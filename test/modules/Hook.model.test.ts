@@ -27,7 +27,6 @@ describe("HookModel", () => {
       envAllowlist: null,
       source: "user",
       enabled: false,
-      trusted: false,
     });
 
     expect(row.id).to.equal("user-test-1");
@@ -46,7 +45,6 @@ describe("HookModel", () => {
       failureMode: "warn",
       source: "user",
       enabled: false,
-      trusted: false,
     });
     const rows = await model.listBySource("user");
     expect(rows.length).to.equal(1);
@@ -63,7 +61,6 @@ describe("HookModel", () => {
       failureMode: "warn",
       source: "user",
       enabled: false,
-      trusted: false,
     });
     const updated = await model.update("u2", { command: "new", enabled: true });
     expect(updated.command).to.equal("new");
@@ -80,7 +77,6 @@ describe("HookModel", () => {
       failureMode: "warn",
       source: "user",
       enabled: false,
-      trusted: false,
     });
     await model.deleteById("u3");
     const fetched = await model.findById("u3");
@@ -97,7 +93,6 @@ describe("HookModel", () => {
       failureMode: "warn",
       source: "user",
       enabled: false,
-      trusted: false,
     });
     await model.create({
       id: "u-b",
@@ -108,7 +103,6 @@ describe("HookModel", () => {
       failureMode: "warn",
       source: "user",
       enabled: false,
-      trusted: false,
     });
     const all = await model.listAll();
     expect(all.length).to.equal(2);
@@ -124,7 +118,6 @@ describe("HookModel", () => {
       failureMode: "warn",
       source: "user",
       enabled: false,
-      trusted: false,
     });
     const at = new Date("2026-07-01T12:00:00Z");
     await model.updateRunStatus("u-status", "blocked", at);

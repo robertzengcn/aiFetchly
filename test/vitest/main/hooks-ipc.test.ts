@@ -33,9 +33,6 @@ const fakeHook = {
   setEnabled: vi
     .fn()
     .mockResolvedValue({ id: "u1", enabled: true, source: "user" }),
-  setTrusted: vi
-    .fn()
-    .mockResolvedValue({ id: "u1", trusted: true, source: "user" }),
   listUserHooks: vi.fn().mockResolvedValue([{ id: "u1", source: "user" }]),
   findById: vi.fn().mockResolvedValue(null),
   loadUserHooksIntoRegistry: vi.fn().mockResolvedValue(undefined),
@@ -72,7 +69,6 @@ vi.mock("@/service/hooks/HookRegistry", () => ({
         source: "builtin",
         type: "callback",
         enabled: true,
-        trusted: true,
       },
     ]),
   },
@@ -100,11 +96,6 @@ describe("hooks-ipc handlers", () => {
       enabled: true,
       source: "user",
     });
-    fakeHook.setTrusted.mockResolvedValue({
-      id: "u1",
-      trusted: true,
-      source: "user",
-    });
     fakeHook.listUserHooks.mockResolvedValue([{ id: "u1", source: "user" }]);
     fakeHook.findById.mockResolvedValue(null);
     fakeHook.loadUserHooksIntoRegistry.mockResolvedValue(undefined);
@@ -123,7 +114,6 @@ describe("hooks-ipc handlers", () => {
       "hooks:update",
       "hooks:delete",
       "hooks:setEnabled",
-      "hooks:setTrusted",
       "hooks:getGlobalEnable",
       "hooks:setGlobalEnable",
       "hooks:listAudit",

@@ -1297,7 +1297,10 @@ emailAutoReplyAudit: {
       audit_time: "Hora",
       audit_duration: "Duración",
       audit_reason: "Razón",
+      auto_refresh_start: "Iniciar auto-actualización",
+      auto_refresh_pause: "Pausar auto-actualización",
       field: {
+        id: "ID del Hook",
         event: "Evento",
         matcher: "Matcher",
         type: "Tipo",
@@ -1337,6 +1340,8 @@ emailAutoReplyAudit: {
         load_failed: "Error al cargar hooks",
         create_failed: "Error al crear hook",
       },
+      untrusted_warning: "Este hook no es de confianza y no se ejecutará. Haga clic en Confiar para permitir su ejecución.",
+      scraping_compliance_warning: "Habilitar este gancho inyecta contexto de cumplimiento en el prompt de IA después de cada llamada de scraper, lo que puede afectar los resultados.",
     },
     ai_preferences: "Preferencias de IA",
     "ai-preferences-group-description":

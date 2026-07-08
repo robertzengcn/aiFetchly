@@ -36,8 +36,8 @@ class HookDispatcherImpl implements HookDispatcherApi {
   async executeHooks(args: ExecuteHooksInput): Promise<AggregatedHookResult> {
     // Global enable gate — Token-backed so the System Settings UI
     // can toggle the whole subsystem without touching dispatcher
-    // internals. Defaults to OFF when the Token value is unset,
-    // matching the PRD's "disabled by default" intent.
+    // internals. Defaults to ON when the Token value is unset.
+    // Set USER_HOOKS_ENABLED to "false" to disable all hooks.
     //
     // Per-call Token construction is intentional: electron-store caches
     // its JSON state in-memory per Store instance (loaded once on
@@ -45,7 +45,7 @@ class HookDispatcherImpl implements HookDispatcherApi {
     // that never sees writes from the IPC handler's separate Token.
     // Every sibling gate (USER_AI_ENABLED: 8 call sites in src/) uses
     // the same per-call pattern for this reason.
-    if (new Token().getValue(USER_HOOKS_ENABLED) !== "true") {
+    if (new Token().getValue(USER_HOOKS_ENABLED) === "false") {
       return EMPTY_AGGREGATE;
     }
 

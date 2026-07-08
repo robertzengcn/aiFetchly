@@ -1282,7 +1282,10 @@ emailAutoReplyAudit: {
       audit_time: "Heure",
       audit_duration: "Durée",
       audit_reason: "Raison",
+      auto_refresh_start: "Démarrer l'auto-actualisation",
+      auto_refresh_pause: "Suspendre l'auto-actualisation",
       field: {
+        id: "ID du Hook",
         event: "Événement",
         matcher: "Matcher",
         type: "Type",
@@ -1322,6 +1325,8 @@ emailAutoReplyAudit: {
         load_failed: "Échec du chargement des hooks",
         create_failed: "Échec de la création du hook",
       },
+      untrusted_warning: "Ce hook n'est pas approuvé et ne s'exécutera pas. Cliquez sur Approuver pour l'autoriser.",
+      scraping_compliance_warning: "Activer ce hook injecte un contexte de conformité dans l'invite de l'IA après chaque appel d'outil de scraping, ce qui peut affecter les résultats.",
     },
     ai_preferences: "Préférences IA",
     "ai-preferences-group-description":

@@ -74,7 +74,6 @@
               </v-list-item-title>
               <v-list-item-subtitle>
                 {{ hook.eventName }} · {{ hook.source }}
-                <span v-if="isUntrustedCommand(hook)"> · ⚠ {{ t('system_settings.hooks.trust_required') || 'Trust required' }}</span>
               </v-list-item-subtitle>
             </v-list-item>
             <v-list-item v-if="visibleHooks.length === 0">
@@ -97,7 +96,7 @@
           <v-card-text v-else>
             <v-text-field
               v-model="form.id"
-              :label="t('system_settings.hooks.field.event') || 'Hook ID'"
+              :label="t('system_settings.hooks.field.id') || 'Hook ID'"
               :disabled="!creating"
               density="compact"
               class="mb-2"
@@ -117,11 +116,13 @@
               density="compact"
               class="mb-2"
             />
-            <v-text-field
+            <v-textarea
               v-model="form.command"
               :label="t('system_settings.hooks.field.command') || 'Command'"
               :disabled="!isUserSource"
               density="compact"
+              auto-grow
+              rows="3"
               class="mb-2"
             />
             <v-text-field
@@ -148,6 +149,26 @@
               class="mb-2"
             />
 
+            <v-switch
+              v-if="selectedHook"
+              :model-value="selectedHook.enabled"
+              :label="t('system_settings.hooks.field.enabled') || 'Enabled'"
+              color="primary"
+              density="compact"
+              hide-details
+              class="mb-2"
+              @update:model-value="onToggleEnabled"
+            />
+
+            <v-alert
+              v-if="showScrapingWarning"
+              type="warning"
+              density="compact"
+              class="mb-2"
+            >
+              {{ t('system_settings.hooks.scraping_compliance_warning') || 'Enabling this hook injects compliance context into the AI prompt after every scrape tool call, which may affect scrape results.' }}
+            </v-alert>
+
             <div class="mt-2">
               <v-btn
                 v-if="isUserSource"
@@ -157,23 +178,6 @@
                 @click="onSave"
               >
                 {{ t('system_settings.hooks.button.save') || 'Save' }}
-              </v-btn>
-              <v-btn
-                v-if="canTrust"
-                color="warning"
-                variant="outlined"
-                class="mr-2"
-                @click="onTrust"
-              >
-                {{ t('system_settings.hooks.button.trust') || 'Trust' }}
-              </v-btn>
-              <v-btn
-                v-if="canUntrust"
-                variant="outlined"
-                class="mr-2"
-                @click="onUntrust"
-              >
-                {{ t('system_settings.hooks.button.untrust') || 'Untrust' }}
               </v-btn>
               <v-btn
                 v-if="isUserSource && !creating"
@@ -195,6 +199,19 @@
         <v-card>
           <v-card-title>
             {{ t('system_settings.hooks.audit_title') || 'Recent audit log' }}
+            <v-spacer />
+            <v-btn
+              icon
+              size="small"
+              variant="text"
+              :color="autoRefreshEnabled ? 'primary' : undefined"
+              @click="toggleAutoRefresh"
+              :title="autoRefreshEnabled
+                ? (t('system_settings.hooks.auto_refresh_pause') || 'Pause auto refresh')
+                : (t('system_settings.hooks.auto_refresh_start') || 'Start auto refresh')"
+            >
+              <v-icon :class="{ 'spin': autoRefreshEnabled }">mdi-refresh</v-icon>
+            </v-btn>
           </v-card-title>
           <v-card-text>
             <v-row dense class="mb-2">
@@ -249,28 +266,6 @@
       </v-col>
     </v-row>
 
-    <!-- Trust confirm dialog -->
-    <v-dialog v-model="trustDialog" max-width="500">
-      <v-card>
-        <v-card-title>
-          {{ t('system_settings.hooks.trust_confirm_title') || 'Trust this command hook?' }}
-        </v-card-title>
-        <v-card-text>
-          {{ t('system_settings.hooks.trust_confirm_body') || 'Trusting means the local process will run on every matching event.' }}
-          <br /><code>{{ form.command }}</code>
-        </v-card-text>
-        <v-card-actions>
-          <v-spacer />
-          <v-btn @click="trustDialog = false">
-            {{ t('system_settings.hooks.button.cancel') || 'Cancel' }}
-          </v-btn>
-          <v-btn color="warning" @click="confirmTrust">
-            {{ t('system_settings.hooks.button.trust') || 'Trust' }}
-          </v-btn>
-        </v-card-actions>
-      </v-card>
-    </v-dialog>
-
     <!-- Delete confirm dialog -->
     <v-dialog v-model="deleteDialog" max-width="500">
       <v-card>
@@ -292,15 +287,18 @@
         </v-card-actions>
       </v-card>
     </v-dialog>
+
+    <NoticeSnackbar v-model="snackbar.show" :message="snackbar.message" :type="snackbar.type" />
   </v-container>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from "vue";
+import { ref, computed, onMounted, onUnmounted, watch } from "vue";
 import { useI18n } from "vue-i18n";
+import NoticeSnackbar from "@/views/components/widgets/noticeSnackbar.vue";
 import {
   listHooks, createHook, updateHook, deleteHook,
-  setHookTrusted,
+  setHookEnabled,
   getHooksGlobalEnable, setHooksGlobalEnable,
   listHookAudit,
   type NewHookInput,
@@ -338,13 +336,40 @@ const form = ref({
   statusMessage: "",
 });
 
-const trustDialog = ref(false);
 const deleteDialog = ref(false);
+
+const snackbar = ref({ show: false, message: "", type: "success" as "success" | "error" });
 
 // Audit
 const auditRows = ref<HookAuditEntry[]>([]);
 const auditFilter = ref<{ eventName?: HookEventName; status?: HookAuditStatus; hookId?: string }>({});
 const auditLimit = ref(100);
+
+// Auto-refresh
+const autoRefreshEnabled = ref(false);
+let autoRefreshTimer: ReturnType<typeof setInterval> | undefined;
+
+function startAutoRefresh(): void {
+  stopAutoRefresh();
+  autoRefreshTimer = setInterval(() => { void loadAudit(); }, 3000);
+  autoRefreshEnabled.value = true;
+}
+
+function stopAutoRefresh(): void {
+  if (autoRefreshTimer !== undefined) {
+    clearInterval(autoRefreshTimer);
+    autoRefreshTimer = undefined;
+  }
+  autoRefreshEnabled.value = false;
+}
+
+function toggleAutoRefresh(): void {
+  if (autoRefreshEnabled.value) {
+    stopAutoRefresh();
+  } else {
+    startAutoRefresh();
+  }
+}
 
 const auditHeaders = [
   { title: t("system_settings.hooks.audit_time") || "Time", key: "timestamp", sortable: true },
@@ -362,37 +387,28 @@ const selectedHook = computed(() =>
 const isUserSource = computed(() =>
   creating.value || selectedHook.value?.source === "user"
 );
-const canTrust = computed(() =>
-  !creating.value &&
-  selectedHook.value?.source === "user" &&
-  selectedHook.value?.type === "command" &&
-  selectedHook.value?.trusted !== true
-);
-const canUntrust = computed(() =>
-  !creating.value &&
-  selectedHook.value?.source === "user" &&
-  selectedHook.value?.type === "command" &&
-  selectedHook.value?.trusted === true
-);
 const editorTitle = computed(() => {
   if (creating.value) return t("system_settings.hooks.add_command") || "+ Add command hook";
   if (selectedHook.value) return selectedHook.value.id;
   return "";
 });
 const hookIdOptions = computed(() => allHooks.value.map((h) => h.id));
-
-function isUntrustedCommand(hook: HookDefinition): boolean {
-  return hook.source === "user" && hook.type === "command" && !hook.trusted;
-}
+const showScrapingWarning = computed(() =>
+  selectedHook.value?.id === "builtin-scraping-compliance-context" &&
+  selectedHook.value?.enabled === true
+);
 function iconFor(hook: HookDefinition): string {
   if (hook.source === "builtin") return hook.enabled ? "mdi-check" : "mdi-pause";
-  if (isUntrustedCommand(hook)) return "mdi-alert";
   return hook.enabled ? "mdi-check" : "mdi-pause";
 }
 
 function formatTime(ts: string | Date): string {
   const d = typeof ts === "string" ? new Date(ts) : ts;
   return d.toLocaleString();
+}
+
+function generateHookId(): string {
+  return `hook-${Math.random().toString(36).substring(2, 8)}`;
 }
 
 async function loadAll() {
@@ -431,6 +447,24 @@ async function onGlobalToggle(value: boolean | null) {
   }
 }
 
+async function onToggleEnabled(value: boolean | null) {
+  if (!selectedHook.value) return;
+  const enabled = value === null ? false : value;
+  const id = selectedHook.value.id;
+  // Optimistic update — toggle immediately for responsive feel
+  const idx = allHooks.value.findIndex((h) => h.id === id);
+  if (idx !== -1) {
+    allHooks.value[idx] = { ...allHooks.value[idx], enabled };
+  }
+  try {
+    await setHookEnabled(id, enabled);
+    await loadAll();
+  } catch (err) {
+    console.error("setHookEnabled failed", err);
+    await loadAll(); // revert via server reload
+  }
+}
+
 function onSelect(id: string) {
   creating.value = false;
   selectedId.value = id;
@@ -452,7 +486,7 @@ function onAddNew() {
   creating.value = true;
   selectedId.value = null;
   form.value = {
-    id: "",
+    id: generateHookId(),
     eventName: "PreToolUse",
     matcher: "*",
     command: "",
@@ -476,7 +510,6 @@ async function onSave() {
         failureMode: form.value.failureMode,
         statusMessage: form.value.statusMessage || undefined,
         enabled: false, // user must explicitly enable after create
-        trusted: false,
       };
       await createHook(input);
     } else if (selectedHook.value?.source === "user") {
@@ -491,31 +524,10 @@ async function onSave() {
     }
     creating.value = false;
     await loadAll();
+    snackbar.value = { show: true, message: t('system_settings.hooks.toast.saved') || "Hook saved", type: "success" };
   } catch (err) {
     console.error("save failed", err);
-    alert(String(err));
-  }
-}
-
-function onTrust() { trustDialog.value = true; }
-function onUntrust() { void doUntrust(); }
-async function doUntrust() {
-  if (!selectedHook.value) return;
-  try {
-    await setHookTrusted(selectedHook.value.id, false);
-    await loadAll();
-  } catch (err) {
-    console.error(err);
-  }
-}
-async function confirmTrust() {
-  trustDialog.value = false;
-  if (!selectedHook.value) return;
-  try {
-    await setHookTrusted(selectedHook.value.id, true);
-    await loadAll();
-  } catch (err) {
-    console.error(err);
+    snackbar.value = { show: true, message: String(err), type: "error" };
   }
 }
 
@@ -534,7 +546,14 @@ async function confirmDelete() {
 }
 
 watch([filterSource, filterEvent, showSession], () => { void loadAll(); });
-watch([auditFilter, auditLimit], () => { void loadAudit(); }, { deep: true });
+watch([auditFilter, auditLimit], () => {
+  void loadAudit();
+  // Restart auto-refresh timer so it picks up new filters immediately
+  if (autoRefreshTimer) {
+    clearInterval(autoRefreshTimer);
+    autoRefreshTimer = setInterval(() => { void loadAudit(); }, 3000);
+  }
+}, { deep: true });
 
 onMounted(async () => {
   try {
@@ -545,4 +564,18 @@ onMounted(async () => {
   await loadAll();
   await loadAudit();
 });
+
+onUnmounted(() => {
+  stopAutoRefresh();
+});
 </script>
+
+<style scoped>
+.spin {
+  animation: spin 1s linear infinite;
+}
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+</style>

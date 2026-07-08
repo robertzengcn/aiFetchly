@@ -37,7 +37,6 @@ export interface NewHookInput {
   statusMessage?: string;
   envAllowlist?: string[];
   enabled?: boolean;
-  trusted?: boolean;
 }
 
 export interface HookConfigRow {
@@ -53,7 +52,6 @@ export interface HookConfigRow {
   envAllowlist: string | null;
   source: string;
   enabled: boolean;
-  trusted: boolean;
   lastRunAt: string | null;
   lastRunStatus: string | null;
   createdAt: string;
@@ -100,13 +98,6 @@ export async function setHookEnabled(
   enabled: boolean
 ): Promise<{ id: string; enabled: boolean; source: HookSource }> {
   return invoke("hooks:setEnabled", { id, enabled });
-}
-
-export async function setHookTrusted(
-  id: string,
-  trusted: boolean
-): Promise<HookConfigRow> {
-  return invoke("hooks:setTrusted", { id, trusted });
 }
 
 export async function getHooksGlobalEnable(): Promise<boolean> {

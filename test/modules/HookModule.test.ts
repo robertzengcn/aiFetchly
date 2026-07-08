@@ -40,7 +40,6 @@ describe("HookModule", () => {
         timeoutMs: 5000,
         failureMode: "warn",
         enabled: false,
-        trusted: false,
       });
       expect.fail("should have rejected");
     } catch (err: unknown) {
@@ -57,7 +56,6 @@ describe("HookModule", () => {
       timeoutMs: 5000,
       failureMode: "warn",
       enabled: true,
-      trusted: true,
     });
 
     const matched = HookRegistry.getMatchingHooks({
@@ -65,25 +63,6 @@ describe("HookModule", () => {
       matchQuery: "shell_execute",
     });
     expect(matched.find((h) => h.id === "u2")).to.not.equal(undefined);
-  });
-
-  it("does not register an untrusted command hook for execution", async () => {
-    await module.create({
-      id: "u3",
-      eventName: "PreToolUse" as HookEventName,
-      matcher: "*",
-      command: "node ./x",
-      timeoutMs: 5000,
-      failureMode: "warn",
-      enabled: true,
-      trusted: false,
-    });
-
-    const matched = HookRegistry.getMatchingHooks({
-      eventName: "PreToolUse",
-      matchQuery: "anything",
-    });
-    expect(matched.find((h) => h.id === "u3")).to.equal(undefined);
   });
 
   it("updates fields and re-registers", async () => {
@@ -95,7 +74,6 @@ describe("HookModule", () => {
       timeoutMs: 5000,
       failureMode: "warn",
       enabled: true,
-      trusted: true,
     });
     await module.update("u4", { command: "node ./y" });
 
@@ -116,7 +94,6 @@ describe("HookModule", () => {
       timeoutMs: 5000,
       failureMode: "warn",
       enabled: true,
-      trusted: true,
     });
     await module.deleteById("u5");
     const matched = HookRegistry.getMatchingHooks({
@@ -124,21 +101,6 @@ describe("HookModule", () => {
       matchQuery: "anything",
     });
     expect(matched.find((h) => h.id === "u5")).to.equal(undefined);
-  });
-
-  it("setTrusted writes through to HookCommandTrustService", async () => {
-    await module.create({
-      id: "u6",
-      eventName: "PreToolUse" as HookEventName,
-      matcher: "*",
-      command: "node ./x",
-      timeoutMs: 5000,
-      failureMode: "warn",
-      enabled: true,
-      trusted: false,
-    });
-    await module.setTrusted("u6", true);
-    expect(HookCommandTrustService.isTrusted("u6")).to.equal(true);
   });
 
   it("applyBuiltinOverrides reads Token map and flips builtin enabled state", async () => {
@@ -149,7 +111,6 @@ describe("HookModule", () => {
       eventName: "PreToolUse",
       source: "builtin",
       enabled: true, // starts enabled
-      trusted: true,
       type: "callback",
       callback: () => ({}),
     });
@@ -178,7 +139,6 @@ describe("HookModule", () => {
       eventName: "Stop",
       source: "builtin",
       enabled: true,
-      trusted: true,
       type: "callback",
       callback: () => ({}),
     });

@@ -45,7 +45,11 @@ export type HookFailureMode = "warn" | "block";
 export type HookPermissionDecision = "allow" | "ask" | "deny";
 
 /** Where the hook run originated. */
-export type HookRunSource = "ai-chat-v2" | "agent-runtime" | "system";
+export type HookRunSource =
+  | "ai-chat-v2"
+  | "agent-runtime"
+  | "skill-executor"
+  | "system";
 
 // ---------------------------------------------------------------------------
 // Size / timing limits
@@ -199,7 +203,6 @@ export interface HookDefinitionBase {
   readonly matcher?: string;
   readonly source: HookSource;
   readonly enabled: boolean;
-  readonly trusted: boolean;
   readonly failureMode?: HookFailureMode;
   readonly statusMessage?: string;
 }

@@ -2084,3 +2084,22 @@ onBeforeUnmount(() => {
   border-top: 1px solid rgba(0, 0, 0, 0.05);
 }
 </style>
+
+<style>
+:root[theme="dark"] .v2-shell {
+  background: #1e1e1e;
+}
+:root[theme="dark"] .v2-shell__header {
+  border-bottom-color: rgba(255, 255, 255, 0.12);
+}
+:root[theme="dark"] .v2-shell__file-ops-panel {
+  background: #2d2d2d;
+  border-top-color: rgba(255, 255, 255, 0.12);
+}
+:root[theme="dark"] .v2-shell__file-ops-header:hover {
+  background-color: rgba(255, 255, 255, 0.06);
+}
+:root[theme="dark"] .v2-shell__file-ops-body {
+  border-top-color: rgba(255, 255, 255, 0.08);
+}
+</style>

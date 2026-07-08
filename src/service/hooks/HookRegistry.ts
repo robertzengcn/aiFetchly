@@ -122,9 +122,6 @@ class HookRegistryImpl implements HookRegistryApi {
     for (const entry of list) {
       if (!entry.hook.enabled) continue;
       if (entry.sessionId && input.sessionId !== entry.sessionId) continue;
-      // Untrusted command hooks are excluded — trust gate is enforced
-      // at registration time for command hooks, but defense-in-depth.
-      if (entry.hook.type === "command" && !entry.hook.trusted) continue;
       if (!matchesHookMatcher(entry.hook.matcher, input.matchQuery ?? ""))
         continue;
       if (seen.has(entry.hook.id)) continue;

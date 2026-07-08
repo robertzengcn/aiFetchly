@@ -1295,7 +1295,10 @@ emailAutoReplyAudit: {
       audit_time: "Time",
       audit_duration: "Duration",
       audit_reason: "Reason",
+      auto_refresh_start: "Start auto refresh",
+      auto_refresh_pause: "Pause auto refresh",
       field: {
+        id: "Hook ID",
         event: "Event",
         matcher: "Matcher",
         type: "Type",
@@ -1335,6 +1338,8 @@ emailAutoReplyAudit: {
         load_failed: "Failed to load hooks",
         create_failed: "Failed to create hook",
       },
+      untrusted_warning: "This hook is not trusted and will not run. Click Trust to allow it to execute.",
+      scraping_compliance_warning: "Enabling this hook injects compliance context into the AI prompt after every scrape tool call, which may affect scrape results.",
     },
     ai_preferences: "AI Preferences",
     "ai-preferences-group-description":

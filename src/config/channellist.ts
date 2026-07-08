@@ -461,7 +461,6 @@ export const HOOKS_CREATE = "hooks:create";
 export const HOOKS_UPDATE = "hooks:update";
 export const HOOKS_DELETE = "hooks:delete";
 export const HOOKS_SET_ENABLED = "hooks:setEnabled";
-export const HOOKS_SET_TRUSTED = "hooks:setTrusted";
 export const HOOKS_GET_GLOBAL_ENABLE = "hooks:getGlobalEnable";
 export const HOOKS_SET_GLOBAL_ENABLE = "hooks:setGlobalEnable";
 export const HOOKS_LIST_AUDIT = "hooks:listAudit";

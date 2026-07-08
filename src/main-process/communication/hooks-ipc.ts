@@ -19,7 +19,6 @@ import {
   HOOKS_UPDATE,
   HOOKS_DELETE,
   HOOKS_SET_ENABLED,
-  HOOKS_SET_TRUSTED,
   HOOKS_GET_GLOBAL_ENABLE,
   HOOKS_SET_GLOBAL_ENABLE,
   HOOKS_LIST_AUDIT,
@@ -149,6 +148,8 @@ export function registerHooksIpcHandlers(): void {
       }
       map[data.id] = { enabled: data.enabled as boolean };
       t.setValue(USER_HOOKS_BUILTIN_OVERRIDES, JSON.stringify(map));
+      // Sync the in-memory registry so hooks:list reflects the change immediately
+      HookRegistry.setBuiltinEnabled(data.id, data.enabled as boolean);
       return ok({
         id: data.id,
         enabled: data.enabled as boolean,
@@ -156,23 +157,6 @@ export function registerHooksIpcHandlers(): void {
       });
     } catch (err: unknown) {
       return fail(`hooks:setEnabled failed: ${String(err)}`);
-    }
-  });
-
-  ipcMain.handle(HOOKS_SET_TRUSTED, async (_event, data) => {
-    if (
-      !isObject(data) ||
-      !isString(data.id) ||
-      typeof data.trusted !== "boolean"
-    ) {
-      return fail("invalid payload");
-    }
-    try {
-      const module = new HookModule();
-      const updated = await module.setTrusted(data.id, data.trusted as boolean);
-      return ok(updated);
-    } catch (err: unknown) {
-      return fail(`hooks:setTrusted failed: ${String(err)}`);
     }
   });
 

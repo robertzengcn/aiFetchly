@@ -1266,7 +1266,10 @@ emailAutoReplyAudit: {
       audit_time: "時刻",
       audit_duration: "所要時間",
       audit_reason: "理由",
+      auto_refresh_start: "自動更新を開始",
+      auto_refresh_pause: "自動更新を一時停止",
       field: {
+        id: "フックID",
         event: "イベント",
         matcher: "マッチャー",
         type: "型",
@@ -1306,6 +1309,8 @@ emailAutoReplyAudit: {
         load_failed: "Hookの読み込みに失敗しました",
         create_failed: "Hookの作成に失敗しました",
       },
+      untrusted_warning: "このフックは信頼されていないため実行されません。「信頼」をクリックして実行を許可してください。",
+      scraping_compliance_warning: "このフックを有効にすると、スクレイプツール呼び出しのたびにAIプロンプトにコンプライアンスコンテキストが挿入され、スクレイプ結果に影響を与える可能性があります。",
     },
     ai_preferences: "AI 設定",
     "ai-preferences-group-description":

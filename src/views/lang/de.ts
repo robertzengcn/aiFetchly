@@ -1289,7 +1289,10 @@ emailAutoReplyAudit: {
       audit_time: "Zeit",
       audit_duration: "Dauer",
       audit_reason: "Grund",
+      auto_refresh_start: "Auto-Aktualisierung starten",
+      auto_refresh_pause: "Auto-Aktualisierung pausieren",
       field: {
+        id: "Hook-ID",
         event: "Ereignis",
         matcher: "Matcher",
         type: "Typ",
@@ -1329,6 +1332,8 @@ emailAutoReplyAudit: {
         load_failed: "Hooks konnten nicht geladen werden",
         create_failed: "Hook konnte nicht erstellt werden",
       },
+      untrusted_warning: "Dieser Hook ist nicht vertrauenswürdig und wird nicht ausgeführt. Klicken Sie auf Vertrauen, um ihn zu erlauben.",
+      scraping_compliance_warning: "Die Aktivierung dieses Hook fügt nach jedem Scrape-Tool-Aufruf Compliance-Kontext in den AI-Prompt ein, was die Scrape-Ergebnisse beeinflussen kann.",
     },
     ai_preferences: "KI-Einstellungen",
     "ai-preferences-group-description":

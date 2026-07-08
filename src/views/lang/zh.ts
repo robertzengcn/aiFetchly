@@ -1249,7 +1249,10 @@ emailAutoReplyAudit: {
       audit_time: "时间",
       audit_duration: "耗时",
       audit_reason: "原因",
+      auto_refresh_start: "开启自动刷新",
+      auto_refresh_pause: "暂停自动刷新",
       field: {
+        id: "钩子ID",
         event: "事件",
         matcher: "匹配器",
         type: "类型",
@@ -1289,6 +1292,8 @@ emailAutoReplyAudit: {
         load_failed: "加载 hook 失败",
         create_failed: "创建 hook 失败",
       },
+      untrusted_warning: "此钩子未受信任，不会运行。点击信任以允许执行。",
+      scraping_compliance_warning: "启用此钩子会在每次抓取工具调用后向AI提示中注入合规上下文，可能会影响抓取结果。",
     },
     ai_preferences: "AI 偏好设置",
     "ai-preferences-group-description":

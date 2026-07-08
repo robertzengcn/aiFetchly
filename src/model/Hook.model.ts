@@ -37,7 +37,6 @@ export type HookPatch = Partial<
     | "statusMessage"
     | "envAllowlist"
     | "enabled"
-    | "trusted"
   >
 >;
 
