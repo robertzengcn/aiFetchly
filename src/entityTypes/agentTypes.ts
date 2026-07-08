@@ -9,6 +9,19 @@ export type AgentExecutionMode = "foreground" | "background" | "scheduled";
 /** Agent functional role. */
 export type AgentMode = "coordinator" | "specialist" | "verifier" | "formatter";
 
+/**
+ * The source kind an agent definition was registered under (AGT-01 /
+ * tech-design §7.4). Drives the lookup-order rank inside
+ * {@link AgentDefinitionRegistry}: built-in (0) > user (1) > workspace (2)
+ * > plugin (3, reserved for Phase 18).
+ *
+ * NOTE: this rank DELIBERATELY DIVERGES from CommandRegistry (commands rank
+ * workspace above user). See the load-bearing comment on the agent
+ * registry's SOURCE_RANK map. Phase 18 fills in the `plugin` source; Phase 16
+ * ships built-in + user + trusted-workspace only.
+ */
+export type AgentSource = "built-in" | "user" | "workspace" | "plugin";
+
 /** Agent task lifecycle status. */
 export type AgentTaskStatus =
   | "queued"
