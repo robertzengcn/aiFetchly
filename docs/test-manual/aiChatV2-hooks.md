@@ -126,8 +126,7 @@ No built-in demo hook exists. Test by creating a user command hook and triggerin
    - Command: `node -e "process.stdin.resume();let b='';process.stdin.on('data',c=>b+=c);process.stdin.on('end',()=>{const i=JSON.parse(b);console.log(JSON.stringify({additionalContext:'Hook saw failure: '+(i.toolOutput?.error||'unknown')}))})"`
    - Timeout: `5000`
    - Failure mode: `warn`
-4. Toggle **Trusted** ON
-5. Click Save
+4. Click Save
 
 ### 5.2 Trigger a tool failure
 
@@ -154,37 +153,28 @@ Command hooks execute a local process, receive hook input JSON on stdin, and ret
    - Command: `node -e "process.stdin.resume(); let b=''; process.stdin.on('data',c=>b+=c); process.stdin.on('end',()=>{const i=JSON.parse(b); if(i.input?.command?.includes('dangerous')){console.log(JSON.stringify({continue:false,reason:'Blocked by user command hook'}))}else{console.log(JSON.stringify({continue:true}))}})"`
    - Timeout: `5000`
    - Failure mode: `warn`
-4. Leave **Trusted** OFF initially
-5. Click Save
+4. Click Save
 
-### 6.2 Trust flow
-
-| Test | Steps | Expected |
-|---|---|---|
-| **6.2a — Untrusted hook does not run** | 1. Leave the hook untrusted<br>2. Send a `shell_execute` prompt matching the matcher | Hook is skipped; command runs untrusted; tool executes normally |
-| **6.2b — Trust the hook** | 1. Toggle Trusted ON for the hook<br>2. Send: `run shell command dangerous-stuff` | Hook executes; input JSON received; if matcher matches, hook returns `continue: false` and blocks |
-| **6.2c — Revoke trust** | 1. Toggle Trusted OFF<br>2. Send same prompt | Hook skipped again |
-
-### 6.3 Hook blocks via stdout JSON
+### 6.2 Hook blocks via stdout JSON
 
 | Test | Steps | Expected |
 |---|---|---|
-| **6.3a — Hook returns `continue: false`** | 1. Create a command hook that returns `{ continue: false, reason: "Blocked by policy" }`<br>2. Send matching tool prompt | Tool result shows the hook's `reason` as error message; tool not executed |
-| **6.3b — Hook returns `continue: true`** | 1. Create a command hook that always returns `{ continue: true }`<br>2. Send matching tool prompt | Tool executes normally |
-| **6.3c — Hook returns invalid JSON** | 1. Create a command that writes `not json` to stdout<br>2. Send matching tool prompt | Hook marked as failed; tool continues (failure mode: warn); console shows parse error |
+| **6.2a — Hook returns `continue: false`** | 1. Create a command hook that returns `{ continue: false, reason: "Blocked by policy" }`<br>2. Send matching tool prompt | Tool result shows the hook's `reason` as error message; tool not executed |
+| **6.2b — Hook returns `continue: true`** | 1. Create a command hook that always returns `{ continue: true }`<br>2. Send matching tool prompt | Tool executes normally |
+| **6.2c — Hook returns invalid JSON** | 1. Create a command that writes `not json` to stdout<br>2. Send matching tool prompt | Hook marked as failed; tool continues (failure mode: warn); console shows parse error |
 
-### 6.4 Timeout behavior
-
-| Test | Steps | Expected |
-|---|---|---|
-| **6.4a — Hook times out** | 1. Create a command hook: `node -e "setTimeout(() => process.exit(0), 10000)"` with timeoutMs=2000 and failureMode=block<br>2. Send matching prompt | Hook times out; if failureMode=block, tool is blocked with timeout error; if failureMode=warn, tool continues |
-| **6.4b — Verify timeout duration** | Check audit logs | `durationMs` is close to 2000; status is `timeout` |
-
-### 6.5 Input forwarded correctly
+### 6.3 Timeout behavior
 
 | Test | Steps | Expected |
 |---|---|---|
-| **6.5a — Hook receives tool name** | Create a command hook: `node -e "process.stdin.resume();let b='';process.stdin.on('data',c=>b+=c);process.stdin.on('end',()=>{const i=JSON.parse(b);console.log(JSON.stringify({continue:true,reason:'saw:'+i.tool.name}))})"`<br>Send: `run shell command echo hello` | Tool executes; check console or reason to confirm hook received `tool.name = "shell_execute"` |
+| **6.3a — Hook times out** | 1. Create a command hook: `node -e "setTimeout(() => process.exit(0), 10000)"` with timeoutMs=2000 and failureMode=block<br>2. Send matching prompt | Hook times out; if failureMode=block, tool is blocked with timeout error; if failureMode=warn, tool continues |
+| **6.3b — Verify timeout duration** | Check audit logs | `durationMs` is close to 2000; status is `timeout` |
+
+### 6.4 Input forwarded correctly
+
+| Test | Steps | Expected |
+|---|---|---|
+| **6.4a — Hook receives tool name** | Create a command hook: `node -e "process.stdin.resume();let b='';process.stdin.on('data',c=>b+=c);process.stdin.on('end',()=>{const i=JSON.parse(b);console.log(JSON.stringify({continue:true,reason:'saw:'+i.tool.name}))})"`<br>Send: `run shell command echo hello` | Tool executes; check console or reason to confirm hook received `tool.name = "shell_execute"` |
 
 ---
 
@@ -313,9 +303,8 @@ yarn test
 | `HookOutputValidator.test.ts` | Valid/invalid output, size caps, unknown field stripping |
 | `CallbackHookExecutor.test.ts` | Sync/async callbacks, throw handling, abort |
 | `CommandHookExecutor.test.ts` | stdin JSON, stdout parse, timeout, invalid JSON |
-| `HookCommandTrustService.test.ts` | isTrusted, setTrusted, hydrate, snapshot |
 | `HookAuditService.test.ts` | Entry shape, console logging, status values |
-| `HookModule.test.ts` | CRUD, registry sync, validation, setTrusted |
+| `HookModule.test.ts` | CRUD, registry sync, validation |
 
 ---
 
@@ -326,7 +315,6 @@ yarn test
 - [ ] Built-in PreToolUse hook blocks dangerous commands
 - [ ] Built-in PostToolUse hook adds context after scraping
 - [ ] Command hooks execute with stdin/stdout JSON contract
-- [ ] Untrusted command hooks do not execute (trust gate works)
 - [ ] Command hook timeout kills process within configured ms
 - [ ] Invalid hook JSON treated as failure, not allow
 - [ ] Block wins in aggregation; deny wins over allow
@@ -361,8 +349,7 @@ Fires once when a new conversation begins. Dispatches with `matchQuery: undefine
    - Command: `node -e "process.stdin.resume();let b='';process.stdin.on('data',c=>b+=c);process.stdin.on('end',()=>{console.log(JSON.stringify({continue:true}))})"`
    - Timeout: `5000`
    - Failure mode: `warn`
-3. Toggle **Trusted** ON
-4. Click Save
+3. Click Save
 
 ### 17.2 Verification
 
@@ -409,8 +396,7 @@ Dispatches with `matchQuery` set to the tool name (e.g. `"shell_execute"`).
    - Command: `node -e "process.stdin.resume();let b='';process.stdin.on('data',c=>b+=c);process.stdin.on('end',()=>{console.log(JSON.stringify({continue:true}))})"`
    - Timeout: `5000`
    - Failure mode: `warn`
-3. Toggle **Trusted** ON
-4. Click Save
+3. Click Save
 
 ### 19.2 Verification
 
@@ -438,8 +424,7 @@ or by a PreToolUse hook returning `permissionDecision: "deny"`.
    - Command: `node -e "process.stdin.resume();let b='';process.stdin.on('data',c=>b+=c);process.stdin.on('end',()=>{console.log(JSON.stringify({continue:true}))})"`
    - Timeout: `5000`
    - Failure mode: `warn`
-3. Toggle **Trusted** ON
-4. Click Save
+3. Click Save
 
 ### 20.2 Verification
 
