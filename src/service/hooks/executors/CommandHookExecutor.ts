@@ -62,14 +62,41 @@ function buildEnv(allowlist?: readonly string[]): NodeJS.ProcessEnv {
 }
 
 function parseCommand(command: string): string[] {
-  // Minimal whitespace splitter. We do not invoke a shell; users who
-  // need shell syntax must opt into a future explicit shell hook
-  // type. This parser rejects empty commands.
+  // Quote-aware argv splitter. Supports double and single quotes
+  // to preserve arguments with embedded whitespace (e.g. `-e "code"`).
+  // No escape sequences, no variable expansion — intentionally simple.
   const trimmed = command.trim();
   if (!trimmed) {
     throw new Error("Command hook has empty command");
   }
-  return trimmed.split(/\s+/);
+
+  const args: string[] = [];
+  let current = "";
+  let inDouble = false;
+  let inSingle = false;
+
+  for (let i = 0; i < trimmed.length; i++) {
+    const c = trimmed[i];
+    if (c === '"' && !inSingle) {
+      inDouble = !inDouble;
+      continue;
+    }
+    if (c === "'" && !inSingle) {
+      inSingle = !inSingle;
+      continue;
+    }
+    if (/\s/.test(c) && !inDouble && !inSingle) {
+      if (current) {
+        args.push(current);
+        current = "";
+      }
+      continue;
+    }
+    current += c;
+  }
+  if (current) args.push(current);
+
+  return args;
 }
 
 export async function executeCommand(
