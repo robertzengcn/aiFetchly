@@ -170,6 +170,15 @@
               {{ t('system_settings.hooks.scraping_compliance_warning') || 'Enabling this hook injects compliance context into the AI prompt after every scrape tool call, which may affect scrape results.' }}
             </v-alert>
 
+            <v-alert
+              v-if="showUntrustedWarning"
+              type="warning"
+              density="compact"
+              class="mb-2"
+            >
+              {{ t('system_settings.hooks.untrusted_warning') || 'This hook is not trusted and will not run. Click Trust to allow it to execute.' }}
+            </v-alert>
+
             <div class="mt-2">
               <v-btn
                 v-if="isUserSource"
@@ -410,6 +419,10 @@ const hookIdOptions = computed(() => allHooks.value.map((h) => h.id));
 const showScrapingWarning = computed(() =>
   selectedHook.value?.id === "builtin-scraping-compliance-context" &&
   selectedHook.value?.enabled === true
+);
+const showUntrustedWarning = computed(() =>
+  selectedHook.value !== null &&
+  isUntrustedCommand(selectedHook.value)
 );
 
 function isUntrustedCommand(hook: HookDefinition): boolean {

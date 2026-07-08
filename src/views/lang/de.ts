@@ -1330,6 +1330,7 @@ emailAutoReplyAudit: {
         load_failed: "Hooks konnten nicht geladen werden",
         create_failed: "Hook konnte nicht erstellt werden",
       },
+      untrusted_warning: "Dieser Hook ist nicht vertrauenswürdig und wird nicht ausgeführt. Klicken Sie auf Vertrauen, um ihn zu erlauben.",
       scraping_compliance_warning: "Die Aktivierung dieses Hook fügt nach jedem Scrape-Tool-Aufruf Compliance-Kontext in den AI-Prompt ein, was die Scrape-Ergebnisse beeinflussen kann.",
     },
     ai_preferences: "KI-Einstellungen",

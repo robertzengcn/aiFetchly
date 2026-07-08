@@ -1336,6 +1336,7 @@ emailAutoReplyAudit: {
         load_failed: "Failed to load hooks",
         create_failed: "Failed to create hook",
       },
+      untrusted_warning: "This hook is not trusted and will not run. Click Trust to allow it to execute.",
       scraping_compliance_warning: "Enabling this hook injects compliance context into the AI prompt after every scrape tool call, which may affect scrape results.",
     },
     ai_preferences: "AI Preferences",
