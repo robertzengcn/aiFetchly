@@ -991,9 +991,10 @@ async function handleSetToolApprovalMode(
       payload.conversationId,
       payload.mode as ChatToolApprovalMode
     );
-    // Return the stored mode (in case of downgrade from full_access)
-    const saved = module.getMode(payload.conversationId);
-    return ok(saved);
+    // Return the mode that was just set. Do NOT call getMode() here —
+    // its startup-reset downgrades full_access back to ask_for_approval
+    // on the very first read, making it impossible to select "Full access".
+    return ok(payload.mode);
   } catch (err) {
     return denied(userSafeError(err));
   }
