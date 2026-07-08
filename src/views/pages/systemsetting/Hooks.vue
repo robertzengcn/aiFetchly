@@ -471,8 +471,10 @@ async function onToggleEnabled(value: boolean | null) {
   const enabled = value === null ? false : value;
   const id = selectedHook.value.id;
   // Optimistic update — toggle immediately for responsive feel
-  const target = allHooks.value.find((h) => h.id === id);
-  if (target) target.enabled = enabled;
+  const idx = allHooks.value.findIndex((h) => h.id === id);
+  if (idx !== -1) {
+    allHooks.value[idx] = { ...allHooks.value[idx], enabled };
+  }
   try {
     await setHookEnabled(id, enabled);
     await loadAll();
