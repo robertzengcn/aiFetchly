@@ -217,6 +217,34 @@ describe("TokenRefreshService.performAutoRefreshCheck", () => {
     expect(mockRemoveToken).not.toHaveBeenCalled();
   });
 
+  test("Case C: unexpected (non-auth, non-transient) error at MAX threshold stops the timer but does NOT sign out", async () => {
+    // Body returns an unsuccessful status with a non-401 code → refreshAccessToken
+    // throws a plain Error (not RefreshTokenInvalidError, not transient) → Case C.
+    mockFetch.mockResolvedValue(
+      fakeResponse(
+        {
+          status: false,
+          code: 500,
+          msg: "unexpected backend error",
+          data: null,
+        },
+        { ok: true, status: 200 }
+      )
+    );
+
+    TokenRefreshService.startAutoRefresh();
+    // MAX_CONSECUTIVE_FAILURES === 3; the startAutoRefresh immediate check plus
+    // these calls push the counter past the threshold.
+    for (let i = 0; i < 3; i++) {
+      await TokenRefreshService.performAutoRefreshCheck();
+    }
+
+    expect(mockSignout).not.toHaveBeenCalled();
+    expect(mockRemoveToken).not.toHaveBeenCalled();
+    // Timer stopped to avoid hammering the server, but the user stays logged in.
+    expect(TokenRefreshService.isAutoRefreshRunning()).toBe(false);
+  });
+
   test("refresh token genuinely invalid (API code 401) DOES sign out and stops auto-refresh", async () => {
     mockFetch.mockResolvedValue(
       fakeResponse(
@@ -270,5 +298,91 @@ describe("TokenRefreshService.performAutoRefreshCheck", () => {
     expect(mockSignout).not.toHaveBeenCalled();
     // New access token persisted.
     expect(mockSetValue).toHaveBeenCalledWith(TOKENNAME, "new-access-token");
+  });
+});
+
+describe("TokenRefreshService.refreshAccessToken throw-type contract", () => {
+  // The linchpin of the transient-vs-auth design: every genuine auth failure
+  // MUST throw RefreshTokenInvalidError so performAutoRefreshCheck signs the
+  // user out (and HttpClient callers handle it). A regression to a plain Error
+  // would silently keep rejected sessions alive.
+
+  beforeEach(() => {
+    vi.stubGlobal("fetch", mockFetch);
+    mockFetch.mockReset();
+    mockGetValue.mockClear();
+    mockSetValue.mockClear();
+    mockGetValue.mockImplementation(
+      (key: string) => tokenState.values[key] ?? ""
+    );
+    mockSetValue.mockImplementation((key: string, val: string) => {
+      tokenState.values[key] = val;
+    });
+    tokenState.values = {
+      [TOKENNAME]: "access-token-value",
+      [TOKENEXPIRY]: String(Date.now() - 100_000),
+      [REFRESHTOKEN]: "refresh-token-value",
+      [REFRESHTOKENEXPIRY]: String(Date.now() + 10_000_000), // valid
+    };
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  test("missing refresh token throws RefreshTokenInvalidError", async () => {
+    tokenState.values[REFRESHTOKEN] = "";
+    await expect(
+      new TokenRefreshService().refreshAccessToken()
+    ).rejects.toBeInstanceOf(RefreshTokenInvalidError);
+  });
+
+  test("expired refresh token throws RefreshTokenInvalidError", async () => {
+    tokenState.values[REFRESHTOKENEXPIRY] = String(Date.now() - 1_000);
+    await expect(
+      new TokenRefreshService().refreshAccessToken()
+    ).rejects.toBeInstanceOf(RefreshTokenInvalidError);
+  });
+
+  test("HTTP 401 from refresh endpoint throws RefreshTokenInvalidError", async () => {
+    mockFetch.mockResolvedValue(
+      fakeResponse(null, { ok: false, status: 401, statusText: "Unauthorized" })
+    );
+    await expect(
+      new TokenRefreshService().refreshAccessToken()
+    ).rejects.toBeInstanceOf(RefreshTokenInvalidError);
+  });
+
+  test("HTTP 403 from refresh endpoint throws RefreshTokenInvalidError", async () => {
+    mockFetch.mockResolvedValue(
+      fakeResponse(null, { ok: false, status: 403, statusText: "Forbidden" })
+    );
+    await expect(
+      new TokenRefreshService().refreshAccessToken()
+    ).rejects.toBeInstanceOf(RefreshTokenInvalidError);
+  });
+
+  test("body code 401 (HTTP 200) throws RefreshTokenInvalidError", async () => {
+    mockFetch.mockResolvedValue(
+      fakeResponse(
+        {
+          status: false,
+          code: 401,
+          msg: "Invalid or expired refresh token",
+          data: null,
+        },
+        { ok: true, status: 200 }
+      )
+    );
+    await expect(
+      new TokenRefreshService().refreshAccessToken()
+    ).rejects.toBeInstanceOf(RefreshTokenInvalidError);
+  });
+
+  test("network failure throws a plain Error (NOT RefreshTokenInvalidError)", async () => {
+    mockFetch.mockRejectedValue(new TypeError("fetch failed"));
+    await expect(
+      new TokenRefreshService().refreshAccessToken()
+    ).rejects.not.toBeInstanceOf(RefreshTokenInvalidError);
   });
 });
