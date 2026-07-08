@@ -113,15 +113,29 @@ The entire hook system is gated by `Token.getValue(USER_HOOKS_ENABLED) === "fals
 
 ## 5. PostToolUseFailure Hook (Manual Simulation)
 
-There is no built-in demo hook for `PostToolUseFailure`. To test this path, either:
+No built-in demo hook exists. Test by creating a user command hook and triggering a tool failure.
 
-- (a) Write a quick test callback in `src/service/hooks/builtinHooks.ts` (add a hook with `eventName: "PostToolUseFailure"` and `matcher: "*"` that returns `{ systemMessage: "Tool failed: " + reason }`), restart, and trigger a tool failure.
-- (b) Trust the unit tests in `test/vitest/utilitycode/hooks/HookDispatcher.test.ts`.
+### 5.1 Create a user command hook for PostToolUseFailure
+
+1. Open **System Settings → Hooks**
+2. Click **"Add Hook"**
+3. Fill in:
+   - Event: `PostToolUseFailure`
+   - Matcher: `*`
+   - Type: `command`
+   - Command: `node -e "process.stdin.resume();let b='';process.stdin.on('data',c=>b+=c);process.stdin.on('end',()=>{const i=JSON.parse(b);console.log(JSON.stringify({additionalContext:'Hook saw failure: '+(i.toolOutput?.error||'unknown')}))})"`
+   - Timeout: `5000`
+   - Failure mode: `warn`
+4. Toggle **Trusted** ON
+5. Click Save
+
+### 5.2 Trigger a tool failure
 
 | Test | Steps | Expected |
 |---|---|---|
-| **5a — PostToolUseFailure fires** | After adding a PostToolUseFailure test hook, send a prompt that triggers a known tool failure | Hook output (systemMessage, additionalContext) appears in the chat |
-| **5b — Failure does not become success** | Check the tool result status | Result remains `success: false`; hook cannot turn failure into success |
+| **5.2a — PostToolUseFailure fires** | 1. Send: `run shell command cat /nonexistent_file_xyz`<br>2. Wait for tool result | Tool result shows failure. Audit log shows PostToolUseFailure hook fired with status `success`. |
+| **5.2b — Failure remains failure** | Check the tool result status | Result shows `success: false`; hook cannot turn failure into success |
+| **5.2c — Successful tool does not trigger** | Send: `run shell command echo ok` | No PostToolUseFailure audit entry; event never fires for successful tools |
 
 ---
 
@@ -319,5 +333,164 @@ yarn test
 - [ ] Hook allow does not bypass SkillPermissionService
 - [ ] Stop during hook aborts execution cleanly
 - [ ] Audit entries created for every hook fire
+- [ ] PreToolUse fires before tool execution
+- [ ] PostToolUse fires after successful tool execution
+- [ ] PostToolUseFailure fires after failed tool execution
+- [ ] PermissionRequest fires when permission is needed
+- [ ] PermissionDenied fires when permission is denied
+- [ ] SessionStart fires once per new conversation
+- [ ] UserPromptSubmit fires on every user message
+- [ ] Stop fires on conversation turn end (completed / user_stopped / error)
 - [ ] All 13 vitest hook test files pass
 - [ ] All module test files pass
+
+---
+
+## 17. SessionStart Hook
+
+Fires once when a new conversation begins. Dispatches with `matchQuery: undefined`
+(→ `""`), so only hooks with `matcher: "*"` match.
+
+### 17.1 Create a user command hook for SessionStart
+
+1. Open **System Settings → Hooks** → **"Add Hook"**
+2. Fill in:
+   - Event: `SessionStart`
+   - Matcher: `*`
+   - Type: `command`
+   - Command: `node -e "process.stdin.resume();let b='';process.stdin.on('data',c=>b+=c);process.stdin.on('end',()=>{console.log(JSON.stringify({continue:true}))})"`
+   - Timeout: `5000`
+   - Failure mode: `warn`
+3. Toggle **Trusted** ON
+4. Click Save
+
+### 17.2 Verification
+
+| Test | Steps | Expected |
+|---|---|---|
+| **17.2a — Fires on first message** | 1. Open a **new** conversation in AI Chat V2<br>2. Send: `hello`<br>3. Open **System Settings → Hooks → Audit Log** | Audit log shows one entry for `SessionStart` + one for `UserPromptSubmit` (from the same message) |
+| **17.2b — Fires only once per conversation** | Send a second message in the same conversation: `how are you?` | Only `UserPromptSubmit` entries; no second `SessionStart` |
+| **17.2c — Fires for each new conversation** | Start another new conversation, send any message | `SessionStart` fires again for the new conversation |
+| **17.3 — Specific matcher does not match** | 1. Create a second SessionStart hook with matcher `shell_execute`<br>2. Send a plain chat message in a new conversation | Only the `*` matcher hook fires; `shell_execute` matcher skips `matchQuery=""` |
+
+---
+
+## 18. UserPromptSubmit Hook
+
+Fires on every user message submission.
+
+### 18.1 Create a user command hook for UserPromptSubmit
+
+Same pattern as §17.1 but with:
+- Event: `UserPromptSubmit`
+- Matcher: `*`
+
+### 18.2 Verification
+
+| Test | Steps | Expected |
+|---|---|---|
+| **18.2a — Fires on every message** | Send 3 messages: `first`, `second`, `third` | Audit log shows 3 `UserPromptSubmit` entries, one per message |
+| **18.2b — Contains prompt in input** | Create a hook that echoes back: `node -e "process.stdin.resume();let b='';process.stdin.on('data',c=>b+=c);process.stdin.on('end',()=>{const i=JSON.parse(b);console.log(JSON.stringify({additionalContext:'prompt: '+i.prompt?.substring(0,50)}))})"` | The AI's next response includes "prompt: ..." (injected via `additionalContext`) |
+
+---
+
+## 19. PermissionRequest Hook
+
+Fires when `SkillPermissionService` needs user permission for a tool.
+Dispatches with `matchQuery` set to the tool name (e.g. `"shell_execute"`).
+
+### 19.1 Create a user command hook for PermissionRequest
+
+1. Open **System Settings → Hooks** → **"Add Hook"**
+2. Fill in:
+   - Event: `PermissionRequest`
+   - Matcher: `shell_execute`
+   - Type: `command`
+   - Command: `node -e "process.stdin.resume();let b='';process.stdin.on('data',c=>b+=c);process.stdin.on('end',()=>{console.log(JSON.stringify({continue:true}))})"`
+   - Timeout: `5000`
+   - Failure mode: `warn`
+3. Toggle **Trusted** ON
+4. Click Save
+
+### 19.2 Verification
+
+| Test | Steps | Expected |
+|---|---|---|
+| **19.2a — Fires before permission prompt** | 1. Clear any saved `shell_execute` permission<br>2. Send: `run shell command echo hello` | Audit log shows `PermissionRequest` before the permission dialog appears |
+| **19.2b — Already-granted tool does not fire** | 1. Grant `shell_execute` permanently<br>2. Send the same command in a new conversation | No `PermissionRequest` entry (permission cached; hook not dispatched) |
+| **19.2c — Non-matching tool skips** | Send a non-shell prompt (e.g. `scrape https://example.com`) | No `PermissionRequest` entry for `shell_execute` matcher |
+| **19.3 — Hook cannot bypass permission** | Create a `PermissionRequest` hook returning `permissionDecision: "allow"` | Permission prompt still appears; hook allow does not bypass `SkillPermissionService` |
+
+---
+
+## 20. PermissionDenied Hook
+
+Fires when a tool is denied — either by user clicking Deny in the permission prompt,
+or by a PreToolUse hook returning `permissionDecision: "deny"`.
+
+### 20.1 Create a user command hook for PermissionDenied
+
+1. Open **System Settings → Hooks** → **"Add Hook"**
+2. Fill in:
+   - Event: `PermissionDenied`
+   - Matcher: `*`
+   - Type: `command`
+   - Command: `node -e "process.stdin.resume();let b='';process.stdin.on('data',c=>b+=c);process.stdin.on('end',()=>{console.log(JSON.stringify({continue:true}))})"`
+   - Timeout: `5000`
+   - Failure mode: `warn`
+3. Toggle **Trusted** ON
+4. Click Save
+
+### 20.2 Verification
+
+| Test | Steps | Expected |
+|---|---|---|
+| **20.2a — Denied by user** | 1. Clear saved `shell_execute` permission<br>2. Send: `run shell command ls`<br>3. When permission dialog appears, click **Deny** | Audit log shows `PermissionDenied` entry with `reason` field |
+| **20.2b — Denied by PreToolUse hook** | 1. Create a PreToolUse hook with matcher `shell_execute` returning `{ permissionDecision: "deny", reason: "Blocked by policy" }`<br>2. Send a shell command | Audit log shows `PermissionDenied`; tool not executed |
+| **20.2c — Granted tool does not fire** | Grant `shell_execute` permission, send command | No `PermissionDenied` entry |
+
+---
+
+## 21. Stop Hook
+
+Fires when a conversation turn ends — by natural completion, user clicking Stop, or error.
+
+### 21.1 Create a user command hook for Stop
+
+Same pattern as §17.1 but with:
+- Event: `Stop`
+- Matcher: `*`
+
+### 21.2 Verification
+
+| Test | Steps | Expected |
+|---|---|---|
+| **21.2a — Stop on completion** | Send: `say hi`, wait for full response | Audit log shows `Stop` with `reason: "completed"` |
+| **21.2b — Stop on user click** | 1. Send: `write a 500 word essay about AI`<br>2. Click **Stop** button while streaming | Audit log shows `Stop` with `reason: "user_stopped"` |
+| **21.2c — Stop on error** | Temporarily disable AI mid-session (set `USER_AI_ENABLED = "false"`), try to send | Audit log shows `Stop` with `reason: "error"` |
+
+---
+
+## 22. All 8 Events — Quick-Reference Smoke Test
+
+Create one command hook per event (all `matcher: "*"`, trivial `{continue:true}` command).
+Then run the trigger sequence below and check the audit log after each step.
+
+| Step | Action | Expected Audit Events |
+|------|--------|----------------------|
+| 1 | Open new conversation | |
+| 2 | Send: `hello` | `SessionStart`, `UserPromptSubmit` |
+| 3 | Send: `run shell command echo hi` | `UserPromptSubmit`, `PreToolUse`, `PostToolUse` |
+| 4 | Send: `run shell command cat /nope` | `UserPromptSubmit`, `PreToolUse`, `PostToolUseFailure` |
+| 5 | Send: `run shell command ls` → deny permission | `UserPromptSubmit`, `PermissionRequest`, `PermissionDenied` |
+| 6 | Click **Stop** mid-stream | `Stop` (reason: `user_stopped`) |
+| 7 | Wait for natural end | `Stop` (reason: `completed`) |
+
+### Smoke test order (if short on time)
+
+1. **§17.2a** — SessionStart fires on new conversation
+2. **§18.2a** — UserPromptSubmit fires on every message
+3. **§5.2a** — PostToolUseFailure fires after failed tool
+4. **§19.2a** — PermissionRequest fires before permission dialog
+5. **§20.2b** — PermissionDenied fires from PreToolUse deny
+6. **§21.2a/b** — Stop fires on completion + user stop
