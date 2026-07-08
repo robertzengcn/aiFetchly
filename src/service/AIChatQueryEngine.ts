@@ -13,6 +13,7 @@ import type {
 } from "@/api/aiChatApi";
 import { SkillRegistry } from "@/config/skillsRegistry";
 import { SkillExecutor } from "@/service/SkillExecutor";
+import { HookDispatcher } from "@/service/hooks/HookDispatcher";
 import { AIChatContextAssembler } from "@/service/AIChatContextAssembler";
 import type { AIChatCompactAgentService } from "@/service/AIChatCompactAgentService";
 import type { AIAutoDreamService } from "@/service/AIAutoDreamService";
@@ -156,6 +157,8 @@ export class AIChatQueryEngine {
     AIChatQueryEventSink,
     Promise<unknown>[]
   >();
+  /** Tracks which conversations have already fired SessionStart. */
+  private readonly startedConversations = new Set<string>();
 
   constructor(
     private readonly loop: AIChatQueryLoop,
@@ -460,7 +463,27 @@ export class AIChatQueryEngine {
     }
 
     // ------------------------------------------------------------------
-    // 3. Resolve tools (skills + plan mode tools)
+    // 3. Lifecycle hooks: SessionStart (once per conversation)
+    // ------------------------------------------------------------------
+    if (!this.startedConversations.has(conversationId)) {
+      this.startedConversations.add(conversationId);
+      HookDispatcher.executeHooks({
+        eventName: "SessionStart",
+        input: {
+          eventName: "SessionStart",
+          hookRunId: `hookrun-session-${conversationId}`,
+          source: "ai-chat-v2",
+          conversationId,
+          timestamp: new Date().toISOString(),
+          mode: isPlanMode ? "plan" : "chat",
+        },
+      }).catch(() => {
+        // Hook errors are non-fatal
+      });
+    }
+
+    // ------------------------------------------------------------------
+    // 4. Resolve tools (skills + plan mode tools)
     // ------------------------------------------------------------------
     const toolFunctions = await SkillRegistry.getAllToolFunctions();
     const openAITools = toOpenAITools(toolFunctions);
@@ -528,7 +551,25 @@ export class AIChatQueryEngine {
         : undefined;
 
     // ------------------------------------------------------------------
-    // 7. Run the loop
+    // 8. UserPromptSubmit lifecycle hook
+    // ------------------------------------------------------------------
+    HookDispatcher.executeHooks({
+      eventName: "UserPromptSubmit",
+      input: {
+        eventName: "UserPromptSubmit",
+        hookRunId: `hookrun-prompt-${conversationId}-${Date.now()}`,
+        source: "ai-chat-v2",
+        conversationId,
+        timestamp: new Date().toISOString(),
+        prompt: request.message,
+        mode: isPlanMode ? "plan" : "chat",
+      },
+    }).catch(() => {
+      // Hook errors are non-fatal
+    });
+
+    // ------------------------------------------------------------------
+    // 9. Run the loop
     // ------------------------------------------------------------------
     const streamEventSink = this.createPersistingEventSink(module, eventSink);
     const loopInput: AIChatQueryLoopInput = {
@@ -571,11 +612,31 @@ export class AIChatQueryEngine {
     }
   }
 
+  private dispatchStop(
+    conversationId: string | undefined,
+    reason: "completed" | "user_stopped" | "error"
+  ): void {
+    HookDispatcher.executeHooks({
+      eventName: "Stop",
+      input: {
+        eventName: "Stop",
+        hookRunId: `hookrun-stop-${conversationId ?? "unknown"}-${Date.now()}`,
+        source: "ai-chat-v2",
+        conversationId,
+        timestamp: new Date().toISOString(),
+        reason,
+      },
+    }).catch(() => {
+      // Hook errors are non-fatal
+    });
+  }
+
   /**
    * Stop the active turn: abort streaming, cancel pending permission/plan
    * question turns, and emit cancelled events through the stored event sinks.
    */
   stopActiveTurn(): void {
+    this.dispatchStop(this.currentConversationId ?? undefined, "user_stopped");
     if (this.pendingPermission) {
       const pending = this.pendingPermission;
       this.pendingPermission = null;
@@ -919,6 +980,7 @@ export class AIChatQueryEngine {
               console.error("[ai-auto-dream] chat trigger failed:", err)
             );
         }
+        this.dispatchStop(conversationId, "completed");
         this.clearActiveTurnState();
         break;
       }
@@ -945,6 +1007,7 @@ export class AIChatQueryEngine {
             result.partialContent.length > 0 ? assistantMessageId : undefined,
           fullContent: result.partialContent,
         });
+        this.dispatchStop(conversationId, "user_stopped");
         this.clearActiveTurnState();
         break;
       }
@@ -971,6 +1034,7 @@ export class AIChatQueryEngine {
             result.partialContent.length > 0 ? assistantMessageId : undefined,
           errorMessage: userSafeError(result.error),
         });
+        this.dispatchStop(conversationId, "error");
         this.clearActiveTurnState();
         this.pendingPermission = null;
         this.pendingPlanQuestion = null;
@@ -1085,6 +1149,7 @@ export class AIChatQueryEngine {
     assistantMessageId: string,
     eventSink: AIChatQueryEventSink
   ): void {
+    this.dispatchStop(conversationId, "error");
     console.error("[ai-chat-v2] engine failure:", err);
     eventSink.emit({
       type: "error",

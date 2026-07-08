@@ -341,6 +341,77 @@ async function dispatchPostToolUseFailureHooks(
   }
 }
 
+async function dispatchPermissionRequestHooks(
+  name: string,
+  skillName: string,
+  source: HookToolSource,
+  permissionCategory: string | undefined,
+  args: Record<string, unknown>,
+  context: SkillExecutionContext
+): Promise<void> {
+  const descriptor: HookToolDescriptor = {
+    id: skillName,
+    name,
+    source,
+    permissionCategory,
+  };
+  try {
+    await HookDispatcher.executeHooks({
+      eventName: "PermissionRequest",
+      input: {
+        eventName: "PermissionRequest",
+        hookRunId: `hookrun-permreq-${context.toolCallId}`,
+        source: "skill-executor",
+        conversationId: context.conversationId,
+        timestamp: new Date().toISOString(),
+        tool: descriptor,
+        input: args,
+        permissionCategory: permissionCategory ?? "unknown",
+      },
+      matchQuery: name,
+      abortSignal: context.signal,
+    });
+  } catch {
+    // Non-fatal — permission request hooks are advisory
+  }
+}
+
+async function dispatchPermissionDeniedHooks(
+  name: string,
+  skillName: string,
+  source: HookToolSource,
+  permissionCategory: string | undefined,
+  args: Record<string, unknown>,
+  reason: string,
+  context: SkillExecutionContext
+): Promise<void> {
+  const descriptor: HookToolDescriptor = {
+    id: skillName,
+    name,
+    source,
+    permissionCategory,
+  };
+  try {
+    await HookDispatcher.executeHooks({
+      eventName: "PermissionDenied",
+      input: {
+        eventName: "PermissionDenied",
+        hookRunId: `hookrun-permdeny-${context.toolCallId}`,
+        source: "skill-executor",
+        conversationId: context.conversationId,
+        timestamp: new Date().toISOString(),
+        tool: descriptor,
+        input: args,
+        reason,
+      },
+      matchQuery: name,
+      abortSignal: context.signal,
+    });
+  } catch {
+    // Non-fatal — permission denied hooks are advisory
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Execution
 // ---------------------------------------------------------------------------
@@ -418,6 +489,15 @@ async function execute(
       SkillPermissionService.checkPermission(permissionSkillName);
     if (!permCheck.allowed) {
       if (permCheck.needsPrompt) {
+        // PermissionRequest hooks run before showing the UI prompt
+        await dispatchPermissionRequestHooks(
+          name,
+          skillName,
+          "skill-registry",
+          skill.permissionCategory,
+          resolvedArgs,
+          context
+        );
         // Return a special result indicating permission is needed.
         // StreamEventProcessor shows the UI prompt, defers sendToolResultToAI until the user grants.
         const result: ToolExecutionResult = {
@@ -445,6 +525,16 @@ async function execute(
         return result;
       }
       // Explicitly denied
+      // PermissionDenied hooks run before returning the denied result
+      await dispatchPermissionDeniedHooks(
+        name,
+        skillName,
+        "skill-registry",
+        skill.permissionCategory,
+        resolvedArgs,
+        permCheck.reason || "Permission denied",
+        context
+      );
       const result: ToolExecutionResult = {
         tool_call_id: toolCallId,
         tool_name: name,
