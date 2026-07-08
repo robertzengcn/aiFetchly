@@ -444,12 +444,16 @@ async function onGlobalToggle(value: boolean | null) {
 async function onToggleEnabled(value: boolean | null) {
   if (!selectedHook.value) return;
   const enabled = value === null ? false : value;
+  const id = selectedHook.value.id;
+  // Optimistic update — toggle immediately for responsive feel
+  const target = allHooks.value.find((h) => h.id === id);
+  if (target) target.enabled = enabled;
   try {
-    await setHookEnabled(selectedHook.value.id, enabled);
+    await setHookEnabled(id, enabled);
     await loadAll();
   } catch (err) {
-    console.error(err);
-    await loadAll();
+    console.error("setHookEnabled failed", err);
+    await loadAll(); // revert via server reload
   }
 }
 
