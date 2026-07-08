@@ -29,17 +29,11 @@ export const AI_WORKSPACE_MEMORY_TYPES: readonly AIWorkspaceMemoryType[] = [
   "warning",
 ] as const;
 
-export const AI_WORKSPACE_MEMORY_STATUSES: readonly AIWorkspaceMemoryStatus[] = [
-  "active",
-  "archived",
-  "contradicted",
-] as const;
+export const AI_WORKSPACE_MEMORY_STATUSES: readonly AIWorkspaceMemoryStatus[] =
+  ["active", "archived", "contradicted"] as const;
 
 export const AI_WORKSPACE_MEMORY_SOURCE_KINDS: readonly AIWorkspaceMemorySourceKind[] =
   ["manual", "chat_v2", "agent_task", "auto_dream"] as const;
-
-export const WORKSPACE_MEMORY_RUN_STATUSES: readonly AIWorkspaceMemoryConsolidationStatus[] =
-  ["running", "completed", "failed", "cancelled"] as const;
 
 export function isAIWorkspaceMemoryType(
   v: unknown

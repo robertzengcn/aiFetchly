@@ -31,6 +31,14 @@ vi.mock("@/service/AIWorkspaceMemoryService", () => ({
   })),
 }));
 
+// Controllable manual-memory toggle (default-on; set "false" to disable writes).
+const mockGetSettingValue = vi.fn();
+vi.mock("@/modules/SystemSettingModule", () => ({
+  SystemSettingModule: vi.fn().mockImplementation(() => ({
+    getSettingValue: mockGetSettingValue,
+  })),
+}));
+
 const handlers: Record<string, (e: unknown, data: string) => Promise<unknown>> =
   {};
 vi.mock("electron", () => ({
@@ -63,6 +71,8 @@ describe("ai-workspace-memory-ipc", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     state.aiEnabled = "true";
+    // Manual-memory toggle defaults to enabled (setting absent → enabled).
+    mockGetSettingValue.mockResolvedValue(null);
     _resetAIWorkspaceMemorySingletonsForTesting();
     registerAIWorkspaceMemoryIpcHandlers();
   });
@@ -172,6 +182,35 @@ describe("ai-workspace-memory-ipc", () => {
       EVENT,
       JSON.stringify({ conversationId: "conv-1" })
     )) as { status: boolean };
-    expect(r.status).toBe(false); // Phase 4 wires the real service; stub denies gracefully
+    // AI enabled, but the real service skips when there are no workspace-bound
+    // sources in the test DB → runNow throws "skipped" → denied.
+    expect(r.status).toBe(false);
+  });
+
+  it("manual write handlers are denied when the manual-memory toggle is off", async () => {
+    mockGetSettingValue.mockResolvedValue("false");
+    const r = (await handlers[AI_WORKSPACE_MEMORY_CREATE](
+      EVENT,
+      JSON.stringify({
+        conversationId: "conv-1",
+        type: "decision",
+        title: "t",
+        content: "c",
+      })
+    )) as { status: boolean; msg: string };
+    expect(r.status).toBe(false);
+    expect(r.msg).toMatch(/disabled/i);
+    expect(mockCreate).not.toHaveBeenCalled();
+  });
+
+  it("list is NOT gated by the manual-memory toggle", async () => {
+    mockGetSettingValue.mockResolvedValue("false");
+    mockList.mockResolvedValue([]);
+    const r = (await handlers[AI_WORKSPACE_MEMORY_LIST](
+      EVENT,
+      JSON.stringify({ conversationId: "conv-1" })
+    )) as { status: boolean };
+    expect(r.status).toBe(true);
+    expect(mockList).toHaveBeenCalled();
   });
 });

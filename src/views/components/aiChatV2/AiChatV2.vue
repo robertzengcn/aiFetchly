@@ -527,36 +527,18 @@ async function refreshWorkspaceMemoryCount(): Promise<void> {
     return;
   }
   try {
-    const resp = await workspaceMemoryApi.list({
-      conversationId: activeConversationId.value,
-      status: "active",
-      limit: 1,
-    });
-    if (resp.status && Array.isArray(resp.data)) {
-      // The list endpoint caps at the requested limit; for an accurate count
-      // we re-request without the limit-1 optimization only when needed.
-      // For the badge we treat any non-empty result as "has memory" and fetch
-      // the real count lazily.
-      workspaceMemoryCount.value = resp.data.length > 0 ? await fetchWorkspaceMemoryTotal() : 0;
-    } else {
-      workspaceMemoryCount.value = 0;
-    }
-  } catch {
-    workspaceMemoryCount.value = 0;
-  }
-}
-
-async function fetchWorkspaceMemoryTotal(): Promise<number> {
-  if (!activeConversationId.value) return 0;
-  try {
+    // One IPC + DB round-trip: fetch up to 200 active memories and use the
+    // returned length as the badge count (capped at 200, which is plenty for
+    // a badge — beyond that the exact number doesn't matter to the user).
     const resp = await workspaceMemoryApi.list({
       conversationId: activeConversationId.value,
       status: "active",
       limit: 200,
     });
-    return resp.status && Array.isArray(resp.data) ? resp.data.length : 0;
+    workspaceMemoryCount.value =
+      resp.status && Array.isArray(resp.data) ? resp.data.length : 0;
   } catch {
-    return 0;
+    workspaceMemoryCount.value = 0;
   }
 }
 

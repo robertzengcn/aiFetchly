@@ -180,12 +180,12 @@ export class AIChatContextAssembler {
     let workspaceMemoryCount = 0;
     if (workspaceInjectionEnabled) {
       try {
+        // Caps (8 memories / 1800 tokens) are owned by the retrieval service's
+        // own defaults — not duplicated here, so a default change propagates.
         const workspaceMem = await this.workspaceMemory.retrieve({
           currentUserMessage: input.currentUserMessage,
           conversationId: input.conversationId,
           mode: input.mode,
-          maxMemories: 8,
-          maxTokens: 1800,
         });
         workspaceContextBlock = workspaceMem.contextBlock;
         workspaceMemoryCount = workspaceMem.memories.length;

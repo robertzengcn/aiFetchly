@@ -3,6 +3,8 @@ import { Token } from "@/modules/token";
 import { USER_AI_ENABLED } from "@/config/usersetting";
 import { AIWorkspaceMemoryService } from "@/service/AIWorkspaceMemoryService";
 import { getSharedWorkspaceAutoDreamService } from "@/service/AIAutoDreamFactory";
+import { SystemSettingModule } from "@/modules/SystemSettingModule";
+import { ai_workspace_manual_memory_enabled } from "@/config/settinggroupInit";
 import {
   AI_WORKSPACE_MEMORY_LIST,
   AI_WORKSPACE_MEMORY_CREATE,
@@ -40,6 +42,28 @@ function isAIEnabled(): boolean {
   return new Token().getValue(USER_AI_ENABLED) === "true";
 }
 
+/**
+ * Manual workspace memory toggle (PRD FR-011). Default-on when the setting row
+ * is absent; only disabled when the value is exactly "false". Read failures
+ * degrade to enabled so a transient DB error never locks users out of their
+ * own memories. List is read-only and not gated; auto-dream is AI-gated
+ * separately.
+ */
+async function isManualMemoryEnabled(): Promise<boolean> {
+  try {
+    const v = await new SystemSettingModule().getSettingValue(
+      ai_workspace_manual_memory_enabled
+    );
+    return v !== "false";
+  } catch (err) {
+    console.error(
+      "[workspace-memory] failed to read manual-memory toggle:",
+      err
+    );
+    return true;
+  }
+}
+
 function safeParse<T = unknown>(data: unknown): T | null {
   if (typeof data !== "string" || data.length === 0) return null;
   try {
@@ -75,6 +99,9 @@ export function registerAIWorkspaceMemoryIpcHandlers(): void {
 
   ipcMain.handle(AI_WORKSPACE_MEMORY_CREATE, async (_e, data: unknown) => {
     try {
+      if (!(await isManualMemoryEnabled())) {
+        return denied("Manual workspace memory is disabled in settings.");
+      }
       const input = safeParse<AIWorkspaceMemoryCreateInput>(data);
       if (
         !input ||
@@ -97,6 +124,9 @@ export function registerAIWorkspaceMemoryIpcHandlers(): void {
 
   ipcMain.handle(AI_WORKSPACE_MEMORY_UPDATE, async (_e, data: unknown) => {
     try {
+      if (!(await isManualMemoryEnabled())) {
+        return denied("Manual workspace memory is disabled in settings.");
+      }
       const input = safeParse<AIWorkspaceMemoryUpdateInput>(data);
       if (
         !input ||
@@ -115,6 +145,9 @@ export function registerAIWorkspaceMemoryIpcHandlers(): void {
 
   ipcMain.handle(AI_WORKSPACE_MEMORY_ARCHIVE, async (_e, data: unknown) => {
     try {
+      if (!(await isManualMemoryEnabled())) {
+        return denied("Manual workspace memory is disabled in settings.");
+      }
       const input = safeParse<{ conversationId?: string; memoryId?: string }>(
         data
       );
@@ -135,6 +168,9 @@ export function registerAIWorkspaceMemoryIpcHandlers(): void {
 
   ipcMain.handle(AI_WORKSPACE_MEMORY_DELETE, async (_e, data: unknown) => {
     try {
+      if (!(await isManualMemoryEnabled())) {
+        return denied("Manual workspace memory is disabled in settings.");
+      }
       const input = safeParse<{ conversationId?: string; memoryId?: string }>(
         data
       );

@@ -27,15 +27,3 @@ export function looksSecretlike(s: string | null | undefined): boolean {
   if (!s) return false;
   return SECRET_PATTERNS.some((re) => re.test(s));
 }
-
-const REDACTED = "[REDACTED]";
-
-/** Replace anything matching a secret pattern with `[REDACTED]`. */
-export function redactSecrets(s: string | null | undefined): string {
-  if (!s) return "";
-  let out = s;
-  for (const re of SECRET_PATTERNS) {
-    out = out.replace(re, REDACTED);
-  }
-  return out;
-}
