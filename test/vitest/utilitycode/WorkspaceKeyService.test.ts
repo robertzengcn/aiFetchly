@@ -3,12 +3,13 @@ import { describe, expect, it } from "vitest";
 import { WorkspaceKeyService } from "@/service/WorkspaceKeyService";
 
 const fakeRealpath = (out: string) => async (): Promise<string> => out;
+const fakeGit = (out: string | null) => async (): Promise<string | null> => out;
 
 describe("WorkspaceKeyService", () => {
   it("derives a stable ws_ key from the canonical path", async () => {
     const svc = new WorkspaceKeyService({
       realpath: fakeRealpath("/tmp/repo"),
-      findGitRoot: () => "/tmp/repo",
+      findGitRoot: fakeGit("/tmp/repo"),
     });
     const r = await svc.resolve("/some/input");
     expect(r.workspaceKey).toMatch(/^ws_[a-f0-9]{32}$/);
@@ -20,7 +21,7 @@ describe("WorkspaceKeyService", () => {
   it("prefers the git root over the real input path", async () => {
     const svc = new WorkspaceKeyService({
       realpath: fakeRealpath("/tmp/repo/sub"),
-      findGitRoot: () => "/tmp/repo",
+      findGitRoot: fakeGit("/tmp/repo"),
     });
     const r = await svc.resolve("/tmp/repo/sub");
     expect(r.canonicalRootPath).toBe("/tmp/repo");
@@ -31,7 +32,7 @@ describe("WorkspaceKeyService", () => {
   it("falls back to the real path when git is unavailable", async () => {
     const svc = new WorkspaceKeyService({
       realpath: fakeRealpath("/tmp/plain"),
-      findGitRoot: () => null,
+      findGitRoot: fakeGit(null),
     });
     const r = await svc.resolve("/tmp/plain");
     expect(r.canonicalRootPath).toBe("/tmp/plain");
@@ -51,11 +52,11 @@ describe("WorkspaceKeyService", () => {
   it("two services resolve the same canonical root to the same key", async () => {
     const s1 = new WorkspaceKeyService({
       realpath: fakeRealpath("/projects/foo"),
-      findGitRoot: () => "/projects/foo",
+      findGitRoot: fakeGit("/projects/foo"),
     });
     const s2 = new WorkspaceKeyService({
       realpath: fakeRealpath("/projects/foo"),
-      findGitRoot: () => null,
+      findGitRoot: fakeGit(null),
     });
     const r1 = await s1.resolve("/projects/foo");
     const r2 = await s2.resolve("/projects/foo");

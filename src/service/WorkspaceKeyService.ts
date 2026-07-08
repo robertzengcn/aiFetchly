@@ -1,7 +1,10 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
 
 export interface WorkspaceKeyResolution {
   readonly inputRootPath: string;
@@ -12,7 +15,7 @@ export interface WorkspaceKeyResolution {
 }
 
 /** Resolves a git repository top-level for a real path, or null when unavailable. */
-export type GitRootFinder = (realPath: string) => string | null;
+export type GitRootFinder = (realPath: string) => Promise<string | null>;
 
 /** Canonicalizes a path (defaults to fs.realpath). Injectable for tests. */
 export type RealpathFn = (inputPath: string) => Promise<string>;
@@ -53,7 +56,7 @@ export class WorkspaceKeyService {
 
   async resolve(rootPath: string): Promise<WorkspaceKeyResolution> {
     const realInput = await this.realpath(rootPath);
-    const gitRoot = this.findGitRoot(realInput);
+    const gitRoot = await this.findGitRoot(realInput);
     const canonicalRootPath = gitRoot ?? realInput;
     const workspaceKey = this.hashWorkspacePath(canonicalRootPath);
 
@@ -78,20 +81,22 @@ export class WorkspaceKeyService {
 
 /**
  * Default git-root finder. Runs `git -C <path> rev-parse --show-toplevel`
- * synchronously (main process only). Treats any failure as "no git".
+ * asynchronously (non-blocking) with a 2s timeout. Treats any failure — non-zero
+ * exit, no git binary, timeout — as "no git".
  *
- * Security: never executes a shell string — arguments are passed as an array.
- * Does not read repository config for memory paths.
+ * Security: never executes a shell string — arguments are passed as an array to
+ * execFile. Does not read repository config for memory paths.
  */
-export function defaultGitRootFinder(realPath: string): string | null {
+export async function defaultGitRootFinder(
+  realPath: string
+): Promise<string | null> {
   try {
-    const result = spawnSync(
+    const { stdout } = await execFileAsync(
       "git",
       ["-C", realPath, "rev-parse", "--show-toplevel"],
       { encoding: "utf8", timeout: 2000 }
     );
-    if (result.status !== 0) return null;
-    const out = (result.stdout ?? "").trim();
+    const out = (stdout ?? "").trim();
     return out.length > 0 ? path.resolve(out) : null;
   } catch {
     return null;

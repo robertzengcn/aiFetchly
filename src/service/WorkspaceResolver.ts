@@ -1,5 +1,8 @@
 import { WorkspaceModule } from "@/modules/WorkspaceModule";
-import { WorkspaceKeyService } from "@/service/WorkspaceKeyService";
+import {
+  WorkspaceKeyService,
+  type WorkspaceKeyResolution,
+} from "@/service/WorkspaceKeyService";
 
 export interface ResolvedWorkspace {
   readonly workspaceId: number;
@@ -21,6 +24,15 @@ export interface ResolvedWorkspaceWithKey {
  * approved, which tells callers they must NOT run file tools.
  */
 export class WorkspaceResolver {
+  /**
+   * Per-rootPath cache of key resolutions for the lifetime of this resolver
+   * instance. The auto-dream source collector holds one resolver and loops over
+   * conversations, so conversations sharing a workspace root resolve git only
+   * once. Keyed by the workspace record's rootPath (stable per workspace).
+   */
+  private readonly keyCache = new Map<string, WorkspaceKeyResolution>();
+  private readonly keyService = new WorkspaceKeyService();
+
   async resolve(conversationId: string): Promise<ResolvedWorkspace | null> {
     if (!conversationId) return null;
 
@@ -49,7 +61,7 @@ export class WorkspaceResolver {
     if (!record) return null;
     if (record.approvalState !== "approved") return null;
 
-    const resolved = await new WorkspaceKeyService().resolve(record.rootPath);
+    const resolved = await this.resolveKey(record.rootPath);
     return {
       workspaceId: record.id,
       conversationId: record.conversationId,
@@ -58,5 +70,13 @@ export class WorkspaceResolver {
       workspaceKey: resolved.workspaceKey,
       displayName: record.label ?? resolved.displayName,
     };
+  }
+
+  private async resolveKey(rootPath: string): Promise<WorkspaceKeyResolution> {
+    const cached = this.keyCache.get(rootPath);
+    if (cached) return cached;
+    const resolved = await this.keyService.resolve(rootPath);
+    this.keyCache.set(rootPath, resolved);
+    return resolved;
   }
 }
