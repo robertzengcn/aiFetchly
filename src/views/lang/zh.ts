@@ -1249,6 +1249,8 @@ emailAutoReplyAudit: {
       audit_time: "时间",
       audit_duration: "耗时",
       audit_reason: "原因",
+      auto_refresh_start: "开启自动刷新",
+      auto_refresh_pause: "暂停自动刷新",
       field: {
         id: "钩子ID",
         event: "事件",

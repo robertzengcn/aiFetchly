@@ -1295,6 +1295,8 @@ emailAutoReplyAudit: {
       audit_time: "Time",
       audit_duration: "Duration",
       audit_reason: "Reason",
+      auto_refresh_start: "Start auto refresh",
+      auto_refresh_pause: "Pause auto refresh",
       field: {
         id: "Hook ID",
         event: "Event",

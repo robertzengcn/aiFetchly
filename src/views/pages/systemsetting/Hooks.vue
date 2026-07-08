@@ -199,6 +199,19 @@
         <v-card>
           <v-card-title>
             {{ t('system_settings.hooks.audit_title') || 'Recent audit log' }}
+            <v-spacer />
+            <v-btn
+              icon
+              size="small"
+              variant="text"
+              :color="autoRefreshEnabled ? 'primary' : undefined"
+              @click="toggleAutoRefresh"
+              :title="autoRefreshEnabled
+                ? (t('system_settings.hooks.auto_refresh_pause') || 'Pause auto refresh')
+                : (t('system_settings.hooks.auto_refresh_start') || 'Start auto refresh')"
+            >
+              <v-icon :class="{ 'spin': autoRefreshEnabled }">mdi-refresh</v-icon>
+            </v-btn>
           </v-card-title>
           <v-card-text>
             <v-row dense class="mb-2">
@@ -280,7 +293,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from "vue";
+import { ref, computed, onMounted, onUnmounted, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import NoticeSnackbar from "@/views/components/widgets/noticeSnackbar.vue";
 import {
@@ -331,6 +344,32 @@ const snackbar = ref({ show: false, message: "", type: "success" as "success" | 
 const auditRows = ref<HookAuditEntry[]>([]);
 const auditFilter = ref<{ eventName?: HookEventName; status?: HookAuditStatus; hookId?: string }>({});
 const auditLimit = ref(100);
+
+// Auto-refresh
+const autoRefreshEnabled = ref(false);
+let autoRefreshTimer: ReturnType<typeof setInterval> | undefined;
+
+function startAutoRefresh(): void {
+  stopAutoRefresh();
+  autoRefreshTimer = setInterval(() => { void loadAudit(); }, 3000);
+  autoRefreshEnabled.value = true;
+}
+
+function stopAutoRefresh(): void {
+  if (autoRefreshTimer !== undefined) {
+    clearInterval(autoRefreshTimer);
+    autoRefreshTimer = undefined;
+  }
+  autoRefreshEnabled.value = false;
+}
+
+function toggleAutoRefresh(): void {
+  if (autoRefreshEnabled.value) {
+    stopAutoRefresh();
+  } else {
+    startAutoRefresh();
+  }
+}
 
 const auditHeaders = [
   { title: t("system_settings.hooks.audit_time") || "Time", key: "timestamp", sortable: true },
@@ -507,7 +546,14 @@ async function confirmDelete() {
 }
 
 watch([filterSource, filterEvent, showSession], () => { void loadAll(); });
-watch([auditFilter, auditLimit], () => { void loadAudit(); }, { deep: true });
+watch([auditFilter, auditLimit], () => {
+  void loadAudit();
+  // Restart auto-refresh timer so it picks up new filters immediately
+  if (autoRefreshTimer) {
+    clearInterval(autoRefreshTimer);
+    autoRefreshTimer = setInterval(() => { void loadAudit(); }, 3000);
+  }
+}, { deep: true });
 
 onMounted(async () => {
   try {
@@ -518,4 +564,18 @@ onMounted(async () => {
   await loadAll();
   await loadAudit();
 });
+
+onUnmounted(() => {
+  stopAutoRefresh();
+});
 </script>
+
+<style scoped>
+.spin {
+  animation: spin 1s linear infinite;
+}
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+</style>

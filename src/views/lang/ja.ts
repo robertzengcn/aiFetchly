@@ -1266,6 +1266,8 @@ emailAutoReplyAudit: {
       audit_time: "時刻",
       audit_duration: "所要時間",
       audit_reason: "理由",
+      auto_refresh_start: "自動更新を開始",
+      auto_refresh_pause: "自動更新を一時停止",
       field: {
         id: "フックID",
         event: "イベント",
