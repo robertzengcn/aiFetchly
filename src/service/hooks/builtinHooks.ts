@@ -43,7 +43,7 @@ const SCRAPING_COMPLIANCE: CallbackHookDefinition = {
   eventName: "PostToolUse",
   matcher: "scrape_*",
   source: "builtin",
-  enabled: true,
+  enabled: false,
   trusted: true,
   type: "callback",
   callback: () => ({

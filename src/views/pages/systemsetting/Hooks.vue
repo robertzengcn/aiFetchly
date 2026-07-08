@@ -158,6 +158,16 @@
               class="mb-2"
               @update:model-value="onToggleEnabled"
             />
+
+            <v-alert
+              v-if="showScrapingWarning"
+              type="warning"
+              density="compact"
+              class="mb-2"
+            >
+              {{ t('system_settings.hooks.scraping_compliance_warning') || 'Enabling this hook injects compliance context into the AI prompt after every scrape tool call, which may affect scrape results.' }}
+            </v-alert>
+
             <div class="mt-2">
               <v-btn
                 v-if="isUserSource"
@@ -390,6 +400,10 @@ const editorTitle = computed(() => {
   return "";
 });
 const hookIdOptions = computed(() => allHooks.value.map((h) => h.id));
+const showScrapingWarning = computed(() =>
+  selectedHook.value?.id === "builtin-scraping-compliance-context" &&
+  selectedHook.value?.enabled === true
+);
 
 function isUntrustedCommand(hook: HookDefinition): boolean {
   return hook.source === "user" && hook.type === "command" && !hook.trusted;

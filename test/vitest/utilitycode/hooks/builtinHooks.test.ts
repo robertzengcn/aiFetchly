@@ -14,20 +14,24 @@ describe("registerBuiltinHooks", () => {
     // the default being enabled, so don't set the token.
   });
 
-  it("registers built-in hooks enabled by default", () => {
+  it("registers built-in hooks with correct defaults", () => {
     registerBuiltinHooks();
+    const all = HookRegistry.listAll();
+    expect(all.some((h) => h.id === "builtin-block-dangerous-shell-delete")).toBe(true);
+    expect(all.some((h) => h.id === "builtin-scraping-compliance-context")).toBe(true);
+
+    // dangerous-shell is enabled by default, scraping-compliance is disabled
     const pre = HookRegistry.getMatchingHooks({
       eventName: "PreToolUse",
       matchQuery: "shell_execute",
     });
+    expect(pre.some((h) => h.id === "builtin-block-dangerous-shell-delete")).toBe(true);
+
     const post = HookRegistry.getMatchingHooks({
       eventName: "PostToolUse",
       matchQuery: "scrape_businesses",
     });
-    expect(pre.length).toBeGreaterThanOrEqual(1);
-    expect(pre.some((h) => h.id === "builtin-block-dangerous-shell-delete")).toBe(true);
-    expect(post.length).toBeGreaterThanOrEqual(1);
-    expect(post.some((h) => h.id === "builtin-scraping-compliance-context")).toBe(true);
+    expect(post.some((h) => h.id === "builtin-scraping-compliance-context")).toBe(false);
   });
 
   it("is idempotent across repeated calls", () => {
