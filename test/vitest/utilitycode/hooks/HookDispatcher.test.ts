@@ -44,10 +44,8 @@ describe("HookDispatcher", () => {
   beforeEach(() => {
     HookRegistry.resetForTests();
     setHookAuditLoggerForTests(NULL_LOGGER);
-    // Existing tests assume hooks are enabled. The Token-backed gate
-    // added in the global-enable-gate describe block defaults to OFF,
-    // so explicitly opt in here.
-    new Token().setValue(USER_HOOKS_ENABLED, "true");
+    // Hooks default to ON (gate checks === "false").
+    // Ensure clean token state for these tests.
   });
 
   it("returns EMPTY_AGGREGATE on the no-hooks fast path", async () => {
@@ -175,9 +173,11 @@ describe("HookDispatcher global-enable gate", () => {
   beforeEach(() => {
     HookRegistry.resetForTests();
     setHookAuditLoggerForTests(NULL_LOGGER);
+    // Clear any previous token value so each test starts clean.
+    new Token().setValue(USER_HOOKS_ENABLED, "");
   });
 
-  it("returns EMPTY_AGGREGATE when USER_HOOKS_ENABLED is not 'true'", async () => {
+  it("returns EMPTY_AGGREGATE when USER_HOOKS_ENABLED is 'false'", async () => {
     new Token().setValue(USER_HOOKS_ENABLED, "false");
     HookRegistry.registerBuiltinHook(
       cb("gate-test-off", () => ({ continue: false }))
@@ -191,8 +191,8 @@ describe("HookDispatcher global-enable gate", () => {
     expect(result.executedHookIds).toEqual([]);
   });
 
-  it("executes matching hooks when USER_HOOKS_ENABLED is 'true'", async () => {
-    new Token().setValue(USER_HOOKS_ENABLED, "true");
+  it("executes matching hooks when USER_HOOKS_ENABLED is unset (default on)", async () => {
+    // Don't set the token — verify default is enabled.
     HookRegistry.registerBuiltinHook(
       cb("gate-test-on", () => ({ continue: false, reason: "blocked by test" }))
     );

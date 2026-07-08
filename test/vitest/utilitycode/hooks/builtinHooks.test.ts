@@ -4,25 +4,18 @@ import {
   resetBuiltinHooksRegistrationForTests,
 } from "@/service/hooks/builtinHooks";
 import { HookRegistry } from "@/service/hooks/HookRegistry";
-import { Token } from "@/modules/token";
-import { USER_HOOKS_ENABLED } from "@/config/usersetting";
 
 describe("registerBuiltinHooks", () => {
   beforeEach(() => {
     HookRegistry.resetForTests();
     resetBuiltinHooksRegistrationForTests();
-    // The dispatcher's global-enable gate reads this token; the
-    // dangerous-delete test below calls executeHooks, so we must opt
-    // in explicitly to keep this test independent of run order.
-    new Token().setValue(USER_HOOKS_ENABLED, "true");
+    // Hooks default to ON (gate checks === "false").
+    // The dangerous-delete test below calls executeHooks and relies on
+    // the default being enabled, so don't set the token.
   });
 
-  it("registers built-in demo hooks (disabled, so they are filtered out of getMatchingHooks)", () => {
+  it("registers built-in hooks enabled by default", () => {
     registerBuiltinHooks();
-    // Built-ins ship disabled; the registry therefore returns an
-    // empty list for both events. The registration is still
-    // observable through the warning the registry emits on duplicate
-    // id, which the idempotency test covers indirectly.
     const pre = HookRegistry.getMatchingHooks({
       eventName: "PreToolUse",
       matchQuery: "shell_execute",
@@ -31,20 +24,10 @@ describe("registerBuiltinHooks", () => {
       eventName: "PostToolUse",
       matchQuery: "scrape_businesses",
     });
-    expect(pre).toEqual([]);
-    expect(post).toEqual([]);
-  });
-
-  it("registers hooks disabled by default", () => {
-    registerBuiltinHooks();
-    // Disabled hooks are filtered out by getMatchingHooks, so we
-    // verify the registration side-effect through the dispatcher's
-    // no-hooks behavior. Re-enable to confirm the hook is present.
-    const emptyBefore = HookRegistry.getMatchingHooks({
-      eventName: "PreToolUse",
-      matchQuery: "shell_execute",
-    });
-    expect(emptyBefore).toEqual([]);
+    expect(pre.length).toBeGreaterThanOrEqual(1);
+    expect(pre.some((h) => h.id === "builtin-block-dangerous-shell-delete")).toBe(true);
+    expect(post.length).toBeGreaterThanOrEqual(1);
+    expect(post.some((h) => h.id === "builtin-scraping-compliance-context")).toBe(true);
   });
 
   it("is idempotent across repeated calls", () => {

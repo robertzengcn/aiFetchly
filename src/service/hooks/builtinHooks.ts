@@ -2,11 +2,11 @@ import { CallbackHookDefinition } from "@/entityTypes/hookTypes";
 import { HookRegistry } from "./HookRegistry";
 
 /**
- * Built-in demo hooks for manual QA.
+ * Built-in hooks for safety and compliance.
  *
- * Both are registered with `enabled: false`. They exist so a power
- * user or developer can flip them on to validate the end-to-end
- * pipeline without writing a plugin or touching the database.
+ * Both are registered with `enabled: true` so they protect the user
+ * out of the box. Users can disable individual hooks via the Hooks
+ * Management UI or the USER_HOOKS_BUILTIN_OVERRIDES Token.
  *
  * See docs/superpowers/specs/2026-06-23-hooks-system-technical-design.md
  * §Example Built-In Hooks for the policy intent.
@@ -17,7 +17,7 @@ const BLOCK_DANGEROUS_SHELL: CallbackHookDefinition = {
   eventName: "PreToolUse",
   matcher: "shell_execute",
   source: "builtin",
-  enabled: false,
+  enabled: true,
   trusted: true,
   failureMode: "block",
   statusMessage: "Checking shell command policy",
@@ -43,7 +43,7 @@ const SCRAPING_COMPLIANCE: CallbackHookDefinition = {
   eventName: "PostToolUse",
   matcher: "scrape_*",
   source: "builtin",
-  enabled: false,
+  enabled: true,
   trusted: true,
   type: "callback",
   callback: () => ({
