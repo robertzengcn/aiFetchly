@@ -1895,6 +1895,7 @@ export default {
     clear: "会話をクリア",
     reloadConfig: "設定を再読み込み",
     status: "ステータス",
+    agents: "エージェント",
     helpResultTitle: "利用可能なコマンド",
     noMatches: "一致するコマンドはありません",
     unknownCommand: "不明なスラッシュコマンド: /{name}",

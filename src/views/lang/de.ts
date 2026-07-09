@@ -1935,6 +1935,7 @@ export default {
     clear: "Unterhaltung löschen",
     reloadConfig: "Konfig neu laden",
     status: "Status",
+    agents: "Agenten",
     helpResultTitle: "Verfügbare Befehle",
     noMatches: "Keine passenden Befehle",
     unknownCommand: "Unbekannter Slash-Befehl: /{name}",

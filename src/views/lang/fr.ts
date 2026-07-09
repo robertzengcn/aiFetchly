@@ -1923,6 +1923,7 @@ export default {
     clear: "Effacer la conversation",
     reloadConfig: "Recharger la config",
     status: "État",
+    agents: "Agents",
     helpResultTitle: "Commandes disponibles",
     noMatches: "Aucune commande correspondante",
     unknownCommand: "Commande slash inconnue : /{name}",

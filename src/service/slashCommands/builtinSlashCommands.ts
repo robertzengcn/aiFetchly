@@ -52,7 +52,8 @@ const BUILT_IN_COMMANDS: readonly SlashCommandDefinition[] = Object.freeze([
   {
     id: "built-in:command:status",
     name: "status",
-    description: "Show AiFetchly configuration status, counts, and diagnostics.",
+    description:
+      "Show AiFetchly configuration status, counts, and diagnostics.",
     aliases: [],
     type: "local",
     source: "built-in",
@@ -73,6 +74,24 @@ const BUILT_IN_COMMANDS: readonly SlashCommandDefinition[] = Object.freeze([
     requiresTrust: false,
     enabled: true,
   },
+  {
+    // Phase 16 / Plan 03 — /agents lists built-in + dynamic agents (AGT-03,
+    // D-AgentsList). Non-AI-gated local command: the dispatcher returns a
+    // computed show_result string sourced from agentRegistry.list(); no AI
+    // call, no AI-gated handler registration (TRS-05 Strategy A — the grep
+    // boundary test in SlashCommandDispatcher.test.ts asserts the absence of
+    // the AI-gate registrar symbol in this file).
+    id: "built-in:command:agents",
+    name: "agents",
+    description: "List available AiFetchly agents (built-in and dynamic).",
+    aliases: [],
+    type: "local",
+    source: "built-in",
+    sourceId: "built-in",
+    sourceLabel: "Built-in",
+    requiresTrust: false,
+    enabled: true,
+  },
 ]);
 
 /**
@@ -83,9 +102,7 @@ const BUILT_IN_COMMANDS: readonly SlashCommandDefinition[] = Object.freeze([
  * Called once at startup from `registerSlashCommandHandlers` in the IPC
  * layer so this file owns all built-in command setup.
  */
-export function registerBuiltInSlashCommands(
-  registry: CommandRegistry
-): void {
+export function registerBuiltInSlashCommands(registry: CommandRegistry): void {
   for (const cmd of BUILT_IN_COMMANDS) {
     registry.register(cmd);
   }

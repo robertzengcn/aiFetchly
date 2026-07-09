@@ -68,7 +68,7 @@ function disableCommand(registry: CommandRegistry, id: string): void {
 // --- CMD-03 built-in registration -------------------------------------------
 
 describe("registerBuiltInSlashCommands (CMD-03)", () => {
-  it("registers exactly the four phase-13 built-ins with correct ids", () => {
+  it("registers exactly the phase-13 + phase-16 built-ins with correct ids", () => {
     const { registry } = buildStack();
     const ids = registry
       .list()
@@ -77,6 +77,7 @@ describe("registerBuiltInSlashCommands (CMD-03)", () => {
       .sort();
     expect(ids).toEqual(
       [
+        "built-in:command:agents",
         "built-in:command:clear",
         "built-in:command:help",
         "built-in:command:reload-config",
@@ -93,6 +94,11 @@ describe("registerBuiltInSlashCommands (CMD-03)", () => {
       id: "built-in:command:reload-config",
       name: "reload-config",
       descMatch: /Rescan|reload/i,
+    },
+    {
+      id: "built-in:command:agents",
+      name: "agents",
+      descMatch: /agents/i,
     },
   ])(
     "built-in $id has stable shape (type=local, enabled, no trust)",

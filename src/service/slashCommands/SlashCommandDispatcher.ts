@@ -35,6 +35,7 @@ import type {
   AIFetchlyConfigReloadSummary,
   AIFetchlyConfigStatus,
 } from "@/service/aifetchlyConfig/AIFetchlyConfigManager";
+import type { AgentDefinitionView } from "@/entityTypes/agentTypes";
 
 /**
  * SlashCommandDispatcher — resolves raw composer text into the
@@ -181,6 +182,22 @@ export class SlashCommandDispatcher {
         };
       }
 
+      case "built-in:command:agents": {
+        // Phase 16 / Plan 03 (D-AgentsList) — list built-in + dynamic agents
+        // sourced from agentRegistry.list() (already sorted by D-Precedence:
+        // built-in -> user -> workspace -> plugin). Returns a computed
+        // string only — no agent file bytes cross to the renderer (TRS-07).
+        // Non-AI-gated: this branch runs under the existing
+        // SLASH_COMMAND_DISPATCH registerValidatedHandler path (TRS-05 A).
+        const agents = this.manager.getAgentRegistry().list();
+        return {
+          status: true,
+          action: "show_result",
+          commandId,
+          content: renderAgentsList(agents),
+        };
+      }
+
       case "built-in:command:reload-config": {
         const summary = await this.manager.reload();
         return {
@@ -253,4 +270,47 @@ function renderReload(r: AIFetchlyConfigReloadSummary): string {
     `Diagnostics: ${r.diagnosticCount}`,
     `Instructions changed: ${r.instructionsChanged ? "yes" : "no"}`,
   ].join("\n");
+}
+
+/**
+ * Phase 16 / Plan 03 — derive the {@link AgentSource} kind from a scoped
+ * agent id. Conventions (Plan 01 scoped-ID format):
+ *   - "user:agent:<name>"                   -> user
+ *   - "workspace:<workspaceId>:agent:<name>"-> workspace
+ *   - "plugin:<pluginName>:agent:<name>"    -> plugin
+ *   - anything else (bare "agent-*")        -> built-in
+ *
+ * Pure string derivation keeps the helper free of registry coupling
+ * (AgentDefinitionView intentionally carries no source field — Plan 01
+ * decision). The {@link AgentDefinitionRegistryImpl.list} output is already
+ * sorted by D-Precedence, so the caller renders rows in precedence order.
+ */
+function agentSourceBadgeLabel(id: string): string {
+  // Badge labels mirror the Phase 13 slashCommands i18n source-label keys
+  // (sourceBuiltin/sourceUser/sourceWorkspace/sourcePlugin). The dispatcher
+  // returns English literals for simplicity (design §15.3; same convention
+  // as renderHelp/renderStatus) — no new badge strings are introduced.
+  if (id.startsWith("user:agent:")) return "User";
+  if (id.startsWith("workspace:") && id.includes(":agent:")) return "Workspace";
+  if (id.startsWith("plugin:") && id.includes(":agent:")) return "Plugin";
+  return "Built-in";
+}
+
+/**
+ * Render the /agents content (D-AgentsList). The input MUST be already sorted
+ * by D-Precedence (built-in -> user -> workspace -> plugin), which
+ * {@link AgentDefinitionRegistryImpl.list} guarantees. Each row formats as
+ * "<id> — <name>: <description> [<source badge>]" so the model can copy the
+ * exact id into run_subagent (ties to D-AgentIDs). An empty list yields a
+ * stable no-agents message and NEVER throws.
+ */
+function renderAgentsList(agents: readonly AgentDefinitionView[]): string {
+  if (agents.length === 0) {
+    return "No agents registered. Add ~/.aifetchly/agents/<name>.md to define one.";
+  }
+  const lines = agents.map(
+    (a) =>
+      `${a.id} — ${a.name}: ${a.description} [${agentSourceBadgeLabel(a.id)}]`
+  );
+  return "Available agents:\n" + lines.join("\n");
 }

@@ -1940,6 +1940,7 @@ export default {
     clear: "Borrar conversación",
     reloadConfig: "Recargar config",
     status: "Estado",
+    agents: "Agentes",
     helpResultTitle: "Comandos disponibles",
     noMatches: "Sin comandos coincidentes",
     unknownCommand: "Comando slash desconocido: /{name}",

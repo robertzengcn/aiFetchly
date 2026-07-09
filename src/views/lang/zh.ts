@@ -1872,6 +1872,7 @@ export default {
     clear: "清空对话",
     reloadConfig: "重新加载配置",
     status: "状态",
+    agents: "代理",
     helpResultTitle: "可用命令",
     noMatches: "没有匹配的命令",
     unknownCommand: "未知的斜杠命令：/{name}",
