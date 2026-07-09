@@ -71,7 +71,8 @@ jspm_packages/
 .yarn-integrity
 
 # dotenv environment variables file
-.env
+.env*
+!.env.example
 
 # next.js build output
 .next
@@ -90,10 +91,8 @@ yt-auth/*
 #Electron-builder output
 /dist_electron
 dist
-.env.development
 .vite/*
-vite.main.config.mjs.timestamp-*.mjs
-vite.utilityCode.config.mjs.*.mjs
+*.timestamp-*.mjs
 build/
 
 dev-debug.log
