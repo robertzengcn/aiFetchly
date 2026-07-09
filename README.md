@@ -15,7 +15,7 @@
 
 ---
 
-**aiFetchly** is an open-source desktop application that combines AI with marketing automation to help you find leads, extract contacts, run personalized email outreach campaigns, and manage social media — all from one place.
+**aiFetchly** is an open-source desktop agent that combines AI with marketing automation to help you find leads, extract contacts, run personalized email outreach campaigns, and manage social media — all from one place.
 
 ## Why aiFetchly?
 
