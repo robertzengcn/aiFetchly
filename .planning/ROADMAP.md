@@ -170,7 +170,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 16-02-loaders-trust-scanner-PLAN.md — global ~/.aifetchly/agents loader + manager-owned registry; workspace scanner raw drafts (worker-no-DB); workspace draft→definition converter + applyWorkspaceSnapshot trust filter (TRS-01) (AGT-02)
+- [x] 16-02-loaders-trust-scanner-PLAN.md — COMPLETE 2026-07-09 — global ~/.aifetchly/agents loader + manager-owned registry; workspace scanner raw drafts (worker-no-DB); workspace draft to definition converter + applyWorkspaceSnapshot trust filter (TRS-01) (AGT-02) — 3/3 tasks TDD, 44 tests green, tsc 0
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
@@ -234,6 +234,6 @@ Plans:
 | 13. Global Context and Built-in Slash Commands | v2.0 | 6/6 | Complete   | 2026-07-05 |
 | 14. Workspace Watcher Worker | v2.0 | 3/5 | In Progress|  |
 | 15. Prompt Command Files | v2.0 | 2/2 | Complete    | 2026-07-07 |
-| 16. Dynamic Agents | v2.0 | 1/3 | In Progress|  |
+| 16. Dynamic Agents | v2.0 | 2/3 | In Progress| 2026-07-09 |
 | 17. Hooks | v2.0 | 0/? | Not started | — |
 | 18. Skills and Plugin Integration | v2.0 | 0/? | Not started | — |
