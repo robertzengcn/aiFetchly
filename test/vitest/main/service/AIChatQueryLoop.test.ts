@@ -322,6 +322,79 @@ describe("AIChatQueryLoop", () => {
       );
     });
 
+    it("applies PreToolUse updatedInput before executing a tool", async () => {
+      HookRegistry.registerUserHook({
+        id: "test-shell-rewrite",
+        eventName: "PreToolUse",
+        source: "user",
+        enabled: true,
+        type: "command",
+        matcher: "shell_execute",
+        command: `${process.execPath} -e "process.stdout.write(JSON.stringify({updatedInput:{command:'echo safe'}}))"`,
+        timeoutMs: 5000,
+      });
+
+      const toolCallChunk = makeToolCallChunk(
+        "call-1",
+        "shell_execute",
+        '{"command":"echo hello"}'
+      );
+      const finalChunk = makeChunk("Done", "stop");
+      let callCount = 0;
+      const fakeStream = vi.fn(
+        async (
+          _request: OpenAIChatCompletionRequest,
+          onChunk: (c: OpenAIChatCompletionChunk) => void
+        ) => {
+          if (callCount === 0) {
+            callCount++;
+            onChunk(toolCallChunk);
+            return;
+          }
+          onChunk(finalChunk);
+        }
+      );
+      const fakeExecute = vi.fn().mockResolvedValue({
+        tool_call_id: "call-1",
+        tool_name: "shell_execute",
+        success: true,
+        result: { stdout: "safe\n" },
+        execution_time_ms: 10,
+      });
+      const eventSink = { emit: vi.fn() };
+      const loop = new AIChatQueryLoop({
+        streamChatCompletion: fakeStream,
+        executeTool: fakeExecute,
+        getSkillDefinition: vi.fn().mockReturnValue(undefined),
+      });
+      const input: AIChatQueryLoopInput = {
+        conversationId: "v2-test",
+        assistantMessageId: "a-1",
+        messages: [],
+        request: { message: "run shell command echo hello" },
+        openAITools: [],
+        abortController: new AbortController(),
+        eventSink,
+        startRound: 0,
+        isActiveTurn: () => true,
+      };
+
+      const result = await loop.run(input);
+
+      expect(result.type).toBe("completed");
+      expect(fakeExecute).toHaveBeenCalledWith(
+        "shell_execute",
+        { command: "echo safe" },
+        expect.objectContaining({ toolCallId: "call-1" })
+      );
+      expect(eventSink.emit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "tool_call",
+          toolArguments: { command: "echo safe" },
+        })
+      );
+    });
+
     it("returns failed for malformed tool arguments", async () => {
       const badChunk = makeToolCallChunk("call-1", "search", "{invalid json");
       const fakeStream = vi.fn(
@@ -449,6 +522,63 @@ describe("AIChatQueryLoop", () => {
       if (result.type === "paused_for_permission") {
         expect(result.pending.toolCallId).toBe("call-1");
         expect(result.pending.nextRound).toBe(1);
+      }
+    });
+
+    it("stores PreToolUse updatedInput in pending permission state", async () => {
+      HookRegistry.registerUserHook({
+        id: "test-pending-shell-rewrite",
+        eventName: "PreToolUse",
+        source: "user",
+        enabled: true,
+        type: "command",
+        matcher: "shell_execute",
+        command: `${process.execPath} -e "process.stdout.write(JSON.stringify({updatedInput:{command:'echo safe'}}))"`,
+        timeoutMs: 5000,
+      });
+
+      const toolCallChunk = makeToolCallChunk(
+        "call-1",
+        "shell_execute",
+        '{"command":"echo hello"}'
+      );
+      const fakeStream = vi.fn(
+        async (
+          _req: unknown,
+          onChunk: (c: OpenAIChatCompletionChunk) => void
+        ) => {
+          onChunk(toolCallChunk);
+        }
+      );
+      const fakeExecute = vi.fn().mockResolvedValue({
+        tool_call_id: "call-1",
+        tool_name: "shell_execute",
+        success: false,
+        result: { needsPermissionPrompt: true },
+        execution_time_ms: 1,
+      });
+      const loop = new AIChatQueryLoop({
+        streamChatCompletion: fakeStream,
+        executeTool: fakeExecute,
+        getSkillDefinition: vi.fn().mockReturnValue(undefined),
+      });
+      const input: AIChatQueryLoopInput = {
+        conversationId: "v2-test",
+        assistantMessageId: "a-1",
+        messages: [],
+        request: { message: "run shell command echo hello" },
+        openAITools: [],
+        abortController: new AbortController(),
+        eventSink: { emit: vi.fn() },
+        startRound: 0,
+        isActiveTurn: () => true,
+      };
+
+      const result = await loop.run(input);
+
+      expect(result.type).toBe("paused_for_permission");
+      if (result.type === "paused_for_permission") {
+        expect(result.pending.toolArguments).toEqual({ command: "echo safe" });
       }
     });
 

@@ -127,6 +127,18 @@ interface LastFailedToolInfo {
   error: string;
 }
 
+interface PreparedToolCall {
+  startedAt: number;
+  descriptor: HookToolDescriptor;
+  preAggregate: AggregatedHookResult;
+  effectiveCall: {
+    id: string;
+    name: string;
+    arguments?: Record<string, unknown>;
+  };
+  blockedResult?: ToolExecutionResult;
+}
+
 /**
  * Estimate token usage locally from the prompt messages and completion text.
  * Used as a fallback when the AI server ignores `stream_options.include_usage`
@@ -774,15 +786,21 @@ export class AIChatQueryLoop {
           if (!call.ok || !call.id || !call.name) {
             continue;
           }
+          const callId = call.id;
+          const callName = call.name;
 
-          eventSink.emit({
-            type: "tool_call",
-            conversationId: input.conversationId,
-            messageId: input.assistantMessageId,
-            toolCallId: call.id,
-            toolName: call.name,
-            toolArguments: call.arguments ?? {},
-          });
+          const emitToolCall = (
+            toolArguments: Record<string, unknown>
+          ): void => {
+            eventSink.emit({
+              type: "tool_call",
+              conversationId: input.conversationId,
+              messageId: input.assistantMessageId,
+              toolCallId: callId,
+              toolName: callName,
+              toolArguments,
+            });
+          };
 
           // Model-initiated Plan Mode entry (chat mode only).
           if (
@@ -790,6 +808,7 @@ export class AIChatQueryLoop {
             !planContext &&
             input.autoPlan
           ) {
+            emitToolCall(call.arguments ?? {});
             const transition = await this.handleEnterPlanMode(
               input,
               messages,
@@ -826,6 +845,7 @@ export class AIChatQueryLoop {
             isEnterPlanModeToolName(call.name) &&
             (!input.autoPlan || planContext)
           ) {
+            emitToolCall(call.arguments ?? {});
             const reason = planContext
               ? "Already in Plan Mode; EnterPlanMode is not available."
               : "EnterPlanMode is not available. Plan Mode auto-entry is disabled.";
@@ -852,6 +872,7 @@ export class AIChatQueryLoop {
 
           // Plan tools are intercepted locally.
           if (planContext && isPlanToolName(call.name)) {
+            emitToolCall(call.arguments ?? {});
             planToolsUsed = true;
             if (call.name === "AskUserQuestion") {
               const paused = await this.handlePlanToolAskUserQuestion(
@@ -889,6 +910,7 @@ export class AIChatQueryLoop {
               },
             });
             if (!policyDecision.allowed) {
+              emitToolCall(call.arguments ?? {});
               const blockedContent = serializeToolResultContent({
                 success: false,
                 planApprovalRequired: true,
@@ -918,10 +940,14 @@ export class AIChatQueryLoop {
             name: call.name,
             arguments: call.arguments,
           };
-          const toolResult = await this.executeToolWithTimeout(
-            input,
-            executableCall
-          );
+          const preparedCall = await this.prepareToolCall(input, executableCall);
+          const effectiveArguments =
+            preparedCall.effectiveCall.arguments ?? {};
+          emitToolCall(effectiveArguments);
+
+          const toolResult =
+            preparedCall.blockedResult ??
+            (await this.executePreparedToolWithTimeout(input, preparedCall));
 
           // If the abort fired during the tool (e.g. user clicked Stop during
           // async polling), skip the tool_result emit — the outer abort handler
@@ -981,7 +1007,7 @@ export class AIChatQueryLoop {
                 nextRound: round + 1,
                 toolCallId: call.id,
                 toolName: call.name,
-                toolArguments: call.arguments ?? {},
+                toolArguments: effectiveArguments,
                 planContext,
                 eventSink: eventSink,
               },
@@ -1240,7 +1266,7 @@ export class AIChatQueryLoop {
    * Used when resolveTimeoutMs(cls) === null (i.e. the resolved timeout class
    * is "async"). Instead of blocking the query loop with a Promise.race, we
    * register a job in the ToolJobRegistry and return the jobId. The caller
-   * (executeToolWithTimeout) then hands the jobId to pollAsyncJobToCompletion,
+   * (executePreparedToolWithTimeout) then hands the jobId to pollAsyncJobToCompletion,
    * which blocks the loop until the registry job reaches a terminal status,
    * emitting tool_progress events along the way.
    *
@@ -1488,14 +1514,14 @@ export class AIChatQueryLoop {
     }
   }
 
-  private async executeToolWithTimeout(
+  private async prepareToolCall(
     input: AIChatQueryLoopInput,
     call: {
       id: string;
       name: string;
       arguments?: Record<string, unknown>;
     }
-  ): Promise<ToolExecutionResult> {
+  ): Promise<PreparedToolCall> {
     const startedAt = Date.now();
     const descriptor = this.resolveHookToolDescriptor(input, call);
     const preAggregate = await this.runPreToolUseHooks(
@@ -1505,11 +1531,20 @@ export class AIChatQueryLoop {
     );
 
     if (preAggregate.blocked || preAggregate.permissionDecision === "deny") {
-      return this.buildHookBlockedToolResult(
-        call,
+      return {
+        startedAt,
+        descriptor,
         preAggregate,
-        Date.now() - startedAt
-      );
+        effectiveCall: {
+          ...call,
+          arguments: preAggregate.updatedInput ?? call.arguments ?? {},
+        },
+        blockedResult: this.buildHookBlockedToolResult(
+          call,
+          preAggregate,
+          Date.now() - startedAt
+        ),
+      };
     }
 
     const effectiveCall = {
@@ -1517,6 +1552,19 @@ export class AIChatQueryLoop {
       arguments: preAggregate.updatedInput ?? call.arguments ?? {},
     };
 
+    return {
+      startedAt,
+      descriptor,
+      preAggregate,
+      effectiveCall,
+    };
+  }
+
+  private async executePreparedToolWithTimeout(
+    input: AIChatQueryLoopInput,
+    prepared: PreparedToolCall
+  ): Promise<ToolExecutionResult> {
+    const { descriptor, effectiveCall, preAggregate, startedAt } = prepared;
     // Resolve the timeout class. Explicit declaration on the skill wins;
     // argument-driven resolver wins over static field; otherwise infer by name.
     const skill = input.skillRegistry?.getSkill(effectiveCall.name);

@@ -264,7 +264,7 @@ Refer to the Hooks Management UI plan for full CRUD testing. Key tests:
 |---|---|---|
 | **13.1 — No hooks matched** | 1. Enable hooks globally but register no matching hooks<br>2. Send any tool prompt | Dispatcher fast-paths: `EMPTY_AGGREGATE`; tool executes normally; <5ms overhead |
 | **13.2 — Hook throws exception** | Create a callback hook that throws | Hook marked as failed; tool continues (failureMode=warn); no crash |
-| **13.3 — Hook modifies tool input** | Create a PreToolUse callback that returns `{ updatedInput: { command: "echo safe" } }` | Tool receives the modified input instead of the original |
+| **13.3 — Hook modifies tool input** | Create a PreToolUse command hook for `shell_execute` that prints `{"updatedInput":{"command":"echo safe"}}`, then send `run shell command echo hello` | Tool receives the modified input instead of the original. The tool-call card/history should show `command: "echo safe"` and the shell result should output `safe` |
 | **13.4 — Hook returns systemMessage** | Create any hook returning `{ systemMessage: "Hello from hook" }` | System message appears in the chat UI |
 | **13.5 — Multiple hooks add context** | Two PostToolUse hooks each return `additionalContext` | Both context strings appear; merged in order |
 | **13.6 — Abort signal before dispatch** | 1. Send a prompt<br>2. Click Stop before the tool call | Dispatcher sees `abortSignal.aborted` and returns `EMPTY_AGGREGATE` |
