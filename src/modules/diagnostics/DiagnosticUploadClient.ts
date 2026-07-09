@@ -1,5 +1,6 @@
-'use strict';
-import type { DiagnosticReportPackage } from './DiagnosticSchemas';
+"use strict";
+import type { DiagnosticReportPackage } from "./DiagnosticSchemas";
+import { projectToWirePayload } from "./CrashReportWireSchema";
 
 /**
  * Minimal HTTP client interface so callers can inject axios, fetch, or a mock.
@@ -10,7 +11,7 @@ export interface HttpClientLike {
   post(
     url: string,
     body: unknown,
-    config: { headers: Record<string, string>; timeout: number },
+    config: { headers: Record<string, string>; timeout: number }
   ): Promise<{ status: number; data: unknown }>;
 }
 
@@ -44,14 +45,18 @@ export class DiagnosticUploadClient {
 
   async upload(pkg: DiagnosticReportPackage): Promise<UploadResult> {
     const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
+      "Content-Type": "application/json",
     };
     if (this.cfg.authToken) {
-      headers['Authorization'] = this.cfg.authToken;
+      headers["Authorization"] = this.cfg.authToken;
     }
 
     try {
-      const res = await this.cfg.http.post(this.cfg.endpoint, pkg, {
+      // Project the rich internal package down to the backend's strict wire
+      // contract before posting. The server decodes with
+      // DisallowUnknownFields and rejects unknown fields with HTTP 400.
+      const wirePayload = projectToWirePayload(pkg);
+      const res = await this.cfg.http.post(this.cfg.endpoint, wirePayload, {
         headers,
         timeout: this.cfg.timeoutMs ?? 15_000,
       });
@@ -65,11 +70,11 @@ export class DiagnosticUploadClient {
       if (res.status === 429) {
         return {
           reportId: null,
-          error: `Rate limit exceeded: ${body?.msg ?? 'try again later'}`,
+          error: `Rate limit exceeded: ${body?.msg ?? "try again later"}`,
         };
       }
       if (res.status === 413) {
-        return { reportId: null, error: 'Report payload too large.' };
+        return { reportId: null, error: "Report payload too large." };
       }
       return {
         reportId: null,
