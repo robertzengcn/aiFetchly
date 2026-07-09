@@ -203,7 +203,7 @@ Refer to the Hooks Management UI plan for full CRUD testing. Key tests:
 |---|---|---|
 | **8.1 — List hooks** | Open **System Settings → Hooks** | All registered hooks shown (built-in + user-configured) with source, event, matcher, enabled status |
 | **8.2 — Toggle hook** | Toggle a built-in hook ON/OFF | Saved immediately; behavior changes on next tool call |
-| **8.3 — Edit user hook** | Click edit on a user-configured hook | Command, matcher, timeout, failure mode editable |
+| **8.3 — Edit user hook** | Click edit on a user-configured hook | Command, matcher, if condition, timeout, failure mode editable |
 | **8.4 — Delete user hook** | Delete a user-configured hook | Removed from registry; no longer fires |
 | **8.5 — Last run status** | Check the hook row after firing | Shows last run timestamp + status (success/failed/timeout) |
 
@@ -232,6 +232,10 @@ Refer to the Hooks Management UI plan for full CRUD testing. Key tests:
 | **10f — Contains wildcard** | `scrape_*_urls` | `scrape_all_urls` | Match |
 | **10g — Empty matcher** | `""` | any | No match |
 | **10h — Oversized matcher** | >200 chars | any | No match (malformed) |
+| **10i — `if` matches arg value** | matcher=`shell_execute`, if=`echo *` | `shell_execute` with command=`echo hello` | Match (`if` pattern matches arg value) |
+| **10j — `if` does not match arg value** | matcher=`shell_execute`, if=`git *` | `shell_execute` with command=`ls -la` | No match (`if` pattern rejects) |
+| **10k — `if` applies to non-tool events** | event=`SessionStart`, if=`echo *` | `SessionStart` has no tool input | Match (`if` ignored for non-tool events) |
+| **10l — `if` matches non-`command` arg** | matcher=`mcp_*`, if=`weather` | `mcp_weather` tool with `location=London` | Match (`weather` found in `JSON.stringify(toolInput)`) |
 
 ---
 
@@ -301,7 +305,7 @@ yarn test
 | Test File | Coverage |
 |---|---|
 | `HookDispatcher.test.ts` | Global gate, callback success/throw, aggregation, abort, no-hooks path |
-| `HookMatcher.test.ts` | Exact, wildcard, prefix/suffix glob, edge cases |
+| `HookMatcher.test.ts` | Exact, wildcard, prefix/suffix glob, edge cases, `if` condition matching |
 | `HookRegistry.test.ts` | Registration, dedup, source priority, event filtering |
 | `HookRegistry.listAll.test.ts` | listAll, registerUserHook, replaceUserHooks, filters |
 | `HookResultAggregator.test.ts` | Block wins, deny wins, input merge, context merge |
@@ -461,7 +465,44 @@ Same pattern as §17.1 but with:
 
 ---
 
-## 22. All 8 Events — Quick-Reference Smoke Test
+## 22. If Condition Filter (Secondary Filter)
+
+The `if` field is an optional glob-lite pattern matched against tool input argument values. It acts as a secondary pre-filter after `matcher`. For tool events only (`PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `PermissionRequest`); ignored for non-tool events.
+
+### 22.1 Create a hook with `if` condition
+
+1. Open **System Settings → Hooks** → **"Add Hook"**
+2. Fill in:
+   - Event: `PreToolUse`
+   - Matcher: `shell_execute`
+   - If condition: `git *`
+   - Type: `command`
+   - Command: `node -e "process.stdin.resume();let b='';process.stdin.on('data',c=>b+=c);process.stdin.on('end',()=>{console.log(JSON.stringify({additionalContext:'git command detected'}))})"`
+   - Timeout: `5000`
+   - Failure mode: `warn`
+3. Click Save
+
+### 22.2 Verification
+
+| Test | Steps | Expected |
+|---|---|---|
+| **22.2a — `if` matches** | Send: `run shell command git status` | Hook fires; AI response includes "git command detected" in `additionalContext` |
+| **22.2b — `if` does not match** | Send: `run shell command echo hello` | Hook does not fire (no `additionalContext`); tool executes normally |
+| **22.2c — `if` ignored for non-tool events** | 1. Create a `UserPromptSubmit` hook with matcher=`*`, if=`git *`<br>2. Send a plain chat message `hello` | Hook fires (non-tool event ignores `if` condition) |
+| **22.2d — `if` with empty value** | Edit the hook: set `if` to blank | Hook fires on all `shell_execute` invocations (no filter) |
+| **22.2e — `if` with `*` wildcard** | Edit the hook: set `if` to `*` | Same as empty — matches all `shell_execute` invocations |
+
+### 22.3 Matches against serialized toolInput
+
+The `if` condition scans individual string argument values. If none match, it falls back to matching against `JSON.stringify(toolInput)`.
+
+| Test | Steps | Expected |
+|---|---|---|
+| **22.3a — Match in serialized fallback** | Create a hook with matcher=`mcp_search`, if=`keyword.*query` and call an MCP tool with `{ "query": "hello world" }` | Hook fires (`"keyword.*query"` matches `"query":"hello world"` in serialized JSON) |
+
+---
+
+## 23. All 8 Events — Quick-Reference Smoke Test
 
 Create one command hook per event (all `matcher: "*"`, trivial `{continue:true}` command).
 Then run the trigger sequence below and check the audit log after each step.
