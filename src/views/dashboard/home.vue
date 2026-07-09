@@ -480,8 +480,10 @@ onUnmounted(() => {
   background-color: #f5f5f5;
   min-height: 100vh;
 }
+</style>
 
-:deep(.v-theme--dark) .dashboard-home {
+<style>
+:root[theme="dark"] .dashboard-home {
   background-color: #121212;
 }
 </style>

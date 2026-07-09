@@ -18,6 +18,15 @@ import {
   RagConfigApi,
   resolveDefaultEmbeddingFromAvailableModels,
 } from "@/api/ragConfigApi";
+import { EmbeddingProviderFactory } from "@/service/embedding/EmbeddingProviderFactory";
+import { EmbeddingRetryService } from "@/service/embedding/EmbeddingRetryService";
+import type { EmbeddingProvider } from "@/service/embedding/EmbeddingProvider";
+import type { EmbeddingResult } from "@/entityTypes/embeddingTypes";
+import {
+  LOCAL_XENOVA_ALL_MINILM_MODEL_ID,
+  LOCAL_XENOVA_ALL_MINILM_DIMENSIONS,
+} from "@/service/embedding/LocalEmbeddingModels";
+import { LOCAL_EMBEDDING_MAX_BATCH_SIZE } from "@/childprocess/embedding/LocalEmbeddingWorkerTypes";
 import { SystemSettingModule } from "@/modules/SystemSettingModule";
 import { SystemSettingGroupModule } from "@/modules/SystemSettingGroupModule";
 import { app } from "electron";
@@ -34,6 +43,11 @@ import {
 } from "@/service/RagSearchTypes";
 import { RagRerankService } from "@/service/RagRerankService";
 import { RAGChunkModule } from "@/modules/RAGChunkModule";
+import {
+  EmbeddingBillingError,
+  isBillingDeniedMessage,
+  isEmbeddingBillingError,
+} from "@/modules/rag/embeddingErrors";
 // import { Token } from "./token";
 // import { USERSDBPATH } from "@/config/usersetting";
 export interface SearchRequest {
@@ -135,6 +149,7 @@ export class RagSearchModule extends BaseModule {
     options: DocumentUploadOptions
   ): Promise<DocumentUploadResponse> {
     const startTime = Date.now();
+    let createdDocument: RAGDocumentEntity | null = null;
 
     // Ensure we always have a valid default model before uploading.
     await this.checkAndSetDefaultEmbeddingModel();
@@ -159,6 +174,7 @@ export class RagSearchModule extends BaseModule {
     try {
       // Upload document to database
       const document = await this.documentService.uploadDocument(options);
+      createdDocument = document;
 
       // Update processing status to processing
       await this.documentService.updateDocumentStatus(
@@ -170,18 +186,20 @@ export class RagSearchModule extends BaseModule {
       // Chunk the document
       const chunks = await this.chunkingService.chunkDocument(document);
 
-      // Generate embeddings for chunks using remote API
-      const vectorIndexPath = await this.generateChunkEmbeddings(
+      // Generate embeddings. The result carries the FINAL model metadata,
+      // which may differ from the requested model when a remote failure forced
+      // a local fallback.
+      const embeddingResult = await this.generateChunkEmbeddings(
         chunks,
         modelName,
         vectorDimensions
       );
 
-      if (vectorIndexPath) {
+      if (embeddingResult) {
         await this.documentService.updateDocumentMetadata(document.id, {
-          vectorIndexPath: vectorIndexPath,
-          modelName: modelName,
-          vectorDimensions: vectorDimensions,
+          vectorIndexPath: embeddingResult.vectorIndexPath,
+          modelName: embeddingResult.modelName,
+          vectorDimensions: embeddingResult.dimensions,
         });
       }
 
@@ -211,11 +229,36 @@ export class RagSearchModule extends BaseModule {
         throw error;
       }
 
-      // Try to find the document and update its status
+      // Preserve the billing-denied signal so the UI can present a clear,
+      // translated message instead of the raw backend string.
+      if (error instanceof EmbeddingBillingError) {
+        // Still try to mark the document as failed before propagating.
+        try {
+          const existingDoc =
+            createdDocument ||
+            (await this.documentService.findDocumentByPath(options.filePath));
+          if (existingDoc) {
+            await this.documentService.updateDocumentStatus(
+              existingDoc.id,
+              "active",
+              "failed"
+            );
+          }
+        } catch (updateError) {
+          console.error(
+            "Failed to update document status to error:",
+            updateError
+          );
+        }
+        throw error;
+      }
+
+      // Try to update the created document status. Upload staging changes the
+      // persisted filePath, so prefer the captured document id over path lookup.
       try {
-        const existingDoc = await this.documentService.findDocumentByPath(
-          options.filePath
-        );
+        const existingDoc =
+          createdDocument ||
+          (await this.documentService.findDocumentByPath(options.filePath));
         if (existingDoc) {
           // Save error log for the document
           try {
@@ -231,7 +274,7 @@ export class RagSearchModule extends BaseModule {
           await this.documentService.updateDocumentStatus(
             existingDoc.id,
             "active",
-            "error"
+            "failed"
           );
         }
       } catch (updateError) {
@@ -250,51 +293,213 @@ export class RagSearchModule extends BaseModule {
   }
 
   /**
-   * Generate embeddings for document chunks using remote API
-   * @param chunks - Array of chunk entities
+   * Result of a chunk-embedding run. Carries the FINAL model metadata, which
+   * may differ from the requested model when a remote failure forced a local
+   * fallback — callers persist these values onto the document.
    */
   private async generateChunkEmbeddings(
     chunks: RAGChunkEntity[],
     modelName: string,
     dimension: number
-  ): Promise<string | null> {
+  ): Promise<{
+    vectorIndexPath: string;
+    modelName: string;
+    dimensions: number;
+  } | null> {
+    if (chunks.length === 0) {
+      return null;
+    }
+    const documentId = chunks[0].documentId;
+    const factory = new EmbeddingProviderFactory();
+    const retryService = new EmbeddingRetryService();
+    const provider = factory.create(modelName, dimension);
+
+    const requestedIndexPath =
+      this.searchService.vectorStoreService.getDocumentIndexPath(documentId, {
+        name: provider.modelName,
+        dimensions: provider.dimensions,
+      });
+
     try {
-      if (chunks.length === 0) {
-        return null;
+      if (provider.provider === "local-xenova") {
+        await this.embedAndStoreChunks(
+          chunks,
+          (texts: string[]) => provider.embedBatch(texts),
+          requestedIndexPath
+        );
+        console.log(
+          `[RagSearchModule] Embedded ${chunks.length} chunks locally for document ${documentId}`
+        );
+        return {
+          vectorIndexPath: requestedIndexPath,
+          modelName: provider.modelName,
+          dimensions: provider.dimensions,
+        };
       }
 
-      const documentId = chunks[0].documentId;
-      // let vectorIndexPath: string | null = null;
-
-      const vectorIndexPath =
-        this.searchService.vectorStoreService.getDocumentIndexPath(documentId, {
-          name: modelName,
-          dimensions: dimension,
-        });
-
-      for (const chunk of chunks) {
-        // Generate embedding for chunk content using remote API
-        const response = await this.ragConfigApi.generateEmbedding(
-          [chunk.content],
-          modelName
+      // Remote path: retry each batch, fall back to the local model only after
+      // retry is exhausted. A document indexing run always finishes with one
+      // model so embedding spaces are never mixed.
+      try {
+        await this.embedAndStoreChunks(
+          chunks,
+          (texts: string[]) => retryService.embedBatch(provider, texts),
+          requestedIndexPath
         );
+        console.log(
+          `[RagSearchModule] Embedded ${chunks.length} chunks via remote model ${provider.modelName} for document ${documentId}`
+        );
+        return {
+          vectorIndexPath: requestedIndexPath,
+          modelName: provider.modelName,
+          dimensions: provider.dimensions,
+        };
+      } catch (remoteError) {
+        // Billing/quota denials must surface to the UI as a typed error so the
+        // user sees a clear, translated message. Do NOT silently fall back to
+        // the local model — the user needs to know their plan limit was hit.
+        if (isEmbeddingBillingError(remoteError)) {
+          throw remoteError;
+        }
+        return await this.fallbackToLocalEmbedding(
+          chunks,
+          documentId,
+          provider,
+          remoteError
+        );
+      }
+    } catch (error) {
+      // Preserve the billing-denied signal unchanged so uploadDocument (and
+      // ultimately the UI) can branch on the typed error.
+      if (isEmbeddingBillingError(error)) {
+        throw error;
+      }
+      console.error("Error generating embeddings:", error);
+      try {
+        await this.documentService.saveErrorLog(
+          documentId,
+          error instanceof Error ? error : new Error(String(error)),
+          "Failed to generate embeddings for document chunks"
+        );
+      } catch (logError) {
+        console.error(
+          "Failed to save error log during embedding generation:",
+          logError
+        );
+      }
+      throw new Error(
+        `Failed to generate embeddings: ${
+          error instanceof Error ? error.message : "Unknown error"
+        }`
+      );
+    }
+  }
 
-        if (!response.status || !response.data) {
+  /**
+   * Best-effort local fallback after remote embedding fails. Clears any partial
+   * remote vectors for the document, then re-embeds every chunk with the local
+   * free model. If the local provider also fails, the error propagates so the
+   * caller marks the document as errored.
+   *
+   * Note: billing-denied errors are NOT routed here — they surface directly so
+   * the UI can present a clear, translated message (see generateChunkEmbeddings).
+   */
+  private async fallbackToLocalEmbedding(
+    chunks: RAGChunkEntity[],
+    documentId: number,
+    remoteProvider: EmbeddingProvider,
+    remoteError: unknown
+  ): Promise<{
+    vectorIndexPath: string;
+    modelName: string;
+    dimensions: number;
+  }> {
+    const remoteFailureMessage =
+      remoteError instanceof Error ? remoteError.message : String(remoteError);
+    console.warn(
+      `[RagSearchModule] Remote embedding failed after retry for document ${documentId}, falling back to local model. Remote error: ${remoteFailureMessage}`
+    );
+
+    // Discard any partial remote vectors so the document index is not mixed.
+    await this.searchService.vectorStoreService.deleteDocumentIndexByPath(
+      documentId,
+      {
+        name: remoteProvider.modelName,
+        dimensions: remoteProvider.dimensions,
+      }
+    );
+
+    const factory = new EmbeddingProviderFactory();
+    const localProvider = factory.create(
+      LOCAL_XENOVA_ALL_MINILM_MODEL_ID,
+      LOCAL_XENOVA_ALL_MINILM_DIMENSIONS
+    );
+    const localIndexPath =
+      this.searchService.vectorStoreService.getDocumentIndexPath(documentId, {
+        name: localProvider.modelName,
+        dimensions: localProvider.dimensions,
+      });
+
+    try {
+      await this.embedAndStoreChunks(
+        chunks,
+        (texts: string[]) => localProvider.embedBatch(texts),
+        localIndexPath
+      );
+    } catch (localError) {
+      const localFailureMessage =
+        localError instanceof Error ? localError.message : String(localError);
+      // Local fallback also failed — record both failures and surface a clear
+      // error. Never include document content in the log.
+      throw new Error(
+        `Embedding generation failed after remote retry and local fallback. ` +
+          `Remote model: ${remoteProvider.modelName} (${remoteFailureMessage}). ` +
+          `Local model: ${localProvider.modelName} (${localFailureMessage}).`
+      );
+    }
+
+    console.log(
+      `[RagSearchModule] Embedded ${chunks.length} chunks via local fallback for document ${documentId}`
+    );
+    return {
+      vectorIndexPath: localIndexPath,
+      modelName: localProvider.modelName,
+      dimensions: localProvider.dimensions,
+    };
+  }
+
+  /**
+   * Embed every chunk via the supplied batch function and store the vectors.
+   * Chunks are processed in fixed-size batches to bound memory and CPU on the
+   * worker / remote API. If embedBatchFn throws, partial vectors from earlier
+   * batches may already be stored — the caller (fallback) is responsible for
+   * clearing them before retrying with a different provider.
+   */
+  private async embedAndStoreChunks(
+    chunks: RAGChunkEntity[],
+    embedBatchFn: (texts: string[]) => Promise<EmbeddingResult[]>,
+    vectorIndexPath: string
+  ): Promise<void> {
+    const batchSize = LOCAL_EMBEDDING_MAX_BATCH_SIZE;
+    for (let i = 0; i < chunks.length; i += batchSize) {
+      const batch = chunks.slice(i, i + batchSize);
+      const texts = batch.map((chunk) => chunk.content);
+      const results = await embedBatchFn(texts);
+      for (let j = 0; j < batch.length; j++) {
+        const chunk = batch[j];
+        const result = results[j];
+        if (!result) {
           throw new Error(
-            `Failed to get embedding: ${response.msg || "Unknown error"}`
+            `Embedding provider returned no result for chunk index ${i + j}`
           );
         }
-
-        const embeddingResult = response.data[0];
-
-        // Store embedding in document-specific vector store with model information
         await this.searchService.vectorStoreService.storeEmbedding({
           chunkId: chunk.id,
           documentId: chunk.documentId,
           content: chunk.content,
-          embedding: embeddingResult.embedding,
-          model: embeddingResult.model,
-          dimensions: embeddingResult.dimensions,
+          embedding: result.embedding,
+          model: result.model,
+          dimensions: result.dimensions,
           metadata: {
             chunkIndex: chunk.chunkIndex,
             pageNumber: chunk.pageNumber,
@@ -302,39 +507,6 @@ export class RagSearchModule extends BaseModule {
           vectorIndexPath: vectorIndexPath,
         });
       }
-
-      // Get the vector index path (only need to do this once)
-
-      console.log(
-        `Generated embeddings for ${chunks.length} chunks using remote API for document ${documentId}`
-      );
-      console.log("vectorIndexPath", vectorIndexPath);
-      return vectorIndexPath;
-    } catch (error) {
-      console.error("Error generating embeddings:", error);
-
-      // Try to save error log for the document
-      try {
-        const documentId = chunks[0]?.documentId;
-        if (documentId) {
-          await this.documentService.saveErrorLog(
-            documentId,
-            error instanceof Error ? error : new Error(String(error)),
-            "Failed to generate embeddings for document chunks"
-          );
-        }
-      } catch (logError) {
-        console.error(
-          "Failed to save error log during embedding generation:",
-          logError
-        );
-      }
-
-      throw new Error(
-        `Failed to generate embeddings: ${
-          error instanceof Error ? error.message : "Unknown error"
-        }`
-      );
     }
   }
 
@@ -788,22 +960,23 @@ export class RagSearchModule extends BaseModule {
         };
       }
 
-      // Generate embeddings for chunks that don't have them using remote API
-      const vectorIndexPath = await this.generateChunkEmbeddings(
+      // Generate embeddings. The result carries the FINAL model metadata,
+      // which may differ from the requested model after a local fallback.
+      const embeddingResult = await this.generateChunkEmbeddings(
         chunksWithoutEmbeddings,
         modelName,
         dimension
       );
 
-      // Save vector index path to document entity
-      if (vectorIndexPath) {
+      // Save final vector index path and model metadata to document entity
+      if (embeddingResult) {
         await this.documentService.updateDocumentMetadata(documentId, {
-          vectorIndexPath,
-          modelName: modelName,
-          vectorDimensions: dimension,
+          vectorIndexPath: embeddingResult.vectorIndexPath,
+          modelName: embeddingResult.modelName,
+          vectorDimensions: embeddingResult.dimensions,
         });
         console.log(
-          `Saved vector index path to document ${documentId}: ${vectorIndexPath}`
+          `Saved vector index path to document ${documentId}: ${embeddingResult.vectorIndexPath}`
         );
       }
 

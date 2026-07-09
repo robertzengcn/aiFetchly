@@ -6,6 +6,8 @@ import { TaskStatus } from "@/entityTypes/commonType";
 import { ToolExecutionService } from "@/service/ToolExecutionService";
 import { formatYellowPagesResultsForLLM } from "@/main-process/communication/ai-chat-ipc";
 import { MCPToolService } from "@/service/MCPToolService";
+import { parseMcpToolName } from "@/service/pluginCompat/McpToolNaming";
+import { MCPToolModule } from "@/modules/MCPToolModule";
 import { EmailSearchTaskModule } from "@/modules/EmailSearchTaskModule";
 import { EmailExtractionTypes } from "@/config/emailextraction";
 import { WebsiteAnalysisService } from "@/service/WebsiteAnalysisService";
@@ -334,14 +336,51 @@ export class ToolExecutor {
 
   /**
    * Execute MCP tool
-   * Tool name format: mcp_<serverId>_<toolName>
+   * Tool name formats:
+   *   Legacy:  mcp_<serverId>_<toolName>
+   *   Plugin:  mcp__<plugin>__<server>__<toolName>
    */
   private static async executeMCPTool(
     toolName: string,
     toolParams: Record<string, unknown>
   ): Promise<Record<string, unknown>> {
     try {
-      // Parse tool name: mcp_<serverId>_<toolName>
+      const mcpService = new MCPToolService();
+
+      if (toolName.startsWith("mcp__")) {
+        // Plugin format: mcp__<plugin>__<server>__<toolName>
+        const parsed = parseMcpToolName(toolName);
+        if (!parsed.ok) {
+          return { success: false, error: parsed.error };
+        }
+        if (parsed.kind !== "plugin") {
+          return { success: false, error: `Expected plugin format MCP tool name: ${toolName}` };
+        }
+
+        const module = new MCPToolModule();
+        // The scoped server name includes the <plugin>__ prefix.
+        const scopedName = `${parsed.pluginName}__${parsed.unscopedServerName}`;
+        const server = await module.findPluginMcpByScopedName(
+          parsed.pluginName,
+          scopedName
+        );
+
+        if (!server) {
+          return {
+            success: false,
+            error: `MCP server "${parsed.unscopedServerName}" not found for plugin "${parsed.pluginName}"`,
+          };
+        }
+
+        const result = await mcpService.executeMCPTool(
+          server.id,
+          parsed.toolName,
+          toolParams
+        );
+        return { success: true, result };
+      }
+
+      // Legacy format: mcp_<serverId>_<toolName>
       const parts = toolName.split("_");
       if (parts.length < 3 || parts[0] !== "mcp") {
         return {
@@ -360,7 +399,6 @@ export class ToolExecutor {
         };
       }
 
-      const mcpService = new MCPToolService();
       const result = await mcpService.executeMCPTool(
         serverId,
         actualToolName,
@@ -1697,8 +1735,8 @@ export class ToolExecutor {
         const filePath = path.isAbsolute(rawPath)
           ? rawPath
           : ws?.rootPath
-            ? path.resolve(ws.rootPath, rawPath)
-            : path.resolve(rawPath);
+          ? path.resolve(ws.rootPath, rawPath)
+          : path.resolve(rawPath);
         const record: Omit<FileOperationRecord, "id" | "timestamp"> = {
           type:
             toolName === "file_write"
@@ -1742,8 +1780,8 @@ export class ToolExecutor {
         const filePath = path.isAbsolute(rawPath)
           ? rawPath
           : ws?.rootPath
-            ? path.resolve(ws.rootPath, rawPath)
-            : path.resolve(rawPath);
+          ? path.resolve(ws.rootPath, rawPath)
+          : path.resolve(rawPath);
         FileOperationTracker.emit({
           // Note: On failure we can't know if file_write intended "create" vs "overwrite".
           // Defaulting to "overwrite" is reasonable since the file likely exists already.

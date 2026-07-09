@@ -68,11 +68,6 @@ v-if="mainStore.isMobile" variant="text" icon="mdi-menu"
                     <v-btn
 @click="mainStore.onTheme" variant="text" :icon="mainStore.theme === 'light' ? 'mdi-weather-sunny' : 'mdi-weather-night'
         " />
-                    <v-btn variant="text" icon="mdi-bell-outline">
-                        <v-badge content="2" color="error">
-                            <v-icon size="small"></v-icon>
-                        </v-badge>
-                    </v-btn>
                     <v-menu :location="location">
                         <template v-slot:activator="{ props }">
                             <v-btn variant="text" icon="mdi-translate" v-bind="props">
@@ -225,9 +220,9 @@ const chatPanelOpen = ref(false);
 const v2ChatPanelOpen = ref(false);
 const V2_FLAG_KEY = 'aifetchly:aiChatV2Enabled';
 const aiChatV2Enabled = ref(localStorage.getItem(V2_FLAG_KEY) !== 'false');
-const chatPanelWidth = ref(420);
-const CHAT_PANEL_MIN_WIDTH = 320;
-const CHAT_PANEL_MAX_WIDTH = 900;
+const chatPanelWidth = ref(600);
+const CHAT_PANEL_MIN_WIDTH = 400;
+const CHAT_PANEL_MAX_WIDTH = 1200;
 const mainStore = useMainStore();
 const router = useRouter();
 const navState = reactive({
@@ -619,18 +614,7 @@ const showDialog=(status:boolean, content:string)=>{
     }
 }
 
-:deep(.v-theme--dark) {
-    .ai-chat-panel {
-        background-color: #1e1e1e;
-        box-shadow: -2px 0 16px rgba(0, 0, 0, 0.5);
-    }
 
-    .ai-chat-dock {
-        background-color: #1e1e1e;
-        border-left-color: rgba(255, 255, 255, 0.12);
-        box-shadow: -2px 0 16px rgba(0, 0, 0, 0.5);
-    }
-}
 
 @media (max-width: 768px) {
     .ai-chat-panel {
@@ -676,5 +660,18 @@ const showDialog=(status:boolean, content:string)=>{
 
 .chat-resize-handle:hover {
     background-color: rgba(var(--v-theme-primary), 0.3);
+}
+</style>
+
+<style>
+:root[theme="dark"] .ai-chat-panel {
+    background-color: #1e1e1e;
+    box-shadow: -2px 0 16px rgba(0, 0, 0, 0.5);
+}
+
+:root[theme="dark"] .ai-chat-dock {
+    background-color: #1e1e1e;
+    border-left-color: rgba(255, 255, 255, 0.12);
+    box-shadow: -2px 0 16px rgba(0, 0, 0, 0.5);
 }
 </style>

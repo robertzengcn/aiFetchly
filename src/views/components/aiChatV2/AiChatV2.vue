@@ -86,6 +86,7 @@
         :show-typing-indicator="showTypingIndicator"
         :is-streaming="chatIsRunning"
         :retry-info="retryInfo"
+        :recovery-info="recoveryInfo"
         :workspace-root="activeWorkspace?.rootPath ?? ''"
         @grant-permission="handleSkillPermissionGrant"
         @deny-permission="handleSkillPermissionDeny"
@@ -181,8 +182,10 @@
       <div class="v2-shell__workspace-panel">
         <WorkspaceBadge
           :workspace="activeWorkspace"
+          :memory-count="workspaceMemoryCount"
           class="mb-1"
           @request-set-workspace="handleWorkspaceSetupRequest"
+          @request-open-memory="openWorkspaceMemory"
         />
         <WorkspaceRequiredCard
           v-if="showWorkspaceRequired && activeConversationId"
@@ -192,8 +195,29 @@
         />
       </div>
 
+      <v-dialog v-model="showWorkspaceMemory" max-width="760">
+        <v-card>
+          <v-card-title class="d-flex align-center">
+            <v-icon class="mr-2">mdi-brain</v-icon>
+            <span>{{
+              t("workspaceMemory.panelTitle") || "Workspace memory"
+            }}</span>
+            <v-spacer />
+            <v-btn icon="mdi-close" variant="text" size="small" @click="showWorkspaceMemory = false" />
+          </v-card-title>
+          <v-divider />
+          <WorkspaceMemoryPanel
+            v-if="activeConversationId"
+            :conversation-id="activeConversationId"
+            :workspace="activeWorkspace"
+            @change="refreshWorkspaceMemoryCount"
+          />
+        </v-card>
+      </v-dialog>
+
       <AiChatV2Composer
         :is-streaming="chatIsRunning"
+        :is-processing="isPreparingAttachments"
         @send="onSend"
         @stop="onStop"
       >
@@ -340,7 +364,11 @@ import type {
   ChatV2MessageView,
   ChatV2ConversationSummary,
   ChatV2StreamChunk,
+  ChatV2StreamRequest,
   ChatV2MessageMetadata,
+  ChatV2UploadedAttachment,
+  ChatV2AttachmentKind,
+  ChatV2AttachmentMetadata,
   ChatToolApprovalMode,
 } from "@/entityTypes/aiChatV2Types";
 import type {
@@ -385,7 +413,9 @@ import MCPToolManager from "../aiChat/MCPToolManager.vue";
 import AgentTaskListDialog from "./AgentTaskListDialog.vue";
 import WorkspaceBadge from "./WorkspaceBadge.vue";
 import WorkspaceRequiredCard from "./WorkspaceRequiredCard.vue";
+import WorkspaceMemoryPanel from "./WorkspaceMemoryPanel.vue";
 import { getWorkspace } from "@/views/api/workspace";
+import { workspaceMemoryApi } from "@/views/api/aiWorkspaceMemory";
 import type { WorkspaceSummary } from "@/entityTypes/workspaceTypes";
 import type { FileOperationRecord } from "@/entityTypes/fileOperationTypes";
 import {
@@ -399,6 +429,10 @@ import {
   DEFAULT_CONTEXT_WINDOW,
 } from "./contextUsageUtil";
 import { hasPendingToolExecution } from "./toolExecutionStateUtil";
+import {
+  downscaleImageAttachment,
+  arrayBufferToBase64,
+} from "./imageScaleUtil";
 import { QUOTA_EXHAUSTED_SENTINEL } from "@/service/AIChatErrorMapper";
 
 /**
@@ -435,11 +469,109 @@ const retryInfo = ref<{
   maxAttempts: number;
   delayMs: number;
 } | null>(null);
+// Active seven-layer recovery status. Null when no recovery layer is
+// running. Cleared on token/tool_call/complete/cancelled/error.
+type RecoveryInfo = {
+  layer: import("@/service/AIChatRecoveryTypes").AIChatRecoveryLayer;
+  reason: import("@/service/AIChatRecoveryTypes").AIChatRecoveryReason;
+  attempt?: number;
+  maxAttempts?: number;
+  delayMs?: number;
+  elapsedMs?: number;
+  originalModel?: string;
+  currentModel?: string;
+  fallbackModel?: string;
+  message?: string;
+};
+const recoveryInfo = ref<RecoveryInfo | null>(null);
 const showConversationsDialog = ref(false);
 const showMCPToolManager = ref(false);
 const isCompacting = ref(false);
 const compactNotice = ref(false);
 const stoppedPendingToolConversationIds = ref<Set<string>>(new Set());
+
+// ---------------------------------------------------------------------------
+// Attachment upload state
+// ---------------------------------------------------------------------------
+const isPreparingAttachments = ref(false);
+const attachmentError = ref<string | null>(null);
+
+const MAX_UPLOAD_FILE_BYTES = 5 * 1024 * 1024;
+
+function classifyAttachment(fileName: string, mimeType: string): ChatV2AttachmentKind | null {
+  const name = fileName.toLowerCase();
+  const mime = mimeType.toLowerCase();
+
+  if (mime.startsWith("image/")) return "image";
+  if (name.endsWith(".png") || name.endsWith(".jpg") || name.endsWith(".jpeg")) return "image";
+  if (name.endsWith(".webp") || name.endsWith(".gif")) return "image";
+
+  if (mime === "application/pdf" || name.endsWith(".pdf")) return "document";
+  if (mime === "text/csv" || mime === "application/csv" || name.endsWith(".csv")) return "document";
+  if (name.endsWith(".docx") || mime.includes("wordprocessingml.document")) return "document";
+  if (name.endsWith(".xlsx") || name.endsWith(".xls") || mime.includes("spreadsheetml.sheet")) return "document";
+
+  return null;
+}
+
+function defaultPromptForAttachments(files: File[]): string {
+  const images = files.filter((f) => classifyAttachment(f.name, f.type) === "image");
+  if (images.length > 0 && files.every((f) => classifyAttachment(f.name, f.type) === "image")) {
+    return "What is in this image?";
+  }
+  return "";
+}
+
+function resolveMimeType(file: File): string {
+  if (file.type && file.type !== "application/octet-stream") {
+    return file.type;
+  }
+  const name = file.name.toLowerCase();
+  if (name.endsWith(".pdf")) return "application/pdf";
+  if (name.endsWith(".csv")) return "text/csv";
+  if (name.endsWith(".docx")) return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+  if (name.endsWith(".xlsx")) return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+  if (name.endsWith(".xls")) return "application/vnd.ms-excel";
+  if (name.endsWith(".png")) return "image/png";
+  if (name.endsWith(".jpg") || name.endsWith(".jpeg")) return "image/jpeg";
+  if (name.endsWith(".webp")) return "image/webp";
+  if (name.endsWith(".gif")) return "image/gif";
+  return file.type || "application/octet-stream";
+}
+
+async function buildUploadedAttachments(files: File[]): Promise<ChatV2UploadedAttachment[]> {
+  const out: ChatV2UploadedAttachment[] = [];
+  for (const file of files) {
+    const kind = classifyAttachment(file.name, file.type);
+    if (!kind) throw new Error(`Unsupported file type: ${file.name}`);
+    if (file.size > MAX_UPLOAD_FILE_BYTES) throw new Error(`File too large: ${file.name}`);
+
+    if (kind === "image") {
+      // Downscale + recompress before base64 so the inline data URL stays
+      // small enough for the AI server's request-body limit (large photos
+      // otherwise trip HTTP 413 "Request Entity Too Large"). Falls back to
+      // the original bytes if canvas processing fails.
+      const processed = await downscaleImageAttachment(file);
+      out.push({
+        fileName: file.name,
+        mimeType: processed.mimeType,
+        sizeBytes: processed.sizeBytes,
+        contentBase64: processed.contentBase64,
+        kind,
+      });
+    } else {
+      const buffer = await file.arrayBuffer();
+      out.push({
+        fileName: file.name,
+        mimeType: resolveMimeType(file),
+        sizeBytes: file.size,
+        contentBase64: arrayBufferToBase64(buffer),
+        kind,
+      });
+    }
+  }
+  return out;
+}
 
 // ---------------------------------------------------------------------------
 // Tool approval mode
@@ -485,6 +617,39 @@ const activeWorkspace = ref<WorkspaceSummary | null>(null);
 // True when the active conversation has no workspace — shows the pick card.
 const showWorkspaceRequired = ref(false);
 
+// Workspace memory panel + count for the active approved workspace.
+const showWorkspaceMemory = ref(false);
+const workspaceMemoryCount = ref(0);
+
+function openWorkspaceMemory(): void {
+  if (!activeWorkspace.value || activeWorkspace.value.approvalState !== "approved") {
+    showWorkspaceMemory.value = false;
+    return;
+  }
+  showWorkspaceMemory.value = true;
+}
+
+async function refreshWorkspaceMemoryCount(): Promise<void> {
+  if (!activeConversationId.value || !activeWorkspace.value || activeWorkspace.value.approvalState !== "approved") {
+    workspaceMemoryCount.value = 0;
+    return;
+  }
+  try {
+    // One IPC + DB round-trip: fetch up to 200 active memories and use the
+    // returned length as the badge count (capped at 200, which is plenty for
+    // a badge — beyond that the exact number doesn't matter to the user).
+    const resp = await workspaceMemoryApi.list({
+      conversationId: activeConversationId.value,
+      status: "active",
+      limit: 200,
+    });
+    workspaceMemoryCount.value =
+      resp.status && Array.isArray(resp.data) ? resp.data.length : 0;
+  } catch {
+    workspaceMemoryCount.value = 0;
+  }
+}
+
 function createLocalConversationId(): string {
   const randomId =
     typeof globalThis.crypto?.randomUUID === "function"
@@ -522,6 +687,7 @@ async function refreshWorkspace(conversationId: string | null): Promise<void> {
   if (!conversationId) {
     activeWorkspace.value = null;
     showWorkspaceRequired.value = false;
+    void refreshWorkspaceMemoryCount();
     return;
   }
   try {
@@ -541,6 +707,7 @@ async function refreshWorkspace(conversationId: string | null): Promise<void> {
     activeWorkspace.value = null;
     showWorkspaceRequired.value = false;
   }
+  void refreshWorkspaceMemoryCount();
 }
 
 /**
@@ -981,6 +1148,7 @@ const detachActiveStreamView = (): void => {
     isStreaming.value = false;
     activeAssistantMessageId.value = null;
     retryInfo.value = null;
+    recoveryInfo.value = null;
   }
 };
 
@@ -1404,23 +1572,53 @@ const handleCompactConversation = async (): Promise<void> => {
   }
 };
 
-const onSend = async (text: string): Promise<void> => {
+const onSend = async (text: string, files?: File[]): Promise<void> => {
   if (chatIsRunning.value) return;
   streamError.value = null;
+  attachmentError.value = null;
   if (activeConversationId.value) {
     const nextStopped = new Set(stoppedPendingToolConversationIds.value);
     nextStopped.delete(activeConversationId.value);
     stoppedPendingToolConversationIds.value = nextStopped;
   }
 
+  // Process attachments if present
+  let uploadedFiles: ChatV2UploadedAttachment[] | undefined;
+  let attachmentMetadata: ChatV2AttachmentMetadata[] | undefined;
+  if (files && files.length > 0) {
+    isPreparingAttachments.value = true;
+    try {
+      uploadedFiles = await buildUploadedAttachments(files);
+      attachmentMetadata = uploadedFiles.map((f) => ({
+        fileName: f.fileName,
+        mimeType: f.mimeType,
+        sizeBytes: f.sizeBytes,
+        kind: f.kind,
+        processingMode: f.kind === "image" ? "image_url" : "staged_markdown",
+      }));
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      attachmentError.value = msg;
+      isPreparingAttachments.value = false;
+      return;
+    }
+    isPreparingAttachments.value = false;
+  }
+
+  // Resolve text: if only images with no text, use default prompt
+  const displayText = text || defaultPromptForAttachments(files ?? []);
+
   const nowIso = new Date().toISOString();
   const tempUser: ChatV2MessageView = {
     id: `temp-user-${Date.now()}`,
     conversationId: activeConversationId.value ?? "",
     role: "user",
-    content: text,
+    content: displayText,
     timestamp: nowIso,
     messageType: "message" as MessageType,
+    metadata: attachmentMetadata
+      ? { source: "chat-v2", attachments: attachmentMetadata }
+      : undefined,
   };
   messages.value = [...messages.value, tempUser];
 
@@ -1468,6 +1666,7 @@ const onSend = async (text: string): Promise<void> => {
   isStreaming.value = true;
   receivedFirstResponse.value = false;
   retryInfo.value = null;
+  recoveryInfo.value = null;
   // Seed the live context estimate from the last known server usage. If no
   // usage_update has arrived yet this session, fall back to the existing
   // streaming estimate (e.g. seeded from persisted tokensUsed on history
@@ -1482,13 +1681,17 @@ const onSend = async (text: string): Promise<void> => {
   await nextTick();
 
   try {
+    const streamRequest: ChatV2StreamRequest = {
+      conversationId: activeConversationId.value ?? undefined,
+      message: displayText,
+      mode: mode.value,
+      model: resolveModelForRequest(),
+    };
+    if (uploadedFiles && uploadedFiles.length > 0) {
+      streamRequest.uploadedFiles = uploadedFiles;
+    }
     await streamChatV2Message(
-      {
-        conversationId: activeConversationId.value ?? undefined,
-        message: text,
-        mode: mode.value,
-        model: resolveModelForRequest(),
-      },
+      streamRequest,
       (chunk: ChatV2StreamChunk) => {
         if (chunk.eventType === "start") {
           if (chunk.conversationId) {
@@ -1533,10 +1736,27 @@ const onSend = async (text: string): Promise<void> => {
               delayMs: chunk.retryDelayMs ?? 0,
             };
           }
+        } else if (chunk.eventType === "recovery_status") {
+          // Seven-layer recovery status. Show the badge but keep streaming.
+          if (chunk.recoveryLayer && chunk.recoveryReason) {
+            recoveryInfo.value = {
+              layer: chunk.recoveryLayer,
+              reason: chunk.recoveryReason,
+              attempt: chunk.recoveryAttempt,
+              maxAttempts: chunk.recoveryMaxAttempts,
+              delayMs: chunk.recoveryDelayMs,
+              elapsedMs: chunk.recoveryElapsedMs,
+              originalModel: chunk.recoveryOriginalModel,
+              currentModel: chunk.recoveryCurrentModel,
+              fallbackModel: chunk.recoveryFallbackModel,
+              message: chunk.recoveryMessage,
+            };
+          }
         } else {
           // Any non-start/non-retry chunk means the AI has started responding.
           receivedFirstResponse.value = true;
           retryInfo.value = null;
+          recoveryInfo.value = null;
           if (chunk.eventType === "token" && chunk.contentDelta) {
             if (!assistantAdded) {
               console.log(
@@ -1665,6 +1885,7 @@ const onSend = async (text: string): Promise<void> => {
         isStreaming.value = false;
         activeAssistantMessageId.value = null;
         retryInfo.value = null;
+        recoveryInfo.value = null;
         // Snap to ground-truth usage carried by the complete event so the
         // badge reflects the real context size even if usage_update chunks
         // didn't fire during the stream (some servers only report usage on
@@ -1743,6 +1964,7 @@ const onSend = async (text: string): Promise<void> => {
         isStreaming.value = false;
         activeAssistantMessageId.value = null;
         retryInfo.value = null;
+        recoveryInfo.value = null;
         const displayMessage = mapStreamErrorMessage(error.message);
         streamError.value = displayMessage;
         showAssistantError(displayMessage);
@@ -1755,6 +1977,7 @@ const onSend = async (text: string): Promise<void> => {
       isStreaming.value = false;
       activeAssistantMessageId.value = null;
       retryInfo.value = null;
+      recoveryInfo.value = null;
       streamError.value = displayMessage;
       showAssistantError(displayMessage);
     }
@@ -1859,5 +2082,24 @@ onBeforeUnmount(() => {
 .v2-shell__file-ops-body {
   padding: 4px 12px 10px;
   border-top: 1px solid rgba(0, 0, 0, 0.05);
+}
+</style>
+
+<style>
+:root[theme="dark"] .v2-shell {
+  background: #1e1e1e;
+}
+:root[theme="dark"] .v2-shell__header {
+  border-bottom-color: rgba(255, 255, 255, 0.12);
+}
+:root[theme="dark"] .v2-shell__file-ops-panel {
+  background: #2d2d2d;
+  border-top-color: rgba(255, 255, 255, 0.12);
+}
+:root[theme="dark"] .v2-shell__file-ops-header:hover {
+  background-color: rgba(255, 255, 255, 0.06);
+}
+:root[theme="dark"] .v2-shell__file-ops-body {
+  border-top-color: rgba(255, 255, 255, 0.08);
 }
 </style>

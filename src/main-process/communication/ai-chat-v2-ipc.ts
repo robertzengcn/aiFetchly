@@ -1,6 +1,6 @@
 import { ipcMain } from "electron";
 import { Token } from "@/modules/token";
-import { USER_AI_ENABLED } from "@/config/usersetting";
+import { USER_AI_ENABLED, USERSDBPATH } from "@/config/usersetting";
 import { AiChatApi } from "@/api/aiChatApi";
 import { AIChatV2Module } from "@/modules/AIChatV2Module";
 import { AIChatPlanModule } from "@/modules/AIChatPlanModule";
@@ -10,7 +10,12 @@ import { AIChatQueryLoop } from "@/service/AIChatQueryLoop";
 import type { AIChatQueryLoopDeps } from "@/service/AIChatQueryLoop";
 import { AIChatQueryEngine } from "@/service/AIChatQueryEngine";
 import { AIChatCompactAgentService } from "@/service/AIChatCompactAgentService";
-import { getSharedAutoDreamService } from "@/service/AIAutoDreamFactory";
+import { AIChatModelFallbackService } from "@/service/AIChatModelFallbackService";
+import {
+  getSharedAutoDreamService,
+  resetSharedAutoDreamService,
+  getSharedWorkspaceAutoDreamService,
+} from "@/service/AIAutoDreamFactory";
 import { AIChatToolApprovalModule } from "@/modules/AIChatToolApprovalModule";
 import { evaluateToolApproval } from "@/service/AIChatToolApprovalPolicyService";
 import { userSafeError } from "@/service/AIChatErrorMapper";
@@ -53,6 +58,8 @@ import type {
   ChatV2HistoryResponse,
   ChatV2ConversationSummary,
   ChatV2MessageMetadata,
+  ChatV2UploadedAttachment,
+  ChatV2AttachmentKind,
   ChatToolApprovalMode,
 } from "@/entityTypes/aiChatV2Types";
 
@@ -70,6 +77,8 @@ type IpcEventLike = {
 
 let queryEngine: AIChatQueryEngine | null = null;
 let compactAgent: AIChatCompactAgentService | null = null;
+let queryEngineDbPath: string | null = null;
+let compactAgentDbPath: string | null = null;
 
 /** Build the production AIChatQueryLoop with real service deps. */
 function createQueryLoop(): AIChatQueryLoop {
@@ -110,28 +119,63 @@ function createQueryLoop(): AIChatQueryLoop {
       return SkillExecutor.execute(name, args, context);
     },
     getSkillDefinition: (name) => SkillRegistry.getSkill(name) ?? undefined,
+    resolveFallbackModel: async ({ originalModel, currentModel, reason }) => {
+      // Lazily construct the fallback service so we don't pay the catalog
+      // fetch on every loop construction — only when recovery triggers.
+      const svc = new AIChatModelFallbackService();
+      return svc.resolve({ originalModel, currentModel, reason });
+    },
   };
   return new AIChatQueryLoop(deps);
 }
 
+function getCurrentUserDbPath(): string | null {
+  const tokenService = new Token();
+  return tokenService.getValue(USERSDBPATH) || null;
+}
+
+export function resetAiChatV2RuntimeForDatabaseSwitch(): void {
+  if (queryEngine) {
+    queryEngine.stopActiveTurn();
+  }
+  queryEngine = null;
+  compactAgent = null;
+  queryEngineDbPath = null;
+  compactAgentDbPath = null;
+  resetSharedAutoDreamService();
+}
+
 function getCompactAgent(): AIChatCompactAgentService {
+  const dbPath = getCurrentUserDbPath();
+  if (compactAgent && compactAgentDbPath !== dbPath) {
+    compactAgent = null;
+    compactAgentDbPath = null;
+    resetSharedAutoDreamService();
+  }
   if (!compactAgent) {
     const tokenService = new Token();
     compactAgent = new AIChatCompactAgentService(tokenService, {
       completeChat: (request) => new AiChatApi().openAIChatCompletion(request),
       isEnabled: () => tokenService.getValue(USER_AI_ENABLED) === "true",
     });
+    compactAgentDbPath = dbPath;
   }
   return compactAgent;
 }
 
 function getQueryEngine(): AIChatQueryEngine {
+  const dbPath = getCurrentUserDbPath();
+  if (queryEngine && queryEngineDbPath !== dbPath) {
+    resetAiChatV2RuntimeForDatabaseSwitch();
+  }
   if (!queryEngine) {
     const loop = createQueryLoop();
     queryEngine = new AIChatQueryEngine(loop, {
       compactAgent: getCompactAgent(),
       autoDreamService: getSharedAutoDreamService(),
+      workspaceAutoDreamService: getSharedWorkspaceAutoDreamService(),
     });
+    queryEngineDbPath = dbPath;
   }
   return queryEngine;
 }
@@ -215,6 +259,23 @@ function createEventSink(event: IpcEventLike): AIChatQueryEventSink {
             retryAttempt: e.retryAttempt,
             retryMaxAttempts: e.retryMaxAttempts,
             retryDelayMs: e.retryDelayMs,
+          });
+          break;
+        case "recovery_status":
+          sendChunk(event, {
+            eventType: "recovery_status",
+            conversationId: e.conversationId,
+            messageId: e.messageId,
+            recoveryLayer: e.layer,
+            recoveryReason: e.reason,
+            recoveryAttempt: e.attempt,
+            recoveryMaxAttempts: e.maxAttempts,
+            recoveryDelayMs: e.delayMs,
+            recoveryElapsedMs: e.elapsedMs,
+            recoveryOriginalModel: e.originalModel,
+            recoveryCurrentModel: e.currentModel,
+            recoveryFallbackModel: e.fallbackModel,
+            recoveryMessage: e.message,
           });
           break;
         case "tool_progress":
@@ -350,12 +411,16 @@ function createEventSink(event: IpcEventLike): AIChatQueryEventSink {
 function validateStreamRequest(
   req: Partial<ChatV2StreamRequest>
 ): string | null {
+  const hasFiles =
+    Array.isArray(req.uploadedFiles) && req.uploadedFiles.length > 0;
   if (
     !req ||
     typeof req.message !== "string" ||
     req.message.trim().length === 0
   ) {
-    return "Message must be a non-empty string";
+    if (!hasFiles) {
+      return "Message must be a non-empty string";
+    }
   }
   if (req.conversationId !== undefined && req.conversationId === "pending") {
     return "conversationId must not be 'pending'";
@@ -381,6 +446,106 @@ function validateStreamRequest(
   }
   return null;
 }
+const MAX_UPLOAD_FILE_BYTES = 5 * 1024 * 1024;
+const MAX_TOTAL_IMAGE_BASE64_BYTES = 10 * 1024 * 1024;
+
+function classifyAttachment(
+  fileName: string,
+  mimeType: string
+): ChatV2AttachmentKind | null {
+  const name = fileName.toLowerCase();
+  const mime = mimeType.toLowerCase();
+
+  if (mime.startsWith("image/")) return "image";
+  if (name.endsWith(".png") || name.endsWith(".jpg") || name.endsWith(".jpeg"))
+    return "image";
+  if (name.endsWith(".webp") || name.endsWith(".gif")) return "image";
+
+  if (mime === "application/pdf" || name.endsWith(".pdf")) return "document";
+  if (
+    mime === "text/csv" ||
+    mime === "application/csv" ||
+    name.endsWith(".csv")
+  )
+    return "document";
+  if (name.endsWith(".docx") || mime.includes("wordprocessingml.document"))
+    return "document";
+  if (
+    name.endsWith(".xlsx") ||
+    name.endsWith(".xls") ||
+    mime.includes("spreadsheetml.sheet")
+  )
+    return "document";
+
+  return null;
+}
+
+function normalizeChatV2UploadedFiles(
+  input: unknown
+): ChatV2UploadedAttachment[] {
+  if (!Array.isArray(input)) return [];
+  const out: ChatV2UploadedAttachment[] = [];
+  let totalImageBase64Bytes = 0;
+
+  for (const item of input) {
+    if (!item || typeof item !== "object") continue;
+
+    const fileName =
+      typeof (item as Record<string, unknown>).fileName === "string"
+        ? ((item as Record<string, unknown>).fileName as string)
+        : "";
+    const mimeType =
+      typeof (item as Record<string, unknown>).mimeType === "string"
+        ? ((item as Record<string, unknown>).mimeType as string)
+        : "";
+    const sizeBytes =
+      typeof (item as Record<string, unknown>).sizeBytes === "number"
+        ? ((item as Record<string, unknown>).sizeBytes as number)
+        : 0;
+    const contentBase64 =
+      typeof (item as Record<string, unknown>).contentBase64 === "string"
+        ? ((item as Record<string, unknown>).contentBase64 as string)
+        : "";
+    const kind =
+      typeof (item as Record<string, unknown>).kind === "string"
+        ? ((item as Record<string, unknown>).kind as string)
+        : "";
+
+    if (!fileName || !contentBase64) continue;
+
+    // Classify attachment to verify kind matches content
+    const detectedKind = classifyAttachment(fileName, mimeType);
+    if (!detectedKind) continue;
+    if (kind !== "document" && kind !== "image") continue;
+    if (kind !== detectedKind) continue;
+
+    // Validate base64 length vs declared size
+    if (sizeBytes <= 0 || sizeBytes > MAX_UPLOAD_FILE_BYTES) continue;
+    try {
+      const decodedLen = Buffer.from(contentBase64, "base64").length;
+      if (decodedLen !== sizeBytes) continue;
+    } catch {
+      continue;
+    }
+
+    // Validate total image payload size
+    if (kind === "image") {
+      totalImageBase64Bytes += contentBase64.length;
+      if (totalImageBase64Bytes > MAX_TOTAL_IMAGE_BASE64_BYTES) continue;
+    }
+
+    out.push({
+      fileName,
+      mimeType,
+      sizeBytes,
+      contentBase64,
+      kind: kind as ChatV2AttachmentKind,
+    });
+  }
+
+  return out;
+}
+
 //handleStream is the main function that handles the stream request
 async function handleStream(event: IpcEventLike, data: string): Promise<void> {
   // AI gate FIRST, before parsing request data.
@@ -418,7 +583,14 @@ async function handleStream(event: IpcEventLike, data: string): Promise<void> {
   const engine = getQueryEngine();
   const eventSink = createEventSink(event);
 
-  await engine.submitMessage({ request: req, eventSink });
+  // Normalize uploaded files
+  const uploadedFiles = normalizeChatV2UploadedFiles(req.uploadedFiles);
+  const processedReq = {
+    ...req,
+    uploadedFiles: uploadedFiles.length > 0 ? uploadedFiles : undefined,
+  };
+
+  await engine.submitMessage({ request: processedReq, eventSink });
 }
 
 function handleStop(): void {
@@ -848,9 +1020,10 @@ async function handleSetToolApprovalMode(
       payload.conversationId,
       payload.mode as ChatToolApprovalMode
     );
-    // Return the stored mode (in case of downgrade from full_access)
-    const saved = module.getMode(payload.conversationId);
-    return ok(saved);
+    // Return the mode that was just set. Do NOT call getMode() here —
+    // its startup-reset downgrades full_access back to ask_for_approval
+    // on the very first read, making it impossible to select "Full access".
+    return ok(payload.mode);
   } catch (err) {
     return denied(userSafeError(err));
   }

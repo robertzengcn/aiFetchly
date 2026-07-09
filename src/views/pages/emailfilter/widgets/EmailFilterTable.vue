@@ -3,17 +3,19 @@
     <div class="search_bar mt-4 d-flex jsb">
         <div class="d-flex jsb search_tool">
             <div class="search_wrap mr-4">
-                <v-text-field rounded class="elevation-0" density="compact" variant="solo" label="Search sample"
+                <v-text-field
+rounded class="elevation-0" density="compact" variant="solo" label="Search sample"
                     append-inner-icon="mdi-magnify" single-line hide-details></v-text-field>
             </div>
             
             <v-btn class="btn ml-3" variant="flat" prepend-icon="mdi-plus" color="#5865f2" @click="createFilter()">
-                {{CapitalizeFirstLetter(t('emailfilter.create_filter'))}}
+                {{ CapitalizeFirstLetter(t('emailfilter.create_filter')) }}
              </v-btn> 
         </div>
    
     </div>
-    <v-data-table-server v-model="selected" :items-per-page="itemsPerPage" :search="search" :headers="computedHeaders"
+    <v-data-table-server
+v-model="selected" :items-per-page="itemsPerPage" :search="search" :headers="computedHeaders"
         :items-length="totalItems" :items="serverItems" :loading="loading"  item-value="id" @update:options="loadItems" 
         class="mt-5" :show-select="isSelectedtable"  return-object>
         <template v-slot:[`item.actions`]="{ item }" v-if="isSelectedtable!=true">
@@ -49,10 +51,11 @@ import { ref,computed,watch } from 'vue'
 import { SearchResult } from '@/views/api/types'
 import {CapitalizeFirstLetter} from "@/views/utils/function"
 // import type { VDataTable } from 'vuetify/lib/components/index.mjs'
-import router from '@/views/router';
+import { useRouter } from 'vue-router';
 import {Header} from "@/entityTypes/commonType"
 import DeleteDialog from '@/views/components/widgets/deleteDialog.vue';
 const {t} = useI18n({inheritLocale: true});
+const router = useRouter();
 
 // const campaignId = i18n.t("campaignId");
 type Fetchparam = {
@@ -126,7 +129,7 @@ function loadItems({ page, itemsPerPage, sortBy }) {
     const fetchitem: Fetchparam = {
         page: page,
         itemsPerPage: itemsPerPage,
-        sortBy: sortBy,
+        sortBy: sortBy?.[0],
         search: search.value
     }
     FakeAPI.fetch(fetchitem).then(
@@ -163,8 +166,11 @@ const deleteitem=(item:EmailFilterdata)=>{
     showDeleteModal.value = true;
   }
 function createFilter(){
+    console.log("create email filter")
     router.push({
         name: 'Email_Marketing_Filter_Create'
+    }).catch((err) => {
+        console.warn('Navigation to create filter failed:', err);
     });
 }
 const handleDelete=async ()=>{

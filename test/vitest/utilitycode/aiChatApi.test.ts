@@ -1154,4 +1154,246 @@ describe("AiChatApi - OpenAI compatibility fallback", () => {
       { content: undefined, finishReason: "stop" },
     ]);
   });
+
+  it("surfaces non-SSE JSON API envelope errors instead of ignoring them", async () => {
+    const encoder = new TextEncoder();
+    const body = JSON.stringify({
+      status: false,
+      code: 500,
+      msg: "database connection is not open",
+      data: null,
+    });
+    const response = new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(encoder.encode(body));
+          controller.close();
+        },
+      }),
+      {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }
+    );
+
+    mockPostStreamShared.mockResolvedValueOnce(response);
+
+    await expect(
+      api.openAIChatCompletionStream(
+        {
+          model: "gpt-test",
+          messages: [{ role: "user", content: "Hi" }],
+        },
+        vi.fn()
+      )
+    ).rejects.toThrow("AI server error code=500: database connection is not open");
+  });
+});
+
+describe("AiChatApi - Recovery-driven streaming retry", () => {
+  function makeResponse(
+    body: string,
+    status = 200,
+    headers: Record<string, string> = { "Content-Type": "text/event-stream" }
+  ): Response {
+    const encoder = new TextEncoder();
+    return new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(encoder.encode(body));
+          controller.close();
+        },
+      }),
+      { status, headers }
+    );
+  }
+
+  function successStream(): Response {
+    return makeResponse(
+      [
+        'data: {"id":"r","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":null}]}',
+        "",
+        'data: {"id":"r","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}',
+        "",
+        "data: [DONE]",
+        "",
+      ].join("\n")
+    );
+  }
+
+  beforeEach(() => {
+    mockPostStreamShared.mockReset();
+    mockPostJsonShared.mockReset();
+    mockGetShared.mockReset();
+  });
+
+  it("retries a network failure then succeeds and emits retry + recovery_status", async () => {
+    vi.useFakeTimers();
+    try {
+      mockPostStreamShared
+        .mockRejectedValueOnce(new Error("connect ECONNRESET"))
+        .mockResolvedValueOnce(successStream());
+
+      const api = new AiChatApi();
+      const retries: Array<{ attempt: number; delayMs: number }> = [];
+      const recoveries: Array<{
+        layer: string;
+        reason: string;
+        attempt: number;
+      }> = [];
+      const chunks: string[] = [];
+
+      const p = api.openAIChatCompletionStream(
+        {
+          model: "m",
+          messages: [{ role: "user", content: "hi" }],
+          max_tokens: 16,
+        },
+        (c) => {
+          const t = c.choices[0]?.delta?.content;
+          if (t) chunks.push(t);
+        },
+        {
+          retryProfile: "foreground",
+          onRetry: (info) =>
+            retries.push({ attempt: info.attempt, delayMs: info.delayMs }),
+          onRecoveryStatus: (info) =>
+            recoveries.push({
+              layer: info.layer,
+              reason: info.reason,
+              attempt: info.attempt,
+            }),
+        }
+      );
+      await vi.runAllTimersAsync();
+      await p;
+
+      expect(chunks.join("")).toBe("ok");
+      expect(retries).toHaveLength(1);
+      expect(retries[0].attempt).toBe(2);
+      expect(recoveries).toEqual([
+        { layer: "api_retry", reason: "network", attempt: 2 },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("retries HTTP 429 and honors Retry-After", async () => {
+    vi.useFakeTimers();
+    try {
+      mockPostStreamShared
+        .mockResolvedValueOnce(
+          makeResponse("rate limit", 429, { "Retry-After": "1" })
+        )
+        .mockResolvedValueOnce(successStream());
+
+      const api = new AiChatApi();
+      const recoveries: Array<{ reason: string; delayMs: number }> = [];
+      const p = api.openAIChatCompletionStream(
+        {
+          model: "m",
+          messages: [{ role: "user", content: "hi" }],
+          max_tokens: 16,
+        },
+        () => undefined,
+        {
+          retryProfile: "foreground",
+          onRecoveryStatus: (info) =>
+            recoveries.push({ reason: info.reason, delayMs: info.delayMs }),
+        }
+      );
+      await vi.runAllTimersAsync();
+      await p;
+
+      expect(recoveries).toHaveLength(1);
+      expect(recoveries[0].reason).toBe("rate_limit");
+      // Retry-After=1s → 1000ms is the minimum; jitter may push higher.
+      expect(recoveries[0].delayMs).toBeGreaterThanOrEqual(1000);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("retries HTTP 529 overload then succeeds", async () => {
+    vi.useFakeTimers();
+    try {
+      mockPostStreamShared
+        .mockResolvedValueOnce(makeResponse("overloaded_error", 529))
+        .mockResolvedValueOnce(successStream());
+
+      const api = new AiChatApi();
+      const layers: string[] = [];
+      const p = api.openAIChatCompletionStream(
+        {
+          model: "m",
+          messages: [{ role: "user", content: "hi" }],
+          max_tokens: 16,
+        },
+        () => undefined,
+        {
+          retryProfile: "foreground",
+          onRecoveryStatus: (info) => layers.push(info.layer),
+        }
+      );
+      await vi.runAllTimersAsync();
+      await p;
+
+      expect(layers).toEqual(["overload_retry"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("aborts during retry sleep reject immediately", async () => {
+    mockPostStreamShared.mockRejectedValueOnce(new Error("ECONNRESET"));
+
+    const api = new AiChatApi();
+    const ac = new AbortController();
+    const recoveryEvents: number[] = [];
+    const promise = api.openAIChatCompletionStream(
+      {
+        model: "m",
+        messages: [{ role: "user", content: "hi" }],
+        max_tokens: 16,
+      },
+      () => undefined,
+      {
+        signal: ac.signal,
+        retryProfile: "foreground",
+        onRecoveryStatus: () => {
+          recoveryEvents.push(1);
+          // Fire abort immediately after the recovery event lands,
+          // before the long sleep completes.
+          ac.abort();
+        },
+      }
+    );
+    await expect(promise).rejects.toBeDefined();
+    expect(recoveryEvents).toHaveLength(1);
+  });
+
+  it("throws AIChatRecoverableError after exhausting foreground retries", async () => {
+    vi.useFakeTimers();
+    try {
+      // Always 500.
+      mockPostStreamShared.mockResolvedValue(makeResponse("boom", 500));
+
+      const api = new AiChatApi();
+      const p = api.openAIChatCompletionStream(
+        {
+          model: "m",
+          messages: [{ role: "user", content: "hi" }],
+          max_tokens: 16,
+        },
+        () => undefined,
+        { retryProfile: "foreground" }
+      );
+      const assertion = expect(p).rejects.toThrow(/HTTP 500/);
+      await vi.runAllTimersAsync();
+      await assertion;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

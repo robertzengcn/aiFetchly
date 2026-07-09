@@ -57,6 +57,90 @@ v-model="host" :label="t('emailservice.host')" type="input"
         </v-col>
       </v-row>
 
+      <!-- ===== Inbound receive settings ===== -->
+      <v-divider class="mt-4 mb-2"></v-divider>
+      <v-row>
+        <v-col cols="12" md="12">
+          <p><b>{{ t('emailReceive.receive_settings') }}</b></p>
+          <v-btn-toggle v-model="receiveEnabled" mandatory>
+            <v-btn :value="1" color="primary">{{ t('emailReceive.receive_enabled') }}</v-btn>
+            <v-btn :value="0" color="success">{{ t('emailReceive.receive_disabled') }}</v-btn>
+          </v-btn-toggle>
+        </v-col>
+      </v-row>
+      <v-row v-if="receiveEnabled === 1">
+        <v-col cols="12" md="4">
+          <v-select
+v-model="receiveProtocol" :items="[{ title: 'IMAP', value: 'imap' }, { title: 'POP3', value: 'pop3' }]"
+            :label="t('emailReceive.receive_protocol')" :readonly="loading"></v-select>
+        </v-col>
+        <v-col cols="12" md="4">
+          <v-text-field
+v-model="receiveFolder" :label="t('emailReceive.folder')" :hint="t('emailReceive.folder_hint')"
+            :readonly="loading"></v-text-field>
+        </v-col>
+        <v-col cols="12" md="4" class="d-flex align-center">
+          <v-btn color="blue" :loading="testingReceive" @click="testReceiveConnection">
+            {{ t('emailReceive.test_connection') }}
+          </v-btn>
+        </v-col>
+      </v-row>
+      <template v-if="receiveEnabled === 1 && receiveProtocol === 'imap'">
+        <v-row>
+          <v-col cols="12" md="8">
+            <v-text-field
+v-model="imapHost" :label="t('emailReceive.imap_host')" :readonly="loading" clearable></v-text-field>
+          </v-col>
+          <v-col cols="12" md="4">
+            <v-text-field
+v-model="imapPort" :label="t('emailReceive.imap_port')" :readonly="loading" clearable></v-text-field>
+          </v-col>
+        </v-row>
+        <v-row>
+          <v-col cols="12" md="12">
+            <p><b>{{ t('emailReceive.imap_ssl') }}:</b></p>
+            <v-btn-toggle v-model="imapSsl" mandatory>
+              <v-btn :value="1" color="primary">{{ t('common.yes') }}</v-btn>
+              <v-btn :value="0" color="success">{{ t('common.no') }}</v-btn>
+            </v-btn-toggle>
+          </v-col>
+        </v-row>
+      </template>
+      <template v-if="receiveEnabled === 1 && receiveProtocol === 'pop3'">
+        <v-row>
+          <v-col cols="12" md="8">
+            <v-text-field
+v-model="pop3Host" :label="t('emailReceive.pop3_host')" :readonly="loading" clearable></v-text-field>
+          </v-col>
+          <v-col cols="12" md="4">
+            <v-text-field
+v-model="pop3Port" :label="t('emailReceive.pop3_port')" :readonly="loading" clearable></v-text-field>
+          </v-col>
+        </v-row>
+        <v-row>
+          <v-col cols="12" md="12">
+            <p><b>{{ t('emailReceive.pop3_ssl') }}:</b></p>
+            <v-btn-toggle v-model="pop3Ssl" mandatory>
+              <v-btn :value="1" color="primary">{{ t('common.yes') }}</v-btn>
+              <v-btn :value="0" color="success">{{ t('common.no') }}</v-btn>
+            </v-btn-toggle>
+          </v-col>
+        </v-row>
+      </template>
+      <v-row v-if="receiveEnabled === 1">
+        <v-col cols="12" md="6">
+          <v-text-field
+v-model="receiveUsername" :label="t('emailReceive.receive_username')" :hint="t('emailReceive.receive_username_hint')"
+            :readonly="loading" clearable></v-text-field>
+        </v-col>
+        <v-col cols="12" md="6">
+          <v-text-field
+v-model="receivePassword" :label="t('emailReceive.receive_password')" :type="showReceivePassword ? 'text' : 'password'"
+            @click:append="showReceivePassword = !showReceivePassword" :readonly="loading" clearable
+            :append-icon="showReceivePassword ? 'mdi-eye' : 'mdi-eye-off'"></v-text-field>
+        </v-col>
+      </v-row>
+
       <div class="d-flex flex-column mt-4 mb-4">
         <v-row>
 
@@ -140,6 +224,7 @@ import { ref, onMounted, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
 import { getEmailServiceDetail, createupdateEmailService, sendTestemail, receiveEmailsendevent } from "@/views/api/emailservice";
+import { testEmailReceiveConnection } from "@/views/api/emailreceive";
 import { EmailServiceEntitydata, EmailSendParam, EmailRequestData } from "@/entityTypes/emailmarketingType"
 import { CapitalizeFirstLetter } from "@/views/utils/function"
 import { CommonDialogMsg } from "@/entityTypes/commonType"
@@ -190,6 +275,21 @@ const port = ref<string>("");
 const name = ref<string>("");
 const ssl = ref<number>(0);
 
+// ---- inbound receive settings ----
+const receiveEnabled = ref<number>(0);
+const receiveProtocol = ref<"imap" | "pop3">("imap");
+const imapHost = ref<string>("");
+const imapPort = ref<string>("");
+const imapSsl = ref<number>(1);
+const pop3Host = ref<string>("");
+const pop3Port = ref<string>("");
+const pop3Ssl = ref<number>(1);
+const receiveUsername = ref<string>("");
+const receivePassword = ref<string>("");
+const receiveFolder = ref<string>("INBOX");
+const showReceivePassword = ref<boolean>(false);
+const testingReceive = ref<boolean>(false);
+
 const loading = ref<boolean>(false);
 const show = ref<boolean>(false);
 const alert = ref<boolean>(false);
@@ -221,6 +321,18 @@ const initialize = async () => {
         port.value = res.port;
         name.value = res.name;
         ssl.value = res.ssl;
+        // receive settings (optional)
+        receiveEnabled.value = res.receiveEnabled ?? 0;
+        receiveProtocol.value = (res.receiveProtocol === "pop3" ? "pop3" : "imap");
+        imapHost.value = res.imapHost ?? "";
+        imapPort.value = res.imapPort ?? "";
+        imapSsl.value = res.imapSsl ?? 1;
+        pop3Host.value = res.pop3Host ?? "";
+        pop3Port.value = res.pop3Port ?? "";
+        pop3Ssl.value = res.pop3Ssl ?? 1;
+        receiveUsername.value = res.receiveUsername ?? "";
+        receivePassword.value = res.receivePassword ?? "";
+        receiveFolder.value = res.receiveFolder ?? "INBOX";
 
       }
     });
@@ -233,6 +345,31 @@ const initialize = async () => {
 };
 
 
+
+/** Test inbound receive connectivity. Requires the service to be saved first. */
+async function testReceiveConnection() {
+  if (!Id.value || Id.value <= 0) {
+    alert.value = true;
+    alertcolor.value = "error";
+    alertContent.value = t("emailReceive.test_save_first");
+    return;
+  }
+  testingReceive.value = true;
+  try {
+    const res = await testEmailReceiveConnection(Id.value);
+    alert.value = true;
+    alertcolor.value = res.success ? "success" : "error";
+    alertContent.value = res.success
+      ? t("emailReceive.test_connection_success")
+      : `${t("emailReceive.test_connection_failed")}${res.error ? ": " + res.error : ""}`;
+  } catch (err) {
+    alert.value = true;
+    alertcolor.value = "error";
+    alertContent.value = err instanceof Error ? err.message : String(err);
+  } finally {
+    testingReceive.value = false;
+  }
+}
 
 async function onSubmit() {
   console.log("submit");
@@ -264,6 +401,17 @@ async function onSubmit() {
       host: host.value,
       port: port.value,
       ssl: ssl.value,
+      receiveEnabled: receiveEnabled.value,
+      receiveProtocol: receiveProtocol.value,
+      imapHost: imapHost.value || null,
+      imapPort: imapPort.value || null,
+      imapSsl: imapSsl.value,
+      pop3Host: pop3Host.value || null,
+      pop3Port: pop3Port.value || null,
+      pop3Ssl: pop3Ssl.value,
+      receiveUsername: receiveUsername.value || null,
+      receivePassword: receivePassword.value || null,
+      receiveFolder: receiveFolder.value || "INBOX",
     };
 
 

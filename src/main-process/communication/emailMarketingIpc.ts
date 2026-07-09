@@ -52,7 +52,9 @@ import {
  * Envelope: handlers return data only; wrapper wraps in {status, msg, data}.
  */
 export function registerEmailMarketingIpcHandlers() {
-  const toTemplateResp = (item: EmailTemplateEntity): EmailTemplateRespdata => ({
+  const toTemplateResp = (
+    item: EmailTemplateEntity
+  ): EmailTemplateRespdata => ({
     TplId: item.id,
     TplTitle: item.title,
     TplContent: item.content,
@@ -70,14 +72,14 @@ export function registerEmailMarketingIpcHandlers() {
       const res = await emailmarketCon.listEmailTemplate(
         input.page ?? 0,
         input.size ?? 100,
-        input.search,
+        input.search
       );
       if (!res) {
         throw new Error("emailmarketing.list_email_template_error");
       }
       const records = (res.records || []).map(toTemplateResp);
       return { records, num: res.num };
-    },
+    }
   );
 
   registerValidatedHandler(
@@ -88,7 +90,7 @@ export function registerEmailMarketingIpcHandlers() {
       const emailmarketCon = new EmailMarketingController();
       await emailmarketCon.removeEmailTemplate(id);
       return id;
-    },
+    }
   );
 
   registerValidatedHandler(
@@ -108,7 +110,7 @@ export function registerEmailMarketingIpcHandlers() {
         Status: res.status,
         TplDescription: res.description ? res.description : "",
       } satisfies EmailTemplateRespdata;
-    },
+    }
   );
 
   registerValidatedHandler(
@@ -117,13 +119,13 @@ export function registerEmailMarketingIpcHandlers() {
     async (input) => {
       const emailmarketCon = new EmailMarketingController();
       const res = await emailmarketCon.updateEmailtemplate(
-        input as unknown as EmailTemplateRespdata,
+        input as unknown as EmailTemplateRespdata
       );
       if (!res) {
         throw new Error("emailmarketing.update_email_template_error");
       }
       return { id: res } satisfies CommonIdrequest<number>;
-    },
+    }
   );
 
   // ── Filter CRUD ──────────────────────────────────────────────────────
@@ -136,7 +138,7 @@ export function registerEmailMarketingIpcHandlers() {
       const res = await emailmarketCon.listEmailFilter(
         input.page ?? 0,
         input.size ?? 100,
-        input.search,
+        input.search
       );
       if (!res) {
         return { records: [], num: 0 };
@@ -160,7 +162,7 @@ export function registerEmailMarketingIpcHandlers() {
         });
       }
       return { records: respdata, num: res.num };
-    },
+    }
   );
 
   registerValidatedHandler(
@@ -173,8 +175,9 @@ export function registerEmailMarketingIpcHandlers() {
       if (!resp) {
         throw new Error("emailmarketing.filter_item_notexist");
       }
-      const filterdetails =
-        await emailmarketCon.getEmailFilterDetailByFilterId(id);
+      const filterdetails = await emailmarketCon.getEmailFilterDetailByFilterId(
+        id
+      );
       const respdata: EmailFilterdata = {
         id: resp.id,
         name: resp.name,
@@ -184,11 +187,14 @@ export function registerEmailMarketingIpcHandlers() {
       };
       if (filterdetails) {
         for (const detail of filterdetails as EmailFilterDetailEntity[]) {
-          respdata.filter_details.push({ id: detail.id, content: detail.content });
+          respdata.filter_details.push({
+            id: detail.id,
+            content: detail.content,
+          });
         }
       }
       return respdata;
-    },
+    }
   );
 
   registerValidatedHandler(
@@ -197,13 +203,13 @@ export function registerEmailMarketingIpcHandlers() {
     async (input) => {
       const emailmarketCon = new EmailMarketingController();
       const res = await emailmarketCon.updateEmailFilter(
-        input as unknown as EmailFilterdata,
+        input as unknown as EmailFilterdata
       );
       if (!res) {
         throw new Error("emailmarketing.update_email_filter_error");
       }
       return { id: res } satisfies CommonIdrequest<number>;
-    },
+    }
   );
 
   registerValidatedHandler(
@@ -218,7 +224,7 @@ export function registerEmailMarketingIpcHandlers() {
       } catch {
         throw new Error("emailmarketing.delete_email_filter_error");
       }
-    },
+    }
   );
 
   // ── Service CRUD ─────────────────────────────────────────────────────
@@ -231,7 +237,7 @@ export function registerEmailMarketingIpcHandlers() {
       const res = await emailmarketCon.getEmailServiceList(
         input.page ?? 0,
         input.size ?? 100,
-        input.search,
+        input.search
       );
       if (!res) {
         throw new Error("emailmarketing.service_list_error");
@@ -240,7 +246,7 @@ export function registerEmailMarketingIpcHandlers() {
         records: res.records || [],
         num: res.num,
       } satisfies CommonResponse<EmailServiceListdata>["data"];
-    },
+    }
   );
 
   registerValidatedHandler(
@@ -253,7 +259,7 @@ export function registerEmailMarketingIpcHandlers() {
         throw new Error("emailmarketing.service_item_notexist");
       }
       return res satisfies EmailServiceEntitydata;
-    },
+    }
   );
 
   registerValidatedHandler(
@@ -269,12 +275,16 @@ export function registerEmailMarketingIpcHandlers() {
           : undefined;
       let serviceId = id;
       if (serviceId === undefined && qdata.name) {
-        const existing = await emailmarketCon.findEmailServiceByName(qdata.name);
+        const existing = await emailmarketCon.findEmailServiceByName(
+          qdata.name
+        );
         serviceId = existing?.id;
       }
 
       if (serviceId !== undefined) {
-        const existing = await emailmarketCon.getEmailServiceDetail(serviceId);
+        // Resolve the RAW entity (credentials never round-trip from the form,
+        // so getEmailServiceDetail returns empty password sentinels).
+        const existing = await emailmarketCon.getEmailServiceEntity(serviceId);
         if (!existing) {
           throw new Error("Email service not found");
         }
@@ -283,8 +293,31 @@ export function registerEmailMarketingIpcHandlers() {
         entity.host = qdata.host ?? existing.host;
         entity.port = qdata.port ?? existing.port;
         entity.from = qdata.from ?? existing.from;
-        entity.password = qdata.password ?? existing.password;
+        // Empty incoming password = keep existing (credential sentinel).
+        entity.password =
+          qdata.password && qdata.password.length > 0
+            ? qdata.password
+            : existing.password;
         entity.ssl = qdata.ssl ?? existing.ssl;
+        // inbound receive fields
+        entity.receiveProtocol =
+          qdata.receiveProtocol ?? existing.receiveProtocol ?? "imap";
+        entity.imapHost = qdata.imapHost ?? existing.imapHost ?? null;
+        entity.imapPort = qdata.imapPort ?? existing.imapPort ?? null;
+        entity.imapSsl = qdata.imapSsl ?? existing.imapSsl ?? 1;
+        entity.pop3Host = qdata.pop3Host ?? existing.pop3Host ?? null;
+        entity.pop3Port = qdata.pop3Port ?? existing.pop3Port ?? null;
+        entity.pop3Ssl = qdata.pop3Ssl ?? existing.pop3Ssl ?? 1;
+        entity.receiveUsername =
+          qdata.receiveUsername ?? existing.receiveUsername ?? null;
+        entity.receivePassword =
+          qdata.receivePassword && qdata.receivePassword.length > 0
+            ? qdata.receivePassword
+            : existing.receivePassword ?? null;
+        entity.receiveFolder =
+          qdata.receiveFolder ?? existing.receiveFolder ?? "INBOX";
+        entity.receiveEnabled =
+          qdata.receiveEnabled ?? existing.receiveEnabled ?? 0;
         await emailmarketCon.updateEmailService(serviceId, entity);
         return { id: serviceId } satisfies CommonIdrequest<number>;
       }
@@ -294,7 +327,7 @@ export function registerEmailMarketingIpcHandlers() {
         throw new Error("emailmarketing.create_email_service_error");
       }
       return { id: createdId } satisfies CommonIdrequest<number>;
-    },
+    }
   );
 
   registerValidatedHandler(
@@ -305,7 +338,7 @@ export function registerEmailMarketingIpcHandlers() {
       const emailmarketCon = new EmailMarketingController();
       await emailmarketCon.deleteEmailService(id);
       return id;
-    },
+    }
   );
 
   // ── Out-of-scope: streaming on handler ───────────────────────────────
@@ -342,7 +375,7 @@ export function registerEmailMarketingIpcHandlers() {
           (
             event as { sender: { send: (c: string, m: string) => void } }
           ).sender.send(RECEIVESENDTESTEMAILMESSAGE, JSON.stringify(resp));
-        },
+        }
       )
       .catch((error) => {
         const errorMessage =

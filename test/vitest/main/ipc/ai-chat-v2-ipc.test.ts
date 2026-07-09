@@ -123,10 +123,13 @@ vi.mock("@/service/OpenAIChatTranscriptBuilder", () => ({
 }));
 
 // Mock compact-related modules used by AIChatContextAssembler (T11/T12).
-vi.mock("@/modules/AIChatSessionMemoryModule", () => ({
-  AIChatSessionMemoryModule: vi.fn().mockImplementation(() => ({
+const mockAIChatSessionMemoryModule = vi.hoisted(() =>
+  vi.fn().mockImplementation(() => ({
     getByConversation: vi.fn().mockResolvedValue(null),
-  })),
+  }))
+);
+vi.mock("@/modules/AIChatSessionMemoryModule", () => ({
+  AIChatSessionMemoryModule: mockAIChatSessionMemoryModule,
 }));
 vi.mock("@/modules/AIChatCompactModule", () => ({
   AIChatCompactModule: vi.fn().mockImplementation(() => ({
@@ -134,7 +137,10 @@ vi.mock("@/modules/AIChatCompactModule", () => ({
   })),
 }));
 
-import { registerAiChatV2IpcHandlers } from "@/main-process/communication/ai-chat-v2-ipc";
+import {
+  registerAiChatV2IpcHandlers,
+  resetAiChatV2RuntimeForDatabaseSwitch,
+} from "@/main-process/communication/ai-chat-v2-ipc";
 import {
   AI_CHAT_V2_RESUME_TOOL_AFTER_PERMISSION,
   AI_CHAT_V2_CONVERSATIONS,
@@ -326,6 +332,39 @@ describe("AI Chat V2 — stream lifecycle", () => {
     expect(payload?.fullContent).toBe("Hello world");
     expect(mockSaveAssistantMessage).toHaveBeenCalledWith(
       expect.objectContaining({ content: "Hello world" })
+    );
+  });
+
+  it("rebuilds stream runtime after a database account switch", async () => {
+    mockOpenAIChatCompletionStream.mockImplementation(
+      async (_req, onChunk: (c: unknown) => void) => {
+        onChunk({ choices: [{ delta: { content: "ok" } }] });
+        onChunk({
+          choices: [{ delta: { content: "" }, finish_reason: "stop" }],
+        });
+      }
+    );
+
+    const firstSenderSend = vi.fn();
+    await mockIpcMain.callHandler(
+      AI_CHAT_V2_STREAM,
+      { sender: { send: firstSenderSend } },
+      JSON.stringify({ message: "before switch" })
+    );
+    const firstRuntimeConstructCount =
+      mockAIChatSessionMemoryModule.mock.calls.length;
+
+    resetAiChatV2RuntimeForDatabaseSwitch();
+
+    const secondSenderSend = vi.fn();
+    await mockIpcMain.callHandler(
+      AI_CHAT_V2_STREAM,
+      { sender: { send: secondSenderSend } },
+      JSON.stringify({ message: "after switch" })
+    );
+
+    expect(mockAIChatSessionMemoryModule.mock.calls.length).toBeGreaterThan(
+      firstRuntimeConstructCount + 1
     );
   });
 

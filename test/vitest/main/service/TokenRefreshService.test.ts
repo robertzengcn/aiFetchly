@@ -81,6 +81,23 @@ function fakeResponse(
   } as unknown as Response;
 }
 
+// Reset the private static singletons between tests so each starts clean.
+// stopAutoRefresh() handles the timer/counter/running flag; _inFlight must be
+// cleared manually (it self-clears on settle, but this is belt-and-suspenders
+// if a prior test's promise did not settle).
+function resetStaticState(): void {
+  const staticState = TokenRefreshService as unknown as {
+    _inFlight: unknown;
+    _isAutoRefreshRunning: boolean;
+    _autoRefreshTimer: ReturnType<typeof setInterval> | null;
+    _consecutiveFailures: number;
+  };
+  staticState._inFlight = null;
+  staticState._isAutoRefreshRunning = false;
+  staticState._autoRefreshTimer = null;
+  staticState._consecutiveFailures = 0;
+}
+
 describe("isTransientBackendError", () => {
   test("TypeError 'fetch failed' is transient (backend unreachable)", () => {
     expect(isTransientBackendError(new TypeError("fetch failed"))).toBe(true);
@@ -104,9 +121,7 @@ describe("isTransientBackendError", () => {
 
   test("HTTP 5xx is transient (backend up but erroring)", () => {
     expect(
-      isTransientBackendError(
-        new Error("HTTP error: 500 Internal Server Error")
-      )
+      isTransientBackendError(new Error("HTTP error: 500 Internal Server Error"))
     ).toBe(true);
     expect(
       isTransientBackendError(new Error("HTTP error: 503 Service Unavailable"))
@@ -142,6 +157,184 @@ describe("RefreshTokenInvalidError", () => {
   });
 });
 
+describe("refreshOnce — process-wide serialization", () => {
+  beforeEach(() => {
+    vi.stubGlobal("fetch", mockFetch);
+    mockSignout.mockClear();
+    mockRemoveToken.mockClear();
+    mockGetValue.mockClear();
+    mockSetValue.mockClear();
+    mockFetch.mockReset();
+    resetStaticState();
+
+    // Valid refresh token, no access-token expiry stored → refresh runs.
+    tokenState.values = {
+      [TOKENNAME]: "current-access-token",
+      [TOKENEXPIRY]: "",
+      [REFRESHTOKEN]: "valid-refresh-token",
+      [REFRESHTOKENEXPIRY]: "",
+    };
+    mockGetValue.mockImplementation(
+      (key: string) => tokenState.values[key] ?? ""
+    );
+    mockSetValue.mockImplementation((key: string, val: string) => {
+      tokenState.values[key] = val;
+    });
+  });
+
+  afterEach(() => {
+    TokenRefreshService.stopAutoRefresh();
+    vi.unstubAllGlobals();
+  });
+
+  test("runs only one network refresh for two concurrent callers", async () => {
+    // Make fetch resolve slowly so both callers are definitely in flight.
+    let resolveFetch!: (value: Response) => void;
+    mockFetch.mockImplementation(
+      () =>
+        new Promise<Response>((resolve) => {
+          resolveFetch = resolve;
+        })
+    );
+
+    const payload = {
+      status: true,
+      code: 0,
+      msg: "ok",
+      data: {
+        accessToken: "new-access",
+        refreshToken: "new-refresh",
+        expiresIn: 3600,
+      },
+    };
+
+    const p1 = TokenRefreshService.refreshOnce();
+    const p2 = TokenRefreshService.refreshOnce();
+
+    // While in flight, the static slot must be populated.
+    expect(TokenRefreshService.isRefreshInFlight()).toBe(true);
+
+    resolveFetch(fakeResponse(payload));
+
+    const [r1, r2] = await Promise.all([p1, p2]);
+
+    // Critical assertion: exactly one fetch call despite two callers.
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(r1).toBe(r2); // same resolved value object
+    expect(r1.status).toBe(true);
+    expect(r1.data?.accessToken).toBe("new-access");
+
+    // Slot cleared after completion.
+    expect(TokenRefreshService.isRefreshInFlight()).toBe(false);
+  });
+
+  test("clears the in-flight slot after a failed refresh", async () => {
+    mockFetch.mockResolvedValue(
+      fakeResponse(
+        { status: false, code: 500, msg: "server error", data: null },
+        { ok: true, status: 200 }
+      )
+    );
+
+    await expect(TokenRefreshService.refreshOnce()).rejects.toThrow(
+      /server error|Token refresh failed/
+    );
+
+    expect(TokenRefreshService.isRefreshInFlight()).toBe(false);
+
+    // A subsequent call must issue a NEW fetch (slot was cleared).
+    mockFetch.mockResolvedValue(
+      fakeResponse({
+        status: true,
+        code: 0,
+        msg: "ok",
+        data: { accessToken: "a", refreshToken: "r", expiresIn: 60 },
+      })
+    );
+    await TokenRefreshService.refreshOnce();
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+  });
+
+  test("preserves backward-compat instance.refreshAccessToken() by delegating to refreshOnce()", async () => {
+    mockFetch.mockResolvedValue(
+      fakeResponse({
+        status: true,
+        code: 0,
+        msg: "ok",
+        data: { accessToken: "a", refreshToken: "r", expiresIn: 60 },
+      })
+    );
+
+    const service = new TokenRefreshService();
+    const result = await service.refreshAccessToken();
+
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(result.status).toBe(true);
+    expect(result.data?.accessToken).toBe("a");
+  });
+});
+
+describe("case-insensitive refresh-token-invalid handling", () => {
+  // The background refresh path stops the auto-refresh timer when the refresh
+  // token is invalid. With the merged typed-error design, a body-level code 401
+  // throws RefreshTokenInvalidError regardless of message casing, so the
+  // lowercase backend message that previously slipped past a capital-I match
+  // is now handled. This test guards that behavior end-to-end.
+  beforeEach(() => {
+    vi.stubGlobal("fetch", mockFetch);
+    mockSignout.mockClear();
+    mockRemoveToken.mockClear();
+    mockGetValue.mockClear();
+    mockSetValue.mockClear();
+    mockFetch.mockReset();
+    resetStaticState();
+
+    tokenState.values = {
+      [TOKENNAME]: "current-access-token",
+      [TOKENEXPIRY]: "",
+      [REFRESHTOKEN]: "valid-refresh-token",
+      [REFRESHTOKENEXPIRY]: "",
+    };
+    mockGetValue.mockImplementation(
+      (key: string) => tokenState.values[key] ?? ""
+    );
+    mockSetValue.mockImplementation((key: string, val: string) => {
+      tokenState.values[key] = val;
+    });
+  });
+
+  afterEach(() => {
+    TokenRefreshService.stopAutoRefresh();
+    vi.unstubAllGlobals();
+  });
+
+  test("stops auto-refresh on lowercase 'invalid or expired refresh token'", async () => {
+    mockFetch.mockResolvedValue(
+      fakeResponse({
+        status: false,
+        code: 401,
+        msg: "invalid or expired refresh token",
+        data: null,
+      })
+    );
+
+    // Spy on stopAutoRefresh to verify the auth-failure branch fires, without
+    // actually clearing the timer (cleaned up manually below).
+    const stopSpy = vi
+      .spyOn(TokenRefreshService, "stopAutoRefresh")
+      .mockImplementation(() => undefined);
+
+    TokenRefreshService.startAutoRefresh();
+
+    await vi.waitFor(() => {
+      expect(stopSpy).toHaveBeenCalled();
+    });
+
+    stopSpy.mockRestore();
+    TokenRefreshService.stopAutoRefresh();
+  });
+});
+
 describe("TokenRefreshService.performAutoRefreshCheck", () => {
   beforeEach(() => {
     vi.stubGlobal("fetch", mockFetch);
@@ -150,6 +343,7 @@ describe("TokenRefreshService.performAutoRefreshCheck", () => {
     mockGetValue.mockClear();
     mockSetValue.mockClear();
     mockFetch.mockReset();
+    resetStaticState();
 
     // Valid refresh token, expired access token → forces a refresh attempt.
     tokenState.values = {
@@ -165,7 +359,6 @@ describe("TokenRefreshService.performAutoRefreshCheck", () => {
       tokenState.values[key] = val;
     });
 
-    // Ensure a clean singleton state between tests.
     TokenRefreshService.stopAutoRefresh();
   });
 
@@ -218,16 +411,11 @@ describe("TokenRefreshService.performAutoRefreshCheck", () => {
   });
 
   test("Case C: unexpected (non-auth, non-transient) error at MAX threshold stops the timer but does NOT sign out", async () => {
-    // Body returns an unsuccessful status with a non-401 code → refreshAccessToken
+    // Body returns an unsuccessful status with a non-401 code → _performRefreshNetwork
     // throws a plain Error (not RefreshTokenInvalidError, not transient) → Case C.
     mockFetch.mockResolvedValue(
       fakeResponse(
-        {
-          status: false,
-          code: 500,
-          msg: "unexpected backend error",
-          data: null,
-        },
+        { status: false, code: 500, msg: "unexpected backend error", data: null },
         { ok: true, status: 200 }
       )
     );
@@ -312,18 +500,20 @@ describe("TokenRefreshService.refreshAccessToken throw-type contract", () => {
     mockFetch.mockReset();
     mockGetValue.mockClear();
     mockSetValue.mockClear();
-    mockGetValue.mockImplementation(
-      (key: string) => tokenState.values[key] ?? ""
-    );
-    mockSetValue.mockImplementation((key: string, val: string) => {
-      tokenState.values[key] = val;
-    });
+    resetStaticState();
+
     tokenState.values = {
       [TOKENNAME]: "access-token-value",
       [TOKENEXPIRY]: String(Date.now() - 100_000),
       [REFRESHTOKEN]: "refresh-token-value",
       [REFRESHTOKENEXPIRY]: String(Date.now() + 10_000_000), // valid
     };
+    mockGetValue.mockImplementation(
+      (key: string) => tokenState.values[key] ?? ""
+    );
+    mockSetValue.mockImplementation((key: string, val: string) => {
+      tokenState.values[key] = val;
+    });
   });
 
   afterEach(() => {

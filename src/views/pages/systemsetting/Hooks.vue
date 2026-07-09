@@ -1,0 +1,581 @@
+<template>
+  <v-container fluid>
+    <!-- Header -->
+    <v-row align="center" class="mb-2">
+      <v-col cols="6">
+        <v-switch
+          v-model="globalEnabled"
+          :label="t('system_settings.hooks.global_enable') || 'Enable hooks globally'"
+          color="primary"
+          hide-details
+          @update:model-value="onGlobalToggle"
+        />
+      </v-col>
+      <v-col cols="6" class="text-right">
+        <v-btn color="primary" @click="onAddNew">
+          <v-icon left>mdi-plus</v-icon>
+          {{ t('system_settings.hooks.add_command') || '+ Add command hook' }}
+        </v-btn>
+      </v-col>
+    </v-row>
+
+    <v-alert v-if="!globalEnabled" type="warning" density="compact" class="mb-2">
+      {{ t('system_settings.hooks.global_disable_banner') || 'Hooks are globally disabled — no hook will fire.' }}
+    </v-alert>
+
+    <!-- Filters -->
+    <v-row dense class="mb-2">
+      <v-col cols="3">
+        <v-select
+          v-model="filterEvent"
+          :items="eventOptions"
+          :label="t('system_settings.hooks.filter_event') || 'Event'"
+          density="compact"
+          clearable
+        />
+      </v-col>
+      <v-col cols="3">
+        <v-select
+          v-model="filterSource"
+          :items="sourceOptions"
+          :label="t('system_settings.hooks.filter_source') || 'Source'"
+          density="compact"
+        />
+      </v-col>
+      <v-col cols="3">
+        <v-checkbox
+          v-model="showSession"
+          :label="t('system_settings.hooks.show_session') || 'Show session hooks'"
+          density="compact"
+          hide-details
+        />
+      </v-col>
+    </v-row>
+
+    <!-- Master-detail -->
+    <v-row>
+      <v-col cols="5">
+        <v-card>
+          <v-card-title>
+            {{ t('system_settings.hooks.title') || 'Hooks Management' }}
+            <v-chip size="x-small" class="ml-2">{{ visibleHooks.length }}</v-chip>
+          </v-card-title>
+          <v-divider />
+          <v-list density="compact" style="max-height: 480px; overflow-y: auto;">
+            <v-list-item
+              v-for="hook in visibleHooks"
+              :key="hook.id"
+              :active="selectedId === hook.id"
+              @click="onSelect(hook.id)"
+            >
+              <v-list-item-title>
+                <v-icon small class="mr-1">{{ iconFor(hook) }}</v-icon>
+                {{ hook.id }}
+              </v-list-item-title>
+              <v-list-item-subtitle>
+                {{ hook.eventName }} · {{ hook.source }}
+              </v-list-item-subtitle>
+            </v-list-item>
+            <v-list-item v-if="visibleHooks.length === 0">
+              <v-list-item-title class="text--disabled">
+                {{ t('system_settings.hooks.list_empty') || 'No hooks configured yet' }}
+              </v-list-item-title>
+            </v-list-item>
+          </v-list>
+        </v-card>
+      </v-col>
+
+      <v-col cols="7">
+        <v-card>
+          <v-card-title>{{ editorTitle }}</v-card-title>
+          <v-card-text v-if="!selectedHook && !creating">
+            <p class="text--disabled">
+              {{ t('system_settings.hooks.create_first') || 'Create your first command hook' }}
+            </p>
+          </v-card-text>
+          <v-card-text v-else>
+            <v-text-field
+              v-model="form.id"
+              :label="t('system_settings.hooks.field.id') || 'Hook ID'"
+              :disabled="!creating"
+              density="compact"
+              class="mb-2"
+            />
+            <v-select
+              v-model="form.eventName"
+              :items="eventOptions"
+              :label="t('system_settings.hooks.field.event') || 'Event'"
+              :disabled="!isUserSource"
+              density="compact"
+              class="mb-2"
+            />
+            <v-text-field
+              v-model="form.matcher"
+              :label="t('system_settings.hooks.field.matcher') || 'Matcher'"
+              :disabled="!isUserSource"
+              density="compact"
+              class="mb-2"
+            />
+            <v-textarea
+              v-model="form.command"
+              :label="t('system_settings.hooks.field.command') || 'Command'"
+              :disabled="!isUserSource"
+              density="compact"
+              auto-grow
+              rows="3"
+              class="mb-2"
+            />
+            <v-text-field
+              v-model.number="form.timeoutMs"
+              type="number"
+              :label="t('system_settings.hooks.field.timeout') || 'Timeout (ms)'"
+              :disabled="!isUserSource"
+              density="compact"
+              class="mb-2"
+            />
+            <v-select
+              v-model="form.failureMode"
+              :items="['warn', 'block']"
+              :label="t('system_settings.hooks.field.failure_mode') || 'Failure mode'"
+              :disabled="!isUserSource"
+              density="compact"
+              class="mb-2"
+            />
+            <v-text-field
+              v-model="form.statusMessage"
+              :label="t('system_settings.hooks.field.status_message') || 'Status message'"
+              :disabled="!isUserSource"
+              density="compact"
+              class="mb-2"
+            />
+
+            <v-switch
+              v-if="selectedHook"
+              :model-value="selectedHook.enabled"
+              :label="t('system_settings.hooks.field.enabled') || 'Enabled'"
+              color="primary"
+              density="compact"
+              hide-details
+              class="mb-2"
+              @update:model-value="onToggleEnabled"
+            />
+
+            <v-alert
+              v-if="showScrapingWarning"
+              type="warning"
+              density="compact"
+              class="mb-2"
+            >
+              {{ t('system_settings.hooks.scraping_compliance_warning') || 'Enabling this hook injects compliance context into the AI prompt after every scrape tool call, which may affect scrape results.' }}
+            </v-alert>
+
+            <div class="mt-2">
+              <v-btn
+                v-if="isUserSource"
+                color="primary"
+                variant="outlined"
+                class="mr-2"
+                @click="onSave"
+              >
+                {{ t('system_settings.hooks.button.save') || 'Save' }}
+              </v-btn>
+              <v-btn
+                v-if="isUserSource && !creating"
+                color="error"
+                variant="outlined"
+                @click="onDelete"
+              >
+                {{ t('system_settings.hooks.button.delete') || 'Delete' }}
+              </v-btn>
+            </div>
+          </v-card-text>
+        </v-card>
+      </v-col>
+    </v-row>
+
+    <!-- Audit panel -->
+    <v-row class="mt-4">
+      <v-col cols="12">
+        <v-card>
+          <v-card-title>
+            {{ t('system_settings.hooks.audit_title') || 'Recent audit log' }}
+            <v-spacer />
+            <v-btn
+              icon
+              size="small"
+              variant="text"
+              :color="autoRefreshEnabled ? 'primary' : undefined"
+              @click="toggleAutoRefresh"
+              :title="autoRefreshEnabled
+                ? (t('system_settings.hooks.auto_refresh_pause') || 'Pause auto refresh')
+                : (t('system_settings.hooks.auto_refresh_start') || 'Start auto refresh')"
+            >
+              <v-icon :class="{ 'spin': autoRefreshEnabled }">mdi-refresh</v-icon>
+            </v-btn>
+          </v-card-title>
+          <v-card-text>
+            <v-row dense class="mb-2">
+              <v-col cols="3">
+                <v-select
+                  v-model="auditFilter.eventName"
+                  :items="eventOptions"
+                  :label="t('system_settings.hooks.filter_event') || 'Event'"
+                  clearable
+                  density="compact"
+                />
+              </v-col>
+              <v-col cols="3">
+                <v-select
+                  v-model="auditFilter.status"
+                  :items="['started','success','blocked','failed','timeout']"
+                  :label="t('system_settings.hooks.filter_status') || 'Status'"
+                  clearable
+                  density="compact"
+                />
+              </v-col>
+              <v-col cols="3">
+                <v-select
+                  v-model="auditFilter.hookId"
+                  :items="hookIdOptions"
+                  :label="t('system_settings.hooks.filter_hook') || 'Hook'"
+                  clearable
+                  density="compact"
+                />
+              </v-col>
+              <v-col cols="3">
+                <v-select
+                  v-model="auditLimit"
+                  :items="[100, 500, 1000]"
+                  :label="t('system_settings.hooks.last_rows') || 'Rows'"
+                  density="compact"
+                />
+              </v-col>
+            </v-row>
+            <v-data-table
+              :headers="auditHeaders"
+              :items="auditRows"
+              :items-per-page="10"
+              density="compact"
+            >
+              <template #item.timestamp="{ item }">
+                {{ formatTime(item.timestamp) }}
+              </template>
+            </v-data-table>
+          </v-card-text>
+        </v-card>
+      </v-col>
+    </v-row>
+
+    <!-- Delete confirm dialog -->
+    <v-dialog v-model="deleteDialog" max-width="500">
+      <v-card>
+        <v-card-title>
+          {{ t('system_settings.hooks.delete_confirm_title') || 'Delete this hook?' }}
+        </v-card-title>
+        <v-card-text>
+          {{ t('system_settings.hooks.delete_confirm_body') || 'This action cannot be undone.' }}
+          <br /><code>{{ form.id }}</code>
+        </v-card-text>
+        <v-card-actions>
+          <v-spacer />
+          <v-btn @click="deleteDialog = false">
+            {{ t('system_settings.hooks.button.cancel') || 'Cancel' }}
+          </v-btn>
+          <v-btn color="error" @click="confirmDelete">
+            {{ t('system_settings.hooks.button.delete') || 'Delete' }}
+          </v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
+    <NoticeSnackbar v-model="snackbar.show" :message="snackbar.message" :type="snackbar.type" />
+  </v-container>
+</template>
+
+<script setup lang="ts">
+import { ref, computed, onMounted, onUnmounted, watch } from "vue";
+import { useI18n } from "vue-i18n";
+import NoticeSnackbar from "@/views/components/widgets/noticeSnackbar.vue";
+import {
+  listHooks, createHook, updateHook, deleteHook,
+  setHookEnabled,
+  getHooksGlobalEnable, setHooksGlobalEnable,
+  listHookAudit,
+  type NewHookInput,
+} from "@/views/api/hooks";
+import type {
+  HookDefinition, HookEventName, HookAuditEntry, HookAuditStatus,
+} from "@/entityTypes/hookTypes";
+
+const { t } = useI18n();
+
+const EVENT_NAMES: HookEventName[] = [
+  "SessionStart", "UserPromptSubmit", "PreToolUse",
+  "PostToolUse", "PostToolUseFailure",
+  "PermissionRequest", "PermissionDenied", "Stop",
+];
+const eventOptions = EVENT_NAMES;
+const sourceOptions = ["all", "builtin", "user"];
+
+const globalEnabled = ref(false);
+const filterEvent = ref<HookEventName | undefined>(undefined);
+const filterSource = ref<"all" | "builtin" | "user">("all");
+const showSession = ref(false);
+const allHooks = ref<HookDefinition[]>([]);
+const selectedId = ref<string | null>(null);
+const creating = ref(false);
+
+const form = ref({
+  id: "",
+  eventName: "PreToolUse" as HookEventName,
+  matcher: "*",
+  command: "",
+  cwd: "",
+  timeoutMs: 5000,
+  failureMode: "warn" as "warn" | "block",
+  statusMessage: "",
+});
+
+const deleteDialog = ref(false);
+
+const snackbar = ref({ show: false, message: "", type: "success" as "success" | "error" });
+
+// Audit
+const auditRows = ref<HookAuditEntry[]>([]);
+const auditFilter = ref<{ eventName?: HookEventName; status?: HookAuditStatus; hookId?: string }>({});
+const auditLimit = ref(100);
+
+// Auto-refresh
+const autoRefreshEnabled = ref(false);
+let autoRefreshTimer: ReturnType<typeof setInterval> | undefined;
+
+function startAutoRefresh(): void {
+  stopAutoRefresh();
+  autoRefreshTimer = setInterval(() => { void loadAudit(); }, 3000);
+  autoRefreshEnabled.value = true;
+}
+
+function stopAutoRefresh(): void {
+  if (autoRefreshTimer !== undefined) {
+    clearInterval(autoRefreshTimer);
+    autoRefreshTimer = undefined;
+  }
+  autoRefreshEnabled.value = false;
+}
+
+function toggleAutoRefresh(): void {
+  if (autoRefreshEnabled.value) {
+    stopAutoRefresh();
+  } else {
+    startAutoRefresh();
+  }
+}
+
+const auditHeaders = [
+  { title: t("system_settings.hooks.audit_time") || "Time", key: "timestamp", sortable: true },
+  { title: t("system_settings.hooks.filter_hook") || "Hook", key: "hookId" },
+  { title: t("system_settings.hooks.filter_event") || "Event", key: "eventName" },
+  { title: t("system_settings.hooks.filter_status") || "Status", key: "status" },
+  { title: t("system_settings.hooks.audit_duration") || "Duration", key: "durationMs" },
+  { title: t("system_settings.hooks.audit_reason") || "Reason", key: "reason" },
+];
+
+const visibleHooks = computed(() => allHooks.value);
+const selectedHook = computed(() =>
+  allHooks.value.find((h) => h.id === selectedId.value) ?? null
+);
+const isUserSource = computed(() =>
+  creating.value || selectedHook.value?.source === "user"
+);
+const editorTitle = computed(() => {
+  if (creating.value) return t("system_settings.hooks.add_command") || "+ Add command hook";
+  if (selectedHook.value) return selectedHook.value.id;
+  return "";
+});
+const hookIdOptions = computed(() => allHooks.value.map((h) => h.id));
+const showScrapingWarning = computed(() =>
+  selectedHook.value?.id === "builtin-scraping-compliance-context" &&
+  selectedHook.value?.enabled === true
+);
+function iconFor(hook: HookDefinition): string {
+  if (hook.source === "builtin") return hook.enabled ? "mdi-check" : "mdi-pause";
+  return hook.enabled ? "mdi-check" : "mdi-pause";
+}
+
+function formatTime(ts: string | Date): string {
+  const d = typeof ts === "string" ? new Date(ts) : ts;
+  return d.toLocaleString();
+}
+
+function generateHookId(): string {
+  return `hook-${Math.random().toString(36).substring(2, 8)}`;
+}
+
+async function loadAll() {
+  try {
+    allHooks.value = await listHooks({
+      source: filterSource.value === "all" ? undefined : filterSource.value,
+      includeSession: showSession.value,
+      eventName: filterEvent.value,
+    });
+  } catch (err) {
+    console.error("hooks:list failed", err);
+  }
+}
+
+async function loadAudit() {
+  try {
+    const result = await listHookAudit({
+      ...auditFilter.value,
+      limit: auditLimit.value,
+      offset: 0,
+    });
+    auditRows.value = result.rows;
+  } catch (err) {
+    console.error("hooks:listAudit failed", err);
+  }
+}
+
+async function onGlobalToggle(value: boolean | null) {
+  const enabled = value === null ? false : value;
+  try {
+    await setHooksGlobalEnable(enabled);
+    globalEnabled.value = enabled;
+  } catch (err) {
+    console.error(err);
+    globalEnabled.value = !enabled; // revert
+  }
+}
+
+async function onToggleEnabled(value: boolean | null) {
+  if (!selectedHook.value) return;
+  const enabled = value === null ? false : value;
+  const id = selectedHook.value.id;
+  // Optimistic update — toggle immediately for responsive feel
+  const idx = allHooks.value.findIndex((h) => h.id === id);
+  if (idx !== -1) {
+    allHooks.value[idx] = { ...allHooks.value[idx], enabled };
+  }
+  try {
+    await setHookEnabled(id, enabled);
+    await loadAll();
+  } catch (err) {
+    console.error("setHookEnabled failed", err);
+    await loadAll(); // revert via server reload
+  }
+}
+
+function onSelect(id: string) {
+  creating.value = false;
+  selectedId.value = id;
+  const hook = allHooks.value.find((h) => h.id === id);
+  if (!hook || hook.type !== "command") return;
+  form.value = {
+    id: hook.id,
+    eventName: hook.eventName,
+    matcher: hook.matcher ?? "*",
+    command: hook.command,
+    cwd: hook.cwd ?? "",
+    timeoutMs: hook.timeoutMs ?? 5000,
+    failureMode: hook.failureMode ?? "warn",
+    statusMessage: hook.statusMessage ?? "",
+  };
+}
+
+function onAddNew() {
+  creating.value = true;
+  selectedId.value = null;
+  form.value = {
+    id: generateHookId(),
+    eventName: "PreToolUse",
+    matcher: "*",
+    command: "",
+    cwd: "",
+    timeoutMs: 5000,
+    failureMode: "warn",
+    statusMessage: "",
+  };
+}
+
+async function onSave() {
+  try {
+    if (creating.value) {
+      const input: NewHookInput = {
+        id: form.value.id,
+        eventName: form.value.eventName,
+        matcher: form.value.matcher,
+        command: form.value.command,
+        cwd: form.value.cwd || undefined,
+        timeoutMs: form.value.timeoutMs,
+        failureMode: form.value.failureMode,
+        statusMessage: form.value.statusMessage || undefined,
+        enabled: false, // user must explicitly enable after create
+      };
+      await createHook(input);
+    } else if (selectedHook.value?.source === "user") {
+      await updateHook(form.value.id, {
+        matcher: form.value.matcher,
+        command: form.value.command,
+        cwd: form.value.cwd || null,
+        timeoutMs: form.value.timeoutMs,
+        failureMode: form.value.failureMode,
+        statusMessage: form.value.statusMessage || null,
+      });
+    }
+    creating.value = false;
+    await loadAll();
+    snackbar.value = { show: true, message: t('system_settings.hooks.toast.saved') || "Hook saved", type: "success" };
+  } catch (err) {
+    console.error("save failed", err);
+    snackbar.value = { show: true, message: String(err), type: "error" };
+  }
+}
+
+function onDelete() { deleteDialog.value = true; }
+async function confirmDelete() {
+  deleteDialog.value = false;
+  if (!selectedHook.value) return;
+  try {
+    await deleteHook(selectedHook.value.id);
+    selectedId.value = null;
+    await loadAll();
+  } catch (err) {
+    console.error(err);
+    alert(String(err));
+  }
+}
+
+watch([filterSource, filterEvent, showSession], () => { void loadAll(); });
+watch([auditFilter, auditLimit], () => {
+  void loadAudit();
+  // Restart auto-refresh timer so it picks up new filters immediately
+  if (autoRefreshTimer) {
+    clearInterval(autoRefreshTimer);
+    autoRefreshTimer = setInterval(() => { void loadAudit(); }, 3000);
+  }
+}, { deep: true });
+
+onMounted(async () => {
+  try {
+    globalEnabled.value = await getHooksGlobalEnable();
+  } catch (err) {
+    console.error("getHooksGlobalEnable failed", err);
+  }
+  await loadAll();
+  await loadAudit();
+});
+
+onUnmounted(() => {
+  stopAutoRefresh();
+});
+</script>
+
+<style scoped>
+.spin {
+  animation: spin 1s linear infinite;
+}
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+</style>
