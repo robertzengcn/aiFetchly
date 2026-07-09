@@ -2,6 +2,7 @@ import { describe, expect, it, beforeEach, vi } from "vitest";
 import { SqliteDb } from "@/config/SqliteDb";
 import { AIWorkspaceMemoryModule } from "@/modules/AIWorkspaceMemoryModule";
 import type { WorkspaceMemoryScope } from "@/modules/AIWorkspaceMemoryModule";
+import { AIWorkspaceMemoryModel } from "@/model/AIWorkspaceMemory.model";
 import path from "node:path";
 import os from "node:os";
 import fs from "node:fs";
@@ -219,5 +220,95 @@ describe("AIWorkspaceMemoryModule", () => {
     expect(bRetrieval.length).toBe(1);
     expect(aRetrieval[0].title).toBe("no direct DB in workers");
     expect(bRetrieval[0].title).toBe("beta rule");
+  });
+
+  it("search treats wildcard characters literally within a workspace", async () => {
+    const mod = new AIWorkspaceMemoryModule();
+    await SqliteDb.ensureInitialized();
+    await mod.createMemory(SCOPE_A, {
+      type: "workflow",
+      title: "literal 100% rule",
+      content: "Use the literal percent marker when testing search.",
+    });
+    await mod.createMemory(SCOPE_A, {
+      type: "workflow",
+      title: "ordinary rule",
+      content: "This item should not match a percent wildcard query.",
+    });
+
+    const results = await mod.listMemories(SCOPE_A, {
+      query: "100%",
+      limit: 10,
+    });
+
+    expect(results.map((m) => m.title)).toEqual(["literal 100% rule"]);
+  });
+
+  it("filters by status and source kind without crossing workspace scope", async () => {
+    const mod = new AIWorkspaceMemoryModule();
+    await SqliteDb.ensureInitialized();
+    await mod.createMemory(SCOPE_A, {
+      type: "decision",
+      title: "manual active",
+      content: "Manual memory.",
+      sourceKind: "manual",
+    });
+    const auto = await mod.createMemory(SCOPE_A, {
+      type: "decision",
+      title: "auto archived",
+      content: "Auto-dream memory.",
+      sourceKind: "auto_dream",
+    });
+    await mod.createMemory(SCOPE_B, {
+      type: "decision",
+      title: "beta auto",
+      content: "Beta auto-dream memory.",
+      sourceKind: "auto_dream",
+    });
+    await mod.archiveMemory(SCOPE_A, auto.memoryId);
+
+    const archivedAuto = await mod.listMemories(SCOPE_A, {
+      status: "archived",
+      sourceKind: "auto_dream",
+    });
+
+    expect(archivedAuto).toHaveLength(1);
+    expect(archivedAuto[0].title).toBe("auto archived");
+    expect(archivedAuto[0].workspaceKey).toBe(SCOPE_A.workspaceKey);
+  });
+
+  it("limits source message attribution to 100 message ids", async () => {
+    const mod = new AIWorkspaceMemoryModule();
+    await SqliteDb.ensureInitialized();
+    const sourceMessageIds = Array.from({ length: 105 }, (_unused, i) => {
+      return `msg-${i}`;
+    });
+
+    const memory = await mod.createMemory(SCOPE_A, {
+      type: "reference",
+      title: "source capped",
+      content: "Source attribution should stay compact.",
+      sourceMessageIds,
+    });
+
+    expect(memory.sourceMessageIds).toHaveLength(100);
+    expect(memory.sourceMessageIds?.[0]).toBe("msg-0");
+    expect(memory.sourceMessageIds?.[99]).toBe("msg-99");
+  });
+
+  it("prevents workspace memory models from being instantiated in worker processes", () => {
+    const previous = process.env.WORKER_TYPE;
+    process.env.WORKER_TYPE = "contact-extraction";
+    try {
+      expect(() => new AIWorkspaceMemoryModel(tmpDir)).toThrow(
+        /Direct database access from worker process is not allowed/
+      );
+    } finally {
+      if (previous === undefined) {
+        delete process.env.WORKER_TYPE;
+      } else {
+        process.env.WORKER_TYPE = previous;
+      }
+    }
   });
 });

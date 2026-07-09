@@ -34,8 +34,13 @@ export class AIWorkspaceMemoryService {
     input: AIWorkspaceMemorySearchInput
   ): Promise<AIWorkspaceMemoryView[]> {
     const ctx = await this.requireContext(input.conversationId);
-    const { conversationId: _conversationId, ...rest } = input;
+    const {
+      conversationId: _conversationId,
+      workspaceKey: _workspaceKey,
+      ...rest
+    } = input as AIWorkspaceMemorySearchInput & { workspaceKey?: unknown };
     void _conversationId;
+    void _workspaceKey;
     return this.memoryModule.listMemories(ctx, rest);
   }
 
@@ -43,8 +48,13 @@ export class AIWorkspaceMemoryService {
     input: AIWorkspaceMemoryCreateInput
   ): Promise<AIWorkspaceMemoryView> {
     const ctx = await this.requireContext(input.conversationId);
-    const { conversationId: _conversationId, ...rest } = input;
+    const {
+      conversationId: _conversationId,
+      workspaceKey: _workspaceKey,
+      ...rest
+    } = input as AIWorkspaceMemoryCreateInput & { workspaceKey?: unknown };
     void _conversationId;
+    void _workspaceKey;
     return this.memoryModule.createMemory(ctx, {
       ...rest,
       sourceKind: "manual",
@@ -55,8 +65,13 @@ export class AIWorkspaceMemoryService {
     input: AIWorkspaceMemoryUpdateInput
   ): Promise<AIWorkspaceMemoryView> {
     const ctx = await this.requireContext(input.conversationId);
-    const { conversationId: _conversationId, ...rest } = input;
+    const {
+      conversationId: _conversationId,
+      workspaceKey: _workspaceKey,
+      ...rest
+    } = input as AIWorkspaceMemoryUpdateInput & { workspaceKey?: unknown };
     void _conversationId;
+    void _workspaceKey;
     return this.memoryModule.updateMemory(ctx, rest);
   }
 
