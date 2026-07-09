@@ -174,7 +174,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 16-03-dispatch-list-context-PLAN.md — AgentRuntime.runSync registry-first resolution with DB fallback (AGT-03); /agents built-in command; "Available agents" system-message block (D-Discovery); i18n chrome
+- [x] 16-03-dispatch-list-context-PLAN.md — AgentRuntime.runSync registry-first resolution with DB fallback (AGT-03); /agents built-in command; "Available agents" system-message block (D-Discovery); i18n chrome
 
 ### Phase 17: Hooks
 
@@ -234,6 +234,6 @@ Plans:
 | 13. Global Context and Built-in Slash Commands | v2.0 | 6/6 | Complete   | 2026-07-05 |
 | 14. Workspace Watcher Worker | v2.0 | 3/5 | In Progress|  |
 | 15. Prompt Command Files | v2.0 | 2/2 | Complete    | 2026-07-07 |
-| 16. Dynamic Agents | v2.0 | 2/3 | In Progress| 2026-07-09 |
+| 16. Dynamic Agents | v2.0 | 3/3 | Complete   | 2026-07-09 |
 | 17. Hooks | v2.0 | 0/? | Not started | — |
 | 18. Skills and Plugin Integration | v2.0 | 0/? | Not started | — |
