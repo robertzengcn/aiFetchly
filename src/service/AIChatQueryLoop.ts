@@ -57,6 +57,13 @@ import { CancellationToken } from "@/service/CancellationToken";
 import { getDefaultToolJobRegistry } from "@/service/ToolJobRegistry";
 import { USER_AI_ENABLED } from "@/config/usersetting";
 import { Token } from "@/modules/token";
+import { HookDispatcher } from "@/service/hooks/HookDispatcher";
+import { SkillPermissionService } from "@/service/SkillPermissionService";
+import {
+  EMPTY_AGGREGATE,
+  type AggregatedHookResult,
+  type HookToolDescriptor,
+} from "@/entityTypes/hookTypes";
 
 /**
  * Max model→tool→model rounds per user turn. Must be high enough to
@@ -212,6 +219,43 @@ function extractToolError(payload: Record<string, unknown>): string {
     return message.trim();
   }
   return "The tool did not complete successfully.";
+}
+
+function mergeToolResultHookContext(
+  result: ToolExecutionResult,
+  preAggregate: AggregatedHookResult,
+  postAggregate: AggregatedHookResult
+): ToolExecutionResult {
+  const hookMessages = [
+    ...preAggregate.systemMessages,
+    ...postAggregate.systemMessages,
+  ];
+  const hookContexts = [
+    ...preAggregate.additionalContexts,
+    ...postAggregate.additionalContexts,
+  ];
+  const updatedToolOutput =
+    result.success && postAggregate.updatedToolOutput
+      ? postAggregate.updatedToolOutput
+      : undefined;
+
+  if (
+    hookMessages.length === 0 &&
+    hookContexts.length === 0 &&
+    !updatedToolOutput
+  ) {
+    return result;
+  }
+
+  return {
+    ...result,
+    result: {
+      ...result.result,
+      ...(updatedToolOutput ?? {}),
+      ...(hookMessages.length > 0 ? { hookMessages } : {}),
+      ...(hookContexts.length > 0 ? { hookContexts } : {}),
+    },
+  };
 }
 
 function buildFailedToolFallbackMessage(info: LastFailedToolInfo): string {
@@ -1453,25 +1497,95 @@ export class AIChatQueryLoop {
     }
   ): Promise<ToolExecutionResult> {
     const startedAt = Date.now();
+    const descriptor = this.resolveHookToolDescriptor(input, call);
+    const preAggregate = await this.runPreToolUseHooks(
+      input,
+      descriptor,
+      call.arguments ?? {}
+    );
+
+    if (preAggregate.blocked || preAggregate.permissionDecision === "deny") {
+      return this.buildHookBlockedToolResult(
+        call,
+        preAggregate,
+        Date.now() - startedAt
+      );
+    }
+
+    const effectiveCall = {
+      ...call,
+      arguments: preAggregate.updatedInput ?? call.arguments ?? {},
+    };
 
     // Resolve the timeout class. Explicit declaration on the skill wins;
     // argument-driven resolver wins over static field; otherwise infer by name.
-    const skill = input.skillRegistry?.getSkill(call.name);
+    const skill = input.skillRegistry?.getSkill(effectiveCall.name);
     const cls: ToolTimeoutClass =
-      skill?.resolveTimeoutClass?.(call.arguments ?? {}) ??
+      skill?.resolveTimeoutClass?.(effectiveCall.arguments ?? {}) ??
       skill?.timeoutClass ??
-      inferTimeoutClassByName(call.name);
+      inferTimeoutClassByName(effectiveCall.name);
     const timeoutMs = resolveTimeoutMs(cls);
 
+    let toolResult: ToolExecutionResult;
     // When the resolved class is "async", dispatch to the async job path
     // and block on pollAsyncJobToCompletion until the registry job reaches
     // a terminal status. This keeps the model→tool→model loop intact: the
     // model sees the real tool result instead of an { async: true } envelope.
     if (timeoutMs === null) {
-      const { jobId } = await this.executeAsyncTool(input, call);
-      return await this.pollAsyncJobToCompletion(input, call, jobId);
+      const { jobId } = await this.executeAsyncTool(input, effectiveCall);
+      toolResult = await this.pollAsyncJobToCompletion(
+        input,
+        effectiveCall,
+        jobId
+      );
+    } else {
+      toolResult = await this.executeForegroundToolWithTimeout(
+        input,
+        effectiveCall,
+        skill,
+        timeoutMs,
+        startedAt
+      );
     }
 
+    if (isPermissionPromptResult(toolResult)) {
+      return mergeToolResultHookContext(
+        toolResult,
+        preAggregate,
+        EMPTY_AGGREGATE
+      );
+    }
+
+    const postAggregate = toolResult.success
+      ? await this.runPostToolUseHooks(
+          input,
+          descriptor,
+          effectiveCall.arguments ?? {},
+          normalizeToolResult(toolResult),
+          Date.now() - startedAt
+        )
+      : await this.runPostToolUseFailureHooks(
+          input,
+          descriptor,
+          effectiveCall.arguments ?? {},
+          normalizeToolResult(toolResult),
+          Date.now() - startedAt
+        );
+
+    return mergeToolResultHookContext(toolResult, preAggregate, postAggregate);
+  }
+
+  private async executeForegroundToolWithTimeout(
+    input: AIChatQueryLoopInput,
+    call: {
+      id: string;
+      name: string;
+      arguments?: Record<string, unknown>;
+    },
+    skill: SkillDefinition | null | undefined,
+    timeoutMs: number,
+    startedAt: number
+  ): Promise<ToolExecutionResult> {
     const token = new CancellationToken(timeoutMs);
     token.startTimer();
 
@@ -1571,6 +1685,169 @@ export class AIChatQueryLoop {
       }
       ToolExecutor.unregisterPartialSnapshot(call.id);
     }
+  }
+
+  private resolveHookToolDescriptor(
+    input: AIChatQueryLoopInput,
+    call: { id: string; name: string }
+  ): HookToolDescriptor {
+    const skill = input.skillRegistry?.getSkill(call.name);
+    if (skill) {
+      return {
+        id: call.id,
+        name: call.name,
+        source: "skill-registry",
+        permissionCategory: skill.permissionCategory,
+      };
+    }
+    if (call.name.startsWith("mcp_")) {
+      return { id: call.id, name: call.name, source: "mcp" };
+    }
+    return { id: call.id, name: call.name, source: "legacy-tool" };
+  }
+
+  private snapshotPermissionState(
+    input: AIChatQueryLoopInput,
+    toolName: string
+  ): {
+    allowed: boolean;
+    needsPrompt: boolean;
+    reason?: string;
+  } {
+    if (!input.skillRegistry?.getSkill(toolName)) {
+      return { allowed: true, needsPrompt: false };
+    }
+    const status = SkillPermissionService.getPermissionStatus(toolName);
+    if (status === "granted") {
+      return { allowed: true, needsPrompt: false };
+    }
+    if (status === "denied") {
+      return {
+        allowed: false,
+        needsPrompt: false,
+        reason: "Permission denied",
+      };
+    }
+    return { allowed: false, needsPrompt: true, reason: "Permission required" };
+  }
+
+  private async runPreToolUseHooks(
+    input: AIChatQueryLoopInput,
+    descriptor: HookToolDescriptor,
+    toolInput: Record<string, unknown>
+  ): Promise<AggregatedHookResult> {
+    try {
+      return await HookDispatcher.executeHooks({
+        eventName: "PreToolUse",
+        input: {
+          eventName: "PreToolUse",
+          hookRunId: `hookrun-pre-${descriptor.id}-${Date.now()}`,
+          source: "ai-chat-v2",
+          conversationId: input.conversationId,
+          messageId: input.assistantMessageId,
+          timestamp: new Date().toISOString(),
+          tool: descriptor,
+          input: toolInput,
+          permissionState: this.snapshotPermissionState(
+            input,
+            descriptor.name
+          ),
+        },
+        matchQuery: descriptor.name,
+        abortSignal: input.abortController.signal,
+      });
+    } catch (err) {
+      console.error("PreToolUse hook dispatch failed:", err);
+      return EMPTY_AGGREGATE;
+    }
+  }
+
+  private async runPostToolUseHooks(
+    input: AIChatQueryLoopInput,
+    descriptor: HookToolDescriptor,
+    toolInput: Record<string, unknown>,
+    output: Record<string, unknown>,
+    executionTimeMs: number
+  ): Promise<AggregatedHookResult> {
+    try {
+      return await HookDispatcher.executeHooks({
+        eventName: "PostToolUse",
+        input: {
+          eventName: "PostToolUse",
+          hookRunId: `hookrun-post-${descriptor.id}-${Date.now()}`,
+          source: "ai-chat-v2",
+          conversationId: input.conversationId,
+          messageId: input.assistantMessageId,
+          timestamp: new Date().toISOString(),
+          tool: descriptor,
+          input: toolInput,
+          output,
+          executionTimeMs,
+        },
+        matchQuery: descriptor.name,
+        abortSignal: input.abortController.signal,
+      });
+    } catch (err) {
+      console.error("PostToolUse hook dispatch failed:", err);
+      return EMPTY_AGGREGATE;
+    }
+  }
+
+  private async runPostToolUseFailureHooks(
+    input: AIChatQueryLoopInput,
+    descriptor: HookToolDescriptor,
+    toolInput: Record<string, unknown>,
+    toolResult: Record<string, unknown>,
+    executionTimeMs: number
+  ): Promise<AggregatedHookResult> {
+    const message = extractToolError(toolResult);
+    try {
+      return await HookDispatcher.executeHooks({
+        eventName: "PostToolUseFailure",
+        input: {
+          eventName: "PostToolUseFailure",
+          hookRunId: `hookrun-fail-${descriptor.id}-${Date.now()}`,
+          source: "ai-chat-v2",
+          conversationId: input.conversationId,
+          messageId: input.assistantMessageId,
+          timestamp: new Date().toISOString(),
+          tool: descriptor,
+          input: toolInput,
+          error: { message },
+          executionTimeMs,
+        },
+        matchQuery: descriptor.name,
+        abortSignal: input.abortController.signal,
+      });
+    } catch (err) {
+      console.error("PostToolUseFailure hook dispatch failed:", err);
+      return EMPTY_AGGREGATE;
+    }
+  }
+
+  private buildHookBlockedToolResult(
+    call: { id: string; name: string },
+    aggregate: AggregatedHookResult,
+    executionTimeMs: number
+  ): ToolExecutionResult {
+    const reason =
+      aggregate.blockReason ??
+      (aggregate.permissionDecision === "deny"
+        ? "Tool denied by hook policy"
+        : "Tool blocked by hook policy");
+    return {
+      tool_call_id: call.id,
+      tool_name: call.name,
+      success: false,
+      result: {
+        success: false,
+        error: reason,
+        blockedByHook: true,
+        hookMessages: [...aggregate.systemMessages],
+        hookContexts: [...aggregate.additionalContexts],
+      },
+      execution_time_ms: executionTimeMs,
+    };
   }
 
   private async submitImmediatePlanForApproval(

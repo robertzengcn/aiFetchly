@@ -1,10 +1,16 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   AIChatQueryLoop,
   resolveToolChoiceForRound,
 } from "@/service/AIChatQueryLoop";
 import type { AIChatQueryLoopInput } from "@/service/AIChatQueryEvents";
-import type { OpenAIChatCompletionChunk } from "@/api/aiChatApi";
+import type {
+  OpenAIChatCompletionChunk,
+  OpenAIChatCompletionRequest,
+  OpenAIChatMessage,
+} from "@/api/aiChatApi";
+import { HookRegistry } from "@/service/hooks/HookRegistry";
+import { setHookAuditLoggerForTests } from "@/service/hooks/HookAuditService";
 
 function makeChunk(
   delta: string,
@@ -55,6 +61,11 @@ function makeToolCallChunk(
 }
 
 describe("AIChatQueryLoop", () => {
+  beforeEach(() => {
+    HookRegistry.resetForTests();
+    setHookAuditLoggerForTests({ log: () => undefined });
+  });
+
   describe("tool choice", () => {
     it("forces SubmitPlanForApproval on explicit submit-now plan requests", () => {
       expect(
@@ -237,6 +248,77 @@ describe("AIChatQueryLoop", () => {
         "search",
         { q: "test" },
         expect.objectContaining({ toolCallId: "call-1" })
+      );
+    });
+
+    it("injects PreToolUse command hook context into the next model round", async () => {
+      HookRegistry.registerUserHook({
+        id: "test-tool-name-context",
+        eventName: "PreToolUse",
+        source: "user",
+        enabled: true,
+        type: "command",
+        matcher: "shell_execute",
+        command: `${process.execPath} -e "let b='';process.stdin.on('data',c=>b+=c);process.stdin.on('end',()=>{const i=JSON.parse(b);process.stdout.write(JSON.stringify({continue:true,additionalContext:'tool.name='+i.tool.name}));})"`,
+        timeoutMs: 5000,
+      });
+
+      const toolCallChunk = makeToolCallChunk(
+        "call-1",
+        "shell_execute",
+        '{"command":"echo hello"}'
+      );
+      const finalChunk = makeChunk("Done", "stop");
+      let callCount = 0;
+      let secondRoundMessages: readonly OpenAIChatMessage[] = [];
+      const fakeStream = vi.fn(
+        async (
+          request: OpenAIChatCompletionRequest,
+          onChunk: (c: OpenAIChatCompletionChunk) => void
+        ) => {
+          if (callCount === 0) {
+            callCount++;
+            onChunk(toolCallChunk);
+            return;
+          }
+          secondRoundMessages = request.messages;
+          onChunk(finalChunk);
+        }
+      );
+      const fakeExecute = vi.fn().mockResolvedValue({
+        tool_call_id: "call-1",
+        tool_name: "shell_execute",
+        success: true,
+        result: { stdout: "hello\n" },
+        execution_time_ms: 10,
+      });
+      const loop = new AIChatQueryLoop({
+        streamChatCompletion: fakeStream,
+        executeTool: fakeExecute,
+        getSkillDefinition: vi.fn().mockReturnValue(undefined),
+      });
+      const input: AIChatQueryLoopInput = {
+        conversationId: "v2-test",
+        assistantMessageId: "a-1",
+        messages: [],
+        request: { message: "run shell command echo hello" },
+        openAITools: [],
+        abortController: new AbortController(),
+        eventSink: { emit: vi.fn() },
+        startRound: 0,
+        isActiveTurn: () => true,
+      };
+
+      const result = await loop.run(input);
+
+      expect(result.type).toBe("completed");
+      expect(fakeExecute).toHaveBeenCalledWith(
+        "shell_execute",
+        { command: "echo hello" },
+        expect.objectContaining({ toolCallId: "call-1" })
+      );
+      expect(JSON.stringify(secondRoundMessages)).toContain(
+        "tool.name=shell_execute"
       );
     });
 
