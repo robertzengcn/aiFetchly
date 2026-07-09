@@ -585,6 +585,8 @@ async function execute(
     resolvedArgs,
     context
   );
+  const preSystemMessages = [...preAggregate.systemMessages];
+  const preContexts = [...preAggregate.additionalContexts];
   if (preAggregate.blocked) {
     const result: ToolExecutionResult = {
       tool_call_id: toolCallId,
@@ -593,6 +595,10 @@ async function execute(
       result: {
         error: preAggregate.blockReason ?? "Blocked by hook",
         blocked: true,
+        ...(preSystemMessages.length > 0 || preContexts.length > 0 ? {
+          hookMessages: [...preSystemMessages],
+          hookContexts: [...preContexts],
+        } : {}),
       },
       execution_time_ms: Date.now() - startTime,
     };
@@ -627,10 +633,12 @@ async function execute(
       if (postAggregate.updatedToolOutput) {
         result.result = { ...result.result, ...postAggregate.updatedToolOutput };
       }
-      if (postAggregate.systemMessages.length > 0) {
+      const hasPreHookContext = preSystemMessages.length > 0 || preContexts.length > 0;
+      if (hasPreHookContext || postAggregate.systemMessages.length > 0 || postAggregate.additionalContexts.length > 0) {
         result.result = {
           ...result.result,
-          hookMessages: [...postAggregate.systemMessages],
+          hookMessages: [...preSystemMessages, ...postAggregate.systemMessages],
+          hookContexts: [...preContexts, ...postAggregate.additionalContexts],
         };
       }
     } else {
@@ -698,6 +706,8 @@ async function executeViaToolExecutor(
     args,
     context
   );
+  const preSystemMessages = [...preAggregate.systemMessages];
+  const preContexts = [...preAggregate.additionalContexts];
   if (preAggregate.blocked) {
     const execResult: ToolExecutionResult = {
       tool_call_id: context.toolCallId,
@@ -706,6 +716,10 @@ async function executeViaToolExecutor(
       result: {
         error: preAggregate.blockReason ?? "Blocked by hook",
         blocked: true,
+        ...(preSystemMessages.length > 0 || preContexts.length > 0 ? {
+          hookMessages: [...preSystemMessages],
+          hookContexts: [...preContexts],
+        } : {}),
       },
       execution_time_ms: Date.now() - startTime,
     };
@@ -747,10 +761,12 @@ async function executeViaToolExecutor(
     if (postAggregate.updatedToolOutput) {
       execResult.result = { ...execResult.result, ...postAggregate.updatedToolOutput };
     }
-    if (postAggregate.systemMessages.length > 0) {
+    const hasPreHookContext = preSystemMessages.length > 0 || preContexts.length > 0;
+    if (hasPreHookContext || postAggregate.systemMessages.length > 0 || postAggregate.additionalContexts.length > 0) {
       execResult.result = {
         ...execResult.result,
-        hookMessages: [...postAggregate.systemMessages],
+        hookMessages: [...preSystemMessages, ...postAggregate.systemMessages],
+        hookContexts: [...preContexts, ...postAggregate.additionalContexts],
       };
     }
 
