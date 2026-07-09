@@ -11,6 +11,8 @@ import {
 } from "@/config/settinggroupInit";
 import { WorkspaceResolver } from "@/service/WorkspaceResolver";
 import { AIFetchlyContextLoader } from "@/service/aifetchlyConfig/AIFetchlyContextLoader";
+import { getAIFetchlyConfigManager } from "@/service/aifetchlyConfig/AIFetchlyConfigManager";
+import { buildAvailableAgentsBlock } from "@/service/aifetchlyConfig/availableAgentsBlock";
 import path from "node:path";
 import type { OpenAIChatMessage, OpenAIMessageRole } from "@/api/aiChatApi";
 import { MessageType } from "@/entityTypes/commonType";
@@ -174,6 +176,31 @@ export class AIChatContextAssembler {
     } catch (err) {
       console.error(
         "[ai-chat-context] aifetchly instructions injection failed:",
+        err
+      );
+    }
+
+    // AiFetchly "Available agents" discovery block (D-Discovery, Plan 16-03).
+    // Lets the model discover dispatchable agents and copy the exact scoped id
+    // into run_subagent (ties to D-AgentIDs). Reads the live agentRegistry,
+    // which the runtime-registry-sync mutates in-place on
+    // AIFETCHLY_CONFIG_CHANGED (replaceSource on every reload), so a subsequent
+    // assemble() reflects add/rename/delete WITHOUT an app restart — the
+    // registry itself is the cache-invalidation mechanism (mirrors how the
+    // AIFetchlyContextStore plays the cache role for instruction blocks).
+    // Placed AFTER the AGENTS.md instruction blocks and BEFORE durable memory
+    // (CTX-01 ordinal: the static agent catalog sits closer to the system
+    // prompt than to retrieved memories). Read failures MUST never break the
+    // chat — degrade to no-injection + console.error (mirrors the catch above).
+    try {
+      const agents = getAIFetchlyConfigManager().getAgentRegistry().list();
+      const agentsBlock = buildAvailableAgentsBlock(agents);
+      if (agentsBlock.length > 0) {
+        messages.push({ role: "system", content: agentsBlock });
+      }
+    } catch (err) {
+      console.error(
+        "[ai-chat-context] available agents injection failed:",
         err
       );
     }
