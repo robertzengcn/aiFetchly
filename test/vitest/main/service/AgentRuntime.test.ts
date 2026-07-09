@@ -19,7 +19,7 @@ const definition: AgentDefinitionView = {
 // Phase 16 / Plan 03 — registry-first resolution with DB fallback.
 // Both lookups are controllable per-test. Defaults preserve the original
 // "agent-test" DB-fallback behavior so the pre-existing test stays GREEN.
-const mockRegistryGetById = vi.fn(() => null);
+const mockRegistryGetById = vi.fn((): AgentDefinitionView | null => null);
 const mockDefGetActiveById = vi.fn(
   async (id: string): Promise<AgentDefinitionView | null> => {
     // Bare built-in / legacy DB path: only resolve the seeded test id.

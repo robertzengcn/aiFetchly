@@ -14,6 +14,7 @@ import { AgentOutputParser } from "@/service/AgentOutputParser";
 import { AgentTranscriptService } from "@/service/AgentTranscriptService";
 import { AgentToolPolicyService } from "@/service/AgentToolPolicyService";
 import type { AIAutoDreamService } from "@/service/AIAutoDreamService";
+import { getAIFetchlyConfigManager } from "@/service/aifetchlyConfig/AIFetchlyConfigManager";
 import type {
   AgentDefinitionView,
   AgentResult,
@@ -63,12 +64,33 @@ export class AgentRuntime {
   private readonly defModule = new AgentDefinitionModule();
   private readonly taskModule = new AgentTaskModule();
   private readonly api = new AiChatApi();
+  /**
+   * Phase 16 (Plan 03) — the agent registry owned by AIFetchlyConfigManager.
+   * Resolution at runSync is REGISTRY-FIRST (in-memory, precedence-aware,
+   * scoped dynamic IDs); the existing DB-backed defModule lookup is the
+   * FALLBACK for bare built-in execution metadata + legacy test mocks
+   * (RESEARCH Resolution-Path Decision Option a; AGT-03).
+   */
+  private readonly agentRegistry =
+    getAIFetchlyConfigManager().getAgentRegistry();
 
   async runSync(
     request: RunAgentRequest,
     deps?: AgentRuntimeDeps
   ): Promise<AgentResult> {
-    const definition = await this.defModule.getActiveById(request.agentId);
+    // Phase 16 (Plan 03): REGISTRY-FIRST resolution with DB fallback.
+    // The registry is in-memory, precedence-aware, and scoped-ID-aware
+    // (dynamic user:agent:* / workspace:*:agent:* IDs resolve here). The DB
+    // fallback preserves the built-in execution-metadata path (seeded by
+    // AgentDefinitionModule.ensureBuiltIns) + existing test mocks, so legacy
+    // bare-id dispatch keeps working (RESEARCH Pitfall 1). An id in neither
+    // resolves to fail() with NO fuzzy matching across sources (D-AgentIDs).
+    let definition: AgentDefinitionView | null = this.agentRegistry.getById(
+      request.agentId
+    );
+    if (!definition) {
+      definition = await this.defModule.getActiveById(request.agentId);
+    }
     if (!definition) {
       return this.fail(
         request,
