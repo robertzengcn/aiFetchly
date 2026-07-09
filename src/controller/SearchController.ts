@@ -13,7 +13,7 @@ import {
 //import { utilityProcess, MessageChannelMain} from "electron";
 import * as path from "path";
 import * as fs from "fs";
-import { exec } from "child_process";
+import { killPidViaOs } from "@/controller/searchProcessKill";
 import * as process from "process";
 import { SearchModule } from "@/modules/SearchModule";
 import { Token } from "@/modules/token";
@@ -786,17 +786,9 @@ export class SearchController {
       const taskId = await this.getTaskIdByPID(pid);
 
       if (!taskId) {
-        // Try to kill process directly using system kill command
+        // Try to kill the process directly via the OS (argv, no shell).
         try {
-          const isWindows = process.platform === "win32";
-          exec(
-            isWindows ? `taskkill /PID ${pid} /F` : `kill -9 ${pid}`,
-            (error: unknown) => {
-              if (error) {
-                console.error(`Failed to kill process ${pid}:`, error);
-              }
-            }
-          );
+          killPidViaOs(pid);
           return {
             success: true,
             message: `Process ${pid} killed successfully (task not found in memory)`,
@@ -821,8 +813,7 @@ export class SearchController {
           console.error(`Error killing process ${pid}:`, error);
           // Try system kill as fallback
           try {
-            const isWindows = process.platform === "win32";
-            exec(isWindows ? `taskkill /PID ${pid} /F` : `kill -9 ${pid}`);
+            killPidViaOs(pid);
           } catch (killError) {
             console.error(
               `Failed to kill process ${pid} using system command:`,
@@ -833,8 +824,7 @@ export class SearchController {
       } else {
         // Process not in map, try system kill
         try {
-          const isWindows = process.platform === "win32";
-          exec(isWindows ? `taskkill /PID ${pid} /F` : `kill -9 ${pid}`);
+          killPidViaOs(pid);
         } catch (error) {
           console.error(`Failed to kill process ${pid}:`, error);
         }
@@ -914,8 +904,7 @@ export class SearchController {
         // Try system kill as fallback
         if (pid) {
           try {
-            const isWindows = process.platform === "win32";
-            exec(isWindows ? `taskkill /PID ${pid} /F` : `kill -9 ${pid}`);
+            killPidViaOs(pid);
           } catch (killError) {
             console.error(
               `Failed to kill process ${pid} using system command:`,
