@@ -29,7 +29,9 @@ import { registerBuiltInSlashCommands } from "@/service/slashCommands/builtinSla
 import { SlashCommandDispatcher } from "@/service/slashCommands/SlashCommandDispatcher";
 import { SlashCommandModule } from "@/modules/SlashCommandModule";
 import { AIFetchlyConfigManager } from "@/service/aifetchlyConfig/AIFetchlyConfigManager";
+import { AgentDefinitionRegistryImpl } from "@/service/AgentDefinitionRegistry";
 import type { SlashCommandDefinition } from "@/entityTypes/slashCommandTypes";
+import type { AgentDefinitionView } from "@/entityTypes/agentTypes";
 import * as dispatcherModule from "@/service/slashCommands/SlashCommandDispatcher";
 
 // --- Fixtures ----------------------------------------------------------------
@@ -469,5 +471,129 @@ describe("SlashCommandDispatcher prompt commands (Phase 15 / SC2)", () => {
     // The dispatcher does not import Token or any AI client.
     expect(typeof r.prompt).toBe("string");
     expect(r.prompt.length).toBeGreaterThan(0);
+  });
+});
+
+// --- Phase 16 / Plan 03: /agents built-in command (D-AgentsList) ------------
+
+const userAgent: AgentDefinitionView = {
+  id: "user:agent:profile-writer",
+  name: "Profile Writer",
+  description: "Writes outreach profiles.",
+  version: 1,
+  systemPrompt: "You write profiles.",
+  allowedTools: [],
+  mode: "specialist",
+  maxToolCalls: 4,
+  maxRuntimeMs: 60000,
+  maxContinueCalls: 4,
+  outputSchema: {},
+  status: "active",
+};
+
+const workspaceAgent: AgentDefinitionView = {
+  id: "workspace:ws-1:agent:summarizer",
+  name: "Summarizer",
+  description: "Summarizes notes.",
+  version: 1,
+  systemPrompt: "You summarize.",
+  allowedTools: [],
+  mode: "specialist",
+  maxToolCalls: 4,
+  maxRuntimeMs: 60000,
+  maxContinueCalls: 4,
+  outputSchema: {},
+  status: "active",
+};
+
+describe("SlashCommandDispatcher /agents command (Phase 16 / Plan 03, D-AgentsList)", () => {
+  it("returns show_result for /agents and lists the built-in agent", async () => {
+    const { dispatcher } = buildStack();
+    const r = await dispatcher.dispatch({
+      conversationId: "conv-1",
+      rawInput: "/agents",
+    });
+    expect(r.status).toBe(true);
+    if (!r.status || r.action !== "show_result") {
+      throw new Error("expected show_result");
+    }
+    expect(r.commandId).toBe("built-in:command:agents");
+    // The built-in lead-researcher is seeded into the registry at construction.
+    expect(r.content).toContain("agent-lead-researcher");
+  });
+
+  it("sorts rows built-in -> user -> workspace (D-Precedence) with source badges", async () => {
+    const { dispatcher, manager } = buildStack();
+    manager.getAgentRegistry().replaceSource("user", [userAgent]);
+    manager
+      .getAgentRegistry()
+      .replaceSource("workspace:ws-1", [workspaceAgent]);
+
+    const r = await dispatcher.dispatch({
+      conversationId: "conv-1",
+      rawInput: "/agents",
+    });
+    if (!r.status || r.action !== "show_result") {
+      throw new Error("expected show_result");
+    }
+    const content = r.content as string;
+    const builtInIdx = content.indexOf("agent-lead-researcher");
+    const userIdx = content.indexOf("user:agent:profile-writer");
+    const wsIdx = content.indexOf("workspace:ws-1:agent:summarizer");
+    expect(builtInIdx).toBeGreaterThan(-1);
+    expect(userIdx).toBeGreaterThan(-1);
+    expect(wsIdx).toBeGreaterThan(-1);
+    // D-Precedence: built-in (0) < user (1) < workspace (2).
+    expect(builtInIdx).toBeLessThan(userIdx);
+    expect(userIdx).toBeLessThan(wsIdx);
+    // Source badges present (reuse Phase 13 slashCommands labels).
+    expect(content).toMatch(/Built-in/);
+    expect(content).toMatch(/User/);
+    expect(content).toMatch(/Workspace/);
+  });
+
+  it("does not crash on an empty registry (built-ins cleared)", async () => {
+    const tmpRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "slash-agents-empty-")
+    );
+    const emptyRegistry = new AgentDefinitionRegistryImpl();
+    emptyRegistry.replaceSource("built-in", []);
+    const manager = new AIFetchlyConfigManager({
+      rootPath: tmpRoot,
+      agentRegistry: emptyRegistry,
+    });
+    const registry = manager.getCommandRegistry();
+    registerBuiltInSlashCommands(registry);
+    const dispatcher = new SlashCommandDispatcher(registry, manager);
+
+    const r = await dispatcher.dispatch({
+      conversationId: "conv-1",
+      rawInput: "/agents",
+    });
+    expect(r.status).toBe(true);
+    if (!r.status || r.action !== "show_result") {
+      throw new Error("expected show_result");
+    }
+    // No throw; content is a stable string (may be an empty-list message).
+    expect(typeof r.content).toBe("string");
+  });
+
+  it("/agents is non-AI-gated — dispatcher + built-ins add NO registerAiValidatedHandler (TRS-05 Strategy A)", () => {
+    const dispatcherSrc = fs.readFileSync(
+      path.join(
+        process.cwd(),
+        "src/service/slashCommands/SlashCommandDispatcher.ts"
+      ),
+      "utf8"
+    );
+    const builtinsSrc = fs.readFileSync(
+      path.join(
+        process.cwd(),
+        "src/service/slashCommands/builtinSlashCommands.ts"
+      ),
+      "utf8"
+    );
+    expect(dispatcherSrc).not.toMatch(/registerAiValidatedHandler/);
+    expect(builtinsSrc).not.toMatch(/registerAiValidatedHandler/);
   });
 });
