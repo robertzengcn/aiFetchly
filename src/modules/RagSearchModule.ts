@@ -26,6 +26,7 @@ import {
   LOCAL_XENOVA_ALL_MINILM_MODEL_ID,
   LOCAL_XENOVA_ALL_MINILM_DIMENSIONS,
 } from "@/service/embedding/LocalEmbeddingModels";
+import { isLocalXenovaModel } from "@/service/embedding/EmbeddingModelId";
 import { LOCAL_EMBEDDING_MAX_BATCH_SIZE } from "@/childprocess/embedding/LocalEmbeddingWorkerTypes";
 import { SystemSettingModule } from "@/modules/SystemSettingModule";
 import { SystemSettingGroupModule } from "@/modules/SystemSettingGroupModule";
@@ -1087,6 +1088,17 @@ export class RagSearchModule extends BaseModule {
         await this.systemSettingGroupModule.getOrCreateEmbeddingGroup();
       const defaultEmbeddingModel =
         await this.systemSettingModule.getDefaultEmbeddingModel();
+
+      // A locally-configured model (e.g. local-xenova:Xenova/all-MiniLM-L6-v2)
+      // runs on-device and is never advertised by the remote model API. Treat it
+      // as always available so the remote availability check below does not
+      // overwrite the user's selection with the remote default model.
+      if (
+        defaultEmbeddingModel &&
+        isLocalXenovaModel(defaultEmbeddingModel.modelName)
+      ) {
+        return;
+      }
 
       if (!defaultEmbeddingModel) {
         console.log(
