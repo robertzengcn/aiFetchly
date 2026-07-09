@@ -40,7 +40,13 @@ import type {
   AIFetchlyConfigSnapshot,
   AIFetchlyInstructionBlock,
 } from "@/entityTypes/aifetchlyConfigTypes";
+import type { AgentDefinitionView } from "@/entityTypes/agentTypes";
 import type { SlashCommandDefinition } from "@/entityTypes/slashCommandTypes";
+import {
+  buildAgentDefinition,
+  detectUnknownTools,
+  type AgentDefinitionSourceMeta,
+} from "@/service/slashCommands/agentFrontmatter";
 import { buildPromptCommandDefinition } from "@/service/slashCommands/promptCommandFrontmatter";
 import { lazySchema } from "@/utils/lazySchema";
 import {
@@ -59,6 +65,7 @@ import { resolveConfigRelativePath } from "./resolveConfigRelativePath";
 const AGENTS_MD = "AGENTS.md";
 const SETTINGS_JSON = "settings.json";
 const COMMANDS_DIR = "commands";
+const AGENTS_DIR = "agents";
 
 const settingsSchema = lazySchema(() =>
   z
@@ -72,19 +79,45 @@ const settingsSchema = lazySchema(() =>
     .passthrough()
 );
 
+export interface AIFetchlyConfigLoaderOptions {
+  /**
+   * Tool names currently registered with the runtime. When present, the
+   * agent scan emits non-fatal `agent-tool-invalid` (DX-01) warnings for
+   * agent files referencing tools outside this set (D-ToolDiagnostic).
+   * Defaults to an empty set (all tools flagged) — Plan 03 wires the live
+   * SkillRegistry set through the manager.
+   */
+  readonly registeredToolNames?: ReadonlySet<string>;
+}
+
 export class AIFetchlyConfigLoader {
   private readonly rootPath: string;
   private settings: AIFetchlyConfigSettings = {
     ...DEFAULT_AIFETCHLY_CONFIG_SETTINGS,
   };
+  /**
+   * Tool names currently registered with the runtime (SkillRegistry +
+   * MCP tools). Used by {@link tryReadAgentFiles} to emit non-fatal
+   * `agent-tool-invalid` (DX-01) warnings via {@link detectUnknownTools}
+   * for agent files that reference unregistered tools.
+   *
+   * Plan 02 leaves this empty in the default manager wiring; Plan 03
+   * populates it from `SkillRegistry.getAllToolFunctions()` at startup
+   * and on skill reload so warnings reflect the live tool set. Tests
+   * inject a stub set directly (D-ToolDiagnostic).
+   */
+  private readonly registeredToolNames: ReadonlySet<string>;
 
   /**
    * @param rootPath Optional override for the config root (tests). Defaults
    * to path.join(os.homedir(), AIFETCHLY_CONFIG_DIR_NAME) per CFG-01.
+   * @param options Optional bag; {@link AIFetchlyConfigLoaderOptions.registeredToolNames}
+   * feeds the non-fatal unknown-tool warning path (D-ToolDiagnostic).
    */
-  constructor(rootPath?: string) {
+  constructor(rootPath?: string, options: AIFetchlyConfigLoaderOptions = {}) {
     this.rootPath =
       rootPath ?? path.join(os.homedir(), AIFETCHLY_CONFIG_DIR_NAME);
+    this.registeredToolNames = options.registeredToolNames ?? new Set();
   }
 
   /** The most recently parsed settings (DEFAULT until a successful scan). */
@@ -99,6 +132,7 @@ export class AIFetchlyConfigLoader {
     const files: AIFetchlyConfigFileSnapshot[] = [];
     const instructions: AIFetchlyInstructionBlock[] = [];
     const commands: SlashCommandDefinition[] = [];
+    const agents: AgentDefinitionView[] = [];
     const diagnostics: AIFetchlyConfigDiagnostic[] = [];
 
     let entries: readonly string[];
@@ -114,6 +148,7 @@ export class AIFetchlyConfigLoader {
           files,
           instructions,
           commands,
+          agents,
           diagnostics
         );
       }
@@ -125,6 +160,7 @@ export class AIFetchlyConfigLoader {
         files,
         instructions,
         commands,
+        agents,
         diagnostics
       );
     }
@@ -199,12 +235,18 @@ export class AIFetchlyConfigLoader {
     // Phase-14 WorkspaceConfigScanner.tryReadCommandFiles structure.
     await this.tryReadCommandFiles(files, commands, diagnostics);
 
+    // Phase 16 (Plan 02): scan agents/*.md through the restricted frontmatter
+    // parser (CFG-07) + buildAgentDefinition (AGT-06). Mirrors
+    // tryReadCommandFiles above; source is "user", sourceId "user".
+    await this.tryReadAgentFiles(files, agents, diagnostics);
+
     return this.buildSnapshot(
       source,
       sourceId,
       files,
       instructions,
       commands,
+      agents,
       diagnostics
     );
   }
@@ -407,6 +449,168 @@ export class AIFetchlyConfigLoader {
     }
   }
 
+  /**
+   * AGT-02 (Phase 16 / Plan 02): read `<rootPath>/agents/*.md`, parse each
+   * with the restricted frontmatter parser (CFG-07), apply CFG-05 path safety
+   * + CFG-04 size/count caps, validate via buildAgentDefinition (the single
+   * AGT-02 schema owner from Plan 01), and push successful definitions into
+   * `agents`. After each successful build, detectUnknownTools emits non-fatal
+   * `agent-tool-invalid` (DX-01) warnings for tools outside the registered
+   * set — the agent is STILL registered (D-ToolDiagnostic). Mirrors
+   * {@link tryReadCommandFiles}. Missing agents/ dir is the happy path — no
+   * diagnostic.
+   *
+   * Pure file I/O + Plan-01 pure logic — NO DB / Electron / Module imports
+   * (CLAUDE.md three-layer; the loader never touches the registry directly).
+   */
+  private async tryReadAgentFiles(
+    files: AIFetchlyConfigFileSnapshot[],
+    agents: AgentDefinitionView[],
+    diagnostics: AIFetchlyConfigDiagnostic[]
+  ): Promise<void> {
+    const source = "user" as const;
+    const sourceId = "user";
+    const agentsDir = path.join(this.rootPath, AGENTS_DIR);
+
+    let entries: readonly (string | fs.Dirent)[];
+    try {
+      entries = await fs.promises.readdir(agentsDir, { withFileTypes: true });
+    } catch (err) {
+      // Missing agents/ dir is the happy path (most installs have none).
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") return;
+      diagnostics.push(this.ioError(`${AGENTS_DIR}/`, err));
+      return;
+    }
+
+    const sourceMeta: AgentDefinitionSourceMeta = {
+      source,
+      sourceId,
+      sourceLabel: "User",
+      requiresTrust: false,
+    };
+
+    for (const entry of entries) {
+      const name = typeof entry === "string" ? entry : entry.name;
+      if (!name.endsWith(".md")) continue;
+      const relativePath = `${AGENTS_DIR}/${name}`;
+      const safeRel = resolveConfigRelativePath(agentsDir, name);
+      // CFG-05: reject absolute or `..`-traversing names.
+      if (!safeRel.ok) {
+        diagnostics.push({
+          severity: "warning",
+          source,
+          sourceId,
+          filePath: relativePath,
+          code: "path-outside-root",
+          message: `rejected agent path: ${safeRel.reason}`,
+          recoverable: true,
+        });
+        continue;
+      }
+      try {
+        // Skip subdirectories (withFileTypes returns Dirent).
+        if (
+          typeof entry !== "string" &&
+          typeof entry.isDirectory === "function" &&
+          entry.isDirectory()
+        ) {
+          continue;
+        }
+
+        // CFG-04: count cap — once maxAgentsPerSource files have been added,
+        // skip the rest with a single diagnostic (mirrors commands cap).
+        if (agents.length >= AIFETCHLY_CONFIG_LIMITS.maxAgentsPerSource) {
+          diagnostics.push({
+            severity: "warning",
+            source,
+            sourceId,
+            filePath: relativePath,
+            code: "file-too-large",
+            message: `agent count reached the ${AIFETCHLY_CONFIG_LIMITS.maxAgentsPerSource}-file cap; skipping remaining files`,
+            recoverable: true,
+          });
+          break;
+        }
+
+        const abs = safeRel.absolutePath;
+        const stat = await fs.promises.stat(abs);
+        if (stat.size > AIFETCHLY_CONFIG_LIMITS.agentMdBytes) {
+          diagnostics.push({
+            severity: "warning",
+            source,
+            sourceId,
+            filePath: relativePath,
+            code: "file-too-large",
+            message: `${name} is ${stat.size} bytes which exceeds the ${AIFETCHLY_CONFIG_LIMITS.agentMdBytes}-byte limit; skipped`,
+            recoverable: true,
+          });
+          continue;
+        }
+
+        const content = await fs.promises.readFile(abs);
+        const contentHash = crypto
+          .createHash("sha256")
+          .update(content)
+          .digest("hex");
+        files.push({
+          relativePath,
+          kind: "agent",
+          mtimeMs: stat.mtimeMs,
+          sizeBytes: stat.size,
+          contentHash,
+        });
+
+        // CFG-07 restricted frontmatter parse. On failure, surface a
+        // diagnostic and skip — the file is still counted in files[].
+        const text = content.toString("utf8");
+        const parsed = parseRestrictedFrontmatter(text);
+        if (parsed === null) {
+          diagnostics.push({
+            severity: "warning",
+            source,
+            sourceId,
+            filePath: relativePath,
+            code: "frontmatter-invalid",
+            message: `${name} frontmatter failed restricted parse; skipped`,
+            recoverable: true,
+          });
+          continue;
+        }
+
+        const scalars: Record<string, string> = {};
+        const arrays: Record<string, readonly string[]> = {};
+        for (const [k, v] of parsed.scalars) scalars[k] = v;
+        for (const [k, v] of parsed.arrays) arrays[k] = v;
+
+        // AGT-02 validation via the single schema owner (Plan 01).
+        const result = buildAgentDefinition(
+          {
+            frontmatter: { ...scalars, ...arrays },
+            body: parsed.body,
+            relativePath,
+          },
+          sourceMeta
+        );
+        if (result.ok) {
+          agents.push(result.definition);
+          // DX-01 (D-ToolDiagnostic): non-fatal warnings for tools outside the
+          // registered set. The agent is still registered above; these only
+          // surface author-facing early feedback.
+          const toolDiagnostics = detectUnknownTools(
+            result.definition,
+            this.registeredToolNames
+          );
+          for (const d of toolDiagnostics) diagnostics.push(d);
+        } else {
+          diagnostics.push(result.diagnostic);
+        }
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === "ENOENT") continue;
+        diagnostics.push(this.ioError(relativePath, err));
+      }
+    }
+  }
+
   private ioError(filePath: string, err: unknown): AIFetchlyConfigDiagnostic {
     return {
       severity: "warning",
@@ -427,6 +631,7 @@ export class AIFetchlyConfigLoader {
     files: readonly AIFetchlyConfigFileSnapshot[],
     instructions: readonly AIFetchlyInstructionBlock[],
     commands: readonly SlashCommandDefinition[],
+    agents: readonly AgentDefinitionView[],
     diagnostics: readonly AIFetchlyConfigDiagnostic[]
   ): AIFetchlyConfigSnapshot {
     return {
@@ -437,7 +642,7 @@ export class AIFetchlyConfigLoader {
       files,
       instructions,
       commands,
-      agents: [],
+      agents,
       hooks: [],
       skills: [],
       diagnostics,

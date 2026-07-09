@@ -38,6 +38,7 @@ import {
 } from "./AIFetchlyContextLoader";
 import { AIFetchlyRuntimeRegistrySync } from "./AIFetchlyRuntimeRegistrySync";
 import { CommandRegistry } from "@/service/slashCommands/CommandRegistry";
+import { AgentDefinitionRegistryImpl } from "@/service/AgentDefinitionRegistry";
 import type { WorkspaceWatchManager } from "@/service/workspaceWatch/WorkspaceWatchManager";
 
 /** Result of {@link AIFetchlyConfigManager.reload}. */
@@ -80,6 +81,8 @@ export interface AIFetchlyConfigManagerOptions {
   readonly loader?: AIFetchlyConfigLoader;
   readonly store?: AIFetchlyContextStore;
   readonly registry?: CommandRegistry;
+  /** Override the agent registry (Phase 16 / Plan 02 — tests inject an isolated one). */
+  readonly agentRegistry?: AgentDefinitionRegistryImpl;
   readonly sync?: AIFetchlyRuntimeRegistrySync;
 }
 
@@ -91,6 +94,13 @@ export class AIFetchlyConfigManager {
   private readonly loader: AIFetchlyConfigLoader;
   private readonly store: AIFetchlyContextStore;
   private readonly registry: CommandRegistry;
+  /**
+   * Phase 16 (Plan 02): the manager owns the AgentDefinitionRegistry alongside
+   * the existing CommandRegistry. Built-ins are seeded at construction (the
+   * registry's own constructor calls registerBuiltIns). getAgentRegistry()
+   * exposes it to Plan 03 (dispatch resolution + /agents command + context).
+   */
+  private readonly agentRegistry: AgentDefinitionRegistryImpl;
   private readonly sync: AIFetchlyRuntimeRegistrySync;
   private readonly contextLoader: AIFetchlyContextLoader;
   private readonly listeners = new Set<() => void>();
@@ -112,6 +122,8 @@ export class AIFetchlyConfigManager {
     this.loader = options.loader ?? new AIFetchlyConfigLoader(options.rootPath);
     this.store = options.store ?? getGlobalAIFetchlyContextStore();
     this.registry = options.registry ?? new CommandRegistry();
+    this.agentRegistry =
+      options.agentRegistry ?? new AgentDefinitionRegistryImpl();
     this.sync =
       options.sync ??
       new AIFetchlyRuntimeRegistrySync(this.registry, this.store);
@@ -159,7 +171,9 @@ export class AIFetchlyConfigManager {
   getStatus(): AIFetchlyConfigStatus {
     return {
       commandCount: this.registry.list().length,
-      agentCount: 0, // Phase 16 — no agents discovered yet.
+      // Phase 16 (Plan 02): agentCount reflects built-in + user + trusted-
+      // workspace agents currently in the registry (no longer hardcoded 0).
+      agentCount: this.agentRegistry.list().length,
       hookCount: 0, // Phase 17 — no hooks discovered yet.
       skillCount: 0, // Phase 18 — no skills discovered yet.
       diagnosticCount: this.lastDiagnosticCount,
@@ -224,6 +238,15 @@ export class AIFetchlyConfigManager {
   /** Expose the CommandRegistry for Plan 03b's built-in registration. */
   getCommandRegistry(): CommandRegistry {
     return this.registry;
+  }
+
+  /**
+   * Expose the AgentDefinitionRegistry (Phase 16 / Plan 02). Plan 03 consumes
+   * this for dispatch resolution, the /agents command, and the model-discovery
+   * context block. Built-ins are already seeded at construction.
+   */
+  getAgentRegistry(): AgentDefinitionRegistryImpl {
+    return this.agentRegistry;
   }
 
   /** Expose the ContextStore (test-only convenience). */
