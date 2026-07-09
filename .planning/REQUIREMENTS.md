@@ -57,7 +57,7 @@ Requirements for the v2.0 milestone. Each maps to exactly one roadmap phase (13â
 
 ### Dynamic Agents (AGT)
 
-- [ ] **AGT-01**: `AgentDefinitionRegistry` refactored for source-aware dynamic registration (`listBuiltIns`/`list`/`getById`/`replaceSource`) with lookup order built-in > user > trusted workspace > plugin; built-ins cannot be shadowed
+- [x] **AGT-01**: `AgentDefinitionRegistry` refactored for source-aware dynamic registration (`listBuiltIns`/`list`/`getById`/`replaceSource`) with lookup order built-in > user > trusted workspace > plugin; built-ins cannot be shadowed
 - [x] **AGT-02**: `agents/*.md` parsed (name, description, tools allowlist, `maxToolCalls`, `maxRuntimeMs`, prompt body) and registered with scoped IDs (`user:agent:`, `workspace:<id>:agent:`); tool allowlists intersected with actually registered and permitted tools at runtime; workspace agents require trust
 - [x] **AGT-03**: `run_subagent` validation and description updated to dispatch by dynamic agent ID; `/agents` lists built-in and dynamic agents
 
@@ -145,7 +145,7 @@ Each requirement maps to exactly one phase. Updated during roadmap creation.
 | TRS-05 | Phase 13 | Complete |
 | TRS-06 | Phase 13 | Complete |
 | TRS-07 | Phase 13 | Pending |
-| AGT-01 | Phase 16 | Pending |
+| AGT-01 | Phase 16 | Complete | 2026-07-09 |
 | AGT-02 | Phase 16 | Complete | 2026-07-09 |
 | AGT-03 | Phase 16 | Complete |
 | HOK-01 | Phase 17 | Pending |
