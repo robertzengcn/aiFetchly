@@ -126,7 +126,11 @@ export class AIFetchlyConfigManager {
       options.agentRegistry ?? new AgentDefinitionRegistryImpl();
     this.sync =
       options.sync ??
-      new AIFetchlyRuntimeRegistrySync(this.registry, this.store);
+      new AIFetchlyRuntimeRegistrySync(
+        this.registry,
+        this.store,
+        this.agentRegistry
+      );
     // The context loader reads from the SAME store the sync writes to.
     this.contextLoader = new AIFetchlyContextLoader(this.store);
   }

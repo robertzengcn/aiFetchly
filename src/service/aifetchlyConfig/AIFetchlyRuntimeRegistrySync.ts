@@ -23,14 +23,20 @@ import type {
   AIFetchlyConfigSnapshot,
   AIFetchlySourceTrust,
 } from "@/entityTypes/aifetchlyConfigTypes";
+import type { AgentDefinitionView } from "@/entityTypes/agentTypes";
 import type { SlashCommandDefinition } from "@/entityTypes/slashCommandTypes";
 import type { CommandRegistry } from "@/service/slashCommands/CommandRegistry";
+import { AgentDefinitionRegistryImpl } from "@/service/AgentDefinitionRegistry";
+import type { WorkspaceAgentDraft } from "@/service/workspaceWatch/WorkspaceConfigScanner";
+import { buildWorkspaceAgentDefinitions } from "@/service/workspaceWatch/buildWorkspaceAgentDefinitions";
 import type { AIFetchlyContextStore } from "./AIFetchlyContextStore";
 
 /** Outcome of applying a snapshot — surfaced to callers and getStatus(). */
 export interface AIFetchlySnapshotApplyResult {
   /** True if any commands were added/changed/removed for this source. */
   readonly commandsChanged: boolean;
+  /** True if any agents were added/changed/removed for this source. */
+  readonly agentsChanged: boolean;
   /** True if any instructions were added/changed/removed for this source. */
   readonly instructionsChanged: boolean;
   /** Diagnostic count carried by this snapshot (for /status display). */
@@ -47,10 +53,28 @@ export interface AIFetchlySnapshotApplyResult {
  * their place.
  */
 export class AIFetchlyRuntimeRegistrySync {
+  /**
+   * Tool names currently registered with the runtime, used by the workspace
+   * agent conversion path to emit non-fatal agent-tool-invalid (DX-01)
+   * warnings. Defaults to an empty set in Plan 02 (all workspace agent tools
+   * flagged) — Plan 03 wires the live SkillRegistry set through the manager.
+   */
+  private registeredToolNames: ReadonlySet<string> = new Set();
+
   constructor(
     private readonly commandRegistry: CommandRegistry,
-    private readonly contextStore: AIFetchlyContextStore
+    private readonly contextStore: AIFetchlyContextStore,
+    private readonly agentRegistry: AgentDefinitionRegistryImpl = new AgentDefinitionRegistryImpl()
   ) {}
+
+  /**
+   * Plan 03 wires the live SkillRegistry tool set here so workspace agent
+   * unknown-tool warnings reflect the runtime. Plan 02 leaves the default
+   * empty set in place.
+   */
+  setRegisteredToolNames(names: ReadonlySet<string>): void {
+    this.registeredToolNames = names;
+  }
 
   /**
    * Apply a full snapshot: replace the source's command set in the registry
@@ -67,6 +91,29 @@ export class AIFetchlyRuntimeRegistrySync {
     const commands = snapshot.commands as readonly SlashCommandDefinition[];
     this.commandRegistry.replaceSource(snapshot.sourceId, commands);
 
+    // Phase 16 (Plan 02): agents. The global path (source "user") fills
+    // snapshot.agents with already-validated AgentDefinitionView[] (Task 1
+    // loader). The workspace path (source "workspace") fills it with RAW
+    // WorkspaceAgentDraft[] (Task 2 scanner); convert them here in the MAIN
+    // process via buildWorkspaceAgentDefinitions before registry mutation.
+    let agents: readonly AgentDefinitionView[];
+    if (snapshot.source === "workspace") {
+      const drafts =
+        snapshot.agents as readonly unknown[] as readonly WorkspaceAgentDraft[];
+      const workspaceId =
+        snapshot.workspaceId ?? snapshot.sourceId.replace(/^workspace:/, "");
+      const converted = buildWorkspaceAgentDefinitions(
+        drafts,
+        workspaceId,
+        this.registeredToolNames
+      );
+      agents = converted.definitions;
+    } else {
+      agents =
+        snapshot.agents as readonly unknown[] as readonly AgentDefinitionView[];
+    }
+    this.agentRegistry.replaceSource(snapshot.sourceId, agents);
+
     this.contextStore.replaceInstructions(
       snapshot.sourceId,
       snapshot.instructions
@@ -74,6 +121,7 @@ export class AIFetchlyRuntimeRegistrySync {
 
     return {
       commandsChanged: commands.length > 0,
+      agentsChanged: agents.length > 0,
       instructionsChanged: snapshot.instructions.length > 0,
       diagnosticCount: countDiagnostics(snapshot.diagnostics),
     };
@@ -111,16 +159,22 @@ export class AIFetchlyRuntimeRegistrySync {
       // through unchanged.
       instructions: trust.instructions ? snapshot.instructions : [],
       commands: trust.commands ? snapshot.commands : [],
+      // TRS-01 (Phase 16 / Plan 02): drop untrusted workspace agents BEFORE
+      // applySnapshot mutates the agent registry. Trusted workspace agent
+      // drafts pass through and are converted main-side in applySnapshot.
+      agents: trust.agents ? snapshot.agents : [],
     };
     return this.applySnapshot(filtered);
   }
 
   /**
-   * Drop every command and instruction block belonging to this sourceId.
-   * Used by the manager on a source going away (phase 14: workspace removal).
+   * Drop every command, agent, and instruction block belonging to this
+   * sourceId. Used by the manager on a source going away (phase 14: workspace
+   * removal).
    */
   removeSource(sourceId: string): void {
     this.commandRegistry.replaceSource(sourceId, []);
+    this.agentRegistry.replaceSource(sourceId, []);
     this.contextStore.removeSource(sourceId);
   }
 }
