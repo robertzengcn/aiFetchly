@@ -88,4 +88,31 @@ describe("run_subagent tool definition", () => {
       })
     ).toBe("async");
   });
+
+  // Phase 16 / Plan 03 — Task 1 (D-AgentIDs / RESEARCH Pitfall 5).
+  it("agentId parameter description documents BOTH bare built-in IDs and scoped dynamic IDs", () => {
+    const agentId = props.agentId as Record<string, unknown>;
+    const desc = agentId.description as string;
+    expect(typeof desc).toBe("string");
+    expect(desc.length).toBeGreaterThan(0);
+    // The old single-form wording is GONE.
+    expect(desc).not.toMatch(/Built-in agent ID/i);
+    // Both ID forms are documented ...
+    expect(desc).toMatch(/agent-lead-researcher/); // bare built-in example
+    expect(desc).toMatch(/user:agent:/); // scoped dynamic user form
+    expect(desc).toMatch(/workspace:/); // scoped dynamic workspace form
+  });
+
+  it("agentId parameter description points the model to the 'Available agents' context block", () => {
+    const agentId = props.agentId as Record<string, unknown>;
+    const desc = agentId.description as string;
+    expect(desc).toMatch(/Available agents/i);
+  });
+
+  it("agentId parameter description warns that unknown IDs error and must not be guessed", () => {
+    const agentId = props.agentId as Record<string, unknown>;
+    const desc = agentId.description as string;
+    expect(desc).toMatch(/unknown|error/i);
+    expect(desc).toMatch(/do not (guess|abbreviate)|never (guess|abbreviate)/i);
+  });
 });
