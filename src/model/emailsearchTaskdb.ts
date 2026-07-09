@@ -1,7 +1,10 @@
 import { Database } from "better-sqlite3";
 import { Scraperdb } from "@/model/scraperdb";
 import { getRecorddatetime } from "@/modules/lib/function";
-import { EmailExtractionTypes } from "@/config/emailextraction";
+import {
+  EmailExtractionTypes,
+  emailExtractionTypeName,
+} from "@/config/emailextraction";
 import { SortBy } from "@/entityTypes/commonType";
 import { ProxyEntity } from "@/entity/Proxy.entity";
 export interface EmailsearchTaskEntity {
@@ -197,13 +200,6 @@ export class EmailsearchTaskdb {
   }
   //convert type to string
   public convertType(type: EmailExtractionTypes): string {
-    switch (type) {
-      case EmailExtractionTypes.ManualInputUrl:
-        return "ManualInputUrl";
-      case EmailExtractionTypes.SearchResult:
-        return "SearchResult";
-      default:
-        return "Unknown";
-    }
+    return emailExtractionTypeName(type);
   }
 }

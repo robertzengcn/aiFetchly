@@ -17,6 +17,14 @@ v-model="emailtype" :items="emailTypelist" :label="t('emailextraction.extraction
         <SearchResultSelectTable @change="handleSearchtaskChanged" :selected-value="searchtaskId" />
       </div>
 
+       <div v-if="emailtype?.index==2" class="mt-3">
+        <GoogleMapsSelectTable @change="handleMapsRecordChanged" :selected-value="searchtaskId" />
+      </div>
+
+       <div v-if="emailtype?.index==3" class="mt-3">
+        <YandexMapsSelectTable @change="handleMapsRecordChanged" :selected-value="searchtaskId" />
+      </div>
+
 
       <v-text-field v-model="page_length" :label="t('emailextraction.page_length')" clearable class="mt-3"></v-text-field>
 
@@ -115,6 +123,8 @@ import { submitScraper,receiveSearchEmailevent, getEmailSearchTask, updateEmailS
 import {isValidUrl,convertNumberToBoolean} from "@/views/utils/function"
 import ProxyTableselected from "@/views/pages/proxy/widgets/ProxySelectedTable.vue";
 import SearchResultSelectTable from "@/views/pages/search/widgets/SearchResultSelectTable.vue";
+import GoogleMapsSelectTable from "@/views/pages/google-maps-scraper/widgets/GoogleMapsSelectTable.vue";
+import YandexMapsSelectTable from "@/views/pages/yandex-maps-scraper/widgets/YandexMapsSelectTable.vue";
 import { ProxyEntity,ProxyListEntity } from "@/entityTypes/proxyType";
 import {SearchtaskItem } from "@/entityTypes/searchControlType"
 import {EmailscFormdata, EmailSearchTaskDetail} from '@/entityTypes/emailextraction-type'
@@ -231,8 +241,12 @@ const loadTaskData = async () => {
     // Populate form with task data
     if (task) {
       // Set extraction type
-      const typeIndex = task.type_id === EmailExtractionTypes.SearchResult ? 1 : 0;
-      emailtype.value = emailTypelist.value.find(item => item.index === typeIndex);
+      const taskTypeName =
+        (EmailExtractionTypes[task.type_id as EmailExtractionTypes] as string | undefined) ??
+        "ManualInputUrl";
+      emailtype.value =
+        emailTypelist.value.find(item => item.key === taskTypeName) ??
+        emailTypelist.value.find(item => item.index === 0);
       
       // Set URLs
       if (task.urls && task.urls.length > 0) {
@@ -354,6 +368,14 @@ const handleSearchtaskChanged = (newValue: SearchtaskItem[]|undefined) => {
   }
 };
 
+const handleMapsRecordChanged = (newValue: { id?: number } | undefined) => {
+  if (newValue && newValue.id) {
+    searchtaskId.value = newValue.id;
+  } else {
+    searchtaskId.value = 0;
+  }
+};
+
 const receiveMsg = () => {
   receiveSearchEmailevent(EMAILEXTRACTIONMESSAGE, function (res) {
     console.log(res)
@@ -413,9 +435,14 @@ async function onSubmit() {
     if(searchtaskId.value==0||!searchtaskId.value){
       setAlert(t('emailextraction.choose_search_task'), "Error", "error");
       return;
+    }
+  }else if(emailtype.value?.index==2 || emailtype.value?.index==3){
+    extratype=emailtype.value.key;
+    if(searchtaskId.value==0||!searchtaskId.value){
+      setAlert(t('emailextraction.choose_maps_record'), "Error", "error");
+      return;
+    }
   }
-
-}
 
    const scraperData:EmailscFormdata={
     extratype:extratype,

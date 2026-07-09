@@ -861,6 +861,9 @@ export default {
     max_page_number: "max page number",
     manualinputurl: "manual input url",
     searchresult: "search result",
+    googlemaps: "Google Maps",
+    yandexmaps: "Yandex Maps",
+    choose_maps_record: "choisissez un enregistrement de scraper de cartes",
     extraction_type: "Insight Type",
     extract_emails: "Build Contact Profiles",
     input_urls_hint: "input urls, per one per line",
@@ -924,6 +927,8 @@ export default {
     url_invalid: "No valid URLs found",
     searchTaskId_empty: "Search task ID is empty",
     searchResult_empty: "No search results found for contact profile insights",
+    mapsResult_empty:
+      "Aucune URL de site Web trouvée dans l'enregistrement de cartes sélectionné",
     action_error: "Invalid action type",
     emailsearch_task_start: "Email search task started successfully",
   },
