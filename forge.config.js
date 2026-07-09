@@ -55,7 +55,7 @@ module.exports = {
     asar: {
       // .vite/build holds vec0.* copied by Vite; node_modules holds native deps — both must be real disk
       unpackDir:
-        "**/{.vite,node_modules/better-sqlite3,node_modules/sqlite3,node_modules/sqlite-vec}/**",
+        "**/{.vite,node_modules/better-sqlite3,node_modules/sqlite-vec}/**",
       unpack: "**/vec0.*",
     },
     ignore: (file) => {
@@ -105,36 +105,12 @@ module.exports = {
     // ],
     prune: true,
     overwrite: true,
-    // extraResource: [
-    //    // Only include these paths if they exist
-    //    ...(() => {
-    //     const resources:Array<string>= [];
-    //     const sqlite3Path = path.join(__dirname, 'node_modules/sqlite3/lib/binding');
-    //     const betterSqlitePath = path.join(__dirname, 'node_modules/better-sqlite3/build/Release');
-
-    //     if (fsSync.existsSync(sqlite3Path)) {
-    //       resources.push(sqlite3Path);
-    //     }
-
-    //     if (fsSync.existsSync(betterSqlitePath)) {
-    //       resources.push(betterSqlitePath);
-    //     }
-
-    //     return resources;
-    //   })()
-    // ],
   },
   rebuildConfig: {
     // isolated-vm@6.1.2 fails to compile against Electron 35 V8 13.5 headers
     // (known upstream issue: laverdet/isolated-vm#528). Exclude it from rebuild
     // so Forge startup is not blocked; the pre-built Node.js binary is used instead.
-    onlyModules: [
-      "better-sqlite3",
-      "sqlite3",
-      "bufferutil",
-      "utf-8-validate",
-      "keytar",
-    ],
+    onlyModules: ["better-sqlite3", "bufferutil", "utf-8-validate", "keytar"],
   },
   makers: [
     {
