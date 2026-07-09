@@ -8,6 +8,7 @@
 - **Owner**: AiFetchly Desktop Engineering
 - **Related docs**:
   - `docs/architecture-optimization-review.md` — the evidence base and root-cause analysis for every item in this PRD
+  - `docs/architecture-remediation-technical-design.md` — **the HOW**: technical design, code patterns, migration mechanics, and ADRs for this program
   - `CLAUDE.md` — documented architecture (three-layer) that this program reconciles with reality
   - `docs/prd/plugin-marketplace-support-prd.md` — reference PRD format
   - `docs/sqlite-vec-migration-spec.md`, `docs/rag-migration-guide.md` — prior migration precedents
