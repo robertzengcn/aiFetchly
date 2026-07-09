@@ -1255,6 +1255,8 @@ emailAutoReplyAudit: {
         id: "钩子ID",
         event: "事件",
         matcher: "匹配器",
+        if_condition: "条件筛选",
+        if_condition_placeholder: "例如: echo *",
         type: "类型",
         command: "命令",
         cwd: "工作目录",
