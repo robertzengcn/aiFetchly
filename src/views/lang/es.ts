@@ -852,6 +852,9 @@ export default {
     max_page_number: "Número máximo de páginas",
     manualinputurl: "Ingresar URL manualmente",
     searchresult: "Resultado de búsqueda",
+    googlemaps: "Google Maps",
+    yandexmaps: "Yandex Maps",
+    choose_maps_record: "elige un registro de scraper de mapas",
     extraction_type: "Insight Type",
     extract_emails: "Build Contact Profiles",
     input_urls_hint: "Ingrese URLs, una por línea",
@@ -916,6 +919,8 @@ export default {
     url_invalid: "No se encontraron URLs válidas",
     searchTaskId_empty: "El ID de la tarea de búsqueda está vacío",
     searchResult_empty: "No search results found for contact profile insights",
+    mapsResult_empty:
+      "No se encontraron URLs de sitios web en el registro de mapas seleccionado",
     action_error: "Tipo de acción inválido",
     emailsearch_task_start:
       "Tarea de búsqueda de correos iniciada correctamente",
@@ -1139,23 +1144,28 @@ export default {
     chrome_path: "Ruta de Chrome",
     firefox_path: "Ruta de Firefox",
     embedding_group: "Modelos de Embedding",
-    embedding_group_description: "Modelo de embedding predeterminado para búsqueda vectorial.",
+    embedding_group_description:
+      "Modelo de embedding predeterminado para búsqueda vectorial.",
     external_system: "Sistema Externo",
     user_preferences: "Preferencias de Usuario",
-    "user-preferences-group-description": "Preferencias a nivel de usuario para el comportamiento de la aplicación.",
+    "user-preferences-group-description":
+      "Preferencias a nivel de usuario para el comportamiento de la aplicación.",
     default_embedding_model: "Modelo de Embedding Predeterminado",
-    "default-embedding-model-description": "Seleccione el modelo de embedding utilizado para la búsqueda vectorial y la coincidencia de similitud.",
+    "default-embedding-model-description":
+      "Seleccione el modelo de embedding utilizado para la búsqueda vectorial y la coincidencia de similitud.",
     language_preference: "Idioma",
     "language-preference-description": "Preferencia de idioma de la interfaz.",
     ai_website_analysis_business_info: "Información de Negocio",
-    "ai-website-analysis-business-info-description": "Información comercial utilizada durante el análisis de IA del sitio web.",
+    "ai-website-analysis-business-info-description":
+      "Información comercial utilizada durante el análisis de IA del sitio web.",
     "external-system-group-description":
       "Configuración del grupo de sistema externo",
     mcp_tools: "Herramientas MCP",
     manage_mcp_tools: "Gestionar herramientas MCP",
     manage_skills: "Gestionar habilidades",
     ai_preferences: "Preferencias de IA",
-    "ai-preferences-group-description": "Configuración que controla el comportamiento del chat de IA, la memoria y el contexto.",
+    "ai-preferences-group-description":
+      "Configuración que controla el comportamiento del chat de IA, la memoria y el contexto.",
     user_ai_auto_dream: "Consolidación Auto-Sueño",
     "ai-auto-dream-description":
       "Resumir automáticamente conversaciones pasadas en segundo plano para ahorrar tokens de contexto de IA.",

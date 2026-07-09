@@ -848,6 +848,9 @@ export default {
     max_page_number: "Maximale Seitenzahl",
     manualinputurl: "URL manuell eingeben",
     searchresult: "Suchergebnis",
+    googlemaps: "Google Maps",
+    yandexmaps: "Yandex Maps",
+    choose_maps_record: "wählen Sie einen Karten-Scraper-Eintrag",
     extraction_type: "Insight Type",
     extract_emails: "Build Contact Profiles",
     input_urls_hint: "URLs eingeben, eine pro Zeile",
@@ -911,6 +914,8 @@ export default {
     url_invalid: "Keine gültigen URLs gefunden",
     searchTaskId_empty: "Suchaufgaben-ID ist leer",
     searchResult_empty: "No search results found for contact profile insights",
+    mapsResult_empty:
+      "Keine Website-URLs im ausgewählten Karten-Eintrag gefunden",
     action_error: "Ungültiger Aktionstyp",
     emailsearch_task_start: "E-Mail-Suchaufgabe erfolgreich gestartet",
   },
@@ -1132,22 +1137,27 @@ export default {
     chrome_path: "Chrome-Pfad",
     firefox_path: "Firefox-Pfad",
     embedding_group: "Einbettungsmodelle",
-    embedding_group_description: "Standard-Einbettungsmodell für die Vektorsuche.",
+    embedding_group_description:
+      "Standard-Einbettungsmodell für die Vektorsuche.",
     external_system: "Externes System",
     user_preferences: "Benutzereinstellungen",
-    "user-preferences-group-description": "Benutzereinstellungen für das Anwendungsverhalten.",
+    "user-preferences-group-description":
+      "Benutzereinstellungen für das Anwendungsverhalten.",
     default_embedding_model: "Standard-Einbettungsmodell",
-    "default-embedding-model-description": "Wählen Sie das Einbettungsmodell für die Vektorsuche und Ähnlichkeitsermittlung.",
+    "default-embedding-model-description":
+      "Wählen Sie das Einbettungsmodell für die Vektorsuche und Ähnlichkeitsermittlung.",
     language_preference: "Sprache",
     "language-preference-description": "UI-Spracheinstellung.",
     ai_website_analysis_business_info: "Geschäftsinformationen",
-    "ai-website-analysis-business-info-description": "Geschäftsinformationen, die bei der KI-Analyse von Websites verwendet werden.",
+    "ai-website-analysis-business-info-description":
+      "Geschäftsinformationen, die bei der KI-Analyse von Websites verwendet werden.",
     "external-system-group-description": "Externe Systemgruppen-Einstellung",
     mcp_tools: "MCP-Tools",
     manage_mcp_tools: "MCP-Tools verwalten",
     manage_skills: "Fähigkeiten verwalten",
     ai_preferences: "KI-Einstellungen",
-    "ai-preferences-group-description": "Einstellungen zur Steuerung des KI-Chat-Verhaltens, des Speichers und des Kontexts.",
+    "ai-preferences-group-description":
+      "Einstellungen zur Steuerung des KI-Chat-Verhaltens, des Speichers und des Kontexts.",
     user_ai_auto_dream: "Auto-Traum-Konsolidierung",
     "ai-auto-dream-description":
       "Automatisches Zusammenfassen vergangener Konversationen im Hintergrund, um KI-Kontext-Token zu sparen.",

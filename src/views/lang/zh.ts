@@ -816,6 +816,9 @@ export default {
     max_page_number: "最大页数",
     manualinputurl: "手动输入URL",
     searchresult: "搜索结果",
+    googlemaps: "Google 地图",
+    yandexmaps: "Yandex 地图",
+    choose_maps_record: "请选择一个地图抓取记录",
     extraction_type: "Insight Type",
     extract_emails: "Build Contact Profiles",
     input_urls_hint: "输入URL，每行一个",
@@ -886,6 +889,7 @@ export default {
     url_invalid: "未找到有效URL",
     searchTaskId_empty: "搜索任务ID为空",
     searchResult_empty: "No search results found for contact profile insights",
+    mapsResult_empty: "所选地图记录中未找到网站链接",
     action_error: "无效的操作类型",
     emailsearch_task_start: "邮件搜索任务已成功启动",
   },
@@ -1102,17 +1106,20 @@ export default {
     user_preferences: "用户偏好",
     "user-preferences-group-description": "应用程序行为的用户级偏好设置。",
     default_embedding_model: "默认嵌入模型",
-    "default-embedding-model-description": "选择用于向量搜索和相似度匹配的嵌入模型。",
+    "default-embedding-model-description":
+      "选择用于向量搜索和相似度匹配的嵌入模型。",
     language_preference: "语言",
     "language-preference-description": "界面语言偏好。",
     ai_website_analysis_business_info: "业务信息",
-    "ai-website-analysis-business-info-description": "网站AI分析中使用的业务信息。",
+    "ai-website-analysis-business-info-description":
+      "网站AI分析中使用的业务信息。",
     "external-system-group-description": "外部系统组设置",
     mcp_tools: "MCP工具",
     manage_mcp_tools: "管理MCP工具",
     manage_skills: "管理技能",
     ai_preferences: "AI 偏好设置",
-    "ai-preferences-group-description": "控制 AI 聊天行为、记忆和上下文的设置。",
+    "ai-preferences-group-description":
+      "控制 AI 聊天行为、记忆和上下文的设置。",
     user_ai_auto_dream: "自动摘要整合",
     "ai-auto-dream-description":
       "在后台自动汇总过去的对话，以节省 AI 上下文令牌。",
@@ -1822,7 +1829,8 @@ export default {
     tool_approval_mode_full: "完全访问",
     tool_approval_mode_ask_desc: "在需要权限的工具运行前询问。",
     tool_approval_mode_auto_desc: "自动批准本对话中受信任的非 shell 工具。",
-    tool_approval_mode_full_desc: "自动批准本对话中注册的工具。安全限制仍然生效。",
+    tool_approval_mode_full_desc:
+      "自动批准本对话中注册的工具。安全限制仍然生效。",
     tool_approval_mode_full_confirm_title: "启用完全访问？",
     tool_approval_mode_full_confirm_text:
       "注册工具将在本对话中无需审批提示直接运行。依赖安装和硬安全限制仍需要您的批准。",
