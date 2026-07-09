@@ -597,8 +597,8 @@ function handleAgentTaskCancel(agentTaskId: string): void {
 }
 
 async function onToolApprovalModeChange(mode: ChatToolApprovalMode): Promise<void> {
-  if (!activeConversationId.value) return;
   toolApprovalMode.value = mode;
+  if (!activeConversationId.value) return;
   try {
     const saved = await setChatV2ToolApprovalMode(activeConversationId.value, mode);
     toolApprovalMode.value = saved;
@@ -1686,6 +1686,7 @@ const onSend = async (text: string, files?: File[]): Promise<void> => {
       message: displayText,
       mode: mode.value,
       model: resolveModelForRequest(),
+      toolApprovalMode: toolApprovalMode.value,
     };
     if (uploadedFiles && uploadedFiles.length > 0) {
       streamRequest.uploadedFiles = uploadedFiles;

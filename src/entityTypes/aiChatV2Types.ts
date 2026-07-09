@@ -109,6 +109,7 @@ export interface ChatV2StreamRequest {
   maxTokens?: number;
   systemPrompt?: string;
   mode?: ChatV2Mode;
+  toolApprovalMode?: ChatToolApprovalMode;
   uploadedFiles?: ChatV2UploadedAttachment[];
 }
 

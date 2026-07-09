@@ -444,6 +444,14 @@ function validateStreamRequest(
   if (req.mode !== undefined && req.mode !== "chat" && req.mode !== "plan") {
     return "mode must be 'chat' or 'plan'";
   }
+  if (
+    req.toolApprovalMode !== undefined &&
+    req.toolApprovalMode !== "ask_for_approval" &&
+    req.toolApprovalMode !== "approve_for_me" &&
+    req.toolApprovalMode !== "full_access"
+  ) {
+    return "toolApprovalMode must be a valid approval mode";
+  }
   return null;
 }
 const MAX_UPLOAD_FILE_BYTES = 5 * 1024 * 1024;

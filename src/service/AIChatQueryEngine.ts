@@ -2,6 +2,7 @@
 import { AIChatV2Module } from "@/modules/AIChatV2Module";
 import { AIChatPlanModule } from "@/modules/AIChatPlanModule";
 import { AIChatAttachmentModule } from "@/modules/AIChatAttachmentModule";
+import { AIChatToolApprovalModule } from "@/modules/AIChatToolApprovalModule";
 import {
   DocumentService,
   StagedAttachmentReference,
@@ -365,6 +366,12 @@ export class AIChatQueryEngine {
         request.conversationId
       );
       this.currentConversationId = conversationId;
+      if (request.toolApprovalMode) {
+        new AIChatToolApprovalModule().setMode(
+          conversationId,
+          request.toolApprovalMode
+        );
+      }
 
       // Resolve plan state now that we have the final conversation id.
       if (isPlanMode) {
