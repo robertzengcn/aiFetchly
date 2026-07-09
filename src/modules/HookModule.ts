@@ -14,6 +14,8 @@ export interface CreateHookInput {
   id: string;
   eventName: HookEventName;
   matcher?: string;
+  /** Glob-lite condition matched against tool input argument values. */
+  ifCondition?: string;
   command: string;
   cwd?: string;
   timeoutMs?: number;
@@ -45,6 +47,7 @@ export class HookModule extends BaseModule {
       id: input.id,
       eventName: input.eventName,
       matcher: input.matcher ?? null,
+      ifCondition: input.ifCondition ?? null,
       hookType: "command",
       command: input.command,
       cwd: input.cwd ?? null,
@@ -70,6 +73,13 @@ export class HookModule extends BaseModule {
       patch.matcher.length > HOOK_LIMITS.maxMatcherChars
     ) {
       throw new Error(`matcher exceeds ${HOOK_LIMITS.maxMatcherChars} chars`);
+    }
+    if (
+      patch.ifCondition !== undefined &&
+      patch.ifCondition !== null &&
+      patch.ifCondition.length > HOOK_LIMITS.maxIfChars
+    ) {
+      throw new Error(`ifCondition exceeds ${HOOK_LIMITS.maxIfChars} chars`);
     }
     if (
       patch.timeoutMs !== undefined &&
@@ -163,6 +173,9 @@ export class HookModule extends BaseModule {
     if (input.matcher && input.matcher.length > HOOK_LIMITS.maxMatcherChars) {
       throw new Error(`matcher exceeds ${HOOK_LIMITS.maxMatcherChars} chars`);
     }
+    if (input.ifCondition && input.ifCondition.length > HOOK_LIMITS.maxIfChars) {
+      throw new Error(`ifCondition exceeds ${HOOK_LIMITS.maxIfChars} chars`);
+    }
     if (input.timeoutMs && input.timeoutMs > HOOK_LIMITS.maxCommandTimeoutMs) {
       throw new Error(`timeoutMs exceeds ${HOOK_LIMITS.maxCommandTimeoutMs}ms`);
     }
@@ -173,6 +186,7 @@ export class HookModule extends BaseModule {
       id: row.id,
       eventName: row.eventName as HookEventName,
       matcher: row.matcher ?? undefined,
+      if: row.ifCondition ?? undefined,
       source: "user",
       enabled: row.enabled,
       type: "command",

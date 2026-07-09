@@ -1288,6 +1288,8 @@ emailAutoReplyAudit: {
         id: "ID du Hook",
         event: "Événement",
         matcher: "Matcher",
+        if_condition: "Condition de filtre",
+        if_condition_placeholder: "p. ex. echo *",
         type: "Type",
         command: "Commande",
         cwd: "Répertoire de travail",

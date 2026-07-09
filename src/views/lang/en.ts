@@ -1301,6 +1301,8 @@ emailAutoReplyAudit: {
         id: "Hook ID",
         event: "Event",
         matcher: "Matcher",
+        if_condition: "If condition",
+        if_condition_placeholder: "e.g. echo *",
         type: "Type",
         command: "Command",
         cwd: "Working directory",

@@ -4,7 +4,7 @@ import {
   HookEventName,
   HookSource,
 } from "@/entityTypes/hookTypes";
-import { matchesHookMatcher } from "./HookMatcher";
+import { matchesHookMatcher, matchesHookIfCondition } from "./HookMatcher";
 
 /**
  * In-memory registry of hook definitions grouped by event.
@@ -32,6 +32,12 @@ export interface HookLookupInput {
   readonly eventName: HookEventName;
   readonly matchQuery?: string;
   readonly sessionId?: string;
+  /**
+   * Tool input arguments, used to evaluate the hook's `if` condition
+   * (a glob-lite pattern matched against argument string values).
+   * Omitted or undefined for non-tool events (SessionStart, Stop, etc.).
+   */
+  readonly toolInput?: Record<string, unknown>;
 }
 
 export interface ListAllFilter {
@@ -123,6 +129,8 @@ class HookRegistryImpl implements HookRegistryApi {
       if (!entry.hook.enabled) continue;
       if (entry.sessionId && input.sessionId !== entry.sessionId) continue;
       if (!matchesHookMatcher(entry.hook.matcher, input.matchQuery ?? ""))
+        continue;
+      if (!matchesHookIfCondition(entry.hook.if, input.toolInput))
         continue;
       if (seen.has(entry.hook.id)) continue;
       seen.add(entry.hook.id);

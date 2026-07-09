@@ -16,12 +16,13 @@ export type NewHookRow = Omit<
   | "createdAt"
   | "updatedAt"
   | "matcher"
+  | "ifCondition"
   | "cwd"
   | "statusMessage"
   | "envAllowlist"
 > &
   Partial<
-    Pick<HookConfigEntity, "matcher" | "cwd" | "statusMessage" | "envAllowlist">
+    Pick<HookConfigEntity, "matcher" | "ifCondition" | "cwd" | "statusMessage" | "envAllowlist">
   >;
 
 export type HookPatch = Partial<
@@ -29,6 +30,7 @@ export type HookPatch = Partial<
     HookConfigEntity,
     | "eventName"
     | "matcher"
+    | "ifCondition"
     | "hookType"
     | "command"
     | "cwd"

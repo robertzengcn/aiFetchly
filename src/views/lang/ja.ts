@@ -1272,6 +1272,8 @@ emailAutoReplyAudit: {
         id: "フックID",
         event: "イベント",
         matcher: "マッチャー",
+        if_condition: "条件フィルター",
+        if_condition_placeholder: "例: echo *",
         type: "型",
         command: "コマンド",
         cwd: "作業ディレクトリ",

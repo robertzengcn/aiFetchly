@@ -30,6 +30,7 @@ export interface NewHookInput {
   id: string;
   eventName: HookEventName;
   matcher?: string;
+  ifCondition?: string;
   command: string;
   cwd?: string;
   timeoutMs?: number;

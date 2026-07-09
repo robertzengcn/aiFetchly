@@ -32,6 +32,10 @@ export class HookConfigEntity {
   @Column({ name: "matcher", type: "text", nullable: true })
   matcher: string | null;
 
+  /** Glob-lite condition matched against tool input argument values. */
+  @Column({ name: "if_condition", type: "text", nullable: true })
+  ifCondition: string | null;
+
   /** "command" for UI-created rows. "callback" reserved for future schema reuse. */
   @Column({ name: "hook_type", type: "text" })
   hookType: string;

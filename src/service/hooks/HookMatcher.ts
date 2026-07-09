@@ -48,3 +48,42 @@ export function matchesHookMatcher(
   const re = new RegExp(source);
   return re.test(query);
 }
+
+/**
+ * Evaluate a hook's `if` condition against tool input arguments.
+ *
+ * The `if` condition is a glob-lite pattern matched against each
+ * string value in the tool input args. If any string value matches,
+ * the condition is satisfied.
+ *
+ * - `undefined` or `*`         → always matches (no filtering)
+ * - `echo *`                   → matches "echo hello", "echo foo bar"
+ * - `git *`                    → matches "git status", "git push"
+ *
+ * Oversized conditions (over HOOK_LIMITS.maxIfChars) never match.
+ */
+const MAX_IF_CHARS = HOOK_LIMITS.maxIfChars;
+
+export function matchesHookIfCondition(
+  ifCondition: string | undefined,
+  toolInput: Record<string, unknown> | undefined
+): boolean {
+  if (ifCondition === undefined || ifCondition === "*" || ifCondition === "") {
+    return true;
+  }
+  if (ifCondition.length > MAX_IF_CHARS) {
+    return false;
+  }
+  const source = matcherToRegexSource(ifCondition);
+  const re = new RegExp(source);
+
+  if (!toolInput) return false;
+
+  for (const val of Object.values(toolInput)) {
+    if (typeof val === "string" && re.test(val)) {
+      return true;
+    }
+  }
+  // Also match against JSON stringification for non-string values
+  return re.test(JSON.stringify(toolInput));
+}

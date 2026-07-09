@@ -66,6 +66,7 @@ export const HOOK_LIMITS = {
   defaultCommandTimeoutMs: 5_000,
   maxCommandTimeoutMs: 60_000,
   maxMatcherChars: 128,
+  maxIfChars: 256,
 } as const;
 
 /** Safe environment variable keys passed to command hooks. */
@@ -205,6 +206,14 @@ export interface HookDefinitionBase {
   readonly enabled: boolean;
   readonly failureMode?: HookFailureMode;
   readonly statusMessage?: string;
+  /**
+   * Optional glob-lite condition matched against tool input arguments.
+   * For PreToolUse/PostToolUse/PostToolUseFailure/PermissionRequest
+   * events, if present, the hook only fires when at least one string
+   * argument value matches the pattern (e.g. `git *` for shell commands
+   * starting with "git "). For other events, this field is ignored.
+   */
+  readonly if?: string;
 }
 
 export interface CallbackHookDefinition extends HookDefinitionBase {

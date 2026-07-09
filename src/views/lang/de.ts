@@ -1295,6 +1295,8 @@ emailAutoReplyAudit: {
         id: "Hook-ID",
         event: "Ereignis",
         matcher: "Matcher",
+        if_condition: "Filterbedingung",
+        if_condition_placeholder: "z. B. echo *",
         type: "Typ",
         command: "Befehl",
         cwd: "Arbeitsverzeichnis",
