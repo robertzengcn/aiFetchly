@@ -14,16 +14,28 @@ import {
 } from "@/config/channellist";
 import * as path from "path";
 import * as fs from "fs";
-import { EmailscFormdata, EmailsControldata } from "@/entityTypes/emailextraction-type";
+import {
+  EmailscFormdata,
+  EmailsControldata,
+} from "@/entityTypes/emailextraction-type";
 import { CommonDialogMsg } from "@/entityTypes/commonType";
 import { isValidUrl } from "@/views/utils/function";
 import { EmailextractionController } from "@/controller/emailextractionController";
-import { EmailExtractionTypes } from "@/config/emailextraction";
+import {
+  EmailExtractionTypes,
+  extratypeToEnum,
+} from "@/config/emailextraction";
 import { CommonResponse } from "@/entityTypes/commonType";
 import { SearchResultModule } from "@/modules/SearchResultModule";
+import { GoogleMapsModule } from "@/modules/GoogleMapsModule";
+import { YandexMapsModule } from "@/modules/YandexMapsModule";
 import { ISearchResultApi } from "@/modules/interface/ISearchResultApi";
 import { EmailSearchTaskModule } from "@/modules/EmailSearchTaskModule";
 import { resolveSearchResultUrls } from "@/main-process/communication/emailExtractionSearchResultUrls";
+import {
+  resolveGoogleMapsUrls,
+  resolveYandexMapsUrls,
+} from "@/main-process/communication/emailExtractionMapsUrls";
 import { registerValidatedHandler } from "@/main-process/communication/_shared/registerValidatedHandler";
 import {
   emailExtractionListInputSchema,
@@ -53,13 +65,19 @@ export function registerEmailextractionIpcHandlers() {
     const validUrls: string[] = [];
     if (qdata.extratype === "ManualInputUrl") {
       if (!qdata.urls || qdata.urls.length === 0) {
-        (event as { sender: { send: (c: string, m: string) => void } }).sender.send(
+        (
+          event as { sender: { send: (c: string, m: string) => void } }
+        ).sender.send(
           EMAILEXTRACTIONMESSAGE,
           JSON.stringify({
             status: false,
             code: 20240705103811,
-            data: { action: "error", title: "emailscrape.failed", content: "emailscrape.url_empty" },
-          } satisfies CommonDialogMsg),
+            data: {
+              action: "error",
+              title: "emailscrape.failed",
+              content: "emailscrape.url_empty",
+            },
+          } satisfies CommonDialogMsg)
         );
         return;
       }
@@ -67,51 +85,157 @@ export function registerEmailextractionIpcHandlers() {
         isValidUrl(item) ? validUrls.push(item) : null;
       });
       if (validUrls.length === 0) {
-        (event as { sender: { send: (c: string, m: string) => void } }).sender.send(
+        (
+          event as { sender: { send: (c: string, m: string) => void } }
+        ).sender.send(
           EMAILEXTRACTIONMESSAGE,
           JSON.stringify({
             status: false,
             code: 20240705103811,
-            data: { action: "error", title: "emailscrape.failed", content: "emailscrape.url_invalid" },
-          } satisfies CommonDialogMsg),
+            data: {
+              action: "error",
+              title: "emailscrape.failed",
+              content: "emailscrape.url_invalid",
+            },
+          } satisfies CommonDialogMsg)
         );
         return;
       }
     } else if (qdata.extratype === "SearchResult") {
       extraType = EmailExtractionTypes.SearchResult;
       if (!qdata.searchTaskId) {
-        (event as { sender: { send: (c: string, m: string) => void } }).sender.send(
+        (
+          event as { sender: { send: (c: string, m: string) => void } }
+        ).sender.send(
           EMAILEXTRACTIONMESSAGE,
           JSON.stringify({
             status: false,
             code: 20240705103811,
-            data: { action: "error", title: "emailscrape.failed", content: "emailscrape.searchTaskId_empty" },
-          } satisfies CommonDialogMsg),
+            data: {
+              action: "error",
+              title: "emailscrape.failed",
+              content: "emailscrape.searchTaskId_empty",
+            },
+          } satisfies CommonDialogMsg)
         );
         return;
       }
       const searchResultModule: ISearchResultApi = new SearchResultModule();
-      const searchResult = await searchResultModule.getAllSearchResultsByTaskId(qdata.searchTaskId);
+      const searchResult = await searchResultModule.getAllSearchResultsByTaskId(
+        qdata.searchTaskId
+      );
       validUrls.push(...resolveSearchResultUrls(searchResult));
       if (validUrls.length === 0) {
-        (event as { sender: { send: (c: string, m: string) => void } }).sender.send(
+        (
+          event as { sender: { send: (c: string, m: string) => void } }
+        ).sender.send(
           EMAILEXTRACTIONMESSAGE,
           JSON.stringify({
             status: false,
             code: 20240705103811,
-            data: { action: "error", title: "emailscrape.failed", content: "emailscrape.searchResult_empty" },
-          } satisfies CommonDialogMsg),
+            data: {
+              action: "error",
+              title: "emailscrape.failed",
+              content: "emailscrape.searchResult_empty",
+            },
+          } satisfies CommonDialogMsg)
+        );
+        return;
+      }
+    } else if (qdata.extratype === "GoogleMaps") {
+      extraType = EmailExtractionTypes.GoogleMaps;
+      if (!qdata.searchTaskId) {
+        (
+          event as { sender: { send: (c: string, m: string) => void } }
+        ).sender.send(
+          EMAILEXTRACTIONMESSAGE,
+          JSON.stringify({
+            status: false,
+            code: 20240705103811,
+            data: {
+              action: "error",
+              title: "emailscrape.failed",
+              content: "emailscrape.searchTaskId_empty",
+            },
+          } satisfies CommonDialogMsg)
+        );
+        return;
+      }
+      const record = await new GoogleMapsModule().getSearchRecord(
+        qdata.searchTaskId
+      );
+      validUrls.push(...resolveGoogleMapsUrls(record));
+      if (validUrls.length === 0) {
+        (
+          event as { sender: { send: (c: string, m: string) => void } }
+        ).sender.send(
+          EMAILEXTRACTIONMESSAGE,
+          JSON.stringify({
+            status: false,
+            code: 20240705103811,
+            data: {
+              action: "error",
+              title: "emailscrape.failed",
+              content: "emailscrape.mapsResult_empty",
+            },
+          } satisfies CommonDialogMsg)
+        );
+        return;
+      }
+    } else if (qdata.extratype === "YandexMaps") {
+      extraType = EmailExtractionTypes.YandexMaps;
+      if (!qdata.searchTaskId) {
+        (
+          event as { sender: { send: (c: string, m: string) => void } }
+        ).sender.send(
+          EMAILEXTRACTIONMESSAGE,
+          JSON.stringify({
+            status: false,
+            code: 20240705103811,
+            data: {
+              action: "error",
+              title: "emailscrape.failed",
+              content: "emailscrape.searchTaskId_empty",
+            },
+          } satisfies CommonDialogMsg)
+        );
+        return;
+      }
+      const record = await new YandexMapsModule().getSearchRecord(
+        qdata.searchTaskId
+      );
+      validUrls.push(...resolveYandexMapsUrls(record));
+      if (validUrls.length === 0) {
+        (
+          event as { sender: { send: (c: string, m: string) => void } }
+        ).sender.send(
+          EMAILEXTRACTIONMESSAGE,
+          JSON.stringify({
+            status: false,
+            code: 20240705103811,
+            data: {
+              action: "error",
+              title: "emailscrape.failed",
+              content: "emailscrape.mapsResult_empty",
+            },
+          } satisfies CommonDialogMsg)
         );
         return;
       }
     } else {
-      (event as { sender: { send: (c: string, m: string) => void } }).sender.send(
+      (
+        event as { sender: { send: (c: string, m: string) => void } }
+      ).sender.send(
         EMAILEXTRACTIONMESSAGE,
         JSON.stringify({
           status: false,
           code: 20240705103811,
-          data: { action: "error", title: "emailscrape.failed", content: "emailscrape.action_error" },
-        } satisfies CommonDialogMsg),
+          data: {
+            action: "error",
+            title: "emailscrape.failed",
+            content: "emailscrape.action_error",
+          },
+        } satisfies CommonDialogMsg)
       );
       return;
     }
@@ -136,8 +260,12 @@ export function registerEmailextractionIpcHandlers() {
       JSON.stringify({
         status: true,
         code: 0,
-        data: { action: "emailscrape.emailsearch_task_start", title: "", content: "" },
-      } satisfies CommonDialogMsg),
+        data: {
+          action: "emailscrape.emailsearch_task_start",
+          title: "",
+          content: "",
+        },
+      } satisfies CommonDialogMsg)
     );
   });
 
@@ -151,10 +279,10 @@ export function registerEmailextractionIpcHandlers() {
       const res = await emailCon.listEmailSearchtasks(
         input.page ?? 0,
         input.size ?? 100,
-        input.sortby,
+        input.sortby
       );
       return { records: res.records, num: res.total };
-    },
+    }
   );
 
   registerValidatedHandler(
@@ -165,11 +293,11 @@ export function registerEmailextractionIpcHandlers() {
       const res = await emailCon.Emailtaskresult(
         input.taskId,
         input.page ?? 0,
-        input.size ?? 100,
+        input.size ?? 100
       );
       const count = await emailCon.EmailtaskresultCount(input.taskId);
       return { records: res, num: count };
-    },
+    }
   );
 
   registerValidatedHandler(
@@ -178,7 +306,7 @@ export function registerEmailextractionIpcHandlers() {
     async (input) => {
       const emailCon = new EmailextractionController();
       return emailCon.readTaskErrorlog(input.id);
-    },
+    }
   );
 
   registerValidatedHandler(
@@ -187,7 +315,7 @@ export function registerEmailextractionIpcHandlers() {
     async (input) => {
       const emailCon = new EmailextractionController();
       return emailCon.getEmailSearchTask(input.id);
-    },
+    }
   );
 
   registerValidatedHandler(
@@ -214,6 +342,24 @@ export function registerEmailextractionIpcHandlers() {
           isValidUrl(item) ? validUrls.push(item) : null;
         });
         if (validUrls.length === 0) throw new Error("No valid URLs provided");
+      } else if (formData.extratype === "GoogleMaps") {
+        if (!formData.searchTaskId)
+          throw new Error("Maps record id is required");
+        const record = await new GoogleMapsModule().getSearchRecord(
+          formData.searchTaskId
+        );
+        validUrls.push(...resolveGoogleMapsUrls(record));
+        if (validUrls.length === 0)
+          throw new Error("No website URLs found in the selected maps record");
+      } else if (formData.extratype === "YandexMaps") {
+        if (!formData.searchTaskId)
+          throw new Error("Maps record id is required");
+        const record = await new YandexMapsModule().getSearchRecord(
+          formData.searchTaskId
+        );
+        validUrls.push(...resolveYandexMapsUrls(record));
+        if (validUrls.length === 0)
+          throw new Error("No website URLs found in the selected maps record");
       }
 
       const updateData: EmailsControldata = {
@@ -223,10 +369,7 @@ export function registerEmailextractionIpcHandlers() {
         pagelength: formData.pagelength,
         notShowBrowser: formData.notShowBrowser,
         proxys: formData.proxys,
-        type:
-          formData.extratype === "SearchResult"
-            ? EmailExtractionTypes.SearchResult
-            : EmailExtractionTypes.ManualInputUrl,
+        type: extratypeToEnum(formData.extratype),
         processTimeout: Number(formData.processTimeout),
         maxPageNumber: formData.maxPageNumber,
         aiSupportEnabled: formData.aiSupportEnabled || false,
@@ -234,7 +377,7 @@ export function registerEmailextractionIpcHandlers() {
 
       await emailCon.updateEmailSearchTask(input.id, updateData);
       return "Task updated successfully";
-    },
+    }
   );
 
   registerValidatedHandler(
@@ -250,7 +393,7 @@ export function registerEmailextractionIpcHandlers() {
       }
       await emailCon.deleteEmailSearchTask(input.id);
       return "Task deleted successfully";
-    },
+    }
   );
 
   registerValidatedHandler(
@@ -259,7 +402,10 @@ export function registerEmailextractionIpcHandlers() {
     async (input) => {
       const emailController = new EmailextractionController();
       const format = input.format ?? "csv";
-      const exportData = await emailController.exportEmailResults(input.taskId, format);
+      const exportData = await emailController.exportEmailResults(
+        input.taskId,
+        format
+      );
 
       const fileExtension = format === "csv" ? "csv" : "json";
       const defaultFilename = `email_results_task_${input.taskId}_${
@@ -270,7 +416,10 @@ export function registerEmailextractionIpcHandlers() {
         title: `Export Email Results as ${format.toUpperCase()}`,
         defaultPath: path.join(app.getPath("documents"), defaultFilename),
         filters: [
-          { name: format === "csv" ? "CSV Files" : "JSON Files", extensions: [fileExtension] },
+          {
+            name: format === "csv" ? "CSV Files" : "JSON Files",
+            extensions: [fileExtension],
+          },
           { name: "All Files", extensions: ["*"] },
         ],
       });
@@ -281,10 +430,14 @@ export function registerEmailextractionIpcHandlers() {
       if (format === "csv") {
         fs.writeFileSync(filePath, exportData, "utf-8");
       } else {
-        fs.writeFileSync(filePath, JSON.stringify(exportData, null, 2), "utf-8");
+        fs.writeFileSync(
+          filePath,
+          JSON.stringify(exportData, null, 2),
+          "utf-8"
+        );
       }
       return filePath;
-    },
+    }
   );
 
   registerValidatedHandler(
@@ -294,7 +447,7 @@ export function registerEmailextractionIpcHandlers() {
       const emailCon = new EmailextractionController();
       await emailCon.killEmailSearchTask(input.id);
       return "Task stopped successfully";
-    },
+    }
   );
 
   registerValidatedHandler(
@@ -304,7 +457,7 @@ export function registerEmailextractionIpcHandlers() {
       const emailCon = new EmailextractionController();
       await emailCon.startEmailSearchTask(input.id);
       return "Task started successfully";
-    },
+    }
   );
 
   // Reset any tasks stuck in "Processing" from a previous app session
