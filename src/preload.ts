@@ -330,6 +330,9 @@ import {
 // contextBridge.exposeInMainWorld('electronAPI', {
 //     userLogin: (data) => ipcRenderer.invoke('user:login', data)
 // })
+// IPC payloads must not be logged in production (they may carry tokens/PII).
+const isDev = process.env.NODE_ENV !== "production";
+
 contextBridge.exposeInMainWorld("api", {
   getPathForFile: (file: File) => webUtils.getPathForFile(file),
   send: (channel, data) => {
@@ -375,18 +378,18 @@ contextBridge.exposeInMainWorld("api", {
       AI_EMAIL_TEMPLATE_GENERATE_STREAM,
       AI_EMAIL_TEMPLATE_STOP,
     ];
-    console.log("send", channel, data);
+    if (isDev) console.log("send", channel, data);
     if (validChannels.includes(channel)) {
-      console.log("send2", channel, data);
+      if (isDev) console.log("send2", channel, data);
       ipcRenderer.send(channel, data);
     }
   },
   sendBinary: (channel, data) => {
     // whitelist channels for binary data
     const validChannels = [SAVE_TEMP_FILE];
-    console.log("sendBinary", channel, data);
+    if (isDev) console.log("sendBinary", channel, data);
     if (validChannels.includes(channel)) {
-      console.log("sendBinary2", channel, data);
+      if (isDev) console.log("sendBinary2", channel, data);
       ipcRenderer.send(channel, data);
     }
   },
