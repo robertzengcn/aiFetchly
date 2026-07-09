@@ -56,6 +56,26 @@ export interface WorkspaceCommandDraft {
   readonly contentHash: string;
 }
 
+/**
+ * Phase 16 (Plan 02): a raw workspace agent draft produced by the WORKER.
+ *
+ * The worker emits parsed frontmatter (scalars + arrays) + body + hash ONLY.
+ * NO validation runs here — buildAgentDefinition (Plan 01) runs in the MAIN
+ * process via buildWorkspaceAgentDefinitions (Task 3). This keeps the worker
+ * scan-only (WAT-02 worker-no-DB / no-registry / no-Electron). An invalid
+ * name or unknown tool is carried through unchanged; the main-process
+ * converter decides whether to drop or warn.
+ */
+export interface WorkspaceAgentDraft {
+  readonly id: string;
+  readonly source: "workspace";
+  readonly sourceId: string;
+  readonly relativePath: string;
+  readonly frontmatter: Readonly<Record<string, string | readonly string[]>>;
+  readonly body: string;
+  readonly contentHash: string;
+}
+
 export interface WorkspaceConfigScanInput {
   readonly workspaceId: string;
   readonly workspaceRoot: string;
@@ -65,6 +85,7 @@ export interface WorkspaceConfigScanInput {
 const AGENTS_MD = "AGENTS.md";
 const SETTINGS_JSON = "settings.json";
 const COMMANDS_DIR = "commands";
+const AGENTS_DIR = "agents";
 
 /** Build a deterministic diagnostic for a single file failure. */
 function diagnostic(
@@ -104,7 +125,9 @@ function ioDiagnostic(
  * scans — the worker uses one scan() call per rescan.
  */
 export class WorkspaceConfigScanner {
-  async scan(input: WorkspaceConfigScanInput): Promise<AIFetchlyConfigSnapshot> {
+  async scan(
+    input: WorkspaceConfigScanInput
+  ): Promise<AIFetchlyConfigSnapshot> {
     const workspaceId = input.workspaceId;
     const workspaceRoot = input.workspaceRoot;
     const sourceId = `workspace:${workspaceId}`;
@@ -113,8 +136,11 @@ export class WorkspaceConfigScanner {
     const files: AIFetchlyConfigFileSnapshot[] = [];
     const instructions: AIFetchlyInstructionBlock[] = [];
     const commands: WorkspaceCommandDraft[] = [];
+    const agents: WorkspaceAgentDraft[] = [];
     const diagnostics: AIFetchlyConfigDiagnostic[] = [];
-    const settings: AIFetchlyConfigSettings = { ...DEFAULT_AIFETCHLY_CONFIG_SETTINGS };
+    const settings: AIFetchlyConfigSettings = {
+      ...DEFAULT_AIFETCHLY_CONFIG_SETTINGS,
+    };
 
     // 1. Scan .aifetchly/ if it exists.
     let dotAifetchlyExists = false;
@@ -133,6 +159,7 @@ export class WorkspaceConfigScanner {
         files,
         instructions,
         commands,
+        agents,
         diagnostics,
         settings
       );
@@ -163,7 +190,10 @@ export class WorkspaceConfigScanner {
       // so we cast through unknown — the runtime shape is what matters for the
       // diff (id-keyed) and Plan 14-02's apply filter.
       commands: commands as readonly unknown[],
-      agents: [],
+      // Phase 16 (Plan 02): raw WorkspaceAgentDrafts (worker-side, no
+      // validation). Cast through unknown mirroring commands — the main-
+      // process converter (buildWorkspaceAgentDefinitions, Task 3) validates.
+      agents: agents as readonly unknown[],
       hooks: [],
       skills: [],
       diagnostics,
@@ -171,7 +201,7 @@ export class WorkspaceConfigScanner {
   }
 
   /**
-   * Scan .aifetchly/{AGENTS.md, settings.json, commands/*.md}.
+   * Scan .aifetchly/{AGENTS.md, settings.json, commands/*.md, agents/*.md}.
    * NEVER throws — all per-file errors surface as recoverable diagnostics.
    */
   private async scanAifetchlyRoot(
@@ -181,13 +211,11 @@ export class WorkspaceConfigScanner {
     files: AIFetchlyConfigFileSnapshot[],
     instructions: AIFetchlyInstructionBlock[],
     commands: WorkspaceCommandDraft[],
+    agents: WorkspaceAgentDraft[],
     diagnostics: AIFetchlyConfigDiagnostic[],
     settings: AIFetchlyConfigSettings
   ): Promise<void> {
-    const rootRel = path.relative(
-      path.dirname(dotAifetchly),
-      dotAifetchly
-    ); // ".aifetchly"
+    const rootRel = path.relative(path.dirname(dotAifetchly), dotAifetchly); // ".aifetchly"
 
     // AGENTS.md
     await this.tryReadInstructionFile(
@@ -221,6 +249,19 @@ export class WorkspaceConfigScanner {
       `${rootRel}/${COMMANDS_DIR}`,
       files,
       commands,
+      diagnostics
+    );
+
+    // agents/*.md (Phase 16 / Plan 02) — RAW drafts only; the worker does NOT
+    // validate (WAT-02). buildWorkspaceAgentDefinitions validates main-side.
+    await this.tryReadAgentFiles(
+      dotAifetchly,
+      workspaceId,
+      sourceId,
+      AGENTS_DIR,
+      `${rootRel}/${AGENTS_DIR}`,
+      files,
+      agents,
       diagnostics
     );
   }
@@ -297,7 +338,10 @@ export class WorkspaceConfigScanner {
         return;
       }
       const content = await fs.promises.readFile(abs);
-      const contentHash = crypto.createHash("sha256").update(content).digest("hex");
+      const contentHash = crypto
+        .createHash("sha256")
+        .update(content)
+        .digest("hex");
       files.push({
         relativePath,
         kind: "instructions",
@@ -384,7 +428,9 @@ export class WorkspaceConfigScanner {
       if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
         const obj = parsed as Record<string, unknown>;
         const merged = { ...DEFAULT_AIFETCHLY_CONFIG_SETTINGS };
-        for (const key of Object.keys(merged) as (keyof AIFetchlyConfigSettings)[]) {
+        for (const key of Object.keys(
+          merged
+        ) as (keyof AIFetchlyConfigSettings)[]) {
           const v = obj[key];
           if (typeof v === "boolean") {
             merged[key] = v;
@@ -471,7 +517,10 @@ export class WorkspaceConfigScanner {
           continue;
         }
         const content = await fs.promises.readFile(abs);
-        const contentHash = crypto.createHash("sha256").update(content).digest("hex");
+        const contentHash = crypto
+          .createHash("sha256")
+          .update(content)
+          .digest("hex");
         const relativePath = `${commandsRelativeDir}/${name}`;
         files.push({
           relativePath,
@@ -503,7 +552,10 @@ export class WorkspaceConfigScanner {
           for (const [k, v] of parsed.scalars) scalars[k] = v;
           for (const [k, v] of parsed.arrays) arrays[k] = v;
         }
-        const cmdId = `workspace:${workspaceId}:command:${name.replace(/\.md$/i, "")}`;
+        const cmdId = `workspace:${workspaceId}:command:${name.replace(
+          /\.md$/i,
+          ""
+        )}`;
         commands.push({
           id: cmdId,
           source: "workspace",
@@ -515,7 +567,160 @@ export class WorkspaceConfigScanner {
         });
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code === "ENOENT") continue;
-        diagnostics.push(ioDiagnostic(sourceId, `${commandsRelativeDir}/${name}`, err));
+        diagnostics.push(
+          ioDiagnostic(sourceId, `${commandsRelativeDir}/${name}`, err)
+        );
+      }
+    }
+  }
+
+  /**
+   * Phase 16 (Plan 02): scan `agents/` for *.md files and emit RAW
+   * {@link WorkspaceAgentDraft}s. Mirrors {@link tryReadCommandFiles} with
+   * two intentional differences:
+   *   1. Size cap is `agentMdBytes` (128KB, CFG-04) and count cap is
+   *      `maxAgentsPerSource` (100).
+   *   2. NO validation runs here. The worker is scan-only (WAT-02): parsed
+   *      frontmatter + body + hash are carried through unchanged, including
+   *      drafts with invalid names or unknown tools. The main-process
+   *      converter (buildWorkspaceAgentDefinitions, Task 3) calls
+   *      buildAgentDefinition to validate; the trust filter in
+   *      applyWorkspaceSnapshot drops untrusted workspace agents before they
+   *      reach the registry.
+   *
+   * NEVER throws — per-file failures push diagnostics and the scan continues.
+   * Imports ONLY pure helpers (parseRestrictedFrontmatter,
+   * resolveConfigRelativePath, constants, diagnostic/ioDiagnostic) — no
+   * Module/Model/registry/Electron/TypeORM (WAT-02 WorkerNoDbBoundary).
+   */
+  private async tryReadAgentFiles(
+    dotAifetchly: string,
+    workspaceId: string,
+    sourceId: string,
+    agentsDirName: string,
+    agentsRelativeDir: string,
+    files: AIFetchlyConfigFileSnapshot[],
+    agents: WorkspaceAgentDraft[],
+    diagnostics: AIFetchlyConfigDiagnostic[]
+  ): Promise<void> {
+    const agentsDir = path.join(dotAifetchly, agentsDirName);
+    let entries: readonly string[] | readonly fs.Dirent[];
+    try {
+      entries = await fs.promises.readdir(agentsDir, { withFileTypes: true });
+    } catch (err) {
+      // Missing agents/ dir is the happy path (most workspaces have none).
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") return;
+      diagnostics.push(ioDiagnostic(sourceId, agentsRelativeDir, err));
+      return;
+    }
+
+    for (const entry of entries) {
+      const name = entry.name;
+      if (!name.endsWith(".md")) continue;
+      // CFG-05: reject any `..` or absolute-seeming name.
+      const safeRel = resolveConfigRelativePath(agentsDir, name);
+      if (!safeRel.ok) {
+        diagnostics.push(
+          diagnostic(
+            "workspace",
+            sourceId,
+            `${agentsRelativeDir}/${name}`,
+            "path-outside-root",
+            `rejected agent path: ${safeRel.reason}`,
+            true
+          )
+        );
+        continue;
+      }
+      try {
+        if (typeof (entry as fs.Dirent).isDirectory === "function") {
+          if ((entry as fs.Dirent).isDirectory()) continue;
+        }
+        // CFG-04: count cap — once maxAgentsPerSource drafts have been added,
+        // skip the rest with a single diagnostic (mirrors commands cap).
+        if (agents.length >= AIFETCHLY_CONFIG_LIMITS.maxAgentsPerSource) {
+          diagnostics.push(
+            diagnostic(
+              "workspace",
+              sourceId,
+              `${agentsRelativeDir}/${name}`,
+              "file-too-large",
+              `agent count reached the ${AIFETCHLY_CONFIG_LIMITS.maxAgentsPerSource}-file cap; skipping remaining files`,
+              true
+            )
+          );
+          break;
+        }
+        const abs = safeRel.absolutePath;
+        const stat = await fs.promises.stat(abs);
+        if (stat.size > AIFETCHLY_CONFIG_LIMITS.agentMdBytes) {
+          diagnostics.push(
+            diagnostic(
+              "workspace",
+              sourceId,
+              `${agentsRelativeDir}/${name}`,
+              "file-too-large",
+              `${name} is ${stat.size} bytes which exceeds the ${AIFETCHLY_CONFIG_LIMITS.agentMdBytes}-byte limit; skipped`,
+              true
+            )
+          );
+          continue;
+        }
+        const content = await fs.promises.readFile(abs);
+        const contentHash = crypto
+          .createHash("sha256")
+          .update(content)
+          .digest("hex");
+        const relativePath = `${agentsRelativeDir}/${name}`;
+        files.push({
+          relativePath,
+          kind: "agent",
+          mtimeMs: stat.mtimeMs,
+          sizeBytes: stat.size,
+          contentHash,
+        });
+        // CFG-07 restricted frontmatter parse. On failure, surface a
+        // diagnostic and carry the raw text as the body — the draft still
+        // flows through (validation is main-process; the converter drops it
+        // if the frontmatter is unusable).
+        const text = content.toString("utf8");
+        const parsed = parseRestrictedFrontmatter(text);
+        if (parsed === null) {
+          diagnostics.push(
+            diagnostic(
+              "workspace",
+              sourceId,
+              relativePath,
+              "frontmatter-invalid",
+              `${name} frontmatter failed restricted parse; carrying raw body`,
+              true
+            )
+          );
+        }
+        const scalars: Record<string, string> = {};
+        const arrays: Record<string, readonly string[]> = {};
+        if (parsed) {
+          for (const [k, v] of parsed.scalars) scalars[k] = v;
+          for (const [k, v] of parsed.arrays) arrays[k] = v;
+        }
+        const agentId = `workspace:${workspaceId}:agent:${name.replace(
+          /\.md$/i,
+          ""
+        )}`;
+        agents.push({
+          id: agentId,
+          source: "workspace",
+          sourceId,
+          relativePath,
+          frontmatter: { ...scalars, ...arrays },
+          body: parsed ? parsed.body : text,
+          contentHash,
+        });
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === "ENOENT") continue;
+        diagnostics.push(
+          ioDiagnostic(sourceId, `${agentsRelativeDir}/${name}`, err)
+        );
       }
     }
   }
