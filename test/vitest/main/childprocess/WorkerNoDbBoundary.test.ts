@@ -31,6 +31,19 @@ import { join, extname, relative } from "path";
 const WORKER_ROOT = "src/childprocess/aifetchly-config";
 
 /**
+ * Pure helper files OUTSIDE the worker dir that the worker imports
+ * transitively. They are NOT under {@link WORKER_ROOT} (they live in
+ * `@/service/...`) but they MUST stay DB/Electron/Module-free because the
+ * worker process loads them directly. Phase 16 / Plan 02 adds the workspace
+ * agent scanner to this set — `tryReadAgentFiles` runs worker-side and must
+ * produce RAW drafts only (WAT-02). Listed individually so the gate is
+ * explicit about which transitive deps are sanctioned.
+ */
+const WORKER_TRANSITIVE_PURE_HELPERS: ReadonlyArray<string> = [
+  "src/service/workspaceWatch/WorkspaceConfigScanner.ts",
+];
+
+/**
  * The canonical WorkerNoDbBoundary forbidden-import regex set.
  *
  * Names below are by concept (per Phase 13-03b lesson #429 / Rule 3) —
@@ -38,8 +51,14 @@ const WORKER_ROOT = "src/childprocess/aifetchly-config";
  * set" rather than inlining these patterns.
  */
 const FORBIDDEN_PATTERNS: ReadonlyArray<{ name: string; re: RegExp }> = [
-  { name: "electron-main-module-from", re: /from\s+["']electron(?:\/[^"']*)?["']/ },
-  { name: "electron-main-module-require", re: /require\(\s*["']electron(?:\/[^"']*)?["']\s*\)/ },
+  {
+    name: "electron-main-module-from",
+    re: /from\s+["']electron(?:\/[^"']*)?["']/,
+  },
+  {
+    name: "electron-main-module-require",
+    re: /require\(\s*["']electron(?:\/[^"']*)?["']\s*\)/,
+  },
   { name: "typeorm-from", re: /from\s+["']typeorm["']/ },
   { name: "typeorm-require", re: /require\(\s*["']typeorm["']\s*\)/ },
   { name: "modules-business-logic-from", re: /from\s+["']@\/modules\// },
@@ -77,7 +96,12 @@ describe("WAT-02 worker sandbox — WorkerNoDbBoundary grep gate", () => {
     const files = walk(WORKER_ROOT);
     expect(files.length, "worker dir must be non-empty").toBeGreaterThan(0);
 
-    const violations: Array<{ file: string; name: string; line: string; lineNo: number }> = [];
+    const violations: Array<{
+      file: string;
+      name: string;
+      line: string;
+      lineNo: number;
+    }> = [];
     for (const f of files) {
       const src = readFileSync(f, "utf8");
       const lines = src.split("\n");
@@ -86,7 +110,11 @@ describe("WAT-02 worker sandbox — WorkerNoDbBoundary grep gate", () => {
           // Skip comment lines (// or * or /*) — they describe the prohibition,
           // they don't constitute an actual import. Phase 13-03b lesson #429.
           const trimmed = line.trim();
-          if (trimmed.startsWith("//") || trimmed.startsWith("*") || trimmed.startsWith("/*")) {
+          if (
+            trimmed.startsWith("//") ||
+            trimmed.startsWith("*") ||
+            trimmed.startsWith("/*")
+          ) {
             continue;
           }
           if (re.test(line)) {
@@ -111,5 +139,50 @@ describe("WAT-02 worker sandbox — WorkerNoDbBoundary grep gate", () => {
 
   it("forbidden-import set is non-empty (sanity — the gate has teeth)", () => {
     expect(FORBIDDEN_PATTERNS.length).toBeGreaterThan(0);
+  });
+
+  it("worker-transitive pure helpers (WorkspaceConfigScanner etc.) stay DB/Module/Electron-free (WAT-02)", () => {
+    // The worker imports these @/service/* files directly; they must obey the
+    // SAME forbidden-import boundary as the worker dir itself. Phase 16 / Plan
+    // 02 added tryReadAgentFiles to WorkspaceConfigScanner — this gate ensures
+    // it stays a RAW-draft producer (no validation/registry/DB coupling).
+    const violations: Array<{
+      file: string;
+      name: string;
+      line: string;
+      lineNo: number;
+    }> = [];
+    for (const p of WORKER_TRANSITIVE_PURE_HELPERS) {
+      if (!existsSync(p)) continue;
+      const src = readFileSync(p, "utf8");
+      const lines = src.split("\n");
+      lines.forEach((line, idx) => {
+        for (const { name, re } of FORBIDDEN_PATTERNS) {
+          const trimmed = line.trim();
+          if (
+            trimmed.startsWith("//") ||
+            trimmed.startsWith("*") ||
+            trimmed.startsWith("/*")
+          ) {
+            continue;
+          }
+          if (re.test(line)) {
+            violations.push({
+              file: relative(process.cwd(), p),
+              name,
+              line,
+              lineNo: idx + 1,
+            });
+          }
+        }
+      });
+    }
+
+    expect(
+      violations,
+      `forbidden imports in worker-transitive helpers:\n${violations
+        .map((v) => `  ${v.file}:${v.lineNo} [${v.name}] ${v.line.trim()}`)
+        .join("\n")}`
+    ).toEqual([]);
   });
 });
