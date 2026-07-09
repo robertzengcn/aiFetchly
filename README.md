@@ -95,16 +95,6 @@ yarn start
 2. [Set up proxies](https://aifetchly.com/docs/getting-started/proxy-setup) for web scraping features
 3. Add your social media accounts and SMTP credentials in Settings
 
-### CLI Usage
-
-```bash
-# Login to a social platform campaign
-yarn login -c <campaignId>
-
-# Run a task from the command line
-yarn task -t <taskDetails>
-```
-
 ## Development
 
 ```bash
