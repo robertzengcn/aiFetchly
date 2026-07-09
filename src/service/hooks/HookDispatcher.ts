@@ -3,6 +3,10 @@ import {
   EMPTY_AGGREGATE,
   HookEventName,
   HookInput,
+  PreToolUseHookInput,
+  PostToolUseHookInput,
+  PostToolUseFailureHookInput,
+  PermissionRequestHookInput,
 } from "@/entityTypes/hookTypes";
 import { HookRegistry } from "./HookRegistry";
 import { aggregateResults, HookSingleResult } from "./HookResultAggregator";
@@ -52,9 +56,13 @@ class HookDispatcherImpl implements HookDispatcherApi {
     const { eventName, input, matchQuery, abortSignal } = args;
     if (abortSignal?.aborted) return EMPTY_AGGREGATE;
 
+    // Extract tool input for `if` condition evaluation.
+    const toolInput = extractToolInput(input);
+
     const hooks = HookRegistry.getMatchingHooks({
       eventName,
       matchQuery,
+      toolInput,
       // The dispatcher does not own a sessionId; session hooks are
       // fetched by callers that pass a sessionId-aware registry in a
       // future iteration. For MVP, the StreamEventProcessor runs in
@@ -124,3 +132,18 @@ class HookDispatcherImpl implements HookDispatcherApi {
 }
 
 export const HookDispatcher: HookDispatcherApi = new HookDispatcherImpl();
+
+/** Extract tool input args from a HookInput, if the event carries them. */
+function extractToolInput(
+  input: HookInput
+): Record<string, unknown> | undefined {
+  if (
+    input.eventName === "PreToolUse" ||
+    input.eventName === "PostToolUse" ||
+    input.eventName === "PostToolUseFailure" ||
+    input.eventName === "PermissionRequest"
+  ) {
+    return (input as PreToolUseHookInput | PostToolUseHookInput | PostToolUseFailureHookInput | PermissionRequestHookInput).input;
+  }
+  return undefined;
+}

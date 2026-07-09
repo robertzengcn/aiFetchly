@@ -116,6 +116,14 @@
               density="compact"
               class="mb-2"
             />
+            <v-text-field
+              v-model="form.ifCondition"
+              :label="t('system_settings.hooks.field.if_condition') || 'If condition'"
+              :disabled="!isUserSource"
+              density="compact"
+              class="mb-2"
+              :placeholder="t('system_settings.hooks.field.if_condition_placeholder') || 'e.g. echo *'"
+            />
             <v-textarea
               v-model="form.command"
               :label="t('system_settings.hooks.field.command') || 'Command'"
@@ -329,6 +337,7 @@ const form = ref({
   id: "",
   eventName: "PreToolUse" as HookEventName,
   matcher: "*",
+  ifCondition: "",
   command: "",
   cwd: "",
   timeoutMs: 5000,
@@ -474,6 +483,7 @@ function onSelect(id: string) {
     id: hook.id,
     eventName: hook.eventName,
     matcher: hook.matcher ?? "*",
+    ifCondition: hook.if ?? "",
     command: hook.command,
     cwd: hook.cwd ?? "",
     timeoutMs: hook.timeoutMs ?? 5000,
@@ -489,6 +499,7 @@ function onAddNew() {
     id: generateHookId(),
     eventName: "PreToolUse",
     matcher: "*",
+    ifCondition: "",
     command: "",
     cwd: "",
     timeoutMs: 5000,
@@ -504,6 +515,7 @@ async function onSave() {
         id: form.value.id,
         eventName: form.value.eventName,
         matcher: form.value.matcher,
+        ifCondition: form.value.ifCondition || undefined,
         command: form.value.command,
         cwd: form.value.cwd || undefined,
         timeoutMs: form.value.timeoutMs,
@@ -515,6 +527,7 @@ async function onSave() {
     } else if (selectedHook.value?.source === "user") {
       await updateHook(form.value.id, {
         matcher: form.value.matcher,
+        ifCondition: form.value.ifCondition || null,
         command: form.value.command,
         cwd: form.value.cwd || null,
         timeoutMs: form.value.timeoutMs,
