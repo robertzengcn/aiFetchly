@@ -17,6 +17,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AIFetchlyInstructionBlock } from "@/entityTypes/aifetchlyConfigTypes";
+import type { AgentDefinitionView } from "@/entityTypes/agentTypes";
 import { ai_custom_context_directive } from "@/config/settinggroupInit";
 
 // --- shared mocks (mirror AIChatContextAssembler.test.ts) -------------------
@@ -27,6 +28,12 @@ const mockGetConversationMessages = vi.fn();
 const mockDurableRetrieve = vi.fn();
 const mockGetSettingValue = vi.fn();
 const mockGetInstructionBlocks = vi.fn();
+
+// Plan 16-03 Task 3 — Available agents block (D-Discovery). The assembler
+// reads agentRegistry.list() via the AIFetchlyConfigManager singleton;
+// controlling list() here drives the block-injection assertions below.
+const mockAgentList = vi.fn();
+const mockGetAgentRegistry = vi.fn();
 
 vi.mock("@/modules/AIChatSessionMemoryModule", () => ({
   AIChatSessionMemoryModule: vi.fn().mockImplementation(() => ({
@@ -81,6 +88,17 @@ vi.mock("@/service/aifetchlyConfig/AIFetchlyContextLoader", () => ({
   ),
 }));
 
+// Plan 16-03 Task 3 — the assembler reads the agent registry through the
+// AIFetchlyConfigManager singleton. Mock it so getAgentRegistry().list() is
+// driven by mockAgentList (set per-test in beforeEach). The factory returns a
+// fresh manager whose getAgentRegistry() always resolves to the SAME
+// mockGetAgentRegistry binding, so beforeEach can re-point it deterministically.
+vi.mock("@/service/aifetchlyConfig/AIFetchlyConfigManager", () => ({
+  getAIFetchlyConfigManager: vi.fn().mockImplementation(() => ({
+    getAgentRegistry: mockGetAgentRegistry,
+  })),
+}));
+
 import { AIChatContextAssembler } from "@/service/AIChatContextAssembler";
 
 // --- helpers ----------------------------------------------------------------
@@ -129,6 +147,11 @@ describe("AIChatContextAssembler — AGENTS.md injection (CTX-01, CTX-03)", () =
       return Promise.resolve(null); // memory injection toggle default-on, retrieve returns empty
     });
     mockGetInstructionBlocks.mockResolvedValue([]);
+    // Plan 16-03 Task 3: default to an EMPTY registry so the existing CTX-01/03
+    // tests are unaffected (empty -> buildAvailableAgentsBlock returns "" ->
+    // no block pushed). Tests in the D-Discovery block override mockAgentList.
+    mockGetAgentRegistry.mockReturnValue({ list: mockAgentList });
+    mockAgentList.mockReturnValue([]);
   });
 
   it("CTX-01: injects AGENTS.md AFTER base prompt and BEFORE durable memory", async () => {
@@ -188,7 +211,7 @@ describe("AIChatContextAssembler — AGENTS.md injection (CTX-01, CTX-03)", () =
         m.content.startsWith(AGENTS_LABEL_PREFIX)
     );
     expect(agents).toBeTruthy();
-    expect((agents!.content as string)).toContain("custom-rules");
+    expect(agents!.content as string).toContain("custom-rules");
   });
 
   it("CTX-03: loader throwing degrades to no-injection and does not break assemble()", async () => {
@@ -275,5 +298,152 @@ describe("AIChatContextAssembler — AGENTS.md injection (CTX-01, CTX-03)", () =
       conversationId: "conv-xyz",
       mode: "plan",
     });
+  });
+});
+
+// --- D-Discovery: Available agents block (Plan 16-03 Task 3) ----------------
+//
+// The model discovers dispatchable agents via a "Available agents" system
+// block (ID + one-line description + source) sourced from
+// agentRegistry.list(), so it can copy the exact scoped ID into run_subagent.
+
+const AVAILABLE_AGENTS_PREFIX = "Available AiFetchly agents";
+
+function agentView(
+  partial: Partial<AgentDefinitionView> & {
+    id: string;
+  }
+): AgentDefinitionView {
+  return {
+    name: partial.name ?? "Agent",
+    description: partial.description ?? "An agent.",
+    version: 1,
+    systemPrompt: "",
+    allowedTools: [],
+    mode: "specialist",
+    maxToolCalls: 8,
+    maxRuntimeMs: 180000,
+    maxContinueCalls: 8,
+    outputSchema: {},
+    status: "active",
+    ...partial,
+  };
+}
+
+function findAvailableAgentsMessage(
+  messages: readonly { role: string; content: unknown }[]
+): number {
+  return messages.findIndex(
+    (m) =>
+      m.role === "system" &&
+      typeof m.content === "string" &&
+      m.content.startsWith(AVAILABLE_AGENTS_PREFIX)
+  );
+}
+
+describe("AIChatContextAssembler — Available agents block (D-Discovery, Plan 16-03)", () => {
+  beforeEach(() => {
+    // Defaults inherited from the outer beforeEach (empty registry). Tests in
+    // this block override mockAgentList / mockGetInstructionBlocks as needed.
+  });
+
+  it("D-Discovery: injects the block AFTER instructions and BEFORE durable memory (CTX-01 ordinal)", async () => {
+    // Populate all three anchors so the ordinal is observable: an AGENTS.md
+    // instruction block, a non-empty agent registry, and a durable block.
+    mockGetInstructionBlocks.mockResolvedValue([agentsBlock("global rules")]);
+    mockAgentList.mockReturnValue([
+      agentView({
+        id: "agent-lead-researcher",
+        name: "Lead Researcher",
+        description: "Built-in research specialist.",
+      }),
+      agentView({
+        id: "user:agent:lead-researcher",
+        name: "My Researcher",
+        description: "User-defined researcher.",
+      }),
+    ]);
+    mockDurableRetrieve.mockResolvedValue({
+      memories: [{ memoryId: "mem-1" }],
+      tokenEstimate: 10,
+      contextBlock: "Durable user memory:\nsome durable block",
+    });
+
+    const asm = new AIChatContextAssembler();
+    const r = await asm.assemble({
+      conversationId: "conv-test",
+      currentUserMessage: "hello",
+      baseSystemPrompt: "base-system-prompt",
+      mode: "chat",
+    });
+
+    const agentsIdx = findAgentsMessage(r.messages);
+    expect(agentsIdx).toBeGreaterThan(-1);
+
+    const availableIdx = findAvailableAgentsMessage(r.messages);
+    expect(availableIdx).toBeGreaterThan(-1);
+
+    const durableIdx = r.messages.findIndex(
+      (m) =>
+        m.role === "system" &&
+        typeof m.content === "string" &&
+        m.content.startsWith("Durable user memory")
+    );
+    expect(durableIdx).toBeGreaterThan(-1);
+
+    // CTX-01 ordinal: instructions < available-agents < durable memory.
+    expect(availableIdx).toBeGreaterThan(agentsIdx);
+    expect(availableIdx).toBeLessThan(durableIdx);
+
+    // The block lists BOTH agents and lets the model copy the exact scoped ID.
+    const block = r.messages[availableIdx].content as string;
+    expect(block).toContain("agent-lead-researcher");
+    expect(block).toContain("user:agent:lead-researcher");
+  });
+
+  it("D-Discovery: an EMPTY registry pushes NO block (skip empty)", async () => {
+    mockAgentList.mockReturnValue([]);
+
+    const asm = new AIChatContextAssembler();
+    const r = await asm.assemble({
+      conversationId: "conv-test",
+      currentUserMessage: "hello",
+      baseSystemPrompt: "sysp",
+      mode: "chat",
+    });
+
+    expect(findAvailableAgentsMessage(r.messages)).toBe(-1);
+  });
+
+  it("D-Discovery: registry access throwing degrades to no-injection and does not break assemble() (graceful)", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    mockAgentList.mockImplementation(() => {
+      throw new Error("registry boom");
+    });
+
+    const asm = new AIChatContextAssembler();
+    const r = await asm.assemble({
+      conversationId: "conv-test",
+      currentUserMessage: "hello",
+      baseSystemPrompt: "sysp",
+      mode: "chat",
+    });
+
+    // assemble() must still resolve with a valid messages array.
+    expect(r.messages.length).toBeGreaterThan(0);
+    expect(r.messages[0]).toEqual({ role: "system", content: "sysp" });
+    expect(r.messages[r.messages.length - 1]).toEqual({
+      role: "user",
+      content: "hello",
+    });
+    // No available-agents block leaked through.
+    expect(findAvailableAgentsMessage(r.messages)).toBe(-1);
+    // The graceful-degradation path logged the failure.
+    expect(spy).toHaveBeenCalled();
+    const logged = spy.mock.calls
+      .map((c) => String(c[0]))
+      .some((s) => s.includes("available agents injection failed"));
+    expect(logged).toBe(true);
+    spy.mockRestore();
   });
 });
