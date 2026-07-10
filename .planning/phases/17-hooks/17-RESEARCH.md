@@ -551,20 +551,23 @@ async ensureMigrationSeed(): Promise<void> {
 
 **Note on confidence:** All other claims in this research are `[VERIFIED: codebase]` (traced to specific files/lines this session) or `[CITED: technical-design §X]` / `[CITED: PRD §X]` (quoted from the in-repo design docs). The gsd-tools classify-confidence seam was unavailable in this environment; tiers assigned manually from source authority: codebase traces = HIGH, design-doc citations = HIGH (authoritative for this project), assumptions A1-A5 = LOW.
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **SessionStart / Stop / UserPromptSubmit emitters - wire this phase or defer?**
    - What we know: HOK-01 names "matchers for PreToolUse/PostToolUse/SessionStart/Stop". The registry + dispatcher SUPPORT all 8 `HookEventName` values. But ONLY PreToolUse/PostToolUse/PostToolUseFailure have emitters today (`StreamEventProcessor` L752/781/821). SessionStart/Stop/UserPromptSubmit have ZERO emission sites. `[VERIFIED: codebase - grep for eventName "SessionStart"/"Stop"/"UserPromptSubmit" returns nothing in src/]`
    - What's unclear: does HOK-01 require live emitters for all 4 events, or just that `hooks.json` can DECLARE matchers for them (with dormant registration)?
    - Recommendation: **Register all 4 events from hooks.json (reject truly-unknown event names with an `unsupported-event` diagnostic), but only PreToolUse/PostToolUse are live this phase.** Wiring SessionStart/Stop emitters at stream start/stop is cheap (two `HookDispatcher.executeHooks` calls) and completes HOK-01's event coverage - recommend the planner include it as a small task. If scope-bound, defer the emitters and document SessionStart/Stop as "registered, fires when emitter lands."
+   - **RESOLVED:** wire SessionStart/Stop emitters in Plan 03 Task 2 (StreamEventProcessor stream-start/completion `executeHooks` calls). UserPromptSubmit stays out of HOK-01 event scope (not named by HOK-01).
 
 2. **Sync `trustResolver` hydration timing**
    - What we know: the manager's `trustResolver` is sync; TypeORM is async (Pitfall 5). The bridge is a sync map hydrated from the entity.
    - What's unclear: exactly WHEN the map is hydrated (at manager construction? on first acquire? on each trust write?).
    - Recommendation: hydrate at `initWorkspaceWatchManager` (startup, after the migration seed) + on every `markWorkspaceApproved`/revoke write. The map is the sync-read cache; the entity is the durable source.
+   - **RESOLVED:** hydrate the entity-backed sync trust cache at `initWorkspaceWatchManager` (after `ensureMigrationSeed`) + re-hydrate on every `markWorkspaceApproved`/revoke write — implemented in Plan 02 Task 2b.
 
 3. **`/hooks` built-in command - include or defer?**
    - CONTEXT.md marks it Claude's-discretion nice-to-have. Recommend DEFER to avoid scope creep - HOK-01/02 success criteria don't require it, and `/status` already shows a hook count.
+   - **RESOLVED:** defer `/hooks` command (out of HOK-01/02 scope); `/status` already shows a hook count.
 
 ## Environment Availability
 
@@ -723,10 +726,10 @@ Existing hook tests at `test/vitest/utilitycode/hooks/` (HookRegistry, HookDispa
 | Pitfalls | HIGH | All grounded in actual codebase behavior (sync resolver, spawn latency, splitter, source enum) |
 | Event Coverage | MEDIUM | SessionStart/Stop emitter wiring is a genuine scope decision (A5) |
 
-### Open Questions
-1. SessionStart/Stop/UserPromptSubmit emitters - wire this phase or register-dormant? (Recommend: wire at stream start/stop - cheap, completes HOK-01 coverage.)
-2. Sync `trustResolver` hydration timing - at startup + on every trust write (map = sync cache, entity = durable source).
-3. `/hooks` built-in command - defer (out of HOK-01/02 success criteria).
+### Open Questions (RESOLVED)
+1. SessionStart/Stop/UserPromptSubmit emitters - wire this phase or register-dormant? RESOLVED: wire SessionStart/Stop in Plan 03 Task 2.
+2. Sync `trustResolver` hydration timing - at startup + on every trust write (map = sync cache, entity = durable source). RESOLVED: hydrate at initWorkspaceWatchManager (after ensureMigrationSeed) + on every trust write/revoke — Plan 02 Task 2b.
+3. `/hooks` built-in command - defer (out of HOK-01/02 success criteria). RESOLVED: deferred.
 
 ### Ready for Planning
 Research complete. The central architectural question (execution-boundary mechanism) is settled with code evidence, all integration points are traced to specific files/lines, and the Validation Architecture maps every requirement + success criterion to a concrete test + grep gate. Planner can now create PLAN.md files.
