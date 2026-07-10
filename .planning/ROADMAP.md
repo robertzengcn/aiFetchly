@@ -187,7 +187,17 @@ Plans:
 3. The `AIFetchlyWorkspaceTrust` entity persists per-capability trust (instructions/commands/agents/hooks/skills) via Model/Module (no DB access from worker).
 4. Hook failures are non-fatal and surface as diagnostics; unsupported events produce diagnostics.
 
-**Plans:** TBD
+**Plans:** 3 plans
+Plans:
+
+**Wave 1**
+
+- [ ] 17-01-PLAN.md — AIFetchlyWorkspaceTrust entity/model/module + migration seed + schema-apply [BLOCKING] (TRS-02) + HookRegistry.replaceSource/unregisterSource (HOK-01) + maxHooksPerSource/diagnostic-code constants
+
+**Wave 2** *(parallel; both depend on 17-01, zero file overlap)*
+
+- [ ] 17-02-PLAN.md — hooks.json parse layer (buildHookDefinition + global/worker scanners + converter) + hooks: trust-filter line + entity-backed sync trust cache replacing approvalCache (HOK-01, TRS-02)
+- [ ] 17-03-PLAN.md — NEW hook-execution worker (protocol + entry + client + forge/vite) + dispatcher command-hook worker routing + skill-ref no-op + SessionStart/Stop emitters (HOK-02)
 
 ### Phase 18: Skills and Plugin Integration
 
