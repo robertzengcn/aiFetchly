@@ -196,7 +196,7 @@ Plans:
 
 **Wave 2** *(parallel; both depend on 17-01, zero file overlap)*
 
-- [ ] 17-02-PLAN.md — hooks.json parse layer (buildHookDefinition + global/worker scanners + converter) + hooks: trust-filter line + entity-backed sync trust cache replacing approvalCache (HOK-01, TRS-02)
+- [x] 17-02-PLAN.md — hooks.json parse layer (buildHookDefinition + global/worker scanners + converter) + hooks: trust-filter line + entity-backed sync trust cache replacing approvalCache (HOK-01, TRS-02)
 - [ ] 17-03-PLAN.md — NEW hook-execution worker (protocol + entry + client + forge/vite) + dispatcher command-hook worker routing + skill-ref no-op + SessionStart/Stop emitters (HOK-02)
 
 ### Phase 18: Skills and Plugin Integration
@@ -245,5 +245,5 @@ Plans:
 | 14. Workspace Watcher Worker | v2.0 | 3/5 | In Progress|  |
 | 15. Prompt Command Files | v2.0 | 2/2 | Complete    | 2026-07-07 |
 | 16. Dynamic Agents | v2.0 | 3/3 | Complete   | 2026-07-09 |
-| 17. Hooks | v2.0 | 1/3 | In Progress|  |
+| 17. Hooks | v2.0 | 2/3 | In Progress|  |
 | 18. Skills and Plugin Integration | v2.0 | 0/? | Not started | — |
