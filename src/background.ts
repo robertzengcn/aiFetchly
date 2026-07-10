@@ -48,6 +48,7 @@ import {
   urlContainsTokenParams as deepLinkUrlContainsTokenParams,
   isValidDeepLinkOrigin as deepLinkIsValidDeepLinkOrigin,
 } from "@/modules/deepLinkSecurity";
+import { createNavigationGuardHandler } from "@/main-process/security/navigationGuard";
 // import { RAGIpcHandlers } from '@/main-process/ragIpcHandlers';
 // import { createProtocol } from 'electron';
 const isDevelopment = process.env.NODE_ENV !== "production";
@@ -318,6 +319,27 @@ function initialize() {
       // Ensure menu bar is hidden by default + register shortcuts to show/toggle.
       registerMenuBarShortcuts(win);
 
+      // Security: block renderer navigation/redirects to untrusted (external)
+      // origins so the privileged preload is never re-injected on an attacker page.
+      const navGuardTrustedOrigins: string[] = [];
+      if (MAIN_WINDOW_VITE_DEV_SERVER_URL) {
+        try {
+          navGuardTrustedOrigins.push(
+            new URL(MAIN_WINDOW_VITE_DEV_SERVER_URL).origin
+          );
+        } catch {
+          /* malformed dev-server URL — leave untrusted */
+        }
+      }
+      const onWillNavigate = createNavigationGuardHandler({
+        trustedOrigins: navGuardTrustedOrigins,
+        trustedProtocols: ["aifetchly:"],
+      });
+      // `as any` matches the file's pattern — the electron tsconfig mock (aliased
+      // in tsconfig.paths) does not type the EventEmitter `.on`. See WS-7 R7.2.
+      (win as any).webContents.on("will-navigate", onWillNavigate);
+      (win as any).webContents.on("will-redirect", onWillNavigate);
+
       console.log(
         "Window exist, prepare to register communication ipc handlers"
       );
@@ -394,6 +416,10 @@ function initialize() {
           // fullscreenable: false,
           backgroundColor: "black",
           webPreferences: {
+            // Harden child windows explicitly (defaults are safe; be explicit
+            // so a future Electron default change cannot regress us).
+            contextIsolation: true,
+            nodeIntegration: false,
             preload: path.join(__dirname + "/preload.js"),
           },
         },
