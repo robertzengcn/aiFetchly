@@ -46,10 +46,20 @@
 
 | Feature | Description |
 |---------|-------------|
-| **Knowledge Library** | Upload documents and chat with an AI that understands your content. Semantic search across your entire knowledge base using vector embeddings. |
+| **Knowledge Library (RAG)** | Upload PDF, TXT, DOC/DOCX, Markdown, HTML, CSV, and Excel files into a local knowledge base. The app detects duplicate uploads, tracks processing progress, chunks documents, and stores vector embeddings for retrieval-augmented generation. |
+| **Embedding Model Settings** | Select and update the embedding model used by the Knowledge Library, with model metadata such as dimensions and availability shown in the UI. |
 | **AI Marketing Assistant** | Get strategic marketing guidance through AI-powered chat, grounded in your own documents. |
 | **Task Scheduling** | Schedule any task with cron timing, chain dependent tasks, set up recurring jobs, and monitor execution history. |
-| **Installable Skills** | Extend the platform with skill packages — PDF processing, data analysis, and more. No coding required. |
+| **Installable Skills** | Extend the platform with skill packages — PDF processing, data analysis, automation helpers, and more. No coding required. |
+
+### Extensibility & Control
+
+| Feature | Description |
+|---------|-------------|
+| **Skills Management** | Import skills from ZIP packages, list built-in/user-installed/plugin-provided skills, enable or disable them, and uninstall user-installed skills. |
+| **Plugin Management** | Import plugin ZIPs or install plugins from source folders. Manage plugin enablement, health, format, included skills, and MCP servers from one screen. |
+| **Claude-Style Plugin Compatibility** | Supports both aiFetchly plugin format and Claude-style plugin packages, so plugin bundles can contribute skills and MCP server definitions. |
+| **Hooks Management** | Create command hooks for AI/chat lifecycle events such as session start, prompt submit, tool use, permission requests, and stop events. Hooks support matchers, conditions, timeouts, warn/block failure modes, global enablement, and audit logs. |
 
 ### Social Media & Infrastructure
 
