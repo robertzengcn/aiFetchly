@@ -382,6 +382,18 @@ export default ({ mode }) => {
             // transpile-only mode silently passes files with type errors
             // (this exact issue bit us during the zod schema rollout).
             globalSetup: ['./test/vitest/_typecheck/globalSetup.ts'],
+            // WS-2: coverage (only active when run with --coverage).
+            coverage: {
+                provider: 'v8',
+                reporter: ['text', 'html', 'lcov'],
+                reportsDirectory: './coverage/main',
+                include: [
+                    'src/main-process/**', 'src/service/**', 'src/modules/**',
+                    'src/model/**', 'src/controller/**', 'src/utils/**',
+                    'src/config/**', 'src/schemas/**', 'src/entity/**', 'src/entityTypes/**',
+                ],
+                exclude: ['**/*.test.ts', 'test/**', 'src/**/*.d.ts', '**/index.ts'],
+            },
         }
     })
 }
