@@ -15,7 +15,7 @@
 
 ---
 
-**aiFetchly** is an open-source desktop agent that combines AI with marketing automation to help you find leads, extract contacts, run personalized email outreach campaigns, and manage social media — all from one place.
+**aiFetchly** is an open-source desktop agent that combines AI with marketing automation to help you find leads, extract contacts, run personalized email outreach campaigns, and manage social account — all from one place.
 
 ## Why aiFetchly?
 
@@ -50,7 +50,8 @@
 | **Embedding Model Settings** | Select and update the embedding model used by the Knowledge Library, with model metadata such as dimensions and availability shown in the UI. |
 | **AI Marketing Assistant** | Get strategic marketing guidance through AI-powered chat, grounded in your own documents. |
 | **Task Scheduling** | Schedule any task with cron timing, chain dependent tasks, set up recurring jobs, and monitor execution history. |
-| **Installable Skills** | Extend the platform with skill packages — PDF processing, data analysis, automation helpers, and more. No coding required. |
+| **Installable Skills** | Extend the platform with skill packages — File processing, data analysis, automation helpers, and more. No coding required. |
+| **Application Support Subagent** | Deploy specialist AI subagents (Lead Researcher, etc.) that run autonomously with their own system prompt, tool allowlist, resource limits, and structured output schema. Triggered via the `run_subagent` tool from any AI chat session. Tool calls are policy-gated (global denylist + agent allowlist + per-task blocked-tools). Agent tasks persist with full transcript and tool-call audit trails, viewable from a background-agents panel in the chat UI. |
 
 ### Extensibility & Control
 
@@ -61,7 +62,7 @@
 | **Claude-Style Plugin Compatibility** | Supports both aiFetchly plugin format and Claude-style plugin packages, so plugin bundles can contribute skills and MCP server definitions. |
 | **Hooks Management** | Create command hooks for AI/chat lifecycle events such as session start, prompt submit, tool use, permission requests, and stop events. Hooks support matchers, conditions, timeouts, warn/block failure modes, global enablement, and audit logs. |
 
-### Social Media & Infrastructure
+###  Infrastructure
 
 | Feature | Description |
 |---------|-------------|
@@ -87,7 +88,7 @@ git clone https://github.com/robertzeng/aiFetchly.git
 cd aiFetchly
 
 # Install dependencies
-yarn
+yarn install
 
 # Initialize the local SQLite database
 yarn init
@@ -131,16 +132,6 @@ yarn make-linux:prod   # Linux
 ```bash
 # Run all tests
 yarn test
-
-# Run a specific test by pattern
-npx mocha test test/modules --grep "video-url-list"
-
-# Run vitest suites
-yarn vitest-googlescraper
-yarn testmain
-
-# Debug mode
-DEBUG='bilibili-scraper:Scraper' yarn testdownload
 ```
 
 ### Project Structure
