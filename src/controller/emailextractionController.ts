@@ -13,7 +13,7 @@ import { readLogFile } from "@/modules/lib/function";
 // import { v4 as uuidv4 } from 'uuid';
 // import {EmailsearchTaskStatus} from '@/model/emailsearchTaskdb'
 // import {ProcessMessage} from "@/entityTypes/processMessage-type"
-import { SortBy } from "@/entityTypes/commonType";
+import { SortBy, TaskStatus } from "@/entityTypes/commonType";
 // import { SystemSettingGroupModule } from '@/modules/SystemSettingGroupModule';
 // import {twocaptchagroup,twocaptchatoken,twocaptcha_enabled} from '@/config/settinggroupInit'
 
@@ -378,8 +378,7 @@ export class EmailextractionController {
     }
 
     // Only allow editing pending or error tasks
-    if (task.status !== 0 && task.status !== 2) {
-      // 0 = pending, 2 = error
+    if (task.status !== TaskStatus.Notstart && task.status !== TaskStatus.Error) {
       throw new Error("Cannot edit task with current status");
     }
 

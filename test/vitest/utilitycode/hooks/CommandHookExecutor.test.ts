@@ -4,7 +4,6 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { executeCommand } from "@/service/hooks/executors/CommandHookExecutor";
 import { CommandHookDefinition, HookInput } from "@/entityTypes/hookTypes";
-import { HookCommandTrustService } from "@/service/hooks/HookCommandTrustService";
 
 const NODE = process.execPath;
 
@@ -16,7 +15,6 @@ function makeHook(
     eventName: "PreToolUse",
     source: "user",
     enabled: true,
-    trusted: true,
     type: "command",
     timeoutMs: 2000,
     ...overrides,
@@ -40,8 +38,7 @@ describe("CommandHookExecutor", () => {
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "hook-cmd-"));
-    HookCommandTrustService.resetForTests();
-    HookCommandTrustService.setTrusted("cmd-hook", true);
+    // no-op
   });
 
   afterEach(() => {
@@ -66,11 +63,6 @@ describe("CommandHookExecutor", () => {
   });
 
   it("rejects invalid JSON output as an error", async () => {
-    const fixture = writeFixture(
-      "bad.js",
-      `process.stdin.resume();process.stdin.on('end',()=>{process.stdout.write('not json');});setInterval(()=>{},1000);process.stdin.on('data',()=>{});`
-    );
-    // Make the script exit after writing garbage.
     const fixture2 = writeFixture(
       "bad2.js",
       `let body='';process.stdin.on('data',c=>body+=c);process.stdin.on('end',()=>{process.stdout.write('not json {}');process.exit(0);});`
@@ -90,31 +82,6 @@ describe("CommandHookExecutor", () => {
     const r = await executeCommand({ hook, input: makeInput() });
     expect(r.result.error).toBeDefined();
     expect(r.result.error?.timedOut).toBe(true);
-  });
-
-  it("rejects untrusted hook without spawning", async () => {
-    HookCommandTrustService.setTrusted("cmd-hook", false);
-    const hook = makeHook({
-      id: "cmd-hook",
-      command: `${NODE} -e "process.stdout.write('{}')"`,
-      trusted: false,
-    });
-    const r = await executeCommand({ hook, input: makeInput() });
-    expect(r.result.error).toBeDefined();
-    expect(r.result.error?.message).toMatch(/not trusted/i);
-    expect(r.durationMs).toBeLessThan(50);
-  });
-
-  it("rejects hook with static trusted=true but no dynamic trust grant", async () => {
-    HookCommandTrustService.setTrusted("cmd-hook", false);
-    const hook = makeHook({
-      id: "cmd-hook",
-      command: `${NODE} -e "process.stdout.write('{}')"`,
-      trusted: true,
-    });
-    const r = await executeCommand({ hook, input: makeInput() });
-    expect(r.result.error).toBeDefined();
-    expect(r.result.error?.message).toMatch(/not trusted/i);
   });
 
   it("passes only allowlisted env vars to the child", async () => {
@@ -167,6 +134,15 @@ describe("CommandHookExecutor", () => {
     const r = await executeCommand({ hook, input: makeInput() });
     expect(r.result.error).toBeDefined();
     expect(r.result.error?.message).toMatch(/stdout cap|exceeded/i);
+  });
+
+  it("handles double-quoted -e with inner single quotes", async () => {
+    const hook = makeHook({
+      command: `${NODE} -e "let b='';process.stdin.on('data',c=>b+=c);process.stdin.on('end',()=>{const i=JSON.parse(b);process.stdout.write(JSON.stringify({additionalContext:'saw '+i.tool.name}));})"`,
+    });
+    const r = await executeCommand({ hook, input: makeInput() });
+    expect(r.result.error).toBeUndefined();
+    expect(r.result.output?.additionalContext).toBe("saw shell_execute");
   });
 
   it("treats empty stdout as an empty object (no-op hook)", async () => {

@@ -1,6 +1,7 @@
 <template>
     
-    <v-data-table-server v-model="selected" :search="search" :headers="headers" :items-per-page="itemsPerPage"
+    <v-data-table-server
+v-model="selected" :search="search" :headers="headers" :items-per-page="itemsPerPage"
         :items-length="totalItems" :items="serverItems" :loading="loading" item-value="name" @update:options="loadItems" return-object show-select>
     </v-data-table-server>
 
@@ -25,7 +26,7 @@ const FakeAPI = {
     async fetch(fetchparam: Fetchparam): Promise<SearchProxyResp> {
         // console.log(fetchparam.search)
         const fpage=(fetchparam.page-1)*fetchparam.itemsPerPage
-        const res=await getProxyList({ page: fpage, size: fetchparam.itemsPerPage, sortby: fetchparam.sortBy, search: fetchparam.search })
+        const res=await getProxyList({ page: fpage, size: fetchparam.itemsPerPage, search: fetchparam.search })
         console.log(res)
         return res
     }

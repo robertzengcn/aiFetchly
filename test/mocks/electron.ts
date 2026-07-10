@@ -57,6 +57,11 @@ export class BrowserWindow {
   static getAllWindows(): unknown[] {
     return [];
   }
+
+  /** Mirrors Electron's static lookup; returns null in tests. */
+  static fromWebContents(_contents: unknown): BrowserWindow | null {
+    return null;
+  }
 }
 
 export const ipcMain = {

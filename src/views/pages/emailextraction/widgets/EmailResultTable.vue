@@ -209,11 +209,14 @@ function loadItems({ page = 1, itemsPerPage = 10, sortBy }) {
 //     path: '/graphics/oasis-engine',
 // });
 // };
-const openfolder = (item) => {
-  // console.log(item)
-  router.push({
-    name: 'Email_Extraction_Task_Detail', params: { id: item.id }
-  });
+const openfolder = async (item: EmailsearchTaskEntityDisplay) => {
+  try {
+    await router.push({
+      name: 'Email_Extraction_Task_Detail', params: { id: item.id }
+    });
+  } catch (error) {
+    console.error('openfolder navigation failed:', error);
+  }
 }
 const downloadErrorlog = async (item) => {
     try {
@@ -276,11 +279,14 @@ const startTask = async (item: EmailsearchTaskEntityDisplay) => {
 }
 
 // Edit task
-const editTask = (item: EmailsearchTaskEntityDisplay) => {
-  console.log("edit task", item)
-  router.push({
-    name: 'Email_Extraction_Edit', params: { id: item.id }
-  });
+const editTask = async (item: EmailsearchTaskEntityDisplay) => {
+  try {
+    await router.push({
+      name: 'Email_Extraction_Edit', params: { id: item.id }
+    });
+  } catch (error) {
+    console.error('editTask navigation failed:', error);
+  }
 }
 
 // Delete task

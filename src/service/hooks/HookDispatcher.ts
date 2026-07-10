@@ -3,12 +3,18 @@ import {
   EMPTY_AGGREGATE,
   HookEventName,
   HookInput,
+  PreToolUseHookInput,
+  PostToolUseHookInput,
+  PostToolUseFailureHookInput,
+  PermissionRequestHookInput,
 } from "@/entityTypes/hookTypes";
 import { HookRegistry } from "./HookRegistry";
 import { aggregateResults, HookSingleResult } from "./HookResultAggregator";
 import { executeCallback } from "./executors/CallbackHookExecutor";
 import { executeCommand } from "./executors/CommandHookExecutor";
 import { buildAuditEntry, getHookAuditLogger } from "./HookAuditService";
+import { Token } from "@/modules/token";
+import { USER_HOOKS_ENABLED } from "@/config/usersetting";
 
 /**
  * Public dispatcher API. `executeHooks` is the single entry point
@@ -31,18 +37,32 @@ export interface HookDispatcherApi {
 }
 
 class HookDispatcherImpl implements HookDispatcherApi {
-  /** Toggles globally; future USER_HOOKS_ENABLED gate plugs in here. */
-  private enabled = true;
-
   async executeHooks(args: ExecuteHooksInput): Promise<AggregatedHookResult> {
-    if (!this.enabled) return EMPTY_AGGREGATE;
+    // Global enable gate — Token-backed so the System Settings UI
+    // can toggle the whole subsystem without touching dispatcher
+    // internals. Defaults to ON when the Token value is unset.
+    // Set USER_HOOKS_ENABLED to "false" to disable all hooks.
+    //
+    // Per-call Token construction is intentional: electron-store caches
+    // its JSON state in-memory per Store instance (loaded once on
+    // construction), so a cached Token field would hold a stale view
+    // that never sees writes from the IPC handler's separate Token.
+    // Every sibling gate (USER_AI_ENABLED: 8 call sites in src/) uses
+    // the same per-call pattern for this reason.
+    if (new Token().getValue(USER_HOOKS_ENABLED) === "false") {
+      return EMPTY_AGGREGATE;
+    }
 
     const { eventName, input, matchQuery, abortSignal } = args;
     if (abortSignal?.aborted) return EMPTY_AGGREGATE;
 
+    // Extract tool input for `if` condition evaluation.
+    const toolInput = extractToolInput(input);
+
     const hooks = HookRegistry.getMatchingHooks({
       eventName,
       matchQuery,
+      toolInput,
       // The dispatcher does not own a sessionId; session hooks are
       // fetched by callers that pass a sessionId-aware registry in a
       // future iteration. For MVP, the StreamEventProcessor runs in
@@ -109,13 +129,21 @@ class HookDispatcherImpl implements HookDispatcherApi {
 
     return aggregateResults(results);
   }
-
-  /** Test-only: flip the global enable. */
-  setEnabledForTests(value: boolean): void {
-    this.enabled = value;
-  }
 }
 
-export const HookDispatcher: HookDispatcherApi & {
-  setEnabledForTests(value: boolean): void;
-} = new HookDispatcherImpl();
+export const HookDispatcher: HookDispatcherApi = new HookDispatcherImpl();
+
+/** Extract tool input args from a HookInput, if the event carries them. */
+function extractToolInput(
+  input: HookInput
+): Record<string, unknown> | undefined {
+  if (
+    input.eventName === "PreToolUse" ||
+    input.eventName === "PostToolUse" ||
+    input.eventName === "PostToolUseFailure" ||
+    input.eventName === "PermissionRequest"
+  ) {
+    return (input as PreToolUseHookInput | PostToolUseHookInput | PostToolUseFailureHookInput | PermissionRequestHookInput).input;
+  }
+  return undefined;
+}

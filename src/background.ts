@@ -1,19 +1,22 @@
 "use strict";
 import "reflect-metadata";
 // import {ipcMain as ipc} from 'electron-better-ipc';
-import { app, BrowserWindow, Menu, dialog } from "electron";
+import { app, BrowserWindow, Menu, dialog, shell } from "electron";
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const autoUpdater = require("electron").autoUpdater;
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const globalShortcut = require("electron").globalShortcut;
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const session = require("electron").session;
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const crashReporter = require("electron").crashReporter;
 // import { createProtocol } from 'vue-cli-plugin-electron-builder/lib'
 import installExtension, { VUEJS3_DEVTOOLS } from "electron-devtools-installer";
 import { registerCommunicationIpcHandlers } from "./main-process/communication/";
 import { SkillImportService } from "@/service/SkillImportService";
 import { FileOperationTracker } from "@/service/FileOperationTracker";
 import { registerBuiltinHooks } from "@/service/hooks/builtinHooks";
+import { isAppTrustedOrigin } from "@/service/OriginTrust";
 import * as path from "path";
 import { Token } from "@/modules/token";
 import { MenuManager } from "@/main-process/menu/MenuManager";
@@ -26,6 +29,17 @@ import {
 } from "@/config/usersetting";
 import { SqliteDb } from "@/config/SqliteDb";
 import { logger, log } from "@/modules/Logger";
+import { CrashReporterService } from "@/modules/diagnostics/CrashReporterService";
+import {
+  ensureDiagnosticsDirs,
+  getStartupMarkerPath,
+  getNativeDumpsDir,
+} from "@/modules/diagnostics/DiagnosticPaths";
+import {
+  newSessionId,
+  getOrCreateInstallId,
+} from "@/modules/diagnostics/DiagnosticIdentity";
+import { DiagnosticRetentionService } from "@/modules/diagnostics/DiagnosticRetentionService";
 import fs from "fs";
 import ProtocolRegistry from "protocol-registry";
 //import { RemoteSource } from '@/modules/remotesource'
@@ -72,24 +86,77 @@ const logDir = logger.getLogDir();
 
 // Console override and log verification are now handled by the Logger module
 
+// Diagnostics: crash reporter, breadcrumb buffer, retention service.
+// Initialized before any other code so uncaught exceptions during startup
+// are captured. The diagnostics handlers are installed first; a separate
+// user-facing dialog handler is registered below.
+ensureDiagnosticsDirs();
+const __sessionId = newSessionId();
+const __diagnosticsRetention = new DiagnosticRetentionService();
+const __crashReporter = new CrashReporterService({
+  sessionId: __sessionId,
+  installId: getOrCreateInstallId(),
+  appVersion: (app as any).getVersion(),
+  platform: process.platform,
+  arch: process.arch,
+});
+(
+  globalThis as unknown as {
+    __aifetchlyCrashReporter: CrashReporterService;
+  }
+).__aifetchlyCrashReporter = __crashReporter;
+__crashReporter.installProcessHandlers(process);
+__diagnosticsRetention.schedule();
+
+// Unclean shutdown detection: read previous session's startup marker (if any)
+// and record an unclean shutdown record, then write this session's marker.
+//
+// PRODUCTION ONLY. During development (electron-forge start, the Cursor/VS Code
+// debugger) the process is killed and restarted repeatedly without a graceful
+// `before-quit`, so the marker would survive and surface a spurious "send
+// crash report" prompt on every launch. In dev we neither consult nor write the
+// marker, and clear any stale one so a later production launch can't misread a
+// dev kill as a real unclean shutdown. `app.isPackaged` is the reliable signal
+// here (NODE_ENV is not auto-set to "production" in packaged Electron builds).
+const __startupMarker = getStartupMarkerPath();
+if ((app as any).isPackaged) {
+  let __previousSessionId: string | undefined;
+  if (fs.existsSync(__startupMarker)) {
+    try {
+      const prev = JSON.parse(fs.readFileSync(__startupMarker, "utf8")) as {
+        sessionId?: string;
+      };
+      __previousSessionId = prev.sessionId;
+      __crashReporter.recordUncleanShutdown(__previousSessionId);
+    } catch {
+      __crashReporter.recordUncleanShutdown();
+    }
+  }
+  fs.writeFileSync(
+    __startupMarker,
+    JSON.stringify({ sessionId: __sessionId, ts: Date.now() })
+  );
+} else {
+  // Dev: clear any stale marker left by a previous (killed) run.
+  try {
+    fs.rmSync(__startupMarker, { force: true });
+  } catch {
+    /* ignore */
+  }
+}
+
 log.info("Application starting...");
 
-// Handle uncaught exceptions
+// Handle uncaught exceptions — user-facing dialog only.
+// Crash record persistence is handled by __crashReporter (registered above,
+// which runs first as it was registered earlier).
 process.on("uncaughtException", (error) => {
-  log.error("Uncaught Exception:", error);
-
-  // Show error dialog if possible
   if ((app as any).isReady()) {
     dialog.showErrorBox(
       "Application Error",
       `An unexpected error occurred: ${error.message}\n\nDetails have been logged.`
     );
   }
-});
-
-// Handle unhandled promise rejections
-process.on("unhandledRejection", (reason) => {
-  log.error("Unhandled Promise Rejection:", reason);
 });
 
 let win: BrowserWindow | null;
@@ -128,6 +195,12 @@ function registerMenuBarShortcuts(mainWindow: BrowserWindow): void {
 }
 
 function initialize() {
+  // HMR guard: prevent re-initialization on Vite hot reload
+  if ((globalThis as any).__aifetchlyAppInitialized) {
+    log.info("[HMR] App already initialized, skipping re-init");
+    return;
+  }
+  (globalThis as any).__aifetchlyAppInitialized = true;
   // protocol.registerSchemesAsPrivileged([
 
   //   { scheme: appName, privileges: { secure: true,
@@ -273,15 +346,25 @@ function initialize() {
   let createWindowInFlight: Promise<void> | null = null;
 
   async function createWindow(): Promise<void> {
-    if (win && !(win as any).isDestroyed()) {
-      console.log("Window already exists and is valid, focusing...");
-      (win as any).focus();
-      return;
+    const existingWindows = BrowserWindow.getAllWindows() as any[];
+    if (existingWindows.length > 0) {
+      const existing = existingWindows[0];
+      if (!existing.isDestroyed()) {
+        console.log("Window already exists and is valid, focusing...");
+        if (!win) win = existing;
+        existing.focus();
+        return;
+      }
     }
     if (createWindowInFlight) {
       await createWindowInFlight;
-      if (win && !(win as any).isDestroyed()) {
-        (win as any).focus();
+      const existingWindows2 = BrowserWindow.getAllWindows() as any[];
+      if (existingWindows2.length > 0) {
+        const existing = existingWindows2[0];
+        if (!existing.isDestroyed()) {
+          if (!win) win = existing;
+          existing.focus();
+        }
       }
       return;
     }
@@ -392,40 +475,58 @@ function initialize() {
     // In this example, only windows with the `about:blank` url will be created.
     // All other urls will be blocked.
     (win as any).webContents.setWindowOpenHandler(({ url }) => {
-      // console.log(url)
-      //if (url === '_blank') {
+      // F9 fix — only attach the privileged preload bridge to trusted app
+      // origins. Untrusted child windows (any external URL, including
+      // attacker-controlled pages opened via window.open from a compromised
+      // renderer) must NOT receive window.api or any other privileged
+      // surface, otherwise they can read or delete AI chat history, drive
+      // shell/file tools, etc.
+      //
+      // The trusted set (about:/file:/app: schemes + the Vite dev-server
+      // origin) is defined once in OriginTrust and shared with privileged
+      // IPC handlers (e.g. MCP_TOOL_TRUST). Anything else is forwarded to
+      // the OS browser via shell.openExternal and the in-app child
+      // BrowserWindow is denied.
+      const isTrustedOrigin = isAppTrustedOrigin(url);
 
-      //   const url = new URL(req.url);
-      //   const filePath = url.pathname;
-
-      // if (url.startsWith(`${protocolScheme}://`)) {   // Handle token data if it's in the URL
-      //   if (url.searchParams.has('token')) {
-      //     const tokenService = new Token()
-      //     const token = url.searchParams.get('token');
-      //     if (token) {
-      //       log.info('Token received, setting USERSDBPATH');
-      //       tokenService.setValue(USERSDBPATH, token);
-      //     }
-      //   }
-      // }
+      if (!isTrustedOrigin) {
+        // Open externally WITHOUT preload. Never expose the IPC bridge to
+        // arbitrary web content.
+        // F9 fix (bypass) — validate scheme before handing the URL to the
+        // OS handler. shell.openExternal will happily dispatch file://,
+        // smb://, custom protocol handlers, etc., which can launch
+        // arbitrary applications. Restrict to http/https.
+        try {
+          const parsed = new URL(url);
+          if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+            shell.openExternal(url).catch(() => {
+              /* ignore — best-effort external open */
+            });
+          } else {
+            console.warn(
+              `Refusing to open external URL with unsafe scheme: ${parsed.protocol}`
+            );
+          }
+        } catch {
+          /* ignore malformed URL */
+        }
+        return { action: "deny" };
+      }
 
       return {
         action: "allow",
         overrideBrowserWindowOptions: {
-          // frame: false,
-          // fullscreenable: false,
           backgroundColor: "black",
           webPreferences: {
             // Harden child windows explicitly (defaults are safe; be explicit
             // so a future Electron default change cannot regress us).
             contextIsolation: true,
             nodeIntegration: false,
+            sandbox: true,
             preload: path.join(__dirname + "/preload.js"),
           },
         },
       };
-      // }
-      // return { action: 'deny' }
     });
 
     // console.log(process.env.WEBPACK_DEV_SERVER_UR)
@@ -540,6 +641,18 @@ function initialize() {
 
   // Handle application shutdown
   (app as any).on("before-quit", async () => {
+    // Remove startup marker on clean shutdown so the next launch does not
+    // mistake a graceful exit for a crash.
+    try {
+      const __startupMarker = getStartupMarkerPath();
+      if (fs.existsSync(__startupMarker)) fs.rmSync(__startupMarker);
+    } catch {
+      /* ignore */
+    }
+
+    // Stop periodic diagnostics retention cleanup timer immediately.
+    __diagnosticsRetention.stop();
+
     // Terminate running async tool jobs first so workers are signalled early
     try {
       getDefaultToolJobRegistry().shutdown();
@@ -614,6 +727,22 @@ function initialize() {
     // Configure Content Security Policy (must be called after app is ready)
     configureContentSecurityPolicy();
 
+    // Install Electron app-level crash handlers (render-process-gone, etc.).
+    __crashReporter.installAppHandlers(app as any);
+
+    // Start Electron's native crashReporter to capture minidumps for the main
+    // and render processes. Dumps stay local (no upload) and are routed to
+    // the diagnostics folder for later inclusion in exported reports.
+    try {
+      crashReporter.start({
+        uploadToServer: false,
+        compress: true,
+      });
+      (app as any).setPath("crashDumps", getNativeDumpsDir());
+    } catch (e) {
+      log.warn("Failed to start Electron crashReporter", e);
+    }
+
     // Register built-in lifecycle hooks (disabled by default; flip
     // them on at runtime via HookRegistry for manual QA). See
     // src/service/hooks/builtinHooks.ts.
@@ -631,6 +760,10 @@ function initialize() {
     Menu.setApplicationMenu(menu);
 
     createWindow();
+
+    // Show crash prompt if there was an unclean shutdown (no-op otherwise).
+    // Fire-and-forget so it never blocks app startup.
+    void maybeShowCrashPrompt();
 
     // Schedule log cleanup (runs after 5 seconds delay, then every 24 hours)
     logger.scheduleLogCleanup();
@@ -666,6 +799,30 @@ function initialize() {
         await defModule.ensureBuiltIns();
       } catch (err) {
         log.error("Failed to seed built-in agent definitions:", err);
+      }
+
+      // Phase 4: load persisted user hooks into the registry and
+      // hydrate HookCommandTrustService from the DB. Must run AFTER
+      // SqliteDb is initialized and AFTER builtin hooks are registered
+      // (which happens via builtinHooks.ts at module init).
+      try {
+        const { HookModule } = await import("@/modules/HookModule");
+        const hookModule = new HookModule();
+        await hookModule.loadUserHooksIntoRegistry();
+
+        // Activate the persistent audit logger now that the module is ready.
+        const { HookAuditModule } = await import("@/modules/HookAuditModule");
+        const { PersistentHookAuditLogger, setHookAuditLogger } = await import(
+          "@/service/hooks/HookAuditService"
+        );
+        PersistentHookAuditLogger.setModule(new HookAuditModule());
+        setHookAuditLogger(PersistentHookAuditLogger);
+
+        log.info(
+          "Hook subsystem loaded user hooks and persistent audit logger"
+        );
+      } catch (err) {
+        log.error("Failed to load hook subsystem:", err);
       }
 
       // Initialize RAG IPC handlers
@@ -1034,6 +1191,53 @@ function sendLoginError(message: string): void {
       status: "error",
       message,
     });
+  }
+}
+
+/**
+ * Show the "report crash" prompt if the previous session ended in an
+ * unclean shutdown. No-op when there is no `unclean-shutdown` record on
+ * disk (e.g. first launch or after a clean exit). The function is wrapped
+ * in a try/catch so a failure in the diagnostics layer can never block
+ * app startup — `maybeShowCrashPrompt` is invoked fire-and-forget via
+ * `void` from `app.whenReady`.
+ *
+ * v1 note: this is not throttled by `lastPromptedCrashId`. The prompt
+ * shows at most once per session that has an unread unclean-shutdown
+ * record. Throttling is a P2 follow-up.
+ */
+async function maybeShowCrashPrompt(): Promise<void> {
+  // Production only (see startup-marker logic above). Dev builds are killed
+  // repeatedly without graceful shutdown, so prompting would be noise.
+  if (!(app as any).isPackaged) return;
+  try {
+    const { CrashLogSink } = await import("@/modules/diagnostics/CrashLogSink");
+    const records = CrashLogSink.readAll();
+    const latest = records.find((r) => r.crashType === "unclean-shutdown");
+    if (!latest) return;
+    const choice = await dialog.showMessageBox({
+      type: "question",
+      title: "AiFetchly",
+      message: "The app closed unexpectedly last time.",
+      detail:
+        "Send a diagnostics report to help us fix this? You can review what gets sent before sending.",
+      buttons: ["Send report", "Export report", "Dismiss"],
+      defaultId: 0,
+      cancelId: 2,
+    });
+    if (choice.response === 0) {
+      const { uploadLatestUncleanShutdown } = await import(
+        "@/main-process/communication/diagnostics-ipc"
+      );
+      await uploadLatestUncleanShutdown(latest.crashId);
+    } else if (choice.response === 1) {
+      const { exportLatestReport } = await import(
+        "@/main-process/communication/diagnostics-ipc"
+      );
+      await exportLatestReport(latest.crashId);
+    }
+  } catch (e) {
+    log.warn("[crash-prompt] failed", e);
   }
 }
 

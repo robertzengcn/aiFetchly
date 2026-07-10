@@ -21,6 +21,7 @@ import {
 export interface StagedAttachmentReference {
   refId: string;
   fileName: string;
+  filePath: string;
 }
 
 export interface StagedAttachmentContent {
@@ -31,6 +32,7 @@ export interface StagedAttachmentContent {
 
 interface StageAttachmentOptions {
   attachmentSha256?: string;
+  originalContentBase64?: string;
 }
 
 export class DocumentService {
@@ -258,9 +260,9 @@ export class DocumentService {
     }
 
     const refId = `${Date.now()}-${crypto.randomUUID()}`;
-    const filePath = path.join(stageDir, `${refId}.md`);
+    const mdPath = path.join(stageDir, `${refId}.md`);
     const metadataPath = path.join(stageDir, `${refId}.meta.json`);
-    fs.writeFileSync(filePath, markdown, "utf-8");
+    fs.writeFileSync(mdPath, markdown, "utf-8");
     fs.writeFileSync(
       metadataPath,
       JSON.stringify({
@@ -270,9 +272,18 @@ export class DocumentService {
       "utf-8"
     );
 
+    let filePath = mdPath;
+    if (options?.originalContentBase64) {
+      const ext = path.extname(fileName) || ".bin";
+      const originalPath = path.join(stageDir, `${refId}${ext}`);
+      fs.writeFileSync(originalPath, Buffer.from(options.originalContentBase64, "base64"));
+      filePath = originalPath;
+    }
+
     return {
       refId,
       fileName,
+      filePath,
     };
   }
 

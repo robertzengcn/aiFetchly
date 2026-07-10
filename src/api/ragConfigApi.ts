@@ -1,77 +1,97 @@
 "use strict";
 import { HttpClient } from "@/modules/lib/httpclient";
 import { EmbeddingConfig, CommonApiresp } from "@/entityTypes/commonType";
+import type { EmbeddingProviderKind } from "@/entityTypes/embeddingTypes";
 
 /**
  * Embedding result interface for individual embedding
  */
 export interface EmbeddingResult {
-    /** Original text that was embedded */
-    text: string;
-    /** Embedding vector as array of numbers */
-    embedding: number[];
-    /** Dimensions of the embedding vector */
-    dimensions: number;
-    /** Model used for embedding */
-    model: string;
+  /** Original text that was embedded */
+  text: string;
+  /** Embedding vector as array of numbers */
+  embedding: number[];
+  /** Dimensions of the embedding vector */
+  dimensions: number;
+  /** Model used for embedding */
+  model: string;
 }
 
 /**
  * Embedding response data interface
  */
 export interface EmbeddingResponseData {
-    /** Array of embedding results */
-    embeddings: EmbeddingResult[];
-    /** Total number of embeddings processed */
-    total_embeddings: number;
-    /** Processing time in milliseconds */
-    processing_time: number;
+  /** Array of embedding results */
+  embeddings: EmbeddingResult[];
+  /** Total number of embeddings processed */
+  total_embeddings: number;
+  /** Processing time in milliseconds */
+  processing_time: number;
 }
 
 /**
  * Model information interface for remote configuration
+ *
+ * `name` is the stable, machine-readable model ID shared by the backend and the
+ * renderer (single source of truth). The optional fields below are populated by
+ * the embedding model catalog when merging remote and local models; they are
+ * optional so that raw remote responses (which only carry name/description/
+ * dimensions) still satisfy this shape.
  */
 export interface ModelInfo {
-    /** Model identifier (e.g., 'Qwen/Qwen3-Embedding-4B') */
-    name: string;
-    /** Model description */
-    description: string;
-    /** Maximum dimensions supported by the model */
-    dimensions: number;
-    /** Recommended dimensions for the model */
-    // recommended_dimensions: number;
+  /** Stable model identifier (e.g., 'Qwen/Qwen3-Embedding-4B'). */
+  name: string;
+  /** Model description */
+  description: string;
+  /** Maximum dimensions supported by the model */
+  dimensions: number;
+  /**
+   * UI display label. Falls back to `name` when absent. Presentation text only —
+   * must not be used for provider routing or vector index naming.
+   */
+  displayName?: string;
+  /** Provider responsible for generating embeddings for this model. */
+  provider?: EmbeddingProviderKind;
+  /** Whether the model is free to use (drives the UI free badge). */
+  is_free?: boolean;
+  /** Whether the model is currently available in the runtime. */
+  available?: boolean;
+  /** For local models, the underlying library model identifier. */
+  underlyingModel?: string;
+  /** Recommended dimensions for the model */
+  // recommended_dimensions: number;
 }
 
 /**
  * Available models response interface
  */
 export interface AvailableModelsResponse {
-    /** Array of available models */
-    models: Record<string, ModelInfo>;
-    /** Default model name */
-    default_model: string;
-    /** Optional; server may omit and only send per-model `dimensions` under `models` */
-    default_dimensions?: number;
-    /** Total number of models */
-    total_models: number;
-    /** Number of configured models */
-    configured_models: number;
+  /** Array of available models */
+  models: Record<string, ModelInfo>;
+  /** Default model name */
+  default_model: string;
+  /** Optional; server may omit and only send per-model `dimensions` under `models` */
+  default_dimensions?: number;
+  /** Total number of models */
+  total_models: number;
+  /** Number of configured models */
+  configured_models: number;
 }
 
 /**
  * Normalize embedding dimension from API (number or numeric string).
  */
 export function normalizeEmbeddingDimension(value: unknown): number | null {
-    if (typeof value === "number" && Number.isInteger(value) && value > 0) {
-        return value;
+  if (typeof value === "number" && Number.isInteger(value) && value > 0) {
+    return value;
+  }
+  if (typeof value === "string") {
+    const parsed = parseInt(value, 10);
+    if (!Number.isNaN(parsed) && parsed > 0) {
+      return parsed;
     }
-    if (typeof value === "string") {
-        const parsed = parseInt(value, 10);
-        if (!Number.isNaN(parsed) && parsed > 0) {
-            return parsed;
-        }
-    }
-    return null;
+  }
+  return null;
 }
 
 /**
@@ -79,66 +99,66 @@ export function normalizeEmbeddingDimension(value: unknown): number | null {
  * Prefer top-level `default_dimensions` when present; otherwise use `models[default_model].dimensions`.
  */
 export function resolveDefaultEmbeddingFromAvailableModels(
-    data: AvailableModelsResponse
+  data: AvailableModelsResponse
 ): { modelName: string; dimension: number } | null {
-    const models = data.models;
-    const preferredName = data.default_model?.trim();
-    const directDim = normalizeEmbeddingDimension(data.default_dimensions);
+  const models = data.models;
+  const preferredName = data.default_model?.trim();
+  const directDim = normalizeEmbeddingDimension(data.default_dimensions);
 
-    if (directDim !== null && preferredName) {
-        return { modelName: preferredName, dimension: directDim };
+  if (directDim !== null && preferredName) {
+    return { modelName: preferredName, dimension: directDim };
+  }
+
+  if (preferredName && models?.[preferredName]) {
+    const dim = normalizeEmbeddingDimension(models[preferredName].dimensions);
+    if (dim !== null) {
+      return { modelName: preferredName, dimension: dim };
     }
+  }
 
-    if (preferredName && models?.[preferredName]) {
-        const dim = normalizeEmbeddingDimension(models[preferredName].dimensions);
-        if (dim !== null) {
-            return { modelName: preferredName, dimension: dim };
-        }
+  if (models) {
+    for (const key of Object.keys(models)) {
+      const dim = normalizeEmbeddingDimension(models[key]?.dimensions);
+      if (dim !== null) {
+        return { modelName: key, dimension: dim };
+      }
     }
+  }
 
-    if (models) {
-        for (const key of Object.keys(models)) {
-            const dim = normalizeEmbeddingDimension(models[key]?.dimensions);
-            if (dim !== null) {
-                return { modelName: key, dimension: dim };
-            }
-        }
-    }
-
-    return null;
+  return null;
 }
 
 /**
  * Chunking configuration interface for remote configuration
  */
 export interface ChunkingConfig {
-    /** Size of each chunk in characters */
-    chunkSize: number;
-    /** Overlap size between chunks in characters */
-    overlapSize: number;
-    /** Chunking strategy to use */
-    strategy: 'sentence' | 'paragraph' | 'semantic' | 'fixed';
-    /** Whether to preserve whitespace in chunks */
-    preserveWhitespace: boolean;
-    /** Minimum chunk size to avoid very small chunks */
-    minChunkSize: number;
-    /** Maximum chunk size to avoid very large chunks */
-    maxChunkSize?: number;
-    /** Whether to split on sentences when possible */
-    splitOnSentences?: boolean;
-    /** Whether to split on paragraphs when possible */
-    splitOnParagraphs?: boolean;
+  /** Size of each chunk in characters */
+  chunkSize: number;
+  /** Overlap size between chunks in characters */
+  overlapSize: number;
+  /** Chunking strategy to use */
+  strategy: "sentence" | "paragraph" | "semantic" | "fixed";
+  /** Whether to preserve whitespace in chunks */
+  preserveWhitespace: boolean;
+  /** Minimum chunk size to avoid very small chunks */
+  minChunkSize: number;
+  /** Maximum chunk size to avoid very large chunks */
+  maxChunkSize?: number;
+  /** Whether to split on sentences when possible */
+  splitOnSentences?: boolean;
+  /** Whether to split on paragraphs when possible */
+  splitOnParagraphs?: boolean;
 }
-export interface ChunkingConfigResponse{
-    default_config: ChunkingConfig;
+export interface ChunkingConfigResponse {
+  default_config: ChunkingConfig;
 }
 
 /**
  * API client for RAG configuration management
- * 
+ *
  * Handles communication with remote configuration service to retrieve
  * embedding model configurations, refresh cache, and check service health.
- * 
+ *
  * @example
  * ```typescript
  * const api = new RagConfigApi();
@@ -149,157 +169,170 @@ export interface ChunkingConfigResponse{
  * ```
  */
 export class RagConfigApi {
-    private _httpClient: HttpClient;
+  private _httpClient: HttpClient;
 
-    /**
-     * Creates a new RagConfigApi instance
-     * Initializes the HTTP client for remote communication
-     */
-    constructor() {
-        this._httpClient = new HttpClient();
+  /**
+   * Creates a new RagConfigApi instance
+   * Initializes the HTTP client for remote communication
+   */
+  constructor() {
+    this._httpClient = new HttpClient();
+  }
+
+  /**
+   * Retrieves the default embedding model configuration from remote server
+   *
+   * @returns Promise resolving to configuration response
+   * @throws {Error} When network request fails
+   *
+   * @example
+   * ```typescript
+   * const config = await api.getDefaultConfig();
+   * if (config.success) {
+   *   const model = config.data.model;
+   *   const dimensions = config.data.dimensions;
+   * }
+   * ```
+   */
+  async getDefaultConfig(): Promise<CommonApiresp<EmbeddingConfig>> {
+    return this._httpClient.get("/api/rag/config");
+  }
+
+  /**
+   * Refreshes the configuration cache on the remote server
+   *
+   * This forces the remote service to update its cached configurations
+   * and should be called when configuration changes are expected.
+   *
+   * @returns Promise resolving to refresh response
+   * @throws {Error} When network request fails
+   *
+   * @example
+   * ```typescript
+   * await api.refreshCache();
+   * console.log('Configuration cache refreshed');
+   * ```
+   */
+  async refreshCache(): Promise<CommonApiresp<void>> {
+    const data = new FormData();
+    return this._httpClient.post("/api/rag/refresh", data);
+  }
+
+  /**
+   * Checks if the remote configuration service is online and available
+   *
+   * @returns Promise resolving to boolean indicating service availability
+   * @throws {Error} When network request fails (returns false)
+   *
+   * @example
+   * ```typescript
+   * const isOnline = await api.isOnline();
+   * if (isOnline) {
+   *   console.log('Configuration service is available');
+   * } else {
+   *   console.log('Using offline fallback');
+   * }
+   * ```
+   */
+  async isOnline(): Promise<CommonApiresp<boolean>> {
+    return this._httpClient.get("/api/healthcheck");
+  }
+
+  /**
+   * Send content to remote host and get embedding result
+   *
+   * @param texts - Array of text content to embed
+   * @param modelName - Optional model name to use for embedding generation
+   * @returns Promise resolving to embedding result objects
+   * @throws {Error} When network request fails
+   *
+   * @example
+   * ```typescript
+   * const embedding = await api.generateEmbedding(['Hello world']);
+   * console.log('Embedding dimensions:', embedding.data[0].dimensions);
+   * console.log('Model used:', embedding.data[0].model);
+   * console.log('Vector length:', embedding.data[0].embedding.length);
+   *
+   * // Multiple texts with specific model
+   * const embeddings = await api.generateEmbedding(['Hello world', 'Test code is necessary'], 'text-embedding-3-small');
+   * console.log('Number of embeddings:', embeddings.data.length);
+   * ```
+   */
+  async generateEmbedding(
+    texts: string[],
+    modelName: string
+  ): Promise<CommonApiresp<EmbeddingResult[]>> {
+    const data = {
+      texts: texts,
+      model_name: modelName,
+    };
+
+    const response = await this._httpClient.postJson(
+      "/api/ai/embedding/generate",
+      data
+    );
+
+    // Extract the embedding results from the nested response structure
+    if (
+      response.status &&
+      response.data &&
+      response.data.data &&
+      response.data.data.embeddings
+    ) {
+      return {
+        status: response.status,
+        code: response.code,
+        msg: response.msg,
+        data: response.data.data.embeddings,
+      };
     }
 
-    /**
-     * Retrieves the default embedding model configuration from remote server
-     * 
-     * @returns Promise resolving to configuration response
-     * @throws {Error} When network request fails
-     * 
-     * @example
-     * ```typescript
-     * const config = await api.getDefaultConfig();
-     * if (config.success) {
-     *   const model = config.data.model;
-     *   const dimensions = config.data.dimensions;
-     * }
-     * ```
-     */
-    async getDefaultConfig(): Promise<CommonApiresp<EmbeddingConfig>> {
-        return this._httpClient.get('/api/rag/config');
-    }
+    // Return error response if structure is unexpected
+    return {
+      status: false,
+      code: response.code || 50000,
+      msg: response.msg || "Failed to extract embedding from response",
+      data: undefined,
+    };
+  }
 
-    /**
-     * Refreshes the configuration cache on the remote server
-     * 
-     * This forces the remote service to update its cached configurations
-     * and should be called when configuration changes are expected.
-     * 
-     * @returns Promise resolving to refresh response
-     * @throws {Error} When network request fails
-     * 
-     * @example
-     * ```typescript
-     * await api.refreshCache();
-     * console.log('Configuration cache refreshed');
-     * ```
-     */
-    async refreshCache(): Promise<CommonApiresp<void>> {
-        const data = new FormData();
-        return this._httpClient.post('/api/rag/refresh', data);
-    }
+  /**
+   * Retrieves the chunking configuration from remote server
+   *
+   * @returns Promise resolving to chunking configuration response
+   * @throws {Error} When network request fails
+   *
+   * @example
+   * ```typescript
+   * const config = await api.getChunkingConfig();
+   * if (config.success) {
+   *   const chunkSize = config.data.chunkSize;
+   *   const strategy = config.data.strategy;
+   * }
+   * ```
+   */
+  async getChunkingConfig(): Promise<CommonApiresp<ChunkingConfigResponse>> {
+    return this._httpClient.get("/api/ai/chunking/info");
+  }
 
-    /**
-     * Checks if the remote configuration service is online and available
-     * 
-     * @returns Promise resolving to boolean indicating service availability
-     * @throws {Error} When network request fails (returns false)
-     * 
-     * @example
-     * ```typescript
-     * const isOnline = await api.isOnline();
-     * if (isOnline) {
-     *   console.log('Configuration service is available');
-     * } else {
-     *   console.log('Using offline fallback');
-     * }
-     * ```
-     */
-    async isOnline(): Promise<CommonApiresp<boolean>> {
-        return this._httpClient.get('/api/healthcheck');
-    }
-
-    /**
-     * Send content to remote host and get embedding result
-     * 
-     * @param texts - Array of text content to embed
-     * @param modelName - Optional model name to use for embedding generation
-     * @returns Promise resolving to embedding result objects
-     * @throws {Error} When network request fails
-     * 
-     * @example
-     * ```typescript
-     * const embedding = await api.generateEmbedding(['Hello world']);
-     * console.log('Embedding dimensions:', embedding.data[0].dimensions);
-     * console.log('Model used:', embedding.data[0].model);
-     * console.log('Vector length:', embedding.data[0].embedding.length);
-     * 
-     * // Multiple texts with specific model
-     * const embeddings = await api.generateEmbedding(['Hello world', 'Test code is necessary'], 'text-embedding-3-small');
-     * console.log('Number of embeddings:', embeddings.data.length);
-     * ```
-     */
-    async generateEmbedding(texts: string[], modelName: string): Promise<CommonApiresp<EmbeddingResult[]>> {
-        const data = {
-            texts: texts,
-            model_name: modelName
-        };
-        
-        const response = await this._httpClient.postJson('/api/ai/embedding/generate', data);
-        
-        // Extract the embedding results from the nested response structure
-        if (response.status && response.data && response.data.data && response.data.data.embeddings) {
-            return {
-                status: response.status,
-                code: response.code,
-                msg: response.msg,
-                data: response.data.data.embeddings
-            };
-        }
-        
-        // Return error response if structure is unexpected
-        return {
-            status: false,
-            code: response.code || 50000,
-            msg: response.msg || 'Failed to extract embedding from response',
-            data: undefined
-        };
-    }
-
-    /**
-     * Retrieves the chunking configuration from remote server
-     * 
-     * @returns Promise resolving to chunking configuration response
-     * @throws {Error} When network request fails
-     * 
-     * @example
-     * ```typescript
-     * const config = await api.getChunkingConfig();
-     * if (config.success) {
-     *   const chunkSize = config.data.chunkSize;
-     *   const strategy = config.data.strategy;
-     * }
-     * ```
-     */
-    async getChunkingConfig(): Promise<CommonApiresp<ChunkingConfigResponse>> {
-        return this._httpClient.get('/api/ai/chunking/info');
-    }
-
-    /**
-     * Retrieves available embedding models from remote server
-     * 
-     * @returns Promise resolving to available models response
-     * @throws {Error} When network request fails
-     * 
-     * @example
-     * ```typescript
-     * const models = await api.getAvailableEmbeddingModels();
-     * if (models.success) {
-     *   console.log('Available models:', models.data);
-     *   console.log('Default model:', models.data.default_model);
-     * }
-     * ```
-     */
-    async getAvailableEmbeddingModels(): Promise<CommonApiresp<AvailableModelsResponse>> {
-        return this._httpClient.get('/api/ai/embedding/models');
-    }
+  /**
+   * Retrieves available embedding models from remote server
+   *
+   * @returns Promise resolving to available models response
+   * @throws {Error} When network request fails
+   *
+   * @example
+   * ```typescript
+   * const models = await api.getAvailableEmbeddingModels();
+   * if (models.success) {
+   *   console.log('Available models:', models.data);
+   *   console.log('Default model:', models.data.default_model);
+   * }
+   * ```
+   */
+  async getAvailableEmbeddingModels(): Promise<
+    CommonApiresp<AvailableModelsResponse>
+  > {
+    return this._httpClient.get("/api/ai/embedding/models");
+  }
 }

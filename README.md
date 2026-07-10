@@ -15,7 +15,7 @@
 
 ---
 
-**aiFetchly** is an open-source desktop application that combines AI with marketing automation to help you find leads, extract contacts, run personalized email outreach campaigns, and manage social media — all from one place.
+**aiFetchly** is an open-source desktop agent that combines AI with marketing automation to help you find leads, extract contacts, run personalized email outreach campaigns, and manage social media — all from one place.
 
 ## Why aiFetchly?
 
@@ -94,16 +94,6 @@ yarn start
    ```
 2. [Set up proxies](https://aifetchly.com/docs/getting-started/proxy-setup) for web scraping features
 3. Add your social media accounts and SMTP credentials in Settings
-
-### CLI Usage
-
-```bash
-# Login to a social platform campaign
-yarn login -c <campaignId>
-
-# Run a task from the command line
-yarn task -t <taskDetails>
-```
 
 ## Development
 
@@ -217,4 +207,4 @@ Please read [CLAUDE.md](./CLAUDE.md) for architecture guidelines and coding conv
 
 ## License
 
-This project is licensed under the [MIT License](./LICENSE).
+This project is licensed under the [Apache License Version 2.0](./LICENSE).
