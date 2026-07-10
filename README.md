@@ -158,7 +158,6 @@ src/
 ├── main-process/                  # Electron main-process code
 │   ├── communication/             # IPC handlers
 │   └── menu/                      # Application menu setup
-├── mocks/                         # Mock data and test doubles
 ├── model/                         # Data access layer (extends BaseDb)
 ├── modules/                       # Core business logic (extends BaseModule)
 │   ├── adapters/                  # Infrastructure adapters
@@ -190,6 +189,7 @@ src/
 
 test/
 ├── modules/                       # Mocha module tests
+├── mocks/                         # Shared test mocks and test doubles
 ├── rag/                           # RAG tests and integration tests
 ├── service/                       # Service tests
 ├── utils/                         # Utility tests

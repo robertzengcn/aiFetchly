@@ -1,4 +1,5 @@
-import { IPlatformAdapter, SearchResult, BusinessData, PlatformSelectors, RateLimitingConfig, AuthenticationConfig, CookiesType, PlatformFeature } from '../modules/interface/IPlatformAdapter';
+import type { Page } from 'puppeteer';
+import { IPlatformAdapter, SearchResult, BusinessData, PlatformSelectors, RateLimitingConfig, AuthenticationConfig, CookiesType, PlatformFeature } from '../../src/modules/interface/IPlatformAdapter';
 
 /**
  * Mock implementation of IPlatformAdapter for testing purposes.
@@ -12,7 +13,8 @@ export class MockPlatformAdapter implements IPlatformAdapter {
     /**
      * Mock search for businesses
      */
-    async searchBusinesses(page: any, keywords: string[], location: string): Promise<SearchResult[]> {
+    async searchBusinesses(page: Page, keywords: string[], location: string): Promise<SearchResult[]> {
+        void page;
         console.log(`MockPlatformAdapter: Searching for ${keywords.join(', ')} in ${location}`);
         
         const mockResults: SearchResult[] = [];
@@ -33,7 +35,8 @@ export class MockPlatformAdapter implements IPlatformAdapter {
     /**
      * Mock business data extraction
      */
-    async extractBusinessData(page: any): Promise<BusinessData> {
+    async extractBusinessData(page: Page): Promise<BusinessData> {
+        void page;
         return {
             business_name: 'Mock Business',
             email: 'mock@example.com',
@@ -59,7 +62,8 @@ export class MockPlatformAdapter implements IPlatformAdapter {
     /**
      * Mock pagination handling
      */
-    async handlePagination(page: any, maxPages: number): Promise<void> {
+    async handlePagination(page: Page, maxPages: number): Promise<void> {
+        void page;
         console.log(`MockPlatformAdapter: Handling pagination for ${maxPages} pages`);
         await this.sleep(100);
     }
@@ -67,7 +71,8 @@ export class MockPlatformAdapter implements IPlatformAdapter {
     /**
      * Mock cookie application
      */
-    async applyCookies(page: any, cookies: CookiesType): Promise<void> {
+    async applyCookies(page: Page, cookies: CookiesType): Promise<void> {
+        void page;
         console.log(`MockPlatformAdapter: Applying ${cookies.length} cookies`);
         await this.sleep(50);
     }

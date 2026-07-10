@@ -1,4 +1,5 @@
-import { IScraperEngine, YellowPagesTask, YellowPagesResult, PlatformSelectors, BusinessData, ScrapingProgress, ScrapingError } from '../modules/interface/IScraperEngine';
+import type { Page } from 'puppeteer';
+import { IScraperEngine, YellowPagesTask, YellowPagesResult, PlatformSelectors, BusinessData, ScrapingProgress, ScrapingError } from '../../src/modules/interface/IScraperEngine';
 
 /**
  * Mock implementation of IScraperEngine for testing purposes.
@@ -80,7 +81,9 @@ export class MockScraperEngine implements IScraperEngine {
     /**
      * Mock business data extraction
      */
-    async extractBusinessData(page: any, selectors: PlatformSelectors): Promise<BusinessData> {
+    async extractBusinessData(page: Page, selectors: PlatformSelectors): Promise<BusinessData> {
+        void page;
+        void selectors;
         return {
             business_name: 'Mock Business',
             email: 'mock@example.com',
@@ -106,7 +109,8 @@ export class MockScraperEngine implements IScraperEngine {
     /**
      * Mock pagination handling
      */
-    async handlePagination(page: any, maxPages: number): Promise<void> {
+    async handlePagination(page: Page, maxPages: number): Promise<void> {
+        void page;
         console.log(`MockScraperEngine: Handling pagination for ${maxPages} pages`);
         await this.sleep(100);
     }
