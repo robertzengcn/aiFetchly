@@ -11,6 +11,11 @@ export type {
   UploadResult,
 } from "./DiagnosticUploadClient";
 export {
+  crashReportWireSchema,
+  projectToWirePayload,
+} from "./CrashReportWireSchema";
+export type { CrashReportWirePayload } from "./CrashReportWireSchema";
+export {
   crashRecordSchema,
   errorRecordSchema,
   diagnosticBreadcrumbSchema,
