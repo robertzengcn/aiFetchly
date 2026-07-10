@@ -60,14 +60,24 @@ src/
 
 ### Key Components
 
-#### Database & Storage (Three-Layer Architecture)
-- **SQLite with TypeORM** for local data persistence
-- **sqlite-vec** integration for vector operations (in progress on current branch)
-- Database configuration in `src/config/SqliteDb.ts`
-- Entities in `src/entity/` following TypeORM patterns
-- **Models** in `src/model/` for data access (extend `BaseDb`)
-- **Modules** in `src/modules/` for business logic (extend `BaseModule`)
-- **IPC Handlers** in `src/main-process/communication/` use Modules (never direct database access)
+#### Database & Storage (Four-Layer Architecture)
+
+The real layering is **four** layers, not three. IPC handlers delegate to a
+**Service** (orchestration / AI / streaming) *or* a **Module** (single-domain
+CRUD + rules), which use **Models** for data access over **Entities** → DB.
+
+- **SQLite with TypeORM** for local data persistence; **sqlite-vec** for vector operations.
+- Database config in `src/config/SqliteDb.ts`; entities in `src/entity/` (TypeORM `@Entity`).
+- **Models** (`src/model/`, extend `BaseDb`) — data access via TypeORM repositories. Legacy raw-SQL `*db.ts` files via `Scraperdb` are being consolidated into Models (WS-3).
+- **Modules** (`src/modules/`, extend `BaseModule`) — single-domain CRUD + business rules over one entity family.
+- **Services** (`src/service/`) — orchestration that spans multiple Modules and owns AI / streaming / tool-call flows (e.g. `AIChatQueryLoop`, `StreamEventProcessor`, `ToolExecutor`, `AiFeatureGate`). **This layer was previously undocumented in CLAUDE.md** despite holding ~166 files — it is the application's "AI brain."
+- **IPC Handlers** (`src/main-process/communication/`) — thin: validate input with Zod (`registerValidatedHandler` / `registerAiValidatedHandler`) → call a Service/Module → return the `CommonMessage<T>` `{status,msg,data}` envelope. **Never** touch TypeORM repositories directly.
+
+**Where does new code go?**
+- **Service** (`src/service/`) — if it orchestrates multiple Modules, owns a long-running/streaming flow, or invokes AI models / tools.
+- **Module** (`src/modules/`) — if it is single-domain CRUD + business rules over one entity family.
+- **Model** (`src/model/`) — data access only (queries, repositories).
+- **Entity** (`src/entity/`) — schema only (`@Entity`, columns, indices).
 
 #### IPC Communication
 - Main process handlers in `src/main-process/communication/`
