@@ -137,22 +137,63 @@ DEBUG='bilibili-scraper:Scraper' yarn testdownload
 
 ```
 src/
-├── background.ts              # Main Electron process entry
-├── preload.ts                 # Context bridge / preload scripts
-├── main-process/              # IPC handlers
-├── controller/                # Business logic controllers
-├── modules/                   # Core business logic (extends BaseModule)
-├── model/                     # Data access layer (extends BaseDb)
-├── entity/                    # TypeORM entities
-├── service/                   # Service layer
-├── childprocess/              # Worker process entry points
-├── config/                    # App configuration & skill registry
-└── views/                     # Vue 3 frontend
-    ├── pages/                 # Page components
-    ├── components/            # Reusable UI components
-    ├── api/                   # Frontend API layer (IPC calls)
-    ├── store/                 # Pinia state management
-    └── lang/                  # i18n (en, zh, es, fr, de, ja)
+├── background.ts                  # Main Electron process entry point
+├── preload.ts                     # Context bridge / preload scripts
+├── buckEmail.ts                   # Email worker/task entry
+├── taskCode.ts                    # Task execution entry
+├── utilityCode.ts                 # Utility process entry
+├── api/                           # Shared API clients and API tests
+├── assets/                        # Images, installer assets, device assets, WebGL assets
+├── childprocess/                  # Child/worker process entry points and worker-only code
+│   ├── contact-extraction/        # Contact extraction worker implementation
+│   ├── email-ai-enrichment/       # Email enrichment worker helpers
+│   ├── embedding/                 # Local embedding worker implementation
+│   ├── google-maps/               # Google Maps worker implementation
+│   ├── yandex-maps/               # Yandex Maps worker implementation
+│   └── utils/                     # Worker-only automation/recovery utilities
+├── config/                        # App configuration and platform configuration
+├── controller/                    # Business logic controllers
+├── entity/                        # TypeORM entities
+├── entityTypes/                   # Entity-related TypeScript types
+├── main-process/                  # Electron main-process code
+│   ├── communication/             # IPC handlers
+│   └── menu/                      # Application menu setup
+├── mocks/                         # Mock data and test doubles
+├── model/                         # Data access layer (extends BaseDb)
+├── modules/                       # Core business logic (extends BaseModule)
+│   ├── adapters/                  # Infrastructure adapters
+│   ├── diagnostics/               # Diagnostics modules
+│   ├── factories/                 # Factory helpers
+│   ├── platforms/                 # Platform-specific integrations
+│   └── rag/                       # RAG and vector-search modules
+├── schemas/                       # Zod/typed schemas for tools, IPC, config, workers
+├── scripts/                       # Project scripts
+├── service/                       # Service layer and integrations
+├── shims/                         # Runtime shims
+├── sql/                           # SQL assets and scraper database files
+├── test/                          # Source-local tests
+├── types/                         # Shared TypeScript type declarations
+├── utils/                         # Shared utilities
+└── views/                         # Vue 3 frontend
+    ├── api/                       # Frontend API layer (IPC calls)
+    ├── components/                # Reusable UI components
+    ├── dashboard/                 # Dashboard views
+    ├── lang/                      # i18n (en, zh, es, fr, de, ja)
+    ├── layout/                    # App layouts
+    ├── pages/                     # Page components
+    ├── plugins/                   # Frontend plugin setup
+    ├── router/                    # Vue Router configuration
+    ├── services/                  # Renderer-side services
+    ├── store/                     # Pinia state management
+    ├── styles/                    # Global styles
+    └── utils/                     # Renderer utilities
+
+test/
+├── modules/                       # Mocha module tests
+├── rag/                           # RAG tests and integration tests
+├── service/                       # Service tests
+├── utils/                         # Utility tests
+└── vitest/                        # Vitest suites for main, modules, taskCode, utilityCode
 ```
 
 ### Architecture
