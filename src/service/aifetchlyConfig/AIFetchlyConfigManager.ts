@@ -39,6 +39,7 @@ import {
 import { AIFetchlyRuntimeRegistrySync } from "./AIFetchlyRuntimeRegistrySync";
 import { CommandRegistry } from "@/service/slashCommands/CommandRegistry";
 import { AgentDefinitionRegistryImpl } from "@/service/AgentDefinitionRegistry";
+import { HookRegistry } from "@/service/hooks/HookRegistry";
 import type { WorkspaceWatchManager } from "@/service/workspaceWatch/WorkspaceWatchManager";
 
 /** Result of {@link AIFetchlyConfigManager.reload}. */
@@ -129,7 +130,8 @@ export class AIFetchlyConfigManager {
       new AIFetchlyRuntimeRegistrySync(
         this.registry,
         this.store,
-        this.agentRegistry
+        this.agentRegistry,
+        HookRegistry
       );
     // The context loader reads from the SAME store the sync writes to.
     this.contextLoader = new AIFetchlyContextLoader(this.store);

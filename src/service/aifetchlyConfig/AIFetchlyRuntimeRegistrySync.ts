@@ -24,11 +24,18 @@ import type {
   AIFetchlySourceTrust,
 } from "@/entityTypes/aifetchlyConfigTypes";
 import type { AgentDefinitionView } from "@/entityTypes/agentTypes";
+import type { CommandHookDefinition } from "@/entityTypes/hookTypes";
 import type { SlashCommandDefinition } from "@/entityTypes/slashCommandTypes";
 import type { CommandRegistry } from "@/service/slashCommands/CommandRegistry";
 import { AgentDefinitionRegistryImpl } from "@/service/AgentDefinitionRegistry";
+import {
+  HookRegistry,
+  type HookRegistryApi,
+} from "@/service/hooks/HookRegistry";
 import type { WorkspaceAgentDraft } from "@/service/workspaceWatch/WorkspaceConfigScanner";
+import type { WorkspaceHookDraft } from "@/service/workspaceWatch/WorkspaceConfigScanner";
 import { buildWorkspaceAgentDefinitions } from "@/service/workspaceWatch/buildWorkspaceAgentDefinitions";
+import { buildWorkspaceHookDefinitions } from "@/service/workspaceWatch/buildWorkspaceHookDefinitions";
 import type { AIFetchlyContextStore } from "./AIFetchlyContextStore";
 
 /** Outcome of applying a snapshot — surfaced to callers and getStatus(). */
@@ -64,7 +71,8 @@ export class AIFetchlyRuntimeRegistrySync {
   constructor(
     private readonly commandRegistry: CommandRegistry,
     private readonly contextStore: AIFetchlyContextStore,
-    private readonly agentRegistry: AgentDefinitionRegistryImpl = new AgentDefinitionRegistryImpl()
+    private readonly agentRegistry: AgentDefinitionRegistryImpl = new AgentDefinitionRegistryImpl(),
+    private readonly hookRegistry: HookRegistryApi = HookRegistry
   ) {}
 
   /**
@@ -113,6 +121,25 @@ export class AIFetchlyRuntimeRegistrySync {
         snapshot.agents as readonly unknown[] as readonly AgentDefinitionView[];
     }
     this.agentRegistry.replaceSource(snapshot.sourceId, agents);
+
+    // Phase 17 (Plan 02): hooks. The global path (source "user") fills
+    // snapshot.hooks with already-validated CommandHookDefinition[] (Task 1
+    // loader). The workspace path (source "workspace") fills it with RAW
+    // WorkspaceHookDraft[] (Task 1 scanner); convert them here in the MAIN
+    // process via buildWorkspaceHookDefinitions before registry mutation.
+    let hooks: readonly CommandHookDefinition[];
+    if (snapshot.source === "workspace") {
+      const hookDrafts =
+        snapshot.hooks as readonly unknown[] as readonly WorkspaceHookDraft[];
+      const workspaceId =
+        snapshot.workspaceId ?? snapshot.sourceId.replace(/^workspace:/, "");
+      const converted = buildWorkspaceHookDefinitions(hookDrafts, workspaceId);
+      hooks = converted.definitions;
+    } else {
+      hooks =
+        snapshot.hooks as readonly unknown[] as readonly CommandHookDefinition[];
+    }
+    this.hookRegistry.replaceSource(snapshot.sourceId, hooks);
 
     this.contextStore.replaceInstructions(
       snapshot.sourceId,
@@ -163,6 +190,10 @@ export class AIFetchlyRuntimeRegistrySync {
       // applySnapshot mutates the agent registry. Trusted workspace agent
       // drafts pass through and are converted main-side in applySnapshot.
       agents: trust.agents ? snapshot.agents : [],
+      // HOK-01 (Phase 17 / Plan 02): drop untrusted workspace hooks BEFORE
+      // applySnapshot mutates the hook registry. Trusted workspace hook drafts
+      // pass through and are converted main-side in applySnapshot.
+      hooks: trust.hooks ? snapshot.hooks : [],
     };
     return this.applySnapshot(filtered);
   }
@@ -175,6 +206,7 @@ export class AIFetchlyRuntimeRegistrySync {
   removeSource(sourceId: string): void {
     this.commandRegistry.replaceSource(sourceId, []);
     this.agentRegistry.replaceSource(sourceId, []);
+    this.hookRegistry.replaceSource(sourceId, []);
     this.contextStore.removeSource(sourceId);
   }
 }
