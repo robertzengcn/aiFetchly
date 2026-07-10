@@ -1,0 +1,49 @@
+name: Test Suite
+
+# WS-2: run the full Mocha + Vitest suite with the tsc type-check gate and emit
+# coverage on every push/PR. Packaging lives in build.yml (fires on `test`);
+# this workflow is the CI test gate and fires on the active dev branches.
+on:
+  push:
+    branches: [dev, master, test]
+  pull_request:
+    branches: [dev, master, test]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.19.3'
+
+      # Native modules (better-sqlite3, sqlite-vec, isolated-vm) need a C/C++
+      # toolchain + cmake to build from source on Linux.
+      - name: Install build toolchain for native modules
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3 build-essential cmake
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Run test suite (mocha + vitest) with type-check gate
+        # Runs the full suite. The globalSetup in vite.main.config.mjs runs
+        # `tsc --noEmit` first (do NOT set AIFETCHLY_SKIP_TSC in CI).
+        # continue-on-error initially while flaky / integration tests
+        # (mocha tests that touch a live DB / network) are quarantined;
+        # ratchet to a hard gate once green. (WS-2 R2.3)
+        continue-on-error: true
+        run: yarn test:ci
+
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage/
+          if-no-files-found: ignore
