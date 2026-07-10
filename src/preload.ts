@@ -606,6 +606,13 @@ contextBridge.exposeInMainWorld("api", {
       VIDEODOWNLOAD_DETAIL_QUERY,
       SYSTEM_SETTING_LIST,
       SYSTEM_SETTING_UPDATE,
+      // Session Recording Channels
+      "session-recording:toggle",
+      "session-recording:get-status",
+      "session-recording:get-sessions",
+      "session-recording:export",
+      "session-recording:clear",
+      "session-recording:get-directory",
       QUERY_USER_INFO,
       EMAILSEARCHTASK_ERROR_LOG_DOWNLOAD,
       RETRYSEARCHTASK,

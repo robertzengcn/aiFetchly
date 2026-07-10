@@ -10,7 +10,25 @@
         "eslint:recommended",
         "@vue/eslint-config-typescript/recommended"
     ],
-    "overrides": [],
+    "overrides": [
+        {
+            "files": ["src/views/**/*", "src/components/**/*"],
+            "rules": {
+                "no-restricted-imports": [
+                    "error",
+                    {
+                        "paths": [
+                            {
+                                "name": "electron",
+                                "importNames": ["ipcRenderer"],
+                                "message": "Do not import ipcRenderer directly in the renderer. Use the preload contextBridge via window.api / windowInvoke instead (WS-1 R1.8)."
+                            }
+                        ]
+                    }
+                ]
+            }
+        }
+    ],
     "parserOptions": {
         "ecmaVersion": "latest",
         "sourceType": "module"
