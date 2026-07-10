@@ -42,6 +42,8 @@ export const AIFETCHLY_CONFIG_LIMITS = {
   maxCommandsPerSource: 200,
   /** Cap on agents accepted from a single source (DoS hygiene). */
   maxAgentsPerSource: 100,
+  /** Cap on hooks accepted from a single source (CFG-06 / Phase 17, DoS hygiene). */
+  maxHooksPerSource: 100,
   /** CMD-06 (Phase 15): max length of a command frontmatter `description`. */
   commandDescriptionLength: 500,
   /** CMD-06 (Phase 15): max number of aliases accepted on one command. */
@@ -99,6 +101,16 @@ export const AIFETCHLY_DIAGNOSTIC_CODES = [
   "unsupported-file",
   "workspace-untrusted",
   "scanner-io-error",
+  // ---- Phase 17 hooks (HOK-01 / D-Vocabulary) ----
+  // hooks.json failed JSON.parse or zod validation. Consumed by Plan 02.
+  "hooks-json-invalid",
+  // A hooks.json entry declares an event name outside the supported set. Plan 02.
+  "unsupported-event",
+  // A single source exceeded maxHooksPerSource. Consumed by Plan 02.
+  "count-cap",
+  // A hook declares a skill action but the skill registry is not yet wired
+  // (D-Vocabulary no-op). Consumed by Plan 03's dispatcher.
+  "skill-registry-not-available",
 ] as const;
 
 export type AIFetchlyDiagnosticCode =
