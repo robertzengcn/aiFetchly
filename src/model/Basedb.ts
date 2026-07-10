@@ -44,7 +44,7 @@ export abstract class BaseDb {
   protected assertNotWorker(): void {
     if (process.env.WORKER_TYPE) {
       throw new Error(
-        `Direct DB access from a worker process (${process.env.WORKER_TYPE}) is forbidden. Send data to the main process via IPC instead.`
+        `Direct database access from worker process is not allowed (worker: ${process.env.WORKER_TYPE}). Workers must send data to the main process via IPC instead.`
       );
     }
   }
