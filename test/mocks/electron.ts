@@ -117,10 +117,24 @@ export const webUtils = {
   },
 };
 
+/** Matches Electron `safeStorage` (OS keychain / DPAPI / libsecret). */
+export const safeStorage = {
+  isEncryptionAvailable(): boolean {
+    return false;
+  },
+  encryptString(_plainText: string): Buffer {
+    return Buffer.alloc(0);
+  },
+  decryptString(_encrypted: Buffer): string {
+    return "";
+  },
+};
+
 export default {
   app,
   BrowserWindow,
   ipcMain,
   ipcRenderer,
   webUtils,
+  safeStorage,
 };
