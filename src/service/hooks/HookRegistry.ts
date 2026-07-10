@@ -38,6 +38,16 @@ export interface HookRegistryApi {
   registerBuiltinHook(hook: CallbackHookDefinition): void;
   registerSessionHook(sessionId: string, hook: HookDefinition): void;
   clearSessionHooks(sessionId: string): void;
+  /**
+   * Atomically reconcile every hook for a config source (HOK-01). Removes all
+   * hooks previously registered under {@link sourceId}, then inserts defensive
+   * copies of {@link hooks}. Add/change/delete/rename all fall out of the
+   * remove-then-insert so stale entries from a prior scan never survive a
+   * rescan. SourceId is the full source key ("user", "workspace:<id>").
+   */
+  replaceSource(sourceId: string, hooks: readonly HookDefinition[]): void;
+  /** Remove every hook for a config source (equivalent to replaceSource(id, [])). */
+  unregisterSource(sourceId: string): void;
   getMatchingHooks(input: HookLookupInput): readonly HookDefinition[];
   /** Test-only: wipe all hooks including built-ins. */
   resetForTests(): void;
@@ -53,6 +63,13 @@ interface RegistryEntry {
 
 class HookRegistryImpl implements HookRegistryApi {
   private readonly byEvent = new Map<HookEventName, RegistryEntry[]>();
+  /**
+   * Per-sourceId bookkeeping for config-sourced hooks (HOK-01). Keys are the
+   * full source id string ("user", "workspace:<id>"); values are the hook ids
+   * inserted under that source so {@link replaceSource} can remove them again.
+   * Built-in/session registrations do not use this index.
+   */
+  private readonly sourceIndex = new Map<string, Set<string>>();
   private seq = 0;
 
   registerBuiltinHook(hook: CallbackHookDefinition): void {
@@ -91,7 +108,8 @@ class HookRegistryImpl implements HookRegistryApi {
       // Untrusted command hooks are excluded — trust gate is enforced
       // at registration time for command hooks, but defense-in-depth.
       if (entry.hook.type === "command" && !entry.hook.trusted) continue;
-      if (!matchesHookMatcher(entry.hook.matcher, input.matchQuery ?? "")) continue;
+      if (!matchesHookMatcher(entry.hook.matcher, input.matchQuery ?? ""))
+        continue;
       if (seen.has(entry.hook.id)) continue;
       seen.add(entry.hook.id);
       matched.push(entry);
@@ -109,8 +127,50 @@ class HookRegistryImpl implements HookRegistryApi {
     return matched.map((e) => e.hook);
   }
 
+  replaceSource(sourceId: string, hooks: readonly HookDefinition[]): void {
+    // 1. Remove every hook previously registered under this sourceId from all
+    //    event lists (a hook id lives under exactly one event, but iterate
+    //    every list defensively). This is the "delete" half of the atomic
+    //    reconcile — stale entries from a prior scan never survive a rescan.
+    const existing = this.sourceIndex.get(sourceId);
+    if (existing) {
+      for (const id of existing) {
+        this.removeHookIdFromAllEvents(id);
+      }
+    }
+    // 2. Insert defensive shallow copies of the new hooks so caller mutation
+    //    cannot corrupt registry state (CLAUDE.md immutability). The spread
+    //    copies all top-level fields including the `type` discriminant and the
+    //    type-specific callback/command payload; nested caller mutation is not
+    //    a concern for the immutable HookDefinition shape.
+    const next = new Set<string>();
+    for (const hook of hooks) {
+      const copy = { ...hook } as HookDefinition;
+      this.push(copy);
+      next.add(copy.id);
+    }
+    this.sourceIndex.set(sourceId, next);
+    // No name index to rebuild — hooks key on event+matcher and
+    // getMatchingHooks re-sorts by (SOURCE_PRIORITY, seq) on every read.
+  }
+
+  unregisterSource(sourceId: string): void {
+    this.replaceSource(sourceId, []);
+  }
+
+  private removeHookIdFromAllEvents(id: string): void {
+    for (const list of this.byEvent.values()) {
+      for (let i = list.length - 1; i >= 0; i--) {
+        if (list[i].hook.id === id) {
+          list.splice(i, 1);
+        }
+      }
+    }
+  }
+
   resetForTests(): void {
     this.byEvent.clear();
+    this.sourceIndex.clear();
     this.seq = 0;
   }
 
