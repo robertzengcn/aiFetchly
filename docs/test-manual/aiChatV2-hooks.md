@@ -169,6 +169,28 @@ No built-in demo hook exists. Test by creating a user command hook and triggerin
 
 Command hooks execute a local process, receive hook input JSON on stdin, and return hook output JSON on stdout.
 
+### 6.0 The Command field contract — read this first
+
+The **Command** field must contain an actual OS command that **prints** the hook-output JSON to stdout. It is *not* the JSON payload itself.
+
+> ❌ Wrong — pasting the raw JSON object as the command:
+> ```
+> {"updatedInput":{"command":"echo safe"}}
+> ```
+> The executor runs the command with `shell: false` (`CommandHookExecutor.ts`), so this parses into a non-existent executable → `ENOENT` → the hook fails. With the default failure mode `warn`, the failure is swallowed and the tool runs with its **original** arguments — the hook silently appears to "do nothing". (This is the symptom: tool-call card and shell result still show the unmodified command.)
+
+> ✅ Right — a command that prints the JSON:
+> ```
+> node -e "process.stdout.write(JSON.stringify({updatedInput:{command:'echo safe'}}))"
+> ```
+
+Throughout this doc, wherever a test says a hook "returns `{...}`" or "prints `{...}`", paste a `node -e "process.stdout.write(JSON.stringify({...}))"` (or equivalent) command into the **Command** field — not the raw object.
+
+Two more gotchas when creating a user command hook:
+- **User hooks are created disabled.** After saving, toggle the **Enabled** switch ON (System Settings → Hooks), otherwise the hook never fires.
+- **Matcher must match the tool name.** For shell tools use `shell_execute` (or `*`).
+- **Verify it fired.** Check System Settings → Hooks → Audit Log. Status `failed` with reason `… ENOENT` means the Command field is not a real command; no entry at all means the hook is disabled or not matching.
+
 ### 6.1 Create a command hook
 
 1. Open **System Settings → Hooks**
@@ -291,8 +313,8 @@ Refer to the Hooks Management UI plan for full CRUD testing. Key tests:
 |---|---|---|
 | **13.1 — No hooks matched** | 1. Enable hooks globally but register no matching hooks<br>2. Send any tool prompt | Dispatcher fast-paths: `EMPTY_AGGREGATE`; tool executes normally; <5ms overhead |
 | **13.2 — Hook throws exception** | Create a callback hook that throws | Hook marked as failed; tool continues (failureMode=warn); no crash |
-| **13.3 — Hook modifies tool input** | Create a PreToolUse command hook for `shell_execute` that prints `{"updatedInput":{"command":"echo safe"}}`, then send `run shell command echo hello` | Tool receives the modified input instead of the original. The tool-call card/history should show `command: "echo safe"` and the shell result should output `safe` |
-| **13.4 — Hook returns systemMessage** | Create any hook returning `{ systemMessage: "Hello from hook" }` | System message appears in the chat UI |
+| **13.3 — Hook modifies tool input** | Create a PreToolUse command hook (matcher `shell_execute`), enable it, and set its Command to: `node -e "process.stdout.write(JSON.stringify({updatedInput:{command:'echo safe'}}))"`. Then send `run shell command echo hello` | Tool receives the modified input instead of the original. The tool-call card/history should show `command: "echo safe"` and the shell result should output `safe` |
+| **13.4 — Hook returns systemMessage** | Create any hook (e.g. PreToolUse, matcher `shell_execute`), enable it, and set its Command to: `node -e "process.stdout.write(JSON.stringify({systemMessage:'Hello from hook'}))"` | System message appears in the chat UI |
 | **13.5 — Multiple hooks add context** | Two PostToolUse hooks each return `additionalContext` | Both context strings appear; merged in order |
 | **13.6 — Abort signal before dispatch** | 1. Send a prompt<br>2. Click Stop before the tool call | Dispatcher sees `abortSignal.aborted` and returns `EMPTY_AGGREGATE` |
 
