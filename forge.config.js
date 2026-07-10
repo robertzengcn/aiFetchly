@@ -408,6 +408,10 @@ module.exports = {
             config: "vite.aifetchlyConfigWorker.config.mjs",
           },
           {
+            entry: "src/childprocess/hook-execution/HookExecutionWorker.ts",
+            config: "vite.hookExecutionWorker.config.mjs",
+          },
+          {
             entry: "src/childprocess/google-maps/GoogleMapsWorker.ts",
             config: "vite.googleMapsWorker.config.mjs",
           },
