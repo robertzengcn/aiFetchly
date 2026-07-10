@@ -170,7 +170,6 @@ src/
 ├── service/                       # Service layer and integrations
 ├── shims/                         # Runtime shims
 ├── sql/                           # SQL assets and scraper database files
-├── test/                          # Source-local tests
 ├── types/                         # Shared TypeScript type declarations
 ├── utils/                         # Shared utilities
 └── views/                         # Vue 3 frontend
@@ -188,6 +187,7 @@ src/
     └── utils/                     # Renderer utilities
 
 test/
+├── *Test.ts                       # Platform adapter and Yellow Pages test runners
 ├── modules/                       # Mocha module tests
 ├── mocks/                         # Shared test mocks and test doubles
 ├── rag/                           # RAG tests and integration tests

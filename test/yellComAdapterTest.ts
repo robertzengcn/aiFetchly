@@ -260,7 +260,7 @@ export class YellComAdapterTest {
         ];
 
         let passedTests = 0;
-        let totalTests = tests.length;
+        const totalTests = tests.length;
 
         for (const test of tests) {
             try {
