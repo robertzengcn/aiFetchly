@@ -192,7 +192,7 @@ Plans:
 
 **Wave 1**
 
-- [ ] 17-01-PLAN.md — AIFetchlyWorkspaceTrust entity/model/module + migration seed + schema-apply [BLOCKING] (TRS-02) + HookRegistry.replaceSource/unregisterSource (HOK-01) + maxHooksPerSource/diagnostic-code constants
+- [x] 17-01-PLAN.md — AIFetchlyWorkspaceTrust entity/model/module + migration seed + schema-apply [BLOCKING] (TRS-02) + HookRegistry.replaceSource/unregisterSource (HOK-01) + maxHooksPerSource/diagnostic-code constants
 
 **Wave 2** *(parallel; both depend on 17-01, zero file overlap)*
 
@@ -245,5 +245,5 @@ Plans:
 | 14. Workspace Watcher Worker | v2.0 | 3/5 | In Progress|  |
 | 15. Prompt Command Files | v2.0 | 2/2 | Complete    | 2026-07-07 |
 | 16. Dynamic Agents | v2.0 | 3/3 | Complete   | 2026-07-09 |
-| 17. Hooks | v2.0 | 0/? | Not started | — |
+| 17. Hooks | v2.0 | 1/3 | In Progress|  |
 | 18. Skills and Plugin Integration | v2.0 | 0/? | Not started | — |

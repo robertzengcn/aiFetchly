@@ -2,19 +2,19 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Local Extensibility
-current_phase: 16
-current_phase_name: dynamic-agents
+current_phase: 17
+current_phase_name: hooks
 status: executing
 stopped_at: Phase 17 context gathered
-last_updated: "2026-07-09T23:17:42.899Z"
-last_activity: 2026-07-09
-last_activity_desc: Plan 16-03 complete (dispatch-list-context); Phase 16 3/3 plans done
+last_updated: "2026-07-10T04:13:08.217Z"
+last_activity: 2026-07-10
+last_activity_desc: Plan 17-01 complete (trust entity + HookRegistry + config constants); Wave 1 done, 17-02/17-03 next
 progress:
   total_phases: 6
   completed_phases: 4
-  total_plans: 16
-  completed_plans: 16
-  percent: 67
+  total_plans: 19
+  completed_plans: 17
+  percent: 89
 ---
 
 # Project State
@@ -28,7 +28,7 @@ progress:
 See: .planning/PROJECT.md (updated 2026-07-04)
 
 **Core value:** Users can discover, contact, and market to prospects across platforms using AI-assisted workflows.
-**Current focus:** Phase 16 — dynamic-agents
+**Current focus:** Phase 17 — hooks
 
 ## Milestone Progress
 
@@ -45,13 +45,13 @@ Progress: ███░░░░░░░ 33%
 
 ## Current Position
 
-Phase: 16 (dynamic-agents) — EXECUTING
+Phase: 17 (hooks) — EXECUTING
 Plan 16-01 (registry-validator-frontmatter): COMPLETE — 2/2 tasks (TDD RED→GREEN), 4 commits + SUMMARY (f9fb579e), 65 tests GREEN (59 main + 6 utilitycode) + 12 consumer + 104 targeted regression, tsc 0 errors, AGT-01+AGT-02 satisfied
 Plan 16-02 (loaders-trust-scanner): COMPLETE — 3/3 tasks (TDD RED->GREEN), 6 commits + SUMMARY, 44 tests GREEN (5 files), tsc 0 errors, AGT-02 satisfied (worker stays scan-only WAT-02)
 Plan 16-03 (dispatch-list-context): COMPLETE — 3/3 tasks (TDD RED->GREEN), 6 commits + SUMMARY (92d1a1b7), 51 tests GREEN (AgentRuntime/runSubagentTool/SlashCommandDispatcher/AIChatContextAssembler.aifetchly), tsc 0 errors, AGT-03 satisfied (registry-first dispatch + /agents command + D-Discovery block)
 Phase 16: 3/3 plans executed — all waves complete (16-01 + 16-02 + 16-03); ready for phase verification
-Status: Phase 16 execution COMPLETE (3/3 plans) — pending verification (/gsd-verify-work 16 or gsd-verifier)
-Last activity: 2026-07-09 — Plan 16-03 complete (dispatch-list-context); Phase 16 3/3 plans done
+Status: Executing Phase 17
+Last activity: 2026-07-10 — Phase 17 execution started
 Resume note (Waves 2-3 executors): do NOT run bare `yarn testmain` for Self-Check — it hangs 20+ min on a pre-existing Electron/DB integration test unrelated to these plans. Use targeted runs: `AIFETCHLY_SKIP_TSC=1 npx vitest run --config vite.main.config.mjs <new test files>` (+ utilityCode config variant) + a standalone `npx tsc --noEmit`. 16-01 used this and got 104/104 regression + 65 new tests green, tsc 0 errors.
 
 ## Accumulated Context
