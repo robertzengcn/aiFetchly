@@ -22,7 +22,16 @@ import type { AIFetchlySourceTrust } from "@/entityTypes/aifetchlyConfigTypes";
  */
 export function normalizeWorkspaceRoot(rootPath: string): string {
   if (!rootPath) return "";
-  return path.normalize(rootPath);
+  // path.normalize collapses "."/".." and duplicate separators but does NOT
+  // remove a single trailing separator, so "/x" and "/x/" would otherwise
+  // hash to different keys. Strip trailing separators (preserving the root
+  // "/") so the trust key is stable regardless of trailing slash (A1) and
+  // stays consistent with runtime resolver lookups.
+  let normalized = path.normalize(rootPath);
+  while (normalized.length > 1 && normalized.endsWith(path.sep)) {
+    normalized = normalized.slice(0, -1);
+  }
+  return normalized;
 }
 
 /**
@@ -70,8 +79,9 @@ export class AIFetchlyWorkspaceTrustModel extends BaseDb {
     // never `this`, so it is safe ahead of super().
     assertNotWorker("AIFetchlyWorkspaceTrustModel");
     super(dbpath);
-    this.repository =
-      this.sqliteDb.connection.getRepository(AIFetchlyWorkspaceTrustEntity);
+    this.repository = this.sqliteDb.connection.getRepository(
+      AIFetchlyWorkspaceTrustEntity
+    );
   }
 
   /**
