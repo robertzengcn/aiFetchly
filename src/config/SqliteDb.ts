@@ -53,6 +53,7 @@ import { AgentToolCallEntity } from "@/entity/AgentToolCall.entity";
 import { AIUserMemoryEntity } from "@/entity/AIUserMemory.entity";
 import { AIMemoryConsolidationRunEntity } from "@/entity/AIMemoryConsolidationRun.entity";
 import { WorkspaceEntity } from "@/entity/Workspace.entity";
+import { AIFetchlyWorkspaceTrustEntity } from "@/entity/AIFetchlyWorkspaceTrust.entity";
 import { AIChatPlanEntity } from "@/entity/AIChatPlan.entity";
 import { AIChatPlanVersionEntity } from "@/entity/AIChatPlanVersion.entity";
 import { AIChatPlanQuestionEntity } from "@/entity/AIChatPlanQuestion.entity";
@@ -496,6 +497,10 @@ export class SqliteDb {
           AIUserMemoryEntity,
           AIMemoryConsolidationRunEntity,
           WorkspaceEntity,
+          // Phase 17-01 (TRS-02): persisted per-capability workspace trust.
+          // synchronize:true creates the aifetchly_workspace_trust table on
+          // connection open; the Module mocha suite is the schema-apply proof.
+          AIFetchlyWorkspaceTrustEntity,
         ],
         synchronize: true,
         migrations: [],
