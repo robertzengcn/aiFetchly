@@ -69,6 +69,7 @@
     "rebuild-better-sqlite": "node scripts/rebuild-better-sqlite.js",
     "prepackage": "npm run rebuild-native",
     "rebuild-native": "yarn rebuild-sqlite3 && yarn rebuild-better-sqlite",
+    "postinstall": "yarn rebuild-better-sqlite",
     "vue-check": "vue-tsc --noEmit --watch",
     "test-installer": "node installer-scripts/test-installer.js",
     "uninstall-win": "node installer-scripts/uninstall-windows.js",

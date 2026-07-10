@@ -1,11 +1,24 @@
 const { spawnSync } = require("node:child_process");
 
 function getElectronTargetVersion() {
-  return require("electron/package.json").version;
+  try {
+    return require("electron/package.json").version;
+  } catch {
+    // electron is a devDependency, so it is absent on `install --production`
+    // (CI/Docker jobs that skip devDeps). There is nothing to rebuild for
+    // Electron in that case — better-sqlite3 stays built for system Node.
+    return null;
+  }
 }
 
 function rebuildBetterSqlite() {
   const electronVersion = getElectronTargetVersion();
+  if (!electronVersion) {
+    console.log(
+      "Skipping better-sqlite3 Electron rebuild: electron package not installed."
+    );
+    return;
+  }
   const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
   const env = {
     ...process.env,
