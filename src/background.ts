@@ -109,23 +109,40 @@ __diagnosticsRetention.schedule();
 
 // Unclean shutdown detection: read previous session's startup marker (if any)
 // and record an unclean shutdown record, then write this session's marker.
+//
+// PRODUCTION ONLY. During development (electron-forge start, the Cursor/VS Code
+// debugger) the process is killed and restarted repeatedly without a graceful
+// `before-quit`, so the marker would survive and surface a spurious "send
+// crash report" prompt on every launch. In dev we neither consult nor write the
+// marker, and clear any stale one so a later production launch can't misread a
+// dev kill as a real unclean shutdown. `app.isPackaged` is the reliable signal
+// here (NODE_ENV is not auto-set to "production" in packaged Electron builds).
 const __startupMarker = getStartupMarkerPath();
-let __previousSessionId: string | undefined;
-if (fs.existsSync(__startupMarker)) {
+if ((app as any).isPackaged) {
+  let __previousSessionId: string | undefined;
+  if (fs.existsSync(__startupMarker)) {
+    try {
+      const prev = JSON.parse(fs.readFileSync(__startupMarker, "utf8")) as {
+        sessionId?: string;
+      };
+      __previousSessionId = prev.sessionId;
+      __crashReporter.recordUncleanShutdown(__previousSessionId);
+    } catch {
+      __crashReporter.recordUncleanShutdown();
+    }
+  }
+  fs.writeFileSync(
+    __startupMarker,
+    JSON.stringify({ sessionId: __sessionId, ts: Date.now() })
+  );
+} else {
+  // Dev: clear any stale marker left by a previous (killed) run.
   try {
-    const prev = JSON.parse(fs.readFileSync(__startupMarker, "utf8")) as {
-      sessionId?: string;
-    };
-    __previousSessionId = prev.sessionId;
-    __crashReporter.recordUncleanShutdown(__previousSessionId);
+    fs.rmSync(__startupMarker, { force: true });
   } catch {
-    __crashReporter.recordUncleanShutdown();
+    /* ignore */
   }
 }
-fs.writeFileSync(
-  __startupMarker,
-  JSON.stringify({ sessionId: __sessionId, ts: Date.now() })
-);
 
 log.info("Application starting...");
 
@@ -1166,6 +1183,9 @@ function sendLoginError(message: string): void {
  * record. Throttling is a P2 follow-up.
  */
 async function maybeShowCrashPrompt(): Promise<void> {
+  // Production only (see startup-marker logic above). Dev builds are killed
+  // repeatedly without graceful shutdown, so prompting would be noise.
+  if (!(app as any).isPackaged) return;
   try {
     const { CrashLogSink } = await import("@/modules/diagnostics/CrashLogSink");
     const records = CrashLogSink.readAll();
