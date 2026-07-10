@@ -41,6 +41,7 @@ import type {
   AIFetchlyInstructionBlock,
 } from "@/entityTypes/aifetchlyConfigTypes";
 import type { AgentDefinitionView } from "@/entityTypes/agentTypes";
+import type { CommandHookDefinition } from "@/entityTypes/hookTypes";
 import type { SlashCommandDefinition } from "@/entityTypes/slashCommandTypes";
 import {
   buildAgentDefinition,
@@ -48,6 +49,10 @@ import {
   type AgentDefinitionSourceMeta,
 } from "@/service/slashCommands/agentFrontmatter";
 import { buildPromptCommandDefinition } from "@/service/slashCommands/promptCommandFrontmatter";
+import {
+  buildHookDefinition,
+  type HookDefinitionSourceMeta,
+} from "@/service/hooks/hookFileFrontmatter";
 import { lazySchema } from "@/utils/lazySchema";
 import {
   AIFETCHLY_CONFIG_DIR_NAME,
@@ -66,6 +71,8 @@ const AGENTS_MD = "AGENTS.md";
 const SETTINGS_JSON = "settings.json";
 const COMMANDS_DIR = "commands";
 const AGENTS_DIR = "agents";
+const HOOKS_DIR = "hooks";
+const HOOKS_JSON = "hooks.json";
 
 const settingsSchema = lazySchema(() =>
   z
@@ -133,6 +140,7 @@ export class AIFetchlyConfigLoader {
     const instructions: AIFetchlyInstructionBlock[] = [];
     const commands: SlashCommandDefinition[] = [];
     const agents: AgentDefinitionView[] = [];
+    const hooks: CommandHookDefinition[] = [];
     const diagnostics: AIFetchlyConfigDiagnostic[] = [];
 
     let entries: readonly string[];
@@ -149,6 +157,7 @@ export class AIFetchlyConfigLoader {
           instructions,
           commands,
           agents,
+          hooks,
           diagnostics
         );
       }
@@ -161,6 +170,7 @@ export class AIFetchlyConfigLoader {
         instructions,
         commands,
         agents,
+        hooks,
         diagnostics
       );
     }
@@ -240,6 +250,12 @@ export class AIFetchlyConfigLoader {
     // tryReadCommandFiles above; source is "user", sourceId "user".
     await this.tryReadAgentFiles(files, agents, diagnostics);
 
+    // Phase 17 (Plan 02): read the SINGLE hooks/hooks.json file, JSON.parse it,
+    // validate each entry via buildHookDefinition (HOK-01), and push validated
+    // CommandHookDefinition[] into `hooks` (source "user"). Mirrors the
+    // agents path but for one JSON file instead of a directory of .md.
+    await this.tryReadHookFiles(files, hooks, diagnostics);
+
     return this.buildSnapshot(
       source,
       sourceId,
@@ -247,6 +263,7 @@ export class AIFetchlyConfigLoader {
       instructions,
       commands,
       agents,
+      hooks,
       diagnostics
     );
   }
@@ -611,6 +628,129 @@ export class AIFetchlyConfigLoader {
     }
   }
 
+  /**
+   * HOK-01 (Phase 17 / Plan 02): read the SINGLE `<rootPath>/hooks/hooks.json`
+   * file (NOT a directory), enforce CFG-04 size cap, JSON.parse it, validate
+   * each entry via buildHookDefinition (the single HOK-01 schema owner), apply
+   * the CFG-06 maxHooksPerSource count cap, and push validated
+   * {@link CommandHookDefinition} objects into `hooks` with failures into
+   * `diagnostics`. Missing hooks/hooks.json is the happy path — no diagnostic.
+   *
+   * Pure file I/O + Plan-02 pure logic — NO DB / Electron / Module imports.
+   */
+  private async tryReadHookFiles(
+    files: AIFetchlyConfigFileSnapshot[],
+    hooks: CommandHookDefinition[],
+    diagnostics: AIFetchlyConfigDiagnostic[]
+  ): Promise<void> {
+    const source = "user" as const;
+    const sourceId = "user";
+    const relativePath = `${HOOKS_DIR}/${HOOKS_JSON}`;
+    const hooksFile = path.join(this.rootPath, HOOKS_DIR, HOOKS_JSON);
+
+    let stat: fs.Stats;
+    try {
+      stat = await fs.promises.stat(hooksFile);
+    } catch (err) {
+      // Missing hooks/hooks.json is the happy path (most installs have none).
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") return;
+      diagnostics.push(this.ioError(relativePath, err));
+      return;
+    }
+
+    // CFG-04: size cap before read (T-13-DoS mitigation).
+    if (stat.size > AIFETCHLY_CONFIG_LIMITS.hooksJsonBytes) {
+      diagnostics.push({
+        severity: "warning",
+        source,
+        sourceId,
+        filePath: relativePath,
+        code: "file-too-large",
+        message: `${HOOKS_JSON} is ${stat.size} bytes which exceeds the ${AIFETCHLY_CONFIG_LIMITS.hooksJsonBytes}-byte limit; skipped`,
+        recoverable: true,
+      });
+      return;
+    }
+
+    let content: Buffer;
+    try {
+      content = await fs.promises.readFile(hooksFile);
+    } catch (err) {
+      diagnostics.push(this.ioError(relativePath, err));
+      return;
+    }
+    const contentHash = crypto
+      .createHash("sha256")
+      .update(content)
+      .digest("hex");
+    files.push({
+      relativePath,
+      kind: "hook",
+      mtimeMs: stat.mtimeMs,
+      sizeBytes: stat.size,
+      contentHash,
+    });
+
+    // JSON.parse the whole file; a parse failure yields a single
+    // hooks-json-invalid diagnostic (no definitions).
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(content.toString("utf8")) as unknown;
+    } catch (err) {
+      diagnostics.push({
+        severity: "warning",
+        source,
+        sourceId,
+        filePath: relativePath,
+        code: "hooks-json-invalid",
+        message: `${HOOKS_JSON} is not valid JSON: ${(err as Error).message}`,
+        recoverable: true,
+      });
+      return;
+    }
+    if (!Array.isArray(parsed)) {
+      diagnostics.push({
+        severity: "warning",
+        source,
+        sourceId,
+        filePath: relativePath,
+        code: "hooks-json-invalid",
+        message: `${HOOKS_JSON} top-level must be an array of hook entries`,
+        recoverable: true,
+      });
+      return;
+    }
+
+    const sourceMeta: HookDefinitionSourceMeta = {
+      source,
+      sourceId,
+      relativePath,
+    };
+
+    for (let index = 0; index < parsed.length; index++) {
+      // CFG-06: count cap — once maxHooksPerSource valid definitions are
+      // accepted, drop the surplus with a single count-cap diagnostic.
+      if (hooks.length >= AIFETCHLY_CONFIG_LIMITS.maxHooksPerSource) {
+        diagnostics.push({
+          severity: "warning",
+          source,
+          sourceId,
+          filePath: relativePath,
+          code: "count-cap",
+          message: `hook count reached the ${AIFETCHLY_CONFIG_LIMITS.maxHooksPerSource}-per-source cap; skipping remaining entries`,
+          recoverable: true,
+        });
+        break;
+      }
+      const result = buildHookDefinition(parsed[index], sourceMeta, index);
+      if (result.ok) {
+        hooks.push(result.definition);
+      } else {
+        diagnostics.push(result.diagnostic);
+      }
+    }
+  }
+
   private ioError(filePath: string, err: unknown): AIFetchlyConfigDiagnostic {
     return {
       severity: "warning",
@@ -632,6 +772,7 @@ export class AIFetchlyConfigLoader {
     instructions: readonly AIFetchlyInstructionBlock[],
     commands: readonly SlashCommandDefinition[],
     agents: readonly AgentDefinitionView[],
+    hooks: readonly CommandHookDefinition[],
     diagnostics: readonly AIFetchlyConfigDiagnostic[]
   ): AIFetchlyConfigSnapshot {
     return {
@@ -643,7 +784,7 @@ export class AIFetchlyConfigLoader {
       instructions,
       commands,
       agents,
-      hooks: [],
+      hooks,
       skills: [],
       diagnostics,
     };

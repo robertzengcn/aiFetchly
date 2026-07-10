@@ -82,10 +82,32 @@ export interface WorkspaceConfigScanInput {
   readonly includeRootAgentsFile: boolean;
 }
 
+/**
+ * Phase 17 (Plan 02): a raw workspace hook draft produced by the WORKER.
+ *
+ * The worker reads the SINGLE `.aifetchly/hooks/hooks.json` file, JSON.parses
+ * it, and ships the parsed blob as opaque `raw` (expected to be an array of
+ * entries). NO validation runs here — the HOK-01 validator (Plan 02) runs in
+ * the MAIN process via the workspace hook converter. This keeps the worker
+ * scan-only (WAT-02 worker-no-DB / no-registry / no-Electron / no-zod). A
+ * structurally invalid file is carried through unchanged; the main-process
+ * converter decides whether to drop or warn.
+ */
+export interface WorkspaceHookDraft {
+  readonly id: string;
+  readonly source: "workspace";
+  readonly sourceId: string;
+  readonly relativePath: string;
+  readonly raw: unknown;
+  readonly contentHash: string;
+}
+
 const AGENTS_MD = "AGENTS.md";
 const SETTINGS_JSON = "settings.json";
 const COMMANDS_DIR = "commands";
 const AGENTS_DIR = "agents";
+const HOOKS_DIR = "hooks";
+const HOOKS_JSON = "hooks.json";
 
 /** Build a deterministic diagnostic for a single file failure. */
 function diagnostic(
@@ -137,6 +159,7 @@ export class WorkspaceConfigScanner {
     const instructions: AIFetchlyInstructionBlock[] = [];
     const commands: WorkspaceCommandDraft[] = [];
     const agents: WorkspaceAgentDraft[] = [];
+    const hooks: WorkspaceHookDraft[] = [];
     const diagnostics: AIFetchlyConfigDiagnostic[] = [];
     const settings: AIFetchlyConfigSettings = {
       ...DEFAULT_AIFETCHLY_CONFIG_SETTINGS,
@@ -160,6 +183,7 @@ export class WorkspaceConfigScanner {
         instructions,
         commands,
         agents,
+        hooks,
         diagnostics,
         settings
       );
@@ -194,7 +218,10 @@ export class WorkspaceConfigScanner {
       // validation). Cast through unknown mirroring commands — the main-
       // process converter (buildWorkspaceAgentDefinitions, Task 3) validates.
       agents: agents as readonly unknown[],
-      hooks: [],
+      // Phase 17 (Plan 02): raw WorkspaceHookDrafts (worker-side, no
+      // validation). Cast through unknown mirroring agents/commands — the
+      // main-process converter (buildWorkspaceHookDefinitions) validates.
+      hooks: hooks as readonly unknown[],
       skills: [],
       diagnostics,
     };
@@ -212,6 +239,7 @@ export class WorkspaceConfigScanner {
     instructions: AIFetchlyInstructionBlock[],
     commands: WorkspaceCommandDraft[],
     agents: WorkspaceAgentDraft[],
+    hooks: WorkspaceHookDraft[],
     diagnostics: AIFetchlyConfigDiagnostic[],
     settings: AIFetchlyConfigSettings
   ): Promise<void> {
@@ -262,6 +290,20 @@ export class WorkspaceConfigScanner {
       `${rootRel}/${AGENTS_DIR}`,
       files,
       agents,
+      diagnostics
+    );
+
+    // hooks/hooks.json (Phase 17 / Plan 02) — ONE raw draft carrying the
+    // JSON-parsed blob; the worker does NOT validate (WAT-02).
+    // buildWorkspaceHookDefinitions validates main-side.
+    await this.tryReadHookFiles(
+      dotAifetchly,
+      workspaceId,
+      sourceId,
+      HOOKS_DIR,
+      `${rootRel}/${HOOKS_DIR}`,
+      files,
+      hooks,
       diagnostics
     );
   }
@@ -723,5 +765,94 @@ export class WorkspaceConfigScanner {
         );
       }
     }
+  }
+
+  /**
+   * Phase 17 (Plan 02): read the SINGLE `<dotAifetchly>/hooks/hooks.json`
+   * file, JSON.parse it, and push ONE raw {@link WorkspaceHookDraft} carrying
+   * the parsed blob (opaque `unknown`). SCAN-ONLY — the worker performs NO
+   * schema validation, NO count cap, NO array-shape check (WAT-02). The main-
+   * process converter (buildWorkspaceHookDefinitions) owns all validation.
+   *
+   * CFG-04 size cap + CFG-05 path safety are enforced here (they are I/O-level
+   * protections, not schema validation). Missing hooks/hooks.json is the happy
+   * path — no diagnostic. Mirrors {@link tryReadAgentFiles} for a single file.
+   */
+  private async tryReadHookFiles(
+    dotAifetchly: string,
+    workspaceId: string,
+    sourceId: string,
+    hooksDirName: string,
+    hooksRelativeDir: string,
+    files: AIFetchlyConfigFileSnapshot[],
+    hooks: WorkspaceHookDraft[],
+    diagnostics: AIFetchlyConfigDiagnostic[]
+  ): Promise<void> {
+    const hooksFile = path.join(dotAifetchly, hooksDirName, HOOKS_JSON);
+    const relativePath = `${hooksRelativeDir}/${HOOKS_JSON}`;
+
+    let stat: fs.Stats;
+    try {
+      stat = await fs.promises.stat(hooksFile);
+    } catch (err) {
+      // Missing hooks/hooks.json is the happy path (most workspaces have none).
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") return;
+      diagnostics.push(ioDiagnostic(sourceId, relativePath, err));
+      return;
+    }
+
+    // CFG-04: size cap before read (T-13-DoS mitigation).
+    if (stat.size > AIFETCHLY_CONFIG_LIMITS.hooksJsonBytes) {
+      diagnostics.push(
+        diagnostic(
+          "workspace",
+          sourceId,
+          relativePath,
+          "file-too-large",
+          `${HOOKS_JSON} is ${stat.size} bytes which exceeds the ${AIFETCHLY_CONFIG_LIMITS.hooksJsonBytes}-byte limit; skipped`,
+          true
+        )
+      );
+      return;
+    }
+
+    let content: Buffer;
+    try {
+      content = await fs.promises.readFile(hooksFile);
+    } catch (err) {
+      diagnostics.push(ioDiagnostic(sourceId, relativePath, err));
+      return;
+    }
+    const contentHash = crypto
+      .createHash("sha256")
+      .update(content)
+      .digest("hex");
+    files.push({
+      relativePath,
+      kind: "hook",
+      mtimeMs: stat.mtimeMs,
+      sizeBytes: stat.size,
+      contentHash,
+    });
+
+    // SCAN-ONLY: JSON.parse and ship the opaque blob. A parse failure is
+    // carried as a raw draft with `raw = null` so the main-side converter can
+    // still emit a hooks-json-invalid diagnostic with full source attribution;
+    // the worker never decides validity (WAT-02).
+    let parsed: unknown = null;
+    try {
+      parsed = JSON.parse(content.toString("utf8")) as unknown;
+    } catch {
+      parsed = null;
+    }
+
+    hooks.push({
+      id: `workspace:${workspaceId}:hooks`,
+      source: "workspace",
+      sourceId,
+      relativePath,
+      raw: parsed,
+      contentHash,
+    });
   }
 }
