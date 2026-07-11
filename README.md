@@ -79,7 +79,6 @@ aiFetchly helps you turn business intent into executable workflows:
 | **Contact Extraction** | Feed any list of URLs and extract emails, phone numbers, addresses, and social profiles with batch processing and live progress tracking. |
 | **AI Email Drafting** | Generate personalized business emails using RAG technology and your own uploaded documents as context. |
 | **Customer Email Sending & Replies** | Let AI help send customer emails and generate context-aware replies using your knowledge base, customer data, and previous workflow results. |
-| **Batch Email Campaigns** | Design campaigns with AI-generated templates, send through your own SMTP, and apply smart filters. |
 | **Social Platform Operations** | Manage social accounts and automate selected social media workflows where supported. |
 
 ### Desktop Infrastructure
@@ -87,7 +86,6 @@ aiFetchly helps you turn business intent into executable workflows:
 | Capability | Description |
 |------------|-------------|
 | **Local-First Storage** | Store application data in local SQLite through TypeORM, with sqlite-vec support for vector operations. |
-| **Dashboard & Analytics** | Review searches, tasks, emails, campaigns, and workflow activity from one interface. |
 | **Multi-Language UI** | Use the interface in English, Chinese, Spanish, French, German, and Japanese. |
 | **Electron Desktop App** | Run business automation from a desktop application across Windows, macOS, and Linux. |
 
