@@ -218,7 +218,6 @@
       <AiChatV2Composer
         :is-streaming="chatIsRunning"
         :is-processing="isPreparingAttachments"
-        :prompt-request="props.promptRequest"
         @send="onSend"
         @stop="onStop"
       >
@@ -463,6 +462,7 @@ const props = defineProps<{
   promptRequest?: AiPromptRequest | null;
 }>();
 
+const lastHandledPromptRequestId = ref<number | null>(null);
 const conversations = ref<ChatV2ConversationSummary[]>([]);
 const activeConversationId = ref<string | null>(null);
 const messages = ref<ChatV2MessageView[]>([]);
@@ -1994,6 +1994,24 @@ const onSend = async (text: string, files?: File[]): Promise<void> => {
     }
   }
 };
+
+function sendPromptRequest(request: AiPromptRequest | null | undefined): void {
+  if (!request || request.id === lastHandledPromptRequestId.value) return;
+  const text = request.text.trim();
+  if (!text || chatIsRunning.value) return;
+
+  lastHandledPromptRequestId.value = request.id;
+  void nextTick(() => {
+    void onSend(text, []);
+  });
+}
+
+watch(
+  [() => props.promptRequest, chatIsRunning],
+  ([request]) => {
+    sendPromptRequest(request);
+  }
+);
 
 onMounted(() => {
   void loadConversations();

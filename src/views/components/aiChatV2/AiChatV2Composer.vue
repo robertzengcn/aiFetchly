@@ -27,7 +27,6 @@
     </div>
 
     <v-textarea
-      ref="draftInputRef"
       v-model="draft"
       :placeholder="t('aiChatV2.input_placeholder') || 'Send a message…'"
       variant="outlined"
@@ -91,7 +90,7 @@
 </template>
 
 <script setup lang="ts">
-import { nextTick, ref, watch } from "vue";
+import { ref } from "vue";
 import { useI18n } from "vue-i18n";
 
 const MAX_UPLOAD_FILES = 3;
@@ -100,15 +99,9 @@ const MAX_UPLOAD_FILE_BYTES = 5 * 1024 * 1024; // 5 MB
 const SUPPORTED_IMAGE_EXTS = new Set([".png", ".jpg", ".jpeg", ".webp", ".gif"]);
 const SUPPORTED_DOC_EXTS = new Set([".pdf", ".docx", ".csv", ".xlsx", ".xls"]);
 
-interface AiPromptRequest {
-  id: number;
-  text: string;
-}
-
 const props = defineProps<{
   isStreaming: boolean;
   isProcessing?: boolean;
-  promptRequest?: AiPromptRequest | null;
 }>();
 const emit = defineEmits<{
   (e: "send", text: string, files: File[]): void;
@@ -120,7 +113,6 @@ const draft = ref("");
 const selectedFiles = ref<File[]>([]);
 const fileNotice = ref("");
 const fileInputRef = ref<HTMLInputElement | null>(null);
-const draftInputRef = ref<{ focus: () => void } | null>(null);
 
 let noticeTimer: ReturnType<typeof setTimeout> | null = null;
 function showNotice(msg: string): void {
@@ -202,18 +194,6 @@ const onKeydown = (event: KeyboardEvent): void => {
     onSend();
   }
 };
-
-watch(
-  () => props.promptRequest,
-  (request) => {
-    const text = request?.text?.trim();
-    if (!text) return;
-    draft.value = text;
-    void nextTick(() => {
-      draftInputRef.value?.focus();
-    });
-  }
-);
 </script>
 
 <style scoped>
