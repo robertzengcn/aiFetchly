@@ -7,6 +7,7 @@
 - **Created**: 2026-07-11
 - **Owner**: aiFetchly Desktop
 - **Related docs**:
+  - `docs/prd/plugin-subagent-management-technical-design.md`
   - `docs/marketing-subagent-system-prd.md`
   - `docs/marketing-subagent-system-technical-design.md`
   - `docs/skills/PRD_Plugin_Management_System.md`
