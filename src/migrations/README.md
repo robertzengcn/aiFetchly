@@ -22,22 +22,22 @@ is generated and registered.
 
 ## Adding a migration (cutover sequence)
 
-1. **Generate the baseline** (one-time, from a clean DB that matches current
-   entities — e.g. delete a throwaway `scraper.db`, let `synchronize` create it,
-   then diff):
+1. **Generate the baseline** (one-time). Point the CLI at an *empty* DB so every
+   entity becomes a `CREATE TABLE`:
    ```
-   yarn migration:generate src/migrations/0000-initial-schema
+   AIFETCHLY_DB_PATH=/tmp/empty.db yarn migration:generate src/migrations/0000-initial-schema
    ```
-   Review the output. Make every `CREATE TABLE` idempotent
+   (The CLI runs via `tsx`, which resolves the `@/` alias — verified to produce a
+   ~103-table baseline.) Review the output. Make every `CREATE TABLE` idempotent
    (`CREATE TABLE IF NOT EXISTS`) so existing user DBs (already at this schema)
    don't error when the baseline runs.
-2. **Register** the new migration class in `DB_MIGRATIONS` in
-   `src/config/SqliteDb.ts`. This is the switch that turns off `synchronize` in
-   packaged builds and enables `migrationsRun`.
+2. **Register** the new migration class in `DB_MIGRATIONS`
+   (`src/config/dbMigrations.ts`). This is the switch that turns off `synchronize`
+   in packaged builds and enables `migrationsRun` (SqliteDb's self-correcting gate).
 3. **Verify** up + down on a copy of a real user DB:
    ```
-   yarn migration:run        # apply
-   # confirm app boots + data intact
+   AIFETCHLY_DB_PATH=/path/to/user-copy.db yarn migration:run   # apply
+   # confirm app boots + data intact; a .premigrate backup is taken first
    ```
 4. Future schema changes: generate an incremental migration, register it, ship.
    Never edit a shipped migration — add a new one.
