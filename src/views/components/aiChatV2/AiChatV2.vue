@@ -79,7 +79,7 @@
     <!-- Main content (no sidebar) -->
     <div class="v2-shell__body">
       <AiChatV2Messages
-        :messages="messages"
+        :messages="visibleMessages"
         :active-assistant-message-id="activeAssistantMessageId"
         :stream-status="streamStatus"
         :error-message="streamError ?? undefined"
@@ -95,13 +95,25 @@
         @request-plan-changes="handleRequestPlanChanges"
       />
 
-      <!-- Pinned action cards: question + plan approval while awaiting user input.
+      <!-- Pinned action cards: permission + question + plan approval while awaiting user input.
            After the user approves/rejects/requests changes, the plan card moves
            into the message flow (see handleApprovePlan et al.). -->
       <div
-        v-if="mode === 'plan' && (pendingQuestion || pendingPlanApproval)"
+        v-if="
+          pinnedPermissionPrompt ||
+          (mode === 'plan' && (pendingQuestion || pendingPlanApproval))
+        "
         class="v2-shell__plan-panel"
       >
+        <SkillApprovalCard
+          v-if="pinnedPermissionPrompt"
+          :tool-name="pinnedPermissionToolName"
+          :permission-category="pinnedPermissionCategory"
+          :shell-preview="pinnedPermissionShellPreview"
+          :workspace-root="activeWorkspace?.rootPath ?? ''"
+          @grant="handlePinnedPermissionGrant"
+          @deny="handlePinnedPermissionDeny"
+        />
         <AiChatV2QuestionCard
           v-if="pendingQuestion"
           :question="pendingQuestion"
@@ -409,6 +421,7 @@ import AiChatV2PlanApprovalCard from "./AiChatV2PlanApprovalCard.vue";
 import AiChatV2PlanStatusBadge from "./AiChatV2PlanStatusBadge.vue";
 import AiChatV2ContextBadge from "./AiChatV2ContextBadge.vue";
 import FileOperationBadge from "../aiChat/FileOperationBadge.vue";
+import SkillApprovalCard from "../aiChat/SkillApprovalCard.vue";
 import MCPToolManager from "../aiChat/MCPToolManager.vue";
 import AgentTaskListDialog from "./AgentTaskListDialog.vue";
 import WorkspaceBadge from "./WorkspaceBadge.vue";
@@ -450,6 +463,12 @@ const CHARS_PER_TOKEN_ESTIMATE = 4;
 const AUTO_MODEL_VALUE = "auto";
 
 type Status = "idle" | "streaming" | "cancelled" | "error";
+type ShellPreview = {
+  command: string;
+  cwd?: string;
+  shell: string;
+  timeout_ms: number;
+};
 
 const { t } = useI18n();
 
@@ -924,6 +943,62 @@ const chatIsRunning = computed(
 const isConversationRunning = (conversationId: string): boolean =>
   chatIsRunning.value && conversationId === activeConversationId.value;
 
+const isPermissionPromptMessage = (message: ChatV2MessageView): boolean => {
+  if (message.messageType !== MessageType.TOOL_RESULT) return false;
+  return message.metadata?.toolResult?.needsPermissionPrompt === true;
+};
+
+const pinnedPermissionPrompt = computed<ChatV2MessageView | null>(() => {
+  for (let i = messages.value.length - 1; i >= 0; i -= 1) {
+    const message = messages.value[i];
+    if (isPermissionPromptMessage(message)) {
+      return message;
+    }
+  }
+  return null;
+});
+
+const visibleMessages = computed<ChatV2MessageView[]>(() => {
+  const pinnedId = pinnedPermissionPrompt.value?.id;
+  if (!pinnedId) return messages.value;
+  return messages.value.filter((message) => message.id !== pinnedId);
+});
+
+const pinnedPermissionToolResult = computed<Record<string, unknown>>(
+  () => pinnedPermissionPrompt.value?.metadata?.toolResult ?? {}
+);
+
+const pinnedPermissionToolName = computed(() => {
+  const toolName = pinnedPermissionPrompt.value?.metadata?.toolName;
+  return typeof toolName === "string" ? toolName : "";
+});
+
+const pinnedPermissionCategory = computed(() => {
+  const category = pinnedPermissionToolResult.value.permissionCategory;
+  return typeof category === "string" ? category : "";
+});
+
+const pinnedPermissionShellPreview = computed<ShellPreview | undefined>(() => {
+  const preview = pinnedPermissionToolResult.value.shellPreview;
+  if (!preview || typeof preview !== "object") {
+    return undefined;
+  }
+  const shellData = preview as Record<string, unknown>;
+  if (
+    typeof shellData.command !== "string" ||
+    typeof shellData.shell !== "string" ||
+    typeof shellData.timeout_ms !== "number"
+  ) {
+    return undefined;
+  }
+  return {
+    command: shellData.command,
+    cwd: typeof shellData.cwd === "string" ? shellData.cwd : undefined,
+    shell: shellData.shell,
+    timeout_ms: shellData.timeout_ms,
+  };
+});
+
 // True only between clicking send and the first visible AI chunk. Auto-clears
 // when streaming ends for any reason (complete/error/stop/permission deny).
 // Also shows during tool execution rounds (after tool_call/tool_result, before
@@ -1333,7 +1408,8 @@ const upsertToolResultMessage = (
 };
 
 const handleSkillPermissionGrant = async (
-  message: ChatV2MessageView
+  message: ChatV2MessageView,
+  _persistent?: boolean
 ): Promise<void> => {
   const toolId = resolveToolIdForPermissionMessage(message);
   if (!toolId) {
@@ -1381,6 +1457,12 @@ const handleSkillPermissionGrant = async (
   }
 };
 
+const handlePinnedPermissionGrant = (payload: { persistent: boolean }): void => {
+  const message = pinnedPermissionPrompt.value;
+  if (!message) return;
+  void handleSkillPermissionGrant(message, payload.persistent);
+};
+
 const handleSkillPermissionDeny = (message: ChatV2MessageView): void => {
   const idx = messages.value.findIndex((m) => m.id === message.id);
   const deniedMessage =
@@ -1402,6 +1484,12 @@ const handleSkillPermissionDeny = (message: ChatV2MessageView): void => {
   stopChatV2Stream();
   isStreaming.value = false;
   activeAssistantMessageId.value = null;
+};
+
+const handlePinnedPermissionDeny = (): void => {
+  const message = pinnedPermissionPrompt.value;
+  if (!message) return;
+  handleSkillPermissionDeny(message);
 };
 
 // ---------------------------------------------------------------------------
