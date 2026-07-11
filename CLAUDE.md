@@ -77,7 +77,7 @@ CRUD + rules), which use **Models** for data access over **Entities** → DB.
 - **Service** (`src/service/`) — if it orchestrates multiple Modules, owns a long-running/streaming flow, or invokes AI models / tools.
 - **Module** (`src/modules/`) — if it is single-domain CRUD + business rules over one entity family.
 - **Model** (`src/model/`) — data access only (queries, repositories).
-- **Entity** (`src/entity/`) — schema only (`@Entity`, columns, indices).
+- **Entity** (`src/entity/`) — schema only (`@Entity`, columns, indices). Add `@Index()` to FK columns (`*_id`) and frequently-filtered columns (e.g. `status`, `ai_analysis_status`) — these are the hot query paths (WS-3 R3.5).
 
 #### IPC Communication
 - Main process handlers in `src/main-process/communication/`
