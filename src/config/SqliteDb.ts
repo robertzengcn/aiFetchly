@@ -66,6 +66,7 @@ import { TaskEntity } from "@/entity/Task.entity";
 import { ContactInfoEntity } from "@/entity/ContactInfo.entity";
 import { InstalledSkillEntity } from "@/entity/InstalledSkill.entity";
 import { InstalledPluginEntity } from "@/entity/InstalledPlugin.entity";
+import { PluginMarketplaceEntity } from "@/entity/PluginMarketplace.entity";
 import { DependencyInstallAuditEntity } from "@/entity/DependencyInstallAudit";
 import { ShellAuditEntity } from "@/entity/ShellAudit.entity";
 import { GoogleMapsSearchRecordEntity } from "@/entity/GoogleMapsSearchRecord.entity";
@@ -477,6 +478,7 @@ export class SqliteDb {
           ContactInfoEntity,
           InstalledSkillEntity,
           InstalledPluginEntity,
+          PluginMarketplaceEntity,
           DependencyInstallAuditEntity,
           ShellAuditEntity,
           GoogleMapsSearchRecordEntity,
