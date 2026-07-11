@@ -37,6 +37,12 @@ import {
 } from "./DevBrowserSecurity";
 import { BridgeInvokeRequestSchema } from "./DevBrowserSchemas";
 import type { BridgeConfigResponse } from "./DevBrowserSchemas";
+import {
+  attachWebSocketRelay,
+  wrapWebContentsSend,
+  type DevBrowserEventRelay,
+  type WebContentsLike,
+} from "./DevBrowserEventRelay";
 
 export const BRIDGE_PATH_PREFIX = "/__aifetchly_dev_bridge";
 export const BRIDGE_PATH_INVOKE = `${BRIDGE_PATH_PREFIX}/invoke`;
@@ -206,34 +212,25 @@ export interface DevBrowserBridgeOptions {
   dispatcher?: DevBrowserDispatcher;
   /** Injectable for deterministic tests. Defaults to a 32-byte hex token. */
   generateToken?: () => string;
-  /**
-   * Hook invoked on every `upgrade` request. The HTTP server in this layer
-   * never handles WebSocket upgrades itself; the WS relay (Task 5) registers
-   * here so start()/stop() lifecycle stays centralized.
-   */
-  onUpgrade?: (
-    req: http.IncomingMessage,
-    socket: import("node:net").Socket,
-    head: Buffer
-  ) => void;
 }
 
 export class DevBrowserBridge {
   readonly config: DevBrowserBridgeConfig;
   private readonly dispatcher: DevBrowserDispatcher;
   private readonly generateToken: () => string;
-  private readonly onUpgrade?: DevBrowserBridgeOptions["onUpgrade"];
   private token = "";
   private server: http.Server | null = null;
   /** Actual bound port (differs from config.port when config.port === 0). */
   private actualPort = 0;
+  /** Teardown for the optional WebSocket event relay + webContents tap. */
+  private relayStop?: () => void;
+  private restoreSend?: () => void;
 
   constructor(opts: DevBrowserBridgeOptions) {
     this.config = opts.config;
     this.dispatcher = opts.dispatcher ?? new DevBrowserDispatcher();
     this.generateToken =
       opts.generateToken ?? (() => crypto.randomBytes(32).toString("hex"));
-    this.onUpgrade = opts.onUpgrade;
   }
 
   /** Per-session bearer token (available after start()). */
@@ -255,10 +252,6 @@ export class DevBrowserBridge {
     this.token = this.generateToken();
     const server = http.createServer((req, res) => this.adapt(req, res));
     this.server = server;
-
-    if (this.onUpgrade) {
-      server.on("upgrade", this.onUpgrade);
-    }
 
     await new Promise<void>((resolve, reject) => {
       const onError = (err: NodeJS.ErrnoException): void => {
@@ -284,8 +277,32 @@ export class DevBrowserBridge {
     };
   }
 
-  /** Stop the HTTP server. Safe to call multiple times. */
+  /**
+   * Attach the WebSocket event relay and tap `webContents.send` so main->
+   * renderer events are mirrored to subscribed browser clients (PRD FR-5).
+   * Must be called after {@link start}. Safe to call once.
+   */
+  attachEventRelay(webContents: WebContentsLike): DevBrowserEventRelay {
+    if (!this.server) {
+      throw new Error("attachEventRelay called before start()");
+    }
+    const attached = attachWebSocketRelay(
+      this.server,
+      this.config,
+      () => this.token
+    );
+    this.relayStop = attached.stop;
+    this.restoreSend = wrapWebContentsSend(webContents, attached.relay);
+    return attached.relay;
+  }
+
+  /** Stop the relay (if attached) and the HTTP server. Safe to call multiple times. */
   async stop(): Promise<void> {
+    this.restoreSend?.();
+    this.restoreSend = undefined;
+    this.relayStop?.();
+    this.relayStop = undefined;
+
     const server = this.server;
     if (!server) return;
     this.server = null;
