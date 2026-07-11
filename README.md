@@ -95,42 +95,30 @@ aiFetchly helps you turn business intent into executable workflows:
 
 ### Prerequisites
 
-- **Node.js** 18+
-- **Yarn** 1.x (classic)
 - **OS**: Windows 10+, macOS 10.15+, or Linux (Ubuntu 20.04+)
 - **RAM**: 4 GB minimum, 8 GB recommended
 
-### Install & Run
+### First-Time Setup
+
+1. Open aiFetchly and sign in to your account.
+2. Import business documents into the Knowledge Library if you want grounded AI responses.
+3. Install or enable skills/plugins for the workflows you want the agent to run.
+4. Configure proxies, social accounts, or SMTP credentials only if you plan to use website information collection, social, or email workflows.
+
+## Development
+
+### Prerequisites
+
+- **Node.js** 18+
+- **Yarn** 1.x (classic)
 
 ```bash
-# Clone the repository
-git clone https://github.com/robertzeng/aiFetchly.git
-cd aiFetchly
-
 # Install dependencies
 yarn install
 
 # Initialize the local SQLite database
 yarn init
 
-# Start the application
-yarn start
-```
-
-### First-Time Setup
-
-1. Configure your backend API URL in `.env`:
-   ```env
-   VITE_REMOTEADD=https://your-backend-api.example.com
-   ```
-2. Add AI provider settings and any required credentials in the application settings.
-3. Import business documents into the Knowledge Library if you want grounded AI responses.
-4. Install or enable skills/plugins for the workflows you want the agent to run.
-5. Configure proxies, social accounts, or SMTP credentials only if you plan to use website information collection, social, or email workflows.
-
-## Development
-
-```bash
 # Start dev server with hot reload
 yarn dev
 
