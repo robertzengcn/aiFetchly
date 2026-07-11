@@ -220,6 +220,7 @@ export interface PluginSourceProvenance {
   readonly sourceKind: PluginSourceKind;
   readonly sourceUri?: string;
   readonly sourceRef?: string;
+  readonly source?: PluginSource;
   readonly sourceMeta?: Record<string, unknown>;
 }
 

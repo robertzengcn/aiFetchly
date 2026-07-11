@@ -429,7 +429,9 @@ export class PluginImportService {
         version: manifest.version,
         description: manifest.description,
         author: manifest.author,
-        source: (manifest.source ?? "local") as PluginSource,
+        source: (provenance?.source ??
+          manifest.source ??
+          "local") as PluginSource,
         installPath,
         manifestJson: JSON.stringify(manifest),
         permissionsJson: JSON.stringify(manifest.permissions ?? []),
