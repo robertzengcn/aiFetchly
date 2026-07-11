@@ -2,6 +2,7 @@ import "reflect-metadata";
 import { DataSource } from "typeorm";
 import { DB_ENTITIES } from "@/config/dbEntities";
 import { DB_MIGRATIONS } from "@/config/dbMigrations";
+import { log } from "@/modules/Logger";
 // import sqlite3 from "sqlite3";
 import Database from "better-sqlite3";
 import { app } from "electron";
@@ -492,32 +493,23 @@ export class SqliteDb {
       throw new Error("Cannot create SqliteDb instance with empty filepath");
     }
 
-    // Check if path has changed - if so, reset the instance
-    if (SqliteDb.instance && SqliteDb.currentDbPath !== filepath) {
-      console.log(
-        `SqliteDb path changed from ${SqliteDb.currentDbPath} to ${filepath}, resetting instance...`
-      );
-      // Destroy old connection asynchronously (fire and forget)
-      // The old instance will be replaced immediately with a new one
-      const oldInstance = SqliteDb.instance;
-      if (oldInstance.connection?.isInitialized) {
-        oldInstance.connection.destroy().catch((error) => {
-          console.error(
-            "Failed to destroy old SqliteDb connection during path change:",
-            error
-          );
-        });
+    // WS-3 R3.4: the DB path is immutable post-init from getInstance's view.
+    // Previously a different path triggered a fire-and-forget swap that raced
+    // with in-flight callers (they could observe a destroyed connection). Path
+    // changes must go through the awaited resetInstance() (used by login /
+    // BackgroundScheduler). On a mismatch, return the authoritative singleton.
+    if (SqliteDb.instance) {
+      if (SqliteDb.currentDbPath !== filepath) {
+        log.warn(
+          `SqliteDb.getInstance called with path "${filepath}" but the active singleton uses "${SqliteDb.currentDbPath}"; returning the existing instance. Use SqliteDb.resetInstance() to change the path.`
+        );
       }
-      // Create new instance immediately with new path
-      SqliteDb.instance = new SqliteDb(filepath);
-      SqliteDb.currentDbPath = filepath;
-      SqliteDb.initPromise = null;
-    } else if (!SqliteDb.instance) {
-      SqliteDb.instance = new SqliteDb(filepath);
-      SqliteDb.currentDbPath = filepath;
-      // await SqliteDb.instance.checkConnection();
+      return SqliteDb.instance;
     }
 
+    // First initialization
+    SqliteDb.instance = new SqliteDb(filepath);
+    SqliteDb.currentDbPath = filepath;
     return SqliteDb.instance;
   }
 
