@@ -119,6 +119,7 @@ export type PluginErrorCode =
   | "cache-missing"
   | "uninstall-failed"
   | "missing_files"
+  | "plugin-identifier-invalid"
   | "unknown";
 
 export interface PluginError {
