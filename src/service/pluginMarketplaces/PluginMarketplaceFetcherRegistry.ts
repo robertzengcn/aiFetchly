@@ -6,16 +6,29 @@ import { LocalMarketplaceFetcher } from "./LocalMarketplaceFetcher";
 import { UrlMarketplaceFetcher } from "./UrlMarketplaceFetcher";
 
 export class PluginMarketplaceFetcherRegistry {
-  private readonly fetchers = new Map<PluginMarketplaceSourceKind, PluginMarketplaceFetcher>();
+  private readonly fetchers = new Map<
+    PluginMarketplaceSourceKind,
+    PluginMarketplaceFetcher
+  >();
 
-  register(fetcher: PluginMarketplaceFetcher): void {
-    this.fetchers.set(fetcher.kind, fetcher);
+  /**
+   * Register a fetcher. By default it is keyed by its own `kind`; pass an
+   * explicit `kind` to register the same fetcher instance under an alias
+   * (e.g. LocalMarketplaceFetcher handles both `local-folder` and `local-file`).
+   */
+  register(
+    fetcher: PluginMarketplaceFetcher,
+    kind: PluginMarketplaceSourceKind = fetcher.kind
+  ): void {
+    this.fetchers.set(kind, fetcher);
   }
 
   get(kind: PluginMarketplaceSourceKind): PluginMarketplaceFetcher {
     const f = this.fetchers.get(kind);
     if (!f) {
-      throw new Error(`No fetcher registered for marketplace source kind "${kind}"`);
+      throw new Error(
+        `No fetcher registered for marketplace source kind "${kind}"`
+      );
     }
     return f;
   }
@@ -27,8 +40,8 @@ export function createDefaultMarketplaceFetcherRegistry(): PluginMarketplaceFetc
   reg.register(git);
   reg.register(new GitHubMarketplaceFetcher(git));
   const local = new LocalMarketplaceFetcher();
-  reg.register(local);
-  reg.register(local); // local-file reuses LocalMarketplaceFetcher
+  reg.register(local); // local-folder
+  reg.register(local, "local-file"); // local-file reuses the same fetcher
   reg.register(new UrlMarketplaceFetcher());
   return reg;
 }

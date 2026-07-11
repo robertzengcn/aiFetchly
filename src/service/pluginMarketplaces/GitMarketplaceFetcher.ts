@@ -3,6 +3,7 @@ import * as os from "os";
 import * as path from "path";
 import { spawn as realSpawn } from "child_process";
 import { redactUri } from "@/service/pluginSources/pluginSourceRedact";
+import { applyDirectoryLimits } from "@/service/pluginSources/pluginSourceLimits";
 import {
   mktErr,
   type PluginMarketplaceFetchResult,
@@ -42,13 +43,42 @@ export class GitMarketplaceFetcher implements PluginMarketplaceFetcher {
 
   constructor(private readonly spawnFn: SpawnFn = defaultSpawn) {}
 
-  async fetch(req: PluginMarketplaceFetchRequest): Promise<PluginMarketplaceFetchResult> {
+  async fetch(
+    req: PluginMarketplaceFetchRequest
+  ): Promise<PluginMarketplaceFetchResult> {
     const uri = req.source.uri?.trim();
     if (!uri) {
-      return { success: false, errors: [mktErr("marketplace-source-invalid", "git source requires a uri.")] };
+      return {
+        success: false,
+        errors: [
+          mktErr("marketplace-source-invalid", "git source requires a uri."),
+        ],
+      };
     }
     if (uri.startsWith("http://")) {
-      return { success: false, errors: [mktErr("marketplace-source-invalid", "Plain HTTP git URLs are not allowed.")] };
+      return {
+        success: false,
+        errors: [
+          mktErr(
+            "marketplace-source-invalid",
+            "Plain HTTP git URLs are not allowed."
+          ),
+        ],
+      };
+    }
+    // Positive scheme allowlist — blocks file://, ftp://, relative paths, etc.
+    // Mirrors GitPluginFetcher; the upstream source parser does not scrub git
+    // URLs, so this is defense-in-depth alongside shell:false + arg-array.
+    if (!/^((https|ssh|git):\/\/|git@)/.test(uri)) {
+      return {
+        success: false,
+        errors: [
+          mktErr(
+            "marketplace-source-invalid",
+            "Only https, ssh, git://, and git@ URLs are accepted for git marketplace sources."
+          ),
+        ],
+      };
     }
 
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "mkt-git-"));
@@ -57,13 +87,35 @@ export class GitMarketplaceFetcher implements PluginMarketplaceFetcher {
     if (req.source.ref) args.push("--branch", req.source.ref);
     args.push(uri, target);
 
-    await runUntilSettled(this.spawnFn("git", args, { cwd: tmp, env: process.env }), DEFAULT_TIMEOUT_MS);
+    await runUntilSettled(
+      this.spawnFn("git", args, { cwd: tmp, env: process.env }),
+      DEFAULT_TIMEOUT_MS
+    );
 
     if (!fs.existsSync(target)) {
       fs.rmSync(tmp, { recursive: true, force: true });
       return {
         success: false,
-        errors: [mktErr("marketplace-fetch-failed", `git clone failed for ${redactUri(uri)}.`)],
+        errors: [
+          mktErr(
+            "marketplace-fetch-failed",
+            `git clone failed for ${redactUri(uri)}.`
+          ),
+        ],
+      };
+    }
+
+    // Cap the cloned repository size/file count (mirrors GitPluginFetcher).
+    const limits = applyDirectoryLimits(target);
+    if (!limits.ok) {
+      fs.rmSync(tmp, { recursive: true, force: true });
+      const msg =
+        limits.reason === "too-many-files"
+          ? `Cloned marketplace repository has too many files (${limits.fileCount}).`
+          : `Cloned marketplace repository is too large (${limits.totalBytes.toString()} bytes).`;
+      return {
+        success: false,
+        errors: [mktErr("marketplace-fetch-failed", msg)],
       };
     }
 
@@ -72,7 +124,12 @@ export class GitMarketplaceFetcher implements PluginMarketplaceFetcher {
       fs.rmSync(tmp, { recursive: true, force: true });
       return {
         success: false,
-        errors: [mktErr("marketplace-manifest-not-found", "No .claude-plugin/marketplace.json found in repository.")],
+        errors: [
+          mktErr(
+            "marketplace-manifest-not-found",
+            "No .claude-plugin/marketplace.json found in repository."
+          ),
+        ],
       };
     }
 
@@ -95,7 +152,10 @@ export class GitMarketplaceFetcher implements PluginMarketplaceFetcher {
   }
 }
 
-function runUntilSettled(child: SpawnChildLike, timeoutMs: number): Promise<void> {
+function runUntilSettled(
+  child: SpawnChildLike,
+  timeoutMs: number
+): Promise<void> {
   return new Promise<void>((resolve) => {
     let settled = false;
     const finish = () => {

@@ -50,7 +50,10 @@ function makeChild(code: number): SpawnChildLike {
   return child as unknown as SpawnChildLike;
 }
 
-function makeSpawnSpy(fake: FakeOpts = {}): { spawn: SpawnFn; calls: RecordedCall[] } {
+function makeSpawnSpy(fake: FakeOpts = {}): {
+  spawn: SpawnFn;
+  calls: RecordedCall[];
+} {
   const calls: RecordedCall[] = [];
   const code = fake.code ?? 0;
   const spawn: SpawnFn = (cmd, args, spawnOpts) => {
@@ -65,7 +68,10 @@ function makeSpawnSpy(fake: FakeOpts = {}): { spawn: SpawnFn; calls: RecordedCal
         fake.setupTarget(target);
       } else {
         fs.mkdirSync(path.join(target, ".claude-plugin"), { recursive: true });
-        fs.writeFileSync(path.join(target, ".claude-plugin", "marketplace.json"), FIXTURE);
+        fs.writeFileSync(
+          path.join(target, ".claude-plugin", "marketplace.json"),
+          FIXTURE
+        );
       }
     }
     return makeChild(code);
@@ -115,7 +121,9 @@ describe("GitMarketplaceFetcher", () => {
   it("omits --branch when no ref is given (still a discrete arg array)", async () => {
     const { spawn, calls } = makeSpawnSpy();
     const f = new GitMarketplaceFetcher(spawn);
-    const r = await f.fetch({ source: { kind: "git", uri: "https://example.com/repo.git" } });
+    const r = await f.fetch({
+      source: { kind: "git", uri: "https://example.com/repo.git" },
+    });
 
     expect(r.success).toBe(true);
     expect(calls[0]?.cmd).toBe("git");
@@ -143,7 +151,9 @@ describe("GitMarketplaceFetcher", () => {
     expect(r.success).toBe(true);
     const target = calls[0]?.args[calls[0].args.length - 1];
     if (r.success) {
-      expect(r.marketplace.manifestPath).toBe(path.join(target, "marketplace.json"));
+      expect(r.marketplace.manifestPath).toBe(
+        path.join(target, "marketplace.json")
+      );
       expect(r.marketplace.manifestJson).toBe(FIXTURE);
       await r.marketplace.cleanup();
     }
@@ -168,13 +178,32 @@ describe("GitMarketplaceFetcher", () => {
   it("rejects http:// uris with marketplace-source-invalid before spawning git", async () => {
     const { spawn, calls } = makeSpawnSpy();
     const f = new GitMarketplaceFetcher(spawn);
-    const r = await f.fetch({ source: { kind: "git", uri: "http://example.com/repo.git" } });
+    const r = await f.fetch({
+      source: { kind: "git", uri: "http://example.com/repo.git" },
+    });
 
     expect(r.success).toBe(false);
     expect(calls.length).toBe(0); // spawn never invoked
     if (!r.success) {
       expect(r.errors[0]?.code).toBe("marketplace-source-invalid");
     }
+  });
+
+  it("rejects non-allowlisted schemes (file://, ftp://, relative) before spawning git", async () => {
+    const { spawn, calls } = makeSpawnSpy();
+    const f = new GitMarketplaceFetcher(spawn);
+    for (const badUri of [
+      "file:///etc/passwd",
+      "ftp://example.com/repo",
+      "relative/path",
+    ]) {
+      const r = await f.fetch({ source: { kind: "git", uri: badUri } });
+      expect(r.success).toBe(false);
+      if (!r.success) {
+        expect(r.errors[0]?.code).toBe("marketplace-source-invalid");
+      }
+    }
+    expect(calls.length).toBe(0); // spawn never invoked for any of them
   });
 
   it("cleanup() removes the temp clone directory", async () => {
