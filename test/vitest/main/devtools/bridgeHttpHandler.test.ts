@@ -202,6 +202,37 @@ describe("handleBridgeHttpRequest — POST /invoke", () => {
     expect(b.requestId).toBe("r1");
   });
 
+  it("blocks a channel that has a dispatcher handler but is not on the allowlist (defense-in-depth)", async () => {
+    // The dispatcher has a handler for a non-allowlisted channel. The allowlist
+    // gate must block it independently — the two must never silently diverge.
+    const ctxWithExtra = ctx(
+      new DevBrowserDispatcher(
+        new Map([
+          [
+            "evil:channel",
+            async () => ({ status: true, msg: "", data: "leaked" }),
+          ],
+        ])
+      )
+    );
+    const res = await handleBridgeHttpRequest(
+      {
+        method: "POST",
+        path,
+        origin: CONFIG.allowedOrigin,
+        authHeader: `Bearer ${TOKEN}`,
+        body: Buffer.from(
+          JSON.stringify({ channel: "evil:channel", requestId: "r1" })
+        ),
+      },
+      ctxWithExtra
+    );
+    expect(res.statusCode).toBe(200);
+    const body = asJson(res.body);
+    expect(body.status).toBe(false);
+    expect(body.data).toBeNull();
+  });
+
   it("returns 400 for invalid JSON", async () => {
     const res = await handleBridgeHttpRequest(
       {

@@ -29,6 +29,7 @@ import http from "node:http";
 import crypto from "node:crypto";
 import type { DevBrowserBridgeConfig } from "./DevBrowserActivation";
 import { DevBrowserDispatcher } from "./DevBrowserDispatcher";
+import { isInvokeAllowed } from "./devBrowserChannels";
 import {
   checkOrigin,
   checkBearerToken,
@@ -179,6 +180,22 @@ export async function handleBridgeHttpRequest(
       return json(400, { msg: "invalid invoke request schema" }, cors);
     }
     const { channel, data, requestId } = schemaResult.data;
+    // Defense-in-depth: the canonical allowlist gates the invoke path
+    // independently of the dispatcher's handler map, so the two can never
+    // silently diverge (a handler registered without an allowlist entry is
+    // still blocked here). Safe failure mirrors the IPC contract (FR-4.3).
+    if (!isInvokeAllowed(channel)) {
+      return json(
+        200,
+        {
+          status: false,
+          msg: `Channel '${channel}' is not on the dev browser bridge invoke allowlist.`,
+          data: null,
+          requestId,
+        },
+        cors
+      );
+    }
     const result = await ctx.dispatcher.dispatch(channel, data);
     return json(
       200,
@@ -306,6 +323,13 @@ export class DevBrowserBridge {
     const server = this.server;
     if (!server) return;
     this.server = null;
+    // Close lingering keep-alive connections promptly so before-quit does not
+    // wait on a browser holding a connection open. closeAllConnections() landed
+    // in Node 18.2; guard for older runtimes / older @types/node.
+    const closable = server as { closeAllConnections?: () => void };
+    if (typeof closable.closeAllConnections === "function") {
+      closable.closeAllConnections();
+    }
     await new Promise<void>((resolve) => {
       server.close(() => resolve());
     });
