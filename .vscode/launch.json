@@ -19,7 +19,11 @@
         "DISPLAY": ":0",
         "AICHAT_DEBUG_REQUEST": "0",
         "CHOKIDAR_USEPOLLING": "1",
-        "CHOKIDAR_INTERVAL": "1000"
+        "CHOKIDAR_INTERVAL": "1000",
+        "AIFETCHLY_DEV_BROWSER_BRIDGE": "1",
+        "AIFETCHLY_DEV_BROWSER_BRIDGE_HOST": "127.0.0.1",
+        "AIFETCHLY_DEV_BROWSER_BRIDGE_PORT": "37621",
+        "AIFETCHLY_DEV_BROWSER_BRIDGE_ALLOWED_ORIGIN": "http://localhost:5173"
       },
       "outFiles": [
         "${workspaceFolder}/.vite/build/**/*.js"
@@ -44,6 +48,21 @@
       "args": ["run", "${relativeFile}"],
       "smartStep": true,
       "console": "integratedTerminal"
+    },
+    {
+      "type": "chrome",
+      "request": "launch",
+      "name": "Chrome Renderer (Dev Browser)",
+      "url": "http://localhost:5173",
+      "webRoot": "${workspaceFolder}/src/views",
+      "sourceMaps": true,
+      "skipFiles": ["<node_internals>/**"]
+    }
+  ],
+  "compounds": [
+    {
+      "name": "Electron + Chrome (Dev Browser)",
+      "configurations": ["Electron Main", "Chrome Renderer (Dev Browser)"]
     }
   ]
 }
