@@ -38,6 +38,16 @@ export class AIChatPlanApprovalModel extends BaseDb {
     });
   }
 
+  async getLatestByPlanVersion(
+    planId: string,
+    version: number
+  ): Promise<AIChatPlanApprovalEntity | null> {
+    return await this.repository.findOne({
+      where: { planId, version },
+      order: { createdAt: "DESC", id: "DESC" },
+    });
+  }
+
   async deleteByPlan(planId: string): Promise<number> {
     const result = await this.repository.delete({ planId });
     return result.affected ?? 0;
