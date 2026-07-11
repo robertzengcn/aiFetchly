@@ -318,6 +318,11 @@ export default {
   },
   home: {
     dashboard: "ダッシュボード",
+    agent_headline: "AI がビジネスの成長を支援します。",
+    agent_placeholder:
+      "リード発掘、アウトリーチ作成、キャンペーン分析を AI に依頼...",
+    agent_input_aria: "AI エージェントに質問",
+    agent_send_label: "AI チャットを開く",
     refresh_dashboard: "ダッシュボードを更新",
     analytics_trends: "分析とトレンド",
     date_range_filter: "ダッシュボードデータの日付範囲フィルター",

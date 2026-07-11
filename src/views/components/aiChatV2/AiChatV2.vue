@@ -218,6 +218,7 @@
       <AiChatV2Composer
         :is-streaming="chatIsRunning"
         :is-processing="isPreparingAttachments"
+        :prompt-request="props.promptRequest"
         @send="onSend"
         @stop="onStop"
       >
@@ -452,6 +453,15 @@ const AUTO_MODEL_VALUE = "auto";
 type Status = "idle" | "streaming" | "cancelled" | "error";
 
 const { t } = useI18n();
+
+interface AiPromptRequest {
+  id: number;
+  text: string;
+}
+
+const props = defineProps<{
+  promptRequest?: AiPromptRequest | null;
+}>();
 
 const conversations = ref<ChatV2ConversationSummary[]>([]);
 const activeConversationId = ref<string | null>(null);

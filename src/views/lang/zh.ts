@@ -299,6 +299,10 @@ export default {
   },
   home: {
     dashboard: "仪表板",
+    agent_headline: "让 AI 帮你发展业务。",
+    agent_placeholder: "让 AI 帮你寻找线索、撰写外联内容、分析营销活动...",
+    agent_input_aria: "询问 AI 代理",
+    agent_send_label: "打开 AI 聊天",
     refresh_dashboard: "刷新仪表板",
     analytics_trends: "分析与趋势",
     date_range_filter: "仪表板数据的日期范围筛选",

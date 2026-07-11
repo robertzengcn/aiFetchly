@@ -324,6 +324,11 @@ export default {
   },
   home: {
     dashboard: "Panel de control",
+    agent_headline: "Deja que la IA te ayude a hacer crecer tu negocio.",
+    agent_placeholder:
+      "Pide a la IA que encuentre leads, escriba mensajes y analice campañas...",
+    agent_input_aria: "Preguntar al agente de IA",
+    agent_send_label: "Abrir chat de IA",
     refresh_dashboard: "Actualizar panel",
     analytics_trends: "Análisis y tendencias",
     date_range_filter: "Filtro de rango de fechas para datos del panel",

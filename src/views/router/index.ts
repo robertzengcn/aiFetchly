@@ -9,7 +9,7 @@ export const constantRoutes: RouteRecordRaw[] = [
     redirect: "/dashboard/home",
     name: "Dashboard",
     meta: {
-      visible: false,
+      visible: true,
       title: "route.dashboard",
       icon: "mdi-view-dashboard",
     },
@@ -22,9 +22,33 @@ export const constantRoutes: RouteRecordRaw[] = [
           title: "route.home",
           icon: "mdi-home",
           keepAlive: false,
-          visible: false,
+          visible: true,
         },
         component: () => import("@/views/dashboard/home.vue"),
+        children: [],
+      },
+    ],
+  },
+  {
+    path: "/statistic",
+    name: "Statistic",
+    meta: {
+      visible: true,
+      title: "route.statistic",
+      icon: "mdi-chart-box-outline",
+    },
+    component: Layout,
+    children: [
+      {
+        path: "",
+        name: "statistic_page",
+        meta: {
+          title: "route.statistic",
+          icon: "mdi-chart-box-outline",
+          keepAlive: false,
+          visible: true,
+        },
+        component: () => import("@/views/pages/statistic/index.vue"),
         children: [],
       },
     ],

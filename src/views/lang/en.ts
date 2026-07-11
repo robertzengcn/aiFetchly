@@ -316,6 +316,11 @@ export default {
   },
   home: {
     dashboard: "Dashboard",
+    agent_headline: "Let AI help you grow your business.",
+    agent_placeholder:
+      "Ask AI to find leads, write outreach, analyze campaigns...",
+    agent_input_aria: "Ask the AI agent",
+    agent_send_label: "Open AI chat",
     refresh_dashboard: "Refresh Dashboard",
     analytics_trends: "Analytics & Trends",
     date_range_filter: "Date range filter for dashboard data",

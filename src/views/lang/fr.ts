@@ -319,6 +319,11 @@ export default {
   },
   home: {
     dashboard: "Tableau de bord",
+    agent_headline: "Laissez l’IA vous aider à développer votre activité.",
+    agent_placeholder:
+      "Demandez à l’IA de trouver des prospects, rédiger des messages et analyser des campagnes...",
+    agent_input_aria: "Interroger l’agent IA",
+    agent_send_label: "Ouvrir le chat IA",
     refresh_dashboard: "Actualiser le tableau de bord",
     analytics_trends: "Analyses et tendances",
     date_range_filter: "Filtre de période pour les données du tableau de bord",

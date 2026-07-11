@@ -325,6 +325,11 @@ export default {
   },
   home: {
     dashboard: "Dashboard",
+    agent_headline: "Lass KI dein Geschäft wachsen lassen.",
+    agent_placeholder:
+      "Bitte KI, Leads zu finden, Outreach zu schreiben und Kampagnen zu analysieren...",
+    agent_input_aria: "KI-Agent fragen",
+    agent_send_label: "KI-Chat öffnen",
     refresh_dashboard: "Dashboard aktualisieren",
     analytics_trends: "Analysen & Trends",
     date_range_filter: "Datumsbereichsfilter für Dashboard-Daten",
