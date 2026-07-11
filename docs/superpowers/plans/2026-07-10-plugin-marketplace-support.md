@@ -97,20 +97,28 @@ These override anything in the technical design that contradicts them.
 | `test/modules/PluginMarketplaceModule.test.ts` | mocha |
 | `test/vitest/main/plugin-marketplace-ipc.test.ts` | vitest main |
 
-### Run commands (memorize these)
+### Run commands (memorize these — VERIFIED)
+
+This worktree has **no `node_modules`**; the vitest/tsc binaries live in the main checkout. A bare `npx vitest <file>` enters **watch mode** and the `vite-plugin-checker` plugin runs a continuous tsc watcher that grinds CPU forever — never use it. Always force one-shot `run` mode with the absolute binary path.
 
 ```bash
-# utility code unit tests
-npx vitest --config vite.utilityCode.config.mjs <file>
-# main process / IPC tests
-npx vitest --config vite.main.config.mjs <file>
-# module tests (mocha, real DB temp fallback)
+# FAST one-shot utility test (completes in <1s; verified 456ms)
+CI=true AIFETCHLY_SKIP_TSC=1 /home/robertzeng/project/aiFetchly/node_modules/.bin/vitest run --config vite.utilityCode.config.mjs <file>
+
+# FAST one-shot main/IPC test
+CI=true AIFETCHLY_SKIP_TSC=1 /home/robertzeng/project/aiFetchly/node_modules/.bin/vitest run --config vite.main.config.mjs <file>
+
+# module tests (mocha; real DB temp fallback). Use the absolute tsc-safe mocha via yarn:
 yarn test <file>
-# vue type check
+
+# Type-check gate — run ONCE before committing each task (~5-15s cold):
+/home/robertzeng/project/aiFetchly/node_modules/.bin/tsc --noEmit -p tsconfig.json
+
+# Vue renderer type check (run at the end of UI tasks):
 yarn vue-check
 ```
 
-If `tsc` globalSetup is slow during a tight loop, bypass with `AIFETCHLY_SKIP_TSC=1` — but never commit code that needs it.
+**Workflow per task:** use the FAST vitest command for RED→GREEN iteration; then run the `tsc --noEmit` gate once before commit. Do NOT run `yarn tsc-result` (it's `tsc --noEmit --watch` — watch mode). Do NOT use bare `npx vitest`.
 
 ## Task 1: Marketplace type contracts + plugin identifier parser
 
