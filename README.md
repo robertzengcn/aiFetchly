@@ -15,7 +15,7 @@
 
 ---
 
-**aiFetchly** is an open-source desktop AI agent platform for business work. It combines local knowledge, browser automation, installable skills, scheduled tasks, plugins, and specialist subagents so teams can automate research, document processing, data extraction, communication workflows, and recurring operations from one application.
+**aiFetchly** is an open-source desktop AI agent platform for business work. It combines local knowledge, browser automation, installable skills, scheduled tasks, plugins, and specialist subagents so teams can automate research, document processing, website information collection, customer communication, and recurring operations from one application.
 
 aiFetchly started with marketing automation features such as lead discovery, contact extraction, and email outreach. Those workflows are still included, but the product direction is broader: aiFetchly is becoming a local-first AI agent workspace for business users who need tools, memory, files, web automation, and controllable execution.
 
@@ -25,7 +25,7 @@ aiFetchly helps you turn business intent into executable workflows:
 
 - **Ask an AI agent to do work** — run research, analyze files, extract data, prepare messages, summarize documents, and operate tools from a chat interface.
 - **Use your business knowledge** — upload documents into a local knowledge library and generate answers or drafts grounded in your own files.
-- **Automate browser and data tasks** — scrape websites, collect structured information, process URLs, and export results.
+- **Automate browser and data tasks** — get information from websites, collect structured data, process URLs, and export results.
 - **Delegate to specialist subagents** — run background agents with their own prompts, tool permissions, resource limits, and structured outputs.
 - **Extend the workspace** — install skills and plugins to add new tools, business workflows, and integrations.
 - **Stay in control** — keep data in a local SQLite database, review tool activity, gate permissions, and run on your own desktop.
@@ -38,6 +38,7 @@ aiFetchly helps you turn business intent into executable workflows:
 |------------|-------------|
 | **Tool-Using AI Chat** | Work with an AI assistant that can call approved tools, use business context, and complete multi-step tasks from one desktop workspace. |
 | **Business Task Execution** | Run research, extraction, file processing, message drafting, scheduling, and automation workflows without switching across multiple SaaS tools. |
+| **AI Customer Email Assistant** | Use AI to draft, send, and reply to customer emails with business context from your documents and workflow data. |
 | **Application Support Subagents** | Deploy specialist AI subagents that run autonomously with their own system prompt, tool allowlist, resource limits, and structured output schema. Agent tasks persist with transcripts and tool-call audit trails. |
 | **Permission-Gated Automation** | Control which tools, plugins, hooks, and subagents can run. Tool calls are policy-gated through global deny rules, agent allowlists, and per-task blocked tools. |
 
@@ -68,7 +69,7 @@ aiFetchly helps you turn business intent into executable workflows:
 | **Structured Data Extraction** | Extract emails, phone numbers, addresses, social profiles, company details, directory records, and other structured business data. |
 | **Task Scheduling** | Schedule tasks with cron timing, chain dependent jobs, set up recurring workflows, and monitor execution history. |
 | **One-Click Export** | Download datasets as CSV and generate reports from collected or processed business data. |
-| **Proxy Management** | Manage rotating HTTP, HTTPS, and SOCKS5 proxies. Bulk import, validate, and test proxies for browser automation and scraping workflows. |
+| **Proxy Management** | Manage rotating HTTP, HTTPS, and SOCKS5 proxies. Bulk import, validate, and test proxies for browser automation and website information collection workflows. |
 
 ### Included Business Growth Workflows
 
@@ -77,6 +78,7 @@ aiFetchly helps you turn business intent into executable workflows:
 | **Company & Lead Research** | Find businesses from search engines, Google Maps, Yandex Maps, Yellow Pages, and other directory-style sources. |
 | **Contact Extraction** | Feed any list of URLs and extract emails, phone numbers, addresses, and social profiles with batch processing and live progress tracking. |
 | **AI Email Drafting** | Generate personalized business emails using RAG technology and your own uploaded documents as context. |
+| **Customer Email Sending & Replies** | Let AI help send customer emails and generate context-aware replies using your knowledge base, customer data, and previous workflow results. |
 | **Batch Email Campaigns** | Design campaigns with AI-generated templates, send through your own SMTP, apply smart filters, and track delivery status in real time. |
 | **Social Platform Operations** | Manage social accounts and automate selected social media workflows where supported. |
 
@@ -124,7 +126,7 @@ yarn start
 2. Add AI provider settings and any required credentials in the application settings.
 3. Import business documents into the Knowledge Library if you want grounded AI responses.
 4. Install or enable skills/plugins for the workflows you want the agent to run.
-5. Configure proxies, social accounts, or SMTP credentials only if you plan to use scraping, social, or email workflows.
+5. Configure proxies, social accounts, or SMTP credentials only if you plan to use website information collection, social, or email workflows.
 
 ## Development
 
