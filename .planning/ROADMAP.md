@@ -187,7 +187,7 @@ Plans:
 3. The `AIFetchlyWorkspaceTrust` entity persists per-capability trust (instructions/commands/agents/hooks/skills) via Model/Module (no DB access from worker).
 4. Hook failures are non-fatal and surface as diagnostics; unsupported events produce diagnostics.
 
-**Plans:** 3 plans
+**Plans:** 3/3 plans complete
 Plans:
 
 **Wave 1**
@@ -245,5 +245,5 @@ Plans:
 | 14. Workspace Watcher Worker | v2.0 | 3/5 | In Progress|  |
 | 15. Prompt Command Files | v2.0 | 2/2 | Complete    | 2026-07-07 |
 | 16. Dynamic Agents | v2.0 | 3/3 | Complete   | 2026-07-09 |
-| 17. Hooks | v2.0 | 3/3 | Complete   | 2026-07-11 |
+| 17. Hooks | v2.0 | 3/3 | Complete    | 2026-07-11 |
 | 18. Skills and Plugin Integration | v2.0 | 0/? | Not started | — |

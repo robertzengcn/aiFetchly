@@ -48,7 +48,7 @@ Requirements for the v2.0 milestone. Each maps to exactly one roadmap phase (13â
 ### Trust & Security (TRS)
 
 - [ ] **TRS-01**: Global `~/.aifetchly` enabled by default (user-owned); workspace `.aifetchly` untrusted until approved; trust enforced in `AIFetchlyRuntimeRegistrySync` before registry mutation (not UI-only disabled state)
-- [ ] **TRS-02**: Workspace AI-config trust persisted via a TypeORM entity + Model + Module (`AIFetchlyWorkspaceTrust`) with per-capability flags (instructions/commands/agents/hooks/skills); added before hooks/skills ship
+- [x] **TRS-02**: Workspace AI-config trust persisted via a TypeORM entity + Model + Module (`AIFetchlyWorkspaceTrust`) with per-capability flags (instructions/commands/agents/hooks/skills); added before hooks/skills ship
 - [ ] **TRS-03**: Trust prompt UI offers Preview / Trust instructions only / Trust all workspace AI config / Keep disabled when a workspace contains `.aifetchly`
 - [ ] **TRS-04**: External web/scraped/attachment content cannot override local trust policies; injected instruction blocks are clearly labeled by source
 - [x] **TRS-05**: AI-serving IPC handlers (prompt command submit, skill command, agent run, AI-backed config diagnostics) check `USER_AI_ENABLED` via `Token`; list/status/reload-rescan handlers do not
@@ -63,8 +63,8 @@ Requirements for the v2.0 milestone. Each maps to exactly one roadmap phase (13â
 
 ### Hooks (HOK)
 
-- [ ] **HOK-01**: `hooks/hooks.json` parsed (matchers for `PreToolUse`/`PostToolUse`/`SessionStart`/`Stop`) from user and trusted-workspace config; `HookRegistry` gains `replaceSource`/`unregisterSource` (or an adapter in `AIFetchlyRuntimeRegistrySync`)
-- [ ] **HOK-02**: Hooks dispatched only through existing safe hook boundaries; never execute shell directly in the main process (actions route through worker/sandbox or a registered skill); workspace hooks require trust; failures are non-fatal and surface as diagnostics; unsupported events produce diagnostics
+- [x] **HOK-01**: `hooks/hooks.json` parsed (matchers for `PreToolUse`/`PostToolUse`/`SessionStart`/`Stop`) from user and trusted-workspace config; `HookRegistry` gains `replaceSource`/`unregisterSource` (or an adapter in `AIFetchlyRuntimeRegistrySync`)
+- [x] **HOK-02**: Hooks dispatched only through existing safe hook boundaries; never execute shell directly in the main process (actions route through worker/sandbox or a registered skill); workspace hooks require trust; failures are non-fatal and surface as diagnostics; unsupported events produce diagnostics
 
 ### Skills & Plugins (SKL)
 
@@ -139,7 +139,7 @@ Each requirement maps to exactly one phase. Updated during roadmap creation.
 | WAT-06 | Phase 14 | Pending |
 | WAT-07 | Phase 14 | Complete |
 | TRS-01 | Phase 14 | Pending |
-| TRS-02 | Phase 17 | Pending |
+| TRS-02 | Phase 17 | Complete |
 | TRS-03 | Phase 14 | Pending |
 | TRS-04 | Phase 14 | Pending |
 | TRS-05 | Phase 13 | Complete |
@@ -148,8 +148,8 @@ Each requirement maps to exactly one phase. Updated during roadmap creation.
 | AGT-01 | Phase 16 | Complete | 2026-07-09 |
 | AGT-02 | Phase 16 | Complete | 2026-07-09 |
 | AGT-03 | Phase 16 | Complete |
-| HOK-01 | Phase 17 | Pending |
-| HOK-02 | Phase 17 | Pending |
+| HOK-01 | Phase 17 | Complete |
+| HOK-02 | Phase 17 | Complete |
 | SKL-01 | Phase 18 | Pending |
 | SKL-02 | Phase 18 | Pending |
 | DX-01 | Phase 13 | Pending |
