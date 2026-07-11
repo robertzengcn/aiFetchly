@@ -70,7 +70,7 @@ const insightItems = computed<InsightItem[]>(() => [
       t("insights.market_description") ||
       "Research markets and search result opportunities.",
     icon: "mdi-magnify",
-    path: "/search/form",
+    path: "/search/tasklist",
   },
   {
     title: t("insights.contact_profile") || "Contact Profile",
@@ -78,7 +78,7 @@ const insightItems = computed<InsightItem[]>(() => [
       t("insights.contact_description") ||
       "Extract and enrich contact profiles for prospects.",
     icon: "mdi-email-search",
-    path: "/emailextraction/form",
+    path: "/emailextraction/tasklist",
   },
   {
     title: t("route.yellow_pages") || "Directory Assistant",
