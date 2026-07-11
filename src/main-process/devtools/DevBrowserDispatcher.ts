@@ -1,0 +1,125 @@
+"use strict";
+/**
+ * Dev Browser Bridge request dispatcher (PRD FR-4, technical design §9 Option B).
+ *
+ * Implements explicit, reviewed handlers for each allowed invoke channel. Each
+ * handler calls the SAME module/controller the corresponding `ipcMain.handle`
+ * registration uses — never a raw repository / direct database access (FR-6.5,
+ * NFR-3). The dispatcher is intentionally tiny: route to a handler, normalize
+ * the result into the shared `{ status, msg, data }` contract, and convert any
+ * thrown error into a safe failure response (FR-4.3) without rethrowing.
+ *
+ * Design note: handlers are injected via a `ReadonlyMap` so the routing logic
+ * (unsupported channel, error isolation, normalization) is unit-testable in
+ * isolation from the Electron-dependent modules the default handlers call.
+ */
+import type { CommonMessage } from "@/entityTypes/commonType";
+import { GET_APP_INFO, QUERY_USER_INFO } from "@/config/channellist";
+import { MainProcessAppInfoModule } from "@/modules/MainProcessAppInfoModule";
+import { UserController } from "@/controller/UserController";
+
+/** A single channel handler. Returns a CommonMessage or a bare payload. */
+export type DevBrowserHandler = (
+  data: unknown
+) => Promise<CommonMessage<unknown> | unknown> | CommonMessage<unknown> | unknown;
+
+/** Coerce a handler return value into the canonical bridge response shape. */
+function normalizeBridgeResult(raw: unknown): CommonMessage<unknown> {
+  if (raw === null || raw === undefined) {
+    return { status: false, msg: "Handler returned no result.", data: null };
+  }
+  if (
+    typeof raw === "object" &&
+    raw !== null &&
+    "status" in raw &&
+    typeof (raw as { status: unknown }).status === "boolean"
+  ) {
+    const obj = raw as CommonMessage<unknown>;
+    return {
+      status: obj.status,
+      msg: typeof obj.msg === "string" ? obj.msg : "",
+      data: "data" in obj ? obj.data : null,
+    };
+  }
+  // Bare payload: treat as a successful result and wrap it.
+  return { status: true, msg: "", data: raw };
+}
+
+export class DevBrowserDispatcher {
+  private readonly handlers: ReadonlyMap<string, DevBrowserHandler>;
+
+  constructor(handlers?: ReadonlyMap<string, DevBrowserHandler>) {
+    this.handlers = handlers ?? createDefaultHandlers();
+  }
+
+  /** True iff a reviewed handler exists for this channel. */
+  isDispatchable(channel: string): boolean {
+    return this.handlers.has(channel);
+  }
+
+  /**
+   * Dispatch an invoke request. Never throws — handler errors and unsupported
+   * channels both become `{ status: false }` responses.
+   */
+  async dispatch(
+    channel: string,
+    data: unknown
+  ): Promise<CommonMessage<unknown>> {
+    const handler = this.handlers.get(channel);
+    if (!handler) {
+      return {
+        status: false,
+        msg: `Channel '${channel}' is not available through the dev browser bridge.`,
+        data: null,
+      };
+    }
+    try {
+      const raw = await handler(data);
+      return normalizeBridgeResult(raw);
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      return {
+        status: false,
+        msg: `Dev browser bridge handler error: ${msg}`,
+        data: null,
+      };
+    }
+  }
+}
+
+/**
+ * Default handler set — the reviewed MVP channels.
+ *
+ * Each entry calls the same module/controller layer the IPC handler uses, so
+ * business logic stays in exactly one place. Add a channel here AND in
+ * devBrowserChannels.ts when expanding coverage.
+ */
+export function createDefaultHandlers(): ReadonlyMap<string, DevBrowserHandler> {
+  const handlers = new Map<string, DevBrowserHandler>();
+
+  // GET_APP_INFO — read-only app metadata (package.json / Electron app info).
+  handlers.set(GET_APP_INFO, async () => {
+    const module = new MainProcessAppInfoModule();
+    const info = module.getAppInfo();
+    const result: CommonMessage<unknown> = {
+      status: true,
+      msg: "get app info success",
+      data: info,
+    };
+    return result;
+  });
+
+  // QUERY_USER_INFO — read-only local user profile (Token-backed).
+  handlers.set(QUERY_USER_INFO, async () => {
+    const controller = new UserController();
+    const info = controller.getUserInfo();
+    const result: CommonMessage<unknown> = {
+      status: true,
+      msg: "",
+      data: info,
+    };
+    return result;
+  });
+
+  return handlers;
+}
