@@ -12,7 +12,7 @@ Consequences → Alternatives**.
 | [0004](0004-graduated-diff-coverage-gate.md) | Graduated diff-coverage gate, not blanket 80% | WS-2 | Accepted |
 | 0005 | Zod `zod/v4` mandate: honor or drop | WS-7 | Pending |
 | 0006 | `lazySchema` required for all IPC/worker schemas | WS-1/WS-4 | Pending |
-| 0007 | TypeORM migrations over `synchronize` in production | WS-3 | Pending |
+| [0007](0007-migrations-over-synchronize.md) | TypeORM migrations over `synchronize` in production | WS-3 | Accepted (gate + backup shipped; baseline migration pending) |
 | 0008 | Single worker transport: `utilityProcess.fork` + `parentPort` | WS-4 | Pending |
 | 0009 | Worker/browser concurrency budget value & derivation | WS-4 | Pending |
 | 0010 | Constructor injection with defaults for hub modules | WS-5 | Pending |

@@ -411,6 +411,25 @@ function getSqliteVecExtensionPath(): string | null {
   }
 }
 
+/** Reliable production signal: the app is packaged. NODE_ENV is not reliably
+ * "production" in packaged Electron, so app.isPackaged is the source of truth. */
+function isPackagedBuild(): boolean {
+  try {
+    return Boolean((app as { isPackaged?: boolean }).isPackaged);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * WS-3 (R3.1): registered schema migrations (TypeORM MigrationInterface classes).
+ * While this is empty, the DataSource keeps using `synchronize` (current behavior
+ * — safe). Once the baseline migration is added here, packaged builds stop
+ * auto-mutating the schema and run pending migrations on boot instead.
+ * See docs/adr/0007-migrations-over-synchronize.md.
+ */
+const DB_MIGRATIONS: Array<new () => import("typeorm").MigrationInterface> = [];
+
 export class SqliteDb {
   public connection: DataSource;
   private static instance: SqliteDb | null = null;
@@ -517,8 +536,13 @@ export class SqliteDb {
           HookConfigEntity,
           HookAuditEntryEntity,
         ],
-        synchronize: true,
-        migrations: [],
+        // WS-3 R3.1: dev keeps `synchronize` for schema ergonomics. Packaged
+        // (production) builds stop auto-mutating the schema ONLY once a baseline
+        // migration exists (DB_MIGRATIONS.length > 0), then run migrations on
+        // boot. Until the baseline lands, behavior is unchanged (synchronize on).
+        synchronize: !isPackagedBuild() || DB_MIGRATIONS.length === 0,
+        migrationsRun: isPackagedBuild() && DB_MIGRATIONS.length > 0,
+        migrations: DB_MIGRATIONS,
         subscribers: [],
         //logging:  process.env.NODE_ENV !== 'production', /// use this for debugging
         logging: false,
@@ -591,6 +615,10 @@ export class SqliteDb {
       return;
     }
 
+    // WS-3 R3.1: snapshot the DB before initialize() can run migrations, so a
+    // bad migration is recoverable. No-op until migrations exist / in dev.
+    SqliteDb.backupDatabaseBeforeMigrate();
+
     if (!SqliteDb.initPromise) {
       const guardedPromise = initializeConnection()
         .then(() => undefined)
@@ -603,6 +631,36 @@ export class SqliteDb {
     }
 
     await SqliteDb.initPromise;
+  }
+
+  /**
+   * WS-3 R3.1 safety: copy scraper.db to a timestamped .premigrate backup before
+   * the connection initializes (which may run pending migrations). Best-effort —
+   * never blocks startup. Only acts in packaged builds with migrations
+   * registered, so it is a no-op today and activates automatically once the
+   * baseline migration lands in DB_MIGRATIONS.
+   */
+  private static backupDatabaseBeforeMigrate(): void {
+    if (
+      DB_MIGRATIONS.length === 0 ||
+      !isPackagedBuild() ||
+      !SqliteDb.currentDbPath
+    ) {
+      return;
+    }
+    try {
+      const dbFile = path.join(SqliteDb.currentDbPath, "scraper.db");
+      if (!fs.existsSync(dbFile)) return;
+      const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+      const backupPath = path.join(
+        SqliteDb.currentDbPath,
+        `scraper.db.premigrate-${stamp}`
+      );
+      fs.copyFileSync(dbFile, backupPath);
+      console.log(`[SqliteDb] pre-migration backup written: ${backupPath}`);
+    } catch (err) {
+      console.error("[SqliteDb] pre-migration backup failed:", err);
+    }
   }
 
   public static getInstance(filepath: string): SqliteDb {
