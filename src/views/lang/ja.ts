@@ -81,6 +81,7 @@ export default {
   },
   route: {
     dashboard: "ダッシュボード",
+    insights: "インサイト",
     home: "ホーム",
     statistic: "統計",
     system_setting: "システム設定",
@@ -1989,6 +1990,22 @@ emailAutoReplyAudit: {
     error_parse_failed: "エージェント出力を解析できませんでした。",
     tool_blocked: "エージェントポリシーによりツールがブロックされました",
     draft_label: "下書き — レビュー必須",
+  },
+  insights: {
+    title: "インサイト",
+    subtitle:
+      "ビジネスシグナル、見込み客発掘、アウトリーチ管理をひとつのワークスペースで行えます。",
+    contact_profile: "連絡先プロフィール",
+    statistics_description:
+      "アクティビティ、トレンド、キャンペーン成果を追跡します。",
+    market_description: "市場と検索結果の機会を調査します。",
+    contact_description:
+      "見込み客向けの連絡先プロフィールを抽出して充実させます。",
+    directory_description:
+      "ディレクトリタスクと収集済みの企業レコードを確認します。",
+    maps_description: "地図プロバイダーから地域ビジネスを見つけます。",
+    outreach_description:
+      "アウトリーチタスク、テンプレート、フィルター、返信を管理します。",
   },
   aiChatV2: {
     title: "AI アシスタント",

@@ -81,6 +81,7 @@ export default {
   },
   route: {
     dashboard: "Dashboard",
+    insights: "Insights",
     home: "Startseite",
     statistic: "Statistiken",
     system_setting: "Systemeinstellungen",
@@ -2024,6 +2025,23 @@ emailAutoReplyAudit: {
     error_parse_failed: "Agent-Ausgabe konnte nicht analysiert werden.",
     tool_blocked: "Tool durch Agent-Richtlinie blockiert",
     draft_label: "Entwurf — Überprüfung erforderlich",
+  },
+  insights: {
+    title: "Insights",
+    subtitle:
+      "Prüfe Geschäftssignale, finde Interessenten und verwalte Outreach in einem Arbeitsbereich.",
+    contact_profile: "Kontaktprofil",
+    statistics_description:
+      "Verfolge Aktivitäten, Trends und Kampagnenleistung.",
+    market_description:
+      "Analysiere Märkte und Chancen in Suchergebnissen.",
+    contact_description:
+      "Extrahiere und erweitere Kontaktprofile für Interessenten.",
+    directory_description:
+      "Durchsuche Verzeichnisaufgaben und gesammelte Unternehmensdaten.",
+    maps_description: "Finde lokale Unternehmen über Kartendienste.",
+    outreach_description:
+      "Verwalte Outreach-Aufgaben, Vorlagen, Filter und Antworten.",
   },
   aiChatV2: {
     title: "KI-Assistent",

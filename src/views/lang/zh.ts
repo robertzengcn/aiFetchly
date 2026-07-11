@@ -71,6 +71,7 @@ export default {
   },
   route: {
     dashboard: "仪表板",
+    insights: "洞察",
     home: "首页",
     statistic: "数据统计",
     system_setting: "系统设置",
@@ -1965,6 +1966,17 @@ emailAutoReplyAudit: {
     error_parse_failed: "代理输出无法解析。",
     tool_blocked: "工具被代理策略阻止",
     draft_label: "草稿 — 需要审核",
+  },
+  insights: {
+    title: "洞察",
+    subtitle: "在一个工作区查看业务信号、发现潜在客户并管理外联。",
+    contact_profile: "联系人画像",
+    statistics_description: "跟踪活动、趋势和营销表现。",
+    market_description: "研究市场和搜索结果机会。",
+    contact_description: "为潜在客户提取并丰富联系人画像。",
+    directory_description: "浏览目录任务和已收集的商家记录。",
+    maps_description: "从地图服务中查找本地商家。",
+    outreach_description: "管理外联任务、模板、过滤器和回复。",
   },
   aiChatV2: {
     title: "AI 助手",

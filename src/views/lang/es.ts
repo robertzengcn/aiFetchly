@@ -81,6 +81,7 @@ export default {
   },
   route: {
     dashboard: "Panel",
+    insights: "Insights",
     home: "Inicio",
     statistic: "Estadísticas",
     system_setting: "Configuración del sistema",
@@ -2030,6 +2031,23 @@ emailAutoReplyAudit: {
     error_parse_failed: "No se pudo analizar la salida del agente.",
     tool_blocked: "Herramienta bloqueada por la política del agente",
     draft_label: "Borrador — requiere revisión",
+  },
+  insights: {
+    title: "Insights",
+    subtitle:
+      "Revisa señales de negocio, encuentra prospectos y gestiona el outreach desde un solo espacio.",
+    contact_profile: "Perfil de contacto",
+    statistics_description:
+      "Sigue la actividad, las tendencias y el rendimiento de campañas.",
+    market_description:
+      "Investiga mercados y oportunidades en resultados de búsqueda.",
+    contact_description:
+      "Extrae y enriquece perfiles de contacto para prospectos.",
+    directory_description:
+      "Consulta tareas de directorio y registros de negocios recopilados.",
+    maps_description: "Encuentra negocios locales desde proveedores de mapas.",
+    outreach_description:
+      "Gestiona tareas de outreach, plantillas, filtros y respuestas.",
   },
   aiChatV2: {
     title: "Asistente de IA",

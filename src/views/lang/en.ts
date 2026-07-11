@@ -80,6 +80,7 @@ export default {
   },
   route: {
     dashboard: "Dashboard",
+    insights: "Insights",
     home: "Home",
     statistic: "Statistics",
     system_setting: "System Setting",
@@ -2030,6 +2031,20 @@ emailAutoReplyAudit: {
     error_parse_failed: "Agent output could not be parsed.",
     tool_blocked: "Tool blocked by agent policy",
     draft_label: "Draft — review required",
+  },
+  insights: {
+    title: "Insights",
+    subtitle:
+      "Review business signals, find prospects, and manage outreach from one workspace.",
+    contact_profile: "Contact Profile",
+    statistics_description: "Track activity, trends, and campaign performance.",
+    market_description: "Research markets and search result opportunities.",
+    contact_description: "Extract and enrich contact profiles for prospects.",
+    directory_description:
+      "Browse directory tasks and collected business records.",
+    maps_description: "Find local businesses from map providers.",
+    outreach_description:
+      "Manage outreach tasks, templates, filters, and replies.",
   },
   aiChatV2: {
     title: "AI Assistant",

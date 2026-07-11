@@ -30,10 +30,34 @@ export const constantRoutes: RouteRecordRaw[] = [
     ],
   },
   {
+    path: "/insights",
+    name: "Insights",
+    meta: {
+      visible: true,
+      title: "route.insights",
+      icon: "mdi-compass-outline",
+    },
+    component: Layout,
+    children: [
+      {
+        path: "",
+        name: "InsightsHome",
+        meta: {
+          title: "route.insights",
+          icon: "mdi-compass-outline",
+          keepAlive: false,
+          visible: true,
+        },
+        component: () => import("@/views/pages/insights/index.vue"),
+        children: [],
+      },
+    ],
+  },
+  {
     path: "/statistic",
     name: "Statistic",
     meta: {
-      visible: true,
+      visible: false,
       title: "route.statistic",
       icon: "mdi-chart-box-outline",
     },
@@ -279,7 +303,7 @@ export const constantRoutes: RouteRecordRaw[] = [
     path: "/search",
     name: "Search",
     meta: {
-      visible: true,
+      visible: false,
       title: "route.search",
       icon: "mdi-magnify",
     },
@@ -343,7 +367,7 @@ export const constantRoutes: RouteRecordRaw[] = [
     path: "/emailextraction",
     name: "Email_Extraction",
     meta: {
-      visible: true,
+      visible: false,
       title: "route.email_extraction",
       icon: "mdi-email-search",
     },
@@ -407,7 +431,7 @@ export const constantRoutes: RouteRecordRaw[] = [
     path: "/yellowpages",
     name: "Yellow_Pages",
     meta: {
-      visible: true,
+      visible: false,
       title: "route.yellow_pages",
       icon: "mdi-database-search",
     },
@@ -469,7 +493,7 @@ export const constantRoutes: RouteRecordRaw[] = [
     path: "/map-scraper",
     name: "Map_Scraper",
     meta: {
-      visible: true,
+      visible: false,
       title: "route.map_scraper",
       icon: "mdi-map-marker-multiple",
     },
@@ -514,7 +538,7 @@ export const constantRoutes: RouteRecordRaw[] = [
     path: "/emailmarketing",
     name: "Email_Marketing",
     meta: {
-      visible: true,
+      visible: false,
       title: "route.email_marketing",
       icon: "mdi-email-multiple",
     },

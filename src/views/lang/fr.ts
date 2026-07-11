@@ -81,6 +81,7 @@ export default {
   },
   route: {
     dashboard: "Tableau de bord",
+    insights: "Insights",
     home: "Accueil",
     statistic: "Statistiques",
     system_setting: "Paramètres système",
@@ -2013,6 +2014,24 @@ emailAutoReplyAudit: {
     error_parse_failed: "La sortie de l'agent n'a pas pu être analysée.",
     tool_blocked: "Outil bloqué par la politique de l'agent",
     draft_label: "Brouillon — révision requise",
+  },
+  insights: {
+    title: "Insights",
+    subtitle:
+      "Consultez les signaux business, trouvez des prospects et gérez la prospection dans un seul espace.",
+    contact_profile: "Profil de contact",
+    statistics_description:
+      "Suivez l’activité, les tendances et les performances des campagnes.",
+    market_description:
+      "Analysez les marchés et les opportunités dans les résultats de recherche.",
+    contact_description:
+      "Extrayez et enrichissez les profils de contact des prospects.",
+    directory_description:
+      "Parcourez les tâches d’annuaire et les fiches d’entreprises collectées.",
+    maps_description:
+      "Trouvez des entreprises locales depuis les fournisseurs de cartes.",
+    outreach_description:
+      "Gérez les tâches de prospection, modèles, filtres et réponses.",
   },
   aiChatV2: {
     title: "Assistant IA",
