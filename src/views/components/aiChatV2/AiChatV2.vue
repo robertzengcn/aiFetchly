@@ -1496,6 +1496,66 @@ const handlePinnedPermissionDeny = (): void => {
 // Plan Mode handlers
 // ---------------------------------------------------------------------------
 
+const isSubmitPlanToolMessage = (message: ChatV2MessageView): boolean =>
+  message.metadata?.toolName === "SubmitPlanForApproval";
+
+const readPlanToolResultVersion = (
+  message: ChatV2MessageView
+): { planId?: string; version?: number } | null => {
+  if (message.messageType !== MessageType.TOOL_RESULT) return null;
+  const result = message.metadata?.toolResult;
+  if (result) {
+    return {
+      planId: typeof result.planId === "string" ? result.planId : undefined,
+      version: typeof result.version === "number" ? result.version : undefined,
+    };
+  }
+  try {
+    const parsed = JSON.parse(message.content) as Record<string, unknown>;
+    return {
+      planId: typeof parsed.planId === "string" ? parsed.planId : undefined,
+      version: typeof parsed.version === "number" ? parsed.version : undefined,
+    };
+  } catch {
+    return null;
+  }
+};
+
+const findPlanMessageInsertionIndex = (
+  state: AIChatPlanStateView,
+  existingPlanIndex: number
+): number => {
+  let fallbackIndex = -1;
+  for (let i = messages.value.length - 1; i >= 0; i -= 1) {
+    if (i === existingPlanIndex) continue;
+    const message = messages.value[i];
+    if (!isSubmitPlanToolMessage(message)) continue;
+    fallbackIndex = i + 1;
+    const versionInfo = readPlanToolResultVersion(message);
+    if (
+      versionInfo?.planId === state.planId &&
+      versionInfo.version === state.currentVersion
+    ) {
+      return i + 1;
+    }
+  }
+  if (fallbackIndex !== -1) return fallbackIndex;
+
+  const planCreatedAt = state.latestVersion
+    ? Date.parse(state.latestVersion.createdAt)
+    : NaN;
+  if (!Number.isNaN(planCreatedAt)) {
+    const chronologicalIndex = messages.value.findIndex((message, index) => {
+      if (index === existingPlanIndex) return false;
+      const messageTime = Date.parse(message.timestamp);
+      return !Number.isNaN(messageTime) && messageTime > planCreatedAt;
+    });
+    if (chronologicalIndex !== -1) return chronologicalIndex;
+  }
+
+  return messages.value.length;
+};
+
 /**
  * Insert or update the inline plan-approval message row so the card appears
  * in the conversation flow (not pinned at the bottom). After approval/reject
@@ -1504,31 +1564,45 @@ const handlePinnedPermissionDeny = (): void => {
 const upsertPlanMessage = (state: AIChatPlanStateView): void => {
   const planMsgId = `plan-${state.planId}`;
   const existingIdx = messages.value.findIndex((m) => m.id === planMsgId);
+  const insertIdx = findPlanMessageInsertionIndex(state, existingIdx);
   const metadata = {
     source: "chat-v2" as const,
     planEventType: "plan_submitted" as const,
     planId: state.planId,
     planStateView: state,
   };
-  if (existingIdx !== -1) {
-    messages.value[existingIdx] = {
-      ...messages.value[existingIdx],
-      metadata: {
-        ...messages.value[existingIdx].metadata,
-        ...metadata,
-      },
-    };
-    return;
-  }
-  messages.value.push({
+  const planMessage: ChatV2MessageView = {
     id: planMsgId,
     conversationId: state.conversationId,
     role: "assistant",
     content: "",
-    timestamp: new Date().toISOString(),
+    timestamp: state.latestVersion?.createdAt ?? new Date().toISOString(),
     messageType: "message" as MessageType,
     metadata,
-  });
+  };
+  if (existingIdx !== -1) {
+    const existingMessage = messages.value[existingIdx];
+    planMessage.timestamp = messages.value[existingIdx].timestamp;
+    planMessage.metadata = {
+      ...existingMessage.metadata,
+      ...metadata,
+    };
+    const withoutExisting = messages.value.filter((m) => m.id !== planMsgId);
+    const adjustedInsertIdx =
+      existingIdx < insertIdx ? insertIdx - 1 : insertIdx;
+    const targetIdx = Math.min(adjustedInsertIdx, withoutExisting.length);
+    messages.value = [
+      ...withoutExisting.slice(0, targetIdx),
+      planMessage,
+      ...withoutExisting.slice(targetIdx),
+    ];
+    return;
+  }
+  messages.value = [
+    ...messages.value.slice(0, insertIdx),
+    planMessage,
+    ...messages.value.slice(insertIdx),
+  ];
 };
 
 const handleQuestionAnswered = async (
