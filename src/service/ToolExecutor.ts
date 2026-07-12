@@ -354,7 +354,10 @@ export class ToolExecutor {
           return { success: false, error: parsed.error };
         }
         if (parsed.kind !== "plugin") {
-          return { success: false, error: `Expected plugin format MCP tool name: ${toolName}` };
+          return {
+            success: false,
+            error: `Expected plugin format MCP tool name: ${toolName}`,
+          };
         }
 
         const module = new MCPToolModule();
@@ -1396,7 +1399,9 @@ export class ToolExecutor {
       );
     }
 
-    const results = await extractContactFromUrls(urls, context);
+    const outcome = await extractContactFromUrls(urls, context);
+    const results = outcome.results;
+    const expectedTotal = outcome.expectedTotal;
     const successful = results.filter((r) => r.success);
     const failed = results.filter((r) => !r.success);
 
@@ -1434,12 +1439,25 @@ export class ToolExecutor {
             : "")
         : "No URLs to process.";
 
+    // When the 5-minute ceiling fired mid-batch, surface the partial result
+    // (success: true with partial: true) rather than an opaque timeout error.
+    // The summary spells out how many URLs were skipped so the model can
+    // decide whether to retry the remainder.
+    const partialNote = outcome.timedOut
+      ? `\n\nNOTE: The extraction timeout was reached after processing ${results.length} of ${expectedTotal} requested URL(s). ` +
+        `${
+          expectedTotal - results.length
+        } URL(s) were not processed; retry extract_contact_info for the remaining URLs if needed.`
+      : "";
+
     return {
       success: true,
-      totalUrls: results.length,
+      ...(outcome.timedOut && { partial: true, timedOut: true }),
+      totalUrls: expectedTotal,
+      processedUrls: results.length,
       successful: successful.length,
       failed: failed.length,
-      summary: formattedSummary,
+      summary: formattedSummary + partialNote,
       results: results.map((r) => ({
         url: r.url,
         success: r.success,
