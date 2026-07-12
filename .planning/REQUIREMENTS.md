@@ -68,7 +68,7 @@ Requirements for the v2.0 milestone. Each maps to exactly one roadmap phase (13â
 
 ### Skills & Plugins (SKL)
 
-- [ ] **SKL-01**: `~/.aifetchly/skills/*/manifest.json` validated and registered through the existing `SkillRegistry`, executed via `SkillExecutor`, permission-checked via `SkillPermissionService`; never loaded as arbitrary code into the Electron main process
+- [x] **SKL-01**: `~/.aifetchly/skills/*/manifest.json` validated and registered through the existing `SkillRegistry`, executed via `SkillExecutor`, permission-checked via `SkillPermissionService`; never loaded as arbitrary code into the Electron main process
 - [ ] **SKL-02**: Plugin `commands/*.md` promoted from opaque metadata once the native command registry is stable; plugin `agents/*.md` promoted once the dynamic agent registry is stable; `~/.aifetchly/plugins/<name>/options.json` path preserved without conflicting with installed plugin package roots under `userData/plugins/installed`
 
 ### Diagnostics (DX)
@@ -150,7 +150,7 @@ Each requirement maps to exactly one phase. Updated during roadmap creation.
 | AGT-03 | Phase 16 | Complete |
 | HOK-01 | Phase 17 | Complete |
 | HOK-02 | Phase 17 | Complete |
-| SKL-01 | Phase 18 | Pending |
+| SKL-01 | Phase 18 | Complete |
 | SKL-02 | Phase 18 | Pending |
 | DX-01 | Phase 13 | Pending |
 | DX-02 | Phase 13 | Complete |

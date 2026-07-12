@@ -5,15 +5,15 @@ milestone_name: Local Extensibility
 current_phase: 18
 current_phase_name: skills-and-plugin-integration
 status: executing
-stopped_at: Phase 18 context gathered
-last_updated: "2026-07-12T14:52:09.109Z"
+stopped_at: Phase 18 Plan 18-01 COMPLETE
+last_updated: "2026-07-12T20:09:51.405Z"
 last_activity: 2026-07-12
 last_activity_desc: Phase 18 execution started
 progress:
   total_phases: 6
   completed_phases: 5
   total_plans: 21
-  completed_plans: 19
+  completed_plans: 20
   percent: 83
 ---
 
@@ -46,6 +46,7 @@ Progress: ███░░░░░░░ 33%
 ## Current Position
 
 Phase: 18 (skills-and-plugin-integration) — EXECUTING
+Plan 18-01 (local-skills-discovery): COMPLETE — 3/3 tasks (TDD RED->GREEN), 3 commits + SUMMARY, 43 tests GREEN (35 main + 8 utilitycode) + Phase-17 hooks regression green, tsc 0 errors, SKL-01 satisfied (local skills discovered/validated/registered via existing SkillRegistry + source adapter; execution boundary + permission gate contract tests prove existing SkillWorkerClient/SkillPermissionService boundary holds)
 Plan 16-01 (registry-validator-frontmatter): COMPLETE — 2/2 tasks (TDD RED→GREEN), 4 commits + SUMMARY (f9fb579e), 65 tests GREEN (59 main + 6 utilitycode) + 12 consumer + 104 targeted regression, tsc 0 errors, AGT-01+AGT-02 satisfied
 Plan 16-02 (loaders-trust-scanner): COMPLETE — 3/3 tasks (TDD RED->GREEN), 6 commits + SUMMARY, 44 tests GREEN (5 files), tsc 0 errors, AGT-02 satisfied (worker stays scan-only WAT-02)
 Plan 16-03 (dispatch-list-context): COMPLETE — 3/3 tasks (TDD RED->GREEN), 6 commits + SUMMARY (92d1a1b7), 51 tests GREEN (AgentRuntime/runSubagentTool/SlashCommandDispatcher/AIChatContextAssembler.aifetchly), tsc 0 errors, AGT-03 satisfied (registry-first dispatch + /agents command + D-Discovery block)
@@ -92,6 +93,9 @@ Resume note (Waves 2-3 executors): do NOT run bare `yarn testmain` for Self-Chec
 - [Phase 15]: [15-01 dispatcher]: Phase-13 "not yet supported" placeholder for case "prompt" is GONE; branch now returns {status:true, action:'submit_prompt', prompt, commandId} via expandPrompt. cmd.body ?? '' is a one-line insurance policy against bypassed validation.
 - [Phase 15]: [15-01 boundary]: Phase-15 boundary marker crossed for the DISPATCHER ONLY; SlashCommandParser.ts and CommandRegistry.ts UNCHANGED (zero expansion logic leaked — region-scoped invariant verified by git diff).
 - [Phase 16]: [16-02 loaders]: Workspace agent drafts convert in applySnapshot (source-aware) since WorkspaceWatchManager is out of this plan's file set; AgentDefinitionRegistry 3rd ctor param optional w/ default to unblock 5 pre-existing ContextLoader test call sites; registeredToolNames defaults empty (Plan 03 wires SkillRegistry via sync.setRegisteredToolNames).
+- [Phase ?]: [Phase 18 18-01] Reuse existing SkillImportService.validateManifest as the single manifest schema owner - buildLocalSkillDraft delegates (no rule duplication); adds only CFG-05 entry path-traversal check
+- [Phase ?]: [Phase 18 18-01] LocalSkillSourceAdapter bridges SkillRegistry's missing replaceSource via unregister-then-register; built-in collisions -> manifest-invalid (T-spoof-builtin)
+- [Phase ?]: [Phase 18 18-01] D-SkillEnable delivered - auto-register + gate-at-call via SkillPermissionService; no per-skill enable flag; contract test proves checkPermission fires before execute
 
 ### Pending Todos
 
@@ -119,7 +123,7 @@ None yet.
 
 **Resume file:** .planning/phases/18-skills-and-plugin-integration/18-CONTEXT.md
 
-Last session: 2026-07-11T13:47:53.204Z
+Last session: 2026-07-12T20:09:51.401Z
 Stopped at: Phase 18 context gathered
 Worktree: .claude/worktrees/merry-stirring-scroll (branch: dev)
 
@@ -133,3 +137,4 @@ Worktree: .claude/worktrees/merry-stirring-scroll (branch: dev)
 | Phase 14 P03 | 8m | 2 tasks | 12 files |
 | Phase 15 P15-01-expansion-validator-dispatcher | ~35min | 3 tasks | 7 files |
 | Phase 16 P16-02-loaders-trust-scanner | ~95min | 3 tasks | 10 files |
+| Phase 18 P01 | 25m | 3 tasks | 16 files |
