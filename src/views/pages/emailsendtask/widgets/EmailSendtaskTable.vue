@@ -7,11 +7,11 @@
             </div> -->
            
             <div class="ml-auto">
-            <v-btn class="btn" variant="outlined" prepend-icon="mdi-email-sync" @click="goToEmailService()">
-                {{ CapitalizeFirstLetter(t('buckemailtask.email_service')) }}
-            </v-btn>
-            <v-btn class="btn ml-2" variant="flat" prepend-icon="mdi-plus" color="#5865f2" @click="createTask()">
+            <v-btn class="btn" variant="flat" prepend-icon="mdi-plus" color="#5865f2" @click="createTask()">
                 {{ CapitalizeFirstLetter(t('buckemailtask.create_task')) }}
+            </v-btn>
+            <v-btn class="btn ml-2" variant="outlined" prepend-icon="mdi-email-sync" @click="goToEmailService()">
+                {{ CapitalizeFirstLetter(t('buckemailtask.email_service')) }}
             </v-btn>
         </div>
         </div>
