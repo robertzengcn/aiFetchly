@@ -42,6 +42,8 @@ import { SkillImportService } from "@/service/SkillImportService";
  * 18-RESEARCH).
  */
 export interface LocalSkillDraft {
+  /** Stable id `${sourceId}:skill:${name}` — consumed by the snapshot diff. */
+  readonly id: string;
   /** Skill name (kebab-case, matches `manifest.name`). */
   readonly name: string;
   /** Validated manifest (reused `SkillManifest` type — not redefined). */
@@ -123,6 +125,7 @@ export function buildLocalSkillDraft(
   // 3. Construct the validated draft. The manifest is the reused
   //    SkillManifest type — no redefinition, no re-validation downstream.
   const draft: LocalSkillDraft = {
+    id: `${sourceMeta.sourceId}:skill:${manifest.name}`,
     name: manifest.name,
     manifest,
     skillDir,

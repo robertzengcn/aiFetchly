@@ -32,6 +32,7 @@ import type {
   AIFetchlyConfigSettings,
   AIFetchlyConfigSnapshot,
   AIFetchlyInstructionBlock,
+  WorkspaceSkillDraft,
 } from "@/entityTypes/aifetchlyConfigTypes";
 import {
   AIFETCHLY_CONFIG_DIR_NAME,
@@ -108,6 +109,9 @@ const COMMANDS_DIR = "commands";
 const AGENTS_DIR = "agents";
 const HOOKS_DIR = "hooks";
 const HOOKS_JSON = "hooks.json";
+// Phase 18 (SKL-01): skills are DIRECTORIES under skills/<name>/manifest.json.
+const SKILLS_DIR = "skills";
+const SKILL_MANIFEST = "manifest.json";
 
 /** Build a deterministic diagnostic for a single file failure. */
 function diagnostic(
@@ -160,6 +164,7 @@ export class WorkspaceConfigScanner {
     const commands: WorkspaceCommandDraft[] = [];
     const agents: WorkspaceAgentDraft[] = [];
     const hooks: WorkspaceHookDraft[] = [];
+    const skills: WorkspaceSkillDraft[] = [];
     const diagnostics: AIFetchlyConfigDiagnostic[] = [];
     const settings: AIFetchlyConfigSettings = {
       ...DEFAULT_AIFETCHLY_CONFIG_SETTINGS,
@@ -184,6 +189,7 @@ export class WorkspaceConfigScanner {
         commands,
         agents,
         hooks,
+        skills,
         diagnostics,
         settings
       );
@@ -222,7 +228,10 @@ export class WorkspaceConfigScanner {
       // validation). Cast through unknown mirroring agents/commands — the
       // main-process converter (buildWorkspaceHookDefinitions) validates.
       hooks: hooks as readonly unknown[],
-      skills: [],
+      // Phase 18 (Plan 01 / SKL-01): raw WorkspaceSkillDrafts (worker-side,
+      // no validation). Cast through unknown mirroring hooks/agents/commands
+      // — the main-process converter (buildWorkspaceSkillDefinitions) validates.
+      skills: skills as readonly unknown[],
       diagnostics,
     };
   }
@@ -240,6 +249,7 @@ export class WorkspaceConfigScanner {
     commands: WorkspaceCommandDraft[],
     agents: WorkspaceAgentDraft[],
     hooks: WorkspaceHookDraft[],
+    skills: WorkspaceSkillDraft[],
     diagnostics: AIFetchlyConfigDiagnostic[],
     settings: AIFetchlyConfigSettings
   ): Promise<void> {
@@ -304,6 +314,23 @@ export class WorkspaceConfigScanner {
       `${rootRel}/${HOOKS_DIR}`,
       files,
       hooks,
+      diagnostics
+    );
+
+    // skills/<name>/manifest.json (Phase 18 / Plan 01 / SKL-01) — ONE raw
+    // draft PER skill directory carrying the JSON-parsed blob; the worker
+    // does NOT validate (WAT-02). buildWorkspaceSkillDefinitions validates
+    // main-side. The worker reads manifest.json ONLY — it does NOT read the
+    // entry .js/.py file (the main process reads entry at registration time
+    // per 18-RESEARCH Pattern 9 / Anti-Pattern).
+    await this.tryReadSkillFiles(
+      dotAifetchly,
+      workspaceId,
+      sourceId,
+      SKILLS_DIR,
+      `${rootRel}/${SKILLS_DIR}`,
+      files,
+      skills,
       diagnostics
     );
   }
@@ -854,5 +881,149 @@ export class WorkspaceConfigScanner {
       raw: parsed,
       contentHash,
     });
+  }
+
+  /**
+   * Phase 18 (SKL-01 / Plan 01 Task 2): scan `skills/<name>/manifest.json` —
+   * one DIRECTORY per skill — and ship a raw {@link WorkspaceSkillDraft} per
+   * directory carrying the JSON-parsed manifest blob (unvalidated `unknown`).
+   *
+   * SCAN-ONLY (WAT-02): NO validation, NO DB, NO registry, NO Electron. The
+   * worker reads manifest.json ONLY — it does NOT read the entry .js/.py file
+   * (the main process reads entry at registration time per 18-RESEARCH
+   * Pattern 9 / Anti-Pattern). A JSON.parse failure is carried as a raw draft
+   * with `rawManifest = null` so the main-side converter can emit a
+   * manifest-invalid diagnostic with full source attribution; the worker
+   * never decides validity.
+   *
+   * Missing `skills/` dir is the happy path (no diagnostic). Non-directory
+   * entries are skipped. CFG-04 size cap + CFG-06 count cap enforced.
+   */
+  private async tryReadSkillFiles(
+    dotAifetchly: string,
+    workspaceId: string,
+    sourceId: string,
+    skillsDirName: string,
+    skillsRelativeDir: string,
+    files: AIFetchlyConfigFileSnapshot[],
+    skills: WorkspaceSkillDraft[],
+    diagnostics: AIFetchlyConfigDiagnostic[]
+  ): Promise<void> {
+    const skillsDir = path.join(dotAifetchly, skillsDirName);
+
+    let entries: readonly fs.Dirent[];
+    try {
+      entries = await fs.promises.readdir(skillsDir, { withFileTypes: true });
+    } catch (err) {
+      // Missing skills/ dir is the happy path (most workspaces have none).
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") return;
+      diagnostics.push(ioDiagnostic(sourceId, skillsRelativeDir, err));
+      return;
+    }
+
+    for (const entry of entries) {
+      // Only directories are skill candidates; stray files are ignored.
+      if (!entry.isDirectory()) continue;
+
+      // CFG-06: count cap — once maxSkillsPerSource raw drafts are accepted,
+      // drop the surplus with a single count-cap diagnostic.
+      if (skills.length >= AIFETCHLY_CONFIG_LIMITS.maxSkillsPerSource) {
+        diagnostics.push(
+          diagnostic(
+            "workspace",
+            sourceId,
+            `${skillsRelativeDir}/${entry.name}`,
+            "count-cap",
+            `skill count reached the ${AIFETCHLY_CONFIG_LIMITS.maxSkillsPerSource}-per-source cap; skipping remaining entries`,
+            true
+          )
+        );
+        break;
+      }
+
+      const skillName = entry.name;
+      const relativePath = `${skillsRelativeDir}/${skillName}/${SKILL_MANIFEST}`;
+      const manifestPath = path.join(skillsDir, skillName, SKILL_MANIFEST);
+
+      let stat: fs.Stats;
+      try {
+        stat = await fs.promises.stat(manifestPath);
+      } catch (err) {
+        // Missing manifest.json for a skill dir is a soft skip; carry as a
+        // raw draft with rawManifest=null so the main-side converter emits the
+        // manifest-invalid diagnostic (worker never decides validity).
+        if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+          skills.push({
+            id: `workspace:${workspaceId}:skill:${skillName}`,
+            source: "workspace",
+            sourceId,
+            name: skillName,
+            relativePath,
+            skillDir: path.join(skillsDir, skillName),
+            rawManifest: null,
+            contentHash: "",
+          });
+          continue;
+        }
+        diagnostics.push(ioDiagnostic(sourceId, relativePath, err));
+        continue;
+      }
+
+      // CFG-04: size cap before read (T-13-DoS mitigation).
+      if (stat.size > AIFETCHLY_CONFIG_LIMITS.skillManifestBytes) {
+        diagnostics.push(
+          diagnostic(
+            "workspace",
+            sourceId,
+            relativePath,
+            "file-too-large",
+            `${SKILL_MANIFEST} is ${stat.size} bytes which exceeds the ${AIFETCHLY_CONFIG_LIMITS.skillManifestBytes}-byte limit; skipped`,
+            true
+          )
+        );
+        continue;
+      }
+
+      let content: Buffer;
+      try {
+        content = await fs.promises.readFile(manifestPath);
+      } catch (err) {
+        diagnostics.push(ioDiagnostic(sourceId, relativePath, err));
+        continue;
+      }
+      const contentHash = crypto
+        .createHash("sha256")
+        .update(content)
+        .digest("hex");
+      files.push({
+        relativePath,
+        kind: "skill",
+        mtimeMs: stat.mtimeMs,
+        sizeBytes: stat.size,
+        contentHash,
+      });
+
+      // SCAN-ONLY: JSON.parse and ship the opaque blob. A parse failure is
+      // carried as a raw draft with rawManifest = null so the main-side
+      // converter can still emit a manifest-invalid diagnostic with full
+      // source attribution; the worker never decides validity (WAT-02).
+      let parsed: unknown = null;
+      try {
+        parsed = JSON.parse(content.toString("utf8")) as unknown;
+      } catch {
+        parsed = null;
+      }
+
+      skills.push({
+        id: `workspace:${workspaceId}:skill:${skillName}`,
+        source: "workspace",
+        sourceId,
+        name: skillName,
+        relativePath,
+        skillDir: path.join(skillsDir, skillName),
+        rawManifest: parsed,
+        contentHash,
+      });
+    }
   }
 }

@@ -139,10 +139,14 @@ export interface AIFetchlyConfigSettings {
  * import it as a pure type without pulling main-process runtime code.
  */
 export interface WorkspaceSkillDraft {
-  /** Skill directory name (the `<name>` in `skills/<name>/`). */
-  readonly name: string;
+  /** Stable id `workspace:<workspaceId>:skill:<name>` — consumed by the snapshot diff. */
+  readonly id: string;
+  /** Always `"workspace"` (worker snapshot source kind). */
+  readonly source: "workspace";
   /** The workspace source identifier (`workspace:<workspaceId>`). */
   readonly sourceId: string;
+  /** Skill directory name (the `<name>` in `skills/<name>/`). */
+  readonly name: string;
   /** Workspace-relative path of the manifest file (`skills/<name>/manifest.json`). */
   readonly relativePath: string;
   /** Absolute skill directory (`<workspaceRoot>/.aifetchly/skills/<name>`). */

@@ -53,6 +53,10 @@ import {
   buildHookDefinition,
   type HookDefinitionSourceMeta,
 } from "@/service/hooks/hookFileFrontmatter";
+import {
+  buildLocalSkillDraft,
+  type LocalSkillDraft,
+} from "@/service/aifetchlyConfig/buildLocalSkillDraft";
 import { lazySchema } from "@/utils/lazySchema";
 import {
   AIFETCHLY_CONFIG_DIR_NAME,
@@ -73,6 +77,9 @@ const COMMANDS_DIR = "commands";
 const AGENTS_DIR = "agents";
 const HOOKS_DIR = "hooks";
 const HOOKS_JSON = "hooks.json";
+// Phase 18 (SKL-01): skills are DIRECTORIES under skills/<name>/manifest.json.
+const SKILLS_DIR = "skills";
+const SKILL_MANIFEST = "manifest.json";
 
 const settingsSchema = lazySchema(() =>
   z
@@ -141,6 +148,7 @@ export class AIFetchlyConfigLoader {
     const commands: SlashCommandDefinition[] = [];
     const agents: AgentDefinitionView[] = [];
     const hooks: CommandHookDefinition[] = [];
+    const skills: LocalSkillDraft[] = [];
     const diagnostics: AIFetchlyConfigDiagnostic[] = [];
 
     let entries: readonly string[];
@@ -158,6 +166,7 @@ export class AIFetchlyConfigLoader {
           commands,
           agents,
           hooks,
+          skills,
           diagnostics
         );
       }
@@ -171,6 +180,7 @@ export class AIFetchlyConfigLoader {
         commands,
         agents,
         hooks,
+        skills,
         diagnostics
       );
     }
@@ -256,6 +266,12 @@ export class AIFetchlyConfigLoader {
     // agents path but for one JSON file instead of a directory of .md.
     await this.tryReadHookFiles(files, hooks, diagnostics);
 
+    // Phase 18 (Plan 01 / SKL-01): scan skills/<name>/manifest.json — one
+    // DIRECTORY per skill — validate each via buildLocalSkillDraft, and push
+    // validated LocalSkillDraft[] into `skills` (source "user"). Mirrors the
+    // hooks path but for a directory of manifests instead of one JSON file.
+    await this.tryReadSkillFiles(files, skills, diagnostics);
+
     return this.buildSnapshot(
       source,
       sourceId,
@@ -264,6 +280,7 @@ export class AIFetchlyConfigLoader {
       commands,
       agents,
       hooks,
+      skills,
       diagnostics
     );
   }
@@ -751,6 +768,164 @@ export class AIFetchlyConfigLoader {
     }
   }
 
+  /**
+   * Phase 18 (SKL-01): scan `skills/<name>/manifest.json` — one DIRECTORY per
+   * skill — validate each via {@link buildLocalSkillDraft}, and push validated
+   * {@link LocalSkillDraft} objects into `skills` (source "user", sourceId
+   * "user"). Mirrors {@link tryReadHookFiles} but adapted for directories.
+   *
+   * Pipeline per skill dir:
+   *   readdir(skills/) -> for each directory entry:
+   *     count-cap check -> stat(<name>/manifest.json) (CFG-04 size cap) ->
+   *     readFile -> sha256 -> push file snapshot (kind "skill") ->
+   *     JSON.parse (failure -> manifest-invalid) ->
+   *     buildLocalSkillDraft(parsed, sourceMeta, skillDir, hash) ->
+   *       ok -> push draft; !ok -> push diagnostic
+   *
+   * Missing `skills/` dir is the happy path (no diagnostic). Non-directory
+   * entries are skipped. `skillDir` is resolved from `this.rootPath` (NEVER
+   * from `SkillEnvironmentManager.getInstalledSkillRoot` — 18-RESEARCH
+   * Anti-Pattern).
+   */
+  private async tryReadSkillFiles(
+    files: AIFetchlyConfigFileSnapshot[],
+    skills: LocalSkillDraft[],
+    diagnostics: AIFetchlyConfigDiagnostic[]
+  ): Promise<void> {
+    const source = "user" as const;
+    const sourceId = "user";
+    const skillsDir = path.join(this.rootPath, SKILLS_DIR);
+
+    let entries: readonly fs.Dirent[];
+    try {
+      entries = await fs.promises.readdir(skillsDir, { withFileTypes: true });
+    } catch (err) {
+      // Missing skills/ dir is the happy path (most installs have none).
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") return;
+      diagnostics.push(this.ioError(SKILLS_DIR, err));
+      return;
+    }
+
+    const sourceMeta = {
+      source,
+      sourceId,
+      relativePath: "",
+    };
+
+    for (const entry of entries) {
+      // Only directories are skill candidates; stray files are ignored.
+      if (!entry.isDirectory()) continue;
+
+      // CFG-06: count cap — once maxSkillsPerSource valid drafts are accepted,
+      // drop the surplus with a single count-cap diagnostic.
+      if (skills.length >= AIFETCHLY_CONFIG_LIMITS.maxSkillsPerSource) {
+        diagnostics.push({
+          severity: "warning",
+          source,
+          sourceId,
+          filePath: `${SKILLS_DIR}/${entry.name}`,
+          code: "count-cap",
+          message: `skill count reached the ${AIFETCHLY_CONFIG_LIMITS.maxSkillsPerSource}-per-source cap; skipping remaining entries`,
+          recoverable: true,
+        });
+        break;
+      }
+
+      const skillName = entry.name;
+      const relativePath = `${SKILLS_DIR}/${skillName}/${SKILL_MANIFEST}`;
+      const manifestPath = path.join(skillsDir, skillName, SKILL_MANIFEST);
+
+      let stat: fs.Stats;
+      try {
+        stat = await fs.promises.stat(manifestPath);
+      } catch (err) {
+        // Missing manifest.json for a skill dir is a soft skip (the directory
+        // may be a WIP); surface as a manifest-invalid so the user notices.
+        if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+          diagnostics.push({
+            severity: "warning",
+            source,
+            sourceId,
+            filePath: relativePath,
+            code: "manifest-invalid",
+            message: `skills/${skillName}/ is missing a manifest.json; skipped`,
+            recoverable: true,
+          });
+          continue;
+        }
+        diagnostics.push(this.ioError(relativePath, err));
+        continue;
+      }
+
+      // CFG-04: size cap before read (T-13-DoS mitigation).
+      if (stat.size > AIFETCHLY_CONFIG_LIMITS.skillManifestBytes) {
+        diagnostics.push({
+          severity: "warning",
+          source,
+          sourceId,
+          filePath: relativePath,
+          code: "file-too-large",
+          message: `${SKILL_MANIFEST} is ${stat.size} bytes which exceeds the ${AIFETCHLY_CONFIG_LIMITS.skillManifestBytes}-byte limit; skipped`,
+          recoverable: true,
+        });
+        continue;
+      }
+
+      let content: Buffer;
+      try {
+        content = await fs.promises.readFile(manifestPath);
+      } catch (err) {
+        diagnostics.push(this.ioError(relativePath, err));
+        continue;
+      }
+      const contentHash = crypto
+        .createHash("sha256")
+        .update(content)
+        .digest("hex");
+      files.push({
+        relativePath,
+        kind: "skill",
+        mtimeMs: stat.mtimeMs,
+        sizeBytes: stat.size,
+        contentHash,
+      });
+
+      // JSON.parse; a parse failure yields a single manifest-invalid diagnostic.
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(content.toString("utf8")) as unknown;
+      } catch (err) {
+        diagnostics.push({
+          severity: "warning",
+          source,
+          sourceId,
+          filePath: relativePath,
+          code: "manifest-invalid",
+          message: `${SKILL_MANIFEST} is not valid JSON: ${
+            (err as Error).message
+          }`,
+          recoverable: true,
+        });
+        continue;
+      }
+
+      // skillDir is resolved from this.rootPath — NEVER from
+      // SkillEnvironmentManager.getInstalledSkillRoot (18-RESEARCH Anti-Pattern).
+      const skillDir = path.join(skillsDir, skillName);
+      const result = buildLocalSkillDraft(
+        parsed,
+        { ...sourceMeta, relativePath },
+        skillDir,
+        contentHash
+      );
+      if (result.ok) {
+        skills.push(result.draft);
+      } else {
+        diagnostics.push(result.diagnostic);
+      }
+    }
+  }
+
   private ioError(filePath: string, err: unknown): AIFetchlyConfigDiagnostic {
     return {
       severity: "warning",
@@ -773,6 +948,7 @@ export class AIFetchlyConfigLoader {
     commands: readonly SlashCommandDefinition[],
     agents: readonly AgentDefinitionView[],
     hooks: readonly CommandHookDefinition[],
+    skills: readonly LocalSkillDraft[],
     diagnostics: readonly AIFetchlyConfigDiagnostic[]
   ): AIFetchlyConfigSnapshot {
     return {
@@ -785,7 +961,7 @@ export class AIFetchlyConfigLoader {
       commands,
       agents,
       hooks,
-      skills: [],
+      skills,
       diagnostics,
     };
   }
