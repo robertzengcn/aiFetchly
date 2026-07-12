@@ -2047,6 +2047,18 @@ emailAutoReplyAudit: {
     outreach_description:
       "Manage outreach tasks, templates, filters, and replies.",
   },
+  outreach: {
+    subtitle:
+      "Manage outreach tasks, templates, filters, email services, and replies.",
+    tasks_description: "Create and manage bulk email outreach tasks.",
+    template_description: "Create and manage email templates for outreach campaigns.",
+    filter_description: "Define filters to segment and target your outreach audiences.",
+    service_description: "Configure SMTP and IMAP email service connections.",
+    received_messages: "Received Messages",
+    receive_description: "View and manage inbound emails received through configured services.",
+    reply_audit: "Reply Audit",
+    audit_description: "Review AI-generated replies, approval status, and audit logs.",
+  },
   aiChatV2: {
     title: "AI Assistant",
     new_conversation: "New conversation",

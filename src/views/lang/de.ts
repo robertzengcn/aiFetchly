@@ -2044,6 +2044,18 @@ emailAutoReplyAudit: {
     outreach_description:
       "Verwalte Outreach-Aufgaben, Vorlagen, Filter und Antworten.",
   },
+  outreach: {
+    subtitle:
+      "Verwalte Outreach-Aufgaben, Vorlagen, Filter, E-Mail-Dienste und Antworten.",
+    tasks_description: "Erstelle und verwalte Bulk-E-Mail-Outreach-Aufgaben.",
+    template_description: "Erstelle und verwalte E-Mail-Vorlagen für Outreach-Kampagnen.",
+    filter_description: "Definiere Filter, um deine Outreach-Zielsegmente zu segmentieren und zu steuern.",
+    service_description: "Konfiguriere SMTP- und IMAP-E-Mail-Dienstverbindungen.",
+    received_messages: "Empfangene Nachrichten",
+    receive_description: "Zeige und verwalte eingehende E-Mails über konfigurierte Dienste.",
+    reply_audit: "Antwort-Audit",
+    audit_description: "Überprüfe KI-generierte Antworten, Genehmigungsstatus und Audit-Protokolle.",
+  },
   aiChatV2: {
     title: "KI-Assistent",
     new_conversation: "Neue Unterhaltung",

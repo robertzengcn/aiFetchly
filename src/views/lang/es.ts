@@ -2050,6 +2050,18 @@ emailAutoReplyAudit: {
     outreach_description:
       "Gestiona tareas de outreach, plantillas, filtros y respuestas.",
   },
+  outreach: {
+    subtitle:
+      "Gestiona tareas de outreach, plantillas, filtros, servicios de correo y respuestas.",
+    tasks_description: "Crea y gestiona tareas de outreach por correo masivo.",
+    template_description: "Crea y gestiona plantillas de correo para campañas de outreach.",
+    filter_description: "Define filtros para segmentar y orientar a tus audiencias de outreach.",
+    service_description: "Configura conexiones de servicio de correo SMTP e IMAP.",
+    received_messages: "Mensajes Recibidos",
+    receive_description: "Consulta y gestiona los correos recibidos a través de servicios configurados.",
+    reply_audit: "Auditoría de Respuestas",
+    audit_description: "Revisa respuestas generadas por IA, estado de aprobación y registros de auditoría.",
+  },
   aiChatV2: {
     title: "Asistente de IA",
     new_conversation: "Nueva conversación",

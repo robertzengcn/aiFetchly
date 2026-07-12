@@ -2034,6 +2034,18 @@ emailAutoReplyAudit: {
     outreach_description:
       "Gérez les tâches de prospection, modèles, filtres et réponses.",
   },
+  outreach: {
+    subtitle:
+      "Gérez les tâches de prospection, modèles, filtres, services de messagerie et réponses.",
+    tasks_description: "Créez et gérez les tâches de prospection par e-mail en masse.",
+    template_description: "Créez et gérez les modèles d'e-mail pour les campagnes de prospection.",
+    filter_description: "Définissez des filtres pour segmenter et cibler vos audiences de prospection.",
+    service_description: "Configurez les connexions de service de messagerie SMTP et IMAP.",
+    received_messages: "Messages Reçus",
+    receive_description: "Consultez et gérez les e-mails entrants reçus via les services configurés.",
+    reply_audit: "Audit des Réponses",
+    audit_description: "Examinez les réponses générées par l'IA, le statut d'approbation et les journaux d'audit.",
+  },
   aiChatV2: {
     title: "Assistant IA",
     new_conversation: "Nouvelle conversation",

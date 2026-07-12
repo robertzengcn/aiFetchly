@@ -2008,6 +2008,18 @@ emailAutoReplyAudit: {
     outreach_description:
       "アウトリーチタスク、テンプレート、フィルター、返信を管理します。",
   },
+  outreach: {
+    subtitle:
+      "アウトリーチタスク、テンプレート、フィルター、メールサービス、返信を管理します。",
+    tasks_description: "一括メールアウトリーチタスクを作成および管理します。",
+    template_description: "アウトリーチキャンペーン用のメールテンプレートを作成および管理します。",
+    filter_description: "アウトリーチオーディエンスをセグメント化し、ターゲティングするフィルターを定義します。",
+    service_description: "SMTPおよびIMAPメールサービス接続を設定します。",
+    received_messages: "受信メッセージ",
+    receive_description: "設定されたサービスで受信した受信メールを表示および管理します。",
+    reply_audit: "返信監査",
+    audit_description: "AI生成の返信、承認ステータス、監査ログを確認します。",
+  },
   aiChatV2: {
     title: "AI アシスタント",
     new_conversation: "新しい会話",

@@ -1979,6 +1979,17 @@ emailAutoReplyAudit: {
     maps_description: "从地图服务中查找本地商家。",
     outreach_description: "管理外联任务、模板、过滤器和回复。",
   },
+  outreach: {
+    subtitle: "管理外联任务、模板、过滤器、邮件服务和回复。",
+    tasks_description: "创建和管理批量邮件外联任务。",
+    template_description: "创建和管理外联活动的邮件模板。",
+    filter_description: "定义过滤器以细分和定位外联受众。",
+    service_description: "配置 SMTP 和 IMAP 邮件服务连接。",
+    received_messages: "接收的消息",
+    receive_description: "查看和管理通过配置的服务接收的入站邮件。",
+    reply_audit: "回复审核",
+    audit_description: "审核 AI 生成的回复、审批状态和审核日志。",
+  },
   aiChatV2: {
     title: "AI 助手",
     new_conversation: "新对话",

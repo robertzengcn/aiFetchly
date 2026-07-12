@@ -102,7 +102,7 @@ const insightItems = computed<InsightItem[]>(() => [
       t("insights.outreach_description") ||
       "Manage outreach tasks, templates, filters, and replies.",
     icon: "mdi-email-multiple",
-    path: "/emailmarketing/buckemailtask/list/",
+    path: "/emailmarketing",
   },
 ]);
 

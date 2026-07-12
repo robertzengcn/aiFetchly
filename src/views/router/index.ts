@@ -545,6 +545,19 @@ export const constantRoutes: RouteRecordRaw[] = [
     component: Layout,
     children: [
       {
+        path: "",
+        component: () =>
+          import(
+            /* webpackChunkName: "email-marketing" */ "@/views/pages/emailmarketing/index.vue"
+          ),
+        name: "Email_Marketing_Index",
+        meta: {
+          visible: false,
+          title: "route.email_marketing",
+          icon: "mdi-email-multiple",
+        },
+      },
+      {
         path: "buckemailtask/list/",
         component: () =>
           import(
