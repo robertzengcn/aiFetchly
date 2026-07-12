@@ -101,7 +101,7 @@ export class SocialTask {
     async saveSocialTask(data: SocialTaskEntity): Promise<SaveSocialTaskResponse> {
 
 
-        let formData = new FormData();
+        const formData = new FormData();
         // Object.entries(data).forEach(([key, value]) => {
         //     formData.append(key, String(value));
         // });
@@ -134,7 +134,7 @@ export class SocialTask {
 
     async createsocialtask(socailtaskId: number,taskRunNum:string): Promise<SocialTaskRunEntity> {
         const runModel = new SocialTaskRun()
-        const socialTaskrun = runModel.createsocialtaskrun(socailtaskId,taskRunNum)
+        const socialTaskrun = await runModel.createsocialtaskrun(socailtaskId,taskRunNum)
         // const result = await this.runsocialtask(socialTaskrun)
         return socialTaskrun
     }

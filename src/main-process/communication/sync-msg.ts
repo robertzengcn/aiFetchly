@@ -205,7 +205,7 @@ export default function SyncMsg(mainWindow: BrowserWindow) {
     const stkrunModel = new SocialTaskRun()
     // const res = await stkrunModel.getrunlist(qdata.id).then(function (res) {
     //   // console.log(res);
-    const reslist = stkrunModel.getrunlist(qdata.id, qdata.page, qdata.size)
+    const reslist = await stkrunModel.getrunlist(qdata.id, qdata.page, qdata.size)
     console.log(reslist)
     return { status: true, msg: "", data: reslist };
     //   // return {status:true,msg:"",data:res};
