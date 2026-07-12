@@ -1142,6 +1142,7 @@ emailAutoReplyAudit: {
     status: "任务状态",
     type: "任务类型",
     create_task: "创建联系人画像洞察任务",
+    email_service: "邮件服务",
   },
   emailtasksendlog: {
     id: "ID",

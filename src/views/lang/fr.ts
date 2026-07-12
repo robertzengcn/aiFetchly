@@ -1172,6 +1172,7 @@ emailAutoReplyAudit: {
     status: "Task Status",
     type: "Task Type",
     create_task: "Créer une Tâche d'Aperçu des Contacts",
+    email_service: "Service de Messagerie",
   },
   emailtasksendlog: {
     id: "id",

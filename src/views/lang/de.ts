@@ -1180,6 +1180,7 @@ emailAutoReplyAudit: {
     status: "Aufgabenstatus",
     type: "Aufgabentyp",
     create_task: "Kontaktprofil-Aufgabe erstellen",
+    email_service: "E-Mail-Dienst",
   },
   emailtasksendlog: {
     id: "ID",

@@ -1187,6 +1187,7 @@ emailAutoReplyAudit: {
     status: "Estado de tarea",
     type: "Tipo de tarea",
     create_task: "Crear Tarea de Información de Contactos",
+    email_service: "Servicio de Correo",
   },
   emailtasksendlog: {
     id: "ID",

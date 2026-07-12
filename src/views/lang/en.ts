@@ -1186,6 +1186,7 @@ emailAutoReplyAudit: {
     status: "Task Status",
     type: "Task Type",
     create_task: "Create Contact Profile Insights Task",
+    email_service: "Email Service",
   },
   emailtasksendlog: {
     id: "id",

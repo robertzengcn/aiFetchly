@@ -1158,6 +1158,7 @@ emailAutoReplyAudit: {
     status: "タスク状態",
     type: "タスクタイプ",
     create_task: "連絡先インサイトタスクを作成",
+    email_service: "メールサービス",
   },
   emailtasksendlog: {
     id: "ID",
