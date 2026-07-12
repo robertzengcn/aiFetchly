@@ -73,6 +73,9 @@ export interface PluginDetail extends PluginSummary {
   sourceKind?: PluginSourceKind;
   sourceUri?: string;
   sourceRef?: string;
+  marketplaceName?: string;
+  entryName?: string;
+  entryVersion?: string;
 }
 
 export type PluginSourceKind =
