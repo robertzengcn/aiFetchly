@@ -36,6 +36,10 @@ import type { WorkspaceAgentDraft } from "@/service/workspaceWatch/WorkspaceConf
 import type { WorkspaceHookDraft } from "@/service/workspaceWatch/WorkspaceConfigScanner";
 import { buildWorkspaceAgentDefinitions } from "@/service/workspaceWatch/buildWorkspaceAgentDefinitions";
 import { buildWorkspaceHookDefinitions } from "@/service/workspaceWatch/buildWorkspaceHookDefinitions";
+import { buildWorkspaceSkillDefinitions } from "@/service/workspaceWatch/buildWorkspaceSkillDefinitions";
+import type { LocalSkillDraft } from "@/service/aifetchlyConfig/buildLocalSkillDraft";
+import type { WorkspaceSkillDraft } from "@/entityTypes/aifetchlyConfigTypes";
+import { LocalSkillSourceAdapter } from "@/service/LocalSkillSourceAdapter";
 import type { AIFetchlyContextStore } from "./AIFetchlyContextStore";
 
 /** Outcome of applying a snapshot — surfaced to callers and getStatus(). */
@@ -46,6 +50,8 @@ export interface AIFetchlySnapshotApplyResult {
   readonly agentsChanged: boolean;
   /** True if any instructions were added/changed/removed for this source. */
   readonly instructionsChanged: boolean;
+  /** True if any skills were added/changed/removed for this source (Phase 18). */
+  readonly skillsChanged: boolean;
   /** Diagnostic count carried by this snapshot (for /status display). */
   readonly diagnosticCount: number;
 }
@@ -72,7 +78,11 @@ export class AIFetchlyRuntimeRegistrySync {
     private readonly commandRegistry: CommandRegistry,
     private readonly contextStore: AIFetchlyContextStore,
     private readonly agentRegistry: AgentDefinitionRegistryImpl = new AgentDefinitionRegistryImpl(),
-    private readonly hookRegistry: HookRegistryApi = HookRegistry
+    private readonly hookRegistry: HookRegistryApi = HookRegistry,
+    // Phase 18 (SKL-01): the adapter MUST be the SAME instance across
+    // applySnapshot calls so the sourceId -> names index persists across
+    // rescans. Constructed once by default; injectable for testing.
+    private readonly skillAdapter: LocalSkillSourceAdapter = new LocalSkillSourceAdapter()
   ) {}
 
   /**
@@ -141,6 +151,31 @@ export class AIFetchlyRuntimeRegistrySync {
     }
     this.hookRegistry.replaceSource(snapshot.sourceId, hooks);
 
+    // Phase 18 (SKL-01 / Plan 01 Task 3): skills. The global path (source
+    // "user") fills snapshot.skills with already-validated LocalSkillDraft[]
+    // (Task 2 loader). The workspace path (source "workspace") fills it with
+    // RAW WorkspaceSkillDraft[] (Task 2 scanner); convert them here in the
+    // MAIN process via buildWorkspaceSkillDefinitions before registry
+    // mutation. Then reconcile via the LocalSkillSourceAdapter (SkillRegistry
+    // has NO replaceSource — the adapter tracks sourceId -> names and
+    // performs unregister-then-register).
+    let skills: readonly LocalSkillDraft[];
+    if (snapshot.source === "workspace") {
+      const skillDrafts =
+        snapshot.skills as readonly unknown[] as readonly WorkspaceSkillDraft[];
+      const workspaceId =
+        snapshot.workspaceId ?? snapshot.sourceId.replace(/^workspace:/, "");
+      const converted = buildWorkspaceSkillDefinitions(
+        skillDrafts,
+        workspaceId
+      );
+      skills = converted.definitions;
+    } else {
+      skills =
+        snapshot.skills as readonly unknown[] as readonly LocalSkillDraft[];
+    }
+    this.skillAdapter.replaceSource(snapshot.sourceId, skills);
+
     this.contextStore.replaceInstructions(
       snapshot.sourceId,
       snapshot.instructions
@@ -150,6 +185,7 @@ export class AIFetchlyRuntimeRegistrySync {
       commandsChanged: commands.length > 0,
       agentsChanged: agents.length > 0,
       instructionsChanged: snapshot.instructions.length > 0,
+      skillsChanged: skills.length > 0,
       diagnosticCount: countDiagnostics(snapshot.diagnostics),
     };
   }
@@ -194,6 +230,11 @@ export class AIFetchlyRuntimeRegistrySync {
       // applySnapshot mutates the hook registry. Trusted workspace hook drafts
       // pass through and are converted main-side in applySnapshot.
       hooks: trust.hooks ? snapshot.hooks : [],
+      // SKL-01 / TRS-01 (Phase 18 / Plan 01): drop untrusted workspace skills
+      // BEFORE applySnapshot mutates the SkillRegistry via the adapter. Trusted
+      // workspace skill drafts pass through and are converted main-side in
+      // applySnapshot (T-untrusted-workspace / T-18-04).
+      skills: trust.skills ? snapshot.skills : [],
     };
     return this.applySnapshot(filtered);
   }
@@ -207,6 +248,9 @@ export class AIFetchlyRuntimeRegistrySync {
     this.commandRegistry.replaceSource(sourceId, []);
     this.agentRegistry.replaceSource(sourceId, []);
     this.hookRegistry.replaceSource(sourceId, []);
+    // Phase 18 (SKL-01): clear the source's skills via the adapter (reconcile
+    // to an empty set — unregister every tracked name for this sourceId).
+    this.skillAdapter.replaceSource(sourceId, []);
     this.contextStore.removeSource(sourceId);
   }
 }

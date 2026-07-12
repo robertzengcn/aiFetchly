@@ -1321,4 +1321,8 @@ export const SkillImportService = {
   loadPersistedSkills,
   validateManifest,
   validatePythonSkillZip,
+  // Phase 18 (SKL-01): exposed so LocalSkillSourceAdapter can register local
+  // ~/.aifetchly/skills/<name>/ drafts through the SAME pipeline as zip-
+  // installed skills. The function is unchanged — only surfaced.
+  registerImportedSkill,
 } as const;
