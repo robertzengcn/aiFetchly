@@ -6,8 +6,9 @@
             <v-chip class="mx-2"> Status </v-chip>
         </div> -->
    
-    <v-data-table-server v-model:items-per-page="itemsPerPage" :search="search" :headers="headers"
-        :items-length="totalItems" :items="serverItems" :loading="loading" item-value="name" @update:options="loadItems" class="custom-data-table">
+    <v-data-table-server
+v-model:items-per-page="itemsPerPage" :search="search" :headers="headers"
+        :items-length="totalItems" :items="serverItems" :loading="loading" item-value="id" @update:options="loadItems" class="custom-data-table">
         <template v-slot:[`item.actions`]="{ item }">
             <v-icon
             size="small"
