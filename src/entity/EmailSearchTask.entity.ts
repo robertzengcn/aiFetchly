@@ -1,4 +1,4 @@
-import { Entity, Column, PrimaryGeneratedColumn, OneToMany } from "typeorm";
+import { Entity, Column, PrimaryGeneratedColumn, OneToMany, Index } from "typeorm";
 import AuditableEntity from "@/entity/Auditable.entity";
 import { EmailSearchTaskUrlEntity } from "@/entity/EmailSearchTaskUrl.entity";
 import { EmailSearchTaskProxyEntity } from "@/entity/EmailSearchTaskProxy.entity";
@@ -46,6 +46,7 @@ export class EmailSearchTaskEntity extends AuditableEntity {
   error_log: string;
 
   @Column("integer", { nullable: true })
+  @Index()
   status: number;
 
   @Column("boolean", { default: false })

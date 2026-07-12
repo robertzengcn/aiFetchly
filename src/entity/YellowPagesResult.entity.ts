@@ -1,4 +1,4 @@
-import { Entity, Column, PrimaryGeneratedColumn } from "typeorm";
+import { Entity, Column, PrimaryGeneratedColumn, Index } from "typeorm";
 import AuditableEntity from "@/entity/Auditable.entity";
 
 @Entity("yellow_pages_result")
@@ -7,6 +7,7 @@ export class YellowPagesResultEntity extends AuditableEntity {
     id: number;
 
     @Column("integer", { nullable: false })
+    @Index()
     task_id: number;
 
     @Column("text", { nullable: false })

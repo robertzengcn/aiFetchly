@@ -1,4 +1,4 @@
-import { Entity, Column, PrimaryGeneratedColumn } from "typeorm";
+import { Entity, Column, PrimaryGeneratedColumn, Index } from "typeorm";
 import AuditableEntity from "@/entity/Auditable.entity";
 
 @Entity("search_task")
@@ -18,6 +18,7 @@ export class SearchTaskEntity extends AuditableEntity {
     record_time: string;
     
     @Column("integer", { nullable: true })
+    @Index()
     status: number;
     @Column("integer", { nullable: true })
     num_pages: number; //how many pages to scrape
