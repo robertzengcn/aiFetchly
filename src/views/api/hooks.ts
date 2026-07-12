@@ -44,6 +44,7 @@ export interface HookConfigRow {
   id: string;
   eventName: string;
   matcher: string | null;
+  ifCondition: string | null;
   hookType: string;
   command: string;
   cwd: string | null;
