@@ -25,7 +25,7 @@ import {
   BuckEmailTasklogQueryType,
   EmailMarketingSendLogListDisplay,
 } from "@/entityTypes/buckemailType";
-import { EmailMarketingSendLogEntity } from "@/model/emailMarketingSendLogdb";
+import { EmailMarketingSendLogEntity } from "@/entityTypes/emailMarketingSendLog-type";
 import { registerValidatedHandler } from "@/main-process/communication/_shared/registerValidatedHandler";
 import {
   buckEmailTaskListInputSchema,
