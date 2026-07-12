@@ -36,6 +36,8 @@ export const AIFETCHLY_CONFIG_LIMITS = {
   agentMdBytes: 128 * 1024,
   /** hooks/hooks.json — 128 KiB. */
   hooksJsonBytes: 128 * 1024,
+  /** Phase 18 (SKL-01): skills/<name>/manifest.json — 64 KiB each (CFG-04). */
+  skillManifestBytes: 64 * 1024,
   /** settings.json — 32 KiB. */
   settingsJsonBytes: 32 * 1024,
   /** Cap on commands accepted from a single source (DoS hygiene). */
@@ -44,6 +46,8 @@ export const AIFETCHLY_CONFIG_LIMITS = {
   maxAgentsPerSource: 100,
   /** Cap on hooks accepted from a single source (CFG-06 / Phase 17, DoS hygiene). */
   maxHooksPerSource: 100,
+  /** Cap on skills accepted from a single source (CFG-06 / Phase 18, DoS hygiene). */
+  maxSkillsPerSource: 100,
   /** CMD-06 (Phase 15): max length of a command frontmatter `description`. */
   commandDescriptionLength: 500,
   /** CMD-06 (Phase 15): max number of aliases accepted on one command. */
@@ -111,6 +115,11 @@ export const AIFETCHLY_DIAGNOSTIC_CODES = [
   // A hook declares a skill action but the skill registry is not yet wired
   // (D-Vocabulary no-op). Consumed by Plan 03's dispatcher.
   "skill-registry-not-available",
+  // ---- Phase 18 skills (SKL-01) ----
+  // A skills/<name>/manifest.json failed validation (bad name/version/runtime/
+  // parameters, path-traversal entry, or a name colliding with a built-in
+  // skill). Emitted by buildLocalSkillDraft + LocalSkillSourceAdapter.
+  "manifest-invalid",
 ] as const;
 
 export type AIFetchlyDiagnosticCode =

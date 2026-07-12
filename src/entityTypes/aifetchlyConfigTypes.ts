@@ -123,6 +123,37 @@ export interface AIFetchlyConfigSettings {
 }
 
 /**
+ * Phase 18 (SKL-01 / Plan 01): a raw workspace skill draft produced by the
+ * WORKER scanner.
+ *
+ * The worker reads `<workspace>/.aifetchly/skills/<name>/manifest.json`,
+ * JSON.parses it, and ships the parsed blob as opaque {@link rawManifest}
+ * (an unvalidated `unknown`). NO validation runs in the worker —
+ * `buildLocalSkillDraft` runs in the MAIN process via
+ * `buildWorkspaceSkillDefinitions`. This keeps the worker scan-only
+ * (WAT-02 worker-no-DB / no-registry / no-Electron). A structurally invalid
+ * manifest is carried through unchanged; the main-process converter decides
+ * whether to drop or warn.
+ *
+ * Defined here (rather than in `buildLocalSkillDraft.ts`) so the worker can
+ * import it as a pure type without pulling main-process runtime code.
+ */
+export interface WorkspaceSkillDraft {
+  /** Skill directory name (the `<name>` in `skills/<name>/`). */
+  readonly name: string;
+  /** The workspace source identifier (`workspace:<workspaceId>`). */
+  readonly sourceId: string;
+  /** Workspace-relative path of the manifest file (`skills/<name>/manifest.json`). */
+  readonly relativePath: string;
+  /** Absolute skill directory (`<workspaceRoot>/.aifetchly/skills/<name>`). */
+  readonly skillDir: string;
+  /** JSON-parsed manifest blob; `unknown` until validated main-side. */
+  readonly rawManifest: unknown;
+  /** SHA-256 of the manifest file bytes (CFG-06). */
+  readonly contentHash: string;
+}
+
+/**
  * Per-capability trust flags for a config source (design §8.2 / TRS-01).
  *
  * The watcher manager applies workspace snapshots through
