@@ -8,7 +8,7 @@
    
     <v-data-table-server
 v-model:items-per-page="itemsPerPage" :search="search" :headers="headers"
-        :items-length="totalItems" :items="serverItems" :loading="loading" item-value="id" @update:options="loadItems" class="custom-data-table">
+        :items-length="totalItems" :items="serverItems" :loading="loading" item-value="id" @update:options="loadItems" class="custom-data-table" return-object>
         <template v-slot:[`item.actions`]="{ item }">
             <v-icon
             size="small"
@@ -189,7 +189,7 @@ function loadItems({ page=1, itemsPerPage=10, sortBy}) {
        
         search: search.value
     }
-    if(sortBy.length){
+    if(sortBy && sortBy.length){
         console.log("sort have value")
         fetchitem.sortBy={key:sortBy[0].key,order:sortBy[0].order}
 
