@@ -16,7 +16,7 @@ import { EmailSearchResultDetailEntity } from "@/entity/EmailSearchResultDetail.
 import {
   EmailsearchTaskEntity,
   EmailsearchTaskStatus,
-} from "@/model/emailsearchTaskdb";
+} from "@/entityTypes/emailSearchTask-type";
 import { EmailsearchUrlEntity } from "@/entityTypes/emailSearchUrl-type";
 import { EmailsControldata } from "@/entityTypes/emailextraction-type";
 import { AggregatedCount } from "@/entityTypes/dashboardType";
