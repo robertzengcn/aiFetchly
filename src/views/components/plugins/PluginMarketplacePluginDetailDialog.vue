@@ -15,6 +15,10 @@
         </div>
 
         <v-checkbox v-if="canInstall" v-model="confirmRisk" :label="t('plugins.marketplace.confirm_risk') || 'I understand the risks and want to install.'" hide-details density="compact" />
+
+        <v-alert v-if="errorMsg" type="error" variant="tonal" class="mt-3" closable @click:close="errorMsg = ''">
+          {{ errorMsg }}
+        </v-alert>
       </v-card-text>
       <v-card-actions>
         <v-spacer />
@@ -38,6 +42,7 @@ const { t } = useI18n();
 const detail = ref<PluginMarketplacePluginDetail | null>(null);
 const installing = ref(false);
 const confirmRisk = ref(false);
+const errorMsg = ref("");
 
 const riskFlags = computed<string[]>(() => {
   if (!detail.value) return [];
@@ -66,17 +71,29 @@ function riskLabel(f: string): string {
 
 watch(() => [props.modelValue, props.pluginId], async ([open, id]) => {
   if (open && id) {
-    detail.value = await getMarketplacePlugin(id as string);
+    errorMsg.value = "";
     confirmRisk.value = false;
+    try {
+      detail.value = await getMarketplacePlugin(id as string);
+    } catch (e: unknown) {
+      detail.value = null;
+      errorMsg.value = e instanceof Error ? e.message : String(e);
+    }
   }
 }, { immediate: true });
 
 async function doInstall(): Promise<void> {
   if (!detail.value) return;
   installing.value = true;
+  errorMsg.value = "";
   try {
     await installMarketplacePlugin({ pluginId: detail.value.pluginId, overwrite: true });
     emit("installed"); emit("update:modelValue", false);
-  } finally { installing.value = false; }
+  } catch (e: unknown) {
+    // windowInvoke throws on backend {status:false}; surface it to the user.
+    errorMsg.value = e instanceof Error ? e.message : String(e);
+  } finally {
+    installing.value = false;
+  }
 }
 </script>

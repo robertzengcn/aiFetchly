@@ -14,6 +14,10 @@ v-model="installedFilter" :items="installedItems" item-title="label" item-value=
         :label="t('plugins.marketplace.column_status')" @update:model-value="reload" />
     </div>
 
+    <v-alert v-if="installError" type="error" variant="tonal" class="mb-2" closable @click:close="installError = ''">
+      {{ installError }}
+    </v-alert>
+
     <div v-if="loading" class="text-center pa-4"><v-progress-circular indeterminate color="primary" /></div>
     <v-table v-else>
       <thead><tr>
@@ -67,6 +71,7 @@ const installedItems = ref([
 ]);
 const showDetail = ref(false);
 const detailId = ref<string | null>(null);
+const installError = ref("");
 
 async function reload(): Promise<void> {
   loading.value = true;
@@ -81,7 +86,14 @@ async function reload(): Promise<void> {
 }
 function openDetail(pluginId: string): void { detailId.value = pluginId; showDetail.value = true; }
 async function install(pluginId: string): Promise<void> {
-  try { await installMarketplacePlugin({ pluginId, overwrite: true }); await reload(); } catch { /* error shown via envelope */ }
+  installError.value = "";
+  try {
+    await installMarketplacePlugin({ pluginId, overwrite: true });
+    await reload();
+  } catch (e: unknown) {
+    // windowInvoke throws on backend {status:false}; surface it to the user.
+    installError.value = e instanceof Error ? e.message : String(e);
+  }
 }
 async function loadMarketplaceOptions(): Promise<void> {
   const list = (await listPluginMarketplaces()) ?? [];
