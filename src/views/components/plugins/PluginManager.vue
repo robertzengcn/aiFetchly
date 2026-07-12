@@ -7,7 +7,7 @@
       <v-divider />
       <v-card-text>
         <v-tabs v-model="tab">
-          <v-tab value="installed">{{ t("plugins.tab_installed") || "Installed" }}</v-tab>
+          <v-tab value="installed">{{ t("plugins.marketplace.tab_installed") || "Installed" }}</v-tab>
           <v-tab value="discover">{{ t("plugins.marketplace.tab_discover") || "Discover" }}</v-tab>
           <v-tab value="marketplaces">{{ t("plugins.marketplace.tab_marketplaces") || "Marketplaces" }}</v-tab>
           <v-tab value="errors">{{ t("plugins.marketplace.tab_errors") || "Errors" }}</v-tab>
