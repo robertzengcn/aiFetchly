@@ -17,7 +17,7 @@ import {
   BuckemailTaskStartInput,
   mapBuckemailTaskStartInputToEntity,
 } from "@/entityTypes/emailmarketingType";
-import { BuckEmailType } from "@/model/buckEmailTaskdb";
+import { BuckEmailType } from "@/entityTypes/buckEmail-type";
 import { ItemSearchparam } from "@/entityTypes/commonType";
 import { CommonResponse } from "@/entityTypes/commonType";
 import {

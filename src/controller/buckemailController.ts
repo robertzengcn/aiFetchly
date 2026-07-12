@@ -18,7 +18,7 @@ import {
 } from "@/modules/lib/function";
 import { v4 as uuidv4 } from "uuid";
 import { BuckEmailTaskModule } from "@/modules/buckEmailTaskModule";
-import { BuckemailEntity } from "@/model/buckEmailTaskdb";
+import { BuckemailEntity } from "@/entityTypes/buckEmail-type";
 import { TaskStatus } from "@/entityTypes/commonType";
 import { ProcessMessage } from "@/entityTypes/processMessage-type";
 import { EmailSendResult } from "@/entityTypes/emailmarketingType";
