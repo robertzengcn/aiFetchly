@@ -3,16 +3,16 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Local Extensibility
 current_phase: 18
-current_phase_name: Skills and Plugin Integration
+current_phase_name: skills-and-plugin-integration
 status: executing
 stopped_at: Phase 18 context gathered
-last_updated: "2026-07-12T14:46:57.655Z"
-last_activity: 2026-07-11
-last_activity_desc: Phase 17 complete, transitioned to Phase 18
+last_updated: "2026-07-12T14:52:09.109Z"
+last_activity: 2026-07-12
+last_activity_desc: Phase 18 execution started
 progress:
   total_phases: 6
   completed_phases: 5
-  total_plans: 19
+  total_plans: 21
   completed_plans: 19
   percent: 83
 ---
@@ -28,7 +28,7 @@ progress:
 See: .planning/PROJECT.md (updated 2026-07-04)
 
 **Core value:** Users can discover, contact, and market to prospects across platforms using AI-assisted workflows.
-**Current focus:** Phase 17 — hooks
+**Current focus:** Phase 18 — skills-and-plugin-integration
 
 ## Milestone Progress
 
@@ -45,13 +45,13 @@ Progress: ███░░░░░░░ 33%
 
 ## Current Position
 
-Phase: 18 — Skills and Plugin Integration
+Phase: 18 (skills-and-plugin-integration) — EXECUTING
 Plan 16-01 (registry-validator-frontmatter): COMPLETE — 2/2 tasks (TDD RED→GREEN), 4 commits + SUMMARY (f9fb579e), 65 tests GREEN (59 main + 6 utilitycode) + 12 consumer + 104 targeted regression, tsc 0 errors, AGT-01+AGT-02 satisfied
 Plan 16-02 (loaders-trust-scanner): COMPLETE — 3/3 tasks (TDD RED->GREEN), 6 commits + SUMMARY, 44 tests GREEN (5 files), tsc 0 errors, AGT-02 satisfied (worker stays scan-only WAT-02)
 Plan 16-03 (dispatch-list-context): COMPLETE — 3/3 tasks (TDD RED->GREEN), 6 commits + SUMMARY (92d1a1b7), 51 tests GREEN (AgentRuntime/runSubagentTool/SlashCommandDispatcher/AIChatContextAssembler.aifetchly), tsc 0 errors, AGT-03 satisfied (registry-first dispatch + /agents command + D-Discovery block)
 Phase 16: 3/3 plans executed — all waves complete (16-01 + 16-02 + 16-03); ready for phase verification
-Status: Ready to execute
-Last activity: 2026-07-11 — Phase 17 complete, transitioned to Phase 18
+Status: Executing Phase 18
+Last activity: 2026-07-12 — Phase 18 execution started
 Resume note (Waves 2-3 executors): do NOT run bare `yarn testmain` for Self-Check — it hangs 20+ min on a pre-existing Electron/DB integration test unrelated to these plans. Use targeted runs: `AIFETCHLY_SKIP_TSC=1 npx vitest run --config vite.main.config.mjs <new test files>` (+ utilityCode config variant) + a standalone `npx tsc --noEmit`. 16-01 used this and got 104/104 regression + 65 new tests green, tsc 0 errors.
 
 ## Accumulated Context
