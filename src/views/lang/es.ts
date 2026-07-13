@@ -1134,7 +1134,7 @@ emailAutoReplyAudit: {
     from_hint: "Ingrese la cuenta del remitente",
     password: "Contraseña",
     password_hint: "Ingrese la contraseña del correo",
-    host: "Host",
+    host: "Servidor SMTP",
     host_hint: "Ingrese el host del correo",
     port: "Puerto",
     port_hint: "Ingrese el puerto del correo",

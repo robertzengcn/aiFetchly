@@ -1108,7 +1108,7 @@ emailAutoReplyAudit: {
     from_hint: "メール送信者アカウントを入力",
     password: "パスワード",
     password_hint: "メールパスワードを入力",
-    host: "ホスト",
+    host: "SMTP ホスト",
     host_hint: "メールホストを入力",
     port: "ポート",
     port_hint: "メールポートを入力",

@@ -1129,7 +1129,7 @@ emailAutoReplyAudit: {
     from_hint: "E-Mail-Absenderkonto eingeben",
     password: "Passwort",
     password_hint: "E-Mail-Passwort eingeben",
-    host: "Host",
+    host: "SMTP-Host",
     host_hint: "E-Mail-Host eingeben",
     port: "Port",
     port_hint: "E-Mail-Port eingeben",

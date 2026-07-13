@@ -1092,7 +1092,7 @@ emailAutoReplyAudit: {
     from_hint: "输入邮件发送者账户",
     password: "密码",
     password_hint: "输入邮件密码",
-    host: "主机",
+    host: "SMTP 主机",
     host_hint: "输入邮件主机",
     port: "端口",
     port_hint: "输入邮件端口",

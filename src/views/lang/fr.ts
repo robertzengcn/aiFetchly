@@ -1121,7 +1121,7 @@ emailAutoReplyAudit: {
     from_hint: "input email sender account",
     password: "password",
     password_hint: "input email password",
-    host: "host",
+    host: "Hôte SMTP",
     host_hint: "input email host",
     port: "port",
     port_hint: "input email port",
