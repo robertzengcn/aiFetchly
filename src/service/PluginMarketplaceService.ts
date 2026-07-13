@@ -30,10 +30,7 @@ import {
 import type { PluginMarketplaceFetcher } from "@/service/pluginMarketplaces/marketplaceFetcherTypes";
 import { resolveMarketplaceEntrySource } from "@/service/pluginMarketplaces/resolveMarketplaceEntrySource";
 import { parsePluginIdentifier } from "@/service/pluginMarketplaces/parsePluginIdentifier";
-import {
-  getPluginMarketplaceCacheRoot,
-  getPluginMarketplacesRoot,
-} from "@/service/pluginMarketplaces/pluginMarketplacePaths";
+import { getPluginMarketplaceCacheRoot } from "@/service/pluginMarketplaces/pluginMarketplacePaths";
 
 /**
  * Orchestrates marketplace add/list/get/refresh/remove/discover/install.
@@ -145,7 +142,19 @@ export class PluginMarketplaceService {
     if (existing) {
       await this.marketplaceModule.updateMarketplaceState(input);
     } else {
-      await this.marketplaceModule.createMarketplace(input);
+      try {
+        await this.marketplaceModule.createMarketplace(input);
+      } catch (e: unknown) {
+        // Race: a concurrent add won the unique-name race between our
+        // getMarketplaceByName check and this insert. The unique index is the
+        // real guard; surface a clean conflict instead of a raw constraint error.
+        if (e instanceof Error && /UNIQUE constraint/i.test(e.message)) {
+          throw new Error(
+            `Marketplace "${manifest.name}" already exists. Use overwrite to replace it.`
+          );
+        }
+        throw e;
+      }
     }
     const row = await this.marketplaceModule.getMarketplaceByName(
       manifest.name
@@ -599,6 +608,3 @@ function copyTree(src: string, dest: string): void {
     else if (entry.isFile()) fs.copyFileSync(s, d);
   }
 }
-
-// Touch getPluginMarketplacesRoot so the import is used by tooling that scans for path roots.
-void getPluginMarketplacesRoot;

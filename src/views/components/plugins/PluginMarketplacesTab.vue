@@ -11,6 +11,10 @@
       </v-btn>
     </div>
 
+    <v-alert v-if="loadError" type="error" variant="tonal" class="mb-2" closable @click:close="loadError = ''">
+      {{ loadError }}
+    </v-alert>
+
     <div v-if="loading" class="text-center pa-4"><v-progress-circular indeterminate color="primary" /></div>
     <v-table v-else>
       <thead><tr>
@@ -74,6 +78,7 @@ const showRemove = ref(false);
 const removeTarget = ref<string | null>(null);
 const refreshingName = ref<string | null>(null);
 const refreshingAll = ref(false);
+const loadError = ref("");
 
 function healthLabel(h: string): string { return t(`plugins.marketplace.health_${h}`) || h; }
 function healthColor(h: string): string {
@@ -84,15 +89,37 @@ function healthColor(h: string): string {
 
 async function load(): Promise<void> {
   loading.value = true;
-  try { marketplaces.value = (await listPluginMarketplaces()) ?? []; } finally { loading.value = false; }
+  try {
+    marketplaces.value = (await listPluginMarketplaces()) ?? [];
+  } catch (e: unknown) {
+    loadError.value = e instanceof Error ? e.message : String(e);
+  } finally {
+    loading.value = false;
+  }
 }
 async function refresh(name: string): Promise<void> {
   refreshingName.value = name;
-  try { await refreshPluginMarketplace(name); await load(); emit("changed"); } finally { refreshingName.value = null; }
+  try {
+    await refreshPluginMarketplace(name);
+    await load();
+    emit("changed");
+  } catch (e: unknown) {
+    loadError.value = e instanceof Error ? e.message : String(e);
+  } finally {
+    refreshingName.value = null;
+  }
 }
 async function refreshAll(): Promise<void> {
   refreshingAll.value = true;
-  try { for (const m of marketplaces.value) await refreshPluginMarketplace(m.name); await load(); emit("changed"); } finally { refreshingAll.value = false; }
+  try {
+    for (const m of marketplaces.value) await refreshPluginMarketplace(m.name);
+    await load();
+    emit("changed");
+  } catch (e: unknown) {
+    loadError.value = e instanceof Error ? e.message : String(e);
+  } finally {
+    refreshingAll.value = false;
+  }
 }
 function confirmRemove(name: string): void { removeTarget.value = name; showRemove.value = true; }
 async function doRemove(): Promise<void> {

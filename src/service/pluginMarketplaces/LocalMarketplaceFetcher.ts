@@ -2,10 +2,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { applyDirectoryLimits } from "@/service/pluginSources/pluginSourceLimits";
 import { getPluginsRoot } from "@/service/pluginPaths";
-import {
-  getPluginMarketplaceCacheRoot,
-  getPluginMarketplaceTempRoot,
-} from "./pluginMarketplacePaths";
+import { getPluginMarketplaceTempRoot } from "./pluginMarketplacePaths";
 import { locateMarketplaceManifest } from "./GitMarketplaceFetcher";
 import {
   mktErr,

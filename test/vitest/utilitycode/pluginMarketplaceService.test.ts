@@ -22,7 +22,9 @@ vi.mock("@/modules/PluginMarketplaceModule", () => {
         return Array.from(mockState.store.values());
       }
       async listEnabledMarketplaces() {
-        return Array.from(mockState.store.values()).filter((r) => r.enabled === 1);
+        return Array.from(mockState.store.values()).filter(
+          (r) => r.enabled === 1
+        );
       }
       async getMarketplaceByName(name: string) {
         return mockState.store.get(name) ?? null;
@@ -93,7 +95,11 @@ const VALID_MANIFEST = JSON.stringify({
   name: "team-tools",
   owner: { name: "Team" },
   plugins: [
-    { name: "lead-research", version: "1.0.0", source: "./plugins/lead-research" },
+    {
+      name: "lead-research",
+      version: "1.0.0",
+      source: "./plugins/lead-research",
+    },
   ],
 });
 
@@ -133,6 +139,39 @@ function fakeFetcher(root: string): PluginMarketplaceFetcher {
       };
     },
   };
+}
+
+/**
+ * Captures the PluginSourceRequest passed to installFromSource so the install
+ * test can assert the marketplace source override + sourceMeta provenance are
+ * threaded through. Returns a success result shaped like PluginImportResult.
+ */
+function fakeInstallService(): {
+  svc: { installFromSource: (req: unknown) => Promise<unknown> };
+  captured: unknown[];
+} {
+  const captured: unknown[] = [];
+  const svc = {
+    async installFromSource(req: unknown): Promise<unknown> {
+      captured.push(req);
+      return {
+        success: true,
+        plugin: {
+          id: 1,
+          name: "lead-research",
+          version: "1.0.0",
+          source: "marketplace",
+          enabled: true,
+          health: "healthy",
+          skillCount: 0,
+          mcpServerCount: 0,
+          permissions: [],
+          lastUpdated: new Date().toISOString(),
+        },
+      };
+    },
+  };
+  return { svc, captured };
 }
 
 describe("PluginMarketplaceService", () => {
@@ -220,5 +259,100 @@ describe("PluginMarketplaceService", () => {
     await svc.addMarketplace({ source: sourceRoot });
     await expect(svc.removeMarketplace("team-tools")).resolves.toBeUndefined();
     expect(await svc.getMarketplace("team-tools")).toBeNull();
+  });
+
+  it("installMarketplacePlugin delegates to PluginInstallService with marketplace provenance", async () => {
+    const { svc: fakeInstall, captured } = fakeInstallService();
+    const svc = new PluginMarketplaceService(
+      undefined as never,
+      fakeInstall as never,
+      fakeFetcher(sourceRoot)
+    );
+    await svc.addMarketplace({ source: sourceRoot });
+
+    const plugin = await svc.installMarketplacePlugin({
+      pluginId: "lead-research@team-tools",
+      overwrite: true,
+    });
+
+    expect(captured).toHaveLength(1);
+    const req = captured[0] as {
+      kind?: string;
+      source?: string;
+      sourceMeta?: {
+        marketplace?: { marketplaceName: string; entryName: string };
+      };
+    };
+    expect(req.kind).toBe("local-folder");
+    // Install-pipeline override + marketplace provenance must be set.
+    expect(req.source).toBe("marketplace");
+    expect(req.sourceMeta?.marketplace?.marketplaceName).toBe("team-tools");
+    expect(req.sourceMeta?.marketplace?.entryName).toBe("lead-research");
+    expect(plugin).toBeDefined();
+  });
+
+  it("installMarketplacePlugin rejects a plugin id without a marketplace segment", async () => {
+    const { svc: fakeInstall } = fakeInstallService();
+    const svc = new PluginMarketplaceService(
+      undefined as never,
+      fakeInstall as never,
+      fakeFetcher(sourceRoot)
+    );
+    await expect(
+      svc.installMarketplacePlugin({ pluginId: "lead-research" })
+    ).rejects.toThrow(/marketplace/i);
+  });
+
+  it("refreshMarketplace keeps the previous cache + manifest when re-fetch fails", async () => {
+    // Add with a working fetcher first.
+    const svcAdd = new PluginMarketplaceService(
+      undefined as never,
+      undefined as never,
+      fakeFetcher(sourceRoot)
+    );
+    await svcAdd.addMarketplace({ source: sourceRoot });
+    const cacheRoot = path.join(
+      mockState.userDataDir,
+      "plugins",
+      "marketplaces",
+      "cache",
+      "team-tools"
+    );
+    expect(fs.existsSync(cacheRoot)).toBe(true);
+
+    // A second service with a FAILING fetcher shares the same in-memory store
+    // (the module mock is global), exercising the refresh-failure path.
+    const failFetcher: PluginMarketplaceFetcher = {
+      kind: "local-folder",
+      async fetch() {
+        return {
+          success: false,
+          errors: [
+            {
+              code: "marketplace-fetch-failed",
+              message: "refresh boom",
+              recoverable: false,
+            },
+          ],
+        };
+      },
+    };
+    const svcRefresh = new PluginMarketplaceService(
+      undefined as never,
+      undefined as never,
+      failFetcher
+    );
+    await expect(svcRefresh.refreshMarketplace("team-tools")).rejects.toThrow();
+
+    // Cache dir is NOT deleted on failure.
+    expect(fs.existsSync(cacheRoot)).toBe(true);
+    // Persisted manifest is unchanged; health reflects the error.
+    const after = await svcRefresh.getMarketplace("team-tools");
+    expect(after).not.toBeNull();
+    expect(after!.manifest.plugins[0].name).toBe("lead-research");
+    expect(after!.health).toBe("invalid");
+    expect(
+      after!.errors.some((e) => e.code === "marketplace-fetch-failed")
+    ).toBe(true);
   });
 });

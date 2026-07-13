@@ -1,5 +1,8 @@
 <template>
   <div>
+    <v-alert v-if="loadError" type="error" variant="tonal" class="mb-2" closable @click:close="loadError = ''">
+      {{ loadError }}
+    </v-alert>
     <div v-if="loading" class="text-center pa-4"><v-progress-circular indeterminate color="primary" /></div>
     <div v-else-if="rows.length === 0" class="text-center pa-4 text-grey">{{ t("plugins.marketplace.no_errors") || "No marketplace errors." }}</div>
     <v-table v-else>
@@ -27,6 +30,7 @@ import { listPluginMarketplaces, type PluginMarketplaceSummary } from "@/views/a
 const { t } = useI18n();
 const rows = ref<PluginMarketplaceSummary[]>([]);
 const loading = ref(false);
+const loadError = ref("");
 
 function errorText(m: PluginMarketplaceSummary): string {
   // Detailed errors come from getPluginMarketplace(name).errors; show health here.
@@ -38,6 +42,8 @@ async function load(): Promise<void> {
   try {
     const all = (await listPluginMarketplaces()) ?? [];
     rows.value = all.filter((m) => m.health !== "healthy");
+  } catch (e: unknown) {
+    loadError.value = e instanceof Error ? e.message : String(e);
   } finally {
     loading.value = false;
   }

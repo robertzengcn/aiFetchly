@@ -3,7 +3,7 @@
     <div class="d-flex ga-2 mb-2 flex-wrap">
       <v-text-field
 v-model="search" density="compact" hide-details style="max-width: 280px"
-        :label="t('plugins.marketplace.search_label') || 'Search'" @update:model-value="reload" />
+        :label="t('plugins.marketplace.search_label') || 'Search'" @update:model-value="onSearchInput" />
       <v-select
 v-model="marketplaceName" :items="marketplaceItems" item-title="label" item-value="value"
         density="compact" hide-details style="max-width: 220px" clearable
@@ -16,6 +16,9 @@ v-model="installedFilter" :items="installedItems" item-title="label" item-value=
 
     <v-alert v-if="installError" type="error" variant="tonal" class="mb-2" closable @click:close="installError = ''">
       {{ installError }}
+    </v-alert>
+    <v-alert v-if="loadError" type="error" variant="tonal" class="mb-2" closable @click:close="loadError = ''">
+      {{ loadError }}
     </v-alert>
 
     <div v-if="loading" class="text-center pa-4"><v-progress-circular indeterminate color="primary" /></div>
@@ -38,6 +41,7 @@ v-model="installedFilter" :items="installedItems" item-title="label" item-value=
             </v-btn>
             <v-btn v-else-if="p.status === 'installed'" size="small" disabled>{{ t("plugins.marketplace.status_installed") || "Installed" }}</v-btn>
             <v-btn v-else-if="p.status === 'different_version'" size="small" variant="tonal" @click="install(p.pluginId)">{{ t("plugins.marketplace.reinstall_button") || "Reinstall" }}</v-btn>
+            <v-btn v-else-if="p.status === 'error'" size="small" disabled>{{ t("plugins.marketplace.status_error") || "Error" }}</v-btn>
             <v-btn v-else size="small" disabled>{{ t("plugins.marketplace.status_unsupported") || "Unsupported" }}</v-btn>
           </td>
         </tr>
@@ -72,9 +76,12 @@ const installedItems = ref([
 const showDetail = ref(false);
 const detailId = ref<string | null>(null);
 const installError = ref("");
+const loadError = ref("");
+let searchTimer: ReturnType<typeof setTimeout> | null = null;
 
 async function reload(): Promise<void> {
   loading.value = true;
+  loadError.value = "";
   try {
     const filter: PluginMarketplacePluginFilter = {};
     if (search.value) filter.search = search.value;
@@ -82,7 +89,18 @@ async function reload(): Promise<void> {
     if (installedFilter.value === "installed") filter.installed = true;
     if (installedFilter.value === "not_installed") filter.installed = false;
     items.value = (await listMarketplacePlugins(filter)) ?? [];
-  } finally { loading.value = false; }
+  } catch (e: unknown) {
+    loadError.value = e instanceof Error ? e.message : String(e);
+  } finally {
+    loading.value = false;
+  }
+}
+// Debounce search so each keystroke does not fire an IPC round-trip.
+function onSearchInput(): void {
+  if (searchTimer) clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => {
+    reload();
+  }, 300);
 }
 function openDetail(pluginId: string): void { detailId.value = pluginId; showDetail.value = true; }
 async function install(pluginId: string): Promise<void> {
@@ -96,8 +114,12 @@ async function install(pluginId: string): Promise<void> {
   }
 }
 async function loadMarketplaceOptions(): Promise<void> {
-  const list = (await listPluginMarketplaces()) ?? [];
-  marketplaceItems.value = list.map((m) => ({ label: m.displayName || m.name, value: m.name }));
+  try {
+    const list = (await listPluginMarketplaces()) ?? [];
+    marketplaceItems.value = list.map((m) => ({ label: m.displayName || m.name, value: m.name }));
+  } catch (e: unknown) {
+    loadError.value = e instanceof Error ? e.message : String(e);
+  }
 }
 defineExpose({ reload });
 onMounted(async () => { await loadMarketplaceOptions(); await reload(); });
