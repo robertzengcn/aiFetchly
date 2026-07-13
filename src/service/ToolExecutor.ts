@@ -1408,7 +1408,8 @@ export class ToolExecutor {
     const formattedSummary =
       results.length > 0
         ? `Contact Extraction Results:\n\n` +
-          `Total URLs: ${results.length}\n` +
+          `Total URLs: ${expectedTotal}\n` +
+          `Processed: ${results.length}\n` +
           `Successful: ${successful.length}\n` +
           `Failed: ${failed.length}\n\n` +
           (successful.length > 0
