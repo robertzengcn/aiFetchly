@@ -148,6 +148,12 @@ v-model="receivePassword" :label="t('emailReceive.receive_password')" :type="sho
         </v-col>
       </v-row>
 
+      <v-alert
+v-model="alert" border="start" variant="tonal" closable close-label="Close Alert" title="Information"
+        :color="alertcolor">
+        {{ alertContent }}
+      </v-alert>
+
       <div class="d-flex flex-column mt-4 mb-4">
         <v-row>
 
@@ -165,11 +171,6 @@ v-model="receivePassword" :label="t('emailReceive.receive_password')" :type="sho
 
         </v-row>
       </div>
-      <v-alert
-v-model="alert" border="start" variant="tonal" closable close-label="Close Alert" title="Information"
-        :color="alertcolor">
-        {{ alertContent }}
-      </v-alert>
     </v-form>
   </v-sheet>
   <!-- test service valid dialog -->
