@@ -25,9 +25,18 @@ export async function syncUnreadEmails(input: {
 
 /** Test receive connectivity. Does not mutate stored sync state. */
 export async function testEmailReceiveConnection(
-  emailServiceId: number
+  emailServiceId: number,
+  settings?: {
+    protocol: string;
+    host: string;
+    port: number;
+    ssl: boolean;
+    username: string;
+    password: string;
+    folder: string;
+  }
 ): Promise<{ success: boolean; error: string | null }> {
-  return await windowInvoke(EMAIL_RECEIVE_CONNECTION_TEST, { emailServiceId });
+  return await windowInvoke(EMAIL_RECEIVE_CONNECTION_TEST, { emailServiceId, settings });
 }
 
 export interface ReceivedMessageListInput {

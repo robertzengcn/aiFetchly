@@ -349,17 +349,37 @@ const initialize = async () => {
 
 
 
-/** Test inbound receive connectivity. Requires the service to be saved first. */
+/** Test inbound receive connectivity. Can test before saving by sending settings directly. */
 async function testReceiveConnection() {
-  if (!Id.value || Id.value <= 0) {
+  const missing: string[] = [];
+  if (!receiveProtocol.value) missing.push(t('emailReceive.receive_protocol'));
+  if (!imapHost.value && receiveProtocol.value === 'imap') missing.push(t('emailReceive.imap_host'));
+  if (!imapPort.value && receiveProtocol.value === 'imap') missing.push(t('emailReceive.imap_port'));
+  if (!pop3Host.value && receiveProtocol.value === 'pop3') missing.push(t('emailReceive.pop3_host'));
+  if (!pop3Port.value && receiveProtocol.value === 'pop3') missing.push(t('emailReceive.pop3_port'));
+  if (!receiveUsername.value) missing.push(t('emailReceive.receive_username'));
+  if (!receivePassword.value) missing.push(t('emailReceive.receive_password'));
+  if (missing.length > 0) {
     alert.value = true;
     alertcolor.value = "error";
-    alertContent.value = t("emailReceive.test_save_first");
+    alertContent.value = (t('emailservice.required_fields_missing') || 'Please fill in all required fields') + ': ' + missing.join(', ');
     return;
   }
+
+  const isImap = receiveProtocol.value === 'imap';
+  const settings = {
+    protocol: receiveProtocol.value,
+    host: isImap ? imapHost.value : pop3Host.value,
+    port: parseInt(isImap ? imapPort.value : pop3Port.value, 10),
+    ssl: isImap ? imapSsl.value === 1 : pop3Ssl.value === 1,
+    username: receiveUsername.value,
+    password: receivePassword.value,
+    folder: receiveFolder.value || 'INBOX',
+  };
+
   testingReceive.value = true;
   try {
-    const res = await testEmailReceiveConnection(Id.value);
+    const res = await testEmailReceiveConnection(Id.value || 0, settings);
     alert.value = true;
     alertcolor.value = res.success ? "success" : "error";
     alertContent.value = res.success
