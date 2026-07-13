@@ -5,15 +5,18 @@
     </div>
 
     <div class="d-flex flex-wrap align-center mb-3">
-      <v-text-field
-        v-model.number="emailServiceId"
-        :label="t('emailReceive.email_service_id')"
-        type="number"
+      <v-select
+        v-model="emailServiceId"
+        :items="emailServices"
+        item-title="name"
+        item-value="id"
+        :label="t('emailReceive.select_email_service')"
         density="compact"
         hide-details
         class="mr-2"
-        style="max-width: 200px"
-      ></v-text-field>
+        style="max-width: 280px"
+        clearable
+      ></v-select>
       <v-btn color="primary" :loading="syncing" :disabled="!emailServiceId" @click="syncNow" class="mr-2">
         <v-icon start>mdi-sync</v-icon>{{ t("emailReceive.sync") }}
       </v-btn>
@@ -49,7 +52,7 @@
       class="mb-3"
       density="compact"
     >
-      {{ t("emailReceive.email_service_id_required") || "Please enter an Email Service ID to view messages." }}
+      {{ t("emailReceive.select_email_service_hint") || "Please select an Email Service to view messages." }}
     </v-alert>
 
     <v-data-table-server
@@ -79,24 +82,36 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from "vue";
+import { ref, computed, onMounted } from "vue";
 import { useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
 import type { Header } from "@/entityTypes/commonType";
 import { CapitalizeFirstLetter } from "@/views/utils/function";
 import { listReceivedMessages, syncUnreadEmails } from "@/views/api/emailreceive";
+import { getEmailServiceList } from "@/views/api/emailservice";
+import type { EmailServiceListdata } from "@/entityTypes/emailmarketingType";
 import type { ReceivedMessageListDto } from "@/entityTypes/emailReceiveTypes";
 
 const { t } = useI18n({ inheritLocale: true });
 const router = useRouter();
 
 const emailServiceId = ref<number | null>(null);
+const emailServices = ref<EmailServiceListdata[]>([]);
 const serverItems = ref<ReceivedMessageListDto[]>([]);
 const totalItems = ref(0);
 const loading = ref(true);
 const syncing = ref(false);
 const itemsPerPage = ref(20);
 const currentPage = ref(1);
+
+onMounted(async () => {
+  try {
+    const resp = await getEmailServiceList({ page: 1, size: 9999 });
+    emailServices.value = resp.data;
+  } catch (err) {
+    console.error("Failed to load email services:", err);
+  }
+});
 
 const filters = ref({ replyStatus: undefined as string | undefined, search: "" });
 
