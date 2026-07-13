@@ -9,86 +9,59 @@ import {
   WEBSOCKET_SEND,
 } from "@/config/channellist";
 import { log } from "@/modules/Logger";
+import { registerValidatedHandler } from "@/main-process/communication/_shared/registerValidatedHandler";
+import { noInputSchema } from "@/schemas/ipc/_shared/common";
 
 /**
  * Register WebSocket IPC handlers
- * 
+ *
  * These handlers allow the renderer process to control and interact with
  * the WebSocket connection to the marketing server.
- * 
+ *
  * @param win - BrowserWindow instance for sending events
  */
 export function registerWebSocketIpcHandlers(win: BrowserWindow): void {
   log.info("Registering WebSocket IPC handlers");
 
-  /**
-   * Connect to WebSocket server
-   */
-  ipcMain.handle(WEBSOCKET_CONNECT, async () => {
-    try {
-      const wsClient = WebSocketClient.getInstance();
-      wsClient.connect(win);
-      return { status: true, msg: "WebSocket connection initiated" };
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      log.error("Failed to connect WebSocket:", error);
-      return { status: false, msg: errorMessage };
-    }
+  // WS-1 R1.5: migrated to registerValidatedHandler. The renderer reads
+  // result.status / result.msg (on error) / result.data — the same envelope
+  // registerValidatedHandler emits — so no renderer change is needed. Errors
+  // now throw (caught by the wrapper -> {status:false,msg}); success returns
+  // the inner data (wrapper -> {status:true,msg:"ok",data}).
+
+  /** Connect to WebSocket server */
+  registerValidatedHandler(WEBSOCKET_CONNECT, noInputSchema, async () => {
+    const wsClient = WebSocketClient.getInstance();
+    wsClient.connect(win);
+  });
+
+  /** Disconnect from WebSocket server */
+  registerValidatedHandler(WEBSOCKET_DISCONNECT, noInputSchema, async () => {
+    const wsClient = WebSocketClient.getInstance();
+    wsClient.disconnect();
+  });
+
+  /** Force reconnect to WebSocket server */
+  registerValidatedHandler(WEBSOCKET_RECONNECT, noInputSchema, async () => {
+    const wsClient = WebSocketClient.getInstance();
+    wsClient.reconnect();
+  });
+
+  /** Get WebSocket connection status */
+  registerValidatedHandler(WEBSOCKET_STATUS, noInputSchema, async () => {
+    const wsClient = WebSocketClient.getInstance();
+    return {
+      connectionStatus: wsClient.getStatus(),
+      clientId: wsClient.getClientId(),
+      isConnected: wsClient.isConnected(),
+    };
   });
 
   /**
-   * Disconnect from WebSocket server
-   */
-  ipcMain.handle(WEBSOCKET_DISCONNECT, async () => {
-    try {
-      const wsClient = WebSocketClient.getInstance();
-      wsClient.disconnect();
-      return { status: true, msg: "WebSocket disconnected" };
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      log.error("Failed to disconnect WebSocket:", error);
-      return { status: false, msg: errorMessage };
-    }
-  });
-
-  /**
-   * Force reconnect to WebSocket server
-   */
-  ipcMain.handle(WEBSOCKET_RECONNECT, async () => {
-    try {
-      const wsClient = WebSocketClient.getInstance();
-      wsClient.reconnect();
-      return { status: true, msg: "WebSocket reconnection initiated" };
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      log.error("Failed to reconnect WebSocket:", error);
-      return { status: false, msg: errorMessage };
-    }
-  });
-
-  /**
-   * Get WebSocket connection status
-   */
-  ipcMain.handle(WEBSOCKET_STATUS, async () => {
-    try {
-      const wsClient = WebSocketClient.getInstance();
-      return {
-        status: true,
-        data: {
-          connectionStatus: wsClient.getStatus(),
-          clientId: wsClient.getClientId(),
-          isConnected: wsClient.isConnected(),
-        },
-      };
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      log.error("Failed to get WebSocket status:", error);
-      return { status: false, msg: errorMessage };
-    }
-  });
-
-  /**
-   * Send a message through WebSocket
+   * Send a message through WebSocket.
+   * TODO(WS-1): migrate to registerValidatedHandler — its `status` field is the
+   * send result (true/false), not error/success, so the renderer must read
+   * result.data instead of result.status (a renderer change).
    */
   ipcMain.handle(WEBSOCKET_SEND, async (_event, message: unknown) => {
     try {
@@ -110,10 +83,10 @@ export function registerWebSocketIpcHandlers(win: BrowserWindow): void {
 
 /**
  * Initialize WebSocket connection if user is logged in
- * 
+ *
  * This function should be called during app startup after checking
  * if the user has a valid authentication token.
- * 
+ *
  * @param win - BrowserWindow instance for sending events
  */
 export async function initializeWebSocketConnection(win: BrowserWindow): Promise<void> {
