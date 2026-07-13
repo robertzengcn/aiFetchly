@@ -17,7 +17,13 @@ import { campaignEntity } from "@/entityTypes/campaign-type"
 import { OPENDIRECTORY, CHOOSEFILEDIALOG, GET_APP_INFO } from "@/config/channellist"
 import { AppInfo } from '@/modules/AppInfoModule'
 import { registerValidatedHandler } from "@/main-process/communication/_shared/registerValidatedHandler";
-import { noInputSchema } from "@/schemas/ipc/_shared/common";
+import { noInputSchema, byIdInputSchema } from "@/schemas/ipc/_shared/common";
+import { z } from "zod";
+import { lazySchema } from "@/utils/lazySchema";
+
+const taskListSchema = lazySchema(() =>
+  z.object({ id: z.number().int(), page: z.number().int().optional(), size: z.number().int().optional() })
+);
 
 
 export default function SyncMsg(mainWindow: BrowserWindow) {
@@ -53,199 +59,51 @@ export default function SyncMsg(mainWindow: BrowserWindow) {
     return res as CommonResponse<campaignEntity>;
   });
   //get social task list
-  ipcMain.handle("socialtask:list", async (event, data) => {
-    const qdata = JSON.parse(data as string);
-    if (!("id" in qdata)) {
-      //throw new Error("id not found");
-      return {
-        status: false,
-        msg: "id not found",
-      };
-    }
+  registerValidatedHandler("socialtask:list", taskListSchema, async (input) => {
     const socialControl = new SocialTaskController()
-    const res = await socialControl.getSocialTasklist(qdata.id, qdata.page, qdata.size).then(function (res) {
-      // console.log(res);
-      return res;
-    }).catch(function (err) {
-      console.log(err);
-      if (err instanceof Error) {
-        return {
-          status: false,
-          msg: err.message,
-        };
-      } else {
-        return {
-          status: false,
-          msg: "unknow error",
-        };
-      }
-    });
-    console.log(res)
-    return res as SocialTaskResponse;
+    const res = await socialControl.getSocialTasklist(input.id, input.page ?? 0, input.size ?? 0)
+    if (!res.status) throw new Error(res.msg || "Unknown error")
+    return res.data
   });
   //get social task info
-  ipcMain.handle("socialtask:info", async (event, data) => {
-    const qdata = JSON.parse(data as string);
-    if (!("id" in qdata)) {
-      //throw new Error("id not found");
-      return {
-        status: false,
-        msg: "id not found",
-      };
-    }
+  registerValidatedHandler("socialtask:info", byIdInputSchema, async (input) => {
     const socialControl = new SocialTaskController()
-    const res = await socialControl.getSocialTaskinfo(qdata.id).then(function (res) {
-      // console.log(res);
-      return res;
-    }).catch(function (err) {
-      console.log(err);
-      if (err instanceof Error) {
-        return {
-          status: false,
-          msg: err.message,
-        };
-      } else {
-        return {
-          status: false,
-          msg: "unknow error",
-        };
-      }
-    });
-    console.log(res)
-    return res as SocialTaskInfoResponse;
+    const res = await socialControl.getSocialTaskinfo(input.id)
+    if (!res.status) throw new Error(res.msg || "Unknown error")
+    return res.data
   });
 
   //get social task type list
-  ipcMain.handle("socialtasktype:list", async (event, data) => {
-
+  registerValidatedHandler("socialtasktype:list", noInputSchema, async () => {
     const socialControl = new SocialTaskController()
-    const res = await socialControl.getSocialTaskType().then(function (res) {
-      // console.log(res);
-      return res;
-    }).catch(function (err) {
-      console.log(err);
-      if (err instanceof Error) {
-        return {
-          status: false,
-          msg: err.message,
-        };
-      } else {
-        return {
-          status: false,
-          msg: "unknow error",
-        };
-      }
-    });
-    console.log(res)
-    return res as SocialTaskTypeResponse;
+    const res = await socialControl.getSocialTaskType()
+    if (!res.status) throw new Error(res.msg || "Unknown error")
+    return res.data
   });
   //get tag list
-  ipcMain.handle("tag:list", async (event, data) => {
-
+  registerValidatedHandler("tag:list", noInputSchema, async () => {
     const socialControl = new SocialTaskController()
-    const res = await socialControl.getTaglist().then(function (res) {
-      // console.log(res);
-      return res;
-    }).catch(function (err) {
-      console.log(err);
-      if (err instanceof Error) {
-        return {
-          status: false,
-          msg: err.message,
-        };
-      } else {
-        return {
-          status: false,
-          msg: "unknow error",
-        };
-      }
-    });
-    console.log(res)
-    return res as TagResponse;
+    const res = await socialControl.getTaglist()
+    if (!res.status) throw new Error(res.msg || "Unknown error")
+    return res.data
   });
   //save social task
-  ipcMain.handle("socialtask:save", async (event, data) => {
-    const qdata = JSON.parse(data as string);
-
+  registerValidatedHandler("socialtask:save", lazySchema(() => z.object({}).passthrough()), async (input) => {
     const socialControl = new SocialTaskController()
-    const res = await socialControl.saveSocialTask(qdata).then(function (res) {
-      // console.log(res);
-      return res;
-    }).catch(function (err) {
-      // console.log(err);
-      if (err instanceof Error) {
-        return {
-          status: false,
-          msg: err.message,
-        };
-      } else {
-        return {
-          status: false,
-          msg: "unknow error",
-        };
-      }
-    });
-    console.log(res)
-    return res as SaveSocialTaskResponse;
+    const res = await socialControl.saveSocialTask(input as never)
+    if (!res.status) throw new Error(res.msg || "Unknown error")
+    return res.data
   });
 
-  ipcMain.handle("socialtaskrun:list", async (event, data) => {
-    const qdata = JSON.parse(data as string);
-    if (!("id" in qdata)) {
-      //throw new Error("id not found");
-      return {
-        status: false,
-        msg: "id not found",
-      };
-    }
-    if (!("page" in qdata)) {
-      qdata.page = 10;
-    }
-    if (!("size" in qdata)) {
-      qdata.size = 10;
-    }
+  registerValidatedHandler("socialtaskrun:list", taskListSchema, async (input) => {
     const stkrunModel = new SocialTaskRun()
-    // const res = await stkrunModel.getrunlist(qdata.id).then(function (res) {
-    //   // console.log(res);
-    const reslist = await stkrunModel.getrunlist(qdata.id, qdata.page, qdata.size)
-    console.log(reslist)
-    return { status: true, msg: "", data: reslist };
-    //   // return {status:true,msg:"",data:res};
-    // }).catch(function (err) {
-    //   console.log(err);
-    //   if (err instanceof Error) {
-    //     return {
-    //       status: false,
-    //       msg: err.message,
-    //     };
-    //   } else {
-    //     return {
-    //       status: false,
-    //       msg: "unknow error",
-    //     };
-    //   }
-    // });
-    // console.log(res)
-    // return res as SocialTaskResponse;
+    const reslist = await stkrunModel.getrunlist(input.id, input.page ?? 10, input.size ?? 10)
+    return reslist
   });
-  ipcMain.handle("socialtaskresult:list", async (event, data) => {
-    const qdata = JSON.parse(data as string);
-    if (!("id" in qdata)) {
-      //throw new Error("id not found");
-      return {
-        status: false,
-        msg: "id not found",
-      };
-    }
-    if (!("page" in qdata)) {
-      qdata.page = 10;
-    }
-    if (!("size" in qdata)) {
-      qdata.size = 10;
-    }
+  registerValidatedHandler("socialtaskresult:list", taskListSchema, async (input) => {
     const socialtaskres = new SocialTaskResult()
-    const reslist = socialtaskres.gettaskresultlist(qdata.id, qdata.page, qdata.size, null)
-    return { status: true, msg: "", data: reslist };
+    const reslist = socialtaskres.gettaskresultlist(input.id, input.page ?? 10, input.size ?? 10, null)
+    return reslist
   })
 
   registerValidatedHandler(GET_APP_INFO, noInputSchema, async () => {
@@ -264,19 +122,20 @@ export default function SyncMsg(mainWindow: BrowserWindow) {
     return filePaths[0]
   })
   //choose file dialog
-  ipcMain.handle(CHOOSEFILEDIALOG, async (_event, ...args) => {
-    const rawOptions = args[0] as string | undefined;
-    const opts: { title?: string; filters?: { name: string; extensions: string[] }[]; properties?: ('openFile' | 'openDirectory')[] } = rawOptions ? JSON.parse(rawOptions) : {};
+  registerValidatedHandler(CHOOSEFILEDIALOG, lazySchema(() => z.object({
+    title: z.string().optional(),
+    filters: z.array(z.object({ name: z.string(), extensions: z.array(z.string()) })).optional(),
+    properties: z.array(z.string()).optional(),
+  }).passthrough()), async (input) => {
     const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow, {
-      title: opts.title,
-      filters: opts.filters,
-      properties: opts.properties ?? ['openFile', 'openDirectory'],
+      title: input.title,
+      filters: input.filters,
+      properties: input.properties ?? ['openFile', 'openDirectory'],
     })
     if (canceled) {
-      return { status: false, msg: "canceled" }
-    } else {
-      return { status: true, data: filePaths[0] }
+      throw new Error("canceled")
     }
+    return filePaths[0]
   })
 
 
