@@ -16,6 +16,8 @@ import { CommonMessage, CommonResponse } from "@/entityTypes/commonType"
 import { campaignEntity } from "@/entityTypes/campaign-type"
 import { OPENDIRECTORY, CHOOSEFILEDIALOG, GET_APP_INFO } from "@/config/channellist"
 import { AppInfo } from '@/modules/AppInfoModule'
+import { registerValidatedHandler } from "@/main-process/communication/_shared/registerValidatedHandler";
+import { noInputSchema } from "@/schemas/ipc/_shared/common";
 
 
 export default function SyncMsg(mainWindow: BrowserWindow) {
@@ -246,27 +248,20 @@ export default function SyncMsg(mainWindow: BrowserWindow) {
     return { status: true, msg: "", data: reslist };
   })
 
-  ipcMain.handle(GET_APP_INFO, async () => {
+  registerValidatedHandler(GET_APP_INFO, noInputSchema, async () => {
     const appInfo = new MainProcessAppInfoModule()
-    const res = await appInfo.getAppInfo()
-    const result:CommonMessage<AppInfo> = {
-      status: true,
-      msg: "get app info success",
-      data: res
-    }
-    return result
+    return await appInfo.getAppInfo()
   })
 
 
-  ipcMain.handle(OPENDIRECTORY, async () => {
+  registerValidatedHandler(OPENDIRECTORY, noInputSchema, async () => {
     const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow, {
       properties: ['openDirectory']
     })
     if (canceled) {
-      return { status: false, msg: "canceled" }
-    } else {
-      return { status: true, data: filePaths[0] }
+      throw new Error("canceled")
     }
+    return filePaths[0]
   })
   //choose file dialog
   ipcMain.handle(CHOOSEFILEDIALOG, async (_event, ...args) => {
