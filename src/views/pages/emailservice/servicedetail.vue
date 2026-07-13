@@ -56,6 +56,13 @@ v-model="host" :label="t('emailservice.host')" type="input"
           </v-btn-toggle>
         </v-col>
       </v-row>
+      <v-row>
+        <v-col cols="12" class="d-flex justify-center">
+          <v-btn color="blue" @click="showtestdialog = true">
+            {{ t('common.test') }}
+          </v-btn>
+        </v-col>
+      </v-row>
 
       <!-- ===== Inbound receive settings ===== -->
       <v-divider class="mt-4 mb-2"></v-divider>
@@ -144,17 +151,12 @@ v-model="receivePassword" :label="t('emailReceive.receive_password')" :type="sho
       <div class="d-flex flex-column mt-4 mb-4">
         <v-row>
 
-          <v-col cols="4" md="4">
+          <v-col cols="6" md="6">
             <v-btn color="error" block @click="router.go(-1)">
               {{ t('common.return') }}
             </v-btn>
           </v-col>
-          <v-col cols="4" md="4">
-            <v-btn color="blue" block @click="showtestdialog = true">
-              {{ t('common.test') }}
-            </v-btn>
-          </v-col>
-          <v-col cols="4" md="4">
+          <v-col cols="6" md="6">
             <v-btn color="success" type="submit" :loading="loading">
               {{ t('common.submit') }}
             </v-btn>
