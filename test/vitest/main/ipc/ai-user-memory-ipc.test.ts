@@ -89,7 +89,7 @@ describe("ai-user-memory-ipc", () => {
 
   it("list delegates to service", async () => {
     mockList.mockResolvedValue([]);
-    const r = (await handlers[AI_USER_MEMORY_LIST](EVENT, "")) as {
+    const r = (await handlers[AI_USER_MEMORY_LIST](EVENT, "{}")) as {
       status: boolean;
     };
     expect(mockList).toHaveBeenCalled();
