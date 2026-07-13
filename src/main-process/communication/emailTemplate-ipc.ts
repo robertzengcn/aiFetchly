@@ -32,11 +32,12 @@ export function registerEmailTemplateIpcHandlers() {
     emailTemplateListInputSchema,
     async (input) => {
       const mod = new EmailTemplateModule();
+      const sortby = Array.isArray(input.sortby) ? input.sortby[0] : input.sortby;
       const templates = await mod.listEmailTemplates(
         input.page ?? 0,
         input.size ?? 100,
         input.search,
-        input.sortby
+        sortby
       );
       const total = await mod.countEmailTemplates();
       return { records: templates, num: total };

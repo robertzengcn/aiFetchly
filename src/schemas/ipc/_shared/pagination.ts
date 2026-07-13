@@ -29,6 +29,9 @@ export const itemSearchParamSchema = lazySchema(() =>
     size: z.number().int().positive().optional(),
     where: z.string().optional(),
     search: z.string().optional(),
-    sortby: sortBySchema().optional(),
+    sortby: z
+      .union([sortBySchema(), z.array(sortBySchema())])
+      .transform((v) => (Array.isArray(v) ? (v[0] ?? undefined) : v))
+      .optional(),
   }),
 )

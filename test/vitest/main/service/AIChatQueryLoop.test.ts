@@ -1,10 +1,16 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   AIChatQueryLoop,
   resolveToolChoiceForRound,
 } from "@/service/AIChatQueryLoop";
 import type { AIChatQueryLoopInput } from "@/service/AIChatQueryEvents";
-import type { OpenAIChatCompletionChunk } from "@/api/aiChatApi";
+import type {
+  OpenAIChatCompletionChunk,
+  OpenAIChatCompletionRequest,
+  OpenAIChatMessage,
+} from "@/api/aiChatApi";
+import { HookRegistry } from "@/service/hooks/HookRegistry";
+import { setHookAuditLoggerForTests } from "@/service/hooks/HookAuditService";
 
 function makeChunk(
   delta: string,
@@ -55,6 +61,11 @@ function makeToolCallChunk(
 }
 
 describe("AIChatQueryLoop", () => {
+  beforeEach(() => {
+    HookRegistry.resetForTests();
+    setHookAuditLoggerForTests({ log: () => undefined });
+  });
+
   describe("tool choice", () => {
     it("forces SubmitPlanForApproval on explicit submit-now plan requests", () => {
       expect(
@@ -240,6 +251,150 @@ describe("AIChatQueryLoop", () => {
       );
     });
 
+    it("injects PreToolUse command hook context into the next model round", async () => {
+      HookRegistry.registerUserHook({
+        id: "test-tool-name-context",
+        eventName: "PreToolUse",
+        source: "user",
+        enabled: true,
+        type: "command",
+        matcher: "shell_execute",
+        command: `${process.execPath} -e "let b='';process.stdin.on('data',c=>b+=c);process.stdin.on('end',()=>{const i=JSON.parse(b);process.stdout.write(JSON.stringify({continue:true,additionalContext:'tool.name='+i.tool.name}));})"`,
+        timeoutMs: 5000,
+      });
+
+      const toolCallChunk = makeToolCallChunk(
+        "call-1",
+        "shell_execute",
+        '{"command":"echo hello"}'
+      );
+      const finalChunk = makeChunk("Done", "stop");
+      let callCount = 0;
+      let secondRoundMessages: readonly OpenAIChatMessage[] = [];
+      const fakeStream = vi.fn(
+        async (
+          request: OpenAIChatCompletionRequest,
+          onChunk: (c: OpenAIChatCompletionChunk) => void
+        ) => {
+          if (callCount === 0) {
+            callCount++;
+            onChunk(toolCallChunk);
+            return;
+          }
+          secondRoundMessages = request.messages;
+          onChunk(finalChunk);
+        }
+      );
+      const fakeExecute = vi.fn().mockResolvedValue({
+        tool_call_id: "call-1",
+        tool_name: "shell_execute",
+        success: true,
+        result: { stdout: "hello\n" },
+        execution_time_ms: 10,
+      });
+      const loop = new AIChatQueryLoop({
+        streamChatCompletion: fakeStream,
+        executeTool: fakeExecute,
+        getSkillDefinition: vi.fn().mockReturnValue(undefined),
+      });
+      const input: AIChatQueryLoopInput = {
+        conversationId: "v2-test",
+        assistantMessageId: "a-1",
+        messages: [],
+        request: { message: "run shell command echo hello" },
+        openAITools: [],
+        abortController: new AbortController(),
+        eventSink: { emit: vi.fn() },
+        startRound: 0,
+        isActiveTurn: () => true,
+      };
+
+      const result = await loop.run(input);
+
+      expect(result.type).toBe("completed");
+      expect(fakeExecute).toHaveBeenCalledWith(
+        "shell_execute",
+        { command: "echo hello" },
+        expect.objectContaining({ toolCallId: "call-1" })
+      );
+      expect(JSON.stringify(secondRoundMessages)).toContain(
+        "tool.name=shell_execute"
+      );
+    });
+
+    it("applies PreToolUse updatedInput before executing a tool", async () => {
+      HookRegistry.registerUserHook({
+        id: "test-shell-rewrite",
+        eventName: "PreToolUse",
+        source: "user",
+        enabled: true,
+        type: "command",
+        matcher: "shell_execute",
+        command: `${process.execPath} -e "process.stdout.write(JSON.stringify({updatedInput:{command:'echo safe'}}))"`,
+        timeoutMs: 5000,
+      });
+
+      const toolCallChunk = makeToolCallChunk(
+        "call-1",
+        "shell_execute",
+        '{"command":"echo hello"}'
+      );
+      const finalChunk = makeChunk("Done", "stop");
+      let callCount = 0;
+      const fakeStream = vi.fn(
+        async (
+          _request: OpenAIChatCompletionRequest,
+          onChunk: (c: OpenAIChatCompletionChunk) => void
+        ) => {
+          if (callCount === 0) {
+            callCount++;
+            onChunk(toolCallChunk);
+            return;
+          }
+          onChunk(finalChunk);
+        }
+      );
+      const fakeExecute = vi.fn().mockResolvedValue({
+        tool_call_id: "call-1",
+        tool_name: "shell_execute",
+        success: true,
+        result: { stdout: "safe\n" },
+        execution_time_ms: 10,
+      });
+      const eventSink = { emit: vi.fn() };
+      const loop = new AIChatQueryLoop({
+        streamChatCompletion: fakeStream,
+        executeTool: fakeExecute,
+        getSkillDefinition: vi.fn().mockReturnValue(undefined),
+      });
+      const input: AIChatQueryLoopInput = {
+        conversationId: "v2-test",
+        assistantMessageId: "a-1",
+        messages: [],
+        request: { message: "run shell command echo hello" },
+        openAITools: [],
+        abortController: new AbortController(),
+        eventSink,
+        startRound: 0,
+        isActiveTurn: () => true,
+      };
+
+      const result = await loop.run(input);
+
+      expect(result.type).toBe("completed");
+      expect(fakeExecute).toHaveBeenCalledWith(
+        "shell_execute",
+        { command: "echo safe" },
+        expect.objectContaining({ toolCallId: "call-1" })
+      );
+      expect(eventSink.emit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "tool_call",
+          toolArguments: { command: "echo safe" },
+        })
+      );
+    });
+
     it("returns failed for malformed tool arguments", async () => {
       const badChunk = makeToolCallChunk("call-1", "search", "{invalid json");
       const fakeStream = vi.fn(
@@ -367,6 +522,63 @@ describe("AIChatQueryLoop", () => {
       if (result.type === "paused_for_permission") {
         expect(result.pending.toolCallId).toBe("call-1");
         expect(result.pending.nextRound).toBe(1);
+      }
+    });
+
+    it("stores PreToolUse updatedInput in pending permission state", async () => {
+      HookRegistry.registerUserHook({
+        id: "test-pending-shell-rewrite",
+        eventName: "PreToolUse",
+        source: "user",
+        enabled: true,
+        type: "command",
+        matcher: "shell_execute",
+        command: `${process.execPath} -e "process.stdout.write(JSON.stringify({updatedInput:{command:'echo safe'}}))"`,
+        timeoutMs: 5000,
+      });
+
+      const toolCallChunk = makeToolCallChunk(
+        "call-1",
+        "shell_execute",
+        '{"command":"echo hello"}'
+      );
+      const fakeStream = vi.fn(
+        async (
+          _req: unknown,
+          onChunk: (c: OpenAIChatCompletionChunk) => void
+        ) => {
+          onChunk(toolCallChunk);
+        }
+      );
+      const fakeExecute = vi.fn().mockResolvedValue({
+        tool_call_id: "call-1",
+        tool_name: "shell_execute",
+        success: false,
+        result: { needsPermissionPrompt: true },
+        execution_time_ms: 1,
+      });
+      const loop = new AIChatQueryLoop({
+        streamChatCompletion: fakeStream,
+        executeTool: fakeExecute,
+        getSkillDefinition: vi.fn().mockReturnValue(undefined),
+      });
+      const input: AIChatQueryLoopInput = {
+        conversationId: "v2-test",
+        assistantMessageId: "a-1",
+        messages: [],
+        request: { message: "run shell command echo hello" },
+        openAITools: [],
+        abortController: new AbortController(),
+        eventSink: { emit: vi.fn() },
+        startRound: 0,
+        isActiveTurn: () => true,
+      };
+
+      const result = await loop.run(input);
+
+      expect(result.type).toBe("paused_for_permission");
+      if (result.type === "paused_for_permission") {
+        expect(result.pending.toolArguments).toEqual({ command: "echo safe" });
       }
     });
 
@@ -554,7 +766,11 @@ describe("AIChatQueryLoop", () => {
       const truncated =
         '{"agentId":"agent-lead-researcher","prompt":"Research Stripe","taskPacket":' +
         '{"lead":{"companyName":"Stripe","contacts":[{"name":"John"';
-      const truncChunk = makeToolCallChunk("call-trunc", "run_subagent", truncated);
+      const truncChunk = makeToolCallChunk(
+        "call-trunc",
+        "run_subagent",
+        truncated
+      );
 
       const eventSink = { emit: vi.fn() };
 
@@ -591,14 +807,22 @@ describe("AIChatQueryLoop", () => {
 
       // Check that at least one tool_result event carried the compact-payload
       // guidance message (emitted before the retry limit was exhausted)
-      const toolResultEvents = (eventSink.emit as ReturnType<typeof vi.fn>).mock.calls
-        .filter((call: unknown[]) => (call[0] as { type?: string }).type === "tool_result")
-        .map((call: unknown[]) => (call[0] as { toolResult?: { error?: string } }).toolResult?.error ?? "");
+      const toolResultEvents = (
+        eventSink.emit as ReturnType<typeof vi.fn>
+      ).mock.calls
+        .filter(
+          (call: unknown[]) =>
+            (call[0] as { type?: string }).type === "tool_result"
+        )
+        .map(
+          (call: unknown[]) =>
+            (call[0] as { toolResult?: { error?: string } }).toolResult
+              ?.error ?? ""
+        );
 
       expect(toolResultEvents.length).toBeGreaterThan(0);
       const hasTruncationGuidance = toolResultEvents.some(
-        (msg: string) =>
-          msg.includes("cut off") && msg.includes("incomplete")
+        (msg: string) => msg.includes("cut off") && msg.includes("incomplete")
       );
       expect(hasTruncationGuidance).toBe(true);
     });
@@ -643,6 +867,104 @@ describe("AIChatQueryLoop", () => {
         const msg = (result.error as Error).message;
         expect(msg).toMatch(/finish_reason=error/i);
         expect(msg).toMatch(/transient server/i);
+      }
+    });
+  });
+
+  describe("seven-layer recovery", () => {
+    it("Layer 3: escalates max_tokens on finish_reason=length then completes", async () => {
+      const events: Array<{ type: string; layer?: string }> = [];
+      let callCount = 0;
+      const fakeStream = vi.fn(
+        async (
+          req: unknown,
+          onChunk: (c: OpenAIChatCompletionChunk) => void
+        ) => {
+          callCount += 1;
+          if (callCount === 1) {
+            // Truncated response.
+            onChunk(makeChunk("partial", "length"));
+          } else {
+            // After escalation, the model finishes cleanly.
+            onChunk(makeChunk(" full", "stop"));
+          }
+          void req;
+        }
+      );
+      const loop = new AIChatQueryLoop({
+        streamChatCompletion: fakeStream,
+        executeTool: vi.fn(),
+        getSkillDefinition: vi.fn().mockReturnValue(undefined),
+      });
+      const input: AIChatQueryLoopInput = {
+        conversationId: "v2-test",
+        assistantMessageId: "a1",
+        messages: [],
+        request: { message: "hi" },
+        openAITools: [],
+        abortController: new AbortController(),
+        eventSink: {
+          emit: (e) => {
+            events.push({
+              type: e.type,
+              layer: "layer" in e ? (e as { layer?: string }).layer : undefined,
+            });
+          },
+        },
+        startRound: 0,
+        isActiveTurn: () => true,
+      };
+      const result = await loop.run(input);
+      expect(result.type).toBe("completed");
+      const recoveryEvents = events.filter((e) => e.type === "recovery_status");
+      expect(recoveryEvents.length).toBeGreaterThan(0);
+      expect(recoveryEvents[0]?.layer).toBe("output_token_recovery");
+    });
+
+    it("Layer 3: continuation preserves the truncated prefix in fullContent", async () => {
+      // Force escalation first (round 1), then continuation (round 2),
+      // then a clean stop (round 3). Verifies the prefix is concatenated
+      // rather than lost when the accumulator resets each round.
+      let callCount = 0;
+      const fakeStream = vi.fn(
+        async (
+          _req: unknown,
+          onChunk: (c: OpenAIChatCompletionChunk) => void
+        ) => {
+          callCount += 1;
+          if (callCount === 1) {
+            onChunk(makeChunk("alpha", "length")); // triggers escalation
+          } else if (callCount === 2) {
+            onChunk(makeChunk("beta", "length")); // triggers continuation
+          } else {
+            onChunk(makeChunk("gamma", "stop")); // clean completion
+          }
+        }
+      );
+      const loop = new AIChatQueryLoop({
+        streamChatCompletion: fakeStream,
+        executeTool: vi.fn(),
+        getSkillDefinition: vi.fn().mockReturnValue(undefined),
+      });
+      const result = await loop.run({
+        conversationId: "v2-test",
+        assistantMessageId: "a-prefix",
+        messages: [],
+        request: { message: "hi" },
+        openAITools: [],
+        abortController: new AbortController(),
+        eventSink: { emit: () => undefined },
+        startRound: 0,
+        isActiveTurn: () => true,
+      });
+      expect(result.type).toBe("completed");
+      if (result.type === "completed") {
+        // alpha was followed by continuation; beta by continuation;
+        // gamma was the final clean tail. All three must be present.
+        expect(result.fullContent).toContain("alpha");
+        expect(result.fullContent).toContain("beta");
+        expect(result.fullContent).toContain("gamma");
+        expect(result.fullContent).toBe("alphabetagamma");
       }
     });
   });

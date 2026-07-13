@@ -7,6 +7,7 @@ import type {
   OpenAIToolCall,
   OpenAIToolChoice,
   ToolExecutionResult,
+  StreamRecoveryInfo,
   StreamRetryInfo,
 } from "@/api/aiChatApi";
 import type {
@@ -27,6 +28,19 @@ import type {
 import { OpenAIStreamAccumulator } from "@/service/OpenAIStreamAccumulator";
 import { ToolExecutor } from "@/service/ToolExecutor";
 import {
+  AIChatRecoverableError,
+  buildRecoveryMetadata,
+  createRecoveryAttemptState,
+  isAIChatRecoverableError,
+  type AIChatRecoveryReason,
+} from "@/service/AIChatRecoveryTypes";
+import { AIChatRecoveryClassifier } from "@/service/AIChatRecoveryClassifier";
+import { AIChatRecoveryCoordinator } from "@/service/AIChatRecoveryCoordinator";
+import {
+  AI_CHAT_RECOVERY_DEFAULTS,
+  AIChatRetryPolicy,
+} from "@/service/AIChatRetryPolicy";
+import {
   checkPlanModeToolPolicy,
   isPlanToolName,
 } from "@/service/PlanModeToolPolicy";
@@ -43,6 +57,13 @@ import { CancellationToken } from "@/service/CancellationToken";
 import { getDefaultToolJobRegistry } from "@/service/ToolJobRegistry";
 import { USER_AI_ENABLED } from "@/config/usersetting";
 import { Token } from "@/modules/token";
+import { HookDispatcher } from "@/service/hooks/HookDispatcher";
+import { SkillPermissionService } from "@/service/SkillPermissionService";
+import {
+  EMPTY_AGGREGATE,
+  type AggregatedHookResult,
+  type HookToolDescriptor,
+} from "@/entityTypes/hookTypes";
 
 /**
  * Max model→tool→model rounds per user turn. Must be high enough to
@@ -104,6 +125,18 @@ const TOKENS_PER_MESSAGE_OVERHEAD = 4;
 interface LastFailedToolInfo {
   name: string;
   error: string;
+}
+
+interface PreparedToolCall {
+  startedAt: number;
+  descriptor: HookToolDescriptor;
+  preAggregate: AggregatedHookResult;
+  effectiveCall: {
+    id: string;
+    name: string;
+    arguments?: Record<string, unknown>;
+  };
+  blockedResult?: ToolExecutionResult;
 }
 
 /**
@@ -200,6 +233,43 @@ function extractToolError(payload: Record<string, unknown>): string {
   return "The tool did not complete successfully.";
 }
 
+function mergeToolResultHookContext(
+  result: ToolExecutionResult,
+  preAggregate: AggregatedHookResult,
+  postAggregate: AggregatedHookResult
+): ToolExecutionResult {
+  const hookMessages = [
+    ...preAggregate.systemMessages,
+    ...postAggregate.systemMessages,
+  ];
+  const hookContexts = [
+    ...preAggregate.additionalContexts,
+    ...postAggregate.additionalContexts,
+  ];
+  const updatedToolOutput =
+    result.success && postAggregate.updatedToolOutput
+      ? postAggregate.updatedToolOutput
+      : undefined;
+
+  if (
+    hookMessages.length === 0 &&
+    hookContexts.length === 0 &&
+    !updatedToolOutput
+  ) {
+    return result;
+  }
+
+  return {
+    ...result,
+    result: {
+      ...result.result,
+      ...(updatedToolOutput ?? {}),
+      ...(hookMessages.length > 0 ? { hookMessages } : {}),
+      ...(hookContexts.length > 0 ? { hookContexts } : {}),
+    },
+  };
+}
+
 function buildFailedToolFallbackMessage(info: LastFailedToolInfo): string {
   return `The tool \`${info.name}\` did not complete successfully: ${info.error}`;
 }
@@ -212,6 +282,7 @@ export interface AIChatQueryLoopDeps {
     options?: {
       signal?: AbortSignal;
       onRetry?: (info: StreamRetryInfo) => void;
+      onRecoveryStatus?: (info: StreamRecoveryInfo) => void;
     }
   ): Promise<void>;
 
@@ -222,6 +293,18 @@ export interface AIChatQueryLoopDeps {
   ): Promise<ToolExecutionResult>;
 
   getSkillDefinition(name: string): SkillDefinition | undefined;
+
+  /**
+   * Optional: resolves a fallback model id for Layer 6 recovery. When
+   * omitted, the loop records the failure reason but cannot auto-switch
+   * models (the badge stays dark). Production wires
+   * AIChatModelFallbackService here.
+   */
+  resolveFallbackModel?(input: {
+    originalModel?: string;
+    currentModel?: string;
+    reason: AIChatRecoveryReason;
+  }): Promise<{ model?: string; source: string }>;
 }
 
 /** Serialization helpers (moved from ai-chat-v2-ipc.ts). */
@@ -310,6 +393,11 @@ export class AIChatQueryLoop {
     // The frontend may or may not send maxTokens; default to 16384.
     let currentMaxTokens = input.request.maxTokens ?? 16384;
 
+    // Per-turn seven-layer recovery state. Tracks which layers have
+    // already been attempted so the coordinator doesn't loop forever.
+    // Imported fresh per run() to avoid cross-turn contamination.
+    let recoveryState = createRecoveryAttemptState(input.request.model);
+
     try {
       for (
         let round = input.startRound;
@@ -369,6 +457,19 @@ export class AIChatQueryLoop {
                 retryDelayMs: info.delayMs,
               });
             },
+            onRecoveryStatus: (info) => {
+              eventSink.emit({
+                type: "recovery_status",
+                conversationId: input.conversationId,
+                messageId: input.assistantMessageId,
+                layer: info.layer,
+                reason: info.reason,
+                attempt: info.attempt,
+                maxAttempts: info.maxAttempts,
+                delayMs: info.delayMs,
+                message: info.message,
+              });
+            },
           }
         );
 
@@ -409,9 +510,125 @@ export class AIChatQueryLoop {
         );
 
         if (accumulator.state.sawToolCallDelta && parsedCalls.length === 0) {
+          // Layer 3: the model started emitting tool_call deltas but the
+          // arguments were truncated. Try recovery before failing.
+          const coordinator = new AIChatRecoveryCoordinator();
+          const result = coordinator.recover({
+            reason: "output_limit",
+            state: recoveryState,
+            maxOutputTokensCap: AI_CHAT_RECOVERY_DEFAULTS.maxOutputTokensCap,
+          });
+          if (result.action.type === "escalate_output_tokens") {
+            currentMaxTokens = result.action.maxTokens;
+            // Capture any partial content before re-trying with a larger
+            // budget. The model may have produced useful text before
+            // hitting the limit.
+            const partialEsc = accumulator.state.fullContent || "";
+            recoveryState = {
+              ...result.updatedState,
+              recoveredContentPrefix:
+                recoveryState.recoveredContentPrefix + partialEsc,
+            };
+            eventSink.emit({
+              type: "recovery_status",
+              conversationId: input.conversationId,
+              messageId: input.assistantMessageId,
+              layer: "output_token_recovery",
+              reason: "output_limit",
+              message: "Escalating output token budget",
+            });
+            continue;
+          }
+          if (result.action.type === "continue_output") {
+            // Append a non-persisted continuation prompt so the model
+            // picks up where it left off. We must NOT emit a terminal
+            // event for the truncated partial content.
+            const partial = accumulator.state.fullContent || "";
+            recoveryState = {
+              ...result.updatedState,
+              recoveredContentPrefix:
+                recoveryState.recoveredContentPrefix + partial,
+            };
+            messages.push({
+              role: "assistant",
+              content: partial || null,
+            });
+            messages.push({
+              role: "user",
+              content: result.action.continuationMessage,
+            });
+            eventSink.emit({
+              type: "recovery_status",
+              conversationId: input.conversationId,
+              messageId: input.assistantMessageId,
+              layer: "output_token_recovery",
+              reason: "output_limit",
+              attempt: recoveryState.outputContinuationCount,
+              message: "Continuing truncated output",
+            });
+            continue;
+          }
           throw new Error(
             "AI server stream ended before returning a complete response."
           );
+        }
+
+        // Layer 3 also handles finish_reason=length on text responses.
+        if (accumulator.state.finishReason === "length") {
+          const coordinator = new AIChatRecoveryCoordinator();
+          const result = coordinator.recover({
+            reason: "output_limit",
+            state: recoveryState,
+            maxOutputTokensCap: AI_CHAT_RECOVERY_DEFAULTS.maxOutputTokensCap,
+          });
+          if (result.action.type === "escalate_output_tokens") {
+            currentMaxTokens = result.action.maxTokens;
+            // Capture any partial content before re-trying with a larger
+            // budget. The model may have produced useful text before
+            // hitting the limit.
+            const partialEsc = accumulator.state.fullContent || "";
+            recoveryState = {
+              ...result.updatedState,
+              recoveredContentPrefix:
+                recoveryState.recoveredContentPrefix + partialEsc,
+            };
+            eventSink.emit({
+              type: "recovery_status",
+              conversationId: input.conversationId,
+              messageId: input.assistantMessageId,
+              layer: "output_token_recovery",
+              reason: "output_limit",
+              message: "Escalating output token budget",
+            });
+            continue;
+          }
+          if (result.action.type === "continue_output") {
+            const partial = accumulator.state.fullContent || "";
+            recoveryState = {
+              ...result.updatedState,
+              recoveredContentPrefix:
+                recoveryState.recoveredContentPrefix + partial,
+            };
+            messages.push({
+              role: "assistant",
+              content: partial || null,
+            });
+            messages.push({
+              role: "user",
+              content: result.action.continuationMessage,
+            });
+            eventSink.emit({
+              type: "recovery_status",
+              conversationId: input.conversationId,
+              messageId: input.assistantMessageId,
+              layer: "output_token_recovery",
+              reason: "output_limit",
+              attempt: recoveryState.outputContinuationCount,
+              message: "Continuing truncated output",
+            });
+            continue;
+          }
+          // Else fall through; the round will complete with the partial.
         }
 
         // Detect explicit server-side errors: OpenAI-compatible servers can
@@ -569,15 +786,21 @@ export class AIChatQueryLoop {
           if (!call.ok || !call.id || !call.name) {
             continue;
           }
+          const callId = call.id;
+          const callName = call.name;
 
-          eventSink.emit({
-            type: "tool_call",
-            conversationId: input.conversationId,
-            messageId: input.assistantMessageId,
-            toolCallId: call.id,
-            toolName: call.name,
-            toolArguments: call.arguments ?? {},
-          });
+          const emitToolCall = (
+            toolArguments: Record<string, unknown>
+          ): void => {
+            eventSink.emit({
+              type: "tool_call",
+              conversationId: input.conversationId,
+              messageId: input.assistantMessageId,
+              toolCallId: callId,
+              toolName: callName,
+              toolArguments,
+            });
+          };
 
           // Model-initiated Plan Mode entry (chat mode only).
           if (
@@ -585,6 +808,7 @@ export class AIChatQueryLoop {
             !planContext &&
             input.autoPlan
           ) {
+            emitToolCall(call.arguments ?? {});
             const transition = await this.handleEnterPlanMode(
               input,
               messages,
@@ -621,6 +845,7 @@ export class AIChatQueryLoop {
             isEnterPlanModeToolName(call.name) &&
             (!input.autoPlan || planContext)
           ) {
+            emitToolCall(call.arguments ?? {});
             const reason = planContext
               ? "Already in Plan Mode; EnterPlanMode is not available."
               : "EnterPlanMode is not available. Plan Mode auto-entry is disabled.";
@@ -647,6 +872,7 @@ export class AIChatQueryLoop {
 
           // Plan tools are intercepted locally.
           if (planContext && isPlanToolName(call.name)) {
+            emitToolCall(call.arguments ?? {});
             planToolsUsed = true;
             if (call.name === "AskUserQuestion") {
               const paused = await this.handlePlanToolAskUserQuestion(
@@ -684,6 +910,7 @@ export class AIChatQueryLoop {
               },
             });
             if (!policyDecision.allowed) {
+              emitToolCall(call.arguments ?? {});
               const blockedContent = serializeToolResultContent({
                 success: false,
                 planApprovalRequired: true,
@@ -713,10 +940,14 @@ export class AIChatQueryLoop {
             name: call.name,
             arguments: call.arguments,
           };
-          const toolResult = await this.executeToolWithTimeout(
-            input,
-            executableCall
-          );
+          const preparedCall = await this.prepareToolCall(input, executableCall);
+          const effectiveArguments =
+            preparedCall.effectiveCall.arguments ?? {};
+          emitToolCall(effectiveArguments);
+
+          const toolResult =
+            preparedCall.blockedResult ??
+            (await this.executePreparedToolWithTimeout(input, preparedCall));
 
           // If the abort fired during the tool (e.g. user clicked Stop during
           // async polling), skip the tool_result emit — the outer abort handler
@@ -776,7 +1007,7 @@ export class AIChatQueryLoop {
                 nextRound: round + 1,
                 toolCallId: call.id,
                 toolName: call.name,
-                toolArguments: call.arguments ?? {},
+                toolArguments: effectiveArguments,
                 planContext,
                 eventSink: eventSink,
               },
@@ -809,6 +1040,12 @@ export class AIChatQueryLoop {
       }
 
       let fullContent = finalAccumulator?.state.fullContent ?? "";
+      // Layer 3 recovery: prepend any prefix accumulated from prior
+      // truncated rounds so the persisted assistant message includes
+      // the recovered content from earlier in the turn.
+      if (recoveryState.recoveredContentPrefix) {
+        fullContent = recoveryState.recoveredContentPrefix + fullContent;
+      }
       if (fullContent.trim().length === 0 && immediatePlanSubmissionContent) {
         fullContent = immediatePlanSubmissionContent;
       }
@@ -864,6 +1101,7 @@ export class AIChatQueryLoop {
         totalTokens: lastReportedUsage?.totalTokens,
         promptTokens: lastReportedUsage?.promptTokens,
         completionTokens: lastReportedUsage?.completionTokens,
+        recoveryMetadata: buildRecoveryMetadata(recoveryState),
       };
     } catch (err) {
       if (err instanceof Error && err.name === "AbortError") {
@@ -874,7 +1112,62 @@ export class AIChatQueryLoop {
           partialContent: activeAccumulator?.state.fullContent ?? "",
           model: activeAccumulator?.state.model,
           responseId: activeAccumulator?.state.responseId,
+          recoveryMetadata: buildRecoveryMetadata(recoveryState),
         };
+      }
+      // Layer 6 (model fallback) observability: when the API exhausted
+      // its retries and surfaced an AIChatRecoverableError for overload
+      // or model_unavailable, record a fallback attempt and emit a
+      // recovery_status event so the UI badge reflects the escalation.
+      // (Full automatic model re-run is a follow-up enhancement; this
+      // path makes the failure observable and persists the attempt.)
+      if (isAIChatRecoverableError(err)) {
+        const classifier = new AIChatRecoveryClassifier();
+        const rec = classifier.classifyThrown(err);
+        const coordinator = new AIChatRecoveryCoordinator();
+        // Resolve a fallback model (Layer 6) when the deps provide a
+        // resolver. Without it, the coordinator cannot return a
+        // fallback_model action and the badge stays dark.
+        let fallbackModel: string | undefined;
+        if (
+          this.deps.resolveFallbackModel &&
+          (rec.reason === "overload" || rec.reason === "model_unavailable")
+        ) {
+          try {
+            const resolved = await this.deps.resolveFallbackModel({
+              originalModel: recoveryState.originalModel,
+              currentModel: recoveryState.currentModel,
+              reason: rec.reason,
+            });
+            fallbackModel = resolved.model;
+          } catch {
+            // Non-fatal: proceed without a fallback.
+          }
+        }
+        const result = coordinator.recover({
+          reason: rec.reason,
+          state: recoveryState,
+          maxOutputTokensCap: AI_CHAT_RECOVERY_DEFAULTS.maxOutputTokensCap,
+          fallbackModel,
+        });
+        // Only update state when the coordinator produced an action we
+        // actually act on (fallback_model). Recording persistent_retry
+        // or other actions without executing them would mislead the
+        // persisted recoveryMetadata.
+        if (result.action.type === "fallback_model") {
+          recoveryState = result.updatedState;
+          eventSink.emit({
+            type: "recovery_status",
+            conversationId: input.conversationId,
+            messageId: input.assistantMessageId,
+            layer: "model_fallback",
+            reason: rec.reason,
+            originalModel: recoveryState.originalModel,
+            currentModel: recoveryState.currentModel,
+            fallbackModel: result.action.fallbackModel,
+            message: "Switching to backup model",
+          });
+        }
       }
       return {
         type: "failed",
@@ -884,6 +1177,7 @@ export class AIChatQueryLoop {
         partialContent: activeAccumulator?.state.fullContent ?? "",
         model: activeAccumulator?.state.model,
         responseId: activeAccumulator?.state.responseId,
+        recoveryMetadata: buildRecoveryMetadata(recoveryState),
       };
     }
   }
@@ -972,7 +1266,7 @@ export class AIChatQueryLoop {
    * Used when resolveTimeoutMs(cls) === null (i.e. the resolved timeout class
    * is "async"). Instead of blocking the query loop with a Promise.race, we
    * register a job in the ToolJobRegistry and return the jobId. The caller
-   * (executeToolWithTimeout) then hands the jobId to pollAsyncJobToCompletion,
+   * (executePreparedToolWithTimeout) then hands the jobId to pollAsyncJobToCompletion,
    * which blocks the loop until the registry job reaches a terminal status,
    * emitting tool_progress events along the way.
    *
@@ -1220,34 +1514,126 @@ export class AIChatQueryLoop {
     }
   }
 
-  private async executeToolWithTimeout(
+  private async prepareToolCall(
     input: AIChatQueryLoopInput,
     call: {
       id: string;
       name: string;
       arguments?: Record<string, unknown>;
     }
-  ): Promise<ToolExecutionResult> {
+  ): Promise<PreparedToolCall> {
     const startedAt = Date.now();
+    const descriptor = this.resolveHookToolDescriptor(input, call);
+    const preAggregate = await this.runPreToolUseHooks(
+      input,
+      descriptor,
+      call.arguments ?? {}
+    );
 
+    if (preAggregate.blocked || preAggregate.permissionDecision === "deny") {
+      return {
+        startedAt,
+        descriptor,
+        preAggregate,
+        effectiveCall: {
+          ...call,
+          arguments: preAggregate.updatedInput ?? call.arguments ?? {},
+        },
+        blockedResult: this.buildHookBlockedToolResult(
+          call,
+          preAggregate,
+          Date.now() - startedAt
+        ),
+      };
+    }
+
+    const effectiveCall = {
+      ...call,
+      arguments: preAggregate.updatedInput ?? call.arguments ?? {},
+    };
+
+    return {
+      startedAt,
+      descriptor,
+      preAggregate,
+      effectiveCall,
+    };
+  }
+
+  private async executePreparedToolWithTimeout(
+    input: AIChatQueryLoopInput,
+    prepared: PreparedToolCall
+  ): Promise<ToolExecutionResult> {
+    const { descriptor, effectiveCall, preAggregate, startedAt } = prepared;
     // Resolve the timeout class. Explicit declaration on the skill wins;
     // argument-driven resolver wins over static field; otherwise infer by name.
-    const skill = input.skillRegistry?.getSkill(call.name);
+    const skill = input.skillRegistry?.getSkill(effectiveCall.name);
     const cls: ToolTimeoutClass =
-      skill?.resolveTimeoutClass?.(call.arguments ?? {}) ??
+      skill?.resolveTimeoutClass?.(effectiveCall.arguments ?? {}) ??
       skill?.timeoutClass ??
-      inferTimeoutClassByName(call.name);
+      inferTimeoutClassByName(effectiveCall.name);
     const timeoutMs = resolveTimeoutMs(cls);
 
+    let toolResult: ToolExecutionResult;
     // When the resolved class is "async", dispatch to the async job path
     // and block on pollAsyncJobToCompletion until the registry job reaches
     // a terminal status. This keeps the model→tool→model loop intact: the
     // model sees the real tool result instead of an { async: true } envelope.
     if (timeoutMs === null) {
-      const { jobId } = await this.executeAsyncTool(input, call);
-      return await this.pollAsyncJobToCompletion(input, call, jobId);
+      const { jobId } = await this.executeAsyncTool(input, effectiveCall);
+      toolResult = await this.pollAsyncJobToCompletion(
+        input,
+        effectiveCall,
+        jobId
+      );
+    } else {
+      toolResult = await this.executeForegroundToolWithTimeout(
+        input,
+        effectiveCall,
+        skill,
+        timeoutMs,
+        startedAt
+      );
     }
 
+    if (isPermissionPromptResult(toolResult)) {
+      return mergeToolResultHookContext(
+        toolResult,
+        preAggregate,
+        EMPTY_AGGREGATE
+      );
+    }
+
+    const postAggregate = toolResult.success
+      ? await this.runPostToolUseHooks(
+          input,
+          descriptor,
+          effectiveCall.arguments ?? {},
+          normalizeToolResult(toolResult),
+          Date.now() - startedAt
+        )
+      : await this.runPostToolUseFailureHooks(
+          input,
+          descriptor,
+          effectiveCall.arguments ?? {},
+          normalizeToolResult(toolResult),
+          Date.now() - startedAt
+        );
+
+    return mergeToolResultHookContext(toolResult, preAggregate, postAggregate);
+  }
+
+  private async executeForegroundToolWithTimeout(
+    input: AIChatQueryLoopInput,
+    call: {
+      id: string;
+      name: string;
+      arguments?: Record<string, unknown>;
+    },
+    skill: SkillDefinition | null | undefined,
+    timeoutMs: number,
+    startedAt: number
+  ): Promise<ToolExecutionResult> {
     const token = new CancellationToken(timeoutMs);
     token.startTimer();
 
@@ -1347,6 +1733,169 @@ export class AIChatQueryLoop {
       }
       ToolExecutor.unregisterPartialSnapshot(call.id);
     }
+  }
+
+  private resolveHookToolDescriptor(
+    input: AIChatQueryLoopInput,
+    call: { id: string; name: string }
+  ): HookToolDescriptor {
+    const skill = input.skillRegistry?.getSkill(call.name);
+    if (skill) {
+      return {
+        id: call.id,
+        name: call.name,
+        source: "skill-registry",
+        permissionCategory: skill.permissionCategory,
+      };
+    }
+    if (call.name.startsWith("mcp_")) {
+      return { id: call.id, name: call.name, source: "mcp" };
+    }
+    return { id: call.id, name: call.name, source: "legacy-tool" };
+  }
+
+  private snapshotPermissionState(
+    input: AIChatQueryLoopInput,
+    toolName: string
+  ): {
+    allowed: boolean;
+    needsPrompt: boolean;
+    reason?: string;
+  } {
+    if (!input.skillRegistry?.getSkill(toolName)) {
+      return { allowed: true, needsPrompt: false };
+    }
+    const status = SkillPermissionService.getPermissionStatus(toolName);
+    if (status === "granted") {
+      return { allowed: true, needsPrompt: false };
+    }
+    if (status === "denied") {
+      return {
+        allowed: false,
+        needsPrompt: false,
+        reason: "Permission denied",
+      };
+    }
+    return { allowed: false, needsPrompt: true, reason: "Permission required" };
+  }
+
+  private async runPreToolUseHooks(
+    input: AIChatQueryLoopInput,
+    descriptor: HookToolDescriptor,
+    toolInput: Record<string, unknown>
+  ): Promise<AggregatedHookResult> {
+    try {
+      return await HookDispatcher.executeHooks({
+        eventName: "PreToolUse",
+        input: {
+          eventName: "PreToolUse",
+          hookRunId: `hookrun-pre-${descriptor.id}-${Date.now()}`,
+          source: "ai-chat-v2",
+          conversationId: input.conversationId,
+          messageId: input.assistantMessageId,
+          timestamp: new Date().toISOString(),
+          tool: descriptor,
+          input: toolInput,
+          permissionState: this.snapshotPermissionState(
+            input,
+            descriptor.name
+          ),
+        },
+        matchQuery: descriptor.name,
+        abortSignal: input.abortController.signal,
+      });
+    } catch (err) {
+      console.error("PreToolUse hook dispatch failed:", err);
+      return EMPTY_AGGREGATE;
+    }
+  }
+
+  private async runPostToolUseHooks(
+    input: AIChatQueryLoopInput,
+    descriptor: HookToolDescriptor,
+    toolInput: Record<string, unknown>,
+    output: Record<string, unknown>,
+    executionTimeMs: number
+  ): Promise<AggregatedHookResult> {
+    try {
+      return await HookDispatcher.executeHooks({
+        eventName: "PostToolUse",
+        input: {
+          eventName: "PostToolUse",
+          hookRunId: `hookrun-post-${descriptor.id}-${Date.now()}`,
+          source: "ai-chat-v2",
+          conversationId: input.conversationId,
+          messageId: input.assistantMessageId,
+          timestamp: new Date().toISOString(),
+          tool: descriptor,
+          input: toolInput,
+          output,
+          executionTimeMs,
+        },
+        matchQuery: descriptor.name,
+        abortSignal: input.abortController.signal,
+      });
+    } catch (err) {
+      console.error("PostToolUse hook dispatch failed:", err);
+      return EMPTY_AGGREGATE;
+    }
+  }
+
+  private async runPostToolUseFailureHooks(
+    input: AIChatQueryLoopInput,
+    descriptor: HookToolDescriptor,
+    toolInput: Record<string, unknown>,
+    toolResult: Record<string, unknown>,
+    executionTimeMs: number
+  ): Promise<AggregatedHookResult> {
+    const message = extractToolError(toolResult);
+    try {
+      return await HookDispatcher.executeHooks({
+        eventName: "PostToolUseFailure",
+        input: {
+          eventName: "PostToolUseFailure",
+          hookRunId: `hookrun-fail-${descriptor.id}-${Date.now()}`,
+          source: "ai-chat-v2",
+          conversationId: input.conversationId,
+          messageId: input.assistantMessageId,
+          timestamp: new Date().toISOString(),
+          tool: descriptor,
+          input: toolInput,
+          error: { message },
+          executionTimeMs,
+        },
+        matchQuery: descriptor.name,
+        abortSignal: input.abortController.signal,
+      });
+    } catch (err) {
+      console.error("PostToolUseFailure hook dispatch failed:", err);
+      return EMPTY_AGGREGATE;
+    }
+  }
+
+  private buildHookBlockedToolResult(
+    call: { id: string; name: string },
+    aggregate: AggregatedHookResult,
+    executionTimeMs: number
+  ): ToolExecutionResult {
+    const reason =
+      aggregate.blockReason ??
+      (aggregate.permissionDecision === "deny"
+        ? "Tool denied by hook policy"
+        : "Tool blocked by hook policy");
+    return {
+      tool_call_id: call.id,
+      tool_name: call.name,
+      success: false,
+      result: {
+        success: false,
+        error: reason,
+        blockedByHook: true,
+        hookMessages: [...aggregate.systemMessages],
+        hookContexts: [...aggregate.additionalContexts],
+      },
+      execution_time_ms: executionTimeMs,
+    };
   }
 
   private async submitImmediatePlanForApproval(

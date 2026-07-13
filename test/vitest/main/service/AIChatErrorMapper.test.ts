@@ -61,6 +61,16 @@ describe("AIChatErrorMapper - userSafeError", () => {
     );
   });
 
+  it("maps AI server JSON envelope errors to the transient-issue message", () => {
+    expect(
+      userSafeError(
+        new Error("AI server error code=500: database connection is not open")
+      )
+    ).toBe(
+      "The AI service is busy or had a transient issue. Please try again in a moment."
+    );
+  });
+
   it("still falls back to the generic message for unknown errors", () => {
     expect(userSafeError(new Error("something else entirely"))).toBe(
       "An unexpected error occurred. Please try again."

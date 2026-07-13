@@ -269,9 +269,13 @@ export default function SyncMsg(mainWindow: BrowserWindow) {
     }
   })
   //choose file dialog
-  ipcMain.handle(CHOOSEFILEDIALOG, async () => {
+  ipcMain.handle(CHOOSEFILEDIALOG, async (_event, ...args) => {
+    const rawOptions = args[0] as string | undefined;
+    const opts: { title?: string; filters?: { name: string; extensions: string[] }[]; properties?: ('openFile' | 'openDirectory')[] } = rawOptions ? JSON.parse(rawOptions) : {};
     const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow, {
-      properties: ['openFile', 'openDirectory']
+      title: opts.title,
+      filters: opts.filters,
+      properties: opts.properties ?? ['openFile', 'openDirectory'],
     })
     if (canceled) {
       return { status: false, msg: "canceled" }

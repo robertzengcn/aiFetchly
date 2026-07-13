@@ -37,7 +37,7 @@ export const yellowPagesByPidInputSchema = lazySchema(() =>
 
 /** LIST: TaskFilters (optional, passthrough) */
 export const yellowPagesListInputSchema = lazySchema(() =>
-  z.object({}).passthrough(),
+  z.object({}).passthrough().default({}),
 )
 
 /** RESULTS: { id, page?, size? } */

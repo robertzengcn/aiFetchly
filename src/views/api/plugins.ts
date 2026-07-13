@@ -23,6 +23,8 @@ import {
 
 export type PluginSource = "local" | "builtin" | "marketplace";
 
+export type PluginFormat = "aifetchly" | "claude";
+
 export type PluginHealth =
   | "healthy"
   | "disabled"
@@ -37,6 +39,7 @@ export interface PluginSummary {
   displayName?: string;
   version: string;
   source: PluginSource;
+  format?: PluginFormat;
   enabled: boolean;
   health: PluginHealth;
   skillCount: number;

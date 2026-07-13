@@ -1,5 +1,6 @@
 import { SandboxedSkillExecutor } from "@/service/SandboxedSkillExecutor";
 import type { SkillExecutionContext } from "@/entityTypes/skillTypes";
+import type { HookInput, HookOutput } from "@/entityTypes/hookTypes";
 
 interface ExecuteSkillMessage {
   type: "EXECUTE_SKILL";
@@ -9,10 +10,25 @@ interface ExecuteSkillMessage {
   context: SkillExecutionContext;
 }
 
+interface ExecuteHookMessage {
+  type: "EXECUTE_HOOK";
+  requestId: string;
+  script: string;
+  input: HookInput;
+}
+
+type WorkerRequestMessage = ExecuteSkillMessage | ExecuteHookMessage;
+
 interface SkillResultMessage {
   type: "SKILL_RESULT";
   requestId: string;
   result: Awaited<ReturnType<typeof SandboxedSkillExecutor.execute>>;
+}
+
+interface HookResultMessage {
+  type: "HOOK_RESULT";
+  requestId: string;
+  result: HookOutput;
 }
 
 interface SkillErrorMessage {
@@ -39,7 +55,7 @@ const parentPort = (process as unknown as { parentPort?: WorkerParentPort })
 const activeRequestIds = new Set<string>();
 
 function postMessageSafe(
-  message: SkillResultMessage | SkillErrorMessage
+  message: SkillResultMessage | HookResultMessage | SkillErrorMessage
 ): void {
   if (!parentPort) {
     return;
@@ -78,6 +94,39 @@ function validateExecuteSkillMessage(parsed: unknown): ExecuteSkillMessage {
     throw new Error("Invalid EXECUTE_SKILL message payload");
   }
   return message as ExecuteSkillMessage;
+}
+
+function validateExecuteHookMessage(parsed: unknown): ExecuteHookMessage {
+  const message = parsed as Partial<ExecuteHookMessage>;
+  if (
+    message.type !== "EXECUTE_HOOK" ||
+    typeof message.requestId !== "string" ||
+    typeof message.script !== "string" ||
+    typeof message.input !== "object" ||
+    message.input === null
+  ) {
+    throw new Error("Invalid EXECUTE_HOOK message payload");
+  }
+  return message as ExecuteHookMessage;
+}
+
+/**
+ * Execute a plugin hook script in-process (worker side). The script is a
+ * JS function body that receives `input` (HookInput) and returns a
+ * HookOutput. Wrapped in a try/catch — any error becomes SKILL_ERROR.
+ *
+ * Runs synchronously with `new Function` — no async, no I/O, no require.
+ * The worker process itself is the sandbox boundary; plugins cannot
+ * escape to main-process APIs from here.
+ */
+function executeHookScript(script: string, input: HookInput): HookOutput {
+  // eslint-disable-next-line @typescript-eslint/no-implied-eval, no-new-func
+  const fn = new Function("input", script) as (input: HookInput) => HookOutput;
+  const result = fn(input);
+  if (!result || typeof result !== "object") {
+    return { continue: true, permissionDecision: "allow" };
+  }
+  return result;
 }
 
 if (parentPort) {
