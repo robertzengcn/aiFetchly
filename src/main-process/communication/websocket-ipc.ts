@@ -11,6 +11,8 @@ import {
 import { log } from "@/modules/Logger";
 import { registerValidatedHandler } from "@/main-process/communication/_shared/registerValidatedHandler";
 import { noInputSchema } from "@/schemas/ipc/_shared/common";
+import { z } from "zod";
+import { lazySchema } from "@/utils/lazySchema";
 
 /**
  * Register WebSocket IPC handlers
@@ -63,19 +65,9 @@ export function registerWebSocketIpcHandlers(win: BrowserWindow): void {
    * send result (true/false), not error/success, so the renderer must read
    * result.data instead of result.status (a renderer change).
    */
-  ipcMain.handle(WEBSOCKET_SEND, async (_event, message: unknown) => {
-    try {
-      const wsClient = WebSocketClient.getInstance();
-      const sent = wsClient.send(message as Record<string, unknown>);
-      return {
-        status: sent,
-        msg: sent ? "Message sent" : "Failed to send message (not connected)",
-      };
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      log.error("Failed to send WebSocket message:", error);
-      return { status: false, msg: errorMessage };
-    }
+  registerValidatedHandler(WEBSOCKET_SEND, lazySchema(() => z.record(z.unknown())), async (input) => {
+    const wsClient = WebSocketClient.getInstance();
+    return wsClient.send(input);
   });
 
   log.info("WebSocket IPC handlers registered");
