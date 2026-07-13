@@ -352,7 +352,76 @@ This avoids changing the tool schema whenever a page is added.
 
 ### 10.2 Tool Description
 
-"Navigate AiFetchly to an internal application page based on a user's natural language request. Use this for opening pages, lists, settings, logs, dashboards, or management screens. This tool does not click buttons, submit forms, mutate data, send messages, or navigate to external websites."
+The function-call description must be explicit enough that the model knows when navigation is appropriate and when it should answer normally or use another tool.
+
+Recommended production tool description:
+
+```text
+Navigate AiFetchly to a safe internal application page based on the user's natural language request.
+
+Use this tool when:
+- The user explicitly asks to open, go to, navigate to, show, view, or switch to an application page.
+- The user asks for a page-like destination such as a list, dashboard, settings screen, log, audit page, management page, inbox, template page, campaign page, schedule page, or configuration page.
+- The user appears blocked because they do not know where a feature is located and the best next step is to open the relevant page.
+- The request is only about navigation and does not require changing data, submitting a form, sending a message, starting a task, scraping, or calling an external service.
+
+Do not use this tool when:
+- The user is asking a general question that can be answered directly without opening a page.
+- The user asks to create, edit, delete, send, run, import, export, scrape, schedule, approve, or otherwise mutate data.
+- The requested action needs a specific record ID or object that is not known, such as opening a detail/edit page for a specific campaign, email, account, schedule, or task.
+- The user asks to log in, log out, open an auth callback, open a system error page, or access an internal helper page.
+- The user asks to open an external website, URL, file path, browser page, or operating-system location.
+- The user asks for a destructive or high-impact workflow; explain what page they can open or ask for confirmation instead.
+- The destination is ambiguous between multiple pages; return clarification candidates rather than choosing one.
+
+This tool only returns a navigation command for a validated internal route. It must not click buttons, fill forms, submit forms, mutate data, send emails, start automation, scrape websites, read private records, or navigate to external websites.
+```
+
+The final implementation should keep the same intent even if wording is shortened to fit remote model/tool limits.
+
+### 10.2.1 Positive Use Examples
+
+| User request | Expected tool behavior |
+| --- | --- |
+| "Open email service." | Call `open_app_page` with query `"Open email service."` |
+| "I want to edit email settings." | Call `open_app_page`; resolve to email service list/config page. |
+| "Check email reply log." | Call `open_app_page`; resolve to AI auto-reply audit list. |
+| "Go to campaign list." | Call `open_app_page`; resolve to campaign list if available. |
+| "Where can I manage schedules?" | Call `open_app_page` if opening the schedule page is the best next step. |
+| "Show system settings." | Call `open_app_page`; resolve to system settings. |
+
+### 10.2.2 Negative Use Examples
+
+| User request | Expected behavior |
+| --- | --- |
+| "What is the email service page used for?" | Answer directly; do not navigate unless the user also asks to open it. |
+| "Create a new campaign." | Do not use navigation as an action substitute; explain or ask whether to open the campaign page. |
+| "Delete this schedule." | Do not use this tool; deletion is a data mutation and needs the appropriate workflow. |
+| "Send this email now." | Do not use this tool; sending email is high-impact and requires the send workflow/confirmation. |
+| "Open campaign 123." | Do not navigate unless route params are supported and the ID is validated. |
+| "Open login." | Do not navigate; login/auth routes are excluded. |
+| "Open https://example.com." | Do not use this tool; external navigation is out of scope. |
+| "Open email page." | Return clarification candidates if multiple email pages match. |
+
+### 10.2.3 Ambiguous Intent Guidance
+
+If the user request includes both a page intent and an action intent, the assistant should separate them:
+
+1. If the user primarily wants to perform an action, do not use `open_app_page` as though navigation completes the action.
+2. If opening a page would help the user manually complete the action, ask a short confirmation or phrase the response clearly.
+3. If another purpose-built AI tool exists for the action, prefer that tool over navigation.
+
+Examples:
+
+```text
+User: "Send a bulk email."
+Assistant behavior: Do not call open_app_page as the final action. Use the proper email-send workflow if available and approved, or ask whether to open the bulk email task page.
+```
+
+```text
+User: "I need to configure SMTP."
+Assistant behavior: Call open_app_page because the request is naturally a configuration-page navigation request.
+```
 
 ### 10.3 Parameters
 
