@@ -58,7 +58,7 @@ v-model="host" :label="t('emailservice.host')" type="input"
       </v-row>
       <v-row>
         <v-col cols="12" class="d-flex justify-center">
-          <v-btn color="blue" @click="showtestdialog = true">
+          <v-btn color="blue" @click="openTestDialog">
             {{ t('common.test') }}
           </v-btn>
         </v-col>
@@ -456,6 +456,24 @@ async function onSubmit() {
   }
   loading.value = false;
 }
+
+const openTestDialog = () => {
+  const requiredFields = [
+    { value: name.value, label: t('emailservice.name') },
+    { value: from.value, label: t('emailservice.from') },
+    { value: password.value, label: t('emailservice.password') },
+    { value: host.value, label: t('emailservice.host') },
+    { value: port.value, label: t('emailservice.port') },
+  ];
+  const missing = requiredFields.filter(f => !f.value);
+  if (missing.length > 0) {
+    alert.value = true;
+    alertcolor.value = "error";
+    alertContent.value = t('emailservice.test_save_first') || 'Please fill in all required fields: ' + missing.map(f => f.label).join(', ');
+    return;
+  }
+  showtestdialog.value = true;
+};
 
 const submitTestemail = async () => {
   if (!testform.value) return;
