@@ -26,6 +26,9 @@ const baseDefinition: AgentDefinitionView = {
     },
   },
   status: "active",
+  source: "built-in",
+  health: "healthy",
+  manifest: {},
 };
 
 const basePacket: AgentTaskPacket = {

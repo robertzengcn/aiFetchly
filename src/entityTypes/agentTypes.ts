@@ -9,6 +9,17 @@ export type AgentExecutionMode = "foreground" | "background" | "scheduled";
 /** Agent functional role. */
 export type AgentMode = "coordinator" | "specialist" | "verifier" | "formatter";
 
+/** Origin of an agent definition row. */
+export type AgentDefinitionSource = "built-in" | "user" | "plugin";
+
+/** Runtime health of an agent definition. */
+export type AgentDefinitionHealth =
+  | "healthy"
+  | "disabled"
+  | "partial_load"
+  | "invalid"
+  | "missing_files";
+
 /** Agent task lifecycle status. */
 export type AgentTaskStatus =
   | "queued"
@@ -43,6 +54,14 @@ export interface AgentDefinitionView {
   maxContinueCalls: number;
   outputSchema: Record<string, unknown>;
   status: "active" | "disabled";
+  source: AgentDefinitionSource;
+  pluginName?: string;
+  pluginComponentPath?: string;
+  manifest?: Record<string, unknown>;
+  health: AgentDefinitionHealth;
+  lastError?: string;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 /** Lead input packet. */
@@ -169,3 +188,54 @@ export interface AgentTaskMessageRecord {
   toolCallId?: string;
   metadata?: Record<string, unknown>;
 }
+
+/** Input for creating a user-owned (manual) agent. */
+export interface CreateManualAgentDefinitionInput {
+  idSlug: string;
+  name: string;
+  description: string;
+  systemPrompt: string;
+  allowedTools: string[];
+  defaultModel?: string;
+  mode: AgentMode;
+  maxToolCalls: number;
+  maxRuntimeMs: number;
+  maxContinueCalls: number;
+  outputSchema?: Record<string, unknown>;
+  enabled?: boolean;
+}
+
+/** Patch for updating a user-owned (manual) agent. */
+export interface UpdateManualAgentDefinitionInput {
+  name?: string;
+  description?: string;
+  systemPrompt?: string;
+  allowedTools?: string[];
+  defaultModel?: string | null;
+  mode?: AgentMode;
+  maxToolCalls?: number;
+  maxRuntimeMs?: number;
+  maxContinueCalls?: number;
+  outputSchema?: Record<string, unknown>;
+  enabled?: boolean;
+}
+
+/** One parsed plugin agent plus ownership metadata. */
+export interface ParsedPluginAgentDefinition {
+  definition: AgentDefinitionView;
+  pluginName: string;
+  componentPath: string;
+  manifest: Record<string, unknown>;
+  warnings: ReadonlyArray<import("@/entityTypes/pluginTypes").PluginError>;
+}
+
+export type PluginAgentParseResult =
+  | {
+      ok: true;
+      agents: ParsedPluginAgentDefinition[];
+      warnings: ReadonlyArray<import("@/entityTypes/pluginTypes").PluginError>;
+    }
+  | {
+      ok: false;
+      errors: ReadonlyArray<import("@/entityTypes/pluginTypes").PluginError>;
+    };

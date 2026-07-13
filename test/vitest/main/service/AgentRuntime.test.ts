@@ -25,6 +25,9 @@ const definition: AgentDefinitionView = {
     },
   },
   status: "active",
+  source: "built-in",
+  health: "healthy",
+  manifest: {},
 };
 
 // Mutable handle so individual tests can swap the active definition
