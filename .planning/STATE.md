@@ -45,8 +45,10 @@ Progress: ███░░░░░░░ 33%
 
 ## Current Position
 
-Phase: 18 (skills-and-plugin-integration) — EXECUTING
+Phase: 18 (skills-and-plugin-integration) — EXECUTING (both plans complete; ready for phase verification)
+Plan 18-02 (skill-ref-resolution-plugin-promotion): COMPLETE — 3/3 tasks (TDD RED→GREEN), 3 commits (75a8503d / 79d4f71c / cec81362) + SUMMARY, 20 tests GREEN (skillRef 7 + promotion 8 + optionsPath 5) + Phase 15/16/17 regression green (CommandRegistry 33 / agentFrontmatter+AgentDefinitionRegistry 84 / utilitycode HookDispatcher 15 boundary-preserved + hook main 28 / workspace converters 14), tsc 0 errors, SKL-02 + D-SkillRefResolve + D-PluginBadge satisfied (plugin commands/agents promoted into native CommandRegistry/AgentDefinitionRegistry under plugin:<name> rank 3 — T-plugin-poison structural; skill-ref loop closed via SkillExecutor.execute + preserved no-op fallback; options.json path non-collision proven). Tasks 2-3 executed inline on the orchestrator model after recurring Anthropic-5h-quota deaths of sonnet executors; Task 1 (75a8503d) was committed by the prior sonnet executor before its quota death.
 Plan 18-01 (local-skills-discovery): COMPLETE — 3/3 tasks (TDD RED->GREEN), 3 commits + SUMMARY, 43 tests GREEN (35 main + 8 utilitycode) + Phase-17 hooks regression green, tsc 0 errors, SKL-01 satisfied (local skills discovered/validated/registered via existing SkillRegistry + source adapter; execution boundary + permission gate contract tests prove existing SkillWorkerClient/SkillPermissionService boundary holds)
+Phase 18: 2/2 plans executed — both waves complete (18-01 + 18-02); ready for phase verification
 Plan 16-01 (registry-validator-frontmatter): COMPLETE — 2/2 tasks (TDD RED→GREEN), 4 commits + SUMMARY (f9fb579e), 65 tests GREEN (59 main + 6 utilitycode) + 12 consumer + 104 targeted regression, tsc 0 errors, AGT-01+AGT-02 satisfied
 Plan 16-02 (loaders-trust-scanner): COMPLETE — 3/3 tasks (TDD RED->GREEN), 6 commits + SUMMARY, 44 tests GREEN (5 files), tsc 0 errors, AGT-02 satisfied (worker stays scan-only WAT-02)
 Plan 16-03 (dispatch-list-context): COMPLETE — 3/3 tasks (TDD RED->GREEN), 6 commits + SUMMARY (92d1a1b7), 51 tests GREEN (AgentRuntime/runSubagentTool/SlashCommandDispatcher/AIChatContextAssembler.aifetchly), tsc 0 errors, AGT-03 satisfied (registry-first dispatch + /agents command + D-Discovery block)
