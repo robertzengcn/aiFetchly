@@ -7,6 +7,7 @@
 - **Created**: 2026-07-13
 - **Owner**: Engineering Team
 - **Related areas**: AI Chat, Vue Router, renderer navigation, built-in tools, route metadata
+- **Technical design**: `docs/prd/ai-app-navigation-tool-technical-design.md`
 - **Related files**:
   - `src/views/router/index.ts`
   - `src/views/components/aiChat/AiChatBox.vue`
