@@ -25,6 +25,14 @@ import {
   contactExtractionWorkerOutboundSchema,
   type ContactExtractionWorkerOutbound,
 } from "@/schemas/worker/contactExtraction";
+import { registerValidatedHandler } from "@/main-process/communication/_shared/registerValidatedHandler";
+import { z } from "zod";
+import { lazySchema } from "@/utils/lazySchema";
+
+// WS-1 R1.5: Zod schema for the {resultIds} request (replaces JSON.parse + as).
+const contactExtractionRequestSchema = lazySchema(() =>
+  z.object({ resultIds: z.array(z.number()).min(1) })
+);
 
 // Type for IPC request with resultIds
 interface ContactExtractionRequest {
@@ -369,13 +377,11 @@ export function registerContactExtractionHandlers(): void {
   /**
    * Handler: Start contact extraction
    */
-  ipcMain.handle(START_CONTACT_EXTRACTION, async (event, request: unknown) => {
+  registerValidatedHandler(START_CONTACT_EXTRACTION, contactExtractionRequestSchema, async (input) => {
     try {
       // console.log(request);
       // Parse JSON string if needed (frontend sends JSON.stringify)
-      const parsedRequest =
-        typeof request === "string" ? JSON.parse(request) : request;
-      const { resultIds } = parsedRequest as ContactExtractionRequest;
+      const { resultIds } = input;
       // console.log(resultIds);
       // Validate input
       if (!Array.isArray(resultIds) || resultIds.length === 0) {
@@ -450,12 +456,10 @@ export function registerContactExtractionHandlers(): void {
   /**
    * Handler: Get contact info
    */
-  ipcMain.handle(GET_CONTACT_INFO, async (event, request: unknown) => {
+  registerValidatedHandler(GET_CONTACT_INFO, contactExtractionRequestSchema, async (input) => {
     try {
       // Parse JSON string if needed (frontend sends JSON.stringify)
-      const parsedRequest =
-        typeof request === "string" ? JSON.parse(request) : request;
-      const { resultIds } = parsedRequest as ContactExtractionRequest;
+      const { resultIds } = input;
 
       // Use ContactInfoModule for business logic
       const module = new ContactInfoModule();
@@ -477,12 +481,10 @@ export function registerContactExtractionHandlers(): void {
   /**
    * Handler: Retry contact extraction
    */
-  ipcMain.handle(RETRY_CONTACT_EXTRACTION, async (event, request: unknown) => {
+  registerValidatedHandler(RETRY_CONTACT_EXTRACTION, contactExtractionRequestSchema, async (input) => {
     try {
       // Parse JSON string if needed (frontend sends JSON.stringify)
-      const parsedRequest =
-        typeof request === "string" ? JSON.parse(request) : request;
-      const { resultIds } = parsedRequest as ContactExtractionRequest;
+      const { resultIds } = input;
 
       // Validate input
       if (!Array.isArray(resultIds) || resultIds.length === 0) {
