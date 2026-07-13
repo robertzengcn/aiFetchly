@@ -32,7 +32,7 @@ export async function testEmailReceiveConnection(
     port: number;
     ssl: boolean;
     username: string;
-    password: string;
+    password?: string;
     folder: string;
   }
 ): Promise<{ success: boolean; error: string | null }> {

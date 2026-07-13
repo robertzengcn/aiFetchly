@@ -54,13 +54,24 @@ export class EmailReceiveSyncService {
       port: number;
       ssl: boolean;
       username: string;
-      password: string;
+      password?: string;
       folder: string;
     }
   ): Promise<{ success: boolean; error: string | null }> {
     try {
       let config: EmailReceiveConnectionConfig | null;
       if (settings) {
+        const storedConfig =
+          settings.password && settings.password.length > 0
+            ? null
+            : await this.serviceModule.getEmailServiceReceiveConfig(emailServiceId);
+        const password =
+          settings.password && settings.password.length > 0
+            ? settings.password
+            : storedConfig?.password ?? "";
+        if (!password) {
+          return { success: false, error: "Receive is not configured for this service." };
+        }
         config = {
           emailServiceId,
           protocol: settings.protocol as EmailReceiveProtocol,
@@ -68,7 +79,7 @@ export class EmailReceiveSyncService {
           port: settings.port,
           ssl: settings.ssl,
           username: settings.username,
-          password: settings.password,
+          password,
           folder: settings.folder,
         };
       } else {

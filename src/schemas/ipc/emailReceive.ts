@@ -30,7 +30,7 @@ export const emailReceiveConnectionTestInputSchema = lazySchema(() =>
         port: z.number().int().min(1).max(65535),
         ssl: z.boolean(),
         username: z.string().min(1),
-        password: z.string().min(1),
+        password: z.string().min(1).optional(),
         folder: z.string().min(1),
       })
       .optional(),

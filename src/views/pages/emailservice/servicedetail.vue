@@ -352,13 +352,16 @@ const initialize = async () => {
 /** Test inbound receive connectivity. Can test before saving by sending settings directly. */
 async function testReceiveConnection() {
   const missing: string[] = [];
+  const usernameForTest = receiveUsername.value || from.value;
+  const passwordForTest = receivePassword.value || password.value;
+  const canUseStoredPassword = isEdit.value && Id.value > 0;
   if (!receiveProtocol.value) missing.push(t('emailReceive.receive_protocol'));
   if (!imapHost.value && receiveProtocol.value === 'imap') missing.push(t('emailReceive.imap_host'));
   if (!imapPort.value && receiveProtocol.value === 'imap') missing.push(t('emailReceive.imap_port'));
   if (!pop3Host.value && receiveProtocol.value === 'pop3') missing.push(t('emailReceive.pop3_host'));
   if (!pop3Port.value && receiveProtocol.value === 'pop3') missing.push(t('emailReceive.pop3_port'));
-  if (!receiveUsername.value) missing.push(t('emailReceive.receive_username'));
-  if (!receivePassword.value) missing.push(t('emailReceive.receive_password'));
+  if (!usernameForTest) missing.push(t('emailReceive.receive_username'));
+  if (!passwordForTest && !canUseStoredPassword) missing.push(t('emailReceive.receive_password'));
   if (missing.length > 0) {
     alert.value = true;
     alertcolor.value = "error";
@@ -372,10 +375,12 @@ async function testReceiveConnection() {
     host: isImap ? imapHost.value : pop3Host.value,
     port: parseInt(isImap ? imapPort.value : pop3Port.value, 10),
     ssl: isImap ? imapSsl.value === 1 : pop3Ssl.value === 1,
-    username: receiveUsername.value,
-    password: receivePassword.value,
+    username: usernameForTest,
     folder: receiveFolder.value || 'INBOX',
   };
+  if (passwordForTest) {
+    Object.assign(settings, { password: passwordForTest });
+  }
 
   testingReceive.value = true;
   try {
@@ -484,7 +489,7 @@ const openTestDialog = () => {
   if (!from.value) missing.push(t('emailservice.from'));
   if (!password.value) missing.push(t('emailservice.password'));
   if (!host.value) missing.push(t('emailservice.host'));
-  if (!port.value && port.value !== 0) missing.push(t('emailservice.port'));
+  if (!port.value) missing.push(t('emailservice.port'));
   if (missing.length > 0) {
     alert.value = true;
     alertcolor.value = "error";
