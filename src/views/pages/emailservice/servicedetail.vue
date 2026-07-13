@@ -458,18 +458,16 @@ async function onSubmit() {
 }
 
 const openTestDialog = () => {
-  const requiredFields = [
-    { value: name.value, label: t('emailservice.name') },
-    { value: from.value, label: t('emailservice.from') },
-    { value: password.value, label: t('emailservice.password') },
-    { value: host.value, label: t('emailservice.host') },
-    { value: port.value, label: t('emailservice.port') },
-  ];
-  const missing = requiredFields.filter(f => !f.value);
+  const missing: string[] = [];
+  if (!name.value) missing.push(t('emailservice.name'));
+  if (!from.value) missing.push(t('emailservice.from'));
+  if (!password.value) missing.push(t('emailservice.password'));
+  if (!host.value) missing.push(t('emailservice.host'));
+  if (!port.value && port.value !== 0) missing.push(t('emailservice.port'));
   if (missing.length > 0) {
     alert.value = true;
     alertcolor.value = "error";
-    alertContent.value = t('emailservice.test_save_first') || 'Please fill in all required fields: ' + missing.map(f => f.label).join(', ');
+    alertContent.value = (t('emailservice.required_fields_missing') || 'Please fill in all required fields') + ': ' + missing.join(', ');
     return;
   }
   showtestdialog.value = true;

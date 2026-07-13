@@ -1154,6 +1154,7 @@ emailAutoReplyAudit: {
     send_test_email_success: "Test-E-Mail erfolgreich gesendet",
     send_test_email_error: "Fehler beim Senden der Test-E-Mail",
     email_send_success: "E-Mail erfolgreich gesendet",
+    required_fields_missing: "Bitte füllen Sie alle Pflichtfelder aus",
   },
   buckemailsend: {
     email_source: "E-Mail-Quelle",

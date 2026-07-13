@@ -1116,6 +1116,7 @@ emailAutoReplyAudit: {
     send_test_email_success: "发送测试邮件成功",
     send_test_email_error: "发送测试邮件错误",
     email_send_success: "邮件发送成功",
+    required_fields_missing: "请填写所有必填字段",
   },
   buckemailsend: {
     email_source: "邮件来源",

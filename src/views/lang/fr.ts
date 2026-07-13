@@ -1146,6 +1146,7 @@ emailAutoReplyAudit: {
     send_test_email_success: "send test email success",
     send_test_email_error: "send test email error",
     email_send_success: "email send success",
+    required_fields_missing: "Veuillez remplir tous les champs obligatoires",
   },
   buckemailsend: {
     email_source: "Email Source",
