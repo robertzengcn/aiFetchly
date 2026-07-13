@@ -59,7 +59,7 @@ describe("AI workspace IPC folder picker", () => {
     )) as CommonMessage<string | null>;
 
     expect(result.status).toBe(false);
-    expect(result.msg).toContain("AI functionality");
+    expect(result.msg).toContain("AI feature is not enabled");
     expect(mockShowOpenDialog).not.toHaveBeenCalled();
   });
 
