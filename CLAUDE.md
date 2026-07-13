@@ -456,6 +456,41 @@ private getRepository(): Repository<SomeEntity> {
 - User input validation and sanitization
 - Secure token storage using Electron's safeStorage
 
+### AI Navigation Route Metadata - MANDATORY RULE
+**CRITICAL: When adding or modifying Vue routes, keep AI app navigation metadata accurate so users can ask AI Chat to open pages by natural language.**
+
+#### Required Route Metadata Workflow
+
+1. **For safe parameter-free application pages**, allow AI navigation by default or set `meta.aiNavigable = true`.
+   - Good candidates: list pages, dashboard pages, settings pages, logs, management screens, and normal index pages.
+   - Add `meta.aiAliases` when users may describe the page differently from its route title.
+   - Add `meta.aiDescription` when the page purpose is not obvious from the route title.
+
+2. **For unsafe or unsupported pages**, explicitly set `meta.aiNavigable = false`.
+   - Always exclude login, auth callback, logout, error-only, internal helper, destructive workflow, and action-on-load pages.
+   - Exclude detail/edit pages that require route params such as `:id` unless a safe default behavior is implemented.
+
+3. **Use route names, not component file paths, as navigation targets.**
+   - AI tools should return validated route names such as `Email_Marketing_Service_LIST`.
+   - Actual `router.push(...)` calls must run in the renderer process, never directly from Electron main process.
+
+4. **Example route metadata**:
+```typescript
+{
+  path: "emailreply/audit/list",
+  name: "AI_Auto_Reply_Audit_List",
+  meta: {
+    visible: true,
+    title: "route.ai_auto_replies",
+    icon: "mdi-robot-outline",
+    aiNavigable: true,
+    aiAliases: ["email reply log", "auto reply log", "reply audit", "ai replies"],
+    aiDescription: "Review AI auto-reply decisions, sent replies, skipped replies, and audit logs"
+  },
+  component: () => import("@/views/pages/emailreply/auditlist.vue")
+}
+```
+
 ### Internationalization (i18n) - MANDATORY RULE
 **CRITICAL: When adding or modifying any user-facing text in the UI, you MUST update translations for ALL supported languages.**
 
