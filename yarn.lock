@@ -11997,41 +11997,41 @@ sql-highlight@^6.0.0:
   resolved "https://registry.npmmirror.com/sql-highlight/-/sql-highlight-6.1.0.tgz"
   integrity sha512-ed7OK4e9ywpE7pgRMkMQmZDPKSVdm0oX5IEtZiKnFucSF0zu6c80GZBe38UqHuVhTWJ9xsKgSMjCG2bml86KvA==
 
-sqlite-vec-darwin-arm64@0.1.7-alpha.2:
-  version "0.1.7-alpha.2"
-  resolved "https://registry.yarnpkg.com/sqlite-vec-darwin-arm64/-/sqlite-vec-darwin-arm64-0.1.7-alpha.2.tgz#d4b0c79a072f366f1d29a99a3b3c1f210146acf3"
-  integrity sha512-raIATOqFYkeCHhb/t3r7W7Cf2lVYdf4J3ogJ6GFc8PQEgHCPEsi+bYnm2JT84MzLfTlSTIdxr4/NKv+zF7oLPw==
+sqlite-vec-darwin-arm64@0.1.9:
+  version "0.1.9"
+  resolved "https://registry.npmmirror.com/sqlite-vec-darwin-arm64/-/sqlite-vec-darwin-arm64-0.1.9.tgz#0f73ce38d8127de5a2be9e47a526e13a5816ba63"
+  integrity sha512-jSsZpE42OfBkGL/ItyJTVCUwl6o6Ka3U5rc4j+UBDIQzC1ulSSKMEhQLthsOnF/MdAf1MuAkYhkdKmmcjaIZQg==
 
-sqlite-vec-darwin-x64@0.1.7-alpha.2:
-  version "0.1.7-alpha.2"
-  resolved "https://registry.yarnpkg.com/sqlite-vec-darwin-x64/-/sqlite-vec-darwin-x64-0.1.7-alpha.2.tgz#f3800f29b45a9bc1993a63af29882bd729c2426b"
-  integrity sha512-jeZEELsQjjRsVojsvU5iKxOvkaVuE+JYC8Y4Ma8U45aAERrDYmqZoHvgSG7cg1PXL3bMlumFTAmHynf1y4pOzA==
+sqlite-vec-darwin-x64@0.1.9:
+  version "0.1.9"
+  resolved "https://registry.npmmirror.com/sqlite-vec-darwin-x64/-/sqlite-vec-darwin-x64-0.1.9.tgz#5c907bff5f1336312d0d77b123c7519d54d98746"
+  integrity sha512-KDlVyqQT7pnOhU1ymB9gs7dMbSoVmKHitT+k1/xkjarcX8bBqPxWrGlK/R+C5WmWkfvWwyq5FfXfiBYCBs6PlA==
 
-sqlite-vec-linux-arm64@0.1.7-alpha.2:
-  version "0.1.7-alpha.2"
-  resolved "https://registry.yarnpkg.com/sqlite-vec-linux-arm64/-/sqlite-vec-linux-arm64-0.1.7-alpha.2.tgz#fd2882e7ce87d1513cc382b56bf168d01fa2a388"
-  integrity sha512-6Spj4Nfi7tG13jsUG+W7jnT0bCTWbyPImu2M8nWp20fNrd1SZ4g3CSlDAK8GBdavX7wRlbBHCZ+BDa++rbDewA==
+sqlite-vec-linux-arm64@0.1.9:
+  version "0.1.9"
+  resolved "https://registry.npmmirror.com/sqlite-vec-linux-arm64/-/sqlite-vec-linux-arm64-0.1.9.tgz#08e37c1142cf12b75de686419e7db905f1efa07c"
+  integrity sha512-5wXVJ9c9kR4CHm/wVqXb/R+XUHTdpZ4nWbPHlS+gc9qQFVHs92Km4bPnCKX4rtcPMzvNis+SIzMJR1SCEwpuUw==
 
-sqlite-vec-linux-x64@0.1.7-alpha.2:
-  version "0.1.7-alpha.2"
-  resolved "https://registry.npmmirror.com/sqlite-vec-linux-x64/-/sqlite-vec-linux-x64-0.1.7-alpha.2.tgz"
-  integrity sha512-IcgrbHaDccTVhXDf8Orwdc2+hgDLAFORl6OBUhcvlmwswwBP1hqBTSEhovClG4NItwTOBNgpwOoQ7Qp3VDPWLg==
+sqlite-vec-linux-x64@0.1.9:
+  version "0.1.9"
+  resolved "https://registry.npmmirror.com/sqlite-vec-linux-x64/-/sqlite-vec-linux-x64-0.1.9.tgz#692af0d05a6c37c41049e3b5bdcdf60508dfaf5c"
+  integrity sha512-w3tCH8xK2finW8fQJ/m8uqKodXUZ9KAuAar2UIhz4BHILfpE0WM/MTGCRfa7RjYbrYim5Luk3guvMOGI7T7JQA==
 
-sqlite-vec-windows-x64@0.1.7-alpha.2:
-  version "0.1.7-alpha.2"
-  resolved "https://registry.yarnpkg.com/sqlite-vec-windows-x64/-/sqlite-vec-windows-x64-0.1.7-alpha.2.tgz#0fa5d3bf170281f9e587855c11b7e97e99317c05"
-  integrity sha512-TRP6hTjAcwvQ6xpCZvjP00pdlda8J38ArFy1lMYhtQWXiIBmWnhMaMbq4kaeCYwvTTddfidatRS+TJrwIKB/oQ==
+sqlite-vec-windows-x64@0.1.9:
+  version "0.1.9"
+  resolved "https://registry.npmmirror.com/sqlite-vec-windows-x64/-/sqlite-vec-windows-x64-0.1.9.tgz#5ae39efdcae3e2b9333a3d3ace8b4cdfd35417c0"
+  integrity sha512-y3gEIyy/17bq2QFPQOWLE68TYWcRZkBQVA2XLrTPHNTOp55xJi/BBBmOm40tVMDMjtP+Elpk6UBUXdaq+46b0Q==
 
-sqlite-vec@^0.1.7-alpha.2:
-  version "0.1.7-alpha.2"
-  resolved "https://registry.npmmirror.com/sqlite-vec/-/sqlite-vec-0.1.7-alpha.2.tgz"
-  integrity sha512-rNgRCv+4V4Ed3yc33Qr+nNmjhtrMnnHzXfLVPeGb28Dx5mmDL3Ngw/Wk8vhCGjj76+oC6gnkmMG8y73BZWGBwQ==
+sqlite-vec@0.1.9:
+  version "0.1.9"
+  resolved "https://registry.npmmirror.com/sqlite-vec/-/sqlite-vec-0.1.9.tgz#1634ac7d125c32dd62502591b71f2d961e2a9aa4"
+  integrity sha512-L7XJWRIBNvR9O5+vh1FQ+IGkh/3D2AzVksW5gdtk28m78Hy8skFD0pqReKH1Yp0/BUKRGcffgKvyO/EON5JXpA==
   optionalDependencies:
-    sqlite-vec-darwin-arm64 "0.1.7-alpha.2"
-    sqlite-vec-darwin-x64 "0.1.7-alpha.2"
-    sqlite-vec-linux-arm64 "0.1.7-alpha.2"
-    sqlite-vec-linux-x64 "0.1.7-alpha.2"
-    sqlite-vec-windows-x64 "0.1.7-alpha.2"
+    sqlite-vec-darwin-arm64 "0.1.9"
+    sqlite-vec-darwin-x64 "0.1.9"
+    sqlite-vec-linux-arm64 "0.1.9"
+    sqlite-vec-linux-x64 "0.1.9"
+    sqlite-vec-windows-x64 "0.1.9"
 
 ssf@~0.11.2:
   version "0.11.2"

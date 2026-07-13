@@ -11,10 +11,10 @@
  * the results against manual verification to ensure 98%+ data accuracy and 95%+ page success rate.
  */
 
-import { YellowPagesComAdapter } from '../modules/platforms/YellowPagesComAdapter';
-// import { YelpComAdapter } from '../modules/platforms/YelpComAdapter';
-import { YellowPagesCaAdapter } from '../modules/platforms/YellowPagesCaAdapter';
-import { PlatformConfig } from '../modules/interface/IPlatformConfig';
+import { YellowPagesComAdapter } from '../src/modules/platforms/YellowPagesComAdapter';
+// import { YelpComAdapter } from '../src/modules/platforms/YelpComAdapter';
+import { YellowPagesCaAdapter } from '../src/modules/platforms/YellowPagesCaAdapter';
+import { PlatformConfig } from '../src/modules/interface/IPlatformConfig';
 
 interface ValidationResult {
     platform: string;
@@ -228,8 +228,8 @@ class DataValidationTest {
 
             // Check phone number format
             if (data.phone) {
-                const phoneRegex = /^[\+]?[1-9][\d]{0,15}$/;
-                if (phoneRegex.test(data.phone.replace(/[\s\-\(\)]/g, ''))) {
+                const phoneRegex = /^[+]?[1-9][\d]{0,15}$/;
+                if (phoneRegex.test(data.phone.replace(/[\s\-()]/g, ''))) {
                     entryAccuracy += 1;
                 }
             }

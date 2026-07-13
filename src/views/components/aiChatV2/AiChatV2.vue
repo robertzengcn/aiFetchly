@@ -79,7 +79,7 @@
     <!-- Main content (no sidebar) -->
     <div class="v2-shell__body">
       <AiChatV2Messages
-        :messages="messages"
+        :messages="visibleMessages"
         :active-assistant-message-id="activeAssistantMessageId"
         :stream-status="streamStatus"
         :error-message="streamError ?? undefined"
@@ -95,13 +95,25 @@
         @request-plan-changes="handleRequestPlanChanges"
       />
 
-      <!-- Pinned action cards: question + plan approval while awaiting user input.
+      <!-- Pinned action cards: permission + question + plan approval while awaiting user input.
            After the user approves/rejects/requests changes, the plan card moves
            into the message flow (see handleApprovePlan et al.). -->
       <div
-        v-if="mode === 'plan' && (pendingQuestion || pendingPlanApproval)"
+        v-if="
+          pinnedPermissionPrompt ||
+          (mode === 'plan' && (pendingQuestion || pendingPlanApproval))
+        "
         class="v2-shell__plan-panel"
       >
+        <SkillApprovalCard
+          v-if="pinnedPermissionPrompt"
+          :tool-name="pinnedPermissionToolName"
+          :permission-category="pinnedPermissionCategory"
+          :shell-preview="pinnedPermissionShellPreview"
+          :workspace-root="activeWorkspace?.rootPath ?? ''"
+          @grant="handlePinnedPermissionGrant"
+          @deny="handlePinnedPermissionDeny"
+        />
         <AiChatV2QuestionCard
           v-if="pendingQuestion"
           :question="pendingQuestion"
@@ -409,6 +421,7 @@ import AiChatV2PlanApprovalCard from "./AiChatV2PlanApprovalCard.vue";
 import AiChatV2PlanStatusBadge from "./AiChatV2PlanStatusBadge.vue";
 import AiChatV2ContextBadge from "./AiChatV2ContextBadge.vue";
 import FileOperationBadge from "../aiChat/FileOperationBadge.vue";
+import SkillApprovalCard from "../aiChat/SkillApprovalCard.vue";
 import MCPToolManager from "../aiChat/MCPToolManager.vue";
 import AgentTaskListDialog from "./AgentTaskListDialog.vue";
 import WorkspaceBadge from "./WorkspaceBadge.vue";
@@ -450,9 +463,25 @@ const CHARS_PER_TOKEN_ESTIMATE = 4;
 const AUTO_MODEL_VALUE = "auto";
 
 type Status = "idle" | "streaming" | "cancelled" | "error";
+type ShellPreview = {
+  command: string;
+  cwd?: string;
+  shell: string;
+  timeout_ms: number;
+};
 
 const { t } = useI18n();
 
+interface AiPromptRequest {
+  id: number;
+  text: string;
+}
+
+const props = defineProps<{
+  promptRequest?: AiPromptRequest | null;
+}>();
+
+const lastHandledPromptRequestId = ref<number | null>(null);
 const conversations = ref<ChatV2ConversationSummary[]>([]);
 const activeConversationId = ref<string | null>(null);
 const messages = ref<ChatV2MessageView[]>([]);
@@ -914,6 +943,62 @@ const chatIsRunning = computed(
 const isConversationRunning = (conversationId: string): boolean =>
   chatIsRunning.value && conversationId === activeConversationId.value;
 
+const isPermissionPromptMessage = (message: ChatV2MessageView): boolean => {
+  if (message.messageType !== MessageType.TOOL_RESULT) return false;
+  return message.metadata?.toolResult?.needsPermissionPrompt === true;
+};
+
+const pinnedPermissionPrompt = computed<ChatV2MessageView | null>(() => {
+  for (let i = messages.value.length - 1; i >= 0; i -= 1) {
+    const message = messages.value[i];
+    if (isPermissionPromptMessage(message)) {
+      return message;
+    }
+  }
+  return null;
+});
+
+const visibleMessages = computed<ChatV2MessageView[]>(() => {
+  const pinnedId = pinnedPermissionPrompt.value?.id;
+  if (!pinnedId) return messages.value;
+  return messages.value.filter((message) => message.id !== pinnedId);
+});
+
+const pinnedPermissionToolResult = computed<Record<string, unknown>>(
+  () => pinnedPermissionPrompt.value?.metadata?.toolResult ?? {}
+);
+
+const pinnedPermissionToolName = computed(() => {
+  const toolName = pinnedPermissionPrompt.value?.metadata?.toolName;
+  return typeof toolName === "string" ? toolName : "";
+});
+
+const pinnedPermissionCategory = computed(() => {
+  const category = pinnedPermissionToolResult.value.permissionCategory;
+  return typeof category === "string" ? category : "";
+});
+
+const pinnedPermissionShellPreview = computed<ShellPreview | undefined>(() => {
+  const preview = pinnedPermissionToolResult.value.shellPreview;
+  if (!preview || typeof preview !== "object") {
+    return undefined;
+  }
+  const shellData = preview as Record<string, unknown>;
+  if (
+    typeof shellData.command !== "string" ||
+    typeof shellData.shell !== "string" ||
+    typeof shellData.timeout_ms !== "number"
+  ) {
+    return undefined;
+  }
+  return {
+    command: shellData.command,
+    cwd: typeof shellData.cwd === "string" ? shellData.cwd : undefined,
+    shell: shellData.shell,
+    timeout_ms: shellData.timeout_ms,
+  };
+});
+
 // True only between clicking send and the first visible AI chunk. Auto-clears
 // when streaming ends for any reason (complete/error/stop/permission deny).
 // Also shows during tool execution rounds (after tool_call/tool_result, before
@@ -1323,7 +1408,8 @@ const upsertToolResultMessage = (
 };
 
 const handleSkillPermissionGrant = async (
-  message: ChatV2MessageView
+  message: ChatV2MessageView,
+  _persistent?: boolean
 ): Promise<void> => {
   const toolId = resolveToolIdForPermissionMessage(message);
   if (!toolId) {
@@ -1371,6 +1457,12 @@ const handleSkillPermissionGrant = async (
   }
 };
 
+const handlePinnedPermissionGrant = (payload: { persistent: boolean }): void => {
+  const message = pinnedPermissionPrompt.value;
+  if (!message) return;
+  void handleSkillPermissionGrant(message, payload.persistent);
+};
+
 const handleSkillPermissionDeny = (message: ChatV2MessageView): void => {
   const idx = messages.value.findIndex((m) => m.id === message.id);
   const deniedMessage =
@@ -1394,9 +1486,75 @@ const handleSkillPermissionDeny = (message: ChatV2MessageView): void => {
   activeAssistantMessageId.value = null;
 };
 
+const handlePinnedPermissionDeny = (): void => {
+  const message = pinnedPermissionPrompt.value;
+  if (!message) return;
+  handleSkillPermissionDeny(message);
+};
+
 // ---------------------------------------------------------------------------
 // Plan Mode handlers
 // ---------------------------------------------------------------------------
+
+const isSubmitPlanToolMessage = (message: ChatV2MessageView): boolean =>
+  message.metadata?.toolName === "SubmitPlanForApproval";
+
+const readPlanToolResultVersion = (
+  message: ChatV2MessageView
+): { planId?: string; version?: number } | null => {
+  if (message.messageType !== MessageType.TOOL_RESULT) return null;
+  const result = message.metadata?.toolResult;
+  if (result) {
+    return {
+      planId: typeof result.planId === "string" ? result.planId : undefined,
+      version: typeof result.version === "number" ? result.version : undefined,
+    };
+  }
+  try {
+    const parsed = JSON.parse(message.content) as Record<string, unknown>;
+    return {
+      planId: typeof parsed.planId === "string" ? parsed.planId : undefined,
+      version: typeof parsed.version === "number" ? parsed.version : undefined,
+    };
+  } catch {
+    return null;
+  }
+};
+
+const findPlanMessageInsertionIndex = (
+  state: AIChatPlanStateView,
+  existingPlanIndex: number
+): number => {
+  let fallbackIndex = -1;
+  for (let i = messages.value.length - 1; i >= 0; i -= 1) {
+    if (i === existingPlanIndex) continue;
+    const message = messages.value[i];
+    if (!isSubmitPlanToolMessage(message)) continue;
+    fallbackIndex = i + 1;
+    const versionInfo = readPlanToolResultVersion(message);
+    if (
+      versionInfo?.planId === state.planId &&
+      versionInfo.version === state.currentVersion
+    ) {
+      return i + 1;
+    }
+  }
+  if (fallbackIndex !== -1) return fallbackIndex;
+
+  const planCreatedAt = state.latestVersion
+    ? Date.parse(state.latestVersion.createdAt)
+    : NaN;
+  if (!Number.isNaN(planCreatedAt)) {
+    const chronologicalIndex = messages.value.findIndex((message, index) => {
+      if (index === existingPlanIndex) return false;
+      const messageTime = Date.parse(message.timestamp);
+      return !Number.isNaN(messageTime) && messageTime > planCreatedAt;
+    });
+    if (chronologicalIndex !== -1) return chronologicalIndex;
+  }
+
+  return messages.value.length;
+};
 
 /**
  * Insert or update the inline plan-approval message row so the card appears
@@ -1406,31 +1564,45 @@ const handleSkillPermissionDeny = (message: ChatV2MessageView): void => {
 const upsertPlanMessage = (state: AIChatPlanStateView): void => {
   const planMsgId = `plan-${state.planId}`;
   const existingIdx = messages.value.findIndex((m) => m.id === planMsgId);
+  const insertIdx = findPlanMessageInsertionIndex(state, existingIdx);
   const metadata = {
     source: "chat-v2" as const,
     planEventType: "plan_submitted" as const,
     planId: state.planId,
     planStateView: state,
   };
-  if (existingIdx !== -1) {
-    messages.value[existingIdx] = {
-      ...messages.value[existingIdx],
-      metadata: {
-        ...messages.value[existingIdx].metadata,
-        ...metadata,
-      },
-    };
-    return;
-  }
-  messages.value.push({
+  const planMessage: ChatV2MessageView = {
     id: planMsgId,
     conversationId: state.conversationId,
     role: "assistant",
     content: "",
-    timestamp: new Date().toISOString(),
+    timestamp: state.latestVersion?.createdAt ?? new Date().toISOString(),
     messageType: "message" as MessageType,
     metadata,
-  });
+  };
+  if (existingIdx !== -1) {
+    const existingMessage = messages.value[existingIdx];
+    planMessage.timestamp = messages.value[existingIdx].timestamp;
+    planMessage.metadata = {
+      ...existingMessage.metadata,
+      ...metadata,
+    };
+    const withoutExisting = messages.value.filter((m) => m.id !== planMsgId);
+    const adjustedInsertIdx =
+      existingIdx < insertIdx ? insertIdx - 1 : insertIdx;
+    const targetIdx = Math.min(adjustedInsertIdx, withoutExisting.length);
+    messages.value = [
+      ...withoutExisting.slice(0, targetIdx),
+      planMessage,
+      ...withoutExisting.slice(targetIdx),
+    ];
+    return;
+  }
+  messages.value = [
+    ...messages.value.slice(0, insertIdx),
+    planMessage,
+    ...messages.value.slice(insertIdx),
+  ];
 };
 
 const handleQuestionAnswered = async (
@@ -1984,6 +2156,24 @@ const onSend = async (text: string, files?: File[]): Promise<void> => {
     }
   }
 };
+
+function sendPromptRequest(request: AiPromptRequest | null | undefined): void {
+  if (!request || request.id === lastHandledPromptRequestId.value) return;
+  const text = request.text.trim();
+  if (!text || chatIsRunning.value) return;
+
+  lastHandledPromptRequestId.value = request.id;
+  void nextTick(() => {
+    void onSend(text, []);
+  });
+}
+
+watch(
+  [() => props.promptRequest, chatIsRunning],
+  ([request]) => {
+    sendPromptRequest(request);
+  }
+);
 
 onMounted(() => {
   void loadConversations();

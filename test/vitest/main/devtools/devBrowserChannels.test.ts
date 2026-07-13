@@ -1,0 +1,84 @@
+"use strict";
+import { describe, expect, it } from "vitest";
+import {
+  GET_APP_INFO,
+  QUERY_USER_INFO,
+  SHOW_OPEN_DIALOG,
+  OPENDIRECTORY,
+  PLUGIN_IMPORT,
+  PLUGIN_INSTALL_FROM_SOURCE,
+  SYSTEM_DEPENDENCY_INSTALL,
+  GET_LOGIN_URL,
+  SOCIAL_ACCOUNT_LOGIN_UPLOADCOOKIES,
+  START_CONTACT_EXTRACTION,
+  AI_FILE_OPEN,
+  SYSTEM_MESSAGE,
+  LOGIN_STATUS,
+  AI_CHAT_V2_STREAM_CHUNK,
+} from "@/config/channellist";
+import {
+  DEV_BROWSER_INVOKE_ALLOWLIST,
+  DEV_BROWSER_EVENT_ALLOWLIST,
+  isInvokeAllowed,
+  isEventAllowed,
+} from "@/main-process/devtools/devBrowserChannels";
+
+// `task:run` is a legacy literal channel (not an exported const).
+const TASK_RUN_CHANNEL = "task:run";
+
+describe("devBrowserChannels — invoke allowlist", () => {
+  it("includes the PRD-named MVP read-only channels", () => {
+    expect(DEV_BROWSER_INVOKE_ALLOWLIST).toContain(GET_APP_INFO);
+    expect(DEV_BROWSER_INVOKE_ALLOWLIST).toContain(QUERY_USER_INFO);
+  });
+
+  it("isInvokeAllowed returns true only for listed channels", () => {
+    expect(isInvokeAllowed(GET_APP_INFO)).toBe(true);
+    expect(isInvokeAllowed(QUERY_USER_INFO)).toBe(true);
+    expect(isInvokeAllowed("unknown:channel")).toBe(false);
+  });
+
+  it("blocks high-risk channel categories by omission", () => {
+    // File access / dialogs
+    expect(isInvokeAllowed(SHOW_OPEN_DIALOG)).toBe(false);
+    expect(isInvokeAllowed(OPENDIRECTORY)).toBe(false);
+    // Plugin install
+    expect(isInvokeAllowed(PLUGIN_IMPORT)).toBe(false);
+    expect(isInvokeAllowed(PLUGIN_INSTALL_FROM_SOURCE)).toBe(false);
+    // System dependency install
+    expect(isInvokeAllowed(SYSTEM_DEPENDENCY_INSTALL)).toBe(false);
+    // Credential / login / cookie
+    expect(isInvokeAllowed(GET_LOGIN_URL)).toBe(false);
+    expect(isInvokeAllowed(SOCIAL_ACCOUNT_LOGIN_UPLOADCOOKIES)).toBe(false);
+    // Automation task execution
+    expect(isInvokeAllowed(TASK_RUN_CHANNEL)).toBe(false);
+    expect(isInvokeAllowed(START_CONTACT_EXTRACTION)).toBe(false);
+    // AI file tools
+    expect(isInvokeAllowed(AI_FILE_OPEN)).toBe(false);
+  });
+
+  it("allowlist is frozen / immutable", () => {
+    expect(Object.isFrozen(DEV_BROWSER_INVOKE_ALLOWLIST)).toBe(true);
+  });
+});
+
+describe("devBrowserChannels — event allowlist", () => {
+  it("isEventAllowed returns true only for listed event channels", () => {
+    expect(DEV_BROWSER_EVENT_ALLOWLIST.length).toBeGreaterThan(0);
+    for (const ch of DEV_BROWSER_EVENT_ALLOWLIST) {
+      expect(isEventAllowed(ch)).toBe(true);
+    }
+    // High-volume streaming channels are NOT in the MVP event allowlist.
+    expect(isEventAllowed(AI_CHAT_V2_STREAM_CHUNK)).toBe(false);
+    expect(isEventAllowed("not-an-event-channel")).toBe(false);
+  });
+
+  it("includes common safe main->renderer event channels", () => {
+    expect(DEV_BROWSER_EVENT_ALLOWLIST).toContain(SYSTEM_MESSAGE);
+    expect(DEV_BROWSER_EVENT_ALLOWLIST).toContain(LOGIN_STATUS);
+  });
+
+  it("allowlist is frozen / immutable", () => {
+    expect(Object.isFrozen(DEV_BROWSER_EVENT_ALLOWLIST)).toBe(true);
+  });
+});

@@ -3,7 +3,7 @@ import { EmailReceivedMessageModule } from "@/modules/EmailReceivedMessageModule
 import { EmailReplyAuditLogModule } from "@/modules/EmailReplyAuditLogModule";
 import { EmailReceivedMessageEntity } from "@/entity/EmailReceivedMessage.entity";
 import { EmailReplyAuditLogEntity } from "@/entity/EmailReplyAuditLog.entity";
-import { EmailReceiveFetchOptions } from "@/entityTypes/emailReceiveTypes";
+import { EmailReceiveFetchOptions, EmailReceiveConnectionConfig, EmailReceiveProtocol } from "@/entityTypes/emailReceiveTypes";
 import { EmailReceiveClientFactory } from "@/service/emailReceive/EmailReceiveClientFactory";
 import { ParsedInboundEmail } from "@/service/emailReceive/EmailReceiveClient";
 import {
@@ -43,10 +43,48 @@ export class EmailReceiveSyncService {
   /**
    * Test connectivity for a receive-enabled service. Does NOT mutate stored
    * sync state — it is a pure connectivity probe for the UI "Test Connection".
+   * When `settings` is provided, tests using those settings directly (for
+   * testing before the service has been saved).
    */
-  async testConnection(emailServiceId: number): Promise<{ success: boolean; error: string | null }> {
+  async testConnection(
+    emailServiceId: number,
+    settings?: {
+      protocol: string;
+      host: string;
+      port: number;
+      ssl: boolean;
+      username: string;
+      password?: string;
+      folder: string;
+    }
+  ): Promise<{ success: boolean; error: string | null }> {
     try {
-      const config = await this.serviceModule.getEmailServiceReceiveConfig(emailServiceId);
+      let config: EmailReceiveConnectionConfig | null;
+      if (settings) {
+        const storedConfig =
+          settings.password && settings.password.length > 0
+            ? null
+            : await this.serviceModule.getEmailServiceReceiveConfig(emailServiceId);
+        const password =
+          settings.password && settings.password.length > 0
+            ? settings.password
+            : storedConfig?.password ?? "";
+        if (!password) {
+          return { success: false, error: "Receive is not configured for this service." };
+        }
+        config = {
+          emailServiceId,
+          protocol: settings.protocol as EmailReceiveProtocol,
+          host: settings.host,
+          port: settings.port,
+          ssl: settings.ssl,
+          username: settings.username,
+          password,
+          folder: settings.folder,
+        };
+      } else {
+        config = await this.serviceModule.getEmailServiceReceiveConfig(emailServiceId);
+      }
       if (!config) {
         return { success: false, error: "Receive is not configured for this service." };
       }

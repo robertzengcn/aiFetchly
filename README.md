@@ -1,108 +1,130 @@
 <h1 align="center">aiFetchly</h1>
 
 <p align="center">
-  <strong>AI-Powered Marketing Automation for Lead Generation and Outreach</strong>
+  <strong>Desktop AI Agent for Business Automation</strong>
 </p>
 
 <p align="center">
-  <a href="#features">Features</a> &middot;
+  <a href="#what-is-aifetchly">What is aiFetchly?</a> &middot;
+  <a href="#agent-capabilities">Agent Capabilities</a> &middot;
   <a href="#getting-started">Getting Started</a> &middot;
   <a href="#development">Development</a> &middot;
   <a href="#documentation">Documentation</a> &middot;
-  <a href="#contributing">Contributing</a> &middot;
-  <a href="#license">License</a>
+  <a href="#contributing">Contributing</a>
 </p>
 
 ---
 
-**aiFetchly** is an open-source desktop agent that combines AI with marketing automation to help you find leads, extract contacts, run personalized email outreach campaigns, and manage social media — all from one place.
+**aiFetchly** is an open-source desktop AI agent platform for business work. It combines local knowledge, browser automation, installable skills, scheduled tasks, plugins, and specialist subagents so teams can automate research, document processing, website information collection, customer communication, and recurring operations from one application.
 
-## Why aiFetchly?
+aiFetchly started with marketing automation features such as lead discovery, contact extraction, and email outreach. Those workflows are still included, but the product direction is broader: aiFetchly is becoming a local-first AI agent workspace for business users who need tools, memory, files, web automation, and controllable execution.
 
-- **One tool for the entire pipeline** — from discovering leads to sending outreach emails, no need to juggle multiple SaaS products
-- **Your data stays on your machine** — local SQLite database, your own SMTP server, no third-party data harvesting
-- **AI that knows your business** — upload your documents and let AI generate emails and strategies grounded in your own content
-- **Extensible skill system** — install community skills or build your own to grow the platform
+## What is aiFetchly?
 
-## Features
+aiFetchly helps you turn business intent into executable workflows:
 
-### Lead Generation
+- **Ask an AI agent to do work** — run research, analyze files, extract data, prepare messages, summarize documents, and operate tools from a chat interface.
+- **Use your business knowledge** — upload documents into a local knowledge library and generate answers or drafts grounded in your own files.
+- **Automate browser and data tasks** — get information from websites, collect structured data, process URLs, and export results.
+- **Delegate to specialist subagents** — run background agents with their own prompts, tool permissions, resource limits, and structured outputs.
+- **Extend the workspace** — install skills and plugins to add new tools, business workflows, and integrations.
+- **Stay in control** — keep data in a local SQLite database, review tool activity, gate permissions, and run on your own desktop.
 
-| Feature | Description |
-|---------|-------------|
-| **Multi-Engine Search** | Search Google and Yandex simultaneously with bulk keywords. AI generates related keywords and recovers from errors in real time. |
-| **Local Business Finder** | Find businesses on Google Maps and Yandex Maps by keyword and location. Export names, categories, ratings, phone numbers, and websites. |
-| **Yellow Pages Scraper** | Organize business data from global directory platforms with AI-assisted data alignment that adapts to directory changes. |
+## Agent Capabilities
 
-### Contact Extraction & Email Outreach
+### AI Agent Workspace
 
-| Feature | Description |
-|---------|-------------|
-| **Contact Extraction** | Feed any list of URLs and extract emails, phone numbers, addresses, and social profiles. Batch process thousands of pages with live progress tracking. |
-| **AI Email Writer** | Generate personalized outreach emails using RAG technology. Upload your own documents (PDF, DOCX, TXT, MD) as context for AI-generated content. |
-| **Batch Email Campaigns** | Design campaigns with AI-generated templates, send through your own SMTP, apply smart filters, and track delivery status in real time. Duplicate prevention built in. |
+| Capability | Description |
+|------------|-------------|
+| **Tool-Using AI Chat** | Work with an AI assistant that can call approved tools, use business context, and complete multi-step tasks from one desktop workspace. |
+| **Business Task Execution** | Run research, extraction, file processing, message drafting, scheduling, and automation workflows without switching across multiple SaaS tools. |
+| **AI Customer Email Assistant** | Use AI to draft, send, and reply to customer emails with business context from your documents and workflow data. |
+| **Application Support Subagents** | Deploy specialist AI subagents that run autonomously with their own system prompt, tool allowlist, resource limits, and structured output schema. Agent tasks persist with transcripts and tool-call audit trails. |
+| **Permission-Gated Automation** | Control which tools, plugins, hooks, and subagents can run. Tool calls are policy-gated through global deny rules, agent allowlists, and per-task blocked tools. |
 
-### AI & Automation
+### Business Knowledge & RAG
 
-| Feature | Description |
-|---------|-------------|
-| **Knowledge Library** | Upload documents and chat with an AI that understands your content. Semantic search across your entire knowledge base using vector embeddings. |
-| **AI Marketing Assistant** | Get strategic marketing guidance through AI-powered chat, grounded in your own documents. |
-| **Task Scheduling** | Schedule any task with cron timing, chain dependent tasks, set up recurring jobs, and monitor execution history. |
-| **Installable Skills** | Extend the platform with skill packages — PDF processing, data analysis, and more. No coding required. |
+| Capability | Description |
+|------------|-------------|
+| **Knowledge Library** | Upload PDF, TXT, DOC/DOCX, Markdown, HTML, CSV, and Excel files into a local knowledge base for retrieval-augmented generation. |
+| **Document Processing** | Detect duplicate uploads, track processing progress, chunk documents, and store vector embeddings for semantic retrieval. |
+| **Embedding Model Settings** | Select and update the embedding model used by the Knowledge Library, with model metadata such as dimensions and availability shown in the UI. |
+| **Grounded Business Answers** | Generate summaries, plans, emails, reports, and operating guidance using your own documents as context. |
 
-### Social Media & Infrastructure
+### Skills, Plugins & Extensibility
 
-| Feature | Description |
-|---------|-------------|
-| **Proxy Management** | Manage rotating HTTP, HTTPS, and SOCKS5 proxies. Bulk import, validate, and test to ensure uninterrupted access. |
-| **Dashboard & Analytics** | Real-time overview of searches, emails, campaigns, and success rates. Filter by date and search engine, spot trends. |
-| **One-Click Export** | Download any dataset as CSV. Generate performance reports with conversion tracking. |
-| **Multi-Language UI** | Full interface in English, Chinese, Spanish, French, German, and Japanese. Switch on the fly. |
+| Capability | Description |
+|------------|-------------|
+| **Installable Skills** | Extend the agent with reusable skill packages for file processing, data analysis, automation helpers, and domain-specific tasks. |
+| **Skills Management** | Import skills from ZIP packages, list built-in/user-installed/plugin-provided skills, enable or disable them, and uninstall user-installed skills. |
+| **Plugin Management** | Import plugin ZIPs or install plugins from source folders. Manage plugin enablement, health, format, included skills, and MCP servers from one screen. |
+| **Claude-Style Plugin Compatibility** | Supports both aiFetchly plugin format and Claude-style plugin packages, so plugin bundles can contribute skills and MCP server definitions. |
+| **Hooks Management** | Create command hooks for AI/chat lifecycle events such as session start, prompt submit, tool use, permission requests, and stop events. Hooks support matchers, conditions, timeouts, warn/block failure modes, global enablement, and audit logs. |
+
+### Browser, Data & Workflow Automation
+
+| Capability | Description |
+|------------|-------------|
+| **Web Research Automation** | Search across engines, collect business information, process URL lists, and recover from task errors in real time. |
+| **Structured Data Extraction** | Extract emails, phone numbers, addresses, social profiles, company details, directory records, and other structured business data. |
+| **Task Scheduling** | Schedule tasks with cron timing, chain dependent jobs, set up recurring workflows, and monitor execution history. |
+| **One-Click Export** | Download datasets as CSV and generate reports from collected or processed business data. |
+| **Proxy Management** | Manage rotating HTTP, HTTPS, and SOCKS5 proxies. Bulk import, validate, and test proxies for browser automation and website information collection workflows. |
+
+### Included Business Growth Workflows
+
+| Workflow | Description |
+|----------|-------------|
+| **Company & Lead Research** | Find businesses from search engines, Google Maps, Yandex Maps, Yellow Pages, and other directory-style sources. |
+| **Contact Extraction** | Feed any list of URLs and extract emails, phone numbers, addresses, and social profiles with batch processing and live progress tracking. |
+| **AI Email Drafting** | Generate personalized business emails using RAG technology and your own uploaded documents as context. |
+| **Customer Email Sending & Replies** | Let AI help send customer emails and generate context-aware replies using your knowledge base, customer data, and previous workflow results. |
+| **Social Platform Operations** | Manage social accounts and automate selected social media workflows where supported. |
+
+### Desktop Infrastructure
+
+| Capability | Description |
+|------------|-------------|
+| **Local-First Storage** | Store application data in local SQLite through TypeORM, with sqlite-vec support for vector operations. |
+| **Multi-Language UI** | Use the interface in English, Chinese, Spanish, French, German, and Japanese. |
+| **Electron Desktop App** | Run business automation from a desktop application across Windows, macOS, and Linux. |
 
 ## Getting Started
 
 ### Prerequisites
 
+- **OS**: Windows 10+, macOS 10.15+, or Linux (Ubuntu 20.04+)
+- **RAM**: 4 GB minimum, 8 GB recommended
+
+### First-Time Setup
+
+1. Open aiFetchly and sign in to your account.
+2. Import business documents into the Knowledge Library if you want grounded AI responses.
+3. Install or enable skills/plugins for the workflows you want the agent to run.
+4. Configure proxies, social accounts, or SMTP credentials only if you plan to use website information collection, social, or email workflows.
+
+## Development
+
+### Prerequisites
+
 - **Node.js** 18+
 - **Yarn** 1.x (classic)
-- **OS**: Windows 10+, macOS 10.15+, or Linux (Ubuntu 20.04+)
-- **RAM**: 4 GB minimum (8 GB recommended)
-
-### Install & Run
 
 ```bash
-# Clone the repository
-git clone https://github.com/robertzeng/aiFetchly.git
-cd aiFetchly
-
 # Install dependencies
-yarn
+yarn install
 
 # Initialize the local SQLite database
 yarn init
 
-# Start the application
-yarn start
-```
-
-### First-Time Setup
-
-1. Configure your backend API URL in `.env`:
-   ```
-   VITE_REMOTEADD=https://your-backend-api.example.com
-   ```
-2. [Set up proxies](https://aifetchly.com/docs/getting-started/proxy-setup) for web scraping features
-3. Add your social media accounts and SMTP credentials in Settings
-
-## Development
-
-```bash
 # Start dev server with hot reload
 yarn dev
 
-# Type check (watch mode)
-tsc --noEmit --watch
+# Type check in watch mode
+yarn tsc
+
+# Vue type checking
+yarn vue-check
 
 # Build for production
 yarn build
@@ -122,65 +144,105 @@ yarn make-linux:prod   # Linux
 # Run all tests
 yarn test
 
-# Run a specific test by pattern
-npx mocha test test/modules --grep "video-url-list"
-
-# Run vitest suites
-yarn vitest-googlescraper
+# Run main process tests
 yarn testmain
 
-# Debug mode
-DEBUG='bilibili-scraper:Scraper' yarn testdownload
+# Run selected specialized tests
+yarn vitest-googlescraper
+yarn testhttpclient
+yarn testyoutubeupload
+yarn testdownload
 ```
 
 ### Project Structure
 
-```
+```text
 src/
-├── background.ts              # Main Electron process entry
-├── preload.ts                 # Context bridge / preload scripts
-├── main-process/              # IPC handlers
-├── controller/                # Business logic controllers
-├── modules/                   # Core business logic (extends BaseModule)
-├── model/                     # Data access layer (extends BaseDb)
-├── entity/                    # TypeORM entities
-├── service/                   # Service layer
-├── childprocess/              # Worker process entry points
-├── config/                    # App configuration & skill registry
-└── views/                     # Vue 3 frontend
-    ├── pages/                 # Page components
-    ├── components/            # Reusable UI components
-    ├── api/                   # Frontend API layer (IPC calls)
-    ├── store/                 # Pinia state management
-    └── lang/                  # i18n (en, zh, es, fr, de, ja)
+├── background.ts                  # Main Electron process entry point
+├── preload.ts                     # Context bridge / preload scripts
+├── buckEmail.ts                   # Email worker/task entry
+├── taskCode.ts                    # Task execution entry
+├── utilityCode.ts                 # Utility process entry
+├── api/                           # Shared API clients and API tests
+├── assets/                        # Images, installer assets, device assets, WebGL assets
+├── childprocess/                  # Child/worker process entry points and worker-only code
+│   ├── contact-extraction/        # Contact extraction worker implementation
+│   ├── email-ai-enrichment/       # Email enrichment worker helpers
+│   ├── embedding/                 # Local embedding worker implementation
+│   ├── google-maps/               # Google Maps worker implementation
+│   ├── yandex-maps/               # Yandex Maps worker implementation
+│   └── utils/                     # Worker-only automation/recovery utilities
+├── config/                        # App configuration and platform configuration
+├── controller/                    # Business logic controllers
+├── entity/                        # TypeORM entities
+├── entityTypes/                   # Entity-related TypeScript types
+├── main-process/                  # Electron main-process code
+│   ├── communication/             # IPC handlers
+│   └── menu/                      # Application menu setup
+├── model/                         # Data access layer, extends BaseDb
+├── modules/                       # Core business logic, extends BaseModule
+│   ├── adapters/                  # Infrastructure adapters
+│   ├── diagnostics/               # Diagnostics modules
+│   ├── factories/                 # Factory helpers
+│   ├── platforms/                 # Platform-specific integrations
+│   └── rag/                       # RAG and vector-search modules
+├── schemas/                       # Zod/typed schemas for tools, IPC, config, workers
+├── scripts/                       # Project scripts
+├── service/                       # Service layer and integrations
+├── shims/                         # Runtime shims
+├── sql/                           # SQL assets and scraper database files
+├── types/                         # Shared TypeScript type declarations
+├── utils/                         # Shared utilities
+└── views/                         # Vue 3 frontend
+    ├── api/                       # Frontend API layer, IPC calls
+    ├── components/                # Reusable UI components
+    ├── dashboard/                 # Dashboard views
+    ├── lang/                      # i18n: en, zh, es, fr, de, ja
+    ├── layout/                    # App layouts
+    ├── pages/                     # Page components
+    ├── plugins/                   # Frontend plugin setup
+    ├── router/                    # Vue Router configuration
+    ├── services/                  # Renderer-side services
+    ├── store/                     # Pinia state management
+    ├── styles/                    # Global styles
+    └── utils/                     # Renderer utilities
+
+test/
+├── *Test.ts                       # Platform adapter and Yellow Pages test runners
+├── modules/                       # Mocha module tests
+├── mocks/                         # Shared test mocks and test doubles
+├── rag/                           # RAG tests and integration tests
+├── service/                       # Service tests
+├── utils/                         # Utility tests
+└── vitest/                        # Vitest suites for main, modules, taskCode, utilityCode
 ```
 
 ### Architecture
 
-aiFetchly follows a **three-layer architecture** with strict separation of concerns:
+aiFetchly follows a three-layer architecture with strict separation of concerns:
 
+```text
+IPC Handler  ->  Module (business logic)  ->  Model (data access)
+   communication only     extends BaseModule       extends BaseDb
 ```
-IPC Handler  →  Module (business logic)  →  Model (data access)
-   (communication only)   (extends BaseModule)     (extends BaseDb)
-```
 
-- **Models** (`src/model/`) — TypeORM database operations, direct SQL queries
-- **Modules** (`src/modules/`) — Business logic, validation, coordination of multiple models
-- **IPC Handlers** (`src/main-process/`) — Communication only, never access the database directly
+- **Models** (`src/model/`) handle TypeORM database operations and direct SQL queries.
+- **Modules** (`src/modules/`) handle business logic, validation, and coordination of multiple models.
+- **IPC Handlers** (`src/main-process/`) handle communication only and never access the database directly.
 
-Worker processes (`src/childprocess/`) handle CPU-intensive tasks (scraping, AI processing) and communicate results back to the main process via IPC — never access the database directly.
+Worker processes in `src/childprocess/` handle CPU-intensive tasks such as scraping and AI processing. They communicate results back to the main process through IPC and never access the database directly.
 
 ### Tech Stack
 
 | Layer | Technology |
-|-------|-----------|
+|-------|------------|
 | Desktop | Electron |
 | Frontend | Vue 3, Vuetify, Pinia, vue-i18n |
 | Language | TypeScript |
 | Build | Vite, Electron Forge |
-| Database | SQLite (TypeORM, better-sqlite3, sqlite-vec) |
+| Database | SQLite, TypeORM, better-sqlite3, sqlite-vec |
 | Automation | Puppeteer |
-| AI | OpenAI, RAG with vector embeddings |
+| AI | OpenAI, RAG with vector embeddings, tool execution, subagents |
 | Testing | Mocha, Vitest |
 
 ## Documentation
@@ -189,19 +251,19 @@ Full documentation is available at [aifetchly.com](https://aifetchly.com):
 
 - [Introduction](https://aifetchly.com/docs/getting-started/introduction)
 - [Installation Guide](https://aifetchly.com/docs/getting-started/installation)
-- [Proxy Setup](https://aifetchly.com/docs/getting-started/proxy-setup)
+- [Automation](https://aifetchly.com/docs/category/automation)
 - [Lead Generation](https://aifetchly.com/docs/category/lead-generation)
 - [AI Outreach](https://aifetchly.com/docs/category/ai-outreach)
-- [Automation](https://aifetchly.com/docs/category/automation)
+- [Proxy Setup](https://aifetchly.com/docs/getting-started/proxy-setup)
 
 ## Contributing
 
-Contributions are welcome! Whether it's a bug fix, new feature, or translation improvement:
+Contributions are welcome. Whether it is a bug fix, new feature, workflow improvement, skill, plugin, or translation update:
 
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feat/my-feature`)
-3. Commit your changes following [conventional commits](https://www.conventionalcommits.org/)
-4. Open a pull request
+1. Fork the repository.
+2. Create a feature branch: `git checkout -b feat/my-feature`.
+3. Commit your changes following [conventional commits](https://www.conventionalcommits.org/).
+4. Open a pull request.
 
 Please read [CLAUDE.md](./CLAUDE.md) for architecture guidelines and coding conventions before contributing.
 

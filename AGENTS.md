@@ -20,7 +20,7 @@ AiFetchly is an AI-powered marketing automation Electron application for social 
 - `yarn login -c <campaignId>` - Login to social platform for specific campaign
 - `yarn task -t <taskDetails>` - Run specific task
 - `yarn init` - Initialize SQL database
-- `yarn rebuild-sqlite3` - Rebuild SQLite3 native module
+- `yarn rebuild-better-sqlite` - Rebuild better-sqlite3 for the installed Electron version (also runs automatically via `postinstall`)
 - `yarn vue-check` - Vue TypeScript type checking
 
 ### Testing Commands

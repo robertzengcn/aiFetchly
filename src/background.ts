@@ -161,6 +161,14 @@ process.on("uncaughtException", (error) => {
 
 let win: BrowserWindow | null;
 
+/**
+ * Dev browser bridge instance (dev-only). Null in production or when the
+ * bridge is disabled. Held at module scope so `before-quit` can stop it.
+ * Typed structurally to avoid importing the bridge module at the top level
+ * (NFR-1: keep bridge code out of production startup paths via dynamic import).
+ */
+let devBrowserBridge: { stop(): Promise<void> } | null = null;
+
 function registerMenuBarShortcuts(mainWindow: BrowserWindow): void {
   if (process.platform === "darwin") {
     return;
@@ -458,6 +466,13 @@ function initialize() {
       // INIT-01: Wire FileOperationTracker to the window's webContents
       FileOperationTracker.setWebContents(win.webContents);
 
+      // Start the dev browser bridge (dev-only; no-op in production or when
+      // disabled). Fire-and-forget so a bridge failure never blocks app startup.
+      void startDevBrowserBridge(win).catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        log.error(`[dev-browser] failed to start bridge: ${msg}`);
+      });
+
       // Load persisted skills into runtime registry
       SkillImportService.loadPersistedSkills().catch((err: unknown) => {
         console.warn("[Startup] Failed to load persisted skills:", err);
@@ -649,6 +664,14 @@ function initialize() {
     } catch {
       /* ignore */
     }
+
+    // Stop the dev browser bridge (no-op if it never started).
+    try {
+      await devBrowserBridge?.stop();
+    } catch (err) {
+      log.warn("[dev-browser] bridge stop failed", err);
+    }
+    devBrowserBridge = null;
 
     // Stop periodic diagnostics retention cleanup timer immediately.
     __diagnosticsRetention.stop();
@@ -1239,6 +1262,56 @@ async function maybeShowCrashPrompt(): Promise<void> {
   } catch (e) {
     log.warn("[crash-prompt] failed", e);
   }
+}
+
+/**
+ * Start the dev browser bridge if activation rules permit (PRD FR-1; design §4).
+ *
+ * Production isolation (NFR-1): the bridge modules are loaded via dynamic
+ * import ONLY when the activation gate is satisfied, so packaged builds never
+ * parse or load bridge code. The gate requires !app.isPackaged, the explicit
+ * AIFETCHLY_DEV_BROWSER_BRIDGE=1 flag, a loopback host, and a derivable
+ * allowed origin. When enabled, also taps webContents.send so main->renderer
+ * events mirror to subscribed browser clients (FR-5).
+ */
+async function startDevBrowserBridge(mainWindow: BrowserWindow): Promise<void> {
+  if (devBrowserBridge) return; // start once even across re-createWindow
+  const { resolveDevBrowserActivation } = await import(
+    "@/main-process/devtools/DevBrowserActivation"
+  );
+  const activation = resolveDevBrowserActivation({
+    isPackaged: (app as any).isPackaged,
+    env: process.env,
+    devServerUrl:
+      typeof MAIN_WINDOW_VITE_DEV_SERVER_URL === "string"
+        ? MAIN_WINDOW_VITE_DEV_SERVER_URL
+        : undefined,
+  });
+  if (!activation.enabled || !activation.config) {
+    // Diagnostic in dev only; the gate above already guarantees no production log.
+    if (!(app as any).isPackaged) {
+      log.info(`[dev-browser] ${activation.reason}`);
+    }
+    return;
+  }
+
+  const { DevBrowserBridge } = await import(
+    "@/main-process/devtools/DevBrowserBridge"
+  );
+  const bridge = new DevBrowserBridge({ config: activation.config });
+  const info = await bridge.start();
+  bridge.attachEventRelay(
+    mainWindow.webContents as unknown as { send: (...args: unknown[]) => void }
+  );
+  devBrowserBridge = bridge;
+
+  log.info(
+    `[dev-browser] bridge listening on ${info.baseUrl} (allowed origin: ${info.allowedOrigin})`
+  );
+  log.info(`[dev-browser] per-session token: ${info.token}`);
+  log.info(
+    `[dev-browser] open the app in a browser at ${info.allowedOrigin} (the Vite renderer URL); the renderer fetches its token from ${info.baseUrl}/__aifetchly_dev_bridge/config.`
+  );
 }
 
 // makeSingleInstance()

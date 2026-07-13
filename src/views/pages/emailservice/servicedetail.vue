@@ -56,6 +56,13 @@ v-model="host" :label="t('emailservice.host')" type="input"
           </v-btn-toggle>
         </v-col>
       </v-row>
+      <v-row>
+        <v-col cols="12" class="d-flex justify-center">
+          <v-btn color="blue" @click="openTestDialog">
+            {{ t('common.test') }}
+          </v-btn>
+        </v-col>
+      </v-row>
 
       <!-- ===== Inbound receive settings ===== -->
       <v-divider class="mt-4 mb-2"></v-divider>
@@ -141,20 +148,21 @@ v-model="receivePassword" :label="t('emailReceive.receive_password')" :type="sho
         </v-col>
       </v-row>
 
+      <v-alert
+v-model="alert" border="start" variant="tonal" closable close-label="Close Alert" title="Information"
+        :color="alertcolor">
+        {{ alertContent }}
+      </v-alert>
+
       <div class="d-flex flex-column mt-4 mb-4">
         <v-row>
 
-          <v-col cols="4" md="4">
+          <v-col cols="6" md="6">
             <v-btn color="error" block @click="router.go(-1)">
               {{ t('common.return') }}
             </v-btn>
           </v-col>
-          <v-col cols="4" md="4">
-            <v-btn color="blue" block @click="showtestdialog = true">
-              {{ t('common.test') }}
-            </v-btn>
-          </v-col>
-          <v-col cols="4" md="4">
+          <v-col cols="6" md="6">
             <v-btn color="success" type="submit" :loading="loading">
               {{ t('common.submit') }}
             </v-btn>
@@ -163,11 +171,6 @@ v-model="receivePassword" :label="t('emailReceive.receive_password')" :type="sho
 
         </v-row>
       </div>
-      <v-alert
-v-model="alert" border="start" variant="tonal" closable close-label="Close Alert" title="Information"
-        :color="alertcolor">
-        {{ alertContent }}
-      </v-alert>
     </v-form>
   </v-sheet>
   <!-- test service valid dialog -->
@@ -346,17 +349,42 @@ const initialize = async () => {
 
 
 
-/** Test inbound receive connectivity. Requires the service to be saved first. */
+/** Test inbound receive connectivity. Can test before saving by sending settings directly. */
 async function testReceiveConnection() {
-  if (!Id.value || Id.value <= 0) {
+  const missing: string[] = [];
+  const usernameForTest = receiveUsername.value || from.value;
+  const passwordForTest = receivePassword.value || password.value;
+  const canUseStoredPassword = isEdit.value && Id.value > 0;
+  if (!receiveProtocol.value) missing.push(t('emailReceive.receive_protocol'));
+  if (!imapHost.value && receiveProtocol.value === 'imap') missing.push(t('emailReceive.imap_host'));
+  if (!imapPort.value && receiveProtocol.value === 'imap') missing.push(t('emailReceive.imap_port'));
+  if (!pop3Host.value && receiveProtocol.value === 'pop3') missing.push(t('emailReceive.pop3_host'));
+  if (!pop3Port.value && receiveProtocol.value === 'pop3') missing.push(t('emailReceive.pop3_port'));
+  if (!usernameForTest) missing.push(t('emailReceive.receive_username'));
+  if (!passwordForTest && !canUseStoredPassword) missing.push(t('emailReceive.receive_password'));
+  if (missing.length > 0) {
     alert.value = true;
     alertcolor.value = "error";
-    alertContent.value = t("emailReceive.test_save_first");
+    alertContent.value = (t('emailservice.required_fields_missing') || 'Please fill in all required fields') + ': ' + missing.join(', ');
     return;
   }
+
+  const isImap = receiveProtocol.value === 'imap';
+  const settings = {
+    protocol: receiveProtocol.value,
+    host: isImap ? imapHost.value : pop3Host.value,
+    port: parseInt(isImap ? imapPort.value : pop3Port.value, 10),
+    ssl: isImap ? imapSsl.value === 1 : pop3Ssl.value === 1,
+    username: usernameForTest,
+    folder: receiveFolder.value || 'INBOX',
+  };
+  if (passwordForTest) {
+    Object.assign(settings, { password: passwordForTest });
+  }
+
   testingReceive.value = true;
   try {
-    const res = await testEmailReceiveConnection(Id.value);
+    const res = await testEmailReceiveConnection(Id.value || 0, settings);
     alert.value = true;
     alertcolor.value = res.success ? "success" : "error";
     alertContent.value = res.success
@@ -454,6 +482,22 @@ async function onSubmit() {
   }
   loading.value = false;
 }
+
+const openTestDialog = () => {
+  const missing: string[] = [];
+  if (!name.value) missing.push(t('emailservice.name'));
+  if (!from.value) missing.push(t('emailservice.from'));
+  if (!password.value) missing.push(t('emailservice.password'));
+  if (!host.value) missing.push(t('emailservice.host'));
+  if (!port.value) missing.push(t('emailservice.port'));
+  if (missing.length > 0) {
+    alert.value = true;
+    alertcolor.value = "error";
+    alertContent.value = (t('emailservice.required_fields_missing') || 'Please fill in all required fields') + ': ' + missing.join(', ');
+    return;
+  }
+  showtestdialog.value = true;
+};
 
 const submitTestemail = async () => {
   if (!testform.value) return;

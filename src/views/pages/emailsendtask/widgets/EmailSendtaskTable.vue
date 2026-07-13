@@ -10,6 +10,9 @@
             <v-btn class="btn" variant="flat" prepend-icon="mdi-plus" color="#5865f2" @click="createTask()">
                 {{ CapitalizeFirstLetter(t('buckemailtask.create_task')) }}
             </v-btn>
+            <v-btn class="btn ml-2" variant="outlined" prepend-icon="mdi-email-sync" @click="goToEmailService()">
+                {{ CapitalizeFirstLetter(t('buckemailtask.email_service')) }}
+            </v-btn>
         </div>
         </div>
 
@@ -149,6 +152,12 @@ const openItem = (item: BuckEmailListType) => {
         name: "BUCK_Email_TASK_LOG_LIST", params: { id: item.TaskId }
     });
 };
+
+function goToEmailService() {
+    router.push({
+        name: 'Email_Marketing_Service_LIST'
+    });
+}
 
 function createTask() {
     console.log("create email Service")

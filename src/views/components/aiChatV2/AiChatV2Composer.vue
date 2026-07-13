@@ -99,7 +99,10 @@ const MAX_UPLOAD_FILE_BYTES = 5 * 1024 * 1024; // 5 MB
 const SUPPORTED_IMAGE_EXTS = new Set([".png", ".jpg", ".jpeg", ".webp", ".gif"]);
 const SUPPORTED_DOC_EXTS = new Set([".pdf", ".docx", ".csv", ".xlsx", ".xls"]);
 
-const props = defineProps<{ isStreaming: boolean; isProcessing?: boolean }>();
+const props = defineProps<{
+  isStreaming: boolean;
+  isProcessing?: boolean;
+}>();
 const emit = defineEmits<{
   (e: "send", text: string, files: File[]): void;
   (e: "stop"): void;

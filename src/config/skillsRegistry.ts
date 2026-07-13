@@ -57,8 +57,10 @@ import {
 
 /** Map of skill name → full definition. Stored in globalThis to survive HMR. */
 const registry: Map<string, SkillDefinition> =
-  ((globalThis as any).__aifetchlySkillRegistry as Map<string, SkillDefinition>) ??
-  new Map();
+  ((globalThis as any).__aifetchlySkillRegistry as Map<
+    string,
+    SkillDefinition
+  >) ?? new Map();
 (globalThis as any).__aifetchlySkillRegistry = registry;
 
 // ---------------------------------------------------------------------------
@@ -633,8 +635,10 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     name: "extract_contact_info",
     description:
       "Extract contact information (emails, phones, address, social links) from one or more website URLs. Uses AI-assisted discovery and regex fallback. Call this when the user wants to find contact details for given website URLs. " +
+      "IMPORTANT: To avoid timeouts and get fast synchronous results, call this tool in SMALL BATCHES of about 5 URLs or fewer per call. For a larger URL list, make multiple sequential calls (around 5 URLs each) instead of one large call. " +
       "When the urls array contains 8 or more entries, this tool runs ASYNCHRONOUSLY: it returns { async: true, job_id } within ~2 seconds and continues working in the background. " +
-      "Poll the result with check_tool_job_status(job_id) every 15-30 seconds until status is 'completed' or 'failed'. Do not retry the call while a job is running.",
+      "Poll the result with check_tool_job_status(job_id) every 15-30 seconds until status is 'completed' or 'failed'. Do not retry the call while a job is running. " +
+      "If a batch hits the extraction timeout, any contacts already collected are returned with partial: true plus a note listing the URLs that were NOT processed — retry those remaining URLs in a smaller batch.",
     parameters: {
       type: "object",
       properties: {

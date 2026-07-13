@@ -112,7 +112,7 @@ v-if="mainStore.isMobile" variant="text" icon="mdi-menu"
                         class="chat-resize-handle"
                         @mousedown="startResize"
                     ></div>
-                    <AiChatV2 v-show="v2ChatPanelOpen" />
+                    <AiChatV2 v-show="v2ChatPanelOpen" :prompt-request="pendingAiPromptRequest" />
                 </div>
             </div>
         </main>
@@ -207,6 +207,15 @@ interface MessageItem {
   timestamp: number;
 }
 
+interface AiChatOpenEventDetail {
+  prompt?: string;
+}
+
+interface AiPromptRequest {
+  id: number;
+  text: string;
+}
+
 const dialogStatus=ref(false)
 const noticeMessage=ref('')
 const noticeType=ref<NoticeType>('info')
@@ -221,6 +230,8 @@ const v2ChatPanelOpen = ref(false);
 const V2_FLAG_KEY = 'aifetchly:aiChatV2Enabled';
 const aiChatV2Enabled = ref(localStorage.getItem(V2_FLAG_KEY) !== 'false');
 const chatPanelWidth = ref(600);
+const pendingAiPromptRequest = ref<AiPromptRequest | null>(null);
+let aiPromptRequestId = 0;
 const CHAT_PANEL_MIN_WIDTH = 400;
 const CHAT_PANEL_MAX_WIDTH = 1200;
 const mainStore = useMainStore();
@@ -327,6 +338,25 @@ const toggleChat = () => {
         toggleChatPanel();
     }
 };
+
+const openAiChatFromDashboard = (event: Event): void => {
+    const detail = (event as CustomEvent<AiChatOpenEventDetail>).detail;
+    const text = detail?.prompt?.trim();
+    if (!text) return;
+
+    if (aiChatV2Enabled.value) {
+        pendingAiPromptRequest.value = {
+            id: ++aiPromptRequestId,
+            text,
+        };
+        v2ChatPanelOpen.value = true;
+        chatPanelOpen.value = false;
+        return;
+    }
+
+    chatPanelOpen.value = true;
+    v2ChatPanelOpen.value = false;
+}
 
 const startResize = (e: MouseEvent) => {
     e.preventDefault();
@@ -443,6 +473,7 @@ onMounted(async () => {
     await initializeLanguageSynchronization()
 
     window.addEventListener('keydown', handleKeyboardShortcut)
+    window.addEventListener('aifetchly:open-ai-chat', openAiChatFromDashboard)
 
     receiveSystemMessage((res:CommonDialogMsg)=>{
        console.log(res)
@@ -456,6 +487,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
     window.removeEventListener('keydown', handleKeyboardShortcut)
+    window.removeEventListener('aifetchly:open-ai-chat', openAiChatFromDashboard)
 })
 
 const showDialog=(status:boolean, content:string)=>{

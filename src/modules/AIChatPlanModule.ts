@@ -101,17 +101,49 @@ export class AIChatPlanModule extends BaseModule {
     if (!plan) return null;
     const latest = await this.versionModel.getLatest(planId);
     const pending = await this.questionModel.getPendingByPlan(planId);
+    const currentDecision =
+      plan.currentVersion > 0
+        ? await this.approvalModel.getLatestByPlanVersion(
+            plan.planId,
+            plan.currentVersion
+          )
+        : null;
+    let status = plan.status as AIChatPlanStatus;
+    let approvedAt = plan.approvedAt
+      ? plan.approvedAt.toISOString()
+      : undefined;
+    let rejectedAt = plan.rejectedAt ? plan.rejectedAt.toISOString() : undefined;
+
+    if (currentDecision?.decision === "approved") {
+      if (status === "awaiting_approval" || status === "draft") {
+        status = "approved";
+      }
+      approvedAt =
+        approvedAt ?? currentDecision.createdAt?.toISOString() ?? undefined;
+    } else if (currentDecision?.decision === "rejected") {
+      if (status !== "completed" && status !== "cancelled") {
+        status = "rejected";
+      }
+      rejectedAt =
+        rejectedAt ?? currentDecision.createdAt?.toISOString() ?? undefined;
+    } else if (
+      currentDecision?.decision === "changes_requested" &&
+      status === "awaiting_approval"
+    ) {
+      status = "draft";
+    }
+
     return {
       planId: plan.planId,
       conversationId: plan.conversationId,
-      status: plan.status as AIChatPlanStatus,
+      status,
       title: plan.title,
       objective: plan.objective,
       currentVersion: plan.currentVersion,
       latestVersion: latest ? this.toVersionView(latest) : undefined,
       pendingQuestion: pending ? this.toQuestionView(pending) : undefined,
-      approvedAt: plan.approvedAt ? plan.approvedAt.toISOString() : undefined,
-      rejectedAt: plan.rejectedAt ? plan.rejectedAt.toISOString() : undefined,
+      approvedAt,
+      rejectedAt,
     };
   }
 

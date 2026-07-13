@@ -5,6 +5,8 @@
 
 import { PlatformAdapterFactory } from '@/modules/PlatformAdapterFactory';
 import { PlatformRegistry } from '@/modules/PlatformRegistry';
+import fs from 'fs';
+import path from 'path';
 import YellComAdapterTest from './yellComAdapterTest';
 import * as Test192 from './192ComAdapterTest';
 
@@ -299,9 +301,7 @@ export class UKPlatformsTestRunner {
             console.log('=' .repeat(60));
 
             // Save report to file
-            const fs = require('fs');
-            const path = require('path');
-            const reportPath = path.join(__dirname, '../test/output/uk-platforms-framework-report.json');
+            const reportPath = path.join(__dirname, 'output/uk-platforms-framework-report.json');
             
             // Ensure output directory exists
             const outputDir = path.dirname(reportPath);
@@ -333,7 +333,7 @@ export class UKPlatformsTestRunner {
         ];
 
         let passedTests = 0;
-        let totalTests = tests.length;
+        const totalTests = tests.length;
 
         for (const test of tests) {
             try {

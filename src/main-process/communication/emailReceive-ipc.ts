@@ -87,7 +87,7 @@ export function registerEmailReceiveIpcHandlers(): void {
     emailReceiveConnectionTestInputSchema,
     async (input) => {
       const syncService = new EmailReceiveSyncService();
-      return await syncService.testConnection(input.emailServiceId);
+      return await syncService.testConnection(input.emailServiceId, input.settings);
     }
   );
 

@@ -424,6 +424,18 @@ export const PLUGIN_INSTALL_FROM_SOURCE = "plugin:install-from-source";
 export const PLUGIN_GET_MCP_OPTIONS = "plugin:get-mcp-options";
 export const PLUGIN_SET_MCP_OPTION = "plugin:set-mcp-option";
 
+// ==================== Plugin Marketplace Channels (Marketplace PRD §11.1) ====================
+export const PLUGIN_MARKETPLACE_LIST = "plugin:marketplace:list";
+export const PLUGIN_MARKETPLACE_GET = "plugin:marketplace:get";
+export const PLUGIN_MARKETPLACE_ADD = "plugin:marketplace:add";
+export const PLUGIN_MARKETPLACE_REFRESH = "plugin:marketplace:refresh";
+export const PLUGIN_MARKETPLACE_REMOVE = "plugin:marketplace:remove";
+export const PLUGIN_MARKETPLACE_AVAILABLE_PLUGINS =
+  "plugin:marketplace:available-plugins";
+export const PLUGIN_MARKETPLACE_GET_PLUGIN = "plugin:marketplace:get-plugin";
+export const PLUGIN_MARKETPLACE_INSTALL_PLUGIN =
+  "plugin:marketplace:install-plugin";
+
 // AI user memory (durable cross-session memory)
 export const AI_USER_MEMORY_LIST = "ai:user-memory:list";
 export const AI_USER_MEMORY_CREATE = "ai:user-memory:create";

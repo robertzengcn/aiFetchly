@@ -1,4 +1,5 @@
-import { IDataExtractor, BusinessData, Address, BusinessHours, Rating, ValidationResult, ValidationError, ValidationWarning } from '../modules/interface/IDataExtractor';
+import type { ElementHandle } from 'puppeteer';
+import { IDataExtractor, BusinessData, Address, BusinessHours, Rating, ValidationResult, ValidationError, ValidationWarning } from '../../src/modules/interface/IDataExtractor';
 
 /**
  * Mock implementation of IDataExtractor for testing purposes.
@@ -8,35 +9,40 @@ export class MockDataExtractor implements IDataExtractor {
     /**
      * Mock business name extraction
      */
-    async extractBusinessName(element: any): Promise<string> {
+    async extractBusinessName(element: ElementHandle<Element>): Promise<string> {
+        void element;
         return 'Mock Business Name';
     }
 
     /**
      * Mock phone number extraction
      */
-    async extractPhoneNumber(element: any): Promise<string> {
+    async extractPhoneNumber(element: ElementHandle<Element>): Promise<string> {
+        void element;
         return '+1-555-1234';
     }
 
     /**
      * Mock email extraction
      */
-    async extractEmail(element: any): Promise<string | null> {
+    async extractEmail(element: ElementHandle<Element>): Promise<string | null> {
+        void element;
         return 'mock@example.com';
     }
 
     /**
      * Mock website extraction
      */
-    async extractWebsite(element: any): Promise<string | null> {
+    async extractWebsite(element: ElementHandle<Element>): Promise<string | null> {
+        void element;
         return 'https://mockbusiness.com';
     }
 
     /**
      * Mock address extraction
      */
-    async extractAddress(element: any): Promise<Address> {
+    async extractAddress(element: ElementHandle<Element>): Promise<Address> {
+        void element;
         return {
             street: '123 Mock Street',
             city: 'Mock City',
@@ -50,7 +56,8 @@ export class MockDataExtractor implements IDataExtractor {
     /**
      * Mock social media extraction
      */
-    async extractSocialMedia(element: any): Promise<string[]> {
+    async extractSocialMedia(element: ElementHandle<Element>): Promise<string[]> {
+        void element;
         return [
             'https://facebook.com/mockbusiness',
             'https://twitter.com/mockbusiness',
@@ -61,14 +68,16 @@ export class MockDataExtractor implements IDataExtractor {
     /**
      * Mock categories extraction
      */
-    async extractCategories(element: any): Promise<string[]> {
+    async extractCategories(element: ElementHandle<Element>): Promise<string[]> {
+        void element;
         return ['Mock Category 1', 'Mock Category 2', 'Mock Category 3'];
     }
 
     /**
      * Mock business hours extraction
      */
-    async extractBusinessHours(element: any): Promise<BusinessHours | null> {
+    async extractBusinessHours(element: ElementHandle<Element>): Promise<BusinessHours | null> {
+        void element;
         return {
             monday: { open: '9:00 AM', close: '5:00 PM' },
             tuesday: { open: '9:00 AM', close: '5:00 PM' },
@@ -83,7 +92,8 @@ export class MockDataExtractor implements IDataExtractor {
     /**
      * Mock rating extraction
      */
-    async extractRating(element: any): Promise<Rating | null> {
+    async extractRating(element: ElementHandle<Element>): Promise<Rating | null> {
+        void element;
         return {
             score: 4.5,
             max_score: 5.0,
@@ -202,8 +212,8 @@ export class MockDataExtractor implements IDataExtractor {
      * Validate phone format
      */
     private isValidPhone(phone: string): boolean {
-        const phoneRegex = /^[\+]?[1-9][\d]{0,15}$/;
-        const cleanPhone = phone.replace(/[\s\-\(\)]/g, '');
+        const phoneRegex = /^[+]?[1-9][\d]{0,15}$/;
+        const cleanPhone = phone.replace(/[\s\-()]/g, '');
         return phoneRegex.test(cleanPhone);
     }
 } 
