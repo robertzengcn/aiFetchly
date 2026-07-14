@@ -32,40 +32,28 @@ type ImapConnectionMode = "configured" | "implicitTls";
  */
 export class ImapEmailReceiveClient implements EmailReceiveClient {
   async testConnection(config: EmailReceiveConnectionConfig): Promise<void> {
-    const traceId = createImapTraceId();
     let client = this.createClient(config);
     try {
-      logImapAttempt("test", traceId, config, "configured", "connect:start");
       await client.connect();
-      logImapAttempt("test", traceId, config, "configured", "connect:success");
       try {
         await client.mailboxOpen(config.folder);
-        logImapAttempt("test", traceId, config, "configured", "mailbox:open");
       } catch {
         // Folder may not exist; connectivity itself still succeeded.
-        logImapAttempt("test", traceId, config, "configured", "mailbox:ignored");
       }
     } catch (error) {
-      logImapAttempt("test", traceId, config, "configured", "connect:error", error);
       if (!shouldRetryWithImplicitTls(error, config)) {
-        logImapAttempt("test", traceId, config, "configured", "retry:skip", error);
         throw error;
       }
-      logImapAttempt("test", traceId, config, "implicitTls", "retry:start");
       await closeClient(client);
       client = this.createClient(config, "implicitTls");
       await client.connect();
-      logImapAttempt("test", traceId, config, "implicitTls", "connect:success");
       try {
         await client.mailboxOpen(config.folder);
-        logImapAttempt("test", traceId, config, "implicitTls", "mailbox:open");
       } catch {
         // Folder may not exist; connectivity itself still succeeded.
-        logImapAttempt("test", traceId, config, "implicitTls", "mailbox:ignored");
       }
     } finally {
       await closeClient(client);
-      logImapAttempt("test", traceId, config, "configured", "client:closed");
     }
   }
 
@@ -73,18 +61,11 @@ export class ImapEmailReceiveClient implements EmailReceiveClient {
     config: EmailReceiveConnectionConfig,
     options: EmailReceiveFetchOptions
   ): Promise<ParsedInboundEmail[]> {
-    const traceId = createImapTraceId();
     const limit = Math.max(1, Math.min(options.limit, MAX_FETCH_CAP));
 
     let client = this.createClient(config);
     try {
-      logImapAttempt("fetch", traceId, config, "configured", "connect:start", undefined, {
-        limit,
-        unreadOnly: options.unreadOnly,
-        since: options.since?.toISOString(),
-      });
       await client.connect();
-      logImapAttempt("fetch", traceId, config, "configured", "connect:success");
       return await this.fetchFromConnectedClient(
         client,
         config.folder,
@@ -92,16 +73,12 @@ export class ImapEmailReceiveClient implements EmailReceiveClient {
         limit
       );
     } catch (error) {
-      logImapAttempt("fetch", traceId, config, "configured", "connect:error", error);
       if (!shouldRetryWithImplicitTls(error, config)) {
-        logImapAttempt("fetch", traceId, config, "configured", "retry:skip", error);
         throw error;
       }
-      logImapAttempt("fetch", traceId, config, "implicitTls", "retry:start");
       await closeClient(client);
       client = this.createClient(config, "implicitTls");
       await client.connect();
-      logImapAttempt("fetch", traceId, config, "implicitTls", "connect:success");
       return await this.fetchFromConnectedClient(
         client,
         config.folder,
@@ -110,7 +87,6 @@ export class ImapEmailReceiveClient implements EmailReceiveClient {
       );
     } finally {
       await closeClient(client);
-      logImapAttempt("fetch", traceId, config, "configured", "client:closed");
     }
   }
 
@@ -217,63 +193,6 @@ export class ImapEmailReceiveClient implements EmailReceiveClient {
       precedence: precedenceHeader ? String(precedenceHeader) : null,
     };
   }
-}
-
-function createImapTraceId(): string {
-  return `imap-${Date.now().toString(36)}-${Math.random()
-    .toString(36)
-    .slice(2, 8)}`;
-}
-
-function logImapAttempt(
-  operation: "test" | "fetch",
-  traceId: string,
-  config: EmailReceiveConnectionConfig,
-  mode: ImapConnectionMode,
-  event: string,
-  error?: unknown,
-  extra?: Record<string, unknown>
-): void {
-  const options = buildImapFlowOptions(config, mode);
-  const payload: Record<string, unknown> = {
-    traceId,
-    operation,
-    event,
-    mode,
-    host: config.host,
-    port: config.port,
-    ssl: config.ssl,
-    folder: config.folder,
-    imapSecure: options.secure,
-    imapStartTls: options.doSTARTTLS,
-    ...extra,
-  };
-
-  if (error != null) {
-    payload.error = describeImapError(error);
-    console.warn("[email-receive:imap]", payload);
-    return;
-  }
-
-  console.info("[email-receive:imap]", payload);
-}
-
-function describeImapError(error: unknown): Record<string, unknown> {
-  if (!(error instanceof Error)) {
-    return { message: String(error) };
-  }
-  const extended = error as Error & {
-    code?: unknown;
-    reason?: unknown;
-    tlsFailed?: unknown;
-  };
-  return {
-    name: error.name,
-    message: error.message,
-    code: extended.code,
-    reason: extended.reason,
-    tlsFailed: extended.tlsFailed,
-  };
 }
 
 async function closeClient(client: ImapFlow): Promise<void> {

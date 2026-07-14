@@ -95,31 +95,10 @@ export class EmailReceiveSyncService {
       if (validationError) {
         return { success: false, error: validationError };
       }
-      console.info("[email-receive:test] starting connection test", {
-        emailServiceId: normalizedConfig.emailServiceId,
-        protocol: normalizedConfig.protocol,
-        host: normalizedConfig.host,
-        port: normalizedConfig.port,
-        ssl: normalizedConfig.ssl,
-        usernamePresent: normalizedConfig.username.length > 0,
-        passwordPresent: normalizedConfig.password.length > 0,
-        folder: normalizedConfig.folder,
-        directSettingsProvided: settings != null,
-      });
       const client = EmailReceiveClientFactory.createClient(normalizedConfig.protocol);
       await client.testConnection(normalizedConfig);
-      console.info("[email-receive:test] connection test succeeded", {
-        emailServiceId: normalizedConfig.emailServiceId,
-        protocol: normalizedConfig.protocol,
-        host: normalizedConfig.host,
-        port: normalizedConfig.port,
-        ssl: normalizedConfig.ssl,
-      });
       return { success: true, error: null };
     } catch (error) {
-      console.warn("[email-receive:test] connection test failed", {
-        error: describeReceiveError(error),
-      });
       return { success: false, error: sanitizeError(error) };
     }
   }
@@ -283,24 +262,6 @@ function sanitizeError(error: unknown): string {
     return msg.length > 240 ? msg.slice(0, 240) + "…" : msg;
   }
   return String(error).slice(0, 240);
-}
-
-function describeReceiveError(error: unknown): Record<string, unknown> {
-  if (!(error instanceof Error)) {
-    return { message: String(error) };
-  }
-  const extended = error as Error & {
-    code?: unknown;
-    reason?: unknown;
-    tlsFailed?: unknown;
-  };
-  return {
-    name: error.name,
-    message: error.message,
-    code: extended.code,
-    reason: extended.reason,
-    tlsFailed: extended.tlsFailed,
-  };
 }
 
 function truncate(value: string, max: number): string {
