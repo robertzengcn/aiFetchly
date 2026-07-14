@@ -51,6 +51,7 @@ import {
   initializeWebSocketConnection,
   cleanupWebSocketConnection,
 } from "@/main-process/communication/websocket-ipc";
+import { cleanupContactExtractionWorker } from "@/main-process/communication/contactExtraction-ipc";
 import { TokenRefreshService } from "@/modules/tokenRefresh";
 import { getDefaultToolJobRegistry } from "@/service/ToolJobRegistry";
 import {
@@ -681,6 +682,13 @@ function initialize() {
       getDefaultToolJobRegistry().shutdown();
     } catch (err) {
       console.error("[shutdown] ToolJobRegistry shutdown failed", err);
+    }
+
+    // WS-4 R4.5: clean up the contact-extraction worker on app quit
+    try {
+      cleanupContactExtractionWorker();
+    } catch (err) {
+      log.warn("[shutdown] contactExtractionWorker cleanup failed", err);
     }
 
     // Clear any in-flight desktop auth handoff so the PKCE verifier does
