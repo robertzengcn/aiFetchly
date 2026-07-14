@@ -9,7 +9,10 @@ import type FormDataLib from "form-data";
 import { Token } from "@/modules/token";
 import { TOKENNAME, REFRESHTOKEN } from "@/config/usersetting";
 import { User } from "@/modules/user";
-import { TokenRefreshService } from "@/modules/tokenRefresh";
+import {
+  RefreshTokenInvalidError,
+  TokenRefreshService,
+} from "@/modules/tokenRefresh";
 import { resolveViteLoginBase } from "@/config/viteLoginUrl";
 import { userSecretKeyService } from "@/modules/fieldCipher";
 
@@ -23,14 +26,19 @@ import { userSecretKeyService } from "@/modules/fieldCipher";
  * this branch silently never fire.
  */
 function isRefreshTokenInvalidError(error: unknown): boolean {
+  if (error instanceof RefreshTokenInvalidError) {
+    return true;
+  }
   const msg = (
     error instanceof Error ? error.message : String(error)
   ).toLowerCase();
   return (
+    (error instanceof Error && error.name === "RefreshTokenInvalidError") ||
     msg.includes("invalid or expired refresh token") ||
     msg.includes("refresh token not found") ||
     msg.includes("refresh token has expired") ||
     msg.includes("refresh token is invalid") ||
+    msg.includes("refresh token rejected") ||
     msg.includes("http error: 401")
   );
 }

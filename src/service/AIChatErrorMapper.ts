@@ -26,7 +26,11 @@ export function userSafeError(err: unknown): string {
     ) {
       return QUOTA_EXHAUSTED_SENTINEL;
     }
-    if (/401|403/.test(msg)) {
+    if (
+      /401|403|Authentication failed: Token expired|Please login again|RefreshTokenInvalidError|refresh token rejected|invalid or expired refresh token|refresh token not found|refresh token has expired|refresh token is invalid/i.test(
+        msg
+      )
+    ) {
       return "Please sign in again.";
     }
     if (/404/.test(msg)) {
