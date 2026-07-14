@@ -56,9 +56,8 @@
 //import { UserModule } from '@/views/store/modules/user'
 import {openPage, getLoginUrl} from "@/views/api/users"
 import { onMounted, onUnmounted, ref } from "vue";
-import { receiveRedirectevent } from "@/views/api/users";
-//import { defineComponent } from "vue";
 import {NATIVATECOMMAND, LOGIN_STATUS} from "@/config/channellist"
+import { getIpcTransport } from "@/views/utils/ipcTransport"
 import { useI18n } from 'vue-i18n'
 import type { LoginStatusType, NativateDatatype } from "@/entityTypes/commonType"
 
@@ -90,13 +89,15 @@ const handleLoginStatus = (data: LoginStatusType): void => {
 };
 
 onMounted(() => {
-  receiveRedirectevent(NATIVATECOMMAND, handleNavigateCommand);
-  window.api.receive(LOGIN_STATUS, handleLoginStatus);
+  const transport = getIpcTransport();
+  transport.receive(NATIVATECOMMAND, handleNavigateCommand as (value: unknown) => void);
+  transport.receive(LOGIN_STATUS, handleLoginStatus as (value: unknown) => void);
 });
 
 onUnmounted(() => {
-  window.api.removeListener(NATIVATECOMMAND, handleNavigateCommand);
-  window.api.removeListener(LOGIN_STATUS, handleLoginStatus);
+  const transport = getIpcTransport();
+  transport.removeListener(NATIVATECOMMAND, handleNavigateCommand as (value: unknown) => void);
+  transport.removeListener(LOGIN_STATUS, handleLoginStatus as (value: unknown) => void);
 });
 const redirectToLogin = async () => {
     try {
