@@ -133,12 +133,10 @@ export const aiNavigationRouteManifest: readonly AiNavigationRouteManifestEntry[
       titleKey: "route.campaign_list",
       visible: true,
       aiNavigable: true,
-      aiAliases: [
-        "campaign",
-        "campaign list",
-        "campaigns",
-        "marketing campaign",
-      ],
+      // NOTE: bare "campaign" intentionally omitted so that detail/edit
+      // requests ("campaign detail", "campaign 123") fall through to
+      // needsRouteParams instead of loosely matching this list page.
+      aiAliases: ["campaign list", "campaigns", "marketing campaign"],
       aiDescription: "View and manage marketing campaigns",
     },
     {
@@ -161,8 +159,9 @@ export const aiNavigationRouteManifest: readonly AiNavigationRouteManifestEntry[
       titleKey: "route.schedule_list",
       visible: true,
       aiNavigable: true,
+      // NOTE: bare "schedule" intentionally omitted so that detail requests
+      // ("schedule detail") fall through to needsRouteParams.
       aiAliases: [
-        "schedule",
         "schedule list",
         "schedules",
         "task schedule",
@@ -212,8 +211,7 @@ export const aiNavigationRouteManifest: readonly AiNavigationRouteManifestEntry[
         "email extractor",
         "email extraction form",
       ],
-      aiDescription:
-        "Extract email addresses from websites and search results",
+      aiDescription: "Extract email addresses from websites and search results",
     },
     {
       routeName: "YellowPagesList",
@@ -221,11 +219,7 @@ export const aiNavigationRouteManifest: readonly AiNavigationRouteManifestEntry[
       titleKey: "route.yellow_pages_list",
       visible: true,
       aiNavigable: true,
-      aiAliases: [
-        "yellow pages",
-        "yellow pages list",
-        "business directory",
-      ],
+      aiAliases: ["yellow pages", "yellow pages list", "business directory"],
       aiDescription: "Scrape business listings from yellow pages directories",
     },
     {

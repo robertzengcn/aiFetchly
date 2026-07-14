@@ -54,8 +54,47 @@ const registry = new Map<string, SkillDefinition>();
 // Built-in skill definitions (statically imported)
 // ---------------------------------------------------------------------------
 import { RUN_SUBAGENT_TOOL } from "@/service/agentTools/runSubagentTool";
+import { AIAppNavigationToolService } from "@/service/AIAppNavigationToolService";
 
 const BUILT_IN_SKILLS: SkillDefinition[] = [
+  {
+    name: "open_app_page",
+    description:
+      "Navigate AiFetchly to a safe internal application page based on the user's natural language request. " +
+      "Use when the user explicitly asks to open, go to, navigate to, show, view, or switch to an application page " +
+      "(list, dashboard, settings, log, audit, management, inbox, template, campaign, schedule, or configuration page). " +
+      "Do NOT use for general questions, data mutations (create/edit/delete/send/run/scrape/schedule), " +
+      "required-record detail/edit pages without a known id, login/auth/error pages, external URLs, or ambiguous destinations " +
+      "(return clarification candidates instead). Only returns a navigation command for a validated internal route; " +
+      "never clicks buttons, fills/submits forms, mutates data, sends email, starts automation, or opens external sites.",
+    parameters: {
+      type: "object",
+      properties: {
+        query: {
+          type: "string",
+          description: "The user's natural-language page navigation request.",
+        },
+        preferredRouteName: {
+          type: "string",
+          description:
+            "Optional route name selected from a previous clarification candidate list.",
+        },
+      },
+      required: ["query"],
+    },
+    tier: "main",
+    requiresConfirmation: false,
+    permissionCategory: "pure",
+    source: "built-in",
+    execute: async (args) => {
+      const service = new AIAppNavigationToolService();
+      const result = service.openAppPage(args);
+      return {
+        success: result.success,
+        result: result as unknown as Record<string, unknown>,
+      };
+    },
+  },
   {
     name: "scrape_urls_from_search_engine",
     description:
