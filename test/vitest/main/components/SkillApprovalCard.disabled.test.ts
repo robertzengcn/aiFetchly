@@ -28,12 +28,12 @@ const i18n = createI18n({
   },
 });
 
-function mountCard(disabled = false) {
+function mountCard(props: { disabled?: boolean; loading?: boolean } = {}) {
   return mount(SkillApprovalCard, {
     props: {
       toolName: "scrape_urls_from_search_engine",
       permissionCategory: "network",
-      disabled,
+      ...props,
     },
     global: {
       plugins: [i18n],
@@ -44,7 +44,7 @@ function mountCard(disabled = false) {
           props: ["disabled", "loading"],
           emits: ["click"],
           template:
-            "<button :disabled=\"disabled\" @click=\"$emit('click')\"><slot /></button>",
+            "<button :disabled=\"disabled\" :data-loading=\"loading ? 'true' : 'false'\" @click=\"$emit('click')\"><slot /></button>",
         },
       },
     },
@@ -60,7 +60,7 @@ describe("SkillApprovalCard disabled state", () => {
   });
 
   it("does not grant or emit when disabled", async () => {
-    const wrapper = mountCard(true);
+    const wrapper = mountCard({ disabled: true });
     await wrapper.findAll("button")[2].trigger("click");
     await flushPromises();
 
@@ -70,7 +70,7 @@ describe("SkillApprovalCard disabled state", () => {
   });
 
   it("grants and emits when enabled", async () => {
-    const wrapper = mountCard(false);
+    const wrapper = mountCard();
     await wrapper.findAll("button")[2].trigger("click");
     await flushPromises();
 
@@ -80,5 +80,18 @@ describe("SkillApprovalCard disabled state", () => {
       persistent: true,
     });
     expect(wrapper.emitted("grant")?.[0]).toEqual([{ persistent: true }]);
+  });
+
+  it("shows loading and blocks duplicate grant while parent resume is pending", async () => {
+    const wrapper = mountCard({ loading: true });
+    const alwaysAllowButton = wrapper.findAll("button")[2];
+
+    expect(alwaysAllowButton.attributes("data-loading")).toBe("true");
+    await alwaysAllowButton.trigger("click");
+    await flushPromises();
+
+    const invoke = (window as WindowWithApi).api?.invoke;
+    expect(invoke).not.toHaveBeenCalled();
+    expect(wrapper.emitted("grant")).toBeUndefined();
   });
 });

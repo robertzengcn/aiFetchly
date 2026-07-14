@@ -112,6 +112,7 @@
           :shell-preview="pinnedPermissionShellPreview"
           :workspace-root="activeWorkspace?.rootPath ?? ''"
           :disabled="pinnedPermissionResumeInFlight"
+          :loading="pinnedPermissionResumeInFlight"
           @grant="handlePinnedPermissionGrant"
           @deny="handlePinnedPermissionDeny"
         />

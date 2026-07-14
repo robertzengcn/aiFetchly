@@ -73,7 +73,7 @@
         size="small"
         variant="flat"
         color="primary"
-        :loading="isProcessing"
+        :loading="isLoading"
         :disabled="isDisabled"
         @click="handleAlwaysAllow"
       >
@@ -103,6 +103,7 @@ interface Props {
   workspaceRoot?: string;
   relativePath?: string;
   disabled?: boolean;
+  loading?: boolean;
 }
 
 const props = defineProps<Props>();
@@ -113,7 +114,8 @@ const emit = defineEmits<{
 }>();
 
 const isProcessing = ref(false);
-const isDisabled = computed(() => isProcessing.value || props.disabled === true);
+const isLoading = computed(() => isProcessing.value || props.loading === true);
+const isDisabled = computed(() => isLoading.value || props.disabled === true);
 
 const isShellCategory = computed(() => props.permissionCategory === "shell");
 
