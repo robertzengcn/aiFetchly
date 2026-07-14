@@ -15,9 +15,10 @@
 // Each call to {@link replaceSource} is an atomic replace for that sourceId:
 // the previously-tracked names for that sourceId are dropped (via
 // SkillRegistry.unregisterSkill), then the new draft set is registered (via
-// SkillImportService.registerImportedSkill). Collisions with built-in or
-// concurrently-registered skills are caught and surfaced as manifest-invalid
-// diagnostics (T-spoof-builtin / T-18-02 — built-in names ALWAYS win).
+// SkillImportService.registerImportedSkill). On successful registration the
+// skill is also persisted to the DB (fire-and-forget) so the skills UI
+// (skill:list-installed IPC → SkillManagementModule.listInstalledSkills)
+// sees auto-discovered skills alongside zip-imported ones.
 //
 // Per D-SkillEnable: no per-skill "enable" flag — registration is immediate,
 // gating is at call time via the existing SkillPermissionService.
@@ -31,14 +32,13 @@ import { SkillImportService } from "@/service/SkillImportService";
  * Source-reconciliation adapter bridging SkillRegistry's missing `replaceSource`.
  *
  * Stateless across instances EXCEPT for the private sourceIndex; callers MUST
- * hold a single instance across rescans so the index persists. Construct via
- * `new LocalSkillSourceAdapter()` (the AIFetchlyRuntimeRegistrySync owns one).
+ * hold a single instance across rescans so the index persists. The adapter
+ * manages the in-memory SkillRegistry; DB persistence is delegated to the
+ * SkillManagementModule via fire-and-forget writes so the skills UI stays in
+ * sync. DB write failures are non-fatal (the skill is already registered
+ * in-memory and functional at the tool-call level).
  */
 export class LocalSkillSourceAdapter {
-  /**
-   * sourceId -> Set of skill names currently registered for that source.
-   * Tracks what THIS adapter has registered so rescans can reconcile.
-   */
   private readonly sourceIndex = new Map<string, Set<string>>();
 
   /**
@@ -47,17 +47,14 @@ export class LocalSkillSourceAdapter {
    * 1. Read the previously-tracked names for `sourceId`.
    * 2. For each old name, call `SkillRegistry.unregisterSkill(name)` (best-
    *    effort — guard against already-gone; Pitfall 4 / stale entries).
+   *    Also remove from DB (fire-and-forget) so the skills UI stays in sync.
    * 3. For each draft, try `SkillImportService.registerImportedSkill(
    *    draft.manifest, draft.skillDir)`:
-   *      - success -> add the name to the next Set.
+   *      - success -> add the name to the next Set and persist to DB
+   *        (fire-and-forget).
    *      - throw (duplicate-name collision with a built-in or concurrently-
-   *        registered skill) -> catch and push a manifest-invalid diagnostic
-   *        ("skill name collides with an existing skill: <name>"); built-in
-   *        names ALWAYS win (T-spoof-builtin).
+   *        registered skill) -> catch and push a manifest-invalid diagnostic.
    * 4. Set the index to the next Set. Return the diagnostics array.
-   *
-   * NEVER throws — every registration failure is caught and surfaced as a
-   * non-fatal diagnostic so one bad draft cannot abort the batch.
    */
   replaceSource(
     sourceId: string,
@@ -65,32 +62,35 @@ export class LocalSkillSourceAdapter {
   ): AIFetchlyConfigDiagnostic[] {
     const diagnostics: AIFetchlyConfigDiagnostic[] = [];
 
-    // 1. Unregister the old set for this source (reconciliation).
     const oldNames = this.sourceIndex.get(sourceId);
     if (oldNames) {
       for (const name of oldNames) {
         try {
           SkillRegistry.unregisterSkill(name);
         } catch {
-          // Already gone (e.g. manually uninstalled) — best-effort.
+          // Already gone — best-effort.
         }
+        this.removeFromDb(name).catch(() => {
+          /* DB persistence is best-effort — non-fatal */
+        });
       }
     }
 
-    // 2. Register the new set, catching collisions.
     const nextNames = new Set<string>();
     for (const draft of drafts) {
       try {
-        SkillImportService.registerImportedSkill(draft.manifest, draft.skillDir);
+        SkillImportService.registerImportedSkill(
+          draft.manifest,
+          draft.skillDir
+        );
         nextNames.add(draft.name);
+        this.persistToDb(draft).catch(() => {
+          /* DB persistence is best-effort — non-fatal */
+        });
       } catch (err) {
-        // Collisions with built-in / concurrently-registered skills surface as
-        // manifest-invalid diagnostics. Built-in names ALWAYS win.
         const message = (err as Error)?.message ?? String(err);
         diagnostics.push({
           severity: "warning",
-          // source/sourceId derived from the sourceId; LocalSkillDraft does not
-          // carry a sourceKind, so infer from the sourceId namespace.
           source: sourceId.startsWith("workspace:") ? "workspace" : "user",
           sourceId,
           filePath: `${sourceId}:skill:${draft.name}`,
@@ -101,8 +101,33 @@ export class LocalSkillSourceAdapter {
       }
     }
 
-    // 3. Commit the new set.
     this.sourceIndex.set(sourceId, nextNames);
     return diagnostics;
+  }
+
+  /** Persist an auto-discovered skill to the DB (best-effort, fire-and-forget). */
+  private async persistToDb(draft: LocalSkillDraft): Promise<void> {
+    const { SkillManagementModule } = await import(
+      "@/modules/SkillManagementModule"
+    );
+    const module = new SkillManagementModule();
+    await module.ensureConnection();
+    await module.installSkill({
+      name: draft.manifest.name,
+      version: draft.manifest.version,
+      source: "user",
+      manifest_json: JSON.stringify(draft.manifest),
+      enabled: 1,
+    });
+  }
+
+  /** Remove a skill from the DB (best-effort, fire-and-forget). */
+  private async removeFromDb(name: string): Promise<void> {
+    const { SkillManagementModule } = await import(
+      "@/modules/SkillManagementModule"
+    );
+    const module = new SkillManagementModule();
+    await module.ensureConnection();
+    await module.uninstallSkill(name);
   }
 }
