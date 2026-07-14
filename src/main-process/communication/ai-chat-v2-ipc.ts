@@ -5,6 +5,14 @@ import { lazySchema } from "@/utils/lazySchema";
 
 const unknownInputSchema = lazySchema(() => z.unknown());
 
+/** Unwrap a handleX CommonMessage return: throw on status:false, return data on success. */
+async function unwrap<T>(p: Promise<{ status: boolean; msg?: string; data?: T }>): Promise<T> {
+  const res = await p;
+  if (!res.status) throw new Error(res.msg || "Unknown error");
+  return res.data as T;
+}
+
+
 import { ipcMain as ipcMain } from "electron";
 import { Token } from "@/modules/token";
 import { USER_AI_ENABLED, USERSDBPATH } from "@/config/usersetting";
@@ -1064,45 +1072,45 @@ export function registerAiChatV2IpcHandlers(): void {
     AI_CHAT_V2_RESUME_TOOL_AFTER_PERMISSION,
     unknownInputSchema,
     async (input) =>
-      handleResumeToolAfterPermission(JSON.stringify(input ?? "{}"))
+      unwrap(handleResumeToolAfterPermission(JSON.stringify(input ?? "{}")))
   );
-  registerValidatedHandler(AI_CHAT_V2_MODELS, noInputSchema, async () => handleModels());
+  registerValidatedHandler(AI_CHAT_V2_MODELS, noInputSchema, async () => unwrap(handleModels()));
   registerValidatedHandler(AI_CHAT_V2_CONVERSATIONS, unknownInputSchema, async (input) =>
-    handleConversations(JSON.stringify(input ?? {}))
+    unwrap(handleConversations(JSON.stringify(input ?? {})))
   );
   registerValidatedHandler(AI_CHAT_V2_HISTORY, unknownInputSchema, async (input, event) =>
-    handleHistory(event as IpcEventLike, JSON.stringify(input ?? {}))
+    unwrap(handleHistory(event as IpcEventLike, JSON.stringify(input ?? {})))
   );
   registerValidatedHandler(AI_CHAT_V2_CLEAR_CONVERSATION, unknownInputSchema, async (input, event) =>
-    handleClearConversation(event as IpcEventLike, JSON.stringify(input ?? {}))
+    unwrap(handleClearConversation(event as IpcEventLike, JSON.stringify(input ?? {})))
   );
-  registerValidatedHandler(AI_CHAT_V2_CLEAR_ALL, noInputSchema, async () => handleClearAll());
+  registerValidatedHandler(AI_CHAT_V2_CLEAR_ALL, noInputSchema, async () => unwrap(handleClearAll()));
   registerValidatedHandler(AI_CHAT_V2_PLAN_STATE, unknownInputSchema, async (input) =>
-    handlePlanState(JSON.stringify(input ?? "{}"))
+    unwrap(handlePlanState(JSON.stringify(input ?? "{}")))
   );
   registerValidatedHandler(AI_CHAT_V2_ANSWER_QUESTION, unknownInputSchema, async (input) =>
-    handleAnswerQuestion(JSON.stringify(input ?? "{}"))
+    unwrap(handleAnswerQuestion(JSON.stringify(input ?? "{}")))
   );
   registerValidatedHandler(AI_CHAT_V2_APPROVE_PLAN, unknownInputSchema, async (input) =>
-    handleApprovePlan(JSON.stringify(input ?? "{}"))
+    unwrap(handleApprovePlan(JSON.stringify(input ?? "{}")))
   );
   registerValidatedHandler(AI_CHAT_V2_REJECT_PLAN, unknownInputSchema, async (input) =>
-    handleRejectPlan(JSON.stringify(input ?? "{}"))
+    unwrap(handleRejectPlan(JSON.stringify(input ?? "{}")))
   );
   registerValidatedHandler(AI_CHAT_V2_REQUEST_PLAN_CHANGES, unknownInputSchema, async (input) =>
-    handleRequestPlanChanges(JSON.stringify(input ?? "{}"))
+    unwrap(handleRequestPlanChanges(JSON.stringify(input ?? "{}")))
   );
   registerValidatedHandler(AI_CHAT_V2_PLAN_VERSIONS, unknownInputSchema, async (input) =>
-    handlePlanVersions(JSON.stringify(input ?? "{}"))
+    unwrap(handlePlanVersions(JSON.stringify(input ?? "{}")))
   );
   registerValidatedHandler(AI_CHAT_V2_COMPACT_CONVERSATION, unknownInputSchema, async (input) =>
-    handleCompactConversation(JSON.stringify(input ?? "{}"))
+    unwrap(handleCompactConversation(JSON.stringify(input ?? "{}")))
   );
   registerValidatedHandler(AI_CHAT_V2_GET_TOOL_APPROVAL_MODE, unknownInputSchema, async (input) =>
-    handleGetToolApprovalMode(JSON.stringify(input ?? "{}"))
+    unwrap(handleGetToolApprovalMode(JSON.stringify(input ?? "{}")))
   );
   registerValidatedHandler(AI_CHAT_V2_SET_TOOL_APPROVAL_MODE, unknownInputSchema, async (input) =>
-    handleSetToolApprovalMode(JSON.stringify(input ?? "{}"))
+    unwrap(handleSetToolApprovalMode(JSON.stringify(input ?? "{}")))
   );
   // Stream handler send message to the AI engine and receive chunks back
   ipcMain.on(AI_CHAT_V2_STREAM, async (event, data: unknown) => {
