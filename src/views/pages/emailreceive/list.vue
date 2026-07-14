@@ -82,7 +82,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from "vue";
+import { ref, computed, onMounted, nextTick } from "vue";
 import { useRouter, useRoute } from "vue-router";
 import { useI18n } from "vue-i18n";
 import type { Header } from "@/entityTypes/commonType";
@@ -106,21 +106,21 @@ const itemsPerPage = ref(20);
 const currentPage = ref(1);
 
 onMounted(async () => {
-  const qs = route.query.emailServiceId;
-  if (qs != null) {
-    const parsed = Number(qs);
-    if (!isNaN(parsed)) emailServiceId.value = parsed;
-  }
   try {
     const resp = await getEmailServiceList({ page: 0, size: 9999 });
     emailServices.value = resp.data;
   } catch (err) {
     console.error("Failed to load email services:", err);
   }
-});
-
-watch(emailServiceId, (val) => {
-  router.replace({ query: { ...route.query, emailServiceId: val != null ? String(val) : undefined } });
+  const qs = route.query.emailServiceId;
+  if (qs != null) {
+    const parsed = Number(qs);
+    if (!isNaN(parsed)) {
+      emailServiceId.value = parsed;
+      await nextTick();
+      await loadItems({ page: 1, itemsPerPage: itemsPerPage.value, sortBy: [] });
+    }
+  }
 });
 
 const filters = ref({ replyStatus: undefined as string | undefined, search: "" });
