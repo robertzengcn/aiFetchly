@@ -335,6 +335,8 @@ import {
   onBeforeUnmount,
 } from "vue";
 import { useI18n } from "vue-i18n";
+import { useRouter } from "vue-router";
+import { handleAiNavigationToolResult } from "@/views/utils/aiNavigationResultHandler";
 import { MessageType } from "@/entityTypes/commonType";
 import type {
   ChatV2MessageView,
@@ -418,6 +420,7 @@ const AUTO_MODEL_VALUE = "auto";
 type Status = "idle" | "streaming" | "cancelled" | "error";
 
 const { t } = useI18n();
+const router = useRouter();
 
 const conversations = ref<ChatV2ConversationSummary[]>([]);
 const activeConversationId = ref<string | null>(null);
@@ -1658,6 +1661,8 @@ const onSend = async (text: string): Promise<void> => {
               chunk.conversationId || activeConversationId.value || "",
               assistantAdded ? assistant.id : undefined
             );
+            // AI app navigation: route on open_app_page navigate commands.
+            void handleAiNavigationToolResult(router, chunk.toolResult);
           }
         }
       },
