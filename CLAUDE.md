@@ -105,7 +105,7 @@ CRUD + rules), which use **Models** for data access over **Entities** → DB.
 - **Vite** - Build tool and dev server
 - **Pinia** - State management
 - **Vuetify** - UI component library
-- **Zod v4** (`zod/v4`) - Full-stack type validation infrastructure
+- **Zod v3** (`zod ^3.24.0`) - Full-stack type validation infrastructure
 
 ### Key Dependencies
 - **Puppeteer** - Web automation and scraping
@@ -113,7 +113,7 @@ CRUD + rules), which use **Models** for data access over **Entities** → DB.
 - **better-sqlite3** - SQLite database driver
 - **node-cron** - Task scheduling
 - **openai** - AI integration
-- **zod** - Schema definition and runtime validation (imported via `zod/v4`)
+- **zod** - Schema definition and runtime validation (imported via `zod`)
 
 ## Development Patterns
 
@@ -123,13 +123,13 @@ CRUD + rules), which use **Models** for data access over **Entities** → DB.
 - All functions must have explicit return types
 - Use proper error handling with `unknown` instead of `any` for catch blocks
 
-### Zod v4 Validation Infrastructure - MANDATORY RULE
-**This project uses Zod v4** (`zod/v4`) as its full-stack type validation infrastructure. Tool definition, configuration management, cross-process communication, and setting validation all require Zod for type safety validation.
+### Zod Validation Infrastructure - MANDATORY RULE
+**This project uses Zod** (`zod ^3.24.0`) as its full-stack type validation infrastructure. Tool definition, configuration management, cross-process communication, and setting validation all require Zod for type safety validation.
 
 #### Import Convention
-- Always import from `zod/v4` (not from bare `zod`) to opt into the v4 API:
+- Always import from `zod` (the standard import — 66 files use this convention):
   ```typescript
-  import { z } from "zod/v4";
+  import { z } from "zod";
   ```
 - Derive TypeScript types from schemas with `z.infer<typeof schema>` rather than hand-writing interfaces that mirror the schema.
 
