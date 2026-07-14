@@ -4,6 +4,7 @@ import { EmailReplyAuditLogEntity } from "@/entity/EmailReplyAuditLog.entity";
 import { SortBy } from "@/entityTypes/commonType";
 import { parseAndStrip } from "@/utils/parseAndStrip";
 import { emailReplyAuditLogWriteSchema } from "@/schemas/entity/emailReplyAuditLog";
+import { runWithSqliteBusyRetry } from "@/utils/sqliteBusyRetry";
 
 export interface ReplyAuditLogListInput {
   emailServiceId?: number;
@@ -29,7 +30,19 @@ export class EmailReplyAuditLogModel extends BaseDb {
       entity,
       emailReplyAuditLogWriteSchema()
     ) as unknown as EmailReplyAuditLogEntity;
-    const saved = await this.repository.save(stripped);
+    const saved = await runWithSqliteBusyRetry(
+      () => this.repository.save(stripped),
+      {
+        maxAttempts: 2,
+        delayMs: 250,
+        onRetry: (nextAttempt, maxAttempts, delayMs, error) => {
+          const message = error instanceof Error ? error.message : String(error);
+          console.warn(
+            `Reply audit log write hit a SQLite lock; retrying attempt ${nextAttempt}/${maxAttempts} in ${delayMs}ms: ${message}`
+          );
+        },
+      }
+    );
     return saved.id;
   }
 
