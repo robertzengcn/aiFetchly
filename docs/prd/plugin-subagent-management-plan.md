@@ -189,11 +189,11 @@ Expected: no new errors. (Other files referencing `AgentDefinitionView` without 
   pluginName?: string | null;
 
   @Order(16)
-  @Column("text", nullable: true })
+  @Column("text", { nullable: true })
   pluginComponentPath?: string | null;
 
   @Order(17)
-  @Column("text", nullable: true })
+  @Column("text", { nullable: true })
   manifestJson?: string | null;
 
   @Order(18)
@@ -201,7 +201,7 @@ Expected: no new errors. (Other files referencing `AgentDefinitionView` without 
   health: string;
 
   @Order(19)
-  @Column("text", nullable: true })
+  @Column("text", { nullable: true })
   lastError?: string | null;
 ```
 

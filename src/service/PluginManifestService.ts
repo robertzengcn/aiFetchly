@@ -146,13 +146,22 @@ function validateManifest(
       recoverable: false,
     });
   }
+  if (m.agents !== undefined && !isStringArray(m.agents)) {
+    errors.push({
+      code: "manifest-schema-invalid",
+      message: '"agents" must be an array of relative path strings.',
+      recoverable: false,
+    });
+  }
 
   const skills = Array.isArray(m.skills) ? m.skills : [];
   const mcpServers = Array.isArray(m.mcpServers) ? m.mcpServers : [];
-  if (skills.length === 0 && mcpServers.length === 0) {
+  const agents = Array.isArray(m.agents) ? m.agents : [];
+  if (skills.length === 0 && mcpServers.length === 0 && agents.length === 0) {
     errors.push({
       code: "manifest-schema-invalid",
-      message: 'At least one of "skills" or "mcpServers" must be non-empty.',
+      message:
+        'At least one of "skills", "mcpServers", or "agents" must be non-empty.',
       recoverable: false,
     });
   }
@@ -188,6 +197,19 @@ function validateManifest(
         componentType: "mcpServer",
         path: mcpPath,
         message: `MCP path "${mcpPath}" escapes the plugin directory.`,
+        recoverable: false,
+      });
+    }
+  }
+  for (const agentPath of agents) {
+    try {
+      resolvePluginRelativePath(pluginRoot, agentPath);
+    } catch {
+      errors.push({
+        code: "path-outside-plugin",
+        componentType: "agent",
+        path: agentPath,
+        message: `Agent path "${agentPath}" escapes the plugin directory.`,
         recoverable: false,
       });
     }

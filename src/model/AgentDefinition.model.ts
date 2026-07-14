@@ -48,11 +48,9 @@ export class AgentDefinitionModel extends BaseDb {
     );
   }
 
-  async upsert(view: AgentDefinitionView): Promise<void> {
-    const existing = await this.repository.findOne({
-      where: { agentId: view.id },
-    });
-    const merged: Partial<AgentDefinitionEntity> = {
+  /** All persisted columns except `status` (callers decide status policy). */
+  private toPartial(view: AgentDefinitionView): Partial<AgentDefinitionEntity> {
+    return {
       agentId: view.id,
       name: view.name,
       description: view.description,
@@ -65,7 +63,6 @@ export class AgentDefinitionModel extends BaseDb {
       maxRuntimeMs: view.maxRuntimeMs,
       maxContinueCalls: view.maxContinueCalls,
       outputSchema: view.outputSchema,
-      status: view.status,
       source: view.source,
       pluginName: view.pluginName ?? null,
       pluginComponentPath: view.pluginComponentPath ?? null,
@@ -73,11 +70,53 @@ export class AgentDefinitionModel extends BaseDb {
       health: view.health,
       lastError: view.lastError ?? null,
     };
+  }
+
+  async upsert(view: AgentDefinitionView): Promise<void> {
+    const existing = await this.repository.findOne({
+      where: { agentId: view.id },
+    });
+    const merged: Partial<AgentDefinitionEntity> = {
+      ...this.toPartial(view),
+      status: view.status,
+    };
     if (existing) {
       await this.repository.save({ ...existing, ...merged });
     } else {
       await this.repository.save(merged as AgentDefinitionEntity);
     }
+  }
+
+  /**
+   * Upsert one plugin-owned agent. On update, refresh content + health but
+   * PRESERVE the user's toggled status. On insert, `initiallyEnabled`
+   * (derived from prior component state) decides the status; when omitted,
+   * the view's status is used.
+   */
+  async upsertPluginAgent(
+    view: AgentDefinitionView,
+    initiallyEnabled?: boolean
+  ): Promise<void> {
+    const existing = await this.repository.findOne({
+      where: { agentId: view.id },
+    });
+    if (existing) {
+      await this.repository.save({
+        ...existing,
+        ...this.toPartial(view),
+        status: existing.status,
+      });
+      return;
+    }
+    await this.repository.save({
+      ...this.toPartial(view),
+      status:
+        initiallyEnabled === undefined
+          ? view.status
+          : initiallyEnabled
+            ? "active"
+            : "disabled",
+    } as AgentDefinitionEntity);
   }
 
   async getActiveById(agentId: string): Promise<AgentDefinitionView | null> {

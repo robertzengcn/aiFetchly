@@ -65,12 +65,10 @@ export class AgentDefinitionEntity extends AuditableEntity {
   status: string;
 
   @Order(14)
-  @Index()
   @Column("varchar", { length: 32, nullable: false, default: "built-in" })
   source: string;
 
   @Order(15)
-  @Index()
   @Column("varchar", { length: 100, nullable: true })
   pluginName?: string | null;
 

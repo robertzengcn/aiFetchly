@@ -1,4 +1,5 @@
 import { PluginManagementModule } from "@/modules/PluginManagementModule";
+import { AgentDefinitionModule } from "@/modules/AgentDefinitionModule";
 import { SkillManagementModule } from "@/modules/SkillManagementModule";
 import { MCPToolModule } from "@/modules/MCPToolModule";
 import { MCPToolService } from "@/service/MCPToolService";
@@ -61,7 +62,8 @@ import {
 function toSummary(
   p: InstalledPluginEntity,
   skillCount: number,
-  mcpServerCount: number
+  mcpServerCount: number,
+  agentCount: number
 ): PluginSummary {
   let permissions: string[] = [];
   try {
@@ -83,6 +85,7 @@ function toSummary(
       "healthy") as PluginSummary["health"],
     skillCount,
     mcpServerCount,
+    agentCount,
     permissions,
     lastUpdated: p.updatedAt
       ? new Date(p.updatedAt).toISOString()
@@ -97,12 +100,16 @@ export function registerPluginIpcHandlers(): void {
     const module = new PluginManagementModule();
     const skillModule = new SkillManagementModule();
     const mcpModule = new MCPToolModule();
+    const agentModule = new AgentDefinitionModule();
     const plugins = await module.listInstalledPlugins();
     const summaries: PluginSummary[] = [];
     for (const p of plugins) {
       const skills = await skillModule.findSkillsByPluginName(p.name);
       const mcpServers = await mcpModule.findMcpByPluginName(p.name);
-      summaries.push(toSummary(p, skills.length, mcpServers.length));
+      const agents = await agentModule.findAgentsByPluginName(p.name);
+      summaries.push(
+        toSummary(p, skills.length, mcpServers.length, agents.length)
+      );
     }
     return summaries;
   });
@@ -118,9 +125,16 @@ export function registerPluginIpcHandlers(): void {
       }
       const skillModule = new SkillManagementModule();
       const mcpModule = new MCPToolModule();
+      const agentModule = new AgentDefinitionModule();
       const skills = await skillModule.findSkillsByPluginName(input.name);
       const mcpServers = await mcpModule.findMcpByPluginName(input.name);
-      const summary = toSummary(plugin, skills.length, mcpServers.length);
+      const agents = await agentModule.findAgentsByPluginName(input.name);
+      const summary = toSummary(
+        plugin,
+        skills.length,
+        mcpServers.length,
+        agents.length
+      );
       let manifest = {};
       try {
         manifest = JSON.parse(plugin.manifestJson || "{}");
@@ -141,6 +155,17 @@ export function registerPluginIpcHandlers(): void {
           id: s.id,
           serverName: s.serverName,
           enabled: s.enabled,
+        })),
+        agents: agents.map((a) => ({
+          id: a.id,
+          name: a.name,
+          description: a.description,
+          enabled: a.status === "active",
+          mode: a.mode,
+          toolCount: a.allowedTools.length,
+          componentPath: a.pluginComponentPath ?? "",
+          health: a.health,
+          ...(a.lastError ? { error: a.lastError } : {}),
         })),
         manifest,
       };

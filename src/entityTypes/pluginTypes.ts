@@ -178,6 +178,7 @@ export interface PluginSummary {
   readonly format?: PluginFormat;
   readonly skillCount: number;
   readonly mcpServerCount: number;
+  readonly agentCount: number;
   readonly permissions: readonly string[];
   readonly lastUpdated: string;
 }
@@ -199,11 +200,24 @@ export interface PluginMcpServerComponent {
   readonly error?: string;
 }
 
+export interface PluginAgentComponent {
+  readonly id: string;
+  readonly name: string;
+  readonly description: string;
+  readonly enabled: boolean;
+  readonly mode: string;
+  readonly toolCount: number;
+  readonly componentPath: string;
+  readonly health: string;
+  readonly error?: string;
+}
+
 export interface PluginDetail extends PluginSummary {
   readonly description: string;
   readonly author?: string;
   readonly skills: readonly PluginSkillComponent[];
   readonly mcpServers: readonly PluginMcpServerComponent[];
+  readonly agents: readonly PluginAgentComponent[];
   readonly errors: readonly PluginError[];
   readonly manifest: Record<string, unknown>;
   readonly sourceKind?: PluginSourceKind;
@@ -272,6 +286,7 @@ export interface PluginUninstallResult {
   readonly removedPlugin: boolean;
   readonly removedSkillNames: readonly string[];
   readonly removedMcpServerNames: readonly string[];
+  readonly removedAgentIds: readonly string[];
   readonly errors: readonly PluginError[];
 }
 

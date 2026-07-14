@@ -5,14 +5,20 @@ import { SkillManagementModule } from "@/modules/SkillManagementModule";
 import { MCPToolModule } from "@/modules/MCPToolModule";
 import { MCPToolEntity } from "@/entity/MCPTool.entity";
 import { PluginArchiveService } from "@/service/PluginArchiveService";
-import { PluginManifestService, resolvePluginRoot } from "@/service/PluginManifestService";
+import {
+  PluginManifestService,
+  resolvePluginRoot,
+} from "@/service/PluginManifestService";
 import {
   parseServersJson,
   normalizeMcpDeclaration,
   normalizeInlineMcpMap,
   type NormalizedMcpServer,
 } from "@/service/PluginMcpDeclaration";
-import { getPluginInstallRoot, getPluginOwnedSkillRoot } from "@/service/pluginPaths";
+import {
+  getPluginInstallRoot,
+  getPluginOwnedSkillRoot,
+} from "@/service/pluginPaths";
 import {
   resolvePluginRelativePath,
   type PluginError,
@@ -24,6 +30,8 @@ import { MCPToolService } from "@/service/MCPToolService";
 import { SkillImportService } from "@/service/SkillImportService";
 import { ClaudeSkillFormatAdapter } from "@/service/pluginCompat/ClaudeSkillFormatAdapter";
 import { ClaudePluginAdapter } from "@/service/pluginCompat/ClaudePluginAdapter";
+import { AgentDefinitionModule } from "@/modules/AgentDefinitionModule";
+import { PluginAgentImportService } from "@/service/PluginAgentImportService";
 import { SkillRegistry } from "@/config/skillsRegistry";
 import type {
   SkillDefinition,
@@ -241,7 +249,11 @@ function readPluginClaudeSkillsFromPath(
       mdFiles.push({ abs: absPath, rel: skillPath });
     }
   } catch (e: unknown) {
-    if (e instanceof Error && "code" in e && (e as { code: string }).code === "ENOENT") {
+    if (
+      e instanceof Error &&
+      "code" in e &&
+      (e as { code: string }).code === "ENOENT"
+    ) {
       return { ok: true, skills: [] };
     }
     return {
@@ -497,8 +509,21 @@ export class PluginImportService {
         ],
       };
     }
-    // If overwrite, uninstall the old one first (rows + files).
+    // If overwrite, uninstall the old one first (rows + files). Capture the
+    // user's previously-disabled agent IDs first so reinstall honors them (D5).
+    let preservedDisabledAgentIds = new Set<string>();
     if (existing && overwrite) {
+      try {
+        const prevAgents =
+          await new AgentDefinitionModule().findAgentsByPluginName(
+            manifest.name
+          );
+        preservedDisabledAgentIds = new Set(
+          prevAgents.filter((a) => a.status === "disabled").map((a) => a.id)
+        );
+      } catch {
+        // best-effort
+      }
       await pluginModule.uninstallPlugin(manifest.name);
       removePath(getPluginInstallRoot(manifest.name));
     }
@@ -603,6 +628,17 @@ export class PluginImportService {
     if (mcpErrors.length > 0) {
       return { success: false, errors: toErrors(mcpErrors) };
     }
+
+    // 6c. Validate plugin agents (design §12.1). Errors fail import before
+    // any files are copied; warnings do not.
+    const agentParse = PluginAgentImportService.parsePluginAgents({
+      pluginRoot: localRoot,
+      manifest,
+    });
+    if (!agentParse.ok) {
+      return { success: false, errors: toErrors([...agentParse.errors]) };
+    }
+    const pluginAgents = agentParse.agents;
 
     // 6b. Apply name scoping for plugin-owned MCP servers. Two plugins with
     // a server named "linkedin" become "plugin-a__linkedin" and
@@ -761,10 +797,7 @@ export class PluginImportService {
         try {
           skillMdContent = fs.readFileSync(skillMdPath, "utf-8");
         } catch (e) {
-          console.warn(
-            `[PluginImport]   SKILL.md not readable:`,
-            e
-          );
+          console.warn(`[PluginImport]   SKILL.md not readable:`, e);
         }
         const wrapperCode = `setResult({
   success: true,
@@ -856,11 +889,36 @@ export class PluginImportService {
         }
         await new MCPToolService().discoverTools(id);
       } catch (e) {
-        console.warn(
-          `Failed to discover MCP tools for server ${id}:`,
-          e
-        );
+        console.warn(`Failed to discover MCP tools for server ${id}:`, e);
       }
+    }
+
+    // 10c. Persist plugin-owned agent definitions (design §12.2). Roll back
+    // rows + files on failure so no partial agent rows survive.
+    const agentModule = new AgentDefinitionModule();
+    try {
+      await agentModule.upsertPluginAgents(
+        manifest.name,
+        pluginAgents,
+        preservedDisabledAgentIds
+      );
+    } catch (e: unknown) {
+      await rollbackRowsAndFiles(manifest.name, installPath);
+      return {
+        success: false,
+        errors: [
+          {
+            code: "agent-manifest-invalid",
+            componentType: "agent",
+            pluginName: manifest.name,
+            message:
+              e instanceof Error
+                ? `Failed to persist plugin agents: ${e.message}`
+                : "Failed to persist plugin agents",
+            recoverable: false,
+          },
+        ],
+      };
     }
 
     // 11. Cache invalidation (best-effort).
@@ -891,6 +949,17 @@ export class PluginImportService {
       }
     }
 
+    // 11c. Surface agent parser warnings (forbidden/unknown fields) as
+    // non-fatal load errors so they show in diagnostics. Plugin health stays
+    // healthy — warnings never block the runtime (design §12.5).
+    if (agentParse.warnings.length > 0) {
+      try {
+        await pluginModule.setLoadErrors(manifest.name, agentParse.warnings);
+      } catch {
+        // best-effort
+      }
+    }
+
     // 12. Return summary
     const summary: PluginSummary = {
       id: pluginId,
@@ -902,6 +971,7 @@ export class PluginImportService {
       health: hasPythonSkill ? "needs_configuration" : "healthy",
       skillCount: skills.length,
       mcpServerCount: mcpServers.length,
+      agentCount: pluginAgents.length,
       permissions: manifest.permissions ?? [],
       lastUpdated: new Date().toISOString(),
     };
@@ -923,9 +993,10 @@ function buildDocSkillExecuteHandler(
     let guidance = "";
     try {
       const content = fs.readFileSync(skillMdPath, "utf-8");
-      guidance = content.length > 8000
-        ? `${content.slice(0, 8000)}\n...[skill guidance truncated]`
-        : content;
+      guidance =
+        content.length > 8000
+          ? `${content.slice(0, 8000)}\n...[skill guidance truncated]`
+          : content;
     } catch {
       // SKILL.md not readable; return empty guidance
     }
