@@ -21,20 +21,30 @@ export const emailReceiveSyncInputSchema = lazySchema(() =>
 
 /** Receive connection test. */
 export const emailReceiveConnectionTestInputSchema = lazySchema(() =>
-  z.strictObject({
-    emailServiceId: z.number().int().positive("Email service id is required"),
-    settings: z
-      .strictObject({
-        protocol: z.enum(["imap", "pop3"]),
-        host: z.string().min(1),
-        port: z.number().int().min(1).max(65535),
-        ssl: z.boolean(),
-        username: z.string().min(1),
-        password: z.string().min(1).optional(),
-        folder: z.string().min(1),
-      })
-      .optional(),
-  }),
+  z
+    .strictObject({
+      emailServiceId: z.number().int().nonnegative("Email service id is required"),
+      settings: z
+        .strictObject({
+          protocol: z.enum(["imap", "pop3"]),
+          host: z.string().min(1),
+          port: z.number().int().min(1).max(65535),
+          ssl: z.boolean(),
+          username: z.string().min(1),
+          password: z.string().min(1).optional(),
+          folder: z.string().min(1),
+        })
+        .optional(),
+    })
+    .superRefine((input, ctx) => {
+      if (input.emailServiceId === 0 && !input.settings) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["emailServiceId"],
+          message: "Email service id is required",
+        });
+      }
+    }),
 );
 
 /** Received message list with filters + pagination. */

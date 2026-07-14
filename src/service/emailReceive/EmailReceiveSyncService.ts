@@ -21,6 +21,8 @@ export interface EmailReceiveSyncResult {
 
 /** Hard cap on messages per sync regardless of caller limit. */
 const SYNC_LIMIT_CAP = 50;
+const IMAP_IMPLICIT_TLS_PORT = 993;
+const POP3_IMPLICIT_TLS_PORT = 995;
 
 /**
  * Orchestrates a bounded inbound receive sync:
@@ -88,8 +90,9 @@ export class EmailReceiveSyncService {
       if (!config) {
         return { success: false, error: "Receive is not configured for this service." };
       }
-      const client = EmailReceiveClientFactory.createClient(config.protocol);
-      await client.testConnection(config);
+      const normalizedConfig = normalizeReceiveConnectionConfig(config);
+      const client = EmailReceiveClientFactory.createClient(normalizedConfig.protocol);
+      await client.testConnection(normalizedConfig);
       return { success: true, error: null };
     } catch (error) {
       return { success: false, error: sanitizeError(error) };
@@ -116,10 +119,11 @@ export class EmailReceiveSyncService {
       throw new Error("Receive is not configured or enabled for this service.");
     }
 
-    const client = EmailReceiveClientFactory.createClient(config.protocol);
+    const normalizedConfig = normalizeReceiveConnectionConfig(config);
+    const client = EmailReceiveClientFactory.createClient(normalizedConfig.protocol);
     let parsed: ParsedInboundEmail[];
     try {
-      parsed = await client.fetchMessages(config, fetchOptions);
+      parsed = await client.fetchMessages(normalizedConfig, fetchOptions);
     } catch (error) {
       const message = sanitizeError(error);
       await this.serviceModule.updateReceiveSyncState(emailServiceId, new Date(), message);
@@ -198,6 +202,27 @@ export class EmailReceiveSyncService {
       console.error("Failed to write receive audit log:", e);
     }
   }
+}
+
+/**
+ * Keep receive security compatible with common email-client behavior.
+ * Standard implicit TLS ports always require TLS, regardless of a stale or
+ * incorrect stored toggle value.
+ */
+export function normalizeReceiveConnectionConfig(
+  config: EmailReceiveConnectionConfig
+): EmailReceiveConnectionConfig {
+  const implicitTlsPort =
+    config.protocol === "pop3" ? POP3_IMPLICIT_TLS_PORT : IMAP_IMPLICIT_TLS_PORT;
+
+  if (config.port !== implicitTlsPort || config.ssl) {
+    return config;
+  }
+
+  return {
+    ...config,
+    ssl: true,
+  };
 }
 
 /** Reduce an unknown error to a short, safe string (no stack traces leaked). */
