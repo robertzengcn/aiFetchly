@@ -1069,6 +1069,7 @@ export default {
   from: "From",
   received_at: "Received At",
   unread: "Unread",
+  unread_unavailable_pop3: "Unread status is not available for POP3 mailboxes.",
   classification: "Classification",
   message_detail: "Message Detail",
   reply_to: "Reply-To",

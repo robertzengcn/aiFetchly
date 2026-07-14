@@ -1026,6 +1026,7 @@ export default {
   from: "发件人",
   received_at: "接收时间",
   unread: "未读",
+  unread_unavailable_pop3: "POP3 邮箱不支持未读状态。",
   classification: "分类",
   message_detail: "邮件详情",
   reply_to: "回复至",

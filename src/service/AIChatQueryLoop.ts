@@ -475,26 +475,36 @@ export class AIChatQueryLoop {
 
         finalAccumulator = accumulator;
 
-        // Surface token usage from this round so the UI can render a live
-        // context-usage indicator. The server emits a usage object on the
-        // final chunk when stream_options.include_usage is true.
+        // Surface token usage from THIS round so (a) the UI can render a
+        // live context-usage indicator and (b) the persisting event sink can
+        // attribute tokens to the tool_call rows emitted later this round.
+        // The server emits a usage object on the final chunk when
+        // stream_options.include_usage is true — but many providers
+        // (ZhipuAI, Google, Anthropic, ...) never emit one. When the server
+        // reports nothing we estimate locally so usage_update still fires
+        // BEFORE tool_call; otherwise latestUsage is undefined at tool_call
+        // time and every tool_call row is persisted with tokensUsed=null.
+        // The estimate uses the messages actually sent this round (which
+        // already include prior tool calls/results) plus this round's
+        // completion, so it grows with context just like real usage.
         const roundUsage = accumulator.state.usage;
-        if (roundUsage) {
-          lastReportedUsage = {
-            totalTokens: roundUsage.total_tokens,
-            promptTokens: roundUsage.prompt_tokens,
-            completionTokens: roundUsage.completion_tokens,
-          };
-          eventSink.emit({
-            type: "usage_update",
-            conversationId: input.conversationId,
-            messageId: input.assistantMessageId,
-            model: accumulator.state.model,
-            promptTokens: roundUsage.prompt_tokens,
-            completionTokens: roundUsage.completion_tokens,
-            totalTokens: roundUsage.total_tokens,
-          });
-        }
+        const resolvedUsage = roundUsage
+          ? {
+              totalTokens: roundUsage.total_tokens,
+              promptTokens: roundUsage.prompt_tokens,
+              completionTokens: roundUsage.completion_tokens,
+            }
+          : estimateTokenUsage(messages, accumulator.state.fullContent);
+        lastReportedUsage = resolvedUsage;
+        eventSink.emit({
+          type: "usage_update",
+          conversationId: input.conversationId,
+          messageId: input.assistantMessageId,
+          model: accumulator.state.model,
+          promptTokens: resolvedUsage.promptTokens,
+          completionTokens: resolvedUsage.completionTokens,
+          totalTokens: resolvedUsage.totalTokens,
+        });
 
         const parsedCalls = accumulator
           .tryParseToolCallArguments()
@@ -940,9 +950,11 @@ export class AIChatQueryLoop {
             name: call.name,
             arguments: call.arguments,
           };
-          const preparedCall = await this.prepareToolCall(input, executableCall);
-          const effectiveArguments =
-            preparedCall.effectiveCall.arguments ?? {};
+          const preparedCall = await this.prepareToolCall(
+            input,
+            executableCall
+          );
+          const effectiveArguments = preparedCall.effectiveCall.arguments ?? {};
           emitToolCall(effectiveArguments);
 
           const toolResult =
@@ -1071,12 +1083,11 @@ export class AIChatQueryLoop {
         }
       }
 
-      // Fallback: many OpenAI-compatible servers ignore
-      // stream_options.include_usage and never report token counts in the
-      // stream. Without this fallback, tokensUsed stays null in the database
-      // and the context-usage badge has no denominator. Estimate locally from
-      // the prompt messages + completion content using the standard
-      // chars/4 heuristic.
+      // Edge-case safety net: per-round emission above keeps lastReportedUsage
+      // populated for every normal turn (each round emits a usage_update, real
+      // or estimated). This only fires when no round ran at all (e.g. a resume
+      // landing at startRound >= CHAT_V2_MAX_TOOL_ROUNDS), guaranteeing the
+      // completed result still carries a token estimate for the context badge.
       if (!lastReportedUsage) {
         const estimated = estimateTokenUsage(input.messages, fullContent);
         lastReportedUsage = estimated;
@@ -1796,10 +1807,7 @@ export class AIChatQueryLoop {
           timestamp: new Date().toISOString(),
           tool: descriptor,
           input: toolInput,
-          permissionState: this.snapshotPermissionState(
-            input,
-            descriptor.name
-          ),
+          permissionState: this.snapshotPermissionState(input, descriptor.name),
         },
         matchQuery: descriptor.name,
         abortSignal: input.abortController.signal,

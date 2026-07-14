@@ -691,10 +691,10 @@ describe("AI Chat V2 — stream lifecycle", () => {
     const resumeResult = await mockIpcMain.callHandler(
       AI_CHAT_V2_RESUME_TOOL_AFTER_PERMISSION,
       {},
-      JSON.stringify({
+      {
         toolId: "call_1",
         conversationId: "v2-test-conv",
-      })
+      }
     );
     expect(resumeResult).toMatchObject({
       status: true,

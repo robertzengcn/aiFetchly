@@ -28,13 +28,19 @@ vi.mock("@/modules/user", () => ({
 const mockRefreshOnce = vi.hoisted(() => vi.fn<[], Promise<unknown>>());
 
 vi.mock("@/modules/tokenRefresh", () => {
+  class RefreshTokenInvalidError extends Error {
+    constructor(message: string) {
+      super(message);
+      this.name = "RefreshTokenInvalidError";
+    }
+  }
   // Constructor-callable stub: HttpClient does `new TokenRefreshService()`
   // in its constructor. We attach a static `refreshOnce` method that the
   // source code calls for refreshes.
   const Stub = vi.fn().mockImplementation(() => ({}));
   (Stub as unknown as { refreshOnce: typeof mockRefreshOnce }).refreshOnce =
     mockRefreshOnce;
-  return { TokenRefreshService: Stub };
+  return { RefreshTokenInvalidError, TokenRefreshService: Stub };
 });
 
 // invalidate() is called after a successful refresh; make it a no-op.
@@ -48,6 +54,7 @@ vi.mock("@/modules/fieldCipher", () => ({
 process.env.VITE_LOGIN_URL = "http://localhost:3000";
 
 import { HttpClient } from "@/modules/lib/httpclient";
+import { RefreshTokenInvalidError } from "@/modules/tokenRefresh";
 
 function jsonResponse(
   payload: unknown,
@@ -160,6 +167,22 @@ describe("HttpClient token-refresh behavior", () => {
     // itself is invalid. This is the case where signing out IS correct.
     mockRefreshOnce.mockRejectedValue(
       new Error("invalid or expired refresh token")
+    );
+
+    await expect(
+      client._fetchJSON("/api/test", { method: "GET" })
+    ).rejects.toThrow(/Authentication failed: Token expired/);
+
+    expect(mockRemoveToken).toHaveBeenCalledTimes(1);
+  });
+
+  it("signs out when refresh endpoint rejects the refresh token with typed error", async () => {
+    fetchSpy.mockResolvedValueOnce(
+      jsonResponse(null, { status: 403, statusText: "Forbidden" })
+    );
+
+    mockRefreshOnce.mockRejectedValue(
+      new RefreshTokenInvalidError("Refresh token rejected (HTTP 401)")
     );
 
     await expect(

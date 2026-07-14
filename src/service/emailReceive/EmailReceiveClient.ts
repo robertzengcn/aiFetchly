@@ -25,6 +25,7 @@ export interface ParsedInboundEmail {
   readonly snippet: string | null;
   readonly receivedAt: Date;
   readonly isUnread: boolean;
+  readonly isAnswered: boolean;
   readonly autoSubmitted: string | null;
   readonly precedence: string | null;
 }

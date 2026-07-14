@@ -192,6 +192,7 @@ export class EmailMarketingController {
         name: item.name,
         from: item.from,
         host: item.host,
+        receiveProtocol: item.receiveProtocol,
         create_time: item.createdAt?.toISOString() || "",
       };
     });

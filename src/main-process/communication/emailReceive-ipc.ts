@@ -361,7 +361,7 @@ function toMessageListDto(
     subject: e.subject,
     snippet: e.snippet,
     receivedAt: iso(e.receivedAt),
-    isUnread: e.isUnread === 1,
+    isUnread: normalizeStoredBoolean(e.isUnread),
     classification: e.classification,
     classificationConfidence: e.classificationConfidence,
     replyStatus: e.replyStatus,
@@ -382,6 +382,10 @@ function toMessageDetailDto(
     bodyText: e.bodyText,
     bodyHtmlSanitized: e.bodyHtmlSanitized,
   };
+}
+
+function normalizeStoredBoolean(value: unknown): boolean {
+  return value === 1 || value === true || value === "1";
 }
 
 function toIdentityProfileDto(

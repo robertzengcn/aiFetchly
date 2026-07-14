@@ -8,11 +8,13 @@
  *
  * Hard rules (per architecture):
  *  - no SQLite / TypeORM / vector-store imports
- *  - no remote AI calls
+ *  - no remote AI calls; model artifact downloads are limited to configured
+ *    Transformers.js hosts and cached on disk
  *  - never receives document or database paths — only the text to embed
  *  - validates every inbound message and every produced vector before returning
  */
-import { pipeline } from "@xenova/transformers";
+import * as fs from "node:fs";
+import { env as transformersEnv, pipeline } from "@xenova/transformers";
 import { LOCAL_XENOVA_ALL_MINILM_DIMENSIONS } from "@/service/embedding/LocalEmbeddingModels";
 import {
   type LocalEmbeddingBatchMessage,
@@ -26,6 +28,10 @@ import {
   validateBatchTexts,
   validateEmbeddingMatrix,
 } from "@/childprocess/embedding/LocalEmbeddingValidation";
+import {
+  type LocalTransformersConfig,
+  resolveLocalTransformersConfig,
+} from "@/childprocess/embedding/LocalTransformersEnvironment";
 
 interface ParentPortMessageEvent {
   data: string;
@@ -56,6 +62,9 @@ type CachedExtractor = {
 
 let cachedExtractor: CachedExtractor | null = null;
 const activeRequestIds = new Set<string>();
+const transformersConfig = resolveLocalTransformersConfig();
+let configuredRemoteHost: string | null = null;
+let configuredBaseEnvironment = false;
 
 function postMessageSafe(message: LocalEmbeddingOutboundMessage): void {
   if (!parentPort) {
@@ -89,12 +98,68 @@ async function getOrCreateExtractor(
   if (cachedExtractor && cachedExtractor.underlyingModel === underlyingModel) {
     return cachedExtractor;
   }
-  const extractor = await pipeline("feature-extraction", underlyingModel);
+  const extractor = await createExtractorWithFallback(
+    underlyingModel,
+    transformersConfig
+  );
   cachedExtractor = {
     underlyingModel,
     run: extractor as CachedExtractor["run"],
   };
   return cachedExtractor;
+}
+
+function configureTransformersEnvironment(
+  config: LocalTransformersConfig,
+  remoteHost: string | null
+): void {
+  if (!configuredBaseEnvironment) {
+    fs.mkdirSync(config.cacheDir, { recursive: true });
+    transformersEnv.cacheDir = config.cacheDir;
+    transformersEnv.allowRemoteModels = config.allowRemoteModels;
+    if (config.localModelPath) {
+      transformersEnv.localModelPath = config.localModelPath;
+    }
+    configuredBaseEnvironment = true;
+  }
+
+  if (remoteHost && configuredRemoteHost !== remoteHost) {
+    transformersEnv.remoteHost = remoteHost;
+    configuredRemoteHost = remoteHost;
+  }
+}
+
+async function createExtractorWithFallback(
+  underlyingModel: string,
+  config: LocalTransformersConfig
+): Promise<unknown> {
+  const remoteHosts = config.allowRemoteModels ? config.remoteHosts : [null];
+  let lastError: unknown = null;
+
+  for (const remoteHost of remoteHosts) {
+    configureTransformersEnvironment(config, remoteHost);
+    try {
+      return await pipeline("feature-extraction", underlyingModel);
+    } catch (error) {
+      lastError = error;
+      const message = error instanceof Error ? error.message : String(error);
+      if (remoteHost && remoteHost !== remoteHosts[remoteHosts.length - 1]) {
+        console.warn(
+          `[LocalEmbeddingWorker] Failed to load ${underlyingModel} from ${remoteHost}: ${message}. Trying next configured host.`
+        );
+      }
+    }
+  }
+
+  const detail =
+    lastError instanceof Error ? lastError.message : String(lastError);
+  const remoteDetail = config.allowRemoteModels
+    ? `Remote hosts tried: ${remoteHosts.filter(Boolean).join(", ")}.`
+    : "Remote model downloads are disabled by offline configuration.";
+  throw new Error(
+    `Unable to load local embedding model ${underlyingModel}. ${remoteDetail} ` +
+      `Cache directory: ${config.cacheDir}. Last error: ${detail}`
+  );
 }
 
 async function handleInitialize(

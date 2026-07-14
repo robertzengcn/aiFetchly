@@ -1055,6 +1055,7 @@ export default {
   from: "De",
   received_at: "Reçu le",
   unread: "Non lu",
+  unread_unavailable_pop3: "Le statut non lu n'est pas disponible pour les boîtes POP3.",
   classification: "Classification",
   message_detail: "Détail du Message",
   reply_to: "Répondre à",

@@ -1042,6 +1042,7 @@ export default {
   from: "差出人",
   received_at: "受信日時",
   unread: "未読",
+  unread_unavailable_pop3: "POP3 メールボックスでは未読ステータスを利用できません。",
   classification: "分類",
   message_detail: "メッセージ詳細",
   reply_to: "返信先",

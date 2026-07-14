@@ -1063,6 +1063,7 @@ export default {
   from: "Von",
   received_at: "Empfangen",
   unread: "Ungelesen",
+  unread_unavailable_pop3: "Der Ungelesen-Status ist für POP3-Postfächer nicht verfügbar.",
   classification: "Klassifizierung",
   message_detail: "Nachrichtendetail",
   reply_to: "Antwort an",

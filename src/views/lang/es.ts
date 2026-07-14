@@ -1068,6 +1068,7 @@ export default {
   from: "De",
   received_at: "Recibido",
   unread: "No leído",
+  unread_unavailable_pop3: "El estado de no leído no está disponible para buzones POP3.",
   classification: "Clasificación",
   message_detail: "Detalle del Mensaje",
   reply_to: "Responder A",
