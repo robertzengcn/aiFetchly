@@ -125,6 +125,9 @@ export const constantRoutes: RouteRecordRaw[] = [
           visible: true,
           title: "route.campaign_list",
           icon: "mdi-format-list-bulleted",
+          aiNavigable: true,
+          aiAliases: ["campaign list", "campaigns", "marketing campaign"],
+          aiDescription: "View and manage marketing campaigns",
         },
       },
     ],
@@ -608,6 +611,17 @@ export const constantRoutes: RouteRecordRaw[] = [
           visible: true,
           title: "route.email_service",
           icon: "mdi-email-sync",
+          aiNavigable: true,
+          aiAliases: [
+            "email service",
+            "email edit",
+            "email settings",
+            "mailbox settings",
+            "smtp settings",
+            "sending mailbox",
+          ],
+          aiDescription:
+            "Manage email sending service accounts, sending mailbox settings, and SMTP configuration",
         },
         component: () =>
           import(
@@ -873,6 +887,7 @@ export const constantRoutes: RouteRecordRaw[] = [
       title: "route.login",
       icon: "mdi-shield-account",
       visible: false,
+      aiNavigable: false,
     },
     component: () => import("@/views/pages/login/login.vue"),
   },
