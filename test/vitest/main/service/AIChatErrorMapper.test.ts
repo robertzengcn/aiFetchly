@@ -18,6 +18,14 @@ describe("AIChatErrorMapper - userSafeError", () => {
     expect(userSafeError(new Error("401 Unauthorized"))).toBe(
       "Please sign in again."
     );
+    expect(
+      userSafeError(
+        new Error("Authentication failed: Token expired. Please login again.")
+      )
+    ).toBe("Please sign in again.");
+    expect(
+      userSafeError(new Error("Refresh token rejected (HTTP 401)"))
+    ).toBe("Please sign in again.");
   });
 
   it("returns a model-missing message on 404", () => {

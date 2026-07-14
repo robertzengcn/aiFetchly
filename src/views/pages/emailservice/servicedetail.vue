@@ -293,6 +293,29 @@ const receiveFolder = ref<string>("INBOX");
 const showReceivePassword = ref<boolean>(false);
 const testingReceive = ref<boolean>(false);
 
+function parseReceivePort(value: string): number | null {
+  const port = Number(value.trim());
+  return Number.isInteger(port) ? port : null;
+}
+
+function syncImplicitTlsPortToggle(protocol: "imap" | "pop3", portValue: string): void {
+  const port = parseReceivePort(portValue);
+  if (protocol === "imap" && port === 993) {
+    imapSsl.value = 1;
+  }
+  if (protocol === "pop3" && port === 995) {
+    pop3Ssl.value = 1;
+  }
+}
+
+watch(imapPort, (newValue) => {
+  syncImplicitTlsPortToggle("imap", newValue);
+});
+
+watch(pop3Port, (newValue) => {
+  syncImplicitTlsPortToggle("pop3", newValue);
+});
+
 const loading = ref<boolean>(false);
 const show = ref<boolean>(false);
 const alert = ref<boolean>(false);

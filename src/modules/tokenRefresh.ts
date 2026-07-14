@@ -20,6 +20,7 @@ export interface TokenRefreshData {
   accessToken: string;
   refreshToken: string;
   expiresIn: number;
+  refreshExpiresIn?: number;
 }
 
 /**
@@ -529,6 +530,19 @@ export class TokenRefreshService {
         response.data.refreshToken.trim().length > 0
       ) {
         this._tokenService.setValue(REFRESHTOKEN, response.data.refreshToken);
+      }
+
+      if (
+        typeof response.data.refreshExpiresIn === "number" &&
+        !Number.isNaN(response.data.refreshExpiresIn) &&
+        response.data.refreshExpiresIn > 0
+      ) {
+        const newRefreshExpiry =
+          Date.now() + response.data.refreshExpiresIn * 1000;
+        this._tokenService.setValue(
+          REFRESHTOKENEXPIRY,
+          newRefreshExpiry.toString()
+        );
       }
     }
 

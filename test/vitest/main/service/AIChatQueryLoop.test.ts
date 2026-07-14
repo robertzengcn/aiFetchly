@@ -705,6 +705,67 @@ describe("AIChatQueryLoop", () => {
       expect(events).toContain("tool_result");
     });
 
+    it("emits usage_update BEFORE tool_call when the server reports no in-stream usage", async () => {
+      // Regression: many providers (ZhipuAI/Google/Anthropic) never emit a
+      // usage chunk, so usage_update only fired once at turn end — AFTER the
+      // tool_call row was already persisted with tokensUsed=null. The
+      // persisting sink attributes tokens to tool_call rows from the most
+      // recent usage_update, so usage_update MUST precede tool_call.
+      const toolCallChunk = makeToolCallChunk("call-1", "get_time", "{}");
+      const finalChunk = makeChunk("It is noon.", "stop");
+      let callCount = 0;
+      const fakeStream = vi.fn(
+        async (
+          _req: unknown,
+          onChunk: (c: OpenAIChatCompletionChunk) => void
+        ) => {
+          if (callCount === 0) {
+            onChunk(toolCallChunk);
+            callCount++;
+          } else {
+            onChunk(finalChunk);
+          }
+        }
+      );
+      const fakeExecute = vi.fn().mockResolvedValue({
+        tool_call_id: "call-1",
+        tool_name: "get_time",
+        success: true,
+        result: { time: "12:00" },
+        execution_time_ms: 5,
+      });
+      const events: string[] = [];
+      const loop = new AIChatQueryLoop({
+        streamChatCompletion: fakeStream,
+        executeTool: fakeExecute,
+        getSkillDefinition: vi.fn().mockReturnValue(undefined),
+      });
+      const input: AIChatQueryLoopInput = {
+        conversationId: "v2-test",
+        assistantMessageId: "a-1",
+        messages: [{ role: "user", content: "what time is it" }],
+        request: { message: "what time is it" },
+        openAITools: [],
+        abortController: new AbortController(),
+        eventSink: {
+          emit: (e) => {
+            events.push(e.type);
+          },
+        },
+        startRound: 0,
+        isActiveTurn: () => true,
+      };
+      await loop.run(input);
+
+      const firstToolCallIndex = events.indexOf("tool_call");
+      const firstUsageIndex = events.indexOf("usage_update");
+      // A usage_update must be emitted at all...
+      expect(firstUsageIndex).toBeGreaterThanOrEqual(0);
+      // ...and it must come BEFORE the first tool_call so the persisting
+      // sink has latestUsage populated when it saves the tool_call row.
+      expect(firstUsageIndex).toBeLessThan(firstToolCallIndex);
+    });
+
     it("returns a clear fallback message when a failed tool is followed by an empty model response", async () => {
       const toolCallChunk = makeToolCallChunk(
         "call-1",

@@ -55,7 +55,7 @@
         size="small"
         variant="text"
         color="error"
-        :disabled="isProcessing"
+        :disabled="isDisabled"
         @click="handleDeny"
       >
         {{ t('skills.approval_deny') }}
@@ -64,7 +64,7 @@
         size="small"
         variant="outlined"
         color="primary"
-        :disabled="isProcessing"
+        :disabled="isDisabled"
         @click="handleAllowOnce"
       >
         {{ t('skills.approval_allow_once') }}
@@ -73,7 +73,8 @@
         size="small"
         variant="flat"
         color="primary"
-        :loading="isProcessing"
+        :loading="isLoading"
+        :disabled="isDisabled"
         @click="handleAlwaysAllow"
       >
         {{ isShellCategory ? t('skills.approval_always_allow_session') : t('skills.approval_always_allow') }}
@@ -101,6 +102,8 @@ interface Props {
   shellPreview?: ShellPreview;
   workspaceRoot?: string;
   relativePath?: string;
+  disabled?: boolean;
+  loading?: boolean;
 }
 
 const props = defineProps<Props>();
@@ -111,6 +114,8 @@ const emit = defineEmits<{
 }>();
 
 const isProcessing = ref(false);
+const isLoading = computed(() => isProcessing.value || props.loading === true);
+const isDisabled = computed(() => isLoading.value || props.disabled === true);
 
 const isShellCategory = computed(() => props.permissionCategory === "shell");
 
@@ -137,6 +142,7 @@ function formatTimeout(ms: number): string {
 }
 
 async function handleAllowOnce(): Promise<void> {
+  if (isDisabled.value) return;
   isProcessing.value = true;
   try {
     await window.api.invoke("skill:grant-permission", {
@@ -150,6 +156,7 @@ async function handleAllowOnce(): Promise<void> {
 }
 
 async function handleAlwaysAllow(): Promise<void> {
+  if (isDisabled.value) return;
   isProcessing.value = true;
   try {
     // Shell "Always Allow" is session-only for safety; other categories persist.
@@ -165,6 +172,7 @@ async function handleAlwaysAllow(): Promise<void> {
 }
 
 async function handleDeny(): Promise<void> {
+  if (isDisabled.value) return;
   isProcessing.value = true;
   try {
     await window.api.invoke("skill:deny-permission", {

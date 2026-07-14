@@ -475,6 +475,7 @@ describe("TokenRefreshService.performAutoRefreshCheck", () => {
             accessToken: "new-access-token",
             refreshToken: "new-refresh-token",
             expiresIn: 3600,
+            refreshExpiresIn: 2592000,
           },
         },
         { ok: true, status: 200 }
@@ -486,6 +487,10 @@ describe("TokenRefreshService.performAutoRefreshCheck", () => {
     expect(mockSignout).not.toHaveBeenCalled();
     // New access token persisted.
     expect(mockSetValue).toHaveBeenCalledWith(TOKENNAME, "new-access-token");
+    expect(mockSetValue).toHaveBeenCalledWith(
+      REFRESHTOKENEXPIRY,
+      expect.any(String)
+    );
   });
 });
 

@@ -18,12 +18,14 @@
  *   - local file reads/writes & file dialogs      (SHOW_OPEN_DIALOG, GET_FILE_STATS, ...)
  *   - plugin import / install / uninstall         (PLUGIN_*, EXTRAMODULECHANNE_*)
  *   - system dependency install                   (SYSTEM_DEPENDENCY_INSTALL)
- *   - credential / cookie / login flows           (GET_LOGIN_URL, *_LOGIN_UPLOADCOOKIES, ...)
+ *   - credential / cookie flows                   (*_LOGIN_UPLOADCOOKIES, ...)
  *   - task execution that launches automation     (task:run, START_CONTACT_EXTRACTION, ...)
  *   - AI file tools / shell-like operations       (AI_FILE_OPEN, AI_FILE_OPERATION)
  */
 import {
   GET_APP_INFO,
+  GET_LOGIN_URL,
+  NATIVATECOMMAND,
   QUERY_USER_INFO,
   SYSTEM_MESSAGE,
   LOGIN_STATUS,
@@ -32,12 +34,14 @@ import {
 /**
  * Invoke (request/response) channels the dev browser bridge may dispatch.
  *
- * MVP scope: two PRD-named read-only channels. Adding a channel is a one-line
- * change here plus a handler in DevBrowserDispatcher — keep it deliberate.
+ * MVP scope: read-only app/user channels plus the reviewed desktop-login URL
+ * bootstrap. GET_LOGIN_URL starts the same localhost PKCE handoff used by the
+ * Electron IPC path; it returns only a URL and never exposes stored tokens.
  */
 export const DEV_BROWSER_INVOKE_ALLOWLIST = Object.freeze([
   GET_APP_INFO,
   QUERY_USER_INFO,
+  GET_LOGIN_URL,
 ] as const);
 
 /**
@@ -50,6 +54,7 @@ export const DEV_BROWSER_INVOKE_ALLOWLIST = Object.freeze([
 export const DEV_BROWSER_EVENT_ALLOWLIST = Object.freeze([
   SYSTEM_MESSAGE,
   LOGIN_STATUS,
+  NATIVATECOMMAND,
 ] as const);
 
 /** True iff an invoke channel is on the reviewed allowlist. */

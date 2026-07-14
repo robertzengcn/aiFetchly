@@ -182,6 +182,7 @@ export type EmailServiceListdata = {
   name: string;
   from: string;
   host: string;
+  receiveProtocol: EmailReceiveProtocol;
   create_time: string;
 };
 
