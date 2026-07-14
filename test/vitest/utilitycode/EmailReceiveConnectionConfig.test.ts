@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { emailReceiveConnectionTestInputSchema } from "@/schemas/ipc/emailReceive";
 import { normalizeReceiveConnectionConfig } from "@/service/emailReceive/EmailReceiveSyncService";
+import { buildImapFlowOptions } from "@/service/emailReceive/ImapEmailReceiveClient";
 import type { EmailReceiveConnectionConfig } from "@/entityTypes/emailReceiveTypes";
 
 function makeConfig(
@@ -48,6 +49,35 @@ describe("normalizeReceiveConnectionConfig", () => {
     const config = makeConfig({ protocol: "pop3", port: 1995, ssl: true });
 
     expect(normalizeReceiveConnectionConfig(config)).toBe(config);
+  });
+});
+
+describe("buildImapFlowOptions", () => {
+  it("uses direct TLS for IMAP implicit TLS port", () => {
+    const options = buildImapFlowOptions(
+      makeConfig({ protocol: "imap", port: 993, ssl: true })
+    );
+
+    expect(options.secure).toBe(true);
+    expect(options.doSTARTTLS).toBe(false);
+  });
+
+  it("uses STARTTLS for IMAP SSL on non-implicit TLS ports", () => {
+    const options = buildImapFlowOptions(
+      makeConfig({ protocol: "imap", port: 143, ssl: true })
+    );
+
+    expect(options.secure).toBe(false);
+    expect(options.doSTARTTLS).toBe(true);
+  });
+
+  it("does not opportunistically upgrade when IMAP SSL is disabled", () => {
+    const options = buildImapFlowOptions(
+      makeConfig({ protocol: "imap", port: 143, ssl: false })
+    );
+
+    expect(options.secure).toBe(false);
+    expect(options.doSTARTTLS).toBe(false);
   });
 });
 

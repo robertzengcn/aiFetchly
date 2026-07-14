@@ -1,4 +1,5 @@
 import { ImapFlow } from "imapflow";
+import type { ImapFlowOptions } from "imapflow";
 import { simpleParser } from "mailparser";
 import type { EmailMessage, ParsedMail } from "mailparser";
 import {
@@ -19,6 +20,7 @@ import {
 
 /** Hard cap on messages returned per fetch, regardless of caller limit. */
 const MAX_FETCH_CAP = 50;
+const IMAP_IMPLICIT_TLS_PORT = 993;
 
 /**
  * ImapFlow-backed receive client. Connects with TLS based on `ssl`, opens the
@@ -93,13 +95,7 @@ export class ImapEmailReceiveClient implements EmailReceiveClient {
   }
 
   private createClient(config: EmailReceiveConnectionConfig): ImapFlow {
-    return new ImapFlow({
-      host: config.host,
-      port: config.port,
-      secure: config.ssl,
-      auth: { user: config.username, pass: config.password },
-      logger: false,
-    });
+    return new ImapFlow(buildImapFlowOptions(config));
   }
 
   private toParsedInboundEmail(
@@ -162,4 +158,20 @@ export class ImapEmailReceiveClient implements EmailReceiveClient {
       precedence: precedenceHeader ? String(precedenceHeader) : null,
     };
   }
+}
+
+export function buildImapFlowOptions(
+  config: EmailReceiveConnectionConfig
+): ImapFlowOptions {
+  const useImplicitTls = config.ssl && config.port === IMAP_IMPLICIT_TLS_PORT;
+  const useStartTls = config.ssl && !useImplicitTls;
+
+  return {
+    host: config.host,
+    port: config.port,
+    secure: useImplicitTls,
+    doSTARTTLS: useStartTls,
+    auth: { user: config.username, pass: config.password },
+    logger: false,
+  };
 }
