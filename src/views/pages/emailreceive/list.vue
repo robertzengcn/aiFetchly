@@ -67,7 +67,15 @@
     >
       <template #item.receivedAt="{ item }">{{ formatDate(item.receivedAt) }}</template>
       <template #item.isUnread="{ item }">
-        <v-icon :color="item.isUnread ? 'primary' : undefined" size="small">
+        <v-icon
+          v-if="isPop3Selected"
+          color="medium-emphasis"
+          size="small"
+          :title="t('emailReceive.unread_unavailable_pop3')"
+        >
+          mdi-minus-circle-outline
+        </v-icon>
+        <v-icon v-else :color="item.isUnread ? 'primary' : undefined" size="small">
           {{ item.isUnread ? "mdi-email" : "mdi-email-open" }}
         </v-icon>
       </template>
@@ -104,6 +112,10 @@ const loading = ref(true);
 const syncing = ref(false);
 const itemsPerPage = ref(20);
 const currentPage = ref(1);
+const selectedEmailService = computed(() =>
+  emailServices.value.find((service) => service.id === emailServiceId.value)
+);
+const isPop3Selected = computed(() => selectedEmailService.value?.receiveProtocol === "pop3");
 
 onMounted(async () => {
   try {
