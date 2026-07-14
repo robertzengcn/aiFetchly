@@ -610,15 +610,26 @@ function handleStop(): void {
 // -------------------------------------------------------------------------
 
 async function handleResumeToolAfterPermission(
-  data: string
+  data: unknown
 ): Promise<CommonMessage<{ ok: boolean; error?: string } | null>> {
   if (!isAIEnabled()) {
     return denied("AI functionality is only available to subscribers.");
   }
 
-  const parsed = data
-    ? (JSON.parse(data) as { toolId?: string; conversationId?: string })
-    : {};
+  let parsed: { toolId?: unknown; conversationId?: unknown };
+  try {
+    parsed =
+      typeof data === "string"
+        ? ((data ? JSON.parse(data) : {}) as {
+            toolId?: unknown;
+            conversationId?: unknown;
+          })
+        : data && typeof data === "object"
+        ? (data as { toolId?: unknown; conversationId?: unknown })
+        : {};
+  } catch {
+    return denied("Invalid resume payload");
+  }
   if (!parsed.toolId || typeof parsed.toolId !== "string") {
     return denied("toolId is required");
   }
@@ -626,7 +637,10 @@ async function handleResumeToolAfterPermission(
   const engine = getQueryEngine();
   const result = await engine.resumeToolAfterPermission({
     toolId: parsed.toolId,
-    conversationId: parsed.conversationId,
+    conversationId:
+      typeof parsed.conversationId === "string"
+        ? parsed.conversationId
+        : undefined,
   });
   return ok(result);
 }
@@ -1056,7 +1070,7 @@ export function registerAiChatV2IpcHandlers(): void {
   ipcMain.handle(
     AI_CHAT_V2_RESUME_TOOL_AFTER_PERMISSION,
     async (_e, data: unknown) =>
-      handleResumeToolAfterPermission((data as string) ?? "")
+      handleResumeToolAfterPermission(data ?? "")
   );
   ipcMain.handle(AI_CHAT_V2_MODELS, async () => handleModels());
   ipcMain.handle(AI_CHAT_V2_CONVERSATIONS, async (_e, data: unknown) =>

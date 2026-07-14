@@ -111,6 +111,7 @@
           :permission-category="pinnedPermissionCategory"
           :shell-preview="pinnedPermissionShellPreview"
           :workspace-root="activeWorkspace?.rootPath ?? ''"
+          :disabled="pinnedPermissionResumeInFlight"
           @grant="handlePinnedPermissionGrant"
           @deny="handlePinnedPermissionDeny"
         />
@@ -999,6 +1000,28 @@ const pinnedPermissionShellPreview = computed<ShellPreview | undefined>(() => {
   };
 });
 
+const permissionResumeInFlightToolIds = ref<Set<string>>(new Set());
+
+const setPermissionResumeInFlight = (
+  toolId: string,
+  inFlight: boolean
+): void => {
+  const next = new Set(permissionResumeInFlightToolIds.value);
+  if (inFlight) {
+    next.add(toolId);
+  } else {
+    next.delete(toolId);
+  }
+  permissionResumeInFlightToolIds.value = next;
+};
+
+const pinnedPermissionResumeInFlight = computed(() => {
+  const toolId = pinnedPermissionPrompt.value
+    ? resolveToolIdForPermissionMessage(pinnedPermissionPrompt.value)
+    : undefined;
+  return !!toolId && permissionResumeInFlightToolIds.value.has(toolId);
+});
+
 // True only between clicking send and the first visible AI chunk. Auto-clears
 // when streaming ends for any reason (complete/error/stop/permission deny).
 // Also shows during tool execution rounds (after tool_call/tool_result, before
@@ -1325,6 +1348,13 @@ const upsertToolResultMessage = (
   insertBeforeAssistantId?: string
 ): void => {
   const toolResult = chunk.toolResult ?? {};
+  if (
+    chunk.toolCallId &&
+    toolResult.needsPermissionPrompt !== true &&
+    permissionResumeInFlightToolIds.value.has(chunk.toolCallId)
+  ) {
+    setPermissionResumeInFlight(chunk.toolCallId, false);
+  }
   const content =
     typeof chunk.fullContent === "string" && chunk.fullContent.trim().length > 0
       ? chunk.fullContent
@@ -1421,6 +1451,12 @@ const handleSkillPermissionGrant = async (
     return;
   }
 
+  if (permissionResumeInFlightToolIds.value.has(toolId)) {
+    return;
+  }
+
+  setPermissionResumeInFlight(toolId, true);
+
   try {
     const raw = await windowInvoke(AI_CHAT_V2_RESUME_TOOL_AFTER_PERMISSION, {
       toolId,
@@ -1448,12 +1484,14 @@ const handleSkillPermissionGrant = async (
       }
       isStreaming.value = false;
       activeAssistantMessageId.value = null;
+      setPermissionResumeInFlight(toolId, false);
     }
   } catch (error) {
     const errMsg = error instanceof Error ? error.message : String(error);
     streamError.value = errMsg;
     isStreaming.value = false;
     activeAssistantMessageId.value = null;
+    setPermissionResumeInFlight(toolId, false);
   }
 };
 
