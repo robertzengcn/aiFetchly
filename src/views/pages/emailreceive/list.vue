@@ -106,7 +106,7 @@ const currentPage = ref(1);
 
 onMounted(async () => {
   try {
-    const resp = await getEmailServiceList({ page: 1, size: 9999 });
+    const resp = await getEmailServiceList({ page: 0, size: 9999 });
     emailServices.value = resp.data;
   } catch (err) {
     console.error("Failed to load email services:", err);
