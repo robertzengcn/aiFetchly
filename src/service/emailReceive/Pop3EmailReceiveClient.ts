@@ -119,6 +119,7 @@ export class Pop3EmailReceiveClient implements EmailReceiveClient {
       snippet: buildSnippet(bodyText),
       receivedAt: parsed.date ?? new Date(),
       isUnread: false,
+      isAnswered: false,
       autoSubmitted: autoSubmittedHeader ? String(autoSubmittedHeader) : null,
       precedence: precedenceHeader ? String(precedenceHeader) : null,
     };

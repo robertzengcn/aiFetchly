@@ -178,7 +178,7 @@ export class EmailReceiveSyncService {
     entity.snippet = buildSnippet(p.bodyText);
     entity.receivedAt = p.receivedAt;
     entity.isUnread = p.isUnread ? 1 : 0;
-    entity.replyStatus = "not_started";
+    entity.replyStatus = p.isAnswered ? "sent" : "not_started";
     return entity;
   }
 

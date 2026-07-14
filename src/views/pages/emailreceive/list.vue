@@ -158,12 +158,12 @@ interface SortByItem {
   order: "asc" | "desc";
 }
 
-function reload() {
+async function reload(): Promise<void> {
   currentPage.value = 1;
-  loadItems({ page: 1, itemsPerPage: itemsPerPage.value, sortBy: [] });
+  await loadItems({ page: 1, itemsPerPage: itemsPerPage.value, sortBy: [] });
 }
 
-async function loadItems({ page, itemsPerPage: ips }: { page: number; itemsPerPage: number; sortBy: SortByItem[] }) {
+async function loadItems({ page, itemsPerPage: ips }: { page: number; itemsPerPage: number; sortBy: SortByItem[] }): Promise<void> {
   if (!emailServiceId.value) {
     serverItems.value = [];
     totalItems.value = 0;
@@ -197,7 +197,7 @@ async function syncNow() {
   if (!emailServiceId.value) return;
   syncing.value = true;
   try {
-    await syncUnreadEmails({ emailServiceId: emailServiceId.value, limit: 20, unreadOnly: true });
+    await syncUnreadEmails({ emailServiceId: emailServiceId.value, limit: 50, unreadOnly: false });
     await reload();
   } catch (err) {
     console.error("Sync failed:", err);

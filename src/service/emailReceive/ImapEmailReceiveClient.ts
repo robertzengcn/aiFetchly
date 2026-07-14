@@ -127,7 +127,11 @@ export class ImapEmailReceiveClient implements EmailReceiveClient {
     const threadKey = extractThreadKey(messageId, inReplyTo, referencesHeader);
 
     const flags = msg.flags ?? new Set<string>();
-    const isUnread = !flags.has("\\Seen");
+    const normalizedFlags = new Set(
+      Array.from(flags, (flag) => flag.toLowerCase())
+    );
+    const isUnread = !normalizedFlags.has("\\seen");
+    const isAnswered = normalizedFlags.has("\\answered");
 
     const toAddresses = addressListToStrings(parsed.to?.value as EmailMessage[] | undefined);
     const ccAddresses = addressListToStrings(parsed.cc?.value as EmailMessage[] | undefined);
@@ -153,6 +157,7 @@ export class ImapEmailReceiveClient implements EmailReceiveClient {
       snippet: buildSnippet(bodyText),
       receivedAt: parsed.date ?? new Date(),
       isUnread,
+      isAnswered,
       autoSubmitted: autoSubmittedHeader ? String(autoSubmittedHeader) : null,
       precedence: precedenceHeader ? String(precedenceHeader) : null,
     };
