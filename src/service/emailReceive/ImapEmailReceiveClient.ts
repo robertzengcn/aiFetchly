@@ -21,6 +21,7 @@ import {
 /** Hard cap on messages returned per fetch, regardless of caller limit. */
 const MAX_FETCH_CAP = 50;
 const IMAP_IMPLICIT_TLS_PORT = 993;
+type ImapConnectionMode = "configured" | "implicitTls";
 
 /**
  * ImapFlow-backed receive client. Connects with TLS based on `ssl`, opens the
@@ -31,7 +32,7 @@ const IMAP_IMPLICIT_TLS_PORT = 993;
  */
 export class ImapEmailReceiveClient implements EmailReceiveClient {
   async testConnection(config: EmailReceiveConnectionConfig): Promise<void> {
-    const client = this.createClient(config);
+    let client = this.createClient(config);
     try {
       await client.connect();
       try {
@@ -39,12 +40,20 @@ export class ImapEmailReceiveClient implements EmailReceiveClient {
       } catch {
         // Folder may not exist; connectivity itself still succeeded.
       }
-    } finally {
-      try {
-        await client.logout();
-      } catch {
-        /* ignore */
+    } catch (error) {
+      if (!shouldRetryWithImplicitTls(error, config)) {
+        throw error;
       }
+      await closeClient(client);
+      client = this.createClient(config, "implicitTls");
+      await client.connect();
+      try {
+        await client.mailboxOpen(config.folder);
+      } catch {
+        // Folder may not exist; connectivity itself still succeeded.
+      }
+    } finally {
+      await closeClient(client);
     }
   }
 
@@ -53,49 +62,75 @@ export class ImapEmailReceiveClient implements EmailReceiveClient {
     options: EmailReceiveFetchOptions
   ): Promise<ParsedInboundEmail[]> {
     const limit = Math.max(1, Math.min(options.limit, MAX_FETCH_CAP));
-    const client = this.createClient(config);
-    const results: ParsedInboundEmail[] = [];
 
+    let client = this.createClient(config);
     try {
       await client.connect();
-      await client.mailboxOpen(config.folder);
-
-      // UIDs of messages matching the criteria (most recent at the end).
-      const searchCriteria: Record<string, unknown> = {};
-      if (options.unreadOnly) searchCriteria.seen = false;
-      if (options.since) searchCriteria.since = options.since;
-
-      const uids = (await client.search(searchCriteria, { uid: true })) as number[];
-      if (!Array.isArray(uids) || uids.length === 0) return [];
-
-      // Take the most recent `limit` UIDs.
-      const bounded = uids.slice(-limit);
-
-      for (const uid of bounded) {
-        const msg = await client.fetchOne(
-          uid,
-          { source: true, flags: true, internalDate: true },
-          { uid: true }
-        );
-        if (!msg || !msg.source) continue;
-
-        const parsed = await simpleParser(msg.source as Buffer);
-        const record = this.toParsedInboundEmail(uid, parsed, msg);
-        if (record) results.push(record);
+      return await this.fetchFromConnectedClient(
+        client,
+        config.folder,
+        options,
+        limit
+      );
+    } catch (error) {
+      if (!shouldRetryWithImplicitTls(error, config)) {
+        throw error;
       }
-
-      return results;
+      await closeClient(client);
+      client = this.createClient(config, "implicitTls");
+      await client.connect();
+      return await this.fetchFromConnectedClient(
+        client,
+        config.folder,
+        options,
+        limit
+      );
     } finally {
-      try {
-        await client.logout();
-      } catch {
-        /* ignore */
-      }
+      await closeClient(client);
     }
   }
 
-  private createClient(config: EmailReceiveConnectionConfig): ImapFlow {
-    return new ImapFlow(buildImapFlowOptions(config));
+  private createClient(
+    config: EmailReceiveConnectionConfig,
+    mode: ImapConnectionMode = "configured"
+  ): ImapFlow {
+    return new ImapFlow(buildImapFlowOptions(config, mode));
+  }
+
+  private async fetchFromConnectedClient(
+    client: ImapFlow,
+    folder: string,
+    options: EmailReceiveFetchOptions,
+    limit: number
+  ): Promise<ParsedInboundEmail[]> {
+    const results: ParsedInboundEmail[] = [];
+    await client.mailboxOpen(folder);
+
+    // UIDs of messages matching the criteria (most recent at the end).
+    const searchCriteria: Record<string, unknown> = {};
+    if (options.unreadOnly) searchCriteria.seen = false;
+    if (options.since) searchCriteria.since = options.since;
+
+    const uids = (await client.search(searchCriteria, { uid: true })) as number[];
+    if (!Array.isArray(uids) || uids.length === 0) return [];
+
+    // Take the most recent `limit` UIDs.
+    const bounded = uids.slice(-limit);
+
+    for (const uid of bounded) {
+      const msg = await client.fetchOne(
+        uid,
+        { source: true, flags: true, internalDate: true },
+        { uid: true }
+      );
+      if (!msg || !msg.source) continue;
+
+      const parsed = await simpleParser(msg.source as Buffer);
+      const record = this.toParsedInboundEmail(uid, parsed, msg);
+      if (record) results.push(record);
+    }
+
+    return results;
   }
 
   private toParsedInboundEmail(
@@ -160,10 +195,21 @@ export class ImapEmailReceiveClient implements EmailReceiveClient {
   }
 }
 
+async function closeClient(client: ImapFlow): Promise<void> {
+  try {
+    await client.logout();
+  } catch {
+    /* ignore */
+  }
+}
+
 export function buildImapFlowOptions(
-  config: EmailReceiveConnectionConfig
+  config: EmailReceiveConnectionConfig,
+  mode: ImapConnectionMode = "configured"
 ): ImapFlowOptions {
-  const useImplicitTls = config.ssl && config.port === IMAP_IMPLICIT_TLS_PORT;
+  const useImplicitTls =
+    config.ssl &&
+    (config.port === IMAP_IMPLICIT_TLS_PORT || mode === "implicitTls");
   const useStartTls = config.ssl && !useImplicitTls;
 
   return {
@@ -174,4 +220,20 @@ export function buildImapFlowOptions(
     auth: { user: config.username, pass: config.password },
     logger: false,
   };
+}
+
+export function shouldRetryWithImplicitTls(
+  error: unknown,
+  config: EmailReceiveConnectionConfig
+): boolean {
+  if (!config.ssl || config.port === IMAP_IMPLICIT_TLS_PORT) {
+    return false;
+  }
+
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  const maybeCode = (error as Error & { code?: unknown }).code;
+  return maybeCode === "GREETING_TIMEOUT";
 }

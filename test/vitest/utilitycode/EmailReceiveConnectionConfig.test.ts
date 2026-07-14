@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { emailReceiveConnectionTestInputSchema } from "@/schemas/ipc/emailReceive";
 import { normalizeReceiveConnectionConfig } from "@/service/emailReceive/EmailReceiveSyncService";
-import { buildImapFlowOptions } from "@/service/emailReceive/ImapEmailReceiveClient";
+import {
+  buildImapFlowOptions,
+  shouldRetryWithImplicitTls,
+} from "@/service/emailReceive/ImapEmailReceiveClient";
 import type { EmailReceiveConnectionConfig } from "@/entityTypes/emailReceiveTypes";
 
 function makeConfig(
@@ -78,6 +81,51 @@ describe("buildImapFlowOptions", () => {
 
     expect(options.secure).toBe(false);
     expect(options.doSTARTTLS).toBe(false);
+  });
+
+  it("can retry direct TLS for IMAP SSL on custom TLS ports", () => {
+    const options = buildImapFlowOptions(
+      makeConfig({ protocol: "imap", port: 1993, ssl: true }),
+      "implicitTls"
+    );
+
+    expect(options.secure).toBe(true);
+    expect(options.doSTARTTLS).toBe(false);
+  });
+});
+
+describe("shouldRetryWithImplicitTls", () => {
+  it("retries greeting timeouts for IMAP SSL on non-implicit TLS ports", () => {
+    const err = new Error("Failed to receive greeting");
+    Object.assign(err, { code: "GREETING_TIMEOUT" });
+
+    expect(
+      shouldRetryWithImplicitTls(
+        err,
+        makeConfig({ protocol: "imap", port: 1993, ssl: true })
+      )
+    ).toBe(true);
+  });
+
+  it("does not retry when SSL is disabled", () => {
+    const err = new Error("Failed to receive greeting");
+    Object.assign(err, { code: "GREETING_TIMEOUT" });
+
+    expect(
+      shouldRetryWithImplicitTls(
+        err,
+        makeConfig({ protocol: "imap", port: 143, ssl: false })
+      )
+    ).toBe(false);
+  });
+
+  it("does not retry unrelated connection errors", () => {
+    expect(
+      shouldRetryWithImplicitTls(
+        new Error("Invalid credentials"),
+        makeConfig({ protocol: "imap", port: 143, ssl: true })
+      )
+    ).toBe(false);
   });
 });
 
