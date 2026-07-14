@@ -1,6 +1,7 @@
 // src/modules/AgentDefinitionModule.ts
 import { BaseModule } from "@/modules/baseModule";
 import { AgentDefinitionModel } from "@/model/AgentDefinition.model";
+import { InstalledPluginModel } from "@/model/InstalledPlugin.model";
 import { AgentDefinitionRegistry } from "@/service/AgentDefinitionRegistry";
 import { sanitizeAgentSegment } from "@/service/pluginCompat/ClaudeAgentFormatAdapter";
 import type {
@@ -12,10 +13,12 @@ import type {
 
 export class AgentDefinitionModule extends BaseModule {
   private readonly model: AgentDefinitionModel;
+  private readonly pluginModel: InstalledPluginModel;
 
   constructor() {
     super();
     this.model = new AgentDefinitionModel(this.dbpath);
+    this.pluginModel = new InstalledPluginModel(this.dbpath);
   }
 
   async ensureBuiltIns(): Promise<void> {
@@ -25,14 +28,45 @@ export class AgentDefinitionModule extends BaseModule {
     }
   }
 
+  /**
+   * Runtime active catalog: active + healthy agents whose owning plugin (if
+   * any) is enabled. Built-in and manual agents need only be active+healthy.
+   * (Decision D3 — plugin enablement composed in the Module, not via SQL join.)
+   */
   async listActive(): Promise<AgentDefinitionView[]> {
+    return this.listActiveForRuntime();
+  }
+
+  async listActiveForRuntime(): Promise<AgentDefinitionView[]> {
     await this.ensureConnection();
-    return this.model.listActive();
+    const enabled = await this.enabledPluginNames();
+    const all = await this.model.listActiveHealthy();
+    return all.filter((a) => this.isRuntimeEligible(a, enabled));
   }
 
   async getActiveById(agentId: string): Promise<AgentDefinitionView | null> {
     await this.ensureConnection();
-    return this.model.getActiveById(agentId);
+    const a = await this.model.getActiveHealthyById(agentId);
+    if (!a) return null;
+    const enabled = await this.enabledPluginNames();
+    return this.isRuntimeEligible(a, enabled) ? a : null;
+  }
+
+  private async enabledPluginNames(): Promise<Set<string>> {
+    const enabled = await this.pluginModel.findEnabled();
+    return new Set(enabled.map((p) => p.name));
+  }
+
+  private isRuntimeEligible(
+    a: AgentDefinitionView,
+    enabled: Set<string>
+  ): boolean {
+    if (a.status !== "active") return false;
+    if (a.health !== "healthy") return false;
+    if (a.source === "plugin") {
+      return !!a.pluginName && enabled.has(a.pluginName);
+    }
+    return true;
   }
 
   // -- Management (non-runtime) -------------------------------------------

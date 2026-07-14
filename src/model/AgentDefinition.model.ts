@@ -114,8 +114,8 @@ export class AgentDefinitionModel extends BaseDb {
         initiallyEnabled === undefined
           ? view.status
           : initiallyEnabled
-            ? "active"
-            : "disabled",
+          ? "active"
+          : "disabled",
     } as AgentDefinitionEntity);
   }
 
@@ -134,6 +134,29 @@ export class AgentDefinitionModel extends BaseDb {
   async listActive(): Promise<AgentDefinitionView[]> {
     const rows = await this.repository.find({ where: { status: "active" } });
     return rows.map(toView);
+  }
+
+  /** Active AND healthy agents — runtime-eligible before plugin-enablement. */
+  async listActiveHealthy(): Promise<AgentDefinitionView[]> {
+    const rows = await this.repository
+      .createQueryBuilder("a")
+      .where("a.status = :status", { status: "active" })
+      .andWhere("a.health = :health", { health: "healthy" })
+      .orderBy("a.agentId", "ASC")
+      .getMany();
+    return rows.map(toView);
+  }
+
+  async getActiveHealthyById(
+    agentId: string
+  ): Promise<AgentDefinitionView | null> {
+    const e = await this.repository
+      .createQueryBuilder("a")
+      .where("a.agentId = :agentId", { agentId })
+      .andWhere("a.status = :status", { status: "active" })
+      .andWhere("a.health = :health", { health: "healthy" })
+      .getOne();
+    return e ? toView(e) : null;
   }
 
   async listAll(): Promise<AgentDefinitionView[]> {
