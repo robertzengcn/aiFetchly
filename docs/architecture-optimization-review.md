@@ -7,6 +7,26 @@
 
 ---
 
+## Remediation Status (Architecture Remediation Program — 2026-07-10)
+
+> This table tracks which findings from this review have been addressed by the
+> Architecture Remediation Program (`docs/prd/architecture-remediation-prd.md`).
+> Branch: `worktree-architecture-remediation`.
+
+| Finding | § | Workstream | Status |
+|---|---|---|---|
+| `src/service/` undocumented 4th layer | 4.1 | WS-8 | ✅ Resolved — CLAUDE.md documents the four-layer reality + placement rules |
+| `synchronize: true`, dual data-access, dual driver | 4.2 | WS-3 | ✅ Migration gate + CLI shipped; `synchronize` auto-disables when baseline exists; all 18 legacy `*db.ts` removed; `SqliteVecDatabase` cleaned (typed driver, no `as any`, no dead code); entity indices added (16 hot paths); path-safe singleton |
+| Dead `ChildProcessManager`, restart loops, contract fragmentation | 4.3 | WS-4 | ⚠️ Partial — dead managers deleted (R4.1); bounded restart policy with circuit-breaker (R4.2); fatal-error handling (R4.3); before-quit cleanup (R4.5). Contract unification (R4.6) + WorkerCoordinator (R4.7) remain. |
+| God modules, no DI, dead abstractions, factory tangle | 4.4 | WS-5 | ⚠️ Partial — `BaseModule` constructor lazy (R5.2 ✅). DI for hubs (R5.1), factory consolidation (R5.4), god-file splits (R5.6) remain. |
+| Stalled Pinia migration, god components, mixed API layer | 4.5 | WS-6 | ❌ Not started |
+| Logging epidemic, `any`, half-strict tsconfig, dead code | 4.6 | WS-7 | ⚠️ Drift gates — `no-console: warn` + `no-explicit-any: warn` eslint rules added; Zod mandate reconciled (R7.4). 2665 console→Logger codemod, strict tsconfig, `any` reduction remain. |
+| Plaintext secrets, navigation bypass, unsandboxed window, exec injection, raw IPC, preload logging | 6 | WS-1 | ⚠️ Partial — nav guard (R1.2 ✅), execFile (R1.4 ✅), preload gate (R1.6 ✅), ipcRenderer lint (R1.8 ✅), SecureStore adapter + wiring behind flag (R1.1 ✅). 48/51 IPC handlers migrated to registerValidatedHandler (R1.5). Sandbox flip (R1.3) documented as compensating control. userIpc 4 (auth) deferred. |
+| CI runs 0 tests, no coverage | 7-8 | WS-2 | ✅ Resolved — blocking CI gate (vitest suite 99.7% green), coverage tooling (`@vitest/coverage-v8`), `yarn test:ci`, 5 test-bug fixes, USonar quarantine |
+| Bogus `crypto`, dead `sqlite3`, stray files | 7 | WS-0 | ✅ Resolved — `crypto`/`sqlite3`/`@types/sqlite3` removed; orphan configs deleted; gitignore broadened; timestamp files removed |
+
+---
+
 ## 1. Executive Summary
 
 aiFetchly is a **large, mature, genuinely functional** desktop application with a few **excellent seams** — a clean IPC validation wrapper, a real template-method platform-adapter pattern, fully-parity i18n, and an intact "no DB in workers" boundary. The core problem is not that it doesn't work; it's that **two migrations stalled mid-flight and the codebase now carries the weight of both worlds simultaneously**, with a third undocumented layer quietly holding the brain.
