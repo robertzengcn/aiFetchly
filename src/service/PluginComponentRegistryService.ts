@@ -6,6 +6,8 @@ import {
   type PluginLoadResult,
 } from "@/service/PluginLoaderService";
 import { PluginRuntimeCache } from "@/service/PluginRuntimeCache";
+import { PluginHookRegistrar } from "@/service/pluginCompat/PluginHookRegistrar";
+import { SkillRegistry } from "@/config/skillsRegistry";
 import { CommandRegistry } from "@/service/slashCommands/CommandRegistry";
 import { AgentDefinitionRegistryImpl } from "@/service/AgentDefinitionRegistry";
 import { getAIFetchlyConfigManager } from "@/service/aifetchlyConfig/AIFetchlyConfigManager";
@@ -19,13 +21,9 @@ import { AIFETCHLY_CONFIG_LIMITS } from "@/service/aifetchlyConfig/AIFetchlyConf
 import type { AIFetchlyConfigDiagnostic } from "@/entityTypes/aifetchlyConfigTypes";
 import type { SlashCommandDefinition } from "@/entityTypes/slashCommandTypes";
 import type { AgentDefinitionView } from "@/entityTypes/agentTypes";
-
 /**
- * Adapts loaded plugin data into the existing skill and MCP runtime systems,
- * AND (Phase 18 / SKL-02) promotes plugin-authored `commands/*.md` +
- * `agents/*.md` into the native {@link CommandRegistry} /
- * {@link AgentDefinitionRegistryImpl} under `plugin:<name>` source IDs.
- * Source of truth: Design §7.5, §7.3 (plugin rank 3, lowest).
+ * Adapts loaded plugin data into the existing skill and MCP runtime systems.
+ * Source of truth: Design §7.5.
  *
  * Boundaries (Design §7.5 last paragraph):
  *  - Does NOT execute skill code itself — that's SkillRegistry's job.
@@ -33,46 +31,41 @@ import type { AgentDefinitionView } from "@/entityTypes/agentTypes";
  *  - Writes DB rows only through Modules when enablement must persist.
  *
  * The actual effective-enablement filtering (plugin.enabled && component.enabled)
- * for skills/MCP lives in skillsRegistry.ts and MCPToolService.ts. This service
- * is the coordination point that triggers cache invalidation, ensures the
- * loader state is propagated, and reconciles plugin commands/agents into the
- * native registries (T-plugin-poison mitigation is structural: plugin source
- * is rank 3, so built-in/workspace/user always win name collisions).
+ * lives in skillsRegistry.ts and MCPToolService.ts. This service is the
+ * coordination point that triggers cache invalidation and ensures the loader
+ * state is propagated.
  */
 export class PluginComponentRegistryService {
   /**
    * Apply the current loader state: clear caches so downstream catalogs
-   * re-read owned components with the latest plugin enablement, AND (Phase 18)
-   * promote plugin commands/agents into the native registries under
-   * `plugin:<name>` source IDs.
+   * re-read owned components with the latest plugin enablement.
    *
    * The skill/MCP catalog queries read owned rows from their own models,
-   * then filter by the owning plugin's enabled state — so cache invalidation
-   * is all that's needed for those. Plugin commands/agents, however, are
-   * discovered by filesystem scan of each enabled plugin's installPath (they
-   * are NOT declared in PluginManifest per 18-RESEARCH Pattern 5 / Assumption
-   * A3), so they must be promoted here on every plugin lifecycle event.
+   * then filter by the owning plugin's enabled state — so all this method
+   * needs to do is invalidate the caches that would otherwise serve stale
+   * catalogs.
    */
   static async applyLoadedPlugins(): Promise<void> {
     PluginRuntimeCache.clear("apply-loaded-plugins");
-    const { enabled, disabled } = await PluginLoaderService.loadAllPlugins();
+    // Register plugin-declared hooks (Phase 3 plumbing). Re-registration
+    // is idempotent per hook id, so calling this on every apply is safe.
+    const loaded = await PluginLoaderService.loadAllPlugins();
+    PluginHookRegistrar.registerFromLoadedPlugins(loaded.enabled);
     const manager = getAIFetchlyConfigManager();
     await PluginComponentRegistryService.promotePluginCommandsAndAgents(
       manager.getCommandRegistry(),
       manager.getAgentRegistry(),
-      [...enabled, ...disabled]
+      [...loaded.enabled, ...loaded.disabled]
     );
   }
 
   /**
    * Remove a plugin's capabilities from the runtime. Used by the IPC
-   * uninstall/disable flow. Clears the runtime cache AND reconciles the
-   * plugin's commands/agents to [] on both registries so disable/uninstall
-   * takes effect immediately even if {@link applyLoadedPlugins} is not
-   * re-invoked (T-18-05: no stale entries survive).
+   * uninstall/disable flow.
    */
   static async unregisterPluginCapabilities(pluginName: string): Promise<void> {
     PluginRuntimeCache.clear(`unregister-${pluginName}`);
+    SkillRegistry.unregisterSkillsByPlugin(pluginName);
     const sourceId = `plugin:${pluginName}`;
     const manager = getAIFetchlyConfigManager();
     manager.getCommandRegistry().replaceSource(sourceId, []);
@@ -80,9 +73,8 @@ export class PluginComponentRegistryService {
   }
 
   /**
-   * Force a fresh load (clears loader cache, reloads), then re-applies the
-   * loaded state (which re-promotes plugin commands/agents after the reload).
-   * Used by the IPC reload channel.
+   * Force a fresh load (clears cache, then reloads). Used by the IPC reload
+   * channel.
    */
   static async reload(): Promise<PluginLoadResult> {
     PluginLoaderService.clearCache();
@@ -91,36 +83,6 @@ export class PluginComponentRegistryService {
     return result;
   }
 
-  /**
-   * Promote each plugin's `commands/*.md` and `agents/*.md` into the native
-   * registries under sourceId `plugin:<name>` (SKL-02 SC2 / D-PluginBadge).
-   *
-   * For each plugin:
-   *   - disabled OR missing install dir → `replaceSource("plugin:<name>", [])`
-   *     on BOTH registries (reconcile away, no stale entries; 18-RESEARCH
-   *     Pitfall 5 — a missing install dir is skipped without throwing).
-   *   - enabled with an existing install dir → scan `<installPath>/commands` +
-   *     `<installPath>/agents`, route every `.md` through the SINGLE CMD-06 /
-   *     AGT-02 schema owner ({@link buildPromptCommandDefinition} /
-   *     {@link buildAgentDefinition}) with source `"plugin"`, and atomically
-   *     reconcile via `replaceSource("plugin:<name>", defs)`.
-   *
-   * Plugin commands/agents are discovered by FILE SCAN of the installPath
-   * (PluginManifest has skills/mcpServers only — no commands/agents field per
-   * 18-RESEARCH Pattern 5 / Assumption A3). This reads ONLY the plugin's
-   * installPath; it never scans `~/.aifetchly` (plugins are installed packages,
-   * not config files). The restricted frontmatter parser + the existing
-   * builders are reused — no new parser is written (CFG-07 safe-schema
-   * invariant preserved).
-   *
-   * Registry instances are passed in (dependency injection) so the promotion
-   * core is unit-testable without the singleton or the DB; production callers
-   * pass the {@link getAIFetchlyConfigManager} singletons so promotion targets
-   * the SAME instances every other code path reads.
-   *
-   * Never throws — file IO / parse failures become non-fatal diagnostics so
-   * one bad plugin file cannot abort the whole batch.
-   */
   static async promotePluginCommandsAndAgents(
     commandRegistry: CommandRegistry,
     agentRegistry: AgentDefinitionRegistryImpl,
@@ -137,9 +99,6 @@ export class PluginComponentRegistryService {
         requiresTrust: false,
       };
 
-      // Disabled or missing-install plugins reconcile to empty (no stale
-      // entries). fs.existsSync keeps this branch from ever touching a
-      // non-existent install dir (Pitfall 5).
       if (
         !plugin.enabled ||
         !plugin.installPath ||
@@ -176,15 +135,6 @@ export class PluginComponentRegistryService {
     return { diagnostics: allDiagnostics };
   }
 
-  /**
-   * Read every `*.md` file under `<installPath>/<subdir>`, enforce the byte
-   * cap, parse the restricted frontmatter, and route each draft through the
-   * supplied builder. Returns validated definitions + per-file diagnostics for
-   * the failures. Never throws — IO/parse errors become diagnostics.
-   *
-   * A missing subdir is the happy path (a plugin with no commands/ or agents/
-   * dir) → empty result, no diagnostic.
-   */
   private static async readComponentFiles<T>(
     installPath: string,
     subdir: string,
@@ -268,23 +218,12 @@ export class PluginComponentRegistryService {
   }
 }
 
-/**
- * Parsed-draft shape shared by the CMD-06 / AGT-02 builders: already-parsed
- * frontmatter (scalar | string-array record) + body + relative path. Both
- * {@link PromptCommandDraft} and {@link AgentDefinitionDraft} are structurally
- * assignable from this.
- */
 interface ComponentDraft {
   readonly frontmatter: Readonly<Record<string, string | readonly string[]>>;
   readonly body: string;
   readonly relativePath: string;
 }
 
-/**
- * Merge a {@link ParsedFrontmatter}'s scalar + array maps into the flat
- * `Record<string, string | readonly string[]>` shape the CMD-06 / AGT-02
- * builders consume. Returns a fresh record (immutability rule).
- */
 function frontmatterRecord(
   parsed: ParsedFrontmatter
 ): Record<string, string | readonly string[]> {
@@ -294,7 +233,6 @@ function frontmatterRecord(
   return record;
 }
 
-/** Build a non-fatal plugin-sourced diagnostic with the project's stable shape. */
 function pluginDiagnostic(
   sourceId: string,
   filePath: string,
@@ -312,7 +250,6 @@ function pluginDiagnostic(
   };
 }
 
-/** Wrap an unexpected IO error as a `scanner-io-error` diagnostic (never throws). */
 function pluginIoDiagnostic(
   sourceId: string,
   filePath: string,

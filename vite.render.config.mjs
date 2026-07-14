@@ -18,6 +18,13 @@ export default defineConfig({
       ]
     }
   },
+  // Stable dev-server port so the dev browser bridge origin and the Chrome
+  // launch config (http://localhost:5173) line up. strictPort fails fast if
+  // 5173 is taken rather than silently picking another port (PRD FR-7.2).
+  server: {
+    port: 5173,
+    strictPort: true,
+  },
   plugins: [
     // nodePolyfills({
     //   // To exclude specific polyfills, add them to this list.

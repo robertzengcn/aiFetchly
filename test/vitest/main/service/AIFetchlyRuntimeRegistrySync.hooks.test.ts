@@ -57,6 +57,12 @@ function makeRecordingHookRegistry(): HookRegistryApi & {
     registerSessionHook() {
       /* no-op */
     },
+    registerUserHook() {
+      /* no-op */
+    },
+    replaceUserHooks() {
+      /* no-op */
+    },
     clearSessionHooks() {
       /* no-op */
     },
@@ -68,6 +74,12 @@ function makeRecordingHookRegistry(): HookRegistryApi & {
     },
     getMatchingHooks() {
       return [];
+    },
+    listAll() {
+      return [];
+    },
+    setBuiltinEnabled() {
+      return false;
     },
     resetForTests() {
       /* no-op */

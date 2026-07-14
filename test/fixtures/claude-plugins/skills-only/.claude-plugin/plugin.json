@@ -1,0 +1,7 @@
+{
+  "name": "claude-skills-pack",
+  "version": "1.0.0",
+  "description": "A sample Claude plugin with documentation-only skills.",
+  "author": "fixture",
+  "skills": true
+}

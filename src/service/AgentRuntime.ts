@@ -14,7 +14,7 @@ import { AgentOutputParser } from "@/service/AgentOutputParser";
 import { AgentTranscriptService } from "@/service/AgentTranscriptService";
 import { AgentToolPolicyService } from "@/service/AgentToolPolicyService";
 import type { AIAutoDreamService } from "@/service/AIAutoDreamService";
-import { getAIFetchlyConfigManager } from "@/service/aifetchlyConfig/AIFetchlyConfigManager";
+import type { AIWorkspaceAutoDreamService } from "@/service/AIWorkspaceAutoDreamService";
 import type {
   AgentDefinitionView,
   AgentResult,
@@ -49,6 +49,10 @@ export interface AgentRuntimeDeps {
   /** Optional. When provided, the runtime triggers auto-dream consolidation
    * after a completed task. Failures are logged and swallowed. */
   autoDreamService?: AIAutoDreamService;
+  /** Optional. When provided, the runtime triggers workspace-scoped auto-dream
+   * consolidation after a completed task. Runs independently of the user-memory
+   * service. Failures are logged and swallowed. */
+  workspaceAutoDreamService?: AIWorkspaceAutoDreamService;
 }
 
 /**
@@ -64,33 +68,12 @@ export class AgentRuntime {
   private readonly defModule = new AgentDefinitionModule();
   private readonly taskModule = new AgentTaskModule();
   private readonly api = new AiChatApi();
-  /**
-   * Phase 16 (Plan 03) — the agent registry owned by AIFetchlyConfigManager.
-   * Resolution at runSync is REGISTRY-FIRST (in-memory, precedence-aware,
-   * scoped dynamic IDs); the existing DB-backed defModule lookup is the
-   * FALLBACK for bare built-in execution metadata + legacy test mocks
-   * (RESEARCH Resolution-Path Decision Option a; AGT-03).
-   */
-  private readonly agentRegistry =
-    getAIFetchlyConfigManager().getAgentRegistry();
 
   async runSync(
     request: RunAgentRequest,
     deps?: AgentRuntimeDeps
   ): Promise<AgentResult> {
-    // Phase 16 (Plan 03): REGISTRY-FIRST resolution with DB fallback.
-    // The registry is in-memory, precedence-aware, and scoped-ID-aware
-    // (dynamic user:agent:* / workspace:*:agent:* IDs resolve here). The DB
-    // fallback preserves the built-in execution-metadata path (seeded by
-    // AgentDefinitionModule.ensureBuiltIns) + existing test mocks, so legacy
-    // bare-id dispatch keeps working (RESEARCH Pitfall 1). An id in neither
-    // resolves to fail() with NO fuzzy matching across sources (D-AgentIDs).
-    let definition: AgentDefinitionView | null = this.agentRegistry.getById(
-      request.agentId
-    );
-    if (!definition) {
-      definition = await this.defModule.getActiveById(request.agentId);
-    }
+    const definition = await this.defModule.getActiveById(request.agentId);
     if (!definition) {
       return this.fail(
         request,
@@ -334,45 +317,75 @@ export class AgentRuntime {
 
     // 6. Parse output.
     await transcript.appendAssistantText(agentTaskId, finalText);
-    const parseResult = this.outputParser.parse(
-      finalText,
-      definition.outputSchema as { required?: string[] }
-    );
-    if (!parseResult.ok) {
-      await this.taskModule.setStatus(agentTaskId, "failed", {
-        finishedAt: new Date(),
-        errorMessage: parseResult.error,
-      });
-      return this.buildResult(
-        agentTaskId,
-        definition,
-        "failed",
-        finalText,
-        parseResult.error
-      );
-    }
 
-    const outputObj = parseResult.output;
+    // Caller-supplied narrower schema takes precedence over the agent default.
+    // (Fixes a bug where outputSchemaOverride was plumbed through RunAgentRequest
+    // but silently ignored here — callers could not actually narrow the schema.)
+    const effectiveSchema =
+      (request.outputSchemaOverride as { required?: string[] } | undefined) ??
+      (definition.outputSchema as { required?: string[] });
+    const parseResult = this.outputParser.parse(finalText, effectiveSchema);
+
     // Trust boundary: validate LLM-generated values before persistence.
     // sourceUrls must be http(s) URLs (PRD §14.4 + SSRF defense for later
     // milestones that may resolve them). confidence must be a finite number.
-    const rawUrls = Array.isArray(outputObj.sourceUrls)
-      ? (outputObj.sourceUrls as unknown[])
-      : [];
-    const sourceUrls = rawUrls.filter((u): u is string => {
-      if (typeof u !== "string") return false;
-      try {
-        const parsed = new URL(u);
-        return parsed.protocol === "http:" || parsed.protocol === "https:";
-      } catch {
-        return false;
-      }
-    });
-    const rawConfidence = outputObj.confidence;
-    const confidence =
-      typeof rawConfidence === "number" && Number.isFinite(rawConfidence)
-        ? rawConfidence
-        : undefined;
+    const extractSourceUrls = (obj: Record<string, unknown>): string[] => {
+      const raw = Array.isArray(obj.sourceUrls)
+        ? (obj.sourceUrls as unknown[])
+        : [];
+      return raw.filter((u): u is string => {
+        if (typeof u !== "string") return false;
+        try {
+          const parsed = new URL(u);
+          return parsed.protocol === "http:" || parsed.protocol === "https:";
+        } catch {
+          return false;
+        }
+      });
+    };
+    const extractConfidence = (
+      obj: Record<string, unknown>
+    ): number | undefined => {
+      const v = obj.confidence;
+      return typeof v === "number" && Number.isFinite(v) ? v : undefined;
+    };
+
+    let outputObj: Record<string, unknown>;
+    let sourceUrls: string[];
+    let confidence: number | undefined;
+    let parseWarning: string | undefined;
+
+    if (parseResult.ok) {
+      outputObj = parseResult.output;
+      sourceUrls = extractSourceUrls(outputObj);
+      confidence = extractConfidence(outputObj);
+    } else {
+      // Lenient fallback: the agent finished its loop but its final text
+      // wasn't valid JSON matching the schema (a common failure when a model
+      // hits an "I can't complete this" state and writes a prose summary
+      // instead). Salvage the work as a low-confidence partial result rather
+      // than failing the whole task — callers already handle low confidence,
+      // and the agent's research is often still useful in the text body.
+      parseWarning = parseResult.error;
+      const base = parseResult.partial ?? {};
+      const fallbackSummary =
+        typeof base.businessSummary === "string" &&
+        base.businessSummary.trim().length > 0
+          ? base.businessSummary
+          : finalText.trim().slice(0, 4000);
+      outputObj = {
+        ...base,
+        businessSummary: fallbackSummary,
+        sourceUrls: Array.isArray(base.sourceUrls) ? base.sourceUrls : [],
+        confidence:
+          typeof base.confidence === "number" &&
+          Number.isFinite(base.confidence)
+            ? base.confidence
+            : 0,
+      };
+      sourceUrls = extractSourceUrls(outputObj);
+      confidence = extractConfidence(outputObj) ?? 0;
+    }
 
     const result: AgentResult = {
       agentTaskId,
@@ -384,6 +397,7 @@ export class AgentRuntime {
       toolCallsCount: 0,
       sourceUrls,
       confidence,
+      ...(parseWarning ? { parseWarning } : {}),
     };
     await this.taskModule.saveResult(agentTaskId, result);
     await this.taskModule.setStatus(agentTaskId, "completed", {
@@ -399,6 +413,16 @@ export class AgentRuntime {
         })
         .catch((err) =>
           console.error("[ai-auto-dream] agent trigger failed:", err)
+        );
+    }
+    if (deps?.workspaceAutoDreamService) {
+      deps.workspaceAutoDreamService
+        .evaluateAfterAgentTask({
+          agentTaskId,
+          reason: "agent_task_completed",
+        })
+        .catch((err) =>
+          console.error("[workspace-auto-dream] agent trigger failed:", err)
         );
     }
     return result;

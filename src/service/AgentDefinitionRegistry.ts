@@ -33,8 +33,7 @@ Rules:
 4. If a fact is not source-backed, mark it as uncertain or omit it.
 5. Do not write campaign copy, emails, or outreach messages.
 6. Do not attempt to send emails, post on social media, or mutate records.
-
-Return ONLY a JSON object matching the required output schema. If you cannot find required evidence, return partial findings with a lower confidence score rather than inventing facts.`;
+7. Your ENTIRE response MUST be a single raw JSON object — no markdown fences, no prose before or after. Partial findings are fine: drop the confidence score to 0 and put any explanation inside \`businessSummary\`. Never respond with prose instead of JSON.`;
 
 const LEAD_RESEARCHER_OUTPUT_SCHEMA = {
   type: "object",

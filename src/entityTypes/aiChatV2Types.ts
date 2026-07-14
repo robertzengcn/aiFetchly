@@ -6,6 +6,11 @@ import type {
   ChatV2Mode,
   AIChatPlanStatus,
 } from "@/entityTypes/aiChatPlanTypes";
+import type {
+  AIChatRecoveryLayer,
+  AIChatRecoveryReason,
+  ChatV2RecoveryMetadata,
+} from "@/service/AIChatRecoveryTypes";
 
 export type {
   ChatV2Mode,
@@ -26,6 +31,29 @@ export type ChatToolApprovalMode =
   | "approve_for_me"
   | "full_access";
 
+// ---------------------------------------------------------------------------
+// Attachment types
+// ---------------------------------------------------------------------------
+
+export type ChatV2AttachmentKind = "document" | "image";
+
+export interface ChatV2UploadedAttachment {
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+  contentBase64: string;
+  kind: ChatV2AttachmentKind;
+}
+
+export interface ChatV2AttachmentMetadata {
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+  kind: ChatV2AttachmentKind;
+  processingMode?: "staged_markdown" | "rag_ingestion" | "image_url";
+  documentId?: number;
+}
+
 /** Metadata stored on v2 chat rows in the existing ai_chat_messages table. */
 export interface ChatV2MessageMetadata {
   source: "chat-v2";
@@ -42,6 +70,7 @@ export interface ChatV2MessageMetadata {
   success?: boolean;
   executionTimeMs?: number;
   summary?: string;
+  attachments?: ChatV2AttachmentMetadata[];
   // Plan-mode fields (present only on plan-related display rows)
   planEventType?:
     | "ask_user_question"
@@ -66,10 +95,13 @@ export interface ChatV2MessageMetadata {
     expectedCount?: number | null;
     updatedAt: number;
   };
-  // Slash-command result rows (Phase 13 — Plan 04). Present only on assistant
-  // messages rendered from a slash-command dispatch's `show_result` variant.
+  // Slash-command result rows. Present only on assistant messages rendered
+  // from a slash-command dispatch's show_result variant.
   slashCommandResult?: boolean;
   slashCommandName?: string;
+  /** Recovery metadata persisted on the assistant row when any recovery
+   * layer activated during the turn. Technical-design §15.1. */
+  recovery?: ChatV2RecoveryMetadata;
 }
 
 /** Renderer request to start a streaming chat turn. */
@@ -81,6 +113,8 @@ export interface ChatV2StreamRequest {
   maxTokens?: number;
   systemPrompt?: string;
   mode?: ChatV2Mode;
+  toolApprovalMode?: ChatToolApprovalMode;
+  uploadedFiles?: ChatV2UploadedAttachment[];
 }
 
 export interface ChatV2HistoryRequest {
@@ -91,6 +125,35 @@ export interface ChatV2HistoryRequest {
 
 export interface ChatV2ClearConversationRequest {
   conversationId: string;
+}
+
+export type WorkspaceTrustScope = "instructions" | "all";
+
+export interface WorkspaceWatchAcquireRequest {
+  readonly conversationId: string;
+  readonly workspaceId?: string;
+}
+
+export interface WorkspaceWatchReleaseRequest {
+  readonly conversationId: string;
+  readonly workspaceId?: string;
+}
+
+export interface WorkspaceTrustSetRequest {
+  readonly workspaceId: string;
+  readonly scope: WorkspaceTrustScope;
+}
+
+export interface WorkspaceWatchAcquireResponse {
+  readonly workspaceId: string;
+}
+
+export interface WorkspaceTrustPreviewResponse {
+  readonly content: string;
+}
+
+export interface WorkspaceTrustSetResponse {
+  readonly ok: boolean;
 }
 
 /** Conversation summary for the sidebar. */
@@ -140,6 +203,7 @@ export type ChatV2StreamEventType =
   | "plan_blocked_tool"
   | "plan_changes_requested"
   | "retry_connect"
+  | "recovery_status"
   | "usage_update"
   | "error"
   | "cancelled"
@@ -181,67 +245,21 @@ export interface ChatV2StreamChunk {
   retryAttempt?: number;
   retryMaxAttempts?: number;
   retryDelayMs?: number;
+  // Recovery fields — present on recovery_status chunks emitted by the
+  // seven-layer recovery strategy. See AIChatQueryRecoveryStatusEvent.
+  recoveryLayer?: AIChatRecoveryLayer;
+  recoveryReason?: AIChatRecoveryReason;
+  recoveryAttempt?: number;
+  recoveryMaxAttempts?: number;
+  recoveryDelayMs?: number;
+  recoveryElapsedMs?: number;
+  recoveryOriginalModel?: string;
+  recoveryCurrentModel?: string;
+  recoveryFallbackModel?: string;
+  recoveryMessage?: string;
   // Usage fields — present on usage_update chunks emitted at the end of each
   // model round when the server returns token counts.
   promptTokens?: number;
   completionTokens?: number;
   totalTokens?: number;
-}
-
-// ---------------------------------------------------------------------------
-// Phase 14 (Plan 14-04) — Workspace Watch renderer surface types
-// ---------------------------------------------------------------------------
-// These mirror the main-process types in src/modules/WorkspaceWatchModule.ts
-// but live here so the renderer can import them WITHOUT pulling main-process
-// collaborators (WorkspaceWatchManager / WorkspaceResolver / WorkspaceModule)
-// into the renderer bundle. The shapes are deliberately structurally equal.
-//
-// Trust boundary (TRS-07): these types carry NO filesystem paths. The renderer
-// never receives a workspace root — only the workspaceId token returned by
-// acquire and the AGENTS.md content body returned by preview.
-// ---------------------------------------------------------------------------
-
-/**
- * Phase 14 trust scope (TRS-03). Forward-compatible: Phase 17 swaps the body
- * of WorkspaceTrustFilter for a per-capability AIFetchlyWorkspaceTrust lookup,
- * at which point "all" vs "instructions" branch into different trust flags.
- */
-export type WorkspaceTrustScope = "instructions" | "all";
-
-/** Renderer->main acquire request (chat-open). */
-export interface WorkspaceWatchAcquireRequest {
-  readonly conversationId: string;
-  /**
-   * Optional renderer hint (the id returned by a previous acquire). Main
-   * ALWAYS re-resolves the approved root via WorkspaceResolver — the renderer
-   * NEVER supplies a workspaceRoot (CFG-02).
-   */
-  readonly workspaceId?: string;
-}
-
-/** Renderer->main release request (chat-close / unmount). */
-export interface WorkspaceWatchReleaseRequest {
-  readonly conversationId: string;
-  readonly workspaceId?: string;
-}
-
-/** Renderer->main trust-set request (TRS-03 prompt actions). */
-export interface WorkspaceTrustSetRequest {
-  readonly workspaceId: string;
-  readonly scope: WorkspaceTrustScope;
-}
-
-/** Successful acquire response — the workspaceId token to pass back. */
-export interface WorkspaceWatchAcquireResponse {
-  readonly workspaceId: string;
-}
-
-/** Successful preview response — AGENTS.md body string (never a path). */
-export interface WorkspaceTrustPreviewResponse {
-  readonly content: string;
-}
-
-/** Successful setTrust response. */
-export interface WorkspaceTrustSetResponse {
-  readonly ok: boolean;
 }

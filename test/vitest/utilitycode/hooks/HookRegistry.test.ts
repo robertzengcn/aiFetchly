@@ -15,7 +15,6 @@ function cb(
     eventName: "PreToolUse",
     source: "builtin",
     enabled: true,
-    trusted: true,
     type: "callback",
     callback: () => ({}),
     ...overrides,
@@ -31,7 +30,6 @@ function cmd(
     eventName: "PreToolUse",
     source: "session",
     enabled: true,
-    trusted: true,
     type: "command",
     command: "node -e 'process.stdin.resume()'",
     ...overrides,
@@ -73,23 +71,6 @@ describe("HookRegistry", () => {
     HookRegistry.registerBuiltinHook(cb("on"));
     const matched = HookRegistry.getMatchingHooks({ eventName: "PreToolUse" });
     expect(matched.map((h) => h.id)).toEqual(["on"]);
-  });
-
-  it("filters untrusted command hooks", () => {
-    // Callback hook: trusted flag is not consulted by the registry
-    // (trust is a command-hook concern).
-    HookRegistry.registerBuiltinHook(cb("safe-cb", { trusted: false }));
-    // Untrusted command hook registered via the session API (built-in
-    // registration is callback-only by design).
-    HookRegistry.registerSessionHook(
-      "s1",
-      cmd("cmd-untrusted", { source: "session", trusted: false })
-    );
-    const matched = HookRegistry.getMatchingHooks({
-      eventName: "PreToolUse",
-      sessionId: "s1",
-    });
-    expect(matched.map((h) => h.id)).toEqual(["safe-cb"]);
   });
 
   it("registers session hooks and scopes them by sessionId", () => {

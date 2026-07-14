@@ -8,7 +8,7 @@ export interface BuildPlanModeSystemPromptInput {
 export function buildPlanModeSystemPrompt(
   input: BuildPlanModeSystemPromptInput
 ): string {
-  const base = input.baseSystemPrompt?.trim() || "You are a helpful assistant.";
+  const base = input.baseSystemPrompt?.trim() || "You are aiFetchly's built-in helpful assistant.";
   const stateBlock = buildPlanStateBlock(input.planState);
 
   return `${base}

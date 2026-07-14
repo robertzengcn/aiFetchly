@@ -41,6 +41,13 @@
           color="primary"
           height="2"
         />
+        <div
+          v-else-if="loadError"
+          class="pa-6 text-center text-error"
+        >
+          <v-icon size="40" color="error">mdi-alert-circle-outline</v-icon>
+          <p class="mt-2 text-caption">{{ loadError }}</p>
+        </div>
         <div v-else-if="tasks.length === 0" class="pa-6 text-center text-grey">
           <v-icon size="40" color="grey-lighten-2">mdi-robot-off</v-icon>
           <p class="mt-2 text-caption">
@@ -116,6 +123,7 @@ const { t } = useI18n();
 const loading = ref(false);
 const tasks = ref<AgentTaskSnapshot[]>([]);
 const definitions = ref<AgentDefinitionView[]>([]);
+const loadError = ref<string | null>(null);
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 
 const agentNameMap = computed(() => {
@@ -230,15 +238,31 @@ function formatTime(iso: string): string {
 
 async function refresh(): Promise<void> {
   loading.value = true;
+  loadError.value = null;
+  // Decouple the two IPC calls so a definitions failure (e.g. built-in
+  // agents not seeded yet) does not mask the task list, and vice versa.
+  // Each call logs its own error; the task-list error is surfaced in the UI
+  // so users can distinguish "no tasks" from "load failed".
+  const tasksP = listAgentTasks(50).catch((err) => {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("[AgentTaskListDialog] listAgentTasks failed:", err);
+    return { __error: msg } as unknown as AgentTaskSnapshot[];
+  });
+  const defsP = listAgentDefinitions().catch((err) => {
+    // Non-fatal: agent names just fall back to ids.
+    console.warn("[AgentTaskListDialog] listAgentDefinitions failed:", err);
+    return [] as AgentDefinitionView[];
+  });
   try {
-    const [taskList, defList] = await Promise.all([
-      listAgentTasks(50),
-      listAgentDefinitions(),
-    ]);
-    tasks.value = taskList;
+    const [taskList, defList] = await Promise.all([tasksP, defsP]);
+    const maybeErr = taskList as unknown as { __error?: string };
+    if (maybeErr.__error) {
+      loadError.value = maybeErr.__error;
+      tasks.value = [];
+    } else {
+      tasks.value = taskList;
+    }
     definitions.value = defList;
-  } catch {
-    // silent
   } finally {
     loading.value = false;
   }
@@ -247,6 +271,8 @@ async function refresh(): Promise<void> {
 function onToggle(open: boolean): void {
   if (open) {
     void refresh();
+    // Guard against a leaked interval if onToggle(true) fires twice.
+    if (pollTimer) clearInterval(pollTimer);
     pollTimer = setInterval(() => void refresh(), 5000);
   } else {
     if (pollTimer) {

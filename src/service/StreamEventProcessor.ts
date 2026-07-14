@@ -507,6 +507,10 @@ export class StreamEventProcessor {
         toolResult = this.buildHookBlockedToolResult(preAggregate);
       } else {
         const effectiveParams = preAggregate.updatedInput ?? toolParams;
+        // PreToolUse hook messages/contexts for non-blocking path.
+        // Merged into toolResult after executor runs (below).
+        const preSystemMessages = [...preAggregate.systemMessages];
+        const preContexts = [...preAggregate.additionalContexts];
 
         // Use SkillExecutor for registry-known skills, fall back to ToolExecutor for MCP/legacy
         if (SkillRegistry.isRegistered(toolName)) {
@@ -614,13 +618,15 @@ export class StreamEventProcessor {
             toolResult = { ...toolResult, ...postAggregate.updatedToolOutput };
           }
           if (
+            preSystemMessages.length > 0 ||
+            preContexts.length > 0 ||
             postAggregate.systemMessages.length > 0 ||
             postAggregate.additionalContexts.length > 0
           ) {
             toolResult = {
               ...toolResult,
-              hookMessages: [...postAggregate.systemMessages],
-              hookContexts: [...postAggregate.additionalContexts],
+              hookMessages: [...preSystemMessages, ...postAggregate.systemMessages],
+              hookContexts: [...preContexts, ...postAggregate.additionalContexts],
             };
           }
         }

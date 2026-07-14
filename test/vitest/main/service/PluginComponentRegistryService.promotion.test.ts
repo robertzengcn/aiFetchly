@@ -58,6 +58,7 @@ function makePlugin(opts: {
     manifest: { name: opts.name, version: "1.0.0" } as PluginManifest,
     skills: [],
     mcpServers: [],
+    hooks: [],
     errors: [],
   };
 }

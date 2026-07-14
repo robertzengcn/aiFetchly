@@ -367,7 +367,7 @@ import { useI18n } from 'vue-i18n'
 import YellowPagesTaskTable from './components/YellowPagesTaskTable.vue'
 import TaskDetailsView from './components/TaskDetailsView.vue'
 import NoticeSnackbar from '@/views/components/widgets/noticeSnackbar.vue'
-import { getYellowPagesTaskList, getYellowPagesPlatforms, killProcessByPID, startYellowPagesTask, pauseYellowPagesTask, resumeYellowPagesTask } from '@/views/api/yellowpages'
+import { getYellowPagesTaskList, getYellowPagesPlatforms, deleteYellowPagesTask, killProcessByPID, startYellowPagesTask, pauseYellowPagesTask, resumeYellowPagesTask } from '@/views/api/yellowpages'
 import { TaskStatus, TaskSummary } from '@/modules/interface/ITaskManager'
 import { PlatformSummary } from '@/modules/interface/IPlatformConfig'
 
@@ -717,10 +717,7 @@ const deleteTask = (task: any) => {
 
 const performDeleteTask = async (taskId: number) => {
   try {
-    // TODO: Replace with actual API call when deleteYellowPagesTask is implemented
-    await fetch(`/api/yellow-pages/tasks/${taskId}`, {
-      method: 'DELETE'
-    })
+    await deleteYellowPagesTask(taskId)
     await loadTasks()
   } catch (error) {
     console.error('Failed to delete task:', error)

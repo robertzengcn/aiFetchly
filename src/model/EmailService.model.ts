@@ -104,4 +104,25 @@ export class EmailServiceModel extends BaseDb {
 
     return entities;
   }
+
+  /** Services with inbound receive enabled. */
+  async listReceiveEnabled(): Promise<EmailServiceEntity[]> {
+    return await this.repository.find({
+      where: { receiveEnabled: 1 },
+      order: { id: "DESC" },
+    });
+  }
+
+  /** Update receive sync tracking fields without touching SMTP/send config. */
+  async updateReceiveSyncState(
+    id: number,
+    lastReceiveSyncAt: Date | null,
+    lastReceiveSyncError: string | null
+  ): Promise<void> {
+    const entity = await this.repository.findOne({ where: { id } });
+    if (!entity) return;
+    entity.lastReceiveSyncAt = lastReceiveSyncAt;
+    entity.lastReceiveSyncError = lastReceiveSyncError;
+    await this.repository.save(entity);
+  }
 }

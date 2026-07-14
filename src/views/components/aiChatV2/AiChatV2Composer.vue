@@ -1,18 +1,31 @@
 <template>
   <div class="v2-composer">
-    <!--
-      Slash suggestions dropdown (Phase 13 — Plan 04, CMD-05).
-      Positioned absolutely above the textarea by AiChatV2SlashSuggestions's
-      own scoped styles (bottom: 100%). Only renders when slashOpen && the
-      draft starts with '/'. Emits 'select' on Enter/Tab/click.
-    -->
-    <AiChatV2SlashSuggestions
-      :commands="slashCommands"
-      :highlighted-index="slashHighlighted"
-      :open="slashOpen"
-      @select="onSlashSelect"
-      @highlight="onSlashHighlight"
-    />
+    <!-- File notice (error/warning inline) -->
+    <v-slide-y-reverse-transition>
+      <div v-if="fileNotice" class="v2-composer__notice">
+        <v-icon size="x-small" color="warning" class="mr-1">mdi-alert-circle-outline</v-icon>
+        {{ fileNotice }}
+      </div>
+    </v-slide-y-reverse-transition>
+
+    <!-- Selected file chips -->
+    <div v-if="selectedFiles.length > 0" class="v2-composer__files">
+      <v-chip
+        v-for="(file, idx) in selectedFiles"
+        :key="`${file.name}-${idx}`"
+        size="small"
+        closable
+        class="mr-1 mb-1"
+        @click:close="removeFile(idx)"
+      >
+        <v-icon start size="x-small">
+          {{ isImageFile(file) ? "mdi-image" : "mdi-file-document-outline" }}
+        </v-icon>
+        {{ file.name }}
+        <span class="v2-composer__file-size">({{ formatBytes(file.size) }})</span>
+      </v-chip>
+    </div>
+
     <v-textarea
       v-model="draft"
       :placeholder="t('aiChatV2.input_placeholder') || 'Send a message…'"
@@ -22,10 +35,24 @@
       max-rows="6"
       hide-details
       density="comfortable"
-      :disabled="isStreaming"
+      :disabled="isStreaming || isProcessing"
       @keydown="onKeydown"
     />
     <div class="v2-composer__bar">
+      <!-- Attach file button. Rendered as its own flex item at the far
+           left of the bar so the mode/model/tool selectors in the prepend
+           slot can't push it off-screen on narrow chat panels. -->
+      <v-btn
+        v-if="!isStreaming && !isProcessing"
+        icon
+        size="small"
+        variant="text"
+        class="v2-composer__attach"
+        :title="t('aiChatV2.attachments.add') || 'Attach file'"
+        @click="triggerFilePicker"
+      >
+        <v-icon size="small">mdi-paperclip</v-icon>
+      </v-btn>
       <div v-if="$slots.prepend" class="v2-composer__prepend">
         <slot name="prepend" />
       </div>
@@ -35,7 +62,8 @@
           color="primary"
           icon="mdi-send"
           size="small"
-          :disabled="draft.trim().length === 0"
+          :disabled="(draft.trim().length === 0 && selectedFiles.length === 0) || isProcessing"
+          :loading="isProcessing"
           :aria-label="t('aiChatV2.send') || 'Send'"
           @click="onSend"
         />
@@ -49,184 +77,123 @@
         />
       </div>
     </div>
+    <!-- Hidden file input -->
+    <input
+      ref="fileInputRef"
+      type="file"
+      multiple
+      accept=".pdf,.docx,.csv,.xlsx,.xls,.png,.jpg,.jpeg,.webp,.gif,image/*"
+      style="display: none"
+      @change="onFileSelected"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, watch } from "vue";
+import { ref } from "vue";
 import { useI18n } from "vue-i18n";
-import AiChatV2SlashSuggestions from "./AiChatV2SlashSuggestions.vue";
-import { listSlashCommands } from "@/views/api/slashCommands";
-import type { SlashCommandView } from "@/entityTypes/slashCommandTypes";
 
-const props = defineProps<{ isStreaming: boolean }>();
+const MAX_UPLOAD_FILES = 3;
+const MAX_UPLOAD_FILE_BYTES = 5 * 1024 * 1024; // 5 MB
+
+const SUPPORTED_IMAGE_EXTS = new Set([".png", ".jpg", ".jpeg", ".webp", ".gif"]);
+const SUPPORTED_DOC_EXTS = new Set([".pdf", ".docx", ".csv", ".xlsx", ".xls"]);
+
+const props = defineProps<{
+  isStreaming: boolean;
+  isProcessing?: boolean;
+}>();
 const emit = defineEmits<{
-  (e: "send", text: string): void;
+  (e: "send", text: string, files: File[]): void;
   (e: "stop"): void;
-  /**
-   * Emitted when the user chooses a suggestion (Enter/Tab/click) while the
-   * dropdown is open and an item is highlighted. AiChatV2.vue routes the
-   * chosen command through dispatchSlashCommand.
-   */
-  (e: "command-select", command: SlashCommandView): void;
 }>();
 const { t } = useI18n();
 
 const draft = ref("");
+const selectedFiles = ref<File[]>([]);
+const fileNotice = ref("");
+const fileInputRef = ref<HTMLInputElement | null>(null);
 
-// ---------------------------------------------------------------------------
-// Slash-suggestions state (Phase 13 — Plan 04, CMD-05 + Pitfall 4)
-// ---------------------------------------------------------------------------
-// slashOpen drives the dropdown render. slashCommands is the local cache of
-// the renderer-safe views returned by SLASH_COMMAND_LIST. slashHighlighted is
-// the index of the currently-focused row (-1 = none); Enter/Tab choose it.
-const slashOpen = ref(false);
-const slashCommands = ref<SlashCommandView[]>([]);
-const slashHighlighted = ref(-1);
+let noticeTimer: ReturnType<typeof setTimeout> | null = null;
+function showNotice(msg: string): void {
+  fileNotice.value = msg;
+  if (noticeTimer) clearTimeout(noticeTimer);
+  noticeTimer = setTimeout(() => { fileNotice.value = ""; }, 4000);
+}
 
-let slashFetchToken = 0;
-// Tracks whether the current draft still starts with '/' after left-trim.
-// Drives open/close + refetch on every relevant edit.
-const startsWithSlash = (text: string): boolean =>
-  text.trimStart().startsWith("/");
+function isImageFile(file: File): boolean {
+  if (file.type.startsWith("image/")) return true;
+  const name = file.name.toLowerCase();
+  for (const ext of SUPPORTED_IMAGE_EXTS) {
+    if (name.endsWith(ext)) return true;
+  }
+  return false;
+}
 
-/**
- * Open (or refresh) the dropdown by fetching the renderer-safe command list
- * from the main process. The fetch is token-guarded so a stale response
- * (e.g. user typed '/' then 'x' quickly) never replaces a newer fetch's
- * results. On success, pre-selects the first row so Enter always selects.
- */
-async function openSlashDropdown(query: string): Promise<void> {
-  slashOpen.value = true;
-  const myToken = ++slashFetchToken;
-  try {
-    const resp = await listSlashCommands({ query });
-    if (myToken !== slashFetchToken) return; // a newer fetch superseded us
-    slashCommands.value = [...resp.commands];
-    slashHighlighted.value = slashCommands.value.length > 0 ? 0 : -1;
-  } catch {
-    // Non-fatal: leave the dropdown empty. The user can still type / submit.
-    if (myToken === slashFetchToken) {
-      slashCommands.value = [];
-      slashHighlighted.value = -1;
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes}B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
+}
+
+function getFileExtension(name: string): string {
+  const dot = name.lastIndexOf(".");
+  return dot >= 0 ? name.slice(dot).toLowerCase() : "";
+}
+
+function isSupportedFile(file: File): boolean {
+  if (file.type.startsWith("image/")) return true;
+  const ext = getFileExtension(file.name);
+  return SUPPORTED_DOC_EXTS.has(ext) || SUPPORTED_IMAGE_EXTS.has(ext);
+}
+
+function triggerFilePicker(): void {
+  fileInputRef.value?.click();
+}
+
+function onFileSelected(event: Event): void {
+  const input = event.target as HTMLInputElement;
+  if (!input.files || input.files.length === 0) return;
+
+  const newFiles: File[] = [];
+  for (const file of input.files) {
+    if (!isSupportedFile(file)) {
+      showNotice(t("aiChatV2.attachments.unsupported", { name: file.name }) || `${file.name} is not a supported file type.`);
+      continue;
     }
+    if (file.size > MAX_UPLOAD_FILE_BYTES) {
+      showNotice(t("aiChatV2.attachments.too_large", { name: file.name, maxSize: formatBytes(MAX_UPLOAD_FILE_BYTES) }) || `${file.name} exceeds the ${formatBytes(MAX_UPLOAD_FILE_BYTES)} limit.`);
+      continue;
+    }
+    newFiles.push(file);
   }
+
+  const combined = [...selectedFiles.value, ...newFiles].slice(0, MAX_UPLOAD_FILES);
+  selectedFiles.value = combined;
+
+  // Reset input so the same files can be re-selected after removal.
+  input.value = "";
 }
 
-function closeSlashDropdown(): void {
-  slashOpen.value = false;
-  slashCommands.value = [];
-  slashHighlighted.value = -1;
+function removeFile(idx: number): void {
+  selectedFiles.value = selectedFiles.value.filter((_, i) => i !== idx);
 }
-
-// Watch the draft for leading '/' to open/close the dropdown. Per design §16.3
-// the renderer fetches on '/' and lets the main process's CMD-07 ranking
-// handle the filtering — cheaper than client-side fuzzy ranking (FUT-01).
-watch(draft, (next) => {
-  if (!next) {
-    closeSlashDropdown();
-    return;
-  }
-  if (startsWithSlash(next)) {
-    // Only refetch when the query token after '/' changes shape significantly
-    // (e.g. '/' -> '/x'). For the simple phase-13 case (4 built-ins) a fetch
-    // per keystroke is cheap, but the token-guard above already dedupes races.
-    const query = next.trimStart().slice(1);
-    void openSlashDropdown(query);
-  } else if (slashOpen.value) {
-    closeSlashDropdown();
-  }
-});
 
 const onSend = (): void => {
   const text = draft.value.trim();
-  if (!text || props.isStreaming) return;
-  emit("send", text);
+  if ((!text && selectedFiles.value.length === 0) || props.isStreaming) return;
+  const files = [...selectedFiles.value];
+  emit("send", text, files);
   draft.value = "";
+  selectedFiles.value = [];
 };
 
-/**
- * Hand the chosen command to the parent for dispatch, clear the draft, and
- * close the dropdown. Called from click and Enter/Tab paths. Clearing the
- * draft locally keeps the composer self-contained: selecting a slash command
- * consumes the input (the slash text is not a meaningful chat message).
- */
-function selectCommand(cmd: SlashCommandView): void {
-  emit("command-select", cmd);
-  draft.value = "";
-  closeSlashDropdown();
-}
-
-/**
- * Keyboard handler (Pitfall 4 — the critical change).
- *
- * Precedence when the dropdown is OPEN and a row is highlighted:
- *   1. Enter or Tab -> preventDefault + selectCommand; do NOT submit.
- *   2. ArrowDown / ArrowUp -> cycle highlight; preventDefault.
- *   3. Escape -> close dropdown; preventDefault.
- *
- * If the dropdown is closed or no row is highlighted, the EXISTING behavior
- * runs: Enter (no Shift) submits via onSend; Shift+Enter inserts a newline
- * (Vuetify default). This preserves the composer's original UX when no
- * suggestion is being chosen.
- */
 const onKeydown = (event: KeyboardEvent): void => {
-  if (slashOpen.value && slashHighlighted.value >= 0) {
-    if (event.key === "Enter" || event.key === "Tab") {
-      // Pitfall 4: intercept — do NOT fall through to onSend.
-      event.preventDefault();
-      const cmd = slashCommands.value[slashHighlighted.value];
-      if (cmd) {
-        selectCommand(cmd);
-      }
-      return;
-    }
-    if (event.key === "ArrowDown") {
-      event.preventDefault();
-      const len = slashCommands.value.length;
-      if (len > 0) {
-        slashHighlighted.value = (slashHighlighted.value + 1) % len;
-      }
-      return;
-    }
-    if (event.key === "ArrowUp") {
-      event.preventDefault();
-      const len = slashCommands.value.length;
-      if (len > 0) {
-        slashHighlighted.value =
-          (slashHighlighted.value - 1 + len) % len;
-      }
-      return;
-    }
-    if (event.key === "Escape") {
-      event.preventDefault();
-      closeSlashDropdown();
-      return;
-    }
-  } else if (slashOpen.value && event.key === "Escape") {
-    event.preventDefault();
-    closeSlashDropdown();
-    return;
-  }
-
-  // Existing behavior: Enter (no Shift) submits; Shift+Enter inserts newline.
   if (event.key === "Enter" && !event.shiftKey) {
     event.preventDefault();
     onSend();
   }
 };
-
-/** User clicked a suggestion. Resolve + emit + clear draft + close dropdown. */
-function onSlashSelect(idx: number): void {
-  const cmd = slashCommands.value[idx];
-  if (!cmd) return;
-  selectCommand(cmd);
-}
-
-/** User hovered a row — update the highlight to follow the mouse. */
-function onSlashHighlight(idx: number): void {
-  slashHighlighted.value = idx;
-}
 </script>
 
 <style scoped>
@@ -234,23 +201,53 @@ function onSlashHighlight(idx: number): void {
   flex: 0 0 auto;
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 10px 12px;
+  gap: 4px;
+  padding: 8px 12px 10px;
   border-top: 1px solid rgba(0, 0, 0, 0.08);
-  position: relative; /* anchor for the absolutely-positioned suggestions dropdown */
+}
+.v2-composer__notice {
+  display: flex;
+  align-items: center;
+  font-size: 12px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  background: rgba(255, 152, 0, 0.1);
+  color: rgba(0, 0, 0, 0.7);
+}
+.v2-composer__files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding-bottom: 4px;
+}
+.v2-composer__file-size {
+  font-size: 11px;
+  opacity: 0.7;
+  margin-left: 2px;
 }
 .v2-composer__bar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 8px;
 }
+/* Attach button never shrinks — always visible on the far left. */
+.v2-composer__attach {
+  flex: 0 0 auto;
+}
+/* Prepend slot wraps and can shrink; selectors move to the next line on
+   narrow panels instead of pushing the attach/send buttons off-screen. */
 .v2-composer__prepend {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
+  flex: 1 1 auto;
+  min-width: 0;
+  row-gap: 4px;
 }
 .v2-composer__actions {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
+  margin-left: auto;
 }
 </style>
