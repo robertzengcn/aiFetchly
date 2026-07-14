@@ -119,3 +119,90 @@ describe("SkillImportService local-skill execution boundary (T-arbitrary-exec / 
     expect(localTool?.type).toBe("function");
   });
 });
+
+describe("registerImportedSkill collision + idempotency (T-spoof-builtin + HMR)", () => {
+  const tracked: string[] = [];
+  let tmpDir: string;
+
+  beforeAll(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "aifetchly-collision-"));
+  });
+
+  afterAll(() => {
+    for (const n of tracked) {
+      try {
+        SkillRegistry.unregisterSkill(n);
+      } catch {
+        /* gone */
+      }
+    }
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  function writeSkill(name: string): {
+    manifest: Record<string, unknown>;
+    skillDir: string;
+  } {
+    const skillDir = path.join(tmpDir, name);
+    fs.mkdirSync(skillDir, { recursive: true });
+    const manifest = {
+      name,
+      version: "1.0.0",
+      description: `Collision/idempotency test skill ${name}.`,
+      runtime: "javascript",
+      entry: "handler.js",
+      parameters: { type: "object", properties: {} },
+    };
+    fs.writeFileSync(
+      path.join(skillDir, "manifest.json"),
+      JSON.stringify(manifest),
+      "utf8"
+    );
+    fs.writeFileSync(path.join(skillDir, "handler.js"), HANDLER_CODE, "utf8");
+    return { manifest, skillDir };
+  }
+
+  it("re-registering a USER skill is idempotent — no throw (HMR / dev reinstall)", () => {
+    const name = "idempotent-user-skill";
+    tracked.push(name);
+    const { manifest, skillDir } = writeSkill(name);
+
+    expect(() =>
+      SkillImportService.registerImportedSkill(manifest as never, skillDir)
+    ).not.toThrow();
+    // Second registration in the same session (HMR preserved the registry Map)
+    // unregisters-then-reregisters — still no throw.
+    expect(() =>
+      SkillImportService.registerImportedSkill(manifest as never, skillDir)
+    ).not.toThrow();
+    expect(SkillRegistry.isRegistered(name)).toBe(true);
+  });
+
+  it("a skill colliding with a BUILT-IN throws — built-in always wins (T-spoof-builtin / T-18-02)", () => {
+    const name = "spoof-builtin-target";
+    // Pre-register a built-in — the would-be clobber target.
+    SkillRegistry.registerSkill({
+      name,
+      description: "Built-in clobber target.",
+      parameters: { type: "object", properties: {} },
+      tier: "sandboxed",
+      permissionCategory: "pure",
+      requiresConfirmation: false,
+      source: "built-in",
+      execute: async () => ({ success: true, result: { ok: true } }),
+    });
+    tracked.push(name);
+
+    const { manifest, skillDir } = writeSkill(name);
+
+    // A local/plugin skill with the SAME name must NOT silently replace the
+    // built-in (the idempotent unregister path skips built-ins).
+    expect(() =>
+      SkillImportService.registerImportedSkill(manifest as never, skillDir)
+    ).toThrow(/already registered as built-in/i);
+
+    // The built-in survives unchanged.
+    const survivor = SkillRegistry.getSkill(name);
+    expect(survivor?.source).toBe("built-in");
+  });
+});
