@@ -66,9 +66,23 @@ function initializeWorker(): void {
     // SIGTERM/SIGINT handlers (process signals), not via IPC.
   });
 
-  // Handle worker errors
+  // Handle worker errors — WS-4 R4.3: on fatal error, notify main + exit(1)
+  // (mirrors LocalEmbeddingWorker / SkillWorker pattern).
   process.on("uncaughtException", (error) => {
     console.error("ContactExtractionWorker: Uncaught exception:", error);
+    try {
+      process.send?.({
+        type: "worker-log",
+        level: "error",
+        args: [
+          "[ContactExtractionWorker] Fatal: uncaughtException:",
+          String(error),
+        ],
+      });
+    } catch {
+      /* main may already be gone */
+    }
+    process.exit(1);
   });
 
   process.on("unhandledRejection", (reason, promise) => {
@@ -78,6 +92,29 @@ function initializeWorker(): void {
       "reason:",
       reason
     );
+    try {
+      process.send?.({
+        type: "worker-log",
+        level: "error",
+        args: [
+          "[ContactExtractionWorker] Fatal: unhandledRejection:",
+          String(reason),
+        ],
+      });
+    } catch {
+      /* main may already be gone */
+    }
+    process.exit(1);
+  });
+
+  // WS-4 R4.3: graceful shutdown on SIGTERM/SIGINT
+  process.on("SIGTERM", () => {
+    console.log("ContactExtractionWorker: received SIGTERM, shutting down");
+    process.exit(0);
+  });
+  process.on("SIGINT", () => {
+    console.log("ContactExtractionWorker: received SIGINT, shutting down");
+    process.exit(0);
   });
 
   // Notify parent that worker is ready
