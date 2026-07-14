@@ -147,6 +147,22 @@ export const constantRoutes: RouteRecordRaw[] = [
         component: () => import("@/views/pages/systemsetting/plugins.vue"),
         children: [],
       },
+      {
+        path: "subagents",
+        name: "system_setting_subagents",
+        meta: {
+          title: "route.subagents",
+          icon: "mdi-robot-outline",
+          keepAlive: false,
+          visible: false,
+          aiNavigable: true,
+          aiAliases: ["subagents", "agents", "agent management"],
+          aiDescription:
+            "Manage built-in, plugin-installed, and manual subagents",
+        },
+        component: () => import("@/views/pages/systemsetting/subagents.vue"),
+        children: [],
+      },
     ],
   },
 

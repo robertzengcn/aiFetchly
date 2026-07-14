@@ -17,6 +17,7 @@
         <v-tabs v-model="tab">
           <v-tab value="overview">{{ t("plugins.tab_overview") }}</v-tab>
           <v-tab value="skills">{{ t("plugins.tab_skills") }}</v-tab>
+          <v-tab value="subagents">{{ t("subagents.tab_subagents") }}</v-tab>
           <v-tab value="mcp">{{ t("plugins.tab_mcp_servers") }}</v-tab>
           <v-tab value="permissions">{{ t("plugins.tab_permissions") }}</v-tab>
           <v-tab value="diagnostics">{{ t("plugins.tab_diagnostics") }}</v-tab>
@@ -28,6 +29,9 @@
           </v-window-item>
           <v-window-item value="skills">
             <PluginSkillsTab :detail="detail" @changed="reload" />
+          </v-window-item>
+          <v-window-item value="subagents">
+            <PluginAgentsTab :detail="detail" @changed="reload" />
           </v-window-item>
           <v-window-item value="mcp">
             <PluginMcpServersTab :detail="detail" @changed="reload" />
@@ -53,6 +57,7 @@ import { useI18n } from "vue-i18n";
 import { getPlugin, type PluginDetail } from "@/views/api/plugins";
 import PluginOverviewTab from "./PluginOverviewTab.vue";
 import PluginSkillsTab from "./PluginSkillsTab.vue";
+import PluginAgentsTab from "./PluginAgentsTab.vue";
 import PluginMcpServersTab from "./PluginMcpServersTab.vue";
 import PluginPermissionsTab from "./PluginPermissionsTab.vue";
 import PluginDiagnosticsTab from "./PluginDiagnosticsTab.vue";
