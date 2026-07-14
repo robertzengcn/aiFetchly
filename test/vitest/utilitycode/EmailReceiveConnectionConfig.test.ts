@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { emailReceiveConnectionTestInputSchema } from "@/schemas/ipc/emailReceive";
-import { normalizeReceiveConnectionConfig } from "@/service/emailReceive/EmailReceiveSyncService";
+import {
+  normalizeReceiveConnectionConfig,
+  validateReceiveEndpointConfig,
+} from "@/service/emailReceive/EmailReceiveSyncService";
 import {
   buildImapFlowOptions,
   shouldRetryWithImplicitTls,
@@ -52,6 +55,48 @@ describe("normalizeReceiveConnectionConfig", () => {
     const config = makeConfig({ protocol: "pop3", port: 1995, ssl: true });
 
     expect(normalizeReceiveConnectionConfig(config)).toBe(config);
+  });
+});
+
+describe("validateReceiveEndpointConfig", () => {
+  it("rejects SMTP port 465 for IMAP receive", () => {
+    const message = validateReceiveEndpointConfig(
+      makeConfig({
+        protocol: "imap",
+        host: "imap.qiye.aliyun.com",
+        port: 465,
+        ssl: true,
+      })
+    );
+
+    expect(message).toContain("Port 465 is for SMTP sending");
+    expect(message).toContain("port 993");
+  });
+
+  it("rejects SMTP hosts for IMAP receive", () => {
+    const message = validateReceiveEndpointConfig(
+      makeConfig({
+        protocol: "imap",
+        host: "smtp.qiye.aliyun.com",
+        port: 993,
+        ssl: true,
+      })
+    );
+
+    expect(message).toContain("SMTP host is configured for IMAP receive");
+  });
+
+  it("allows normal Aliyun IMAP SSL receive settings", () => {
+    expect(
+      validateReceiveEndpointConfig(
+        makeConfig({
+          protocol: "imap",
+          host: "imap.qiye.aliyun.com",
+          port: 993,
+          ssl: true,
+        })
+      )
+    ).toBeNull();
   });
 });
 

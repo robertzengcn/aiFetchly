@@ -91,6 +91,10 @@ export class EmailReceiveSyncService {
         return { success: false, error: "Receive is not configured for this service." };
       }
       const normalizedConfig = normalizeReceiveConnectionConfig(config);
+      const validationError = validateReceiveEndpointConfig(normalizedConfig);
+      if (validationError) {
+        return { success: false, error: validationError };
+      }
       console.info("[email-receive:test] starting connection test", {
         emailServiceId: normalizedConfig.emailServiceId,
         protocol: normalizedConfig.protocol,
@@ -141,6 +145,10 @@ export class EmailReceiveSyncService {
     }
 
     const normalizedConfig = normalizeReceiveConnectionConfig(config);
+    const validationError = validateReceiveEndpointConfig(normalizedConfig);
+    if (validationError) {
+      throw new Error(validationError);
+    }
     const client = EmailReceiveClientFactory.createClient(normalizedConfig.protocol);
     let parsed: ParsedInboundEmail[];
     try {
@@ -244,6 +252,28 @@ export function normalizeReceiveConnectionConfig(
     ...config,
     ssl: true,
   };
+}
+
+export function validateReceiveEndpointConfig(
+  config: EmailReceiveConnectionConfig
+): string | null {
+  if (config.port === 465) {
+    return (
+      "Port 465 is for SMTP sending, not receiving. " +
+      `For ${config.protocol.toUpperCase()} receive, use the provider's receive port. ` +
+      "For Aliyun IMAP, use port 993 with SSL/TLS or port 143 without SSL/TLS."
+    );
+  }
+
+  if (config.protocol === "imap" && config.host.toLowerCase().startsWith("smtp.")) {
+    return "SMTP host is configured for IMAP receive. Use an IMAP host, such as imap.qiye.aliyun.com for Aliyun.";
+  }
+
+  if (config.protocol === "pop3" && config.host.toLowerCase().startsWith("smtp.")) {
+    return "SMTP host is configured for POP3 receive. Use a POP3 host, such as pop.qiye.aliyun.com for Aliyun.";
+  }
+
+  return null;
 }
 
 /** Reduce an unknown error to a short, safe string (no stack traces leaked). */
