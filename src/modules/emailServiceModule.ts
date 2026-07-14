@@ -8,6 +8,9 @@ import {
   EmailReceiveConnectionConfig,
   EmailReceiveProtocol,
 } from "@/entityTypes/emailReceiveTypes";
+import { FieldCipher } from "@/modules/fieldCipher/FieldCipher";
+import { userSecretKeyService } from "@/modules/fieldCipher";
+import { SecretKeyUnavailableError } from "@/modules/fieldCipher/SecretKeyUnavailableError";
 
 export class EmailServiceModule
   extends BaseModule
@@ -22,7 +25,8 @@ export class EmailServiceModule
 
   async createEmailService(service: EmailServiceEntity): Promise<number> {
     try {
-      return await this.emailServiceModel.create(service);
+      const encryptedService = await this.encryptCredentialsForStorage(service);
+      return await this.emailServiceModel.create(encryptedService);
     } catch (error) {
       console.error("Error creating email service:", error);
       throw error;
@@ -31,7 +35,8 @@ export class EmailServiceModule
 
   async getEmailService(id: number): Promise<EmailServiceEntity | undefined> {
     try {
-      return await this.emailServiceModel.read(id);
+      const service = await this.emailServiceModel.read(id);
+      return await this.decryptServiceCredentials(service);
     } catch (error) {
       console.error("Error getting email service:", error);
       throw error;
@@ -43,7 +48,8 @@ export class EmailServiceModule
     service: EmailServiceEntity
   ): Promise<void> {
     try {
-      await this.emailServiceModel.update(id, service);
+      const encryptedService = await this.encryptCredentialsForStorage(service);
+      await this.emailServiceModel.update(id, encryptedService);
     } catch (error) {
       console.error("Error updating email service:", error);
       throw error;
@@ -84,7 +90,7 @@ export class EmailServiceModule
       const num = await this.emailServiceModel.countEmailServices();
 
       return {
-        records,
+        records: await this.decryptServiceCredentialsList(records),
         num,
       };
     } catch (error) {
@@ -106,7 +112,8 @@ export class EmailServiceModule
     name: string
   ): Promise<EmailServiceEntity | undefined> {
     try {
-      return await this.emailServiceModel.findByName(name);
+      const service = await this.emailServiceModel.findByName(name);
+      return await this.decryptServiceCredentials(service);
     } catch (error) {
       console.error("Error finding email service by name:", error);
       throw error;
@@ -115,7 +122,8 @@ export class EmailServiceModule
 
   async findEmailServicesByHost(host: string): Promise<EmailServiceEntity[]> {
     try {
-      return await this.emailServiceModel.findByHost(host);
+      const services = await this.emailServiceModel.findByHost(host);
+      return await this.decryptServiceCredentialsList(services);
     } catch (error) {
       console.error("Error finding email services by host:", error);
       throw error;
@@ -128,7 +136,9 @@ export class EmailServiceModule
         0,
         1000
       );
-      return allServices.filter((service) => service.status === 1);
+      const decryptedServices =
+        await this.decryptServiceCredentialsList(allServices);
+      return decryptedServices.filter((service) => service.status === 1);
     } catch (error) {
       console.error("Error getting active email services:", error);
       throw error;
@@ -139,7 +149,8 @@ export class EmailServiceModule
   async listReceiveEnabledServices(): Promise<EmailServiceEntity[]> {
     try {
       await this.ensureConnection();
-      return await this.emailServiceModel.listReceiveEnabled();
+      const services = await this.emailServiceModel.listReceiveEnabled();
+      return await this.decryptServiceCredentialsList(services);
     } catch (error) {
       console.error("Error listing receive-enabled services:", error);
       throw error;
@@ -177,7 +188,7 @@ export class EmailServiceModule
   ): Promise<EmailReceiveConnectionConfig | null> {
     try {
       await this.ensureConnection();
-      const service = await this.emailServiceModel.read(id);
+      const service = await this.getEmailService(id);
       if (!service || service.receiveEnabled !== 1) return null;
 
       const protocol: EmailReceiveProtocol =
@@ -285,5 +296,125 @@ export class EmailServiceModule
   private isValidEmail(email: string): boolean {
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     return emailRegex.test(email);
+  }
+
+  private async encryptCredentialsForStorage(
+    service: EmailServiceEntity
+  ): Promise<EmailServiceEntity> {
+    const encryptedService = new EmailServiceEntity();
+    Object.assign(encryptedService, service);
+    encryptedService.password = await this.encryptRequiredCredential(
+      service.password
+    );
+    encryptedService.receivePassword = await this.encryptOptionalCredential(
+      service.receivePassword
+    );
+    return encryptedService;
+  }
+
+  private async decryptServiceCredentials(
+    service: EmailServiceEntity | undefined
+  ): Promise<EmailServiceEntity | undefined> {
+    if (!service) return undefined;
+
+    const decryptedService = new EmailServiceEntity();
+    Object.assign(decryptedService, service);
+    decryptedService.password = await this.decryptRequiredCredential(
+      service.password,
+      service.id,
+      "password"
+    );
+    decryptedService.receivePassword = await this.decryptOptionalCredential(
+      service.receivePassword,
+      service.id,
+      "receivePassword"
+    );
+    return decryptedService;
+  }
+
+  private async decryptServiceCredentialsList(
+    services: EmailServiceEntity[]
+  ): Promise<EmailServiceEntity[]> {
+    const decryptedServices = await Promise.all(
+      services.map((service) => this.decryptServiceCredentials(service))
+    );
+    return decryptedServices.filter(
+      (service): service is EmailServiceEntity => service !== undefined
+    );
+  }
+
+  private async encryptRequiredCredential(
+    plaintext: string | null | undefined
+  ): Promise<string> {
+    if (plaintext == null || plaintext === "") {
+      return plaintext ?? "";
+    }
+    if (FieldCipher.isEncrypted(plaintext)) {
+      return plaintext;
+    }
+    const key = await userSecretKeyService.getKey();
+    return FieldCipher.encrypt(plaintext, key);
+  }
+
+  private async encryptOptionalCredential(
+    plaintext: string | null | undefined
+  ): Promise<string | null> {
+    if (plaintext == null || plaintext === "") {
+      return plaintext ?? null;
+    }
+    if (FieldCipher.isEncrypted(plaintext)) {
+      return plaintext;
+    }
+    const key = await userSecretKeyService.getKey();
+    return FieldCipher.encrypt(plaintext, key);
+  }
+
+  private async decryptRequiredCredential(
+    stored: string | null | undefined,
+    serviceId: number | undefined,
+    fieldName: string
+  ): Promise<string> {
+    if (stored == null) return "";
+    if (!FieldCipher.isEncrypted(stored)) {
+      return stored;
+    }
+    return await this.decryptStoredCredential(stored, serviceId, fieldName);
+  }
+
+  private async decryptOptionalCredential(
+    stored: string | null | undefined,
+    serviceId: number | undefined,
+    fieldName: string
+  ): Promise<string | null> {
+    if (stored == null) return null;
+    if (!FieldCipher.isEncrypted(stored)) {
+      return stored;
+    }
+    return await this.decryptStoredCredential(stored, serviceId, fieldName);
+  }
+
+  private async decryptStoredCredential(
+    stored: string,
+    serviceId: number | undefined,
+    fieldName: string
+  ): Promise<string> {
+    try {
+      const key = await userSecretKeyService.getKey();
+      return FieldCipher.decrypt(stored, key);
+    } catch (error) {
+      if (error instanceof SecretKeyUnavailableError) {
+        console.warn(
+          `[EmailServiceModule] decrypt ${fieldName}: secret key unavailable`,
+          error.message
+        );
+      } else {
+        console.error(
+          `[EmailServiceModule] decrypt ${fieldName}: failed for service`,
+          serviceId,
+          error
+        );
+      }
+      return stored;
+    }
   }
 }
