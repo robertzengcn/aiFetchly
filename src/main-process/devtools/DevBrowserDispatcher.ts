@@ -14,12 +14,14 @@
  * isolation from the Electron-dependent modules the default handlers call.
  */
 import type { CommonMessage } from "@/entityTypes/commonType";
+import type { UserInfoType } from "@/entityTypes/userType";
 import { GET_APP_INFO, GET_LOGIN_URL, QUERY_USER_INFO } from "@/config/channellist";
-import { TOKENNAME } from "@/config/usersetting";
+import { REFRESHTOKEN, TOKENNAME } from "@/config/usersetting";
 import { MainProcessAppInfoModule } from "@/modules/MainProcessAppInfoModule";
 import { UserController } from "@/controller/UserController";
 import { log } from "@/modules/Logger";
 import { Token } from "@/modules/token";
+import { TokenRefreshService } from "@/modules/tokenRefresh";
 
 /** A single channel handler. Returns a CommonMessage or a bare payload. */
 export type DevBrowserHandler = (
@@ -65,6 +67,45 @@ function attachDevBrowserLoginCompletion(
         error: error instanceof Error ? error.message : String(error),
       });
     });
+}
+
+function hasUserProfile(info: UserInfoType): boolean {
+  return info.email.length > 0 && info.name.length > 0;
+}
+
+async function resolveUserInfoFromStoredSession(
+  controller: UserController
+): Promise<UserInfoType> {
+  let info = controller.getUserInfo();
+  if (hasUserProfile(info)) {
+    return info;
+  }
+
+  const tokenService = new Token();
+  const accessToken = tokenService.getValue(TOKENNAME);
+  const refreshToken = tokenService.getValue(REFRESHTOKEN);
+  const hasAccessToken = accessToken.trim().length > 0;
+  const hasRefreshToken = refreshToken.trim().length > 0;
+  if (!hasAccessToken && !hasRefreshToken) {
+    return info;
+  }
+
+  try {
+    if (!hasAccessToken && hasRefreshToken) {
+      await TokenRefreshService.refreshOnce();
+    }
+    await controller.updateUserInfo();
+    info = controller.getUserInfo();
+    if (hasUserProfile(info) && !TokenRefreshService.isAutoRefreshRunning()) {
+      TokenRefreshService.startAutoRefresh();
+    }
+  } catch (error) {
+    log.warn("[dev-browser] could not hydrate user info from stored tokens", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+
+  return info;
 }
 
 /** Coerce a handler return value into the canonical bridge response shape. */
@@ -156,11 +197,7 @@ export function createDefaultHandlers(): ReadonlyMap<string, DevBrowserHandler> 
   // QUERY_USER_INFO — read-only local user profile (Token-backed).
   handlers.set(QUERY_USER_INFO, async () => {
     const controller = new UserController();
-    let info = controller.getUserInfo();
-    if ((!info.email || !info.name) && new Token().getValue(TOKENNAME)) {
-      await controller.updateUserInfo();
-      info = controller.getUserInfo();
-    }
+    const info = await resolveUserInfoFromStoredSession(controller);
     const result: CommonMessage<unknown> = {
       status: true,
       msg: "",
