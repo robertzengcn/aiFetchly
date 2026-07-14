@@ -1,7 +1,7 @@
 <template>
   <v-sheet class="mx-auto pa-4" rounded>
     <div class="d-flex align-center mb-4">
-      <v-btn color="error" variant="text" @click="router.go(-1)">
+      <v-btn color="error" variant="text" @click="goBack">
         <v-icon start>mdi-arrow-left</v-icon>{{ t("common.return") }}
       </v-btn>
       <h2 class="ml-2">{{ message?.subject || t("emailReceive.message_detail") }}</h2>
@@ -71,6 +71,10 @@ onMounted(async () => {
     loading.value = false;
   }
 });
+
+function goBack() {
+  router.push({ name: "Email_Receive_List", query: route.query });
+}
 
 function formatDate(iso: string): string {
   if (!iso) return "—";

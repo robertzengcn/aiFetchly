@@ -82,8 +82,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from "vue";
-import { useRouter } from "vue-router";
+import { ref, computed, onMounted, watch } from "vue";
+import { useRouter, useRoute } from "vue-router";
 import { useI18n } from "vue-i18n";
 import type { Header } from "@/entityTypes/commonType";
 import { CapitalizeFirstLetter } from "@/views/utils/function";
@@ -94,6 +94,7 @@ import type { ReceivedMessageListDto } from "@/entityTypes/emailReceiveTypes";
 
 const { t } = useI18n({ inheritLocale: true });
 const router = useRouter();
+const route = useRoute();
 
 const emailServiceId = ref<number | null>(null);
 const emailServices = ref<EmailServiceListdata[]>([]);
@@ -105,12 +106,21 @@ const itemsPerPage = ref(20);
 const currentPage = ref(1);
 
 onMounted(async () => {
+  const qs = route.query.emailServiceId;
+  if (qs != null) {
+    const parsed = Number(qs);
+    if (!isNaN(parsed)) emailServiceId.value = parsed;
+  }
   try {
     const resp = await getEmailServiceList({ page: 0, size: 9999 });
     emailServices.value = resp.data;
   } catch (err) {
     console.error("Failed to load email services:", err);
   }
+});
+
+watch(emailServiceId, (val) => {
+  router.replace({ query: { ...route.query, emailServiceId: val != null ? String(val) : undefined } });
 });
 
 const filters = ref({ replyStatus: undefined as string | undefined, search: "" });
@@ -197,7 +207,7 @@ async function syncNow() {
 }
 
 function openDetail(id: number) {
-  router.push({ name: "Email_Receive_Detail", params: { id } });
+  router.push({ name: "Email_Receive_Detail", params: { id }, query: { emailServiceId: emailServiceId.value != null ? String(emailServiceId.value) : undefined } });
 }
 
 function formatDate(iso: string): string {
