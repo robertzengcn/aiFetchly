@@ -36,6 +36,7 @@
     "rules": {
         "vue/multi-word-component-names": 0,
         "no-console": "warn",
+        "@typescript-eslint/no-explicit-any": "warn",
         "indent": "off",
         "vue/html-indent": "off",
         "vue/attributes-order": "off",
