@@ -235,5 +235,5 @@ export function shouldRetryWithImplicitTls(
   }
 
   const maybeCode = (error as Error & { code?: unknown }).code;
-  return maybeCode === "GREETING_TIMEOUT";
+  return maybeCode === "GREETING_TIMEOUT" || maybeCode === "ClosedAfterConnectText";
 }

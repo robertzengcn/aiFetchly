@@ -107,6 +107,18 @@ describe("shouldRetryWithImplicitTls", () => {
     ).toBe(true);
   });
 
+  it("retries plaintext unexpected close before greeting for IMAP SSL on non-implicit TLS ports", () => {
+    const err = new Error("Unexpected close");
+    Object.assign(err, { code: "ClosedAfterConnectText" });
+
+    expect(
+      shouldRetryWithImplicitTls(
+        err,
+        makeConfig({ protocol: "imap", port: 1993, ssl: true })
+      )
+    ).toBe(true);
+  });
+
   it("does not retry when SSL is disabled", () => {
     const err = new Error("Failed to receive greeting");
     Object.assign(err, { code: "GREETING_TIMEOUT" });
@@ -115,6 +127,18 @@ describe("shouldRetryWithImplicitTls", () => {
       shouldRetryWithImplicitTls(
         err,
         makeConfig({ protocol: "imap", port: 143, ssl: false })
+      )
+    ).toBe(false);
+  });
+
+  it("does not retry unexpected close from an already secure connection", () => {
+    const err = new Error("Unexpected close");
+    Object.assign(err, { code: "ClosedAfterConnectTLS" });
+
+    expect(
+      shouldRetryWithImplicitTls(
+        err,
+        makeConfig({ protocol: "imap", port: 1993, ssl: true })
       )
     ).toBe(false);
   });
