@@ -24,6 +24,7 @@ v-model="installedFilter" :items="installedItems" item-title="label" item-value=
         <th>{{ t("plugins.column_plugin") }}</th>
         <th>{{ t("plugins.marketplace.column_marketplace") }}</th>
         <th>{{ t("plugins.column_version") }}</th>
+        <th>{{ t("plugins.marketplace.column_status") }}</th>
         <th>{{ t("plugins.column_actions") }}</th>
       </tr></thead>
       <tbody>
@@ -31,6 +32,7 @@ v-model="installedFilter" :items="installedItems" item-title="label" item-value=
           <td>{{ p.displayName || p.name }}<div class="text-caption text-grey">{{ p.description }}</div></td>
           <td>{{ p.marketplaceDisplayName || p.marketplaceName }}</td>
           <td>{{ p.version || "—" }}</td>
+          <td><v-chip size="small" variant="tonal" :color="statusColor(p.status)">{{ statusLabel(p.status) }}</v-chip></td>
           <td>
             <v-btn size="small" variant="text" @click="openDetail(p.pluginId)">{{ t("plugins.marketplace.view_details") || "Details" }}</v-btn>
           </td>
@@ -67,6 +69,7 @@ const showDetail = ref(false);
 const detailId = ref<string | null>(null);
 const loadError = ref("");
 let searchTimer: ReturnType<typeof setTimeout> | null = null;
+type PluginMarketplaceStatus = PluginMarketplacePluginSummary["status"];
 
 async function reload(): Promise<void> {
   loading.value = true;
@@ -92,6 +95,26 @@ function onSearchInput(): void {
   }, 300);
 }
 function openDetail(pluginId: string): void { detailId.value = pluginId; showDetail.value = true; }
+function statusLabel(status: PluginMarketplaceStatus): string {
+  const labels: Record<PluginMarketplaceStatus, string> = {
+    not_installed: t("plugins.marketplace.status_not_installed") || "Not installed",
+    installed: t("plugins.marketplace.status_installed") || "Installed",
+    different_version: t("plugins.marketplace.status_different_version") || "Different version installed",
+    unsupported: t("plugins.marketplace.status_unsupported") || "Unsupported source",
+    error: t("plugins.marketplace.status_error") || "Error",
+  };
+  return labels[status];
+}
+function statusColor(status: PluginMarketplaceStatus): string {
+  const colors: Record<PluginMarketplaceStatus, string> = {
+    not_installed: "default",
+    installed: "success",
+    different_version: "warning",
+    unsupported: "default",
+    error: "error",
+  };
+  return colors[status];
+}
 async function loadMarketplaceOptions(): Promise<void> {
   try {
     const list = (await listPluginMarketplaces()) ?? [];

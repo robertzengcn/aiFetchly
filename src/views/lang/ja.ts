@@ -2382,6 +2382,7 @@ emailAutoReplyAudit: {
       status_not_installed: "未インストール",
       status_different_version: "別のバージョンがインストール済み",
       status_unsupported: "未対応のソース",
+      status_error: "エラー",
       health_healthy: "正常",
       health_disabled: "無効",
       health_invalid: "不正",

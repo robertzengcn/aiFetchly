@@ -2426,6 +2426,7 @@ emailAutoReplyAudit: {
       status_not_installed: "Nicht installiert",
       status_different_version: "Andere Version installiert",
       status_unsupported: "Nicht unterstützte Quelle",
+      status_error: "Fehler",
       health_healthy: "Fehlerfrei",
       health_disabled: "Deaktiviert",
       health_invalid: "Ungültig",

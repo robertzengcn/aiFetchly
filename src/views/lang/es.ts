@@ -2431,6 +2431,7 @@ emailAutoReplyAudit: {
       status_not_installed: "No instalado",
       status_different_version: "Versión diferente instalada",
       status_unsupported: "Origen no admitido",
+      status_error: "Error",
       health_healthy: "Sano",
       health_disabled: "Desactivado",
       health_invalid: "Inválido",

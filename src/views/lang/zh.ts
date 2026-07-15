@@ -2344,6 +2344,7 @@ emailAutoReplyAudit: {
       status_not_installed: "未安装",
       status_different_version: "已安装不同版本",
       status_unsupported: "不支持的来源",
+      status_error: "错误",
       health_healthy: "健康",
       health_disabled: "已禁用",
       health_invalid: "无效",

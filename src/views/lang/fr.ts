@@ -2414,6 +2414,7 @@ emailAutoReplyAudit: {
       status_not_installed: "Non installé",
       status_different_version: "Version différente installée",
       status_unsupported: "Source non prise en charge",
+      status_error: "Erreur",
       health_healthy: "Sain",
       health_disabled: "Désactivé",
       health_invalid: "Invalide",

@@ -2423,6 +2423,7 @@ emailAutoReplyAudit: {
       status_not_installed: "Not installed",
       status_different_version: "Different version installed",
       status_unsupported: "Unsupported source",
+      status_error: "Error",
       health_healthy: "Healthy",
       health_disabled: "Disabled",
       health_invalid: "Invalid",

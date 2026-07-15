@@ -6,6 +6,7 @@
         <p>{{ detail.description || "" }}</p>
         <p class="mt-2"><strong>{{ t("plugins.marketplace.column_marketplace") }}:</strong> {{ detail.marketplaceDisplayName || detail.marketplaceName }}</p>
         <p><strong>{{ t("plugins.column_version") }}:</strong> {{ detail.version || "—" }}</p>
+        <p><strong>{{ t("plugins.marketplace.column_status") }}:</strong> <v-chip size="small" variant="tonal" :color="statusColor(detail.status)">{{ statusLabel(detail.status) }}</v-chip></p>
         <p v-if="detail.author"><strong>Author:</strong> {{ detail.author }}</p>
         <p v-if="detail.resolvedSourceKind"><strong>{{ t("plugins.install_source.source_kind") || "Source" }}:</strong> {{ detail.resolvedSourceKind }}<span v-if="detail.resolvedSourceUri"> · {{ detail.resolvedSourceUri }}</span></p>
         <p v-if="!detail.pinnedToCommit" class="text-warning">{{ t("plugins.marketplace.risk_unpinned_git") || "This plugin is not pinned to a commit." }}</p>
@@ -23,8 +24,11 @@
       <v-card-actions>
         <v-spacer />
         <v-btn variant="text" @click="$emit('update:modelValue', false)">{{ t("common.cancel") || "Close" }}</v-btn>
-        <v-btn color="primary" :disabled="!canInstall || (riskFlags.length > 0 && !confirmRisk)" :loading="installing" @click="doInstall">
-          {{ t("plugins.marketplace.install_button") || "Install" }}
+        <v-btn v-if="detail?.status === 'installed'" disabled>
+          {{ statusLabel("installed") }}
+        </v-btn>
+        <v-btn v-else color="primary" :disabled="!canInstall || (riskFlags.length > 0 && !confirmRisk)" :loading="installing" @click="doInstall">
+          {{ installButtonLabel }}
         </v-btn>
       </v-card-actions>
     </v-card>
@@ -43,6 +47,7 @@ const detail = ref<PluginMarketplacePluginDetail | null>(null);
 const installing = ref(false);
 const confirmRisk = ref(false);
 const errorMsg = ref("");
+type PluginMarketplaceStatus = PluginMarketplacePluginDetail["status"];
 
 const riskFlags = computed<string[]>(() => {
   if (!detail.value) return [];
@@ -56,7 +61,13 @@ const riskFlags = computed<string[]>(() => {
 });
 const canInstall = computed<boolean>(() => {
   if (!detail.value) return false;
-  return detail.value.status !== "unsupported" && detail.value.status !== "error";
+  return detail.value.status !== "installed" && detail.value.status !== "unsupported" && detail.value.status !== "error";
+});
+const installButtonLabel = computed<string>(() => {
+  if (detail.value?.status === "different_version") {
+    return t("plugins.marketplace.reinstall_button") || "Reinstall";
+  }
+  return t("plugins.marketplace.install_button") || "Install";
 });
 function riskLabel(f: string): string {
   const map: Record<string, string> = {
@@ -67,6 +78,26 @@ function riskLabel(f: string): string {
     unpinnedGit: t("plugins.marketplace.risk_unpinned_git") || "Not pinned to commit",
   };
   return map[f] || f;
+}
+function statusLabel(status: PluginMarketplaceStatus): string {
+  const labels: Record<PluginMarketplaceStatus, string> = {
+    not_installed: t("plugins.marketplace.status_not_installed") || "Not installed",
+    installed: t("plugins.marketplace.status_installed") || "Installed",
+    different_version: t("plugins.marketplace.status_different_version") || "Different version installed",
+    unsupported: t("plugins.marketplace.status_unsupported") || "Unsupported source",
+    error: t("plugins.marketplace.status_error") || "Error",
+  };
+  return labels[status];
+}
+function statusColor(status: PluginMarketplaceStatus): string {
+  const colors: Record<PluginMarketplaceStatus, string> = {
+    not_installed: "default",
+    installed: "success",
+    different_version: "warning",
+    unsupported: "default",
+    error: "error",
+  };
+  return colors[status];
 }
 
 watch(() => [props.modelValue, props.pluginId], async ([open, id]) => {
@@ -87,8 +118,12 @@ async function doInstall(): Promise<void> {
   installing.value = true;
   errorMsg.value = "";
   try {
-    await installMarketplacePlugin({ pluginId: detail.value.pluginId, overwrite: true });
-    emit("installed"); emit("update:modelValue", false);
+    const pluginId = detail.value.pluginId;
+    await installMarketplacePlugin({ pluginId, overwrite: true });
+    const updated = await getMarketplacePlugin(pluginId);
+    detail.value = updated ?? { ...detail.value, installed: true, status: "installed" };
+    confirmRisk.value = false;
+    emit("installed");
   } catch (e: unknown) {
     // windowInvoke throws on backend {status:false}; surface it to the user.
     errorMsg.value = e instanceof Error ? e.message : String(e);
