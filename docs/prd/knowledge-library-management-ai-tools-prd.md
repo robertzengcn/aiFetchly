@@ -7,6 +7,7 @@
 - **Created**: 2026-07-15
 - **Owner**: Engineering Team
 - **Related systems**: AiChatV2, AI tool calling, SkillRegistry, RAG, DocumentService, RAGDocumentModule, RagSearchModule
+- **Technical design**: `docs/prd/knowledge-library-management-ai-tools-technical-design.md`
 - **Related PRDs**:
   - `docs/rag-tool-call-rerank-prd.md`
   - `docs/ai-chat-v2-attachment-upload-prd.md`
