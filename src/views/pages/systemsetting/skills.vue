@@ -122,6 +122,7 @@ import { ref, onMounted } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRouter } from "vue-router";
 import { windowInvoke } from "@/views/utils/apirequest";
+import { useApiCall } from "@/views/composables/useApiCall";
 
 const { t } = useI18n();
 const router = useRouter();
@@ -136,13 +137,17 @@ interface SkillEntry {
   pluginName?: string;
 }
 
-const isLoading = ref(false);
 const skills = ref<SkillEntry[]>([]);
 const fileInput = ref<HTMLInputElement | null>(null);
 
-async function fetchSkills(): Promise<void> {
-  isLoading.value = true;
-  try {
+// useApiCall standardizes loading + error handling. onError surfaces the
+// backend's failure message (windowInvoke throws Error(result.msg)) instead of
+// the previous silent try/finally swallow.
+const {
+  run: fetchSkills,
+  loading: isLoading,
+} = useApiCall(
+  async () => {
     const data = await windowInvoke("skill:list-installed", {});
     if (Array.isArray(data?.skills)) {
       skills.value = data.skills.map((s: Record<string, unknown>) => ({
@@ -155,10 +160,9 @@ async function fetchSkills(): Promise<void> {
         pluginName: s.pluginName ? String(s.pluginName) : undefined,
       }));
     }
-  } finally {
-    isLoading.value = false;
-  }
-}
+  },
+  { onError: (message) => alert(message) }
+);
 
 async function handleToggle(skill: SkillEntry): Promise<void> {
   try {
