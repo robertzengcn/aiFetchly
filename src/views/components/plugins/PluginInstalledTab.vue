@@ -29,6 +29,7 @@
             <th>{{ t("plugins.column_plugin") }}</th>
             <th>{{ t("plugins.column_version") }}</th>
             <th>{{ t("plugins.column_source") }}</th>
+            <th>{{ t("plugins.column_source_path") }}</th>
             <th>{{ t("plugins.column_format") }}</th>
             <th>{{ t("plugins.column_status") }}</th>
             <th>{{ t("plugins.column_skills") }}</th>
@@ -41,6 +42,17 @@
             <td>{{ p.displayName || p.name }}</td>
             <td>{{ p.version }}</td>
             <td><v-chip size="small">{{ sourceLabel(p.source) }}</v-chip></td>
+            <td class="plugin-path-cell">
+              <span v-if="displayPath(p)" class="plugin-path-text">
+                {{ displayPath(p) }}
+                <v-tooltip activator="parent" location="top">
+                  {{ displayPath(p) }}
+                </v-tooltip>
+              </span>
+              <span v-else class="text-medium-emphasis">
+                {{ t("plugins.source_path_unknown") }}
+              </span>
+            </td>
             <td>
               <v-chip
                 size="small"
@@ -92,6 +104,9 @@ function sourceLabel(source: string): string {
   if (source === "marketplace") return t("plugins.source_marketplace");
   return t("plugins.source_local");
 }
+function displayPath(p: PluginSummary): string | undefined {
+  return p.sourceUri || p.installPath;
+}
 function healthLabel(p: PluginSummary): string {
   if (!p.enabled) return t("plugins.status_disabled");
   return t(`plugins.status_${p.health}`);
@@ -103,3 +118,18 @@ function healthColor(p: PluginSummary): string {
   return "warning";
 }
 </script>
+
+<style scoped>
+.plugin-path-cell {
+  max-width: 280px;
+}
+
+.plugin-path-text {
+  display: inline-block;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+</style>

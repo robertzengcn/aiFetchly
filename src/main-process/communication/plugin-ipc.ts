@@ -91,6 +91,10 @@ function toSummary(
     lastUpdated: p.updatedAt
       ? new Date(p.updatedAt).toISOString()
       : new Date().toISOString(),
+    sourceKind: p.sourceKind as PluginSummary["sourceKind"],
+    sourceUri: p.sourceUri,
+    sourceRef: p.sourceRef,
+    installPath: p.installPath,
   };
 }
 

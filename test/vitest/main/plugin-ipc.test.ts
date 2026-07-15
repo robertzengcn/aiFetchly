@@ -24,7 +24,23 @@ vi.mock("@/modules/token", () => ({
 vi.mock("@/modules/PluginManagementModule", () => ({
   PluginManagementModule: class {
     async listInstalledPlugins() {
-      return [];
+      return [
+        {
+          id: 1,
+          name: "demo-plugin",
+          displayName: "Demo Plugin",
+          version: "1.0.0",
+          source: "local",
+          enabled: 1,
+          health: "healthy",
+          permissionsJson: "[]",
+          updatedAt: new Date("2026-06-17T00:00:00.000Z"),
+          installPath: "/app-data/plugins/installed/demo-plugin",
+          sourceKind: "local-folder",
+          sourceUri: "/home/user/.aifetchly/plugins/demo-plugin",
+          sourceRef: "main",
+        },
+      ];
     }
     async getPluginByName(name: string) {
       if (name !== "demo-plugin") return null;
@@ -41,6 +57,10 @@ vi.mock("@/modules/PluginManagementModule", () => ({
         description: "Demo",
         author: "Tester",
         manifestJson: JSON.stringify({ name, version: "1.0.0" }),
+        installPath: "/app-data/plugins/installed/demo-plugin",
+        sourceKind: "local-folder",
+        sourceUri: "/home/user/.aifetchly/plugins/demo-plugin",
+        sourceRef: "main",
       };
     }
     async togglePlugin() {
@@ -183,8 +203,20 @@ describe("plugin-ipc", () => {
   it("syncs user plugin folders before listing installed plugins", async () => {
     const fn = handlers.get(PLUGIN_LIST)!;
     const result = await fn({}, undefined);
-    expect(result).toMatchObject({ status: true });
-    expect(UserPluginAutoInstallService.syncDefaultUserPlugins).toHaveBeenCalled();
+    expect(result).toMatchObject({
+      status: true,
+      data: [
+        expect.objectContaining({
+          installPath: "/app-data/plugins/installed/demo-plugin",
+          sourceKind: "local-folder",
+          sourceUri: "/home/user/.aifetchly/plugins/demo-plugin",
+          sourceRef: "main",
+        }),
+      ],
+    });
+    expect(
+      UserPluginAutoInstallService.syncDefaultUserPlugins
+    ).toHaveBeenCalled();
   });
 
   it("rejects import with path traversal in zipPath", async () => {
@@ -220,6 +252,10 @@ describe("plugin-ipc", () => {
             serverName: "demo-mcp",
           }),
         ],
+        installPath: "/app-data/plugins/installed/demo-plugin",
+        sourceKind: "local-folder",
+        sourceUri: "/home/user/.aifetchly/plugins/demo-plugin",
+        sourceRef: "main",
       },
     });
   });

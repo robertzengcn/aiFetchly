@@ -181,6 +181,10 @@ export interface PluginSummary {
   readonly agentCount: number;
   readonly permissions: readonly string[];
   readonly lastUpdated: string;
+  readonly sourceKind?: PluginSourceKind;
+  readonly sourceUri?: string;
+  readonly sourceRef?: string;
+  readonly installPath?: string;
 }
 
 export interface PluginSkillComponent {
@@ -220,9 +224,6 @@ export interface PluginDetail extends PluginSummary {
   readonly agents: readonly PluginAgentComponent[];
   readonly errors: readonly PluginError[];
   readonly manifest: Record<string, unknown>;
-  readonly sourceKind?: PluginSourceKind;
-  readonly sourceUri?: string;
-  readonly sourceRef?: string;
 }
 
 export interface PluginValidationResult {

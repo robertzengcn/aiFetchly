@@ -47,6 +47,10 @@ export interface PluginSummary {
   agentCount: number;
   permissions: string[];
   lastUpdated: string;
+  sourceKind?: PluginSourceKind;
+  sourceUri?: string;
+  sourceRef?: string;
+  installPath?: string;
 }
 
 export interface PluginSkillComponent {
@@ -87,9 +91,6 @@ export interface PluginDetail extends PluginSummary {
   agents: PluginAgentComponent[];
   errors: Array<{ code: string; message: string; recoverable: boolean }>;
   manifest: Record<string, unknown>;
-  sourceKind?: PluginSourceKind;
-  sourceUri?: string;
-  sourceRef?: string;
   marketplaceName?: string;
   entryName?: string;
   entryVersion?: string;
