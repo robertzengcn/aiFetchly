@@ -38,6 +38,12 @@ import {
   type UrlContactExtractionOutcome,
   type UrlContactExtractionResult,
 } from "./urlExtractionCollector";
+import {
+  recoverInFlightExtractions,
+  failInFlightExtractions,
+  type RecoveryDeps,
+  type FailDeps,
+} from "./contactExtractionRecovery";
 
 // Re-export the URL-extraction result/outcome types so existing import sites
 // (`@/main-process/communication/contactExtraction-ipc`) keep resolving. The
@@ -162,6 +168,19 @@ function spawnWorker(): ChildProcess {
           }s — circuit broken. Worker will not be restarted.`
         );
         contactExtractionWorker = null;
+        // WS-4 R4.4: the worker is gone for good — fail in-flight jobs so they
+        // don't stay stuck in 'analyzing' forever.
+        void failInFlightExtractions(
+          realFailDeps(),
+          "Worker exceeded restart limit and was not restarted"
+        )
+          .then((ids) => {
+            if (ids.length > 0)
+              log.warn(
+                `[R4.4] Marked ${ids.length} in-flight job(s) failed (worker unavailable)`
+              );
+          })
+          .catch((e) => log.error("[R4.4] fail-in-flight failed:", e));
       }
     }
   });
@@ -184,6 +203,19 @@ function spawnWorker(): ChildProcess {
       case "worker-ready":
         log.info("Contact extraction worker is ready");
         resetRestartCounter(); // WS-4 R4.2: healthy start clears the restart counter
+        // WS-4 R4.4: recover any jobs stranded by a prior crash (or a previous
+        // app session). No-op when there is nothing in-flight. Fire-and-forget —
+        // recovery failures are logged inside, never block the ready handshake.
+        void recoverInFlightExtractions(realRecoveryDeps())
+          .then((ids) => {
+            if (ids.length > 0)
+              log.info(
+                `[R4.4] Re-queued ${ids.length} in-flight contact-extraction job(s) after worker restart`
+              );
+          })
+          .catch((e) =>
+            log.error("[R4.4] recovery after worker-ready failed:", e)
+          );
         break;
       case "worker-log": {
         // level/args have .default() in schema so they're always present here
@@ -406,6 +438,35 @@ async function fetchSearchResults(resultIds: number[]): Promise<any[]> {
   return await module.getSearchResults(resultIds);
 }
 
+// ---------------------------------------------------------------------------
+// WS-4 R4.4 — crash recovery for in-flight contact-extraction jobs.
+// The pure recovery logic lives in ./contactExtractionRecovery.ts (Electron-
+// free, unit-tested). Here we just wire it to the real ContactInfoModule and
+// the current worker process, and call it from the worker lifecycle hooks.
+// ---------------------------------------------------------------------------
+
+/** Build RecoveryDeps backed by the real ContactInfoModule + current worker. */
+function realRecoveryDeps(): RecoveryDeps {
+  const module = new ContactInfoModule();
+  return {
+    getInFlightResultIds: () => module.getInFlightResultIds(),
+    getSearchResults: (ids) => module.getSearchResults(ids),
+    send: (message) => {
+      contactExtractionWorker?.send?.(message as { type: string });
+    },
+  };
+}
+
+/** Build FailDeps backed by the real ContactInfoModule. */
+function realFailDeps(): FailDeps {
+  const module = new ContactInfoModule();
+  return {
+    getInFlightResultIds: () => module.getInFlightResultIds(),
+    batchUpdateStatus: (ids, status, error) =>
+      module.batchUpdateExtractionStatus(ids, status, error),
+  };
+}
+
 /**
  * Register IPC handlers for contact extraction
  */
@@ -547,9 +608,7 @@ export function registerContactExtractionHandlers(): void {
           };
         }
 
-        log.info(
-          `Retrying contact extraction for ${resultIds.length} results`
-        );
+        log.info(`Retrying contact extraction for ${resultIds.length} results`);
 
         // Use ContactInfoModule for business logic
         const module = new ContactInfoModule();
