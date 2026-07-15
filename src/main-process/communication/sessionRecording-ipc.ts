@@ -1,4 +1,5 @@
 import * as fs from "fs";
+import { log } from "@/modules/Logger";
 import * as path from "path";
 import { app } from "electron";
 import { registerValidatedHandler } from "@/main-process/communication/_shared/registerValidatedHandler";
@@ -32,7 +33,7 @@ const sessionsDirectory = path.join(app.getPath("userData"), "sessions");
  * Register all session recording IPC handlers
  */
 export function registerSessionRecordingIpcHandlers(): void {
-  console.log("Registering session recording IPC handlers...");
+  log.info("Registering session recording IPC handlers...");
 
   // Toggle session recording on/off
   registerValidatedHandler(
@@ -40,7 +41,7 @@ export function registerSessionRecordingIpcHandlers(): void {
     sessionRecordingToggleInputSchema,
     async (input) => {
       isRecordingEnabled = input.enabled;
-      console.log(
+      log.info(
         `Session recording ${input.enabled ? "enabled" : "disabled"} via IPC`
       );
       await saveRecordingPreference(input.enabled);
@@ -96,7 +97,7 @@ export function registerSessionRecordingIpcHandlers(): void {
     }
   );
 
-  console.log("Session recording IPC handlers registered successfully");
+  log.info("Session recording IPC handlers registered successfully");
 }
 
 /**
@@ -180,7 +181,7 @@ async function getRecordedSessions(): Promise<any[]> {
 
               sessions.push(session);
             } catch (error) {
-              console.error(
+              log.error(
                 `Failed to read session file ${sessionPath}:`,
                 error
               );
@@ -312,7 +313,7 @@ async function clearOldSessions(options: any): Promise<any> {
         deletedCount++;
         deletedSize += fileSize;
       } catch (error) {
-        console.error(
+        log.error(
           `Failed to delete session file ${session.filePath}:`,
           error
         );

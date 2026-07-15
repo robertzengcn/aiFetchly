@@ -1,6 +1,7 @@
 // export { default as SyncMsg } from "./sync-msg";
 // export { default as AsyncMsg } from "./async-msg";
 import { registerExtraModulesIpcHandlers } from "@/main-process/communication/extramodule-ipc";
+import { log } from "@/modules/Logger";
 import { registerScheduleIpcHandlers } from "@/main-process/communication/scheduleIpc";
 import { registerYellowPagesIpcHandlers } from "@/main-process/communication/yellowPagesIpc";
 import SyncMsg from "@/main-process/communication/sync-msg";
@@ -49,7 +50,7 @@ type GlobalIpcState = typeof globalThis & {
 export function registerCommunicationIpcHandlers(win: BrowserWindow) {
   const globalState = globalThis as GlobalIpcState;
   if (globalState.__aifetchlyIpcHandlersRegistered) {
-    console.warn("[IPC] Skipping duplicate handler registration (HMR guard)");
+    log.warn("[IPC] Skipping duplicate handler registration (HMR guard)");
     return;
   }
   globalState.__aifetchlyIpcHandlersRegistered = true;
@@ -95,8 +96,8 @@ export function registerCommunicationIpcHandlers(win: BrowserWindow) {
     registerHooksIpcHandlers();
     AsyncMsg();
   } catch (e) {
-    console.log("registerCommunicationIpcHandlers error:");
-    console.error(e);
+    log.info("registerCommunicationIpcHandlers error:");
+    log.error(e);
   }
   // Register extra modules IPC handlers
 }

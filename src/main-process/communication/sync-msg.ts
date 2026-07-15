@@ -1,3 +1,4 @@
+import { log } from "@/modules/Logger";
 import { ipcMain, BrowserWindow, dialog } from 'electron'
 //import { UserController, userResponse, userlogin } from '@/controller/UserController'
 import { CampaignController } from '@/controller/campaignController'
@@ -15,7 +16,6 @@ import { MainProcessAppInfoModule } from '@/modules/MainProcessAppInfoModule'
 import { CommonMessage, CommonResponse } from "@/entityTypes/commonType"
 import { campaignEntity } from "@/entityTypes/campaign-type"
 import { OPENDIRECTORY, CHOOSEFILEDIALOG, GET_APP_INFO } from "@/config/channellist"
-import { log } from "@/modules/Logger";
 import { AppInfo } from '@/modules/AppInfoModule'
 import { registerValidatedHandler } from "@/main-process/communication/_shared/registerValidatedHandler";
 import { noInputSchema, byIdInputSchema } from "@/schemas/ipc/_shared/common";

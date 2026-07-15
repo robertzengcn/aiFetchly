@@ -13,6 +13,7 @@
  */
 
 import { app } from "electron";
+import { log } from "@/modules/Logger";
 import * as fs from "fs";
 import * as path from "path";
 import {
@@ -39,7 +40,7 @@ import {
 } from "@/schemas/ipc/skills";
 
 export function registerSkillsIpcHandlers(): void {
-  console.log("Skills IPC handlers registered");
+  log.info("Skills IPC handlers registered");
 
   registerAiValidatedHandler(
     SKILL_CHECK_PERMISSION,
@@ -150,7 +151,7 @@ export function registerSkillsIpcHandlers(): void {
             fs.rmSync(skillsDir, { recursive: true, force: true });
           }
         } catch (cleanupError) {
-          console.warn(
+          log.warn(
             `[SkillsIPC] Failed to clean up skill files for "${input.skillName}": ${
               cleanupError instanceof Error ? cleanupError.message : cleanupError
             }`,

@@ -1,4 +1,5 @@
 import { ipcMain } from "electron";
+import { log } from "@/modules/Logger";
 import { spawn, spawnSync } from "child_process";
 import { platform } from "os";
 import { readFileSync } from "fs";
@@ -154,13 +155,13 @@ function normalizeUploadedFiles(input: unknown): UploadedFilePayload[] {
     if (typeof sizeBytes !== "number" || !Number.isFinite(sizeBytes)) continue;
     if (typeof contentBase64 !== "string") continue;
     if (contentBase64.length > MAX_BASE64_LENGTH) {
-      console.warn(
+      log.warn(
         `normalizeUploadedFiles: skipping file "${fileName}" — base64 length ${contentBase64.length} exceeds limit ${MAX_BASE64_LENGTH}`
       );
       continue;
     }
     if (!isSupportedUploadedFile(fileName, mimeType)) {
-      console.warn(
+      log.warn(
         `normalizeUploadedFiles: skipping file "${fileName}" — unsupported file type ${mimeType}`
       );
       continue;
@@ -168,13 +169,13 @@ function normalizeUploadedFiles(input: unknown): UploadedFilePayload[] {
 
     const decodedByteLength = Buffer.byteLength(contentBase64, "base64");
     if (decodedByteLength > MAX_UPLOAD_FILE_BYTES) {
-      console.warn(
+      log.warn(
         `normalizeUploadedFiles: skipping file "${fileName}" — decoded size ${decodedByteLength} exceeds limit ${MAX_UPLOAD_FILE_BYTES}`
       );
       continue;
     }
     if (sizeBytes > MAX_UPLOAD_FILE_BYTES) {
-      console.warn(
+      log.warn(
         `normalizeUploadedFiles: skipping file "${fileName}" — declared size ${sizeBytes} exceeds limit ${MAX_UPLOAD_FILE_BYTES}`
       );
       continue;
@@ -331,7 +332,7 @@ function normalizeLLMAttachments(input: unknown): LLMImageAttachmentPayload[] {
       continue;
     if (typeof dataBase64 !== "string" || dataBase64.length === 0) continue;
     if (dataBase64.length > MAX_BASE64_LENGTH) {
-      console.warn(
+      log.warn(
         `normalizeLLMAttachments: skipping attachment with mediaType "${mediaType}" — base64 length ${dataBase64.length} exceeds per-file limit ${MAX_BASE64_LENGTH}`
       );
       continue;
@@ -340,7 +341,7 @@ function normalizeLLMAttachments(input: unknown): LLMImageAttachmentPayload[] {
       runningLength + dataBase64.length >
       MAX_TOTAL_ATTACHMENTS_BASE64_LENGTH
     ) {
-      console.warn(
+      log.warn(
         `normalizeLLMAttachments: skipping attachment with mediaType "${mediaType}" — total payload would exceed ${MAX_TOTAL_ATTACHMENTS_BASE64_LENGTH}`
       );
       continue;
@@ -500,18 +501,18 @@ async function enhanceMessageWithRAG(
       // Prepend RAG context to the message
       const enhancedMessage = `Based on the following context from knowledge base:\n\n${ragContext}\n\n---\n\nUser question: ${message}`;
 
-      console.log(
+      log.info(
         `RAG search found ${searchResponse.results.length} relevant documents`
       );
       return enhancedMessage;
     } else {
-      console.log(
+      log.info(
         "RAG search returned no results, proceeding with original message"
       );
       return message;
     }
   } catch (ragError) {
-    console.error(
+    log.error(
       "RAG search failed, proceeding without RAG context:",
       ragError
     );
@@ -593,7 +594,7 @@ let currentStreamEventProcessor: StreamEventProcessor | null = null;
  * Register AI Chat IPC handlers
  */
 export function registerAiChatIpcHandlers(): void {
-  console.log("AI Chat IPC handlers registered");
+  log.info("AI Chat IPC handlers registered");
 
   registerAiValidatedHandler(
     AI_CHAT_RESUME_TOOL_AFTER_PERMISSION,
@@ -717,16 +718,16 @@ export function registerAiChatIpcHandlers(): void {
               .join("\n\n");
 
             enhancedMessage = `Based on the following context from knowledge base:\n\n${ragContext}\n\n---\n\nUser question: ${enhancedMessage}`;
-            console.log(
+            log.info(
               `RAG search found ${searchResponse.results.length} relevant documents`
             );
           } else {
-            console.log(
+            log.info(
               "RAG search returned no results, proceeding with original message"
             );
           }
         } catch (ragError) {
-          console.error(
+          log.error(
             "RAG search failed, proceeding without RAG context:",
             ragError
           );
@@ -917,16 +918,16 @@ export function registerAiChatIpcHandlers(): void {
             // Prepend RAG context to the message
             enhancedMessage = `Based on the following context from knowledge base:\n\n${ragContext}\n\n---\n\nUser question: ${enhancedMessage}`;
 
-            console.log(
+            log.info(
               `RAG search found ${searchResponse.results.length} relevant documents`
             );
           } else {
-            console.log(
+            log.info(
               "RAG search returned no results, proceeding with original message"
             );
           }
         } catch (ragError) {
-          console.error(
+          log.error(
             "RAG search failed, proceeding without RAG context:",
             ragError
           );
@@ -1003,7 +1004,7 @@ export function registerAiChatIpcHandlers(): void {
           ) {
             return;
           }
-          console.error("Error processing stream event:", error);
+          log.error("Error processing stream event:", error);
         }
       };
 
@@ -1044,7 +1045,7 @@ export function registerAiChatIpcHandlers(): void {
           };
           sender.send(AI_CHAT_STREAM_COMPLETE, JSON.stringify(cancelledChunk));
         } else {
-          console.error("AI Chat stream error:", error);
+          log.error("AI Chat stream error:", error);
           const errorChunk: ChatStreamChunk = {
             content: "",
             isComplete: true,
@@ -1080,7 +1081,7 @@ export function registerAiChatIpcHandlers(): void {
       ) {
         return;
       }
-      console.error("AI Chat stream error:", error);
+      log.error("AI Chat stream error:", error);
       const errorChunk: ChatStreamChunk = {
         content: "",
         isComplete: true,
@@ -1127,7 +1128,7 @@ export function registerAiChatIpcHandlers(): void {
           try {
             message.metadata = JSON.parse(entity.metadata);
           } catch (parseError) {
-            console.warn("Failed to parse message metadata:", parseError);
+            log.warn("Failed to parse message metadata:", parseError);
           }
         }
         return message;

@@ -1,3 +1,4 @@
+import { log } from "@/modules/Logger";
 import {
   PLUGIN_MARKETPLACE_LIST,
   PLUGIN_MARKETPLACE_GET,
@@ -25,7 +26,7 @@ import { PluginMarketplaceService } from "@/service/PluginMarketplaceService";
  * service (parseMarketplaceSource rejects control chars), not the schema.
  */
 export function registerPluginMarketplaceIpcHandlers(): void {
-  console.log("Plugin Marketplace IPC handlers registered");
+  log.info("Plugin Marketplace IPC handlers registered");
 
   registerAiValidatedHandler(PLUGIN_MARKETPLACE_LIST, pluginMarketplaceNoInputSchema, async () => {
     return await new PluginMarketplaceService().listMarketplaces();

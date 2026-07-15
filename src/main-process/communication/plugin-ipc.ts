@@ -1,4 +1,5 @@
 import { PluginManagementModule } from "@/modules/PluginManagementModule";
+import { log } from "@/modules/Logger";
 import { SkillManagementModule } from "@/modules/SkillManagementModule";
 import { MCPToolModule } from "@/modules/MCPToolModule";
 import { MCPToolService } from "@/service/MCPToolService";
@@ -91,7 +92,7 @@ function toSummary(
 }
 
 export function registerPluginIpcHandlers(): void {
-  console.log("Plugin IPC handlers registered");
+  log.info("Plugin IPC handlers registered");
 
   registerAiValidatedHandler(PLUGIN_LIST, pluginNoInputSchema, async () => {
     const module = new PluginManagementModule();
