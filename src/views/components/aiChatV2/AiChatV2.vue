@@ -399,6 +399,7 @@ import {
 } from "@/config/channellist";
 import {
   clearChatV2StreamListeners,
+  clearChatV2Conversation,
   getChatV2Conversations,
   getChatV2History,
   streamChatV2Message,
@@ -413,6 +414,7 @@ import {
   getChatV2ToolApprovalMode,
   setChatV2ToolApprovalMode,
 } from "@/views/api/aiChatV2";
+import { dispatchSlashCommand } from "@/views/api/slashCommands";
 import AiChatV2Messages from "./AiChatV2Messages.vue";
 import AiChatV2Composer from "./AiChatV2Composer.vue";
 import AiChatV2ModeSelector from "./AiChatV2ModeSelector.vue";
@@ -1243,6 +1245,19 @@ const onClearMessages = (): void => {
   onNewConversation();
 };
 
+async function clearCurrentConversation(): Promise<void> {
+  const conversationId = activeConversationId.value;
+  if (conversationId) {
+    try {
+      await clearChatV2Conversation(conversationId);
+    } catch (err) {
+      streamError.value = err instanceof Error ? err.message : String(err);
+      return;
+    }
+  }
+  onNewConversation();
+}
+
 const onSelectConversation = (conversationId: string): void => {
   detachActiveStreamView();
   activeConversationId.value = conversationId;
@@ -1793,6 +1808,11 @@ const onSend = async (text: string, files?: File[]): Promise<void> => {
     stoppedPendingToolConversationIds.value = nextStopped;
   }
 
+  if ((!files || files.length === 0) && text.trim().startsWith("/")) {
+    const handled = await handleSlashCommandSubmission(text.trim());
+    if (handled) return;
+  }
+
   // Process attachments if present
   let uploadedFiles: ChatV2UploadedAttachment[] | undefined;
   let attachmentMetadata: ChatV2AttachmentMetadata[] | undefined;
@@ -2195,6 +2215,71 @@ const onSend = async (text: string, files?: File[]): Promise<void> => {
     }
   }
 };
+
+async function handleSlashCommandSubmission(rawInput: string): Promise<boolean> {
+  const conversationId = ensureWorkspaceConversationId();
+  let result: Awaited<ReturnType<typeof dispatchSlashCommand>>;
+  try {
+    result = await dispatchSlashCommand({
+      conversationId,
+      rawInput,
+    });
+  } catch (err) {
+    appendLocalCommandExchange(
+      conversationId,
+      rawInput,
+      err instanceof Error ? err.message : String(err)
+    );
+    return true;
+  }
+
+  if (!result.status) {
+    appendLocalCommandExchange(conversationId, rawInput, result.msg);
+    return true;
+  }
+
+  if (result.action === "submit_prompt") {
+    await onSend(result.prompt, []);
+    return true;
+  }
+
+  if (result.commandId === "built-in:command:clear") {
+    await clearCurrentConversation();
+    return true;
+  }
+
+  appendLocalCommandExchange(conversationId, rawInput, result.content);
+  return true;
+}
+
+function appendLocalCommandExchange(
+  conversationId: string,
+  input: string,
+  content: string
+): void {
+  const nowIso = new Date().toISOString();
+  const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  messages.value = [
+    ...messages.value,
+    {
+      id: `local-command-user-${suffix}`,
+      conversationId,
+      role: "user",
+      content: input,
+      timestamp: nowIso,
+      messageType: "message" as MessageType,
+    },
+    {
+      id: `local-command-assistant-${suffix}`,
+      conversationId,
+      role: "assistant",
+      content,
+      timestamp: nowIso,
+      messageType: "message" as MessageType,
+      metadata: { source: "slash-command" },
+    },
+  ];
+}
 
 function sendPromptRequest(request: AiPromptRequest | null | undefined): void {
   if (!request || request.id === lastHandledPromptRequestId.value) return;

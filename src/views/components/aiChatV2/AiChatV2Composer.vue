@@ -132,6 +132,7 @@ const slashCommands = ref<readonly SlashCommandView[]>([]);
 const slashOpen = ref(false);
 const slashHighlightedIndex = ref(-1);
 let slashDebounce: ReturnType<typeof setTimeout> | null = null;
+let suppressSlashRefresh = false;
 
 /**
  * When the draft starts with '/', fetch matching commands from the registry
@@ -139,6 +140,10 @@ let slashDebounce: ReturnType<typeof setTimeout> | null = null;
  * on every keystroke.
  */
 function refreshSlashSuggestions(): void {
+  if (suppressSlashRefresh) {
+    suppressSlashRefresh = false;
+    return;
+  }
   const text = draft.value;
   if (!text.startsWith("/")) {
     slashOpen.value = false;
@@ -167,7 +172,12 @@ watch(draft, () => {
 });
 
 function closeSlash(): void {
+  if (slashDebounce) {
+    clearTimeout(slashDebounce);
+    slashDebounce = null;
+  }
   slashOpen.value = false;
+  slashCommands.value = [];
   slashHighlightedIndex.value = -1;
 }
 
@@ -183,6 +193,7 @@ function onSlashHighlight(idx: number): void {
 function onSlashSelect(idx: number): void {
   const cmd = slashCommands.value[idx];
   if (!cmd) return;
+  suppressSlashRefresh = true;
   draft.value = `/${cmd.name} `;
   closeSlash();
 }
