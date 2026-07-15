@@ -42,9 +42,6 @@
       ],
       "electron-log/node": [
         "./test/mocks/electron-log.ts"
-      ],
-      "electron-store": [
-        "./test/mocks/electron-store.ts"
       ]
     },
     "lib": [
