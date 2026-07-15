@@ -42,6 +42,11 @@ import {
   resumeScheduleForAi,
   runScheduleNowForAi,
 } from "@/service/ScheduleAiTools";
+import {
+  listKnowledgeLibraryDocumentsForAi,
+  importKnowledgeLibraryAttachmentForAi,
+  deleteKnowledgeLibraryDocumentForAi,
+} from "@/service/KnowledgeLibraryAiTools";
 
 // ---------------------------------------------------------------------------
 // Internal state
@@ -1565,6 +1570,159 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
           | boolean
           | undefined,
       });
+      return {
+        success: result.success,
+        result: result as unknown as Record<string, unknown>,
+      };
+    },
+  },
+  {
+    name: "knowledge_library_list_documents",
+    description:
+      "List documents in the local knowledge library. Use this to find exact document IDs before deleting or inspecting knowledge-library documents. Returns compact metadata only (id, name, title, tags, status, size), never file contents or paths. Supports filtering by name/title query, tags, status, processing status, and file type.",
+    parameters: {
+      type: "object",
+      properties: {
+        query: {
+          type: "string",
+          description:
+            "Optional case-insensitive search matched against document name or title.",
+        },
+        status: {
+          type: "string",
+          description:
+            "Optional document status filter (e.g. active, archived).",
+        },
+        processingStatus: {
+          type: "string",
+          description:
+            "Optional processing status filter (e.g. completed, pending, error).",
+        },
+        fileType: {
+          type: "string",
+          description:
+            "Optional file extension filter, with or without a leading dot (e.g. .pdf or pdf).",
+        },
+        tags: {
+          type: "array",
+          items: { type: "string" },
+          description: "Optional tag filter.",
+        },
+        limit: {
+          type: "number",
+          description: "Maximum documents to return (default 20, max 50).",
+          default: 20,
+        },
+        offset: {
+          type: "number",
+          description: "Pagination offset (default 0).",
+          default: 0,
+        },
+      },
+      required: [],
+    },
+    tier: "main",
+    requiresConfirmation: false,
+    permissionCategory: "pure",
+    source: "built-in",
+    execute: async (args) => {
+      const result = await listKnowledgeLibraryDocumentsForAi(
+        args as Record<string, unknown>
+      );
+      return {
+        success: result.success,
+        result: result as unknown as Record<string, unknown>,
+      };
+    },
+  },
+  {
+    name: "knowledge_library_import_attachment",
+    description:
+      "Import a document the user attached to this chat into the local knowledge library (chunks and embeds it). Use ONLY with an attachment_ref value shown in the current conversation. Never use this for arbitrary local file paths. Requires user confirmation.",
+    parameters: {
+      type: "object",
+      properties: {
+        attachment_ref: {
+          type: "string",
+          description:
+            "Conversation-scoped attachment reference from the user's uploaded document.",
+        },
+        title: {
+          type: "string",
+          description: "Optional document title.",
+        },
+        description: {
+          type: "string",
+          description: "Optional document description.",
+        },
+        tags: {
+          type: "array",
+          items: { type: "string" },
+          description: "Optional document tags.",
+        },
+        author: {
+          type: "string",
+          description: "Optional document author. Defaults to User.",
+        },
+        duplicatePolicy: {
+          type: "string",
+          enum: ["fail", "allow", "replace"],
+          description:
+            'How to handle a duplicate name/size match. "fail" (default) refuses, "allow" imports anyway, "replace" is not supported yet.',
+          default: "fail",
+        },
+      },
+      required: ["attachment_ref"],
+    },
+    tier: "main",
+    requiresConfirmation: true,
+    permissionCategory: "filesystem",
+    timeoutClass: "network",
+    source: "built-in",
+    execute: async (args, context) => {
+      const result = await importKnowledgeLibraryAttachmentForAi(
+        args as Record<string, unknown>,
+        context
+      );
+      return {
+        success: result.success,
+        result: result as unknown as Record<string, unknown>,
+      };
+    },
+  },
+  {
+    name: "knowledge_library_delete_document",
+    description:
+      "Delete one known document from the local knowledge library by exact document ID. Call knowledge_library_list_documents first when the ID is unknown. Pass expected_name as a safety check when you inferred the document from a list result. Requires user confirmation.",
+    parameters: {
+      type: "object",
+      properties: {
+        document_id: {
+          type: "number",
+          description: "Exact knowledge library document ID to delete.",
+        },
+        delete_source_file: {
+          type: "boolean",
+          description:
+            "Whether to also delete the app-owned staged source file (default false).",
+          default: false,
+        },
+        expected_name: {
+          type: "string",
+          description:
+            "Optional safety check: the document name or title must match this exactly before deletion proceeds.",
+        },
+      },
+      required: ["document_id"],
+    },
+    tier: "main",
+    requiresConfirmation: true,
+    permissionCategory: "filesystem",
+    source: "built-in",
+    execute: async (args) => {
+      const result = await deleteKnowledgeLibraryDocumentForAi(
+        args as Record<string, unknown>
+      );
       return {
         success: result.success,
         result: result as unknown as Record<string, unknown>,
