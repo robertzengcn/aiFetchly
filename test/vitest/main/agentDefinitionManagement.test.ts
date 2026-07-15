@@ -237,6 +237,20 @@ describe("AgentDefinitionModule management", () => {
     );
   });
 
+  it("refuses to toggle a built-in agent from runtime or persisted catalogs", async () => {
+    await SqliteDb.ensureInitialized();
+    const m = new AgentDefinitionModule();
+
+    await expect(m.toggleAgent("agent-lead-researcher", false)).rejects.toThrow(
+      /Built-in/
+    );
+
+    await m.ensureBuiltIns();
+    await expect(m.toggleAgent("agent-lead-researcher", false)).rejects.toThrow(
+      /Built-in/
+    );
+  });
+
   it("refuses to delete a plugin-owned agent directly", async () => {
     await SqliteDb.ensureInitialized();
     const m = new AgentDefinitionModule();

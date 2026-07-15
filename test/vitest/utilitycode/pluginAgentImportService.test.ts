@@ -125,4 +125,26 @@ describe("PluginAgentImportService", () => {
     if (!r.ok) return;
     expect(r.agents).toHaveLength(0);
   });
+
+  it("rejects a symlinked agent file that escapes the plugin root", () => {
+    // File outside the plugin root (but inside the shared tmp parent).
+    const outside = path.join(tmp, "outside-secret.md");
+    fs.writeFileSync(outside, "secret content");
+    const root = fs.mkdtempSync(path.join(tmp, "plug-"));
+    fs.mkdirSync(path.join(root, "agents"));
+    fs.symlinkSync(outside, path.join(root, "agents", "leak.md"));
+    const manifest = {
+      name: "p",
+      version: "1.0.0",
+      description: "x",
+      agents: ["agents/leak.md"],
+    } as unknown as PluginManifest;
+    const r = PluginAgentImportService.parsePluginAgents({
+      pluginRoot: root,
+      manifest,
+    });
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.errors.some((e) => e.code === "agent-path-invalid")).toBe(true);
+  });
 });

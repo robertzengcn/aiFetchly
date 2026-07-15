@@ -800,6 +800,8 @@ class="message-bubble" :class="{
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
+import { useRouter } from 'vue-router';
+import { handleAiNavigationToolResult } from '@/views/utils/aiNavigationResultHandler';
 import { streamChatMessage, stopStreamingChat, getChatHistory, clearChatHistory, getConversations, ConversationMetadata, subscribeToFileOperations, unsubscribeFromFileOperations } from '@/views/api/aiChat';
 import { ChatMessage, ChatStreamChunk, Plan, PlanStep, PlanStepStatus, MessageType, UploadedFilePayload, LLMImageAttachmentPayload, CommonMessage } from '@/entityTypes/commonType';
 import { AI_CHAT_RESUME_TOOL_AFTER_PERMISSION } from '@/config/channellist';
@@ -856,6 +858,7 @@ const AI_CHAT_SLASH_COMMANDS: readonly SlashCommandDefinition[] = [
 
 // i18n setup
 const { t } = useI18n();
+const router = useRouter();
 
 // Props
 interface Props {
@@ -1627,6 +1630,10 @@ async function sendMessage(
             isExecutingTool.value = false;
             const hasContentPayload =
               typeof chunk.content === 'string' && chunk.content.trim().length > 0;
+
+            // AI app navigation: if this is an open_app_page navigate command,
+            // route to the validated page. Non-navigation results are ignored.
+            void handleAiNavigationToolResult(router, chunk.toolResult);
 
             if (chunk.replacesPermissionPromptForToolId) {
               const rid = chunk.replacesPermissionPromptForToolId;

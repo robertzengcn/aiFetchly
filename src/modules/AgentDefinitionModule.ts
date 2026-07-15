@@ -210,11 +210,15 @@ export class AgentDefinitionModule extends BaseModule {
 
   async toggleAgent(agentId: string, enabled: boolean): Promise<boolean> {
     await this.ensureConnection();
-    const toggled = await this.model.toggle(agentId, enabled);
-    if (toggled) return true;
-
-    const runtime = this.getRuntimeDefinition(agentId);
-    if (!runtime || runtime.source === "built-in") return false;
+    const existing = await this.model.getById(agentId);
+    const runtime = existing ?? this.getRuntimeDefinition(agentId);
+    if (!runtime) return false;
+    if (runtime.source === "built-in") {
+      throw new Error(`Built-in agent "${agentId}" cannot be toggled.`);
+    }
+    if (existing) {
+      return this.model.toggle(agentId, enabled);
+    }
     await this.model.upsert({
       ...runtime,
       status: enabled ? "active" : "disabled",

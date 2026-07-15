@@ -373,6 +373,8 @@ import {
   onBeforeUnmount,
 } from "vue";
 import { useI18n } from "vue-i18n";
+import { useRouter } from "vue-router";
+import { handleAiNavigationToolResult } from "@/views/utils/aiNavigationResultHandler";
 import { MessageType } from "@/entityTypes/commonType";
 import type {
   ChatV2MessageView,
@@ -475,6 +477,7 @@ type ShellPreview = {
 };
 
 const { t } = useI18n();
+const router = useRouter();
 
 interface AiPromptRequest {
   id: number;
@@ -2110,6 +2113,8 @@ const onSend = async (text: string, files?: File[]): Promise<void> => {
               chunk.conversationId || activeConversationId.value || "",
               assistantAdded ? assistant.id : undefined
             );
+            // AI app navigation: route on open_app_page navigate commands.
+            void handleAiNavigationToolResult(router, chunk.toolResult);
           }
         }
       },

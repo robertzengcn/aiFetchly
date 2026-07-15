@@ -1,4 +1,5 @@
 import * as path from "path";
+import * as fs from "fs";
 
 /**
  * Plugin Management System — shared type contracts.
@@ -322,8 +323,32 @@ export function resolvePluginRelativePath(
 ): string {
   const root = path.resolve(pluginRoot);
   const resolved = path.resolve(path.join(root, relativePath));
+  // Lexical containment: stops "../" traversal.
   if (resolved !== root && !resolved.startsWith(`${root}${path.sep}`)) {
     throw new Error(`Path "${relativePath}" escapes plugin directory`);
+  }
+  // Symlink resistance: when the target exists, verify its real (link-resolved)
+  // path is still inside the real plugin root, so a symlinked entry pointing
+  // outside the plugin dir cannot be read during import. ENOENT/EACCES defer
+  // to the caller's own existence check.
+  let realRoot = root;
+  try {
+    realRoot = fs.realpathSync(root);
+  } catch {
+    // root may be hypothetical in some call paths; fall back to lexical root
+  }
+  try {
+    const real = fs.realpathSync(resolved);
+    if (real !== realRoot && !real.startsWith(`${realRoot}${path.sep}`)) {
+      throw new Error(`Path "${relativePath}" escapes plugin directory`);
+    }
+  } catch (err) {
+    // Propagate our own escape error and any unexpected fs error; only defer
+    // missing/inaccessible targets to the caller.
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code !== "ENOENT" && code !== "EACCES") {
+      throw err;
+    }
   }
   return resolved;
 }
