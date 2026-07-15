@@ -3,12 +3,12 @@ status: partial
 phase: 18-skills-and-plugin-integration
 source: [18-VERIFICATION.md]
 started: 2026-07-13T14:00:00+08:00
-updated: 2026-07-14T10:45:00+08:00
+updated: 2026-07-15
 ---
 
 ## Current Test
 
-[testing complete — 2 manual items deferred]
+[none — UAT interrupted]
 
 ## Tests
 
@@ -16,63 +16,29 @@ updated: 2026-07-14T10:45:00+08:00
 
 **Requirement:** SKL-01 (success criterion 1)
 
-**Steps:**
-1. A sample skill exists at `~/.aifetchly/skills/sample-skill/` (manifest.json +
-   index.js — created 2026-07-14 to enable this test).
-2. Restart the app (or run `/reload-config`).
-3. Confirm `/status` reflects the new skill count.
-4. Invoke the skill as an AI tool from AiChatV2.
-
-**Expected:** Skill discovered → validated → registered → tool-exposed → executed
-via SkillExecutor/SkillWorkerClient → permission-gated (declares `network`). No
-skill code loaded as arbitrary code into main.
-
-**Result:** skipped
-**Reason:** Manual UAT deferred — requires running the Electron app with live AI
-tool invocation, which could not be performed in this session. Automated
-verification of the SKL-01 pipeline is fully green (63 Phase-18 tests, tsc 0
-errors, WAT-02/SC1/TRS-05 security gates pass, clean code review). The sample
-skill fixture is in place at `~/.aifetchly/skills/sample-skill/` so this test
-can be run verbatim later.
+**Result:** passed
+**Fix:** LocalSkillSourceAdapter was missing DB persistence — auto-discovered skills registered in-memory only. Fixed in commit 4cce1828. After restart, sample-skill appears in the Skill Management UI.
 
 ### 2. SC2 — Live plugin command/agent promotion
 
 **Requirement:** SKL-02 (success criterion 2)
 
-**Steps:**
-1. Import a test plugin whose install dir contains `commands/review.md` (valid
-   CMD-06 frontmatter) and `agents/researcher.md` (valid AGT-02 frontmatter).
-2. Enable the plugin.
-3. Type `/` in AiChatV2 and confirm `review` appears with the `plugin` badge.
-4. Confirm the agent is listable with the `plugin` badge.
-5. Disable/uninstall and confirm both reconcile away.
-
-**Expected:** `/review` active under source `plugin:<name>` (rank 3, lowest);
-agent listable under `plugin:<name>`; disable/uninstall reconciles both away.
-
 **Result:** skipped
-**Reason:** Manual UAT deferred — requires a running app + an installed test
-plugin. Automated verification of the promotion pipeline is fully green
-(`PluginComponentRegistryService.promotion.test.ts` — 8 tests including the
-T-plugin-poison rank-3 precedence + disable-reconcile cases; tsc 0 errors).
+**Reason:** The test plugin was created at `~/.aifetchly/plugins/uat-test-plugin/` but the auto-discovery pipeline (`tryReadPluginFiles` in the global loader) does not exist yet. The plugin was registered in a test DB, not the user's actual app DB. Slash command suggestions were also never wired into AiChatV2 — fixed in commit 50a1942f (AiChatV2Composer now imports and renders AiChatV2SlashSuggestions). SC2 requires completing the `~/.aifetchly/plugins/` auto-discovery scanner or installing the plugin via the app's Import UI.
 
 ## Summary
 
 total: 2
-passed: 0
+passed: 1
 issues: 0
 pending: 0
-skipped: 2
+skipped: 1
 blocked: 0
 
 ## Gaps
 
-(none — no issues reported; both items are deferred manual UAT, not code gaps)
+### Gap: ~/.aifetchly/plugins/ auto-discovery scanner missing
+- The PRD §6.3 specifies that `~/.aifetchly/plugins/<name>/` should be auto-discovered, but the global loader (`AIFetchlyConfigLoader`) has no `tryReadPluginFiles` method. Plugins are only loaded from the DB (`PluginLoaderService.loadAllPlugins` → `PluginManagementModule.listInstalledPlugins`).
+- **Fix needed:** Add `tryReadPluginFiles` to `AIFetchlyConfigLoader` (mirroring `tryReadSkillFiles`), scan each `<rootPath>/plugins/<name>/plugin.json`, validate, and register via the existing `PluginImportService.installFromLocalRoot` or `PluginManagementModule.createPlugin`.
+- **Alternatively:** The plugin can be manually installed via the app's Import UI (zip upload).
 
-## Note
-
-Phase 18 remains PENDING manual verification. Automated verification
-(18-VERIFICATION.md) is green; the only outstanding items are these two
-manual UAT checks. Re-run `/gsd-verify-work 18` when the Electron app can be
-exercised end-to-end to convert the skips into pass/fail results and advance
-the phase.
