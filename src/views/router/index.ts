@@ -80,6 +80,7 @@ export const constantRoutes: RouteRecordRaw[] = [
   {
     path: "/systemsetting",
     name: "system_setting",
+    redirect: "/systemsetting/index",
     meta: {
       visible: false,
       title: "route.system_setting",
@@ -864,7 +865,7 @@ export const constantRoutes: RouteRecordRaw[] = [
     path: "/skills",
     name: "Skills",
     meta: {
-      visible: true,
+      visible: false,
       title: "route.skills",
       icon: "mdi-lightning-bolt",
     },
@@ -875,7 +876,7 @@ export const constantRoutes: RouteRecordRaw[] = [
         component: () => import("@/views/pages/systemsetting/skills.vue"),
         name: "SkillsManagement",
         meta: {
-          visible: true,
+          visible: false,
           title: "route.skills_management",
           icon: "mdi-lightning-bolt",
         },

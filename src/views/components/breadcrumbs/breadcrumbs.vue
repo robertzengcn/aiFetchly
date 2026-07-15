@@ -43,7 +43,7 @@ function init() {
         ];
         return;
     }
-    if (matched[0].path === matched[1].path) {
+    if (matched.length < 2 || matched[0].path === matched[1].path) {
         routes.value = [
             {
                 title: t('route.home'),

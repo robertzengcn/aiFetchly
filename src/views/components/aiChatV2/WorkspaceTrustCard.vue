@@ -51,7 +51,7 @@
         :data-loading="previewLoading ? 'true' : 'false'"
         variant="text"
         :loading="previewLoading"
-        :disabled="trustLoading"
+        :disabled="trustLoadingScope !== null"
         @click="onPreview"
       >
         <v-icon start size="small">{{ showPreview ? "mdi-eye-off-outline" : "mdi-eye-outline" }}</v-icon>
