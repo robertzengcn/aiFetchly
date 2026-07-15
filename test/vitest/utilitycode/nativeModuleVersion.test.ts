@@ -68,6 +68,7 @@ function getCompiledModuleVersion(modulePath: string): number | null {
 
 describe("Native module version compatibility", () => {
   const projectRoot = path.resolve(__dirname, "../../..");
+  const packageJsonPath = path.join(projectRoot, "package.json");
   const electronBinaryPath = path.join(
     projectRoot,
     "node_modules/electron/dist/electron"
@@ -164,5 +165,16 @@ describe("Native module version compatibility", () => {
       `rebuild-better-sqlite targets Electron ${targetVersion} but installed version is ${electronVersion}. ` +
         `Update scripts/rebuild-better-sqlite.js.`
     ).toBe(electronVersion);
+  });
+
+  it("should verify native modules before Electron startup commands", () => {
+    const packageJson = JSON.parse(
+      fs.readFileSync(packageJsonPath, "utf-8")
+    ) as {
+      scripts?: Record<string, string>;
+    };
+
+    expect(packageJson.scripts?.prestart).toBe("yarn rebuild-native");
+    expect(packageJson.scripts?.predev).toBe("yarn rebuild-native");
   });
 });
