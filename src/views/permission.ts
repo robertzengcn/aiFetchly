@@ -4,8 +4,7 @@ import NProgress from "nprogress";
 import "nprogress/nprogress.css";
 // import { Message } from 'element-ui'
 //import { Router } from 'vue-router'
-import { UserModule } from "@/views/store/modules/user";
-import { PermissionModule } from "@/views/store/modules/permission";
+import { useUserStore } from "@/views/store/modules/userStore";
 import i18n from "@/views/lang"; // Internationalization
 import settings from "@/views/settings";
 
@@ -26,7 +25,7 @@ router.beforeEach(async (to, from, next: any) => {
   NProgress.start();
   let userinfo;
   try {
-    userinfo = await UserModule.GetUserInfo();
+    userinfo = await useUserStore().getUserInfo();
     console.log("userinfo");
     console.log(userinfo);
   } catch (err) {

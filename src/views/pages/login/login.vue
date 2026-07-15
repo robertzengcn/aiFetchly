@@ -53,7 +53,6 @@
       </v-dialog>
 </template>
 <script setup lang="ts">
-//import { UserModule } from '@/views/store/modules/user'
 import {openPage, getLoginUrl} from "@/views/api/users"
 import { onMounted, onUnmounted, ref } from "vue";
 import {NATIVATECOMMAND, LOGIN_STATUS} from "@/config/channellist"

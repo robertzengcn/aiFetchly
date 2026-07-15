@@ -169,13 +169,10 @@
     "uuid": "^9.0.1",
     "vite-plugin-commonjs": "^0.10.1",
     "vue": "^3.3.4",
-    "vue-class-component": "^8.0.0-0",
     "vue-i18n": "9",
     "vue-router": "^4.2.5",
     "vue3-apexcharts": "^1.4.4",
     "vuetify": "3.5.15",
-    "vuex": "^4.1.0",
-    "vuex-module-decorators": "^2.0.0",
     "webfontloader": "^1.0.0",
     "whatwg-fetch": "^3.6.20",
     "winston": "^3.2.1",
@@ -273,7 +270,6 @@
     "vitest": "^1.2.2",
     "vue-cli-plugin-vuetify": "~2.5.8",
     "vue-loader": "^15.11.1",
-    "vue-template-compiler": "^2.7.14",
     "vue-tsc": "^2.0.28"
   },
   "overrides": {
