@@ -7,6 +7,7 @@ import {
 } from "@/service/PluginLoaderService";
 import { PluginRuntimeCache } from "@/service/PluginRuntimeCache";
 import { PluginHookRegistrar } from "@/service/pluginCompat/PluginHookRegistrar";
+import { UserPluginAutoInstallService } from "@/service/UserPluginAutoInstallService";
 import { SkillRegistry } from "@/config/skillsRegistry";
 import { CommandRegistry } from "@/service/slashCommands/CommandRegistry";
 import { AgentDefinitionRegistryImpl } from "@/service/AgentDefinitionRegistry";
@@ -47,6 +48,7 @@ export class PluginComponentRegistryService {
    */
   static async applyLoadedPlugins(): Promise<void> {
     PluginRuntimeCache.clear("apply-loaded-plugins");
+    await PluginComponentRegistryService.syncUserPluginFolders();
     // Register plugin-declared hooks (Phase 3 plumbing). Re-registration
     // is idempotent per hook id, so calling this on every apply is safe.
     const loaded = await PluginLoaderService.loadAllPlugins();
@@ -78,9 +80,20 @@ export class PluginComponentRegistryService {
    */
   static async reload(): Promise<PluginLoadResult> {
     PluginLoaderService.clearCache();
+    await PluginComponentRegistryService.syncUserPluginFolders();
     const result = await PluginLoaderService.loadAllPlugins();
     await PluginComponentRegistryService.applyLoadedPlugins();
     return result;
+  }
+
+  private static async syncUserPluginFolders(): Promise<void> {
+    const result = await UserPluginAutoInstallService.syncDefaultUserPlugins();
+    if (result.errors.length > 0) {
+      console.warn(
+        `[PluginComponentRegistryService] Failed to auto-install ${result.errors.length} user plugin folder(s).`,
+        result.errors
+      );
+    }
   }
 
   static async promotePluginCommandsAndAgents(

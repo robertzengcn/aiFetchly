@@ -7,6 +7,7 @@ import { PluginImportService } from "@/service/PluginImportService";
 import { PluginOptionsStore } from "@/service/pluginCompat/PluginOptionsStore";
 import { PluginComponentRegistryService } from "@/service/PluginComponentRegistryService";
 import { PluginDiagnosticsService } from "@/service/PluginDiagnosticsService";
+import { UserPluginAutoInstallService } from "@/service/UserPluginAutoInstallService";
 import { getPluginInstallRoot } from "@/service/pluginPaths";
 import type {
   PluginSummary,
@@ -97,6 +98,7 @@ export function registerPluginIpcHandlers(): void {
   console.log("Plugin IPC handlers registered");
 
   registerAiValidatedHandler(PLUGIN_LIST, pluginNoInputSchema, async () => {
+    await syncUserPluginFoldersForList();
     const module = new PluginManagementModule();
     const skillModule = new SkillManagementModule();
     const mcpModule = new MCPToolModule();
@@ -441,4 +443,14 @@ export function registerPluginIpcHandlers(): void {
       return { ok: true as const };
     }
   );
+}
+
+async function syncUserPluginFoldersForList(): Promise<void> {
+  const result = await UserPluginAutoInstallService.syncDefaultUserPlugins();
+  if (result.errors.length > 0) {
+    console.warn(
+      `[Plugin IPC] Failed to auto-install ${result.errors.length} user plugin folder(s).`,
+      result.errors
+    );
+  }
 }

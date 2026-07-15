@@ -129,9 +129,20 @@ vi.mock("@/service/PluginLoaderService", () => ({
     }),
   },
 }));
+vi.mock("@/service/UserPluginAutoInstallService", () => ({
+  UserPluginAutoInstallService: {
+    syncDefaultUserPlugins: vi.fn(async () => ({
+      scanned: 0,
+      installed: 0,
+      skipped: 0,
+      errors: [],
+    })),
+  },
+}));
 
 // Import AFTER mocks are registered.
 import { registerPluginIpcHandlers } from "@/main-process/communication/plugin-ipc";
+import { UserPluginAutoInstallService } from "@/service/UserPluginAutoInstallService";
 import {
   PLUGIN_LIST,
   PLUGIN_GET,
@@ -167,6 +178,13 @@ describe("plugin-ipc", () => {
       msg: expect.stringContaining("not enabled"),
       data: null,
     });
+  });
+
+  it("syncs user plugin folders before listing installed plugins", async () => {
+    const fn = handlers.get(PLUGIN_LIST)!;
+    const result = await fn({}, undefined);
+    expect(result).toMatchObject({ status: true });
+    expect(UserPluginAutoInstallService.syncDefaultUserPlugins).toHaveBeenCalled();
   });
 
   it("rejects import with path traversal in zipPath", async () => {

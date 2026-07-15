@@ -27,6 +27,7 @@ import {
 } from "@/service/PluginComponentRegistryService";
 import { PluginLoaderService } from "@/service/PluginLoaderService";
 import { PluginRuntimeCache } from "@/service/PluginRuntimeCache";
+import { UserPluginAutoInstallService } from "@/service/UserPluginAutoInstallService";
 import type { LoadedPlugin } from "@/service/PluginLoaderService";
 
 const tmpRoots: string[] = [];
@@ -249,6 +250,10 @@ describe("PluginComponentRegistryService.applyLoadedPlugins / unregister (SKL-02
   });
 
   it("applyLoadedPlugins clears the runtime cache AND delegates to promotion", async () => {
+    vi.spyOn(
+      UserPluginAutoInstallService,
+      "syncDefaultUserPlugins"
+    ).mockResolvedValue({ scanned: 0, installed: 0, skipped: 0, errors: [] });
     const clearSpy = vi.spyOn(PluginRuntimeCache, "clear");
     const promoteSpy = vi
       .spyOn(PluginComponentRegistryService, "promotePluginCommandsAndAgents")
