@@ -69,6 +69,7 @@ function getCompiledModuleVersion(modulePath: string): number | null {
 describe("Native module version compatibility", () => {
   const projectRoot = path.resolve(__dirname, "../../..");
   const packageJsonPath = path.join(projectRoot, "package.json");
+  const forgeConfigPath = path.join(projectRoot, "forge.config.js");
   const electronBinaryPath = path.join(
     projectRoot,
     "node_modules/electron/dist/electron"
@@ -176,5 +177,13 @@ describe("Native module version compatibility", () => {
 
     expect(packageJson.scripts?.prestart).toBe("yarn rebuild-native");
     expect(packageJson.scripts?.predev).toBe("yarn rebuild-native");
+  });
+
+  it("should verify native modules inside Forge preStart for direct launches", () => {
+    const forgeConfig = fs.readFileSync(forgeConfigPath, "utf-8");
+
+    expect(forgeConfig).toContain("preStart: async");
+    expect(forgeConfig).toContain("ensureBetterSqliteElectronBinary");
+    expect(forgeConfig).toContain("scripts\", \"rebuild-better-sqlite.js");
   });
 });

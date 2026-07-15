@@ -1,5 +1,6 @@
 const path = require("path");
 const dotenv = require("dotenv");
+const { spawnSync } = require("node:child_process");
 const { readdirSync, rmdirSync, statSync } = require("node:fs");
 const { join, normalize } = require("node:path");
 const { Walker, DepType } = require("flora-colossus");
@@ -48,6 +49,24 @@ const EXTERNAL_DEPENDENCIES = [
 dotenv.config({ path: path.resolve(__dirname, ".env") });
 const env = process.env.NODE_ENV || "development";
 dotenv.config({ path: path.resolve(__dirname, `.env.${env}`) });
+
+function ensureBetterSqliteElectronBinary() {
+  const scriptPath = join(__dirname, "scripts", "rebuild-better-sqlite.js");
+  const result = spawnSync(process.execPath, [scriptPath], {
+    cwd: __dirname,
+    stdio: "inherit",
+  });
+
+  if (result.error) {
+    throw result.error;
+  }
+  if (result.status !== 0) {
+    throw new Error(
+      `better-sqlite3 Electron rebuild failed with exit code ${result.status}`
+    );
+  }
+}
+
 module.exports = {
   packagerConfig: {
     icon: "./src/assets/images/icon",
@@ -444,6 +463,10 @@ module.exports = {
     },
   ],
   hooks: {
+    // VS Code/Cursor launch electron-forge directly, bypassing npm prestart/predev.
+    preStart: async () => {
+      ensureBetterSqliteElectronBinary();
+    },
     postPackage: async (forgeConfig, options) => {
       // Copy uninstaller to the packaged application
       const {
