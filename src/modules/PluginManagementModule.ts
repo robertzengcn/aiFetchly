@@ -61,6 +61,10 @@ export class PluginManagementModule extends BaseModule {
       componentStateJson: input.componentStateJson ?? "{}",
       enabled: input.enabled ?? 1,
       health: input.health ?? "healthy",
+      sourceKind: input.sourceKind,
+      sourceUri: input.sourceUri,
+      sourceRef: input.sourceRef,
+      sourceMetaJson: input.sourceMetaJson ?? "{}",
     });
   }
 

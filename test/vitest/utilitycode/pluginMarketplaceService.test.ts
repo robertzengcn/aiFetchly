@@ -9,6 +9,12 @@ import * as path from "path";
 const mockState = vi.hoisted(() => ({
   // In-memory stand-in for the plugin_marketplaces table.
   store: new Map<string, Record<string, unknown>>(),
+  // In-memory stand-in for installed plugin rows used by discovery status.
+  installedPlugins: [] as Array<{
+    name: string;
+    version?: string;
+    sourceMetaJson?: string;
+  }>,
   // Resolved per-test to a fresh temp dir; the path helpers derive all cache
   // locations from this so no writes land under process.cwd().
   userDataDir: "",
@@ -72,7 +78,7 @@ vi.mock("@/modules/PluginMarketplaceModule", () => {
 vi.mock("@/modules/PluginManagementModule", () => ({
   PluginManagementModule: class {
     async listInstalledPlugins() {
-      return [];
+      return mockState.installedPlugins;
     }
   },
 }));
@@ -180,6 +186,7 @@ describe("PluginMarketplaceService", () => {
     mockState.userDataDir = tmpRoot;
     sourceRoot = makeSourceRoot();
     mockState.store.clear();
+    mockState.installedPlugins = [];
   });
 
   afterEach(() => {
@@ -248,6 +255,32 @@ describe("PluginMarketplaceService", () => {
     expect(["not_installed", "installed", "different_version"]).toContain(
       plugins[0].status
     );
+  });
+
+  it("marks marketplace plugins as installed when installed row has marketplace provenance", async () => {
+    const svc = new PluginMarketplaceService(
+      undefined as never,
+      undefined as never,
+      fakeFetcher(sourceRoot)
+    );
+    await svc.addMarketplace({ source: sourceRoot });
+    mockState.installedPlugins = [
+      {
+        name: "lead-research",
+        version: "1.0.0",
+        sourceMetaJson: JSON.stringify({
+          marketplace: {
+            marketplaceName: "team-tools",
+            entryName: "lead-research",
+          },
+        }),
+      },
+    ];
+
+    const plugin = await svc.getAvailablePlugin("lead-research@team-tools");
+
+    expect(plugin?.installed).toBe(true);
+    expect(plugin?.status).toBe("installed");
   });
 
   it("removing a marketplace does not touch installed plugins", async () => {

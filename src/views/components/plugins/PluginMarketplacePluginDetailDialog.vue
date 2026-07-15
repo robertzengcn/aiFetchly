@@ -99,6 +99,16 @@ function statusColor(status: PluginMarketplaceStatus): string {
   };
   return colors[status];
 }
+function asInstalledDetail(
+  current: PluginMarketplacePluginDetail
+): PluginMarketplacePluginDetail {
+  return {
+    ...current,
+    installed: true,
+    installedVersion: current.installedVersion ?? current.version,
+    status: "installed",
+  };
+}
 
 watch(() => [props.modelValue, props.pluginId], async ([open, id]) => {
   if (open && id) {
@@ -121,7 +131,10 @@ async function doInstall(): Promise<void> {
     const pluginId = detail.value.pluginId;
     await installMarketplacePlugin({ pluginId, overwrite: true });
     const updated = await getMarketplacePlugin(pluginId);
-    detail.value = updated ?? { ...detail.value, installed: true, status: "installed" };
+    detail.value =
+      updated && updated.status !== "not_installed"
+        ? updated
+        : asInstalledDetail(detail.value);
     confirmRisk.value = false;
     emit("installed");
   } catch (e: unknown) {
