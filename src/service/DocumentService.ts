@@ -29,8 +29,37 @@ export interface StagedAttachmentContent {
   sha256?: string;
 }
 
+/**
+ * Resolved import source for a staged chat attachment. `filePath` is an
+ * app-owned, containment-checked file under the staged attachment directory,
+ * suitable for feeding into the RAG upload pipeline. Never expose this path to
+ * the model.
+ */
+export interface StagedAttachmentImportSource {
+  refId: string;
+  fileName: string;
+  filePath: string;
+  sha256?: string;
+  sizeBytes: number;
+  /** True when the original binary file was missing and a `.md` fallback is used. */
+  markdownFallback: boolean;
+}
+
 interface StageAttachmentOptions {
   attachmentSha256?: string;
+  /**
+   * Optional base64-encoded original file bytes. When provided (and the file
+   * extension is not `.md`), the raw bytes are persisted as
+   * `<refId><ext>` alongside the converted markdown so the attachment can be
+   * imported into the knowledge library through the normal RAG upload path.
+   */
+  originalContentBase64?: string;
+}
+
+interface StagedAttachmentMetadata {
+  fileName?: string;
+  sha256?: string;
+  hasOriginalFile?: boolean;
 }
 
 export class DocumentService {
@@ -261,11 +290,32 @@ export class DocumentService {
     const filePath = path.join(stageDir, `${refId}.md`);
     const metadataPath = path.join(stageDir, `${refId}.meta.json`);
     fs.writeFileSync(filePath, markdown, "utf-8");
+
+    // Persist the original file bytes when supplied so the attachment can be
+    // imported into the knowledge library. Markdown sources reuse the .md file
+    // already written above, so no separate original file is needed.
+    let hasOriginalFile = false;
+    const originalExt = path.extname(fileName);
+    if (
+      options?.originalContentBase64 &&
+      originalExt &&
+      originalExt !== ".md"
+    ) {
+      const originalPath = path.join(stageDir, `${refId}${originalExt}`);
+      const originalBytes = Buffer.from(
+        options.originalContentBase64,
+        "base64"
+      );
+      fs.writeFileSync(originalPath, originalBytes);
+      hasOriginalFile = true;
+    }
+
     fs.writeFileSync(
       metadataPath,
       JSON.stringify({
         fileName,
         sha256: options?.attachmentSha256 || null,
+        hasOriginalFile,
       }),
       "utf-8"
     );
@@ -273,6 +323,74 @@ export class DocumentService {
     return {
       refId,
       fileName,
+    };
+  }
+
+  /**
+   * Resolve a safe, app-owned import source for a staged attachment.
+   *
+   * Prefers the original binary file (`<refId><ext>`) when it was staged;
+   * falls back to the converted markdown (`<refId>.md`) only when the
+   * original is unavailable. The returned `filePath` is realpath-resolved and
+   * containment-checked to live under the staged attachment directory.
+   *
+   * @throws when the ref is malformed, the conversation has no staged files,
+   *   the resolved path escapes staging, or the source file is missing.
+   */
+  async getStagedAttachmentImportSource(
+    conversationId: string,
+    refId: string
+  ): Promise<StagedAttachmentImportSource> {
+    if (!/^[a-zA-Z0-9-]+$/.test(refId)) {
+      throw new Error("Invalid attachment reference");
+    }
+
+    const safeConversationId = this.sanitizePathSegment(
+      conversationId || "default"
+    );
+    const stageDir = path.join(this.stagedAttachmentRoot, safeConversationId);
+    const metadataPath = path.join(stageDir, `${refId}.meta.json`);
+    const metadata = this.readStagedAttachmentMetadata(metadataPath);
+
+    const storedFileName = metadata.fileName || `${refId}.md`;
+    const ext = path.extname(storedFileName);
+    const markdownPath = path.join(stageDir, `${refId}.md`);
+    const originalPath =
+      ext && ext !== ".md"
+        ? path.join(stageDir, `${refId}${ext}`)
+        : markdownPath;
+
+    const hasOriginal = ext !== ".md" && fs.existsSync(originalPath);
+    const candidatePath = hasOriginal ? originalPath : markdownPath;
+
+    if (!fs.existsSync(candidatePath)) {
+      throw new Error(
+        "Attachment original file is no longer available. Ask the user to upload it again."
+      );
+    }
+
+    const resolved = fs.realpathSync(candidatePath);
+    if (!this.isPathUnderRoot(resolved, stageDir)) {
+      throw new Error("Attachment source path is outside staging directory");
+    }
+
+    const stats = fs.statSync(resolved);
+    if (!stats.isFile()) {
+      throw new Error("Attachment source is not a file");
+    }
+
+    const markdownFallback = !hasOriginal;
+    const resolvedFileName = markdownFallback
+      ? `${path.basename(storedFileName, ext)}.md`
+      : storedFileName;
+
+    return {
+      refId,
+      fileName: resolvedFileName,
+      filePath: resolved,
+      sha256: metadata.sha256,
+      sizeBytes: stats.size,
+      markdownFallback,
     };
   }
 
@@ -309,22 +427,12 @@ export class DocumentService {
 
     let fileName = path.basename(filePath);
     let sha256: string | undefined;
-    if (fs.existsSync(metadataPath)) {
-      try {
-        const metadataRaw = fs.readFileSync(metadataPath, "utf-8");
-        const metadata = JSON.parse(metadataRaw) as {
-          fileName?: string;
-          sha256?: string;
-        };
-        if (metadata.fileName) {
-          fileName = metadata.fileName;
-        }
-        if (metadata.sha256) {
-          sha256 = metadata.sha256;
-        }
-      } catch {
-        // Fallback to default filename above if metadata cannot be parsed.
-      }
+    const metadata = this.readStagedAttachmentMetadata(metadataPath);
+    if (metadata.fileName) {
+      fileName = metadata.fileName;
+    }
+    if (metadata.sha256) {
+      sha256 = metadata.sha256;
     }
 
     return {
@@ -332,6 +440,37 @@ export class DocumentService {
       markdown,
       sha256,
     };
+  }
+
+  /**
+   * Read and parse a staged attachment's `.meta.json`. Returns an empty object
+   * when the file is missing or unparseable so callers can fall back safely.
+   */
+  private readStagedAttachmentMetadata(
+    metadataPath: string
+  ): StagedAttachmentMetadata {
+    if (!fs.existsSync(metadataPath)) {
+      return {};
+    }
+    try {
+      return JSON.parse(
+        fs.readFileSync(metadataPath, "utf-8")
+      ) as StagedAttachmentMetadata;
+    } catch {
+      return {};
+    }
+  }
+
+  /**
+   * Containment check: true when `targetPath` lives inside `rootDir`. Uses
+   * already-realpath-resolved inputs (callers must resolve symlinks first).
+   */
+  private isPathUnderRoot(targetPath: string, rootDir: string): boolean {
+    const relative = path.relative(rootDir, targetPath);
+    return (
+      relative === "" ||
+      (!relative.startsWith("..") && !path.isAbsolute(relative))
+    );
   }
 
   private resolveSupportedExtension(
