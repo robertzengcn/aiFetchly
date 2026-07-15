@@ -184,6 +184,11 @@ export class AgentDefinitionModule extends BaseModule {
 
   async toggleAgent(agentId: string, enabled: boolean): Promise<boolean> {
     await this.ensureConnection();
+    const existing = await this.model.getById(agentId);
+    if (!existing) return false;
+    if (existing.source === "built-in") {
+      throw new Error(`Built-in agent "${agentId}" cannot be toggled.`);
+    }
     return this.model.toggle(agentId, enabled);
   }
 
