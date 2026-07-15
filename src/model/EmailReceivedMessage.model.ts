@@ -70,7 +70,16 @@ export class EmailReceivedMessageModel extends BaseDb {
       existing.snippet = stripped.snippet;
       existing.receivedAt = stripped.receivedAt;
       existing.isUnread = stripped.isUnread;
-      // replyStatus / classification / processedAt intentionally preserved.
+      if (
+        shouldPromoteReplyStatusFromProvider(
+          stripped.replyStatus as EmailReplyStatus | undefined,
+          existing.replyStatus
+        )
+      ) {
+        existing.replyStatus = "sent";
+        existing.processedAt = new Date();
+      }
+      // classification intentionally preserved.
       return await this.repository.save(existing);
     }
 
@@ -194,4 +203,11 @@ export class EmailReceivedMessageModel extends BaseDb {
     }
     return await qb.getCount();
   }
+}
+
+export function shouldPromoteReplyStatusFromProvider(
+  incomingStatus: EmailReplyStatus | undefined,
+  existingStatus: EmailReplyStatus
+): boolean {
+  return incomingStatus === "sent" && existingStatus !== "sent";
 }

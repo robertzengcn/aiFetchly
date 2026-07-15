@@ -40,6 +40,16 @@
               <v-icon left>mdi-hook</v-icon>
               {{ t('system_settings.manage_hooks') || 'Manage Hooks' }}
             </v-btn>
+            <v-btn
+              color="primary"
+              variant="outlined"
+              block
+              @click="navigateToSubagents"
+              class="mb-2"
+            >
+              <v-icon left>mdi-robot-outline</v-icon>
+              {{ t('system_settings.manage_subagents') || 'Manage Subagents' }}
+            </v-btn>
           </v-card-text>
         </v-card>
       </v-col>
@@ -401,6 +411,10 @@ function navigateToSkills() {
 
 function navigateToHooks() {
   router.push({ name: 'system_setting_hooks' });
+}
+
+function navigateToSubagents() {
+  router.push({ name: 'system_setting_subagents' });
 }
 
 onMounted(() => {

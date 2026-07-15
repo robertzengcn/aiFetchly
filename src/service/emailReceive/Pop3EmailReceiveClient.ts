@@ -119,6 +119,7 @@ export class Pop3EmailReceiveClient implements EmailReceiveClient {
       snippet: buildSnippet(bodyText),
       receivedAt: parsed.date ?? new Date(),
       isUnread: false,
+      isAnswered: false,
       autoSubmitted: autoSubmittedHeader ? String(autoSubmittedHeader) : null,
       precedence: precedenceHeader ? String(precedenceHeader) : null,
     };
@@ -165,7 +166,7 @@ class Pop3Connection {
       const timeout = setTimeout(() => {
         socket.destroy();
         reject(new Error("POP3 connection timed out"));
-      }, 15000);
+      }, 30000);
 
       const onConnect = async () => {
         try {
@@ -187,7 +188,6 @@ class Pop3Connection {
       };
 
       socket.once("data", () => {
-        socket.removeListener("data", onData);
         onConnect();
       });
       socket.on("data", onData);
@@ -239,17 +239,27 @@ class Pop3Connection {
       this.socket.write(cmd + "\r\n", (err) => {
         if (err) reject(err);
       });
-      setTimeout(() => {
-        const resp = this.buffer;
-        this.buffer = "";
-        if (resp.startsWith("+OK")) {
-          resolve(resp);
-        } else if (resp.startsWith("-ERR")) {
-          reject(new Error(`POP3 error: ${resp.replace("-ERR", "").trim()}`));
-        } else {
-          resolve(resp);
+      const start = Date.now();
+      const check = () => {
+        if (this.buffer) {
+          const resp = this.buffer;
+          this.buffer = "";
+          if (resp.startsWith("+OK")) {
+            resolve(resp);
+          } else if (resp.startsWith("-ERR")) {
+            reject(new Error(`POP3 error: ${resp.replace("-ERR", "").trim()}`));
+          } else {
+            resolve(resp);
+          }
+          return;
         }
-      }, 10000);
+        if (Date.now() - start > 10000) {
+          reject(new Error("POP3 command timeout"));
+          return;
+        }
+        setTimeout(check, 100);
+      };
+      check();
     });
   }
 

@@ -1,4 +1,5 @@
 import { PluginManagementModule } from "@/modules/PluginManagementModule";
+import { AgentDefinitionModule } from "@/modules/AgentDefinitionModule";
 import { SkillManagementModule } from "@/modules/SkillManagementModule";
 import { MCPToolModule } from "@/modules/MCPToolModule";
 import type { PluginError, PluginSummary } from "@/entityTypes/pluginTypes";
@@ -84,12 +85,14 @@ export class PluginDiagnosticsService {
     const pluginModule = new PluginManagementModule();
     const skillModule = new SkillManagementModule();
     const mcpModule = new MCPToolModule();
+    const agentModule = new AgentDefinitionModule();
 
     const plugin = await pluginModule.getPluginByName(pluginName);
     if (!plugin) return null;
 
     const skills = await skillModule.findSkillsByPluginName(pluginName);
     const mcpServers = await mcpModule.findMcpByPluginName(pluginName);
+    const agents = await agentModule.findAgentsByPluginName(pluginName);
 
     let storedErrors: PluginError[] = [];
     try {
@@ -120,6 +123,7 @@ export class PluginDiagnosticsService {
       health: plugin.health as PluginSummary["health"],
       skillCount: skills.length,
       mcpServerCount: mcpServers.length,
+      agentCount: agents.length,
       permissions: safeParseArray(plugin.permissionsJson),
       lastUpdated: plugin.updatedAt
         ? new Date(plugin.updatedAt).toISOString()

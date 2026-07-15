@@ -25,6 +25,13 @@ import {
 
 // --- Fixtures ----------------------------------------------------------------
 
+function sourceFromId(id: string): AgentDefinitionView["source"] {
+  if (id.startsWith("workspace:")) return "workspace";
+  if (id.startsWith("plugin:")) return "plugin";
+  if (id === "built-in" || id.startsWith("agent-")) return "built-in";
+  return "user";
+}
+
 function makeAgent(
   overrides: Partial<AgentDefinitionView> &
     Pick<AgentDefinitionView, "id" | "name">
@@ -41,6 +48,8 @@ function makeAgent(
     outputSchema: {},
     status: "active",
     ...overrides,
+    source: overrides.source ?? sourceFromId(overrides.id),
+    health: overrides.health ?? "healthy",
   };
 }
 

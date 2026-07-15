@@ -495,6 +495,8 @@ const userAgent: AgentDefinitionView = {
   maxContinueCalls: 4,
   outputSchema: {},
   status: "active",
+  source: "user",
+  health: "healthy",
 };
 
 const workspaceAgent: AgentDefinitionView = {
@@ -510,6 +512,8 @@ const workspaceAgent: AgentDefinitionView = {
   maxContinueCalls: 4,
   outputSchema: {},
   status: "active",
+  source: "workspace",
+  health: "healthy",
 };
 
 describe("SlashCommandDispatcher /agents command (Phase 16 / Plan 03, D-AgentsList)", () => {

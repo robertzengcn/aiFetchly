@@ -256,6 +256,8 @@ export function buildAgentDefinition(
     maxContinueCalls: DEFAULT_MAX_CONTINUE_CALLS,
     outputSchema: {},
     status: "active",
+    source: sourceMeta.source,
+    health: "healthy",
   };
 
   return { ok: true, definition };

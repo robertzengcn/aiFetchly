@@ -41,6 +41,7 @@ const REQUIRED_EMAIL_RECEIVE_KEYS = [
   "from",
   "received_at",
   "unread",
+  "unread_unavailable_pop3",
   "classification",
   "reply_to",
   "body_html",

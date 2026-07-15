@@ -77,6 +77,9 @@ const BUILT_INS: readonly AgentDefinitionView[] = [
     maxContinueCalls: 8,
     outputSchema: LEAD_RESEARCHER_OUTPUT_SCHEMA,
     status: "active",
+    source: "built-in",
+    health: "healthy",
+    manifest: {},
   },
 ];
 

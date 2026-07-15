@@ -67,7 +67,15 @@
     >
       <template #item.receivedAt="{ item }">{{ formatDate(item.receivedAt) }}</template>
       <template #item.isUnread="{ item }">
-        <v-icon :color="item.isUnread ? 'primary' : undefined" size="small">
+        <v-icon
+          v-if="isPop3Selected"
+          color="medium-emphasis"
+          size="small"
+          :title="t('emailReceive.unread_unavailable_pop3')"
+        >
+          mdi-minus-circle-outline
+        </v-icon>
+        <v-icon v-else :color="item.isUnread ? 'primary' : undefined" size="small">
           {{ item.isUnread ? "mdi-email" : "mdi-email-open" }}
         </v-icon>
       </template>
@@ -82,8 +90,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from "vue";
-import { useRouter } from "vue-router";
+import { ref, computed, onMounted, nextTick } from "vue";
+import { useRouter, useRoute } from "vue-router";
 import { useI18n } from "vue-i18n";
 import type { Header } from "@/entityTypes/commonType";
 import { CapitalizeFirstLetter } from "@/views/utils/function";
@@ -94,6 +102,7 @@ import type { ReceivedMessageListDto } from "@/entityTypes/emailReceiveTypes";
 
 const { t } = useI18n({ inheritLocale: true });
 const router = useRouter();
+const route = useRoute();
 
 const emailServiceId = ref<number | null>(null);
 const emailServices = ref<EmailServiceListdata[]>([]);
@@ -103,13 +112,26 @@ const loading = ref(true);
 const syncing = ref(false);
 const itemsPerPage = ref(20);
 const currentPage = ref(1);
+const selectedEmailService = computed(() =>
+  emailServices.value.find((service) => service.id === emailServiceId.value)
+);
+const isPop3Selected = computed(() => selectedEmailService.value?.receiveProtocol === "pop3");
 
 onMounted(async () => {
   try {
-    const resp = await getEmailServiceList({ page: 1, size: 9999 });
+    const resp = await getEmailServiceList({ page: 0, size: 9999 });
     emailServices.value = resp.data;
   } catch (err) {
     console.error("Failed to load email services:", err);
+  }
+  const qs = route.query.emailServiceId;
+  if (qs != null) {
+    const parsed = Number(qs);
+    if (!isNaN(parsed)) {
+      emailServiceId.value = parsed;
+      await nextTick();
+      await loadItems({ page: 1, itemsPerPage: itemsPerPage.value, sortBy: [] });
+    }
   }
 });
 
@@ -148,12 +170,12 @@ interface SortByItem {
   order: "asc" | "desc";
 }
 
-function reload() {
+async function reload(): Promise<void> {
   currentPage.value = 1;
-  loadItems({ page: 1, itemsPerPage: itemsPerPage.value, sortBy: [] });
+  await loadItems({ page: 1, itemsPerPage: itemsPerPage.value, sortBy: [] });
 }
 
-async function loadItems({ page, itemsPerPage: ips }: { page: number; itemsPerPage: number; sortBy: SortByItem[] }) {
+async function loadItems({ page, itemsPerPage: ips }: { page: number; itemsPerPage: number; sortBy: SortByItem[] }): Promise<void> {
   if (!emailServiceId.value) {
     serverItems.value = [];
     totalItems.value = 0;
@@ -187,7 +209,7 @@ async function syncNow() {
   if (!emailServiceId.value) return;
   syncing.value = true;
   try {
-    await syncUnreadEmails({ emailServiceId: emailServiceId.value, limit: 20, unreadOnly: true });
+    await syncUnreadEmails({ emailServiceId: emailServiceId.value, limit: 50, unreadOnly: false });
     await reload();
   } catch (err) {
     console.error("Sync failed:", err);
@@ -197,7 +219,7 @@ async function syncNow() {
 }
 
 function openDetail(id: number) {
-  router.push({ name: "Email_Receive_Detail", params: { id } });
+  router.push({ name: "Email_Receive_Detail", params: { id }, query: { emailServiceId: emailServiceId.value != null ? String(emailServiceId.value) : undefined } });
 }
 
 function formatDate(iso: string): string {

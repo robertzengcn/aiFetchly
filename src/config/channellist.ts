@@ -460,6 +460,16 @@ export const AGENT_TASK_LIST = "agent-runtime:task-list";
 export const AGENT_RESUME_TOOL_AFTER_PERMISSION =
   "agent-runtime:resume-tool-after-permission";
 
+// ==================== Agent Definition Management Channels ====================
+// Management-only (CRUD/enablement). NOT AI execution channels — handlers use
+// registerValidatedHandler, not registerAiValidatedHandler (design §15.5).
+export const AGENT_MANAGEMENT_LIST = "agent-definition:list";
+export const AGENT_MANAGEMENT_GET = "agent-definition:get";
+export const AGENT_MANAGEMENT_CREATE = "agent-definition:create";
+export const AGENT_MANAGEMENT_UPDATE = "agent-definition:update";
+export const AGENT_MANAGEMENT_TOGGLE = "agent-definition:toggle";
+export const AGENT_MANAGEMENT_DELETE = "agent-definition:delete";
+
 // ==================== Plugin Management Channels (Design §10) ====================
 export const PLUGIN_IMPORT = "plugin:import";
 export const PLUGIN_VALIDATE_PACKAGE = "plugin:validate-package";

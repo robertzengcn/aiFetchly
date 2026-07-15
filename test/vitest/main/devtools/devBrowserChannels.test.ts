@@ -14,6 +14,7 @@ import {
   AI_FILE_OPEN,
   SYSTEM_MESSAGE,
   LOGIN_STATUS,
+  NATIVATECOMMAND,
   AI_CHAT_V2_STREAM_CHUNK,
 } from "@/config/channellist";
 import {
@@ -32,6 +33,11 @@ describe("devBrowserChannels — invoke allowlist", () => {
     expect(DEV_BROWSER_INVOKE_ALLOWLIST).toContain(QUERY_USER_INFO);
   });
 
+  it("includes the reviewed desktop-login URL bootstrap channel", () => {
+    expect(DEV_BROWSER_INVOKE_ALLOWLIST).toContain(GET_LOGIN_URL);
+    expect(isInvokeAllowed(GET_LOGIN_URL)).toBe(true);
+  });
+
   it("isInvokeAllowed returns true only for listed channels", () => {
     expect(isInvokeAllowed(GET_APP_INFO)).toBe(true);
     expect(isInvokeAllowed(QUERY_USER_INFO)).toBe(true);
@@ -47,8 +53,7 @@ describe("devBrowserChannels — invoke allowlist", () => {
     expect(isInvokeAllowed(PLUGIN_INSTALL_FROM_SOURCE)).toBe(false);
     // System dependency install
     expect(isInvokeAllowed(SYSTEM_DEPENDENCY_INSTALL)).toBe(false);
-    // Credential / login / cookie
-    expect(isInvokeAllowed(GET_LOGIN_URL)).toBe(false);
+    // Credential / cookie import
     expect(isInvokeAllowed(SOCIAL_ACCOUNT_LOGIN_UPLOADCOOKIES)).toBe(false);
     // Automation task execution
     expect(isInvokeAllowed(TASK_RUN_CHANNEL)).toBe(false);
@@ -76,6 +81,7 @@ describe("devBrowserChannels — event allowlist", () => {
   it("includes common safe main->renderer event channels", () => {
     expect(DEV_BROWSER_EVENT_ALLOWLIST).toContain(SYSTEM_MESSAGE);
     expect(DEV_BROWSER_EVENT_ALLOWLIST).toContain(LOGIN_STATUS);
+    expect(DEV_BROWSER_EVENT_ALLOWLIST).toContain(NATIVATECOMMAND);
   });
 
   it("allowlist is frozen / immutable", () => {

@@ -314,6 +314,15 @@ function agentView(
     id: string;
   }
 ): AgentDefinitionView {
+  const source: AgentDefinitionView["source"] = partial.id.startsWith(
+    "workspace:"
+  )
+    ? "workspace"
+    : partial.id.startsWith("plugin:")
+    ? "plugin"
+    : partial.id.startsWith("agent-")
+    ? "built-in"
+    : "user";
   return {
     name: partial.name ?? "Agent",
     description: partial.description ?? "An agent.",
@@ -327,6 +336,8 @@ function agentView(
     outputSchema: {},
     status: "active",
     ...partial,
+    source: partial.source ?? source,
+    health: partial.health ?? "healthy",
   };
 }
 
