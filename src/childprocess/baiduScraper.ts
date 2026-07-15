@@ -3,6 +3,7 @@ import { SearchScrape } from "@/childprocess/searchScraper"
 import { ScrapeOptions, SearchData, SearchResult } from "@/entityTypes/scrapeType"
 import { CustomError } from "@/modules/customError"
 import { TimeoutError,InterceptResolutionAction } from 'puppeteer';
+import { log } from "@/modules/Logger";
 import useProxy from "@lem0-packages/puppeteer-page-proxy"
 import {convertProxyServertourl} from "@/modules/lib/function"
 //import { delay } from "@/modules/lib/function";
@@ -112,7 +113,7 @@ export class BaiduScraper extends SearchScrape {
                         //catch time out error
                         if (error instanceof TimeoutError) {
                             // Do something if this is a timeout.
-                            console.log('Navigation timed out:', error);
+                            log.info('Navigation timed out:', error);
                         }
                     } finally {
                         if (!newPage.isClosed()) {
@@ -120,7 +121,7 @@ export class BaiduScraper extends SearchScrape {
                         }
                     }
                 } catch (error) {
-                    console.error('Error creating new page:', error);
+                    log.error('Error creating new page:', error);
                 }
             }
             result.results.push(seval);

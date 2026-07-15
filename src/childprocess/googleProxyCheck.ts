@@ -12,6 +12,7 @@
  */
 
 import puppeteer, { InterceptResolutionAction, TimeoutError } from 'puppeteer';
+import { log } from "@/modules/Logger";
 import { addExtra } from 'puppeteer-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import useProxy from '@lem0-packages/puppeteer-page-proxy';
@@ -118,7 +119,7 @@ async function checkGooglePass(proxy: ProxyParseItem, timeout = 15000): Promise<
             try {
                 await browser.close();
             } catch (error) {
-                console.error('Error closing browser:', error);
+                log.error('Error closing browser:', error);
             }
         }
     }
@@ -141,7 +142,7 @@ if (parentPort) {
             requestId = message.requestId || 'unknown';
 
             if (message.type === 'CHECK_GOOGLE_PASS') {
-                console.log(`🔍 Checking Google pass for proxy: ${message.proxy.host}:${message.proxy.port}`);
+                log.info(`🔍 Checking Google pass for proxy: ${message.proxy.host}:${message.proxy.port}`);
                 const result = await checkGooglePass(message.proxy, message.timeout);
 
                 if (parentPort) {
@@ -153,10 +154,10 @@ if (parentPort) {
                     }));
                 }
 
-                console.log(`✅ Google check completed: ${result ? 'PASS' : 'FAIL'}`);
+                log.info(`✅ Google check completed: ${result ? 'PASS' : 'FAIL'}`);
             }
         } catch (error) {
-            console.error('Error in Google proxy check message handler:', error);
+            log.error('Error in Google proxy check message handler:', error);
             // Always send a response, even on error
             try {
                 if (parentPort) {
@@ -169,7 +170,7 @@ if (parentPort) {
                     }));
                 }
             } catch (postError) {
-                console.error('Failed to send error response:', postError);
+                log.error('Failed to send error response:', postError);
             }
         }
     });
@@ -177,23 +178,23 @@ if (parentPort) {
 
 // Handle uncaught exceptions
 process.on('uncaughtException', (error) => {
-    console.error('Uncaught exception:', error);
+    log.error('Uncaught exception:', error);
     process.exit(1);
 });
 
 // Handle unhandled promise rejections
 process.on('unhandledRejection', (reason) => {
-    console.error('Unhandled promise rejection:', reason);
+    log.error('Unhandled promise rejection:', reason);
     process.exit(1);
 });
 
 // Handle process termination
 process.on('SIGTERM', async () => {
-    console.log('🛑 Received SIGTERM, exiting...');
+    log.info('🛑 Received SIGTERM, exiting...');
     process.exit(0);
 });
 
 process.on('SIGINT', async () => {
-    console.log('🛑 Received SIGINT, exiting...');
+    log.info('🛑 Received SIGINT, exiting...');
     process.exit(0);
 });

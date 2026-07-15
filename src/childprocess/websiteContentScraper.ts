@@ -13,6 +13,7 @@
  */
 
 import { Browser } from "puppeteer";
+import { log } from "@/modules/Logger";
 import { BrowserManager } from "@/modules/browserManager";
 import { HtmlConversionService } from "@/service/HtmlConversionService";
 import { UrlGuard } from "@/service/UrlGuard";
@@ -117,7 +118,7 @@ async function scrapeWebsite(url: string): Promise<string> {
       await page.close();
     }
   } catch (error) {
-    console.error("Error scraping website:", error);
+    log.error("Error scraping website:", error);
     throw error;
   }
 }
@@ -130,7 +131,7 @@ async function cleanupBrowser(): Promise<void> {
     try {
       await browser.close();
     } catch (error) {
-      console.error("Error closing browser:", error);
+      log.error("Error closing browser:", error);
     }
     browser = null;
   }
@@ -154,7 +155,7 @@ if (parentPort) {
       const message: ScrapeWebsiteMessage = JSON.parse(e.data);
 
       if (message.type === "SCRAPE_WEBSITE" && message.url) {
-        console.log(`📄 Scraping website: ${message.url}`);
+        log.info(`📄 Scraping website: ${message.url}`);
 
         try {
           const markdown = await scrapeWebsite(message.url);
@@ -171,7 +172,7 @@ if (parentPort) {
         } catch (error) {
           const errorMessage =
             error instanceof Error ? error.message : String(error);
-          console.error("Scraping error:", errorMessage);
+          log.error("Scraping error:", errorMessage);
 
           const response: ScrapeWebsiteResponse = {
             type: "SCRAPE_ERROR",
@@ -184,10 +185,10 @@ if (parentPort) {
           }
         }
       } else {
-        console.warn("⚠️ Unknown message type:", message);
+        log.warn("⚠️ Unknown message type:", message);
       }
     } catch (error) {
-      console.error("Error processing message:", error);
+      log.error("Error processing message:", error);
       const errorResponse: ScrapeWebsiteResponse = {
         type: "SCRAPE_ERROR",
         requestId: "unknown",
@@ -202,13 +203,13 @@ if (parentPort) {
 
 // Handle process termination
 process.on("SIGTERM", async () => {
-  console.log("🛑 Received SIGTERM, cleaning up...");
+  log.info("🛑 Received SIGTERM, cleaning up...");
   await cleanupBrowser();
   process.exit(0);
 });
 
 process.on("SIGINT", async () => {
-  console.log("🛑 Received SIGINT, cleaning up...");
+  log.info("🛑 Received SIGINT, cleaning up...");
   await cleanupBrowser();
   process.exit(0);
 });

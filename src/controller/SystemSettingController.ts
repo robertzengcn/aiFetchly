@@ -5,6 +5,7 @@ import {
 } from "@/entityTypes/systemsettingType";
 
 import { SystemSettingGroupModule } from "@/modules/SystemSettingGroupModule";
+import { log } from "@/modules/Logger";
 import { SystemSettingModule } from "@/modules/SystemSettingModule";
 // import {SystemSetting,SystemSettingGroup,SystemSettingDetail} from '@/model/modelIndex';
 import { SystemSettingOptionModule } from "@/modules/SystemSettingOptionModule";
@@ -125,7 +126,7 @@ export class SystemSettingController {
       const setting = await this.getLanguageSettingWithDefaults();
       return setting?.value || "en"; // Default to English if no value
     } catch (error) {
-      console.error("Error getting language preference:", error);
+      log.error("Error getting language preference:", error);
       return "en"; // Default fallback
     }
   }
@@ -135,7 +136,7 @@ export class SystemSettingController {
       // Validate language code
       const validLanguages = ["en", "zh", "es", "fr", "de", "ja"];
       if (!validLanguages.includes(language)) {
-        console.error("Invalid language code:", language);
+        log.error("Invalid language code:", language);
         return false;
       }
 
@@ -146,10 +147,10 @@ export class SystemSettingController {
         return result;
       }
 
-      console.error("Language preference setting not found");
+      log.error("Language preference setting not found");
       return false;
     } catch (error) {
-      console.error("Error updating language preference:", error);
+      log.error("Error updating language preference:", error);
       return false;
     }
   }

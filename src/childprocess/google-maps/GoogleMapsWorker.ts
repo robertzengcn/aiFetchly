@@ -10,6 +10,7 @@
  */
 
 import { launch, type Browser, type Page } from "puppeteer";
+import { log } from "@/modules/Logger";
 import useProxy from "@lem0-packages/puppeteer-page-proxy";
 import type {
   GoogleMapsSearchResult,
@@ -127,10 +128,10 @@ async function applyCookies(page: Page, cookies: unknown[]): Promise<void> {
       };
       await page.setCookie(cookieData);
     } catch (err) {
-      console.error(`Failed to set cookie:`, err);
+      log.error(`Failed to set cookie:`, err);
     }
   }
-  console.log(`Applied ${cookies.length} cookies`);
+  log.info(`Applied ${cookies.length} cookies`);
 }
 
 // ---------------------------------------------------------------------------
@@ -259,7 +260,7 @@ async function scrapeGoogleMaps(msg: StartMessage): Promise<void> {
           }
         });
       });
-      console.log(
+      log.info(
         `[DEBUG] Proxy rotation enabled with ${proxies.length} proxy(ies). Initial: ${proxies[0].host}:${proxies[0].port}`
       );
     }
@@ -315,7 +316,7 @@ async function scrapeGoogleMaps(msg: StartMessage): Promise<void> {
     const scrollStartTime = Date.now();
     const maxScrollTimeMs = 60_000; // Hard timeout: 60s max for scrolling
 
-    console.log(
+    log.info(
       `[DEBUG] Starting scroll loop — maxResults=${maxResults}, maxNoNewCards=${maxNoNewCards}, maxScrollTime=${maxScrollTimeMs}ms`
     );
 
@@ -350,7 +351,7 @@ async function scrapeGoogleMaps(msg: StartMessage): Promise<void> {
       });
 
       const elapsed = Date.now() - scrollStartTime;
-      console.log(
+      log.info(
         `[DEBUG] Scroll loop — cardCount=${cardCount}, previousCardCount=${previousCardCount}, noNewCardsCount=${noNewCardsCount}, elapsed=${elapsed}ms`
       );
 
@@ -359,7 +360,7 @@ async function scrapeGoogleMaps(msg: StartMessage): Promise<void> {
         previousCardCount = cardCount;
       } else {
         noNewCardsCount++;
-        console.log(
+        log.info(
           `[DEBUG] No new cards (${noNewCardsCount}/${maxNoNewCards})`
         );
       }
@@ -381,14 +382,14 @@ async function scrapeGoogleMaps(msg: StartMessage): Promise<void> {
         : noNewCardsCount >= maxNoNewCards
         ? `no new cards after ${maxNoNewCards} scrolls`
         : `scroll timeout (${Date.now() - scrollStartTime}ms)`;
-    console.log(
+    log.info(
       `[DEBUG] Scroll loop ended — reason: ${scrollExitReason}, total cards on page: ${previousCardCount}`
     );
 
     // Get all card elements — capture fresh handles after scrolling is done
     const cardHandles = await page.$$('div[role="feed"] > div > div[jsaction]');
     const limit = Math.min(cardHandles.length, maxResults);
-    console.log(
+    log.info(
       `[DEBUG] cardHandles.length=${cardHandles.length}, limit=${limit}`
     );
 
@@ -427,13 +428,13 @@ async function scrapeGoogleMaps(msg: StartMessage): Promise<void> {
         `Extracting business ${i + 1} of ${limit}...`
       );
 
-      console.log(`[DEBUG] === Extracting card ${i + 1}/${limit} ===`);
+      log.info(`[DEBUG] === Extracting card ${i + 1}/${limit} ===`);
 
       // Rotate proxy for this card (round-robin)
       if (proxies && proxies.length > 0 && i > 0) {
         const rotated = proxies[i % proxies.length];
         currentProxyUrl = proxyToUrl(rotated);
-        console.log(
+        log.info(
           `[DEBUG] Rotated to proxy ${i % proxies.length}: ${rotated.host}:${
             rotated.port
           }`
@@ -445,10 +446,10 @@ async function scrapeGoogleMaps(msg: StartMessage): Promise<void> {
         const freshCards = await page.$$(
           'div[role="feed"] > div > div[jsaction]'
         );
-        console.log(`[DEBUG] Fresh card handles on page: ${freshCards.length}`);
+        log.info(`[DEBUG] Fresh card handles on page: ${freshCards.length}`);
 
         if (i >= freshCards.length) {
-          console.log(
+          log.info(
             `[DEBUG] Card index ${i} out of range (only ${freshCards.length} cards). Re-navigating to search URL.`
           );
           await safeGoto(page, searchUrl, {
@@ -458,7 +459,7 @@ async function scrapeGoogleMaps(msg: StartMessage): Promise<void> {
           await page
             .waitForSelector('[role="feed"]', { timeout: 15000 })
             .catch(() => {
-              console.log(`[DEBUG] Feed not found after re-navigate`);
+              log.info(`[DEBUG] Feed not found after re-navigate`);
             });
           // Scroll down to where we were
           for (let s = 0; s < Math.ceil((i + 1) / 10); s++) {
@@ -471,11 +472,11 @@ async function scrapeGoogleMaps(msg: StartMessage): Promise<void> {
           const retryCards = await page.$$(
             'div[role="feed"] > div > div[jsaction]'
           );
-          console.log(
+          log.info(
             `[DEBUG] After re-navigate and scroll: ${retryCards.length} cards`
           );
           if (i >= retryCards.length) {
-            console.log(`[DEBUG] Still can't find card ${i}. Skipping.`);
+            log.info(`[DEBUG] Still can't find card ${i}. Skipping.`);
             continue;
           }
           await retryCards[i].click();
@@ -483,7 +484,7 @@ async function scrapeGoogleMaps(msg: StartMessage): Promise<void> {
           await freshCards[i].click();
         }
 
-        console.log(
+        log.info(
           `[DEBUG] Clicked card ${i + 1}, waiting for detail panel...`
         );
         await randomDelay(1000, 2000);
@@ -493,21 +494,21 @@ async function scrapeGoogleMaps(msg: StartMessage): Promise<void> {
           await page.waitForSelector('h1[class*="fontHeadline"]', {
             timeout: 10000,
           });
-          console.log(`[DEBUG] Detail panel h1.fontHeadline found`);
+          log.info(`[DEBUG] Detail panel h1.fontHeadline found`);
         } catch {
           // Fallback: wait for any h1
-          console.log(
+          log.info(
             `[DEBUG] h1.fontHeadline not found, trying fallback h1...`
           );
           await page.waitForSelector("h1", { timeout: 5000 });
-          console.log(`[DEBUG] Fallback h1 found`);
+          log.info(`[DEBUG] Fallback h1 found`);
         }
 
         await randomDelay(500, 1000);
 
         // Extract business data
         const business = await extractBusinessData(page);
-        console.log(
+        log.info(
           `[DEBUG] Extracted: name="${business.name}", phone="${
             business.phone ?? "N/A"
           }", website="${business.website ?? "N/A"}"`
@@ -517,12 +518,12 @@ async function scrapeGoogleMaps(msg: StartMessage): Promise<void> {
         }
 
         // Go back to results list
-        console.log(`[DEBUG] Navigating back to results list...`);
+        log.info(`[DEBUG] Navigating back to results list...`);
         await page
           .goBack({ waitUntil: "domcontentloaded", timeout: 10000 })
           .catch(async () => {
             // If goBack fails, re-navigate
-            console.log(`[DEBUG] goBack failed, re-navigating to searchUrl`);
+            log.info(`[DEBUG] goBack failed, re-navigating to searchUrl`);
             await safeGoto(page, searchUrl, {
               timeout: 30000,
               waitUntil: "domcontentloaded",
@@ -534,13 +535,13 @@ async function scrapeGoogleMaps(msg: StartMessage): Promise<void> {
         await page
           .waitForSelector('[role="feed"]', { timeout: 10000 })
           .catch(() => {
-            console.log(`[DEBUG] Feed did not re-appear after goBack`);
+            log.info(`[DEBUG] Feed did not re-appear after goBack`);
           });
-        console.log(
+        log.info(
           `[DEBUG] Back on results page, collectedCards so far: ${collectedCards.length}`
         );
       } catch (err) {
-        console.error(
+        log.error(
           `[DEBUG] Error extracting card ${i + 1}:`,
           err instanceof Error ? err.message : err
         );
@@ -555,7 +556,7 @@ async function scrapeGoogleMaps(msg: StartMessage): Promise<void> {
       }
     }
 
-    console.log(
+    log.info(
       `[DEBUG] Extraction complete. collectedCards=${collectedCards.length}, deduplicating...`
     );
 
@@ -762,7 +763,7 @@ process.on("message", (msg: WorkerMessage) => {
       browser
         .close()
         .catch((err: unknown) => {
-          console.error(
+          log.error(
             "[GoogleMapsWorker] Error closing browser during cancel:",
             err
           );

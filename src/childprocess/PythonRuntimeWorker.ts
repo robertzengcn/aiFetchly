@@ -1,4 +1,5 @@
 import { spawn } from "child_process";
+import { log } from "@/modules/Logger";
 
 interface ExecutePythonMessage {
   type: "EXECUTE_PYTHON";
@@ -52,7 +53,7 @@ function postMessageSafe(message: PythonResultMessage | PythonErrorMessage): voi
   } catch (postError) {
     const errorMessage =
       postError instanceof Error ? postError.message : String(postError);
-    console.error(`[PythonRuntimeWorker] Failed to post message: ${errorMessage}`);
+    log.error(`[PythonRuntimeWorker] Failed to post message: ${errorMessage}`);
   }
 }
 
@@ -168,7 +169,7 @@ async function executePython(
 }
 
 if (parentPort) {
-  console.log(
+  log.info(
     `[PythonRuntimeWorker] Utility process worker online (pid=${process.pid})`
   );
   parentPort.on("message", async (event: ParentPortMessageEvent) => {
@@ -187,7 +188,7 @@ if (parentPort) {
       requestId = message.requestId;
       activeRequestIds.add(requestId);
       const scriptLabel = message.scriptPath.split(/[\\/]/).pop() || "unknown";
-      console.log(
+      log.info(
         `[PythonRuntimeWorker] Executing request ${requestId} (script=${scriptLabel}, pid=${process.pid})`
       );
 
@@ -198,12 +199,12 @@ if (parentPort) {
         stdout: result.stdout,
         stderr: result.stderr,
       });
-      console.log(
+      log.info(
         `[PythonRuntimeWorker] Completed request ${requestId} (pid=${process.pid})`
       );
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
-      console.warn(
+      log.warn(
         `[PythonRuntimeWorker] Request ${requestId} failed: ${errorMessage}`
       );
       postMessageSafe({
@@ -218,13 +219,13 @@ if (parentPort) {
 }
 
 process.on("uncaughtException", (error: unknown) => {
-  console.error("[PythonRuntimeWorker] Uncaught exception:", error);
+  log.error("[PythonRuntimeWorker] Uncaught exception:", error);
   sendFatalErrorToActiveRequests(error);
   process.exit(1);
 });
 
 process.on("unhandledRejection", (reason: unknown) => {
-  console.error("[PythonRuntimeWorker] Unhandled rejection:", reason);
+  log.error("[PythonRuntimeWorker] Unhandled rejection:", reason);
   sendFatalErrorToActiveRequests(reason);
   process.exit(1);
 });

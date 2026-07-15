@@ -17,6 +17,7 @@
  */
 
 import { Page, Browser, ElementHandle, Frame } from "puppeteer";
+import { log } from "@/modules/Logger";
 import type { LaunchOptions } from "puppeteer";
 import type { YellowPagesTaskProxyConfig } from "@/entityTypes/yellowPagesTaskProxyType";
 import { buildPuppeteerProxyLaunchPieces } from "@/utils/yellowPagesProxyLaunch";
@@ -428,11 +429,11 @@ export class YellowPagesScraper {
 
     const headlessMode =
       this.taskData.headless !== undefined ? this.taskData.headless : true;
-    console.log(`🔧 Scraper initialized with headless mode: ${headlessMode}`);
-    console.log(
+    log.info(`🔧 Scraper initialized with headless mode: ${headlessMode}`);
+    log.info(
       `📹 Session recording initialized: ${this.sessionManager.getRecordingStatus()}`
     );
-    console.log(
+    log.info(
       `🤖 AI support: ${this.aiSupportEnabled ? "enabled" : "disabled"}`
     );
   }
@@ -473,7 +474,7 @@ export class YellowPagesScraper {
         }, sel);
 
         if (element) {
-          console.log(`✅ Found element with selector: ${sel}`);
+          log.info(`✅ Found element with selector: ${sel}`);
           return element;
         }
       } catch (error) {
@@ -507,7 +508,7 @@ export class YellowPagesScraper {
         }, sel);
 
         if (elements && elements.length > 0) {
-          console.log(
+          log.info(
             `✅ Found ${elements.length} elements with selector: ${sel}`
           );
           return elements;
@@ -541,7 +542,7 @@ export class YellowPagesScraper {
       try {
         const element = await this.page.$(sel);
         if (element) {
-          console.log(`✅ Clicking element with selector: ${sel}`);
+          log.info(`✅ Clicking element with selector: ${sel}`);
           await element.click();
           return true;
         }
@@ -578,7 +579,7 @@ export class YellowPagesScraper {
       try {
         const element = await this.page.$(sel);
         if (element) {
-          console.log(`✅ Typing into element with selector: ${sel}`);
+          log.info(`✅ Typing into element with selector: ${sel}`);
           await element.click({ clickCount: 3 }); // Focus and select all
           await element.type(text, { delay: 100 });
           return true;
@@ -635,7 +636,7 @@ export class YellowPagesScraper {
         await this.page.waitForSelector(sel, {
           timeout: Math.min(remainingTime, 5000), // Wait max 5 seconds per selector
         });
-        console.log(`✅ Found element with selector: ${sel}`);
+        log.info(`✅ Found element with selector: ${sel}`);
         return true;
       } catch {
         // Selector not found, try next one
@@ -663,7 +664,7 @@ export class YellowPagesScraper {
       try {
         const element = await this.page.$(sel);
         if (element) {
-          console.log(`✅ Found element with selector: ${sel}`);
+          log.info(`✅ Found element with selector: ${sel}`);
           await element.dispose();
           return true;
         }
@@ -715,7 +716,7 @@ export class YellowPagesScraper {
         await page.waitForSelector(sel, {
           timeout: Math.min(remainingTime, 5000), // Wait max 5 seconds per selector
         });
-        console.log(`✅ Found element with selector: ${sel}`);
+        log.info(`✅ Found element with selector: ${sel}`);
         return true;
       } catch {
         // Selector not found, try next one
@@ -745,7 +746,7 @@ export class YellowPagesScraper {
       try {
         const element = await page.$(sel);
         if (element) {
-          console.log(`✅ Found element with selector: ${sel}`);
+          log.info(`✅ Found element with selector: ${sel}`);
           await element.dispose();
           return true;
         }
@@ -778,7 +779,7 @@ export class YellowPagesScraper {
       try {
         const found = await element.$(sel);
         if (found) {
-          console.log(`✅ Found element with selector: ${sel}`);
+          log.info(`✅ Found element with selector: ${sel}`);
           return found;
         }
       } catch {
@@ -812,7 +813,7 @@ export class YellowPagesScraper {
       try {
         const elements = await element.$$(sel);
         if (elements && elements.length > 0) {
-          console.log(
+          log.info(
             `✅ Found ${elements.length} elements with selector: ${sel}`
           );
           return elements;
@@ -847,7 +848,7 @@ export class YellowPagesScraper {
       try {
         const elements = await this.page.$$(sel);
         if (elements && elements.length > 0) {
-          console.log(
+          log.info(
             `✅ Found ${elements.length} elements with selector: ${sel}`
           );
           return elements;
@@ -873,7 +874,7 @@ export class YellowPagesScraper {
     const requestId = message.requestId as string;
     const pending = this.pendingAiRequests.get(requestId);
     if (!pending) {
-      console.warn(
+      log.warn(
         `⚠️ Received AI_SUPPORT_RESPONSE for unknown requestId: ${requestId}`
       );
       return;
@@ -927,7 +928,7 @@ export class YellowPagesScraper {
       const buf = await this.page.screenshot({ encoding: "base64" });
       screenshot = typeof buf === "string" ? buf : undefined;
     } catch (err) {
-      console.warn("⚠️ Failed to capture page state for AI:", err);
+      log.warn("⚠️ Failed to capture page state for AI:", err);
     }
     return { pageContent, screenshot };
   }
@@ -1002,7 +1003,7 @@ export class YellowPagesScraper {
           screenshot = typeof buf === "string" ? buf : undefined;
         }
       } catch (err) {
-        console.warn("⚠️ Failed to capture page state for AI request:", err);
+        log.warn("⚠️ Failed to capture page state for AI request:", err);
       }
     }
 
@@ -1082,7 +1083,7 @@ export class YellowPagesScraper {
         timer,
       });
       parentPort.postMessage(requestMessage);
-      console.log(
+      log.info(
         `🤖 Sent AI_SUPPORT_REQUEST (${params.requestType}) id=${requestId}`
       );
     });
@@ -1249,24 +1250,24 @@ export class YellowPagesScraper {
   private async initializeAdapter(): Promise<void> {
     if (this.platformInfo.adapterClass) {
       try {
-        console.log(
+        log.info(
           `Initializing adapter: ${this.platformInfo.adapterClass.className}`
         );
         this.adapter = await ChildProcessAdapterFactory.createAdapter(
           this.platformInfo.adapterClass,
           this.platformInfo as any // Cast to PlatformConfig for compatibility
         );
-        console.log(
+        log.info(
           `✅ Adapter initialized successfully: ${this.platformInfo.adapterClass.className}`
         );
       } catch (error) {
-        console.warn(
+        log.warn(
           `⚠️ Failed to initialize adapter: ${error}. Falling back to configuration-based approach.`
         );
         this.adapter = null;
       }
     } else {
-      console.log(
+      log.info(
         "No adapter class specified, using configuration-based approach"
       );
     }
@@ -1299,12 +1300,12 @@ export class YellowPagesScraper {
   private logAdapterInfo(): void {
     if (this.adapter) {
       const capabilities = this.getAdapterCapabilities();
-      console.log(
+      log.info(
         `🔧 Using adapter: ${this.platformInfo.adapterClass?.className}`
       );
-      console.log(`📋 Adapter capabilities: ${capabilities.join(", ")}`);
+      log.info(`📋 Adapter capabilities: ${capabilities.join(", ")}`);
     } else {
-      console.log("🔧 Using configuration-based approach");
+      log.info("🔧 Using configuration-based approach");
     }
   }
 
@@ -1313,46 +1314,46 @@ export class YellowPagesScraper {
    */
   private async executePlatformSpecificOperations(): Promise<void> {
     if (!this.adapter) {
-      console.log(
+      log.info(
         "No adapter available, skipping platform-specific operations"
       );
       return;
     }
 
     try {
-      console.log("🔧 Executing platform-specific operations...");
+      log.info("🔧 Executing platform-specific operations...");
 
       // Example: Use adapter-specific search method if available
       if (this.adapterSupportsFeature("custom-search")) {
-        console.log(
+        log.info(
           "🔍 Adapter supports custom search, this will be used during scraping"
         );
       }
 
       // Example: Use adapter-specific data extraction if available
       if (this.adapterSupportsFeature("custom-extraction")) {
-        console.log(
+        log.info(
           "📊 Adapter supports custom data extraction, this will be used during scraping"
         );
       }
 
       // Example: Use adapter-specific pagination if available
       if (this.adapterSupportsFeature("custom-pagination")) {
-        console.log(
+        log.info(
           "📄 Adapter supports custom pagination, this will be used during scraping"
         );
       }
 
       // Example: Use adapter-specific page load handling if available
       if (this.adapterSupportsFeature("custom-page-load")) {
-        console.log(
+        log.info(
           "🔧 Adapter supports custom page load handling, this will be used during scraping"
         );
       }
 
-      console.log("✅ Platform-specific operations completed");
+      log.info("✅ Platform-specific operations completed");
     } catch (error) {
-      console.warn("⚠️ Error during platform-specific operations:", error);
+      log.warn("⚠️ Error during platform-specific operations:", error);
     }
   }
 
@@ -1361,10 +1362,10 @@ export class YellowPagesScraper {
    */
   async start(): Promise<void> {
     try {
-      console.log(
+      log.info(
         `Starting Yellow Pages scraping for task ${this.taskData.taskId}`
       );
-      console.log(`📋 Task configuration:`, {
+      log.info(`📋 Task configuration:`, {
         taskId: this.taskData.taskId,
         platform: this.taskData.platform,
         keywords: this.taskData.keywords,
@@ -1397,7 +1398,7 @@ export class YellowPagesScraper {
         this.taskData.keywords,
         this.taskData.location
       );
-      console.log(
+      log.info(
         `📹 Started session recording for task ${this.taskData.taskId}`
       );
 
@@ -1417,7 +1418,7 @@ export class YellowPagesScraper {
         this.onCompleteCallback(results);
       }
 
-      console.log(
+      log.info(
         `Completed Yellow Pages scraping for task ${this.taskData.taskId}`
       );
     } catch (error) {
@@ -1432,7 +1433,7 @@ export class YellowPagesScraper {
         );
       }
       // One line to stderr (avoid logging the Error object twice — stacks look "uncaught")
-      console.error(
+      log.error(
         `Error in Yellow Pages scraping for task ${this.taskData.taskId}: ${toReport.message}`
       );
 
@@ -1451,7 +1452,7 @@ export class YellowPagesScraper {
    * Stop the scraping process
    */
   async stop(): Promise<void> {
-    console.log(
+    log.info(
       `Stopping Yellow Pages scraping for task ${this.taskData.taskId}`
     );
     this.isRunning = false;
@@ -1464,7 +1465,7 @@ export class YellowPagesScraper {
   async pause(): Promise<void> {
     if (this.isPaused) return;
 
-    console.log(
+    log.info(
       `Pausing Yellow Pages scraping for task ${this.taskData.taskId}`
     );
     this.isPaused = true;
@@ -1496,7 +1497,7 @@ export class YellowPagesScraper {
   async resume(): Promise<void> {
     if (!this.isPaused) return;
 
-    console.log(
+    log.info(
       `Resuming Yellow Pages scraping for task ${this.taskData.taskId}`
     );
     this.isPaused = false;
@@ -1562,7 +1563,7 @@ export class YellowPagesScraper {
       // Override headless setting if specified in task data
       const headless =
         this.taskData.headless !== undefined ? this.taskData.headless : false;
-      console.log(
+      log.info(
         `Browser will run in ${headless ? "headless" : "non-headless"} mode`
       );
 
@@ -1574,7 +1575,7 @@ export class YellowPagesScraper {
         launchOptions.args = proxyPieces.args;
         const cfg = this.taskData.proxyConfig;
         if (cfg) {
-          console.log(
+          log.info(
             `Using proxy for scraping: ${cfg.protocol}://${cfg.host}:${cfg.port}`
           );
         }
@@ -1593,24 +1594,24 @@ export class YellowPagesScraper {
 
       if (proxyPieces.authenticate) {
         await this.page.authenticate(proxyPieces.authenticate);
-        console.log("Applied HTTP proxy authentication for Puppeteer page");
+        log.info("Applied HTTP proxy authentication for Puppeteer page");
       }
 
       // Set up page configurations with random viewport
       const viewport = browserManager.getRandomViewport();
       await this.page.setViewport(viewport);
-      console.log(`Set viewport to: ${viewport.width}x${viewport.height}`);
+      log.info(`Set viewport to: ${viewport.width}x${viewport.height}`);
 
       // Set random user agent
       const userAgent = browserManager.getRandomUserAgent();
       await this.page.setUserAgent(userAgent);
-      console.log(`Set user agent: ${userAgent}`);
+      log.info(`Set user agent: ${userAgent}`);
 
-      console.log(
+      log.info(
         "Browser initialized successfully with stealth mode using puppeteer-extra"
       );
     } catch (error) {
-      console.error("Failed to initialize browser:", error);
+      log.error("Failed to initialize browser:", error);
       throw error;
     }
   }
@@ -1624,10 +1625,10 @@ export class YellowPagesScraper {
         throw new Error("Page is not initialized");
       }
 
-      console.log(`Applying ${cookies.length} cookies`);
+      log.info(`Applying ${cookies.length} cookies`);
 
       if (!Array.isArray(cookies) || cookies.length === 0) {
-        console.log("No valid cookies found");
+        log.info("No valid cookies found");
         return;
       }
 
@@ -1649,18 +1650,18 @@ export class YellowPagesScraper {
           };
 
           await this.page.setCookie(cookieData);
-          console.log(
+          log.info(
             `Applied cookie: ${cookie.name} for domain: ${cookie.domain}`
           );
         } catch (error) {
-          console.error(`Failed to set cookie ${cookie.name}:`, error);
+          log.error(`Failed to set cookie ${cookie.name}:`, error);
           // Continue with other cookies
         }
       }
 
-      console.log("Successfully applied cookies");
+      log.info("Successfully applied cookies");
     } catch (error) {
-      console.error("Error applying cookies:", error);
+      log.error("Error applying cookies:", error);
       // Don't throw error - cookies are optional
     }
   }
@@ -1694,7 +1695,7 @@ export class YellowPagesScraper {
     const hasCustomAddressExtraction =
       this.adapter && this.adapterSupportsFeature("custom-address-extraction");
 
-    console.log(`🔧 Platform capabilities:`, {
+    log.info(`🔧 Platform capabilities:`, {
       customSearch: hasCustomSearch,
       customExtraction: hasCustomExtraction,
       customPagination: hasCustomPagination,
@@ -1707,10 +1708,10 @@ export class YellowPagesScraper {
     });
 
     if (this.adapter) {
-      console.log(
+      log.info(
         `🚀 Using platform adapter: ${this.platformInfo.adapterClass?.className}`
       );
-      console.log(`📋 Adapter methods:`, {
+      log.info(`📋 Adapter methods:`, {
         searchBusinesses: hasCustomSearch ? "Custom" : "Default",
         extractBusinessData: hasCustomExtraction ? "Custom" : "Default",
         handlePagination: hasCustomPagination ? "Custom" : "Default",
@@ -1729,7 +1730,7 @@ export class YellowPagesScraper {
           : "Default",
       });
     } else {
-      console.log(
+      log.info(
         `🔧 No platform adapter available, using configuration-based approach`
       );
     }
@@ -1737,12 +1738,12 @@ export class YellowPagesScraper {
     for (const keyword of keywords) {
       if (!this.isRunning) break;
 
-      console.log(`Scraping keyword: ${keyword} in ${location}`);
+      log.info(`Scraping keyword: ${keyword} in ${location}`);
 
       // For each keyword, we'll handle it differently based on the approach
       if (hasCustomSearch && hasCustomExtraction) {
         // Use platform-specific adapter methods for complete control
-        console.log(
+        log.info(
           `🔧 Using platform-specific adapter for keyword: ${keyword}`
         );
 
@@ -1754,7 +1755,7 @@ export class YellowPagesScraper {
             location
           );
 
-          console.log(
+          log.info(
             `🔍 Adapter search returned ${searchResults.length} results`
           );
 
@@ -1775,7 +1776,7 @@ export class YellowPagesScraper {
                 const businessData = await this.adapter!.extractBusinessData(
                   this.page!
                 );
-                console.log(
+                log.info(
                   `📊 Adapter extracted business data:`,
                   businessData.business_name
                 );
@@ -1792,7 +1793,7 @@ export class YellowPagesScraper {
               // Add results to total
               if (results.length > 0) {
                 totalResults = totalResults.concat(results);
-                console.log(
+                log.info(
                   `Found ${results.length} results from page ${pageNum}`
                 );
               }
@@ -1814,13 +1815,13 @@ export class YellowPagesScraper {
 
               // Check if paused after each major operation
               if (this.isPaused) {
-                console.log(
+                log.info(
                   `Task ${this.taskData.taskId} is paused, waiting for resume...`
                 );
                 try {
                   await this.pause();
                 } catch (error) {
-                  console.log(
+                  log.info(
                     `Task ${this.taskData.taskId} was stopped while paused`
                   );
                   break;
@@ -1834,7 +1835,7 @@ export class YellowPagesScraper {
 
               // Check if robot verification was detected and paused the task
               if (!this.isRunning) {
-                console.log(
+                log.info(
                   `Task ${this.taskData.taskId} stopped due to robot verification challenge`
                 );
                 break;
@@ -1842,7 +1843,7 @@ export class YellowPagesScraper {
 
               // Handle pagination using adapter if available
               if (hasCustomPagination && pageNum < maxPages) {
-                console.log(`📄 Using adapter pagination for page ${pageNum}`);
+                log.info(`📄 Using adapter pagination for page ${pageNum}`);
                 await this.adapter!.handlePagination(this.page!, maxPages);
               }
 
@@ -1851,7 +1852,7 @@ export class YellowPagesScraper {
                 await this.sleep(delayBetweenRequests);
               }
             } catch (error) {
-              console.error(`Error scraping page ${pageNum}:`, error);
+              log.error(`Error scraping page ${pageNum}:`, error);
               if (this.aiSupportEnabled && this.page) {
                 try {
                   const aiExtract = await this.requestAiSupport({
@@ -1872,21 +1873,21 @@ export class YellowPagesScraper {
                       resultsCount: totalResults.length,
                       percentage: (pageNum / maxPages) * 100,
                     });
-                    console.log(
+                    log.info(
                       "🤖 AI contact extraction recovered result after custom extraction failure"
                     );
                   }
                 } catch (aiErr) {
-                  console.warn("🤖 AI contact extraction failed:", aiErr);
+                  log.warn("🤖 AI contact extraction failed:", aiErr);
                 }
               }
             }
           }
         } catch (error) {
-          console.error(`❌ Error using platform-specific adapter:`, error);
+          log.error(`❌ Error using platform-specific adapter:`, error);
           // Try AI step_guidance when custom search fails (maps to scrape_assist)
           if (this.aiSupportEnabled && this.page) {
-            console.log(
+            log.info(
               "🤖 Requesting AI step guidance for custom search failure..."
             );
             try {
@@ -1907,7 +1908,7 @@ export class YellowPagesScraper {
                 aiResult.data?.suggestedSelectors &&
                 Object.keys(aiResult.data.suggestedSelectors).length > 0
               ) {
-                console.log(
+                log.info(
                   "🤖 AI suggested selectors for search, attempting to apply..."
                 );
                 const sel = aiResult.data.suggestedSelectors;
@@ -1992,7 +1993,7 @@ export class YellowPagesScraper {
                               resultsCount: totalResults.length,
                               percentage: (pageNum / maxPages) * 100,
                             });
-                            console.log(
+                            log.info(
                               "🤖 AI contact extraction recovered result after custom extraction failure"
                             );
                           }
@@ -2004,20 +2005,20 @@ export class YellowPagesScraper {
                   }
                   continue; // skip fallback to generic
                 } catch (applyErr) {
-                  console.warn(
+                  log.warn(
                     "🤖 Applying AI suggested selectors failed:",
                     applyErr
                   );
                 }
               }
             } catch (aiErr) {
-              console.warn(
+              log.warn(
                 "🤖 AI step guidance for custom search failed:",
                 aiErr
               );
             }
           }
-          console.log(`🔄 Falling back to generic scraping logic`);
+          log.info(`🔄 Falling back to generic scraping logic`);
           await this.scrapeKeywordWithGenericMethod(
             keyword,
             location,
@@ -2028,7 +2029,7 @@ export class YellowPagesScraper {
         }
       } else if (hasCustomExtraction) {
         // Use adapter's custom data extraction but generic navigation
-        console.log(
+        log.info(
           `🔧 Using hybrid approach: generic navigation + custom extraction for keyword: ${keyword}`
         );
         await this.scrapeKeywordWithGenericMethod(
@@ -2041,7 +2042,7 @@ export class YellowPagesScraper {
         );
       } else {
         // Fallback to generic scraping logic
-        console.log(`🔧 Using generic scraping logic for keyword: ${keyword}`);
+        log.info(`🔧 Using generic scraping logic for keyword: ${keyword}`);
         await this.scrapeKeywordWithGenericMethod(
           keyword,
           location,
@@ -2054,7 +2055,7 @@ export class YellowPagesScraper {
 
     // Complete session recording and save if results > 1
     if (this.sessionManager.getRecordingStatus()) {
-      console.log(
+      log.info(
         `📹 Completing session recording with ${totalResults.length} results`
       );
       await this.sessionManager.endSession(totalResults.length, totalResults);
@@ -2063,7 +2064,7 @@ export class YellowPagesScraper {
 
     // Filter out duplicate results before returning
     const uniqueResults = this.filterDuplicateResults(totalResults);
-    console.log(
+    log.info(
       `🔍 Filtered ${totalResults.length} results to ${uniqueResults.length} unique results`
     );
 
@@ -2110,7 +2111,7 @@ export class YellowPagesScraper {
               const businessData = await this.adapter.extractBusinessData(
                 this.page!
               );
-              console.log(
+              log.info(
                 `📊 Adapter extracted business data:`,
                 businessData.business_name
               );
@@ -2135,12 +2136,12 @@ export class YellowPagesScraper {
                     results = [
                       this.buildScrapingResultFromAiContactData(aiExtract.data),
                     ];
-                    console.log(
+                    log.info(
                       "🤖 AI contact extraction recovered result (page 1, custom extraction failed)"
                     );
                   }
                 } catch (aiErr) {
-                  console.warn("🤖 AI contact extraction failed:", aiErr);
+                  log.warn("🤖 AI contact extraction failed:", aiErr);
                 }
               }
             }
@@ -2156,7 +2157,7 @@ export class YellowPagesScraper {
           );
 
           if (!hasMoreContent) {
-            console.log(`⚠️ No more content available, stopping pagination`);
+            log.info(`⚠️ No more content available, stopping pagination`);
             break;
           }
 
@@ -2170,7 +2171,7 @@ export class YellowPagesScraper {
               const businessData = await this.adapter.extractBusinessData(
                 this.page!
               );
-              console.log(
+              log.info(
                 `📊 Adapter extracted business data:`,
                 businessData.business_name
               );
@@ -2195,12 +2196,12 @@ export class YellowPagesScraper {
                     results = [
                       this.buildScrapingResultFromAiContactData(aiExtract.data),
                     ];
-                    console.log(
+                    log.info(
                       "🤖 AI contact extraction recovered result (pagination, custom extraction failed)"
                     );
                   }
                 } catch (aiErr) {
-                  console.warn("🤖 AI contact extraction failed:", aiErr);
+                  log.warn("🤖 AI contact extraction failed:", aiErr);
                 }
               }
             }
@@ -2213,7 +2214,7 @@ export class YellowPagesScraper {
         // Add results to total
         if (results.length > 0) {
           totalResults.push(...results);
-          console.log(
+          log.info(
             `Found ${results.length} results from page ${currentPage}`
           );
         }
@@ -2235,13 +2236,13 @@ export class YellowPagesScraper {
 
         // Check if paused after each major operation
         if (this.isPaused) {
-          console.log(
+          log.info(
             `Task ${this.taskData.taskId} is paused, waiting for resume...`
           );
           try {
             await this.pause();
           } catch (error) {
-            console.log(
+            log.info(
               `Task ${this.taskData.taskId} was stopped while paused`
             );
             break;
@@ -2264,7 +2265,7 @@ export class YellowPagesScraper {
 
         currentPage++;
       } catch (error) {
-        console.error(`Error scraping page ${currentPage}:`, error);
+        log.error(`Error scraping page ${currentPage}:`, error);
         // Continue with next page
         currentPage++;
       }
@@ -2285,7 +2286,7 @@ export class YellowPagesScraper {
 
     try {
       // Navigate to base URL first
-      console.log(`Navigating to base URL: ${this.platformInfo.base_url}`);
+      log.info(`Navigating to base URL: ${this.platformInfo.base_url}`);
 
       // Log action for AI training
       if (this.sessionManager.getRecordingStatus() && this.page) {
@@ -2309,7 +2310,7 @@ export class YellowPagesScraper {
       // Check for Cloudflare protection after page load and handle with retry
       const cloudflareHandled = await this.handleCloudflareWithRetry();
       if (!cloudflareHandled) {
-        console.log(
+        log.info(
           "⚠️ Cloudflare protection could not be resolved, but continuing with scraping..."
         );
       }
@@ -2317,17 +2318,17 @@ export class YellowPagesScraper {
       // Call custom onPageLoad method if it exists in the adapter (BEFORE any form interaction)
       if (this.adapter && typeof this.adapter.onPageLoad === "function") {
         try {
-          console.log(
+          log.info(
             "🔧 Calling custom onPageLoad method from adapter (before form interaction)"
           );
           await this.adapter.onPageLoad(this.page!);
-          console.log("✅ Custom onPageLoad method completed successfully");
+          log.info("✅ Custom onPageLoad method completed successfully");
         } catch (error) {
-          console.warn("⚠️ Error in custom onPageLoad method:", error);
+          log.warn("⚠️ Error in custom onPageLoad method:", error);
           // Don't fail the scraping process if onPageLoad fails
         }
       } else {
-        console.log(
+        log.info(
           "🔧 No custom onPageLoad method found, continuing with default flow"
         );
       }
@@ -2340,7 +2341,7 @@ export class YellowPagesScraper {
 
       if (hasSearchFormSelectors) {
         // Use platform-defined search form selectors (main frame only to avoid detached iframe)
-        console.log("Using platform-defined search form selectors");
+        log.info("Using platform-defined search form selectors");
         await this.fillSearchFormWithPlatformSelectors(keyword, location);
 
         // Submit the form using platform selector
@@ -2357,7 +2358,7 @@ export class YellowPagesScraper {
 
         // Capture search page URL for later reference
         this.searchPageUrl = this.page.url();
-        console.log(`📝 Captured search page URL: ${this.searchPageUrl}`);
+        log.info(`📝 Captured search page URL: ${this.searchPageUrl}`);
 
         // Navigate to specific page if needed
         if (pageNum > 1) {
@@ -2365,7 +2366,7 @@ export class YellowPagesScraper {
         }
       } else {
         // Fallback to generic search form detection
-        console.log(
+        log.info(
           "No platform search form selectors found, using generic detection"
         );
         const searchForm = await this.findSearchForm();
@@ -2386,7 +2387,7 @@ export class YellowPagesScraper {
 
           // Capture search page URL for later reference
           this.searchPageUrl = this.page.url();
-          console.log(`📝 Captured search page URL: ${this.searchPageUrl}`);
+          log.info(`📝 Captured search page URL: ${this.searchPageUrl}`);
 
           // Navigate to specific page if needed
           if (pageNum > 1) {
@@ -2394,7 +2395,7 @@ export class YellowPagesScraper {
           }
         } else {
           // Fallback to URL-based navigation if no form found
-          console.log("No search form found, using URL-based navigation");
+          log.info("No search form found, using URL-based navigation");
           const searchUrl = this.buildFallbackSearchUrl(
             keyword,
             location,
@@ -2404,7 +2405,7 @@ export class YellowPagesScraper {
 
           // Capture search page URL for later reference
           this.searchPageUrl = this.page.url();
-          console.log(`📝 Captured search page URL: ${this.searchPageUrl}`);
+          log.info(`📝 Captured search page URL: ${this.searchPageUrl}`);
 
           // Check for Cloudflare protection after URL-based navigation
           await this.handleCloudflareDetection();
@@ -2417,10 +2418,10 @@ export class YellowPagesScraper {
       // Wait for content to settle
       await this.sleep(1000);
     } catch (error) {
-      console.error("Error navigating to search page:", error);
+      log.error("Error navigating to search page:", error);
 
       if (this.aiSupportEnabled && this.page) {
-        console.log(
+        log.info(
           "🤖 Requesting AI step guidance for search page navigation failure..."
         );
         try {
@@ -2452,9 +2453,9 @@ export class YellowPagesScraper {
           if (aiResult.success && aiResult.data) {
             const guidance = aiResult.data;
             if (guidance.shouldSkip) {
-              console.log(`🤖 AI suggests skipping: ${guidance.explanation}`);
+              log.info(`🤖 AI suggests skipping: ${guidance.explanation}`);
             } else if (guidance.suggestedSelectors) {
-              console.log(
+              log.info(
                 "🤖 AI suggested selectors:",
                 guidance.suggestedSelectors
               );
@@ -2477,12 +2478,12 @@ export class YellowPagesScraper {
                     } else if (field === "searchButton") {
                       await el.click();
                     }
-                    console.log(
+                    log.info(
                       `🤖 AI selector worked for ${field}: ${selector}`
                     );
                   }
                 } catch (selectorErr) {
-                  console.warn(
+                  log.warn(
                     `🤖 AI selector failed for ${field}: ${selector}`,
                     selectorErr
                   );
@@ -2490,14 +2491,14 @@ export class YellowPagesScraper {
               }
               await this.sleep(2000);
               this.searchPageUrl = this.page.url();
-              console.log(
+              log.info(
                 `📝 Captured search page URL after AI guidance: ${this.searchPageUrl}`
               );
               return;
             }
           }
         } catch (aiError) {
-          console.warn("🤖 AI step guidance failed:", aiError);
+          log.warn("🤖 AI step guidance failed:", aiError);
         }
       }
 
@@ -2528,14 +2529,14 @@ export class YellowPagesScraper {
       for (const selector of formSelectors) {
         const element = await this.page.$(selector);
         if (element) {
-          console.log(`Found search form with selector: ${selector}`);
+          log.info(`Found search form with selector: ${selector}`);
           return true;
         }
       }
 
       return false;
     } catch (error) {
-      console.error("Error finding search form:", error);
+      log.error("Error finding search form:", error);
       return false;
     }
   }
@@ -2577,7 +2578,7 @@ export class YellowPagesScraper {
       for (const selector of keywordSelectors) {
         keywordField = await this.page.$(selector);
         if (keywordField) {
-          console.log(`Filling keyword field: ${selector}`);
+          log.info(`Filling keyword field: ${selector}`);
           break;
         }
       }
@@ -2597,7 +2598,7 @@ export class YellowPagesScraper {
       for (const selector of locationSelectors) {
         locationField = await this.page.$(selector);
         if (locationField) {
-          console.log(`Filling location field: ${selector}`);
+          log.info(`Filling location field: ${selector}`);
           break;
         }
       }
@@ -2612,7 +2613,7 @@ export class YellowPagesScraper {
       // Wait a bit after filling forms
       await this.sleep(Math.random() * 500 + 300);
     } catch (error) {
-      console.error("Error filling search form:", error);
+      log.error("Error filling search form:", error);
     }
   }
 
@@ -2643,7 +2644,7 @@ export class YellowPagesScraper {
         if (keywordTyped) {
           keywordFilled = true;
         } else {
-          console.warn(
+          log.warn(
             `Keyword input field not found with selector: ${searchForm.keywordInput}`
           );
         }
@@ -2659,7 +2660,7 @@ export class YellowPagesScraper {
         if (locationTyped) {
           locationFilled = true;
         } else {
-          console.warn(
+          log.warn(
             `Location input field not found with selector: ${searchForm.locationInput}`
           );
         }
@@ -2668,7 +2669,7 @@ export class YellowPagesScraper {
       // Wait a bit after filling forms
       await this.sleep(500);
     } catch (error) {
-      console.error(
+      log.error(
         "Error filling search form with platform selectors:",
         error
       );
@@ -2687,7 +2688,7 @@ export class YellowPagesScraper {
             selectorsAvailable.locationInput = searchForm.locationInput;
           }
 
-          console.log(
+          log.info(
             "🤖 Requesting AI support for fillSearchFormWithPlatformSelectors error recovery..."
           );
           const observeResult = await this.observeExecuteLoop({
@@ -2712,7 +2713,7 @@ The initial attempt to fill using platform selectors failed with a click/type er
             return;
           }
         } catch (aiError: unknown) {
-          console.warn(
+          log.warn(
             "🤖 AI recovery for fillSearchFormWithPlatformSelectors failed:",
             aiError instanceof Error ? aiError.message : aiError
           );
@@ -2734,7 +2735,7 @@ The initial attempt to fill using platform selectors failed with a click/type er
             selectorsAvailable.locationInput = searchForm.locationInput;
           }
 
-          console.log(
+          log.info(
             "🤖 Requesting AI support for fillSearchFormWithPlatformSelectors missing-field recovery..."
           );
           await this.observeExecuteLoop({
@@ -2757,7 +2758,7 @@ The initial deterministic filling did not succeed for ${
             errorInfo: `keywordFilled=${keywordFilled}, locationFilled=${locationFilled}`,
           });
         } catch (aiError: unknown) {
-          console.warn(
+          log.warn(
             "🤖 AI recovery for fillSearchFormWithPlatformSelectors missing-field failed:",
             aiError instanceof Error ? aiError.message : aiError
           );
@@ -2780,14 +2781,14 @@ The initial deterministic filling did not succeed for ${
         // Use tryClickElement to handle comma-separated selectors
         const clicked = await this.tryClickElement(searchForm.searchButton);
         if (!clicked) {
-          console.warn(
+          log.warn(
             `Search button not found with selector: ${searchForm.searchButton}`
           );
 
           // Try AI support if enabled before falling back to Enter key
           if (this.aiSupportEnabled && this.page) {
             try {
-              console.log(
+              log.info(
                 "🤖 Requesting AI support for search button not found..."
               );
               const captured = await this.capturePageStateForAiSupport();
@@ -2808,7 +2809,7 @@ The initial deterministic filling did not succeed for ${
               if (buttonAiResult.success && buttonAiResult.data) {
                 const guidance = buttonAiResult.data;
                 if (guidance.suggestedSelectors?.searchButton) {
-                  console.log(
+                  log.info(
                     "🤖 AI provided alternative searchButton selector"
                   );
                   const altBtn = await this.page.$(
@@ -2825,24 +2826,24 @@ The initial deterministic filling did not succeed for ${
                       );
                     }
                     await altBtn.click();
-                    console.log(
+                    log.info(
                       "✅ Alternative searchButton clicked successfully"
                     );
                     return; // Success, exit early
                   } else {
-                    console.warn(
+                    log.warn(
                       "⚠️ Alternative searchButton selector also not found"
                     );
                   }
                 } else if (guidance.actions?.length) {
-                  console.log(
+                  log.info(
                     "🤖 AI provided suggested actions to submit search"
                   );
                   // Execute suggested actions
                   for (const action of guidance.actions) {
                     const result = await this.executeAction(action);
                     if (!result.success) {
-                      console.warn(
+                      log.warn(
                         `⚠️ AI suggested action failed: ${
                           action.description || action.type
                         }`
@@ -2854,7 +2855,7 @@ The initial deterministic filling did not succeed for ${
                 }
               }
             } catch (buttonAiErr) {
-              console.warn(
+              log.warn(
                 "🤖 AI support for searchButton not found failed:",
                 buttonAiErr
               );
@@ -2874,7 +2875,7 @@ The initial deterministic filling did not succeed for ${
 
           // Fallback to Enter key
           await this.page.keyboard.press("Enter");
-          console.log("Submitted search form using Enter key (fallback)");
+          log.info("Submitted search form using Enter key (fallback)");
         }
       } else {
         // No search button selector, try Enter key
@@ -2900,7 +2901,7 @@ The initial deterministic filling did not succeed for ${
           }
         }
         await this.page.keyboard.press("Enter");
-        console.log(
+        log.info(
           "Submitted search form using Enter key (no button selector)"
         );
       }
@@ -2917,7 +2918,7 @@ The initial deterministic filling did not succeed for ${
       // Check for robot verification challenge after form submission
       await this.handleRobotVerificationDetection();
     } catch (error) {
-      console.error(
+      log.error(
         "Error submitting search form with platform selector:",
         error
       );
@@ -2963,7 +2964,7 @@ The initial deterministic filling did not succeed for ${
             return;
           }
         } catch (aiError: unknown) {
-          console.warn(
+          log.warn(
             "🤖 AI recovery for submitSearchFormWithPlatformSelector failed:",
             aiError instanceof Error ? aiError.message : aiError
           );
@@ -2992,7 +2993,7 @@ The initial deterministic filling did not succeed for ${
         await this.navigateToPageWithGenericSelectors(pageNum);
       }
     } catch (error) {
-      console.error(`Error navigating to page ${pageNum}:`, error);
+      log.error(`Error navigating to page ${pageNum}:`, error);
     }
   }
 
@@ -3016,7 +3017,7 @@ The initial deterministic filling did not succeed for ${
         const pageLink = await this.page.$(pageSelector);
 
         if (pageLink) {
-          console.log(
+          log.info(
             `Found page ${pageNum} link with platform selector: ${pageSelector}`
           );
           await pageLink.click();
@@ -3024,7 +3025,7 @@ The initial deterministic filling did not succeed for ${
             waitUntil: "networkidle2",
             timeout: 15000,
           });
-          console.log(`Navigated to page ${pageNum} using platform selector`);
+          log.info(`Navigated to page ${pageNum} using platform selector`);
 
           // Check for Cloudflare protection after navigation
           await this.handleCloudflareDetection();
@@ -3037,12 +3038,12 @@ The initial deterministic filling did not succeed for ${
       }
 
       // Fallback to generic selectors if platform selector doesn't work
-      console.log(
+      log.info(
         "Platform pagination selector failed, falling back to generic selectors"
       );
       await this.navigateToPageWithGenericSelectors(pageNum);
     } catch (error) {
-      console.error(
+      log.error(
         `Error navigating to page ${pageNum} with platform selectors:`,
         error
       );
@@ -3074,7 +3075,7 @@ The initial deterministic filling did not succeed for ${
       for (const selector of paginationSelectors) {
         pageLink = await this.page.$(selector);
         if (pageLink) {
-          console.log(`Found page ${pageNum} link: ${selector}`);
+          log.info(`Found page ${pageNum} link: ${selector}`);
           break;
         }
       }
@@ -3085,7 +3086,7 @@ The initial deterministic filling did not succeed for ${
           waitUntil: "networkidle2",
           timeout: 15000,
         });
-        console.log(`Navigated to page ${pageNum}`);
+        log.info(`Navigated to page ${pageNum}`);
 
         // Check for Cloudflare protection after navigation
         await this.handleCloudflareDetection();
@@ -3093,12 +3094,12 @@ The initial deterministic filling did not succeed for ${
         // Check for robot verification challenge after navigation
         await this.handleRobotVerificationDetection();
       } else {
-        console.log(
+        log.info(
           `Could not find page ${pageNum} link, staying on current page`
         );
       }
     } catch (error) {
-      console.error(
+      log.error(
         `Error navigating to page ${pageNum} with generic selectors:`,
         error
       );
@@ -3171,12 +3172,12 @@ The initial deterministic filling did not succeed for ${
           `extract('${selectors.businessList}')`
         );
       }
-      console.log("selectors.businessItem", selectors.businessItem);
+      log.info("selectors.businessItem", selectors.businessItem);
       // Extract all business listings using comma-separated selector support
       const businessElements = await this.tryFindElementHandles(
         selectors.businessItem
       );
-      console.log(`Found ${businessElements.length} business listings`);
+      log.info(`Found ${businessElements.length} business listings`);
 
       // Track processed businesses to prevent duplicates when platforms add more results to current page
       const processedBusinessIds = new Set<string>();
@@ -3215,7 +3216,7 @@ The initial deterministic filling did not succeed for ${
         try {
           // Log current item being processed
           const itemNumber = i + 1; // Convert to 1-based indexing for user-friendly display
-          console.log(
+          log.info(
             `\n📋 Processing business item ${itemNumber}/${businessElements.length}`
           );
 
@@ -3226,15 +3227,15 @@ The initial deterministic filling did not succeed for ${
           try {
             await currentElement.evaluate((el) => el.isConnected);
           } catch (error) {
-            console.log(`Element ${itemNumber} became stale, re-querying...`);
+            log.info(`Element ${itemNumber} became stale, re-querying...`);
             const freshElements = await this.page!.$$(
               businessSelectors.businessItem
             );
             if (freshElements[i]) {
               currentElement = freshElements[i];
-              console.log(`✅ Successfully re-queried element ${itemNumber}`);
+              log.info(`✅ Successfully re-queried element ${itemNumber}`);
             } else {
-              console.error(
+              log.error(
                 `❌ Could not re-query element ${itemNumber}, skipping`
               );
               continue;
@@ -3249,7 +3250,7 @@ The initial deterministic filling did not succeed for ${
 
           // Check if this business has already been processed
           if (processedBusinessIds.has(businessId)) {
-            console.log(`🔄 Skipping duplicate business: ${businessId}`);
+            log.info(`🔄 Skipping duplicate business: ${businessId}`);
             continue;
           }
 
@@ -3260,17 +3261,17 @@ The initial deterministic filling did not succeed for ${
             currentElement,
             businessSelectors
           );
-          console.log(
+          log.info(
             `📊 Extraction result for item ${itemNumber}:`,
             result?.business_name || "No business name found"
           );
           if (result) {
             // Check if navigation to detail page is available
             if (businessSelectors.navigation?.detailLink) {
-              console.log(
+              log.info(
                 `🔗 Navigating to detail page for item ${itemNumber}`
               );
-              console.log(
+              log.info(
                 "detailLink",
                 businessSelectors.navigation.detailLink
               );
@@ -3285,11 +3286,11 @@ The initial deterministic filling did not succeed for ${
                   "generic_extract_after_detail"
                 );
                 results.push(enriched);
-                console.log(
+                log.info(
                   `✅ Enhanced data extracted for item ${itemNumber}: ${enriched.business_name}`
                 );
               } else {
-                console.log(
+                log.info(
                   `⚠️ No enhanced data for item ${itemNumber}, using basic result`
                 );
                 const enriched = await this.enrichScrapingResultWithAiIfNeeded(
@@ -3300,7 +3301,7 @@ The initial deterministic filling did not succeed for ${
               }
 
               // After returning from detail page, re-query all elements to handle page re-render
-              console.log(
+              log.info(
                 `🔄 Re-querying business elements after detail page navigation for item ${itemNumber}...`
               );
               const refreshedElements = await this.page!.$$(
@@ -3313,13 +3314,13 @@ The initial deterministic filling did not succeed for ${
                   businessElements.length,
                   ...refreshedElements
                 );
-                console.log(
+                log.info(
                   `✅ Refreshed ${businessElements.length} business elements after item ${itemNumber}`
                 );
 
                 // Check if new businesses were added (indicating "load more" functionality)
                 if (refreshedElements.length > processedBusinessIds.size) {
-                  console.log(
+                  log.info(
                     `🆕 Detected ${
                       refreshedElements.length - processedBusinessIds.size
                     } new businesses added to page`
@@ -3332,12 +3333,12 @@ The initial deterministic filling did not succeed for ${
                 "generic_extract_list_only"
               );
               results.push(enriched);
-              console.log(
+              log.info(
                 `✅ Basic data extracted for item ${itemNumber}: ${enriched.business_name}`
               );
             }
           } else {
-            console.log(`⚠️ No data extracted for item ${itemNumber}`);
+            log.info(`⚠️ No data extracted for item ${itemNumber}`);
 
             // AI fallback: ask AI support to extract contact/business fields from the page HTML
             // when structured extraction yields nothing for this item.
@@ -3385,22 +3386,22 @@ The initial deterministic filling did not succeed for ${
                     `Unknown-${itemNumber}`
                   );
                   results.push(aiResult);
-                  console.log(
+                  log.info(
                     `🤖 AI extracted data for item ${itemNumber}: ${aiResult.business_name}`
                   );
                 }
               } catch (aiErr: unknown) {
-                console.warn("🤖 AI fallback (no data extracted) failed:", aiErr);
+                log.warn("🤖 AI fallback (no data extracted) failed:", aiErr);
               }
             }
           }
 
           // Log progress summary
-          console.log(
+          log.info(
             `📈 Progress: ${results.length}/${businessElements.length} items processed successfully`
           );
         } catch (error) {
-          console.error(`❌ Error processing item ${i + 1}:`, error);
+          log.error(`❌ Error processing item ${i + 1}:`, error);
           // AI fallback: when extraction throws, ask AI to extract usable fields
           // so the run can continue with partial results.
           if (this.aiSupportEnabled && this.page) {
@@ -3449,24 +3450,24 @@ The initial deterministic filling did not succeed for ${
                   `Unknown-${i + 1}`
                 );
                 results.push(aiResult);
-                console.log(
+                log.info(
                   `🤖 AI recovered extraction for item ${i + 1}: ${aiResult.business_name}`
                 );
               }
             } catch (aiErr: unknown) {
-              console.warn("🤖 AI fallback (item error) failed:", aiErr);
+              log.warn("🤖 AI fallback (item error) failed:", aiErr);
             }
           }
           // Continue with next element
         }
       }
     } catch (error) {
-      console.error("Error extracting business data from page:", error);
+      log.error("Error extracting business data from page:", error);
 
       if (this.aiSupportEnabled && this.page && results.length === 0) {
         try {
           const errMsg = error instanceof Error ? error.message : String(error);
-          console.log(
+          log.info(
             "🤖 Attempting AI-assisted recovery for extractBusinessData..."
           );
 
@@ -3492,7 +3493,7 @@ The initial deterministic filling did not succeed for ${
           });
 
           if (result.success && result.data?.status === "goal_achieved") {
-            console.log(
+            log.info(
               "✅ AI recovered page state, retrying business data extraction"
             );
             try {
@@ -3509,14 +3510,14 @@ The initial deterministic filling did not succeed for ${
               }
               return await this.extractBusinessData();
             } catch (retryErr) {
-              console.warn(
+              log.warn(
                 "⚠️ Retry after AI recovery still failed:",
                 retryErr
               );
             }
           }
         } catch (aiErr) {
-          console.warn(
+          log.warn(
             "⚠️ AI recovery for extractBusinessData also failed:",
             aiErr
           );
@@ -3704,7 +3705,7 @@ The initial deterministic filling did not succeed for ${
         .substring(0, 50)
         .toLowerCase()}`;
     } catch (error) {
-      console.warn("Error generating business identifier:", error);
+      log.warn("Error generating business identifier:", error);
       // Ultimate fallback: use timestamp and element reference
       return `error:${Date.now()}:${Math.random()}`;
     }
@@ -3749,7 +3750,7 @@ The initial deterministic filling did not succeed for ${
           if (loadMoreButton) {
             const isVisible = await loadMoreButton.isVisible();
             if (isVisible) {
-              console.log(
+              log.info(
                 `🔍 Detected "Load More" functionality with selector: ${selector}`
               );
               return true;
@@ -3773,7 +3774,7 @@ The initial deterministic filling did not succeed for ${
         try {
           const indicator = await this.page.$(selector);
           if (indicator) {
-            console.log(
+            log.info(
               `🔍 Detected infinite scroll functionality with selector: ${selector}`
             );
             return true;
@@ -3785,7 +3786,7 @@ The initial deterministic filling did not succeed for ${
 
       return false;
     } catch (error) {
-      console.warn("Error detecting load more functionality:", error);
+      log.warn("Error detecting load more functionality:", error);
       return false;
     }
   }
@@ -3842,7 +3843,7 @@ The initial deterministic filling did not succeed for ${
             });
 
             if (isVisible && isClickable) {
-              console.log(
+              log.info(
                 `🔄 Clicking "Load More" button with selector: ${selector}`
               );
 
@@ -3874,7 +3875,7 @@ The initial deterministic filling did not succeed for ${
                 .then((elements) => elements.length);
               const newBusinesses = newBusinessCount - currentBusinessCount;
 
-              console.log(
+              log.info(
                 `✅ Loaded ${newBusinesses} new businesses (${currentBusinessCount} → ${newBusinessCount})`
               );
               return true;
@@ -3887,7 +3888,7 @@ The initial deterministic filling did not succeed for ${
 
       return false;
     } catch (error) {
-      console.warn("Error handling load more functionality:", error);
+      log.warn("Error handling load more functionality:", error);
       return false;
     }
   }
@@ -3904,7 +3905,7 @@ The initial deterministic filling did not succeed for ${
     try {
       // Check if we're currently in a new tab (detail page) and need to switch back to search page
       if (this.isInNewTab) {
-        console.log(
+        log.info(
           "🆕 Currently in new tab, switching back to search page for pagination"
         );
 
@@ -3919,7 +3920,7 @@ The initial deterministic filling did not succeed for ${
 
           if (searchResultsPage) {
             this.page = searchResultsPage;
-            console.log(
+            log.info(
               `🔍 Switched back to search results page: ${searchResultsPage.url()}`
             );
 
@@ -3931,7 +3932,7 @@ The initial deterministic filling did not succeed for ${
 
             // Update captured search page URL
             this.searchPageUrl = searchResultsPage.url();
-            console.log(`📝 Updated search page URL: ${this.searchPageUrl}`);
+            log.info(`📝 Updated search page URL: ${this.searchPageUrl}`);
 
             // Check for Cloudflare protection
             await this.handleCloudflareDetection();
@@ -3939,11 +3940,11 @@ The initial deterministic filling did not succeed for ${
             // Clear the new tab flag
             this.isInNewTab = false;
 
-            console.log(
+            log.info(
               "✅ Successfully switched back to search page for pagination"
             );
           } else {
-            console.log(
+            log.info(
               "⚠️ Could not find search results page after closing detail tab"
             );
             return false;
@@ -3960,18 +3961,18 @@ The initial deterministic filling did not succeed for ${
       // Give the page a moment to load new content if applicable
       await this.sleep(1000);
       // First, try traditional pagination
-      console.log(
+      log.info(
         `📄 Attempting traditional pagination for page ${currentPage + 1}`
       );
       const traditionalPaginationWorked = await this.navigateToNextPage();
 
       if (traditionalPaginationWorked) {
-        console.log(
+        log.info(
           `✅ Traditional pagination successful for page ${currentPage + 1}`
         );
         return true;
       } else {
-        console.log(
+        log.info(
           `⚠️ Traditional pagination failed, checking for "Load More" functionality`
         );
 
@@ -3985,25 +3986,25 @@ The initial deterministic filling did not succeed for ${
         const usesLoadMore = await this.detectLoadMoreFunctionality();
 
         if (usesLoadMore) {
-          console.log(`🔄 Platform uses "Load More" functionality as fallback`);
+          log.info(`🔄 Platform uses "Load More" functionality as fallback`);
 
           // Try to load more content
           const loadedMore = await this.handleLoadMoreFunctionality();
           if (loadedMore) {
             return true; // Successfully loaded more content
           } else {
-            console.log(
+            log.info(
               `⚠️ No more content to load or load more button not available`
             );
             return false; // No more content available
           }
         } else {
-          console.log(`⚠️ No pagination or load more functionality available`);
+          log.info(`⚠️ No pagination or load more functionality available`);
           return false; // No pagination available
         }
       }
     } catch (error) {
-      console.error("Error in enhanced pagination handling:", error);
+      log.error("Error in enhanced pagination handling:", error);
       return false;
     }
   }
@@ -4022,7 +4023,7 @@ The initial deterministic filling did not succeed for ${
         typeof selectors.pagination === "object" &&
         selectors.pagination.nextButton
       ) {
-        console.log(
+        log.info(
           `📄 Checking for next page button: ${selectors.pagination.nextButton}`
         );
         const nextButton = await this.page.$(selectors.pagination.nextButton);
@@ -4044,7 +4045,7 @@ The initial deterministic filling did not succeed for ${
           });
 
           if (isClickable) {
-            console.log(
+            log.info(
               `🔄 Clicking next page button: ${selectors.pagination.nextButton}`
             );
             await nextButton.click();
@@ -4070,11 +4071,11 @@ The initial deterministic filling did not succeed for ${
 
             // Update captured search page URL after successful navigation
             this.searchPageUrl = this.page.url();
-            console.log(
+            log.info(
               `📝 Updated search page URL after pagination: ${this.searchPageUrl}`
             );
 
-            console.log(`✅ Successfully navigated to next page`);
+            log.info(`✅ Successfully navigated to next page`);
             return true;
           }
         }
@@ -4082,12 +4083,12 @@ The initial deterministic filling did not succeed for ${
 
       return false;
     } catch (error) {
-      console.error("Error navigating to next page:", error);
+      log.error("Error navigating to next page:", error);
 
       if (this.aiSupportEnabled && this.page) {
         try {
           const errMsg = error instanceof Error ? error.message : String(error);
-          console.log(
+          log.info(
             "🤖 Attempting AI-assisted recovery for navigateToNextPage..."
           );
 
@@ -4120,12 +4121,12 @@ The initial deterministic filling did not succeed for ${
           });
 
           if (result.success && result.data?.status === "goal_achieved") {
-            console.log("✅ AI recovered next-page navigation");
+            log.info("✅ AI recovered next-page navigation");
             this.searchPageUrl = this.page.url();
             return true;
           }
         } catch (aiErr) {
-          console.warn(
+          log.warn(
             "⚠️ AI recovery for navigateToNextPage also failed:",
             aiErr
           );
@@ -4152,9 +4153,9 @@ The initial deterministic filling did not succeed for ${
         element,
         selectors.navigation.detailLink
       );
-      console.log("detailLink2", detailLink);
+      log.info("detailLink2", detailLink);
       if (!detailLink) {
-        console.log("Detail link not found, using basic result");
+        log.info("Detail link not found, using basic result");
         return basicResult;
       }
 
@@ -4173,11 +4174,11 @@ The initial deterministic filling did not succeed for ${
       });
 
       if (!isClickable) {
-        console.log("Detail link is not clickable, using basic result");
+        log.info("Detail link is not clickable, using basic result");
         return basicResult;
       }
 
-      console.log(
+      log.info(
         "Detail link is clickable, clicking to navigate to detail page"
       );
 
@@ -4213,11 +4214,11 @@ The initial deterministic filling did not succeed for ${
       // Call custom onPageLoad method if it exists in the adapter
       if (this.adapter && typeof this.adapter.onPageLoad === "function") {
         try {
-          console.log("🔧 Calling custom onPageLoad method for detail page");
+          log.info("🔧 Calling custom onPageLoad method for detail page");
           await this.adapter.onPageLoad(this.page);
-          console.log("✅ Custom onPageLoad method for detail page completed");
+          log.info("✅ Custom onPageLoad method for detail page completed");
         } catch (error) {
-          console.warn(
+          log.warn(
             "⚠️ Error in custom onPageLoad method for detail page:",
             error
           );
@@ -4239,15 +4240,15 @@ The initial deterministic filling did not succeed for ${
       // Navigate back to search results (if needed)
       await this.navigateBackToSearchResults(selectors);
 
-      console.log("enhancedResult", enhancedResult);
+      log.info("enhancedResult", enhancedResult);
       return enhancedResult;
     } catch (error) {
-      console.error("Error navigating to detail page:", error);
+      log.error("Error navigating to detail page:", error);
 
       if (this.aiSupportEnabled && this.page) {
         try {
           const errMsg = error instanceof Error ? error.message : String(error);
-          console.log(
+          log.info(
             "🤖 Attempting AI-assisted recovery for navigateToDetailPage..."
           );
 
@@ -4276,7 +4277,7 @@ The initial deterministic filling did not succeed for ${
           });
 
           if (result.success && result.data?.status === "goal_achieved") {
-            console.log(
+            log.info(
               "✅ AI recovered detail page navigation, extracting enhanced data"
             );
             await this.sleep(
@@ -4291,7 +4292,7 @@ The initial deterministic filling did not succeed for ${
             return enhancedResult;
           }
         } catch (aiErr) {
-          console.warn(
+          log.warn(
             "⚠️ AI recovery for navigateToDetailPage also failed:",
             aiErr
           );
@@ -4314,8 +4315,8 @@ The initial deterministic filling did not succeed for ${
       const initialPageCount = pagesBefore.length;
       const initialUrl = this.page.url();
 
-      console.log(`📄 Pages before click: ${initialPageCount}`);
-      console.log(`🌐 Current URL: ${initialUrl}`);
+      log.info(`📄 Pages before click: ${initialPageCount}`);
+      log.info(`🌐 Current URL: ${initialUrl}`);
 
       // Set up promises to wait for both navigation scenarios
       const navigationPromise = this.page
@@ -4343,7 +4344,7 @@ The initial deterministic filling did not succeed for ${
               const newPage = await target.page();
               if (newPage && newPage !== this.page) {
                 clearTimeout(timeout);
-                console.log(`🆕 New page detected: ${newPage.url()}`);
+                log.info(`🆕 New page detected: ${newPage.url()}`);
                 resolve(newPage);
               }
             } catch (error) {
@@ -4355,7 +4356,7 @@ The initial deterministic filling did not succeed for ${
 
       // Click the detail link
       await detailLink.click();
-      console.log("🖱️ Detail link clicked");
+      log.info("🖱️ Detail link clicked");
 
       // Small delay to allow the browser to process the click
       await this.sleep(500);
@@ -4371,15 +4372,15 @@ The initial deterministic filling did not succeed for ${
       const finalPageCount = pagesAfter.length;
       const currentUrl = this.page.url();
 
-      console.log(
+      log.info(
         `📄 Pages after click: ${finalPageCount} (was ${initialPageCount})`
       );
-      console.log(`🌐 Current URL after click: ${currentUrl}`);
-      console.log(`🌐 Initial URL: ${initialUrl}`);
+      log.info(`🌐 Current URL after click: ${currentUrl}`);
+      log.info(`🌐 Initial URL: ${initialUrl}`);
 
       // Debug: Show all page URLs
       const allPages = (await this.page.browser()?.pages()) || [];
-      console.log(
+      log.info(
         "📄 All page URLs:",
         allPages.map((p, i) => `${i}: ${p.url()}`)
       );
@@ -4394,13 +4395,13 @@ The initial deterministic filling did not succeed for ${
         navigationResult.value !== null;
       const urlChanged = currentUrl !== initialUrl;
 
-      console.log(
+      log.info(
         `🔍 Detection results: newTab=${newTabOpened}, sameTab=${sameTabNavigated}, urlChanged=${urlChanged}`
       );
 
       // Fallback: If event-based detection failed, manually check for new pages
       if (!newTabOpened && finalPageCount > initialPageCount) {
-        console.log(
+        log.info(
           "🔍 Event detection failed, manually checking for new pages..."
         );
         const allPages = (await this.page.browser()?.pages()) || [];
@@ -4413,7 +4414,7 @@ The initial deterministic filling did not succeed for ${
         );
 
         if (newPage) {
-          console.log("🆕 Found new page manually:", newPage.url());
+          log.info("🆕 Found new page manually:", newPage.url());
           newTabOpened = true;
           // Update the result for the following logic
           (newPageResult as any).value = newPage;
@@ -4423,7 +4424,7 @@ The initial deterministic filling did not succeed for ${
 
       if (newTabOpened) {
         // New tab was opened
-        console.log("🆕 New tab detected, switching to it");
+        log.info("🆕 New tab detected, switching to it");
         const newPageInstance = (newPageResult as PromiseFulfilledResult<any>)
           .value;
 
@@ -4439,21 +4440,21 @@ The initial deterministic filling did not succeed for ${
             () => document.readyState === "complete",
             { timeout: 30000 }
           );
-          console.log(`🌐 New tab URL: ${this.page.url()}`);
+          log.info(`🌐 New tab URL: ${this.page.url()}`);
         }
 
-        console.log("✅ Successfully switched to new tab");
+        log.info("✅ Successfully switched to new tab");
       } else if (sameTabNavigated || urlChanged) {
         // Same tab navigation occurred
-        console.log("🔄 Same tab navigation detected");
+        log.info("🔄 Same tab navigation detected");
 
         // Wait a bit more for the page to stabilize
         await this.sleep(1000);
 
-        console.log("✅ Same tab navigation completed");
+        log.info("✅ Same tab navigation completed");
       } else {
         // No clear navigation occurred - this might be a JavaScript-based page update
-        console.log(
+        log.info(
           "⚠️ No clear navigation detected, checking for dynamic content updates"
         );
 
@@ -4471,15 +4472,15 @@ The initial deterministic filling did not succeed for ${
         });
 
         if (hasContentChanged) {
-          console.log("✅ Dynamic content update detected");
+          log.info("✅ Dynamic content update detected");
         } else {
-          console.log(
+          log.info(
             "⚠️ No navigation or content update detected, continuing with current page"
           );
         }
       }
     } catch (error) {
-      console.error("❌ Error handling detail link click:", error);
+      log.error("❌ Error handling detail link click:", error);
       // Don't throw - let the process continue
     }
   }
@@ -4544,7 +4545,7 @@ The initial deterministic filling did not succeed for ${
 
       return Math.min(score, 10); // Cap at 10
     } catch (error) {
-      console.log(`⚠️ Error calculating URL similarity: ${error}`);
+      log.info(`⚠️ Error calculating URL similarity: ${error}`);
       return 0;
     }
   }
@@ -4556,10 +4557,10 @@ The initial deterministic filling did not succeed for ${
   private async findSearchResultsPage(pages: any[]): Promise<any | null> {
     if (!pages || pages.length === 0) return null;
 
-    console.log("🔍 Searching for search results page among open tabs...");
+    log.info("🔍 Searching for search results page among open tabs...");
 
     if (this.searchPageUrl) {
-      console.log(
+      log.info(
         `📝 Using captured search page URL for similarity matching: ${this.searchPageUrl}`
       );
     }
@@ -4585,7 +4586,7 @@ The initial deterministic filling did not succeed for ${
               this.searchPageUrl
             );
             score += similarityScore; // This can be up to 10 points
-            console.log(
+            log.info(
               `🔗 URL similarity to search page: ${similarityScore} (${url})`
             );
           }
@@ -4634,7 +4635,7 @@ The initial deterministic filling did not succeed for ${
             }
           } catch (error) {
             // Page might not be ready, don't penalize
-            console.log(
+            log.info(
               `⚠️ Could not check business list selector on page ${url}: ${error}`
             );
           }
@@ -4669,10 +4670,10 @@ The initial deterministic filling did not succeed for ${
             // Title check failed, continue without penalty
           }
 
-          console.log(`📊 Page ${url} scored: ${score}`);
+          log.info(`📊 Page ${url} scored: ${score}`);
           return { page, score };
         } catch (error) {
-          console.log(`⚠️ Error evaluating page: ${error}`);
+          log.info(`⚠️ Error evaluating page: ${error}`);
           return { page, score: -1 };
         }
       })
@@ -4684,7 +4685,7 @@ The initial deterministic filling did not succeed for ${
       .sort((a, b) => b.score - a.score)[0];
 
     if (bestMatch) {
-      console.log(
+      log.info(
         `✅ Found best search results page with score ${
           bestMatch.score
         }: ${bestMatch.page.url()}`
@@ -4695,13 +4696,13 @@ The initial deterministic filling did not succeed for ${
     // Fallback: if no page scored positively, return the first non-closed page
     const fallbackPage = pages.find((page) => !page.isClosed());
     if (fallbackPage) {
-      console.log(
+      log.info(
         `⚠️ No ideal search results page found, using fallback: ${fallbackPage.url()}`
       );
       return fallbackPage;
     }
 
-    console.log("❌ No suitable search results page found");
+    log.info("❌ No suitable search results page found");
     return null;
   }
 
@@ -4719,7 +4720,7 @@ The initial deterministic filling did not succeed for ${
 
       if (isInNewTab) {
         // We're in a new tab - simply close it to return to search results
-        console.log(
+        log.info(
           "🆕 In new tab scenario, closing detail page to return to search results"
         );
 
@@ -4736,7 +4737,7 @@ The initial deterministic filling did not succeed for ${
 
           if (searchResultsPage) {
             this.page = searchResultsPage;
-            console.log(
+            log.info(
               `🔍 Switched back to search results page: ${searchResultsPage.url()}`
             );
 
@@ -4756,7 +4757,7 @@ The initial deterministic filling did not succeed for ${
 
             // Update captured search page URL
             this.searchPageUrl = searchResultsPage.url();
-            console.log(`📝 Updated search page URL: ${this.searchPageUrl}`);
+            log.info(`📝 Updated search page URL: ${this.searchPageUrl}`);
 
             // Check for Cloudflare protection
             await this.handleCloudflareDetection();
@@ -4764,18 +4765,18 @@ The initial deterministic filling did not succeed for ${
             // Clear the new tab flag
             this.isInNewTab = false;
 
-            console.log(
+            log.info(
               "✅ Successfully closed detail page and returned to search results"
             );
           } else {
-            console.log(
+            log.info(
               "⚠️ Could not find search results page after closing detail tab"
             );
           }
         }
       } else {
         // Same tab scenario - use normal back navigation
-        console.log("🔄 Same tab scenario, navigating back to search results");
+        log.info("🔄 Same tab scenario, navigating back to search results");
         await this.page.goBack({ waitUntil: "networkidle2" });
 
         // Wait for search results to reload
@@ -4790,22 +4791,22 @@ The initial deterministic filling did not succeed for ${
 
         // Update captured search page URL
         this.searchPageUrl = this.page.url();
-        console.log(
+        log.info(
           `📝 Updated search page URL after back navigation: ${this.searchPageUrl}`
         );
 
         // Check for Cloudflare protection after returning to search results
         await this.handleCloudflareDetection();
 
-        console.log("✅ Successfully navigated back to search results");
+        log.info("✅ Successfully navigated back to search results");
       }
     } catch (error) {
-      console.error("❌ Error navigating back to search results:", error);
+      log.error("❌ Error navigating back to search results:", error);
 
       if (this.aiSupportEnabled && this.page) {
         try {
           const errMsg = error instanceof Error ? error.message : String(error);
-          console.log(
+          log.info(
             "🤖 Attempting AI-assisted recovery for navigateBackToSearchResults..."
           );
 
@@ -4831,19 +4832,19 @@ The initial deterministic filling did not succeed for ${
           });
 
           if (result.success && result.data?.status === "goal_achieved") {
-            console.log(
+            log.info(
               "✅ AI successfully recovered navigation back to search results"
             );
             if (this.page) {
               this.searchPageUrl = this.page.url();
             }
           } else {
-            console.warn(
+            log.warn(
               "⚠️ AI recovery for navigateBackToSearchResults did not achieve goal"
             );
           }
         } catch (aiErr) {
-          console.warn("⚠️ AI recovery attempt also failed:", aiErr);
+          log.warn("⚠️ AI recovery attempt also failed:", aiErr);
         }
       }
     }
@@ -4859,7 +4860,7 @@ The initial deterministic filling did not succeed for ${
     if (!this.page || !selectors.navigation?.detailPage) return basicResult;
 
     const detailSelectors = selectors.navigation.detailPage;
-    console.log("detailSelectors", detailSelectors);
+    log.info("detailSelectors", detailSelectors);
     const enhancedResult = { ...basicResult };
 
     try {
@@ -4879,7 +4880,7 @@ The initial deterministic filling did not succeed for ${
         );
         if (website) {
           enhancedResult.website = website;
-          console.log(`📱 Extracted website from detail page: ${website}`);
+          log.info(`📱 Extracted website from detail page: ${website}`);
         }
       }
 
@@ -4889,7 +4890,7 @@ The initial deterministic filling did not succeed for ${
         typeof this.adapter.extractWebsiteWithReveal === "function"
       ) {
         try {
-          console.log(
+          log.info(
             "🔧 Using adapter-specific website extraction method on detail page"
           );
           const adapterWebsite = await this.adapter.extractWebsiteWithReveal(
@@ -4898,16 +4899,16 @@ The initial deterministic filling did not succeed for ${
           );
           if (adapterWebsite && this.isValidWebsiteUrl(adapterWebsite)) {
             enhancedResult.website = adapterWebsite;
-            console.log(
+            log.info(
               `🌐 Valid website extracted using adapter method on detail page: ${adapterWebsite}`
             );
           } else if (adapterWebsite) {
-            console.log(
+            log.info(
               `⚠️ Invalid website format from adapter method on detail page: ${adapterWebsite}`
             );
           }
         } catch (error) {
-          console.warn(
+          log.warn(
             "⚠️ Error in adapter website extraction method on detail page:",
             error
           );
@@ -4933,7 +4934,7 @@ The initial deterministic filling did not succeed for ${
         typeof this.adapter.extractAddressFromBusinessSection === "function"
       ) {
         try {
-          console.log(
+          log.info(
             "🔧 Using adapter-specific address extraction method on detail page"
           );
           const adapterAddress =
@@ -4945,12 +4946,12 @@ The initial deterministic filling did not succeed for ${
               ...enhancedResult.address,
               ...addressParts,
             };
-            console.log(
+            log.info(
               `📍 Valid address extracted using adapter method on detail page: ${adapterAddress}`
             );
           }
         } catch (error) {
-          console.warn(
+          log.warn(
             "⚠️ Error in adapter address extraction method on detail page:",
             error
           );
@@ -5010,7 +5011,7 @@ The initial deterministic filling did not succeed for ${
         typeof this.adapter.extractPhoneNumberWithReveal === "function"
       ) {
         try {
-          console.log(
+          log.info(
             "🔧 Using adapter-specific phone extraction method on detail page"
           );
           const adapterPhone = await this.adapter.extractPhoneNumberWithReveal(
@@ -5019,16 +5020,16 @@ The initial deterministic filling did not succeed for ${
           );
           if (adapterPhone && this.isValidPhoneNumber(adapterPhone)) {
             enhancedResult.phone = adapterPhone;
-            console.log(
+            log.info(
               `📞 Valid phone extracted using adapter method on detail page: ${adapterPhone}`
             );
           } else if (adapterPhone) {
-            console.log(
+            log.info(
               `⚠️ Invalid phone format from adapter method on detail page: ${adapterPhone}`
             );
           }
         } catch (error) {
-          console.warn(
+          log.warn(
             "⚠️ Error in adapter phone extraction method on detail page:",
             error
           );
@@ -5044,39 +5045,39 @@ The initial deterministic filling did not succeed for ${
         typeof this.adapter.extractEmailFromDetailPage === "function"
       ) {
         try {
-          console.log("🔧 Using adapter-specific email extraction method");
+          log.info("🔧 Using adapter-specific email extraction method");
           const adapterEmail = await this.adapter.extractEmailFromDetailPage(
             this.page!
           );
           if (adapterEmail && this.isValidEmail(adapterEmail)) {
             enhancedResult.email = adapterEmail;
             emailExtracted = true;
-            console.log(
+            log.info(
               `📧 Valid email extracted using adapter method: ${adapterEmail}`
             );
           } else if (adapterEmail) {
-            console.log(
+            log.info(
               `⚠️ Invalid email format from adapter method: ${adapterEmail}`
             );
           }
         } catch (error) {
-          console.warn("⚠️ Error in adapter email extraction method:", error);
+          log.warn("⚠️ Error in adapter email extraction method:", error);
         }
       }
 
       // If adapter method didn't find email, try standard selector-based extraction
       if (!emailExtracted && detailSelectors.additionalEmail) {
-        console.log("🔧 Falling back to selector-based email extraction");
+        log.info("🔧 Falling back to selector-based email extraction");
         const additionalEmail = await this.extractTextFromPage(
           detailSelectors.additionalEmail
         );
         if (additionalEmail && this.isValidEmail(additionalEmail)) {
           enhancedResult.email = additionalEmail;
-          console.log(
+          log.info(
             `📧 Valid email extracted from detail page selector: ${additionalEmail}`
           );
         } else if (additionalEmail) {
-          console.log(
+          log.info(
             `⚠️ Invalid email format from detail page selector: ${additionalEmail}`
           );
         }
@@ -5131,9 +5132,9 @@ The initial deterministic filling did not succeed for ${
         if (specialties) enhancedResult.specialties = specialties;
       }
 
-      console.log("Enhanced data extracted from detail page");
+      log.info("Enhanced data extracted from detail page");
     } catch (error) {
-      console.error("Error extracting enhanced data from detail page:", error);
+      log.error("Error extracting enhanced data from detail page:", error);
     }
 
     if (
@@ -5142,7 +5143,7 @@ The initial deterministic filling did not succeed for ${
       !enhancedResult.phone &&
       !enhancedResult.website
     ) {
-      console.log(
+      log.info(
         "🤖 Key contact fields missing, attempting AI contact extraction..."
       );
       try {
@@ -5176,16 +5177,16 @@ The initial deterministic filling did not succeed for ${
             ];
           }
           (enhancedResult as Record<string, unknown>).ai_extracted = true;
-          console.log("🤖 AI successfully extracted contact info");
+          log.info("🤖 AI successfully extracted contact info");
         } else {
-          console.log(
+          log.info(
             `🤖 AI extraction returned no data: ${
               aiResult.errorMessage || "unknown"
             }`
           );
         }
       } catch (aiError) {
-        console.warn("🤖 AI contact extraction failed:", aiError);
+        log.warn("🤖 AI contact extraction failed:", aiError);
       }
     }
 
@@ -5245,7 +5246,7 @@ The initial deterministic filling did not succeed for ${
     if (!this.page) return;
 
     try {
-      console.log(
+      log.info(
         `📹 Capturing detail page content for AI training: ${businessName}`
       );
 
@@ -5357,7 +5358,7 @@ The initial deterministic filling did not succeed for ${
       };
 
       // Log the training data capture
-      console.log(`📊 Detail page training data captured:`, {
+      log.info(`📊 Detail page training data captured:`, {
         businessName,
         url: currentUrl,
         htmlLength: rawHtml.length,
@@ -5373,7 +5374,7 @@ The initial deterministic filling did not succeed for ${
         this.sessionManager.addDetailPageTrainingData(trainingData);
       }
     } catch (error) {
-      console.warn("⚠️ Error capturing detail page for training:", error);
+      log.warn("⚠️ Error capturing detail page for training:", error);
       // Don't fail the scraping process if training capture fails
     }
   }
@@ -5538,7 +5539,7 @@ The initial deterministic filling did not succeed for ${
 
       return result;
     } catch (error) {
-      console.warn("Error parsing address string:", error);
+      log.warn("Error parsing address string:", error);
       // Fallback: return the whole string as street address
       return { street: addressString };
     }
@@ -5594,12 +5595,12 @@ The initial deterministic filling did not succeed for ${
         element,
         selectors.businessName
       );
-      console.log("element", element);
-      console.log("selectors", selectors.businessName);
-      console.log("business_name", business_name);
+      log.info("element", element);
+      log.info("selectors", selectors.businessName);
+      log.info("business_name", business_name);
       if (this.page) {
         const currentUrl = this.page.url();
-        console.log("Current page URL:", currentUrl);
+        log.info("Current page URL:", currentUrl);
       }
       if (!business_name) return null;
 
@@ -5683,7 +5684,7 @@ The initial deterministic filling did not succeed for ${
 
       return result;
     } catch (error) {
-      console.error("Error extracting business from element:", error);
+      log.error("Error extracting business from element:", error);
       return null;
     }
   }
@@ -5722,7 +5723,7 @@ The initial deterministic filling did not succeed for ${
             return text;
           }
         } else {
-          console.error("textElement not found", selector);
+          log.error("textElement not found", selector);
         }
       } catch (error) {
         const errorMessage =
@@ -5732,7 +5733,7 @@ The initial deterministic filling did not succeed for ${
           errorMessage.includes("Protocol error") ||
           errorMessage.includes("Could not find object")
         ) {
-          console.log(
+          log.info(
             `DOM re-rendering detected, attempt ${
               attempt + 1
             }/3 for selector: ${selector}`
@@ -5744,7 +5745,7 @@ The initial deterministic filling did not succeed for ${
           // Continue to next attempt
           continue;
         } else {
-          console.error("error extracting text", errorMessage);
+          log.error("error extracting text", errorMessage);
           break;
         }
       }
@@ -5788,7 +5789,7 @@ The initial deterministic filling did not succeed for ${
             return attrValue;
           }
         } else {
-          console.error("attrElement not found", selector);
+          log.error("attrElement not found", selector);
         }
       } catch (error) {
         const errorMessage =
@@ -5798,7 +5799,7 @@ The initial deterministic filling did not succeed for ${
           errorMessage.includes("Protocol error") ||
           errorMessage.includes("Could not find object")
         ) {
-          console.log(
+          log.info(
             `DOM re-rendering detected, attempt ${
               attempt + 1
             }/3 for attribute selector: ${selector}`
@@ -5810,7 +5811,7 @@ The initial deterministic filling did not succeed for ${
           // Continue to next attempt
           continue;
         } else {
-          console.error("error extracting attribute", errorMessage);
+          log.error("error extracting attribute", errorMessage);
           break;
         }
       }
@@ -5858,7 +5859,7 @@ The initial deterministic filling did not succeed for ${
               elementErrorMessage.includes("Protocol error") ||
               elementErrorMessage.includes("Could not find object")
             ) {
-              console.log("Skipping stale element in array extraction");
+              log.info("Skipping stale element in array extraction");
               continue;
             }
           }
@@ -5873,7 +5874,7 @@ The initial deterministic filling did not succeed for ${
           errorMessage.includes("Protocol error") ||
           errorMessage.includes("Could not find object")
         ) {
-          console.log(
+          log.info(
             `DOM re-rendering detected, attempt ${
               attempt + 1
             }/3 for array selector: ${selector}`
@@ -5885,7 +5886,7 @@ The initial deterministic filling did not succeed for ${
           // Continue to next attempt
           continue;
         } else {
-          console.error("error extracting array", errorMessage);
+          log.error("error extracting array", errorMessage);
           break;
         }
       }
@@ -6025,7 +6026,7 @@ The initial deterministic filling did not succeed for ${
               );
             }, text);
             if (hasText) {
-              console.log(
+              log.info(
                 `🔒 Cloudflare protection detected via text: "${text}"`
               );
               return true;
@@ -6036,7 +6037,7 @@ The initial deterministic filling did not succeed for ${
               () => false
             );
             if (element) {
-              console.log(
+              log.info(
                 `🔒 Cloudflare protection detected via selector: ${selector}`
               );
               return true;
@@ -6066,7 +6067,7 @@ The initial deterministic filling did not succeed for ${
 
       for (const pattern of cloudflareTitlePatterns) {
         if (pattern.test(pageTitle)) {
-          console.log(
+          log.info(
             `🔒 Cloudflare protection detected via page title: "${pageTitle}"`
           );
           return true;
@@ -6081,7 +6082,7 @@ The initial deterministic filling did not succeed for ${
         currentUrl.includes("cf-") ||
         currentUrl.includes("security-check")
       ) {
-        console.log(`🔒 Cloudflare protection detected via URL: ${currentUrl}`);
+        log.info(`🔒 Cloudflare protection detected via URL: ${currentUrl}`);
         return true;
       }
 
@@ -6104,7 +6105,7 @@ The initial deterministic filling did not succeed for ${
         );
 
         if (hasCloudflareResources) {
-          console.log("🔒 Cloudflare protection detected via resource loading");
+          log.info("🔒 Cloudflare protection detected via resource loading");
           return true;
         }
       } catch (error) {
@@ -6128,7 +6129,7 @@ The initial deterministic filling did not succeed for ${
         });
 
         if (hasCloudflareStructure) {
-          console.log(
+          log.info(
             "🔒 Cloudflare protection detected via page structure analysis"
           );
           return true;
@@ -6139,7 +6140,7 @@ The initial deterministic filling did not succeed for ${
 
       return false;
     } catch (error) {
-      console.warn("Error detecting Cloudflare protection:", error);
+      log.warn("Error detecting Cloudflare protection:", error);
       return false;
     }
   }
@@ -6256,11 +6257,11 @@ The initial deterministic filling did not succeed for ${
       }, robotVerificationIndicators);
 
       if (hasRobotText.found) {
-        console.log(
+        log.info(
           "🤖 Robot verification challenge detected in visible page content"
         );
-        console.log(`🔍 Found indicator: "${hasRobotText.indicator}"`);
-        console.log(`📝 Visible text context: "${hasRobotText.visibleText}"`);
+        log.info(`🔍 Found indicator: "${hasRobotText.indicator}"`);
+        log.info(`📝 Visible text context: "${hasRobotText.visibleText}"`);
         return true;
       }
 
@@ -6297,11 +6298,11 @@ The initial deterministic filling did not succeed for ${
       }, robotVerificationIndicators);
 
       if (visibleRobotElements.found) {
-        console.log(
+        log.info(
           `🤖 Robot verification challenge detected in visible elements`
         );
-        console.log(`🔍 Found indicator: "${visibleRobotElements.indicator}"`);
-        console.log(`📝 Element text: "${visibleRobotElements.elementText}"`);
+        log.info(`🔍 Found indicator: "${visibleRobotElements.indicator}"`);
+        log.info(`📝 Element text: "${visibleRobotElements.elementText}"`);
         return true;
       }
 
@@ -6338,7 +6339,7 @@ The initial deterministic filling did not succeed for ${
             const isVisible = await this.isElementVisible(element);
 
             if (isVisible) {
-              console.log(
+              log.info(
                 `🤖 Robot verification detected with visible selector: ${selector}`
               );
               return true;
@@ -6366,7 +6367,7 @@ The initial deterministic filling did not succeed for ${
           const isVisible = await this.isElementVisible(iframe);
 
           if (isVisible) {
-            console.log(
+            log.info(
               `🤖 Robot verification iframe detected and visible: ${src}`
             );
             return true;
@@ -6389,7 +6390,7 @@ The initial deterministic filling did not succeed for ${
 
       for (const pattern of robotTitlePatterns) {
         if (pattern.test(pageTitle)) {
-          console.log(
+          log.info(
             `🤖 Robot verification detected via page title: "${pageTitle}"`
           );
           return true;
@@ -6398,7 +6399,7 @@ The initial deterministic filling did not succeed for ${
 
       return false;
     } catch (error) {
-      console.warn("Error detecting robot verification:", error);
+      log.warn("Error detecting robot verification:", error);
       return false;
     }
   }
@@ -6414,7 +6415,7 @@ The initial deterministic filling did not succeed for ${
     const goal =
       "Pass the robot verification challenge and return to normal searchable page state. If a slider is present, drag the slider handle left-to-right to complete verification. Otherwise use safe actions: wait for challenge render, click visible verification/send button once, then wait for page to load.";
 
-    console.log(
+    log.info(
       "🤖 Attempting AI robot verification bypass via observe-execute..."
     );
     const result = await this.observeExecuteLoop({
@@ -6425,11 +6426,11 @@ The initial deterministic filling did not succeed for ${
     });
 
     if (!result.success || !result.data) {
-      console.log("🤖 AI robot verification bypass failed or returned no data");
+      log.info("🤖 AI robot verification bypass failed or returned no data");
       return false;
     }
     if (result.data.status !== "goal_achieved") {
-      console.log(
+      log.info(
         `🤖 AI robot verification bypass did not achieve goal (status=${result.data.status})`
       );
       return false;
@@ -6437,12 +6438,12 @@ The initial deterministic filling did not succeed for ${
 
     const stillBlocked = await this.detectRobotVerification();
     if (stillBlocked) {
-      console.log(
+      log.info(
         "🤖 AI reported goal_achieved but robot verification is still detected locally; treat bypass as failed."
       );
       return false;
     } else {
-      console.log(
+      log.info(
         "✅ AI robot verification bypass succeeded – challenge no longer detected"
       );
     }
@@ -6459,19 +6460,19 @@ The initial deterministic filling did not succeed for ${
       const isRobotVerification = await this.detectRobotVerification();
       if (isRobotVerification) {
         if (this.aiSupportEnabled) {
-          console.log(
+          log.info(
             "🤖 Robot verification detected. Attempting AI support to pass verification..."
           );
           const bypassOk = await this.attemptAiRobotVerificationBypass();
           if (bypassOk) {
-            console.log(
+            log.info(
               "✅ Robot verification appears resolved with AI support; continuing scraping."
             );
             return;
           }
         }
 
-        console.log(
+        log.info(
           "🤖 Robot verification challenge detected! Notifying parent process..."
         );
 
@@ -6533,17 +6534,17 @@ The initial deterministic filling did not succeed for ${
         }
 
         // Pause the scraping process
-        console.log(
+        log.info(
           "⏸️ Pausing scraping due to robot verification challenge..."
         );
         this.pause();
 
-        console.log(
+        log.info(
           "✅ Robot verification detection notification sent to parent process"
         );
       }
     } catch (error) {
-      console.error("Error handling robot verification detection:", error);
+      log.error("Error handling robot verification detection:", error);
     }
   }
 
@@ -6556,7 +6557,7 @@ The initial deterministic filling did not succeed for ${
     try {
       const isBlocked = await this.detectCloudflareProtection();
       if (isBlocked) {
-        console.log(
+        log.info(
           "🚨 Cloudflare protection detected! Notifying parent process..."
         );
 
@@ -6609,15 +6610,15 @@ The initial deterministic filling did not succeed for ${
         ).parentPort;
         if (parentPortLocal4) {
           parentPortLocal4.postMessage(cloudflareMessage);
-          console.log("✅ Cloudflare detection message sent to parent process");
+          log.info("✅ Cloudflare detection message sent to parent process");
         } else {
-          console.warn(
+          log.warn(
             "⚠️ Cannot send Cloudflare message: process.parentPort not available"
           );
         }
 
         // Log the detection for debugging
-        console.log("🔒 Cloudflare protection details:", {
+        log.info("🔒 Cloudflare protection details:", {
           url: currentUrl,
           timestamp: timestamp,
           userAgent: userAgent,
@@ -6625,27 +6626,27 @@ The initial deterministic filling did not succeed for ${
         });
 
         // Provide user guidance
-        console.log("💡 Cloudflare Protection Detected - User Guidance:");
-        console.log("   • The target website is protected by Cloudflare");
-        console.log("   • This may be due to:");
-        console.log("     - High request frequency");
-        console.log("     - Suspicious traffic patterns");
-        console.log("     - Geographic restrictions");
-        console.log("     - Browser fingerprinting");
-        console.log("   • Recommended actions:");
-        console.log("     - Wait before retrying (15-30 minutes)");
-        console.log("     - Use different proxy/VPN if available");
-        console.log("     - Reduce scraping frequency");
-        console.log("     - Check if manual access works in browser");
+        log.info("💡 Cloudflare Protection Detected - User Guidance:");
+        log.info("   • The target website is protected by Cloudflare");
+        log.info("   • This may be due to:");
+        log.info("     - High request frequency");
+        log.info("     - Suspicious traffic patterns");
+        log.info("     - Geographic restrictions");
+        log.info("     - Browser fingerprinting");
+        log.info("   • Recommended actions:");
+        log.info("     - Wait before retrying (15-30 minutes)");
+        log.info("     - Use different proxy/VPN if available");
+        log.info("     - Reduce scraping frequency");
+        log.info("     - Check if manual access works in browser");
 
         // Pause the scraping process due to Cloudflare protection
         if (this.isRunning) {
-          console.log(
+          log.info(
             "⏸️ Pausing scraping process due to Cloudflare protection..."
           );
           try {
             await this.pause();
-            console.log(
+            log.info(
               "✅ Scraping paused successfully due to Cloudflare protection"
             );
 
@@ -6670,12 +6671,12 @@ The initial deterministic filling did not succeed for ${
             ).parentPort;
             if (parentPortLocal5) {
               parentPortLocal5.postMessage(pauseNotificationMessage);
-              console.log(
+              log.info(
                 "✅ Cloudflare pause notification sent to parent process"
               );
             }
           } catch (pauseError) {
-            console.error(
+            log.error(
               "❌ Failed to pause scraping due to Cloudflare protection:",
               pauseError
             );
@@ -6683,7 +6684,7 @@ The initial deterministic filling did not succeed for ${
         }
       }
     } catch (error) {
-      console.error("Error handling Cloudflare detection:", error);
+      log.error("Error handling Cloudflare detection:", error);
     }
   }
 
@@ -6767,7 +6768,7 @@ The initial deterministic filling did not succeed for ${
       // Small pause after clicking
       await this.sleep(Math.random() * 100 + 50);
     } catch (error) {
-      console.error(`Error in human-like click: ${error}`);
+      log.error(`Error in human-like click: ${error}`);
       // Fallback to regular click
       await page.click(selector);
     }
@@ -6827,7 +6828,7 @@ The initial deterministic filling did not succeed for ${
       // Final pause after typing
       await this.sleep(Math.random() * 200 + 100);
     } catch (error) {
-      console.error(`Error in human-like typing: ${error}`);
+      log.error(`Error in human-like typing: ${error}`);
       // Fallback to regular typing
       await page.type(selector, text);
     }
@@ -6882,7 +6883,7 @@ The initial deterministic filling did not succeed for ${
       for (const selector of submitSelectors) {
         submitButton = await this.page.$(selector);
         if (submitButton) {
-          console.log(`Found submit button: ${selector}`);
+          log.info(`Found submit button: ${selector}`);
           break;
         }
       }
@@ -6892,17 +6893,17 @@ The initial deterministic filling did not succeed for ${
         const selector = submitSelectors.find((s) => this.page!.$(s));
         if (selector) {
           await this.humanLikeClick(this.page, selector);
-          console.log("Submitted search form");
+          log.info("Submitted search form");
         }
       } else {
-        console.warn(
+        log.warn(
           "⚠️ No submit button found with any of the common selectors"
         );
 
         // Try AI support if enabled before falling back to Enter key
         if (this.aiSupportEnabled && this.page) {
           try {
-            console.log(
+            log.info(
               "🤖 Requesting AI support for submit button not found..."
             );
             const captured = await this.capturePageStateForAiSupport();
@@ -6923,7 +6924,7 @@ The initial deterministic filling did not succeed for ${
             if (buttonAiResult.success && buttonAiResult.data) {
               const guidance = buttonAiResult.data;
               if (guidance.suggestedSelectors?.searchButton) {
-                console.log(
+                log.info(
                   "🤖 AI provided alternative submit button selector"
                 );
                 const altBtn = await this.page.$(
@@ -6934,7 +6935,7 @@ The initial deterministic filling did not succeed for ${
                     this.page,
                     guidance.suggestedSelectors.searchButton
                   );
-                  console.log(
+                  log.info(
                     "✅ Alternative submit button clicked successfully"
                   );
 
@@ -6948,19 +6949,19 @@ The initial deterministic filling did not succeed for ${
                   await this.handleCloudflareDetection();
                   return; // Success, exit early
                 } else {
-                  console.warn(
+                  log.warn(
                     "⚠️ Alternative submit button selector also not found"
                   );
                 }
               } else if (guidance.actions?.length) {
-                console.log(
+                log.info(
                   "🤖 AI provided suggested actions to submit search"
                 );
                 // Execute suggested actions
                 for (const action of guidance.actions) {
                   const result = await this.executeAction(action);
                   if (!result.success) {
-                    console.warn(
+                    log.warn(
                       `⚠️ AI suggested action failed: ${
                         action.description || action.type
                       }`
@@ -6979,7 +6980,7 @@ The initial deterministic filling did not succeed for ${
                 return; // Success, exit early
               } else if (guidance.suggestedActions?.length) {
                 // Try observe-execute as last resort
-                console.log(
+                log.info(
                   "🤖 AI suggested observe-execute to submit search form"
                 );
                 const observeResult = await this.observeExecuteLoop({
@@ -7005,13 +7006,13 @@ The initial deterministic filling did not succeed for ${
                   return; // Success, exit early
                 }
 
-                console.warn(
+                log.warn(
                   "⚠️ Observe-execute also failed to submit search form"
                 );
               }
             }
           } catch (buttonAiErr) {
-            console.warn(
+            log.warn(
               "🤖 AI support for submit button not found failed:",
               buttonAiErr
             );
@@ -7021,7 +7022,7 @@ The initial deterministic filling did not succeed for ${
         // Final fallback to Enter key
         await this.sleep(Math.random() * 200 + 100);
         await this.page.keyboard.press("Enter");
-        console.log("Submitted search form using Enter key (final fallback)");
+        log.info("Submitted search form using Enter key (final fallback)");
       }
 
       // Wait for navigation
@@ -7033,7 +7034,7 @@ The initial deterministic filling did not succeed for ${
       // Check for Cloudflare protection after form submission
       await this.handleCloudflareDetection();
     } catch (error) {
-      console.error("Error submitting search form:", error);
+      log.error("Error submitting search form:", error);
     }
   }
 
@@ -7051,7 +7052,7 @@ The initial deterministic filling did not succeed for ${
         this.browser = null;
       }
     } catch (error) {
-      console.error("Error during cleanup:", error);
+      log.error("Error during cleanup:", error);
     }
   }
 
@@ -7181,7 +7182,7 @@ The initial deterministic filling did not succeed for ${
         seenBusinesses.add(businessKey);
         uniqueResults.push(result);
       } else {
-        console.log(
+        log.info(
           `🔄 Duplicate business filtered out: ${result.business_name}`
         );
       }
@@ -7301,13 +7302,13 @@ The initial deterministic filling did not succeed for ${
           "Structured extraction returned incomplete business or contact fields; extract from page HTML.",
       });
       if (aiExtract.success && aiExtract.data) {
-        console.log(
+        log.info(
           "🤖 AI enriched listing from page HTML (missing name or email/phone)"
         );
         return this.mergeAiExtractIntoScrapingResult(result, aiExtract.data);
       }
     } catch (err: unknown) {
-      console.warn("🤖 AI HTML enrichment failed:", err);
+      log.warn("🤖 AI HTML enrichment failed:", err);
     }
     return result;
   }
@@ -7395,7 +7396,7 @@ The initial deterministic filling did not succeed for ${
   ): Promise<boolean> {
     if (!this.page) return false;
 
-    console.log(
+    log.info(
       `⏳ Waiting for Cloudflare challenge to complete (max: ${maxWaitTime}ms)...`
     );
 
@@ -7408,7 +7409,7 @@ The initial deterministic filling did not succeed for ${
         const isStillBlocked = await this.detectCloudflareProtection();
 
         if (!isStillBlocked) {
-          console.log("✅ Cloudflare challenge appears to be resolved");
+          log.info("✅ Cloudflare challenge appears to be resolved");
           return true;
         }
 
@@ -7418,16 +7419,16 @@ The initial deterministic filling did not succeed for ${
         // Log progress
         const elapsed = Date.now() - startTime;
         const remaining = maxWaitTime - elapsed;
-        console.log(
+        log.info(
           `⏳ Still waiting... (${Math.round(remaining / 1000)}s remaining)`
         );
       } catch (error) {
-        console.warn("Error while waiting for Cloudflare challenge:", error);
+        log.warn("Error while waiting for Cloudflare challenge:", error);
         await this.sleep(checkInterval);
       }
     }
 
-    console.log("⏰ Timeout waiting for Cloudflare challenge to complete");
+    log.info("⏰ Timeout waiting for Cloudflare challenge to complete");
     return false;
   }
 
@@ -7442,7 +7443,7 @@ The initial deterministic filling did not succeed for ${
     const goal =
       "Get past the Cloudflare challenge so the real page loads. Prefer waiting and a single click on the challenge/verify button if visible.";
 
-    console.log("🤖 Attempting AI Cloudflare bypass via observe-execute...");
+    log.info("🤖 Attempting AI Cloudflare bypass via observe-execute...");
     const result = await this.observeExecuteLoop({
       goal,
       pageUrl,
@@ -7451,11 +7452,11 @@ The initial deterministic filling did not succeed for ${
     });
 
     if (!result.success || !result.data) {
-      console.log("🤖 AI Cloudflare bypass failed or returned no data");
+      log.info("🤖 AI Cloudflare bypass failed or returned no data");
       return false;
     }
     if (result.data.status !== "goal_achieved") {
-      console.log(
+      log.info(
         `🤖 AI Cloudflare bypass did not achieve goal (status=${result.data.status})`
       );
       return false;
@@ -7463,10 +7464,10 @@ The initial deterministic filling did not succeed for ${
 
     const stillBlocked = await this.detectCloudflareProtection();
     if (!stillBlocked) {
-      console.log("✅ AI Cloudflare bypass succeeded – page no longer blocked");
+      log.info("✅ AI Cloudflare bypass succeeded – page no longer blocked");
       return true;
     }
-    console.log("🤖 AI reported goal_achieved but Cloudflare still detected");
+    log.info("🤖 AI reported goal_achieved but Cloudflare still detected");
     return false;
   }
 
@@ -7479,14 +7480,14 @@ The initial deterministic filling did not succeed for ${
     if (!this.page) return false;
 
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
-      console.log(`🔄 Cloudflare handling attempt ${attempt}/${maxRetries}`);
+      log.info(`🔄 Cloudflare handling attempt ${attempt}/${maxRetries}`);
 
       try {
         // Check if Cloudflare protection is detected
         const isBlocked = await this.detectCloudflareProtection();
 
         if (!isBlocked) {
-          console.log("✅ No Cloudflare protection detected, continuing...");
+          log.info("✅ No Cloudflare protection detected, continuing...");
           return true;
         }
 
@@ -7503,7 +7504,7 @@ The initial deterministic filling did not succeed for ${
         const challengeResolved = await this.waitForCloudflareChallenge();
 
         if (challengeResolved) {
-          console.log(
+          log.info(
             "✅ Cloudflare challenge resolved, continuing with scraping..."
           );
           return true;
@@ -7511,14 +7512,14 @@ The initial deterministic filling did not succeed for ${
 
         // If challenge not resolved, try wait for some second
         if (attempt < maxRetries) {
-          console.log(
+          log.info(
             `🔄 Attempting page refresh (attempt ${attempt + 1}/${maxRetries})`
           );
           //await this.page.reload({ waitUntil: "networkidle2" });
           await this.sleep(5000); // Wait 5 seconds
         }
       } catch (error) {
-        console.error(
+        log.error(
           `Error in Cloudflare handling attempt ${attempt}:`,
           error
         );
@@ -7528,7 +7529,7 @@ The initial deterministic filling did not succeed for ${
       }
     }
 
-    console.log(
+    log.info(
       "❌ Failed to handle Cloudflare protection after all retry attempts"
     );
     return false;
@@ -7582,17 +7583,17 @@ ${htmlContent}`;
       // Save HTML content to file
       await fsPromises.writeFile(filePath, debugHtml, "utf8");
 
-      console.log(`💾 Saved debug HTML to: ${filePath}`);
-      console.log(
+      log.info(`💾 Saved debug HTML to: ${filePath}`);
+      log.info(
         `🔍 Debug info - Platform: ${platform}, Task: ${taskId}, Page: ${pageNumber}, URL: ${currentUrl}`
       );
     } catch (error) {
-      console.error("❌ Error saving debug HTML:", error);
+      log.error("❌ Error saving debug HTML:", error);
       // Don't throw - this is just for debugging
     }
   }
 }
-console.log("🚀 YellowPagesScraper loaded");
+log.info("🚀 YellowPagesScraper loaded");
 
 // Global scraper instance for pause/resume operations
 let globalScraper: YellowPagesScraper | null = null;
@@ -7608,12 +7609,12 @@ const parentPort = (
 ).parentPort;
 if (parentPort) {
   parentPort.on("message", async (e: { data: string }) => {
-    console.log(e);
+    log.info(e);
     const message = JSON.parse(e.data);
-    console.log("📨 Received message:", message.type);
+    log.info("📨 Received message:", message.type);
 
     if (message.type === "START" && message.taskData && message.platformInfo) {
-      console.log("🚀 Starting scraper with data:", {
+      log.info("🚀 Starting scraper with data:", {
         taskId: message.taskData.taskId,
         platform: message.taskData.platform,
         hasAdapter: !!message.platformInfo.adapterClass,
@@ -7628,7 +7629,7 @@ if (parentPort) {
         );
         globalScraper = scraper; // Store reference for pause/resume operations
       } catch (error) {
-        console.error("Error initializing scraper:", error);
+        log.error("Error initializing scraper:", error);
         const errorMessage: ErrorMessage = {
           type: "ERROR",
           taskId: message.taskData.taskId,
@@ -7684,7 +7685,7 @@ if (parentPort) {
       });
 
       try {
-        console.log("🚀 Starting scraper real");
+        log.info("🚀 Starting scraper real");
         await scraper.start();
       } catch (error) {
         const errorMessage: ErrorMessage = {
@@ -7700,26 +7701,26 @@ if (parentPort) {
         }
       }
     } else if (message.type === "PAUSE") {
-      console.log("⏸️ Received pause command");
+      log.info("⏸️ Received pause command");
       if (globalScraper) {
         try {
           await globalScraper.pause();
         } catch (error) {
-          console.error("Failed to pause scraper:", error);
+          log.error("Failed to pause scraper:", error);
         }
       } else {
-        console.warn("No active scraper to pause");
+        log.warn("No active scraper to pause");
       }
     } else if (message.type === "RESUME") {
-      console.log("▶️ Received resume command");
+      log.info("▶️ Received resume command");
       if (globalScraper) {
         try {
           await globalScraper.resume();
         } catch (error) {
-          console.error("Failed to resume scraper:", error);
+          log.error("Failed to resume scraper:", error);
         }
       } else {
-        console.warn("No active scraper to resume");
+        log.warn("No active scraper to resume");
       }
     } else if (isAiSupportResponseMessage(message)) {
       if (globalScraper) {
@@ -7727,35 +7728,35 @@ if (parentPort) {
           message as unknown as Record<string, unknown>
         );
       } else {
-        console.warn("Received AI_SUPPORT_RESPONSE but no active scraper");
+        log.warn("Received AI_SUPPORT_RESPONSE but no active scraper");
       }
     } else if (message.type === "EXIT") {
       const reason =
         (message as { reason?: string }).reason ?? "Requested by main process";
-      console.log(
+      log.info(
         `Received EXIT command, shutting down gracefully. Reason: ${reason}`
       );
       if (globalScraper) {
         try {
           await globalScraper.stop();
         } catch (error) {
-          console.warn("Error stopping scraper on EXIT:", error);
+          log.warn("Error stopping scraper on EXIT:", error);
         }
       }
       process.exit(0);
     } else {
-      console.log("⚠️ Unknown message type:", message.type);
+      log.info("⚠️ Unknown message type:", message.type);
     }
   });
 }
 
 // Handle process termination
 process.on("SIGTERM", async () => {
-  console.log("Received SIGTERM, shutting down gracefully");
+  log.info("Received SIGTERM, shutting down gracefully");
   process.exit(0);
 });
 
 process.on("SIGINT", async () => {
-  console.log("Received SIGINT, shutting down gracefully");
+  log.info("Received SIGINT, shutting down gracefully");
   process.exit(0);
 });

@@ -1,5 +1,6 @@
 "use strict";
 import { SearchScrape } from "@/childprocess/searchScraper";
+import { log } from "@/modules/Logger";
 import {
   ScrapeOptions,
   SearchData,
@@ -517,7 +518,7 @@ export class YandexScraper extends SearchScrape {
               await this.page.evaluate(() => {
                 const form = document.querySelector("form") as HTMLFormElement;
                 if (form) {
-                  console.log("form found and submit");
+                  log.info("form found and submit");
                   form.submit();
                 }
               });

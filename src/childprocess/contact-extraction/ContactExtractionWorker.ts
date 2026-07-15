@@ -14,6 +14,7 @@ import {
   ExtractionProgress,
 } from "@/entityTypes/contactExtractionTypes";
 import { extractionQueue } from "./ExtractionQueue";
+import { log } from "@/modules/Logger";
 import { discoverAndExtractContactInfo } from "./ContactDiscovery";
 import {
   contactExtractionWorkerInboundSchema,
@@ -41,7 +42,7 @@ type ExtractContactFromUrlsMessage = Extract<
  * Initialize the worker process
  */
 function initializeWorker(): void {
-  console.log("ContactExtractionWorker: Worker process initialized");
+  log.info("ContactExtractionWorker: Worker process initialized");
 
   // Listen for messages from main process — validated against the shared
   // inbound schema. Malformed messages are dropped with a warning, so a
@@ -49,7 +50,7 @@ function initializeWorker(): void {
   process.on("message", (raw: unknown) => {
     const parsed = contactExtractionWorkerInboundSchema().safeParse(raw);
     if (!parsed.success) {
-      console.warn(
+      log.warn(
         "ContactExtractionWorker: dropped malformed inbound message:",
         parsed.error.message
       );
@@ -69,7 +70,7 @@ function initializeWorker(): void {
   // Handle worker errors — WS-4 R4.3: on fatal error, notify main + exit(1)
   // (mirrors LocalEmbeddingWorker / SkillWorker pattern).
   process.on("uncaughtException", (error) => {
-    console.error("ContactExtractionWorker: Uncaught exception:", error);
+    log.error("ContactExtractionWorker: Uncaught exception:", error);
     try {
       process.send?.({
         type: "worker-log",
@@ -86,7 +87,7 @@ function initializeWorker(): void {
   });
 
   process.on("unhandledRejection", (reason, promise) => {
-    console.error(
+    log.error(
       "ContactExtractionWorker: Unhandled rejection at:",
       promise,
       "reason:",
@@ -109,11 +110,11 @@ function initializeWorker(): void {
 
   // WS-4 R4.3: graceful shutdown on SIGTERM/SIGINT
   process.on("SIGTERM", () => {
-    console.log("ContactExtractionWorker: received SIGTERM, shutting down");
+    log.info("ContactExtractionWorker: received SIGTERM, shutting down");
     process.exit(0);
   });
   process.on("SIGINT", () => {
-    console.log("ContactExtractionWorker: received SIGINT, shutting down");
+    log.info("ContactExtractionWorker: received SIGINT, shutting down");
     process.exit(0);
   });
 
@@ -129,10 +130,10 @@ function initializeWorker(): void {
 function handleExtractionRequest(message: ExtractContactMessage): void {
   const { batchId, resultIds, results, priority = 0 } = message;
 
-  console.log(
+  log.info(
     `ContactExtractionWorker: Received extraction request for batch ${batchId}`
   );
-  console.log(`ContactExtractionWorker: Processing ${resultIds.length} URLs`);
+  log.info(`ContactExtractionWorker: Processing ${resultIds.length} URLs`);
 
   // Set up progress callback to send updates back to main process
   extractionQueue.setProgressCallback((progress: ExtractionProgress) => {
@@ -156,7 +157,7 @@ function handleExtractionRequest(message: ExtractContactMessage): void {
   // Add jobs to queue
   extractionQueue.addBatch(jobs, batchId);
 
-  console.log(
+  log.info(
     `ContactExtractionWorker: Jobs added to queue (queue length: ${extractionQueue.getQueueLength()})`
   );
 }

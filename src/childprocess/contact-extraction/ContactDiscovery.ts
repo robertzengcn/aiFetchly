@@ -1,4 +1,5 @@
 import { Page } from "puppeteer";
+import { log } from "@/modules/Logger";
 import { AiChatApi } from "@/api/aiChatApi";
 import {
   ContactInfo,
@@ -69,7 +70,7 @@ async function scanHomepageForContactInfo(
 
     return null;
   } catch (error) {
-    console.error("Stage 1 error:", error);
+    log.error("Stage 1 error:", error);
     return null;
   }
 }
@@ -134,7 +135,7 @@ async function findContactPageHeuristic(page: Page): Promise<string | null> {
 
     return bestLink;
   } catch (error) {
-    console.error("Stage 2 error:", error);
+    log.error("Stage 2 error:", error);
     return null;
   }
 }
@@ -174,7 +175,7 @@ async function captureScreenshot(page: Page): Promise<string | undefined> {
     });
     return `data:image/png;base64,${screenshot}`;
   } catch (error) {
-    console.error("Screenshot capture failed:", error);
+    log.error("Screenshot capture failed:", error);
     return undefined;
   }
 }
@@ -246,7 +247,7 @@ async function extractWithAI(
       method: "failed",
     };
   } catch (error) {
-    console.error("AI extraction error:", error);
+    log.error("AI extraction error:", error);
     return {
       success: false,
       error: `AI extraction failed: ${error}`,
@@ -267,7 +268,7 @@ async function captureScreenshotForAI(page: Page): Promise<string | undefined> {
     });
     return `data:image/png;base64,${screenshot}`;
   } catch (error) {
-    console.error("Screenshot capture failed:", error);
+    log.error("Screenshot capture failed:", error);
     return undefined;
   }
 }
@@ -314,7 +315,7 @@ export async function discoverAndExtractContactInfo(
 
   try {
     const aiAvailable = isAIAvailable();
-    console.log(
+    log.info(
       `ContactDiscovery: Starting extraction for ${url} (AI ${
         aiAvailable ? "enabled" : "not enabled - using regex only"
       })`
@@ -332,7 +333,7 @@ export async function discoverAndExtractContactInfo(
         pageContent.includes("captcha") ||
         pageContent.includes("human verification")
       ) {
-        console.log(
+        log.info(
           "ContactDiscovery: Bot detection detected, trying with stealth"
         );
 
@@ -352,7 +353,7 @@ export async function discoverAndExtractContactInfo(
     // Stages 1-3 require AI. Skip them if AI is not available.
     if (aiAvailable) {
       // Stage 1: AI Extraction on Homepage (Primary - Most Comprehensive)
-      console.log(
+      log.info(
         "ContactDiscovery: Stage 1 - AI-assisted extraction on homepage"
       );
       const stage1Result = await extractWithAI(page, url, pageTitle, true);
@@ -372,7 +373,7 @@ export async function discoverAndExtractContactInfo(
           hasAddress ||
           hasSocialLinks
         ) {
-          console.log(
+          log.info(
             "ContactDiscovery: Stage 1 SUCCESS - AI found comprehensive data"
           );
           return stage1Result;
@@ -380,7 +381,7 @@ export async function discoverAndExtractContactInfo(
       }
 
       // Stage 2: Heuristic Discovery + AI Extraction
-      console.log(
+      log.info(
         "ContactDiscovery: Stage 2 - Heuristic link scoring + AI extraction"
       );
       const contactPageUrl = await findContactPageHeuristic(page);
@@ -390,11 +391,11 @@ export async function discoverAndExtractContactInfo(
         // attacker-controlled. Validate before navigation so a malicious page
         // cannot steer the worker to internal/metadata destinations.
         if (!(await validateUrlAsync(contactPageUrl))) {
-          console.warn(
+          log.warn(
             `ContactDiscovery: Stage 2 contact page URL rejected by SSRF guard: ${contactPageUrl}`
           );
         } else {
-          console.log(
+          log.info(
             `ContactDiscovery: Stage 2 found contact page: ${contactPageUrl}`
           );
           await page.goto(contactPageUrl, {
@@ -422,7 +423,7 @@ export async function discoverAndExtractContactInfo(
               hasAddress ||
               hasSocialLinks
             ) {
-              console.log("ContactDiscovery: Stage 2 SUCCESS");
+              log.info("ContactDiscovery: Stage 2 SUCCESS");
               return stage2Result;
             }
           }
@@ -430,7 +431,7 @@ export async function discoverAndExtractContactInfo(
       }
 
       // Stage 3: Fallback Routes + AI Extraction
-      console.log(
+      log.info(
         "ContactDiscovery: Stage 3 - Fallback standard routes + AI extraction"
       );
       const fallbackPath = await checkStandardRoutes(url);
@@ -439,11 +440,11 @@ export async function discoverAndExtractContactInfo(
         const fallbackUrl = new URL(fallbackPath, url).toString();
         // F7 fix (bypass) — validate derived URL before navigation.
         if (!(await validateUrlAsync(fallbackUrl))) {
-          console.warn(
+          log.warn(
             `ContactDiscovery: Stage 3 fallback URL rejected by SSRF guard: ${fallbackUrl}`
           );
         } else {
-          console.log(`ContactDiscovery: Stage 3 trying ${fallbackUrl}`);
+          log.info(`ContactDiscovery: Stage 3 trying ${fallbackUrl}`);
 
           try {
             await page.goto(fallbackUrl, {
@@ -475,23 +476,23 @@ export async function discoverAndExtractContactInfo(
                 hasAddress ||
                 hasSocialLinks
               ) {
-                console.log("ContactDiscovery: Stage 3 SUCCESS");
+                log.info("ContactDiscovery: Stage 3 SUCCESS");
                 return stage3Result;
               }
             }
           } catch (e) {
-            console.log("ContactDiscovery: Stage 3 route not found");
+            log.info("ContactDiscovery: Stage 3 route not found");
           }
         }
       }
     } else {
-      console.log(
+      log.info(
         "ContactDiscovery: AI not enabled - skipping Stages 1-3, using regex fallback only"
       );
     }
 
     // Stage 4: Regex Fallback (Last Resort - Basic Data Only, or only method if AI unavailable)
-    console.log("ContactDiscovery: Stage 4 - Regex fallback (basic data only)");
+    log.info("ContactDiscovery: Stage 4 - Regex fallback (basic data only)");
     // Navigate back to homepage if we navigated away during earlier stages, or if AI was skipped
     const currentUrl = page.url();
     if (currentUrl !== url) {
@@ -500,7 +501,7 @@ export async function discoverAndExtractContactInfo(
     const stage4Result = await scanHomepageForContactInfo(page);
 
     if (stage4Result) {
-      console.log("ContactDiscovery: Stage 4 SUCCESS - Basic regex extraction");
+      log.info("ContactDiscovery: Stage 4 SUCCESS - Basic regex extraction");
       return {
         success: true,
         data: {
@@ -511,14 +512,14 @@ export async function discoverAndExtractContactInfo(
       };
     }
 
-    console.log("ContactDiscovery: All stages failed");
+    log.info("ContactDiscovery: All stages failed");
     return {
       success: false,
       error: "No contact information found",
       method: "failed",
     };
   } catch (error) {
-    console.error("ContactDiscovery error:", error);
+    log.error("ContactDiscovery error:", error);
     return {
       success: false,
       error: `Discovery failed: ${error}`,

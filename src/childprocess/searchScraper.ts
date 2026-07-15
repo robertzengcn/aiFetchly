@@ -1,5 +1,6 @@
 import { searchEngineImpl } from "@/modules/interface/searchEngineImpl"
 import { Page, Browser, InterceptResolutionAction } from 'puppeteer';
+import { log } from "@/modules/Logger";
 import { SMconfig, ScrapeOptions, clusterData, RunResult, ParseType, SearchData, ClusterSearchData,ResultParseItemType } from "@/entityTypes/scrapeType"
 import { evadeChromeHeadlessDetection } from "@/modules/lib/function"
 import { get_http_headers, get_ip_data } from "@/modules/metadata"
@@ -272,14 +273,14 @@ export class SearchScrape implements searchEngineImpl {
                         httpOnly: cookie.httpOnly ?? true,
                         expires: cookie.expirationDate ?? 0
                     };
-                    console.log("prepare to set cookies of",mappedCookie)
+                    log.info("prepare to set cookies of",mappedCookie)
                     //console.log("Setting cookie in browser context:", mappedCookie);
                     await this.page.setCookie(mappedCookie)
                     // Set cookie in browser context
                     //await browserContext.setCookie(mappedCookie);
                     
                     // Also set cookie in page context
-                    console.log("Setting cookie in page context:", mappedCookie);
+                    log.info("Setting cookie in page context:", mappedCookie);
                     //await pageContext.browser().setCookie(mappedCookie);
                 }
             }
@@ -327,7 +328,7 @@ export class SearchScrape implements searchEngineImpl {
 
         //console.log("browser cookies=%O",await this.page.browser().cookies());
         if (!do_continue) {
-            console.error('Failed to load the search engine: load_search_engine()');
+            log.error('Failed to load the search engine: load_search_engine()');
         } else {
             await this.scraping_loop();
         }
@@ -353,10 +354,10 @@ export class SearchScrape implements searchEngineImpl {
                                   cookie.sameSite === 'Lax' ? 'lax' as const :
                                   cookie.sameSite === 'Strict' ? 'strict' as const : 'unspecified' as const
                     }));
-                    console.log(`Captured ${updatedCookies.length} updated cookies for account ${this.accountId}`);
+                    log.info(`Captured ${updatedCookies.length} updated cookies for account ${this.accountId}`);
                 }
             } catch (error) {
-                console.error('Failed to capture updated cookies:', error);
+                log.error('Failed to capture updated cookies:', error);
             }
         }
 
@@ -436,7 +437,7 @@ export class SearchScrape implements searchEngineImpl {
             // Save a screenshot of the results.
             if(this.config.debug_log_path){
                 await this.page.evaluate(() => {
-                    console.log('Current User Agent:', navigator.userAgent);
+                    log.info('Current User Agent:', navigator.userAgent);
                 });
                 await new Promise(resolve => setTimeout(resolve, 1000));
                 this.logger.info("headless-evasion-result path:"+path.join(this.config.debug_log_path, 'headless-evasion-result.png') as `${string}.png`)
@@ -641,8 +642,8 @@ export class SearchScrape implements searchEngineImpl {
                         // this.results[keyword][this.page_num] = await this.parse_async(html);
                         const pareseres: SearchData | void = await this.parse_async();
                         if (pareseres) {
-                            console.log(`pareseres: ${pareseres}`);
-                            console.log(`pareseres.results: ${pareseres.results}`); 
+                            log.info(`pareseres: ${pareseres}`);
+                            log.info(`pareseres.results: ${pareseres.results}`); 
                             //this.results[keyword][this.page_num].value = pareseres.results;
                             //this.results[keyword].set(this.page_num,{value:pareseres.results})
                             const resultParseItem:ResultParseItemType={

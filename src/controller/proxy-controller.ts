@@ -1,6 +1,7 @@
 // import * as path from "path"
 import * as fs from "fs"
 import Papa from 'papaparse';
+import { log } from "@/modules/Logger";
 import fetch from 'node-fetch';
 // import { fetch as undicifetch,Agent } from "undici";
 import { HttpsProxyAgent } from 'https-proxy-agent';
@@ -95,7 +96,7 @@ export class ProxyController {
             const req = http.request(options);
             req.on('connect', (res, socket) => {
                 socket.on('error', (socketError) => {
-                    console.log(`HTTP proxy socket error after connect: ${socketError.message}`);
+                    log.info(`HTTP proxy socket error after connect: ${socketError.message}`);
                     resolve(false);
                 });
                 socket.end();
@@ -103,12 +104,12 @@ export class ProxyController {
             });
 
             req.on('error', (error) => {
-                console.log(`HTTP proxy error: ${error.message}`);
+                log.info(`HTTP proxy error: ${error.message}`);
                 resolve(false);
             });
             
             req.on('timeout', () => {
-                console.log(`HTTP proxy timeout after ${timeout}ms`);
+                log.info(`HTTP proxy timeout after ${timeout}ms`);
                 req.destroy();
                 resolve(false);
             });
@@ -139,7 +140,7 @@ export class ProxyController {
             const req = http.request(options);
             req.on('connect', (res, socket) => {
                 socket.on('error', (socketError) => {
-                    console.log(`SOCKS proxy socket error after connect: ${socketError.message}`);
+                    log.info(`SOCKS proxy socket error after connect: ${socketError.message}`);
                     resolve(false);
                 });
                 socket.end();
@@ -147,12 +148,12 @@ export class ProxyController {
             });
 
             req.on('error', (error) => {
-                console.log(`SOCKS proxy error: ${error.message}`);
+                log.info(`SOCKS proxy error: ${error.message}`);
                 resolve(false);
             });
             
             req.on('timeout', () => {
-                console.log(`SOCKS proxy timeout after ${timeout}ms`);
+                log.info(`SOCKS proxy timeout after ${timeout}ms`);
                 req.destroy();
                 resolve(false);
             });
@@ -172,7 +173,7 @@ export class ProxyController {
 
             if (proxyEntity.protocol.includes('http')) {
                 // For HTTP/HTTPS proxies, use CONNECT method
-                console.log(`Checking HTTP proxy: ${proxyEntity.host}:${proxyEntity.port}`);
+                log.info(`Checking HTTP proxy: ${proxyEntity.host}:${proxyEntity.port}`);
                 isValid = await this.checkHttpProxy(
                     proxyEntity.host, 
                     proxyEntity.port, 
@@ -183,7 +184,7 @@ export class ProxyController {
                 );
             } else if (proxyEntity.protocol.includes('socks')) {
                 // For SOCKS proxies, use CONNECT method
-                console.log(`Checking SOCKS proxy: ${proxyEntity.host}:${proxyEntity.port}`);
+                log.info(`Checking SOCKS proxy: ${proxyEntity.host}:${proxyEntity.port}`);
                 isValid = await this.checkSocksProxy(
                     proxyEntity.host, 
                     proxyEntity.port, 
@@ -197,10 +198,10 @@ export class ProxyController {
             }
 
             if (isValid) {
-                console.log(`Proxy ${proxyEntity.host}:${proxyEntity.port} is valid`);
+                log.info(`Proxy ${proxyEntity.host}:${proxyEntity.port} is valid`);
                 return { status: true, msg: "", data: true };
             } else {
-                console.log(`Proxy ${proxyEntity.host}:${proxyEntity.port} is invalid`);
+                log.info(`Proxy ${proxyEntity.host}:${proxyEntity.port} is invalid`);
                 return { status: false, msg: "proxy check failure", data: false };
             }
         } catch (error) {
@@ -208,7 +209,7 @@ export class ProxyController {
             if (error instanceof Error) {
                 message = error.message;
             }
-            console.log(`Proxy check error: ${message}`);
+            log.info(`Proxy check error: ${message}`);
             throw new Error('Proxy is not valid, ' + message);
         }
     }
@@ -237,7 +238,7 @@ export class ProxyController {
                         childPath = altPath2;
                     } else {
                         const errorMsg = `Google proxy check child process not found. Tried: ${childPath}, ${altPath1}, ${altPath2}. Please rebuild the application.`;
-                        console.error(errorMsg);
+                        log.error(errorMsg);
                         reject(new Error(errorMsg));
                         return;
                     }
@@ -257,7 +258,7 @@ export class ProxyController {
                 try {
                     child.kill();
                 } catch (error) {
-                    console.error('Error killing child process:', error);
+                    log.error('Error killing child process:', error);
                 }
                 reject(new Error('Google check timeout'));
             }, timeout + 5000); // Add buffer to timeout
@@ -288,25 +289,25 @@ export class ProxyController {
                         if (typeof msg.data === 'string') {
                             messageData = msg.data;
                         } else {
-                            console.error('Invalid message data type from child process:', message);
+                            log.error('Invalid message data type from child process:', message);
                             clearTimeout(timeoutId);
                             child.removeListener('message', messageHandler);
                             try {
                                 child.kill();
                             } catch (killError) {
-                                console.error('Error killing child process:', killError);
+                                log.error('Error killing child process:', killError);
                             }
                             reject(new Error('Invalid message format from child process'));
                             return;
                         }
                     } else {
-                        console.error('Invalid message format from child process:', message);
+                        log.error('Invalid message format from child process:', message);
                         clearTimeout(timeoutId);
                         child.removeListener('message', messageHandler);
                         try {
                             child.kill();
                         } catch (killError) {
-                            console.error('Error killing child process:', killError);
+                            log.error('Error killing child process:', killError);
                         }
                         reject(new Error('Invalid message format from child process'));
                         return;
@@ -319,7 +320,7 @@ export class ProxyController {
                         try {
                             child.kill();
                         } catch (error) {
-                            console.error('Error killing child process:', error);
+                            log.error('Error killing child process:', error);
                         }
                         if (response.success) {
                             resolve(response.passed);
@@ -332,7 +333,7 @@ export class ProxyController {
                     try {
                         child.kill();
                     } catch (killError) {
-                        console.error('Error killing child process:', killError);
+                        log.error('Error killing child process:', killError);
                     }
                     reject(error);
                 }
@@ -354,27 +355,27 @@ export class ProxyController {
                 try {
                     child.kill();
                 } catch (killError) {
-                    console.error('Error killing child process:', killError);
+                    log.error('Error killing child process:', killError);
                 }
                 reject(error);
             });
             
             // Capture stderr from child process for debugging
             child.stderr?.on('data', (data) => {
-                console.error(`Child process stderr: ${data}`);
+                log.error(`Child process stderr: ${data}`);
             });
             
             // Capture stdout from child process for debugging
             child.stdout?.on('data', (data) => {
-                console.log(`Child process stdout: ${data}`);
+                log.info(`Child process stdout: ${data}`);
             });
         });
     }
 
     //check user's proxy and update db
     public async updateProxyStatus(proxyEntity: ProxyParseItem, proxyID: number, timeout?: number): Promise<void> {
-        console.log("updateProxyStatus")
-        console.log(proxyEntity)
+        log.info("updateProxyStatus")
+        log.info(proxyEntity)
         await this.checkProxy(proxyEntity, timeout).then(async (res) => {
             if (res.status) {
                 //update success status to db
@@ -384,13 +385,13 @@ export class ProxyController {
                 this.checkGooglePass(proxyEntity, timeout).then((googlePassed) => {
                     const googleStatus = googlePassed ? googlePassStatus.Pass : googlePassStatus.Fail;
                     this.proxyCheckdb.updateGooglePassStatus(proxyID, googleStatus).catch((error) => {
-                        console.error(`Error updating Google pass status for proxy ${proxyID}:`, error);
+                        log.error(`Error updating Google pass status for proxy ${proxyID}:`, error);
                     });
                 }).catch((error) => {
-                    console.error(`Error checking Google pass for proxy ${proxyID}:`, error);
+                    log.error(`Error checking Google pass for proxy ${proxyID}:`, error);
                     // Mark as fail if check fails
                     this.proxyCheckdb.updateGooglePassStatus(proxyID, googlePassStatus.Fail).catch((updateError) => {
-                        console.error(`Error updating Google pass status for proxy ${proxyID}:`, updateError);
+                        log.error(`Error updating Google pass status for proxy ${proxyID}:`, updateError);
                     });
                 });
             } else {
@@ -398,7 +399,7 @@ export class ProxyController {
                 await this.proxyCheckdb.updateProxyCheck(proxyID, proxyCheckStatus.Failure)
             }
         }).catch(async (error) => {
-            console.log(error)
+            log.info(error)
             //update status to db
             await this.proxyCheckdb.updateProxyCheck(proxyID, proxyCheckStatus.Failure)
         })
@@ -426,12 +427,12 @@ export class ProxyController {
                                 pass: proxy.pass
                             };
                             await this.updateProxyStatus(element, proxyId, timeout).catch((error) => {
-                                console.log(error);
+                                log.info(error);
                             });
                         }
                     }
                 } catch (error) {
-                    console.log(`Error checking proxy ${proxyId}:`, error);
+                    log.info(`Error checking proxy ${proxyId}:`, error);
                 }
                 
                 checked++;
@@ -455,7 +456,7 @@ export class ProxyController {
                 //check each proxy
                 const res = await this.proxyapi.getProxylist(i, size, "")
                 if (res.status) {
-                    console.log(res)
+                    log.info(res)
                     if (res.data) {
                         res.data.records.forEach(async (item) => {
                             if (item.host && item.port && item.protocol) {
@@ -466,9 +467,9 @@ export class ProxyController {
                                     user: item.username,
                                     pass: item.password
                                 }
-                                console.log(element)
+                                log.info(element)
                                 await this.updateProxyStatus(element, item.id!, timeout).catch((error) => {
-                                    console.log(error)
+                                    log.info(error)
 
                                 })
 
@@ -523,7 +524,7 @@ export class ProxyController {
         //get all failure proxy
         const failureProxy = await this.proxyCheckdb.getProxyByStatus(proxyCheckStatus.Failure);
         if (failureProxy) {
-            console.log(failureProxy)
+            log.info(failureProxy)
             //    const proxycheckres=this.proxyCheckdb
             //remove all failure proxy
             failureProxy.map(async (item) => {

@@ -10,6 +10,7 @@
  */
 
 import { type Browser, type Page } from "puppeteer";
+import { log } from "@/modules/Logger";
 import useProxy from "@lem0-packages/puppeteer-page-proxy";
 import { BrowserManager } from "@/modules/browserManager";
 import type {
@@ -129,10 +130,10 @@ async function applyCookies(page: Page, cookies: unknown[]): Promise<void> {
       };
       await page.setCookie(cookieData);
     } catch (err) {
-      console.error("[YandexMapsWorker] Failed to set cookie:", err);
+      log.error("[YandexMapsWorker] Failed to set cookie:", err);
     }
   }
-  console.log(`[YandexMapsWorker] Applied ${cookies.length} cookies`);
+  log.info(`[YandexMapsWorker] Applied ${cookies.length} cookies`);
 }
 
 // ---------------------------------------------------------------------------
@@ -519,7 +520,7 @@ async function scrapeYandexMaps(msg: StartMessage): Promise<void> {
           }
         });
       });
-      console.log(
+      log.info(
         `[YandexMapsWorker] Proxy rotation enabled with ${proxies.length} proxy(ies). Initial: ${proxies[0].host}:${proxies[0].port}`
       );
     }
@@ -961,7 +962,7 @@ async function scrapeYandexMaps(msg: StartMessage): Promise<void> {
           consecutiveSkips++;
         }
       } catch (err) {
-        console.error(
+        log.error(
           "[YandexMapsWorker] Error extracting card:",
           err instanceof Error ? err.message : err
         );
@@ -1321,7 +1322,7 @@ process.on("message", (msg: WorkerMessage) => {
       browser
         .close()
         .catch((err: unknown) => {
-          console.error(
+          log.error(
             "[YandexMapsWorker] Error closing browser during cancel:",
             err
           );

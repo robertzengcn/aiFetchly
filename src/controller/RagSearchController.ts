@@ -9,6 +9,7 @@ import {
   RAGDocumentModule,
 } from "@/modules/RAGDocumentModule";
 import { RAGDocumentEntity } from "@/entity/RAGDocument.entity";
+import { log } from "@/modules/Logger";
 import { RagConfigApi, ChunkingConfig } from "@/api/ragConfigApi";
 import { RAGChunkModule } from "@/modules/RAGChunkModule";
 
@@ -218,9 +219,9 @@ export class RagSearchController {
       try {
         const deletedChunksCount =
           await this.ragChunkModule.deleteDocumentChunks(id);
-        console.log(`Deleted ${deletedChunksCount} chunks for document ${id}`);
+        log.info(`Deleted ${deletedChunksCount} chunks for document ${id}`);
       } catch (error) {
-        console.error(`Failed to delete chunks for document ${id}:`, error);
+        log.error(`Failed to delete chunks for document ${id}:`, error);
         // Don't return false - document was already deleted successfully
         // Chunks deletion failure is logged but doesn't affect the overall success
       }
@@ -342,16 +343,16 @@ export class RagSearchController {
         const configResponse = await this.ragConfigApi.getChunkingConfig();
         if (configResponse.status && configResponse.data) {
           chunkingOptions = configResponse.data.default_config;
-          console.log("Using remote chunking configuration:", chunkingOptions);
+          log.info("Using remote chunking configuration:", chunkingOptions);
         } else {
-          console.warn("Failed to get remote chunking config, using defaults");
+          log.warn("Failed to get remote chunking config, using defaults");
         }
       } catch (configError) {
-        console.warn(
+        log.warn(
           "Error fetching chunking config from remote server:",
           configError
         );
-        console.log("Using default chunking configuration");
+        log.info("Using default chunking configuration");
       }
 
       // Step 2: Chunk the document
@@ -418,7 +419,7 @@ export class RagSearchController {
         },
       };
     } catch (error) {
-      console.error("Error in chunk and embed document:", error);
+      log.error("Error in chunk and embed document:", error);
       return {
         documentId,
         chunksCreated: 0,
@@ -452,9 +453,9 @@ export class RagSearchController {
         dimension
       );
 
-      console.log(`Embedding model updated to: ${modelName}:${dimension}`);
+      log.info(`Embedding model updated to: ${modelName}:${dimension}`);
     } catch (error) {
-      console.error("Error updating embedding model:", error);
+      log.error("Error updating embedding model:", error);
       throw new Error(
         `Failed to update embedding model: ${
           error instanceof Error ? error.message : "Unknown error"

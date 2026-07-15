@@ -1,4 +1,5 @@
 import { SandboxedSkillExecutor } from "@/service/SandboxedSkillExecutor";
+import { log } from "@/modules/Logger";
 import type { SkillExecutionContext } from "@/entityTypes/skillTypes";
 import type { HookInput, HookOutput } from "@/entityTypes/hookTypes";
 
@@ -65,7 +66,7 @@ function postMessageSafe(
   } catch (postError) {
     const errorMessage =
       postError instanceof Error ? postError.message : String(postError);
-    console.error(`[SkillWorker] Failed to post message: ${errorMessage}`);
+    log.error(`[SkillWorker] Failed to post message: ${errorMessage}`);
   }
 }
 
@@ -172,13 +173,13 @@ if (parentPort) {
 }
 
 process.on("uncaughtException", (error: unknown) => {
-  console.error("[SkillWorker] Uncaught exception:", error);
+  log.error("[SkillWorker] Uncaught exception:", error);
   sendFatalErrorToActiveRequests(error);
   process.exit(1);
 });
 
 process.on("unhandledRejection", (reason: unknown) => {
-  console.error("[SkillWorker] Unhandled rejection:", reason);
+  log.error("[SkillWorker] Unhandled rejection:", reason);
   sendFatalErrorToActiveRequests(reason);
   process.exit(1);
 });

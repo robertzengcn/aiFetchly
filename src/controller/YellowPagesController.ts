@@ -1,4 +1,5 @@
 import { YellowPagesModule } from "@/modules/YellowPagesModule";
+import { log } from "@/modules/Logger";
 import { YellowPagesTaskModule } from "@/modules/YellowPagesTaskModule";
 import { YellowPagesResultModule } from "@/modules/YellowPagesResultModule";
 import { YellowPagesPlatformModule } from "@/modules/YellowPagesPlatformModule";
@@ -99,7 +100,7 @@ export class YellowPagesController {
    */
   async createTask(taskData: YellowPagesTaskData): Promise<number> {
     try {
-      console.log("Creating Yellow Pages task:", taskData);
+      log.info("Creating Yellow Pages task:", taskData);
 
       // Validate task data
       await this.validateTaskData(taskData);
@@ -122,7 +123,7 @@ export class YellowPagesController {
             taskData.account_id
           );
         if (!accountCookies) {
-          console.warn(
+          log.warn(
             `Account ${taskData.account_id} not found, task will run without cookies`
           );
         }
@@ -131,10 +132,10 @@ export class YellowPagesController {
       // Create task using the task module
       const taskId = await this.taskModule.createTask(taskData);
 
-      console.log(`Created Yellow Pages task with ID: ${taskId}`);
+      log.info(`Created Yellow Pages task with ID: ${taskId}`);
       return taskId;
     } catch (error) {
-      console.error("Failed to create Yellow Pages task:", error);
+      log.error("Failed to create Yellow Pages task:", error);
       throw error;
     }
   }
@@ -150,7 +151,7 @@ export class YellowPagesController {
       const tasks = await this.taskModule.listTasks(0, 1000, filters);
       return tasks;
     } catch (error) {
-      console.error("Failed to list Yellow Pages tasks:", error);
+      log.error("Failed to list Yellow Pages tasks:", error);
       throw error;
     }
   }
@@ -181,7 +182,7 @@ export class YellowPagesController {
         progress,
       };
     } catch (error) {
-      console.error(`Failed to get task ${taskId}:`, error);
+      log.error(`Failed to get task ${taskId}:`, error);
       throw error;
     }
   }
@@ -197,15 +198,15 @@ export class YellowPagesController {
     updates: Partial<YellowPagesTask>
   ): Promise<void> {
     try {
-      console.log(`Updating Yellow Pages task ${taskId}:`, updates);
+      log.info(`Updating Yellow Pages task ${taskId}:`, updates);
 
       // Convert updates to entity format
       const entityUpdates = this.convertTaskUpdatesToEntity(updates);
       await this.taskModule.updateTask(taskId, entityUpdates);
 
-      console.log(`Successfully updated Yellow Pages task ${taskId}`);
+      log.info(`Successfully updated Yellow Pages task ${taskId}`);
     } catch (error) {
-      console.error(`Failed to update Yellow Pages task ${taskId}:`, error);
+      log.error(`Failed to update Yellow Pages task ${taskId}:`, error);
       throw error;
     }
   }
@@ -217,15 +218,15 @@ export class YellowPagesController {
    */
   async deleteTask(taskId: number): Promise<void> {
     try {
-      console.log(`Deleting Yellow Pages task ${taskId}`);
+      log.info(`Deleting Yellow Pages task ${taskId}`);
 
       // Delete the task and its results
       await this.taskModule.deleteTask(taskId);
       await this.resultModule.deleteResultsByTaskId(taskId);
 
-      console.log(`Successfully deleted Yellow Pages task ${taskId}`);
+      log.info(`Successfully deleted Yellow Pages task ${taskId}`);
     } catch (error) {
-      console.error(`Failed to delete Yellow Pages task ${taskId}:`, error);
+      log.error(`Failed to delete Yellow Pages task ${taskId}:`, error);
       throw error;
     }
   }
@@ -237,7 +238,7 @@ export class YellowPagesController {
    */
   async startTask(taskId: number): Promise<void> {
     try {
-      console.log(`Starting Yellow Pages task ${taskId}`);
+      log.info(`Starting Yellow Pages task ${taskId}`);
 
       // Update task status to running
       await this.taskModule.updateTaskStatus(taskId, TaskStatus.InProgress);
@@ -245,9 +246,9 @@ export class YellowPagesController {
       // Start the task using the main module
       await this.yellowPagesModule.startTask(taskId);
 
-      console.log(`Successfully started Yellow Pages task ${taskId}`);
+      log.info(`Successfully started Yellow Pages task ${taskId}`);
     } catch (error) {
-      console.error(`Failed to start Yellow Pages task ${taskId}:`, error);
+      log.error(`Failed to start Yellow Pages task ${taskId}:`, error);
       throw error;
     }
   }
@@ -259,7 +260,7 @@ export class YellowPagesController {
    */
   async stopTask(taskId: number): Promise<void> {
     try {
-      console.log(`Stopping Yellow Pages task ${taskId}`);
+      log.info(`Stopping Yellow Pages task ${taskId}`);
 
       // Update task status to stopped
       await this.taskModule.updateTaskStatus(taskId, TaskStatus.Pending);
@@ -267,9 +268,9 @@ export class YellowPagesController {
       // Stop the task using the main module
       await this.yellowPagesModule.stopTask(taskId);
 
-      console.log(`Successfully stopped Yellow Pages task ${taskId}`);
+      log.info(`Successfully stopped Yellow Pages task ${taskId}`);
     } catch (error) {
-      console.error(`Failed to stop Yellow Pages task ${taskId}:`, error);
+      log.error(`Failed to stop Yellow Pages task ${taskId}:`, error);
       throw error;
     }
   }
@@ -281,7 +282,7 @@ export class YellowPagesController {
    */
   async pauseTask(taskId: number): Promise<void> {
     try {
-      console.log(`Pausing Yellow Pages task ${taskId}`);
+      log.info(`Pausing Yellow Pages task ${taskId}`);
 
       // Update task status to paused
       await this.taskModule.updateTaskStatus(taskId, TaskStatus.Paused);
@@ -289,9 +290,9 @@ export class YellowPagesController {
       // Pause the task using the main module
       await this.yellowPagesModule.pauseTask(taskId);
 
-      console.log(`Successfully paused Yellow Pages task ${taskId}`);
+      log.info(`Successfully paused Yellow Pages task ${taskId}`);
     } catch (error) {
-      console.error(`Failed to pause Yellow Pages task ${taskId}:`, error);
+      log.error(`Failed to pause Yellow Pages task ${taskId}:`, error);
       throw error;
     }
   }
@@ -303,7 +304,7 @@ export class YellowPagesController {
    */
   async resumeTask(taskId: number): Promise<void> {
     try {
-      console.log(`Resuming Yellow Pages task ${taskId}`);
+      log.info(`Resuming Yellow Pages task ${taskId}`);
 
       // Resume the task using the main module
       await this.yellowPagesModule.resumeTask(taskId);
@@ -311,9 +312,9 @@ export class YellowPagesController {
       // Update task status to running
       await this.taskModule.updateTaskStatus(taskId, TaskStatus.InProgress);
 
-      console.log(`Successfully resumed Yellow Pages task ${taskId}`);
+      log.info(`Successfully resumed Yellow Pages task ${taskId}`);
     } catch (error) {
-      console.error(`Failed to resume Yellow Pages task ${taskId}:`, error);
+      log.error(`Failed to resume Yellow Pages task ${taskId}:`, error);
       throw error;
     }
   }
@@ -329,7 +330,7 @@ export class YellowPagesController {
     message: string;
   }> {
     try {
-      console.log(`Killing process with PID ${pid}`);
+      log.info(`Killing process with PID ${pid}`);
 
       // Use the process manager to terminate the process by PID
       const success = await this.processManager.terminateProcessByPID(pid);
@@ -339,17 +340,17 @@ export class YellowPagesController {
         const task = await this.processManager.getTaskByPID(pid);
         const taskId = task?.id;
 
-        console.log(`Successfully killed process ${pid} for task ${taskId}`);
+        log.info(`Successfully killed process ${pid} for task ${taskId}`);
 
         // Update task status to reflect that it's no longer running
         if (taskId) {
           try {
             await this.taskModule.updateTaskStatus(taskId, TaskStatus.Pending);
-            console.log(
+            log.info(
               `Updated task ${taskId} status to Pending after killing process`
             );
           } catch (statusUpdateError) {
-            console.warn(
+            log.warn(
               `Failed to update task ${taskId} status:`,
               statusUpdateError
             );
@@ -369,7 +370,7 @@ export class YellowPagesController {
         };
       }
     } catch (error) {
-      console.error(`Failed to kill process ${pid}:`, error);
+      log.error(`Failed to kill process ${pid}:`, error);
       throw error;
     }
   }
@@ -386,15 +387,15 @@ export class YellowPagesController {
     error?: string;
   }> {
     try {
-      console.log(`Getting status for process with PID ${pid}`);
+      log.info(`Getting status for process with PID ${pid}`);
 
       // Use the process manager to check process status by PID
       const status = await this.processManager.checkProcessStatusByPID(pid);
 
-      console.log(`Process ${pid} status:`, status);
+      log.info(`Process ${pid} status:`, status);
       return status;
     } catch (error) {
-      console.error(`Failed to get status for process ${pid}:`, error);
+      log.error(`Failed to get status for process ${pid}:`, error);
       throw error;
     }
   }
@@ -409,7 +410,7 @@ export class YellowPagesController {
       const progress = await this.yellowPagesModule.getTaskProgress(taskId);
       return progress;
     } catch (error) {
-      console.error(`Failed to get progress for task ${taskId}:`, error);
+      log.error(`Failed to get progress for task ${taskId}:`, error);
       throw error;
     }
   }
@@ -453,7 +454,7 @@ export class YellowPagesController {
         },
       };
     } catch (error) {
-      console.error(`Failed to get results for task ${taskId}:`, error);
+      log.error(`Failed to get results for task ${taskId}:`, error);
       throw error;
     }
   }
@@ -473,7 +474,7 @@ export class YellowPagesController {
       const exportData = await this.resultModule.exportResults(taskId, format);
       return exportData;
     } catch (error) {
-      console.error(`Failed to export results for task ${taskId}:`, error);
+      log.error(`Failed to export results for task ${taskId}:`, error);
       throw error;
     }
   }
@@ -541,7 +542,7 @@ export class YellowPagesController {
         results,
       };
     } catch (error) {
-      console.error("Failed to perform bulk operations:", error);
+      log.error("Failed to perform bulk operations:", error);
       throw error;
     }
   }
@@ -561,7 +562,7 @@ export class YellowPagesController {
       const healthStatus = await this.yellowPagesModule.getHealthStatus();
       return healthStatus;
     } catch (error) {
-      console.error("Failed to get health status:", error);
+      log.error("Failed to get health status:", error);
       throw error;
     }
   }
@@ -594,7 +595,7 @@ export class YellowPagesController {
           : undefined,
       }));
     } catch (error) {
-      console.error("Failed to get available platforms:", error);
+      log.error("Failed to get available platforms:", error);
       throw error;
     }
   }
@@ -640,7 +641,7 @@ export class YellowPagesController {
         recentActivity,
       };
     } catch (error) {
-      console.error("Failed to get task statistics:", error);
+      log.error("Failed to get task statistics:", error);
       throw error;
     }
   }
@@ -824,15 +825,15 @@ export class YellowPagesController {
     failedUpdates: number;
   }> {
     try {
-      console.log("YellowPagesController: Checking for orphaned processes...");
+      log.info("YellowPagesController: Checking for orphaned processes...");
       const result = await this.processManager.checkForOrphanedProcesses();
-      console.log(
+      log.info(
         "YellowPagesController: Orphaned process check completed:",
         result
       );
       return result;
     } catch (error) {
-      console.error(
+      log.error(
         "YellowPagesController: Failed to check for orphaned processes:",
         error
       );
@@ -848,17 +849,17 @@ export class YellowPagesController {
    */
   async handleTasksFromPreviousSession(): Promise<number> {
     try {
-      console.log(
+      log.info(
         "YellowPagesController: Handling tasks from previous session..."
       );
       const failedCount =
         await this.taskModule.handleTasksFromPreviousSession();
-      console.log(
+      log.info(
         `YellowPagesController: Successfully handled ${failedCount} tasks from previous session`
       );
       return failedCount;
     } catch (error) {
-      console.error(
+      log.error(
         "YellowPagesController: Failed to handle tasks from previous session:",
         error
       );

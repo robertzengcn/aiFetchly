@@ -1,5 +1,6 @@
 //import { SocialAccount } from "@/modules/socialaccount";
 import { BrowserWindow } from 'electron';
+import { log } from "@/modules/Logger";
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const session = require('electron').session;
 import { AccountCookiesEntity } from "@/entity/AccountCookies.entity";
@@ -146,9 +147,9 @@ export class SocialAccountController {
                     // console.log(randomProxy.url)
                     //convert proxy to string
                     ses.setProxy({ proxyRules: proxyUrl }).then(() => {
-                        console.log('set proxy success, use proxy host:' + randomProxy.host + " port:" + randomProxy.port)
+                        log.info('set proxy success, use proxy host:' + randomProxy.host + " port:" + randomProxy.port)
                     }).catch((error) => {
-                        console.log('set proxy failed, error:' + error)
+                        log.info('set proxy failed, error:' + error)
                     })
                 }
             }
@@ -205,12 +206,12 @@ export class SocialAccountController {
 
                     }
                     try {
-                        console.log(cookieDetails)
+                        log.info(cookieDetails)
                         await ses.cookies.set(cookieDetails)
                     } catch (error) {
                         // Log the error but continue processing remaining cookies
                         // instead of throwing and aborting the entire loop.
-                        console.error(`Failed to set cookie: ${cookie.name}`, error);
+                        log.error(`Failed to set cookie: ${cookie.name}`, error);
                     }
                 }
             }
@@ -225,19 +226,19 @@ export class SocialAccountController {
         // showNotification("test title","test message")
 
         const socialTypeUrl = accinfo.data.social_type_id ? this.getSocialPlatformUrl(accinfo.data.social_type_id) : null
-        console.log(socialTypeUrl)
+        log.info(socialTypeUrl)
         if (socialTypeUrl) {
             await win.loadURL(socialTypeUrl).catch((error: Error) => {
                 const ignoreMsg = ["Message 0 rejected by interface blink.mojom.WidgetHost", "ERR_FAILED (-2)"]
 
                 if (!ignoreMsg.some(msg => error.message.includes(msg))) {
-                    console.log('load url failed, error:' + error.message)
-                    console.error(error)
+                    log.info('load url failed, error:' + error.message)
+                    log.error(error)
                     // showNotification("error","load url failed, error:" + error.message)
                     win.close()
                     throw new Error('load url failed, error:' + error.message)
                 } else {
-                    console.log('Ignored error:', error.message)
+                    log.info('Ignored error:', error.message)
                 }
             })
             // win.loadURL('https://ident.me/ip')
@@ -263,8 +264,8 @@ export class SocialAccountController {
             if (win && (win as any).webContents && (win as any).webContents.session) {
                 const winsession = (win as any).webContents.session
                 const cookiescontent = await winsession.cookies.get({ url: socialTypeUrl })
-                console.log("get cookies:")
-                console.log(cookiescontent)
+                log.info("get cookies:")
+                log.info(cookiescontent)
                 const cookiesstr = JSON.stringify(cookiescontent)
                 if (accinfo.data.id) {
                     // const ace: AccountCookiesEntity = {
