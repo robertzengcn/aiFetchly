@@ -1,6 +1,8 @@
 import { describe, expect, it, beforeEach, vi } from "vitest";
 import { SqliteDb } from "@/config/SqliteDb";
 import { AgentDefinitionModule } from "@/modules/AgentDefinitionModule";
+import { AgentDefinitionEntity } from "@/entity/AgentDefinition.entity";
+import { getAIFetchlyConfigManager } from "@/service/aifetchlyConfig/AIFetchlyConfigManager";
 import type {
   AgentDefinitionView,
   ParsedPluginAgentDefinition,
@@ -20,6 +22,7 @@ beforeEach(() => {
   (SqliteDb as unknown as { initPromise: unknown }).initPromise = null;
   process.env.AIFETCHLY_TEST_DBPATH = tmpDir;
   SqliteDb.getInstance(tmpDir);
+  getAIFetchlyConfigManager().getAgentRegistry().replaceSource("user", []);
 });
 
 vi.mock("@/modules/token", () => ({
@@ -62,6 +65,26 @@ function pluginAgent(
   };
 }
 
+function userRuntimeAgent(name: string): AgentDefinitionView {
+  return {
+    id: `user:agent:${name}`,
+    name,
+    description: `${name} user config agent`,
+    version: 1,
+    systemPrompt: `You are ${name}.`,
+    allowedTools: [],
+    mode: "specialist",
+    maxToolCalls: 8,
+    maxRuntimeMs: 300000,
+    maxContinueCalls: 8,
+    outputSchema: {},
+    status: "active",
+    source: "user",
+    manifest: {},
+    health: "healthy",
+  };
+}
+
 describe("AgentDefinitionModule management", () => {
   it("creates a manual user:<slug> agent, enabled by default", async () => {
     await SqliteDb.ensureInitialized();
@@ -84,6 +107,64 @@ describe("AgentDefinitionModule management", () => {
 
     const all = await m.listAllForManagement();
     expect(all.some((a) => a.id === "user:local-verifier")).toBe(true);
+  });
+
+  it("lists runtime ~/.aifetchly agents with their user source", async () => {
+    await SqliteDb.ensureInitialized();
+    const runtimeAgent = userRuntimeAgent("runtime-helper");
+    getAIFetchlyConfigManager()
+      .getAgentRegistry()
+      .replaceSource("user", [runtimeAgent]);
+
+    const m = new AgentDefinitionModule();
+    const all = await m.listAllForManagement();
+    const found = all.find((a) => a.id === runtimeAgent.id);
+    expect(found?.source).toBe("user");
+    expect(found?.status).toBe("active");
+  });
+
+  it("materializes a runtime user agent when toggled off", async () => {
+    await SqliteDb.ensureInitialized();
+    const runtimeAgent = userRuntimeAgent("toggle-runtime");
+    getAIFetchlyConfigManager()
+      .getAgentRegistry()
+      .replaceSource("user", [runtimeAgent]);
+
+    const m = new AgentDefinitionModule();
+    expect(await m.getActiveById(runtimeAgent.id)).not.toBeNull();
+    expect(await m.toggleAgent(runtimeAgent.id, false)).toBe(true);
+
+    const managed = await m.getForManagement(runtimeAgent.id);
+    expect(managed?.source).toBe("user");
+    expect(managed?.status).toBe("disabled");
+    expect(await m.getActiveById(runtimeAgent.id)).toBeNull();
+  });
+
+  it("normalizes legacy user-scoped rows that stored the built-in default source", async () => {
+    await SqliteDb.ensureInitialized();
+    const row = new AgentDefinitionEntity();
+    row.agentId = "user:agent:legacy-config";
+    row.name = "legacy-config";
+    row.description = "Legacy config agent";
+    row.version = 1;
+    row.systemPrompt = "You are legacy-config.";
+    row.allowedTools = [];
+    row.mode = "specialist";
+    row.maxToolCalls = 8;
+    row.maxRuntimeMs = 300000;
+    row.maxContinueCalls = 8;
+    row.outputSchema = {};
+    row.status = "active";
+    row.source = "built-in";
+    row.health = "healthy";
+    await SqliteDb.getInstance(tmpDir)
+      .connection.getRepository(AgentDefinitionEntity)
+      .save(row);
+
+    const m = new AgentDefinitionModule();
+    const all = await m.listAllForManagement();
+    const found = all.find((a) => a.id === row.agentId);
+    expect(found?.source).toBe("user");
   });
 
   it("rejects a duplicate manual id", async () => {
@@ -151,9 +232,9 @@ describe("AgentDefinitionModule management", () => {
     await SqliteDb.ensureInitialized();
     const m = new AgentDefinitionModule();
     await m.ensureBuiltIns();
-    await expect(
-      m.deleteManualAgent("agent-lead-researcher")
-    ).rejects.toThrow(/Built-in/);
+    await expect(m.deleteManualAgent("agent-lead-researcher")).rejects.toThrow(
+      /Built-in/
+    );
   });
 
   it("refuses to delete a plugin-owned agent directly", async () => {

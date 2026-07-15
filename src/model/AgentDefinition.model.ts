@@ -2,7 +2,18 @@
 import { BaseDb } from "@/model/Basedb";
 import { Repository } from "typeorm";
 import { AgentDefinitionEntity } from "@/entity/AgentDefinition.entity";
-import type { AgentDefinitionView } from "@/entityTypes/agentTypes";
+import type {
+  AgentDefinitionSource,
+  AgentDefinitionView,
+} from "@/entityTypes/agentTypes";
+
+function inferSource(e: AgentDefinitionEntity): AgentDefinitionSource {
+  if (e.pluginName) return "plugin";
+  if (e.agentId.startsWith("user:")) return "user";
+  if (e.agentId.startsWith("workspace:")) return "workspace";
+  if (e.source) return e.source as AgentDefinitionSource;
+  return "built-in";
+}
 
 function toView(e: AgentDefinitionEntity): AgentDefinitionView {
   let manifest: Record<string, unknown> = {};
@@ -27,7 +38,7 @@ function toView(e: AgentDefinitionEntity): AgentDefinitionView {
     maxContinueCalls: e.maxContinueCalls,
     outputSchema: e.outputSchema,
     status: e.status as AgentDefinitionView["status"],
-    source: (e.source ?? "built-in") as AgentDefinitionView["source"],
+    source: inferSource(e),
     pluginName: e.pluginName ?? undefined,
     pluginComponentPath: e.pluginComponentPath ?? undefined,
     manifest,

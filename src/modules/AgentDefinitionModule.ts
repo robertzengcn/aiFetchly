@@ -3,6 +3,7 @@ import { BaseModule } from "@/modules/baseModule";
 import { AgentDefinitionModel } from "@/model/AgentDefinition.model";
 import { InstalledPluginModel } from "@/model/InstalledPlugin.model";
 import { AgentDefinitionRegistry } from "@/service/AgentDefinitionRegistry";
+import { getAIFetchlyConfigManager } from "@/service/aifetchlyConfig/AIFetchlyConfigManager";
 import { sanitizeAgentSegment } from "@/service/pluginCompat/ClaudeAgentFormatAdapter";
 import type {
   AgentDefinitionView,
@@ -40,13 +41,15 @@ export class AgentDefinitionModule extends BaseModule {
   async listActiveForRuntime(): Promise<AgentDefinitionView[]> {
     await this.ensureConnection();
     const enabled = await this.enabledPluginNames();
-    const all = await this.model.listActiveHealthy();
+    const all = this.mergeWithRuntimeDefinitions(await this.model.listAll());
     return all.filter((a) => this.isRuntimeEligible(a, enabled));
   }
 
   async getActiveById(agentId: string): Promise<AgentDefinitionView | null> {
     await this.ensureConnection();
-    const a = await this.model.getActiveHealthyById(agentId);
+    const persisted = await this.model.getById(agentId);
+    const runtime = this.getRuntimeDefinition(agentId);
+    const a = persisted ?? runtime;
     if (!a) return null;
     const enabled = await this.enabledPluginNames();
     return this.isRuntimeEligible(a, enabled) ? a : null;
@@ -73,12 +76,35 @@ export class AgentDefinitionModule extends BaseModule {
 
   async listAllForManagement(): Promise<AgentDefinitionView[]> {
     await this.ensureConnection();
-    return this.model.listAll();
+    return this.mergeWithRuntimeDefinitions(await this.model.listAll());
   }
 
   async getForManagement(agentId: string): Promise<AgentDefinitionView | null> {
     await this.ensureConnection();
-    return this.model.getById(agentId);
+    return (
+      (await this.model.getById(agentId)) ?? this.getRuntimeDefinition(agentId)
+    );
+  }
+
+  private mergeWithRuntimeDefinitions(
+    persisted: readonly AgentDefinitionView[]
+  ): AgentDefinitionView[] {
+    const merged = new Map<string, AgentDefinitionView>();
+    for (const agent of this.listRuntimeDefinitions()) {
+      merged.set(agent.id, agent);
+    }
+    for (const agent of persisted) {
+      merged.set(agent.id, agent);
+    }
+    return [...merged.values()].sort((a, b) => a.id.localeCompare(b.id));
+  }
+
+  private listRuntimeDefinitions(): AgentDefinitionView[] {
+    return getAIFetchlyConfigManager().getAgentRegistry().list();
+  }
+
+  private getRuntimeDefinition(agentId: string): AgentDefinitionView | null {
+    return getAIFetchlyConfigManager().getAgentRegistry().getById(agentId);
   }
 
   /**
@@ -184,7 +210,16 @@ export class AgentDefinitionModule extends BaseModule {
 
   async toggleAgent(agentId: string, enabled: boolean): Promise<boolean> {
     await this.ensureConnection();
-    return this.model.toggle(agentId, enabled);
+    const toggled = await this.model.toggle(agentId, enabled);
+    if (toggled) return true;
+
+    const runtime = this.getRuntimeDefinition(agentId);
+    if (!runtime || runtime.source === "built-in") return false;
+    await this.model.upsert({
+      ...runtime,
+      status: enabled ? "active" : "disabled",
+    });
+    return true;
   }
 
   /**
