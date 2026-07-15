@@ -12,6 +12,10 @@
       </strong>
       {{ detail.sourceKind }}<span v-if="detail.sourceUri"> · {{ detail.sourceUri }}</span><span v-if="detail.sourceRef"> · {{ detail.sourceRef }}</span>
     </p>
+    <p v-if="detail.marketplaceName">
+      <strong>{{ t("plugins.marketplace.column_marketplace") || "Marketplace" }}:</strong>
+      {{ detail.marketplaceName }}<span v-if="detail.entryName"> · {{ detail.entryName }}</span>
+    </p>
     <p class="mt-2">{{ detail.description }}</p>
   </div>
 </template>

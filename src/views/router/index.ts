@@ -9,7 +9,7 @@ export const constantRoutes: RouteRecordRaw[] = [
     redirect: "/dashboard/home",
     name: "Dashboard",
     meta: {
-      visible: false,
+      visible: true,
       title: "route.dashboard",
       icon: "mdi-view-dashboard",
     },
@@ -22,9 +22,57 @@ export const constantRoutes: RouteRecordRaw[] = [
           title: "route.home",
           icon: "mdi-home",
           keepAlive: false,
-          visible: false,
+          visible: true,
         },
         component: () => import("@/views/dashboard/home.vue"),
+        children: [],
+      },
+    ],
+  },
+  {
+    path: "/insights",
+    name: "Insights",
+    meta: {
+      visible: true,
+      title: "route.insights",
+      icon: "mdi-compass-outline",
+    },
+    component: Layout,
+    children: [
+      {
+        path: "",
+        name: "InsightsHome",
+        meta: {
+          title: "route.insights",
+          icon: "mdi-compass-outline",
+          keepAlive: false,
+          visible: true,
+        },
+        component: () => import("@/views/pages/insights/index.vue"),
+        children: [],
+      },
+    ],
+  },
+  {
+    path: "/statistic",
+    name: "Statistic",
+    meta: {
+      visible: false,
+      title: "route.statistic",
+      icon: "mdi-chart-box-outline",
+    },
+    component: Layout,
+    children: [
+      {
+        path: "",
+        name: "statistic_page",
+        meta: {
+          title: "route.statistic",
+          icon: "mdi-chart-box-outline",
+          keepAlive: false,
+          visible: true,
+        },
+        component: () => import("@/views/pages/statistic/index.vue"),
         children: [],
       },
     ],
@@ -76,6 +124,18 @@ export const constantRoutes: RouteRecordRaw[] = [
         children: [],
       },
       {
+        path: "hooks",
+        name: "system_setting_hooks",
+        meta: {
+          title: "route.hooks_management",
+          icon: "mdi-hook",
+          keepAlive: false,
+          visible: false,
+        },
+        component: () => import("@/views/pages/systemsetting/Hooks.vue"),
+        children: [],
+      },
+      {
         path: "plugins",
         name: "system_setting_plugins",
         meta: {
@@ -85,6 +145,22 @@ export const constantRoutes: RouteRecordRaw[] = [
           visible: false,
         },
         component: () => import("@/views/pages/systemsetting/plugins.vue"),
+        children: [],
+      },
+      {
+        path: "subagents",
+        name: "system_setting_subagents",
+        meta: {
+          title: "route.subagents",
+          icon: "mdi-robot-outline",
+          keepAlive: false,
+          visible: false,
+          aiNavigable: true,
+          aiAliases: ["subagents", "agents", "agent management"],
+          aiDescription:
+            "Manage built-in, plugin-installed, and manual subagents",
+        },
+        component: () => import("@/views/pages/systemsetting/subagents.vue"),
         children: [],
       },
     ],
@@ -246,7 +322,7 @@ export const constantRoutes: RouteRecordRaw[] = [
     path: "/search",
     name: "Search",
     meta: {
-      visible: true,
+      visible: false,
       title: "route.search",
       icon: "mdi-magnify",
     },
@@ -310,7 +386,7 @@ export const constantRoutes: RouteRecordRaw[] = [
     path: "/emailextraction",
     name: "Email_Extraction",
     meta: {
-      visible: true,
+      visible: false,
       title: "route.email_extraction",
       icon: "mdi-email-search",
     },
@@ -374,7 +450,7 @@ export const constantRoutes: RouteRecordRaw[] = [
     path: "/yellowpages",
     name: "Yellow_Pages",
     meta: {
-      visible: true,
+      visible: false,
       title: "route.yellow_pages",
       icon: "mdi-database-search",
     },
@@ -436,7 +512,7 @@ export const constantRoutes: RouteRecordRaw[] = [
     path: "/map-scraper",
     name: "Map_Scraper",
     meta: {
-      visible: true,
+      visible: false,
       title: "route.map_scraper",
       icon: "mdi-map-marker-multiple",
     },
@@ -481,12 +557,25 @@ export const constantRoutes: RouteRecordRaw[] = [
     path: "/emailmarketing",
     name: "Email_Marketing",
     meta: {
-      visible: true,
+      visible: false,
       title: "route.email_marketing",
       icon: "mdi-email-multiple",
     },
     component: Layout,
     children: [
+      {
+        path: "",
+        component: () =>
+          import(
+            /* webpackChunkName: "email-marketing" */ "@/views/pages/emailmarketing/index.vue"
+          ),
+        name: "Email_Marketing_Index",
+        meta: {
+          visible: false,
+          title: "route.email_marketing",
+          icon: "mdi-email-multiple",
+        },
+      },
       {
         path: "buckemailtask/list/",
         component: () =>
@@ -652,6 +741,58 @@ export const constantRoutes: RouteRecordRaw[] = [
         component: () =>
           import(
             /* webpackChunkName: "staff-list" */ "@/views/pages/emailservice/servicedetail.vue"
+          ),
+      },
+      {
+        path: "emailreceive/list",
+        name: "Email_Receive_List",
+        meta: {
+          visible: true,
+          title: "route.email_receive",
+          icon: "mdi-inbox-arrow-down",
+        },
+        component: () =>
+          import(
+            /* webpackChunkName: "email-receive" */ "@/views/pages/emailreceive/list.vue"
+          ),
+      },
+      {
+        path: "emailreceive/detail/:id(\\d+)",
+        name: "Email_Receive_Detail",
+        meta: {
+          visible: false,
+          title: "route.email_receive_detail",
+          icon: "mdi-email-open",
+        },
+        component: () =>
+          import(
+            /* webpackChunkName: "email-receive" */ "@/views/pages/emailreceive/detail.vue"
+          ),
+      },
+      {
+        path: "emailreply/audit/list",
+        name: "AI_Auto_Reply_Audit_List",
+        meta: {
+          visible: true,
+          title: "route.ai_auto_replies",
+          icon: "mdi-robot-outline",
+        },
+        component: () =>
+          import(
+            /* webpackChunkName: "email-reply-audit" */ "@/views/pages/emailreply/auditlist.vue"
+          ),
+      },
+      {
+        path: "emailreply/audit/detail/:id(\\d+)",
+        name: "AI_Auto_Reply_Audit_Detail",
+        meta: {
+          visible: false,
+          title: "route.ai_auto_reply_detail",
+          icon: "mdi-robot-outline",
+        },
+        component: () =>
+          import(
+            /* webpackChunkName: "email-reply-audit" */ "@/views/pages/emailreply/auditdetail.vue"
           ),
       },
     ],

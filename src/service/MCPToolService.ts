@@ -1,6 +1,12 @@
 import { MCPToolEntity } from "@/entity/MCPTool.entity";
 import { MCPToolModule } from "@/modules/MCPToolModule";
 import { MCPClient } from "@/modules/MCPClient";
+import { PluginOptionsStore } from "@/service/pluginCompat/PluginOptionsStore";
+import {
+  buildPluginToolName,
+  buildLegacyToolName,
+  unscopeServerName,
+} from "@/service/pluginCompat/McpToolNaming";
 import { MCP_CALL_TIMEOUT_MS } from "@/config/mcpConfig";
 import { MCPTimeoutError } from "@/service/MCPTimeoutError";
 import type { ToolFunction } from "@/api/aiChatApi";
@@ -8,6 +14,8 @@ import {
   mcpServerConfigSchema,
   mcpServerConfigUpdateSchema,
 } from "@/schemas/config/mcpServer";
+import { Token } from "@/modules/token";
+import { getPluginInstallRoot } from "@/service/pluginPaths";
 
 export interface MCPServerConfig {
   serverName: string;
@@ -34,6 +42,10 @@ export interface MCPToolWithServer {
   serverName: string;
   toolName: string;
   toolInfo: MCPToolInfo;
+  /** Origin — "plugin" enables dual-format tool naming (PRD AC-6). */
+  origin?: "manual" | "plugin";
+  /** Plugin owner; required when origin === "plugin". */
+  pluginName?: string;
 }
 
 /**
@@ -51,6 +63,7 @@ function buildClientConfig(server: MCPToolEntity): {
   command?: string;
   args?: string[];
   env?: Record<string, string>;
+  cwd?: string;
 } {
   const base: {
     host?: string;
@@ -62,6 +75,7 @@ function buildClientConfig(server: MCPToolEntity): {
     command?: string;
     args?: string[];
     env?: Record<string, string>;
+    cwd?: string;
   } = {
     transport: server.transport,
     authType: server.authType,
@@ -78,6 +92,33 @@ function buildClientConfig(server: MCPToolEntity): {
       ? safeJsonParseStringArray(server.argsJson)
       : [];
     base.env = server.envJson ? safeJsonParseRecord(server.envJson) : undefined;
+    // Set working directory to the plugin install root so relative paths
+    // in command args (e.g., "servers/echo.js") resolve correctly.
+    if (server.pluginName && server.origin === "plugin") {
+      base.cwd = getPluginInstallRoot(server.pluginName);
+    }
+    // Plugin-owned MCP servers may declare ${VAR} placeholders in env.
+    // Resolve them against the per-plugin options store before spawn.
+    if (base.env && server.pluginName && server.origin === "plugin") {
+      const scopedName = server.serverName;
+      const resolved = PluginOptionsStore.resolveEnv(
+        server.pluginName,
+        scopedName,
+        base.env
+      );
+      if (resolved.ok) {
+        base.env = resolved.env;
+      } else {
+        // Unresolved placeholders — leave them in place; the spawn will
+        // surface a clear error. The Plugin Manager UI renders the
+        // missing vars so the user can supply values.
+        console.warn(
+          `[MCPToolService] plugin "${server.pluginName}" server ` +
+            `"${scopedName}" has unresolved env placeholders: ` +
+            `${resolved.missing.join(", ")}`
+        );
+      }
+    }
   } else {
     // Legacy manual server or network transport.
     if (server.host) base.host = server.host;
@@ -137,6 +178,66 @@ export class MCPToolService {
 
   private createClientForServer(server: MCPToolEntity): MCPClient {
     return new MCPClient(buildClientConfig(server));
+  }
+
+  /**
+   * F1 fix — stdio MCP servers execute arbitrary local commands via
+   * child_process.spawn. Treat them like shell-tool invocations: refuse to
+   * spawn until the user has explicitly trusted the server. Transport
+   * 'sse' / 'websocket' is unaffected (they open outbound sockets, not
+   * local processes).
+   *
+   * Trust is stored as a Token flag `MCP_TRUST_<id>` = "true". The
+   * frontend grants it through the MCP_TOOL_TRUST IPC handler. Plugin-
+   * imported servers start untrusted and must be explicitly approved
+   * before discovery / execution.
+   */
+  private assertStdioTrusted(server: MCPToolEntity): void {
+    if (server.transport !== "stdio") return;
+    if (server.id === undefined || server.id === null) {
+      throw new Error(
+        "MCP stdio server has no id; cannot verify trust status."
+      );
+    }
+    let trusted: string | undefined;
+    try {
+      trusted = new Token().getValue(`MCP_TRUST_${server.id}`);
+    } catch {
+      // Token service unreachable → fail-closed.
+      throw new Error(
+        `Unable to verify trust for MCP stdio server "${server.serverName}". Token service unavailable.`
+      );
+    }
+    if (trusted !== "true") {
+      throw new Error(
+        `MCP stdio server "${server.serverName}" requires explicit trust approval before it can spawn a local process.`
+      );
+    }
+  }
+
+  /** Grant or revoke trust for an MCP server (idempotent). */
+  setTrust(serverId: number, trusted: boolean): void {
+    const token = new Token();
+    token.setValue(`MCP_TRUST_${serverId}`, trusted ? "true" : "");
+  }
+
+  /** Returns true when the given stdio server has been explicitly trusted. */
+  isTrusted(serverId: number): boolean {
+    try {
+      return new Token().getValue(`MCP_TRUST_${serverId}`) === "true";
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Returns the human-readable server name for a given id, or null when the
+   * server does not exist. Used by the trust-approval IPC handler to label
+   * the native confirmation dialog with the exact server being approved.
+   */
+  async getServerName(serverId: number): Promise<string | null> {
+    const server = await this.mcpToolModule.getMCPToolById(serverId);
+    return server?.serverName ?? null;
   }
 
   /**
@@ -229,6 +330,8 @@ export class MCPToolService {
                 enabled: true,
                 customConfig: config.customConfig,
               },
+              origin: server.origin,
+              pluginName: server.pluginName,
             });
           }
         }
@@ -249,9 +352,19 @@ export class MCPToolService {
     const toolFunctions: ToolFunction[] = [];
 
     for (const tool of enabledTools) {
+      // Plugin-owned tools use the mcp__<plugin>__<server>__<tool> format
+      // (PRD AC-6); legacy/manual tools keep the mcp_<serverId>_<tool> format.
+      const name =
+        tool.origin === "plugin" && tool.pluginName
+          ? buildPluginToolName(
+              tool.pluginName,
+              unscopeServerName(tool.pluginName, tool.serverName),
+              tool.toolName
+            )
+          : buildLegacyToolName(tool.serverId, tool.toolName);
       toolFunctions.push({
         type: "function",
-        name: `mcp_${tool.serverId}_${tool.toolName}`,
+        name,
         description:
           tool.toolInfo.description ||
           `MCP tool ${tool.toolName} from ${tool.serverName}`,
@@ -353,6 +466,8 @@ export class MCPToolService {
     if (!server) {
       throw new Error(`MCP server with id ${serverId} not found`);
     }
+
+    this.assertStdioTrusted(server);
 
     const client = this.createClientForServer(server);
 
@@ -492,6 +607,7 @@ export class MCPToolService {
     }
 
     this.assertToolEnabled(server, toolName);
+    this.assertStdioTrusted(server);
 
     const client = this.createClientForServer(server);
     const callTimeoutMs = MCP_CALL_TIMEOUT_MS;
@@ -555,6 +671,8 @@ export class MCPToolService {
     if (!server) {
       throw new Error(`MCP server with id ${serverId} not found`);
     }
+
+    this.assertStdioTrusted(server);
 
     const client = this.createClientForServer(server);
 

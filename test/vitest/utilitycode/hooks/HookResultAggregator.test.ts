@@ -14,7 +14,6 @@ function cbHook(
     eventName: "PreToolUse",
     source: "builtin",
     enabled: true,
-    trusted: true,
     type: "callback",
     callback: () => ({}),
     ...overrides,

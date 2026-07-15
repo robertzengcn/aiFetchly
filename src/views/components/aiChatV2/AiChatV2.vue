@@ -79,13 +79,14 @@
     <!-- Main content (no sidebar) -->
     <div class="v2-shell__body">
       <AiChatV2Messages
-        :messages="messages"
+        :messages="visibleMessages"
         :active-assistant-message-id="activeAssistantMessageId"
         :stream-status="streamStatus"
         :error-message="streamError ?? undefined"
         :show-typing-indicator="showTypingIndicator"
         :is-streaming="chatIsRunning"
         :retry-info="retryInfo"
+        :recovery-info="recoveryInfo"
         :workspace-root="activeWorkspace?.rootPath ?? ''"
         @grant-permission="handleSkillPermissionGrant"
         @deny-permission="handleSkillPermissionDeny"
@@ -94,13 +95,27 @@
         @request-plan-changes="handleRequestPlanChanges"
       />
 
-      <!-- Pinned action cards: question + plan approval while awaiting user input.
+      <!-- Pinned action cards: permission + question + plan approval while awaiting user input.
            After the user approves/rejects/requests changes, the plan card moves
            into the message flow (see handleApprovePlan et al.). -->
       <div
-        v-if="mode === 'plan' && (pendingQuestion || pendingPlanApproval)"
+        v-if="
+          pinnedPermissionPrompt ||
+          (mode === 'plan' && (pendingQuestion || pendingPlanApproval))
+        "
         class="v2-shell__plan-panel"
       >
+        <SkillApprovalCard
+          v-if="pinnedPermissionPrompt"
+          :tool-name="pinnedPermissionToolName"
+          :permission-category="pinnedPermissionCategory"
+          :shell-preview="pinnedPermissionShellPreview"
+          :workspace-root="activeWorkspace?.rootPath ?? ''"
+          :disabled="pinnedPermissionResumeInFlight"
+          :loading="pinnedPermissionResumeInFlight"
+          @grant="handlePinnedPermissionGrant"
+          @deny="handlePinnedPermissionDeny"
+        />
         <AiChatV2QuestionCard
           v-if="pendingQuestion"
           :question="pendingQuestion"
@@ -181,8 +196,10 @@
       <div class="v2-shell__workspace-panel">
         <WorkspaceBadge
           :workspace="activeWorkspace"
+          :memory-count="workspaceMemoryCount"
           class="mb-1"
           @request-set-workspace="handleWorkspaceSetupRequest"
+          @request-open-memory="openWorkspaceMemory"
         />
         <WorkspaceRequiredCard
           v-if="showWorkspaceRequired && activeConversationId"
@@ -192,8 +209,29 @@
         />
       </div>
 
+      <v-dialog v-model="showWorkspaceMemory" max-width="760">
+        <v-card>
+          <v-card-title class="d-flex align-center">
+            <v-icon class="mr-2">mdi-brain</v-icon>
+            <span>{{
+              t("workspaceMemory.panelTitle") || "Workspace memory"
+            }}</span>
+            <v-spacer />
+            <v-btn icon="mdi-close" variant="text" size="small" @click="showWorkspaceMemory = false" />
+          </v-card-title>
+          <v-divider />
+          <WorkspaceMemoryPanel
+            v-if="activeConversationId"
+            :conversation-id="activeConversationId"
+            :workspace="activeWorkspace"
+            @change="refreshWorkspaceMemoryCount"
+          />
+        </v-card>
+      </v-dialog>
+
       <AiChatV2Composer
         :is-streaming="chatIsRunning"
+        :is-processing="isPreparingAttachments"
         @send="onSend"
         @stop="onStop"
       >
@@ -342,7 +380,11 @@ import type {
   ChatV2MessageView,
   ChatV2ConversationSummary,
   ChatV2StreamChunk,
+  ChatV2StreamRequest,
   ChatV2MessageMetadata,
+  ChatV2UploadedAttachment,
+  ChatV2AttachmentKind,
+  ChatV2AttachmentMetadata,
   ChatToolApprovalMode,
 } from "@/entityTypes/aiChatV2Types";
 import type {
@@ -383,11 +425,14 @@ import AiChatV2PlanApprovalCard from "./AiChatV2PlanApprovalCard.vue";
 import AiChatV2PlanStatusBadge from "./AiChatV2PlanStatusBadge.vue";
 import AiChatV2ContextBadge from "./AiChatV2ContextBadge.vue";
 import FileOperationBadge from "../aiChat/FileOperationBadge.vue";
+import SkillApprovalCard from "../aiChat/SkillApprovalCard.vue";
 import MCPToolManager from "../aiChat/MCPToolManager.vue";
 import AgentTaskListDialog from "./AgentTaskListDialog.vue";
 import WorkspaceBadge from "./WorkspaceBadge.vue";
 import WorkspaceRequiredCard from "./WorkspaceRequiredCard.vue";
+import WorkspaceMemoryPanel from "./WorkspaceMemoryPanel.vue";
 import { getWorkspace } from "@/views/api/workspace";
+import { workspaceMemoryApi } from "@/views/api/aiWorkspaceMemory";
 import type { WorkspaceSummary } from "@/entityTypes/workspaceTypes";
 import type { FileOperationRecord } from "@/entityTypes/fileOperationTypes";
 import {
@@ -401,6 +446,10 @@ import {
   DEFAULT_CONTEXT_WINDOW,
 } from "./contextUsageUtil";
 import { hasPendingToolExecution } from "./toolExecutionStateUtil";
+import {
+  downscaleImageAttachment,
+  arrayBufferToBase64,
+} from "./imageScaleUtil";
 import { QUOTA_EXHAUSTED_SENTINEL } from "@/service/AIChatErrorMapper";
 
 /**
@@ -418,10 +467,26 @@ const CHARS_PER_TOKEN_ESTIMATE = 4;
 const AUTO_MODEL_VALUE = "auto";
 
 type Status = "idle" | "streaming" | "cancelled" | "error";
+type ShellPreview = {
+  command: string;
+  cwd?: string;
+  shell: string;
+  timeout_ms: number;
+};
 
 const { t } = useI18n();
 const router = useRouter();
 
+interface AiPromptRequest {
+  id: number;
+  text: string;
+}
+
+const props = defineProps<{
+  promptRequest?: AiPromptRequest | null;
+}>();
+
+const lastHandledPromptRequestId = ref<number | null>(null);
 const conversations = ref<ChatV2ConversationSummary[]>([]);
 const activeConversationId = ref<string | null>(null);
 const messages = ref<ChatV2MessageView[]>([]);
@@ -438,11 +503,109 @@ const retryInfo = ref<{
   maxAttempts: number;
   delayMs: number;
 } | null>(null);
+// Active seven-layer recovery status. Null when no recovery layer is
+// running. Cleared on token/tool_call/complete/cancelled/error.
+type RecoveryInfo = {
+  layer: import("@/service/AIChatRecoveryTypes").AIChatRecoveryLayer;
+  reason: import("@/service/AIChatRecoveryTypes").AIChatRecoveryReason;
+  attempt?: number;
+  maxAttempts?: number;
+  delayMs?: number;
+  elapsedMs?: number;
+  originalModel?: string;
+  currentModel?: string;
+  fallbackModel?: string;
+  message?: string;
+};
+const recoveryInfo = ref<RecoveryInfo | null>(null);
 const showConversationsDialog = ref(false);
 const showMCPToolManager = ref(false);
 const isCompacting = ref(false);
 const compactNotice = ref(false);
 const stoppedPendingToolConversationIds = ref<Set<string>>(new Set());
+
+// ---------------------------------------------------------------------------
+// Attachment upload state
+// ---------------------------------------------------------------------------
+const isPreparingAttachments = ref(false);
+const attachmentError = ref<string | null>(null);
+
+const MAX_UPLOAD_FILE_BYTES = 5 * 1024 * 1024;
+
+function classifyAttachment(fileName: string, mimeType: string): ChatV2AttachmentKind | null {
+  const name = fileName.toLowerCase();
+  const mime = mimeType.toLowerCase();
+
+  if (mime.startsWith("image/")) return "image";
+  if (name.endsWith(".png") || name.endsWith(".jpg") || name.endsWith(".jpeg")) return "image";
+  if (name.endsWith(".webp") || name.endsWith(".gif")) return "image";
+
+  if (mime === "application/pdf" || name.endsWith(".pdf")) return "document";
+  if (mime === "text/csv" || mime === "application/csv" || name.endsWith(".csv")) return "document";
+  if (name.endsWith(".docx") || mime.includes("wordprocessingml.document")) return "document";
+  if (name.endsWith(".xlsx") || name.endsWith(".xls") || mime.includes("spreadsheetml.sheet")) return "document";
+
+  return null;
+}
+
+function defaultPromptForAttachments(files: File[]): string {
+  const images = files.filter((f) => classifyAttachment(f.name, f.type) === "image");
+  if (images.length > 0 && files.every((f) => classifyAttachment(f.name, f.type) === "image")) {
+    return "What is in this image?";
+  }
+  return "";
+}
+
+function resolveMimeType(file: File): string {
+  if (file.type && file.type !== "application/octet-stream") {
+    return file.type;
+  }
+  const name = file.name.toLowerCase();
+  if (name.endsWith(".pdf")) return "application/pdf";
+  if (name.endsWith(".csv")) return "text/csv";
+  if (name.endsWith(".docx")) return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+  if (name.endsWith(".xlsx")) return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+  if (name.endsWith(".xls")) return "application/vnd.ms-excel";
+  if (name.endsWith(".png")) return "image/png";
+  if (name.endsWith(".jpg") || name.endsWith(".jpeg")) return "image/jpeg";
+  if (name.endsWith(".webp")) return "image/webp";
+  if (name.endsWith(".gif")) return "image/gif";
+  return file.type || "application/octet-stream";
+}
+
+async function buildUploadedAttachments(files: File[]): Promise<ChatV2UploadedAttachment[]> {
+  const out: ChatV2UploadedAttachment[] = [];
+  for (const file of files) {
+    const kind = classifyAttachment(file.name, file.type);
+    if (!kind) throw new Error(`Unsupported file type: ${file.name}`);
+    if (file.size > MAX_UPLOAD_FILE_BYTES) throw new Error(`File too large: ${file.name}`);
+
+    if (kind === "image") {
+      // Downscale + recompress before base64 so the inline data URL stays
+      // small enough for the AI server's request-body limit (large photos
+      // otherwise trip HTTP 413 "Request Entity Too Large"). Falls back to
+      // the original bytes if canvas processing fails.
+      const processed = await downscaleImageAttachment(file);
+      out.push({
+        fileName: file.name,
+        mimeType: processed.mimeType,
+        sizeBytes: processed.sizeBytes,
+        contentBase64: processed.contentBase64,
+        kind,
+      });
+    } else {
+      const buffer = await file.arrayBuffer();
+      out.push({
+        fileName: file.name,
+        mimeType: resolveMimeType(file),
+        sizeBytes: file.size,
+        contentBase64: arrayBufferToBase64(buffer),
+        kind,
+      });
+    }
+  }
+  return out;
+}
 
 // ---------------------------------------------------------------------------
 // Tool approval mode
@@ -468,8 +631,8 @@ function handleAgentTaskCancel(agentTaskId: string): void {
 }
 
 async function onToolApprovalModeChange(mode: ChatToolApprovalMode): Promise<void> {
-  if (!activeConversationId.value) return;
   toolApprovalMode.value = mode;
+  if (!activeConversationId.value) return;
   try {
     const saved = await setChatV2ToolApprovalMode(activeConversationId.value, mode);
     toolApprovalMode.value = saved;
@@ -487,6 +650,39 @@ async function onToolApprovalModeChange(mode: ChatToolApprovalMode): Promise<voi
 const activeWorkspace = ref<WorkspaceSummary | null>(null);
 // True when the active conversation has no workspace — shows the pick card.
 const showWorkspaceRequired = ref(false);
+
+// Workspace memory panel + count for the active approved workspace.
+const showWorkspaceMemory = ref(false);
+const workspaceMemoryCount = ref(0);
+
+function openWorkspaceMemory(): void {
+  if (!activeWorkspace.value || activeWorkspace.value.approvalState !== "approved") {
+    showWorkspaceMemory.value = false;
+    return;
+  }
+  showWorkspaceMemory.value = true;
+}
+
+async function refreshWorkspaceMemoryCount(): Promise<void> {
+  if (!activeConversationId.value || !activeWorkspace.value || activeWorkspace.value.approvalState !== "approved") {
+    workspaceMemoryCount.value = 0;
+    return;
+  }
+  try {
+    // One IPC + DB round-trip: fetch up to 200 active memories and use the
+    // returned length as the badge count (capped at 200, which is plenty for
+    // a badge — beyond that the exact number doesn't matter to the user).
+    const resp = await workspaceMemoryApi.list({
+      conversationId: activeConversationId.value,
+      status: "active",
+      limit: 200,
+    });
+    workspaceMemoryCount.value =
+      resp.status && Array.isArray(resp.data) ? resp.data.length : 0;
+  } catch {
+    workspaceMemoryCount.value = 0;
+  }
+}
 
 function createLocalConversationId(): string {
   const randomId =
@@ -525,6 +721,7 @@ async function refreshWorkspace(conversationId: string | null): Promise<void> {
   if (!conversationId) {
     activeWorkspace.value = null;
     showWorkspaceRequired.value = false;
+    void refreshWorkspaceMemoryCount();
     return;
   }
   try {
@@ -544,6 +741,7 @@ async function refreshWorkspace(conversationId: string | null): Promise<void> {
     activeWorkspace.value = null;
     showWorkspaceRequired.value = false;
   }
+  void refreshWorkspaceMemoryCount();
 }
 
 /**
@@ -749,6 +947,84 @@ const chatIsRunning = computed(
  */
 const isConversationRunning = (conversationId: string): boolean =>
   chatIsRunning.value && conversationId === activeConversationId.value;
+
+const isPermissionPromptMessage = (message: ChatV2MessageView): boolean => {
+  if (message.messageType !== MessageType.TOOL_RESULT) return false;
+  return message.metadata?.toolResult?.needsPermissionPrompt === true;
+};
+
+const pinnedPermissionPrompt = computed<ChatV2MessageView | null>(() => {
+  for (let i = messages.value.length - 1; i >= 0; i -= 1) {
+    const message = messages.value[i];
+    if (isPermissionPromptMessage(message)) {
+      return message;
+    }
+  }
+  return null;
+});
+
+const visibleMessages = computed<ChatV2MessageView[]>(() => {
+  const pinnedId = pinnedPermissionPrompt.value?.id;
+  if (!pinnedId) return messages.value;
+  return messages.value.filter((message) => message.id !== pinnedId);
+});
+
+const pinnedPermissionToolResult = computed<Record<string, unknown>>(
+  () => pinnedPermissionPrompt.value?.metadata?.toolResult ?? {}
+);
+
+const pinnedPermissionToolName = computed(() => {
+  const toolName = pinnedPermissionPrompt.value?.metadata?.toolName;
+  return typeof toolName === "string" ? toolName : "";
+});
+
+const pinnedPermissionCategory = computed(() => {
+  const category = pinnedPermissionToolResult.value.permissionCategory;
+  return typeof category === "string" ? category : "";
+});
+
+const pinnedPermissionShellPreview = computed<ShellPreview | undefined>(() => {
+  const preview = pinnedPermissionToolResult.value.shellPreview;
+  if (!preview || typeof preview !== "object") {
+    return undefined;
+  }
+  const shellData = preview as Record<string, unknown>;
+  if (
+    typeof shellData.command !== "string" ||
+    typeof shellData.shell !== "string" ||
+    typeof shellData.timeout_ms !== "number"
+  ) {
+    return undefined;
+  }
+  return {
+    command: shellData.command,
+    cwd: typeof shellData.cwd === "string" ? shellData.cwd : undefined,
+    shell: shellData.shell,
+    timeout_ms: shellData.timeout_ms,
+  };
+});
+
+const permissionResumeInFlightToolIds = ref<Set<string>>(new Set());
+
+const setPermissionResumeInFlight = (
+  toolId: string,
+  inFlight: boolean
+): void => {
+  const next = new Set(permissionResumeInFlightToolIds.value);
+  if (inFlight) {
+    next.add(toolId);
+  } else {
+    next.delete(toolId);
+  }
+  permissionResumeInFlightToolIds.value = next;
+};
+
+const pinnedPermissionResumeInFlight = computed(() => {
+  const toolId = pinnedPermissionPrompt.value
+    ? resolveToolIdForPermissionMessage(pinnedPermissionPrompt.value)
+    : undefined;
+  return !!toolId && permissionResumeInFlightToolIds.value.has(toolId);
+});
 
 // True only between clicking send and the first visible AI chunk. Auto-clears
 // when streaming ends for any reason (complete/error/stop/permission deny).
@@ -984,6 +1260,7 @@ const detachActiveStreamView = (): void => {
     isStreaming.value = false;
     activeAssistantMessageId.value = null;
     retryInfo.value = null;
+    recoveryInfo.value = null;
   }
 };
 
@@ -1075,6 +1352,13 @@ const upsertToolResultMessage = (
   insertBeforeAssistantId?: string
 ): void => {
   const toolResult = chunk.toolResult ?? {};
+  if (
+    chunk.toolCallId &&
+    toolResult.needsPermissionPrompt !== true &&
+    permissionResumeInFlightToolIds.value.has(chunk.toolCallId)
+  ) {
+    setPermissionResumeInFlight(chunk.toolCallId, false);
+  }
   const content =
     typeof chunk.fullContent === "string" && chunk.fullContent.trim().length > 0
       ? chunk.fullContent
@@ -1158,7 +1442,8 @@ const upsertToolResultMessage = (
 };
 
 const handleSkillPermissionGrant = async (
-  message: ChatV2MessageView
+  message: ChatV2MessageView,
+  _persistent?: boolean
 ): Promise<void> => {
   const toolId = resolveToolIdForPermissionMessage(message);
   if (!toolId) {
@@ -1169,6 +1454,12 @@ const handleSkillPermissionGrant = async (
     activeAssistantMessageId.value = null;
     return;
   }
+
+  if (permissionResumeInFlightToolIds.value.has(toolId)) {
+    return;
+  }
+
+  setPermissionResumeInFlight(toolId, true);
 
   try {
     const raw = await windowInvoke(AI_CHAT_V2_RESUME_TOOL_AFTER_PERMISSION, {
@@ -1197,13 +1488,21 @@ const handleSkillPermissionGrant = async (
       }
       isStreaming.value = false;
       activeAssistantMessageId.value = null;
+      setPermissionResumeInFlight(toolId, false);
     }
   } catch (error) {
     const errMsg = error instanceof Error ? error.message : String(error);
     streamError.value = errMsg;
     isStreaming.value = false;
     activeAssistantMessageId.value = null;
+    setPermissionResumeInFlight(toolId, false);
   }
+};
+
+const handlePinnedPermissionGrant = (payload: { persistent: boolean }): void => {
+  const message = pinnedPermissionPrompt.value;
+  if (!message) return;
+  void handleSkillPermissionGrant(message, payload.persistent);
 };
 
 const handleSkillPermissionDeny = (message: ChatV2MessageView): void => {
@@ -1229,9 +1528,75 @@ const handleSkillPermissionDeny = (message: ChatV2MessageView): void => {
   activeAssistantMessageId.value = null;
 };
 
+const handlePinnedPermissionDeny = (): void => {
+  const message = pinnedPermissionPrompt.value;
+  if (!message) return;
+  handleSkillPermissionDeny(message);
+};
+
 // ---------------------------------------------------------------------------
 // Plan Mode handlers
 // ---------------------------------------------------------------------------
+
+const isSubmitPlanToolMessage = (message: ChatV2MessageView): boolean =>
+  message.metadata?.toolName === "SubmitPlanForApproval";
+
+const readPlanToolResultVersion = (
+  message: ChatV2MessageView
+): { planId?: string; version?: number } | null => {
+  if (message.messageType !== MessageType.TOOL_RESULT) return null;
+  const result = message.metadata?.toolResult;
+  if (result) {
+    return {
+      planId: typeof result.planId === "string" ? result.planId : undefined,
+      version: typeof result.version === "number" ? result.version : undefined,
+    };
+  }
+  try {
+    const parsed = JSON.parse(message.content) as Record<string, unknown>;
+    return {
+      planId: typeof parsed.planId === "string" ? parsed.planId : undefined,
+      version: typeof parsed.version === "number" ? parsed.version : undefined,
+    };
+  } catch {
+    return null;
+  }
+};
+
+const findPlanMessageInsertionIndex = (
+  state: AIChatPlanStateView,
+  existingPlanIndex: number
+): number => {
+  let fallbackIndex = -1;
+  for (let i = messages.value.length - 1; i >= 0; i -= 1) {
+    if (i === existingPlanIndex) continue;
+    const message = messages.value[i];
+    if (!isSubmitPlanToolMessage(message)) continue;
+    fallbackIndex = i + 1;
+    const versionInfo = readPlanToolResultVersion(message);
+    if (
+      versionInfo?.planId === state.planId &&
+      versionInfo.version === state.currentVersion
+    ) {
+      return i + 1;
+    }
+  }
+  if (fallbackIndex !== -1) return fallbackIndex;
+
+  const planCreatedAt = state.latestVersion
+    ? Date.parse(state.latestVersion.createdAt)
+    : NaN;
+  if (!Number.isNaN(planCreatedAt)) {
+    const chronologicalIndex = messages.value.findIndex((message, index) => {
+      if (index === existingPlanIndex) return false;
+      const messageTime = Date.parse(message.timestamp);
+      return !Number.isNaN(messageTime) && messageTime > planCreatedAt;
+    });
+    if (chronologicalIndex !== -1) return chronologicalIndex;
+  }
+
+  return messages.value.length;
+};
 
 /**
  * Insert or update the inline plan-approval message row so the card appears
@@ -1241,31 +1606,45 @@ const handleSkillPermissionDeny = (message: ChatV2MessageView): void => {
 const upsertPlanMessage = (state: AIChatPlanStateView): void => {
   const planMsgId = `plan-${state.planId}`;
   const existingIdx = messages.value.findIndex((m) => m.id === planMsgId);
+  const insertIdx = findPlanMessageInsertionIndex(state, existingIdx);
   const metadata = {
     source: "chat-v2" as const,
     planEventType: "plan_submitted" as const,
     planId: state.planId,
     planStateView: state,
   };
-  if (existingIdx !== -1) {
-    messages.value[existingIdx] = {
-      ...messages.value[existingIdx],
-      metadata: {
-        ...messages.value[existingIdx].metadata,
-        ...metadata,
-      },
-    };
-    return;
-  }
-  messages.value.push({
+  const planMessage: ChatV2MessageView = {
     id: planMsgId,
     conversationId: state.conversationId,
     role: "assistant",
     content: "",
-    timestamp: new Date().toISOString(),
+    timestamp: state.latestVersion?.createdAt ?? new Date().toISOString(),
     messageType: "message" as MessageType,
     metadata,
-  });
+  };
+  if (existingIdx !== -1) {
+    const existingMessage = messages.value[existingIdx];
+    planMessage.timestamp = messages.value[existingIdx].timestamp;
+    planMessage.metadata = {
+      ...existingMessage.metadata,
+      ...metadata,
+    };
+    const withoutExisting = messages.value.filter((m) => m.id !== planMsgId);
+    const adjustedInsertIdx =
+      existingIdx < insertIdx ? insertIdx - 1 : insertIdx;
+    const targetIdx = Math.min(adjustedInsertIdx, withoutExisting.length);
+    messages.value = [
+      ...withoutExisting.slice(0, targetIdx),
+      planMessage,
+      ...withoutExisting.slice(targetIdx),
+    ];
+    return;
+  }
+  messages.value = [
+    ...messages.value.slice(0, insertIdx),
+    planMessage,
+    ...messages.value.slice(insertIdx),
+  ];
 };
 
 const handleQuestionAnswered = async (
@@ -1407,23 +1786,53 @@ const handleCompactConversation = async (): Promise<void> => {
   }
 };
 
-const onSend = async (text: string): Promise<void> => {
+const onSend = async (text: string, files?: File[]): Promise<void> => {
   if (chatIsRunning.value) return;
   streamError.value = null;
+  attachmentError.value = null;
   if (activeConversationId.value) {
     const nextStopped = new Set(stoppedPendingToolConversationIds.value);
     nextStopped.delete(activeConversationId.value);
     stoppedPendingToolConversationIds.value = nextStopped;
   }
 
+  // Process attachments if present
+  let uploadedFiles: ChatV2UploadedAttachment[] | undefined;
+  let attachmentMetadata: ChatV2AttachmentMetadata[] | undefined;
+  if (files && files.length > 0) {
+    isPreparingAttachments.value = true;
+    try {
+      uploadedFiles = await buildUploadedAttachments(files);
+      attachmentMetadata = uploadedFiles.map((f) => ({
+        fileName: f.fileName,
+        mimeType: f.mimeType,
+        sizeBytes: f.sizeBytes,
+        kind: f.kind,
+        processingMode: f.kind === "image" ? "image_url" : "staged_markdown",
+      }));
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      attachmentError.value = msg;
+      isPreparingAttachments.value = false;
+      return;
+    }
+    isPreparingAttachments.value = false;
+  }
+
+  // Resolve text: if only images with no text, use default prompt
+  const displayText = text || defaultPromptForAttachments(files ?? []);
+
   const nowIso = new Date().toISOString();
   const tempUser: ChatV2MessageView = {
     id: `temp-user-${Date.now()}`,
     conversationId: activeConversationId.value ?? "",
     role: "user",
-    content: text,
+    content: displayText,
     timestamp: nowIso,
     messageType: "message" as MessageType,
+    metadata: attachmentMetadata
+      ? { source: "chat-v2", attachments: attachmentMetadata }
+      : undefined,
   };
   messages.value = [...messages.value, tempUser];
 
@@ -1471,6 +1880,7 @@ const onSend = async (text: string): Promise<void> => {
   isStreaming.value = true;
   receivedFirstResponse.value = false;
   retryInfo.value = null;
+  recoveryInfo.value = null;
   // Seed the live context estimate from the last known server usage. If no
   // usage_update has arrived yet this session, fall back to the existing
   // streaming estimate (e.g. seeded from persisted tokensUsed on history
@@ -1485,13 +1895,18 @@ const onSend = async (text: string): Promise<void> => {
   await nextTick();
 
   try {
+    const streamRequest: ChatV2StreamRequest = {
+      conversationId: activeConversationId.value ?? undefined,
+      message: displayText,
+      mode: mode.value,
+      model: resolveModelForRequest(),
+      toolApprovalMode: toolApprovalMode.value,
+    };
+    if (uploadedFiles && uploadedFiles.length > 0) {
+      streamRequest.uploadedFiles = uploadedFiles;
+    }
     await streamChatV2Message(
-      {
-        conversationId: activeConversationId.value ?? undefined,
-        message: text,
-        mode: mode.value,
-        model: resolveModelForRequest(),
-      },
+      streamRequest,
       (chunk: ChatV2StreamChunk) => {
         if (chunk.eventType === "start") {
           if (chunk.conversationId) {
@@ -1536,10 +1951,27 @@ const onSend = async (text: string): Promise<void> => {
               delayMs: chunk.retryDelayMs ?? 0,
             };
           }
+        } else if (chunk.eventType === "recovery_status") {
+          // Seven-layer recovery status. Show the badge but keep streaming.
+          if (chunk.recoveryLayer && chunk.recoveryReason) {
+            recoveryInfo.value = {
+              layer: chunk.recoveryLayer,
+              reason: chunk.recoveryReason,
+              attempt: chunk.recoveryAttempt,
+              maxAttempts: chunk.recoveryMaxAttempts,
+              delayMs: chunk.recoveryDelayMs,
+              elapsedMs: chunk.recoveryElapsedMs,
+              originalModel: chunk.recoveryOriginalModel,
+              currentModel: chunk.recoveryCurrentModel,
+              fallbackModel: chunk.recoveryFallbackModel,
+              message: chunk.recoveryMessage,
+            };
+          }
         } else {
           // Any non-start/non-retry chunk means the AI has started responding.
           receivedFirstResponse.value = true;
           retryInfo.value = null;
+          recoveryInfo.value = null;
           if (chunk.eventType === "token" && chunk.contentDelta) {
             if (!assistantAdded) {
               console.log(
@@ -1670,6 +2102,7 @@ const onSend = async (text: string): Promise<void> => {
         isStreaming.value = false;
         activeAssistantMessageId.value = null;
         retryInfo.value = null;
+        recoveryInfo.value = null;
         // Snap to ground-truth usage carried by the complete event so the
         // badge reflects the real context size even if usage_update chunks
         // didn't fire during the stream (some servers only report usage on
@@ -1748,6 +2181,7 @@ const onSend = async (text: string): Promise<void> => {
         isStreaming.value = false;
         activeAssistantMessageId.value = null;
         retryInfo.value = null;
+        recoveryInfo.value = null;
         const displayMessage = mapStreamErrorMessage(error.message);
         streamError.value = displayMessage;
         showAssistantError(displayMessage);
@@ -1760,11 +2194,30 @@ const onSend = async (text: string): Promise<void> => {
       isStreaming.value = false;
       activeAssistantMessageId.value = null;
       retryInfo.value = null;
+      recoveryInfo.value = null;
       streamError.value = displayMessage;
       showAssistantError(displayMessage);
     }
   }
 };
+
+function sendPromptRequest(request: AiPromptRequest | null | undefined): void {
+  if (!request || request.id === lastHandledPromptRequestId.value) return;
+  const text = request.text.trim();
+  if (!text || chatIsRunning.value) return;
+
+  lastHandledPromptRequestId.value = request.id;
+  void nextTick(() => {
+    void onSend(text, []);
+  });
+}
+
+watch(
+  [() => props.promptRequest, chatIsRunning],
+  ([request]) => {
+    sendPromptRequest(request);
+  }
+);
 
 onMounted(() => {
   void loadConversations();
@@ -1864,5 +2317,24 @@ onBeforeUnmount(() => {
 .v2-shell__file-ops-body {
   padding: 4px 12px 10px;
   border-top: 1px solid rgba(0, 0, 0, 0.05);
+}
+</style>
+
+<style>
+:root[theme="dark"] .v2-shell {
+  background: #1e1e1e;
+}
+:root[theme="dark"] .v2-shell__header {
+  border-bottom-color: rgba(255, 255, 255, 0.12);
+}
+:root[theme="dark"] .v2-shell__file-ops-panel {
+  background: #2d2d2d;
+  border-top-color: rgba(255, 255, 255, 0.12);
+}
+:root[theme="dark"] .v2-shell__file-ops-header:hover {
+  background-color: rgba(255, 255, 255, 0.06);
+}
+:root[theme="dark"] .v2-shell__file-ops-body {
+  border-top-color: rgba(255, 255, 255, 0.08);
 }
 </style>

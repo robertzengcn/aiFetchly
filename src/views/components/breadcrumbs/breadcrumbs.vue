@@ -38,7 +38,7 @@ function init() {
             {
                 title: t('route.dashboard'),
                 disabled: false,
-                href: '/dashboard',
+                to: '/dashboard',
             },
         ];
         return;
@@ -48,12 +48,11 @@ function init() {
             {
                 title: t('route.home'),
                 disabled: false,
-                href: '/dashboard',
+                to: '/dashboard',
             },
             {
                 title: translateRouteTitle(matched[0].meta.title as string),
                 disabled: true,
-                href: matched[0].path,
             },
         ];
         return;
@@ -64,15 +63,14 @@ function init() {
             routes.value.push({
                 title: translateRouteTitle(route.meta.title as string),
                 exact: true,
-                disabled: false,
-                href: $route.path,
+                disabled: true,
             });
         } else {
             routes.value.push({
                 title: translateRouteTitle(route.meta.title as string),
                 exact: false,
-                disabled: true,
-                href: route.path,
+                disabled: false,
+                to: route.path,
             });
         }
     });

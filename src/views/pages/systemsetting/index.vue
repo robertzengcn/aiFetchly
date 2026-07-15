@@ -30,6 +30,26 @@
               <v-icon left>mdi-view-dashboard</v-icon>
               {{ t('system_settings.manage_skills') }}
             </v-btn>
+            <v-btn
+              color="primary"
+              variant="outlined"
+              block
+              @click="navigateToHooks"
+              class="mb-2"
+            >
+              <v-icon left>mdi-hook</v-icon>
+              {{ t('system_settings.manage_hooks') || 'Manage Hooks' }}
+            </v-btn>
+            <v-btn
+              color="primary"
+              variant="outlined"
+              block
+              @click="navigateToSubagents"
+              class="mb-2"
+            >
+              <v-icon left>mdi-robot-outline</v-icon>
+              {{ t('system_settings.manage_subagents') || 'Manage Subagents' }}
+            </v-btn>
           </v-card-text>
         </v-card>
       </v-col>
@@ -165,6 +185,9 @@ v-for="(opt, idx) in setting.options || []" :key="idx" :label="opt.optionLabel"
         </v-card>
       </v-col>
     </v-row>
+
+    <!-- Diagnostics section (always visible, independent of selected group) -->
+    <DiagnosticsSection />
   </v-container>
 </template>
 
@@ -180,6 +203,7 @@ import { language_preference } from '@/config/settinggroupInit';
 const { t, locale } = useI18n();
 const router = useRouter();
 import { chooseFileDialog } from "@/views/api/common"
+import DiagnosticsSection from "@/views/components/settings/DiagnosticsSection.vue"
 
 // Store references for settings, groups, and tree state
 //const systemSettings = ref<SystemSettingDisplay[]>([]);
@@ -383,6 +407,14 @@ function navigateToMCP() {
 
 function navigateToSkills() {
   router.push({ name: 'system_setting_skills' });
+}
+
+function navigateToHooks() {
+  router.push({ name: 'system_setting_hooks' });
+}
+
+function navigateToSubagents() {
+  router.push({ name: 'system_setting_subagents' });
 }
 
 onMounted(() => {

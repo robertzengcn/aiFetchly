@@ -71,6 +71,21 @@ export const BUCKEMAILTASKLIST = "buck:email:task:list";
 export const SENDTESTEMAIL = "send:test:email";
 export const RECEIVESENDTESTEMAILMESSAGE = "receive:send:test:email:message";
 export const BUCKEMAILTASKSENDLOG = "buck:email:task:sendlog";
+
+// ======== Email receive + AI auto-reply ========
+export const EMAIL_RECEIVE_SYNC = "email:receive:sync";
+export const EMAIL_RECEIVE_CONNECTION_TEST = "email:receive:connection:test";
+export const EMAIL_RECEIVE_MESSAGE_LIST = "email:receive:message:list";
+export const EMAIL_RECEIVE_MESSAGE_DETAIL = "email:receive:message:detail";
+export const EMAIL_REPLY_MARK_PROCESSED = "email:reply:mark:processed";
+export const EMAIL_REPLY_IDENTITY_GET = "email:reply:identity:get";
+export const EMAIL_REPLY_IDENTITY_UPDATE = "email:reply:identity:update";
+export const EMAIL_REPLY_DRAFT_CREATE = "email:reply:draft:create";
+export const EMAIL_REPLY_DRAFT_DETAIL = "email:reply:draft:detail";
+export const EMAIL_REPLY_DRAFT_UPDATE = "email:reply:draft:update";
+export const EMAIL_REPLY_SEND = "email:reply:send";
+export const EMAIL_AUTO_REPLY_AUDIT_LIST = "email:autoreply:audit:list";
+export const EMAIL_AUTO_REPLY_AUDIT_DETAIL = "email:autoreply:audit:detail";
 export const SOCIALACCOUNTlIST = "socialaccount:list";
 export const SOCIALACCOUNTDETAIL = "socialaccount:detail";
 export const SOCIALACCOUNTSAVE = "socialaccount:save";
@@ -296,6 +311,7 @@ export const MCP_TOOL_DISCOVER = "mcp:tool:discover";
 export const MCP_TOOL_TOGGLE_SERVER = "mcp:tool:toggle:server";
 export const MCP_TOOL_TOGGLE_TOOL = "mcp:tool:toggle:tool";
 export const MCP_TOOL_TEST_CONNECTION = "mcp:tool:test:connection";
+export const MCP_TOOL_TRUST = "mcp:tool:trust";
 
 // Skill Management Channels
 export const SKILL_CHECK_PERMISSION = "skill:check-permission";
@@ -390,6 +406,16 @@ export const AGENT_TASK_LIST = "agent-runtime:task-list";
 export const AGENT_RESUME_TOOL_AFTER_PERMISSION =
   "agent-runtime:resume-tool-after-permission";
 
+// ==================== Agent Definition Management Channels ====================
+// Management-only (CRUD/enablement). NOT AI execution channels — handlers use
+// registerValidatedHandler, not registerAiValidatedHandler (design §15.5).
+export const AGENT_MANAGEMENT_LIST = "agent-definition:list";
+export const AGENT_MANAGEMENT_GET = "agent-definition:get";
+export const AGENT_MANAGEMENT_CREATE = "agent-definition:create";
+export const AGENT_MANAGEMENT_UPDATE = "agent-definition:update";
+export const AGENT_MANAGEMENT_TOGGLE = "agent-definition:toggle";
+export const AGENT_MANAGEMENT_DELETE = "agent-definition:delete";
+
 // ==================== Plugin Management Channels (Design §10) ====================
 export const PLUGIN_IMPORT = "plugin:import";
 export const PLUGIN_VALIDATE_PACKAGE = "plugin:validate-package";
@@ -405,6 +431,20 @@ export const PLUGIN_TOGGLE_MCP_TOOL = "plugin:toggle-mcp-tool";
 export const PLUGIN_TEST_MCP_CONNECTION = "plugin:test-mcp-connection";
 export const PLUGIN_DISCOVER_MCP_TOOLS = "plugin:discover-mcp-tools";
 export const PLUGIN_INSTALL_FROM_SOURCE = "plugin:install-from-source";
+export const PLUGIN_GET_MCP_OPTIONS = "plugin:get-mcp-options";
+export const PLUGIN_SET_MCP_OPTION = "plugin:set-mcp-option";
+
+// ==================== Plugin Marketplace Channels (Marketplace PRD §11.1) ====================
+export const PLUGIN_MARKETPLACE_LIST = "plugin:marketplace:list";
+export const PLUGIN_MARKETPLACE_GET = "plugin:marketplace:get";
+export const PLUGIN_MARKETPLACE_ADD = "plugin:marketplace:add";
+export const PLUGIN_MARKETPLACE_REFRESH = "plugin:marketplace:refresh";
+export const PLUGIN_MARKETPLACE_REMOVE = "plugin:marketplace:remove";
+export const PLUGIN_MARKETPLACE_AVAILABLE_PLUGINS =
+  "plugin:marketplace:available-plugins";
+export const PLUGIN_MARKETPLACE_GET_PLUGIN = "plugin:marketplace:get-plugin";
+export const PLUGIN_MARKETPLACE_INSTALL_PLUGIN =
+  "plugin:marketplace:install-plugin";
 
 // AI user memory (durable cross-session memory)
 export const AI_USER_MEMORY_LIST = "ai:user-memory:list";
@@ -423,5 +463,36 @@ export const AI_WORKSPACE_APPROVE = "ai-workspace:approve";
 export const AI_WORKSPACE_REVOKE = "ai-workspace:revoke";
 export const AI_WORKSPACE_LIST = "ai-workspace:list";
 
+// Workspace Memory (durable, workspace-scoped memory)
+export const AI_WORKSPACE_MEMORY_LIST = "ai:workspace-memory:list";
+export const AI_WORKSPACE_MEMORY_CREATE = "ai:workspace-memory:create";
+export const AI_WORKSPACE_MEMORY_UPDATE = "ai:workspace-memory:update";
+export const AI_WORKSPACE_MEMORY_ARCHIVE = "ai:workspace-memory:archive";
+export const AI_WORKSPACE_MEMORY_DELETE = "ai:workspace-memory:delete";
+export const AI_WORKSPACE_MEMORY_RUN_AUTO_DREAM =
+  "ai:workspace-memory:auto-dream:run";
+export const AI_WORKSPACE_MEMORY_AUTO_DREAM_STATUS =
+  "ai:workspace-memory:auto-dream:status";
+
 // Dialog Channels
 export const DIALOG_PICK_FOLDER = "dialog:pick-folder";
+
+// Hooks system — Phase 4 management UI channels.
+export const HOOKS_LIST = "hooks:list";
+export const HOOKS_CREATE = "hooks:create";
+export const HOOKS_UPDATE = "hooks:update";
+export const HOOKS_DELETE = "hooks:delete";
+export const HOOKS_SET_ENABLED = "hooks:setEnabled";
+export const HOOKS_GET_GLOBAL_ENABLE = "hooks:getGlobalEnable";
+export const HOOKS_SET_GLOBAL_ENABLE = "hooks:setGlobalEnable";
+export const HOOKS_LIST_AUDIT = "hooks:listAudit";
+
+// Diagnostics Channels
+export const DIAGNOSTICS_RENDERER_ERROR = "diagnostics:renderer-error";
+export const DIAGNOSTICS_EXPORT_REPORT = "diagnostics:export-report";
+export const DIAGNOSTICS_UPLOAD_REPORT = "diagnostics:upload-report";
+export const DIAGNOSTICS_OPEN_FOLDER = "diagnostics:open-folder";
+export const DIAGNOSTICS_GET_STATUS = "diagnostics:get-status";
+export const DIAGNOSTICS_SET_DEBUG = "diagnostics:set-debug";
+export const DIAGNOSTICS_CLEAR_LOCAL = "diagnostics:clear-local";
+export const DIAGNOSTICS_LIST_CRASHES = "diagnostics:list-crashes";

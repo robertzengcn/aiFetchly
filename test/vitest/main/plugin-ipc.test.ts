@@ -78,6 +78,13 @@ vi.mock("@/modules/MCPToolModule", () => ({
     }
   },
 }));
+vi.mock("@/modules/AgentDefinitionModule", () => ({
+  AgentDefinitionModule: class {
+    async findAgentsByPluginName() {
+      return [];
+    }
+  },
+}));
 vi.mock("@/service/PluginImportService", () => ({
   PluginImportService: {
     importFromZip: vi.fn(async () => ({
@@ -192,7 +199,7 @@ describe("plugin-ipc", () => {
         mcpServers: [
           expect.objectContaining({
             id: 42,
-            name: "demo-mcp",
+            serverName: "demo-mcp",
           }),
         ],
       },

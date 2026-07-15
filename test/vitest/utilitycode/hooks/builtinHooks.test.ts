@@ -9,36 +9,29 @@ describe("registerBuiltinHooks", () => {
   beforeEach(() => {
     HookRegistry.resetForTests();
     resetBuiltinHooksRegistrationForTests();
+    // Hooks default to ON (gate checks === "false").
+    // The dangerous-delete test below calls executeHooks and relies on
+    // the default being enabled, so don't set the token.
   });
 
-  it("registers built-in demo hooks (disabled, so they are filtered out of getMatchingHooks)", () => {
+  it("registers built-in hooks with correct defaults", () => {
     registerBuiltinHooks();
-    // Built-ins ship disabled; the registry therefore returns an
-    // empty list for both events. The registration is still
-    // observable through the warning the registry emits on duplicate
-    // id, which the idempotency test covers indirectly.
+    const all = HookRegistry.listAll();
+    expect(all.some((h) => h.id === "builtin-block-dangerous-shell-delete")).toBe(true);
+    expect(all.some((h) => h.id === "builtin-scraping-compliance-context")).toBe(true);
+
+    // dangerous-shell is enabled by default, scraping-compliance is disabled
     const pre = HookRegistry.getMatchingHooks({
       eventName: "PreToolUse",
       matchQuery: "shell_execute",
     });
+    expect(pre.some((h) => h.id === "builtin-block-dangerous-shell-delete")).toBe(true);
+
     const post = HookRegistry.getMatchingHooks({
       eventName: "PostToolUse",
       matchQuery: "scrape_businesses",
     });
-    expect(pre).toEqual([]);
-    expect(post).toEqual([]);
-  });
-
-  it("registers hooks disabled by default", () => {
-    registerBuiltinHooks();
-    // Disabled hooks are filtered out by getMatchingHooks, so we
-    // verify the registration side-effect through the dispatcher's
-    // no-hooks behavior. Re-enable to confirm the hook is present.
-    const emptyBefore = HookRegistry.getMatchingHooks({
-      eventName: "PreToolUse",
-      matchQuery: "shell_execute",
-    });
-    expect(emptyBefore).toEqual([]);
+    expect(post.some((h) => h.id === "builtin-scraping-compliance-context")).toBe(false);
   });
 
   it("is idempotent across repeated calls", () => {
@@ -60,7 +53,6 @@ describe("registerBuiltinHooks", () => {
       matcher: "shell_execute",
       source: "builtin",
       enabled: true,
-      trusted: true,
       failureMode: "block",
       type: "callback",
       callback: (input) => {

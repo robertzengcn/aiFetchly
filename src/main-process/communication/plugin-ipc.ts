@@ -1,8 +1,10 @@
 import { PluginManagementModule } from "@/modules/PluginManagementModule";
+import { AgentDefinitionModule } from "@/modules/AgentDefinitionModule";
 import { SkillManagementModule } from "@/modules/SkillManagementModule";
 import { MCPToolModule } from "@/modules/MCPToolModule";
 import { MCPToolService } from "@/service/MCPToolService";
 import { PluginImportService } from "@/service/PluginImportService";
+import { PluginOptionsStore } from "@/service/pluginCompat/PluginOptionsStore";
 import { PluginComponentRegistryService } from "@/service/PluginComponentRegistryService";
 import { PluginDiagnosticsService } from "@/service/PluginDiagnosticsService";
 import { getPluginInstallRoot } from "@/service/pluginPaths";
@@ -26,8 +28,11 @@ import {
   PLUGIN_TOGGLE_MCP_TOOL,
   PLUGIN_TEST_MCP_CONNECTION,
   PLUGIN_DISCOVER_MCP_TOOLS,
+  PLUGIN_GET_MCP_OPTIONS,
+  PLUGIN_SET_MCP_OPTION,
 } from "@/config/channellist";
 import { registerAiValidatedHandler } from "@/main-process/communication/_shared/registerValidatedHandler";
+import { registerValidatedHandler } from "@/main-process/communication/_shared/registerValidatedHandler";
 import {
   pluginNoInputSchema,
   pluginByNameInputSchema,
@@ -39,6 +44,8 @@ import {
   pluginToggleMcpServerInputSchema,
   pluginToggleMcpToolInputSchema,
   pluginByServerIdInputSchema,
+  pluginGetMcpOptionsInputSchema,
+  pluginSetMcpOptionInputSchema,
 } from "@/schemas/ipc/plugin";
 
 /**
@@ -55,7 +62,8 @@ import {
 function toSummary(
   p: InstalledPluginEntity,
   skillCount: number,
-  mcpServerCount: number
+  mcpServerCount: number,
+  agentCount: number
 ): PluginSummary {
   let permissions: string[] = [];
   try {
@@ -77,6 +85,7 @@ function toSummary(
       "healthy") as PluginSummary["health"],
     skillCount,
     mcpServerCount,
+    agentCount,
     permissions,
     lastUpdated: p.updatedAt
       ? new Date(p.updatedAt).toISOString()
@@ -91,12 +100,16 @@ export function registerPluginIpcHandlers(): void {
     const module = new PluginManagementModule();
     const skillModule = new SkillManagementModule();
     const mcpModule = new MCPToolModule();
+    const agentModule = new AgentDefinitionModule();
     const plugins = await module.listInstalledPlugins();
     const summaries: PluginSummary[] = [];
     for (const p of plugins) {
       const skills = await skillModule.findSkillsByPluginName(p.name);
       const mcpServers = await mcpModule.findMcpByPluginName(p.name);
-      summaries.push(toSummary(p, skills.length, mcpServers.length));
+      const agents = await agentModule.findAgentsByPluginName(p.name);
+      summaries.push(
+        toSummary(p, skills.length, mcpServers.length, agents.length)
+      );
     }
     return summaries;
   });
@@ -112,9 +125,16 @@ export function registerPluginIpcHandlers(): void {
       }
       const skillModule = new SkillManagementModule();
       const mcpModule = new MCPToolModule();
+      const agentModule = new AgentDefinitionModule();
       const skills = await skillModule.findSkillsByPluginName(input.name);
       const mcpServers = await mcpModule.findMcpByPluginName(input.name);
-      const summary = toSummary(plugin, skills.length, mcpServers.length);
+      const agents = await agentModule.findAgentsByPluginName(input.name);
+      const summary = toSummary(
+        plugin,
+        skills.length,
+        mcpServers.length,
+        agents.length
+      );
       let manifest = {};
       try {
         manifest = JSON.parse(plugin.manifestJson || "{}");
@@ -135,6 +155,17 @@ export function registerPluginIpcHandlers(): void {
           id: s.id,
           serverName: s.serverName,
           enabled: s.enabled,
+        })),
+        agents: agents.map((a) => ({
+          id: a.id,
+          name: a.name,
+          description: a.description,
+          enabled: a.status === "active",
+          mode: a.mode,
+          toolCount: a.allowedTools.length,
+          componentPath: a.pluginComponentPath ?? "",
+          health: a.health,
+          ...(a.lastError ? { error: a.lastError } : {}),
         })),
         manifest,
       };
@@ -245,15 +276,16 @@ export function registerPluginIpcHandlers(): void {
       const { PluginArchiveService } = await import(
         "@/service/PluginArchiveService"
       );
-      const { PluginManifestService } = await import(
+      const { PluginManifestService, resolvePluginRoot } = await import(
         "@/service/PluginManifestService"
       );
       const extract = await PluginArchiveService.extractZip(input.zipPath);
       if (!extract.success) {
         return { valid: false, errors: extract.errors };
       }
+      const effectiveRoot = resolvePluginRoot(extract.tempRoot);
       const manifest = await PluginManifestService.loadFromDirectory(
-        extract.tempRoot
+        effectiveRoot
       );
       await extract.cleanup();
       if (!manifest.success) {
@@ -382,6 +414,31 @@ export function registerPluginIpcHandlers(): void {
       const tools = await service.discoverTools(input.serverId);
       await PluginComponentRegistryService.applyLoadedPlugins();
       return tools;
+    }
+  );
+
+  // MCP option read/write — config-only, NOT AI-gated. Users can edit
+  // MCP option values regardless of AI enable state; the values take
+  // effect at next MCP spawn (which IS AI-gated).
+  registerValidatedHandler(
+    PLUGIN_GET_MCP_OPTIONS,
+    pluginGetMcpOptionsInputSchema,
+    async (input) => {
+      return PluginOptionsStore.read(input.pluginName);
+    }
+  );
+
+  registerValidatedHandler(
+    PLUGIN_SET_MCP_OPTION,
+    pluginSetMcpOptionInputSchema,
+    async (input) => {
+      PluginOptionsStore.setOption(
+        input.pluginName,
+        input.scopedServerName,
+        input.varName,
+        input.value
+      );
+      return { ok: true as const };
     }
   );
 }

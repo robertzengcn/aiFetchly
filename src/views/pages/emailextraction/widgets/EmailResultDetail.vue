@@ -224,11 +224,14 @@ function loadItems({ page=1, itemsPerPage=10, sortBy}) {
     //     path: '/graphics/oasis-engine',
     // });
 // };
-const openfolder=(item)=>{
-    // console.log(item)
-    router.push({
-            name: 'Searchtaskdetail',params: { id: item.id } 
-     });
+const openfolder=async (item)=>{
+    try {
+        await router.push({
+                name: 'Searchtaskdetail',params: { id: item.id } 
+        });
+    } catch (error) {
+        console.error('openfolder navigation failed:', error);
+    }
     }
 const downloadErrorlog=(item)=>{
     // console.log(item)
