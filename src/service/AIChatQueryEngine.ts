@@ -19,6 +19,7 @@ import {
   isPermissionPromptResult,
 } from "@/service/AIChatQueryLoop";
 import { userSafeError } from "@/service/AIChatErrorMapper";
+import { stageChatV2AttachmentsForMessage } from "@/service/ChatAttachmentReferenceService";
 import { Token } from "@/modules/token";
 import { USER_AI_AUTO_PLAN, USER_AI_ENABLED } from "@/config/usersetting";
 import { ENTER_PLAN_MODE_TOOL } from "@/service/EnterPlanModeTool";
@@ -72,11 +73,7 @@ function isTypedPlanApproval(message: string): boolean {
     return true;
   }
 
-  const looksGoodSignals = [
-    "looks good",
-    "looks fine",
-    "looks correct",
-  ];
+  const looksGoodSignals = ["looks good", "looks fine", "looks correct"];
   const executionSignals = [
     "begin executing",
     "start executing",
@@ -210,9 +207,27 @@ export class AIChatQueryEngine {
       }
 
       // Save user message before remote call.
+      // Stage any document attachments and build the message the LLM will see.
+      // Uses the final conversationId (never "pending") so attachment_ref values
+      // resolve correctly later via SkillExecutionContext.conversationId.
+      let userMessage = request.message;
+      if (request.attachments && request.attachments.length > 0) {
+        try {
+          const staged = await stageChatV2AttachmentsForMessage({
+            conversationId,
+            message: request.message,
+            attachments: request.attachments,
+          });
+          userMessage = staged.message;
+        } catch (err) {
+          console.error("[ai-chat-v2] attachment staging failed:", err);
+          // Continue with the original message; staging is best-effort.
+        }
+      }
+
       const savedUser = await module.saveUserMessage({
         conversationId,
-        content: request.message,
+        content: userMessage,
       });
 
       // Load history and build transcript.
@@ -220,7 +235,7 @@ export class AIChatQueryEngine {
         request.systemPrompt ?? module.getDefaultSystemPrompt();
       const assembled = await this.contextAssembler.assemble({
         conversationId,
-        currentUserMessage: request.message,
+        currentUserMessage: userMessage,
         currentUserMessageId: savedUser.messageId,
         baseSystemPrompt: basePrompt,
         mode: isPlanMode ? "plan" : "chat",

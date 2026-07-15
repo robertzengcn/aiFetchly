@@ -68,6 +68,19 @@ export interface ChatV2MessageMetadata {
   };
 }
 
+/**
+ * A document attached to a v2 chat message (renderer -> main).
+ *
+ * Only document attachments (pdf, csv, docx, xlsx, xls) are staged for
+ * knowledge-library import; image attachments are handled separately.
+ */
+export interface ChatV2UploadedAttachment {
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+  contentBase64: string;
+}
+
 /** Renderer request to start a streaming chat turn. */
 export interface ChatV2StreamRequest {
   conversationId?: string;
@@ -77,6 +90,8 @@ export interface ChatV2StreamRequest {
   maxTokens?: number;
   systemPrompt?: string;
   mode?: ChatV2Mode;
+  /** Optional document attachments to stage for this turn. */
+  attachments?: ChatV2UploadedAttachment[];
 }
 
 export interface ChatV2HistoryRequest {

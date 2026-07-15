@@ -14,6 +14,7 @@ import { getSharedAutoDreamService } from "@/service/AIAutoDreamFactory";
 import { AIChatToolApprovalModule } from "@/modules/AIChatToolApprovalModule";
 import { evaluateToolApproval } from "@/service/AIChatToolApprovalPolicyService";
 import { userSafeError } from "@/service/AIChatErrorMapper";
+import { normalizeChatV2Attachments } from "@/service/ChatAttachmentReferenceService";
 import type {
   AIChatQueryEvent,
   AIChatQueryEventSink,
@@ -404,6 +405,9 @@ async function handleStream(event: IpcEventLike, data: string): Promise<void> {
     });
     return;
   }
+
+  // Sanitize any document attachments (drop unsupported/oversized files).
+  req.attachments = normalizeChatV2Attachments(req.attachments);
 
   const validationError = validateStreamRequest(req);
   if (validationError) {
