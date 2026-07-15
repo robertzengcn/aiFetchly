@@ -60,15 +60,18 @@ export function registerWebSocketIpcHandlers(win: BrowserWindow): void {
   });
 
   /**
-   * Send a message through WebSocket.
-   * TODO(WS-1): migrate to registerValidatedHandler — its `status` field is the
-   * send result (true/false), not error/success, so the renderer must read
-   * result.data instead of result.status (a renderer change).
+   * Send a message through WebSocket. Migrated to registerValidatedHandler —
+   * the renderer (sendWebSocketMessage) unwraps result.data to recover the
+   * semantic sent/not-sent boolean.
    */
-  registerValidatedHandler(WEBSOCKET_SEND, lazySchema(() => z.record(z.unknown())), async (input) => {
-    const wsClient = WebSocketClient.getInstance();
-    return wsClient.send(input);
-  });
+  registerValidatedHandler(
+    WEBSOCKET_SEND,
+    lazySchema(() => z.record(z.unknown())),
+    async (input) => {
+      const wsClient = WebSocketClient.getInstance();
+      return wsClient.send(input);
+    }
+  );
 
   log.info("WebSocket IPC handlers registered");
 }
@@ -81,7 +84,9 @@ export function registerWebSocketIpcHandlers(win: BrowserWindow): void {
  *
  * @param win - BrowserWindow instance for sending events
  */
-export async function initializeWebSocketConnection(win: BrowserWindow): Promise<void> {
+export async function initializeWebSocketConnection(
+  win: BrowserWindow
+): Promise<void> {
   try {
     const wsClient = WebSocketClient.getInstance();
     wsClient.connect(win);
