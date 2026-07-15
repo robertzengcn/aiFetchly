@@ -14,6 +14,7 @@ async function unwrap<T>(p: Promise<{ status: boolean; msg?: string; data?: T }>
 
 
 import { ipcMain as ipcMain } from "electron";
+import { log } from "@/modules/Logger";
 import { Token } from "@/modules/token";
 import { USER_AI_ENABLED, USERSDBPATH } from "@/config/usersetting";
 import { AiChatApi } from "@/api/aiChatApi";
@@ -118,14 +119,14 @@ function createQueryLoop(): AIChatQueryLoop {
             });
             if (decision.autoApprove) {
               context = { ...context, skipPermissionCheck: true };
-              console.log(
+              log.info(
                 `[ai-chat-v2] auto-approved tool "${name}" for conversation ${context.conversationId}: ${decision.reason}`
               );
             }
           }
         } catch (err) {
           // Non-fatal: fall back to normal permission flow
-          console.warn(
+          log.warn(
             "[ai-chat-v2] failed to evaluate tool approval mode, falling back to default:",
             err
           );
@@ -222,7 +223,7 @@ function sendChunk(
 }
 
 function sendComplete(event: IpcEventLike, chunk: ChatV2StreamChunk): void {
-  console.log(
+  log.info(
     `[ai-chat-v2] IPC complete event=${chunk.eventType} conv=${
       chunk.conversationId || "(none)"
     } message=${chunk.messageId || "(none)"} fullContentLen=${
@@ -253,7 +254,7 @@ function createEventSink(event: IpcEventLike): AIChatQueryEventSink {
           break;
         case "token":
           if (tokenLogCount < 5 || tokenLogCount % 25 === 0) {
-            console.log(
+            log.info(
               `[ai-chat-v2] IPC token conv=${e.conversationId} message=${e.messageId} deltaLen=${e.contentDelta.length} tokenIndex=${tokenLogCount}`
             );
           }
@@ -756,7 +757,7 @@ async function handleClearConversation(
       const planModule = new AIChatPlanModule();
       await planModule.clearConversationPlanState(conversationId);
     } catch (err) {
-      console.error("[ai-chat-v2] clearConversationPlanState failed:", err);
+      log.error("[ai-chat-v2] clearConversationPlanState failed:", err);
     }
     return ok({ deleted });
   } catch (err) {
@@ -1131,7 +1132,7 @@ export function registerAiChatV2IpcHandlers(): void {
     try {
       await handleStream(event as IpcEventLike, data as string);
     } catch (err) {
-      console.error("[ai-chat-v2] unhandled stream error:", err);
+      log.error("[ai-chat-v2] unhandled stream error:", err);
       const evt = event as IpcEventLike;
       sendComplete(evt, {
         eventType: "error",

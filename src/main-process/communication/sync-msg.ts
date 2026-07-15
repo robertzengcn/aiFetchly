@@ -15,6 +15,7 @@ import { MainProcessAppInfoModule } from '@/modules/MainProcessAppInfoModule'
 import { CommonMessage, CommonResponse } from "@/entityTypes/commonType"
 import { campaignEntity } from "@/entityTypes/campaign-type"
 import { OPENDIRECTORY, CHOOSEFILEDIALOG, GET_APP_INFO } from "@/config/channellist"
+import { log } from "@/modules/Logger";
 import { AppInfo } from '@/modules/AppInfoModule'
 import { registerValidatedHandler } from "@/main-process/communication/_shared/registerValidatedHandler";
 import { noInputSchema, byIdInputSchema } from "@/schemas/ipc/_shared/common";
@@ -27,7 +28,7 @@ const taskListSchema = lazySchema(() =>
 
 
 export default function SyncMsg(mainWindow: BrowserWindow) {
-  console.log("SyncMsg");
+  log.info("SyncMsg");
   
 
  
@@ -42,7 +43,7 @@ export default function SyncMsg(mainWindow: BrowserWindow) {
       //   data: res
       // };
     }).catch(function (err) {
-      console.log(err);
+      log.info(err);
       if (err instanceof Error) {
         return {
           status: false,
@@ -55,7 +56,7 @@ export default function SyncMsg(mainWindow: BrowserWindow) {
         };
       }
     });
-    console.log(res)
+    log.info(res)
     return res as CommonResponse<campaignEntity>;
   });
   //get social task list
