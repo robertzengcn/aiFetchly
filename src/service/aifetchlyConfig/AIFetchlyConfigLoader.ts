@@ -521,6 +521,7 @@ export class AIFetchlyConfigLoader {
       sourceId,
       sourceLabel: "User",
       requiresTrust: false,
+      rootPath: this.rootPath,
     };
 
     for (const entry of entries) {

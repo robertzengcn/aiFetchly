@@ -2249,6 +2249,7 @@ emailAutoReplyAudit: {
     field_name: "名前",
     field_id_slug: "IDスラッグ",
     field_description: "説明",
+    field_source_file: "ソースファイル",
     field_mode: "モード",
     field_system_prompt: "システムプロンプト",
     field_tools: "許可するツール",

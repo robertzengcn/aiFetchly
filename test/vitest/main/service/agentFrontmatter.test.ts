@@ -84,6 +84,26 @@ describe("buildAgentDefinition — valid AGT-02 drafts", () => {
     // outputSchema is an empty object (structured authoring deferred —
     // RESEARCH Pitfall 4). The field is ALWAYS present (required-typed).
     expect(def.outputSchema).toEqual({});
+    expect(def.manifest?.sourceLocation).toEqual({
+      sourceId: "user",
+      sourceLabel: "User",
+      relativePath: "agents/lead-researcher.md",
+    });
+  });
+
+  it("stores the optional source root for local config agent locations", () => {
+    const result = buildAgentDefinition(draft(), {
+      ...baseSourceMeta,
+      rootPath: "/home/user/.aifetchly",
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected ok");
+    expect(result.definition.manifest?.sourceLocation).toEqual({
+      sourceId: "user",
+      sourceLabel: "User",
+      relativePath: "agents/lead-researcher.md",
+      rootPath: "/home/user/.aifetchly",
+    });
   });
 
   it("builds a scoped id derived from sourceMeta.sourceId + name (workspace form)", () => {
@@ -515,7 +535,9 @@ describe("detectUnknownTools (DX-01 non-fatal warning)", () => {
     if (!result.ok) throw new Error("expected ok");
     const def = result.definition;
     expect(def.allowedTools).toEqual([]);
-    expect(detectUnknownTools(def, new Set<string>(["web_search"]))).toEqual([]);
+    expect(detectUnknownTools(def, new Set<string>(["web_search"]))).toEqual(
+      []
+    );
   });
 
   it("is non-fatal: a valid definition with unknown tools is still registrable", () => {

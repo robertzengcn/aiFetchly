@@ -2290,6 +2290,7 @@ emailAutoReplyAudit: {
     field_name: "Name",
     field_id_slug: "ID slug",
     field_description: "Description",
+    field_source_file: "Source file",
     field_mode: "Mode",
     field_system_prompt: "System prompt",
     field_tools: "Allowed tools",

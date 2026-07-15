@@ -2292,6 +2292,7 @@ emailAutoReplyAudit: {
     field_name: "Name",
     field_id_slug: "ID-Slug",
     field_description: "Beschreibung",
+    field_source_file: "Quelldatei",
     field_mode: "Modus",
     field_system_prompt: "System-Prompt",
     field_tools: "Erlaubte Werkzeuge",

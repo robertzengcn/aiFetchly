@@ -2215,6 +2215,7 @@ emailAutoReplyAudit: {
     field_name: "名称",
     field_id_slug: "ID 标识",
     field_description: "描述",
+    field_source_file: "来源文件",
     field_mode: "模式",
     field_system_prompt: "系统提示词",
     field_tools: "允许的工具",

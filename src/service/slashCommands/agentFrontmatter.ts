@@ -69,6 +69,7 @@ export interface AgentDefinitionSourceMeta {
   readonly sourceId: string;
   readonly sourceLabel: string;
   readonly requiresTrust: boolean;
+  readonly rootPath?: string;
 }
 
 /**
@@ -251,12 +252,22 @@ export function buildAgentDefinition(
     systemPrompt: body,
     allowedTools: Array.from(tools),
     mode: "specialist",
-    maxToolCalls: typeof maxToolCalls === "number" ? maxToolCalls : DEFAULT_MAX_TOOL_CALLS,
-    maxRuntimeMs: typeof maxRuntimeMs === "number" ? maxRuntimeMs : DEFAULT_MAX_RUNTIME_MS,
+    maxToolCalls:
+      typeof maxToolCalls === "number" ? maxToolCalls : DEFAULT_MAX_TOOL_CALLS,
+    maxRuntimeMs:
+      typeof maxRuntimeMs === "number" ? maxRuntimeMs : DEFAULT_MAX_RUNTIME_MS,
     maxContinueCalls: DEFAULT_MAX_CONTINUE_CALLS,
     outputSchema: {},
     status: "active",
     source: sourceMeta.source,
+    manifest: {
+      sourceLocation: {
+        sourceId: sourceMeta.sourceId,
+        sourceLabel: sourceMeta.sourceLabel,
+        relativePath: filePath,
+        ...(sourceMeta.rootPath ? { rootPath: sourceMeta.rootPath } : {}),
+      },
+    },
     health: "healthy",
   };
 
@@ -355,7 +366,8 @@ function sourceFromDefinitionId(id: string): {
   }
   const sourceId = id.slice(0, idx);
   if (sourceId === "user") return { sourceId, source: "user" };
-  if (sourceId.startsWith("workspace:")) return { sourceId, source: "workspace" };
+  if (sourceId.startsWith("workspace:"))
+    return { sourceId, source: "workspace" };
   if (sourceId.startsWith("plugin:")) return { sourceId, source: "plugin" };
   return { sourceId, source: "user" };
 }
