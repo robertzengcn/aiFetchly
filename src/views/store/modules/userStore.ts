@@ -9,23 +9,24 @@ import {
   getUserInfo as fetchUserInfo,
 } from "@/views/api/users";
 import { getToken, setToken, removeToken } from "@/views/utils/cookies";
-import router from "@/views/router";
-import { usePermissionStore } from "./permissionStore";
 
 /**
  * User store — Pinia (setup-style) port of the former Vuex
  * `vuex-module-decorators` `UserModule`.
  *
- * Auth/permission behaviour preserved exactly (WS-6 R6.1):
- *  - `login`          → validates via the login API, sets roles, generates the
- *                       permission routes and registers them with the router.
- *                       NOTE: the token is NOT persisted here (mirrors the
- *                       original Vuex action); `loginCallback` owns the token.
+ * Auth behaviour preserved (WS-6 R6.1):
+ *  - `login`          → validates via the login API and sets roles. NOTE: the
+ *                       token is NOT persisted here (mirrors the original Vuex
+ *                       action); `loginCallback` owns the token.
  *  - `loginCallback`  → persists the token (cookie) + state.
  *  - `getUserInfo`    → hydrates name/email; the router guard keys off these.
  *  - `resetToken`/`logout` → clears token + identity.
  *
- * The original threw on `status === false`; that contract is preserved.
+ * The former permission route-generation (GenerateRoutes / router.addRoute on
+ * the empty `asyncRoutes`) was removed as dead code (WS-6 R6.7): `asyncRoutes`
+ * was empty and no consumer ever read `permission.routes`/`dynamicRoutes` (the
+ * menu reads `router.options.routes` directly). The original threw on
+ * `status === false`; that contract is preserved.
  */
 export const useUserStore = defineStore("user", () => {
   const token = ref<string>(getToken() || "");
@@ -46,12 +47,6 @@ export const useUserStore = defineStore("user", () => {
       throw Error(data.msg);
     }
     roles.value = data.data.roles;
-
-    const permissionStore = usePermissionStore();
-    permissionStore.generateRoutes(roles.value);
-    permissionStore.dynamicRoutes.forEach((route) => {
-      router.addRoute(route);
-    });
   };
 
   const loginCallback = (data: {
@@ -99,11 +94,6 @@ export const useUserStore = defineStore("user", () => {
     token.value = newToken;
     setToken(newToken);
     await getUserInfo();
-    const permissionStore = usePermissionStore();
-    permissionStore.generateRoutes(roles.value);
-    permissionStore.dynamicRoutes.forEach((route) => {
-      router.addRoute(route);
-    });
   };
 
   const logout = async (): Promise<void> => {

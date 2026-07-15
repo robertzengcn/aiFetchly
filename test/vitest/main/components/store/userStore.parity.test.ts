@@ -1,39 +1,20 @@
 import { describe, expect, it, beforeEach, vi } from "vitest";
 import { setActivePinia, createPinia } from "pinia";
 import { getToken, removeToken } from "@/views/utils/cookies";
+import { useUserStore } from "@/views/store/modules/userStore";
 
 // Hoisted mocks so we can assert on the spy handles.
-const { loginMock, signoutMock, getUserInfoMock, addRouteMock } = vi.hoisted(
-  () => ({
-    loginMock: vi.fn(),
-    signoutMock: vi.fn(),
-    getUserInfoMock: vi.fn(),
-    addRouteMock: vi.fn(),
-  })
-);
+const { loginMock, signoutMock, getUserInfoMock } = vi.hoisted(() => ({
+  loginMock: vi.fn(),
+  signoutMock: vi.fn(),
+  getUserInfoMock: vi.fn(),
+}));
 
 vi.mock("@/views/api/users", () => ({
   login: loginMock,
   Signout: signoutMock,
   getUserInfo: getUserInfoMock,
 }));
-
-// Provide a non-empty asyncRoutes so the login→generateRoutes→addRoute flow is
-// observable (the live asyncRoutes is empty). The user store imports the router
-// default for `router.addRoute`; the permission store imports the named exports.
-vi.mock("@/views/router", () => ({
-  asyncRoutes: [
-    { path: "/a", meta: { roles: ["admin"] } },
-    { path: "/b", meta: { roles: ["user"] } },
-  ],
-  constantRoutes: [{ path: "/" }],
-  default: { addRoute: addRouteMock },
-}));
-
-const { useUserStore } = await import("@/views/store/modules/userStore");
-const { usePermissionStore } = await import(
-  "@/views/store/modules/permissionStore"
-);
 
 describe("userStore (Pinia parity with former Vuex UserModule)", () => {
   beforeEach(() => {
@@ -42,7 +23,6 @@ describe("userStore (Pinia parity with former Vuex UserModule)", () => {
     loginMock.mockReset();
     signoutMock.mockReset();
     getUserInfoMock.mockReset();
-    addRouteMock.mockReset();
   });
 
   describe("loginCallback", () => {
@@ -62,7 +42,7 @@ describe("userStore (Pinia parity with former Vuex UserModule)", () => {
   });
 
   describe("login", () => {
-    it("sets roles, generates permission routes, and registers them via addRoute", async () => {
+    it("trims the username and sets roles on success", async () => {
       loginMock.mockResolvedValue({
         status: true,
         data: { roles: ["admin"] },
@@ -77,9 +57,6 @@ describe("userStore (Pinia parity with former Vuex UserModule)", () => {
         password: "pw",
       });
       expect(u.roles).toEqual(["admin"]);
-      // admin short-circuit → both async routes registered
-      expect(usePermissionStore().dynamicRoutes).toHaveLength(2);
-      expect(addRouteMock).toHaveBeenCalledTimes(2);
     });
 
     it("throws when the API returns status:false", async () => {
