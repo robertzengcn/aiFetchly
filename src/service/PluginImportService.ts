@@ -1,4 +1,5 @@
 import * as fs from "fs";
+import { log } from "@/modules/Logger";
 import * as path from "path";
 import { PluginManagementModule } from "@/modules/PluginManagementModule";
 import { SkillManagementModule } from "@/modules/SkillManagementModule";
@@ -761,7 +762,7 @@ export class PluginImportService {
         try {
           skillMdContent = fs.readFileSync(skillMdPath, "utf-8");
         } catch (e) {
-          console.warn(
+          log.warn(
             `[PluginImport]   SKILL.md not readable:`,
             e
           );
@@ -798,7 +799,7 @@ export class PluginImportService {
           execute,
         });
       } catch (e) {
-        console.warn(
+        log.warn(
           `Failed to hot-register skill "${skillManifest.name}":`,
           e
         );
@@ -856,7 +857,7 @@ export class PluginImportService {
         }
         await new MCPToolService().discoverTools(id);
       } catch (e) {
-        console.warn(
+        log.warn(
           `Failed to discover MCP tools for server ${id}:`,
           e
         );

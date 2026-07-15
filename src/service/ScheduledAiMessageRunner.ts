@@ -8,6 +8,7 @@ import {
   type ToolExecutionResult,
 } from "@/api/aiChatApi";
 import { Token } from "@/modules/token";
+import { log } from "@/modules/Logger";
 import { USER_AI_ENABLED } from "@/config/usersetting";
 import { SkillRegistry } from "@/config/skillsRegistry";
 import { SkillExecutor } from "@/service/SkillExecutor";
@@ -369,7 +370,7 @@ export class ScheduledAiMessageRunner {
         errorMessage,
       };
     } catch (logError) {
-      console.error("Failed to log AI message task failure:", logError);
+      log.error("Failed to log AI message task failure:", logError);
       return {
         runId: 0,
         status: "failed",

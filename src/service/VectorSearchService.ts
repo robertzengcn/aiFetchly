@@ -1,4 +1,5 @@
 import { VectorStoreService } from "./VectorStoreService";
+import { log } from "@/modules/Logger";
 // import { SqliteDb } from '@/config/SqliteDb';
 import { EmbeddingImpl } from "@/modules/interface/EmbeddingImpl";
 import { RAGDocumentModule } from "@/modules/RAGDocumentModule";
@@ -146,14 +147,14 @@ export class VectorSearchService {
       for (const [modelKey, docs] of documentsByModel.entries()) {
         const separatorIndex = modelKey.lastIndexOf(":");
         if (separatorIndex === -1) {
-          console.warn(`Invalid model key format: ${modelKey}`);
+          log.warn(`Invalid model key format: ${modelKey}`);
           continue;
         }
         const modelName = modelKey.slice(0, separatorIndex);
         const dimensions = modelKey.slice(separatorIndex + 1);
         const numericDimensions = Number.parseInt(dimensions, 10);
         if (Number.isNaN(numericDimensions) || numericDimensions <= 0) {
-          console.warn(
+          log.warn(
             `Invalid vector dimensions "${dimensions}" for model ${modelName}`
           );
           continue;
@@ -177,7 +178,7 @@ export class VectorSearchService {
               ? "local query embedding failed"
               : "remote query embedding failed after retry",
           });
-          console.warn(
+          log.warn(
             `[VectorSearchService] Skipping model group ${modelName}:${numericDimensions} — query embedding unavailable`
           );
           continue;
@@ -205,7 +206,7 @@ export class VectorSearchService {
               documentId: doc.id,
             });
           } catch (error) {
-            console.warn(`Failed to search in document ${doc.id}:`, error);
+            log.warn(`Failed to search in document ${doc.id}:`, error);
             // Log total number of chunks in the search index for this document
             try {
               const totalChunks = await this.vectorStore.getTotalVectors();
@@ -213,7 +214,7 @@ export class VectorSearchService {
                 `Document ${doc.id} index contains ${totalChunks} chunks`
               );
             } catch (countError) {
-              console.warn(
+              log.warn(
                 `Failed to retrieve index size for document ${doc.id}:`,
                 countError
               );
@@ -237,7 +238,7 @@ export class VectorSearchService {
       );
 
       if (skippedModelGroups.length > 0) {
-        console.warn(
+        log.warn(
           `[VectorSearchService] Partial search: ${skippedModelGroups.length} model group(s) skipped — ` +
             skippedModelGroups
               .map((g) => `${g.modelName}:${g.dimensions} (${g.reason})`)
@@ -247,7 +248,7 @@ export class VectorSearchService {
 
       return results;
     } catch (error) {
-      console.error("Error in vector search:", error);
+      log.error("Error in vector search:", error);
       throw new Error(
         `Vector search failed: ${
           error instanceof Error ? error.message : "Unknown error"
@@ -444,14 +445,14 @@ export class VectorSearchService {
         );
         const result = await provider.embedText(query);
         if (result.embedding.length !== expectedDimensions) {
-          console.warn(
+          log.warn(
             `Local query vector dimensions (${result.embedding.length}) do not match expected dimensions (${expectedDimensions}) for model "${modelName}"`
           );
           return null;
         }
         return result.embedding;
       } catch (error) {
-        console.warn(
+        log.warn(
           `Local query embedding failed for model ${modelName}: ${
             error instanceof Error ? error.message : error
           }`
@@ -477,7 +478,7 @@ export class VectorSearchService {
 
         const queryVector = response.data[0].embedding;
         if (queryVector.length !== expectedDimensions) {
-          console.warn(
+          log.warn(
             `Query vector dimensions (${queryVector.length}) do not match expected dimensions (${expectedDimensions}) for model candidate "${candidateModel}" (document model "${modelName}")`
           );
           continue;
@@ -495,7 +496,7 @@ export class VectorSearchService {
       }
     }
 
-    console.warn(
+    log.warn(
       `Failed to generate query embedding for model ${modelName}. Tried ${
         modelCandidates.length
       } candidate(s). Last error: ${lastErrorMessage || "Unknown error"}`
@@ -522,7 +523,7 @@ export class VectorSearchService {
       );
       return this.availableEmbeddingModelsCache;
     } catch (error) {
-      console.warn(
+      log.warn(
         "Failed to load available embedding models for name resolution:",
         error
       );
@@ -549,7 +550,7 @@ export class VectorSearchService {
     for (const doc of documents) {
       const modelConfig = await this.getDocumentModelConfig(doc.id);
       if (!modelConfig) {
-        console.warn(`No model configuration found for document ${doc.id}`);
+        log.warn(`No model configuration found for document ${doc.id}`);
         continue;
       }
 
@@ -697,7 +698,7 @@ export class VectorSearchService {
 
       return results;
     } catch (error) {
-      console.error("Error getting detailed results:", error);
+      log.error("Error getting detailed results:", error);
       throw new Error("Failed to get detailed search results");
     }
   }
@@ -744,7 +745,7 @@ export class VectorSearchService {
 
       return Array.from(suggestions).slice(0, limit);
     } catch (error) {
-      console.error("Error getting search suggestions:", error);
+      log.error("Error getting search suggestions:", error);
       return [];
     }
   }
@@ -773,7 +774,7 @@ export class VectorSearchService {
         indexStats,
       };
     } catch (error) {
-      console.error("Error getting search analytics:", error);
+      log.error("Error getting search analytics:", error);
       throw new Error("Failed to get search analytics");
     }
   }
@@ -783,7 +784,7 @@ export class VectorSearchService {
    */
   clearCache(): void {
     // Implementation for search result caching would go here
-    console.log("Search cache cleared");
+    log.info("Search cache cleared");
   }
 
   /**
@@ -814,7 +815,7 @@ export class VectorSearchService {
       // Use document module to get documents with embeddings
       return await this.documentModule.getDocumentsWithEmbeddings();
     } catch (error) {
-      console.error("Error getting documents with embeddings:", error);
+      log.error("Error getting documents with embeddings:", error);
       return [];
     }
   }
@@ -847,7 +848,7 @@ export class VectorSearchService {
 
       return null;
     } catch (error) {
-      console.error(
+      log.error(
         `Error getting model config for document ${documentId}:`,
         error
       );

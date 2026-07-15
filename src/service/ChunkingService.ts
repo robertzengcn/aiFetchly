@@ -1,4 +1,5 @@
 import { RAGChunkEntity } from "@/entity/RAGChunk.entity";
+import { log } from "@/modules/Logger";
 import { RAGDocumentEntity } from "@/entity/RAGDocument.entity";
 // import { SqliteDb } from '@/config/SqliteDb';
 import { RagConfigApi, ChunkingConfig } from "@/api/ragConfigApi";
@@ -75,9 +76,9 @@ export class ChunkingService {
   private async initializeConfig(): Promise<void> {
     try {
       await this.loadChunkingConfig();
-      console.log("ChunkingService initialized with remote configuration");
+      log.info("ChunkingService initialized with remote configuration");
     } catch (error) {
-      console.warn(
+      log.warn(
         "Failed to load remote chunking configuration, using defaults:",
         error
       );
@@ -90,7 +91,7 @@ export class ChunkingService {
   private async loadChunkingConfig(): Promise<void> {
     // Check if cache is still valid
     if (this.cachedConfig && Date.now() < this.configCacheExpiry) {
-      console.log("Using cached chunking configuration");
+      log.info("Using cached chunking configuration");
       return;
     }
 
@@ -98,7 +99,7 @@ export class ChunkingService {
       // Check if remote service is online
       const healthCheck = await this.ragConfigApi.isOnline();
       if (!healthCheck.status || !healthCheck.data) {
-        console.warn("Remote configuration service is offline, using defaults");
+        log.warn("Remote configuration service is offline, using defaults");
         return;
       }
 
@@ -107,16 +108,16 @@ export class ChunkingService {
       if (configResponse.status && configResponse.data) {
         this.cachedConfig = configResponse.data.default_config;
         this.configCacheExpiry = Date.now() + this.CACHE_DURATION_MS;
-        console.log("Chunking configuration loaded from remote API:", {
+        log.info("Chunking configuration loaded from remote API:", {
           chunkSize: this.cachedConfig.chunkSize,
           overlapSize: this.cachedConfig.overlapSize,
           strategy: this.cachedConfig.strategy,
         });
       } else {
-        console.warn("Failed to fetch chunking configuration from remote API");
+        log.warn("Failed to fetch chunking configuration from remote API");
       }
     } catch (error) {
-      console.error("Error loading chunking configuration:", error);
+      log.error("Error loading chunking configuration:", error);
       throw error;
     }
   }
@@ -212,11 +213,11 @@ export class ChunkingService {
       throw new Error("Unable to extract content from document");
     }
 
-    console.log(`Processing document: ${path.basename(document.filePath)}`);
-    console.log(
+    log.info(`Processing document: ${path.basename(document.filePath)}`);
+    log.info(
       `Content type: ${documentContent.contentType}, Original format: ${documentContent.originalFormat}`
     );
-    console.log(
+    log.info(
       `Content length: ${documentContent.content.length} characters, ${
         documentContent.metadata?.wordCount || 0
       } words`
@@ -243,7 +244,7 @@ export class ChunkingService {
       );
 
       if (existingChunk) {
-        console.warn(
+        log.warn(
           `Duplicate chunk detected for document ${document.id}, chunk ${i}`
         );
         continue;
@@ -273,18 +274,18 @@ export class ChunkingService {
     try {
       // Check if file exists
       if (!fs.existsSync(filePath)) {
-        console.error(`DOCX file not found: ${filePath}`);
+        log.error(`DOCX file not found: ${filePath}`);
         return null;
       }
 
-      console.log(`Processing DOCX file: ${path.basename(filePath)}`);
+      log.info(`Processing DOCX file: ${path.basename(filePath)}`);
 
       // Convert DOCX to HTML using mammoth
       const result = await mammoth.convertToHtml({ path: filePath });
       const htmlContent = result.value;
 
       if (!htmlContent || htmlContent.trim().length === 0) {
-        console.warn(
+        log.warn(
           `No content extracted from DOCX: ${path.basename(filePath)}`
         );
         return null;
@@ -292,7 +293,7 @@ export class ChunkingService {
 
       // Log any conversion messages/warnings
       if (result.messages && result.messages.length > 0) {
-        console.log(
+        log.info(
           `DOCX conversion messages for ${path.basename(filePath)}:`,
           result.messages
         );
@@ -303,18 +304,18 @@ export class ChunkingService {
         this.htmlConversionService.convertHtmlToMarkdown(htmlContent);
 
       if (markdownContent && markdownContent.trim().length > 0) {
-        console.log(
+        log.info(
           `Successfully converted DOCX to markdown: ${markdownContent.length} characters`
         );
         return markdownContent.trim();
       } else {
-        console.warn(
+        log.warn(
           `No markdown content generated from DOCX: ${path.basename(filePath)}`
         );
         return null;
       }
     } catch (error) {
-      console.error(`Error extracting DOCX content from ${filePath}:`, error);
+      log.error(`Error extracting DOCX content from ${filePath}:`, error);
       return null;
     }
   }
@@ -328,7 +329,7 @@ export class ChunkingService {
     try {
       // Check if file exists
       if (!fs.existsSync(filePath)) {
-        console.error(`PDF file not found: ${filePath}`);
+        log.error(`PDF file not found: ${filePath}`);
         return null;
       }
 
@@ -336,7 +337,7 @@ export class ChunkingService {
       const pdfBytes = fs.readFileSync(filePath);
 
       if (pdfBytes.length === 0) {
-        console.error(`PDF file is empty: ${filePath}`);
+        log.error(`PDF file is empty: ${filePath}`);
         return null;
       }
 
@@ -345,11 +346,11 @@ export class ChunkingService {
       const pageCount = pdfDoc.getPageCount();
 
       if (pageCount === 0) {
-        console.warn(`PDF has no pages: ${filePath}`);
+        log.warn(`PDF has no pages: ${filePath}`);
         return null;
       }
 
-      console.log(
+      log.info(
         `Processing PDF with ${pageCount} pages: ${path.basename(filePath)}`
       );
 
@@ -387,16 +388,16 @@ export class ChunkingService {
 
           // Log progress every 10 pages or on the last page
           if (pageNum % 10 === 0 || pageNum === pageCount) {
-            console.log(`Processed ${pageNum}/${pageCount} pages`);
+            log.info(`Processed ${pageNum}/${pageCount} pages`);
           }
         } catch (pageError) {
-          console.warn(`Failed to process page ${pageNum}:`, pageError);
+          log.warn(`Failed to process page ${pageNum}:`, pageError);
           // Continue with other pages even if one fails
         }
       }
 
       if (fullContent.trim()) {
-        console.log(
+        log.info(
           `Successfully extracted PDF content: ${fullContent.length} characters from ${processedPages}/${pageCount} pages`
         );
         return {
@@ -404,13 +405,13 @@ export class ChunkingService {
           pageCount: pageCount,
         };
       } else {
-        console.warn(
+        log.warn(
           `No content extracted from PDF: ${path.basename(filePath)}`
         );
         return null;
       }
     } catch (error) {
-      console.error(`Error extracting PDF content from ${filePath}:`, error);
+      log.error(`Error extracting PDF content from ${filePath}:`, error);
       return null;
     }
   }
@@ -474,7 +475,7 @@ export class ChunkingService {
         case ".html":
         case ".htm": {
           const htmlContent = fs.readFileSync(document.filePath, "utf-8");
-          console.log(
+          log.info(
             `Converting HTML file to markdown: ${path.basename(
               document.filePath
             )}`
@@ -579,11 +580,11 @@ export class ChunkingService {
         //     return null;
 
         default:
-          console.warn(`Unsupported file type for text extraction: ${fileExt}`);
+          log.warn(`Unsupported file type for text extraction: ${fileExt}`);
           return null;
       }
     } catch (error) {
-      console.error("Error extracting document content:", error);
+      log.error("Error extracting document content:", error);
       return null;
     }
   }
@@ -638,7 +639,7 @@ export class ChunkingService {
       options.strategy
     );
 
-    console.log(
+    log.info(
       `Using chunking strategy: ${effectiveStrategy} for content type: ${contentType}`
     );
 

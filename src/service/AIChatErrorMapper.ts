@@ -1,3 +1,4 @@
+import { log } from "@/modules/Logger";
 // src/service/AIChatErrorMapper.ts
 
 /**
@@ -60,7 +61,7 @@ export function userSafeError(err: unknown): string {
     ) {
       return "The AI service is busy or had a transient issue. Please try again in a moment.";
     }
-    console.error("[ai-chat-v2] unmapped error:", msg);
+    log.error("[ai-chat-v2] unmapped error:", msg);
     return "An unexpected error occurred. Please try again.";
   }
   return "Unknown error";

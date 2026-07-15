@@ -1,4 +1,5 @@
 import { ZodError } from "zod";
+import { log } from "@/modules/Logger";
 import { EmailServiceModule } from "@/modules/emailServiceModule";
 import { EmailReceivedMessageModule } from "@/modules/EmailReceivedMessageModule";
 import { EmailReplyDraftModule } from "@/modules/EmailReplyDraftModule";
@@ -387,7 +388,7 @@ async function writeSendAudit(args: {
       : args.error;
     await new EmailReplyAuditLogModule().create(replyAudit);
   } catch (e) {
-    console.error("Failed to write reply send audit:", e);
+    log.error("Failed to write reply send audit:", e);
   }
   try {
     const autoAudit = new EmailAutoReplyAuditLogEntity();
@@ -406,7 +407,7 @@ async function writeSendAudit(args: {
       : "Send failed after user confirmation";
     await new EmailAutoReplyAuditLogModule().create(autoAudit);
   } catch (e) {
-    console.error("Failed to write auto-reply send audit:", e);
+    log.error("Failed to write auto-reply send audit:", e);
   }
 }
 
@@ -491,6 +492,6 @@ async function writeReadAudit(
     await auditModule.create(log);
   } catch (e) {
     // Audit failure must not break the tool call.
-    console.error("Failed to write AI read audit log:", e);
+    log.error("Failed to write AI read audit log:", e);
   }
 }

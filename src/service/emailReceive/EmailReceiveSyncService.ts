@@ -1,4 +1,5 @@
 import { EmailServiceModule } from "@/modules/emailServiceModule";
+import { log } from "@/modules/Logger";
 import { EmailReceivedMessageModule } from "@/modules/EmailReceivedMessageModule";
 import { EmailReplyAuditLogModule } from "@/modules/EmailReplyAuditLogModule";
 import { EmailReceivedMessageEntity } from "@/entity/EmailReceivedMessage.entity";
@@ -207,7 +208,7 @@ export class EmailReceiveSyncService {
       await this.auditModule.create(log);
     } catch (e) {
       // Audit failure must not break the sync.
-      console.error("Failed to write receive audit log:", e);
+      log.error("Failed to write receive audit log:", e);
     }
   }
 }

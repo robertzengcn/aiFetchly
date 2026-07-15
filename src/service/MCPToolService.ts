@@ -1,4 +1,5 @@
 import { MCPToolEntity } from "@/entity/MCPTool.entity";
+import { log } from "@/modules/Logger";
 import { MCPToolModule } from "@/modules/MCPToolModule";
 import { MCPClient } from "@/modules/MCPClient";
 import { PluginOptionsStore } from "@/service/pluginCompat/PluginOptionsStore";
@@ -112,7 +113,7 @@ function buildClientConfig(server: MCPToolEntity): {
         // Unresolved placeholders — leave them in place; the spawn will
         // surface a clear error. The Plugin Manager UI renders the
         // missing vars so the user can supply values.
-        console.warn(
+        log.warn(
           `[MCPToolService] plugin "${server.pluginName}" server ` +
             `"${scopedName}" has unresolved env placeholders: ` +
             `${resolved.missing.join(", ")}`
@@ -307,7 +308,7 @@ export class MCPToolService {
                 { description?: string; inputSchema?: Record<string, unknown> }
               >) || {};
           } catch (error) {
-            console.error(
+            log.error(
               `Failed to parse metadata for server ${server.id}:`,
               error
             );
@@ -336,7 +337,7 @@ export class MCPToolService {
           }
         }
       } catch (error) {
-        console.error(`Failed to parse tools for server ${server.id}:`, error);
+        log.error(`Failed to parse tools for server ${server.id}:`, error);
       }
     }
 
@@ -486,7 +487,7 @@ export class MCPToolService {
         try {
           metadata = JSON.parse(server.metadata);
         } catch (e) {
-          console.warn("Failed to parse existing metadata, initializing new");
+          log.warn("Failed to parse existing metadata, initializing new");
         }
       }
 
@@ -513,7 +514,7 @@ export class MCPToolService {
         try {
           toolConfig = JSON.parse(server.toolConfig);
         } catch (e) {
-          console.warn("Failed to parse existing toolConfig, initializing new");
+          log.warn("Failed to parse existing toolConfig, initializing new");
         }
       }
 
@@ -569,7 +570,7 @@ export class MCPToolService {
       try {
         toolConfig = JSON.parse(server.toolConfig);
       } catch (e) {
-        console.warn("Failed to parse toolConfig");
+        log.warn("Failed to parse toolConfig");
       }
     }
 
@@ -654,7 +655,7 @@ export class MCPToolService {
     try {
       toolConfig = JSON.parse(server.toolConfig);
     } catch {
-      console.warn("Failed to parse toolConfig for tool check");
+      log.warn("Failed to parse toolConfig for tool check");
       return;
     }
     if (toolConfig[toolName]?.enabled === false) {

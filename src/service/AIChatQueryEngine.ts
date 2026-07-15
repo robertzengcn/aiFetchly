@@ -1,5 +1,6 @@
 // src/service/AIChatQueryEngine.ts
 import { AIChatV2Module } from "@/modules/AIChatV2Module";
+import { log } from "@/modules/Logger";
 import { AIChatPlanModule } from "@/modules/AIChatPlanModule";
 import { AIChatAttachmentModule } from "@/modules/AIChatAttachmentModule";
 import { AIChatToolApprovalModule } from "@/modules/AIChatToolApprovalModule";
@@ -228,7 +229,7 @@ export class AIChatQueryEngine {
         });
       } else {
         // Document was too large or staging failed — skip enrichment
-        console.log(
+        log.info(
           `[ai-chat-v2] document ${file.fileName} not staged — skipping enrichment`
         );
       }
@@ -281,7 +282,7 @@ export class AIChatQueryEngine {
 
     for (const file of files) {
       if (file.sizeBytes > SMALL_DOC_THRESHOLD) {
-        console.log(
+        log.info(
           `[ai-chat-v2] large document ${file.fileName} (${file.sizeBytes}b) — staging skipped`
         );
         continue;
@@ -300,7 +301,7 @@ export class AIChatQueryEngine {
         );
         staged.push(ref);
       } catch (err) {
-        console.error(
+        log.error(
           `[ai-chat-v2] failed to stage document ${file.fileName}:`,
           err
         );
@@ -475,7 +476,7 @@ export class AIChatQueryEngine {
       this.currentAssistantMessageId = assistantMessageId;
       messages = [...assembled.messages];
     } catch (err) {
-      console.error("[ai-chat-v2] pre-stream error:", err);
+      log.error("[ai-chat-v2] pre-stream error:", err);
       this.clearActiveTurnState();
       eventSink.emit({
         type: "error",
@@ -792,7 +793,7 @@ export class AIChatQueryEngine {
           await this.handleLoopResult(result, module, eventSink);
         })
         .catch((err) => {
-          console.error("[ai-chat-v2] resume loop failed:", err);
+          log.error("[ai-chat-v2] resume loop failed:", err);
           pending.eventSink.emit({
             type: "error",
             conversationId: pending.conversationId,
@@ -920,7 +921,7 @@ export class AIChatQueryEngine {
         await this.handleLoopResult(result, module, eventSink);
       })
       .catch((err) => {
-        console.error("[ai-chat-v2] answer-question loop failed:", err);
+        log.error("[ai-chat-v2] answer-question loop failed:", err);
         pending.eventSink.emit({
           type: "error",
           conversationId: pending.conversationId,
@@ -987,7 +988,7 @@ export class AIChatQueryEngine {
               model: result.model,
             })
             .catch((err) =>
-              console.error(
+              log.error(
                 "[ai-chat-compact] session memory update failed:",
                 err
               )
@@ -1000,7 +1001,7 @@ export class AIChatQueryEngine {
               reason: "assistant_turn_completed",
             })
             .catch((err) =>
-              console.error("[ai-auto-dream] chat trigger failed:", err)
+              log.error("[ai-auto-dream] chat trigger failed:", err)
             );
         }
         if (this.workspaceAutoDreamService) {
@@ -1010,7 +1011,7 @@ export class AIChatQueryEngine {
               reason: "assistant_turn_completed",
             })
             .catch((err) =>
-              console.error("[workspace-auto-dream] chat trigger failed:", err)
+              log.error("[workspace-auto-dream] chat trigger failed:", err)
             );
         }
         this.dispatchStop(conversationId, "completed");
@@ -1075,14 +1076,14 @@ export class AIChatQueryEngine {
       }
       case "paused_for_permission": {
         this.pendingPermission = result.pending;
-        console.log(
+        log.info(
           `[ai-chat-v2] tool ${result.pending.toolName} needs permission — paused (nextRound=${result.pending.nextRound})`
         );
         break;
       }
       case "paused_for_plan_question": {
         this.pendingPlanQuestion = result.pending;
-        console.log(
+        log.info(
           `[ai-chat-v2] AskUserQuestion paused (questionId=${result.pending.questionId}, nextRound=${result.pending.nextRound})`
         );
         break;
@@ -1134,7 +1135,7 @@ export class AIChatQueryEngine {
                 tokensUsed: latestUsage?.totalTokens,
               })
               .catch((err: unknown) => {
-                console.error("[ai-chat-v2] save tool call failed:", err);
+                log.error("[ai-chat-v2] save tool call failed:", err);
               })
           );
         }
@@ -1152,7 +1153,7 @@ export class AIChatQueryEngine {
                   event.replacesPermissionPromptForToolId,
               })
               .catch((err: unknown) => {
-                console.error("[ai-chat-v2] save tool result failed:", err);
+                log.error("[ai-chat-v2] save tool result failed:", err);
               })
           );
         }
@@ -1183,7 +1184,7 @@ export class AIChatQueryEngine {
     eventSink: AIChatQueryEventSink
   ): void {
     this.dispatchStop(conversationId, "error");
-    console.error("[ai-chat-v2] engine failure:", err);
+    log.error("[ai-chat-v2] engine failure:", err);
     eventSink.emit({
       type: "error",
       conversationId,

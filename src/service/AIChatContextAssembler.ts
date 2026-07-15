@@ -1,4 +1,5 @@
 import { AIChatSessionMemoryModule } from "@/modules/AIChatSessionMemoryModule";
+import { log } from "@/modules/Logger";
 import { AIChatCompactModule } from "@/modules/AIChatCompactModule";
 import { AIChatV2Module } from "@/modules/AIChatV2Module";
 import { AIChatTokenEstimator } from "@/service/AIChatTokenEstimator";
@@ -133,7 +134,7 @@ export class AIChatContextAssembler {
         messages.push({ role: "system", content: customDirective });
       }
     } catch (err) {
-      console.error(
+      log.error(
         "[ai-chat-context] failed to read custom context directive:",
         err
       );
@@ -153,7 +154,7 @@ export class AIChatContextAssembler {
         });
       }
     } catch (err) {
-      console.error(
+      log.error(
         "[ai-chat-context] failed to resolve active workspace:",
         err
       );
@@ -166,7 +167,7 @@ export class AIChatContextAssembler {
       const envBlock = await this.buildEnvironmentContext();
       messages.push({ role: "system", content: envBlock });
     } catch (err) {
-      console.error(
+      log.error(
         "[ai-chat-context] failed to build environment context:",
         err
       );
@@ -191,7 +192,7 @@ export class AIChatContextAssembler {
       );
       workspaceInjectionEnabled = wv !== "false";
     } catch (err) {
-      console.error(
+      log.error(
         "[ai-chat-context] failed to read workspace memory injection toggle:",
         err
       );
@@ -210,7 +211,7 @@ export class AIChatContextAssembler {
         workspaceContextBlock = workspaceMem.contextBlock;
         workspaceMemoryCount = workspaceMem.memories.length;
       } catch (err) {
-        console.error(
+        log.error(
           "[ai-chat-context] workspace memory retrieval failed:",
           err
         );
@@ -226,7 +227,7 @@ export class AIChatContextAssembler {
       );
       injectionEnabled = v !== "false";
     } catch (err) {
-      console.error(
+      log.error(
         "[ai-chat-context] failed to read memory injection toggle:",
         err
       );
@@ -245,7 +246,7 @@ export class AIChatContextAssembler {
         durableContextBlock = durable.contextBlock;
         durableMemoryCount = durable.memories.length;
       } catch (err) {
-        console.error(
+        log.error(
           "[ai-chat-context] durable memory retrieval failed:",
           err
         );

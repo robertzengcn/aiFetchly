@@ -1,4 +1,5 @@
 import { AIChatSessionMemoryModule } from "@/modules/AIChatSessionMemoryModule";
+import { log } from "@/modules/Logger";
 import { AIChatV2Module } from "@/modules/AIChatV2Module";
 import { AIChatCompactModule } from "@/modules/AIChatCompactModule";
 import { AIChatTokenEstimator } from "@/service/AIChatTokenEstimator";
@@ -87,13 +88,13 @@ export class AIChatCompactAgentService {
     input: SessionMemoryUpdateInput
   ): Promise<void> {
     if (!input.conversationId || !input.conversationId.startsWith(V2_PREFIX)) {
-      console.log(
+      log.info(
         `[ai-chat-compact] session update skipped (invalid conversationId) reason=${input.reason}`
       );
       return;
     }
     if (!this.deps.isEnabled()) {
-      console.log(
+      log.info(
         `[ai-chat-compact] session update skipped (AI disabled) conv=${input.conversationId}`
       );
       return;
@@ -101,7 +102,7 @@ export class AIChatCompactAgentService {
     // Per-conversation serialization.
     const existing = this.inFlight.get(input.conversationId);
     if (existing) {
-      console.log(
+      log.info(
         `[ai-chat-compact] session update skipped (already running) conv=${input.conversationId}`
       );
       return;
@@ -111,7 +112,7 @@ export class AIChatCompactAgentService {
     // SESSION_MEMORY_MAX_AGE_MS has passed since the last successful update.
     const gate = this.shouldAttemptSessionMemoryUpdate(input);
     if (!gate.attempt) {
-      console.log(
+      log.info(
         `[ai-chat-compact] session update skipped (threshold gate) conv=${
           input.conversationId
         } reason=${gate.reason} promptTokens=${
@@ -187,12 +188,12 @@ export class AIChatCompactAgentService {
           ? new Date(existing.updatedAt).getTime()
           : 0;
         if (Date.now() - lastFailureAt > CIRCUIT_BREAKER_COOLDOWN_MS) {
-          console.log(
+          log.info(
             `[ai-chat-compact] circuit breaker cooldown expired conv=${input.conversationId} — retrying`
           );
           await this.memory.resetFailures(input.conversationId);
         } else {
-          console.log(
+          log.info(
             `[ai-chat-compact] session update skipped (circuit broken) conv=${input.conversationId} failures=${existing.failureCount}`
           );
           return;
@@ -213,7 +214,7 @@ export class AIChatCompactAgentService {
         : -1;
       const newRows = sorted.slice(boundaryIdx + 1).filter(isMessageRow);
       if (newRows.length < MIN_DELTA_MESSAGES) {
-        console.log(
+        log.info(
           `[ai-chat-compact] session update skipped (delta too small) conv=${input.conversationId} delta=${newRows.length}`
         );
         return;
@@ -264,7 +265,7 @@ export class AIChatCompactAgentService {
       });
       await this.memory.resetFailures(input.conversationId);
       this.lastSessionMemoryAt.set(input.conversationId, Date.now());
-      console.log(
+      log.info(
         `[ai-chat-compact] session update completed conv=${
           input.conversationId
         } msgs=${newRows.length} tokens=${tokenEstimate} elapsed=${
@@ -273,7 +274,7 @@ export class AIChatCompactAgentService {
       );
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      console.error(
+      log.error(
         `[ai-chat-compact] compact failed conv=${input.conversationId}:`,
         err
       );
@@ -312,7 +313,7 @@ export class AIChatCompactAgentService {
     }));
     const inputTokenEstimate = this.estimator.estimateMessages(messages);
     const startedAt = Date.now();
-    console.log(
+    log.info(
       `[ai-chat-compact] full compact started conv=${input.conversationId} msgs=${messages.length} tokens=${inputTokenEstimate}`
     );
     const resp = await this.deps.completeChat({
@@ -347,7 +348,7 @@ export class AIChatCompactAgentService {
       model: resp.model,
       status: "active",
     });
-    console.log(
+    log.info(
       `[ai-chat-compact] full compact completed conv=${
         input.conversationId
       } elapsed=${Date.now() - startedAt}ms`

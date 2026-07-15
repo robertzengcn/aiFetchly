@@ -5,6 +5,7 @@ import {
   HookSource,
 } from "@/entityTypes/hookTypes";
 import { matchesHookMatcher, matchesHookIfCondition } from "./HookMatcher";
+import { log } from "@/modules/Logger";
 
 /**
  * In-memory registry of hook definitions grouped by event.
@@ -216,7 +217,7 @@ class HookRegistryImpl implements HookRegistryApi {
     // throw so a stale session reregister doesn't crash the chat.
     const existing = this.byEvent.get(hook.eventName);
     if (existing?.some((e) => e.hook.id === hook.id)) {
-      console.warn(
+      log.warn(
         `Hook id "${hook.id}" is already registered for event "${hook.eventName}". Overlapping ids may cause confusion.`
       );
     }

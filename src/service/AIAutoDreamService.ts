@@ -1,4 +1,5 @@
 import { AIUserMemoryModule } from "@/modules/AIUserMemoryModule";
+import { log } from "@/modules/Logger";
 import { AIMemoryConsolidationRunModule } from "@/modules/AIMemoryConsolidationRunModule";
 import { AIAutoDreamSourceCollector } from "@/service/AIAutoDreamSourceCollector";
 import {
@@ -50,7 +51,7 @@ export class AIAutoDreamService {
     try {
       await this.maybeRun({ reason: input.reason });
     } catch (err) {
-      console.error("[ai-auto-dream] chat trigger failed:", err);
+      log.error("[ai-auto-dream] chat trigger failed:", err);
     }
   }
 
@@ -61,7 +62,7 @@ export class AIAutoDreamService {
     try {
       await this.maybeRun({ reason: input.reason });
     } catch (err) {
-      console.error("[ai-auto-dream] agent trigger failed:", err);
+      log.error("[ai-auto-dream] agent trigger failed:", err);
     }
   }
 
@@ -219,7 +220,7 @@ export class AIAutoDreamService {
       return await this.runModule.getByRunId(runView.runId);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      console.error("[ai-auto-dream] consolidation failed:", err);
+      log.error("[ai-auto-dream] consolidation failed:", err);
       try {
         await this.runModule.failRun(runView.runId, message);
       } catch {

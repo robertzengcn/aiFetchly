@@ -26,6 +26,7 @@ import type {
   AIChatQueryLoopResult,
 } from "@/service/AIChatQueryEvents";
 import { OpenAIStreamAccumulator } from "@/service/OpenAIStreamAccumulator";
+import { log } from "@/modules/Logger";
 import { ToolExecutor } from "@/service/ToolExecutor";
 import {
   AIChatRecoverableError,
@@ -407,7 +408,7 @@ export class AIChatQueryLoop {
         const accumulator = new OpenAIStreamAccumulator();
         activeAccumulator = accumulator;
 
-        console.log(
+        log.info(
           `[ai-chat-v2] round ${round} → POST /chat/completions msgs=${
             messages.length
           } roles=[${messages.map((m) => m.role).join(",")}] tools=${
@@ -515,7 +516,7 @@ export class AIChatQueryLoop {
         // presence of valid parsed tool calls is the reliable signal that
         // the model wants tools executed — not finish_reason.
         const willContinue = parsedCalls.length > 0;
-        console.log(
+        log.info(
           `[ai-chat-v2] round ${round} ← finishReason=${accumulator.state.finishReason} sawToolCallDelta=${accumulator.state.sawToolCallDelta} parsedCalls=${parsedCalls.length} willContinue=${willContinue}`
         );
 
@@ -726,7 +727,7 @@ export class AIChatQueryLoop {
             );
           }
           for (const call of malformedCalls) {
-            console.error(
+            log.error(
               `[ai-chat-v2] malformed tool call args name=${call.name} id=${
                 call.id
               } rawArgsLen=${call.rawArgumentsJson?.length ?? 0} rawArgs="${(
@@ -990,7 +991,7 @@ export class AIChatQueryLoop {
             };
           }
           const toolContent = serializeToolResultContent(toolPayload);
-          console.log(
+          log.info(
             `[ai-chat-v2] tool ${call.name} ok=${
               toolResult.success
             } needsPermission=${isPermissionPromptResult(toolResult)}`
@@ -1031,7 +1032,7 @@ export class AIChatQueryLoop {
             tool_call_id: call.id,
             content: toolContent,
           });
-          console.log(
+          log.info(
             `[ai-chat-v2] tool ${call.name} result pushed → round ${round} will continue`
           );
         }
@@ -1075,11 +1076,11 @@ export class AIChatQueryLoop {
           await input.autoPlan.planModule.cancelDraft({
             planId: autoEnteredPlanId,
           });
-          console.log(
+          log.info(
             `[ai-chat-v2] auto-entered draft ${autoEnteredPlanId} cancelled (no plan tools used)`
           );
         } catch (err) {
-          console.error("[ai-chat-v2] failed to cancel orphan draft:", err);
+          log.error("[ai-chat-v2] failed to cancel orphan draft:", err);
         }
       }
 
@@ -1216,7 +1217,7 @@ export class AIChatQueryLoop {
         payload,
       });
     } catch (err) {
-      console.error("[ai-chat-v2] saveQuestion failed:", err);
+      log.error("[ai-chat-v2] saveQuestion failed:", err);
       const errContent = serializeToolResultContent({
         success: false,
         error:
@@ -1813,7 +1814,7 @@ export class AIChatQueryLoop {
         abortSignal: input.abortController.signal,
       });
     } catch (err) {
-      console.error("PreToolUse hook dispatch failed:", err);
+      log.error("PreToolUse hook dispatch failed:", err);
       return EMPTY_AGGREGATE;
     }
   }
@@ -1844,7 +1845,7 @@ export class AIChatQueryLoop {
         abortSignal: input.abortController.signal,
       });
     } catch (err) {
-      console.error("PostToolUse hook dispatch failed:", err);
+      log.error("PostToolUse hook dispatch failed:", err);
       return EMPTY_AGGREGATE;
     }
   }
@@ -1876,7 +1877,7 @@ export class AIChatQueryLoop {
         abortSignal: input.abortController.signal,
       });
     } catch (err) {
-      console.error("PostToolUseFailure hook dispatch failed:", err);
+      log.error("PostToolUseFailure hook dispatch failed:", err);
       return EMPTY_AGGREGATE;
     }
   }
@@ -1929,7 +1930,7 @@ export class AIChatQueryLoop {
       });
       return updatedPlan;
     } catch (err) {
-      console.error("[ai-chat-v2] immediate plan submit failed:", err);
+      log.error("[ai-chat-v2] immediate plan submit failed:", err);
       return null;
     }
   }
@@ -2014,7 +2015,7 @@ export class AIChatQueryLoop {
         payload,
       });
     } catch (err) {
-      console.error("[ai-chat-v2] submitPlanForApproval failed:", err);
+      log.error("[ai-chat-v2] submitPlanForApproval failed:", err);
       const errContent = serializeToolResultContent({
         success: false,
         error:
@@ -2086,7 +2087,7 @@ export class AIChatQueryLoop {
         objective,
       });
     } catch (err) {
-      console.error("[ai-chat-v2] EnterPlanMode ensurePlan failed:", err);
+      log.error("[ai-chat-v2] EnterPlanMode ensurePlan failed:", err);
       const errContent = serializeToolResultContent({
         success: false,
         error:

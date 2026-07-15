@@ -1,4 +1,5 @@
 import { utilityProcess } from "electron";
+import { log } from "@/modules/Logger";
 import type { UtilityProcess } from "electron";
 import * as fs from "fs";
 import * as path from "path";
@@ -96,7 +97,7 @@ export class SkillWorkerClient {
         this.workerProcess.kill();
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        console.warn(`[SkillWorkerClient] Failed to kill worker: ${message}`);
+        log.warn(`[SkillWorkerClient] Failed to kill worker: ${message}`);
       }
       this.workerProcess = null;
     }

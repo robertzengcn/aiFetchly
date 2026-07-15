@@ -1,6 +1,7 @@
 // import { RAGChunkEntity } from '@/entity/RAGChunk.entity';
 // import { RAGModelEntity } from '@/entity/RAGModel.entity';
 import { RAGChunkModule } from "@/modules/RAGChunkModule";
+import { log } from "@/modules/Logger";
 // import { SqliteDb } from '@/config/SqliteDb';
 import * as path from "path";
 import * as fs from "fs";
@@ -64,11 +65,11 @@ export class VectorStoreService {
   async initialize(): Promise<void> {
     try {
       await this.vectorDatabase.initialize();
-      console.log(
+      log.info(
         `${this.databaseType} vector database initialized successfully`
       );
     } catch (error) {
-      console.error(
+      log.error(
         `Failed to initialize ${this.databaseType} vector database:`,
         error
       );
@@ -102,11 +103,11 @@ export class VectorStoreService {
       };
 
       const indexPath = await this.vectorDatabase.createIndex(vectorDbConfig);
-      console.log(
+      log.info(
         `Created ${indexType} index for model ${modelConfig.name} with dimension ${modelConfig.name} at ${indexPath}`
       );
     } catch (error) {
-      console.error(`Failed to create ${this.databaseType} index:`, error);
+      log.error(`Failed to create ${this.databaseType} index:`, error);
       throw new Error(`Failed to create ${this.databaseType} index`);
     }
   }
@@ -166,11 +167,11 @@ export class VectorStoreService {
       }
 
       const stats = this.vectorDatabase.getIndexStats();
-      console.log(
+      log.info(
         `Loaded existing index for model ${modelConfig.name} with ${stats.totalVectors} vectors`
       );
     } catch (error) {
-      console.error(`Failed to load ${this.databaseType} index:`, error);
+      log.error(`Failed to load ${this.databaseType} index:`, error);
       throw new Error(`Failed to load ${this.databaseType} index`);
     }
   }
@@ -198,7 +199,7 @@ export class VectorStoreService {
     try {
       await this.vectorDatabase.saveIndex();
     } catch (error) {
-      console.error(`Failed to save ${this.databaseType} index:`, error);
+      log.error(`Failed to save ${this.databaseType} index:`, error);
       throw new Error(`Failed to save ${this.databaseType} index`);
     }
   }
@@ -250,7 +251,7 @@ export class VectorStoreService {
 
       // If index doesn't exist, create it
       if (!indexExists) {
-        console.log(
+        log.info(
           `Creating new document-specific index for document ${embeddingData.documentId} with model ${embeddingData.model} (using pool)`
         );
         if (embeddingData.vectorIndexPath) {
@@ -267,7 +268,7 @@ export class VectorStoreService {
         this.currentModel.name !== embeddingData.model
         //    this.currentModel.dimensions !== embeddingData.dimensions
       ) {
-        console.log(
+        log.info(
           `Loading existing document-specific index for document ${embeddingData.documentId} with model ${embeddingData.model} (using pool)`
         );
         await this.loadDocumentIndex(embeddingData.documentId, modelConfig);
@@ -331,11 +332,11 @@ export class VectorStoreService {
       // );
       // }
 
-      console.log(
+      log.info(
         `Added ${vectors.length} vectors to ${this.databaseType} index (using pool)`
       );
     } catch (error) {
-      console.error(
+      log.error(
         `Failed to add vectors to ${this.databaseType} index:`,
         error
       );
@@ -381,7 +382,7 @@ export class VectorStoreService {
         chunkIds: results.chunkIds,
       };
     } catch (error) {
-      console.error(`Failed to search vectors in ${this.databaseType}:`, error);
+      log.error(`Failed to search vectors in ${this.databaseType}:`, error);
       throw new Error(`Failed to search vectors in ${this.databaseType}`);
     }
   }
@@ -424,7 +425,7 @@ export class VectorStoreService {
     try {
       await this.vectorDatabase.resetIndex();
     } catch (error) {
-      console.error(`Failed to reset ${this.databaseType} index:`, error);
+      log.error(`Failed to reset ${this.databaseType} index:`, error);
       throw new Error(`Failed to reset ${this.databaseType} index`);
     }
   }
@@ -436,7 +437,7 @@ export class VectorStoreService {
     try {
       await this.vectorDatabase.optimizeIndex();
     } catch (error) {
-      console.error(`Failed to optimize ${this.databaseType} index:`, error);
+      log.error(`Failed to optimize ${this.databaseType} index:`, error);
       throw new Error(`Failed to optimize ${this.databaseType} index`);
     }
   }
@@ -449,7 +450,7 @@ export class VectorStoreService {
     try {
       await this.vectorDatabase.backupIndex(backupPath);
     } catch (error) {
-      console.error(`Failed to backup ${this.databaseType} index:`, error);
+      log.error(`Failed to backup ${this.databaseType} index:`, error);
       throw new Error(`Failed to backup ${this.databaseType} index`);
     }
   }
@@ -466,7 +467,7 @@ export class VectorStoreService {
     try {
       await this.vectorDatabase.restoreIndex(backupPath);
     } catch (error) {
-      console.error(`Failed to restore ${this.databaseType} index:`, error);
+      log.error(`Failed to restore ${this.databaseType} index:`, error);
       throw new Error(`Failed to restore ${this.databaseType} index`);
     }
   }
@@ -478,7 +479,7 @@ export class VectorStoreService {
     try {
       await this.vectorDatabase.cleanup();
     } catch (error) {
-      console.error(
+      log.error(
         `Failed to cleanup ${this.databaseType} vector database:`,
         error
       );
@@ -686,7 +687,7 @@ export class VectorStoreService {
       baseIndexPath: this.indexPath,
     });
 
-    console.log(`Switched to ${databaseType} vector database`);
+    log.info(`Switched to ${databaseType} vector database`);
   }
 
   /**
@@ -726,13 +727,13 @@ export class VectorStoreService {
       };
 
       const indexFilePath = await pooledInstance.createIndex(vectorDbConfig);
-      console.log(
+      log.info(
         `Created document-specific ${indexType} index for document ${documentId} with model ${modelConfig.name} (using pool) at ${indexFilePath}`
       );
 
       return indexFilePath;
     } catch (error) {
-      console.error(
+      log.error(
         `Failed to create document-specific index for document ${documentId}:`,
         error
       );
@@ -781,13 +782,13 @@ export class VectorStoreService {
       };
 
       const indexFilePath = await pooledInstance.createIndex(vectorDbConfig);
-      console.log(
+      log.info(
         `Created document-specific ${indexType} index for document ${documentId} with model ${modelConfig.name} at specified path ${indexFilePath}`
       );
 
       return indexFilePath;
     } catch (error) {
-      console.error(
+      log.error(
         `Failed to create document-specific index at path ${indexPath} for document ${documentId}:`,
         error
       );
@@ -835,11 +836,11 @@ export class VectorStoreService {
         );
       }
 
-      console.log(
+      log.info(
         `Loaded document-specific index for document ${documentId} with model ${modelConfig.name}`
       );
     } catch (error) {
-      console.error(
+      log.error(
         `Failed to load document-specific index for document ${documentId}:`,
         error
       );
@@ -867,18 +868,18 @@ export class VectorStoreService {
         const key = this.getInstanceKey(this.currentModel, documentId);
         await VectorDatabasePool.clearInstance(key);
 
-        console.log(
+        log.info(
           `Deleted document-specific index for document ${documentId} (cleared from pool)`
         );
       } else {
         // Fallback to current instance if no model is set
         await this.vectorDatabase.deleteDocumentIndex(documentId);
-        console.log(
+        log.info(
           `Deleted document-specific index for document ${documentId} (fallback)`
         );
       }
     } catch (error) {
-      console.error(
+      log.error(
         `Failed to delete document-specific index for document ${documentId}:`,
         error
       );
@@ -898,7 +899,7 @@ export class VectorStoreService {
     }
 
     if (chunkIds.length === 0) {
-      console.log("No chunk IDs provided, nothing to delete");
+      log.info("No chunk IDs provided, nothing to delete");
       return;
     }
 
@@ -909,14 +910,14 @@ export class VectorStoreService {
         "function"
       ) {
         await (this.vectorDatabase as any).deleteVectorsByChunkIds(chunkIds);
-        console.log(`Deleted ${chunkIds.length} vectors by chunk IDs`);
+        log.info(`Deleted ${chunkIds.length} vectors by chunk IDs`);
       } else {
         throw new Error(
           "Vector database does not support deleteVectorsByChunkIds method"
         );
       }
     } catch (error) {
-      console.error("Failed to delete vectors by chunk IDs:", error);
+      log.error("Failed to delete vectors by chunk IDs:", error);
       throw new Error(
         `Failed to delete vectors by chunk IDs: ${
           error instanceof Error ? error.message : "Unknown error"
@@ -986,7 +987,7 @@ export class VectorStoreService {
    */
   async clearPool(): Promise<void> {
     await VectorDatabasePool.clearAllInstances();
-    console.log("Cleared all vector database pool instances");
+    log.info("Cleared all vector database pool instances");
   }
 
   /**
@@ -1030,7 +1031,7 @@ export class VectorStoreService {
       const key = this.getInstanceKey(modelConfig, documentId);
       await VectorDatabasePool.clearInstance(key);
     } catch (error) {
-      console.warn(
+      log.warn(
         `[VectorStoreService] Best-effort delete failed for document ${documentId}:`,
         error instanceof Error ? error.message : error
       );
@@ -1041,7 +1042,7 @@ export class VectorStoreService {
         fs.unlinkSync(indexPath);
       }
     } catch (fsError) {
-      console.warn(
+      log.warn(
         `[VectorStoreService] Best-effort index file cleanup failed for document ${documentId}:`,
         fsError instanceof Error ? fsError.message : fsError
       );

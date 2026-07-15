@@ -1,3 +1,4 @@
+import { log } from "@/modules/Logger";
 /**
  * Simple rate limiter for tool execution
  */
@@ -34,7 +35,7 @@ export class RateLimiter {
       const waitTime = 60000 - (now - oldestExecution);
 
       if (waitTime > 0) {
-        console.log(`Rate limit reached. Waiting ${waitTime}ms...`);
+        log.info(`Rate limit reached. Waiting ${waitTime}ms...`);
         await this.sleep(waitTime);
       }
     }
@@ -46,7 +47,7 @@ export class RateLimiter {
       this.config.maxConcurrent > 0 &&
       this.concurrentCount >= this.config.maxConcurrent
     ) {
-      console.log(`Concurrent limit reached. Waiting...`);
+      log.info(`Concurrent limit reached. Waiting...`);
       await this.sleep(100);
     }
 

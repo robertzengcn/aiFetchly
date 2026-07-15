@@ -1,4 +1,5 @@
 import { Token } from "@/modules/token";
+import { log } from "@/modules/Logger";
 import { USER_AI_ENABLED } from "@/config/usersetting";
 import { AiChatApi } from "@/api/aiChatApi";
 import type { OpenAIChatMessage } from "@/api/aiChatApi";
@@ -260,7 +261,7 @@ export class EmailReplyDraftGenerationService {
       log.reason = "AI generated knowledge-grounded reply draft";
       await this.replyAuditModule.create(log);
     } catch (e) {
-      console.error("Failed to write draft_created audit:", e);
+      log.error("Failed to write draft_created audit:", e);
     }
   }
 
@@ -302,7 +303,7 @@ export class EmailReplyDraftGenerationService {
         args.warnings.length > 0 ? args.warnings.join("; ") : "draft created";
       await this.autoAuditModule.create(log);
     } catch (e) {
-      console.error("Failed to write auto-reply draft audit:", e);
+      log.error("Failed to write auto-reply draft audit:", e);
     }
   }
 
@@ -320,7 +321,7 @@ export class EmailReplyDraftGenerationService {
       log.reason = reason;
       await this.replyAuditModule.create(log);
     } catch (e) {
-      console.error("Failed to write failure audit:", e);
+      log.error("Failed to write failure audit:", e);
     }
   }
 }

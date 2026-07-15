@@ -1,5 +1,6 @@
 // src/service/AgentRuntime.ts
 import { randomUUID } from "crypto";
+import { log } from "@/modules/Logger";
 import { SkillRegistry } from "@/config/skillsRegistry";
 import { SkillExecutor } from "@/service/SkillExecutor";
 import { AIChatQueryLoop } from "@/service/AIChatQueryLoop";
@@ -412,7 +413,7 @@ export class AgentRuntime {
           reason: "agent_task_completed",
         })
         .catch((err) =>
-          console.error("[ai-auto-dream] agent trigger failed:", err)
+          log.error("[ai-auto-dream] agent trigger failed:", err)
         );
     }
     if (deps?.workspaceAutoDreamService) {
@@ -422,7 +423,7 @@ export class AgentRuntime {
           reason: "agent_task_completed",
         })
         .catch((err) =>
-          console.error("[workspace-auto-dream] agent trigger failed:", err)
+          log.error("[workspace-auto-dream] agent trigger failed:", err)
         );
     }
     return result;
