@@ -121,6 +121,7 @@
 import { ref, onMounted } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRouter } from "vue-router";
+import { windowInvoke } from "@/views/utils/apirequest";
 
 const { t } = useI18n();
 const router = useRouter();
@@ -142,9 +143,9 @@ const fileInput = ref<HTMLInputElement | null>(null);
 async function fetchSkills(): Promise<void> {
   isLoading.value = true;
   try {
-    const response = await window.api.invoke("skill:list-installed", {});
-    if (response.status && Array.isArray(response.data?.skills)) {
-      skills.value = response.data.skills.map((s: Record<string, unknown>) => ({
+    const data = await windowInvoke("skill:list-installed", {});
+    if (Array.isArray(data?.skills)) {
+      skills.value = data.skills.map((s: Record<string, unknown>) => ({
         name: String(s.name),
         source: String(s.source),
         category: JSON.parse(String(s.manifest_json || "{}")).permissions?.[0] || "pure",
@@ -161,13 +162,11 @@ async function fetchSkills(): Promise<void> {
 
 async function handleToggle(skill: SkillEntry): Promise<void> {
   try {
-    const response = await window.api.invoke("skill:toggle", {
+    await windowInvoke("skill:toggle", {
       skillName: skill.name,
       enabled: skill.enabled,
     });
-    if (response.status) {
-      await fetchSkills();
-    }
+    await fetchSkills();
   } catch (error) {
     console.error("Toggle error:", error);
   }
@@ -176,12 +175,10 @@ async function handleToggle(skill: SkillEntry): Promise<void> {
 async function handleUninstall(skill: SkillEntry): Promise<void> {
   if (!confirm(t('skills.uninstall_confirm'))) return;
   try {
-    const response = await window.api.invoke("skill:uninstall", {
+    await windowInvoke("skill:uninstall", {
       skillName: skill.name,
     });
-    if (response.status) {
-      await fetchSkills();
-    }
+    await fetchSkills();
   } catch (error) {
     console.error("Uninstall error:", error);
   }
@@ -203,16 +200,11 @@ async function handleFileSelect(event: Event): Promise<void> {
     if (!file) return;
 
     const zipPath = window.api.getPathForFile(file);
-    const response = await window.api.invoke("skill:import", {
-      zipPath,
-    });
-    if (response.status) {
-      await fetchSkills();
-    } else {
-      alert(response.msg || t('skills.import_error'));
-    }
+    // windowInvoke throws Error(result.msg) on failure; surface that message.
+    await windowInvoke("skill:import", { zipPath });
+    await fetchSkills();
   } catch (error) {
-    alert(t('skills.import_error'));
+    alert(error instanceof Error && error.message ? error.message : t('skills.import_error'));
   } finally {
     // Reset again so the next open + same file selection always fires `change`.
     target.value = "";
