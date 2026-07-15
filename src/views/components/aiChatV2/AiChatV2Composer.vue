@@ -1,5 +1,15 @@
 <template>
   <div class="v2-composer">
+    <!-- Slash command suggestions dropdown -->
+    <AiChatV2SlashSuggestions
+      :commands="slashCommands"
+      :highlighted-index="slashHighlightedIndex"
+      :open="slashOpen"
+      @select="onSlashSelect"
+      @highlight="onSlashHighlight"
+      @close="closeSlash"
+    />
+
     <!-- File notice (error/warning inline) -->
     <v-slide-y-reverse-transition>
       <div v-if="fileNotice" class="v2-composer__notice">
@@ -90,8 +100,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from "vue";
+import { ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
+import AiChatV2SlashSuggestions from "./AiChatV2SlashSuggestions.vue";
+import { listSlashCommands } from "@/views/api/slashCommands";
+import type { SlashCommandView } from "@/entityTypes/slashCommandTypes";
 
 const MAX_UPLOAD_FILES = 3;
 const MAX_UPLOAD_FILE_BYTES = 5 * 1024 * 1024; // 5 MB
@@ -113,6 +126,66 @@ const draft = ref("");
 const selectedFiles = ref<File[]>([]);
 const fileNotice = ref("");
 const fileInputRef = ref<HTMLInputElement | null>(null);
+
+// --- Slash command suggestions ---
+const slashCommands = ref<readonly SlashCommandView[]>([]);
+const slashOpen = ref(false);
+const slashHighlightedIndex = ref(-1);
+let slashDebounce: ReturnType<typeof setTimeout> | null = null;
+
+/**
+ * When the draft starts with '/', fetch matching commands from the registry
+ * (via IPC) and show the suggestion dropdown. Debounced so we don't spam IPC
+ * on every keystroke.
+ */
+function refreshSlashSuggestions(): void {
+  const text = draft.value;
+  if (!text.startsWith("/")) {
+    slashOpen.value = false;
+    slashCommands.value = [];
+    return;
+  }
+  const query = text.slice(1); // strip leading /
+  if (slashDebounce) clearTimeout(slashDebounce);
+  slashDebounce = setTimeout(async () => {
+    try {
+      const resp = await listSlashCommands({ query });
+      const commands = resp?.commands ?? [];
+      slashCommands.value = commands;
+      slashOpen.value = commands.length > 0;
+      slashHighlightedIndex.value = commands.length > 0 ? 0 : -1;
+    } catch {
+      slashOpen.value = false;
+      slashCommands.value = [];
+    }
+  }, 120);
+}
+
+// Watch the draft and trigger slash detection.
+watch(draft, () => {
+  refreshSlashSuggestions();
+});
+
+function closeSlash(): void {
+  slashOpen.value = false;
+  slashHighlightedIndex.value = -1;
+}
+
+function onSlashHighlight(idx: number): void {
+  slashHighlightedIndex.value = idx;
+}
+
+/**
+ * When the user selects a command from the dropdown (click or Enter), inject
+ * the command name into the draft so the full text is e.g. "/review" and
+ * the user can add arguments or press Enter to send.
+ */
+function onSlashSelect(idx: number): void {
+  const cmd = slashCommands.value[idx];
+  if (!cmd) return;
+  draft.value = `/${cmd.name} `;
+  closeSlash();
+}
 
 let noticeTimer: ReturnType<typeof setTimeout> | null = null;
 function showNotice(msg: string): void {
@@ -186,9 +259,39 @@ const onSend = (): void => {
   emit("send", text, files);
   draft.value = "";
   selectedFiles.value = [];
+  closeSlash();
 };
 
 const onKeydown = (event: KeyboardEvent): void => {
+  // Slash suggestion keyboard navigation
+  if (slashOpen.value && slashCommands.value.length > 0) {
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      slashHighlightedIndex.value = Math.min(
+        slashHighlightedIndex.value + 1,
+        slashCommands.value.length - 1
+      );
+      return;
+    }
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      slashHighlightedIndex.value = Math.max(slashHighlightedIndex.value - 1, 0);
+      return;
+    }
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      if (slashHighlightedIndex.value >= 0) {
+        onSlashSelect(slashHighlightedIndex.value);
+      }
+      return;
+    }
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeSlash();
+      return;
+    }
+  }
+  // Normal send (Enter without shift)
   if (event.key === "Enter" && !event.shiftKey) {
     event.preventDefault();
     onSend();
