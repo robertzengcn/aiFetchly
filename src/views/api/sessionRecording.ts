@@ -9,7 +9,7 @@ import type { CommonMessage } from "@/entityTypes/commonType";
  * - Export training data
  *
  * All IPC goes through the preload contextBridge (`window.api.invoke`) — no
- * direct `ipcRenderer` import (forbidden by eslint no-restricted-imports).
+ * direct Electron renderer import (forbidden by eslint no-restricted-imports).
  * The main-process handlers (sessionRecording-ipc.ts) are on
  * registerValidatedHandler, so responses use the { status, msg, data } envelope.
  */
@@ -35,7 +35,7 @@ export interface SessionInfo {
 }
 
 export interface ExportOptions {
-  format: 'json' | 'csv' | 'openai';
+  format: "json" | "csv" | "openai";
   includeStates?: boolean;
   includeExpectedOutput?: boolean;
 }
@@ -77,12 +77,17 @@ async function invokeSession<T>(channel: string, data?: unknown): Promise<T> {
 /**
  * Toggle session recording on/off
  */
-export async function toggleSessionRecording(enabled: boolean): Promise<SessionRecordingStatus> {
+export async function toggleSessionRecording(
+  enabled: boolean
+): Promise<SessionRecordingStatus> {
   try {
-    const data = await invokeSession<{ enabled: boolean }>('session-recording:toggle', { enabled });
+    const data = await invokeSession<{ enabled: boolean }>(
+      "session-recording:toggle",
+      { enabled }
+    );
     return { success: true, enabled: data.enabled };
   } catch (error) {
-    console.error('Failed to toggle session recording:', error);
+    console.error("Failed to toggle session recording:", error);
     return {
       success: false,
       enabled: false,
@@ -96,10 +101,12 @@ export async function toggleSessionRecording(enabled: boolean): Promise<SessionR
  */
 export async function getSessionRecordingStatus(): Promise<SessionRecordingStatus> {
   try {
-    const data = await invokeSession<{ enabled: boolean }>('session-recording:get-status');
+    const data = await invokeSession<{ enabled: boolean }>(
+      "session-recording:get-status"
+    );
     return { success: true, enabled: data.enabled };
   } catch (error) {
-    console.error('Failed to get session recording status:', error);
+    console.error("Failed to get session recording status:", error);
     return {
       success: false,
       enabled: false,
@@ -111,12 +118,18 @@ export async function getSessionRecordingStatus(): Promise<SessionRecordingStatu
 /**
  * Get list of all recorded sessions
  */
-export async function getRecordedSessions(): Promise<{ success: boolean; sessions: SessionInfo[]; error?: string }> {
+export async function getRecordedSessions(): Promise<{
+  success: boolean;
+  sessions: SessionInfo[];
+  error?: string;
+}> {
   try {
-    const data = await invokeSession<{ sessions: SessionInfo[] }>('session-recording:get-sessions');
+    const data = await invokeSession<{ sessions: SessionInfo[] }>(
+      "session-recording:get-sessions"
+    );
     return { success: true, sessions: data.sessions ?? [] };
   } catch (error) {
-    console.error('Failed to get recorded sessions:', error);
+    console.error("Failed to get recorded sessions:", error);
     return {
       success: false,
       sessions: [],
@@ -128,12 +141,15 @@ export async function getRecordedSessions(): Promise<{ success: boolean; session
 /**
  * Export sessions for AI training
  */
-export async function exportSessions(options: ExportOptions): Promise<ExportResult> {
+export async function exportSessions(
+  options: ExportOptions
+): Promise<ExportResult> {
   try {
-    const data = await invokeSession<{ exportedSessions: number; exportPath: string; format: string }>(
-      'session-recording:export',
-      options
-    );
+    const data = await invokeSession<{
+      exportedSessions: number;
+      exportPath: string;
+      format: string;
+    }>("session-recording:export", options);
     return {
       success: true,
       exportedSessions: data.exportedSessions,
@@ -141,11 +157,11 @@ export async function exportSessions(options: ExportOptions): Promise<ExportResu
       format: data.format,
     };
   } catch (error) {
-    console.error('Failed to export sessions:', error);
+    console.error("Failed to export sessions:", error);
     return {
       success: false,
       exportedSessions: 0,
-      exportPath: '',
+      exportPath: "",
       format: options.format,
       error: error instanceof Error ? error.message : String(error),
     };
@@ -155,12 +171,15 @@ export async function exportSessions(options: ExportOptions): Promise<ExportResu
 /**
  * Clear old sessions
  */
-export async function clearOldSessions(options: ClearOptions = {}): Promise<ClearResult> {
+export async function clearOldSessions(
+  options: ClearOptions = {}
+): Promise<ClearResult> {
   try {
-    const data = await invokeSession<{ deletedCount: number; deletedSize: number; remainingSessions: number }>(
-      'session-recording:clear',
-      options
-    );
+    const data = await invokeSession<{
+      deletedCount: number;
+      deletedSize: number;
+      remainingSessions: number;
+    }>("session-recording:clear", options);
     return {
       success: true,
       deletedCount: data.deletedCount,
@@ -168,7 +187,7 @@ export async function clearOldSessions(options: ClearOptions = {}): Promise<Clea
       remainingSessions: data.remainingSessions,
     };
   } catch (error) {
-    console.error('Failed to clear old sessions:', error);
+    console.error("Failed to clear old sessions:", error);
     return {
       success: false,
       deletedCount: 0,
@@ -182,15 +201,21 @@ export async function clearOldSessions(options: ClearOptions = {}): Promise<Clea
 /**
  * Get sessions directory path
  */
-export async function getSessionsDirectory(): Promise<{ success: boolean; directory: string; error?: string }> {
+export async function getSessionsDirectory(): Promise<{
+  success: boolean;
+  directory: string;
+  error?: string;
+}> {
   try {
-    const data = await invokeSession<{ directory: string }>('session-recording:get-directory');
+    const data = await invokeSession<{ directory: string }>(
+      "session-recording:get-directory"
+    );
     return { success: true, directory: data.directory };
   } catch (error) {
-    console.error('Failed to get sessions directory:', error);
+    console.error("Failed to get sessions directory:", error);
     return {
       success: false,
-      directory: '',
+      directory: "",
       error: error instanceof Error ? error.message : String(error),
     };
   }
@@ -200,13 +225,13 @@ export async function getSessionsDirectory(): Promise<{ success: boolean; direct
  * Utility function to format file size
  */
 export function formatFileSize(bytes: number): string {
-  if (bytes === 0) return '0 Bytes';
+  if (bytes === 0) return "0 Bytes";
 
   const k = 1024;
-  const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+  const sizes = ["Bytes", "KB", "MB", "GB"];
   const i = Math.floor(Math.log(bytes) / Math.log(k));
 
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
 }
 
 /**
@@ -241,7 +266,10 @@ export function getSessionStatistics(sessions: SessionInfo[]) {
     0
   );
 
-  const totalFileSize = sessions.reduce((sum, session) => sum + session.fileSize, 0);
+  const totalFileSize = sessions.reduce(
+    (sum, session) => sum + session.fileSize,
+    0
+  );
 
   const platforms = [...new Set(sessions.map((s) => s.platform))];
 
@@ -254,7 +282,8 @@ export function getSessionStatistics(sessions: SessionInfo[]) {
   return {
     totalSessions: sessions.length,
     totalTrainingPoints,
-    averageResultsPerSession: sessions.reduce((sum, s) => sum + s.resultsCount, 0) / sessions.length,
+    averageResultsPerSession:
+      sessions.reduce((sum, s) => sum + s.resultsCount, 0) / sessions.length,
     totalFileSize,
     platforms,
     dateRange,
