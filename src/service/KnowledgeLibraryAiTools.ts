@@ -91,7 +91,9 @@ function parseDocumentTags(raw: string | null | undefined): string[] {
 }
 
 /** Map a RAG document row to a compact, model-facing summary (no paths/content). */
-function toDocumentSummary(doc: RAGDocumentEntity): KnowledgeLibraryDocumentSummary {
+function toDocumentSummary(
+  doc: RAGDocumentEntity
+): KnowledgeLibraryDocumentSummary {
   return {
     id: doc.id,
     name: doc.name,
@@ -121,7 +123,10 @@ function matchesNameOrTitle(doc: RAGDocumentEntity, query: string): boolean {
  * Exact (normalized) match used by the destructive delete path. Compares
  * against both name and title; deliberately avoids fuzzy matching.
  */
-function matchesExpectedName(doc: RAGDocumentEntity, expected: string): boolean {
+function matchesExpectedName(
+  doc: RAGDocumentEntity,
+  expected: string
+): boolean {
   const target = expected.trim().toLowerCase();
   if (!target) {
     return true;
@@ -173,7 +178,9 @@ export class KnowledgeLibraryAiTools {
   }
 
   private isAiEnabled(): boolean {
-    return this.deps.isAiEnabled ? this.deps.isAiEnabled() : defaultIsAiEnabled();
+    return this.deps.isAiEnabled
+      ? this.deps.isAiEnabled()
+      : defaultIsAiEnabled();
   }
 
   /**
@@ -245,7 +252,7 @@ export class KnowledgeLibraryAiTools {
     if (input.duplicatePolicy === "replace") {
       return toolError(
         "INVALID_INPUT",
-        "duplicatePolicy \"replace\" is not supported yet. Use \"fail\" or \"allow\"."
+        'duplicatePolicy "replace" is not supported yet. Use "fail" or "allow".'
       );
     }
 
@@ -257,8 +264,7 @@ export class KnowledgeLibraryAiTools {
         input.attachment_ref
       );
     } catch (error) {
-      const message =
-        error instanceof Error ? error.message : String(error);
+      const message = error instanceof Error ? error.message : String(error);
       return toolError("ATTACHMENT_NOT_FOUND", message);
     }
 
@@ -267,11 +273,10 @@ export class KnowledgeLibraryAiTools {
       const validation = await documentModule.validateFile(source.filePath);
       if (!validation.isValid) {
         const combined = validation.errors.join(", ");
-        const code: KnowledgeLibraryToolErrorCode = /size|large|exceed|big/i.test(
-          combined
-        )
-          ? "FILE_TOO_LARGE"
-          : "UNSUPPORTED_FILE_TYPE";
+        const code: KnowledgeLibraryToolErrorCode =
+          /size|large|exceed|big/i.test(combined)
+            ? "FILE_TOO_LARGE"
+            : "UNSUPPORTED_FILE_TYPE";
         return toolError(code, combined);
       }
 
@@ -285,9 +290,8 @@ export class KnowledgeLibraryAiTools {
             "DUPLICATE_DOCUMENT",
             "A matching document already exists in the knowledge library.",
             {
-              existingDocuments: duplicate.existingDocuments.map(
-                toDocumentSummary
-              ),
+              existingDocuments:
+                duplicate.existingDocuments.map(toDocumentSummary),
             }
           );
         }
@@ -346,7 +350,10 @@ export class KnowledgeLibraryAiTools {
         );
       }
 
-      if (input.expected_name && !matchesExpectedName(doc, input.expected_name)) {
+      if (
+        input.expected_name &&
+        !matchesExpectedName(doc, input.expected_name)
+      ) {
         return toolError(
           "EXPECTED_NAME_MISMATCH",
           `Document #${doc.id} did not match the expected name "${input.expected_name}".`
@@ -388,11 +395,6 @@ function getDefaultTools(): KnowledgeLibraryAiTools {
     defaultTools = new KnowledgeLibraryAiTools();
   }
   return defaultTools;
-}
-
-/** Allow tests to reset the cached default instance (e.g. after mocking). */
-export function resetKnowledgeLibraryAiToolsDefault(): void {
-  defaultTools = null;
 }
 
 export async function listKnowledgeLibraryDocumentsForAi(

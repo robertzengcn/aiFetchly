@@ -13,6 +13,7 @@
  */
 
 import * as crypto from "crypto";
+import * as path from "path";
 import { SkillRegistry } from "@/config/skillsRegistry";
 import {
   DocumentService,
@@ -72,12 +73,15 @@ export function normalizeChatV2Attachments(
       continue;
     }
     const rec = item as Record<string, unknown>;
-    const fileName = rec.fileName;
+    const rawFileName = rec.fileName;
     const mimeType = rec.mimeType;
     const sizeBytes = rec.sizeBytes;
     const contentBase64 = rec.contentBase64;
 
-    if (typeof fileName !== "string") continue;
+    if (typeof rawFileName !== "string") continue;
+    // Reduce to a basename so no path components from the renderer ever reach
+    // staging metadata or the stored RAG document name.
+    const fileName = path.basename(rawFileName);
     if (typeof mimeType !== "string") continue;
     if (typeof contentBase64 !== "string") continue;
     if (contentBase64.length > MAX_BASE64_LENGTH) {
@@ -205,9 +209,7 @@ export async function stageChatV2AttachmentsForMessage(input: {
   // Touch the registry so supported-extension skills remain discoverable for
   // other tools; the import/read tools are advertised in the block text.
   for (const ref of references) {
-    const ext = ref.fileName
-      .toLowerCase()
-      .slice(ref.fileName.lastIndexOf("."));
+    const ext = ref.fileName.toLowerCase().slice(ref.fileName.lastIndexOf("."));
     if (ext) {
       await SkillRegistry.findSkillForFileExtension(ext);
     }
