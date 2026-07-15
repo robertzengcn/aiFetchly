@@ -1,4 +1,5 @@
 import { Repository } from 'typeorm';
+import { log } from "@/modules/Logger";
 import { VectorEntity } from '@/entity/Vector.entity';
 import { BaseDb } from '@/model/Basedb';
 import { VectorSearchResult } from '@/modules/interface/IVectorDatabase';
@@ -145,7 +146,7 @@ export class VectorModel extends BaseDb {
                         await queryRunner.query(sql);
                         await queryRunner.release();
                         
-                        console.log(`Created virtual table '${virtualTableName}' directly (dimension: ${dimension})`);
+                        log.info(`Created virtual table '${virtualTableName}' directly (dimension: ${dimension})`);
                     } catch (createError) {
                         const errorMessage = createError instanceof Error ? createError.message : String(createError);
                         throw new Error(`Virtual table '${virtualTableName}' does not exist and failed to create it: ${errorMessage}`);
@@ -170,10 +171,10 @@ export class VectorModel extends BaseDb {
             );
             await queryRunner.release();
             
-            console.log(`Inserted vector into virtual table '${virtualTableName}' (chunk_id: ${chunkId})`);
+            log.info(`Inserted vector into virtual table '${virtualTableName}' (chunk_id: ${chunkId})`);
         } catch (error) {
             const errorMessage = error instanceof Error ? error.message : String(error);
-            console.error(`Failed to add vector to virtual table '${virtualTableName}':`, errorMessage);
+            log.error(`Failed to add vector to virtual table '${virtualTableName}':`, errorMessage);
             throw new Error(`Failed to add vector to virtual table: ${errorMessage}`);
         }
     }
@@ -188,7 +189,7 @@ export class VectorModel extends BaseDb {
      */
     async deleteVectorsFromVirtualTable(chunkIds: number[], virtualTableName: string): Promise<void> {
         if (chunkIds.length === 0) {
-            console.log('No chunk IDs provided, nothing to delete');
+            log.info('No chunk IDs provided, nothing to delete');
             return;
         }
 
@@ -219,10 +220,10 @@ export class VectorModel extends BaseDb {
             await queryRunner.query(query, chunkIds);
             await queryRunner.release();
             
-            console.log(`Deleted ${chunkIds.length} vectors from virtual table '${virtualTableName}'`);
+            log.info(`Deleted ${chunkIds.length} vectors from virtual table '${virtualTableName}'`);
         } catch (error) {
             const errorMessage = error instanceof Error ? error.message : String(error);
-            console.error(`Failed to delete from virtual table '${virtualTableName}':`, errorMessage);
+            log.error(`Failed to delete from virtual table '${virtualTableName}':`, errorMessage);
             throw new Error(`Failed to delete from virtual table: ${errorMessage}`);
         }
     }
@@ -243,7 +244,7 @@ export class VectorModel extends BaseDb {
         try {
             // Validate table name format (alphanumeric, underscores, hyphens only)
             if (!/^[a-zA-Z0-9_-]+$/.test(vecIndexName)) {
-                console.error(`Invalid vec index name format: '${vecIndexName}'. Only alphanumeric characters, underscores, and hyphens are allowed.`);
+                log.error(`Invalid vec index name format: '${vecIndexName}'. Only alphanumeric characters, underscores, and hyphens are allowed.`);
                 return 0;
             }
 
@@ -264,7 +265,7 @@ export class VectorModel extends BaseDb {
             await queryRunner.release();
             return result[0]?.count || 0;
         } catch (error) {
-            console.error(`Failed to get total count from vec index '${vecIndexName}':`, error);
+            log.error(`Failed to get total count from vec index '${vecIndexName}':`, error);
             return 0;
         }
     }
@@ -302,7 +303,7 @@ export class VectorModel extends BaseDb {
             const database = driver.database;
             
             if (!database) {
-                console.warn('Unable to access underlying database for synchronous query');
+                log.warn('Unable to access underlying database for synchronous query');
                 return false;
             }
 
@@ -315,7 +316,7 @@ export class VectorModel extends BaseDb {
             
             return (result?.count || 0) > 0;
         } catch (error) {
-            console.error('Failed to check if vectors exist for chunk IDs:', error);
+            log.error('Failed to check if vectors exist for chunk IDs:', error);
             return false;
         }
     }
@@ -354,7 +355,7 @@ export class VectorModel extends BaseDb {
             // Adjust k if necessary
             const adjustedK = Math.min(k, totalVectors);
             if (adjustedK !== k) {
-                console.log(`Adjusted k from ${k} to ${adjustedK} (total vectors: ${totalVectors})`);
+                log.info(`Adjusted k from ${k} to ${adjustedK} (total vectors: ${totalVectors})`);
             }
 
             // Validate dimension if provided
@@ -417,7 +418,7 @@ export class VectorModel extends BaseDb {
                 chunkIds: results.map(r => r.chunk_id)
             };
         } catch (error) {
-            console.error('Failed to search vectors:', error);
+            log.error('Failed to search vectors:', error);
             throw new Error(`Failed to perform vector search. Please ensure sqlite-vec extension is properly installed and configured. Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
         }
     }
@@ -461,7 +462,7 @@ export class VectorModel extends BaseDb {
             // Adjust k if necessary
             const adjustedK = Math.min(k, totalVectors);
             if (adjustedK !== k) {
-                console.log(`Adjusted k from ${k} to ${adjustedK} (total vectors in '${vecIndexName}': ${totalVectors})`);
+                log.info(`Adjusted k from ${k} to ${adjustedK} (total vectors in '${vecIndexName}': ${totalVectors})`);
             }
 
             // Validate dimension if provided
@@ -511,7 +512,7 @@ export class VectorModel extends BaseDb {
                         chunkIds: results.map(r => r.chunk_id)
                     };
                 } catch (error) {
-                    console.warn('vec0 virtual table MATCH search failed, trying vec_distance_l2...', error);
+                    log.warn('vec0 virtual table MATCH search failed, trying vec_distance_l2...', error);
                 }
             }
 
@@ -519,7 +520,7 @@ export class VectorModel extends BaseDb {
             // This is the standard approach shown in the merge guide
             return await this.searchSimilarVectors(queryVector, adjustedK, dimension);
         } catch (error) {
-            console.error('Failed to search vectors with vec0:', error);
+            log.error('Failed to search vectors with vec0:', error);
             throw new Error(`Failed to perform vector search. Please ensure sqlite-vec extension is properly installed and configured. Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
         }
     }
@@ -581,11 +582,11 @@ export class VectorModel extends BaseDb {
                 await queryRunner.query(sql);
                 await queryRunner.release();
                 
-                console.log(`vec0 virtual table '${virtualTableName}' created successfully for model '${modelName}' with dimension ${dimension}`);
+                log.info(`vec0 virtual table '${virtualTableName}' created successfully for model '${modelName}' with dimension ${dimension}`);
             } catch (error) {
                 const errorMessage = error instanceof Error ? error.message : String(error);
-                console.warn(`Failed to create vec0 virtual table '${virtualTableName}':`, errorMessage);
-                console.warn('Vector search will fall back to vec_distance_l2 function on regular table');
+                log.warn(`Failed to create vec0 virtual table '${virtualTableName}':`, errorMessage);
+                log.warn('Vector search will fall back to vec_distance_l2 function on regular table');
                 // Don't throw - allow application to continue with fallback method
             }
         }
@@ -613,7 +614,7 @@ export class VectorModel extends BaseDb {
             await queryRunner.release();
             return result.length > 0;
         } catch (error) {
-            console.warn(`Failed to check if virtual table '${virtualTableName}' exists:`, error);
+            log.warn(`Failed to check if virtual table '${virtualTableName}' exists:`, error);
             return false;
         }
     }

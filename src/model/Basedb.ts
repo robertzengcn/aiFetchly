@@ -1,5 +1,6 @@
 //import { Scraperdb } from "./scraperdb";
 import { Database } from "better-sqlite3";
+import { log } from "@/modules/Logger";
 import { SqliteDb } from "@/config/SqliteDb";
 export abstract class BaseDb {
   protected db: Database;
@@ -50,6 +51,6 @@ export abstract class BaseDb {
   }
 
   protected log(message: string): void {
-    console.log(`[BaseDb]: ${message}`);
+    log.info(`[BaseDb]: ${message}`);
   }
 }

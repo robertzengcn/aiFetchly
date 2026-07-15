@@ -1,5 +1,6 @@
 // import { Database } from 'sqlite3';
 import Database from 'better-sqlite3';
+import { log } from "@/modules/Logger";
 //const Database = require('better-sqlite3');
 // import DatabaseConstructor,{Database}from 'better-sqlite3';
 import * as fs from 'fs';
@@ -20,16 +21,16 @@ export class Scraperdb {
         // this.dbname = "scraper.db";
         //const dbpath = path.join(filepath, this.dbname)
         if(!filepath||filepath.length==0){
-            console.log("no filepath")
+            log.info("no filepath")
             return
         }
         this.pathdb = this.getdbpath(filepath)
-        console.log("path db is"+this.pathdb)
+        log.info("path db is"+this.pathdb)
         // if (fs.existsSync(dbpath)) {
         //     this.init()
         // }
         // debug(this.dbname)
-        this.db = new Database(this.pathdb, { verbose: console.log});
+        this.db = new Database(this.pathdb, { verbose: log.info});
         this.db.pragma('journal_mode = WAL');
     }
 
@@ -74,14 +75,14 @@ export class Scraperdb {
                 sqlFilePath = path.join(__dirname, '../../dist/sql/scraperdb/');
             }
         }
-        console.log(sqlFilePath)
+        log.info(sqlFilePath)
         fs.readdir(sqlFilePath, (err, files) => {
-            console.log(files)
+            log.info(files)
             // debug(files)
             if(files){
             files.forEach(file => {
                 this.db.exec(fs.readFileSync(path.join(sqlFilePath, file), 'utf8').toString());
-                console.log(file+"created")
+                log.info(file+"created")
             });
         }
             // console.log("finish")

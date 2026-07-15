@@ -180,7 +180,7 @@ function getSqliteVecExtensionPath(): string | null {
       try {
         const resolved = resolveNativeExtensionPathForLoad(buildPath);
         if (resolved) {
-          console.log(
+          log.info(
             `Found sqlite-vec extension in build directory: ${resolved}`
           );
           return resolved;
@@ -209,7 +209,7 @@ function getSqliteVecExtensionPath(): string | null {
         const resolvedPkg =
           resolveNativeExtensionPathForLoad(platformPackagePath);
         if (resolvedPkg) {
-          console.log(
+          log.info(
             `Found sqlite-vec extension at (via require.resolve): ${resolvedPkg}`
           );
           return resolvedPkg;
@@ -217,7 +217,7 @@ function getSqliteVecExtensionPath(): string | null {
       }
     } catch (error) {
       // require.resolve might fail in bundled apps, continue with other methods
-      console.warn(
+      log.warn(
         "Could not resolve sqlite-vec via require.resolve, trying alternative methods"
       );
     }
@@ -309,7 +309,7 @@ function getSqliteVecExtensionPath(): string | null {
           );
           const resolvedDirect = resolveNativeExtensionPathForLoad(directPath);
           if (resolvedDirect) {
-            console.log(`Found sqlite-vec extension at: ${resolvedDirect}`);
+            log.info(`Found sqlite-vec extension at: ${resolvedDirect}`);
             return resolvedDirect;
           }
         }
@@ -318,16 +318,16 @@ function getSqliteVecExtensionPath(): string | null {
       }
     }
 
-    console.warn(
+    log.warn(
       `Could not find sqlite-vec extension file. Tried packages: ${packageNames.join(
         ", "
       )}`
     );
-    console.warn("Tried build paths:", buildExtensionPaths);
-    console.warn("Tried base paths:", uniqueBasePaths);
+    log.warn("Tried build paths:", buildExtensionPaths);
+    log.warn("Tried base paths:", uniqueBasePaths);
     return null;
   } catch (error) {
-    console.error("Error resolving sqlite-vec extension path:", error);
+    log.error("Error resolving sqlite-vec extension path:", error);
     return null;
   }
 }
@@ -374,22 +374,22 @@ export class SqliteDb {
           try {
             if (extensionPath) {
               db.loadExtension(extensionPath);
-              console.log(
+              log.info(
                 "sqlite-vec extension loaded successfully from:",
                 extensionPath
               );
             } else {
-              console.warn(
+              log.warn(
                 "sqlite-vec extension not found. Vector operations will not work."
               );
-              console.warn(
+              log.warn(
                 "This is non-fatal - the database will initialize, but vector search will fail."
               );
               // Don't throw - allow database to initialize even if extension fails
               // Vector operations will fail, but other database operations will work
             }
           } catch (error) {
-            console.error("Failed to load sqlite-vec extension:", error);
+            log.error("Failed to load sqlite-vec extension:", error);
             // Don't throw - allow database to initialize even if extension fails
             // This allows the app to start, but vector operations will fail
             // The error will be logged for debugging
@@ -477,9 +477,9 @@ export class SqliteDb {
         `scraper.db.premigrate-${stamp}`
       );
       fs.copyFileSync(dbFile, backupPath);
-      console.log(`[SqliteDb] pre-migration backup written: ${backupPath}`);
+      log.info(`[SqliteDb] pre-migration backup written: ${backupPath}`);
     } catch (err) {
-      console.error("[SqliteDb] pre-migration backup failed:", err);
+      log.error("[SqliteDb] pre-migration backup failed:", err);
     }
   }
 
@@ -558,7 +558,7 @@ export class SqliteDb {
           await new Promise((resolve) => setTimeout(resolve, 100));
         }
       } catch (error) {
-        console.error("Failed to destroy existing SqliteDb connection:", error);
+        log.error("Failed to destroy existing SqliteDb connection:", error);
       }
     }
 
@@ -575,7 +575,7 @@ export class SqliteDb {
         await this.connection.initialize();
       }
     } catch (error) {
-      console.error("Database connection failed:", error);
+      log.error("Database connection failed:", error);
       throw new Error("Failed to initialize database connection");
     }
   }

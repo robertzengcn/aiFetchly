@@ -1,4 +1,5 @@
 import { BaseDb } from "@/model/Basedb";
+import { log } from "@/modules/Logger";
 import { Repository } from "typeorm";
 import { YellowPagesTaskEntity } from "@/entity/YellowPagesTask.entity";
 import { getRecorddatetime } from "@/modules/lib/function";
@@ -228,7 +229,7 @@ export class YellowPagesTaskModel extends BaseDb {
       await this.repository.update({ id: taskId }, updateData);
       return true;
     } catch (error) {
-      console.error("Error updating task:", error);
+      log.error("Error updating task:", error);
       return false;
     }
   }
@@ -243,7 +244,7 @@ export class YellowPagesTaskModel extends BaseDb {
       await this.repository.delete({ id: taskId });
       return true;
     } catch (error) {
-      console.error("Error deleting task:", error);
+      log.error("Error deleting task:", error);
       return false;
     }
   }

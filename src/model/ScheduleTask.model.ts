@@ -1,4 +1,5 @@
 import { BaseDb } from "@/model/Basedb";
+import { log } from "@/modules/Logger";
 import { Repository } from "typeorm";
 import { ScheduleTaskEntity, TaskType, ScheduleStatus, TriggerType, DependencyCondition } from "@/entity/ScheduleTask.entity";
 import { ScheduleCreateRequest, ScheduleUpdateRequest } from "@/entityTypes/schedule-type";
@@ -28,7 +29,7 @@ export class ScheduleTaskModel extends BaseDb {
             const nextDate = cronJob.nextDate();
             return nextDate.toJSDate();
         } catch (error) {
-            console.error('Failed to calculate next run time:', error);
+            log.error('Failed to calculate next run time:', error);
             return null;
         }
     }

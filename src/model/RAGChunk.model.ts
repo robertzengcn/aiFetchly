@@ -1,4 +1,5 @@
 import { BaseDb } from "@/model/Basedb";
+import { log } from "@/modules/Logger";
 import { Repository } from "typeorm";
 import { RAGChunkEntity } from "@/entity/RAGChunk.entity";
 
@@ -71,7 +72,7 @@ export class RAGChunkModel extends BaseDb {
       const database = driver.database;
 
       if (!database) {
-        console.warn(
+        log.warn(
           "Unable to access underlying database for synchronous query"
         );
         return [];
@@ -85,7 +86,7 @@ export class RAGChunkModel extends BaseDb {
 
       return results.map((row) => row.id);
     } catch (error) {
-      console.error("Failed to get chunk IDs for document:", error);
+      log.error("Failed to get chunk IDs for document:", error);
       return [];
     }
   }

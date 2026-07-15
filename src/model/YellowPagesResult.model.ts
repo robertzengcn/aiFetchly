@@ -1,4 +1,5 @@
 import { BaseDb } from "@/model/Basedb";
+import { log } from "@/modules/Logger";
 import { Repository } from "typeorm";
 import { YellowPagesResultEntity } from "@/entity/YellowPagesResult.entity";
 import { SortBy } from "@/entityTypes/commonType";
@@ -301,7 +302,7 @@ export class YellowPagesResultModel extends BaseDb {
       await this.repository.delete({ task_id: taskId });
       return true;
     } catch (error) {
-      console.error('Error deleting results:', error);
+      log.error('Error deleting results:', error);
       return false;
     }
   }
@@ -316,7 +317,7 @@ export class YellowPagesResultModel extends BaseDb {
       await this.repository.delete({ id: resultId });
       return true;
     } catch (error) {
-      console.error('Error deleting result:', error);
+      log.error('Error deleting result:', error);
       return false;
     }
   }

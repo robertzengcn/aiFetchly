@@ -1,4 +1,5 @@
 import { ToolFunction } from "@/api/aiChatApi";
+import { log } from "@/modules/Logger";
 import { MCPToolService } from "@/service/MCPToolService";
 
 // Static tool functions
@@ -305,7 +306,7 @@ export async function getAvailableToolFunctions(): Promise<ToolFunction[]> {
     const mcpTools = await mcpService.getEnabledMCPToolsAsFunctions();
     return [...staticTools, ...mcpTools];
   } catch (error) {
-    console.error("Failed to load MCP tools:", error);
+    log.error("Failed to load MCP tools:", error);
     // Return static tools if MCP tools fail to load
     return staticTools;
   }
