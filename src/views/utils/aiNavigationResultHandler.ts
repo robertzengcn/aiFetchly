@@ -90,6 +90,11 @@ export async function handleAiNavigationToolResult(
     return true;
   }
 
-  await router.push({ name: routeName });
+  try {
+    await router.push({ name: routeName });
+  } catch {
+    // A navigation guard threw. Treat as handled without surfacing an error
+    // (avoids an unhandled rejection from the fire-and-forget caller).
+  }
   return true;
 }
