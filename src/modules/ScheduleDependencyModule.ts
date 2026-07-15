@@ -1,4 +1,5 @@
 import { BaseModule } from "@/modules/baseModule";
+import { log } from "@/modules/Logger";
 import { ScheduleDependencyModel } from "@/model/ScheduleDependency.model";
 import { ScheduleDependencyEntity } from "@/entity/ScheduleDependency.entity";
 import { DependencyCondition } from "@/entity/ScheduleDependency.entity";
@@ -35,7 +36,7 @@ export class ScheduleDependencyModule extends BaseModule implements ScheduleDepe
                 notes
             );
         } catch (error) {
-            console.error('Error creating dependency:', error);
+            log.error('Error creating dependency:', error);
             throw error;
         }
     }
@@ -54,7 +55,7 @@ export class ScheduleDependencyModule extends BaseModule implements ScheduleDepe
                 notes
             );
         } catch (error) {
-            console.error('Error updating dependency:', error);
+            log.error('Error updating dependency:', error);
             throw error;
         }
     }
@@ -63,7 +64,7 @@ export class ScheduleDependencyModule extends BaseModule implements ScheduleDepe
         try {
             await this.scheduleDependencyModel.deleteDependency(id);
         } catch (error) {
-            console.error('Error deleting dependency:', error);
+            log.error('Error deleting dependency:', error);
             throw error;
         }
     }
@@ -72,7 +73,7 @@ export class ScheduleDependencyModule extends BaseModule implements ScheduleDepe
         try {
             await this.scheduleDependencyModel.deleteDependencyByParentChild(parentId, childId);
         } catch (error) {
-            console.error('Error deleting dependency by parent-child:', error);
+            log.error('Error deleting dependency by parent-child:', error);
             throw error;
         }
     }
@@ -81,7 +82,7 @@ export class ScheduleDependencyModule extends BaseModule implements ScheduleDepe
         try {
             return await this.scheduleDependencyModel.getDependencyById(id);
         } catch (error) {
-            console.error('Error getting dependency by ID:', error);
+            log.error('Error getting dependency by ID:', error);
             throw error;
         }
     }
@@ -90,7 +91,7 @@ export class ScheduleDependencyModule extends BaseModule implements ScheduleDepe
         try {
             return await this.scheduleDependencyModel.getDependencyByParentChild(parentId, childId);
         } catch (error) {
-            console.error('Error getting dependency by parent-child:', error);
+            log.error('Error getting dependency by parent-child:', error);
             throw error;
         }
     }
@@ -99,7 +100,7 @@ export class ScheduleDependencyModule extends BaseModule implements ScheduleDepe
         try {
             return await this.scheduleDependencyModel.getDependenciesByParent(parentId);
         } catch (error) {
-            console.error('Error getting dependencies by parent:', error);
+            log.error('Error getting dependencies by parent:', error);
             throw error;
         }
     }
@@ -108,7 +109,7 @@ export class ScheduleDependencyModule extends BaseModule implements ScheduleDepe
         try {
             return await this.scheduleDependencyModel.getDependenciesByChild(childId);
         } catch (error) {
-            console.error('Error getting dependencies by child:', error);
+            log.error('Error getting dependencies by child:', error);
             throw error;
         }
     }
@@ -117,7 +118,7 @@ export class ScheduleDependencyModule extends BaseModule implements ScheduleDepe
         try {
             return await this.scheduleDependencyModel.getDependentSchedules(scheduleId);
         } catch (error) {
-            console.error('Error getting dependent schedules:', error);
+            log.error('Error getting dependent schedules:', error);
             throw error;
         }
     }
@@ -126,7 +127,7 @@ export class ScheduleDependencyModule extends BaseModule implements ScheduleDepe
         try {
             return await this.scheduleDependencyModel.getParentSchedules(scheduleId);
         } catch (error) {
-            console.error('Error getting parent schedules:', error);
+            log.error('Error getting parent schedules:', error);
             throw error;
         }
     }
@@ -135,7 +136,7 @@ export class ScheduleDependencyModule extends BaseModule implements ScheduleDepe
         try {
             return await this.scheduleDependencyModel.getDependencyChain(startId);
         } catch (error) {
-            console.error('Error getting dependency chain:', error);
+            log.error('Error getting dependency chain:', error);
             throw error;
         }
     }
@@ -144,7 +145,7 @@ export class ScheduleDependencyModule extends BaseModule implements ScheduleDepe
         try {
             return await this.scheduleDependencyModel.checkCircularDependency(parentId, childId);
         } catch (error) {
-            console.error('Error checking circular dependency:', error);
+            log.error('Error checking circular dependency:', error);
             throw error;
         }
     }
@@ -153,7 +154,7 @@ export class ScheduleDependencyModule extends BaseModule implements ScheduleDepe
         try {
             await this.scheduleDependencyModel.enableDependency(id);
         } catch (error) {
-            console.error('Error enabling dependency:', error);
+            log.error('Error enabling dependency:', error);
             throw error;
         }
     }
@@ -162,7 +163,7 @@ export class ScheduleDependencyModule extends BaseModule implements ScheduleDepe
         try {
             await this.scheduleDependencyModel.disableDependency(id);
         } catch (error) {
-            console.error('Error disabling dependency:', error);
+            log.error('Error disabling dependency:', error);
             throw error;
         }
     }
@@ -171,7 +172,7 @@ export class ScheduleDependencyModule extends BaseModule implements ScheduleDepe
         try {
             return await this.scheduleDependencyModel.getDependenciesByCondition(condition);
         } catch (error) {
-            console.error('Error getting dependencies by condition:', error);
+            log.error('Error getting dependencies by condition:', error);
             throw error;
         }
     }
@@ -180,7 +181,7 @@ export class ScheduleDependencyModule extends BaseModule implements ScheduleDepe
         try {
             return await this.scheduleDependencyModel.getAllActiveDependencies();
         } catch (error) {
-            console.error('Error getting all active dependencies:', error);
+            log.error('Error getting all active dependencies:', error);
             throw error;
         }
     }
@@ -242,7 +243,7 @@ export class ScheduleDependencyModule extends BaseModule implements ScheduleDepe
                 num: total
             };
         } catch (error) {
-            console.error('Error listing dependencies:', error);
+            log.error('Error listing dependencies:', error);
             throw error;
         }
     }
@@ -272,7 +273,7 @@ export class ScheduleDependencyModule extends BaseModule implements ScheduleDepe
             
             return filtered.length;
         } catch (error) {
-            console.error('Error getting dependencies total:', error);
+            log.error('Error getting dependencies total:', error);
             throw error;
         }
     }
@@ -281,7 +282,7 @@ export class ScheduleDependencyModule extends BaseModule implements ScheduleDepe
         try {
             return await this.scheduleDependencyModel.getDependencyStatistics();
         } catch (error) {
-            console.error('Error getting dependency statistics:', error);
+            log.error('Error getting dependency statistics:', error);
             throw error;
         }
     }
@@ -290,7 +291,7 @@ export class ScheduleDependencyModule extends BaseModule implements ScheduleDepe
         try {
             return await this.scheduleDependencyModel.validateDependencies(scheduleId);
         } catch (error) {
-            console.error('Error validating dependencies:', error);
+            log.error('Error validating dependencies:', error);
             throw error;
         }
     }
@@ -314,7 +315,7 @@ export class ScheduleDependencyModule extends BaseModule implements ScheduleDepe
 
             return validationResults;
         } catch (error) {
-            console.error('Error validating all dependencies:', error);
+            log.error('Error validating all dependencies:', error);
             throw error;
         }
     }
@@ -323,7 +324,7 @@ export class ScheduleDependencyModule extends BaseModule implements ScheduleDepe
         try {
             return await this.scheduleDependencyModel.cleanupInactiveDependencies();
         } catch (error) {
-            console.error('Error cleaning up inactive dependencies:', error);
+            log.error('Error cleaning up inactive dependencies:', error);
             throw error;
         }
     }
@@ -374,7 +375,7 @@ export class ScheduleDependencyModule extends BaseModule implements ScheduleDepe
                 edges
             };
         } catch (error) {
-            console.error('Error getting dependency graph:', error);
+            log.error('Error getting dependency graph:', error);
             throw error;
         }
     }
@@ -383,7 +384,7 @@ export class ScheduleDependencyModule extends BaseModule implements ScheduleDepe
         try {
             await this.scheduleDependencyModel.truncatedb();
         } catch (error) {
-            console.error('Error truncating database:', error);
+            log.error('Error truncating database:', error);
             throw error;
         }
     }

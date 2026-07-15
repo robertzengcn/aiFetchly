@@ -8,6 +8,7 @@
  */
 
 import { app } from "electron";
+import { log } from "@/modules/Logger";
 import { spawn, type ChildProcess } from "child_process";
 import path from "path";
 import fs from "fs";
@@ -257,7 +258,7 @@ export class YandexMapsModule extends BaseModule {
             result.summary,
             result.results
           ).catch((saveErr: unknown) => {
-            console.error(
+            log.error(
               "[YandexMaps] Failed to save search result:",
               saveErr
             );
@@ -268,7 +269,7 @@ export class YandexMapsModule extends BaseModule {
       });
 
       worker.on("error", (err) => {
-        console.error("[YandexMaps] Worker process error:", err.message);
+        log.error("[YandexMaps] Worker process error:", err.message);
         clearTimeout(timeoutTimer);
         this.activeSearches.delete(requestId);
         reject(new Error(`Worker error: ${err.message}`));
@@ -276,7 +277,7 @@ export class YandexMapsModule extends BaseModule {
 
       worker.on("exit", (code) => {
         if (this.activeSearches.has(requestId)) {
-          console.error(
+          log.error(
             `[YandexMaps] Worker exited unexpectedly with code ${code}`
           );
           clearTimeout(timeoutTimer);

@@ -6,6 +6,7 @@ export type HttpClientOptions = {
 // }
 //import { AuthInterceptor } from '@/modules/lib/authInterceptor';
 import type FormDataLib from "form-data";
+import { log } from "@/modules/Logger";
 import { Token } from "@/modules/token";
 import { TOKENNAME, REFRESHTOKEN } from "@/config/usersetting";
 import { User } from "@/modules/user";
@@ -65,7 +66,7 @@ export class HttpClient {
     try {
       new URL(loginUrl);
     } catch (error) {
-      console.warn(
+      log.warn(
         `Invalid VITE_LOGIN_URL: ${loginUrl}, falling back to default`
       );
       loginUrl = "http://localhost:3000";
@@ -134,12 +135,12 @@ export class HttpClient {
     // Prevent infinite refresh loops: if we already retried once and the
     // retried request still hit 401/403, refresh did not help — sign out.
     if (isRetry) {
-      console.warn("Token refresh failed after retry, signing out user");
+      log.warn("Token refresh failed after retry, signing out user");
       try {
         const userModel = new User();
         await userModel.removeToken();
       } catch (error) {
-        console.error("Error during signout:", error);
+        log.error("Error during signout:", error);
       }
       delete this._headers["Authorization"];
       throw new Error(
@@ -171,7 +172,7 @@ export class HttpClient {
         throw new Error("Token refresh failed");
       }
     } catch (error) {
-      console.error("Token refresh error:", error);
+      log.error("Token refresh error:", error);
 
       // Only sign out when the refresh token itself is confirmed invalid/
       // expired/revoked. Transient network/5xx/unknown failures must NOT
@@ -181,7 +182,7 @@ export class HttpClient {
           const userModel = new User();
           await userModel.removeToken();
         } catch (signoutError) {
-          console.error("Error during signout:", signoutError);
+          log.error("Error during signout:", signoutError);
         }
         delete this._headers["Authorization"];
         throw new Error(
@@ -213,7 +214,7 @@ export class HttpClient {
     // 401 the same as 403 here — otherwise a genuinely expired access token
     // forces a re-login instead of a transparent refresh (B5 fix).
     if (res.status === 401 || res.status === 403) {
-      console.warn(`Received ${res.status} - Attempting token refresh`);
+      log.warn(`Received ${res.status} - Attempting token refresh`);
       const tokenModel = new Token();
       const refreshToken = tokenModel.getValue(REFRESHTOKEN);
 
@@ -236,7 +237,7 @@ export class HttpClient {
 
       // Check if refresh token exists
       // (tokenModel/refreshToken loaded for debug logging above)
-      console.log(
+      log.info(
         "[HttpClient] Refresh token check:",
         refreshToken ? `found (length=${refreshToken.length})` : "missing",
         "| endpoint:",
@@ -248,14 +249,14 @@ export class HttpClient {
         return this._refreshTokenAndRetry(endpoint, options, isRetry);
       } else {
         // No refresh token available, sign out user
-        console.warn(
+        log.warn(
           "[HttpClient] No refresh token available, signing out user"
         );
         try {
           const userModel = new User();
           await userModel.removeToken();
         } catch (error) {
-          console.error("Error during signout:", error);
+          log.error("Error during signout:", error);
         }
 
         delete this._headers["Authorization"];
@@ -333,7 +334,7 @@ export class HttpClient {
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   public async put<T = any>(endpoint: string, data): Promise<T> {
-    console.log(JSON.stringify(data));
+    log.info(JSON.stringify(data));
     return (await this._fetchJSON(endpoint, {
       // headers: this._headers,
       body: data ? JSON.stringify(data) : undefined,
@@ -410,7 +411,7 @@ export class HttpClient {
     // See _fetchJSON: backend returns 401 for invalid/expired tokens, so we
     // must refresh on both (B5 fix).
     if (res.status === 401 || res.status === 403) {
-      console.warn(`Received ${res.status} - Attempting token refresh`);
+      log.warn(`Received ${res.status} - Attempting token refresh`);
 
       // Prevent refresh recursion during signout.
       // postStream isn't used by removeRemoteToken today, but keep behavior consistent.
@@ -430,12 +431,12 @@ export class HttpClient {
 
       // Prevent infinite refresh loops: already retried once -> sign out.
       if (isRetry) {
-        console.warn("Token refresh failed after retry, signing out user");
+        log.warn("Token refresh failed after retry, signing out user");
         try {
           const userModel = new User();
           await userModel.removeToken();
         } catch (error) {
-          console.error("Error during signout:", error);
+          log.error("Error during signout:", error);
         }
         delete this._headers["Authorization"];
         throw new Error(
@@ -468,7 +469,7 @@ export class HttpClient {
             throw new Error("Token refresh failed");
           }
         } catch (error) {
-          console.error("Token refresh error:", error);
+          log.error("Token refresh error:", error);
 
           // Only sign out when the refresh token itself is confirmed invalid/
           // expired/revoked. Transient failures do NOT sign the user out (B3).
@@ -477,7 +478,7 @@ export class HttpClient {
               const userModel = new User();
               await userModel.removeToken();
             } catch (signoutError) {
-              console.error("Error during signout:", signoutError);
+              log.error("Error during signout:", signoutError);
             }
             delete this._headers["Authorization"];
             throw new Error(
@@ -490,12 +491,12 @@ export class HttpClient {
         }
       } else {
         // No refresh token available, sign out user
-        console.warn("No refresh token available, signing out user");
+        log.warn("No refresh token available, signing out user");
         try {
           const userModel = new User();
           await userModel.removeToken();
         } catch (error) {
-          console.error("Error during signout:", error);
+          log.error("Error during signout:", error);
         }
 
         delete this._headers["Authorization"];

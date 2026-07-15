@@ -1,4 +1,5 @@
 import { BaseModule } from "@/modules/baseModule";
+import { log } from "@/modules/Logger";
 import {
   AIWorkspaceMemoryModel,
   AIWorkspaceMemoryCreateFields,
@@ -192,7 +193,7 @@ export class AIWorkspaceMemoryModule extends BaseModule {
         usedAt
       );
     } catch (err) {
-      console.error("[workspace-memory] markMemoriesUsed failed:", err);
+      log.error("[workspace-memory] markMemoriesUsed failed:", err);
     }
   }
 

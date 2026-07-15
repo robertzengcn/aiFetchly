@@ -1,4 +1,5 @@
 import { SearchDataParam } from "@/entityTypes/scrapeType";
+import { log } from "@/modules/Logger";
 import {
   SearchTaskModel,
   SearchTaskStatus,
@@ -155,16 +156,16 @@ export class SearchModule extends BaseModule {
             // Randomly select one account
             const randomIndex = Math.floor(Math.random() * accounts.length);
             selectedAccounts = [accounts[randomIndex].id];
-            console.log(
+            log.info(
               `Randomly selected account ${selectedAccounts[0]} for platform ${platformId} (${engineName})`
             );
           } else {
-            console.log(
+            log.info(
               `No accounts found for platform ${platformId} (${engineName}), proceeding without account`
             );
           }
         } catch (error) {
-          console.error(
+          log.error(
             `Error selecting account for platform ${platformId}:`,
             error
           );
@@ -344,12 +345,12 @@ export class SearchModule extends BaseModule {
       },
     });
     child.on("spawn", async () => {
-      console.log("child process satart, pid is" + child.pid);
+      log.info("child process satart, pid is" + child.pid);
       this.updateTaskStatus(taskId, SearchTaskStatus.Processing);
       // Store PID in database
       if (child.pid) {
         this.updateTaskPID(taskId, child.pid).catch((err) => {
-          console.error(`Failed to update PID for task ${taskId}:`, err);
+          log.error(`Failed to update PID for task ${taskId}:`, err);
         });
         // Register process with SearchController
         const searchController = (
@@ -365,7 +366,7 @@ export class SearchModule extends BaseModule {
     });
 
     child.stdout?.on("data", (data) => {
-      console.log(`Received data chunk ${data}`);
+      log.info(`Received data chunk ${data}`);
       WriteLog(runLogfile, data);
       // child.kill()
     });
@@ -377,7 +378,7 @@ export class SearchModule extends BaseModule {
       ];
       if (!ingoreStr.some((value) => data.includes(value))) {
         // seModel.saveTaskerrorlog(taskId,data)
-        console.log(`Received error chunk ${data}`);
+        log.info(`Received error chunk ${data}`);
         WriteLog(errorLogfile, data);
         this.updateTaskStatus(taskId, SearchTaskStatus.Error);
         //child.kill()
@@ -392,15 +393,15 @@ export class SearchModule extends BaseModule {
         ).SearchController.getInstance();
         searchController.unregisterProcess(taskId);
       } catch (error) {
-        console.error(`Failed to clear PID for task ${taskId}:`, error);
+        log.error(`Failed to clear PID for task ${taskId}:`, error);
       }
 
       if (code !== 0) {
-        console.error(`Child process exited with code ${code}`);
+        log.error(`Child process exited with code ${code}`);
         this.updateTaskStatus(taskId, SearchTaskStatus.Error);
       } else {
         this.updateTaskStatus(taskId, SearchTaskStatus.Complete);
-        console.log("Child process exited successfully");
+        log.info("Child process exited successfully");
       }
     });
     child.on("message", (message: unknown) => {
@@ -416,7 +417,7 @@ export class SearchModule extends BaseModule {
                 child
               )
               .catch((err) => {
-                console.error("AI support request failed:", err);
+                log.error("AI support request failed:", err);
               });
             return;
           }
@@ -435,7 +436,7 @@ export class SearchModule extends BaseModule {
                   child
                 )
                 .catch((err) => {
-                  console.error("AI support request failed:", err);
+                  log.error("AI support request failed:", err);
                 });
               return;
             }
@@ -446,7 +447,7 @@ export class SearchModule extends BaseModule {
 
         const parseResult = parseChildMessage<ResultParseItemType>(message);
         if (parseResult.kind === "error") {
-          console.error(
+          log.error(
             `Invalid message from child process (${parseResult.reason}):`,
             message
           );
@@ -457,8 +458,8 @@ export class SearchModule extends BaseModule {
           data?: unknown;
         };
 
-        console.log("get message from child");
-        console.log("Message from child:", childdata);
+        log.info("get message from child");
+        log.info("Message from child:", childdata);
         if (childdata.action == "savesearchresult") {
           //save individual result immediately
           // Handle both single result and array (for backward compatibility)
@@ -467,7 +468,7 @@ export class SearchModule extends BaseModule {
             : [childdata.data as ResultParseItemType];
           // Save result immediately without waiting for completion
           this.saveSearchResult(resultData, taskId).catch((err) => {
-            console.error(
+            log.error(
               `Failed to save search result for task ${taskId}:`,
               err
             );
@@ -481,7 +482,7 @@ export class SearchModule extends BaseModule {
           const errorData = childdata.data as { error?: string } | null;
           const errorMessage =
             errorData?.error || "Unknown error occurred during search";
-          console.error(`Search error for task ${taskId}:`, errorMessage);
+          log.error(`Search error for task ${taskId}:`, errorMessage);
           this.updateTaskStatus(taskId, SearchTaskStatus.Error);
           child.kill();
         } else if (childdata.action == "updateaccountcookies") {
@@ -491,14 +492,14 @@ export class SearchModule extends BaseModule {
             cookies: Array<CookiesType>;
           } | null;
           if (cookiesData && cookiesData.accountId && cookiesData.cookies) {
-            console.log(
+            log.info(
               `Updating cookies for account ${cookiesData.accountId}`
             );
             this.updateAccountCookies(
               cookiesData.accountId,
               cookiesData.cookies
             ).catch((err) => {
-              console.error(
+              log.error(
                 `Failed to update cookies for account ${cookiesData.accountId}:`,
                 err
               );
@@ -507,9 +508,9 @@ export class SearchModule extends BaseModule {
         }
         // Search flow uses AI_SUPPORT_REQUEST (observe_execute) only; requestAIRecovery branch removed.
       } catch (error) {
-        console.error("Failed to parse message from child process:", error);
+        log.error("Failed to parse message from child process:", error);
         if (error instanceof Error) {
-          console.error("Error details:", error.message);
+          log.error("Error details:", error.message);
         }
       }
     });
@@ -517,7 +518,7 @@ export class SearchModule extends BaseModule {
 
   //save search task, call it when user start search keyword
   public async saveSearchtask(data: SearchDataParam): Promise<number> {
-    console.log("save search task");
+    log.info("save search task");
     // const tokenService = new Token()
     // const dbpath = await tokenService.getValue(USERSDBPATH)
     // if (!dbpath) {
@@ -525,7 +526,7 @@ export class SearchModule extends BaseModule {
     // }
     //const searchtask = new SearchTaskdb(this.dbpath)
     const enginId = this.convertSEtoNum(data.engine);
-    console.log("enginId is" + enginId);
+    log.info("enginId is" + enginId);
     if (!enginId) {
       throw new Error("enginerId empty");
     }
@@ -570,9 +571,9 @@ export class SearchModule extends BaseModule {
    * @returns The ID of the created task
    */
   public async saveSearchtaskOnly(data: SearchDataParam): Promise<number> {
-    console.log("save search task only");
+    log.info("save search task only");
     const enginId = this.convertSEtoNum(data.engine);
-    console.log("enginId is" + enginId);
+    log.info("enginId is" + enginId);
     if (!enginId) {
       throw new Error("enginerId empty");
     }
@@ -740,7 +741,7 @@ export class SearchModule extends BaseModule {
                 reEntity,
                 taskId
               );
-              console.log(`save result is: ${res}`);
+              log.info(`save result is: ${res}`);
               linkearr.push(sitem.link);
             }
           }
@@ -913,12 +914,12 @@ export class SearchModule extends BaseModule {
       throw new Error("task not exist");
     }
     try {
-      console.log(task);
+      log.info(task);
       const absolutePath = path.resolve(task.error_log);
       const content = fs.readFileSync(absolutePath, "utf-8");
       return content;
     } catch (error) {
-      console.error(`Error reading file at ${task.error_log}:`, error);
+      log.error(`Error reading file at ${task.error_log}:`, error);
       throw error;
     }
   }
@@ -1207,7 +1208,7 @@ export class SearchModule extends BaseModule {
         existingCookies.cookies = JSON.stringify(cookies);
         existingCookies.record_time = getRecorddatetime();
         await this.accountCookiesModule.saveAccountCookies(existingCookies);
-        console.log(`Successfully updated cookies for account ${accountId}`);
+        log.info(`Successfully updated cookies for account ${accountId}`);
       } else {
         // Create new cookies entry if it doesn't exist
         const { AccountCookiesEntity } = await import(
@@ -1220,12 +1221,12 @@ export class SearchModule extends BaseModule {
         newCookies.partition_path =
           this.accountCookiesModule.genPartitionPath();
         await this.accountCookiesModule.saveAccountCookies(newCookies);
-        console.log(
+        log.info(
           `Successfully created new cookies entry for account ${accountId}`
         );
       }
     } catch (error) {
-      console.error(
+      log.error(
         `Failed to update cookies for account ${accountId}:`,
         error
       );

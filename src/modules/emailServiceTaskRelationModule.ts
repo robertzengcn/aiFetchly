@@ -1,4 +1,5 @@
 import { BaseModule } from "@/modules/baseModule";
+import { log } from "@/modules/Logger";
 import { EmailServiceTaskRelationModel } from "@/model/EmailServiceTaskRelation.model";
 import { EmailServiceTaskRelationEntity } from "@/entity/EmailServiceTaskRelation.entity";
 import { EmailServiceEntity } from "@/entity/EmailService.entity";
@@ -15,7 +16,7 @@ export class EmailServiceTaskRelationModule extends BaseModule {
         try {
             return await this.emailServiceTaskRelationModel.create(relation);
         } catch (error) {
-            console.error('Error creating email service task relation:', error);
+            log.error('Error creating email service task relation:', error);
             throw error;
         }
     }
@@ -24,7 +25,7 @@ export class EmailServiceTaskRelationModule extends BaseModule {
         try {
             return await this.emailServiceTaskRelationModel.read(id);
         } catch (error) {
-            console.error('Error getting email service task relation:', error);
+            log.error('Error getting email service task relation:', error);
             throw error;
         }
     }
@@ -33,7 +34,7 @@ export class EmailServiceTaskRelationModule extends BaseModule {
         try {
             await this.emailServiceTaskRelationModel.update(id, relation);
         } catch (error) {
-            console.error('Error updating email service task relation:', error);
+            log.error('Error updating email service task relation:', error);
             throw error;
         }
     }
@@ -42,7 +43,7 @@ export class EmailServiceTaskRelationModule extends BaseModule {
         try {
             await this.emailServiceTaskRelationModel.delete(id);
         } catch (error) {
-            console.error('Error deleting email service task relation:', error);
+            log.error('Error deleting email service task relation:', error);
             throw error;
         }
     }
@@ -51,7 +52,7 @@ export class EmailServiceTaskRelationModule extends BaseModule {
         try {
             return await this.emailServiceTaskRelationModel.getEmailServicesByTaskId(buckemailTaskId);
         } catch (error) {
-            console.error('Error getting email services by task ID:', error);
+            log.error('Error getting email services by task ID:', error);
             throw error;
         }
     }
@@ -60,7 +61,7 @@ export class EmailServiceTaskRelationModule extends BaseModule {
         try {
             await this.emailServiceTaskRelationModel.updateEmailServicesByTaskId(buckemailTaskId, emailServiceIds);
         } catch (error) {
-            console.error('Error updating email services by task ID:', error);
+            log.error('Error updating email services by task ID:', error);
             throw error;
         }
     }
@@ -69,7 +70,7 @@ export class EmailServiceTaskRelationModule extends BaseModule {
         try {
             await this.emailServiceTaskRelationModel.deleteEmailServicesByTaskId(buckemailTaskId);
         } catch (error) {
-            console.error('Error deleting email services by task ID:', error);
+            log.error('Error deleting email services by task ID:', error);
             throw error;
         }
     }
@@ -78,7 +79,7 @@ export class EmailServiceTaskRelationModule extends BaseModule {
         try {
             return await this.emailServiceTaskRelationModel.getTaskIdsByEmailServiceId(emailServiceId);
         } catch (error) {
-            console.error('Error getting task IDs by email service ID:', error);
+            log.error('Error getting task IDs by email service ID:', error);
             throw error;
         }
     }
@@ -87,7 +88,7 @@ export class EmailServiceTaskRelationModule extends BaseModule {
         try {
             return await this.emailServiceTaskRelationModel.checkRelationExists(emailServiceId, buckemailTaskId);
         } catch (error) {
-            console.error('Error checking relation exists:', error);
+            log.error('Error checking relation exists:', error);
             throw error;
         }
     }
@@ -100,7 +101,7 @@ export class EmailServiceTaskRelationModule extends BaseModule {
             }
             return await this.emailServiceTaskRelationModel.addEmailServiceToTask(emailServiceId, buckemailTaskId);
         } catch (error) {
-            console.error('Error adding email service to task:', error);
+            log.error('Error adding email service to task:', error);
             throw error;
         }
     }
@@ -109,7 +110,7 @@ export class EmailServiceTaskRelationModule extends BaseModule {
         try {
             await this.emailServiceTaskRelationModel.removeEmailServiceFromTask(emailServiceId, buckemailTaskId);
         } catch (error) {
-            console.error('Error removing email service from task:', error);
+            log.error('Error removing email service from task:', error);
             throw error;
         }
     }
@@ -118,7 +119,7 @@ export class EmailServiceTaskRelationModule extends BaseModule {
         try {
             await this.emailServiceTaskRelationModel.updateRelationStatus(id, status);
         } catch (error) {
-            console.error('Error updating relation status:', error);
+            log.error('Error updating relation status:', error);
             throw error;
         }
     }
@@ -128,7 +129,7 @@ export class EmailServiceTaskRelationModule extends BaseModule {
             const emailServices = await this.getEmailServicesByTaskId(buckemailTaskId);
             return emailServices.map(service => service.id);
         } catch (error) {
-            console.error('Error getting email service IDs by task ID:', error);
+            log.error('Error getting email service IDs by task ID:', error);
             throw error;
         }
     }
@@ -173,7 +174,7 @@ export class EmailServiceTaskRelationModule extends BaseModule {
                 await this.updateEmailServicesByTaskId(Number(taskId), emailServiceIds);
             }
         } catch (error) {
-            console.error('Error bulk updating email services for tasks:', error);
+            log.error('Error bulk updating email services for tasks:', error);
             throw error;
         }
     }

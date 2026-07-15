@@ -1,4 +1,5 @@
 import path from "path";
+import { log } from "@/modules/Logger";
 import { execSync, exec, execFile } from "child_process";
 import { app, BrowserWindow } from "electron";
 import { Notification } from "electron";
@@ -143,7 +144,7 @@ export function checkPipPackage(): string {
     return execSync("pip list", { encoding: "utf8" });
   } catch (error) {
     if (error instanceof Error) {
-      console.error(`Error executing command: ${error.message}`);
+      log.error(`Error executing command: ${error.message}`);
     }
     return "";
   }
@@ -192,14 +193,14 @@ export function uninstallPipPackage(
     ["uninstall", packageName, "-y"],
     (error: Error | null, stdout: string, stderr: string) => {
       if (error) {
-        console.error(`exec error: ${error}`);
+        log.error(`exec error: ${error}`);
         if (errorcall) {
           errorcall(error);
         }
         return;
       }
-      console.log(`stdout: ${stdout}`);
-      console.error(`stderr: ${stderr}`);
+      log.info(`stdout: ${stdout}`);
+      log.error(`stderr: ${stderr}`);
       if (stdoutCall) {
         stdoutCall(stdout);
       }
@@ -463,11 +464,11 @@ export function getApplogspath(username: string): string {
 export async function checkAndCreatePath(pathToCheck: string): Promise<void> {
   try {
     await fs.promises.access(pathToCheck, fs.constants.F_OK);
-    console.log("Path exists.");
+    log.info("Path exists.");
   } catch {
-    console.log("Path does not exist. Creating...");
+    log.info("Path does not exist. Creating...");
     await fs.promises.mkdir(pathToCheck, { recursive: true });
-    console.log("Path created.");
+    log.info("Path created.");
   }
 }
 export function getEnumKeyByValue(
@@ -501,7 +502,7 @@ export function WriteLog(logPath: string, data: string): void {
   }
   fs.appendFile(logPath, logEntry, (err) => {
     if (err) {
-      console.error("Failed to write to log file:", err);
+      log.error("Failed to write to log file:", err);
     }
   });
 }
@@ -583,7 +584,7 @@ export function getDomain(url) {
     const parsedUrl = new URL(url);
     return parsedUrl.hostname;
   } catch (e) {
-    console.error("Invalid URL:", e);
+    log.error("Invalid URL:", e);
     return null;
   }
 }
@@ -928,7 +929,7 @@ export async function scrollPageToBottom(
       }
     } catch (error) {
       // Continue if spinner not found or not clickable
-      console.log("No spinner/button found or not clickable");
+      log.info("No spinner/button found or not clickable");
     }
 
     currentScrolls++;
@@ -962,7 +963,7 @@ export async function closePuppeteer(
       await browser.close();
     }
   } catch (error) {
-    console.error("Error closing puppeteer resources:", error);
+    log.error("Error closing puppeteer resources:", error);
   }
 }
 // Function to find Chrome path on macOS
@@ -978,7 +979,7 @@ export function findChromeOnMac(): string | undefined {
       return path.join(chromePath, "Contents/MacOS/Google Chrome");
     }
   } catch (error) {
-    console.error("Error finding Chrome:", error);
+    log.error("Error finding Chrome:", error);
   }
 
   // Fallback paths
@@ -1015,7 +1016,7 @@ export function findChromeOnMac(): string | undefined {
   ];
 
   for (const chromePath of possiblePaths) {
-    console.log("chromePath", chromePath);
+    log.info("chromePath", chromePath);
     if (fs.existsSync(chromePath)) {
       return chromePath;
     }
@@ -1064,7 +1065,7 @@ export function findChromeOnWindows(): string | undefined {
       }
     }
   } catch (error) {
-    console.error("Error finding Chrome in registry:", error);
+    log.error("Error finding Chrome in registry:", error);
   }
 
   return undefined;
@@ -1077,7 +1078,7 @@ export function findChromeOnLinux(): string | undefined {
       return chromePath;
     }
   } catch (error) {
-    console.error("Error finding Chrome with which:", error);
+    log.error("Error finding Chrome with which:", error);
   }
 
   const possiblePaths = [
@@ -1221,6 +1222,6 @@ export function sendSystemMessage(message: {
       }
     });
   } catch (error) {
-    console.error("Failed to send system message:", error);
+    log.error("Failed to send system message:", error);
   }
 }

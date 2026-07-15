@@ -1,4 +1,5 @@
 import { app } from 'electron';
+import { log } from "@/modules/Logger";
 import * as path from 'path';
 import * as fs from 'fs';
 import { AppInfo } from '@/modules/AppInfoModule';
@@ -24,7 +25,7 @@ export class MainProcessAppInfoModule {
         };
       }
     } catch (error) {
-      console.error('Error loading package.json:', error);
+      log.error('Error loading package.json:', error);
     }
 
     // Fallback to Electron app info

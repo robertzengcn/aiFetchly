@@ -1,4 +1,5 @@
 import { BasePlatformAdapter } from '@/modules/BasePlatformAdapter';
+import { log } from "@/modules/Logger";
 import { IBasePlatformAdapter } from '@/modules/interface/IBasePlatformAdapter';
 import { PlatformConfig } from '@/modules/interface/IPlatformConfig';
 import { PlatformAdapterFactory } from './platforms';
@@ -20,7 +21,7 @@ export class ChildProcessAdapterFactory {
         platformConfig: PlatformConfig
     ): Promise<BasePlatformAdapter> {
         try {
-            console.log(adapterClassInfo);
+            log.info(adapterClassInfo);
             
             // Use the factory method instead of dynamic import
             if (!PlatformAdapterFactory.isAdapterAvailable(adapterClassInfo.className)) {
@@ -31,7 +32,7 @@ export class ChildProcessAdapterFactory {
             return PlatformAdapterFactory.createAdapter(adapterClassInfo.className, platformConfig);
             
         } catch (error) {
-            console.error(`Failed to create adapter ${adapterClassInfo.className}:`, error);
+            log.error(`Failed to create adapter ${adapterClassInfo.className}:`, error);
             throw new Error(`Failed to create adapter: ${error}`);
         }
     }

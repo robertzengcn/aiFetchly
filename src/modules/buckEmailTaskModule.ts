@@ -1,4 +1,5 @@
 import { Token } from "@/modules/token";
+import { log } from "@/modules/Logger";
 import { USERSDBPATH } from "@/config/usersetting";
 import { BuckemailTaskEntity } from "@/entity/BuckemailTask.entity";
 import { BuckEmailType } from "@/entityTypes/buckEmail-type";
@@ -113,14 +114,14 @@ export class BuckEmailTaskModule extends BaseModule {
     try {
       parsed = JSON.parse(emailListJson);
     } catch {
-      console.warn(
+      log.warn(
         "parseEmailListJson: failed to parse email_list_json, returning empty list"
       );
       return [];
     }
 
     if (!Array.isArray(parsed)) {
-      console.warn(
+      log.warn(
         "parseEmailListJson: email_list_json is not an array, returning empty list"
       );
       return [];
@@ -136,7 +137,7 @@ export class BuckEmailTaskModule extends BaseModule {
       }
     }
     if (droppedCount > 0) {
-      console.warn(
+      log.warn(
         `parseEmailListJson: dropped ${droppedCount} invalid email item(s) from stored JSON`
       );
     }
@@ -435,7 +436,7 @@ export class BuckEmailTaskModule extends BaseModule {
     });
 
     child.on("spawn", () => {
-      console.log("child process satart, pid is" + child.pid);
+      log.info("child process satart, pid is" + child.pid);
       child.postMessage(JSON.stringify({ action: "sendEmail", data: data }), [
         port1,
       ]);
@@ -487,7 +488,7 @@ export class BuckEmailTaskModule extends BaseModule {
       : undefined;
 
     child.on("error", (error) => {
-      console.error("Child process failed:", error);
+      log.error("Child process failed:", error);
       WriteLog(errorLogfile, `Child process failed: ${error.message}`);
       this.updateTaskErrorFile(taskId, errorLogfile);
       this.updateTaskStatus(taskId, TaskStatus.Error);
@@ -497,13 +498,13 @@ export class BuckEmailTaskModule extends BaseModule {
     child.on("exit", (code) => {
       if (code !== 0) {
         const message = `Child process exited with code ${code}`;
-        console.error(message);
+        log.error(message);
         WriteLog(errorLogfile, message);
         this.updateTaskErrorFile(taskId, errorLogfile);
         this.updateTaskStatus(taskId, TaskStatus.Error);
         settleFailure(new Error(`${message}; task_id=${taskId}`));
       } else {
-        console.log("Child process exited successfully");
+        log.info("Child process exited successfully");
         this.updateTaskStatus(taskId, TaskStatus.Complete);
         settleSuccess();
       }
@@ -512,7 +513,7 @@ export class BuckEmailTaskModule extends BaseModule {
       try {
         const result = parseChildMessage<EmailSendResult>(message);
         if (result.kind === "error") {
-          console.error(
+          log.error(
             `Invalid message from child process (${result.reason}):`,
             message
           );
@@ -520,8 +521,8 @@ export class BuckEmailTaskModule extends BaseModule {
         }
         const childdata = result.data;
 
-        console.log("get message from child");
-        console.log("Message from child:", childdata);
+        log.info("get message from child");
+        log.info("Message from child:", childdata);
         switch (childdata.action) {
           case "EmailSendSuccess":
             {
@@ -533,7 +534,7 @@ export class BuckEmailTaskModule extends BaseModule {
               //     content: message.data.content,
               // }
               if (!childdata.data) {
-                console.error("EmailSendSuccess: childdata.data is undefined");
+                log.error("EmailSendSuccess: childdata.data is undefined");
                 break;
               }
               const emailMarketLog = new EmailMarketingSendLogEntity();
@@ -560,7 +561,7 @@ export class BuckEmailTaskModule extends BaseModule {
               //     log: message.data.info
               // }
               if (!childdata.data) {
-                console.error("EmailSendFailure: childdata.data is undefined");
+                log.error("EmailSendFailure: childdata.data is undefined");
                 break;
               }
               const emailMarketLog = new EmailMarketingSendLogEntity();
@@ -589,9 +590,9 @@ export class BuckEmailTaskModule extends BaseModule {
             break;
         }
       } catch (error) {
-        console.error("Failed to parse message from child process:", error);
+        log.error("Failed to parse message from child process:", error);
         if (error instanceof Error) {
-          console.error("Error details:", error.message);
+          log.error("Error details:", error.message);
         }
       }
     });

@@ -6,6 +6,7 @@ import { SocialTaskRun } from "@/modules/socialtaskrun"
 // const os = require("os");
 import { SocialTaskEntity, SocialTaskResponse, SocialTaskInfoResponse, SocialTaskTypeResponse, SaveSocialTaskResponse, TagResponse, SocialTaskRunEntity } from "@/entityTypes/socialtask-type"
 import { utilityProcess, MessageChannelMain, app } from "electron";
+import { log } from "@/modules/Logger";
 import * as path from 'path';
 // import { spawn } from 'node:child_process';
 import * as fs from 'fs';
@@ -170,7 +171,7 @@ export class SocialTask {
             }
         })
         child.on("exit", () => {
-            console.log(`child process exited `)
+            log.info(`child process exited `)
         })
 
         port2.on("message", (e) => {

@@ -1,4 +1,5 @@
 import { Page } from 'puppeteer';
+import { log } from "@/modules/Logger";
 import { BasePlatformAdapter } from '@/modules/BasePlatformAdapter';
 import { PlatformConfig } from '@/modules/interface/IPlatformConfig';
 import { SearchResult } from '@/modules/interface/IBasePlatformAdapter';
@@ -38,7 +39,7 @@ export class ComAdapter192 extends BasePlatformAdapter {
      * Custom business data extraction for 192.com
      */
     async extractBusinessData(page: Page): Promise<BusinessData> {
-        console.log('Extracting business data from 192.com');
+        log.info('Extracting business data from 192.com');
 
         // Wait for results to load
         await page.waitForSelector('div.business-result', { timeout: 10000 });
@@ -148,11 +149,11 @@ export class ComAdapter192 extends BasePlatformAdapter {
      * Handle pagination for 192.com
      */
     async handlePagination(page: Page, maxPages: number): Promise<void> {
-        console.log('Handling pagination for 192.com');
+        log.info('Handling pagination for 192.com');
 
         const currentPage = await this.getCurrentPage(page);
         if (currentPage >= maxPages) {
-            console.log(`Reached maximum page limit: ${maxPages}`);
+            log.info(`Reached maximum page limit: ${maxPages}`);
             return;
         }
 
@@ -162,7 +163,7 @@ export class ComAdapter192 extends BasePlatformAdapter {
             if (nextButton) {
                 await nextButton.click();
                 await new Promise(resolve => setTimeout(resolve, 2000)); // Wait for page to load
-                console.log(`Navigated to page ${currentPage + 1}`);
+                log.info(`Navigated to page ${currentPage + 1}`);
             }
         }
     }
@@ -171,7 +172,7 @@ export class ComAdapter192 extends BasePlatformAdapter {
      * Extract detailed business information from individual business page
      */
     async extractDetailedBusinessInfo(page: Page, businessUrl: string): Promise<any> {
-        console.log(`Extracting detailed business info from: ${businessUrl}`);
+        log.info(`Extracting detailed business info from: ${businessUrl}`);
 
         try {
             await page.goto(businessUrl, { waitUntil: 'networkidle2' });
@@ -213,7 +214,7 @@ export class ComAdapter192 extends BasePlatformAdapter {
 
             return detailedInfo;
         } catch (error) {
-            console.error('Error extracting detailed business info:', error);
+            log.error('Error extracting detailed business info:', error);
             return {};
         }
     }
@@ -268,7 +269,7 @@ export class ComAdapter192 extends BasePlatformAdapter {
                 return parseInt(text || '1', 10);
             }
         } catch (error) {
-            console.error('Error getting current page:', error);
+            log.error('Error getting current page:', error);
         }
         return 1;
     }
@@ -281,7 +282,7 @@ export class ComAdapter192 extends BasePlatformAdapter {
             const nextButton = await page.$('a.pagination-next');
             return nextButton !== null;
         } catch (error) {
-            console.error('Error checking for next page:', error);
+            log.error('Error checking for next page:', error);
             return false;
         }
     }
@@ -290,7 +291,7 @@ export class ComAdapter192 extends BasePlatformAdapter {
      * Apply cookies to the page
      */
     async applyCookies(page: Page, cookies: any): Promise<void> {
-        console.log('Applying cookies to 192.com');
+        log.info('Applying cookies to 192.com');
         
         if (cookies && Array.isArray(cookies)) {
             await page.setCookie(...cookies);
@@ -301,7 +302,7 @@ export class ComAdapter192 extends BasePlatformAdapter {
      * Handle site-specific features for 192.com
      */
     async handleSiteSpecificFeatures(page: Page): Promise<void> {
-        console.log('Handling 192.com specific features');
+        log.info('Handling 192.com specific features');
 
         // Handle cookie consent if present
         try {
@@ -311,7 +312,7 @@ export class ComAdapter192 extends BasePlatformAdapter {
                 await new Promise(resolve => setTimeout(resolve, 1000));
             }
         } catch (error) {
-            console.log('No cookie consent dialog found or already handled');
+            log.info('No cookie consent dialog found or already handled');
         }
 
         // Handle location popup if present
@@ -322,7 +323,7 @@ export class ComAdapter192 extends BasePlatformAdapter {
                 await new Promise(resolve => setTimeout(resolve, 1000));
             }
         } catch (error) {
-            console.log('No location popup found or already handled');
+            log.info('No location popup found or already handled');
         }
 
         // Handle search suggestions if present
@@ -333,7 +334,7 @@ export class ComAdapter192 extends BasePlatformAdapter {
                 await new Promise(resolve => setTimeout(resolve, 1000));
             }
         } catch (error) {
-            console.log('No search suggestion dialog found or already handled');
+            log.info('No search suggestion dialog found or already handled');
         }
     }
 }

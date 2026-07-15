@@ -1,6 +1,7 @@
 import { Token } from "@/modules/token"
 import { RemoteSource } from "@/modules/remotesource"
 import { USERSDBPATH, TOKENNAME, USERLOGPATH, USEREMAIL, USERNAME, REFRESHTOKEN, TOKENEXPIRY, REFRESHTOKENEXPIRY } from '@/config/usersetting';
+import { log } from "@/modules/Logger";
 import { BrowserWindow } from 'electron';
 import { NATIVATECOMMAND } from '@/config/channellist';
 import type { NativateDatatype } from '@/entityTypes/commonType';
@@ -29,7 +30,7 @@ export class User {
                 if (mainWindow) {
                     const bw = mainWindow as BrowserWindow;
                     if (bw && !(bw as any).isDestroyed?.() && (bw as any).webContents) {
-                        console.log("Sending navigation command to renderer");
+                        log.info("Sending navigation command to renderer");
                         (bw as any).webContents.send(NATIVATECOMMAND, {
                             path: 'login'
                         } as NativateDatatype);
@@ -37,7 +38,7 @@ export class User {
                 }
             }
         } catch (ipcError) {
-            console.error('Failed to send navigation command to renderer:', ipcError);
+            log.error('Failed to send navigation command to renderer:', ipcError);
         }
     }
     //private tokenname= "social-market-token";
@@ -46,7 +47,7 @@ export class User {
             const remoteModel = new RemoteSource()
             await remoteModel.removeRemoteToken()
         } catch (error) {
-            console.error("Error removing remote token:", error);
+            log.error("Error removing remote token:", error);
             // Continue with local cleanup even if remote token removal fails
         }
         this.removeToken()

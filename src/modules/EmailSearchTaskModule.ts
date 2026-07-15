@@ -1,6 +1,7 @@
 //import { Token } from "@/modules/token"
 //import { USERSDBPATH } from '@/config/usersetting';
 import { EmailsearchTaskModel } from "@/model/EmailsearchTask.model";
+import { log } from "@/modules/Logger";
 import { EmailsearchTaskUrlModel } from "@/model/EmailsearchTaskUrl.model";
 import {
   EmailResult,
@@ -188,7 +189,7 @@ export class EmailSearchTaskModule extends BaseModule {
     const processTimeoutMs = (data.processTimeout || 30) * 60 * 1000;
     const processTimeoutHandle = setTimeout(() => {
       if (EmailSearchTaskModule.processMap.has(taskId)) {
-        console.error(
+        log.error(
           `[EmailSearchTask] Child process for task ${taskId} exceeded timeout of ${
             processTimeoutMs / 1000
           }s, killing...`
@@ -196,7 +197,7 @@ export class EmailSearchTaskModule extends BaseModule {
         child.kill();
         EmailSearchTaskModule.processMap.delete(taskId);
         this.updateTaskStatus(taskId, TaskStatus.Error).catch((err) => {
-          console.error(
+          log.error(
             `[EmailSearchTask] Failed to update task ${taskId} status after timeout kill:`,
             err
           );
@@ -205,7 +206,7 @@ export class EmailSearchTaskModule extends BaseModule {
     }, processTimeoutMs);
 
     child.on("spawn", () => {
-      console.log(
+      log.info(
         `[EmailSearchTask] Child process started for task ${taskId}, pid: ${child.pid}`
       );
       child.postMessage(JSON.stringify({ action: "searchEmail", data: data }), [
@@ -229,14 +230,14 @@ export class EmailSearchTaskModule extends BaseModule {
     });
     // Handle child process errors (e.g., process can't start, crashes)
     child.on("error", (err) => {
-      console.error(
+      log.error(
         `[EmailSearchTask] Child process error for task ${taskId}:`,
         err
       );
       clearTimeout(processTimeoutHandle);
       EmailSearchTaskModule.processMap.delete(taskId);
       this.updateTaskStatus(taskId, TaskStatus.Error).catch((updateErr) => {
-        console.error(
+        log.error(
           `[EmailSearchTask] Failed to update task ${taskId} status after error:`,
           updateErr
         );
@@ -248,18 +249,18 @@ export class EmailSearchTaskModule extends BaseModule {
       EmailSearchTaskModule.processMap.delete(taskId);
       try {
         if (code !== 0) {
-          console.error(
+          log.error(
             `[EmailSearchTask] Child process for task ${taskId} exited with code ${code}`
           );
           await this.updateTaskStatus(taskId, TaskStatus.Error);
         } else {
-          console.log(
+          log.info(
             `[EmailSearchTask] Child process for task ${taskId} exited successfully`
           );
           await this.updateTaskStatus(taskId, TaskStatus.Complete);
         }
       } catch (error) {
-        console.error(
+        log.error(
           `[EmailSearchTask] Failed to update task ${taskId} status after child exit:`,
           error
         );
@@ -285,7 +286,7 @@ export class EmailSearchTaskModule extends BaseModule {
 
         const result = parseChildMessage<EmailResult>(message);
         if (result.kind === "error") {
-          console.error(
+          log.error(
             `Invalid message from child process (${result.reason}):`,
             message
           );
@@ -293,13 +294,13 @@ export class EmailSearchTaskModule extends BaseModule {
         }
         const childdata = result.data;
 
-        console.log("get message from child");
-        console.log("Message from child:", childdata);
+        log.info("get message from child");
+        log.info("Message from child:", childdata);
         if (childdata.action == "saveres") {
           if (childdata.data) {
             //save result
             this.saveSearchResult(taskId, childdata.data).catch((error) => {
-              console.error(
+              log.error(
                 `Failed to save email search result for task ${taskId}:`,
                 error
               );
@@ -307,16 +308,16 @@ export class EmailSearchTaskModule extends BaseModule {
           }
         } else if (childdata.action == "searcherror") {
           // Child process reported a search error - update task status
-          console.error(
+          log.error(
             `[EmailSearchTask] Search error from child for task ${taskId}:`,
             childdata.data
           );
           await this.updateTaskStatus(taskId, TaskStatus.Error);
         }
       } catch (error) {
-        console.error("Failed to parse message from child process:", error);
+        log.error("Failed to parse message from child process:", error);
         if (error instanceof Error) {
-          console.error("Error details:", error.message);
+          log.error("Error details:", error.message);
         }
       }
     });
@@ -330,13 +331,13 @@ export class EmailSearchTaskModule extends BaseModule {
     const child = EmailSearchTaskModule.processMap.get(taskId);
     if (!child) {
       // Process already exited but DB status is stale — just fix the status
-      console.warn(
+      log.warn(
         `[EmailSearchTask] No running process for task ${taskId}, marking as cancelled in DB`
       );
       await this.updateTaskStatus(taskId, TaskStatus.Cancel);
       return;
     }
-    console.log(`[EmailSearchTask] Killing child process for task ${taskId}`);
+    log.info(`[EmailSearchTask] Killing child process for task ${taskId}`);
     child.kill();
     EmailSearchTaskModule.processMap.delete(taskId);
     await this.updateTaskStatus(taskId, TaskStatus.Cancel);
@@ -351,7 +352,7 @@ export class EmailSearchTaskModule extends BaseModule {
     if (EmailSearchTaskModule.processMap.has(taskId)) {
       throw new Error("Task is already running");
     }
-    console.log(`[EmailSearchTask] Starting task ${taskId}`);
+    log.info(`[EmailSearchTask] Starting task ${taskId}`);
     await this.updateTaskStatus(taskId, TaskStatus.Processing);
     this.searchEmail(taskId);
   }
@@ -379,7 +380,7 @@ export class EmailSearchTaskModule extends BaseModule {
           task.status === 1 &&
           !EmailSearchTaskModule.processMap.has(task.id!)
         ) {
-          console.warn(
+          log.warn(
             `Resetting orphaned Processing task ${task.id} to Error`
           );
           await this.updateTaskStatus(task.id!, TaskStatus.Error);
@@ -392,7 +393,7 @@ export class EmailSearchTaskModule extends BaseModule {
 
   //save search task, call it when user start search email
   public async saveSearchtask(data: EmailsControldata): Promise<number> {
-    console.log("save search task");
+    log.info("save search task");
     //
     const task = new EmailSearchTaskEntity();
     task.status = TaskStatus.Processing;
@@ -568,7 +569,7 @@ export class EmailSearchTaskModule extends BaseModule {
     page: number,
     size: number
   ): Promise<EmailResultDisplay[]> {
-    console.log("get task result,task id is" + taskId);
+    log.info("get task result,task id is" + taskId);
     const res = await this.emailsearchresultdb.getTaskResult(
       taskId,
       page,
@@ -607,7 +608,7 @@ export class EmailSearchTaskModule extends BaseModule {
   public async getAllTaskResults(
     taskId: number
   ): Promise<EmailResultDisplay[]> {
-    console.log("get all task results for export, task id is" + taskId);
+    log.info("get all task results for export, task id is" + taskId);
     const res = await this.emailsearchresultdb.getAllResultsByTaskId(taskId);
     const result: EmailResultDisplay[] = [];
     for (const value of res) {

@@ -1,4 +1,5 @@
 import { MessageType } from '@/modules/interface/IPCMessageProtocol';
+import { log } from "@/modules/Logger";
 import { TaskStatus } from '@/modules/interface/ITaskManager';
 import { BaseModule } from '@/modules/baseModule';
 import { YellowPagesTaskModel, YellowPagesTaskStatus } from '@/model/YellowPagesTask.model';
@@ -94,8 +95,8 @@ export class StatusReportingManager extends BaseModule {
      * Initialize the status reporting manager
      */
     async initialize(): Promise<void> {
-        console.log('Initializing StatusReportingManager...');
-        console.log('StatusReportingManager initialized successfully');
+        log.info('Initializing StatusReportingManager...');
+        log.info('StatusReportingManager initialized successfully');
     }
 
     /**
@@ -103,7 +104,7 @@ export class StatusReportingManager extends BaseModule {
      */
     async handleMessage(message: IPCMessage): Promise<void> {
         try {
-            console.log(`Handling message type: ${message.type}`);
+            log.info(`Handling message type: ${message.type}`);
 
             // Call registered handlers
             const handlers = this.messageHandlers.get(message.type);
@@ -136,11 +137,11 @@ export class StatusReportingManager extends BaseModule {
                     break;
 
                 default:
-                    console.log(`Unhandled message type: ${message.type}`);
+                    log.info(`Unhandled message type: ${message.type}`);
             }
 
         } catch (error) {
-            console.error('Error handling message:', error);
+            log.error('Error handling message:', error);
             await this.handleError('StatusReportingManager', 'Message handling failed', error);
         }
     }
@@ -151,7 +152,7 @@ export class StatusReportingManager extends BaseModule {
     private async handleProgressUpdate(message: ProgressUpdateMessage): Promise<void> {
         try {
             const taskId = message.taskId;
-            console.log(`Progress update for task ${taskId}: ${message.progress}% (${message.currentPage}/${message.totalPages})`);
+            log.info(`Progress update for task ${taskId}: ${message.progress}% (${message.currentPage}/${message.totalPages})`);
 
             // Update progress tracking
             this.taskProgress.set(taskId, {
@@ -169,7 +170,7 @@ export class StatusReportingManager extends BaseModule {
 
             // Log progress details
             if (message.details) {
-                console.log(`Task ${taskId} details:`, {
+                log.info(`Task ${taskId} details:`, {
                     currentUrl: message.details.currentUrl,
                     timeElapsed: message.details.timeElapsed,
                     timeRemaining: message.details.timeRemaining,
@@ -179,7 +180,7 @@ export class StatusReportingManager extends BaseModule {
             }
 
         } catch (error) {
-            console.error('Error handling progress update:', error);
+            log.error('Error handling progress update:', error);
             await this.handleError(message.taskId, 'Progress update failed', error);
         }
     }
@@ -190,7 +191,7 @@ export class StatusReportingManager extends BaseModule {
     private async handleStatusUpdate(message: StatusUpdateMessage): Promise<void> {
         try {
             const taskId = message.taskId;
-            console.log(`Status update for task ${taskId}: ${message.status} - ${message.message}`);
+            log.info(`Status update for task ${taskId}: ${message.status} - ${message.message}`);
 
             // Update task status in database
             const dbStatus = this.mapTaskStatus(message.status);
@@ -212,7 +213,7 @@ export class StatusReportingManager extends BaseModule {
             }
 
         } catch (error) {
-            console.error('Error handling status update:', error);
+            log.error('Error handling status update:', error);
             await this.handleError(message.taskId, 'Status update failed', error);
         }
     }
@@ -223,7 +224,7 @@ export class StatusReportingManager extends BaseModule {
     private async handleResultData(message: ResultDataMessage): Promise<void> {
         try {
             const taskId = message.taskId;
-            console.log(`Result data for task ${taskId}: ${message.results.length} results from page ${message.pageNumber}`);
+            log.info(`Result data for task ${taskId}: ${message.results.length} results from page ${message.pageNumber}`);
 
             // Save results to database
             for (const result of message.results) {
@@ -244,10 +245,10 @@ export class StatusReportingManager extends BaseModule {
                 });
             }
 
-            console.log(`Saved ${message.results.length} results for task ${taskId}`);
+            log.info(`Saved ${message.results.length} results for task ${taskId}`);
 
         } catch (error) {
-            console.error('Error handling result data:', error);
+            log.error('Error handling result data:', error);
             await this.handleError(message.taskId, 'Result data handling failed', error);
         }
     }
@@ -258,14 +259,14 @@ export class StatusReportingManager extends BaseModule {
     private async handleTaskError(message: ErrorMessage): Promise<void> {
         try {
             const taskId = message.taskId;
-            console.error(`Task error for ${taskId}: ${message.message} (${message.severity})`);
+            log.error(`Task error for ${taskId}: ${message.message} (${message.severity})`);
 
             // Log error details
             if (message.stack) {
-                console.error('Error stack:', message.stack);
+                log.error('Error stack:', message.stack);
             }
             if (message.context) {
-                console.error('Error context:', message.context);
+                log.error('Error context:', message.context);
             }
 
             // Update task status based on error severity
@@ -288,7 +289,7 @@ export class StatusReportingManager extends BaseModule {
             }
 
         } catch (error) {
-            console.error('Error handling task error:', error);
+            log.error('Error handling task error:', error);
             await this.handleError(message.taskId, 'Error handling failed', error);
         }
     }
@@ -309,22 +310,22 @@ export class StatusReportingManager extends BaseModule {
                     console.info(logMessage);
                     break;
                 case 'warn':
-                    console.warn(logMessage);
+                    log.warn(logMessage);
                     break;
                 case 'error':
-                    console.error(logMessage);
+                    log.error(logMessage);
                     break;
                 default:
-                    console.log(logMessage);
+                    log.info(logMessage);
             }
 
             // Log additional data if present
             if (message.data) {
-                console.log('Log data:', message.data);
+                log.info('Log data:', message.data);
             }
 
         } catch (error) {
-            console.error('Error handling log message:', error);
+            log.error('Error handling log message:', error);
         }
     }
 
@@ -333,7 +334,7 @@ export class StatusReportingManager extends BaseModule {
      */
     private async handleTaskCompleted(taskId: string, data?: any): Promise<void> {
         try {
-            console.log(`Task ${taskId} completed successfully`);
+            log.info(`Task ${taskId} completed successfully`);
             
             // Update task completion time
             await this.taskModel.updateTaskCompletion(parseInt(taskId));
@@ -343,10 +344,10 @@ export class StatusReportingManager extends BaseModule {
 
             // Log completion statistics
             const results = await this.resultModel.getResultsByTaskId(parseInt(taskId));
-            console.log(`Task ${taskId} completed with ${results.length} results`);
+            log.info(`Task ${taskId} completed with ${results.length} results`);
 
         } catch (error) {
-            console.error('Error handling task completion:', error);
+            log.error('Error handling task completion:', error);
             await this.handleError(taskId, 'Task completion handling failed', error);
         }
     }
@@ -356,18 +357,18 @@ export class StatusReportingManager extends BaseModule {
      */
     private async handleTaskFailed(taskId: string, data?: any): Promise<void> {
         try {
-            console.error(`Task ${taskId} failed`);
+            log.error(`Task ${taskId} failed`);
             
             // Log failure details
             if (data) {
-                console.error('Failure details:', data);
+                log.error('Failure details:', data);
             }
 
             // Clean up progress tracking
             this.taskProgress.delete(taskId);
 
         } catch (error) {
-            console.error('Error handling task failure:', error);
+            log.error('Error handling task failure:', error);
             await this.handleError(taskId, 'Task failure handling failed', error);
         }
     }
@@ -377,13 +378,13 @@ export class StatusReportingManager extends BaseModule {
      */
     private async handleTaskStopped(taskId: string, data?: any): Promise<void> {
         try {
-            console.log(`Task ${taskId} stopped`);
+            log.info(`Task ${taskId} stopped`);
             
             // Clean up progress tracking
             this.taskProgress.delete(taskId);
 
         } catch (error) {
-            console.error('Error handling task stopped:', error);
+            log.error('Error handling task stopped:', error);
             await this.handleError(taskId, 'Task stopped handling failed', error);
         }
     }
@@ -393,7 +394,7 @@ export class StatusReportingManager extends BaseModule {
      */
     private async handleCriticalError(taskId: string, errorMessage: ErrorMessage): Promise<void> {
         try {
-            console.error(`Critical error for task ${taskId}:`, errorMessage.message);
+            log.error(`Critical error for task ${taskId}:`, errorMessage.message);
             
             // Update task status to failed
             await this.taskModel.updateTaskStatus(parseInt(taskId), YellowPagesTaskStatus.Failed);
@@ -405,7 +406,7 @@ export class StatusReportingManager extends BaseModule {
             // e.g., notify administrators, restart process, etc.
 
         } catch (error) {
-            console.error('Error handling critical error:', error);
+            log.error('Error handling critical error:', error);
         }
     }
 
@@ -414,7 +415,7 @@ export class StatusReportingManager extends BaseModule {
      */
     private async handleError(taskId: string, message: string, error: any): Promise<void> {
         try {
-            console.error(`Error for task ${taskId}: ${message}`, error);
+            log.error(`Error for task ${taskId}: ${message}`, error);
             
             // Log error details
             const errorDetails = {
@@ -425,10 +426,10 @@ export class StatusReportingManager extends BaseModule {
                 timestamp: new Date()
             };
 
-            console.error('Error details:', errorDetails);
+            log.error('Error details:', errorDetails);
 
         } catch (logError) {
-            console.error('Error logging error:', logError);
+            log.error('Error logging error:', logError);
         }
     }
 
@@ -495,23 +496,23 @@ export class StatusReportingManager extends BaseModule {
     private setupDefaultHandlers(): void {
         // Default handler for all messages
         this.registerMessageHandler(MessageType.PROGRESS_UPDATE, async (message) => {
-            console.log('Progress update received:', message);
+            log.info('Progress update received:', message);
         });
 
         this.registerMessageHandler(MessageType.STATUS_UPDATE, async (message) => {
-            console.log('Status update received:', message);
+            log.info('Status update received:', message);
         });
 
         this.registerMessageHandler(MessageType.RESULT_DATA, async (message) => {
-            console.log('Result data received:', message);
+            log.info('Result data received:', message);
         });
 
         this.registerMessageHandler(MessageType.TASK_ERROR, async (message) => {
-            console.error('Task error received:', message);
+            log.error('Task error received:', message);
         });
 
         this.registerMessageHandler(MessageType.LOG_MESSAGE, async (message) => {
-            console.log('Log message received:', message);
+            log.info('Log message received:', message);
         });
     }
 } 

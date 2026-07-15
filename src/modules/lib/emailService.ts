@@ -1,4 +1,5 @@
 import nodemailer from 'nodemailer';
+import { log } from "@/modules/Logger";
 import {EmailServiceEntitydata,EmailRequestData} from "@/entityTypes/emailmarketingType";
 export class EmailService {
     private transporter: nodemailer.Transporter;
@@ -43,13 +44,13 @@ export class EmailService {
             // Send the email
             this.transporter.sendMail(mailOptions, function (error, info) {
                 if (error) {
-                    console.error('Error:', error);
+                    log.error('Error:', error);
                     if (errorCallback) {
                         errorCallback(error.message)
                         // errorCallback(item.address, error.message, emailTpldata.TplTitle, emailTpldata.TplContent)
                     }
                 } else {
-                    console.log('Email sent:', info.response);
+                    log.info('Email sent:', info.response);
                     if (successCallback) {
                         successCallback()
                         // successCallback(item.address, emailTpldata.TplTitle, emailTpldata.TplContent)

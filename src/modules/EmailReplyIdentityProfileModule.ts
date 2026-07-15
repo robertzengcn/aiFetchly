@@ -1,4 +1,5 @@
 import { BaseModule } from "@/modules/baseModule";
+import { log } from "@/modules/Logger";
 import { EmailReplyIdentityProfileModel } from "@/model/EmailReplyIdentityProfile.model";
 import { EmailReplyIdentityProfileEntity } from "@/entity/EmailReplyIdentityProfile.entity";
 
@@ -18,7 +19,7 @@ export class EmailReplyIdentityProfileModule extends BaseModule {
       await this.ensureConnection();
       return await this.profileModel.getByEmailServiceId(emailServiceId);
     } catch (error) {
-      console.error("Error reading reply identity profile:", error);
+      log.error("Error reading reply identity profile:", error);
       throw error;
     }
   }
@@ -30,7 +31,7 @@ export class EmailReplyIdentityProfileModule extends BaseModule {
       await this.ensureConnection();
       return await this.profileModel.upsertForEmailService(entity);
     } catch (error) {
-      console.error("Error upserting reply identity profile:", error);
+      log.error("Error upserting reply identity profile:", error);
       throw error;
     }
   }

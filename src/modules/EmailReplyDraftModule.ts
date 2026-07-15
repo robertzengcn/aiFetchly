@@ -1,4 +1,5 @@
 import { BaseModule } from "@/modules/baseModule";
+import { log } from "@/modules/Logger";
 import {
   EmailReplyDraftModel,
   ReplyDraftListInput,
@@ -22,7 +23,7 @@ export class EmailReplyDraftModule extends BaseModule {
       await this.ensureConnection();
       return await this.draftModel.create(entity);
     } catch (error) {
-      console.error("Error creating reply draft:", error);
+      log.error("Error creating reply draft:", error);
       throw error;
     }
   }
@@ -32,7 +33,7 @@ export class EmailReplyDraftModule extends BaseModule {
       await this.ensureConnection();
       return await this.draftModel.read(id);
     } catch (error) {
-      console.error("Error reading reply draft:", error);
+      log.error("Error reading reply draft:", error);
       throw error;
     }
   }
@@ -46,7 +47,7 @@ export class EmailReplyDraftModule extends BaseModule {
       await this.ensureConnection();
       await this.draftModel.updateStatus(id, status, error);
     } catch (e) {
-      console.error("Error updating draft status:", e);
+      log.error("Error updating draft status:", e);
       throw e;
     }
   }
@@ -60,7 +61,7 @@ export class EmailReplyDraftModule extends BaseModule {
       await this.ensureConnection();
       await this.draftModel.updateBody(id, bodyText, bodyHtml);
     } catch (e) {
-      console.error("Error updating draft body:", e);
+      log.error("Error updating draft body:", e);
       throw e;
     }
   }
@@ -70,7 +71,7 @@ export class EmailReplyDraftModule extends BaseModule {
       await this.ensureConnection();
       await this.draftModel.markSent(id, sentAt);
     } catch (e) {
-      console.error("Error marking draft sent:", e);
+      log.error("Error marking draft sent:", e);
       throw e;
     }
   }
@@ -82,7 +83,7 @@ export class EmailReplyDraftModule extends BaseModule {
       await this.ensureConnection();
       return await this.draftModel.listByMessage(messageId);
     } catch (error) {
-      console.error("Error listing drafts by message:", error);
+      log.error("Error listing drafts by message:", error);
       throw error;
     }
   }
@@ -96,7 +97,7 @@ export class EmailReplyDraftModule extends BaseModule {
       const total = await this.draftModel.count(input);
       return { records, total };
     } catch (error) {
-      console.error("Error listing reply drafts:", error);
+      log.error("Error listing reply drafts:", error);
       throw error;
     }
   }

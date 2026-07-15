@@ -1,4 +1,5 @@
 import { BaseModule } from "@/modules/baseModule";
+import { log } from "@/modules/Logger";
 import { AIChatModule } from "@/modules/AIChatModule";
 import { AIChatSessionMemoryModule } from "@/modules/AIChatSessionMemoryModule";
 import { AIChatCompactModule } from "@/modules/AIChatCompactModule";
@@ -182,7 +183,7 @@ export class AIChatV2Module extends BaseModule {
     try {
       await this.sessionMemoryModule.deleteByConversation(conversationId);
     } catch (err) {
-      console.error(
+      log.error(
         "[ai-chat-v2] clearConversation: session memory clear failed:",
         err
       );
@@ -190,7 +191,7 @@ export class AIChatV2Module extends BaseModule {
     try {
       await this.compactModule.deleteByConversation(conversationId);
     } catch (err) {
-      console.error(
+      log.error(
         "[ai-chat-v2] clearConversation: compact clear failed:",
         err
       );
@@ -208,7 +209,7 @@ export class AIChatV2Module extends BaseModule {
     try {
       await this.sessionMemoryModule.deleteAllV2();
     } catch (err) {
-      console.error(
+      log.error(
         "[ai-chat-v2] clearAllV2History: session memory clearAll failed:",
         err
       );
@@ -216,7 +217,7 @@ export class AIChatV2Module extends BaseModule {
     try {
       await this.compactModule.deleteAllV2();
     } catch (err) {
-      console.error(
+      log.error(
         "[ai-chat-v2] clearAllV2History: compact clearAll failed:",
         err
       );

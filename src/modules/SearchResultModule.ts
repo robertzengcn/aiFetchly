@@ -1,4 +1,5 @@
 import { ISearchResultApi } from "./interface/ISearchResultApi";
+import { log } from "@/modules/Logger";
 import { SearchResultModel } from "@/model/SearchResult.model";
 import { SearchResEntity } from "@/entityTypes/scrapeType";
 import { BaseModule } from "./baseModule";
@@ -21,7 +22,7 @@ export class SearchResultModule extends BaseModule implements ISearchResultApi {
         try {
             return await this.searchResultModel.saveResult(data, taskId);
         } catch (error) {
-            console.error("Failed to save search result:", error);
+            log.error("Failed to save search result:", error);
             throw new Error(error instanceof Error ? error.message : "Failed to save search result");
         }
     }
@@ -37,7 +38,7 @@ export class SearchResultModule extends BaseModule implements ISearchResultApi {
 
             return await this.searchResultModel.listSearchresult(keywords, page, size);
         } catch (error) {
-            console.error("Failed to list search results:", error);
+            log.error("Failed to list search results:", error);
             throw new Error(error instanceof Error ? error.message : "Failed to list search results");
         }
     }
@@ -53,7 +54,7 @@ export class SearchResultModule extends BaseModule implements ISearchResultApi {
 
             return await this.searchResultModel.countSearchResult(keywords);
         } catch (error) {
-            console.error("Failed to count search results:", error);
+            log.error("Failed to count search results:", error);
             throw new Error(error instanceof Error ? error.message : "Failed to count search results");
         }
     }
@@ -62,7 +63,7 @@ export class SearchResultModule extends BaseModule implements ISearchResultApi {
         try {
             return await this.searchResultModel.countAll();
         } catch (error) {
-            console.error("Failed to count search results:", error);
+            log.error("Failed to count search results:", error);
             throw new Error(error instanceof Error ? error.message : "Failed to count search results");
         }
     }
@@ -71,7 +72,7 @@ export class SearchResultModule extends BaseModule implements ISearchResultApi {
         try {
             return await this.searchResultModel.countByDateRange(startDate, endDate);
         } catch (error) {
-            console.error("Failed to count search results by date range:", error);
+            log.error("Failed to count search results by date range:", error);
             throw new Error(error instanceof Error ? error.message : "Failed to count search results by date range");
         }
     }
@@ -81,7 +82,7 @@ export class SearchResultModule extends BaseModule implements ISearchResultApi {
             const rows = await this.searchResultModel.aggregateByDateRange(startDate, endDate, granularity);
             return rows.map(row => ({ date: row.date, count: row.count }));
         } catch (error) {
-            console.error("Failed to aggregate search results by date range:", error);
+            log.error("Failed to aggregate search results by date range:", error);
             throw new Error(error instanceof Error ? error.message : "Failed to aggregate search results by date range");
         }
     }
@@ -97,7 +98,7 @@ export class SearchResultModule extends BaseModule implements ISearchResultApi {
 
             return await this.searchResultModel.getSearchResultsByTaskId(taskId, page, size);
         } catch (error) {
-            console.error("Failed to get search results by task ID:", error);
+            log.error("Failed to get search results by task ID:", error);
             throw new Error(error instanceof Error ? error.message : "Failed to get search results by task ID");
         }
     }
@@ -113,7 +114,7 @@ export class SearchResultModule extends BaseModule implements ISearchResultApi {
 
             return await this.searchResultModel.getAllSearchResultsByTaskId(taskId);
         } catch (error) {
-            console.error("Failed to get all search results by task ID:", error);
+            log.error("Failed to get all search results by task ID:", error);
             throw new Error(error instanceof Error ? error.message : "Failed to get all search results by task ID");
         }
     }
@@ -125,7 +126,7 @@ export class SearchResultModule extends BaseModule implements ISearchResultApi {
         try {
             await this.searchResultModel.truncatedb();
         } catch (error) {
-            console.error("Failed to truncate search results database:", error);
+            log.error("Failed to truncate search results database:", error);
             throw new Error(error instanceof Error ? error.message : "Failed to truncate search results database");
         }
     }
@@ -170,7 +171,7 @@ export class SearchResultModule extends BaseModule implements ISearchResultApi {
                 total: total
             };
         } catch (error) {
-            console.error("Failed to get search results with filter:", error);
+            log.error("Failed to get search results with filter:", error);
             throw new Error(error instanceof Error ? error.message : "Failed to get search results with filter");
         }
     }
@@ -185,7 +186,7 @@ export class SearchResultModule extends BaseModule implements ISearchResultApi {
         try {
             return await this.searchResultModel.getBreakdownByEngine(startDate, endDate);
         } catch (error) {
-            console.error("Failed to get breakdown by engine:", error);
+            log.error("Failed to get breakdown by engine:", error);
             throw new Error(error instanceof Error ? error.message : "Failed to get breakdown by engine");
         }
     }
@@ -212,7 +213,7 @@ export class SearchResultModule extends BaseModule implements ISearchResultApi {
 
             return deletedCount;
         } catch (error) {
-            console.error("Failed to delete search results by task ID:", error);
+            log.error("Failed to delete search results by task ID:", error);
             throw new Error(error instanceof Error ? error.message : "Failed to delete search results by task ID");
         }
     }
@@ -238,7 +239,7 @@ export class SearchResultModule extends BaseModule implements ISearchResultApi {
                 throw new Error('Failed to update AI analysis');
             }
         } catch (error) {
-            console.error('Failed to update AI analysis:', error);
+            log.error('Failed to update AI analysis:', error);
             throw new Error(error instanceof Error ? error.message : 'Failed to update AI analysis');
         }
     }
@@ -259,7 +260,7 @@ export class SearchResultModule extends BaseModule implements ISearchResultApi {
                 throw new Error('Failed to update AI analysis status');
             }
         } catch (error) {
-            console.error('Failed to update AI analysis status:', error);
+            log.error('Failed to update AI analysis status:', error);
             throw new Error(error instanceof Error ? error.message : 'Failed to update AI analysis status');
         }
     }
@@ -278,7 +279,7 @@ export class SearchResultModule extends BaseModule implements ISearchResultApi {
 
             return await this.searchResultModel.updateAiAnalysisStatusBatch(resultIds, status);
         } catch (error) {
-            console.error('Failed to update AI analysis status batch:', error);
+            log.error('Failed to update AI analysis status batch:', error);
             throw new Error(error instanceof Error ? error.message : 'Failed to update AI analysis status batch');
         }
     }
@@ -296,7 +297,7 @@ export class SearchResultModule extends BaseModule implements ISearchResultApi {
 
             return await this.searchResultModel.getSearchResultsByIds(resultIds);
         } catch (error) {
-            console.error('Failed to get search results by IDs:', error);
+            log.error('Failed to get search results by IDs:', error);
             throw new Error(error instanceof Error ? error.message : 'Failed to get search results by IDs');
         }
     }

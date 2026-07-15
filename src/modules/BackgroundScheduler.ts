@@ -1,4 +1,5 @@
 import { BaseDb } from "@/model/Basedb";
+import { log } from "@/modules/Logger";
 import { ScheduleManager } from "./ScheduleManager";
 import { ScheduleTaskModel } from "@/model/ScheduleTask.model";
 import { ScheduleExecutionLogModel } from "@/model/ScheduleExecutionLog.model";
@@ -115,7 +116,7 @@ export class BackgroundScheduler extends BaseDb {
     }
 
     try {
-      console.log("Initializing BackgroundScheduler...");
+      log.info("Initializing BackgroundScheduler...");
 
       // Initialize the schedule manager
       await this.scheduleManager.initializeSchedules();
@@ -124,9 +125,9 @@ export class BackgroundScheduler extends BaseDb {
       await this.loadPendingExecutions();
 
       this.isInitialized = true;
-      console.log("BackgroundScheduler initialized successfully");
+      log.info("BackgroundScheduler initialized successfully");
     } catch (error) {
-      console.error("Failed to initialize BackgroundScheduler:", error);
+      log.error("Failed to initialize BackgroundScheduler:", error);
       throw error;
     }
   }
@@ -164,7 +165,7 @@ export class BackgroundScheduler extends BaseDb {
     // with the new SqliteDb instance on next use
     SearchController.resetInstance();
     YellowPagesController.resetInstance();
-    console.log("Controller singletons reset after SqliteDb path change");
+    log.info("Controller singletons reset after SqliteDb path change");
 
     // Ensure the new connection is initialized with retry logic for database locks
     if (!newDbInstance.connection.isInitialized) {
@@ -186,7 +187,7 @@ export class BackgroundScheduler extends BaseDb {
               errorMessage.includes("locked") ||
               errorMessage.includes("database is locked")
             ) {
-              console.warn(
+              log.warn(
                 `Database locked during initialization, retrying... (${retries} retries left)`
               );
               // Wait a bit longer before retrying
@@ -199,7 +200,7 @@ export class BackgroundScheduler extends BaseDb {
         }
       }
       if (retries === 0 && lastError) {
-        console.error(
+        log.error(
           "Failed to initialize new SqliteDb connection after retries:",
           lastError
         );
@@ -223,12 +224,12 @@ export class BackgroundScheduler extends BaseDb {
    */
   async start(): Promise<void> {
     if (this.isRunning) {
-      console.log("BackgroundScheduler is already running");
+      log.info("BackgroundScheduler is already running");
       return;
     }
 
     try {
-      console.log("Starting BackgroundScheduler...");
+      log.info("Starting BackgroundScheduler...");
 
       // Ensure initialization
       if (!this.isInitialized) {
@@ -261,9 +262,9 @@ export class BackgroundScheduler extends BaseDb {
       await this.processScheduledTasks();
       await this.processDependencyQueue();
 
-      console.log("BackgroundScheduler started successfully");
+      log.info("BackgroundScheduler started successfully");
     } catch (error) {
-      console.error("Failed to start BackgroundScheduler:", error);
+      log.error("Failed to start BackgroundScheduler:", error);
       this.isRunning = false;
       throw error;
     }
@@ -274,12 +275,12 @@ export class BackgroundScheduler extends BaseDb {
    */
   async stop(): Promise<void> {
     if (!this.isRunning) {
-      console.log("BackgroundScheduler is not running");
+      log.info("BackgroundScheduler is not running");
       return;
     }
 
     try {
-      console.log("Stopping BackgroundScheduler...");
+      log.info("Stopping BackgroundScheduler...");
 
       this.isRunning = false;
 
@@ -317,15 +318,15 @@ export class BackgroundScheduler extends BaseDb {
 
       // Force stop remaining executions
       if (this.runningExecutions.size > 0) {
-        console.warn(
+        log.warn(
           `Force stopping ${this.runningExecutions.size} remaining executions`
         );
         this.runningExecutions.clear();
       }
 
-      console.log("BackgroundScheduler stopped successfully");
+      log.info("BackgroundScheduler stopped successfully");
     } catch (error) {
-      console.error("Error stopping BackgroundScheduler:", error);
+      log.error("Error stopping BackgroundScheduler:", error);
       throw error;
     }
   }
@@ -335,7 +336,7 @@ export class BackgroundScheduler extends BaseDb {
    */
   async reloadSchedules(): Promise<void> {
     try {
-      console.log("Reloading schedules...");
+      log.info("Reloading schedules...");
 
       // Stop the schedule manager
       await this.scheduleManager.stop();
@@ -348,9 +349,9 @@ export class BackgroundScheduler extends BaseDb {
         await this.scheduleManager.start();
       }
 
-      console.log("Schedules reloaded successfully");
+      log.info("Schedules reloaded successfully");
     } catch (error) {
-      console.error("Failed to reload schedules:", error);
+      log.error("Failed to reload schedules:", error);
       throw error;
     }
   }
@@ -379,7 +380,7 @@ export class BackgroundScheduler extends BaseDb {
    * Handle application shutdown
    */
   async handleAppShutdown(): Promise<void> {
-    console.log("Handling application shutdown...");
+    log.info("Handling application shutdown...");
 
     try {
       // Stop the background scheduler
@@ -388,9 +389,9 @@ export class BackgroundScheduler extends BaseDb {
       // Stop the schedule manager
       await this.scheduleManager.handleAppShutdown();
 
-      console.log("Application shutdown handled successfully");
+      log.info("Application shutdown handled successfully");
     } catch (error) {
-      console.error("Error during application shutdown:", error);
+      log.error("Error during application shutdown:", error);
     }
   }
 
@@ -420,12 +421,12 @@ export class BackgroundScheduler extends BaseDb {
       }
 
       if (readySchedules.length > 0) {
-        console.log(
+        log.info(
           `Found ${readySchedules.length} schedules ready to execute`
         );
       }
     } catch (error) {
-      console.error("Error processing scheduled tasks:", error);
+      log.error("Error processing scheduled tasks:", error);
     }
   }
 
@@ -460,7 +461,7 @@ export class BackgroundScheduler extends BaseDb {
         }
       }
     } catch (error) {
-      console.error("Error processing dependency queue:", error);
+      log.error("Error processing dependency queue:", error);
     }
   }
 
@@ -516,7 +517,7 @@ export class BackgroundScheduler extends BaseDb {
       this.lastExecutionTime = new Date();
       this.totalExecutions++;
 
-      console.log(
+      log.info(
         `Executing schedule ${queueItem.scheduleId} (attempt ${
           queueItem.retryCount + 1
         })`
@@ -582,7 +583,7 @@ export class BackgroundScheduler extends BaseDb {
         }
 
         this.successfulExecutions++;
-        console.log(
+        log.info(
           `Schedule ${queueItem.scheduleId} executed successfully in ${duration}ms`
         );
 
@@ -612,14 +613,14 @@ export class BackgroundScheduler extends BaseDb {
         );
 
         this.failedExecutions++;
-        console.error(
+        log.error(
           `Schedule ${queueItem.scheduleId} execution failed:`,
           error
         );
 
         // Handle retry logic
         if (queueItem.retryCount < queueItem.maxRetries) {
-          console.log(
+          log.info(
             `Retrying schedule ${queueItem.scheduleId} in ${this.retryDelayMs}ms`
           );
 
@@ -631,7 +632,7 @@ export class BackgroundScheduler extends BaseDb {
             });
           }, this.retryDelayMs);
         } else {
-          console.error(
+          log.error(
             `Schedule ${queueItem.scheduleId} failed after ${queueItem.maxRetries} retries`
           );
 
@@ -640,7 +641,7 @@ export class BackgroundScheduler extends BaseDb {
         }
       }
     } catch (error) {
-      console.error(
+      log.error(
         `Error in executeScheduleWithRetry for schedule ${queueItem.scheduleId}:`,
         error
       );
@@ -673,7 +674,7 @@ export class BackgroundScheduler extends BaseDb {
       // Execute dependent jobs
       await this.scheduleManager.executeDependentJobs(executionId, status);
     } catch (error) {
-      console.error("Error handling job completion:", error);
+      log.error("Error handling job completion:", error);
     }
   }
 
@@ -728,7 +729,7 @@ export class BackgroundScheduler extends BaseDb {
         }
       }
     } catch (error) {
-      console.error("Error loading pending executions:", error);
+      log.error("Error loading pending executions:", error);
     }
   }
 
@@ -737,13 +738,13 @@ export class BackgroundScheduler extends BaseDb {
    */
   private async performCleanup(): Promise<void> {
     try {
-      console.log("Performing cleanup tasks...");
+      log.info("Performing cleanup tasks...");
 
       // Clean up old execution logs (keep last 30 days)
       const deletedCount =
         await this.scheduleExecutionLogModel.cleanupOldExecutions(30);
       if (deletedCount > 0) {
-        console.log(`Cleaned up ${deletedCount} old execution logs`);
+        log.info(`Cleaned up ${deletedCount} old execution logs`);
       }
 
       // Clean up inactive dependencies
@@ -751,10 +752,10 @@ export class BackgroundScheduler extends BaseDb {
         this.scheduleManager as any
       ).scheduleDependencyModel.cleanupInactiveDependencies();
       if (deletedDependencies > 0) {
-        console.log(`Cleaned up ${deletedDependencies} inactive dependencies`);
+        log.info(`Cleaned up ${deletedDependencies} inactive dependencies`);
       }
     } catch (error) {
-      console.error("Error during cleanup:", error);
+      log.error("Error during cleanup:", error);
     }
   }
 
@@ -781,9 +782,9 @@ export class BackgroundScheduler extends BaseDb {
         scheduledTime: new Date(),
       });
 
-      console.log(`Manually triggered schedule ${scheduleId}`);
+      log.info(`Manually triggered schedule ${scheduleId}`);
     } catch (error) {
-      console.error(`Error triggering schedule ${scheduleId}:`, error);
+      log.error(`Error triggering schedule ${scheduleId}:`, error);
       throw error;
     }
   }
@@ -852,7 +853,7 @@ export class BackgroundScheduler extends BaseDb {
         },
       };
     } catch (error) {
-      console.error("Error getting detailed stats:", error);
+      log.error("Error getting detailed stats:", error);
       throw error;
     }
   }

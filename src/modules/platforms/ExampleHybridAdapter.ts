@@ -1,4 +1,5 @@
 import { PlatformConfig } from '@/modules/interface/IPlatformConfig';
+import { log } from "@/modules/Logger";
 import { IBasePlatformAdapter } from '@/modules/interface/IBasePlatformAdapter';
 import { Page } from 'puppeteer';
 
@@ -71,7 +72,7 @@ export class ExampleHybridAdapter implements IBasePlatformAdapter {
             return this.postProcessData(businessData);
             
         } catch (error) {
-            console.error('Error in hybrid data extraction:', error);
+            log.error('Error in hybrid data extraction:', error);
             return this.getFallbackData(page);
         }
     }
@@ -264,7 +265,7 @@ export class ExampleHybridAdapter implements IBasePlatformAdapter {
                     const customExtractor = await this.loadCustomExtractor(functionName as string);
                     customData[extractorName] = await customExtractor(page);
                 } catch (error) {
-                    console.warn(`Failed to apply custom extractor ${extractorName}:`, error);
+                    log.warn(`Failed to apply custom extractor ${extractorName}:`, error);
                 }
             }
         }
@@ -320,7 +321,7 @@ export class ExampleHybridAdapter implements IBasePlatformAdapter {
                 return await element.evaluate(el => el.textContent?.trim());
             }
         } catch (error) {
-            console.warn(`Failed to extract text from selector ${selector}:`, error);
+            log.warn(`Failed to extract text from selector ${selector}:`, error);
         }
         return undefined;
     }
@@ -333,7 +334,7 @@ export class ExampleHybridAdapter implements IBasePlatformAdapter {
                 return result || undefined;
             }
         } catch (error) {
-            console.warn(`Failed to extract attribute ${attribute} from selector ${selector}:`, error);
+            log.warn(`Failed to extract attribute ${attribute} from selector ${selector}:`, error);
         }
         return undefined;
     }

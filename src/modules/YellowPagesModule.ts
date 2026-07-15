@@ -1,4 +1,5 @@
 import { BaseModule } from "@/modules/baseModule";
+import { log } from "@/modules/Logger";
 import {
   ITaskManager,
   YellowPagesTaskData,
@@ -57,7 +58,7 @@ export class YellowPagesModule extends BaseModule implements ITaskManager {
    */
   async createTask(taskData: YellowPagesTaskData): Promise<number> {
     try {
-      console.log("Creating Yellow Pages task:", taskData);
+      log.info("Creating Yellow Pages task:", taskData);
 
       // Validate task data
       this.validateTaskData(taskData);
@@ -83,7 +84,7 @@ export class YellowPagesModule extends BaseModule implements ITaskManager {
             taskData.account_id
           );
         if (!accountCookies) {
-          console.warn(
+          log.warn(
             `Account ${taskData.account_id} not found, task will run without cookies`
           );
         }
@@ -103,10 +104,10 @@ export class YellowPagesModule extends BaseModule implements ITaskManager {
         headless: taskData.headless !== undefined ? taskData.headless : true,
       });
 
-      console.log(`Created Yellow Pages task with ID: ${taskId}`);
+      log.info(`Created Yellow Pages task with ID: ${taskId}`);
       return taskId;
     } catch (error) {
-      console.error("Failed to create Yellow Pages task:", error);
+      log.error("Failed to create Yellow Pages task:", error);
       throw error;
     }
   }
@@ -118,7 +119,7 @@ export class YellowPagesModule extends BaseModule implements ITaskManager {
    */
   async startTask(taskId: number): Promise<void> {
     try {
-      console.log(`Starting Yellow Pages task ${taskId}`);
+      log.info(`Starting Yellow Pages task ${taskId}`);
 
       // Update task status to in-progress
       await this.taskModel.updateTaskStatus(
@@ -129,9 +130,9 @@ export class YellowPagesModule extends BaseModule implements ITaskManager {
       // Spawn child process for scraping
       await this.processManager.spawnScraperProcess(taskId);
 
-      console.log(`Successfully started Yellow Pages task ${taskId}`);
+      log.info(`Successfully started Yellow Pages task ${taskId}`);
     } catch (error) {
-      console.error(`Failed to start Yellow Pages task ${taskId}:`, error);
+      log.error(`Failed to start Yellow Pages task ${taskId}:`, error);
 
       // Update task status to failed
       await this.taskModel.updateTaskStatus(
@@ -154,7 +155,7 @@ export class YellowPagesModule extends BaseModule implements ITaskManager {
    */
   async stopTask(taskId: number): Promise<void> {
     try {
-      console.log(`Stopping Yellow Pages task ${taskId}`);
+      log.info(`Stopping Yellow Pages task ${taskId}`);
 
       // Terminate the child process
       await this.processManager.terminateProcess(taskId);
@@ -165,9 +166,9 @@ export class YellowPagesModule extends BaseModule implements ITaskManager {
         YellowPagesTaskStatus.Paused
       );
 
-      console.log(`Successfully stopped Yellow Pages task ${taskId}`);
+      log.info(`Successfully stopped Yellow Pages task ${taskId}`);
     } catch (error) {
-      console.error(`Failed to stop Yellow Pages task ${taskId}:`, error);
+      log.error(`Failed to stop Yellow Pages task ${taskId}:`, error);
       throw error;
     }
   }
@@ -179,14 +180,14 @@ export class YellowPagesModule extends BaseModule implements ITaskManager {
    */
   async pauseTask(taskId: number): Promise<void> {
     try {
-      console.log(`Pausing Yellow Pages task ${taskId}`);
+      log.info(`Pausing Yellow Pages task ${taskId}`);
 
       // Use the process manager to pause the task
       await this.processManager.pauseTask(taskId);
 
-      console.log(`Successfully paused Yellow Pages task ${taskId}`);
+      log.info(`Successfully paused Yellow Pages task ${taskId}`);
     } catch (error) {
-      console.error(`Failed to pause Yellow Pages task ${taskId}:`, error);
+      log.error(`Failed to pause Yellow Pages task ${taskId}:`, error);
       throw error;
     }
   }
@@ -198,7 +199,7 @@ export class YellowPagesModule extends BaseModule implements ITaskManager {
    */
   async resumeTask(taskId: number): Promise<void> {
     try {
-      console.log(`Resuming Yellow Pages task ${taskId}`);
+      log.info(`Resuming Yellow Pages task ${taskId}`);
 
       // Check if task is in paused state
       const task = await this.taskModel.getTaskById(taskId);
@@ -213,9 +214,9 @@ export class YellowPagesModule extends BaseModule implements ITaskManager {
       // Use the process manager to resume the task
       await this.processManager.resumeTask(taskId);
 
-      console.log(`Successfully resumed Yellow Pages task ${taskId}`);
+      log.info(`Successfully resumed Yellow Pages task ${taskId}`);
     } catch (error) {
-      console.error(`Failed to resume Yellow Pages task ${taskId}:`, error);
+      log.error(`Failed to resume Yellow Pages task ${taskId}:`, error);
       throw error;
     }
   }
@@ -234,7 +235,7 @@ export class YellowPagesModule extends BaseModule implements ITaskManager {
 
       return task.status as TaskStatus;
     } catch (error) {
-      console.error(`Failed to get status for task ${taskId}:`, error);
+      log.error(`Failed to get status for task ${taskId}:`, error);
       throw error;
     }
   }
@@ -272,7 +273,7 @@ export class YellowPagesModule extends BaseModule implements ITaskManager {
 
       return progress;
     } catch (error) {
-      console.error(`Failed to get progress for task ${taskId}:`, error);
+      log.error(`Failed to get progress for task ${taskId}:`, error);
       throw error;
     }
   }
@@ -328,7 +329,7 @@ export class YellowPagesModule extends BaseModule implements ITaskManager {
           : undefined,
       }));
     } catch (error) {
-      console.error(`Failed to get results for task ${taskId}:`, error);
+      log.error(`Failed to get results for task ${taskId}:`, error);
       throw error;
     }
   }
@@ -369,7 +370,7 @@ export class YellowPagesModule extends BaseModule implements ITaskManager {
 
       return summaries;
     } catch (error) {
-      console.error("Failed to list Yellow Pages tasks:", error);
+      log.error("Failed to list Yellow Pages tasks:", error);
       throw error;
     }
   }
@@ -385,7 +386,7 @@ export class YellowPagesModule extends BaseModule implements ITaskManager {
     updates: Partial<YellowPagesTask>
   ): Promise<void> {
     try {
-      console.log(`Updating Yellow Pages task ${taskId}:`, updates);
+      log.info(`Updating Yellow Pages task ${taskId}:`, updates);
 
       const updateData: any = {
         ...updates,
@@ -402,9 +403,9 @@ export class YellowPagesModule extends BaseModule implements ITaskManager {
 
       await this.taskModel.updateTask(taskId, updateData);
 
-      console.log(`Successfully updated Yellow Pages task ${taskId}`);
+      log.info(`Successfully updated Yellow Pages task ${taskId}`);
     } catch (error) {
-      console.error(`Failed to update Yellow Pages task ${taskId}:`, error);
+      log.error(`Failed to update Yellow Pages task ${taskId}:`, error);
       throw error;
     }
   }
@@ -416,7 +417,7 @@ export class YellowPagesModule extends BaseModule implements ITaskManager {
    */
   async deleteTask(taskId: number): Promise<void> {
     try {
-      console.log(`Deleting Yellow Pages task ${taskId}`);
+      log.info(`Deleting Yellow Pages task ${taskId}`);
 
       // Stop the task if it's running
       if (this.processManager.isProcessRunning(taskId)) {
@@ -429,9 +430,9 @@ export class YellowPagesModule extends BaseModule implements ITaskManager {
       // Delete the task
       await this.taskModel.deleteTask(taskId);
 
-      console.log(`Successfully deleted Yellow Pages task ${taskId}`);
+      log.info(`Successfully deleted Yellow Pages task ${taskId}`);
     } catch (error) {
-      console.error(`Failed to delete Yellow Pages task ${taskId}:`, error);
+      log.error(`Failed to delete Yellow Pages task ${taskId}:`, error);
       throw error;
     }
   }
@@ -494,7 +495,7 @@ export class YellowPagesModule extends BaseModule implements ITaskManager {
         processHealth,
       };
     } catch (error) {
-      console.error("Failed to get health status:", error);
+      log.error("Failed to get health status:", error);
       throw error;
     }
   }

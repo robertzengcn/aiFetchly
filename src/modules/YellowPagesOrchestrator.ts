@@ -1,4 +1,5 @@
 import { BaseModule } from "@/modules/baseModule";
+import { log } from "@/modules/Logger";
 import { YellowPagesModule } from "@/modules/YellowPagesModule";
 import { YellowPagesProcessManager } from "@/modules/YellowPagesProcessManager";
 import { BrowserManager } from "@/modules/browserManager";
@@ -60,12 +61,12 @@ export class YellowPagesOrchestrator extends BaseModule implements ITaskManager 
      */
     async initialize(): Promise<void> {
         if (this.isInitialized) {
-            console.log('Yellow Pages Orchestrator already initialized');
+            log.info('Yellow Pages Orchestrator already initialized');
             return;
         }
 
         try {
-            console.log('Initializing Yellow Pages Orchestrator...');
+            log.info('Initializing Yellow Pages Orchestrator...');
 
             // Step 1: Initialize the Yellow Pages system (platforms, etc.)
             await this.initModule.initializeYellowPagesSystem();
@@ -78,7 +79,7 @@ export class YellowPagesOrchestrator extends BaseModule implements ITaskManager 
 
             // Step 3: Verify browser availability
             const browserInfo = await this.browserManager.getBrowserInfo();
-            console.log('Browser info:', {
+            log.info('Browser info:', {
                 executablePath: browserInfo.executablePath || 'bundled',
                 buildId: browserInfo.buildId,
                 isSystemBrowser: browserInfo.isSystemBrowser,
@@ -89,10 +90,10 @@ export class YellowPagesOrchestrator extends BaseModule implements ITaskManager 
             // Health check is ready to use without initialization
 
             this.isInitialized = true;
-            console.log('Yellow Pages Orchestrator initialized successfully');
+            log.info('Yellow Pages Orchestrator initialized successfully');
 
         } catch (error) {
-            console.error('Failed to initialize Yellow Pages Orchestrator:', error);
+            log.error('Failed to initialize Yellow Pages Orchestrator:', error);
             throw error;
         }
     }
@@ -106,7 +107,7 @@ export class YellowPagesOrchestrator extends BaseModule implements ITaskManager 
         }
 
         try {
-            console.log('Shutting down Yellow Pages Orchestrator...');
+            log.info('Shutting down Yellow Pages Orchestrator...');
             this.isShuttingDown = true;
 
             // Stop all active processes
@@ -114,10 +115,10 @@ export class YellowPagesOrchestrator extends BaseModule implements ITaskManager 
 
             // Health check cleanup not required
 
-            console.log('Yellow Pages Orchestrator shutdown complete');
+            log.info('Yellow Pages Orchestrator shutdown complete');
 
         } catch (error) {
-            console.error('Error during Yellow Pages Orchestrator shutdown:', error);
+            log.error('Error during Yellow Pages Orchestrator shutdown:', error);
             throw error;
         }
     }
@@ -139,18 +140,18 @@ export class YellowPagesOrchestrator extends BaseModule implements ITaskManager 
             if (taskData.account_id) {
                 const cookies = await this.accountCookiesModule.getAccountCookies(taskData.account_id);
                 if (!cookies) {
-                    console.warn(`Account ${taskData.account_id} not found, task will run without cookies`);
+                    log.warn(`Account ${taskData.account_id} not found, task will run without cookies`);
                 }
             }
 
             // Create task through the main module
             const taskId = await this.yellowPagesModule.createTask(taskData);
 
-            console.log(`Orchestrator created task ${taskId} for platform ${taskData.platform}`);
+            log.info(`Orchestrator created task ${taskId} for platform ${taskData.platform}`);
             return taskId;
 
         } catch (error) {
-            console.error('Failed to create task:', error);
+            log.error('Failed to create task:', error);
             throw error;
         }
     }
@@ -162,7 +163,7 @@ export class YellowPagesOrchestrator extends BaseModule implements ITaskManager 
         await this.ensureInitialized();
 
         try {
-            console.log(`Orchestrator starting task ${taskId}`);
+            log.info(`Orchestrator starting task ${taskId}`);
 
             // Pre-flight checks
             await this.performPreflightChecks(taskId);
@@ -170,16 +171,16 @@ export class YellowPagesOrchestrator extends BaseModule implements ITaskManager 
             // Start the task through the main module
             await this.yellowPagesModule.startTask(taskId);
 
-            console.log(`Orchestrator successfully started task ${taskId}`);
+            log.info(`Orchestrator successfully started task ${taskId}`);
 
         } catch (error) {
-            console.error(`Failed to start task ${taskId}:`, error);
+            log.error(`Failed to start task ${taskId}:`, error);
             
             // Attempt cleanup on failure
             try {
                 await this.processManager.terminateProcess(taskId);
             } catch (cleanupError) {
-                console.error(`Failed to cleanup after task start failure:`, cleanupError);
+                log.error(`Failed to cleanup after task start failure:`, cleanupError);
             }
             
             throw error;
@@ -305,7 +306,7 @@ export class YellowPagesOrchestrator extends BaseModule implements ITaskManager 
             };
 
         } catch (error) {
-            console.error('Failed to get system health status:', error);
+            log.error('Failed to get system health status:', error);
             const available = this.platformRegistry.getActivePlatforms().length;
             return {
                 orchestrator: { initialized: false, shuttingDown: false, uptime: 0 },
@@ -323,7 +324,7 @@ export class YellowPagesOrchestrator extends BaseModule implements ITaskManager 
      * Perform pre-flight checks before starting a task
      */
     private async performPreflightChecks(taskId: number): Promise<void> {
-        console.log(`Performing pre-flight checks for task ${taskId}`);
+        log.info(`Performing pre-flight checks for task ${taskId}`);
 
         // Check system health
         const healthStatus = await this.getSystemHealthStatus();
@@ -349,7 +350,7 @@ export class YellowPagesOrchestrator extends BaseModule implements ITaskManager 
             throw new Error(`Browser not available: ${error instanceof Error ? error.message : String(error)}`);
         }
 
-        console.log(`Pre-flight checks passed for task ${taskId}`);
+        log.info(`Pre-flight checks passed for task ${taskId}`);
     }
 
     /**

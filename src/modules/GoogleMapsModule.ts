@@ -8,6 +8,7 @@
  */
 
 import { app } from "electron";
+import { log } from "@/modules/Logger";
 import { spawn, type ChildProcess } from "child_process";
 import path from "path";
 import fs from "fs";
@@ -249,7 +250,7 @@ export class GoogleMapsModule extends BaseModule {
             result.summary,
             result.results
           ).catch((saveErr: unknown) => {
-            console.error(
+            log.error(
               "[GoogleMaps] Failed to save search result:",
               saveErr
             );
@@ -260,7 +261,7 @@ export class GoogleMapsModule extends BaseModule {
       });
 
       worker.on("error", (err) => {
-        console.error("[GoogleMaps] Worker process error:", err.message);
+        log.error("[GoogleMaps] Worker process error:", err.message);
         clearTimeout(timeoutTimer);
         this.activeSearches.delete(requestId);
         reject(new Error(`Worker error: ${err.message}`));
@@ -268,7 +269,7 @@ export class GoogleMapsModule extends BaseModule {
 
       worker.on("exit", (code) => {
         if (this.activeSearches.has(requestId)) {
-          console.error(
+          log.error(
             `[GoogleMaps] Worker exited unexpectedly with code ${code}`
           );
           clearTimeout(timeoutTimer);

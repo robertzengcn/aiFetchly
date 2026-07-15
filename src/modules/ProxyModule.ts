@@ -1,4 +1,5 @@
 import { IProxyApi } from "./interface/IProxyApi";
+import { log } from "@/modules/Logger";
 import { ProxyModel } from "@/model/Proxy.model";
 import { 
     ProxylistResp, 
@@ -199,7 +200,7 @@ export class ProxyModule extends BaseModule implements IProxyApi {
         try {
             return await this.proxyModel.getProxyCount();
         } catch (error) {
-            console.error("Failed to get proxy count:", error);
+            log.error("Failed to get proxy count:", error);
             return 0;
         }
     }

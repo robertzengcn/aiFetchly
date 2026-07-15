@@ -1,4 +1,5 @@
 import debug from 'debug';
+import { log } from "@/modules/Logger";
 // const resolve = require('path').resolve;
 // import * as path from "path";
 // import * as fs from "fs";
@@ -170,28 +171,28 @@ export class SocialScraper implements Subject {
     public attach(observer: Observer): void {
         const isExist = this.observers.includes(observer);
         if (isExist) {
-            return console.log('Subject: Observer has been attached already.');
+            return log.info('Subject: Observer has been attached already.');
         }
 
-        console.log('Subject: Attached an observer.');
+        log.info('Subject: Attached an observer.');
         this.observers.push(observer);
     }
 
     public detach(observer: Observer): void {
         const observerIndex = this.observers.indexOf(observer);
         if (observerIndex === -1) {
-            return console.log('Subject: Nonexistent observer.');
+            return log.info('Subject: Nonexistent observer.');
         }
 
         this.observers.splice(observerIndex, 1);
-        console.log('Subject: Detached an observer.');
+        log.info('Subject: Detached an observer.');
     }
 
     /**
      * Trigger an update in each subscriber.
      */
     public notify(type:string,data:ScrapeVideo): void {
-        console.log('Subject: Notifying observers...');
+        log.info('Subject: Notifying observers...');
         for (const observer of this.observers) {
             observer.update(type,data);
         }
@@ -317,7 +318,7 @@ export class SocialScraper implements Subject {
      */
     async workersearchdata(workerseach: WosearchObj) {
         if (workerseach.worker) {
-            console.log('worker=%o', workerseach.worker, this.config.keywords);
+            log.info('worker=%o', workerseach.worker, this.config.keywords);
         }
         if (workerseach.page) {
             this.page = workerseach.page;
@@ -326,7 +327,7 @@ export class SocialScraper implements Subject {
         await this.page.setViewport({ width: 1280, height: 800 });
         await this.load_browser_engine()
         if(!this.config.keywords){
-            console.error("keyword is empty");
+            log.error("keyword is empty");
             return
         }
         const links = await this.searchdata({ keyword: this.config.keywords })

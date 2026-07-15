@@ -1,4 +1,5 @@
 import { BaseModule } from '@/modules/baseModule';
+import { log } from "@/modules/Logger";
 import { PlatformRegistry } from '@/modules/PlatformRegistry';
 import { IBasePlatformAdapter, IPlatformAdapterFactory } from '@/modules/interface/IBasePlatformAdapter';
 import { PlatformConfig, PlatformSummary } from '@/modules/interface/IPlatformConfig';
@@ -54,11 +55,11 @@ export class PlatformAdapterFactory extends BaseModule implements IPlatformAdapt
             // Cache the adapter
             this.adapterCache.set(config.id, adapter);
             
-            console.log(`✅ Created adapter for platform: ${config.name} (${config.type || 'configuration'})`);
+            log.info(`✅ Created adapter for platform: ${config.name} (${config.type || 'configuration'})`);
             return adapter;
 
         } catch (error) {
-            console.error(`❌ Error creating adapter for platform ${config.id}:`, error);
+            log.error(`❌ Error creating adapter for platform ${config.id}:`, error);
             throw error;
         }
     }
@@ -80,7 +81,7 @@ export class PlatformAdapterFactory extends BaseModule implements IPlatformAdapt
      */
     registerAdapter(platformName: string, adapter: IBasePlatformAdapter): void {
         this.adapterCache.set(platformName, adapter);
-        console.log(`✅ Manually registered adapter: ${platformName}`);
+        log.info(`✅ Manually registered adapter: ${platformName}`);
     }
 
     /**
@@ -88,7 +89,7 @@ export class PlatformAdapterFactory extends BaseModule implements IPlatformAdapt
      */
     unregisterAdapter(platformName: string): void {
         this.adapterCache.delete(platformName);
-        console.log(`🗑️ Unregistered adapter: ${platformName}`);
+        log.info(`🗑️ Unregistered adapter: ${platformName}`);
     }
 
     /**
@@ -110,7 +111,7 @@ export class PlatformAdapterFactory extends BaseModule implements IPlatformAdapt
      */
     clearCache(): void {
         this.adapterCache.clear();
-        console.log('🧹 Cleared adapter cache');
+        log.info('🧹 Cleared adapter cache');
     }
 
     /**
@@ -166,7 +167,7 @@ export class PlatformAdapterFactory extends BaseModule implements IPlatformAdapt
             return new AdapterClass(config);
 
         } catch (error) {
-            console.error(`❌ Error loading class-based adapter ${config.class_name}:`, error);
+            log.error(`❌ Error loading class-based adapter ${config.class_name}:`, error);
             throw new Error(`Failed to load class-based adapter: ${error instanceof Error ? error.message : String(error)}`);
         }
     }
@@ -193,7 +194,7 @@ export class PlatformAdapterFactory extends BaseModule implements IPlatformAdapt
             return new AdapterClass(config);
 
         } catch (error) {
-            console.error(`❌ Error loading hybrid adapter ${config.class_name}:`, error);
+            log.error(`❌ Error loading hybrid adapter ${config.class_name}:`, error);
             throw new Error(`Failed to load hybrid adapter: ${error instanceof Error ? error.message : String(error)}`);
         }
     }
@@ -231,7 +232,7 @@ export class PlatformAdapterFactory extends BaseModule implements IPlatformAdapt
 
             for (const method of requiredMethods) {
                 if (typeof adapter[method] !== 'function') {
-                    console.error(`❌ Adapter missing required method: ${method}`);
+                    log.error(`❌ Adapter missing required method: ${method}`);
                     return false;
                 }
             }
@@ -239,15 +240,15 @@ export class PlatformAdapterFactory extends BaseModule implements IPlatformAdapt
             // Validate configuration
             const configValidation = adapter.validateConfig();
             if (!configValidation.isValid) {
-                console.error(`❌ Adapter configuration invalid:`, configValidation.errors);
+                log.error(`❌ Adapter configuration invalid:`, configValidation.errors);
                 return false;
             }
 
-            console.log(`✅ Adapter validation passed for: ${adapter.platformName}`);
+            log.info(`✅ Adapter validation passed for: ${adapter.platformName}`);
             return true;
 
         } catch (error) {
-            console.error(`❌ Error validating adapter:`, error);
+            log.error(`❌ Error validating adapter:`, error);
             return false;
         }
     }
