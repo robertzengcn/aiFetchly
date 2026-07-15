@@ -16,7 +16,10 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { AIFetchlyInstructionBlock } from "@/entityTypes/aifetchlyConfigTypes";
+import type {
+  AIFetchlyConfigSnapshot,
+  AIFetchlyInstructionBlock,
+} from "@/entityTypes/aifetchlyConfigTypes";
 import { AIFetchlyContextStore } from "@/service/aifetchlyConfig/AIFetchlyContextStore";
 import {
   AIFetchlyContextLoader,
@@ -354,6 +357,47 @@ describe("AIFetchlyConfigManager (DX-02 placeholder, CTX-03 cache miss)", () => 
     const status = mgr.getStatus();
     expect(status.commandCount).toBe(0);
     expect(status.diagnosticCount).toBe(0);
+  });
+
+  it("getStatus() reports scanned hook and skill counts", async () => {
+    const snapshot: AIFetchlyConfigSnapshot = {
+      source: "user",
+      sourceId: "user",
+      rootPath: tmpRoot,
+      version: 1,
+      files: [],
+      instructions: [],
+      commands: [],
+      agents: [],
+      hooks: [{ id: "user:hook:test" }],
+      skills: [{ id: "user:skill:test" }],
+      diagnostics: [],
+    };
+    const loader = {
+      scanGlobalRoot: async (): Promise<AIFetchlyConfigSnapshot> => snapshot,
+      getSettings: (): Record<string, never> => ({}),
+    } as unknown as AIFetchlyConfigLoader;
+    const sync = {
+      applySnapshot: () => ({
+        commandsChanged: false,
+        agentsChanged: false,
+        instructionsChanged: false,
+        skillsChanged: true,
+        diagnosticCount: 0,
+      }),
+    } as unknown as AIFetchlyRuntimeRegistrySync;
+    const mgr = new AIFetchlyConfigManager({
+      loader,
+      sync,
+      store: new AIFetchlyContextStore(),
+      registry: new CommandRegistry(),
+    });
+
+    await mgr.initialize();
+    const status = mgr.getStatus();
+
+    expect(status.hookCount).toBe(1);
+    expect(status.skillCount).toBe(1);
   });
 
   it("getStatus() surfaces diagnostics from the snapshot (e.g. oversized file)", async () => {

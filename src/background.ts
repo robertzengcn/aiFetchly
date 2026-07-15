@@ -16,6 +16,7 @@ import { registerCommunicationIpcHandlers } from "./main-process/communication/"
 import { SkillImportService } from "@/service/SkillImportService";
 import { getAIFetchlyConfigManager } from "@/service/aifetchlyConfig/AIFetchlyConfigManager";
 import { getWorkspaceWatchManager } from "@/service/workspaceWatch/WorkspaceWatchManagerSingleton";
+import { PluginComponentRegistryService } from "@/service/PluginComponentRegistryService";
 import { FileOperationTracker } from "@/service/FileOperationTracker";
 import { registerBuiltinHooks } from "@/service/hooks/builtinHooks";
 import { isAppTrustedOrigin } from "@/service/OriginTrust";
@@ -457,6 +458,11 @@ function initialize() {
       SkillImportService.loadPersistedSkills().catch((err: unknown) => {
         console.warn("[Startup] Failed to load persisted skills:", err);
       });
+      PluginComponentRegistryService.applyLoadedPlugins().catch(
+        (err: unknown) => {
+          console.warn("[Startup] Failed to load persisted plugins:", err);
+        }
+      );
 
       // Phase 13 (Plan 03b): fire-and-forget the global ~/.aifetchly scan.
       // Never blocks app launch (Pitfall 6) and never throws synchronously —

@@ -301,6 +301,7 @@ const onKeydown = (event: KeyboardEvent): void => {
 
 <style scoped>
 .v2-composer {
+  position: relative;
   flex: 0 0 auto;
   display: flex;
   flex-direction: column;

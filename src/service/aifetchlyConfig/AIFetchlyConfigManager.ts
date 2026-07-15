@@ -180,8 +180,8 @@ export class AIFetchlyConfigManager {
       // Phase 16 (Plan 02): agentCount reflects built-in + user + trusted-
       // workspace agents currently in the registry (no longer hardcoded 0).
       agentCount: this.agentRegistry.list().length,
-      hookCount: 0, // Phase 17 — no hooks discovered yet.
-      skillCount: 0, // Phase 18 — no skills discovered yet.
+      hookCount: this.lastSnapshot?.hooks.length ?? 0,
+      skillCount: this.lastSnapshot?.skills.length ?? 0,
       diagnosticCount: this.lastDiagnosticCount,
       lastReloadAt: this.lastReloadAt,
       watcherState: this.computeWatcherState(),

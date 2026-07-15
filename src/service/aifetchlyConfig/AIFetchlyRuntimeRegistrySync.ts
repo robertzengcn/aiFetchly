@@ -174,7 +174,10 @@ export class AIFetchlyRuntimeRegistrySync {
       skills =
         snapshot.skills as readonly unknown[] as readonly LocalSkillDraft[];
     }
-    this.skillAdapter.replaceSource(snapshot.sourceId, skills);
+    const skillDiagnostics = this.skillAdapter.replaceSource(
+      snapshot.sourceId,
+      skills
+    );
 
     this.contextStore.replaceInstructions(
       snapshot.sourceId,
@@ -186,7 +189,8 @@ export class AIFetchlyRuntimeRegistrySync {
       agentsChanged: agents.length > 0,
       instructionsChanged: snapshot.instructions.length > 0,
       skillsChanged: skills.length > 0,
-      diagnosticCount: countDiagnostics(snapshot.diagnostics),
+      diagnosticCount:
+        countDiagnostics(snapshot.diagnostics) + skillDiagnostics.length,
     };
   }
 
