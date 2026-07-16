@@ -13,6 +13,7 @@ import { createI18n } from "vue-i18n";
 import AiChatV2Composer from "@/views/components/aiChatV2/AiChatV2Composer.vue";
 import { listSlashCommands } from "@/views/api/slashCommands";
 import type { SlashCommandView } from "@/entityTypes/slashCommandTypes";
+import type { SlashCommandListResponse } from "@/entityTypes/slashCommandTypes";
 
 vi.mock("@/views/api/slashCommands", () => ({
   listSlashCommands: vi.fn(),
@@ -162,5 +163,52 @@ describe("AiChatV2Composer conversation-scoped slash suggestions", () => {
     await flushPromises();
 
     expect(listSlashCommands).not.toHaveBeenCalled();
+  });
+
+  it("does not flash a previous conversation's commands when switching mid-suggestion (AC-1 stale guard)", async () => {
+    // Hold the FIRST (conv-A) IPC in-flight; later calls resolve immediately
+    // with a command named after their conversationId.
+    let holdResolve: ((v: SlashCommandListResponse) => void) | null = null;
+    vi.mocked(listSlashCommands).mockImplementation((req) => {
+      if (holdResolve === null) {
+        return new Promise<SlashCommandListResponse>((resolve) => {
+          holdResolve = resolve;
+        });
+      }
+      return Promise.resolve({
+        status: true,
+        commands: [command(req.conversationId ?? "x")],
+        diagnostics: [],
+        msg: "",
+      });
+    });
+
+    const wrapper = mountComposer("conv-A");
+    await wrapper.find('[data-testid="composer-input"]').setValue("/");
+    await vi.advanceTimersByTimeAsync(130);
+    await flushPromises();
+    // conv-A IPC is now in-flight (held); dropdown not yet populated.
+    expect(wrapper.find(".slash-suggestions__name").exists()).toBe(false);
+
+    // Switch to conv-B mid-flight -> a new refresh fires and resolves at once.
+    await wrapper.setProps({ conversationId: "conv-B" });
+    await vi.advanceTimersByTimeAsync(130);
+    await flushPromises();
+    expect(wrapper.find(".slash-suggestions__name").text()).toContain("conv-B");
+
+    // Release the now-stale conv-A result. The generation guard must drop it.
+    expect(holdResolve).not.toBeNull();
+    holdResolve!({
+      status: true,
+      commands: [command("conv-A")],
+      diagnostics: [],
+      msg: "",
+    });
+    await flushPromises();
+
+    // conv-A must NOT have overwritten conv-B.
+    const name = wrapper.find(".slash-suggestions__name").text();
+    expect(name).toContain("conv-B");
+    expect(name).not.toContain("conv-A");
   });
 });
