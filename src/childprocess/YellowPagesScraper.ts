@@ -293,14 +293,14 @@ export class YellowPagesScraper {
       ];
       for (const sel of removeSelectors) {
         try {
-          clone.querySelectorAll(sel).forEach((el) => el.remove());
+          clone.querySelectorAll(sel).forEach((el: Element) => el.remove());
         } catch {
           /* ignore invalid selectors */
         }
       }
 
       // Remove elements with display:none (common for hidden menus/modals)
-      clone.querySelectorAll("*").forEach((el) => {
+      clone.querySelectorAll("*").forEach((el: Element) => {
         const style = (el as HTMLElement).getAttribute("style") || "";
         if (/display\s*:\s*none/i.test(style)) {
           el.remove();
@@ -324,7 +324,7 @@ export class YellowPagesScraper {
         "alt",
         "method",
       ]);
-      clone.querySelectorAll("*").forEach((el) => {
+      clone.querySelectorAll("*").forEach((el: Element) => {
         const attrs = [...el.attributes];
         for (const attr of attrs) {
           if (!keepAttrs.has(attr.name)) {
@@ -520,9 +520,7 @@ export class YellowPagesScraper {
       }
     }
 
-    log.debug(
-      `⚠️ No elements found for selectors: ${selectors.join(", ")}`
-    );
+    log.debug(`⚠️ No elements found for selectors: ${selectors.join(", ")}`);
     return [];
   }
 
@@ -825,9 +823,7 @@ export class YellowPagesScraper {
       }
     }
 
-    log.debug(
-      `⚠️ No elements found for selectors: ${selectors.join(", ")}`
-    );
+    log.debug(`⚠️ No elements found for selectors: ${selectors.join(", ")}`);
     return [];
   }
 
@@ -860,9 +856,7 @@ export class YellowPagesScraper {
       }
     }
 
-    log.debug(
-      `⚠️ No elements found for selectors: ${selectors.join(", ")}`
-    );
+    log.debug(`⚠️ No elements found for selectors: ${selectors.join(", ")}`);
     return [];
   }
 
@@ -1314,9 +1308,7 @@ export class YellowPagesScraper {
    */
   private async executePlatformSpecificOperations(): Promise<void> {
     if (!this.adapter) {
-      log.info(
-        "No adapter available, skipping platform-specific operations"
-      );
+      log.info("No adapter available, skipping platform-specific operations");
       return;
     }
 
@@ -1398,9 +1390,7 @@ export class YellowPagesScraper {
         this.taskData.keywords,
         this.taskData.location
       );
-      log.info(
-        `📹 Started session recording for task ${this.taskData.taskId}`
-      );
+      log.info(`📹 Started session recording for task ${this.taskData.taskId}`);
 
       // Initialize browser
       await this.initializeBrowser();
@@ -1452,9 +1442,7 @@ export class YellowPagesScraper {
    * Stop the scraping process
    */
   async stop(): Promise<void> {
-    log.info(
-      `Stopping Yellow Pages scraping for task ${this.taskData.taskId}`
-    );
+    log.info(`Stopping Yellow Pages scraping for task ${this.taskData.taskId}`);
     this.isRunning = false;
     await this.cleanup();
   }
@@ -1465,9 +1453,7 @@ export class YellowPagesScraper {
   async pause(): Promise<void> {
     if (this.isPaused) return;
 
-    log.info(
-      `Pausing Yellow Pages scraping for task ${this.taskData.taskId}`
-    );
+    log.info(`Pausing Yellow Pages scraping for task ${this.taskData.taskId}`);
     this.isPaused = true;
 
     // Send pause confirmation to parent process
@@ -1497,9 +1483,7 @@ export class YellowPagesScraper {
   async resume(): Promise<void> {
     if (!this.isPaused) return;
 
-    log.info(
-      `Resuming Yellow Pages scraping for task ${this.taskData.taskId}`
-    );
+    log.info(`Resuming Yellow Pages scraping for task ${this.taskData.taskId}`);
     this.isPaused = false;
 
     // Send resume confirmation to parent process
@@ -1743,9 +1727,7 @@ export class YellowPagesScraper {
       // For each keyword, we'll handle it differently based on the approach
       if (hasCustomSearch && hasCustomExtraction) {
         // Use platform-specific adapter methods for complete control
-        log.info(
-          `🔧 Using platform-specific adapter for keyword: ${keyword}`
-        );
+        log.info(`🔧 Using platform-specific adapter for keyword: ${keyword}`);
 
         try {
           // Use adapter's custom search method - this should handle the keyword input once
@@ -2012,10 +1994,7 @@ export class YellowPagesScraper {
                 }
               }
             } catch (aiErr) {
-              log.warn(
-                "🤖 AI step guidance for custom search failed:",
-                aiErr
-              );
+              log.warn("🤖 AI step guidance for custom search failed:", aiErr);
             }
           }
           log.info(`🔄 Falling back to generic scraping logic`);
@@ -2214,9 +2193,7 @@ export class YellowPagesScraper {
         // Add results to total
         if (results.length > 0) {
           totalResults.push(...results);
-          log.info(
-            `Found ${results.length} results from page ${currentPage}`
-          );
+          log.info(`Found ${results.length} results from page ${currentPage}`);
         }
 
         // Report progress
@@ -2242,9 +2219,7 @@ export class YellowPagesScraper {
           try {
             await this.pause();
           } catch (error) {
-            log.info(
-              `Task ${this.taskData.taskId} was stopped while paused`
-            );
+            log.info(`Task ${this.taskData.taskId} was stopped while paused`);
             break;
           }
         }
@@ -2478,9 +2453,7 @@ export class YellowPagesScraper {
                     } else if (field === "searchButton") {
                       await el.click();
                     }
-                    log.info(
-                      `🤖 AI selector worked for ${field}: ${selector}`
-                    );
+                    log.info(`🤖 AI selector worked for ${field}: ${selector}`);
                   }
                 } catch (selectorErr) {
                   log.warn(
@@ -2669,10 +2642,7 @@ export class YellowPagesScraper {
       // Wait a bit after filling forms
       await this.sleep(500);
     } catch (error) {
-      log.error(
-        "Error filling search form with platform selectors:",
-        error
-      );
+      log.error("Error filling search form with platform selectors:", error);
 
       // AI recovery: if filling inputs fails (e.g., element not clickable),
       // try the observe-execute loop to recover by clicking/focusing and typing correctly.
@@ -2809,9 +2779,7 @@ The initial deterministic filling did not succeed for ${
               if (buttonAiResult.success && buttonAiResult.data) {
                 const guidance = buttonAiResult.data;
                 if (guidance.suggestedSelectors?.searchButton) {
-                  log.info(
-                    "🤖 AI provided alternative searchButton selector"
-                  );
+                  log.info("🤖 AI provided alternative searchButton selector");
                   const altBtn = await this.page.$(
                     guidance.suggestedSelectors.searchButton
                   );
@@ -2836,9 +2804,7 @@ The initial deterministic filling did not succeed for ${
                     );
                   }
                 } else if (guidance.actions?.length) {
-                  log.info(
-                    "🤖 AI provided suggested actions to submit search"
-                  );
+                  log.info("🤖 AI provided suggested actions to submit search");
                   // Execute suggested actions
                   for (const action of guidance.actions) {
                     const result = await this.executeAction(action);
@@ -2901,9 +2867,7 @@ The initial deterministic filling did not succeed for ${
           }
         }
         await this.page.keyboard.press("Enter");
-        log.info(
-          "Submitted search form using Enter key (no button selector)"
-        );
+        log.info("Submitted search form using Enter key (no button selector)");
       }
 
       // Wait for navigation
@@ -2918,10 +2882,7 @@ The initial deterministic filling did not succeed for ${
       // Check for robot verification challenge after form submission
       await this.handleRobotVerificationDetection();
     } catch (error) {
-      log.error(
-        "Error submitting search form with platform selector:",
-        error
-      );
+      log.error("Error submitting search form with platform selector:", error);
 
       // AI recovery: attempt to submit the form when the platform selector path fails.
       // This keeps the scraper resilient against minor DOM/selector changes.
@@ -3225,7 +3186,7 @@ The initial deterministic filling did not succeed for ${
 
           // Check if element is still valid, if not, re-query it
           try {
-            await currentElement.evaluate((el) => el.isConnected);
+            await currentElement.evaluate((el: Element) => el.isConnected);
           } catch (error) {
             log.info(`Element ${itemNumber} became stale, re-querying...`);
             const freshElements = await this.page!.$$(
@@ -3268,13 +3229,8 @@ The initial deterministic filling did not succeed for ${
           if (result) {
             // Check if navigation to detail page is available
             if (businessSelectors.navigation?.detailLink) {
-              log.info(
-                `🔗 Navigating to detail page for item ${itemNumber}`
-              );
-              log.info(
-                "detailLink",
-                businessSelectors.navigation.detailLink
-              );
+              log.info(`🔗 Navigating to detail page for item ${itemNumber}`);
+              log.info("detailLink", businessSelectors.navigation.detailLink);
               const enhancedResult = await this.navigateToDetailPageAndExtract(
                 currentElement,
                 businessSelectors,
@@ -3406,9 +3362,11 @@ The initial deterministic filling did not succeed for ${
           // so the run can continue with partial results.
           if (this.aiSupportEnabled && this.page) {
             try {
-              const errMsg = error instanceof Error ? error.message : String(error);
-              const currentElement =
-                businessElements[i] as ElementHandle<Element> | undefined;
+              const errMsg =
+                error instanceof Error ? error.message : String(error);
+              const currentElement = businessElements[i] as
+                | ElementHandle<Element>
+                | undefined;
               const pageContent = currentElement
                 ? await this.buildBusinessItemContextForAi(
                     currentElement,
@@ -3431,7 +3389,9 @@ The initial deterministic filling did not succeed for ${
                 pageUrl: this.page.url(),
                 businessName: "Unknown",
                 stepContext: "extract_business_item_error",
-                errorInfo: `Error extracting business info for item ${i + 1}: ${errMsg}. Extract business name and any contact fields from current page HTML.`,
+                errorInfo: `Error extracting business info for item ${
+                  i + 1
+                }: ${errMsg}. Extract business name and any contact fields from current page HTML.`,
                 selectorsAvailable: {
                   businessList: selectors.businessList,
                   businessItem: selectors.businessItem,
@@ -3451,7 +3411,9 @@ The initial deterministic filling did not succeed for ${
                 );
                 results.push(aiResult);
                 log.info(
-                  `🤖 AI recovered extraction for item ${i + 1}: ${aiResult.business_name}`
+                  `🤖 AI recovered extraction for item ${i + 1}: ${
+                    aiResult.business_name
+                  }`
                 );
               }
             } catch (aiErr: unknown) {
@@ -3510,10 +3472,7 @@ The initial deterministic filling did not succeed for ${
               }
               return await this.extractBusinessData();
             } catch (retryErr) {
-              log.warn(
-                "⚠️ Retry after AI recovery still failed:",
-                retryErr
-              );
+              log.warn("⚠️ Retry after AI recovery still failed:", retryErr);
             }
           }
         } catch (aiErr) {
@@ -3550,7 +3509,18 @@ The initial deterministic filling did not succeed for ${
 
     try {
       const itemContext = await element.evaluate(
-        (el, sel) => {
+        (
+          el: Element,
+          sel: {
+            businessList: string;
+            businessItem: string;
+            businessName?: string;
+            phone?: string;
+            email?: string;
+            website?: string;
+            address?: string;
+          }
+        ) => {
           const pickText = (selector?: string): string => {
             if (!selector) return "";
             const target = el.querySelector(selector);
@@ -3558,7 +3528,9 @@ The initial deterministic filling did not succeed for ${
           };
           const pickHref = (selector?: string): string => {
             if (!selector) return "";
-            const target = el.querySelector(selector) as HTMLAnchorElement | null;
+            const target = el.querySelector(
+              selector
+            ) as HTMLAnchorElement | null;
             return target?.href || "";
           };
 
@@ -3622,7 +3594,7 @@ The initial deterministic filling did not succeed for ${
         );
         if (name) {
           const nameText = await name.evaluate(
-            (el) => el.textContent?.trim() || ""
+            (el: Element) => el.textContent?.trim() || ""
           );
           if (nameText) {
             identifierParts.push(`name:${nameText.toLowerCase()}`);
@@ -3639,7 +3611,7 @@ The initial deterministic filling did not succeed for ${
         );
         if (phone) {
           phoneText = await phone.evaluate(
-            (el) => el.textContent?.trim() || ""
+            (el: Element) => el.textContent?.trim() || ""
           );
         }
       }
@@ -3660,7 +3632,7 @@ The initial deterministic filling did not succeed for ${
         );
         if (address) {
           const addressText = await address.evaluate(
-            (el) => el.textContent?.trim() || ""
+            (el: Element) => el.textContent?.trim() || ""
           );
           if (addressText) {
             identifierParts.push(`addr:${addressText.toLowerCase()}`);
@@ -3676,7 +3648,7 @@ The initial deterministic filling did not succeed for ${
         );
         if (website) {
           const websiteUrl = await website.evaluate(
-            (el) => el.getAttribute("href") || ""
+            (el: Element) => el.getAttribute("href") || ""
           );
           if (websiteUrl) {
             identifierParts.push(`url:${websiteUrl.toLowerCase()}`);
@@ -3691,9 +3663,9 @@ The initial deterministic filling did not succeed for ${
 
       // Fallback: use element position and basic text content
       const fallbackText = await element.evaluate(
-        (el) => el.textContent?.trim() || ""
+        (el: Element) => el.textContent?.trim() || ""
       );
-      const elementIndex = await element.evaluate((el) => {
+      const elementIndex = await element.evaluate((el: Element) => {
         const parent = el.parentElement;
         if (parent) {
           return Array.from(parent.children).indexOf(el);
@@ -3827,7 +3799,7 @@ The initial deterministic filling did not succeed for ${
           const loadMoreButton = await this.page.$(selector);
           if (loadMoreButton) {
             const isVisible = await loadMoreButton.isVisible();
-            const isClickable = await loadMoreButton.evaluate((el) => {
+            const isClickable = await loadMoreButton.evaluate((el: Element) => {
               const rect = el.getBoundingClientRect();
               const style = window.getComputedStyle(el);
               const htmlEl = el as HTMLElement;
@@ -4029,7 +4001,7 @@ The initial deterministic filling did not succeed for ${
         const nextButton = await this.page.$(selectors.pagination.nextButton);
 
         if (nextButton) {
-          const isClickable = await nextButton.evaluate((el) => {
+          const isClickable = await nextButton.evaluate((el: Element) => {
             const rect = el.getBoundingClientRect();
             const style = window.getComputedStyle(el);
             const htmlEl = el as HTMLElement;
@@ -4126,10 +4098,7 @@ The initial deterministic filling did not succeed for ${
             return true;
           }
         } catch (aiErr) {
-          log.warn(
-            "⚠️ AI recovery for navigateToNextPage also failed:",
-            aiErr
-          );
+          log.warn("⚠️ AI recovery for navigateToNextPage also failed:", aiErr);
         }
       }
 
@@ -4160,7 +4129,7 @@ The initial deterministic filling did not succeed for ${
       }
 
       // Check if the element is clickable (visible and enabled)
-      const isClickable = await detailLink.evaluate((el) => {
+      const isClickable = await detailLink.evaluate((el: HTMLButtonElement) => {
         const rect = el.getBoundingClientRect();
         const style = window.getComputedStyle(el);
         return (
@@ -4178,9 +4147,7 @@ The initial deterministic filling did not succeed for ${
         return basicResult;
       }
 
-      log.info(
-        "Detail link is clickable, clicking to navigate to detail page"
-      );
+      log.info("Detail link is clickable, clicking to navigate to detail page");
 
       // Store current page context for AI training
       if (this.sessionManager.getRecordingStatus() && this.page) {
@@ -5204,7 +5171,7 @@ The initial deterministic filling did not succeed for ${
     try {
       const element = await this.page.$(selector);
       if (element) {
-        return await element.evaluate((el) => el.textContent?.trim());
+        return await element.evaluate((el: Element) => el.textContent?.trim());
       }
     } catch (error) {
       // Ignore extraction errors
@@ -5225,7 +5192,7 @@ The initial deterministic filling did not succeed for ${
       const element = await this.page.$(selector);
       if (element) {
         const attrValue = await element.evaluate(
-          (el, attr) => el.getAttribute(attr),
+          (el: Element, attr: string) => el.getAttribute(attr),
           attribute
         );
         return attrValue || undefined;
@@ -5391,7 +5358,7 @@ The initial deterministic filling did not succeed for ${
       const elements = await this.page.$$(selector);
       const array: string[] = [];
       for (const el of elements) {
-        const text = await el.evaluate((element) =>
+        const text = await el.evaluate((element: Element) =>
           element.textContent?.trim()
         );
         if (text) array.push(text);
@@ -5711,7 +5678,7 @@ The initial deterministic filling did not succeed for ${
         );
         if (textElement) {
           // Immediately extract text without validation to avoid additional DOM queries
-          const text = await textElement.evaluate((el) => {
+          const text = await textElement.evaluate((el: Element) => {
             try {
               return el.textContent?.trim() || "";
             } catch {
@@ -5777,13 +5744,16 @@ The initial deterministic filling did not succeed for ${
         );
         if (attrElement) {
           // Immediately extract attribute without validation to avoid additional DOM queries
-          const attrValue = await attrElement.evaluate((el, attr) => {
-            try {
-              return el.getAttribute(attr);
-            } catch {
-              return null;
-            }
-          }, attribute);
+          const attrValue = await attrElement.evaluate(
+            (el: Element, attr: string) => {
+              try {
+                return el.getAttribute(attr);
+              } catch {
+                return null;
+              }
+            },
+            attribute
+          );
 
           if (attrValue) {
             return attrValue;
@@ -5841,7 +5811,7 @@ The initial deterministic filling did not succeed for ${
 
         for (const el of elements) {
           try {
-            const text = await el.evaluate((element) => {
+            const text = await el.evaluate((element: Element) => {
               try {
                 return element.textContent?.trim() || "";
               } catch {
@@ -5939,7 +5909,7 @@ The initial deterministic filling did not succeed for ${
    */
   private async extractRawData(element: any): Promise<object | undefined> {
     try {
-      return await element.evaluate((el) => {
+      return await element.evaluate((el: Element) => {
         const data: any = {};
         data.innerHTML = el.innerHTML;
         data.textContent = el.textContent;
@@ -6026,9 +5996,7 @@ The initial deterministic filling did not succeed for ${
               );
             }, text);
             if (hasText) {
-              log.info(
-                `🔒 Cloudflare protection detected via text: "${text}"`
-              );
+              log.info(`🔒 Cloudflare protection detected via text: "${text}"`);
               return true;
             }
           } else {
@@ -6354,7 +6322,9 @@ The initial deterministic filling did not succeed for ${
       // Check for common captcha/verification iframe patterns
       const iframes = await this.page.$$("iframe");
       for (const iframe of iframes) {
-        const src = await iframe.evaluate((el) => el.getAttribute("src") || "");
+        const src = await iframe.evaluate(
+          (el: Element) => el.getAttribute("src") || ""
+        );
         if (
           src &&
           (src.includes("recaptcha") ||
@@ -6534,9 +6504,7 @@ The initial deterministic filling did not succeed for ${
         }
 
         // Pause the scraping process
-        log.info(
-          "⏸️ Pausing scraping due to robot verification challenge..."
-        );
+        log.info("⏸️ Pausing scraping due to robot verification challenge...");
         this.pause();
 
         log.info(
@@ -6896,16 +6864,12 @@ The initial deterministic filling did not succeed for ${
           log.info("Submitted search form");
         }
       } else {
-        log.warn(
-          "⚠️ No submit button found with any of the common selectors"
-        );
+        log.warn("⚠️ No submit button found with any of the common selectors");
 
         // Try AI support if enabled before falling back to Enter key
         if (this.aiSupportEnabled && this.page) {
           try {
-            log.info(
-              "🤖 Requesting AI support for submit button not found..."
-            );
+            log.info("🤖 Requesting AI support for submit button not found...");
             const captured = await this.capturePageStateForAiSupport();
             const buttonAiResult = await this.requestAiSupport({
               requestType: "step_guidance",
@@ -6924,9 +6888,7 @@ The initial deterministic filling did not succeed for ${
             if (buttonAiResult.success && buttonAiResult.data) {
               const guidance = buttonAiResult.data;
               if (guidance.suggestedSelectors?.searchButton) {
-                log.info(
-                  "🤖 AI provided alternative submit button selector"
-                );
+                log.info("🤖 AI provided alternative submit button selector");
                 const altBtn = await this.page.$(
                   guidance.suggestedSelectors.searchButton
                 );
@@ -6935,9 +6897,7 @@ The initial deterministic filling did not succeed for ${
                     this.page,
                     guidance.suggestedSelectors.searchButton
                   );
-                  log.info(
-                    "✅ Alternative submit button clicked successfully"
-                  );
+                  log.info("✅ Alternative submit button clicked successfully");
 
                   // Wait for navigation
                   await this.page.waitForNavigation({
@@ -6954,9 +6914,7 @@ The initial deterministic filling did not succeed for ${
                   );
                 }
               } else if (guidance.actions?.length) {
-                log.info(
-                  "🤖 AI provided suggested actions to submit search"
-                );
+                log.info("🤖 AI provided suggested actions to submit search");
                 // Execute suggested actions
                 for (const action of guidance.actions) {
                   const result = await this.executeAction(action);
@@ -7182,9 +7140,7 @@ The initial deterministic filling did not succeed for ${
         seenBusinesses.add(businessKey);
         uniqueResults.push(result);
       } else {
-        log.info(
-          `🔄 Duplicate business filtered out: ${result.business_name}`
-        );
+        log.info(`🔄 Duplicate business filtered out: ${result.business_name}`);
       }
     }
 
@@ -7519,10 +7475,7 @@ The initial deterministic filling did not succeed for ${
           await this.sleep(5000); // Wait 5 seconds
         }
       } catch (error) {
-        log.error(
-          `Error in Cloudflare handling attempt ${attempt}:`,
-          error
-        );
+        log.error(`Error in Cloudflare handling attempt ${attempt}:`, error);
         if (attempt < maxRetries) {
           await this.sleep(5000); // Wait before retry
         }
