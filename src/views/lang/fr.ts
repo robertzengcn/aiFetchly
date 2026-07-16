@@ -1364,7 +1364,7 @@ emailAutoReplyAudit: {
       "Injection de mémoire d'espace de travail",
     "ai-workspace-memory-injection-description":
       "Injecte les mémoires d'espace de travail pertinentes (décisions, commandes, conventions) dans le contexte du chat IA pour l'espace de travail actif.",
-    user_ai_workspace_auto_dream: "Auto-Dream d'espace de travail",
+    user_ai_workspace_auto_dream: "Auto-résumé d'espace de travail",
     "ai-workspace-auto-dream-description":
       "Consolide en arrière-plan les mémoires spécifiques à l'espace de travail à partir des conversations et des tâches d'agent.",
     user_ai_workspace_manual_memory: "Mémoire d'espace de travail manuelle",

@@ -1378,7 +1378,7 @@ emailAutoReplyAudit: {
     user_ai_workspace_memory_injection: "Inyección de memoria de workspace",
     "ai-workspace-memory-injection-description":
       "Inyecta memorias de workspace relevantes (decisiones, comandos, convenciones) en el contexto del chat de IA para el workspace activo.",
-    user_ai_workspace_auto_dream: "Auto-Dream de workspace",
+    user_ai_workspace_auto_dream: "Auto-resumen de workspace",
     "ai-workspace-auto-dream-description":
       "Consolida en segundo plano memorias específicas del workspace a partir de conversaciones y tareas de agente.",
     user_ai_workspace_manual_memory: "Memoria de workspace manual",
