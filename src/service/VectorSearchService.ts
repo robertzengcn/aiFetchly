@@ -210,7 +210,7 @@ export class VectorSearchService {
             // Log total number of chunks in the search index for this document
             try {
               const totalChunks = await this.vectorStore.getTotalVectors();
-              console.info(
+              log.info(
                 `Document ${doc.id} index contains ${totalChunks} chunks`
               );
             } catch (countError) {
@@ -485,7 +485,7 @@ export class VectorSearchService {
         }
 
         if (candidateModel !== modelName) {
-          console.info(
+          log.info(
             `Using fallback embedding model "${candidateModel}" for stored model "${modelName}"`
           );
         }

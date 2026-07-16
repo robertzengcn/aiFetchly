@@ -304,10 +304,10 @@ export class StatusReportingManager extends BaseModule {
 
             switch (message.level) {
                 case 'debug':
-                    console.debug(logMessage);
+                    log.debug(logMessage);
                     break;
                 case 'info':
-                    console.info(logMessage);
+                    log.info(logMessage);
                     break;
                 case 'warn':
                     log.warn(logMessage);

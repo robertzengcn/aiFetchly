@@ -479,12 +479,12 @@ export class YellowPagesScraper {
         }
       } catch (error) {
         // Invalid selector, continue to next
-        console.debug(`⚠️ Invalid selector: ${sel}`);
+        log.debug(`⚠️ Invalid selector: ${sel}`);
         continue;
       }
     }
 
-    console.debug(`⚠️ No element found for selectors: ${selectors.join(", ")}`);
+    log.debug(`⚠️ No element found for selectors: ${selectors.join(", ")}`);
     return null;
   }
 
@@ -515,12 +515,12 @@ export class YellowPagesScraper {
         }
       } catch (error) {
         // Invalid selector, continue to next
-        console.debug(`⚠️ Invalid selector: ${sel}`);
+        log.debug(`⚠️ Invalid selector: ${sel}`);
         continue;
       }
     }
 
-    console.debug(
+    log.debug(
       `⚠️ No elements found for selectors: ${selectors.join(", ")}`
     );
     return [];
@@ -548,12 +548,12 @@ export class YellowPagesScraper {
         }
       } catch (error) {
         // Error clicking, continue to next selector
-        console.debug(`⚠️ Could not click element with selector: ${sel}`);
+        log.debug(`⚠️ Could not click element with selector: ${sel}`);
         continue;
       }
     }
 
-    console.debug(
+    log.debug(
       `⚠️ No clickable element found for selectors: ${selectors.join(", ")}`
     );
     return false;
@@ -586,12 +586,12 @@ export class YellowPagesScraper {
         }
       } catch (error) {
         // Error typing, continue to next selector
-        console.debug(`⚠️ Could not type into element with selector: ${sel}`);
+        log.debug(`⚠️ Could not type into element with selector: ${sel}`);
         continue;
       }
     }
 
-    console.debug(
+    log.debug(
       `⚠️ No input element found for selectors: ${selectors.join(", ")}`
     );
     return false;
@@ -644,7 +644,7 @@ export class YellowPagesScraper {
       }
     }
 
-    console.debug(`⚠️ No element found for selectors: ${selectors.join(", ")}`);
+    log.debug(`⚠️ No element found for selectors: ${selectors.join(", ")}`);
     return false;
   }
 
@@ -724,7 +724,7 @@ export class YellowPagesScraper {
       }
     }
 
-    console.debug(`⚠️ No element found for selectors: ${selectors.join(", ")}`);
+    log.debug(`⚠️ No element found for selectors: ${selectors.join(", ")}`);
     return false;
   }
 
@@ -784,12 +784,12 @@ export class YellowPagesScraper {
         }
       } catch {
         // Invalid selector, continue to next
-        console.debug(`⚠️ Invalid selector: ${sel}`);
+        log.debug(`⚠️ Invalid selector: ${sel}`);
         continue;
       }
     }
 
-    console.debug(`⚠️ No element found for selectors: ${selectors.join(", ")}`);
+    log.debug(`⚠️ No element found for selectors: ${selectors.join(", ")}`);
     return null;
   }
 
@@ -820,12 +820,12 @@ export class YellowPagesScraper {
         }
       } catch {
         // Invalid selector, continue to next
-        console.debug(`⚠️ Invalid selector: ${sel}`);
+        log.debug(`⚠️ Invalid selector: ${sel}`);
         continue;
       }
     }
 
-    console.debug(
+    log.debug(
       `⚠️ No elements found for selectors: ${selectors.join(", ")}`
     );
     return [];
@@ -855,12 +855,12 @@ export class YellowPagesScraper {
         }
       } catch {
         // Invalid selector, continue to next
-        console.debug(`⚠️ Invalid selector: ${sel}`);
+        log.debug(`⚠️ Invalid selector: ${sel}`);
         continue;
       }
     }
 
-    console.debug(
+    log.debug(
       `⚠️ No elements found for selectors: ${selectors.join(", ")}`
     );
     return [];
@@ -1078,7 +1078,7 @@ export class YellowPagesScraper {
         resolve,
         reject: (reason?: unknown) => {
           // Silently handle timeout rejections to avoid unhandled rejection warnings
-          console.debug(`AI request ${requestId} timed out`);
+          log.debug(`AI request ${requestId} timed out`);
         },
         timer,
       });
