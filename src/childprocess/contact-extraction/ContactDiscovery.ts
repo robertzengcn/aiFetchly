@@ -8,6 +8,10 @@ import {
 import { browserManager } from "@/modules/browserManager";
 import { UrlGuard } from "@/service/UrlGuard";
 import { applySsrfNavigationGuard } from "@/service/PuppeteerSsrfGuard";
+import {
+  registerActiveBrowser,
+  unregisterActiveBrowser,
+} from "./activeBrowserRegistry";
 
 /**
  * Contact Discovery - 4-Stage Pipeline
@@ -296,6 +300,9 @@ export async function discoverAndExtractContactInfo(
   const browser = await browserManager.launchWithStealth({
     headless: true,
   });
+  // WS-4 R4.5: track the browser so the worker can close it on shutdown if
+  // this function is interrupted by SIGTERM (the `finally` below wouldn't run).
+  registerActiveBrowser(browser);
   const page = await browser.newPage();
 
   // Set user agent and viewport for stealth
@@ -526,8 +533,14 @@ export async function discoverAndExtractContactInfo(
       method: "failed",
     };
   } finally {
-    await page.close();
-    await browser.close();
+    // Best-effort close — a failing page.close() must not skip browser.close().
+    await page.close().catch(() => {
+      /* already closed or navigation in progress */
+    });
+    await browser.close().catch(() => {
+      /* already closed */
+    });
+    unregisterActiveBrowser(browser);
   }
 }
 

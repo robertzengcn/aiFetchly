@@ -21,6 +21,7 @@ import {
   type ContactExtractionWorkerInbound,
 } from "@/schemas/worker/contactExtraction";
 import { mapWithConcurrency } from "@/utils/concurrency";
+import { closeAllActiveBrowsers } from "./activeBrowserRegistry";
 
 /**
  * Worker message types — derived from the shared zod schema.
@@ -37,6 +38,35 @@ type ExtractContactFromUrlsMessage = Extract<
   ContactExtractionWorkerInbound,
   { type: "extract-contact-from-urls" }
 >;
+
+/**
+ * WS-4 R4.5: gracefully close every tracked Puppeteer browser before exiting,
+ * so a SIGTERM from the main process's `cleanupContactExtractionWorker()` does
+ * not orphan in-flight browsers. Bounded by a hard timeout so a hung close can
+ * never stall shutdown. Re-entrant: a SIGTERM arriving during a fatal-error
+ * shutdown is a no-op.
+ */
+const SHUTDOWN_BROWSER_TIMEOUT_MS = 3000;
+let shuttingDown = false;
+function gracefulShutdown(signal: string, exitCode: number): void {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  log.info(
+    `ContactExtractionWorker: received ${signal}, closing browsers and exiting`
+  );
+  const force = setTimeout(() => {
+    log.warn(
+      `ContactExtractionWorker: graceful close exceeded ${SHUTDOWN_BROWSER_TIMEOUT_MS}ms, forcing exit`
+    );
+    process.exit(exitCode);
+  }, SHUTDOWN_BROWSER_TIMEOUT_MS);
+  force.unref();
+  closeAllActiveBrowsers()
+    .catch((e) =>
+      log.error("ContactExtractionWorker: closeAllActiveBrowsers failed:", e)
+    )
+    .finally(() => process.exit(exitCode));
+}
 
 /**
  * Initialize the worker process
@@ -83,7 +113,7 @@ function initializeWorker(): void {
     } catch {
       /* main may already be gone */
     }
-    process.exit(1);
+    gracefulShutdown("uncaughtException", 1);
   });
 
   process.on("unhandledRejection", (reason, promise) => {
@@ -105,17 +135,17 @@ function initializeWorker(): void {
     } catch {
       /* main may already be gone */
     }
-    process.exit(1);
+    gracefulShutdown("unhandledRejection", 1);
   });
 
-  // WS-4 R4.3: graceful shutdown on SIGTERM/SIGINT
+  // WS-4 R4.3/R4.5: graceful shutdown on SIGTERM/SIGINT — close in-flight
+  // browsers before exiting so cleanupContactExtractionWorker().kill() does not
+  // orphan them.
   process.on("SIGTERM", () => {
-    log.info("ContactExtractionWorker: received SIGTERM, shutting down");
-    process.exit(0);
+    gracefulShutdown("SIGTERM", 0);
   });
   process.on("SIGINT", () => {
-    log.info("ContactExtractionWorker: received SIGINT, shutting down");
-    process.exit(0);
+    gracefulShutdown("SIGINT", 0);
   });
 
   // Notify parent that worker is ready
