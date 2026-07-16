@@ -104,6 +104,14 @@ const insightItems = computed<InsightItem[]>(() => [
     icon: "mdi-email-multiple",
     path: "/emailmarketing",
   },
+  {
+    title: t("route.proxy") || "Proxy",
+    description:
+      t("insights.proxy_description") ||
+      "Manage and validate your proxy servers.",
+    icon: "mdi-shield-outline",
+    path: "/proxy/list",
+  },
 ]);
 
 function goTo(path: string): void {

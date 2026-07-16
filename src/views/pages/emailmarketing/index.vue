@@ -79,16 +79,6 @@ const outreachItems = computed<OutreachItem[]>(() => [
     path: "/emailmarketing/template/list/",
   },
   {
-    title: t("route.email_filter_list") || "Email Filters",
-    description:
-      t("outreach.filter_description") ||
-      "Define filters to segment and target your outreach audiences.",
-    icon: "mdi-filter-outline",
-    iconBg: "rgba(16, 185, 129, 0.1)",
-    iconColor: "#10b981",
-    path: "/emailmarketing/emailfilter/list",
-  },
-  {
     title: t("route.email_service") || "Email Services",
     description:
       t("outreach.service_description") ||

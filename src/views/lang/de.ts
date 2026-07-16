@@ -726,7 +726,6 @@ export default {
     google: "Google",
     bing: "Bing.com",
     yandex: "Yandex",
-    baidu: "Baidu.com",
     platform: "Plattform",
     keyword: "Schlüsselwort",
     search_enginer_name: "Suchmaschine",
@@ -2048,6 +2047,7 @@ emailAutoReplyAudit: {
     maps_description: "Finde lokale Unternehmen über Kartendienste.",
     outreach_description:
       "Verwalte Outreach-Aufgaben, Vorlagen, Filter und Antworten.",
+    proxy_description: "Verwalte und validiere deine Proxy-Server.",
   },
   outreach: {
     subtitle:
@@ -2319,9 +2319,7 @@ emailAutoReplyAudit: {
     column_version: "Version",
     column_source: "Quelle",
     column_source_path: "Importiert aus",
-    column_format: "Format",
-    format_aifetchly: "AiFetchly",
-    format_claude: "Claude",
+    column_sub_agent: "SubAgent",
     column_status: "Status",
     column_skills: "Skills",
     column_mcp_servers: "MCP-Server",
@@ -2508,7 +2506,7 @@ emailAutoReplyAudit: {
     injectionEnabled: "Workspace-Memory-Injection",
     autoDreamEnabled: "Workspace-Auto-Dream",
     manualMemoryEnabled: "Manuelles Workspace-Memory",
-    runAutoDream: "Auto-dream jetzt ausführen",
+    runAutoSummary: "RUN AUTO SUMMARY",
     autoDreamRunning: "Workspace-Memory wird konsolidiert...",
     autoDreamFailed: "Der letzte Auto-dream-Lauf ist fehlgeschlagen.",
     autoDreamLastRun: "Letzter Lauf: {time}",

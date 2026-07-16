@@ -7,15 +7,15 @@ const STATIC_TOOL_FUNCTIONS: ToolFunction[] = [
     type: "function",
     name: "scrape_urls_from_search_engine",
     description:
-      "Scrape search result URLs from a supported engine (Google, Bing, Yandex, or Baidu) using a query string. Returns titles, snippets, and URLs. This tool is for collecting URLs from a SERP, not for answering questions from page text.",
+      "Scrape search result URLs from a supported engine (Google, Bing, or Yandex) using a query string. Returns titles, snippets, and URLs. This tool is for collecting URLs from a SERP, not for answering questions from page text.",
     parameters: {
       type: "object",
       properties: {
         search_engine: {
           type: "string",
           description:
-            "Which search engine to scrape: google, bing, yandex, or baidu",
-          enum: ["google", "bing", "yandex", "baidu"],
+            "Which search engine to scrape: google, bing, or yandex",
+          enum: ["google", "bing", "yandex"],
         },
         query: {
           type: "string",

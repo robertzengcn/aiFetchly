@@ -721,7 +721,6 @@ export default {
     google: "Google",
     bing: "Bing.com",
     yandex: "Yandex",
-    baidu: "Baidu.com",
     platform: "platform",
     keyword: "Keyword",
     search_enginer_name: "search enginer",
@@ -2051,6 +2050,7 @@ emailAutoReplyAudit: {
     maps_description: "Find local businesses from map providers.",
     outreach_description:
       "Manage outreach tasks, templates, filters, and replies.",
+    proxy_description: "Manage and validate your proxy servers.",
   },
   outreach: {
     subtitle:
@@ -2317,9 +2317,7 @@ emailAutoReplyAudit: {
     column_version: "Version",
     column_source: "Source",
     column_source_path: "Imported From",
-    column_format: "Format",
-    format_aifetchly: "AiFetchly",
-    format_claude: "Claude",
+    column_sub_agent: "SubAgent",
     column_status: "Status",
     column_skills: "Skills",
     column_mcp_servers: "MCP Servers",
@@ -2504,7 +2502,7 @@ emailAutoReplyAudit: {
     injectionEnabled: "Workspace memory injection",
     autoDreamEnabled: "Workspace auto-dream",
     manualMemoryEnabled: "Manual workspace memory",
-    runAutoDream: "Run auto-dream now",
+    runAutoSummary: "RUN AUTO SUMMARY",
     autoDreamRunning: "Consolidating workspace memory...",
     autoDreamFailed: "Last auto-dream run failed.",
     autoDreamLastRun: "Last run: {time}",

@@ -802,7 +802,7 @@ export const constantRoutes: RouteRecordRaw[] = [
     path: "/proxy",
     name: "Proxy",
     meta: {
-      visible: true,
+      visible: false,
       title: "route.proxy",
       icon: "mdi-shield-outline",
     },

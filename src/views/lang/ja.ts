@@ -709,7 +709,6 @@ export default {
     google: "Google",
     bing: "Bing.com",
     yandex: "Yandex",
-    baidu: "Baidu.com",
     platform: "プラットフォーム",
     keyword: "キーワード",
     search_enginer_name: "検索エンジン",
@@ -2012,6 +2011,7 @@ emailAutoReplyAudit: {
     maps_description: "地図プロバイダーから地域ビジネスを見つけます。",
     outreach_description:
       "アウトリーチタスク、テンプレート、フィルター、返信を管理します。",
+    proxy_description: "プロキシサーバーを管理・検証します。",
   },
   outreach: {
     subtitle:
@@ -2276,9 +2276,7 @@ emailAutoReplyAudit: {
     column_version: "バージョン",
     column_source: "ソース",
     column_source_path: "インポート元",
-    column_format: "フォーマット",
-    format_aifetchly: "AiFetchly",
-    format_claude: "Claude",
+    column_sub_agent: "サブエージェント",
     column_status: "ステータス",
     column_skills: "スキル",
     column_mcp_servers: "MCP サーバー",
@@ -2464,7 +2462,7 @@ emailAutoReplyAudit: {
     injectionEnabled: "ワークスペース記憶の注入",
     autoDreamEnabled: "ワークスペース自動ドリーム",
     manualMemoryEnabled: "手動ワークスペース記憶",
-    runAutoDream: "今すぐ自動ドリームを実行",
+    runAutoSummary: "RUN AUTO SUMMARY",
     autoDreamRunning: "ワークスペース記憶を統合中...",
     autoDreamFailed: "前回の自動ドリーム実行が失敗しました。",
     autoDreamLastRun: "最終実行：{time}",
