@@ -1328,7 +1328,7 @@ emailAutoReplyAudit: {
     user_ai_workspace_memory_injection: "工作区记忆注入",
     "ai-workspace-memory-injection-description":
       "将相关的工作区记忆（项目决策、命令、约定）注入到当前工作区的 AI 聊天上下文中。",
-    user_ai_workspace_auto_dream: "工作区自动整理",
+    user_ai_workspace_auto_dream: "工作区自动摘要",
     "ai-workspace-auto-dream-description":
       "在后台从会话和智能体任务中整合工作区专属记忆。",
     user_ai_workspace_manual_memory: "手动工作区记忆",
