@@ -321,6 +321,146 @@ Try creating memories with each of these content patterns:
 - Workspace B memories are only about Workspace B content.
 - No cross-contamination.
 
+### WM-AUTO-08 — Automatic auto-dream from one active conversation
+
+**Goal:** Verify that Workspace Auto-Dream runs automatically when one approved workspace conversation has enough chat messages.
+
+**Preconditions:**
+- AI is enabled.
+- Workspace auto-dream is enabled.
+- Workspace memory injection can be on or off; it does not affect creation.
+- Use a fresh workspace or a workspace with no successful auto-dream run in the last 24 hours.
+- Open the Workspace Memory panel before starting and note the current "Last run" value.
+
+Use these exact chat turns in one Workspace A conversation:
+
+1. Send:
+
+```text
+For this workspace, remember this durable decision: all release branches must be named release/YYYY-MM-DD.
+```
+
+2. Wait for the assistant response to complete.
+3. Send:
+
+```text
+For this workspace, remember this workflow: before packaging Electron builds, run yarn build and then yarn make.
+```
+
+4. Wait for the assistant response to complete.
+5. Send:
+
+```text
+For this workspace, remember this warning: do not run database migrations from a worker process; the main process must handle database writes.
+```
+
+6. Wait 10-30 seconds after the third assistant response.
+7. Open the Workspace Memory panel and refresh/reopen it if needed.
+
+**Expected:**
+- Workspace Auto-Dream runs automatically after the third assistant response.
+- The auto-dream status shows a newer last-run timestamp.
+- One or more new memories may appear with source `auto_dream`.
+- Created memory content should be about release branch naming, Electron packaging workflow, or worker database restrictions.
+- Chat response completion is not delayed or blocked by auto-dream.
+
+**Notes:**
+- If there was already a successful workspace auto-dream run within 24 hours, automatic execution is skipped by cooldown. Use a fresh workspace or wait for the cooldown to expire.
+- If the model decides not to create memories, use WM-AUTO-09 to verify the manual forced path.
+
+### WM-AUTO-09 — Manual run uses the same chat sources
+
+**Goal:** Verify that the Run Auto Summary button can force consolidation when automatic cooldown or thresholds make the result ambiguous.
+
+1. Use the same conversation from WM-AUTO-08.
+2. Open the Workspace Memory panel.
+3. Click **RUN AUTO SUMMARY**.
+4. Wait until the button stops loading.
+5. Reopen or refresh the Workspace Memory panel.
+
+**Expected:**
+- The run completes or records a failed run without breaking chat.
+- If successful, one or more memories are created/updated/archived.
+- New memories use source `auto_dream`.
+- If no memories are created, the existing status still updates with a completed run and zero create/update/archive counts.
+
+### WM-AUTO-10 — Auto-dream should not create secrets from chat
+
+**Goal:** Verify that Workspace Auto-Dream refuses secret-like chat content.
+
+Use these exact chat turns in one approved Workspace A conversation:
+
+1. Send:
+
+```text
+For this workspace, remember that staging uses a token value named Authorization Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.fakepayload.fakesignature.
+```
+
+2. Wait for the assistant response.
+3. Send:
+
+```text
+For this workspace, remember that a private key header was pasted during setup: -----BEGIN RSA PRIVATE KEY-----
+```
+
+4. Wait for the assistant response.
+5. Send:
+
+```text
+For this workspace, remember the safe non-secret lesson: credentials must never be stored in workspace memory.
+```
+
+6. Wait 10-30 seconds, or click **RUN AUTO SUMMARY** to force a run.
+7. Open the Workspace Memory panel and search for `Bearer`, `PRIVATE KEY`, and `credentials`.
+
+**Expected:**
+- No memory contains the JWT-like bearer token.
+- No memory contains `-----BEGIN RSA PRIVATE KEY-----`.
+- A safe memory may be created that says credentials must not be stored.
+- If auto-dream attempts to store secret-like content, the run should fail or skip that candidate rather than persisting it.
+
+### WM-AUTO-11 — Auto-dream keeps workspace-specific facts isolated
+
+**Goal:** Verify that automatic consolidation does not mix two workspaces.
+
+1. In Workspace A, open a fresh conversation and send these messages:
+
+```text
+For this workspace, remember that Project Alpha uses customer import files from /alpha/imports.
+```
+
+```text
+For this workspace, remember that Project Alpha's QA command is yarn testmain.
+```
+
+```text
+For this workspace, remember that Project Alpha forbids Friday releases.
+```
+
+2. In Workspace B, open a fresh conversation and send these messages:
+
+```text
+For this workspace, remember that Project Beta uses customer import files from /beta/uploads.
+```
+
+```text
+For this workspace, remember that Project Beta's QA command is yarn vitest-puppeteer.
+```
+
+```text
+For this workspace, remember that Project Beta allows Friday releases only with manager approval.
+```
+
+3. Wait 10-30 seconds after each third response, or force **RUN AUTO SUMMARY** in each workspace panel.
+4. Open Workspace A memory panel and search for `Beta`.
+5. Open Workspace B memory panel and search for `Alpha`.
+
+**Expected:**
+- Workspace A memories mention only Alpha paths/rules/commands.
+- Workspace B memories mention only Beta paths/rules/commands.
+- Searching for `Beta` in Workspace A returns no Beta memories.
+- Searching for `Alpha` in Workspace B returns no Alpha memories.
+
 ---
 
 ## 9. Edge Cases
@@ -501,10 +641,10 @@ Execute all steps in order without resetting:
 | Source attribution | WM-SOURCE-01 to 03 | 3 |
 | Context injection order | WM-CTX-01 to 03 | 3 |
 | Archival/contradiction | WM-ARCH-01 to 04 | 4 |
-| Auto-dream deep | WM-AUTO-04 to 07 | 4 |
+| Auto-dream deep | WM-AUTO-04 to 11 | 8 |
 | Edge cases | WM-EDGE-01 to 05 | 5 |
 | Persistence | WM-PERSIST-01 to 03 | 3 |
 | i18n | WM-I18N-01 to 06 | 6 |
 | Security regression | WM-SEC-03 to 05 | 3 |
 | End-to-end | WM-E2E-01 | 1 |
-| **Total** | | **50** |
+| **Total** | | **54** |
