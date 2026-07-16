@@ -8,6 +8,14 @@
 //      with `source` or inline `content`). `true` auto-detects the directory,
 //      which source #1 already covers, so it adds nothing.
 //
+// Native files are STRICT: they must declare `type: prompt` and a valid name
+// (buildPromptCommandDefinition rejects otherwise). Claude-sourced commands
+// (path files + inline content) are LENIENT: missing fields fall back to the
+// mapping key / entry description and `type` is forced to `prompt`, because
+// Claude command files commonly omit them (design §10.4, §17.2). A Claude
+// command that explicitly declares an execution type (local/local-jsx/shell)
+// is skipped with `claude-format-unsupported-feature`.
+//
 // SECURITY (design §11.4, §14.5):
 //   - All file paths resolve through resolvePluginRelativePath (path traversal
 //     blocked lexically AND via symlink realpath check).
@@ -48,20 +56,18 @@ export interface PluginCommandSourceReadResult {
   readonly diagnostics: readonly AIFetchlyConfigDiagnostic[];
 }
 
+/** Where a raw draft came from — drives strict vs lenient normalization. */
+type DraftKind = "native" | "claude-file" | "claude-inline";
+
 /** A raw command markdown body + optional fallback identity, pre-validation. */
 interface RawCommandDraft {
   readonly content: string;
   readonly relativePath: string;
   /** Resolved absolute path for file-sourced drafts (for dedup); undefined for inline. */
   readonly absPath?: string;
+  readonly kind: DraftKind;
   readonly fallbackName?: string;
   readonly fallbackDescription?: string;
-  /**
-   * True for real files on disk (native dir + Claude path declarations), which
-   * MUST start with valid frontmatter. False for Claude inline `content`, which
-   * may legitimately omit frontmatter and fall back to the mapping key.
-   */
-  readonly requireFrontmatter: boolean;
 }
 
 /** Command types that imply execution / UI behavior AiFetchly does not run. */
@@ -124,11 +130,7 @@ export class PluginCommandSourceReader {
     const rawDrafts: RawCommandDraft[] = [];
 
     rawDrafts.push(
-      ...(await readNativeCommandFiles(
-        input.installPath,
-        sourceId,
-        diagnostics
-      ))
+      ...(await readNativeCommandFiles(input.installPath, sourceId, diagnostics))
     );
     rawDrafts.push(
       ...(await readClaudeCommandDeclarations(input, sourceId, diagnostics))
@@ -181,7 +183,7 @@ async function readNativeCommandFiles(
 ): Promise<RawCommandDraft[]> {
   const absDir = path.join(installPath, "commands");
   if (!fs.existsSync(absDir)) return [];
-  return readMarkdownDir(absDir, "commands", {}, sourceId, diagnostics);
+  return readMarkdownDir(absDir, "commands", "native", {}, sourceId, diagnostics);
 }
 
 // --- Claude manifest declarations --------------------------------------------
@@ -274,8 +276,8 @@ async function readClaudeCommandDeclarations(
         out.push({
           content: e!.content!,
           relativePath: `<inline:${input.pluginName}:${key}>`,
+          kind: "claude-inline",
           ...fallbacks,
-          requireFrontmatter: false,
         });
         continue;
       }
@@ -330,11 +332,19 @@ async function collectFromDeclarationPath(
   try {
     const stat = await fs.promises.stat(abs);
     if (stat.isDirectory()) {
-      return readMarkdownDir(abs, relPath, fallbacks, sourceId, diagnostics);
+      return readMarkdownDir(
+        abs,
+        relPath,
+        "claude-file",
+        fallbacks,
+        sourceId,
+        diagnostics
+      );
     }
     const draft = await readMarkdownFile(
       abs,
       relPath,
+      "claude-file",
       fallbacks,
       sourceId,
       diagnostics
@@ -360,6 +370,7 @@ async function collectFromDeclarationPath(
 async function readMarkdownDir(
   absDir: string,
   relDir: string,
+  kind: DraftKind,
   fallbacks: {
     readonly fallbackName?: string;
     readonly fallbackDescription?: string;
@@ -383,6 +394,7 @@ async function readMarkdownDir(
     const draft = await readMarkdownFile(
       abs,
       rel,
+      kind,
       fallbacks,
       sourceId,
       diagnostics
@@ -395,6 +407,7 @@ async function readMarkdownDir(
 async function readMarkdownFile(
   abs: string,
   rel: string,
+  kind: DraftKind,
   fallbacks: {
     readonly fallbackName?: string;
     readonly fallbackDescription?: string;
@@ -421,8 +434,8 @@ async function readMarkdownFile(
       content,
       relativePath: rel,
       absPath: abs,
+      kind,
       ...fallbacks,
-      requireFrontmatter: true,
     };
   } catch (err) {
     diagnostics.push(ioDiag(sourceId, rel, err));
@@ -434,13 +447,15 @@ async function readMarkdownFile(
 
 /**
  * Turn a raw command markdown draft into a CMD-06 prompt-command draft, or
- * return null with a diagnostic when it declares an unsupported execution type.
+ * return null with a diagnostic.
  *
- * Supplies Claude fallbacks (name=key, description=entry description, type
- * "prompt", argument-hint -> argumentHint) where the frontmatter is absent.
- * If the frontmatter explicitly declares a non-prompt type it is skipped:
- * local/local-jsx/shell get `claude-format-unsupported-feature`; anything else
- * gets `frontmatter-invalid` and is left for buildPromptCommandDefinition.
+ * Native drafts are strict: frontmatter is required and the validator enforces
+ * `type: prompt` + a valid name (no fallbacks). Claude drafts are lenient:
+ * missing frontmatter is tolerated for inline content, missing name/description
+ * fall back to the mapping key / entry description, and `type` is forced to
+ * `prompt` — UNLESS the frontmatter explicitly declares an unsupported
+ * execution type (local/local-jsx/shell), which is skipped with
+ * `claude-format-unsupported-feature`.
  */
 function normalizeRawDraft(
   raw: RawCommandDraft,
@@ -448,7 +463,9 @@ function normalizeRawDraft(
   diagnostics: AIFetchlyConfigDiagnostic[]
 ): PromptCommandDraft | null {
   const parsed = parseRestrictedFrontmatter(raw.content);
-  if (!parsed && raw.requireFrontmatter) {
+  // Real files (native + Claude path declarations) MUST start with valid
+  // frontmatter. Inline content may legitimately omit it.
+  if (!parsed && raw.kind !== "claude-inline") {
     diagnostics.push(
       diag(
         sourceId,
@@ -464,6 +481,13 @@ function normalizeRawDraft(
     : {};
   const body = parsed ? parsed.body : raw.content;
 
+  // Native drafts: pass through strict — let buildPromptCommandDefinition own
+  // all validation (type, name, description). No forcing, no fallbacks.
+  if (raw.kind === "native") {
+    return { relativePath: raw.relativePath, body, frontmatter: fm };
+  }
+
+  // Claude drafts: skip explicitly-declared unsupported execution types.
   const rawType = typeof fm.type === "string" ? (fm.type as string) : undefined;
   if (rawType !== undefined && rawType !== "prompt") {
     const code = UNSUPPORTED_COMMAND_TYPES.has(rawType)
@@ -474,9 +498,7 @@ function normalizeRawDraft(
         sourceId,
         raw.relativePath,
         code,
-        `Command '${
-          raw.fallbackName ?? raw.relativePath
-        }' declares type '${rawType}'; only 'prompt' commands are supported.`
+        `Command '${raw.fallbackName ?? raw.relativePath}' declares type '${rawType}'; only 'prompt' commands are supported.`
       )
     );
     return null;
