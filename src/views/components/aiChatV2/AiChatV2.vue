@@ -1177,6 +1177,7 @@ watch(showConversationsDialog, (open) => {
 const loadHistory = async (conversationId: string): Promise<void> => {
   try {
     const resp = await getChatV2History(conversationId);
+    if (activeConversationId.value !== conversationId) return;
     messages.value = resp?.messages ?? [];
     // Reset context-usage tracking for the loaded conversation. If any
     // history rows carry tokensUsed, seed the baseline estimate from the
@@ -1200,7 +1201,9 @@ const loadHistory = async (conversationId: string): Promise<void> => {
     }
     // Load plan state for this conversation.
     try {
-      applyPlanState(await getChatV2PlanState(conversationId));
+      const nextPlanState = await getChatV2PlanState(conversationId);
+      if (activeConversationId.value !== conversationId) return;
+      applyPlanState(nextPlanState);
       if (planState.value?.pendingQuestion) {
         pendingQuestion.value = planState.value.pendingQuestion;
       } else {
@@ -1225,6 +1228,7 @@ const loadHistory = async (conversationId: string): Promise<void> => {
     // Load tool approval mode for this conversation
     void loadToolApprovalMode(conversationId);
   } catch (err) {
+    if (activeConversationId.value !== conversationId) return;
     streamError.value = err instanceof Error ? err.message : String(err);
   }
 };
@@ -1841,11 +1845,17 @@ const onSend = async (text: string, files?: File[]): Promise<void> => {
 
   // Resolve text: if only images with no text, use default prompt
   const displayText = text || defaultPromptForAttachments(files ?? []);
+  const streamConversationId = ensureWorkspaceConversationId();
+  const isCurrentStreamView = (): boolean =>
+    activeConversationId.value === streamConversationId;
+  const isCurrentStreamChunk = (chunk: ChatV2StreamChunk): boolean =>
+    isCurrentStreamView() &&
+    (!chunk.conversationId || chunk.conversationId === streamConversationId);
 
   const nowIso = new Date().toISOString();
   const tempUser: ChatV2MessageView = {
     id: `temp-user-${Date.now()}`,
-    conversationId: activeConversationId.value ?? "",
+    conversationId: streamConversationId,
     role: "user",
     content: displayText,
     timestamp: nowIso,
@@ -1860,7 +1870,7 @@ const onSend = async (text: string, files?: File[]): Promise<void> => {
   activeAssistantMessageId.value = assistantId;
   const assistant: ChatV2MessageView = {
     id: assistantId,
-    conversationId: activeConversationId.value ?? "",
+    conversationId: streamConversationId,
     role: "assistant",
     content: "",
     timestamp: nowIso,
@@ -1916,7 +1926,7 @@ const onSend = async (text: string, files?: File[]): Promise<void> => {
 
   try {
     const streamRequest: ChatV2StreamRequest = {
-      conversationId: activeConversationId.value ?? undefined,
+      conversationId: streamConversationId,
       message: displayText,
       mode: mode.value,
       model: resolveModelForRequest(),
@@ -1928,6 +1938,7 @@ const onSend = async (text: string, files?: File[]): Promise<void> => {
     await streamChatV2Message(
       streamRequest,
       (chunk: ChatV2StreamChunk) => {
+        if (!isCurrentStreamChunk(chunk)) return;
         if (chunk.eventType === "start") {
           if (chunk.conversationId) {
             activeConversationId.value = chunk.conversationId;
@@ -2119,6 +2130,7 @@ const onSend = async (text: string, files?: File[]): Promise<void> => {
         }
       },
       (complete: ChatV2StreamChunk) => {
+        if (!isCurrentStreamChunk(complete)) return;
         isStreaming.value = false;
         activeAssistantMessageId.value = null;
         retryInfo.value = null;
@@ -2198,6 +2210,7 @@ const onSend = async (text: string, files?: File[]): Promise<void> => {
         void loadConversations();
       },
       (error: Error) => {
+        if (!isCurrentStreamView()) return;
         isStreaming.value = false;
         activeAssistantMessageId.value = null;
         retryInfo.value = null;
