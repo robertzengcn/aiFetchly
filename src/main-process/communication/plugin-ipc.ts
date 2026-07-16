@@ -453,7 +453,7 @@ export function registerPluginIpcHandlers(): void {
 async function syncUserPluginFoldersForList(): Promise<void> {
   const result = await UserPluginAutoInstallService.syncDefaultUserPlugins();
   if (result.errors.length > 0) {
-    console.warn(
+    log.warn(
       `[Plugin IPC] Failed to auto-install ${result.errors.length} user plugin folder(s).`,
       result.errors
     );

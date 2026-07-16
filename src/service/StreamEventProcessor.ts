@@ -879,7 +879,7 @@ export class StreamEventProcessor {
         abortSignal: this.state.abortSignal,
       });
     } catch (err) {
-      console.error(`${eventName} hook dispatch failed:`, err);
+      log.error(`${eventName} hook dispatch failed:`, err);
       return EMPTY_AGGREGATE;
     }
   }

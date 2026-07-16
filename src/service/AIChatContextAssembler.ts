@@ -191,7 +191,7 @@ export class AIChatContextAssembler {
         });
       }
     } catch (err) {
-      console.error(
+      log.error(
         "[ai-chat-context] aifetchly instructions injection failed:",
         err
       );
@@ -206,7 +206,7 @@ export class AIChatContextAssembler {
         messages.push({ role: "system", content: agentsBlock });
       }
     } catch (err) {
-      console.error(
+      log.error(
         "[ai-chat-context] available agents injection failed:",
         err
       );
