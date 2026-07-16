@@ -15,6 +15,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { SkillManagementModule } from "@/modules/SkillManagementModule";
 import { SkillRegistry } from "@/config/skillsRegistry";
+import { getPluginInstallRoot } from "@/service/pluginPaths";
 import type {
   SkillExecutionContext,
   SkillExecutionResult,
@@ -56,7 +57,7 @@ interface SkillMarkdownMetadata {
 const VALID_PERMISSIONS = new Set(["network", "filesystem", "automation"]);
 const VALID_RUNTIMES = new Set(["javascript", "python"]);
 const SEMVER_REGEX = /^\d+\.\d+\.\d+(?:-[a-zA-Z0-9.]+)?$/;
-const NAME_REGEX = /^[a-z][a-z0-9_-]*$/;
+const NAME_REGEX = /^[a-z0-9][a-z0-9_-]*$/;
 
 function resolvePermissionCategory(
   permissions: readonly string[] | undefined
@@ -930,7 +931,7 @@ async function importFromZip(zipPath: string): Promise<
     registerImportedSkill(manifest, skillDir);
   } catch (regError) {
     console.warn(
-      `[SkillImport] Failed to hot-register skill "${manifest.name}": ${
+      `Failed to hot-register skill "${manifest.name}": ${
         regError instanceof Error ? regError.message : regError
       }`
     );
@@ -1027,6 +1028,22 @@ function registerImportedSkill(
     }
   }
 
+  // Idempotent: unregister first if already registered (handles
+  // reinstall-in-same-session where HMR preserved the registry Map).
+  // T-spoof-builtin (Phase 18 / T-18-02): a BUILT-IN is never clobbered — throw
+  // so a local/plugin skill whose name collides with a built-in surfaces a
+  // manifest-invalid diagnostic (caught by LocalSkillSourceAdapter) and the
+  // built-in keeps its registration. Built-in names ALWAYS win. Non-built-in
+  // re-registration (the HMR/dev reinstall case) stays idempotent.
+  if (SkillRegistry.isRegistered(resolvedManifest.name)) {
+    const existing = SkillRegistry.getSkill(resolvedManifest.name);
+    if (existing?.source === "built-in") {
+      throw new Error(
+        `Skill already registered as built-in: ${resolvedManifest.name}`
+      );
+    }
+    SkillRegistry.unregisterSkill(resolvedManifest.name);
+  }
   SkillRegistry.registerSkill({
     name: resolvedManifest.name,
     description: resolvedManifest.description,
@@ -1290,21 +1307,31 @@ async function loadPersistedSkills(): Promise<void> {
   for (const skill of skills) {
     try {
       const manifest = JSON.parse(skill.manifest_json) as SkillManifest;
-      const skillsDir = getInstalledSkillsDir();
-      const skillDir = path.join(skillsDir, skill.name);
+
+      // Plugin-owned skills live under the plugin install root, not
+      // under userData/installed_skills/.
+      let skillDir: string;
+      if (skill.pluginName && skill.pluginComponentPath) {
+        skillDir = path.join(
+          getPluginInstallRoot(skill.pluginName),
+          path.dirname(skill.pluginComponentPath)
+        );
+      } else {
+        const skillsDir = getInstalledSkillsDir();
+        skillDir = path.join(skillsDir, skill.name);
+      }
 
       if (!fs.existsSync(skillDir)) {
         console.warn(
-          `[SkillImport] Skill directory missing for "${skill.name}", skipping`
+          `Skill directory missing for "${skill.name}" at "${skillDir}", skipping`
         );
         continue;
       }
 
       registerImportedSkill(manifest, skillDir);
-      console.log(`[SkillImport] Loaded persisted skill: ${skill.name}`);
     } catch (error) {
       console.warn(
-        `[SkillImport] Failed to load skill "${skill.name}": ${
+        `Failed to load skill "${skill.name}": ${
           error instanceof Error ? error.message : error
         }`
       );
@@ -1321,4 +1348,8 @@ export const SkillImportService = {
   loadPersistedSkills,
   validateManifest,
   validatePythonSkillZip,
+  // Phase 18 (SKL-01): exposed so LocalSkillSourceAdapter can register local
+  // ~/.aifetchly/skills/<name>/ drafts through the SAME pipeline as zip-
+  // installed skills. The function is unchanged — only surfaced.
+  registerImportedSkill,
 } as const;

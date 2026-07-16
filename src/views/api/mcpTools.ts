@@ -8,6 +8,7 @@ import {
   MCP_TOOL_TOGGLE_SERVER,
   MCP_TOOL_TOGGLE_TOOL,
   MCP_TOOL_TEST_CONNECTION,
+  MCP_TOOL_TRUST,
 } from "@/config/channellist";
 import type { Iresponse } from "@/views/api/types";
 
@@ -122,4 +123,17 @@ export async function testMCPConnection(
   serverId: number
 ): Promise<boolean | null> {
   return await windowInvoke(MCP_TOOL_TEST_CONNECTION, { serverId });
+}
+
+/**
+ * Grant or revoke explicit trust for an MCP stdio server.
+ *
+ * F1 fix — stdio MCP servers spawn local child processes; the service layer
+ * refuses to spawn any stdio server until trust has been granted here.
+ */
+export async function setMCPServerTrust(
+  serverId: number,
+  trusted: boolean
+): Promise<{ trusted: boolean } | null> {
+  return await windowInvoke(MCP_TOOL_TRUST, { serverId, trusted });
 }

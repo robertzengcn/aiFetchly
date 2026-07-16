@@ -17,7 +17,7 @@ import { CookiesType, CookiesParse } from "@/entityTypes/cookiesType"
 //import { SocialAccountDetailData } from "@/entityTypes/socialaccount-type"
 import { SocialAccountModule } from "@/modules/socialAccountModule"
 import { SocialPlatformList } from "@/config/generate"
-import { SavesocialaccountResp, SocialAccountDetailData, SocialAccountDetailResponse, SocialAccountResponse } from "@/entityTypes/socialaccount-type"
+import { SoASuccessEntity, SocialAccountDetailData, SocialAccountResponse } from "@/entityTypes/socialaccount-type"
 export class SocialAccountController {
     private accountCookiesModule: AccountCookiesModule
     private socialaccountModel: SocialAccountModule
@@ -34,8 +34,12 @@ export class SocialAccountController {
     //get social account detail from local database
     public async getAccountdetail(
         id: number
-    ): Promise<SocialAccountDetailResponse> {
-        return await this.socialaccountModel.getAccountDetail(id);
+    ): Promise<SocialAccountDetailData> {
+        const result = await this.socialaccountModel.getAccountDetail(id);
+        if (result.status !== "success") {
+            throw new Error(result.msg);
+        }
+        return result.data;
     }
     //open open and login social account
     public async showSocialaccountMsg(id: number, platform: string, gmsgCallback?: () => void, omsgCallback?: () => void, closeFun?: () => void): Promise<void> {
@@ -331,14 +335,22 @@ export class SocialAccountController {
         size: number,
         search: string,
         platform?: number,
-    ): Promise<SocialAccountResponse> {
-        return await this.socialaccountModel.getSocialAccountList(page, size, search, platform);
+    ): Promise<SocialAccountResponse["data"]> {
+        const result = await this.socialaccountModel.getSocialAccountList(page, size, search, platform);
+        if (result.status !== "success") {
+            throw new Error(result.msg);
+        }
+        return result.data;
     }
      //save social account to local database
   public async saveSocialAccount(
     soc: SocialAccountDetailData
-  ): Promise<SavesocialaccountResp> {
-    return await this.socialaccountModel.saveSocialAccount(soc);
+  ): Promise<SoASuccessEntity> {
+    const result = await this.socialaccountModel.saveSocialAccount(soc);
+    if (!result.status) {
+        throw new Error(result.msg);
+    }
+    return result.data;
   }
 
 }

@@ -65,8 +65,8 @@ jobs:
       - name: Rebuild electron
         run: yarn electron-rebuild --force --types prod,dev,optional --module-dir .
 
-      - name: Rebuild sqlite3
-        run: yarn rebuild-sqlite3
+      - name: Rebuild sqlite3 (no-op; sqlite3 unused)
+        run: echo "rebuild-sqlite3 removed; sqlite3 package is unused. Skipping."
 
       - name: Rebuild better sqlite
         run: yarn rebuild-better-sqlite
@@ -188,8 +188,8 @@ jobs:
             npx electron-rebuild --force --arch="${TARGET_ARCH}" -w better-sqlite3,sqlite3,bufferutil,utf-8-validate || echo "Selective rebuild failed"
           }
 
-      - name: Rebuild sqlite3
-        run: CXXFLAGS="-std=c++20" CFLAGS="-std=c11" yarn rebuild-sqlite3
+      - name: Rebuild sqlite3 (no-op; sqlite3 unused)
+        run: echo "rebuild-sqlite3 removed; sqlite3 package is unused. Skipping."
 
       - name: Rebuild better sqlite
         run: CXXFLAGS="-std=c++20" CFLAGS="-std=c11" yarn rebuild-better-sqlite

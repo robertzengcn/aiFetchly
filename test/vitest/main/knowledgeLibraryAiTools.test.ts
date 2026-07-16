@@ -80,7 +80,6 @@ interface FakeDeps {
   deps: KnowledgeLibraryAiToolsDeps;
   documentService: {
     getStagedAttachmentImportSource: ReturnType<typeof vi.fn>;
-    copyStagedSourceToUploads: ReturnType<typeof vi.fn>;
     findDocumentById: ReturnType<typeof vi.fn>;
     deleteDocument: ReturnType<typeof vi.fn>;
   };
@@ -98,7 +97,6 @@ interface FakeDeps {
 function buildTools(opts: { aiEnabled?: boolean } = {}): FakeDeps {
   const documentService = {
     getStagedAttachmentImportSource: vi.fn(),
-    copyStagedSourceToUploads: vi.fn(),
     findDocumentById: vi.fn(),
     deleteDocument: vi.fn(),
   };
@@ -286,11 +284,6 @@ describe("KnowledgeLibraryAiTools.importAttachment", () => {
       isDuplicate: false,
       existingDocuments: [],
     });
-    // The staged source is copied to a durable app-owned path before upload
-    // (the staged file is ephemeral; uploadDocument stores the path verbatim).
-    documentService.copyStagedSourceToUploads.mockResolvedValue(
-      "/tmp/appdata/uploads/durable-pricing-guide.pdf"
-    );
     ragSearchModule.uploadDocument.mockResolvedValue({
       documentId: 42,
       chunksCreated: 37,
@@ -308,21 +301,16 @@ describe("KnowledgeLibraryAiTools.importAttachment", () => {
       baseContext
     );
 
-    expect(documentService.copyStagedSourceToUploads).toHaveBeenCalledWith(
-      "/tmp/staged/conv-123/ref-1.pdf",
-      "pricing-guide.pdf"
-    );
     expect(ragSearchModule.uploadDocument).toHaveBeenCalledTimes(1);
     const callArg = ragSearchModule.uploadDocument.mock.calls[0][0] as {
       filePath: string;
       name: string;
       tags?: string[];
     };
-    // Must import the durable copy of the staged file — never the ephemeral
-    // staged path, and never an arbitrary/model-supplied path.
-    expect(callArg.filePath).toBe(
-      "/tmp/appdata/uploads/durable-pricing-guide.pdf"
-    );
+    // Must import the containment-checked staged source — never an arbitrary
+    // or model-supplied path. RAGDocumentModule.uploadDocument copies it into
+    // app-owned rag_uploads and persists that durable path.
+    expect(callArg.filePath).toBe("/tmp/staged/conv-123/ref-1.pdf");
     expect(callArg.name).toBe("pricing-guide.pdf");
     expect(callArg.tags).toEqual(["pricing", "sales"]);
 

@@ -21,6 +21,7 @@ import {
 export interface StagedAttachmentReference {
   refId: string;
   fileName: string;
+  filePath: string;
 }
 
 export interface StagedAttachmentContent {
@@ -287,42 +288,33 @@ export class DocumentService {
     }
 
     const refId = `${Date.now()}-${crypto.randomUUID()}`;
-    const filePath = path.join(stageDir, `${refId}.md`);
+    const mdPath = path.join(stageDir, `${refId}.md`);
     const metadataPath = path.join(stageDir, `${refId}.meta.json`);
-    fs.writeFileSync(filePath, markdown, "utf-8");
-
-    // Persist the original file bytes when supplied so the attachment can be
-    // imported into the knowledge library. Markdown sources reuse the .md file
-    // already written above, so no separate original file is needed.
-    let hasOriginalFile = false;
-    const originalExt = path.extname(fileName);
-    if (
-      options?.originalContentBase64 &&
-      originalExt &&
-      originalExt !== ".md"
-    ) {
-      const originalPath = path.join(stageDir, `${refId}${originalExt}`);
-      const originalBytes = Buffer.from(
-        options.originalContentBase64,
-        "base64"
-      );
-      fs.writeFileSync(originalPath, originalBytes);
-      hasOriginalFile = true;
-    }
-
+    fs.writeFileSync(mdPath, markdown, "utf-8");
     fs.writeFileSync(
       metadataPath,
       JSON.stringify({
         fileName,
         sha256: options?.attachmentSha256 || null,
-        hasOriginalFile,
       }),
       "utf-8"
     );
 
+    let filePath = mdPath;
+    if (options?.originalContentBase64) {
+      const ext = path.extname(fileName) || ".bin";
+      const originalPath = path.join(stageDir, `${refId}${ext}`);
+      fs.writeFileSync(
+        originalPath,
+        Buffer.from(options.originalContentBase64, "base64")
+      );
+      filePath = originalPath;
+    }
+
     return {
       refId,
       fileName,
+      filePath,
     };
   }
 
@@ -392,30 +384,6 @@ export class DocumentService {
       sizeBytes: stats.size,
       markdownFallback,
     };
-  }
-
-  /**
-   * Copy a staged attachment source into the durable app-owned uploads
-   * directory and return the new path.
-   *
-   * The staged attachment root is garbage-collected after 24h, so a staged
-   * file must be copied somewhere durable before being recorded as a
-   * knowledge-library document's `filePath` (RAGDocumentModule.uploadDocument
-   * stores the path verbatim). Mirrors the SAVE_TEMP_FILE upload convention.
-   */
-  async copyStagedSourceToUploads(
-    srcPath: string,
-    fileName: string
-  ): Promise<string> {
-    const uploadsDir = path.join(app.getPath("userData"), "uploads");
-    if (!fs.existsSync(uploadsDir)) {
-      fs.mkdirSync(uploadsDir, { recursive: true });
-    }
-    const ext = path.extname(fileName) || path.extname(srcPath) || "";
-    const destName = `${Date.now()}-${crypto.randomUUID()}${ext}`;
-    const destPath = path.join(uploadsDir, destName);
-    fs.copyFileSync(srcPath, destPath);
-    return destPath;
   }
 
   /**

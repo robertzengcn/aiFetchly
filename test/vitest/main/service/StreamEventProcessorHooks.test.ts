@@ -193,7 +193,7 @@ describe("StreamEventProcessor + hooks integration", () => {
       eventName: "PreToolUse",
       source: "builtin",
       enabled: true,
-      trusted: true,
+
       type: "callback",
       matcher: "stub_skill",
       callback: () => ({ continue: false, reason: "policy says no" }),
@@ -218,7 +218,7 @@ describe("StreamEventProcessor + hooks integration", () => {
       eventName: "PreToolUse",
       source: "builtin",
       enabled: true,
-      trusted: true,
+
       type: "callback",
       matcher: "stub_skill",
       callback: () => ({ updatedInput: { x: 999, added: true } }),
@@ -236,7 +236,7 @@ describe("StreamEventProcessor + hooks integration", () => {
       eventName: "PreToolUse",
       source: "builtin",
       enabled: true,
-      trusted: true,
+
       type: "callback",
       matcher: "stub_skill",
       callback: () => ({ permissionDecision: "allow" }),
@@ -254,7 +254,7 @@ describe("StreamEventProcessor + hooks integration", () => {
       eventName: "PreToolUse",
       source: "builtin",
       enabled: true,
-      trusted: true,
+
       type: "callback",
       matcher: "stub_skill",
       // Deny only — no continue:false. Must still block.
@@ -279,7 +279,7 @@ describe("StreamEventProcessor + hooks integration", () => {
       eventName: "PostToolUse",
       source: "builtin",
       enabled: true,
-      trusted: true,
+
       type: "callback",
       matcher: "stub_skill",
       callback: () => ({ additionalContext: "compliance-reminder" }),
@@ -309,7 +309,7 @@ describe("StreamEventProcessor + hooks integration", () => {
       eventName: "PostToolUseFailure",
       source: "builtin",
       enabled: true,
-      trusted: true,
+
       type: "callback",
       matcher: "stub_skill",
       callback: () => ({ systemMessage: "install python to fix this" }),

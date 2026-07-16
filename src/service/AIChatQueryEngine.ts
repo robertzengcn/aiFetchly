@@ -1,6 +1,12 @@
 // src/service/AIChatQueryEngine.ts
 import { AIChatV2Module } from "@/modules/AIChatV2Module";
 import { AIChatPlanModule } from "@/modules/AIChatPlanModule";
+import { AIChatAttachmentModule } from "@/modules/AIChatAttachmentModule";
+import { AIChatToolApprovalModule } from "@/modules/AIChatToolApprovalModule";
+import {
+  DocumentService,
+  StagedAttachmentReference,
+} from "@/service/DocumentService";
 import type {
   OpenAIChatMessage,
   OpenAITool,
@@ -8,9 +14,11 @@ import type {
 } from "@/api/aiChatApi";
 import { SkillRegistry } from "@/config/skillsRegistry";
 import { SkillExecutor } from "@/service/SkillExecutor";
+import { HookDispatcher } from "@/service/hooks/HookDispatcher";
 import { AIChatContextAssembler } from "@/service/AIChatContextAssembler";
 import type { AIChatCompactAgentService } from "@/service/AIChatCompactAgentService";
 import type { AIAutoDreamService } from "@/service/AIAutoDreamService";
+import type { AIWorkspaceAutoDreamService } from "@/service/AIWorkspaceAutoDreamService";
 import { PlanModeToolRegistry } from "@/service/PlanModeToolRegistry";
 import type { AIChatQueryLoop } from "@/service/AIChatQueryLoop";
 import {
@@ -19,7 +27,6 @@ import {
   isPermissionPromptResult,
 } from "@/service/AIChatQueryLoop";
 import { userSafeError } from "@/service/AIChatErrorMapper";
-import { stageChatV2AttachmentsForMessage } from "@/service/ChatAttachmentReferenceService";
 import { Token } from "@/modules/token";
 import { USER_AI_AUTO_PLAN, USER_AI_ENABLED } from "@/config/usersetting";
 import { ENTER_PLAN_MODE_TOOL } from "@/service/EnterPlanModeTool";
@@ -34,7 +41,17 @@ import type {
   ResumeToolAfterPermissionRequest,
   ResumeTurnResult,
 } from "@/service/AIChatQueryEvents";
-import type { ChatV2StreamRequest } from "@/entityTypes/aiChatV2Types";
+import type {
+  ChatV2StreamRequest,
+  ChatV2UploadedAttachment,
+  ChatV2AttachmentKind,
+  ChatV2AttachmentMetadata,
+} from "@/entityTypes/aiChatV2Types";
+import type {
+  OpenAITextContentPart,
+  OpenAIImageUrlContentPart,
+  OpenAIMessageContent,
+} from "@/api/aiChatApi";
 import type { AIChatPlanStateView } from "@/entityTypes/aiChatPlanTypes";
 
 function isActivePlanState(plan?: AIChatPlanStateView | null): boolean {
@@ -100,6 +117,14 @@ function toOpenAITools(toolFunctions: ToolFunction[]): OpenAITool[] {
     }));
 }
 
+interface AttachmentPrepResult {
+  enrichedMessage: string;
+  contentParts: Array<OpenAITextContentPart | OpenAIImageUrlContentPart>;
+  displayMetadata: ChatV2AttachmentMetadata[];
+  attachmentRefs: string[];
+  docFileNames: string[];
+}
+
 export interface AIChatQuerySubmitInput {
   eventSink: AIChatQueryEventSink;
   request: ChatV2StreamRequest;
@@ -114,6 +139,10 @@ export interface AIChatQueryEngineDeps {
   /** Optional. When provided, the engine triggers auto-dream consolidation
    * after each completed assistant turn. Failures are logged and swallowed. */
   autoDreamService?: AIAutoDreamService;
+  /** Optional. When provided, the engine triggers workspace-scoped auto-dream
+   * consolidation after each completed assistant turn. Runs independently of
+   * the user-memory auto-dream service. Failures are logged and swallowed. */
+  workspaceAutoDreamService?: AIWorkspaceAutoDreamService;
 }
 
 /**
@@ -130,10 +159,13 @@ export class AIChatQueryEngine {
   private readonly contextAssembler: AIChatContextAssembler;
   private readonly compactAgent?: AIChatCompactAgentService;
   private readonly autoDreamService?: AIAutoDreamService;
+  private readonly workspaceAutoDreamService?: AIWorkspaceAutoDreamService;
   private readonly pendingEventSaves = new WeakMap<
     AIChatQueryEventSink,
     Promise<unknown>[]
   >();
+  /** Tracks which conversations have already fired SessionStart. */
+  private readonly startedConversations = new Set<string>();
 
   constructor(
     private readonly loop: AIChatQueryLoop,
@@ -143,6 +175,159 @@ export class AIChatQueryEngine {
       deps?.contextAssembler ?? new AIChatContextAssembler();
     this.compactAgent = deps?.compactAgent;
     this.autoDreamService = deps?.autoDreamService;
+    this.workspaceAutoDreamService = deps?.workspaceAutoDreamService;
+  }
+
+  /**
+   * Prepare attachment content enrichment (no DB writes).
+   * Returns enriched message text, content parts (for images), and metadata.
+   *
+   * @param files       All uploaded files (images + documents).
+   * @param stagedRefs  Already-staged document references (with refId from
+   *                    stageAttachmentMarkdown). Images have no refId.
+   * @param originalMessage  The user's original text message.
+   */
+  private prepareAttachmentContent(
+    files: ChatV2UploadedAttachment[],
+    stagedRefs: StagedAttachmentReference[],
+    originalMessage: string
+  ): AttachmentPrepResult {
+    const displayMetadata: ChatV2AttachmentMetadata[] = [];
+    const contentParts: Array<
+      OpenAITextContentPart | OpenAIImageUrlContentPart
+    > = [];
+    const attachmentRefs: string[] = [];
+    const docFileNames: string[] = [];
+
+    // Build a set of filenames that were successfully staged (for enrichment).
+    const stagedFileNames = new Set(stagedRefs.map((r) => r.fileName));
+
+    for (const file of files) {
+      if (file.kind === "image") {
+        const dataUrl = `data:${file.mimeType};base64,${file.contentBase64}`;
+        contentParts.push({
+          type: "image_url",
+          image_url: { url: dataUrl, detail: "auto" },
+        });
+        displayMetadata.push({
+          fileName: file.fileName,
+          mimeType: file.mimeType,
+          sizeBytes: file.sizeBytes,
+          kind: "image",
+          processingMode: "image_url",
+        });
+      } else if (stagedFileNames.has(file.fileName)) {
+        // Only include documents that were successfully staged
+        docFileNames.push(file.fileName);
+        displayMetadata.push({
+          fileName: file.fileName,
+          mimeType: file.mimeType,
+          sizeBytes: file.sizeBytes,
+          kind: "document",
+          processingMode: "staged_markdown",
+        });
+      } else {
+        // Document was too large or staging failed — skip enrichment
+        console.log(
+          `[ai-chat-v2] document ${file.fileName} not staged — skipping enrichment`
+        );
+      }
+    }
+
+    // Build enriched user message with attachment reference block for documents
+    let enrichedMessage = originalMessage || "";
+    if (stagedRefs.length > 0) {
+      const blockLines = [
+        "",
+        `Attached ${stagedRefs.length} file(s) are staged locally and available below.`,
+        "A `read_attachment_content` tool is available to load their contents.",
+        ...stagedRefs.map(
+          (ref, i) =>
+            `${i + 1}. file_name="${ref.fileName}" attachment_ref="${
+              ref.refId
+            }" file_path="${
+              ref.filePath
+            }" → call \`read_attachment_content\` with attachment_ref="${
+              ref.refId
+            }" to load this file. For local shell tools, use file_path to access the file directly on disk.`
+        ),
+      ];
+      enrichedMessage = enrichedMessage
+        ? `${enrichedMessage}\n\n${blockLines.join("\n")}`
+        : blockLines.join("\n");
+    }
+
+    return {
+      enrichedMessage,
+      contentParts,
+      displayMetadata,
+      attachmentRefs,
+      docFileNames,
+    };
+  }
+
+  /**
+   * Convert small documents to markdown and stage them on disk.
+   * Returns the list of successfully staged attachment references (with refId)
+   * so they can be injected into the enriched user message before sending.
+   */
+  private async stageDocumentMarkdowns(
+    files: ChatV2UploadedAttachment[],
+    conversationId: string
+  ): Promise<StagedAttachmentReference[]> {
+    const docService = new DocumentService();
+    const SMALL_DOC_THRESHOLD = 1 * 1024 * 1024; // 1 MB
+    const staged: StagedAttachmentReference[] = [];
+
+    for (const file of files) {
+      if (file.sizeBytes > SMALL_DOC_THRESHOLD) {
+        console.log(
+          `[ai-chat-v2] large document ${file.fileName} (${file.sizeBytes}b) — staging skipped`
+        );
+        continue;
+      }
+      try {
+        const markdown = await docService.convertUploadedAttachmentToMarkdown(
+          file.fileName,
+          file.mimeType,
+          file.contentBase64
+        );
+        const ref = await docService.stageAttachmentMarkdown(
+          conversationId,
+          file.fileName,
+          markdown,
+          { originalContentBase64: file.contentBase64 }
+        );
+        staged.push(ref);
+      } catch (err) {
+        console.error(
+          `[ai-chat-v2] failed to stage document ${file.fileName}:`,
+          err
+        );
+      }
+    }
+    return staged;
+  }
+
+  /**
+   * Persist attachment bytes to DB.
+   */
+  private async persistAttachmentBytes(
+    files: ChatV2UploadedAttachment[],
+    conversationId: string,
+    messageId: string
+  ): Promise<void> {
+    const attachmentModule = new AIChatAttachmentModule();
+    await attachmentModule.saveUploadedFiles(
+      conversationId,
+      messageId,
+      files.map((f) => ({
+        fileName: f.fileName,
+        mimeType: f.mimeType,
+        sizeBytes: f.sizeBytes,
+        contentBase64: f.contentBase64,
+      }))
+    );
   }
 
   /**
@@ -181,6 +366,12 @@ export class AIChatQueryEngine {
         request.conversationId
       );
       this.currentConversationId = conversationId;
+      if (request.toolApprovalMode) {
+        new AIChatToolApprovalModule().setMode(
+          conversationId,
+          request.toolApprovalMode
+        );
+      }
 
       // Resolve plan state now that we have the final conversation id.
       if (isPlanMode) {
@@ -206,42 +397,76 @@ export class AIChatQueryEngine {
         }
       }
 
-      // Save user message before remote call.
-      // Stage any document attachments and build the message the LLM will see.
-      // Uses the final conversationId (never "pending") so attachment_ref values
-      // resolve correctly later via SkillExecutionContext.conversationId.
-      let userMessage = request.message;
-      if (request.attachments && request.attachments.length > 0) {
-        try {
-          const staged = await stageChatV2AttachmentsForMessage({
-            conversationId,
-            message: request.message,
-            attachments: request.attachments,
-          });
-          userMessage = staged.message;
-        } catch (err) {
-          console.error("[ai-chat-v2] attachment staging failed:", err);
-          // Continue with the original message; staging is best-effort.
+      // Handle uploaded attachments:
+      //   1. Stage documents FIRST (convert to markdown, write to disk), capture refIds.
+      //   2. Build the enriched message WITH the correct attachment_ref values so the
+      //      LLM can call read_attachment_content with a valid refId — not a filename.
+      //   3. Persist attachment bytes to the database.
+      const hasFiles =
+        Array.isArray(request.uploadedFiles) &&
+        request.uploadedFiles.length > 0;
+      let messageToSave = request.message || "";
+      let attachmentMetadata: ChatV2AttachmentMetadata[] | undefined;
+      let currentUserContentParts:
+        | Array<OpenAITextContentPart | OpenAIImageUrlContentPart>
+        | undefined;
+
+      if (hasFiles) {
+        // Stage documents *before* building the enrichment so refIds are available.
+        const docFiles = request.uploadedFiles!.filter(
+          (f) => f.kind === "document"
+        );
+        const stagedRefs: StagedAttachmentReference[] =
+          docFiles.length > 0
+            ? await this.stageDocumentMarkdowns(docFiles, conversationId)
+            : [];
+
+        const prep = this.prepareAttachmentContent(
+          request.uploadedFiles!,
+          stagedRefs,
+          request.message || ""
+        );
+        messageToSave = prep.enrichedMessage;
+        attachmentMetadata = prep.displayMetadata;
+        if (prep.contentParts.length > 0) {
+          currentUserContentParts = [
+            { type: "text", text: prep.enrichedMessage },
+            ...prep.contentParts,
+          ];
         }
       }
 
+      // Save user message with enriched text + attachment metadata.
       const savedUser = await module.saveUserMessage({
         conversationId,
-        content: userMessage,
+        content: messageToSave,
+        metadata: attachmentMetadata
+          ? { source: "chat-v2", attachments: attachmentMetadata }
+          : undefined,
       });
+
+      // Persist attachment bytes to DB (original file bytes, not the staged markdown).
+      if (hasFiles) {
+        await this.persistAttachmentBytes(
+          request.uploadedFiles!,
+          conversationId,
+          savedUser.messageId
+        );
+      }
 
       // Load history and build transcript.
       const basePrompt =
         request.systemPrompt ?? module.getDefaultSystemPrompt();
       const assembled = await this.contextAssembler.assemble({
         conversationId,
-        currentUserMessage: userMessage,
+        currentUserMessage: messageToSave,
         currentUserMessageId: savedUser.messageId,
         baseSystemPrompt: basePrompt,
         mode: isPlanMode ? "plan" : "chat",
         model: request.model,
         maxTokens: request.maxTokens,
         planState,
+        currentUserContentParts,
       });
 
       assistantMessageId = `assistant-${Date.now()}-${Math.random()
@@ -261,7 +486,27 @@ export class AIChatQueryEngine {
     }
 
     // ------------------------------------------------------------------
-    // 3. Resolve tools (skills + plan mode tools)
+    // 3. Lifecycle hooks: SessionStart (once per conversation)
+    // ------------------------------------------------------------------
+    if (!this.startedConversations.has(conversationId)) {
+      this.startedConversations.add(conversationId);
+      HookDispatcher.executeHooks({
+        eventName: "SessionStart",
+        input: {
+          eventName: "SessionStart",
+          hookRunId: `hookrun-session-${conversationId}`,
+          source: "ai-chat-v2",
+          conversationId,
+          timestamp: new Date().toISOString(),
+          mode: isPlanMode ? "plan" : "chat",
+        },
+      }).catch(() => {
+        // Hook errors are non-fatal
+      });
+    }
+
+    // ------------------------------------------------------------------
+    // 4. Resolve tools (skills + plan mode tools)
     // ------------------------------------------------------------------
     const toolFunctions = await SkillRegistry.getAllToolFunctions();
     const openAITools = toOpenAITools(toolFunctions);
@@ -329,7 +574,25 @@ export class AIChatQueryEngine {
         : undefined;
 
     // ------------------------------------------------------------------
-    // 7. Run the loop
+    // 8. UserPromptSubmit lifecycle hook
+    // ------------------------------------------------------------------
+    HookDispatcher.executeHooks({
+      eventName: "UserPromptSubmit",
+      input: {
+        eventName: "UserPromptSubmit",
+        hookRunId: `hookrun-prompt-${conversationId}-${Date.now()}`,
+        source: "ai-chat-v2",
+        conversationId,
+        timestamp: new Date().toISOString(),
+        prompt: request.message,
+        mode: isPlanMode ? "plan" : "chat",
+      },
+    }).catch(() => {
+      // Hook errors are non-fatal
+    });
+
+    // ------------------------------------------------------------------
+    // 9. Run the loop
     // ------------------------------------------------------------------
     const streamEventSink = this.createPersistingEventSink(module, eventSink);
     const loopInput: AIChatQueryLoopInput = {
@@ -372,11 +635,31 @@ export class AIChatQueryEngine {
     }
   }
 
+  private dispatchStop(
+    conversationId: string | undefined,
+    reason: "completed" | "user_stopped" | "error"
+  ): void {
+    HookDispatcher.executeHooks({
+      eventName: "Stop",
+      input: {
+        eventName: "Stop",
+        hookRunId: `hookrun-stop-${conversationId ?? "unknown"}-${Date.now()}`,
+        source: "ai-chat-v2",
+        conversationId,
+        timestamp: new Date().toISOString(),
+        reason,
+      },
+    }).catch(() => {
+      // Hook errors are non-fatal
+    });
+  }
+
   /**
    * Stop the active turn: abort streaming, cancel pending permission/plan
    * question turns, and emit cancelled events through the stored event sinks.
    */
   stopActiveTurn(): void {
+    this.dispatchStop(this.currentConversationId ?? undefined, "user_stopped");
     if (this.pendingPermission) {
       const pending = this.pendingPermission;
       this.pendingPermission = null;
@@ -680,6 +963,7 @@ export class AIChatQueryEngine {
               source: "chat-v2",
               openaiResponseId: result.responseId,
               finishReason: result.finishReason,
+              recovery: result.recoveryMetadata,
             },
           });
         }
@@ -719,6 +1003,17 @@ export class AIChatQueryEngine {
               console.error("[ai-auto-dream] chat trigger failed:", err)
             );
         }
+        if (this.workspaceAutoDreamService) {
+          this.workspaceAutoDreamService
+            .evaluateAfterChatTurn({
+              conversationId,
+              reason: "assistant_turn_completed",
+            })
+            .catch((err) =>
+              console.error("[workspace-auto-dream] chat trigger failed:", err)
+            );
+        }
+        this.dispatchStop(conversationId, "completed");
         this.clearActiveTurnState();
         break;
       }
@@ -745,6 +1040,7 @@ export class AIChatQueryEngine {
             result.partialContent.length > 0 ? assistantMessageId : undefined,
           fullContent: result.partialContent,
         });
+        this.dispatchStop(conversationId, "user_stopped");
         this.clearActiveTurnState();
         break;
       }
@@ -771,6 +1067,7 @@ export class AIChatQueryEngine {
             result.partialContent.length > 0 ? assistantMessageId : undefined,
           errorMessage: userSafeError(result.error),
         });
+        this.dispatchStop(conversationId, "error");
         this.clearActiveTurnState();
         this.pendingPermission = null;
         this.pendingPlanQuestion = null;
@@ -885,6 +1182,7 @@ export class AIChatQueryEngine {
     assistantMessageId: string,
     eventSink: AIChatQueryEventSink
   ): void {
+    this.dispatchStop(conversationId, "error");
     console.error("[ai-chat-v2] engine failure:", err);
     eventSink.emit({
       type: "error",

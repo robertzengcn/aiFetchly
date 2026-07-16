@@ -301,20 +301,15 @@ export class KnowledgeLibraryAiTools {
         }
       }
 
-      // Copy the staged source into a durable app-owned location before
-      // upload. The staged file is garbage-collected after 24h, but
-      // RAGDocumentModule.uploadDocument stores the path verbatim as the
-      // document's filePath, so importing the ephemeral staged path directly
-      // would leave a dangling reference once it is reaped.
-      const durableFilePath = await documentService.copyStagedSourceToUploads(
-        source.filePath,
-        source.fileName
-      );
-
+      // RAGDocumentModule.uploadDocument copies the source into an app-owned
+      // rag_uploads directory and persists that durable path as document.filePath
+      // (never the external/staged path), so it is safe to pass the staged
+      // source directly. The staged file's 24h TTL does not affect the imported
+      // document because the persisted copy lives under rag_uploads.
       const ragModule = this.getRagSearchModule();
       await ragModule.initializeRagModule();
       const upload = await ragModule.uploadDocument({
-        filePath: durableFilePath,
+        filePath: source.filePath,
         name: source.fileName,
         title: input.title,
         description: input.description,
