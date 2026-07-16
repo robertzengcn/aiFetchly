@@ -7,6 +7,7 @@
 - **Created**: 2026-07-16
 - **Owner**: AiFetchly Desktop Engineering
 - **Related docs**:
+  - `docs/prd/plugin-workspace-slash-commands-technical-design.md`
   - `docs/prd/aifetchly-local-extensibility-prd.md`
   - `docs/prd/aifetchly-local-extensibility-technical-design.md`
   - `docs/prd/claude-code-plugin-compatibility-prd.md`
@@ -766,4 +767,3 @@ Exit criteria:
 - Import command packs from `~/.claude` as an explicit user action.
 - Local imperative commands implemented as approved AiFetchly skills rather than raw command execution.
 - Command marketplace metadata and preview before install.
-
