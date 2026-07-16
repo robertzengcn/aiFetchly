@@ -23,6 +23,7 @@ import { openAIContentToString } from "@/api/aiChatApi";
 
 const MIN_HOURS_BETWEEN_RUNS = 24;
 const MIN_CHANGED_SOURCES_PER_WORKSPACE = 3;
+const MIN_CHANGED_MESSAGES_PER_WORKSPACE = 6;
 const RUNNING_STALE_MS = 60 * 60 * 1000;
 
 export interface AIWorkspaceAutoDreamServiceDeps {
@@ -211,7 +212,7 @@ export class AIWorkspaceAutoDreamService {
       );
       if (runningForWs) return null;
 
-      if (group.packets.length < MIN_CHANGED_SOURCES_PER_WORKSPACE) {
+      if (!hasEnoughChangedContent(group)) {
         return null;
       }
     }
@@ -311,4 +312,15 @@ export class AIWorkspaceAutoDreamService {
       return await this.runModule.getByRunId(runView.runId);
     }
   }
+}
+
+function hasEnoughChangedContent(group: WorkspacePacketGroup): boolean {
+  if (group.packets.length >= MIN_CHANGED_SOURCES_PER_WORKSPACE) {
+    return true;
+  }
+  const messageCount = group.packets.reduce(
+    (sum, packet) => sum + packet.messages.length,
+    0
+  );
+  return messageCount >= MIN_CHANGED_MESSAGES_PER_WORKSPACE;
 }

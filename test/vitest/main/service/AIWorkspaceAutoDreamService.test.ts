@@ -64,14 +64,23 @@ const WS = "ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const now = () => new Date();
 const iso = (d: Date) => d.toISOString();
 
-function pkt(ws: string, id: string) {
+function pkt(ws: string, id: string, messageCount = 1) {
   return {
     sourceKind: "chat_v2" as const,
     sourceId: id,
     updatedAt: iso(now()),
     title: "t",
-    messages: [{ id: "m", role: "user", content: "x" }],
-    workspace: { workspaceId: 1, workspaceKey: ws, workspaceRoot: "/p/a", displayName: "a" },
+    messages: Array.from({ length: messageCount }, (_unused, i) => ({
+      id: `m${i}`,
+      role: i % 2 === 0 ? "user" : "assistant",
+      content: "x",
+    })),
+    workspace: {
+      workspaceId: 1,
+      workspaceKey: ws,
+      workspaceRoot: "/p/a",
+      displayName: "a",
+    },
   };
 }
 
@@ -173,6 +182,44 @@ describe("AIWorkspaceAutoDreamService", () => {
     const r = await svc().runNow();
     expect(r).toEqual([]);
     expect(startRun).not.toHaveBeenCalled();
+  });
+
+  it("skips one short workspace conversation below the automatic message threshold", async () => {
+    collect.mockResolvedValue({
+      packets: [pkt(WS, "c1", 2)],
+      chatConversationCount: 1,
+      agentTaskCount: 0,
+      reviewedThrough: now(),
+    });
+
+    await svc().evaluateAfterChatTurn({
+      conversationId: "c1",
+      reason: "assistant_turn_completed",
+    });
+
+    expect(startRun).not.toHaveBeenCalled();
+  });
+
+  it("runs automatically for one active workspace conversation with enough messages", async () => {
+    collect.mockResolvedValue({
+      packets: [pkt(WS, "c1", 6)],
+      chatConversationCount: 1,
+      agentTaskCount: 0,
+      reviewedThrough: now(),
+    });
+
+    await svc().evaluateAfterChatTurn({
+      conversationId: "c1",
+      reason: "assistant_turn_completed",
+    });
+
+    expect(startRun).toHaveBeenCalledTimes(1);
+    expect(completeRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "wrun-1",
+        chatConversationsReviewed: 1,
+      })
+    );
   });
 
   it("per-workspace cooldown: a run finished 25h ago proceeds", async () => {
