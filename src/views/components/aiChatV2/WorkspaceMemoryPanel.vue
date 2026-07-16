@@ -56,6 +56,7 @@
           density="compact"
           hide-details
           inset
+          color="primary"
           class="wm-panel__archived-toggle"
         />
       </div>
