@@ -783,6 +783,37 @@ describe("AiChatApi - OpenAI compatibility fallback", () => {
     });
   });
 
+  it("retries model listing when the backend is temporarily unreachable", async () => {
+    vi.useFakeTimers();
+    try {
+      mockGetShared.mockRejectedValueOnce(new Error("fetch failed"));
+      mockGetShared.mockResolvedValueOnce({
+        models: [
+          {
+            name: "agnes-2.0-flash",
+            available: true,
+            max_tokens: 0,
+            context_size: 256000,
+            description: null,
+          },
+        ],
+        default_model: "agnes-2.0-flash",
+        total_count: 1,
+      });
+
+      const resultPromise = api.listOpenAIModels();
+      await vi.advanceTimersByTimeAsync(500);
+      const result = await resultPromise;
+
+      expect(mockGetShared).toHaveBeenNthCalledWith(1, "/api/ai/v1/models");
+      expect(mockGetShared).toHaveBeenNthCalledWith(2, "/api/ai/v1/models");
+      expect(result.data).toHaveLength(1);
+      expect(result.data[0].id).toBe("agnes-2.0-flash");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("falls back to legacy model listing when /api/ai/v1/models is not found", async () => {
     const notFound = new Error("Not Found");
     mockGetShared.mockRejectedValueOnce(notFound).mockResolvedValueOnce({

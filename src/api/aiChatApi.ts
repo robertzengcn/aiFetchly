@@ -725,6 +725,8 @@ const STREAM_RETRY_MAX_ATTEMPTS = 3;
  * exponential backoff: base * 2^attempt (1s, 2s, 4s).
  */
 const STREAM_RETRY_BASE_DELAY_MS = 1000;
+const MODEL_LIST_RETRY_MAX_ATTEMPTS = 3;
+const MODEL_LIST_RETRY_BASE_DELAY_MS = 500;
 
 export class AiChatApi {
   private _httpClient: HttpClient;
@@ -1836,16 +1838,86 @@ export class AiChatApi {
    */
   async listOpenAIModels(): Promise<OpenAIModelsResponse> {
     this.ensureAIEnabled();
-    try {
-      const raw = await this._httpClient.get("/api/ai/v1/models");
-      return this.normalizeModelsResponse(raw);
-    } catch (error) {
-      if (!this.isNotFoundError(error)) {
-        throw error;
+    return this.withModelListRetry(async () => {
+      try {
+        const raw = await this._httpClient.get("/api/ai/v1/models");
+        return this.normalizeModelsResponse(raw);
+      } catch (error) {
+        if (!this.isNotFoundError(error)) {
+          throw error;
+        }
+        const legacyModels = await this._httpClient.get("/api/ai/chat/models");
+        return this.normalizeLegacyModelsResponse(legacyModels);
       }
-      const legacyModels = await this._httpClient.get("/api/ai/chat/models");
-      return this.normalizeLegacyModelsResponse(legacyModels);
+    });
+  }
+
+  private async withModelListRetry<T>(operation: () => Promise<T>): Promise<T> {
+    let attempt = 1;
+    try {
+      return await operation();
+    } catch (error) {
+      let lastError: unknown = error;
+      while (
+        attempt < MODEL_LIST_RETRY_MAX_ATTEMPTS &&
+        this.isRetryableModelListError(lastError)
+      ) {
+        await this.sleepWithAbort(this.computeModelListRetryDelay(attempt));
+        attempt += 1;
+        try {
+          return await operation();
+        } catch (retryError) {
+          lastError = retryError;
+        }
+      }
+      throw lastError;
     }
+  }
+
+  private computeModelListRetryDelay(attempt: number): number {
+    return MODEL_LIST_RETRY_BASE_DELAY_MS * Math.pow(2, attempt - 1);
+  }
+
+  private isRetryableModelListError(error: unknown): boolean {
+    if (this.isNotFoundError(error)) {
+      return false;
+    }
+
+    const status = this.getErrorStatus(error);
+    if (typeof status === "number") {
+      return status === 0 || status === 429 || (status >= 500 && status < 600);
+    }
+
+    if (!(error instanceof Error)) {
+      return false;
+    }
+
+    const text = `${error.name} ${error.message}`.toLowerCase();
+    return (
+      text.includes("network") ||
+      text.includes("fetch failed") ||
+      text.includes("failed to fetch") ||
+      text.includes("timeout") ||
+      text.includes("timed out") ||
+      text.includes("econnrefused") ||
+      text.includes("econnreset") ||
+      text.includes("enotfound") ||
+      text.includes("etimedout") ||
+      text.includes("socket hang up") ||
+      text.includes("too many requests") ||
+      text.includes("internal server error") ||
+      text.includes("bad gateway") ||
+      text.includes("service unavailable") ||
+      text.includes("gateway timeout")
+    );
+  }
+
+  private getErrorStatus(error: unknown): number | undefined {
+    if (!this.isRecord(error)) {
+      return undefined;
+    }
+    const status = error.status ?? error.statusCode;
+    return typeof status === "number" ? status : undefined;
   }
 
   /**
