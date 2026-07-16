@@ -80,6 +80,7 @@ interface FakeDeps {
   deps: KnowledgeLibraryAiToolsDeps;
   documentService: {
     getStagedAttachmentImportSource: ReturnType<typeof vi.fn>;
+    copyStagedSourceToUploads: ReturnType<typeof vi.fn>;
     findDocumentById: ReturnType<typeof vi.fn>;
     deleteDocument: ReturnType<typeof vi.fn>;
   };
@@ -97,6 +98,7 @@ interface FakeDeps {
 function buildTools(opts: { aiEnabled?: boolean } = {}): FakeDeps {
   const documentService = {
     getStagedAttachmentImportSource: vi.fn(),
+    copyStagedSourceToUploads: vi.fn(),
     findDocumentById: vi.fn(),
     deleteDocument: vi.fn(),
   };
@@ -110,10 +112,8 @@ function buildTools(opts: { aiEnabled?: boolean } = {}): FakeDeps {
     uploadDocument: vi.fn(),
   };
   const deps: KnowledgeLibraryAiToolsDeps = {
-    documentService:
-      documentService as unknown as DocumentService,
-    ragDocumentModule:
-      ragDocumentModule as unknown as RAGDocumentModule,
+    documentService: documentService as unknown as DocumentService,
+    ragDocumentModule: ragDocumentModule as unknown as RAGDocumentModule,
     ragSearchModule: ragSearchModule as unknown as RagSearchModule,
     isAiEnabled: () => opts.aiEnabled ?? true,
   };
@@ -127,7 +127,10 @@ function buildTools(opts: { aiEnabled?: boolean } = {}): FakeDeps {
 describe("KnowledgeLibraryAiTools.listDocuments", () => {
   test("returns compact summaries and respects limit clamp", async () => {
     const { deps, ragDocumentModule } = buildTools();
-    ragDocumentModule.getDocuments.mockResolvedValue([makeDoc({ id: 1 }), makeDoc({ id: 2 })]);
+    ragDocumentModule.getDocuments.mockResolvedValue([
+      makeDoc({ id: 1 }),
+      makeDoc({ id: 2 }),
+    ]);
     const tools = new KnowledgeLibraryAiTools(deps);
 
     const result = await tools.listDocuments({ limit: 50, offset: 0 });
@@ -164,6 +167,40 @@ describe("KnowledgeLibraryAiTools.listDocuments", () => {
     expect(byName.documents.map((d) => d.id)).toEqual([2]);
   });
 
+  test("signals truncated when the scan cap is reached", async () => {
+    const { deps, ragDocumentModule } = buildTools();
+    const many = Array.from({ length: 200 }, (_, i) => makeDoc({ id: i + 1 }));
+    ragDocumentModule.getDocuments.mockResolvedValue(many);
+    const tools = new KnowledgeLibraryAiTools(deps);
+
+    const result = await tools.listDocuments({ limit: 50 });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.truncated).toBe(true);
+  });
+
+  test("does not signal truncated below the scan cap", async () => {
+    const { deps, ragDocumentModule } = buildTools();
+    ragDocumentModule.getDocuments.mockResolvedValue([makeDoc({ id: 1 })]);
+    const tools = new KnowledgeLibraryAiTools(deps);
+
+    const result = await tools.listDocuments({ limit: 50 });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.truncated).toBeFalsy();
+  });
+
+  test("maps a backend failure to LIST_FAILED, not INVALID_INPUT", async () => {
+    const { deps, ragDocumentModule } = buildTools();
+    ragDocumentModule.getDocuments.mockRejectedValue(new Error("db locked"));
+    const tools = new KnowledgeLibraryAiTools(deps);
+
+    const result = await tools.listDocuments({});
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.code).toBe("LIST_FAILED");
+  });
+
   test("rejects an out-of-range limit as INVALID_INPUT", async () => {
     const { deps } = buildTools();
     const tools = new KnowledgeLibraryAiTools(deps);
@@ -197,7 +234,9 @@ describe("KnowledgeLibraryAiTools.importAttachment", () => {
     expect(result.success).toBe(false);
     if (result.success) return;
     expect(result.code).toBe("AI_DISABLED");
-    expect(documentService.getStagedAttachmentImportSource).not.toHaveBeenCalled();
+    expect(
+      documentService.getStagedAttachmentImportSource
+    ).not.toHaveBeenCalled();
   });
 
   test("rejects duplicatePolicy replace as INVALID_INPUT", async () => {
@@ -206,6 +245,7 @@ describe("KnowledgeLibraryAiTools.importAttachment", () => {
       { attachment_ref: "ref-1", duplicatePolicy: "replace" },
       baseContext
     );
+    expect(result.success).toBe(false);
     if (result.success) return;
     expect(result.code).toBe("INVALID_INPUT");
   });
@@ -220,6 +260,7 @@ describe("KnowledgeLibraryAiTools.importAttachment", () => {
       { attachment_ref: "ref-1" },
       baseContext
     );
+    expect(result.success).toBe(false);
     if (result.success) return;
     expect(result.code).toBe("ATTACHMENT_NOT_FOUND");
   });
@@ -245,6 +286,11 @@ describe("KnowledgeLibraryAiTools.importAttachment", () => {
       isDuplicate: false,
       existingDocuments: [],
     });
+    // The staged source is copied to a durable app-owned path before upload
+    // (the staged file is ephemeral; uploadDocument stores the path verbatim).
+    documentService.copyStagedSourceToUploads.mockResolvedValue(
+      "/tmp/appdata/uploads/durable-pricing-guide.pdf"
+    );
     ragSearchModule.uploadDocument.mockResolvedValue({
       documentId: 42,
       chunksCreated: 37,
@@ -262,14 +308,21 @@ describe("KnowledgeLibraryAiTools.importAttachment", () => {
       baseContext
     );
 
+    expect(documentService.copyStagedSourceToUploads).toHaveBeenCalledWith(
+      "/tmp/staged/conv-123/ref-1.pdf",
+      "pricing-guide.pdf"
+    );
     expect(ragSearchModule.uploadDocument).toHaveBeenCalledTimes(1);
     const callArg = ragSearchModule.uploadDocument.mock.calls[0][0] as {
       filePath: string;
       name: string;
       tags?: string[];
     };
-    // Must import the staged, containment-checked file — never an arbitrary path.
-    expect(callArg.filePath).toBe("/tmp/staged/conv-123/ref-1.pdf");
+    // Must import the durable copy of the staged file — never the ephemeral
+    // staged path, and never an arbitrary/model-supplied path.
+    expect(callArg.filePath).toBe(
+      "/tmp/appdata/uploads/durable-pricing-guide.pdf"
+    );
     expect(callArg.name).toBe("pricing-guide.pdf");
     expect(callArg.tags).toEqual(["pricing", "sales"]);
 
@@ -306,6 +359,7 @@ describe("KnowledgeLibraryAiTools.importAttachment", () => {
       baseContext
     );
 
+    expect(result.success).toBe(false);
     if (result.success) return;
     expect(result.code).toBe("DUPLICATE_DOCUMENT");
     expect(result.existingDocuments?.[0].id).toBe(7);
@@ -322,6 +376,7 @@ describe("KnowledgeLibraryAiTools.deleteDocument", () => {
     documentService.findDocumentById.mockResolvedValue(null);
     const tools = new KnowledgeLibraryAiTools(deps);
     const result = await tools.deleteDocument({ document_id: 99 });
+    expect(result.success).toBe(false);
     if (result.success) return;
     expect(result.code).toBe("DOCUMENT_NOT_FOUND");
   });
@@ -336,6 +391,7 @@ describe("KnowledgeLibraryAiTools.deleteDocument", () => {
       document_id: 5,
       expected_name: "different-name.pdf",
     });
+    expect(result.success).toBe(false);
     if (result.success) return;
     expect(result.code).toBe("EXPECTED_NAME_MISMATCH");
   });
