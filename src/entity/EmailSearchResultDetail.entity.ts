@@ -4,26 +4,26 @@ import AuditableEntity from "@/entity/Auditable.entity";
 @Entity("emailsearch_result_detail")
 export class EmailSearchResultDetailEntity extends AuditableEntity {
     @PrimaryGeneratedColumn()
-    id: number;
+    id!: number;
     
     @Column("integer")
-    result_id: number;
+    result_id!: number;
     
     @Column("text",{ nullable: true })
-    email: string;
+    email!: string;
     
     @Column("text", { nullable: true })
-    company: string;
+    company!: string;
     
     @Column("text", { nullable: true })
-    title: string;
+    title!: string;
     
     @Column("text", { nullable: true })
-    linkedin: string;
+    linkedin!: string;
     
     @Column("text", { nullable: true })
-    location: string;
+    location!: string;
     
     @Column("text", { nullable: true })
-    record_time: string;
+    record_time!: string;
 }

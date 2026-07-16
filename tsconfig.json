@@ -1,7 +1,7 @@
 {
   "compilerOptions": {
     "outDir": "./dist",
-    "strictPropertyInitialization": false,
+    "strictPropertyInitialization": true,
     "noImplicitAny": false,
     "noImplicitThis": true,
     "target": "es6",

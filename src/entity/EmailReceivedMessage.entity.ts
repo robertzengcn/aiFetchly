@@ -18,70 +18,70 @@ import type {
 @Index(["threadKey"])
 export class EmailReceivedMessageEntity extends AuditableEntity {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
 
   @Column("integer")
-  emailServiceId: number;
+  emailServiceId!: number;
 
   /** Provider-stable identifier (IMAP UID or POP3 UIDL/hash). Used for dedupe. */
   @Column("varchar", { length: 255 })
-  providerUid: string;
+  providerUid!: string;
 
   @Column("varchar", { length: 998, nullable: true })
-  messageId: string | null;
+  messageId!: string | null;
 
   /** Normalized thread key derived from References / In-Reply-To / Message-ID. */
   @Column("varchar", { length: 998, nullable: true })
-  threadKey: string | null;
+  threadKey!: string | null;
 
   @Column("varchar", { length: 998, nullable: true })
-  inReplyTo: string | null;
+  inReplyTo!: string | null;
 
   @Column("text", { nullable: true })
-  referencesHeader: string | null;
+  referencesHeader!: string | null;
 
   @Column("varchar", { length: 320 })
-  fromAddress: string;
+  fromAddress!: string;
 
   @Column("varchar", { length: 255, nullable: true })
-  fromName: string | null;
+  fromName!: string | null;
 
   @Column("varchar", { length: 320, nullable: true })
-  replyToAddress: string | null;
+  replyToAddress!: string | null;
 
   @Column("text")
-  toAddressesJson: string;
+  toAddressesJson!: string;
 
   @Column("text", { nullable: true })
-  ccAddressesJson: string | null;
+  ccAddressesJson!: string | null;
 
   @Column("varchar", { length: 998 })
-  subject: string;
+  subject!: string;
 
   @Column("text", { nullable: true })
-  bodyText: string | null;
+  bodyText!: string | null;
 
   @Column("text", { nullable: true })
-  bodyHtmlSanitized: string | null;
+  bodyHtmlSanitized!: string | null;
 
   @Column("text", { nullable: true })
-  snippet: string | null;
+  snippet!: string | null;
 
   @Column("datetime")
-  receivedAt: Date;
+  receivedAt!: Date;
 
   @Column("integer", { default: 1 })
-  isUnread: number;
+  isUnread!: number;
 
   @Column("varchar", { length: 50, nullable: true })
-  classification: EmailMessageClassification | null;
+  classification!: EmailMessageClassification | null;
 
   @Column("real", { nullable: true })
-  classificationConfidence: number | null;
+  classificationConfidence!: number | null;
 
   @Column("varchar", { length: 50, default: "not_started" })
-  replyStatus: EmailReplyStatus;
+  replyStatus!: EmailReplyStatus;
 
   @Column("datetime", { nullable: true })
-  processedAt: Date | null;
+  processedAt!: Date | null;
 }

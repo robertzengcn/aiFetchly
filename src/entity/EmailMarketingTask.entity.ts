@@ -4,16 +4,16 @@ import AuditableEntity from "@/entity/Auditable.entity";
 @Entity("emailmarketing_task")
 export class EmailMarketingTaskEntity extends AuditableEntity {
     @PrimaryGeneratedColumn()
-     id: number;
+     id!: number;
     @Column("text", { nullable: true })
-    task_name: string;
+    task_name!: string;
     
     @Column("text", { nullable: true })
-    task_desc: string;
+    task_desc!: string;
     
     @Column("text", { nullable: true })
-    record_time: string;
+    record_time!: string;
     
     @Column("integer", { nullable: true })
-    status: number;
+    status!: number;
 }

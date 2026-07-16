@@ -4,14 +4,14 @@ import AuditableEntity from "@/entity/Auditable.entity";
 @Entity("yellow_pages_result")
 export class YellowPagesResultEntity extends AuditableEntity {
     @PrimaryGeneratedColumn()
-    id: number;
+    id!: number;
 
     @Column("integer", { nullable: false })
     @Index()
-    task_id: number;
+    task_id!: number;
 
     @Column("text", { nullable: false })
-    business_name: string;
+    business_name!: string;
 
     @Column("text", { nullable: true })
     email?: string;
@@ -56,10 +56,10 @@ export class YellowPagesResultEntity extends AuditableEntity {
     review_count?: number;
 
     @Column("datetime", { nullable: false })
-    scraped_at: Date;
+    scraped_at!: Date;
 
     @Column("text", { nullable: false })
-    platform: string;
+    platform!: string;
 
     @Column("text", { nullable: true })
     raw_data?: string; // JSON string of raw scraped data

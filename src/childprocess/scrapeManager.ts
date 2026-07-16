@@ -55,18 +55,18 @@ function isUtilityProcessWorker(): boolean {
   );
 }
 export class ScrapeManager {
-  cluster: Cluster<ClusterSearchData>;
-  pluggable: pluggableType;
+  cluster!: Cluster<ClusterSearchData>;
+  pluggable!: pluggableType;
   // scraper: SocialScraper;
   context: object;
   config: SMconfig;
   logger: winston.Logger;
   // logger: { info: Function };
-  browser: Browser;
-  page: Page;
-  numClusters: number;
-  tmppath: string;
-  proxiesArr: Array<ProxyServer | null>;
+  browser!: Browser;
+  page!: Page;
+  numClusters!: number;
+  tmppath!: string;
+  proxiesArr!: Array<ProxyServer | null>;
   debug_log_path?: string;
   // runLogin: Function;
   // taskid?: number;

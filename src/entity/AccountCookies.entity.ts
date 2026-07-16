@@ -4,18 +4,18 @@ import AuditableEntity from "@/entity/Auditable.entity";
 @Entity("account_cookies")
 export class AccountCookiesEntity extends AuditableEntity {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
 
   @Column({ type: "integer" })
   @Index()
-  account_id: number;
+  account_id!: number;
 
   @Column({ type: "text" })
-  cookies: string;
+  cookies!: string;
 
   @Column({ type: "text" })
-  partition_path: string;
+  partition_path!: string;
 
   @Column({ type: "text", nullable: true })
-  record_time: string;
+  record_time!: string;
 }

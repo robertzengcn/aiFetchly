@@ -3,7 +3,7 @@ import { Database } from "better-sqlite3";
 import { log } from "@/modules/Logger";
 import { SqliteDb } from "@/config/SqliteDb";
 export abstract class BaseDb {
-  protected db: Database;
+  protected db!: Database;
   // protected connectionString: string;
   protected sqliteDb: SqliteDb;
   constructor(filepath: string) {

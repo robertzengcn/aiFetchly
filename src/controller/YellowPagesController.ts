@@ -48,7 +48,7 @@ export class YellowPagesController {
   private resultModule: YellowPagesResultModule;
   private platformModule: YellowPagesPlatformModule;
   private processManager: YellowPagesProcessManager;
-  private browserManager: BrowserManager;
+  private browserManager!: BrowserManager;
   private accountCookiesModule: AccountCookiesModule;
 
   /**

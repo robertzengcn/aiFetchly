@@ -26,17 +26,17 @@ import { CustomConcurrency } from "@/modules/concurrency-implementation";
 import { ProxyServer } from "@/entityTypes/proxyType";
 
 export class EmailCluster {
-  cluster: Cluster<EmailClusterdata>;
+  cluster!: Cluster<EmailClusterdata>;
   context: object;
   config: SMconfig;
   logger: winston.Logger;
   // logger: { info: Function };
-  browser: Browser;
-  page: Page;
-  numClusters: number;
-  tmppath: string;
-  proxiesArr: Array<ProxyServer | null>;
-  maxPageNumber: number;
+  browser!: Browser;
+  page!: Page;
+  numClusters!: number;
+  tmppath!: string;
+  proxiesArr!: Array<ProxyServer | null>;
+  maxPageNumber!: number;
   // runLogin: Function;
   // taskid?: number;
   // taskrunId?: number;

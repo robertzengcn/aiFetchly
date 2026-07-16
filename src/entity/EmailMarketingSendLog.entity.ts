@@ -4,26 +4,26 @@ import AuditableEntity from "@/entity/Auditable.entity";
 @Entity("emailmarketing_send_log")
 export class EmailMarketingSendLogEntity extends AuditableEntity {
     @PrimaryGeneratedColumn()
-      id: number;
+      id!: number;
     @Column("integer")
     @Index()
-    task_id: number;
+    task_id!: number;
     
     @Column("integer")
     @Index()
-    status: number;
+    status!: number;
     
     @Column("text", { nullable: true })
-    receiver: string;
+    receiver!: string;
     
     @Column("text", { nullable: true })
-    title: string;
+    title!: string;
     
     @Column("text", { nullable: true })
-    content: string;
+    content!: string;
     @Column("text", { nullable: true })
-    log: string;
+    log!: string;
     
     @Column("text", { nullable: true })
-    record_time: string;
+    record_time!: string;
 }

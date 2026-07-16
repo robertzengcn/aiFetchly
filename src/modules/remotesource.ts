@@ -88,7 +88,7 @@ type jwtTokenUser = {
 export class RemoteSource {
   private tokenname= TOKENNAME;
   // private static instance: RemoteSource;
-  REMOTEADD: string;
+  REMOTEADD!: string;
   // REMOTEUSERNAME: string;
   // REMOTEPASSWORD: string;
   // private _Token:string;

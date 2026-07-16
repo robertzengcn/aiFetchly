@@ -12,11 +12,11 @@ import { Order } from "@/entity/order.decorator";
 @Index(["health"])
 export class InstalledPluginEntity extends AuditableEntity {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
 
   @Order(1)
   @Column("text")
-  name: string;
+  name!: string;
 
   @Order(2)
   @Column("text", { nullable: true })
@@ -24,11 +24,11 @@ export class InstalledPluginEntity extends AuditableEntity {
 
   @Order(3)
   @Column("text")
-  version: string;
+  version!: string;
 
   @Order(4)
   @Column("text", { default: "local" })
-  source: string; // PluginSource: "local" | "builtin" | "marketplace"
+  source!: string; // PluginSource: "local" | "builtin" | "marketplace"
 
   @Order(5)
   @Column("text", { nullable: true })
@@ -36,39 +36,39 @@ export class InstalledPluginEntity extends AuditableEntity {
 
   @Order(6)
   @Column("text")
-  description: string;
+  description!: string;
 
   @Order(7)
   @Column("text")
-  installPath: string;
+  installPath!: string;
 
   @Order(8)
   @Column("text")
-  manifestJson: string;
+  manifestJson!: string;
 
   @Order(9)
   @Column("text", { default: "[]" })
-  permissionsJson: string;
+  permissionsJson!: string;
 
   @Order(10)
   @Column("text", { default: "{}" })
-  componentStateJson: string;
+  componentStateJson!: string;
 
   @Order(11)
   @Column("integer", { default: 1 })
-  enabled: number;
+  enabled!: number;
 
   @Order(12)
   @Column("text", { default: "healthy" })
-  health: string; // PluginHealth
+  health!: string; // PluginHealth
 
   @Order(13)
   @Column("text", { default: "[]" })
-  lastLoadErrorsJson: string;
+  lastLoadErrorsJson!: string;
 
   @Order(14)
   @Column("text", { default: "local-zip" })
-  sourceKind: string; // PluginSourceKind
+  sourceKind!: string; // PluginSourceKind
 
   @Order(15)
   @Column("text", { nullable: true })
@@ -80,5 +80,5 @@ export class InstalledPluginEntity extends AuditableEntity {
 
   @Order(17)
   @Column("text", { default: "{}" })
-  sourceMetaJson: string;
+  sourceMetaJson!: string;
 }

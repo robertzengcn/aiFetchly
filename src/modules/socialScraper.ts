@@ -94,14 +94,14 @@ export class SocialScraper implements Subject {
     //     // obj:puppeteer.Page
     // };
     config:SMconfig;
-    page: Page;
+    page!: Page;
     last_response: object | null;
     metadata: { http_headers?: object, ipinfo?: { ip: string }, scraping_detected?: boolean };
     pluggable?: object;
     context?: object;
     logger: logType;
-    proxy: string;
-    keywords: Array<string>;
+    proxy!: string;
+    keywords!: Array<string>;
     STANDARD_TIMEOUT: number;
     SOLVE_CAPTCHA_TIME: number;
     results: object;

@@ -4,15 +4,15 @@ import AuditableEntity from "@/entity/Auditable.entity";
 @Entity("emailmarketing_task_detail")
 export class EmailMarketingTaskDetailEntity extends AuditableEntity {
     @PrimaryGeneratedColumn()
-    id: number;
+    id!: number;
     
     @Column("integer")
     @Index()
-    task_id: number;
+    task_id!: number;
     
     @Column("integer")
-    name: number;
+    name!: number;
     
     @Column("integer")
-    value: number;
+    value!: number;
 }

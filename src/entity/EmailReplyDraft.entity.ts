@@ -15,51 +15,51 @@ import type {
 @Index(["emailServiceId"])
 export class EmailReplyDraftEntity extends AuditableEntity {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
 
   @Column("integer")
-  messageId: number;
+  messageId!: number;
 
   @Column("integer", { nullable: true })
-  emailServiceId: number | null;
+  emailServiceId!: number | null;
 
   @Column("varchar", { length: 998 })
-  subject: string;
+  subject!: string;
 
   @Column("text")
-  bodyText: string;
+  bodyText!: string;
 
   @Column("text", { nullable: true })
-  bodyHtml: string | null;
+  bodyHtml!: string | null;
 
   @Column("varchar", { length: 50, default: "draft" })
-  status: EmailReplyDraftStatus;
+  status!: EmailReplyDraftStatus;
 
   @Column("varchar", { length: 20, default: "ai" })
-  generationSource: EmailReplyGenerationSource;
+  generationSource!: EmailReplyGenerationSource;
 
   @Column("varchar", { length: 100, nullable: true })
-  modelName: string | null;
+  modelName!: string | null;
 
   @Column("varchar", { length: 50, nullable: true })
-  promptVersion: string | null;
+  promptVersion!: string | null;
 
   @Column("real", { nullable: true })
-  confidence: number | null;
+  confidence!: number | null;
 
   /** Serialized {@code EmailReplyKnowledgeSourceAudit[]}. */
   @Column("text", { nullable: true })
-  knowledgeSourcesJson: string | null;
+  knowledgeSourcesJson!: string | null;
 
   @Column("text", { nullable: true })
-  ownerStyleProfileJson: string | null;
+  ownerStyleProfileJson!: string | null;
 
   @Column("text", { nullable: true })
-  warningsJson: string | null;
+  warningsJson!: string | null;
 
   @Column("datetime", { nullable: true })
-  sentAt: Date | null;
+  sentAt!: Date | null;
 
   @Column("text", { nullable: true })
-  sendError: string | null;
+  sendError!: string | null;
 }

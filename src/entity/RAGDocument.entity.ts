@@ -9,30 +9,30 @@ import { Order } from './order.decorator';
 @Index(['uploadedAt'])
 export class RAGDocumentEntity extends AuditableEntity {
     @PrimaryGeneratedColumn()
-    id: number;
+    id!: number;
     @Order(1)
     @Column('varchar', { length: 255, nullable: false })
-    name: string;
+    name!: string;
 
     @Order(2)
     @Column('varchar', { length: 500, nullable: false })
-    filePath: string;
+    filePath!: string;
 
     @Order(3)
     @Column('varchar', { length: 50, nullable: false })
-    fileType: string;
+    fileType!: string;
 
     @Order(4)
     @Column('bigint', { nullable: false })
-    fileSize: number;
+    fileSize!: number;
 
     @Order(5)
     @Column('varchar', { length: 20, default: 'active', nullable: false })
-    status: string; // 'active', 'archived', 'deleted'
+    status!: string; // 'active', 'archived', 'deleted'
 
     @Order(6)
     @Column('varchar', { length: 20, default: 'pending', nullable: false })
-    processingStatus: string; // 'pending', 'processing', 'completed', 'failed'
+    processingStatus!: string; // 'pending', 'processing', 'completed', 'failed'
 
     // Metadata fields
     @Order(7)

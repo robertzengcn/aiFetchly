@@ -4,32 +4,32 @@ import AuditableEntity from "@/entity/Auditable.entity";
 @Entity("search_task")
 export class SearchTaskEntity extends AuditableEntity {
     @PrimaryGeneratedColumn()
-    id: number;
+    id!: number;
 
     @Column("text", { nullable: true })
-    enginer_id: number;
+    enginer_id!: number;
     
     @Column("text", { nullable: true })
-    error_log: string;
+    error_log!: string;
     @Column("text", { nullable: true })
-    runtime_log: string;    
+    runtime_log!: string;    
     
     @Column("text", { nullable: true })
-    record_time: string;
+    record_time!: string;
     
     @Column("integer", { nullable: true })
     @Index()
-    status: number;
+    status!: number;
     @Column("integer", { nullable: true })
-    num_pages: number; //how many pages to scrape
+    num_pages!: number; //how many pages to scrape
     @Column("integer", { nullable: true })
-    concurrency: number; //how many concurrent requests
+    concurrency!: number; //how many concurrent requests
     @Column("integer", { nullable: true })
-    notShowBrowser: number; //if true, the browser will not be shown
+    notShowBrowser!: number; //if true, the browser will not be shown
     @Column("integer", { nullable: true })
-    useLocalbrowserdata:number
+    useLocalbrowserdata!:number
     @Column("text", { nullable: true })
-    localBrowser:string
+    localBrowser!:string
     @Column("integer", { nullable: true })
-    pid: number;
+    pid!: number;
 }

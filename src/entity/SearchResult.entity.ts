@@ -11,49 +11,49 @@ import { ContactInfoEntity } from "./ContactInfo.entity";
 @Entity("search_result")
 export class SearchResultEntity extends AuditableEntity {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
 
   @Column("integer", { default: 0 })
   @Index()
-  task_id: number;
+  task_id!: number;
 
   @Column("integer", { default: 0 })
   @Index()
-  keyword_id: number;
+  keyword_id!: number;
 
   @Column("text", { nullable: true })
-  title: string;
+  title!: string;
 
   @Column("text", { nullable: true })
-  link: string;
+  link!: string;
 
   @Column("text", { nullable: true })
-  snippet: string;
+  snippet!: string;
 
   @Column("text", { nullable: true })
-  domain: string;
+  domain!: string;
 
   @Column("text", { nullable: true })
-  record_time: string;
+  record_time!: string;
 
   @Column("text", { nullable: true })
-  ai_industry: string;
+  ai_industry!: string;
 
   @Column("integer", { nullable: true })
-  ai_match_score: number;
+  ai_match_score!: number;
 
   @Column("text", { nullable: true })
-  ai_reasoning: string;
+  ai_reasoning!: string;
 
   @Column("text", { nullable: true })
-  ai_client_business: string;
+  ai_client_business!: string;
 
   @Column("text", { nullable: true })
-  ai_analysis_time: string;
+  ai_analysis_time!: string;
 
   @Column("text", { nullable: true, default: null })
   @Index()
-  ai_analysis_status: string; // 'pending', 'analyzing', 'completed', 'failed'
+  ai_analysis_status!: string; // 'pending', 'analyzing', 'completed', 'failed'
 
   @OneToOne(
     () => ContactInfoEntity,
@@ -64,5 +64,5 @@ export class SearchResultEntity extends AuditableEntity {
       cascade: false, // Don't cascade operations (handled manually)
     }
   )
-  contactInfo: ContactInfoEntity | null;
+  contactInfo!: ContactInfoEntity | null;
 }

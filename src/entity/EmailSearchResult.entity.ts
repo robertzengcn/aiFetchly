@@ -4,44 +4,44 @@ import AuditableEntity from "@/entity/Auditable.entity";
 @Entity("emailsearch_result")
 export class EmailSearchResultEntity extends AuditableEntity {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
   @Column("integer")
   @Index()
-  task_id: number;
+  task_id!: number;
 
   @Column("text", { nullable: true })
-  email: string;
+  email!: string;
 
   @Column("text", { nullable: true })
-  name: string;
+  name!: string;
 
   @Column("text", { nullable: true })
-  domain: string;
+  domain!: string;
 
   @Column("text", { nullable: true })
-  url: string;
+  url!: string;
 
   @Column("text", { nullable: true })
-  title: string;
+  title!: string;
 
   @Column("text", { nullable: true })
-  record_time: string;
+  record_time!: string;
 
   @Column("text", { nullable: true })
-  phone: string | null;
+  phone!: string | null;
 
   @Column("text", { nullable: true })
-  address: string | null;
+  address!: string | null;
 
   @Column("text", { nullable: true })
-  socialLinks: string | null;
+  socialLinks!: string | null;
 
   @Column("text", { nullable: true, default: "none" })
-  aiEnrichmentStatus: string | null;
+  aiEnrichmentStatus!: string | null;
 
   @Column("text", { nullable: true })
-  aiEnrichmentError: string | null;
+  aiEnrichmentError!: string | null;
 
   @Column("real", { nullable: true, default: 0 })
-  aiConfidence: number;
+  aiConfidence!: number;
 }

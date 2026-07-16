@@ -4,12 +4,12 @@ import AuditableEntity from "@/entity/Auditable.entity";
 @Entity("search_keyword")
 export class SearchKeywordEntity extends AuditableEntity {
     @PrimaryGeneratedColumn()
-    id: number;
+    id!: number;
     
     @Column("integer")
     @Index()
-    task_id: number;
+    task_id!: number;
     
     @Column("text")
-    keyword: string;
+    keyword!: string;
 }

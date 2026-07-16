@@ -14,7 +14,7 @@ import { SqliteDb } from "@/config/SqliteDb";
  */
 export abstract class BaseModule {
   protected dbpath: string;
-  protected sqliteDb: SqliteDb;
+  protected sqliteDb!: SqliteDb;
   private dbInitialized = false;
 
   constructor() {

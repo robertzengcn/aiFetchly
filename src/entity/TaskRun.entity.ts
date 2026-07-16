@@ -4,24 +4,24 @@ import AuditableEntity from "@/entity/Auditable.entity";
 @Entity("task_run")
 export class TaskRunEntity extends AuditableEntity {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
 
   @Column("integer")
   @Index()
-  task_id: number;
+  task_id!: number;
   @Column("text", { nullable: true })
-  taskrun_num: string;
+  taskrun_num!: string;
 
   @Column("text", { nullable: true })
-  log_path: string;
+  log_path!: string;
 
   @Column("text", { nullable: true })
-  error_log: string;
+  error_log!: string;
 
   @Column("text", { nullable: true })
-  record_time: string;
+  record_time!: string;
 
   @Column("integer", { nullable: true })
   @Index()
-  status: number;
+  status!: number;
 }

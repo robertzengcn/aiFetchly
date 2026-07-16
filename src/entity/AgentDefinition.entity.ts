@@ -8,31 +8,31 @@ import { Order } from "./order.decorator";
 @Index(["status"])
 export class AgentDefinitionEntity extends AuditableEntity {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
 
   @Order(1)
   @Column("varchar", { length: 100, nullable: false, unique: true })
-  agentId: string;
+  agentId!: string;
 
   @Order(2)
   @Column("varchar", { length: 120, nullable: false })
-  name: string;
+  name!: string;
 
   @Order(3)
   @Column("text", { nullable: false })
-  description: string;
+  description!: string;
 
   @Order(4)
   @Column("int", { nullable: false })
-  version: number;
+  version!: number;
 
   @Order(5)
   @Column("text", { nullable: false })
-  systemPrompt: string;
+  systemPrompt!: string;
 
   @Order(6)
   @Column("simple-json", { nullable: false })
-  allowedTools: string[];
+  allowedTools!: string[];
 
   @Order(7)
   @Column("varchar", { length: 120, nullable: true })
@@ -40,25 +40,25 @@ export class AgentDefinitionEntity extends AuditableEntity {
 
   @Order(8)
   @Column("varchar", { length: 32, nullable: false, default: "specialist" })
-  mode: string;
+  mode!: string;
 
   @Order(9)
   @Column("int", { nullable: false, default: 8 })
-  maxToolCalls: number;
+  maxToolCalls!: number;
 
   @Order(10)
   @Column("int", { nullable: false, default: 300000 })
-  maxRuntimeMs: number;
+  maxRuntimeMs!: number;
 
   @Order(11)
   @Column("int", { nullable: false, default: 8 })
-  maxContinueCalls: number;
+  maxContinueCalls!: number;
 
   @Order(12)
   @Column("simple-json", { nullable: false })
-  outputSchema: Record<string, unknown>;
+  outputSchema!: Record<string, unknown>;
 
   @Order(13)
   @Column("varchar", { length: 32, nullable: false, default: "active" })
-  status: string;
+  status!: string;
 }

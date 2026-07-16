@@ -13,7 +13,7 @@ export class Scraperdb {
     private static instance: Scraperdb;
     dbname="scraper.db";
     db;
-    pathdb:string
+    pathdb!:string
     isDevelopment = process.env.NODE_ENV !== 'production';
     private constructor(filepath:string) {
         

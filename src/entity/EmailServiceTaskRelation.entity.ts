@@ -6,22 +6,22 @@ import { EmailServiceEntity } from "./EmailService.entity";
 @Entity('email_service_task_relation')
 export class EmailServiceTaskRelationEntity extends AuditableEntity {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
 
   @Column({ type: 'integer' })
-  emailServiceId: number;
+  emailServiceId!: number;
 
   @Column({ type: 'integer' })
-  buckemailTaskId: number;
+  buckemailTaskId!: number;
 
   @Column({ type: 'integer', default: 1 })
-  status: number;
+  status!: number;
 
   @ManyToOne(() => EmailServiceEntity, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'emailServiceId' })
-  emailService: EmailServiceEntity;
+  emailService!: EmailServiceEntity;
 
   @ManyToOne(() => BuckemailTaskEntity, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'buckemailTaskId' })
-  buckemailTask: BuckemailTaskEntity;
+  buckemailTask!: BuckemailTaskEntity;
 } 

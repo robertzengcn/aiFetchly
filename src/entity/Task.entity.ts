@@ -10,31 +10,31 @@ import {
 @Entity("tasks")
 export class TaskEntity {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
 
   @Column({ type: "varchar", length: 255 })
-  name: string;
+  name!: string;
 
   @Column({ type: "text", nullable: true })
-  description: string;
+  description!: string;
 
   @Column({ type: "varchar", length: 100 })
-  platform: string;
+  platform!: string;
 
   @Column({ type: "simple-array" })
-  keywords: string[];
+  keywords!: string[];
 
   @Column({ type: "varchar", length: 255, nullable: true })
-  location: string;
+  location!: string;
 
   @Column({ type: "int", default: 10 })
-  numPages: number;
+  numPages!: number;
 
   @Column({ type: "int", default: 3 })
-  concurrency: number;
+  concurrency!: number;
 
   @Column({ type: "boolean", default: true })
-  showBrowser: boolean;
+  showBrowser!: boolean;
 
   @Column({
     type: "varchar",
@@ -43,19 +43,19 @@ export class TaskEntity {
     enum: ["pending", "running", "completed", "failed", "cancelled"],
   })
   @Index()
-  status: "pending" | "running" | "completed" | "failed" | "cancelled";
+  status!: "pending" | "running" | "completed" | "failed" | "cancelled";
 
   @Column({ type: "int", default: 0 })
-  results_count: number;
+  results_count!: number;
 
   @Column({ type: "text", nullable: true })
   error_message?: string;
 
   @CreateDateColumn()
-  created_at: string;
+  created_at!: string;
 
   @UpdateDateColumn()
-  updated_at: string;
+  updated_at!: string;
 
   @Column({ type: "datetime", nullable: true })
   completed_at?: string;

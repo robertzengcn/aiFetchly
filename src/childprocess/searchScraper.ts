@@ -25,15 +25,15 @@ import { v4 as uuidv4 } from "uuid"
 
 export class SearchScrape implements searchEngineImpl {
     config: SMconfig;
-    page: Page
-    browser: Browser
+    page!: Page
+    browser!: Browser
     last_response: object | null;
     metadata: { http_headers?: object, ipinfo?: { ip: string }, scraping_detected?: boolean | void };
     pluggable?: ScrapeOptions["pluggable"];
     context?: object;
     logger: SMconfig["logger"];
-    proxy: string;
-    keywords: Array<string>;
+    proxy!: string;
+    keywords!: Array<string>;
     STANDARD_TIMEOUT: number;
     SOLVE_CAPTCHA_TIME: number;
     results:Array<ResultParseItemType>=[]; // change it to map:
@@ -42,11 +42,11 @@ export class SearchScrape implements searchEngineImpl {
     result_rank: number;
     num_requests: number;
     num_keywords: number;
-    keyword: string;
-    page_num: number;
+    keyword!: string;
+    page_num!: number;
     proxyServer?:ProxyServer|null
     debug_log_path?:string;
-    search_engine_name:string;
+    search_engine_name!:string;
     resultCallback?: (result: ResultParseItemType) => void; // Callback to send results immediately
     accountId?: number; // Track which account's cookies are being used
     hasCookies = false; // Track if cookies were passed for this session
