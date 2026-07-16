@@ -3,7 +3,7 @@
     "outDir": "./dist",
     "strictPropertyInitialization": false,
     "noImplicitAny": false,
-    "noImplicitThis": false,
+    "noImplicitThis": true,
     "target": "es6",
     "module": "esnext",
     "strict": true,
