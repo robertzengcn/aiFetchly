@@ -690,7 +690,6 @@ export default {
     google: "Google",
     bing: "Bing.com",
     yandex: "Yandex",
-    baidu: "Baidu.com",
     platform: "平台",
     keyword: "关键词",
     search_enginer_name: "搜索引擎",

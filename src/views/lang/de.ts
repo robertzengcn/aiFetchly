@@ -726,7 +726,6 @@ export default {
     google: "Google",
     bing: "Bing.com",
     yandex: "Yandex",
-    baidu: "Baidu.com",
     platform: "Plattform",
     keyword: "Schlüsselwort",
     search_enginer_name: "Suchmaschine",

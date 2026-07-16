@@ -709,7 +709,6 @@ export default {
     google: "Google",
     bing: "Bing.com",
     yandex: "Yandex",
-    baidu: "Baidu.com",
     platform: "プラットフォーム",
     keyword: "キーワード",
     search_enginer_name: "検索エンジン",
