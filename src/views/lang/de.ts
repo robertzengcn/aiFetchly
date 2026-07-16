@@ -2047,6 +2047,7 @@ emailAutoReplyAudit: {
     maps_description: "Finde lokale Unternehmen über Kartendienste.",
     outreach_description:
       "Verwalte Outreach-Aufgaben, Vorlagen, Filter und Antworten.",
+    proxy_description: "Verwalte und validiere deine Proxy-Server.",
   },
   outreach: {
     subtitle:

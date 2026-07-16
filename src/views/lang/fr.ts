@@ -2036,7 +2036,8 @@ emailAutoReplyAudit: {
     maps_description:
       "Trouvez des entreprises locales depuis les fournisseurs de cartes.",
     outreach_description:
-      "Gérez les tâches de prospection, modèles, filtres et réponses.",
+      "Gérez les tâches de prospection, les modèles, les filtres et les réponses.",
+    proxy_description: "Gérez et validez vos serveurs proxy.",
   },
   outreach: {
     subtitle:

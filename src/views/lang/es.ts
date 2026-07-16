@@ -2053,6 +2053,7 @@ emailAutoReplyAudit: {
     maps_description: "Encuentra negocios locales desde proveedores de mapas.",
     outreach_description:
       "Gestiona tareas de outreach, plantillas, filtros y respuestas.",
+    proxy_description: "Gestiona y valida tus servidores proxy.",
   },
   outreach: {
     subtitle:

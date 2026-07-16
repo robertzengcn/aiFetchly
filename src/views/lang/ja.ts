@@ -2011,6 +2011,7 @@ emailAutoReplyAudit: {
     maps_description: "地図プロバイダーから地域ビジネスを見つけます。",
     outreach_description:
       "アウトリーチタスク、テンプレート、フィルター、返信を管理します。",
+    proxy_description: "プロキシサーバーを管理・検証します。",
   },
   outreach: {
     subtitle:

@@ -2050,6 +2050,7 @@ emailAutoReplyAudit: {
     maps_description: "Find local businesses from map providers.",
     outreach_description:
       "Manage outreach tasks, templates, filters, and replies.",
+    proxy_description: "Manage and validate your proxy servers.",
   },
   outreach: {
     subtitle:

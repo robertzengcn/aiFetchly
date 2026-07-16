@@ -1982,6 +1982,7 @@ emailAutoReplyAudit: {
     directory_description: "浏览目录任务和已收集的商家记录。",
     maps_description: "从地图服务中查找本地商家。",
     outreach_description: "管理外联任务、模板、过滤器和回复。",
+    proxy_description: "管理和验证您的代理服务器。",
   },
   outreach: {
     subtitle: "管理外联任务、模板、过滤器、邮件服务和回复。",
