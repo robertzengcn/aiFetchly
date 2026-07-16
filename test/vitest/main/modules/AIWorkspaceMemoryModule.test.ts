@@ -95,6 +95,21 @@ describe("AIWorkspaceMemoryModule", () => {
     ).rejects.toThrow(/secret|credential/i);
   });
 
+  it("rejects WM-VALID-06 secret-like content without creating a memory", async () => {
+    const createSpy = vi.spyOn(AIWorkspaceMemoryModel.prototype, "create");
+    const mod = new AIWorkspaceMemoryModule();
+
+    await expect(
+      mod.createMemory(SCOPE_A, {
+        type: "reference",
+        title: "API Config",
+        content: "The API key is sk-proj-abcdefghijklmnop1234567890abcdef",
+      })
+    ).rejects.toThrow(/secret|credential/i);
+
+    expect(createSpy).not.toHaveBeenCalled();
+  });
+
   it("clamps confidence into 0..100", async () => {
     const mod = new AIWorkspaceMemoryModule();
     await SqliteDb.ensureInitialized();
