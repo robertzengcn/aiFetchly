@@ -172,6 +172,7 @@ export async function streamChatV2Message(
     };
 
     const completeHandler = (raw: unknown): void => {
+      let shouldCleanup = true;
       try {
         const chunk: ChatV2StreamChunk = JSON.parse(String(raw));
         if (!isChunkForRequest(chunk)) {
@@ -180,6 +181,7 @@ export async function streamChatV2Message(
               chunk.conversationId || "(none)"
             } expected=${expectedConversationId}`
           );
+          shouldCleanup = false;
           return;
         }
         console.debug(
@@ -207,7 +209,9 @@ export async function streamChatV2Message(
         onError(error);
         reject(error);
       } finally {
-        cleanup();
+        if (shouldCleanup) {
+          cleanup();
+        }
       }
     };
 
