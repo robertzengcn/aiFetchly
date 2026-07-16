@@ -38,6 +38,23 @@ export interface ParsedFrontmatter {
 }
 
 /**
+ * Flatten a {@link ParsedFrontmatter} into the plain record shape consumed by
+ * {@link buildPromptCommandDefinition} / {@link buildAgentDefinition}
+ * (`Record<string, string | readonly string[]>`). Scalars and arrays are
+ * merged; on a key collision arrays win (matches the frontmatter grammar where
+ * a key is either scalar or array, never both). Shared so command/agent
+ * readers do not each reimplement it.
+ */
+export function frontmatterRecord(
+  parsed: ParsedFrontmatter
+): Record<string, string | readonly string[]> {
+  const record: Record<string, string | readonly string[]> = {};
+  for (const [key, value] of parsed.scalars) record[key] = value;
+  for (const [key, value] of parsed.arrays) record[key] = value;
+  return record;
+}
+
+/**
  * Parse the initial restricted frontmatter block of `text`.
  *
  * Returns null (fail closed) when:

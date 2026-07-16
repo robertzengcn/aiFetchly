@@ -7,6 +7,7 @@ import {
   type PluginManifest,
   type PluginMcpServerDeclaration,
   type PluginAgentDeclaration,
+  type PluginCommandDeclaration,
 } from "@/entityTypes/pluginTypes";
 import type { ClaudeAdaptResult } from "@/service/pluginCompat/pluginFormatTypes";
 
@@ -39,6 +40,40 @@ export interface ClaudePluginAdapterOptions {
 
 /** Key under which opaque carry-through is stashed on the manifest. */
 export const CLAUDE_OPAQUE_KEY = "__claudeOpaque__";
+
+/** Whether a manifest was produced by the Claude compatibility adapter. */
+export function isClaudeManifest(manifest: PluginManifest): boolean {
+  return manifest.format === "claude";
+}
+
+/**
+ * Read the opaque carry-through bag the adapter stashed on the manifest. Only
+ * meaningful when {@link isClaudeManifest} is true. Returns an empty record for
+ * non-Claude manifests or when nothing was carried.
+ */
+export function getClaudeOpaque(
+  manifest: PluginManifest
+): Record<string, unknown> {
+  const v = (manifest as unknown as Record<string, unknown>)[CLAUDE_OPAQUE_KEY];
+  return v && typeof v === "object" && !Array.isArray(v)
+    ? (v as Record<string, unknown>)
+    : {};
+}
+
+/**
+ * Typed accessor for the Claude `commands` declaration carried opaquely on the
+ * manifest (design §10.7). Returns undefined for non-Claude manifests or when
+ * no `commands` field was declared.
+ */
+export function getClaudeCommandDeclaration(
+  manifest: PluginManifest
+): PluginCommandDeclaration | undefined {
+  if (!isClaudeManifest(manifest)) return undefined;
+  const opaque = getClaudeOpaque(manifest);
+  const commands = opaque.commands;
+  if (commands === undefined) return undefined;
+  return commands as PluginCommandDeclaration;
+}
 
 type SkillDecl =
   | string
@@ -106,14 +141,14 @@ function normalizeAgentsField(
   // Object map: validate per-entry.
   if (raw && typeof raw === "object" && !Array.isArray(raw)) {
     const out: Record<string, { source?: string; description?: string }> = {};
-    for (const [key, val] of Object.entries(
-      raw as Record<string, unknown>
-    )) {
-      const v = val as {
-        source?: string;
-        content?: string;
-        description?: string;
-      } | undefined;
+    for (const [key, val] of Object.entries(raw as Record<string, unknown>)) {
+      const v = val as
+        | {
+            source?: string;
+            content?: string;
+            description?: string;
+          }
+        | undefined;
       if (
         v &&
         typeof v.content === "string" &&
@@ -244,7 +279,9 @@ export class ClaudePluginAdapter {
     let effectiveAgents = agentsDecl;
     if (agentsDecl === undefined) {
       try {
-        if (fs.statSync(path.join(options.pluginRoot, "agents")).isDirectory()) {
+        if (
+          fs.statSync(path.join(options.pluginRoot, "agents")).isDirectory()
+        ) {
           effectiveAgents = true;
         }
       } catch {
