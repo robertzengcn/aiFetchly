@@ -113,6 +113,21 @@ vi.mock("@/service/PluginImportService", () => ({
     })),
   },
 }));
+vi.mock("@/service/PluginInstallService", () => ({
+  PluginInstallService: class {
+    async installFromSource() {
+      return {
+        success: true,
+        plugin: {
+          name: "p",
+          version: "1.0.0",
+          skillCount: 0,
+          mcpServerCount: 0,
+        },
+      };
+    }
+  },
+}));
 vi.mock("@/service/MCPToolService", () => ({
   MCPToolService: class {
     async testConnection() {
@@ -163,6 +178,7 @@ vi.mock("@/service/UserPluginAutoInstallService", () => ({
 // Import AFTER mocks are registered.
 import { registerPluginIpcHandlers } from "@/main-process/communication/plugin-ipc";
 import { UserPluginAutoInstallService } from "@/service/UserPluginAutoInstallService";
+import { PluginComponentRegistryService } from "@/service/PluginComponentRegistryService";
 import {
   PLUGIN_LIST,
   PLUGIN_GET,
@@ -302,5 +318,46 @@ describe("plugin-ipc", () => {
       msg: expect.stringContaining("not enabled"),
       data: null,
     });
+  });
+
+  it("PLUGIN_IMPORT promotes commands/agents immediately after a successful install (PRD §9.4)", async () => {
+    aiEnabledValue = "true";
+    const applySpy = vi.mocked(
+      PluginComponentRegistryService.applyLoadedPlugins
+    );
+    applySpy.mockClear();
+    const fn = handlers.get(PLUGIN_IMPORT)!;
+    const result = await fn({}, { zipPath: "/tmp/plugin.zip" });
+    expect(result).toMatchObject({ status: true });
+    expect(applySpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("PLUGIN_INSTALL_FROM_SOURCE promotes commands/agents immediately after a successful install (PRD §9.4)", async () => {
+    aiEnabledValue = "true";
+    const applySpy = vi.mocked(
+      PluginComponentRegistryService.applyLoadedPlugins
+    );
+    applySpy.mockClear();
+    const fn = handlers.get(PLUGIN_INSTALL_FROM_SOURCE)!;
+    const result = await fn(
+      {},
+      { kind: "local-folder", folderPath: "/tmp/plugin" }
+    );
+    expect(result).toMatchObject({ status: true });
+    expect(applySpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("PLUGIN_IMPORT still returns success when post-install promotion throws (recoverable, design §11.3)", async () => {
+    aiEnabledValue = "true";
+    const applySpy = vi.mocked(
+      PluginComponentRegistryService.applyLoadedPlugins
+    );
+    applySpy.mockClear();
+    applySpy.mockRejectedValueOnce(new Error("promotion boom"));
+    const fn = handlers.get(PLUGIN_IMPORT)!;
+    const result = await fn({}, { zipPath: "/tmp/plugin.zip" });
+    // Install itself succeeded; promotion failure must not fail the install.
+    expect(result).toMatchObject({ status: true });
+    expect(applySpy).toHaveBeenCalledTimes(1);
   });
 });
