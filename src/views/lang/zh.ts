@@ -2422,7 +2422,7 @@ emailAutoReplyAudit: {
     injectionEnabled: "工作区记忆注入",
     autoDreamEnabled: "工作区自动整理",
     manualMemoryEnabled: "手动工作区记忆",
-    runAutoDream: "立即运行自动整理",
+    runAutoSummary: "RUN AUTO SUMMARY",
     autoDreamRunning: "正在整合工作区记忆...",
     autoDreamFailed: "上次自动整理运行失败。",
     autoDreamLastRun: "上次运行：{time}",

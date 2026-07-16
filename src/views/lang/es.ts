@@ -2511,7 +2511,7 @@ emailAutoReplyAudit: {
     injectionEnabled: "Inyección de memoria de workspace",
     autoDreamEnabled: "Auto-dream de workspace",
     manualMemoryEnabled: "Memoria de workspace manual",
-    runAutoDream: "Ejecutar auto-dream ahora",
+    runAutoSummary: "RUN AUTO SUMMARY",
     autoDreamRunning: "Consolidando memoria de workspace...",
     autoDreamFailed: "La última ejecución de auto-dream falló.",
     autoDreamLastRun: "Última ejecución: {time}",

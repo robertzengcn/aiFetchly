@@ -2462,7 +2462,7 @@ emailAutoReplyAudit: {
     injectionEnabled: "ワークスペース記憶の注入",
     autoDreamEnabled: "ワークスペース自動ドリーム",
     manualMemoryEnabled: "手動ワークスペース記憶",
-    runAutoDream: "今すぐ自動ドリームを実行",
+    runAutoSummary: "RUN AUTO SUMMARY",
     autoDreamRunning: "ワークスペース記憶を統合中...",
     autoDreamFailed: "前回の自動ドリーム実行が失敗しました。",
     autoDreamLastRun: "最終実行：{time}",

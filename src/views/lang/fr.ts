@@ -2495,7 +2495,7 @@ emailAutoReplyAudit: {
     injectionEnabled: "Injection de mémoire d'espace de travail",
     autoDreamEnabled: "Auto-dream d'espace de travail",
     manualMemoryEnabled: "Mémoire d'espace de travail manuelle",
-    runAutoDream: "Lancer auto-dream maintenant",
+    runAutoSummary: "RUN AUTO SUMMARY",
     autoDreamRunning: "Consolidation de la mémoire...",
     autoDreamFailed: "La dernière exécution d'auto-dream a échoué.",
     autoDreamLastRun: "Dernière exécution : {time}",
