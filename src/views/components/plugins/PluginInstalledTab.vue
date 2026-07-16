@@ -30,7 +30,7 @@
             <th>{{ t("plugins.column_version") }}</th>
             <th>{{ t("plugins.column_source") }}</th>
             <th>{{ t("plugins.column_source_path") }}</th>
-            <th>{{ t("plugins.column_format") }}</th>
+            <th>{{ t("plugins.column_sub_agent") }}</th>
             <th>{{ t("plugins.column_status") }}</th>
             <th>{{ t("plugins.column_skills") }}</th>
             <th>{{ t("plugins.column_mcp_servers") }}</th>
@@ -53,14 +53,7 @@
                 {{ t("plugins.source_path_unknown") }}
               </span>
             </td>
-            <td>
-              <v-chip
-                size="small"
-                :color="p.format === 'claude' ? 'deep-purple-lighten-3' : 'grey-lighten-1'"
-              >
-                {{ p.format === "claude" ? t("plugins.format_claude") : t("plugins.format_aifetchly") }}
-              </v-chip>
-            </td>
+            <td>{{ p.agentCount }}</td>
             <td><v-chip :color="healthColor(p)" size="small">{{ healthLabel(p) }}</v-chip></td>
             <td>{{ p.skillCount }}</td>
             <td>{{ p.mcpServerCount }}</td>
