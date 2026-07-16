@@ -579,7 +579,7 @@ export const createTranslatedRoutes = (): RouteRecordRaw[] => {
       path: "/proxy",
       name: "Proxy",
       meta: {
-        visible: true,
+        visible: false,
         title: computed(() => t("router.proxy")),
         icon: "mdi-shield-outline",
       },

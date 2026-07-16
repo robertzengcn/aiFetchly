@@ -404,16 +404,25 @@ describe("AIChatContextAssembler — custom context directive", () => {
       mode: "chat",
     });
 
-    // sysp + env context + user message
-    expect(result.messages).toHaveLength(3);
     expect(result.messages[0]).toEqual({
       role: "system",
       content: "you are helpful",
     });
-    expect(result.messages[1].role).toBe("system");
-    expect(typeof result.messages[1].content).toBe("string");
-    expect(result.messages[1].content).toContain("Environment & System Context");
-    expect(result.messages[2]).toEqual({ role: "user", content: "hello" });
+    expect(
+      result.messages.some(
+        (message) =>
+          message.role === "system" &&
+          typeof message.content === "string" &&
+          message.content.includes("Environment & System Context")
+      )
+    ).toBe(true);
+    expect(
+      result.messages.some((message) => message.content === "")
+    ).toBe(false);
+    expect(result.messages[result.messages.length - 1]).toEqual({
+      role: "user",
+      content: "hello",
+    });
   });
 
   it("skips injection when the setting value is whitespace-only", async () => {
@@ -431,15 +440,25 @@ describe("AIChatContextAssembler — custom context directive", () => {
       mode: "chat",
     });
 
-    // sysp + env context + user message
-    expect(result.messages).toHaveLength(3);
     expect(result.messages[0]).toEqual({
       role: "system",
       content: "you are helpful",
     });
-    expect(result.messages[1].role).toBe("system");
-    expect(result.messages[1].content).toContain("Environment & System Context");
-    expect(result.messages[2]).toEqual({ role: "user", content: "hello" });
+    expect(
+      result.messages.some(
+        (message) =>
+          message.role === "system" &&
+          typeof message.content === "string" &&
+          message.content.includes("Environment & System Context")
+      )
+    ).toBe(true);
+    expect(
+      result.messages.some((message) => message.content === "   \n  ")
+    ).toBe(false);
+    expect(result.messages[result.messages.length - 1]).toEqual({
+      role: "user",
+      content: "hello",
+    });
   });
 
   it("skips injection and does not throw when the setting read fails", async () => {
@@ -457,14 +476,25 @@ describe("AIChatContextAssembler — custom context directive", () => {
       mode: "chat",
     });
 
-    // Should not throw. sysp + env context + user message; directive not injected.
-    expect(result.messages).toHaveLength(3);
+    // Should not throw. Directive is not injected.
     expect(result.messages[0]).toEqual({
       role: "system",
       content: "you are helpful",
     });
-    expect(result.messages[1].role).toBe("system");
-    expect(result.messages[1].content).toContain("Environment & System Context");
-    expect(result.messages[2]).toEqual({ role: "user", content: "hello" });
+    expect(
+      result.messages.some(
+        (message) =>
+          message.role === "system" &&
+          typeof message.content === "string" &&
+          message.content.includes("Environment & System Context")
+      )
+    ).toBe(true);
+    expect(
+      result.messages.some((message) => message.content === "sqlite locked")
+    ).toBe(false);
+    expect(result.messages[result.messages.length - 1]).toEqual({
+      role: "user",
+      content: "hello",
+    });
   });
 });

@@ -204,6 +204,7 @@ export interface HookDefinitionBase {
   readonly matcher?: string;
   readonly source: HookSource;
   readonly enabled: boolean;
+  readonly trusted?: boolean;
   readonly failureMode?: HookFailureMode;
   readonly statusMessage?: string;
   /**

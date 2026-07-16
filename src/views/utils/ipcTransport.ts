@@ -181,7 +181,7 @@ class DevBrowserBridgeTransport implements RendererIpcTransport {
   private counter = 0;
 
   constructor(opts: DevBrowserBridgeTransportOptions = {}) {
-    this.fetchImpl = opts.fetch ?? fetch;
+    this.fetchImpl = opts.fetch ?? fetch.bind(globalThis);
     this.webSocketCtor = opts.WebSocket ?? WebSocket;
     this.baseUrlOverride = opts.baseUrl;
   }

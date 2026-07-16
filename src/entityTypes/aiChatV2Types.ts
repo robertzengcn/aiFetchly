@@ -95,6 +95,10 @@ export interface ChatV2MessageMetadata {
     expectedCount?: number | null;
     updatedAt: number;
   };
+  // Slash-command result rows. Present only on assistant messages rendered
+  // from a slash-command dispatch's show_result variant.
+  slashCommandResult?: boolean;
+  slashCommandName?: string;
   /** Recovery metadata persisted on the assistant row when any recovery
    * layer activated during the turn. Technical-design §15.1. */
   recovery?: ChatV2RecoveryMetadata;
@@ -121,6 +125,35 @@ export interface ChatV2HistoryRequest {
 
 export interface ChatV2ClearConversationRequest {
   conversationId: string;
+}
+
+export type WorkspaceTrustScope = "instructions" | "all";
+
+export interface WorkspaceWatchAcquireRequest {
+  readonly conversationId: string;
+  readonly workspaceId?: string;
+}
+
+export interface WorkspaceWatchReleaseRequest {
+  readonly conversationId: string;
+  readonly workspaceId?: string;
+}
+
+export interface WorkspaceTrustSetRequest {
+  readonly workspaceId: string;
+  readonly scope: WorkspaceTrustScope;
+}
+
+export interface WorkspaceWatchAcquireResponse {
+  readonly workspaceId: string;
+}
+
+export interface WorkspaceTrustPreviewResponse {
+  readonly content: string;
+}
+
+export interface WorkspaceTrustSetResponse {
+  readonly ok: boolean;
 }
 
 /** Conversation summary for the sidebar. */

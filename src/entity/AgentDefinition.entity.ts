@@ -6,6 +6,8 @@ import { Order } from "./order.decorator";
 @Entity("agent_definitions")
 @Index(["agentId"], { unique: true })
 @Index(["status"])
+@Index(["source"])
+@Index(["pluginName", "status"])
 export class AgentDefinitionEntity extends AuditableEntity {
   @PrimaryGeneratedColumn()
   id!: number;
@@ -61,4 +63,28 @@ export class AgentDefinitionEntity extends AuditableEntity {
   @Order(13)
   @Column("varchar", { length: 32, nullable: false, default: "active" })
   status!: string;
+
+  @Order(14)
+  @Column("varchar", { length: 32, nullable: false, default: "built-in" })
+  source!: string;
+
+  @Order(15)
+  @Column("varchar", { length: 100, nullable: true })
+  pluginName?: string | null;
+
+  @Order(16)
+  @Column("text", { nullable: true })
+  pluginComponentPath?: string | null;
+
+  @Order(17)
+  @Column("text", { nullable: true })
+  manifestJson?: string | null;
+
+  @Order(18)
+  @Column("varchar", { length: 32, nullable: false, default: "healthy" })
+  health!: string;
+
+  @Order(19)
+  @Column("text", { nullable: true })
+  lastError?: string | null;
 }

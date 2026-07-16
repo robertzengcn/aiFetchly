@@ -302,6 +302,60 @@ export const AI_CHAT_V2_GET_TOOL_APPROVAL_MODE =
 export const AI_CHAT_V2_SET_TOOL_APPROVAL_MODE =
   "ai-chat-v2:set-tool-approval-mode";
 
+// ==================== Slash Command + AiFetchly Config Channels ==============
+// Phase 13 (Plan 03b) — see docs/prd/aifetchly-local-extensibility-technical-design.md §17.1.
+//
+// TRS-05 Strategy A: every invoke handler below uses registerValidatedHandler
+// (NOT registerAiValidatedHandler). Built-in dispatch returns show_result
+// (no AI call); prompt commands return submit_prompt and the renderer submits
+// via AI_CHAT_V2_STREAM which already gates USER_AI_ENABLED FIRST (verified
+// at ai-chat-v2-ipc.ts handleStream lines 385-393).
+/** Renderer->Main: list renderer-safe slash commands (CMD-07 ranking). */
+export const SLASH_COMMAND_LIST = "slash-command:list";
+/** Renderer->Main: dispatch one composer submission (CMD-04). */
+export const SLASH_COMMAND_DISPATCH = "slash-command:dispatch";
+/** Renderer->Main: force a config rescan (DX-02 + success criterion 3). */
+export const AIFETCHLY_CONFIG_RELOAD = "aifetchly-config:reload";
+/** Renderer->Main: read config status counts (DX-02). */
+export const AIFETCHLY_CONFIG_STATUS = "aifetchly-config:status";
+/**
+ * Main->Renderer EVENT (NOT an invoke handler): emitted via
+ * win.webContents.send after a successful reload so the renderer refreshes
+ * its command cache. Payload is JSON-stringified {source, summary}.
+ *
+ * Phase 14 (Plan 14-03 D-04): the payload is additively extended with
+ * optional `workspaceId` + `diff` for workspace-originated changes. The
+ * existing `{source: "user", summary}` shape is preserved; subscribers
+ * that ignore the payload (Phase 13-04 AiChatV2 subscriber) keep working.
+ */
+export const AIFETCHLY_CONFIG_CHANGED = "aifetchly-config:changed";
+
+// ==================== Workspace Watcher Channels (Phase 14 — Plan 03) =======
+// Renderer->Main invoke handlers that drive the workspace-config watcher
+// lifecycle. See docs/prd/aifetchly-local-extensibility-technical-design.md
+// §10.1 (chat-open acquire flow), §10.4 (switch flow), §13 (trust prompt IPC).
+//
+// Trust boundary (CFG-02): the handlers NEVER trust a renderer-provided
+// workspaceRoot — WorkspaceResolver.resolve(conversationId) is the sole
+// source of truth for the watched path. The renderer may pass a workspaceId
+// hint (the string returned by acquire), but main always re-resolves the
+// root from the approved WorkspaceRecord before forwarding to the manager.
+/** Renderer->Main: acquire a watch for the active workspace (chat-open). */
+export const AIFETCHLY_WORKSPACE_WATCH_ACQUIRE =
+  "aifetchly-workspace-watch:acquire";
+/** Renderer->Main: release a watch consumer (chat-close / unmount). */
+export const AIFETCHLY_WORKSPACE_WATCH_RELEASE =
+  "aifetchly-workspace-watch:release";
+/**
+ * Renderer->Main: read the trusted workspace AGENTS.md content body for the
+ * trust-prompt preview (TRS-07 — renderer never reads the file directly;
+ * main returns the content string, never a path).
+ */
+export const AIFETCHLY_WORKSPACE_TRUST_PREVIEW =
+  "aifetchly-workspace-trust:preview";
+/** Renderer->Main: set workspace trust scope (TRS-03 prompt actions). */
+export const AIFETCHLY_WORKSPACE_TRUST_SET = "aifetchly-workspace-trust:set";
+
 // MCP Tool Management Channels
 export const MCP_TOOL_LIST = "mcp:tool:list";
 export const MCP_TOOL_ADD = "mcp:tool:add";
@@ -405,6 +459,16 @@ export const AGENT_TASK_TRANSCRIPT = "agent-runtime:task-transcript";
 export const AGENT_TASK_LIST = "agent-runtime:task-list";
 export const AGENT_RESUME_TOOL_AFTER_PERMISSION =
   "agent-runtime:resume-tool-after-permission";
+
+// ==================== Agent Definition Management Channels ====================
+// Management-only (CRUD/enablement). NOT AI execution channels — handlers use
+// registerValidatedHandler, not registerAiValidatedHandler (design §15.5).
+export const AGENT_MANAGEMENT_LIST = "agent-definition:list";
+export const AGENT_MANAGEMENT_GET = "agent-definition:get";
+export const AGENT_MANAGEMENT_CREATE = "agent-definition:create";
+export const AGENT_MANAGEMENT_UPDATE = "agent-definition:update";
+export const AGENT_MANAGEMENT_TOGGLE = "agent-definition:toggle";
+export const AGENT_MANAGEMENT_DELETE = "agent-definition:delete";
 
 // ==================== Plugin Management Channels (Design §10) ====================
 export const PLUGIN_IMPORT = "plugin:import";

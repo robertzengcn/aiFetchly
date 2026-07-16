@@ -1,26 +1,33 @@
+import * as fs from "fs";
+import * as path from "path";
 import {
   PLUGIN_NAME_REGEX,
   resolvePluginRelativePath,
   type PluginError,
   type PluginManifest,
   type PluginMcpServerDeclaration,
+  type PluginAgentDeclaration,
 } from "@/entityTypes/pluginTypes";
 import type { ClaudeAdaptResult } from "@/service/pluginCompat/pluginFormatTypes";
 
 /**
  * Pure translator: Claude manifest JSON → AiFetchly PluginManifest + extras.
  *
- * Rules (Tech Design §5):
+ * Rules (Tech Design §5, §9.2):
  *   - name required, must match PLUGIN_NAME_REGEX.
  *   - version optional in Claude; defaults to "0.0.0".
  *   - description optional in Claude; defaults to "".
  *   - skills normalization: true → ["skills/"]; string → [string];
  *     string[] → string[] (deduped); object map → ["skills/<key>/SKILL.md", ...].
+ *   - agents normalization: true → default "agents/"; string → [string];
+ *     string[] → string[]; object map → "agents/<key>.md" unless a value has
+ *     a string `source`. Inline `content` is unsupported (file imports only).
+ *     When `agents` is absent but an `agents/` dir exists, auto-detect it.
  *   - mcpServers: when `mcp` is an object, use inline (alternative B).
  *     Otherwise leave mcpServersPaths empty; the loader checks for sibling
  *     .mcp.json at the plugin root.
  *   - hooks path recorded as opaque (Phase 3 will consume).
- *   - commands / agents / outputStyles / lsp carried opaquely.
+ *   - commands / outputStyles / lsp carried opaquely.
  *
  * Internal key `__claudeOpaque__` carries fields the runtime doesn't yet
  * consume. Read it only when manifest.format === "claude".
@@ -38,6 +45,8 @@ type SkillDecl =
   | readonly string[]
   | true
   | Record<string, { source?: string; content?: string; description?: string }>;
+
+type AgentDecl = PluginAgentDeclaration;
 
 function normalizeSkillsField(
   raw: SkillDecl | undefined,
@@ -83,6 +92,106 @@ function normalizeSkillsField(
   return out;
 }
 
+/**
+ * Normalize the Claude `agents` field. Returns the normalized declaration
+ * (string | string[] | true | object map), or undefined when nothing is
+ * declared. Path safety is validated per entry; object-map `content`-only
+ * entries are rejected (file imports only).
+ */
+function normalizeAgentsField(
+  raw: AgentDecl | undefined,
+  pluginRoot: string,
+  errors: PluginError[]
+): PluginAgentDeclaration | undefined {
+  // Object map: validate per-entry.
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+    const out: Record<string, { source?: string; description?: string }> = {};
+    for (const [key, val] of Object.entries(
+      raw as Record<string, unknown>
+    )) {
+      const v = val as {
+        source?: string;
+        content?: string;
+        description?: string;
+      } | undefined;
+      if (
+        v &&
+        typeof v.content === "string" &&
+        (typeof v.source !== "string" || v.source.length === 0)
+      ) {
+        errors.push({
+          code: "agent-unsupported-field",
+          componentType: "agent",
+          componentName: key,
+          message: `Agent "${key}" uses inline "content", which is not supported (file imports only).`,
+          recoverable: false,
+        });
+        continue;
+      }
+      if (v && typeof v.source === "string") {
+        try {
+          resolvePluginRelativePath(pluginRoot, v.source);
+        } catch {
+          errors.push({
+            code: "agent-path-invalid",
+            componentType: "agent",
+            componentName: key,
+            path: v.source,
+            message: `Agent source path "${v.source}" escapes the plugin directory.`,
+            recoverable: false,
+          });
+          continue;
+        }
+        out[key] = {
+          source: v.source,
+          ...(v.description ? { description: v.description } : {}),
+        };
+      } else {
+        out[key] = v?.description ? { description: v.description } : {};
+      }
+    }
+    return out;
+  }
+
+  if (raw === undefined) return undefined;
+  if (raw === true) return true;
+
+  if (typeof raw === "string") {
+    try {
+      resolvePluginRelativePath(pluginRoot, raw);
+    } catch {
+      errors.push({
+        code: "agent-path-invalid",
+        componentType: "agent",
+        path: raw,
+        message: `Agent path "${raw}" escapes the plugin directory.`,
+        recoverable: false,
+      });
+    }
+    return raw;
+  }
+
+  if (Array.isArray(raw)) {
+    for (const p of raw) {
+      if (typeof p !== "string") continue;
+      try {
+        resolvePluginRelativePath(pluginRoot, p);
+      } catch {
+        errors.push({
+          code: "agent-path-invalid",
+          componentType: "agent",
+          path: p,
+          message: `Agent path "${p}" escapes the plugin directory.`,
+          recoverable: false,
+        });
+      }
+    }
+    return [...raw];
+  }
+
+  return undefined;
+}
+
 export class ClaudePluginAdapter {
   static adapt(
     raw: unknown,
@@ -126,6 +235,23 @@ export class ClaudePluginAdapter {
       errors
     );
 
+    // Agents: normalize declared form; auto-detect agents/ when absent.
+    const agentsDecl = normalizeAgentsField(
+      m.agents as AgentDecl | undefined,
+      options.pluginRoot,
+      errors
+    );
+    let effectiveAgents = agentsDecl;
+    if (agentsDecl === undefined) {
+      try {
+        if (fs.statSync(path.join(options.pluginRoot, "agents")).isDirectory()) {
+          effectiveAgents = true;
+        }
+      } catch {
+        // no agents/ dir — leave undefined
+      }
+    }
+
     // Inline mcp (alternative B) — only when it's a non-array object.
     let inlineMcp: Record<string, PluginMcpServerDeclaration> | undefined;
     if (m.mcp && typeof m.mcp === "object" && !Array.isArray(m.mcp)) {
@@ -134,15 +260,9 @@ export class ClaudePluginAdapter {
 
     const hooksPath = typeof m.hooks === "string" ? m.hooks : undefined;
 
-    // Opaque carry-through.
+    // Opaque carry-through (agents is now a first-class field, not opaque).
     const opaque: Record<string, unknown> = {};
-    for (const key of [
-      "commands",
-      "agents",
-      "outputStyles",
-      "lsp",
-      "output-styles",
-    ]) {
+    for (const key of ["commands", "outputStyles", "lsp", "output-styles"]) {
       if (m[key] !== undefined) {
         opaque[key] = m[key];
       }
@@ -162,6 +282,7 @@ export class ClaudePluginAdapter {
       ...(typeof m.repository === "string" ? { repository: m.repository } : {}),
       skills: skillsPaths,
       mcpServers: inlineMcp ? Object.keys(inlineMcp) : [],
+      ...(effectiveAgents !== undefined ? { agents: effectiveAgents } : {}),
       [CLAUDE_OPAQUE_KEY]: opaque,
     } as unknown as PluginManifest;
 

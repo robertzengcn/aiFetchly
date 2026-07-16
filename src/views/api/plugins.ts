@@ -44,8 +44,13 @@ export interface PluginSummary {
   health: PluginHealth;
   skillCount: number;
   mcpServerCount: number;
+  agentCount: number;
   permissions: string[];
   lastUpdated: string;
+  sourceKind?: PluginSourceKind;
+  sourceUri?: string;
+  sourceRef?: string;
+  installPath?: string;
 }
 
 export interface PluginSkillComponent {
@@ -66,16 +71,26 @@ export interface PluginMcpServerComponent {
   error?: string;
 }
 
+export interface PluginAgentComponent {
+  id: string;
+  name: string;
+  description: string;
+  enabled: boolean;
+  mode: string;
+  toolCount: number;
+  componentPath: string;
+  health: string;
+  error?: string;
+}
+
 export interface PluginDetail extends PluginSummary {
   description: string;
   author?: string;
   skills: PluginSkillComponent[];
   mcpServers: PluginMcpServerComponent[];
+  agents: PluginAgentComponent[];
   errors: Array<{ code: string; message: string; recoverable: boolean }>;
   manifest: Record<string, unknown>;
-  sourceKind?: PluginSourceKind;
-  sourceUri?: string;
-  sourceRef?: string;
   marketplaceName?: string;
   entryName?: string;
   entryVersion?: string;

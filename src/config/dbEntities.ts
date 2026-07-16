@@ -60,6 +60,7 @@ import { AIMemoryConsolidationRunEntity } from "@/entity/AIMemoryConsolidationRu
 import { AIWorkspaceMemoryEntity } from "@/entity/AIWorkspaceMemory.entity";
 import { AIWorkspaceMemoryConsolidationRunEntity } from "@/entity/AIWorkspaceMemoryConsolidationRun.entity";
 import { WorkspaceEntity } from "@/entity/Workspace.entity";
+import { AIFetchlyWorkspaceTrustEntity } from "@/entity/AIFetchlyWorkspaceTrust.entity";
 import { HookConfigEntity } from "@/entity/HookConfig.entity";
 import { HookAuditEntryEntity } from "@/entity/HookAuditEntry.entity";
 import { AIChatPlanEntity } from "@/entity/AIChatPlan.entity";
@@ -167,6 +168,7 @@ export const DB_ENTITIES = [
   AIWorkspaceMemoryEntity,
   AIWorkspaceMemoryConsolidationRunEntity,
   WorkspaceEntity,
+  AIFetchlyWorkspaceTrustEntity,
   HookConfigEntity,
   HookAuditEntryEntity,
 ];

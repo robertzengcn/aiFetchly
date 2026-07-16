@@ -97,14 +97,22 @@ function marketError(
   return { code, message, recoverable: false, ...extras };
 }
 
+function containsControlCharacter(value: string): boolean {
+  for (const char of value) {
+    const code = char.charCodeAt(0);
+    if (code === 10 || code === 13 || code <= 31) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /**
  * Two-stage: (1) zod parse of the raw JSON string, (2) post-schema checks
  * (duplicate entry names, relative-source shape, control chars). Unknown
  * fields are preserved (passthrough) for future Claude compatibility.
  */
-export function validateMarketplaceManifest(
-  rawJson: string
-): ValidationResult {
+export function validateMarketplaceManifest(rawJson: string): ValidationResult {
   if (rawJson.length > MARKETPLACE_LIMITS.maxManifestBytes) {
     return {
       success: false,
@@ -123,7 +131,12 @@ export function validateMarketplaceManifest(
   } catch {
     return {
       success: false,
-      errors: [marketError("marketplace-manifest-invalid-json", "Manifest is not valid JSON.")],
+      errors: [
+        marketError(
+          "marketplace-manifest-invalid-json",
+          "Manifest is not valid JSON."
+        ),
+      ],
     };
   }
 
@@ -165,8 +178,7 @@ export function validateMarketplaceManifest(
           )
         );
       }
-  // eslint-disable-next-line no-control-regex
-      if (/[\r\n\x00-\x1f]/.test(entry.source)) {
+      if (containsControlCharacter(entry.source)) {
         errors.push(
           marketError(
             "marketplace-plugin-entry-invalid",

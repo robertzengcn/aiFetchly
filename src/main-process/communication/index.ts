@@ -34,6 +34,7 @@ import { registerGoogleMapsHandlers } from "@/main-process/communication/googleM
 import { registerYandexMapsHandlers } from "@/main-process/communication/yandexMaps-ipc";
 import { registerAiMessageTaskIpcHandlers } from "@/main-process/communication/aiMessageTask-ipc";
 import { registerAgentRuntimeIpcHandlers } from "@/main-process/communication/agent-runtime-ipc";
+import { registerAgentDefinitionIpcHandlers } from "@/main-process/communication/agent-definition-ipc";
 import { registerPluginIpcHandlers } from "@/main-process/communication/plugin-ipc";
 import { registerPluginMarketplaceIpcHandlers } from "@/main-process/communication/plugin-marketplace-ipc";
 import { registerAIUserMemoryIpcHandlers } from "@/main-process/communication/ai-user-memory-ipc";
@@ -42,6 +43,9 @@ import { registerAIWorkspaceMemoryIpcHandlers } from "@/main-process/communicati
 import { registerEmailReceiveIpcHandlers } from "@/main-process/communication/emailReceive-ipc";
 import { registerDiagnosticsIpcHandlers } from "@/main-process/communication/diagnostics-ipc";
 import { registerHooksIpcHandlers } from "@/main-process/communication/hooks-ipc";
+import { registerSlashCommandHandlers } from "@/main-process/communication/slash-command-ipc";
+import { registerWorkspaceWatchHandlers } from "@/main-process/communication/workspace-watch-ipc";
+import { initWorkspaceWatchManager } from "@/service/workspaceWatch/WorkspaceWatchManagerSingleton";
 
 type GlobalIpcState = typeof globalThis & {
   __aifetchlyIpcHandlersRegistered?: boolean;
@@ -86,6 +90,7 @@ export function registerCommunicationIpcHandlers(win: BrowserWindow) {
     registerYandexMapsHandlers();
     registerAiMessageTaskIpcHandlers();
     registerAgentRuntimeIpcHandlers();
+    registerAgentDefinitionIpcHandlers();
     registerPluginIpcHandlers();
     registerPluginMarketplaceIpcHandlers();
     registerAIUserMemoryIpcHandlers();
@@ -94,6 +99,9 @@ export function registerCommunicationIpcHandlers(win: BrowserWindow) {
     registerEmailReceiveIpcHandlers();
     registerDiagnosticsIpcHandlers();
     registerHooksIpcHandlers();
+    registerSlashCommandHandlers(win);
+    const workspaceWatchManager = initWorkspaceWatchManager(win);
+    registerWorkspaceWatchHandlers(win, workspaceWatchManager);
     AsyncMsg();
   } catch (e) {
     log.info("registerCommunicationIpcHandlers error:");

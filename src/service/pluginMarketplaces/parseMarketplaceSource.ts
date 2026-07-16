@@ -14,26 +14,46 @@ function err(message: string): PluginMarketplaceError {
   return { code: "marketplace-source-invalid", message, recoverable: false };
 }
 
+function containsControlCharacter(value: string): boolean {
+  for (const char of value) {
+    const code = char.charCodeAt(0);
+    if (code === 10 || code === 13 || code <= 31) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /**
  * Parse a user-provided marketplace source string into a structured source.
  * Rules: trim; reject empty / control chars; classify by shape; resolve
  * relative local paths to absolute.
  */
-export function parseMarketplaceSource(raw: string, ref?: string): ParseSourceResult {
+export function parseMarketplaceSource(
+  raw: string,
+  ref?: string
+): ParseSourceResult {
   const input = (raw ?? "").trim();
   if (input.length === 0) {
     return { success: false, errors: [err("Marketplace source is empty.")] };
   }
-  // eslint-disable-next-line no-control-regex
-  if (/[\r\n\x00-\x1f]/.test(input)) {
-    return { success: false, errors: [err("Marketplace source contains control characters.")] };
+  if (containsControlCharacter(input)) {
+    return {
+      success: false,
+      errors: [err("Marketplace source contains control characters.")],
+    };
   }
-  // eslint-disable-next-line no-control-regex
-  if (ref && /[\r\n\x00-\x1f]/.test(ref)) {
-    return { success: false, errors: [err("Marketplace ref contains control characters.")] };
+  if (ref && containsControlCharacter(ref)) {
+    return {
+      success: false,
+      errors: [err("Marketplace ref contains control characters.")],
+    };
   }
 
-  const withRef = (kind: PluginMarketplaceSourceKind, uri: string): PluginMarketplaceSource => ({
+  const withRef = (
+    kind: PluginMarketplaceSourceKind,
+    uri: string
+  ): PluginMarketplaceSource => ({
     kind,
     uri,
     ...(ref ? { ref } : {}),
@@ -41,7 +61,12 @@ export function parseMarketplaceSource(raw: string, ref?: string): ParseSourceRe
 
   // Plain http:// is always rejected.
   if (input.startsWith("http://")) {
-    return { success: false, errors: [err("Plain HTTP marketplace sources are not allowed. Use HTTPS.")] };
+    return {
+      success: false,
+      errors: [
+        err("Plain HTTP marketplace sources are not allowed. Use HTTPS."),
+      ],
+    };
   }
 
   // git@ ssh style
@@ -60,19 +85,29 @@ export function parseMarketplaceSource(raw: string, ref?: string): ParseSourceRe
   }
 
   // GitHub shorthand owner/repo (no slashes elsewhere, no spaces).
-  if (/^[a-z0-9][a-z0-9.-]*\/[a-z0-9_.-]+$/i.test(input) && !input.includes("://")) {
+  if (
+    /^[a-z0-9][a-z0-9.-]*\/[a-z0-9_.-]+$/i.test(input) &&
+    !input.includes("://")
+  ) {
     return { success: true, source: withRef("github", input) };
   }
 
   // https://.../marketplace.json (direct URL)
-  if (input.startsWith("https://") && /marketplace\.json(\?.*)?$/i.test(input)) {
+  if (
+    input.startsWith("https://") &&
+    /marketplace\.json(\?.*)?$/i.test(input)
+  ) {
     return { success: true, source: withRef("url", input) };
   }
 
   // Local existing file named marketplace.json
   try {
     const abs = path.resolve(input);
-    if (fs.existsSync(abs) && fs.statSync(abs).isFile() && input.toLowerCase().endsWith("marketplace.json")) {
+    if (
+      fs.existsSync(abs) &&
+      fs.statSync(abs).isFile() &&
+      input.toLowerCase().endsWith("marketplace.json")
+    ) {
       return { success: true, source: withRef("local-file", abs) };
     }
     if (fs.existsSync(abs) && fs.statSync(abs).isDirectory()) {
@@ -94,5 +129,8 @@ export function parseMarketplaceSource(raw: string, ref?: string): ParseSourceRe
     };
   }
 
-  return { success: false, errors: [err(`Unrecognized marketplace source: "${input}".`)] };
+  return {
+    success: false,
+    errors: [err(`Unrecognized marketplace source: "${input}".`)],
+  };
 }

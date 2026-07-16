@@ -53,6 +53,8 @@ export interface HookRegistryApi {
   registerUserHook(hook: HookDefinition): void;
   replaceUserHooks(hooks: HookDefinition[]): void;
   clearSessionHooks(sessionId: string): void;
+  replaceSource(sourceId: string, hooks: readonly HookDefinition[]): void;
+  unregisterSource(sourceId: string): void;
   getMatchingHooks(input: HookLookupInput): readonly HookDefinition[];
   listAll(filter?: ListAllFilter): readonly HookDefinition[];
   /**
@@ -76,6 +78,7 @@ interface RegistryEntry {
 
 class HookRegistryImpl implements HookRegistryApi {
   private readonly byEvent = new Map<HookEventName, RegistryEntry[]>();
+  private readonly sourceIndex = new Map<string, Set<string>>();
   private seq = 0;
 
   registerBuiltinHook(hook: CallbackHookDefinition): void {
@@ -119,6 +122,27 @@ class HookRegistryImpl implements HookRegistryApi {
     }
   }
 
+  replaceSource(sourceId: string, hooks: readonly HookDefinition[]): void {
+    const existing = this.sourceIndex.get(sourceId);
+    if (existing) {
+      for (const id of existing) {
+        this.removeHookIdFromAllEvents(id);
+      }
+    }
+
+    const next = new Set<string>();
+    for (const hook of hooks) {
+      const copy = { ...hook } as HookDefinition;
+      this.push(copy);
+      next.add(copy.id);
+    }
+    this.sourceIndex.set(sourceId, next);
+  }
+
+  unregisterSource(sourceId: string): void {
+    this.replaceSource(sourceId, []);
+  }
+
   getMatchingHooks(input: HookLookupInput): readonly HookDefinition[] {
     const list = this.byEvent.get(input.eventName);
     if (!list || list.length === 0) return [];
@@ -129,6 +153,8 @@ class HookRegistryImpl implements HookRegistryApi {
     for (const entry of list) {
       if (!entry.hook.enabled) continue;
       if (entry.sessionId && input.sessionId !== entry.sessionId) continue;
+      if (entry.hook.type === "command" && entry.hook.trusted === false)
+        continue;
       if (!matchesHookMatcher(entry.hook.matcher, input.matchQuery ?? ""))
         continue;
       if (!matchesHookIfCondition(entry.hook.if, input.toolInput))
@@ -197,7 +223,18 @@ class HookRegistryImpl implements HookRegistryApi {
 
   resetForTests(): void {
     this.byEvent.clear();
+    this.sourceIndex.clear();
     this.seq = 0;
+  }
+
+  private removeHookIdFromAllEvents(id: string): void {
+    for (const list of this.byEvent.values()) {
+      for (let i = list.length - 1; i >= 0; i--) {
+        if (list[i].hook.id === id) {
+          list.splice(i, 1);
+        }
+      }
+    }
   }
 
   private push(hook: HookDefinition, sessionId?: string): void {

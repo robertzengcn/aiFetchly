@@ -13,13 +13,15 @@
  * prose rather than a raw blob.
  */
 const SECRET_PATTERNS: RegExp[] = [
-  /sk-[A-Za-z0-9]{10,}/,
-  /api[_-]?key/i,
-  /access[_-]?token/i,
-  /refresh[_-]?token/i,
+  /\bsk-[A-Za-z0-9_-]{10,}\b/,
+  /api[\s_-]?key/i,
+  /access[\s_-]?token/i,
+  /refresh[\s_-]?token/i,
+  /authorization\s*:\s*bearer\s+\S+/i,
+  /\bbearer\s+[A-Za-z0-9._~+/-]{16,}={0,2}\b/i,
   /password/i,
   /cookie/i,
-  /^eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/,
+  /\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/,
   /[A-Za-z0-9+/]{40,}={0,2}/,
 ];
 

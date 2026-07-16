@@ -80,6 +80,7 @@ export const constantRoutes: RouteRecordRaw[] = [
   {
     path: "/systemsetting",
     name: "system_setting",
+    redirect: "/systemsetting/index",
     meta: {
       visible: false,
       title: "route.system_setting",
@@ -147,6 +148,22 @@ export const constantRoutes: RouteRecordRaw[] = [
         component: () => import("@/views/pages/systemsetting/plugins.vue"),
         children: [],
       },
+      {
+        path: "subagents",
+        name: "system_setting_subagents",
+        meta: {
+          title: "route.subagents",
+          icon: "mdi-robot-outline",
+          keepAlive: false,
+          visible: false,
+          aiNavigable: true,
+          aiAliases: ["subagents", "agents", "agent management"],
+          aiDescription:
+            "Manage built-in, plugin-installed, and manual subagents",
+        },
+        component: () => import("@/views/pages/systemsetting/subagents.vue"),
+        children: [],
+      },
     ],
   },
 
@@ -185,6 +202,9 @@ export const constantRoutes: RouteRecordRaw[] = [
           visible: true,
           title: "route.campaign_list",
           icon: "mdi-format-list-bulleted",
+          aiNavigable: true,
+          aiAliases: ["campaign list", "campaigns", "marketing campaign"],
+          aiDescription: "View and manage marketing campaigns",
         },
       },
     ],
@@ -681,6 +701,17 @@ export const constantRoutes: RouteRecordRaw[] = [
           visible: true,
           title: "route.email_service",
           icon: "mdi-email-sync",
+          aiNavigable: true,
+          aiAliases: [
+            "email service",
+            "email edit",
+            "email settings",
+            "mailbox settings",
+            "smtp settings",
+            "sending mailbox",
+          ],
+          aiDescription:
+            "Manage email sending service accounts, sending mailbox settings, and SMTP configuration",
         },
         component: () =>
           import(
@@ -771,7 +802,7 @@ export const constantRoutes: RouteRecordRaw[] = [
     path: "/proxy",
     name: "Proxy",
     meta: {
-      visible: true,
+      visible: false,
       title: "route.proxy",
       icon: "mdi-shield-outline",
     },
@@ -848,7 +879,7 @@ export const constantRoutes: RouteRecordRaw[] = [
     path: "/skills",
     name: "Skills",
     meta: {
-      visible: true,
+      visible: false,
       title: "route.skills",
       icon: "mdi-lightning-bolt",
     },
@@ -859,7 +890,7 @@ export const constantRoutes: RouteRecordRaw[] = [
         component: () => import("@/views/pages/systemsetting/skills.vue"),
         name: "SkillsManagement",
         meta: {
-          visible: true,
+          visible: false,
           title: "route.skills_management",
           icon: "mdi-lightning-bolt",
         },
@@ -998,6 +1029,7 @@ export const constantRoutes: RouteRecordRaw[] = [
       title: "route.login",
       icon: "mdi-shield-account",
       visible: false,
+      aiNavigable: false,
     },
     component: () => import("@/views/pages/login/login.vue"),
   },

@@ -19,6 +19,9 @@ const DEF: AgentDefinitionView = {
   maxContinueCalls: 8,
   outputSchema: { type: "object", properties: { x: { type: "string" } } },
   status: "active",
+  source: "built-in",
+  health: "healthy",
+  manifest: {},
 };
 
 const PACKET: AgentTaskPacket = {

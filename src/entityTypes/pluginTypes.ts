@@ -1,4 +1,5 @@
 import * as path from "path";
+import * as fs from "fs";
 
 /**
  * Plugin Management System — shared type contracts.
@@ -46,6 +47,7 @@ export interface PluginManifest {
   readonly dependencies?: readonly PluginDependency[];
   readonly homepage?: string;
   readonly repository?: string;
+  readonly agents?: PluginAgentDeclaration;
   /** Unknown top-level fields are allowed but preserved under diagnostics only. */
   readonly [extra: string]: unknown;
 }
@@ -55,6 +57,17 @@ export interface PluginDependency {
   readonly version?: string;
   readonly optional?: boolean;
 }
+
+/**
+ * Plugin agent declaration shape. Native (aifetchly) format uses an array of
+ * relative path strings; Claude format additionally allows `true` (auto-detect
+ * `agents/`), a single string, or an object map of `{ source?, content?, description? }`.
+ */
+export type PluginAgentDeclaration =
+  | string
+  | readonly string[]
+  | true
+  | Record<string, { source?: string; content?: string; description?: string }>;
 
 // ---------------------------------------------------------------------------
 // MCP server declaration (Design §4.3)
@@ -103,6 +116,7 @@ export interface PluginComponentState {
       readonly toolConfig?: Record<string, PluginMcpToolConfig>;
     }
   >;
+  readonly agents?: Record<string, PluginComponentStateEntry>;
 }
 
 // ---------------------------------------------------------------------------
@@ -132,12 +146,18 @@ export type PluginErrorCode =
   | "claude-frontmatter-missing-field"
   | "mcp-options-missing"
   | "plugin-identifier-invalid"
+  | "agent-manifest-invalid"
+  | "agent-frontmatter-invalid"
+  | "agent-frontmatter-missing-field"
+  | "agent-name-conflict"
+  | "agent-path-invalid"
+  | "agent-unsupported-field"
   | "unknown";
 
 export interface PluginError {
   readonly code: PluginErrorCode;
   readonly pluginName?: string;
-  readonly componentType?: "plugin" | "skill" | "mcpServer";
+  readonly componentType?: "plugin" | "skill" | "mcpServer" | "agent";
   readonly componentName?: string;
   readonly path?: string;
   readonly message: string;
@@ -159,8 +179,13 @@ export interface PluginSummary {
   readonly format?: PluginFormat;
   readonly skillCount: number;
   readonly mcpServerCount: number;
+  readonly agentCount: number;
   readonly permissions: readonly string[];
   readonly lastUpdated: string;
+  readonly sourceKind?: PluginSourceKind;
+  readonly sourceUri?: string;
+  readonly sourceRef?: string;
+  readonly installPath?: string;
 }
 
 export interface PluginSkillComponent {
@@ -180,16 +205,26 @@ export interface PluginMcpServerComponent {
   readonly error?: string;
 }
 
+export interface PluginAgentComponent {
+  readonly id: string;
+  readonly name: string;
+  readonly description: string;
+  readonly enabled: boolean;
+  readonly mode: string;
+  readonly toolCount: number;
+  readonly componentPath: string;
+  readonly health: string;
+  readonly error?: string;
+}
+
 export interface PluginDetail extends PluginSummary {
   readonly description: string;
   readonly author?: string;
   readonly skills: readonly PluginSkillComponent[];
   readonly mcpServers: readonly PluginMcpServerComponent[];
+  readonly agents: readonly PluginAgentComponent[];
   readonly errors: readonly PluginError[];
   readonly manifest: Record<string, unknown>;
-  readonly sourceKind?: PluginSourceKind;
-  readonly sourceUri?: string;
-  readonly sourceRef?: string;
 }
 
 export interface PluginValidationResult {
@@ -253,6 +288,7 @@ export interface PluginUninstallResult {
   readonly removedPlugin: boolean;
   readonly removedSkillNames: readonly string[];
   readonly removedMcpServerNames: readonly string[];
+  readonly removedAgentIds: readonly string[];
   readonly errors: readonly PluginError[];
 }
 
@@ -287,8 +323,32 @@ export function resolvePluginRelativePath(
 ): string {
   const root = path.resolve(pluginRoot);
   const resolved = path.resolve(path.join(root, relativePath));
+  // Lexical containment: stops "../" traversal.
   if (resolved !== root && !resolved.startsWith(`${root}${path.sep}`)) {
     throw new Error(`Path "${relativePath}" escapes plugin directory`);
+  }
+  // Symlink resistance: when the target exists, verify its real (link-resolved)
+  // path is still inside the real plugin root, so a symlinked entry pointing
+  // outside the plugin dir cannot be read during import. ENOENT/EACCES defer
+  // to the caller's own existence check.
+  let realRoot = root;
+  try {
+    realRoot = fs.realpathSync(root);
+  } catch {
+    // root may be hypothetical in some call paths; fall back to lexical root
+  }
+  try {
+    const real = fs.realpathSync(resolved);
+    if (real !== realRoot && !real.startsWith(`${realRoot}${path.sep}`)) {
+      throw new Error(`Path "${relativePath}" escapes plugin directory`);
+    }
+  } catch (err) {
+    // Propagate our own escape error and any unexpected fs error; only defer
+    // missing/inaccessible targets to the caller.
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code !== "ENOENT" && code !== "EACCES") {
+      throw err;
+    }
   }
   return resolved;
 }

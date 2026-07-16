@@ -56,6 +56,7 @@
           density="compact"
           hide-details
           inset
+          color="primary"
           class="wm-panel__archived-toggle"
         />
       </div>
@@ -466,7 +467,7 @@ const showArchivedText = computed(
 );
 const loadingText = computed(() => t("common.loading") || "Loading...");
 const runAutoDreamText = computed(
-  () => t("workspaceMemory.runAutoDream") || "Run auto-dream now"
+  () => t("workspaceMemory.runAutoSummary") || "RUN AUTO SUMMARY"
 );
 const autoDreamLastRunText = computed(() => {
   if (!autoDreamLastRun.value) return "";

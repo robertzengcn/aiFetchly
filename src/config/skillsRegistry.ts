@@ -51,6 +51,11 @@ import {
   resumeScheduleForAi,
   runScheduleNowForAi,
 } from "@/service/ScheduleAiTools";
+import {
+  listKnowledgeLibraryDocumentsForAi,
+  importKnowledgeLibraryAttachmentForAi,
+  deleteKnowledgeLibraryDocumentForAi,
+} from "@/service/KnowledgeLibraryAiTools";
 
 // ---------------------------------------------------------------------------
 // Internal state
@@ -68,25 +73,64 @@ const registry: Map<string, SkillDefinition> =
 // Built-in skill definitions (statically imported)
 // ---------------------------------------------------------------------------
 import { RUN_SUBAGENT_TOOL } from "@/service/agentTools/runSubagentTool";
+import { AIAppNavigationToolService } from "@/service/AIAppNavigationToolService";
 
 const BUILT_IN_SKILLS: SkillDefinition[] = [
   {
+    name: "open_app_page",
+    description:
+      "Navigate AiFetchly to a safe internal application page based on the user's natural language request. " +
+      "Use when the user explicitly asks to open, go to, navigate to, show, view, or switch to an application page " +
+      "(list, dashboard, settings, log, audit, management, inbox, template, campaign, schedule, or configuration page). " +
+      "Do NOT use for general questions, data mutations (create/edit/delete/send/run/scrape/schedule), " +
+      "required-record detail/edit pages without a known id, login/auth/error pages, external URLs, or ambiguous destinations " +
+      "(return clarification candidates instead). Only returns a navigation command for a validated internal route; " +
+      "never clicks buttons, fills/submits forms, mutates data, sends email, starts automation, or opens external sites.",
+    parameters: {
+      type: "object",
+      properties: {
+        query: {
+          type: "string",
+          description: "The user's natural-language page navigation request.",
+        },
+        preferredRouteName: {
+          type: "string",
+          description:
+            "Optional route name selected from a previous clarification candidate list.",
+        },
+      },
+      required: ["query"],
+    },
+    tier: "main",
+    requiresConfirmation: false,
+    permissionCategory: "pure",
+    source: "built-in",
+    execute: async (args) => {
+      const service = new AIAppNavigationToolService();
+      const result = service.openAppPage(args);
+      return {
+        success: result.success,
+        result: result as unknown as Record<string, unknown>,
+      };
+    },
+  },
+  {
     name: "scrape_urls_from_search_engine",
     description:
-      "Scrape search result URLs from a supported engine (Google, Bing, Yandex, or Baidu) using a query string. Returns titles, snippets, and URLs. This tool is for collecting URLs from a SERP, not for answering questions from page text.\n\n" +
+      "Scrape search result URLs from a supported engine (Google, Bing, or Yandex) using a query string. Returns titles, snippets, and URLs. This tool is for collecting URLs from a SERP, not for answering questions from page text.\n\n" +
       "MANDATORY WORKFLOW for google or yandex (these engines require login cookies):\n" +
       '  1. FIRST call `list_social_accounts` with platform="google" (or platform="yandex") to obtain a valid account ID. Only accounts with `cookies: true` and a successful `status` are usable.\n' +
       "  2. THEN call this tool with that account ID in the `account` field.\n" +
       'Do NOT call this tool with search_engine "google" or "yandex" unless you already have a valid `account` ID obtained from `list_social_accounts`. Calls without a valid account ID will fail.\n' +
-      'For "bing" or "baidu": NO account is needed and NO login cookies are required. Do NOT call `list_social_accounts` and do NOT pass `account` when search_engine is "bing" or "baidu" — proceed directly with just the query.',
+      'For "bing": NO account is needed and NO login cookies are required. Do NOT call `list_social_accounts` and do NOT pass `account` when search_engine is "bing" — proceed directly with just the query.',
     parameters: {
       type: "object",
       properties: {
         search_engine: {
           type: "string",
           description:
-            "Which search engine to scrape: google, bing, yandex, or baidu",
-          enum: ["google", "bing", "yandex", "baidu"],
+            "Which search engine to scrape: google, bing, or yandex",
+          enum: ["google", "bing", "yandex"],
         },
         query: {
           type: "string",
@@ -116,7 +160,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
             "MANDATORY (no default) when search_engine is 'google' or 'yandex' — these engines require login cookies. " +
             "You MUST obtain this ID by calling `list_social_accounts` first (filter by platform) and pick an account whose `cookies` field is true. " +
             "Never invent or guess an account ID. " +
-            "DO NOT call `list_social_accounts` and DO NOT pass `account` when search_engine is 'bing' or 'baidu' — those engines need no account.",
+            "DO NOT call `list_social_accounts` and DO NOT pass `account` when search_engine is 'bing' — that engine needs no account.",
         },
       },
       required: ["search_engine", "query"],
@@ -1818,6 +1862,159 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
           | boolean
           | undefined,
       });
+      return {
+        success: result.success,
+        result: result as unknown as Record<string, unknown>,
+      };
+    },
+  },
+  {
+    name: "knowledge_library_list_documents",
+    description:
+      "List documents in the local knowledge library. Use this to find exact document IDs before deleting or inspecting knowledge-library documents. Returns compact metadata only (id, name, title, tags, status, size), never file contents or paths. Supports filtering by name/title query, tags, status, processing status, and file type. Scans the most recent documents (capped); when truncated is true, more documents exist beyond the scan — narrow with query/filters instead of paging further.",
+    parameters: {
+      type: "object",
+      properties: {
+        query: {
+          type: "string",
+          description:
+            "Optional case-insensitive search matched against document name or title.",
+        },
+        status: {
+          type: "string",
+          description:
+            "Optional document status filter (e.g. active, archived).",
+        },
+        processingStatus: {
+          type: "string",
+          description:
+            "Optional processing status filter (e.g. completed, pending, error).",
+        },
+        fileType: {
+          type: "string",
+          description:
+            "Optional file extension filter, with or without a leading dot (e.g. .pdf or pdf).",
+        },
+        tags: {
+          type: "array",
+          items: { type: "string" },
+          description: "Optional tag filter.",
+        },
+        limit: {
+          type: "number",
+          description: "Maximum documents to return (default 20, max 50).",
+          default: 20,
+        },
+        offset: {
+          type: "number",
+          description: "Pagination offset (default 0).",
+          default: 0,
+        },
+      },
+      required: [],
+    },
+    tier: "main",
+    requiresConfirmation: false,
+    permissionCategory: "pure",
+    source: "built-in",
+    execute: async (args) => {
+      const result = await listKnowledgeLibraryDocumentsForAi(
+        args as Record<string, unknown>
+      );
+      return {
+        success: result.success,
+        result: result as unknown as Record<string, unknown>,
+      };
+    },
+  },
+  {
+    name: "knowledge_library_import_attachment",
+    description:
+      "Import a document the user attached to this chat into the local knowledge library (chunks and embeds it). Use ONLY with an attachment_ref value shown in the current conversation. Never use this for arbitrary local file paths. Requires user confirmation.",
+    parameters: {
+      type: "object",
+      properties: {
+        attachment_ref: {
+          type: "string",
+          description:
+            "Conversation-scoped attachment reference from the user's uploaded document.",
+        },
+        title: {
+          type: "string",
+          description: "Optional document title.",
+        },
+        description: {
+          type: "string",
+          description: "Optional document description.",
+        },
+        tags: {
+          type: "array",
+          items: { type: "string" },
+          description: "Optional document tags.",
+        },
+        author: {
+          type: "string",
+          description: "Optional document author. Defaults to User.",
+        },
+        duplicatePolicy: {
+          type: "string",
+          enum: ["fail", "allow", "replace"],
+          description:
+            'How to handle a duplicate name/size match. "fail" (default) refuses, "allow" imports anyway, "replace" is not supported yet.',
+          default: "fail",
+        },
+      },
+      required: ["attachment_ref"],
+    },
+    tier: "main",
+    requiresConfirmation: true,
+    permissionCategory: "filesystem",
+    timeoutClass: "network",
+    source: "built-in",
+    execute: async (args, context) => {
+      const result = await importKnowledgeLibraryAttachmentForAi(
+        args as Record<string, unknown>,
+        context
+      );
+      return {
+        success: result.success,
+        result: result as unknown as Record<string, unknown>,
+      };
+    },
+  },
+  {
+    name: "knowledge_library_delete_document",
+    description:
+      "Delete one known document from the local knowledge library by exact document ID. Call knowledge_library_list_documents first when the ID is unknown. Pass expected_name as a safety check when you inferred the document from a list result. Requires user confirmation.",
+    parameters: {
+      type: "object",
+      properties: {
+        document_id: {
+          type: "number",
+          description: "Exact knowledge library document ID to delete.",
+        },
+        delete_source_file: {
+          type: "boolean",
+          description:
+            "Whether to also delete the app-owned staged source file (default false).",
+          default: false,
+        },
+        expected_name: {
+          type: "string",
+          description:
+            "Optional safety check: the document name or title must match this exactly before deletion proceeds.",
+        },
+      },
+      required: ["document_id"],
+    },
+    tier: "main",
+    requiresConfirmation: true,
+    permissionCategory: "filesystem",
+    source: "built-in",
+    execute: async (args) => {
+      const result = await deleteKnowledgeLibraryDocumentForAi(
+        args as Record<string, unknown>
+      );
       return {
         success: result.success,
         result: result as unknown as Record<string, unknown>,

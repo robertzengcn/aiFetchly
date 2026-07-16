@@ -8,6 +8,14 @@ import {
   AI_CHAT_V2_COMPACT_CONVERSATION,
   AI_CHAT_V2_GET_TOOL_APPROVAL_MODE,
   AI_CHAT_V2_SET_TOOL_APPROVAL_MODE,
+  PLUGIN_MARKETPLACE_ADD,
+  PLUGIN_MARKETPLACE_AVAILABLE_PLUGINS,
+  PLUGIN_MARKETPLACE_GET,
+  PLUGIN_MARKETPLACE_GET_PLUGIN,
+  PLUGIN_MARKETPLACE_INSTALL_PLUGIN,
+  PLUGIN_MARKETPLACE_LIST,
+  PLUGIN_MARKETPLACE_REFRESH,
+  PLUGIN_MARKETPLACE_REMOVE,
 } from "@/config/channellist";
 
 type ExposedApi = {
@@ -91,6 +99,36 @@ describe("preload AI Chat V2 invoke allowlist", () => {
   ])("forwards %s through window.api.invoke", async (channel) => {
     const api = await loadApi();
     const payload = JSON.stringify({ conversationId: "conv-test" });
+
+    const result = await api.invoke(channel, payload);
+
+    expect(electronMock.ipcRenderer.invoke).toHaveBeenCalledWith(
+      channel,
+      payload
+    );
+    expect(result).toEqual({ channel, data: payload });
+  });
+});
+
+describe("preload plugin marketplace invoke allowlist", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    electronMock.exposed.clear();
+    electronMock.ipcRenderer.invoke.mockClear();
+  });
+
+  it.each([
+    PLUGIN_MARKETPLACE_LIST,
+    PLUGIN_MARKETPLACE_GET,
+    PLUGIN_MARKETPLACE_ADD,
+    PLUGIN_MARKETPLACE_REFRESH,
+    PLUGIN_MARKETPLACE_REMOVE,
+    PLUGIN_MARKETPLACE_AVAILABLE_PLUGINS,
+    PLUGIN_MARKETPLACE_GET_PLUGIN,
+    PLUGIN_MARKETPLACE_INSTALL_PLUGIN,
+  ])("forwards %s through window.api.invoke", async (channel) => {
+    const api = await loadApi();
+    const payload = JSON.stringify({ pluginId: "lead-research@team-tools" });
 
     const result = await api.invoke(channel, payload);
 

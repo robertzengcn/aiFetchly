@@ -13,6 +13,9 @@ import {
   ai_custom_context_directive,
 } from "@/config/settinggroupInit";
 import { WorkspaceResolver } from "@/service/WorkspaceResolver";
+import { AIFetchlyContextLoader } from "@/service/aifetchlyConfig/AIFetchlyContextLoader";
+import { getAIFetchlyConfigManager } from "@/service/aifetchlyConfig/AIFetchlyConfigManager";
+import { buildAvailableAgentsBlock } from "@/service/aifetchlyConfig/availableAgentsBlock";
 import path from "node:path";
 import os from "node:os";
 import type {
@@ -74,6 +77,7 @@ export class AIChatContextAssembler {
   private readonly durableMemory = new AIUserMemoryRetrievalService();
   private readonly workspaceMemory = new AIWorkspaceMemoryRetrievalService();
   private readonly systemSettings = new SystemSettingModule();
+  private readonly aifetchlyContext = new AIFetchlyContextLoader();
 
   async assemble(
     input: AIChatContextAssembleInput
@@ -169,6 +173,41 @@ export class AIChatContextAssembler {
     } catch (err) {
       log.error(
         "[ai-chat-context] failed to build environment context:",
+        err
+      );
+    }
+
+    // AiFetchly global AGENTS.md injection. Reads from the in-memory cache
+    // populated by AIFetchlyConfigManager; failures degrade to no-injection.
+    try {
+      const blocks = await this.aifetchlyContext.getInstructionBlocks({
+        conversationId: input.conversationId,
+        mode: input.mode,
+      });
+      for (const block of blocks) {
+        messages.push({
+          role: "system",
+          content: AIFetchlyContextLoader.formatInstructionBlock(block),
+        });
+      }
+    } catch (err) {
+      console.error(
+        "[ai-chat-context] aifetchly instructions injection failed:",
+        err
+      );
+    }
+
+    // Available agents block for run_subagent discovery. The registry is
+    // mutated in-place by config reloads, so each assembly sees current agents.
+    try {
+      const agents = getAIFetchlyConfigManager().getAgentRegistry().list();
+      const agentsBlock = buildAvailableAgentsBlock(agents);
+      if (agentsBlock.length > 0) {
+        messages.push({ role: "system", content: agentsBlock });
+      }
+    } catch (err) {
+      console.error(
+        "[ai-chat-context] available agents injection failed:",
         err
       );
     }

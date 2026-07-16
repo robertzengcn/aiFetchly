@@ -555,6 +555,32 @@ alert(t('contactExtraction.select_items_hint') || 'Please select at least one it
 
 **FAILURE TO UPDATE ALL LANGUAGE FILES WILL RESULT IN INCOMPLETE INTERNATIONALIZATION AND USER EXPERIENCE ISSUES.**
 
+### AI App Navigation (open_app_page tool) - MANDATORY RULE
+**CRITICAL: The AI navigation catalog is driven by the route manifest, NOT the router. The manifest is the single source of truth for model-facing route discovery.**
+
+#### Source Of Truth
+- **Manifest** (`src/config/aiNavigationRouteManifest.ts`): the authoritative list of AI-navigable routes, aliases, and descriptions. The `open_app_page` tool builds its catalog from this file. It is pure data (main-process safe — no Vue / Vue Router imports).
+- **Router meta** (`src/views/router/index.ts`): secondary / documentation only. The renderer re-validates every route against `router.getRoutes()` and blocks any route with `meta.aiNavigable === false`.
+
+#### When Adding Or Modifying A Route
+1. **Safe parameter-free list/index/settings pages**: add an entry to `aiNavigationRouteManifest.ts` with `aiNavigable: true`, accurate `aiAliases` (natural-language phrases users would actually say), and `aiDescription`.
+2. **Aliases**: pick phrases a user would type (e.g. `"email reply log"`, `"smtp settings"`). Do NOT add bare single-word aliases for entities that have detail/edit param routes (e.g. bare `"campaign"`) — otherwise a detail request like `"campaign detail"` matches the list page instead of returning `needsRouteParams`.
+3. **Unsafe routes** (login, auth callback, required-param detail/edit pages, destructive workflows, internal helper pages): do NOT add them to the manifest. Optionally set `meta.aiNavigable = false` in the router for defense-in-depth.
+4. Verify the `routeName` and `path` EXACTLY match `src/views/router/index.ts` — the catalog/matcher/tool tests assert against real names.
+
+#### Why A Manifest (not router meta) Is Authoritative
+`src/views/router/index.ts` imports Vue Router, `Layout`, and lazy `.vue` components. Importing it from main-process tool code would pull renderer-only code into the main bundle. The pure manifest avoids this. See `docs/prd/ai-app-navigation-tool-technical-design.md` §7.
+
+#### Architecture Boundary
+- **Main process / tool layer** (`src/service/AIAppNavigationToolService.ts`): resolves intent to a validated navigation command. NEVER calls Vue Router, NEVER mutates data, NEVER echoes raw user input.
+- **Renderer** (`src/views/utils/aiNavigationResultHandler.ts`): owns Vue Router; re-validates the route and calls `router.push`. Wired in `AiChatBox.vue` (V1) and `AiChatV2.vue` (V2) `tool_result` handlers.
+
+#### Tests
+- Catalog / matcher / renderer-helper: `test/vitest/utilitycode/aiAppNavigation*.test.ts`
+- Tool service: `test/vitest/main/aiAppNavigationTool.test.ts`
+
+Run the relevant scenario through these tests before shipping manifest changes.
+
 ### Testing Strategy
 
 #### Test Organization
