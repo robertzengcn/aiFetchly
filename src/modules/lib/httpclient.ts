@@ -50,7 +50,7 @@ function isRefreshTokenInvalidError(error: unknown): boolean {
 //   data?: any,
 // }
 export class HttpClient {
-  private _headers: HeadersInit = {};
+  private _headers: Record<string, string> = {};
   private baseUrl: string;
   private _isWorker = false;
   constructor() {
@@ -66,9 +66,7 @@ export class HttpClient {
     try {
       new URL(loginUrl);
     } catch (error) {
-      log.warn(
-        `Invalid VITE_LOGIN_URL: ${loginUrl}, falling back to default`
-      );
+      log.warn(`Invalid VITE_LOGIN_URL: ${loginUrl}, falling back to default`);
       loginUrl = "http://localhost:3000";
     }
 
@@ -249,9 +247,7 @@ export class HttpClient {
         return this._refreshTokenAndRetry(endpoint, options, isRetry);
       } else {
         // No refresh token available, sign out user
-        log.warn(
-          "[HttpClient] No refresh token available, signing out user"
-        );
+        log.warn("[HttpClient] No refresh token available, signing out user");
         try {
           const userModel = new User();
           await userModel.removeToken();
@@ -275,21 +271,21 @@ export class HttpClient {
     return data;
   }
 
-  setHeader(key, value) {
+  setHeader(key: string, value: string) {
     this._headers[key] = value;
     return this;
   }
 
-  getHeader(key) {
+  getHeader(key: string): string | undefined {
     return this._headers[key];
   }
 
-  setBasicAuth(username, password) {
+  setBasicAuth(username: string, password: string) {
     this._headers["Authorization"] = `Basic ${btoa(`${username}:${password}`)}`;
     return this;
   }
 
-  setBearerAuth(token) {
+  setBearerAuth(token: string) {
     this._headers["Authorization"] = `Bearer ${token}`;
     return this;
   }
@@ -333,7 +329,7 @@ export class HttpClient {
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  public async put<T = any>(endpoint: string, data): Promise<T> {
+  public async put<T = any>(endpoint: string, data: unknown): Promise<T> {
     log.info(JSON.stringify(data));
     return (await this._fetchJSON(endpoint, {
       // headers: this._headers,
@@ -349,7 +345,7 @@ export class HttpClient {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   public async patch<T = any>(
     endpoint: string,
-    operations,
+    operations: unknown,
     options = {}
   ): Promise<T> {
     return (await this._fetchJSON(endpoint, {
@@ -372,7 +368,7 @@ export class HttpClient {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   public async postJson<T = any>(
     endpoint: string,
-    data,
+    data: unknown,
     options = {}
   ): Promise<T> {
     // this.setHeader('Accept', 'application/json')
@@ -392,7 +388,7 @@ export class HttpClient {
   /** Post JSON and return stream response. Callers may pass options.signal (AbortSignal) to abort the request. */
   public async postStream(
     endpoint: string,
-    data,
+    data: unknown,
     options: RequestInit = {},
     isRetry = false
   ): Promise<Response> {
