@@ -232,6 +232,7 @@
       <AiChatV2Composer
         :is-streaming="chatIsRunning"
         :is-processing="isPreparingAttachments"
+        :conversation-id="activeConversationId"
         @send="onSend"
         @stop="onStop"
       >

@@ -115,6 +115,14 @@ const SUPPORTED_DOC_EXTS = new Set([".pdf", ".docx", ".csv", ".xlsx", ".xls"]);
 const props = defineProps<{
   isStreaming: boolean;
   isProcessing?: boolean;
+  /**
+   * Active conversation id, used to scope slash-command suggestions so a
+   * workspace command only appears in chats using that workspace (FR-1).
+   * null/undefined for a brand-new chat -> the main process returns only
+   * non-workspace commands. We deliberately do NOT create a conversation id
+   * just for suggestions (design §9.1).
+   */
+  conversationId?: string | null;
 }>();
 const emit = defineEmits<{
   (e: "send", text: string, files: File[]): void;
@@ -154,7 +162,10 @@ function refreshSlashSuggestions(): void {
   if (slashDebounce) clearTimeout(slashDebounce);
   slashDebounce = setTimeout(async () => {
     try {
-      const resp = await listSlashCommands({ query });
+      const resp = await listSlashCommands({
+        conversationId: props.conversationId ?? undefined,
+        query,
+      });
       const commands = resp?.commands ?? [];
       slashCommands.value = commands;
       slashOpen.value = commands.length > 0;
@@ -170,6 +181,18 @@ function refreshSlashSuggestions(): void {
 watch(draft, () => {
   refreshSlashSuggestions();
 });
+
+// Refresh suggestions when the active conversation changes (the scoped command
+// set differs per workspace) — but only if the user is already typing a slash
+// command, so we never open the dropdown unprompted.
+watch(
+  () => props.conversationId,
+  () => {
+    if (draft.value.startsWith("/")) {
+      refreshSlashSuggestions();
+    }
+  }
+);
 
 function closeSlash(): void {
   if (slashDebounce) {
