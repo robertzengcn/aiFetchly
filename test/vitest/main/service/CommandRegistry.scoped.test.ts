@@ -230,17 +230,19 @@ describe("CommandRegistry.getByLookupNameScoped (FR-2, AC-2, AC-7, AC-8)", () =>
     r.register(pluginWithAlias); // aliases ["rev"]
     r.register(pluginRev); // primary "rev"
     // Same source rank (plugin) -> primary-name match wins.
-    expect(r.getByLookupNameScoped("rev", DEFAULT_NON_WORKSPACE_SCOPE)?.id).toBe(
-      "plugin:demo:command:rev"
-    );
+    expect(
+      r.getByLookupNameScoped("rev", DEFAULT_NON_WORKSPACE_SCOPE)?.id
+    ).toBe("plugin:demo:command:rev");
   });
 
-  it("disabled commands never win scoped lookup", () => {
+  it("disabled commands are still found scoped (dispatcher surfaces the disabled result)", () => {
     const r = new CommandRegistry();
     r.register({ ...userReview, enabled: false });
+    // Found (so the dispatcher can return a readable disabled message, PRD §9.3)
+    // even though enabled is false — mirrors getByName semantics.
     expect(
-      r.getByLookupNameScoped("review", DEFAULT_NON_WORKSPACE_SCOPE)
-    ).toBeNull();
+      r.getByLookupNameScoped("review", DEFAULT_NON_WORKSPACE_SCOPE)?.id
+    ).toBe("user:command:review");
   });
 
   it("returns a defensive copy", () => {

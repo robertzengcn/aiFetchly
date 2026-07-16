@@ -24,6 +24,10 @@ import {
   rankSuggestions,
 } from "@/service/slashCommands/CommandRegistry";
 import { SlashCommandDispatcher } from "@/service/slashCommands/SlashCommandDispatcher";
+import {
+  nonWorkspaceSlashCommandScopeResolver,
+  type SlashCommandScopeResolver,
+} from "@/service/slashCommands/SlashCommandScopeResolver";
 import { getAIFetchlyConfigManager } from "@/service/aifetchlyConfig/AIFetchlyConfigManager";
 import type {
   AIFetchlyConfigManager,
@@ -54,24 +58,37 @@ export class SlashCommandModule {
   private readonly registry: CommandRegistry;
   private readonly dispatcher: SlashCommandDispatcher;
   private readonly manager: AIFetchlyConfigManager;
+  private readonly scopeResolver: SlashCommandScopeResolver;
 
-  constructor(registry?: CommandRegistry, manager?: AIFetchlyConfigManager) {
+  constructor(
+    registry?: CommandRegistry,
+    manager?: AIFetchlyConfigManager,
+    scopeResolver: SlashCommandScopeResolver = nonWorkspaceSlashCommandScopeResolver
+  ) {
     // Resolve the collaborators. Production callers (the IPC layer) pass
-    // the singleton manager + its registry; tests pass fresh instances.
+    // the singleton manager + its registry + the workspace-aware scope
+    // resolver; tests pass fresh instances and rely on the DB-free default
+    // resolver unless they explicitly inject one.
     this.manager = manager ?? getAIFetchlyConfigManager();
     this.registry = registry ?? this.manager.getCommandRegistry();
     this.dispatcher = new SlashCommandDispatcher(this.registry, this.manager);
+    this.scopeResolver = scopeResolver;
   }
 
   /**
-   * List commands as renderer-safe views, ranked by query (CMD-07).
-   * Empty query returns all commands in registry order. Diagnostics
-   * array is empty in phase 13 (no per-command diagnostics surfaced yet).
+   * List commands as renderer-safe views, ranked by query (CMD-07). The views
+   * are scoped to the conversation's approved workspace first (FR-1), so a
+   * workspace command never appears in a chat that did not select that
+   * workspace. Empty query returns all scoped commands in registry order.
+   * Diagnostics array is empty in phase 13 (no per-command diagnostics yet).
    */
   async listCommands(
     req: SlashCommandListRequest
   ): Promise<SlashCommandListResponse> {
-    const all = this.registry.listViews();
+    const { commandScope } = await this.scopeResolver.resolve(
+      req.conversationId
+    );
+    const all = this.registry.listScopedViews(commandScope);
     const query = (req.query ?? "").trim();
     const ranked: SlashCommandView[] =
       query.length === 0 ? [...all] : rankSuggestions(query, all);
@@ -83,11 +100,14 @@ export class SlashCommandModule {
     };
   }
 
-  /** Dispatch a single composer submission (CMD-04 / CMD-08). */
+  /** Dispatch a single composer submission (CMD-04 / CMD-08), scoped (FR-2). */
   async dispatch(
     req: SlashCommandDispatchRequest
   ): Promise<SlashCommandDispatchResponse> {
-    return this.dispatcher.dispatch(req);
+    const { commandScope } = await this.scopeResolver.resolve(
+      req.conversationId
+    );
+    return this.dispatcher.dispatch(req, { scope: commandScope });
   }
 
   /**

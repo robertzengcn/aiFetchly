@@ -183,8 +183,12 @@ export class CommandRegistry {
   }
 
   /**
-   * Scoped, alias-aware lookup. Among all ENABLED, ALLOWED commands whose
+   * Scoped, alias-aware lookup. Among all ALLOWED commands whose
    * primary name OR an alias equals `lookupName`, returns the winner.
+   *
+   * Mirrors {@link getByName}: the winner is selected by source rank
+   * regardless of the `enabled` flag, so a disabled command is still found
+   * and the dispatcher can surface a readable disabled result (PRD §9.3).
    *
    * Ranking (FR-2 / design §5.3, §17.1):
    *   1. Lowest {@link SOURCE_RANK} wins (built-in > workspace > user > plugin).
@@ -204,7 +208,6 @@ export class CommandRegistry {
     let winner: { cmd: SlashCommandDefinition; matchRank: number } | null =
       null;
     for (const cmd of this.byId.values()) {
-      if (!cmd.enabled) continue;
       if (!this.isAllowed(cmd, scope)) continue;
 
       const primaryMatch = cmd.name === lookupName;
