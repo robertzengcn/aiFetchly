@@ -1,3 +1,15 @@
+/**
+ * Canonical YellowPages worker-process manager (WS-4 R4.1).
+ *
+ * One of the TWO canonical process-manager patterns in the codebase (the other
+ * is ChildProcessAdapterFactory). The older `ChildProcessManager` /
+ * `ChildProcessScraper` were deleted as dead code (wrong spawn mechanism,
+ * delete-before-exit orphan risk, no retry) — do NOT reintroduce them. New
+ * worker-process management belongs here or behind ChildProcessAdapterFactory.
+ *
+ * Uses Electron's `utilityProcess.fork` (not Node's `child_process.spawn`) for
+ * typed IPC via MessageChannelMain.
+ */
 import { utilityProcess, MessageChannelMain, app } from "electron";
 import { log } from "@/modules/Logger";
 import type { UtilityProcess } from "electron";
@@ -429,10 +441,7 @@ export class YellowPagesProcessManager extends BaseModule {
           this.taskModel
             .updateTaskErrorLog(taskId, `Stderr: ${data}`)
             .catch((err) => {
-              log.error(
-                `Failed to update error log for task ${taskId}:`,
-                err
-              );
+              log.error(`Failed to update error log for task ${taskId}:`, err);
             });
         }
       });
@@ -544,9 +553,7 @@ export class YellowPagesProcessManager extends BaseModule {
           }
           break;
         case "SCRAPING_RATE_LIMITED":
-          log.info(
-            `Task ${taskId}: Rate limited, waiting before next request`
-          );
+          log.info(`Task ${taskId}: Rate limited, waiting before next request`);
           break;
         case "SCRAPING_CAPTCHA_DETECTED":
           log.info(
@@ -774,10 +781,7 @@ export class YellowPagesProcessManager extends BaseModule {
           }
           break;
         default:
-          log.info(
-            `Unknown message type from task ${taskId}:`,
-            message.type
-          );
+          log.info(`Unknown message type from task ${taskId}:`, message.type);
       }
     });
   }
@@ -1103,9 +1107,7 @@ export class YellowPagesProcessManager extends BaseModule {
     code: number | null,
     signal: string | null
   ): void {
-    log.info(
-      `Process exit for task ${taskId}: code=${code}, signal=${signal}`
-    );
+    log.info(`Process exit for task ${taskId}: code=${code}, signal=${signal}`);
 
     const processInfo = this.activeProcesses.get(taskId);
     if (processInfo) {
@@ -1639,9 +1641,7 @@ export class YellowPagesProcessManager extends BaseModule {
       log.info(
         `Found ${tasksWithValidPID.length} tasks with valid PIDs to check`
       );
-      log.info(
-        `Found ${tasksWithZeroPID.length} tasks with PID = 0 to handle`
-      );
+      log.info(`Found ${tasksWithZeroPID.length} tasks with PID = 0 to handle`);
       log.info(
         `Found ${tasksWithInvalidPID.length} tasks with undefined/null PID to handle`
       );
@@ -1691,9 +1691,7 @@ export class YellowPagesProcessManager extends BaseModule {
       // Handle tasks with PID = 0 - mark them as failed directly
       for (const task of tasksWithZeroPID) {
         try {
-          log.info(
-            `Task ${task.id} has PID = 0, marking as failed directly`
-          );
+          log.info(`Task ${task.id} has PID = 0, marking as failed directly`);
 
           // Mark task as failed
           await this.taskModel.updateTaskStatus(
@@ -1719,10 +1717,7 @@ export class YellowPagesProcessManager extends BaseModule {
             },
           });
         } catch (error) {
-          log.error(
-            `Failed to update task ${task.id} with PID = 0:`,
-            error
-          );
+          log.error(`Failed to update task ${task.id} with PID = 0:`, error);
           failedUpdates++;
         }
       }
