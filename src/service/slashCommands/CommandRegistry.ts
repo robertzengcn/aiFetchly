@@ -14,20 +14,35 @@
 // §11.2.
 
 import type {
+  CommandRegistryScope,
   SlashCommandDefinition,
   SlashCommandSource,
   SlashCommandView,
 } from "@/entityTypes/slashCommandTypes";
+import { BUILTIN_SOURCE, USER_SOURCE } from "@/entityTypes/slashCommandTypes";
 
 /**
  * Lookup-order ranks. Lower rank wins. Enforces CMD-01:
  *   built-in (0) > workspace (1) > user (2) > plugin (3).
  */
-const SOURCE_RANK: Readonly<Record<SlashCommandSource, number>> = Object.freeze({
-  "built-in": 0,
-  workspace: 1,
-  user: 2,
-  plugin: 3,
+const SOURCE_RANK: Readonly<Record<SlashCommandSource, number>> = Object.freeze(
+  {
+    "built-in": 0,
+    workspace: 1,
+    user: 2,
+    plugin: 3,
+  }
+);
+
+/**
+ * Safe default scope used when no conversation scope is resolved: built-in +
+ * user + plugin, NEVER any workspace source. This is the fail-closed fallback
+ * for the dispatcher (an omitted context can never leak a workspace command)
+ * and the base for the resolver's no-workspace branch.
+ */
+export const DEFAULT_NON_WORKSPACE_SCOPE: CommandRegistryScope = Object.freeze({
+  allowedExactSourceIds: new Set<string>([BUILTIN_SOURCE, USER_SOURCE]),
+  allowPluginSources: true,
 });
 
 /**
@@ -129,6 +144,91 @@ export class CommandRegistry {
     return this.list().map(toView);
   }
 
+  // --- Scoped accessors (plugin/workspace slash commands, FR-1..FR-3) ---------
+
+  /**
+   * Whether `cmd` is visible under `scope`. A command is allowed when its
+   * sourceId is in the allowed set, or it is a plugin command and plugin
+   * sources are permitted (design §5.2). Pure predicate, no mutation.
+   */
+  private isAllowed(
+    cmd: SlashCommandDefinition,
+    scope: CommandRegistryScope
+  ): boolean {
+    if (scope.allowedExactSourceIds.has(cmd.sourceId)) return true;
+    if (scope.allowPluginSources && cmd.source === "plugin") return true;
+    return false;
+  }
+
+  /**
+   * Scoped list — every allowed command, as defensive copies, in by-id
+   * insertion order. Used by {@link listScopedViews} and scoped `/help`.
+   */
+  listScoped(scope: CommandRegistryScope): SlashCommandDefinition[] {
+    const out: SlashCommandDefinition[] = [];
+    for (const cmd of this.byId.values()) {
+      if (this.isAllowed(cmd, scope)) out.push({ ...cmd });
+    }
+    return out;
+  }
+
+  /**
+   * Scoped renderer-safe views — {@link listScoped} projected through the
+   * same {@link toView} used by {@link listViews} (so body/metadata stay
+   * stripped — T-13-Leak). Workspace commands outside the conversation's
+   * scope never appear (FR-1, AC-1).
+   */
+  listScopedViews(scope: CommandRegistryScope): SlashCommandView[] {
+    return this.listScoped(scope).map(toView);
+  }
+
+  /**
+   * Scoped, alias-aware lookup. Among all ENABLED, ALLOWED commands whose
+   * primary name OR an alias equals `lookupName`, returns the winner.
+   *
+   * Ranking (FR-2 / design §5.3, §17.1):
+   *   1. Lowest {@link SOURCE_RANK} wins (built-in > workspace > user > plugin).
+   *   2. Same rank: a primary-name match (matchRank 0) beats an alias match
+   *      (matchRank 1). Alias resolution therefore never changes source
+   *      precedence.
+   *   3. Exact tie: first registration order wins (Map insertion order).
+   *
+   * Returns a defensive copy, or null when nothing matches. A workspace
+   * command hidden by scope is also unreachable here (AC-2 — it cannot be
+   * dispatched by manually typing its name from the wrong conversation).
+   */
+  getByLookupNameScoped(
+    lookupName: string,
+    scope: CommandRegistryScope
+  ): SlashCommandDefinition | null {
+    let winner: { cmd: SlashCommandDefinition; matchRank: number } | null =
+      null;
+    for (const cmd of this.byId.values()) {
+      if (!cmd.enabled) continue;
+      if (!this.isAllowed(cmd, scope)) continue;
+
+      const primaryMatch = cmd.name === lookupName;
+      const aliasMatch = cmd.aliases.includes(lookupName);
+      if (!primaryMatch && !aliasMatch) continue;
+
+      const matchRank = primaryMatch ? 0 : 1;
+      if (winner === null) {
+        winner = { cmd, matchRank };
+        continue;
+      }
+      const sourceDelta =
+        SOURCE_RANK[cmd.source] - SOURCE_RANK[winner.cmd.source];
+      if (sourceDelta < 0) {
+        winner = { cmd, matchRank };
+        continue;
+      }
+      if (sourceDelta === 0 && matchRank < winner.matchRank) {
+        winner = { cmd, matchRank };
+      }
+    }
+    return winner ? { ...winner.cmd } : null;
+  }
+
   /**
    * Rebuild the name index from `byId`, applying the lookup order.
    * For each name, the winner is the candidate with the lowest
@@ -141,10 +241,7 @@ export class CommandRegistry {
     // Iterate in insertion order (Map guarantee).
     for (const cmd of this.byId.values()) {
       const current = this.byName.get(cmd.name);
-      if (
-        !current ||
-        SOURCE_RANK[cmd.source] < SOURCE_RANK[current.source]
-      ) {
+      if (!current || SOURCE_RANK[cmd.source] < SOURCE_RANK[current.source]) {
         this.byName.set(cmd.name, cmd);
       }
     }
@@ -230,7 +327,11 @@ export function rankSuggestions(
 ): SlashCommandView[] {
   const q = query.trim().toLowerCase();
   if (q === "") return [...commands];
-  const scored = commands.map((cmd, idx) => ({ cmd, score: scoreCommand(cmd, q), idx }));
+  const scored = commands.map((cmd, idx) => ({
+    cmd,
+    score: scoreCommand(cmd, q),
+    idx,
+  }));
   scored.sort((a, b) => {
     if (a.score !== b.score) return b.score - a.score; // higher score first
     return a.idx - b.idx; // stable: preserve input order on ties
