@@ -395,6 +395,30 @@ export class DocumentService {
   }
 
   /**
+   * Copy a staged attachment source into the durable app-owned uploads
+   * directory and return the new path.
+   *
+   * The staged attachment root is garbage-collected after 24h, so a staged
+   * file must be copied somewhere durable before being recorded as a
+   * knowledge-library document's `filePath` (RAGDocumentModule.uploadDocument
+   * stores the path verbatim). Mirrors the SAVE_TEMP_FILE upload convention.
+   */
+  async copyStagedSourceToUploads(
+    srcPath: string,
+    fileName: string
+  ): Promise<string> {
+    const uploadsDir = path.join(app.getPath("userData"), "uploads");
+    if (!fs.existsSync(uploadsDir)) {
+      fs.mkdirSync(uploadsDir, { recursive: true });
+    }
+    const ext = path.extname(fileName) || path.extname(srcPath) || "";
+    const destName = `${Date.now()}-${crypto.randomUUID()}${ext}`;
+    const destPath = path.join(uploadsDir, destName);
+    fs.copyFileSync(srcPath, destPath);
+    return destPath;
+  }
+
+  /**
    * Read staged attachment markdown by conversation-scoped reference ID.
    */
   async readStagedAttachment(

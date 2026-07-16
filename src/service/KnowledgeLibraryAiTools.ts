@@ -213,6 +213,9 @@ export class KnowledgeLibraryAiTools {
         : docs;
       const page = filtered.slice(input.offset, input.offset + input.limit);
       const documents = page.map(toDocumentSummary);
+      // Signal when the scan hit its cap: more documents may exist beyond what
+      // was scanned, so an empty/small page does not mean the library is empty.
+      const truncated = docs.length >= LIST_QUERY_SCAN_CAP;
 
       return {
         success: true,
@@ -220,9 +223,10 @@ export class KnowledgeLibraryAiTools {
         limit: input.limit,
         offset: input.offset,
         returned: documents.length,
+        truncated,
       };
     } catch (error) {
-      return mapError("INVALID_INPUT", error);
+      return mapError("LIST_FAILED", error);
     }
   }
 
@@ -297,10 +301,20 @@ export class KnowledgeLibraryAiTools {
         }
       }
 
+      // Copy the staged source into a durable app-owned location before
+      // upload. The staged file is garbage-collected after 24h, but
+      // RAGDocumentModule.uploadDocument stores the path verbatim as the
+      // document's filePath, so importing the ephemeral staged path directly
+      // would leave a dangling reference once it is reaped.
+      const durableFilePath = await documentService.copyStagedSourceToUploads(
+        source.filePath,
+        source.fileName
+      );
+
       const ragModule = this.getRagSearchModule();
       await ragModule.initializeRagModule();
       const upload = await ragModule.uploadDocument({
-        filePath: source.filePath,
+        filePath: durableFilePath,
         name: source.fileName,
         title: input.title,
         description: input.description,

@@ -102,7 +102,8 @@ export type KnowledgeLibraryToolErrorCode =
   | "DOCUMENT_NOT_FOUND"
   | "EXPECTED_NAME_MISMATCH"
   | "IMPORT_FAILED"
-  | "DELETE_FAILED";
+  | "DELETE_FAILED"
+  | "LIST_FAILED";
 
 /**
  * Failure payload shared by every knowledge library tool.
@@ -155,6 +156,12 @@ export interface ListKnowledgeDocumentsResult {
   readonly limit: number;
   readonly offset: number;
   readonly returned: number;
+  /**
+   * True when the underlying scan hit its cap, meaning more documents may exist
+   * beyond what was scanned. The model should narrow with query/filters rather
+   * than conclude the library is empty.
+   */
+  readonly truncated?: boolean;
 }
 
 // ---------------------------------------------------------------------------

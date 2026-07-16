@@ -1579,7 +1579,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
   {
     name: "knowledge_library_list_documents",
     description:
-      "List documents in the local knowledge library. Use this to find exact document IDs before deleting or inspecting knowledge-library documents. Returns compact metadata only (id, name, title, tags, status, size), never file contents or paths. Supports filtering by name/title query, tags, status, processing status, and file type.",
+      "List documents in the local knowledge library. Use this to find exact document IDs before deleting or inspecting knowledge-library documents. Returns compact metadata only (id, name, title, tags, status, size), never file contents or paths. Supports filtering by name/title query, tags, status, processing status, and file type. Scans the most recent documents (capped); when truncated is true, more documents exist beyond the scan — narrow with query/filters instead of paging further.",
     parameters: {
       type: "object",
       properties: {

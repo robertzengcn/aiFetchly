@@ -320,7 +320,11 @@ export class RAGDocumentModule extends BaseModule {
       }
 
       // Delete vector index file if path exists (legacy cleanup)
-      if (document.vectorIndexPath && fs.existsSync(document.vectorIndexPath)) {
+      if (
+        document.vectorIndexPath &&
+        fs.existsSync(document.vectorIndexPath) &&
+        this.isPathUnderUserData(document.vectorIndexPath)
+      ) {
         try {
           fs.unlinkSync(document.vectorIndexPath);
           console.log(`Deleted vector index file: ${document.vectorIndexPath}`);
@@ -335,11 +339,20 @@ export class RAGDocumentModule extends BaseModule {
 
     // Delete file if requested
     if (deleteFile && fs.existsSync(document.filePath)) {
-      try {
-        fs.unlinkSync(document.filePath);
-        console.log(`Deleted document file: ${document.filePath}`);
-      } catch (error) {
-        console.warn(`Failed to delete file: ${document.filePath}`, error);
+      if (!this.isPathUnderUserData(document.filePath)) {
+        // Defense-in-depth: only app-owned files (under userData) may be
+        // unlinked. The filePath is stored verbatim from upload callers; a
+        // row pointing outside app storage must never be destroyed here.
+        console.warn(
+          `Refusing to delete document file outside app storage: ${document.filePath}`
+        );
+      } else {
+        try {
+          fs.unlinkSync(document.filePath);
+          console.log(`Deleted document file: ${document.filePath}`);
+        } catch (error) {
+          console.warn(`Failed to delete file: ${document.filePath}`, error);
+        }
       }
     }
 
@@ -351,6 +364,23 @@ export class RAGDocumentModule extends BaseModule {
     }
 
     return true;
+  }
+
+  /**
+   * Containment check: true only when `targetPath` realpath-resolves to a
+   * location inside the app's userData directory. Used to gate destructive
+   * file operations so a DB row pointing outside app storage can never cause
+   * an arbitrary local file to be unlinked.
+   */
+  private isPathUnderUserData(targetPath: string): boolean {
+    try {
+      const root = fs.realpathSync(app.getPath("userData"));
+      const resolved = fs.realpathSync(targetPath);
+      const rel = path.relative(root, resolved);
+      return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+    } catch {
+      return false;
+    }
   }
 
   /**
