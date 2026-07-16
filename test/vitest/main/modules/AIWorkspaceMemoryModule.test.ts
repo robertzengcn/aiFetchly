@@ -110,6 +110,21 @@ describe("AIWorkspaceMemoryModule", () => {
     expect(createSpy).not.toHaveBeenCalled();
   });
 
+  it("rejects WM-VALID-07 PEM private-key headers without creating a memory", async () => {
+    const createSpy = vi.spyOn(AIWorkspaceMemoryModel.prototype, "create");
+    const mod = new AIWorkspaceMemoryModule();
+
+    await expect(
+      mod.createMemory(SCOPE_A, {
+        type: "reference",
+        title: "Signing Key",
+        content: "-----BEGIN RSA PRIVATE KEY-----",
+      })
+    ).rejects.toThrow(/secret|credential/i);
+
+    expect(createSpy).not.toHaveBeenCalled();
+  });
+
   it("clamps confidence into 0..100", async () => {
     const mod = new AIWorkspaceMemoryModule();
     await SqliteDb.ensureInitialized();

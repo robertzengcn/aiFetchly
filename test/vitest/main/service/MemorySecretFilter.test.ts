@@ -17,6 +17,9 @@ describe("MemorySecretFilter", () => {
       "password=SuperSecret123!",
       "access token abcdef1234567890abcdef1234567890",
       "refresh-token=abcdef1234567890abcdef1234567890",
+      "-----BEGIN RSA PRIVATE KEY-----",
+      "-----BEGIN OPENSSH PRIVATE KEY-----",
+      "-----BEGIN PGP PRIVATE KEY BLOCK-----",
     ];
 
     for (const sample of secretLikeSamples) {
