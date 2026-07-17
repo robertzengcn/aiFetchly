@@ -20,6 +20,7 @@ import {
   contactExtractionWorkerInboundSchema,
   type ContactExtractionWorkerInbound,
 } from "@/schemas/worker/contactExtraction";
+import { parseWorkerMessage } from "@/schemas/worker/_shared";
 import { mapWithConcurrency } from "@/utils/concurrency";
 import { closeAllActiveBrowsers } from "./activeBrowserRegistry";
 
@@ -78,11 +79,14 @@ function initializeWorker(): void {
   // inbound schema. Malformed messages are dropped with a warning, so a
   // buggy main process can never crash the worker with a bad payload.
   process.on("message", (raw: unknown) => {
-    const parsed = contactExtractionWorkerInboundSchema().safeParse(raw);
+    const parsed = parseWorkerMessage<ContactExtractionWorkerInbound>(
+      raw,
+      contactExtractionWorkerInboundSchema()
+    );
     if (!parsed.success) {
       log.warn(
         "ContactExtractionWorker: dropped malformed inbound message:",
-        parsed.error.message
+        parsed.error
       );
       return;
     }
