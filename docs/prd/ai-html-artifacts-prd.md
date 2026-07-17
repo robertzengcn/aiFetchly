@@ -7,6 +7,7 @@
 - **Created**: 2026-07-17
 - **Owner**: AiFetchly Desktop Engineering
 - **Related areas**: AiChatV2, renderer layout, AI tools, artifact preview, HTML sandboxing
+- **Technical design**: `docs/prd/ai-html-artifacts-technical-design.md`
 - **Related files**:
   - `src/views/layout/layout.vue`
   - `src/views/components/aiChatV2/AiChatV2.vue`
