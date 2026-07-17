@@ -30,7 +30,7 @@ export type queryParams = {
   search: string;
 };
 //scroll down to the bottom of the page
-export async function autoScroll(page) {
+export async function autoScroll(page: Page) {
   await page.evaluate(async () => {
     await new Promise((resolve) => {
       let totalHeight = 0;
@@ -48,7 +48,7 @@ export async function autoScroll(page) {
     });
   });
 }
-export async function delay(time) {
+export async function delay(time: number) {
   return new Promise(function (resolve) {
     setTimeout(resolve, time);
   });
@@ -297,7 +297,9 @@ export async function evadeChromeHeadlessDetection(page: Page) {
   // Pass the Permissions Test.
   await page.evaluateOnNewDocument(() => {
     const originalQuery = window.navigator.permissions.query;
-    Object.getPrototypeOf(window.navigator.permissions).query = (parameters) =>
+    Object.getPrototypeOf(window.navigator.permissions).query = (
+      parameters: PermissionDescriptor
+    ) =>
       parameters.name === "notifications"
         ? Promise.resolve({ state: Notification.permission })
         : originalQuery(parameters);
@@ -425,7 +427,7 @@ export async function evadeChromeHeadlessDetection(page: Page) {
     }
   });
 }
-export function read_keywords_from_file(fname) {
+export function read_keywords_from_file(fname: string) {
   let kws = fs.readFileSync(fname).toString().split(os.EOL);
   // clean keywords
   kws = kws.filter((kw) => {
@@ -433,11 +435,11 @@ export function read_keywords_from_file(fname) {
   });
   return kws;
 }
-export function writeResults(fname, data) {
+export function writeResults(fname: string, data: string) {
   fs.writeFileSync(fname, data, "utf8");
 }
-const StringIsNumber = (value) => isNaN(Number(value)) === false;
-export function ToArray(enumme) {
+const StringIsNumber = (value: string) => isNaN(Number(value)) === false;
+export function ToArray(enumme: Record<string, string | number>) {
   return Object.keys(enumme)
     .filter(StringIsNumber)
     .map((key) => enumme[key]);
@@ -579,7 +581,7 @@ export function proxyEntityToServer(proxyEntity: ProxyParseItem): ProxyServer {
   };
   return rest;
 }
-export function getDomain(url) {
+export function getDomain(url: string) {
   try {
     const parsedUrl = new URL(url);
     return parsedUrl.hostname;
@@ -798,7 +800,7 @@ export function removeFile(
     });
   }
 }
-export function readLogFile(filePath): Promise<string> {
+export function readLogFile(filePath: string): Promise<string> {
   return new Promise((resolve, reject) => {
     fs.readFile(filePath, "utf8", (err, data) => {
       if (err) {
@@ -877,7 +879,7 @@ export function compareVersions(versionA: string, versionB: string): number {
  * Scrolls down an infinite scroll page until reaching bottom or max scrolls
  */
 export async function scrollPageToBottom(
-  page,
+  page: Page,
   maxScrolls = 10,
   cssclass = "#spinnerContainer, button.yt-spec-button-shape-next"
 ) {
@@ -886,9 +888,9 @@ export async function scrollPageToBottom(
 
   while (currentScrolls < maxScrolls) {
     // Get current scroll height
-    const currentHeight = await page.evaluate(
+    const currentHeight = (await page.evaluate(
       "document.documentElement.scrollHeight"
-    );
+    )) as number;
 
     // If we haven't moved since last scroll, we might be at the bottom
     if (currentHeight === lastHeight) {
@@ -898,9 +900,9 @@ export async function scrollPageToBottom(
       );
       await puppeteerDelay(2000);
 
-      const newHeight = await page.evaluate(
+      const newHeight = (await page.evaluate(
         "document.documentElement.scrollHeight"
-      );
+      )) as number;
       if (newHeight === currentHeight) {
         // We're truly at the bottom
         break;
@@ -921,9 +923,9 @@ export async function scrollPageToBottom(
       const spinnerSelector = cssclass;
       const hasSpinner = await page.$(spinnerSelector);
       if (hasSpinner) {
-        await page.evaluate((selector) => {
+        await page.evaluate((selector: string) => {
           const element = document.querySelector(selector);
-          if (element) element.click();
+          if (element) (element as HTMLElement).click();
         }, spinnerSelector);
         await puppeteerDelay(2000);
       }
