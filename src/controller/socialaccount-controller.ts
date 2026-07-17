@@ -261,8 +261,8 @@ export class SocialAccountController {
 
         // winsession.cookies.remove()
         win.on('close', async () => { //   <---- Catch close event
-            if (win && (win as any).webContents && (win as any).webContents.session) {
-                const winsession = (win as any).webContents.session
+            if (win && (win).webContents && (win).webContents.session) {
+                const winsession = (win).webContents.session
                 const cookiescontent = await winsession.cookies.get({ url: socialTypeUrl })
                 log.info("get cookies:")
                 log.info(cookiescontent)
