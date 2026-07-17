@@ -1346,7 +1346,7 @@ emailAutoReplyAudit: {
     user_ai_workspace_memory_injection: "ワークスペース記憶の注入",
     "ai-workspace-memory-injection-description":
       "関連するワークスペース記憶（プロジェクトの決定、コマンド、規約）をアクティブなワークスペースの AI チャットコンテキストに注入します。",
-    user_ai_workspace_auto_dream: "ワークスペース自動ドリーム",
+    user_ai_workspace_auto_dream: "ワークスペース自動要約",
     "ai-workspace-auto-dream-description":
       "会話とエージェントタスクからワークスペース固有の記憶をバックグラウンドで統合します。",
     user_ai_workspace_manual_memory: "手動ワークスペース記憶",

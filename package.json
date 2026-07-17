@@ -15,7 +15,7 @@
   "scripts": {
     "serve": "vite preview",
     "build": "vite build --config vite.render.config.mjs",
-    "lint": "vue-cli-service lint",
+    "lint": "vue-cli-service lint --no-fix",
     "builds": "tsc --build",
     "clean": "tsc --build --clean",
     "predev": "yarn rebuild-native",
@@ -225,7 +225,9 @@
     "@vitejs/plugin-vue": "^5.0.3",
     "@vitejs/plugin-vue-jsx": "^3.1.0",
     "@vitest/coverage-v8": "1.6.1",
+    "@vue/cli-plugin-eslint": "^5.0.8",
     "@vue/cli-plugin-router": "^5.0.8",
+    "@vue/cli-service": "^5.0.8",
     "@vue/eslint-config-prettier": "^8.0.0",
     "@vue/eslint-config-typescript": "^12.0.0",
     "@vue/test-utils": "^2.4.11",

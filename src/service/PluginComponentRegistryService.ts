@@ -8,20 +8,19 @@ import {
 } from "@/service/PluginLoaderService";
 import { PluginRuntimeCache } from "@/service/PluginRuntimeCache";
 import { PluginHookRegistrar } from "@/service/pluginCompat/PluginHookRegistrar";
+import { PluginCommandSourceReader } from "@/service/pluginCompat/PluginCommandSourceReader";
 import { UserPluginAutoInstallService } from "@/service/UserPluginAutoInstallService";
 import { SkillRegistry } from "@/config/skillsRegistry";
 import { CommandRegistry } from "@/service/slashCommands/CommandRegistry";
 import { AgentDefinitionRegistryImpl } from "@/service/AgentDefinitionRegistry";
 import { getAIFetchlyConfigManager } from "@/service/aifetchlyConfig/AIFetchlyConfigManager";
-import { buildPromptCommandDefinition } from "@/service/slashCommands/promptCommandFrontmatter";
 import { buildAgentDefinition } from "@/service/slashCommands/agentFrontmatter";
 import {
+  frontmatterRecord,
   parseRestrictedFrontmatter,
-  type ParsedFrontmatter,
 } from "@/service/aifetchlyConfig/AIFetchlyConfigMarkdown";
 import { AIFETCHLY_CONFIG_LIMITS } from "@/service/aifetchlyConfig/AIFetchlyConfigConstants";
 import type { AIFetchlyConfigDiagnostic } from "@/entityTypes/aifetchlyConfigTypes";
-import type { SlashCommandDefinition } from "@/entityTypes/slashCommandTypes";
 import type { AgentDefinitionView } from "@/entityTypes/agentTypes";
 /**
  * Adapts loaded plugin data into the existing skill and MCP runtime systems.
@@ -123,14 +122,13 @@ export class PluginComponentRegistryService {
         continue;
       }
 
-      const commandResult =
-        await PluginComponentRegistryService.readComponentFiles<SlashCommandDefinition>(
-          plugin.installPath,
-          "commands",
-          AIFETCHLY_CONFIG_LIMITS.commandMdBytes,
-          sourceId,
-          (draft) => buildPromptCommandDefinition(draft, sourceMeta)
-        );
+      // Commands: native commands/*.md PLUS Claude manifest declarations
+      // (string/array/object/inline), handled by PluginCommandSourceReader.
+      const commandResult = await PluginCommandSourceReader.read({
+        pluginName: plugin.name,
+        installPath: plugin.installPath,
+        manifest: plugin.manifest,
+      });
       allDiagnostics.push(...commandResult.diagnostics);
       commandRegistry.replaceSource(sourceId, commandResult.definitions);
 
@@ -236,15 +234,6 @@ interface ComponentDraft {
   readonly frontmatter: Readonly<Record<string, string | readonly string[]>>;
   readonly body: string;
   readonly relativePath: string;
-}
-
-function frontmatterRecord(
-  parsed: ParsedFrontmatter
-): Record<string, string | readonly string[]> {
-  const record: Record<string, string | readonly string[]> = {};
-  for (const [key, value] of parsed.scalars) record[key] = value;
-  for (const [key, value] of parsed.arrays) record[key] = value;
-  return record;
 }
 
 function pluginDiagnostic(

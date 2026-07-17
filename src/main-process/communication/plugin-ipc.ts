@@ -195,6 +195,19 @@ export function registerPluginIpcHandlers(): void {
       if (!result.success) {
         throw new Error(result.errors.map((e) => e.message).join("; "));
       }
+      // Promote the plugin's commands/agents immediately so they are usable in
+      // AiChatV2 without an app restart or manual reload (PRD §9.4 / design
+      // §11). Recoverable: a promotion failure must NOT fail an otherwise-
+      // successful install — the plugin is already persisted and a subsequent
+      // reload re-promotes. Invalid commands surface as diagnostics, not errors.
+      try {
+        await PluginComponentRegistryService.applyLoadedPlugins();
+      } catch (promotionError) {
+        console.warn(
+          "[plugin-ipc] command promotion after import failed (recoverable):",
+          promotionError
+        );
+      }
       return result.plugin;
     }
   );
@@ -267,6 +280,19 @@ export function registerPluginIpcHandlers(): void {
       });
       if (!r.success) {
         throw new Error(r.errors.map((e) => e.message).join("; "));
+      }
+      // Promote the plugin's commands/agents immediately so they are usable in
+      // AiChatV2 without an app restart or manual reload (PRD §9.4 / design
+      // §11). Recoverable: a promotion failure must NOT fail an otherwise-
+      // successful install — the plugin is already persisted and a subsequent
+      // reload re-promotes.
+      try {
+        await PluginComponentRegistryService.applyLoadedPlugins();
+      } catch (promotionError) {
+        console.warn(
+          "[plugin-ipc] command promotion after install-from-source failed (recoverable):",
+          promotionError
+        );
       }
       return r.plugin;
     }

@@ -69,6 +69,28 @@ export type PluginAgentDeclaration =
   | true
   | Record<string, { source?: string; content?: string; description?: string }>;
 
+/**
+ * Plugin command declaration shape (PRD §8.2, design §10.5). Native (aifetchly)
+ * format uses a physical `commands/*.md` directory; Claude format additionally
+ * allows the manifest `commands` field to be a single path string, an array of
+ * paths, `true` (auto-detect `commands/`), or an object map of
+ * `{ source?, content?, description? }` entries (inline `content` supported).
+ */
+export type PluginCommandDeclaration =
+  | string
+  | readonly string[]
+  | true
+  | Record<string, PluginCommandDeclarationEntry>;
+
+export interface PluginCommandDeclarationEntry {
+  /** Relative path to a command markdown file inside the plugin root. */
+  readonly source?: string;
+  /** Inline command markdown body (frontmatter optional). Filesystem-free. */
+  readonly content?: string;
+  /** Fallback description when the command file has none. */
+  readonly description?: string;
+}
+
 // ---------------------------------------------------------------------------
 // MCP server declaration (Design §4.3)
 // ---------------------------------------------------------------------------

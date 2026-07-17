@@ -115,6 +115,14 @@ const SUPPORTED_DOC_EXTS = new Set([".pdf", ".docx", ".csv", ".xlsx", ".xls"]);
 const props = defineProps<{
   isStreaming: boolean;
   isProcessing?: boolean;
+  /**
+   * Active conversation id, used to scope slash-command suggestions so a
+   * workspace command only appears in chats using that workspace (FR-1).
+   * null/undefined for a brand-new chat -> the main process returns only
+   * non-workspace commands. We deliberately do NOT create a conversation id
+   * just for suggestions (design §9.1).
+   */
+  conversationId?: string | null;
 }>();
 const emit = defineEmits<{
   (e: "send", text: string, files: File[]): void;
@@ -133,6 +141,12 @@ const slashOpen = ref(false);
 const slashHighlightedIndex = ref(-1);
 let slashDebounce: ReturnType<typeof setTimeout> | null = null;
 let suppressSlashRefresh = false;
+// Monotonic generation token: each refreshSlashSuggestions call increments it
+// and captures its generation. After the IPC resolves, a stale callback (from a
+// previous conversation or query) sees a mismatch and skips the state write —
+// so switching chats mid-suggestion can never flash another workspace's command
+// names/descriptions into the now-active chat (AC-1 — "never listable").
+let slashGeneration = 0;
 
 /**
  * When the draft starts with '/', fetch matching commands from the registry
@@ -152,14 +166,22 @@ function refreshSlashSuggestions(): void {
   }
   const query = text.slice(1); // strip leading /
   if (slashDebounce) clearTimeout(slashDebounce);
+  const generation = ++slashGeneration;
   slashDebounce = setTimeout(async () => {
     try {
-      const resp = await listSlashCommands({ query });
+      const resp = await listSlashCommands({
+        conversationId: props.conversationId ?? undefined,
+        query,
+      });
+      // A newer refresh (new keystroke or conversation switch) superseded this
+      // one — drop the stale result instead of flashing it into the wrong chat.
+      if (generation !== slashGeneration) return;
       const commands = resp?.commands ?? [];
       slashCommands.value = commands;
       slashOpen.value = commands.length > 0;
       slashHighlightedIndex.value = commands.length > 0 ? 0 : -1;
     } catch {
+      if (generation !== slashGeneration) return;
       slashOpen.value = false;
       slashCommands.value = [];
     }
@@ -170,6 +192,18 @@ function refreshSlashSuggestions(): void {
 watch(draft, () => {
   refreshSlashSuggestions();
 });
+
+// Refresh suggestions when the active conversation changes (the scoped command
+// set differs per workspace) — but only if the user is already typing a slash
+// command, so we never open the dropdown unprompted.
+watch(
+  () => props.conversationId,
+  () => {
+    if (draft.value.startsWith("/")) {
+      refreshSlashSuggestions();
+    }
+  }
+);
 
 function closeSlash(): void {
   if (slashDebounce) {

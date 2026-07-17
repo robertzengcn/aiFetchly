@@ -22,6 +22,7 @@ import { z } from "zod";
 import { registerValidatedHandler } from "./_shared/registerValidatedHandler";
 import { lazySchema } from "@/utils/lazySchema";
 import { SlashCommandModule } from "@/modules/SlashCommandModule";
+import { WorkspaceSlashCommandScopeResolver } from "@/service/slashCommands/SlashCommandScopeResolver";
 import { registerBuiltInSlashCommands } from "@/service/slashCommands/builtinSlashCommands";
 import { getAIFetchlyConfigManager } from "@/service/aifetchlyConfig/AIFetchlyConfigManager";
 import {
@@ -83,13 +84,17 @@ export function registerSlashCommandHandlers(win: BrowserWindow): void {
   //    during HMR / multiple windows does not duplicate commands.
   const manager = getAIFetchlyConfigManager();
   registerBuiltInSlashCommands(manager.getCommandRegistry());
+  // Workspace-aware scope resolver shared by list + dispatch so they agree on
+  // exactly which commands a conversation may see (FR-1..FR-3).
+  const scopeResolver = new WorkspaceSlashCommandScopeResolver();
 
-  // 2. list — SlashCommandView[] ranked by query (CMD-07).
+  // 2. list — SlashCommandView[] ranked by query (CMD-07), scoped to the
+  //    conversation's approved workspace (FR-1).
   registerValidatedHandler(
     SLASH_COMMAND_LIST,
     listRequestSchema,
     async (input) => {
-      const module = new SlashCommandModule(undefined, manager);
+      const module = new SlashCommandModule(undefined, manager, scopeResolver);
       return module.listCommands(input);
     }
   );
@@ -97,12 +102,13 @@ export function registerSlashCommandHandlers(win: BrowserWindow): void {
   // 3. dispatch — CMD-04 discriminated union. Built-in (local) commands
   //    return show_result; prompt-type commands return submit_prompt and
   //    the renderer submits via AI_CHAT_V2_STREAM (gated downstream —
-  //    TRS-05 Strategy A).
+  //    TRS-05 Strategy A). Scoped resolution (FR-2) ensures a workspace
+  //    command cannot be dispatched from the wrong conversation.
   registerValidatedHandler(
     SLASH_COMMAND_DISPATCH,
     dispatchRequestSchema,
     async (input) => {
-      const module = new SlashCommandModule(undefined, manager);
+      const module = new SlashCommandModule(undefined, manager, scopeResolver);
       return module.dispatch(input);
     }
   );

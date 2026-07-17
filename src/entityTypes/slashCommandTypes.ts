@@ -161,3 +161,43 @@ export interface SlashCommandListResponse {
   readonly diagnostics: readonly unknown[];
   readonly msg: string;
 }
+
+// --- Scoped command resolution (plugin/workspace slash commands) -------------
+
+/**
+ * Filter applied by {@link CommandRegistry} scoped accessors. A command is
+ * "allowed" for a conversation when EITHER:
+ *   - its `sourceId` is listed in {@link allowedExactSourceIds}, OR
+ *   - it is a plugin command (`source === "plugin"`) and
+ *     {@link allowPluginSources} is true.
+ *
+ * {@link allowedExactSourceIds} always includes {@link BUILTIN_SOURCE} and
+ * {@link USER_SOURCE}; it additionally includes exactly one
+ * `workspace:<workspaceId>` when the conversation has an approved workspace.
+ *
+ * Why plugins use a predicate instead of enumerated ids: the installed plugin
+ * set is dynamic and already represented in the registry. Filtering by
+ * `source === "plugin"` avoids rebuilding scopes whenever plugins are
+ * installed/disabled/uninstalled (design §4.1).
+ *
+ * This is the canonical scope shape consumed by the registry AND produced by
+ * the scope resolver — one source of truth.
+ */
+export interface CommandRegistryScope {
+  readonly allowedExactSourceIds: ReadonlySet<string>;
+  readonly allowPluginSources: boolean;
+}
+
+/**
+ * Per-dispatch context handed to {@link SlashCommandDispatcher.dispatch}.
+ * Carries the {@link CommandRegistryScope} so dispatch resolves names against
+ * exactly the same scoped set the list API exposes (FR-2: suggestions and
+ * dispatch MUST agree on the winning command).
+ *
+ * Optional on the dispatcher signature: when omitted, the dispatcher uses a
+ * safe non-workspace default so a forgotten context can never leak a
+ * workspace command. Production paths always pass a resolver-produced scope.
+ */
+export interface SlashCommandDispatchContext {
+  readonly scope: CommandRegistryScope;
+}

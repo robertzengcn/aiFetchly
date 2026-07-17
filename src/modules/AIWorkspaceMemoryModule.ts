@@ -11,6 +11,7 @@ import type {
   AIWorkspaceMemoryUpdateInput,
   AIWorkspaceMemorySearchInput,
   AIWorkspaceMemoryView,
+  AIWorkspaceMemoryStatus,
 } from "@/entityTypes/aiWorkspaceMemoryTypes";
 import {
   isAIWorkspaceMemoryType,
@@ -158,11 +159,12 @@ export class AIWorkspaceMemoryModule extends BaseModule {
     scope: WorkspaceMemoryScope,
     input: Omit<AIWorkspaceMemorySearchInput, "conversationId">
   ): Promise<AIWorkspaceMemoryView[]> {
+    const status = resolveListStatus(input.status);
     const rows = await this.memoryModel.list({
       workspaceKey: scope.workspaceKey,
       query: input.query,
       type: input.type,
-      status: input.status ?? "active",
+      status,
       sourceKind: input.sourceKind,
       limit: input.limit,
       offset: input.offset,
@@ -260,6 +262,17 @@ function rejectSecretLike(title: string | null, content: string | null): void {
       "Workspace memory content looks like a secret or credential and was rejected."
     );
   }
+}
+
+function resolveListStatus(
+  status: AIWorkspaceMemorySearchInput["status"]
+): AIWorkspaceMemoryStatus | undefined {
+  if (status === "all") return undefined;
+  if (status === undefined) return "active";
+  if (!isAIWorkspaceMemoryStatus(status)) {
+    throw new Error("Invalid workspace memory status");
+  }
+  return status;
 }
 
 function clampConfidence(v: number): number {

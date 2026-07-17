@@ -43,6 +43,40 @@ const SCOPE_B: WorkspaceMemoryScope = {
   workspaceRoot: "/projects/beta",
 };
 
+function createModuleWithListMock(list: ReturnType<typeof vi.fn>) {
+  const mod = Object.create(
+    AIWorkspaceMemoryModule.prototype
+  ) as AIWorkspaceMemoryModule;
+  (
+    mod as unknown as {
+      memoryModel: Pick<AIWorkspaceMemoryModel, "list">;
+    }
+  ).memoryModel = { list } as Pick<AIWorkspaceMemoryModel, "list">;
+  return mod;
+}
+
+function memoryRow(overrides: {
+  memoryId: string;
+  status: "active" | "archived" | "contradicted";
+  title: string;
+}) {
+  const now = new Date("2026-07-16T00:00:00.000Z");
+  return {
+    id: 1,
+    memoryId: overrides.memoryId,
+    workspaceKey: SCOPE_A.workspaceKey,
+    workspaceRoot: SCOPE_A.workspaceRoot,
+    type: "decision",
+    title: overrides.title,
+    content: "content",
+    status: overrides.status,
+    confidence: 100,
+    sourceKind: "manual",
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
 describe("AIWorkspaceMemoryModule", () => {
   it("creates a memory with a wmem- id and the workspace scope", async () => {
     const mod = new AIWorkspaceMemoryModule();
@@ -110,6 +144,21 @@ describe("AIWorkspaceMemoryModule", () => {
     expect(createSpy).not.toHaveBeenCalled();
   });
 
+  it("rejects WM-VALID-07 PEM private-key headers without creating a memory", async () => {
+    const createSpy = vi.spyOn(AIWorkspaceMemoryModel.prototype, "create");
+    const mod = new AIWorkspaceMemoryModule();
+
+    await expect(
+      mod.createMemory(SCOPE_A, {
+        type: "reference",
+        title: "Signing Key",
+        content: "-----BEGIN RSA PRIVATE KEY-----",
+      })
+    ).rejects.toThrow(/secret|credential/i);
+
+    expect(createSpy).not.toHaveBeenCalled();
+  });
+
   it("clamps confidence into 0..100", async () => {
     const mod = new AIWorkspaceMemoryModule();
     await SqliteDb.ensureInitialized();
@@ -169,6 +218,52 @@ describe("AIWorkspaceMemoryModule", () => {
     await mod.markMemoriesUsed(SCOPE_A, [v.memoryId], at);
     const fetched = await mod.getMemory(SCOPE_A, v.memoryId);
     expect(fetched?.lastUsedAt).toBe(at.toISOString());
+  });
+
+  it("lists active memories by default at the module boundary", async () => {
+    const list = vi
+      .fn()
+      .mockResolvedValue([
+        memoryRow({ memoryId: "wmem-active", status: "active", title: "Active" }),
+      ]);
+    const mod = createModuleWithListMock(list);
+
+    const results = await mod.listMemories(SCOPE_A, {});
+
+    expect(list).toHaveBeenCalledWith({
+      workspaceKey: SCOPE_A.workspaceKey,
+      query: undefined,
+      type: undefined,
+      status: "active",
+      sourceKind: undefined,
+      limit: undefined,
+      offset: undefined,
+    });
+    expect(results.map((m) => m.status)).toEqual(["active"]);
+  });
+
+  it("lists all statuses when requested for the show-archived panel toggle", async () => {
+    const list = vi.fn().mockResolvedValue([
+      memoryRow({
+        memoryId: "wmem-archived",
+        status: "archived",
+        title: "Archived",
+      }),
+    ]);
+    const mod = createModuleWithListMock(list);
+
+    const results = await mod.listMemories(SCOPE_A, { status: "all" });
+
+    expect(list).toHaveBeenCalledWith({
+      workspaceKey: SCOPE_A.workspaceKey,
+      query: undefined,
+      type: undefined,
+      status: undefined,
+      sourceKind: undefined,
+      limit: undefined,
+      offset: undefined,
+    });
+    expect(results.map((m) => m.status)).toEqual(["archived"]);
   });
 
   // ---- Workspace isolation (the core safety guarantee) ----

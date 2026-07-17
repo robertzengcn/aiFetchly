@@ -321,6 +321,146 @@ Try creating memories with each of these content patterns:
 - Workspace B memories are only about Workspace B content.
 - No cross-contamination.
 
+### WM-AUTO-08 — Automatic auto-dream from one active conversation
+
+**Goal:** Verify that Workspace Auto-Dream runs automatically when one approved workspace conversation has enough chat messages.
+
+**Preconditions:**
+- AI is enabled.
+- Workspace auto-dream is enabled.
+- Workspace memory injection can be on or off; it does not affect creation.
+- Use a fresh workspace or a workspace with no successful auto-dream run in the last 24 hours.
+- Open the Workspace Memory panel before starting and note the current "Last run" value.
+
+Use these exact chat turns in one Workspace A conversation:
+
+1. Send:
+
+```text
+For this workspace, remember this durable decision: all release branches must be named release/YYYY-MM-DD.
+```
+
+2. Wait for the assistant response to complete.
+3. Send:
+
+```text
+For this workspace, remember this workflow: before packaging Electron builds, run yarn build and then yarn make.
+```
+
+4. Wait for the assistant response to complete.
+5. Send:
+
+```text
+For this workspace, remember this warning: do not run database migrations from a worker process; the main process must handle database writes.
+```
+
+6. Wait 10-30 seconds after the third assistant response.
+7. Open the Workspace Memory panel and refresh/reopen it if needed.
+
+**Expected:**
+- Workspace Auto-Dream runs automatically after the third assistant response.
+- The auto-dream status shows a newer last-run timestamp.
+- One or more new memories may appear with source `auto_dream`.
+- Created memory content should be about release branch naming, Electron packaging workflow, or worker database restrictions.
+- Chat response completion is not delayed or blocked by auto-dream.
+
+**Notes:**
+- If there was already a successful workspace auto-dream run within 24 hours, automatic execution is skipped by cooldown. Use a fresh workspace or wait for the cooldown to expire.
+- If the model decides not to create memories, use WM-AUTO-09 to verify the manual forced path.
+
+### WM-AUTO-09 — Manual run uses the same chat sources
+
+**Goal:** Verify that the Run Auto Summary button can force consolidation when automatic cooldown or thresholds make the result ambiguous.
+
+1. Use the same conversation from WM-AUTO-08.
+2. Open the Workspace Memory panel.
+3. Click **RUN AUTO SUMMARY**.
+4. Wait until the button stops loading.
+5. Reopen or refresh the Workspace Memory panel.
+
+**Expected:**
+- The run completes or records a failed run without breaking chat.
+- If successful, one or more memories are created/updated/archived.
+- New memories use source `auto_dream`.
+- If no memories are created, the existing status still updates with a completed run and zero create/update/archive counts.
+
+### WM-AUTO-10 — Auto-dream should not create secrets from chat
+
+**Goal:** Verify that Workspace Auto-Dream refuses secret-like chat content.
+
+Use these exact chat turns in one approved Workspace A conversation:
+
+1. Send:
+
+```text
+For this workspace, remember that staging uses a token value named Authorization Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.fakepayload.fakesignature.
+```
+
+2. Wait for the assistant response.
+3. Send:
+
+```text
+For this workspace, remember that a private key header was pasted during setup: -----BEGIN RSA PRIVATE KEY-----
+```
+
+4. Wait for the assistant response.
+5. Send:
+
+```text
+For this workspace, remember the safe non-secret lesson: credentials must never be stored in workspace memory.
+```
+
+6. Wait 10-30 seconds, or click **RUN AUTO SUMMARY** to force a run.
+7. Open the Workspace Memory panel and search for `Bearer`, `PRIVATE KEY`, and `credentials`.
+
+**Expected:**
+- No memory contains the JWT-like bearer token.
+- No memory contains `-----BEGIN RSA PRIVATE KEY-----`.
+- A safe memory may be created that says credentials must not be stored.
+- If auto-dream attempts to store secret-like content, the run should fail or skip that candidate rather than persisting it.
+
+### WM-AUTO-11 — Auto-dream keeps workspace-specific facts isolated
+
+**Goal:** Verify that automatic consolidation does not mix two workspaces.
+
+1. In Workspace A, open a fresh conversation and send these messages:
+
+```text
+For this workspace, remember that Project Alpha uses customer import files from /alpha/imports.
+```
+
+```text
+For this workspace, remember that Project Alpha's QA command is yarn testmain.
+```
+
+```text
+For this workspace, remember that Project Alpha forbids Friday releases.
+```
+
+2. In Workspace B, open a fresh conversation and send these messages:
+
+```text
+For this workspace, remember that Project Beta uses customer import files from /beta/uploads.
+```
+
+```text
+For this workspace, remember that Project Beta's QA command is yarn vitest-puppeteer.
+```
+
+```text
+For this workspace, remember that Project Beta allows Friday releases only with manager approval.
+```
+
+3. Wait 10-30 seconds after each third response, or force **RUN AUTO SUMMARY** in each workspace panel.
+4. Open Workspace A memory panel and search for `Beta`.
+5. Open Workspace B memory panel and search for `Alpha`.
+
+**Expected:**
+- Workspace A memories mention only Alpha paths/rules/commands.
+- Workspace B memories mention only Beta paths/rules/commands.
+- Searching for `Beta` in Workspace A returns no Beta memories.
+- Searching for `Alpha` in Workspace B returns no Alpha memories.
+
 ---
 
 ## 9. Edge Cases
@@ -336,15 +476,337 @@ Try creating memories with each of these content patterns:
 - No workspace memory block is injected into the context.
 - Chat still works normally.
 
-### WM-EDGE-02 — Very long memory content
+### WM-EDGE-02 — Very long memory content (workspace memory)
 
-1. Create a memory with content close to the 8000-character limit (e.g., 7500 chars).
-2. Ask a question that should trigger retrieval of this memory.
+**Goal:** Verify that a memory with content close to the 8000-character limit is stored, retrieved, and injected into chat without errors or truncation.
+
+**Why this matters:** The retrieval service has a token budget (1800 tokens for workspace memory). A single 7500-char memory may consume most or all of that budget, testing how the system handles near-max-length content.
+
+---
+
+#### Step 1 — Generate the test content
+
+Copy-paste the following into a terminal to create the test file:
+
+```bash
+node -e "
+const lines = [
+  '=== PROJECT DEPLOYMENT RUNBOOK v3.2 ===',
+  '',
+  '1. PRE-DEPLOYMENT CHECKLIST',
+  '- Verify all CI checks pass on the target branch (main or release).',
+  '- Confirm database migrations are backward-compatible and tested locally.',
+  '- Check that environment variables (VITE_REMOTEADD, UPDATESERVER) are set in the deployment environment.',
+  '- Run the full test suite: yarn test and yarn vitest-googlescraper.',
+  '- Verify Puppeteer stealth plugin is not blocked by the target site (test with a single scrape).',
+  '- Confirm SQLite database schema matches the deployed TypeORM entities (run yarn init if needed).',
+  '- Ensure better-sqlite3 native module is rebuilt for the target Node/Electron version (yarn rebuild-better-sqlite).',
+  '- Review all open PRs and ensure no secrets or API keys are committed (check .env files, safeStorage usage).',
+  '',
+  '2. BUILD STEPS',
+  '- Clean build directory: rm -rf dist out.',
+  '- Run yarn build to create production bundle via Vite.',
+  '- Package for current platform: yarn make (Electron Forge).',
+  '- Verify the output package exists in the out/ directory.',
+  '- Check the package size — flag if it exceeds 200MB (may indicate unoptimized assets).',
+  '- Test the packaged app by running yarn start with the built output.',
+  '',
+  '3. DATABASE MIGRATION',
+  '- Back up the existing SQLite database from the users data directory.',
+  "- Run the app's init sequence: yarn init (creates/migrates schema).",
+  '- Verify TypeORM entities are all registered in SqliteDb.ts.',
+  '- Check sqlite-vec integration for vector operations (if applicable to the release).',
+  '- Confirm no TypeORM errors in the main process log.',
+  '- Test that existing data is preserved after migration (no data loss).',
+  '',
+  '4. DEPLOYMENT ENVIRONMENT',
+  '- For desktop (Electron) releases: sign the binary with the appropriate certificate.',
+  '- For web deployments: ensure VITE_REMOTEADD points to the production backend URL.',
+  '- Update UPDATESERVER URL if the auto-updater endpoint has changed.',
+  '- Verify the update server is accessible from the target deployment region.',
+  '- Check SSL certificates on the update server (must be valid for at least 90 days).',
+  '',
+  '5. POST-DEPLOYMENT VERIFICATION',
+  '- Open the application and confirm the main window loads without errors.',
+  '- Check that the AI Chat V2 panel initializes correctly.',
+  '- Verify workspace memory panel loads and shows the correct memory count.',
+  '- Test a simple AI chat message to confirm API connectivity.',
+  '- Confirm that user memory injection works (settings toggle should be ON by default).',
+  '- Test workspace memory create/read/update/delete from the panel.',
+  '- Verify auto-dream status shows the last consolidation run (or shows disabled if never triggered).',
+  '- Check that child processes (contact extraction, yellow pages scraper) can be spawned.',
+  '- Confirm the SQLite database file is in the correct location (resolved via Token service).',
+  '',
+  '6. ROLLBACK PLAN',
+  '- If critical issues are found, revert to the previous release by re-installing the older version.',
+  '- Database is backward-compatible (migrations are additive), so no rollback migration is needed.',
+  '- User memories and workspace memories are preserved across version changes.',
+  '- If the SQLite schema changed in a breaking way, restore from the pre-migration backup.',
+  '',
+  '7. MONITORING',
+  '- Watch the application logs for the first 24 hours after deployment.',
+  '- Monitor error rates in the update server dashboard.',
+  '- Track auto-dream consolidation run success rates (should be above 95%).',
+  '- Check for any spike in Puppeteer timeout errors (may indicate site changes or IP blocks).',
+  '- Verify that memory creation and retrieval latency stays under 500ms.',
+  '',
+  '8. PERFORMANCE BENCHMARKS',
+  '- App cold start time should be under 3 seconds on a standard machine.',
+  '- AI Chat first message response time should be under 5 seconds.',
+  '- Workspace memory retrieval should complete in under 200ms.',
+  '- User memory retrieval should complete in under 150ms.',
+  '- SQLite queries should complete in under 50ms for any single operation.',
+  '- File operations (contact extraction) should not block the main process UI thread.',
+  '',
+  '9. SECURITY CHECKLIST',
+  '- Verify context isolation is enabled in Electron (nodeIntegration: false).',
+  '- Confirm all IPC communication goes through contextBridge (no direct renderer-main access).',
+  '- Check that safeStorage is used for sensitive token storage (not plaintext files).',
+  '- Verify that worker processes do not access the database directly (they use IPC).',
+  '- Ensure the MemorySecretFilter rejects API keys, JWTs, and private keys in workspace memory.',
+  '- Confirm that no hardcoded credentials exist in the source code.',
+  '- Review the auto-dream output for any leaked secrets (should be filtered).',
+  '',
+  '10. CONTACT INFORMATION',
+  '- DevOps Lead: reachable via internal Slack channel #deployments.',
+  '- Backend Team: available for database migration support during deploy window.',
+  '- QA Team: on standby for post-deploy smoke testing.',
+  '- Emergency Contact: escalation path documented in the incident response playbook.',
+  '',
+  '=== END OF RUNBOOK ==='
+];
+const content = lines.join('\n');
+require('fs').writeFileSync('/tmp/wmedge02-test-content.txt', content);
+console.log('Content length: ' + content.length + ' characters');
+"
+```
+
+Then read and copy the content:
+
+```bash
+cat /tmp/wmedge02-test-content.txt
+```
+
+The content should be approximately **4,700–5,000 characters**. If you need it closer to 7,500, add more detail to each section (see note below). Alternatively, you can generate exactly 7,500 chars with:
+
+```bash
+node -e "
+// Generate exactly 7500 characters of realistic memory content
+const base = '=== PROJECT DEPLOYMENT RUNBOOK v3.2 ===\n\nThis document covers the complete deployment workflow for the AiFetchly application. It includes pre-deployment checks, build steps, database migration procedures, environment configuration, post-deployment verification, rollback plans, monitoring setup, performance benchmarks, security audits, and emergency contact information. Every team member must read this runbook before performing a production deployment.\n\n';
+let content = base;
+const sections = [
+  ['1. PRE-DEPLOYMENT CHECKLIST', [
+    'Verify all CI checks pass on the target branch (main or release).',
+    'Confirm database migrations are backward-compatible and tested locally.',
+    'Check that environment variables (VITE_REMOTEADD, UPDATESERVER) are set correctly.',
+    'Run the full test suite: yarn test and yarn vitest-googlescraper.',
+    'Verify Puppeteer stealth plugin is not blocked by the target scraping sites.',
+    'Confirm SQLite database schema matches the deployed TypeORM entities.',
+    'Ensure better-sqlite3 native module is rebuilt for the target Node version.',
+    'Review all open PRs for secrets or API keys before merging.',
+  ]],
+  ['2. BUILD STEPS', [
+    'Clean build directory: rm -rf dist out before each build.',
+    'Run yarn build to create production bundle via Vite.',
+    'Package for current platform: yarn make uses Electron Forge.',
+    'Verify the output package exists in the out/ directory after build.',
+    'Check the package size — flag if it exceeds 200MB total.',
+    'Test the packaged app by running yarn start with built output.',
+    'Verify that all Vue components render correctly in the packaged build.',
+    'Confirm Pinia store state persists correctly after app restart.',
+  ]],
+  ['3. DATABASE MIGRATION', [
+    'Back up the existing SQLite database before any migration.',
+    'Run the init sequence: yarn init creates or migrates the schema.',
+    'Verify TypeORM entities are all registered in SqliteDb.ts configuration.',
+    'Check sqlite-vec integration for vector operations if applicable.',
+    'Confirm no TypeORM errors appear in the main process log output.',
+    'Test that existing data is preserved after migration without loss.',
+    'Verify AIUserMemory, AIWorkspaceMemory, and session memory tables exist.',
+    'Check that the contact extraction child process can still access data via IPC.',
+  ]],
+  ['4. DEPLOYMENT ENVIRONMENT', [
+    'For desktop Electron releases: sign the binary with proper certificate.',
+    'For web deployments: ensure VITE_REMOTEADD points to production backend.',
+    'Update UPDATESERVER URL if the auto-updater endpoint has changed.',
+    'Verify the update server is accessible from the target deployment region.',
+    'Check SSL certificates on the update server for validity and expiry.',
+    'Ensure the Electron app can download updates from the server without errors.',
+    'Test the auto-update flow on at least two different operating systems.',
+  ]],
+  ['5. POST-DEPLOYMENT VERIFICATION', [
+    'Open the application and confirm the main window loads without errors.',
+    'Check that the AI Chat V2 panel initializes correctly on first launch.',
+    'Verify workspace memory panel loads and shows the correct memory count.',
+    'Test a simple AI chat message to confirm API connectivity works.',
+    'Confirm that user memory injection works with the settings toggle ON.',
+    'Test workspace memory create, read, update, and delete from the panel.',
+    'Verify auto-dream status shows the last consolidation run information.',
+    'Check that child processes like contact extraction can be spawned correctly.',
+    'Confirm the SQLite database file is resolved via Token service correctly.',
+  ]],
+  ['6. ROLLBACK PLAN', [
+    'If critical issues found, revert by reinstalling the previous release version.',
+    'Database migrations are additive so no rollback migration should be needed.',
+    'User memories and workspace memories are preserved across version changes.',
+    'If schema changed in breaking way, restore from pre-migration backup file.',
+    'Notify all team members about the rollback via the incident channel.',
+    'Document the root cause before attempting a re-deployment with fixes.',
+  ]],
+  ['7. MONITORING', [
+    'Watch application logs for the first 24 hours after deployment completes.',
+    'Monitor error rates in the update server dashboard for anomalies.',
+    'Track auto-dream consolidation run success rates — should be above 95%.',
+    'Check for spike in Puppeteer timeout errors that may indicate site changes.',
+    'Verify memory creation and retrieval latency stays under 500 milliseconds.',
+    'Set up alerts for any unhandled promise rejections in the main process.',
+    'Monitor SQLite database file size growth over the first week after deploy.',
+  ]],
+  ['8. PERFORMANCE BENCHMARKS', [
+    'App cold start time should be under 3 seconds on a standard development machine.',
+    'AI Chat first message response time should be under 5 seconds from send.',
+    'Workspace memory retrieval should complete in under 200 milliseconds total.',
+    'User memory retrieval should complete in under 150 milliseconds total.',
+    'SQLite queries should complete in under 50 milliseconds for any single operation.',
+    'File operations like contact extraction must not block the main process UI.',
+    'Memory injection into the chat context should not add more than 100ms overhead.',
+  ]],
+  ['9. SECURITY CHECKLIST', [
+    'Verify context isolation is enabled in Electron with nodeIntegration false.',
+    'Confirm all IPC communication goes through contextBridge securely.',
+    'Check that safeStorage is used for sensitive token storage in files.',
+    'Ensure worker processes do not access the database directly via IPC.',
+    'Verify MemorySecretFilter rejects API keys and JWTs and private keys.',
+    'Confirm no hardcoded credentials exist anywhere in the source code.',
+    'Review auto-dream output for any leaked secrets before they are stored.',
+    'Audit the contact extraction pipeline for any data leakage vectors.',
+  ]],
+  ['10. CONTACT INFORMATION', [
+    'DevOps Lead: reachable via internal Slack channel number deployments.',
+    'Backend Team: available for database migration support during deploy window.',
+    'QA Team: on standby for post-deploy smoke testing of all critical flows.',
+    'Emergency Contact: escalation path is documented in incident response plan.',
+  ]],
+];
+for (const [title, items] of sections) {
+  content += title + '\n';
+  for (const item of items) {
+    content += '- ' + item + '\n';
+  }
+  content += '\n';
+}
+content += '=== END OF RUNBOOK ===\n';
+// Pad or trim to exactly 7500 chars
+if (content.length < 7500) {
+  const pad = 'Additional deployment note: always verify that the environment is clean and free of stale processes before beginning a new deployment cycle. Check that no orphaned Node.js processes remain from previous builds, as these can interfere with file locking on the SQLite database and cause unexpected migration failures. If you encounter locked database errors, terminate any lingering Electron or Node processes and retry the migration step. This is especially important on Windows where file locking behavior differs from Unix systems.\n\n';
+  while (content.length < 7500) content += pad;
+}
+content = content.slice(0, 7500);
+require('fs').writeFileSync('/tmp/wmedge02-test-content-7500.txt', content);
+console.log('Content length: ' + content.length + ' characters');
+"
+```
+
+#### Step 2 — Create the workspace memory
+
+1. Open AI Chat V2.
+2. Open the **Workspace Memory panel** for Workspace A.
+3. Click **Create memory**.
+4. Fill in:
+   - **Type:** `workflow`
+   - **Title:** `Deployment runbook summary`
+   - **Content:** Paste the full content from `/tmp/wmedge02-test-content-7500.txt` (or the shorter ~5000-char version from Step 1).
+5. Click **Save**.
+
+**Expected (creation):**
+- Save succeeds without error.
+- Memory appears in the workspace memory list.
+- Status is `active`, source is `manual`.
+- The full content is visible (no truncation in the panel).
+
+#### Step 3 — Verify retrieval with keyword match
+
+In the **same Workspace A conversation**, send this message:
+
+```
+What are the pre-deployment checks before releasing?
+```
+
+**Expected (retrieval):**
+- The assistant's response references the deployment runbook memory (mentions items like CI checks, database migrations, Puppeteer stealth, or environment variables).
+- No console errors or "context assembly failed" messages in DevTools.
+- The `lastUsedAt` field on the memory is updated (visible in memory details if the UI supports it).
+
+#### Step 4 — Verify the token budget handling
+
+Since the 7,500-char memory may consume most or all of the 1800-token workspace memory budget, create **two additional smaller memories** in the same workspace:
+
+- Type: `warning`, Title: `No Friday deploys`, Content: `Never deploy on Fridays.`
+- Type: `convention`, Title: `Commit messages`, Content: `Use conventional commits format for all git commits.`
+
+Then ask:
+
+```
+What deployment rules should I follow?
+```
 
 **Expected:**
-- Memory is stored and retrieved.
-- Injection does not break the context assembly.
-- No truncation errors.
+- The assistant references the deployment runbook memory (the large one).
+- The assistant may or may not include the smaller memories depending on whether token budget remains — but it does **not** error or crash.
+- The chat response is coherent and complete.
+
+#### Step 5 — Verify memory list and count
+
+1. Open the Workspace Memory panel.
+2. Verify all 3 memories are listed (deployment runbook, no Friday deploys, commit messages).
+3. Check the badge count shows 3.
+
+**Expected:**
+- All 3 memories are visible and none are corrupted or truncated.
+- The deployment run memory content field shows the full ~7500 chars in the detail view.
+- Badge count is correct.
+
+#### Step 6 — Test the exact 8000-character boundary
+
+Optionally, create a memory with **exactly 8000 characters** (the maximum allowed):
+
+```bash
+node -e "
+const content = 'A'.repeat(8000);
+require('fs').writeFileSync('/tmp/wmedge02-exact-8000.txt', content);
+console.log('Content length: ' + content.length);
+"
+```
+
+Try to save it as a workspace memory.
+
+**Expected:** Saves successfully (8000 is within the limit).
+
+Then try with **8001 characters**:
+
+```bash
+node -e "
+const content = 'A'.repeat(8001);
+require('fs').writeFileSync('/tmp/wmedge02-over-8000.txt', content);
+console.log('Content length: ' + content.length);
+"
+```
+
+Try to save it.
+
+**Expected:** Save is rejected with a validation error (e.g., "Invalid content length (1..8000)").
+
+---
+
+#### Summary
+
+| Step | What to check | Pass criteria |
+|------|--------------|---------------|
+| 2 | Create ~7500-char memory | Saves without error, appears in list |
+| 3 | Keyword retrieval | Assistant uses the memory, no context errors |
+| 4 | Token budget | Chat works even with a near-max memory consuming budget |
+| 5 | Memory list integrity | All memories visible, badge correct |
+| 6 | Exact boundary | 8000 saves, 8001 rejected |
 
 ### WM-EDGE-03 — Rapid create/delete cycle
 
@@ -501,10 +963,10 @@ Execute all steps in order without resetting:
 | Source attribution | WM-SOURCE-01 to 03 | 3 |
 | Context injection order | WM-CTX-01 to 03 | 3 |
 | Archival/contradiction | WM-ARCH-01 to 04 | 4 |
-| Auto-dream deep | WM-AUTO-04 to 07 | 4 |
+| Auto-dream deep | WM-AUTO-04 to 11 | 8 |
 | Edge cases | WM-EDGE-01 to 05 | 5 |
 | Persistence | WM-PERSIST-01 to 03 | 3 |
 | i18n | WM-I18N-01 to 06 | 6 |
 | Security regression | WM-SEC-03 to 05 | 3 |
 | End-to-end | WM-E2E-01 | 1 |
-| **Total** | | **50** |
+| **Total** | | **54** |

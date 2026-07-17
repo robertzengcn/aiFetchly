@@ -22,12 +22,11 @@ import type { SlashCommandDefinition } from "@/entityTypes/slashCommandTypes";
 import type { PluginManifest } from "@/entityTypes/pluginTypes";
 import { CommandRegistry } from "@/service/slashCommands/CommandRegistry";
 import { AgentDefinitionRegistryImpl } from "@/service/AgentDefinitionRegistry";
-import {
-  PluginComponentRegistryService,
-} from "@/service/PluginComponentRegistryService";
+import { PluginComponentRegistryService } from "@/service/PluginComponentRegistryService";
 import { PluginLoaderService } from "@/service/PluginLoaderService";
 import { PluginRuntimeCache } from "@/service/PluginRuntimeCache";
 import { UserPluginAutoInstallService } from "@/service/UserPluginAutoInstallService";
+import { CLAUDE_OPAQUE_KEY } from "@/service/pluginCompat/ClaudePluginAdapter";
 import type { LoadedPlugin } from "@/service/PluginLoaderService";
 
 const tmpRoots: string[] = [];
@@ -122,9 +121,7 @@ describe("PluginComponentRegistryService.promotePluginCommandsAndAgents (SKL-02)
     // SKL-02 SC2: agents promoted under plugin:<name>.
     expect(agentSpy).toHaveBeenCalledWith(
       "plugin:demo",
-      expect.arrayContaining([
-        expect.objectContaining({ name: "researcher" }),
-      ])
+      expect.arrayContaining([expect.objectContaining({ name: "researcher" })])
     );
     const agents = agentRegistry.list();
     expect(agents.some((a) => a.name === "researcher")).toBe(true);
@@ -205,11 +202,18 @@ describe("PluginComponentRegistryService.promotePluginCommandsAndAgents (SKL-02)
   it("collects a diagnostic for a malformed command but still promotes valid siblings", async () => {
     const install = makeTmpDir();
     // Missing required `type: prompt` → builder returns a diagnostic.
-    writeFile(install, "commands/bad.md", "---\nname: bad\ndescription: ok\n---\nbody\n");
+    writeFile(
+      install,
+      "commands/bad.md",
+      "---\nname: bad\ndescription: ok\n---\nbody\n"
+    );
     writeFile(
       install,
       "commands/good.md",
-      VALID_COMMAND_MD.replace("review", "good").replace("Review code", "Good command")
+      VALID_COMMAND_MD.replace("review", "good").replace(
+        "Review code",
+        "Good command"
+      )
     );
 
     const commandRegistry = new CommandRegistry();
@@ -240,7 +244,54 @@ describe("PluginComponentRegistryService.promotePluginCommandsAndAgents (SKL-02)
       );
 
     expect(diagnostics).toEqual([]);
-    expect(commandRegistry.list().some((c) => c.source === "plugin")).toBe(false);
+    expect(commandRegistry.list().some((c) => c.source === "plugin")).toBe(
+      false
+    );
+  });
+
+  it("promotes a Claude manifest inline command declaration (FR-5, AC-6)", async () => {
+    const install = makeTmpDir();
+    const commandRegistry = new CommandRegistry();
+    const claudePlugin: LoadedPlugin = {
+      name: "claude-demo",
+      displayName: "claude-demo",
+      version: "1.0.0",
+      source: "local",
+      enabled: true,
+      installPath: install,
+      manifest: {
+        name: "claude-demo",
+        version: "1.0.0",
+        description: "",
+        format: "claude",
+        [CLAUDE_OPAQUE_KEY]: {
+          commands: {
+            review: {
+              description: "Review current changes",
+              content:
+                "---\nname: review\ndescription: Review current changes\ntype: prompt\n---\nReview $ARGUMENTS\n",
+            },
+          },
+        },
+      } as unknown as PluginManifest,
+      skills: [],
+      mcpServers: [],
+      hooks: [],
+      errors: [],
+    };
+
+    const { diagnostics } =
+      await PluginComponentRegistryService.promotePluginCommandsAndAgents(
+        commandRegistry,
+        new AgentDefinitionRegistryImpl(),
+        [claudePlugin]
+      );
+
+    expect(diagnostics).toEqual([]);
+    const review = commandRegistry.getByName("review");
+    expect(review).not.toBeNull();
+    expect(review?.source).toBe("plugin");
+    expect(review?.sourceId).toBe("plugin:claude-demo");
   });
 });
 

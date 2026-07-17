@@ -227,7 +227,7 @@ async function refresh(): Promise<void> {
   try {
     const resp = await workspaceMemoryApi.list({
       conversationId: props.conversationId,
-      status: showArchived.value ? undefined : "active",
+      status: showArchived.value ? "all" : "active",
       limit: 200,
     });
     if (resp.status) {

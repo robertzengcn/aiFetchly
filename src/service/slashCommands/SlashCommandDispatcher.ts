@@ -24,11 +24,16 @@
 // stays pure and free of the argument-token literal (region-scoped).
 
 import type {
+  CommandRegistryScope,
+  SlashCommandDispatchContext,
   SlashCommandDispatchRequest,
   SlashCommandDispatchResponse,
 } from "@/entityTypes/slashCommandTypes";
 import { parseSlashCommandInput } from "./SlashCommandParser";
-import { CommandRegistry } from "./CommandRegistry";
+import {
+  CommandRegistry,
+  DEFAULT_NON_WORKSPACE_SCOPE,
+} from "./CommandRegistry";
 import { expandPrompt } from "./expandPrompt";
 import type {
   AIFetchlyConfigManager,
@@ -60,8 +65,15 @@ export class SlashCommandDispatcher {
    * handle UI localization, per design §15.3).
    */
   async dispatch(
-    input: SlashCommandDispatchRequest
+    input: SlashCommandDispatchRequest,
+    context?: SlashCommandDispatchContext
   ): Promise<SlashCommandDispatchResponse> {
+    // Scoped resolution (plugin/workspace slash commands, FR-2): the context
+    // carries the allowed-source set derived from the conversation's approved
+    // workspace. When omitted (e.g. legacy callers / unit tests), fall back to
+    // the safe non-workspace scope so a forgotten context can never leak a
+    // workspace command into the wrong chat.
+    const scope = context?.scope ?? DEFAULT_NON_WORKSPACE_SCOPE;
     const parsed = parseSlashCommandInput(input.rawInput);
 
     // Step 1: not a slash command at all.
@@ -80,8 +92,10 @@ export class SlashCommandDispatcher {
       };
     }
 
-    // Step 3: resolve via registry.
-    const cmd = this.registry.getByName(parsed.name);
+    // Step 3: resolve via registry (scoped + alias-aware). A workspace command
+    // hidden from this conversation's scope is unreachable here, so it cannot
+    // be dispatched by manually typing its name from the wrong chat (AC-2).
+    const cmd = this.registry.getByLookupNameScoped(parsed.name, scope);
     if (!cmd) {
       return {
         status: false,
@@ -100,7 +114,7 @@ export class SlashCommandDispatcher {
     // Step 5: switch on functional type.
     switch (cmd.type) {
       case "local":
-        return this.dispatchLocal(cmd.id, parsed.name);
+        return this.dispatchLocal(cmd.id, parsed.name, scope);
 
       case "prompt": {
         // Phase-15 (Plan 15-01, SC2 + CMD-04): prompt-type commands now
@@ -152,7 +166,8 @@ export class SlashCommandDispatcher {
    */
   private async dispatchLocal(
     commandId: string,
-    name: string
+    name: string,
+    scope: CommandRegistryScope
   ): Promise<SlashCommandDispatchResponse> {
     switch (commandId) {
       case "built-in:command:help":
@@ -160,7 +175,7 @@ export class SlashCommandDispatcher {
           status: true,
           action: "show_result",
           commandId,
-          content: this.renderHelp(),
+          content: this.renderHelp(scope),
         };
 
       case "built-in:command:clear":
@@ -219,11 +234,12 @@ export class SlashCommandDispatcher {
   }
 
   /**
-   * Build the /help content. Lists every registered command with its
+   * Build the /help content. Lists every command allowed under `scope` (so
+   * workspace commands only appear inside their owning conversation) with its
    * source label and description (renderer may render this richly later).
    */
-  private renderHelp(): string {
-    const views = this.registry.listViews();
+  private renderHelp(scope: CommandRegistryScope): string {
+    const views = this.registry.listScopedViews(scope);
     if (views.length === 0) {
       return "Available commands: (none registered).";
     }

@@ -21,6 +21,7 @@ const SECRET_PATTERNS: RegExp[] = [
   /\bbearer\s+[A-Za-z0-9._~+/-]{16,}={0,2}\b/i,
   /password/i,
   /cookie/i,
+  /-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----/i,
   /\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/,
   /[A-Za-z0-9+/]{40,}={0,2}/,
 ];

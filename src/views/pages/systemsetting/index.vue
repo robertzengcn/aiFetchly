@@ -7,8 +7,8 @@
           <v-card-title>{{ t('system_settings.title') }}</v-card-title>
           <v-card-text>
             <v-treeview
-:items="groupItems" color="warning" activatable open-all item-value="id" item-title="name"
-              item-children="children" v-model:activated="activeGroups" />
+              :items="groupItems" color="warning" activatable open-all item-value="id" item-title="name"
+              item-children="children" select-strategy="single-leaf" v-model:activated="activeGroups" />
             <v-divider class="my-4"></v-divider>
             <v-btn
               color="primary"

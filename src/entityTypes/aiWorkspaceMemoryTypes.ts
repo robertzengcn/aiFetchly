@@ -7,6 +7,7 @@ export type AIWorkspaceMemoryType =
   | "warning";
 
 export type AIWorkspaceMemoryStatus = "active" | "archived" | "contradicted";
+export type AIWorkspaceMemoryListStatus = AIWorkspaceMemoryStatus | "all";
 
 export type AIWorkspaceMemorySourceKind =
   | "manual"
@@ -110,7 +111,7 @@ export interface AIWorkspaceMemorySearchInput {
   conversationId: string;
   query?: string;
   type?: AIWorkspaceMemoryType;
-  status?: AIWorkspaceMemoryStatus;
+  status?: AIWorkspaceMemoryListStatus;
   sourceKind?: AIWorkspaceMemorySourceKind;
   limit?: number;
   offset?: number;

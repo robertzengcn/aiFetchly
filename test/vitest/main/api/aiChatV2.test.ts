@@ -102,6 +102,113 @@ describe("aiChatV2 renderer API", () => {
     expect(settled).toBe(true);
   });
 
+  it("ignores stale stream events from another conversation", async () => {
+    const onChunk = vi.fn();
+    const onComplete = vi.fn();
+    const onError = vi.fn();
+    let settled = false;
+
+    const promise = streamChatV2Message(
+      { conversationId: "v2-new", message: "hello" },
+      onChunk,
+      onComplete,
+      onError
+    ).then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      }
+    );
+
+    await Promise.resolve();
+
+    const chunkHandler = handlers.get(AI_CHAT_V2_STREAM_CHUNK);
+    const completeHandler = handlers.get(AI_CHAT_V2_STREAM_COMPLETE);
+    expect(chunkHandler).toBeDefined();
+    expect(completeHandler).toBeDefined();
+
+    chunkHandler?.(
+      JSON.stringify({
+        eventType: "tool_call",
+        conversationId: "v2-old",
+        toolCallId: "tool-old",
+        toolName: "old_tool",
+      })
+    );
+    completeHandler?.(
+      JSON.stringify({ eventType: "complete", conversationId: "v2-old" })
+    );
+
+    expect(onChunk).not.toHaveBeenCalled();
+    expect(onComplete).not.toHaveBeenCalled();
+    expect(onError).not.toHaveBeenCalled();
+    expect(settled).toBe(false);
+    expect(handlers.has(AI_CHAT_V2_STREAM_CHUNK)).toBe(true);
+    expect(handlers.has(AI_CHAT_V2_STREAM_COMPLETE)).toBe(true);
+
+    chunkHandler?.(
+      JSON.stringify({
+        eventType: "tool_call",
+        conversationId: "v2-new",
+        toolCallId: "tool-new",
+        toolName: "new_tool",
+      })
+    );
+    completeHandler?.(
+      JSON.stringify({ eventType: "complete", conversationId: "v2-new" })
+    );
+
+    await promise;
+
+    expect(onChunk).toHaveBeenCalledTimes(1);
+    expect(onChunk).toHaveBeenCalledWith({
+      eventType: "tool_call",
+      conversationId: "v2-new",
+      toolCallId: "tool-new",
+      toolName: "new_tool",
+    });
+    expect(onComplete).toHaveBeenCalledWith({
+      eventType: "complete",
+      conversationId: "v2-new",
+    });
+    expect(onError).not.toHaveBeenCalled();
+    expect(settled).toBe(true);
+  });
+
+  it("still reports AI entitlement errors that cannot include a conversation id", async () => {
+    const onChunk = vi.fn();
+    const onComplete = vi.fn();
+    const onError = vi.fn();
+
+    const promise = streamChatV2Message(
+      { conversationId: "v2-new", message: "hello" },
+      onChunk,
+      onComplete,
+      onError
+    );
+
+    await Promise.resolve();
+
+    handlers.get(AI_CHAT_V2_STREAM_COMPLETE)?.(
+      JSON.stringify({
+        eventType: "error",
+        conversationId: "",
+        errorMessage: "AI functionality is only available to subscribers.",
+      })
+    );
+
+    await expect(promise).rejects.toThrow(
+      "AI functionality is only available to subscribers."
+    );
+    expect(onChunk).not.toHaveBeenCalled();
+    expect(onComplete).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledWith(
+      new Error("AI functionality is only available to subscribers.")
+    );
+  });
+
   it("rejects and reports an error when the stream cannot be sent", async () => {
     const onError = vi.fn();
     send.mockImplementationOnce(() => {
