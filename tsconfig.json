@@ -2,7 +2,7 @@
   "compilerOptions": {
     "outDir": "./dist",
     "strictPropertyInitialization": true,
-    "noImplicitAny": false,
+    "noImplicitAny": true,
     "noImplicitThis": true,
     "target": "es6",
     "module": "esnext",

@@ -518,7 +518,7 @@ function initialize() {
     });
     // In this example, only windows with the `about:blank` url will be created.
     // All other urls will be blocked.
-    (win as any).webContents.setWindowOpenHandler(({ url }) => {
+    (win as any).webContents.setWindowOpenHandler(({ url }: { url: string }) => {
       // F9 fix — only attach the privileged preload bridge to trusted app
       // origins. Untrusted child windows (any external URL, including
       // attacker-controlled pages opened via window.open from a compromised
@@ -774,7 +774,7 @@ function initialize() {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
 
-  (app as any).on("open-url", (event, url) => {
+  (app as any).on("open-url", (event: { preventDefault: () => void }, url: string) => {
     event.preventDefault();
     // Log only that a deep link arrived — never the URL itself, which now
     // carries the authorization code.
@@ -1029,7 +1029,7 @@ function configureContentSecurityPolicy() {
         "frame-ancestors 'none'",
       ].join("; ");
 
-  defaultSession.webRequest.onHeadersReceived((details, callback) => {
+  defaultSession.webRequest.onHeadersReceived((details: { responseHeaders?: Record<string, string[]> }, callback: (response: { responseHeaders: Record<string, string[]> }) => void) => {
     callback({
       responseHeaders: {
         ...details.responseHeaders,
@@ -1054,7 +1054,7 @@ function makeSingleInstance() {
   } else {
     // console.log('gotThelock:', gotThelock)
 
-    (app as any).on("second-instance", (event, argv, workingDirectory) => {
+    (app as any).on("second-instance", (event: unknown, argv: string[], workingDirectory: string) => {
       if (win) {
         if ((win as any).isMinimized()) (win as any).restore();
         (win as any).focus();

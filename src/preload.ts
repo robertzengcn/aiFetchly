@@ -407,7 +407,7 @@ const isDev = process.env.NODE_ENV !== "production";
 
 contextBridge.exposeInMainWorld("api", {
   getPathForFile: (file: File) => webUtils.getPathForFile(file),
-  send: (channel, data) => {
+  send: (channel: string, data?: unknown) => {
     // whitelist channels
     const validChannels = [
       "user:Login",
@@ -456,7 +456,7 @@ contextBridge.exposeInMainWorld("api", {
       ipcRenderer.send(channel, data);
     }
   },
-  sendBinary: (channel, data) => {
+  sendBinary: (channel: string, data?: unknown) => {
     // whitelist channels for binary data
     const validChannels = [SAVE_TEMP_FILE];
     if (isDev) console.log("sendBinary", channel, data);
@@ -465,7 +465,7 @@ contextBridge.exposeInMainWorld("api", {
       ipcRenderer.send(channel, data);
     }
   },
-  receive: (channel, func) => {
+  receive: (channel: string, func: (...args: unknown[]) => void) => {
     const validChannels = [
       "user:Login",
       "socialtask:start",
@@ -528,7 +528,7 @@ contextBridge.exposeInMainWorld("api", {
       ipcRenderer.on(channel, wrapped);
     }
   },
-  removeListener: (channel, func) => {
+  removeListener: (channel: string, func: (...args: unknown[]) => void) => {
     // Use same whitelist as receive
     const validChannels = [
       "user:Login",
@@ -591,7 +591,7 @@ contextBridge.exposeInMainWorld("api", {
       }
     }
   },
-  removeAllListeners: (channel) => {
+  removeAllListeners: (channel: string) => {
     const validChannels = [
       AI_CHAT_STREAM_CHUNK,
       AI_CHAT_STREAM_COMPLETE,
@@ -612,7 +612,7 @@ contextBridge.exposeInMainWorld("api", {
       ipcRenderer.removeAllListeners(channel);
     }
   },
-  invoke: (channel, data) => {
+  invoke: (channel: string, data?: unknown) => {
     // whitelist channels
     const validChannels = [
       "user:Login",
