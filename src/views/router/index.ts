@@ -64,6 +64,18 @@ export const constantRoutes: RouteRecordRaw[] = [
         children: [],
       },
       {
+        path: "ai-provider",
+        name: "system_setting_ai_provider",
+        meta: {
+          title: "route.ai_provider",
+          icon: "mdi-robot-outline",
+          keepAlive: false,
+          visible: false,
+        },
+        component: () => import("@/views/pages/systemsetting/ai_provider.vue"),
+        children: [],
+      },
+      {
         path: "skills",
         name: "system_setting_skills",
         meta: {

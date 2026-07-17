@@ -30,6 +30,16 @@
               <v-icon left>mdi-view-dashboard</v-icon>
               {{ t('system_settings.manage_skills') }}
             </v-btn>
+            <v-btn
+              color="primary"
+              variant="outlined"
+              block
+              @click="navigateToAIProvider"
+              class="mb-2"
+            >
+              <v-icon left>mdi-robot-outline</v-icon>
+              {{ t('system_settings.manage_ai_provider') || 'AI Provider' }}
+            </v-btn>
           </v-card-text>
         </v-card>
       </v-col>
@@ -383,6 +393,10 @@ function navigateToMCP() {
 
 function navigateToSkills() {
   router.push({ name: 'system_setting_skills' });
+}
+
+function navigateToAIProvider() {
+  router.push({ name: 'system_setting_ai_provider' });
 }
 
 onMounted(() => {
