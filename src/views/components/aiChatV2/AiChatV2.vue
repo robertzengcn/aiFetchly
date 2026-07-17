@@ -192,6 +192,16 @@
         />
       </div>
 
+      <v-alert
+        v-if="localToolsUnsupported"
+        type="warning"
+        variant="tonal"
+        density="compact"
+        class="mb-2"
+      >
+        {{ t('aiProvider.tool_warning') || 'This local provider has not confirmed tool support. Tools are disabled for this conversation.' }}
+      </v-alert>
+
       <AiChatV2Composer
         :is-streaming="chatIsRunning"
         @send="onSend"
@@ -207,6 +217,23 @@
             :loading="availableModels.length === 0"
             class="ml-2"
           />
+          <v-tooltip location="bottom">
+            <template #activator="{ props }">
+              <v-chip
+                v-if="providerLabel"
+                v-bind="props"
+                size="x-small"
+                :color="providerChipColor"
+                variant="tonal"
+                class="ml-2 cursor-pointer"
+                @click="openAIProviderSettings"
+              >
+                <v-icon start size="small">mdi-robot-outline</v-icon>
+                {{ providerLabel }}
+              </v-chip>
+            </template>
+            <span>{{ t('aiProvider.title') || 'AI Provider' }}</span>
+          </v-tooltip>
           <AiChatV2ToolApprovalModeSelector
             v-model="toolApprovalMode"
             :disabled="chatIsRunning"
@@ -371,6 +398,9 @@ import {
   getChatV2ToolApprovalMode,
   setChatV2ToolApprovalMode,
 } from "@/views/api/aiChatV2";
+import { getAIProviderSettings } from "@/views/api/aiProvider";
+import type { AIProviderSettingsView } from "@/entityTypes/aiProviderTypes";
+import { useRouter } from "vue-router";
 import AiChatV2Messages from "./AiChatV2Messages.vue";
 import AiChatV2Composer from "./AiChatV2Composer.vue";
 import AiChatV2ModeSelector from "./AiChatV2ModeSelector.vue";
@@ -725,6 +755,55 @@ watch(selectedModel, (val) => {
     // non-fatal; selection still works for the session
   }
 });
+
+// ---------------------------------------------------------------------------
+// Provider indicator (Hosted vs Local). Loaded once on mount; the chip near
+// the model selector reflects which provider is active and links to settings.
+// ---------------------------------------------------------------------------
+const router = useRouter();
+const providerSettings = ref<AIProviderSettingsView | null>(null);
+
+const providerLabel = computed<string>(() => {
+  const view = providerSettings.value;
+  if (!view) return "";
+  if (view.mode === "hosted") {
+    return t("aiProvider.indicator_hosted") || "Hosted";
+  }
+  if (view.localProvider) {
+    const name = view.localProvider.name || view.localProvider.preset;
+    return `${t("aiProvider.indicator_local") || "Local"}: ${name}`;
+  }
+  return t("aiProvider.indicator_offline") || "Local offline";
+});
+
+const providerChipColor = computed<string>(() => {
+  const view = providerSettings.value;
+  if (!view) return "grey";
+  if (view.mode === "hosted") return "primary";
+  return view.localProvider ? "success" : "warning";
+});
+
+/** True only when the local provider is KNOWN to lack tool support. */
+const localToolsUnsupported = computed<boolean>(() => {
+  const view = providerSettings.value;
+  return (
+    !!view &&
+    view.mode === "local" &&
+    view.localProvider?.capabilities?.tools === "unsupported"
+  );
+});
+
+async function loadProviderSettings(): Promise<void> {
+  try {
+    providerSettings.value = await getAIProviderSettings();
+  } catch {
+    // Non-fatal: indicator simply stays blank.
+  }
+}
+
+function openAIProviderSettings(): void {
+  router.push({ name: "system_setting_ai_provider" });
+}
 
 const hasLoadedPendingToolExecution = computed(() => {
   const conversationId = activeConversationId.value;
@@ -1764,6 +1843,7 @@ const onSend = async (text: string): Promise<void> => {
 onMounted(() => {
   void loadConversations();
   void loadModelContextWindows();
+  void loadProviderSettings();
   // Subscribe to file operation events emitted during tool execution.
   // Records are appended per-conversation so the summary panel reflects
   // all changes made within the active conversation.

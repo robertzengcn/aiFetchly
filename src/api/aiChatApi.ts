@@ -806,9 +806,9 @@ export class AiChatApi {
   }
 
   /**
-   * Return a copy of the payload with large base64 fields replaced by a
-   * placeholder so request logs stay readable. Does not mutate the original
-   * request payload (immutability rule).
+   * Return a copy of the payload with large base64 fields and secrets replaced
+   * by placeholders so request logs stay readable and never leak credentials.
+   * Does not mutate the original request payload (immutability rule).
    */
   private _redactDebugPayload(data: unknown): unknown {
     if (data === null || typeof data !== "object") {
@@ -821,7 +821,15 @@ export class AiChatApi {
     for (const [key, value] of Object.entries(
       data as Record<string, unknown>
     )) {
+      const lcKey = key.toLowerCase();
       if (
+        lcKey === "authorization" ||
+        lcKey === "api_key" ||
+        lcKey === "apikey" ||
+        lcKey === "user_local_ai_provider_api_key"
+      ) {
+        redacted[key] = "<redacted>";
+      } else if (
         (key === "screenshot" || key === "attachments") &&
         typeof value === "string" &&
         value.length > 200
