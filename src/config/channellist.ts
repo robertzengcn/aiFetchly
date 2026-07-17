@@ -287,6 +287,13 @@ export const AI_CHAT_V2_GET_TOOL_APPROVAL_MODE =
 export const AI_CHAT_V2_SET_TOOL_APPROVAL_MODE =
   "ai-chat-v2:set-tool-approval-mode";
 
+// AI Provider (Local/Custom) Settings Channels
+export const AI_PROVIDER_SETTINGS_GET = "ai-provider:settings:get";
+export const AI_PROVIDER_SETTINGS_SAVE = "ai-provider:settings:save";
+export const AI_PROVIDER_MODELS_REFRESH = "ai-provider:models:refresh";
+export const AI_PROVIDER_CONNECTION_TEST = "ai-provider:connection:test";
+export const AI_PROVIDER_API_KEY_CLEAR = "ai-provider:api-key:clear";
+
 // MCP Tool Management Channels
 export const MCP_TOOL_LIST = "mcp:tool:list";
 export const MCP_TOOL_ADD = "mcp:tool:add";

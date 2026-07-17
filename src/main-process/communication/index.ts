@@ -36,6 +36,7 @@ import { registerAgentRuntimeIpcHandlers } from "@/main-process/communication/ag
 import { registerPluginIpcHandlers } from "@/main-process/communication/plugin-ipc";
 import { registerAIUserMemoryIpcHandlers } from "@/main-process/communication/ai-user-memory-ipc";
 import { registerAIWorkspaceIpcHandlers } from "@/main-process/communication/ai-workspace-ipc";
+import { registerAIProviderIpcHandlers } from "@/main-process/communication/ai-provider-ipc";
 
 type GlobalIpcState = typeof globalThis & {
   __aifetchlyIpcHandlersRegistered?: boolean;
@@ -83,6 +84,7 @@ export function registerCommunicationIpcHandlers(win: BrowserWindow) {
     registerPluginIpcHandlers();
     registerAIUserMemoryIpcHandlers();
     registerAIWorkspaceIpcHandlers(win);
+    registerAIProviderIpcHandlers();
     AsyncMsg();
   } catch (e) {
     console.log("registerCommunicationIpcHandlers error:");

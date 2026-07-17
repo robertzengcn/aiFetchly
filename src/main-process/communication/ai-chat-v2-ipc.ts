@@ -1,6 +1,7 @@
 import { ipcMain } from "electron";
 import { Token } from "@/modules/token";
-import { USER_AI_ENABLED } from "@/config/usersetting";
+import { AIProviderResolver } from "@/service/aiProvider/AIProviderResolver";
+import type { OpenAIChatCompletionRequest } from "@/api/aiChatApi";
 import { AiChatApi } from "@/api/aiChatApi";
 import { AIChatV2Module } from "@/modules/AIChatV2Module";
 import { AIChatPlanModule } from "@/modules/AIChatPlanModule";
@@ -76,7 +77,11 @@ function createQueryLoop(): AIChatQueryLoop {
   const deps: AIChatQueryLoopDeps = {
     streamChatCompletion: (request, onChunk, options) => {
       const api = new AiChatApi();
-      return api.openAIChatCompletionStream(request, onChunk, options);
+      return api.openAIChatCompletionStream(
+        applyLocalToolPolicy(request),
+        onChunk,
+        options
+      );
     },
     executeTool: (name, args, context) => {
       // Tool approval mode check — auto-approve eligible tools without
@@ -119,7 +124,9 @@ function getCompactAgent(): AIChatCompactAgentService {
     const tokenService = new Token();
     compactAgent = new AIChatCompactAgentService(tokenService, {
       completeChat: (request) => new AiChatApi().openAIChatCompletion(request),
-      isEnabled: () => tokenService.getValue(USER_AI_ENABLED) === "true",
+      // Compact follows the chat availability resolver so local-provider users
+      // can compact conversations without a hosted subscription.
+      isEnabled: () => canUseChat().ok,
     });
   }
   return compactAgent;
@@ -140,10 +147,55 @@ function getQueryEngine(): AIChatQueryEngine {
 // IPC helpers
 // -------------------------------------------------------------------------
 
-function isAIEnabled(): boolean {
-  const tokenService = new Token();
-  const value = tokenService.getValue(USER_AI_ENABLED);
-  return value === "true";
+/**
+ * Chat availability resolver — shared across all AiChatV2 handlers. Allows the
+ * hosted path (subscribed) AND the local-provider path (valid config) while
+ * every hosted-only AI feature outside this file keeps its own
+ * `ensureHostedAIEnabled()` gate.
+ *
+ * Lazily constructed so importing this module does not touch electron-store.
+ */
+let chatResolver: AIProviderResolver | null = null;
+function getChatResolver(): AIProviderResolver {
+  if (!chatResolver) {
+    chatResolver = new AIProviderResolver();
+  }
+  return chatResolver;
+}
+
+function canUseChat(): { ok: true } | { ok: false; message: string } {
+  const provider = getChatResolver().resolveForChat();
+  if (provider.canUse) {
+    return { ok: true };
+  }
+  return { ok: false, message: provider.message };
+}
+
+/**
+ * When the active provider is local and tool support is not confirmed
+ * (capability "unsupported" or unknown/absent), strip tools from the request
+ * so the query loop runs plain chat. This is the conservative MVP behavior
+ * (design §23.1): unknown → no tools.
+ */
+function applyLocalToolPolicy(
+  request: OpenAIChatCompletionRequest
+): OpenAIChatCompletionRequest {
+  const provider = getChatResolver().resolveForChat();
+  if (!provider.canUse || provider.kind !== "local") {
+    return request;
+  }
+  const tools = provider.config.capabilities?.tools;
+  if (tools === "supported") {
+    return request;
+  }
+  // unsupported | unknown | failed → omit tools/tool_choice.
+  if (request.tools === undefined && request.tool_choice === undefined) {
+    return request;
+  }
+  const rest: OpenAIChatCompletionRequest = { ...request };
+  delete rest.tools;
+  delete rest.tool_choice;
+  return rest;
 }
 
 function denied<T>(msg: string): CommonMessage<T> {
@@ -383,12 +435,13 @@ function validateStreamRequest(
 }
 //handleStream is the main function that handles the stream request
 async function handleStream(event: IpcEventLike, data: string): Promise<void> {
-  // AI gate FIRST, before parsing request data.
-  if (!isAIEnabled()) {
+  // Chat availability gate FIRST, before parsing request data.
+  const chatAccess = canUseChat();
+  if (!chatAccess.ok) {
     sendComplete(event, {
       eventType: "error",
       conversationId: "",
-      errorMessage: "AI functionality is only available to subscribers.",
+      errorMessage: chatAccess.message,
     });
     return;
   }
@@ -432,8 +485,9 @@ function handleStop(): void {
 async function handleResumeToolAfterPermission(
   data: string
 ): Promise<CommonMessage<{ ok: boolean; error?: string } | null>> {
-  if (!isAIEnabled()) {
-    return denied("AI functionality is only available to subscribers.");
+  const chatAccess = canUseChat();
+  if (!chatAccess.ok) {
+    return denied(chatAccess.message);
   }
 
   const parsed = data
@@ -456,8 +510,9 @@ async function handleResumeToolAfterPermission(
 // -------------------------------------------------------------------------
 
 async function handleModels(): Promise<CommonMessage<unknown>> {
-  if (!isAIEnabled()) {
-    return denied("AI functionality is only available to subscribers.");
+  const chatAccess = canUseChat();
+  if (!chatAccess.ok) {
+    return denied(chatAccess.message);
   }
   try {
     const api = new AiChatApi();
@@ -471,8 +526,9 @@ async function handleModels(): Promise<CommonMessage<unknown>> {
 async function handleConversations(
   data?: string
 ): Promise<CommonMessage<ChatV2ConversationSummary[]>> {
-  if (!isAIEnabled()) {
-    return denied("AI functionality is only available to subscribers.");
+  const chatAccess = canUseChat();
+  if (!chatAccess.ok) {
+    return denied(chatAccess.message);
   }
   try {
     const req = data ? JSON.parse(data) : {};
@@ -489,8 +545,9 @@ async function handleHistory(
   _e: IpcEventLike,
   data: string
 ): Promise<CommonMessage<ChatV2HistoryResponse | null>> {
-  if (!isAIEnabled()) {
-    return denied("AI functionality is only available to subscribers.");
+  const chatAccess = canUseChat();
+  if (!chatAccess.ok) {
+    return denied(chatAccess.message);
   }
   try {
     const req = JSON.parse(data ?? "{}");
@@ -528,8 +585,9 @@ async function handleClearConversation(
   _e: IpcEventLike,
   data: string
 ): Promise<CommonMessage<{ deleted: number } | null>> {
-  if (!isAIEnabled()) {
-    return denied("AI functionality is only available to subscribers.");
+  const chatAccess = canUseChat();
+  if (!chatAccess.ok) {
+    return denied(chatAccess.message);
   }
   try {
     const req = JSON.parse(data ?? "{}");
@@ -558,8 +616,9 @@ async function handleClearConversation(
 async function handleClearAll(): Promise<
   CommonMessage<{ deleted: number } | null>
 > {
-  if (!isAIEnabled()) {
-    return denied("AI functionality is only available to subscribers.");
+  const chatAccess = canUseChat();
+  if (!chatAccess.ok) {
+    return denied(chatAccess.message);
   }
   try {
     const module = new AIChatV2Module();
@@ -577,8 +636,9 @@ async function handleClearAll(): Promise<
 async function handlePlanState(
   data: string
 ): Promise<CommonMessage<AIChatPlanStateView | null>> {
-  if (!isAIEnabled()) {
-    return denied("AI functionality is only available to subscribers.");
+  const chatAccess = canUseChat();
+  if (!chatAccess.ok) {
+    return denied(chatAccess.message);
   }
   try {
     const req = data ? JSON.parse(data) : {};
@@ -596,8 +656,9 @@ async function handlePlanState(
 async function handleAnswerQuestion(
   data: string
 ): Promise<CommonMessage<{ ok: boolean; error?: string } | null>> {
-  if (!isAIEnabled()) {
-    return denied("AI functionality is only available to subscribers.");
+  const chatAccess = canUseChat();
+  if (!chatAccess.ok) {
+    return denied(chatAccess.message);
   }
   const parsed = data
     ? (JSON.parse(data) as {
@@ -628,8 +689,9 @@ async function handleAnswerQuestion(
 async function handleApprovePlan(
   data: string
 ): Promise<CommonMessage<AIChatPlanStateView | null>> {
-  if (!isAIEnabled()) {
-    return denied("AI functionality is only available to subscribers.");
+  const chatAccess = canUseChat();
+  if (!chatAccess.ok) {
+    return denied(chatAccess.message);
   }
   const parsed = data
     ? (JSON.parse(data) as {
@@ -663,8 +725,9 @@ async function handleApprovePlan(
 async function handleRejectPlan(
   data: string
 ): Promise<CommonMessage<AIChatPlanStateView | null>> {
-  if (!isAIEnabled()) {
-    return denied("AI functionality is only available to subscribers.");
+  const chatAccess = canUseChat();
+  if (!chatAccess.ok) {
+    return denied(chatAccess.message);
   }
   const parsed = data
     ? (JSON.parse(data) as {
@@ -700,8 +763,9 @@ async function handleRejectPlan(
 async function handleRequestPlanChanges(
   data: string
 ): Promise<CommonMessage<AIChatPlanStateView | null>> {
-  if (!isAIEnabled()) {
-    return denied("AI functionality is only available to subscribers.");
+  const chatAccess = canUseChat();
+  if (!chatAccess.ok) {
+    return denied(chatAccess.message);
   }
   const parsed = data
     ? (JSON.parse(data) as {
@@ -740,8 +804,9 @@ async function handleRequestPlanChanges(
 async function handlePlanVersions(
   data: string
 ): Promise<CommonMessage<AIChatPlanVersionView[] | null>> {
-  if (!isAIEnabled()) {
-    return denied("AI functionality is only available to subscribers.");
+  const chatAccess = canUseChat();
+  if (!chatAccess.ok) {
+    return denied(chatAccess.message);
   }
   const parsed = data ? (JSON.parse(data) as { planId?: string }) : {};
   if (!parsed.planId) {
@@ -759,8 +824,9 @@ async function handlePlanVersions(
 async function handleCompactConversation(
   data: string
 ): Promise<CommonMessage<AIChatCompactSummaryView | null>> {
-  if (!isAIEnabled()) {
-    return denied("AI functionality is only available to subscribers.");
+  const chatAccess = canUseChat();
+  if (!chatAccess.ok) {
+    return denied(chatAccess.message);
   }
   const parsed = data
     ? (JSON.parse(data) as { conversationId?: string; model?: string })
@@ -816,8 +882,9 @@ function parseSetApprovalModePayload(
 async function handleGetToolApprovalMode(
   data: string
 ): Promise<CommonMessage<string>> {
-  if (!isAIEnabled()) {
-    return denied("AI functionality is only available to subscribers.");
+  const chatAccess = canUseChat();
+  if (!chatAccess.ok) {
+    return denied(chatAccess.message);
   }
   const parsed = data ? (JSON.parse(data) as { conversationId?: string }) : {};
   if (!parsed.conversationId) {
@@ -835,8 +902,9 @@ async function handleGetToolApprovalMode(
 async function handleSetToolApprovalMode(
   data: string
 ): Promise<CommonMessage<string>> {
-  if (!isAIEnabled()) {
-    return denied("AI functionality is only available to subscribers.");
+  const chatAccess = canUseChat();
+  if (!chatAccess.ok) {
+    return denied(chatAccess.message);
   }
   const payload = parseSetApprovalModePayload(data);
   if (!payload) {
