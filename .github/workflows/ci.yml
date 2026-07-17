@@ -31,6 +31,11 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Use HTTPS for GitHub dependencies
+        run: |
+          git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
+          git config --global url."https://github.com/".insteadOf "git@github.com:"
+
       - name: Install dependencies
         run: yarn install
 
