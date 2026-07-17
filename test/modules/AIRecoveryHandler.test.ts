@@ -5,8 +5,22 @@ import { describe, it, beforeEach, afterEach } from 'mocha';
 import { expect } from 'chai';
 import { AIRecoveryHandler } from '@/modules/AIRecoveryHandler';
 import { AIRecoveryRequest } from '@/entityTypes/processMessage-type';
-import { AiChatApi } from '@/api/aiChatApi';
+import { AiChatApi, PuppeteerRecoveryResponseData } from '@/api/aiChatApi';
 import sinon, { SinonStub } from 'sinon';
+
+function makeRecoveryData(
+    requestId: string,
+    overrides: Partial<PuppeteerRecoveryResponseData> = {}
+): PuppeteerRecoveryResponseData {
+    return {
+        request_id: requestId,
+        success: true,
+        actions: [],
+        confidence: 0.8,
+        reasoning: 'test',
+        ...overrides
+    };
+}
 
 describe('AIRecoveryHandler', () => {
     let handler: AIRecoveryHandler;
@@ -20,8 +34,10 @@ describe('AIRecoveryHandler', () => {
             rateLimitMax: 10
         });
 
-        // Stub the AiChatApi
-        aiChatApiStub = sinon.stub(AiChatApi.prototype, 'sendMessage');
+        // Stub the dedicated recovery API. Stubbing this method bypasses the
+        // transport-level AI feature gate and keeps these module tests focused
+        // on AIRecoveryHandler behavior.
+        aiChatApiStub = sinon.stub(AiChatApi.prototype, 'sendPuppeteerRecovery');
     });
 
     afterEach(() => {
@@ -45,12 +61,7 @@ describe('AIRecoveryHandler', () => {
             for (let i = 0; i < 10; i++) {
                 aiChatApiStub.resolves({
                     status: true,
-                    data: { message: JSON.stringify({
-                        success: true,
-                        actions: [],
-                        confidence: 0.8,
-                        reasoning: 'test'
-                    })}
+                    data: makeRecoveryData(`test-${i}`)
                 });
                 await handler.handleRecoveryRequest({ ...request, requestId: `test-${i}` });
             }
@@ -82,12 +93,7 @@ describe('AIRecoveryHandler', () => {
 
             aiChatApiStub.resolves({
                 status: true,
-                data: { message: JSON.stringify({
-                    success: true,
-                    actions: [],
-                    confidence: 0.8,
-                    reasoning: 'test'
-                })}
+                data: makeRecoveryData('test')
             });
 
             // Make 2 requests (at the limit)
@@ -106,7 +112,7 @@ describe('AIRecoveryHandler', () => {
             expect(result.success).to.be.true;
         });
 
-        it('should sanitize error messages', async () => {
+        it('should forward the original request to the recovery API', async () => {
             const request: AIRecoveryRequest = {
                 requestId: 'test-1',
                 operation: 'search_input',
@@ -120,20 +126,16 @@ describe('AIRecoveryHandler', () => {
 
             aiChatApiStub.resolves({
                 status: true,
-                data: { message: JSON.stringify({
-                    success: true,
+                data: makeRecoveryData('test-1', {
                     actions: [{ type: 'click', selector: '.btn', reason: 'test' }],
-                    confidence: 0.9,
-                    reasoning: 'test'
-                })}
+                    confidence: 0.9
+                })
             });
 
             await handler.handleRecoveryRequest(request);
 
-            // Check that the API was called with sanitized error message
             const callArgs = aiChatApiStub.getCall(0).args[0];
-            expect(callArgs.message).to.not.contain('/home/user');
-            expect(callArgs.message).to.not.contain('test.ts:10');
+            expect(callArgs).to.equal(request);
         });
 
         it('should handle API failures gracefully', async () => {
@@ -172,7 +174,8 @@ describe('AIRecoveryHandler', () => {
                 htmlSample: '<html>test</html>'
             };
 
-            const validResponse = JSON.stringify({
+            const validResponse: PuppeteerRecoveryResponseData = {
+                request_id: 'test-1',
                 success: true,
                 actions: [
                     { type: 'click', selector: '.button', reason: 'Click search button' },
@@ -180,11 +183,11 @@ describe('AIRecoveryHandler', () => {
                 ],
                 confidence: 0.95,
                 reasoning: 'Found the search elements'
-            });
+            };
 
             aiChatApiStub.resolves({
                 status: true,
-                data: { message: validResponse }
+                data: validResponse
             });
 
             const result = await handler.handleRecoveryRequest(request);
@@ -195,7 +198,7 @@ describe('AIRecoveryHandler', () => {
             expect(result.reasoning).to.equal('Found the search elements');
         });
 
-        it('should extract JSON from code blocks', async () => {
+        it('should map snake_case selector_type from recovery responses', async () => {
             const request: AIRecoveryRequest = {
                 requestId: 'test-1',
                 operation: 'search_input',
@@ -207,28 +210,23 @@ describe('AIRecoveryHandler', () => {
                 htmlSample: '<html>test</html>'
             };
 
-            const responseWithCodeBlock = `Here's my analysis:
-
-\`\`\`json
-{
-  "success": true,
-  "actions": [{"type": "click", "selector": ".btn", "reason": "test"}],
-  "confidence": 0.9,
-  "reasoning": "test"
-}
-\`\`\`
-
-Hope this helps!`;
-
             aiChatApiStub.resolves({
                 status: true,
-                data: { message: responseWithCodeBlock }
+                data: makeRecoveryData('test-1', {
+                    actions: [{
+                        type: 'click',
+                        selector: '//button',
+                        selector_type: 'xpath',
+                        reason: 'test'
+                    }]
+                })
             });
 
             const result = await handler.handleRecoveryRequest(request);
 
             expect(result.success).to.be.true;
             expect(result.actions).to.have.lengthOf(1);
+            expect(result.actions[0].selectorType).to.equal('xpath');
         });
 
         it('should limit maximum actions to 5', async () => {
@@ -243,7 +241,7 @@ Hope this helps!`;
                 htmlSample: '<html>test</html>'
             };
 
-            const responseWithManyActions = JSON.stringify({
+            const responseWithManyActions = makeRecoveryData('test-1', {
                 success: true,
                 actions: Array(10).fill(null).map((_, i) => ({
                     type: 'click',
@@ -256,7 +254,7 @@ Hope this helps!`;
 
             aiChatApiStub.resolves({
                 status: true,
-                data: { message: responseWithManyActions }
+                data: responseWithManyActions
             });
 
             const result = await handler.handleRecoveryRequest(request);
@@ -277,11 +275,11 @@ Hope this helps!`;
                 htmlSample: '<html>test</html>'
             };
 
-            const responseWithInvalidActions = JSON.stringify({
+            const responseWithInvalidActions = makeRecoveryData('test-1', {
                 success: true,
                 actions: [
                     { type: 'click', selector: '.btn', reason: 'valid' },
-                    { type: 'evaluate', selector: 'invalid', reason: 'invalid action' },
+                    { type: 'evaluate', selector: 'document.body', reason: 'valid evaluate action' },
                     { type: 'goto', url: 'http://invalid.com', reason: 'invalid action' }
                 ],
                 confidence: 0.9,
@@ -290,14 +288,15 @@ Hope this helps!`;
 
             aiChatApiStub.resolves({
                 status: true,
-                data: { message: responseWithInvalidActions }
+                data: responseWithInvalidActions
             });
 
             const result = await handler.handleRecoveryRequest(request);
 
             expect(result.success).to.be.true;
-            expect(result.actions).to.have.lengthOf(1); // Only click is valid
+            expect(result.actions).to.have.lengthOf(2); // goto is invalid
             expect(result.actions[0].type).to.equal('click');
+            expect(result.actions[1].type).to.equal('evaluate');
         });
 
         it('should handle exceptions during processing', async () => {
@@ -336,18 +335,13 @@ Hope this helps!`;
 
             aiChatApiStub.resolves({
                 status: true,
-                data: { message: JSON.stringify({
-                    success: true,
-                    actions: [],
-                    confidence: 0.8,
-                    reasoning: 'test'
-                })}
+                data: makeRecoveryData('test-1')
             });
 
             await handler.handleRecoveryRequest(request);
 
             const callArgs = aiChatApiStub.getCall(0).args[0];
-            expect(callArgs.message).to.contain('ACCESSIBILITY TREE');
+            expect(callArgs.accessibilityTree).to.contain('"role": "WebArea"');
         });
     });
 });
