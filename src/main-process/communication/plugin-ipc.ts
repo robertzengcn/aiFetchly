@@ -203,7 +203,7 @@ export function registerPluginIpcHandlers(): void {
       try {
         await PluginComponentRegistryService.applyLoadedPlugins();
       } catch (promotionError) {
-        console.warn(
+        log.warn(
           "[plugin-ipc] command promotion after import failed (recoverable):",
           promotionError
         );
@@ -289,7 +289,7 @@ export function registerPluginIpcHandlers(): void {
       try {
         await PluginComponentRegistryService.applyLoadedPlugins();
       } catch (promotionError) {
-        console.warn(
+        log.warn(
           "[plugin-ipc] command promotion after install-from-source failed (recoverable):",
           promotionError
         );
