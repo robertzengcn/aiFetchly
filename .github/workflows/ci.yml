@@ -37,7 +37,7 @@ jobs:
           git config --global url."https://github.com/".insteadOf "git@github.com:"
 
       - name: Install dependencies
-        run: yarn install
+        run: yarn install --frozen-lockfile
 
       - name: Run lint
         run: yarn lint
