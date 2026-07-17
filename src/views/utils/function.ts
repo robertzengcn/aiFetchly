@@ -9,11 +9,11 @@ export function SplitArrayIntoGroups<Type>(array: Type[], groupSize: number):Typ
         return groups;
 }
 
-const StringIsNumber = value => isNaN(Number(value)) === false;
-export function ToArray(enumme) {
+const StringIsNumber = (value: string) => isNaN(Number(value)) === false;
+export function ToArray(enumme: Record<string, unknown>) {
     return Object.keys(enumme)
         .filter(StringIsNumber)
-        .map(key => enumme[key]);
+        .map(key => enumme[key] as string);
   }
 export  function CapitalizeFirstLetter(string:string) {
     return string.charAt(0).toUpperCase() + string.slice(1);

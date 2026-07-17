@@ -439,10 +439,10 @@ export function writeResults(fname: string, data: string) {
   fs.writeFileSync(fname, data, "utf8");
 }
 const StringIsNumber = (value: string) => isNaN(Number(value)) === false;
-export function ToArray(enumme: Record<string, string | number>) {
+export function ToArray(enumme: Record<string, unknown>) {
   return Object.keys(enumme)
     .filter(StringIsNumber)
-    .map((key) => enumme[key]);
+    .map((key) => enumme[key] as string);
 }
 
 // export function forkScript(scriptName:string,command:Array<string>):Electron.UtilityProcess{

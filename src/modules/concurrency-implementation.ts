@@ -65,7 +65,7 @@ export class CustomConcurrency extends Browser {
         
         let chrome = await puppeteers.launch(launchOptions) as puppeteer.Browser;
         let page: puppeteer.Page;
-        let context;
+        let context: puppeteer.BrowserContext;
 
         return {
             jobInstance: async () => {
