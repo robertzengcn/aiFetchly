@@ -137,11 +137,10 @@ function mockFork(): { fork: ForkFn; emit: (msg: unknown) => void; sent: unknown
   const sent: unknown[] = [];
   let messageHandler: ((msg: unknown) => void) | null = null;
   const child = {
-    on(event: string, listener: (...args: never[]) => void): typeof child {
+    on(event: string, listener: (...args: never[]) => void): void {
       if (event === "message") {
         messageHandler = listener as unknown as (msg: unknown) => void;
       }
-      return child;
     },
     send(msg: unknown): boolean {
       sent.push(msg);

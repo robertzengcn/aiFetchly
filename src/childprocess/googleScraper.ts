@@ -899,7 +899,7 @@ export class GoogleScraper extends SearchScrape {
         return value.replace(/\+/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
     }
 
-    async wait_for_results() {
+    async wait_for_results(): Promise<void> {
         try {
             // Wait for the page to be stable
             // await this.page.waitForFunction(() => {

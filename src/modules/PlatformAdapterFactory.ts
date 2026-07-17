@@ -231,7 +231,7 @@ export class PlatformAdapterFactory extends BaseModule implements IPlatformAdapt
             ];
 
             for (const method of requiredMethods) {
-                if (typeof adapter[method] !== 'function') {
+                if (typeof (adapter as unknown as Record<string, unknown>)[method] !== 'function') {
                     log.error(`❌ Adapter missing required method: ${method}`);
                     return false;
                 }

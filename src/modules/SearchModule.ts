@@ -805,7 +805,7 @@ export class SearchModule extends BaseModule {
         status: this.taskdbModel.taskStatusToString(item.status),
         keywords: keywords,
         record_time: item.record_time,
-        pid: item.pid ?? undefined,
+        pid: (item as { pid?: number }).pid ?? undefined,
         result_count: resultCount,
       };
       data.keywordline = data.keywords.join(",");

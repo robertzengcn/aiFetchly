@@ -272,7 +272,7 @@ async function exportSessions(options: any): Promise<any> {
   if (format === "csv") {
     // Convert to CSV format
     const headers = Object.keys(exportData[0] || {}).join(",");
-    const rows = exportData.map((row) =>
+    const rows = exportData.map((row: Record<string, unknown>) =>
       Object.values(row)
         .map((val) => `"${val}"`)
         .join(",")

@@ -13,7 +13,7 @@ export interface searchEngineImpl {
   scraping_loop(): void;
   build_start_url(): string;
   parse(html: string): void;
-  parse_async(html): Promise<SearchData | void>;
+  parse_async(html: string): Promise<SearchData | void>;
   search_keyword(keywords: string): void;
   next_page(): Promise<boolean | void>;
   set_input_value(selector: string, value: string): void;

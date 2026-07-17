@@ -148,7 +148,7 @@ export class RemoteSource {
    * get response from remote servive
    * @return object
    */
-  async getRemoteConfig(campaignId): Promise<sosetting | void> {
+  async getRemoteConfig(campaignId: string | number): Promise<sosetting | void> {
     // let envconfig = await readenv();
 
     const sosetvar = this._httpClient.get(

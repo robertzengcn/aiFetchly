@@ -319,7 +319,7 @@ export class BingScraper extends SearchScrape {
         return true;
     }
 
-    async search_keyword(keyword: string) {
+    async search_keyword(keyword: string): Promise<void> {
         //wait for full page loading
         // await delay(5000)
         await this.page.waitForFunction(() => {

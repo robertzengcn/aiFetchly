@@ -464,7 +464,7 @@ export class YandexScraper extends SearchScrape {
     return r;
   }
 
-  async search_keyword(keyword: string) {
+  async search_keyword(keyword: string): Promise<void> {
     for (const selector of this.searchSelectors) {
       try {
         const input = await this.page.$(selector);

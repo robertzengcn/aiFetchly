@@ -148,7 +148,7 @@ export class SocialAccountController {
                     //convert proxy to string
                     ses.setProxy({ proxyRules: proxyUrl }).then(() => {
                         log.info('set proxy success, use proxy host:' + randomProxy.host + " port:" + randomProxy.port)
-                    }).catch((error) => {
+                    }).catch((error: unknown) => {
                         log.info('set proxy failed, error:' + error)
                     })
                 }

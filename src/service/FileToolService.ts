@@ -408,7 +408,7 @@ export class FileToolService {
     const patch = diff.createPatch(params.path, content, newContent);
     const diffLines = patch
       .split("\n")
-      .filter((line) => line.startsWith("+") || line.startsWith("-"))
+      .filter((line: string) => line.startsWith("+") || line.startsWith("-"))
       .slice(0, 20);
 
     // Atomic write
