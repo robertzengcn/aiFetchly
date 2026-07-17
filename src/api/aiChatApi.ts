@@ -13,6 +13,9 @@ import {
   batchKeywordGenerationResponseSchema,
   chatApiResponseSchema,
 } from "@/schemas/api/aiChat";
+import { AIProviderResolver } from "@/service/aiProvider/AIProviderResolver";
+import { OpenAICompatibleProviderClient } from "@/service/aiProvider/OpenAICompatibleProviderClient";
+import type { LocalAIProviderConfig } from "@/entityTypes/aiProviderTypes";
 
 /**
  * Chat request interface
@@ -655,6 +658,7 @@ const STREAM_RETRY_BASE_DELAY_MS = 1000;
 export class AiChatApi {
   private _httpClient: HttpClient;
   private validationConfig: AiValidationConfig;
+  private _providerResolver?: AIProviderResolver;
 
   /**
    * Creates a new AiChatApi instance
@@ -666,6 +670,29 @@ export class AiChatApi {
       ...DEFAULT_VALIDATION_CONFIG,
       ...validationConfig,
     };
+  }
+
+  /**
+   * Lazy chat-availability resolver. Constructed on first use so creating an
+   * AiChatApi (e.g. in worker processes) does not touch encrypted storage
+   * until a chat call actually happens.
+   */
+  private getProviderResolver(): AIProviderResolver {
+    if (!this._providerResolver) {
+      this._providerResolver = new AIProviderResolver();
+    }
+    return this._providerResolver;
+  }
+
+  /**
+   * Build a one-off OpenAI-compatible client for a resolved local provider.
+   * Never cached — provider settings may change while the app is open.
+   */
+  private localClient(
+    config: LocalAIProviderConfig,
+    apiKey: string
+  ): OpenAICompatibleProviderClient {
+    return new OpenAICompatibleProviderClient(config, apiKey);
   }
 
   /**
@@ -1756,7 +1783,23 @@ export class AiChatApi {
    * @returns Promise resolving to models list in OpenAI format
    */
   async listOpenAIModels(): Promise<OpenAIModelsResponse> {
+    if (!process.env.WORKER_TYPE) {
+      const resolved = this.getProviderResolver().resolveForChat();
+      if (!resolved.canUse) {
+        throw new Error(resolved.message);
+      }
+      if (resolved.kind === "local") {
+        return this.localClient(resolved.config, resolved.apiKey).listModels();
+      }
+      return this.listOpenAIModelsHosted();
+    }
+    // Worker processes have no provider settings; keep the hosted-only gate.
     this.ensureAIEnabled();
+    return this.listOpenAIModelsHosted();
+  }
+
+  /** Hosted aiFetchly model listing (existing behavior, unchanged). */
+  private async listOpenAIModelsHosted(): Promise<OpenAIModelsResponse> {
     try {
       const raw = await this._httpClient.get("/api/ai/v1/models");
       return this.normalizeModelsResponse(raw);
@@ -1836,7 +1879,26 @@ export class AiChatApi {
   async openAIChatCompletion(
     request: OpenAIChatCompletionRequest
   ): Promise<OpenAIChatCompletionResponse> {
+    if (!process.env.WORKER_TYPE) {
+      const resolved = this.getProviderResolver().resolveForChat();
+      if (!resolved.canUse) {
+        throw new Error(resolved.message);
+      }
+      if (resolved.kind === "local") {
+        return this.localClient(resolved.config, resolved.apiKey).complete(
+          request
+        );
+      }
+      return this.openAIChatCompletionHosted(request);
+    }
     this.ensureAIEnabled();
+    return this.openAIChatCompletionHosted(request);
+  }
+
+  /** Hosted aiFetchly non-streaming completion (existing behavior, unchanged). */
+  private async openAIChatCompletionHosted(
+    request: OpenAIChatCompletionRequest
+  ): Promise<OpenAIChatCompletionResponse> {
     const data: OpenAIChatCompletionRequest = {
       messages: request.messages,
       stream: false,
@@ -1886,7 +1948,39 @@ export class AiChatApi {
       onRetry?: (info: StreamRetryInfo) => void;
     }
   ): Promise<void> {
+    if (!process.env.WORKER_TYPE) {
+      const resolved = this.getProviderResolver().resolveForChat();
+      if (!resolved.canUse) {
+        throw new Error(resolved.message);
+      }
+      if (resolved.kind === "local") {
+        await this.localClient(resolved.config, resolved.apiKey).stream(
+          request,
+          onChunk,
+          options
+        );
+        return;
+      }
+      await this.openAIChatCompletionStreamHosted(request, onChunk, options);
+      return;
+    }
+    // Worker processes have no provider settings; keep the hosted-only gate.
     this.ensureAIEnabled();
+    await this.openAIChatCompletionStreamHosted(request, onChunk, options);
+  }
+
+  /**
+   * Hosted aiFetchly streaming completion. Preserves the existing retry,
+   * legacy-endpoint fallback, and SSE parsing behavior exactly.
+   */
+  private async openAIChatCompletionStreamHosted(
+    request: OpenAIChatCompletionRequest,
+    onChunk: (chunk: OpenAIChatCompletionChunk) => void,
+    options?: {
+      signal?: AbortSignal;
+      onRetry?: (info: StreamRetryInfo) => void;
+    }
+  ): Promise<void> {
     const data: OpenAIChatCompletionRequest = {
       messages: request.messages,
       stream: true,
