@@ -280,7 +280,7 @@ describe('AIRecoveryHandler', () => {
                 actions: [
                     { type: 'click', selector: '.btn', reason: 'valid' },
                     { type: 'evaluate', selector: 'document.body', reason: 'valid evaluate action' },
-                    { type: 'goto', url: 'http://invalid.com', reason: 'invalid action' }
+                    { type: 'goto', selector: 'http://invalid.com', reason: 'invalid action' }
                 ],
                 confidence: 0.9,
                 reasoning: 'test'
