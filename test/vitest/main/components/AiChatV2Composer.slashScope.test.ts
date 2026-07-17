@@ -177,7 +177,7 @@ describe("AiChatV2Composer conversation-scoped slash suggestions", () => {
       }
       return Promise.resolve({
         status: true,
-        commands: [command(req.conversationId ?? "x")],
+        commands: [command(req?.conversationId ?? "x")],
         diagnostics: [],
         msg: "",
       });
