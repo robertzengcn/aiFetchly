@@ -27,6 +27,13 @@ new contract; a migration tracker retires old ones." This file is that tracker.
 |---|---|---|---|
 | contact-extraction | `schemas/worker/contactExtraction.ts` | `process.send` | ✅ |
 | local-embedding | `schemas/worker/localEmbedding.ts` | `parentPort` | ✅ |
+| skill-worker | `schemas/worker/skillWorker.ts` | `parentPort` | ✅ |
+| python-runtime | `schemas/worker/pythonRuntime.ts` | `parentPort` | ✅ |
+| google-proxy-check | `schemas/worker/googleProxyCheck.ts` | `parentPort` | ✅ |
+| website-content-scraper | `schemas/worker/websiteContentScraper.ts` | `parentPort` | ✅ |
+| google-maps | `schemas/worker/googleMaps.ts` | `process.send` | ✅ |
+| yandex-maps | `schemas/worker/yandexMaps.ts` | `process.send` | ✅ |
+| hook-execution | `workerProtocol.ts` (local) | `process.send` | ✅ (already safeParse) |
 
 ## Migration queue (~11 workers)
 
