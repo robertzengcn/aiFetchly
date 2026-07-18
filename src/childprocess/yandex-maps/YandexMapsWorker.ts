@@ -12,6 +12,11 @@
 import { type Browser, type Page } from "puppeteer";
 import { log } from "@/modules/Logger";
 import useProxy from "@lem0-packages/puppeteer-page-proxy";
+import {
+  yandexMapsWorkerInboundSchema,
+  type YandexMapsWorkerInbound,
+} from "@/schemas/worker/yandexMaps";
+import { parseWorkerMessage } from "@/schemas/worker/_shared";
 import { BrowserManager } from "@/modules/browserManager";
 import type {
   YandexMapsSearchResult,
@@ -1302,7 +1307,16 @@ function buildSummary(
 // Message handler
 // ---------------------------------------------------------------------------
 
-process.on("message", (msg: WorkerMessage) => {
+process.on("message", (raw: unknown) => {
+  const validation = parseWorkerMessage<YandexMapsWorkerInbound>(
+    raw,
+    yandexMapsWorkerInboundSchema()
+  );
+  if (!validation.success) {
+    log.warn("[YandexMapsWorker] dropped malformed message:", validation.error);
+    return;
+  }
+  const msg = validation.data as unknown as WorkerMessage;
   if (msg.type === "start") {
     scrapeYandexMaps(msg).catch((err: unknown) => {
       send({
