@@ -25,7 +25,7 @@ new contract; a migration tracker retires old ones." This file is that tracker.
 
 | Worker | Schemas | Transport | Status |
 |---|---|---|---|
-| contact-extraction | `schemas/worker/contactExtraction.ts` | `process.send` (validated via `_shared.parseWorkerMessage`) | ✅ inbound Zod; outbound Zod (ipc) |
+| contact-extraction | `schemas/worker/contactExtraction.ts` | `process.send` | ✅ |
 | local-embedding | `schemas/worker/localEmbedding.ts` | `parentPort` | ✅ |
 
 ## Migration queue (~11 workers)
@@ -43,9 +43,9 @@ importer remains → (where applicable) switch `process.send` → `parentPort`.
 - (`contact-extraction` already on Zod; transport switch is optional follow-up)
 
 ### `parentPort` transport (already on the target transport — add Zod only)
-- `childprocess/SkillWorker.ts`
+- ✅ `childprocess/SkillWorker.ts` (migrated: `schemas/worker/skillWorker.ts`)
 - `childprocess/embedding/LocalEmbeddingWorker.ts` (schema exists)
-- `childprocess/PythonRuntimeWorker.ts`
+- ✅ `childprocess/PythonRuntimeWorker.ts` (migrated: `schemas/worker/pythonRuntime.ts`)
 - `childprocess/googleProxyCheck.ts`
 - `childprocess/websiteContentScraper.ts`
 - `childprocess/scrapeManager.ts`

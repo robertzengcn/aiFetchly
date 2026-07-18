@@ -1,5 +1,10 @@
 import { spawn } from "child_process";
 import { log } from "@/modules/Logger";
+import {
+  pythonRuntimeWorkerInboundSchema,
+  type PythonRuntimeWorkerInbound,
+} from "@/schemas/worker/pythonRuntime";
+import { parseWorkerMessage } from "@/schemas/worker/_shared";
 
 interface ExecutePythonMessage {
   type: "EXECUTE_PYTHON";
@@ -46,7 +51,9 @@ function trimOutput(text: string): string {
   return `${text.slice(0, MAX_STDIO)}...[truncated]`;
 }
 
-function postMessageSafe(message: PythonResultMessage | PythonErrorMessage): void {
+function postMessageSafe(
+  message: PythonResultMessage | PythonErrorMessage
+): void {
   if (!parentPort) return;
   try {
     parentPort.postMessage(JSON.stringify(message));
@@ -68,23 +75,6 @@ function sendFatalErrorToActiveRequests(error: unknown): void {
   }
 }
 
-function validateExecutePythonMessage(parsed: unknown): ExecutePythonMessage {
-  const message = parsed as Partial<ExecutePythonMessage>;
-  if (
-    message.type !== "EXECUTE_PYTHON" ||
-    typeof message.requestId !== "string" ||
-    typeof message.pythonBin !== "string" ||
-    typeof message.scriptPath !== "string" ||
-    !Array.isArray(message.args) ||
-    typeof message.timeoutMs !== "number"
-  ) {
-    throw new Error("Invalid EXECUTE_PYTHON message payload");
-  }
-  if (message.args.some((arg) => typeof arg !== "string")) {
-    throw new Error("EXECUTE_PYTHON args must be string[]");
-  }
-  return message as ExecutePythonMessage;
-}
 
 async function executePython(
   message: ExecutePythonMessage
@@ -155,9 +145,9 @@ async function executePython(
         if (code !== 0) {
           reject(
             new Error(
-              `Python script exited with code ${String(code)}. stderr: ${trimOutput(
-                stderr
-              )}`
+              `Python script exited with code ${String(
+                code
+              )}. stderr: ${trimOutput(stderr)}`
             )
           );
           return;
@@ -184,7 +174,23 @@ if (parentPort) {
       ) {
         requestId = (parsed as { requestId: string }).requestId;
       }
-      const message = validateExecutePythonMessage(parsed);
+      const validation = parseWorkerMessage<PythonRuntimeWorkerInbound>(
+        parsed,
+        pythonRuntimeWorkerInboundSchema()
+      );
+      if (!validation.success) {
+        log.warn(
+          "[PythonRuntimeWorker] dropped malformed EXECUTE_PYTHON:",
+          validation.error
+        );
+        postMessageSafe({
+          type: "PYTHON_ERROR",
+          requestId,
+          error: "Invalid EXECUTE_PYTHON message payload",
+        });
+        return;
+      }
+      const message = validation.data;
       requestId = message.requestId;
       activeRequestIds.add(requestId);
       const scriptLabel = message.scriptPath.split(/[\\/]/).pop() || "unknown";
@@ -203,7 +209,8 @@ if (parentPort) {
         `[PythonRuntimeWorker] Completed request ${requestId} (pid=${process.pid})`
       );
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
       log.warn(
         `[PythonRuntimeWorker] Request ${requestId} failed: ${errorMessage}`
       );
