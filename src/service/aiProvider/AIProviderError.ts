@@ -122,6 +122,11 @@ export async function toProviderError(
 
 /** Map a network/transport error (no response) to a provider error. */
 export function toNetworkProviderError(err: unknown): AIProviderError {
+  // Already-categorized provider errors (e.g. a response timeout we raised
+  // intentionally) pass through unchanged so their message survives.
+  if (err instanceof AIProviderError) {
+    return err;
+  }
   if (err instanceof Error && err.name === "AbortError") {
     // Preserve abort semantics; rethrow rather than recategorize upstream.
     throw err;

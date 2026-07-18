@@ -159,12 +159,16 @@ export class AIProviderConnectionTester {
           },
           STREAM_TIMEOUT_MS
         );
-        capabilities.streaming = res.ok ? "supported" : "failed";
-        // Drain a little of the body so the connection closes cleanly.
-        await res.body
-          ?.getReader()
-          .read()
-          .catch(() => undefined);
+        if (!res.ok || !res.body) {
+          capabilities.streaming = res.ok ? "failed" : "unsupported";
+        } else {
+          // Verify the body actually contains an SSE `data:` line before
+          // reporting streaming as supported — a 200 with a non-SSE body
+          // (e.g. plain JSON) is not real streaming support.
+          capabilities.streaming = (await this.bodyHasSseData(res.body))
+            ? "supported"
+            : "unsupported";
+        }
       } catch {
         capabilities.streaming = "failed";
       }
@@ -214,6 +218,35 @@ export class AIProviderConnectionTester {
       return await this.fetchImpl(url, { ...init, signal: controller.signal });
     } finally {
       clearTimeout(timer);
+    }
+  }
+
+  /**
+   * Read up to 8KB of a streaming body looking for an SSE `data:` line.
+   * Bounded (16 reads / 8KB) so a provider that opens the connection but never
+   * sends a line cannot hang the test. Releases the reader lock when done.
+   */
+  private async bodyHasSseData(
+    body: ReadableStream<Uint8Array>
+  ): Promise<boolean> {
+    const reader = body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    try {
+      for (let i = 0; i < 16; i += 1) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        if (buffer.includes("data:")) {
+          return true;
+        }
+        if (buffer.length > 8192) break;
+      }
+      return false;
+    } catch {
+      return false;
+    } finally {
+      reader.releaseLock();
     }
   }
 

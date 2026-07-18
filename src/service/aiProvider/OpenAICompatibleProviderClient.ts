@@ -19,8 +19,17 @@ import {
 } from "./OpenAIModelNormalizer";
 import { OpenAIStreamParser } from "./OpenAIStreamParser";
 import { toProviderError, toNetworkProviderError } from "./AIProviderError";
+import { AIProviderError } from "./AIProviderError";
 
 type FetchImpl = typeof fetch;
+
+/**
+ * Time-to-response-headers budget for local provider chat calls. Local models
+ * can take a while on cold start, so this is generous; once headers arrive the
+ * timer is cleared so an active stream is never killed. Prevents a hung
+ * provider from stalling chat indefinitely (PRD §17.1).
+ */
+const LOCAL_PROVIDER_RESPONSE_TIMEOUT_MS = 60_000;
 
 /**
  * ChatProviderClient that talks to a user-configured OpenAI-compatible
@@ -34,16 +43,19 @@ type FetchImpl = typeof fetch;
  */
 export class OpenAICompatibleProviderClient implements ChatProviderClient {
   private readonly streamParser: OpenAIStreamParser;
+  private readonly responseTimeoutMs: number;
 
   constructor(
     private readonly config: LocalAIProviderConfig,
     private readonly apiKey: string,
     fetchImpl?: FetchImpl,
-    streamParser?: OpenAIStreamParser
+    streamParser?: OpenAIStreamParser,
+    responseTimeoutMs: number = LOCAL_PROVIDER_RESPONSE_TIMEOUT_MS
   ) {
     // Default to the global fetch; capture it once so tests can inject a stub.
     this.fetchImpl = fetchImpl ?? fetch;
     this.streamParser = streamParser ?? new OpenAIStreamParser();
+    this.responseTimeoutMs = responseTimeoutMs;
   }
 
   private readonly fetchImpl: FetchImpl;
@@ -63,6 +75,52 @@ export class OpenAICompatibleProviderClient implements ChatProviderClient {
       headers.Authorization = `Bearer ${this.apiKey}`;
     }
     return headers;
+  }
+
+  /**
+   * fetch with a time-to-response-headers timeout. The timer is cleared once
+   * the Response arrives, so the body of a streaming call can flow without
+   * being killed; only a provider that never sends headers stalls into the
+   * timeout. A caller-initiated abort is preserved as an AbortError; a timeout
+   * surfaces as a categorized network error.
+   */
+  private async fetchWithResponseTimeout(
+    url: string,
+    init: RequestInit,
+    timeoutMs: number,
+    callerSignal?: AbortSignal
+  ): Promise<Response> {
+    const controller = new AbortController();
+    const onCallerAbort = (): void => controller.abort();
+    if (callerSignal) {
+      if (callerSignal.aborted) {
+        controller.abort();
+      } else {
+        callerSignal.addEventListener("abort", onCallerAbort, { once: true });
+      }
+    }
+    const timer = setTimeout(() => {
+      controller.abort();
+    }, timeoutMs);
+    try {
+      return await this.fetchImpl(url, { ...init, signal: controller.signal });
+    } catch (err) {
+      // Distinguish a timeout (timer fired) from a user-initiated abort.
+      const timedOut =
+        controller.signal.aborted && (!callerSignal || !callerSignal.aborted);
+      if (timedOut) {
+        throw new AIProviderError(
+          "The AI provider took too long to respond. Check that it is running and not overloaded.",
+          "network"
+        );
+      }
+      throw err;
+    } finally {
+      clearTimeout(timer);
+      if (callerSignal) {
+        callerSignal.removeEventListener("abort", onCallerAbort);
+      }
+    }
   }
 
   async listModels(): Promise<OpenAIModelsResponse> {
@@ -101,11 +159,15 @@ export class OpenAICompatibleProviderClient implements ChatProviderClient {
     });
     let res: Response;
     try {
-      res = await this.fetchImpl(this.url("/chat/completions"), {
-        method: "POST",
-        headers: this.jsonHeaders("application/json"),
-        body: JSON.stringify(payload),
-      });
+      res = await this.fetchWithResponseTimeout(
+        this.url("/chat/completions"),
+        {
+          method: "POST",
+          headers: this.jsonHeaders("application/json"),
+          body: JSON.stringify(payload),
+        },
+        this.responseTimeoutMs
+      );
     } catch (err) {
       throw toNetworkProviderError(err);
     }
@@ -129,12 +191,16 @@ export class OpenAICompatibleProviderClient implements ChatProviderClient {
     });
     let res: Response;
     try {
-      res = await this.fetchImpl(this.url("/chat/completions"), {
-        method: "POST",
-        headers: this.jsonHeaders("text/event-stream"),
-        body: JSON.stringify(payload),
-        signal: options?.signal,
-      });
+      res = await this.fetchWithResponseTimeout(
+        this.url("/chat/completions"),
+        {
+          method: "POST",
+          headers: this.jsonHeaders("text/event-stream"),
+          body: JSON.stringify(payload),
+        },
+        this.responseTimeoutMs,
+        options?.signal
+      );
     } catch (err) {
       throw toNetworkProviderError(err);
     }

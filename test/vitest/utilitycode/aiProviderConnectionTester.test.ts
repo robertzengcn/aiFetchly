@@ -19,17 +19,26 @@ function makeFetch(routes: {
     const path = String(url);
     const method = init?.method ?? "GET";
     if (path.endsWith("/models") && method === "GET") {
-      return Promise.resolve(routes.models ? routes.models() : new Response("nope", { status: 404 }));
+      return Promise.resolve(
+        routes.models ? routes.models() : new Response("nope", { status: 404 })
+      );
     }
     if (path.endsWith("/chat/completions")) {
       const body = init?.body ? JSON.parse(String(init.body)) : {};
       if (body.stream === true) {
         return Promise.resolve(
-          routes.stream ? routes.stream() : new Response("data: [DONE]\n\n", { status: 200 })
+          routes.stream
+            ? routes.stream()
+            : new Response("data: [DONE]\n\n", { status: 200 })
         );
       }
       return Promise.resolve(
-        routes.chat ? routes.chat() : new Response(JSON.stringify({ choices: [{ message: { content: "pong" } }] }), { status: 200 })
+        routes.chat
+          ? routes.chat()
+          : new Response(
+              JSON.stringify({ choices: [{ message: { content: "pong" } }] }),
+              { status: 200 }
+            )
       );
     }
     return Promise.resolve(new Response("", { status: 404 }));
@@ -40,18 +49,24 @@ const okModels = (): Response =>
   new Response(
     JSON.stringify({
       object: "list",
-      data: [{ id: "llama3.1", object: "model", created: 0, owned_by: "ollama" }],
+      data: [
+        { id: "llama3.1", object: "model", created: 0, owned_by: "ollama" },
+      ],
     }),
     { status: 200, headers: { "Content-Type": "application/json" } }
   );
 
 const okChat = (): Response =>
-  new Response(JSON.stringify({ choices: [{ message: { content: "pong" } }] }), {
-    status: 200,
-    headers: { "Content-Type": "application/json" },
-  });
+  new Response(
+    JSON.stringify({ choices: [{ message: { content: "pong" } }] }),
+    {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }
+  );
 
-const okStream = (): Response => new Response("data: [DONE]\n\n", { status: 200 });
+const okStream = (): Response =>
+  new Response("data: [DONE]\n\n", { status: 200 });
 
 describe("AIProviderConnectionTester", () => {
   it("reports passed when models, chat, and streaming all work", async () => {
@@ -120,7 +135,13 @@ describe("AIProviderConnectionTester", () => {
               {
                 message: {
                   content: null,
-                  tool_calls: [{ id: "t1", type: "function", function: { name: "ping_tool", arguments: "{}" } }],
+                  tool_calls: [
+                    {
+                      id: "t1",
+                      type: "function",
+                      function: { name: "ping_tool", arguments: "{}" },
+                    },
+                  ],
                 },
               },
             ],
@@ -131,5 +152,26 @@ describe("AIProviderConnectionTester", () => {
     const tester = new AIProviderConnectionTester(fetchImpl);
     const result = await tester.test(baseProvider, { probeTools: true });
     expect(result.capabilities.tools).toBe("supported");
+  });
+
+  it("marks streaming unsupported when a 200 body has no SSE data line", async () => {
+    // Provider returns 200 with a plain JSON body (not an SSE stream).
+    const fetchImpl = makeFetch({
+      models: okModels,
+      chat: okChat,
+      stream: () =>
+        new Response(
+          JSON.stringify({ choices: [{ message: { content: "pong" } }] }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }
+        ),
+    });
+    const tester = new AIProviderConnectionTester(fetchImpl);
+    const result = await tester.test(baseProvider);
+    expect(result.capabilities.streaming).toBe("unsupported");
+    // Chat still worked, so this is a partial result, not a failure.
+    expect(result.status).toBe("partial");
   });
 });
