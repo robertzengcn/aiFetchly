@@ -92,6 +92,8 @@
         @approve-plan="handleApprovePlan"
         @reject-plan="handleRejectPlan"
         @request-plan-changes="handleRequestPlanChanges"
+        @open-artifact="(id: string) => emit('open-artifact', id)"
+        @copy-artifact-html="(id: string) => emit('copy-artifact-html', id)"
       />
 
       <!-- Pinned action cards: question + plan approval while awaiting user input.
@@ -388,6 +390,7 @@ import WorkspaceRequiredCard from "./WorkspaceRequiredCard.vue";
 import { getWorkspace } from "@/views/api/workspace";
 import type { WorkspaceSummary } from "@/entityTypes/workspaceTypes";
 import type { FileOperationRecord } from "@/entityTypes/fileOperationTypes";
+import { extractArtifactMetadata } from "./artifactMetadata";
 import {
   subscribeToFileOperations,
   unsubscribeFromFileOperations,
@@ -416,6 +419,11 @@ const CHARS_PER_TOKEN_ESTIMATE = 4;
 const AUTO_MODEL_VALUE = "auto";
 
 type Status = "idle" | "streaming" | "cancelled" | "error";
+
+const emit = defineEmits<{
+  (e: "open-artifact", artifactId: string): void;
+  (e: "copy-artifact-html", artifactId: string): void;
+}>();
 
 const { t } = useI18n();
 
@@ -1102,6 +1110,7 @@ const upsertToolResultMessage = (
     summary:
       typeof toolResult.summary === "string" ? toolResult.summary : undefined,
     error: typeof toolResult.error === "string" ? toolResult.error : undefined,
+    artifact: extractArtifactMetadata(toolResult),
   };
 
   if (existingIdx !== -1) {
@@ -1658,6 +1667,12 @@ const onSend = async (text: string): Promise<void> => {
               chunk.conversationId || activeConversationId.value || "",
               assistantAdded ? assistant.id : undefined
             );
+            // Auto-open the artifact preview during a live tool result.
+            // (History loads render the card but must NOT auto-open.)
+            const liveArtifact = extractArtifactMetadata(chunk.toolResult ?? {});
+            if (liveArtifact?.openImmediately) {
+              emit("open-artifact", liveArtifact.id);
+            }
           }
         }
       },

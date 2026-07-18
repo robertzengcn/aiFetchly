@@ -6,6 +6,7 @@ import type {
   ChatV2Mode,
   AIChatPlanStatus,
 } from "@/entityTypes/aiChatPlanTypes";
+import type { AIArtifactToolMetadata } from "@/entityTypes/aiArtifactTypes";
 
 export type {
   ChatV2Mode,
@@ -66,6 +67,9 @@ export interface ChatV2MessageMetadata {
     expectedCount?: number | null;
     updatedAt: number;
   };
+  // AI artifact pointer (metadata only — never the full HTML content).
+  // Present on tool_result messages produced by create_html_artifact.
+  artifact?: AIArtifactToolMetadata;
 }
 
 /** Renderer request to start a streaming chat turn. */

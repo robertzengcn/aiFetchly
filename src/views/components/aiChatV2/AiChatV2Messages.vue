@@ -22,6 +22,8 @@
       @approve-plan="emit('approve-plan')"
       @reject-plan="(fb) => emit('reject-plan', fb)"
       @request-plan-changes="(fb) => emit('request-plan-changes', fb)"
+      @open-artifact="(id: string) => emit('open-artifact', id)"
+      @copy-artifact-html="(id: string) => emit('copy-artifact-html', id)"
     />
     <div
       v-if="showTypingIndicator"
@@ -80,6 +82,8 @@ const emit = defineEmits<{
   (e: "approve-plan"): void;
   (e: "reject-plan", feedback: string): void;
   (e: "request-plan-changes", feedback: string): void;
+  (e: "open-artifact", artifactId: string): void;
+  (e: "copy-artifact-html", artifactId: string): void;
 }>();
 const { t } = useI18n();
 

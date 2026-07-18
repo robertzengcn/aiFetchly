@@ -106,7 +106,15 @@ v-if="mainStore.isMobile" variant="text" icon="mdi-menu"
             </header>
             <div class="app_main__body">
                 <div class="router">
-                    <RouterView />
+                    <AiArtifactWorkspace
+                        v-if="activeArtifact"
+                        :artifact="activeArtifact"
+                        :loading="artifactLoading"
+                        :error="artifactError ?? undefined"
+                        @close="closeAiArtifact"
+                        @copy-html="copyActiveArtifactHtml"
+                    />
+                    <RouterView v-else />
                 </div>
                 <div
                     class="ai-chat-dock"
@@ -117,7 +125,11 @@ v-if="mainStore.isMobile" variant="text" icon="mdi-menu"
                         class="chat-resize-handle"
                         @mousedown="startResize"
                     ></div>
-                    <AiChatV2 v-show="v2ChatPanelOpen" />
+                    <AiChatV2
+                        v-show="v2ChatPanelOpen"
+                        @open-artifact="openAiArtifact"
+                        @copy-artifact-html="copyArtifactHtml"
+                    />
                 </div>
             </div>
         </main>
@@ -193,6 +205,9 @@ import {CommonDialogMsg} from "@/entityTypes/commonType"
 import NoticeSnackbar from '@/views/components/widgets/noticeSnackbar.vue';
 import AiChatBox from '@/views/components/aiChat/AiChatBox.vue';
 import AiChatV2 from '@/views/components/aiChatV2/AiChatV2.vue';
+import AiArtifactWorkspace from '@/views/components/aiArtifacts/AiArtifactWorkspace.vue';
+import { getAIArtifact } from '@/views/api/aiArtifacts';
+import type { AIArtifactRecord } from '@/entityTypes/aiArtifactTypes';
 import {GetloginUserInfo} from '@/views/api/users'
 import { getAppName } from '@/views/api/app'
 import { packageAppName } from '@/config/appPackage'
@@ -223,6 +238,11 @@ const snaptimeout=ref<number>(10000)
 const messages = ref<MessageItem[]>([]);
 const chatPanelOpen = ref(false);
 const v2ChatPanelOpen = ref(false);
+// AI artifact workspace — layout-owned temporary preview state. When set,
+// it replaces the route view; closing restores the prior route.
+const activeArtifact = ref<AIArtifactRecord | null>(null);
+const artifactLoading = ref(false);
+const artifactError = ref<string | null>(null);
 const V2_FLAG_KEY = 'aifetchly:aiChatV2Enabled';
 const aiChatV2Enabled = ref(localStorage.getItem(V2_FLAG_KEY) !== 'false');
 const chatPanelWidth = ref(420);
@@ -400,6 +420,51 @@ const addMessage = (type: NoticeType, content: string) => {
 
 const showSuccessMessage = (content: string) => addMessage('success', content);
 const showErrorMessage = (content: string) => addMessage('error', content);
+
+// --- AI artifact workspace ----------------------------------------------
+const openAiArtifact = async (artifactId: string): Promise<void> => {
+  artifactLoading.value = true;
+  artifactError.value = null;
+  try {
+    const artifact = await getAIArtifact(artifactId);
+    if (!artifact) {
+      artifactError.value = t('aiArtifacts.not_found') || 'Artifact not found.';
+      showErrorMessage(artifactError.value);
+      return;
+    }
+    activeArtifact.value = artifact;
+  } catch (error: unknown) {
+    artifactError.value = error instanceof Error ? error.message : String(error);
+    showErrorMessage(artifactError.value);
+  } finally {
+    artifactLoading.value = false;
+  }
+};
+
+const closeAiArtifact = (): void => {
+  activeArtifact.value = null;
+  artifactError.value = null;
+};
+
+const copyArtifactHtml = async (artifactId: string): Promise<void> => {
+  try {
+    const artifact = await getAIArtifact(artifactId);
+    if (!artifact) {
+      showErrorMessage(t('aiArtifacts.not_found') || 'Artifact not found.');
+      return;
+    }
+    await navigator.clipboard.writeText(artifact.content);
+    showSuccessMessage(t('aiArtifacts.copy_success') || 'HTML copied.');
+  } catch {
+    showErrorMessage(t('aiArtifacts.copy_error') || 'Could not copy HTML.');
+  }
+};
+
+const copyActiveArtifactHtml = (): void => {
+  if (activeArtifact.value) {
+    void copyArtifactHtml(activeArtifact.value.id);
+  }
+};
 const showWarningMessage = (content: string) => addMessage('warning', content);
 const showInfoMessage = (content: string) => addMessage('info', content);
 
