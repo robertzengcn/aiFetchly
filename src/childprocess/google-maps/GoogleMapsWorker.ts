@@ -12,6 +12,11 @@
 import { launch, type Browser, type Page } from "puppeteer";
 import { log } from "@/modules/Logger";
 import useProxy from "@lem0-packages/puppeteer-page-proxy";
+import {
+  googleMapsWorkerInboundSchema,
+  type GoogleMapsWorkerInbound,
+} from "@/schemas/worker/googleMaps";
+import { parseWorkerMessage } from "@/schemas/worker/_shared";
 import type {
   GoogleMapsSearchResult,
   GoogleMapsBusinessResult,
@@ -360,9 +365,7 @@ async function scrapeGoogleMaps(msg: StartMessage): Promise<void> {
         previousCardCount = cardCount;
       } else {
         noNewCardsCount++;
-        log.info(
-          `[DEBUG] No new cards (${noNewCardsCount}/${maxNoNewCards})`
-        );
+        log.info(`[DEBUG] No new cards (${noNewCardsCount}/${maxNoNewCards})`);
       }
 
       // Scroll the feed container to load more
@@ -484,9 +487,7 @@ async function scrapeGoogleMaps(msg: StartMessage): Promise<void> {
           await freshCards[i].click();
         }
 
-        log.info(
-          `[DEBUG] Clicked card ${i + 1}, waiting for detail panel...`
-        );
+        log.info(`[DEBUG] Clicked card ${i + 1}, waiting for detail panel...`);
         await randomDelay(1000, 2000);
 
         // Wait for detail panel
@@ -497,9 +498,7 @@ async function scrapeGoogleMaps(msg: StartMessage): Promise<void> {
           log.info(`[DEBUG] Detail panel h1.fontHeadline found`);
         } catch {
           // Fallback: wait for any h1
-          log.info(
-            `[DEBUG] h1.fontHeadline not found, trying fallback h1...`
-          );
+          log.info(`[DEBUG] h1.fontHeadline not found, trying fallback h1...`);
           await page.waitForSelector("h1", { timeout: 5000 });
           log.info(`[DEBUG] Fallback h1 found`);
         }
@@ -743,7 +742,16 @@ function buildSummary(
 // Message handler
 // ---------------------------------------------------------------------------
 
-process.on("message", (msg: WorkerMessage) => {
+process.on("message", (raw: unknown) => {
+  const validation = parseWorkerMessage<GoogleMapsWorkerInbound>(
+    raw,
+    googleMapsWorkerInboundSchema()
+  );
+  if (!validation.success) {
+    log.warn("[GoogleMapsWorker] dropped malformed message:", validation.error);
+    return;
+  }
+  const msg = validation.data as unknown as WorkerMessage;
   if (msg.type === "start") {
     scrapeGoogleMaps(msg).catch((err) => {
       send({
