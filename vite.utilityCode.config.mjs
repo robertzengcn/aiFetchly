@@ -6,6 +6,7 @@ import * as path from 'path';
 import ClosePlugin from './vite-plugin-close.ts'
 // import { esbuildCommonjs } from '@originjs/vite-plugin-commonjs'
 import checker from 'vite-plugin-checker'
+import { optionalChecker } from './vite-checker-toggle.mjs';
 //import { nodeResolve } from '@rollup/plugin-node-resolve';
 //import requireTransform from 'vite-plugin-require-transform';
 import commonjs from '@rollup/plugin-commonjs';
@@ -42,10 +43,10 @@ export default ({ mode }) => {
         }),
         sourcemaps(),
         ClosePlugin(),
-        checker({
+        ...optionalChecker(() => checker({
             // e.g. use TypeScript check
             typescript: true,
-        }),
+        })),
         ],
         resolve: {
             alias: {

@@ -3,28 +3,12 @@
   "configurations": [
     {
       "type": "node",
-      "request": "launch",
+      "request": "attach",
       "name": "Electron Main",
-      "runtimeExecutable": "${workspaceFolder}/node_modules/.bin/electron-forge",
-      "runtimeArgs": [
-        "start",
-        "--inspect-electron",
-        "--",
-        "--disable-gpu",
-        "--disable-software-rasterizer",
-        "--no-sandbox"
-      ],
+      "address": "127.0.0.1",
+      "port": 9229,
+      "preLaunchTask": "electron-forge-start-debug",
       "cwd": "${workspaceFolder}",
-      "env": {
-        "DISPLAY": ":0",
-        "AICHAT_DEBUG_REQUEST": "0",
-        "CHOKIDAR_USEPOLLING": "1",
-        "CHOKIDAR_INTERVAL": "1000",
-        "AIFETCHLY_DEV_BROWSER_BRIDGE": "1",
-        "AIFETCHLY_DEV_BROWSER_BRIDGE_HOST": "127.0.0.1",
-        "AIFETCHLY_DEV_BROWSER_BRIDGE_PORT": "37621",
-        "AIFETCHLY_DEV_BROWSER_BRIDGE_ALLOWED_ORIGIN": "http://localhost:5173"
-      },
       "outFiles": [
         "${workspaceFolder}/.vite/build/**/*.js"
       ],
@@ -33,9 +17,9 @@
         "!**/node_modules/**"
       ],
       "sourceMaps": true,
-      "autoAttachChildProcesses": true,
-      "skipFiles": ["<node_internals>/**"],
-      "console": "integratedTerminal"
+      "restart": true,
+      "timeout": 60000,
+      "skipFiles": ["<node_internals>/**"]
     },
     {
       "type": "node",
