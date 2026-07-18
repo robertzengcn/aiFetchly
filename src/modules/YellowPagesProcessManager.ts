@@ -92,6 +92,19 @@ type PlatformInfo = StartTaskMessage["platformInfo"];
  * - Consistent process lifecycle control
  * - Centralized process resource management
  */
+
+/**
+ * WS-5 R5.1 — injectable collaborators for {@link YellowPagesProcessManager}.
+ * Used via the static createForTest() factory for unit tests.
+ */
+export interface YellowPagesProcessManagerDeps {
+  taskModel: YellowPagesTaskModel;
+  resultModel: YellowPagesResultModel;
+  platformRegistry: PlatformRegistry;
+  accountCookiesModule: AccountCookiesModule;
+  aiSupportHandler: YellowPagesAiSupportHandler;
+}
+
 export class YellowPagesProcessManager extends BaseModule {
   private static instance: YellowPagesProcessManager | null = null;
 
@@ -104,16 +117,23 @@ export class YellowPagesProcessManager extends BaseModule {
 
   /**
    * Private constructor to prevent direct instantiation
-   * Use getInstance() method to access the singleton instance
+   * Use getInstance() method to access the singleton instance.
+   *
+   * WS-5 R5.1: accepts optional deps so tests can substitute fakes via the
+   * static {@link createForTest} factory (bypasses the singleton cache for test
+   * isolation). Production callers use getInstance() (no deps → real modules).
    */
-  private constructor() {
+  private constructor(deps?: Partial<YellowPagesProcessManagerDeps>) {
     super();
-    this.taskModel = new YellowPagesTaskModel(this.dbpath);
-    this.resultModel = new YellowPagesResultModel(this.dbpath);
-    this.platformRegistry = new PlatformRegistry();
-    this.accountCookiesModule = new AccountCookiesModule();
+    this.taskModel = deps?.taskModel ?? new YellowPagesTaskModel(this.dbpath);
+    this.resultModel =
+      deps?.resultModel ?? new YellowPagesResultModel(this.dbpath);
+    this.platformRegistry = deps?.platformRegistry ?? new PlatformRegistry();
+    this.accountCookiesModule =
+      deps?.accountCookiesModule ?? new AccountCookiesModule();
     // Initialize AI support handler (will be configured per task)
-    this.aiSupportHandler = new YellowPagesAiSupportHandler();
+    this.aiSupportHandler =
+      deps?.aiSupportHandler ?? new YellowPagesAiSupportHandler();
   }
 
   /**
@@ -126,6 +146,17 @@ export class YellowPagesProcessManager extends BaseModule {
       YellowPagesProcessManager.instance = new YellowPagesProcessManager();
     }
     return YellowPagesProcessManager.instance;
+  }
+
+  /**
+   * WS-5 R5.1 — construct a FRESH instance with injected collaborators,
+   * bypassing the singleton cache. For unit tests only (test isolation: each
+   * test gets its own instance with its own fakes).
+   */
+  public static createForTest(
+    deps?: Partial<YellowPagesProcessManagerDeps>
+  ): YellowPagesProcessManager {
+    return new YellowPagesProcessManager(deps);
   }
 
   /**
