@@ -3,6 +3,7 @@ import {
   QUOTA_EXHAUSTED_SENTINEL,
   userSafeError,
 } from "@/service/AIChatErrorMapper";
+import { AIProviderError } from "@/service/aiProvider/AIProviderError";
 
 describe("AIChatErrorMapper - userSafeError", () => {
   it("returns the quota sentinel on 402 / insufficient_quota", () => {
@@ -17,6 +18,27 @@ describe("AIChatErrorMapper - userSafeError", () => {
   it("returns a sign-in prompt on 401/403", () => {
     expect(userSafeError(new Error("401 Unauthorized"))).toBe(
       "Please sign in again."
+    );
+  });
+
+  it("surfaces AIProviderError messages directly instead of the generic fallback", () => {
+    const auth = new AIProviderError(
+      "AI provider authentication failed. Check your API key.",
+      "auth",
+      { status: 401 }
+    );
+    // The message has no "401" substring, so without the instanceof check it
+    // would fall through to "An unexpected error occurred."
+    expect(userSafeError(auth)).toBe(
+      "AI provider authentication failed. Check your API key."
+    );
+
+    const network = new AIProviderError(
+      "Could not connect to the AI provider.",
+      "network"
+    );
+    expect(userSafeError(network)).toBe(
+      "Could not connect to the AI provider."
     );
   });
 

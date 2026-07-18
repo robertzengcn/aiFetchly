@@ -1,5 +1,7 @@
 // src/service/AIChatErrorMapper.ts
 
+import { AIProviderError } from "./aiProvider/AIProviderError";
+
 /**
  * Sentinel returned by {@link userSafeError} when the AI server reports
  * HTTP 402 / "Payment Required" — i.e. the user's subscription token quota
@@ -17,6 +19,13 @@ export function userSafeError(err: unknown): string {
   if (err instanceof Error) {
     if (err.name === "AbortError") {
       return "Generation stopped.";
+    }
+    // AIProviderError messages are crafted to be user-safe (auth, network,
+    // model-unavailable, etc.). Surface them directly instead of letting the
+    // status-number regexes below — which my provider messages don't contain —
+    // clobber them with a generic "unexpected error".
+    if (err instanceof AIProviderError) {
+      return err.message || "AI provider error.";
     }
     const msg = err.message || "Unknown error";
     if (
