@@ -22,6 +22,7 @@ import { ToolExecutor } from "@/service/ToolExecutor";
 import { DocSkillScriptRunnerService } from "@/service/DocSkillScriptRunnerService";
 import { executeShellCommand } from "@/service/ShellToolService";
 import { ShellAuditLogger } from "@/service/ShellAuditLogger";
+import { AIHtmlArtifactToolService } from "@/service/AIHtmlArtifactToolService";
 import {
   getEmailServiceConfig,
   getEmailSearchTaskEmails,
@@ -2027,6 +2028,51 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     },
   },
   RUN_SUBAGENT_TOOL,
+  {
+    name: "create_html_artifact",
+    description:
+      "Create a standalone HTML artifact and display it in the application's main content area. " +
+      "Use this tool when the user asks for information that is better presented visually or interactively, such as dashboards, statistical reports, comparison tables, charts, summaries with layout, generated landing-page previews, visual plans, or formatted documents. " +
+      "The HTML must be self-contained and safe to render in a sandboxed iframe. Use semantic HTML and inline CSS. Do not rely on external network resources, remote scripts, remote stylesheets, cookies, localStorage, Electron APIs, filesystem access, or navigation. Do not include forms that submit data, login fields, payment fields, tracking scripts, or code intended to escape the sandbox. " +
+      "Do not use this tool for ordinary conversational answers, short explanations, code snippets, command output, private/internal reasoning, or content that the user did not ask to visualize. If a simple text response is enough, respond in chat instead.",
+    parameters: {
+      type: "object",
+      properties: {
+        title: {
+          type: "string",
+          description: "Short user-facing title for the artifact.",
+        },
+        html: {
+          type: "string",
+          description:
+            "Complete standalone HTML document or safe fragment to render in the main workspace.",
+        },
+        description: {
+          type: "string",
+          description: "Brief summary of what the artifact shows.",
+        },
+        openImmediately: {
+          type: "boolean",
+          description:
+            "Whether to open the artifact in the main workspace immediately. Default true.",
+          default: true,
+        },
+      },
+      required: ["title", "html"],
+    },
+    tier: "main",
+    requiresConfirmation: false,
+    permissionCategory: "pure",
+    source: "built-in",
+    execute: async (args, context) => {
+      const service = new AIHtmlArtifactToolService();
+      const result = await service.create(args, context);
+      return {
+        success: result.success,
+        result: result as unknown as Record<string, unknown>,
+      };
+    },
+  },
 ];
 
 // Register all built-in skills at module load time
