@@ -39,30 +39,39 @@ const DISALLOWED_HTML_PATTERNS: ReadonlyArray<{
   pattern: RegExp;
   reason: string;
 }> = [
-  { pattern: /<script\b/i, reason: "Scripts are not supported in HTML artifacts." },
-  { pattern: /\son\w+\s*=/i, reason: "Inline event handlers are not supported." },
-  { pattern: /\bjavascript\s*:/i, reason: "javascript: URLs are not supported." },
+  {
+    pattern: /<script\b/i,
+    reason: "Scripts are not supported in HTML artifacts.",
+  },
+  {
+    pattern: /\son\w+\s*=/i,
+    reason: "Inline event handlers are not supported.",
+  },
+  {
+    pattern: /\bjavascript\s*:/i,
+    reason: "javascript: URLs are not supported.",
+  },
   { pattern: /<iframe\b/i, reason: "Nested iframes are not supported." },
   { pattern: /<object\b/i, reason: "Object embeds are not supported." },
   { pattern: /<embed\b/i, reason: "Embeds are not supported." },
   {
-    pattern: /<link\b[^>]*href\s*=\s*["']?https?:\/\//i,
+    pattern: /<link\b[^>]*href\s*=\s*["']?(?:https?:)?\/\//i,
     reason: "Remote stylesheets are not supported.",
   },
   {
-    pattern: /<img\b[^>]*src\s*=\s*["']?https?:\/\//i,
+    pattern: /<img\b[^>]*src\s*=\s*["']?(?:https?:)?\/\//i,
     reason: "Remote images are not supported.",
   },
   {
-    pattern: /<audio\b[^>]*src\s*=\s*["']?https?:\/\//i,
+    pattern: /<audio\b[^>]*src\s*=\s*["']?(?:https?:)?\/\//i,
     reason: "Remote audio is not supported.",
   },
   {
-    pattern: /<video\b[^>]*src\s*=\s*["']?https?:\/\//i,
+    pattern: /<video\b[^>]*src\s*=\s*["']?(?:https?:)?\/\//i,
     reason: "Remote video is not supported.",
   },
   {
-    pattern: /<source\b[^>]*src\s*=\s*["']?https?:\/\//i,
+    pattern: /<source\b[^>]*src\s*=\s*["']?(?:https?:)?\/\//i,
     reason: "Remote media sources are not supported.",
   },
   { pattern: /<form\b/i, reason: "Forms are not supported in HTML artifacts." },

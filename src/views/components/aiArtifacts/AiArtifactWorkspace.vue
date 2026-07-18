@@ -68,7 +68,7 @@
 import { useI18n } from "vue-i18n";
 import type { AIArtifactRecord } from "@/entityTypes/aiArtifactTypes";
 
-const props = defineProps<{
+defineProps<{
   artifact: AIArtifactRecord;
   loading?: boolean;
   error?: string;
@@ -80,9 +80,6 @@ const emit = defineEmits<{
 }>();
 
 const { t } = useI18n();
-
-// Touch props so they are used in the template/slot even if only for typing.
-void props;
 </script>
 
 <style scoped>

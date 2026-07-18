@@ -110,6 +110,28 @@ describe("AIArtifactValidationService.validateCreateInput", () => {
     }
   });
 
+  it("rejects protocol-relative remote media (tracking-pixel gap)", () => {
+    const cases = [
+      '<img src="//evil.example/pixel.png">',
+      '<link rel="stylesheet" href="//evil.example/a.css">',
+      '<audio src="//evil.example/track.mp3">',
+      '<video src="//evil.example/clip.mp4">',
+      '<source src="//evil.example/clip.mp4">',
+    ];
+    for (const html of cases) {
+      expect(validateCreateInput({ title: "T", html }).ok).toBe(false);
+    }
+  });
+
+  it("allows inline data: images and same-document fragments", () => {
+    expect(
+      validateCreateInput({
+        title: "T",
+        html: '<img src="data:image/png;base64,iVBORw0KGgo=">',
+      }).ok
+    ).toBe(true);
+  });
+
   it("rejects forms", () => {
     const result = validateCreateInput({
       title: "T",
