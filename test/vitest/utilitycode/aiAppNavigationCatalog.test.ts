@@ -218,6 +218,15 @@ describe("AIAppNavigationCatalogService", () => {
       expect(audit).toBeDefined();
     });
 
+    it("labels the account management route as tool accounts", () => {
+      const catalog = service.buildCatalog(aiNavigationRouteManifest);
+      const toolAccounts = catalog.find((e) => e.routeName === "SocialAccount");
+      expect(toolAccounts).toBeDefined();
+      expect(toolAccounts?.label).toBe("Tool Account List");
+      expect(toolAccounts?.aliases).toContain("tool account");
+      expect(toolAccounts?.description).toBe("Manage tool platform accounts");
+    });
+
     it("excludes nothing unexpected from the curated manifest", () => {
       const catalog = service.buildCatalog(aiNavigationRouteManifest);
       // Every entry in the curated manifest is safe and param-free, so all
