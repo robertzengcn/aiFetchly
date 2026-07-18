@@ -29,6 +29,21 @@ import type { YandexMapsSearchInput } from "@/entityTypes/yandexMapsTypes";
 //     CANCELLED = 'cancelled'
 // }
 
+/**
+ * WS-5 R5.1 — injectable collaborators for {@link TaskExecutorService}.
+ * Each is optional in the constructor; omitting one yields the real module.
+ */
+export interface TaskExecutorServiceDeps {
+  searchTaskModel: SearchTaskModule;
+  buckEmailTaskModel: BuckEmailTaskModule;
+  searchModel: SearchModule;
+  emailSeachTaskModule: EmailSearchTaskModule;
+  yellowPagesModule: YellowPagesModule;
+  googleMapsModule: GoogleMapsModule;
+  yandexMapsModule: YandexMapsModule;
+  aiMessageTaskModule: AiMessageTaskModule;
+}
+
 export class TaskExecutorService {
   private searchTaskModel: SearchTaskModule;
   //private emailMarketingTaskModel: EmailMarketingTaskModule;
@@ -42,18 +57,27 @@ export class TaskExecutorService {
   private aiMessageTaskModule: AiMessageTaskModule;
   //private socialTaskModel: SocialTaskModel;
 
-  constructor() {
+  /**
+   * WS-5 R5.1 — collaborators are constructor-injected so unit tests can
+   * substitute fakes (the PRD acceptance: "a passing unit test that substitutes
+   * a fake collaborator"). Production callers pass no args and get the real
+   * modules (defaults); tests pass a Partial with the collaborators they fake.
+   */
+  constructor(deps?: Partial<TaskExecutorServiceDeps>) {
     //super();
-    this.searchTaskModel = new SearchTaskModule();
+    this.searchTaskModel = deps?.searchTaskModel ?? new SearchTaskModule();
     //this.emailMarketingTaskModel = new EmailMarketingTaskModule();
-    this.buckEmailTaskModel = new BuckEmailTaskModule();
+    this.buckEmailTaskModel =
+      deps?.buckEmailTaskModel ?? new BuckEmailTaskModule();
     //this.videoDownloadTaskModel = new VideoDownloadTaskModule();
-    this.searchModel = new SearchModule();
-    this.emailSeachTaskModule = new EmailSearchTaskModule();
-    this.yellowPagesModule = new YellowPagesModule();
-    this.googleMapsModule = new GoogleMapsModule();
-    this.yandexMapsModule = new YandexMapsModule();
-    this.aiMessageTaskModule = new AiMessageTaskModule();
+    this.searchModel = deps?.searchModel ?? new SearchModule();
+    this.emailSeachTaskModule =
+      deps?.emailSeachTaskModule ?? new EmailSearchTaskModule();
+    this.yellowPagesModule = deps?.yellowPagesModule ?? new YellowPagesModule();
+    this.googleMapsModule = deps?.googleMapsModule ?? new GoogleMapsModule();
+    this.yandexMapsModule = deps?.yandexMapsModule ?? new YandexMapsModule();
+    this.aiMessageTaskModule =
+      deps?.aiMessageTaskModule ?? new AiMessageTaskModule();
 
     //this.socialTaskModel = new SocialTaskModel(filepath);
   }
