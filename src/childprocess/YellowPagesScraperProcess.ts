@@ -2,6 +2,8 @@ import { MessageType } from "@/modules/interface/IPCMessageProtocol";
 import { log } from "@/modules/Logger";
 import { TaskStatus } from "@/modules/interface/ITaskManager";
 import { YellowPagesScraper } from "./YellowPagesScraper";
+import { yellowPagesScraperProcessInboundSchema } from "@/schemas/worker/yellowPagesScraperProcess";
+import { parseWorkerMessage } from "@/schemas/worker/_shared";
 
 // Define missing interfaces and enums
 enum ErrorSeverity {
@@ -150,9 +152,20 @@ export class YellowPagesScraperProcess {
       return;
     }
 
-    process.on("message", async (message: any) => {
+    process.on("message", async (raw: unknown) => {
+      const validation = parseWorkerMessage(
+        raw,
+        yellowPagesScraperProcessInboundSchema()
+      );
+      if (!validation.success) {
+        log.warn(
+          "[YPScraperProcess] dropped malformed message:",
+          validation.error
+        );
+        return;
+      }
       try {
-        await this.handleMessage(message);
+        await this.handleMessage(validation.data);
       } catch (error) {
         log.error("Error handling message:", error);
         this.sendErrorMessage(
