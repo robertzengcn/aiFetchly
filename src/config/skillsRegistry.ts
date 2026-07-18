@@ -33,6 +33,14 @@ import {
   startBulkEmailSendTask,
 } from "@/service/EmailMarketingAiTools";
 import {
+  listEmailInboxes,
+  fetchUnreadEmails,
+  getEmailMessage,
+  markEmailProcessed,
+  createEmailReplyDraft,
+  sendEmailReply,
+} from "@/service/EmailReceiveAiTools";
+import {
   listSchedulesForAi,
   getScheduleDetailsForAi,
   listScheduleExecutionsForAi,
@@ -43,32 +51,86 @@ import {
   resumeScheduleForAi,
   runScheduleNowForAi,
 } from "@/service/ScheduleAiTools";
+import {
+  listKnowledgeLibraryDocumentsForAi,
+  importKnowledgeLibraryAttachmentForAi,
+  deleteKnowledgeLibraryDocumentForAi,
+} from "@/service/KnowledgeLibraryAiTools";
 
 // ---------------------------------------------------------------------------
 // Internal state
 // ---------------------------------------------------------------------------
 
-/** Map of skill name → full definition. */
-const registry = new Map<string, SkillDefinition>();
+/** Map of skill name → full definition. Stored in globalThis to survive HMR. */
+const registry: Map<string, SkillDefinition> =
+  ((globalThis as any).__aifetchlySkillRegistry as Map<
+    string,
+    SkillDefinition
+  >) ?? new Map();
+(globalThis as any).__aifetchlySkillRegistry = registry;
 
 // ---------------------------------------------------------------------------
 // Built-in skill definitions (statically imported)
 // ---------------------------------------------------------------------------
 import { RUN_SUBAGENT_TOOL } from "@/service/agentTools/runSubagentTool";
+import { AIAppNavigationToolService } from "@/service/AIAppNavigationToolService";
 
 const BUILT_IN_SKILLS: SkillDefinition[] = [
   {
+    name: "open_app_page",
+    description:
+      "Navigate AiFetchly to a safe internal application page based on the user's natural language request. " +
+      "Use when the user explicitly asks to open, go to, navigate to, show, view, or switch to an application page " +
+      "(list, dashboard, settings, log, audit, management, inbox, template, campaign, schedule, or configuration page). " +
+      "Do NOT use for general questions, data mutations (create/edit/delete/send/run/scrape/schedule), " +
+      "required-record detail/edit pages without a known id, login/auth/error pages, external URLs, or ambiguous destinations " +
+      "(return clarification candidates instead). Only returns a navigation command for a validated internal route; " +
+      "never clicks buttons, fills/submits forms, mutates data, sends email, starts automation, or opens external sites.",
+    parameters: {
+      type: "object",
+      properties: {
+        query: {
+          type: "string",
+          description: "The user's natural-language page navigation request.",
+        },
+        preferredRouteName: {
+          type: "string",
+          description:
+            "Optional route name selected from a previous clarification candidate list.",
+        },
+      },
+      required: ["query"],
+    },
+    tier: "main",
+    requiresConfirmation: false,
+    permissionCategory: "pure",
+    source: "built-in",
+    execute: async (args) => {
+      const service = new AIAppNavigationToolService();
+      const result = service.openAppPage(args);
+      return {
+        success: result.success,
+        result: result as unknown as Record<string, unknown>,
+      };
+    },
+  },
+  {
     name: "scrape_urls_from_search_engine",
     description:
-      "Scrape search result URLs from a supported engine (Google, Bing, Yandex, or Baidu) using a query string. Returns titles, snippets, and URLs. This tool is for collecting URLs from a SERP, not for answering questions from page text.",
+      "Scrape search result URLs from a supported engine (Google, Bing, or Yandex) using a query string. Returns titles, snippets, and URLs. This tool is for collecting URLs from a SERP, not for answering questions from page text.\n\n" +
+      "MANDATORY WORKFLOW for google or yandex (these engines require login cookies):\n" +
+      '  1. FIRST call `list_social_accounts` with platform="google" (or platform="yandex") to obtain a valid account ID. Only accounts with `cookies: true` and a successful `status` are usable.\n' +
+      "  2. THEN call this tool with that account ID in the `account` field.\n" +
+      'Do NOT call this tool with search_engine "google" or "yandex" unless you already have a valid `account` ID obtained from `list_social_accounts`. Calls without a valid account ID will fail.\n' +
+      'For "bing": NO account is needed and NO login cookies are required. Do NOT call `list_social_accounts` and do NOT pass `account` when search_engine is "bing" — proceed directly with just the query.',
     parameters: {
       type: "object",
       properties: {
         search_engine: {
           type: "string",
           description:
-            "Which search engine to scrape: google, bing, yandex, or baidu",
-          enum: ["google", "bing", "yandex", "baidu"],
+            "Which search engine to scrape: google, bing, or yandex",
+          enum: ["google", "bing", "yandex"],
         },
         query: {
           type: "string",
@@ -94,10 +156,11 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
         account: {
           type: "number",
           description:
-            "Social account ID to use for authenticated scraping. " +
-            "REQUIRED when search_engine is 'google' or 'yandex' (these engines require login cookies). " +
-            "Ignored for 'bing' and 'baidu'. The account must have valid cookies stored; " +
-            "otherwise the call fails and the user must add account cookies first.",
+            "Social account ID used for authenticated scraping. " +
+            "MANDATORY (no default) when search_engine is 'google' or 'yandex' — these engines require login cookies. " +
+            "You MUST obtain this ID by calling `list_social_accounts` first (filter by platform) and pick an account whose `cookies` field is true. " +
+            "Never invent or guess an account ID. " +
+            "DO NOT call `list_social_accounts` and DO NOT pass `account` when search_engine is 'bing' — that engine needs no account.",
         },
       },
       required: ["search_engine", "query"],
@@ -617,8 +680,10 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     name: "extract_contact_info",
     description:
       "Extract contact information (emails, phones, address, social links) from one or more website URLs. Uses AI-assisted discovery and regex fallback. Call this when the user wants to find contact details for given website URLs. " +
+      "IMPORTANT: To avoid timeouts and get fast synchronous results, call this tool in SMALL BATCHES of about 5 URLs or fewer per call. For a larger URL list, make multiple sequential calls (around 5 URLs each) instead of one large call. " +
       "When the urls array contains 8 or more entries, this tool runs ASYNCHRONOUSLY: it returns { async: true, job_id } within ~2 seconds and continues working in the background. " +
-      "Poll the result with check_tool_job_status(job_id) every 15-30 seconds until status is 'completed' or 'failed'. Do not retry the call while a job is running.",
+      "Poll the result with check_tool_job_status(job_id) every 15-30 seconds until status is 'completed' or 'failed'. Do not retry the call while a job is running. " +
+      "If a batch hits the extraction timeout, any contacts already collected are returned with partial: true plus a note listing the URLs that were NOT processed — retry those remaining URLs in a smaller batch.",
     parameters: {
       type: "object",
       properties: {
@@ -1392,6 +1457,237 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     },
   },
   {
+    name: "list_email_inboxes",
+    description:
+      "List email services that have inbound receive enabled. Returns inbox name, " +
+      "address, host, folder, sync status, and last sync error. Never exposes passwords or tokens.",
+    parameters: {
+      type: "object",
+      properties: {
+        page: {
+          type: "number",
+          description: "Zero-based page number.",
+          default: 0,
+        },
+        size: {
+          type: "number",
+          description: "Page size, from 1 to 100.",
+          default: 20,
+        },
+        search: {
+          type: "string",
+          description: "Optional name/address/host search text.",
+        },
+      },
+    },
+    tier: "main",
+    requiresConfirmation: false,
+    permissionCategory: "automation",
+    source: "built-in",
+    execute: async (args) => {
+      const result = await listEmailInboxes(args);
+      return {
+        success: result.success,
+        result: result as unknown as Record<string, unknown>,
+      };
+    },
+  },
+  {
+    name: "fetch_unread_emails",
+    description:
+      "Fetch a bounded set of unread (or recent) messages from a receive-enabled inbox and " +
+      "store them locally. Returns message summaries only (no bodies). Default unread_only is true; " +
+      "limit is capped at 50.",
+    parameters: {
+      type: "object",
+      properties: {
+        email_service_id: {
+          type: "number",
+          description: "Receive-enabled email service id.",
+        },
+        folder: {
+          type: "string",
+          description: "Folder to read. Defaults to the configured folder.",
+        },
+        limit: {
+          type: "number",
+          description: "Max messages to fetch (1-50).",
+          default: 10,
+        },
+        unread_only: {
+          type: "boolean",
+          description: "Fetch only unread messages.",
+          default: true,
+        },
+        since: {
+          type: "string",
+          description: "ISO 8601 lower bound on received date.",
+        },
+      },
+      required: ["email_service_id"],
+    },
+    tier: "main",
+    requiresConfirmation: false,
+    permissionCategory: "automation",
+    source: "built-in",
+    execute: async (args) => {
+      const result = await fetchUnreadEmails(args);
+      return {
+        success: result.success,
+        result: result as unknown as Record<string, unknown>,
+      };
+    },
+  },
+  {
+    name: "get_email_message",
+    description:
+      "Read one stored inbound message in detail, including a sanitized body (scripts, event " +
+      "handlers, and tracking pixels stripped). Does not return attachments. Marks the message read.",
+    parameters: {
+      type: "object",
+      properties: {
+        message_id: {
+          type: "number",
+          description: "Stored received message id.",
+        },
+        include_body: {
+          type: "boolean",
+          description: "Include sanitized body text/HTML.",
+          default: true,
+        },
+      },
+      required: ["message_id"],
+    },
+    tier: "main",
+    requiresConfirmation: false,
+    permissionCategory: "automation",
+    source: "built-in",
+    execute: async (args) => {
+      const result = await getEmailMessage(args);
+      return {
+        success: result.success,
+        result: result as unknown as Record<string, unknown>,
+      };
+    },
+  },
+  {
+    name: "mark_email_processed",
+    description:
+      "Mark a received message as handled without replying (skipped, blocked, failed, or " +
+      "needs_human_review). Does not delete the provider mailbox message. Writes an audit row.",
+    parameters: {
+      type: "object",
+      properties: {
+        message_id: {
+          type: "number",
+          description: "Stored received message id.",
+        },
+        status: {
+          type: "string",
+          enum: ["skipped", "blocked", "failed", "needs_human_review"],
+          description: "Processing outcome to record.",
+        },
+        reason: {
+          type: "string",
+          description: "Optional human-readable reason.",
+        },
+      },
+      required: ["message_id", "status"],
+    },
+    tier: "main",
+    requiresConfirmation: false,
+    permissionCategory: "automation",
+    source: "built-in",
+    execute: async (args) => {
+      const result = await markEmailProcessed(args);
+      return {
+        success: result.success,
+        result: result as unknown as Record<string, unknown>,
+      };
+    },
+  },
+  {
+    name: "create_email_reply_draft",
+    description:
+      "Create a knowledge-grounded reply draft for one inbound message. Searches the " +
+      "knowledge library by default, then writes the draft in the mailbox owner's voice. " +
+      "Does NOT send the reply and does NOT mention AI, retrieval, or confidence in the body. " +
+      "AI must be enabled. Returns the persisted draft for human review.",
+    parameters: {
+      type: "object",
+      properties: {
+        message_id: {
+          type: "number",
+          description: "Stored received message id to reply to.",
+        },
+        tone: {
+          type: "string",
+          description: "Optional tone hint (e.g. professional, friendly).",
+        },
+        goal: {
+          type: "string",
+          description:
+            "Optional reply goal (e.g. 'answer pricing and book a call').",
+        },
+        extra_instructions: {
+          type: "string",
+          description: "Optional extra instructions for the draft.",
+        },
+        use_knowledge_library: {
+          type: "boolean",
+          description:
+            "Whether to ground the reply in knowledge-library context.",
+          default: true,
+        },
+      },
+      required: ["message_id"],
+    },
+    tier: "main",
+    requiresConfirmation: false,
+    permissionCategory: "automation",
+    source: "built-in",
+    execute: async (args) => {
+      const result = await createEmailReplyDraft(args);
+      return {
+        success: result.success,
+        result: result as unknown as Record<string, unknown>,
+      };
+    },
+  },
+  {
+    name: "send_email_reply",
+    description:
+      "Send a persisted reply draft as an email. Requires user confirmation because it sends " +
+      "email. Verifies the draft and outbound service, preserves reply threading headers " +
+      "(In-Reply-To, References), updates draft/message state, and writes a send audit record.",
+    parameters: {
+      type: "object",
+      properties: {
+        draft_id: {
+          type: "number",
+          description: "Persisted reply draft id to send.",
+        },
+        email_service_id: {
+          type: "number",
+          description:
+            "Optional outbound email service id. Defaults to the draft's service.",
+        },
+      },
+      required: ["draft_id"],
+    },
+    tier: "main",
+    requiresConfirmation: true,
+    permissionCategory: "automation",
+    source: "built-in",
+    execute: async (args) => {
+      const result = await sendEmailReply(args);
+      return {
+        success: result.success,
+        result: result as unknown as Record<string, unknown>,
+      };
+    },
+  },
+  {
     name: "shell_execute",
     description:
       "Execute a local shell command with explicit user confirmation and safety controls. " +
@@ -1566,6 +1862,159 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
           | boolean
           | undefined,
       });
+      return {
+        success: result.success,
+        result: result as unknown as Record<string, unknown>,
+      };
+    },
+  },
+  {
+    name: "knowledge_library_list_documents",
+    description:
+      "List documents in the local knowledge library. Use this to find exact document IDs before deleting or inspecting knowledge-library documents. Returns compact metadata only (id, name, title, tags, status, size), never file contents or paths. Supports filtering by name/title query, tags, status, processing status, and file type. Scans the most recent documents (capped); when truncated is true, more documents exist beyond the scan — narrow with query/filters instead of paging further.",
+    parameters: {
+      type: "object",
+      properties: {
+        query: {
+          type: "string",
+          description:
+            "Optional case-insensitive search matched against document name or title.",
+        },
+        status: {
+          type: "string",
+          description:
+            "Optional document status filter (e.g. active, archived).",
+        },
+        processingStatus: {
+          type: "string",
+          description:
+            "Optional processing status filter (e.g. completed, pending, error).",
+        },
+        fileType: {
+          type: "string",
+          description:
+            "Optional file extension filter, with or without a leading dot (e.g. .pdf or pdf).",
+        },
+        tags: {
+          type: "array",
+          items: { type: "string" },
+          description: "Optional tag filter.",
+        },
+        limit: {
+          type: "number",
+          description: "Maximum documents to return (default 20, max 50).",
+          default: 20,
+        },
+        offset: {
+          type: "number",
+          description: "Pagination offset (default 0).",
+          default: 0,
+        },
+      },
+      required: [],
+    },
+    tier: "main",
+    requiresConfirmation: false,
+    permissionCategory: "pure",
+    source: "built-in",
+    execute: async (args) => {
+      const result = await listKnowledgeLibraryDocumentsForAi(
+        args as Record<string, unknown>
+      );
+      return {
+        success: result.success,
+        result: result as unknown as Record<string, unknown>,
+      };
+    },
+  },
+  {
+    name: "knowledge_library_import_attachment",
+    description:
+      "Import a document the user attached to this chat into the local knowledge library (chunks and embeds it). Use ONLY with an attachment_ref value shown in the current conversation. Never use this for arbitrary local file paths. Requires user confirmation.",
+    parameters: {
+      type: "object",
+      properties: {
+        attachment_ref: {
+          type: "string",
+          description:
+            "Conversation-scoped attachment reference from the user's uploaded document.",
+        },
+        title: {
+          type: "string",
+          description: "Optional document title.",
+        },
+        description: {
+          type: "string",
+          description: "Optional document description.",
+        },
+        tags: {
+          type: "array",
+          items: { type: "string" },
+          description: "Optional document tags.",
+        },
+        author: {
+          type: "string",
+          description: "Optional document author. Defaults to User.",
+        },
+        duplicatePolicy: {
+          type: "string",
+          enum: ["fail", "allow", "replace"],
+          description:
+            'How to handle a duplicate name/size match. "fail" (default) refuses, "allow" imports anyway, "replace" is not supported yet.',
+          default: "fail",
+        },
+      },
+      required: ["attachment_ref"],
+    },
+    tier: "main",
+    requiresConfirmation: true,
+    permissionCategory: "filesystem",
+    timeoutClass: "network",
+    source: "built-in",
+    execute: async (args, context) => {
+      const result = await importKnowledgeLibraryAttachmentForAi(
+        args as Record<string, unknown>,
+        context
+      );
+      return {
+        success: result.success,
+        result: result as unknown as Record<string, unknown>,
+      };
+    },
+  },
+  {
+    name: "knowledge_library_delete_document",
+    description:
+      "Delete one known document from the local knowledge library by exact document ID. Call knowledge_library_list_documents first when the ID is unknown. Pass expected_name as a safety check when you inferred the document from a list result. Requires user confirmation.",
+    parameters: {
+      type: "object",
+      properties: {
+        document_id: {
+          type: "number",
+          description: "Exact knowledge library document ID to delete.",
+        },
+        delete_source_file: {
+          type: "boolean",
+          description:
+            "Whether to also delete the app-owned staged source file (default false).",
+          default: false,
+        },
+        expected_name: {
+          type: "string",
+          description:
+            "Optional safety check: the document name or title must match this exactly before deletion proceeds.",
+        },
+      },
+      required: ["document_id"],
+    },
+    tier: "main",
+    requiresConfirmation: true,
+    permissionCategory: "filesystem",
+    source: "built-in",
+    execute: async (args) => {
+      const result = await deleteKnowledgeLibraryDocumentForAi(
+        args as Record<string, unknown>
+      );
       return {
         success: result.success,
         result: result as unknown as Record<string, unknown>,
@@ -2027,6 +2476,109 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       return { success: true, result };
     },
   },
+  {
+    name: "list_social_accounts",
+    description:
+      "List social/sender accounts that can be used as the `account` parameter for tools requiring authenticated scraping (e.g. scrape_urls_from_search_engine with google or yandex). " +
+      "Returns each account's id, platform (social_type), status, and whether login cookies are stored (cookies: true|false). " +
+      'Always call this BEFORE scrape_urls_from_search_engine when search_engine is "google" or "yandex" — you must pick an account with cookies=true and a valid status, then pass its id as the `account` argument.',
+    parameters: {
+      type: "object",
+      properties: {
+        platform: {
+          type: "string",
+          description:
+            'Optional platform filter (case-insensitive). Examples: "google", "yandex", "bing", "facebook". Use "google" before calling scrape_urls_from_search_engine with search_engine="google", and "yandex" for search_engine="yandex".',
+        },
+        search: {
+          type: "string",
+          description: "Optional free-text filter on account user/name fields.",
+        },
+        page: {
+          type: "number",
+          description: "Zero-based page number (default: 0).",
+          default: 0,
+        },
+        size: {
+          type: "number",
+          description: "Page size, 1 to 100 (default: 20).",
+          default: 20,
+        },
+      },
+      required: [],
+    },
+    tier: "main",
+    requiresConfirmation: false,
+    permissionCategory: "automation",
+    source: "built-in",
+    execute: async (
+      args
+    ): Promise<{ success: boolean; result: Record<string, unknown> }> => {
+      const { SocialAccountModule } = await import(
+        "@/modules/socialAccountModule"
+      );
+      const { SocialPlatformList } = await import("@/config/generate");
+
+      const platformRaw =
+        typeof args.platform === "string"
+          ? args.platform.trim().toLowerCase()
+          : "";
+      const searchRaw =
+        typeof args.search === "string" ? args.search : undefined;
+      const page =
+        typeof args.page === "number" && args.page >= 0
+          ? Math.floor(args.page)
+          : 0;
+      const size =
+        typeof args.size === "number" && args.size > 0
+          ? Math.min(100, Math.floor(args.size))
+          : 20;
+
+      // Resolve platform name → numeric social_type_id used by the model.
+      let platformId: number | undefined;
+      if (platformRaw) {
+        const match = SocialPlatformList.find(
+          (p) => p.name.toLowerCase() === platformRaw
+        );
+        if (!match) {
+          return {
+            success: false,
+            result: {
+              error: `Unknown platform "${args.platform}".`,
+              known_platforms: SocialPlatformList.map((p) => p.name),
+            },
+          };
+        }
+        platformId = match.id;
+      }
+
+      const mod = new SocialAccountModule();
+      const resp = await mod.getSocialAccountList(
+        page,
+        size,
+        searchRaw ?? "",
+        platformId
+      );
+
+      // Surface the fields the LLM actually needs to choose an account.
+      const records = (resp.data?.records ?? []).map((r) => ({
+        id: r.id,
+        platform: r.social_type,
+        user: r.user,
+        status: r.status,
+        cookies: r.cookies === true,
+      }));
+
+      return {
+        success: resp.status === "success",
+        result: {
+          total: resp.data?.total ?? 0,
+          records,
+          hint: "Pick an account whose cookies=true. Pass its id as the `account` argument of scrape_urls_from_search_engine.",
+        },
+      };
+    },
+  },
   RUN_SUBAGENT_TOOL,
   {
     name: "create_html_artifact",
@@ -2102,9 +2654,11 @@ async function getAllToolFunctions(): Promise<ToolFunction[]> {
     const mod = new PluginManagementModule();
     const enabledPlugins = await mod.listEnabledPlugins();
     enabledPluginNames = new Set(enabledPlugins.map((p) => p.name));
-  } catch {
-    // Plugin module unavailable (e.g. during early boot / tests) — treat as
-    // no enabled plugins, which suppresses plugin-owned skills safely.
+  } catch (e) {
+    console.warn(
+      `[SkillRegistry] listEnabledPlugins failed, suppressing all plugin-owned skills:`,
+      e
+    );
     enabledPluginNames = new Set();
   }
 
@@ -2153,6 +2707,9 @@ function isRegistered(name: string): boolean {
  */
 function registerSkill(skill: SkillDefinition): void {
   if (registry.has(skill.name)) {
+    console.warn(
+      `[SkillRegistry] registerSkill FAILED: "${skill.name}" already registered`
+    );
     throw new Error(`Skill already registered: ${skill.name}`);
   }
   registry.set(skill.name, skill);
@@ -2163,6 +2720,14 @@ function registerSkill(skill: SkillDefinition): void {
  */
 function unregisterSkill(name: string): void {
   registry.delete(name);
+}
+
+function unregisterSkillsByPlugin(pluginName: string): void {
+  for (const [name, skill] of registry) {
+    if (skill.pluginOwner === pluginName) {
+      registry.delete(name);
+    }
+  }
 }
 
 /**
@@ -2236,6 +2801,7 @@ export const SkillRegistry = {
   isRegistered,
   registerSkill,
   unregisterSkill,
+  unregisterSkillsByPlugin,
   findSkillForFileExtension,
   listBuiltInSkillDefinitions,
 } as const;

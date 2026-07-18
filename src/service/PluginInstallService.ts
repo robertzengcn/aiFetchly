@@ -34,8 +34,10 @@ export type InstallFromLocalRootFn = (
 export class PluginInstallService {
   constructor(
     private readonly registry: PluginSourceRegistry = PluginInstallService.defaultRegistry(),
-    private readonly installFromLocalRoot: InstallFromLocalRootFn =
-      (root, opts) => PluginImportService.installFromLocalRoot(root, opts)
+    private readonly installFromLocalRoot: InstallFromLocalRootFn = (
+      root,
+      opts
+    ) => PluginImportService.installFromLocalRoot(root, opts)
   ) {}
 
   static defaultRegistry(): PluginSourceRegistry {
@@ -49,7 +51,9 @@ export class PluginInstallService {
     return reg;
   }
 
-  async installFromSource(req: PluginSourceRequest): Promise<PluginImportResult> {
+  async installFromSource(
+    req: PluginSourceRequest
+  ): Promise<PluginImportResult> {
     let fetcher;
     try {
       fetcher = this.registry.get(req.kind as PluginSourceKind);
@@ -59,8 +63,7 @@ export class PluginInstallService {
         errors: [
           {
             code: "unknown",
-            message:
-              e instanceof Error ? e.message : "Unknown source kind.",
+            message: e instanceof Error ? e.message : "Unknown source kind.",
             recoverable: false,
           },
         ],
@@ -79,10 +82,13 @@ export class PluginInstallService {
     try {
       const provenance: PluginSourceProvenance = {
         sourceKind: req.kind,
-        sourceUri:
-          req.uri ?? req.zipPath ?? req.folderPath ?? req.npmPackage,
+        sourceUri: req.uri ?? req.zipPath ?? req.folderPath ?? req.npmPackage,
         sourceRef: req.ref ?? req.npmVersion,
-        sourceMeta: req.npmRegistry ? { registry: req.npmRegistry } : undefined,
+        source: req.source,
+        sourceMeta: {
+          ...(req.npmRegistry ? { registry: req.npmRegistry } : {}),
+          ...(req.sourceMeta ?? {}),
+        },
       };
       const r = await this.installFromLocalRoot(localRoot, {
         overwrite: req.overwrite,
@@ -115,8 +121,6 @@ export class PluginInstallService {
   }
 }
 
-function redactErrors(
-  errors: readonly PluginError[]
-): readonly PluginError[] {
+function redactErrors(errors: readonly PluginError[]): readonly PluginError[] {
   return errors.map((e) => ({ ...e, message: redactMessage(e.message) }));
 }

@@ -1,4 +1,5 @@
 import * as path from "path";
+import * as fs from "fs";
 
 /**
  * Plugin Management System — shared type contracts.
@@ -12,6 +13,12 @@ import * as path from "path";
 // ---------------------------------------------------------------------------
 
 export type PluginSource = "local" | "builtin" | "marketplace";
+
+/**
+ * On-disk manifest format. Computed at load time from which manifest file
+ * was found; not persisted in the database.
+ */
+export type PluginFormat = "aifetchly" | "claude";
 
 export type PluginHealth =
   | "healthy"
@@ -32,12 +39,15 @@ export interface PluginManifest {
   readonly description: string;
   readonly author?: string;
   readonly source?: PluginSource;
+  /** Manifest format. Undefined for plugins installed before this field existed. */
+  readonly format?: PluginFormat;
   readonly skills?: readonly string[];
   readonly mcpServers?: readonly string[];
   readonly permissions?: readonly string[];
   readonly dependencies?: readonly PluginDependency[];
   readonly homepage?: string;
   readonly repository?: string;
+  readonly agents?: PluginAgentDeclaration;
   /** Unknown top-level fields are allowed but preserved under diagnostics only. */
   readonly [extra: string]: unknown;
 }
@@ -46,6 +56,39 @@ export interface PluginDependency {
   readonly name: string;
   readonly version?: string;
   readonly optional?: boolean;
+}
+
+/**
+ * Plugin agent declaration shape. Native (aifetchly) format uses an array of
+ * relative path strings; Claude format additionally allows `true` (auto-detect
+ * `agents/`), a single string, or an object map of `{ source?, content?, description? }`.
+ */
+export type PluginAgentDeclaration =
+  | string
+  | readonly string[]
+  | true
+  | Record<string, { source?: string; content?: string; description?: string }>;
+
+/**
+ * Plugin command declaration shape (PRD §8.2, design §10.5). Native (aifetchly)
+ * format uses a physical `commands/*.md` directory; Claude format additionally
+ * allows the manifest `commands` field to be a single path string, an array of
+ * paths, `true` (auto-detect `commands/`), or an object map of
+ * `{ source?, content?, description? }` entries (inline `content` supported).
+ */
+export type PluginCommandDeclaration =
+  | string
+  | readonly string[]
+  | true
+  | Record<string, PluginCommandDeclarationEntry>;
+
+export interface PluginCommandDeclarationEntry {
+  /** Relative path to a command markdown file inside the plugin root. */
+  readonly source?: string;
+  /** Inline command markdown body (frontmatter optional). Filesystem-free. */
+  readonly content?: string;
+  /** Fallback description when the command file has none. */
+  readonly description?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -95,6 +138,7 @@ export interface PluginComponentState {
       readonly toolConfig?: Record<string, PluginMcpToolConfig>;
     }
   >;
+  readonly agents?: Record<string, PluginComponentStateEntry>;
 }
 
 // ---------------------------------------------------------------------------
@@ -119,12 +163,23 @@ export type PluginErrorCode =
   | "cache-missing"
   | "uninstall-failed"
   | "missing_files"
+  | "claude-format-unsupported-feature"
+  | "claude-frontmatter-invalid"
+  | "claude-frontmatter-missing-field"
+  | "mcp-options-missing"
+  | "plugin-identifier-invalid"
+  | "agent-manifest-invalid"
+  | "agent-frontmatter-invalid"
+  | "agent-frontmatter-missing-field"
+  | "agent-name-conflict"
+  | "agent-path-invalid"
+  | "agent-unsupported-field"
   | "unknown";
 
 export interface PluginError {
   readonly code: PluginErrorCode;
   readonly pluginName?: string;
-  readonly componentType?: "plugin" | "skill" | "mcpServer";
+  readonly componentType?: "plugin" | "skill" | "mcpServer" | "agent";
   readonly componentName?: string;
   readonly path?: string;
   readonly message: string;
@@ -143,10 +198,16 @@ export interface PluginSummary {
   readonly source: PluginSource;
   readonly enabled: boolean;
   readonly health: PluginHealth;
+  readonly format?: PluginFormat;
   readonly skillCount: number;
   readonly mcpServerCount: number;
+  readonly agentCount: number;
   readonly permissions: readonly string[];
   readonly lastUpdated: string;
+  readonly sourceKind?: PluginSourceKind;
+  readonly sourceUri?: string;
+  readonly sourceRef?: string;
+  readonly installPath?: string;
 }
 
 export interface PluginSkillComponent {
@@ -166,16 +227,26 @@ export interface PluginMcpServerComponent {
   readonly error?: string;
 }
 
+export interface PluginAgentComponent {
+  readonly id: string;
+  readonly name: string;
+  readonly description: string;
+  readonly enabled: boolean;
+  readonly mode: string;
+  readonly toolCount: number;
+  readonly componentPath: string;
+  readonly health: string;
+  readonly error?: string;
+}
+
 export interface PluginDetail extends PluginSummary {
   readonly description: string;
   readonly author?: string;
   readonly skills: readonly PluginSkillComponent[];
   readonly mcpServers: readonly PluginMcpServerComponent[];
+  readonly agents: readonly PluginAgentComponent[];
   readonly errors: readonly PluginError[];
   readonly manifest: Record<string, unknown>;
-  readonly sourceKind?: PluginSourceKind;
-  readonly sourceUri?: string;
-  readonly sourceRef?: string;
 }
 
 export interface PluginValidationResult {
@@ -219,6 +290,7 @@ export interface PluginSourceProvenance {
   readonly sourceKind: PluginSourceKind;
   readonly sourceUri?: string;
   readonly sourceRef?: string;
+  readonly source?: PluginSource;
   readonly sourceMeta?: Record<string, unknown>;
 }
 
@@ -238,6 +310,7 @@ export interface PluginUninstallResult {
   readonly removedPlugin: boolean;
   readonly removedSkillNames: readonly string[];
   readonly removedMcpServerNames: readonly string[];
+  readonly removedAgentIds: readonly string[];
   readonly errors: readonly PluginError[];
 }
 
@@ -255,7 +328,7 @@ export const PLUGIN_PACKAGE_LIMITS = {
 // Validation regexes (Design §4.2 validation constraints)
 // ---------------------------------------------------------------------------
 
-export const PLUGIN_NAME_REGEX = /^[a-z][a-z0-9_-]*$/;
+export const PLUGIN_NAME_REGEX = /^[a-z0-9][a-z0-9_-]*$/;
 export const PLUGIN_SEMVER_REGEX = /^\d+\.\d+\.\d+(?:-[a-zA-Z0-9.]+)?$/;
 
 // ---------------------------------------------------------------------------
@@ -272,8 +345,32 @@ export function resolvePluginRelativePath(
 ): string {
   const root = path.resolve(pluginRoot);
   const resolved = path.resolve(path.join(root, relativePath));
+  // Lexical containment: stops "../" traversal.
   if (resolved !== root && !resolved.startsWith(`${root}${path.sep}`)) {
     throw new Error(`Path "${relativePath}" escapes plugin directory`);
+  }
+  // Symlink resistance: when the target exists, verify its real (link-resolved)
+  // path is still inside the real plugin root, so a symlinked entry pointing
+  // outside the plugin dir cannot be read during import. ENOENT/EACCES defer
+  // to the caller's own existence check.
+  let realRoot = root;
+  try {
+    realRoot = fs.realpathSync(root);
+  } catch {
+    // root may be hypothetical in some call paths; fall back to lexical root
+  }
+  try {
+    const real = fs.realpathSync(resolved);
+    if (real !== realRoot && !real.startsWith(`${realRoot}${path.sep}`)) {
+      throw new Error(`Path "${relativePath}" escapes plugin directory`);
+    }
+  } catch (err) {
+    // Propagate our own escape error and any unexpected fs error; only defer
+    // missing/inaccessible targets to the caller.
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code !== "ENOENT" && code !== "EACCES") {
+      throw err;
+    }
   }
   return resolved;
 }

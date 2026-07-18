@@ -1,0 +1,199 @@
+{
+  "computed_at": "2026-07-16T13:11:29.879Z",
+  "scc_available": false,
+  "years": [
+    {
+      "year": 2013,
+      "active": false,
+      "commits": 0,
+      "files_touched": 0,
+      "raw_lines_added": 0,
+      "logical_lines_added": 0,
+      "active_weeks": 0,
+      "days_elapsed": 365,
+      "is_partial": false,
+      "per_day_rate": {
+        "logical": 0,
+        "raw": 0,
+        "commits": 0
+      },
+      "annualized_projection": {
+        "logical": 0,
+        "raw": 0,
+        "commits": 0
+      },
+      "per_language": {},
+      "caveats": [
+        "No commits found for year 2013 in this repo with the configured email filter. If private work existed in this era, it is excluded."
+      ]
+    },
+    {
+      "year": 2026,
+      "active": true,
+      "commits": 2211,
+      "files_touched": 9842,
+      "raw_lines_added": 1400098,
+      "logical_lines_added": 1039426,
+      "active_weeks": 41,
+      "days_elapsed": 197,
+      "is_partial": true,
+      "per_day_rate": {
+        "logical": 5276.27,
+        "raw": 7107.1,
+        "commits": 11.223
+      },
+      "annualized_projection": {
+        "logical": 1925840,
+        "raw": 2594090,
+        "commits": 4097
+      },
+      "per_language": {
+        "ts": {
+          "commits": 1521,
+          "logical_added": 539123
+        },
+        "vue": {
+          "commits": 356,
+          "logical_added": 27680
+        },
+        "md": {
+          "commits": 472,
+          "logical_added": 337610
+        },
+        "js": {
+          "commits": 39,
+          "logical_added": 6558
+        },
+        "json": {
+          "commits": 80,
+          "logical_added": 39437
+        },
+        "mjs": {
+          "commits": 25,
+          "logical_added": 924
+        },
+        "yml": {
+          "commits": 29,
+          "logical_added": 1808
+        },
+        "lock": {
+          "commits": 25,
+          "logical_added": 8018
+        },
+        "other": {
+          "commits": 30,
+          "logical_added": 19446
+        },
+        "cjs": {
+          "commits": 3,
+          "logical_added": 752
+        },
+        "sql": {
+          "commits": 5,
+          "logical_added": 346
+        },
+        "scss": {
+          "commits": 1,
+          "logical_added": 4
+        },
+        "tmpl": {
+          "commits": 4,
+          "logical_added": 31896
+        },
+        "sh": {
+          "commits": 4,
+          "logical_added": 2328
+        },
+        "toml": {
+          "commits": 2,
+          "logical_added": 4
+        },
+        "css": {
+          "commits": 4,
+          "logical_added": 3574
+        },
+        "html": {
+          "commits": 4,
+          "logical_added": 11644
+        },
+        "txt": {
+          "commits": 4,
+          "logical_added": 312
+        },
+        "swift": {
+          "commits": 2,
+          "logical_added": 2158
+        },
+        "template": {
+          "commits": 2,
+          "logical_added": 2066
+        },
+        "m": {
+          "commits": 2,
+          "logical_added": 404
+        },
+        "h": {
+          "commits": 2,
+          "logical_added": 12
+        },
+        "plist": {
+          "commits": 2,
+          "logical_added": 68
+        },
+        "py": {
+          "commits": 4,
+          "logical_added": 1172
+        },
+        "mdc": {
+          "commits": 4,
+          "logical_added": 126
+        },
+        "example": {
+          "commits": 2,
+          "logical_added": 2
+        },
+        "yaml": {
+          "commits": 4,
+          "logical_added": 1264
+        },
+        "ci": {
+          "commits": 2,
+          "logical_added": 114
+        },
+        "rb": {
+          "commits": 2,
+          "logical_added": 128
+        },
+        "bak": {
+          "commits": 2,
+          "logical_added": 448
+        }
+      },
+      "caveats": [
+        "Year 2026 is partial (day 197 of 365). Run-rate multiple extrapolates current pace."
+      ]
+    }
+  ],
+  "multiples": {
+    "to_date": {
+      "logical_lines_added": null,
+      "raw_lines_added": null,
+      "commits": null,
+      "files_touched": null
+    },
+    "run_rate": {
+      "logical_per_day": null,
+      "raw_per_day": null,
+      "commits_per_day": null
+    },
+    "logical_lines_added": null
+  },
+  "caveats_global": [
+    "Public repos only. Private work at both eras is excluded to make the comparison apples-to-apples.",
+    "2013 and 2026 may differ in commit-style: 2013 tends toward monolithic commits, 2026 tends toward smaller AI-assisted commits. Multiples reflect this drift.",
+    "Logical-line classification uses a crude regex fallback (scc not installed). Exclude blank lines + single-line comments; does not catch block comments or docstrings. Approximate.",
+    "This script analyzes a single repo at a time. Full 2013-vs-2026 picture requires running against every public repo with commits in both years and summing results (future work).",
+    "Authorship attribution relies on commit email matching. Supply historical aliases via --email flags or GSTACK_AUTHOR_EMAILS."
+  ],
+  "version": 1
+}

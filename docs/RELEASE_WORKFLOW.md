@@ -4,11 +4,11 @@ This document explains how to set up and use the automatic release workflow for 
 
 ## Overview
 
-The auto-release workflow (`.github/workflows/release.yml`) automatically builds and releases your Electron app when you push to the `main` branch or create a tag starting with `v*`.
+The auto-release workflow (`.github/workflows/release.yml`) automatically builds and releases your Electron app when you push to the `master` branch.
 
 ## How It Works
 
-1. **Trigger**: Push to `main` branch or create a tag (e.g., `v1.0.12`)
+1. **Trigger**: Push to the `master` branch
 2. **Build**: Creates builds for both Windows and macOS
 3. **Release**: Automatically creates a GitHub release with the built artifacts
 
@@ -20,8 +20,8 @@ You need to set up the following secrets in your GitHub repository:
 
 Go to your repository → Settings → Secrets and variables → Actions, then add:
 
-- `VITE_REMOTEADD_TEST`: Your test environment remote address
 - `VITE_LOGIN_URL_TEST`: Your test environment login URL
+- `UPDATESERVER`: Your update server URL
 
 ### 2. Repository Permissions
 
@@ -38,6 +38,7 @@ The workflow automatically manages versioning:
 - Extracts the base version from `package.json` (e.g., `1.0.11`)
 - Appends the GitHub run number as build number (e.g., `1.0.123`)
 - Creates a release tag (e.g., `v1.0.123`)
+- Uploads the generated Windows and macOS package files as GitHub release assets
 
 ## Workflow Steps
 
@@ -66,22 +67,15 @@ The workflow automatically manages versioning:
 ## Usage
 
 ### Automatic Release (Recommended)
-Simply push to the `main` branch:
+Simply push to the `master` branch:
 ```bash
-git push origin main
+git push origin master
 ```
 
 The workflow will automatically:
 1. Build both platforms
 2. Create a new release
 3. Upload the installers
-
-### Manual Release with Tag
-Create and push a tag:
-```bash
-git tag v1.0.12
-git push origin v1.0.12
-```
 
 ## Customization
 
@@ -90,8 +84,8 @@ git push origin v1.0.12
 To use production environment variables instead of test:
 
 1. Add production secrets to GitHub:
-   - `VITE_REMOTEADD_PROD`
    - `VITE_LOGIN_URL_PROD`
+   - `UPDATESERVER_PROD`
 
 2. Create production build scripts in `package.json`:
    ```json
@@ -115,10 +109,10 @@ To add custom release notes, you can:
 
 ### Conditional Releases
 
-The workflow only creates releases when pushing to `main` branch. To modify this behavior, edit the condition in the `create-release` job:
+The workflow only creates releases when pushing to the `master` branch. To modify this behavior, edit the condition in the `create-release` job:
 
 ```yaml
-if: github.ref == 'refs/heads/main'
+if: github.ref == 'refs/heads/master'
 ```
 
 ## Troubleshooting
@@ -144,6 +138,6 @@ if: github.ref == 'refs/heads/main'
 ## Next Steps
 
 1. Set up the required GitHub secrets
-2. Push to `main` branch to trigger the first release
+2. Push to the `master` branch to trigger the first release
 3. Monitor the Actions tab to ensure everything works correctly
-4. Consider setting up production environment variables for actual releases 
+4. Consider setting up production environment variables for actual releases

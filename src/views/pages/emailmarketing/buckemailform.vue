@@ -1,7 +1,8 @@
 <template>
   <v-stepper alt-labels v-model="thisstep" show-actions>
     <v-stepper-header>
-      <v-stepper-item v-for="(step, n) in computedHeaders" :title="step.title" :value="step.step"
+      <v-stepper-item
+v-for="(step, n) in computedHeaders" :key="step.step" :title="step.title" :value="step.step"
         :rules="[() => step.valid]"
          :complete="stepComplete(n+1)"
         >
@@ -16,11 +17,12 @@
         <h3 class="text-h6">{{ CapitalizeFirstLetter(t("buckemailsend.choose_email_source")) }}</h3>
         <h4>{{ t("common.single_choose") }}</h4>
         <v-sheet class="mx-auto" rounded>
-          <v-select v-model="useemailsource" :items="marketTypeOption" item-title="tranme" item-value="key"
+          <v-select
+v-model="useemailsource" :items="marketTypeOption" item-title="tranme" item-value="key"
             :label="t('emailmarketing.use_email_source')" required :readonly="loading"
             :rules="[rules.required]" class="mt-3" return-object></v-select>
           <div v-if="useemailsource?.key == 1">
-            <EmailresultTable :isSelectedtable="true" @change="handleEmailsourceChanged" />
+            <EmailresultTable :is-selectedtable="true" @change="handleEmailsourceChanged" />
           </div>
           <v-container fluid>
             <v-checkbox
@@ -35,21 +37,21 @@
         <h3 class="text-h6">{{ CapitalizeFirstLetter(t("buckemailsend.choose_email_template")) }}</h3>
         <h4>{{ t("common.multiple_choice") }}</h4>
         <!--select email template-->
-        <Emailtemplateselect :isSelectedtable="true" @change="handleEmailtemplateChanged" />
+        <Emailtemplateselect :is-selectedtable="true" @change="handleEmailtemplateChanged" />
         <!-- </template> -->
       </v-stepper-window-item>
       <v-stepper-window-item key="3-content" :value="3">
         <!-- <template v-slot:item.3>   -->
         <h3 class="text-h6">{{ CapitalizeFirstLetter(t("buckemailsend.choose_email_filter")) }}</h3>
         <h4>{{ t("common.multiple_choice") }}</h4>
-        <EmailFilterTable :isSelectedtable="true" @change="handleEmailfilterChanged" />
+        <EmailFilterTable :is-selectedtable="true" @change="handleEmailfilterChanged" />
         <!-- </template> -->
       </v-stepper-window-item>
       <v-stepper-window-item key="4-content" :value="4">
         <!-- <template v-slot:item.4>   -->
         <h3 class="text-h6">{{ CapitalizeFirstLetter(t("buckemailsend.choose_email_service")) }}</h3>
         <h4>{{ t("common.multiple_choice") }}</h4>
-        <EmailServiceTable :isSelectedtable="true" @change="handleEmailserviceChanged" />
+        <EmailServiceTable :is-selectedtable="true" @change="handleEmailserviceChanged" />
         <!-- </template> -->
       </v-stepper-window-item>
     </v-stepper-window>
@@ -60,7 +62,7 @@
       <v-btn v-else color="success" @click="validstep(thisstep)">Done</v-btn>
     </div>
   </v-stepper>
-  <ErrorDialog :showDialog="showDialog" :alertext="alertext" :alertitle="t('common.error')" @dialogclose="showDialog=false" />
+  <ErrorDialog :show-dialog="showDialog" :alertext="alertext" :alertitle="t('common.error')" @dialogclose="showDialog=false" />
 </template>
 <script setup lang="ts">
 import { ref, computed, onMounted } from "vue";

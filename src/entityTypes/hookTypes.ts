@@ -45,7 +45,11 @@ export type HookFailureMode = "warn" | "block";
 export type HookPermissionDecision = "allow" | "ask" | "deny";
 
 /** Where the hook run originated. */
-export type HookRunSource = "ai-chat-v2" | "agent-runtime" | "system";
+export type HookRunSource =
+  | "ai-chat-v2"
+  | "agent-runtime"
+  | "skill-executor"
+  | "system";
 
 // ---------------------------------------------------------------------------
 // Size / timing limits
@@ -62,6 +66,7 @@ export const HOOK_LIMITS = {
   defaultCommandTimeoutMs: 5_000,
   maxCommandTimeoutMs: 60_000,
   maxMatcherChars: 128,
+  maxIfChars: 256,
 } as const;
 
 /** Safe environment variable keys passed to command hooks. */
@@ -199,9 +204,17 @@ export interface HookDefinitionBase {
   readonly matcher?: string;
   readonly source: HookSource;
   readonly enabled: boolean;
-  readonly trusted: boolean;
+  readonly trusted?: boolean;
   readonly failureMode?: HookFailureMode;
   readonly statusMessage?: string;
+  /**
+   * Optional glob-lite condition matched against tool input arguments.
+   * For PreToolUse/PostToolUse/PostToolUseFailure/PermissionRequest
+   * events, if present, the hook only fires when at least one string
+   * argument value matches the pattern (e.g. `git *` for shell commands
+   * starting with "git "). For other events, this field is ignored.
+   */
+  readonly if?: string;
 }
 
 export interface CallbackHookDefinition extends HookDefinitionBase {

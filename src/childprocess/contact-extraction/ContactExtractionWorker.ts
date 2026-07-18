@@ -19,6 +19,7 @@ import {
   contactExtractionWorkerInboundSchema,
   type ContactExtractionWorkerInbound,
 } from "@/schemas/worker/contactExtraction";
+import { mapWithConcurrency } from "@/utils/concurrency";
 
 /**
  * Worker message types — derived from the shared zod schema.
@@ -141,8 +142,23 @@ interface UrlExtractionResultMessage {
 }
 
 /**
+ * Maximum number of URLs to extract concurrently. Matches the existing
+ * ContactExtractionQueue (max 3) used by the DB-backed extract-contact flow,
+ * so the URL-only AI-tool flow scales the same way instead of processing
+ * URLs one at a time. Each URL launches its own browser via
+ * discoverAndExtractContactInfo, so 3 concurrent = 3 browsers — the same
+ * ceiling the worker already accepts for the DB flow.
+ */
+const URL_EXTRACTION_CONCURRENCY = 3;
+
+/**
  * Handle extract-contact-from-urls: extract contact info from URLs and send results back (no DB).
  * Used by the AI tool extract_contact_info.
+ *
+ * URLs are processed with bounded concurrency (URL_EXTRACTION_CONCURRENCY)
+ * rather than sequentially. Per-URL results are streamed back as each
+ * completes; the main-process collector counts them against the expected
+ * total, so out-of-order completion is fine.
  */
 async function handleExtractContactFromUrls(
   message: ExtractContactFromUrlsMessage
@@ -152,40 +168,44 @@ async function handleExtractContactFromUrls(
     (u): u is string => typeof u === "string" && u.trim().length > 0
   );
 
-  for (const url of validUrls) {
-    try {
-      const result = await discoverAndExtractContactInfo(url);
-      const payload: UrlExtractionResultMessage = {
-        type: "extract-contact-url-result",
-        requestId,
-        url,
-        success: result.success,
-        ...(result.data && {
-          data: {
-            emails: result.data.emails,
-            phones: result.data.phones,
-            address: result.data.address ?? null,
-            socialLinks: result.data.socialLinks ?? null,
-          },
-        }),
-        ...(result.error && { error: result.error }),
-      };
-      if (process.send) {
-        process.send(payload);
-      }
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : String(err);
-      if (process.send) {
-        process.send({
+  await mapWithConcurrency(
+    validUrls,
+    URL_EXTRACTION_CONCURRENCY,
+    async (url: string): Promise<void> => {
+      try {
+        const result = await discoverAndExtractContactInfo(url);
+        const payload: UrlExtractionResultMessage = {
           type: "extract-contact-url-result",
           requestId,
           url,
-          success: false,
-          error: errorMessage,
-        } as UrlExtractionResultMessage);
+          success: result.success,
+          ...(result.data && {
+            data: {
+              emails: result.data.emails,
+              phones: result.data.phones,
+              address: result.data.address ?? null,
+              socialLinks: result.data.socialLinks ?? null,
+            },
+          }),
+          ...(result.error && { error: result.error }),
+        };
+        if (process.send) {
+          process.send(payload);
+        }
+      } catch (err) {
+        const errorMessage = err instanceof Error ? err.message : String(err);
+        if (process.send) {
+          process.send({
+            type: "extract-contact-url-result",
+            requestId,
+            url,
+            success: false,
+            error: errorMessage,
+          } as UrlExtractionResultMessage);
+        }
       }
     }
-  }
+  );
 }
 
 /**

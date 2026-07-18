@@ -405,6 +405,19 @@ export const createTranslatedRoutes = (): RouteRecordRaw[] => {
       component: Layout,
       children: [
         {
+          path: "",
+          component: () =>
+            import(
+              /* webpackChunkName: "email-marketing" */ "@/views/pages/emailmarketing/index.vue"
+            ),
+          name: "Email_Marketing_Index",
+          meta: {
+            visible: false,
+            title: computed(() => t("router.email_marketing")),
+            icon: "mdi-email-multiple",
+          },
+        },
+        {
           path: "buckemailtask/list/",
           component: () =>
             import(
@@ -566,7 +579,7 @@ export const createTranslatedRoutes = (): RouteRecordRaw[] => {
       path: "/proxy",
       name: "Proxy",
       meta: {
-        visible: true,
+        visible: false,
         title: computed(() => t("router.proxy")),
         icon: "mdi-shield-outline",
       },

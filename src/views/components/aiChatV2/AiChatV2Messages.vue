@@ -55,6 +55,7 @@
         </span>
       </span>
     </div>
+    <AiChatV2RecoveryStatus v-if="recoveryInfo" :info="recoveryInfo" />
   </div>
 </template>
 
@@ -63,6 +64,7 @@ import { ref, watch, nextTick, onMounted } from "vue";
 import { useI18n } from "vue-i18n";
 import type { ChatV2MessageView } from "@/entityTypes/aiChatV2Types";
 import AiChatV2Message from "./AiChatV2Message.vue";
+import AiChatV2RecoveryStatus from "./AiChatV2RecoveryStatus.vue";
 
 type Status = "idle" | "streaming" | "cancelled" | "error";
 
@@ -74,6 +76,19 @@ const props = defineProps<{
   showTypingIndicator?: boolean;
   isStreaming?: boolean;
   retryInfo?: { attempt: number; maxAttempts: number; delayMs: number } | null;
+  /** Active seven-layer recovery status. Null when no recovery is running. */
+  recoveryInfo?: {
+    layer: import("@/service/AIChatRecoveryTypes").AIChatRecoveryLayer;
+    reason: import("@/service/AIChatRecoveryTypes").AIChatRecoveryReason;
+    attempt?: number;
+    maxAttempts?: number;
+    delayMs?: number;
+    elapsedMs?: number;
+    originalModel?: string;
+    currentModel?: string;
+    fallbackModel?: string;
+    message?: string;
+  } | null;
   workspaceRoot?: string;
 }>();
 const emit = defineEmits<{
