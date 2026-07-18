@@ -15,6 +15,11 @@
 import { Browser } from "puppeteer";
 import { log } from "@/modules/Logger";
 import { BrowserManager } from "@/modules/browserManager";
+import {
+  websiteContentScraperInboundSchema,
+  type WebsiteContentScraperInbound,
+} from "@/schemas/worker/websiteContentScraper";
+import { parseWorkerMessage } from "@/schemas/worker/_shared";
 import { HtmlConversionService } from "@/service/HtmlConversionService";
 import { UrlGuard } from "@/service/UrlGuard";
 import { applySsrfNavigationGuard } from "@/service/PuppeteerSsrfGuard";
@@ -152,9 +157,21 @@ const parentPort = (
 if (parentPort) {
   parentPort.on("message", async (e: { data: string }) => {
     try {
-      const message: ScrapeWebsiteMessage = JSON.parse(e.data);
+      const raw = JSON.parse(e.data) as unknown;
+      const validation = parseWorkerMessage<WebsiteContentScraperInbound>(
+        raw,
+        websiteContentScraperInboundSchema()
+      );
+      if (!validation.success) {
+        log.warn(
+          "[websiteContentScraper] dropped malformed SCRAPE_WEBSITE:",
+          validation.error
+        );
+        return;
+      }
+      const message = validation.data;
 
-      if (message.type === "SCRAPE_WEBSITE" && message.url) {
+      if (message.type === "SCRAPE_WEBSITE") {
         log.info(`📄 Scraping website: ${message.url}`);
 
         try {
