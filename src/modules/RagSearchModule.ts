@@ -89,6 +89,20 @@ export interface DocumentUploadResponse {
  *
  * Extends BaseModule to inherit database connection management.
  */
+/**
+ * WS-5 R5.1 — injectable collaborators for {@link RagSearchModule}.
+ * Each is optional in the constructor; omitting one yields the real service.
+ */
+export interface RagSearchModuleDeps {
+  searchService: VectorSearchService;
+  configurationService: ConfigurationService;
+  documentService: DocumentService;
+  chunkingService: ChunkingService;
+  ragConfigApi: RagConfigApi;
+  systemSettingModule: SystemSettingModule;
+  systemSettingGroupModule: SystemSettingGroupModule;
+}
+
 export class RagSearchModule extends BaseModule {
   private searchService: VectorSearchService;
   private configurationService: ConfigurationService;
@@ -98,23 +112,25 @@ export class RagSearchModule extends BaseModule {
   private systemSettingModule: SystemSettingModule;
   private systemSettingGroupModule: SystemSettingGroupModule;
 
-  constructor() {
+  /**
+   * WS-5 R5.1 — collaborators are constructor-injected so unit tests can
+   * substitute fakes. Production callers pass no args (real services); tests
+   * pass a Partial with the collaborators they fake.
+   */
+  constructor(deps?: Partial<RagSearchModuleDeps>) {
     super();
-    //get user data path
-    // const tokenService = new Token()
-    // const userdataPath = tokenService.getValue(USERSDBPATH)
-    // Initialize services with database
-    // const dbPath = getUserdbpath();
-    //get app data path
-    const appDataPath = app.getPath("appData");
-    const vectorStoreService = new VectorStoreService(appDataPath);
-    this.searchService = new VectorSearchService(vectorStoreService);
-    this.configurationService = new ConfigurationServiceImpl();
-    this.documentService = new DocumentService();
-    this.chunkingService = new ChunkingService();
-    this.ragConfigApi = new RagConfigApi();
-    this.systemSettingModule = new SystemSettingModule();
-    this.systemSettingGroupModule = new SystemSettingGroupModule();
+    this.searchService =
+      deps?.searchService ??
+      new VectorSearchService(new VectorStoreService(app.getPath("appData")));
+    this.configurationService =
+      deps?.configurationService ?? new ConfigurationServiceImpl();
+    this.documentService = deps?.documentService ?? new DocumentService();
+    this.chunkingService = deps?.chunkingService ?? new ChunkingService();
+    this.ragConfigApi = deps?.ragConfigApi ?? new RagConfigApi();
+    this.systemSettingModule =
+      deps?.systemSettingModule ?? new SystemSettingModule();
+    this.systemSettingGroupModule =
+      deps?.systemSettingGroupModule ?? new SystemSettingGroupModule();
   }
 
   /**
@@ -124,9 +140,7 @@ export class RagSearchModule extends BaseModule {
   async initialize(): Promise<void> {
     try {
       // No local embedding service needed - will use remote API
-      log.info(
-        "RAG search module initialized successfully (using remote API)"
-      );
+      log.info("RAG search module initialized successfully (using remote API)");
     } catch (error) {
       log.error("Failed to initialize RAG search module:", error);
       throw new Error("Failed to initialize RAG search module");
@@ -247,10 +261,7 @@ export class RagSearchModule extends BaseModule {
             );
           }
         } catch (updateError) {
-          log.error(
-            "Failed to update document status to error:",
-            updateError
-          );
+          log.error("Failed to update document status to error:", updateError);
         }
         throw error;
       }
@@ -280,10 +291,7 @@ export class RagSearchModule extends BaseModule {
           );
         }
       } catch (updateError) {
-        log.error(
-          "Failed to update document status to error:",
-          updateError
-        );
+        log.error("Failed to update document status to error:", updateError);
       }
 
       throw new Error(
@@ -899,10 +907,7 @@ export class RagSearchModule extends BaseModule {
           "error"
         );
       } catch (updateError) {
-        log.error(
-          "Failed to update document status to error:",
-          updateError
-        );
+        log.error("Failed to update document status to error:", updateError);
       }
 
       return {
