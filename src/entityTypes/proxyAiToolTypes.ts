@@ -63,6 +63,7 @@ export interface ProxyToolError {
     | "CHECK_FAILED"
     | "IMPORT_FAILED"
     | "DELETE_FAILED"
+    | "INTERNAL_ERROR"
     | "UNSUPPORTED_OPERATION";
   readonly error: string;
 }
@@ -193,7 +194,7 @@ export interface ProxyCheckBatchResult {
  */
 export function mapBasicStatus(
   status: number | undefined | null,
-  hasChecktime: boolean,
+  hasChecktime: boolean
 ): ProxyBasicStatus {
   if (status === 2) {
     return "failure";
@@ -205,7 +206,7 @@ export function mapBasicStatus(
 }
 
 export function mapGooglePassStatus(
-  googlePass: number | undefined | null,
+  googlePass: number | undefined | null
 ): ProxyGooglePassStatus {
   if (googlePass === 1) {
     return "pass";
@@ -217,7 +218,7 @@ export function mapGooglePassStatus(
 }
 
 export function mapProtocol(
-  protocol: string | undefined | null,
+  protocol: string | undefined | null
 ): ProxyProtocol | undefined {
   if (typeof protocol !== "string") {
     return undefined;
@@ -232,9 +233,7 @@ export function mapProtocol(
 // Normalizers (pure; return undefined when input is invalid)
 // ---------------------------------------------------------------------------
 
-export function normalizeProtocol(
-  input: unknown,
-): ProxyProtocol | undefined {
+export function normalizeProtocol(input: unknown): ProxyProtocol | undefined {
   if (typeof input !== "string") {
     return undefined;
   }
@@ -284,7 +283,7 @@ export function normalizeHost(input: unknown): string | undefined {
 
 /** Normalize an optional string. undefined => undefined; null => null. */
 export function normalizeNullableString(
-  input: unknown,
+  input: unknown
 ): string | null | undefined {
   if (input === undefined) {
     return undefined;
@@ -323,9 +322,13 @@ export interface SafeProxySummaryInput {
 }
 
 export function toSafeProxySummary(
-  input: SafeProxySummaryInput,
+  input: SafeProxySummaryInput
 ): SafeProxySummary {
-  if (input.id === undefined || input.host === undefined || input.port === undefined) {
+  if (
+    input.id === undefined ||
+    input.host === undefined ||
+    input.port === undefined
+  ) {
     throw new Error("Cannot map incomplete proxy to safe summary");
   }
   const port = normalizePort(input.port) ?? String(input.port);
@@ -340,7 +343,9 @@ export function toSafeProxySummary(
     protocol: mapProtocol(input.protocol),
     ...(username !== undefined ? { username } : {}),
     hasPassword,
-    ...(input.country_code !== undefined ? { countryCode: input.country_code } : {}),
+    ...(input.country_code !== undefined
+      ? { countryCode: input.country_code }
+      : {}),
     ...(input.addtime !== undefined ? { addtime: input.addtime } : {}),
     ...(input.checktime !== undefined ? { checktime: input.checktime } : {}),
     status: mapBasicStatus(input.status, hasChecktime),
@@ -432,7 +437,7 @@ export const proxyUpdateSchema = z
       value.user !== undefined ||
       value.pass !== undefined ||
       value.country_code !== undefined,
-    { message: "At least one update field is required" },
+    { message: "At least one update field is required" }
   );
 
 export type ProxyDeleteInput = z.infer<typeof proxyDeleteSchema>;
@@ -453,7 +458,9 @@ export const proxyCheckSchema = z
   .object({
     proxy_ids: z.array(z.number().int().positive()).min(1).max(100).optional(),
     check_all: z.boolean().optional(),
-    filters: proxyListSchema.pick({ status: true, googlePass: true, search: true }).optional(),
+    filters: proxyListSchema
+      .pick({ status: true, googlePass: true, search: true })
+      .optional(),
     mode: z.enum(["basic", "google", "both"]).default("both"),
     timeout_ms: z.number().int().min(1000).max(60000).default(15000),
     concurrency: z.number().int().min(1).max(10).default(3),
@@ -468,9 +475,8 @@ export const proxyCheckSchema = z
       return selectors.filter(Boolean).length === 1;
     },
     {
-      message:
-        "Provide exactly one of proxy_ids, check_all, or filters",
-    },
+      message: "Provide exactly one of proxy_ids, check_all, or filters",
+    }
   );
 
 export type ProxyRemoveFailedInput = z.infer<typeof proxyRemoveFailedSchema>;
@@ -494,7 +500,7 @@ export const proxyRemoveFailedSchema = z.object({
 export async function runWithConcurrency<T, R>(
   items: readonly T[],
   concurrency: number,
-  worker: (item: T, index: number) => Promise<R>,
+  worker: (item: T, index: number) => Promise<R>
 ): Promise<(R | undefined)[]> {
   const limited = Math.max(1, Math.min(concurrency, items.length));
   const results: (R | undefined)[] = new Array(items.length).fill(undefined);

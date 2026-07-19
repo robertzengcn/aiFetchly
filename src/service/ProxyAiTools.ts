@@ -11,23 +11,47 @@
  * mocked module/controller instances and no SQLite.
  */
 
-import { ZodError } from "zod";
+import { z, ZodError } from "zod";
 import { ProxyModule } from "@/modules/ProxyModule";
 import { ProxyController } from "@/controller/proxy-controller";
 import type { IProxyApi } from "@/modules/interface/IProxyApi";
-import type { ProxyListEntity } from "@/entityTypes/proxyType";
+import type {
+  ProxyEntity,
+  ProxyListEntity,
+  ProxyParseItem,
+} from "@/entityTypes/proxyType";
 import {
   proxyListSchema,
   proxyGetSchema,
+  proxyCreateSchema,
+  proxyUpdateSchema,
+  proxyDeleteSchema,
   toSafeProxySummary,
   mapBasicStatus,
   mapGooglePassStatus,
+  normalizePort,
   type SafeProxySummary,
   type SafeProxySummaryInput,
   type ProxyToolError,
   type ProxyListToolResult,
   type ProxyGetToolResult,
+  type ProxyCreateToolResult,
+  type ProxyUpdateToolResult,
+  type ProxyDeleteToolResult,
+  type ProxyImportToolResult,
+  type ProxyImportInvalidRow,
+  type ProxyProtocol,
 } from "@/entityTypes/proxyAiToolTypes";
+
+/**
+ * Import wrapper validates only array length and duplicate policy here; each
+ * row is validated individually with `proxyCreateSchema.safeParse` so the tool
+ * can return per-row invalid details (AC-6) instead of rejecting wholesale.
+ */
+const proxyImportWrapperSchema = z.object({
+  proxies: z.array(z.record(z.unknown())).min(1).max(500),
+  duplicatePolicy: z.enum(["skip", "fail"]).default("skip"),
+});
 
 /** Hard cap for bounded in-memory scans when filtering by check status. */
 const BOUNDED_SCAN_LIMIT = 500;
@@ -43,7 +67,7 @@ export interface ProxyAiToolsDeps {
 
 export function proxyToolError(
   code: ProxyToolError["code"],
-  error: string,
+  error: string
 ): ProxyToolError {
   return { success: false, code, error };
 }
@@ -51,7 +75,7 @@ export function proxyToolError(
 function mapZodError(error: ZodError): ProxyToolError {
   return proxyToolError(
     "INVALID_INPUT",
-    `Invalid input: ${error.issues.map((issue) => issue.message).join("; ")}`,
+    `Invalid input: ${error.issues.map((issue) => issue.message).join("; ")}`
   );
 }
 
@@ -79,12 +103,72 @@ function summaryFromList(record: ProxyListEntity): SafeProxySummary | null {
   return toSafeProxySummary(input);
 }
 
-function basicStatusOf(record: ProxyListEntity): ReturnType<typeof mapBasicStatus> {
+function basicStatusOf(
+  record: ProxyListEntity
+): ReturnType<typeof mapBasicStatus> {
   return mapBasicStatus(record.status, Boolean(record.checktime));
 }
 
-function googlePassOf(record: ProxyListEntity): ReturnType<typeof mapGooglePassStatus> {
+function googlePassOf(
+  record: ProxyListEntity
+): ReturnType<typeof mapGooglePassStatus> {
   return mapGooglePassStatus(record.googlePass);
+}
+
+/** A proxy entity whose nullable fields may be explicitly nulled to clear. */
+type ClearableProxyEntity = Omit<
+  ProxyEntity,
+  "user" | "pass" | "country_code"
+> & {
+  user?: string | null;
+  pass?: string | null;
+  country_code?: string | null;
+};
+
+/** Map a detail entity (user/pass shape) to a redacted safe summary. */
+function summaryFromDetail(proxy: ProxyEntity): SafeProxySummary {
+  if (proxy.id === undefined) {
+    throw new Error("Cannot map proxy without an id to safe summary");
+  }
+  return toSafeProxySummary({
+    id: proxy.id,
+    host: proxy.host,
+    port: proxy.port,
+    protocol: proxy.protocol,
+    user: proxy.user,
+    pass: proxy.pass,
+    country_code: proxy.country_code,
+    addtime: proxy.addtime,
+  });
+}
+
+/**
+ * Validate optional expected_host / expected_port guards against the current
+ * record. Returns a ProxyToolError on mismatch, or undefined when guards pass
+ * (or are absent).
+ */
+function checkExpectedMatch(
+  current: { host: string; port: string },
+  expectedHost: string | undefined,
+  expectedPort: string | number | undefined
+): ProxyToolError | undefined {
+  if (expectedHost !== undefined && expectedHost !== current.host) {
+    return proxyToolError(
+      "EXPECTED_PROXY_MISMATCH",
+      `Proxy host is ${current.host}, not ${expectedHost}.`
+    );
+  }
+  if (expectedPort !== undefined) {
+    const expected = normalizePort(expectedPort);
+    const actual = normalizePort(current.port) ?? current.port;
+    if (expected !== actual) {
+      return proxyToolError(
+        "EXPECTED_PROXY_MISMATCH",
+        `Proxy port is ${actual}, not ${expectedPort}.`
+      );
+    }
+  }
+  return undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -109,7 +193,7 @@ export class ProxyAiTools {
    * status in SQL.
    */
   async listProxies(
-    args: Record<string, unknown>,
+    args: Record<string, unknown>
   ): Promise<ProxyListToolResult | ProxyToolError> {
     let input;
     try {
@@ -154,12 +238,12 @@ export class ProxyAiTools {
       const resp = await controller.getProxylist(
         input.page + 1,
         input.size,
-        input.search ?? "",
+        input.search ?? ""
       );
       if (!resp.status || !resp.data) {
         return proxyToolError(
           "UNSUPPORTED_OPERATION",
-          resp.msg || "Failed to read proxy list",
+          resp.msg || "Failed to read proxy list"
         );
       }
       records = resp.data.records;
@@ -182,7 +266,7 @@ export class ProxyAiTools {
 
   /** Inspect a single proxy by exact ID. Credentials are never revealed. */
   async getProxy(
-    args: Record<string, unknown>,
+    args: Record<string, unknown>
   ): Promise<ProxyGetToolResult | ProxyToolError> {
     let input;
     try {
@@ -199,7 +283,7 @@ export class ProxyAiTools {
     if (!detail.status || !detail.data) {
       return proxyToolError(
         "PROXY_NOT_FOUND",
-        `Proxy #${input.proxy_id} was not found.`,
+        `Proxy #${input.proxy_id} was not found.`
       );
     }
 
@@ -222,18 +306,339 @@ export class ProxyAiTools {
     };
   }
 
+  /** Create one proxy. Returns the redacted new summary on success. */
+  async createProxy(
+    args: Record<string, unknown>
+  ): Promise<ProxyCreateToolResult | ProxyToolError> {
+    let input;
+    try {
+      input = proxyCreateSchema.parse(args);
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return mapZodError(error);
+      }
+      throw error;
+    }
+
+    const module = this.getProxyModule();
+    const saved = await module.saveProxy({
+      host: input.host,
+      port: input.port,
+      protocol: input.protocol,
+      user: input.user,
+      pass: input.pass,
+      country_code: input.country_code,
+    });
+    if (!saved.status) {
+      if (saved.code === 409) {
+        return proxyToolError(
+          "DUPLICATE_PROXY",
+          saved.msg || "A proxy with this host and port already exists."
+        );
+      }
+      return proxyToolError(
+        "INTERNAL_ERROR",
+        saved.msg || "Failed to create proxy."
+      );
+    }
+
+    const detail = await module.getProxyDetail(saved.data.id);
+    if (!detail.status || !detail.data || detail.data.id === undefined) {
+      return proxyToolError(
+        "INTERNAL_ERROR",
+        "Proxy was created but could not be reloaded."
+      );
+    }
+    return {
+      success: true,
+      created: true,
+      proxy: summaryFromDetail(detail.data),
+    };
+  }
+
+  /** Update one proxy by exact ID with optional expected-host/port guards. */
+  async updateProxy(
+    args: Record<string, unknown>
+  ): Promise<ProxyUpdateToolResult | ProxyToolError> {
+    let input;
+    try {
+      input = proxyUpdateSchema.parse(args);
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return mapZodError(error);
+      }
+      throw error;
+    }
+
+    const module = this.getProxyModule();
+    const current = await module.getProxyDetail(input.proxy_id);
+    if (!current.status || !current.data || current.data.id === undefined) {
+      return proxyToolError(
+        "PROXY_NOT_FOUND",
+        `Proxy #${input.proxy_id} was not found.`
+      );
+    }
+    const cur = current.data;
+
+    const mismatch = checkExpectedMatch(
+      cur,
+      input.expected_host,
+      input.expected_port
+    );
+    if (mismatch) {
+      return mismatch;
+    }
+
+    // Build a full merged entity. Null clears a field (TypeORM writes NULL);
+    // undefined (unchanged) is avoided by initializing from current values.
+    const merged: ClearableProxyEntity = {
+      id: cur.id,
+      host: cur.host,
+      port: cur.port,
+      protocol: cur.protocol,
+      user: cur.user ?? null,
+      pass: cur.pass ?? null,
+      country_code: cur.country_code ?? null,
+      addtime: cur.addtime,
+    };
+    const changedFields: string[] = [];
+    const curPort = normalizePort(cur.port) ?? cur.port;
+
+    if (input.host !== undefined && input.host !== cur.host) {
+      merged.host = input.host;
+      changedFields.push("host");
+    }
+    if (input.port !== undefined && input.port !== curPort) {
+      merged.port = input.port;
+      changedFields.push("port");
+    }
+    if (input.protocol !== undefined && input.protocol !== cur.protocol) {
+      merged.protocol = input.protocol;
+      changedFields.push("protocol");
+    }
+    if (
+      input.user !== undefined &&
+      (input.user ?? null) !== (cur.user ?? null)
+    ) {
+      merged.user = input.user;
+      changedFields.push("user");
+    }
+    if (
+      input.pass !== undefined &&
+      (input.pass ?? null) !== (cur.pass ?? null)
+    ) {
+      merged.pass = input.pass;
+      changedFields.push("pass");
+    }
+    if (
+      input.country_code !== undefined &&
+      (input.country_code ?? null) !== (cur.country_code ?? null)
+    ) {
+      merged.country_code = input.country_code;
+      changedFields.push("country_code");
+    }
+
+    const updated = await module.saveProxy(merged as unknown as ProxyEntity);
+    if (!updated.status) {
+      return proxyToolError(
+        "INTERNAL_ERROR",
+        updated.msg || "Failed to update proxy."
+      );
+    }
+
+    const reloaded = await module.getProxyDetail(input.proxy_id);
+    if (!reloaded.status || !reloaded.data || reloaded.data.id === undefined) {
+      return proxyToolError(
+        "INTERNAL_ERROR",
+        "Proxy was updated but could not be reloaded."
+      );
+    }
+    return {
+      success: true,
+      updated: true,
+      proxy: summaryFromDetail(reloaded.data),
+      changedFields,
+    };
+  }
+
+  /** Delete one proxy by exact ID with optional expected-host/port guards. */
+  async deleteProxy(
+    args: Record<string, unknown>
+  ): Promise<ProxyDeleteToolResult | ProxyToolError> {
+    let input;
+    try {
+      input = proxyDeleteSchema.parse(args);
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return mapZodError(error);
+      }
+      throw error;
+    }
+
+    const module = this.getProxyModule();
+    const controller = this.getProxyController();
+    const current = await module.getProxyDetail(input.proxy_id);
+    if (!current.status || !current.data || current.data.id === undefined) {
+      return proxyToolError(
+        "PROXY_NOT_FOUND",
+        `Proxy #${input.proxy_id} was not found.`
+      );
+    }
+    const cur = current.data;
+
+    const mismatch = checkExpectedMatch(
+      cur,
+      input.expected_host,
+      input.expected_port
+    );
+    if (mismatch) {
+      return mismatch;
+    }
+
+    const summary = summaryFromDetail(cur);
+    const ok = await controller.deleteProxyWithCheck(input.proxy_id);
+    if (!ok) {
+      return proxyToolError(
+        "DELETE_FAILED",
+        `Failed to delete proxy #${input.proxy_id}.`
+      );
+    }
+    return { success: true, deleted: true, proxy: summary };
+  }
+
+  /**
+   * Import multiple proxies from LLM-parsed structured input. Each row is
+   * validated individually so invalid rows are reported (AC-6) rather than
+   * rejecting the whole call. Duplicates are detected via a single batch
+   * query and skipped or, when duplicatePolicy is "fail", reject the call.
+   */
+  async importProxies(
+    args: Record<string, unknown>
+  ): Promise<ProxyImportToolResult | ProxyToolError> {
+    let wrapped;
+    try {
+      wrapped = proxyImportWrapperSchema.parse(args);
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return mapZodError(error);
+      }
+      throw error;
+    }
+    const duplicatePolicy = wrapped.duplicatePolicy;
+
+    interface ValidRow {
+      host: string;
+      port: string;
+      protocol: ProxyProtocol;
+      user?: string;
+      pass?: string;
+      country_code?: string;
+    }
+    const valid: ValidRow[] = [];
+    const invalidRows: ProxyImportInvalidRow[] = [];
+    wrapped.proxies.forEach((row, index) => {
+      const parsed = proxyCreateSchema.safeParse(row);
+      if (parsed.success) {
+        valid.push(parsed.data as ValidRow);
+      } else {
+        invalidRows.push({
+          index,
+          error: parsed.error.issues.map((issue) => issue.message).join("; "),
+        });
+      }
+    });
+
+    // Deduplicate within the batch (first occurrence wins).
+    const seen = new Set<string>();
+    const unique: ValidRow[] = [];
+    let intraSkipped = 0;
+    for (const row of valid) {
+      const key = `${row.host}:${row.port}`;
+      if (seen.has(key)) {
+        intraSkipped += 1;
+        continue;
+      }
+      seen.add(key);
+      unique.push(row);
+    }
+
+    const module = this.getProxyModule();
+    const pairs = unique.map((row) => ({ host: row.host, port: row.port }));
+    const existing = await module.getProxiesByHostPortPairs(pairs);
+    const existingKeys = new Set(
+      existing.map((entity) => `${entity.host}:${entity.port}`)
+    );
+    const dbDuplicates = unique.filter((row) =>
+      existingKeys.has(`${row.host}:${row.port}`)
+    );
+
+    if (duplicatePolicy === "fail" && dbDuplicates.length > 0) {
+      return proxyToolError(
+        "IMPORT_FAILED",
+        `${dbDuplicates.length} proxy/proxies already exist (duplicatePolicy=fail).`
+      );
+    }
+
+    const toImport = unique.filter(
+      (row) => !existingKeys.has(`${row.host}:${row.port}`)
+    );
+    const skippedDuplicateCount = dbDuplicates.length + intraSkipped;
+
+    let importedCount = 0;
+    let proxies: SafeProxySummary[] = [];
+    if (toImport.length > 0) {
+      const items: ProxyParseItem[] = toImport.map((row) => ({
+        host: row.host,
+        port: row.port,
+        protocol: row.protocol,
+        user: row.user,
+        pass: row.pass,
+      }));
+      const result = await module.importProxy(items);
+      if (!result.status) {
+        return proxyToolError(
+          "IMPORT_FAILED",
+          result.msg || "Failed to import proxies."
+        );
+      }
+      const reloaded = await module.getProxiesByHostPortPairs(
+        toImport.map((row) => ({ host: row.host, port: row.port }))
+      );
+      importedCount = reloaded.length;
+      proxies = reloaded
+        .map((entity) =>
+          entity.id === undefined ? null : summaryFromDetail(entity)
+        )
+        .filter((summary): summary is SafeProxySummary => summary !== null);
+    }
+
+    return {
+      success: true,
+      importedCount,
+      skippedDuplicateCount,
+      invalidCount: invalidRows.length,
+      ...(invalidRows.length > 0 ? { invalidRows } : {}),
+      proxies,
+      credentialsRedacted: true,
+    };
+  }
+
   /**
    * Fetch up to BOUNDED_SCAN_LIMIT enriched records across pages. Used when
    * SQL-level status filtering is unavailable.
    */
   private async boundedScan(
     controller: ProxyController,
-    search: string | undefined,
+    search: string | undefined
   ): Promise<ProxyListEntity[]> {
     const pageSize = 100;
     const collected: ProxyListEntity[] = [];
     for (let page = 0; page * pageSize < BOUNDED_SCAN_LIMIT; page += 1) {
-      const resp = await controller.getProxylist(page + 1, pageSize, search ?? "");
+      const resp = await controller.getProxylist(
+        page + 1,
+        pageSize,
+        search ?? ""
+      );
       if (!resp.status || !resp.data || resp.data.records.length === 0) {
         break;
       }
@@ -268,13 +673,37 @@ export function resetProxyAiToolsDefault(): void {
 }
 
 export async function listProxiesForAi(
-  args: Record<string, unknown>,
+  args: Record<string, unknown>
 ): Promise<ProxyListToolResult | ProxyToolError> {
   return getDefaultTools().listProxies(args);
 }
 
 export async function getProxyForAi(
-  args: Record<string, unknown>,
+  args: Record<string, unknown>
 ): Promise<ProxyGetToolResult | ProxyToolError> {
   return getDefaultTools().getProxy(args);
+}
+
+export async function createProxyForAi(
+  args: Record<string, unknown>
+): Promise<ProxyCreateToolResult | ProxyToolError> {
+  return getDefaultTools().createProxy(args);
+}
+
+export async function updateProxyForAi(
+  args: Record<string, unknown>
+): Promise<ProxyUpdateToolResult | ProxyToolError> {
+  return getDefaultTools().updateProxy(args);
+}
+
+export async function deleteProxyForAi(
+  args: Record<string, unknown>
+): Promise<ProxyDeleteToolResult | ProxyToolError> {
+  return getDefaultTools().deleteProxy(args);
+}
+
+export async function importProxiesForAi(
+  args: Record<string, unknown>
+): Promise<ProxyImportToolResult | ProxyToolError> {
+  return getDefaultTools().importProxies(args);
 }
