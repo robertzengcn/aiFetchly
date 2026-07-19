@@ -117,3 +117,26 @@ npm rebuild better-sqlite3 --build-from-source
 ```
 
 The first test run failed because `better-sqlite3` was compiled for a different Node ABI. After rebuild, the DB-backed subagent suites passed.
+
+## Retest After Fix
+
+Date: 2026-07-19
+
+Fix commit:
+- `e4f20ea4 fix: enable browser subagent management QA`
+
+Fixed:
+- Browser bridge code now allowlists and dispatches `agent-definition:list`, `agent-definition:get`, `agent-definition:create`, `agent-definition:update`, `agent-definition:toggle`, and `agent-definition:delete`.
+- Subagents table now includes the required Plugin and Model columns.
+- Status filter now exposes the Has warnings option.
+- Detail panel now shows explicit ID, display name, component path, output schema, warnings, created timestamp, and last updated timestamp.
+- Direct route smoke for `http://localhost:5173/#/systemsetting/subagents` now renders the Subagents page, Add Subagent action, filters, and empty state.
+
+Retest results:
+- `yarn testmain --run test/vitest/main/devtools/devBrowserChannels.test.ts test/vitest/main/devtools/DevBrowserDispatcher.test.ts test/vitest/main/agent-definition-ipc.test.ts test/vitest/main/agentDefinitionManagement.test.ts test/vitest/main/agentRuntimeDefinitionList.test.ts`: 46/46 passed.
+- `yarn tsc-result`: passed.
+- `./node_modules/.bin/vue-tsc --noEmit`: passed.
+- Translation parity check: all six language files have 57 `subagents` keys.
+
+Remaining live-test note:
+- The currently running Electron process was launched before the fix and still rejects `agent-definition:list` with the old allowlist. Restart Electron, then rerun browser CRUD smoke for TC-19 through TC-24 and TC-26 through TC-28.
