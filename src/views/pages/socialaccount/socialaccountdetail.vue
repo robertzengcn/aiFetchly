@@ -3,7 +3,7 @@
     <v-form ref="form" @submit.prevent="onSubmit">
       <v-text-field
         v-model="socialaccountId"
-        :label="t('socialaccount.id')"
+        :label="t('socialaccount.col_id')"
         type="input"
         v-show="isEdit"
         :readonly="true"

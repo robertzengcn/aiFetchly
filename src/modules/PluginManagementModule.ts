@@ -2,6 +2,7 @@ import { BaseModule } from "@/modules/baseModule";
 import { InstalledPluginModel } from "@/model/InstalledPlugin.model";
 import { InstalledSkillModel } from "@/model/InstalledSkill.model";
 import { MCPToolModel } from "@/model/MCPTool.model";
+import { AgentDefinitionModel } from "@/model/AgentDefinition.model";
 import { InstalledPluginEntity } from "@/entity/InstalledPlugin.entity";
 import type {
   CreateInstalledPluginInput,
@@ -24,12 +25,14 @@ export class PluginManagementModule extends BaseModule {
   private pluginModel: InstalledPluginModel;
   private skillModel: InstalledSkillModel;
   private mcpModel: MCPToolModel;
+  private agentModel: AgentDefinitionModel;
 
   constructor() {
     super();
     this.pluginModel = new InstalledPluginModel(this.dbpath);
     this.skillModel = new InstalledSkillModel(this.dbpath);
     this.mcpModel = new MCPToolModel(this.dbpath);
+    this.agentModel = new AgentDefinitionModel(this.dbpath);
   }
 
   async listInstalledPlugins(): Promise<InstalledPluginEntity[]> {
@@ -40,9 +43,7 @@ export class PluginManagementModule extends BaseModule {
     return this.pluginModel.findEnabled();
   }
 
-  async getPluginByName(
-    name: string
-  ): Promise<InstalledPluginEntity | null> {
+  async getPluginByName(name: string): Promise<InstalledPluginEntity | null> {
     return this.pluginModel.findByName(name);
   }
 
@@ -60,6 +61,10 @@ export class PluginManagementModule extends BaseModule {
       componentStateJson: input.componentStateJson ?? "{}",
       enabled: input.enabled ?? 1,
       health: input.health ?? "healthy",
+      sourceKind: input.sourceKind,
+      sourceUri: input.sourceUri,
+      sourceRef: input.sourceRef,
+      sourceMetaJson: input.sourceMetaJson ?? "{}",
     });
   }
 
@@ -71,7 +76,8 @@ export class PluginManagementModule extends BaseModule {
     if (input.displayName !== undefined) patch.displayName = input.displayName;
     if (input.version !== undefined) patch.version = input.version;
     if (input.description !== undefined) patch.description = input.description;
-    if (input.manifestJson !== undefined) patch.manifestJson = input.manifestJson;
+    if (input.manifestJson !== undefined)
+      patch.manifestJson = input.manifestJson;
     if (input.permissionsJson !== undefined)
       patch.permissionsJson = input.permissionsJson;
     if (input.componentStateJson !== undefined)
@@ -120,6 +126,7 @@ export class PluginManagementModule extends BaseModule {
         removedPlugin: false,
         removedSkillNames: [],
         removedMcpServerNames: [],
+        removedAgentIds: [],
         errors: [],
       };
     }
@@ -154,6 +161,19 @@ export class PluginManagementModule extends BaseModule {
       });
     }
 
+    let removedAgentIds: string[] = [];
+    try {
+      removedAgentIds = await this.agentModel.deleteByPluginName(name);
+    } catch (e: unknown) {
+      errors.push({
+        code: "uninstall-failed",
+        componentType: "agent",
+        pluginName: name,
+        message: e instanceof Error ? e.message : String(e),
+        recoverable: false,
+      });
+    }
+
     let removedPlugin = false;
     try {
       removedPlugin = await this.pluginModel.remove(name);
@@ -171,6 +191,7 @@ export class PluginManagementModule extends BaseModule {
       removedPlugin,
       removedSkillNames,
       removedMcpServerNames,
+      removedAgentIds,
       errors,
     };
   }

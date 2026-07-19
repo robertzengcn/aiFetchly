@@ -1,14 +1,13 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { HookDispatcher } from "@/service/hooks/HookDispatcher";
 import { HookRegistry } from "@/service/hooks/HookRegistry";
-import {
-  CallbackHookDefinition,
-  HookInput,
-} from "@/entityTypes/hookTypes";
+import { CallbackHookDefinition, HookInput } from "@/entityTypes/hookTypes";
 import {
   setHookAuditLoggerForTests,
   HookAuditLogger,
 } from "@/service/hooks/HookAuditService";
+import { Token } from "@/modules/token";
+import { USER_HOOKS_ENABLED } from "@/config/usersetting";
 
 function baseInput(): HookInput {
   return {
@@ -32,7 +31,6 @@ function cb(
     eventName: "PreToolUse",
     source: "builtin",
     enabled: true,
-    trusted: true,
     type: "callback",
     callback: impl as never,
     ...overrides,
@@ -45,6 +43,8 @@ describe("HookDispatcher", () => {
   beforeEach(() => {
     HookRegistry.resetForTests();
     setHookAuditLoggerForTests(NULL_LOGGER);
+    // Hooks default to ON (gate checks === "false").
+    // Ensure clean token state for these tests.
   });
 
   it("returns EMPTY_AGGREGATE on the no-hooks fast path", async () => {
@@ -165,5 +165,42 @@ describe("HookDispatcher", () => {
       matchQuery: "shell_execute",
     });
     expect(result.executedHookIds).toEqual([]);
+  });
+});
+
+describe("HookDispatcher global-enable gate", () => {
+  beforeEach(() => {
+    HookRegistry.resetForTests();
+    setHookAuditLoggerForTests(NULL_LOGGER);
+    // Clear any previous token value so each test starts clean.
+    new Token().setValue(USER_HOOKS_ENABLED, "");
+  });
+
+  it("returns EMPTY_AGGREGATE when USER_HOOKS_ENABLED is 'false'", async () => {
+    new Token().setValue(USER_HOOKS_ENABLED, "false");
+    HookRegistry.registerBuiltinHook(
+      cb("gate-test-off", () => ({ continue: false }))
+    );
+    const result = await HookDispatcher.executeHooks({
+      eventName: "PreToolUse",
+      input: baseInput(),
+      matchQuery: "shell_execute",
+    });
+    expect(result.blocked).toBe(false);
+    expect(result.executedHookIds).toEqual([]);
+  });
+
+  it("executes matching hooks when USER_HOOKS_ENABLED is unset (default on)", async () => {
+    // Don't set the token — verify default is enabled.
+    HookRegistry.registerBuiltinHook(
+      cb("gate-test-on", () => ({ continue: false, reason: "blocked by test" }))
+    );
+    const result = await HookDispatcher.executeHooks({
+      eventName: "PreToolUse",
+      input: baseInput(),
+      matchQuery: "shell_execute",
+    });
+    expect(result.blocked).toBe(true);
+    expect(result.executedHookIds).toEqual(["gate-test-on"]);
   });
 });

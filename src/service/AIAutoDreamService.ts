@@ -10,6 +10,9 @@ import type {
   AIMemoryConsolidationRunView,
   AIAutoDreamStatusView,
 } from "@/entityTypes/aiUserMemoryTypes";
+import {
+  openAIContentToString,
+} from "@/api/aiChatApi";
 import type {
   OpenAIChatCompletionRequest,
   OpenAIChatCompletionResponse,
@@ -162,7 +165,7 @@ export class AIAutoDreamService {
         ],
       };
       const resp = await this.deps.completeChat(req);
-      const raw = resp.choices?.[0]?.message?.content ?? "";
+      const raw = openAIContentToString(resp.choices?.[0]?.message?.content);
       const parsed = parseAutoDreamModelOutput(
         raw,
         collected.packets,

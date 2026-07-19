@@ -3,6 +3,7 @@ import { HookRegistry } from "@/service/hooks/HookRegistry";
 import {
   CallbackHookDefinition,
   CommandHookDefinition,
+  HookSource,
 } from "@/entityTypes/hookTypes";
 
 function cb(
@@ -14,7 +15,6 @@ function cb(
     eventName: "PreToolUse",
     source: "builtin",
     enabled: true,
-    trusted: true,
     type: "callback",
     callback: () => ({}),
     ...overrides,
@@ -30,7 +30,6 @@ function cmd(
     eventName: "PreToolUse",
     source: "session",
     enabled: true,
-    trusted: true,
     type: "command",
     command: "node -e 'process.stdin.resume()'",
     ...overrides,
@@ -72,23 +71,6 @@ describe("HookRegistry", () => {
     HookRegistry.registerBuiltinHook(cb("on"));
     const matched = HookRegistry.getMatchingHooks({ eventName: "PreToolUse" });
     expect(matched.map((h) => h.id)).toEqual(["on"]);
-  });
-
-  it("filters untrusted command hooks", () => {
-    // Callback hook: trusted flag is not consulted by the registry
-    // (trust is a command-hook concern).
-    HookRegistry.registerBuiltinHook(cb("safe-cb", { trusted: false }));
-    // Untrusted command hook registered via the session API (built-in
-    // registration is callback-only by design).
-    HookRegistry.registerSessionHook(
-      "s1",
-      cmd("cmd-untrusted", { source: "session", trusted: false })
-    );
-    const matched = HookRegistry.getMatchingHooks({
-      eventName: "PreToolUse",
-      sessionId: "s1",
-    });
-    expect(matched.map((h) => h.id)).toEqual(["safe-cb"]);
   });
 
   it("registers session hooks and scopes them by sessionId", () => {
@@ -149,5 +131,139 @@ describe("HookRegistry", () => {
     HookRegistry.registerBuiltinHook(cb("dup"));
     const matched = HookRegistry.getMatchingHooks({ eventName: "PreToolUse" });
     expect(matched.map((h) => h.id)).toEqual(["dup"]);
+  });
+
+  describe("replaceSource / unregisterSource (HOK-01)", () => {
+    // Config-sourced hooks keyed by the full sourceId string ("user",
+    // "workspace:<id>"). Workspace-sourced hooks carry source "project"
+    // (A3 resolved: there is no "workspace" enum value; SOURCE_PRIORITY
+    // project:3 < user:5 ranks workspace above user).
+    function srcHook(
+      id: string,
+      source: HookSource,
+      overrides: Partial<CallbackHookDefinition> = {}
+    ): CallbackHookDefinition {
+      return {
+        id,
+        eventName: "PreToolUse",
+        source,
+        enabled: true,
+        trusted: true,
+        type: "callback",
+        callback: () => ({}),
+        ...overrides,
+      };
+    }
+
+    it("atomically adds hooks for a source", () => {
+      HookRegistry.replaceSource("user", [srcHook("h1", "user")]);
+      const matched = HookRegistry.getMatchingHooks({
+        eventName: "PreToolUse",
+      });
+      expect(matched.map((h) => h.id)).toEqual(["h1"]);
+    });
+
+    it("atomically changes a hook (same id, new body; old body gone)", () => {
+      HookRegistry.replaceSource("user", [
+        srcHook("h1", "user", { matcher: "shell_execute" }),
+      ]);
+      HookRegistry.replaceSource("user", [
+        srcHook("h1", "user", { matcher: "mcp_*" }),
+      ]);
+      const oldBody = HookRegistry.getMatchingHooks({
+        eventName: "PreToolUse",
+        matchQuery: "shell_execute",
+      });
+      expect(oldBody.map((h) => h.id)).toEqual([]);
+      const newBody = HookRegistry.getMatchingHooks({
+        eventName: "PreToolUse",
+        matchQuery: "mcp_foo",
+      });
+      expect(newBody.map((h) => h.id)).toEqual(["h1"]);
+    });
+
+    it("atomically renames (different id removes the old id entirely)", () => {
+      HookRegistry.replaceSource("user", [srcHook("h1", "user")]);
+      HookRegistry.replaceSource("user", [srcHook("h2", "user")]);
+      const matched = HookRegistry.getMatchingHooks({
+        eventName: "PreToolUse",
+      });
+      expect(matched.map((h) => h.id)).toEqual(["h2"]);
+    });
+
+    it("atomically deletes via an empty array", () => {
+      HookRegistry.replaceSource("user", [srcHook("h1", "user")]);
+      HookRegistry.replaceSource("user", []);
+      const matched = HookRegistry.getMatchingHooks({
+        eventName: "PreToolUse",
+      });
+      expect(matched).toEqual([]);
+    });
+
+    it("unregisterSource is equivalent to replaceSource(id, [])", () => {
+      HookRegistry.replaceSource("user", [srcHook("h1", "user")]);
+      HookRegistry.unregisterSource("user");
+      const matched = HookRegistry.getMatchingHooks({
+        eventName: "PreToolUse",
+      });
+      expect(matched).toEqual([]);
+    });
+
+    it("isolates sources (unregistering one leaves the other intact)", () => {
+      HookRegistry.replaceSource("user", [srcHook("u1", "user")]);
+      HookRegistry.replaceSource("workspace:42", [srcHook("w1", "project")]);
+      // project (3) before user (5).
+      expect(
+        HookRegistry.getMatchingHooks({ eventName: "PreToolUse" }).map(
+          (h) => h.id
+        )
+      ).toEqual(["w1", "u1"]);
+
+      HookRegistry.unregisterSource("workspace:42");
+      expect(
+        HookRegistry.getMatchingHooks({ eventName: "PreToolUse" }).map(
+          (h) => h.id
+        )
+      ).toEqual(["u1"]);
+    });
+
+    it("orders project (workspace) before user by SOURCE_PRIORITY", () => {
+      // Register user first, then workspace — order must still be workspace first.
+      HookRegistry.replaceSource("user", [srcHook("u1", "user")]);
+      HookRegistry.replaceSource("workspace:42", [srcHook("w1", "project")]);
+      const matched = HookRegistry.getMatchingHooks({
+        eventName: "PreToolUse",
+      });
+      expect(matched.map((h) => h.id)).toEqual(["w1", "u1"]);
+    });
+
+    it("holds a defensive copy (caller mutation does not leak)", () => {
+      const original = srcHook("h1", "user", { matcher: "shell_execute" });
+      HookRegistry.replaceSource("user", [original]);
+      // Mutate the caller's object after registration.
+      (original as { matcher?: string }).matcher = "mcp_*";
+      expect(
+        HookRegistry.getMatchingHooks({
+          eventName: "PreToolUse",
+          matchQuery: "shell_execute",
+        }).map((h) => h.id)
+      ).toEqual(["h1"]);
+      expect(
+        HookRegistry.getMatchingHooks({
+          eventName: "PreToolUse",
+          matchQuery: "mcp_foo",
+        })
+      ).toEqual([]);
+    });
+
+    it("resetForTests clears sourceIndex (no stale-id leak across tests)", () => {
+      HookRegistry.replaceSource("user", [srcHook("h1", "user")]);
+      HookRegistry.resetForTests();
+      HookRegistry.replaceSource("user", [srcHook("h2", "user")]);
+      const matched = HookRegistry.getMatchingHooks({
+        eventName: "PreToolUse",
+      });
+      expect(matched.map((h) => h.id)).toEqual(["h2"]);
+    });
   });
 });

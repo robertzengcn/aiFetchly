@@ -137,3 +137,7 @@ node_modules
 .worktrees/
 *.mp4
 *.wav
+# Test artifacts accidentally created in working tree root
+/true/
+.superpowers/
+hyperframes-*

@@ -26,3 +26,9 @@ export const USER_AI_PROVIDER_MODE = "user_ai_provider_mode";
 export const USER_LOCAL_AI_PROVIDER_CONFIG = "user_local_ai_provider_config";
 /** Encrypted plaintext API key for the local provider (stored separately). */
 export const USER_LOCAL_AI_PROVIDER_API_KEY = "user_local_ai_provider_api_key";
+
+// Hooks system — Phase 4 global enable + builtin enabled-override map.
+// Values are strings ("true"/"false") to match the Token store shape.
+export const USER_HOOKS_ENABLED = "user_hooks_enabled";
+// Value is a JSON string: { [hookId: string]: { enabled: boolean } }
+export const USER_HOOKS_BUILTIN_OVERRIDES = "user_hooks_builtin_overrides";

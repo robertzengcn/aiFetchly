@@ -19,6 +19,14 @@ describe("AIChatErrorMapper - userSafeError", () => {
     expect(userSafeError(new Error("401 Unauthorized"))).toBe(
       "Please sign in again."
     );
+    expect(
+      userSafeError(
+        new Error("Authentication failed: Token expired. Please login again.")
+      )
+    ).toBe("Please sign in again.");
+    expect(
+      userSafeError(new Error("Refresh token rejected (HTTP 401)"))
+    ).toBe("Please sign in again.");
   });
 
   it("surfaces AIProviderError messages directly instead of the generic fallback", () => {
@@ -77,6 +85,16 @@ describe("AIChatErrorMapper - userSafeError", () => {
         new Error(
           "AI server returned an empty response with no finish reason. This is typically a transient server issue (rate limit, timeout, or 502)."
         )
+      )
+    ).toBe(
+      "The AI service is busy or had a transient issue. Please try again in a moment."
+    );
+  });
+
+  it("maps AI server JSON envelope errors to the transient-issue message", () => {
+    expect(
+      userSafeError(
+        new Error("AI server error code=500: database connection is not open")
       )
     ).toBe(
       "The AI service is busy or had a transient issue. Please try again in a moment."

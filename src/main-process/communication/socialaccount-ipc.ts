@@ -88,31 +88,13 @@ export function registerSocialAccountIpcHandlers(mainWindow: BrowserWindow) {
       let platform = "";
       const sac = new SocialAccountController();
       const accinfo = await sac.getAccountdetail(qdata.id);
-      if (accinfo.status) {
-        const socialTypeId = accinfo.data.social_type_id;
-        //convert social type id to platform
-        const platformItem = SocialPlatformList.find(
-          (item) => item.id === socialTypeId
-        );
-        if (platformItem) {
-          platform = platformItem.name;
-        }
-      } else {
-        const comMsgs: CommonDialogMsg = {
-          status: false,
-          code: qdata.id,
-          data: {
-            action: "error",
-            title: "",
-            content: accinfo.msg,
-          },
-        };
-        (
-          event as {
-            sender: { send: (channel: string, message: string) => void };
-          }
-        ).sender.send(SOCIAL_ACCOUNT_LOGIN_MESSSAGE, JSON.stringify(comMsgs));
-        return;
+      const socialTypeId = accinfo.social_type_id;
+      //convert social type id to platform
+      const platformItem = SocialPlatformList.find(
+        (item) => item.id === socialTypeId
+      );
+      if (platformItem) {
+        platform = platformItem.name;
       }
       // event.sender.send('socialaccount:login:msg', JSON.stringify({ msg: "test", status: false }))
       await sac
@@ -297,7 +279,11 @@ export function registerSocialAccountIpcHandlers(mainWindow: BrowserWindow) {
       filters: [{ name: "Netscape Cookies", extensions: ["txt"] }],
     });
     if (canceled) {
-      const cmsg = { status: false, msg: "canceled" } as CommonDialogMsg;
+      const cmsg = {
+        status: false,
+        msg: "canceled",
+        data: { action: "uploadCanceled", title: "", content: "socialaccount.upload_cookies_cancel" },
+      } as CommonDialogMsg;
       (
         event as {
           sender: { send: (channel: string, message: string) => void };

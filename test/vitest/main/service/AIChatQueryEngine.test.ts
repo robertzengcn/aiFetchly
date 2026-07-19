@@ -332,6 +332,59 @@ describe("AIChatQueryEngine", () => {
       });
     });
 
+    it("attributes the latest usage_update tokens to tool_call rows", async () => {
+      // The real loop (after the per-round usage fix) emits usage_update
+      // BEFORE tool_call. The persisting sink must carry that usage through
+      // to saveToolCallMessage so tool_call rows get a non-null tokensUsed.
+      const fakeRun = vi
+        .fn()
+        .mockImplementation(async (input: AIChatQueryLoopInput) => {
+          input.eventSink.emit({
+            type: "usage_update",
+            conversationId: input.conversationId,
+            messageId: input.assistantMessageId,
+            model: "gpt-4",
+            promptTokens: 100,
+            completionTokens: 20,
+            totalTokens: 120,
+          });
+          input.eventSink.emit({
+            type: "tool_call",
+            conversationId: input.conversationId,
+            messageId: input.assistantMessageId,
+            toolCallId: "call-1",
+            toolName: "get_time",
+            toolArguments: {},
+          });
+          return {
+            type: "completed" as const,
+            conversationId: input.conversationId,
+            assistantMessageId: input.assistantMessageId,
+            fullContent: "done",
+            finishReason: "stop",
+            model: "gpt-4",
+            totalTokens: 120,
+            promptTokens: 100,
+            completionTokens: 20,
+          };
+        });
+      const engine = createEngineWithFakeLoop(fakeRun);
+      const { sink } = makeEventCollector();
+
+      await engine.submitMessage({
+        request: { message: "what time is it?" },
+        eventSink: sink,
+      });
+
+      expect(mockSaveToolCallMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          toolCallId: "call-1",
+          model: "gpt-4",
+          tokensUsed: 120,
+        })
+      );
+    });
+
     it("emits error event when loop returns failed", async () => {
       const fakeRun = vi.fn().mockResolvedValue({
         type: "failed" as const,

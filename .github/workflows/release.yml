@@ -3,16 +3,17 @@ name: Auto Release
 on:
   push:
     branches:
-      - main
-    tags:
-      - 'v*'
+      - master
+
+permissions:
+  contents: write
 
 jobs:
   build-windows:
     runs-on: windows-latest
     outputs:
       version: ${{ steps.calculate_version.outputs.version }}
-      artifact-name: ${{ steps.calculate_version.outputs.artifact_name }}
+      artifact_name: ${{ steps.calculate_version.outputs.artifact_name }}
 
     steps:
       - name: Checkout code
@@ -21,7 +22,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20.18.3
+          node-version: 22.14.0
 
       # Python 3.12+ removed distutils; bundled node-gyp in electron-rebuild still imports it.
       - name: Set up Python for node-gyp
@@ -51,13 +52,28 @@ jobs:
           echo "artifact_name=electron-app-windows-v$NEW_VERSION" >> $GITHUB_OUTPUT
         shell: bash
 
-      - name: Create .env file
+      - name: Write .env for test build
+        shell: bash
+        env:
+          VITE_LOGIN_URL_TEST: ${{ secrets.VITE_LOGIN_URL_TEST }}
+          UPDATESERVER: ${{ secrets.UPDATESERVER }}
         run: |
-          touch .env
-          echo "NODE_ENV=test" >> .env
-          echo "VITE_LOGIN_URL=${{ secrets.VITE_LOGIN_URL_TEST }}" >> .env
-          echo "UPDATESERVER=${{ secrets.UPDATESERVER }}" >> .env
-          cat .env
+          set -euo pipefail
+          if [ -z "$VITE_LOGIN_URL_TEST" ]; then
+            echo "::error::secrets.VITE_LOGIN_URL_TEST is empty. Add it in repo Settings > Secrets and variables > Actions."
+            exit 1
+          fi
+          if [ -z "$UPDATESERVER" ]; then
+            echo "::error::secrets.UPDATESERVER is empty. Add it in repo Settings > Secrets and variables > Actions."
+            exit 1
+          fi
+          {
+            echo "NODE_ENV=test"
+            echo "VITE_LOGIN_URL=$VITE_LOGIN_URL_TEST"
+            echo "UPDATESERVER=$UPDATESERVER"
+          } > .env
+          cp .env .env.test
+          echo "OK: .env and .env.test written"
 
       - name: Install dependencies
         run: yarn install
@@ -65,8 +81,8 @@ jobs:
       - name: Rebuild electron
         run: yarn electron-rebuild --force --types prod,dev,optional --module-dir .
 
-      - name: Rebuild sqlite3
-        run: yarn rebuild-sqlite3
+      - name: Rebuild sqlite3 (no-op; sqlite3 unused)
+        run: echo "rebuild-sqlite3 removed; sqlite3 package is unused. Skipping."
 
       - name: Rebuild better sqlite
         run: yarn rebuild-better-sqlite
@@ -91,7 +107,7 @@ jobs:
     runs-on: macos-latest
     outputs:
       version: ${{ steps.calculate_version.outputs.version }}
-      artifact-name: ${{ steps.calculate_version.outputs.artifact_name }}
+      artifact_name: ${{ steps.calculate_version.outputs.artifact_name }}
 
     steps:
       - name: Set up C++20 environment
@@ -126,7 +142,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20.18.3
+          node-version: 22.14.0
 
       # Python 3.12+ removed distutils; bundled node-gyp in electron-rebuild still imports it.
       - name: Set up Python for node-gyp
@@ -156,13 +172,28 @@ jobs:
           echo "artifact_name=electron-app-macos-v$NEW_VERSION" >> $GITHUB_OUTPUT
         shell: bash
 
-      - name: Create .env file
+      - name: Write .env for test build
+        shell: bash
+        env:
+          VITE_LOGIN_URL_TEST: ${{ secrets.VITE_LOGIN_URL_TEST }}
+          UPDATESERVER: ${{ secrets.UPDATESERVER }}
         run: |
-          touch .env
-          echo "NODE_ENV=test" >> .env
-          echo "VITE_LOGIN_URL=${{ secrets.VITE_LOGIN_URL_TEST }}" >> .env
-          echo "UPDATESERVER=${{ secrets.UPDATESERVER }}" >> .env
-          cat .env
+          set -euo pipefail
+          if [ -z "$VITE_LOGIN_URL_TEST" ]; then
+            echo "::error::secrets.VITE_LOGIN_URL_TEST is empty. Add it in repo Settings > Secrets and variables > Actions."
+            exit 1
+          fi
+          if [ -z "$UPDATESERVER" ]; then
+            echo "::error::secrets.UPDATESERVER is empty. Add it in repo Settings > Secrets and variables > Actions."
+            exit 1
+          fi
+          {
+            echo "NODE_ENV=test"
+            echo "VITE_LOGIN_URL=$VITE_LOGIN_URL_TEST"
+            echo "UPDATESERVER=$UPDATESERVER"
+          } > .env
+          cp .env .env.test
+          echo "OK: .env and .env.test written"
 
       - name: Install setuptools
         run: brew install python-setuptools
@@ -188,8 +219,8 @@ jobs:
             npx electron-rebuild --force --arch="${TARGET_ARCH}" -w better-sqlite3,sqlite3,bufferutil,utf-8-validate || echo "Selective rebuild failed"
           }
 
-      - name: Rebuild sqlite3
-        run: CXXFLAGS="-std=c++20" CFLAGS="-std=c11" yarn rebuild-sqlite3
+      - name: Rebuild sqlite3 (no-op; sqlite3 unused)
+        run: echo "rebuild-sqlite3 removed; sqlite3 package is unused. Skipping."
 
       - name: Rebuild better sqlite
         run: CXXFLAGS="-std=c++20" CFLAGS="-std=c11" yarn rebuild-better-sqlite
@@ -210,42 +241,62 @@ jobs:
   create-release:
     needs: [build-windows, build-macos]
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/master'
     
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20.18.3
-
-      - name: Calculate version
-        id: calculate_version
-        run: |
-          # Extract current version from package.json
-          CURRENT_VERSION=$(node -e "console.log(require('./package.json').version)")
-          echo "Current version: $CURRENT_VERSION"
-          
-          # Generate build number based on GitHub run number
-          BUILD_NUMBER=${{ github.run_number }}
-          
-          # Create new version with build number
-          NEW_VERSION="${CURRENT_VERSION%.*}.$BUILD_NUMBER"
-          echo "New version: $NEW_VERSION"
-          
-          # Set as output variable
-          echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
-
       - name: Download Windows artifact
         uses: actions/download-artifact@v4
         with:
-          name: electron-app-windows-v${{ steps.calculate_version.outputs.version }}
+          name: ${{ needs.build-windows.outputs.artifact_name }}
           path: ./windows-build
 
       - name: Download macOS artifact
         uses: actions/download-artifact@v4
         with:
-          name: electron-app-macos-v${{ steps.calculate_version.outputs.version }}
+          name: ${{ needs.build-macos.outputs.artifact_name }}
           path: ./macos-build
+
+      - name: Prepare release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets
+
+          while IFS= read -r -d '' file; do
+            case "$file" in
+              windows-build/*)
+                relative_path="${file#windows-build/}"
+                output_name="windows-${relative_path//\//-}"
+                ;;
+              macos-build/*)
+                relative_path="${file#macos-build/}"
+                output_name="macos-${relative_path//\//-}"
+                ;;
+              *)
+                echo "Skipping unexpected artifact path: $file"
+                continue
+                ;;
+            esac
+
+            cp "$file" "release-assets/$output_name"
+          done < <(find windows-build macos-build -type f -print0)
+
+          echo "Release assets:"
+          find release-assets -maxdepth 1 -type f -print | sort
+          asset_count="$(find release-assets -maxdepth 1 -type f | wc -l | tr -d ' ')"
+          if [ "$asset_count" = "0" ]; then
+            echo "::error::No release assets were prepared."
+            exit 1
+          fi
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.build-windows.outputs.version }}
+          name: aiFetchly v${{ needs.build-windows.outputs.version }}
+          body: |
+            Automated release for `${{ github.ref_name }}`.
+
+            Commit: ${{ github.sha }}
+            Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          files: release-assets/*

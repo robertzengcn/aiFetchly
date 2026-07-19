@@ -35,7 +35,11 @@ export function userSafeError(err: unknown): string {
     ) {
       return QUOTA_EXHAUSTED_SENTINEL;
     }
-    if (/401|403/.test(msg)) {
+    if (
+      /401|403|Authentication failed: Token expired|Please login again|RefreshTokenInvalidError|refresh token rejected|invalid or expired refresh token|refresh token not found|refresh token has expired|refresh token is invalid/i.test(
+        msg
+      )
+    ) {
       return "Please sign in again.";
     }
     if (/404/.test(msg)) {
@@ -43,6 +47,13 @@ export function userSafeError(err: unknown): string {
     }
     if (/503/.test(msg)) {
       return "No chat model is configured on the AI server.";
+    }
+    // HTTP 413: the request body exceeded the AI server's max size. Images
+    // are downscaled client-side before upload, so this is now rare — but
+    // surface a clear, actionable message instead of "unexpected error"
+    // if a tight server limit or a large non-image payload still trips it.
+    if (/413|Request Entity Too Large|Payload Too Large/i.test(msg)) {
+      return "The attachment is too large for the AI server. Please try a smaller image or file.";
     }
     if (/Failed to fetch|NetworkError|ECONNREFUSED|fetch failed/i.test(msg)) {
       return "Could not connect to the AI server.";
@@ -52,7 +63,7 @@ export function userSafeError(err: unknown): string {
     // after a short wait, so surface a clear, actionable message instead of
     // the generic "unexpected error" fallback.
     if (
-      /finish_reason=error|empty response|no finish reason|transient server|rate limit|timeout|\b502\b/i.test(
+      /finish_reason=error|empty response|no finish reason|transient server|rate limit|timeout|\b502\b|AI server error code=5\d\d|database connection is not open/i.test(
         msg
       )
     ) {
