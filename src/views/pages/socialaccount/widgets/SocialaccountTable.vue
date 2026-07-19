@@ -68,18 +68,18 @@ v-model:items-per-page="itemsPerPage" :search="search" :headers="headers"
     </v-data-table-server>
 
 
-    <!-- Social Account Table -->
-    <!-- Your existing code for the social account table goes here -->
+    <!-- Tool Account Table -->
+    <!-- Your existing code for the tool account table goes here -->
 
     <!-- Delete Confirmation Modal -->
     <v-dialog v-model="showDeleteModal" width="auto">
         <v-card
-max-width="400" prepend-icon="mdi-update" text="The account will be delete"
-            title="Confirm to delete account">
+max-width="400" prepend-icon="mdi-update" :text="t('socialaccount.delete_tool_account_confirm_text')"
+            :title="t('socialaccount.delete_tool_account_confirm_title')">
             <template v-slot:actions>
-                <v-btn class="ms-auto" text="Ok" color="secondary" @click="confirmrmAccount">
+                <v-btn class="ms-auto" :text="t('common.ok')" color="secondary" @click="confirmrmAccount">
                 </v-btn>
-                <v-btn class="ms-auto" text="Cancel" @click="showDeleteModal = false"></v-btn>
+                <v-btn class="ms-auto" :text="t('common.cancel')" @click="showDeleteModal = false"></v-btn>
 
             </template>
         </v-card>
@@ -88,12 +88,12 @@ max-width="400" prepend-icon="mdi-update" text="The account will be delete"
     <!-- Clear Cookies Confirmation Modal -->
     <v-dialog v-model="showClearCookiesModal" width="auto">
         <v-card
-max-width="400" prepend-icon="mdi-cookie-remove" text="The cookies will be cleared"
-            title="Confirm to clear cookies">
+max-width="400" prepend-icon="mdi-cookie-remove" :text="t('socialaccount.clear_cookies_confirm_text')"
+            :title="t('socialaccount.clear_cookies_confirm_title')">
             <template v-slot:actions>
-                <v-btn class="ms-auto" text="Ok" color="secondary" @click="confirmClearCookies">
+                <v-btn class="ms-auto" :text="t('common.ok')" color="secondary" @click="confirmClearCookies">
                 </v-btn>
-                <v-btn class="ms-auto" text="Cancel" @click="showClearCookiesModal = false"></v-btn>
+                <v-btn class="ms-auto" :text="t('common.cancel')" @click="showClearCookiesModal = false"></v-btn>
 
             </template>
         </v-card>
@@ -276,7 +276,7 @@ const createAccount = () => {
         name: 'CreateSocialAccount'
     });
 }
-//login social account
+//login tool account
 const loginAccount = (item: SocialAccountListData) => {
     socialaccountLogin({ id: item.id })
     tmpId.value = item.id
