@@ -21,6 +21,8 @@ import { log } from "@/modules/Logger";
 import type { LaunchOptions } from "puppeteer";
 import type { YellowPagesTaskProxyConfig } from "@/entityTypes/yellowPagesTaskProxyType";
 import { buildPuppeteerProxyLaunchPieces } from "@/utils/yellowPagesProxyLaunch";
+import { yellowPagesScraperInboundSchema } from "@/schemas/worker/yellowPagesScraper";
+import { parseWorkerMessage } from "@/schemas/worker/_shared";
 import { executePuppeteerAction } from "@/childprocess/utils/ObserveExecuteExecutor";
 import { runObserveExecuteLoop } from "@/childprocess/utils/ObserveExecuteLoop";
 import { BrowserManager } from "@/modules/browserManager";
@@ -7562,8 +7564,22 @@ const parentPort = (
 ).parentPort;
 if (parentPort) {
   parentPort.on("message", async (e: { data: string }) => {
-    log.info(e);
-    const message = JSON.parse(e.data);
+    const raw = JSON.parse(e.data) as unknown;
+    const validation = parseWorkerMessage(
+      raw,
+      yellowPagesScraperInboundSchema()
+    );
+    if (!validation.success) {
+      log.warn(
+        "[YellowPagesScraper] dropped malformed message:",
+        validation.error
+      );
+      return;
+    }
+    // Validated by Zod at the boundary (R4.6); handler internals use the
+    // pre-validated data with their existing logic.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const message: any = validation.data;
     log.info("📨 Received message:", message.type);
 
     if (message.type === "START" && message.taskData && message.platformInfo) {
