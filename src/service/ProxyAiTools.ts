@@ -41,7 +41,11 @@ import {
   type ProxyImportToolResult,
   type ProxyImportInvalidRow,
   type ProxyProtocol,
+  type ProxyCheckToolResult,
+  type ProxyCheckItemResult,
+  proxyCheckSchema,
 } from "@/entityTypes/proxyAiToolTypes";
+import type { SkillExecutionContext } from "@/entityTypes/skillTypes";
 
 /**
  * Import wrapper validates only array length and duplicate policy here; each
@@ -169,6 +173,27 @@ function checkExpectedMatch(
     }
   }
   return undefined;
+}
+
+/** Filter enriched list records by optional status/googlePass, returning ids. */
+function filterRecordsByCheckStatus(
+  records: readonly ProxyListEntity[],
+  status: "unknown" | "pass" | "failure" | undefined,
+  googlePass: "not_checked" | "pass" | "fail" | undefined
+): number[] {
+  const ids: number[] = [];
+  for (const record of records) {
+    if (status !== undefined && basicStatusOf(record) !== status) {
+      continue;
+    }
+    if (googlePass !== undefined && googlePassOf(record) !== googlePass) {
+      continue;
+    }
+    if (record.id !== undefined) {
+      ids.push(record.id);
+    }
+  }
+  return ids;
 }
 
 // ---------------------------------------------------------------------------
@@ -624,6 +649,158 @@ export class ProxyAiTools {
   }
 
   /**
+   * Validate stored proxies and update check status. MVP runs synchronously
+   * with a small-batch limit per mode (basic <= 20, google/both <= 5); larger
+   * scopes return UNSUPPORTED_OPERATION until async job wiring is added.
+   * Progress is emitted via the skill execution context when available.
+   */
+  async checkProxies(
+    args: Record<string, unknown>,
+    context?: SkillExecutionContext
+  ): Promise<ProxyCheckToolResult | ProxyToolError> {
+    let input;
+    try {
+      input = proxyCheckSchema.parse(args);
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return mapZodError(error);
+      }
+      throw error;
+    }
+
+    const module = this.getProxyModule();
+    const controller = this.getProxyController();
+    const emit = context?.emitProgress;
+    const limit = input.mode === "basic" ? 20 : 5;
+
+    let targetIds: number[] | undefined;
+    let useCheckAll = false;
+    let expectedCount: number;
+
+    if (input.proxy_ids) {
+      targetIds = [...input.proxy_ids];
+      expectedCount = targetIds.length;
+    } else if (input.check_all) {
+      useCheckAll = true;
+      const count = await module.getProxycount();
+      expectedCount = count;
+      if (count > limit) {
+        return proxyToolError(
+          "UNSUPPORTED_OPERATION",
+          `Sync check supports up to ${limit} proxies for mode "${input.mode}"; ${count} are stored. Narrow the scope with proxy_ids or filters.`
+        );
+      }
+    } else if (input.filters) {
+      const records = await this.boundedScan(controller, input.filters.search);
+      targetIds = filterRecordsByCheckStatus(
+        records,
+        input.filters.status,
+        input.filters.googlePass
+      );
+      expectedCount = targetIds.length;
+    } else {
+      return proxyToolError(
+        "INVALID_INPUT",
+        "No check target selector provided."
+      );
+    }
+
+    if (targetIds !== undefined && targetIds.length > limit) {
+      return proxyToolError(
+        "UNSUPPORTED_OPERATION",
+        `Sync check supports up to ${limit} proxies for mode "${input.mode}"; ${targetIds.length} were selected. Split the request.`
+      );
+    }
+
+    emit?.({
+      phase: "running",
+      message: `Checking ${expectedCount} proxy/proxies`,
+      progress: 0,
+      partialCount: 0,
+      expectedCount,
+    });
+
+    const batch = await controller.checkProxyBatch({
+      ...(targetIds !== undefined
+        ? { proxyIds: targetIds }
+        : { checkAll: true }),
+      ...(useCheckAll ? { checkAll: true } : {}),
+      mode: input.mode,
+      timeoutMs: input.timeout_ms,
+      concurrency: input.concurrency,
+      onProgress: (p) =>
+        emit?.({
+          phase: "running",
+          message: `Checked ${p.checked} of ${p.total}`,
+          progress:
+            p.total > 0 ? Math.round((p.checked / p.total) * 100) : null,
+          partialCount: p.checked,
+          expectedCount: p.total,
+        }),
+    });
+
+    emit?.({
+      phase: "finalizing",
+      message: `Finalizing ${batch.results.length} results`,
+      progress: 100,
+      partialCount: batch.results.length,
+      expectedCount,
+    });
+
+    // Load redacted summaries for each checked proxy.
+    const detailMap = new Map<number, SafeProxySummary | null>();
+    for (const item of batch.results) {
+      if (!detailMap.has(item.proxyId)) {
+        const detail = await module.getProxyDetail(item.proxyId);
+        if (detail.status && detail.data && detail.data.id !== undefined) {
+          detailMap.set(item.proxyId, summaryFromDetail(detail.data));
+        } else {
+          detailMap.set(item.proxyId, null);
+        }
+      }
+    }
+
+    let basicPassCount = 0;
+    let basicFailCount = 0;
+    let googlePassCount = 0;
+    let googleFailCount = 0;
+    const results: ProxyCheckItemResult[] = [];
+    for (const item of batch.results) {
+      const proxy = detailMap.get(item.proxyId);
+      if (proxy) {
+        results.push({
+          proxy,
+          ...(item.basic !== undefined ? { basic: item.basic } : {}),
+          ...(item.googlePass !== undefined
+            ? { googlePass: item.googlePass }
+            : {}),
+          ...(item.error !== undefined ? { error: item.error } : {}),
+        });
+      }
+      if (item.basic === "pass") {
+        basicPassCount += 1;
+      } else if (item.basic === "failure") {
+        basicFailCount += 1;
+      }
+      if (item.googlePass === "pass") {
+        googlePassCount += 1;
+      } else if (item.googlePass === "fail") {
+        googleFailCount += 1;
+      }
+    }
+
+    return {
+      success: true,
+      checkedCount: results.length,
+      basicPassCount,
+      basicFailCount,
+      googlePassCount,
+      googleFailCount,
+      results,
+    };
+  }
+
+  /**
    * Fetch up to BOUNDED_SCAN_LIMIT enriched records across pages. Used when
    * SQL-level status filtering is unavailable.
    */
@@ -706,4 +883,11 @@ export async function importProxiesForAi(
   args: Record<string, unknown>
 ): Promise<ProxyImportToolResult | ProxyToolError> {
   return getDefaultTools().importProxies(args);
+}
+
+export async function checkProxiesForAi(
+  args: Record<string, unknown>,
+  context?: SkillExecutionContext
+): Promise<ProxyCheckToolResult | ProxyToolError> {
+  return getDefaultTools().checkProxies(args, context);
 }

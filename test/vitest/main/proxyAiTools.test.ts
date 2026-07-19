@@ -10,6 +10,8 @@ import type {
   ImportProxyResp,
 } from "@/entityTypes/proxyType";
 import type { CommonApiresp } from "@/entityTypes/commonType";
+import type { ProxyCheckItemInternal } from "@/entityTypes/proxyAiToolTypes";
+import type { SkillExecutionContext } from "@/entityTypes/skillTypes";
 
 function makeListRecord(
   over: Partial<ProxyListEntity> & { id: number }
@@ -555,5 +557,127 @@ describe("ProxyAiTools.importProxies", () => {
     }
     expect(result.code).toBe("IMPORT_FAILED");
     expect(importProxy).not.toHaveBeenCalled();
+  });
+});
+
+describe("ProxyAiTools.checkProxies", () => {
+  function makeCheckDeps(opts: {
+    count?: number;
+    detail?: (id: number) => ProxyEntity | null;
+    batch?: readonly ProxyCheckItemInternal[];
+  }) {
+    const getProxycount = vi.fn(async () => opts.count ?? 0);
+    const getProxyDetail = vi.fn(async (id: number) => {
+      const data = opts.detail
+        ? opts.detail(id)
+        : ({
+            id,
+            host: `h-${id}`,
+            port: "8080",
+            protocol: "http",
+          } as ProxyEntity);
+      return data
+        ? ({
+            status: true,
+            code: 200,
+            msg: "ok",
+            data,
+          } as CommonApiresp<ProxyEntity>)
+        : { status: false, code: 404, msg: "no" };
+    });
+    const results = opts.batch ?? [];
+    const checkProxyBatch = vi.fn(async () => ({
+      total: results.length,
+      checked: results.length,
+      results,
+    }));
+    return {
+      proxyModule: { getProxycount, getProxyDetail },
+      proxyController: { checkProxyBatch },
+      checkProxyBatch,
+    };
+  }
+
+  it("rejects when no target selector is provided", async () => {
+    const deps = makeCheckDeps({});
+    const tools = makeTools(deps);
+    const result = await tools.checkProxies({ mode: "basic" });
+    expect(result.success).toBe(false);
+    if (result.success) {
+      return;
+    }
+    expect(result.code).toBe("INVALID_INPUT");
+  });
+
+  it("rejects when multiple selectors are provided", async () => {
+    const deps = makeCheckDeps({});
+    const tools = makeTools(deps);
+    const result = await tools.checkProxies({
+      proxy_ids: [1],
+      check_all: true,
+      mode: "basic",
+    });
+    expect(result.success).toBe(false);
+    if (result.success) {
+      return;
+    }
+    expect(result.code).toBe("INVALID_INPUT");
+  });
+
+  it("returns UNSUPPORTED_OPERATION when basic mode exceeds 20 ids", async () => {
+    const deps = makeCheckDeps({});
+    const tools = makeTools(deps);
+    const result = await tools.checkProxies({
+      proxy_ids: Array.from({ length: 21 }, (_, i) => i + 1),
+      mode: "basic",
+    });
+    expect(result.success).toBe(false);
+    if (result.success) {
+      return;
+    }
+    expect(result.code).toBe("UNSUPPORTED_OPERATION");
+    expect(deps.checkProxyBatch).not.toHaveBeenCalled();
+  });
+
+  it("runs a small synchronous check and aggregates redacted results", async () => {
+    const deps = makeCheckDeps({
+      batch: [
+        { proxyId: 10, basic: "pass", googlePass: "pass" },
+        { proxyId: 11, basic: "failure", error: "timeout" },
+      ],
+    });
+    const tools = makeTools(deps);
+    const result = await tools.checkProxies({
+      proxy_ids: [10, 11],
+      mode: "both",
+    });
+    expect(result.success).toBe(true);
+    if (!result.success) {
+      return;
+    }
+    expect(result.checkedCount).toBe(2);
+    expect(result.basicPassCount).toBe(1);
+    expect(result.basicFailCount).toBe(1);
+    expect(result.googlePassCount).toBe(1);
+    expect(result.results[0].proxy.hasPassword).toBe(false);
+    expect(deps.checkProxyBatch).toHaveBeenCalledWith(
+      expect.objectContaining({ mode: "both", proxyIds: [10, 11] })
+    );
+  });
+
+  it("emits progress events via context", async () => {
+    const deps = makeCheckDeps({
+      batch: [{ proxyId: 1, basic: "pass" }],
+    });
+    const tools = makeTools(deps);
+    const events: string[] = [];
+    const context = {
+      conversationId: "c",
+      toolCallId: "t",
+      emitProgress: (e: { phase: string }) => events.push(e.phase),
+    } as unknown as SkillExecutionContext;
+    await tools.checkProxies({ proxy_ids: [1], mode: "basic" }, context);
+    expect(events).toContain("running");
+    expect(events).toContain("finalizing");
   });
 });

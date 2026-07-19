@@ -49,6 +49,7 @@ import {
   updateProxyForAi,
   deleteProxyForAi,
   importProxiesForAi,
+  checkProxiesForAi,
 } from "@/service/ProxyAiTools";
 
 // ---------------------------------------------------------------------------
@@ -2260,6 +2261,62 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     source: "built-in",
     execute: async (args) => {
       const result = await importProxiesForAi(args);
+      return {
+        success: result.success,
+        result: result as unknown as Record<string, unknown>,
+      };
+    },
+  },
+  {
+    name: "proxy_check",
+    description:
+      "Validate stored proxies and update their check status. Provide EXACTLY ONE target: proxy_ids (a few IDs), check_all, or filters (status/googlePass/search). mode 'basic' = reachability only; 'google' = Google pass only; 'both' (default) = basic then Google only if basic passes. MVP runs synchronously: basic allows up to 20 proxies, google/both up to 5; larger scopes are rejected. Requires confirmation because it performs network/browser checks. Never reveals passwords.",
+    parameters: {
+      type: "object",
+      properties: {
+        proxy_ids: {
+          type: "array",
+          items: { type: "number" },
+          description: "Exact proxy IDs to check.",
+        },
+        check_all: {
+          type: "boolean",
+          description: "Check all stored proxies.",
+        },
+        filters: {
+          type: "object",
+          properties: {
+            status: { type: "string", enum: ["unknown", "pass", "failure"] },
+            googlePass: {
+              type: "string",
+              enum: ["not_checked", "pass", "fail"],
+            },
+            search: { type: "string" },
+          },
+        },
+        mode: {
+          type: "string",
+          enum: ["basic", "google", "both"],
+          default: "both",
+        },
+        timeout_ms: {
+          type: "number",
+          description: "Per-proxy timeout, 1000-60000. Default 15000.",
+        },
+        concurrency: {
+          type: "number",
+          description: "Parallel checks, 1-10. Default 3.",
+        },
+      },
+      required: [],
+    },
+    tier: "main",
+    requiresConfirmation: true,
+    permissionCategory: "automation",
+    source: "built-in",
+    timeoutClass: "network",
+    execute: async (args, context) => {
+      const result = await checkProxiesForAi(args, context);
       return {
         success: result.success,
         result: result as unknown as Record<string, unknown>,
