@@ -723,6 +723,32 @@ export class ProxyController {
     }
     return ids;
   }
+
+  /**
+   * Return IDs of proxies whose latest check matches the failure type:
+   * - basic: latest basic reachability check failed
+   * - google: latest Google pass check failed
+   * - either: union of both
+   * Used by the AI remove-failed tool to enumerate cleanup candidates.
+   */
+  public async getFailedProxyCandidateIds(
+    failureType: "basic" | "google" | "either"
+  ): Promise<number[]> {
+    const ids = new Set<number>();
+    if (failureType === "basic" || failureType === "either") {
+      const basic = await this.proxyCheckdb.getProxyByStatus(
+        proxyCheckStatus.Failure
+      );
+      basic.forEach((p) => ids.add(p.proxy_id));
+    }
+    if (failureType === "google" || failureType === "either") {
+      const google = await this.proxyCheckdb.getProxyByGooglePassStatus(
+        googlePassStatus.Fail
+      );
+      google.forEach((p) => ids.add(p.proxy_id));
+    }
+    return [...ids];
+  }
   public async getProxylist(
     page: number,
     size: number,

@@ -681,3 +681,74 @@ describe("ProxyAiTools.checkProxies", () => {
     expect(events).toContain("finalizing");
   });
 });
+
+describe("ProxyAiTools.removeFailedProxies", () => {
+  function makeRemoveDeps(opts: {
+    candidateIds: number[];
+    detail?: (id: number) => ProxyEntity | null;
+    deleteOk?: (id: number) => boolean;
+  }) {
+    const getFailedProxyCandidateIds = vi.fn(async () => opts.candidateIds);
+    const deleteProxyWithCheck = vi.fn(async (id: number) =>
+      opts.deleteOk ? opts.deleteOk(id) : true
+    );
+    const getProxyDetail = vi.fn(async (id: number) => {
+      const data = opts.detail
+        ? opts.detail(id)
+        : ({
+            id,
+            host: `h-${id}`,
+            port: "8080",
+            protocol: "http",
+          } as ProxyEntity);
+      return data
+        ? ({
+            status: true,
+            code: 200,
+            msg: "ok",
+            data,
+          } as CommonApiresp<ProxyEntity>)
+        : { status: false, code: 404, msg: "no" };
+    });
+    return {
+      proxyModule: { getProxyDetail },
+      proxyController: { getFailedProxyCandidateIds, deleteProxyWithCheck },
+      deleteProxyWithCheck,
+      getFailedProxyCandidateIds,
+    };
+  }
+
+  it("dry run lists candidates without deleting", async () => {
+    const deps = makeRemoveDeps({ candidateIds: [10, 11, 12] });
+    const tools = makeTools(deps);
+    const result = await tools.removeFailedProxies({ dry_run: true });
+
+    expect(result.success).toBe(true);
+    if (!result.success) {
+      return;
+    }
+    expect(result.dryRun).toBe(true);
+    expect(result.candidateCount).toBe(3);
+    expect(result.deletedCount).toBe(0);
+    expect(result.proxies).toHaveLength(3);
+    expect(deps.deleteProxyWithCheck).not.toHaveBeenCalled();
+  });
+
+  it("deletes candidates up to max_delete when not a dry run", async () => {
+    const deps = makeRemoveDeps({ candidateIds: [10, 11, 12] });
+    const tools = makeTools(deps);
+    const result = await tools.removeFailedProxies({
+      dry_run: false,
+      max_delete: 2,
+    });
+
+    expect(result.success).toBe(true);
+    if (!result.success) {
+      return;
+    }
+    expect(result.dryRun).toBe(false);
+    expect(result.candidateCount).toBe(3);
+    expect(result.deletedCount).toBe(2);
+    expect(deps.deleteProxyWithCheck).toHaveBeenCalledTimes(2);
+  });
+});

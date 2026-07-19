@@ -43,7 +43,9 @@ import {
   type ProxyProtocol,
   type ProxyCheckToolResult,
   type ProxyCheckItemResult,
+  type ProxyRemoveFailedToolResult,
   proxyCheckSchema,
+  proxyRemoveFailedSchema,
 } from "@/entityTypes/proxyAiToolTypes";
 import type { SkillExecutionContext } from "@/entityTypes/skillTypes";
 
@@ -801,6 +803,66 @@ export class ProxyAiTools {
   }
 
   /**
+   * Delete proxies whose latest check failed. Defaults to a dry run so the
+   * assistant can show candidates before the user authorizes deletion. Respects
+   * max_delete as a hard cap. Requires exact proxy IDs (resolved from check
+   * records) — no fuzzy deletion.
+   */
+  async removeFailedProxies(
+    args: Record<string, unknown>
+  ): Promise<ProxyRemoveFailedToolResult | ProxyToolError> {
+    let input;
+    try {
+      input = proxyRemoveFailedSchema.parse(args);
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return mapZodError(error);
+      }
+      throw error;
+    }
+
+    const module = this.getProxyModule();
+    const controller = this.getProxyController();
+    const candidateIds = await controller.getFailedProxyCandidateIds(
+      input.failureType
+    );
+    const limitedIds = candidateIds.slice(0, input.max_delete);
+
+    const candidates: SafeProxySummary[] = [];
+    for (const id of limitedIds) {
+      const detail = await module.getProxyDetail(id);
+      if (detail.status && detail.data && detail.data.id !== undefined) {
+        candidates.push(summaryFromDetail(detail.data));
+      }
+    }
+
+    if (input.dry_run) {
+      return {
+        success: true,
+        dryRun: true,
+        candidateCount: candidateIds.length,
+        deletedCount: 0,
+        proxies: candidates,
+      };
+    }
+
+    const deleted: SafeProxySummary[] = [];
+    for (const summary of candidates) {
+      const ok = await controller.deleteProxyWithCheck(summary.id);
+      if (ok) {
+        deleted.push(summary);
+      }
+    }
+    return {
+      success: true,
+      dryRun: false,
+      candidateCount: candidateIds.length,
+      deletedCount: deleted.length,
+      proxies: deleted,
+    };
+  }
+
+  /**
    * Fetch up to BOUNDED_SCAN_LIMIT enriched records across pages. Used when
    * SQL-level status filtering is unavailable.
    */
@@ -890,4 +952,10 @@ export async function checkProxiesForAi(
   context?: SkillExecutionContext
 ): Promise<ProxyCheckToolResult | ProxyToolError> {
   return getDefaultTools().checkProxies(args, context);
+}
+
+export async function removeFailedProxiesForAi(
+  args: Record<string, unknown>
+): Promise<ProxyRemoveFailedToolResult | ProxyToolError> {
+  return getDefaultTools().removeFailedProxies(args);
 }

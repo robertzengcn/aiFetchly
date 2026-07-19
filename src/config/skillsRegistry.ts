@@ -50,6 +50,7 @@ import {
   deleteProxyForAi,
   importProxiesForAi,
   checkProxiesForAi,
+  removeFailedProxiesForAi,
 } from "@/service/ProxyAiTools";
 
 // ---------------------------------------------------------------------------
@@ -2317,6 +2318,42 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     timeoutClass: "network",
     execute: async (args, context) => {
       const result = await checkProxiesForAi(args, context);
+      return {
+        success: result.success,
+        result: result as unknown as Record<string, unknown>,
+      };
+    },
+  },
+  {
+    name: "proxy_remove_failed",
+    description:
+      "Delete proxies whose latest check failed. ALWAYS run with dry_run=true first to list candidates, then confirm with the user before deleting. failureType 'basic' (default) deletes proxies that failed reachability; 'google' deletes Google-pass failures; 'either' deletes both. max_delete caps the count. Requires confirmation. Use proxy_list with a status filter for a no-side-effect view of failures.",
+    parameters: {
+      type: "object",
+      properties: {
+        failureType: {
+          type: "string",
+          enum: ["basic", "google", "either"],
+          default: "basic",
+        },
+        dry_run: {
+          type: "boolean",
+          default: true,
+          description: "If true, list candidates without deleting.",
+        },
+        max_delete: {
+          type: "number",
+          description: "Hard cap on deletions, 1-500. Default 100.",
+        },
+      },
+      required: [],
+    },
+    tier: "main",
+    requiresConfirmation: true,
+    permissionCategory: "automation",
+    source: "built-in",
+    execute: async (args) => {
+      const result = await removeFailedProxiesForAi(args);
       return {
         success: result.success,
         result: result as unknown as Record<string, unknown>,
