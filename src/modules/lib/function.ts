@@ -138,78 +138,7 @@ export const hash = Math.floor(Math.random() * 90000) + 10000;
 export function showNotification(title: string, body: string) {
   new Notification({ title: title, body: body }).show();
 }
-//get pip package list
-export function checkPipPackage(): string {
-  try {
-    return execSync("pip list", { encoding: "utf8" });
-  } catch (error) {
-    if (error instanceof Error) {
-      log.error(`Error executing command: ${error.message}`);
-    }
-    return "";
-  }
-}
-//install pip package, event driver
-export function installPipPackage(
-  packageName: string,
-  version: string,
-  errorcall?: (error: Error) => void,
-  stdoutCall?: (stdout: string) => void,
-  stderrCall?: (stderr: string) => void
-): void {
-  // Security: pass arguments as an array to execFile so packageName/version
-  // can never be interpreted as shell syntax (command injection).
-  execFile(
-    "pip",
-    ["install", `${packageName}==${version}`],
-    (error: Error | null, stdout: string, stderr: string) => {
-      if (error) {
-        // console.error(`exec error: ${error}`);
-        if (errorcall) {
-          errorcall(error);
-        }
-        // return;
-      }
-      if (stdoutCall) {
-        stdoutCall(stdout);
-      }
-      if (stderrCall) {
-        stderrCall(stderr);
-      }
-    }
-  );
-}
-//uninstall pip package
-export function uninstallPipPackage(
-  packageName: string,
-  errorcall?: (error: Error) => void,
-  stdoutCall?: (stdout: string) => void,
-  stderrCall?: (stderr: string) => void
-): void {
-  // Security: pass arguments as an array to execFile so packageName
-  // can never be interpreted as shell syntax (command injection).
-  execFile(
-    "pip",
-    ["uninstall", packageName, "-y"],
-    (error: Error | null, stdout: string, stderr: string) => {
-      if (error) {
-        log.error(`exec error: ${error}`);
-        if (errorcall) {
-          errorcall(error);
-        }
-        return;
-      }
-      log.info(`stdout: ${stdout}`);
-      log.error(`stderr: ${stderr}`);
-      if (stdoutCall) {
-        stdoutCall(stdout);
-      }
-      if (stderrCall) {
-        stderrCall(stderr);
-      }
-    }
-  );
-}
+export { checkPipPackage, installPipPackage, uninstallPipPackage } from "./pipUtils";
 //write data to yaml file
 // export function writeYamlFile(filepath: string, data: object) {
 
@@ -511,76 +440,7 @@ export function WriteLog(logPath: string, data: string): void {
 export function getRandomValues(buf: Uint8Array): Uint8Array {
   return crypto.randomFillSync(buf);
 }
-//convert proxy entity to url
-export function proxyEntityToUrl(proxyEntity: ProxyParseItem): string {
-  if (!proxyEntity.protocol) {
-    throw new Error("protocol is required");
-  }
-  if (!proxyEntity.host) {
-    throw new Error("host is required");
-  }
-  if (!proxyEntity.port) {
-    throw new Error("port is required");
-  }
-  let proxyUrl = "";
-  if (proxyEntity.protocol.includes("http")) {
-    if (
-      proxyEntity.user &&
-      proxyEntity.user?.length > 0 &&
-      proxyEntity.pass &&
-      proxyEntity.pass?.length > 0
-    ) {
-      proxyUrl = `${proxyEntity.protocol}://${proxyEntity.user}:${proxyEntity.pass}@${proxyEntity.host}:${proxyEntity.port}`;
-    } else {
-      proxyUrl = `${proxyEntity.protocol}://${proxyEntity.host}:${proxyEntity.port}`;
-    }
-  } else if (proxyEntity.protocol.includes("socks")) {
-    // let socketType:4|5=5
-    // if(proxyEntity.protocol.includes('4')){
-    //     let socketType=4
-    // }
-    proxyUrl = `${proxyEntity.protocol}://${proxyEntity.host}:${proxyEntity.port}`;
-  } else {
-    throw new Error("protocol is not valid");
-  }
-  return proxyUrl;
-}
-export function convertProxyServertourl(proxyServer: ProxyServer): string {
-  if (!proxyServer.server) {
-    throw new Error("server is required");
-  }
-  let proxyUrl = "";
-  if (
-    proxyServer.username &&
-    proxyServer.username?.length > 0 &&
-    proxyServer.password &&
-    proxyServer.password?.length > 0
-  ) {
-    proxyUrl = `${proxyServer.server}://${proxyServer.username}:${proxyServer.password}`;
-  } else {
-    proxyUrl = `${proxyServer.server}`;
-  }
-  return proxyUrl;
-}
-//convert proxy entity to proxy server
-export function proxyEntityToServer(proxyEntity: ProxyParseItem): ProxyServer {
-  if (!proxyEntity.protocol) {
-    throw new Error("protocol is required");
-  }
-  if (!proxyEntity.host) {
-    throw new Error("host is required");
-  }
-  if (!proxyEntity.port) {
-    throw new Error("port is required");
-  }
-  const proxyUrl = `${proxyEntity.protocol}://${proxyEntity.host}:${proxyEntity.port}`;
-  const rest: ProxyServer = {
-    server: proxyUrl,
-    username: proxyEntity.user,
-    password: proxyEntity.pass,
-  };
-  return rest;
-}
+export { proxyEntityToUrl, convertProxyServertourl, proxyEntityToServer } from "./proxyUtils";
 export function getDomain(url: string) {
   try {
     const parsedUrl = new URL(url);
