@@ -16,6 +16,9 @@ AiFetchly is an AI-powered marketing automation Electron application for social 
 - `yarn test` - Run test suite with Mocha
 - `yarn tsc` - Type check with TypeScript (watch mode)
 
+### Local Testing URL
+- The application can be tested in a browser at `http://localhost:5173` after running `yarn dev`.
+
 ### Specialized Commands
 - `yarn login -c <campaignId>` - Login to social platform for specific campaign
 - `yarn task -t <taskDetails>` - Run specific task

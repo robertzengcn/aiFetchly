@@ -119,9 +119,9 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     description:
       "Scrape search result URLs from a supported engine (Google, Bing, or Yandex) using a query string. Returns titles, snippets, and URLs. This tool is for collecting URLs from a SERP, not for answering questions from page text.\n\n" +
       "MANDATORY WORKFLOW for google or yandex (these engines require login cookies):\n" +
-      '  1. FIRST call `list_social_accounts` with platform="google" (or platform="yandex") to obtain a valid account ID. Only accounts with `cookies: true` and a successful `status` are usable.\n' +
-      "  2. THEN call this tool with that account ID in the `account` field.\n" +
-      'Do NOT call this tool with search_engine "google" or "yandex" unless you already have a valid `account` ID obtained from `list_social_accounts`. Calls without a valid account ID will fail.\n' +
+      '  1. FIRST call `list_social_accounts` with platform="google" (or platform="yandex") to obtain a valid tool account ID. Only tool accounts with `cookies: true` and a successful `status` are usable.\n' +
+      "  2. THEN call this tool with that tool account ID in the `account` field.\n" +
+      'Do NOT call this tool with search_engine "google" or "yandex" unless you already have a valid tool account ID obtained from `list_social_accounts`. Calls without a valid tool account ID will fail.\n' +
       'For "bing": NO account is needed and NO login cookies are required. Do NOT call `list_social_accounts` and do NOT pass `account` when search_engine is "bing" — proceed directly with just the query.',
     parameters: {
       type: "object",
@@ -156,10 +156,10 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
         account: {
           type: "number",
           description:
-            "Social account ID used for authenticated scraping. " +
+            "Tool account ID used for authenticated scraping. " +
             "MANDATORY (no default) when search_engine is 'google' or 'yandex' — these engines require login cookies. " +
-            "You MUST obtain this ID by calling `list_social_accounts` first (filter by platform) and pick an account whose `cookies` field is true. " +
-            "Never invent or guess an account ID. " +
+            "You MUST obtain this ID by calling `list_social_accounts` first (filter by platform) and pick a tool account whose `cookies` field is true. " +
+            "Never invent or guess a tool account ID. " +
             "DO NOT call `list_social_accounts` and DO NOT pass `account` when search_engine is 'bing' — that engine needs no account.",
         },
       },
@@ -190,7 +190,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
             success: false,
             result: {
               error:
-                `An account (social account ID) is required when search_engine is "${engineRaw}". ` +
+                `A tool account ID is required when search_engine is "${engineRaw}". ` +
                 "Please provide the 'account' parameter and retry.",
             },
           };
@@ -2479,9 +2479,9 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
   {
     name: "list_social_accounts",
     description:
-      "List social/sender accounts that can be used as the `account` parameter for tools requiring authenticated scraping (e.g. scrape_urls_from_search_engine with google or yandex). " +
-      "Returns each account's id, platform (social_type), status, and whether login cookies are stored (cookies: true|false). " +
-      'Always call this BEFORE scrape_urls_from_search_engine when search_engine is "google" or "yandex" — you must pick an account with cookies=true and a valid status, then pass its id as the `account` argument.',
+      "List tool accounts that can be used as the `account` parameter for tools requiring authenticated scraping (e.g. scrape_urls_from_search_engine with google or yandex). " +
+      "Returns each tool account's id, platform (social_type), status, and whether login cookies are stored (cookies: true|false). " +
+      'Always call this BEFORE scrape_urls_from_search_engine when search_engine is "google" or "yandex" — you must pick a tool account with cookies=true and a valid status, then pass its id as the `account` argument.',
     parameters: {
       type: "object",
       properties: {
@@ -2492,7 +2492,8 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
         },
         search: {
           type: "string",
-          description: "Optional free-text filter on account user/name fields.",
+          description:
+            "Optional free-text filter on tool account user/name fields.",
         },
         page: {
           type: "number",
@@ -2574,7 +2575,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
         result: {
           total: resp.data?.total ?? 0,
           records,
-          hint: "Pick an account whose cookies=true. Pass its id as the `account` argument of scrape_urls_from_search_engine.",
+          hint: "Pick a tool account whose cookies=true. Pass its id as the `account` argument of scrape_urls_from_search_engine.",
         },
       };
     },

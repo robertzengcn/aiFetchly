@@ -936,7 +936,7 @@ export const constantRoutes: RouteRecordRaw[] = [
     name: "Socialaccount",
     meta: {
       visible: true,
-      title: "route.social_account",
+      title: "route.tool_account",
       icon: "mdi-account-multiple",
     },
     component: Layout,
@@ -950,7 +950,7 @@ export const constantRoutes: RouteRecordRaw[] = [
         name: "SocialAccount",
         meta: {
           visible: true,
-          title: "route.account_list",
+          title: "route.tool_account_list",
           icon: "mdi-account-details",
         },
       },
@@ -963,7 +963,7 @@ export const constantRoutes: RouteRecordRaw[] = [
         name: "editSocialAccount",
         meta: {
           visible: false,
-          title: "route.edit_account",
+          title: "route.edit_tool_account",
           icon: "mdi-account-edit",
         },
       },
@@ -976,7 +976,7 @@ export const constantRoutes: RouteRecordRaw[] = [
         name: "CreateSocialAccount",
         meta: {
           visible: false,
-          title: "route.add_account",
+          title: "route.add_tool_account",
           icon: "mdi-account-plus",
         },
       },

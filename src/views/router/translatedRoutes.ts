@@ -657,7 +657,7 @@ export const createTranslatedRoutes = (): RouteRecordRaw[] => {
       name: "Socialaccount",
       meta: {
         visible: true,
-        title: computed(() => t("router.social_account")),
+        title: computed(() => t("route.tool_account")),
         icon: "mdi-account-multiple",
       },
       component: Layout,
@@ -671,7 +671,7 @@ export const createTranslatedRoutes = (): RouteRecordRaw[] => {
           name: "SocialAccount",
           meta: {
             visible: true,
-            title: computed(() => t("router.account_list")),
+            title: computed(() => t("route.tool_account_list")),
             icon: "mdi-account-details",
           },
         },
@@ -684,7 +684,7 @@ export const createTranslatedRoutes = (): RouteRecordRaw[] => {
           name: "editSocialAccount",
           meta: {
             visible: false,
-            title: computed(() => t("router.edit_account")),
+            title: computed(() => t("route.edit_tool_account")),
             icon: "mdi-account-edit",
           },
         },
@@ -697,7 +697,7 @@ export const createTranslatedRoutes = (): RouteRecordRaw[] => {
           name: "CreateSocialAccount",
           meta: {
             visible: false,
-            title: computed(() => t("router.add_account")),
+            title: computed(() => t("route.add_tool_account")),
             icon: "mdi-account-plus",
           },
         },

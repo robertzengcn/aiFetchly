@@ -142,16 +142,19 @@ export const aiNavigationRouteManifest: readonly AiNavigationRouteManifestEntry[
     {
       routeName: "SocialAccount",
       path: "/socialaccount/list",
-      titleKey: "route.account_list",
+      titleKey: "route.tool_account_list",
       visible: true,
       aiNavigable: true,
       aiAliases: [
+        "tool account",
+        "tool accounts",
+        "tool account list",
         "social account",
         "social accounts",
         "account list",
         "social media account",
       ],
-      aiDescription: "Manage social media platform accounts",
+      aiDescription: "Manage tool platform accounts",
     },
     {
       routeName: "ScheduleList",
