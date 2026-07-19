@@ -53,49 +53,7 @@ export async function delay(time: number) {
     setTimeout(resolve, time);
   });
 }
-//get record date string for local db
-export function getRecorddatetime(): string {
-  const date = new Date();
-
-  return (
-    date.getFullYear().toString() +
-    "-" +
-    pad2(date.getMonth() + 1) +
-    "-" +
-    pad2(date.getDate()) +
-    " " +
-    pad2(date.getHours()) +
-    ":" +
-    pad2(date.getMinutes()) +
-    ":" +
-    pad2(date.getSeconds())
-  );
-}
-export function pad2(n: number): string {
-  if (n < 10) {
-    return "0" + n.toString();
-  } else {
-    return n.toString();
-  }
-}
-//return date string
-export function getdate(): string {
-  const date = new Date();
-
-  return (
-    date.getFullYear().toString() +
-    "-" +
-    pad2(date.getMonth() + 1) +
-    "-" +
-    pad2(date.getDate()) +
-    " " +
-    pad2(date.getHours()) +
-    ":" +
-    pad2(date.getMinutes()) +
-    ":" +
-    pad2(date.getSeconds())
-  );
-}
+export { getRecorddatetime, pad2, getdate } from "./datetime";
 
 export function getUserhome(): string | undefined {
   switch (process.platform) {
