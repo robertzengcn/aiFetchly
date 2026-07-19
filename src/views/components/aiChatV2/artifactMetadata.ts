@@ -46,3 +46,41 @@ export function extractArtifactMetadata(
     openImmediately: raw.openImmediately !== false,
   };
 }
+
+/** Message shape accepted by ensureArtifactMetadata. */
+export interface MessageWithMaybeArtifactMetadata {
+  messageType?: unknown;
+  metadata?: {
+    toolResult?: unknown;
+    artifact?: AIArtifactToolMetadata;
+  };
+}
+
+/**
+ * Derive a top-level `metadata.artifact` pointer for a tool-result message
+ * that lacks one. Persisted tool-result rows store only the raw `toolResult`
+ * (with the artifact nested under `.artifact`); the live in-memory path sets
+ * the shortcut directly, but history-loaded messages do not. Without this,
+ * the artifact card disappears after closing and reopening a conversation
+ * (PRD ART-009, acceptance criterion #5). Returns the message unchanged when
+ * no artifact is present or the shortcut already exists.
+ */
+export function ensureArtifactMetadata<
+  T extends MessageWithMaybeArtifactMetadata
+>(message: T): T {
+  const meta = message.metadata;
+  if (
+    meta &&
+    !meta.artifact &&
+    meta.toolResult &&
+    typeof meta.toolResult === "object"
+  ) {
+    const artifact = extractArtifactMetadata(
+      meta.toolResult as Record<string, unknown>
+    );
+    if (artifact) {
+      return { ...message, metadata: { ...meta, artifact } };
+    }
+  }
+  return message;
+}
