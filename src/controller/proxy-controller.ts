@@ -9,6 +9,13 @@ import {
   ProxyCheckres,
   ProxylistResp,
 } from "@/entityTypes/proxyType";
+import {
+  runWithConcurrency,
+  type ProxyCheckBatchOptions,
+  type ProxyCheckBatchResult,
+  type ProxyCheckItemInternal,
+  type ProxyCheckMode,
+} from "@/entityTypes/proxyAiToolTypes";
 import * as http from "http";
 import * as https from "https";
 import * as url from "url";
@@ -427,8 +434,13 @@ export class ProxyController {
     proxyID: number,
     timeout?: number
   ): Promise<void> {
-    console.log("updateProxyStatus");
-    console.log(proxyEntity);
+    // Redacted log: never print raw credentials.
+    console.log("updateProxyStatus", {
+      host: proxyEntity.host,
+      port: proxyEntity.port,
+      protocol: proxyEntity.protocol,
+      hasPassword: Boolean(proxyEntity.pass),
+    });
     await this.checkProxy(proxyEntity, timeout)
       .then(async (res) => {
         if (res.status) {
@@ -491,87 +503,225 @@ export class ProxyController {
     timeout?: number,
     proxyIds?: number[]
   ): Promise<void> {
-    // If specific proxy IDs are provided, only check those
-    if (proxyIds && proxyIds.length > 0) {
-      const total = proxyIds.length;
-      let checked = 0;
-
-      for (const proxyId of proxyIds) {
-        try {
-          // Get proxy details by ID
-          const proxyDetail = await this.proxyapi.getProxyDetail(proxyId);
-          if (proxyDetail.status && proxyDetail.data) {
-            const proxy = proxyDetail.data;
-            if (proxy.host && proxy.port && proxy.protocol) {
-              const element: ProxyParseItem = {
-                host: proxy.host,
-                port: proxy.port,
-                protocol: proxy.protocol,
-                user: proxy.user,
-                pass: proxy.pass,
-              };
-              await this.updateProxyStatus(element, proxyId, timeout).catch(
-                (error) => {
-                  console.log(error);
-                }
-              );
-            }
-          }
-        } catch (error) {
-          console.log(`Error checking proxy ${proxyId}:`, error);
-        }
-
-        checked++;
+    // Thin wrapper over checkProxyBatch so the UI path and the AI tool path
+    // share one reliable, awaited, concurrency-limited implementation.
+    const useIds = proxyIds !== undefined && proxyIds.length > 0;
+    await this.checkProxyBatch({
+      ...(useIds ? { proxyIds } : { checkAll: true }),
+      mode: "both",
+      timeoutMs: timeout ?? 15000,
+      concurrency: 3,
+      onProgress: (progress) => {
         if (callback) {
-          callback(checked, total);
+          callback(progress.checked, progress.total);
         }
-      }
+      },
+    });
+    if (finishcall) {
+      finishcall();
+    }
+  }
 
-      if (finishcall) {
-        finishcall();
+  /**
+   * Check a batch of proxies with controlled concurrency. Replaces the old
+   * async-forEach "check all" path that could report completion before all
+   * checks settled. Per-proxy failures do not abort the batch; only setup
+   * errors (e.g. child process missing) throw. Database status updates happen
+   * in the main process via ProxyCheckModel.
+   */
+  public async checkProxyBatch(
+    options: ProxyCheckBatchOptions
+  ): Promise<ProxyCheckBatchResult> {
+    const { mode, timeoutMs, concurrency, onProgress } = options;
+
+    let targetIds: number[];
+    if (options.proxyIds !== undefined && options.proxyIds.length > 0) {
+      targetIds = [...options.proxyIds];
+    } else if (options.checkAll) {
+      targetIds = await this.collectAllProxyIds();
+    } else {
+      targetIds = [];
+    }
+    const total = targetIds.length;
+
+    interface DetailedTarget {
+      id: number;
+      proxy: ProxyParseItem;
+    }
+    const detailed: DetailedTarget[] = [];
+    const setupErrors: ProxyCheckItemInternal[] = [];
+    for (const id of targetIds) {
+      try {
+        const proxyDetail = await this.proxyapi.getProxyDetail(id);
+        const proxy = proxyDetail.status ? proxyDetail.data : undefined;
+        if (proxy && proxy.host && proxy.port && proxy.protocol) {
+          detailed.push({
+            id,
+            proxy: {
+              host: proxy.host,
+              port: proxy.port,
+              protocol: proxy.protocol,
+              user: proxy.user,
+              pass: proxy.pass,
+            },
+          });
+        } else {
+          setupErrors.push({
+            proxyId: id,
+            error: "proxy not found or missing host/port/protocol",
+          });
+        }
+      } catch (error) {
+        setupErrors.push({
+          proxyId: id,
+          error:
+            error instanceof Error ? error.message : "failed to load proxy",
+        });
       }
-      return;
     }
 
-    // Otherwise, check all proxies (original behavior)
-    const proxyCount = await this.proxyapi.getProxycount();
-    if (proxyCount > 0) {
-      const size = 10;
-      //get all proxy
-      for (let i = 0; i < proxyCount; i = i + size) {
-        //check each proxy
-        const res = await this.proxyapi.getProxylist(i, size, "");
+    let checked = 0;
+    const workerResults = await runWithConcurrency(
+      detailed,
+      concurrency,
+      async (item): Promise<ProxyCheckItemInternal> => {
+        const result = await this.runProxyCheck(
+          item.proxy,
+          item.id,
+          mode,
+          timeoutMs
+        );
+        checked += 1;
+        if (onProgress) {
+          onProgress({
+            checked,
+            total,
+            proxyId: item.id,
+            ...(result.basic !== undefined ? { basic: result.basic } : {}),
+            ...(result.googlePass !== undefined
+              ? { googlePass: result.googlePass }
+              : {}),
+            ...(result.error !== undefined ? { error: result.error } : {}),
+          });
+        }
+        const internal: ProxyCheckItemInternal = {
+          proxyId: item.id,
+          ...(result.basic !== undefined ? { basic: result.basic } : {}),
+          ...(result.googlePass !== undefined
+            ? { googlePass: result.googlePass }
+            : {}),
+          ...(result.error !== undefined ? { error: result.error } : {}),
+        };
+        return internal;
+      }
+    );
+
+    const checkedResults = workerResults.filter(
+      (r): r is ProxyCheckItemInternal => r !== undefined
+    );
+    return {
+      total,
+      checked: checkedResults.length + setupErrors.length,
+      results: [...setupErrors, ...checkedResults],
+    };
+  }
+
+  /**
+   * Run a single proxy check according to mode and persist status.
+   * - basic: reachability only.
+   * - google: Google pass only.
+   * - both: reachability first; Google only if basic passes.
+   * Never throws — network/browser failures become per-item error results.
+   */
+  private async runProxyCheck(
+    proxy: ProxyParseItem,
+    proxyId: number,
+    mode: ProxyCheckMode,
+    timeoutMs: number
+  ): Promise<ProxyCheckItemInternal> {
+    type MutableCheckItem = {
+      proxyId: number;
+      basic?: "pass" | "failure";
+      googlePass?: "pass" | "fail";
+      error?: string;
+    };
+    const result: MutableCheckItem = { proxyId };
+
+    const runBasic = mode === "basic" || mode === "both";
+    const runGoogle = mode === "google" || mode === "both";
+
+    let basicPassed = false;
+    if (runBasic) {
+      try {
+        const res = await this.checkProxy(proxy, timeoutMs);
         if (res.status) {
-          console.log(res);
-          if (res.data) {
-            res.data.records.forEach(async (item) => {
-              if (item.host && item.port && item.protocol) {
-                const element: ProxyParseItem = {
-                  host: item.host,
-                  port: item.port,
-                  protocol: item.protocol,
-                  user: item.username,
-                  pass: item.password,
-                };
-                console.log(element);
-                await this.updateProxyStatus(element, item.id!, timeout).catch(
-                  (error) => {
-                    console.log(error);
-                  }
-                );
-              }
-            });
-          }
+          result.basic = "pass";
+          basicPassed = true;
+          await this.proxyCheckdb.updateProxyCheck(
+            proxyId,
+            proxyCheckStatus.Success
+          );
+        } else {
+          result.basic = "failure";
+          await this.proxyCheckdb.updateProxyCheck(
+            proxyId,
+            proxyCheckStatus.Failure
+          );
         }
-        //})
-        if (callback) {
-          callback(i, proxyCount);
-        }
-      }
-      if (finishcall) {
-        finishcall();
+      } catch (error) {
+        result.basic = "failure";
+        result.error =
+          error instanceof Error ? error.message : "basic check failed";
+        await this.proxyCheckdb.updateProxyCheck(
+          proxyId,
+          proxyCheckStatus.Failure
+        );
       }
     }
+
+    const shouldCheckGoogle = runGoogle && (mode === "google" || basicPassed);
+    if (shouldCheckGoogle) {
+      try {
+        const passed = await this.checkGooglePass(proxy, timeoutMs);
+        result.googlePass = passed ? "pass" : "fail";
+        await this.proxyCheckdb.updateGooglePassStatus(
+          proxyId,
+          passed ? googlePassStatus.Pass : googlePassStatus.Fail
+        );
+      } catch (error) {
+        result.googlePass = "fail";
+        result.error =
+          error instanceof Error ? error.message : "google check failed";
+        await this.proxyCheckdb.updateGooglePassStatus(
+          proxyId,
+          googlePassStatus.Fail
+        );
+      }
+    }
+
+    return result;
+  }
+
+  /** Collect every stored proxy ID using correct 1-based pagination. */
+  private async collectAllProxyIds(): Promise<number[]> {
+    const count = await this.proxyapi.getProxycount();
+    const ids: number[] = [];
+    const size = 100;
+    for (let page = 1; (page - 1) * size < count; page += 1) {
+      const res = await this.proxyapi.getProxylist(page, size, "");
+      if (!res.status || !res.data || res.data.records.length === 0) {
+        break;
+      }
+      for (const record of res.data.records) {
+        if (record.id !== undefined) {
+          ids.push(record.id);
+        }
+      }
+      if (res.data.records.length < size) {
+        break;
+      }
+    }
+    return ids;
   }
   public async getProxylist(
     page: number,
