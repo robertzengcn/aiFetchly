@@ -98,20 +98,43 @@ function validateArgs(
 // Audit logging (FR-024)
 // ---------------------------------------------------------------------------
 
-/** Sanitize args for logging — strips sensitive values. */
-function sanitizeForLog(
+/**
+ * Keys whose values are redacted from tool audit logs. Covers proxy credentials
+ * (proxy AI tools) plus the common secret-bearing fields other tools may carry.
+ * Matched case-insensitively, ignoring separators (_, -).
+ */
+const SENSITIVE_KEY_RE =
+  /^(pass|password|passwd|pwd|secret|token|api[_-]?key|access[_-]?token|refresh[_-]?token|authorization|private[_-]?key|client[_-]?secret)$/i;
+
+function sanitizeValue(key: string, value: unknown): unknown {
+  if (typeof value === "string") {
+    if (SENSITIVE_KEY_RE.test(key)) {
+      return "[REDACTED]";
+    }
+    return value.length > 100
+      ? `${value.substring(0, 50)}...[truncated, ${value.length} chars]`
+      : value;
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => sanitizeValue(key, item));
+  }
+  if (value !== null && typeof value === "object") {
+    const nested: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      nested[k] = sanitizeValue(k, v);
+    }
+    return nested;
+  }
+  return value;
+}
+
+/** Sanitize args for logging — redacts sensitive keys and truncates long strings. */
+export function sanitizeForLog(
   args: Record<string, unknown>
 ): Record<string, unknown> {
   const sanitized: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(args)) {
-    if (typeof value === "string") {
-      sanitized[key] =
-        value.length > 100
-          ? `${value.substring(0, 50)}...[truncated, ${value.length} chars]`
-          : value;
-    } else {
-      sanitized[key] = value;
-    }
+    sanitized[key] = sanitizeValue(key, value);
   }
   return sanitized;
 }
