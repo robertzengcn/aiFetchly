@@ -482,7 +482,11 @@ export const proxyCheckSchema = z
 export type ProxyRemoveFailedInput = z.infer<typeof proxyRemoveFailedSchema>;
 export const proxyRemoveFailedSchema = z.object({
   failureType: z.enum(["basic", "google", "either"]).default("basic"),
-  dry_run: z.boolean().default(false),
+  // Default true (safe): an omitted dry_run lists candidates instead of
+  // deleting. This matches the registry description and the design's
+  // "always dry-run first" guidance; deletion only happens on explicit
+  // dry_run: false (still gated by requiresConfirmation).
+  dry_run: z.boolean().default(true),
   max_delete: z.number().int().min(1).max(500).default(100),
 });
 

@@ -200,10 +200,10 @@ describe("proxy Zod schemas", () => {
     ).toThrow();
   });
 
-  it("remove_failed schema applies defaults", () => {
+  it("remove_failed schema applies defaults (dry_run defaults true for safety)", () => {
     expect(proxyRemoveFailedSchema.parse({})).toMatchObject({
       failureType: "basic",
-      dry_run: false,
+      dry_run: true,
       max_delete: 100,
     });
   });
