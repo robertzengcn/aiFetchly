@@ -8,6 +8,7 @@ import {
 import { PluginRuntimeCache } from "@/service/PluginRuntimeCache";
 import { PluginHookRegistrar } from "@/service/pluginCompat/PluginHookRegistrar";
 import { PluginCommandSourceReader } from "@/service/pluginCompat/PluginCommandSourceReader";
+import { PluginCommandDiagnosticsStore } from "@/service/pluginCompat/PluginCommandDiagnosticsStore";
 import { UserPluginAutoInstallService } from "@/service/UserPluginAutoInstallService";
 import { SkillRegistry } from "@/config/skillsRegistry";
 import { CommandRegistry } from "@/service/slashCommands/CommandRegistry";
@@ -71,6 +72,7 @@ export class PluginComponentRegistryService {
     const manager = getAIFetchlyConfigManager();
     manager.getCommandRegistry().replaceSource(sourceId, []);
     manager.getAgentRegistry().replaceSource(sourceId, []);
+    PluginCommandDiagnosticsStore.clear(pluginName);
   }
 
   /**
@@ -118,6 +120,9 @@ export class PluginComponentRegistryService {
       ) {
         commandRegistry.replaceSource(sourceId, []);
         agentRegistry.replaceSource(sourceId, []);
+        // Reconcile to an empty diagnostics set so a now-clean (disabled /
+        // uninstalled / missing-dir) plugin never lingers stale warnings.
+        PluginCommandDiagnosticsStore.set(plugin.name, []);
         continue;
       }
 
@@ -141,6 +146,15 @@ export class PluginComponentRegistryService {
         );
       allDiagnostics.push(...agentResult.diagnostics);
       agentRegistry.replaceSource(sourceId, agentResult.definitions);
+
+      // Cache this plugin's command+agent diagnostics so the diagnostics
+      // bundle can surface WHY individual command/agent files were skipped.
+      // (Commands/agents have no DB row; the live registry is the truth, so
+      // diagnostics live in memory here.)
+      PluginCommandDiagnosticsStore.set(plugin.name, [
+        ...commandResult.diagnostics,
+        ...agentResult.diagnostics,
+      ]);
     }
 
     return { diagnostics: allDiagnostics };
