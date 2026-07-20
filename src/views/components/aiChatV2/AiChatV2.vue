@@ -469,7 +469,7 @@ import { getWorkspace } from "@/views/api/workspace";
 import { workspaceMemoryApi } from "@/views/api/aiWorkspaceMemory";
 import type { WorkspaceSummary } from "@/entityTypes/workspaceTypes";
 import type { FileOperationRecord } from "@/entityTypes/fileOperationTypes";
-import { extractArtifactMetadata } from "./artifactMetadata";
+import { extractArtifactMetadata, ensureArtifactMetadata } from "./artifactMetadata";
 import {
   subscribeToFileOperations,
   unsubscribeFromFileOperations,
@@ -1265,7 +1265,12 @@ const loadHistory = async (conversationId: string): Promise<void> => {
   try {
     const resp = await getChatV2History(conversationId);
     if (activeConversationId.value !== conversationId) return;
-    messages.value = resp?.messages ?? [];
+    // Persisted tool-result rows store only the raw `toolResult` (with the
+    // artifact nested under .artifact), not the renderer's `metadata.artifact`
+    // shortcut. Re-derive it on load so artifact cards reappear on history
+    // reopen (PRD ART-009). Auto-open is NOT triggered here — only live
+    // tool_result chunks auto-open.
+    messages.value = (resp?.messages ?? []).map(ensureArtifactMetadata);
     // Reset context-usage tracking for the loaded conversation. If any
     // history rows carry tokensUsed, seed the baseline estimate from the
     // most recent assistant message; otherwise start at zero until the
