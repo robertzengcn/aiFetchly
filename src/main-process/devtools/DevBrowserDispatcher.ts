@@ -23,6 +23,8 @@ import {
   AGENT_MANAGEMENT_LIST,
   AGENT_MANAGEMENT_TOGGLE,
   AGENT_MANAGEMENT_UPDATE,
+  AI_ARTIFACT_GET,
+  AI_ARTIFACT_LIST,
   GET_APP_INFO,
   GET_LOGIN_URL,
   QUERY_USER_INFO,
@@ -30,6 +32,7 @@ import {
 import { REFRESHTOKEN, TOKENNAME } from "@/config/usersetting";
 import { MainProcessAppInfoModule } from "@/modules/MainProcessAppInfoModule";
 import { AgentDefinitionModule } from "@/modules/AgentDefinitionModule";
+import { AIArtifactModule } from "@/modules/AIArtifactModule";
 import { UserController } from "@/controller/UserController";
 import { log } from "@/modules/Logger";
 import { Token } from "@/modules/token";
@@ -161,6 +164,20 @@ function parseBridgeInput<T>(schema: () => ZodType<T>, data: unknown): T {
   return parsed.data;
 }
 
+function parseRequiredStringField(
+  data: unknown,
+  field: string
+): string {
+  if (!data || typeof data !== "object") {
+    throw new Error("Invalid request payload.");
+  }
+  const value = (data as Record<string, unknown>)[field];
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new Error(`${field} is required.`);
+  }
+  return value.trim();
+}
+
 export class DevBrowserDispatcher {
   private readonly handlers: ReadonlyMap<string, DevBrowserHandler>;
 
@@ -284,6 +301,28 @@ export function createDefaultHandlers(): ReadonlyMap<string, DevBrowserHandler> 
   handlers.set(AGENT_MANAGEMENT_DELETE, async (data) => {
     const input = parseBridgeInput(agentDefinitionDeleteInputSchema, data);
     return new AgentDefinitionModule().deleteManualAgent(input.agentId);
+  });
+
+  // AI artifact reads — safe browser-preview path for artifacts already
+  // created by the gated AI chat tool. Mirrors ai-artifact-ipc.ts.
+  handlers.set(AI_ARTIFACT_GET, async (data) => {
+    const artifactId = parseRequiredStringField(data, "artifactId");
+    const artifact = await new AIArtifactModule().getArtifact(artifactId);
+    return {
+      status: true,
+      msg: "",
+      data: artifact,
+    } satisfies CommonMessage<unknown>;
+  });
+
+  handlers.set(AI_ARTIFACT_LIST, async (data) => {
+    const conversationId = parseRequiredStringField(data, "conversationId");
+    const artifacts = await new AIArtifactModule().listArtifacts(conversationId);
+    return {
+      status: true,
+      msg: "",
+      data: artifacts,
+    } satisfies CommonMessage<unknown>;
   });
 
   return handlers;
