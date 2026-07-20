@@ -140,3 +140,21 @@ Retest results:
 
 Remaining live-test note:
 - The currently running Electron process was launched before the fix and still rejects `agent-definition:list` with the old allowlist. Restart Electron, then rerun browser CRUD smoke for TC-19 through TC-24 and TC-26 through TC-28.
+
+## Retest After Electron Restart
+
+Date: 2026-07-20
+
+Result: passed.
+
+Verified against restarted Electron process:
+- Dev bridge config loaded from `http://127.0.0.1:37621` with allowed origin `http://localhost:5173`.
+- Bridge CRUD smoke passed for disposable agent `user:codex-live-smoke-1784507790775`: list, create, get, toggle disabled, update enabled, list, delete, and final list cleanup.
+- Browser UI create passed for disposable agent `user:codex-ui-smoke-1784507823630`: Add Subagent dialog saved successfully and the table rendered the new manual agent.
+- Required table columns rendered: Agent, Description, Source, Plugin, Mode, Tools, Model, Status, Actions.
+- Detail panel rendered required fields: ID, Display name, Output schema, Warnings, Last updated, and Created.
+- Status filter exposed the Has warnings option.
+- Browser UI delete passed: confirmation dialog deleted the disposable UI agent and the row disappeared.
+
+Remaining observations:
+- Browser console showed one `404 Not Found` resource error during page loads. It did not block Subagents route rendering or CRUD behavior.
