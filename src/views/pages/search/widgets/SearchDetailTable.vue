@@ -470,9 +470,6 @@ const taskid = parseInt($route.params.id.toString());
 
 const initialize = async () => {
 console.log($route.params.id)
-//   if ($route.params.id) {
-//     taskid.value = parseInt($route.params.id.toString());
-//   }
 }
 /**
  * Start auto-refresh timer
@@ -740,9 +737,6 @@ const extractionNotice = reactive({
 const showDetailDialog = ref(false);
 const selectedResult = ref<SearchResEntityDisplay | null>(null);
 
-// Column visibility state
-// Default hidden columns: ai_analysis_status, extraction_status, contact_email, contact_phone, contact_address
-// Default hidden: ai_industry (Customer Industry), ai_match_score (Probability of Potential Customers)
 const visibleColumns = ref<Set<string>>(new Set(['index', 'title', 'link', 'keyword', 'record_time', 'actions']));
 
 // Auto-refresh functionality
@@ -1497,9 +1491,6 @@ async function handleAnalyzeConfirm(data: { businessInfo: string; saveForFuture:
         // Close dialog
         showAnalysisDialog.value = false;
         
-        // Keep analyzing flag true until we detect completion via progress updates
-        // The progress handler will update the table as items complete and clear the flag when done
-        // Set a timeout to clear analyzing flag as a fallback (in case progress updates fail)
         const fallbackTimeout = setTimeout(() => {
             if (analyzing.value) {
                 analyzing.value = false;
@@ -1518,13 +1509,7 @@ async function handleAnalyzeConfirm(data: { businessInfo: string; saveForFuture:
         analysisProgress.value = { current: 0, total: 0 };
     }
 }
-// },
-// }
-// const editItem = (item) => {
  
-// };
-// const openfolder=(item)=>{
-//     // console.log(item)
     
 // }
 

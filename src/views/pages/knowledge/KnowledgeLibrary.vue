@@ -498,10 +498,6 @@ async function initializeRAGSystem() {
       console.log('✅ Default embedding model set from stats:', response.data.defaultEmbeddingModel);
     }
     
-    // if (!response.success) {
-    //   // Initialize with default configuration
-    //   //await initializeWithDefaultConfig();
-    // }
     
     setLoading(false);
     //showStatus(t('knowledge.rag_system_initialized_successfully'), 'success');
@@ -512,27 +508,6 @@ async function initializeRAGSystem() {
   }
 }
 
-// async function initializeWithDefaultConfig() {
-//   const embeddingConfig = {
-//     provider: 'openai',
-//     model: 'text-embedding-ada-002',
-//     apiKey: process.env.OPENAI_API_KEY || '',
-//   };
-
-//   const llmConfig = {
-//     model: 'gpt-3.5-turbo',
-//     apiKey: process.env.OPENAI_API_KEY || '',
-//   };
-
-//   const response = await initializeRAG({
-//     embedding: embeddingConfig,
-//     llm: llmConfig,
-//   });
-
-//   if (!response.success) {
-//     throw new Error(response.message);
-//   }
-// }
 
 function setLoading(loading: boolean, message = '', subMessage = '') {
   isLoading.value = loading;
@@ -588,47 +563,6 @@ async function handleUploadSuccess(document: UploadedDocument) {
   
   console.log('📄 Document processed:', document);
   
-  // Automatically start chunking and embedding process
-  // if (document.id) {
-  //   try {
-  //     setLoading(true, t('knowledge.processing_document'), t('knowledge.chunking_and_embedding_document'));
-      
-  //     const chunkEmbedResult = await chunkAndEmbedDocument(document.id);
-      
-  //     if (chunkEmbedResult.success && chunkEmbedResult.data) {
-  //       const { chunksCreated, embeddingsGenerated, processingTime } = chunkEmbedResult.data;
-  //       showStatus(
-  //         t('knowledge.document_processed_successfully', { 
-  //           name: document.name, 
-  //           chunks: chunksCreated, 
-  //           embeddings: embeddingsGenerated 
-  //         }), 
-  //         'success'
-  //       );
-  //       console.log(`✅ Document ${document.name} processed: ${chunksCreated} chunks, ${embeddingsGenerated} embeddings in ${processingTime}ms`);
-  //     } else {
-  //       showStatus(
-  //         t('knowledge.document_processing_failed', { 
-  //           name: document.name, 
-  //           error: chunkEmbedResult.message 
-  //         }), 
-  //         'warning'
-  //       );
-  //       console.warn(`⚠️ Document ${document.name} processing failed:`, chunkEmbedResult.message);
-  //     }
-  //   } catch (error) {
-  //     console.error(`❌ Error processing document ${document.name}:`, error);
-  //     showStatus(
-  //       t('knowledge.document_processing_error', { 
-  //         name: document.name, 
-  //         error: error instanceof Error ? error.message : 'Unknown error' 
-  //       }), 
-  //       'error'
-  //     );
-  //   } finally {
-  //     setLoading(false);
-  //   }
-  // }
   
   // Refresh document management if available
   if (documentManagement.value) {

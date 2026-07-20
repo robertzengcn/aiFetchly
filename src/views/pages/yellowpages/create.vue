@@ -841,13 +841,6 @@ const minDateTime = computed(() => {
   return now.toISOString().slice(0, 16)
 })
 
-// Proxy configuration (replaced by ProxyTableselected selection)
-// const proxyConfig = reactive({
-//   host: '',
-//   port: '',
-//   username: '',
-//   password: ''
-// })
 
 // Platform data
 const platforms = ref<PlatformSummary[]>([])
@@ -886,19 +879,6 @@ const platformOptions = computed(() => {
   }))
 })
 
-// Methods
-// const updateKeywords = () => {
-//   if (keywordsInput.value) {
-//     const newKeywords = keywordsInput.value
-//       .split(',')
-//       .map(k => k.trim())
-//       .filter(k => k.length > 0)
-    
-//     // Remove duplicates
-//     const uniqueKeywords = [...new Set([...taskForm.keywords, ...newKeywords])]
-//     taskForm.keywords = uniqueKeywords
-//   }
-// }
 
 const removeKeyword = (keyword: string) => {
   taskForm.keywords = taskForm.keywords.filter(k => k !== keyword)
