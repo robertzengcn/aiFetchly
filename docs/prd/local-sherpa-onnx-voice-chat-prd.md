@@ -21,6 +21,8 @@
 
 AiFetchly should add local voice chat support to AiChatV2 using `sherpa-onnx` for speech-to-text (STT) and text-to-speech (TTS).
 
+Technical design: `docs/prd/local-sherpa-onnx-voice-chat-technical-design.md`
+
 The first user-visible outcome is simple:
 
 1. The user can press a microphone button in AiChatV2, speak a message, and have the app convert speech to text locally.
@@ -221,7 +223,7 @@ Sentence boundaries:
 - `?`
 - `!`
 - newline after a meaningful phrase
-- language-specific punctuation such as `。`, `？`, `！`
+- language-specific punctuation such as CJK sentence-ending marks
 
 Fallback behavior:
 
