@@ -135,9 +135,8 @@ export function registerAIProviderIpcHandlers(): void {
         // Use a one-off client; listModels falls back to a synthetic list on
         // failure and we surface that as a warning rather than an error.
         const client = new OpenAICompatibleProviderClient(config, apiKey);
-        const models = await client.listModels();
-        const isSynthetic =
-          models.data.length === 1 && models.data[0].id === cfg.defaultModel;
+        const { models, usedFallback } =
+          await client.listModelsWithFallbackStatus();
         const response: RefreshLocalAIModelsResponse = {
           models: models.data.map((m) => ({
             id: m.id,
@@ -147,7 +146,7 @@ export function registerAIProviderIpcHandlers(): void {
             ...(typeof m.context_size === "number" ? { context_size: m.context_size } : {}),
           })),
           ...(models.default_model ? { default_model: models.default_model } : {}),
-          ...(isSynthetic
+          ...(usedFallback
             ? {
                 warning:
                   "Model list could not be loaded. You can still use the manually entered model if your provider supports it.",

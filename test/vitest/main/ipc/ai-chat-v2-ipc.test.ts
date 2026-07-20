@@ -11,8 +11,11 @@ vi.mock("electron", () => ({
   app: { getPath: vi.fn().mockReturnValue("/tmp") },
 }));
 
-// Mock Token so AI-enabled is controllable per-test via mockState.aiEnabled.
-const mockState = vi.hoisted(() => ({ aiEnabled: "true" }));
+// Mock Token so hosted entitlement and local-provider settings are controllable.
+const mockState = vi.hoisted(() => ({
+  aiEnabled: "true",
+  tokenStore: new Map<string, string>(),
+}));
 const mockGetAllToolFunctions = vi.hoisted(() =>
   vi.fn().mockResolvedValue([
     {
@@ -49,7 +52,23 @@ const mockSetToolApprovalMode = vi.hoisted(() =>
 vi.mock("@/modules/token", () => {
   return {
     Token: vi.fn().mockImplementation(() => ({
-      getValue: vi.fn().mockImplementation(() => mockState.aiEnabled),
+      getValue: vi.fn().mockImplementation((key: string) => {
+        if (key === "USER_AI_ENABLED") {
+          return mockState.aiEnabled;
+        }
+        return mockState.tokenStore.get(key) ?? "";
+      }),
+      setValue: vi.fn().mockImplementation((key: string, value: string) => {
+        mockState.tokenStore.set(key, value);
+      }),
+      deleteValue: vi.fn().mockImplementation((key: string) => {
+        mockState.tokenStore.delete(key);
+      }),
+      hasValue: vi.fn().mockImplementation(
+        (key: string) =>
+          mockState.tokenStore.has(key) &&
+          (mockState.tokenStore.get(key)?.length ?? 0) > 0
+      ),
     })),
   };
 });
@@ -174,7 +193,42 @@ import {
   AI_CHAT_V2_STREAM_STOP,
   AI_CHAT_V2_STREAM_CHUNK,
   AI_CHAT_V2_STREAM_COMPLETE,
+  AI_CHAT_V2_MODELS,
 } from "@/config/channellist";
+
+function enableLocalAiChat(capabilities?: { tools?: string }): void {
+  mockState.tokenStore.set("user_ai_provider_mode", "local");
+  mockState.tokenStore.set("user_local_ai_enabled", "true");
+  mockState.tokenStore.set(
+    "user_local_ai_provider_config",
+    JSON.stringify({
+      preset: "ollama",
+      name: "Ollama",
+      baseUrl: "http://localhost:11434/v1",
+      defaultModel: "llama3.1",
+      ...(capabilities
+        ? {
+            capabilities: {
+              modelsEndpoint: "supported",
+              chat: "supported",
+              streaming: "supported",
+              tools: capabilities.tools ?? "unknown",
+              vision: "unknown",
+            },
+          }
+        : {}),
+    })
+  );
+}
+
+function resetProviderState(): void {
+  mockState.aiEnabled = "true";
+  mockState.tokenStore.clear();
+}
+
+beforeEach(() => {
+  resetProviderState();
+});
 
 describe("AI Chat V2 IPC handlers", () => {
   beforeEach(() => {
@@ -251,7 +305,7 @@ describe("AI Chat V2 — AI-disabled gate", () => {
     const result = await mockIpcMain.callHandler(AI_CHAT_V2_CONVERSATIONS);
     expect(result).toMatchObject({
       status: false,
-      msg: "AI functionality is only available to subscribers.",
+      msg: "Hosted aiFetchly AI requires a subscription. Configure a local AI provider or upgrade your plan to use AI Chat.",
     });
     expect(mockGetConversations).not.toHaveBeenCalled();
   });
@@ -268,8 +322,51 @@ describe("AI Chat V2 — AI-disabled gate", () => {
     expect(payload).toBeDefined();
     expect(payload?.eventType).toBe("error");
     expect(payload?.errorMessage).toBe(
-      "AI functionality is only available to subscribers."
+      "Hosted aiFetchly AI requires a subscription. Configure a local AI provider or upgrade your plan to use AI Chat."
     );
+  });
+
+  it("allows stream when hosted AI is disabled but local provider config is valid", async () => {
+    mockState.aiEnabled = "false";
+    enableLocalAiChat();
+    mockOpenAIChatCompletionStream.mockImplementation(
+      async (_req, onChunk: (c: unknown) => void) => {
+        onChunk({ choices: [{ delta: { content: "local pong" } }] });
+        onChunk({ choices: [{ delta: {}, finish_reason: "stop" }] });
+      }
+    );
+
+    const senderSend = vi.fn();
+    await mockIpcMain.callHandler(
+      AI_CHAT_V2_STREAM,
+      { sender: { send: senderSend } },
+      JSON.stringify({ message: "hi" })
+    );
+
+    expect(mockOpenAIChatCompletionStream).toHaveBeenCalledTimes(1);
+    const payload = findCompletePayload(senderSend);
+    expect(payload?.eventType).toBe("complete");
+    expect(payload?.fullContent).toBe("local pong");
+  });
+
+  it("allows model listing when hosted AI is disabled but local provider config is valid", async () => {
+    mockState.aiEnabled = "false";
+    enableLocalAiChat();
+    mockListOpenAIModels.mockResolvedValue({
+      object: "list",
+      data: [
+        { id: "llama3.1", object: "model", created: 0, owned_by: "Ollama" },
+      ],
+      default_model: "llama3.1",
+    });
+
+    const result = await mockIpcMain.callHandler(AI_CHAT_V2_MODELS);
+
+    expect(result).toMatchObject({ status: true });
+    expect(mockListOpenAIModels).toHaveBeenCalledTimes(1);
+    expect(
+      (result as { data: { default_model: string } }).data.default_model
+    ).toBe("llama3.1");
   });
 });
 
@@ -603,6 +700,32 @@ describe("AI Chat V2 — stream lifecycle", () => {
     const payload = findCompletePayload(senderSend);
     expect(payload?.eventType).toBe("complete");
     expect(payload?.fullContent).toBe("Found one supplier.");
+  });
+
+  it("strips tools from local-provider requests when tool support is not confirmed", async () => {
+    mockState.aiEnabled = "false";
+    enableLocalAiChat({ tools: "unsupported" });
+    mockOpenAIChatCompletionStream.mockImplementation(
+      async (req, onChunk: (c: unknown) => void) => {
+        expect(req.tools).toBeUndefined();
+        expect(req.tool_choice).toBeUndefined();
+        onChunk({ choices: [{ delta: { content: "Plain local answer." } }] });
+        onChunk({ choices: [{ delta: {}, finish_reason: "stop" }] });
+      }
+    );
+
+    const senderSend = vi.fn();
+    await mockIpcMain.callHandler(
+      AI_CHAT_V2_STREAM,
+      { sender: { send: senderSend } },
+      JSON.stringify({ message: "please search milk wholesale in google" })
+    );
+
+    expect(mockGetAllToolFunctions).toHaveBeenCalled();
+    expect(mockSkillExecute).not.toHaveBeenCalled();
+    const payload = findCompletePayload(senderSend);
+    expect(payload?.eventType).toBe("complete");
+    expect(payload?.fullContent).toBe("Plain local answer.");
   });
 
   it("surfaces permission prompts and resumes the stream after approval", async () => {
