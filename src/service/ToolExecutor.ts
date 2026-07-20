@@ -5,7 +5,7 @@ import { YellowPagesController } from "@/controller/YellowPagesController";
 import { TaskStatus as YellowPagesTaskStatus } from "@/modules/interface/ITaskManager";
 import { TaskStatus } from "@/entityTypes/commonType";
 import { ToolExecutionService } from "@/service/ToolExecutionService";
-import { formatYellowPagesResultsForLLM } from "@/main-process/communication/ai-chat-ipc";
+import { formatYellowPagesResultsForLLM } from "@/service/yellowPagesResultFormatter";
 import { MCPToolService } from "@/service/MCPToolService";
 import { parseMcpToolName } from "@/service/pluginCompat/McpToolNaming";
 import { MCPToolModule } from "@/modules/MCPToolModule";
