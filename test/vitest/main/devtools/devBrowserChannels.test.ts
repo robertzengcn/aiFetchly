@@ -1,6 +1,12 @@
 "use strict";
 import { describe, expect, it } from "vitest";
 import {
+  AGENT_MANAGEMENT_CREATE,
+  AGENT_MANAGEMENT_DELETE,
+  AGENT_MANAGEMENT_GET,
+  AGENT_MANAGEMENT_LIST,
+  AGENT_MANAGEMENT_TOGGLE,
+  AGENT_MANAGEMENT_UPDATE,
   GET_APP_INFO,
   QUERY_USER_INFO,
   SHOW_OPEN_DIALOG,
@@ -38,9 +44,19 @@ describe("devBrowserChannels — invoke allowlist", () => {
     expect(isInvokeAllowed(GET_LOGIN_URL)).toBe(true);
   });
 
+  it("includes reviewed subagent management channels for browser QA", () => {
+    expect(DEV_BROWSER_INVOKE_ALLOWLIST).toContain(AGENT_MANAGEMENT_LIST);
+    expect(DEV_BROWSER_INVOKE_ALLOWLIST).toContain(AGENT_MANAGEMENT_GET);
+    expect(DEV_BROWSER_INVOKE_ALLOWLIST).toContain(AGENT_MANAGEMENT_CREATE);
+    expect(DEV_BROWSER_INVOKE_ALLOWLIST).toContain(AGENT_MANAGEMENT_UPDATE);
+    expect(DEV_BROWSER_INVOKE_ALLOWLIST).toContain(AGENT_MANAGEMENT_TOGGLE);
+    expect(DEV_BROWSER_INVOKE_ALLOWLIST).toContain(AGENT_MANAGEMENT_DELETE);
+  });
+
   it("isInvokeAllowed returns true only for listed channels", () => {
     expect(isInvokeAllowed(GET_APP_INFO)).toBe(true);
     expect(isInvokeAllowed(QUERY_USER_INFO)).toBe(true);
+    expect(isInvokeAllowed(AGENT_MANAGEMENT_CREATE)).toBe(true);
     expect(isInvokeAllowed("unknown:channel")).toBe(false);
   });
 

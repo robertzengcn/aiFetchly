@@ -7,6 +7,7 @@ import fs from 'fs';
 // import { viteStaticCopy } from 'vite-plugin-static-copy'
 import ClosePlugin from './vite-plugin-close'
 import checker from 'vite-plugin-checker'
+import { optionalChecker } from './vite-checker-toggle.mjs';
 // rollup-plugin-sourcemaps removed: it conflicts with Vite's built-in source map
 // handling and causes empty `sources` arrays in generated .map files,
 // which breaks debugger breakpoint resolution.
@@ -308,10 +309,10 @@ export default ({ mode }) => {
             // ViteEjsPlugin(),
             emptyModulesPlugin(),
             ClosePlugin(),
-            checker({
+            ...optionalChecker(() => checker({
                 // e.g. use TypeScript check
                 typescript: true,
-            }),
+            })),
             platformCopyPlugin(),
             fixInteropNamespacePlugin(),
             // ejsTemplateProcessorPlugin(),

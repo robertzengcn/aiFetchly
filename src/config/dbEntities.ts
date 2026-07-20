@@ -70,6 +70,7 @@ import { AIChatPlanApprovalEntity } from "@/entity/AIChatPlanApproval.entity";
 import { AIChatSessionMemoryEntity } from "@/entity/AIChatSessionMemory.entity";
 import { AIChatCompactSummaryEntity } from "@/entity/AIChatCompactSummary.entity";
 import { AIChatAttachmentEntity } from "@/entity/AIChatAttachment.entity";
+import { AIArtifactEntity } from "@/entity/AIArtifact.entity";
 import { VectorEntity, VectorMetadataEntity } from "@/entity/Vector.entity";
 import { MCPToolEntity } from "@/entity/MCPTool.entity";
 import { TaskEntity } from "@/entity/Task.entity";
@@ -133,6 +134,7 @@ export const DB_ENTITIES = [
   RAGChunkEntity,
   AIChatMessageEntity,
   AIChatAttachmentEntity,
+  AIArtifactEntity,
   VectorEntity,
   VectorMetadataEntity,
   MCPToolEntity,

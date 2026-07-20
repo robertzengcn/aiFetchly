@@ -13,6 +13,9 @@ import {
   batchKeywordGenerationResponseSchema,
   chatApiResponseSchema,
 } from "@/schemas/api/aiChat";
+import { AIProviderResolver } from "@/service/aiProvider/AIProviderResolver";
+import { OpenAICompatibleProviderClient } from "@/service/aiProvider/OpenAICompatibleProviderClient";
+import type { LocalAIProviderConfig } from "@/entityTypes/aiProviderTypes";
 import {
   AIChatRecoverableError,
   type AIChatRecoveryReason,
@@ -731,6 +734,7 @@ const MODEL_LIST_RETRY_BASE_DELAY_MS = 500;
 export class AiChatApi {
   private _httpClient: HttpClient;
   private validationConfig: AiValidationConfig;
+  private _providerResolver?: AIProviderResolver;
 
   /**
    * Creates a new AiChatApi instance
@@ -742,6 +746,29 @@ export class AiChatApi {
       ...DEFAULT_VALIDATION_CONFIG,
       ...validationConfig,
     };
+  }
+
+  /**
+   * Lazy chat-availability resolver. Constructed on first use so creating an
+   * AiChatApi (e.g. in worker processes) does not touch encrypted storage
+   * until a chat call actually happens.
+   */
+  private getProviderResolver(): AIProviderResolver {
+    if (!this._providerResolver) {
+      this._providerResolver = new AIProviderResolver();
+    }
+    return this._providerResolver;
+  }
+
+  /**
+   * Build a one-off OpenAI-compatible client for a resolved local provider.
+   * Never cached — provider settings may change while the app is open.
+   */
+  private localClient(
+    config: LocalAIProviderConfig,
+    apiKey: string
+  ): OpenAICompatibleProviderClient {
+    return new OpenAICompatibleProviderClient(config, apiKey);
   }
 
   /**
@@ -855,9 +882,9 @@ export class AiChatApi {
   }
 
   /**
-   * Return a copy of the payload with large base64 fields replaced by a
-   * placeholder so request logs stay readable. Does not mutate the original
-   * request payload (immutability rule).
+   * Return a copy of the payload with large base64 fields and secrets replaced
+   * by placeholders so request logs stay readable and never leak credentials.
+   * Does not mutate the original request payload (immutability rule).
    */
   private _redactDebugPayload(data: unknown): unknown {
     if (data === null || typeof data !== "object") {
@@ -873,7 +900,15 @@ export class AiChatApi {
     for (const [key, value] of Object.entries(
       data as Record<string, unknown>
     )) {
-      if (typeof value === "string" && value.startsWith("data:image/")) {
+      const lcKey = key.toLowerCase();
+      if (
+        lcKey === "authorization" ||
+        lcKey === "api_key" ||
+        lcKey === "apikey" ||
+        lcKey === "user_local_ai_provider_api_key"
+      ) {
+        redacted[key] = "<redacted>";
+      } else if (typeof value === "string" && value.startsWith("data:image/")) {
         redacted[key] = `<image data url len=${value.length}>`;
       } else if (
         (key === "screenshot" || key === "attachments") &&
@@ -1837,7 +1872,23 @@ export class AiChatApi {
    * @returns Promise resolving to models list in OpenAI format
    */
   async listOpenAIModels(): Promise<OpenAIModelsResponse> {
+    if (!process.env.WORKER_TYPE) {
+      const resolved = this.getProviderResolver().resolveForChat();
+      if (!resolved.canUse) {
+        throw new Error(resolved.message);
+      }
+      if (resolved.kind === "local") {
+        return this.localClient(resolved.config, resolved.apiKey).listModels();
+      }
+      return this.listOpenAIModelsHosted();
+    }
+    // Worker processes have no provider settings; keep the hosted-only gate.
     this.ensureAIEnabled();
+    return this.listOpenAIModelsHosted();
+  }
+
+  /** Hosted aiFetchly model listing, wrapped in dev's model-list retry policy. */
+  private async listOpenAIModelsHosted(): Promise<OpenAIModelsResponse> {
     return this.withModelListRetry(async () => {
       try {
         const raw = await this._httpClient.get("/api/ai/v1/models");
@@ -1991,7 +2042,26 @@ export class AiChatApi {
   async openAIChatCompletion(
     request: OpenAIChatCompletionRequest
   ): Promise<OpenAIChatCompletionResponse> {
+    if (!process.env.WORKER_TYPE) {
+      const resolved = this.getProviderResolver().resolveForChat();
+      if (!resolved.canUse) {
+        throw new Error(resolved.message);
+      }
+      if (resolved.kind === "local") {
+        return this.localClient(resolved.config, resolved.apiKey).complete(
+          request
+        );
+      }
+      return this.openAIChatCompletionHosted(request);
+    }
     this.ensureAIEnabled();
+    return this.openAIChatCompletionHosted(request);
+  }
+
+  /** Hosted aiFetchly non-streaming completion (existing behavior, unchanged). */
+  private async openAIChatCompletionHosted(
+    request: OpenAIChatCompletionRequest
+  ): Promise<OpenAIChatCompletionResponse> {
     const data: OpenAIChatCompletionRequest = {
       messages: request.messages,
       stream: false,
@@ -2048,7 +2118,43 @@ export class AiChatApi {
       onRecoveryStatus?: (info: StreamRecoveryInfo) => void;
     }
   ): Promise<void> {
+    if (!process.env.WORKER_TYPE) {
+      const resolved = this.getProviderResolver().resolveForChat();
+      if (!resolved.canUse) {
+        throw new Error(resolved.message);
+      }
+      if (resolved.kind === "local") {
+        await this.localClient(resolved.config, resolved.apiKey).stream(
+          request,
+          onChunk,
+          options
+        );
+        return;
+      }
+      await this.openAIChatCompletionStreamHosted(request, onChunk, options);
+      return;
+    }
+    // Worker processes have no provider settings; keep the hosted-only gate.
     this.ensureAIEnabled();
+    await this.openAIChatCompletionStreamHosted(request, onChunk, options);
+  }
+
+  /**
+   * Hosted aiFetchly streaming completion. Preserves the existing retry,
+   * legacy-endpoint fallback, and SSE parsing behavior exactly.
+   */
+  private async openAIChatCompletionStreamHosted(
+    request: OpenAIChatCompletionRequest,
+    onChunk: (chunk: OpenAIChatCompletionChunk) => void,
+    options?: {
+      signal?: AbortSignal;
+      onRetry?: (info: StreamRetryInfo) => void;
+      /** Recovery profile (default: foreground). Background = 1 retry, persistent = 6h. */
+      retryProfile?: AIChatRecoveryProfile;
+      /** Structured recovery status callback (Layer 1/2). */
+      onRecoveryStatus?: (info: StreamRecoveryInfo) => void;
+    }
+  ): Promise<void> {
     const data: OpenAIChatCompletionRequest = {
       messages: request.messages,
       stream: true,
@@ -2391,12 +2497,16 @@ export class AiChatApi {
     const conversationText = request.messages
       .filter((m) => m.role !== "system")
       .map((m) =>
-        `${this.getLegacyRoleLabel(m.role)}: ${openAIContentToString(m.content)}`.trim()
+        `${this.getLegacyRoleLabel(m.role)}: ${openAIContentToString(
+          m.content
+        )}`.trim()
       )
       .join("\n\n");
 
     return {
-      message: conversationText || openAIContentToString(request.messages.at(-1)?.content),
+      message:
+        conversationText ||
+        openAIContentToString(request.messages.at(-1)?.content),
       model: request.model,
       system_prompt:
         typeof systemPrompt === "string" ? systemPrompt : undefined,
@@ -2673,10 +2783,10 @@ export class AiChatApi {
     }
 
     const codeText =
-      numericCode !== undefined
-        ? String(numericCode)
-        : stringCode ?? "unknown";
-    const safeMessage = this.truncateForLog(msg ?? "AI server returned an error");
+      numericCode !== undefined ? String(numericCode) : stringCode ?? "unknown";
+    const safeMessage = this.truncateForLog(
+      msg ?? "AI server returned an error"
+    );
     const data = payload.data;
     const dataType = Array.isArray(data) ? "array" : typeof data;
     console.error(

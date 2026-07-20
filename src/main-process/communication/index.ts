@@ -38,6 +38,8 @@ import { registerPluginIpcHandlers } from "@/main-process/communication/plugin-i
 import { registerPluginMarketplaceIpcHandlers } from "@/main-process/communication/plugin-marketplace-ipc";
 import { registerAIUserMemoryIpcHandlers } from "@/main-process/communication/ai-user-memory-ipc";
 import { registerAIWorkspaceIpcHandlers } from "@/main-process/communication/ai-workspace-ipc";
+import { registerAIProviderIpcHandlers } from "@/main-process/communication/ai-provider-ipc";
+import { registerAIArtifactIpcHandlers } from "@/main-process/communication/ai-artifact-ipc";
 import { registerAIWorkspaceMemoryIpcHandlers } from "@/main-process/communication/ai-workspace-memory-ipc";
 import { registerEmailReceiveIpcHandlers } from "@/main-process/communication/emailReceive-ipc";
 import { registerDiagnosticsIpcHandlers } from "@/main-process/communication/diagnostics-ipc";
@@ -93,6 +95,8 @@ export function registerCommunicationIpcHandlers(win: BrowserWindow) {
     registerPluginMarketplaceIpcHandlers();
     registerAIUserMemoryIpcHandlers();
     registerAIWorkspaceIpcHandlers(win);
+    registerAIProviderIpcHandlers();
+    registerAIArtifactIpcHandlers();
     registerAIWorkspaceMemoryIpcHandlers();
     registerEmailReceiveIpcHandlers();
     registerDiagnosticsIpcHandlers();

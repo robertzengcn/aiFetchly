@@ -1,13 +1,36 @@
 "use strict";
 import { describe, expect, it, vi } from "vitest";
 import type { CommonMessage } from "@/entityTypes/commonType";
-import { GET_APP_INFO, QUERY_USER_INFO } from "@/config/channellist";
+import {
+  AGENT_MANAGEMENT_CREATE,
+  AGENT_MANAGEMENT_LIST,
+  AGENT_MANAGEMENT_TOGGLE,
+  GET_APP_INFO,
+  QUERY_USER_INFO,
+} from "@/config/channellist";
 import {
   DevBrowserDispatcher,
   createDefaultHandlers,
   type DevBrowserHandler,
 } from "@/main-process/devtools/DevBrowserDispatcher";
 import { isInvokeAllowed } from "@/main-process/devtools/devBrowserChannels";
+
+const moduleSpies = vi.hoisted(() => ({
+  listAllForManagement: vi.fn(async () => []),
+  createManualAgent: vi.fn(async (input: { idSlug: string }) => ({
+    id: `user:${input.idSlug}`,
+    name: "Created",
+  })),
+  toggleAgent: vi.fn(async () => true),
+}));
+
+vi.mock("@/modules/AgentDefinitionModule", () => ({
+  AgentDefinitionModule: class {
+    listAllForManagement = moduleSpies.listAllForManagement;
+    createManualAgent = moduleSpies.createManualAgent;
+    toggleAgent = moduleSpies.toggleAgent;
+  },
+}));
 
 function ok<T>(data: T): CommonMessage<T> {
   return { status: true, msg: "", data };
@@ -113,6 +136,9 @@ describe("createDefaultHandlers — MVP channel wiring", () => {
     const handlers = createDefaultHandlers();
     expect(handlers.has(GET_APP_INFO)).toBe(true);
     expect(handlers.has(QUERY_USER_INFO)).toBe(true);
+    expect(handlers.has(AGENT_MANAGEMENT_LIST)).toBe(true);
+    expect(handlers.has(AGENT_MANAGEMENT_CREATE)).toBe(true);
+    expect(handlers.has(AGENT_MANAGEMENT_TOGGLE)).toBe(true);
   });
 
   it("does not register any handler outside the invoke allowlist", () => {
@@ -122,5 +148,41 @@ describe("createDefaultHandlers — MVP channel wiring", () => {
     for (const channel of handlers.keys()) {
       expect(isInvokeAllowed(channel), `channel ${channel}`).toBe(true);
     }
+  });
+
+  it("dispatches validated subagent management calls through AgentDefinitionModule", async () => {
+    moduleSpies.createManualAgent.mockClear();
+    const dispatcher = new DevBrowserDispatcher();
+    const input = {
+      idSlug: "browser-agent",
+      name: "Browser Agent",
+      description: "Created from browser QA",
+      systemPrompt: "You are a browser QA agent.",
+      allowedTools: [],
+      mode: "specialist",
+      maxToolCalls: 8,
+      maxRuntimeMs: 300000,
+      maxContinueCalls: 8,
+      enabled: true,
+    };
+
+    const result = await dispatcher.dispatch(AGENT_MANAGEMENT_CREATE, input);
+
+    expect(result.status).toBe(true);
+    expect(result.data).toEqual({ id: "user:browser-agent", name: "Created" });
+    expect(moduleSpies.createManualAgent).toHaveBeenCalledWith(input);
+  });
+
+  it("rejects invalid subagent management payloads before the module layer", async () => {
+    moduleSpies.createManualAgent.mockClear();
+    const dispatcher = new DevBrowserDispatcher();
+
+    const result = await dispatcher.dispatch(AGENT_MANAGEMENT_CREATE, {
+      idSlug: "bad",
+    });
+
+    expect(result.status).toBe(false);
+    expect(result.msg).toMatch(/name|description|systemPrompt/);
+    expect(moduleSpies.createManualAgent).not.toHaveBeenCalled();
   });
 });

@@ -5,6 +5,7 @@ import vue from '@vitejs/plugin-vue'
 import vuetify from 'vite-plugin-vuetify'
 import ClosePlugin from './vite-plugin-close.ts'
 import checker from 'vite-plugin-checker'
+import { optionalChecker } from './vite-checker-toggle.mjs';
 // import { nodePolyfills } from 'vite-plugin-node-polyfills'
 
 export default defineConfig({
@@ -45,11 +46,11 @@ export default defineConfig({
       autoImport: true,
     }),
     ClosePlugin(),
-    checker({
+    ...optionalChecker(() => checker({
       // e.g. use TypeScript check
       typescript: true,
       //vueTsc: true
-    }),
+    })),
   ],
     define: { 'process.env': {} },
   resolve: {

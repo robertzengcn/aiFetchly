@@ -93,6 +93,8 @@
         @approve-plan="handleApprovePlan"
         @reject-plan="handleRejectPlan"
         @request-plan-changes="handleRequestPlanChanges"
+        @open-artifact="(id: string) => emit('open-artifact', id)"
+        @copy-artifact-html="(id: string) => emit('copy-artifact-html', id)"
       />
 
       <!-- Pinned action cards: permission + question + plan approval while awaiting user input.
@@ -209,6 +211,16 @@
         />
       </div>
 
+      <v-alert
+        v-if="localToolsUnsupported"
+        type="warning"
+        variant="tonal"
+        density="compact"
+        class="mb-2"
+      >
+        {{ t('aiProvider.tool_warning') || 'This local provider has not confirmed tool support. Tools are disabled for this conversation.' }}
+      </v-alert>
+
       <v-dialog v-model="showWorkspaceMemory" max-width="760">
         <v-card>
           <v-card-title class="d-flex align-center">
@@ -246,6 +258,23 @@
             :loading="availableModels.length === 0"
             class="ml-2"
           />
+          <v-tooltip location="bottom">
+            <template #activator="{ props }">
+              <v-chip
+                v-if="providerLabel"
+                v-bind="props"
+                size="x-small"
+                :color="providerChipColor"
+                variant="tonal"
+                class="ml-2 cursor-pointer"
+                @click="openAIProviderSettings"
+              >
+                <v-icon start size="small">mdi-robot-outline</v-icon>
+                {{ providerLabel }}
+              </v-chip>
+            </template>
+            <span>{{ t('aiProvider.title') || 'AI Provider' }}</span>
+          </v-tooltip>
           <AiChatV2ToolApprovalModeSelector
             v-model="toolApprovalMode"
             :disabled="chatIsRunning"
@@ -417,6 +446,8 @@ import {
   getChatV2ToolApprovalMode,
   setChatV2ToolApprovalMode,
 } from "@/views/api/aiChatV2";
+import { getAIProviderSettings } from "@/views/api/aiProvider";
+import type { AIProviderSettingsView } from "@/entityTypes/aiProviderTypes";
 import { dispatchSlashCommand } from "@/views/api/slashCommands";
 import AiChatV2Messages from "./AiChatV2Messages.vue";
 import AiChatV2Composer from "./AiChatV2Composer.vue";
@@ -438,6 +469,7 @@ import { getWorkspace } from "@/views/api/workspace";
 import { workspaceMemoryApi } from "@/views/api/aiWorkspaceMemory";
 import type { WorkspaceSummary } from "@/entityTypes/workspaceTypes";
 import type { FileOperationRecord } from "@/entityTypes/fileOperationTypes";
+import { extractArtifactMetadata, ensureArtifactMetadata } from "./artifactMetadata";
 import {
   subscribeToFileOperations,
   unsubscribeFromFileOperations,
@@ -476,6 +508,11 @@ type ShellPreview = {
   shell: string;
   timeout_ms: number;
 };
+
+const emit = defineEmits<{
+  (e: "open-artifact", artifactId: string): void;
+  (e: "copy-artifact-html", artifactId: string): void;
+}>();
 
 const { t } = useI18n();
 const router = useRouter();
@@ -898,6 +935,55 @@ watch(selectedModel, (val) => {
   }
 });
 
+// ---------------------------------------------------------------------------
+// Provider indicator (Hosted vs Local). Loaded once on mount; the chip near
+// the model selector reflects which provider is active and links to settings.
+// ---------------------------------------------------------------------------
+// `router` is shared with the rest of the component (declared above).
+const providerSettings = ref<AIProviderSettingsView | null>(null);
+
+const providerLabel = computed<string>(() => {
+  const view = providerSettings.value;
+  if (!view) return "";
+  if (view.mode === "hosted") {
+    return t("aiProvider.indicator_hosted") || "Hosted";
+  }
+  if (view.localProvider) {
+    const name = view.localProvider.name || view.localProvider.preset;
+    return `${t("aiProvider.indicator_local") || "Local"}: ${name}`;
+  }
+  return t("aiProvider.indicator_offline") || "Local offline";
+});
+
+const providerChipColor = computed<string>(() => {
+  const view = providerSettings.value;
+  if (!view) return "grey";
+  if (view.mode === "hosted") return "primary";
+  return view.localProvider ? "success" : "warning";
+});
+
+/** Local providers use tools only when capability is explicitly supported. */
+const localToolsUnsupported = computed<boolean>(() => {
+  const view = providerSettings.value;
+  return (
+    !!view &&
+    view.mode === "local" &&
+    view.localProvider?.capabilities?.tools !== "supported"
+  );
+});
+
+async function loadProviderSettings(): Promise<void> {
+  try {
+    providerSettings.value = await getAIProviderSettings();
+  } catch {
+    // Non-fatal: indicator simply stays blank.
+  }
+}
+
+function openAIProviderSettings(): void {
+  router.push({ name: "system_setting_ai_provider" });
+}
+
 const hasLoadedPendingToolExecution = computed(() => {
   const conversationId = activeConversationId.value;
   if (!conversationId) return false;
@@ -1136,7 +1222,12 @@ const loadHistory = async (conversationId: string): Promise<void> => {
   try {
     const resp = await getChatV2History(conversationId);
     if (activeConversationId.value !== conversationId) return;
-    messages.value = resp?.messages ?? [];
+    // Persisted tool-result rows store only the raw `toolResult` (with the
+    // artifact nested under .artifact), not the renderer's `metadata.artifact`
+    // shortcut. Re-derive it on load so artifact cards reappear on history
+    // reopen (PRD ART-009). Auto-open is NOT triggered here — only live
+    // tool_result chunks auto-open.
+    messages.value = (resp?.messages ?? []).map(ensureArtifactMetadata);
     // Reset context-usage tracking for the loaded conversation. If any
     // history rows carry tokensUsed, seed the baseline estimate from the
     // most recent assistant message; otherwise start at zero until the
@@ -1366,6 +1457,7 @@ const upsertToolResultMessage = (
     summary:
       typeof toolResult.summary === "string" ? toolResult.summary : undefined,
     error: typeof toolResult.error === "string" ? toolResult.error : undefined,
+    artifact: extractArtifactMetadata(toolResult),
   };
 
   if (existingIdx !== -1) {
@@ -2082,6 +2174,12 @@ const onSend = async (text: string, files?: File[]): Promise<void> => {
               chunk.conversationId || activeConversationId.value || "",
               assistantAdded ? assistant.id : undefined
             );
+            // Auto-open the artifact preview during a live tool result.
+            // (History loads render the card but must NOT auto-open.)
+            const liveArtifact = extractArtifactMetadata(chunk.toolResult ?? {});
+            if (liveArtifact?.openImmediately) {
+              emit("open-artifact", liveArtifact.id);
+            }
             // AI app navigation: route on open_app_page navigate commands.
             void handleAiNavigationToolResult(router, chunk.toolResult);
           }
@@ -2278,6 +2376,7 @@ watch(
 onMounted(() => {
   void loadConversations();
   void loadModelContextWindows();
+  void loadProviderSettings();
   // Subscribe to file operation events emitted during tool execution.
   // Records are appended per-conversation so the summary panel reflects
   // all changes made within the active conversation.

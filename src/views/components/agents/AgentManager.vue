@@ -42,8 +42,10 @@
           <th>{{ t("subagents.column_agent") }}</th>
           <th>{{ t("subagents.column_description") }}</th>
           <th>{{ t("subagents.column_source") }}</th>
+          <th>{{ t("subagents.column_plugin") }}</th>
           <th>{{ t("subagents.column_mode") }}</th>
           <th>{{ t("subagents.column_tools") }}</th>
+          <th>{{ t("subagents.column_model") }}</th>
           <th>{{ t("subagents.column_status") }}</th>
           <th>{{ t("subagents.column_actions") }}</th>
         </tr>
@@ -65,8 +67,20 @@
               {{ sourceLabel(a.source) }}
             </v-chip>
           </td>
+          <td>
+            <v-chip
+              v-if="a.pluginName"
+              size="x-small"
+              color="primary"
+              variant="tonal"
+            >
+              {{ a.pluginName }}
+            </v-chip>
+            <span v-else class="text-grey text-caption">—</span>
+          </td>
           <td>{{ a.mode }}</td>
           <td>{{ a.allowedTools.length }}</td>
+          <td>{{ a.defaultModel || "—" }}</td>
           <td>
             <v-icon
               v-if="a.health !== 'healthy' || a.lastError"
@@ -146,6 +160,7 @@ const statusFilterItems = computed(() => [
   { label: t("subagents.column_status"), value: "all" },
   { label: t("subagents.status_active"), value: "enabled" },
   { label: t("subagents.status_disabled"), value: "disabled" },
+  { label: t("subagents.status_warning"), value: "warning" },
 ]);
 
 const filteredAgents = computed(() => {

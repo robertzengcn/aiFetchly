@@ -23,6 +23,12 @@
  *   - AI file tools / shell-like operations       (AI_FILE_OPEN, AI_FILE_OPERATION)
  */
 import {
+  AGENT_MANAGEMENT_CREATE,
+  AGENT_MANAGEMENT_DELETE,
+  AGENT_MANAGEMENT_GET,
+  AGENT_MANAGEMENT_LIST,
+  AGENT_MANAGEMENT_TOGGLE,
+  AGENT_MANAGEMENT_UPDATE,
   GET_APP_INFO,
   GET_LOGIN_URL,
   NATIVATECOMMAND,
@@ -34,14 +40,21 @@ import {
 /**
  * Invoke (request/response) channels the dev browser bridge may dispatch.
  *
- * MVP scope: read-only app/user channels plus the reviewed desktop-login URL
- * bootstrap. GET_LOGIN_URL starts the same localhost PKCE handoff used by the
- * Electron IPC path; it returns only a URL and never exposes stored tokens.
+ * MVP scope: read-only app/user channels, the reviewed desktop-login URL
+ * bootstrap, and typed subagent management channels used by the Subagents
+ * settings page. GET_LOGIN_URL starts the same localhost PKCE handoff used by
+ * the Electron IPC path; it returns only a URL and never exposes stored tokens.
  */
 export const DEV_BROWSER_INVOKE_ALLOWLIST = Object.freeze([
   GET_APP_INFO,
   QUERY_USER_INFO,
   GET_LOGIN_URL,
+  AGENT_MANAGEMENT_LIST,
+  AGENT_MANAGEMENT_GET,
+  AGENT_MANAGEMENT_CREATE,
+  AGENT_MANAGEMENT_UPDATE,
+  AGENT_MANAGEMENT_TOGGLE,
+  AGENT_MANAGEMENT_DELETE,
 ] as const);
 
 /**

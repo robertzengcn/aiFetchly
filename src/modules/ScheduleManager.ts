@@ -90,6 +90,25 @@ export class ScheduleManager {
     }
 
     /**
+     * Stop and clear the singleton without creating a replacement.
+     *
+     * Logout clears USERSDBPATH, so resetInstance() would create a temp-db
+     * manager. During user teardown we only want to stop old jobs and drop
+     * references to DB-backed modules from the previous account.
+     */
+    public static async destroyInstance(): Promise<void> {
+        if (ScheduleManager.instance) {
+            try {
+                await ScheduleManager.instance.stop(true);
+            } catch (error) {
+                console.error('Failed to stop existing ScheduleManager during destroy:', error);
+            }
+        }
+
+        ScheduleManager.instance = null;
+    }
+
+    /**
      * Initialize the scheduler and load all active schedules
      */
     async initializeSchedules(): Promise<void> {

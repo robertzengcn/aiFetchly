@@ -6,6 +6,7 @@ import type {
   ChatV2Mode,
   AIChatPlanStatus,
 } from "@/entityTypes/aiChatPlanTypes";
+import type { AIArtifactToolMetadata } from "@/entityTypes/aiArtifactTypes";
 import type {
   AIChatRecoveryLayer,
   AIChatRecoveryReason,
@@ -56,7 +57,7 @@ export interface ChatV2AttachmentMetadata {
 
 /** Metadata stored on v2 chat rows in the existing ai_chat_messages table. */
 export interface ChatV2MessageMetadata {
-  source: "chat-v2";
+  source: "chat-v2" | "slash-command";
   openaiResponseId?: string;
   finishReason?: string | null;
   cancelled?: boolean;
@@ -95,6 +96,9 @@ export interface ChatV2MessageMetadata {
     expectedCount?: number | null;
     updatedAt: number;
   };
+  // AI artifact pointer (metadata only — never the full HTML content).
+  // Present on tool_result messages produced by create_html_artifact.
+  artifact?: AIArtifactToolMetadata;
   // Slash-command result rows. Present only on assistant messages rendered
   // from a slash-command dispatch's show_result variant.
   slashCommandResult?: boolean;

@@ -3,6 +3,7 @@ import { log } from "@/modules/Logger";
 import { AIChatModule } from "@/modules/AIChatModule";
 import { AIChatSessionMemoryModule } from "@/modules/AIChatSessionMemoryModule";
 import { AIChatCompactModule } from "@/modules/AIChatCompactModule";
+import { AIArtifactModule } from "@/modules/AIArtifactModule";
 import { AIChatMessageEntity } from "@/entity/AIChatMessage.entity";
 import { MessageType } from "@/entityTypes/commonType";
 import { Token } from "@/modules/token";
@@ -196,6 +197,15 @@ export class AIChatV2Module extends BaseModule {
         err
       );
     }
+    // Cascade artifact clear so generated HTML is removed with the chat.
+    try {
+      await new AIArtifactModule().deleteByConversation(conversationId);
+    } catch (err) {
+      console.error(
+        "[ai-chat-v2] clearConversation: artifact clear failed:",
+        err
+      );
+    }
     return deleted;
   }
 
@@ -205,6 +215,15 @@ export class AIChatV2Module extends BaseModule {
     let total = 0;
     for (const s of summaries) {
       total += await this.chatModule.clearConversation(s.conversationId);
+      // Remove generated artifacts scoped to this v2 conversation.
+      try {
+        await new AIArtifactModule().deleteByConversation(s.conversationId);
+      } catch (err) {
+        console.error(
+          "[ai-chat-v2] clearAllV2History: artifact clear failed:",
+          err
+        );
+      }
     }
     try {
       await this.sessionMemoryModule.deleteAllV2();

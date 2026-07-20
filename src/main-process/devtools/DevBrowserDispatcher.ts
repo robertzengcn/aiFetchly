@@ -15,13 +15,33 @@
  */
 import type { CommonMessage } from "@/entityTypes/commonType";
 import type { UserInfoType } from "@/entityTypes/userType";
-import { GET_APP_INFO, GET_LOGIN_URL, QUERY_USER_INFO } from "@/config/channellist";
+import type { ZodType } from "zod";
+import {
+  AGENT_MANAGEMENT_CREATE,
+  AGENT_MANAGEMENT_DELETE,
+  AGENT_MANAGEMENT_GET,
+  AGENT_MANAGEMENT_LIST,
+  AGENT_MANAGEMENT_TOGGLE,
+  AGENT_MANAGEMENT_UPDATE,
+  GET_APP_INFO,
+  GET_LOGIN_URL,
+  QUERY_USER_INFO,
+} from "@/config/channellist";
 import { REFRESHTOKEN, TOKENNAME } from "@/config/usersetting";
 import { MainProcessAppInfoModule } from "@/modules/MainProcessAppInfoModule";
+import { AgentDefinitionModule } from "@/modules/AgentDefinitionModule";
 import { UserController } from "@/controller/UserController";
 import { log } from "@/modules/Logger";
 import { Token } from "@/modules/token";
 import { TokenRefreshService } from "@/modules/tokenRefresh";
+import {
+  agentDefinitionByIdInputSchema,
+  agentDefinitionCreateInputSchema,
+  agentDefinitionDeleteInputSchema,
+  agentDefinitionListInputSchema,
+  agentDefinitionToggleInputSchema,
+  agentDefinitionUpdateInputSchema,
+} from "@/schemas/ipc/agentDefinition";
 
 /** A single channel handler. Returns a CommonMessage or a bare payload. */
 export type DevBrowserHandler = (
@@ -130,6 +150,17 @@ function normalizeBridgeResult(raw: unknown): CommonMessage<unknown> {
   return { status: true, msg: "", data: raw };
 }
 
+function parseBridgeInput<T>(schema: () => ZodType<T>, data: unknown): T {
+  const parsed = schema().safeParse(data);
+  if (!parsed.success) {
+    const msg = parsed.error.issues
+      .map((issue) => `${issue.path.join(".") || "input"}: ${issue.message}`)
+      .join("; ");
+    throw new Error(msg || "Invalid request payload.");
+  }
+  return parsed.data;
+}
+
 export class DevBrowserDispatcher {
   private readonly handlers: ReadonlyMap<string, DevBrowserHandler>;
 
@@ -219,6 +250,40 @@ export function createDefaultHandlers(): ReadonlyMap<string, DevBrowserHandler> 
       data: prepared.loginUrl,
     };
     return result;
+  });
+
+  // Agent definition management — used by the Subagents settings page in the
+  // dev browser. These handlers mirror agent-definition-ipc.ts and validate
+  // payloads before touching the Module layer.
+  handlers.set(AGENT_MANAGEMENT_LIST, async (data) => {
+    parseBridgeInput(agentDefinitionListInputSchema, data);
+    return new AgentDefinitionModule().listAllForManagement();
+  });
+
+  handlers.set(AGENT_MANAGEMENT_GET, async (data) => {
+    const input = parseBridgeInput(agentDefinitionByIdInputSchema, data);
+    return new AgentDefinitionModule().getForManagement(input.agentId);
+  });
+
+  handlers.set(AGENT_MANAGEMENT_CREATE, async (data) => {
+    const input = parseBridgeInput(agentDefinitionCreateInputSchema, data);
+    return new AgentDefinitionModule().createManualAgent(input);
+  });
+
+  handlers.set(AGENT_MANAGEMENT_UPDATE, async (data) => {
+    const input = parseBridgeInput(agentDefinitionUpdateInputSchema, data);
+    const { agentId, ...patch } = input;
+    return new AgentDefinitionModule().updateManualAgent(agentId, patch);
+  });
+
+  handlers.set(AGENT_MANAGEMENT_TOGGLE, async (data) => {
+    const input = parseBridgeInput(agentDefinitionToggleInputSchema, data);
+    return new AgentDefinitionModule().toggleAgent(input.agentId, input.enabled);
+  });
+
+  handlers.set(AGENT_MANAGEMENT_DELETE, async (data) => {
+    const input = parseBridgeInput(agentDefinitionDeleteInputSchema, data);
+    return new AgentDefinitionModule().deleteManualAgent(input.agentId);
   });
 
   return handlers;

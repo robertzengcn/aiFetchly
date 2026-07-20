@@ -302,6 +302,13 @@ export const AI_CHAT_V2_GET_TOOL_APPROVAL_MODE =
 export const AI_CHAT_V2_SET_TOOL_APPROVAL_MODE =
   "ai-chat-v2:set-tool-approval-mode";
 
+// AI Provider (Local/Custom) Settings Channels
+export const AI_PROVIDER_SETTINGS_GET = "ai-provider:settings:get";
+export const AI_PROVIDER_SETTINGS_SAVE = "ai-provider:settings:save";
+export const AI_PROVIDER_MODELS_REFRESH = "ai-provider:models:refresh";
+export const AI_PROVIDER_CONNECTION_TEST = "ai-provider:connection:test";
+export const AI_PROVIDER_API_KEY_CLEAR = "ai-provider:api-key:clear";
+
 // ==================== Slash Command + AiFetchly Config Channels ==============
 // Phase 13 (Plan 03b) — see docs/prd/aifetchly-local-extensibility-technical-design.md §17.1.
 //
@@ -502,6 +509,9 @@ export const PLUGIN_MARKETPLACE_INSTALL_PLUGIN =
 
 // AI user memory (durable cross-session memory)
 export const AI_USER_MEMORY_LIST = "ai:user-memory:list";
+// AI Artifacts (read; creation happens through the Chat V2 stream tool)
+export const AI_ARTIFACT_GET = "ai-artifact:get";
+export const AI_ARTIFACT_LIST = "ai-artifact:list";
 export const AI_USER_MEMORY_CREATE = "ai:user-memory:create";
 export const AI_USER_MEMORY_UPDATE = "ai:user-memory:update";
 export const AI_USER_MEMORY_ARCHIVE = "ai:user-memory:archive";

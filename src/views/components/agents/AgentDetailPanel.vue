@@ -45,6 +45,18 @@
         <v-list density="compact" class="px-0">
           <v-list-item>
             <v-list-item-subtitle>{{
+              t("subagents.field_id")
+            }}</v-list-item-subtitle>
+            <div class="text-body-2 text-break">{{ agent.id }}</div>
+          </v-list-item>
+          <v-list-item>
+            <v-list-item-subtitle>{{
+              t("subagents.field_display_name")
+            }}</v-list-item-subtitle>
+            <div class="text-body-2">{{ agent.name }}</div>
+          </v-list-item>
+          <v-list-item>
+            <v-list-item-subtitle>{{
               t("subagents.column_description")
             }}</v-list-item-subtitle>
             <div class="text-body-2">{{ agent.description }}</div>
@@ -89,11 +101,23 @@
           </v-list-item>
           <v-list-item v-if="agent.pluginComponentPath">
             <v-list-item-subtitle>{{
-              t("subagents.column_plugin")
+              t("subagents.field_component_path")
             }}</v-list-item-subtitle>
             <div class="text-body-2 text-break">
               {{ agent.pluginComponentPath }}
             </div>
+          </v-list-item>
+          <v-list-item v-if="agent.updatedAt">
+            <v-list-item-subtitle>{{
+              t("subagents.field_last_updated")
+            }}</v-list-item-subtitle>
+            <div class="text-body-2">{{ agent.updatedAt }}</div>
+          </v-list-item>
+          <v-list-item v-if="agent.createdAt">
+            <v-list-item-subtitle>{{
+              t("subagents.field_created_at")
+            }}</v-list-item-subtitle>
+            <div class="text-body-2">{{ agent.createdAt }}</div>
           </v-list-item>
         </v-list>
 
@@ -115,6 +139,37 @@
               class="text-grey text-body-2"
               >—</span
             >
+          </div>
+        </div>
+
+        <div class="py-2">
+          <div class="text-caption text-grey mb-1">
+            {{ t("subagents.field_output_schema") }}
+          </div>
+          <pre
+            class="text-body-2 bg-grey-lighten-4 pa-2 rounded overflow-auto"
+            style="max-height: 180px"
+            >{{ outputSchemaText }}</pre
+          >
+        </div>
+
+        <div class="py-2">
+          <div class="text-caption text-grey mb-1">
+            {{ t("subagents.field_warnings") }}
+          </div>
+          <div v-if="warnings.length > 0" class="d-flex ga-1 flex-wrap">
+            <v-chip
+              v-for="warning in warnings"
+              :key="warning"
+              size="small"
+              color="warning"
+              variant="tonal"
+            >
+              {{ warning }}
+            </v-chip>
+          </div>
+          <div v-else class="text-body-2 text-grey">
+            {{ t("subagents.field_no_warnings") }}
           </div>
         </div>
 
@@ -278,6 +333,16 @@ const readonlyHint = computed(() => {
     default:
       return t("subagents.readonly_builtin_hint");
   }
+});
+const outputSchemaText = computed(() =>
+  JSON.stringify(props.agent?.outputSchema ?? {}, null, 2)
+);
+const warnings = computed(() => {
+  const values: string[] = [];
+  if (!props.agent) return values;
+  if (props.agent.health !== "healthy") values.push(props.agent.health);
+  if (props.agent.lastError) values.push(props.agent.lastError);
+  return values;
 });
 
 function onDelete(): void {
