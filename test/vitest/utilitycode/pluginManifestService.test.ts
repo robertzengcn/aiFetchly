@@ -96,8 +96,10 @@ describe("PluginManifestService", () => {
   });
 
   it("rejects names that violate the name regex", () => {
-    expect(PLUGIN_NAME_REGEX.test("1bad")).toBe(false);
+    expect(PLUGIN_NAME_REGEX.test("1bad")).toBe(true);
+    expect(PLUGIN_NAME_REGEX.test("2-commit-fast")).toBe(true);
     expect(PLUGIN_NAME_REGEX.test("good-name_1")).toBe(true);
+    expect(PLUGIN_NAME_REGEX.test("-bad")).toBe(false);
     expect(PLUGIN_SEMVER_REGEX.test("1.0.0")).toBe(true);
     expect(PLUGIN_SEMVER_REGEX.test("v1")).toBe(false);
 

@@ -5,6 +5,7 @@ import vue from '@vitejs/plugin-vue'
 import vuetify from 'vite-plugin-vuetify'
 import ClosePlugin from './vite-plugin-close.ts'
 import checker from 'vite-plugin-checker'
+import { optionalChecker } from './vite-checker-toggle.mjs';
 // import { nodePolyfills } from 'vite-plugin-node-polyfills'
 
 export default defineConfig({
@@ -17,6 +18,13 @@ export default defineConfig({
         'keytar',          // Native module, should not be bundled
       ]
     }
+  },
+  // Stable dev-server port so the dev browser bridge origin and the Chrome
+  // launch config (http://localhost:5173) line up. strictPort fails fast if
+  // 5173 is taken rather than silently picking another port (PRD FR-7.2).
+  server: {
+    port: 5173,
+    strictPort: true,
   },
   plugins: [
     // nodePolyfills({
@@ -38,11 +46,11 @@ export default defineConfig({
       autoImport: true,
     }),
     ClosePlugin(),
-    checker({
+    ...optionalChecker(() => checker({
       // e.g. use TypeScript check
       typescript: true,
       //vueTsc: true
-    }),
+    })),
   ],
     define: { 'process.env': {} },
   resolve: {

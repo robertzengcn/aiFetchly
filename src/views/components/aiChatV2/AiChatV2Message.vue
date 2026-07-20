@@ -74,6 +74,13 @@
             </v-icon>
             <strong>{{ t("aiChatV2.tool_result_title") || "Tool Result" }}</strong>
           </div>
+          <AiArtifactCard
+            v-if="message.metadata?.artifact"
+            :artifact="message.metadata.artifact"
+            :disabled="disabled"
+            @open="(id: string) => emit('open-artifact', id)"
+            @copy-html="(id: string) => emit('copy-artifact-html', id)"
+          />
           <div v-if="message.metadata?.toolName" class="v2-message__tool-field">
             <strong>{{ t("aiChatV2.tool_name") || "Tool" }}:</strong>
             <span>{{ message.metadata.toolName }}</span>
@@ -108,6 +115,7 @@ import { MessageType } from "@/entityTypes/commonType";
 import SkillApprovalCard from "@/views/components/aiChat/SkillApprovalCard.vue";
 import AiChatV2StreamStatus from "./AiChatV2StreamStatus.vue";
 import AiChatV2PlanApprovalCard from "./AiChatV2PlanApprovalCard.vue";
+import AiArtifactCard from "@/views/components/aiArtifacts/AiArtifactCard.vue";
 
 type Status = "idle" | "streaming" | "cancelled" | "error";
 type ShellPreview = {
@@ -134,6 +142,8 @@ const emit = defineEmits<{
   (e: "approve-plan"): void;
   (e: "reject-plan", feedback: string): void;
   (e: "request-plan-changes", feedback: string): void;
+  (e: "open-artifact", artifactId: string): void;
+  (e: "copy-artifact-html", artifactId: string): void;
 }>();
 const { t, te } = useI18n();
 

@@ -262,19 +262,22 @@ export class ProxyAiTools {
     } else {
       // Controller enriches records with check status; page is 0-based here and
       // converted to the 1-based page the model layer expects.
-      const resp = await controller.getProxylist(
-        input.page + 1,
-        input.size,
-        input.search ?? ""
-      );
-      if (!resp.status || !resp.data) {
+      // Controller returns the bare {records,total} payload (it unwraps the
+      // module envelope) and throws on module error.
+      try {
+        const resp = await controller.getProxylist(
+          input.page + 1,
+          input.size,
+          input.search ?? ""
+        );
+        records = resp.records;
+        total = resp.total;
+      } catch (err) {
         return proxyToolError(
           "UNSUPPORTED_OPERATION",
-          resp.msg || "Failed to read proxy list"
+          err instanceof Error ? err.message : "Failed to read proxy list"
         );
       }
-      records = resp.data.records;
-      total = resp.data.total;
     }
 
     const proxies = records
@@ -873,19 +876,19 @@ export class ProxyAiTools {
     const pageSize = 100;
     const collected: ProxyListEntity[] = [];
     for (let page = 0; page * pageSize < BOUNDED_SCAN_LIMIT; page += 1) {
-      const resp = await controller.getProxylist(
-        page + 1,
-        pageSize,
-        search ?? ""
-      );
-      if (!resp.status || !resp.data || resp.data.records.length === 0) {
+      // Controller returns bare {records,total} and throws on module error;
+      // treat a throw as "no more pages" and stop scanning.
+      const resp = await controller
+        .getProxylist(page + 1, pageSize, search ?? "")
+        .catch(() => null);
+      if (!resp || resp.records.length === 0) {
         break;
       }
-      collected.push(...resp.data.records);
-      if (collected.length >= resp.data.total) {
+      collected.push(...resp.records);
+      if (collected.length >= resp.total) {
         break;
       }
-      if (resp.data.records.length < pageSize) {
+      if (resp.records.length < pageSize) {
         break;
       }
     }

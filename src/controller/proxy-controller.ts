@@ -116,6 +116,12 @@ export class ProxyController {
 
       const req = http.request(options);
       req.on("connect", (res, socket) => {
+        socket.on("error", (socketError) => {
+          console.log(
+            `HTTP proxy socket error after connect: ${socketError.message}`
+          );
+          resolve(false);
+        });
         socket.end();
         resolve(res.statusCode === 200);
       });
@@ -163,6 +169,12 @@ export class ProxyController {
 
       const req = http.request(options);
       req.on("connect", (res, socket) => {
+        socket.on("error", (socketError) => {
+          console.log(
+            `SOCKS proxy socket error after connect: ${socketError.message}`
+          );
+          resolve(false);
+        });
         socket.end();
         resolve(res.statusCode === 200);
       });
@@ -753,52 +765,39 @@ export class ProxyController {
     page: number,
     size: number,
     search: string
-  ): Promise<ProxylistResp> {
+  ): Promise<ProxylistResp["data"]> {
     const checkDb = this.proxyCheckdb;
-    const res = await this.proxyapi
-      .getProxylist(page, size, search)
-      .then(async function (res) {
-        if (res.status) {
-          if (res.data) {
-            // const pcdb=this.proxyCheckdb
-            //loop data and get check status and check time
-            if (res.data.records) {
-              // res.data.records.map((item) => {
+    // Unwrap the module envelope: registerValidatedHandler already wraps the
+    // handler return in {status,msg,data}, so the controller must return the
+    // bare {records,total} payload here to avoid double-wrapping.
+    const res = await this.proxyapi.getProxylist(page, size, search);
+    if (!res.status) {
+      throw new Error(res.msg ?? "Failed to get proxy list");
+    }
+    if (res.data && res.data.records) {
+      for (let i = 0; i < res.data.records.length; i++) {
+        if (res.data.records[i].id != undefined) {
+          const checkInfo = await checkDb.getProxyCheck(
+            res.data.records[i].id!
+          );
+          if (checkInfo) {
+            res.data.records[i].status = checkInfo.status;
+            res.data.records[i].checktime = checkInfo.check_time;
+            res.data.records[i].googlePass = checkInfo.google_pass ?? undefined;
 
-              //     const checkInfo = pcdb.getProxyCheck(item.id)
-              //     item.status = checkInfo.status
-              //     item.checktime = checkInfo.check_time
-              // })
-              for (let i = 0; i < res.data.records.length; i++) {
-                if (res.data.records[i].id != undefined) {
-                  const checkInfo = await checkDb.getProxyCheck(
-                    res.data.records[i].id!
-                  );
-                  if (checkInfo) {
-                    res.data.records[i].status = checkInfo.status;
-                    res.data.records[i].checktime = checkInfo.check_time;
-                    res.data.records[i].googlePass =
-                      checkInfo.google_pass ?? undefined;
-
-                    // Map to display name
-                    if (checkInfo.google_pass === googlePassStatus.Pass) {
-                      res.data.records[i].googlePassName = "Pass";
-                    } else if (
-                      checkInfo.google_pass === googlePassStatus.Fail
-                    ) {
-                      res.data.records[i].googlePassName = "Fail";
-                    } else {
-                      res.data.records[i].googlePassName = "Not Checked";
-                    }
-                  }
-                }
-              }
+            // Map to display name
+            if (checkInfo.google_pass === googlePassStatus.Pass) {
+              res.data.records[i].googlePassName = "Pass";
+            } else if (checkInfo.google_pass === googlePassStatus.Fail) {
+              res.data.records[i].googlePassName = "Fail";
+            } else {
+              res.data.records[i].googlePassName = "Not Checked";
             }
           }
         }
-        return res;
-      });
-    return res;
+      }
+    }
+    return { total: res.data?.total ?? 0, records: res.data?.records ?? [] };
   }
   //remove failure proxy
   public async removeFailureProxy(callback?: () => void): Promise<void> {

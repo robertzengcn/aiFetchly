@@ -33,8 +33,12 @@ function makeListRecord(
   };
 }
 
-function listResp(records: ProxyListEntity[], total: number): ProxylistResp {
-  return { status: true, msg: "Success", data: { total, records } };
+function listResp(
+  records: ProxyListEntity[],
+  total: number
+): ProxylistResp["data"] {
+  // Controller unwraps the module envelope and returns bare {total, records}.
+  return { total, records };
 }
 
 interface MakeToolsOpts {
@@ -109,11 +113,10 @@ describe("ProxyAiTools.listProxies", () => {
   it("surfaces controller failure as a tool error", async () => {
     const tools = makeTools({
       proxyController: {
-        getProxylist: vi.fn(async () => ({
-          status: false,
-          msg: "db locked",
-          data: { total: 0, records: [] },
-        })),
+        getProxylist: vi.fn(async () => {
+          // Controller throws on module error (it unwraps the envelope).
+          throw new Error("db locked");
+        }),
       },
     });
     const result = await tools.listProxies({});

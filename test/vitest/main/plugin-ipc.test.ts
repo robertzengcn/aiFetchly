@@ -24,7 +24,23 @@ vi.mock("@/modules/token", () => ({
 vi.mock("@/modules/PluginManagementModule", () => ({
   PluginManagementModule: class {
     async listInstalledPlugins() {
-      return [];
+      return [
+        {
+          id: 1,
+          name: "demo-plugin",
+          displayName: "Demo Plugin",
+          version: "1.0.0",
+          source: "local",
+          enabled: 1,
+          health: "healthy",
+          permissionsJson: "[]",
+          updatedAt: new Date("2026-06-17T00:00:00.000Z"),
+          installPath: "/app-data/plugins/installed/demo-plugin",
+          sourceKind: "local-folder",
+          sourceUri: "/home/user/.aifetchly/plugins/demo-plugin",
+          sourceRef: "main",
+        },
+      ];
     }
     async getPluginByName(name: string) {
       if (name !== "demo-plugin") return null;
@@ -41,6 +57,10 @@ vi.mock("@/modules/PluginManagementModule", () => ({
         description: "Demo",
         author: "Tester",
         manifestJson: JSON.stringify({ name, version: "1.0.0" }),
+        installPath: "/app-data/plugins/installed/demo-plugin",
+        sourceKind: "local-folder",
+        sourceUri: "/home/user/.aifetchly/plugins/demo-plugin",
+        sourceRef: "main",
       };
     }
     async togglePlugin() {
@@ -78,12 +98,34 @@ vi.mock("@/modules/MCPToolModule", () => ({
     }
   },
 }));
+vi.mock("@/modules/AgentDefinitionModule", () => ({
+  AgentDefinitionModule: class {
+    async findAgentsByPluginName() {
+      return [];
+    }
+  },
+}));
 vi.mock("@/service/PluginImportService", () => ({
   PluginImportService: {
     importFromZip: vi.fn(async () => ({
       success: true,
       plugin: { name: "p", version: "1.0.0", skillCount: 0, mcpServerCount: 0 },
     })),
+  },
+}));
+vi.mock("@/service/PluginInstallService", () => ({
+  PluginInstallService: class {
+    async installFromSource() {
+      return {
+        success: true,
+        plugin: {
+          name: "p",
+          version: "1.0.0",
+          skillCount: 0,
+          mcpServerCount: 0,
+        },
+      };
+    }
   },
 }));
 vi.mock("@/service/MCPToolService", () => ({
@@ -122,9 +164,21 @@ vi.mock("@/service/PluginLoaderService", () => ({
     }),
   },
 }));
+vi.mock("@/service/UserPluginAutoInstallService", () => ({
+  UserPluginAutoInstallService: {
+    syncDefaultUserPlugins: vi.fn(async () => ({
+      scanned: 0,
+      installed: 0,
+      skipped: 0,
+      errors: [],
+    })),
+  },
+}));
 
 // Import AFTER mocks are registered.
 import { registerPluginIpcHandlers } from "@/main-process/communication/plugin-ipc";
+import { UserPluginAutoInstallService } from "@/service/UserPluginAutoInstallService";
+import { PluginComponentRegistryService } from "@/service/PluginComponentRegistryService";
 import {
   PLUGIN_LIST,
   PLUGIN_GET,
@@ -162,6 +216,25 @@ describe("plugin-ipc", () => {
     });
   });
 
+  it("syncs user plugin folders before listing installed plugins", async () => {
+    const fn = handlers.get(PLUGIN_LIST)!;
+    const result = await fn({}, undefined);
+    expect(result).toMatchObject({
+      status: true,
+      data: [
+        expect.objectContaining({
+          installPath: "/app-data/plugins/installed/demo-plugin",
+          sourceKind: "local-folder",
+          sourceUri: "/home/user/.aifetchly/plugins/demo-plugin",
+          sourceRef: "main",
+        }),
+      ],
+    });
+    expect(
+      UserPluginAutoInstallService.syncDefaultUserPlugins
+    ).toHaveBeenCalled();
+  });
+
   it("rejects import with path traversal in zipPath", async () => {
     aiEnabledValue = "true";
     const fn = handlers.get(PLUGIN_IMPORT)!;
@@ -192,9 +265,13 @@ describe("plugin-ipc", () => {
         mcpServers: [
           expect.objectContaining({
             id: 42,
-            name: "demo-mcp",
+            serverName: "demo-mcp",
           }),
         ],
+        installPath: "/app-data/plugins/installed/demo-plugin",
+        sourceKind: "local-folder",
+        sourceUri: "/home/user/.aifetchly/plugins/demo-plugin",
+        sourceRef: "main",
       },
     });
   });
@@ -241,5 +318,46 @@ describe("plugin-ipc", () => {
       msg: expect.stringContaining("not enabled"),
       data: null,
     });
+  });
+
+  it("PLUGIN_IMPORT promotes commands/agents immediately after a successful install (PRD §9.4)", async () => {
+    aiEnabledValue = "true";
+    const applySpy = vi.mocked(
+      PluginComponentRegistryService.applyLoadedPlugins
+    );
+    applySpy.mockClear();
+    const fn = handlers.get(PLUGIN_IMPORT)!;
+    const result = await fn({}, { zipPath: "/tmp/plugin.zip" });
+    expect(result).toMatchObject({ status: true });
+    expect(applySpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("PLUGIN_INSTALL_FROM_SOURCE promotes commands/agents immediately after a successful install (PRD §9.4)", async () => {
+    aiEnabledValue = "true";
+    const applySpy = vi.mocked(
+      PluginComponentRegistryService.applyLoadedPlugins
+    );
+    applySpy.mockClear();
+    const fn = handlers.get(PLUGIN_INSTALL_FROM_SOURCE)!;
+    const result = await fn(
+      {},
+      { kind: "local-folder", folderPath: "/tmp/plugin" }
+    );
+    expect(result).toMatchObject({ status: true });
+    expect(applySpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("PLUGIN_IMPORT still returns success when post-install promotion throws (recoverable, design §11.3)", async () => {
+    aiEnabledValue = "true";
+    const applySpy = vi.mocked(
+      PluginComponentRegistryService.applyLoadedPlugins
+    );
+    applySpy.mockClear();
+    applySpy.mockRejectedValueOnce(new Error("promotion boom"));
+    const fn = handlers.get(PLUGIN_IMPORT)!;
+    const result = await fn({}, { zipPath: "/tmp/plugin.zip" });
+    // Install itself succeeded; promotion failure must not fail the install.
+    expect(result).toMatchObject({ status: true });
+    expect(applySpy).toHaveBeenCalledTimes(1);
   });
 });

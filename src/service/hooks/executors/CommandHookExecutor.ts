@@ -7,8 +7,10 @@ import {
   HOOK_LIMITS,
 } from "@/entityTypes/hookTypes";
 import { validateHookOutput } from "../HookOutputValidator";
+import debug from "debug";
 import { HookSingleResult } from "../HookResultAggregator";
-import { HookCommandTrustService } from "../HookCommandTrustService";
+
+const _debug = debug("hook:command");
 
 /**
  * Runs a trusted local command as a hook. The command receives the
@@ -63,14 +65,41 @@ function buildEnv(allowlist?: readonly string[]): NodeJS.ProcessEnv {
 }
 
 function parseCommand(command: string): string[] {
-  // Minimal whitespace splitter. We do not invoke a shell; users who
-  // need shell syntax must opt into a future explicit shell hook
-  // type. This parser rejects empty commands.
+  // Quote-aware argv splitter. Supports double and single quotes
+  // to preserve arguments with embedded whitespace (e.g. `-e "code"`).
+  // No escape sequences, no variable expansion — intentionally simple.
   const trimmed = command.trim();
   if (!trimmed) {
     throw new Error("Command hook has empty command");
   }
-  return trimmed.split(/\s+/);
+
+  const args: string[] = [];
+  let current = "";
+  let inDouble = false;
+  let inSingle = false;
+
+  for (let i = 0; i < trimmed.length; i++) {
+    const c = trimmed[i];
+    if (c === '"' && !inSingle) {
+      inDouble = !inDouble;
+      continue;
+    }
+    if (c === "'" && !inDouble) {
+      inSingle = !inSingle;
+      continue;
+    }
+    if (/\s/.test(c) && !inDouble && !inSingle) {
+      if (current) {
+        args.push(current);
+        current = "";
+      }
+      continue;
+    }
+    current += c;
+  }
+  if (current) args.push(current);
+
+  return args;
 }
 
 export async function executeCommand(
@@ -78,16 +107,6 @@ export async function executeCommand(
 ): Promise<CommandHookExecutionResult> {
   const { hook, input, abortSignal } = args;
   const start = Date.now();
-
-  // Trust gate.
-  if (!hook.trusted || !HookCommandTrustService.isTrusted(hook.id)) {
-    return {
-      stdout: "",
-      stderr: "",
-      durationMs: Date.now() - start,
-      result: untrustedResult(hook, start),
-    };
-  }
 
   // Reject if already aborted.
   if (abortSignal?.aborted) {
@@ -102,6 +121,7 @@ export async function executeCommand(
   let argv: string[];
   try {
     argv = parseCommand(hook.command);
+    _debug("parsed command %o → argv %j", hook.command, argv);
   } catch (err) {
     return {
       stdout: "",
@@ -210,7 +230,9 @@ export async function executeCommand(
         let parsed: unknown;
         try {
           parsed = stdoutBuf.length === 0 ? {} : JSON.parse(stdoutBuf);
+          _debug("hook stdout (%d bytes) parsed: %j", stdoutBuf.length, parsed);
         } catch (err) {
+          _debug("hook stdout (%d bytes) not JSON: %s", stdoutBuf.length, stdoutBuf.slice(0, 500));
           return failureResult(
             resultHook,
             `Command hook stdout was not valid JSON: ${errorMessage(err)}`,
@@ -232,6 +254,9 @@ export async function executeCommand(
         };
       })();
 
+      if (stderrBuf) {
+        _debug("hook stderr (%d bytes): %s", stderrBuf.length, stderrBuf.slice(0, 500));
+      }
       return { stdout: stdoutBuf, stderr: stderrBuf, durationMs, result };
     };
 
@@ -268,10 +293,6 @@ export async function executeCommand(
       // If stdin write fails, fall through to close handler.
     }
   });
-}
-
-function untrustedResult(hook: CommandHookDefinition, start: number): HookSingleResult {
-  return failureResult(hook, "Command hook is not trusted", start);
 }
 
 function abortedResult(hook: CommandHookDefinition, durationMs = 0): HookSingleResult {

@@ -405,6 +405,19 @@ export const createTranslatedRoutes = (): RouteRecordRaw[] => {
       component: Layout,
       children: [
         {
+          path: "",
+          component: () =>
+            import(
+              /* webpackChunkName: "email-marketing" */ "@/views/pages/emailmarketing/index.vue"
+            ),
+          name: "Email_Marketing_Index",
+          meta: {
+            visible: false,
+            title: computed(() => t("router.email_marketing")),
+            icon: "mdi-email-multiple",
+          },
+        },
+        {
           path: "buckemailtask/list/",
           component: () =>
             import(
@@ -566,7 +579,7 @@ export const createTranslatedRoutes = (): RouteRecordRaw[] => {
       path: "/proxy",
       name: "Proxy",
       meta: {
-        visible: true,
+        visible: false,
         title: computed(() => t("router.proxy")),
         icon: "mdi-shield-outline",
       },
@@ -644,7 +657,7 @@ export const createTranslatedRoutes = (): RouteRecordRaw[] => {
       name: "Socialaccount",
       meta: {
         visible: true,
-        title: computed(() => t("router.social_account")),
+        title: computed(() => t("route.tool_account")),
         icon: "mdi-account-multiple",
       },
       component: Layout,
@@ -658,7 +671,7 @@ export const createTranslatedRoutes = (): RouteRecordRaw[] => {
           name: "SocialAccount",
           meta: {
             visible: true,
-            title: computed(() => t("router.account_list")),
+            title: computed(() => t("route.tool_account_list")),
             icon: "mdi-account-details",
           },
         },
@@ -671,7 +684,7 @@ export const createTranslatedRoutes = (): RouteRecordRaw[] => {
           name: "editSocialAccount",
           meta: {
             visible: false,
-            title: computed(() => t("router.edit_account")),
+            title: computed(() => t("route.edit_tool_account")),
             icon: "mdi-account-edit",
           },
         },
@@ -684,7 +697,7 @@ export const createTranslatedRoutes = (): RouteRecordRaw[] => {
           name: "CreateSocialAccount",
           meta: {
             visible: false,
-            title: computed(() => t("router.add_account")),
+            title: computed(() => t("route.add_tool_account")),
             icon: "mdi-account-plus",
           },
         },

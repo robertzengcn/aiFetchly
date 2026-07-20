@@ -16,11 +16,14 @@ AiFetchly is an AI-powered marketing automation Electron application for social 
 - `yarn test` - Run test suite with Mocha
 - `yarn tsc` - Type check with TypeScript (watch mode)
 
+### Local Testing URL
+- The application can be tested in a browser at `http://localhost:5173` after running `yarn dev`.
+
 ### Specialized Commands
 - `yarn login -c <campaignId>` - Login to social platform for specific campaign
 - `yarn task -t <taskDetails>` - Run specific task
 - `yarn init` - Initialize SQL database
-- `yarn rebuild-sqlite3` - Rebuild SQLite3 native module
+- `yarn rebuild-better-sqlite` - Rebuild better-sqlite3 for the installed Electron version (also runs automatically via `postinstall`)
 - `yarn vue-check` - Vue TypeScript type checking
 
 ### Testing Commands
@@ -118,11 +121,11 @@ src/
 - Database operations must use TypeORM entities
 
 ### Auto-Commit After Completing Functions - MANDATORY RULE
-**CRITICAL: After completing each function or logical unit of work, you MUST automatically stage and commit the changes to git.**
+**CRITICAL: After fixing a bug, completing a requirement, or finishing each function/logical unit of work, you MUST automatically stage and commit the changes to git.**
 
 #### Workflow
 
-1. **After completing a function**, immediately:
+1. **After completing the work**, immediately:
    - Stage the changed files: `git add <specific-files>`
    - Commit with a descriptive message following conventional commits format
    - Do NOT wait for the user to ask — do it automatically
@@ -131,9 +134,10 @@ src/
    - Types: `feat`, `fix`, `refactor`, `docs`, `test`, `chore`, `perf`, `ci`
    - Description should explain *what* and *why*, not just *what changed*
 
-3. **What counts as a "completed function"**:
+3. **What counts as a unit of work**:
    - A new function/method that is fully implemented
    - A bug fix that resolves a specific issue
+   - A completed user requirement or feature
    - A refactoring of an existing function
    - A new test that covers a specific case
    - A set of related changes that form one logical unit (e.g., entity + model + module for one feature)
