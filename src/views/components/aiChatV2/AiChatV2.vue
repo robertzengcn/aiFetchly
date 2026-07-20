@@ -535,46 +535,14 @@ const attachmentError = ref<string | null>(null);
 
 const MAX_UPLOAD_FILE_BYTES = 5 * 1024 * 1024;
 
-function classifyAttachment(fileName: string, mimeType: string): ChatV2AttachmentKind | null {
-  const name = fileName.toLowerCase();
-  const mime = mimeType.toLowerCase();
-
-  if (mime.startsWith("image/")) return "image";
-  if (name.endsWith(".png") || name.endsWith(".jpg") || name.endsWith(".jpeg")) return "image";
-  if (name.endsWith(".webp") || name.endsWith(".gif")) return "image";
-
-  if (mime === "application/pdf" || name.endsWith(".pdf")) return "document";
-  if (mime === "text/csv" || mime === "application/csv" || name.endsWith(".csv")) return "document";
-  if (name.endsWith(".docx") || mime.includes("wordprocessingml.document")) return "document";
-  if (name.endsWith(".xlsx") || name.endsWith(".xls") || mime.includes("spreadsheetml.sheet")) return "document";
-
-  return null;
-}
-
-function defaultPromptForAttachments(files: File[]): string {
-  const images = files.filter((f) => classifyAttachment(f.name, f.type) === "image");
-  if (images.length > 0 && files.every((f) => classifyAttachment(f.name, f.type) === "image")) {
-    return "What is in this image?";
-  }
-  return "";
-}
-
-function resolveMimeType(file: File): string {
-  if (file.type && file.type !== "application/octet-stream") {
-    return file.type;
-  }
-  const name = file.name.toLowerCase();
-  if (name.endsWith(".pdf")) return "application/pdf";
-  if (name.endsWith(".csv")) return "text/csv";
-  if (name.endsWith(".docx")) return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
-  if (name.endsWith(".xlsx")) return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
-  if (name.endsWith(".xls")) return "application/vnd.ms-excel";
-  if (name.endsWith(".png")) return "image/png";
-  if (name.endsWith(".jpg") || name.endsWith(".jpeg")) return "image/jpeg";
-  if (name.endsWith(".webp")) return "image/webp";
-  if (name.endsWith(".gif")) return "image/gif";
-  return file.type || "application/octet-stream";
-}
+// Pure utility functions extracted to aiChatV2Utils.ts (R5.6/R6.3 split)
+import {
+  classifyAttachment,
+  defaultPromptForAttachments,
+  resolveMimeType,
+  truncateText,
+  formatTimestamp,
+} from "./aiChatV2Utils";
 
 async function buildUploadedAttachments(files: File[]): Promise<ChatV2UploadedAttachment[]> {
   const out: ChatV2UploadedAttachment[] = [];
@@ -1099,18 +1067,7 @@ const streamStatus = computed<Status>(() => {
   return "idle";
 });
 
-const truncateText = (text: string | undefined, max: number): string => {
-  if (!text) return "";
-  return text.length > max ? text.slice(0, max) + "..." : text;
-};
-
-const formatTimestamp = (iso: string): string => {
-  try {
-    return new Date(iso).toLocaleString();
-  } catch {
-    return "";
-  }
-};
+// truncateText + formatTimestamp extracted to aiChatV2Utils.ts
 
 /**
  * Map a backend-mapped error string to a user-facing, translated message.
