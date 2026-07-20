@@ -101,7 +101,7 @@ export class ScheduleManager {
             try {
                 await ScheduleManager.instance.stop(true);
             } catch (error) {
-                console.error('Failed to stop existing ScheduleManager during destroy:', error);
+                log.error('Failed to stop existing ScheduleManager during destroy:', error);
             }
         }
 

@@ -201,7 +201,7 @@ export class AIChatV2Module extends BaseModule {
     try {
       await new AIArtifactModule().deleteByConversation(conversationId);
     } catch (err) {
-      console.error(
+      log.error(
         "[ai-chat-v2] clearConversation: artifact clear failed:",
         err
       );
@@ -219,7 +219,7 @@ export class AIChatV2Module extends BaseModule {
       try {
         await new AIArtifactModule().deleteByConversation(s.conversationId);
       } catch (err) {
-        console.error(
+        log.error(
           "[ai-chat-v2] clearAllV2History: artifact clear failed:",
           err
         );
