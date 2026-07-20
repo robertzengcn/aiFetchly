@@ -32,7 +32,7 @@
  * (switch flow + immediate snapshot), §14.4 (worker message validation).
  */
 
-import { fork, type ChildProcess, type ForkOptions } from "child_process";
+import { utilityProcess } from "electron";
 import * as path from "path";
 import type {
   AIFetchlyConfigDiagnostic,
@@ -101,12 +101,33 @@ export type WorkspaceWatchLogger = (
   meta?: unknown
 ) => void;
 
-/** fork function signature (matches child_process.fork). */
+/** Structural handle for the worker process (R4.6: utilityProcess transport). */
+interface WorkerHandle {
+  postMessage(msg: unknown): void;
+  on(event: "message", cb: (msg: unknown) => void): void;
+  on(event: "exit", cb: (code: number) => void): void;
+  once(event: "exit", cb: (code: number) => void): void;
+  removeListener(event: string, cb: (...args: unknown[]) => void): void;
+  kill(): void;
+  readonly pid?: number;
+}
+
+/** Default fork: utilityProcess.fork (R4.6 transport unification). */
+const defaultUtilityFork = (
+  entry: string,
+  args: readonly string[],
+  opts: { env?: NodeJS.ProcessEnv }
+): WorkerHandle => {
+  const child = utilityProcess.fork(entry, [...args], { env: opts.env });
+  return child as unknown as WorkerHandle;
+};
+
+/** fork function signature (R4.6: utilityProcess, not child_process). */
 export type ForkFn = (
   entry: string,
   args: readonly string[],
-  opts: ForkOptions
-) => ChildProcess;
+  opts: { env?: NodeJS.ProcessEnv }
+) => WorkerHandle;
 
 /** Constructor dependencies. All callbacks are injected (test-friendly). */
 export interface WorkspaceWatchManagerOptions {
@@ -186,7 +207,7 @@ function defaultWorkerEntry(): string {
  */
 export class WorkspaceWatchManager {
   private readonly watched = new Map<string, MutableWatchedWorkspaceState>();
-  private worker: ChildProcess | null = null;
+  private worker: WorkerHandle | null = null;
   private workerState: "not-started" | "running" | "restarting" | "failed" =
     "not-started";
   /** Set by shutdown() — exit handler becomes a no-op (no auto-restart). */
@@ -211,7 +232,7 @@ export class WorkspaceWatchManager {
     this.applySnapshotCallback = opts.applySnapshotCallback;
     this.configChangedEmitter = opts.configChangedEmitter;
     this.trustResolver = opts.trustResolver;
-    this.forkFn = opts.fork ?? fork;
+    this.forkFn = opts.fork ?? defaultUtilityFork;
     this.workerEntry = opts.workerEntry ?? defaultWorkerEntry();
     this.restarter = opts.restarter ?? new WorkspaceWatchRestarter();
     this.logger = opts.logger ?? defaultLogger;
@@ -310,9 +331,11 @@ export class WorkspaceWatchManager {
    */
   async shutdown(): Promise<void> {
     this.disposed = true;
-    if (this.worker && this.worker.connected) {
+    if (this.worker && this.worker.pid !== undefined) {
       try {
-        this.worker.send({ type: "shutdown" } satisfies WorkspaceWatchCommand);
+        this.worker.postMessage({
+          type: "shutdown",
+        } satisfies WorkspaceWatchCommand);
       } catch (err) {
         this.logger("warn", "failed to send shutdown command", err);
       }
@@ -320,7 +343,7 @@ export class WorkspaceWatchManager {
     await this.waitForWorkerExit(this.shutdownTimeoutMs);
     if (this.worker) {
       try {
-        this.worker.kill("SIGKILL");
+        this.worker.kill();
       } catch {
         // Already gone — ignore.
       }
@@ -379,25 +402,19 @@ export class WorkspaceWatchManager {
 
   private spawnWorker(): void {
     const worker = this.forkFn(this.workerEntry, [], {
-      stdio: ["inherit", "inherit", "inherit", "ipc"],
       env: { ...process.env, WORKER_TYPE: WORKER_TYPE_MARKER },
     });
     this.worker = worker;
     this.workerState = "running";
     worker.on("message", (raw: unknown) => this.handleWorkerMessage(raw));
-    worker.on("exit", (code, signal) => this.handleWorkerExit(code, signal));
-    worker.on("error", (err) => {
-      this.logger("error", "worker error event", err);
-      // Treat as a crash — kill will trigger the exit handler.
-      this.killWorker();
-    });
+    worker.on("exit", (code: number) => this.handleWorkerExit(code, "exit"));
   }
 
   private send(cmd: WorkspaceWatchCommand): void {
     const w = this.worker;
-    if (w && w.connected) {
+    if (w && w.pid !== undefined) {
       try {
-        w.send(cmd);
+        w.postMessage(cmd);
       } catch (err) {
         this.logger("warn", `failed to send ${cmd.type} command`, err);
       }
@@ -557,10 +574,7 @@ export class WorkspaceWatchManager {
    * (expected 1→0 transition), no restart. Otherwise, record a restart
    * and re-fork if under cap; surface 'failed' + error if over.
    */
-  private handleWorkerExit(
-    code: number | null,
-    signal: NodeJS.Signals | null
-  ): void {
+  private handleWorkerExit(code: number | null, signal: string): void {
     this.worker = null;
     if (this.disposed) return; // app shutdown
     if (this.watched.size === 0) {
