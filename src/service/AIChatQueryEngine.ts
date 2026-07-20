@@ -1157,20 +1157,32 @@ export class AIChatQueryEngine {
           );
         }
       },
+      flush: async () => {
+        await this.flushPendingEventSaves(saves);
+      },
     };
     this.pendingEventSaves.set(wrapped, saves);
     return wrapped;
+  }
+
+  private async flushPendingEventSaves(
+    saves: Promise<unknown>[]
+  ): Promise<void> {
+    if (saves.length === 0) {
+      return;
+    }
+    await Promise.allSettled(saves);
+    saves.length = 0;
   }
 
   private async flushEventSaves(
     eventSink: AIChatQueryEventSink
   ): Promise<void> {
     const saves = this.pendingEventSaves.get(eventSink);
-    if (!saves || saves.length === 0) {
+    if (!saves) {
       return;
     }
-    await Promise.allSettled(saves);
-    saves.length = 0;
+    await this.flushPendingEventSaves(saves);
   }
 
   /**

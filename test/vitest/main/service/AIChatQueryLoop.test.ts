@@ -60,6 +60,19 @@ function makeToolCallChunk(
   };
 }
 
+async function waitForCondition(
+  predicate: () => boolean,
+  timeoutMs = 1000
+): Promise<void> {
+  const startedAt = Date.now();
+  while (!predicate()) {
+    if (Date.now() - startedAt > timeoutMs) {
+      throw new Error("Timed out waiting for condition");
+    }
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
+
 describe("AIChatQueryLoop", () => {
   beforeEach(() => {
     HookRegistry.resetForTests();
@@ -247,6 +260,78 @@ describe("AIChatQueryLoop", () => {
       expect(fakeExecute).toHaveBeenCalledWith(
         "search",
         { q: "test" },
+        expect.objectContaining({ toolCallId: "call-1" })
+      );
+    });
+
+    it("waits for tool-call persistence to flush before executing the tool", async () => {
+      const toolCallChunk = makeToolCallChunk(
+        "call-1",
+        "create_html_artifact",
+        '{"title":"Report","html":"<html><body>v2</body></html>"}'
+      );
+      const finalChunk = makeChunk("Done", "stop");
+      let callCount = 0;
+      const fakeStream = vi.fn(
+        async (
+          _req: unknown,
+          onChunk: (c: OpenAIChatCompletionChunk) => void
+        ) => {
+          if (callCount === 0) {
+            callCount++;
+            onChunk(toolCallChunk);
+            return;
+          }
+          onChunk(finalChunk);
+        }
+      );
+      const fakeExecute = vi.fn().mockResolvedValue({
+        tool_call_id: "call-1",
+        tool_name: "create_html_artifact",
+        success: true,
+        result: { artifact: { id: "artifact-1" } },
+        execution_time_ms: 10,
+      });
+      const loop = new AIChatQueryLoop({
+        streamChatCompletion: fakeStream,
+        executeTool: fakeExecute,
+        getSkillDefinition: vi.fn().mockReturnValue(undefined),
+      });
+      let releaseFlush: (() => void) | undefined;
+      const flushStarted = vi.fn();
+      const flushPromise = new Promise<void>((resolve) => {
+        releaseFlush = resolve;
+      });
+
+      const runPromise = loop.run({
+        conversationId: "v2-test",
+        assistantMessageId: "a-1",
+        messages: [],
+        request: { message: "revise report" },
+        openAITools: [],
+        abortController: new AbortController(),
+        eventSink: {
+          emit: vi.fn(),
+          flush: async () => {
+            flushStarted();
+            await flushPromise;
+          },
+        },
+        startRound: 0,
+        isActiveTurn: () => true,
+      });
+
+      await waitForCondition(() => flushStarted.mock.calls.length === 1);
+      expect(flushStarted).toHaveBeenCalledOnce();
+      expect(fakeExecute).not.toHaveBeenCalled();
+
+      releaseFlush?.();
+      const result = await runPromise;
+
+      expect(result.type).toBe("completed");
+      expect(fakeExecute).toHaveBeenCalledWith(
+        "create_html_artifact",
+        { title: "Report", html: "<html><body>v2</body></html>" },
         expect.objectContaining({ toolCallId: "call-1" })
       );
     });
