@@ -32,9 +32,12 @@ import { SqliteDb } from "@/config/SqliteDb";
 import { ScheduleManager } from "@/modules/ScheduleManager";
 import { SearchController } from "@/controller/SearchController";
 import { YellowPagesController } from "@/controller/YellowPagesController";
+import { YellowPagesProcessManager } from "@/modules/YellowPagesProcessManager";
 import { initializeWebSocketConnection } from "@/main-process/communication/websocket-ipc";
 import { resetAiChatV2RuntimeForDatabaseSwitch } from "@/main-process/communication/ai-chat-v2-ipc";
 import { TokenRefreshService } from "@/modules/tokenRefresh";
+import { WebSocketClient } from "@/modules/WebSocketClient";
+import { VectorDatabasePool } from "@/modules/factories/VectorDatabasePool";
 import { NATIVATECOMMAND } from "@/config/channellist";
 import { NativateDatatype } from "@/entityTypes/commonType";
 import { log } from "@/modules/Logger";
@@ -200,7 +203,10 @@ export async function completeDesktopLogin(
 
       SearchController.resetInstance();
       YellowPagesController.resetInstance();
+      YellowPagesProcessManager.resetInstance();
       resetAiChatV2RuntimeForDatabaseSwitch();
+      WebSocketClient.resetInstance();
+      await VectorDatabasePool.clearAllInstances();
       log.info("Controller singletons reset after SqliteDb path change");
 
       if (!newDbInstance.connection.isInitialized) {

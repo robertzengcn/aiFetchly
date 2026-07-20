@@ -1,14 +1,14 @@
 import { Repository } from "typeorm";
-import { SqliteDb } from "@/config/SqliteDb";
 import { EmailSearchTaskProxyEntity } from "@/entity/EmailSearchTaskProxy.entity";
 import { IEmailSearchTaskProxyModuleInterface } from "@/modules/interface/IEmailSearchTaskProxyModuleInterface";
+import { BaseDb } from "@/model/Basedb";
 
-export class EmailSearchTaskProxyModel implements IEmailSearchTaskProxyModuleInterface {
+export class EmailSearchTaskProxyModel extends BaseDb implements IEmailSearchTaskProxyModuleInterface {
     private repository: Repository<EmailSearchTaskProxyEntity>;
 
-    constructor() {
-        const db = SqliteDb.getInstance("");
-        this.repository = db.connection.getRepository(EmailSearchTaskProxyEntity);
+    constructor(dbpath: string) {
+        super(dbpath);
+        this.repository = this.sqliteDb.connection.getRepository(EmailSearchTaskProxyEntity);
     }
 
     // Create operations
