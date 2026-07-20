@@ -77,6 +77,10 @@ export interface LocalAIProviderConfigInput {
   /** When true, the stored key is deleted regardless of `apiKey`. */
   readonly clearApiKey?: boolean;
   readonly contextSize?: number;
+  readonly capabilities?: LocalAIProviderCapabilities;
+  readonly lastTestedAt?: string;
+  readonly lastTestStatus?: "passed" | "failed" | "partial" | "untested";
+  readonly lastTestMessage?: string;
 }
 
 /** Redacted, renderer-safe snapshot of all provider settings. */

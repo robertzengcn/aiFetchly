@@ -44,6 +44,7 @@
             :label="t('aiProvider.name') || 'Provider name'"
             density="compact"
             variant="outlined"
+            @update:model-value="clearTestState"
           />
         </v-col>
       </v-row>
@@ -55,6 +56,7 @@
         variant="outlined"
         class="mb-2"
         :placeholder="t('aiProvider.base_url_placeholder') || 'http://localhost:11434/v1'"
+        @update:model-value="clearTestState"
       />
 
       <v-text-field
@@ -66,6 +68,7 @@
         class="mb-1"
         :placeholder="apiKeyConfigured ? (t('aiProvider.api_key_configured') || 'API key configured — leave blank to keep') : ''"
         :append-inner-icon="showApiKey ? 'mdi-eye-off' : 'mdi-eye'"
+        @update:model-value="clearTestState"
         @click:append-inner="showApiKey = !showApiKey"
       />
       <div class="d-flex align-center mb-3">
@@ -100,6 +103,7 @@
             density="compact"
             variant="outlined"
             :return-object="false"
+            @update:model-value="clearTestState"
           />
         </v-col>
         <v-col cols="12" sm="4">
@@ -109,6 +113,7 @@
             :label="t('aiProvider.context_size') || 'Context size (optional)'"
             density="compact"
             variant="outlined"
+            @update:model-value="clearTestState"
           />
         </v-col>
       </v-row>
@@ -198,6 +203,11 @@ const showApiKey = ref(false);
 const defaultModel = ref("");
 const contextSize = ref<number | null>(null);
 const capabilities = ref<LocalAIProviderCapabilities | null>(null);
+const lastTestedAt = ref("");
+const lastTestStatus = ref<"passed" | "failed" | "partial" | "untested">(
+  "untested"
+);
+const lastTestMessage = ref("");
 
 const refreshing = ref(false);
 const testing = ref(false);
@@ -206,6 +216,13 @@ const message = ref<UIMessage | null>(null);
 
 const presetItems = AI_PROVIDER_PRESETS;
 const modelItems = ref<string[]>([]);
+
+function clearTestState(): void {
+  capabilities.value = null;
+  lastTestedAt.value = "";
+  lastTestStatus.value = "untested";
+  lastTestMessage.value = "";
+}
 
 function buildInput(): LocalAIProviderConfigInput {
   // Construct immutably — LocalAIProviderConfigInput fields are readonly.
@@ -220,14 +237,21 @@ function buildInput(): LocalAIProviderConfigInput {
     ...(typeof contextSize.value === "number" && contextSize.value > 0
       ? { contextSize: contextSize.value }
       : {}),
+    ...(capabilities.value ? { capabilities: capabilities.value } : {}),
+    ...(lastTestedAt.value ? { lastTestedAt: lastTestedAt.value } : {}),
+    ...(lastTestStatus.value !== "untested"
+      ? { lastTestStatus: lastTestStatus.value }
+      : {}),
+    ...(lastTestMessage.value ? { lastTestMessage: lastTestMessage.value } : {}),
   };
 }
 
 function onPresetChange(value: LocalAIProviderPreset): void {
   const def = AI_PROVIDER_PRESETS.find((p) => p.preset === value);
   if (!def) return;
-  if (!name.value) name.value = def.defaultName;
-  if (!baseUrl.value) baseUrl.value = def.defaultBaseUrl;
+  name.value = def.defaultName;
+  baseUrl.value = def.defaultBaseUrl;
+  clearTestState();
 }
 
 async function loadSettings(): Promise<void> {
@@ -246,6 +270,9 @@ async function loadSettings(): Promise<void> {
       // Never hydrate the plaintext API key from storage.
       apiKey.value = "";
       capabilities.value = cfg.capabilities ?? null;
+      lastTestedAt.value = cfg.lastTestedAt ?? "";
+      lastTestStatus.value = cfg.lastTestStatus ?? "untested";
+      lastTestMessage.value = cfg.lastTestMessage ?? "";
     }
   } catch (err) {
     message.value = {
@@ -286,6 +313,9 @@ async function onTestConnection(): Promise<void> {
   try {
     const result = await testLocalAIProvider({ provider: buildInput() });
     capabilities.value = result.capabilities;
+    lastTestedAt.value = new Date().toISOString();
+    lastTestStatus.value = result.status;
+    lastTestMessage.value = result.message;
     const tone: MessageType =
       result.status === "passed"
         ? "success"
@@ -316,6 +346,12 @@ async function onSave(): Promise<void> {
       apiKeyConfigured.value = !!view.localProvider.apiKeyConfigured;
       baseUrl.value = view.localProvider.baseUrl;
       apiKey.value = ""; // clear the transient field after save
+      capabilities.value = view.localProvider.capabilities ?? capabilities.value;
+      lastTestedAt.value = view.localProvider.lastTestedAt ?? lastTestedAt.value;
+      lastTestStatus.value =
+        view.localProvider.lastTestStatus ?? lastTestStatus.value;
+      lastTestMessage.value =
+        view.localProvider.lastTestMessage ?? lastTestMessage.value;
     }
     message.value = {
       type: "success",

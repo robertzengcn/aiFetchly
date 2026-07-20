@@ -41,12 +41,17 @@ type Resp = {
   msg: string;
   data: {
     mode?: string;
-    localProvider?: { apiKeyConfigured?: boolean } | null;
+    localProvider?: {
+      apiKeyConfigured?: boolean;
+      capabilities?: { chat?: string; streaming?: string; tools?: string };
+      lastTestStatus?: string;
+      lastTestMessage?: string;
+    } | null;
     models?: { id: string }[];
     warning?: string;
     status?: string;
     message?: string;
-    capabilities?: { chat?: string; modelsEndpoint?: string };
+    capabilities?: { chat?: string; modelsEndpoint?: string; tools?: string };
   };
 };
 
@@ -84,6 +89,34 @@ describe("ai-provider-ipc", () => {
     expect(res.data.localProvider?.apiKeyConfigured).toBe(true);
     // The plaintext key must not appear anywhere in the redacted response.
     expect(JSON.stringify(res.data).includes("sk-super-secret")).toBe(false);
+  });
+
+  it("settings save returns persisted capability metadata without the plaintext key", async () => {
+    const res = await call(AI_PROVIDER_SETTINGS_SAVE, undefined, {
+      mode: "local",
+      localProvider: {
+        ...VALID_PROVIDER,
+        apiKey: "sk-super-secret",
+        capabilities: {
+          modelsEndpoint: "supported",
+          chat: "supported",
+          streaming: "unsupported",
+          tools: "unknown",
+          vision: "unknown",
+        },
+        lastTestedAt: "2026-07-20T00:00:00.000Z",
+        lastTestStatus: "partial",
+        lastTestMessage: "Chat test passed, but streaming could not be verified.",
+      },
+    });
+
+    expect(res.status).toBe(true);
+    expect(res.data.localProvider?.capabilities?.chat).toBe("supported");
+    expect(res.data.localProvider?.capabilities?.streaming).toBe("unsupported");
+    expect(res.data.localProvider?.capabilities?.tools).toBe("unknown");
+    expect(res.data.localProvider?.lastTestStatus).toBe("partial");
+    expect(res.data.localProvider?.lastTestMessage).toMatch(/streaming/i);
+    expect(JSON.stringify(res.data)).not.toContain("sk-super-secret");
   });
 
   it("clear API key flips apiKeyConfigured to false", async () => {
@@ -169,6 +202,73 @@ describe("ai-provider-ipc", () => {
       expect(res.data.status).toBe("failed");
       expect(res.data.message).toMatch(/authentication failed/i);
       expect(JSON.stringify(res)).not.toContain("sk-should-not-leak");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("connection test probes tool support when chat works", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn((url: string | URL | Request, init?: RequestInit) => {
+      const path = String(url);
+      const body = init?.body ? JSON.parse(String(init.body)) : {};
+      if (path.endsWith("/models")) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              object: "list",
+              data: [
+                {
+                  id: "llama3.1",
+                  object: "model",
+                  created: 0,
+                  owned_by: "ollama",
+                },
+              ],
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } }
+          )
+        );
+      }
+      if (body.stream === true) {
+        return Promise.resolve(new Response("data: [DONE]\n\n", { status: 200 }));
+      }
+      if (Array.isArray(body.tools)) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              choices: [
+                {
+                  message: {
+                    tool_calls: [
+                      {
+                        id: "tool_1",
+                        type: "function",
+                        function: { name: "ping_tool", arguments: "{}" },
+                      },
+                    ],
+                  },
+                },
+              ],
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } }
+          )
+        );
+      }
+      return Promise.resolve(
+        new Response(JSON.stringify({ choices: [{ message: { content: "pong" } }] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        })
+      );
+    }) as unknown as typeof globalThis.fetch;
+    try {
+      const res = await call(AI_PROVIDER_CONNECTION_TEST, undefined, {
+        provider: VALID_PROVIDER,
+      });
+      expect(res.status).toBe(true);
+      expect(res.data.status).toBe("passed");
+      expect(res.data.capabilities?.tools).toBe("supported");
     } finally {
       globalThis.fetch = originalFetch;
     }

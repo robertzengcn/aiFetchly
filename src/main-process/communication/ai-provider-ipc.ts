@@ -169,7 +169,7 @@ export function registerAIProviderIpcHandlers(): void {
           return denied("provider is required");
         }
         const tester = new AIProviderConnectionTester();
-        const result = await tester.test(req.provider, { probeTools: false });
+        const result = await tester.test(req.provider, { probeTools: true });
         return ok(result);
       } catch (err) {
         return denied(err instanceof Error ? err.message : String(err));

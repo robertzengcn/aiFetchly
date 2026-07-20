@@ -994,13 +994,13 @@ const providerChipColor = computed<string>(() => {
   return view.localProvider ? "success" : "warning";
 });
 
-/** True only when the local provider is KNOWN to lack tool support. */
+/** Local providers use tools only when capability is explicitly supported. */
 const localToolsUnsupported = computed<boolean>(() => {
   const view = providerSettings.value;
   return (
     !!view &&
     view.mode === "local" &&
-    view.localProvider?.capabilities?.tools === "unsupported"
+    view.localProvider?.capabilities?.tools !== "supported"
   );
 });
 

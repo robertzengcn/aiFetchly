@@ -204,4 +204,34 @@ describe("validateLocalProviderConfig", () => {
     expect(result.normalized?.contextSize).toBeUndefined();
     expect(result.warnings.join("; ")).toMatch(/Context size/);
   });
+
+  it("preserves valid capability and last-test metadata", () => {
+    const result = validateLocalProviderConfig({
+      ...validInput,
+      capabilities: {
+        modelsEndpoint: "supported",
+        chat: "supported",
+        streaming: "unsupported",
+        tools: "unknown",
+        vision: "unknown",
+        contextSize: 8192,
+      },
+      lastTestedAt: "2026-07-20T00:00:00.000Z",
+      lastTestStatus: "partial",
+      lastTestMessage: "Chat test passed, but streaming could not be verified.",
+    });
+
+    expect(result.valid).toBe(true);
+    expect(result.normalized?.capabilities).toEqual({
+      modelsEndpoint: "supported",
+      chat: "supported",
+      streaming: "unsupported",
+      tools: "unknown",
+      vision: "unknown",
+      contextSize: 8192,
+    });
+    expect(result.normalized?.lastTestedAt).toBe("2026-07-20T00:00:00.000Z");
+    expect(result.normalized?.lastTestStatus).toBe("partial");
+    expect(result.normalized?.lastTestMessage).toMatch(/streaming/i);
+  });
 });
