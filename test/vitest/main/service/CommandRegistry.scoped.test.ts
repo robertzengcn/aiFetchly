@@ -115,15 +115,23 @@ describe("CommandRegistry.listScopedViews (FR-1, AC-1)", () => {
     expect(idsB).not.toContain("workspace:1:command:review");
   });
 
-  it("includes built-in, user, and plugin sources under a normal chat scope", () => {
+  it("shows every source under a normal chat scope when command names do not collide", () => {
     const r = new CommandRegistry();
     r.register(builtinReview);
-    r.register(userReview);
-    r.register(pluginReview);
+    r.register({
+      ...userReview,
+      name: "summarize",
+      id: "user:command:summarize",
+    });
+    r.register({
+      ...pluginReview,
+      name: "translate",
+      id: "plugin:demo:command:translate",
+    });
     const ids = r.listScopedViews(DEFAULT_NON_WORKSPACE_SCOPE).map((v) => v.id);
     expect(ids).toContain("built-in:command:review");
-    expect(ids).toContain("user:command:review");
-    expect(ids).toContain("plugin:demo:command:review");
+    expect(ids).toContain("user:command:summarize");
+    expect(ids).toContain("plugin:demo:command:translate");
   });
 
   it("omits body and metadata from every scoped view entry (AC-9 / T-13-Leak)", () => {
@@ -144,6 +152,78 @@ describe("CommandRegistry.listScopedViews (FR-1, AC-1)", () => {
     (list1[0] as { name?: string }).name = "EVIL";
     const list2 = r.listScopedViews(DEFAULT_NON_WORKSPACE_SCOPE);
     expect(list2[0].name).toBe("review");
+  });
+});
+
+// --- listScopedViews: suggestions match dispatch precedence (PRD Problem 1) --
+
+describe("CommandRegistry.listScopedViews precedence (PRD Problem 1)", () => {
+  it("dedupes to the precedence winner when several sources share a name", () => {
+    const r = new CommandRegistry();
+    r.register(userReview);
+    r.register(pluginReview);
+    r.register(builtinReview); // built-in shadows user + plugin on "review"
+    const ids = r.listScopedViews(DEFAULT_NON_WORKSPACE_SCOPE).map((v) => v.id);
+    expect(ids).toEqual(["built-in:command:review"]);
+  });
+
+  it("a workspace command shadows a plugin command with the same name inside its workspace scope", () => {
+    const r = new CommandRegistry();
+    r.register(pluginReview);
+    r.register(workspaceReviewA); // workspace:1 is in scopeA → beats plugin
+    const ids = r.listScopedViews(scopeA).map((v) => v.id);
+    expect(ids).toEqual(["workspace:1:command:review"]);
+  });
+
+  it("outside that workspace scope, the user/plugin winner is shown and the workspace command never appears", () => {
+    const r = new CommandRegistry();
+    r.register(pluginReview);
+    r.register(workspaceReviewA); // excluded from DEFAULT_NON_WORKSPACE_SCOPE
+    r.register(userReview); // user beats plugin
+    const ids = r.listScopedViews(DEFAULT_NON_WORKSPACE_SCOPE).map((v) => v.id);
+    expect(ids).toEqual(["user:command:review"]);
+    expect(ids).not.toContain("workspace:1:command:review");
+  });
+
+  it("manual dispatch resolves to the same command shown in suggestions", () => {
+    const r = new CommandRegistry();
+    r.register(pluginReview);
+    r.register(builtinReview);
+    const suggestedId = r.listScopedViews(DEFAULT_NON_WORKSPACE_SCOPE)[0]?.id;
+    const dispatchedId = r.getByLookupNameScoped(
+      "review",
+      DEFAULT_NON_WORKSPACE_SCOPE
+    )?.id;
+    expect(suggestedId).toBe("built-in:command:review");
+    expect(dispatchedId).toBe(suggestedId);
+  });
+
+  it("drops an alias that a higher-precedence command wins, keeping each winner under its own primary name", () => {
+    const r = new CommandRegistry();
+    // built-in "review" claims alias "rev"; plugin "research" also claims "rev".
+    const builtinReviewAliased: SlashCommandDefinition = {
+      ...builtinReview,
+      aliases: ["rev"],
+    };
+    r.register(pluginWithAlias); // name "research", aliases ["rev"]
+    r.register(builtinReviewAliased); // name "review", aliases ["rev"]
+    const views = r.listScopedViews(DEFAULT_NON_WORKSPACE_SCOPE);
+    const byName = new Map(views.map((v) => [v.name, v]));
+    // Both survive under their own primary names (no name collision).
+    expect(byName.get("review")?.id).toBe("built-in:command:review");
+    expect(byName.get("research")?.id).toBe("plugin:demo:command:research");
+    // built-in wins the shared alias "rev"; the plugin's view drops it.
+    expect(byName.get("review")?.aliases).toContain("rev");
+    expect(byName.get("research")?.aliases).not.toContain("rev");
+  });
+
+  it("still shows a disabled precedence winner (dispatcher surfaces the disabled result)", () => {
+    const r = new CommandRegistry();
+    r.register(pluginReview);
+    r.register({ ...builtinReview, enabled: false });
+    const views = r.listScopedViews(DEFAULT_NON_WORKSPACE_SCOPE);
+    expect(views.map((v) => v.id)).toEqual(["built-in:command:review"]);
+    expect(views[0]?.enabled).toBe(false);
   });
 });
 
