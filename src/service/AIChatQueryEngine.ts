@@ -22,6 +22,13 @@ import { userSafeError } from "@/service/AIChatErrorMapper";
 import { Token } from "@/modules/token";
 import { USER_AI_AUTO_PLAN, USER_AI_ENABLED } from "@/config/usersetting";
 import { ENTER_PLAN_MODE_TOOL } from "@/service/EnterPlanModeTool";
+import {
+  resolveToolCatalogMode,
+  resolvePositiveIntEnv,
+  TOOL_CATALOG_ENV,
+} from "@/config/toolCatalogConfig";
+import { ToolCatalogService } from "@/service/ToolCatalogService";
+import { ToolPromptBudgetService } from "@/service/ToolPromptBudgetService";
 import type {
   AIChatQueryEventSink,
   AIChatQueryLoopInput,
@@ -35,6 +42,11 @@ import type {
 } from "@/service/AIChatQueryEvents";
 import type { ChatV2StreamRequest } from "@/entityTypes/aiChatV2Types";
 import type { AIChatPlanStateView } from "@/entityTypes/aiChatPlanTypes";
+import type {
+  ToolCatalog,
+  ToolCatalogModeDecision,
+  ToolCatalogRuntimeContext,
+} from "@/entityTypes/toolCatalogTypes";
 
 function isActivePlanState(plan?: AIChatPlanStateView | null): boolean {
   if (!plan) return false;
@@ -72,11 +84,7 @@ function isTypedPlanApproval(message: string): boolean {
     return true;
   }
 
-  const looksGoodSignals = [
-    "looks good",
-    "looks fine",
-    "looks correct",
-  ];
+  const looksGoodSignals = ["looks good", "looks fine", "looks correct"];
   const executionSignals = [
     "begin executing",
     "start executing",
@@ -146,6 +154,76 @@ export class AIChatQueryEngine {
       deps?.contextAssembler ?? new AIChatContextAssembler();
     this.compactAgent = deps?.compactAgent;
     this.autoDreamService = deps?.autoDreamService;
+  }
+
+  private readonly catalogService = new ToolCatalogService();
+  private readonly budgetService = new ToolPromptBudgetService();
+
+  /**
+   * Build the deferred tool catalog + mode decision for a turn (FR-8, design
+   * §15.1). Returns undefined when the feature flag is off or catalog building
+   * fails, so the loop falls back to standard full-tool behavior.
+   */
+  private buildToolCatalogForTurn(input: {
+    readonly tools: readonly OpenAITool[];
+    readonly conversationId: string;
+    readonly isPlanMode: boolean;
+    readonly autoPlanEnabled: boolean;
+    readonly userMessage: string;
+    readonly model?: string;
+    readonly contextWindowTokens?: number;
+    readonly initialState?: ToolCatalogRuntimeContext;
+  }): {
+    toolCatalog?: ToolCatalog;
+    toolCatalogModeDecision?: ToolCatalogModeDecision;
+  } {
+    const mode = resolveToolCatalogMode(process.env[TOOL_CATALOG_ENV.mode]);
+    if (mode.mode === "off") {
+      // Still emit the decision so the loop can log the reason, but no catalog.
+      return {};
+    }
+
+    const context: ToolCatalogRuntimeContext = {
+      conversationId: input.conversationId,
+      model: input.model,
+      isPlanMode: input.isPlanMode,
+      autoPlanEnabled: input.autoPlanEnabled,
+      currentUserMessage: input.userMessage,
+      uploadedFileTypes: [],
+      contextWindowTokens: input.contextWindowTokens,
+      ...(input.initialState ?? {}),
+    };
+
+    let catalog: ToolCatalog;
+    try {
+      catalog = this.catalogService.buildFromOpenAITools({
+        tools: input.tools,
+        context,
+      });
+    } catch (err) {
+      console.warn(
+        `[tool-catalog] catalog build failed, using standard mode:`,
+        err
+      );
+      return {};
+    }
+
+    const thresholdPercent = resolvePositiveIntEnv(
+      process.env[TOOL_CATALOG_ENV.thresholdPercent]
+    );
+    const decision = this.budgetService.resolveMode({
+      configuredMode: mode.mode,
+      deferredEstimatedTokens: catalog.deferredEstimatedTokens,
+      contextWindowTokens: input.contextWindowTokens,
+      thresholdPercent,
+    });
+
+    // Auto mode with effectively no deferred payload stays standard.
+    if (decision.mode === "standard") {
+      return {};
+    }
+
+    return { toolCatalog: catalog, toolCatalogModeDecision: decision };
   }
 
   /**
@@ -267,6 +345,18 @@ export class AIChatQueryEngine {
       ? [...openAITools, ENTER_PLAN_MODE_TOOL]
       : openAITools;
 
+    // Build the deferred tool catalog (no-op when AI_TOOL_SEARCH is off or the
+    // auto-mode threshold is not crossed). Fresh turn starts with no discovered
+    // tools; the loop accumulates discovery state in memory.
+    const toolCatalogContext = this.buildToolCatalogForTurn({
+      tools: allOpenAITools,
+      conversationId,
+      isPlanMode,
+      autoPlanEnabled,
+      userMessage: request.message,
+      model: request.model,
+    });
+
     // ------------------------------------------------------------------
     // 4. Abort any prior active turn, create new abort controller
     // ------------------------------------------------------------------
@@ -337,6 +427,8 @@ export class AIChatQueryEngine {
       isActiveTurn: () =>
         this.currentAssistantMessageId === assistantMessageId &&
         this.currentConversationId === conversationId,
+      toolCatalog: toolCatalogContext.toolCatalog,
+      toolCatalogModeDecision: toolCatalogContext.toolCatalogModeDecision,
     };
 
     try {
@@ -472,6 +564,17 @@ export class AIChatQueryEngine {
         content: toolContent,
       });
 
+      // Rebuild the deferred catalog for the resumed turn and carry forward the
+      // discovered-tool snapshot so discovered tools remain exposed (AC-8).
+      const resumeCatalogContext = this.buildToolCatalogForTurn({
+        tools: pending.openAITools,
+        conversationId: pending.conversationId,
+        isPlanMode: Boolean(pending.planContext),
+        autoPlanEnabled: false,
+        userMessage: pending.request.message,
+        model: pending.request.model,
+      });
+
       const loopInput: AIChatQueryLoopInput = {
         conversationId: pending.conversationId,
         assistantMessageId: pending.assistantMessageId,
@@ -486,6 +589,9 @@ export class AIChatQueryEngine {
         isActiveTurn: () =>
           this.currentAssistantMessageId === pending.assistantMessageId &&
           this.currentConversationId === pending.conversationId,
+        toolCatalog: resumeCatalogContext.toolCatalog,
+        toolCatalogModeDecision: resumeCatalogContext.toolCatalogModeDecision,
+        toolCatalogState: pending.toolCatalogState,
       };
 
       void this.loop
@@ -597,6 +703,17 @@ export class AIChatQueryEngine {
         }
       : undefined;
 
+    // Rebuild the deferred catalog for the resumed plan turn and carry forward
+    // the discovered-tool snapshot (AC-8).
+    const resumePlanCatalogContext = this.buildToolCatalogForTurn({
+      tools: allOpenAITools,
+      conversationId: pending.conversationId,
+      isPlanMode: Boolean(planContext),
+      autoPlanEnabled: false,
+      userMessage: pending.request.message,
+      model: pending.request.model,
+    });
+
     const loopInput: AIChatQueryLoopInput = {
       conversationId: pending.conversationId,
       assistantMessageId: pending.assistantMessageId,
@@ -611,6 +728,9 @@ export class AIChatQueryEngine {
       isActiveTurn: () =>
         this.currentAssistantMessageId === pending.assistantMessageId &&
         this.currentConversationId === pending.conversationId,
+      toolCatalog: resumePlanCatalogContext.toolCatalog,
+      toolCatalogModeDecision: resumePlanCatalogContext.toolCatalogModeDecision,
+      toolCatalogState: pending.toolCatalogState,
     };
 
     const module = new AIChatV2Module();
