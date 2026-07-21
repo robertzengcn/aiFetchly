@@ -43,6 +43,16 @@ import { CancellationToken } from "@/service/CancellationToken";
 import { getDefaultToolJobRegistry } from "@/service/ToolJobRegistry";
 import { USER_AI_ENABLED } from "@/config/usersetting";
 import { Token } from "@/modules/token";
+import { TOOL_CATALOG_SEARCH_TOOL_NAME } from "@/config/toolCatalogConfig";
+import { ToolCatalogService } from "@/service/ToolCatalogService";
+import { ToolCatalogSearchService } from "@/service/ToolCatalogSearchService";
+import { logToolCatalogFilter } from "@/service/ToolCatalogMetricsService";
+import type {
+  ToolCatalog,
+  ToolCatalogSearchArgs,
+  ToolCatalogSearchResult,
+  ToolCatalogStateSnapshot,
+} from "@/entityTypes/toolCatalogTypes";
 
 /**
  * Max model→tool→model rounds per user turn. Must be high enough to
@@ -276,8 +286,64 @@ export function buildAssistantToolCallMessage(
   };
 }
 
+/** Snapshot the mutable discovered-tool set for pending-turn carry-forward. */
+function snapshotToolCatalogState(
+  discovered: Set<string>
+): ToolCatalogStateSnapshot {
+  return {
+    discoveredToolNames: [...discovered].sort(),
+    announcedDeferredNames: [],
+  };
+}
+
 export class AIChatQueryLoop {
   constructor(private readonly deps: AIChatQueryLoopDeps) {}
+
+  private readonly catalogService = new ToolCatalogService();
+  private readonly catalogSearchService = new ToolCatalogSearchService();
+
+  /**
+   * Run the deferred-catalog discovery search with a safe failure payload so a
+   * search error never crashes the whole turn (design §22.2).
+   */
+  private runCatalogSearch(input: {
+    readonly args: ToolCatalogSearchArgs;
+    readonly catalog: ToolCatalog;
+    readonly discoveredToolNames: Set<string>;
+    readonly conversationId: string;
+    readonly isPlanMode: boolean;
+    readonly autoPlanEnabled: boolean;
+    readonly currentUserMessage: string;
+  }): ToolCatalogSearchResult {
+    try {
+      return this.catalogSearchService.search({
+        args: input.args,
+        catalog: input.catalog,
+        state: {
+          discoveredToolNames: input.discoveredToolNames,
+          announcedDeferredNames: new Set(),
+        },
+        context: {
+          conversationId: input.conversationId,
+          isPlanMode: input.isPlanMode,
+          autoPlanEnabled: input.autoPlanEnabled,
+          currentUserMessage: input.currentUserMessage,
+          uploadedFileTypes: [],
+        },
+      });
+    } catch (err) {
+      return {
+        success: false,
+        query: typeof input.args.query === "string" ? input.args.query : "",
+        matches: [],
+        selectedToolNames: [],
+        missingToolNames: [],
+        message:
+          "Tool catalog search failed. The system will continue with currently exposed tools.",
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+  }
 
   async run(input: AIChatQueryLoopInput): Promise<AIChatQueryLoopResult> {
     const { eventSink } = input;
@@ -296,6 +362,15 @@ export class AIChatQueryLoop {
     // Local mutable copies so EnterPlanMode can swap them mid-run.
     let planContext = input.planContext;
     const currentTools = [...input.openAITools];
+    // Deferred tool catalog state. `catalogActive` gates every catalog code
+    // path so the loop is a no-op when the feature flag is off or standard.
+    const catalog = input.toolCatalog;
+    const catalogModeDecision = input.toolCatalogModeDecision;
+    const catalogActive =
+      Boolean(catalog) && catalogModeDecision?.mode === "deferred";
+    const discoveredToolNames = new Set<string>(
+      input.toolCatalogState?.discoveredToolNames ?? []
+    );
     // Track whether the model auto-entered plan mode this run AND whether it
     // followed through with plan-tool usage. Used at turn end to cancel orphan
     // drafts (see completed-return path).
@@ -319,11 +394,47 @@ export class AIChatQueryLoop {
         const accumulator = new OpenAIStreamAccumulator();
         activeAccumulator = accumulator;
 
+        // Compute the tools actually sent to the model for this round. In
+        // deferred catalog mode this filters out undiscovered deferred tools
+        // and adds tool_catalog_search; any filter error falls back to the
+        // full currentTools set (TR-5, AC-10). currentTools remains the full
+        // local executable set regardless.
+        let exposedTools: OpenAITool[] = currentTools;
+        if (catalogActive && catalog && catalogModeDecision) {
+          try {
+            const filterResult = this.catalogService.filterForRound({
+              catalog,
+              liveTools: currentTools,
+              state: {
+                discoveredToolNames,
+                announcedDeferredNames: new Set(
+                  input.toolCatalogState?.announcedDeferredNames ?? []
+                ),
+              },
+              modeDecision: catalogModeDecision,
+            });
+            exposedTools = [...filterResult.exposedTools];
+            logToolCatalogFilter({
+              conversationId: input.conversationId,
+              result: filterResult,
+            });
+          } catch (filterError) {
+            console.warn(
+              `[tool-catalog] filter failed, falling back to full tools:`,
+              filterError
+            );
+            exposedTools = currentTools;
+          }
+        }
+        const hasExposedTools = exposedTools.length > 0;
+
         console.log(
           `[ai-chat-v2] round ${round} → POST /chat/completions msgs=${
             messages.length
           } roles=[${messages.map((m) => m.role).join(",")}] tools=${
-            currentTools.length
+            catalogActive
+              ? `${exposedTools.length}/${currentTools.length}`
+              : currentTools.length
           }`
         );
 
@@ -334,10 +445,10 @@ export class AIChatQueryLoop {
             temperature: input.request.temperature,
             max_tokens: currentMaxTokens,
             stream: true,
-            tools: currentTools.length > 0 ? currentTools : undefined,
+            tools: hasExposedTools ? exposedTools : undefined,
             tool_choice: resolveToolChoiceForRound({
               message: input.request.message,
-              hasTools: currentTools.length > 0,
+              hasTools: hasExposedTools,
               isPlanMode: Boolean(planContext),
               round,
               startRound: input.startRound,
@@ -579,6 +690,77 @@ export class AIChatQueryLoop {
             toolArguments: call.arguments ?? {},
           });
 
+          // Deferred catalog: intercept the discovery tool locally (FR-3, FR-9).
+          if (
+            catalogActive &&
+            catalog &&
+            call.name === TOOL_CATALOG_SEARCH_TOOL_NAME
+          ) {
+            const searchPayload = this.runCatalogSearch({
+              args: (call.arguments ?? {}) as ToolCatalogSearchArgs,
+              catalog,
+              discoveredToolNames,
+              conversationId: input.conversationId,
+              isPlanMode: Boolean(planContext),
+              autoPlanEnabled: Boolean(input.autoPlan),
+              currentUserMessage: input.request.message,
+            });
+            for (const name of searchPayload.selectedToolNames) {
+              discoveredToolNames.add(name);
+            }
+            const searchContent = serializeToolResultContent(
+              searchPayload as unknown as Record<string, unknown>
+            );
+            eventSink.emit({
+              type: "tool_result",
+              conversationId: input.conversationId,
+              messageId: input.assistantMessageId,
+              toolCallId: call.id,
+              toolName: call.name,
+              fullContent: searchContent,
+              toolResult: searchPayload as unknown as Record<string, unknown>,
+            });
+            messages.push({
+              role: "tool",
+              tool_call_id: call.id,
+              content: searchContent,
+            });
+            continue;
+          }
+
+          // Unknown-deferred-tool recovery (design §14.4): if the model calls a
+          // deferred tool that is not yet exposed, load it and ask the model to
+          // retry instead of failing the turn.
+          if (catalogActive && catalog) {
+            const entry = catalog.byName.get(call.name);
+            if (
+              entry &&
+              entry.loadPolicy === "deferred" &&
+              !discoveredToolNames.has(call.name)
+            ) {
+              discoveredToolNames.add(call.name);
+              const retryContent = serializeToolResultContent({
+                success: false,
+                error: `Tool "${call.name}" was deferred and has now been loaded. Retry the call with valid arguments.`,
+              });
+              eventSink.emit({
+                type: "tool_result",
+                conversationId: input.conversationId,
+                messageId: input.assistantMessageId,
+                toolCallId: call.id,
+                toolName: call.name,
+                fullContent: retryContent,
+                toolResult: { success: false, error: "deferred tool loaded" },
+              });
+              messages.push({
+                role: "tool",
+                tool_call_id: call.id,
+                content: retryContent,
+              });
+              continue;
+            }
+          }
+
           // Model-initiated Plan Mode entry (chat mode only).
           if (
             isEnterPlanModeToolName(call.name) &&
@@ -657,6 +839,13 @@ export class AIChatQueryLoop {
                 eventSink
               );
               if (paused) {
+                if (
+                  catalogActive &&
+                  paused.type === "paused_for_plan_question"
+                ) {
+                  paused.pending.toolCatalogState =
+                    snapshotToolCatalogState(discoveredToolNames);
+                }
                 return paused;
               }
               continue;
@@ -779,6 +968,9 @@ export class AIChatQueryLoop {
                 toolArguments: call.arguments ?? {},
                 planContext,
                 eventSink: eventSink,
+                toolCatalogState: catalogActive
+                  ? snapshotToolCatalogState(discoveredToolNames)
+                  : undefined,
               },
             };
           }
