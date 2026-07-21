@@ -1,3 +1,4 @@
+import { log } from "@/modules/Logger";
 import { IProxyApi } from "./interface/IProxyApi";
 import { ProxyModel } from "@/model/Proxy.model";
 import {
@@ -226,7 +227,7 @@ export class ProxyModule extends BaseModule implements IProxyApi {
         addtime: proxy.addtime,
       }));
     } catch (error) {
-      console.error("Failed to fetch proxies by host/port pairs:", error);
+      log.error("Failed to fetch proxies by host/port pairs:", error);
       return [];
     }
   }
@@ -238,7 +239,7 @@ export class ProxyModule extends BaseModule implements IProxyApi {
     try {
       return await this.proxyModel.getProxyCount();
     } catch (error) {
-      console.error("Failed to get proxy count:", error);
+      log.error("Failed to get proxy count:", error);
       return 0;
     }
   }
