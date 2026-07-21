@@ -9,6 +9,11 @@ import type {
   SubmitPlanForApprovalPayload,
 } from "@/entityTypes/aiChatPlanTypes";
 import type { SkillDefinition } from "@/entityTypes/skillTypes";
+import type {
+  ToolCatalog,
+  ToolCatalogModeDecision,
+  ToolCatalogStateSnapshot,
+} from "@/entityTypes/toolCatalogTypes";
 
 /**
  * Sink the engine emits non-terminal and terminal events into.
@@ -244,6 +249,11 @@ export interface PendingPermissionTurn {
   toolArguments: Record<string, unknown>;
   planContext?: AIChatPlanLoopContext;
   eventSink: AIChatQueryEventSink;
+  /**
+   * Deferred tool catalog snapshot so discovered tools remain exposed after
+   * the user grants permission (AC-8). Present only when deferred mode active.
+   */
+  toolCatalogState?: ToolCatalogStateSnapshot;
 }
 
 /** State stored when plan mode asks the user a question. */
@@ -259,6 +269,12 @@ export interface PendingPlanQuestionTurn {
   questionId: string;
   planId: string;
   eventSink: AIChatQueryEventSink;
+  /**
+   * Deferred tool catalog snapshot so discovered tools remain exposed after
+   * the user answers the plan question (AC-8). Present only when deferred
+   * mode active.
+   */
+  toolCatalogState?: ToolCatalogStateSnapshot;
 }
 
 /** Plan context carried through the loop. */
@@ -353,6 +369,15 @@ export interface AIChatQueryLoopInput {
    * but before the abort signal propagates through the underlying fetch.
    */
   isActiveTurn: () => boolean;
+  /**
+   * Deferred tool catalog. When present and `toolCatalogModeDecision.mode`
+   * is "deferred", the loop filters the exposed tool set per round, adds the
+   * `tool_catalog_search` tool, and intercepts discovery calls locally.
+   * Omit (or keep mode "standard") to preserve current full-tool behavior.
+   */
+  toolCatalog?: ToolCatalog;
+  toolCatalogState?: ToolCatalogStateSnapshot;
+  toolCatalogModeDecision?: ToolCatalogModeDecision;
 }
 
 /** Request payload for resumeToolAfterPermission. */
