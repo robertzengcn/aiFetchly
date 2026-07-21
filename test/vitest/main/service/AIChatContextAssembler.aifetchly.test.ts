@@ -407,7 +407,7 @@ describe("AIChatContextAssembler — Available agents block (D-Discovery, Plan 1
   it("D-Discovery: uses runtime catalog so persisted plugin agents are injected", async () => {
     mockListActiveForRuntime.mockResolvedValue([
       agentView({
-        id: "plugin:caveman:agent:cavecrew-builder",
+        id: "caveman:cavecrew-builder",
         name: "cavecrew-builder",
         description: "Surgical one-file edit specialist.",
         source: "plugin",
@@ -426,7 +426,7 @@ describe("AIChatContextAssembler — Available agents block (D-Discovery, Plan 1
     const availableIdx = findAvailableAgentsMessage(r.messages);
     expect(availableIdx).toBeGreaterThan(-1);
     const block = r.messages[availableIdx].content as string;
-    expect(block).toContain("plugin:caveman:agent:cavecrew-builder");
+    expect(block).toContain("caveman:cavecrew-builder");
     expect(block).toContain("Surgical one-file edit specialist.");
     expect(block).toContain("[Plugin]");
   });

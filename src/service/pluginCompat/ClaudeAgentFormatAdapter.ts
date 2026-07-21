@@ -49,6 +49,29 @@ const FORBIDDEN_FIELDS: ReadonlyArray<{ key: string; label: string }> = [
   { key: "servers", label: "servers" },
 ];
 
+const CLAUDE_MODEL_ALIASES = new Set(["haiku", "sonnet", "opus"]);
+
+const CLAUDE_TOOL_ALIASES: Readonly<Record<string, string | null>> = {
+  Read: "file_read",
+  Grep: "grep_files",
+  Glob: "glob_files",
+  Bash: null,
+  Edit: null,
+  MultiEdit: null,
+  Write: null,
+};
+
+export function normalizeClaudeAgentToolName(name: string): string | null {
+  if (Object.prototype.hasOwnProperty.call(CLAUDE_TOOL_ALIASES, name)) {
+    return CLAUDE_TOOL_ALIASES[name] ?? null;
+  }
+  return name;
+}
+
+export function isClaudeModelAlias(model: string): boolean {
+  return CLAUDE_MODEL_ALIASES.has(model.toLowerCase());
+}
+
 /** Stricter than skills: bad/empty name is an error, never invented. */
 export function sanitizeAgentSegment(raw: string): string {
   return raw
@@ -135,11 +158,27 @@ export class ClaudeAgentFormatAdapter {
     }
 
     // Optional fields
-    const tools = toStringArray(frontmatter.tools);
-    const skills = toStringArray(frontmatter.skills);
+    const manifest: Record<string, unknown> = {};
+    const tools = normalizeToolNames(
+      toStringArray(frontmatter.tools),
+      name,
+      sourcePath,
+      warnings
+    );
+    const skills = normalizeToolNames(
+      toStringArray(frontmatter.skills),
+      name,
+      sourcePath,
+      warnings
+    );
     const allowedTools = Array.from(new Set([...tools, ...skills]));
-    const defaultModel =
-      typeof frontmatter.model === "string" ? frontmatter.model : undefined;
+    const defaultModel = normalizeModel(
+      frontmatter.model,
+      name,
+      sourcePath,
+      manifest,
+      warnings
+    );
     const mode = toMode(frontmatter.mode);
     const maxToolCalls = toPositiveInt(frontmatter.maxToolCalls, 8);
     const maxRuntimeMs = toPositiveInt(frontmatter.maxRuntimeMs, 300000);
@@ -147,7 +186,6 @@ export class ClaudeAgentFormatAdapter {
     const outputSchema = toOutputSchema(frontmatter.outputSchema);
 
     // Forbidden fields → warnings only; raw value stashed in manifest for diagnostics.
-    const manifest: Record<string, unknown> = {};
     if (typeof frontmatter.color === "string") manifest.color = frontmatter.color;
     if (typeof frontmatter.background === "string")
       manifest.background = frontmatter.background;
@@ -197,6 +235,60 @@ function toStringArray(value: unknown): string[] {
   return value.filter(
     (v): v is string => typeof v === "string" && v.length > 0
   );
+}
+
+function normalizeToolNames(
+  rawTools: readonly string[],
+  componentName: string,
+  sourcePath: string,
+  warnings: PluginError[]
+): string[] {
+  const out: string[] = [];
+  for (const raw of rawTools) {
+    const mapped = normalizeClaudeAgentToolName(raw);
+    if (mapped !== raw) {
+      if (mapped) {
+        out.push(mapped);
+      } else {
+        warnings.push({
+          code: "agent-unsupported-field",
+          componentType: "agent",
+          componentName,
+          path: sourcePath,
+          message: `Claude agent tool "${raw}" is not exposed to AiFetchly v1 plugin agents and was ignored.`,
+          recoverable: true,
+        });
+      }
+      continue;
+    }
+    out.push(mapped);
+  }
+  return out;
+}
+
+function normalizeModel(
+  rawModel: unknown,
+  componentName: string,
+  sourcePath: string,
+  manifest: Record<string, unknown>,
+  warnings: PluginError[]
+): string | undefined {
+  if (typeof rawModel !== "string" || rawModel.length === 0) {
+    return undefined;
+  }
+  if (!isClaudeModelAlias(rawModel)) {
+    return rawModel;
+  }
+  manifest.claudeModelAlias = rawModel;
+  warnings.push({
+    code: "agent-unsupported-field",
+    componentType: "agent",
+    componentName,
+    path: sourcePath,
+    message: `Claude model alias "${rawModel}" is not an AiFetchly model id and was ignored.`,
+    recoverable: true,
+  });
+  return undefined;
 }
 
 function toMode(value: unknown): AgentDefinitionView["mode"] {
