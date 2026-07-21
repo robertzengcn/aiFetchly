@@ -17,6 +17,7 @@ import {
   getSharedAutoDreamService,
   resetSharedAutoDreamService,
   getSharedWorkspaceAutoDreamService,
+  resetSharedWorkspaceAutoDreamService,
 } from "@/service/AIAutoDreamFactory";
 import { AIChatToolApprovalModule } from "@/modules/AIChatToolApprovalModule";
 import { evaluateToolApproval } from "@/service/AIChatToolApprovalPolicyService";
@@ -149,6 +150,7 @@ export function resetAiChatV2RuntimeForDatabaseSwitch(): void {
   queryEngineDbPath = null;
   compactAgentDbPath = null;
   resetSharedAutoDreamService();
+  resetSharedWorkspaceAutoDreamService();
 }
 
 function getCompactAgent(): AIChatCompactAgentService {
@@ -157,6 +159,7 @@ function getCompactAgent(): AIChatCompactAgentService {
     compactAgent = null;
     compactAgentDbPath = null;
     resetSharedAutoDreamService();
+    resetSharedWorkspaceAutoDreamService();
   }
   if (!compactAgent) {
     const tokenService = new Token();
