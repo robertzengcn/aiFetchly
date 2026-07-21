@@ -302,6 +302,23 @@ export const AI_CHAT_V2_GET_TOOL_APPROVAL_MODE =
 export const AI_CHAT_V2_SET_TOOL_APPROVAL_MODE =
   "ai-chat-v2:set-tool-approval-mode";
 
+// ==================== AiChatV2 Local Voice Channels ====================
+// Local sherpa-onnx STT/TTS for AiChatV2. See
+// docs/prd/local-sherpa-onnx-voice-chat-technical-design.md §6.
+// Handlers validate payloads (mime/size/text-length) before any worker call.
+/** Renderer->Main: read voice runtime + model availability. */
+export const AI_CHAT_V2_VOICE_STATUS = "ai-chat-v2:voice-status";
+/** Renderer->Main: transcribe a recorded audio payload (push-to-talk STT). */
+export const AI_CHAT_V2_VOICE_TRANSCRIBE = "ai-chat-v2:voice-transcribe";
+/** Renderer->Main: synthesize speech (TTS) from sanitized assistant text. */
+export const AI_CHAT_V2_VOICE_TTS = "ai-chat-v2:voice-tts";
+/** Renderer->Main: best-effort cancel of active STT/TTS work. */
+export const AI_CHAT_V2_VOICE_CANCEL = "ai-chat-v2:voice-cancel";
+/** Renderer->Main: read voice settings view. */
+export const AI_CHAT_V2_VOICE_GET_SETTINGS = "ai-chat-v2:voice-get-settings";
+/** Renderer->Main: validate + persist voice settings view. */
+export const AI_CHAT_V2_VOICE_SET_SETTINGS = "ai-chat-v2:voice-set-settings";
+
 // AI Provider (Local/Custom) Settings Channels
 export const AI_PROVIDER_SETTINGS_GET = "ai-provider:settings:get";
 export const AI_PROVIDER_SETTINGS_SAVE = "ai-provider:settings:save";

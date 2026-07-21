@@ -32,3 +32,18 @@ export const USER_LOCAL_AI_PROVIDER_API_KEY = "user_local_ai_provider_api_key";
 export const USER_HOOKS_ENABLED = "user_hooks_enabled";
 // Value is a JSON string: { [hookId: string]: { enabled: boolean } }
 export const USER_HOOKS_BUILTIN_OVERRIDES = "user_hooks_builtin_overrides";
+
+// ==================== AiChatV2 Local Voice Settings ====================
+// Local sherpa-onnx voice chat. Values are strings to match the Token store
+// shape; typed via AiChatVoiceSettingsView in src/entityTypes/aiChatVoiceTypes.ts.
+// See docs/prd/local-sherpa-onnx-voice-chat-technical-design.md §7.
+export const AI_CHAT_VOICE_INPUT_MODE = "ai_chat_voice_input_mode";
+export const AI_CHAT_VOICE_TTS_MODE = "ai_chat_voice_tts_mode";
+export const AI_CHAT_VOICE_AUTO_SEND = "ai_chat_voice_auto_send";
+export const AI_CHAT_VOICE_STT_LANGUAGE = "ai_chat_voice_stt_language";
+export const AI_CHAT_VOICE_TTS_LANGUAGE = "ai_chat_voice_tts_language";
+export const AI_CHAT_VOICE_STT_MODEL_ID = "ai_chat_voice_stt_model_id";
+export const AI_CHAT_VOICE_TTS_MODEL_ID = "ai_chat_voice_tts_model_id";
+export const AI_CHAT_VOICE_TTS_VOICE_ID = "ai_chat_voice_tts_voice_id";
+export const AI_CHAT_VOICE_TTS_SPEED = "ai_chat_voice_tts_speed";
+export const AI_CHAT_VOICE_MAX_RECORDING_MS = "ai_chat_voice_max_recording_ms";
