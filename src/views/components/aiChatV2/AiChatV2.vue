@@ -573,7 +573,6 @@ const stoppedPendingToolConversationIds = ref<Set<string>>(new Set());
 const isPreparingAttachments = ref(false);
 const attachmentError = ref<string | null>(null);
 
-const MAX_UPLOAD_FILE_BYTES = 5 * 1024 * 1024;
 
 // Pure utility functions extracted to aiChatV2Utils.ts (R5.6/R6.3 split)
 import {
@@ -583,40 +582,7 @@ import {
   truncateText,
   formatTimestamp,
 } from "./aiChatV2Utils";
-
-async function buildUploadedAttachments(files: File[]): Promise<ChatV2UploadedAttachment[]> {
-  const out: ChatV2UploadedAttachment[] = [];
-  for (const file of files) {
-    const kind = classifyAttachment(file.name, file.type);
-    if (!kind) throw new Error(`Unsupported file type: ${file.name}`);
-    if (file.size > MAX_UPLOAD_FILE_BYTES) throw new Error(`File too large: ${file.name}`);
-
-    if (kind === "image") {
-      // Downscale + recompress before base64 so the inline data URL stays
-      // small enough for the AI server's request-body limit (large photos
-      // otherwise trip HTTP 413 "Request Entity Too Large"). Falls back to
-      // the original bytes if canvas processing fails.
-      const processed = await downscaleImageAttachment(file);
-      out.push({
-        fileName: file.name,
-        mimeType: processed.mimeType,
-        sizeBytes: processed.sizeBytes,
-        contentBase64: processed.contentBase64,
-        kind,
-      });
-    } else {
-      const buffer = await file.arrayBuffer();
-      out.push({
-        fileName: file.name,
-        mimeType: resolveMimeType(file),
-        sizeBytes: file.size,
-        contentBase64: arrayBufferToBase64(buffer),
-        kind,
-      });
-    }
-  }
-  return out;
-}
+import { buildUploadedAttachments, MAX_UPLOAD_FILE_BYTES } from "./aiChatV2Attachment";
 
 // ---------------------------------------------------------------------------
 // Tool approval mode
