@@ -1,5 +1,5 @@
 import { BaseDb } from "./Basedb";
-import { Brackets, Repository } from "typeorm";
+import { Brackets, In, Repository } from "typeorm";
 import { ProxyEntity } from "@/entity/Proxy.entity";
 import { ProxyListEntity } from "@/entityTypes/proxyType";
 
@@ -62,6 +62,18 @@ export class ProxyModel extends BaseDb {
    */
   async getProxyById(id: number): Promise<ProxyEntity | null> {
     return await this.repository.findOne({ where: { id } });
+  }
+
+  /**
+   * Batch-load full proxy entities for many ids in one query. Replaces N
+   * per-id `getProxyById`/`getProxyDetail` round-trips when building
+   * redacted summaries for a set of proxies.
+   */
+  async findByIds(ids: readonly number[]): Promise<ProxyEntity[]> {
+    if (ids.length === 0) {
+      return [];
+    }
+    return this.repository.find({ where: { id: In(ids) } });
   }
 
   /**
