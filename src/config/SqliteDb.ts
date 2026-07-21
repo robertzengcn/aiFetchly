@@ -529,6 +529,11 @@ export class SqliteDb {
         //logging:  process.env.NODE_ENV !== 'production', /// use this for debugging
         logging: false,
         prepareDatabase: (db: Database.Database) => {
+          db.pragma("journal_mode = WAL");
+          db.pragma("synchronous = NORMAL");
+          db.pragma("busy_timeout = 10000");
+          db.pragma("foreign_keys = ON");
+
           // Load the sqlite-vec extension into the connection
           // Manually resolve path for Electron bundled apps
           // Do NOT use sqliteVec.load() as it internally calls getLoadablePath() which fails in bundled apps

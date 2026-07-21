@@ -1,6 +1,7 @@
 import { BaseDb } from "@/model/Basedb";
 import { AIArtifactEntity } from "@/entity/AIArtifact.entity";
 import { Repository } from "typeorm";
+import { runWithSqliteBusyRetry } from "@/utils/sqliteBusyRetry";
 
 /**
  * Data-access layer for AI artifacts.
@@ -19,7 +20,17 @@ export class AIArtifactModel extends BaseDb {
 
   /** Insert or update an artifact row. */
   async saveArtifact(entity: AIArtifactEntity): Promise<AIArtifactEntity> {
-    return this.repository.save(entity);
+    return runWithSqliteBusyRetry(() => this.repository.save(entity), {
+      maxAttempts: 4,
+      delayMs: 250,
+      maxDelayMs: 1_500,
+      onRetry: (nextAttempt, maxAttempts, delayMs, error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn(
+          `[ai-artifact] write hit a SQLite lock; retrying attempt ${nextAttempt}/${maxAttempts} in ${delayMs}ms: ${message}`
+        );
+      },
+    });
   }
 
   /** Fetch a single artifact by its stable public id. */
@@ -42,12 +53,27 @@ export class AIArtifactModel extends BaseDb {
    */
   async getLatestVersion(conversationId: string, title: string): Promise<number> {
     const normalized = title.trim().toLowerCase();
-    const row = await this.repository
-      .createQueryBuilder("a")
-      .select("MAX(a.version)", "maxVersion")
-      .where("a.conversationId = :conversationId", { conversationId })
-      .andWhere("LOWER(a.title) = :title", { title: normalized })
-      .getRawOne<{ maxVersion: number | null }>();
+    const row = await runWithSqliteBusyRetry(
+      () =>
+        this.repository
+          .createQueryBuilder("a")
+          .select("MAX(a.version)", "maxVersion")
+          .where("a.conversationId = :conversationId", { conversationId })
+          .andWhere("LOWER(a.title) = :title", { title: normalized })
+          .getRawOne<{ maxVersion: number | null }>(),
+      {
+        maxAttempts: 4,
+        delayMs: 250,
+        maxDelayMs: 1_500,
+        onRetry: (nextAttempt, maxAttempts, delayMs, error) => {
+          const message =
+            error instanceof Error ? error.message : String(error);
+          console.warn(
+            `[ai-artifact] version lookup hit a SQLite lock; retrying attempt ${nextAttempt}/${maxAttempts} in ${delayMs}ms: ${message}`
+          );
+        },
+      }
+    );
     return row?.maxVersion ?? 0;
   }
 

@@ -258,6 +258,12 @@
             :loading="availableModels.length === 0"
             class="ml-2"
           />
+          <AiChatV2ToolApprovalModeSelector
+            v-model="toolApprovalMode"
+            :disabled="chatIsRunning"
+            class="ml-2"
+            @update:model-value="onToolApprovalModeChange"
+          />
           <v-tooltip location="bottom">
             <template #activator="{ props }">
               <v-chip
@@ -275,12 +281,6 @@
             </template>
             <span>{{ t('aiProvider.title') || 'AI Provider' }}</span>
           </v-tooltip>
-          <AiChatV2ToolApprovalModeSelector
-            v-model="toolApprovalMode"
-            :disabled="chatIsRunning"
-            class="ml-2"
-            @update:model-value="onToolApprovalModeChange"
-          />
         </template>
       </AiChatV2Composer>
     </div>

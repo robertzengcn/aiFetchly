@@ -21,6 +21,12 @@ import type {
  */
 export interface AIChatQueryEventSink {
   emit(event: AIChatQueryEvent): void;
+  /**
+   * Optional persistence barrier for sinks that save events asynchronously.
+   * The query loop calls this before executing a tool so tool-call persistence
+   * does not race DB-writing tools such as artifact creation.
+   */
+  flush?(): Promise<void>;
 }
 
 export interface AIChatQueryStartEvent {

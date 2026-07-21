@@ -235,6 +235,8 @@ import {
   AI_PROVIDER_API_KEY_CLEAR,
   AI_CHAT_V2_GET_TOOL_APPROVAL_MODE,
   AI_CHAT_V2_SET_TOOL_APPROVAL_MODE,
+  AI_ARTIFACT_GET,
+  AI_ARTIFACT_LIST,
   // Dashboard Channels
   DASHBOARD_SUMMARY,
   DASHBOARD_TRENDS,
@@ -812,6 +814,9 @@ contextBridge.exposeInMainWorld("api", {
       AI_CHAT_V2_PLAN_VERSIONS,
       AI_CHAT_V2_GET_TOOL_APPROVAL_MODE,
       AI_CHAT_V2_SET_TOOL_APPROVAL_MODE,
+      // AI Artifact Channels
+      AI_ARTIFACT_GET,
+      AI_ARTIFACT_LIST,
       AI_KEYWORDS_GENERATE,
       // AI Provider (Local/Custom) Settings Channels
       AI_PROVIDER_SETTINGS_GET,
