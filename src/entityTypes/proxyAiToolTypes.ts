@@ -77,6 +77,13 @@ export interface ProxyListToolResult {
   readonly page: number;
   readonly size: number;
   readonly credentialsRedacted: true;
+  /**
+   * Present (and true) only when a status/googlePass filter required an
+   * in-memory scan and that scan was truncated by a read error before
+   * reaching the end of the table. The returned set is partial — callers
+   * (and the LLM) must not treat `total` as the complete matching count.
+   */
+  readonly truncated?: boolean;
 }
 
 export interface ProxyGetToolResult {

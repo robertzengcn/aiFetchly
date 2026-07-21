@@ -126,6 +126,40 @@ describe("ProxyAiTools.listProxies", () => {
     }
     expect(result.code).toBe("UNSUPPORTED_OPERATION");
   });
+
+  it("surfaces truncated=true when a status-filter scan errors mid-pagination", async () => {
+    // Page 1 returns a full page (100) with total=500 so the scan must fetch
+    // page 2; page 2 throws, simulating a transient DB error mid-scan. The
+    // tool must NOT silently return the partial set as a complete success.
+    const page1 = Array.from({ length: 100 }, (_, i) =>
+      makeListRecord({
+        id: i + 1,
+        status: i < 3 ? 2 : 1, // 3 failures among 100
+        checktime: "2026-07-19",
+      })
+    );
+    const getProxylist = vi.fn(async (page: number) => {
+      if (page === 1) {
+        return listResp(page1, 500);
+      }
+      throw new Error("db locked mid-scan");
+    });
+    const tools = makeTools({ proxyController: { getProxylist } });
+
+    const result = await tools.listProxies({
+      status: "failure",
+      page: 0,
+      size: 10,
+    });
+
+    expect(result.success).toBe(true);
+    if (!result.success) {
+      return;
+    }
+    expect(result.truncated).toBe(true);
+    expect(result.total).toBe(3);
+    expect(result.proxies).toHaveLength(3);
+  });
 });
 
 describe("ProxyAiTools.getProxy", () => {
@@ -682,6 +716,59 @@ describe("ProxyAiTools.checkProxies", () => {
     await tools.checkProxies({ proxy_ids: [1], mode: "basic" }, context);
     expect(events).toContain("running");
     expect(events).toContain("finalizing");
+  });
+
+  it("returns UNSUPPORTED_OPERATION when the filters scan is truncated by an error", async () => {
+    // Page 1 returns a full page (100) with total=500 and only 2 failures; page
+    // 2 throws. Without the fix the tool silently proceeds to check the 2
+    // partial-data failures; with the fix it refuses (targets unreliable).
+    const page1 = Array.from({ length: 100 }, (_, i) =>
+      makeListRecord({
+        id: i + 1,
+        status: i < 2 ? 2 : 1, // 2 failures among 100
+        checktime: "2026-07-19",
+      })
+    );
+    const getProxylist = vi.fn(async (page: number) => {
+      if (page === 1) {
+        return listResp(page1, 500);
+      }
+      throw new Error("db locked mid-scan");
+    });
+    const checkProxyBatch = vi.fn(async () => ({
+      total: 0,
+      checked: 0,
+      results: [],
+    }));
+    const tools = makeTools({
+      proxyModule: {
+        getProxycount: vi.fn(async () => 0),
+        getProxyDetail: vi.fn(async (id: number) => ({
+          status: true,
+          code: 200,
+          msg: "ok",
+          data: {
+            id,
+            host: `h-${id}`,
+            port: "8080",
+            protocol: "http",
+          } as ProxyEntity,
+        })),
+      },
+      proxyController: { getProxylist, checkProxyBatch },
+    });
+
+    const result = await tools.checkProxies({
+      filters: { status: "failure" },
+      mode: "basic",
+    });
+
+    expect(result.success).toBe(false);
+    if (result.success) {
+      return;
+    }
+    expect(result.code).toBe("UNSUPPORTED_OPERATION");
+    expect(checkProxyBatch).not.toHaveBeenCalled();
   });
 });
 

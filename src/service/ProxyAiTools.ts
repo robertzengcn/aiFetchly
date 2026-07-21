@@ -238,10 +238,12 @@ export class ProxyAiTools {
 
     let records: ProxyListEntity[];
     let total: number;
+    let truncated = false;
 
     if (needsFilterScan) {
       const scanned = await this.boundedScan(controller, input.search);
-      const filtered = scanned.filter((record) => {
+      truncated = scanned.truncated;
+      const filtered = scanned.records.filter((record) => {
         if (
           input.status !== undefined &&
           basicStatusOf(record) !== input.status
@@ -291,6 +293,7 @@ export class ProxyAiTools {
       page: input.page,
       size: input.size,
       credentialsRedacted: true,
+      ...(truncated ? { truncated: true } : {}),
     };
   }
 
@@ -696,9 +699,15 @@ export class ProxyAiTools {
         );
       }
     } else if (input.filters) {
-      const records = await this.boundedScan(controller, input.filters.search);
+      const scanned = await this.boundedScan(controller, input.filters.search);
+      if (scanned.truncated) {
+        return proxyToolError(
+          "UNSUPPORTED_OPERATION",
+          "Proxy scan was truncated by a read error; cannot reliably determine check targets. Retry, or narrow with proxy_ids / check_all."
+        );
+      }
       targetIds = filterRecordsByCheckStatus(
-        records,
+        scanned.records,
         input.filters.status,
         input.filters.googlePass
       );
@@ -872,16 +881,22 @@ export class ProxyAiTools {
   private async boundedScan(
     controller: ProxyController,
     search: string | undefined
-  ): Promise<ProxyListEntity[]> {
+  ): Promise<{ records: ProxyListEntity[]; truncated: boolean }> {
     const pageSize = 100;
     const collected: ProxyListEntity[] = [];
+    let truncated = false;
     for (let page = 0; page * pageSize < BOUNDED_SCAN_LIMIT; page += 1) {
-      // Controller returns bare {records,total} and throws on module error;
-      // treat a throw as "no more pages" and stop scanning.
-      const resp = await controller
-        .getProxylist(page + 1, pageSize, search ?? "")
-        .catch(() => null);
-      if (!resp || resp.records.length === 0) {
+      // Controller returns bare {records,total} and throws on module error. A
+      // throw mid-scan means the collected set is incomplete — stop fetching,
+      // but signal `truncated` so callers never silently act on partial data.
+      let resp: { records: ProxyListEntity[]; total: number };
+      try {
+        resp = await controller.getProxylist(page + 1, pageSize, search ?? "");
+      } catch {
+        truncated = true;
+        break;
+      }
+      if (resp.records.length === 0) {
         break;
       }
       collected.push(...resp.records);
@@ -892,7 +907,7 @@ export class ProxyAiTools {
         break;
       }
     }
-    return collected.slice(0, BOUNDED_SCAN_LIMIT);
+    return { records: collected.slice(0, BOUNDED_SCAN_LIMIT), truncated };
   }
 }
 
