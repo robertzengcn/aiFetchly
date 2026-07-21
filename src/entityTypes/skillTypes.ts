@@ -174,6 +174,9 @@ export interface SkillExecutionContext {
   /** Arguments from the LLM's tool_call event. */
   readonly args?: Record<string, unknown>;
 
+  /** Chat model selected for the parent turn that invoked this skill. */
+  readonly model?: string;
+
   /**
    * When true, the caller has already obtained user consent (e.g. via
    * resume-after-permission-grant). SkillExecutor should skip the
