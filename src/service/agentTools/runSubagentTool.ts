@@ -142,6 +142,7 @@ export const RUN_SUBAGENT_TOOL: SkillDefinition = {
       prompt,
       taskPacket,
       parentConversationId: context.conversationId,
+      model: context.model,
       executionMode: "foreground",
       outputSchemaOverride: args.outputSchema as
         | Record<string, unknown>

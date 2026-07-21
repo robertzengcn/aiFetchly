@@ -258,6 +258,12 @@
             :loading="availableModels.length === 0"
             class="ml-2"
           />
+          <AiChatV2ToolApprovalModeSelector
+            v-model="toolApprovalMode"
+            :disabled="chatIsRunning"
+            class="ml-2"
+            @update:model-value="onToolApprovalModeChange"
+          />
           <v-tooltip location="bottom">
             <template #activator="{ props }">
               <v-chip
@@ -275,12 +281,6 @@
             </template>
             <span>{{ t('aiProvider.title') || 'AI Provider' }}</span>
           </v-tooltip>
-          <AiChatV2ToolApprovalModeSelector
-            v-model="toolApprovalMode"
-            :disabled="chatIsRunning"
-            class="ml-2"
-            @update:model-value="onToolApprovalModeChange"
-          />
         </template>
       </AiChatV2Composer>
     </div>
@@ -446,7 +446,10 @@ import {
   getChatV2ToolApprovalMode,
   setChatV2ToolApprovalMode,
 } from "@/views/api/aiChatV2";
-import { getAIProviderSettings } from "@/views/api/aiProvider";
+import {
+  AI_PROVIDER_SETTINGS_CHANGED_EVENT,
+  getAIProviderSettings,
+} from "@/views/api/aiProvider";
 import type { AIProviderSettingsView } from "@/entityTypes/aiProviderTypes";
 import { dispatchSlashCommand } from "@/views/api/slashCommands";
 import AiChatV2Messages from "./AiChatV2Messages.vue";
@@ -855,8 +858,19 @@ const contextTotalTokens = computed(() =>
   resolveContextWindowLocal(effectiveModel.value)
 );
 
-const loadModelContextWindows = async (): Promise<void> => {
+const loadModelContextWindows = async (
+  options: { resetSelection?: boolean } = {}
+): Promise<void> => {
   try {
+    if (options.resetSelection) {
+      availableModels.value = [];
+      defaultModelId.value = undefined;
+      modelContextWindows.value = new Map();
+      selectedModel.value = undefined;
+      activeModel.value = undefined;
+      lastUsage.value = null;
+      streamingEstimatedTokens.value = 0;
+    }
     const resp = await getOpenAIChatModels();
     const data = resp?.data;
     if (!Array.isArray(data)) return;
@@ -883,7 +897,7 @@ const loadModelContextWindows = async (): Promise<void> => {
     // Resolve the initial model selection once the list is available. Don't
     // override a selection that was already made (e.g. restored from storage
     // before this async load completed, or changed by the user).
-    if (selectedModel.value === undefined) {
+    if (options.resetSelection || selectedModel.value === undefined) {
       selectedModel.value = resolveInitialModel(validModels);
     }
   } catch {
@@ -978,6 +992,29 @@ async function loadProviderSettings(): Promise<void> {
   } catch {
     // Non-fatal: indicator simply stays blank.
   }
+}
+
+function isAIProviderSettingsView(value: unknown): value is AIProviderSettingsView {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Partial<AIProviderSettingsView>;
+  return candidate.mode === "hosted" || candidate.mode === "local";
+}
+
+async function refreshProviderStateAfterChange(
+  view?: AIProviderSettingsView
+): Promise<void> {
+  if (view) {
+    providerSettings.value = view;
+  } else {
+    await loadProviderSettings();
+  }
+  await loadModelContextWindows({ resetSelection: true });
+}
+
+function handleProviderSettingsChanged(event: Event): void {
+  const detail = event instanceof CustomEvent ? event.detail : undefined;
+  const view = isAIProviderSettingsView(detail) ? detail : undefined;
+  void refreshProviderStateAfterChange(view);
 }
 
 function openAIProviderSettings(): void {
@@ -2377,6 +2414,10 @@ onMounted(() => {
   void loadConversations();
   void loadModelContextWindows();
   void loadProviderSettings();
+  window.addEventListener(
+    AI_PROVIDER_SETTINGS_CHANGED_EVENT,
+    handleProviderSettingsChanged
+  );
   // Subscribe to file operation events emitted during tool execution.
   // Records are appended per-conversation so the summary panel reflects
   // all changes made within the active conversation.
@@ -2391,6 +2432,10 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   detachActiveStreamView();
+  window.removeEventListener(
+    AI_PROVIDER_SETTINGS_CHANGED_EVENT,
+    handleProviderSettingsChanged
+  );
   unsubscribeFromFileOperations();
   if (searchDebounceTimer) {
     clearTimeout(searchDebounceTimer);

@@ -148,6 +148,7 @@ function buildInput(
     request: {
       message: "test",
       conversationId: "conv-test",
+      model: "deepseek-v4-flash",
       mode: "chat",
     } as never,
     openAITools: [],
@@ -240,7 +241,12 @@ describe("AIChatQueryLoop async poll", () => {
 
     const deps = {
       streamChatCompletion: fakeStream,
-      executeTool: async () => {
+      executeTool: async (
+        _name: string,
+        _args: Record<string, unknown>,
+        context: { model?: string; [key: string]: unknown }
+      ) => {
+        expect(context.model).toBe("deepseek-v4-flash");
         const jobId = lastStartedJobId();
         if (jobId) {
           fake.statusOverrides.set(jobId, "completed");

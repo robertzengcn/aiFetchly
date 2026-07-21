@@ -283,7 +283,7 @@ export const taskFixtures = {
 
 **Mocha Setup (`test/setup.ts`):**
 - Imports `reflect-metadata` for TypeORM decorators
-- Sets environment variables: `VITE_LOGIN_URL`, `VITE_REMOTEADD`, `NODE_ENV=test`
+- Sets environment variables: `VITE_LOGIN_URL`, `NODE_ENV=test`
 - Creates global `window` mock for Electron
 - Initializes SQLite database in temp directory (`os.tmpdir()/aifetchly-test`)
 - Uses `SqliteDb.resetInstance()` for fresh database per test run

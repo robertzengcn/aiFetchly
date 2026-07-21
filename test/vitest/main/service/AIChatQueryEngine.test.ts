@@ -62,6 +62,12 @@ vi.mock("@/modules/AIChatCompactModule", () => ({
   })),
 }));
 
+vi.mock("@/modules/AgentDefinitionModule", () => ({
+  AgentDefinitionModule: vi.fn().mockImplementation(() => ({
+    listActiveForRuntime: vi.fn().mockResolvedValue([]),
+  })),
+}));
+
 // --- Mock AiChatApi ----------------------------------------------------
 vi.mock("@/api/aiChatApi", () => ({
   AiChatApi: vi.fn().mockImplementation(() => ({})),

@@ -7,6 +7,8 @@ import {
   AGENT_MANAGEMENT_LIST,
   AGENT_MANAGEMENT_TOGGLE,
   AGENT_MANAGEMENT_UPDATE,
+  AI_ARTIFACT_GET,
+  AI_ARTIFACT_LIST,
   GET_APP_INFO,
   QUERY_USER_INFO,
   SHOW_OPEN_DIALOG,
@@ -53,10 +55,18 @@ describe("devBrowserChannels — invoke allowlist", () => {
     expect(DEV_BROWSER_INVOKE_ALLOWLIST).toContain(AGENT_MANAGEMENT_DELETE);
   });
 
+  it("includes reviewed AI artifact read channels for browser preview", () => {
+    expect(DEV_BROWSER_INVOKE_ALLOWLIST).toContain(AI_ARTIFACT_GET);
+    expect(DEV_BROWSER_INVOKE_ALLOWLIST).toContain(AI_ARTIFACT_LIST);
+    expect(isInvokeAllowed(AI_ARTIFACT_GET)).toBe(true);
+    expect(isInvokeAllowed(AI_ARTIFACT_LIST)).toBe(true);
+  });
+
   it("isInvokeAllowed returns true only for listed channels", () => {
     expect(isInvokeAllowed(GET_APP_INFO)).toBe(true);
     expect(isInvokeAllowed(QUERY_USER_INFO)).toBe(true);
     expect(isInvokeAllowed(AGENT_MANAGEMENT_CREATE)).toBe(true);
+    expect(isInvokeAllowed(AI_ARTIFACT_GET)).toBe(true);
     expect(isInvokeAllowed("unknown:channel")).toBe(false);
   });
 

@@ -137,18 +137,21 @@
           <v-icon start>mdi-connection</v-icon>
           {{ t('aiProvider.test_connection') || 'Test Connection' }}
         </v-btn>
-        <v-btn
-          variant="flat"
-          color="primary"
-          :loading="saving"
-          @click="onSave"
-        >
-          <v-icon start>mdi-content-save</v-icon>
-          {{ t('aiProvider.save') || 'Save' }}
-        </v-btn>
       </div>
 
       <AIProviderCapabilityBadges :capabilities="capabilities" />
+    </div>
+
+    <div class="d-flex flex-wrap gap-2 mb-4">
+      <v-btn
+        variant="flat"
+        color="primary"
+        :loading="saving"
+        @click="onSave"
+      >
+        <v-icon start>mdi-content-save</v-icon>
+        {{ t('aiProvider.save') || 'Save' }}
+      </v-btn>
     </div>
 
     <v-alert

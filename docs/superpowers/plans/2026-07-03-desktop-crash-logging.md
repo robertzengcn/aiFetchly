@@ -10,7 +10,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-07-03-desktop-crash-logging-design.md`
 
-**Backend contract:** `POST ${VITE_REMOTEADD}/api/crash-reports` accepts `CrashReportRequest` (schemaVersion 1, RFC3339 timestamps, length caps — see spec §5.4).
+**Backend contract:** `POST /api/crash-reports` accepts `CrashReportRequest` (schemaVersion 1, RFC3339 timestamps, length caps — see spec §5.4).
 
 **Test runner:** `yarn testmain` runs Vitest with `vite.main.config.mjs` and includes a `tsc --noEmit` type-check gate. For tight inner loops use `AIFETCHLY_SKIP_TSC=1 yarn testmain -t "<pattern>"` (do not commit code that needs this).
 
@@ -2406,7 +2406,7 @@ const rendererErrorTimestamps = new Map<number, number[]>();
 const RATE_LIMIT_PER_MIN = 10;
 
 function getRemoteBase(): string | null {
-  const v = (import.meta as unknown as { env?: { VITE_REMOTEADD?: string } }).env?.VITE_REMOTEADD;
+  const v = (import.meta as unknown as { env?: { VITE_REMOTE_URL?: string } }).env?.VITE_REMOTE_URL;
   return v ?? null;
 }
 

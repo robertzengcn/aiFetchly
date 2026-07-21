@@ -4,76 +4,94 @@ import { ProxyCheckEntity } from "@/entity/ProxyCheck.entity";
 //import { proxyCheckStatus } from "./proxyCheckdb";
 
 export enum proxyCheckStatus {
-    Success = 1,
-    Failure = 2,
+  Success = 1,
+  Failure = 2,
 }
 
 export enum googlePassStatus {
-    Pass = 1,
-    Fail = 2,
+  Pass = 1,
+  Fail = 2,
 }
 
 export class ProxyCheckModel extends BaseDb {
-    private repository: Repository<ProxyCheckEntity>;
+  private repository: Repository<ProxyCheckEntity>;
 
-    constructor(filepath: string) {
-        super(filepath);
-        this.repository = this.sqliteDb.connection.getRepository(ProxyCheckEntity);
-    }
+  constructor(filepath: string) {
+    super(filepath);
+    this.repository = this.sqliteDb.connection.getRepository(ProxyCheckEntity);
+  }
 
-    async updateProxyCheck(proxyId: number, status: proxyCheckStatus): Promise<void> {
-        const recordtime = new Date().toISOString();
-        
-        // Check if proxy exists
-        const existingProxy = await this.getProxyCheck(proxyId);
-        
-        if (!existingProxy) {
-            // Create new record
-            const newProxy = new ProxyCheckEntity();
-            newProxy.proxy_id = proxyId;
-            newProxy.status = status;
-            newProxy.check_time = recordtime;
-            await this.repository.save(newProxy);
-        } else {
-            // Update existing record
-            existingProxy.status = status;
-            existingProxy.check_time = recordtime;
-            await this.repository.save(existingProxy);
-        }
-    }
+  async updateProxyCheck(
+    proxyId: number,
+    status: proxyCheckStatus
+  ): Promise<void> {
+    const recordtime = new Date().toISOString();
 
-    async getProxyCheck(proxyId: number): Promise<ProxyCheckEntity | null> {
-        return this.repository.findOne({ where: { proxy_id: proxyId } });
-    }
+    // Check if proxy exists
+    const existingProxy = await this.getProxyCheck(proxyId);
 
-    async getProxyByStatus(status: proxyCheckStatus): Promise<Array<{ proxy_id: number }>> {
-        const proxies = await this.repository.find({ 
-            where: { status: status },
-            select: ['proxy_id']
-        });
-        return proxies;
+    if (!existingProxy) {
+      // Create new record
+      const newProxy = new ProxyCheckEntity();
+      newProxy.proxy_id = proxyId;
+      newProxy.status = status;
+      newProxy.check_time = recordtime;
+      await this.repository.save(newProxy);
+    } else {
+      // Update existing record
+      existingProxy.status = status;
+      existingProxy.check_time = recordtime;
+      await this.repository.save(existingProxy);
     }
+  }
 
-    async deleteProxyCheck(proxyId: number): Promise<number> {
-        const result = await this.repository.delete({ proxy_id: proxyId });
-        return result.affected || 0;
-    }
+  async getProxyCheck(proxyId: number): Promise<ProxyCheckEntity | null> {
+    return this.repository.findOne({ where: { proxy_id: proxyId } });
+  }
 
-    async updateGooglePassStatus(proxyId: number, status: googlePassStatus | null): Promise<void> {
-        // Check if proxy exists
-        const existingProxy = await this.getProxyCheck(proxyId);
-        
-        if (!existingProxy) {
-            // Create new record
-            const newProxy = new ProxyCheckEntity();
-            newProxy.proxy_id = proxyId;
-            newProxy.google_pass = status;
-            newProxy.check_time = new Date().toISOString();
-            await this.repository.save(newProxy);
-        } else {
-            // Update existing record
-            existingProxy.google_pass = status;
-            await this.repository.save(existingProxy);
-        }
+  async getProxyByStatus(
+    status: proxyCheckStatus
+  ): Promise<Array<{ proxy_id: number }>> {
+    const proxies = await this.repository.find({
+      where: { status: status },
+      select: ["proxy_id"],
+    });
+    return proxies;
+  }
+
+  async getProxyByGooglePassStatus(
+    status: googlePassStatus
+  ): Promise<Array<{ proxy_id: number }>> {
+    const proxies = await this.repository.find({
+      where: { google_pass: status },
+      select: ["proxy_id"],
+    });
+    return proxies;
+  }
+
+  async deleteProxyCheck(proxyId: number): Promise<number> {
+    const result = await this.repository.delete({ proxy_id: proxyId });
+    return result.affected || 0;
+  }
+
+  async updateGooglePassStatus(
+    proxyId: number,
+    status: googlePassStatus | null
+  ): Promise<void> {
+    // Check if proxy exists
+    const existingProxy = await this.getProxyCheck(proxyId);
+
+    if (!existingProxy) {
+      // Create new record
+      const newProxy = new ProxyCheckEntity();
+      newProxy.proxy_id = proxyId;
+      newProxy.google_pass = status;
+      newProxy.check_time = new Date().toISOString();
+      await this.repository.save(newProxy);
+    } else {
+      // Update existing record
+      existingProxy.google_pass = status;
+      await this.repository.save(existingProxy);
     }
-} 
+  }
+}

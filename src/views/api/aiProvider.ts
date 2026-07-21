@@ -15,6 +15,18 @@ import type {
   LocalAIProviderTestResult,
 } from "@/entityTypes/aiProviderTypes";
 
+export const AI_PROVIDER_SETTINGS_CHANGED_EVENT =
+  "aifetchly:ai-provider-settings-changed";
+
+function notifyAIProviderSettingsChanged(view: AIProviderSettingsView): void {
+  window.dispatchEvent(
+    new CustomEvent<AIProviderSettingsView>(
+      AI_PROVIDER_SETTINGS_CHANGED_EVENT,
+      { detail: view }
+    )
+  );
+}
+
 /**
  * Renderer API for the Local AI Provider feature.
  *
@@ -32,10 +44,12 @@ export async function getAIProviderSettings(): Promise<AIProviderSettingsView> {
 export async function saveAIProviderSettings(
   request: SaveAIProviderSettingsRequest
 ): Promise<AIProviderSettingsView> {
-  return (await windowInvoke(
+  const view = (await windowInvoke(
     AI_PROVIDER_SETTINGS_SAVE,
     request as unknown as object
   )) as AIProviderSettingsView;
+  notifyAIProviderSettingsChanged(view);
+  return view;
 }
 
 /**
@@ -64,5 +78,9 @@ export async function testLocalAIProvider(
 
 /** Delete the stored provider API key. Returns the redacted settings view. */
 export async function clearLocalAIProviderApiKey(): Promise<AIProviderSettingsView> {
-  return (await windowInvoke(AI_PROVIDER_API_KEY_CLEAR)) as AIProviderSettingsView;
+  const view = (await windowInvoke(
+    AI_PROVIDER_API_KEY_CLEAR
+  )) as AIProviderSettingsView;
+  notifyAIProviderSettingsChanged(view);
+  return view;
 }

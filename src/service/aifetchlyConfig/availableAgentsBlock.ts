@@ -3,9 +3,8 @@
  *
  * Formats the "Available agents" system-message block consumed by
  * {@link AIChatContextAssembler.assemble}. The block lets the model discover
- * dispatchable agents (built-in + dynamic) and copy the EXACT scoped id into
- * the run_subagent tool (ties to D-AgentIDs: bare built-in agent-* or scoped
- * dynamic user:agent:* / workspace:*:agent:*).
+ * dispatchable agents (built-in + dynamic) and copy the EXACT id into the
+ * run_subagent tool.
  *
  * Pure leaf — no filesystem, Electron-store, or ORM imports. The input
  * is the live {@link AgentDefinitionRegistryImpl.list} output (already sorted
@@ -26,25 +25,22 @@ import type { AgentDefinitionView } from "@/entityTypes/agentTypes";
 export const AVAILABLE_AGENTS_BLOCK_PREFIX = "Available AiFetchly agents";
 
 /**
- * Derive the human-readable source badge from a scoped agent id. Mirrors the
- * {@link SlashCommandDispatcher}'s private agentSourceBadgeLabel helper
- * (Plan 16-03 Task 2) — duplicated as a small, stable, pure derivation rather
- * than coupling this pure leaf to the slash-command dispatcher. Scoped-ID
- * convention comes from Plan 01:
- *   - "user:agent:<name>"                    -> "User"
- *   - "workspace:<workspaceId>:agent:<name>" -> "Workspace"
- *   - "plugin:<pluginName>:agent:<name>"     -> "Plugin"
- *   - anything else (bare "agent-*")         -> "Built-in"
- *
- * AgentDefinitionView intentionally carries no source field (Plan 01 decision
- * — parallel idToSource map keeps the DTO unchanged), so the source is derived
- * from the id prefix.
+ * Derive the human-readable source badge from the catalog source field.
+ * Plugin-owned agents use IDs like `caveman:cavecrew-investigator`, so source
+ * cannot be inferred safely from the id prefix.
  */
-export function agentSourceBadgeFromId(id: string): string {
-  if (id.startsWith("user:agent:")) return "User";
-  if (id.startsWith("workspace:") && id.includes(":agent:")) return "Workspace";
-  if (id.startsWith("plugin:") && id.includes(":agent:")) return "Plugin";
-  return "Built-in";
+export function agentSourceBadge(agent: AgentDefinitionView): string {
+  switch (agent.source) {
+    case "plugin":
+      return "Plugin";
+    case "workspace":
+      return "Workspace";
+    case "user":
+      return "User";
+    case "built-in":
+    default:
+      return "Built-in";
+  }
 }
 
 /**
@@ -68,7 +64,7 @@ export function buildAvailableAgentsBlock(
 ): string {
   if (agents.length === 0) return "";
   const rows = agents.map(
-    (a) => `${a.id} — ${a.description} [${agentSourceBadgeFromId(a.id)}]`
+    (a) => `${a.id} — ${a.description} [${agentSourceBadge(a)}]`
   );
   return (
     `${AVAILABLE_AGENTS_BLOCK_PREFIX} (copy the ID into run_subagent):\n` +

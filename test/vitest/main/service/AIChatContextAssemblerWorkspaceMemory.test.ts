@@ -11,6 +11,7 @@ const mockGetConversationMessages = vi.fn();
 const mockDurableRetrieve = vi.fn();
 const mockWorkspaceRetrieve = vi.fn();
 const mockResolve = vi.fn();
+const mockListActiveForRuntime = vi.fn();
 
 vi.mock("@/modules/AIChatSessionMemoryModule", () => ({
   AIChatSessionMemoryModule: vi.fn().mockImplementation(() => ({
@@ -48,6 +49,11 @@ vi.mock("@/modules/SystemSettingModule", () => ({
     getSettingValue: mockGetSettingValue,
   })),
 }));
+vi.mock("@/modules/AgentDefinitionModule", () => ({
+  AgentDefinitionModule: vi.fn().mockImplementation(() => ({
+    listActiveForRuntime: mockListActiveForRuntime,
+  })),
+}));
 vi.mock("@/modules/token", () => ({
   Token: vi.fn().mockImplementation(() => ({ getValue: vi.fn() })),
 }));
@@ -74,6 +80,7 @@ describe("AIChatContextAssembler — workspace memory injection", () => {
     });
     // Default: both injection toggles enabled (absent → enabled).
     mockGetSettingValue.mockResolvedValue(null);
+    mockListActiveForRuntime.mockResolvedValue([]);
   });
 
   it("injects workspace memory AFTER active workspace and BEFORE durable user memory", async () => {

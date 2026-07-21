@@ -178,6 +178,30 @@ vi.mock("@/modules/AIChatCompactModule", () => ({
     getActiveSummary: vi.fn().mockResolvedValue(null),
   })),
 }));
+vi.mock("@/modules/AgentDefinitionModule", () => ({
+  AgentDefinitionModule: vi.fn().mockImplementation(() => ({
+    listActiveForRuntime: vi.fn().mockResolvedValue([]),
+  })),
+}));
+
+const mockResetSharedAutoDreamService = vi.hoisted(() => vi.fn());
+const mockResetSharedWorkspaceAutoDreamService = vi.hoisted(() => vi.fn());
+const mockSharedAutoDreamService = vi.hoisted(() => ({
+  evaluateAfterChatTurn: vi.fn().mockResolvedValue(undefined),
+  evaluateAfterAgentTask: vi.fn().mockResolvedValue(undefined),
+}));
+const mockSharedWorkspaceAutoDreamService = vi.hoisted(() => ({
+  evaluateAfterChatTurn: vi.fn().mockResolvedValue(undefined),
+  evaluateAfterAgentTask: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock("@/service/AIAutoDreamFactory", () => ({
+  getSharedAutoDreamService: vi.fn(() => mockSharedAutoDreamService),
+  resetSharedAutoDreamService: mockResetSharedAutoDreamService,
+  getSharedWorkspaceAutoDreamService: vi.fn(
+    () => mockSharedWorkspaceAutoDreamService
+  ),
+  resetSharedWorkspaceAutoDreamService: mockResetSharedWorkspaceAutoDreamService,
+}));
 
 import {
   registerAiChatV2IpcHandlers,
@@ -498,6 +522,13 @@ describe("AI Chat V2 — stream lifecycle", () => {
     expect(mockAIChatSessionMemoryModule.mock.calls.length).toBeGreaterThan(
       firstRuntimeConstructCount + 1
     );
+  });
+
+  it("resets both auto-dream singletons after a database account switch", () => {
+    resetAiChatV2RuntimeForDatabaseSwitch();
+
+    expect(mockResetSharedAutoDreamService).toHaveBeenCalledTimes(1);
+    expect(mockResetSharedWorkspaceAutoDreamService).toHaveBeenCalledTimes(1);
   });
 
   it("saves partial content and emits cancelled on abort", async () => {

@@ -800,9 +800,9 @@ export class AIChatQueryLoop {
           const callId = call.id;
           const callName = call.name;
 
-          const emitToolCall = (
+          const emitToolCall = async (
             toolArguments: Record<string, unknown>
-          ): void => {
+          ): Promise<void> => {
             eventSink.emit({
               type: "tool_call",
               conversationId: input.conversationId,
@@ -811,6 +811,7 @@ export class AIChatQueryLoop {
               toolName: callName,
               toolArguments,
             });
+            await eventSink.flush?.();
           };
 
           // Model-initiated Plan Mode entry (chat mode only).
@@ -819,7 +820,7 @@ export class AIChatQueryLoop {
             !planContext &&
             input.autoPlan
           ) {
-            emitToolCall(call.arguments ?? {});
+            await emitToolCall(call.arguments ?? {});
             const transition = await this.handleEnterPlanMode(
               input,
               messages,
@@ -856,7 +857,7 @@ export class AIChatQueryLoop {
             isEnterPlanModeToolName(call.name) &&
             (!input.autoPlan || planContext)
           ) {
-            emitToolCall(call.arguments ?? {});
+            await emitToolCall(call.arguments ?? {});
             const reason = planContext
               ? "Already in Plan Mode; EnterPlanMode is not available."
               : "EnterPlanMode is not available. Plan Mode auto-entry is disabled.";
@@ -883,7 +884,7 @@ export class AIChatQueryLoop {
 
           // Plan tools are intercepted locally.
           if (planContext && isPlanToolName(call.name)) {
-            emitToolCall(call.arguments ?? {});
+            await emitToolCall(call.arguments ?? {});
             planToolsUsed = true;
             if (call.name === "AskUserQuestion") {
               const paused = await this.handlePlanToolAskUserQuestion(
@@ -921,7 +922,7 @@ export class AIChatQueryLoop {
               },
             });
             if (!policyDecision.allowed) {
-              emitToolCall(call.arguments ?? {});
+              await emitToolCall(call.arguments ?? {});
               const blockedContent = serializeToolResultContent({
                 success: false,
                 planApprovalRequired: true,
@@ -956,7 +957,7 @@ export class AIChatQueryLoop {
             executableCall
           );
           const effectiveArguments = preparedCall.effectiveCall.arguments ?? {};
-          emitToolCall(effectiveArguments);
+          await emitToolCall(effectiveArguments);
 
           const toolResult =
             preparedCall.blockedResult ??
@@ -1318,6 +1319,7 @@ export class AIChatQueryLoop {
               conversationId: input.conversationId,
               toolCallId: call.id,
               args: call.arguments,
+              model: input.request.model,
               emitProgress: (event) => {
                 input.eventSink.emit({
                   type: "tool_progress",
@@ -1656,6 +1658,7 @@ export class AIChatQueryLoop {
         conversationId: input.conversationId,
         toolCallId: call.id,
         args: call.arguments,
+        model: input.request.model,
         signal: token.signal,
         emitProgress: (event) => {
           if (token.signal.aborted) return; // drop progress after abort

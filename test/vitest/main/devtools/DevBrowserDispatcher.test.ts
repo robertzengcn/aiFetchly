@@ -5,6 +5,8 @@ import {
   AGENT_MANAGEMENT_CREATE,
   AGENT_MANAGEMENT_LIST,
   AGENT_MANAGEMENT_TOGGLE,
+  AI_ARTIFACT_GET,
+  AI_ARTIFACT_LIST,
   GET_APP_INFO,
   QUERY_USER_INFO,
 } from "@/config/channellist";
@@ -22,6 +24,29 @@ const moduleSpies = vi.hoisted(() => ({
     name: "Created",
   })),
   toggleAgent: vi.fn(async () => true),
+  getArtifact: vi.fn(async (artifactId: string) => ({
+    id: artifactId,
+    conversationId: "v2-browser",
+    type: "html",
+    title: "Report",
+    mimeType: "text/html",
+    content: "<p>full</p>",
+    version: 1,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  })),
+  listArtifacts: vi.fn(async (conversationId: string) => [
+    {
+      id: "artifact-1",
+      conversationId,
+      type: "html",
+      title: "Report",
+      mimeType: "text/html",
+      version: 1,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    },
+  ]),
 }));
 
 vi.mock("@/modules/AgentDefinitionModule", () => ({
@@ -29,6 +54,13 @@ vi.mock("@/modules/AgentDefinitionModule", () => ({
     listAllForManagement = moduleSpies.listAllForManagement;
     createManualAgent = moduleSpies.createManualAgent;
     toggleAgent = moduleSpies.toggleAgent;
+  },
+}));
+
+vi.mock("@/modules/AIArtifactModule", () => ({
+  AIArtifactModule: class {
+    getArtifact = moduleSpies.getArtifact;
+    listArtifacts = moduleSpies.listArtifacts;
   },
 }));
 
@@ -139,6 +171,8 @@ describe("createDefaultHandlers — MVP channel wiring", () => {
     expect(handlers.has(AGENT_MANAGEMENT_LIST)).toBe(true);
     expect(handlers.has(AGENT_MANAGEMENT_CREATE)).toBe(true);
     expect(handlers.has(AGENT_MANAGEMENT_TOGGLE)).toBe(true);
+    expect(handlers.has(AI_ARTIFACT_GET)).toBe(true);
+    expect(handlers.has(AI_ARTIFACT_LIST)).toBe(true);
   });
 
   it("does not register any handler outside the invoke allowlist", () => {
@@ -184,5 +218,48 @@ describe("createDefaultHandlers — MVP channel wiring", () => {
     expect(result.status).toBe(false);
     expect(result.msg).toMatch(/name|description|systemPrompt/);
     expect(moduleSpies.createManualAgent).not.toHaveBeenCalled();
+  });
+
+  it("dispatches artifact get calls through AIArtifactModule", async () => {
+    moduleSpies.getArtifact.mockClear();
+    const dispatcher = new DevBrowserDispatcher();
+
+    const result = await dispatcher.dispatch(AI_ARTIFACT_GET, {
+      artifactId: " artifact-browser ",
+    });
+
+    expect(result.status).toBe(true);
+    expect((result.data as { content?: string } | null)?.content).toBe(
+      "<p>full</p>"
+    );
+    expect(moduleSpies.getArtifact).toHaveBeenCalledWith("artifact-browser");
+  });
+
+  it("dispatches artifact list calls through AIArtifactModule", async () => {
+    moduleSpies.listArtifacts.mockClear();
+    const dispatcher = new DevBrowserDispatcher();
+
+    const result = await dispatcher.dispatch(AI_ARTIFACT_LIST, {
+      conversationId: " v2-browser ",
+    });
+
+    expect(result.status).toBe(true);
+    expect(result.data).toEqual([
+      expect.objectContaining({ id: "artifact-1", title: "Report" }),
+    ]);
+    expect(moduleSpies.listArtifacts).toHaveBeenCalledWith("v2-browser");
+  });
+
+  it("rejects invalid artifact payloads before the module layer", async () => {
+    moduleSpies.getArtifact.mockClear();
+    const dispatcher = new DevBrowserDispatcher();
+
+    const result = await dispatcher.dispatch(AI_ARTIFACT_GET, {
+      artifactId: "",
+    });
+
+    expect(result.status).toBe(false);
+    expect(result.msg).toMatch(/artifactId/i);
+    expect(moduleSpies.getArtifact).not.toHaveBeenCalled();
   });
 });

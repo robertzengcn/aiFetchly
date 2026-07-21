@@ -7,6 +7,7 @@ import { AIUserMemoryRetrievalService } from "@/service/AIUserMemoryRetrievalSer
 import { AIWorkspaceMemoryRetrievalService } from "@/service/AIWorkspaceMemoryRetrievalService";
 import { buildPlanModeSystemPrompt } from "@/service/PlanModePromptBuilder";
 import { SystemSettingModule } from "@/modules/SystemSettingModule";
+import { AgentDefinitionModule } from "@/modules/AgentDefinitionModule";
 import {
   ai_memory_injection_enabled,
   ai_workspace_memory_injection_enabled,
@@ -14,7 +15,6 @@ import {
 } from "@/config/settinggroupInit";
 import { WorkspaceResolver } from "@/service/WorkspaceResolver";
 import { AIFetchlyContextLoader } from "@/service/aifetchlyConfig/AIFetchlyContextLoader";
-import { getAIFetchlyConfigManager } from "@/service/aifetchlyConfig/AIFetchlyConfigManager";
 import { buildAvailableAgentsBlock } from "@/service/aifetchlyConfig/availableAgentsBlock";
 import path from "node:path";
 import os from "node:os";
@@ -197,10 +197,11 @@ export class AIChatContextAssembler {
       );
     }
 
-    // Available agents block for run_subagent discovery. The registry is
-    // mutated in-place by config reloads, so each assembly sees current agents.
+    // Available agents block for run_subagent discovery. Use the same runtime
+    // catalog as AGENT_DEFINITION_LIST so persisted plugin-owned agents are
+    // visible only when active, healthy, and owned by an enabled plugin.
     try {
-      const agents = getAIFetchlyConfigManager().getAgentRegistry().list();
+      const agents = await new AgentDefinitionModule().listActiveForRuntime();
       const agentsBlock = buildAvailableAgentsBlock(agents);
       if (agentsBlock.length > 0) {
         messages.push({ role: "system", content: agentsBlock });
