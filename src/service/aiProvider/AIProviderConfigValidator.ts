@@ -1,7 +1,10 @@
 import type {
   AIProviderValidationResult,
+  LocalAIProviderCapabilities,
   LocalAIProviderConfigInput,
   LocalAIProviderPreset,
+  ProviderCapabilityStatus,
+  VisionCapabilityStatus,
 } from "@/entityTypes/aiProviderTypes";
 import { getPresetDefinition, isValidPreset } from "./AIProviderPresets";
 
@@ -63,6 +66,58 @@ export function isInsecurePublicHttpUrl(normalizedUrl: string): boolean {
   } catch {
     return false;
   }
+}
+
+const CAPABILITY_STATUSES: readonly ProviderCapabilityStatus[] = [
+  "supported",
+  "unsupported",
+  "unknown",
+  "failed",
+];
+const VISION_STATUSES: readonly VisionCapabilityStatus[] = [
+  "supported",
+  "unsupported",
+  "unknown",
+];
+
+function isProviderCapabilityStatus(
+  value: unknown
+): value is ProviderCapabilityStatus {
+  return CAPABILITY_STATUSES.includes(value as ProviderCapabilityStatus);
+}
+
+function isVisionCapabilityStatus(
+  value: unknown
+): value is VisionCapabilityStatus {
+  return VISION_STATUSES.includes(value as VisionCapabilityStatus);
+}
+
+function normalizeCapabilities(
+  value: unknown
+): LocalAIProviderCapabilities | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const raw = value as Partial<LocalAIProviderCapabilities>;
+  if (
+    !isProviderCapabilityStatus(raw.modelsEndpoint) ||
+    !isProviderCapabilityStatus(raw.chat) ||
+    !isProviderCapabilityStatus(raw.streaming) ||
+    !isProviderCapabilityStatus(raw.tools) ||
+    !isVisionCapabilityStatus(raw.vision)
+  ) {
+    return undefined;
+  }
+  return {
+    modelsEndpoint: raw.modelsEndpoint,
+    chat: raw.chat,
+    streaming: raw.streaming,
+    tools: raw.tools,
+    vision: raw.vision,
+    ...(typeof raw.contextSize === "number" && raw.contextSize > 0
+      ? { contextSize: raw.contextSize }
+      : {}),
+  };
 }
 
 /**
@@ -166,6 +221,7 @@ export function validateLocalProviderConfig(
     return { valid: false, errors, warnings };
   }
 
+  const capabilities = normalizeCapabilities(input.capabilities);
   const normalized: LocalAIProviderConfigInput = {
     preset,
     name,
@@ -175,6 +231,21 @@ export function validateLocalProviderConfig(
     ...(input.clearApiKey ? { clearApiKey: true } : {}),
     ...(typeof input.contextSize === "number" && input.contextSize > 0
       ? { contextSize: input.contextSize }
+      : {}),
+    ...(capabilities ? { capabilities } : {}),
+    ...(typeof input.lastTestedAt === "string" &&
+    input.lastTestedAt.trim().length > 0
+      ? { lastTestedAt: input.lastTestedAt.trim() }
+      : {}),
+    ...(input.lastTestStatus === "passed" ||
+    input.lastTestStatus === "failed" ||
+    input.lastTestStatus === "partial" ||
+    input.lastTestStatus === "untested"
+      ? { lastTestStatus: input.lastTestStatus }
+      : {}),
+    ...(typeof input.lastTestMessage === "string" &&
+    input.lastTestMessage.trim().length > 0
+      ? { lastTestMessage: input.lastTestMessage.trim() }
       : {}),
   };
 

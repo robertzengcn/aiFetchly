@@ -190,6 +190,33 @@ describe("AIProviderSettingsService secret redaction", () => {
     expect(view.localProvider?.apiKeyConfigured).toBe(true);
   });
 
+  it("persists provider capabilities and last test metadata without exposing the API key", () => {
+    ctx.settings.saveLocalProvider({
+      ...validProvider,
+      apiKey: "sk-secret",
+      capabilities: {
+        modelsEndpoint: "supported",
+        chat: "supported",
+        streaming: "unsupported",
+        tools: "unknown",
+        vision: "unknown",
+        contextSize: 8192,
+      },
+      lastTestedAt: "2026-07-20T00:00:00.000Z",
+      lastTestStatus: "partial",
+      lastTestMessage: "Chat test passed, but streaming could not be verified.",
+    });
+
+    const view = ctx.settings.getSettingsView();
+
+    expect(view.localProvider?.capabilities?.streaming).toBe("unsupported");
+    expect(view.localProvider?.capabilities?.tools).toBe("unknown");
+    expect(view.localProvider?.lastTestedAt).toBe("2026-07-20T00:00:00.000Z");
+    expect(view.localProvider?.lastTestStatus).toBe("partial");
+    expect(view.localProvider?.lastTestMessage).toMatch(/streaming/i);
+    expect(JSON.stringify(view.localProvider)).not.toContain("sk-secret");
+  });
+
   it("rejects an invalid config without storing anything", () => {
     expect(() =>
       ctx.settings.saveLocalProvider({ ...validProvider, baseUrl: "ftp://x" })

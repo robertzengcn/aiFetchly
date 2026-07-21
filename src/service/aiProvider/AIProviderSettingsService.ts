@@ -132,6 +132,18 @@ export class AIProviderSettingsService {
       ...(typeof normalized.contextSize === "number"
         ? { contextSize: normalized.contextSize }
         : {}),
+      ...(normalized.capabilities
+        ? { capabilities: normalized.capabilities }
+        : {}),
+      ...(normalized.lastTestedAt
+        ? { lastTestedAt: normalized.lastTestedAt }
+        : {}),
+      ...(normalized.lastTestStatus
+        ? { lastTestStatus: normalized.lastTestStatus }
+        : {}),
+      ...(normalized.lastTestMessage
+        ? { lastTestMessage: normalized.lastTestMessage }
+        : {}),
     };
     this.token.setValue(USER_LOCAL_AI_PROVIDER_CONFIG, JSON.stringify(stored));
     this.token.setValue(USER_LOCAL_AI_ENABLED, "true");

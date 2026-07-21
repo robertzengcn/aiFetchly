@@ -124,6 +124,13 @@ export class OpenAICompatibleProviderClient implements ChatProviderClient {
   }
 
   async listModels(): Promise<OpenAIModelsResponse> {
+    return (await this.listModelsWithFallbackStatus()).models;
+  }
+
+  async listModelsWithFallbackStatus(): Promise<{
+    readonly models: OpenAIModelsResponse;
+    readonly usedFallback: boolean;
+  }> {
     try {
       const res = await this.fetchImpl(this.url("/models"), {
         method: "GET",
@@ -133,20 +140,26 @@ export class OpenAICompatibleProviderClient implements ChatProviderClient {
         throw await toProviderError(res, { endpoint: "/models" });
       }
       const raw = await res.json();
-      return normalizeOpenAIModelsResponse(raw, {
-        defaultModel: this.config.defaultModel,
-        providerName: this.config.name,
-        contextSize: this.config.contextSize,
-      });
+      return {
+        models: normalizeOpenAIModelsResponse(raw, {
+          defaultModel: this.config.defaultModel,
+          providerName: this.config.name,
+          contextSize: this.config.contextSize,
+        }),
+        usedFallback: false,
+      };
     } catch {
       // Local providers often have weak /models support. Fall back to a
       // synthetic list so chat can still proceed with the manually configured
       // model; the UI surfaces a warning to the user.
-      return buildSyntheticModelList({
-        model: this.config.defaultModel,
-        providerName: this.config.name,
-        contextSize: this.config.contextSize,
-      });
+      return {
+        models: buildSyntheticModelList({
+          model: this.config.defaultModel,
+          providerName: this.config.name,
+          contextSize: this.config.contextSize,
+        }),
+        usedFallback: true,
+      };
     }
   }
 

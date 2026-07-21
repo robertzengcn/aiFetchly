@@ -619,10 +619,6 @@ export class SqliteDb {
   public static getInstance(filepath: string): SqliteDb {
     // Validate filepath - don't create/reset with invalid paths
     if (!filepath || filepath.length === 0) {
-      // If we have a valid instance, return it instead of creating invalid one
-      if (SqliteDb.instance && SqliteDb.instance.connection) {
-        return SqliteDb.instance;
-      }
       throw new Error("Cannot create SqliteDb instance with empty filepath");
     }
 
@@ -653,6 +649,29 @@ export class SqliteDb {
     }
 
     return SqliteDb.instance;
+  }
+
+  /**
+   * Destroy and clear the process-wide database singleton.
+   *
+   * Use this when the active user context is removed (logout/session expiry)
+   * so an empty or missing USERSDBPATH can never fall back to the previous
+   * user's open database connection.
+   */
+  public static async destroyInstance(): Promise<void> {
+    const instance = SqliteDb.instance;
+    SqliteDb.initPromise = null;
+
+    if (instance?.connection?.isInitialized) {
+      try {
+        await instance.connection.destroy();
+      } catch (error) {
+        console.error("Failed to destroy existing SqliteDb connection:", error);
+      }
+    }
+
+    SqliteDb.instance = null;
+    SqliteDb.currentDbPath = null;
   }
 
   /**
