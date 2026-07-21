@@ -972,6 +972,9 @@ export class PluginImportService {
       skillCount: skills.length,
       mcpServerCount: mcpServers.length,
       agentCount: pluginAgents.length,
+      // Commands are promoted post-install by PluginComponentRegistryService,
+      // not during import — report 0 here; the live count is read on demand.
+      commandCount: 0,
       permissions: manifest.permissions ?? [],
       lastUpdated: new Date().toISOString(),
     };

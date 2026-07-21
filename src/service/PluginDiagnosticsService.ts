@@ -3,6 +3,7 @@ import { AgentDefinitionModule } from "@/modules/AgentDefinitionModule";
 import { SkillManagementModule } from "@/modules/SkillManagementModule";
 import { MCPToolModule } from "@/modules/MCPToolModule";
 import { PluginCommandDiagnosticsStore } from "@/service/pluginCompat/PluginCommandDiagnosticsStore";
+import { getAIFetchlyConfigManager } from "@/service/aifetchlyConfig/AIFetchlyConfigManager";
 import type { AIFetchlyConfigDiagnostic } from "@/entityTypes/aifetchlyConfigTypes";
 import type { PluginError, PluginSummary } from "@/entityTypes/pluginTypes";
 
@@ -134,6 +135,9 @@ export class PluginDiagnosticsService {
       skillCount: skills.length,
       mcpServerCount: mcpServers.length,
       agentCount: agents.length,
+      commandCount: getAIFetchlyConfigManager()
+        .getCommandRegistry()
+        .listBySource(`plugin:${pluginName}`).length,
       permissions: safeParseArray(plugin.permissionsJson),
       lastUpdated: plugin.updatedAt
         ? new Date(plugin.updatedAt).toISOString()

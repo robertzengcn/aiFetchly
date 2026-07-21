@@ -9,6 +9,8 @@ import { PluginComponentRegistryService } from "@/service/PluginComponentRegistr
 import { PluginDiagnosticsService } from "@/service/PluginDiagnosticsService";
 import { UserPluginAutoInstallService } from "@/service/UserPluginAutoInstallService";
 import { getPluginInstallRoot } from "@/service/pluginPaths";
+import { getAIFetchlyConfigManager } from "@/service/aifetchlyConfig/AIFetchlyConfigManager";
+import type { SlashCommandView } from "@/entityTypes/slashCommandTypes";
 import type {
   PluginSummary,
   PluginSourceKind,
@@ -64,7 +66,8 @@ function toSummary(
   p: InstalledPluginEntity,
   skillCount: number,
   mcpServerCount: number,
-  agentCount: number
+  agentCount: number,
+  commandCount: number
 ): PluginSummary {
   let permissions: string[] = [];
   try {
@@ -87,6 +90,7 @@ function toSummary(
     skillCount,
     mcpServerCount,
     agentCount,
+    commandCount,
     permissions,
     lastUpdated: p.updatedAt
       ? new Date(p.updatedAt).toISOString()
@@ -95,6 +99,52 @@ function toSummary(
     sourceUri: p.sourceUri,
     sourceRef: p.sourceRef,
     installPath: p.installPath,
+  };
+}
+
+/**
+ * Renderer-safe projection of one plugin command for the Plugin Manager detail
+ * surface. Picks only the inspectable fields — the raw prompt body and
+ * arbitrary metadata are NEVER included (PRD §11.1 / AC-9). `sourceId` is
+ * exposed so users can see the canonical `plugin:<name>` identity.
+ */
+interface PluginCommandViewEntry {
+  readonly name: string;
+  readonly description: string;
+  readonly aliases: readonly string[];
+  readonly argumentHint?: string;
+  readonly enabled: boolean;
+  readonly sourceId: string;
+}
+
+function toPluginCommandView(
+  view: SlashCommandView,
+  sourceId: string
+): PluginCommandViewEntry {
+  return {
+    name: view.name,
+    description: view.description,
+    aliases: view.aliases,
+    ...(view.argumentHint !== undefined
+      ? { argumentHint: view.argumentHint }
+      : {}),
+    enabled: view.enabled,
+    sourceId,
+  };
+}
+
+/** Live slash commands promoted by a plugin, as renderer-safe views. */
+function pluginCommandViews(pluginName: string): {
+  readonly views: readonly PluginCommandViewEntry[];
+  readonly count: number;
+} {
+  const sourceId = `plugin:${pluginName}`;
+  const defs = getAIFetchlyConfigManager()
+    .getCommandRegistry()
+    .listViewsBySource(sourceId);
+  return {
+    views: defs.map((v) => toPluginCommandView(v, sourceId)),
+    count: defs.length,
   };
 }
 
@@ -113,8 +163,15 @@ export function registerPluginIpcHandlers(): void {
       const skills = await skillModule.findSkillsByPluginName(p.name);
       const mcpServers = await mcpModule.findMcpByPluginName(p.name);
       const agents = await agentModule.findAgentsByPluginName(p.name);
+      const commandCount = pluginCommandViews(p.name).count;
       summaries.push(
-        toSummary(p, skills.length, mcpServers.length, agents.length)
+        toSummary(
+          p,
+          skills.length,
+          mcpServers.length,
+          agents.length,
+          commandCount
+        )
       );
     }
     return summaries;
@@ -135,11 +192,13 @@ export function registerPluginIpcHandlers(): void {
       const skills = await skillModule.findSkillsByPluginName(input.name);
       const mcpServers = await mcpModule.findMcpByPluginName(input.name);
       const agents = await agentModule.findAgentsByPluginName(input.name);
+      const commandInfo = pluginCommandViews(input.name);
       const summary = toSummary(
         plugin,
         skills.length,
         mcpServers.length,
-        agents.length
+        agents.length,
+        commandInfo.count
       );
       let manifest = {};
       try {
@@ -173,6 +232,8 @@ export function registerPluginIpcHandlers(): void {
           health: a.health,
           ...(a.lastError ? { error: a.lastError } : {}),
         })),
+        // Renderer-safe command list — body/metadata stripped (PRD §11.1/AC-9).
+        commands: commandInfo.views,
         manifest,
       };
     }

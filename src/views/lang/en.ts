@@ -1224,7 +1224,8 @@ export default {
     cookies_cleared_successfully: "Cookies cleared successfully",
     clear_cookies_error: "Clear cookies error",
     clear_cookies_confirm_title: "Confirm to clear cookies",
-    clear_cookies_confirm_text: "The cookies for this tool account will be cleared",
+    clear_cookies_confirm_text:
+      "The cookies for this tool account will be cleared",
     manuallogin_title: "Manual login notice",
     manuallogin_content:
       "We will open a pop-up window. Please log in to the selected platform manually, then close the window. The system will automatically save the tool account's cookies.",
@@ -2421,6 +2422,7 @@ export default {
     status_missing_files: "Missing Files",
     tab_overview: "Overview",
     tab_skills: "Skills",
+    tab_commands: "Commands",
     tab_mcp_servers: "MCP Servers",
     tab_permissions: "Permissions",
     tab_diagnostics: "Diagnostics",
@@ -2440,6 +2442,11 @@ export default {
     export_diagnostics: "Export Diagnostics",
     diagnostics_copied: "Diagnostics copied to clipboard",
     enabled_label: "Enabled",
+    command_count: "Commands: {count}",
+    no_commands: "No slash commands in this plugin.",
+    column_command: "Command",
+    column_aliases: "Aliases",
+    column_argument_hint: "Argument Hint",
     via_plugin: "via plugin: {name}",
     install_source: {
       button: "Install from Source",

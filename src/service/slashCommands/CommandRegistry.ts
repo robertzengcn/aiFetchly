@@ -144,6 +144,31 @@ export class CommandRegistry {
     return this.list().map(toView);
   }
 
+  /**
+   * All commands belonging to `sourceId`, as defensive copies, in by-id
+   * insertion order. Used by surfaces that list a single source's commands
+   * (e.g. plugin detail: all commands contributed by `plugin:<name>`).
+   * Unknown sourceId → empty array.
+   */
+  listBySource(sourceId: string): SlashCommandDefinition[] {
+    const ids = this.sourceIndex.get(sourceId);
+    if (!ids) return [];
+    const out: SlashCommandDefinition[] = [];
+    for (const id of ids) {
+      const def = this.byId.get(id);
+      if (def) out.push({ ...def });
+    }
+    return out;
+  }
+
+  /**
+   * Renderer-safe projection of a single source's commands. Body/metadata
+   * stripped via the same {@link toView} used by {@link listViews}.
+   */
+  listViewsBySource(sourceId: string): SlashCommandView[] {
+    return this.listBySource(sourceId).map(toView);
+  }
+
   // --- Scoped accessors (plugin/workspace slash commands, FR-1..FR-3) ---------
 
   /**

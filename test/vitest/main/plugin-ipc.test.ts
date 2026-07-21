@@ -179,6 +179,8 @@ vi.mock("@/service/UserPluginAutoInstallService", () => ({
 import { registerPluginIpcHandlers } from "@/main-process/communication/plugin-ipc";
 import { UserPluginAutoInstallService } from "@/service/UserPluginAutoInstallService";
 import { PluginComponentRegistryService } from "@/service/PluginComponentRegistryService";
+import { getAIFetchlyConfigManager } from "@/service/aifetchlyConfig/AIFetchlyConfigManager";
+import type { SlashCommandDefinition } from "@/entityTypes/slashCommandTypes";
 import {
   PLUGIN_LIST,
   PLUGIN_GET,
@@ -274,6 +276,78 @@ describe("plugin-ipc", () => {
         sourceRef: "main",
       },
     });
+  });
+
+  it("PLUGIN_GET exposes a renderer-safe command list + commandCount (no body/metadata)", async () => {
+    // Seed the live registry with one command under plugin:demo-plugin.
+    const registry = getAIFetchlyConfigManager().getCommandRegistry();
+    const reviewDef: SlashCommandDefinition = {
+      id: "plugin:demo-plugin:command:review",
+      name: "review",
+      description: "Review changes",
+      aliases: ["code-review"],
+      type: "prompt",
+      source: "plugin",
+      sourceId: "plugin:demo-plugin",
+      sourceLabel: "Plugin",
+      argumentHint: "[scope]",
+      requiresTrust: false,
+      enabled: true,
+      // Body/metadata must NEVER reach the renderer (PRD §11.1 / AC-9).
+      body: "SECRET PROMPT BODY $ARGUMENTS",
+      metadata: { secret: "leak-me" },
+    };
+    registry.replaceSource("plugin:demo-plugin", [reviewDef]);
+
+    try {
+      const fn = handlers.get(PLUGIN_GET)!;
+      const result = await fn({}, { name: "demo-plugin" });
+      expect(result).toMatchObject({ status: true });
+      const data = (
+        result as { data: { commands: unknown[]; commandCount: number } }
+      ).data;
+      expect(data.commandCount).toBe(1);
+      expect(data.commands).toHaveLength(1);
+      const serialized = JSON.stringify(data.commands);
+      // Renderer-safe fields present...
+      expect(serialized).toContain('"name":"review"');
+      expect(serialized).toContain('"sourceId":"plugin:demo-plugin"');
+      expect(serialized).toContain('"argumentHint":"[scope]"');
+      // ...raw body + metadata stripped.
+      expect(serialized).not.toContain("SECRET PROMPT BODY");
+      expect(serialized).not.toContain("leak-me");
+    } finally {
+      registry.replaceSource("plugin:demo-plugin", []);
+    }
+  });
+
+  it("PLUGIN_LIST summary carries commandCount from the live registry", async () => {
+    const registry = getAIFetchlyConfigManager().getCommandRegistry();
+    registry.replaceSource("plugin:demo-plugin", [
+      {
+        id: "plugin:demo-plugin:command:a",
+        name: "a",
+        description: "A",
+        aliases: [],
+        type: "prompt",
+        source: "plugin",
+        sourceId: "plugin:demo-plugin",
+        sourceLabel: "Plugin",
+        requiresTrust: false,
+        enabled: true,
+      },
+    ]);
+
+    try {
+      const fn = handlers.get(PLUGIN_LIST)!;
+      const result = await fn({}, undefined);
+      expect(result).toMatchObject({
+        status: true,
+        data: [expect.objectContaining({ commandCount: 1 })],
+      });
+    } finally {
+      registry.replaceSource("plugin:demo-plugin", []);
+    }
   });
 
   it("PLUGIN_INSTALL_FROM_SOURCE rejects an invalid kind", async () => {

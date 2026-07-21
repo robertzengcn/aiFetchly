@@ -66,6 +66,7 @@ async function captureProvenance(
         skillCount: 0,
         mcpServerCount: 0,
         agentCount: 0,
+        commandCount: 0,
         permissions: [],
         lastUpdated: new Date().toISOString(),
       },
