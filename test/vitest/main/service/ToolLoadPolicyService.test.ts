@@ -1,0 +1,105 @@
+import { describe, expect, it } from "vitest";
+import { ToolLoadPolicyService } from "@/service/ToolLoadPolicyService";
+import { TOOL_CATALOG_SEARCH_TOOL_NAME } from "@/config/toolCatalogConfig";
+import type { OpenAITool } from "@/api/aiChatApi";
+import type {
+  ToolCatalogRuntimeContext,
+  ToolCatalogSource,
+} from "@/entityTypes/toolCatalogTypes";
+
+function tool(name: string): OpenAITool {
+  return {
+    type: "function",
+    function: { name, description: "d", parameters: { type: "object" } },
+  };
+}
+
+const baseCtx: ToolCatalogRuntimeContext = {
+  conversationId: "c1",
+  isPlanMode: false,
+  autoPlanEnabled: false,
+  currentUserMessage: "",
+  uploadedFileTypes: [],
+};
+
+function classify(
+  name: string,
+  source: ToolCatalogSource,
+  ctxOverrides: Partial<ToolCatalogRuntimeContext> = {}
+): string {
+  const svc = new ToolLoadPolicyService();
+  return svc.classify({
+    tool: tool(name),
+    source,
+    context: { ...baseCtx, ...ctxOverrides },
+  });
+}
+
+describe("ToolLoadPolicyService.classify", () => {
+  it("treats tool_catalog_search as always", () => {
+    expect(
+      classify(TOOL_CATALOG_SEARCH_TOOL_NAME, "system")
+    ).toBe("always");
+  });
+
+  it("treats core file/search/job helpers as always", () => {
+    expect(classify("file_read", "builtin")).toBe("always");
+    expect(classify("glob_files", "builtin")).toBe("always");
+    expect(classify("grep_files", "builtin")).toBe("always");
+    expect(classify("check_tool_job_status", "builtin")).toBe("always");
+    expect(classify("read_attachment_content", "builtin")).toBe("always");
+    expect(classify("knowledge_library_search", "builtin")).toBe("always");
+  });
+
+  it("classifies MCP tools as deferred regardless of name style", () => {
+    expect(classify("mcp__crm__server__create_lead", "mcp")).toBe("deferred");
+    expect(classify("mcp_42_search", "mcp")).toBe("deferred");
+  });
+
+  it("classifies plugin/imported/subagent tools as deferred", () => {
+    expect(classify("plugin_tool_x", "plugin")).toBe("deferred");
+    expect(classify("user_skill_y", "imported")).toBe("deferred");
+    expect(classify("run_subagent", "subagent")).toBe("deferred");
+  });
+
+  it("defers specialized built-in tools by default", () => {
+    expect(classify("scrape_urls_from_search_engine", "builtin")).toBe(
+      "deferred"
+    );
+    expect(classify("search_maps_businesses", "builtin")).toBe("deferred");
+  });
+
+  it("promotes a specialized tool to contextual when named in the user message", () => {
+    expect(
+      classify("search_maps_businesses", "builtin", {
+        currentUserMessage: "Please use search_maps_businesses for dentists",
+      })
+    ).toBe("contextual");
+  });
+
+  it("treats plan tools as always only in plan mode", () => {
+    expect(classify("AskUserQuestion", "plan", { isPlanMode: true })).toBe(
+      "always"
+    );
+    expect(classify("SubmitPlanForApproval", "plan", { isPlanMode: true })).toBe(
+      "always"
+    );
+    expect(classify("AskUserQuestion", "plan", { isPlanMode: false })).toBe(
+      "contextual"
+    );
+  });
+
+  it("treats EnterPlanMode as contextual", () => {
+    expect(classify("EnterPlanMode", "plan")).toBe("contextual");
+  });
+
+  it("never inspects tool arguments (pure name+source+context)", () => {
+    const svc = new ToolLoadPolicyService();
+    const policy = svc.classify({
+      tool: { type: "function", function: { name: "file_read" } },
+      source: "builtin",
+      context: baseCtx,
+    });
+    expect(policy).toBe("always");
+  });
+});
