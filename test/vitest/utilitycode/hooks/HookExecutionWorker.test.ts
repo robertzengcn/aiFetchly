@@ -145,13 +145,11 @@ function mockFork(): {
         messageHandler = listener as unknown as (msg: unknown) => void;
       }
     },
-    send(msg: unknown): boolean {
+    postMessage(msg: unknown): void {
       sent.push(msg);
-      return true;
     },
-    kill(): boolean {
-      return true;
-    },
+    kill(): void {},
+    pid: 12345,
   };
   return {
     fork: (() => child) as unknown as ForkFn,
