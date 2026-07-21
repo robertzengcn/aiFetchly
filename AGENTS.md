@@ -569,7 +569,6 @@ Current branch (`sqlite-vec-merge`) is integrating sqlite-vec for vector similar
 ## Environment Configuration
 
 ### Required Environment Variables
-- `VITE_REMOTEADD` - Backend API URL
 - `UPDATESERVER` - Update server URL for auto-updater
 
 ### Development Setup
