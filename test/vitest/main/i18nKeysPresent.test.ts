@@ -163,5 +163,20 @@ describe("I18-01 — phase-13 i18n groups present across all six languages", () 
         ).toBe(first);
       }
     });
+
+    it("aiProvider key sets are identical", () => {
+      const sets = Object.values(LANGS).map((l) =>
+        Object.keys(l.aiProvider as Record<string, unknown>)
+          .sort()
+          .join(",")
+      );
+      const first = sets[0];
+      for (let i = 1; i < sets.length; i++) {
+        expect(
+          sets[i],
+          `language ${Object.keys(LANGS)[i]} aiProvider keys mismatch`
+        ).toBe(first);
+      }
+    });
   });
 });

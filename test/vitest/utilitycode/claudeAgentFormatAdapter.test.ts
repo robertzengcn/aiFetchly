@@ -56,6 +56,38 @@ body`;
     expect(r.definition.allowedTools.sort()).toEqual(["s1", "s2", "t1"]);
   });
 
+  it("maps safe Claude tool aliases and ignores Claude model shorthand", () => {
+    const md = `---
+name: cavecrew-investigator
+description: Read-only locator.
+tools: [Read, Grep, Glob, Bash]
+model: haiku
+---
+
+Locate definitions.`;
+    const r = ClaudeAgentFormatAdapter.adapt(md, {
+      pluginName: "caveman",
+      sourcePath: "agents/cavecrew-investigator.md",
+      namespaceSegments: [],
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.definition.id).toBe("caveman:cavecrew-investigator");
+    expect(r.definition.allowedTools).toEqual([
+      "file_read",
+      "grep_files",
+      "glob_files",
+    ]);
+    expect(r.definition.defaultModel).toBeUndefined();
+    expect(r.manifest.claudeModelAlias).toBe("haiku");
+    expect(r.warnings.map((w) => w.message).join("\n")).toContain(
+      'Claude model alias "haiku"'
+    );
+    expect(r.warnings.map((w) => w.message).join("\n")).toContain(
+      'Claude agent tool "Bash"'
+    );
+  });
+
   it("rejects missing name", () => {
     const r = ClaudeAgentFormatAdapter.adapt("---\ndescription: d\n---\nbody", {
       pluginName: "p",

@@ -294,7 +294,6 @@ t('search.input_keywords_hint') || 'Fallback text'
 ### Environment/Config
 
 **Environment Variables:**
-- `VITE_REMOTEADD` -- Backend API URL
 - `VITE_LOGIN_URL` -- Login page URL (embedded at build time)
 - `UPDATESERVER` -- Update server URL
 - `NODE_ENV` -- Environment mode

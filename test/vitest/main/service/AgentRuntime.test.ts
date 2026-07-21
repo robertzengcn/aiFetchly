@@ -78,6 +78,36 @@ vi.mock("@/config/skillsRegistry", () => ({
         description: "Lookup",
         parameters: { type: "object" },
       },
+      {
+        type: "function",
+        name: "file_read",
+        description: "Read file",
+        parameters: { type: "object" },
+      },
+      {
+        type: "function",
+        name: "grep_files",
+        description: "Search files",
+        parameters: { type: "object" },
+      },
+      {
+        type: "function",
+        name: "glob_files",
+        description: "Find files",
+        parameters: { type: "object" },
+      },
+      {
+        type: "function",
+        name: "check_tool_job_status",
+        description: "Check job",
+        parameters: { type: "object" },
+      },
+      {
+        type: "function",
+        name: "cancel_tool_job",
+        description: "Cancel job",
+        parameters: { type: "object" },
+      },
     ]),
     getSkill: vi.fn(() => ({
       name: "lookup",
@@ -123,6 +153,12 @@ let mockLoopResult: {
   }),
 };
 let mockLoopCallCount = 0;
+let lastLoopInput:
+  | {
+      request: { model?: string };
+      openAITools: Array<{ function: { name: string } }>;
+    }
+  | undefined;
 
 vi.mock("@/service/AIChatQueryLoop", () => ({
   AIChatQueryLoop: class {
@@ -135,7 +171,11 @@ vi.mock("@/service/AIChatQueryLoop", () => ({
         ) => Promise<unknown>;
       }
     ) {}
-    async run() {
+    async run(input: {
+      request: { model?: string };
+      openAITools: Array<{ function: { name: string } }>;
+    }) {
+      lastLoopInput = input;
       for (let i = 0; i < mockLoopCallCount; i++) {
         await this.deps.executeTool(
           "lookup",
@@ -183,6 +223,7 @@ describe("AgentRuntime", () => {
         confidence: 0.8,
       }),
     };
+    lastLoopInput = undefined;
   });
 
   it("fails when an agent exceeds its max tool calls", async () => {
@@ -315,6 +356,33 @@ describe("AgentRuntime", () => {
     expect(result.status).toBe("completed");
     expect(result.parseWarning).toBeUndefined();
     expect(result.output?.customField).toBe("value");
+  });
+
+  it("normalizes persisted Claude plugin model and tool aliases at runtime", async () => {
+    mockDefinition = {
+      ...definition,
+      id: "caveman:cavecrew-investigator",
+      source: "plugin",
+      pluginName: "caveman",
+      allowedTools: ["Read", "Grep", "Glob", "Bash"],
+      defaultModel: "haiku",
+    };
+
+    const runtime = new AgentRuntime();
+    const result = await runtime.runSync({
+      ...makeRequest(),
+      agentId: "caveman:cavecrew-investigator",
+    });
+
+    expect(result.status).toBe("completed");
+    expect(lastLoopInput?.request.model).toBeUndefined();
+    const toolNames =
+      lastLoopInput?.openAITools.map((tool) => tool.function.name) ?? [];
+    expect(toolNames).toContain("file_read");
+    expect(toolNames).toContain("grep_files");
+    expect(toolNames).toContain("glob_files");
+    expect(toolNames).not.toContain("Bash");
+    expect(toolNames).not.toContain("haiku");
   });
 
   it("rejects override-mismatched JSON with a parseWarning (lenient fallback)", async () => {

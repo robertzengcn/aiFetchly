@@ -13,6 +13,10 @@ import { AgentPromptBuilder } from "@/service/AgentPromptBuilder";
 import { AgentOutputParser } from "@/service/AgentOutputParser";
 import { AgentTranscriptService } from "@/service/AgentTranscriptService";
 import { AgentToolPolicyService } from "@/service/AgentToolPolicyService";
+import {
+  isClaudeModelAlias,
+  normalizeClaudeAgentToolName,
+} from "@/service/pluginCompat/ClaudeAgentFormatAdapter";
 import type { AIAutoDreamService } from "@/service/AIAutoDreamService";
 import type { AIWorkspaceAutoDreamService } from "@/service/AIWorkspaceAutoDreamService";
 import type {
@@ -35,6 +39,28 @@ function toOpenAITool(
       parameters: def.parameters,
     },
   };
+}
+
+function normalizeRuntimeDefinition(
+  definition: AgentDefinitionView
+): AgentDefinitionView {
+  const normalizedTools = definition.allowedTools
+    .map((name) => normalizeClaudeAgentToolName(name))
+    .filter((name): name is string => typeof name === "string");
+  const defaultModel =
+    definition.defaultModel && isClaudeModelAlias(definition.defaultModel)
+      ? undefined
+      : definition.defaultModel;
+  const normalized: AgentDefinitionView = {
+    ...definition,
+    allowedTools: Array.from(new Set(normalizedTools)),
+  };
+  if (defaultModel) {
+    normalized.defaultModel = defaultModel;
+  } else {
+    delete normalized.defaultModel;
+  }
+  return normalized;
 }
 
 export interface AgentRuntimeDeps {
@@ -73,13 +99,14 @@ export class AgentRuntime {
     request: RunAgentRequest,
     deps?: AgentRuntimeDeps
   ): Promise<AgentResult> {
-    const definition = await this.defModule.getActiveById(request.agentId);
-    if (!definition) {
+    const storedDefinition = await this.defModule.getActiveById(request.agentId);
+    if (!storedDefinition) {
       return this.fail(
         request,
         `Unknown or disabled agent: ${request.agentId}`
       );
     }
+    const definition = normalizeRuntimeDefinition(storedDefinition);
 
     const agentTaskId = `agt-${randomUUID()}`;
     const agentConversationId = `agent-v2-${randomUUID()}`;

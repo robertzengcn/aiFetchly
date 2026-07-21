@@ -9,6 +9,10 @@ vi.mock("@/service/AgentRuntimeRegistry", () => ({
 vi.mock("@/entityTypes/agentTypes", () => ({}));
 
 import { RUN_SUBAGENT_TOOL } from "@/service/agentTools/runSubagentTool";
+import {
+  AgentRuntimeRegistry,
+  getDefaultAgentRuntimeDeps,
+} from "@/service/AgentRuntimeRegistry";
 
 describe("run_subagent tool definition", () => {
   const params = RUN_SUBAGENT_TOOL.parameters as Record<string, unknown>;
@@ -114,5 +118,41 @@ describe("run_subagent tool definition", () => {
     const desc = agentId.description as string;
     expect(desc).toMatch(/unknown|error/i);
     expect(desc).toMatch(/do not (guess|abbreviate)|never (guess|abbreviate)/i);
+  });
+
+  it("forwards the parent chat model to the agent runtime", async () => {
+    const runSync = vi.fn().mockResolvedValue({
+      agentTaskId: "agt-1",
+      agentId: "caveman:cavecrew-investigator",
+      status: "completed",
+      output: { summary: "ok" },
+      sourceUrls: [],
+      confidence: 1,
+    });
+    vi.mocked(AgentRuntimeRegistry.getRuntime).mockReturnValue({
+      runSync,
+    } as never);
+    vi.mocked(getDefaultAgentRuntimeDeps).mockReturnValue({} as never);
+
+    await RUN_SUBAGENT_TOOL.execute(
+      {
+        agentId: "caveman:cavecrew-investigator",
+        prompt: "Find Tool Search",
+        taskPacket: { userGoal: "Find Tool Search" },
+      },
+      {
+        conversationId: "parent-conv",
+        toolCallId: "call-1",
+        model: "deepseek-v4-flash",
+      }
+    );
+
+    expect(runSync).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "caveman:cavecrew-investigator",
+        model: "deepseek-v4-flash",
+      }),
+      expect.anything()
+    );
   });
 });

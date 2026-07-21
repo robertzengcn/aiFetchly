@@ -1,12 +1,14 @@
 import { EmailSearchTaskProxyModel } from "@/model/EmailSearchTaskProxy.model";
 import { IEmailSearchTaskProxyModuleInterface } from "@/modules/interface/IEmailSearchTaskProxyModuleInterface";
 import { EmailSearchTaskProxyEntity } from "@/entity/EmailSearchTaskProxy.entity";
+import { BaseModule } from "@/modules/baseModule";
 
-export class EmailSearchTaskProxyModule implements IEmailSearchTaskProxyModuleInterface {
+export class EmailSearchTaskProxyModule extends BaseModule implements IEmailSearchTaskProxyModuleInterface {
     private model: EmailSearchTaskProxyModel;
 
     constructor() {
-        this.model = new EmailSearchTaskProxyModel();
+        super();
+        this.model = new EmailSearchTaskProxyModel(this.dbpath);
     }
 
     // Create operations

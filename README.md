@@ -37,6 +37,7 @@ aiFetchly helps you turn business intent into executable workflows:
 | Capability | Description |
 |------------|-------------|
 | **Tool-Using AI Chat** | Work with an AI assistant that can call approved tools, use business context, and complete multi-step tasks from one desktop workspace. |
+| **Custom AI Providers** | Power AI Chat with your own OpenAI-compatible provider, including Ollama, LM Studio, OpenAI, OpenRouter, vLLM, LocalAI, or a custom endpoint. |
 | **Business Task Execution** | Run research, extraction, file processing, message drafting, scheduling, and automation workflows without switching across multiple SaaS tools. |
 | **AI Customer Email Assistant** | Use AI to draft, send, and reply to customer emails with business context from your documents and workflow data. |
 | **Application Support Subagents** | Deploy specialist AI subagents that run autonomously with their own system prompt, tool allowlist, resource limits, and structured output schema. Agent tasks persist with transcripts and tool-call audit trails. |
@@ -101,7 +102,8 @@ aiFetchly helps you turn business intent into executable workflows:
 1. Open aiFetchly and sign in to your account.
 2. Import business documents into the Knowledge Library if you want grounded AI responses.
 3. Install or enable skills/plugins for the workflows you want the agent to run.
-4. Configure proxies, social accounts, or SMTP credentials only if you plan to use website information collection, social, or email workflows.
+4. Configure a custom AI provider in System Settings -> AI Provider if you want AI Chat to use your own model instead of hosted aiFetchly AI.
+5. Configure proxies, social accounts, or SMTP credentials only if you plan to use website information collection, social, or email workflows.
 
 ## Development
 
@@ -113,6 +115,9 @@ aiFetchly helps you turn business intent into executable workflows:
 ```bash
 # Install dependencies
 yarn install
+
+# Copy environment variables template
+cp .env.example .env
 
 # Initialize the local SQLite database
 yarn init
@@ -242,8 +247,16 @@ Worker processes in `src/childprocess/` handle CPU-intensive tasks such as scrap
 | Build | Vite, Electron Forge |
 | Database | SQLite, TypeORM, better-sqlite3, sqlite-vec |
 | Automation | Puppeteer |
-| AI | OpenAI, RAG with vector embeddings, tool execution, subagents |
+| AI | Hosted aiFetchly AI, OpenAI-compatible custom providers, RAG with vector embeddings, tool execution, subagents |
 | Testing | Mocha, Vitest |
+
+## AI Provider Configuration
+
+AI Chat can use either hosted aiFetchly AI or a user-configured OpenAI-compatible provider. Open **System Settings -> AI Provider** to switch modes and save a local/custom provider.
+
+Supported presets include Ollama, LM Studio, OpenAI, OpenRouter, vLLM, LocalAI, and Custom. Provider configuration requires a base URL and default model; API keys are optional for local providers and recommended for hosted third-party providers. aiFetchly normalizes provider URLs to the OpenAI `/v1` shape and calls `/models` plus `/chat/completions` from the Electron main process.
+
+The settings screen can refresh available models, test chat and streaming support, and probe tool-call capability. If tool support is not confirmed for a custom provider, AI Chat falls back to plain chat without tool calls. Plaintext API keys are stored separately from the provider JSON and are never returned to the renderer.
 
 ## Documentation
 

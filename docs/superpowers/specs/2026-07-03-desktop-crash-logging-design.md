@@ -314,7 +314,7 @@ Cleanup failures log a warning and never throw or block startup (FR-6.6).
 
 ### 12.2 Upload (`DiagnosticUploadClient.upload`)
 
-- Endpoint: `POST ${VITE_REMOTEADD}/api/crash-reports`
+- Endpoint: `POST /api/crash-reports`
 - Headers: `Content-Type: application/json`. If logged in: `Authorization: Bearer <token>`. Otherwise anonymous with `installId` only.
 - Pre-flight: redact → assemble package → check size ≤ 200 KB (default) or 1 MB (when user opts to include extra diagnostics). Truncate fields if over.
 - Expected response: `{ status: true, reportId: string }`.

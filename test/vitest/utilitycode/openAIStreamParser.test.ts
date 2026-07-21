@@ -14,7 +14,10 @@ function makeResponse(text: string): Response {
   return new Response(stream);
 }
 
-function chunk(content?: string, opts: Partial<OpenAIChatCompletionChunk> = {}): string {
+function chunk(
+  content?: string,
+  opts: Partial<OpenAIChatCompletionChunk> = {}
+): string {
   const payload = {
     id: "chatcmpl-x",
     object: "chat.completion.chunk",
@@ -43,6 +46,17 @@ describe("OpenAIStreamParser", () => {
     expect(received.join("")).toBe("Hello world");
   });
 
+  it("does not emit chunks after [DONE]", async () => {
+    const body =
+      chunk("before") + "data: [DONE]\n\n" + chunk("after should be ignored");
+    const received: string[] = [];
+    await new OpenAIStreamParser().consume(makeResponse(body), (c) => {
+      const delta = c.choices[0]?.delta?.content;
+      if (delta) received.push(delta);
+    });
+    expect(received).toEqual(["before"]);
+  });
+
   it("emits a usage-only final chunk (empty choices + usage)", async () => {
     const usageChunk =
       "data: " +
@@ -59,7 +73,11 @@ describe("OpenAIStreamParser", () => {
     await new OpenAIStreamParser().consume(makeResponse(usageChunk), (c) => {
       usage = c.usage;
     });
-    expect(usage).toEqual({ prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 });
+    expect(usage).toEqual({
+      prompt_tokens: 5,
+      completion_tokens: 2,
+      total_tokens: 7,
+    });
   });
 
   it("emits tool-call deltas", async () => {
@@ -75,7 +93,12 @@ describe("OpenAIStreamParser", () => {
             index: 0,
             delta: {
               tool_calls: [
-                { index: 0, id: "call_1", type: "function", function: { name: "ping", arguments: "{" } },
+                {
+                  index: 0,
+                  id: "call_1",
+                  type: "function",
+                  function: { name: "ping", arguments: "{" },
+                },
               ],
             },
             finish_reason: null,

@@ -5,11 +5,27 @@ import { BrowserWindow } from 'electron';
 import { NATIVATECOMMAND } from '@/config/channellist';
 import type { NativateDatatype } from '@/entityTypes/commonType';
 import { TokenRefreshService } from '@/modules/tokenRefresh';
+import { SqliteDb } from '@/config/SqliteDb';
+import { ScheduleManager } from '@/modules/ScheduleManager';
+import { SearchController } from '@/controller/SearchController';
+import { YellowPagesController } from '@/controller/YellowPagesController';
+import { YellowPagesProcessManager } from '@/modules/YellowPagesProcessManager';
+import { WebSocketClient } from '@/modules/WebSocketClient';
+import { VectorDatabasePool } from '@/modules/factories/VectorDatabasePool';
 
 export class User {
-    public removeToken() {
+    public async removeToken(): Promise<void> {
         // Stop background auto-refresh before clearing tokens
         TokenRefreshService.stopAutoRefresh();
+
+        WebSocketClient.resetInstance();
+        await ScheduleManager.destroyInstance();
+        SearchController.resetInstance();
+        YellowPagesController.resetInstance();
+        YellowPagesProcessManager.resetInstance();
+        await VectorDatabasePool.clearAllInstances();
+        await SqliteDb.destroyInstance();
+
         // Clear all user tokens and data
         const token = new Token();
         token.setValue(TOKENNAME, "");
@@ -49,7 +65,7 @@ export class User {
             console.error("Error removing remote token:", error);
             // Continue with local cleanup even if remote token removal fails
         }
-        this.removeToken()
+        await this.removeToken()
 
     }
 }

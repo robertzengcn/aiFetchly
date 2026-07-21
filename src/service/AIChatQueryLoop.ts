@@ -1318,6 +1318,7 @@ export class AIChatQueryLoop {
               conversationId: input.conversationId,
               toolCallId: call.id,
               args: call.arguments,
+              model: input.request.model,
               emitProgress: (event) => {
                 input.eventSink.emit({
                   type: "tool_progress",
@@ -1656,6 +1657,7 @@ export class AIChatQueryLoop {
         conversationId: input.conversationId,
         toolCallId: call.id,
         args: call.arguments,
+        model: input.request.model,
         signal: token.signal,
         emitProgress: (event) => {
           if (token.signal.aborted) return; // drop progress after abort

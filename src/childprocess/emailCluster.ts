@@ -49,7 +49,6 @@ export class EmailCluster {
     // await this.getRemoteConfig(campaignId)
 
     this.config = defaults(config, {
-      // remote_add:endcofig.REMOTEADD,
       // remote_username:endcofig.USERNAME,
       // remote_password:endcofig.PASSWORD,
       // the user agent to scrape with
