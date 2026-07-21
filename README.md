@@ -116,6 +116,9 @@ aiFetchly helps you turn business intent into executable workflows:
 # Install dependencies
 yarn install
 
+# Copy environment variables template
+cp .env.example .env
+
 # Initialize the local SQLite database
 yarn init
 
