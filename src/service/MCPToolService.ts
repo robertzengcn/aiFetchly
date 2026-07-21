@@ -3,11 +3,53 @@ import { MCPToolModule } from "@/modules/MCPToolModule";
 import { MCPClient } from "@/modules/MCPClient";
 import { MCP_CALL_TIMEOUT_MS } from "@/config/mcpConfig";
 import { MCPTimeoutError } from "@/service/MCPTimeoutError";
+import { sanitizeMcpToolMetadata } from "@/service/ToolSchemaSanitizer";
+import { TOOL_CATALOG_DEFAULTS } from "@/config/toolCatalogConfig";
 import type { ToolFunction } from "@/api/aiChatApi";
 import {
   mcpServerConfigSchema,
   mcpServerConfigUpdateSchema,
 } from "@/schemas/config/mcpServer";
+
+/**
+ * Build a sanitized `toolSchemas` map (toolName -> { description, inputSchema })
+ * from raw discovered tools, capping descriptions and pruning oversized
+ * schemas before they are persisted to server metadata.
+ *
+ * Pure and exported so the discover-time cap (AC-6) can be unit-tested without
+ * a live MCP connection.
+ */
+export function buildSanitizedToolSchemas(
+  tools: ReadonlyArray<{
+    readonly name: string;
+    readonly description?: string;
+    readonly inputSchema?: Record<string, unknown>;
+  }>
+): Record<
+  string,
+  { description?: string; inputSchema?: Record<string, unknown> }
+> {
+  const out: Record<
+    string,
+    {
+      description?: string;
+      inputSchema?: Record<string, unknown>;
+    }
+  > = {};
+  for (const tool of tools) {
+    const sanitized = sanitizeMcpToolMetadata({
+      description: tool.description,
+      inputSchema: tool.inputSchema,
+      descriptionMaxChars: TOOL_CATALOG_DEFAULTS.mcpDescriptionChars,
+      schemaMaxChars: TOOL_CATALOG_DEFAULTS.schemaMaxChars,
+    });
+    out[tool.name] = {
+      description: sanitized.description,
+      inputSchema: sanitized.schema,
+    };
+  }
+  return out;
+}
 
 export interface MCPServerConfig {
   serverName: string;
@@ -131,8 +173,12 @@ function safeJsonParseRecord(
 export class MCPToolService {
   private mcpToolModule: MCPToolModule;
 
-  constructor() {
-    this.mcpToolModule = new MCPToolModule();
+  /**
+   * @param mcpToolModule Optional injected module for unit testing. Production
+   * callers omit it and get a real MCPToolModule instance.
+   */
+  constructor(mcpToolModule?: MCPToolModule) {
+    this.mcpToolModule = mcpToolModule ?? new MCPToolModule();
   }
 
   private createClientForServer(server: MCPToolEntity): MCPClient {
@@ -249,17 +295,27 @@ export class MCPToolService {
     const toolFunctions: ToolFunction[] = [];
 
     for (const tool of enabledTools) {
+      const rawDescription =
+        tool.toolInfo.description ||
+        `MCP tool ${tool.toolName} from ${tool.serverName}`;
+      const rawSchema = tool.toolInfo.inputSchema || {
+        type: "object",
+        properties: {},
+        required: [],
+      };
+      // Defense in depth: re-cap descriptions and prune schemas even for old
+      // DB rows whose metadata predates discover-time capping (AC-6).
+      const sanitized = sanitizeMcpToolMetadata({
+        description: rawDescription,
+        inputSchema: rawSchema,
+        descriptionMaxChars: TOOL_CATALOG_DEFAULTS.mcpDescriptionChars,
+        schemaMaxChars: TOOL_CATALOG_DEFAULTS.schemaMaxChars,
+      });
       toolFunctions.push({
         type: "function",
         name: `mcp_${tool.serverId}_${tool.toolName}`,
-        description:
-          tool.toolInfo.description ||
-          `MCP tool ${tool.toolName} from ${tool.serverName}`,
-        parameters: tool.toolInfo.inputSchema || {
-          type: "object",
-          properties: {},
-          required: [],
-        },
+        description: sanitized.description,
+        parameters: sanitized.schema,
       });
     }
 
@@ -375,17 +431,10 @@ export class MCPToolService {
         }
       }
 
-      // Store tool schemas: toolName -> { description, inputSchema }
-      const toolSchemas: Record<
-        string,
-        { description?: string; inputSchema?: Record<string, unknown> }
-      > = {};
-      for (const tool of tools) {
-        toolSchemas[tool.name] = {
-          description: tool.description,
-          inputSchema: tool.inputSchema,
-        };
-      }
+      // Store tool schemas: toolName -> { description, inputSchema }.
+      // Cap descriptions and prune oversized schemas before persistence so
+      // pathological MCP metadata never bloats the tools payload (AC-6).
+      const toolSchemas = buildSanitizedToolSchemas(tools);
       metadata.toolSchemas = toolSchemas;
       server.metadata = JSON.stringify(metadata);
 
