@@ -6,8 +6,11 @@
  *   on   -> always deferred catalog filtering
  *   auto -> deferred only when estimated deferred payload exceeds threshold
  *
- * Default is `off` so the first merge changes no model behavior. Rollback is
- * simply `AI_TOOL_SEARCH=off` — no code change required.
+ * Default is `auto` (PRD FR-8 production recommendation): deferred loading
+ * activates only when the deferred tool payload exceeds ~10% of the active
+ * context window, so small setups see no behavior change while heavy
+ * MCP/plugin setups get the savings. Rollback is `AI_TOOL_SEARCH=off` — no
+ * code change required.
  */
 
 export const TOOL_CATALOG_SEARCH_TOOL_NAME = "tool_catalog_search";
@@ -19,8 +22,11 @@ export const TOOL_CATALOG_ENV = {
 } as const;
 
 export const TOOL_CATALOG_DEFAULTS = {
-  /** Default mode when AI_TOOL_SEARCH is unset. Safe = no behavior change. */
-  mode: "off" as const,
+  /**
+   * Default mode when AI_TOOL_SEARCH is unset. `auto` activates deferred
+   * loading only above the context threshold; `off` fully disables it.
+   */
+  mode: "auto" as const,
   /** Deferred payload % of context window that triggers deferred mode in auto. */
   autoThresholdPercent: 10,
   /** Chars-per-token heuristic for local token estimation. */
@@ -47,9 +53,10 @@ export type ToolCatalogMode = "off" | "on" | "auto";
  * Parse AI_TOOL_SEARCH into a normalized mode.
  * Unset -> default (`off`). Invalid -> `auto` with a warning.
  */
-export function resolveToolCatalogMode(
-  raw: string | undefined
-): { mode: ToolCatalogMode; fallbackUsed: boolean } {
+export function resolveToolCatalogMode(raw: string | undefined): {
+  mode: ToolCatalogMode;
+  fallbackUsed: boolean;
+} {
   if (raw === undefined || raw === "") {
     return { mode: TOOL_CATALOG_DEFAULTS.mode, fallbackUsed: false };
   }
