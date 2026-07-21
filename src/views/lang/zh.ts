@@ -2352,6 +2352,8 @@ export default {
     test_connection: "测试连接",
     export_diagnostics: "导出诊断",
     diagnostics_copied: "诊断已复制到剪贴板",
+    no_diagnostics: "暂无诊断信息。",
+    no_skills: "此插件暂无技能。",
     enabled_label: "已启用",
     command_count: "命令：{count}",
     no_commands: "此插件没有斜杠命令。",

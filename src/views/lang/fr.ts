@@ -2435,6 +2435,8 @@ export default {
     test_connection: "Tester la connexion",
     export_diagnostics: "Exporter les diagnostics",
     diagnostics_copied: "Diagnostics copiés dans le presse-papiers",
+    no_diagnostics: "Aucun diagnostic disponible.",
+    no_skills: "Aucune compétence dans ce plugin.",
     enabled_label: "Activé",
     command_count: "Commandes : {count}",
     no_commands: "Aucune commande à barre dans ce plugin.",

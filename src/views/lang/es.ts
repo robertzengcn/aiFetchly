@@ -2452,6 +2452,8 @@ export default {
     test_connection: "Probar conexión",
     export_diagnostics: "Exportar diagnóstico",
     diagnostics_copied: "Diagnóstico copiado al portapapeles",
+    no_diagnostics: "No hay diagnósticos disponibles.",
+    no_skills: "No hay habilidades en este complemento.",
     enabled_label: "Habilitado",
     command_count: "Comandos: {count}",
     no_commands: "No hay comandos de barra en este plugin.",

@@ -2441,6 +2441,8 @@ export default {
     test_connection: "Test Connection",
     export_diagnostics: "Export Diagnostics",
     diagnostics_copied: "Diagnostics copied to clipboard",
+    no_diagnostics: "No diagnostics available.",
+    no_skills: "No skills in this plugin.",
     enabled_label: "Enabled",
     command_count: "Commands: {count}",
     no_commands: "No slash commands in this plugin.",
