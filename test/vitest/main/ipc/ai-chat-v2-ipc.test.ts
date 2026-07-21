@@ -178,6 +178,11 @@ vi.mock("@/modules/AIChatCompactModule", () => ({
     getActiveSummary: vi.fn().mockResolvedValue(null),
   })),
 }));
+vi.mock("@/modules/AgentDefinitionModule", () => ({
+  AgentDefinitionModule: vi.fn().mockImplementation(() => ({
+    listActiveForRuntime: vi.fn().mockResolvedValue([]),
+  })),
+}));
 
 import {
   registerAiChatV2IpcHandlers,

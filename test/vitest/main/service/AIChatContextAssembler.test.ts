@@ -9,6 +9,7 @@ const mockGetActiveSummary = vi.fn();
 const mockGetConversationMessages = vi.fn();
 const mockDurableRetrieve = vi.fn();
 const mockWorkspaceRetrieve = vi.fn();
+const mockListActiveForRuntime = vi.fn();
 
 vi.mock("@/modules/AIChatSessionMemoryModule", () => ({
   AIChatSessionMemoryModule: vi.fn().mockImplementation(() => ({
@@ -47,6 +48,12 @@ vi.mock("@/modules/SystemSettingModule", () => ({
   })),
 }));
 
+vi.mock("@/modules/AgentDefinitionModule", () => ({
+  AgentDefinitionModule: vi.fn().mockImplementation(() => ({
+    listActiveForRuntime: mockListActiveForRuntime,
+  })),
+}));
+
 vi.mock("@/modules/token", () => ({
   Token: vi.fn().mockImplementation(() => ({ getValue: vi.fn() })),
 }));
@@ -78,6 +85,7 @@ describe("AIChatContextAssembler", () => {
     });
     // Memory injection defaults to enabled (system_setting absent → true).
     mockGetSettingValue.mockResolvedValue(null);
+    mockListActiveForRuntime.mockResolvedValue([]);
   });
 
   it("puts system prompt first and current user message last", async () => {

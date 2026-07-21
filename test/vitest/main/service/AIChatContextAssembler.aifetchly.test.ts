@@ -29,11 +29,7 @@ const mockDurableRetrieve = vi.fn();
 const mockGetSettingValue = vi.fn();
 const mockGetInstructionBlocks = vi.fn();
 
-// Plan 16-03 Task 3 — Available agents block (D-Discovery). The assembler
-// reads agentRegistry.list() via the AIFetchlyConfigManager singleton;
-// controlling list() here drives the block-injection assertions below.
-const mockAgentList = vi.fn();
-const mockGetAgentRegistry = vi.fn();
+const mockListActiveForRuntime = vi.fn();
 
 vi.mock("@/modules/AIChatSessionMemoryModule", () => ({
   AIChatSessionMemoryModule: vi.fn().mockImplementation(() => ({
@@ -88,14 +84,9 @@ vi.mock("@/service/aifetchlyConfig/AIFetchlyContextLoader", () => ({
   ),
 }));
 
-// Plan 16-03 Task 3 — the assembler reads the agent registry through the
-// AIFetchlyConfigManager singleton. Mock it so getAgentRegistry().list() is
-// driven by mockAgentList (set per-test in beforeEach). The factory returns a
-// fresh manager whose getAgentRegistry() always resolves to the SAME
-// mockGetAgentRegistry binding, so beforeEach can re-point it deterministically.
-vi.mock("@/service/aifetchlyConfig/AIFetchlyConfigManager", () => ({
-  getAIFetchlyConfigManager: vi.fn().mockImplementation(() => ({
-    getAgentRegistry: mockGetAgentRegistry,
+vi.mock("@/modules/AgentDefinitionModule", () => ({
+  AgentDefinitionModule: vi.fn().mockImplementation(() => ({
+    listActiveForRuntime: mockListActiveForRuntime,
   })),
 }));
 
@@ -147,11 +138,11 @@ describe("AIChatContextAssembler — AGENTS.md injection (CTX-01, CTX-03)", () =
       return Promise.resolve(null); // memory injection toggle default-on, retrieve returns empty
     });
     mockGetInstructionBlocks.mockResolvedValue([]);
-    // Plan 16-03 Task 3: default to an EMPTY registry so the existing CTX-01/03
+    // Plan 16-03 Task 3: default to an EMPTY catalog so the existing CTX-01/03
     // tests are unaffected (empty -> buildAvailableAgentsBlock returns "" ->
-    // no block pushed). Tests in the D-Discovery block override mockAgentList.
-    mockGetAgentRegistry.mockReturnValue({ list: mockAgentList });
-    mockAgentList.mockReturnValue([]);
+    // no block pushed). Tests in the D-Discovery block override
+    // mockListActiveForRuntime.
+    mockListActiveForRuntime.mockResolvedValue([]);
   });
 
   it("CTX-01: injects AGENTS.md AFTER base prompt and BEFORE durable memory", async () => {
@@ -354,15 +345,16 @@ function findAvailableAgentsMessage(
 
 describe("AIChatContextAssembler — Available agents block (D-Discovery, Plan 16-03)", () => {
   beforeEach(() => {
-    // Defaults inherited from the outer beforeEach (empty registry). Tests in
-    // this block override mockAgentList / mockGetInstructionBlocks as needed.
+    // Defaults inherited from the outer beforeEach (empty catalog). Tests in
+    // this block override mockListActiveForRuntime / mockGetInstructionBlocks
+    // as needed.
   });
 
   it("D-Discovery: injects the block AFTER instructions and BEFORE durable memory (CTX-01 ordinal)", async () => {
     // Populate all three anchors so the ordinal is observable: an AGENTS.md
-    // instruction block, a non-empty agent registry, and a durable block.
+    // instruction block, a non-empty runtime catalog, and a durable block.
     mockGetInstructionBlocks.mockResolvedValue([agentsBlock("global rules")]);
-    mockAgentList.mockReturnValue([
+    mockListActiveForRuntime.mockResolvedValue([
       agentView({
         id: "agent-lead-researcher",
         name: "Lead Researcher",
@@ -412,8 +404,35 @@ describe("AIChatContextAssembler — Available agents block (D-Discovery, Plan 1
     expect(block).toContain("user:agent:lead-researcher");
   });
 
-  it("D-Discovery: an EMPTY registry pushes NO block (skip empty)", async () => {
-    mockAgentList.mockReturnValue([]);
+  it("D-Discovery: uses runtime catalog so persisted plugin agents are injected", async () => {
+    mockListActiveForRuntime.mockResolvedValue([
+      agentView({
+        id: "plugin:caveman:agent:cavecrew-builder",
+        name: "cavecrew-builder",
+        description: "Surgical one-file edit specialist.",
+        source: "plugin",
+        pluginName: "caveman",
+      }),
+    ]);
+
+    const asm = new AIChatContextAssembler();
+    const r = await asm.assemble({
+      conversationId: "conv-test",
+      currentUserMessage: "List all available agents",
+      baseSystemPrompt: "sysp",
+      mode: "chat",
+    });
+
+    const availableIdx = findAvailableAgentsMessage(r.messages);
+    expect(availableIdx).toBeGreaterThan(-1);
+    const block = r.messages[availableIdx].content as string;
+    expect(block).toContain("plugin:caveman:agent:cavecrew-builder");
+    expect(block).toContain("Surgical one-file edit specialist.");
+    expect(block).toContain("[Plugin]");
+  });
+
+  it("D-Discovery: an EMPTY runtime catalog pushes NO block (skip empty)", async () => {
+    mockListActiveForRuntime.mockResolvedValue([]);
 
     const asm = new AIChatContextAssembler();
     const r = await asm.assemble({
@@ -426,11 +445,9 @@ describe("AIChatContextAssembler — Available agents block (D-Discovery, Plan 1
     expect(findAvailableAgentsMessage(r.messages)).toBe(-1);
   });
 
-  it("D-Discovery: registry access throwing degrades to no-injection and does not break assemble() (graceful)", async () => {
+  it("D-Discovery: runtime catalog access throwing degrades to no-injection and does not break assemble() (graceful)", async () => {
     const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
-    mockAgentList.mockImplementation(() => {
-      throw new Error("registry boom");
-    });
+    mockListActiveForRuntime.mockRejectedValue(new Error("catalog boom"));
 
     const asm = new AIChatContextAssembler();
     const r = await asm.assemble({
