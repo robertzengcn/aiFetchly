@@ -23,9 +23,25 @@ export interface DeferredAnnouncementDelta {
 }
 
 export class ConversationToolStateService {
-  constructor(
-    private readonly module: ConversationToolStateModule = new ConversationToolStateModule()
-  ) {}
+  private readonly injectedModule?: ConversationToolStateModule;
+  private lazyModule?: ConversationToolStateModule;
+
+  constructor(module?: ConversationToolStateModule) {
+    this.injectedModule = module;
+  }
+
+  /**
+   * Lazily resolve the module so simply constructing this service (e.g. as a
+   * field on the engine when the feature is inactive) does not touch the
+   * database or resolve USERSDBPATH.
+   */
+  private getModule(): ConversationToolStateModule {
+    if (this.injectedModule) return this.injectedModule;
+    if (!this.lazyModule) {
+      this.lazyModule = new ConversationToolStateModule();
+    }
+    return this.lazyModule;
+  }
 
   /**
    * Load persisted discovered state for a conversation as a loop snapshot.
@@ -36,7 +52,7 @@ export class ConversationToolStateService {
     conversationId: string
   ): Promise<ToolCatalogStateSnapshot | undefined> {
     try {
-      const view = await this.module.loadView(conversationId);
+      const view = await this.getModule().loadView(conversationId);
       if (!view) return undefined;
       return {
         discoveredToolNames: [...view.discoveredToolNames],
@@ -62,7 +78,7 @@ export class ConversationToolStateService {
     readonly catalogHash?: string;
   }): Promise<void> {
     try {
-      await this.module.saveView({
+      await this.getModule().saveView({
         conversationId: input.conversationId,
         discoveredToolNames: input.snapshot.discoveredToolNames,
         announcedDeferredToolNames: input.snapshot.announcedDeferredNames,
