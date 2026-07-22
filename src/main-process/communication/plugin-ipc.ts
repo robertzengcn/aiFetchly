@@ -10,6 +10,7 @@ import { PluginDiagnosticsService } from "@/service/PluginDiagnosticsService";
 import { UserPluginAutoInstallService } from "@/service/UserPluginAutoInstallService";
 import { getPluginInstallRoot } from "@/service/pluginPaths";
 import { getAIFetchlyConfigManager } from "@/service/aifetchlyConfig/AIFetchlyConfigManager";
+import { HookRegistry } from "@/service/hooks/HookRegistry";
 import { broadcastAifetchlyConfigChanged } from "@/main-process/communication/aifetchlyConfigEvents";
 import type { SlashCommandView } from "@/entityTypes/slashCommandTypes";
 import type {
@@ -69,7 +70,8 @@ function toSummary(
   skillCount: number,
   mcpServerCount: number,
   agentCount: number,
-  commandCount: number
+  commandCount: number,
+  hookCount: number
 ): PluginSummary {
   let permissions: string[] = [];
   try {
@@ -93,6 +95,7 @@ function toSummary(
     mcpServerCount,
     agentCount,
     commandCount,
+    hookCount,
     permissions,
     lastUpdated: p.updatedAt
       ? new Date(p.updatedAt).toISOString()
@@ -216,6 +219,36 @@ function pluginCommandViews(pluginName: string): {
   };
 }
 
+interface PluginHookViewEntry {
+  readonly id: string;
+  readonly eventName: string;
+  readonly matcher?: string;
+  readonly enabled: boolean;
+  readonly type: string;
+  readonly health: "healthy" | "disabled";
+}
+
+function pluginHookViews(pluginName: string): {
+  readonly views: readonly PluginHookViewEntry[];
+  readonly count: number;
+} {
+  const prefix = `plugin:${pluginName}:`;
+  const hooks = HookRegistry.listAll({ source: "plugin" }).filter((hook) =>
+    hook.id.startsWith(prefix)
+  );
+  return {
+    views: hooks.map((hook) => ({
+      id: hook.id,
+      eventName: hook.eventName,
+      ...(hook.matcher !== undefined ? { matcher: hook.matcher } : {}),
+      enabled: hook.enabled,
+      type: hook.type,
+      health: hook.enabled ? "healthy" : "disabled",
+    })),
+    count: hooks.length,
+  };
+}
+
 export function registerPluginIpcHandlers(): void {
   console.log("Plugin IPC handlers registered");
 
@@ -232,13 +265,15 @@ export function registerPluginIpcHandlers(): void {
       const mcpServers = await mcpModule.findMcpByPluginName(p.name);
       const agents = await agentModule.findAgentsByPluginName(p.name);
       const commandCount = pluginCommandViews(p.name).count;
+      const hookCount = pluginHookViews(p.name).count;
       summaries.push(
         toSummary(
           p,
           skills.length,
           mcpServers.length,
           agents.length,
-          commandCount
+          commandCount,
+          hookCount
         )
       );
     }
@@ -261,12 +296,14 @@ export function registerPluginIpcHandlers(): void {
       const mcpServers = await mcpModule.findMcpByPluginName(input.name);
       const agents = await agentModule.findAgentsByPluginName(input.name);
       const commandInfo = pluginCommandViews(input.name);
+      const hookInfo = pluginHookViews(input.name);
       const summary = toSummary(
         plugin,
         skills.length,
         mcpServers.length,
         agents.length,
-        commandInfo.count
+        commandInfo.count,
+        hookInfo.count
       );
       let manifest = {};
       try {
@@ -298,6 +335,7 @@ export function registerPluginIpcHandlers(): void {
         })),
         // Renderer-safe command list — body/metadata stripped (PRD §11.1/AC-9).
         commands: commandInfo.views,
+        hooks: hookInfo.views,
         manifest,
       };
     }

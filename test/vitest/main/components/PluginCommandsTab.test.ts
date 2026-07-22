@@ -37,6 +37,7 @@ function makeDetail(
     mcpServerCount: 0,
     agentCount: 0,
     commandCount: commands.length,
+    hookCount: 0,
     permissions: [],
     lastUpdated: new Date("2026-07-21T00:00:00.000Z").toISOString(),
     description: "demo",
@@ -44,6 +45,7 @@ function makeDetail(
     mcpServers: [],
     agents: [],
     commands,
+    hooks: [],
     errors: [],
     manifest: {},
   };

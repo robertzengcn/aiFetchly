@@ -115,7 +115,15 @@ vi.mock("@/service/PluginImportService", () => ({
   PluginImportService: {
     importFromZip: vi.fn(async () => ({
       success: true,
-      plugin: { name: "p", version: "1.0.0", skillCount: 0, mcpServerCount: 0 },
+      plugin: {
+        name: "p",
+        version: "1.0.0",
+        skillCount: 0,
+        mcpServerCount: 0,
+        agentCount: 0,
+        commandCount: 0,
+        hookCount: 0,
+      },
     })),
   },
 }));
@@ -129,6 +137,9 @@ vi.mock("@/service/PluginInstallService", () => ({
           version: "1.0.0",
           skillCount: 0,
           mcpServerCount: 0,
+          agentCount: 0,
+          commandCount: 0,
+          hookCount: 0,
         },
       };
     }
@@ -186,6 +197,7 @@ import { registerPluginIpcHandlers } from "@/main-process/communication/plugin-i
 import { UserPluginAutoInstallService } from "@/service/UserPluginAutoInstallService";
 import { PluginComponentRegistryService } from "@/service/PluginComponentRegistryService";
 import { getAIFetchlyConfigManager } from "@/service/aifetchlyConfig/AIFetchlyConfigManager";
+import { HookRegistry } from "@/service/hooks/HookRegistry";
 import type { SlashCommandDefinition } from "@/entityTypes/slashCommandTypes";
 import {
   PLUGIN_LIST,
@@ -201,6 +213,7 @@ describe("plugin-ipc", () => {
   beforeEach(() => {
     handlers.clear();
     aiEnabledValue = "true";
+    HookRegistry.unregisterSource("plugin:demo-plugin");
     registerPluginIpcHandlers();
   });
 
@@ -289,6 +302,44 @@ describe("plugin-ipc", () => {
     });
   });
 
+  it("PLUGIN_GET exposes live plugin hooks and hookCount", async () => {
+    HookRegistry.replaceSource("plugin:demo-plugin", [
+      {
+        id: "plugin:demo-plugin:0",
+        eventName: "SessionStart",
+        type: "callback",
+        source: "plugin",
+        enabled: true,
+        matcher: "WebFetch",
+        failureMode: "warn",
+        callback: () => ({ systemMessage: "loaded" }),
+      },
+    ]);
+
+    try {
+      const fn = handlers.get(PLUGIN_GET)!;
+      const result = await fn({}, { name: "demo-plugin" });
+      expect(result).toMatchObject({
+        status: true,
+        data: {
+          hookCount: 1,
+          hooks: [
+            expect.objectContaining({
+              id: "plugin:demo-plugin:0",
+              eventName: "SessionStart",
+              matcher: "WebFetch",
+              enabled: true,
+              type: "callback",
+              health: "healthy",
+            }),
+          ],
+        },
+      });
+    } finally {
+      HookRegistry.unregisterSource("plugin:demo-plugin");
+    }
+  });
+
   it("PLUGIN_GET exposes a renderer-safe command list + commandCount (no body/metadata)", async () => {
     // Seed the live registry with one command under plugin:demo-plugin.
     const registry = getAIFetchlyConfigManager().getCommandRegistry();
@@ -358,6 +409,30 @@ describe("plugin-ipc", () => {
       });
     } finally {
       registry.replaceSource("plugin:demo-plugin", []);
+    }
+  });
+
+  it("PLUGIN_LIST summary carries hookCount from the live hook registry", async () => {
+    HookRegistry.replaceSource("plugin:demo-plugin", [
+      {
+        id: "plugin:demo-plugin:0",
+        eventName: "SessionStart",
+        type: "callback",
+        source: "plugin",
+        enabled: true,
+        callback: () => ({}),
+      },
+    ]);
+
+    try {
+      const fn = handlers.get(PLUGIN_LIST)!;
+      const result = await fn({}, undefined);
+      expect(result).toMatchObject({
+        status: true,
+        data: [expect.objectContaining({ hookCount: 1 })],
+      });
+    } finally {
+      HookRegistry.unregisterSource("plugin:demo-plugin");
     }
   });
 

@@ -15,6 +15,7 @@ import type {
   AIChatQueryLoopResult,
 } from "@/service/AIChatQueryEvents";
 import type { AIChatPlanStateView } from "@/entityTypes/aiChatPlanTypes";
+import { HookRegistry } from "@/service/hooks/HookRegistry";
 
 // --- Mock AIChatV2Module -----------------------------------------------
 const mockSaveUserMessage = vi.fn().mockResolvedValue({ messageId: "user-1" });
@@ -131,6 +132,7 @@ describe("AIChatQueryEngine", () => {
     mockGetPlanState.mockResolvedValue(null);
     mockEnsurePlanForConversation.mockResolvedValue(null);
     mockApprovePlan.mockReset();
+    HookRegistry.unregisterSource("plugin:test-hooks");
   });
 
   describe("submitMessage", () => {
@@ -589,6 +591,62 @@ describe("AIChatQueryEngine context assembly", () => {
       { role: "system", content: "custom-sysp" },
       { role: "user", content: "hi" },
     ]);
+  });
+
+  it("injects SessionStart hook system messages into the loop context", async () => {
+    HookRegistry.replaceSource("plugin:test-hooks", [
+      {
+        id: "plugin:test-hooks:0",
+        eventName: "SessionStart",
+        type: "callback",
+        source: "plugin",
+        enabled: true,
+        callback: () => ({ systemMessage: "agent-skills loaded" }),
+      },
+    ]);
+    const fakeRun = vi.fn().mockResolvedValue({
+      type: "completed",
+      conversationId: "v2-test-conv",
+      assistantMessageId: "assistant-1",
+      fullContent: "ok",
+      finishReason: "stop",
+      model: "m",
+    });
+    const engine = new AIChatQueryEngine(
+      { run: fakeRun } as unknown as AIChatQueryLoop,
+      {
+        contextAssembler: {
+          assemble: vi.fn().mockResolvedValue({
+            messages: [
+              { role: "system", content: "base" },
+              { role: "user", content: "hi" },
+            ],
+            tokenEstimate: 0,
+            usedSessionMemory: false,
+            usedFullCompact: false,
+            compactTriggered: false,
+            warnings: [],
+          }),
+        } as unknown as AIChatContextAssembler,
+      }
+    );
+
+    try {
+      const { sink } = makeEventCollector();
+      await engine.submitMessage({
+        request: { message: "hi" },
+        eventSink: sink,
+      });
+
+      expect(fakeRun).toHaveBeenCalledTimes(1);
+      const loopInput = fakeRun.mock.calls[0][0] as AIChatQueryLoopInput;
+      expect(loopInput.messages).toContainEqual({
+        role: "system",
+        content: "agent-skills loaded",
+      });
+    } finally {
+      HookRegistry.unregisterSource("plugin:test-hooks");
+    }
   });
 });
 

@@ -54,6 +54,7 @@ export interface AdaptedPluginHookMatcher {
    * diagnostics and future SkillWorker dispatch wrapping.
    */
   readonly sourceCommand: string;
+  readonly timeoutMs?: number;
   /**
    * Optional path (relative to plugin root) to a sandboxed JS script
    * that implements the hook logic. When present, PluginHookRegistrar
@@ -82,6 +83,7 @@ export type ClaudeHooksAdaptResult =
 interface ClaudeHookEntry {
   readonly type?: string;
   readonly command?: string;
+  readonly timeout?: number;
   /**
    * AiFetchly-specific extension: path to a JS file (relative to plugin
    * root) whose default export is a function (input) => HookOutput.
@@ -103,7 +105,8 @@ interface ClaudeHookMatcherBlock {
 
 export class ClaudeHooksAdapter {
   static adapt(raw: unknown, pluginName: string): ClaudeHooksAdaptResult {
-    if (!raw || typeof raw !== "object") {
+    const normalized = normalizeHooksRoot(raw);
+    if (!normalized || typeof normalized !== "object") {
       return {
         ok: false,
         errors: [
@@ -116,7 +119,7 @@ export class ClaudeHooksAdapter {
       };
     }
 
-    const obj = raw as Record<string, unknown>;
+    const obj = normalized as Record<string, unknown>;
     const matchers: AdaptedPluginHookMatcher[] = [];
     const unsupported: string[] = [];
 
@@ -150,6 +153,9 @@ export class ClaudeHooksAdapter {
               typeof block.matcher === "string" ? block.matcher : undefined,
             pluginName,
             sourceCommand: hook.command,
+            ...(typeof hook.timeout === "number" && hook.timeout > 0
+              ? { timeoutMs: Math.floor(hook.timeout * 1000) }
+              : {}),
             scriptPath,
           });
         }
@@ -158,4 +164,16 @@ export class ClaudeHooksAdapter {
 
     return { ok: true, matchers, unsupported };
   }
+}
+
+function normalizeHooksRoot(raw: unknown): unknown {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return raw;
+  }
+  const obj = raw as Record<string, unknown>;
+  const wrapped = obj.hooks;
+  if (wrapped && typeof wrapped === "object" && !Array.isArray(wrapped)) {
+    return wrapped;
+  }
+  return raw;
 }

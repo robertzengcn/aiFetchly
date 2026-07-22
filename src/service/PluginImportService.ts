@@ -975,6 +975,8 @@ export class PluginImportService {
       // Commands are promoted post-install by PluginComponentRegistryService,
       // not during import — report 0 here; the live count is read on demand.
       commandCount: 0,
+      // Hooks are promoted post-install by PluginComponentRegistryService.
+      hookCount: 0,
       permissions: manifest.permissions ?? [],
       lastUpdated: new Date().toISOString(),
     };

@@ -19,6 +19,7 @@
           <v-tab value="skills">{{ t("plugins.tab_skills") }}</v-tab>
           <v-tab value="subagents">{{ t("subagents.tab_subagents") }}</v-tab>
           <v-tab value="commands">{{ t("plugins.tab_commands") }}</v-tab>
+          <v-tab value="hooks">{{ t("plugins.tab_hooks") }}</v-tab>
           <v-tab value="mcp">{{ t("plugins.tab_mcp_servers") }}</v-tab>
           <v-tab value="permissions">{{ t("plugins.tab_permissions") }}</v-tab>
           <v-tab value="diagnostics">{{ t("plugins.tab_diagnostics") }}</v-tab>
@@ -36,6 +37,9 @@
           </v-window-item>
           <v-window-item value="commands">
             <PluginCommandsTab :detail="detail" />
+          </v-window-item>
+          <v-window-item value="hooks">
+            <PluginHooksTab :detail="detail" />
           </v-window-item>
           <v-window-item value="mcp">
             <PluginMcpServersTab :detail="detail" @changed="reload" />
@@ -63,6 +67,7 @@ import PluginOverviewTab from "./PluginOverviewTab.vue";
 import PluginSkillsTab from "./PluginSkillsTab.vue";
 import PluginAgentsTab from "./PluginAgentsTab.vue";
 import PluginCommandsTab from "./PluginCommandsTab.vue";
+import PluginHooksTab from "./PluginHooksTab.vue";
 import PluginMcpServersTab from "./PluginMcpServersTab.vue";
 import PluginPermissionsTab from "./PluginPermissionsTab.vue";
 import PluginDiagnosticsTab from "./PluginDiagnosticsTab.vue";

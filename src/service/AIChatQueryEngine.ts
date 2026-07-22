@@ -490,19 +490,27 @@ export class AIChatQueryEngine {
     // ------------------------------------------------------------------
     if (!this.startedConversations.has(conversationId)) {
       this.startedConversations.add(conversationId);
-      HookDispatcher.executeHooks({
-        eventName: "SessionStart",
-        input: {
+      try {
+        const aggregate = await HookDispatcher.executeHooks({
           eventName: "SessionStart",
-          hookRunId: `hookrun-session-${conversationId}`,
-          source: "ai-chat-v2",
-          conversationId,
-          timestamp: new Date().toISOString(),
-          mode: isPlanMode ? "plan" : "chat",
-        },
-      }).catch(() => {
+          input: {
+            eventName: "SessionStart",
+            hookRunId: `hookrun-session-${conversationId}`,
+            source: "ai-chat-v2",
+            conversationId,
+            timestamp: new Date().toISOString(),
+            mode: isPlanMode ? "plan" : "chat",
+          },
+        });
+        for (const content of [
+          ...aggregate.systemMessages,
+          ...aggregate.additionalContexts,
+        ]) {
+          messages.push({ role: "system", content });
+        }
+      } catch {
         // Hook errors are non-fatal
-      });
+      }
     }
 
     // ------------------------------------------------------------------

@@ -138,6 +138,7 @@ export class PluginDiagnosticsService {
       commandCount: getAIFetchlyConfigManager()
         .getCommandRegistry()
         .listBySource(`plugin:${pluginName}`).length,
+      hookCount: 0,
       permissions: safeParseArray(plugin.permissionsJson),
       lastUpdated: plugin.updatedAt
         ? new Date(plugin.updatedAt).toISOString()

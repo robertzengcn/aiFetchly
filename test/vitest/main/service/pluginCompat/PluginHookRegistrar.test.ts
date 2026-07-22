@@ -10,12 +10,28 @@ const executeHookMock = vi.fn<
 
 vi.mock("@/service/hooks/HookRegistry", () => {
   const registered: unknown[] = [];
+  const sources = new Map<string, unknown[]>();
   return {
     HookRegistry: {
       registerBuiltinHook: (hook: unknown) => {
         registered.push(hook);
       },
+      replaceSource: (sourceId: string, hooks: readonly unknown[]) => {
+        sources.set(sourceId, [...hooks]);
+        registered.length = 0;
+        for (const entries of sources.values()) {
+          registered.push(...entries);
+        }
+      },
+      unregisterSource: (sourceId: string) => {
+        sources.delete(sourceId);
+        registered.length = 0;
+        for (const entries of sources.values()) {
+          registered.push(...entries);
+        }
+      },
       _registered: registered,
+      _sources: sources,
     },
   };
 });
@@ -29,7 +45,7 @@ vi.mock("@/service/SkillWorkerClient", () => ({
 }));
 
 vi.mock("@/service/pluginPaths", () => ({
-  getPluginInstallRoot: (name: string) => `/tmp/plugins/${name}`,
+  getPluginInstallRoot: () => "/tmp",
 }));
 
 vi.mock("fs", () => ({
@@ -48,8 +64,10 @@ describe("PluginHookRegistrar", () => {
     const reg = HookRegistry as unknown as {
       registerBuiltinHook: (h: unknown) => void;
       _registered: unknown[];
+      _sources: Map<string, unknown[]>;
     };
     reg._registered.length = 0;
+    reg._sources.clear();
 
     PluginHookRegistrar.registerForPlugin("p", [
       {
@@ -78,14 +96,17 @@ describe("PluginHookRegistrar", () => {
     expect(first.type).toBe("callback");
     expect(first.source).toBe("plugin");
     expect(first.matcher).toBe("shell_execute");
+    expect(reg._sources.has("plugin:p")).toBe(true);
   });
 
   it("registerFromLoadedPlugins skips plugins with no hooks", () => {
     const reg = HookRegistry as unknown as {
       registerBuiltinHook: (h: unknown) => void;
       _registered: unknown[];
+      _sources: Map<string, unknown[]>;
     };
     reg._registered.length = 0;
+    reg._sources.clear();
 
     PluginHookRegistrar.registerFromLoadedPlugins([
       { name: "no-hooks", hooks: [] },
@@ -102,6 +123,7 @@ describe("PluginHookRegistrar", () => {
     ]);
 
     expect(reg._registered.length).toBe(1);
+    expect(reg._sources.has("plugin:no-hooks")).toBe(true);
   });
 
   it("AC-7: callback dispatches to SkillWorker when scriptPath is set, returns deny", async () => {
@@ -111,8 +133,10 @@ describe("PluginHookRegistrar", () => {
         callback: (input: unknown) => Promise<unknown>;
         matcher?: string;
       }>;
+      _sources: Map<string, unknown[]>;
     };
     reg._registered.length = 0;
+    reg._sources.clear();
     executeHookMock.mockResolvedValue({
       permissionDecision: "deny",
       reason: "blocked by plugin policy",
@@ -147,8 +171,10 @@ describe("PluginHookRegistrar", () => {
       _registered: Array<{
         callback: (input: unknown) => Promise<unknown>;
       }>;
+      _sources: Map<string, unknown[]>;
     };
     reg._registered.length = 0;
+    reg._sources.clear();
     executeHookMock.mockClear();
 
     PluginHookRegistrar.registerForPlugin("p", [
@@ -159,10 +185,70 @@ describe("PluginHookRegistrar", () => {
       },
     ]);
 
-    const result = (await reg._registered[0].callback({})) as {
-      permissionDecision: string;
+    const result = (await reg._registered[0].callback({
+      eventName: "SessionStart",
+      hookRunId: "hookrun-1",
+      source: "ai-chat-v2",
+      timestamp: new Date().toISOString(),
+      mode: "chat",
+    })) as {
+      systemMessage?: string;
     };
     expect(executeHookMock).not.toHaveBeenCalled();
-    expect(result.permissionDecision).toBe("allow");
+    expect(result.systemMessage).toBeUndefined();
+  });
+
+  it("runs Claude command hooks and maps message output to systemMessage", async () => {
+    const reg = HookRegistry as unknown as {
+      _registered: Array<{
+        callback: (input: unknown) => Promise<unknown>;
+      }>;
+      _sources: Map<string, unknown[]>;
+    };
+    reg._registered.length = 0;
+    reg._sources.clear();
+    executeHookMock.mockClear();
+
+    PluginHookRegistrar.registerForPlugin("p", [
+      {
+        event: "SessionStart",
+        pluginName: "p",
+        sourceCommand: "printf '%s' '{\"message\":\"agent-skills loaded\"}'",
+      },
+    ]);
+
+    const result = (await reg._registered[0].callback({
+      eventName: "SessionStart",
+      hookRunId: "hookrun-1",
+      source: "ai-chat-v2",
+      timestamp: new Date().toISOString(),
+      mode: "chat",
+    })) as {
+      systemMessage?: string;
+    };
+
+    expect(result.systemMessage).toBe("agent-skills loaded");
+  });
+
+  it("unregisterPlugin removes the plugin source", () => {
+    const reg = HookRegistry as unknown as {
+      _registered: unknown[];
+      _sources: Map<string, unknown[]>;
+    };
+    reg._registered.length = 0;
+    reg._sources.clear();
+
+    PluginHookRegistrar.registerForPlugin("p", [
+      {
+        event: "SessionStart",
+        pluginName: "p",
+        sourceCommand: "true",
+      },
+    ]);
+    expect(reg._registered.length).toBe(1);
+
+    PluginHookRegistrar.unregisterPlugin("p");
+    expect(reg._registered.length).toBe(0);
+    expect(reg._sources.has("plugin:p")).toBe(false);
   });
 });
