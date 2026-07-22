@@ -69,7 +69,11 @@ export function emitAifetchlyConfigChangedTo(
 export function broadcastAifetchlyConfigChanged(
   payload: AifetchlyConfigChangedPayload
 ): void {
-  for (const win of BrowserWindow.getAllWindows()) {
+  // The project's electron types type getAllWindows() loosely (the existing
+  // contactExtraction-ipc broadcaster casts each element too); cast here so
+  // the per-window emitter receives the typed BrowserWindow it guards on.
+  const windows = BrowserWindow.getAllWindows() as BrowserWindow[];
+  for (const win of windows) {
     emitAifetchlyConfigChangedTo(win, payload);
   }
 }
