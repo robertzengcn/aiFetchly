@@ -13,6 +13,18 @@ import { AgentPromptBuilder } from "@/service/AgentPromptBuilder";
 import { AgentOutputParser } from "@/service/AgentOutputParser";
 import { AgentTranscriptService } from "@/service/AgentTranscriptService";
 import { AgentToolPolicyService } from "@/service/AgentToolPolicyService";
+import {
+  resolveToolCatalogMode,
+  resolvePositiveIntEnv,
+  TOOL_CATALOG_ENV,
+} from "@/config/toolCatalogConfig";
+import { ToolCatalogService } from "@/service/ToolCatalogService";
+import { ToolPromptBudgetService } from "@/service/ToolPromptBudgetService";
+import type {
+  ToolCatalog,
+  ToolCatalogModeDecision,
+  ToolCatalogRuntimeContext,
+} from "@/entityTypes/toolCatalogTypes";
 import type { AIAutoDreamService } from "@/service/AIAutoDreamService";
 import type {
   AgentDefinitionView,
@@ -60,6 +72,8 @@ export class AgentRuntime {
   private readonly policy = new AgentToolPolicyService();
   private readonly promptBuilder = new AgentPromptBuilder();
   private readonly outputParser = new AgentOutputParser();
+  private readonly agentCatalogService = new ToolCatalogService();
+  private readonly agentBudgetService = new ToolPromptBudgetService();
   private readonly defModule = new AgentDefinitionModule();
   private readonly taskModule = new AgentTaskModule();
   private readonly api = new AiChatApi();
@@ -127,6 +141,21 @@ export class AgentRuntime {
         description: def?.description,
         parameters: def?.parameters,
       });
+    });
+
+    // Build a deferred tool catalog scoped to the agent's allowlist. The
+    // catalog is constructed from the already-allowlisted exposedTools and the
+    // runtime context carries allowedToolNames/blockedToolNames, so discovery
+    // can never surface a blocked or non-allowlisted tool (AC-4). Agent tasks
+    // are ephemeral, so discovered state is per-task (in-memory) — no
+    // persistence. Small allowlists stay standard under auto mode (design §16).
+    const agentToolCatalogContext = this.buildAgentToolCatalog({
+      tools: exposedTools,
+      conversationId: agentConversationId,
+      userMessage: request.prompt,
+      model: request.model ?? definition.defaultModel,
+      allowedToolNames: new Set(exposedNames),
+      blockedToolNames: new Set(constraints.blockedTools ?? []),
     });
 
     // 3. Injected executeTool enforces the agent allowlist at runtime.
@@ -245,6 +274,9 @@ export class AgentRuntime {
         eventSink: sink,
         startRound: 0,
         isActiveTurn: () => true,
+        toolCatalog: agentToolCatalogContext.toolCatalog,
+        toolCatalogModeDecision:
+          agentToolCatalogContext.toolCatalogModeDecision,
       };
       const result = await loop.run(loopInput);
 
@@ -384,6 +416,66 @@ export class AgentRuntime {
 
   async getTask(agentTaskId: string): Promise<AgentTaskSnapshot | null> {
     return this.taskModule.getSnapshot(agentTaskId);
+  }
+
+  /**
+   * Build a deferred tool catalog scoped to the agent's allowlist (AC-4).
+   * The catalog is constructed from the already-allowlisted tool set, and the
+   * runtime context carries allowedToolNames/blockedToolNames as defense in
+   * depth so discovery can never surface a blocked tool. Returns empty when
+   * the flag is off, the catalog build throws, or auto mode stays standard
+   * (small allowlists).
+   */
+  private buildAgentToolCatalog(input: {
+    readonly tools: readonly OpenAITool[];
+    readonly conversationId: string;
+    readonly userMessage: string;
+    readonly model?: string;
+    readonly allowedToolNames: ReadonlySet<string>;
+    readonly blockedToolNames: ReadonlySet<string>;
+  }): {
+    toolCatalog?: ToolCatalog;
+    toolCatalogModeDecision?: ToolCatalogModeDecision;
+  } {
+    const mode = resolveToolCatalogMode(process.env[TOOL_CATALOG_ENV.mode]);
+    if (mode.mode === "off") return {};
+
+    const context: ToolCatalogRuntimeContext = {
+      conversationId: input.conversationId,
+      model: input.model,
+      isPlanMode: false,
+      autoPlanEnabled: false,
+      currentUserMessage: input.userMessage,
+      uploadedFileTypes: [],
+      allowedToolNames: input.allowedToolNames,
+      blockedToolNames: input.blockedToolNames,
+    };
+
+    let catalog: ToolCatalog;
+    try {
+      catalog = this.agentCatalogService.buildFromOpenAITools({
+        tools: input.tools,
+        context,
+      });
+    } catch (err) {
+      console.warn(
+        `[agent-runtime] catalog build failed, using standard mode:`,
+        err
+      );
+      return {};
+    }
+
+    const thresholdPercent = resolvePositiveIntEnv(
+      process.env[TOOL_CATALOG_ENV.thresholdPercent]
+    );
+    const decision = this.agentBudgetService.resolveMode({
+      configuredMode: mode.mode,
+      deferredEstimatedTokens: catalog.deferredEstimatedTokens,
+      thresholdPercent,
+    });
+    if (decision.mode === "standard") return {};
+
+    return { toolCatalog: catalog, toolCatalogModeDecision: decision };
   }
 
   private async fail(
