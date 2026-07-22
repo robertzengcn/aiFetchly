@@ -47,6 +47,7 @@ import { TOOL_CATALOG_SEARCH_TOOL_NAME } from "@/config/toolCatalogConfig";
 import { ToolCatalogService } from "@/service/ToolCatalogService";
 import { ToolCatalogSearchService } from "@/service/ToolCatalogSearchService";
 import { logToolCatalogFilter } from "@/service/ToolCatalogMetricsService";
+import { toolCatalogCounters } from "@/service/ToolCatalogCounters";
 import type {
   ToolCatalog,
   ToolCatalogSearchArgs,
@@ -423,6 +424,7 @@ export class AIChatQueryLoop {
               `[tool-catalog] filter failed, falling back to full tools:`,
               filterError
             );
+            toolCatalogCounters.increment("fallback_count");
             exposedTools = currentTools;
           }
         }
@@ -708,6 +710,17 @@ export class AIChatQueryLoop {
               autoPlanEnabled: Boolean(input.autoPlan),
               currentUserMessage: input.request.message,
             });
+            toolCatalogCounters.increment("search_calls");
+            if (
+              searchPayload.matches.length === 0 &&
+              searchPayload.selectedToolNames.length === 0
+            ) {
+              toolCatalogCounters.increment("search_no_match");
+            }
+            toolCatalogCounters.increment(
+              "search_selected_count",
+              searchPayload.selectedToolNames.length
+            );
             for (const name of searchPayload.selectedToolNames) {
               discoveredToolNames.add(name);
             }

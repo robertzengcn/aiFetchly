@@ -5,6 +5,7 @@ import { MCP_CALL_TIMEOUT_MS } from "@/config/mcpConfig";
 import { MCPTimeoutError } from "@/service/MCPTimeoutError";
 import { sanitizeMcpToolMetadata } from "@/service/ToolSchemaSanitizer";
 import { TOOL_CATALOG_DEFAULTS } from "@/config/toolCatalogConfig";
+import { toolCatalogCounters } from "@/service/ToolCatalogCounters";
 import type { ToolFunction } from "@/api/aiChatApi";
 import {
   mcpServerConfigSchema,
@@ -24,7 +25,12 @@ export function buildSanitizedToolSchemas(
     readonly name: string;
     readonly description?: string;
     readonly inputSchema?: Record<string, unknown>;
-  }>
+  }>,
+  onSanitized?: (result: {
+    readonly name: string;
+    readonly descriptionTruncated: boolean;
+    readonly schemaChanged: boolean;
+  }) => void
 ): Record<
   string,
   { description?: string; inputSchema?: Record<string, unknown> }
@@ -47,6 +53,11 @@ export function buildSanitizedToolSchemas(
       description: sanitized.description,
       inputSchema: sanitized.schema,
     };
+    onSanitized?.({
+      name: tool.name,
+      descriptionTruncated: sanitized.descriptionTruncated,
+      schemaChanged: sanitized.schemaChanged,
+    });
   }
   return out;
 }
@@ -434,7 +445,14 @@ export class MCPToolService {
       // Store tool schemas: toolName -> { description, inputSchema }.
       // Cap descriptions and prune oversized schemas before persistence so
       // pathological MCP metadata never bloats the tools payload (AC-6).
-      const toolSchemas = buildSanitizedToolSchemas(tools);
+      const toolSchemas = buildSanitizedToolSchemas(tools, (r) => {
+        if (r.descriptionTruncated) {
+          toolCatalogCounters.increment("mcp_description_truncated_count");
+        }
+        if (r.schemaChanged) {
+          toolCatalogCounters.increment("mcp_schema_pruned_count");
+        }
+      });
       metadata.toolSchemas = toolSchemas;
       server.metadata = JSON.stringify(metadata);
 
