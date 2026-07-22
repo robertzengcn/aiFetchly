@@ -452,6 +452,10 @@ module.exports = {
             entry: "src/childprocess/embedding/LocalEmbeddingWorker.ts",
             config: "vite.localEmbeddingWorker.config.mjs",
           },
+          {
+            entry: "src/childprocess/ai-chat-voice/AiChatVoiceWorker.ts",
+            config: "vite.aiChatVoiceWorker.config.mjs",
+          },
         ],
         renderer: [
           {
