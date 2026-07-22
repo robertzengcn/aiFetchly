@@ -11,6 +11,7 @@ import {
 } from "@/api/aiChatApi";
 // import { getAvailableToolFunctions } from "@/config/aiTools.config";
 import { SkillRegistry } from "@/config/skillsRegistry";
+import { formatToolCatalogBreakdown } from "@/service/ToolCatalogDiagnostics";
 import {
   CommonMessage,
   ChatMessage,
@@ -411,7 +412,9 @@ async function resolveSlashCommandContent(
   switch (parsed.name) {
     case "/skills": {
       const allTools = await SkillRegistry.getAllToolFunctions();
-      return formatSkillsAsChatMarkdown(allTools);
+      const listing = formatSkillsAsChatMarkdown(allTools);
+      const breakdown = formatToolCatalogBreakdown(allTools);
+      return `${listing}\n\n${breakdown}`;
     }
     case "/":
       return "Available commands:\n\n1. `/skills` - List available skills/tools.";
@@ -1225,8 +1228,8 @@ export function registerAiChatIpcHandlers(): void {
       platform() === "darwin"
         ? (["open", [filePath]] as const)
         : platform() === "win32"
-          ? (["cmd.exe", ["/c", "start", "", filePath]] as const)
-          : (["xdg-open", [filePath]] as const);
+        ? (["cmd.exe", ["/c", "start", "", filePath]] as const)
+        : (["xdg-open", [filePath]] as const);
     const proc = spawn(cmd, args, { detached: true, stdio: "ignore" });
     proc.unref();
   }
