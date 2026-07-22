@@ -141,3 +141,65 @@ export function buildDeferredAnnouncementDelta(input: {
     removedNames,
   };
 }
+
+/** Cap on the number of newly-deferred tool lines in a delta announcement. */
+const DEFAULT_MAX_ANNOUNCEMENT_ADDED_LINES = 20;
+
+/**
+ * Build the deferred-tool announcement to inject at the start of a turn
+ * (FR-6, design §15.2/§20). Returns "" when there is nothing to announce.
+ *
+ * - First announcement (no prior announced names, deferred tools exist): a
+ *   compact category-level system note.
+ * - Later turns: a token-budgeted delta (newly deferred + removed) only when
+ *   the deferred set changed.
+ */
+export function buildDeferredAnnouncement(input: {
+  readonly previousAnnounced: readonly string[];
+  readonly catalog: ToolCatalog;
+  readonly maxAddedLines?: number;
+}): string {
+  const currentDeferredNames = input.catalog.deferred.map((e) => e.name);
+  const isFirstAnnouncement =
+    input.previousAnnounced.length === 0 && currentDeferredNames.length > 0;
+
+  if (isFirstAnnouncement) {
+    const categories = Array.from(
+      new Set(input.catalog.deferred.map((e) => e.source))
+    ).sort();
+    return (
+      "Tool catalog mode is active. Some tools are deferred to reduce context usage. " +
+      "Use `tool_catalog_search` when a task may need an integration, MCP server, " +
+      "plugin tool, imported skill, browser automation, scraper, or specialist workflow " +
+      "tool that is not currently available." +
+      (categories.length > 0
+        ? ` Deferred tool categories: ${categories.join(", ")}.`
+        : "")
+    );
+  }
+
+  const delta = buildDeferredAnnouncementDelta({
+    previousAnnounced: input.previousAnnounced,
+    catalog: input.catalog,
+  });
+  if (delta.addedLines.length === 0 && delta.removedNames.length === 0) {
+    return "";
+  }
+
+  const maxAdded = input.maxAddedLines ?? DEFAULT_MAX_ANNOUNCEMENT_ADDED_LINES;
+  const addedLines = delta.addedLines.slice(0, maxAdded);
+  const overflow = delta.addedLines.length - addedLines.length;
+  const parts: string[] = [];
+  if (addedLines.length > 0) {
+    const lines = addedLines.map((l) => `- ${l}`);
+    if (overflow > 0) lines.push(`- ...and ${overflow} more`);
+    parts.push(
+      "Newly deferred tools (use `tool_catalog_search` to load):\n" +
+        lines.join("\n")
+    );
+  }
+  if (delta.removedNames.length > 0) {
+    parts.push("Tools no longer available: " + delta.removedNames.join(", "));
+  }
+  return parts.join("\n\n");
+}

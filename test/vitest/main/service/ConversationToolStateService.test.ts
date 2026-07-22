@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   ConversationToolStateService,
   buildDeferredAnnouncementDelta,
+  buildDeferredAnnouncement,
 } from "@/service/ConversationToolStateService";
 import { ToolCatalogService } from "@/service/ToolCatalogService";
 import type { OpenAITool } from "@/api/aiChatApi";
@@ -90,5 +91,63 @@ describe("ConversationToolStateService snapshot conversion (pure)", () => {
     expect(view.conversationId).toBe("conv-x");
     expect(view.discoveredToolNames).toEqual(["mcp_1_b", "mcp_1_a"]);
     expect(view.announcedDeferredToolNames).toEqual([]);
+  });
+});
+
+describe("buildDeferredAnnouncement (pure)", () => {
+  it("emits a compact category-level note on the first announcement", () => {
+    const catalog = catalogOf([tool("mcp_1_a"), tool("mcp_1_b")]);
+    const msg = buildDeferredAnnouncement({
+      previousAnnounced: [],
+      catalog,
+    });
+    expect(msg).toContain("Tool catalog mode is active");
+    expect(msg).toContain("tool_catalog_search");
+    expect(msg).toContain("Deferred tool categories: mcp");
+  });
+
+  it("returns empty when nothing changed since the last announcement", () => {
+    const catalog = catalogOf([tool("mcp_1_a")]);
+    const msg = buildDeferredAnnouncement({
+      previousAnnounced: ["mcp_1_a"],
+      catalog,
+    });
+    expect(msg).toBe("");
+  });
+
+  it("emits a delta when new deferred tools appear", () => {
+    const catalog = catalogOf([
+      tool("mcp_1_a", "alpha"),
+      tool("mcp_1_b", "beta"),
+    ]);
+    const msg = buildDeferredAnnouncement({
+      previousAnnounced: ["mcp_1_a"],
+      catalog,
+    });
+    expect(msg).toContain("Newly deferred tools");
+    expect(msg).toContain("mcp_1_b");
+    expect(msg).not.toContain("mcp_1_a");
+  });
+
+  it("reports removed tools in the delta", () => {
+    const catalog = catalogOf([tool("mcp_1_a")]);
+    const msg = buildDeferredAnnouncement({
+      previousAnnounced: ["mcp_1_a", "mcp_1_gone"],
+      catalog,
+    });
+    expect(msg).toContain("Tools no longer available");
+    expect(msg).toContain("mcp_1_gone");
+  });
+
+  it("caps the number of added lines", () => {
+    const tools: OpenAITool[] = [];
+    for (let i = 0; i < 5; i++) tools.push(tool(`mcp_1_t${i}`));
+    const catalog = catalogOf(tools);
+    const msg = buildDeferredAnnouncement({
+      previousAnnounced: ["mcp_1_t0"],
+      catalog,
+      maxAddedLines: 2,
+    });
+    expect(msg).toContain("...and 2 more");
   });
 });

@@ -142,6 +142,38 @@ describe("AIChatQueryLoop tool catalog integration", () => {
     expect(captured[0]).not.toContain("mcp_1_secret");
   });
 
+  it("injects a compact deferred-tool announcement system message on the first turn", async () => {
+    const capturedMessages: unknown[] = [];
+    const fakeStream = vi.fn(
+      async (
+        req: { messages?: unknown },
+        onChunk: (c: OpenAIChatCompletionChunk) => void
+      ) => {
+        capturedMessages.push(req.messages);
+        onChunk(makeChunk("ok", "stop"));
+      }
+    );
+    const loop = new AIChatQueryLoop({
+      streamChatCompletion: fakeStream,
+      executeTool: vi.fn(),
+      getSkillDefinition: vi.fn().mockReturnValue(undefined),
+    });
+    const { input } = buildInput();
+    await loop.run(input);
+
+    const msgs = capturedMessages[0] as Array<{
+      role: string;
+      content: string;
+    }>;
+    const announcement = msgs.find(
+      (m) =>
+        typeof m.content === "string" &&
+        m.content.includes("Tool catalog mode is active")
+    );
+    expect(announcement).toBeDefined();
+    expect(announcement!.content).toContain("tool_catalog_search");
+  });
+
   it("exposes a selected deferred tool on the next round after tool_catalog_search", async () => {
     const captured: string[][] = [];
     const events: Array<{ type: string; toolName?: string }> = [];
