@@ -557,6 +557,9 @@ export class AIChatQueryLoop {
               partialContent: accumulator.state.fullContent ?? "",
               model: accumulator.state.model,
               responseId: accumulator.state.responseId,
+              toolCatalogState: catalogActive
+                ? snapshotToolCatalogState(discoveredToolNames)
+                : undefined,
             };
           }
 
@@ -923,6 +926,9 @@ export class AIChatQueryLoop {
               totalTokens: lastReportedUsage?.totalTokens,
               promptTokens: lastReportedUsage?.promptTokens,
               completionTokens: lastReportedUsage?.completionTokens,
+              toolCatalogState: catalogActive
+                ? snapshotToolCatalogState(discoveredToolNames)
+                : undefined,
             };
           }
 
@@ -997,6 +1003,9 @@ export class AIChatQueryLoop {
           totalTokens: lastReportedUsage?.totalTokens,
           promptTokens: lastReportedUsage?.promptTokens,
           completionTokens: lastReportedUsage?.completionTokens,
+          toolCatalogState: catalogActive
+            ? snapshotToolCatalogState(discoveredToolNames)
+            : undefined,
         };
       }
 
@@ -1056,6 +1065,9 @@ export class AIChatQueryLoop {
         totalTokens: lastReportedUsage?.totalTokens,
         promptTokens: lastReportedUsage?.promptTokens,
         completionTokens: lastReportedUsage?.completionTokens,
+        toolCatalogState: catalogActive
+          ? snapshotToolCatalogState(discoveredToolNames)
+          : undefined,
       };
     } catch (err) {
       if (err instanceof Error && err.name === "AbortError") {
@@ -1066,6 +1078,9 @@ export class AIChatQueryLoop {
           partialContent: activeAccumulator?.state.fullContent ?? "",
           model: activeAccumulator?.state.model,
           responseId: activeAccumulator?.state.responseId,
+          toolCatalogState: catalogActive
+            ? snapshotToolCatalogState(discoveredToolNames)
+            : undefined,
         };
       }
       return {
@@ -1076,6 +1091,9 @@ export class AIChatQueryLoop {
         partialContent: activeAccumulator?.state.fullContent ?? "",
         model: activeAccumulator?.state.model,
         responseId: activeAccumulator?.state.responseId,
+        toolCatalogState: catalogActive
+          ? snapshotToolCatalogState(discoveredToolNames)
+          : undefined,
       };
     }
   }

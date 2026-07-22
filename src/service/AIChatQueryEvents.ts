@@ -205,6 +205,9 @@ export type AIChatQueryLoopResult =
       totalTokens?: number;
       promptTokens?: number;
       completionTokens?: number;
+      /** Final deferred-catalog discovered-tool snapshot, when deferred mode
+       * was active, so the engine can persist it across restart (FR-5/AC-8). */
+      toolCatalogState?: ToolCatalogStateSnapshot;
     }
   | {
       type: "cancelled";
@@ -216,6 +219,7 @@ export type AIChatQueryLoopResult =
       totalTokens?: number;
       promptTokens?: number;
       completionTokens?: number;
+      toolCatalogState?: ToolCatalogStateSnapshot;
     }
   | {
       type: "paused_for_permission";
@@ -233,6 +237,7 @@ export type AIChatQueryLoopResult =
       partialContent: string;
       model?: string;
       responseId?: string;
+      toolCatalogState?: ToolCatalogStateSnapshot;
     };
 
 /** State stored when a tool needs user permission. */

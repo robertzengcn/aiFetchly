@@ -28,6 +28,7 @@ import {
   TOOL_CATALOG_ENV,
 } from "@/config/toolCatalogConfig";
 import { ToolCatalogService } from "@/service/ToolCatalogService";
+import { ConversationToolStateService } from "@/service/ConversationToolStateService";
 import { ToolPromptBudgetService } from "@/service/ToolPromptBudgetService";
 import type {
   AIChatQueryEventSink,
@@ -158,6 +159,8 @@ export class AIChatQueryEngine {
 
   private readonly catalogService = new ToolCatalogService();
   private readonly budgetService = new ToolPromptBudgetService();
+  private readonly conversationToolStateService =
+    new ConversationToolStateService();
 
   /**
    * Build the deferred tool catalog + mode decision for a turn (FR-8, design
@@ -357,6 +360,12 @@ export class AIChatQueryEngine {
       model: request.model,
     });
 
+    // Load persisted discovered-tool state so tools discovered in earlier turns
+    // (before an app restart / conversation reload) remain exposed (FR-5/AC-8).
+    const persistedToolCatalogState = toolCatalogContext.toolCatalog
+      ? await this.conversationToolStateService.loadSnapshot(conversationId)
+      : undefined;
+
     // ------------------------------------------------------------------
     // 4. Abort any prior active turn, create new abort controller
     // ------------------------------------------------------------------
@@ -429,6 +438,7 @@ export class AIChatQueryEngine {
         this.currentConversationId === conversationId,
       toolCatalog: toolCatalogContext.toolCatalog,
       toolCatalogModeDecision: toolCatalogContext.toolCatalogModeDecision,
+      toolCatalogState: persistedToolCatalogState,
     };
 
     try {
@@ -771,6 +781,15 @@ export class AIChatQueryEngine {
     eventSink: AIChatQueryEventSink
   ): Promise<void> {
     await this.flushEventSaves(eventSink);
+    // Persist deferred-catalog discovered state on terminal results so it
+    // survives app restart / conversation reload (FR-5/AC-8). Pause variants
+    // carry the snapshot on `pending` and persist via the resumed turn.
+    if ("toolCatalogState" in result && result.toolCatalogState) {
+      await this.conversationToolStateService.saveSnapshot({
+        conversationId: result.conversationId,
+        snapshot: result.toolCatalogState,
+      });
+    }
     switch (result.type) {
       case "completed": {
         const { conversationId, assistantMessageId } = result;
