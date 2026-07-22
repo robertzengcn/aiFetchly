@@ -45,6 +45,7 @@ export interface PluginSummary {
   skillCount: number;
   mcpServerCount: number;
   agentCount: number;
+  commandCount: number;
   permissions: string[];
   lastUpdated: string;
   sourceKind?: PluginSourceKind;
@@ -64,6 +65,7 @@ export interface PluginSkillComponent {
 export interface PluginMcpServerComponent {
   id: number;
   name: string;
+  serverName?: string;
   enabled: boolean;
   transport: string;
   health: string;
@@ -83,12 +85,28 @@ export interface PluginAgentComponent {
   error?: string;
 }
 
+/**
+ * Renderer-safe view of one slash command contributed by a plugin.
+ * The raw prompt body and arbitrary metadata are NEVER included
+ * (PRD §11.1 / AC-9). `sourceId` is exposed so users can see the
+ * canonical `plugin:<name>` identity.
+ */
+export interface PluginCommandView {
+  name: string;
+  description: string;
+  aliases: string[];
+  argumentHint?: string;
+  enabled: boolean;
+  sourceId: string;
+}
+
 export interface PluginDetail extends PluginSummary {
   description: string;
   author?: string;
   skills: PluginSkillComponent[];
   mcpServers: PluginMcpServerComponent[];
   agents: PluginAgentComponent[];
+  commands: PluginCommandView[];
   errors: Array<{ code: string; message: string; recoverable: boolean }>;
   manifest: Record<string, unknown>;
   marketplaceName?: string;
@@ -137,6 +155,15 @@ export interface PluginDiagnosticsBundle {
     enabled: boolean;
     transport: string;
     health: string;
+  }>;
+  commandDiagnostics: Array<{
+    severity: string;
+    source: string;
+    sourceId: string;
+    filePath: string;
+    code: string;
+    message: string;
+    recoverable: boolean;
   }>;
 }
 

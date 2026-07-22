@@ -12,7 +12,10 @@ const VALID_PLUGIN_MANIFEST = {
   agents: ["agents/helper.md"],
 };
 
-function writePluginManifest(pluginRoot: string, name = "drop-in-plugin"): void {
+function writePluginManifest(
+  pluginRoot: string,
+  name = "drop-in-plugin"
+): void {
   fs.mkdirSync(path.join(pluginRoot, ".aifetchly-plugin"), {
     recursive: true,
   });
@@ -61,6 +64,7 @@ describe("UserPluginAutoInstallService", () => {
             skillCount: 0,
             mcpServerCount: 0,
             agentCount: 1,
+            commandCount: 0,
             permissions: [],
             lastUpdated: new Date("2026-07-15T00:00:00.000Z").toISOString(),
           },

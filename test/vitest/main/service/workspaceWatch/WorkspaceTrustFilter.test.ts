@@ -1,25 +1,26 @@
 /**
- * WorkspaceTrustFilter — TRS-01 Phase 14 binary trust derivation.
+ * WorkspaceTrustFilter — TRS-01 trust derivation chokepoint.
  *
- * The filter is the single chokepoint where workspace approval state
- * becomes {@link AIFetchlySourceTrust} flags. Phase 14 is binary: an
- * approved workspace trusts instructions + commands only; agents/hooks/
- * skills stay false until their phases (16/17/18) ship per-capability
- * trust gates.
+ * The filter is the single chokepoint where workspace approval state becomes
+ * {@link AIFetchlySourceTrust} flags. Since Phase 17 (D-TrustUX) all five
+ * flags track the same binary approval, so an approved workspace trusts EVERY
+ * capability — instructions, commands, agents, hooks, and skills — and a
+ * revoked/untrusted workspace trusts none. (Phase 14 previously hardcoded
+ * agents/hooks/skills to false; that limitation was removed.)
  *
  * Pure unit test — no mocks, no IO. The function is a pure mapping.
  */
 import { describe, expect, it } from "vitest";
 import { derivePhase14Trust } from "@/service/workspaceWatch/WorkspaceTrustFilter";
 
-describe("WorkspaceTrustFilter — derivePhase14Trust (TRS-01 Phase 14 binary)", () => {
-  it("derivePhase14Trust(true) trusts instructions + commands only", () => {
+describe("WorkspaceTrustFilter — derivePhase14Trust (TRS-01 binary trust)", () => {
+  it("derivePhase14Trust(true) trusts every capability", () => {
     expect(derivePhase14Trust(true)).toEqual({
       instructions: true,
       commands: true,
-      agents: false,
-      hooks: false,
-      skills: false,
+      agents: true,
+      hooks: true,
+      skills: true,
     });
   });
 

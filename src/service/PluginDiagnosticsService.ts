@@ -2,6 +2,9 @@ import { PluginManagementModule } from "@/modules/PluginManagementModule";
 import { AgentDefinitionModule } from "@/modules/AgentDefinitionModule";
 import { SkillManagementModule } from "@/modules/SkillManagementModule";
 import { MCPToolModule } from "@/modules/MCPToolModule";
+import { PluginCommandDiagnosticsStore } from "@/service/pluginCompat/PluginCommandDiagnosticsStore";
+import { getAIFetchlyConfigManager } from "@/service/aifetchlyConfig/AIFetchlyConfigManager";
+import type { AIFetchlyConfigDiagnostic } from "@/entityTypes/aifetchlyConfigTypes";
 import type { PluginError, PluginSummary } from "@/entityTypes/pluginTypes";
 
 /**
@@ -34,6 +37,14 @@ export interface PluginDiagnosticsBundle {
   readonly errors: readonly PluginError[];
   readonly skills: readonly PluginSkillDiagnostic[];
   readonly mcpServers: readonly PluginMcpDiagnostic[];
+  /**
+   * Command + agent promotion diagnostics recorded by the last
+   * PluginComponentRegistryService promotion pass (invalid command files,
+   * unsupported Claude declarations, path-traversal rejections, oversized
+   * files, …). Commands/agents have no DB row, so these come from the
+   * in-memory PluginCommandDiagnosticsStore. Messages are secret-redacted.
+   */
+  readonly commandDiagnostics: readonly AIFetchlyConfigDiagnostic[];
 }
 
 const SECRET_PATTERNS: ReadonlyArray<RegExp> = [
@@ -124,6 +135,9 @@ export class PluginDiagnosticsService {
       skillCount: skills.length,
       mcpServerCount: mcpServers.length,
       agentCount: agents.length,
+      commandCount: getAIFetchlyConfigManager()
+        .getCommandRegistry()
+        .listBySource(`plugin:${pluginName}`).length,
       permissions: safeParseArray(plugin.permissionsJson),
       lastUpdated: plugin.updatedAt
         ? new Date(plugin.updatedAt).toISOString()
@@ -150,6 +164,9 @@ export class PluginDiagnosticsService {
         transport: m.transport,
         health: "healthy",
       })),
+      commandDiagnostics: PluginCommandDiagnosticsStore.get(pluginName).map(
+        (d) => ({ ...d, message: redactSecrets(d.message) })
+      ),
     };
   }
 }

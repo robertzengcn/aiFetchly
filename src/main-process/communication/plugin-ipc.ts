@@ -10,6 +10,9 @@ import { PluginComponentRegistryService } from "@/service/PluginComponentRegistr
 import { PluginDiagnosticsService } from "@/service/PluginDiagnosticsService";
 import { UserPluginAutoInstallService } from "@/service/UserPluginAutoInstallService";
 import { getPluginInstallRoot } from "@/service/pluginPaths";
+import { getAIFetchlyConfigManager } from "@/service/aifetchlyConfig/AIFetchlyConfigManager";
+import { broadcastAifetchlyConfigChanged } from "@/main-process/communication/aifetchlyConfigEvents";
+import type { SlashCommandView } from "@/entityTypes/slashCommandTypes";
 import type {
   PluginSummary,
   PluginSourceKind,
@@ -35,6 +38,7 @@ import {
 } from "@/config/channellist";
 import { registerAiValidatedHandler } from "@/main-process/communication/_shared/registerValidatedHandler";
 import { registerValidatedHandler } from "@/main-process/communication/_shared/registerValidatedHandler";
+import type { MCPToolEntity } from "@/entity/MCPTool.entity";
 import {
   pluginNoInputSchema,
   pluginByNameInputSchema,
@@ -65,7 +69,8 @@ function toSummary(
   p: InstalledPluginEntity,
   skillCount: number,
   mcpServerCount: number,
-  agentCount: number
+  agentCount: number,
+  commandCount: number
 ): PluginSummary {
   let permissions: string[] = [];
   try {
@@ -88,6 +93,7 @@ function toSummary(
     skillCount,
     mcpServerCount,
     agentCount,
+    commandCount,
     permissions,
     lastUpdated: p.updatedAt
       ? new Date(p.updatedAt).toISOString()
@@ -96,6 +102,118 @@ function toSummary(
     sourceUri: p.sourceUri,
     sourceRef: p.sourceRef,
     installPath: p.installPath,
+  };
+}
+
+/**
+ * Renderer-safe projection of one plugin command for the Plugin Manager detail
+ * surface. Picks only the inspectable fields — the raw prompt body and
+ * arbitrary metadata are NEVER included (PRD §11.1 / AC-9). `sourceId` is
+ * exposed so users can see the canonical `plugin:<name>` identity.
+ */
+interface PluginCommandViewEntry {
+  readonly name: string;
+  readonly description: string;
+  readonly aliases: readonly string[];
+  readonly argumentHint?: string;
+  readonly enabled: boolean;
+  readonly sourceId: string;
+}
+
+function toPluginCommandView(
+  view: SlashCommandView,
+  sourceId: string
+): PluginCommandViewEntry {
+  return {
+    name: view.name,
+    description: view.description,
+    aliases: view.aliases,
+    ...(view.argumentHint !== undefined
+      ? { argumentHint: view.argumentHint }
+      : {}),
+    enabled: view.enabled,
+    sourceId,
+  };
+}
+
+interface PluginMcpServerViewEntry {
+  readonly id: number;
+  readonly name: string;
+  readonly serverName: string;
+  readonly enabled: boolean;
+  readonly transport: MCPToolEntity["transport"];
+  readonly health: "healthy" | "needs_configuration";
+  readonly toolCount: number;
+  readonly error?: string;
+}
+
+function parseJsonObject(raw: string | undefined): Record<string, unknown> {
+  if (!raw) return {};
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (
+      typeof parsed === "object" &&
+      parsed !== null &&
+      !Array.isArray(parsed)
+    ) {
+      return parsed as Record<string, unknown>;
+    }
+  } catch {
+    // Malformed metadata should not make the plugin detail surface unusable.
+  }
+  return {};
+}
+
+function parseToolCount(raw: string | undefined): number {
+  if (!raw) return 0;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.length : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function toPluginMcpServerView(
+  server: MCPToolEntity
+): PluginMcpServerViewEntry {
+  const metadata = parseJsonObject(server.metadata);
+  const pluginServerName = metadata.pluginServerName;
+  const name =
+    typeof pluginServerName === "string" && pluginServerName.length > 0
+      ? pluginServerName
+      : server.serverName;
+  const hasConfig =
+    (server.transport === "stdio" && !!server.command) ||
+    ((server.transport === "sse" || server.transport === "websocket") &&
+      (!!server.host || !!server.url));
+  const error = hasConfig
+    ? undefined
+    : `MCP server "${server.serverName}" is missing required configuration.`;
+  return {
+    id: server.id,
+    name,
+    serverName: server.serverName,
+    enabled: server.enabled,
+    transport: server.transport,
+    health: hasConfig ? "healthy" : "needs_configuration",
+    toolCount: parseToolCount(server.tools),
+    ...(error ? { error } : {}),
+  };
+}
+
+/** Live slash commands promoted by a plugin, as renderer-safe views. */
+function pluginCommandViews(pluginName: string): {
+  readonly views: readonly PluginCommandViewEntry[];
+  readonly count: number;
+} {
+  const sourceId = `plugin:${pluginName}`;
+  const defs = getAIFetchlyConfigManager()
+    .getCommandRegistry()
+    .listViewsBySource(sourceId);
+  return {
+    views: defs.map((v) => toPluginCommandView(v, sourceId)),
+    count: defs.length,
   };
 }
 
@@ -114,8 +232,15 @@ export function registerPluginIpcHandlers(): void {
       const skills = await skillModule.findSkillsByPluginName(p.name);
       const mcpServers = await mcpModule.findMcpByPluginName(p.name);
       const agents = await agentModule.findAgentsByPluginName(p.name);
+      const commandCount = pluginCommandViews(p.name).count;
       summaries.push(
-        toSummary(p, skills.length, mcpServers.length, agents.length)
+        toSummary(
+          p,
+          skills.length,
+          mcpServers.length,
+          agents.length,
+          commandCount
+        )
       );
     }
     return summaries;
@@ -136,11 +261,13 @@ export function registerPluginIpcHandlers(): void {
       const skills = await skillModule.findSkillsByPluginName(input.name);
       const mcpServers = await mcpModule.findMcpByPluginName(input.name);
       const agents = await agentModule.findAgentsByPluginName(input.name);
+      const commandInfo = pluginCommandViews(input.name);
       const summary = toSummary(
         plugin,
         skills.length,
         mcpServers.length,
-        agents.length
+        agents.length,
+        commandInfo.count
       );
       let manifest = {};
       try {
@@ -158,11 +285,7 @@ export function registerPluginIpcHandlers(): void {
           manifestPath: s.pluginComponentPath,
           health: "healthy",
         })),
-        mcpServers: mcpServers.map((s) => ({
-          id: s.id,
-          serverName: s.serverName,
-          enabled: s.enabled,
-        })),
+        mcpServers: mcpServers.map((s) => toPluginMcpServerView(s)),
         agents: agents.map((a) => ({
           id: a.id,
           name: a.name,
@@ -174,6 +297,8 @@ export function registerPluginIpcHandlers(): void {
           health: a.health,
           ...(a.lastError ? { error: a.lastError } : {}),
         })),
+        // Renderer-safe command list — body/metadata stripped (PRD §11.1/AC-9).
+        commands: commandInfo.views,
         manifest,
       };
     }
@@ -208,6 +333,8 @@ export function registerPluginIpcHandlers(): void {
           promotionError
         );
       }
+      // Plugin set changed — refresh any open slash suggestions (PRD Problem 2).
+      broadcastAifetchlyConfigChanged({ source: "plugin" });
       return result.plugin;
     }
   );
@@ -294,6 +421,8 @@ export function registerPluginIpcHandlers(): void {
           promotionError
         );
       }
+      // Plugin set changed — refresh any open slash suggestions (PRD Problem 2).
+      broadcastAifetchlyConfigChanged({ source: "plugin" });
       return r.plugin;
     }
   );
@@ -342,6 +471,8 @@ export function registerPluginIpcHandlers(): void {
         throw new Error("Plugin not found");
       }
       await PluginComponentRegistryService.applyLoadedPlugins();
+      // Enable/disable changed the effective command set — refresh suggestions.
+      broadcastAifetchlyConfigChanged({ source: "plugin" });
       return null;
     }
   );
@@ -366,12 +497,16 @@ export function registerPluginIpcHandlers(): void {
       await PluginComponentRegistryService.unregisterPluginCapabilities(
         input.name
       );
+      // Plugin removed — refresh any open slash suggestions (PRD Problem 2).
+      broadcastAifetchlyConfigChanged({ source: "plugin" });
       return null;
     }
   );
 
   registerAiValidatedHandler(PLUGIN_RELOAD, pluginNoInputSchema, async () => {
     const result = await PluginComponentRegistryService.reload();
+    // Reload re-ran command promotion — refresh any open slash suggestions.
+    broadcastAifetchlyConfigChanged({ source: "plugin" });
     return {
       enabled: result.enabled.length,
       disabled: result.disabled.length,
@@ -401,6 +536,8 @@ export function registerPluginIpcHandlers(): void {
         throw new Error("Skill not found");
       }
       await PluginComponentRegistryService.applyLoadedPlugins();
+      // Capability set changed — refresh any subscribed renderer cache.
+      broadcastAifetchlyConfigChanged({ source: "plugin" });
       return null;
     }
   );

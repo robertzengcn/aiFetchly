@@ -100,10 +100,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch } from "vue";
+import { onBeforeUnmount, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import AiChatV2SlashSuggestions from "./AiChatV2SlashSuggestions.vue";
-import { listSlashCommands } from "@/views/api/slashCommands";
+import { listSlashCommands, onAifetchlyConfigChanged } from "@/views/api/slashCommands";
 import type { SlashCommandView } from "@/entityTypes/slashCommandTypes";
 
 const MAX_UPLOAD_FILES = 3;
@@ -203,6 +203,21 @@ watch(
       refreshSlashSuggestions();
     }
   }
+);
+
+// Live-refresh open suggestions when the AiFetchly config changes (PRD Problem
+// 2): a plugin install/disable/uninstall, a skill toggle/uninstall, a manual
+// reload, or a workspace command-file edit. We refresh only while the user is
+// already looking at slash suggestions, so the dropdown never opens unprompted.
+// The fetch is conversationId-scoped on the main side, so an event originating
+// from another workspace cannot leak its commands into this chat (the slashGeneration
+// guard also drops any result superseded by a newer keystroke/switch).
+onBeforeUnmount(
+  onAifetchlyConfigChanged(() => {
+    if (slashOpen.value || draft.value.startsWith("/")) {
+      refreshSlashSuggestions();
+    }
+  })
 );
 
 function closeSlash(): void {

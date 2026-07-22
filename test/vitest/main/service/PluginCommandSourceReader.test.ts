@@ -33,6 +33,14 @@ type: prompt
 Ship the changes.
 `;
 
+const CLAUDE_ASIDE = `---
+description: Answer a quick side question without interrupting context.
+---
+# Aside Command
+
+Answer the question, then resume the original task.
+`;
+
 function tmpPlugin(name = "demo"): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), `plugin-cmd-${name}-`));
 }
@@ -148,6 +156,32 @@ describe("PluginCommandSourceReader — Claude string/array declarations", () =>
       "plugin:demo:command:review",
     ]);
   });
+
+  it("loads Claude directory commands that omit name and type using filename + prompt fallbacks", async () => {
+    const root = tmpPlugin();
+    writeFile(root, "commands/aside.md", CLAUDE_ASIDE);
+    const { definitions, diagnostics } = await read(
+      root,
+      claudeManifest("./commands/")
+    );
+
+    expect(diagnostics).toEqual([]);
+    expect(definitions).toHaveLength(1);
+    expect(definitions[0].name).toBe("aside");
+    expect(definitions[0].type).toBe("prompt");
+    expect(definitions[0].description).toBe(
+      "Answer a quick side question without interrupting context."
+    );
+  });
+
+  it("auto-detects root commands/ for Claude manifests whose commands field is true", async () => {
+    const root = tmpPlugin();
+    writeFile(root, "commands/aside.md", CLAUDE_ASIDE);
+    const { definitions, diagnostics } = await read(root, claudeManifest(true));
+
+    expect(diagnostics).toEqual([]);
+    expect(definitions.map((d) => d.name)).toEqual(["aside"]);
+  });
 });
 
 describe("PluginCommandSourceReader — Claude object declarations", () => {
@@ -227,11 +261,7 @@ describe("PluginCommandSourceReader — Claude object declarations", () => {
         },
       })
     );
-    // The native commands/*.md is still read independently, so review still
-    // registers via the directory; the conflicting object entry is rejected.
-    expect(definitions.map((d) => d.id)).toEqual([
-      "plugin:demo:command:review",
-    ]);
+    expect(definitions).toHaveLength(0);
     expect(
       diagnostics.some((d) => d.code === "claude-frontmatter-invalid")
     ).toBe(true);
@@ -267,12 +297,14 @@ describe("PluginCommandSourceReader — path safety + dedup", () => {
 
   it("emits a duplicate-id diagnostic when distinct sources produce the same command id", async () => {
     const root = tmpPlugin();
-    writeFile(root, "commands/review.md", PROMPT_REVIEW); // native -> review
     const { definitions, diagnostics } = await read(
       root,
       claudeManifest({
-        // Inline content also named review -> same id, different source.
-        review: {
+        first: {
+          content:
+            "---\nname: review\ndescription: Duplicate\ntype: prompt\n---\nBody\n",
+        },
+        second: {
           content:
             "---\nname: review\ndescription: Duplicate\ntype: prompt\n---\nBody\n",
         },

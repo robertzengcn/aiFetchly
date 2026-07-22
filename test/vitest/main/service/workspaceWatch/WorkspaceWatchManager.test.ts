@@ -437,7 +437,9 @@ describe("WorkspaceWatchManager — ref-counted lifecycle + crash restart", () =
 
     // Trust resolver consulted.
     expect(s.trustResolver).toHaveBeenCalledWith("w1");
-    // applySnapshotCallback invoked with derived trust (approved → true).
+    // applySnapshotCallback invoked with derived trust. An approved workspace
+    // trusts every capability (Phase 17 D-TrustUX — all five flags track the
+    // same binary approval).
     expect(s.applySnapshotCallback).toHaveBeenCalledTimes(1);
     const [, trust] = s.applySnapshotCallback.mock.calls[0] as [
       AIFetchlyConfigSnapshot,
@@ -446,12 +448,44 @@ describe("WorkspaceWatchManager — ref-counted lifecycle + crash restart", () =
     expect(trust).toEqual({
       instructions: true,
       commands: true,
+      agents: true,
+      hooks: true,
+      skills: true,
+    });
+    // Emitter fired with workspace-origin event.
+    expect(s.configChangedEmitter).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops every capability when the workspace is revoked/untrusted", () => {
+    // trustApproved: false mirrors a workspace whose AI config trust was
+    // revoked — the manager must pass all-false trust so applySnapshotCallback
+    // drops commands (and every other capability) before registry mutation.
+    const s = createManager({ trustApproved: false });
+    const w = createFakeWorker();
+    s.nextWorker(w);
+
+    s.manager.acquire({
+      workspaceId: "w1",
+      workspaceRoot: "/tmp/w1",
+      consumerId: "chat:1",
+    });
+
+    const snap = snapshot("w1");
+    w.emit("message", { type: "snapshot", workspaceId: "w1", snapshot: snap });
+
+    expect(s.trustResolver).toHaveBeenCalledWith("w1");
+    expect(s.applySnapshotCallback).toHaveBeenCalledTimes(1);
+    const [, trust] = s.applySnapshotCallback.mock.calls[0] as [
+      AIFetchlyConfigSnapshot,
+      AIFetchlySourceTrust
+    ];
+    expect(trust).toEqual({
+      instructions: false,
+      commands: false,
       agents: false,
       hooks: false,
       skills: false,
     });
-    // Emitter fired with workspace-origin event.
-    expect(s.configChangedEmitter).toHaveBeenCalledTimes(1);
   });
 
   it("forwards diagnostic events to the emitter", () => {

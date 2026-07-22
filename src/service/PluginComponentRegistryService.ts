@@ -9,7 +9,9 @@ import {
 import { PluginRuntimeCache } from "@/service/PluginRuntimeCache";
 import { PluginHookRegistrar } from "@/service/pluginCompat/PluginHookRegistrar";
 import { PluginCommandSourceReader } from "@/service/pluginCompat/PluginCommandSourceReader";
+import { PluginCommandDiagnosticsStore } from "@/service/pluginCompat/PluginCommandDiagnosticsStore";
 import { UserPluginAutoInstallService } from "@/service/UserPluginAutoInstallService";
+import { PluginAgentImportService } from "@/service/PluginAgentImportService";
 import { SkillRegistry } from "@/config/skillsRegistry";
 import { CommandRegistry } from "@/service/slashCommands/CommandRegistry";
 import { AgentDefinitionRegistryImpl } from "@/service/AgentDefinitionRegistry";
@@ -22,6 +24,7 @@ import {
 import { AIFETCHLY_CONFIG_LIMITS } from "@/service/aifetchlyConfig/AIFetchlyConfigConstants";
 import type { AIFetchlyConfigDiagnostic } from "@/entityTypes/aifetchlyConfigTypes";
 import type { AgentDefinitionView } from "@/entityTypes/agentTypes";
+import type { PluginError } from "@/entityTypes/pluginTypes";
 /**
  * Adapts loaded plugin data into the existing skill and MCP runtime systems.
  * Source of truth: Design §7.5.
@@ -72,6 +75,7 @@ export class PluginComponentRegistryService {
     const manager = getAIFetchlyConfigManager();
     manager.getCommandRegistry().replaceSource(sourceId, []);
     manager.getAgentRegistry().replaceSource(sourceId, []);
+    PluginCommandDiagnosticsStore.clear(pluginName);
   }
 
   /**
@@ -119,6 +123,9 @@ export class PluginComponentRegistryService {
       ) {
         commandRegistry.replaceSource(sourceId, []);
         agentRegistry.replaceSource(sourceId, []);
+        // Reconcile to an empty diagnostics set so a now-clean (disabled /
+        // uninstalled / missing-dir) plugin never lingers stale warnings.
+        PluginCommandDiagnosticsStore.set(plugin.name, []);
         continue;
       }
 
@@ -133,18 +140,59 @@ export class PluginComponentRegistryService {
       commandRegistry.replaceSource(sourceId, commandResult.definitions);
 
       const agentResult =
-        await PluginComponentRegistryService.readComponentFiles<AgentDefinitionView>(
-          plugin.installPath,
-          "agents",
-          AIFETCHLY_CONFIG_LIMITS.agentMdBytes,
-          sourceId,
-          (draft) => buildAgentDefinition(draft, sourceMeta)
-        );
+        plugin.manifest.format === "claude"
+          ? PluginComponentRegistryService.readClaudePluginAgents(
+              plugin,
+              sourceId
+            )
+          : await PluginComponentRegistryService.readComponentFiles<AgentDefinitionView>(
+              plugin.installPath,
+              "agents",
+              AIFETCHLY_CONFIG_LIMITS.agentMdBytes,
+              sourceId,
+              (draft) => buildAgentDefinition(draft, sourceMeta)
+            );
       allDiagnostics.push(...agentResult.diagnostics);
       agentRegistry.replaceSource(sourceId, agentResult.definitions);
+
+      // Cache this plugin's command+agent diagnostics so the diagnostics
+      // bundle can surface WHY individual command/agent files were skipped.
+      // (Commands/agents have no DB row; the live registry is the truth, so
+      // diagnostics live in memory here.)
+      PluginCommandDiagnosticsStore.set(plugin.name, [
+        ...commandResult.diagnostics,
+        ...agentResult.diagnostics,
+      ]);
     }
 
     return { diagnostics: allDiagnostics };
+  }
+
+  private static readClaudePluginAgents(
+    plugin: LoadedPlugin,
+    sourceId: string
+  ): {
+    readonly definitions: readonly AgentDefinitionView[];
+    readonly diagnostics: readonly AIFetchlyConfigDiagnostic[];
+  } {
+    const parsed = PluginAgentImportService.parsePluginAgents({
+      pluginRoot: plugin.installPath,
+      manifest: plugin.manifest,
+    });
+    if (!parsed.ok) {
+      return {
+        definitions: [],
+        diagnostics: parsed.errors.map((error) =>
+          pluginErrorToDiagnostic(sourceId, error)
+        ),
+      };
+    }
+    return {
+      definitions: parsed.agents.map((agent) => agent.definition),
+      diagnostics: parsed.warnings.map((warning) =>
+        pluginErrorToDiagnostic(sourceId, warning)
+      ),
+    };
   }
 
   private static async readComponentFiles<T>(
@@ -240,17 +288,33 @@ function pluginDiagnostic(
   sourceId: string,
   filePath: string,
   code: string,
-  message: string
+  message: string,
+  severity: AIFetchlyConfigDiagnostic["severity"] = "warning",
+  recoverable = true
 ): AIFetchlyConfigDiagnostic {
   return {
-    severity: "warning",
+    severity,
     source: "plugin",
     sourceId,
     filePath,
     code,
     message,
-    recoverable: true,
+    recoverable,
   };
+}
+
+function pluginErrorToDiagnostic(
+  sourceId: string,
+  error: PluginError
+): AIFetchlyConfigDiagnostic {
+  return pluginDiagnostic(
+    sourceId,
+    error.path ?? error.componentName ?? error.componentType ?? "plugin",
+    error.code,
+    error.message,
+    error.recoverable ? "warning" : "error",
+    error.recoverable
+  );
 }
 
 function pluginIoDiagnostic(

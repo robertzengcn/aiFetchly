@@ -289,27 +289,28 @@ function renderReload(r: AIFetchlyConfigReloadSummary): string {
 }
 
 /**
- * Phase 16 / Plan 03 — derive the {@link AgentSource} kind from a scoped
- * agent id. Conventions (Plan 01 scoped-ID format):
- *   - "user:agent:<name>"                   -> user
- *   - "workspace:<workspaceId>:agent:<name>"-> workspace
- *   - "plugin:<pluginName>:agent:<name>"    -> plugin
- *   - anything else (bare "agent-*")        -> built-in
- *
- * Pure string derivation keeps the helper free of registry coupling
- * (AgentDefinitionView intentionally carries no source field — Plan 01
- * decision). The {@link AgentDefinitionRegistryImpl.list} output is already
- * sorted by D-Precedence, so the caller renders rows in precedence order.
+ * Phase 16 / Plan 03 — derive the rendered badge from the registry metadata.
+ * Plugin agents imported from Claude plugins use IDs such as
+ * "<plugin>:<agent>" for persisted compatibility, so source inference must not
+ * depend only on the old scoped-ID convention.
  */
-function agentSourceBadgeLabel(id: string): string {
+function agentSourceBadgeLabel(agent: AgentDefinitionView): string {
   // Badge labels mirror the Phase 13 slashCommands i18n source-label keys
   // (sourceBuiltin/sourceUser/sourceWorkspace/sourcePlugin). The dispatcher
   // returns English literals for simplicity (design §15.3; same convention
   // as renderHelp/renderStatus) — no new badge strings are introduced.
-  if (id.startsWith("user:agent:")) return "User";
-  if (id.startsWith("workspace:") && id.includes(":agent:")) return "Workspace";
-  if (id.startsWith("plugin:") && id.includes(":agent:")) return "Plugin";
-  return "Built-in";
+  switch (agent.source) {
+    case "user":
+      return "User";
+    case "workspace":
+      return "Workspace";
+    case "plugin":
+      return "Plugin";
+    case "built-in":
+      return "Built-in";
+    default:
+      return "Built-in";
+  }
 }
 
 /**
@@ -326,7 +327,7 @@ function renderAgentsList(agents: readonly AgentDefinitionView[]): string {
   }
   const lines = agents.map(
     (a) =>
-      `${a.id} — ${a.name}: ${a.description} [${agentSourceBadgeLabel(a.id)}]`
+      `${a.id} — ${a.name}: ${a.description} [${agentSourceBadgeLabel(a)}]`
   );
   return "Available agents:\n" + lines.join("\n");
 }

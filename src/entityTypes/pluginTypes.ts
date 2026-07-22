@@ -202,6 +202,8 @@ export interface PluginSummary {
   readonly skillCount: number;
   readonly mcpServerCount: number;
   readonly agentCount: number;
+  /** Slash commands promoted by this plugin (live CommandRegistry count). */
+  readonly commandCount: number;
   readonly permissions: readonly string[];
   readonly lastUpdated: string;
   readonly sourceKind?: PluginSourceKind;
@@ -219,7 +221,9 @@ export interface PluginSkillComponent {
 }
 
 export interface PluginMcpServerComponent {
+  readonly id: number;
   readonly name: string;
+  readonly serverName?: string;
   readonly enabled: boolean;
   readonly transport: PluginMcpTransport;
   readonly health: PluginHealth;

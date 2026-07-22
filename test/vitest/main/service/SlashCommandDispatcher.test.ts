@@ -516,6 +516,25 @@ const workspaceAgent: AgentDefinitionView = {
   health: "healthy",
 };
 
+const claudePluginAgent: AgentDefinitionView = {
+  id: "ecc:code-explorer",
+  name: "code-explorer",
+  description: "Analyzes codebases and recommends integration points.",
+  version: 1,
+  systemPrompt: "You analyze code.",
+  allowedTools: ["file_read", "grep_files", "glob_files"],
+  mode: "specialist",
+  maxToolCalls: 8,
+  maxRuntimeMs: 300000,
+  maxContinueCalls: 8,
+  outputSchema: {},
+  status: "active",
+  source: "plugin",
+  pluginName: "ecc",
+  pluginComponentPath: "agents/code-explorer.md",
+  health: "healthy",
+};
+
 describe("SlashCommandDispatcher /agents command (Phase 16 / Plan 03, D-AgentsList)", () => {
   it("returns show_result for /agents and lists the built-in agent", async () => {
     const { dispatcher } = buildStack();
@@ -560,6 +579,25 @@ describe("SlashCommandDispatcher /agents command (Phase 16 / Plan 03, D-AgentsLi
     expect(content).toMatch(/Built-in/);
     expect(content).toMatch(/User/);
     expect(content).toMatch(/Workspace/);
+  });
+
+  it("labels Claude plugin agents as plugin even when IDs use pluginName:name format", async () => {
+    const { dispatcher, manager } = buildStack();
+    manager
+      .getAgentRegistry()
+      .replaceSource("plugin:ecc", [claudePluginAgent]);
+
+    const r = await dispatcher.dispatch({
+      conversationId: "conv-1",
+      rawInput: "/agents",
+    });
+    if (!r.status || r.action !== "show_result") {
+      throw new Error("expected show_result");
+    }
+
+    expect(r.content).toContain(
+      "ecc:code-explorer — code-explorer: Analyzes codebases and recommends integration points. [Plugin]"
+    );
   });
 
   it("does not crash on an empty registry (built-ins cleared)", async () => {

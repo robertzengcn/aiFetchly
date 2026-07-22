@@ -1,20 +1,20 @@
 // src/service/pluginCompat/PluginCommandSourceReader.ts
 // Plugin + Claude-compatible prompt command loader (PRD §8.2, §10; design §10).
 //
-// Reads a plugin's prompt commands from TWO sources and returns validated
-// SlashCommandDefinitions + diagnostics:
-//   1. Native physical `<installPath>/commands/*.md` (every format).
+// Reads a plugin's prompt commands from format-specific sources and returns
+// validated SlashCommandDefinitions + diagnostics:
+//   1. Native physical `<installPath>/commands/*.md` for AiFetchly plugins.
 //   2. Claude manifest `commands` declarations (string / string[] / object map
-//      with `source` or inline `content`). `true` auto-detects the directory,
-//      which source #1 already covers, so it adds nothing.
+//      with `source` or inline `content`). `true` or a missing declaration
+//      auto-detects the conventional root `commands/` directory.
 //
 // Native files are STRICT: they must declare `type: prompt` and a valid name
 // (buildPromptCommandDefinition rejects otherwise). Claude-sourced commands
 // (path files + inline content) are LENIENT: missing fields fall back to the
-// mapping key / entry description and `type` is forced to `prompt`, because
-// Claude command files commonly omit them (design §10.4, §17.2). A Claude
-// command that explicitly declares an execution type (local/local-jsx/shell)
-// is skipped with `claude-format-unsupported-feature`.
+// mapping key, filename, entry description, and `type` is forced to `prompt`,
+// because Claude command files commonly omit them (design §10.4, §17.2). A
+// Claude command that explicitly declares an execution type
+// (local/local-jsx/shell) is skipped with `claude-format-unsupported-feature`.
 //
 // SECURITY (design §11.4, §14.5):
 //   - All file paths resolve through resolvePluginRelativePath (path traversal
@@ -109,8 +109,10 @@ function stringOr(v: unknown): string | undefined {
 }
 
 /**
- * Read all prompt commands for a plugin. Native `commands/*.md` is always read;
- * Claude manifest declarations are read on top when present. The same file
+ * Read all prompt commands for a plugin. Native `commands/*.md` is read for
+ * AiFetchly plugins. Claude plugins use Claude command declarations, with
+ * `commands/` auto-detected when the declaration is missing or `true`, so
+ * Claude-style command files can omit AiFetchly-only frontmatter. The same file
  * referenced twice (e.g. native dir + manifest path) is silently deduplicated
  * by source; distinct declarations that collapse to the same command id keep
  * the first and emit a duplicate diagnostic (design §17.3).
@@ -129,12 +131,19 @@ export class PluginCommandSourceReader {
     const diagnostics: AIFetchlyConfigDiagnostic[] = [];
     const rawDrafts: RawCommandDraft[] = [];
 
-    rawDrafts.push(
-      ...(await readNativeCommandFiles(input.installPath, sourceId, diagnostics))
-    );
-    rawDrafts.push(
-      ...(await readClaudeCommandDeclarations(input, sourceId, diagnostics))
-    );
+    if (input.manifest.format === "claude") {
+      rawDrafts.push(
+        ...(await readClaudeCommandDeclarations(input, sourceId, diagnostics))
+      );
+    } else {
+      rawDrafts.push(
+        ...(await readNativeCommandFiles(
+          input.installPath,
+          sourceId,
+          diagnostics
+        ))
+      );
+    }
 
     const definitions: SlashCommandDefinition[] = [];
     const seenSources = new Set<string>();
@@ -194,9 +203,13 @@ async function readClaudeCommandDeclarations(
   diagnostics: AIFetchlyConfigDiagnostic[]
 ): Promise<RawCommandDraft[]> {
   const declaration = getClaudeCommandDeclaration(input.manifest);
-  // undefined (no commands field) or true (auto-detect dir, already covered by
-  // the native read) add no extra drafts.
-  if (declaration === undefined || declaration === true) return [];
+  if (declaration === undefined || declaration === true) {
+    return readClaudeAutoDetectedCommandFiles(
+      input.installPath,
+      sourceId,
+      diagnostics
+    );
+  }
 
   const out: RawCommandDraft[] = [];
 
@@ -302,6 +315,23 @@ async function readClaudeCommandDeclarations(
     )
   );
   return out;
+}
+
+async function readClaudeAutoDetectedCommandFiles(
+  installPath: string,
+  sourceId: string,
+  diagnostics: AIFetchlyConfigDiagnostic[]
+): Promise<RawCommandDraft[]> {
+  const absDir = path.join(installPath, "commands");
+  if (!fs.existsSync(absDir)) return [];
+  return readMarkdownDir(
+    absDir,
+    "commands",
+    "claude-file",
+    {},
+    sourceId,
+    diagnostics
+  );
 }
 
 /** Resolve a manifest-declared relative path and collect markdown drafts. */
@@ -430,12 +460,16 @@ async function readMarkdownFile(
       return null;
     }
     const content = await fs.promises.readFile(abs, "utf8");
+    const fallbackName =
+      fallbacks.fallbackName ??
+      (kind === "claude-file" ? path.basename(rel, ".md") : undefined);
     return {
       content,
       relativePath: rel,
       absPath: abs,
       kind,
-      ...fallbacks,
+      fallbackName,
+      fallbackDescription: fallbacks.fallbackDescription,
     };
   } catch (err) {
     diagnostics.push(ioDiag(sourceId, rel, err));
@@ -451,9 +485,10 @@ async function readMarkdownFile(
  *
  * Native drafts are strict: frontmatter is required and the validator enforces
  * `type: prompt` + a valid name (no fallbacks). Claude drafts are lenient:
- * missing frontmatter is tolerated for inline content, missing name/description
- * fall back to the mapping key / entry description, and `type` is forced to
- * `prompt` — UNLESS the frontmatter explicitly declares an unsupported
+ * missing frontmatter is tolerated for inline content, missing
+ * name/description fall back to the mapping key, filename, or entry
+ * description, and `type` is forced to `prompt` — UNLESS the frontmatter
+ * explicitly declares an unsupported
  * execution type (local/local-jsx/shell), which is skipped with
  * `claude-format-unsupported-feature`.
  */
