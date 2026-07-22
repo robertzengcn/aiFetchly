@@ -15,8 +15,18 @@ import { listSlashCommands } from "@/views/api/slashCommands";
 import type { SlashCommandView } from "@/entityTypes/slashCommandTypes";
 import type { SlashCommandListResponse } from "@/entityTypes/slashCommandTypes";
 
+// Capture the config-changed callback the composer registers so tests can
+// simulate a live plugin/config change arriving from the main process.
+const configChangedCallback = vi.hoisted(() => ({
+  current: null as ((event: unknown) => void) | null,
+}));
+
 vi.mock("@/views/api/slashCommands", () => ({
   listSlashCommands: vi.fn(),
+  onAifetchlyConfigChanged: vi.fn((cb: (event: unknown) => void) => {
+    configChangedCallback.current = cb;
+    return () => undefined;
+  }),
 }));
 
 const i18n = createI18n({
@@ -97,6 +107,7 @@ describe("AiChatV2Composer conversation-scoped slash suggestions", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.clearAllMocks();
+    configChangedCallback.current = null;
     vi.mocked(listSlashCommands).mockResolvedValue({
       status: true,
       commands: [command("help")],
@@ -210,5 +221,44 @@ describe("AiChatV2Composer conversation-scoped slash suggestions", () => {
     const name = wrapper.find(".slash-suggestions__name").text();
     expect(name).toContain("conv-B");
     expect(name).not.toContain("conv-A");
+  });
+
+  it("live-refreshes open slash suggestions when a config/plugin change arrives (PRD Problem 2)", async () => {
+    const wrapper = mountComposer("conv-A");
+    await wrapper.find('[data-testid="composer-input"]').setValue("/");
+    await vi.advanceTimersByTimeAsync(130);
+    await flushPromises();
+    expect(listSlashCommands).toHaveBeenCalledTimes(1);
+
+    // A plugin install/disable broadcasts AIFETCHLY_CONFIG_CHANGED. The
+    // composer is already showing "/" suggestions → it must re-fetch without
+    // another keystroke.
+    expect(configChangedCallback.current).not.toBeNull();
+    vi.mocked(listSlashCommands).mockClear();
+    configChangedCallback.current?.({ source: "plugin" });
+    await vi.advanceTimersByTimeAsync(130);
+    await flushPromises();
+
+    expect(listSlashCommands).toHaveBeenCalledWith({
+      conversationId: "conv-A",
+      query: "",
+    });
+  });
+
+  it("does NOT refresh on a config change when the draft is not a slash command (PRD Problem 2)", async () => {
+    const wrapper = mountComposer("conv-A");
+    // Plain-text draft — suggestions are closed.
+    await wrapper.find('[data-testid="composer-input"]').setValue("hello");
+    await vi.advanceTimersByTimeAsync(130);
+    await flushPromises();
+    vi.mocked(listSlashCommands).mockClear();
+
+    expect(configChangedCallback.current).not.toBeNull();
+    configChangedCallback.current?.({ source: "plugin" });
+    await vi.advanceTimersByTimeAsync(130);
+    await flushPromises();
+
+    // Dropdown must not have opened / fetched unprompted.
+    expect(listSlashCommands).not.toHaveBeenCalled();
   });
 });

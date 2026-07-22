@@ -10,6 +10,7 @@ import { PluginDiagnosticsService } from "@/service/PluginDiagnosticsService";
 import { UserPluginAutoInstallService } from "@/service/UserPluginAutoInstallService";
 import { getPluginInstallRoot } from "@/service/pluginPaths";
 import { getAIFetchlyConfigManager } from "@/service/aifetchlyConfig/AIFetchlyConfigManager";
+import { broadcastAifetchlyConfigChanged } from "@/main-process/communication/aifetchlyConfigEvents";
 import type { SlashCommandView } from "@/entityTypes/slashCommandTypes";
 import type {
   PluginSummary,
@@ -268,6 +269,8 @@ export function registerPluginIpcHandlers(): void {
           promotionError
         );
       }
+      // Plugin set changed — refresh any open slash suggestions (PRD Problem 2).
+      broadcastAifetchlyConfigChanged({ source: "plugin" });
       return result.plugin;
     }
   );
@@ -354,6 +357,8 @@ export function registerPluginIpcHandlers(): void {
           promotionError
         );
       }
+      // Plugin set changed — refresh any open slash suggestions (PRD Problem 2).
+      broadcastAifetchlyConfigChanged({ source: "plugin" });
       return r.plugin;
     }
   );
@@ -402,6 +407,8 @@ export function registerPluginIpcHandlers(): void {
         throw new Error("Plugin not found");
       }
       await PluginComponentRegistryService.applyLoadedPlugins();
+      // Enable/disable changed the effective command set — refresh suggestions.
+      broadcastAifetchlyConfigChanged({ source: "plugin" });
       return null;
     }
   );
@@ -426,12 +433,16 @@ export function registerPluginIpcHandlers(): void {
       await PluginComponentRegistryService.unregisterPluginCapabilities(
         input.name
       );
+      // Plugin removed — refresh any open slash suggestions (PRD Problem 2).
+      broadcastAifetchlyConfigChanged({ source: "plugin" });
       return null;
     }
   );
 
   registerAiValidatedHandler(PLUGIN_RELOAD, pluginNoInputSchema, async () => {
     const result = await PluginComponentRegistryService.reload();
+    // Reload re-ran command promotion — refresh any open slash suggestions.
+    broadcastAifetchlyConfigChanged({ source: "plugin" });
     return {
       enabled: result.enabled.length,
       disabled: result.disabled.length,
@@ -461,6 +472,8 @@ export function registerPluginIpcHandlers(): void {
         throw new Error("Skill not found");
       }
       await PluginComponentRegistryService.applyLoadedPlugins();
+      // Capability set changed — refresh any subscribed renderer cache.
+      broadcastAifetchlyConfigChanged({ source: "plugin" });
       return null;
     }
   );
