@@ -244,6 +244,7 @@
       <AiChatV2Composer
         :is-streaming="chatIsRunning"
         :is-processing="isPreparingAttachments"
+        :voice-enabled="voiceInputEnabled"
         :conversation-id="activeConversationId"
         @send="onSend"
         @stop="onStop"
@@ -446,6 +447,7 @@ import {
   getChatV2ToolApprovalMode,
   setChatV2ToolApprovalMode,
 } from "@/views/api/aiChatV2";
+import { getVoiceSettings } from "@/views/api/aiChatV2Voice";
 import {
   AI_PROVIDER_SETTINGS_CHANGED_EVENT,
   getAIProviderSettings,
@@ -2453,8 +2455,19 @@ watch(
   }
 );
 
+const voiceInputEnabled = ref(false);
+async function loadVoiceInputEnabled(): Promise<void> {
+  try {
+    const settings = await getVoiceSettings();
+    voiceInputEnabled.value = settings.inputMode === "push_to_talk";
+  } catch {
+    voiceInputEnabled.value = false;
+  }
+}
+
 onMounted(() => {
   void loadConversations();
+  void loadVoiceInputEnabled();
   void loadModelContextWindows();
   void loadProviderSettings();
   window.addEventListener(

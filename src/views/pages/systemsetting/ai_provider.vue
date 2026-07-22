@@ -10,6 +10,7 @@
       <v-divider></v-divider>
       <v-card-text>
         <AIProviderSettingsPanel />
+        <AiChatVoiceSettingsPanel />
       </v-card-text>
     </v-card>
   </v-container>
@@ -19,6 +20,7 @@
 import { useI18n } from "vue-i18n";
 import { useRouter } from "vue-router";
 import AIProviderSettingsPanel from "@/views/components/settings/AIProviderSettingsPanel.vue";
+import AiChatVoiceSettingsPanel from "@/views/components/settings/AiChatVoiceSettingsPanel.vue";
 
 const { t } = useI18n();
 const router = useRouter();
