@@ -68,6 +68,19 @@
       </div>
       <div class="v2-composer__actions">
         <v-btn
+          v-if="voiceEnabled && !isStreaming && !isProcessing"
+          icon
+          size="small"
+          variant="text"
+          :color="isRecording ? 'error' : undefined"
+          :disabled="isTranscribing"
+          :title="t('aiChatV2.voice.microphone') || 'Voice input'"
+          :aria-label="isRecording ? (t('aiChatV2.voice.stop_recording') || 'Stop recording') : (t('aiChatV2.voice.start_recording') || 'Start recording')"
+          @click="onMicClick"
+        >
+          <v-icon size="small">{{ isRecording ? "mdi-stop" : "mdi-microphone" }}</v-icon>
+        </v-btn>
+        <v-btn
           v-if="!isStreaming"
           color="primary"
           icon="mdi-send"
@@ -105,6 +118,8 @@ import { useI18n } from "vue-i18n";
 import AiChatV2SlashSuggestions from "./AiChatV2SlashSuggestions.vue";
 import { listSlashCommands } from "@/views/api/slashCommands";
 import type { SlashCommandView } from "@/entityTypes/slashCommandTypes";
+import { BrowserVoiceRecorder } from "./voice/BrowserVoiceRecorder";
+import { transcribeVoice } from "@/views/api/aiChatV2Voice";
 
 const MAX_UPLOAD_FILES = 3;
 const MAX_UPLOAD_FILE_BYTES = 5 * 1024 * 1024; // 5 MB
@@ -115,6 +130,11 @@ const SUPPORTED_DOC_EXTS = new Set([".pdf", ".docx", ".csv", ".xlsx", ".xls"]);
 const props = defineProps<{
   isStreaming: boolean;
   isProcessing?: boolean;
+  /**
+   * Show a push-to-talk microphone button for local voice input. Off by
+   * default; the parent enables it from voice settings (PRD §7.1).
+   */
+  voiceEnabled?: boolean;
   /**
    * Active conversation id, used to scope slash-command suggestions so a
    * workspace command only appears in chats using that workspace (FR-1).
@@ -132,6 +152,82 @@ const { t } = useI18n();
 
 const draft = ref("");
 const selectedFiles = ref<File[]>([]);
+
+// --- Local voice input (push-to-talk; PRD §7.1/§7.2) ---
+// The composer owns the recorder + transcribe call for the MVP: the transcript
+// is appended to the draft for review (no auto-send). Auto-send + spoken
+// responses move orchestration to AiChatV2.vue in later phases.
+const voiceRecorder = new BrowserVoiceRecorder();
+const isRecording = ref(false);
+const isTranscribing = ref(false);
+
+function blobToBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      const result = reader.result;
+      if (typeof result !== "string") {
+        reject(new Error("Failed to read audio"));
+        return;
+      }
+      const comma = result.indexOf(",");
+      resolve(comma >= 0 ? result.slice(comma + 1) : result);
+    };
+    reader.onerror = () =>
+      reject(reader.error ?? new Error("Failed to read audio"));
+    reader.readAsDataURL(blob);
+  });
+}
+
+function appendTranscript(text: string): void {
+  const clean = text.trim();
+  if (clean.length === 0) return;
+  draft.value =
+    draft.value.trim().length === 0
+      ? clean
+      : `${draft.value.trim()} ${clean}`;
+}
+
+async function onMicClick(): Promise<void> {
+  if (isTranscribing.value) return;
+  if (isRecording.value) {
+    isRecording.value = false;
+    isTranscribing.value = true;
+    try {
+      const recording = await voiceRecorder.stop();
+      const audioBase64 = await blobToBase64(recording.blob);
+      const result = await transcribeVoice({
+        audioBase64,
+        mimeType: recording.mimeType,
+      });
+      if (result.transcript && result.transcript.trim().length > 0) {
+        appendTranscript(result.transcript);
+      } else {
+        showNotice(t("aiChatV2.voice.empty_transcript") || "No speech was detected.");
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      showNotice(
+        t("aiChatV2.voice.transcription_failed") ||
+          `Voice transcription failed: ${msg}`,
+      );
+    } finally {
+      isTranscribing.value = false;
+    }
+    return;
+  }
+  // Start recording.
+  try {
+    await voiceRecorder.start(60_000);
+    isRecording.value = true;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    showNotice(
+      t("aiChatV2.voice.permission_denied") ||
+        `Microphone unavailable: ${msg}`,
+    );
+  }
+}
 const fileNotice = ref("");
 const fileInputRef = ref<HTMLInputElement | null>(null);
 
