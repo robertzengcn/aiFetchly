@@ -2443,6 +2443,8 @@ export default {
     test_connection: "Verbindung testen",
     export_diagnostics: "Diagnose exportieren",
     diagnostics_copied: "Diagnose in Zwischenablage kopiert",
+    no_diagnostics: "Keine Diagnosen verfügbar.",
+    no_skills: "Keine Skills in diesem Plugin.",
     enabled_label: "Aktiviert",
     command_count: "Befehle: {count}",
     no_commands: "Keine Slash-Befehle in diesem Plugin.",

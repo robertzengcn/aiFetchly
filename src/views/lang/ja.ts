@@ -2399,6 +2399,8 @@ export default {
     test_connection: "接続テスト",
     export_diagnostics: "診断をエクスポート",
     diagnostics_copied: "診断をクリップボードにコピーしました",
+    no_diagnostics: "診断情報はありません。",
+    no_skills: "このプラグインにはスキルがありません。",
     enabled_label: "有効",
     command_count: "コマンド: {count}",
     no_commands: "このプラグインにはスラッシュコマンドがありません。",

@@ -198,13 +198,38 @@ export class CommandRegistry {
   }
 
   /**
-   * Scoped renderer-safe views — {@link listScoped} projected through the
-   * same {@link toView} used by {@link listViews} (so body/metadata stay
-   * stripped — T-13-Leak). Workspace commands outside the conversation's
-   * scope never appear (FR-1, AC-1).
+   * Scoped renderer-safe views, deduped to the EFFECTIVE command set so the
+   * suggestion list and `/help` agree with dispatch (PRD Problem 1).
+   *
+   * A command appears iff it is the precedence winner for its own primary
+   * name; a lower-precedence command defining the same primary name is
+   * shadowed and omitted (a built-in `/help` hides a plugin `/help`). Each
+   * shown command's displayed aliases are filtered to the ones it actually
+   * wins, so no suggested alias can resolve to a different command on
+   * dispatch. Ranking mirrors {@link getByLookupNameScoped} via
+   * {@link resolveWinner}, and `enabled` is intentionally ignored so a
+   * disabled winner still shows (the dispatcher surfaces a readable disabled
+   * result).
+   *
+   * Body/metadata stay stripped via {@link toView} (T-13-Leak), and workspace
+   * commands outside the conversation's scope never appear (FR-1, AC-1) —
+   * {@link isAllowed} filters them before any ranking.
    */
   listScopedViews(scope: CommandRegistryScope): SlashCommandView[] {
-    return this.listScoped(scope).map(toView);
+    const scoped = this.listScoped(scope);
+    const out: SlashCommandView[] = [];
+    for (const cmd of scoped) {
+      const primaryWinner = this.resolveWinner(cmd.name, scoped);
+      // Shadowed on its own primary name → never suggested; the higher-
+      // precedence command with that name is shown instead.
+      if (!primaryWinner || primaryWinner.id !== cmd.id) continue;
+      const winningAliases = cmd.aliases.filter((alias) => {
+        const aliasWinner = this.resolveWinner(alias, scoped);
+        return !!aliasWinner && aliasWinner.id === cmd.id;
+      });
+      out.push(toView({ ...cmd, aliases: winningAliases }));
+    }
+    return out;
   }
 
   /**
@@ -230,13 +255,35 @@ export class CommandRegistry {
     lookupName: string,
     scope: CommandRegistryScope
   ): SlashCommandDefinition | null {
+    const scoped = this.listScoped(scope);
+    const winner = this.resolveWinner(lookupName, scoped);
+    return winner ? { ...winner } : null;
+  }
+
+  /**
+   * Among `scoped` (already {@link isAllowed}-filtered) commands, return the
+   * one that wins `identity` (primary name or alias). Pure; no mutation.
+   *
+   * Factored out so the scoped listing path ({@link listScopedViews}) and the
+   * single-lookup path ({@link getByLookupNameScoped}) share one ranking and
+   * can never disagree (PRD Problem 1 — suggestions must match dispatch).
+   *
+   * Ranking:
+   *   1. Lowest {@link SOURCE_RANK} wins (built-in > workspace > user > plugin).
+   *   2. Same rank: a primary-name match (matchRank 0) beats an alias match
+   *      (matchRank 1).
+   *   3. Exact tie: insertion order of `scoped` (which mirrors by-id order).
+   * `enabled` is intentionally ignored so disabled commands still shadow.
+   */
+  private resolveWinner(
+    identity: string,
+    scoped: readonly SlashCommandDefinition[]
+  ): SlashCommandDefinition | null {
     let winner: { cmd: SlashCommandDefinition; matchRank: number } | null =
       null;
-    for (const cmd of this.byId.values()) {
-      if (!this.isAllowed(cmd, scope)) continue;
-
-      const primaryMatch = cmd.name === lookupName;
-      const aliasMatch = cmd.aliases.includes(lookupName);
+    for (const cmd of scoped) {
+      const primaryMatch = cmd.name === identity;
+      const aliasMatch = cmd.aliases.includes(identity);
       if (!primaryMatch && !aliasMatch) continue;
 
       const matchRank = primaryMatch ? 0 : 1;
@@ -254,7 +301,7 @@ export class CommandRegistry {
         winner = { cmd, matchRank };
       }
     }
-    return winner ? { ...winner.cmd } : null;
+    return winner ? winner.cmd : null;
   }
 
   /**
