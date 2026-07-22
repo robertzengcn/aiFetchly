@@ -93,6 +93,15 @@ export interface ToolCatalogStateSnapshot {
   readonly announcedDeferredNames: readonly string[];
 }
 
+/** Persisted per-conversation catalog state view (design §7.3). */
+export interface ConversationToolStateView {
+  readonly conversationId: string;
+  readonly discoveredToolNames: readonly string[];
+  readonly announcedDeferredToolNames: readonly string[];
+  readonly catalogHash?: string;
+  readonly updatedAt?: string;
+}
+
 /** Decision returned by ToolPromptBudgetService. */
 export interface ToolCatalogModeDecision {
   /** Effective behavior for this turn. */
