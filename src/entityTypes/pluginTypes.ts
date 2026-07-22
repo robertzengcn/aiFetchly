@@ -221,7 +221,9 @@ export interface PluginSkillComponent {
 }
 
 export interface PluginMcpServerComponent {
+  readonly id: number;
   readonly name: string;
+  readonly serverName?: string;
   readonly enabled: boolean;
   readonly transport: PluginMcpTransport;
   readonly health: PluginHealth;

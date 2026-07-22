@@ -37,6 +37,7 @@ import {
 } from "@/config/channellist";
 import { registerAiValidatedHandler } from "@/main-process/communication/_shared/registerValidatedHandler";
 import { registerValidatedHandler } from "@/main-process/communication/_shared/registerValidatedHandler";
+import type { MCPToolEntity } from "@/entity/MCPTool.entity";
 import {
   pluginNoInputSchema,
   pluginByNameInputSchema,
@@ -134,6 +135,72 @@ function toPluginCommandView(
   };
 }
 
+interface PluginMcpServerViewEntry {
+  readonly id: number;
+  readonly name: string;
+  readonly serverName: string;
+  readonly enabled: boolean;
+  readonly transport: MCPToolEntity["transport"];
+  readonly health: "healthy" | "needs_configuration";
+  readonly toolCount: number;
+  readonly error?: string;
+}
+
+function parseJsonObject(raw: string | undefined): Record<string, unknown> {
+  if (!raw) return {};
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (
+      typeof parsed === "object" &&
+      parsed !== null &&
+      !Array.isArray(parsed)
+    ) {
+      return parsed as Record<string, unknown>;
+    }
+  } catch {
+    // Malformed metadata should not make the plugin detail surface unusable.
+  }
+  return {};
+}
+
+function parseToolCount(raw: string | undefined): number {
+  if (!raw) return 0;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.length : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function toPluginMcpServerView(
+  server: MCPToolEntity
+): PluginMcpServerViewEntry {
+  const metadata = parseJsonObject(server.metadata);
+  const pluginServerName = metadata.pluginServerName;
+  const name =
+    typeof pluginServerName === "string" && pluginServerName.length > 0
+      ? pluginServerName
+      : server.serverName;
+  const hasConfig =
+    (server.transport === "stdio" && !!server.command) ||
+    ((server.transport === "sse" || server.transport === "websocket") &&
+      (!!server.host || !!server.url));
+  const error = hasConfig
+    ? undefined
+    : `MCP server "${server.serverName}" is missing required configuration.`;
+  return {
+    id: server.id,
+    name,
+    serverName: server.serverName,
+    enabled: server.enabled,
+    transport: server.transport,
+    health: hasConfig ? "healthy" : "needs_configuration",
+    toolCount: parseToolCount(server.tools),
+    ...(error ? { error } : {}),
+  };
+}
+
 /** Live slash commands promoted by a plugin, as renderer-safe views. */
 function pluginCommandViews(pluginName: string): {
   readonly views: readonly PluginCommandViewEntry[];
@@ -217,11 +284,7 @@ export function registerPluginIpcHandlers(): void {
           manifestPath: s.pluginComponentPath,
           health: "healthy",
         })),
-        mcpServers: mcpServers.map((s) => ({
-          id: s.id,
-          serverName: s.serverName,
-          enabled: s.enabled,
-        })),
+        mcpServers: mcpServers.map((s) => toPluginMcpServerView(s)),
         agents: agents.map((a) => ({
           id: a.id,
           name: a.name,

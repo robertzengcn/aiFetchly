@@ -65,6 +65,7 @@ export interface PluginSkillComponent {
 export interface PluginMcpServerComponent {
   id: number;
   name: string;
+  serverName?: string;
   enabled: boolean;
   transport: string;
   health: string;

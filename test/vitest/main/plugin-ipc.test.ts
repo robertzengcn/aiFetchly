@@ -3,6 +3,9 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 // Mock electron's ipcMain so we can drive handlers without a real Electron.
 const handlers = new Map<string, (...args: unknown[]) => Promise<unknown>>();
 vi.mock("electron", () => ({
+  BrowserWindow: {
+    getAllWindows: () => [],
+  },
   ipcMain: {
     handle: (channel: string, fn: (...args: unknown[]) => Promise<unknown>) => {
       handlers.set(channel, fn);
@@ -87,9 +90,12 @@ vi.mock("@/modules/MCPToolModule", () => ({
       return [
         {
           id: 42,
-          serverName: "demo-mcp",
+          serverName: "demo-plugin__demo-mcp",
           enabled: true,
           transport: "stdio",
+          command: "npx",
+          tools: JSON.stringify(["search", "fetch"]),
+          metadata: JSON.stringify({ pluginServerName: "demo-mcp" }),
         },
       ];
     }
@@ -267,7 +273,12 @@ describe("plugin-ipc", () => {
         mcpServers: [
           expect.objectContaining({
             id: 42,
-            serverName: "demo-mcp",
+            name: "demo-mcp",
+            serverName: "demo-plugin__demo-mcp",
+            enabled: true,
+            transport: "stdio",
+            health: "healthy",
+            toolCount: 2,
           }),
         ],
         installPath: "/app-data/plugins/installed/demo-plugin",
