@@ -152,7 +152,7 @@ export class EmailSearchTaskModule extends BaseModule {
 
     const child = utilityProcess.fork(childPath, [], {
       stdio: "pipe",
-      execArgv: ["--inspect"],
+      execArgv: [],
       env: {
         ...process.env,
         NODE_OPTIONS: "",

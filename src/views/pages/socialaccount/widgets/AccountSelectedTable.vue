@@ -1,6 +1,7 @@
 <template>
     
-    <v-data-table-server v-model="selected" :search="search" :headers="headers" :items-per-page="itemsPerPage"
+    <v-data-table-server
+v-model="selected" :search="search" :headers="headers" :items-per-page="itemsPerPage"
         :items-length="totalItems" :items="serverItems" :loading="loading" item-value="name" @update:options="loadItems" return-object show-select single-select>
         <template v-slot:[`item.cookies`]="{ item }">
             <v-chip v-if="item.cookies" class="mx-2" color="secondary">
@@ -61,7 +62,6 @@ const FakeAPI = {
         const fpage=(fetchparam.page-1)*fetchparam.itemsPerPage
         const searchParam:ItemSearchparam={ page: fpage, 
             size: fetchparam.itemsPerPage, 
-            sortby: fetchparam.sortBy, 
             search: fetchparam.search,
 
         }

@@ -14,6 +14,11 @@ import type {
   ToolCatalogModeDecision,
   ToolCatalogStateSnapshot,
 } from "@/entityTypes/toolCatalogTypes";
+import type {
+  AIChatRecoveryLayer,
+  AIChatRecoveryReason,
+  ChatV2RecoveryMetadata,
+} from "@/service/AIChatRecoveryTypes";
 
 /**
  * Sink the engine emits non-terminal and terminal events into.
@@ -21,6 +26,12 @@ import type {
  */
 export interface AIChatQueryEventSink {
   emit(event: AIChatQueryEvent): void;
+  /**
+   * Optional persistence barrier for sinks that save events asynchronously.
+   * The query loop calls this before executing a tool so tool-call persistence
+   * does not race DB-writing tools such as artifact creation.
+   */
+  flush?(): Promise<void>;
 }
 
 export interface AIChatQueryStartEvent {
@@ -169,10 +180,42 @@ export interface AIChatQueryUsageUpdateEvent {
   totalTokens: number;
 }
 
+/**
+ * Recovery status event for the seven-layer recovery strategy. Emitted
+ * whenever a recovery layer becomes active, advances, or resolves.
+ * Technical-design §4.4.
+ */
+export interface AIChatQueryRecoveryStatusEvent {
+  type: "recovery_status";
+  conversationId: string;
+  messageId: string;
+  /** Which recovery layer is reporting. */
+  layer: AIChatRecoveryLayer;
+  /** Classified reason for the underlying failure. */
+  reason: AIChatRecoveryReason;
+  /** 1-based attempt within this layer. */
+  attempt?: number;
+  /** Max attempts for this layer/profile, when applicable. */
+  maxAttempts?: number;
+  /** Delay before the next retry, when applicable. */
+  delayMs?: number;
+  /** Elapsed time in persistent retry, when applicable. */
+  elapsedMs?: number;
+  /** Original model the turn started with. */
+  originalModel?: string;
+  /** Current model after a fallback. */
+  currentModel?: string;
+  /** Resolved fallback model, on model_fallback events. */
+  fallbackModel?: string;
+  /** Human-readable message (i18n key or English fallback). */
+  message?: string;
+}
+
 export type AIChatQueryEvent =
   | AIChatQueryStartEvent
   | AIChatQueryTokenEvent
   | AIChatQueryRetryEvent
+  | AIChatQueryRecoveryStatusEvent
   | AIChatQueryToolCallEvent
   | AIChatQueryToolProgressEvent
   | AIChatQueryToolResultNormalEvent
@@ -208,6 +251,9 @@ export type AIChatQueryLoopResult =
       /** Final deferred-catalog discovered-tool snapshot, when deferred mode
        * was active, so the engine can persist it across restart (FR-5/AC-8). */
       toolCatalogState?: ToolCatalogStateSnapshot;
+      /** Recovery metadata accumulated during the turn, if any recovery
+       * layers were activated. Persisted on the assistant row metadata. */
+      recoveryMetadata?: ChatV2RecoveryMetadata;
     }
   | {
       type: "cancelled";
@@ -220,6 +266,8 @@ export type AIChatQueryLoopResult =
       promptTokens?: number;
       completionTokens?: number;
       toolCatalogState?: ToolCatalogStateSnapshot;
+      /** Recovery metadata for the cancelled turn, if any. */
+      recoveryMetadata?: ChatV2RecoveryMetadata;
     }
   | {
       type: "paused_for_permission";
@@ -238,6 +286,8 @@ export type AIChatQueryLoopResult =
       model?: string;
       responseId?: string;
       toolCatalogState?: ToolCatalogStateSnapshot;
+      /** Recovery metadata accumulated before the failure, if any. */
+      recoveryMetadata?: ChatV2RecoveryMetadata;
     };
 
 /** State stored when a tool needs user permission. */

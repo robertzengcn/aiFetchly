@@ -19,6 +19,7 @@ vi.mock("@/views/api/aiChatV2", () => ({
     data: [],
     default_model: undefined,
   }),
+  clearChatV2Conversation: vi.fn().mockResolvedValue({ deleted: 0 }),
 }));
 
 vi.mock("@/views/api/workspace", () => ({
@@ -28,6 +29,24 @@ vi.mock("@/views/api/workspace", () => ({
 vi.mock("@/views/api/aiChat", () => ({
   subscribeToFileOperations: vi.fn(),
   unsubscribeFromFileOperations: vi.fn(),
+}));
+
+// Phase 13 (Plan 04): AiChatV2.vue's onMounted now subscribes to AiFetchly
+// config-changed events and seeds a slash-command cache via listSlashCommands.
+// Both ultimately call window.api.{receive,invoke} which is undefined in the
+// happy-dom test env. Mock the module to keep the existing workspace test
+// focused on its own scenario without wiring up a global api mock.
+vi.mock("@/views/api/slashCommands", () => ({
+  listSlashCommands: vi.fn().mockResolvedValue({
+    status: true,
+    commands: [],
+    diagnostics: [],
+    msg: "",
+  }),
+  dispatchSlashCommand: vi.fn(),
+  reloadAifetchlyConfig: vi.fn(),
+  getAifetchlyConfigStatus: vi.fn(),
+  onAifetchlyConfigChanged: vi.fn().mockReturnValue(() => undefined),
 }));
 
 const i18n = createI18n({
@@ -60,7 +79,7 @@ function mountChat() {
         AiChatV2QuestionCard: true,
         AiChatV2PlanApprovalCard: true,
         AiChatV2Composer: {
-          template: "<div><slot name=\"prepend\" /></div>",
+          template: '<div><slot name="prepend" /></div>',
         },
         AiChatV2ModeSelector: true,
         AiChatV2ModelSelector: true,
@@ -71,7 +90,7 @@ function mountChat() {
         WorkspaceRequiredCard: {
           props: ["conversationId"],
           template:
-            "<div data-testid=\"workspace-required\" :data-conversation-id=\"conversationId\" />",
+            '<div data-testid="workspace-required" :data-conversation-id="conversationId" />',
         },
         VBtn: true,
         VCard: true,

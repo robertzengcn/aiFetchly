@@ -5,6 +5,7 @@ import * as path from 'path';
 import ClosePlugin from './vite-plugin-close.js'
 
 import checker from 'vite-plugin-checker'
+import { optionalChecker } from './vite-checker-toggle.mjs';
 
 //import commonjs from '@rollup/plugin-commonjs';
 //import copy from 'rollup-plugin-copy'
@@ -79,10 +80,10 @@ export default ({ mode }) => {
         // }),
         sourcemaps(),
         ClosePlugin(),
-        checker({
+        ...optionalChecker(() => checker({
             // e.g. use TypeScript check
             typescript: true,
-        }),
+        })),
             // nodePolyfills()
         ],
         resolve: {

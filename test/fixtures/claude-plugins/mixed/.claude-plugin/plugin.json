@@ -1,0 +1,13 @@
+{
+  "name": "claude-mixed-pack",
+  "version": "1.0.0",
+  "description": "Claude plugin with one skill and one inline MCP server.",
+  "skills": true,
+  "mcp": {
+    "echo": {
+      "transport": "stdio",
+      "command": "node",
+      "args": ["-e", "console.error('echo')"]
+    }
+  }
+}

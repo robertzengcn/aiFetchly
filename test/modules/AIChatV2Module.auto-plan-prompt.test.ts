@@ -24,12 +24,14 @@ describe("AIChatV2Module.getDefaultSystemPrompt (auto-plan)", function () {
     const prompt = mod.getDefaultSystemPrompt();
 
     // Starts with the base prompt
-    expect(prompt).to.contain("You are a helpful assistant.");
+    expect(prompt).to.contain("You are aiFetchly's built-in helpful assistant.");
     // Contains the auto-plan section built by ChatModePromptSection
     expect(prompt).to.contain("EnterPlanMode");
     expect(prompt).to.contain("Auto Plan Mode");
     // The base prompt should come before the auto-plan section
-    expect(prompt.indexOf("You are a helpful assistant.")).to.be.lessThan(
+    expect(
+      prompt.indexOf("You are aiFetchly's built-in helpful assistant.")
+    ).to.be.lessThan(
       prompt.indexOf("Auto Plan Mode")
     );
   });
@@ -38,6 +40,8 @@ describe("AIChatV2Module.getDefaultSystemPrompt (auto-plan)", function () {
     const mod = new AIChatV2Module();
     const prompt = mod.getDefaultSystemPrompt();
 
-    expect(prompt).to.contain("You are a helpful assistant.\n\n# Auto Plan Mode");
+    expect(prompt).to.contain(
+      "You are aiFetchly's built-in helpful assistant.\n\n# Auto Plan Mode"
+    );
   });
 });

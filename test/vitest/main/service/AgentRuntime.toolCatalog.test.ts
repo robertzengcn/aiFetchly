@@ -16,6 +16,9 @@ const definition: AgentDefinitionView = {
   maxContinueCalls: 4,
   outputSchema: { required: ["summary"] },
   status: "active",
+  source: "built-in",
+  health: "healthy",
+  manifest: {},
 };
 
 vi.mock("@/modules/AgentDefinitionModule", () => ({

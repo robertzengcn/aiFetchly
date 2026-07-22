@@ -21,6 +21,7 @@ describe("PluginManagementModule", function () {
   afterEach(async () => {
     const mod = new PluginManagementModule();
     await mod.uninstallPlugin("test-plugin-pmm");
+    await mod.uninstallPlugin("marketplace-plugin-pmm");
     await mod.uninstallPlugin("toggle-plugin-pmm");
     await mod.uninstallPlugin("update-plugin-pmm");
   });
@@ -35,6 +36,38 @@ describe("PluginManagementModule", function () {
     expect(found?.version).to.equal("1.0.0");
     expect(found?.enabled).to.equal(1);
     expect(found?.health).to.equal("healthy");
+  });
+
+  it("persists install provenance for marketplace plugins", async () => {
+    const mod = new PluginManagementModule();
+    await mod.createPlugin({
+      name: "marketplace-plugin-pmm",
+      version: "1.0.0",
+      description: "marketplace plugin",
+      installPath: "/tmp/marketplace-plugin-pmm",
+      manifestJson: JSON.stringify({
+        name: "marketplace-plugin-pmm",
+        version: "1.0.0",
+      }),
+      source: "marketplace",
+      sourceKind: "local-folder",
+      sourceUri: "/tmp/marketplace-source",
+      sourceRef: "main",
+      sourceMetaJson: JSON.stringify({
+        marketplace: {
+          marketplaceName: "team-tools",
+          entryName: "marketplace-plugin-pmm",
+        },
+      }),
+    });
+
+    const found = await mod.getPluginByName("marketplace-plugin-pmm");
+    expect(found?.source).to.equal("marketplace");
+    expect(found?.sourceKind).to.equal("local-folder");
+    expect(found?.sourceUri).to.equal("/tmp/marketplace-source");
+    expect(found?.sourceRef).to.equal("main");
+    expect(found?.sourceMetaJson).to.contain('"marketplaceName":"team-tools"');
+    expect(found?.sourceMetaJson).to.contain('"entryName":"marketplace-plugin-pmm"');
   });
 
   it("lists installed plugins", async () => {

@@ -19,6 +19,12 @@ import { SkillRegistry } from "@/config/skillsRegistry";
 import { ToolExecutor } from "@/service/ToolExecutor";
 import { SkillPermissionService } from "@/service/SkillPermissionService";
 import { SHELL_RATE_LIMITS } from "@/config/shellToolConfig";
+import { HookDispatcher } from "@/service/hooks/HookDispatcher";
+import type {
+  AggregatedHookResult,
+  HookToolDescriptor,
+  HookToolSource,
+} from "@/entityTypes/hookTypes";
 
 // ---------------------------------------------------------------------------
 // Input sanitization (FR-003, FR-024)
@@ -98,20 +104,43 @@ function validateArgs(
 // Audit logging (FR-024)
 // ---------------------------------------------------------------------------
 
-/** Sanitize args for logging — strips sensitive values. */
-function sanitizeForLog(
+/**
+ * Keys whose values are redacted from tool audit logs. Covers proxy credentials
+ * (proxy AI tools) plus the common secret-bearing fields other tools may carry.
+ * Matched case-insensitively, ignoring separators (_, -).
+ */
+const SENSITIVE_KEY_RE =
+  /^(pass|password|passwd|pwd|secret|token|api[_-]?key|access[_-]?token|refresh[_-]?token|authorization|private[_-]?key|client[_-]?secret)$/i;
+
+function sanitizeValue(key: string, value: unknown): unknown {
+  if (typeof value === "string") {
+    if (SENSITIVE_KEY_RE.test(key)) {
+      return "[REDACTED]";
+    }
+    return value.length > 100
+      ? `${value.substring(0, 50)}...[truncated, ${value.length} chars]`
+      : value;
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => sanitizeValue(key, item));
+  }
+  if (value !== null && typeof value === "object") {
+    const nested: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      nested[k] = sanitizeValue(k, v);
+    }
+    return nested;
+  }
+  return value;
+}
+
+/** Sanitize args for logging — redacts sensitive keys and truncates long strings. */
+export function sanitizeForLog(
   args: Record<string, unknown>
 ): Record<string, unknown> {
   const sanitized: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(args)) {
-    if (typeof value === "string") {
-      sanitized[key] =
-        value.length > 100
-          ? `${value.substring(0, 50)}...[truncated, ${value.length} chars]`
-          : value;
-    } else {
-      sanitized[key] = value;
-    }
+    sanitized[key] = sanitizeValue(key, value);
   }
   return sanitized;
 }
@@ -201,6 +230,212 @@ class ShellRateLimiter {
 const shellRateLimiter = new ShellRateLimiter();
 
 // ---------------------------------------------------------------------------
+// Pre/Post hook helpers
+// ---------------------------------------------------------------------------
+
+async function dispatchPreToolUseHooks(
+  name: string,
+  skillName: string,
+  source: HookToolSource,
+  permissionCategory: string | undefined,
+  args: Record<string, unknown>,
+  context: SkillExecutionContext
+): Promise<AggregatedHookResult> {
+  const descriptor: HookToolDescriptor = {
+    id: skillName,
+    name,
+    source,
+    permissionCategory,
+  };
+  try {
+    return await HookDispatcher.executeHooks({
+      eventName: "PreToolUse",
+      input: {
+        eventName: "PreToolUse",
+        hookRunId: `hookrun-pre-${context.toolCallId}`,
+        source: "skill-executor",
+        conversationId: context.conversationId,
+        timestamp: new Date().toISOString(),
+        tool: descriptor,
+        input: args,
+        permissionState: { allowed: true, needsPrompt: false },
+      },
+      matchQuery: name,
+      abortSignal: context.signal,
+    });
+  } catch {
+    return {
+      blocked: false,
+      additionalContexts: [],
+      systemMessages: [],
+      hookErrors: [],
+      executedHookIds: [],
+    };
+  }
+}
+
+async function dispatchPostToolUseHooks(
+  name: string,
+  skillName: string,
+  source: HookToolSource,
+  permissionCategory: string | undefined,
+  args: Record<string, unknown>,
+  output: Record<string, unknown>,
+  executionTimeMs: number,
+  context: SkillExecutionContext
+): Promise<AggregatedHookResult> {
+  const descriptor: HookToolDescriptor = {
+    id: skillName,
+    name,
+    source,
+    permissionCategory,
+  };
+  try {
+    return await HookDispatcher.executeHooks({
+      eventName: "PostToolUse",
+      input: {
+        eventName: "PostToolUse",
+        hookRunId: `hookrun-post-${context.toolCallId}`,
+        source: "skill-executor",
+        conversationId: context.conversationId,
+        timestamp: new Date().toISOString(),
+        tool: descriptor,
+        input: args,
+        output,
+        executionTimeMs,
+      },
+      matchQuery: name,
+      abortSignal: context.signal,
+    });
+  } catch {
+    return {
+      blocked: false,
+      additionalContexts: [],
+      systemMessages: [],
+      hookErrors: [],
+      executedHookIds: [],
+    };
+  }
+}
+
+async function dispatchPostToolUseFailureHooks(
+  name: string,
+  skillName: string,
+  source: HookToolSource,
+  permissionCategory: string | undefined,
+  args: Record<string, unknown>,
+  error: Record<string, unknown>,
+  executionTimeMs: number,
+  context: SkillExecutionContext
+): Promise<AggregatedHookResult> {
+  const descriptor: HookToolDescriptor = {
+    id: skillName,
+    name,
+    source,
+    permissionCategory,
+  };
+  try {
+    return await HookDispatcher.executeHooks({
+      eventName: "PostToolUseFailure",
+      input: {
+        eventName: "PostToolUseFailure",
+        hookRunId: `hookrun-fail-${context.toolCallId}`,
+        source: "skill-executor",
+        conversationId: context.conversationId,
+        timestamp: new Date().toISOString(),
+        tool: descriptor,
+        input: args,
+        error: {
+          message: String(error.error ?? error.message ?? "Unknown error"),
+        },
+        executionTimeMs,
+      },
+      matchQuery: name,
+      abortSignal: context.signal,
+    });
+  } catch {
+    return {
+      blocked: false,
+      additionalContexts: [],
+      systemMessages: [],
+      hookErrors: [],
+      executedHookIds: [],
+    };
+  }
+}
+
+async function dispatchPermissionRequestHooks(
+  name: string,
+  skillName: string,
+  source: HookToolSource,
+  permissionCategory: string | undefined,
+  args: Record<string, unknown>,
+  context: SkillExecutionContext
+): Promise<void> {
+  const descriptor: HookToolDescriptor = {
+    id: skillName,
+    name,
+    source,
+    permissionCategory,
+  };
+  try {
+    await HookDispatcher.executeHooks({
+      eventName: "PermissionRequest",
+      input: {
+        eventName: "PermissionRequest",
+        hookRunId: `hookrun-permreq-${context.toolCallId}`,
+        source: "skill-executor",
+        conversationId: context.conversationId,
+        timestamp: new Date().toISOString(),
+        tool: descriptor,
+        input: args,
+        permissionCategory: permissionCategory ?? "unknown",
+      },
+      matchQuery: name,
+      abortSignal: context.signal,
+    });
+  } catch {
+    // Non-fatal — permission request hooks are advisory
+  }
+}
+
+async function dispatchPermissionDeniedHooks(
+  name: string,
+  skillName: string,
+  source: HookToolSource,
+  permissionCategory: string | undefined,
+  args: Record<string, unknown>,
+  reason: string,
+  context: SkillExecutionContext
+): Promise<void> {
+  const descriptor: HookToolDescriptor = {
+    id: skillName,
+    name,
+    source,
+    permissionCategory,
+  };
+  try {
+    await HookDispatcher.executeHooks({
+      eventName: "PermissionDenied",
+      input: {
+        eventName: "PermissionDenied",
+        hookRunId: `hookrun-permdeny-${context.toolCallId}`,
+        source: "skill-executor",
+        conversationId: context.conversationId,
+        timestamp: new Date().toISOString(),
+        tool: descriptor,
+        input: args,
+        reason,
+      },
+      matchQuery: name,
+      abortSignal: context.signal,
+    });
+  } catch {
+    // Non-fatal — permission denied hooks are advisory
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Execution
 // ---------------------------------------------------------------------------
 
@@ -277,6 +512,15 @@ async function execute(
       SkillPermissionService.checkPermission(permissionSkillName);
     if (!permCheck.allowed) {
       if (permCheck.needsPrompt) {
+        // PermissionRequest hooks run before showing the UI prompt
+        await dispatchPermissionRequestHooks(
+          name,
+          skillName,
+          "skill-registry",
+          skill.permissionCategory,
+          resolvedArgs,
+          context
+        );
         // Return a special result indicating permission is needed.
         // StreamEventProcessor shows the UI prompt, defers sendToolResultToAI until the user grants.
         const result: ToolExecutionResult = {
@@ -304,6 +548,16 @@ async function execute(
         return result;
       }
       // Explicitly denied
+      // PermissionDenied hooks run before returning the denied result
+      await dispatchPermissionDeniedHooks(
+        name,
+        skillName,
+        "skill-registry",
+        skill.permissionCategory,
+        resolvedArgs,
+        permCheck.reason || "Permission denied",
+        context
+      );
       const result: ToolExecutionResult = {
         tool_call_id: toolCallId,
         tool_name: name,
@@ -345,9 +599,40 @@ async function execute(
     shellRateLimiter.acquire();
   }
 
-  // 5. Execute based on tier
+  // 5. PreToolUse hooks — can block or modify input before execution
+  const preAggregate = await dispatchPreToolUseHooks(
+    name,
+    skillName,
+    "skill-registry",
+    skill.permissionCategory,
+    resolvedArgs,
+    context
+  );
+  const preSystemMessages = [...preAggregate.systemMessages];
+  const preContexts = [...preAggregate.additionalContexts];
+  if (preAggregate.blocked) {
+    const result: ToolExecutionResult = {
+      tool_call_id: toolCallId,
+      tool_name: name,
+      success: false,
+      result: {
+        error: preAggregate.blockReason ?? "Blocked by hook",
+        blocked: true,
+        ...(preSystemMessages.length > 0 || preContexts.length > 0 ? {
+          hookMessages: [...preSystemMessages],
+          hookContexts: [...preContexts],
+        } : {}),
+      },
+      execution_time_ms: Date.now() - startTime,
+    };
+    auditLog(name, resolvedArgs, false, result.execution_time_ms, "Blocked by hook");
+    return result;
+  }
+  const hookFinalArgs = preAggregate.updatedInput ?? resolvedArgs;
+
+  // 6. Execute based on tier
   try {
-    const execResult = await skill.execute(resolvedArgs, context);
+    const execResult = await skill.execute(hookFinalArgs, context);
     const result: ToolExecutionResult = {
       tool_call_id: toolCallId,
       tool_name: name,
@@ -355,7 +640,44 @@ async function execute(
       result: execResult.result,
       execution_time_ms: Date.now() - startTime,
     };
-    auditLog(name, resolvedArgs, result.success, result.execution_time_ms);
+
+    // 7. PostToolUse / PostToolUseFailure hooks
+    if (execResult.success) {
+      const postAggregate = await dispatchPostToolUseHooks(
+        name,
+        skillName,
+        "skill-registry",
+        skill.permissionCategory,
+        hookFinalArgs,
+        result.result,
+        result.execution_time_ms,
+        context
+      );
+      if (postAggregate.updatedToolOutput) {
+        result.result = { ...result.result, ...postAggregate.updatedToolOutput };
+      }
+      const hasPreHookContext = preSystemMessages.length > 0 || preContexts.length > 0;
+      if (hasPreHookContext || postAggregate.systemMessages.length > 0 || postAggregate.additionalContexts.length > 0) {
+        result.result = {
+          ...result.result,
+          hookMessages: [...preSystemMessages, ...postAggregate.systemMessages],
+          hookContexts: [...preContexts, ...postAggregate.additionalContexts],
+        };
+      }
+    } else {
+      await dispatchPostToolUseFailureHooks(
+        name,
+        skillName,
+        "skill-registry",
+        skill.permissionCategory,
+        hookFinalArgs,
+        execResult.result,
+        result.execution_time_ms,
+        context
+      );
+    }
+
+    auditLog(name, hookFinalArgs, result.success, result.execution_time_ms);
     return result;
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
@@ -366,7 +688,20 @@ async function execute(
       result: { error: errorMessage },
       execution_time_ms: Date.now() - startTime,
     };
-    auditLog(name, resolvedArgs, false, result.execution_time_ms, errorMessage);
+
+    // PostToolUseFailure hooks
+    await dispatchPostToolUseFailureHooks(
+      name,
+      skillName,
+      "skill-registry",
+      skill.permissionCategory,
+      hookFinalArgs,
+      { error: errorMessage },
+      result.execution_time_ms,
+      context
+    );
+
+    auditLog(name, hookFinalArgs, false, result.execution_time_ms, errorMessage);
     return result;
   } finally {
     if (skill.permissionCategory === "shell") {
@@ -385,10 +720,41 @@ async function executeViaToolExecutor(
   context: SkillExecutionContext,
   startTime: number
 ): Promise<ToolExecutionResult> {
+  // PreToolUse hooks for MCP/legacy tools
+  const preAggregate = await dispatchPreToolUseHooks(
+    name,
+    name,
+    name.startsWith("mcp_") ? "mcp" : "legacy-tool",
+    undefined,
+    args,
+    context
+  );
+  const preSystemMessages = [...preAggregate.systemMessages];
+  const preContexts = [...preAggregate.additionalContexts];
+  if (preAggregate.blocked) {
+    const execResult: ToolExecutionResult = {
+      tool_call_id: context.toolCallId,
+      tool_name: name,
+      success: false,
+      result: {
+        error: preAggregate.blockReason ?? "Blocked by hook",
+        blocked: true,
+        ...(preSystemMessages.length > 0 || preContexts.length > 0 ? {
+          hookMessages: [...preSystemMessages],
+          hookContexts: [...preContexts],
+        } : {}),
+      },
+      execution_time_ms: Date.now() - startTime,
+    };
+    auditLog(name, args, false, execResult.execution_time_ms, "Blocked by hook");
+    return execResult;
+  }
+  const hookFinalArgs = preAggregate.updatedInput ?? args;
+
   try {
     const result = await ToolExecutor.execute(
       name,
-      args,
+      hookFinalArgs,
       context.conversationId,
       {
         toolCallId: context.toolCallId,
@@ -403,7 +769,31 @@ async function executeViaToolExecutor(
       result,
       execution_time_ms: Date.now() - startTime,
     };
-    auditLog(name, args, true, execResult.execution_time_ms);
+
+    // PostToolUse hooks
+    const postAggregate = await dispatchPostToolUseHooks(
+      name,
+      name,
+      name.startsWith("mcp_") ? "mcp" : "legacy-tool",
+      undefined,
+      hookFinalArgs,
+      execResult.result,
+      execResult.execution_time_ms,
+      context
+    );
+    if (postAggregate.updatedToolOutput) {
+      execResult.result = { ...execResult.result, ...postAggregate.updatedToolOutput };
+    }
+    const hasPreHookContext = preSystemMessages.length > 0 || preContexts.length > 0;
+    if (hasPreHookContext || postAggregate.systemMessages.length > 0 || postAggregate.additionalContexts.length > 0) {
+      execResult.result = {
+        ...execResult.result,
+        hookMessages: [...preSystemMessages, ...postAggregate.systemMessages],
+        hookContexts: [...preContexts, ...postAggregate.additionalContexts],
+      };
+    }
+
+    auditLog(name, hookFinalArgs, true, execResult.execution_time_ms);
     return execResult;
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
@@ -414,7 +804,20 @@ async function executeViaToolExecutor(
       result: { error: errorMessage },
       execution_time_ms: Date.now() - startTime,
     };
-    auditLog(name, args, false, execResult.execution_time_ms, errorMessage);
+
+    // PostToolUseFailure hooks
+    await dispatchPostToolUseFailureHooks(
+      name,
+      name,
+      name.startsWith("mcp_") ? "mcp" : "legacy-tool",
+      undefined,
+      hookFinalArgs,
+      { error: errorMessage },
+      execResult.execution_time_ms,
+      context
+    );
+
+    auditLog(name, hookFinalArgs, false, execResult.execution_time_ms, errorMessage);
     return execResult;
   }
 }

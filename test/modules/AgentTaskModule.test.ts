@@ -11,6 +11,11 @@ const PACKET: AgentTaskPacket = {
   priorFindings: [],
   requiredOutputSchema: { type: "object" },
 };
+const RUN_ID = `${Date.now()}-${process.pid}`;
+
+function testId(name: string): string {
+  return `agt-test-${name}-${RUN_ID}`;
+}
 
 describe("AgentTaskModule", () => {
   let m: AgentTaskModule;
@@ -20,10 +25,10 @@ describe("AgentTaskModule", () => {
   });
 
   it("creates a task in queued status and reads it back", async () => {
-    const id = "agt-test-create";
+    const id = testId("create");
     await m.createTask({
       agentTaskId: id,
-      agentConversationId: "agent-v2-create",
+      agentConversationId: `agent-v2-create-${RUN_ID}`,
       agentId: "agent-lead-researcher",
       agentVersion: 1,
       prompt: "research",
@@ -36,10 +41,10 @@ describe("AgentTaskModule", () => {
   });
 
   it("transitions status and saves result", async () => {
-    const id = "agt-test-result";
+    const id = testId("result");
     await m.createTask({
       agentTaskId: id,
-      agentConversationId: "agent-v2-result",
+      agentConversationId: `agent-v2-result-${RUN_ID}`,
       agentId: "agent-lead-researcher",
       agentVersion: 1,
       prompt: "research",
@@ -69,10 +74,10 @@ describe("AgentTaskModule", () => {
   });
 
   it("appends transcript messages and lists them in order", async () => {
-    const id = "agt-test-msg";
+    const id = testId("msg");
     await m.createTask({
       agentTaskId: id,
-      agentConversationId: "agent-v2-msg",
+      agentConversationId: `agent-v2-msg-${RUN_ID}`,
       agentId: "agent-lead-researcher",
       agentVersion: 1,
       prompt: "research",
@@ -91,10 +96,10 @@ describe("AgentTaskModule", () => {
   });
 
   it("persists tool-call audit rows with sanitized args", async () => {
-    const id = "agt-test-tool";
+    const id = testId("tool");
     await m.createTask({
       agentTaskId: id,
-      agentConversationId: "agent-v2-tool",
+      agentConversationId: `agent-v2-tool-${RUN_ID}`,
       agentId: "agent-lead-researcher",
       agentVersion: 1,
       prompt: "research",

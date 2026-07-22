@@ -40,9 +40,7 @@ export interface ParseServersJsonError {
   readonly error: PluginError;
 }
 
-export type ParseServersJsonResult =
-  | ParseServersJsonOk
-  | ParseServersJsonError;
+export type ParseServersJsonResult = ParseServersJsonOk | ParseServersJsonError;
 
 /**
  * Parse the raw JSON content of a mcp/servers.json file.
@@ -186,10 +184,7 @@ export function normalizeMcpDeclaration(
       };
     }
     // Relative command paths must resolve inside plugin root.
-    if (
-      decl.command.includes("..") ||
-      path.isAbsolute(decl.command)
-    ) {
+    if (decl.command.includes("..") || path.isAbsolute(decl.command)) {
       return {
         ok: false,
         error: {
@@ -235,4 +230,43 @@ export function normalizeMcpDeclaration(
     componentPath,
   };
   return { ok: true, normalized };
+}
+
+export interface InlineMcpNormalizeOk {
+  readonly ok: true;
+  readonly servers: readonly NormalizedMcpServer[];
+}
+
+export interface InlineMcpNormalizeError {
+  readonly ok: false;
+  readonly errors: readonly PluginError[];
+}
+
+export type InlineMcpNormalizeResult =
+  | InlineMcpNormalizeOk
+  | InlineMcpNormalizeError;
+
+/**
+ * Normalize an inline MCP server map (Claude manifest alternative B:
+ * `mcp: { ... }` inside the manifest itself, no sibling .mcp.json file).
+ *
+ * Mirrors the per-server validation that `readPluginMcpServers` performs
+ * for the file form. Returns errors collected per server.
+ */
+export function normalizeInlineMcpMap(
+  map: Record<string, PluginMcpServerDeclaration>,
+  pluginRoot: string
+): InlineMcpNormalizeResult {
+  const out: NormalizedMcpServer[] = [];
+  const errors: PluginError[] = [];
+  for (const [key, decl] of Object.entries(map)) {
+    const norm = normalizeMcpDeclaration(key, decl, pluginRoot, "(inline mcp)");
+    if (norm.ok) {
+      out.push(norm.normalized);
+    } else {
+      errors.push(norm.error);
+    }
+  }
+  if (errors.length > 0) return { ok: false, errors };
+  return { ok: true, servers: out };
 }

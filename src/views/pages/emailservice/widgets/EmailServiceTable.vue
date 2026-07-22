@@ -2,7 +2,8 @@
     <div class="search_bar mt-4 d-flex jsb">
         <div class="d-flex jsb search_tool">
             <div class="search_wrap mr-4">
-                <v-text-field rounded class="elevation-0" density="compact" variant="solo" label="Search"
+                <v-text-field
+rounded class="elevation-0" density="compact" variant="solo" label="Search"
                     append-inner-icon="mdi-magnify" single-line hide-details v-model="search"></v-text-field>
             </div>
 
@@ -12,7 +13,8 @@
         </div>
 
     </div>
-    <v-data-table-server v-model="selected" :items-per-page="itemsPerPage" :search="search" :headers="computedHeaders"
+    <v-data-table-server
+v-model="selected" :items-per-page="itemsPerPage" :search="search" :headers="computedHeaders"
         :items-length="totalItems" :items="serverItems" :loading="loading" item-value="id" @update:options="loadItems" return-object
         class="mt-5" :show-select="isSelectedtable">
         <template v-slot:[`item.actions`]="{ item }" v-if="isSelectedtable!=true">
@@ -25,7 +27,8 @@
             </v-icon>
         </template>
     </v-data-table-server>
-    <delete-dialog :dialog="showDeleteModal" @confirm-delete="handleDelete"
+    <delete-dialog
+:dialog="showDeleteModal" @confirm-delete="handleDelete"
         @confirm-close="showDeleteModal = false"></delete-dialog>
 
 </template>
@@ -117,11 +120,10 @@ const deleteId = ref(0);
 
 function loadItems({ page, itemsPerPage, sortBy }) {
     loading.value = true
-    // console.log(page);
     const fetchitem: Fetchparam = {
         page: page,
         itemsPerPage: itemsPerPage,
-        sortBy: sortBy,
+        sortBy: Array.isArray(sortBy) ? sortBy[0] : sortBy,
         search: search.value
     }
     FakeAPI.fetch(fetchitem).then(
@@ -163,7 +165,7 @@ const handleDelete = async () => {
     const res = await deleteEmailService(deleteId.value)
     if (res) {
         loading.value = false;
-        loadItems({ page: 1, itemsPerPage: itemsPerPage.value, sortBy: "" });
+        loadItems({ page: 1, itemsPerPage: itemsPerPage.value, sortBy: [] });
     }
 }
 function createService() {
