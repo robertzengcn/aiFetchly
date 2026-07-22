@@ -136,6 +136,12 @@ const props = defineProps<{
    */
   voiceEnabled?: boolean;
   /**
+   * When true, a successful transcript is sent immediately via the existing
+   * `send` event (preserving selected files) instead of being appended to the
+   * draft (PRD §7.4 auto-send).
+   */
+  voiceAutoSend?: boolean;
+  /**
    * Active conversation id, used to scope slash-command suggestions so a
    * workspace command only appears in chats using that workspace (FR-1).
    * null/undefined for a brand-new chat -> the main process returns only
@@ -200,10 +206,20 @@ async function onMicClick(): Promise<void> {
         audioBase64,
         mimeType: recording.mimeType,
       });
-      if (result.transcript && result.transcript.trim().length > 0) {
-        appendTranscript(result.transcript);
+      const transcript = result.transcript.trim();
+      if (transcript.length === 0) {
+        showNotice(
+          t("aiChatV2.voice.empty_transcript") || "No speech was detected.",
+        );
+      } else if (props.voiceAutoSend) {
+        // Auto-send: route the transcript through the existing send path,
+        // preserving any selected attachments (PRD §7.4).
+        const files = [...selectedFiles.value];
+        emit("send", transcript, files);
+        draft.value = "";
+        selectedFiles.value = [];
       } else {
-        showNotice(t("aiChatV2.voice.empty_transcript") || "No speech was detected.");
+        appendTranscript(transcript);
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

@@ -241,10 +241,21 @@
         </v-card>
       </v-dialog>
 
+      <v-alert
+        v-if="voiceMissingModel"
+        type="warning"
+        variant="tonal"
+        density="compact"
+        class="mb-2 text-body-2"
+      >
+        <v-icon start size="small">mdi-alert-outline</v-icon>
+        {{ t("aiChatV2.voice.model_missing") || "Voice model is not installed." }}
+      </v-alert>
       <AiChatV2Composer
         :is-streaming="chatIsRunning"
         :is-processing="isPreparingAttachments"
         :voice-enabled="voiceInputEnabled"
+        :voice-auto-send="voiceAutoSend"
         :conversation-id="activeConversationId"
         @send="onSend"
         @stop="onStop"
@@ -447,7 +458,8 @@ import {
   getChatV2ToolApprovalMode,
   setChatV2ToolApprovalMode,
 } from "@/views/api/aiChatV2";
-import { getVoiceSettings } from "@/views/api/aiChatV2Voice";
+import { getVoiceSettings, getVoiceStatus } from "@/views/api/aiChatV2Voice";
+import type { AiChatVoiceRuntimeStatus } from "@/entityTypes/aiChatVoiceTypes";
 import {
   AI_PROVIDER_SETTINGS_CHANGED_EVENT,
   getAIProviderSettings,
@@ -2456,18 +2468,33 @@ watch(
 );
 
 const voiceInputEnabled = ref(false);
-async function loadVoiceInputEnabled(): Promise<void> {
+const voiceAutoSend = ref(false);
+const voiceStatus = ref<AiChatVoiceRuntimeStatus | null>(null);
+const voiceMissingModel = computed(
+  () =>
+    voiceInputEnabled.value &&
+    (voiceStatus.value?.sttState === "missing_model" ||
+      voiceStatus.value?.sttState === "unavailable"),
+);
+async function loadVoiceSettings(): Promise<void> {
   try {
-    const settings = await getVoiceSettings();
+    const [settings, status] = await Promise.all([
+      getVoiceSettings(),
+      getVoiceStatus(),
+    ]);
     voiceInputEnabled.value = settings.inputMode === "push_to_talk";
+    voiceAutoSend.value = settings.autoSendTranscript;
+    voiceStatus.value = status;
   } catch {
     voiceInputEnabled.value = false;
+    voiceAutoSend.value = false;
+    voiceStatus.value = null;
   }
 }
 
 onMounted(() => {
   void loadConversations();
-  void loadVoiceInputEnabled();
+  void loadVoiceSettings();
   void loadModelContextWindows();
   void loadProviderSettings();
   window.addEventListener(
