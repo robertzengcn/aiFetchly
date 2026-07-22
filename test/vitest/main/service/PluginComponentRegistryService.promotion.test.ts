@@ -48,6 +48,7 @@ function makePlugin(opts: {
   name: string;
   installPath: string;
   enabled?: boolean;
+  manifest?: PluginManifest;
 }): LoadedPlugin {
   return {
     name: opts.name,
@@ -56,7 +57,9 @@ function makePlugin(opts: {
     source: "local",
     enabled: opts.enabled ?? true,
     installPath: opts.installPath,
-    manifest: { name: opts.name, version: "1.0.0" } as PluginManifest,
+    manifest:
+      opts.manifest ??
+      ({ name: opts.name, version: "1.0.0" } as PluginManifest),
     skills: [],
     mcpServers: [],
     hooks: [],
@@ -380,6 +383,61 @@ describe("PluginComponentRegistryService.promotePluginCommandsAndAgents (SKL-02)
     expect(review).not.toBeNull();
     expect(review?.source).toBe("plugin");
     expect(review?.sourceId).toBe("plugin:claude-demo");
+  });
+
+  it("promotes Claude-format plugin agents with inline tools into the live slash registry", async () => {
+    const install = makeTmpDir();
+    writeFile(
+      install,
+      "agents/code-explorer.md",
+      `---
+name: code-explorer
+description: Deeply analyzes existing codebase features and recommends integration points.
+model: sonnet
+tools: [Read, Grep, Glob]
+---
+Analyze the codebase and return concise architecture recommendations.
+`
+    );
+
+    const agentRegistry = new AgentDefinitionRegistryImpl();
+    const { diagnostics } =
+      await PluginComponentRegistryService.promotePluginCommandsAndAgents(
+        new CommandRegistry(),
+        agentRegistry,
+        [
+          makePlugin({
+            name: "ecc",
+            installPath: install,
+            manifest: {
+              name: "ecc",
+              version: "1.0.0",
+              description: "",
+              format: "claude",
+              agents: true,
+            },
+          }),
+        ]
+      );
+
+    const agent = agentRegistry.list().find((a) => a.id === "ecc:code-explorer");
+    expect(agent).toMatchObject({
+      id: "ecc:code-explorer",
+      name: "code-explorer",
+      source: "plugin",
+      pluginName: "ecc",
+      pluginComponentPath: "agents/code-explorer.md",
+    });
+    expect(agent?.allowedTools).toEqual([
+      "file_read",
+      "grep_files",
+      "glob_files",
+    ]);
+    expect(
+      diagnostics.some((d) =>
+        d.message.includes("tools must be a YAML string array")
+      )
+    ).toBe(false);
   });
 });
 
