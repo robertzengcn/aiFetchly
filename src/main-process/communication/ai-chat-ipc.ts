@@ -735,16 +735,15 @@ export function registerAiChatIpcHandlers(): void {
       }
 
       enhancedMessage = truncateForRemote(enhancedMessage);
-      // NOTE: this is the legacy hosted path (`/api/ai/ask/stream`) where the
-      // remote AI server orchestrates tool calls. The deferred tool catalog is
-      // intentionally NOT applied here: the server only knows the `functions`
-      // we send, so hiding deferred tools would make undiscoverable to the
-      // server any tool the model expects to call. The hosted path still
-      // benefits from MCP description/schema caps (FR-7) because
-      // getAllToolFunctions routes MCP tools through the sanitized conversion.
-      // Enabling deferred `client_tools` requires server-side support + a
-      // capability flag (PRD Phase 5 / design §17); until then, send the full
-      // tool list.
+      // NOTE: this is the DEPRECATED legacy hosted path (`/api/ai/ask/stream`
+      // with `client_tools`). The active AI server path is the OpenAI-compatible
+      // `/v1/chat/completions`, driven by AIChatQueryEngine/AIChatQueryLoop (V2),
+      // where the full deferred tool catalog IS applied (per-round filtering,
+      // tool_catalog_search, persistence). This legacy path is retained only for
+      // backward compatibility and sends the full tool list; it still benefits
+      // from MCP description/schema caps (FR-7) via getAllToolFunctions. No
+      // deferred client_tools contract is needed here — when this path is
+      // retired, deferral already lives in V2.
       const availableTools = await SkillRegistry.getAllToolFunctions();
 
       const chatRequest: ChatRequest = {
