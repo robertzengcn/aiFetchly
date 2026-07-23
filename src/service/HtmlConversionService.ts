@@ -111,13 +111,13 @@ export class HtmlConversionService {
     cleanHtmlContent(htmlContent: string): string {
         try {
             // Remove script tags and their content completely
-            let cleaned = htmlContent.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '');
+            let cleaned = htmlContent.replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi, '');
             
             // Remove style tags and their content completely
-            cleaned = cleaned.replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '');
+            cleaned = cleaned.replace(/<style\b[^>]*>[\s\S]*?<\/style\s*>/gi, '');
             
             // Remove noscript tags and their content
-            cleaned = cleaned.replace(/<noscript\b[^<]*(?:(?!<\/noscript>)<[^<]*)*<\/noscript>/gi, '');
+            cleaned = cleaned.replace(/<noscript\b[^>]*>[\s\S]*?<\/noscript\s*>/gi, '');
             
             // Remove comments
             cleaned = cleaned.replace(/<!--[\s\S]*?-->/g, '');
