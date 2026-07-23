@@ -3,7 +3,7 @@
 **Related PRD**: `docs/prd/ai-tool-list-management-prd.md`  
 **Related design**: `docs/prd/ai-tool-list-management-technical-design.md`  
 **Date**: 2026-07-23  
-**Total**: 34 test cases
+**Total**: 43 test cases
 
 These cases manually verify deferred AI tool catalog behavior in AI Chat V2: tool payload reduction, `tool_catalog_search` discovery, discovered-tool state, `/skills` diagnostics, MCP schema caps, feature-flag behavior, and safety boundaries.
 
@@ -435,6 +435,167 @@ AI_TOOL_SEARCH=off yarn dev
 
 ---
 
+## 9. Contextual Built-In Function Tools
+
+These cases verify built-in aiFetchly function tools that should be exposed in the first AI server request when the current user message clearly needs them. Use `AI_TOOL_SEARCH=on yarn dev` unless a case says otherwise.
+
+### TC-35: File create request exposes `file_write`
+
+1. Open a fresh AI Chat V2 conversation with an active workspace.
+2. Send:
+
+```text
+create a file in the workspace, name "manual-tool-test.txt", with content "manual test"
+```
+
+3. **Verify in request/logs**: The first AI server request includes `file_write`.
+4. **Verify**: A permission prompt appears before writing the file.
+5. Approve the permission.
+6. **Verify**: The assistant reports success.
+7. **Verify in workspace**: `manual-tool-test.txt` exists and contains `manual test`.
+8. Clean up the file after the test.
+
+### TC-36: File edit request exposes `file_edit`
+
+1. Create a workspace file named `manual-edit-test.txt` with this content:
+
+```text
+hello old value
+```
+
+2. Open AI Chat V2.
+3. Send:
+
+```text
+replace old value with new value in manual-edit-test.txt
+```
+
+4. **Verify in request/logs**: The first AI server request includes `file_edit`.
+5. **Verify**: A permission prompt appears before editing the file.
+6. Approve the permission.
+7. **Verify in workspace**: `manual-edit-test.txt` now contains `hello new value`.
+8. Clean up the file after the test.
+
+### TC-37: File delete request exposes `shell_execute`
+
+1. Create a workspace file named `manual-delete-test.txt`.
+2. Open AI Chat V2.
+3. Send:
+
+```text
+rm the file manual-delete-test.txt
+```
+
+4. **Verify in request/logs**: The first AI server request includes `shell_execute` and `check_shell_status`.
+5. **Verify**: A shell permission prompt appears before running `rm`.
+6. Approve the permission.
+7. **Verify in workspace**: `manual-delete-test.txt` is removed.
+8. **Verify**: The assistant does not say it has no file deletion tool.
+
+### TC-38: Agent delegation exposes `run_subagent`
+
+1. Ensure at least one active agent appears in `/agents` or the `Available AiFetchly agents` system block.
+2. Open a fresh AI Chat V2 conversation.
+3. Send:
+
+```text
+Use the lead researcher agent to summarize public business context for Example Corp. If you need to delegate, do it with an available agent.
+```
+
+4. **Verify in request/logs**: The first AI server request includes `run_subagent`.
+5. **Verify**: If the model delegates, a `run_subagent` tool call is accepted instead of failing as an unknown or unavailable tool.
+6. **Verify**: If the subagent runs asynchronously, the chat can poll with `check_tool_job_status`.
+
+### TC-39: Knowledge library list request exposes document management tools
+
+1. Ensure the local knowledge library has at least one imported document, or use an empty library and verify the empty-state result.
+2. Open AI Chat V2.
+3. Send:
+
+```text
+list the documents in my knowledge library
+```
+
+4. **Verify in request/logs**: The first AI server request includes `knowledge_library_list_documents`.
+5. **Verify**: The assistant returns document metadata or a clear empty-state message.
+6. **Verify**: The response does not expose raw local file paths or document contents unless separately requested through an allowed read/search tool.
+
+### TC-40: Knowledge library import request exposes import tool
+
+1. Attach a small test document to the current AI Chat conversation.
+2. Send:
+
+```text
+import this attachment into the knowledge base with the tag manual-test
+```
+
+3. **Verify in request/logs**: The first AI server request includes `knowledge_library_import_attachment`.
+4. **Verify**: A permission prompt appears before importing.
+5. Approve the permission.
+6. **Verify**: The assistant reports import success or a clear duplicate/processing message.
+7. Send:
+
+```text
+list the documents in my knowledge library with tag manual-test
+```
+
+8. **Verify**: The imported document appears in the list or its processing status is visible.
+
+### TC-41: Schedule request exposes schedule tools
+
+1. Ensure there is an existing task ID that can be scheduled, or use this case only to verify tool exposure before execution.
+2. Open AI Chat V2.
+3. Send:
+
+```text
+create an inactive schedule named Manual Tool Test for task 1 to run every weekday at 9 AM
+```
+
+4. **Verify in request/logs**: The first AI server request includes `create_schedule`.
+5. **Verify**: The assistant asks for missing required task details if task ID/type is ambiguous.
+6. **Verify**: A permission prompt appears before creating or changing a schedule.
+7. If approved and created, clean it up with:
+
+```text
+delete the Manual Tool Test schedule
+```
+
+8. **Verify in request/logs**: The delete request includes `delete_schedule` when schedule intent is clear.
+
+### TC-42: Dashboard/report request exposes `create_html_artifact`
+
+1. Open AI Chat V2.
+2. Send:
+
+```text
+Create an interactive dashboard that compares three sample outreach campaigns by sent count, reply rate, and conversion rate.
+```
+
+3. **Verify in request/logs**: The first AI server request includes `create_html_artifact`.
+4. **Verify**: The assistant creates an HTML artifact instead of only returning plain text.
+5. **Verify in UI**: The artifact opens in the main content area and renders a useful dashboard/report.
+
+### TC-43: Ordinary chat does not overexpose mutation tools
+
+1. Open a fresh AI Chat V2 conversation.
+2. Send:
+
+```text
+write a short product tagline for aiFetchly
+```
+
+3. **Verify in request/logs**: The first AI server request does not include `file_write`, because this is content generation rather than a workspace file write.
+4. Send:
+
+```text
+fix this sentence: aiFetchly help team find lead
+```
+
+5. **Verify in request/logs**: The first AI server request does not include `file_edit`, because this is text editing rather than file editing.
+6. **Verify**: The assistant answers normally in chat.
+
+---
+
 ## Manual Test Summary Checklist
 
 Use this checklist after running the cases above:
@@ -449,5 +610,7 @@ Use this checklist after running the cases above:
 - [ ] Permission prompts still gate sensitive tool execution.
 - [ ] MCP description/schema caps prevent prompt bloat.
 - [ ] Agent allowlists restrict discovery.
+- [ ] Contextual built-in tools are exposed for clear file, shell, agent, knowledge-library, schedule, and artifact requests.
+- [ ] Ordinary chat does not expose write/edit mutation tools unnecessarily.
 - [ ] Logs include useful metrics without secrets.
 - [ ] `AI_TOOL_SEARCH=off` works as rollback.
