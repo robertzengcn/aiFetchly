@@ -55,7 +55,8 @@ export class AiChatVoiceModule {
     const raw: Record<string, string | undefined> = {};
     for (const key of VOICE_SETTING_TOKEN_KEYS) {
       const value = this.token.getValue(key);
-      raw[key] = typeof value === "string" && value.length > 0 ? value : undefined;
+      raw[key] =
+        typeof value === "string" && value.length > 0 ? value : undefined;
     }
     return parseVoiceSettings(raw);
   }
@@ -101,7 +102,10 @@ export class AiChatVoiceModule {
       validation.value.audioBase64,
       validation.value.mimeType,
       language,
-      { sttLanguage: settings.sttLanguage }
+      {
+        sttModelPath: this.resolveModelDir(settings.sttModelId) ?? undefined,
+        sttLanguage: settings.sttLanguage,
+      }
     );
     return {
       transcript: result.transcript,
@@ -132,11 +136,14 @@ export class AiChatVoiceModule {
         ...(validation.value.voiceId !== undefined
           ? { voiceId: validation.value.voiceId }
           : settings.ttsVoiceId !== undefined
-            ? { voiceId: settings.ttsVoiceId }
-            : {}),
+          ? { voiceId: settings.ttsVoiceId }
+          : {}),
         speed: validation.value.speed ?? settings.ttsSpeed,
       },
-      { ttsLanguage: settings.ttsLanguage }
+      {
+        ttsModelPath: this.resolveModelDir(settings.ttsModelId) ?? undefined,
+        ttsLanguage: settings.ttsLanguage,
+      }
     );
     return {
       audioBase64: result.audioBase64,
@@ -158,29 +165,30 @@ export class AiChatVoiceModule {
   // ---------------------------------------------------------------------------
 
   private stateForModel(modelId: string): AiChatVoiceRuntimeState {
-    const modelPath = this.resolveModelPath(modelId);
-    if (modelPath === null || !this.fileExists(modelPath)) {
+    const modelDir = this.resolveModelDir(modelId);
+    if (modelDir === null || !this.fileExists(modelDir)) {
       return "missing_model";
     }
-    // MVP: a present file counts as "ready". Real load/availability is
-    // confirmed by the worker handshake; full catalog/download comes later.
+    // MVP: a present model directory counts as "ready". The worker handshake
+    // confirms the model actually loads; full catalog/download is Phase 5.
     return "ready";
   }
 
   /**
-   * MVP model-path resolution: logical id `sherpa-onnx:stt:auto` ->
-   * `<modelRoot>/auto.onnx`. A real catalog service replaces this once the
-   * consent-gated download flow lands.
+   * Map a logical voice model id to its downloaded model directory under
+   * `modelRoot`. The consent-gated downloader (Phase 5) populates these
+   * directories with the sherpa-onnx model files.
    */
-  private resolveModelPath(modelId: string): string | null {
-    if (!modelId) {
+  private resolveModelDir(modelId: string): string | null {
+    const DIR_MAP: Record<string, string> = {
+      "sherpa-onnx:stt:auto": "sherpa-onnx-whisper-tiny",
+      "sherpa-onnx:tts:auto": "vits-piper-en_US-amy-medium",
+    };
+    const dirName = DIR_MAP[modelId];
+    if (!dirName) {
       return null;
     }
-    const suffix = modelId.split(":").pop();
-    if (!suffix) {
-      return null;
-    }
-    return path.join(this.modelRoot, `${suffix}.onnx`);
+    return path.join(this.modelRoot, dirName);
   }
 
   /** Prefer an explicit request language; fall back to the setting unless "auto". */
