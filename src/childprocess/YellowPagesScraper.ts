@@ -18,6 +18,7 @@
 
 import { Page, Browser, ElementHandle, Frame } from "puppeteer";
 import type { LaunchOptions } from "puppeteer";
+import sanitizeHtml from "sanitize-html";
 import type { YellowPagesTaskProxyConfig } from "@/entityTypes/yellowPagesTaskProxyType";
 import { buildPuppeteerProxyLaunchPieces } from "@/utils/yellowPagesProxyLaunch";
 import { executePuppeteerAction } from "@/childprocess/utils/ObserveExecuteExecutor";
@@ -369,32 +370,36 @@ export class YellowPagesScraper {
   ): string {
     if (html.length <= maxBytes) return html;
 
-    let out = html
-      .replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi, "")
-      .replace(/<style\b[^>]*>[\s\S]*?<\/style\s*>/gi, "")
-      .replace(/<noscript\b[^>]*>[\s\S]*?<\/noscript\s*>/gi, "")
-      .replace(/<svg\b[^>]*>[\s\S]*?<\/svg\s*>/gi, "")
-      .replace(/<iframe\b[^>]*>[\s\S]*?<\/iframe\s*>/gi, "")
-      .replace(/<!--[\s\S]*?-->/g, "");
+    // Use sanitize-html to safely strip dangerous tags and attributes in one pass
+    let out = sanitizeHtml(html, {
+      allowedTags: [
+        "h1", "h2", "h3", "h4", "h5", "h6", "p", "br", "hr",
+        "ul", "ol", "li", "dl", "dt", "dd",
+        "table", "thead", "tbody", "tfoot", "tr", "td", "th", "caption", "colgroup", "col",
+        "div", "span", "section", "article", "aside", "header", "footer", "nav", "main",
+        "pre", "code", "blockquote", "cite", "em", "strong", "b", "i", "u", "s", "small", "sub", "sup",
+        "a", "img", "figure", "figcaption",
+        "abbr", "address", "bdi", "bdo", "del", "dfn", "ins", "kbd", "mark", "q", "rp", "rt", "ruby", "s", "samp", "time", "var", "wbr",
+        "details", "summary",
+        "input", "select", "option", "textarea", "label", "fieldset", "legend",
+        "audio", "video", "source", "picture",
+        "map", "area",
+      ],
+      allowedAttributes: {
+        "*": ["class", "id", "title", "role", "aria-label", "tabindex"],
+        "a": ["href", "target", "rel"],
+        "img": ["src", "alt", "width", "height", "loading"],
+        "td": ["colspan", "rowspan"],
+        "th": ["colspan", "rowspan", "scope"],
+        "input": ["type", "name", "value", "placeholder", "checked", "disabled"],
+        "select": ["name", "disabled"],
+        "option": ["value", "selected", "disabled"],
+        "textarea": ["name", "rows", "cols", "disabled"],
+      },
+    });
 
-    // Remove elements with display:none (hidden menus, modals, etc.)
-    out = out.replace(
-      /<(\w+)\b[^>]*style\s*=\s*["'][^"']*display\s*:\s*none[^"']*["'][^>]*>[\s\S]*?<\/\1>/gi,
-      ""
-    );
-
-    // Remove data-*, event handler, and style attributes
-    // Loop until stable to prevent incomplete multi-character sanitization
-    let prevSanitized: string;
-    do {
-      prevSanitized = out;
-      out = out.replace(/\s+data-[\w-]+=["'][^"']*["']/gi, "");
-      out = out.replace(/\s+data-[\w-]+=\S+/gi, "");
-      out = out.replace(/\s+on\w+=["'][^"']*["']/gi, "");
-      out = out.replace(/\s+on\w+=\S+/gi, "");
-      out = out.replace(/\s+style=["'][^"']*["']/gi, "");
-      out = out.replace(/\s+style=\S+/gi, "");
-    } while (out !== prevSanitized);
+    // Remove HTML comments
+    out = out.replace(/<!--[\s\S]*?-->/g, "");
 
     // Collapse whitespace
     out = out
