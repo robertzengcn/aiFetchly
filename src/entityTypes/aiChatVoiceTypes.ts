@@ -119,6 +119,16 @@ export interface AiChatVoiceTtsResponse {
 // ---------------------------------------------------------------------------
 
 /** Hard cap on a single audio payload (12 MB). */
+/** Progress event for model downloads (main → renderer). */
+export interface VoiceModelDownloadProgress {
+  readonly modelId: string;
+  readonly phase: "downloading" | "verifying" | "extracting" | "done" | "error";
+  readonly pct?: number;
+  readonly downloadedBytes?: number;
+  readonly totalBytes?: number;
+  readonly error?: string;
+}
+
 export const AI_CHAT_VOICE_MAX_AUDIO_BYTES = 12 * 1024 * 1024;
 /** Hard cap on a single TTS synthesis text (chars). */
 export const AI_CHAT_VOICE_MAX_TTS_CHARS = 1_200;
@@ -233,8 +243,7 @@ export function parseVoiceSettings(
       ["disabled", "after_voice_input", "all_assistant_messages"] as const,
       DEFAULT_VOICE_SETTINGS.ttsMode
     ),
-    autoSendTranscript:
-      readToken(raw, AI_CHAT_VOICE_AUTO_SEND) === "true",
+    autoSendTranscript: readToken(raw, AI_CHAT_VOICE_AUTO_SEND) === "true",
     sttLanguage:
       readToken(raw, AI_CHAT_VOICE_STT_LANGUAGE) ??
       DEFAULT_VOICE_SETTINGS.sttLanguage,
@@ -304,7 +313,9 @@ export interface VoiceValidationErr {
   ok: false;
   error: string;
 }
-export type VoiceValidationResult<T> = VoiceValidationOk<T> | VoiceValidationErr;
+export type VoiceValidationResult<T> =
+  | VoiceValidationOk<T>
+  | VoiceValidationErr;
 
 /** Approximate decoded byte length of a base64 string (4 chars -> 3 bytes). */
 function base64DecodedBytes(base64: string): number {
@@ -333,7 +344,10 @@ export function validateTranscribeRequest(
   if (typeof audioBase64 !== "string" || audioBase64.length === 0) {
     return { ok: false, error: "Audio payload is required." };
   }
-  if (typeof mimeType !== "string" || !AI_CHAT_VOICE_AUDIO_MIME_TYPES.has(mimeType)) {
+  if (
+    typeof mimeType !== "string" ||
+    !AI_CHAT_VOICE_AUDIO_MIME_TYPES.has(mimeType)
+  ) {
     return { ok: false, error: "Unsupported audio type." };
   }
   const bytes = base64DecodedBytes(audioBase64);

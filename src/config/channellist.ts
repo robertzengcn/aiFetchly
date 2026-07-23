@@ -318,6 +318,14 @@ export const AI_CHAT_V2_VOICE_CANCEL = "ai-chat-v2:voice-cancel";
 export const AI_CHAT_V2_VOICE_GET_SETTINGS = "ai-chat-v2:voice-get-settings";
 /** Renderer->Main: validate + persist voice settings view. */
 export const AI_CHAT_V2_VOICE_SET_SETTINGS = "ai-chat-v2:voice-set-settings";
+// Phase 5: model download channels
+export const AI_CHAT_V2_VOICE_MODEL_LIST = "ai-chat-v2:voice-model-list";
+export const AI_CHAT_V2_VOICE_MODEL_DOWNLOAD =
+  "ai-chat-v2:voice-model-download";
+export const AI_CHAT_V2_VOICE_MODEL_DOWNLOAD_PROGRESS =
+  "ai-chat-v2:voice-model-download-progress";
+export const AI_CHAT_V2_VOICE_MODEL_CANCEL_DOWNLOAD =
+  "ai-chat-v2:voice-model-cancel-download";
 
 // AI Provider (Local/Custom) Settings Channels
 export const AI_PROVIDER_SETTINGS_GET = "ai-provider:settings:get";
