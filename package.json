@@ -19,7 +19,7 @@
     "builds": "tsc --build",
     "clean": "tsc --build --clean",
     "predev": "yarn rebuild-native",
-    "dev": "vite",
+    "dev": "vite --config vite.render.config.mjs",
     "init": "ts-node src/runcli.ts -a sqlinit",
     "login": "ts-node src/runcli.ts -a login -c",
     "make": "electron-forge make",

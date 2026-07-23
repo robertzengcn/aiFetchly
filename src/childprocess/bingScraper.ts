@@ -137,10 +137,11 @@ export class BingScraper extends SearchScrape {
             }
             ))
         for (const seval of searchRes) {
-            const sevalHost = seval.link ? new URL(seval.link).hostname : '';
-            if (sevalHost.endsWith(BING_REDIRECT_HOST)) {
+            const sevalLink = seval.link;
+            const sevalHost = sevalLink ? new URL(sevalLink).hostname : '';
+            if (sevalLink && sevalHost.endsWith(BING_REDIRECT_HOST)) {
                 // Prefer resolving from URL params (no extra page load)
-                const resolvedFromUrl = resolveBingRedirectUrl(seval.link);
+                const resolvedFromUrl = resolveBingRedirectUrl(sevalLink);
                 if (resolvedFromUrl) {
                     seval.link = resolvedFromUrl;
                     result.results.push(seval);
@@ -167,7 +168,7 @@ export class BingScraper extends SearchScrape {
                             });
                         }
 
-                        const response = await newPage.goto(seval.link, {
+                        const response = await newPage.goto(sevalLink, {
                             waitUntil: "networkidle2",
                             timeout: 60000
                         });
