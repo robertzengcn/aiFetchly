@@ -6,11 +6,11 @@ export const sanitizeInput = {
   string: (input: string): string => {
     if (!input) return ''
     
-    // Remove HTML tags
-    let sanitized = input.replace(/<[^>]*>/g, '')
+    // Remove script tags and content first (handles nested/broken tags)
+    let sanitized = input.replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi, '')
     
-    // Remove script tags and content
-    sanitized = sanitized.replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi, '')
+    // Remove remaining HTML tags
+    sanitized = sanitized.replace(/<[^>]*>/g, '')
     
     // Remove dangerous characters
     sanitized = sanitized.replace(/[<>]/g, '')
