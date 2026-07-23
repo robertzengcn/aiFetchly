@@ -5,7 +5,7 @@
 **Date**: 2026-07-23  
 **Total**: 34 test cases
 
-These cases manually verify deferred AI tool catalog behavior in AI Chat V2: tool payload reduction, `tool_catalog_search` discovery, discovered-tool state, `/skills` diagnostics, MCP schema caps, feature-flag behavior, and safety boundaries.
+These cases manually verify deferred AI tool catalog behavior in AI Chat V2: tool payload reduction, `tool_catalog_search` discovery, discovered-tool state, slash-command status checks, terminal catalog diagnostics, MCP schema caps, feature-flag behavior, and safety boundaries.
 
 ---
 
@@ -43,58 +43,61 @@ Use `AI_TOOL_SEARCH=off` as the rollback/control mode. Use `AI_TOOL_SEARCH=on` t
 
 ---
 
-## 1. Slash Command Diagnostics
+## 1. Slash Command Baseline and Catalog Diagnostics
 
-### TC-1: `/skills` shows catalog breakdown
+### TC-1: `/help` lists the V2 slash commands
 
 1. Start the app with `AI_TOOL_SEARCH=on yarn dev`.
 2. Open AI Chat.
 3. Send:
 
 ```text
-/skills
+/help
 ```
 
-4. **Verify**: Response includes `Tool catalog:`.
-5. **Verify**: Response includes total, always-loaded, deferred, and contextual counts.
-6. **Verify**: Response includes a `Largest tools:` section when tools exist.
+4. **Verify**: Response includes available commands.
+5. **Verify**: Response includes built-in V2 commands such as `/help`, `/clear`, `/status`, `/reload-config`, `/agents`, and `/plugin`.
+6. **Verify**: Response does not need to start an AI model stream.
 
-### TC-2: `/skills` mentions deferred discovery when deferred tools exist
+### TC-2: `/status` shows AiFetchly configuration status
 
-1. Ensure at least one MCP/plugin/imported skill is enabled.
+1. Start the app with `AI_TOOL_SEARCH=on yarn dev`.
+2. Send:
+
+```text
+/status
+```
+
+3. **Verify**: Response starts with `AiFetchly configuration status:`.
+4. **Verify**: Response includes counts for commands, agents, hooks, skills, diagnostics, last reload, and watcher state.
+5. **Verify**: No unknown-command error appears.
+
+### TC-3: `/skills` is not registered in the current V2 slash dispatcher
+
+1. Start the app with `AI_TOOL_SEARCH=on yarn dev`.
 2. Send:
 
 ```text
 /skills
 ```
 
-3. **Verify**: Response mentions deferred tools are discoverable via `tool_catalog_search`.
-4. **Verify**: At least one largest tool row shows a source such as `mcp`, `plugin`, `imported`, or `builtin`.
+3. **Verify**: Current expected V2 result is `Unknown slash command: /skills`.
+4. **Verify**: This does not break the conversation.
+5. **Note**: `/skills` exists in the older AI chat IPC path, but it is not registered in the current AI Chat V2 slash command registry. Use terminal logs and `/status` for this manual test pass.
 
-### TC-3: `/skills` does not break when no plugins or MCP tools exist
+### TC-4: Catalog metrics appear in terminal logs during deferred mode
 
-1. Disable MCP servers and plugins, or use a fresh profile with only built-in skills.
-2. Send:
-
-```text
-/skills
-```
-
-3. **Verify**: Response still returns a valid catalog breakdown.
-4. **Verify**: Deferred count is `0` or very small.
-5. **Verify**: No error toast or chat failure occurs.
-
-### TC-4: `/skills` works when AI tool search is off
-
-1. Restart with `AI_TOOL_SEARCH=off yarn dev`.
-2. Send:
+1. Start with `AI_TOOL_SEARCH=on yarn dev`.
+2. Open a fresh AI Chat V2 conversation.
+3. Send:
 
 ```text
-/skills
+Say hello and do not use tools.
 ```
 
-3. **Verify**: Catalog diagnostics still render.
-4. **Verify**: Chat does not require `tool_catalog_search` to answer the slash command.
+4. **Verify in terminal logs**: A line appears with `event=tool_catalog_filter`.
+5. **Verify in terminal logs**: The line includes `total=`, `always=`, `deferred=`, `contextual=`, `discovered=`, `exposed=`, `estTotalTokens=`, and `estExposedTokens=`.
+6. **Verify in terminal logs**: The line includes `largest=[...]` with tool names and estimated sizes, not full schemas or arguments.
 
 ---
 
@@ -162,7 +165,7 @@ AI_TOOL_SEARCH=bad-value yarn dev
 ### TC-10: First round hides undiscovered deferred tools
 
 1. Start with `AI_TOOL_SEARCH=on yarn dev`.
-2. Ensure an MCP/plugin tool is enabled. Record its exact tool name from `/skills` or logs.
+2. Ensure an MCP/plugin tool is enabled. Record its exact tool name from terminal logs, the MCP settings page, plugin details, or source fixtures.
 3. Open a fresh conversation.
 4. Send:
 
@@ -297,8 +300,8 @@ Use that same tool again for a second related check.
 1. Configure a test MCP server that returns a tool description longer than 2,048 characters.
 2. Start with `AI_TOOL_SEARCH=on yarn dev`.
 3. Trigger MCP tool discovery or refresh.
-4. Send `/skills`.
-5. **Verify**: The large MCP tool is listed without flooding the chat response.
+4. Send a normal AI Chat V2 message so the catalog is built.
+5. **Verify in logs**: The large MCP tool does not flood the terminal output.
 6. **Verify in logs**: Description truncation is logged or counted.
 
 ### TC-22: Large MCP schema is pruned but remains callable
@@ -313,10 +316,9 @@ Use that same tool again for a second related check.
 ### TC-23: Sanitization does not expose secrets
 
 1. Configure an MCP server with auth settings or environment variables.
-2. Send `/skills`.
-3. Trigger a deferred search for that MCP server.
-4. **Verify**: Chat output and logs do not include auth headers, tokens, API keys, or environment values.
-5. **Verify**: Only names, source labels, descriptions, and size metadata are visible.
+2. Trigger a deferred search for that MCP server.
+3. **Verify**: Chat output and logs do not include auth headers, tokens, API keys, or environment values.
+4. **Verify**: Only names, source labels, descriptions, and size metadata are visible.
 
 ---
 
@@ -436,7 +438,9 @@ AI_TOOL_SEARCH=off yarn dev
 
 Use this checklist after running the cases above:
 
-- [ ] `/skills` shows tool catalog counts and largest tools.
+- [ ] `/help` and `/status` work in AI Chat V2.
+- [ ] `/skills` is treated as unknown in the current AI Chat V2 slash dispatcher.
+- [ ] Terminal logs show tool catalog counts and largest tools when deferred mode is active.
 - [ ] `AI_TOOL_SEARCH=off` preserves standard behavior.
 - [ ] `AI_TOOL_SEARCH=on` exposes `tool_catalog_search` and hides undiscovered deferred tools.
 - [ ] `AI_TOOL_SEARCH=auto` switches based on threshold.
