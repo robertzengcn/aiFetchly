@@ -149,6 +149,22 @@ if ((app as any).isPackaged) {
 
 log.info("Application starting...");
 
+if (
+  isDevelopment &&
+  process.platform === "linux" &&
+  process.env.LIBGL_ALWAYS_INDIRECT === "1"
+) {
+  log.info("[dev] Disabling GPU acceleration for indirect GL session");
+  const appWithGpuControls = app as typeof app & {
+    disableHardwareAcceleration: () => void;
+    commandLine: {
+      appendSwitch: (switchName: string) => void;
+    };
+  };
+  appWithGpuControls.disableHardwareAcceleration();
+  appWithGpuControls.commandLine.appendSwitch("disable-gpu");
+}
+
 // Handle uncaught exceptions — user-facing dialog only.
 // Crash record persistence is handled by __crashReporter (registered above,
 // which runs first as it was registered earlier).
@@ -1078,8 +1094,12 @@ function configureContentSecurityPolicy() {
   );
 }
 
-function makeSingleInstance() {
+function makeSingleInstance(): void {
   if ((process as NodeJS.Process & { mas: boolean }).mas) return;
+  if (isDevelopment) {
+    log.info("[dev] Skipping single-instance lock");
+    return;
+  }
 
   const gotThelock = (app as any).requestSingleInstanceLock();
   if (!gotThelock) {
