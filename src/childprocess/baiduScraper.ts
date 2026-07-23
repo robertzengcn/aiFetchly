@@ -76,7 +76,8 @@ export class BaiduScraper extends SearchScrape {
         const uniqueArray = Array.from(new Set(searchRes));
 //console.log(uniqueArray); // Output: [1, 2, 3, 4, 5]    
         for (const seval of uniqueArray) {
-            if (seval.link?.includes('www.baidu.com')) {
+            const sevalHost = seval.link ? new URL(seval.link).hostname : '';
+            if (sevalHost.endsWith('www.baidu.com')) {
                 // const response = await fetch(link, { method: 'GET' });
                 // if(response.status==200){
                 //     link=response.url

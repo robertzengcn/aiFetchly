@@ -137,7 +137,8 @@ export class BingScraper extends SearchScrape {
             }
             ))
         for (const seval of searchRes) {
-            if (seval.link?.includes(BING_REDIRECT_HOST)) {
+            const sevalHost = seval.link ? new URL(seval.link).hostname : '';
+            if (sevalHost.endsWith(BING_REDIRECT_HOST)) {
                 // Prefer resolving from URL params (no extra page load)
                 const resolvedFromUrl = resolveBingRedirectUrl(seval.link);
                 if (resolvedFromUrl) {
