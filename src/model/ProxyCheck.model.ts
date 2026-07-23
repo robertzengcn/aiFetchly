@@ -1,5 +1,5 @@
 import { BaseDb } from "@/model/Basedb";
-import { Repository } from "typeorm";
+import { In, Repository } from "typeorm";
 import { ProxyCheckEntity } from "@/entity/ProxyCheck.entity";
 //import { proxyCheckStatus } from "./proxyCheckdb";
 
@@ -47,6 +47,27 @@ export class ProxyCheckModel extends BaseDb {
 
   async getProxyCheck(proxyId: number): Promise<ProxyCheckEntity | null> {
     return this.repository.findOne({ where: { proxy_id: proxyId } });
+  }
+
+  /**
+   * Batch-load check records for many proxy ids in one query, keyed by
+   * proxy_id. Replaces N per-record `getProxyCheck` round-trips when
+   * enriching a page of proxy records.
+   */
+  async getProxyChecksByIds(
+    proxyIds: readonly number[]
+  ): Promise<Map<number, ProxyCheckEntity>> {
+    if (proxyIds.length === 0) {
+      return new Map();
+    }
+    const rows = await this.repository.find({
+      where: { proxy_id: In(proxyIds) },
+    });
+    const map = new Map<number, ProxyCheckEntity>();
+    for (const row of rows) {
+      map.set(row.proxy_id, row);
+    }
+    return map;
   }
 
   async getProxyByStatus(

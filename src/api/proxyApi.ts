@@ -167,4 +167,15 @@ export class ProxyApi implements IProxyApi {
       "getProxiesByHostPortPairs is not supported by the remote ProxyApi"
     );
   }
+
+  /**
+   * Bulk id lookup is only used by the local AI tools. The legacy remote
+   * backend has no equivalent endpoint, so this is intentionally not supported
+   * here. The local ProxyModule provides the real implementation.
+   */
+  public async getProxiesByIds(
+    _ids: readonly number[]
+  ): Promise<ProxyEntity[]> {
+    throw new Error("getProxiesByIds is not supported by the remote ProxyApi");
+  }
 }

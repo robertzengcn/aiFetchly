@@ -241,9 +241,21 @@
         </v-card>
       </v-dialog>
 
+      <v-alert
+        v-if="voiceMissingModel"
+        type="warning"
+        variant="tonal"
+        density="compact"
+        class="mb-2 text-body-2"
+      >
+        <v-icon start size="small">mdi-alert-outline</v-icon>
+        {{ t("aiChatV2.voice.model_missing") || "Voice model is not installed." }}
+      </v-alert>
       <AiChatV2Composer
         :is-streaming="chatIsRunning"
         :is-processing="isPreparingAttachments"
+        :voice-enabled="voiceInputEnabled"
+        :voice-auto-send="voiceAutoSend"
         :conversation-id="activeConversationId"
         @send="onSend"
         @stop="onStop"
@@ -446,6 +458,9 @@ import {
   getChatV2ToolApprovalMode,
   setChatV2ToolApprovalMode,
 } from "@/views/api/aiChatV2";
+import { getVoiceSettings, getVoiceStatus } from "@/views/api/aiChatV2Voice";
+import type { AiChatVoiceRuntimeStatus } from "@/entityTypes/aiChatVoiceTypes";
+import { SpeechResponseController } from "./voice/SpeechResponseController";
 import {
   AI_PROVIDER_SETTINGS_CHANGED_EVENT,
   getAIProviderSettings,
@@ -1603,6 +1618,8 @@ async function clearCurrentConversation(): Promise<void> {
 }
 
 const onSelectConversation = (conversationId: string): void => {
+  speechController.stop();
+  detachActiveStreamView();
   activeConversationId.value = conversationId;
   const runtime = conversationRuntime.value.get(conversationId);
   if (runtime) {
@@ -1621,6 +1638,7 @@ const detachActiveStreamView = (): void => {
 };
 
 const onStop = (): void => {
+  speechController.stop();
   stopChatV2Stream();
   clearChatV2StreamListeners();
   const conversationId = activeConversationId.value;
@@ -2395,6 +2413,7 @@ const onSend = async (
             }
             ensureAssistantAdded();
             assistant.content += chunk.contentDelta;
+            speechController.pushDelta(chunk.contentDelta);
             // Live estimate: each streamed delta adds ~chars/4 tokens to the
             // running context total. The next usage_update event will snap
             // this back to the server's ground-truth count.
@@ -2583,6 +2602,7 @@ const onSend = async (
         ) {
           ensureAssistantAdded();
           assistant.content = complete.fullContent;
+          speechController.flush();
           const currentMessages = streamMessageListController.get();
           const idx = currentMessages.findIndex((m) => m.id === assistant.id);
           console.log(
@@ -2751,8 +2771,40 @@ watch(
   }
 );
 
+const voiceInputEnabled = ref(false);
+const speechController = new SpeechResponseController({
+  ttsMode: "disabled",
+  latestInputWasVoice: false,
+});
+speechController.start();
+const voiceAutoSend = ref(false);
+const voiceStatus = ref<AiChatVoiceRuntimeStatus | null>(null);
+const voiceMissingModel = computed(
+  () =>
+    voiceInputEnabled.value &&
+    (voiceStatus.value?.sttState === "missing_model" ||
+      voiceStatus.value?.sttState === "unavailable"),
+);
+async function loadVoiceSettings(): Promise<void> {
+  try {
+    const [settings, status] = await Promise.all([
+      getVoiceSettings(),
+      getVoiceStatus(),
+    ]);
+    voiceInputEnabled.value = settings.inputMode === "push_to_talk";
+    voiceAutoSend.value = settings.autoSendTranscript;
+    speechController.updateOptions({ ttsMode: settings.ttsMode });
+    voiceStatus.value = status;
+  } catch {
+    voiceInputEnabled.value = false;
+    voiceAutoSend.value = false;
+    voiceStatus.value = null;
+  }
+}
+
 onMounted(() => {
   void loadConversations();
+  void loadVoiceSettings();
   void loadModelContextWindows();
   void loadProviderSettings();
   window.addEventListener(
@@ -2772,6 +2824,7 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  speechController.stop();
   detachActiveStreamView();
   window.removeEventListener(
     AI_PROVIDER_SETTINGS_CHANGED_EVENT,
