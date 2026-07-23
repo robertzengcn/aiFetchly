@@ -204,6 +204,71 @@ function registerMenuBarShortcuts(mainWindow: BrowserWindow): void {
   });
 }
 
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function isConnectionRefusedError(error: unknown): boolean {
+  if (error instanceof Error && error.message.includes("ERR_CONNECTION_REFUSED")) {
+    return true;
+  }
+
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+
+  const maybeElectronError = error as { code?: unknown; errno?: unknown };
+  return (
+    maybeElectronError.code === "ERR_CONNECTION_REFUSED" ||
+    maybeElectronError.errno === -102
+  );
+}
+
+function isBrowserWindowDestroyed(mainWindow: BrowserWindow): boolean {
+  const destroyableWindow = mainWindow as BrowserWindow & {
+    isDestroyed?: () => boolean;
+  };
+
+  return (
+    typeof destroyableWindow.isDestroyed === "function" &&
+    destroyableWindow.isDestroyed()
+  );
+}
+
+async function loadDevServerUrl(
+  mainWindow: BrowserWindow,
+  devServerUrl: string
+): Promise<void> {
+  const maxAttempts = 20;
+  const retryDelayMs = 250;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      if (isBrowserWindowDestroyed(mainWindow)) {
+        return;
+      }
+
+      await mainWindow.loadURL(devServerUrl);
+      return;
+    } catch (error) {
+      const shouldRetry =
+        attempt < maxAttempts && isConnectionRefusedError(error);
+
+      if (!shouldRetry) {
+        throw error;
+      }
+
+      console.warn(
+        `Vite dev server is not ready at ${devServerUrl}; retrying ` +
+          `${attempt}/${maxAttempts}`
+      );
+      await delay(retryDelayMs);
+    }
+  }
+}
+
 function initialize() {
   // HMR guard: prevent re-initialization on Vite hot reload
   if ((globalThis as any).__aifetchlyAppInitialized) {
@@ -553,7 +618,7 @@ function initialize() {
       // Load the url of the dev server if in development mode
       try {
         if (win && !(win as any).isDestroyed()) {
-          await (win as any).loadURL(MAIN_WINDOW_VITE_DEV_SERVER_URL as string);
+          await loadDevServerUrl(win, MAIN_WINDOW_VITE_DEV_SERVER_URL);
           if (!process.env.IS_TEST) (win as any).webContents.openDevTools();
         }
       } catch (error) {
