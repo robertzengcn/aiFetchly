@@ -398,8 +398,12 @@ export class YellowPagesScraper {
       },
     });
 
-    // Remove HTML comments
-    out = out.replace(/<!--[\s\S]*?-->/g, "");
+    // Remove HTML comments (loop to handle nested/overlapping cases)
+    let prevComments: string;
+    do {
+      prevComments = out;
+      out = out.replace(/<!--[\s\S]*?-->/g, "");
+    } while (out !== prevComments);
 
     // Collapse whitespace
     out = out
