@@ -107,6 +107,49 @@ describe("AIChatQueryLoop", () => {
         function: { name: "SubmitPlanForApproval" },
       });
     });
+
+    it("forces shell_execute for direct file removal requests when exposed", () => {
+      expect(
+        resolveToolChoiceForRound({
+          message: "rm the file manual-delete-test.txt",
+          hasTools: true,
+          isPlanMode: false,
+          round: 0,
+          startRound: 0,
+          exposedToolNames: ["file_read", "shell_execute"],
+        })
+      ).toEqual({
+        type: "function",
+        function: { name: "shell_execute" },
+      });
+
+      expect(
+        resolveToolChoiceForRound({
+          message: "delete the file manual-delete-test.txt",
+          hasTools: true,
+          isPlanMode: false,
+          round: 0,
+          startRound: 0,
+          exposedToolNames: ["file_read", "shell_execute"],
+        })
+      ).toEqual({
+        type: "function",
+        function: { name: "shell_execute" },
+      });
+    });
+
+    it("does not force shell_execute when the shell tool is not exposed", () => {
+      expect(
+        resolveToolChoiceForRound({
+          message: "rm the file manual-delete-test.txt",
+          hasTools: true,
+          isPlanMode: false,
+          round: 0,
+          startRound: 0,
+          exposedToolNames: ["file_read"],
+        })
+      ).toBe("auto");
+    });
   });
 
   describe("normal streaming", () => {
@@ -361,6 +404,42 @@ describe("AIChatQueryLoop", () => {
           message: "Retrying malformed tool-call marker response",
         })
       );
+    });
+
+    it("sends forced shell_execute tool_choice for first-round file deletion", async () => {
+      const captured: OpenAIChatCompletionRequest[] = [];
+      const fakeStream = vi.fn(
+        async (
+          req: OpenAIChatCompletionRequest,
+          onChunk: (c: OpenAIChatCompletionChunk) => void
+        ) => {
+          captured.push(req);
+          onChunk(makeChunk("Done", "stop"));
+        }
+      );
+      const loop = new AIChatQueryLoop({
+        streamChatCompletion: fakeStream,
+        executeTool: vi.fn(),
+        getSkillDefinition: vi.fn().mockReturnValue(undefined),
+      });
+      const input: AIChatQueryLoopInput = {
+        conversationId: "v2-test",
+        assistantMessageId: "a-1",
+        messages: [],
+        request: { message: "rm the file manual-delete-test.txt" },
+        openAITools: [tool("file_read"), tool("shell_execute")],
+        abortController: new AbortController(),
+        eventSink: { emit: vi.fn() },
+        startRound: 0,
+        isActiveTurn: () => true,
+      };
+
+      await loop.run(input);
+
+      expect(captured[0].tool_choice).toEqual({
+        type: "function",
+        function: { name: "shell_execute" },
+      });
     });
 
     it("waits for tool-call persistence to flush before executing the tool", async () => {

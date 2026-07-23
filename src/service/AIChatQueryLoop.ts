@@ -118,6 +118,11 @@ const TEXT_TOOL_CALL_MARKER_RE =
 const TEXT_TOOL_CALL_MARKER_RETRY_PROMPT =
   "Your previous response was a malformed tool-call marker instead of a valid assistant response. Retry now. If you need a tool, emit a real OpenAI tool call with the function name and JSON arguments. Do not write tool_call::def_tool_call markers as text.";
 
+const SHELL_EXECUTE_TOOL_NAME = "shell_execute";
+
+const SHELL_ACTION_INTENT_RE =
+  /\b(rm|unlink)\b|(?:\b(delete|remove)\b.*(?:\b(file|folder|directory|path)\b|[./~]|\.[A-Za-z0-9]{1,8}\b))|(?:\b(run|execute)\b.*\b(shell|terminal|bash|powershell|cmd|command)\b)/i;
+
 /**
  * Legacy global timeout ceiling for foreground tool calls.
  *
@@ -224,12 +229,27 @@ function isTextToolCallMarker(content: string): boolean {
   return TEXT_TOOL_CALL_MARKER_RE.test(content.trim());
 }
 
+function shouldForceShellExecute(input: {
+  message: string;
+  round: number;
+  startRound: number;
+  exposedToolNames: readonly string[];
+}): boolean {
+  return (
+    input.round === 0 &&
+    input.startRound === 0 &&
+    input.exposedToolNames.includes(SHELL_EXECUTE_TOOL_NAME) &&
+    SHELL_ACTION_INTENT_RE.test(input.message)
+  );
+}
+
 export function resolveToolChoiceForRound(input: {
   message: string;
   hasTools: boolean;
   isPlanMode: boolean;
   round: number;
   startRound: number;
+  exposedToolNames?: readonly string[];
 }): OpenAIToolChoice | undefined {
   if (!input.hasTools) return undefined;
   if (
@@ -240,6 +260,19 @@ export function resolveToolChoiceForRound(input: {
     return {
       type: "function",
       function: { name: "SubmitPlanForApproval" },
+    };
+  }
+  if (
+    shouldForceShellExecute({
+      message: input.message,
+      round: input.round,
+      startRound: input.startRound,
+      exposedToolNames: input.exposedToolNames ?? [],
+    })
+  ) {
+    return {
+      type: "function",
+      function: { name: SHELL_EXECUTE_TOOL_NAME },
     };
   }
   return "auto";
@@ -602,6 +635,7 @@ export class AIChatQueryLoop {
               isPlanMode: Boolean(planContext),
               round,
               startRound: input.startRound,
+              exposedToolNames: exposedTools.map((t) => t.function.name),
             }),
           },
           (rawChunk) => {
