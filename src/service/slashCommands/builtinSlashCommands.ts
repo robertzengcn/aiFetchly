@@ -1,5 +1,5 @@
 // src/service/slashCommands/builtinSlashCommands.ts
-// CMD-03 — register the four phase-13 built-in slash commands.
+// CMD-03 — register the built-in slash commands.
 //
 // Built-ins are always-on (requiresTrust=false, enabled=true), source
 // "built-in", type "local" (no AI call — main process returns text).
@@ -13,7 +13,7 @@ import type { SlashCommandDefinition } from "@/entityTypes/slashCommandTypes";
 import { CommandRegistry } from "./CommandRegistry";
 
 /**
- * The four phase-13 built-in slash commands (design §7.2, §11.4).
+ * Built-in slash commands (design §7.2, §11.4).
  *
  * `local` type means the dispatcher handles them in-process and returns
  * a `show_result` discriminated-union variant — no AI call, no AI-enable
@@ -54,6 +54,18 @@ const BUILT_IN_COMMANDS: readonly SlashCommandDefinition[] = Object.freeze([
     name: "status",
     description:
       "Show AiFetchly configuration status, counts, and diagnostics.",
+    aliases: [],
+    type: "local",
+    source: "built-in",
+    sourceId: "built-in",
+    sourceLabel: "Built-in",
+    requiresTrust: false,
+    enabled: true,
+  },
+  {
+    id: "built-in:command:skills",
+    name: "skills",
+    description: "List currently available AI skills/tools in this system.",
     aliases: [],
     type: "local",
     source: "built-in",

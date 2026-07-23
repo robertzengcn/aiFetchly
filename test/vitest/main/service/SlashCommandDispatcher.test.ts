@@ -32,7 +32,10 @@ import { AIFetchlyConfigManager } from "@/service/aifetchlyConfig/AIFetchlyConfi
 import { AgentDefinitionRegistryImpl } from "@/service/AgentDefinitionRegistry";
 import type { SlashCommandDefinition } from "@/entityTypes/slashCommandTypes";
 import type { AgentDefinitionView } from "@/entityTypes/agentTypes";
-import type { PluginSlashCommandExecutor } from "@/service/slashCommands/SlashCommandDispatcher";
+import type {
+  PluginSlashCommandExecutor,
+  SkillsSlashCommandProvider,
+} from "@/service/slashCommands/SlashCommandDispatcher";
 import * as dispatcherModule from "@/service/slashCommands/SlashCommandDispatcher";
 
 // --- Fixtures ----------------------------------------------------------------
@@ -83,6 +86,7 @@ describe("registerBuiltInSlashCommands (CMD-03)", () => {
         "built-in:command:help",
         "built-in:command:plugin",
         "built-in:command:reload-config",
+        "built-in:command:skills",
         "built-in:command:status",
       ].sort()
     );
@@ -106,6 +110,11 @@ describe("registerBuiltInSlashCommands (CMD-03)", () => {
       id: "built-in:command:plugin",
       name: "plugin",
       descMatch: /plugin marketplaces|install plugins/i,
+    },
+    {
+      id: "built-in:command:skills",
+      name: "skills",
+      descMatch: /skills|tools/i,
     },
   ])(
     "built-in $id has stable shape (type=local, enabled, no trust)",
@@ -156,7 +165,7 @@ describe("SlashCommandDispatcher.dispatch (CMD-04, CMD-08, DX-02)", () => {
     expect(r.content).toMatch(/phase 14|phase-14/i);
   });
 
-  it("returns show_result for /help listing the four built-in command names", async () => {
+  it("returns show_result for /help listing the built-in command names", async () => {
     const { dispatcher } = buildStack();
     const r = await dispatcher.dispatch({
       conversationId: "conv-1",
@@ -172,6 +181,7 @@ describe("SlashCommandDispatcher.dispatch (CMD-04, CMD-08, DX-02)", () => {
     expect(r.content).toContain("/status");
     expect(r.content).toContain("/reload-config");
     expect(r.content).toContain("/plugin");
+    expect(r.content).toContain("/skills");
   });
 
   it("returns show_result for /clear with guidance content (renderer clears)", async () => {
@@ -236,6 +246,37 @@ describe("SlashCommandDispatcher.dispatch (CMD-04, CMD-08, DX-02)", () => {
     }
     expect(r.commandId).toBe("built-in:command:plugin");
     expect(r.content).toBe("Plugin command completed.");
+  });
+
+  it("returns show_result for /skills with the AI tool catalog breakdown", async () => {
+    const { registry, manager } = buildStack();
+    const skillsProvider: SkillsSlashCommandProvider = {
+      render: vi
+        .fn<[], Promise<string>>()
+        .mockResolvedValue(
+          "Available skills (1):\n\n1. `file_read` - Read a file\n\nTool catalog: 1 total"
+        ),
+    };
+    const dispatcher = new SlashCommandDispatcher(
+      registry,
+      manager,
+      undefined,
+      skillsProvider
+    );
+
+    const r = await dispatcher.dispatch({
+      conversationId: "conv-1",
+      rawInput: "/skills",
+    });
+
+    expect(skillsProvider.render).toHaveBeenCalledTimes(1);
+    expect(r.status).toBe(true);
+    if (!r.status || r.action !== "show_result") {
+      throw new Error("expected show_result");
+    }
+    expect(r.commandId).toBe("built-in:command:skills");
+    expect(r.content).toContain("Available skills");
+    expect(r.content).toContain("Tool catalog:");
   });
 
   it("returns {status:false, msg} for an unknown command (CMD-08)", async () => {
@@ -333,6 +374,7 @@ describe("SlashCommandModule (three-layer Module)", () => {
     expect(names).toContain("help");
     expect(names).toContain("clear");
     expect(names).toContain("status");
+    expect(names).toContain("skills");
     expect(names).toContain("reload-config");
   });
 

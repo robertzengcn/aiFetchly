@@ -46,6 +46,10 @@ export interface PluginSlashCommandExecutor {
   execute(rawArgs: string | undefined): Promise<string>;
 }
 
+export interface SkillsSlashCommandProvider {
+  render(): Promise<string>;
+}
+
 /**
  * SlashCommandDispatcher — resolves raw composer text into the
  * discriminated-union dispatch response (CMD-04).
@@ -58,7 +62,8 @@ export class SlashCommandDispatcher {
   constructor(
     private readonly registry: CommandRegistry,
     private readonly manager: AIFetchlyConfigManager,
-    private readonly pluginCommands?: PluginSlashCommandExecutor
+    private readonly pluginCommands?: PluginSlashCommandExecutor,
+    private readonly skillsProvider?: SkillsSlashCommandProvider
   ) {}
 
   /**
@@ -203,6 +208,17 @@ export class SlashCommandDispatcher {
         };
       }
 
+      case "built-in:command:skills": {
+        const provider =
+          this.skillsProvider ?? (await createSkillsCommandProvider());
+        return {
+          status: true,
+          action: "show_result",
+          commandId,
+          content: await provider.render(),
+        };
+      }
+
       case "built-in:command:agents": {
         // Phase 16 / Plan 03 (D-AgentsList) — list built-in + dynamic agents
         // sourced from agentRegistry.list() (already sorted by D-Precedence:
@@ -275,6 +291,26 @@ async function createPluginCommands(): Promise<PluginSlashCommandExecutor> {
     "./PluginSlashCommandService"
   );
   return new PluginSlashCommandService();
+}
+
+async function createSkillsCommandProvider(): Promise<SkillsSlashCommandProvider> {
+  const [
+    { SkillRegistry },
+    { formatSkillsAsChatMarkdown },
+    { formatToolCatalogBreakdown },
+  ] = await Promise.all([
+    import("@/config/skillsRegistry"),
+    import("@/api/aiChatApi"),
+    import("@/service/ToolCatalogDiagnostics"),
+  ]);
+  return {
+    async render(): Promise<string> {
+      const allTools = await SkillRegistry.getAllToolFunctions();
+      const listing = formatSkillsAsChatMarkdown(allTools);
+      const breakdown = formatToolCatalogBreakdown(allTools);
+      return `${listing}\n\n${breakdown}`;
+    },
+  };
 }
 
 /**
