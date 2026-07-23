@@ -119,8 +119,12 @@ export class HtmlConversionService {
             // Remove noscript tags and their content
             cleaned = cleaned.replace(/<noscript\b[^>]*>[\s\S]*?<\/noscript\s*>/gi, '');
             
-            // Remove comments
-            cleaned = cleaned.replace(/<!--[\s\S]*?-->/g, '');
+            // Remove comments (loop to handle nested/broken comments)
+            let prevComment: string;
+            do {
+                prevComment = cleaned;
+                cleaned = cleaned.replace(/<!--[\s\S]*?-->/g, '');
+            } while (cleaned !== prevComment);
             
             // Remove meta tags (except viewport)
             cleaned = cleaned.replace(/<meta(?![^>]*viewport)[^>]*>/gi, '');
