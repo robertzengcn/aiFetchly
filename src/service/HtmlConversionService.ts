@@ -110,14 +110,27 @@ export class HtmlConversionService {
      */
     cleanHtmlContent(htmlContent: string): string {
         try {
-            // Remove script tags and their content completely
-            let cleaned = htmlContent.replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi, '');
+            // Remove script tags and their content completely (loop for nested cases)
+            let cleaned = htmlContent;
+            let prevScript: string;
+            do {
+                prevScript = cleaned;
+                cleaned = cleaned.replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi, '');
+            } while (cleaned !== prevScript);
             
-            // Remove style tags and their content completely
-            cleaned = cleaned.replace(/<style\b[^>]*>[\s\S]*?<\/style\s*>/gi, '');
+            // Remove style tags and their content completely (loop for nested cases)
+            let prevStyle: string;
+            do {
+                prevStyle = cleaned;
+                cleaned = cleaned.replace(/<style\b[^>]*>[\s\S]*?<\/style\s*>/gi, '');
+            } while (cleaned !== prevStyle);
             
-            // Remove noscript tags and their content
-            cleaned = cleaned.replace(/<noscript\b[^>]*>[\s\S]*?<\/noscript\s*>/gi, '');
+            // Remove noscript tags and their content (loop for nested cases)
+            let prevNoscript: string;
+            do {
+                prevNoscript = cleaned;
+                cleaned = cleaned.replace(/<noscript\b[^>]*>[\s\S]*?<\/noscript\s*>/gi, '');
+            } while (cleaned !== prevNoscript);
             
             // Remove comments (loop to handle nested/broken comments)
             let prevComment: string;
