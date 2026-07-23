@@ -16,7 +16,7 @@ const BING_REDIRECT_HOST = 'www.bing.com';
 function resolveBingRedirectUrl(bingUrl: string): string | null {
     try {
         const parsed = new URL(bingUrl);
-        if (!parsed.hostname?.toLowerCase().includes('bing.com')) {
+        if (!parsed.hostname?.toLowerCase().endsWith('bing.com')) {
             return null;
         }
         const uParam = parsed.searchParams.get('u');
