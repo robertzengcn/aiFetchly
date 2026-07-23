@@ -250,6 +250,124 @@ describe("ToolCatalogService.filterForRound", () => {
     expect(r.exposedToolNames).not.toContain("shell_execute");
   });
 
+  it("exposes file_write for clear file creation requests", () => {
+    const svc = new ToolCatalogService();
+    const fileCtx: ToolCatalogRuntimeContext = {
+      ...ctx,
+      currentUserMessage:
+        'create a file in the workspace, name "test.txt", with content "test"',
+    };
+    const liveTools = [
+      tool("file_read"),
+      tool("file_write"),
+      tool("mcp_1_secret"),
+    ];
+    const catalog = svc.buildFromOpenAITools({
+      tools: liveTools,
+      context: fileCtx,
+    });
+    const r = svc.filterForRound({
+      catalog,
+      liveTools,
+      state: emptyState,
+      modeDecision: {
+        mode: "deferred",
+        configuredMode: "on",
+        reason: "on",
+        estimatedDeferredTokens: 1000,
+      },
+    });
+
+    expect(catalog.byName.get("file_write")?.loadPolicy).toBe("contextual");
+    expect(r.exposedToolNames).toContain("file_write");
+    expect(r.exposedToolNames).not.toContain("mcp_1_secret");
+  });
+
+  it("exposes file_edit for clear file editing requests", () => {
+    const svc = new ToolCatalogService();
+    const fileCtx: ToolCatalogRuntimeContext = {
+      ...ctx,
+      currentUserMessage: "replace localhost with 127.0.0.1 in config.json",
+    };
+    const liveTools = [tool("file_edit"), tool("mcp_1_secret")];
+    const catalog = svc.buildFromOpenAITools({
+      tools: liveTools,
+      context: fileCtx,
+    });
+    const r = svc.filterForRound({
+      catalog,
+      liveTools,
+      state: emptyState,
+      modeDecision: {
+        mode: "deferred",
+        configuredMode: "on",
+        reason: "on",
+        estimatedDeferredTokens: 1000,
+      },
+    });
+
+    expect(catalog.byName.get("file_edit")?.loadPolicy).toBe("contextual");
+    expect(r.exposedToolNames).toContain("file_edit");
+    expect(r.exposedToolNames).not.toContain("mcp_1_secret");
+  });
+
+  it("keeps run_subagent exposed because the system prompt advertises agents", () => {
+    const { svc, catalog } = buildWith([
+      tool("run_subagent"),
+      tool("mcp_1_secret"),
+    ]);
+    const r = svc.filterForRound({
+      catalog,
+      liveTools: [tool("run_subagent"), tool("mcp_1_secret")],
+      state: emptyState,
+      modeDecision: {
+        mode: "deferred",
+        configuredMode: "on",
+        reason: "on",
+        estimatedDeferredTokens: 1000,
+      },
+    });
+
+    expect(catalog.byName.get("run_subagent")?.loadPolicy).toBe("always");
+    expect(r.exposedToolNames).toContain("run_subagent");
+    expect(r.exposedToolNames).not.toContain("mcp_1_secret");
+  });
+
+  it("exposes management tools for matching knowledge, schedule, and artifact intent", () => {
+    const svc = new ToolCatalogService();
+    const intentCtx: ToolCatalogRuntimeContext = {
+      ...ctx,
+      currentUserMessage:
+        "list knowledge library documents, create a schedule, and show a dashboard",
+    };
+    const liveTools = [
+      tool("knowledge_library_list_documents"),
+      tool("create_schedule"),
+      tool("create_html_artifact"),
+      tool("mcp_1_secret"),
+    ];
+    const catalog = svc.buildFromOpenAITools({
+      tools: liveTools,
+      context: intentCtx,
+    });
+    const r = svc.filterForRound({
+      catalog,
+      liveTools,
+      state: emptyState,
+      modeDecision: {
+        mode: "deferred",
+        configuredMode: "on",
+        reason: "on",
+        estimatedDeferredTokens: 1000,
+      },
+    });
+
+    expect(r.exposedToolNames).toContain("knowledge_library_list_documents");
+    expect(r.exposedToolNames).toContain("create_schedule");
+    expect(r.exposedToolNames).toContain("create_html_artifact");
+    expect(r.exposedToolNames).not.toContain("mcp_1_secret");
+  });
+
   it("promotes a discovered deferred tool", () => {
     const { svc, catalog } = buildWith([tool("mcp_1_secret")]);
     const r = svc.filterForRound({

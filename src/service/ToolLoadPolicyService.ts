@@ -35,14 +35,60 @@ const ALWAYS_LOADED_TOOL_NAMES: ReadonlySet<string> = new Set([
   "check_shell_status",
   "read_attachment_content",
   "knowledge_library_search",
+  "run_subagent",
 ]);
 
 const CONTEXTUAL_SHELL_TOOL_NAMES: ReadonlySet<string> = new Set([
   "shell_execute",
 ]);
 
+const CONTEXTUAL_FILE_WRITE_TOOL_NAMES: ReadonlySet<string> = new Set([
+  "file_write",
+]);
+
+const CONTEXTUAL_FILE_EDIT_TOOL_NAMES: ReadonlySet<string> = new Set([
+  "file_edit",
+]);
+
+const CONTEXTUAL_KNOWLEDGE_LIBRARY_TOOL_NAMES: ReadonlySet<string> = new Set([
+  "knowledge_library_list_documents",
+  "knowledge_library_import_attachment",
+  "knowledge_library_delete_document",
+]);
+
+const CONTEXTUAL_SCHEDULE_TOOL_NAMES: ReadonlySet<string> = new Set([
+  "list_schedules",
+  "get_schedule_details",
+  "list_schedule_executions",
+  "create_schedule",
+  "update_schedule",
+  "delete_schedule",
+  "pause_schedule",
+  "resume_schedule",
+  "run_schedule_now",
+]);
+
+const CONTEXTUAL_HTML_ARTIFACT_TOOL_NAMES: ReadonlySet<string> = new Set([
+  "create_html_artifact",
+]);
+
 const SHELL_INTENT_RE =
   /\b(shell|terminal|bash|powershell|cmd|command|execute|run|rm|unlink)\b|(?:\b(delete|remove)\b.*(?:\b(file|folder|directory|path)\b|[./~]|\.[A-Za-z0-9]{1,8}\b))/i;
+
+const FILE_WRITE_INTENT_RE =
+  /\b(create|write|save|overwrite|generate|make)\b.*(?:\b(file|document)\b|[./~]|\.[A-Za-z0-9]{1,8}\b)|(?:\b(file|document)\b.*\b(create|write|save|overwrite|generate|make)\b)/i;
+
+const FILE_EDIT_INTENT_RE =
+  /\b(edit|modify|replace|patch|update|change|fix)\b.*(?:\b(file|document|path)\b|[./~]|\.[A-Za-z0-9]{1,8}\b)/i;
+
+const KNOWLEDGE_LIBRARY_INTENT_RE =
+  /\b(knowledge[- ]?library|knowledge base|rag|library documents?|documents? in (?:the )?library)\b/i;
+
+const SCHEDULE_INTENT_RE =
+  /\b(schedule|scheduled|scheduler|cron|run .*\b(?:later|daily|weekly|monthly)|automation schedule)\b/i;
+
+const HTML_ARTIFACT_INTENT_RE =
+  /\b(html artifact|artifact|dashboard|chart|visual report|interactive report|formatted document|landing[- ]page preview|comparison table)\b/i;
 
 /** Source types that are always deferred by default. */
 const DEFERRED_SOURCES: ReadonlySet<ToolCatalogSource> = new Set([
@@ -96,7 +142,45 @@ export class ToolLoadPolicyService {
       return "contextual";
     }
 
-    // 8. Built-in default: specialized tools are deferred and discoverable.
+    // 8. Contextual promotion: workspace write/edit tools are hidden for
+    // ordinary chat, but should be present when the user plainly asks to
+    // create or modify files. Confirmation still gates the actual mutation.
+    if (
+      CONTEXTUAL_FILE_WRITE_TOOL_NAMES.has(name) &&
+      this.hasFileWriteIntent(input.context.currentUserMessage)
+    ) {
+      return "contextual";
+    }
+    if (
+      CONTEXTUAL_FILE_EDIT_TOOL_NAMES.has(name) &&
+      this.hasFileEditIntent(input.context.currentUserMessage)
+    ) {
+      return "contextual";
+    }
+
+    // 9. Contextual promotion for built-in capabilities that are otherwise
+    // hard to discover from natural wording because their exact function names
+    // are not user-visible.
+    if (
+      CONTEXTUAL_KNOWLEDGE_LIBRARY_TOOL_NAMES.has(name) &&
+      this.hasKnowledgeLibraryIntent(input.context.currentUserMessage)
+    ) {
+      return "contextual";
+    }
+    if (
+      CONTEXTUAL_SCHEDULE_TOOL_NAMES.has(name) &&
+      this.hasScheduleIntent(input.context.currentUserMessage)
+    ) {
+      return "contextual";
+    }
+    if (
+      CONTEXTUAL_HTML_ARTIFACT_TOOL_NAMES.has(name) &&
+      this.hasHtmlArtifactIntent(input.context.currentUserMessage)
+    ) {
+      return "contextual";
+    }
+
+    // 10. Built-in default: specialized tools are deferred and discoverable.
     return "deferred";
   }
 
@@ -109,5 +193,25 @@ export class ToolLoadPolicyService {
 
   private hasShellIntent(message: string): boolean {
     return SHELL_INTENT_RE.test(message);
+  }
+
+  private hasFileWriteIntent(message: string): boolean {
+    return FILE_WRITE_INTENT_RE.test(message);
+  }
+
+  private hasFileEditIntent(message: string): boolean {
+    return FILE_EDIT_INTENT_RE.test(message);
+  }
+
+  private hasKnowledgeLibraryIntent(message: string): boolean {
+    return KNOWLEDGE_LIBRARY_INTENT_RE.test(message);
+  }
+
+  private hasScheduleIntent(message: string): boolean {
+    return SCHEDULE_INTENT_RE.test(message);
+  }
+
+  private hasHtmlArtifactIntent(message: string): boolean {
+    return HTML_ARTIFACT_INTENT_RE.test(message);
   }
 }

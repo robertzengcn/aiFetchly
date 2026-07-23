@@ -42,7 +42,7 @@ export const TOOL_CATALOG_SEARCH_OPENAI_TOOL: OpenAITool = {
   function: {
     name: TOOL_CATALOG_SEARCH_TOOL_NAME,
     description:
-      "Search the available deferred tool catalog and select tools to load before calling them. Use this when a capability (shell command, filesystem deletion, integration, MCP server, plugin tool, imported skill, scraper, marketing workflow) you need is not currently exposed.",
+      "Search the available deferred tool catalog and select tools to load before calling them. Use this when a capability (workspace file creation/editing/deletion, shell command, subagent, knowledge-library management, schedule automation, HTML artifact, email/social/proxy action, integration, MCP server, plugin tool, imported skill, scraper, marketing workflow) you need is not currently exposed.",
     parameters: {
       type: "object",
       properties: {
