@@ -120,6 +120,7 @@ import { listSlashCommands } from "@/views/api/slashCommands";
 import type { SlashCommandView } from "@/entityTypes/slashCommandTypes";
 import { BrowserVoiceRecorder } from "./voice/BrowserVoiceRecorder";
 import { transcribeVoice } from "@/views/api/aiChatV2Voice";
+import { blobToWavBase64 } from "./voice/audioConversion";
 
 const MAX_UPLOAD_FILES = 3;
 const MAX_UPLOAD_FILE_BYTES = 5 * 1024 * 1024; // 5 MB
@@ -201,10 +202,10 @@ async function onMicClick(): Promise<void> {
     isTranscribing.value = true;
     try {
       const recording = await voiceRecorder.stop();
-      const audioBase64 = await blobToBase64(recording.blob);
+      const audioBase64 = await blobToWavBase64(recording.blob);
       const result = await transcribeVoice({
         audioBase64,
-        mimeType: recording.mimeType,
+        mimeType: "audio/wav",
       });
       const transcript = result.transcript.trim();
       if (transcript.length === 0) {
