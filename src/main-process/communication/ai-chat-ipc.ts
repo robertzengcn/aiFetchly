@@ -212,7 +212,7 @@ function buildAttachmentReferenceBlock(
   if (references.length === 0) return "";
 
   const sanitizeForPrompt = (value: string): string =>
-    value.replace(/[\r\n]/g, " ").replace(/"/g, '\\"');
+    value.replace(/\\/g, "\\\\").replace(/[\r\n]/g, " ").replace(/"/g, '\\"');
 
   const lines = references.map((ref, index) => {
     const ext = ref.fileName.toLowerCase().slice(ref.fileName.lastIndexOf("."));
