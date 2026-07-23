@@ -460,6 +460,7 @@ import {
 } from "@/views/api/aiChatV2";
 import { getVoiceSettings, getVoiceStatus } from "@/views/api/aiChatV2Voice";
 import type { AiChatVoiceRuntimeStatus } from "@/entityTypes/aiChatVoiceTypes";
+import { SpeechResponseController } from "./voice/SpeechResponseController";
 import {
   AI_PROVIDER_SETTINGS_CHANGED_EVENT,
   getAIProviderSettings,
@@ -2155,6 +2156,7 @@ const onSend = async (text: string, files?: File[]): Promise<void> => {
             }
             ensureAssistantAdded();
             assistant.content += chunk.contentDelta;
+            speechController.pushDelta(chunk.contentDelta);
             // Live estimate: each streamed delta adds ~chars/4 tokens to the
             // running context total. The next usage_update event will snap
             // this back to the server's ground-truth count.
@@ -2312,6 +2314,7 @@ const onSend = async (text: string, files?: File[]): Promise<void> => {
         ) {
           ensureAssistantAdded();
           assistant.content = complete.fullContent;
+          speechController.flush();
           const idx = messages.value.findIndex((m) => m.id === assistant.id);
           console.log(
             `[ai-chat-v2] stream complete: assistantId=${assistant.id} fullContentLen=${complete.fullContent.length} idxInMessages=${idx} assistantAdded=${assistantAdded} messagesLen=${messages.value.length}`
@@ -2468,6 +2471,11 @@ watch(
 );
 
 const voiceInputEnabled = ref(false);
+const speechController = new SpeechResponseController({
+  ttsMode: "disabled",
+  latestInputWasVoice: false,
+});
+speechController.start();
 const voiceAutoSend = ref(false);
 const voiceStatus = ref<AiChatVoiceRuntimeStatus | null>(null);
 const voiceMissingModel = computed(
@@ -2484,6 +2492,7 @@ async function loadVoiceSettings(): Promise<void> {
     ]);
     voiceInputEnabled.value = settings.inputMode === "push_to_talk";
     voiceAutoSend.value = settings.autoSendTranscript;
+    speechController.updateOptions({ ttsMode: settings.ttsMode });
     voiceStatus.value = status;
   } catch {
     voiceInputEnabled.value = false;
@@ -2514,6 +2523,7 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  speechController.stop();
   detachActiveStreamView();
   window.removeEventListener(
     AI_PROVIDER_SETTINGS_CHANGED_EVENT,
