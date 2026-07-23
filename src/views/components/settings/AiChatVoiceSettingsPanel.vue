@@ -112,6 +112,60 @@
         variant="outlined"
         @update:model-value="save"
       />
+
+      <v-divider class="my-4" />
+      <h3 class="text-subtitle-1 font-weight-bold mb-2">Voice Models</h3>
+      <div
+        v-for="model in models"
+        :key="model.id"
+        class="d-flex align-center justify-space-between pa-2 mb-2 rounded"
+      >
+        <div>
+          <div class="text-body-2 font-weight-medium">{{ model.name }}</div>
+          <div class="text-caption text-grey-darken-1">
+            {{
+              model.type === "stt" ? "Speech Recognition" : "Text-to-Speech"
+            }}
+            · ~{{ model.approxSizeMb }}MB
+          </div>
+          <div
+            v-if="downloadProgress[model.id]"
+            class="text-caption text-primary"
+          >
+            {{ downloadProgressText(model.id) }}
+          </div>
+        </div>
+        <div>
+          <v-chip
+            v-if="model.installed"
+            color="success"
+            size="small"
+            variant="tonal"
+          >
+            <v-icon start size="small">mdi-check</v-icon>
+            Installed
+          </v-chip>
+          <v-btn
+            v-else-if="!downloadProgress[model.id]"
+            size="small"
+            color="primary"
+            variant="tonal"
+            @click="onDownload(model.id)"
+          >
+            <v-icon start size="small">mdi-download</v-icon>
+            Download
+          </v-btn>
+          <v-btn
+            v-else
+            size="small"
+            color="error"
+            variant="tonal"
+            @click="onCancelDownload(model.id)"
+          >
+            Cancel
+          </v-btn>
+        </div>
+      </div>
     </div>
   </div>
 </template>
@@ -119,8 +173,19 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from "vue";
 import { useI18n } from "vue-i18n";
-import { getVoiceSettings, setVoiceSettings } from "@/views/api/aiChatV2Voice";
-import type { AiChatVoiceSettingsView } from "@/entityTypes/aiChatVoiceTypes";
+import {
+  getVoiceSettings,
+  setVoiceSettings,
+  listVoiceModels,
+  downloadVoiceModel,
+  cancelVoiceModelDownload,
+  onVoiceModelDownloadProgress,
+} from "@/views/api/aiChatV2Voice";
+import type {
+  AiChatVoiceSettingsView,
+  VoiceModelDownloadProgress,
+} from "@/entityTypes/aiChatVoiceTypes";
+import type { VoiceModelCatalogEntry } from "@/service/aiChatVoice/VoiceModelCatalogService";
 
 const { t } = useI18n();
 
@@ -226,7 +291,55 @@ async function save(): Promise<void> {
   }
 }
 
-onMounted(load);
+// --- Phase 5: Model catalog + download ---
+const models = ref<VoiceModelCatalogEntry[]>([]);
+const downloadProgress = ref<
+  Record<string, VoiceModelDownloadProgress | undefined>
+>({});
+
+function downloadProgressText(modelId: string): string {
+  const p = downloadProgress.value[modelId];
+  if (!p) return "";
+  if (p.phase === "downloading") return `Downloading... ${p.pct ?? 0}%`;
+  if (p.phase === "verifying") return "Verifying...";
+  if (p.phase === "extracting") return "Extracting...";
+  if (p.phase === "error") return `Error: ${p.error ?? ""}`;
+  return "";
+}
+
+async function loadModels(): Promise<void> {
+  try {
+    models.value = await listVoiceModels();
+  } catch {
+    models.value = [];
+  }
+}
+
+async function onDownload(modelId: string): Promise<void> {
+  downloadProgress.value = {
+    ...downloadProgress.value,
+    [modelId]: { modelId, phase: "downloading", pct: 0 },
+  };
+  try {
+    await downloadVoiceModel(modelId);
+    await loadModels();
+  } catch {
+    /* error shown via progress */
+  }
+  downloadProgress.value = { ...downloadProgress.value, [modelId]: undefined };
+}
+
+function onCancelDownload(modelId: string): void {
+  cancelVoiceModelDownload(modelId);
+}
+
+onMounted(() => {
+  void load();
+  void loadModels();
+  onVoiceModelDownloadProgress((p) => {
+    downloadProgress.value = { ...downloadProgress.value, [p.modelId]: p };
+  });
+});
 </script>
 
 <style scoped>
