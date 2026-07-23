@@ -370,11 +370,11 @@ export class YellowPagesScraper {
     if (html.length <= maxBytes) return html;
 
     let out = html
-      .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "")
-      .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, "")
-      .replace(/<noscript\b[^>]*>[\s\S]*?<\/noscript>/gi, "")
-      .replace(/<svg\b[^>]*>[\s\S]*?<\/svg>/gi, "")
-      .replace(/<iframe\b[^>]*>[\s\S]*?<\/iframe>/gi, "")
+      .replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi, "")
+      .replace(/<style\b[^>]*>[\s\S]*?<\/style\s*>/gi, "")
+      .replace(/<noscript\b[^>]*>[\s\S]*?<\/noscript\s*>/gi, "")
+      .replace(/<svg\b[^>]*>[\s\S]*?<\/svg\s*>/gi, "")
+      .replace(/<iframe\b[^>]*>[\s\S]*?<\/iframe\s*>/gi, "")
       .replace(/<!--[\s\S]*?-->/g, "");
 
     // Remove elements with display:none (hidden menus, modals, etc.)
