@@ -386,9 +386,13 @@ export class YellowPagesScraper {
     // Remove data-* attributes (data-bind, data-menu-id, etc.)
     out = out.replace(/\s+data-[\w-]+=["'][^"']*["']/gi, "");
     out = out.replace(/\s+data-[\w-]+=\S+/gi, "");
-    // Remove inline event handlers
-    out = out.replace(/\s+on\w+=["'][^"']*["']/gi, "");
-    out = out.replace(/\s+on\w+=\S+/gi, "");
+    // Remove inline event handlers (loop for nested cases)
+    let prevHandlers: string;
+    do {
+      prevHandlers = out;
+      out = out.replace(/\s+on\w+=["'][^"']*["']/gi, "");
+      out = out.replace(/\s+on\w+=\S+/gi, "");
+    } while (out !== prevHandlers);
     // Remove style attributes
     out = out.replace(/\s+style=["'][^"']*["']/gi, "");
 
