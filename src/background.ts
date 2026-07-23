@@ -967,7 +967,15 @@ function configureContentSecurityPolicy() {
   const defaultSession = session.defaultSession;
 
   // Voice feature (PRD §16): allow microphone (audio) capture; deny camera
-  // (video) for the voice input feature. Other permissions use the default.
+  // (video). Other permissions use a minimal allowlist instead of blanket-
+  // approving, so unexpected requests (geolocation, midi, etc.) are denied.
+  const ALLOWED_PERMISSIONS = new Set([
+    "clipboard-sanitized",
+    "clipboard-read",
+    "fullscreen",
+    "window-management",
+    "openExternal",
+  ]);
   defaultSession.setPermissionRequestHandler(
     (_wc, permission, callback, details) => {
       if (permission === "media") {
@@ -978,7 +986,7 @@ function configureContentSecurityPolicy() {
         callback(!wantsVideo);
         return;
       }
-      callback(true);
+      callback(ALLOWED_PERMISSIONS.has(permission));
     }
   );
 

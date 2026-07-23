@@ -171,7 +171,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from "vue";
+import { ref, computed, onMounted, onBeforeUnmount } from "vue";
 import { useI18n } from "vue-i18n";
 import {
   getVoiceSettings,
@@ -333,12 +333,16 @@ function onCancelDownload(modelId: string): void {
   cancelVoiceModelDownload(modelId);
 }
 
+let unsubscribeProgress: (() => void) | null = null;
 onMounted(() => {
   void load();
   void loadModels();
-  onVoiceModelDownloadProgress((p) => {
+  unsubscribeProgress = onVoiceModelDownloadProgress((p) => {
     downloadProgress.value = { ...downloadProgress.value, [p.modelId]: p };
   });
+});
+onBeforeUnmount(() => {
+  unsubscribeProgress?.();
 });
 </script>
 
