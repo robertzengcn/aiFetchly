@@ -76,7 +76,7 @@ const SHELL_INTENT_RE =
   /\b(shell|terminal|bash|powershell|cmd|command|execute|run|rm|unlink)\b|(?:\b(delete|remove)\b.*(?:\b(file|folder|directory|path)\b|[./~]|\.[A-Za-z0-9]{1,8}\b))/i;
 
 const FILE_WRITE_INTENT_RE =
-  /\b(create|write|save|overwrite|generate|make)\b.*(?:\b(file|document)\b|[./~]|\.[A-Za-z0-9]{1,8}\b)|(?:\b(file|document)\b.*\b(create|write|save|overwrite|generate|make)\b)/i;
+  /\b(create|write|save|overwrite|generate|make)\b.*(?:\b(file|document)\b|[./~]|\.[A-Za-z0-9]{1,8}\b)|(?:\b(file|document)\b.*\b(create|write|save|overwrite|generate|make)\b)|\b(update|replace|change)\b.*\bfile\b.*\bcontent\b/i;
 
 const FILE_EDIT_INTENT_RE =
   /\b(edit|modify|replace|patch|update|change|fix)\b.*(?:\b(file|document|path)\b|[./~]|\.[A-Za-z0-9]{1,8}\b)/i;

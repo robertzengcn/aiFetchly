@@ -474,7 +474,15 @@ replace old value with new value in manual-edit-test.txt
 5. **Verify**: A permission prompt appears before editing the file.
 6. Approve the permission.
 7. **Verify in workspace**: `manual-edit-test.txt` now contains `hello new value`.
-8. Clean up the file after the test.
+8. In a conversation where TC-35 just created `manual-tool-test.txt`, send:
+
+```text
+update file content with "manual test 20260723"
+```
+
+9. **Verify in request/logs**: The first AI server request includes `file_edit` and `file_write`.
+10. **Verify**: The assistant does not persist a raw marker such as `user:tool_call::def_tool_call:0`.
+11. Clean up the files after the test.
 
 ### TC-37: File delete request exposes `shell_execute`
 

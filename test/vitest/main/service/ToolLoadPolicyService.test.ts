@@ -116,6 +116,11 @@ describe("ToolLoadPolicyService.classify", () => {
       })
     ).toBe("contextual");
     expect(
+      classify("file_write", "builtin", {
+        currentUserMessage: 'update file content with "manual test 20260723"',
+      })
+    ).toBe("contextual");
+    expect(
       classify("file_edit", "builtin", {
         currentUserMessage: "replace foo with bar in src/main.ts",
       })

@@ -110,6 +110,14 @@ const ASYNC_POLL_MAX_MS = 30 * 60_000;
  */
 const MAX_MALFORMED_ARGUMENT_RETRIES = 3;
 
+const MAX_TEXT_TOOL_CALL_MARKER_RETRIES = 1;
+
+const TEXT_TOOL_CALL_MARKER_RE =
+  /^(?:(?:assistant|user|system):)?tool_call::def_tool_call:\d+\s*$/i;
+
+const TEXT_TOOL_CALL_MARKER_RETRY_PROMPT =
+  "Your previous response was a malformed tool-call marker instead of a valid assistant response. Retry now. If you need a tool, emit a real OpenAI tool call with the function name and JSON arguments. Do not write tool_call::def_tool_call markers as text.";
+
 /**
  * Legacy global timeout ceiling for foreground tool calls.
  *
@@ -210,6 +218,10 @@ export function shouldForceSubmitPlanForApproval(message: string): boolean {
     normalized.includes("now");
 
   return asksForSubmit && asksForNoQuestions;
+}
+
+function isTextToolCallMarker(content: string): boolean {
+  return TEXT_TOOL_CALL_MARKER_RE.test(content.trim());
 }
 
 export function resolveToolChoiceForRound(input: {
@@ -498,6 +510,7 @@ export class AIChatQueryLoop {
     // Reset to 0 whenever a round has no malformed calls. When this exceeds
     // MAX_MALFORMED_ARGUMENT_RETRIES, the turn fails with a user-facing error.
     let consecutiveMalformedRounds = 0;
+    let textToolCallMarkerRetryCount = 0;
     // Ensure a generous token budget so large tool-call arguments (e.g.
     // run_subagent with a full taskPacket) are not truncated mid-JSON.
     // The frontend may or may not send maxTokens; default to 16384.
@@ -820,6 +833,32 @@ export class AIChatQueryLoop {
         }
 
         if (!willContinue) {
+          if (isTextToolCallMarker(accumulator.state.fullContent)) {
+            if (
+              textToolCallMarkerRetryCount >= MAX_TEXT_TOOL_CALL_MARKER_RETRIES
+            ) {
+              throw new Error(
+                "AI server returned a malformed tool-call marker as text. Please retry the message."
+              );
+            }
+            textToolCallMarkerRetryCount += 1;
+            messages.push({
+              role: "user",
+              content: TEXT_TOOL_CALL_MARKER_RETRY_PROMPT,
+            });
+            eventSink.emit({
+              type: "recovery_status",
+              conversationId: input.conversationId,
+              messageId: input.assistantMessageId,
+              layer: "output_token_recovery",
+              reason: "server_error",
+              attempt: textToolCallMarkerRetryCount,
+              maxAttempts: MAX_TEXT_TOOL_CALL_MARKER_RETRIES,
+              message: "Retrying malformed tool-call marker response",
+            });
+            continue;
+          }
+
           // If the turn was aborted, the accumulator likely ingested nothing
           // (the onChunk callback early-returns on abort). Return "cancelled"
           // here rather than falling through to the empty-response guard

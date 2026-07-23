@@ -311,6 +311,40 @@ describe("ToolCatalogService.filterForRound", () => {
     expect(r.exposedToolNames).not.toContain("mcp_1_secret");
   });
 
+  it("exposes file mutation tools for implicit file-content update requests", () => {
+    const svc = new ToolCatalogService();
+    const fileCtx: ToolCatalogRuntimeContext = {
+      ...ctx,
+      currentUserMessage: 'update file content with "manual test 20260723"',
+    };
+    const liveTools = [
+      tool("file_write"),
+      tool("file_edit"),
+      tool("mcp_1_secret"),
+    ];
+    const catalog = svc.buildFromOpenAITools({
+      tools: liveTools,
+      context: fileCtx,
+    });
+    const r = svc.filterForRound({
+      catalog,
+      liveTools,
+      state: emptyState,
+      modeDecision: {
+        mode: "deferred",
+        configuredMode: "on",
+        reason: "on",
+        estimatedDeferredTokens: 1000,
+      },
+    });
+
+    expect(catalog.byName.get("file_write")?.loadPolicy).toBe("contextual");
+    expect(catalog.byName.get("file_edit")?.loadPolicy).toBe("contextual");
+    expect(r.exposedToolNames).toContain("file_write");
+    expect(r.exposedToolNames).toContain("file_edit");
+    expect(r.exposedToolNames).not.toContain("mcp_1_secret");
+  });
+
   it("keeps run_subagent exposed because the system prompt advertises agents", () => {
     const { svc, catalog } = buildWith([
       tool("run_subagent"),
