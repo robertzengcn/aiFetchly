@@ -128,8 +128,12 @@ export class HtmlConversionService {
             // Remove link tags that are not stylesheets or canonical
             cleaned = cleaned.replace(/<link(?![^>]*(?:stylesheet|canonical))[^>]*>/gi, '');
             
-            // Remove script-related attributes from other elements
-            cleaned = cleaned.replace(/\s*on\w+\s*=\s*["'][^"']*["']/gi, '');
+            // Remove script-related attributes from other elements (loop to handle nested cases)
+            let prevCleaned: string;
+            do {
+                prevCleaned = cleaned;
+                cleaned = cleaned.replace(/\s*on\w+\s*=\s*["'][^"']*["']/gi, '');
+            } while (cleaned !== prevCleaned);
             
             // Remove data attributes that might contain scripts
             cleaned = cleaned.replace(/\s*data-[^=]*\s*=\s*["'][^"']*["']/gi, '');
