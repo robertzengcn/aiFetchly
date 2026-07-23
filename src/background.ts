@@ -966,6 +966,22 @@ function initialize() {
 function configureContentSecurityPolicy() {
   const defaultSession = session.defaultSession;
 
+  // Voice feature (PRD §16): allow microphone (audio) capture; deny camera
+  // (video) for the voice input feature. Other permissions use the default.
+  defaultSession.setPermissionRequestHandler(
+    (_wc, permission, callback, details) => {
+      if (permission === "media") {
+        const wantsVideo =
+          (
+            details as { mediaTypes?: string[] } | undefined
+          )?.mediaTypes?.includes("video") ?? false;
+        callback(!wantsVideo);
+        return;
+      }
+      callback(true);
+    }
+  );
+
   // Set CSP based on environment
   // In development, we need 'unsafe-eval' for Vite's HMR
   // In production, we can be more restrictive

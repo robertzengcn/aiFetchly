@@ -1410,6 +1410,7 @@ async function clearCurrentConversation(): Promise<void> {
 }
 
 const onSelectConversation = (conversationId: string): void => {
+  speechController.stop();
   detachActiveStreamView();
   activeConversationId.value = conversationId;
   streamError.value = null;
@@ -1428,6 +1429,7 @@ const detachActiveStreamView = (): void => {
 };
 
 const onStop = (): void => {
+  speechController.stop();
   stopChatV2Stream();
   clearChatV2StreamListeners();
   isStreaming.value = false;
