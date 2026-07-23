@@ -2,6 +2,7 @@
   "name": "aiFetchly",
   "version": "1.0.11",
   "description": "AI-powered marketing agent(aiFetchly)",
+  "license": "Apache-2.0",
   "author": "Robert Zeng",
   "main": ".vite/build/background.js",
   "build": {
