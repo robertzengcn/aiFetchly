@@ -1433,7 +1433,9 @@ function truncateMessage(text: string, maxLength: number): string {
 async function handleCopyMessage(content: string, messageId: string) {
   try {
     // Copy plain text content (strip HTML tags if any)
-    const textToCopy = content.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').trim();
+    const tempDiv = document.createElement('div');
+    tempDiv.innerHTML = content;
+    const textToCopy = (tempDiv.textContent || tempDiv.innerText || '').trim();
     
     await navigator.clipboard.writeText(textToCopy);
     
