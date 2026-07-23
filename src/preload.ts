@@ -242,6 +242,10 @@ import {
   AI_CHAT_V2_VOICE_CANCEL,
   AI_CHAT_V2_VOICE_GET_SETTINGS,
   AI_CHAT_V2_VOICE_SET_SETTINGS,
+  AI_CHAT_V2_VOICE_MODEL_LIST,
+  AI_CHAT_V2_VOICE_MODEL_DOWNLOAD,
+  AI_CHAT_V2_VOICE_MODEL_DOWNLOAD_PROGRESS,
+  AI_CHAT_V2_VOICE_MODEL_CANCEL_DOWNLOAD,
   AI_ARTIFACT_GET,
   AI_ARTIFACT_LIST,
   // Dashboard Channels
@@ -521,6 +525,7 @@ contextBridge.exposeInMainWorld("api", {
       WEBSOCKET_EVENT,
       // Contact Extraction Progress Channel
       CONTACT_EXTRACTION_PROGRESS,
+      AI_CHAT_V2_VOICE_MODEL_DOWNLOAD_PROGRESS,
       // System Dependency Prompt (main→renderer)
       SYSTEM_DEPENDENCY_PROMPT,
       // Google Maps Scraper Channels
@@ -585,6 +590,7 @@ contextBridge.exposeInMainWorld("api", {
       WEBSOCKET_EVENT,
       // Contact Extraction Progress Channel
       CONTACT_EXTRACTION_PROGRESS,
+      AI_CHAT_V2_VOICE_MODEL_DOWNLOAD_PROGRESS,
       // System Dependency Prompt (main→renderer)
       SYSTEM_DEPENDENCY_PROMPT,
       // Google Maps Scraper Channels
@@ -615,6 +621,7 @@ contextBridge.exposeInMainWorld("api", {
       AI_EMAIL_TEMPLATE_GENERATE_COMPLETE,
       AI_EMAIL_TEMPLATE_ERROR,
       CONTACT_EXTRACTION_PROGRESS,
+      AI_CHAT_V2_VOICE_MODEL_DOWNLOAD_PROGRESS,
       GOOGLE_MAPS_SEARCH_RESULT,
       // Yandex Maps Scraper Channels
       YANDEX_MAPS_SEARCH_RESULT,
@@ -828,6 +835,9 @@ contextBridge.exposeInMainWorld("api", {
       AI_CHAT_V2_VOICE_CANCEL,
       AI_CHAT_V2_VOICE_GET_SETTINGS,
       AI_CHAT_V2_VOICE_SET_SETTINGS,
+      AI_CHAT_V2_VOICE_MODEL_LIST,
+      AI_CHAT_V2_VOICE_MODEL_DOWNLOAD,
+      AI_CHAT_V2_VOICE_MODEL_CANCEL_DOWNLOAD,
       // AI Artifact Channels
       AI_ARTIFACT_GET,
       AI_ARTIFACT_LIST,

@@ -9,7 +9,11 @@
  * Design: docs/prd/local-sherpa-onnx-voice-chat-technical-design.md §3.1, §6.
  */
 
-import { windowInvoke } from "@/views/utils/apirequest";
+import {
+  windowInvoke,
+  windowReceive,
+  windowRemoveListener,
+} from "@/views/utils/apirequest";
 import type {
   AiChatVoiceSettingsView,
   AiChatVoiceRuntimeStatus,
@@ -17,7 +21,9 @@ import type {
   AiChatVoiceTranscribeResponse,
   AiChatVoiceTtsRequest,
   AiChatVoiceTtsResponse,
+  VoiceModelDownloadProgress,
 } from "@/entityTypes/aiChatVoiceTypes";
+import type { VoiceModelCatalogEntry } from "@/service/aiChatVoice/VoiceModelCatalogService";
 import {
   AI_CHAT_V2_VOICE_STATUS,
   AI_CHAT_V2_VOICE_TRANSCRIBE,
@@ -25,6 +31,10 @@ import {
   AI_CHAT_V2_VOICE_CANCEL,
   AI_CHAT_V2_VOICE_GET_SETTINGS,
   AI_CHAT_V2_VOICE_SET_SETTINGS,
+  AI_CHAT_V2_VOICE_MODEL_LIST,
+  AI_CHAT_V2_VOICE_MODEL_DOWNLOAD,
+  AI_CHAT_V2_VOICE_MODEL_CANCEL_DOWNLOAD,
+  AI_CHAT_V2_VOICE_MODEL_DOWNLOAD_PROGRESS,
 } from "@/config/channellist";
 
 /** Read STT/TTS runtime + model availability (no audio payload). */
@@ -65,4 +75,27 @@ export function setVoiceSettings(
   settings: AiChatVoiceSettingsView
 ): Promise<AiChatVoiceSettingsView> {
   return windowInvoke(AI_CHAT_V2_VOICE_SET_SETTINGS, settings);
+}
+
+// --- Phase 5: Model catalog + download ---
+
+export function listVoiceModels(): Promise<VoiceModelCatalogEntry[]> {
+  return windowInvoke(AI_CHAT_V2_VOICE_MODEL_LIST, {});
+}
+
+export function downloadVoiceModel(modelId: string): Promise<void> {
+  return windowInvoke(AI_CHAT_V2_VOICE_MODEL_DOWNLOAD, { modelId });
+}
+
+export function cancelVoiceModelDownload(modelId: string): Promise<void> {
+  return windowInvoke(AI_CHAT_V2_VOICE_MODEL_CANCEL_DOWNLOAD, { modelId });
+}
+
+export function onVoiceModelDownloadProgress(
+  cb: (p: VoiceModelDownloadProgress) => void
+): () => void {
+  const listener = cb as (value: unknown) => void;
+  windowReceive(AI_CHAT_V2_VOICE_MODEL_DOWNLOAD_PROGRESS, listener);
+  return () =>
+    windowRemoveListener(AI_CHAT_V2_VOICE_MODEL_DOWNLOAD_PROGRESS, listener);
 }

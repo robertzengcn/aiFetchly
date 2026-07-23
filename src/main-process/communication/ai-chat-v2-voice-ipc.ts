@@ -1,4 +1,4 @@
-import { app, ipcMain } from "electron";
+import { app, BrowserWindow, ipcMain } from "electron";
 import * as path from "path";
 import type { CommonMessage } from "@/entityTypes/commonType";
 import type {
@@ -18,6 +18,14 @@ import {
   AI_CHAT_V2_VOICE_SET_SETTINGS,
 } from "@/config/channellist";
 import { AiChatVoiceModule } from "@/modules/AiChatVoiceModule";
+import { VoiceModelCatalogService } from "@/service/aiChatVoice/VoiceModelCatalogService";
+import { VoiceModelDownloadService } from "@/service/aiChatVoice/VoiceModelDownloadService";
+import {
+  AI_CHAT_V2_VOICE_MODEL_LIST,
+  AI_CHAT_V2_VOICE_MODEL_DOWNLOAD,
+  AI_CHAT_V2_VOICE_MODEL_DOWNLOAD_PROGRESS,
+  AI_CHAT_V2_VOICE_MODEL_CANCEL_DOWNLOAD,
+} from "@/config/channellist";
 
 function ok<T>(data: T): CommonMessage<T> {
   return { status: true, msg: "", data };
@@ -61,29 +69,34 @@ function voiceModule(): AiChatVoiceModule {
  * availability resolver.
  */
 export function registerAiChatVoiceIpcHandlers(): void {
-  ipcMain.handle(AI_CHAT_V2_VOICE_STATUS, async (): Promise<
-    CommonMessage<AiChatVoiceRuntimeStatus>
-  > => {
-    try {
-      return ok(voiceModule().getRuntimeStatus());
-    } catch (err) {
-      return denied(err instanceof Error ? err.message : String(err));
+  ipcMain.handle(
+    AI_CHAT_V2_VOICE_STATUS,
+    async (): Promise<CommonMessage<AiChatVoiceRuntimeStatus>> => {
+      try {
+        return ok(voiceModule().getRuntimeStatus());
+      } catch (err) {
+        return denied(err instanceof Error ? err.message : String(err));
+      }
     }
-  });
+  );
 
-  ipcMain.handle(AI_CHAT_V2_VOICE_GET_SETTINGS, async (): Promise<
-    CommonMessage<AiChatVoiceSettingsView>
-  > => {
-    try {
-      return ok(voiceModule().getSettingsView());
-    } catch (err) {
-      return denied(err instanceof Error ? err.message : String(err));
+  ipcMain.handle(
+    AI_CHAT_V2_VOICE_GET_SETTINGS,
+    async (): Promise<CommonMessage<AiChatVoiceSettingsView>> => {
+      try {
+        return ok(voiceModule().getSettingsView());
+      } catch (err) {
+        return denied(err instanceof Error ? err.message : String(err));
+      }
     }
-  });
+  );
 
   ipcMain.handle(
     AI_CHAT_V2_VOICE_SET_SETTINGS,
-    async (_e, data: unknown): Promise<CommonMessage<AiChatVoiceSettingsView>> => {
+    async (
+      _e,
+      data: unknown
+    ): Promise<CommonMessage<AiChatVoiceSettingsView>> => {
       try {
         const view = parseArg<AiChatVoiceSettingsView>(data);
         if (!view) {
@@ -116,7 +129,10 @@ export function registerAiChatVoiceIpcHandlers(): void {
 
   ipcMain.handle(
     AI_CHAT_V2_VOICE_TTS,
-    async (_e, data: unknown): Promise<CommonMessage<AiChatVoiceTtsResponse>> => {
+    async (
+      _e,
+      data: unknown
+    ): Promise<CommonMessage<AiChatVoiceTtsResponse>> => {
       try {
         const request = parseArg<AiChatVoiceTtsRequest>(data);
         if (!request) {
@@ -129,13 +145,84 @@ export function registerAiChatVoiceIpcHandlers(): void {
     }
   );
 
-  ipcMain.handle(AI_CHAT_V2_VOICE_CANCEL, async (): Promise<
-    CommonMessage<{ ok: boolean }>
-  > => {
-    try {
-      return ok(await voiceModule().cancel());
-    } catch (err) {
-      return denied(err instanceof Error ? err.message : String(err));
+  ipcMain.handle(
+    AI_CHAT_V2_VOICE_CANCEL,
+    async (): Promise<CommonMessage<{ ok: boolean }>> => {
+      try {
+        return ok(await voiceModule().cancel());
+      } catch (err) {
+        return denied(err instanceof Error ? err.message : String(err));
+      }
     }
-  });
+  );
+
+  // --- Phase 5: Model catalog + consent-gated download ---
+
+  let downloadService: VoiceModelDownloadService | null = null;
+  function getDownloadService(): VoiceModelDownloadService {
+    if (!downloadService) {
+      downloadService = new VoiceModelDownloadService({
+        modelRoot: path.join(app.getPath("userData"), "voice-models"),
+      });
+    }
+    return downloadService;
+  }
+
+  ipcMain.handle(
+    AI_CHAT_V2_VOICE_MODEL_LIST,
+    async (): Promise<CommonMessage<unknown[]>> => {
+      try {
+        const catalog = new VoiceModelCatalogService({
+          modelRoot: path.join(app.getPath("userData"), "voice-models"),
+        });
+        return ok(catalog.listModels());
+      } catch (err) {
+        return denied(err instanceof Error ? err.message : String(err));
+      }
+    }
+  );
+
+  ipcMain.handle(
+    AI_CHAT_V2_VOICE_MODEL_DOWNLOAD,
+    async (_e, data: unknown): Promise<CommonMessage<{ ok: boolean }>> => {
+      const req = parseArg<{ modelId: string }>(data);
+      if (!req?.modelId) {
+        return denied("modelId is required.");
+      }
+      try {
+        await getDownloadService().downloadModel(req.modelId, (progress) => {
+          const windows = BrowserWindow.getAllWindows();
+          const win = windows[0] as
+            | {
+                isDestroyed: () => boolean;
+                webContents: {
+                  send: (channel: string, payload: unknown) => void;
+                };
+              }
+            | undefined;
+          if (win && !win.isDestroyed()) {
+            win.webContents.send(
+              AI_CHAT_V2_VOICE_MODEL_DOWNLOAD_PROGRESS,
+              progress
+            );
+          }
+        });
+        return ok({ ok: true });
+      } catch (err) {
+        return denied(err instanceof Error ? err.message : String(err));
+      }
+    }
+  );
+
+  ipcMain.handle(
+    AI_CHAT_V2_VOICE_MODEL_CANCEL_DOWNLOAD,
+    async (_e, data: unknown): Promise<CommonMessage<{ ok: boolean }>> => {
+      const req = parseArg<{ modelId: string }>(data);
+      if (!req?.modelId) {
+        return denied("modelId is required.");
+      }
+      getDownloadService().cancelDownload(req.modelId);
+      return ok({ ok: true });
+    }
+  );
 }
