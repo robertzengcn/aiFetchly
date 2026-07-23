@@ -541,11 +541,12 @@ const activeAssistantMessageId = ref<string | null>(null);
 const receivedFirstResponse = ref(false);
 // Tracks the active reconnection attempt when the AI server connection
 // drops and is being retried. Null when no retry is in progress.
-const retryInfo = ref<{
+type RetryInfo = {
   attempt: number;
   maxAttempts: number;
   delayMs: number;
-} | null>(null);
+};
+const retryInfo = ref<RetryInfo | null>(null);
 // Active seven-layer recovery status. Null when no recovery layer is
 // running. Cleared on token/tool_call/complete/cancelled/error.
 type RecoveryInfo = {
@@ -566,6 +567,192 @@ const showMCPToolManager = ref(false);
 const isCompacting = ref(false);
 const compactNotice = ref(false);
 const stoppedPendingToolConversationIds = ref<Set<string>>(new Set());
+
+interface MessageListController {
+  get(): ChatV2MessageView[];
+  set(nextMessages: ChatV2MessageView[]): void;
+}
+
+interface ConversationRuntimeState {
+  messages: ChatV2MessageView[];
+  isStreaming: boolean;
+  activeAssistantMessageId: string | null;
+  receivedFirstResponse: boolean;
+  streamError: string | null;
+  retryInfo: RetryInfo | null;
+  recoveryInfo: RecoveryInfo | null;
+}
+
+const conversationRuntime = ref<Map<string, ConversationRuntimeState>>(
+  new Map()
+);
+
+const createIdleRuntimeState = (): ConversationRuntimeState => ({
+  messages: [],
+  isStreaming: false,
+  activeAssistantMessageId: null,
+  receivedFirstResponse: false,
+  streamError: null,
+  retryInfo: null,
+  recoveryInfo: null,
+});
+
+const getConversationRuntimeState = (
+  conversationId: string
+): ConversationRuntimeState => {
+  return (
+    conversationRuntime.value.get(conversationId) ?? createIdleRuntimeState()
+  );
+};
+
+const applyRuntimeFieldsToActive = (
+  state: ConversationRuntimeState,
+  options: { applyMessages?: boolean } = {}
+): void => {
+  if (options.applyMessages) {
+    messages.value = state.messages;
+  }
+  isStreaming.value = state.isStreaming;
+  activeAssistantMessageId.value = state.activeAssistantMessageId;
+  receivedFirstResponse.value = state.receivedFirstResponse;
+  streamError.value = state.streamError;
+  retryInfo.value = state.retryInfo;
+  recoveryInfo.value = state.recoveryInfo;
+};
+
+const resetActiveRuntimeFields = (): void => {
+  isStreaming.value = false;
+  activeAssistantMessageId.value = null;
+  receivedFirstResponse.value = false;
+  streamError.value = null;
+  retryInfo.value = null;
+  recoveryInfo.value = null;
+};
+
+const patchConversationRuntimeState = (
+  conversationId: string,
+  patch: Partial<ConversationRuntimeState>
+): ConversationRuntimeState => {
+  const current = getConversationRuntimeState(conversationId);
+  const nextState: ConversationRuntimeState = {
+    ...current,
+    ...patch,
+  };
+  const nextMap = new Map(conversationRuntime.value);
+  nextMap.set(conversationId, nextState);
+  conversationRuntime.value = nextMap;
+  if (activeConversationId.value === conversationId) {
+    applyRuntimeFieldsToActive(nextState, {
+      applyMessages: patch.messages !== undefined,
+    });
+  }
+  return nextState;
+};
+
+const clearConversationRuntimeState = (conversationId: string): void => {
+  if (!conversationRuntime.value.has(conversationId)) return;
+  const nextMap = new Map(conversationRuntime.value);
+  nextMap.delete(conversationId);
+  conversationRuntime.value = nextMap;
+};
+
+const markConversationRuntimeStopped = (
+  conversationId: string | null | undefined,
+  errorMessage?: string
+): void => {
+  if (!conversationId) {
+    resetActiveRuntimeFields();
+    if (errorMessage) {
+      streamError.value = errorMessage;
+    }
+    return;
+  }
+  patchConversationRuntimeState(conversationId, {
+    isStreaming: false,
+    activeAssistantMessageId: null,
+    retryInfo: null,
+    recoveryInfo: null,
+    streamError: errorMessage ?? null,
+  });
+};
+
+const markActiveConversationRuntimeStopped = (errorMessage?: string): void => {
+  markConversationRuntimeStopped(activeConversationId.value, errorMessage);
+};
+
+const activeMessageListController: MessageListController = {
+  get: () => messages.value,
+  set: (nextMessages: ChatV2MessageView[]): void => {
+    messages.value = nextMessages;
+  },
+};
+
+const hasEquivalentPersistedMessage = (
+  persistedMessages: ChatV2MessageView[],
+  liveMessage: ChatV2MessageView
+): boolean => {
+  const liveToolCallId = liveMessage.metadata?.toolCallId;
+  return persistedMessages.some((persisted) => {
+    if (persisted.id === liveMessage.id) return true;
+    if (
+      liveToolCallId &&
+      persisted.messageType === liveMessage.messageType &&
+      persisted.metadata?.toolCallId === liveToolCallId
+    ) {
+      return true;
+    }
+    return (
+      persisted.role === liveMessage.role &&
+      persisted.messageType === liveMessage.messageType &&
+      persisted.content === liveMessage.content &&
+      liveMessage.content.length > 0
+    );
+  });
+};
+
+const mergePersistedAndLiveMessages = (
+  persistedMessages: ChatV2MessageView[],
+  liveMessages: ChatV2MessageView[]
+): ChatV2MessageView[] => {
+  const merged = [...persistedMessages];
+  const indexById = new Map<string, number>();
+  merged.forEach((message, index) => {
+    indexById.set(message.id, index);
+  });
+
+  for (const liveMessage of liveMessages) {
+    const existingIndex = indexById.get(liveMessage.id);
+    if (existingIndex !== undefined) {
+      const persistedMessage = merged[existingIndex];
+      if (liveMessage.content.length > persistedMessage.content.length) {
+        const metadataSource =
+          liveMessage.metadata?.source ?? persistedMessage.metadata?.source;
+        const mergedMetadata =
+          metadataSource &&
+          (persistedMessage.metadata || liveMessage.metadata)
+            ? {
+                ...persistedMessage.metadata,
+                ...liveMessage.metadata,
+                source: metadataSource,
+              }
+            : undefined;
+        merged[existingIndex] = {
+          ...persistedMessage,
+          ...liveMessage,
+          metadata: mergedMetadata,
+        };
+      }
+      continue;
+    }
+    if (hasEquivalentPersistedMessage(merged, liveMessage)) {
+      continue;
+    }
+    merged.push(liveMessage);
+    indexById.set(liveMessage.id, merged.length - 1);
+  }
+
+  return merged;
+};
 
 // ---------------------------------------------------------------------------
 // Attachment upload state
@@ -1066,13 +1253,22 @@ const chatIsRunning = computed(
   () => isStreaming.value || hasLoadedPendingToolExecution.value
 );
 
+const hasAnyActiveStream = computed(() => {
+  for (const state of conversationRuntime.value.values()) {
+    if (state.isStreaming) return true;
+  }
+  return false;
+});
+
 /**
- * A conversation shows a "running" indicator when it is the active conversation
- * and the chat is currently streaming or waiting on a pending tool execution.
- * Other conversations in the list are idle (no background work happens on them).
+ * A conversation shows a running indicator if it owns a live stream, even when
+ * the user has switched away from it. Pending tool execution is only known for
+ * the currently loaded conversation history, so that remains active-only.
  */
 const isConversationRunning = (conversationId: string): boolean =>
-  chatIsRunning.value && conversationId === activeConversationId.value;
+  conversationRuntime.value.get(conversationId)?.isStreaming === true ||
+  (conversationId === activeConversationId.value &&
+    hasLoadedPendingToolExecution.value);
 
 const isPermissionPromptMessage = (message: ChatV2MessageView): boolean => {
   if (message.messageType !== MessageType.TOOL_RESULT) return false;
@@ -1307,7 +1503,19 @@ const loadHistory = async (conversationId: string): Promise<void> => {
     // shortcut. Re-derive it on load so artifact cards reappear on history
     // reopen (PRD ART-009). Auto-open is NOT triggered here — only live
     // tool_result chunks auto-open.
-    messages.value = (resp?.messages ?? []).map(ensureArtifactMetadata);
+    const persistedMessages = (resp?.messages ?? []).map(
+      ensureArtifactMetadata
+    );
+    const runtime = conversationRuntime.value.get(conversationId);
+    messages.value =
+      runtime?.isStreaming && runtime.messages.length > 0
+        ? mergePersistedAndLiveMessages(persistedMessages, runtime.messages)
+        : persistedMessages;
+    if (runtime?.isStreaming) {
+      patchConversationRuntimeState(conversationId, {
+        messages: messages.value,
+      });
+    }
     // Reset context-usage tracking for the loaded conversation. If any
     // history rows carry tokensUsed, seed the baseline estimate from the
     // most recent assistant message; otherwise start at zero until the
@@ -1363,10 +1571,9 @@ const loadHistory = async (conversationId: string): Promise<void> => {
 };
 
 const onNewConversation = (): void => {
-  detachActiveStreamView();
   activeConversationId.value = null;
   messages.value = [];
-  streamError.value = null;
+  resetActiveRuntimeFields();
   applyPlanState(null);
   pendingQuestion.value = null;
   pendingPlanApproval.value = null;
@@ -1386,6 +1593,7 @@ async function clearCurrentConversation(): Promise<void> {
   if (conversationId) {
     try {
       await clearChatV2Conversation(conversationId);
+      clearConversationRuntimeState(conversationId);
     } catch (err) {
       streamError.value = err instanceof Error ? err.message : String(err);
       return;
@@ -1395,29 +1603,29 @@ async function clearCurrentConversation(): Promise<void> {
 }
 
 const onSelectConversation = (conversationId: string): void => {
-  detachActiveStreamView();
   activeConversationId.value = conversationId;
-  streamError.value = null;
+  const runtime = conversationRuntime.value.get(conversationId);
+  if (runtime) {
+    applyRuntimeFieldsToActive(runtime, { applyMessages: true });
+  } else {
+    messages.value = [];
+    resetActiveRuntimeFields();
+  }
   showConversationsDialog.value = false;
   void loadHistory(conversationId);
 };
 
 const detachActiveStreamView = (): void => {
-  if (isStreaming.value) {
-    clearChatV2StreamListeners();
-    isStreaming.value = false;
-    activeAssistantMessageId.value = null;
-    retryInfo.value = null;
-    recoveryInfo.value = null;
-  }
+  clearChatV2StreamListeners();
+  resetActiveRuntimeFields();
 };
 
 const onStop = (): void => {
   stopChatV2Stream();
   clearChatV2StreamListeners();
-  isStreaming.value = false;
   const conversationId = activeConversationId.value;
   if (conversationId) {
+    markActiveConversationRuntimeStopped();
     stoppedPendingToolConversationIds.value = new Set([
       ...stoppedPendingToolConversationIds.value,
       conversationId,
@@ -1452,10 +1660,12 @@ const resolveToolIdForPermissionMessage = (
 
 const upsertToolProgress = (
   chunk: ChatV2StreamChunk,
-  conversationId: string
+  conversationId: string,
+  list: MessageListController = activeMessageListController
 ): void => {
   if (!chunk.toolCallId) return;
-  const idx = messages.value.findIndex(
+  const currentMessages = list.get();
+  const idx = currentMessages.findIndex(
     (m) =>
       m.messageType === MessageType.TOOL_CALL &&
       m.metadata?.toolCallId === chunk.toolCallId
@@ -1463,7 +1673,7 @@ const upsertToolProgress = (
   if (idx === -1) {
     return;
   }
-  const existing = messages.value[idx];
+  const existing = currentMessages[idx];
   const nextProgress: {
     phase?: "queued" | "running" | "fetching" | "extracting" | "finalizing";
     message?: string;
@@ -1487,18 +1697,20 @@ const upsertToolProgress = (
       toolProgress: nextProgress,
     } as ChatV2MessageMetadata,
   };
-  messages.value = [
-    ...messages.value.slice(0, idx),
+  list.set([
+    ...currentMessages.slice(0, idx),
     updatedMessage,
-    ...messages.value.slice(idx + 1),
-  ];
+    ...currentMessages.slice(idx + 1),
+  ]);
 };
 
 const upsertToolResultMessage = (
   chunk: ChatV2StreamChunk,
   conversationId: string,
-  insertBeforeAssistantId?: string
+  insertBeforeAssistantId?: string,
+  list: MessageListController = activeMessageListController
 ): void => {
+  const currentMessages = list.get();
   const toolResult = chunk.toolResult ?? {};
   if (
     chunk.toolCallId &&
@@ -1512,7 +1724,7 @@ const upsertToolResultMessage = (
       ? chunk.fullContent
       : JSON.stringify(toolResult, null, 2);
   const existingIdx = chunk.replacesPermissionPromptForToolId
-    ? messages.value.findIndex(
+    ? currentMessages.findIndex(
         (message) =>
           message.messageType === MessageType.TOOL_RESULT &&
           message.metadata?.toolCallId ===
@@ -1541,20 +1753,22 @@ const upsertToolResultMessage = (
   };
 
   if (existingIdx !== -1) {
-    messages.value[existingIdx] = {
-      ...messages.value[existingIdx],
+    const updatedMessages = [...currentMessages];
+    updatedMessages[existingIdx] = {
+      ...updatedMessages[existingIdx],
       content,
       metadata: {
-        ...messages.value[existingIdx].metadata,
+        ...updatedMessages[existingIdx].metadata,
         ...metadata,
       },
     };
+    list.set(updatedMessages);
     return;
   }
 
   if (
     chunk.toolCallId &&
-    messages.value.some(
+    currentMessages.some(
       (message) =>
         message.messageType === MessageType.TOOL_RESULT &&
         message.metadata?.toolCallId === chunk.toolCallId
@@ -1575,19 +1789,19 @@ const upsertToolResultMessage = (
   // Insert before the assistant placeholder so tool results always
   // appear before the assistant's text response.
   if (insertBeforeAssistantId) {
-    const aIdx = messages.value.findIndex(
+    const aIdx = currentMessages.findIndex(
       (m) => m.id === insertBeforeAssistantId
     );
     if (aIdx !== -1) {
-      messages.value = [
-        ...messages.value.slice(0, aIdx),
+      list.set([
+        ...currentMessages.slice(0, aIdx),
         toolResultMsg,
-        ...messages.value.slice(aIdx),
-      ];
+        ...currentMessages.slice(aIdx),
+      ]);
       return;
     }
   }
-  messages.value = [...messages.value, toolResultMsg];
+  list.set([...currentMessages, toolResultMsg]);
 };
 
 const handleSkillPermissionGrant = async (
@@ -1596,11 +1810,10 @@ const handleSkillPermissionGrant = async (
 ): Promise<void> => {
   const toolId = resolveToolIdForPermissionMessage(message);
   if (!toolId) {
-    streamError.value =
+    const errMsg =
       t("aiChatV2.permission_resume_no_tool_id") ||
       "Missing tool call information; cannot continue execution.";
-    isStreaming.value = false;
-    activeAssistantMessageId.value = null;
+    markConversationRuntimeStopped(message.conversationId, errMsg);
     return;
   }
 
@@ -1635,15 +1848,12 @@ const handleSkillPermissionGrant = async (
           },
         };
       }
-      isStreaming.value = false;
-      activeAssistantMessageId.value = null;
+      markConversationRuntimeStopped(message.conversationId, errMsg);
       setPermissionResumeInFlight(toolId, false);
     }
   } catch (error) {
     const errMsg = error instanceof Error ? error.message : String(error);
-    streamError.value = errMsg;
-    isStreaming.value = false;
-    activeAssistantMessageId.value = null;
+    markConversationRuntimeStopped(message.conversationId, errMsg);
     setPermissionResumeInFlight(toolId, false);
   }
 };
@@ -1673,8 +1883,7 @@ const handleSkillPermissionDeny = (message: ChatV2MessageView): void => {
   }
   clearChatV2StreamListeners();
   stopChatV2Stream();
-  isStreaming.value = false;
-  activeAssistantMessageId.value = null;
+  markConversationRuntimeStopped(message.conversationId);
 };
 
 const handlePinnedPermissionDeny = (): void => {
@@ -1714,12 +1923,14 @@ const readPlanToolResultVersion = (
 
 const findPlanMessageInsertionIndex = (
   state: AIChatPlanStateView,
-  existingPlanIndex: number
+  existingPlanIndex: number,
+  list: MessageListController = activeMessageListController
 ): number => {
+  const currentMessages = list.get();
   let fallbackIndex = -1;
-  for (let i = messages.value.length - 1; i >= 0; i -= 1) {
+  for (let i = currentMessages.length - 1; i >= 0; i -= 1) {
     if (i === existingPlanIndex) continue;
-    const message = messages.value[i];
+    const message = currentMessages[i];
     if (!isSubmitPlanToolMessage(message)) continue;
     fallbackIndex = i + 1;
     const versionInfo = readPlanToolResultVersion(message);
@@ -1736,7 +1947,7 @@ const findPlanMessageInsertionIndex = (
     ? Date.parse(state.latestVersion.createdAt)
     : NaN;
   if (!Number.isNaN(planCreatedAt)) {
-    const chronologicalIndex = messages.value.findIndex((message, index) => {
+    const chronologicalIndex = currentMessages.findIndex((message, index) => {
       if (index === existingPlanIndex) return false;
       const messageTime = Date.parse(message.timestamp);
       return !Number.isNaN(messageTime) && messageTime > planCreatedAt;
@@ -1744,7 +1955,7 @@ const findPlanMessageInsertionIndex = (
     if (chronologicalIndex !== -1) return chronologicalIndex;
   }
 
-  return messages.value.length;
+  return currentMessages.length;
 };
 
 /**
@@ -1752,10 +1963,14 @@ const findPlanMessageInsertionIndex = (
  * in the conversation flow (not pinned at the bottom). After approval/reject
  * the row stays in place; later messages render below it.
  */
-const upsertPlanMessage = (state: AIChatPlanStateView): void => {
+const upsertPlanMessage = (
+  state: AIChatPlanStateView,
+  list: MessageListController = activeMessageListController
+): void => {
+  const currentMessages = list.get();
   const planMsgId = `plan-${state.planId}`;
-  const existingIdx = messages.value.findIndex((m) => m.id === planMsgId);
-  const insertIdx = findPlanMessageInsertionIndex(state, existingIdx);
+  const existingIdx = currentMessages.findIndex((m) => m.id === planMsgId);
+  const insertIdx = findPlanMessageInsertionIndex(state, existingIdx, list);
   const metadata = {
     source: "chat-v2" as const,
     planEventType: "plan_submitted" as const,
@@ -1772,28 +1987,28 @@ const upsertPlanMessage = (state: AIChatPlanStateView): void => {
     metadata,
   };
   if (existingIdx !== -1) {
-    const existingMessage = messages.value[existingIdx];
-    planMessage.timestamp = messages.value[existingIdx].timestamp;
+    const existingMessage = currentMessages[existingIdx];
+    planMessage.timestamp = currentMessages[existingIdx].timestamp;
     planMessage.metadata = {
       ...existingMessage.metadata,
       ...metadata,
     };
-    const withoutExisting = messages.value.filter((m) => m.id !== planMsgId);
+    const withoutExisting = currentMessages.filter((m) => m.id !== planMsgId);
     const adjustedInsertIdx =
       existingIdx < insertIdx ? insertIdx - 1 : insertIdx;
     const targetIdx = Math.min(adjustedInsertIdx, withoutExisting.length);
-    messages.value = [
+    list.set([
       ...withoutExisting.slice(0, targetIdx),
       planMessage,
       ...withoutExisting.slice(targetIdx),
-    ];
+    ]);
     return;
   }
-  messages.value = [
-    ...messages.value.slice(0, insertIdx),
+  list.set([
+    ...currentMessages.slice(0, insertIdx),
     planMessage,
-    ...messages.value.slice(insertIdx),
-  ];
+    ...currentMessages.slice(insertIdx),
+  ]);
 };
 
 const handleQuestionAnswered = async (
@@ -1940,7 +2155,7 @@ const onSend = async (
   files?: File[],
   options?: { isExpandedPrompt?: boolean }
 ): Promise<void> => {
-  if (chatIsRunning.value) return;
+  if (chatIsRunning.value || hasAnyActiveStream.value) return;
   streamError.value = null;
   attachmentError.value = null;
   if (activeConversationId.value) {
@@ -1991,7 +2206,6 @@ const onSend = async (
   const isCurrentStreamView = (): boolean =>
     activeConversationId.value === streamConversationId;
   const isCurrentStreamChunk = (chunk: ChatV2StreamChunk): boolean =>
-    isCurrentStreamView() &&
     (!chunk.conversationId || chunk.conversationId === streamConversationId);
 
   const nowIso = new Date().toISOString();
@@ -2006,10 +2220,19 @@ const onSend = async (
       ? { source: "chat-v2", attachments: attachmentMetadata }
       : undefined,
   };
-  messages.value = [...messages.value, tempUser];
+  let streamMessages = [...messages.value, tempUser];
+  const streamMessageListController: MessageListController = {
+    get: (): ChatV2MessageView[] => streamMessages,
+    set: (nextMessages: ChatV2MessageView[]): void => {
+      streamMessages = nextMessages;
+      patchConversationRuntimeState(streamConversationId, {
+        messages: nextMessages,
+      });
+    },
+  };
+  streamMessageListController.set(streamMessages);
 
   const assistantId = `temp-assistant-${Date.now()}`;
-  activeAssistantMessageId.value = assistantId;
   const assistant: ChatV2MessageView = {
     id: assistantId,
     conversationId: streamConversationId,
@@ -2029,7 +2252,10 @@ const onSend = async (
     // reactive proxy fully owns the copy, preventing reactivity gaps
     // where mutations to `assistant.content` (the raw object) fail to
     // trigger DOM updates — especially after many tool-call card pushes.
-    messages.value = [...messages.value, { ...assistant }];
+    streamMessageListController.set([
+      ...streamMessageListController.get(),
+      { ...assistant },
+    ]);
     assistantAdded = true;
   };
   const showAssistantError = (message: string): void => {
@@ -2039,20 +2265,27 @@ const onSend = async (
       source: "chat-v2",
       error: message,
     };
-    const idx = messages.value.findIndex((m) => m.id === assistant.id);
+    const currentMessages = streamMessageListController.get();
+    const idx = currentMessages.findIndex((m) => m.id === assistant.id);
     if (idx !== -1) {
-      messages.value[idx] = {
-        ...messages.value[idx],
+      const nextMessages = [...currentMessages];
+      nextMessages[idx] = {
+        ...nextMessages[idx],
         content: assistant.content,
         metadata: assistant.metadata,
       };
+      streamMessageListController.set(nextMessages);
     }
   };
 
-  isStreaming.value = true;
-  receivedFirstResponse.value = false;
-  retryInfo.value = null;
-  recoveryInfo.value = null;
+  patchConversationRuntimeState(streamConversationId, {
+    isStreaming: true,
+    activeAssistantMessageId: assistantId,
+    receivedFirstResponse: false,
+    streamError: null,
+    retryInfo: null,
+    recoveryInfo: null,
+  });
   // Seed the live context estimate from the last known server usage. If no
   // usage_update has arrived yet this session, fall back to the existing
   // streaming estimate (e.g. seeded from persisted tokensUsed on history
@@ -2083,13 +2316,14 @@ const onSend = async (
         if (!isCurrentStreamChunk(chunk)) return;
         if (chunk.eventType === "start") {
           if (chunk.conversationId) {
-            activeConversationId.value = chunk.conversationId;
             tempUser.conversationId = chunk.conversationId;
             assistant.conversationId = chunk.conversationId;
           }
           if (chunk.messageId) {
             assistant.id = chunk.messageId;
-            activeAssistantMessageId.value = chunk.messageId;
+            patchConversationRuntimeState(streamConversationId, {
+              activeAssistantMessageId: chunk.messageId,
+            });
           }
           // `start` is metadata only; keep showing the typing indicator.
         } else if (chunk.eventType === "usage_update") {
@@ -2100,16 +2334,18 @@ const onSend = async (
             typeof chunk.promptTokens === "number" &&
             typeof chunk.completionTokens === "number"
           ) {
-            lastUsage.value = {
-              promptTokens: chunk.promptTokens,
-              completionTokens: chunk.completionTokens,
-              totalTokens: chunk.totalTokens,
-              model: chunk.model,
-            };
-            if (chunk.model) {
-              activeModel.value = chunk.model;
+            if (isCurrentStreamView()) {
+              lastUsage.value = {
+                promptTokens: chunk.promptTokens,
+                completionTokens: chunk.completionTokens,
+                totalTokens: chunk.totalTokens,
+                model: chunk.model,
+              };
+              if (chunk.model) {
+                activeModel.value = chunk.model;
+              }
+              streamingEstimatedTokens.value = chunk.totalTokens;
             }
-            streamingEstimatedTokens.value = chunk.totalTokens;
           }
         } else if (chunk.eventType === "retry_connect") {
           // Connection to AI server is being retried. Show the reconnect
@@ -2118,33 +2354,39 @@ const onSend = async (
             typeof chunk.retryAttempt === "number" &&
             typeof chunk.retryMaxAttempts === "number"
           ) {
-            retryInfo.value = {
-              attempt: chunk.retryAttempt,
-              maxAttempts: chunk.retryMaxAttempts,
-              delayMs: chunk.retryDelayMs ?? 0,
-            };
+            patchConversationRuntimeState(streamConversationId, {
+              retryInfo: {
+                attempt: chunk.retryAttempt,
+                maxAttempts: chunk.retryMaxAttempts,
+                delayMs: chunk.retryDelayMs ?? 0,
+              },
+            });
           }
         } else if (chunk.eventType === "recovery_status") {
           // Seven-layer recovery status. Show the badge but keep streaming.
           if (chunk.recoveryLayer && chunk.recoveryReason) {
-            recoveryInfo.value = {
-              layer: chunk.recoveryLayer,
-              reason: chunk.recoveryReason,
-              attempt: chunk.recoveryAttempt,
-              maxAttempts: chunk.recoveryMaxAttempts,
-              delayMs: chunk.recoveryDelayMs,
-              elapsedMs: chunk.recoveryElapsedMs,
-              originalModel: chunk.recoveryOriginalModel,
-              currentModel: chunk.recoveryCurrentModel,
-              fallbackModel: chunk.recoveryFallbackModel,
-              message: chunk.recoveryMessage,
-            };
+            patchConversationRuntimeState(streamConversationId, {
+              recoveryInfo: {
+                layer: chunk.recoveryLayer,
+                reason: chunk.recoveryReason,
+                attempt: chunk.recoveryAttempt,
+                maxAttempts: chunk.recoveryMaxAttempts,
+                delayMs: chunk.recoveryDelayMs,
+                elapsedMs: chunk.recoveryElapsedMs,
+                originalModel: chunk.recoveryOriginalModel,
+                currentModel: chunk.recoveryCurrentModel,
+                fallbackModel: chunk.recoveryFallbackModel,
+                message: chunk.recoveryMessage,
+              },
+            });
           }
         } else {
           // Any non-start/non-retry chunk means the AI has started responding.
-          receivedFirstResponse.value = true;
-          retryInfo.value = null;
-          recoveryInfo.value = null;
+          patchConversationRuntimeState(streamConversationId, {
+            receivedFirstResponse: true,
+            retryInfo: null,
+            recoveryInfo: null,
+          });
           if (chunk.eventType === "token" && chunk.contentDelta) {
             if (!assistantAdded) {
               console.log(
@@ -2159,26 +2401,35 @@ const onSend = async (
             const deltaEstimate = Math.ceil(
               chunk.contentDelta.length / CHARS_PER_TOKEN_ESTIMATE
             );
-            streamingEstimatedTokens.value += deltaEstimate;
-            const idx = messages.value.findIndex((m) => m.id === assistant.id);
+            if (isCurrentStreamView()) {
+              streamingEstimatedTokens.value += deltaEstimate;
+            }
+            const currentMessages = streamMessageListController.get();
+            const idx = currentMessages.findIndex(
+              (m) => m.id === assistant.id
+            );
             if (idx !== -1) {
-              messages.value[idx] = {
-                ...messages.value[idx],
+              const nextMessages = [...currentMessages];
+              nextMessages[idx] = {
+                ...nextMessages[idx],
                 content: assistant.content,
               };
+              streamMessageListController.set(nextMessages);
             }
           } else if (chunk.eventType === ("ask_user_question" as never)) {
             // Plan Mode: show question card, stream may pause
             const planChunk = chunk as ChatV2StreamChunk;
-            if (planChunk.question) {
-              pendingQuestion.value = planChunk.question;
-            }
-            if (planChunk.planState) {
-              applyPlanState(planChunk.planState);
+            if (isCurrentStreamView()) {
+              if (planChunk.question) {
+                pendingQuestion.value = planChunk.question;
+              }
+              if (planChunk.planState) {
+                applyPlanState(planChunk.planState);
+              }
             }
           } else if (chunk.eventType === ("plan_submitted" as never)) {
             const planChunk = chunk as ChatV2StreamChunk;
-            if (planChunk.planState) {
+            if (planChunk.planState && isCurrentStreamView()) {
               applyPlanState(planChunk.planState);
               // Pin the card at the bottom while awaiting the user's action.
               // It moves into the message flow only after the user approves,
@@ -2191,11 +2442,18 @@ const onSend = async (
             // plan content does not exist until SubmitPlanForApproval).
             const planChunk = chunk as ChatV2StreamChunk;
             if (planChunk.planState) {
-              applyPlanState(planChunk.planState);
+              if (isCurrentStreamView()) {
+                applyPlanState(planChunk.planState);
+              }
               if (planChunk.planState.status !== "awaiting_approval") {
-                pendingPlanApproval.value = null;
+                if (isCurrentStreamView()) {
+                  pendingPlanApproval.value = null;
+                }
                 if (planChunk.planState.latestVersion) {
-                  upsertPlanMessage(planChunk.planState);
+                  upsertPlanMessage(
+                    planChunk.planState,
+                    streamMessageListController
+                  );
                 }
               }
             }
@@ -2204,21 +2462,24 @@ const onSend = async (
             const planChunk = chunk as ChatV2StreamChunk;
             upsertToolResultMessage(
               planChunk,
-              planChunk.conversationId || activeConversationId.value || "",
-              assistantAdded ? assistant.id : undefined
+              planChunk.conversationId || streamConversationId,
+              assistantAdded ? assistant.id : undefined,
+              streamMessageListController
             );
           } else if (chunk.eventType === "tool_progress") {
             upsertToolProgress(
               chunk,
-              chunk.conversationId || activeConversationId.value || ""
+              chunk.conversationId || streamConversationId,
+              streamMessageListController
             );
           } else if (chunk.eventType === "tool_call") {
             const toolCallId = chunk.toolCallId;
+            const currentMessages = streamMessageListController.get();
             // Defensive dedup: if the same tool_call event is delivered twice
             // (IPC re-delivery, listener cleanup race, or history already
             // loaded), avoid rendering a duplicate card.
             const alreadyRendered = toolCallId
-              ? messages.value.some(
+              ? currentMessages.some(
                   (m) =>
                     m.messageType === MessageType.TOOL_CALL &&
                     m.metadata?.toolCallId === toolCallId
@@ -2227,8 +2488,7 @@ const onSend = async (
             if (!alreadyRendered) {
               const toolCallMsg: ChatV2MessageView = {
                 id: `tool-call-${toolCallId || Date.now()}`,
-                conversationId:
-                  chunk.conversationId || activeConversationId.value || "",
+                conversationId: chunk.conversationId || streamConversationId,
                 role: "assistant",
                 content: "",
                 timestamp: new Date().toISOString(),
@@ -2244,45 +2504,56 @@ const onSend = async (
               // added (text tokens arrived in an earlier round). This keeps
               // tool calls visually before the assistant's text response.
               if (assistantAdded) {
-                const aIdx = messages.value.findIndex(
+                const aIdx = currentMessages.findIndex(
                   (m) => m.id === assistant.id
                 );
                 if (aIdx !== -1) {
-                  messages.value = [
-                    ...messages.value.slice(0, aIdx),
+                  streamMessageListController.set([
+                    ...currentMessages.slice(0, aIdx),
                     toolCallMsg,
-                    ...messages.value.slice(aIdx),
-                  ];
+                    ...currentMessages.slice(aIdx),
+                  ]);
                 } else {
-                  messages.value = [...messages.value, toolCallMsg];
+                  streamMessageListController.set([
+                    ...currentMessages,
+                    toolCallMsg,
+                  ]);
                 }
               } else {
-                messages.value = [...messages.value, toolCallMsg];
+                streamMessageListController.set([
+                  ...currentMessages,
+                  toolCallMsg,
+                ]);
               }
             }
           } else if (chunk.eventType === "tool_result") {
             upsertToolResultMessage(
               chunk,
-              chunk.conversationId || activeConversationId.value || "",
-              assistantAdded ? assistant.id : undefined
+              chunk.conversationId || streamConversationId,
+              assistantAdded ? assistant.id : undefined,
+              streamMessageListController
             );
             // Auto-open the artifact preview during a live tool result.
             // (History loads render the card but must NOT auto-open.)
             const liveArtifact = extractArtifactMetadata(chunk.toolResult ?? {});
-            if (liveArtifact?.openImmediately) {
+            if (liveArtifact?.openImmediately && isCurrentStreamView()) {
               emit("open-artifact", liveArtifact.id);
             }
             // AI app navigation: route on open_app_page navigate commands.
-            void handleAiNavigationToolResult(router, chunk.toolResult);
+            if (isCurrentStreamView()) {
+              void handleAiNavigationToolResult(router, chunk.toolResult);
+            }
           }
         }
       },
       (complete: ChatV2StreamChunk) => {
         if (!isCurrentStreamChunk(complete)) return;
-        isStreaming.value = false;
-        activeAssistantMessageId.value = null;
-        retryInfo.value = null;
-        recoveryInfo.value = null;
+        patchConversationRuntimeState(streamConversationId, {
+          isStreaming: false,
+          activeAssistantMessageId: null,
+          retryInfo: null,
+          recoveryInfo: null,
+        });
         // Snap to ground-truth usage carried by the complete event so the
         // badge reflects the real context size even if usage_update chunks
         // didn't fire during the stream (some servers only report usage on
@@ -2293,15 +2564,17 @@ const onSend = async (
           typeof complete.promptTokens === "number" &&
           typeof complete.completionTokens === "number"
         ) {
-          lastUsage.value = {
-            promptTokens: complete.promptTokens,
-            completionTokens: complete.completionTokens,
-            totalTokens: complete.totalTokens,
-            model: complete.model ?? lastUsage.value?.model,
-          };
-          streamingEstimatedTokens.value = complete.totalTokens;
-          if (complete.model) {
-            activeModel.value = complete.model;
+          if (isCurrentStreamView()) {
+            lastUsage.value = {
+              promptTokens: complete.promptTokens,
+              completionTokens: complete.completionTokens,
+              totalTokens: complete.totalTokens,
+              model: complete.model ?? lastUsage.value?.model,
+            };
+            streamingEstimatedTokens.value = complete.totalTokens;
+            if (complete.model) {
+              activeModel.value = complete.model;
+            }
           }
         }
         if (
@@ -2310,21 +2583,26 @@ const onSend = async (
         ) {
           ensureAssistantAdded();
           assistant.content = complete.fullContent;
-          const idx = messages.value.findIndex((m) => m.id === assistant.id);
+          const currentMessages = streamMessageListController.get();
+          const idx = currentMessages.findIndex((m) => m.id === assistant.id);
           console.log(
-            `[ai-chat-v2] stream complete: assistantId=${assistant.id} fullContentLen=${complete.fullContent.length} idxInMessages=${idx} assistantAdded=${assistantAdded} messagesLen=${messages.value.length}`
+            `[ai-chat-v2] stream complete: assistantId=${assistant.id} fullContentLen=${complete.fullContent.length} idxInMessages=${idx} assistantAdded=${assistantAdded} messagesLen=${currentMessages.length}`
           );
           if (idx !== -1) {
-            messages.value[idx] = {
-              ...messages.value[idx],
+            const nextMessages = [...currentMessages];
+            nextMessages[idx] = {
+              ...nextMessages[idx],
               content: assistant.content,
             };
+            streamMessageListController.set(nextMessages);
           }
         } else if (!assistantAdded || assistant.content.length === 0) {
           const emptyMessage =
             t("aiChatV2.empty_response_error") ||
             "The AI returned an empty response. This is typically a transient server issue (rate limit, timeout, or 502). Please try sending your message again.";
-          streamError.value = emptyMessage;
+          patchConversationRuntimeState(streamConversationId, {
+            streamError: emptyMessage,
+          });
           showAssistantError(emptyMessage);
         }
         // Safety net: ensure the assistant message appears after all tool
@@ -2333,50 +2611,55 @@ const onSend = async (
         // tool calls if text tokens arrived in an earlier round. Moving it
         // to the end guarantees correct final display order.
         {
-          const aIdx = messages.value.findIndex(
+          const currentMessages = streamMessageListController.get();
+          const aIdx = currentMessages.findIndex(
             (m) => m.id === assistant.id
           );
-          if (aIdx !== -1 && aIdx < messages.value.length - 1) {
-            const reordered = [...messages.value];
+          if (aIdx !== -1 && aIdx < currentMessages.length - 1) {
+            const reordered = [...currentMessages];
             const [assistantMsg] = reordered.splice(aIdx, 1);
             reordered.push(assistantMsg);
-            messages.value = reordered;
+            streamMessageListController.set(reordered);
           }
         }
-        if (complete.conversationId) {
-          activeConversationId.value = complete.conversationId;
-        }
-        messages.value = [...messages.value];
+        streamMessageListController.set([...streamMessageListController.get()]);
         // Force a second render pass after Vue's render cycle completes.
         // After many tool-call card pushes followed by the lazy assistant
         // add + token updates, Vue's render scheduler can miss the final
         // state of the newly-added assistant element. This nextTick
         // re-spread guarantees the DOM picks up the final content.
         void nextTick(() => {
-          messages.value = [...messages.value];
+          streamMessageListController.set([
+            ...streamMessageListController.get(),
+          ]);
         });
         void loadConversations();
       },
       (error: Error) => {
-        if (!isCurrentStreamView()) return;
-        isStreaming.value = false;
-        activeAssistantMessageId.value = null;
-        retryInfo.value = null;
-        recoveryInfo.value = null;
         const displayMessage = mapStreamErrorMessage(error.message);
-        streamError.value = displayMessage;
+        patchConversationRuntimeState(streamConversationId, {
+          isStreaming: false,
+          activeAssistantMessageId: null,
+          retryInfo: null,
+          recoveryInfo: null,
+          streamError: displayMessage,
+        });
         showAssistantError(displayMessage);
       }
     );
   } catch (err) {
     const rawMessage = err instanceof Error ? err.message : String(err);
-    if (!streamError.value) {
+    const runtimeError = getConversationRuntimeState(streamConversationId)
+      .streamError;
+    if (!runtimeError) {
       const displayMessage = mapStreamErrorMessage(rawMessage);
-      isStreaming.value = false;
-      activeAssistantMessageId.value = null;
-      retryInfo.value = null;
-      recoveryInfo.value = null;
-      streamError.value = displayMessage;
+      patchConversationRuntimeState(streamConversationId, {
+        isStreaming: false,
+        activeAssistantMessageId: null,
+        retryInfo: null,
+        recoveryInfo: null,
+        streamError: displayMessage,
+      });
       showAssistantError(displayMessage);
     }
   }
