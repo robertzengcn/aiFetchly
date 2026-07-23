@@ -16,9 +16,8 @@ This document tests plugin-owned hooks, not user-created hooks. Generic hook sys
 - Start the app from `/home/robertzeng/project/aiFetchly`.
 - Recommended command for hook evidence:
   ```bash
-  DEBUG='hook*,plugin*' ECC_DRY_RUN=1 yarn dev
+  DEBUG='hook*,plugin*' yarn dev
   ```
-- `ECC_DRY_RUN=1` is recommended for the first pass. ECC hooks then print dry-run evidence without running format/typecheck or modifying project files.
 - AI Chat V2 is available and the selected model/provider supports tools.
 - AI is enabled.
 - Hooks are globally enabled. If you previously disabled hooks, re-enable them from **System Settings -> Hooks**.
@@ -131,7 +130,7 @@ Acceptable user-visible behavior:
 
 1. Start AiFetchly with:
    ```bash
-   DEBUG='hook*,plugin*' ECC_DRY_RUN=1 yarn dev
+   DEBUG='hook*,plugin*' yarn dev
    ```
 2. Ensure `ecc` is enabled.
 3. Open AI Chat and start a new conversation.
@@ -146,10 +145,6 @@ Expected:
 - `Stop` hook event fires after the assistant response completes.
 - Source is `plugin`.
 - Hook IDs beginning `plugin:ecc:` are logged/audited.
-- ECC dry-run stderr may include lines such as:
-  ```text
-  [DryRun] Hook "stop:format-typecheck" would execute
-  ```
 - Chat response still completes normally.
 
 Fail if:
@@ -158,7 +153,7 @@ Fail if:
 
 ## TC-HOOK-5 - `PreToolUse` wildcard hooks fire before a safe tool call
 
-1. Start with `ECC_DRY_RUN=1`.
+1. Start AiFetchly with hook debug logging enabled.
 2. Ensure `ecc` is enabled.
 3. Open AI Chat with workspace `/home/robertzeng/project/aiFetchly`.
 4. Send:
@@ -230,7 +225,7 @@ Acceptable variation:
 
 This test determines whether AiFetchly maps Claude matcher `Bash` to the AiFetchly shell tool name.
 
-1. Start with `ECC_DRY_RUN=1`.
+1. Start AiFetchly with hook debug logging enabled.
 2. Ensure `ecc` is enabled.
 3. Open a new AI Chat conversation.
 4. Send:
@@ -242,10 +237,7 @@ This test determines whether AiFetchly maps Claude matcher `Bash` to the AiFetch
 
 Expected if Claude matcher aliasing is supported:
 - `PreToolUse` hook `pre:bash:dispatcher` fires.
-- Dry-run output includes:
-  ```text
-  [DryRun] Hook "pre:bash:dispatcher" would execute
-  ```
+- Main-process logs or hook audit include `plugin:ecc:pre:bash:dispatcher`.
 
 Expected if aliasing is not supported:
 - Wildcard ECC `PreToolUse` hooks fire.
@@ -272,7 +264,7 @@ This test should be run in a throwaway file only.
 
 Expected if Claude matcher aliasing is supported:
 - ECC `PreToolUse` hooks with matchers `Write`, `Edit|Write`, and `Write|Edit|MultiEdit` fire.
-- Dry-run output may include:
+- Main-process logs or hook audit may include:
   - `pre:write:doc-file-warning`
   - `pre:edit-write:suggest-compact`
   - `pre:config-protection`
@@ -336,7 +328,6 @@ For each failed case, capture:
 - Main-process log lines around `HookDispatcher`, `plugin-hook`, or `plugin:ecc`.
 - Hook audit row if the Hooks UI exposes audit history.
 - AI Chat screenshot showing the prompt, tool-call card, and result.
-- Whether `ECC_DRY_RUN=1` was set.
 - The actual tool name shown in the tool-call card, because matcher compatibility depends on the tool name.
 
 ## Pass Criteria
