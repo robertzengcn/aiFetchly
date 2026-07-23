@@ -147,7 +147,8 @@ export class YellowPagesAdapterTest {
             const searchUrl = adapter.buildSearchUrl(['restaurant', 'pizza'], 'New York, NY', 1);
             console.log('✅ Search URL built:', searchUrl);
 
-            if (!searchUrl.includes('yellowpages.com')) {
+            const parsedUrl = new URL(searchUrl);
+            if (!parsedUrl.hostname.endsWith('yellowpages.com')) {
                 throw new Error('Search URL does not contain yellowpages.com domain');
             }
 

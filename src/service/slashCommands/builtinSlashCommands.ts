@@ -92,6 +92,21 @@ const BUILT_IN_COMMANDS: readonly SlashCommandDefinition[] = Object.freeze([
     requiresTrust: false,
     enabled: true,
   },
+  {
+    id: "built-in:command:plugin",
+    name: "plugin",
+    description:
+      "Manage plugin marketplaces and install plugins from chat.",
+    aliases: [],
+    type: "local",
+    source: "built-in",
+    sourceId: "built-in",
+    sourceLabel: "Built-in",
+    argumentHint:
+      "marketplace add <source> | install <plugin@marketplace|source>",
+    requiresTrust: false,
+    enabled: true,
+  },
 ]);
 
 /**

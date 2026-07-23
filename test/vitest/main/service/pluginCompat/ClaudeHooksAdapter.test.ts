@@ -55,6 +55,35 @@ describe("ClaudeHooksAdapter", () => {
     expect(r.matchers[0].matcher).toBeUndefined();
   });
 
+  it("adapts hooks nested under a Claude settings-style hooks key", () => {
+    const raw = {
+      hooks: {
+        SessionStart: [
+          {
+            hooks: [
+              {
+                type: "command",
+                command: "bash hooks/session-start.sh",
+                timeout: 10,
+              },
+            ],
+          },
+        ],
+      },
+    };
+    const r = ClaudeHooksAdapter.adapt(raw, "agent-skills");
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.matchers).toEqual([
+      expect.objectContaining({
+        event: "SessionStart",
+        pluginName: "agent-skills",
+        sourceCommand: "bash hooks/session-start.sh",
+        timeoutMs: 10000,
+      }),
+    ]);
+  });
+
   it("skips unsupported events but does not error", () => {
     const raw = {
       UnsupportedEvent: [

@@ -144,7 +144,8 @@ export class YellComAdapterTest {
             console.log('✅ Built search URL:', searchUrl);
 
             // Validate URL format
-            if (!searchUrl.includes('yell.com')) {
+            const parsedUrl = new URL(searchUrl);
+            if (!parsedUrl.hostname.endsWith('yell.com')) {
                 throw new Error('Search URL does not contain correct domain');
             }
 

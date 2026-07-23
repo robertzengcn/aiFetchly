@@ -128,7 +128,7 @@ User submits "/review current changes"
   -> scoped resolver finds winning command
   -> local command returns show_result OR prompt command returns submit_prompt
   -> renderer submits submit_prompt via existing Chat V2 stream path
-  -> AI_CHAT_V2_STREAM gates USER_AI_ENABLED before AI work
+  -> AI_CHAT_V2_STREAM gates via provider-aware canUseChat() before AI work
 ```
 
 ### 3.2 Source registration flow
@@ -944,7 +944,7 @@ Rationale:
 - List/status/reload are metadata or local config operations.
 - Local built-ins do not call AI.
 - Prompt command dispatch returns text only.
-- Actual AI work happens in `AI_CHAT_V2_STREAM`, where `USER_AI_ENABLED` is already checked first.
+- Actual AI work happens in `AI_CHAT_V2_STREAM`, where the provider-aware Chat V2 availability gate (`canUseChat()`) is already enforced first (hosted entitlement OR a valid local-provider config).
 
 ## 14. Security Invariants
 

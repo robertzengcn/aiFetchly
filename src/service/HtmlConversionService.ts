@@ -110,17 +110,34 @@ export class HtmlConversionService {
      */
     cleanHtmlContent(htmlContent: string): string {
         try {
-            // Remove script tags and their content completely
-            let cleaned = htmlContent.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '');
+            // Remove script tags and their content completely (loop for nested cases)
+            let cleaned = htmlContent;
+            let prevScript: string;
+            do {
+                prevScript = cleaned;
+                cleaned = cleaned.replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi, '');
+            } while (cleaned !== prevScript);
             
-            // Remove style tags and their content completely
-            cleaned = cleaned.replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '');
+            // Remove style tags and their content completely (loop for nested cases)
+            let prevStyle: string;
+            do {
+                prevStyle = cleaned;
+                cleaned = cleaned.replace(/<style\b[^>]*>[\s\S]*?<\/style\s*>/gi, '');
+            } while (cleaned !== prevStyle);
             
-            // Remove noscript tags and their content
-            cleaned = cleaned.replace(/<noscript\b[^<]*(?:(?!<\/noscript>)<[^<]*)*<\/noscript>/gi, '');
+            // Remove noscript tags and their content (loop for nested cases)
+            let prevNoscript: string;
+            do {
+                prevNoscript = cleaned;
+                cleaned = cleaned.replace(/<noscript\b[^>]*>[\s\S]*?<\/noscript\s*>/gi, '');
+            } while (cleaned !== prevNoscript);
             
-            // Remove comments
-            cleaned = cleaned.replace(/<!--[\s\S]*?-->/g, '');
+            // Remove comments (loop to handle nested/broken comments)
+            let prevComment: string;
+            do {
+                prevComment = cleaned;
+                cleaned = cleaned.replace(/<!--[\s\S]*?-->/g, '');
+            } while (cleaned !== prevComment);
             
             // Remove meta tags (except viewport)
             cleaned = cleaned.replace(/<meta(?![^>]*viewport)[^>]*>/gi, '');
@@ -128,8 +145,12 @@ export class HtmlConversionService {
             // Remove link tags that are not stylesheets or canonical
             cleaned = cleaned.replace(/<link(?![^>]*(?:stylesheet|canonical))[^>]*>/gi, '');
             
-            // Remove script-related attributes from other elements
-            cleaned = cleaned.replace(/\s*on\w+\s*=\s*["'][^"']*["']/gi, '');
+            // Remove script-related attributes from other elements (loop to handle nested cases)
+            let prevCleaned: string;
+            do {
+                prevCleaned = cleaned;
+                cleaned = cleaned.replace(/\s*on\w+\s*=\s*["'][^"']*["']/gi, '');
+            } while (cleaned !== prevCleaned);
             
             // Remove data attributes that might contain scripts
             cleaned = cleaned.replace(/\s*data-[^=]*\s*=\s*["'][^"']*["']/gi, '');

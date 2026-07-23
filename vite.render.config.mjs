@@ -54,12 +54,22 @@ export default defineConfig({
   ],
     define: { 'process.env': {} },
   resolve: {
-    alias: {
-      "@": path.resolve(__dirname, "./src"),
-      // Prevent dep-scan from failing on Node built-ins pulled in by shared modules
-      crypto: path.resolve(__dirname, "./src/shims/crypto.empty.ts"),
-      fs: path.resolve(__dirname, "./src/shims/fs.empty.ts"),
-    },
+    alias: [
+      {
+        find: "@",
+        replacement: path.resolve(__dirname, "./src"),
+      },
+      // Exact-match only. Prefix aliasing `fs` rewrites `fs/promises` to
+      // `src/shims/fs.empty.ts/promises`, which breaks Vite dependency scans.
+      {
+        find: /^crypto$/,
+        replacement: path.resolve(__dirname, "./src/shims/crypto.empty.ts"),
+      },
+      {
+        find: /^fs$/,
+        replacement: path.resolve(__dirname, "./src/shims/fs.empty.ts"),
+      },
+    ],
   },
   // Prevent Vite from trying to optimize electron-store and other main-process-only modules
   optimizeDeps: {

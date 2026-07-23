@@ -1952,7 +1952,11 @@ const handleCompactConversation = async (): Promise<void> => {
   }
 };
 
-const onSend = async (text: string, files?: File[]): Promise<void> => {
+const onSend = async (
+  text: string,
+  files?: File[],
+  options?: { isExpandedPrompt?: boolean }
+): Promise<void> => {
   if (chatIsRunning.value) return;
   streamError.value = null;
   attachmentError.value = null;
@@ -1962,7 +1966,15 @@ const onSend = async (text: string, files?: File[]): Promise<void> => {
     stoppedPendingToolConversationIds.value = nextStopped;
   }
 
-  if ((!files || files.length === 0) && text.trim().startsWith("/")) {
+  // Manual user input that starts with `/` is intercepted as a slash command.
+  // An EXPANDED prompt (from handleSlashCommandSubmission) must bypass this —
+  // even if its body happens to start with `/`, it is chat content to stream,
+  // not a second slash command to re-dispatch (TODO #3).
+  if (
+    !options?.isExpandedPrompt &&
+    (!files || files.length === 0) &&
+    text.trim().startsWith("/")
+  ) {
     const handled = await handleSlashCommandSubmission(text.trim());
     if (handled) return;
   }
@@ -2412,7 +2424,10 @@ async function handleSlashCommandSubmission(rawInput: string): Promise<boolean> 
   }
 
   if (result.action === "submit_prompt") {
-    await onSend(result.prompt, []);
+    // Submit the expanded prompt directly to the Chat V2 stream. The
+    // isExpandedPrompt flag tells onSend to skip slash-command interception
+    // so a prompt body that begins with `/` streams instead of re-dispatching.
+    await onSend(result.prompt, [], { isExpandedPrompt: true });
     return true;
   }
 

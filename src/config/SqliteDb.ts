@@ -79,6 +79,7 @@ import { GoogleMapsSearchRecordEntity } from "@/entity/GoogleMapsSearchRecord.en
 import { YandexMapsSearchRecordEntity } from "@/entity/YandexMapsSearchRecord.entity";
 import { AiMessageTaskEntity } from "@/entity/AiMessageTask.entity";
 import { AiMessageTaskRunEntity } from "@/entity/AiMessageTaskRun.entity";
+import { ConversationToolStateEntity } from "@/entity/ConversationToolState.entity";
 import { EmailReceivedMessageEntity } from "@/entity/EmailReceivedMessage.entity";
 import { EmailReplyDraftEntity } from "@/entity/EmailReplyDraft.entity";
 import { EmailReplyIdentityProfileEntity } from "@/entity/EmailReplyIdentityProfile.entity";
@@ -498,6 +499,7 @@ export class SqliteDb {
           YandexMapsSearchRecordEntity,
           AiMessageTaskEntity,
           AiMessageTaskRunEntity,
+          ConversationToolStateEntity,
           EmailReceivedMessageEntity,
           EmailReplyDraftEntity,
           EmailReplyIdentityProfileEntity,

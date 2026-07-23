@@ -57,6 +57,18 @@ import { CancellationToken } from "@/service/CancellationToken";
 import { getDefaultToolJobRegistry } from "@/service/ToolJobRegistry";
 import { USER_AI_ENABLED } from "@/config/usersetting";
 import { Token } from "@/modules/token";
+import { TOOL_CATALOG_SEARCH_TOOL_NAME } from "@/config/toolCatalogConfig";
+import { ToolCatalogService } from "@/service/ToolCatalogService";
+import { ToolCatalogSearchService } from "@/service/ToolCatalogSearchService";
+import { logToolCatalogFilter } from "@/service/ToolCatalogMetricsService";
+import { toolCatalogCounters } from "@/service/ToolCatalogCounters";
+import { buildDeferredAnnouncement } from "@/service/ConversationToolStateService";
+import type {
+  ToolCatalog,
+  ToolCatalogSearchArgs,
+  ToolCatalogSearchResult,
+  ToolCatalogStateSnapshot,
+} from "@/entityTypes/toolCatalogTypes";
 import { HookDispatcher } from "@/service/hooks/HookDispatcher";
 import { SkillPermissionService } from "@/service/SkillPermissionService";
 import {
@@ -359,8 +371,91 @@ export function buildAssistantToolCallMessage(
   };
 }
 
+/** Snapshot the mutable discovered-tool set for pending-turn carry-forward. */
+function snapshotToolCatalogState(
+  discovered: Set<string>,
+  announced: Set<string>
+): ToolCatalogStateSnapshot {
+  return {
+    discoveredToolNames: [...discovered].sort(),
+    announcedDeferredNames: [...announced].sort(),
+  };
+}
+
 export class AIChatQueryLoop {
   constructor(private readonly deps: AIChatQueryLoopDeps) {}
+
+  private readonly catalogService = new ToolCatalogService();
+  private readonly catalogSearchService = new ToolCatalogSearchService();
+
+  /**
+   * Run the deferred-catalog discovery search with a safe failure payload so a
+   * search error never crashes the whole turn (design §22.2).
+   */
+  private runCatalogSearch(input: {
+    readonly args: ToolCatalogSearchArgs;
+    readonly catalog: ToolCatalog;
+    readonly discoveredToolNames: Set<string>;
+    readonly conversationId: string;
+    readonly isPlanMode: boolean;
+    readonly autoPlanEnabled: boolean;
+    readonly currentUserMessage: string;
+  }): ToolCatalogSearchResult {
+    try {
+      return this.catalogSearchService.search({
+        args: input.args,
+        catalog: input.catalog,
+        state: {
+          discoveredToolNames: input.discoveredToolNames,
+          announcedDeferredNames: new Set(),
+        },
+        context: {
+          conversationId: input.conversationId,
+          isPlanMode: input.isPlanMode,
+          autoPlanEnabled: input.autoPlanEnabled,
+          currentUserMessage: input.currentUserMessage,
+          uploadedFileTypes: [],
+        },
+      });
+    } catch (err) {
+      return {
+        success: false,
+        query: typeof input.args.query === "string" ? input.args.query : "",
+        matches: [],
+        selectedToolNames: [],
+        missingToolNames: [],
+        message:
+          "Tool catalog search failed. The system will continue with currently exposed tools.",
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+  }
+
+  /**
+   * Inject the deferred-tool announcement as a system message once per turn
+   * (FR-6). Updates `announcedDeferredNames` in place to the current deferred
+   * set so the next turn emits only a delta. The message is inserted right
+   * after the leading system prompt(s).
+   */
+  private maybeInjectDeferredAnnouncement(
+    messages: OpenAIChatMessage[],
+    catalog: ToolCatalog,
+    announcedDeferredNames: Set<string>
+  ): void {
+    const announcement = buildDeferredAnnouncement({
+      previousAnnounced: [...announcedDeferredNames],
+      catalog,
+    });
+    announcedDeferredNames.clear();
+    for (const entry of catalog.deferred)
+      announcedDeferredNames.add(entry.name);
+    if (!announcement) return;
+    let insertAt = 0;
+    while (insertAt < messages.length && messages[insertAt].role === "system") {
+      insertAt += 1;
+    }
+    messages.splice(insertAt, 0, { role: "system", content: announcement });
+  }
 
   async run(input: AIChatQueryLoopInput): Promise<AIChatQueryLoopResult> {
     const { eventSink } = input;
@@ -379,6 +474,21 @@ export class AIChatQueryLoop {
     // Local mutable copies so EnterPlanMode can swap them mid-run.
     let planContext = input.planContext;
     const currentTools = [...input.openAITools];
+    // Deferred tool catalog state. `catalogActive` gates every catalog code
+    // path so the loop is a no-op when the feature flag is off or standard.
+    const catalog = input.toolCatalog;
+    const catalogModeDecision = input.toolCatalogModeDecision;
+    const catalogActive =
+      Boolean(catalog) && catalogModeDecision?.mode === "deferred";
+    const discoveredToolNames = new Set<string>(
+      input.toolCatalogState?.discoveredToolNames ?? []
+    );
+    // Deferred-tool announcement tracking (FR-6): names already announced to
+    // the model in prior turns, so we only emit a compact delta when the
+    // deferred set changes.
+    const announcedDeferredNames = new Set<string>(
+      input.toolCatalogState?.announcedDeferredNames ?? []
+    );
     // Track whether the model auto-entered plan mode this run AND whether it
     // followed through with plan-tool usage. Used at turn end to cancel orphan
     // drafts (see completed-return path).
@@ -399,6 +509,19 @@ export class AIChatQueryLoop {
     let recoveryState = createRecoveryAttemptState(input.request.model);
 
     try {
+      // Inject the deferred-tool announcement once at the start of the turn
+      // (FR-6). First turn gets a compact category-level note; later turns get
+      // a token-budgeted delta only when the deferred set changed. Mutates
+      // announcedDeferredNames so the snapshot persisted for the next turn
+      // suppresses repeats.
+      if (catalogActive && catalog && input.startRound === 0) {
+        this.maybeInjectDeferredAnnouncement(
+          messages,
+          catalog,
+          announcedDeferredNames
+        );
+      }
+
       for (
         let round = input.startRound;
         round < CHAT_V2_MAX_TOOL_ROUNDS;
@@ -407,11 +530,48 @@ export class AIChatQueryLoop {
         const accumulator = new OpenAIStreamAccumulator();
         activeAccumulator = accumulator;
 
+        // Compute the tools actually sent to the model for this round. In
+        // deferred catalog mode this filters out undiscovered deferred tools
+        // and adds tool_catalog_search; any filter error falls back to the
+        // full currentTools set (TR-5, AC-10). currentTools remains the full
+        // local executable set regardless.
+        let exposedTools: OpenAITool[] = currentTools;
+        if (catalogActive && catalog && catalogModeDecision) {
+          try {
+            const filterResult = this.catalogService.filterForRound({
+              catalog,
+              liveTools: currentTools,
+              state: {
+                discoveredToolNames,
+                announcedDeferredNames: new Set(
+                  input.toolCatalogState?.announcedDeferredNames ?? []
+                ),
+              },
+              modeDecision: catalogModeDecision,
+            });
+            exposedTools = [...filterResult.exposedTools];
+            logToolCatalogFilter({
+              conversationId: input.conversationId,
+              result: filterResult,
+            });
+          } catch (filterError) {
+            console.warn(
+              `[tool-catalog] filter failed, falling back to full tools:`,
+              filterError
+            );
+            toolCatalogCounters.increment("fallback_count");
+            exposedTools = currentTools;
+          }
+        }
+        const hasExposedTools = exposedTools.length > 0;
+
         console.log(
           `[ai-chat-v2] round ${round} → POST /chat/completions msgs=${
             messages.length
           } roles=[${messages.map((m) => m.role).join(",")}] tools=${
-            currentTools.length
+            catalogActive
+              ? `${exposedTools.length}/${currentTools.length}`
+              : currentTools.length
           }`
         );
 
@@ -422,10 +582,10 @@ export class AIChatQueryLoop {
             temperature: input.request.temperature,
             max_tokens: currentMaxTokens,
             stream: true,
-            tools: currentTools.length > 0 ? currentTools : undefined,
+            tools: hasExposedTools ? exposedTools : undefined,
             tool_choice: resolveToolChoiceForRound({
               message: input.request.message,
-              hasTools: currentTools.length > 0,
+              hasTools: hasExposedTools,
               isPlanMode: Boolean(planContext),
               round,
               startRound: input.startRound,
@@ -673,6 +833,12 @@ export class AIChatQueryLoop {
               partialContent: accumulator.state.fullContent ?? "",
               model: accumulator.state.model,
               responseId: accumulator.state.responseId,
+              toolCatalogState: catalogActive
+                ? snapshotToolCatalogState(
+                    discoveredToolNames,
+                    announcedDeferredNames
+                  )
+                : undefined,
             };
           }
 
@@ -813,6 +979,88 @@ export class AIChatQueryLoop {
             await eventSink.flush?.();
           };
 
+          // Deferred catalog: intercept the discovery tool locally (FR-3, FR-9).
+          if (
+            catalogActive &&
+            catalog &&
+            call.name === TOOL_CATALOG_SEARCH_TOOL_NAME
+          ) {
+            const searchPayload = this.runCatalogSearch({
+              args: (call.arguments ?? {}) as ToolCatalogSearchArgs,
+              catalog,
+              discoveredToolNames,
+              conversationId: input.conversationId,
+              isPlanMode: Boolean(planContext),
+              autoPlanEnabled: Boolean(input.autoPlan),
+              currentUserMessage: input.request.message,
+            });
+            toolCatalogCounters.increment("search_calls");
+            if (
+              searchPayload.matches.length === 0 &&
+              searchPayload.selectedToolNames.length === 0
+            ) {
+              toolCatalogCounters.increment("search_no_match");
+            }
+            toolCatalogCounters.increment(
+              "search_selected_count",
+              searchPayload.selectedToolNames.length
+            );
+            for (const name of searchPayload.selectedToolNames) {
+              discoveredToolNames.add(name);
+            }
+            const searchContent = serializeToolResultContent(
+              searchPayload as unknown as Record<string, unknown>
+            );
+            eventSink.emit({
+              type: "tool_result",
+              conversationId: input.conversationId,
+              messageId: input.assistantMessageId,
+              toolCallId: call.id,
+              toolName: call.name,
+              fullContent: searchContent,
+              toolResult: searchPayload as unknown as Record<string, unknown>,
+            });
+            messages.push({
+              role: "tool",
+              tool_call_id: call.id,
+              content: searchContent,
+            });
+            continue;
+          }
+
+          // Unknown-deferred-tool recovery (design §14.4): if the model calls a
+          // deferred tool that is not yet exposed, load it and ask the model to
+          // retry instead of failing the turn.
+          if (catalogActive && catalog) {
+            const entry = catalog.byName.get(call.name);
+            if (
+              entry &&
+              entry.loadPolicy === "deferred" &&
+              !discoveredToolNames.has(call.name)
+            ) {
+              discoveredToolNames.add(call.name);
+              const retryContent = serializeToolResultContent({
+                success: false,
+                error: `Tool "${call.name}" was deferred and has now been loaded. Retry the call with valid arguments.`,
+              });
+              eventSink.emit({
+                type: "tool_result",
+                conversationId: input.conversationId,
+                messageId: input.assistantMessageId,
+                toolCallId: call.id,
+                toolName: call.name,
+                fullContent: retryContent,
+                toolResult: { success: false, error: "deferred tool loaded" },
+              });
+              messages.push({
+                role: "tool",
+                tool_call_id: call.id,
+                content: retryContent,
+              });
+              continue;
+            }
+          }
+
           // Model-initiated Plan Mode entry (chat mode only).
           if (
             isEnterPlanModeToolName(call.name) &&
@@ -894,6 +1142,15 @@ export class AIChatQueryLoop {
                 eventSink
               );
               if (paused) {
+                if (
+                  catalogActive &&
+                  paused.type === "paused_for_plan_question"
+                ) {
+                  paused.pending.toolCatalogState = snapshotToolCatalogState(
+                    discoveredToolNames,
+                    announcedDeferredNames
+                  );
+                }
                 return paused;
               }
               continue;
@@ -978,6 +1235,12 @@ export class AIChatQueryLoop {
               totalTokens: lastReportedUsage?.totalTokens,
               promptTokens: lastReportedUsage?.promptTokens,
               completionTokens: lastReportedUsage?.completionTokens,
+              toolCatalogState: catalogActive
+                ? snapshotToolCatalogState(
+                    discoveredToolNames,
+                    announcedDeferredNames
+                  )
+                : undefined,
             };
           }
 
@@ -1023,6 +1286,12 @@ export class AIChatQueryLoop {
                 toolArguments: effectiveArguments,
                 planContext,
                 eventSink: eventSink,
+                toolCatalogState: catalogActive
+                  ? snapshotToolCatalogState(
+                      discoveredToolNames,
+                      announcedDeferredNames
+                    )
+                  : undefined,
               },
             };
           }
@@ -1049,6 +1318,12 @@ export class AIChatQueryLoop {
           totalTokens: lastReportedUsage?.totalTokens,
           promptTokens: lastReportedUsage?.promptTokens,
           completionTokens: lastReportedUsage?.completionTokens,
+          toolCatalogState: catalogActive
+            ? snapshotToolCatalogState(
+                discoveredToolNames,
+                announcedDeferredNames
+              )
+            : undefined,
         };
       }
 
@@ -1113,6 +1388,12 @@ export class AIChatQueryLoop {
         totalTokens: lastReportedUsage?.totalTokens,
         promptTokens: lastReportedUsage?.promptTokens,
         completionTokens: lastReportedUsage?.completionTokens,
+        toolCatalogState: catalogActive
+          ? snapshotToolCatalogState(
+              discoveredToolNames,
+              announcedDeferredNames
+            )
+          : undefined,
         recoveryMetadata: buildRecoveryMetadata(recoveryState),
       };
     } catch (err) {
@@ -1124,6 +1405,12 @@ export class AIChatQueryLoop {
           partialContent: activeAccumulator?.state.fullContent ?? "",
           model: activeAccumulator?.state.model,
           responseId: activeAccumulator?.state.responseId,
+          toolCatalogState: catalogActive
+            ? snapshotToolCatalogState(
+                discoveredToolNames,
+                announcedDeferredNames
+              )
+            : undefined,
           recoveryMetadata: buildRecoveryMetadata(recoveryState),
         };
       }
@@ -1189,6 +1476,12 @@ export class AIChatQueryLoop {
         partialContent: activeAccumulator?.state.fullContent ?? "",
         model: activeAccumulator?.state.model,
         responseId: activeAccumulator?.state.responseId,
+        toolCatalogState: catalogActive
+          ? snapshotToolCatalogState(
+              discoveredToolNames,
+              announcedDeferredNames
+            )
+          : undefined,
         recoveryMetadata: buildRecoveryMetadata(recoveryState),
       };
     }

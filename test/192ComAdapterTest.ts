@@ -144,7 +144,8 @@ export class ComAdapterTest192 {
             console.log('✅ Built search URL:', searchUrl);
 
             // Validate URL format
-            if (!searchUrl.includes('192.com')) {
+            const parsedUrl = new URL(searchUrl);
+            if (!parsedUrl.hostname.endsWith('192.com')) {
                 throw new Error('Search URL does not contain correct domain');
             }
 

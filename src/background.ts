@@ -149,6 +149,22 @@ if ((app as any).isPackaged) {
 
 log.info("Application starting...");
 
+if (
+  isDevelopment &&
+  process.platform === "linux" &&
+  process.env.LIBGL_ALWAYS_INDIRECT === "1"
+) {
+  log.info("[dev] Disabling GPU acceleration for indirect GL session");
+  const appWithGpuControls = app as typeof app & {
+    disableHardwareAcceleration: () => void;
+    commandLine: {
+      appendSwitch: (switchName: string) => void;
+    };
+  };
+  appWithGpuControls.disableHardwareAcceleration();
+  appWithGpuControls.commandLine.appendSwitch("disable-gpu");
+}
+
 // Handle uncaught exceptions — user-facing dialog only.
 // Crash record persistence is handled by __crashReporter (registered above,
 // which runs first as it was registered earlier).
@@ -202,6 +218,71 @@ function registerMenuBarShortcuts(mainWindow: BrowserWindow): void {
     }
     setMenuBarHidden(false);
   });
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function isConnectionRefusedError(error: unknown): boolean {
+  if (error instanceof Error && error.message.includes("ERR_CONNECTION_REFUSED")) {
+    return true;
+  }
+
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+
+  const maybeElectronError = error as { code?: unknown; errno?: unknown };
+  return (
+    maybeElectronError.code === "ERR_CONNECTION_REFUSED" ||
+    maybeElectronError.errno === -102
+  );
+}
+
+function isBrowserWindowDestroyed(mainWindow: BrowserWindow): boolean {
+  const destroyableWindow = mainWindow as BrowserWindow & {
+    isDestroyed?: () => boolean;
+  };
+
+  return (
+    typeof destroyableWindow.isDestroyed === "function" &&
+    destroyableWindow.isDestroyed()
+  );
+}
+
+async function loadDevServerUrl(
+  mainWindow: BrowserWindow,
+  devServerUrl: string
+): Promise<void> {
+  const maxAttempts = 20;
+  const retryDelayMs = 250;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      if (isBrowserWindowDestroyed(mainWindow)) {
+        return;
+      }
+
+      await mainWindow.loadURL(devServerUrl);
+      return;
+    } catch (error) {
+      const shouldRetry =
+        attempt < maxAttempts && isConnectionRefusedError(error);
+
+      if (!shouldRetry) {
+        throw error;
+      }
+
+      console.warn(
+        `Vite dev server is not ready at ${devServerUrl}; retrying ` +
+          `${attempt}/${maxAttempts}`
+      );
+      await delay(retryDelayMs);
+    }
+  }
 }
 
 function initialize() {
@@ -553,7 +634,7 @@ function initialize() {
       // Load the url of the dev server if in development mode
       try {
         if (win && !(win as any).isDestroyed()) {
-          await (win as any).loadURL(MAIN_WINDOW_VITE_DEV_SERVER_URL as string);
+          await loadDevServerUrl(win, MAIN_WINDOW_VITE_DEV_SERVER_URL);
           if (!process.env.IS_TEST) (win as any).webContents.openDevTools();
         }
       } catch (error) {
@@ -1037,8 +1118,12 @@ function configureContentSecurityPolicy() {
   );
 }
 
-function makeSingleInstance() {
+function makeSingleInstance(): void {
   if ((process as NodeJS.Process & { mas: boolean }).mas) return;
+  if (isDevelopment) {
+    log.info("[dev] Skipping single-instance lock");
+    return;
+  }
 
   const gotThelock = (app as any).requestSingleInstanceLock();
   if (!gotThelock) {

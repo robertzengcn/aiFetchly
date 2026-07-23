@@ -30,6 +30,14 @@ import { userSafeError } from "@/service/AIChatErrorMapper";
 import { Token } from "@/modules/token";
 import { USER_AI_AUTO_PLAN, USER_AI_ENABLED } from "@/config/usersetting";
 import { ENTER_PLAN_MODE_TOOL } from "@/service/EnterPlanModeTool";
+import {
+  resolveToolCatalogMode,
+  resolvePositiveIntEnv,
+  TOOL_CATALOG_ENV,
+} from "@/config/toolCatalogConfig";
+import { ToolCatalogService } from "@/service/ToolCatalogService";
+import { ConversationToolStateService } from "@/service/ConversationToolStateService";
+import { ToolPromptBudgetService } from "@/service/ToolPromptBudgetService";
 import type {
   AIChatQueryEventSink,
   AIChatQueryLoopInput,
@@ -53,6 +61,11 @@ import type {
   OpenAIMessageContent,
 } from "@/api/aiChatApi";
 import type { AIChatPlanStateView } from "@/entityTypes/aiChatPlanTypes";
+import type {
+  ToolCatalog,
+  ToolCatalogModeDecision,
+  ToolCatalogRuntimeContext,
+} from "@/entityTypes/toolCatalogTypes";
 
 function isActivePlanState(plan?: AIChatPlanStateView | null): boolean {
   if (!plan) return false;
@@ -330,6 +343,78 @@ export class AIChatQueryEngine {
     );
   }
 
+  private readonly catalogService = new ToolCatalogService();
+  private readonly budgetService = new ToolPromptBudgetService();
+  private readonly conversationToolStateService =
+    new ConversationToolStateService();
+
+  /**
+   * Build the deferred tool catalog + mode decision for a turn (FR-8, design
+   * §15.1). Returns undefined when the feature flag is off or catalog building
+   * fails, so the loop falls back to standard full-tool behavior.
+   */
+  private buildToolCatalogForTurn(input: {
+    readonly tools: readonly OpenAITool[];
+    readonly conversationId: string;
+    readonly isPlanMode: boolean;
+    readonly autoPlanEnabled: boolean;
+    readonly userMessage: string;
+    readonly model?: string;
+    readonly contextWindowTokens?: number;
+    readonly initialState?: ToolCatalogRuntimeContext;
+  }): {
+    toolCatalog?: ToolCatalog;
+    toolCatalogModeDecision?: ToolCatalogModeDecision;
+  } {
+    const mode = resolveToolCatalogMode(process.env[TOOL_CATALOG_ENV.mode]);
+    if (mode.mode === "off") {
+      // Still emit the decision so the loop can log the reason, but no catalog.
+      return {};
+    }
+
+    const context: ToolCatalogRuntimeContext = {
+      conversationId: input.conversationId,
+      model: input.model,
+      isPlanMode: input.isPlanMode,
+      autoPlanEnabled: input.autoPlanEnabled,
+      currentUserMessage: input.userMessage,
+      uploadedFileTypes: [],
+      contextWindowTokens: input.contextWindowTokens,
+      ...(input.initialState ?? {}),
+    };
+
+    let catalog: ToolCatalog;
+    try {
+      catalog = this.catalogService.buildFromOpenAITools({
+        tools: input.tools,
+        context,
+      });
+    } catch (err) {
+      console.warn(
+        `[tool-catalog] catalog build failed, using standard mode:`,
+        err
+      );
+      return {};
+    }
+
+    const thresholdPercent = resolvePositiveIntEnv(
+      process.env[TOOL_CATALOG_ENV.thresholdPercent]
+    );
+    const decision = this.budgetService.resolveMode({
+      configuredMode: mode.mode,
+      deferredEstimatedTokens: catalog.deferredEstimatedTokens,
+      contextWindowTokens: input.contextWindowTokens,
+      thresholdPercent,
+    });
+
+    // Auto mode with effectively no deferred payload stays standard.
+    if (decision.mode === "standard") {
+      return {};
+    }
+
+    return { toolCatalog: catalog, toolCatalogModeDecision: decision };
+  }
+
   /**
    * Full conversation lifecycle for one user message:
    * resolve plan, create conversation, save user message, build transcript,
@@ -490,19 +575,27 @@ export class AIChatQueryEngine {
     // ------------------------------------------------------------------
     if (!this.startedConversations.has(conversationId)) {
       this.startedConversations.add(conversationId);
-      HookDispatcher.executeHooks({
-        eventName: "SessionStart",
-        input: {
+      try {
+        const aggregate = await HookDispatcher.executeHooks({
           eventName: "SessionStart",
-          hookRunId: `hookrun-session-${conversationId}`,
-          source: "ai-chat-v2",
-          conversationId,
-          timestamp: new Date().toISOString(),
-          mode: isPlanMode ? "plan" : "chat",
-        },
-      }).catch(() => {
+          input: {
+            eventName: "SessionStart",
+            hookRunId: `hookrun-session-${conversationId}`,
+            source: "ai-chat-v2",
+            conversationId,
+            timestamp: new Date().toISOString(),
+            mode: isPlanMode ? "plan" : "chat",
+          },
+        });
+        for (const content of [
+          ...aggregate.systemMessages,
+          ...aggregate.additionalContexts,
+        ]) {
+          messages.push({ role: "system", content });
+        }
+      } catch {
         // Hook errors are non-fatal
-      });
+      }
     }
 
     // ------------------------------------------------------------------
@@ -526,6 +619,24 @@ export class AIChatQueryEngine {
       : autoPlanEnabled
       ? [...openAITools, ENTER_PLAN_MODE_TOOL]
       : openAITools;
+
+    // Build the deferred tool catalog (no-op when AI_TOOL_SEARCH is off or the
+    // auto-mode threshold is not crossed). Fresh turn starts with no discovered
+    // tools; the loop accumulates discovery state in memory.
+    const toolCatalogContext = this.buildToolCatalogForTurn({
+      tools: allOpenAITools,
+      conversationId,
+      isPlanMode,
+      autoPlanEnabled,
+      userMessage: request.message,
+      model: request.model,
+    });
+
+    // Load persisted discovered-tool state so tools discovered in earlier turns
+    // (before an app restart / conversation reload) remain exposed (FR-5/AC-8).
+    const persistedToolCatalogState = toolCatalogContext.toolCatalog
+      ? await this.conversationToolStateService.loadSnapshot(conversationId)
+      : undefined;
 
     // ------------------------------------------------------------------
     // 4. Abort any prior active turn, create new abort controller
@@ -615,6 +726,9 @@ export class AIChatQueryEngine {
       isActiveTurn: () =>
         this.currentAssistantMessageId === assistantMessageId &&
         this.currentConversationId === conversationId,
+      toolCatalog: toolCatalogContext.toolCatalog,
+      toolCatalogModeDecision: toolCatalogContext.toolCatalogModeDecision,
+      toolCatalogState: persistedToolCatalogState,
     };
 
     try {
@@ -770,6 +884,17 @@ export class AIChatQueryEngine {
         content: toolContent,
       });
 
+      // Rebuild the deferred catalog for the resumed turn and carry forward the
+      // discovered-tool snapshot so discovered tools remain exposed (AC-8).
+      const resumeCatalogContext = this.buildToolCatalogForTurn({
+        tools: pending.openAITools,
+        conversationId: pending.conversationId,
+        isPlanMode: Boolean(pending.planContext),
+        autoPlanEnabled: false,
+        userMessage: pending.request.message,
+        model: pending.request.model,
+      });
+
       const loopInput: AIChatQueryLoopInput = {
         conversationId: pending.conversationId,
         assistantMessageId: pending.assistantMessageId,
@@ -784,6 +909,9 @@ export class AIChatQueryEngine {
         isActiveTurn: () =>
           this.currentAssistantMessageId === pending.assistantMessageId &&
           this.currentConversationId === pending.conversationId,
+        toolCatalog: resumeCatalogContext.toolCatalog,
+        toolCatalogModeDecision: resumeCatalogContext.toolCatalogModeDecision,
+        toolCatalogState: pending.toolCatalogState,
       };
 
       void this.loop
@@ -895,6 +1023,17 @@ export class AIChatQueryEngine {
         }
       : undefined;
 
+    // Rebuild the deferred catalog for the resumed plan turn and carry forward
+    // the discovered-tool snapshot (AC-8).
+    const resumePlanCatalogContext = this.buildToolCatalogForTurn({
+      tools: allOpenAITools,
+      conversationId: pending.conversationId,
+      isPlanMode: Boolean(planContext),
+      autoPlanEnabled: false,
+      userMessage: pending.request.message,
+      model: pending.request.model,
+    });
+
     const loopInput: AIChatQueryLoopInput = {
       conversationId: pending.conversationId,
       assistantMessageId: pending.assistantMessageId,
@@ -909,6 +1048,9 @@ export class AIChatQueryEngine {
       isActiveTurn: () =>
         this.currentAssistantMessageId === pending.assistantMessageId &&
         this.currentConversationId === pending.conversationId,
+      toolCatalog: resumePlanCatalogContext.toolCatalog,
+      toolCatalogModeDecision: resumePlanCatalogContext.toolCatalogModeDecision,
+      toolCatalogState: pending.toolCatalogState,
     };
 
     const module = new AIChatV2Module();
@@ -949,6 +1091,15 @@ export class AIChatQueryEngine {
     eventSink: AIChatQueryEventSink
   ): Promise<void> {
     await this.flushEventSaves(eventSink);
+    // Persist deferred-catalog discovered state on terminal results so it
+    // survives app restart / conversation reload (FR-5/AC-8). Pause variants
+    // carry the snapshot on `pending` and persist via the resumed turn.
+    if ("toolCatalogState" in result && result.toolCatalogState) {
+      await this.conversationToolStateService.saveSnapshot({
+        conversationId: result.conversationId,
+        snapshot: result.toolCatalogState,
+      });
+    }
     switch (result.type) {
       case "completed": {
         const { conversationId, assistantMessageId } = result;

@@ -90,8 +90,8 @@ export async function capturePageState(
 function cleanHtml(html: string, maxLength: number): string {
     // Remove script and style content
     let cleaned = html
-        .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
-        .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '')
+        .replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi, '')
+        .replace(/<style\b[^>]*>[\s\S]*?<\/style\s*>/gi, '')
         .replace(/<!--[\s\S]*?-->/g, '')
         .replace(/\s+/g, ' ')
         .trim();

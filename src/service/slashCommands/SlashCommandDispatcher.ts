@@ -11,10 +11,10 @@
 //
 // SECURITY (TRS-06): this file MUST NOT import any process-spawning
 // module, MUST NOT call eval-like or dynamic-function constructors, and
-// MUST NOT spawn anything. The dispatch path is pure logic + registry +
-// manager calls + a pure string-only argument-token substitution
-// (expandPrompt). Verified by a grep gate in the plan acceptance criteria
-// (the forbidden literals do not appear anywhere in this file).
+// MUST NOT spawn anything. Prompt expansion remains pure string-only via
+// expandPrompt. Side-effectful plugin management is delegated lazily to
+// PluginSlashCommandService, which keeps install/fetch dependencies out of
+// the normal slash-command dispatch path.
 //
 // Phase-15 boundary (TRS-06 / CMD-06): argument-token substitution NOW
 // lives in the DISPATCHER for prompt-type commands (Plan 15-01, SC2).
@@ -42,6 +42,10 @@ import type {
 } from "@/service/aifetchlyConfig/AIFetchlyConfigManager";
 import type { AgentDefinitionView } from "@/entityTypes/agentTypes";
 
+export interface PluginSlashCommandExecutor {
+  execute(rawArgs: string | undefined): Promise<string>;
+}
+
 /**
  * SlashCommandDispatcher — resolves raw composer text into the
  * discriminated-union dispatch response (CMD-04).
@@ -53,7 +57,8 @@ import type { AgentDefinitionView } from "@/entityTypes/agentTypes";
 export class SlashCommandDispatcher {
   constructor(
     private readonly registry: CommandRegistry,
-    private readonly manager: AIFetchlyConfigManager
+    private readonly manager: AIFetchlyConfigManager,
+    private readonly pluginCommands?: PluginSlashCommandExecutor
   ) {}
 
   /**
@@ -114,7 +119,7 @@ export class SlashCommandDispatcher {
     // Step 5: switch on functional type.
     switch (cmd.type) {
       case "local":
-        return this.dispatchLocal(cmd.id, parsed.name, scope);
+        return this.dispatchLocal(cmd.id, parsed.name, scope, parsed.args);
 
       case "prompt": {
         // Phase-15 (Plan 15-01, SC2 + CMD-04): prompt-type commands now
@@ -167,7 +172,8 @@ export class SlashCommandDispatcher {
   private async dispatchLocal(
     commandId: string,
     name: string,
-    scope: CommandRegistryScope
+    scope: CommandRegistryScope,
+    rawArgs: string | undefined
   ): Promise<SlashCommandDispatchResponse> {
     switch (commandId) {
       case "built-in:command:help":
@@ -223,6 +229,17 @@ export class SlashCommandDispatcher {
         };
       }
 
+      case "built-in:command:plugin": {
+        const service = this.pluginCommands ?? (await createPluginCommands());
+        const content = await service.execute(rawArgs);
+        return {
+          status: true,
+          action: "show_result",
+          commandId,
+          content,
+        };
+      }
+
       default:
         // A local command reached the dispatcher without a matching
         // branch. Fail closed rather than silently dropping the input.
@@ -251,6 +268,13 @@ export class SlashCommandDispatcher {
     );
     return "Available commands:\n" + lines.join("\n");
   }
+}
+
+async function createPluginCommands(): Promise<PluginSlashCommandExecutor> {
+  const { PluginSlashCommandService } = await import(
+    "./PluginSlashCommandService"
+  );
+  return new PluginSlashCommandService();
 }
 
 /**
@@ -289,27 +313,28 @@ function renderReload(r: AIFetchlyConfigReloadSummary): string {
 }
 
 /**
- * Phase 16 / Plan 03 — derive the {@link AgentSource} kind from a scoped
- * agent id. Conventions (Plan 01 scoped-ID format):
- *   - "user:agent:<name>"                   -> user
- *   - "workspace:<workspaceId>:agent:<name>"-> workspace
- *   - "plugin:<pluginName>:agent:<name>"    -> plugin
- *   - anything else (bare "agent-*")        -> built-in
- *
- * Pure string derivation keeps the helper free of registry coupling
- * (AgentDefinitionView intentionally carries no source field — Plan 01
- * decision). The {@link AgentDefinitionRegistryImpl.list} output is already
- * sorted by D-Precedence, so the caller renders rows in precedence order.
+ * Phase 16 / Plan 03 — derive the rendered badge from the registry metadata.
+ * Plugin agents imported from Claude plugins use IDs such as
+ * "<plugin>:<agent>" for persisted compatibility, so source inference must not
+ * depend only on the old scoped-ID convention.
  */
-function agentSourceBadgeLabel(id: string): string {
+function agentSourceBadgeLabel(agent: AgentDefinitionView): string {
   // Badge labels mirror the Phase 13 slashCommands i18n source-label keys
   // (sourceBuiltin/sourceUser/sourceWorkspace/sourcePlugin). The dispatcher
   // returns English literals for simplicity (design §15.3; same convention
   // as renderHelp/renderStatus) — no new badge strings are introduced.
-  if (id.startsWith("user:agent:")) return "User";
-  if (id.startsWith("workspace:") && id.includes(":agent:")) return "Workspace";
-  if (id.startsWith("plugin:") && id.includes(":agent:")) return "Plugin";
-  return "Built-in";
+  switch (agent.source) {
+    case "user":
+      return "User";
+    case "workspace":
+      return "Workspace";
+    case "plugin":
+      return "Plugin";
+    case "built-in":
+      return "Built-in";
+    default:
+      return "Built-in";
+  }
 }
 
 /**
@@ -326,7 +351,7 @@ function renderAgentsList(agents: readonly AgentDefinitionView[]): string {
   }
   const lines = agents.map(
     (a) =>
-      `${a.id} — ${a.name}: ${a.description} [${agentSourceBadgeLabel(a.id)}]`
+      `${a.id} — ${a.name}: ${a.description} [${agentSourceBadgeLabel(a)}]`
   );
   return "Available agents:\n" + lines.join("\n");
 }

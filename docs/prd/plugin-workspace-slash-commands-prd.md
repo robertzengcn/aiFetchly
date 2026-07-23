@@ -84,7 +84,7 @@ Without this work:
 4. Make plugin commands available immediately after plugin install, enable, disable, reload, or uninstall.
 5. Support plugin commands from both native AiFetchly plugin folders and Claude-compatible plugin command declarations.
 6. Support prompt-only command execution through the existing `AI_CHAT_V2_STREAM` flow.
-7. Preserve existing AI enable gating by ensuring command prompt submissions flow through the existing Chat V2 stream handler.
+7. Preserve existing Chat V2 availability gating by ensuring command prompt submissions flow through the existing Chat V2 stream handler (provider-aware: hosted entitlement or a valid local-provider config).
 8. Preserve existing workspace trust behavior before enabling workspace commands.
 9. Preserve the existing plugin, workspace, and database architecture boundaries.
 10. Provide clear diagnostics for invalid command files or unsupported command declarations.
@@ -274,7 +274,7 @@ Acceptance criteria:
 - Prompt commands expand to prompt text and are submitted through the existing Chat V2 streaming path.
 - Built-in local commands continue to return `show_result`.
 - `/clear` continues to clear the active conversation through existing clear logic.
-- Prompt submissions still respect `USER_AI_ENABLED` because they use the existing Chat V2 stream IPC handler.
+- Prompt submissions respect the provider-aware Chat V2 availability gate (`canUseChat()`) because they use the existing Chat V2 stream IPC handler: hosted chat requires hosted entitlement, local-provider chat requires a valid local-provider config. Prompt slash commands are not gated by a stricter hosted-only `USER_AI_ENABLED` check.
 
 ### 9.4 Plugin install experience
 
@@ -436,16 +436,16 @@ Requirements:
 - If `trust.commands` is false, workspace commands are dropped before registry mutation.
 - Revoking trust removes workspace commands without requiring restart.
 
-### 11.3 AI enable gate
+### 11.3 Chat V2 availability gate
 
-Prompt command dispatch must not bypass AI enable checks.
+Prompt command dispatch must not bypass Chat V2 availability checks.
 
 Requirements:
 
 - `SLASH_COMMAND_DISPATCH` may return `submit_prompt`.
 - The renderer submits that prompt through existing Chat V2 streaming APIs.
-- The stream handler continues checking `USER_AI_ENABLED` before doing AI work.
-- The slash-command IPC handler should not duplicate AI gating unless the architecture changes.
+- The stream handler continues enforcing the provider-aware Chat V2 availability gate (`canUseChat()`) before doing AI work: hosted chat requires hosted entitlement, local-provider chat requires a valid local-provider config. Prompt slash commands follow whatever chat availability the user has; they are not gated by a stricter hosted-only `USER_AI_ENABLED` check (decision: provider-aware).
+- The slash-command IPC handler should not duplicate Chat V2 gating unless the architecture changes.
 
 ### 11.4 Plugin safety
 
@@ -658,11 +658,11 @@ Then:
 - The returned command entries do not include `body`.
 - The returned command entries do not include arbitrary raw `metadata`.
 
-### AC-10: AI gate preservation
+### AC-10: Chat availability gate preservation
 
 Given:
 
-- AI features are disabled for the user.
+- Chat V2 is unavailable for the user (no hosted entitlement AND no valid local-provider config).
 
 When:
 
@@ -671,7 +671,9 @@ When:
 Then:
 
 - Slash dispatch may return `submit_prompt`.
-- The subsequent Chat V2 stream request is rejected by the existing AI enable gate before AI work begins.
+- The subsequent Chat V2 stream request is rejected by the existing provider-aware availability gate (`canUseChat()`) before AI work begins.
+
+Note: when only hosted AI is disabled but a valid local provider is configured, prompt slash commands remain available because the Chat V2 stream accepts local-provider chat (decision: provider-aware).
 
 ## 15. Phased Delivery
 

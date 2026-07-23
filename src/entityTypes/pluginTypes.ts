@@ -179,7 +179,7 @@ export type PluginErrorCode =
 export interface PluginError {
   readonly code: PluginErrorCode;
   readonly pluginName?: string;
-  readonly componentType?: "plugin" | "skill" | "mcpServer" | "agent";
+  readonly componentType?: "plugin" | "skill" | "mcpServer" | "agent" | "hook";
   readonly componentName?: string;
   readonly path?: string;
   readonly message: string;
@@ -202,6 +202,10 @@ export interface PluginSummary {
   readonly skillCount: number;
   readonly mcpServerCount: number;
   readonly agentCount: number;
+  /** Slash commands promoted by this plugin (live CommandRegistry count). */
+  readonly commandCount: number;
+  /** Hooks promoted by this plugin (live HookRegistry count). */
+  readonly hookCount: number;
   readonly permissions: readonly string[];
   readonly lastUpdated: string;
   readonly sourceKind?: PluginSourceKind;
@@ -219,7 +223,9 @@ export interface PluginSkillComponent {
 }
 
 export interface PluginMcpServerComponent {
+  readonly id: number;
   readonly name: string;
+  readonly serverName?: string;
   readonly enabled: boolean;
   readonly transport: PluginMcpTransport;
   readonly health: PluginHealth;
@@ -239,12 +245,22 @@ export interface PluginAgentComponent {
   readonly error?: string;
 }
 
+export interface PluginHookComponent {
+  readonly id: string;
+  readonly eventName: string;
+  readonly matcher?: string;
+  readonly enabled: boolean;
+  readonly type: string;
+  readonly health: string;
+}
+
 export interface PluginDetail extends PluginSummary {
   readonly description: string;
   readonly author?: string;
   readonly skills: readonly PluginSkillComponent[];
   readonly mcpServers: readonly PluginMcpServerComponent[];
   readonly agents: readonly PluginAgentComponent[];
+  readonly hooks: readonly PluginHookComponent[];
   readonly errors: readonly PluginError[];
   readonly manifest: Record<string, unknown>;
 }

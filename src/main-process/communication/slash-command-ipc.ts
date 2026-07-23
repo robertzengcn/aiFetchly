@@ -7,12 +7,16 @@
 //     - list/status/reload are not AI-serving (they return metadata only).
 //     - dispatch of a built-in (local) command returns show_result — no
 //       AI call is made, so there is nothing to gate.
-//     - dispatch of a prompt-type command (phase 15+) returns submit_prompt;
-//       the renderer then submits that prompt through the EXISTING
-//       AI_CHAT_V2_STREAM channel which gates USER_AI_ENABLED FIRST,
-//       fail-closed, before parsing the request.
+//     - dispatch of a prompt-type command returns submit_prompt; the renderer
+//       then submits that prompt through the EXISTING AI_CHAT_V2_STREAM
+//       channel, which is gated by the PROVIDER-AWARE Chat V2 availability
+//       check (canUseChat() in ai-chat-v2-ipc.ts handleStream) — run FIRST,
+//       fail-closed, before the request is parsed. Hosted-provider chat
+//       requires hosted entitlement; local-provider chat requires a valid
+//       local-provider config. No strict hosted-only USER_AI_ENABLED gate is
+//       applied to prompt slash commands (decision: provider-aware).
 //   Verified at src/main-process/communication/ai-chat-v2-ipc.ts handleStream
-//   lines 385-393 (isAIEnabled() runs first, returns before JSON.parse).
+//   (canUseChat() runs first and rejects before JSON.parse).
 //
 // Acceptance grep (TRS-05): the AI-gated wrapper literal MUST NOT appear
 // anywhere in this file — verified by a 0-hit grep gate in the plan.
@@ -101,8 +105,9 @@ export function registerSlashCommandHandlers(win: BrowserWindow): void {
 
   // 3. dispatch — CMD-04 discriminated union. Built-in (local) commands
   //    return show_result; prompt-type commands return submit_prompt and
-  //    the renderer submits via AI_CHAT_V2_STREAM (gated downstream —
-  //    TRS-05 Strategy A). Scoped resolution (FR-2) ensures a workspace
+  //    the renderer submits via AI_CHAT_V2_STREAM, which is gated downstream
+  //    by the provider-aware Chat V2 availability check (canUseChat()) —
+  //    TRS-05 Strategy A. Scoped resolution (FR-2) ensures a workspace
   //    command cannot be dispatched from the wrong conversation.
   registerValidatedHandler(
     SLASH_COMMAND_DISPATCH,
