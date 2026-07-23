@@ -134,7 +134,7 @@ export class RateLimiter {
   private maxRequests: number
   private windowMs: number
 
-  constructor(maxRequests: number = 10, windowMs: number = 60000) {
+  constructor(maxRequests = 10, windowMs = 60000) {
     this.maxRequests = maxRequests
     this.windowMs = windowMs
   }
@@ -264,7 +264,7 @@ export const securityValidation = {
   // Check for XSS patterns
   checkXss: (input: string): boolean => {
     const xssPatterns = [
-      /<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi,
+      /<script\b[^>]*>[\s\S]*?<\/script\s*>/gi,
       /javascript:/i,
       /on\w+\s*=/i,
       /<iframe/i,
