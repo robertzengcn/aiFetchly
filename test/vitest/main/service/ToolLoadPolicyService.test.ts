@@ -47,6 +47,7 @@ describe("ToolLoadPolicyService.classify", () => {
     expect(classify("glob_files", "builtin")).toBe("always");
     expect(classify("grep_files", "builtin")).toBe("always");
     expect(classify("check_tool_job_status", "builtin")).toBe("always");
+    expect(classify("check_shell_status", "builtin")).toBe("always");
     expect(classify("read_attachment_content", "builtin")).toBe("always");
     expect(classify("knowledge_library_search", "builtin")).toBe("always");
   });
@@ -67,12 +68,36 @@ describe("ToolLoadPolicyService.classify", () => {
       "deferred"
     );
     expect(classify("search_maps_businesses", "builtin")).toBe("deferred");
+    expect(classify("shell_execute", "builtin")).toBe("deferred");
   });
 
   it("promotes a specialized tool to contextual when named in the user message", () => {
     expect(
       classify("search_maps_businesses", "builtin", {
         currentUserMessage: "Please use search_maps_businesses for dentists",
+      })
+    ).toBe("contextual");
+  });
+
+  it("promotes shell_execute for shell-like user intent", () => {
+    expect(
+      classify("shell_execute", "builtin", {
+        currentUserMessage: "rm the file test.txt",
+      })
+    ).toBe("contextual");
+    expect(
+      classify("shell_execute", "builtin", {
+        currentUserMessage: "delete the file test.txt",
+      })
+    ).toBe("contextual");
+    expect(
+      classify("shell_execute", "builtin", {
+        currentUserMessage: "delete test.txt",
+      })
+    ).toBe("contextual");
+    expect(
+      classify("shell_execute", "builtin", {
+        currentUserMessage: "run a shell command to list files",
       })
     ).toBe("contextual");
   });

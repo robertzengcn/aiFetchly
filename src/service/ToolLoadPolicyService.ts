@@ -32,9 +32,17 @@ const ALWAYS_LOADED_TOOL_NAMES: ReadonlySet<string> = new Set([
   "glob_files",
   "grep_files",
   "check_tool_job_status",
+  "check_shell_status",
   "read_attachment_content",
   "knowledge_library_search",
 ]);
+
+const CONTEXTUAL_SHELL_TOOL_NAMES: ReadonlySet<string> = new Set([
+  "shell_execute",
+]);
+
+const SHELL_INTENT_RE =
+  /\b(shell|terminal|bash|powershell|cmd|command|execute|run|rm|unlink)\b|(?:\b(delete|remove)\b.*(?:\b(file|folder|directory|path)\b|[./~]|\.[A-Za-z0-9]{1,8}\b))/i;
 
 /** Source types that are always deferred by default. */
 const DEFERRED_SOURCES: ReadonlySet<ToolCatalogSource> = new Set([
@@ -77,7 +85,18 @@ export class ToolLoadPolicyService {
       return "contextual";
     }
 
-    // 7. Built-in default: specialized tools are deferred and discoverable.
+    // 7. Contextual promotion: shell execution is high-impact, so do not send
+    // it for ordinary chat. Expose it when the user's current message clearly
+    // asks for shell-like work such as `rm`, terminal/command execution, or
+    // deleting a file. Existing shell permission prompts remain authoritative.
+    if (
+      CONTEXTUAL_SHELL_TOOL_NAMES.has(name) &&
+      this.hasShellIntent(input.context.currentUserMessage)
+    ) {
+      return "contextual";
+    }
+
+    // 8. Built-in default: specialized tools are deferred and discoverable.
     return "deferred";
   }
 
@@ -86,5 +105,9 @@ export class ToolLoadPolicyService {
     const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const re = new RegExp(`\\b${escaped}\\b`, "i");
     return re.test(message);
+  }
+
+  private hasShellIntent(message: string): boolean {
+    return SHELL_INTENT_RE.test(message);
   }
 }

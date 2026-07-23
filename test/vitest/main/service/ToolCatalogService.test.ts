@@ -189,6 +189,67 @@ describe("ToolCatalogService.filterForRound", () => {
     expect(r.deferredToolNames).toContain("mcp_1_secret");
   });
 
+  it("exposes shell_execute for shell-like file removal requests", () => {
+    const svc = new ToolCatalogService();
+    const shellCtx: ToolCatalogRuntimeContext = {
+      ...ctx,
+      currentUserMessage: "rm the file test.txt",
+    };
+    const catalog = svc.buildFromOpenAITools({
+      tools: [
+        tool("file_read"),
+        tool("shell_execute"),
+        tool("check_shell_status"),
+        tool("mcp_1_secret"),
+      ],
+      context: shellCtx,
+    });
+    const r = svc.filterForRound({
+      catalog,
+      liveTools: [
+        tool("file_read"),
+        tool("shell_execute"),
+        tool("check_shell_status"),
+        tool("mcp_1_secret"),
+      ],
+      state: emptyState,
+      modeDecision: {
+        mode: "deferred",
+        configuredMode: "on",
+        reason: "on",
+        estimatedDeferredTokens: 1000,
+      },
+    });
+
+    expect(catalog.byName.get("shell_execute")?.loadPolicy).toBe(
+      "contextual"
+    );
+    expect(catalog.byName.get("check_shell_status")?.loadPolicy).toBe(
+      "always"
+    );
+    expect(r.exposedToolNames).toContain("shell_execute");
+    expect(r.exposedToolNames).toContain("check_shell_status");
+    expect(r.exposedToolNames).not.toContain("mcp_1_secret");
+  });
+
+  it("keeps shell_execute deferred for ordinary chat", () => {
+    const { svc, catalog } = buildWith([tool("shell_execute")]);
+    const r = svc.filterForRound({
+      catalog,
+      liveTools: [tool("shell_execute")],
+      state: emptyState,
+      modeDecision: {
+        mode: "deferred",
+        configuredMode: "on",
+        reason: "on",
+        estimatedDeferredTokens: 1000,
+      },
+    });
+
+    expect(catalog.byName.get("shell_execute")?.loadPolicy).toBe("deferred");
+    expect(r.exposedToolNames).not.toContain("shell_execute");
+  });
+
   it("promotes a discovered deferred tool", () => {
     const { svc, catalog } = buildWith([tool("mcp_1_secret")]);
     const r = svc.filterForRound({
