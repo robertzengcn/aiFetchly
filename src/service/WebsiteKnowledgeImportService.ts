@@ -354,7 +354,7 @@ export class WebsiteKnowledgeImportService {
     }
 
     const contentSha256 = sha256NormalizedBody(body);
-    const fileName = buildFileNameFromUrl(scrape.finalUrl ?? safeUrl);
+    const fileName = buildFileNameFromUrl(scrape.finalUrl ?? safeUrl, safeUrl);
     const filePath = path.join(runDir, fileName);
     try {
       fs.writeFileSync(filePath, staged, "utf8");
@@ -397,11 +397,17 @@ export class WebsiteKnowledgeImportService {
   }
 
   private getStagingRoot(): string {
-    return this.deps.stagingRoot ?? path.join(app.getPath("userData"), STAGING_DIR_NAME);
+    return (
+      this.deps.stagingRoot ??
+      path.join(app.getPath("userData"), STAGING_DIR_NAME)
+    );
   }
 
   private createRunDir(importGroupId: string): string {
-    const runDir = path.join(this.getStagingRoot(), sanitizeDirName(importGroupId));
+    const runDir = path.join(
+      this.getStagingRoot(),
+      sanitizeDirName(importGroupId)
+    );
     if (!fs.existsSync(runDir)) {
       fs.mkdirSync(runDir, { recursive: true });
     }
@@ -497,7 +503,9 @@ function safeOriginOf(url: string): string | undefined {
 }
 
 /** Keep a canonical URL only if it is a safe absolute http(s) URL. */
-function sanitizeCanonicalUrl(canonicalUrl: string | undefined): string | undefined {
+function sanitizeCanonicalUrl(
+  canonicalUrl: string | undefined
+): string | undefined {
   if (!canonicalUrl) return undefined;
   const verdict = UrlGuard.validate(canonicalUrl);
   if (!verdict.safe) return undefined;
@@ -513,11 +521,7 @@ function buildStagedMarkdown(args: {
   crawledAt: Date;
 }): string {
   const heading = args.title?.trim() || args.sourceUrl;
-  const lines: string[] = [
-    `# ${heading}`,
-    "",
-    `Source URL: ${args.sourceUrl}`,
-  ];
+  const lines: string[] = [`# ${heading}`, "", `Source URL: ${args.sourceUrl}`];
   if (args.finalUrl && args.finalUrl !== args.sourceUrl) {
     lines.push(`Final URL: ${args.finalUrl}`);
   }
@@ -526,16 +530,30 @@ function buildStagedMarkdown(args: {
   return lines.join("\n");
 }
 
-/** Deterministic readable filename: {host}-{pathSlug}-{urlHash8}.md */
-function buildFileNameFromUrl(url: string): string {
-  const norm = normalizeUrl(url);
+/**
+ * Deterministic readable filename: {host}-{pathSlug}-{urlHash8}.md
+ *
+ * `readableUrl` supplies the host/path segments (prefers the post-redirect
+ * final URL so the name reflects where content actually came from). `hashUrl`
+ * is the deduped SOURCE URL — hashed for the uniqueness suffix. Hashing the
+ * source URL (not the final URL) guarantees uniqueness within one import run:
+ * url_list dedupes by source URL, and site_crawl's seen-set never re-scrapes
+ * one. Two distinct source URLs that both redirect to the same final URL must
+ * not collide, or the second staged file would overwrite the first before the
+ * tool layer uploads it.
+ */
+function buildFileNameFromUrl(readableUrl: string, hashUrl?: string): string {
+  const norm = normalizeUrl(readableUrl);
   const host = sanitizeFsSegment(norm?.host ?? "site");
   const rawPath = norm?.pathname ?? "";
   const pathSlug =
     sanitizeFsSegment(rawPath.replace(/\.html?$/i, "").replace(/\/+/g, "-")) ||
     "index";
-  const urlHash = sha256Hex(url).slice(0, 8);
-  const base = `${host}-${pathSlug}-${urlHash}`.slice(0, MAX_FILENAME_BASE_LENGTH);
+  const urlHash = sha256Hex(hashUrl ?? readableUrl).slice(0, 8);
+  const base = `${host}-${pathSlug}-${urlHash}`.slice(
+    0,
+    MAX_FILENAME_BASE_LENGTH
+  );
   return `${base}.md`;
 }
 

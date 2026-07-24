@@ -251,6 +251,35 @@ describe("WebsiteKnowledgeImportService", () => {
       expect(res.skipped).toHaveLength(1);
       expect(res.skipped[0].code).toBe("SCRAPE_FAILED");
     });
+
+    test("stages distinct files when two source URLs redirect to the same final URL", async () => {
+      // Regression: filename hash must come from the source URL, not the final
+      // URL — otherwise the second staged file overwrites the first before the
+      // tool layer uploads it.
+      const { svc } = makeService({
+        "https://example.com/a": {
+          markdown: BODY_500,
+          finalUrl: "https://example.com/same",
+        },
+        "https://example.com/b": {
+          markdown: BODY_500,
+          finalUrl: "https://example.com/same",
+        },
+      });
+
+      const res = await svc.prepareImportSources({
+        mode: "url_list",
+        urls: ["https://example.com/a", "https://example.com/b"],
+        maxPages: 20,
+        maxDepth: 2,
+      });
+
+      expect(res.sources).toHaveLength(2);
+      const [first, second] = res.sources;
+      expect(first.filePath).not.toBe(second.filePath);
+      expect(fs.existsSync(first.filePath)).toBe(true);
+      expect(fs.existsSync(second.filePath)).toBe(true);
+    });
   });
 
   // -------------------------------------------------------------------------
