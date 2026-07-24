@@ -64,6 +64,7 @@ import {
 import {
   listKnowledgeLibraryDocumentsForAi,
   importKnowledgeLibraryAttachmentForAi,
+  importKnowledgeLibraryWebsiteForAi,
   deleteKnowledgeLibraryDocumentForAi,
 } from "@/service/KnowledgeLibraryAiTools";
 
@@ -138,8 +139,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       properties: {
         search_engine: {
           type: "string",
-          description:
-            "Which search engine to scrape: google, bing, or yandex",
+          description: "Which search engine to scrape: google, bing, or yandex",
           enum: ["google", "bing", "yandex"],
         },
         query: {
@@ -1983,6 +1983,84 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     source: "built-in",
     execute: async (args, context) => {
       const result = await importKnowledgeLibraryAttachmentForAi(
+        args as Record<string, unknown>,
+        context
+      );
+      return {
+        success: result.success,
+        result: result as unknown as Record<string, unknown>,
+      };
+    },
+  },
+  {
+    name: "knowledge_library_import_website",
+    description:
+      "Import public webpage content into the local knowledge library by URL. Supports one page (single_page), an explicit list of pages (url_list), or a bounded same-origin crawl (site_crawl). Converts pages to markdown and indexes each as a separate searchable document through the existing RAG pipeline. Requires user confirmation. Do NOT use for private, authenticated, localhost, internal network, or non-http(s) URLs.",
+    parameters: {
+      type: "object",
+      properties: {
+        mode: {
+          type: "string",
+          enum: ["single_page", "url_list", "site_crawl"],
+          default: "single_page",
+          description:
+            "Import mode. single_page requires url; url_list requires urls; site_crawl starts from url and follows same-origin links.",
+        },
+        url: {
+          type: "string",
+          description: "Public http(s) URL for single_page or site_crawl mode.",
+        },
+        urls: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Explicit public http(s) URLs for url_list mode. Each becomes one document (up to 50).",
+        },
+        maxPages: {
+          type: "number",
+          default: 20,
+          description:
+            "Maximum pages to import for url_list or site_crawl (hard max 100).",
+        },
+        maxDepth: {
+          type: "number",
+          default: 2,
+          description: "Maximum crawl depth for site_crawl mode (hard max 4).",
+        },
+        title: {
+          type: "string",
+          description: "Optional title override (single_page only).",
+        },
+        description: {
+          type: "string",
+          description: "Optional document or collection description.",
+        },
+        tags: {
+          type: "array",
+          items: { type: "string" },
+          description: "Optional tags applied to every imported page.",
+        },
+        author: {
+          type: "string",
+          description: "Optional author. Defaults to Website.",
+        },
+        duplicatePolicy: {
+          type: "string",
+          enum: ["fail", "allow", "replace"],
+          default: "fail",
+          description:
+            'How to handle duplicate pages. "fail" (default) skips duplicates, "allow" imports anyway, "replace" is not supported yet.',
+        },
+      },
+      required: [],
+    },
+    tier: "main",
+    requiresConfirmation: true,
+    permissionCategory: "automation",
+    timeoutClass: "network",
+    source: "built-in",
+    execute: async (args, context) => {
+      const result = await importKnowledgeLibraryWebsiteForAi(
         args as Record<string, unknown>,
         context
       );

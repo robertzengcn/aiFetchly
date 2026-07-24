@@ -304,7 +304,8 @@ export type SkippedWebsiteImportCode =
   | "SCRAPE_FAILED"
   | "EMPTY_CONTENT"
   | "UNSUPPORTED_FILE_TYPE"
-  | "FILE_TOO_LARGE";
+  | "FILE_TOO_LARGE"
+  | "IMPORT_FAILED";
 
 /**
  * Summary of one webpage that was successfully staged, uploaded, chunked, and

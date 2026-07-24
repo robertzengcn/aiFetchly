@@ -53,6 +53,7 @@ const CONTEXTUAL_FILE_EDIT_TOOL_NAMES: ReadonlySet<string> = new Set([
 const CONTEXTUAL_KNOWLEDGE_LIBRARY_TOOL_NAMES: ReadonlySet<string> = new Set([
   "knowledge_library_list_documents",
   "knowledge_library_import_attachment",
+  "knowledge_library_import_website",
   "knowledge_library_delete_document",
 ]);
 
@@ -83,6 +84,15 @@ const FILE_EDIT_INTENT_RE =
 
 const KNOWLEDGE_LIBRARY_INTENT_RE =
   /\b(knowledge[- ]?library|knowledge base|rag|library documents?|documents? in (?:the )?library)\b/i;
+
+/**
+ * Website-import phrasing that should surface the import_website tool even when
+ * the user does not say "knowledge library" verbatim. Matches phrases like
+ * "import this webpage into knowledge", "save this url to the library",
+ * "crawl the docs into knowledge", "remember this website".
+ */
+const WEBSITE_IMPORT_INTENT_RE =
+  /\b(?:import|save|add|remember|crawl|scrape|index|store)\b[^.]{0,60}?\b(?:webpage|website|web page|url|docs?|documentation|faq|pricing|policy|policies|support page|page)\b[^.]{0,60}?\b(?:knowledge|library|rag|knowledge base)\b/i;
 
 const SCHEDULE_INTENT_RE =
   /\b(schedule|scheduled|scheduler|cron|run .*\b(?:later|daily|weekly|monthly)|automation schedule)\b/i;
@@ -204,7 +214,10 @@ export class ToolLoadPolicyService {
   }
 
   private hasKnowledgeLibraryIntent(message: string): boolean {
-    return KNOWLEDGE_LIBRARY_INTENT_RE.test(message);
+    return (
+      KNOWLEDGE_LIBRARY_INTENT_RE.test(message) ||
+      WEBSITE_IMPORT_INTENT_RE.test(message)
+    );
   }
 
   private hasScheduleIntent(message: string): boolean {

@@ -23,11 +23,18 @@ import { USER_AI_ENABLED } from "@/config/usersetting";
 import { DocumentService } from "@/service/DocumentService";
 import { RagSearchModule } from "@/modules/RagSearchModule";
 import { RAGDocumentModule } from "@/modules/RAGDocumentModule";
+import {
+  WebsiteKnowledgeImportService,
+  WEBSITE_DEFAULT_AUTHOR,
+  type WebsiteImportSource,
+  type WebsiteImportSkippedSource,
+} from "@/service/WebsiteKnowledgeImportService";
 import type { RAGDocumentEntity } from "@/entity/RAGDocument.entity";
 import type { SkillExecutionContext } from "@/entityTypes/skillTypes";
 import {
   deleteKnowledgeDocumentInputSchema,
   importKnowledgeAttachmentInputSchema,
+  importKnowledgeWebsiteInputSchema,
   listKnowledgeDocumentsInputSchema,
 } from "@/entityTypes/knowledgeLibraryAiToolTypes";
 import type {
@@ -37,9 +44,14 @@ import type {
   KnowledgeLibraryListOutcome,
   KnowledgeLibraryToolError,
   KnowledgeLibraryToolErrorCode,
+  KnowledgeLibraryWebsiteImportOutcome,
   ListKnowledgeDocumentsParsed,
   ImportKnowledgeAttachmentParsed,
+  ImportKnowledgeWebsiteParsed,
   DeleteKnowledgeDocumentParsed,
+  ImportedWebsiteDocumentSummary,
+  SkippedWebsiteImportSummary,
+  SkippedWebsiteImportCode,
 } from "@/entityTypes/knowledgeLibraryAiToolTypes";
 
 /** Upper bound on how many rows we scan from the DB before in-memory filtering. */
@@ -148,6 +160,119 @@ function defaultIsAiEnabled(): boolean {
 }
 
 // ---------------------------------------------------------------------------
+// Website import helpers
+// ---------------------------------------------------------------------------
+
+/** Build the per-page tag set: website + host tag + user tags (deduped). */
+function buildWebsiteTags(
+  sourceUrl: string,
+  userTags: readonly string[] | undefined
+): string[] {
+  const tags: string[] = [];
+  const seen = new Set<string>();
+  const candidates = [
+    "website",
+    hostTagFromUrl(sourceUrl),
+    ...(userTags ?? []),
+  ];
+  for (const tag of candidates) {
+    if (!tag) continue;
+    const key = tag.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    tags.push(tag);
+    if (tags.length >= 20) break; // schema max
+  }
+  return tags;
+}
+
+/** Hostname (sans leading www.) capped to tag length, or "" if unparseable. */
+function hostTagFromUrl(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./i, "").slice(0, 80);
+  } catch {
+    return "";
+  }
+}
+
+/** Build a collection-level description carrying source/import metadata. */
+function buildWebsiteDescription(
+  userDescription: string | undefined,
+  source: WebsiteImportSource,
+  mode: string
+): string {
+  const lines: string[] = [];
+  const trimmed = userDescription?.trim();
+  if (trimmed) {
+    lines.push(trimmed);
+  }
+  lines.push("Imported webpage");
+  lines.push(`Source URL: ${source.sourceUrl}`);
+  if (source.finalUrl && source.finalUrl !== source.sourceUrl) {
+    lines.push(`Final URL: ${source.finalUrl}`);
+  }
+  lines.push(`Import mode: ${mode}`);
+  lines.push(`Import group: ${source.importGroupId}`);
+  return lines.join("\n");
+}
+
+/** Human-readable success summary for the model. */
+function summarizeWebsiteSuccess(
+  mode: string,
+  importedCount: number,
+  skippedCount: number
+): string {
+  const label = mode === "site_crawl" ? "webpage(s)" : "webpage(s)";
+  const searchable =
+    " The imported pages are now searchable in future knowledge-library answers.";
+  if (skippedCount > 0) {
+    return `Imported ${importedCount} ${label} into the knowledge library. Skipped ${skippedCount} page(s).${searchable}`;
+  }
+  return `Imported ${importedCount} ${label} into the knowledge library.${searchable}`;
+}
+
+/** Human-readable failure summary listing per-page skip reasons. */
+function summarizeWebsiteFailure(
+  skipped: readonly SkippedWebsiteImportSummary[],
+  discoveredCount?: number
+): string {
+  const discovery =
+    discoveredCount !== undefined
+      ? ` Discovered ${discoveredCount} link(s).`
+      : "";
+  if (skipped.length === 0) {
+    return `No pages were imported.${discovery}`;
+  }
+  const reasons = skipped
+    .map((s) => `${s.code.toLowerCase().replace(/_/g, " ")} (${s.url})`)
+    .join("; ");
+  return `No pages were imported.${discovery} Skipped: ${reasons}.`;
+}
+
+/** Pick the single most descriptive tool error code when nothing imported. */
+function aggregateWebsiteFailureCode(
+  skipped: readonly SkippedWebsiteImportSummary[]
+): KnowledgeLibraryToolErrorCode {
+  if (skipped.length === 0) return "IMPORT_FAILED";
+  const first = skipped[0].code;
+  if (!skipped.every((s) => s.code === first)) return "IMPORT_FAILED";
+  switch (first) {
+    case "DUPLICATE_DOCUMENT":
+      return "DUPLICATE_DOCUMENT";
+    case "URL_BLOCKED":
+      return "URL_BLOCKED";
+    case "EMPTY_CONTENT":
+      return "EMPTY_CONTENT";
+    case "SCRAPE_FAILED":
+      return "SCRAPE_FAILED";
+    case "FILE_TOO_LARGE":
+      return "FILE_TOO_LARGE";
+    default:
+      return "IMPORT_FAILED";
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Service (dependency-injectable for tests)
 // ---------------------------------------------------------------------------
 
@@ -158,6 +283,8 @@ export interface KnowledgeLibraryAiToolsDeps {
   readonly ragDocumentModule?: RAGDocumentModule;
   /** RAG search module (upload + chunking + embedding). */
   readonly ragSearchModule?: RagSearchModule;
+  /** Website import service (URL ingest + markdown staging). */
+  readonly websiteImportService?: WebsiteKnowledgeImportService;
   /** Override the AI feature gate in tests. */
   readonly isAiEnabled?: () => boolean;
 }
@@ -175,6 +302,12 @@ export class KnowledgeLibraryAiTools {
 
   private getRagSearchModule(): RagSearchModule {
     return this.deps.ragSearchModule ?? new RagSearchModule();
+  }
+
+  private getWebsiteImportService(): WebsiteKnowledgeImportService {
+    return (
+      this.deps.websiteImportService ?? new WebsiteKnowledgeImportService()
+    );
   }
 
   private isAiEnabled(): boolean {
@@ -336,6 +469,203 @@ export class KnowledgeLibraryAiTools {
   }
 
   /**
+   * Import public webpage content into the local knowledge library by URL.
+   *
+   * Scrapes pages (single page, an explicit list, or a bounded same-origin
+   * crawl), converts each to markdown, and indexes it through the existing RAG
+   * upload pipeline as a separate document. Requires AI to be enabled
+   * (embedding work) and user confirmation.
+   *
+   * Never passes a URL as a `filePath` — only app-owned staged markdown files
+   * produced by `WebsiteKnowledgeImportService` reach the RAG pipeline. Per-page
+   * failures become `skipped` entries so multi-page imports partially succeed.
+   */
+  async importWebsite(
+    args: Record<string, unknown>,
+    _context: SkillExecutionContext
+  ): Promise<KnowledgeLibraryWebsiteImportOutcome> {
+    let input: ImportKnowledgeWebsiteParsed;
+    try {
+      input = importKnowledgeWebsiteInputSchema.parse(args);
+    } catch (error) {
+      return mapError("INVALID_INPUT", error);
+    }
+
+    if (!this.isAiEnabled()) {
+      return toolError(
+        "AI_DISABLED",
+        "AI is not enabled. Importing websites requires an active AI subscription."
+      );
+    }
+
+    if (input.duplicatePolicy === "replace") {
+      return toolError(
+        "INVALID_INPUT",
+        'duplicatePolicy "replace" is not supported yet. Use "fail" or "allow".'
+      );
+    }
+
+    let prepare;
+    try {
+      prepare = await this.getWebsiteImportService().prepareImportSources({
+        mode: input.mode,
+        url: input.url,
+        urls: input.urls ? [...input.urls] : undefined,
+        maxPages: input.maxPages,
+        maxDepth: input.maxDepth,
+      });
+    } catch (error) {
+      return mapError("IMPORT_FAILED", error);
+    }
+
+    const imported: ImportedWebsiteDocumentSummary[] = [];
+    const skipped: SkippedWebsiteImportSummary[] = prepare.skipped.map((s) => ({
+      ...s,
+    }));
+
+    if (prepare.sources.length > 0) {
+      const documentModule = this.getRagDocumentModule();
+      const ragModule = this.getRagSearchModule();
+      try {
+        await ragModule.initializeRagModule();
+      } catch (error) {
+        return mapError("IMPORT_FAILED", error);
+      }
+
+      for (const source of prepare.sources) {
+        const staged = await this.stageOneWebsiteSource(
+          source,
+          input,
+          documentModule,
+          ragModule
+        );
+        if (staged.imported) imported.push(staged.imported);
+        if (staged.skipped) skipped.push(staged.skipped);
+      }
+    }
+
+    if (imported.length === 0) {
+      const code = aggregateWebsiteFailureCode(skipped);
+      return toolError(
+        code,
+        summarizeWebsiteFailure(skipped, prepare.discoveredCount)
+      );
+    }
+
+    return {
+      success: true,
+      mode: input.mode,
+      imported,
+      skipped,
+      importedCount: imported.length,
+      skippedCount: skipped.length,
+      requestedCount: prepare.requestedCount,
+      discoveredCount: prepare.discoveredCount,
+      summary: summarizeWebsiteSuccess(
+        input.mode,
+        imported.length,
+        skipped.length
+      ),
+    };
+  }
+
+  /**
+   * Validate, duplicate-check, and upload one staged webpage source. Returns
+   * either an imported summary or a skipped summary (never throws — failures are
+   * surfaced as skipped so a multi-page import can partially succeed).
+   */
+  private async stageOneWebsiteSource(
+    source: WebsiteImportSource,
+    input: ImportKnowledgeWebsiteParsed,
+    documentModule: RAGDocumentModule,
+    ragModule: RagSearchModule
+  ): Promise<{
+    imported?: ImportedWebsiteDocumentSummary;
+    skipped?: SkippedWebsiteImportSummary;
+  }> {
+    let validation;
+    try {
+      validation = await documentModule.validateFile(source.filePath);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      return {
+        skipped: { url: source.sourceUrl, reason, code: "IMPORT_FAILED" },
+      };
+    }
+    if (!validation.isValid) {
+      const combined = validation.errors.join(", ");
+      const code: SkippedWebsiteImportCode = /size|large|exceed|big/i.test(
+        combined
+      )
+        ? "FILE_TOO_LARGE"
+        : "UNSUPPORTED_FILE_TYPE";
+      return {
+        skipped: { url: source.sourceUrl, reason: combined, code },
+      };
+    }
+
+    // MVP duplicate detection uses name + size. Phase 8 extends this to
+    // source/canonical/content-hash metadata via the RAG document module.
+    if (input.duplicatePolicy === "fail") {
+      try {
+        const duplicate = await documentModule.checkDuplicate(
+          source.fileName,
+          validation.fileSize ?? source.sizeBytes
+        );
+        if (duplicate.isDuplicate) {
+          return {
+            skipped: {
+              url: source.sourceUrl,
+              reason:
+                "A matching document already exists in the knowledge library.",
+              code: "DUPLICATE_DOCUMENT",
+              existingDocuments:
+                duplicate.existingDocuments.map(toDocumentSummary),
+            },
+          };
+        }
+      } catch {
+        // Treat duplicate-check failure as non-fatal: proceed to import.
+      }
+    }
+
+    // A user title override only applies to single_page; for multi-page imports
+    // each document keeps its own scraped page title (PRD §11.4).
+    const useUserTitle = input.mode === "single_page";
+    const title = useUserTitle ? input.title ?? source.title : source.title;
+
+    try {
+      const upload = await ragModule.uploadDocument({
+        filePath: source.filePath,
+        name: source.fileName,
+        title,
+        description: buildWebsiteDescription(
+          input.description,
+          source,
+          input.mode
+        ),
+        tags: buildWebsiteTags(source.sourceUrl, input.tags),
+        author: input.author ?? WEBSITE_DEFAULT_AUTHOR,
+      });
+
+      return {
+        imported: {
+          ...toDocumentSummary(upload.document),
+          sourceUrl: source.sourceUrl,
+          finalUrl: source.finalUrl,
+          chunksCreated: upload.chunksCreated,
+          processingTimeMs: upload.processingTime,
+        },
+      };
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      return {
+        skipped: { url: source.sourceUrl, reason, code: "IMPORT_FAILED" },
+      };
+    }
+  }
+
+  /**
    * Delete one known document by exact ID through the existing RAG delete
    * pipeline. Local cleanup only; does not require AI to be enabled.
    */
@@ -417,6 +747,13 @@ export async function importKnowledgeLibraryAttachmentForAi(
   context: SkillExecutionContext
 ): Promise<KnowledgeLibraryImportOutcome> {
   return getDefaultTools().importAttachment(args, context);
+}
+
+export async function importKnowledgeLibraryWebsiteForAi(
+  args: Record<string, unknown>,
+  context: SkillExecutionContext
+): Promise<KnowledgeLibraryWebsiteImportOutcome> {
+  return getDefaultTools().importWebsite(args, context);
 }
 
 export async function deleteKnowledgeLibraryDocumentForAi(
