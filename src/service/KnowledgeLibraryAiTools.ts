@@ -604,23 +604,24 @@ export class KnowledgeLibraryAiTools {
       };
     }
 
-    // MVP duplicate detection uses name + size. Phase 8 extends this to
-    // source/canonical/content-hash metadata via the RAG document module.
+    // Duplicate detection by URL/content hash metadata (canonical → source →
+    // content body hash). Falls back to name+size only when no provenance is
+    // available, which does not happen for website imports (sourceUrl is set).
     if (input.duplicatePolicy === "fail") {
       try {
-        const duplicate = await documentModule.checkDuplicate(
-          source.fileName,
-          validation.fileSize ?? source.sizeBytes
-        );
-        if (duplicate.isDuplicate) {
+        const existing = await documentModule.findWebsiteDuplicate({
+          sourceUrl: source.sourceUrl,
+          canonicalUrl: source.canonicalUrl,
+          contentSha256: source.contentSha256,
+        });
+        if (existing) {
           return {
             skipped: {
               url: source.sourceUrl,
               reason:
                 "A matching document already exists in the knowledge library.",
               code: "DUPLICATE_DOCUMENT",
-              existingDocuments:
-                duplicate.existingDocuments.map(toDocumentSummary),
+              existingDocuments: [toDocumentSummary(existing)],
             },
           };
         }
@@ -646,6 +647,13 @@ export class KnowledgeLibraryAiTools {
         ),
         tags: buildWebsiteTags(source.sourceUrl, input.tags),
         author: input.author ?? WEBSITE_DEFAULT_AUTHOR,
+        sourceType: "webpage",
+        sourceUrl: source.sourceUrl,
+        canonicalUrl: source.canonicalUrl,
+        sourceRootUrl: source.sourceRootUrl,
+        importGroupId: source.importGroupId,
+        contentSha256: source.contentSha256,
+        crawledAt: source.crawledAt,
       });
 
       return {

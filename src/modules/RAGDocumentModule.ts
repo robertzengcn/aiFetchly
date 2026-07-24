@@ -17,6 +17,11 @@ function validationStamp(): string {
     .toString("hex")}`;
 }
 
+/** SHA-256 hex digest of a string (used for URL provenance hashes). */
+function sha256Hex(value: string): string {
+  return crypto.createHash("sha256").update(value, "utf8").digest("hex");
+}
+
 export interface DocumentUploadOptions {
   filePath: string;
   name: string;
@@ -26,6 +31,15 @@ export interface DocumentUploadOptions {
   author?: string;
   // modelName?: string;
   // vectorDimensions?: number;
+  // Website import provenance (optional; file/attachment uploads omit these).
+  // URL hashes are derived by the module so store/query stay consistent.
+  sourceType?: "file" | "attachment" | "webpage";
+  sourceUrl?: string;
+  canonicalUrl?: string;
+  sourceRootUrl?: string;
+  importGroupId?: string;
+  contentSha256?: string;
+  crawledAt?: Date;
 }
 
 export interface DocumentValidationResult {
@@ -104,6 +118,22 @@ export class RAGDocumentModule extends BaseModule {
     document.processingStatus = "pending";
     document.uploadedAt = new Date();
 
+    // Website import provenance. URL hashes are derived here so the stored
+    // index columns are consistent with the duplicate-detection lookups.
+    document.sourceType = options.sourceType;
+    document.sourceUrl = options.sourceUrl;
+    document.sourceUrlSha256 = options.sourceUrl
+      ? sha256Hex(options.sourceUrl)
+      : undefined;
+    document.canonicalUrl = options.canonicalUrl;
+    document.canonicalUrlSha256 = options.canonicalUrl
+      ? sha256Hex(options.canonicalUrl)
+      : undefined;
+    document.sourceRootUrl = options.sourceRootUrl;
+    document.importGroupId = options.importGroupId;
+    document.contentSha256 = options.contentSha256;
+    document.crawledAt = options.crawledAt;
+
     // Save to database
     const documentId = await this.ragDocumentModel.createDocument(document);
     const savedDocument = await this.ragDocumentModel.getDocumentById(
@@ -115,6 +145,45 @@ export class RAGDocumentModule extends BaseModule {
     }
 
     return savedDocument;
+  }
+
+  /**
+   * Website import duplicate detection. Checks canonical URL → source URL →
+   * content body hash in order and returns the first active match. Used by the
+   * website import tool; URL hashes are derived internally so this stays
+   * consistent with how uploads store them.
+   */
+  async findWebsiteDuplicate(opts: {
+    sourceUrl?: string;
+    canonicalUrl?: string;
+    contentSha256?: string;
+  }): Promise<RAGDocumentEntity | undefined> {
+    if (opts.canonicalUrl) {
+      const doc = await this.ragDocumentModel.findActiveByCanonicalUrlSha256(
+        sha256Hex(opts.canonicalUrl)
+      );
+      if (doc) return doc;
+    }
+    if (opts.sourceUrl) {
+      const doc = await this.ragDocumentModel.findActiveBySourceUrlSha256(
+        sha256Hex(opts.sourceUrl)
+      );
+      if (doc) return doc;
+    }
+    if (opts.contentSha256) {
+      const docs = await this.ragDocumentModel.findActiveByContentSha256(
+        opts.contentSha256
+      );
+      if (docs.length > 0) return docs[0];
+    }
+    return undefined;
+  }
+
+  /** All active documents belonging to one website import group. */
+  async getDocumentsByImportGroup(
+    importGroupId: string
+  ): Promise<RAGDocumentEntity[]> {
+    return this.ragDocumentModel.getDocumentsByImportGroup(importGroupId);
   }
 
   /**
