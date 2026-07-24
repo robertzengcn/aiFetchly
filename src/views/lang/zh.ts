@@ -2090,6 +2090,8 @@ export default {
       voice_model: "语音模型",
       speech_speed: "语速",
       max_recording_duration: "最长录音时长",
+      open_settings: "语音设置",
+      open_model_settings: "打开设置",
     },
     title: "AI 助手",
     new_conversation: "新对话",

@@ -63,6 +63,18 @@
         >
           <v-icon size="small">{{ isRecording ? "mdi-stop" : "mdi-microphone" }}</v-icon>
         </v-btn>
+        <!-- Compact voice settings entry point (PRD §9.2 / TODO P1-3). -->
+        <v-btn
+          icon
+          size="small"
+          variant="text"
+          class="v2-composer__voice-settings"
+          :title="t('aiChatV2.voice.open_settings') || 'Voice settings'"
+          :aria-label="t('aiChatV2.voice.open_settings') || 'Voice settings'"
+          @click="$emit('open-voice-settings')"
+        >
+          <v-icon size="small">mdi-tune-vertical</v-icon>
+        </v-btn>
       </template>
     </v-textarea>
 
@@ -115,6 +127,17 @@
               ? t("aiChatV2.voice.installing_model") || "Installing..."
               : t("aiChatV2.voice.install_model") || "Install voice model"
           }}
+        </v-btn>
+        <!-- Secondary action: open the full voice/AI-provider settings
+             (model catalog, language, voice selection). TODO P1-4. -->
+        <v-btn
+          size="x-small"
+          variant="text"
+          class="ml-1"
+          :aria-label="t('aiChatV2.voice.open_model_settings') || 'Open settings'"
+          @click="$emit('open-voice-settings')"
+        >
+          {{ t("aiChatV2.voice.open_model_settings") || "Open settings" }}
         </v-btn>
       </div>
     </v-slide-y-reverse-transition>
@@ -240,6 +263,7 @@ const emit = defineEmits<{
   (e: "install-voice-model"): void;
   (e: "voice-recording-start"): void;
   (e: "stop-speaking"): void;
+  (e: "open-voice-settings"): void;
 }>();
 const { t } = useI18n();
 

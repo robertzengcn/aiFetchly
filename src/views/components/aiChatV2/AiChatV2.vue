@@ -257,6 +257,7 @@
         @install-voice-model="handleInstallVoiceModel"
         @voice-recording-start="onVoiceRecordingStart"
         @stop-speaking="onStopSpeaking"
+        @open-voice-settings="openAIProviderSettings"
       >
         <template #prepend>
           <AiChatV2ModeSelector v-model="mode" :disabled="chatIsRunning" />

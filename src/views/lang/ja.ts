@@ -2129,6 +2129,8 @@ export default {
       voice_model: "音声モデル",
       speech_speed: "読み上げ速度",
       max_recording_duration: "最大録音時間",
+      open_settings: "音声設定",
+      open_model_settings: "設定を開く",
     },
     title: "AI アシスタント",
     new_conversation: "新しい会話",

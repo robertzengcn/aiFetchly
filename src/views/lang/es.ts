@@ -2165,7 +2165,8 @@ export default {
       install_model: "Instalar modelo de voz",
       installing_model: "Instalando...",
       model_install_failed: "Error al instalar el modelo de voz.",
-      runtime_unavailable: "El tiempo de ejecución de voz local no está disponible.",
+      runtime_unavailable:
+        "El tiempo de ejecución de voz local no está disponible.",
       empty_transcript: "No se detectó voz.",
       settings_title: "Voz",
       enable_input: "Habilitar entrada de voz",
@@ -2177,6 +2178,8 @@ export default {
       voice_model: "Modelo de voz",
       speech_speed: "Velocidad de voz",
       max_recording_duration: "Duración máxima de grabación",
+      open_settings: "Ajustes de voz",
+      open_model_settings: "Abrir ajustes",
     },
     title: "Asistente de IA",
     new_conversation: "Nueva conversación",

@@ -2167,6 +2167,8 @@ export default {
       voice_model: "Sprachmodell",
       speech_speed: "Sprechgeschwindigkeit",
       max_recording_duration: "Maximale Aufnahmedauer",
+      open_settings: "Spracheinstellungen",
+      open_model_settings: "Einstellungen öffnen",
     },
     title: "KI-Assistent",
     new_conversation: "Neue Unterhaltung",

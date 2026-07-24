@@ -2170,6 +2170,8 @@ export default {
       voice_model: "Voice model",
       speech_speed: "Speech speed",
       max_recording_duration: "Max recording duration",
+      open_settings: "Voice settings",
+      open_model_settings: "Open settings",
     },
     title: "AI Assistant",
     new_conversation: "New conversation",
