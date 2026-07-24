@@ -192,7 +192,7 @@ const props = defineProps<{
   conversationId?: string | null;
 }>();
 const emit = defineEmits<{
-  (e: "send", text: string, files: File[]): void;
+  (e: "send", text: string, files: File[], options?: { fromVoice?: boolean }): void;
   (e: "stop"): void;
   (e: "install-voice-model"): void;
 }>();
@@ -242,9 +242,10 @@ async function onMicClick(): Promise<void> {
         );
       } else if (props.voiceAutoSend) {
         // Auto-send: route the transcript through the existing send path,
-        // preserving any selected attachments (PRD §7.4).
+        // preserving any selected attachments (PRD §7.4). Flag the send as
+        // voice-originated so `after_voice_input` TTS speaks the reply.
         const files = [...selectedFiles.value];
-        emit("send", transcript, files);
+        emit("send", transcript, files, { fromVoice: true });
         draft.value = "";
         selectedFiles.value = [];
       } else {

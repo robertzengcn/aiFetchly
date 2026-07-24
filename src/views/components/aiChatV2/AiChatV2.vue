@@ -2171,11 +2171,16 @@ const handleCompactConversation = async (): Promise<void> => {
 const onSend = async (
   text: string,
   files?: File[],
-  options?: { isExpandedPrompt?: boolean }
+  options?: { isExpandedPrompt?: boolean; fromVoice?: boolean }
 ): Promise<void> => {
   if (chatIsRunning.value || hasAnyActiveStream.value) return;
   streamError.value = null;
   attachmentError.value = null;
+  // Record whether this user message originated from voice input so the
+  // `after_voice_input` TTS policy speaks only the reply to a voice send
+  // (PRD §7.5 / TODO P0-2). Reset for every send — typed/programmatic sends
+  // pass no `fromVoice`, which correctly clears the flag.
+  speechController.updateOptions({ latestInputWasVoice: options?.fromVoice === true });
   if (activeConversationId.value) {
     const nextStopped = new Set(stoppedPendingToolConversationIds.value);
     nextStopped.delete(activeConversationId.value);
