@@ -55,18 +55,14 @@ describe("knowledge library management tool registration", () => {
   });
 
   test("import tool is registered as filesystem and requires confirmation", () => {
-    const skill = SkillRegistry.getSkill(
-      "knowledge_library_import_attachment"
-    );
+    const skill = SkillRegistry.getSkill("knowledge_library_import_attachment");
     expect(skill).not.toBeNull();
     expect(skill!.permissionCategory).toBe("filesystem");
     expect(skill!.requiresConfirmation).toBe(true);
   });
 
   test("delete tool is registered as filesystem and requires confirmation", () => {
-    const skill = SkillRegistry.getSkill(
-      "knowledge_library_delete_document"
-    );
+    const skill = SkillRegistry.getSkill("knowledge_library_delete_document");
     expect(skill).not.toBeNull();
     expect(skill!.permissionCategory).toBe("filesystem");
     expect(skill!.requiresConfirmation).toBe(true);
@@ -81,13 +77,34 @@ describe("knowledge library management tool registration", () => {
   });
 
   test("import tool only accepts attachment_ref (no filePath param)", () => {
-    const skill = SkillRegistry.getSkill(
-      "knowledge_library_import_attachment"
-    );
+    const skill = SkillRegistry.getSkill("knowledge_library_import_attachment");
     const params = skill!.parameters as Record<string, unknown>;
     const properties = params.properties as Record<string, unknown>;
     expect(properties.attachment_ref).toBeDefined();
     expect(properties.filePath).toBeUndefined();
     expect((params.required as string[]).sort()).toEqual(["attachment_ref"]);
+  });
+
+  test("website import tool is registered as automation and requires confirmation", () => {
+    const skill = SkillRegistry.getSkill("knowledge_library_import_website");
+    expect(skill).not.toBeNull();
+    expect(skill!.permissionCategory).toBe("automation");
+    expect(skill!.requiresConfirmation).toBe(true);
+    expect(skill!.source).toBe("built-in");
+    expect(skill!.timeoutClass).toBe("network");
+
+    // The schema exposes the three import modes and the duplicate policy, but
+    // never a filePath parameter (only staged app-owned files are uploaded).
+    const params = skill!.parameters as Record<string, unknown>;
+    const properties = params.properties as Record<string, unknown>;
+    const mode = properties.mode as { enum?: string[] };
+    expect(mode.enum).toEqual(["single_page", "url_list", "site_crawl"]);
+    expect(properties.filePath).toBeUndefined();
+  });
+
+  test("website import tool appears in getAllToolFunctions()", async () => {
+    const tools = await SkillRegistry.getAllToolFunctions();
+    const names = tools.map((t) => t.name);
+    expect(names).toContain("knowledge_library_import_website");
   });
 });

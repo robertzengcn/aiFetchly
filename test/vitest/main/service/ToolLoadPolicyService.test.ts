@@ -37,9 +37,7 @@ function classify(
 
 describe("ToolLoadPolicyService.classify", () => {
   it("treats tool_catalog_search as always", () => {
-    expect(
-      classify(TOOL_CATALOG_SEARCH_TOOL_NAME, "system")
-    ).toBe("always");
+    expect(classify(TOOL_CATALOG_SEARCH_TOOL_NAME, "system")).toBe("always");
   });
 
   it("treats core file/search/job helpers as always", () => {
@@ -158,6 +156,27 @@ describe("ToolLoadPolicyService.classify", () => {
     ).toBe("contextual");
   });
 
+  it("promotes the website import tool for knowledge-library intent and stays deferred otherwise", () => {
+    // Explicit knowledge-library wording promotes it.
+    expect(
+      classify("knowledge_library_import_website", "builtin", {
+        currentUserMessage: "import this webpage into the knowledge library",
+      })
+    ).toBe("contextual");
+    // Website-import phrasing (no literal "knowledge library") also promotes it.
+    expect(
+      classify("knowledge_library_import_website", "builtin", {
+        currentUserMessage: "save this url to the knowledge base for later",
+      })
+    ).toBe("contextual");
+    // Unrelated chat leaves it deferred (discoverable via catalog search).
+    expect(
+      classify("knowledge_library_import_website", "builtin", {
+        currentUserMessage: "what is the weather today",
+      })
+    ).toBe("deferred");
+  });
+
   it("promotes schedule and HTML artifact tools for matching intent", () => {
     expect(
       classify("create_schedule", "builtin", {
@@ -180,9 +199,9 @@ describe("ToolLoadPolicyService.classify", () => {
     expect(classify("AskUserQuestion", "plan", { isPlanMode: true })).toBe(
       "always"
     );
-    expect(classify("SubmitPlanForApproval", "plan", { isPlanMode: true })).toBe(
-      "always"
-    );
+    expect(
+      classify("SubmitPlanForApproval", "plan", { isPlanMode: true })
+    ).toBe("always");
     expect(classify("AskUserQuestion", "plan", { isPlanMode: false })).toBe(
       "contextual"
     );
