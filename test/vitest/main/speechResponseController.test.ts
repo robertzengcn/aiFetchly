@@ -139,3 +139,55 @@ describe("SpeechResponseController.stop", () => {
     expect(stopMock).toHaveBeenCalled();
   });
 });
+
+describe("SpeechResponseController.updateOptions", () => {
+  it("propagates language/voiceId/speed into the synthesize call", async () => {
+    const requests: {
+      language?: string;
+      voiceId?: string;
+      speed?: number;
+    }[] = [];
+    const synth: SynthesizeFn = vi.fn(async (req) => {
+      requests.push({
+        language: req.language,
+        voiceId: req.voiceId,
+        speed: req.speed,
+      });
+      return { audioBase64: "audio:x" };
+    });
+    const queue = makeMockQueue().queue;
+    const c = new SpeechResponseController(
+      { ttsMode: "all_assistant_messages", latestInputWasVoice: false },
+      queue,
+      synth
+    );
+    // Mirror what AiChatV2.loadVoiceSettings pushes from saved settings.
+    c.updateOptions({ language: "zh", voiceId: "amy", speed: 1.5 });
+    c.start();
+    c.pushDelta("A complete sentence that is long enough to emit now.");
+    await vi.waitFor(() => expect(requests.length).toBe(1));
+    expect(requests[0].language).toBe("zh");
+    expect(requests[0].voiceId).toBe("amy");
+    expect(requests[0].speed).toBe(1.5);
+  });
+
+  it("omits language/voiceId when not provided so the worker applies defaults", async () => {
+    const requests: { language?: string; voiceId?: string }[] = [];
+    const synth: SynthesizeFn = vi.fn(async (req) => {
+      requests.push({ language: req.language, voiceId: req.voiceId });
+      return { audioBase64: "audio:x" };
+    });
+    const queue = makeMockQueue().queue;
+    const c = new SpeechResponseController(
+      { ttsMode: "all_assistant_messages", latestInputWasVoice: false },
+      queue,
+      synth
+    );
+    c.updateOptions({ speed: 1 });
+    c.start();
+    c.pushDelta("A complete sentence that is long enough to emit now.");
+    await vi.waitFor(() => expect(requests.length).toBe(1));
+    expect(requests[0].language).toBeUndefined();
+    expect(requests[0].voiceId).toBeUndefined();
+  });
+});

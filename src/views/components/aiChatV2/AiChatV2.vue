@@ -2802,7 +2802,19 @@ async function loadVoiceSettings(): Promise<void> {
     voiceInputEnabled.value = settings.inputMode === "push_to_talk";
     voiceAutoSend.value = settings.autoSendTranscript;
     voiceMaxRecordingMs.value = settings.maxRecordingMs;
-    speechController.updateOptions({ ttsMode: settings.ttsMode });
+    // Push the full TTS option set into the speech controller so spoken
+    // responses use the saved language/voice/speed (TODO P0-3). "auto"
+    // language defers detection to the worker; an unset voice id is omitted.
+    speechController.updateOptions({
+      ttsMode: settings.ttsMode,
+      ...(settings.ttsLanguage !== "auto"
+        ? { language: settings.ttsLanguage }
+        : {}),
+      ...(settings.ttsVoiceId !== undefined
+        ? { voiceId: settings.ttsVoiceId }
+        : {}),
+      speed: settings.ttsSpeed,
+    });
     voiceStatus.value = status;
     if (
       status.sttState !== "missing_model" &&
