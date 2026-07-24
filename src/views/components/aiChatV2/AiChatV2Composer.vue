@@ -178,6 +178,11 @@ const props = defineProps<{
   voiceModelInstalling?: boolean;
   voiceModelInstallError?: string | null;
   /**
+   * Maximum recording duration in milliseconds (PRD §7.2). Loaded from voice
+   * settings by the parent; falls back to 60s when unset.
+   */
+  voiceMaxRecordingMs?: number;
+  /**
    * Active conversation id, used to scope slash-command suggestions so a
    * workspace command only appears in chats using that workspace (FR-1).
    * null/undefined for a brand-new chat -> the main process returns only
@@ -258,7 +263,7 @@ async function onMicClick(): Promise<void> {
   }
   // Start recording.
   try {
-    await voiceRecorder.start(60_000);
+    await voiceRecorder.start(props.voiceMaxRecordingMs ?? 60_000);
     isRecording.value = true;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

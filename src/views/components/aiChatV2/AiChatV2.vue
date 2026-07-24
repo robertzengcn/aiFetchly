@@ -246,6 +246,7 @@
         :is-processing="isPreparingAttachments"
         :voice-enabled="voiceInputEnabled"
         :voice-auto-send="voiceAutoSend"
+        :voice-max-recording-ms="voiceMaxRecordingMs"
         :voice-model-missing="voiceMissingModel"
         :voice-model-installing="voiceModelInstalling"
         :voice-model-install-error="voiceModelInstallError"
@@ -2777,6 +2778,7 @@ const speechController = new SpeechResponseController({
 });
 speechController.start();
 const voiceAutoSend = ref(false);
+const voiceMaxRecordingMs = ref<number>(60_000);
 const voiceStatus = ref<AiChatVoiceRuntimeStatus | null>(null);
 const voiceModelInstalling = ref(false);
 const voiceModelInstallError = ref<string | null>(null);
@@ -2794,6 +2796,7 @@ async function loadVoiceSettings(): Promise<void> {
     ]);
     voiceInputEnabled.value = settings.inputMode === "push_to_talk";
     voiceAutoSend.value = settings.autoSendTranscript;
+    voiceMaxRecordingMs.value = settings.maxRecordingMs;
     speechController.updateOptions({ ttsMode: settings.ttsMode });
     voiceStatus.value = status;
     if (
@@ -2805,6 +2808,7 @@ async function loadVoiceSettings(): Promise<void> {
   } catch {
     voiceInputEnabled.value = false;
     voiceAutoSend.value = false;
+    voiceMaxRecordingMs.value = 60_000;
     voiceStatus.value = null;
   }
 }
