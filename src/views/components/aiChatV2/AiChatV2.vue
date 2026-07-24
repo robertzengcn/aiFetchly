@@ -254,6 +254,7 @@
         @send="onSend"
         @stop="onStop"
         @install-voice-model="handleInstallVoiceModel"
+        @voice-recording-start="onVoiceRecordingStart"
       >
         <template #prepend>
           <AiChatV2ModeSelector v-model="mode" :disabled="chatIsRunning" />
@@ -2849,6 +2850,11 @@ async function handleInstallVoiceModel(): Promise<void> {
 
 function handleVoiceSettingsChanged(): void {
   void loadVoiceSettings();
+}
+
+/** Starting a new voice input stops any in-progress TTS playback (PRD §7.5). */
+function onVoiceRecordingStart(): void {
+  speechController.stop();
 }
 
 onMounted(() => {

@@ -195,6 +195,7 @@ const emit = defineEmits<{
   (e: "send", text: string, files: File[], options?: { fromVoice?: boolean }): void;
   (e: "stop"): void;
   (e: "install-voice-model"): void;
+  (e: "voice-recording-start"): void;
 }>();
 const { t } = useI18n();
 
@@ -266,6 +267,9 @@ async function onMicClick(): Promise<void> {
   try {
     await voiceRecorder.start(props.voiceMaxRecordingMs ?? 60_000);
     isRecording.value = true;
+    // Starting a new voice input stops any queued/current TTS playback
+    // (PRD §7.5). The parent owns the SpeechResponseController.
+    emit("voice-recording-start");
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     showNotice(
