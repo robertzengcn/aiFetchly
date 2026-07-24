@@ -37,6 +37,18 @@ import {
   AI_CHAT_V2_VOICE_MODEL_DOWNLOAD_PROGRESS,
 } from "@/config/channellist";
 
+export const AI_CHAT_V2_VOICE_SETTINGS_CHANGED_EVENT =
+  "aifetchly:ai-chat-v2-voice-settings-changed";
+
+function notifyVoiceSettingsChanged(view: AiChatVoiceSettingsView): void {
+  window.dispatchEvent(
+    new CustomEvent<AiChatVoiceSettingsView>(
+      AI_CHAT_V2_VOICE_SETTINGS_CHANGED_EVENT,
+      { detail: view }
+    )
+  );
+}
+
 /** Read STT/TTS runtime + model availability (no audio payload). */
 export function getVoiceStatus(): Promise<AiChatVoiceRuntimeStatus> {
   return windowInvoke(AI_CHAT_V2_VOICE_STATUS, {});
@@ -74,7 +86,10 @@ export function getVoiceSettings(): Promise<AiChatVoiceSettingsView> {
 export function setVoiceSettings(
   settings: AiChatVoiceSettingsView
 ): Promise<AiChatVoiceSettingsView> {
-  return windowInvoke(AI_CHAT_V2_VOICE_SET_SETTINGS, settings);
+  return windowInvoke(AI_CHAT_V2_VOICE_SET_SETTINGS, settings).then((view) => {
+    notifyVoiceSettingsChanged(view);
+    return view;
+  });
 }
 
 // --- Phase 5: Model catalog + download ---

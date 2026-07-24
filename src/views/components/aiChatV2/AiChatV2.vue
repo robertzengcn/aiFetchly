@@ -458,7 +458,11 @@ import {
   getChatV2ToolApprovalMode,
   setChatV2ToolApprovalMode,
 } from "@/views/api/aiChatV2";
-import { getVoiceSettings, getVoiceStatus } from "@/views/api/aiChatV2Voice";
+import {
+  AI_CHAT_V2_VOICE_SETTINGS_CHANGED_EVENT,
+  getVoiceSettings,
+  getVoiceStatus,
+} from "@/views/api/aiChatV2Voice";
 import type { AiChatVoiceRuntimeStatus } from "@/entityTypes/aiChatVoiceTypes";
 import { SpeechResponseController } from "./voice/SpeechResponseController";
 import {
@@ -2802,6 +2806,10 @@ async function loadVoiceSettings(): Promise<void> {
   }
 }
 
+function handleVoiceSettingsChanged(): void {
+  void loadVoiceSettings();
+}
+
 onMounted(() => {
   void loadConversations();
   void loadVoiceSettings();
@@ -2810,6 +2818,10 @@ onMounted(() => {
   window.addEventListener(
     AI_PROVIDER_SETTINGS_CHANGED_EVENT,
     handleProviderSettingsChanged
+  );
+  window.addEventListener(
+    AI_CHAT_V2_VOICE_SETTINGS_CHANGED_EVENT,
+    handleVoiceSettingsChanged
   );
   // Subscribe to file operation events emitted during tool execution.
   // Records are appended per-conversation so the summary panel reflects
@@ -2829,6 +2841,10 @@ onBeforeUnmount(() => {
   window.removeEventListener(
     AI_PROVIDER_SETTINGS_CHANGED_EVENT,
     handleProviderSettingsChanged
+  );
+  window.removeEventListener(
+    AI_CHAT_V2_VOICE_SETTINGS_CHANGED_EVENT,
+    handleVoiceSettingsChanged
   );
   unsubscribeFromFileOperations();
   if (searchDebounceTimer) {
