@@ -66,6 +66,31 @@
       </template>
     </v-textarea>
 
+    <!-- Explicit recording / transcribing status text (PRD §9.3 / TODO P1-1).
+         The mic button also reflects state via icon/color/loading, but the PRD
+         requires short inline status copy, not color alone. -->
+    <v-slide-y-reverse-transition>
+      <div
+        v-if="isRecording || isTranscribing"
+        class="v2-composer__voice-status"
+        role="status"
+        aria-live="polite"
+      >
+        <v-icon
+          size="x-small"
+          :color="isRecording ? 'error' : 'primary'"
+          class="mr-1"
+        >
+          {{ isRecording ? "mdi-microphone" : "mdi-cloud-upload" }}
+        </v-icon>
+        {{
+          isRecording
+            ? t("aiChatV2.voice.recording") || "Recording..."
+            : t("aiChatV2.voice.transcribing") || "Transcribing..."
+        }}
+      </div>
+    </v-slide-y-reverse-transition>
+
     <v-slide-y-reverse-transition>
       <div v-if="showVoiceModelNotice" class="v2-composer__notice v2-composer__notice--voice">
         <v-icon size="x-small" color="warning" class="mr-1">mdi-alert-circle-outline</v-icon>
@@ -112,6 +137,19 @@
         <slot name="prepend" />
       </div>
       <div class="v2-composer__actions">
+        <v-btn
+          v-if="voiceSpeaking"
+          icon
+          size="small"
+          variant="text"
+          color="primary"
+          class="v2-composer__stop-speaking"
+          :title="t('aiChatV2.voice.stop_speaking') || 'Stop speaking'"
+          :aria-label="t('aiChatV2.voice.stop_speaking') || 'Stop speaking'"
+          @click="$emit('stop-speaking')"
+        >
+          <v-icon size="small">mdi-volume-high</v-icon>
+        </v-btn>
         <v-btn
           v-if="!isStreaming"
           color="primary"
@@ -183,6 +221,11 @@ const props = defineProps<{
    */
   voiceMaxRecordingMs?: number;
   /**
+   * Whether assistant speech is currently playing. When true, a stop-speaking
+   * control is shown (PRD §9.2 / TODO P1-2).
+   */
+  voiceSpeaking?: boolean;
+  /**
    * Active conversation id, used to scope slash-command suggestions so a
    * workspace command only appears in chats using that workspace (FR-1).
    * null/undefined for a brand-new chat -> the main process returns only
@@ -196,6 +239,7 @@ const emit = defineEmits<{
   (e: "stop"): void;
   (e: "install-voice-model"): void;
   (e: "voice-recording-start"): void;
+  (e: "stop-speaking"): void;
 }>();
 const { t } = useI18n();
 
@@ -542,6 +586,25 @@ const onKeydown = (event: KeyboardEvent): void => {
 }
 .v2-composer__voice-button {
   margin-top: -2px;
+}
+.v2-composer__voice-status {
+  display: flex;
+  align-items: center;
+  font-size: 12px;
+  padding: 2px 8px;
+  color: rgba(0, 0, 0, 0.7);
+}
+.v2-composer__stop-speaking {
+  animation: v2-composer-pulse 1.4s ease-in-out infinite;
+}
+@keyframes v2-composer-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
 }
 .v2-composer__files {
   display: flex;

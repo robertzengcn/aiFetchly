@@ -42,6 +42,8 @@ export class SpeechResponseController {
   private options: SpeechResponseOptions;
   private active = false;
   private pendingSynth = 0;
+  private readonly speakingListeners = new Set<(speaking: boolean) => void>();
+  private lastNotifiedSpeaking = false;
 
   constructor(
     options: SpeechResponseOptions,
@@ -49,12 +51,38 @@ export class SpeechResponseController {
     synthesize: SynthesizeFn = defaultSynthesize
   ) {
     this.options = options;
-    this.queue = queue ?? new VoicePlaybackQueue();
+    // When the controller owns the queue, wire playback transitions back to
+    // `notifySpeaking` so subscribers learn the combined speaking state. A
+    // DI'd queue (tests) keeps its own behavior.
+    this.queue =
+      queue ??
+      new VoicePlaybackQueue({ onSpeakingChange: () => this.notifySpeaking() });
     this.synthesize = synthesize;
   }
 
   get isSpeaking(): boolean {
     return this.queue.isSpeaking || this.pendingSynth > 0;
+  }
+
+  /**
+   * Subscribe to combined speaking-state transitions (TODO P1-2). The listener
+   * is fired only when `isSpeaking` flips between true/false, not on every
+   * chunk. Returns an unsubscribe function.
+   */
+  subscribe(listener: (speaking: boolean) => void): () => void {
+    this.speakingListeners.add(listener);
+    return () => {
+      this.speakingListeners.delete(listener);
+    };
+  }
+
+  private notifySpeaking(): void {
+    const current = this.isSpeaking;
+    if (current === this.lastNotifiedSpeaking) return;
+    this.lastNotifiedSpeaking = current;
+    for (const listener of this.speakingListeners) {
+      listener(current);
+    }
   }
 
   /** Whether the policy says to speak for the current response. */
@@ -95,6 +123,7 @@ export class SpeechResponseController {
     this.chunker.flush();
     this.queue.stop();
     this.pendingSynth = 0;
+    this.notifySpeaking();
   }
 
   /** Update options at runtime (e.g., ttsMode or language changed). */
@@ -106,6 +135,7 @@ export class SpeechResponseController {
     const text = sanitizeForSpeech(rawText);
     if (!text) return;
     this.pendingSynth += 1;
+    this.notifySpeaking();
     try {
       const result = await this.synthesize({
         text,
@@ -123,6 +153,7 @@ export class SpeechResponseController {
       // Synthesis failed (model not loaded, etc.); skip this chunk.
     } finally {
       this.pendingSynth -= 1;
+      this.notifySpeaking();
     }
   }
 }

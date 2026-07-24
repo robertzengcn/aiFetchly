@@ -250,11 +250,13 @@
         :voice-model-missing="voiceMissingModel"
         :voice-model-installing="voiceModelInstalling"
         :voice-model-install-error="voiceModelInstallError"
+        :voice-speaking="voiceSpeaking"
         :conversation-id="activeConversationId"
         @send="onSend"
         @stop="onStop"
         @install-voice-model="handleInstallVoiceModel"
         @voice-recording-start="onVoiceRecordingStart"
+        @stop-speaking="onStopSpeaking"
       >
         <template #prepend>
           <AiChatV2ModeSelector v-model="mode" :disabled="chatIsRunning" />
@@ -2787,6 +2789,12 @@ const speechController = new SpeechResponseController({
   latestInputWasVoice: false,
 });
 speechController.start();
+const voiceSpeaking = ref(false);
+// Bridge the controller's imperative speaking state into Vue reactivity so the
+// composer can show a stop-speaking control (TODO P1-2).
+const unsubscribeSpeaking = speechController.subscribe((speaking) => {
+  voiceSpeaking.value = speaking;
+});
 const voiceAutoSend = ref(false);
 const voiceMaxRecordingMs = ref<number>(60_000);
 const voiceStatus = ref<AiChatVoiceRuntimeStatus | null>(null);
@@ -2862,6 +2870,12 @@ function onVoiceRecordingStart(): void {
   void cancelVoiceJob();
 }
 
+/** User clicked the stop-speaking control: halt TTS playback + worker synth. */
+function onStopSpeaking(): void {
+  speechController.stop();
+  void cancelVoiceJob();
+}
+
 onMounted(() => {
   void loadConversations();
   void loadVoiceSettings();
@@ -2889,6 +2903,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   speechController.stop();
+  unsubscribeSpeaking();
   detachActiveStreamView();
   window.removeEventListener(
     AI_PROVIDER_SETTINGS_CHANGED_EVENT,

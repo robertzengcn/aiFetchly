@@ -23,6 +23,8 @@ export interface VoicePlaybackQueueDeps {
   readonly revokeObjectUrl?: (url: string) => void;
   /** Create a playable audio element bound to a src. */
   readonly createAudio?: (src: string) => PlayableAudioElement;
+  /** Notified when playback starts/stops (false<->true transitions only). */
+  readonly onSpeakingChange?: (speaking: boolean) => void;
 }
 
 const defaultResolveAudioUrl = (audioBase64: string): string => {
@@ -44,6 +46,7 @@ export class VoicePlaybackQueue {
   private readonly resolveAudioUrl: (audioBase64: string) => string;
   private readonly revokeObjectUrl: (url: string) => void;
   private readonly createAudio: (src: string) => PlayableAudioElement;
+  private readonly onSpeakingChange?: (speaking: boolean) => void;
   private readonly queue: string[] = [];
   private current: PlayableAudioElement | null = null;
   private currentUrl: string | null = null;
@@ -53,6 +56,7 @@ export class VoicePlaybackQueue {
     this.resolveAudioUrl = deps.resolveAudioUrl ?? defaultResolveAudioUrl;
     this.revokeObjectUrl = deps.revokeObjectUrl ?? URL.revokeObjectURL;
     this.createAudio = deps.createAudio ?? defaultCreateAudio;
+    this.onSpeakingChange = deps.onSpeakingChange;
   }
 
   get isSpeaking(): boolean {
@@ -71,16 +75,22 @@ export class VoicePlaybackQueue {
   stop(): void {
     this.queue.length = 0;
     this.teardownCurrent();
-    this.speaking = false;
+    this.setSpeaking(false);
+  }
+
+  private setSpeaking(value: boolean): void {
+    if (this.speaking === value) return;
+    this.speaking = value;
+    this.onSpeakingChange?.(value);
   }
 
   private async playNext(): Promise<void> {
     const next = this.queue.shift();
     if (next === undefined) {
-      this.speaking = false;
+      this.setSpeaking(false);
       return;
     }
-    this.speaking = true;
+    this.setSpeaking(true);
     const url = this.resolveAudioUrl(next);
     this.currentUrl = url;
     const el = this.createAudio(url);

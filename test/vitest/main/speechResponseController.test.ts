@@ -191,3 +191,47 @@ describe("SpeechResponseController.updateOptions", () => {
     expect(requests[0].voiceId).toBeUndefined();
   });
 });
+
+describe("SpeechResponseController.subscribe", () => {
+  it("notifies subscribers when synthesis starts and ends", async () => {
+    const events: boolean[] = [];
+    const queue = makeMockQueue().queue; // isSpeaking stays false
+    let resolveSynth!: (value: { audioBase64: string }) => void;
+    const synth: SynthesizeFn = vi.fn(
+      () =>
+        new Promise<{ audioBase64: string }>((resolve) => {
+          resolveSynth = resolve;
+        })
+    );
+    const c = new SpeechResponseController(
+      { ttsMode: "all_assistant_messages", latestInputWasVoice: false },
+      queue,
+      synth
+    );
+    c.subscribe((speaking) => events.push(speaking));
+    c.start();
+    c.pushDelta("A complete sentence that is long enough to emit now.");
+    // While synthesis is pending, pendingSynth > 0 -> speaking flips true.
+    await vi.waitFor(() => expect(events).toContain(true));
+    resolveSynth({ audioBase64: "audio:x" });
+    // After synthesis completes, pendingSynth returns to 0 -> speaking false.
+    await vi.waitFor(() => expect(events[events.length - 1]).toBe(false));
+  });
+
+  it("unsubscribe stops further notifications", async () => {
+    const events: boolean[] = [];
+    const queue = makeMockQueue().queue;
+    const synth = makeMockSynth().synth;
+    const c = new SpeechResponseController(
+      { ttsMode: "all_assistant_messages", latestInputWasVoice: false },
+      queue,
+      synth
+    );
+    const unsub = c.subscribe((speaking) => events.push(speaking));
+    unsub();
+    c.start();
+    c.pushDelta("A complete sentence that is long enough to emit now.");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(events).toHaveLength(0);
+  });
+});
