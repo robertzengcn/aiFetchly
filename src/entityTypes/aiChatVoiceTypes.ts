@@ -50,9 +50,9 @@ export const voiceSettingsSchema = z.object({
 
 export type AiChatVoiceSettingsView = z.infer<typeof voiceSettingsSchema>;
 
-/** Default voice settings (design §7). Voice input + spoken responses are OFF. */
+/** Default voice settings. Voice input is visible by default; spoken responses stay off. */
 export const DEFAULT_VOICE_SETTINGS: AiChatVoiceSettingsView = {
-  inputMode: "disabled",
+  inputMode: "push_to_talk",
   ttsMode: "disabled",
   autoSendTranscript: false,
   sttLanguage: "auto",
