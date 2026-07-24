@@ -7,6 +7,7 @@
 - **Created**: 2026-07-24
 - **Owner**: Engineering Team
 - **Related systems**: AiChatV2, AI tool calling, SkillRegistry, RAG, DocumentService, RAGDocumentModule, RagSearchModule, WebsiteAnalysisService, websiteContentScraper
+- **Technical design**: `docs/prd/knowledge-library-website-import-ai-tool-technical-design.md`
 - **Related PRDs**:
   - `docs/prd/knowledge-library-management-ai-tools-prd.md`
   - `docs/prd/knowledge-library-management-ai-tools-technical-design.md`
