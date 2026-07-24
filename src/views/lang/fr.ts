@@ -2162,6 +2162,8 @@ export default {
       max_recording_duration: "Durée maximale d'enregistrement",
       open_settings: "Paramètres vocaux",
       open_model_settings: "Ouvrir les paramètres",
+      chat_unavailable:
+        "Le chat est indisponible. Votre transcription a été conservée dans le composeur.",
     },
     title: "Assistant IA",
     new_conversation: "Nouvelle conversation",

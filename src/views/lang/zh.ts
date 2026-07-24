@@ -2092,6 +2092,7 @@ export default {
       max_recording_duration: "最长录音时长",
       open_settings: "语音设置",
       open_model_settings: "打开设置",
+      chat_unavailable: "聊天不可用，您的转写内容已保留在输入框中。",
     },
     title: "AI 助手",
     new_conversation: "新对话",

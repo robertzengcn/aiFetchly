@@ -2131,6 +2131,8 @@ export default {
       max_recording_duration: "最大録音時間",
       open_settings: "音声設定",
       open_model_settings: "設定を開く",
+      chat_unavailable:
+        "チャットを利用できません。書き起こしは入力欄に残しています。",
     },
     title: "AI アシスタント",
     new_conversation: "新しい会話",

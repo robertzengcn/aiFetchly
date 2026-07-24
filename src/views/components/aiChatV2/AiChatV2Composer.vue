@@ -249,6 +249,13 @@ const props = defineProps<{
    */
   voiceSpeaking?: boolean;
   /**
+   * Whether the chat can currently accept a sent message (a model is
+   * available and the chat isn't streaming). When false and auto-send is on,
+   * a voice transcript is kept in the draft instead of being lost (PRD §7.13
+   * / TODO P1-5). Undefined is treated as ready (backwards compatible).
+   */
+  voiceChatReady?: boolean;
+  /**
    * Active conversation id, used to scope slash-command suggestions so a
    * workspace command only appears in chats using that workspace (FR-1).
    * null/undefined for a brand-new chat -> the main process returns only
@@ -310,6 +317,17 @@ async function onMicClick(): Promise<void> {
           t("aiChatV2.voice.empty_transcript") || "No speech was detected.",
         );
       } else if (props.voiceAutoSend) {
+        if (props.voiceChatReady === false) {
+          // Chat can't accept the message right now (no model / unavailable).
+          // Keep the transcript in the draft for the user and surface a
+          // concise error instead of losing it (PRD §7.13 / TODO P1-5).
+          appendTranscript(transcript);
+          showNotice(
+            t("aiChatV2.voice.chat_unavailable") ||
+              "Chat is unavailable. Your transcript was kept in the composer.",
+          );
+          return;
+        }
         // Auto-send: route the transcript through the existing send path,
         // preserving any selected attachments (PRD §7.4). Flag the send as
         // voice-originated so `after_voice_input` TTS speaks the reply.

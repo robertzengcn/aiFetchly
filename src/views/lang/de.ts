@@ -2169,6 +2169,8 @@ export default {
       max_recording_duration: "Maximale Aufnahmedauer",
       open_settings: "Spracheinstellungen",
       open_model_settings: "Einstellungen öffnen",
+      chat_unavailable:
+        "Chat nicht verfügbar. Ihr Transkript wurde im Eingabefeld behalten.",
     },
     title: "KI-Assistent",
     new_conversation: "Neue Unterhaltung",

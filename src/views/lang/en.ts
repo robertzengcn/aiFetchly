@@ -2172,6 +2172,8 @@ export default {
       max_recording_duration: "Max recording duration",
       open_settings: "Voice settings",
       open_model_settings: "Open settings",
+      chat_unavailable:
+        "Chat is unavailable. Your transcript was kept in the composer.",
     },
     title: "AI Assistant",
     new_conversation: "New conversation",

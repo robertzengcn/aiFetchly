@@ -2180,6 +2180,8 @@ export default {
       max_recording_duration: "Duración máxima de grabación",
       open_settings: "Ajustes de voz",
       open_model_settings: "Abrir ajustes",
+      chat_unavailable:
+        "El chat no está disponible. Tu transcripción se ha conservado en el compositor.",
     },
     title: "Asistente de IA",
     new_conversation: "Nueva conversación",

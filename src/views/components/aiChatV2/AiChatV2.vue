@@ -251,6 +251,7 @@
         :voice-model-installing="voiceModelInstalling"
         :voice-model-install-error="voiceModelInstallError"
         :voice-speaking="voiceSpeaking"
+        :voice-chat-ready="voiceChatReady"
         :conversation-id="activeConversationId"
         @send="onSend"
         @stop="onStop"
@@ -2807,6 +2808,13 @@ const voiceMissingModel = computed(
     (voiceStatus.value?.sttState === "missing_model" ||
       voiceStatus.value?.sttState === "unavailable"),
 );
+/**
+ * Whether the chat can accept a voice auto-send right now. The renderer has no
+ * synchronous AI-entitlement flag, so model availability is the proxy: if no
+ * model is selectable the main process would reject the send, so we keep the
+ * transcript in the draft instead (PRD §7.13 / TODO P1-5).
+ */
+const voiceChatReady = computed(() => availableModels.value.length > 0);
 async function loadVoiceSettings(): Promise<void> {
   try {
     const [settings, status] = await Promise.all([
