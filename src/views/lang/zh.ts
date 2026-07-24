@@ -2101,6 +2101,8 @@ export default {
       verifying: "校验中…",
       extracting: "解压中…",
       download_error: "错误：{error}",
+      unsupported_mime: "此浏览器不支持录音。",
+      conversion_failed: "无法转换录音。",
       open_model_settings: "打开设置",
       chat_unavailable: "聊天不可用，您的转写内容已保留在输入框中。",
     },

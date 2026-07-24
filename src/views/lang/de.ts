@@ -2178,6 +2178,9 @@ export default {
       verifying: "Wird überprüft...",
       extracting: "Wird entpackt...",
       download_error: "Fehler: {error}",
+      unsupported_mime:
+        "Audioaufnahme wird in diesem Browser nicht unterstützt.",
+      conversion_failed: "Die Aufnahme konnte nicht konvertiert werden.",
       open_model_settings: "Einstellungen öffnen",
       chat_unavailable:
         "Chat nicht verfügbar. Ihr Transkript wurde im Eingabefeld behalten.",

@@ -214,6 +214,10 @@ import type { SlashCommandView } from "@/entityTypes/slashCommandTypes";
 import { BrowserVoiceRecorder } from "./voice/BrowserVoiceRecorder";
 import { transcribeVoice } from "@/views/api/aiChatV2Voice";
 import { blobToWavBase64 } from "./voice/audioConversion";
+import {
+  classifyRecorderError,
+  type VoiceRecorderErrorKind,
+} from "./voice/voiceErrors";
 
 const MAX_UPLOAD_FILES = 3;
 const MAX_UPLOAD_FILE_BYTES = 5 * 1024 * 1024; // 5 MB
@@ -295,6 +299,43 @@ function appendTranscript(text: string): void {
       : `${draft.value.trim()} ${clean}`;
 }
 
+/**
+ * Map a recorder error kind to a translated composer notice (TODO P2). Falls
+ * back to English copy when the key is absent so the user always sees a clear
+ * message rather than a raw exception string.
+ */
+const VOICE_ERROR_L10N: Record<VoiceRecorderErrorKind, { key: string; fallback: string }> = {
+  permission_denied: {
+    key: "aiChatV2.voice.permission_denied",
+    fallback: "Microphone permission denied.",
+  },
+  no_microphone: {
+    key: "aiChatV2.voice.no_microphone",
+    fallback: "No microphone was found.",
+  },
+  unsupported_mime: {
+    key: "aiChatV2.voice.unsupported_mime",
+    fallback: "Audio recording is not supported in this browser.",
+  },
+  recording_failed: {
+    key: "aiChatV2.voice.recording_failed",
+    fallback: "Recording failed.",
+  },
+  conversion_failed: {
+    key: "aiChatV2.voice.conversion_failed",
+    fallback: "Could not convert the recording.",
+  },
+  unknown: {
+    key: "aiChatV2.voice.recording_failed",
+    fallback: "Recording failed.",
+  },
+};
+
+function recorderErrorNotice(err: unknown): string {
+  const { key, fallback } = VOICE_ERROR_L10N[classifyRecorderError(err)];
+  return t(key) || fallback;
+}
+
 async function onMicClick(): Promise<void> {
   if (isTranscribing.value) return;
   if (props.voiceModelMissing) {
@@ -306,11 +347,33 @@ async function onMicClick(): Promise<void> {
     isTranscribing.value = true;
     try {
       const recording = await voiceRecorder.stop();
-      const audioBase64 = await blobToWavBase64(recording.blob);
-      const result = await transcribeVoice({
-        audioBase64,
-        mimeType: "audio/wav",
-      });
+      // Decode/resample (WebM -> WAV). Distinct failure kind from the worker
+      // transcription call below (TODO P2 error classification).
+      let audioBase64: string;
+      try {
+        audioBase64 = await blobToWavBase64(recording.blob);
+      } catch {
+        showNotice(
+          t("aiChatV2.voice.conversion_failed") ||
+            "Could not convert the recording.",
+        );
+        return;
+      }
+      // Transcribe via the worker IPC.
+      let result: Awaited<ReturnType<typeof transcribeVoice>>;
+      try {
+        result = await transcribeVoice({
+          audioBase64,
+          mimeType: "audio/wav",
+        });
+      } catch (trErr) {
+        const detail = trErr instanceof Error ? trErr.message : String(trErr);
+        showNotice(
+          t("aiChatV2.voice.transcription_failed") ||
+            `Voice transcription failed: ${detail}`,
+        );
+        return;
+      }
       const transcript = result.transcript.trim();
       if (transcript.length === 0) {
         showNotice(
@@ -339,11 +402,8 @@ async function onMicClick(): Promise<void> {
         appendTranscript(transcript);
       }
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      showNotice(
-        t("aiChatV2.voice.transcription_failed") ||
-          `Voice transcription failed: ${msg}`,
-      );
+      // voiceRecorder.stop() failure (rare) — classify into a clear kind.
+      showNotice(recorderErrorNotice(err));
     } finally {
       isTranscribing.value = false;
     }
@@ -357,11 +417,9 @@ async function onMicClick(): Promise<void> {
     // (PRD §7.5). The parent owns the SpeechResponseController.
     emit("voice-recording-start");
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    showNotice(
-      t("aiChatV2.voice.permission_denied") ||
-        `Microphone unavailable: ${msg}`,
-    );
+    // Distinguish permission denied / no microphone / unsupported type /
+    // generic recording failure (TODO P2 error classification).
+    showNotice(recorderErrorNotice(err));
   }
 }
 

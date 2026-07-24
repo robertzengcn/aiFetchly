@@ -2181,6 +2181,8 @@ export default {
       verifying: "Verifying...",
       extracting: "Extracting...",
       download_error: "Error: {error}",
+      unsupported_mime: "Audio recording is not supported in this browser.",
+      conversion_failed: "Could not convert the recording.",
       open_model_settings: "Open settings",
       chat_unavailable:
         "Chat is unavailable. Your transcript was kept in the composer.",

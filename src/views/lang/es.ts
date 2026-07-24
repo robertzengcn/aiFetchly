@@ -2189,6 +2189,9 @@ export default {
       verifying: "Verificando...",
       extracting: "Extrayendo...",
       download_error: "Error: {error}",
+      unsupported_mime:
+        "La grabación de audio no es compatible con este navegador.",
+      conversion_failed: "No se pudo convertir la grabación.",
       open_model_settings: "Abrir ajustes",
       chat_unavailable:
         "El chat no está disponible. Tu transcripción se ha conservado en el compositor.",

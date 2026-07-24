@@ -2171,6 +2171,9 @@ export default {
       verifying: "Vérification...",
       extracting: "Extraction...",
       download_error: "Erreur : {error}",
+      unsupported_mime:
+        "L'enregistrement audio n'est pas pris en charge dans ce navigateur.",
+      conversion_failed: "Impossible de convertir l'enregistrement.",
       open_model_settings: "Ouvrir les paramètres",
       chat_unavailable:
         "Le chat est indisponible. Votre transcription a été conservée dans le composeur.",

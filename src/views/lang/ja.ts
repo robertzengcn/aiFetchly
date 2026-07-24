@@ -2140,6 +2140,8 @@ export default {
       verifying: "検証中…",
       extracting: "展開中…",
       download_error: "エラー: {error}",
+      unsupported_mime: "このブラウザでは音声録音に対応していません。",
+      conversion_failed: "録音を変換できませんでした。",
       open_model_settings: "設定を開く",
       chat_unavailable:
         "チャットを利用できません。書き起こしは入力欄に残しています。",
