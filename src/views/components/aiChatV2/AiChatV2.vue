@@ -241,24 +241,18 @@
         </v-card>
       </v-dialog>
 
-      <v-alert
-        v-if="voiceMissingModel"
-        type="warning"
-        variant="tonal"
-        density="compact"
-        class="mb-2 text-body-2"
-      >
-        <v-icon start size="small">mdi-alert-outline</v-icon>
-        {{ t("aiChatV2.voice.model_missing") || "Voice model is not installed." }}
-      </v-alert>
       <AiChatV2Composer
         :is-streaming="chatIsRunning"
         :is-processing="isPreparingAttachments"
         :voice-enabled="voiceInputEnabled"
         :voice-auto-send="voiceAutoSend"
+        :voice-model-missing="voiceMissingModel"
+        :voice-model-installing="voiceModelInstalling"
+        :voice-model-install-error="voiceModelInstallError"
         :conversation-id="activeConversationId"
         @send="onSend"
         @stop="onStop"
+        @install-voice-model="handleInstallVoiceModel"
       >
         <template #prepend>
           <AiChatV2ModeSelector v-model="mode" :disabled="chatIsRunning" />
@@ -460,6 +454,7 @@ import {
 } from "@/views/api/aiChatV2";
 import {
   AI_CHAT_V2_VOICE_SETTINGS_CHANGED_EVENT,
+  downloadVoiceModel,
   getVoiceSettings,
   getVoiceStatus,
 } from "@/views/api/aiChatV2Voice";
@@ -2783,6 +2778,8 @@ const speechController = new SpeechResponseController({
 speechController.start();
 const voiceAutoSend = ref(false);
 const voiceStatus = ref<AiChatVoiceRuntimeStatus | null>(null);
+const voiceModelInstalling = ref(false);
+const voiceModelInstallError = ref<string | null>(null);
 const voiceMissingModel = computed(
   () =>
     voiceInputEnabled.value &&
@@ -2799,10 +2796,33 @@ async function loadVoiceSettings(): Promise<void> {
     voiceAutoSend.value = settings.autoSendTranscript;
     speechController.updateOptions({ ttsMode: settings.ttsMode });
     voiceStatus.value = status;
+    if (
+      status.sttState !== "missing_model" &&
+      status.sttState !== "unavailable"
+    ) {
+      voiceModelInstallError.value = null;
+    }
   } catch {
     voiceInputEnabled.value = false;
     voiceAutoSend.value = false;
     voiceStatus.value = null;
+  }
+}
+
+async function handleInstallVoiceModel(): Promise<void> {
+  if (voiceModelInstalling.value) return;
+  voiceModelInstalling.value = true;
+  voiceModelInstallError.value = null;
+  try {
+    await downloadVoiceModel(voiceStatus.value?.sttModelId ?? "sherpa-onnx:stt:auto");
+    await loadVoiceSettings();
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    voiceModelInstallError.value =
+      `${t("aiChatV2.voice.model_install_failed") || "Voice model installation failed."} ${msg}`;
+    await loadVoiceSettings();
+  } finally {
+    voiceModelInstalling.value = false;
   }
 }
 

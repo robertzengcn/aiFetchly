@@ -47,7 +47,52 @@
       density="comfortable"
       :disabled="isStreaming || isProcessing"
       @keydown="onKeydown"
-    />
+    >
+      <template v-if="voiceEnabled" #append-inner>
+        <v-btn
+          icon
+          size="small"
+          variant="text"
+          class="v2-composer__voice-button"
+          :color="isRecording ? 'error' : undefined"
+          :disabled="isStreaming || isProcessing || isTranscribing"
+          :loading="isTranscribing"
+          :title="t('aiChatV2.voice.microphone') || 'Voice input'"
+          :aria-label="isRecording ? (t('aiChatV2.voice.stop_recording') || 'Stop recording') : (t('aiChatV2.voice.start_recording') || 'Start recording')"
+          @click.stop="onMicClick"
+        >
+          <v-icon size="small">{{ isRecording ? "mdi-stop" : "mdi-microphone" }}</v-icon>
+        </v-btn>
+      </template>
+    </v-textarea>
+
+    <v-slide-y-reverse-transition>
+      <div v-if="showVoiceModelNotice" class="v2-composer__notice v2-composer__notice--voice">
+        <v-icon size="x-small" color="warning" class="mr-1">mdi-alert-circle-outline</v-icon>
+        <span class="v2-composer__notice-text">
+          {{
+            voiceModelInstallError ||
+            t("aiChatV2.voice.model_missing") ||
+            "Voice model is not installed."
+          }}
+        </span>
+        <v-btn
+          size="x-small"
+          color="primary"
+          variant="tonal"
+          class="ml-2"
+          :loading="voiceModelInstalling"
+          :disabled="voiceModelInstalling"
+          @click="$emit('install-voice-model')"
+        >
+          {{
+            voiceModelInstalling
+              ? t("aiChatV2.voice.installing_model") || "Installing..."
+              : t("aiChatV2.voice.install_model") || "Install voice model"
+          }}
+        </v-btn>
+      </div>
+    </v-slide-y-reverse-transition>
     <div class="v2-composer__bar">
       <!-- Attach file button. Rendered as its own flex item at the far
            left of the bar so the mode/model/tool selectors in the prepend
@@ -67,19 +112,6 @@
         <slot name="prepend" />
       </div>
       <div class="v2-composer__actions">
-        <v-btn
-          v-if="voiceEnabled && !isStreaming && !isProcessing"
-          icon
-          size="small"
-          variant="text"
-          :color="isRecording ? 'error' : undefined"
-          :disabled="isTranscribing"
-          :title="t('aiChatV2.voice.microphone') || 'Voice input'"
-          :aria-label="isRecording ? (t('aiChatV2.voice.stop_recording') || 'Stop recording') : (t('aiChatV2.voice.start_recording') || 'Start recording')"
-          @click="onMicClick"
-        >
-          <v-icon size="small">{{ isRecording ? "mdi-stop" : "mdi-microphone" }}</v-icon>
-        </v-btn>
         <v-btn
           v-if="!isStreaming"
           color="primary"
@@ -142,6 +174,9 @@ const props = defineProps<{
    * draft (PRD §7.4 auto-send).
    */
   voiceAutoSend?: boolean;
+  voiceModelMissing?: boolean;
+  voiceModelInstalling?: boolean;
+  voiceModelInstallError?: string | null;
   /**
    * Active conversation id, used to scope slash-command suggestions so a
    * workspace command only appears in chats using that workspace (FR-1).
@@ -154,6 +189,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: "send", text: string, files: File[]): void;
   (e: "stop"): void;
+  (e: "install-voice-model"): void;
 }>();
 const { t } = useI18n();
 
@@ -167,24 +203,7 @@ const selectedFiles = ref<File[]>([]);
 const voiceRecorder = new BrowserVoiceRecorder();
 const isRecording = ref(false);
 const isTranscribing = ref(false);
-
-function blobToBase64(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onloadend = () => {
-      const result = reader.result;
-      if (typeof result !== "string") {
-        reject(new Error("Failed to read audio"));
-        return;
-      }
-      const comma = result.indexOf(",");
-      resolve(comma >= 0 ? result.slice(comma + 1) : result);
-    };
-    reader.onerror = () =>
-      reject(reader.error ?? new Error("Failed to read audio"));
-    reader.readAsDataURL(blob);
-  });
-}
+const showVoiceModelNotice = ref(false);
 
 function appendTranscript(text: string): void {
   const clean = text.trim();
@@ -197,6 +216,10 @@ function appendTranscript(text: string): void {
 
 async function onMicClick(): Promise<void> {
   if (isTranscribing.value) return;
+  if (props.voiceModelMissing) {
+    showVoiceModelNotice.value = true;
+    return;
+  }
   if (isRecording.value) {
     isRecording.value = false;
     isTranscribing.value = true;
@@ -245,6 +268,15 @@ async function onMicClick(): Promise<void> {
     );
   }
 }
+
+watch(
+  () => props.voiceModelMissing,
+  (missing) => {
+    if (!missing) {
+      showVoiceModelNotice.value = false;
+    }
+  }
+);
 const fileNotice = ref("");
 const fileInputRef = ref<HTMLInputElement | null>(null);
 
@@ -490,6 +522,16 @@ const onKeydown = (event: KeyboardEvent): void => {
   border-radius: 4px;
   background: rgba(255, 152, 0, 0.1);
   color: rgba(0, 0, 0, 0.7);
+}
+.v2-composer__notice--voice {
+  justify-content: flex-start;
+}
+.v2-composer__notice-text {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.v2-composer__voice-button {
+  margin-top: -2px;
 }
 .v2-composer__files {
   display: flex;
