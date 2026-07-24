@@ -142,5 +142,9 @@ node_modules
 .superpowers/
 hyperframes-*
 
+# Claude Code local/temp files
+.claude/settings.local.json
+.claude/worktrees/
+
 # Vendored gstack build artifacts (contain third-party embedded secrets)
 .claude/skills/gstack/lib/*/dist/
