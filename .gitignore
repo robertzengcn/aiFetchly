@@ -141,3 +141,6 @@ node_modules
 /true/
 .superpowers/
 hyperframes-*
+
+# Vendored gstack build artifacts (contain third-party embedded secrets)
+.claude/skills/gstack/lib/*/dist/
