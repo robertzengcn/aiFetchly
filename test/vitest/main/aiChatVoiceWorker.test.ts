@@ -165,6 +165,22 @@ describe("dispatchVoiceMessage", () => {
     }
   });
 
+  it("does not echo raw audio payload in error responses (privacy)", async () => {
+    const { services } = makeMockServices();
+    const sink = makeCapturingSink();
+    const secret = "SUPER_SECRET_AUDIO_PAYLOAD_BASE64_DATA";
+    // Invalid type carries an audio payload; the error response must surface
+    // a generic message and never reflect the raw payload (PRD §7.12/§12).
+    await dispatchVoiceMessage(
+      { type: "bogus", requestId: "r8", audioBase64: secret },
+      services,
+      sink
+    );
+    const msg = sink.posted[0];
+    expect(msg.type).toBe("error");
+    expect(JSON.stringify(sink.posted)).not.toContain(secret);
+  });
+
   it("shutdown exits the process cleanly", async () => {
     const { services } = makeMockServices();
     const sink = makeCapturingSink();
