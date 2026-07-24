@@ -456,6 +456,7 @@ import {
 } from "@/views/api/aiChatV2";
 import {
   AI_CHAT_V2_VOICE_SETTINGS_CHANGED_EVENT,
+  cancelVoiceJob,
   downloadVoiceModel,
   getVoiceSettings,
   getVoiceStatus,
@@ -1640,6 +1641,9 @@ const detachActiveStreamView = (): void => {
 
 const onStop = (): void => {
   speechController.stop();
+  // Cancel in-flight STT/TTS worker work so the shared worker stops
+  // synthesizing for a response the user has abandoned (TODO P0-5).
+  void cancelVoiceJob();
   stopChatV2Stream();
   clearChatV2StreamListeners();
   const conversationId = activeConversationId.value;
@@ -2855,6 +2859,7 @@ function handleVoiceSettingsChanged(): void {
 /** Starting a new voice input stops any in-progress TTS playback (PRD §7.5). */
 function onVoiceRecordingStart(): void {
   speechController.stop();
+  void cancelVoiceJob();
 }
 
 onMounted(() => {

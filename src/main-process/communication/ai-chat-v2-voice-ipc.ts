@@ -147,9 +147,12 @@ export function registerAiChatVoiceIpcHandlers(): void {
 
   ipcMain.handle(
     AI_CHAT_V2_VOICE_CANCEL,
-    async (): Promise<CommonMessage<{ ok: boolean }>> => {
+    async (_e, data: unknown): Promise<CommonMessage<{ ok: boolean }>> => {
       try {
-        return ok(await voiceModule().cancel());
+        // Accept either { jobId } or a bare jobId string for flexibility.
+        const parsed = parseArg<{ jobId?: string } | string>(data);
+        const jobId = typeof parsed === "string" ? parsed : parsed?.jobId;
+        return ok(await voiceModule().cancel(jobId));
       } catch (err) {
         return denied(err instanceof Error ? err.message : String(err));
       }

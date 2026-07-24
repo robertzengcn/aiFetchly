@@ -155,10 +155,13 @@ export class AiChatVoiceModule {
   }
 
   /**
-   * Best-effort cancel of active STT/TTS work. Safe when no worker is active.
-   * A finer-grained per-job cancel arrives with the worker entry (Step 2).
+   * Best-effort cancel of active STT/TTS work (TODO P0-5). With a `jobId`
+   * (worker requestId), cancels that single job; without it, cancels all
+   * pending worker requests. The renderer separately clears its TTS playback
+   * queue via `SpeechResponseController.stop()`. Safe when no worker is active.
    */
-  async cancel(): Promise<{ ok: boolean }> {
+  async cancel(jobId?: string): Promise<{ ok: boolean }> {
+    this.client.cancel(jobId);
     return { ok: true };
   }
 
