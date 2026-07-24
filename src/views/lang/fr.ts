@@ -2159,6 +2159,8 @@ export default {
       tts_language: "Langue de la réponse vocale",
       voice_model: "Modèle vocal",
       speech_speed: "Vitesse de la voix",
+      stt_model: "Modèle de reconnaissance vocale",
+      tts_model: "Modèle de réponse vocale",
       max_recording_duration: "Durée maximale d'enregistrement",
       open_settings: "Paramètres vocaux",
       voice_models: "Modèles vocaux",

@@ -31,6 +31,26 @@ describe("VoiceModelCatalogService", () => {
     expect(tts?.installed).toBe(false);
   });
 
+  it("reports installed=false when a required model file is missing (TODO P2)", () => {
+    // Directory + most files present, but the Whisper tokens file is absent —
+    // a half-extracted model must not count as installed/ready.
+    const svc = new VoiceModelCatalogService({
+      modelRoot: "/data/voice-models",
+      fileExists: (p) =>
+        !p.endsWith("tiny-tokens.txt") &&
+        p.includes("sherpa-onnx-whisper-tiny"),
+    });
+    expect(svc.isInstalled("sherpa-onnx:stt:auto")).toBe(false);
+  });
+
+  it("reports installed=true when all required files are present (TODO P2)", () => {
+    const svc = new VoiceModelCatalogService({
+      modelRoot: "/data/voice-models",
+      fileExists: (p) => p.includes("sherpa-onnx-whisper-tiny"),
+    });
+    expect(svc.isInstalled("sherpa-onnx:stt:auto")).toBe(true);
+  });
+
   it("resolves model ids to model paths", () => {
     const svc = new VoiceModelCatalogService({
       modelRoot: "/data/voice-models",
@@ -48,9 +68,7 @@ describe("VoiceModelDownloadService", () => {
     const downloadFn = vi.fn(async (url: string, dest: string) => {
       fs.writeFileSync(dest, "fake-archive");
     });
-    const extractFn = vi.fn(async () => {
-      /* mock */
-    });
+    const extractFn = vi.fn(async () => undefined);
     const svc = new VoiceModelDownloadService({
       modelRoot: path.join(os.tmpdir(), "voice-test-models"),
       downloadFn,
@@ -67,16 +85,14 @@ describe("VoiceModelDownloadService", () => {
   });
 
   it("throws when cancelled before extraction", async () => {
-    let resolveDownload: () => void = () => {};
+    let resolveDownload: () => void = () => undefined;
     const downloadFn = vi.fn(async (_url: string, dest: string) => {
       fs.writeFileSync(dest, "fake");
       await new Promise<void>((r) => {
         resolveDownload = r;
       });
     });
-    const extractFn = vi.fn(async () => {
-      /* mock */
-    });
+    const extractFn = vi.fn(async () => undefined);
     const svc = new VoiceModelDownloadService({
       modelRoot: path.join(os.tmpdir(), "voice-test-models"),
       downloadFn,

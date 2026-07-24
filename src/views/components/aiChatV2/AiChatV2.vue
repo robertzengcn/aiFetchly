@@ -460,6 +460,7 @@ import {
 } from "@/views/api/aiChatV2";
 import {
   AI_CHAT_V2_VOICE_SETTINGS_CHANGED_EVENT,
+  AI_CHAT_V2_VOICE_MODELS_CHANGED_EVENT,
   cancelVoiceJob,
   downloadVoiceModel,
   getVoiceSettings,
@@ -2898,6 +2899,12 @@ onMounted(() => {
     AI_CHAT_V2_VOICE_SETTINGS_CHANGED_EVENT,
     handleVoiceSettingsChanged
   );
+  // Model install/remove changes installed status without altering settings;
+  // reload voice status so the mic button reflects availability live.
+  window.addEventListener(
+    AI_CHAT_V2_VOICE_MODELS_CHANGED_EVENT,
+    handleVoiceSettingsChanged
+  );
   // Subscribe to file operation events emitted during tool execution.
   // Records are appended per-conversation so the summary panel reflects
   // all changes made within the active conversation.
@@ -2920,6 +2927,10 @@ onBeforeUnmount(() => {
   );
   window.removeEventListener(
     AI_CHAT_V2_VOICE_SETTINGS_CHANGED_EVENT,
+    handleVoiceSettingsChanged
+  );
+  window.removeEventListener(
+    AI_CHAT_V2_VOICE_MODELS_CHANGED_EVENT,
     handleVoiceSettingsChanged
   );
   unsubscribeFromFileOperations();

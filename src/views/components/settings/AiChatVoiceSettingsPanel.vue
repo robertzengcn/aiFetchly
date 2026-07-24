@@ -87,6 +87,33 @@
         </v-col>
       </v-row>
 
+      <!-- Installed model selection (TODO P2). Only installed catalog entries
+           are selectable so a user cannot pick a model whose files are absent. -->
+      <v-row dense>
+        <v-col cols="12" sm="6">
+          <v-select
+            v-model="sttModelId"
+            :items="installedSttModelItems"
+            :label="t('aiChatV2.voice.stt_model') || 'Speech recognition model'"
+            :disabled="installedSttModelItems.length === 0"
+            density="compact"
+            variant="outlined"
+            @update:model-value="save"
+          />
+        </v-col>
+        <v-col cols="12" sm="6">
+          <v-select
+            v-model="ttsModelId"
+            :items="installedTtsModelItems"
+            :label="t('aiChatV2.voice.tts_model') || 'Speech response model'"
+            :disabled="installedTtsModelItems.length === 0"
+            density="compact"
+            variant="outlined"
+            @update:model-value="save"
+          />
+        </v-col>
+      </v-row>
+
       <div class="mb-2">
         <span class="text-body-2">
           {{ t("aiChatV2.voice.speech_speed") || "Speech speed" }}: {{ speed.toFixed(1) }}x
@@ -184,6 +211,7 @@ import {
   downloadVoiceModel,
   cancelVoiceModelDownload,
   onVoiceModelDownloadProgress,
+  notifyVoiceModelsChanged,
 } from "@/views/api/aiChatV2Voice";
 import type {
   AiChatVoiceSettingsView,
@@ -333,6 +361,20 @@ async function loadModels(): Promise<void> {
   }
 }
 
+// Installed models available for selection (TODO P2 model selection). Only
+// installed entries are selectable so a user cannot pick a model whose files
+// are not present on disk.
+const installedSttModelItems = computed(() =>
+  models.value
+    .filter((m) => m.type === "stt" && m.installed)
+    .map((m) => ({ title: m.name, value: m.id }))
+);
+const installedTtsModelItems = computed(() =>
+  models.value
+    .filter((m) => m.type === "tts" && m.installed)
+    .map((m) => ({ title: m.name, value: m.id }))
+);
+
 async function onDownload(modelId: string): Promise<void> {
   downloadProgress.value = {
     ...downloadProgress.value,
@@ -341,6 +383,9 @@ async function onDownload(modelId: string): Promise<void> {
   try {
     await downloadVoiceModel(modelId);
     await loadModels();
+    // Installed model availability changed -> tell the chat surface to refresh
+    // its voiceMissingModel state without a remount (TODO P2 status refresh).
+    notifyVoiceModelsChanged();
   } catch {
     /* error shown via progress */
   }

@@ -2089,6 +2089,8 @@ export default {
       tts_language: "语音回复语言",
       voice_model: "语音模型",
       speech_speed: "语速",
+      stt_model: "语音识别模型",
+      tts_model: "语音回复模型",
       max_recording_duration: "最长录音时长",
       open_settings: "语音设置",
       voice_models: "语音模型",

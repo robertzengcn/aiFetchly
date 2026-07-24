@@ -2128,6 +2128,8 @@ export default {
       tts_language: "読み上げの言語",
       voice_model: "音声モデル",
       speech_speed: "読み上げ速度",
+      stt_model: "音声認識モデル",
+      tts_model: "音声応答モデル",
       max_recording_duration: "最大録音時間",
       open_settings: "音声設定",
       voice_models: "音声モデル",

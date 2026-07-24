@@ -2166,6 +2166,8 @@ export default {
       tts_language: "Sprache der Sprachausgabe",
       voice_model: "Sprachmodell",
       speech_speed: "Sprechgeschwindigkeit",
+      stt_model: "Spracherkennungsmodell",
+      tts_model: "Sprachantwortmodell",
       max_recording_duration: "Maximale Aufnahmedauer",
       open_settings: "Spracheinstellungen",
       voice_models: "Sprachmodelle",

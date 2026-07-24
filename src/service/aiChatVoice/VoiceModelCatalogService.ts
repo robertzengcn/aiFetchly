@@ -17,6 +17,13 @@ export interface VoiceModelDefinition {
   readonly approxSizeMb: number;
   /** Optional SHA256 digest; if present, the downloader verifies it. */
   readonly sha256?: string;
+  /**
+   * Files that must exist inside `targetDir` for the model to count as
+   * installed/usable (TODO P2 model validation). Mirrors the files the worker
+   * loads in voiceServices.ts; a present directory with a missing model file
+   * is reported as not installed rather than silently failing at inference.
+   */
+  readonly requiredFiles?: readonly string[];
 }
 
 export interface VoiceModelCatalogEntry extends VoiceModelDefinition {
@@ -33,6 +40,11 @@ export const VOICE_MODEL_DEFINITIONS: readonly VoiceModelDefinition[] = [
       "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-whisper-tiny.tar.bz2",
     targetDir: "sherpa-onnx-whisper-tiny",
     approxSizeMb: 39,
+    requiredFiles: [
+      "tiny-encoder.int8.onnx",
+      "tiny-decoder.int8.onnx",
+      "tiny-tokens.txt",
+    ],
   },
   {
     id: "sherpa-onnx:tts:auto",
@@ -42,6 +54,7 @@ export const VOICE_MODEL_DEFINITIONS: readonly VoiceModelDefinition[] = [
       "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-en_US-amy-medium.tar.bz2",
     targetDir: "vits-piper-en_US-amy-medium",
     approxSizeMb: 61,
+    requiredFiles: ["en_US-amy-medium.onnx", "tokens.txt"],
   },
 ];
 
@@ -71,8 +84,21 @@ export class VoiceModelCatalogService {
   }
 
   isInstalled(id: string): boolean {
+    const def = this.getModel(id);
+    if (!def) return false;
     const modelPath = this.getModelPath(id);
-    return modelPath !== null && this.fileExists(modelPath);
+    if (modelPath === null || !this.fileExists(modelPath)) {
+      return false;
+    }
+    // Validate the extracted structure, not just directory presence: a model
+    // whose directory exists but is missing required inference files would
+    // silently fail at the worker handshake (TODO P2 model validation).
+    if (def.requiredFiles && def.requiredFiles.length > 0) {
+      return def.requiredFiles.every((f) =>
+        this.fileExists(path.join(modelPath, f))
+      );
+    }
+    return true;
   }
 
   getModelPath(id: string): string | null {
