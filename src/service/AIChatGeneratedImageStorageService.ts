@@ -2,10 +2,12 @@ import { app } from "electron";
 import fs from "fs/promises";
 import path from "path";
 import type { OpenAIChatImage } from "@/api/aiChatApi";
+import { USEREMAIL } from "@/config/usersetting";
+import { Token } from "@/modules/token";
 import {
   AI_CHAT_GENERATED_IMAGE_PROTOCOL,
   buildGeneratedImageProtocolUrl,
-  getGeneratedImageRoot,
+  getGeneratedImageUserRoot,
 } from "@/service/AIChatGeneratedImageProtocol";
 
 type FetchLike = typeof fetch;
@@ -33,7 +35,8 @@ export interface StoreGeneratedImagesInput {
 export class AIChatGeneratedImageStorageService {
   constructor(
     private readonly fetchImpl: FetchLike = fetch,
-    private readonly userDataPath: string = app.getPath("userData")
+    private readonly userDataPath: string = app.getPath("userData"),
+    private readonly currentUserEmail: string = readCurrentUserEmail()
   ) {}
 
   async storeImages(
@@ -84,7 +87,7 @@ export class AIChatGeneratedImageStorageService {
     const conversationPathPart = sanitizePathPart(input.conversationId);
     const messagePathPart = sanitizePathPart(input.messageId);
     const directory = path.join(
-      getGeneratedImageRoot(this.userDataPath),
+      getGeneratedImageUserRoot(this.userDataPath, this.currentUserEmail),
       conversationPathPart,
       messagePathPart
     );
@@ -97,6 +100,7 @@ export class AIChatGeneratedImageStorageService {
       ...image,
       delivery: "local_file",
       url: buildGeneratedImageProtocolUrl({
+        userEmail: this.currentUserEmail,
         conversationId: conversationPathPart,
         messageId: messagePathPart,
         fileName,
@@ -166,4 +170,9 @@ function isHttpUrl(url: string): boolean {
 
 function sanitizePathPart(value: string): string {
   return value.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 160) || "unknown";
+}
+
+function readCurrentUserEmail(): string {
+  const tokenService = new Token();
+  return tokenService.getValue(USEREMAIL);
 }

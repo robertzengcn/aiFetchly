@@ -3,20 +3,45 @@ import path from "path";
 export const AI_CHAT_GENERATED_IMAGE_PROTOCOL = "aifetchly-generated-image";
 export const AI_CHAT_GENERATED_IMAGE_HOST = "local";
 export const AI_CHAT_GENERATED_IMAGE_DIR = "ai-chat-generated-images";
+const UNKNOWN_GENERATED_IMAGE_USER = "unknown-user";
 
 export function getGeneratedImageRoot(userDataPath: string): string {
   return path.join(userDataPath, AI_CHAT_GENERATED_IMAGE_DIR);
 }
 
+export function normalizeGeneratedImageUserEmail(email: string): string {
+  return (
+    email
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9._@+-]/g, "_")
+      .slice(0, 160) || UNKNOWN_GENERATED_IMAGE_USER
+  );
+}
+
+export function getGeneratedImageUserRoot(
+  userDataPath: string,
+  userEmail: string
+): string {
+  return path.join(
+    getGeneratedImageRoot(userDataPath),
+    normalizeGeneratedImageUserEmail(userEmail)
+  );
+}
+
 export function buildGeneratedImageProtocolUrl(parts: {
+  userEmail: string;
   conversationId: string;
   messageId: string;
   fileName: string;
 }): string {
+  const userEmail = encodeURIComponent(
+    normalizeGeneratedImageUserEmail(parts.userEmail)
+  );
   const conversationId = encodeURIComponent(parts.conversationId);
   const messageId = encodeURIComponent(parts.messageId);
   const fileName = encodeURIComponent(parts.fileName);
-  return `${AI_CHAT_GENERATED_IMAGE_PROTOCOL}://${AI_CHAT_GENERATED_IMAGE_HOST}/${conversationId}/${messageId}/${fileName}`;
+  return `${AI_CHAT_GENERATED_IMAGE_PROTOCOL}://${AI_CHAT_GENERATED_IMAGE_HOST}/${userEmail}/${conversationId}/${messageId}/${fileName}`;
 }
 
 export function resolveGeneratedImageProtocolPath(
@@ -39,7 +64,7 @@ export function resolveGeneratedImageProtocolPath(
     .split("/")
     .filter(Boolean)
     .map((segment) => decodeURIComponent(segment));
-  if (segments.length !== 3 || segments.some((segment) => segment.length === 0)) {
+  if (segments.length !== 4 || segments.some((segment) => segment.length === 0)) {
     return null;
   }
   const root = getGeneratedImageRoot(userDataPath);

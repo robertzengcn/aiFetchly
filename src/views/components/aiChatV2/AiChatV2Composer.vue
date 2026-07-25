@@ -63,18 +63,7 @@
         >
           <v-icon size="small">{{ isRecording ? "mdi-stop" : "mdi-microphone" }}</v-icon>
         </v-btn>
-        <!-- Compact voice settings entry point (PRD §9.2 / TODO P1-3). -->
-        <v-btn
-          icon
-          size="small"
-          variant="text"
-          class="v2-composer__voice-settings"
-          :title="t('aiChatV2.voice.open_settings') || 'Voice settings'"
-          :aria-label="t('aiChatV2.voice.open_settings') || 'Voice settings'"
-          @click="$emit('open-voice-settings')"
-        >
-          <v-icon size="small">mdi-tune-vertical</v-icon>
-        </v-btn>
+
       </template>
     </v-textarea>
 
