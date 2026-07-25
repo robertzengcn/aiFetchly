@@ -21,6 +21,7 @@ import type {
   SkillExecutionResult,
   SkillManifest,
 } from "@/entityTypes/skillTypes";
+import type { InstalledSkillEntity } from "@/entity/InstalledSkill.entity";
 import { DocumentService } from "@/service/DocumentService";
 import {
   SkillEnvironmentManager,
@@ -1306,6 +1307,57 @@ function buildImportedSkillExecuteHandler(
 }
 
 /**
+ * Load one persisted skill entity into SkillRegistry.
+ */
+function loadPersistedSkillEntity(skill: InstalledSkillEntity): boolean {
+  try {
+    const manifest = JSON.parse(skill.manifest_json) as SkillManifest;
+
+    // Plugin-owned skills live under the plugin install root, not
+    // under userData/installed_skills/.
+    let skillDir: string;
+    if (skill.pluginName && skill.pluginComponentPath) {
+      skillDir = path.join(
+        getPluginInstallRoot(skill.pluginName),
+        path.dirname(skill.pluginComponentPath)
+      );
+    } else {
+      const skillsDir = getInstalledSkillsDir();
+      skillDir = path.join(skillsDir, skill.name);
+    }
+
+    if (!fs.existsSync(skillDir)) {
+      console.warn(
+        `Skill directory missing for "${skill.name}" at "${skillDir}", skipping`
+      );
+      return false;
+    }
+
+    registerImportedSkill(manifest, skillDir, {
+      pluginOwner: skill.pluginName,
+    });
+    return true;
+  } catch (error) {
+    console.warn(
+      `Failed to load skill "${skill.name}": ${
+        error instanceof Error ? error.message : error
+      }`
+    );
+    return false;
+  }
+}
+
+/**
+ * Load a single enabled persisted skill from DB into SkillRegistry.
+ */
+async function loadPersistedSkill(skillName: string): Promise<boolean> {
+  const module = new SkillManagementModule();
+  const skill = await module.getSkillByName(skillName);
+  if (!skill || skill.enabled !== 1) return false;
+  return loadPersistedSkillEntity(skill);
+}
+
+/**
  * Load all persisted skills from DB into SkillRegistry on app startup.
  */
 async function loadPersistedSkills(): Promise<void> {
@@ -1313,39 +1365,7 @@ async function loadPersistedSkills(): Promise<void> {
   const skills = await module.listEnabledSkills();
 
   for (const skill of skills) {
-    try {
-      const manifest = JSON.parse(skill.manifest_json) as SkillManifest;
-
-      // Plugin-owned skills live under the plugin install root, not
-      // under userData/installed_skills/.
-      let skillDir: string;
-      if (skill.pluginName && skill.pluginComponentPath) {
-        skillDir = path.join(
-          getPluginInstallRoot(skill.pluginName),
-          path.dirname(skill.pluginComponentPath)
-        );
-      } else {
-        const skillsDir = getInstalledSkillsDir();
-        skillDir = path.join(skillsDir, skill.name);
-      }
-
-      if (!fs.existsSync(skillDir)) {
-        console.warn(
-          `Skill directory missing for "${skill.name}" at "${skillDir}", skipping`
-        );
-        continue;
-      }
-
-      registerImportedSkill(manifest, skillDir, {
-        pluginOwner: skill.pluginName,
-      });
-    } catch (error) {
-      console.warn(
-        `Failed to load skill "${skill.name}": ${
-          error instanceof Error ? error.message : error
-        }`
-      );
-    }
+    loadPersistedSkillEntity(skill);
   }
 }
 
@@ -1355,6 +1375,7 @@ async function loadPersistedSkills(): Promise<void> {
 
 export const SkillImportService = {
   importFromZip,
+  loadPersistedSkill,
   loadPersistedSkills,
   validateManifest,
   validatePythonSkillZip,
