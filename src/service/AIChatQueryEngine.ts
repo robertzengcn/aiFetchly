@@ -8,10 +8,12 @@ import {
   StagedAttachmentReference,
 } from "@/service/DocumentService";
 import type {
+  OpenAIChatImage,
   OpenAIChatMessage,
   OpenAITool,
   ToolFunction,
 } from "@/api/aiChatApi";
+import { AIChatGeneratedImageStorageService } from "@/service/AIChatGeneratedImageStorageService";
 import { SkillRegistry } from "@/config/skillsRegistry";
 import { SkillExecutor } from "@/service/SkillExecutor";
 import { HookDispatcher } from "@/service/hooks/HookDispatcher";
@@ -156,6 +158,15 @@ export interface AIChatQueryEngineDeps {
    * consolidation after each completed assistant turn. Runs independently of
    * the user-memory auto-dream service. Failures are logged and swallowed. */
   workspaceAutoDreamService?: AIWorkspaceAutoDreamService;
+  /** Optional. Stores generated images locally before assistant messages are
+   * persisted/emitted so provider URL expiry does not break chat history. */
+  generatedImageStorage?: {
+    storeImages(input: {
+      conversationId: string;
+      messageId: string;
+      images: OpenAIChatImage[];
+    }): Promise<OpenAIChatImage[]>;
+  };
 }
 
 /**
@@ -173,6 +184,7 @@ export class AIChatQueryEngine {
   private readonly compactAgent?: AIChatCompactAgentService;
   private readonly autoDreamService?: AIAutoDreamService;
   private readonly workspaceAutoDreamService?: AIWorkspaceAutoDreamService;
+  private readonly generatedImageStorage?: AIChatQueryEngineDeps["generatedImageStorage"];
   private readonly pendingEventSaves = new WeakMap<
     AIChatQueryEventSink,
     Promise<unknown>[]
@@ -189,6 +201,7 @@ export class AIChatQueryEngine {
     this.compactAgent = deps?.compactAgent;
     this.autoDreamService = deps?.autoDreamService;
     this.workspaceAutoDreamService = deps?.workspaceAutoDreamService;
+    this.generatedImageStorage = deps?.generatedImageStorage;
   }
 
   /**
@@ -1103,8 +1116,11 @@ export class AIChatQueryEngine {
     switch (result.type) {
       case "completed": {
         const { conversationId, assistantMessageId } = result;
-        const generatedImages =
-          result.images && result.images.length > 0 ? result.images : undefined;
+        const generatedImages = await this.storeGeneratedImages({
+          conversationId,
+          assistantMessageId,
+          images: result.images,
+        });
         if (result.fullContent.length > 0 || generatedImages) {
           await module.saveAssistantMessage({
             conversationId,
@@ -1338,6 +1354,32 @@ export class AIChatQueryEngine {
       return;
     }
     await this.flushPendingEventSaves(saves);
+  }
+
+  private async storeGeneratedImages(input: {
+    conversationId: string;
+    assistantMessageId: string;
+    images?: OpenAIChatImage[];
+  }): Promise<OpenAIChatImage[] | undefined> {
+    if (!input.images || input.images.length === 0) {
+      return undefined;
+    }
+    const storage =
+      this.generatedImageStorage ?? new AIChatGeneratedImageStorageService();
+    try {
+      const stored = await storage.storeImages({
+        conversationId: input.conversationId,
+        messageId: input.assistantMessageId,
+        images: input.images,
+      });
+      return stored.length > 0 ? stored : undefined;
+    } catch (err) {
+      console.warn(
+        `[ai-chat-v2] failed to store generated images locally for conversation ${input.conversationId}:`,
+        err
+      );
+      return input.images;
+    }
   }
 
   /**

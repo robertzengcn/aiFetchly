@@ -431,6 +431,9 @@ export interface OpenAIChatImage {
   type: "image";
   delivery?: "provider_url" | "base64" | string;
   url?: string;
+  original_url?: string;
+  local_path?: string;
+  file_name?: string;
   b64_json?: string;
   expires_at?: string;
   download_required?: boolean;
@@ -2801,6 +2804,9 @@ export class AiChatApi {
         type: "image",
         delivery: this.getStringField(item, "delivery"),
         url,
+        original_url: this.getStringField(item, "original_url"),
+        local_path: this.getStringField(item, "local_path"),
+        file_name: this.getStringField(item, "file_name"),
         b64_json: b64Json,
         expires_at: this.getStringField(item, "expires_at"),
         download_required:

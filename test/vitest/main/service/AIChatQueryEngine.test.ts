@@ -5,7 +5,7 @@ import type {
   AIChatQueryLoop,
   AIChatQueryLoopDeps,
 } from "@/service/AIChatQueryLoop";
-import type { OpenAIChatMessage } from "@/api/aiChatApi";
+import type { OpenAIChatImage, OpenAIChatMessage } from "@/api/aiChatApi";
 import type { AIChatContextAssembler } from "@/service/AIChatContextAssembler";
 import type { AIChatCompactAgentService } from "@/service/AIChatCompactAgentService";
 import type { SessionMemoryUpdateInput } from "@/service/AIChatCompactAgentService";
@@ -229,12 +229,22 @@ describe("AIChatQueryEngine", () => {
     });
 
     it("persists and emits generated images from a completed loop result", async () => {
-      const image = {
+      const image: OpenAIChatImage = {
         type: "image" as const,
         delivery: "provider_url",
         url: "https://example.com/generated.png",
         mime_type: "image/png",
         download_required: true,
+      };
+      const localImage: OpenAIChatImage = {
+        ...image,
+        delivery: "local_file",
+        url: "aifetchly-generated-image://local/v2-test-conv/assistant-test/image-1.png",
+        original_url: image.url,
+        local_path:
+          "/tmp/test/userdata/ai-chat-generated-images/v2-test-conv/assistant-test/image-1.png",
+        file_name: "image-1.png",
+        download_required: false,
       };
       const fakeRun = vi.fn().mockResolvedValue({
         type: "completed" as const,
@@ -245,7 +255,12 @@ describe("AIChatQueryEngine", () => {
         model: "gpt-4",
         images: [image],
       });
-      const engine = createEngineWithFakeLoop(fakeRun);
+      const generatedImageStorage = {
+        storeImages: vi.fn().mockResolvedValue([localImage]),
+      };
+      const engine = createEngineWithFakeLoop(fakeRun, {
+        generatedImageStorage,
+      });
       const { sink, events } = makeEventCollector();
 
       await engine.submitMessage({
@@ -253,18 +268,23 @@ describe("AIChatQueryEngine", () => {
         eventSink: sink,
       });
 
+      expect(generatedImageStorage.storeImages).toHaveBeenCalledWith({
+        conversationId: "v2-test-conv",
+        messageId: "assistant-test",
+        images: [image],
+      });
       expect(mockSaveAssistantMessage).toHaveBeenCalledWith(
         expect.objectContaining({
           content: "Image ready",
           metadata: expect.objectContaining({
-            generatedImages: [image],
+            generatedImages: [localImage],
           }),
         })
       );
       const completeEvent = events.find((e) => e.type === "complete");
       expect(completeEvent).toBeDefined();
       if (completeEvent?.type === "complete") {
-        expect(completeEvent.images).toEqual([image]);
+        expect(completeEvent.images).toEqual([localImage]);
       }
     });
 

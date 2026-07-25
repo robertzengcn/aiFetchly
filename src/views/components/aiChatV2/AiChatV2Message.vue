@@ -150,6 +150,8 @@ type ShellPreview = {
   timeout_ms: number;
 };
 
+const GENERATED_IMAGE_PROTOCOL = "aifetchly-generated-image:";
+
 const props = defineProps<{
   message: ChatV2MessageView;
   status?: Status;
@@ -223,7 +225,11 @@ function isAllowedImageUrl(url: string): boolean {
   }
   try {
     const parsed = new URL(url);
-    return parsed.protocol === "https:" || parsed.protocol === "http:";
+    return (
+      parsed.protocol === "https:" ||
+      parsed.protocol === "http:" ||
+      parsed.protocol === GENERATED_IMAGE_PROTOCOL
+    );
   } catch {
     return false;
   }

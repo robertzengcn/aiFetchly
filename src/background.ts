@@ -1,7 +1,7 @@
 "use strict";
 import "reflect-metadata";
 // import {ipcMain as ipc} from 'electron-better-ipc';
-import { app, BrowserWindow, Menu, dialog, shell } from "electron";
+import { app, BrowserWindow, Menu, dialog, shell, protocol, net } from "electron";
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const autoUpdater = require("electron").autoUpdater;
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -21,6 +21,7 @@ import { FileOperationTracker } from "@/service/FileOperationTracker";
 import { registerBuiltinHooks } from "@/service/hooks/builtinHooks";
 import { isAppTrustedOrigin } from "@/service/OriginTrust";
 import * as path from "path";
+import { pathToFileURL } from "url";
 import { Token } from "@/modules/token";
 import { MenuManager } from "@/main-process/menu/MenuManager";
 import {
@@ -65,12 +66,30 @@ import {
   urlContainsTokenParams as deepLinkUrlContainsTokenParams,
   isValidDeepLinkOrigin as deepLinkIsValidDeepLinkOrigin,
 } from "@/modules/deepLinkSecurity";
+import {
+  AI_CHAT_GENERATED_IMAGE_PROTOCOL,
+  resolveGeneratedImageProtocolPath,
+} from "@/service/AIChatGeneratedImageProtocol";
 // import { RAGIpcHandlers } from '@/main-process/ragIpcHandlers';
 // import { createProtocol } from 'electron';
 const isDevelopment = process.env.NODE_ENV !== "production";
 declare const MAIN_WINDOW_VITE_DEV_SERVER_URL: string;
 declare const MAIN_WINDOW_VITE_NAME: string;
 // import { safeStorage } from 'electron';
+
+if (!app.isReady()) {
+  protocol.registerSchemesAsPrivileged([
+    {
+      scheme: AI_CHAT_GENERATED_IMAGE_PROTOCOL,
+      privileges: {
+        standard: true,
+        secure: true,
+        supportFetchAPI: true,
+        corsEnabled: true,
+      },
+    },
+  ]);
+}
 
 // const { ipcRenderer: ipc } = require('electron-better-ipc');
 // const { ipcMain } = require("electron");
@@ -186,6 +205,24 @@ let win: BrowserWindow | null;
  * (NFR-1: keep bridge code out of production startup paths via dynamic import).
  */
 let devBrowserBridge: { stop(): Promise<void> } | null = null;
+let generatedImageProtocolHandlerRegistered = false;
+
+function registerGeneratedImageProtocolHandler(): void {
+  if (generatedImageProtocolHandlerRegistered) {
+    return;
+  }
+  protocol.handle(AI_CHAT_GENERATED_IMAGE_PROTOCOL, async (request) => {
+    const filePath = resolveGeneratedImageProtocolPath(
+      request.url,
+      app.getPath("userData")
+    );
+    if (!filePath) {
+      return new Response("Generated image not found.", { status: 404 });
+    }
+    return net.fetch(pathToFileURL(filePath).toString());
+  });
+  generatedImageProtocolHandlerRegistered = true;
+}
 
 function registerMenuBarShortcuts(mainWindow: BrowserWindow): void {
   if (process.platform === "darwin") {
@@ -847,6 +884,8 @@ function initialize() {
   // initialization and is ready to create browser windows.
   // Some APIs can only be used after this event occurs.
   (app as any).whenReady().then(async () => {
+    registerGeneratedImageProtocolHandler();
+
     // Configure Content Security Policy (must be called after app is ready)
     configureContentSecurityPolicy();
 
@@ -1079,7 +1118,7 @@ function configureContentSecurityPolicy() {
         "default-src 'self'",
         "script-src 'self' 'unsafe-eval' 'unsafe-inline' http://localhost:* https://localhost:*",
         "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-        "img-src 'self' data: https: http:",
+        `img-src 'self' data: https: http: ${AI_CHAT_GENERATED_IMAGE_PROTOCOL}:`,
         "font-src 'self' data: https://fonts.googleapis.com https://fonts.gstatic.com",
         "connect-src 'self' http://localhost:* https://localhost:* https: http: https://fonts.googleapis.com https://fonts.gstatic.com",
         "frame-src 'self'",
@@ -1092,7 +1131,7 @@ function configureContentSecurityPolicy() {
         "default-src 'self'",
         "script-src 'self'",
         "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-        "img-src 'self' data: https:",
+        `img-src 'self' data: https: ${AI_CHAT_GENERATED_IMAGE_PROTOCOL}:`,
         "font-src 'self' data: https://fonts.googleapis.com https://fonts.gstatic.com",
         "connect-src 'self' https: https://fonts.googleapis.com https://fonts.gstatic.com",
         "frame-src 'self'",
