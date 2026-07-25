@@ -14,6 +14,12 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
+import {
+  loadSherpaOnnxNative,
+  type Recognizer,
+  type TtsEngine,
+  type SherpaOnnxNative,
+} from "@/service/aiChatVoice/SherpaOnnxNative";
 import { encodeWavBase64, parseWavSamples } from "./wavUtils";
 
 export interface TranscribeOutput {
@@ -50,48 +56,6 @@ export interface SherpaTtsService {
 export interface VoiceServices {
   readonly stt: SherpaSttService;
   readonly tts: SherpaTtsService;
-}
-
-// ---------------------------------------------------------------------------
-// sherpa-onnx-node native addon (loosely typed; loaded at runtime)
-// ---------------------------------------------------------------------------
-
-interface RecognizerStream {
-  acceptWaveform(input: { sampleRate: number; samples: Float32Array }): void;
-}
-interface Recognizer {
-  createStream(): RecognizerStream;
-  decode(stream: unknown): void;
-  getResult(stream: unknown): { text?: string };
-}
-interface TtsEngine {
-  generate(input: {
-    text: string;
-    generationConfig: unknown;
-  }): { samples: Float32Array; sampleRate: number };
-}
-interface SherpaOnnxNative {
-  OfflineRecognizer: new (config: unknown) => Recognizer;
-  OfflineTts: new (config: unknown) => TtsEngine;
-  GenerationConfig: new (input: {
-    sid: number;
-    speed: number;
-    silenceScale?: number;
-  }) => unknown;
-}
-
-/** Load the native addon at runtime. Name is concat'd so the bundler leaves it as an external require. */
-function loadSherpaOnnxNative(): SherpaOnnxNative | null {
-  try {
-    const moduleName = "sherpa-onnx-" + "node";
-    const g = globalThis as { require?: (id: string) => unknown };
-    if (typeof g.require === "function") {
-      return g.require(moduleName) as SherpaOnnxNative;
-    }
-  } catch {
-    // package not installed
-  }
-  return null;
 }
 
 // ---------------------------------------------------------------------------

@@ -13,6 +13,7 @@ import * as path from "path";
 import * as fs from "fs";
 import { Token } from "@/modules/token";
 import { SherpaVoiceWorkerClient } from "@/service/aiChatVoice/SherpaVoiceWorkerClient";
+import { isSherpaOnnxNativeAvailable } from "@/service/aiChatVoice/SherpaOnnxNative";
 import {
   parseVoiceSettings,
   serializeVoiceSettings,
@@ -35,6 +36,7 @@ export interface AiChatVoiceModuleDeps {
   /** Directory where resolved model files are expected to live. */
   readonly modelRoot?: string;
   readonly fileExists?: (filePath: string) => boolean;
+  readonly runtimeAvailable?: () => boolean;
 }
 
 export class AiChatVoiceModule {
@@ -42,12 +44,15 @@ export class AiChatVoiceModule {
   private readonly client: SherpaVoiceWorkerClient;
   private readonly modelRoot: string;
   private readonly fileExists: (filePath: string) => boolean;
+  private readonly runtimeAvailable: () => boolean;
 
   constructor(deps: AiChatVoiceModuleDeps = {}) {
     this.token = deps.token ?? new Token();
     this.client = deps.workerClient ?? SherpaVoiceWorkerClient.getInstance();
     this.modelRoot = deps.modelRoot ?? path.join(process.cwd(), "voice-models");
     this.fileExists = deps.fileExists ?? ((p: string) => fs.existsSync(p));
+    this.runtimeAvailable =
+      deps.runtimeAvailable ?? isSherpaOnnxNativeAvailable;
   }
 
   /** Read persisted settings, typed + defaulted (never throws). */
@@ -77,11 +82,18 @@ export class AiChatVoiceModule {
   /** Resolve STT/TTS model availability into a runtime status. */
   getRuntimeStatus(): AiChatVoiceRuntimeStatus {
     const settings = this.getSettingsView();
+    const runtimeAvailable = this.runtimeAvailable();
     return {
-      sttState: this.stateForModel(settings.sttModelId),
-      ttsState: this.stateForModel(settings.ttsModelId),
+      sttState: this.stateForModel(settings.sttModelId, runtimeAvailable),
+      ttsState: this.stateForModel(settings.ttsModelId, runtimeAvailable),
       sttModelId: settings.sttModelId,
       ttsModelId: settings.ttsModelId,
+      ...(!runtimeAvailable
+        ? {
+            errorMessage:
+              "Local voice runtime is unavailable. Install sherpa-onnx-node to enable local voice transcription.",
+          }
+        : {}),
     };
   }
 
@@ -167,7 +179,13 @@ export class AiChatVoiceModule {
 
   // ---------------------------------------------------------------------------
 
-  private stateForModel(modelId: string): AiChatVoiceRuntimeState {
+  private stateForModel(
+    modelId: string,
+    runtimeAvailable: boolean
+  ): AiChatVoiceRuntimeState {
+    if (!runtimeAvailable) {
+      return "unavailable";
+    }
     const modelDir = this.resolveModelDir(modelId);
     if (modelDir === null || !this.fileExists(modelDir)) {
       return "missing_model";

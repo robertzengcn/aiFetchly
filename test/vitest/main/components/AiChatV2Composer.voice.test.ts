@@ -194,6 +194,18 @@ describe("AiChatV2Composer voice controls", () => {
     expect(wrapper.emitted("send")).toBeUndefined();
   });
 
+  it("shows the transcription failure detail returned by the main process", async () => {
+    transcribeVoiceMock.mockRejectedValue(new Error("STT model is not loaded."));
+    const wrapper = mountComposer({ voiceEnabled: true });
+    await wrapper.find(".v2-composer__voice-button").trigger("click");
+    await flushPromises();
+    await wrapper.find(".v2-composer__voice-button").trigger("click");
+    await flushPromises();
+    expect(wrapper.find(".v2-composer__notice").text()).toContain(
+      "Voice transcription failed. STT model is not loaded."
+    );
+  });
+
   it("keeps the transcript in the draft when chat is unavailable on auto-send", async () => {
     const wrapper = mountComposer({
       voiceEnabled: true,

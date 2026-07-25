@@ -248,6 +248,7 @@
         :voice-auto-send="voiceAutoSend"
         :voice-max-recording-ms="voiceMaxRecordingMs"
         :voice-model-missing="voiceMissingModel"
+        :voice-runtime-unavailable="voiceRuntimeUnavailable"
         :voice-model-installing="voiceModelInstalling"
         :voice-model-install-error="voiceModelInstallError"
         :voice-speaking="voiceSpeaking"
@@ -2834,6 +2835,9 @@ const voiceMissingModel = computed(
     voiceInputEnabled.value &&
     (voiceStatus.value?.sttState === "missing_model" ||
       voiceStatus.value?.sttState === "unavailable"),
+);
+const voiceRuntimeUnavailable = computed(
+  () => voiceInputEnabled.value && voiceStatus.value?.sttState === "unavailable",
 );
 /**
  * Whether the chat can accept a voice auto-send right now. The renderer has no

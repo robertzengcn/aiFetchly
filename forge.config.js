@@ -41,6 +41,7 @@ const EXTERNAL_DEPENDENCIES = [
   "onnxruntime-node",
   "onnxruntime-common",
   "sharp",
+  "sherpa-onnx-node",
 ];
 //import { ForgeConfig } from '@electron-forge/shared-types';
 // import { AutoUnpackNativesPlugin } from "@electron-forge/plugin-auto-unpack-natives";
@@ -80,8 +81,9 @@ module.exports = {
       // @xenova/transformers + onnxruntime-* + sharp ship native/WASM/.so artifacts that cannot load
       // from inside app.asar, so they must be unpacked alongside better-sqlite3/sqlite-vec.
       unpackDir:
-        "**/{.vite,node_modules/better-sqlite3,node_modules/sqlite3,node_modules/sqlite-vec,node_modules/@xenova/transformers,node_modules/onnxruntime-node,node_modules/onnxruntime-common,node_modules/sharp}/**",
-      unpack: "**/vec0.*",
+        "**/{.vite,node_modules/better-sqlite3,node_modules/sqlite3,node_modules/sqlite-vec,node_modules/@xenova/transformers,node_modules/onnxruntime-node,node_modules/onnxruntime-common,node_modules/sharp,node_modules/sherpa-onnx-node,node_modules/sherpa-onnx-darwin-arm64,node_modules/sherpa-onnx-darwin-x64,node_modules/sherpa-onnx-linux-arm64,node_modules/sherpa-onnx-linux-x64,node_modules/sherpa-onnx-win-ia32,node_modules/sherpa-onnx-win-x64}/**",
+      unpack:
+        "**/{vec0.*,node_modules/sherpa-onnx-darwin-arm64/*,node_modules/sherpa-onnx-darwin-x64/*,node_modules/sherpa-onnx-linux-arm64/*,node_modules/sherpa-onnx-linux-x64/*,node_modules/sherpa-onnx-win-ia32/*,node_modules/sherpa-onnx-win-x64/*}",
     },
     ignore: (file) => {
       const filePath = file.toLowerCase();

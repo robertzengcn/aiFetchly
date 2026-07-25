@@ -98,11 +98,11 @@
         <span class="v2-composer__notice-text">
           {{
             voiceModelInstallError ||
-            t("aiChatV2.voice.model_missing") ||
-            "Voice model is not installed."
+            voiceAvailabilityNotice
           }}
         </span>
         <v-btn
+          v-if="!voiceRuntimeUnavailable"
           size="x-small"
           color="primary"
           variant="tonal"
@@ -195,7 +195,7 @@
 </template>
 
 <script setup lang="ts">
-import { onBeforeUnmount, ref, watch } from "vue";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import AiChatV2SlashSuggestions from "./AiChatV2SlashSuggestions.vue";
 import { listSlashCommands, onAifetchlyConfigChanged } from "@/views/api/slashCommands";
@@ -229,6 +229,7 @@ const props = defineProps<{
    */
   voiceAutoSend?: boolean;
   voiceModelMissing?: boolean;
+  voiceRuntimeUnavailable?: boolean;
   voiceModelInstalling?: boolean;
   voiceModelInstallError?: string | null;
   /**
@@ -278,6 +279,12 @@ const voiceRecorder = new BrowserVoiceRecorder();
 const isRecording = ref(false);
 const isTranscribing = ref(false);
 const showVoiceModelNotice = ref(false);
+const voiceAvailabilityNotice = computed(() =>
+  props.voiceRuntimeUnavailable
+    ? t("aiChatV2.voice.runtime_unavailable") ||
+      "Local voice runtime is unavailable."
+    : t("aiChatV2.voice.model_missing") || "Voice model is not installed.",
+);
 
 function appendTranscript(text: string): void {
   const clean = text.trim();
@@ -357,9 +364,11 @@ async function onMicClick(): Promise<void> {
         });
       } catch (trErr) {
         const detail = trErr instanceof Error ? trErr.message : String(trErr);
-        showNotice(
+        const base =
           t("aiChatV2.voice.transcription_failed") ||
-            `Voice transcription failed: ${detail}`,
+          "Voice transcription failed.";
+        showNotice(
+          detail.trim().length > 0 ? `${base} ${detail}` : base,
         );
         return;
       }

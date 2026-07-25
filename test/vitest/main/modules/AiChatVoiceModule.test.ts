@@ -90,6 +90,7 @@ describe("AiChatVoiceModule.getRuntimeStatus", () => {
       workerClient: {} as SherpaVoiceWorkerClient,
       modelRoot: "/models",
       fileExists: () => false,
+      runtimeAvailable: () => true,
     });
     const status = mod.getRuntimeStatus();
     expect(status.sttState).toBe("missing_model");
@@ -103,10 +104,26 @@ describe("AiChatVoiceModule.getRuntimeStatus", () => {
       workerClient: {} as SherpaVoiceWorkerClient,
       modelRoot: "/models",
       fileExists: () => true,
+      runtimeAvailable: () => true,
     });
     const status = mod.getRuntimeStatus();
     expect(status.sttState).toBe("ready");
     expect(status.ttsState).toBe("ready");
+  });
+
+  it("reports unavailable when model files exist but the sherpa runtime is missing", () => {
+    const { token } = makeTokenMock();
+    const mod = new AiChatVoiceModule({
+      token,
+      workerClient: {} as SherpaVoiceWorkerClient,
+      modelRoot: "/models",
+      fileExists: () => true,
+      runtimeAvailable: () => false,
+    });
+    const status = mod.getRuntimeStatus();
+    expect(status.sttState).toBe("unavailable");
+    expect(status.ttsState).toBe("unavailable");
+    expect(status.errorMessage).toMatch(/local voice runtime/i);
   });
 });
 
