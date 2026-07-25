@@ -3,6 +3,7 @@ import fs from "fs/promises";
 import os from "os";
 import path from "path";
 import { AIChatGeneratedImageStorageService } from "@/service/AIChatGeneratedImageStorageService";
+import { resolveGeneratedImageProtocolPath } from "@/service/AIChatGeneratedImageProtocol";
 
 vi.mock("electron", () => ({
   app: {
@@ -34,7 +35,11 @@ describe("AIChatGeneratedImageStorageService", () => {
         headers: { "content-type": "image/png" },
       })
     ) as typeof fetch;
-    const service = new AIChatGeneratedImageStorageService(fetchMock, root);
+    const service = new AIChatGeneratedImageStorageService(
+      fetchMock,
+      root,
+      "User+One@Example.COM"
+    );
 
     const stored = await service.storeImages({
       conversationId: "v2-conv",
@@ -62,17 +67,21 @@ describe("AIChatGeneratedImageStorageService", () => {
       })
     );
     expect(stored[0].url).toBe(
-      "aifetchly-generated-image://local/v2-conv/assistant-1/image-1.png"
+      "aifetchly-generated-image://local/user%2Bone%40example.com/v2-conv/assistant-1/image-1.png"
     );
     expect(stored[0].b64_json).toBeUndefined();
     expect(stored[0].local_path).toBe(
       path.join(
         root,
         "ai-chat-generated-images",
+        "user+one@example.com",
         "v2-conv",
         "assistant-1",
         "image-1.png"
       )
+    );
+    expect(resolveGeneratedImageProtocolPath(stored[0].url ?? "", root)).toBe(
+      stored[0].local_path
     );
     await expect(fs.stat(stored[0].local_path ?? "")).resolves.toEqual(
       expect.objectContaining({ size: body.length })
@@ -88,7 +97,11 @@ describe("AIChatGeneratedImageStorageService", () => {
         headers: { "content-type": "image/png" },
       })
     ) as typeof fetch;
-    const service = new AIChatGeneratedImageStorageService(fetchMock, root);
+    const service = new AIChatGeneratedImageStorageService(
+      fetchMock,
+      root,
+      "user@example.com"
+    );
 
     const stored = await service.storeImages({
       conversationId: "v2-conv",

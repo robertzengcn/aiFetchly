@@ -239,10 +239,10 @@ describe("AIChatQueryEngine", () => {
       const localImage: OpenAIChatImage = {
         ...image,
         delivery: "local_file",
-        url: "aifetchly-generated-image://local/v2-test-conv/assistant-test/image-1.png",
+        url: "aifetchly-generated-image://local/user%40example.com/v2-test-conv/assistant-test/image-1.png",
         original_url: image.url,
         local_path:
-          "/tmp/test/userdata/ai-chat-generated-images/v2-test-conv/assistant-test/image-1.png",
+          "/tmp/test/userdata/ai-chat-generated-images/user@example.com/v2-test-conv/assistant-test/image-1.png",
         file_name: "image-1.png",
         download_required: false,
       };
