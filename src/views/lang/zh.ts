@@ -2164,6 +2164,8 @@ export default {
     tool_name: "工具",
     tool_arguments: "参数",
     tool_result_details: "详情",
+    generated_image_alt: "AI 生成的图片",
+    open_generated_image: "打开生成的图片",
     permission_denied: "权限被拒绝。该工具不会执行。",
     permission_resume_failed: "授权后无法继续执行该工具。",
     permission_resume_no_tool_id: "缺少工具调用信息，无法继续执行。",

@@ -97,7 +97,29 @@
           </details>
         </template>
       </template>
-      <div v-else class="v2-message__content">{{ message.content }}</div>
+      <template v-else>
+        <div v-if="message.content" class="v2-message__content">
+          {{ message.content }}
+        </div>
+        <div v-if="generatedImages.length > 0" class="v2-message__images">
+          <a
+            v-for="image in generatedImages"
+            :key="image.key"
+            :href="image.src"
+            class="v2-message__image-link"
+            target="_blank"
+            rel="noreferrer"
+            :title="t('aiChatV2.open_generated_image') || 'Open generated image'"
+          >
+            <img
+              class="v2-message__image"
+              :src="image.src"
+              :alt="t('aiChatV2.generated_image_alt') || 'AI generated image'"
+              loading="lazy"
+            />
+          </a>
+        </div>
+      </template>
       <AiChatV2StreamStatus
         v-if="message.role === 'assistant' && status !== 'idle'"
         :status="status"
@@ -110,7 +132,10 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { useI18n } from "vue-i18n";
-import type { ChatV2MessageView } from "@/entityTypes/aiChatV2Types";
+import type {
+  ChatV2GeneratedImage,
+  ChatV2MessageView,
+} from "@/entityTypes/aiChatV2Types";
 import { MessageType } from "@/entityTypes/commonType";
 import SkillApprovalCard from "@/views/components/aiChat/SkillApprovalCard.vue";
 import AiChatV2StreamStatus from "./AiChatV2StreamStatus.vue";
@@ -161,6 +186,48 @@ const roleLabel = computed(() => {
 
 const status = computed<Status>(() => props.status ?? "idle");
 const disabled = computed(() => props.disabled ?? false);
+
+interface RenderableGeneratedImage {
+  key: string;
+  src: string;
+}
+
+const generatedImages = computed<RenderableGeneratedImage[]>(() => {
+  return (props.message.metadata?.generatedImages ?? [])
+    .map((image, index) => {
+      const src = resolveGeneratedImageSource(image);
+      return src ? { key: `${src}-${index}`, src } : null;
+    })
+    .filter((image): image is RenderableGeneratedImage => image !== null);
+});
+
+function resolveGeneratedImageSource(
+  image: ChatV2GeneratedImage
+): string | null {
+  if (image.url && isAllowedImageUrl(image.url)) {
+    return image.url;
+  }
+  if (image.b64_json) {
+    const mimeType =
+      image.mime_type && image.mime_type.startsWith("image/")
+        ? image.mime_type
+        : "image/png";
+    return `data:${mimeType};base64,${image.b64_json}`;
+  }
+  return null;
+}
+
+function isAllowedImageUrl(url: string): boolean {
+  if (url.startsWith("data:image/")) {
+    return true;
+  }
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "https:" || parsed.protocol === "http:";
+  } catch {
+    return false;
+  }
+}
 
 const toolResult = computed<Record<string, unknown>>(
   () => props.message.metadata?.toolResult ?? {}
@@ -242,6 +309,27 @@ const shellPreview = computed<ShellPreview | undefined>(() => {
 .v2-message__content {
   white-space: pre-wrap;
   line-height: 1.45;
+}
+.v2-message__images {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 8px;
+  margin-top: 8px;
+  max-width: min(520px, 100%);
+}
+.v2-message__image-link {
+  display: block;
+  overflow: hidden;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.7);
+}
+.v2-message__image {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 360px;
+  object-fit: contain;
 }
 .v2-message__tool-header {
   display: flex;

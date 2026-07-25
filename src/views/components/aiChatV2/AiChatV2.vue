@@ -746,7 +746,14 @@ const mergePersistedAndLiveMessages = (
     const existingIndex = indexById.get(liveMessage.id);
     if (existingIndex !== undefined) {
       const persistedMessage = merged[existingIndex];
-      if (liveMessage.content.length > persistedMessage.content.length) {
+      const liveImageCount =
+        liveMessage.metadata?.generatedImages?.length ?? 0;
+      const persistedImageCount =
+        persistedMessage.metadata?.generatedImages?.length ?? 0;
+      if (
+        liveMessage.content.length > persistedMessage.content.length ||
+        liveImageCount > persistedImageCount
+      ) {
         const metadataSource =
           liveMessage.metadata?.source ?? persistedMessage.metadata?.source;
         const mergedMetadata =
@@ -2618,20 +2625,39 @@ const onSend = async (
           ensureAssistantAdded();
           assistant.content = complete.fullContent;
           speechController.flush();
+        }
+        const generatedImages =
+          complete.images && complete.images.length > 0
+            ? complete.images
+            : undefined;
+        if (generatedImages) {
+          ensureAssistantAdded();
+          assistant.metadata = {
+            ...assistant.metadata,
+            source: "chat-v2",
+            generatedImages,
+          };
+        }
+        if (assistantAdded) {
           const currentMessages = streamMessageListController.get();
           const idx = currentMessages.findIndex((m) => m.id === assistant.id);
           console.log(
-            `[ai-chat-v2] stream complete: assistantId=${assistant.id} fullContentLen=${complete.fullContent.length} idxInMessages=${idx} assistantAdded=${assistantAdded} messagesLen=${currentMessages.length}`
+            `[ai-chat-v2] stream complete: assistantId=${assistant.id} fullContentLen=${complete.fullContent?.length ?? 0} imageCount=${generatedImages?.length ?? 0} idxInMessages=${idx} assistantAdded=${assistantAdded} messagesLen=${currentMessages.length}`
           );
           if (idx !== -1) {
             const nextMessages = [...currentMessages];
             nextMessages[idx] = {
               ...nextMessages[idx],
               content: assistant.content,
+              metadata: assistant.metadata ?? nextMessages[idx].metadata,
             };
             streamMessageListController.set(nextMessages);
           }
-        } else if (!assistantAdded || assistant.content.length === 0) {
+        }
+        if (
+          (!assistantAdded || assistant.content.length === 0) &&
+          !generatedImages
+        ) {
           const emptyMessage =
             t("aiChatV2.empty_response_error") ||
             "The AI returned an empty response. This is typically a transient server issue (rate limit, timeout, or 502). Please try sending your message again.";

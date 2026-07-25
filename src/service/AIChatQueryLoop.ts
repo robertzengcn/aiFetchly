@@ -1456,6 +1456,7 @@ export class AIChatQueryLoop {
         assistantMessageId: input.assistantMessageId,
         fullContent,
         finishReason,
+        images: finalAccumulator?.state.images,
         model: finalAccumulator?.state.model,
         responseId: finalAccumulator?.state.responseId,
         totalTokens: lastReportedUsage?.totalTokens,

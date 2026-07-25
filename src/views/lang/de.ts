@@ -2245,6 +2245,8 @@ export default {
     tool_name: "Werkzeug",
     tool_arguments: "Argumente",
     tool_result_details: "Details",
+    generated_image_alt: "KI-generiertes Bild",
+    open_generated_image: "Generiertes Bild öffnen",
     permission_denied:
       "Berechtigung verweigert. Das Werkzeug wird nicht ausgeführt.",
     permission_resume_failed:

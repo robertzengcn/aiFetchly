@@ -228,6 +228,46 @@ describe("AIChatQueryEngine", () => {
       }
     });
 
+    it("persists and emits generated images from a completed loop result", async () => {
+      const image = {
+        type: "image" as const,
+        delivery: "provider_url",
+        url: "https://example.com/generated.png",
+        mime_type: "image/png",
+        download_required: true,
+      };
+      const fakeRun = vi.fn().mockResolvedValue({
+        type: "completed" as const,
+        conversationId: "v2-test-conv",
+        assistantMessageId: "assistant-test",
+        fullContent: "Image ready",
+        finishReason: "stop",
+        model: "gpt-4",
+        images: [image],
+      });
+      const engine = createEngineWithFakeLoop(fakeRun);
+      const { sink, events } = makeEventCollector();
+
+      await engine.submitMessage({
+        request: { message: "generate an image" },
+        eventSink: sink,
+      });
+
+      expect(mockSaveAssistantMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          content: "Image ready",
+          metadata: expect.objectContaining({
+            generatedImages: [image],
+          }),
+        })
+      );
+      const completeEvent = events.find((e) => e.type === "complete");
+      expect(completeEvent).toBeDefined();
+      if (completeEvent?.type === "complete") {
+        expect(completeEvent.images).toEqual([image]);
+      }
+    });
+
     it("forwards promptTokens from the loop result to the compact agent", async () => {
       const fakeRun = vi.fn().mockResolvedValue({
         type: "completed" as const,

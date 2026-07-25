@@ -2246,6 +2246,8 @@ export default {
     tool_name: "Tool",
     tool_arguments: "Arguments",
     tool_result_details: "Details",
+    generated_image_alt: "AI generated image",
+    open_generated_image: "Open generated image",
     permission_denied: "Permission denied. The tool will not be executed.",
     permission_resume_failed:
       "Could not continue the tool after permission was granted.",

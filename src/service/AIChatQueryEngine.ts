@@ -1103,7 +1103,9 @@ export class AIChatQueryEngine {
     switch (result.type) {
       case "completed": {
         const { conversationId, assistantMessageId } = result;
-        if (result.fullContent.length > 0) {
+        const generatedImages =
+          result.images && result.images.length > 0 ? result.images : undefined;
+        if (result.fullContent.length > 0 || generatedImages) {
           await module.saveAssistantMessage({
             conversationId,
             content: result.fullContent,
@@ -1114,6 +1116,7 @@ export class AIChatQueryEngine {
               source: "chat-v2",
               openaiResponseId: result.responseId,
               finishReason: result.finishReason,
+              generatedImages,
               recovery: result.recoveryMetadata,
             },
           });
@@ -1123,6 +1126,7 @@ export class AIChatQueryEngine {
           conversationId,
           messageId: assistantMessageId,
           fullContent: result.fullContent,
+          images: generatedImages,
           model: result.model,
           finishReason: result.finishReason,
           totalTokens: result.totalTokens,

@@ -2239,6 +2239,8 @@ export default {
     tool_name: "Outil",
     tool_arguments: "Arguments",
     tool_result_details: "Détails",
+    generated_image_alt: "Image générée par l'IA",
+    open_generated_image: "Ouvrir l'image générée",
     permission_denied: "Permission refusée. L'outil ne sera pas exécuté.",
     permission_resume_failed:
       "Impossible de reprendre l'outil après l'autorisation.",

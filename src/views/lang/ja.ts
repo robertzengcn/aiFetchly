@@ -2204,6 +2204,8 @@ export default {
     tool_name: "ツール",
     tool_arguments: "引数",
     tool_result_details: "詳細",
+    generated_image_alt: "AI生成画像",
+    open_generated_image: "生成画像を開く",
     permission_denied: "権限が拒否されました。ツールは実行されません。",
     permission_resume_failed: "許可後にツールを再開できませんでした。",
     permission_resume_no_tool_id:

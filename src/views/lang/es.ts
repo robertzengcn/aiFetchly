@@ -2257,6 +2257,8 @@ export default {
     tool_name: "Herramienta",
     tool_arguments: "Argumentos",
     tool_result_details: "Detalles",
+    generated_image_alt: "Imagen generada por IA",
+    open_generated_image: "Abrir imagen generada",
     permission_denied: "Permiso denegado. La herramienta no se ejecutará.",
     permission_resume_failed:
       "No se pudo continuar la herramienta después de conceder el permiso.",

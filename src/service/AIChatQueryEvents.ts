@@ -1,5 +1,9 @@
 // src/service/AIChatQueryEvents.ts
-import type { OpenAIChatMessage, OpenAITool } from "@/api/aiChatApi";
+import type {
+  OpenAIChatImage,
+  OpenAIChatMessage,
+  OpenAITool,
+} from "@/api/aiChatApi";
 import type { ChatV2StreamRequest } from "@/entityTypes/aiChatV2Types";
 import type {
   AIChatPlanQuestionView,
@@ -149,6 +153,7 @@ export interface AIChatQueryCompleteEvent {
   conversationId: string;
   messageId: string;
   fullContent: string;
+  images?: OpenAIChatImage[];
   model?: string;
   finishReason?: string | null;
   totalTokens?: number;
@@ -239,6 +244,7 @@ export type AIChatQueryLoopResult =
       assistantMessageId: string;
       fullContent: string;
       finishReason: string;
+      images?: OpenAIChatImage[];
       model?: string;
       responseId?: string;
       /** Server-reported token usage from the final model round, if the
