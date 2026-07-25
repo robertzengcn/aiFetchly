@@ -78,3 +78,140 @@ describe("SearchModule.searchByKeywordAndEngine", () => {
     expect(events).toEqual(["ensure", "save", "log", "run"]);
   });
 });
+
+describe("database-backed module connection guards", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  test("SearchTaskModule initializes before reading search tasks", async () => {
+    vi.spyOn(SqliteDb, "getInstance").mockReturnValue({
+      connection: {
+        isInitialized: false,
+        getRepository: vi.fn().mockReturnValue({}),
+      },
+    } as unknown as SqliteDb);
+
+    const { SearchTaskModule } = await import("@/modules/SearchTaskModule");
+    const { SearchTaskModel } = await import("@/model/SearchTask.model");
+    const events: string[] = [];
+
+    vi.spyOn(SearchTaskModule.prototype, "ensureConnection").mockImplementation(
+      async (): Promise<void> => {
+        events.push("ensure");
+      }
+    );
+    vi.spyOn(SearchTaskModel.prototype, "getTaskEntity").mockImplementation(
+      async () => {
+        events.push("read");
+        return null;
+      }
+    );
+
+    const module = new SearchTaskModule();
+    await module.read(1);
+
+    expect(events).toEqual(["ensure", "read"]);
+  });
+
+  test("MCPToolModule initializes before listing enabled MCP tools", async () => {
+    vi.spyOn(SqliteDb, "getInstance").mockReturnValue({
+      connection: {
+        isInitialized: false,
+        getRepository: vi.fn().mockReturnValue({}),
+      },
+    } as unknown as SqliteDb);
+
+    const { MCPToolModule } = await import("@/modules/MCPToolModule");
+    const { MCPToolModel } = await import("@/model/MCPTool.model");
+    const events: string[] = [];
+
+    vi.spyOn(MCPToolModule.prototype, "ensureConnection").mockImplementation(
+      async (): Promise<void> => {
+        events.push("ensure");
+      }
+    );
+    vi.spyOn(MCPToolModel.prototype, "getEnabledMCPTools").mockImplementation(
+      async () => {
+        events.push("list");
+        return [];
+      }
+    );
+
+    const module = new MCPToolModule();
+    await module.getEnabledMCPTools();
+
+    expect(events).toEqual(["ensure", "list"]);
+  });
+
+  test("YellowPagesResultModule initializes before counting task results", async () => {
+    vi.spyOn(SqliteDb, "getInstance").mockReturnValue({
+      connection: {
+        isInitialized: false,
+        getRepository: vi.fn().mockReturnValue({}),
+      },
+    } as unknown as SqliteDb);
+
+    const { YellowPagesResultModule } = await import(
+      "@/modules/YellowPagesResultModule"
+    );
+    const { YellowPagesResultModel } = await import(
+      "@/model/YellowPagesResult.model"
+    );
+    const events: string[] = [];
+
+    vi.spyOn(
+      YellowPagesResultModule.prototype,
+      "ensureConnection"
+    ).mockImplementation(async (): Promise<void> => {
+      events.push("ensure");
+    });
+    vi.spyOn(
+      YellowPagesResultModel.prototype,
+      "getResultCountByTaskId"
+    ).mockImplementation(async () => {
+      events.push("count");
+      return 0;
+    });
+
+    const module = new YellowPagesResultModule();
+    await module.getResultsCountByTaskId(1);
+
+    expect(events).toEqual(["ensure", "count"]);
+  });
+
+  test("EmailSearchTaskModule initializes before reading task details", async () => {
+    vi.spyOn(SqliteDb, "getInstance").mockReturnValue({
+      connection: {
+        isInitialized: false,
+        getRepository: vi.fn().mockReturnValue({}),
+      },
+    } as unknown as SqliteDb);
+
+    const { EmailSearchTaskModule } = await import(
+      "@/modules/EmailSearchTaskModule"
+    );
+    const { EmailsearchTaskModel } = await import(
+      "@/model/EmailsearchTask.model"
+    );
+    const events: string[] = [];
+
+    vi.spyOn(
+      EmailSearchTaskModule.prototype,
+      "ensureConnection"
+    ).mockImplementation(async (): Promise<void> => {
+      events.push("ensure");
+    });
+    vi.spyOn(EmailsearchTaskModel.prototype, "getTaskById").mockImplementation(
+      async () => {
+        events.push("read");
+        return undefined;
+      }
+    );
+
+    const module = new EmailSearchTaskModule();
+    await module.getTaskDetail(1);
+
+    expect(events).toEqual(["ensure", "read"]);
+  });
+});

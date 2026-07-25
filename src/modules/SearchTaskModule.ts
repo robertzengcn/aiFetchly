@@ -12,6 +12,11 @@ export class SearchTaskModule extends BaseModule {
         this.searchTaskModel = new SearchTaskModel(this.dbpath);
     }
 
+    private async withConnection<T>(fn: () => Promise<T>): Promise<T> {
+        await this.ensureConnection();
+        return fn();
+    }
+
     /**
      * Create a new search task
      * @param enginerId The search engine ID
@@ -30,14 +35,14 @@ export class SearchTaskModule extends BaseModule {
         localBrowser?: string,
         accounts?: Array<number>
     ): Promise<number> {
-        return await this.searchTaskModel.saveSearchTask(
+        return this.withConnection(() => this.searchTaskModel.saveSearchTask(
             enginerId,
             num_pages,
             concurrency,
             notShowBrowser,
             localBrowser,
             accounts
-        );
+        ));
     }
 
     /**
@@ -46,7 +51,7 @@ export class SearchTaskModule extends BaseModule {
      * @returns The search task entity
      */
     async read(id: number): Promise<SearchTaskEntity | null> {
-        return await this.searchTaskModel.getTaskEntity(id);
+        return this.withConnection(() => this.searchTaskModel.getTaskEntity(id));
     }
 
     /**
@@ -55,7 +60,7 @@ export class SearchTaskModule extends BaseModule {
      * @param log The error log content
      */
     async updateTaskLog(taskId: number, log: string): Promise<void> {
-        return await this.searchTaskModel.updateTaskLog(taskId, log);
+        return this.withConnection(() => this.searchTaskModel.updateTaskLog(taskId, log));
     }
 
     /**
@@ -64,7 +69,7 @@ export class SearchTaskModule extends BaseModule {
      * @param log The runtime log content
      */
     async updateRuntimeLog(taskId: number, log: string): Promise<void> {
-        return await this.searchTaskModel.updateRuntimeLog(taskId, log);
+        return this.withConnection(() => this.searchTaskModel.updateRuntimeLog(taskId, log));
     }
 
     /**
@@ -73,7 +78,7 @@ export class SearchTaskModule extends BaseModule {
      * @param status The new status
      */
     async updateTaskStatus(taskId: number, status: SearchTaskStatus): Promise<void> {
-        return await this.searchTaskModel.updateTaskStatus(taskId, status);
+        return this.withConnection(() => this.searchTaskModel.updateTaskStatus(taskId, status));
     }
 
     /**
@@ -84,7 +89,7 @@ export class SearchTaskModule extends BaseModule {
      * @returns Array of search task entities
      */
     async listTasks(page: number, size: number, sort?: SortBy): Promise<SearchtaskdbEntity[]> {
-        return await this.searchTaskModel.listTask(page, size, sort);
+        return this.withConnection(() => this.searchTaskModel.listTask(page, size, sort));
     }
 
     /**
@@ -92,7 +97,7 @@ export class SearchTaskModule extends BaseModule {
      * @returns Total count of tasks
      */
     async getTaskTotal(): Promise<number> {
-        return await this.searchTaskModel.getTaskTotal();
+        return this.withConnection(() => this.searchTaskModel.getTaskTotal());
     }
 
     /**
@@ -108,6 +113,6 @@ export class SearchTaskModule extends BaseModule {
      * Truncate the database table
      */
     async truncateDatabase(): Promise<void> {
-        return await this.searchTaskModel.truncatedb();
+        return this.withConnection(() => this.searchTaskModel.truncatedb());
     }
-} 
+}
