@@ -1,4 +1,5 @@
 import type { Page } from 'puppeteer';
+import { randomInt } from 'crypto';
 import { IScraperEngine, YellowPagesTask, YellowPagesResult, PlatformSelectors, BusinessData, ScrapingProgress, ScrapingError } from '../../src/modules/interface/IScraperEngine';
 
 /**
@@ -41,14 +42,14 @@ export class MockScraperEngine implements IScraperEngine {
                 business_hours: { monday: { open: '9:00 AM', close: '5:00 PM' } },
                 description: `Mock business description ${i + 1}`,
                 rating: 4.5,
-                review_count: Math.floor(Math.random() * 100),
+                review_count: randomInt(100),
                 scraped_at: new Date(),
                 platform: task.platform,
                 raw_data: { mock: true, index: i + 1 },
                 fax_number: `+1-555-${String(i + 1).padStart(4, '0')}`,
                 contact_person: `Mock Contact ${i + 1}`,
                 year_established: 2020 + (i % 10),
-                number_of_employees: `${Math.floor(Math.random() * 100) + 1} employees`,
+                number_of_employees: `${randomInt(1, 101)} employees`,
                 payment_methods: ['Cash', 'Credit Card'],
                 specialties: ['Mock Specialty']
             });

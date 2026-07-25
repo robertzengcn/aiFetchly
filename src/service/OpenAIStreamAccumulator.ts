@@ -1,4 +1,5 @@
 import type {
+  OpenAIChatImage,
   OpenAIChatCompletionChunk,
   OpenAIStreamToolCallDelta,
   OpenAIUsage,
@@ -11,6 +12,7 @@ export interface OpenAIStreamTextState {
   finishReason?: string | null;
   sawToolCallDelta: boolean;
   usage?: OpenAIUsage;
+  images: OpenAIChatImage[];
 }
 
 export interface BufferedOpenAIToolCall {
@@ -39,6 +41,7 @@ export class OpenAIStreamAccumulator {
   private _state: OpenAIStreamTextState = {
     fullContent: "",
     sawToolCallDelta: false,
+    images: [],
   };
   private _toolCalls: Map<number, BufferedOpenAIToolCall> = new Map();
 
@@ -84,8 +87,27 @@ export class OpenAIStreamAccumulator {
           this._bufferToolCall(tc);
         }
       }
+      if (Array.isArray(delta?.images)) {
+        this._appendImages(delta.images);
+      }
     }
     return contentDelta;
+  }
+
+  private _appendImages(images: OpenAIChatImage[]): void {
+    for (const image of images) {
+      if (image.type !== "image" || (!image.url && !image.b64_json)) {
+        continue;
+      }
+      const alreadyCaptured = this._state.images.some(
+        (existing) =>
+          (image.url && existing.url === image.url) ||
+          (image.b64_json && existing.b64_json === image.b64_json)
+      );
+      if (!alreadyCaptured) {
+        this._state.images.push(image);
+      }
+    }
   }
 
   private _bufferToolCall(tc: OpenAIStreamToolCallDelta): void {

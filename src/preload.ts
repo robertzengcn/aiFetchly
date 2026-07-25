@@ -235,6 +235,17 @@ import {
   AI_PROVIDER_API_KEY_CLEAR,
   AI_CHAT_V2_GET_TOOL_APPROVAL_MODE,
   AI_CHAT_V2_SET_TOOL_APPROVAL_MODE,
+  // AiChatV2 Local Voice Channels
+  AI_CHAT_V2_VOICE_STATUS,
+  AI_CHAT_V2_VOICE_TRANSCRIBE,
+  AI_CHAT_V2_VOICE_TTS,
+  AI_CHAT_V2_VOICE_CANCEL,
+  AI_CHAT_V2_VOICE_GET_SETTINGS,
+  AI_CHAT_V2_VOICE_SET_SETTINGS,
+  AI_CHAT_V2_VOICE_MODEL_LIST,
+  AI_CHAT_V2_VOICE_MODEL_DOWNLOAD,
+  AI_CHAT_V2_VOICE_MODEL_DOWNLOAD_PROGRESS,
+  AI_CHAT_V2_VOICE_MODEL_CANCEL_DOWNLOAD,
   AI_ARTIFACT_GET,
   AI_ARTIFACT_LIST,
   // Dashboard Channels
@@ -514,6 +525,7 @@ contextBridge.exposeInMainWorld("api", {
       WEBSOCKET_EVENT,
       // Contact Extraction Progress Channel
       CONTACT_EXTRACTION_PROGRESS,
+      AI_CHAT_V2_VOICE_MODEL_DOWNLOAD_PROGRESS,
       // System Dependency Prompt (main→renderer)
       SYSTEM_DEPENDENCY_PROMPT,
       // Google Maps Scraper Channels
@@ -578,6 +590,7 @@ contextBridge.exposeInMainWorld("api", {
       WEBSOCKET_EVENT,
       // Contact Extraction Progress Channel
       CONTACT_EXTRACTION_PROGRESS,
+      AI_CHAT_V2_VOICE_MODEL_DOWNLOAD_PROGRESS,
       // System Dependency Prompt (main→renderer)
       SYSTEM_DEPENDENCY_PROMPT,
       // Google Maps Scraper Channels
@@ -608,6 +621,7 @@ contextBridge.exposeInMainWorld("api", {
       AI_EMAIL_TEMPLATE_GENERATE_COMPLETE,
       AI_EMAIL_TEMPLATE_ERROR,
       CONTACT_EXTRACTION_PROGRESS,
+      AI_CHAT_V2_VOICE_MODEL_DOWNLOAD_PROGRESS,
       GOOGLE_MAPS_SEARCH_RESULT,
       // Yandex Maps Scraper Channels
       YANDEX_MAPS_SEARCH_RESULT,
@@ -814,6 +828,16 @@ contextBridge.exposeInMainWorld("api", {
       AI_CHAT_V2_PLAN_VERSIONS,
       AI_CHAT_V2_GET_TOOL_APPROVAL_MODE,
       AI_CHAT_V2_SET_TOOL_APPROVAL_MODE,
+      // AiChatV2 Local Voice Channels (all request/response invoke handlers)
+      AI_CHAT_V2_VOICE_STATUS,
+      AI_CHAT_V2_VOICE_TRANSCRIBE,
+      AI_CHAT_V2_VOICE_TTS,
+      AI_CHAT_V2_VOICE_CANCEL,
+      AI_CHAT_V2_VOICE_GET_SETTINGS,
+      AI_CHAT_V2_VOICE_SET_SETTINGS,
+      AI_CHAT_V2_VOICE_MODEL_LIST,
+      AI_CHAT_V2_VOICE_MODEL_DOWNLOAD,
+      AI_CHAT_V2_VOICE_MODEL_CANCEL_DOWNLOAD,
       // AI Artifact Channels
       AI_ARTIFACT_GET,
       AI_ARTIFACT_LIST,

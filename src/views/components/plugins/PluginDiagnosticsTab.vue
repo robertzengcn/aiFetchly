@@ -7,7 +7,9 @@
       </v-btn>
     </div>
     <pre v-if="bundle">{{ JSON.stringify(bundle, null, 2) }}</pre>
-    <div v-else class="text-grey">No diagnostics available.</div>
+    <div v-else class="text-grey">
+      {{ t("plugins.no_diagnostics") || "No diagnostics available." }}
+    </div>
   </div>
 </template>
 

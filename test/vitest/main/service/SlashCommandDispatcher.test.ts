@@ -32,6 +32,10 @@ import { AIFetchlyConfigManager } from "@/service/aifetchlyConfig/AIFetchlyConfi
 import { AgentDefinitionRegistryImpl } from "@/service/AgentDefinitionRegistry";
 import type { SlashCommandDefinition } from "@/entityTypes/slashCommandTypes";
 import type { AgentDefinitionView } from "@/entityTypes/agentTypes";
+import type {
+  PluginSlashCommandExecutor,
+  SkillsSlashCommandProvider,
+} from "@/service/slashCommands/SlashCommandDispatcher";
 import * as dispatcherModule from "@/service/slashCommands/SlashCommandDispatcher";
 
 // --- Fixtures ----------------------------------------------------------------
@@ -80,7 +84,9 @@ describe("registerBuiltInSlashCommands (CMD-03)", () => {
         "built-in:command:agents",
         "built-in:command:clear",
         "built-in:command:help",
+        "built-in:command:plugin",
         "built-in:command:reload-config",
+        "built-in:command:skills",
         "built-in:command:status",
       ].sort()
     );
@@ -99,6 +105,16 @@ describe("registerBuiltInSlashCommands (CMD-03)", () => {
       id: "built-in:command:agents",
       name: "agents",
       descMatch: /agents/i,
+    },
+    {
+      id: "built-in:command:plugin",
+      name: "plugin",
+      descMatch: /plugin marketplaces|install plugins/i,
+    },
+    {
+      id: "built-in:command:skills",
+      name: "skills",
+      descMatch: /skills|tools/i,
     },
   ])(
     "built-in $id has stable shape (type=local, enabled, no trust)",
@@ -149,7 +165,7 @@ describe("SlashCommandDispatcher.dispatch (CMD-04, CMD-08, DX-02)", () => {
     expect(r.content).toMatch(/phase 14|phase-14/i);
   });
 
-  it("returns show_result for /help listing the four built-in command names", async () => {
+  it("returns show_result for /help listing the built-in command names", async () => {
     const { dispatcher } = buildStack();
     const r = await dispatcher.dispatch({
       conversationId: "conv-1",
@@ -164,6 +180,8 @@ describe("SlashCommandDispatcher.dispatch (CMD-04, CMD-08, DX-02)", () => {
     expect(r.content).toContain("/clear");
     expect(r.content).toContain("/status");
     expect(r.content).toContain("/reload-config");
+    expect(r.content).toContain("/plugin");
+    expect(r.content).toContain("/skills");
   });
 
   it("returns show_result for /clear with guidance content (renderer clears)", async () => {
@@ -202,6 +220,63 @@ describe("SlashCommandDispatcher.dispatch (CMD-04, CMD-08, DX-02)", () => {
     expect(r.content).toMatch(/Reloaded/i);
     expect(r.content).toMatch(/Commands\s*:/i);
     expect(r.content).toMatch(/Diagnostics\s*:/i);
+  });
+
+  it("returns show_result for /plugin and passes raw subcommand args to the plugin executor", async () => {
+    const { registry, manager } = buildStack();
+    const executor: PluginSlashCommandExecutor = {
+      execute: vi.fn().mockResolvedValue("Plugin command completed."),
+    };
+    const dispatcher = new SlashCommandDispatcher(
+      registry,
+      manager,
+      executor
+    );
+    const r = await dispatcher.dispatch({
+      conversationId: "conv-1",
+      rawInput:
+        "/plugin marketplace add https://example.com/marketplace.json --overwrite",
+    });
+    expect(executor.execute).toHaveBeenCalledWith(
+      "marketplace add https://example.com/marketplace.json --overwrite"
+    );
+    expect(r.status).toBe(true);
+    if (!r.status || r.action !== "show_result") {
+      throw new Error("expected show_result");
+    }
+    expect(r.commandId).toBe("built-in:command:plugin");
+    expect(r.content).toBe("Plugin command completed.");
+  });
+
+  it("returns show_result for /skills with the AI tool catalog breakdown", async () => {
+    const { registry, manager } = buildStack();
+    const skillsProvider: SkillsSlashCommandProvider = {
+      render: vi
+        .fn<[], Promise<string>>()
+        .mockResolvedValue(
+          "Available skills (1):\n\n1. `file_read` - Read a file\n\nTool catalog: 1 total"
+        ),
+    };
+    const dispatcher = new SlashCommandDispatcher(
+      registry,
+      manager,
+      undefined,
+      skillsProvider
+    );
+
+    const r = await dispatcher.dispatch({
+      conversationId: "conv-1",
+      rawInput: "/skills",
+    });
+
+    expect(skillsProvider.render).toHaveBeenCalledTimes(1);
+    expect(r.status).toBe(true);
+    if (!r.status || r.action !== "show_result") {
+      throw new Error("expected show_result");
+    }
+    expect(r.commandId).toBe("built-in:command:skills");
+    expect(r.content).toContain("Available skills");
+    expect(r.content).toContain("Tool catalog:");
   });
 
   it("returns {status:false, msg} for an unknown command (CMD-08)", async () => {
@@ -299,6 +374,7 @@ describe("SlashCommandModule (three-layer Module)", () => {
     expect(names).toContain("help");
     expect(names).toContain("clear");
     expect(names).toContain("status");
+    expect(names).toContain("skills");
     expect(names).toContain("reload-config");
   });
 
@@ -516,6 +592,25 @@ const workspaceAgent: AgentDefinitionView = {
   health: "healthy",
 };
 
+const claudePluginAgent: AgentDefinitionView = {
+  id: "ecc:code-explorer",
+  name: "code-explorer",
+  description: "Analyzes codebases and recommends integration points.",
+  version: 1,
+  systemPrompt: "You analyze code.",
+  allowedTools: ["file_read", "grep_files", "glob_files"],
+  mode: "specialist",
+  maxToolCalls: 8,
+  maxRuntimeMs: 300000,
+  maxContinueCalls: 8,
+  outputSchema: {},
+  status: "active",
+  source: "plugin",
+  pluginName: "ecc",
+  pluginComponentPath: "agents/code-explorer.md",
+  health: "healthy",
+};
+
 describe("SlashCommandDispatcher /agents command (Phase 16 / Plan 03, D-AgentsList)", () => {
   it("returns show_result for /agents and lists the built-in agent", async () => {
     const { dispatcher } = buildStack();
@@ -560,6 +655,25 @@ describe("SlashCommandDispatcher /agents command (Phase 16 / Plan 03, D-AgentsLi
     expect(content).toMatch(/Built-in/);
     expect(content).toMatch(/User/);
     expect(content).toMatch(/Workspace/);
+  });
+
+  it("labels Claude plugin agents as plugin even when IDs use pluginName:name format", async () => {
+    const { dispatcher, manager } = buildStack();
+    manager
+      .getAgentRegistry()
+      .replaceSource("plugin:ecc", [claudePluginAgent]);
+
+    const r = await dispatcher.dispatch({
+      conversationId: "conv-1",
+      rawInput: "/agents",
+    });
+    if (!r.status || r.action !== "show_result") {
+      throw new Error("expected show_result");
+    }
+
+    expect(r.content).toContain(
+      "ecc:code-explorer — code-explorer: Analyzes codebases and recommends integration points. [Plugin]"
+    );
   });
 
   it("does not crash on an empty registry (built-ins cleared)", async () => {

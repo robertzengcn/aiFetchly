@@ -167,4 +167,34 @@ describe("AiChatV2 slash command dispatch", () => {
     );
     expect(streamChatV2Message).not.toHaveBeenCalled();
   });
+
+  it("streams a prompt command whose expansion starts with `/` instead of re-dispatching it (TODO #3)", async () => {
+    vi.mocked(dispatchSlashCommand).mockResolvedValueOnce({
+      status: true,
+      action: "submit_prompt",
+      commandId: "plugin:p:command:slashexpand",
+      // Expanded body deliberately starts with `/` — must stream as a prompt,
+      // NOT be intercepted as a second slash command.
+      prompt: "/expanded prompt body that begins with a slash",
+    });
+    const wrapper = mountChat();
+    await flushPromises();
+
+    await wrapper.find('[data-testid="send-help"]').trigger("click");
+    await flushPromises();
+
+    // The original manual command dispatched exactly once...
+    expect(dispatchSlashCommand).toHaveBeenCalledTimes(1);
+    expect(dispatchSlashCommand).toHaveBeenCalledWith({
+      conversationId: expect.stringMatching(/^v2-/),
+      rawInput: "/help",
+    });
+    // ...and the expanded prompt was submitted to the Chat V2 stream exactly
+    // once, using the expanded body as the message — never re-dispatched.
+    expect(streamChatV2Message).toHaveBeenCalledTimes(1);
+    const streamCall = vi.mocked(streamChatV2Message).mock.calls[0];
+    expect(streamCall?.[0]).toMatchObject({
+      message: "/expanded prompt body that begins with a slash",
+    });
+  });
 });

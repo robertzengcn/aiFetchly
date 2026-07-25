@@ -486,6 +486,24 @@ async function execute(
     return result;
   }
 
+  if (!(await SkillRegistry.isSkillEnabledForRuntime(skillName))) {
+    const result: ToolExecutionResult = {
+      tool_call_id: toolCallId,
+      tool_name: name,
+      success: false,
+      result: { error: `Tool is disabled: ${name}` },
+      execution_time_ms: Date.now() - startTime,
+    };
+    auditLog(
+      name,
+      resolvedArgs,
+      false,
+      result.execution_time_ms,
+      "Tool disabled"
+    );
+    return result;
+  }
+
   // 2. Sanitize input (FR-003)
   const validation = validateArgs(resolvedArgs);
   if (!validation.valid) {

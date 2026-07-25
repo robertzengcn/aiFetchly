@@ -65,4 +65,13 @@ export interface IProxyApi {
   getProxiesByHostPortPairs(
     pairs: ReadonlyArray<{ host: string; port: string }>
   ): Promise<ProxyEntity[]>;
+
+  /**
+   * Return proxies matching any of the provided numeric ids, in one query.
+   * Replaces N per-id getProxyDetail round-trips when building summaries
+   * for a set of proxies (proxy_check results, remove-failed candidates).
+   * @param ids - proxy ids to look up
+   * @returns Promise<ProxyEntity[]> - matching proxies (order not guaranteed)
+   */
+  getProxiesByIds(ids: readonly number[]): Promise<ProxyEntity[]>;
 }

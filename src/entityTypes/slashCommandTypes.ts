@@ -118,9 +118,12 @@ export interface SlashCommandDispatchRequest {
  *
  * Variants:
  *   - `submit_prompt`: the renderer submits the returned prompt via the
- *      EXISTING AI_CHAT_V2_STREAM channel (which gates USER_AI_ENABLED
- *      first — verified at ai-chat-v2-ipc.ts handleStream lines 385-393).
- *      This is TRS-05 Strategy A: no duplicate gate in the dispatcher.
+ *      EXISTING AI_CHAT_V2_STREAM channel, which is gated by the provider-
+ *      aware Chat V2 availability check (canUseChat() in ai-chat-v2-ipc.ts
+ *      handleStream) — run first, fail-closed, before the request is parsed.
+ *      Hosted chat requires hosted entitlement; local-provider chat requires
+ *      a valid local-provider config. This is TRS-05 Strategy A: no duplicate
+ *      gate in the dispatcher.
  *   - `show_result`: built-in / local command result. The renderer renders
  *      the content directly (no AI call).
  *   - `{status:false, msg}`: unknown / disabled / invalid / boundary-case

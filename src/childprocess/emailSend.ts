@@ -3,6 +3,7 @@ import nodemailer from "nodemailer";
 import { convertVariableInTemplate } from "@/views/utils/emailFun";
 import { EmailTemplatePreviewdata } from "@/entityTypes/emailmarketingType";
 import { EmailService } from "@/modules/lib/emailService";
+import { randomInt } from "crypto";
 import {
   EmailServiceEntitydata,
   EmailRequestData,
@@ -175,7 +176,7 @@ export class EmailSend {
   }
   // Function to get a random item from an array
   private getRandomItem<Type>(array: Array<Type>): Type {
-    const randomIndex = Math.floor(Math.random() * array.length);
+    const randomIndex = randomInt(array.length);
     return array[randomIndex];
   }
 }

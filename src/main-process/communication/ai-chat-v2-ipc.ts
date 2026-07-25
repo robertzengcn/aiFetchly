@@ -432,6 +432,7 @@ function createEventSink(event: IpcEventLike): AIChatQueryEventSink {
             conversationId: e.conversationId,
             messageId: e.messageId,
             fullContent: e.fullContent,
+            images: e.images,
             model: e.model,
             finishReason: e.finishReason,
             promptTokens: e.promptTokens,

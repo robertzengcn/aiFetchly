@@ -752,16 +752,13 @@ export class ProxyAiTools {
       expectedCount,
     });
 
-    // Load redacted summaries for each checked proxy.
-    const detailMap = new Map<number, SafeProxySummary | null>();
-    for (const item of batch.results) {
-      if (!detailMap.has(item.proxyId)) {
-        const detail = await module.getProxyDetail(item.proxyId);
-        if (detail.status && detail.data && detail.data.id !== undefined) {
-          detailMap.set(item.proxyId, summaryFromDetail(detail.data));
-        } else {
-          detailMap.set(item.proxyId, null);
-        }
+    // Load redacted summaries for each checked proxy in one batch query
+    // instead of one getProxyDetail round-trip per result.
+    const uniqueProxyIds = [...new Set(batch.results.map((r) => r.proxyId))];
+    const summaryById = new Map<number, SafeProxySummary>();
+    for (const proxy of await module.getProxiesByIds(uniqueProxyIds)) {
+      if (proxy.id !== undefined) {
+        summaryById.set(proxy.id, summaryFromDetail(proxy));
       }
     }
 
@@ -771,7 +768,7 @@ export class ProxyAiTools {
     let googleFailCount = 0;
     const results: ProxyCheckItemResult[] = [];
     for (const item of batch.results) {
-      const proxy = detailMap.get(item.proxyId);
+      const proxy = summaryById.get(item.proxyId);
       if (proxy) {
         results.push({
           proxy,
@@ -832,10 +829,9 @@ export class ProxyAiTools {
     const limitedIds = candidateIds.slice(0, input.max_delete);
 
     const candidates: SafeProxySummary[] = [];
-    for (const id of limitedIds) {
-      const detail = await module.getProxyDetail(id);
-      if (detail.status && detail.data && detail.data.id !== undefined) {
-        candidates.push(summaryFromDetail(detail.data));
+    for (const proxy of await module.getProxiesByIds(limitedIds)) {
+      if (proxy.id !== undefined) {
+        candidates.push(summaryFromDetail(proxy));
       }
     }
 

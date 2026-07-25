@@ -1433,7 +1433,9 @@ function truncateMessage(text: string, maxLength: number): string {
 async function handleCopyMessage(content: string, messageId: string) {
   try {
     // Copy plain text content (strip HTML tags if any)
-    const textToCopy = content.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').trim();
+    const tempDiv = document.createElement('div');
+    tempDiv.innerHTML = content;
+    const textToCopy = (tempDiv.textContent || tempDiv.innerText || '').trim();
     
     await navigator.clipboard.writeText(textToCopy);
     
@@ -1448,7 +1450,9 @@ async function handleCopyMessage(content: string, messageId: string) {
     console.error('Failed to copy message:', error);
     // Fallback for older browsers
     const textarea = document.createElement('textarea');
-    textarea.value = content.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').trim();
+    const tempDiv = document.createElement('div');
+    tempDiv.innerHTML = content;
+    textarea.value = (tempDiv.textContent || tempDiv.innerText || '').trim();
     textarea.style.position = 'fixed';
     textarea.style.opacity = '0';
     document.body.appendChild(textarea);

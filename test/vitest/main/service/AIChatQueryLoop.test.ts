@@ -8,6 +8,7 @@ import type {
   OpenAIChatCompletionChunk,
   OpenAIChatCompletionRequest,
   OpenAIChatMessage,
+  OpenAITool,
 } from "@/api/aiChatApi";
 import { HookRegistry } from "@/service/hooks/HookRegistry";
 import { setHookAuditLoggerForTests } from "@/service/hooks/HookAuditService";
@@ -60,6 +61,17 @@ function makeToolCallChunk(
   };
 }
 
+function tool(name: string): OpenAITool {
+  return {
+    type: "function",
+    function: {
+      name,
+      description: "test tool",
+      parameters: { type: "object", properties: {} },
+    },
+  };
+}
+
 async function waitForCondition(
   predicate: () => boolean,
   timeoutMs = 1000
@@ -94,6 +106,49 @@ describe("AIChatQueryLoop", () => {
         type: "function",
         function: { name: "SubmitPlanForApproval" },
       });
+    });
+
+    it("forces shell_execute for direct file removal requests when exposed", () => {
+      expect(
+        resolveToolChoiceForRound({
+          message: "rm the file manual-delete-test.txt",
+          hasTools: true,
+          isPlanMode: false,
+          round: 0,
+          startRound: 0,
+          exposedToolNames: ["file_read", "shell_execute"],
+        })
+      ).toEqual({
+        type: "function",
+        function: { name: "shell_execute" },
+      });
+
+      expect(
+        resolveToolChoiceForRound({
+          message: "delete the file manual-delete-test.txt",
+          hasTools: true,
+          isPlanMode: false,
+          round: 0,
+          startRound: 0,
+          exposedToolNames: ["file_read", "shell_execute"],
+        })
+      ).toEqual({
+        type: "function",
+        function: { name: "shell_execute" },
+      });
+    });
+
+    it("does not force shell_execute when the shell tool is not exposed", () => {
+      expect(
+        resolveToolChoiceForRound({
+          message: "rm the file manual-delete-test.txt",
+          hasTools: true,
+          isPlanMode: false,
+          round: 0,
+          startRound: 0,
+          exposedToolNames: ["file_read"],
+        })
+      ).toBe("auto");
     });
   });
 
@@ -262,6 +317,129 @@ describe("AIChatQueryLoop", () => {
         { q: "test" },
         expect.objectContaining({ toolCallId: "call-1" })
       );
+    });
+
+    it("retries when provider emits a tool-call marker as plain text", async () => {
+      const events: Array<{ type: string; message?: string }> = [];
+      let callCount = 0;
+      const fakeStream = vi.fn(
+        async (
+          _req: unknown,
+          onChunk: (c: OpenAIChatCompletionChunk) => void
+        ) => {
+          if (callCount === 0) {
+            callCount += 1;
+            onChunk(makeChunk("user:tool_call::def_tool_call:0", "stop"));
+            return;
+          }
+          if (callCount === 1) {
+            callCount += 1;
+            onChunk(
+              makeToolCallChunk(
+                "call-1",
+                "file_edit",
+                JSON.stringify({
+                  path: "manual-tool-test.txt",
+                  old_string: "manual test",
+                  new_string: "manual test 20260723",
+                })
+              )
+            );
+            return;
+          }
+          onChunk(makeChunk("Done", "stop"));
+        }
+      );
+      const fakeExecute = vi.fn().mockResolvedValue({
+        tool_call_id: "call-1",
+        tool_name: "file_edit",
+        success: true,
+        result: { path: "manual-tool-test.txt" },
+        execution_time_ms: 10,
+      });
+      const loop = new AIChatQueryLoop({
+        streamChatCompletion: fakeStream,
+        executeTool: fakeExecute,
+        getSkillDefinition: vi.fn().mockReturnValue(undefined),
+      });
+      const input: AIChatQueryLoopInput = {
+        conversationId: "v2-test",
+        assistantMessageId: "a-1",
+        messages: [],
+        request: {
+          message: 'update file content with "manual test 20260723"',
+        },
+        openAITools: [tool("file_edit")],
+        abortController: new AbortController(),
+        eventSink: {
+          emit: (e) => {
+            if (e.type === "recovery_status") {
+              events.push({ type: e.type, message: e.message });
+            }
+          },
+        },
+        startRound: 0,
+        isActiveTurn: () => true,
+      };
+
+      const result = await loop.run(input);
+
+      expect(result.type).toBe("completed");
+      if (result.type === "completed") {
+        expect(result.fullContent).toBe("Done");
+      }
+      expect(fakeStream).toHaveBeenCalledTimes(3);
+      expect(fakeExecute).toHaveBeenCalledWith(
+        "file_edit",
+        {
+          path: "manual-tool-test.txt",
+          old_string: "manual test",
+          new_string: "manual test 20260723",
+        },
+        expect.objectContaining({ toolCallId: "call-1" })
+      );
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "recovery_status",
+          message: "Retrying malformed tool-call marker response",
+        })
+      );
+    });
+
+    it("sends forced shell_execute tool_choice for first-round file deletion", async () => {
+      const captured: OpenAIChatCompletionRequest[] = [];
+      const fakeStream = vi.fn(
+        async (
+          req: OpenAIChatCompletionRequest,
+          onChunk: (c: OpenAIChatCompletionChunk) => void
+        ) => {
+          captured.push(req);
+          onChunk(makeChunk("Done", "stop"));
+        }
+      );
+      const loop = new AIChatQueryLoop({
+        streamChatCompletion: fakeStream,
+        executeTool: vi.fn(),
+        getSkillDefinition: vi.fn().mockReturnValue(undefined),
+      });
+      const input: AIChatQueryLoopInput = {
+        conversationId: "v2-test",
+        assistantMessageId: "a-1",
+        messages: [],
+        request: { message: "rm the file manual-delete-test.txt" },
+        openAITools: [tool("file_read"), tool("shell_execute")],
+        abortController: new AbortController(),
+        eventSink: { emit: vi.fn() },
+        startRound: 0,
+        isActiveTurn: () => true,
+      };
+
+      await loop.run(input);
+
+      expect(captured[0].tool_choice).toEqual({
+        type: "function",
+        function: { name: "shell_execute" },
+      });
     });
 
     it("waits for tool-call persistence to flush before executing the tool", async () => {

@@ -8,6 +8,8 @@ import type { SlashCommandView } from "@/entityTypes/slashCommandTypes";
 
 vi.mock("@/views/api/slashCommands", () => ({
   listSlashCommands: vi.fn(),
+  // The composer subscribes to config-changed events (PRD Problem 2).
+  onAifetchlyConfigChanged: vi.fn().mockReturnValue(() => undefined),
 }));
 
 const i18n = createI18n({
@@ -98,9 +100,7 @@ describe("AiChatV2Composer slash command selection", () => {
   it("closes suggestions after selecting a command and does not immediately reopen them", async () => {
     const wrapper = mountComposer();
 
-    await wrapper
-      .find('[data-testid="composer-input"]')
-      .setValue("/");
+    await wrapper.find('[data-testid="composer-input"]').setValue("/");
     await vi.advanceTimersByTimeAsync(130);
     await flushPromises();
     expect(wrapper.find(".slash-suggestions").exists()).toBe(true);

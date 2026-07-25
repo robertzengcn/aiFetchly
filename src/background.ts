@@ -1,7 +1,7 @@
 "use strict";
 import "reflect-metadata";
 // import {ipcMain as ipc} from 'electron-better-ipc';
-import { app, BrowserWindow, Menu, dialog, shell } from "electron";
+import { app, BrowserWindow, Menu, dialog, shell, protocol, net } from "electron";
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const autoUpdater = require("electron").autoUpdater;
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -21,6 +21,7 @@ import { FileOperationTracker } from "@/service/FileOperationTracker";
 import { registerBuiltinHooks } from "@/service/hooks/builtinHooks";
 import { isAppTrustedOrigin } from "@/service/OriginTrust";
 import * as path from "path";
+import { pathToFileURL } from "url";
 import { Token } from "@/modules/token";
 import { MenuManager } from "@/main-process/menu/MenuManager";
 import {
@@ -65,12 +66,30 @@ import {
   urlContainsTokenParams as deepLinkUrlContainsTokenParams,
   isValidDeepLinkOrigin as deepLinkIsValidDeepLinkOrigin,
 } from "@/modules/deepLinkSecurity";
+import {
+  AI_CHAT_GENERATED_IMAGE_PROTOCOL,
+  resolveGeneratedImageProtocolPath,
+} from "@/service/AIChatGeneratedImageProtocol";
 // import { RAGIpcHandlers } from '@/main-process/ragIpcHandlers';
 // import { createProtocol } from 'electron';
 const isDevelopment = process.env.NODE_ENV !== "production";
 declare const MAIN_WINDOW_VITE_DEV_SERVER_URL: string;
 declare const MAIN_WINDOW_VITE_NAME: string;
 // import { safeStorage } from 'electron';
+
+if (!app.isReady()) {
+  protocol.registerSchemesAsPrivileged([
+    {
+      scheme: AI_CHAT_GENERATED_IMAGE_PROTOCOL,
+      privileges: {
+        standard: true,
+        secure: true,
+        supportFetchAPI: true,
+        corsEnabled: true,
+      },
+    },
+  ]);
+}
 
 // const { ipcRenderer: ipc } = require('electron-better-ipc');
 // const { ipcMain } = require("electron");
@@ -149,6 +168,22 @@ if ((app as any).isPackaged) {
 
 log.info("Application starting...");
 
+if (
+  isDevelopment &&
+  process.platform === "linux" &&
+  process.env.LIBGL_ALWAYS_INDIRECT === "1"
+) {
+  log.info("[dev] Disabling GPU acceleration for indirect GL session");
+  const appWithGpuControls = app as typeof app & {
+    disableHardwareAcceleration: () => void;
+    commandLine: {
+      appendSwitch: (switchName: string) => void;
+    };
+  };
+  appWithGpuControls.disableHardwareAcceleration();
+  appWithGpuControls.commandLine.appendSwitch("disable-gpu");
+}
+
 // Handle uncaught exceptions — user-facing dialog only.
 // Crash record persistence is handled by __crashReporter (registered above,
 // which runs first as it was registered earlier).
@@ -170,6 +205,24 @@ let win: BrowserWindow | null;
  * (NFR-1: keep bridge code out of production startup paths via dynamic import).
  */
 let devBrowserBridge: { stop(): Promise<void> } | null = null;
+let generatedImageProtocolHandlerRegistered = false;
+
+function registerGeneratedImageProtocolHandler(): void {
+  if (generatedImageProtocolHandlerRegistered) {
+    return;
+  }
+  protocol.handle(AI_CHAT_GENERATED_IMAGE_PROTOCOL, async (request) => {
+    const filePath = resolveGeneratedImageProtocolPath(
+      request.url,
+      app.getPath("userData")
+    );
+    if (!filePath) {
+      return new Response("Generated image not found.", { status: 404 });
+    }
+    return net.fetch(pathToFileURL(filePath).toString());
+  });
+  generatedImageProtocolHandlerRegistered = true;
+}
 
 function registerMenuBarShortcuts(mainWindow: BrowserWindow): void {
   if (process.platform === "darwin") {
@@ -202,6 +255,71 @@ function registerMenuBarShortcuts(mainWindow: BrowserWindow): void {
     }
     setMenuBarHidden(false);
   });
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function isConnectionRefusedError(error: unknown): boolean {
+  if (error instanceof Error && error.message.includes("ERR_CONNECTION_REFUSED")) {
+    return true;
+  }
+
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+
+  const maybeElectronError = error as { code?: unknown; errno?: unknown };
+  return (
+    maybeElectronError.code === "ERR_CONNECTION_REFUSED" ||
+    maybeElectronError.errno === -102
+  );
+}
+
+function isBrowserWindowDestroyed(mainWindow: BrowserWindow): boolean {
+  const destroyableWindow = mainWindow as BrowserWindow & {
+    isDestroyed?: () => boolean;
+  };
+
+  return (
+    typeof destroyableWindow.isDestroyed === "function" &&
+    destroyableWindow.isDestroyed()
+  );
+}
+
+async function loadDevServerUrl(
+  mainWindow: BrowserWindow,
+  devServerUrl: string
+): Promise<void> {
+  const maxAttempts = 20;
+  const retryDelayMs = 250;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      if (isBrowserWindowDestroyed(mainWindow)) {
+        return;
+      }
+
+      await mainWindow.loadURL(devServerUrl);
+      return;
+    } catch (error) {
+      const shouldRetry =
+        attempt < maxAttempts && isConnectionRefusedError(error);
+
+      if (!shouldRetry) {
+        throw error;
+      }
+
+      console.warn(
+        `Vite dev server is not ready at ${devServerUrl}; retrying ` +
+          `${attempt}/${maxAttempts}`
+      );
+      await delay(retryDelayMs);
+    }
+  }
 }
 
 function initialize() {
@@ -553,7 +671,7 @@ function initialize() {
       // Load the url of the dev server if in development mode
       try {
         if (win && !(win as any).isDestroyed()) {
-          await (win as any).loadURL(MAIN_WINDOW_VITE_DEV_SERVER_URL as string);
+          await loadDevServerUrl(win, MAIN_WINDOW_VITE_DEV_SERVER_URL);
           if (!process.env.IS_TEST) (win as any).webContents.openDevTools();
         }
       } catch (error) {
@@ -766,6 +884,8 @@ function initialize() {
   // initialization and is ready to create browser windows.
   // Some APIs can only be used after this event occurs.
   (app as any).whenReady().then(async () => {
+    registerGeneratedImageProtocolHandler();
+
     // Configure Content Security Policy (must be called after app is ready)
     configureContentSecurityPolicy();
 
@@ -966,6 +1086,30 @@ function initialize() {
 function configureContentSecurityPolicy() {
   const defaultSession = session.defaultSession;
 
+  // Voice feature (PRD §16): allow microphone (audio) capture; deny camera
+  // (video). Other permissions use a minimal allowlist instead of blanket-
+  // approving, so unexpected requests (geolocation, midi, etc.) are denied.
+  const ALLOWED_PERMISSIONS = new Set([
+    "clipboard-sanitized",
+    "clipboard-read",
+    "fullscreen",
+    "window-management",
+    "openExternal",
+  ]);
+  defaultSession.setPermissionRequestHandler(
+    (_wc, permission, callback, details) => {
+      if (permission === "media") {
+        const wantsVideo =
+          (
+            details as { mediaTypes?: string[] } | undefined
+          )?.mediaTypes?.includes("video") ?? false;
+        callback(!wantsVideo);
+        return;
+      }
+      callback(ALLOWED_PERMISSIONS.has(permission));
+    }
+  );
+
   // Set CSP based on environment
   // In development, we need 'unsafe-eval' for Vite's HMR
   // In production, we can be more restrictive
@@ -974,7 +1118,7 @@ function configureContentSecurityPolicy() {
         "default-src 'self'",
         "script-src 'self' 'unsafe-eval' 'unsafe-inline' http://localhost:* https://localhost:*",
         "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-        "img-src 'self' data: https: http:",
+        `img-src 'self' data: https: http: ${AI_CHAT_GENERATED_IMAGE_PROTOCOL}:`,
         "font-src 'self' data: https://fonts.googleapis.com https://fonts.gstatic.com",
         "connect-src 'self' http://localhost:* https://localhost:* https: http: https://fonts.googleapis.com https://fonts.gstatic.com",
         "frame-src 'self'",
@@ -987,7 +1131,7 @@ function configureContentSecurityPolicy() {
         "default-src 'self'",
         "script-src 'self'",
         "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-        "img-src 'self' data: https:",
+        `img-src 'self' data: https: ${AI_CHAT_GENERATED_IMAGE_PROTOCOL}:`,
         "font-src 'self' data: https://fonts.googleapis.com https://fonts.gstatic.com",
         "connect-src 'self' https: https://fonts.googleapis.com https://fonts.gstatic.com",
         "frame-src 'self'",
@@ -1013,8 +1157,12 @@ function configureContentSecurityPolicy() {
   );
 }
 
-function makeSingleInstance() {
+function makeSingleInstance(): void {
   if ((process as NodeJS.Process & { mas: boolean }).mas) return;
+  if (isDevelopment) {
+    log.info("[dev] Skipping single-instance lock");
+    return;
+  }
 
   const gotThelock = (app as any).requestSingleInstanceLock();
   if (!gotThelock) {

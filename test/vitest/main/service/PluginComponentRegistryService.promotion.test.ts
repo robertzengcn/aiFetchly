@@ -23,6 +23,7 @@ import type { PluginManifest } from "@/entityTypes/pluginTypes";
 import { CommandRegistry } from "@/service/slashCommands/CommandRegistry";
 import { AgentDefinitionRegistryImpl } from "@/service/AgentDefinitionRegistry";
 import { PluginComponentRegistryService } from "@/service/PluginComponentRegistryService";
+import { PluginCommandDiagnosticsStore } from "@/service/pluginCompat/PluginCommandDiagnosticsStore";
 import { PluginLoaderService } from "@/service/PluginLoaderService";
 import { PluginRuntimeCache } from "@/service/PluginRuntimeCache";
 import { UserPluginAutoInstallService } from "@/service/UserPluginAutoInstallService";
@@ -47,6 +48,7 @@ function makePlugin(opts: {
   name: string;
   installPath: string;
   enabled?: boolean;
+  manifest?: PluginManifest;
 }): LoadedPlugin {
   return {
     name: opts.name,
@@ -55,7 +57,9 @@ function makePlugin(opts: {
     source: "local",
     enabled: opts.enabled ?? true,
     installPath: opts.installPath,
-    manifest: { name: opts.name, version: "1.0.0" } as PluginManifest,
+    manifest:
+      opts.manifest ??
+      ({ name: opts.name, version: "1.0.0" } as PluginManifest),
     skills: [],
     mcpServers: [],
     hooks: [],
@@ -83,6 +87,9 @@ You are a careful researcher.
 describe("PluginComponentRegistryService.promotePluginCommandsAndAgents (SKL-02)", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    // The diagnostics store is a process-wide singleton — clear it between
+    // tests so entries from one case never leak into another.
+    PluginCommandDiagnosticsStore.clearAll();
   });
 
   it("promotes an enabled plugin's commands and agents under plugin:<name> (D-PluginBadge)", async () => {
@@ -228,6 +235,90 @@ describe("PluginComponentRegistryService.promotePluginCommandsAndAgents (SKL-02)
     expect(diagnostics[0].sourceId).toBe("plugin:p");
     expect(commandRegistry.getByName("good")).not.toBeNull();
     expect(commandRegistry.getByName("bad")).toBeNull();
+
+    // The same diagnostics are now persisted per-plugin so the diagnostics
+    // bundle can surface WHY individual command files were skipped.
+    const stored = PluginCommandDiagnosticsStore.get("p");
+    expect(stored.length).toBe(diagnostics.length);
+    expect(stored[0].sourceId).toBe("plugin:p");
+    expect(stored[0].filePath).toBe(diagnostics[0].filePath);
+    expect(stored[0].code).toBe(diagnostics[0].code);
+    // Store returns defensive copies — mutating the snapshot must not affect
+    // subsequent reads (immutability rule).
+    (stored[0] as { message: string }).message = "tampered";
+    expect(PluginCommandDiagnosticsStore.get("p")[0].message).not.toBe(
+      "tampered"
+    );
+  });
+
+  it("persists command diagnostics from invalid Claude declarations in the store", async () => {
+    const install = makeTmpDir();
+    const commandRegistry = new CommandRegistry();
+    const claudePlugin: LoadedPlugin = {
+      name: "claude-bad",
+      displayName: "claude-bad",
+      version: "1.0.0",
+      source: "local",
+      enabled: true,
+      installPath: install,
+      manifest: {
+        name: "claude-bad",
+        version: "1.0.0",
+        description: "",
+        format: "claude",
+        [CLAUDE_OPAQUE_KEY]: {
+          commands: {
+            // Both source and content is invalid → diagnostic.
+            dup: { source: "./a.md", content: "x" },
+          },
+        },
+      } as unknown as PluginManifest,
+      skills: [],
+      mcpServers: [],
+      hooks: [],
+      errors: [],
+    };
+
+    const { diagnostics } =
+      await PluginComponentRegistryService.promotePluginCommandsAndAgents(
+        commandRegistry,
+        new AgentDefinitionRegistryImpl(),
+        [claudePlugin]
+      );
+
+    expect(diagnostics.length).toBeGreaterThan(0);
+    const stored = PluginCommandDiagnosticsStore.get("claude-bad");
+    expect(stored.length).toBe(diagnostics.length);
+    expect(stored.some((d) => d.code === "claude-frontmatter-invalid")).toBe(
+      true
+    );
+  });
+
+  it("reconciling a disabled plugin clears its cached command diagnostics", async () => {
+    const install = makeTmpDir();
+    writeFile(
+      install,
+      "commands/bad.md",
+      "---\nname: bad\ndescription: ok\n---\nbody\n"
+    );
+
+    const commandRegistry = new CommandRegistry();
+    // First pass: enabled plugin with an invalid command records a diagnostic.
+    await PluginComponentRegistryService.promotePluginCommandsAndAgents(
+      commandRegistry,
+      new AgentDefinitionRegistryImpl(),
+      [makePlugin({ name: "flip", installPath: install })]
+    );
+    expect(PluginCommandDiagnosticsStore.get("flip").length).toBeGreaterThan(0);
+
+    // Second pass: same plugin now disabled → diagnostics are wiped so a
+    // now-clean plugin never lingers stale warnings.
+    await PluginComponentRegistryService.promotePluginCommandsAndAgents(
+      commandRegistry,
+      new AgentDefinitionRegistryImpl(),
+      [makePlugin({ name: "flip", installPath: install, enabled: false })]
+    );
+    expect(PluginCommandDiagnosticsStore.get("flip")).toEqual([]);
   });
 
   it("treats a plugin with no commands/ or agents/ dir as the happy path (empty, no diagnostic)", async () => {
@@ -293,11 +384,67 @@ describe("PluginComponentRegistryService.promotePluginCommandsAndAgents (SKL-02)
     expect(review?.source).toBe("plugin");
     expect(review?.sourceId).toBe("plugin:claude-demo");
   });
+
+  it("promotes Claude-format plugin agents with inline tools into the live slash registry", async () => {
+    const install = makeTmpDir();
+    writeFile(
+      install,
+      "agents/code-explorer.md",
+      `---
+name: code-explorer
+description: Deeply analyzes existing codebase features and recommends integration points.
+model: sonnet
+tools: [Read, Grep, Glob]
+---
+Analyze the codebase and return concise architecture recommendations.
+`
+    );
+
+    const agentRegistry = new AgentDefinitionRegistryImpl();
+    const { diagnostics } =
+      await PluginComponentRegistryService.promotePluginCommandsAndAgents(
+        new CommandRegistry(),
+        agentRegistry,
+        [
+          makePlugin({
+            name: "ecc",
+            installPath: install,
+            manifest: {
+              name: "ecc",
+              version: "1.0.0",
+              description: "",
+              format: "claude",
+              agents: true,
+            },
+          }),
+        ]
+      );
+
+    const agent = agentRegistry.list().find((a) => a.id === "ecc:code-explorer");
+    expect(agent).toMatchObject({
+      id: "ecc:code-explorer",
+      name: "code-explorer",
+      source: "plugin",
+      pluginName: "ecc",
+      pluginComponentPath: "agents/code-explorer.md",
+    });
+    expect(agent?.allowedTools).toEqual([
+      "file_read",
+      "grep_files",
+      "glob_files",
+    ]);
+    expect(
+      diagnostics.some((d) =>
+        d.message.includes("tools must be a YAML string array")
+      )
+    ).toBe(false);
+  });
 });
 
 describe("PluginComponentRegistryService.applyLoadedPlugins / unregister (SKL-02)", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    PluginCommandDiagnosticsStore.clearAll();
   });
 
   it("applyLoadedPlugins clears the runtime cache AND delegates to promotion", async () => {
@@ -332,6 +479,30 @@ describe("PluginComponentRegistryService.applyLoadedPlugins / unregister (SKL-02
 
     expect(cmdSpy).toHaveBeenCalledWith("plugin:gone", []);
     expect(agentSpy).toHaveBeenCalledWith("plugin:gone", []);
+  });
+
+  it("unregisterPluginCapabilities clears the plugin's cached command diagnostics", async () => {
+    const { getAIFetchlyConfigManager } = await import(
+      "@/service/aifetchlyConfig/AIFetchlyConfigManager"
+    );
+    // Seed the store so we can assert unregister wipes it.
+    PluginCommandDiagnosticsStore.set("gone", [
+      {
+        severity: "warning",
+        source: "plugin",
+        sourceId: "plugin:gone",
+        filePath: "commands/x.md",
+        code: "frontmatter-invalid",
+        message: "boom",
+        recoverable: true,
+      },
+    ]);
+    vi.spyOn(getAIFetchlyConfigManager().getCommandRegistry(), "replaceSource");
+    vi.spyOn(getAIFetchlyConfigManager().getAgentRegistry(), "replaceSource");
+
+    await PluginComponentRegistryService.unregisterPluginCapabilities("gone");
+
+    expect(PluginCommandDiagnosticsStore.get("gone")).toEqual([]);
   });
 });
 

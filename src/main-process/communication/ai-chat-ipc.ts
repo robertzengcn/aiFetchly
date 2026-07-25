@@ -12,6 +12,7 @@ import {
 } from "@/api/aiChatApi";
 // import { getAvailableToolFunctions } from "@/config/aiTools.config";
 import { SkillRegistry } from "@/config/skillsRegistry";
+import { formatToolCatalogBreakdown } from "@/service/ToolCatalogDiagnostics";
 import {
   CommonMessage,
   ChatMessage,
@@ -211,7 +212,7 @@ function buildAttachmentReferenceBlock(
   if (references.length === 0) return "";
 
   const sanitizeForPrompt = (value: string): string =>
-    value.replace(/[\r\n]/g, " ").replace(/"/g, '\\"');
+    value.replace(/\\/g, "\\\\").replace(/[\r\n]/g, " ").replace(/"/g, '\\"');
 
   const lines = references.map((ref, index) => {
     const ext = ref.fileName.toLowerCase().slice(ref.fileName.lastIndexOf("."));
@@ -413,7 +414,9 @@ async function resolveSlashCommandContent(
   switch (parsed.name) {
     case "/skills": {
       const allTools = await SkillRegistry.getAllToolFunctions();
-      return formatSkillsAsChatMarkdown(allTools);
+      const listing = formatSkillsAsChatMarkdown(allTools);
+      const breakdown = formatToolCatalogBreakdown(allTools);
+      return `${listing}\n\n${breakdown}`;
     }
     case "/":
       return "Available commands:\n\n1. `/skills` - List available skills/tools.";
@@ -734,6 +737,15 @@ export function registerAiChatIpcHandlers(): void {
       }
 
       enhancedMessage = truncateForRemote(enhancedMessage);
+      // NOTE: this is the DEPRECATED legacy hosted path (`/api/ai/ask/stream`
+      // with `client_tools`). The active AI server path is the OpenAI-compatible
+      // `/v1/chat/completions`, driven by AIChatQueryEngine/AIChatQueryLoop (V2),
+      // where the full deferred tool catalog IS applied (per-round filtering,
+      // tool_catalog_search, persistence). This legacy path is retained only for
+      // backward compatibility and sends the full tool list; it still benefits
+      // from MCP description/schema caps (FR-7) via getAllToolFunctions. No
+      // deferred client_tools contract is needed here — when this path is
+      // retired, deferral already lives in V2.
       const availableTools = await SkillRegistry.getAllToolFunctions();
 
       const chatRequest: ChatRequest = {

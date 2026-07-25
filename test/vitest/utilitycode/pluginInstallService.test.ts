@@ -22,9 +22,7 @@ import type {
 
 function makeStubbedRegistry(
   kind: PluginSourceFetcher["kind"],
-  acquireImpl: (
-    req: PluginSourceRequest
-  ) => Promise<PluginAcquireResult>
+  acquireImpl: (req: PluginSourceRequest) => Promise<PluginAcquireResult>
 ): PluginSourceRegistry {
   const reg = new PluginSourceRegistry();
   reg.register({
@@ -69,6 +67,8 @@ describe("PluginInstallService.installFromSource", () => {
           skillCount: 0,
           mcpServerCount: 0,
           agentCount: 0,
+          commandCount: 0,
+          hookCount: 0,
           permissions: [],
           lastUpdated: new Date().toISOString(),
         },
@@ -209,6 +209,8 @@ describe("PluginInstallService default fetchers", () => {
         skillCount: 0,
         mcpServerCount: 0,
         agentCount: 0,
+        commandCount: 0,
+        hookCount: 0,
         permissions: [],
         lastUpdated: new Date().toISOString(),
       },

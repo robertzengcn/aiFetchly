@@ -426,6 +426,23 @@ export interface OpenAIToolCall {
   function: OpenAIToolCallFunction;
 }
 
+/** Non-standard image payload returned by aiFetchly's OpenAI-compatible chat endpoint. */
+export interface OpenAIChatImage {
+  type: "image";
+  delivery?: "provider_url" | "base64" | string;
+  url?: string;
+  original_url?: string;
+  local_path?: string;
+  file_name?: string;
+  b64_json?: string;
+  expires_at?: string;
+  download_required?: boolean;
+  mime_type?: string;
+  width?: number | null;
+  height?: number | null;
+  metadata?: Record<string, unknown>;
+}
+
 /** OpenAI-compatible streaming tool call delta */
 export interface OpenAIStreamToolCallDelta {
   index: number;
@@ -463,6 +480,7 @@ export interface OpenAIChatMessage {
   content: OpenAIMessageContent | null;
   tool_calls?: OpenAIToolCall[];
   tool_call_id?: string;
+  images?: OpenAIChatImage[];
 }
 
 /** Safely convert OpenAIMessageContent to a display string. */
@@ -566,6 +584,7 @@ export interface OpenAIStreamDelta {
   role?: string;
   content?: string | null;
   tool_calls?: OpenAIStreamToolCallDelta[];
+  images?: OpenAIChatImage[];
 }
 
 /** OpenAI-compatible streaming chunk choice */
@@ -2588,6 +2607,7 @@ export class AiChatApi {
     content?: string | null;
     finishReason?: string | null;
     usage?: OpenAIUsage;
+    images?: OpenAIChatImage[];
   }): OpenAIChatCompletionChunk {
     const chunk: OpenAIChatCompletionChunk = {
       id: params.id ?? `normalized-${Date.now()}`,
@@ -2598,7 +2618,14 @@ export class AiChatApi {
         {
           index: 0,
           delta:
-            params.content !== undefined ? { content: params.content } : {},
+            params.content !== undefined || params.images
+              ? {
+                  ...(params.content !== undefined
+                    ? { content: params.content }
+                    : {}),
+                  ...(params.images ? { images: params.images } : {}),
+                }
+              : {},
           finish_reason: params.finishReason ?? null,
         },
       ],
@@ -2680,11 +2707,17 @@ export class AiChatApi {
           const message = choice.message;
           if (this.isRecord(message)) {
             const content = message.content;
+            const images = this.normalizeOpenAIChatImages(message.images);
             return {
               index: choiceIndex,
               delta:
-                typeof content === "string" || content === null
-                  ? { content }
+                typeof content === "string" || content === null || images.length > 0
+                  ? {
+                      ...(typeof content === "string" || content === null
+                        ? { content }
+                        : {}),
+                      ...(images.length > 0 ? { images } : {}),
+                    }
                   : {},
               finish_reason: finishReason,
             };
@@ -2730,6 +2763,7 @@ export class AiChatApi {
         model,
         content: directContent,
         finishReason: this.isTerminalStreamEvent(eventType) ? "stop" : null,
+        images: this.normalizeOpenAIChatImages(payload.images),
       });
     }
 
@@ -2743,11 +2777,55 @@ export class AiChatApi {
           model,
           content: nestedContent,
           finishReason: this.isTerminalStreamEvent(eventType) ? "stop" : null,
+          images: this.normalizeOpenAIChatImages(nestedData.images),
         });
       }
     }
 
     return null;
+  }
+
+  private normalizeOpenAIChatImages(input: unknown): OpenAIChatImage[] {
+    if (!Array.isArray(input)) {
+      return [];
+    }
+    const images: OpenAIChatImage[] = [];
+    for (const item of input) {
+      if (!this.isRecord(item)) {
+        continue;
+      }
+      const type = this.getStringField(item, "type");
+      const url = this.getStringField(item, "url");
+      const b64Json = this.getStringField(item, "b64_json");
+      if (type !== "image" || (!url && !b64Json)) {
+        continue;
+      }
+      images.push({
+        type: "image",
+        delivery: this.getStringField(item, "delivery"),
+        url,
+        original_url: this.getStringField(item, "original_url"),
+        local_path: this.getStringField(item, "local_path"),
+        file_name: this.getStringField(item, "file_name"),
+        b64_json: b64Json,
+        expires_at: this.getStringField(item, "expires_at"),
+        download_required:
+          typeof item.download_required === "boolean"
+            ? item.download_required
+            : undefined,
+        mime_type: this.getStringField(item, "mime_type"),
+        width:
+          typeof item.width === "number" || item.width === null
+            ? item.width
+            : undefined,
+        height:
+          typeof item.height === "number" || item.height === null
+            ? item.height
+            : undefined,
+        metadata: this.isRecord(item.metadata) ? item.metadata : undefined,
+      });
+    }
+    return images;
   }
 
   private buildApiEnvelopeError(payload: unknown): Error | null {

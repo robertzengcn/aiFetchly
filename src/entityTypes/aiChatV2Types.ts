@@ -12,6 +12,7 @@ import type {
   AIChatRecoveryReason,
   ChatV2RecoveryMetadata,
 } from "@/service/AIChatRecoveryTypes";
+import type { OpenAIChatImage } from "@/api/aiChatApi";
 
 export type {
   ChatV2Mode,
@@ -31,6 +32,8 @@ export type ChatToolApprovalMode =
   | "ask_for_approval"
   | "approve_for_me"
   | "full_access";
+
+export type ChatV2GeneratedImage = OpenAIChatImage;
 
 // ---------------------------------------------------------------------------
 // Attachment types
@@ -72,6 +75,7 @@ export interface ChatV2MessageMetadata {
   executionTimeMs?: number;
   summary?: string;
   attachments?: ChatV2AttachmentMetadata[];
+  generatedImages?: ChatV2GeneratedImage[];
   // Plan-mode fields (present only on plan-related display rows)
   planEventType?:
     | "ask_user_question"
@@ -222,6 +226,7 @@ export interface ChatV2StreamChunk {
   model?: string;
   finishReason?: string | null;
   errorMessage?: string;
+  images?: ChatV2GeneratedImage[];
   toolCallId?: string;
   toolName?: string;
   toolArguments?: Record<string, unknown>;

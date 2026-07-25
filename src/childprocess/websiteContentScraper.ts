@@ -12,7 +12,7 @@
  * - Returns markdown content via IPC message
  */
 
-import { Browser } from "puppeteer";
+import { Browser, Page } from "puppeteer";
 import { BrowserManager } from "@/modules/browserManager";
 import { HtmlConversionService } from "@/service/HtmlConversionService";
 import { UrlGuard } from "@/service/UrlGuard";
@@ -24,10 +24,22 @@ interface ScrapeWebsiteMessage {
   requestId: string;
 }
 
+interface ScrapeWebsiteResult {
+  markdown: string;
+  title?: string;
+  finalUrl?: string;
+  canonicalUrl?: string;
+  links?: string[];
+}
+
 interface ScrapeWebsiteResponse {
   type: "SCRAPE_SUCCESS" | "SCRAPE_ERROR";
   requestId: string;
   markdown?: string;
+  title?: string;
+  finalUrl?: string;
+  canonicalUrl?: string;
+  links?: string[];
   error?: string;
 }
 
@@ -56,9 +68,95 @@ async function initializeBrowser(): Promise<Browser> {
 }
 
 /**
+ * Candidate main-content selectors, in priority order. The first selector that
+ * resolves to an element with meaningful text (>200 chars) is used as the
+ * conversion root so imported documents skip repeated nav/footer/sidebar
+ * chrome. Falls back to `<body>` / `<html>` when none match.
+ */
+const MAIN_CONTENT_SELECTORS: readonly string[] = [
+  "article",
+  "main",
+  '[role="main"]',
+  ".markdown-body",
+  ".docs-content",
+  ".doc-content",
+  ".content",
+  ".post",
+  ".entry-content",
+];
+
+/** Minimum visible-text length (chars) for a main-content selector to win. */
+const MAIN_CONTENT_MIN_TEXT_LENGTH = 200;
+
+/**
+ * Cap on anchor hrefs returned per page. Bounds IPC payload size and crawl
+ * link-processing when a page (e.g. a sitemap-like index) has thousands of
+ * links. 500 is far above any normal crawl need.
+ */
+const MAX_LINKS_PER_PAGE = 500;
+
+/**
+ * Select a likely main-content root from the rendered DOM and return its
+ * outerHTML for conversion. Falls back to the full body when no candidate
+ * selector matches a sufficiently large region.
+ */
+async function selectMainContentHtml(page: Page): Promise<string> {
+  return await page.evaluate(
+    (config: { selectors: readonly string[]; minTextLength: number }) => {
+      for (const selector of config.selectors) {
+        const element = document.querySelector(selector);
+        const text = element?.textContent?.trim() ?? "";
+        if (element && text.length > config.minTextLength) {
+          return (element as HTMLElement).outerHTML;
+        }
+      }
+      return document.body?.outerHTML || document.documentElement.outerHTML;
+    },
+    {
+      selectors: MAIN_CONTENT_SELECTORS,
+      minTextLength: MAIN_CONTENT_MIN_TEXT_LENGTH,
+    }
+  );
+}
+
+/** Read the page's <link rel="canonical"> href, if present. */
+async function extractCanonicalUrl(page: Page): Promise<string | undefined> {
+  try {
+    const href = await page.$eval(
+      'link[rel="canonical"]',
+      (el) => (el as HTMLLinkElement).href
+    );
+    return typeof href === "string" && href.length > 0 ? href : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Collect rendered anchor hrefs for same-origin crawl discovery. */
+async function extractAnchorLinks(page: Page): Promise<string[]> {
+  try {
+    const hrefs = await page.$$eval(
+      "a[href]",
+      (anchors, limit: number) =>
+        anchors
+          .map((anchor) => (anchor as HTMLAnchorElement).href)
+          .filter(
+            (href): href is string =>
+              typeof href === "string" && href.length > 0
+          )
+          .slice(0, limit),
+      MAX_LINKS_PER_PAGE
+    );
+    return hrefs;
+  } catch {
+    return [];
+  }
+}
+
+/**
  * Scrape website content and convert to markdown
  */
-async function scrapeWebsite(url: string): Promise<string> {
+async function scrapeWebsite(url: string): Promise<ScrapeWebsiteResult> {
   try {
     // F3 fix — validate URL before any navigation. Block file://, data://,
     // chrome://, and any host resolving to loopback / link-local / RFC1918 /
@@ -95,7 +193,8 @@ async function scrapeWebsite(url: string): Promise<string> {
       });
 
       // Verify the final post-redirect URL is still safe.
-      const finalCheck = await UrlGuard.validateWithDns(page.url());
+      const finalUrl = page.url();
+      const finalCheck = await UrlGuard.validateWithDns(finalUrl);
       if (!finalCheck.safe) {
         throw new Error(
           `Final URL after redirect rejected by SSRF guard: ${finalCheck.error}`
@@ -105,13 +204,18 @@ async function scrapeWebsite(url: string): Promise<string> {
       // Wait a bit for dynamic content to load
       await new Promise((resolve) => setTimeout(resolve, 2000));
 
-      // Extract HTML content
-      const htmlContent = await page.content();
+      // Capture page metadata for import/crawl callers.
+      const title = (await page.title()).trim() || undefined;
+      const canonicalUrl = await extractCanonicalUrl(page);
 
-      // Convert HTML to markdown
+      // Select a likely main-content root before converting so imported
+      // documents skip repeated nav/footer/sidebar chrome.
+      const htmlContent = await selectMainContentHtml(page);
       const markdown = htmlConversionService.convertHtmlToMarkdown(htmlContent);
 
-      return markdown;
+      const links = await extractAnchorLinks(page);
+
+      return { markdown, title, finalUrl, canonicalUrl, links };
     } finally {
       // Always close the page
       await page.close();
@@ -157,12 +261,16 @@ if (parentPort) {
         console.log(`📄 Scraping website: ${message.url}`);
 
         try {
-          const markdown = await scrapeWebsite(message.url);
+          const result = await scrapeWebsite(message.url);
 
           const response: ScrapeWebsiteResponse = {
             type: "SCRAPE_SUCCESS",
             requestId: message.requestId,
-            markdown,
+            markdown: result.markdown,
+            title: result.title,
+            finalUrl: result.finalUrl,
+            canonicalUrl: result.canonicalUrl,
+            links: result.links,
           };
 
           if (parentPort) {
