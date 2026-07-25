@@ -606,6 +606,43 @@ describe("KnowledgeLibraryAiTools.importWebsite", () => {
     if (result.success) return;
     expect(result.code).toBe("URL_BLOCKED");
   });
+
+  test("strips local paths from IMPORT_FAILED reasons (no path leakage)", async () => {
+    const { deps, websiteImportService, ragDocumentModule, ragSearchModule } =
+      buildTools();
+    websiteImportService.prepareImportSources.mockResolvedValue({
+      mode: "single_page",
+      sources: [makeSource()],
+      skipped: [],
+      requestedCount: 1,
+    });
+    ragDocumentModule.validateFile.mockResolvedValue({
+      isValid: true,
+      errors: [],
+      fileType: ".md",
+      fileSize: 4096,
+    });
+    ragDocumentModule.findWebsiteDuplicate.mockResolvedValue(undefined);
+    // Inner upload error includes an absolute staged path (as fs/vector errors can).
+    ragSearchModule.uploadDocument.mockRejectedValue(
+      new Error(
+        "Document upload failed: ENOENT: no such file '/tmp/website-imports/web-run/page.md'"
+      )
+    );
+    const tools = new KnowledgeLibraryAiTools(deps);
+
+    const result = await tools.importWebsite(
+      { mode: "single_page", url: "https://example.com/pricing" },
+      baseContext
+    );
+
+    // Single page failed entirely -> aggregate failure, but the key check is that
+    // no absolute local path survives into the model-facing reason/summary.
+    const serialized = JSON.stringify(result);
+    expect(serialized).not.toContain("/tmp/website-imports");
+    expect(serialized).not.toContain("web-run/page.md");
+    expect(serialized).not.toMatch(/\/[^\s"']+website-imports[^\s"']*/);
+  });
 });
 
 // ---------------------------------------------------------------------------

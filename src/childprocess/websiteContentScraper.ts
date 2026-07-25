@@ -89,6 +89,13 @@ const MAIN_CONTENT_SELECTORS: readonly string[] = [
 const MAIN_CONTENT_MIN_TEXT_LENGTH = 200;
 
 /**
+ * Cap on anchor hrefs returned per page. Bounds IPC payload size and crawl
+ * link-processing when a page (e.g. a sitemap-like index) has thousands of
+ * links. 500 is far above any normal crawl need.
+ */
+const MAX_LINKS_PER_PAGE = 500;
+
+/**
  * Select a likely main-content root from the rendered DOM and return its
  * outerHTML for conversion. Falls back to the full body when no candidate
  * selector matches a sufficiently large region.
@@ -128,12 +135,17 @@ async function extractCanonicalUrl(page: Page): Promise<string | undefined> {
 /** Collect rendered anchor hrefs for same-origin crawl discovery. */
 async function extractAnchorLinks(page: Page): Promise<string[]> {
   try {
-    const hrefs = await page.$$eval("a[href]", (anchors) =>
-      anchors
-        .map((anchor) => (anchor as HTMLAnchorElement).href)
-        .filter(
-          (href): href is string => typeof href === "string" && href.length > 0
-        )
+    const hrefs = await page.$$eval(
+      "a[href]",
+      (anchors, limit: number) =>
+        anchors
+          .map((anchor) => (anchor as HTMLAnchorElement).href)
+          .filter(
+            (href): href is string =>
+              typeof href === "string" && href.length > 0
+          )
+          .slice(0, limit),
+      MAX_LINKS_PER_PAGE
     );
     return hrefs;
   } catch {

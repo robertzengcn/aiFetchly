@@ -195,6 +195,21 @@ function hostTagFromUrl(url: string): string {
   }
 }
 
+/**
+ * Strip absolute filesystem paths (Unix `/abs/...` and Windows `C:\\...`) from
+ * an inner error message before it reaches the model. Inner upload/chunk/embed
+ * errors can include staged or vector-index paths (e.g. `ENOENT: ... '/path'`);
+ * the PRD requires tool results never expose local paths. URLs are preserved —
+ * a `/segment` not preceded by a path boundary (space/paren/quote/start) is
+ * left untouched, so `https://host/path` survives.
+ */
+function sanitizeReason(message: string): string {
+  return message
+    .replace(/(^|[\s('"])(\/[^\s'"<>)]+|[A-Za-z]:\\[^\s'"<>)]+)/g, "$1[path]")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 /** Build a collection-level description carrying source/import metadata. */
 function buildWebsiteDescription(
   userDescription: string | undefined,
@@ -589,7 +604,11 @@ export class KnowledgeLibraryAiTools {
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       return {
-        skipped: { url: source.sourceUrl, reason, code: "IMPORT_FAILED" },
+        skipped: {
+          url: source.sourceUrl,
+          reason: sanitizeReason(reason),
+          code: "IMPORT_FAILED",
+        },
       };
     }
     if (!validation.isValid) {
@@ -668,7 +687,11 @@ export class KnowledgeLibraryAiTools {
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       return {
-        skipped: { url: source.sourceUrl, reason, code: "IMPORT_FAILED" },
+        skipped: {
+          url: source.sourceUrl,
+          reason: sanitizeReason(reason),
+          code: "IMPORT_FAILED",
+        },
       };
     }
   }
