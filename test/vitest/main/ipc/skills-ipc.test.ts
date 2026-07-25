@@ -126,6 +126,17 @@ describe("skills-ipc management handlers", () => {
     });
   });
 
+  it("accepts legacy enable payloads from stale renderer builds", async () => {
+    const result = await invoke(SKILL_TOGGLE, {
+      skillName: "pdf",
+      enable: false,
+    });
+
+    expect(result).toMatchObject({ status: true });
+    expect(mocks.toggleSkill).toHaveBeenCalledWith("pdf", false);
+    expect(mocks.unregisterSkill).toHaveBeenCalledWith("pdf");
+  });
+
   it("reloads a skill into the runtime catalog when re-enabled", async () => {
     const result = await invoke(SKILL_TOGGLE, {
       skillName: "pdf",
