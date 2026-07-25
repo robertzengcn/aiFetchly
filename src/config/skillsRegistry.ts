@@ -3057,32 +3057,11 @@ for (const skill of BUILT_IN_SKILLS) {
  * (Design §8.3)
  */
 async function getAllToolFunctions(): Promise<ToolFunction[]> {
-  // Resolve enabled plugin names once per catalog build.
-  let enabledPluginNames: Set<string> | null = null;
-  try {
-    const { PluginManagementModule } = await import(
-      "@/modules/PluginManagementModule"
-    );
-    const mod = new PluginManagementModule();
-    const enabledPlugins = await mod.listEnabledPlugins();
-    enabledPluginNames = new Set(enabledPlugins.map((p) => p.name));
-  } catch (e) {
-    console.warn(
-      `[SkillRegistry] listEnabledPlugins failed, suppressing all plugin-owned skills:`,
-      e
-    );
-    enabledPluginNames = new Set();
-  }
+  const enablement = await loadSkillRuntimeEnablement();
 
   const builtInTools: ToolFunction[] = [];
   for (const skill of registry.values()) {
-    if (
-      skill.pluginOwner &&
-      enabledPluginNames &&
-      !enabledPluginNames.has(skill.pluginOwner)
-    ) {
-      continue; // owning plugin is disabled — hide from catalog
-    }
+    if (!isSkillRuntimeEnabled(skill, enablement)) continue;
     builtInTools.push(skillDefinitionToToolFunction(skill));
   }
 
@@ -3104,6 +3083,83 @@ async function getAllToolFunctions(): Promise<ToolFunction[]> {
  */
 function getSkill(name: string): SkillDefinition | null {
   return registry.get(name) ?? null;
+}
+
+interface InstalledSkillRuntimeState {
+  readonly enabled: number;
+  readonly pluginName?: string | null;
+}
+
+interface SkillRuntimeEnablement {
+  readonly installedSkillsByName: ReadonlyMap<string, InstalledSkillRuntimeState> | null;
+  readonly enabledPluginNames: ReadonlySet<string>;
+}
+
+async function loadSkillRuntimeEnablement(): Promise<SkillRuntimeEnablement> {
+  let enabledPluginNames: ReadonlySet<string>;
+  try {
+    const { PluginManagementModule } = await import(
+      "@/modules/PluginManagementModule"
+    );
+    const mod = new PluginManagementModule();
+    const enabledPlugins = await mod.listEnabledPlugins();
+    enabledPluginNames = new Set(enabledPlugins.map((p) => p.name));
+  } catch (e) {
+    console.warn(
+      "[SkillRegistry] listEnabledPlugins failed, suppressing all plugin-owned skills:",
+      e
+    );
+    enabledPluginNames = new Set();
+  }
+
+  let installedSkillsByName: ReadonlyMap<string, InstalledSkillRuntimeState> | null;
+  try {
+    const mod = new SkillManagementModule();
+    const installedSkills = await mod.listInstalledSkills();
+    installedSkillsByName = new Map(
+      installedSkills.map((skill) => [
+        skill.name,
+        {
+          enabled: skill.enabled,
+          pluginName: skill.pluginName ?? null,
+        },
+      ])
+    );
+  } catch (e) {
+    console.warn(
+      "[SkillRegistry] listInstalledSkills failed, preserving registered standalone skills:",
+      e
+    );
+    installedSkillsByName = null;
+  }
+
+  return {
+    installedSkillsByName,
+    enabledPluginNames,
+  };
+}
+
+function isSkillRuntimeEnabled(
+  skill: SkillDefinition,
+  enablement: SkillRuntimeEnablement
+): boolean {
+  if (skill.source === "built-in") return true;
+
+  const installed = enablement.installedSkillsByName?.get(skill.name);
+  if (installed && installed.enabled !== 1) return false;
+
+  const pluginOwner = skill.pluginOwner ?? installed?.pluginName ?? undefined;
+  if (pluginOwner && !enablement.enabledPluginNames.has(pluginOwner)) {
+    return false;
+  }
+
+  return true;
+}
+
+async function isSkillEnabledForRuntime(name: string): Promise<boolean> {
+  const skill = registry.get(name);
+  if (!skill) return false;
+  return isSkillRuntimeEnabled(skill, await loadSkillRuntimeEnablement());
 }
 
 /**
@@ -3160,20 +3216,7 @@ async function findSkillForFileExtension(
   ext: string
 ): Promise<SkillDefinition | null> {
   const normalized = ext.toLowerCase();
-
-  // Resolve enabled plugin names once per lookup so plugin-owned skills
-  // whose owner is disabled/uninstalled are hidden from attachment routing.
-  let enabledPluginNames: Set<string> | null = null;
-  try {
-    const { PluginManagementModule } = await import(
-      "@/modules/PluginManagementModule"
-    );
-    const mod = new PluginManagementModule();
-    const enabledPlugins = await mod.listEnabledPlugins();
-    enabledPluginNames = new Set(enabledPlugins.map((p) => p.name));
-  } catch {
-    enabledPluginNames = new Set();
-  }
+  const enablement = await loadSkillRuntimeEnablement();
 
   for (const skill of registry.values()) {
     if (
@@ -3181,13 +3224,7 @@ async function findSkillForFileExtension(
       skill.supportedFileTypes &&
       skill.supportedFileTypes.includes(normalized)
     ) {
-      if (
-        skill.pluginOwner &&
-        enabledPluginNames &&
-        !enabledPluginNames.has(skill.pluginOwner)
-      ) {
-        continue; // owning plugin is disabled/uninstalled — skip
-      }
+      if (!isSkillRuntimeEnabled(skill, enablement)) continue;
       return skill;
     }
   }
@@ -3210,6 +3247,7 @@ function listBuiltInSkillDefinitions(): SkillDefinition[] {
 export const SkillRegistry = {
   getAllToolFunctions,
   getSkill,
+  isSkillEnabledForRuntime,
   isRegistered,
   registerSkill,
   unregisterSkill,

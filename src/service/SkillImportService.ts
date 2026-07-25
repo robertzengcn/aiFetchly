@@ -946,7 +946,8 @@ async function importFromZip(zipPath: string): Promise<
  */
 function registerImportedPythonSkill(
   manifest: SkillManifest,
-  skillDir: string
+  skillDir: string,
+  options?: SkillRegistrationOptions
 ): void {
   if (manifest.runtime !== "python" || !manifest.python) {
     throw new Error("registerImportedPythonSkill requires runtime python");
@@ -966,6 +967,7 @@ function registerImportedPythonSkill(
     source: "user",
     documentationOnly: false,
     supportedFileTypes: manifest.supportedFileTypes,
+    pluginOwner: options?.pluginOwner,
     execute: async (
       args: Record<string, unknown>,
       context: SkillExecutionContext
@@ -983,12 +985,17 @@ function registerImportedPythonSkill(
 /**
  * Register an imported skill into the runtime SkillRegistry.
  */
+interface SkillRegistrationOptions {
+  readonly pluginOwner?: string;
+}
+
 function registerImportedSkill(
   manifest: SkillManifest,
-  skillDir: string
+  skillDir: string,
+  options?: SkillRegistrationOptions
 ): void {
   if (manifest.runtime === "python") {
-    registerImportedPythonSkill(manifest, skillDir);
+    registerImportedPythonSkill(manifest, skillDir, options);
     return;
   }
 
@@ -1054,6 +1061,7 @@ function registerImportedSkill(
     source: "user",
     documentationOnly: isDocumentationOnly,
     supportedFileTypes: resolvedManifest.supportedFileTypes,
+    pluginOwner: options?.pluginOwner,
     execute: buildImportedSkillExecuteHandler(resolvedManifest, skillDir, code),
   });
 }
@@ -1328,7 +1336,9 @@ async function loadPersistedSkills(): Promise<void> {
         continue;
       }
 
-      registerImportedSkill(manifest, skillDir);
+      registerImportedSkill(manifest, skillDir, {
+        pluginOwner: skill.pluginName,
+      });
     } catch (error) {
       console.warn(
         `Failed to load skill "${skill.name}": ${
