@@ -37,6 +37,32 @@ import {
   AI_CHAT_V2_VOICE_MODEL_DOWNLOAD_PROGRESS,
 } from "@/config/channellist";
 
+export const AI_CHAT_V2_VOICE_SETTINGS_CHANGED_EVENT =
+  "aifetchly:ai-chat-v2-voice-settings-changed";
+
+/**
+ * Dispatched when a model download/install/remove changes installed status, so
+ * the chat surface can refresh its `voiceMissingModel` state without a remount
+ * (TODO P2). Settings changes use the event above; this is for model-only
+ * changes that do not alter persisted settings.
+ */
+export const AI_CHAT_V2_VOICE_MODELS_CHANGED_EVENT =
+  "aifetchly:ai-chat-v2-voice-models-changed";
+
+function notifyVoiceSettingsChanged(view: AiChatVoiceSettingsView): void {
+  window.dispatchEvent(
+    new CustomEvent<AiChatVoiceSettingsView>(
+      AI_CHAT_V2_VOICE_SETTINGS_CHANGED_EVENT,
+      { detail: view }
+    )
+  );
+}
+
+/** Notify listeners (e.g. AiChatV2) that installed model availability changed. */
+export function notifyVoiceModelsChanged(): void {
+  window.dispatchEvent(new Event(AI_CHAT_V2_VOICE_MODELS_CHANGED_EVENT));
+}
+
 /** Read STT/TTS runtime + model availability (no audio payload). */
 export function getVoiceStatus(): Promise<AiChatVoiceRuntimeStatus> {
   return windowInvoke(AI_CHAT_V2_VOICE_STATUS, {});
@@ -74,7 +100,10 @@ export function getVoiceSettings(): Promise<AiChatVoiceSettingsView> {
 export function setVoiceSettings(
   settings: AiChatVoiceSettingsView
 ): Promise<AiChatVoiceSettingsView> {
-  return windowInvoke(AI_CHAT_V2_VOICE_SET_SETTINGS, settings);
+  return windowInvoke(AI_CHAT_V2_VOICE_SET_SETTINGS, settings).then((view) => {
+    notifyVoiceSettingsChanged(view);
+    return view;
+  });
 }
 
 // --- Phase 5: Model catalog + download ---

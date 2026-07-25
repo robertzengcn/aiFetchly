@@ -99,4 +99,25 @@ describe("VoicePlaybackQueue", () => {
     fx.fireEnded();
     expect(fx.created).toEqual(["blob:A"]);
   });
+
+  it("stop revokes the current object URL so no TTS artifact leaks (TODO P2)", () => {
+    const fx = makeFakeAudio();
+    const { queue, revoked } = makeQueue(fx);
+    queue.enqueue("A");
+    expect(revoked).toEqual([]);
+    queue.stop();
+    expect(revoked).toEqual(["blob:A"]);
+  });
+
+  it("onerror revokes the current URL and advances to the next chunk", () => {
+    const fx = makeFakeAudio();
+    const { queue, revoked } = makeQueue(fx);
+    queue.enqueue("A");
+    queue.enqueue("B");
+    expect(fx.current()?.onerror).not.toBeNull();
+    fx.current()?.onerror?.(); // playback failure on A
+    expect(revoked).toContain("blob:A");
+    // The queue advanced to B instead of stalling.
+    expect(fx.created).toEqual(["blob:A", "blob:B"]);
+  });
 });

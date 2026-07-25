@@ -3,7 +3,10 @@ import { AiChatVoiceModule } from "@/modules/AiChatVoiceModule";
 import type { SherpaVoiceWorkerClient } from "@/service/aiChatVoice/SherpaVoiceWorkerClient";
 import type { Token } from "@/modules/token";
 import { DEFAULT_VOICE_SETTINGS } from "@/entityTypes/aiChatVoiceTypes";
-import { AI_CHAT_VOICE_INPUT_MODE, AI_CHAT_VOICE_TTS_SPEED } from "@/config/usersetting";
+import {
+  AI_CHAT_VOICE_INPUT_MODE,
+  AI_CHAT_VOICE_TTS_SPEED,
+} from "@/config/usersetting";
 
 function makeTokenMock(initial: Record<string, string> = {}): {
   token: Token;
@@ -170,13 +173,27 @@ describe("AiChatVoiceModule.synthesize", () => {
 });
 
 describe("AiChatVoiceModule.cancel", () => {
-  it("resolves ok (best-effort, safe with no worker active)", async () => {
+  it("resolves ok and cancels all pending when no jobId is given", async () => {
     const { token } = makeTokenMock();
+    const cancel = vi.fn(() => 0);
     const mod = new AiChatVoiceModule({
       token,
-      workerClient: {} as SherpaVoiceWorkerClient,
+      workerClient: { cancel } as unknown as SherpaVoiceWorkerClient,
       fileExists: () => false,
     });
     await expect(mod.cancel()).resolves.toEqual({ ok: true });
+    expect(cancel).toHaveBeenCalledWith(undefined);
+  });
+
+  it("forwards a jobId to the worker client for a targeted cancel", async () => {
+    const { token } = makeTokenMock();
+    const cancel = vi.fn(() => 1);
+    const mod = new AiChatVoiceModule({
+      token,
+      workerClient: { cancel } as unknown as SherpaVoiceWorkerClient,
+      fileExists: () => false,
+    });
+    await expect(mod.cancel("stt-123")).resolves.toEqual({ ok: true });
+    expect(cancel).toHaveBeenCalledWith("stt-123");
   });
 });

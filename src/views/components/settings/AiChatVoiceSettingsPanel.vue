@@ -87,6 +87,33 @@
         </v-col>
       </v-row>
 
+      <!-- Installed model selection (TODO P2). Only installed catalog entries
+           are selectable so a user cannot pick a model whose files are absent. -->
+      <v-row dense>
+        <v-col cols="12" sm="6">
+          <v-select
+            v-model="sttModelId"
+            :items="installedSttModelItems"
+            :label="t('aiChatV2.voice.stt_model') || 'Speech recognition model'"
+            :disabled="installedSttModelItems.length === 0"
+            density="compact"
+            variant="outlined"
+            @update:model-value="save"
+          />
+        </v-col>
+        <v-col cols="12" sm="6">
+          <v-select
+            v-model="ttsModelId"
+            :items="installedTtsModelItems"
+            :label="t('aiChatV2.voice.tts_model') || 'Speech response model'"
+            :disabled="installedTtsModelItems.length === 0"
+            density="compact"
+            variant="outlined"
+            @update:model-value="save"
+          />
+        </v-col>
+      </v-row>
+
       <div class="mb-2">
         <span class="text-body-2">
           {{ t("aiChatV2.voice.speech_speed") || "Speech speed" }}: {{ speed.toFixed(1) }}x
@@ -114,7 +141,9 @@
       />
 
       <v-divider class="my-4" />
-      <h3 class="text-subtitle-1 font-weight-bold mb-2">Voice Models</h3>
+      <h3 class="text-subtitle-1 font-weight-bold mb-2">
+        {{ t("aiChatV2.voice.voice_models") || "Voice Models" }}
+      </h3>
       <div
         v-for="model in models"
         :key="model.id"
@@ -124,7 +153,9 @@
           <div class="text-body-2 font-weight-medium">{{ model.name }}</div>
           <div class="text-caption text-grey-darken-1">
             {{
-              model.type === "stt" ? "Speech Recognition" : "Text-to-Speech"
+              model.type === "stt"
+                ? t("aiChatV2.voice.model_type_stt") || "Speech Recognition"
+                : t("aiChatV2.voice.model_type_tts") || "Text-to-Speech"
             }}
             · ~{{ model.approxSizeMb }}MB
           </div>
@@ -143,7 +174,7 @@
             variant="tonal"
           >
             <v-icon start size="small">mdi-check</v-icon>
-            Installed
+            {{ t("aiChatV2.voice.installed") || "Installed" }}
           </v-chip>
           <v-btn
             v-else-if="!downloadProgress[model.id]"
@@ -153,7 +184,7 @@
             @click="onDownload(model.id)"
           >
             <v-icon start size="small">mdi-download</v-icon>
-            Download
+            {{ t("aiChatV2.voice.download") || "Download" }}
           </v-btn>
           <v-btn
             v-else
@@ -162,7 +193,7 @@
             variant="tonal"
             @click="onCancelDownload(model.id)"
           >
-            Cancel
+            {{ t("aiChatV2.voice.cancel_download") || "Cancel" }}
           </v-btn>
         </div>
       </div>
@@ -180,6 +211,7 @@ import {
   downloadVoiceModel,
   cancelVoiceModelDownload,
   onVoiceModelDownloadProgress,
+  notifyVoiceModelsChanged,
 } from "@/views/api/aiChatV2Voice";
 import type {
   AiChatVoiceSettingsView,
@@ -300,10 +332,24 @@ const downloadProgress = ref<
 function downloadProgressText(modelId: string): string {
   const p = downloadProgress.value[modelId];
   if (!p) return "";
-  if (p.phase === "downloading") return `Downloading... ${p.pct ?? 0}%`;
-  if (p.phase === "verifying") return "Verifying...";
-  if (p.phase === "extracting") return "Extracting...";
-  if (p.phase === "error") return `Error: ${p.error ?? ""}`;
+  if (p.phase === "downloading") {
+    return (
+      t("aiChatV2.voice.downloading_pct", { pct: p.pct ?? 0 }) ||
+      `Downloading... ${p.pct ?? 0}%`
+    );
+  }
+  if (p.phase === "verifying") {
+    return t("aiChatV2.voice.verifying") || "Verifying...";
+  }
+  if (p.phase === "extracting") {
+    return t("aiChatV2.voice.extracting") || "Extracting...";
+  }
+  if (p.phase === "error") {
+    return (
+      t("aiChatV2.voice.download_error", { error: p.error ?? "" }) ||
+      `Error: ${p.error ?? ""}`
+    );
+  }
   return "";
 }
 
@@ -315,6 +361,20 @@ async function loadModels(): Promise<void> {
   }
 }
 
+// Installed models available for selection (TODO P2 model selection). Only
+// installed entries are selectable so a user cannot pick a model whose files
+// are not present on disk.
+const installedSttModelItems = computed(() =>
+  models.value
+    .filter((m) => m.type === "stt" && m.installed)
+    .map((m) => ({ title: m.name, value: m.id }))
+);
+const installedTtsModelItems = computed(() =>
+  models.value
+    .filter((m) => m.type === "tts" && m.installed)
+    .map((m) => ({ title: m.name, value: m.id }))
+);
+
 async function onDownload(modelId: string): Promise<void> {
   downloadProgress.value = {
     ...downloadProgress.value,
@@ -323,6 +383,9 @@ async function onDownload(modelId: string): Promise<void> {
   try {
     await downloadVoiceModel(modelId);
     await loadModels();
+    // Installed model availability changed -> tell the chat surface to refresh
+    // its voiceMissingModel state without a remount (TODO P2 status refresh).
+    notifyVoiceModelsChanged();
   } catch {
     /* error shown via progress */
   }

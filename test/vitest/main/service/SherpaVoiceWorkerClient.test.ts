@@ -145,4 +145,41 @@ describe("SherpaVoiceWorkerClient", () => {
     expect(fx.posted).toHaveLength(0);
     client.dispose();
   });
+
+  it("cancels a single pending request and ignores its late result", async () => {
+    const fx = makeFakeFork({ autoReady: true });
+    const client = SherpaVoiceWorkerClient.createWithFork(fx.fork, 5000);
+
+    const p = client.transcribe("AAAA", "audio/webm");
+    await vi.waitFor(() => expect(fx.requestIdFor("transcribe")).toBeDefined());
+    const reqId = fx.requestIdFor("transcribe") as string;
+
+    expect(client.cancel(reqId)).toBe(1);
+    await expect(p).rejects.toThrow(/cancelled/i);
+    // Cancelling an unknown id is a no-op.
+    expect(client.cancel("does-not-exist")).toBe(0);
+
+    // A late result for the cancelled request must be dropped silently
+    // (no matching pending entry) — no unhandled rejection.
+    fx.emit({
+      type: "transcribe-result",
+      requestId: reqId,
+      transcript: "should be ignored",
+    });
+    client.dispose();
+  });
+
+  it("cancels all pending requests when no id is given", async () => {
+    const fx = makeFakeFork({ autoReady: true });
+    const client = SherpaVoiceWorkerClient.createWithFork(fx.fork, 5000);
+
+    const p1 = client.transcribe("AAAA", "audio/webm");
+    const p2 = client.synthesize("Hello.", { speed: 1 });
+    await vi.waitFor(() => expect(fx.requestIdFor("synthesize")).toBeDefined());
+
+    expect(client.cancel()).toBe(2);
+    await expect(p1).rejects.toThrow(/cancelled/i);
+    await expect(p2).rejects.toThrow(/cancelled/i);
+    client.dispose();
+  });
 });

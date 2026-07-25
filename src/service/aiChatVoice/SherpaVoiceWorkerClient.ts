@@ -197,6 +197,33 @@ export class SherpaVoiceWorkerClient {
     return this.sendRequest<VoiceSynthesizePayload>(worker, requestId, message);
   }
 
+  /**
+   * Best-effort cancel of pending STT/TTS work (TODO P0-5).
+   *
+   * With a `requestId`, cancels that single job; without it, cancels every
+   * pending request. Each cancelled request's promise rejects with a
+   * "cancelled" error and its timeout is cleared, so the caller can stop
+   * awaiting. Late worker results for a cancelled request are ignored: by the
+   * time they arrive there is no matching pending entry, so
+   * `handleWorkerMessage` drops them. Returns the number of requests
+   * cancelled. Safe when no worker is active (returns 0).
+   */
+  public cancel(requestId?: string): number {
+    if (requestId !== undefined) {
+      const pending = this.pendingRequests.get(requestId);
+      if (!pending) {
+        return 0;
+      }
+      clearTimeout(pending.timeout);
+      this.pendingRequests.delete(requestId);
+      pending.reject(new Error("Voice request cancelled"));
+      return 1;
+    }
+    const count = this.pendingRequests.size;
+    this.rejectAllPending(new Error("Voice request cancelled"));
+    return count;
+  }
+
   private sendRequest<T>(
     worker: UtilityProcessLike,
     requestId: string,

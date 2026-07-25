@@ -241,24 +241,24 @@
         </v-card>
       </v-dialog>
 
-      <v-alert
-        v-if="voiceMissingModel"
-        type="warning"
-        variant="tonal"
-        density="compact"
-        class="mb-2 text-body-2"
-      >
-        <v-icon start size="small">mdi-alert-outline</v-icon>
-        {{ t("aiChatV2.voice.model_missing") || "Voice model is not installed." }}
-      </v-alert>
       <AiChatV2Composer
         :is-streaming="chatIsRunning"
         :is-processing="isPreparingAttachments"
         :voice-enabled="voiceInputEnabled"
         :voice-auto-send="voiceAutoSend"
+        :voice-max-recording-ms="voiceMaxRecordingMs"
+        :voice-model-missing="voiceMissingModel"
+        :voice-model-installing="voiceModelInstalling"
+        :voice-model-install-error="voiceModelInstallError"
+        :voice-speaking="voiceSpeaking"
+        :voice-chat-ready="voiceChatReady"
         :conversation-id="activeConversationId"
         @send="onSend"
         @stop="onStop"
+        @install-voice-model="handleInstallVoiceModel"
+        @voice-recording-start="onVoiceRecordingStart"
+        @stop-speaking="onStopSpeaking"
+        @open-voice-settings="openAIProviderSettings"
       >
         <template #prepend>
           <AiChatV2ModeSelector v-model="mode" :disabled="chatIsRunning" />
@@ -458,7 +458,14 @@ import {
   getChatV2ToolApprovalMode,
   setChatV2ToolApprovalMode,
 } from "@/views/api/aiChatV2";
-import { getVoiceSettings, getVoiceStatus } from "@/views/api/aiChatV2Voice";
+import {
+  AI_CHAT_V2_VOICE_SETTINGS_CHANGED_EVENT,
+  AI_CHAT_V2_VOICE_MODELS_CHANGED_EVENT,
+  cancelVoiceJob,
+  downloadVoiceModel,
+  getVoiceSettings,
+  getVoiceStatus,
+} from "@/views/api/aiChatV2Voice";
 import type { AiChatVoiceRuntimeStatus } from "@/entityTypes/aiChatVoiceTypes";
 import { SpeechResponseController } from "./voice/SpeechResponseController";
 import {
@@ -1639,6 +1646,9 @@ const detachActiveStreamView = (): void => {
 
 const onStop = (): void => {
   speechController.stop();
+  // Cancel in-flight STT/TTS worker work so the shared worker stops
+  // synthesizing for a response the user has abandoned (TODO P0-5).
+  void cancelVoiceJob();
   stopChatV2Stream();
   clearChatV2StreamListeners();
   const conversationId = activeConversationId.value;
@@ -2171,11 +2181,16 @@ const handleCompactConversation = async (): Promise<void> => {
 const onSend = async (
   text: string,
   files?: File[],
-  options?: { isExpandedPrompt?: boolean }
+  options?: { isExpandedPrompt?: boolean; fromVoice?: boolean }
 ): Promise<void> => {
   if (chatIsRunning.value || hasAnyActiveStream.value) return;
   streamError.value = null;
   attachmentError.value = null;
+  // Record whether this user message originated from voice input so the
+  // `after_voice_input` TTS policy speaks only the reply to a voice send
+  // (PRD §7.5 / TODO P0-2). Reset for every send — typed/programmatic sends
+  // pass no `fromVoice`, which correctly clears the flag.
+  speechController.updateOptions({ latestInputWasVoice: options?.fromVoice === true });
   if (activeConversationId.value) {
     const nextStopped = new Set(stoppedPendingToolConversationIds.value);
     nextStopped.delete(activeConversationId.value);
@@ -2777,14 +2792,30 @@ const speechController = new SpeechResponseController({
   latestInputWasVoice: false,
 });
 speechController.start();
+const voiceSpeaking = ref(false);
+// Bridge the controller's imperative speaking state into Vue reactivity so the
+// composer can show a stop-speaking control (TODO P1-2).
+const unsubscribeSpeaking = speechController.subscribe((speaking) => {
+  voiceSpeaking.value = speaking;
+});
 const voiceAutoSend = ref(false);
+const voiceMaxRecordingMs = ref<number>(60_000);
 const voiceStatus = ref<AiChatVoiceRuntimeStatus | null>(null);
+const voiceModelInstalling = ref(false);
+const voiceModelInstallError = ref<string | null>(null);
 const voiceMissingModel = computed(
   () =>
     voiceInputEnabled.value &&
     (voiceStatus.value?.sttState === "missing_model" ||
       voiceStatus.value?.sttState === "unavailable"),
 );
+/**
+ * Whether the chat can accept a voice auto-send right now. The renderer has no
+ * synchronous AI-entitlement flag, so model availability is the proxy: if no
+ * model is selectable the main process would reject the send, so we keep the
+ * transcript in the draft instead (PRD §7.13 / TODO P1-5).
+ */
+const voiceChatReady = computed(() => availableModels.value.length > 0);
 async function loadVoiceSettings(): Promise<void> {
   try {
     const [settings, status] = await Promise.all([
@@ -2793,13 +2824,66 @@ async function loadVoiceSettings(): Promise<void> {
     ]);
     voiceInputEnabled.value = settings.inputMode === "push_to_talk";
     voiceAutoSend.value = settings.autoSendTranscript;
-    speechController.updateOptions({ ttsMode: settings.ttsMode });
+    voiceMaxRecordingMs.value = settings.maxRecordingMs;
+    // Push the full TTS option set into the speech controller so spoken
+    // responses use the saved language/voice/speed (TODO P0-3). "auto"
+    // language defers detection to the worker; an unset voice id is omitted.
+    speechController.updateOptions({
+      ttsMode: settings.ttsMode,
+      ...(settings.ttsLanguage !== "auto"
+        ? { language: settings.ttsLanguage }
+        : {}),
+      ...(settings.ttsVoiceId !== undefined
+        ? { voiceId: settings.ttsVoiceId }
+        : {}),
+      speed: settings.ttsSpeed,
+    });
     voiceStatus.value = status;
+    if (
+      status.sttState !== "missing_model" &&
+      status.sttState !== "unavailable"
+    ) {
+      voiceModelInstallError.value = null;
+    }
   } catch {
     voiceInputEnabled.value = false;
     voiceAutoSend.value = false;
+    voiceMaxRecordingMs.value = 60_000;
     voiceStatus.value = null;
   }
+}
+
+async function handleInstallVoiceModel(): Promise<void> {
+  if (voiceModelInstalling.value) return;
+  voiceModelInstalling.value = true;
+  voiceModelInstallError.value = null;
+  try {
+    await downloadVoiceModel(voiceStatus.value?.sttModelId ?? "sherpa-onnx:stt:auto");
+    await loadVoiceSettings();
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    voiceModelInstallError.value =
+      `${t("aiChatV2.voice.model_install_failed") || "Voice model installation failed."} ${msg}`;
+    await loadVoiceSettings();
+  } finally {
+    voiceModelInstalling.value = false;
+  }
+}
+
+function handleVoiceSettingsChanged(): void {
+  void loadVoiceSettings();
+}
+
+/** Starting a new voice input stops any in-progress TTS playback (PRD §7.5). */
+function onVoiceRecordingStart(): void {
+  speechController.stop();
+  void cancelVoiceJob();
+}
+
+/** User clicked the stop-speaking control: halt TTS playback + worker synth. */
+function onStopSpeaking(): void {
+  speechController.stop();
+  void cancelVoiceJob();
 }
 
 onMounted(() => {
@@ -2810,6 +2894,16 @@ onMounted(() => {
   window.addEventListener(
     AI_PROVIDER_SETTINGS_CHANGED_EVENT,
     handleProviderSettingsChanged
+  );
+  window.addEventListener(
+    AI_CHAT_V2_VOICE_SETTINGS_CHANGED_EVENT,
+    handleVoiceSettingsChanged
+  );
+  // Model install/remove changes installed status without altering settings;
+  // reload voice status so the mic button reflects availability live.
+  window.addEventListener(
+    AI_CHAT_V2_VOICE_MODELS_CHANGED_EVENT,
+    handleVoiceSettingsChanged
   );
   // Subscribe to file operation events emitted during tool execution.
   // Records are appended per-conversation so the summary panel reflects
@@ -2825,10 +2919,19 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   speechController.stop();
+  unsubscribeSpeaking();
   detachActiveStreamView();
   window.removeEventListener(
     AI_PROVIDER_SETTINGS_CHANGED_EVENT,
     handleProviderSettingsChanged
+  );
+  window.removeEventListener(
+    AI_CHAT_V2_VOICE_SETTINGS_CHANGED_EVENT,
+    handleVoiceSettingsChanged
+  );
+  window.removeEventListener(
+    AI_CHAT_V2_VOICE_MODELS_CHANGED_EVENT,
+    handleVoiceSettingsChanged
   );
   unsubscribeFromFileOperations();
   if (searchDebounceTimer) {
