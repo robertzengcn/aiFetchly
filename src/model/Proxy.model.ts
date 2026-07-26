@@ -4,11 +4,18 @@ import { ProxyEntity } from "@/entity/Proxy.entity";
 import { ProxyListEntity } from "@/entityTypes/proxyType";
 
 export class ProxyModel extends BaseDb {
-  private repository: Repository<ProxyEntity>;
+  private repository: Repository<ProxyEntity> | null = null;
 
   constructor(filepath: string) {
     super(filepath);
-    this.repository = this.sqliteDb.connection.getRepository(ProxyEntity);
+  }
+
+  private async getRepository(): Promise<Repository<ProxyEntity>> {
+    if (!this.repository) {
+      await this.ensureConnection();
+      this.repository = this.sqliteDb.connection.getRepository(ProxyEntity);
+    }
+    return this.repository;
   }
 
   /**
@@ -19,7 +26,8 @@ export class ProxyModel extends BaseDb {
     size: number,
     search: string
   ): Promise<{ total: number; records: ProxyListEntity[] }> {
-    const queryBuilder = this.repository.createQueryBuilder("proxy");
+    const repository = await this.getRepository();
+    const queryBuilder = repository.createQueryBuilder("proxy");
 
     if (search && search.trim().length > 0) {
       queryBuilder.where(
@@ -61,7 +69,8 @@ export class ProxyModel extends BaseDb {
    * Get proxy by ID
    */
   async getProxyById(id: number): Promise<ProxyEntity | null> {
-    return await this.repository.findOne({ where: { id } });
+    const repository = await this.getRepository();
+    return await repository.findOne({ where: { id } });
   }
 
   /**
@@ -73,21 +82,23 @@ export class ProxyModel extends BaseDb {
     if (ids.length === 0) {
       return [];
     }
-    return this.repository.find({ where: { id: In(ids) } });
+    const repository = await this.getRepository();
+    return repository.find({ where: { id: In(ids) } });
   }
 
   /**
    * Save or update proxy
    */
   async saveProxy(proxyData: Partial<ProxyEntity>): Promise<ProxyEntity> {
+    const repository = await this.getRepository();
     if (proxyData.id) {
       // Update existing proxy
-      await this.repository.update(proxyData.id, proxyData);
+      await repository.update(proxyData.id, proxyData);
       return (await this.getProxyById(proxyData.id)) as ProxyEntity;
     } else {
       // Create new proxy
-      const proxy = this.repository.create(proxyData);
-      return await this.repository.save(proxy);
+      const proxy = repository.create(proxyData);
+      return await repository.save(proxy);
     }
   }
 
@@ -95,7 +106,8 @@ export class ProxyModel extends BaseDb {
    * Delete proxy by ID
    */
   async deleteProxy(id: number): Promise<boolean> {
-    const result = await this.repository.delete(id);
+    const repository = await this.getRepository();
+    const result = await repository.delete(id);
     return result.affected ? result.affected > 0 : false;
   }
 
@@ -103,7 +115,8 @@ export class ProxyModel extends BaseDb {
    * Get total count of proxies
    */
   async getProxyCount(): Promise<number> {
-    return await this.repository.count();
+    const repository = await this.getRepository();
+    return await repository.count();
   }
 
   /**
@@ -118,8 +131,9 @@ export class ProxyModel extends BaseDb {
       protocol?: string;
     }>
   ): Promise<number> {
+    const repository = await this.getRepository();
     const proxyEntities = proxies.map((proxy) =>
-      this.repository.create({
+      repository.create({
         host: proxy.host,
         port: proxy.port,
         user: proxy.user,
@@ -128,7 +142,7 @@ export class ProxyModel extends BaseDb {
       })
     );
 
-    const result = await this.repository.save(proxyEntities);
+    const result = await repository.save(proxyEntities);
     return result.length;
   }
 
@@ -136,7 +150,8 @@ export class ProxyModel extends BaseDb {
    * Check if proxy exists by host and port
    */
   async proxyExists(host: string, port: string): Promise<boolean> {
-    const count = await this.repository.count({
+    const repository = await this.getRepository();
+    const count = await repository.count({
       where: { host, port },
     });
     return count > 0;
@@ -162,6 +177,7 @@ export class ProxyModel extends BaseDb {
       protocol?: string;
     }>
   > {
+    const repository = await this.getRepository();
     const uniqueProxies: Array<{
       host: string;
       port: string;
@@ -171,7 +187,7 @@ export class ProxyModel extends BaseDb {
     }> = [];
 
     // Get all existing host:port combinations in one query
-    const existingProxies = await this.repository.find({
+    const existingProxies = await repository.find({
       select: ["host", "port"],
     });
     const existingSet = new Set(
@@ -201,7 +217,8 @@ export class ProxyModel extends BaseDb {
       return [];
     }
 
-    const qb = this.repository.createQueryBuilder("proxy");
+    const repository = await this.getRepository();
+    const qb = repository.createQueryBuilder("proxy");
     qb.where(
       new Brackets((subQuery) => {
         pairs.forEach((pair, index) => {
