@@ -45,12 +45,16 @@ import {
   SAVE_TEMP_FILE_COMPLETE,
   RAG_GET_DOCUMENT_ERROR_LOG,
   RAG_CHECK_DOCUMENT_DUPLICATE,
+  RAG_IMPORT_WEBSITE,
 } from "@/config/channellist";
 import {
   registerValidatedHandler,
   registerAiValidatedHandler,
 } from "@/main-process/communication/_shared/registerValidatedHandler";
 import { isAiEnabled } from "@/service/AiFeatureGate";
+import { KnowledgeLibraryAiTools } from "@/service/KnowledgeLibraryAiTools";
+import type { SkillExecutionContext } from "@/entityTypes/skillTypes";
+import type { KnowledgeLibraryWebsiteImportOutcome } from "@/entityTypes/knowledgeLibraryAiToolTypes";
 import {
   ragShowOpenDialogInputSchema,
   ragFileStatsInputSchema,
@@ -68,6 +72,7 @@ import {
   ragDownloadDocumentInputSchema,
   ragDocumentErrorLogInputSchema,
   ragCheckDuplicateInputSchema,
+  ragImportWebsiteInputSchema,
 } from "@/schemas/ipc/rag";
 
 /**
@@ -77,6 +82,28 @@ async function createRagController(): Promise<RagSearchController> {
   const controller = new RagSearchController();
   await controller.initialize();
   return controller;
+}
+
+/**
+ * Website-import IPC delegator. Thin pass-through to the AI tool layer so the
+ * manual Knowledge Library UI reuses the exact same scrape → stage → dedupe →
+ * RAG-upload path as `knowledge_library_import_website`.
+ *
+ * Exported (and kept free of Electron `event` use) so it can be unit-tested in
+ * isolation. `importWebsite` ignores its `context` argument, so a minimal UI
+ * stub is safe; it performs its own AI-gate check (returns a structured
+ * `AI_DISABLED` outcome) and `replace`-policy rejection, which is why this is
+ * registered with `registerValidatedHandler` rather than the AI-gated variant.
+ */
+export async function handleRagImportWebsite(
+  input: Record<string, unknown>
+): Promise<KnowledgeLibraryWebsiteImportOutcome> {
+  const tools = new KnowledgeLibraryAiTools();
+  const context: SkillExecutionContext = {
+    conversationId: "knowledge-library-ui",
+    toolCallId: "ui-website-import",
+  };
+  return tools.importWebsite(input, context);
 }
 
 /**
@@ -748,4 +775,14 @@ export function registerRagIpcHandlers(): void {
     // Cleanup is automatic (controllers are request-scoped); kept for compat.
     return null;
   });
+
+  // Website/URL import for the Knowledge Library UI. Delegates to the AI tool
+  // layer (handleRagImportWebsite) so the manual UI and the AI assistant share
+  // one import implementation. Boundary validation reuses the tool's schema;
+  // the AI gate + replace-policy + per-page result mapping live in the tool.
+  registerValidatedHandler(
+    RAG_IMPORT_WEBSITE,
+    ragImportWebsiteInputSchema,
+    async (input) => handleRagImportWebsite(input)
+  );
 }
