@@ -229,7 +229,14 @@ class RealSherpaTtsService implements SherpaTtsService {
       speed: speed ?? 1.0,
       silenceScale: 0.2,
     });
-    const audio = this.tts.generate({ text, generationConfig });
+    const audio = this.tts.generate({
+      text,
+      generationConfig,
+      // Electron >= 21 rejects external ArrayBuffers from native addons. Ask
+      // sherpa-onnx to return a normal JS-owned Float32Array so the generated
+      // samples can be encoded and passed back to the renderer safely.
+      enableExternalBuffer: false,
+    });
     const audioBase64 = encodeWavBase64(audio.samples, audio.sampleRate);
     return {
       audioBase64,

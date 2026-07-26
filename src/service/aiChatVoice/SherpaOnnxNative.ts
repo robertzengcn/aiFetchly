@@ -21,6 +21,7 @@ export interface Recognizer {
 export interface TtsEngine {
   generate(input: {
     text: string;
+    enableExternalBuffer?: boolean;
     generationConfig: unknown;
   }): { samples: Float32Array; sampleRate: number };
 }
