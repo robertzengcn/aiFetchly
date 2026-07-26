@@ -154,6 +154,20 @@ export interface ChunkingConfigResponse {
 }
 
 /**
+ * Default chunking configuration (local, no remote fetch needed)
+ */
+export const DEFAULT_CHUNKING_CONFIG: ChunkingConfig = {
+  chunkSize: 1000,
+  overlapSize: 100,
+  strategy: "sentence",
+  preserveWhitespace: true,
+  minChunkSize: 50,
+  maxChunkSize: undefined,
+  splitOnSentences: undefined,
+  splitOnParagraphs: undefined,
+};
+
+/**
  * API client for RAG configuration management
  *
  * Handles communication with remote configuration service to retrieve
@@ -177,6 +191,13 @@ export class RagConfigApi {
    */
   constructor() {
     this._httpClient = new HttpClient();
+  }
+
+  /**
+   * Get default chunking configuration (local, no remote fetch)
+   */
+  getDefaultChunkingConfig(): ChunkingConfig {
+    return { ...DEFAULT_CHUNKING_CONFIG };
   }
 
   /**
@@ -294,25 +315,6 @@ export class RagConfigApi {
       msg: response.msg || "Failed to extract embedding from response",
       data: undefined,
     };
-  }
-
-  /**
-   * Retrieves the chunking configuration from remote server
-   *
-   * @returns Promise resolving to chunking configuration response
-   * @throws {Error} When network request fails
-   *
-   * @example
-   * ```typescript
-   * const config = await api.getChunkingConfig();
-   * if (config.success) {
-   *   const chunkSize = config.data.chunkSize;
-   *   const strategy = config.data.strategy;
-   * }
-   * ```
-   */
-  async getChunkingConfig(): Promise<CommonApiresp<ChunkingConfigResponse>> {
-    return this._httpClient.get("/api/ai/chunking/info");
   }
 
   /**
