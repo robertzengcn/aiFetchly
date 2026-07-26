@@ -1409,14 +1409,45 @@ const pendingPlanApproval = ref<AIChatPlanStateView | null>(null);
 // ---------------------------------------------------------------------------
 // File operation tracking
 // ---------------------------------------------------------------------------
-// Map of conversationId → file operation records emitted via IPC during
-// tool execution (create/overwrite/edit). Shown as a collapsible summary
-// panel above the composer so the user can see what the AI changed.
+// Map of conversationId → file operation records emitted via IPC during tool
+// execution. The panel also includes locally downloaded generated images so
+// users can reopen generated files after provider URLs expire.
 const fileOps = ref<Map<string, readonly FileOperationRecord[]>>(new Map());
 const showFileOpsPanel = ref(true);
+const generatedImageFileOps = computed<readonly FileOperationRecord[]>(() => {
+  if (!activeConversationId.value) return [];
+  return messages.value.flatMap((message) =>
+    (message.metadata?.generatedImages ?? [])
+      .map((image, index): FileOperationRecord | null => {
+        if (!image.local_path) return null;
+        const timestamp = Date.parse(message.timestamp);
+        return {
+          id: `generated-image-${message.id}-${index}`,
+          type: "create",
+          filePath: image.local_path,
+          timestamp: Number.isNaN(timestamp) ? 0 : timestamp,
+          success: true,
+          conversationId:
+            message.conversationId || activeConversationId.value || "",
+          skillName: "generated_image",
+        };
+      })
+      .filter((record): record is FileOperationRecord => record !== null)
+  );
+});
 const currentFileOps = computed<readonly FileOperationRecord[]>(() => {
   if (!activeConversationId.value) return [];
-  return fileOps.value.get(activeConversationId.value) ?? [];
+  const records = [
+    ...(fileOps.value.get(activeConversationId.value) ?? []),
+    ...generatedImageFileOps.value,
+  ];
+  const seen = new Set<string>();
+  return records.filter((record) => {
+    const key = `${record.type}:${record.filePath}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 });
 const createCount = computed(
   () => currentFileOps.value.filter((r) => r.type === "create").length
