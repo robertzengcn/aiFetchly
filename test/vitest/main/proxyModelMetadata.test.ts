@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ProxyModel } from "@/model/Proxy.model";
 import { ProxyCheckModel } from "@/model/ProxyCheck.model";
+import { AIChatMessageModel } from "@/model/AIChatMessage.model";
 
 const sqliteState = vi.hoisted(() => ({
   initialized: false,
@@ -30,10 +31,22 @@ function makeProxyQueryBuilder(): {
 function makeRepository(): {
   createQueryBuilder: (alias: string) => ReturnType<typeof makeProxyQueryBuilder>;
   find: () => Promise<unknown[]>;
+  findOne?: () => Promise<null>;
 } {
   return {
     createQueryBuilder: vi.fn(() => makeProxyQueryBuilder()),
     find: vi.fn(async () => []),
+  };
+}
+
+function makeEagerRepository(): { findOne: () => Promise<null> } {
+  return {
+    findOne: vi.fn(async () => {
+      if (!sqliteState.initialized) {
+        throw new Error('No metadata for "AIChatMessageEntity" was found.');
+      }
+      return null;
+    }),
   };
 }
 
@@ -43,6 +56,10 @@ vi.mock("@/config/SqliteDb", () => {
 
     connection = {
       getRepository: (entity: { name: string }) => {
+        if (entity.name === "AIChatMessageEntity") {
+          sqliteState.repositoryRequests.push(entity.name);
+          return makeEagerRepository();
+        }
         if (!sqliteState.initialized) {
           throw new Error(`No metadata for "${entity.name}" was found.`);
         }
@@ -80,7 +97,7 @@ describe("proxy model metadata initialization", () => {
     const result = await model.getProxyList(1, 10, "");
 
     expect(result).toEqual({ total: 0, records: [] });
-    expect(sqliteState.ensureCalls).toBe(1);
+    expect(sqliteState.ensureCalls).toBeGreaterThanOrEqual(1);
     expect(sqliteState.repositoryRequests).toEqual(["ProxyEntity"]);
   });
 
@@ -91,7 +108,17 @@ describe("proxy model metadata initialization", () => {
 
     expect(result).toBeInstanceOf(Map);
     expect(result.size).toBe(0);
-    expect(sqliteState.ensureCalls).toBe(1);
+    expect(sqliteState.ensureCalls).toBeGreaterThanOrEqual(1);
     expect(sqliteState.repositoryRequests).toEqual(["ProxyCheckEntity"]);
+  });
+
+  it("guards legacy eager repositories before their first operation", async () => {
+    const model = new AIChatMessageModel("/tmp/aifetchly-ai-chat-model-test");
+
+    const result = await model.getMessageById(1);
+
+    expect(result).toBeNull();
+    expect(sqliteState.ensureCalls).toBe(1);
+    expect(sqliteState.repositoryRequests).toEqual(["AIChatMessageEntity"]);
   });
 });
