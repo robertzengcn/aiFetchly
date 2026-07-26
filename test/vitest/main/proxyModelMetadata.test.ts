@@ -5,8 +5,12 @@ import { AIChatMessageModel } from "@/model/AIChatMessage.model";
 
 const sqliteState = vi.hoisted(() => ({
   initialized: false,
+  autoInitialize: true,
   ensureCalls: 0,
+  repositoryOperations: 0,
   repositoryRequests: [] as string[],
+  resolveInitialization: null as (() => void) | null,
+  initializationPromise: null as Promise<void> | null,
 }));
 
 function makeProxyQueryBuilder(): {
@@ -42,6 +46,7 @@ function makeRepository(): {
 function makeEagerRepository(): { findOne: () => Promise<null> } {
   return {
     findOne: vi.fn(async () => {
+      sqliteState.repositoryOperations += 1;
       if (!sqliteState.initialized) {
         throw new Error('No metadata for "AIChatMessageEntity" was found.');
       }
@@ -77,7 +82,19 @@ vi.mock("@/config/SqliteDb", () => {
 
     static async ensureInitialized(): Promise<void> {
       sqliteState.ensureCalls += 1;
-      sqliteState.initialized = true;
+      if (sqliteState.autoInitialize) {
+        sqliteState.initialized = true;
+        return;
+      }
+      if (!sqliteState.initializationPromise) {
+        sqliteState.initializationPromise = new Promise<void>((resolve) => {
+          sqliteState.resolveInitialization = () => {
+            sqliteState.initialized = true;
+            resolve();
+          };
+        });
+      }
+      await sqliteState.initializationPromise;
     }
   }
 
@@ -86,8 +103,12 @@ vi.mock("@/config/SqliteDb", () => {
 
 beforeEach(() => {
   sqliteState.initialized = false;
+  sqliteState.autoInitialize = true;
   sqliteState.ensureCalls = 0;
+  sqliteState.repositoryOperations = 0;
   sqliteState.repositoryRequests = [];
+  sqliteState.resolveInitialization = null;
+  sqliteState.initializationPromise = null;
 });
 
 describe("proxy model metadata initialization", () => {
@@ -120,5 +141,25 @@ describe("proxy model metadata initialization", () => {
     expect(result).toBeNull();
     expect(sqliteState.ensureCalls).toBe(1);
     expect(sqliteState.repositoryRequests).toEqual(["AIChatMessageEntity"]);
+  });
+
+  it("awaits concurrent initialization before legacy repository operations", async () => {
+    sqliteState.autoInitialize = false;
+    const model = new AIChatMessageModel("/tmp/aifetchly-ai-chat-model-test");
+
+    const firstRead = model.getMessageById(1);
+    const secondRead = model.getMessageById(2);
+    await Promise.resolve();
+
+    expect(sqliteState.repositoryOperations).toBe(0);
+    expect(sqliteState.resolveInitialization).not.toBeNull();
+
+    sqliteState.resolveInitialization?.();
+    await expect(Promise.all([firstRead, secondRead])).resolves.toEqual([
+      null,
+      null,
+    ]);
+    expect(sqliteState.repositoryOperations).toBe(2);
+    expect(sqliteState.ensureCalls).toBe(2);
   });
 });
