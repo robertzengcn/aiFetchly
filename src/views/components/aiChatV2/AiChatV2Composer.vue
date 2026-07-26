@@ -130,6 +130,28 @@
         </v-btn>
       </div>
     </v-slide-y-reverse-transition>
+    <v-slide-y-reverse-transition>
+      <div
+        v-if="voicePlaybackError"
+        class="v2-composer__notice v2-composer__notice--voice"
+        role="status"
+        aria-live="polite"
+      >
+        <v-icon size="x-small" color="warning" class="mr-1">mdi-volume-off</v-icon>
+        <span class="v2-composer__notice-text">
+          {{ voicePlaybackError }}
+        </span>
+        <v-btn
+          size="x-small"
+          variant="text"
+          class="ml-1"
+          :aria-label="t('aiChatV2.voice.open_model_settings') || 'Open settings'"
+          @click="$emit('open-voice-settings')"
+        >
+          {{ t("aiChatV2.voice.open_model_settings") || "Open settings" }}
+        </v-btn>
+      </div>
+    </v-slide-y-reverse-transition>
     <div class="v2-composer__bar">
       <!-- Attach file button. Rendered as its own flex item at the far
            left of the bar so the mode/model/tool selectors in the prepend
@@ -232,6 +254,11 @@ const props = defineProps<{
   voiceRuntimeUnavailable?: boolean;
   voiceModelInstalling?: boolean;
   voiceModelInstallError?: string | null;
+  /**
+   * Spoken-response synthesis/playback failure shown when enabled TTS stays
+   * silent (for example, missing model or blocked browser audio).
+   */
+  voicePlaybackError?: string | null;
   /**
    * Maximum recording duration in milliseconds (PRD §7.2). Loaded from voice
    * settings by the parent; falls back to 60s when unset.

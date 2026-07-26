@@ -269,6 +269,7 @@
         :voice-runtime-unavailable="voiceRuntimeUnavailable"
         :voice-model-installing="voiceModelInstalling"
         :voice-model-install-error="voiceModelInstallError"
+        :voice-playback-error="voicePlaybackError"
         :voice-speaking="voiceSpeaking"
         :voice-chat-ready="voiceChatReady"
         :conversation-id="activeConversationId"
@@ -2217,6 +2218,7 @@ const onSend = async (
   if (chatIsRunning.value || hasAnyActiveStream.value) return;
   streamError.value = null;
   attachmentError.value = null;
+  voicePlaybackError.value = null;
   // Record whether this user message originated from voice input so the
   // `after_voice_input` TTS policy speaks only the reply to a voice send
   // (PRD §7.5 / TODO P0-2). Reset for every send — typed/programmatic sends
@@ -2848,13 +2850,25 @@ watch(
   }
 );
 
-const voiceInputEnabled = ref(false);
-const speechController = new SpeechResponseController({
-  ttsMode: "disabled",
-  latestInputWasVoice: false,
-});
-speechController.start();
 const voiceSpeaking = ref(false);
+const voicePlaybackError = ref<string | null>(null);
+const speechController = new SpeechResponseController(
+  {
+    ttsMode: "disabled",
+    latestInputWasVoice: false,
+  },
+  undefined,
+  undefined,
+  (error) => {
+    const fallback = t("aiChatV2.voice.tts_failed") || "Speech playback failed.";
+    voicePlaybackError.value =
+      error.message.trim().length > 0
+        ? `${fallback} ${error.message}`
+        : fallback;
+  }
+);
+speechController.start();
+const voiceInputEnabled = ref(false);
 // Bridge the controller's imperative speaking state into Vue reactivity so the
 // composer can show a stop-speaking control (TODO P1-2).
 const unsubscribeSpeaking = speechController.subscribe((speaking) => {
@@ -2941,6 +2955,7 @@ async function toggleSpokenResponse(): Promise<void> {
   if (voiceSettingsSaving.value) return;
   voiceSettingsSaving.value = true;
   voiceModelInstallError.value = null;
+  voicePlaybackError.value = null;
   try {
     const current = voiceSettings.value ?? await getVoiceSettings();
     const nextTtsMode: AiChatVoiceTtsMode =
@@ -2981,12 +2996,14 @@ function handleVoiceSettingsChanged(): void {
 
 /** Starting a new voice input stops any in-progress TTS playback (PRD §7.5). */
 function onVoiceRecordingStart(): void {
+  voicePlaybackError.value = null;
   speechController.stop();
   void cancelVoiceJob();
 }
 
 /** User clicked the stop-speaking control: halt TTS playback + worker synth. */
 function onStopSpeaking(): void {
+  voicePlaybackError.value = null;
   speechController.stop();
   void cancelVoiceJob();
 }

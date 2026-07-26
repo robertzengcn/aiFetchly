@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import {
   SpeechResponseController,
+  type SpeechResponseError,
   type SynthesizeFn,
 } from "@/views/components/aiChatV2/voice/SpeechResponseController";
 import { VoicePlaybackQueue } from "@/views/components/aiChatV2/voice/VoicePlaybackQueue";
@@ -102,6 +103,52 @@ describe("SpeechResponseController.pushDelta", () => {
     await vi.waitFor(() => expect(calls.length).toBe(1));
     expect(calls[0]).not.toContain("python");
     expect(calls[0]).toContain("actual spoken response");
+  });
+
+  it("reports synthesis failures instead of hiding silent TTS errors", async () => {
+    const { queue } = makeMockQueue();
+    const errors: SpeechResponseError[] = [];
+    const synth: SynthesizeFn = vi.fn(async () => {
+      throw new Error("TTS model is not loaded.");
+    });
+    const c = new SpeechResponseController(
+      { ttsMode: "all_assistant_messages", latestInputWasVoice: false },
+      queue,
+      synth,
+      (error) => errors.push(error)
+    );
+    c.start();
+    c.pushDelta("A complete sentence that is long enough to emit now.");
+    await vi.waitFor(() => expect(errors).toHaveLength(1));
+    expect(errors[0]).toEqual({
+      phase: "synthesis",
+      message: "TTS model is not loaded.",
+    });
+  });
+
+  it("does not report stale synthesis failures after stop", async () => {
+    const { queue } = makeMockQueue();
+    const errors: SpeechResponseError[] = [];
+    let rejectSynth!: (reason: Error) => void;
+    const synth: SynthesizeFn = vi.fn(
+      () =>
+        new Promise<{ audioBase64: string }>((_resolve, reject) => {
+          rejectSynth = reject;
+        })
+    );
+    const c = new SpeechResponseController(
+      { ttsMode: "all_assistant_messages", latestInputWasVoice: false },
+      queue,
+      synth,
+      (error) => errors.push(error)
+    );
+    c.start();
+    c.pushDelta("A complete sentence that is long enough to emit now.");
+    await vi.waitFor(() => expect(synth).toHaveBeenCalledTimes(1));
+    c.stop();
+    rejectSynth(new Error("Voice request cancelled."));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(errors).toHaveLength(0);
   });
 });
 

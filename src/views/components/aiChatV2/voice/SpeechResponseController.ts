@@ -32,6 +32,11 @@ export type SynthesizeFn = (request: {
   speed?: number;
 }) => Promise<{ audioBase64: string }>;
 
+export interface SpeechResponseError {
+  readonly phase: "synthesis" | "playback";
+  readonly message: string;
+}
+
 const defaultSynthesize: SynthesizeFn = (req) =>
   synthesizeVoice(req).then((r) => ({ audioBase64: r.audioBase64 }));
 
@@ -39,6 +44,7 @@ export class SpeechResponseController {
   private readonly chunker = new SentenceChunker();
   private readonly queue: VoicePlaybackQueue;
   private readonly synthesize: SynthesizeFn;
+  private readonly onError?: (error: SpeechResponseError) => void;
   private options: SpeechResponseOptions;
   private active = false;
   private pendingSynth = 0;
@@ -49,15 +55,20 @@ export class SpeechResponseController {
   constructor(
     options: SpeechResponseOptions,
     queue?: VoicePlaybackQueue,
-    synthesize: SynthesizeFn = defaultSynthesize
+    synthesize: SynthesizeFn = defaultSynthesize,
+    onError?: (error: SpeechResponseError) => void
   ) {
     this.options = options;
+    this.onError = onError;
     // When the controller owns the queue, wire playback transitions back to
     // `notifySpeaking` so subscribers learn the combined speaking state. A
     // DI'd queue (tests) keeps its own behavior.
     this.queue =
       queue ??
-      new VoicePlaybackQueue({ onSpeakingChange: () => this.notifySpeaking() });
+      new VoicePlaybackQueue({
+        onSpeakingChange: () => this.notifySpeaking(),
+        onPlaybackError: (error) => this.reportError("playback", error),
+      });
     this.synthesize = synthesize;
   }
 
@@ -156,11 +167,32 @@ export class SpeechResponseController {
       if (this.active && chunkSessionId === this.sessionId) {
         this.queue.enqueue(result.audioBase64);
       }
-    } catch {
-      // Synthesis failed (model not loaded, etc.); skip this chunk.
+    } catch (err) {
+      // Synthesis failed (model not loaded, etc.); skip this chunk but expose
+      // the error so the UI doesn't look enabled while staying silent.
+      if (this.active && chunkSessionId === this.sessionId) {
+        this.reportError("synthesis", err);
+      }
     } finally {
       this.pendingSynth = Math.max(0, this.pendingSynth - 1);
       this.notifySpeaking();
     }
+  }
+
+  private reportError(
+    phase: SpeechResponseError["phase"],
+    error: unknown
+  ): void {
+    const fallback =
+      phase === "synthesis"
+        ? "Speech synthesis failed."
+        : "Speech playback failed.";
+    const message =
+      error instanceof Error
+        ? error.message
+        : typeof error === "string"
+          ? error
+          : fallback;
+    this.onError?.({ phase, message: message.trim() || fallback });
   }
 }

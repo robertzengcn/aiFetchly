@@ -25,6 +25,8 @@ export interface VoicePlaybackQueueDeps {
   readonly createAudio?: (src: string) => PlayableAudioElement;
   /** Notified when playback starts/stops (false<->true transitions only). */
   readonly onSpeakingChange?: (speaking: boolean) => void;
+  /** Notified when browser audio playback fails. */
+  readonly onPlaybackError?: (error: unknown) => void;
 }
 
 const defaultResolveAudioUrl = (audioBase64: string): string => {
@@ -47,6 +49,7 @@ export class VoicePlaybackQueue {
   private readonly revokeObjectUrl: (url: string) => void;
   private readonly createAudio: (src: string) => PlayableAudioElement;
   private readonly onSpeakingChange?: (speaking: boolean) => void;
+  private readonly onPlaybackError?: (error: unknown) => void;
   private readonly queue: string[] = [];
   private current: PlayableAudioElement | null = null;
   private currentUrl: string | null = null;
@@ -57,6 +60,7 @@ export class VoicePlaybackQueue {
     this.revokeObjectUrl = deps.revokeObjectUrl ?? URL.revokeObjectURL;
     this.createAudio = deps.createAudio ?? defaultCreateAudio;
     this.onSpeakingChange = deps.onSpeakingChange;
+    this.onPlaybackError = deps.onPlaybackError;
   }
 
   get isSpeaking(): boolean {
@@ -95,23 +99,35 @@ export class VoicePlaybackQueue {
     this.currentUrl = url;
     const el = this.createAudio(url);
     this.current = el;
-    el.onended = () => {
-      this.revokeObjectUrl(url);
-      this.currentUrl = null;
+    let finalized = false;
+    const finalize = (error?: unknown): void => {
+      if (finalized) return;
+      finalized = true;
+
+      const stillCurrent = this.current === el || this.currentUrl === url;
+      if (!stillCurrent) return;
+
+      el.onended = null;
+      el.onerror = null;
+      if (error !== undefined) {
+        this.onPlaybackError?.(error);
+      }
+      if (this.current === el) {
+        this.current = null;
+      }
+      if (this.currentUrl === url) {
+        this.revokeObjectUrl(url);
+        this.currentUrl = null;
+      }
       void this.playNext();
     };
-    el.onerror = () => {
-      this.revokeObjectUrl(url);
-      this.currentUrl = null;
-      void this.playNext();
-    };
+    el.onended = () => finalize();
+    el.onerror = () => finalize(new Error("Audio playback failed."));
     try {
       await el.play();
-    } catch {
+    } catch (err) {
       // Autoplay/play failure: drop this chunk and advance.
-      this.revokeObjectUrl(url);
-      this.currentUrl = null;
-      void this.playNext();
+      finalize(err);
     }
   }
 

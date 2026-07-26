@@ -12,11 +12,12 @@ interface FakeEl {
   onerror: (() => void) | null;
 }
 
-function makeFakeAudio(): {
+function makeFakeAudio(options: { playRejects?: boolean } = {}): {
   createAudio: (src: string) => PlayableAudioElement;
   current: () => FakeEl | null;
   created: string[];
   fireEnded: () => void;
+  fireError: () => void;
 } {
   let current: FakeEl | null = null;
   const created: string[] = [];
@@ -24,7 +25,9 @@ function makeFakeAudio(): {
     const el: FakeEl = {
       src,
       play: vi.fn(async () => {
-        /* fake */
+        if (options.playRejects) {
+          throw new Error("NotAllowedError: play() failed");
+        }
       }) as Mock,
       pause: vi.fn() as Mock,
       onended: null,
@@ -41,10 +44,16 @@ function makeFakeAudio(): {
     fireEnded: () => {
       current?.onended?.();
     },
+    fireError: () => {
+      current?.onerror?.();
+    },
   };
 }
 
-function makeQueue(fx: ReturnType<typeof makeFakeAudio>): {
+function makeQueue(
+  fx: ReturnType<typeof makeFakeAudio>,
+  onPlaybackError?: (error: unknown) => void
+): {
   queue: VoicePlaybackQueue;
   revoked: string[];
 } {
@@ -53,6 +62,7 @@ function makeQueue(fx: ReturnType<typeof makeFakeAudio>): {
     resolveAudioUrl: (b) => `blob:${b}`,
     revokeObjectUrl: (u) => revoked.push(u),
     createAudio: fx.createAudio,
+    onPlaybackError,
   });
   return { queue, revoked };
 }
@@ -119,5 +129,38 @@ describe("VoicePlaybackQueue", () => {
     expect(revoked).toContain("blob:A");
     // The queue advanced to B instead of stalling.
     expect(fx.created).toEqual(["blob:A", "blob:B"]);
+  });
+
+  it("reports audio element errors instead of failing silently", () => {
+    const fx = makeFakeAudio();
+    const playbackErrors: unknown[] = [];
+    const { queue } = makeQueue(fx, (error) => playbackErrors.push(error));
+    queue.enqueue("A");
+    fx.fireError();
+    expect(playbackErrors).toHaveLength(1);
+    expect(String(playbackErrors[0])).toContain("Audio playback failed");
+  });
+
+  it("reports play() rejections so blocked browser audio is visible", async () => {
+    const fx = makeFakeAudio({ playRejects: true });
+    const playbackErrors: unknown[] = [];
+    const { queue } = makeQueue(fx, (error) => playbackErrors.push(error));
+    queue.enqueue("A");
+    await vi.waitFor(() => expect(playbackErrors).toHaveLength(1));
+    expect(String(playbackErrors[0])).toContain("NotAllowedError");
+    expect(queue.isSpeaking).toBe(false);
+  });
+
+  it("finalizes a chunk only once if onerror and play rejection both fire", async () => {
+    const fx = makeFakeAudio({ playRejects: true });
+    const playbackErrors: unknown[] = [];
+    const { queue, revoked } = makeQueue(fx, (error) =>
+      playbackErrors.push(error)
+    );
+    queue.enqueue("A");
+    fx.fireError();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(playbackErrors).toHaveLength(1);
+    expect(revoked).toEqual(["blob:A"]);
   });
 });
