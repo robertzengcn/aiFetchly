@@ -123,9 +123,9 @@ export class RagSearchModule extends BaseModule {
   async initialize(): Promise<void> {
     try {
       // No local embedding service needed - will use remote API
-      console.log(
-        "RAG search module initialized successfully (using remote API)"
-      );
+      // console.log(
+      //   "RAG search module initialized successfully (using remote API)"
+      // );
     } catch (error) {
       console.error("Failed to initialize RAG search module:", error);
       throw new Error("Failed to initialize RAG search module");
