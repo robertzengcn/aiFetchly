@@ -207,6 +207,14 @@ let win: BrowserWindow | null;
 let devBrowserBridge: { stop(): Promise<void> } | null = null;
 let generatedImageProtocolHandlerRegistered = false;
 
+function isGeneratedImageProtocolUrl(url: string): boolean {
+  try {
+    return new URL(url).protocol === `${AI_CHAT_GENERATED_IMAGE_PROTOCOL}:`;
+  } catch {
+    return false;
+  }
+}
+
 function registerGeneratedImageProtocolHandler(): void {
   if (generatedImageProtocolHandlerRegistered) {
     return;
@@ -629,6 +637,9 @@ function initialize() {
       const isTrustedOrigin = isAppTrustedOrigin(url);
 
       if (!isTrustedOrigin) {
+        if (isGeneratedImageProtocolUrl(url)) {
+          return { action: "deny" };
+        }
         // Open externally WITHOUT preload. Never expose the IPC bridge to
         // arbitrary web content.
         // F9 fix (bypass) — validate scheme before handing the URL to the

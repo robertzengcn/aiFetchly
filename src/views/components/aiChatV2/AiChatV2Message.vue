@@ -102,22 +102,38 @@
           {{ message.content }}
         </div>
         <div v-if="generatedImages.length > 0" class="v2-message__images">
-          <a
-            v-for="image in generatedImages"
-            :key="image.key"
-            :href="image.src"
-            class="v2-message__image-link"
-            target="_blank"
-            rel="noreferrer"
-            :title="t('aiChatV2.open_generated_image') || 'Open generated image'"
-          >
-            <img
-              class="v2-message__image"
-              :src="image.src"
-              :alt="t('aiChatV2.generated_image_alt') || 'AI generated image'"
-              loading="lazy"
-            />
-          </a>
+          <template v-for="image in generatedImages" :key="image.key">
+            <a
+              v-if="image.externalHref"
+              :href="image.externalHref"
+              class="v2-message__image-link"
+              target="_blank"
+              rel="noreferrer"
+              :title="t('aiChatV2.open_generated_image') || 'Open generated image'"
+            >
+              <img
+                class="v2-message__image"
+                :src="image.src"
+                :alt="t('aiChatV2.generated_image_alt') || 'AI generated image'"
+                loading="lazy"
+              />
+            </a>
+            <button
+              v-else
+              type="button"
+              class="v2-message__image-link v2-message__image-button"
+              :disabled="!image.localPath"
+              :title="t('aiChatV2.open_generated_image') || 'Open generated image'"
+              @click="openGeneratedImageFile(image)"
+            >
+              <img
+                class="v2-message__image"
+                :src="image.src"
+                :alt="t('aiChatV2.generated_image_alt') || 'AI generated image'"
+                loading="lazy"
+              />
+            </button>
+          </template>
         </div>
       </template>
       <AiChatV2StreamStatus
@@ -141,6 +157,8 @@ import SkillApprovalCard from "@/views/components/aiChat/SkillApprovalCard.vue";
 import AiChatV2StreamStatus from "./AiChatV2StreamStatus.vue";
 import AiChatV2PlanApprovalCard from "./AiChatV2PlanApprovalCard.vue";
 import AiArtifactCard from "@/views/components/aiArtifacts/AiArtifactCard.vue";
+import { AI_FILE_OPEN } from "@/config/channellist";
+import { windowInvoke } from "@/views/utils/apirequest";
 
 type Status = "idle" | "streaming" | "cancelled" | "error";
 type ShellPreview = {
@@ -192,13 +210,22 @@ const disabled = computed(() => props.disabled ?? false);
 interface RenderableGeneratedImage {
   key: string;
   src: string;
+  externalHref?: string;
+  localPath?: string;
 }
 
 const generatedImages = computed<RenderableGeneratedImage[]>(() => {
   return (props.message.metadata?.generatedImages ?? [])
     .map((image, index) => {
       const src = resolveGeneratedImageSource(image);
-      return src ? { key: `${src}-${index}`, src } : null;
+      return src
+        ? {
+            key: `${src}-${index}`,
+            src,
+            externalHref: isExternalImageUrl(src) ? src : undefined,
+            localPath: image.local_path,
+          }
+        : null;
     })
     .filter((image): image is RenderableGeneratedImage => image !== null);
 });
@@ -233,6 +260,24 @@ function isAllowedImageUrl(url: string): boolean {
   } catch {
     return false;
   }
+}
+
+function isExternalImageUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "https:" || parsed.protocol === "http:";
+  } catch {
+    return false;
+  }
+}
+
+function openGeneratedImageFile(image: RenderableGeneratedImage): void {
+  if (!image.localPath) return;
+  windowInvoke(AI_FILE_OPEN, { filePath: image.localPath }).catch(
+    (openErr: unknown) => {
+      console.error("[ai-chat-v2] Failed to open generated image:", openErr);
+    }
+  );
 }
 
 const toolResult = computed<Record<string, unknown>>(
@@ -329,6 +374,15 @@ const shellPreview = computed<ShellPreview | undefined>(() => {
   border: 1px solid rgba(0, 0, 0, 0.08);
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.7);
+}
+.v2-message__image-button {
+  padding: 0;
+  color: inherit;
+  cursor: pointer;
+  appearance: none;
+}
+.v2-message__image-button:disabled {
+  cursor: default;
 }
 .v2-message__image {
   display: block;
