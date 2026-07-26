@@ -2153,6 +2153,7 @@ export default {
       settings_title: "Voix",
       enable_input: "Activer la saisie vocale",
       enable_spoken_responses: "Activer les réponses parlées",
+      disable_spoken_responses: "Désactiver les réponses parlées",
       auto_send: "Envoyer automatiquement la transcription vocale",
       speak_after_voice_input: "Parler uniquement après une saisie vocale",
       stt_language: "Langue de reconnaissance vocale",

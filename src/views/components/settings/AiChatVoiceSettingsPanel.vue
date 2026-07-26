@@ -246,8 +246,9 @@ const voiceInputOn = computed({
 const spokenOn = computed({
   get: () => ttsMode.value !== "disabled",
   set: (value: boolean) => {
-    // Default to "speak only after voice input" when first enabled.
-    ttsMode.value = value ? "after_voice_input" : "disabled";
+    // Enabling spoken responses should speak normal assistant replies. Users
+    // can still narrow this with the "Speak only after voice input" switch.
+    ttsMode.value = value ? "all_assistant_messages" : "disabled";
   },
 });
 const speakAfterVoiceOnly = computed({

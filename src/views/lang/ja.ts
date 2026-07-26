@@ -2122,6 +2122,7 @@ export default {
       settings_title: "音声",
       enable_input: "音声入力を有効化",
       enable_spoken_responses: "読み上げ応答を有効化",
+      disable_spoken_responses: "読み上げ応答を無効化",
       auto_send: "音声文字起こしを自動送信",
       speak_after_voice_input: "音声入力後にのみ読み上げ",
       stt_language: "音声認識の言語",

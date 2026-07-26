@@ -138,6 +138,32 @@ describe("SpeechResponseController.stop", () => {
     expect(calls.length).toBe(0);
     expect(stopMock).toHaveBeenCalled();
   });
+
+  it("does not enqueue stale synthesis after a later response starts", async () => {
+    const { queue, enqueued } = makeMockQueue();
+    let resolveFirstSynth!: (value: { audioBase64: string }) => void;
+    const synth: SynthesizeFn = vi.fn(
+      () =>
+        new Promise<{ audioBase64: string }>((resolve) => {
+          resolveFirstSynth = resolve;
+        })
+    );
+    const c = new SpeechResponseController(
+      { ttsMode: "all_assistant_messages", latestInputWasVoice: false },
+      queue,
+      synth
+    );
+    c.start();
+    c.pushDelta("This old sentence should never play after a stop.");
+    await vi.waitFor(() => expect(synth).toHaveBeenCalledTimes(1));
+
+    c.stop();
+    c.start();
+    resolveFirstSynth({ audioBase64: "stale-audio" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(enqueued).toHaveLength(0);
+  });
 });
 
 describe("SpeechResponseController.updateOptions", () => {

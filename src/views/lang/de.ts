@@ -2160,6 +2160,7 @@ export default {
       settings_title: "Stimme",
       enable_input: "Spracheingabe aktivieren",
       enable_spoken_responses: "Gesprochene Antworten aktivieren",
+      disable_spoken_responses: "Gesprochene Antworten deaktivieren",
       auto_send: "Sprachtranskript automatisch senden",
       speak_after_voice_input: "Nur nach Spracheingabe sprechen",
       stt_language: "Spracherkennungssprache",

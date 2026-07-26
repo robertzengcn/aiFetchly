@@ -24,6 +24,24 @@
           icon
           size="small"
           variant="text"
+          class="v2-shell__speech-toggle"
+          data-testid="spoken-response-toggle"
+          :color="spokenResponseEnabled ? 'primary' : undefined"
+          :loading="voiceSettingsSaving"
+          :disabled="voiceSettingsSaving"
+          :title="spokenResponseToggleTitle"
+          :aria-label="spokenResponseToggleTitle"
+          :aria-pressed="spokenResponseEnabled"
+          @click="toggleSpokenResponse"
+        >
+          <v-icon size="small">
+            {{ spokenResponseEnabled ? "mdi-volume-high" : "mdi-volume-off" }}
+          </v-icon>
+        </v-btn>
+        <v-btn
+          icon
+          size="small"
+          variant="text"
           :loading="isCompacting"
           :disabled="
             !activeConversationId || messages.length === 0 || chatIsRunning
@@ -466,8 +484,13 @@ import {
   downloadVoiceModel,
   getVoiceSettings,
   getVoiceStatus,
+  setVoiceSettings,
 } from "@/views/api/aiChatV2Voice";
-import type { AiChatVoiceRuntimeStatus } from "@/entityTypes/aiChatVoiceTypes";
+import type {
+  AiChatVoiceRuntimeStatus,
+  AiChatVoiceSettingsView,
+  AiChatVoiceTtsMode,
+} from "@/entityTypes/aiChatVoiceTypes";
 import { SpeechResponseController } from "./voice/SpeechResponseController";
 import {
   AI_PROVIDER_SETTINGS_CHANGED_EVENT,
@@ -2199,6 +2222,11 @@ const onSend = async (
   // (PRD §7.5 / TODO P0-2). Reset for every send — typed/programmatic sends
   // pass no `fromVoice`, which correctly clears the flag.
   speechController.updateOptions({ latestInputWasVoice: options?.fromVoice === true });
+  // Start a fresh spoken-response session for every assistant turn. The
+  // controller is intentionally stopped by "Stop", conversation switching, and
+  // voice recording; without re-arming here, later replies can be silently
+  // ignored even when spoken responses are enabled.
+  speechController.start();
   if (activeConversationId.value) {
     const nextStopped = new Set(stoppedPendingToolConversationIds.value);
     nextStopped.delete(activeConversationId.value);
@@ -2828,8 +2856,17 @@ const unsubscribeSpeaking = speechController.subscribe((speaking) => {
 const voiceAutoSend = ref(false);
 const voiceMaxRecordingMs = ref<number>(60_000);
 const voiceStatus = ref<AiChatVoiceRuntimeStatus | null>(null);
+const voiceSettings = ref<AiChatVoiceSettingsView | null>(null);
+const voiceTtsMode = ref<AiChatVoiceTtsMode>("disabled");
+const voiceSettingsSaving = ref(false);
 const voiceModelInstalling = ref(false);
 const voiceModelInstallError = ref<string | null>(null);
+const spokenResponseEnabled = computed(() => voiceTtsMode.value !== "disabled");
+const spokenResponseToggleTitle = computed(() =>
+  spokenResponseEnabled.value
+    ? t("aiChatV2.voice.disable_spoken_responses") || "Disable spoken responses"
+    : t("aiChatV2.voice.enable_spoken_responses") || "Enable spoken responses",
+);
 const voiceMissingModel = computed(
   () =>
     voiceInputEnabled.value &&
@@ -2846,28 +2883,35 @@ const voiceRuntimeUnavailable = computed(
  * transcript in the draft instead (PRD §7.13 / TODO P1-5).
  */
 const voiceChatReady = computed(() => availableModels.value.length > 0);
+
+function applyVoiceSettings(settings: AiChatVoiceSettingsView): void {
+  voiceSettings.value = settings;
+  voiceInputEnabled.value = settings.inputMode === "push_to_talk";
+  voiceAutoSend.value = settings.autoSendTranscript;
+  voiceMaxRecordingMs.value = settings.maxRecordingMs;
+  voiceTtsMode.value = settings.ttsMode;
+  // Push the full TTS option set into the speech controller so spoken
+  // responses use the saved language/voice/speed (TODO P0-3). "auto"
+  // language defers detection to the worker; an unset voice id is omitted.
+  speechController.updateOptions({
+    ttsMode: settings.ttsMode,
+    ...(settings.ttsLanguage !== "auto"
+      ? { language: settings.ttsLanguage }
+      : {}),
+    ...(settings.ttsVoiceId !== undefined
+      ? { voiceId: settings.ttsVoiceId }
+      : {}),
+    speed: settings.ttsSpeed,
+  });
+}
+
 async function loadVoiceSettings(): Promise<void> {
   try {
     const [settings, status] = await Promise.all([
       getVoiceSettings(),
       getVoiceStatus(),
     ]);
-    voiceInputEnabled.value = settings.inputMode === "push_to_talk";
-    voiceAutoSend.value = settings.autoSendTranscript;
-    voiceMaxRecordingMs.value = settings.maxRecordingMs;
-    // Push the full TTS option set into the speech controller so spoken
-    // responses use the saved language/voice/speed (TODO P0-3). "auto"
-    // language defers detection to the worker; an unset voice id is omitted.
-    speechController.updateOptions({
-      ttsMode: settings.ttsMode,
-      ...(settings.ttsLanguage !== "auto"
-        ? { language: settings.ttsLanguage }
-        : {}),
-      ...(settings.ttsVoiceId !== undefined
-        ? { voiceId: settings.ttsVoiceId }
-        : {}),
-      speed: settings.ttsSpeed,
-    });
+    applyVoiceSettings(settings);
     voiceStatus.value = status;
     if (
       status.sttState !== "missing_model" &&
@@ -2879,7 +2923,31 @@ async function loadVoiceSettings(): Promise<void> {
     voiceInputEnabled.value = false;
     voiceAutoSend.value = false;
     voiceMaxRecordingMs.value = 60_000;
+    voiceSettings.value = null;
+    voiceTtsMode.value = "disabled";
+    speechController.updateOptions({ ttsMode: "disabled" });
     voiceStatus.value = null;
+  }
+}
+
+async function toggleSpokenResponse(): Promise<void> {
+  if (voiceSettingsSaving.value) return;
+  voiceSettingsSaving.value = true;
+  voiceModelInstallError.value = null;
+  try {
+    const current = voiceSettings.value ?? await getVoiceSettings();
+    const nextTtsMode: AiChatVoiceTtsMode =
+      current.ttsMode === "disabled" ? "all_assistant_messages" : "disabled";
+    const saved = await setVoiceSettings({
+      ...current,
+      ttsMode: nextTtsMode,
+    });
+    applyVoiceSettings(saved);
+  } catch (err) {
+    voiceModelInstallError.value =
+      err instanceof Error ? err.message : String(err);
+  } finally {
+    voiceSettingsSaving.value = false;
   }
 }
 

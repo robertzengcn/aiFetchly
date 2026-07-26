@@ -2171,6 +2171,7 @@ export default {
       settings_title: "Voz",
       enable_input: "Habilitar entrada de voz",
       enable_spoken_responses: "Habilitar respuestas habladas",
+      disable_spoken_responses: "Deshabilitar respuestas habladas",
       auto_send: "Enviar la transcripción de voz automáticamente",
       speak_after_voice_input: "Hablar solo después de una entrada de voz",
       stt_language: "Idioma de reconocimiento de voz",

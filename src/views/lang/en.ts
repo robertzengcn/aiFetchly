@@ -2163,6 +2163,7 @@ export default {
       settings_title: "Voice",
       enable_input: "Enable voice input",
       enable_spoken_responses: "Enable spoken responses",
+      disable_spoken_responses: "Disable spoken responses",
       auto_send: "Send voice transcript automatically",
       speak_after_voice_input: "Speak only after voice input",
       stt_language: "Speech recognition language",

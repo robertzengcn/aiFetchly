@@ -42,6 +42,7 @@ export class SpeechResponseController {
   private options: SpeechResponseOptions;
   private active = false;
   private pendingSynth = 0;
+  private sessionId = 0;
   private readonly speakingListeners = new Set<(speaking: boolean) => void>();
   private lastNotifiedSpeaking = false;
 
@@ -96,6 +97,7 @@ export class SpeechResponseController {
   /** Start a new response (resets the chunker). */
   start(): void {
     this.active = true;
+    this.sessionId += 1;
     this.chunker.flush(); // discard any stale buffer
   }
 
@@ -120,6 +122,7 @@ export class SpeechResponseController {
   /** Stop: cancel playback, clear queue + chunker, deactivate. */
   stop(): void {
     this.active = false;
+    this.sessionId += 1;
     this.chunker.flush();
     this.queue.stop();
     this.pendingSynth = 0;
@@ -134,6 +137,7 @@ export class SpeechResponseController {
   private async synthesizeChunk(rawText: string): Promise<void> {
     const text = sanitizeForSpeech(rawText);
     if (!text) return;
+    const chunkSessionId = this.sessionId;
     this.pendingSynth += 1;
     this.notifySpeaking();
     try {
@@ -145,14 +149,17 @@ export class SpeechResponseController {
           ? { speed: this.options.speed }
           : {}),
       });
-      // Only enqueue if still active (not stopped mid-synthesis).
-      if (this.active) {
+      // Only enqueue if still active in the same response session. A stopped
+      // synthesis can resolve after the next message re-arms the controller;
+      // the session guard prevents abandoned audio from leaking into that
+      // newer reply.
+      if (this.active && chunkSessionId === this.sessionId) {
         this.queue.enqueue(result.audioBase64);
       }
     } catch {
       // Synthesis failed (model not loaded, etc.); skip this chunk.
     } finally {
-      this.pendingSynth -= 1;
+      this.pendingSynth = Math.max(0, this.pendingSynth - 1);
       this.notifySpeaking();
     }
   }

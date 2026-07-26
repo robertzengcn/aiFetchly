@@ -2083,6 +2083,7 @@ export default {
       settings_title: "语音",
       enable_input: "启用语音输入",
       enable_spoken_responses: "启用语音回复",
+      disable_spoken_responses: "关闭语音回复",
       auto_send: "自动发送语音识别结果",
       speak_after_voice_input: "仅在语音输入后朗读",
       stt_language: "语音识别语言",
