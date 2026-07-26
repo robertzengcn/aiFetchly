@@ -2314,6 +2314,7 @@ const onSend = async (
   // This keeps tool_call/tool_result chunks (which typically arrive before
   // the final text tokens) visually above the assistant text message.
   let assistantAdded = false;
+  let speechReceivedTextDelta = false;
   const ensureAssistantAdded = (): void => {
     if (assistantAdded) return;
     // Push a shallow copy so the array element is an independent object,
@@ -2464,6 +2465,9 @@ const onSend = async (
             }
             ensureAssistantAdded();
             assistant.content += chunk.contentDelta;
+            if (chunk.contentDelta.trim().length > 0) {
+              speechReceivedTextDelta = true;
+            }
             speechController.pushDelta(chunk.contentDelta);
             // Live estimate: each streamed delta adds ~chars/4 tokens to the
             // running context total. The next usage_update event will snap
@@ -2653,6 +2657,9 @@ const onSend = async (
         ) {
           ensureAssistantAdded();
           assistant.content = complete.fullContent;
+          if (!speechReceivedTextDelta) {
+            speechController.pushDelta(complete.fullContent);
+          }
           speechController.flush();
         }
         const generatedImages =

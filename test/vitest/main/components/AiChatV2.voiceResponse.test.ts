@@ -249,6 +249,75 @@ describe("AiChatV2 spoken responses", () => {
     await vi.waitFor(() => expect(synthesizeVoice).toHaveBeenCalled());
   });
 
+  it("speaks assistant text that arrives only in the complete event", async () => {
+    const completeOnlyText =
+      "This complete-only response should still be spoken aloud.";
+    vi.mocked(streamChatV2Message).mockImplementationOnce(
+      async (
+        request: ChatV2StreamRequest,
+        _onChunk: StreamChunkHandler,
+        onComplete: StreamCompleteHandler
+      ): Promise<void> => {
+        onComplete({
+          eventType: "complete",
+          conversationId: request.conversationId ?? "v2-test",
+          fullContent: completeOnlyText,
+        });
+      }
+    );
+    const wrapper = mountChat();
+    await flushPromises();
+
+    await wrapper.find('[data-testid="send"]').trigger("click");
+
+    await vi.waitFor(() => expect(synthesizeVoice).toHaveBeenCalled());
+    expect(vi.mocked(synthesizeVoice).mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({ text: completeOnlyText })
+    );
+  });
+
+  it("uses complete text for speech after whitespace-only token deltas", async () => {
+    const completeText =
+      "Whitespace-only streaming tokens should not mute this final reply.";
+    vi.mocked(streamChatV2Message).mockImplementationOnce(
+      async (
+        request: ChatV2StreamRequest,
+        onChunk: StreamChunkHandler,
+        onComplete: StreamCompleteHandler
+      ): Promise<void> => {
+        const conversationId = request.conversationId ?? "v2-test";
+        onChunk({
+          eventType: "token",
+          conversationId,
+          contentDelta: "\n ",
+        });
+        onComplete({
+          eventType: "complete",
+          conversationId,
+          fullContent: completeText,
+        });
+      }
+    );
+    const wrapper = mountChat();
+    await flushPromises();
+
+    await wrapper.find('[data-testid="send"]').trigger("click");
+
+    await vi.waitFor(() => expect(synthesizeVoice).toHaveBeenCalled());
+    expect(vi.mocked(synthesizeVoice).mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({ text: completeText })
+    );
+  });
+
+  it("does not speak complete fullContent twice when token deltas were already spoken", async () => {
+    const wrapper = mountChat();
+    await flushPromises();
+
+    await wrapper.find('[data-testid="send"]').trigger("click");
+
+    await vi.waitFor(() => expect(synthesizeVoice).toHaveBeenCalledTimes(1));
+  });
+
   it("shows a header speaker button that enables spoken responses for all assistant messages", async () => {
     vi.mocked(getVoiceSettings).mockResolvedValueOnce({
       ...defaultVoiceSettings,
