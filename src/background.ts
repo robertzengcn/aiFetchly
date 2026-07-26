@@ -70,6 +70,8 @@ import {
   AI_CHAT_GENERATED_IMAGE_PROTOCOL,
   resolveGeneratedImageProtocolPath,
 } from "@/service/AIChatGeneratedImageProtocol";
+import { acquireSingleInstanceLock } from "@/main-process/singleInstanceGuard";
+import type { SingleInstanceApp } from "@/main-process/singleInstanceGuard";
 // import { RAGIpcHandlers } from '@/main-process/ragIpcHandlers';
 // import { createProtocol } from 'electron';
 const isDevelopment = process.env.NODE_ENV !== "production";
@@ -1170,14 +1172,12 @@ function configureContentSecurityPolicy() {
 
 function makeSingleInstance(): void {
   if ((process as NodeJS.Process & { mas: boolean }).mas) return;
-  if (isDevelopment) {
-    log.info("[dev] Skipping single-instance lock");
-    return;
-  }
 
-  const gotThelock = (app as any).requestSingleInstanceLock();
+  const gotThelock = acquireSingleInstanceLock(
+    app as unknown as SingleInstanceApp
+  );
   if (!gotThelock) {
-    (app as any).quit();
+    return;
   } else {
     // console.log('gotThelock:', gotThelock)
 
