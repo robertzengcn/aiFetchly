@@ -5,6 +5,7 @@ import type { Token } from "@/modules/token";
 import { DEFAULT_VOICE_SETTINGS } from "@/entityTypes/aiChatVoiceTypes";
 import {
   AI_CHAT_VOICE_INPUT_MODE,
+  AI_CHAT_VOICE_STT_MODEL_ID,
   AI_CHAT_VOICE_TTS_SPEED,
 } from "@/config/usersetting";
 
@@ -109,6 +110,22 @@ describe("AiChatVoiceModule.getRuntimeStatus", () => {
     const status = mod.getRuntimeStatus();
     expect(status.sttState).toBe("ready");
     expect(status.ttsState).toBe("ready");
+  });
+
+  it("reports ready for a selected Whisper Base model when its files are present", () => {
+    const { token } = makeTokenMock({
+      [AI_CHAT_VOICE_STT_MODEL_ID]: "sherpa-onnx:stt:whisper-base",
+    });
+    const mod = new AiChatVoiceModule({
+      token,
+      workerClient: {} as SherpaVoiceWorkerClient,
+      modelRoot: "/models",
+      fileExists: (p) => p.includes("sherpa-onnx-whisper-base"),
+      runtimeAvailable: () => true,
+    });
+    const status = mod.getRuntimeStatus();
+    expect(status.sttState).toBe("ready");
+    expect(status.sttModelId).toBe("sherpa-onnx:stt:whisper-base");
   });
 
   it("reports unavailable when model files exist but the sherpa runtime is missing", () => {

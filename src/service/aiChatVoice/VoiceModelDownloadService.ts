@@ -17,7 +17,7 @@ import {
 } from "./VoiceModelCatalogService";
 import type { VoiceModelDownloadProgress } from "@/entityTypes/aiChatVoiceTypes";
 
-const MAX_MODEL_DOWNLOAD_BYTES = 500 * 1024 * 1024; // 500 MB cap
+const MAX_MODEL_DOWNLOAD_BYTES = 750 * 1024 * 1024; // supports optional Whisper Small
 const DOWNLOAD_TIMEOUT_MS = 300_000; // 5 min
 
 export type DownloadFn = (
@@ -105,6 +105,11 @@ export class VoiceModelDownloadService {
       onProgress?.({ modelId, phase: "extracting" });
       fs.mkdirSync(this.modelRoot, { recursive: true });
       await this.extractFn(archivePath, this.modelRoot);
+      if (!this.catalog.isInstalled(modelId)) {
+        throw new Error(
+          "Downloaded model is missing required model files after extraction."
+        );
+      }
 
       // Phase 4: done
       onProgress?.({ modelId, phase: "done", pct: 100 });

@@ -6,16 +6,28 @@ import { VoiceModelCatalogService } from "@/service/aiChatVoice/VoiceModelCatalo
 import { VoiceModelDownloadService } from "@/service/aiChatVoice/VoiceModelDownloadService";
 import type { VoiceModelDownloadProgress } from "@/entityTypes/aiChatVoiceTypes";
 
+function writeWhisperTinyFiles(modelRoot: string): void {
+  const modelDir = path.join(modelRoot, "sherpa-onnx-whisper-tiny");
+  fs.mkdirSync(modelDir, { recursive: true });
+  fs.writeFileSync(path.join(modelDir, "tiny-encoder.int8.onnx"), "");
+  fs.writeFileSync(path.join(modelDir, "tiny-decoder.int8.onnx"), "");
+  fs.writeFileSync(path.join(modelDir, "tiny-tokens.txt"), "");
+}
+
 describe("VoiceModelCatalogService", () => {
-  it("lists both STT + TTS models with installed=false when dirs don't exist", () => {
+  it("lists Tiny/Base/Small STT choices plus TTS with installed=false when dirs don't exist", () => {
     const svc = new VoiceModelCatalogService({
       modelRoot: path.join(os.tmpdir(), "voice-test-models"),
       fileExists: () => false,
     });
     const models = svc.listModels();
-    expect(models).toHaveLength(2);
+    expect(models).toHaveLength(4);
     expect(models.every((m) => !m.installed)).toBe(true);
-    expect(models.some((m) => m.type === "stt")).toBe(true);
+    expect(models.filter((m) => m.type === "stt").map((m) => m.id)).toEqual([
+      "sherpa-onnx:stt:auto",
+      "sherpa-onnx:stt:whisper-base",
+      "sherpa-onnx:stt:whisper-small",
+    ]);
     expect(models.some((m) => m.type === "tts")).toBe(true);
   });
 
@@ -59,6 +71,12 @@ describe("VoiceModelCatalogService", () => {
     expect(svc.getModelPath("sherpa-onnx:stt:auto")).toBe(
       "/data/voice-models/sherpa-onnx-whisper-tiny"
     );
+    expect(svc.getModelPath("sherpa-onnx:stt:whisper-base")).toBe(
+      "/data/voice-models/sherpa-onnx-whisper-base"
+    );
+    expect(svc.getModelPath("sherpa-onnx:stt:whisper-small")).toBe(
+      "/data/voice-models/sherpa-onnx-whisper-small"
+    );
     expect(svc.getModelPath("unknown")).toBeNull();
   });
 });
@@ -68,7 +86,9 @@ describe("VoiceModelDownloadService", () => {
     const downloadFn = vi.fn(async (url: string, dest: string) => {
       fs.writeFileSync(dest, "fake-archive");
     });
-    const extractFn = vi.fn(async () => undefined);
+    const extractFn = vi.fn(async (_archive: string, destDir: string) => {
+      writeWhisperTinyFiles(destDir);
+    });
     const svc = new VoiceModelDownloadService({
       modelRoot: path.join(os.tmpdir(), "voice-test-models"),
       downloadFn,
@@ -131,5 +151,23 @@ describe("VoiceModelDownloadService", () => {
     ).rejects.toThrow(/network failure/i);
     expect(progress.at(-1)?.phase).toBe("error");
     expect(progress.at(-1)?.error).toContain("Network failure");
+  });
+
+  it("rejects when extraction does not produce the required model files", async () => {
+    const downloadFn = vi.fn(async (url: string, dest: string) => {
+      fs.writeFileSync(dest, "fake-archive");
+    });
+    const extractFn = vi.fn(async () => undefined);
+    const svc = new VoiceModelDownloadService({
+      modelRoot: fs.mkdtempSync(path.join(os.tmpdir(), "voice-test-models-")),
+      downloadFn,
+      extractFn,
+    });
+    const progress: VoiceModelDownloadProgress[] = [];
+
+    await expect(
+      svc.downloadModel("sherpa-onnx:stt:auto", (p) => progress.push(p))
+    ).rejects.toThrow(/required model files/i);
+    expect(progress.at(-1)?.phase).toBe("error");
   });
 });

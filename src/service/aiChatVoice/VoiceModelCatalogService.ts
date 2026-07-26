@@ -1,9 +1,9 @@
 /**
  * VoiceModelCatalogService — catalog of downloadable sherpa-onnx models + status.
  *
- * Declares the recommended STT (Whisper-tiny) and TTS (Piper VITS) models with
- * their GitHub release URLs, target directories, and approximate sizes. Checks
- * whether each model is installed on disk. Design §14.
+ * Declares downloadable STT (Whisper tiny/base/small) and TTS (Piper VITS)
+ * models with their GitHub release URLs, target directories, and approximate
+ * sizes. Checks whether each model is installed on disk. Design §14.
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -30,22 +30,45 @@ export interface VoiceModelCatalogEntry extends VoiceModelDefinition {
   readonly installed: boolean;
 }
 
-/** Built-in recommended models (user decision: Whisper-tiny + Piper en_US-amy). */
-export const VOICE_MODEL_DEFINITIONS: readonly VoiceModelDefinition[] = [
-  {
-    id: "sherpa-onnx:stt:auto",
-    name: "Whisper Tiny (Multilingual STT)",
+type WhisperVariant = "tiny" | "base" | "small";
+
+function whisperModel(
+  variant: WhisperVariant,
+  id: string,
+  name: string,
+  approxSizeMb: number
+): VoiceModelDefinition {
+  return {
+    id,
+    name,
     type: "stt",
     downloadUrl:
-      "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-whisper-tiny.tar.bz2",
-    targetDir: "sherpa-onnx-whisper-tiny",
-    approxSizeMb: 39,
+      `https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-whisper-${variant}.tar.bz2`,
+    targetDir: `sherpa-onnx-whisper-${variant}`,
+    approxSizeMb,
     requiredFiles: [
-      "tiny-encoder.int8.onnx",
-      "tiny-decoder.int8.onnx",
-      "tiny-tokens.txt",
+      `${variant}-encoder.int8.onnx`,
+      `${variant}-decoder.int8.onnx`,
+      `${variant}-tokens.txt`,
     ],
-  },
+  };
+}
+
+/** Built-in downloadable models. Model files are fetched on demand, not bundled. */
+export const VOICE_MODEL_DEFINITIONS: readonly VoiceModelDefinition[] = [
+  whisperModel("tiny", "sherpa-onnx:stt:auto", "Whisper Tiny (Fast STT)", 111),
+  whisperModel(
+    "base",
+    "sherpa-onnx:stt:whisper-base",
+    "Whisper Base (Recommended STT)",
+    198
+  ),
+  whisperModel(
+    "small",
+    "sherpa-onnx:stt:whisper-small",
+    "Whisper Small (High Accuracy STT)",
+    610
+  ),
   {
     id: "sherpa-onnx:tts:auto",
     name: "Piper VITS en_US Amy (TTS)",

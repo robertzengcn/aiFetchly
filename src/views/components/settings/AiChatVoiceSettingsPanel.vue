@@ -150,7 +150,9 @@
         class="d-flex align-center justify-space-between pa-2 mb-2 rounded"
       >
         <div>
-          <div class="text-body-2 font-weight-medium">{{ model.name }}</div>
+          <div class="text-body-2 font-weight-medium">
+            {{ voiceModelName(model) }}
+          </div>
           <div class="text-caption text-grey-darken-1">
             {{
               model.type === "stt"
@@ -368,13 +370,29 @@ async function loadModels(): Promise<void> {
 const installedSttModelItems = computed(() =>
   models.value
     .filter((m) => m.type === "stt" && m.installed)
-    .map((m) => ({ title: m.name, value: m.id }))
+    .map((m) => ({ title: voiceModelName(m), value: m.id }))
 );
 const installedTtsModelItems = computed(() =>
   models.value
     .filter((m) => m.type === "tts" && m.installed)
-    .map((m) => ({ title: m.name, value: m.id }))
+    .map((m) => ({ title: voiceModelName(m), value: m.id }))
 );
+
+function voiceModelName(model: VoiceModelCatalogEntry): string {
+  if (model.id === "sherpa-onnx:stt:auto") {
+    return t("aiChatV2.voice.model_name_whisper_tiny") || model.name;
+  }
+  if (model.id === "sherpa-onnx:stt:whisper-base") {
+    return t("aiChatV2.voice.model_name_whisper_base") || model.name;
+  }
+  if (model.id === "sherpa-onnx:stt:whisper-small") {
+    return t("aiChatV2.voice.model_name_whisper_small") || model.name;
+  }
+  if (model.id === "sherpa-onnx:tts:auto") {
+    return t("aiChatV2.voice.model_name_piper_amy") || model.name;
+  }
+  return model.name;
+}
 
 async function onDownload(modelId: string): Promise<void> {
   downloadProgress.value = {
