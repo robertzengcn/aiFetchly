@@ -20,6 +20,7 @@ import { PluginComponentRegistryService } from "@/service/PluginComponentRegistr
 import { FileOperationTracker } from "@/service/FileOperationTracker";
 import { registerBuiltinHooks } from "@/service/hooks/builtinHooks";
 import { isAppTrustedOrigin } from "@/service/OriginTrust";
+import { buildAppContentSecurityPolicy } from "@/service/AppContentSecurityPolicy";
 import * as path from "path";
 import { pathToFileURL } from "url";
 import { Token } from "@/modules/token";
@@ -1123,36 +1124,9 @@ function configureContentSecurityPolicy() {
     }
   );
 
-  // Set CSP based on environment
-  // In development, we need 'unsafe-eval' for Vite's HMR
-  // In production, we can be more restrictive
-  const cspDirectives = isDevelopment
-    ? [
-        "default-src 'self'",
-        "script-src 'self' 'unsafe-eval' 'unsafe-inline' http://localhost:* https://localhost:*",
-        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-        `img-src 'self' data: https: http: ${AI_CHAT_GENERATED_IMAGE_PROTOCOL}:`,
-        "font-src 'self' data: https://fonts.googleapis.com https://fonts.gstatic.com",
-        "connect-src 'self' http://localhost:* https://localhost:* https: http: https://fonts.googleapis.com https://fonts.gstatic.com",
-        "frame-src 'self'",
-        "object-src 'none'",
-        "base-uri 'self'",
-        "form-action 'self'",
-        "frame-ancestors 'none'",
-      ].join("; ")
-    : [
-        "default-src 'self'",
-        "script-src 'self'",
-        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-        `img-src 'self' data: https: ${AI_CHAT_GENERATED_IMAGE_PROTOCOL}:`,
-        "font-src 'self' data: https://fonts.googleapis.com https://fonts.gstatic.com",
-        "connect-src 'self' https: https://fonts.googleapis.com https://fonts.gstatic.com",
-        "frame-src 'self'",
-        "object-src 'none'",
-        "base-uri 'self'",
-        "form-action 'self'",
-        "frame-ancestors 'none'",
-      ].join("; ");
+  // Set CSP based on environment. In development, Vite HMR needs a looser
+  // script/connect policy; production keeps those restrictive.
+  const cspDirectives = buildAppContentSecurityPolicy(isDevelopment);
 
   defaultSession.webRequest.onHeadersReceived((details, callback) => {
     callback({

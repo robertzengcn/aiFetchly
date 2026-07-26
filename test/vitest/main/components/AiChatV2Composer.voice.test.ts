@@ -233,4 +233,13 @@ describe("AiChatV2Composer voice controls", () => {
     await stopBtn.trigger("click");
     expect(wrapper.emitted("stop-speaking")).toHaveLength(1);
   });
+
+  it("shows spoken-response playback errors", () => {
+    const wrapper = mountComposer({
+      voicePlaybackError: "Speech playback failed. NotAllowedError",
+    });
+    expect(wrapper.find(".v2-composer__notice").text()).toContain(
+      "Speech playback failed. NotAllowedError"
+    );
+  });
 });

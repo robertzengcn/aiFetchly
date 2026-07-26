@@ -24,6 +24,24 @@
           icon
           size="small"
           variant="text"
+          class="v2-shell__speech-toggle"
+          data-testid="spoken-response-toggle"
+          :color="spokenResponseEnabled ? 'primary' : undefined"
+          :loading="voiceSettingsSaving"
+          :disabled="voiceSettingsSaving"
+          :title="spokenResponseToggleTitle"
+          :aria-label="spokenResponseToggleTitle"
+          :aria-pressed="spokenResponseEnabled"
+          @click="toggleSpokenResponse"
+        >
+          <v-icon size="small">
+            {{ spokenResponseEnabled ? "mdi-volume-high" : "mdi-volume-off" }}
+          </v-icon>
+        </v-btn>
+        <v-btn
+          icon
+          size="small"
+          variant="text"
           :loading="isCompacting"
           :disabled="
             !activeConversationId || messages.length === 0 || chatIsRunning
@@ -251,6 +269,7 @@
         :voice-runtime-unavailable="voiceRuntimeUnavailable"
         :voice-model-installing="voiceModelInstalling"
         :voice-model-install-error="voiceModelInstallError"
+        :voice-playback-error="voicePlaybackError"
         :voice-speaking="voiceSpeaking"
         :voice-chat-ready="voiceChatReady"
         :conversation-id="activeConversationId"
@@ -466,8 +485,13 @@ import {
   downloadVoiceModel,
   getVoiceSettings,
   getVoiceStatus,
+  setVoiceSettings,
 } from "@/views/api/aiChatV2Voice";
-import type { AiChatVoiceRuntimeStatus } from "@/entityTypes/aiChatVoiceTypes";
+import type {
+  AiChatVoiceRuntimeStatus,
+  AiChatVoiceSettingsView,
+  AiChatVoiceTtsMode,
+} from "@/entityTypes/aiChatVoiceTypes";
 import { SpeechResponseController } from "./voice/SpeechResponseController";
 import {
   AI_PROVIDER_SETTINGS_CHANGED_EVENT,
@@ -2225,11 +2249,17 @@ const onSend = async (
   if (chatIsRunning.value || hasAnyActiveStream.value) return;
   streamError.value = null;
   attachmentError.value = null;
+  voicePlaybackError.value = null;
   // Record whether this user message originated from voice input so the
   // `after_voice_input` TTS policy speaks only the reply to a voice send
   // (PRD §7.5 / TODO P0-2). Reset for every send — typed/programmatic sends
   // pass no `fromVoice`, which correctly clears the flag.
   speechController.updateOptions({ latestInputWasVoice: options?.fromVoice === true });
+  // Start a fresh spoken-response session for every assistant turn. The
+  // controller is intentionally stopped by "Stop", conversation switching, and
+  // voice recording; without re-arming here, later replies can be silently
+  // ignored even when spoken responses are enabled.
+  speechController.start();
   if (activeConversationId.value) {
     const nextStopped = new Set(stoppedPendingToolConversationIds.value);
     nextStopped.delete(activeConversationId.value);
@@ -2317,6 +2347,7 @@ const onSend = async (
   // This keeps tool_call/tool_result chunks (which typically arrive before
   // the final text tokens) visually above the assistant text message.
   let assistantAdded = false;
+  let speechReceivedTextDelta = false;
   const ensureAssistantAdded = (): void => {
     if (assistantAdded) return;
     // Push a shallow copy so the array element is an independent object,
@@ -2467,6 +2498,9 @@ const onSend = async (
             }
             ensureAssistantAdded();
             assistant.content += chunk.contentDelta;
+            if (chunk.contentDelta.trim().length > 0) {
+              speechReceivedTextDelta = true;
+            }
             speechController.pushDelta(chunk.contentDelta);
             // Live estimate: each streamed delta adds ~chars/4 tokens to the
             // running context total. The next usage_update event will snap
@@ -2656,6 +2690,9 @@ const onSend = async (
         ) {
           ensureAssistantAdded();
           assistant.content = complete.fullContent;
+          if (!speechReceivedTextDelta) {
+            speechController.pushDelta(complete.fullContent);
+          }
           speechController.flush();
         }
         const generatedImages =
@@ -2844,13 +2881,25 @@ watch(
   }
 );
 
-const voiceInputEnabled = ref(false);
-const speechController = new SpeechResponseController({
-  ttsMode: "disabled",
-  latestInputWasVoice: false,
-});
-speechController.start();
 const voiceSpeaking = ref(false);
+const voicePlaybackError = ref<string | null>(null);
+const speechController = new SpeechResponseController(
+  {
+    ttsMode: "disabled",
+    latestInputWasVoice: false,
+  },
+  undefined,
+  undefined,
+  (error) => {
+    const fallback = t("aiChatV2.voice.tts_failed") || "Speech playback failed.";
+    voicePlaybackError.value =
+      error.message.trim().length > 0
+        ? `${fallback} ${error.message}`
+        : fallback;
+  }
+);
+speechController.start();
+const voiceInputEnabled = ref(false);
 // Bridge the controller's imperative speaking state into Vue reactivity so the
 // composer can show a stop-speaking control (TODO P1-2).
 const unsubscribeSpeaking = speechController.subscribe((speaking) => {
@@ -2859,8 +2908,17 @@ const unsubscribeSpeaking = speechController.subscribe((speaking) => {
 const voiceAutoSend = ref(false);
 const voiceMaxRecordingMs = ref<number>(60_000);
 const voiceStatus = ref<AiChatVoiceRuntimeStatus | null>(null);
+const voiceSettings = ref<AiChatVoiceSettingsView | null>(null);
+const voiceTtsMode = ref<AiChatVoiceTtsMode>("disabled");
+const voiceSettingsSaving = ref(false);
 const voiceModelInstalling = ref(false);
 const voiceModelInstallError = ref<string | null>(null);
+const spokenResponseEnabled = computed(() => voiceTtsMode.value !== "disabled");
+const spokenResponseToggleTitle = computed(() =>
+  spokenResponseEnabled.value
+    ? t("aiChatV2.voice.disable_spoken_responses") || "Disable spoken responses"
+    : t("aiChatV2.voice.enable_spoken_responses") || "Enable spoken responses",
+);
 const voiceMissingModel = computed(
   () =>
     voiceInputEnabled.value &&
@@ -2877,28 +2935,35 @@ const voiceRuntimeUnavailable = computed(
  * transcript in the draft instead (PRD §7.13 / TODO P1-5).
  */
 const voiceChatReady = computed(() => availableModels.value.length > 0);
+
+function applyVoiceSettings(settings: AiChatVoiceSettingsView): void {
+  voiceSettings.value = settings;
+  voiceInputEnabled.value = settings.inputMode === "push_to_talk";
+  voiceAutoSend.value = settings.autoSendTranscript;
+  voiceMaxRecordingMs.value = settings.maxRecordingMs;
+  voiceTtsMode.value = settings.ttsMode;
+  // Push the full TTS option set into the speech controller so spoken
+  // responses use the saved language/voice/speed (TODO P0-3). "auto"
+  // language defers detection to the worker; an unset voice id is omitted.
+  speechController.updateOptions({
+    ttsMode: settings.ttsMode,
+    ...(settings.ttsLanguage !== "auto"
+      ? { language: settings.ttsLanguage }
+      : {}),
+    ...(settings.ttsVoiceId !== undefined
+      ? { voiceId: settings.ttsVoiceId }
+      : {}),
+    speed: settings.ttsSpeed,
+  });
+}
+
 async function loadVoiceSettings(): Promise<void> {
   try {
     const [settings, status] = await Promise.all([
       getVoiceSettings(),
       getVoiceStatus(),
     ]);
-    voiceInputEnabled.value = settings.inputMode === "push_to_talk";
-    voiceAutoSend.value = settings.autoSendTranscript;
-    voiceMaxRecordingMs.value = settings.maxRecordingMs;
-    // Push the full TTS option set into the speech controller so spoken
-    // responses use the saved language/voice/speed (TODO P0-3). "auto"
-    // language defers detection to the worker; an unset voice id is omitted.
-    speechController.updateOptions({
-      ttsMode: settings.ttsMode,
-      ...(settings.ttsLanguage !== "auto"
-        ? { language: settings.ttsLanguage }
-        : {}),
-      ...(settings.ttsVoiceId !== undefined
-        ? { voiceId: settings.ttsVoiceId }
-        : {}),
-      speed: settings.ttsSpeed,
-    });
+    applyVoiceSettings(settings);
     voiceStatus.value = status;
     if (
       status.sttState !== "missing_model" &&
@@ -2910,7 +2975,32 @@ async function loadVoiceSettings(): Promise<void> {
     voiceInputEnabled.value = false;
     voiceAutoSend.value = false;
     voiceMaxRecordingMs.value = 60_000;
+    voiceSettings.value = null;
+    voiceTtsMode.value = "disabled";
+    speechController.updateOptions({ ttsMode: "disabled" });
     voiceStatus.value = null;
+  }
+}
+
+async function toggleSpokenResponse(): Promise<void> {
+  if (voiceSettingsSaving.value) return;
+  voiceSettingsSaving.value = true;
+  voiceModelInstallError.value = null;
+  voicePlaybackError.value = null;
+  try {
+    const current = voiceSettings.value ?? await getVoiceSettings();
+    const nextTtsMode: AiChatVoiceTtsMode =
+      current.ttsMode === "disabled" ? "all_assistant_messages" : "disabled";
+    const saved = await setVoiceSettings({
+      ...current,
+      ttsMode: nextTtsMode,
+    });
+    applyVoiceSettings(saved);
+  } catch (err) {
+    voiceModelInstallError.value =
+      err instanceof Error ? err.message : String(err);
+  } finally {
+    voiceSettingsSaving.value = false;
   }
 }
 
@@ -2937,12 +3027,14 @@ function handleVoiceSettingsChanged(): void {
 
 /** Starting a new voice input stops any in-progress TTS playback (PRD §7.5). */
 function onVoiceRecordingStart(): void {
+  voicePlaybackError.value = null;
   speechController.stop();
   void cancelVoiceJob();
 }
 
 /** User clicked the stop-speaking control: halt TTS playback + worker synth. */
 function onStopSpeaking(): void {
+  voicePlaybackError.value = null;
   speechController.stop();
   void cancelVoiceJob();
 }

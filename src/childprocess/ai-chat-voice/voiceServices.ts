@@ -62,6 +62,33 @@ export interface VoiceServices {
 // STT — Whisper offline recognizer
 // ---------------------------------------------------------------------------
 
+type WhisperVariant = "tiny" | "base" | "small";
+
+const WHISPER_VARIANTS: readonly WhisperVariant[] = ["tiny", "base", "small"];
+
+function resolveWhisperVariant(modelDir: string): WhisperVariant | null {
+  const dirName = path.basename(modelDir);
+  return (
+    WHISPER_VARIANTS.find((variant) =>
+      dirName.startsWith(`sherpa-onnx-whisper-${variant}`)
+    ) ?? null
+  );
+}
+
+function resolveWhisperModelFiles(
+  modelDir: string
+): { encoder: string; decoder: string; tokens: string } | null {
+  const variant = resolveWhisperVariant(modelDir);
+  if (variant === null) {
+    return null;
+  }
+  return {
+    encoder: path.join(modelDir, `${variant}-encoder.int8.onnx`),
+    decoder: path.join(modelDir, `${variant}-decoder.int8.onnx`),
+    tokens: path.join(modelDir, `${variant}-tokens.txt`),
+  };
+}
+
 class RealSherpaSttService implements SherpaSttService {
   private recognizer: Recognizer | null = null;
   private loaded = false;
@@ -72,11 +99,15 @@ class RealSherpaSttService implements SherpaSttService {
       this.loaded = false;
       return false;
     }
-    // sherpa-onnx-whisper-tiny tarball layout:
-    //   <modelDir>/tiny-encoder.int8.onnx, tiny-decoder.int8.onnx, tiny-tokens.txt
-    const encoder = path.join(modelDir, "tiny-encoder.int8.onnx");
-    const decoder = path.join(modelDir, "tiny-decoder.int8.onnx");
-    const tokens = path.join(modelDir, "tiny-tokens.txt");
+    // sherpa-onnx-whisper-<variant> tarball layout:
+    //   <modelDir>/<variant>-encoder.int8.onnx,
+    //   <variant>-decoder.int8.onnx, <variant>-tokens.txt
+    const files = resolveWhisperModelFiles(modelDir);
+    if (files === null) {
+      this.loaded = false;
+      return false;
+    }
+    const { encoder, decoder, tokens } = files;
     if (
       !fs.existsSync(encoder) ||
       !fs.existsSync(decoder) ||
@@ -198,7 +229,14 @@ class RealSherpaTtsService implements SherpaTtsService {
       speed: speed ?? 1.0,
       silenceScale: 0.2,
     });
-    const audio = this.tts.generate({ text, generationConfig });
+    const audio = this.tts.generate({
+      text,
+      generationConfig,
+      // Electron >= 21 rejects external ArrayBuffers from native addons. Ask
+      // sherpa-onnx to return a normal JS-owned Float32Array so the generated
+      // samples can be encoded and passed back to the renderer safely.
+      enableExternalBuffer: false,
+    });
     const audioBase64 = encodeWavBase64(audio.samples, audio.sampleRate);
     return {
       audioBase64,

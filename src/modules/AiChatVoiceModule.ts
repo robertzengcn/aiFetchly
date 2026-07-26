@@ -14,6 +14,7 @@ import * as fs from "fs";
 import { Token } from "@/modules/token";
 import { SherpaVoiceWorkerClient } from "@/service/aiChatVoice/SherpaVoiceWorkerClient";
 import { isSherpaOnnxNativeAvailable } from "@/service/aiChatVoice/SherpaOnnxNative";
+import { VoiceModelCatalogService } from "@/service/aiChatVoice/VoiceModelCatalogService";
 import {
   parseVoiceSettings,
   serializeVoiceSettings,
@@ -45,6 +46,7 @@ export class AiChatVoiceModule {
   private readonly modelRoot: string;
   private readonly fileExists: (filePath: string) => boolean;
   private readonly runtimeAvailable: () => boolean;
+  private readonly catalog: VoiceModelCatalogService;
 
   constructor(deps: AiChatVoiceModuleDeps = {}) {
     this.token = deps.token ?? new Token();
@@ -53,6 +55,10 @@ export class AiChatVoiceModule {
     this.fileExists = deps.fileExists ?? ((p: string) => fs.existsSync(p));
     this.runtimeAvailable =
       deps.runtimeAvailable ?? isSherpaOnnxNativeAvailable;
+    this.catalog = new VoiceModelCatalogService({
+      modelRoot: this.modelRoot,
+      fileExists: this.fileExists,
+    });
   }
 
   /** Read persisted settings, typed + defaulted (never throws). */
@@ -187,11 +193,9 @@ export class AiChatVoiceModule {
       return "unavailable";
     }
     const modelDir = this.resolveModelDir(modelId);
-    if (modelDir === null || !this.fileExists(modelDir)) {
+    if (modelDir === null || !this.catalog.isInstalled(modelId)) {
       return "missing_model";
     }
-    // MVP: a present model directory counts as "ready". The worker handshake
-    // confirms the model actually loads; full catalog/download is Phase 5.
     return "ready";
   }
 
@@ -201,15 +205,7 @@ export class AiChatVoiceModule {
    * directories with the sherpa-onnx model files.
    */
   private resolveModelDir(modelId: string): string | null {
-    const DIR_MAP: Record<string, string> = {
-      "sherpa-onnx:stt:auto": "sherpa-onnx-whisper-tiny",
-      "sherpa-onnx:tts:auto": "vits-piper-en_US-amy-medium",
-    };
-    const dirName = DIR_MAP[modelId];
-    if (!dirName) {
-      return null;
-    }
-    return path.join(this.modelRoot, dirName);
+    return this.catalog.getModelPath(modelId);
   }
 
   /** Prefer an explicit request language; fall back to the setting unless "auto". */
