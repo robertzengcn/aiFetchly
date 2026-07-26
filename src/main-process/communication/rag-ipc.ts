@@ -659,16 +659,15 @@ export function registerRagIpcHandlers(): void {
     }
   );
 
-  // F6 follow-up — the model catalog merges remote + local model lists and
-  // may call the remote AI server; gate on the AI flag.
-  registerAiValidatedHandler(
+  // Model discovery is also needed by free users to select the built-in local
+  // Xenova model. Only include remote models when the AI entitlement is active;
+  // this keeps free-user settings completely local and avoids a remote call.
+  registerValidatedHandler(
     RAG_GET_AVAILABLE_MODELS,
     ragNoInputSchema,
     async () => {
-      // The catalog merges remote + local models and never throws on remote
-      // failure — the local free model is always offered to the UI.
       const catalog = new EmbeddingModelCatalogService();
-      return await catalog.listModels();
+      return await catalog.listModels({ includeRemote: isAiEnabled() });
     }
   );
 
