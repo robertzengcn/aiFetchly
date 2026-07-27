@@ -83,7 +83,10 @@ function mapError(
     return toolError("INVALID_INPUT", `Invalid input: ${messages}`);
   }
   const message = error instanceof Error ? error.message : String(error);
-  return toolError(defaultCode, message);
+  // Strip absolute filesystem paths (staged/vector-index paths can appear in
+  // inner error messages) before the string reaches the model or the UI. URLs
+  // are preserved. Honors the "never expose filePath/content" tool contract.
+  return toolError(defaultCode, sanitizeReason(message));
 }
 
 /** Parse the JSON-encoded `tags` string stored on a RAGDocumentEntity. */
