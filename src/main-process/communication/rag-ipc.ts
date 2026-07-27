@@ -52,9 +52,7 @@ import {
   registerAiValidatedHandler,
 } from "@/main-process/communication/_shared/registerValidatedHandler";
 import { isAiEnabled } from "@/service/AiFeatureGate";
-import { KnowledgeLibraryAiTools } from "@/service/KnowledgeLibraryAiTools";
-import type { SkillExecutionContext } from "@/entityTypes/skillTypes";
-import type { KnowledgeLibraryWebsiteImportOutcome } from "@/entityTypes/knowledgeLibraryAiToolTypes";
+import { handleRagImportWebsite } from "@/main-process/communication/handleRagImportWebsite";
 import {
   ragShowOpenDialogInputSchema,
   ragFileStatsInputSchema,
@@ -82,28 +80,6 @@ async function createRagController(): Promise<RagSearchController> {
   const controller = new RagSearchController();
   await controller.initialize();
   return controller;
-}
-
-/**
- * Website-import IPC delegator. Thin pass-through to the AI tool layer so the
- * manual Knowledge Library UI reuses the exact same scrape → stage → dedupe →
- * RAG-upload path as `knowledge_library_import_website`.
- *
- * Exported (and kept free of Electron `event` use) so it can be unit-tested in
- * isolation. `importWebsite` ignores its `context` argument, so a minimal UI
- * stub is safe; it performs its own AI-gate check (returns a structured
- * `AI_DISABLED` outcome) and `replace`-policy rejection, which is why this is
- * registered with `registerValidatedHandler` rather than the AI-gated variant.
- */
-export async function handleRagImportWebsite(
-  input: Record<string, unknown>
-): Promise<KnowledgeLibraryWebsiteImportOutcome> {
-  const tools = new KnowledgeLibraryAiTools();
-  const context: SkillExecutionContext = {
-    conversationId: "knowledge-library-ui",
-    toolCallId: "ui-website-import",
-  };
-  return tools.importWebsite(input, context);
 }
 
 /**
