@@ -36,7 +36,6 @@ import {
   PLUGIN_GET_MCP_OPTIONS,
   PLUGIN_SET_MCP_OPTION,
 } from "@/config/channellist";
-import { registerAiValidatedHandler } from "@/main-process/communication/_shared/registerValidatedHandler";
 import { registerValidatedHandler } from "@/main-process/communication/_shared/registerValidatedHandler";
 import type { MCPToolEntity } from "@/entity/MCPTool.entity";
 import {
@@ -55,7 +54,8 @@ import {
 } from "@/schemas/ipc/plugin";
 
 /**
- * Plugin Management IPC handlers — all 13 migrated to registerAiValidatedHandler.
+ * Plugin Management IPC handlers — all migrated to registerValidatedHandler
+ * (plugin management is NOT an AI feature).
  *
  * Original code called checkAiEnabled() at the top of every handler; now
  * centralized in the wrapper. Bespoke extractData/validateString helpers
@@ -252,7 +252,7 @@ function pluginHookViews(pluginName: string): {
 export function registerPluginIpcHandlers(): void {
   console.log("Plugin IPC handlers registered");
 
-  registerAiValidatedHandler(PLUGIN_LIST, pluginNoInputSchema, async () => {
+  registerValidatedHandler(PLUGIN_LIST, pluginNoInputSchema, async () => {
     await syncUserPluginFoldersForList();
     const module = new PluginManagementModule();
     const skillModule = new SkillManagementModule();
@@ -280,7 +280,7 @@ export function registerPluginIpcHandlers(): void {
     return summaries;
   });
 
-  registerAiValidatedHandler(
+  registerValidatedHandler(
     PLUGIN_GET,
     pluginByNameInputSchema,
     async (input) => {
@@ -341,7 +341,7 @@ export function registerPluginIpcHandlers(): void {
     }
   );
 
-  registerAiValidatedHandler(
+  registerValidatedHandler(
     PLUGIN_IMPORT,
     pluginImportInputSchema,
     async (input) => {
@@ -377,8 +377,8 @@ export function registerPluginIpcHandlers(): void {
   );
 
   // Install from various sources (zip, folder, git, github, npm, url)
-  // Merged from dev branch. Uses registerAiValidatedHandler + passthrough schema.
-  registerAiValidatedHandler(
+  // Merged from dev branch. Uses registerValidatedHandler + passthrough schema.
+  registerValidatedHandler(
     PLUGIN_INSTALL_FROM_SOURCE,
     pluginInstallFromSourceInputSchema,
     async (input) => {
@@ -464,7 +464,7 @@ export function registerPluginIpcHandlers(): void {
     }
   );
 
-  registerAiValidatedHandler(
+  registerValidatedHandler(
     PLUGIN_VALIDATE_PACKAGE,
     pluginValidatePackageInputSchema,
     async (input) => {
@@ -498,7 +498,7 @@ export function registerPluginIpcHandlers(): void {
     }
   );
 
-  registerAiValidatedHandler(
+  registerValidatedHandler(
     PLUGIN_TOGGLE,
     pluginToggleInputSchema,
     async (input) => {
@@ -514,7 +514,7 @@ export function registerPluginIpcHandlers(): void {
     }
   );
 
-  registerAiValidatedHandler(
+  registerValidatedHandler(
     PLUGIN_UNINSTALL,
     pluginByNameInputSchema,
     async (input) => {
@@ -540,7 +540,7 @@ export function registerPluginIpcHandlers(): void {
     }
   );
 
-  registerAiValidatedHandler(PLUGIN_RELOAD, pluginNoInputSchema, async () => {
+  registerValidatedHandler(PLUGIN_RELOAD, pluginNoInputSchema, async () => {
     const result = await PluginComponentRegistryService.reload();
     // Reload re-ran command promotion — refresh any open slash suggestions.
     broadcastAifetchlyConfigChanged({ source: "plugin" });
@@ -551,7 +551,7 @@ export function registerPluginIpcHandlers(): void {
     };
   });
 
-  registerAiValidatedHandler(
+  registerValidatedHandler(
     PLUGIN_EXPORT_DIAGNOSTICS,
     pluginByNameInputSchema,
     async (input) => {
@@ -563,7 +563,7 @@ export function registerPluginIpcHandlers(): void {
     }
   );
 
-  registerAiValidatedHandler(
+  registerValidatedHandler(
     PLUGIN_TOGGLE_SKILL,
     pluginToggleSkillInputSchema,
     async (input) => {
@@ -579,7 +579,7 @@ export function registerPluginIpcHandlers(): void {
     }
   );
 
-  registerAiValidatedHandler(
+  registerValidatedHandler(
     PLUGIN_TOGGLE_MCP_SERVER,
     pluginToggleMcpServerInputSchema,
     async (input) => {
@@ -590,7 +590,7 @@ export function registerPluginIpcHandlers(): void {
     }
   );
 
-  registerAiValidatedHandler(
+  registerValidatedHandler(
     PLUGIN_TOGGLE_MCP_TOOL,
     pluginToggleMcpToolInputSchema,
     async (input) => {
@@ -604,7 +604,7 @@ export function registerPluginIpcHandlers(): void {
     }
   );
 
-  registerAiValidatedHandler(
+  registerValidatedHandler(
     PLUGIN_TEST_MCP_CONNECTION,
     pluginByServerIdInputSchema,
     async (input) => {
@@ -613,7 +613,7 @@ export function registerPluginIpcHandlers(): void {
     }
   );
 
-  registerAiValidatedHandler(
+  registerValidatedHandler(
     PLUGIN_DISCOVER_MCP_TOOLS,
     pluginByServerIdInputSchema,
     async (input) => {
