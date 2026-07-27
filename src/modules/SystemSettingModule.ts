@@ -2,7 +2,10 @@ import { BaseModule } from "@/modules/baseModule";
 import { SystemSettingModel } from "@/model/SystemSetting.model";
 import { SystemSettingEntity } from "@/entity/SystemSetting.entity";
 import { SystemSettingGroupEntity } from "@/entity/SystemSettingGroup.entity";
-import { parseStoredEmbeddingModel } from "@/service/embedding/EmbeddingModelId";
+import {
+  normalizeEmbeddingModelId,
+  parseStoredEmbeddingModel,
+} from "@/service/embedding/EmbeddingModelId";
 
 export class SystemSettingModule extends BaseModule {
   private systemSettingModel: SystemSettingModel;
@@ -68,7 +71,7 @@ export class SystemSettingModule extends BaseModule {
     }
 
     // Combine modelName and dimension into the required format
-    const combinedModelName = `${modelName.trim()}:${dimension}`;
+    const combinedModelName = `${normalizeEmbeddingModelId(modelName)}:${dimension}`;
 
     return this.systemSettingModel.updateDefaultEmbeddingModel(
       combinedModelName,
@@ -99,6 +102,9 @@ export class SystemSettingModule extends BaseModule {
       return null;
     }
 
-    return parsed;
+    return {
+      modelName: normalizeEmbeddingModelId(parsed.modelName),
+      dimension: parsed.dimension,
+    };
   }
 }
