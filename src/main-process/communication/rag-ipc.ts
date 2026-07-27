@@ -90,25 +90,9 @@ export function registerRagIpcHandlers(): void {
 
   // ── Out-of-scope: streaming on handler ───────────────────────────────
   ipcMain.on(SAVE_TEMP_FILE, async (event, data): Promise<void> => {
-    // F6 follow-up — the streaming upload path also triggers chunking +
-    // remote embedding work. It cannot use registerAiValidatedHandler
-    // (it pushes progress over event.sender.send), so check the AI gate
-    // explicitly and fail-closed before parsing metadata or writing.
-    if (!isAiEnabled()) {
-      const disabled: CommonMessage<SaveTempFileResponse> = {
-        status: false,
-        msg: "AI feature is not enabled",
-        data: {
-          tempFilePath: "",
-          databaseSaved: false,
-          databaseError: "AI feature is not enabled",
-        },
-      };
-      (
-        event as { sender: { send: (c: string, m: string) => void } }
-      ).sender.send(SAVE_TEMP_FILE_COMPLETE, JSON.stringify(disabled));
-      return;
-    }
+    // File upload is NOT an AI feature — it just saves a file to disk and
+    // database. The AI-related chunking/embedding is handled separately by
+    // RAG_CHUNK_AND_EMBED_DOCUMENT (which uses registerAiValidatedHandler).
 
     let documentInfo: UploadedDocument | null = null;
     let databaseSaved = false;
