@@ -190,6 +190,20 @@ describe("Native module version compatibility", () => {
     }
   });
 
+  it("should avoid windows-latest for native Windows build jobs", () => {
+    const workflowPaths = [
+      path.join(projectRoot, ".github/workflows/build.yml"),
+      path.join(projectRoot, ".github/workflows/release.yml"),
+    ];
+
+    for (const workflowPath of workflowPaths) {
+      const workflow = fs.readFileSync(workflowPath, "utf-8");
+
+      expect(workflow).not.toContain("runs-on: windows-latest");
+      expect(workflow).toContain("runs-on: windows-2022");
+    }
+  });
+
   it("should verify native modules before Electron startup commands", () => {
     const packageJson = JSON.parse(
       fs.readFileSync(packageJsonPath, "utf-8")

@@ -10,7 +10,9 @@ permissions:
 
 jobs:
   build-windows:
-    runs-on: windows-latest
+    # Native modules in this Electron build still rely on node-gyp versions
+    # that do not detect Visual Studio 2026/18.x on newer Windows images.
+    runs-on: windows-2022
     outputs:
       version: ${{ steps.calculate_version.outputs.version }}
       artifact_name: ${{ steps.calculate_version.outputs.artifact_name }}
