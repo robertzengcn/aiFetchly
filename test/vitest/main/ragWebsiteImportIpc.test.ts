@@ -83,4 +83,40 @@ describe("handleRagImportWebsite", () => {
     await handleRagImportWebsite(input);
     expect(importWebsiteMock.mock.calls[0][0]).toEqual(input);
   });
+
+  it("forwards site_crawl fields and duplicatePolicy verbatim", async () => {
+    const outcome: ImportKnowledgeWebsiteResult = {
+      success: true,
+      mode: "site_crawl",
+      imported: [],
+      skipped: [],
+      importedCount: 0,
+      skippedCount: 0,
+      requestedCount: 0,
+      summary: "",
+    };
+    importWebsiteMock.mockResolvedValue(outcome);
+    const input = {
+      mode: "site_crawl" as const,
+      url: "https://example.com/docs",
+      maxPages: 10,
+      maxDepth: 3,
+      duplicatePolicy: "replace" as const,
+      tags: ["docs"],
+    };
+    await handleRagImportWebsite(input);
+    expect(importWebsiteMock.mock.calls[0][0]).toEqual(input);
+  });
+
+  it("propagates rejections from importWebsite unchanged", async () => {
+    const boom = new Error("scrape pipeline exploded");
+    importWebsiteMock.mockRejectedValue(boom);
+    await expect(
+      handleRagImportWebsite({
+        mode: "single_page",
+        url: "https://example.com",
+      })
+    ).rejects.toBe(boom);
+    expect(importWebsiteMock).toHaveBeenCalledTimes(1);
+  });
 });
