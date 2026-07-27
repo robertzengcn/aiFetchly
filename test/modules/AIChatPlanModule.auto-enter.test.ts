@@ -17,14 +17,16 @@ import type { AIChatPlanEntity } from "@/entity/AIChatPlan.entity";
  * transient error), the same planId must be returned for the same
  * conversation — never a duplicate plan record.
  *
- * Approach: We stub the Model prototypes (AIChatPlanModel,
- * AIChatPlanVersionModel, AIChatPlanQuestionModel) so that
+ * Approach: We stub the Model prototypes before creating the module
+ * (AIChatPlanModel, AIChatPlanVersionModel, AIChatPlanQuestionModel) so that
  * ensurePlanForConversation's branching logic is exercised without
  * requiring a real SQLite/TypeORM DataSource. The module's own
  * constructor succeeds in the Mocha environment (BaseModule falls back to
  * a temp directory when USERSDBPATH is unset), but the TypeORM entities
  * are not registered with the test DataSource, so direct DB calls would
- * throw EntityMetadataNotFoundError. Sinon stubs avoid that path while
+ * throw EntityMetadataNotFoundError. BaseDb copies async model methods onto
+ * each instance during construction, so the stubs must exist before the
+ * module creates its model instances. Sinon stubs avoid the DB path while
  * still testing the real branching logic in ensurePlanForConversation.
  */
 describe("AIChatPlanModule.ensurePlanForConversation idempotency", function () {
@@ -34,10 +36,6 @@ describe("AIChatPlanModule.ensurePlanForConversation idempotency", function () {
 
   beforeEach(function () {
     sinon.restore();
-    mod = new AIChatPlanModule();
-    sinon
-      .stub(AIChatPlanApprovalModel.prototype, "getLatestByPlanVersion")
-      .resolves(null);
   });
 
   afterEach(function () {
@@ -64,6 +62,10 @@ describe("AIChatPlanModule.ensurePlanForConversation idempotency", function () {
     sinon
       .stub(AIChatPlanQuestionModel.prototype, "getPendingByPlan")
       .resolves(null);
+    sinon
+      .stub(AIChatPlanApprovalModel.prototype, "getLatestByPlanVersion")
+      .resolves(null);
+    mod = new AIChatPlanModule();
 
     const first = await mod.ensurePlanForConversation({
       conversationId: "v2-test-idempotent",
@@ -111,6 +113,10 @@ describe("AIChatPlanModule.ensurePlanForConversation idempotency", function () {
     sinon
       .stub(AIChatPlanQuestionModel.prototype, "getPendingByPlan")
       .resolves(null);
+    sinon
+      .stub(AIChatPlanApprovalModel.prototype, "getLatestByPlanVersion")
+      .resolves(null);
+    mod = new AIChatPlanModule();
 
     const result = await mod.ensurePlanForConversation({
       conversationId: "v2-test-new-conv",
@@ -125,6 +131,7 @@ describe("AIChatPlanModule.ensurePlanForConversation idempotency", function () {
   });
 
   it("rejects a non-v2 conversation id", async function () {
+    mod = new AIChatPlanModule();
     let threw = false;
     try {
       await mod.ensurePlanForConversation({
@@ -146,7 +153,6 @@ describe("AIChatPlanModule.getPlanState current-version approvals", function () 
 
   beforeEach(function () {
     sinon.restore();
-    mod = new AIChatPlanModule();
   });
 
   afterEach(function () {
@@ -184,6 +190,7 @@ describe("AIChatPlanModule.getPlanState current-version approvals", function () 
       } as unknown as Awaited<
         ReturnType<AIChatPlanApprovalModel["getLatestByPlanVersion"]>
       >);
+    mod = new AIChatPlanModule();
 
     const result = await mod.getPlanState("v2-test-approved-history");
 
@@ -214,6 +221,7 @@ describe("AIChatPlanModule.getPlanState current-version approvals", function () 
     const approvalStub = sinon
       .stub(AIChatPlanApprovalModel.prototype, "getLatestByPlanVersion")
       .resolves(null);
+    mod = new AIChatPlanModule();
 
     const result = await mod.getPlanState("v2-test-current-awaiting");
 
@@ -229,7 +237,6 @@ describe("AIChatPlanModule.cancelDraft", function () {
 
   beforeEach(function () {
     sinon.restore();
-    mod = new AIChatPlanModule();
   });
 
   afterEach(function () {
@@ -252,6 +259,7 @@ describe("AIChatPlanModule.cancelDraft", function () {
     const updateStatusStub = sinon
       .stub(AIChatPlanModel.prototype, "updateStatus")
       .resolves();
+    mod = new AIChatPlanModule();
 
     await mod.cancelDraft({ planId: "plan-cancel-draft-001" });
 
@@ -277,6 +285,7 @@ describe("AIChatPlanModule.cancelDraft", function () {
     const updateStatusStub = sinon
       .stub(AIChatPlanModel.prototype, "updateStatus")
       .resolves();
+    mod = new AIChatPlanModule();
 
     await mod.cancelDraft({ planId: "plan-noop-002" });
 
@@ -288,6 +297,7 @@ describe("AIChatPlanModule.cancelDraft", function () {
     const updateStatusStub = sinon
       .stub(AIChatPlanModel.prototype, "updateStatus")
       .resolves();
+    mod = new AIChatPlanModule();
 
     let threw = false;
     try {
