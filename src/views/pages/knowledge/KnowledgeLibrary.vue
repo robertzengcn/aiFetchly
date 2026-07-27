@@ -524,8 +524,9 @@ function handleWebsiteImportCompleted(outcome: ImportKnowledgeWebsiteResult) {
     }),
     outcome.importedCount > 0 ? 'success' : 'warning'
   );
-  // Refresh the documents list so newly imported webpages appear immediately.
-  if (documentManagement.value) {
+  // Refresh the documents list only when at least one page was imported —
+  // avoids a needless IPC + DB round-trip when every page was skipped.
+  if (documentManagement.value && outcome.importedCount > 0) {
     documentManagement.value.refreshDocuments();
   }
 }

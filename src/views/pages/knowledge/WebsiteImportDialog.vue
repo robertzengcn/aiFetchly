@@ -81,7 +81,7 @@
           v-if="mode === 'url_list'"
           v-model="urlsText"
           :label="t('knowledge.website_import_urls')"
-          :hint="t('knowledge.website_import_urls_hint')"
+          :hint="t('knowledge.website_import_urls_hint', { max: WEBSITE_IMPORT_LIMITS.maxUrls })"
           persistent-hint
           prepend-inner-icon="mdi-format-list-text"
           placeholder="https://example.com/pricing&#10;https://example.com/faq"
@@ -99,8 +99,8 @@
           </div>
           <v-slider
             v-model="maxPages"
-            :min="1"
-            :max="100"
+            :min="WEBSITE_IMPORT_LIMITS.maxPages.min"
+            :max="WEBSITE_IMPORT_LIMITS.maxPages.max"
             :step="1"
             thumb-label
             :disabled="importing"
@@ -115,8 +115,8 @@
           </div>
           <v-slider
             v-model="maxDepth"
-            :min="0"
-            :max="4"
+            :min="WEBSITE_IMPORT_LIMITS.maxDepth.min"
+            :max="WEBSITE_IMPORT_LIMITS.maxDepth.max"
             :step="1"
             thumb-label
             :disabled="importing"
@@ -244,7 +244,7 @@
 
       <v-card-actions>
         <v-spacer />
-        <v-btn variant="text" :disabled="importing" @click="closeDialog">
+        <v-btn variant="text" @click="closeDialog">
           {{ hasResult ? t('knowledge.website_import_close') : t('common.cancel') }}
         </v-btn>
         <v-btn
@@ -275,6 +275,7 @@
 import { ref, computed, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { importWebsite, type WebsiteImportOptions } from "@/views/api/rag";
+import { WEBSITE_IMPORT_LIMITS } from "@/entityTypes/knowledgeLibraryAiToolTypes";
 import type {
   ImportKnowledgeWebsiteResult,
   KnowledgeLibraryToolError,
@@ -299,8 +300,8 @@ const title = ref("");
 const description = ref("");
 const tagsText = ref("");
 const author = ref("Website");
-const maxPages = ref(20);
-const maxDepth = ref(2);
+const maxPages = ref(WEBSITE_IMPORT_LIMITS.maxPages.default);
+const maxDepth = ref(WEBSITE_IMPORT_LIMITS.maxDepth.default);
 const duplicatePolicy = ref<"fail" | "allow">("fail");
 
 // ── Runtime state ───────────────────────────────────────────────────────
@@ -366,6 +367,7 @@ function onModeChange(): void {
 }
 
 async function submit(): Promise<void> {
+  if (importing.value) return; // guard against double-submit while in-flight
   formError.value = "";
 
   if (mode.value !== "url_list") {
@@ -375,6 +377,18 @@ async function submit(): Promise<void> {
     }
   } else if (parsedUrls.value.length === 0) {
     formError.value = t("knowledge.website_import_urls_required");
+    return;
+  }
+
+  // Client-side cap so the user gets immediate feedback instead of a backend
+  // INVALID_INPUT rejection after the IPC round-trip.
+  if (
+    mode.value === "url_list" &&
+    parsedUrls.value.length > WEBSITE_IMPORT_LIMITS.maxUrls
+  ) {
+    formError.value = t("knowledge.website_import_too_many_urls", {
+      max: WEBSITE_IMPORT_LIMITS.maxUrls,
+    });
     return;
   }
 
@@ -426,6 +440,18 @@ function resetForAnother(): void {
   urlsText.value = "";
   title.value = "";
 }
+
+// Exposed for component testing (drive submit() + assert state). No parent
+// references the dialog via ref, so this has no production-visible effect.
+defineExpose({
+  submit,
+  mode,
+  url,
+  urlsText,
+  duplicatePolicy,
+  formError,
+  importing,
+});
 </script>
 
 <style scoped>
