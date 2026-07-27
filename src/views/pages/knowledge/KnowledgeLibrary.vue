@@ -15,6 +15,13 @@
           {{ t('knowledge.upload_document') }}
         </v-btn>
         <v-btn
+          color="success"
+          prepend-icon="mdi-web"
+          @click="showWebsiteImportDialog = true"
+        >
+          {{ t('knowledge.import_website') }}
+        </v-btn>
+        <v-btn
           color="info"
           prepend-icon="mdi-cog"
           @click="openSettingsDialog"
@@ -226,6 +233,12 @@
     </v-dialog>
 
 
+    <!-- Website Import Dialog -->
+    <WebsiteImportDialog
+      v-model="showWebsiteImportDialog"
+      @completed="handleWebsiteImportCompleted"
+    />
+
     <!-- Duplicate Confirmation Dialog -->
     <v-dialog v-model="showDuplicateDialog" max-width="550px" persistent>
       <v-card>
@@ -372,6 +385,8 @@ const { t } = useI18n();
 
 import DocumentManagement from '@/views/pages/knowledge/DocumentManagement.vue';
 import SearchInterface from '@/views/pages/knowledge/SearchInterface.vue';
+import WebsiteImportDialog from '@/views/pages/knowledge/WebsiteImportDialog.vue';
+import type { ImportKnowledgeWebsiteResult } from '@/entityTypes/knowledgeLibraryAiToolTypes';
 import { initializeRAG, getRAGStats, uploadDocument, selectFilesNative as selectFilesNativeAPI, copyFileToTemp as copyFileToTempAPI, chunkAndEmbedDocument, getAvailableEmbeddingModelsWithDefault, updateEmbeddingModel, FileUploadProgress, FileUploadComplete, checkDocumentDuplicate } from '@/views/api/rag';
 import type { SaveTempFileResponse, UploadedDocument } from '@/entityTypes/commonType';
 import { ModelInfo } from '@/api/ragConfigApi';
@@ -382,6 +397,7 @@ import { DocumentMetadata } from '@/entityTypes/metadataType';
 // Reactive data
 const activeTab = ref('documents');
 const showUploadDialog = ref(false);
+const showWebsiteImportDialog = ref(false);
 const showSettingsDialog = ref(false);
 const statusMessage = ref('');
 const statusType = ref<'success' | 'error' | 'warning' | 'info'>('info');
@@ -495,6 +511,20 @@ function handleDocumentUploaded(document: UploadedDocument) {
 function handleDocumentDeleted(documentId: number) {
   showStatus(t('knowledge.document_deleted_successfully'), 'success');
   // Refresh document management if needed
+  if (documentManagement.value) {
+    documentManagement.value.refreshDocuments();
+  }
+}
+
+function handleWebsiteImportCompleted(outcome: ImportKnowledgeWebsiteResult) {
+  showStatus(
+    t('knowledge.website_import_status_done', {
+      imported: outcome.importedCount,
+      skipped: outcome.skippedCount,
+    }),
+    outcome.importedCount > 0 ? 'success' : 'warning'
+  );
+  // Refresh the documents list so newly imported webpages appear immediately.
   if (documentManagement.value) {
     documentManagement.value.refreshDocuments();
   }

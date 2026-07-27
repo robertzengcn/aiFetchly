@@ -310,6 +310,48 @@ export default {
     queue_confirm_clear: "Des messages sont en file d'attente. Les effacer ?",
     queue_confirm_switch:
       "Des messages sont en file d'attente. Les abandonner et changer de conversation ?",
+    import_website: "Importer un site web",
+    website_import_title:
+      "Importer un site web dans la bibliothèque de connaissances",
+    website_import_subtitle:
+      "Convertissez les pages web publiques en markdown et ajoutez-les comme documents consultables.",
+    website_import_mode: "Mode d'importation",
+    website_import_mode_single: "Page unique",
+    website_import_mode_list: "Liste d'URL",
+    website_import_mode_crawl: "Exploration du site",
+    website_import_url: "URL",
+    website_import_url_hint:
+      "URL http(s) publique, ex. https://example.com/pricing",
+    website_import_seed_url: "URL de départ",
+    website_import_urls: "URLs",
+    website_import_urls_hint: "Une URL par ligne (50 max).",
+    website_import_title_field: "Titre (facultatif)",
+    website_import_title_hint: "S'applique uniquement au mode page unique.",
+    website_import_max_pages: "Pages max.",
+    website_import_max_depth: "Profondeur max.",
+    website_import_tags: "Étiquettes",
+    website_import_tags_hint: "Séparées par des virgules.",
+    website_import_author: "Auteur",
+    website_import_description: "Description (facultatif)",
+    website_import_duplicate_policy: "Politique des doublons",
+    website_import_policy_fail: "Ignorer les doublons",
+    website_import_policy_allow: "Autoriser les doublons",
+    website_import_hint:
+      "Seules les pages http(s) publiques sont prises en charge. Chaque page devient un document consultable. Les pages authentifiées, localhost et du réseau interne sont rejetées.",
+    website_import_url_required: "L'URL est requise.",
+    website_import_urls_required: "Au moins une URL est requise.",
+    website_import_import: "Importer",
+    website_import_importing: "Importation...",
+    website_import_close: "Fermer",
+    website_import_another: "Importer une autre",
+    website_import_failed: "Échec de l'importation",
+    website_import_result_imported: "Importées",
+    website_import_result_skipped: "Ignorées",
+    website_import_result_discovered:
+      "{count} lien(s) de même origine découvert(s).",
+    website_import_chunks: "{count} fragments",
+    website_import_status_done:
+      "{imported} page(s) importée(s) ; {skipped} ignorée(s).",
   },
   notifications: {
     cloudflare_protection_detected: "Cloudflare Protection Detected",
