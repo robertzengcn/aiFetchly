@@ -1,5 +1,7 @@
 # AI Chat V2 Goal and Loop Commands PRD
 
+Related technical design: [AI Chat V2 Goal and Loop Technical Design](./ai-chat-goal-loop-technical-design.md)
+
 ## Overview
 
 AiFetchly should support `/goal` and `/loop` commands in AI Chat V2 to let users define a durable objective and optionally ask the agent to continue bounded autonomous work toward that objective.
