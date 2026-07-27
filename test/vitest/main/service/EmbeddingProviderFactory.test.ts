@@ -3,7 +3,10 @@ import { describe, expect, it } from "vitest";
 import { EmbeddingProviderFactory } from "@/service/embedding/EmbeddingProviderFactory";
 import { LocalXenovaEmbeddingProvider } from "@/service/embedding/LocalXenovaEmbeddingProvider";
 import { RemoteEmbeddingProvider } from "@/service/embedding/RemoteEmbeddingProvider";
-import { LOCAL_XENOVA_ALL_MINILM_MODEL_ID } from "@/service/embedding/LocalEmbeddingModels";
+import {
+  LOCAL_XENOVA_ALL_MINILM_MODEL_ID,
+  LOCAL_XENOVA_ALL_MINILM_UNDERLYING_MODEL,
+} from "@/service/embedding/LocalEmbeddingModels";
 
 describe("EmbeddingProviderFactory", () => {
   it("returns a local provider for a local-xenova model ID", () => {
@@ -22,6 +25,14 @@ describe("EmbeddingProviderFactory", () => {
     expect(provider.provider).toBe("remote-api");
     expect(provider.modelName).toBe("Qwen/Qwen3-Embedding-4B");
     expect(provider.dimensions).toBe(2560);
+  });
+
+  it("canonicalizes legacy local model names before constructing the provider", () => {
+    const factory = new EmbeddingProviderFactory();
+    const provider = factory.create(LOCAL_XENOVA_ALL_MINILM_UNDERLYING_MODEL, 384);
+    expect(provider).toBeInstanceOf(LocalXenovaEmbeddingProvider);
+    expect(provider.provider).toBe("local-xenova");
+    expect(provider.modelName).toBe(LOCAL_XENOVA_ALL_MINILM_MODEL_ID);
   });
 
   it("passes injected dependencies through to the constructed provider", () => {

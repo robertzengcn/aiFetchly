@@ -27,6 +27,7 @@ import {
   LOCAL_XENOVA_ALL_MINILM_DIMENSIONS,
 } from "@/service/embedding/LocalEmbeddingModels";
 import { isLocalXenovaModel } from "@/service/embedding/EmbeddingModelId";
+import { EmbeddingModelCatalogService } from "@/service/embedding/EmbeddingModelCatalogService";
 import { LOCAL_EMBEDDING_MAX_BATCH_SIZE } from "@/childprocess/embedding/LocalEmbeddingWorkerTypes";
 import { SystemSettingModule } from "@/modules/SystemSettingModule";
 import { SystemSettingGroupModule } from "@/modules/SystemSettingGroupModule";
@@ -356,12 +357,6 @@ export class RagSearchModule extends BaseModule {
           dimensions: provider.dimensions,
         };
       } catch (remoteError) {
-        // Billing/quota denials must surface to the UI as a typed error so the
-        // user sees a clear, translated message. Do NOT silently fall back to
-        // the local model — the user needs to know their plan limit was hit.
-        if (isEmbeddingBillingError(remoteError)) {
-          throw remoteError;
-        }
         return await this.fallbackToLocalEmbedding(
           chunks,
           documentId,
@@ -370,11 +365,6 @@ export class RagSearchModule extends BaseModule {
         );
       }
     } catch (error) {
-      // Preserve the billing-denied signal unchanged so uploadDocument (and
-      // ultimately the UI) can branch on the typed error.
-      if (isEmbeddingBillingError(error)) {
-        throw error;
-      }
       console.error("Error generating embeddings:", error);
       try {
         await this.documentService.saveErrorLog(
@@ -402,8 +392,6 @@ export class RagSearchModule extends BaseModule {
    * free model. If the local provider also fails, the error propagates so the
    * caller marks the document as errored.
    *
-   * Note: billing-denied errors are NOT routed here — they surface directly so
-   * the UI can present a clear, translated message (see generateChunkEmbeddings).
    */
   private async fallbackToLocalEmbedding(
     chunks: RAGChunkEntity[],
@@ -1054,7 +1042,9 @@ export class RagSearchModule extends BaseModule {
       );
     } catch (error) {
       console.error("Error saving default embedding model to settings:", error);
-      // Do not throw to avoid breaking model update flow.
+      // Do not report success when the selection was not persisted. Otherwise
+      // the next upload continues using the previous (possibly remote) model.
+      throw error;
     }
   }
 
@@ -1105,13 +1095,20 @@ export class RagSearchModule extends BaseModule {
           "Default embedding model not found in system settings, fetching from API..."
         );
 
-        const modelsResponse =
-          await this.ragConfigApi.getAvailableEmbeddingModels();
+        const catalog = new EmbeddingModelCatalogService(
+          this.ragConfigApi,
+          this.systemSettingModule
+        );
+        const modelsResponse = await catalog.listModels();
 
-        if (modelsResponse.status && modelsResponse.data) {
-          const resolved = resolveDefaultEmbeddingFromAvailableModels(
-            modelsResponse.data
-          );
+        if (modelsResponse.default_model && modelsResponse.models) {
+          const resolvedModel = modelsResponse.models[modelsResponse.default_model];
+          const resolved = resolvedModel
+            ? {
+                modelName: modelsResponse.default_model,
+                dimension: resolvedModel.dimensions,
+              }
+            : resolveDefaultEmbeddingFromAvailableModels(modelsResponse);
           if (!resolved) {
             console.warn(
               "Could not resolve default embedding model and dimension from API response"
@@ -1129,9 +1126,7 @@ export class RagSearchModule extends BaseModule {
           );
           console.log("Default embedding model updated successfully");
         } else {
-          console.warn(
-            "Failed to fetch available models from API, unable to auto-set default model"
-          );
+          console.warn("Unable to resolve a default embedding model");
         }
         return;
       }

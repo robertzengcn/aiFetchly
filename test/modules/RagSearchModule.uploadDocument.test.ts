@@ -5,6 +5,14 @@ import { RagSearchModule } from "@/modules/RagSearchModule";
 import { RAGDocumentEntity } from "@/entity/RAGDocument.entity";
 import { RAGChunkEntity } from "@/entity/RAGChunk.entity";
 import { DocumentUploadOptions } from "@/modules/RAGDocumentModule";
+import { EmbeddingBillingError } from "@/modules/rag/embeddingErrors";
+import { EmbeddingProviderFactory } from "@/service/embedding/EmbeddingProviderFactory";
+import type { EmbeddingProvider } from "@/service/embedding/EmbeddingProvider";
+import type { EmbeddingResult } from "@/entityTypes/embeddingTypes";
+import {
+  LOCAL_XENOVA_ALL_MINILM_DIMENSIONS,
+  LOCAL_XENOVA_ALL_MINILM_MODEL_ID,
+} from "@/service/embedding/LocalEmbeddingModels";
 
 interface TestableRagSearchModule {
   uploadDocument(options: DocumentUploadOptions): Promise<unknown>;
@@ -31,9 +39,134 @@ interface TestableRagSearchModule {
   };
 }
 
+interface GenerateEmbeddingsHarness {
+  generateChunkEmbeddings(
+    chunks: RAGChunkEntity[],
+    modelName: string,
+    dimension: number
+  ): Promise<{
+    vectorIndexPath: string;
+    modelName: string;
+    dimensions: number;
+  } | null>;
+  searchService: {
+    vectorStoreService: {
+      getDocumentIndexPath(
+        documentId: number,
+        model: { name: string; dimensions: number }
+      ): string;
+      deleteDocumentIndexByPath(
+        documentId: number,
+        model: { name: string; dimensions: number }
+      ): Promise<void>;
+      storeEmbedding(input: {
+        chunkId: number;
+        documentId: number;
+        content: string;
+        embedding: number[];
+        model: string;
+        dimensions: number;
+        metadata: {
+          chunkIndex: number;
+          pageNumber?: number;
+        };
+        vectorIndexPath: string;
+      }): Promise<void>;
+    };
+  };
+  documentService: {
+    saveErrorLog(
+      documentId: number,
+      error: Error | string,
+      context?: string
+    ): Promise<string>;
+  };
+}
+
 describe("RagSearchModule.uploadDocument", () => {
   afterEach(() => {
     sinon.restore();
+  });
+
+  it("falls back to the local embedding provider when remote billing is denied", async () => {
+    const chunk = Object.assign(new RAGChunkEntity(), {
+      id: 7,
+      documentId: 42,
+      content: "hello",
+      chunkIndex: 0,
+    });
+    const remoteProvider: EmbeddingProvider = {
+      provider: "remote-api",
+      modelName: "Qwen/Qwen3-Embedding-4B",
+      dimensions: 2560,
+      embedBatch: sinon
+        .stub()
+        .rejects(
+          new EmbeddingBillingError(
+            "Billing reserve failed",
+            "embedding_error_billing_denied"
+          )
+        ),
+      embedText: sinon.stub().rejects(new Error("unused")),
+    };
+    const localEmbedding = new Array(LOCAL_XENOVA_ALL_MINILM_DIMENSIONS).fill(
+      0.1
+    );
+    const localResult: EmbeddingResult = {
+      text: "hello",
+      embedding: localEmbedding,
+      dimensions: LOCAL_XENOVA_ALL_MINILM_DIMENSIONS,
+      model: LOCAL_XENOVA_ALL_MINILM_MODEL_ID,
+      provider: "local-xenova",
+    };
+    const localProvider: EmbeddingProvider = {
+      provider: "local-xenova",
+      modelName: LOCAL_XENOVA_ALL_MINILM_MODEL_ID,
+      dimensions: LOCAL_XENOVA_ALL_MINILM_DIMENSIONS,
+      embedBatch: sinon.stub().resolves([localResult]),
+      embedText: sinon.stub().resolves(localResult),
+    };
+    sinon
+      .stub(EmbeddingProviderFactory.prototype, "create")
+      .onFirstCall()
+      .returns(remoteProvider)
+      .onSecondCall()
+      .returns(localProvider);
+
+    const storeEmbedding = sinon.stub().resolves();
+    const deleteDocumentIndexByPath = sinon.stub().resolves();
+    const saveErrorLog = sinon.stub().resolves("/tmp/error.log");
+    const moduleUnderTest = Object.create(
+      RagSearchModule.prototype
+    ) as GenerateEmbeddingsHarness;
+
+    Object.assign(moduleUnderTest, {
+      searchService: {
+        vectorStoreService: {
+          getDocumentIndexPath: (
+            documentId: number,
+            model: { name: string; dimensions: number }
+          ): string => `/tmp/${documentId}/${model.name}/${model.dimensions}`,
+          deleteDocumentIndexByPath,
+          storeEmbedding,
+        },
+      },
+      documentService: {
+        saveErrorLog,
+      },
+    });
+
+    const result = await moduleUnderTest.generateChunkEmbeddings(
+      [chunk],
+      remoteProvider.modelName,
+      remoteProvider.dimensions
+    );
+
+    expect(result?.modelName).to.equal(LOCAL_XENOVA_ALL_MINILM_MODEL_ID);
+    expect(result?.dimensions).to.equal(LOCAL_XENOVA_ALL_MINILM_DIMENSIONS);
+    expect(deleteDocumentIndexByPath.calledWith(42)).to.equal(true);
+    expect(storeEmbedding.calledOnce).to.equal(true);
+    expect(saveErrorLog.called).to.equal(false);
   });
 
   it("marks the created document as failed when embedding generation fails after staging", async () => {

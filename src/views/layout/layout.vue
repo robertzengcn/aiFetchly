@@ -39,9 +39,9 @@ v-if="item.meta?.visible && (!item.children || visibleRouteChildren(item).length
                     </v-list-group>
                     <v-list-subheader v-if="item.name === 'Miscellaneous'">Other</v-list-subheader>
                 </template>
-                <v-list-item prepend-icon="mdi-text-box" class="mx-1">
+                    <v-list-item prepend-icon="mdi-text-box" class="mx-1">
                     <v-list-item-title><a
-target="_blank" href="https://vuetifyjs.com/"
+target="_blank" href="https://docs.aifetchly.com"
                             class="link">Document</a></v-list-item-title>
                 </v-list-item>
             </v-list>

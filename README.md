@@ -5,12 +5,26 @@
 </p>
 
 <p align="center">
+  English &middot;
+  <a href="./README.zh.md">简体中文</a> &middot;
+  <a href="./README.es.md">Español</a> &middot;
+  <a href="./README.fr.md">Français</a> &middot;
+  <a href="./README.de.md">Deutsch</a> &middot;
+  <a href="./README.ja.md">日本語</a>
+</p>
+
+<p align="center">
   <a href="#what-is-aifetchly">What is aiFetchly?</a> &middot;
+  <a href="#screenshots">Screenshots</a> &middot;
   <a href="#agent-capabilities">Agent Capabilities</a> &middot;
   <a href="#getting-started">Getting Started</a> &middot;
   <a href="#development">Development</a> &middot;
   <a href="#documentation">Documentation</a> &middot;
   <a href="#contributing">Contributing</a>
+</p>
+
+<p align="center">
+  <img src="docs/images/readme/hero-ai-chat.png" alt="aiFetchly AI agent workspace" width="900">
 </p>
 
 ---
@@ -29,6 +43,24 @@ aiFetchly helps you turn business intent into executable workflows:
 - **Delegate to specialist subagents** — run background agents with their own prompts, tool permissions, resource limits, and structured outputs.
 - **Extend the workspace** — install skills and plugins to add new tools, business workflows, and integrations.
 - **Stay in control** — keep data in a local SQLite database, review tool activity, gate permissions, and run on your own desktop.
+
+## Screenshots
+
+### AI Agent Workspace
+
+![aiFetchly AI agent workspace](docs/images/readme/hero-ai-chat.png)
+
+### Knowledge Library
+
+![aiFetchly knowledge library](docs/images/readme/knowledge-library.png)
+
+### Skills and Plugin Management
+
+![aiFetchly plugin manager](docs/images/readme/plugin-manager.png)
+
+### AI Provider Settings
+
+![aiFetchly AI provider settings](docs/images/readme/ai-provider-settings.png)
 
 ## Agent Capabilities
 
@@ -260,14 +292,9 @@ The settings screen can refresh available models, test chat and streaming suppor
 
 ## Documentation
 
-Full documentation is available at [aifetchly.com](https://aifetchly.com):
+Full documentation is available at [docs.aifetchly.com](https://docs.aifetchly.com).
 
-- [Introduction](https://aifetchly.com/docs/getting-started/introduction)
-- [Installation Guide](https://aifetchly.com/docs/getting-started/installation)
-- [Automation](https://aifetchly.com/docs/category/automation)
-- [Lead Generation](https://aifetchly.com/docs/category/lead-generation)
-- [AI Outreach](https://aifetchly.com/docs/category/ai-outreach)
-- [Proxy Setup](https://aifetchly.com/docs/getting-started/proxy-setup)
+The official application website is [sellart-online.com](https://www.sellart-online.com).
 
 ## Contributing
 

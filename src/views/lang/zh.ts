@@ -347,7 +347,7 @@ export default {
   },
   home: {
     dashboard: "仪表板",
-    agent_headline: "让 AI 帮你发展业务。",
+    agent_headline: "您的业务运营 AI 代理。",
     agent_placeholder: "让 AI 帮你寻找线索、撰写外联内容、分析营销活动...",
     agent_input_aria: "询问 AI 代理",
     agent_send_label: "打开 AI 聊天",

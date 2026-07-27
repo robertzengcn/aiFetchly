@@ -1,7 +1,29 @@
 "use strict";
 import { createHash } from "node:crypto";
 import type { EmbeddingProviderKind } from "@/entityTypes/embeddingTypes";
-import { LOCAL_XENOVA_PROVIDER, LOCAL_XENOVA_PROVIDER_PREFIX } from "@/service/embedding/LocalEmbeddingModels";
+import {
+  LOCAL_XENOVA_ALL_MINILM_DISPLAY_NAME,
+  LOCAL_XENOVA_ALL_MINILM_MODEL_ID,
+  LOCAL_XENOVA_ALL_MINILM_UNDERLYING_MODEL,
+  LOCAL_XENOVA_PROVIDER,
+  LOCAL_XENOVA_PROVIDER_PREFIX,
+} from "@/service/embedding/LocalEmbeddingModels";
+
+/**
+ * Normalize model IDs that were persisted by older versions of the app.
+ * Local models were initially exposed using their display/underlying name;
+ * those values must be upgraded before provider routing takes place.
+ */
+export function normalizeEmbeddingModelId(modelId: string): string {
+  const normalized = modelId.trim();
+  if (
+    normalized === LOCAL_XENOVA_ALL_MINILM_UNDERLYING_MODEL ||
+    normalized === LOCAL_XENOVA_ALL_MINILM_DISPLAY_NAME
+  ) {
+    return LOCAL_XENOVA_ALL_MINILM_MODEL_ID;
+  }
+  return normalized;
+}
 
 /**
  * Helpers for embedding model identifiers.
@@ -24,7 +46,9 @@ export function getEmbeddingProvider(
   if (typeof modelId !== "string" || modelId.length === 0) {
     return "remote-api";
   }
-  if (modelId.startsWith(LOCAL_XENOVA_PROVIDER_PREFIX)) {
+  if (
+    normalizeEmbeddingModelId(modelId).startsWith(LOCAL_XENOVA_PROVIDER_PREFIX)
+  ) {
     return LOCAL_XENOVA_PROVIDER;
   }
   return "remote-api";
@@ -47,7 +71,8 @@ export function getUnderlyingLocalModel(
   if (!isLocalXenovaModel(modelId)) {
     return null;
   }
-  const underlying = (modelId as string).slice(
+  const canonicalModelId = normalizeEmbeddingModelId(modelId as string);
+  const underlying = canonicalModelId.slice(
     LOCAL_XENOVA_PROVIDER_PREFIX.length
   );
   return underlying.length > 0 ? underlying : null;

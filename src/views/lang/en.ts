@@ -365,7 +365,7 @@ export default {
   },
   home: {
     dashboard: "Dashboard",
-    agent_headline: "Let AI help you grow your business.",
+    agent_headline: "Your AI agent for business operations",
     agent_placeholder:
       "Ask AI to find leads, write outreach, analyze campaigns...",
     agent_input_aria: "Ask the AI agent",
