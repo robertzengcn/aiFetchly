@@ -2334,6 +2334,8 @@ export default {
       document_indexing: "Indexing document…",
       document_ready: "Document ready",
       document_failed: "Document processing failed",
+      open_image: "Open attached image",
+      image_alt: "Attached image: {name}",
     },
   },
   aifetchlyConfig: {

@@ -135,6 +135,44 @@
             </button>
           </template>
         </div>
+        <!-- User-sent attachments: render inline so the user sees what they
+             attached, scrolling with the message history. -->
+        <div
+          v-if="imageAttachments.length > 0"
+          class="v2-message__attachments v2-message__attachments--images"
+        >
+          <a
+            v-for="att in imageAttachments"
+            :key="att.key"
+            :href="att.previewDataUrl"
+            class="v2-message__image-link"
+            target="_blank"
+            rel="noreferrer"
+            :title="t('aiChatV2.attachments.open_image') || 'Open attached image'"
+          >
+            <img
+              class="v2-message__attachment-image"
+              :src="att.previewDataUrl"
+              :alt="t('aiChatV2.attachments.image_alt', { name: att.fileName }) || att.fileName"
+              loading="lazy"
+            />
+          </a>
+        </div>
+        <div
+          v-if="fileAttachments.length > 0"
+          class="v2-message__attachments v2-message__attachments--docs"
+        >
+          <v-chip
+            v-for="att in fileAttachments"
+            :key="att.key"
+            size="small"
+            variant="tonal"
+            class="v2-message__attachment-chip"
+          >
+            <v-icon start size="x-small">mdi-file-document-outline</v-icon>
+            {{ att.fileName }}
+          </v-chip>
+        </div>
       </template>
       <AiChatV2StreamStatus
         v-if="message.role === 'assistant' && status !== 'idle'"
@@ -149,6 +187,7 @@
 import { computed } from "vue";
 import { useI18n } from "vue-i18n";
 import type {
+  ChatV2AttachmentMetadata,
   ChatV2GeneratedImage,
   ChatV2MessageView,
 } from "@/entityTypes/aiChatV2Types";
@@ -228,6 +267,45 @@ const generatedImages = computed<RenderableGeneratedImage[]>(() => {
         : null;
     })
     .filter((image): image is RenderableGeneratedImage => image !== null);
+});
+
+interface RenderableAttachment {
+  key: string;
+  fileName: string;
+  previewDataUrl?: string;
+}
+
+/**
+ * User-sent image attachments with an inline preview. Only user messages
+ * carry `metadata.attachments`; rendering the preview here lets the user see
+ * exactly which image they sent, scrolling with the message history.
+ */
+const imageAttachments = computed<RenderableAttachment[]>(() => {
+  if (props.message.role !== "user") return [];
+  return (props.message.metadata?.attachments ?? [])
+    .filter(
+      (att): att is ChatV2AttachmentMetadata & { previewDataUrl: string } =>
+        att.kind === "image" && typeof att.previewDataUrl === "string"
+    )
+    .map((att, index) => ({
+      key: `${att.fileName}-${index}`,
+      fileName: att.fileName,
+      previewDataUrl: att.previewDataUrl,
+    }));
+});
+
+/**
+ * Non-image attachments (documents) and any image whose preview failed to
+ * serialize. Rendered as file chips so the user still sees what they attached.
+ */
+const fileAttachments = computed<RenderableAttachment[]>(() => {
+  if (props.message.role !== "user") return [];
+  return (props.message.metadata?.attachments ?? [])
+    .filter((att) => att.kind !== "image" || typeof att.previewDataUrl !== "string")
+    .map((att, index) => ({
+      key: `${att.fileName}-${index}`,
+      fileName: att.fileName,
+    }));
 });
 
 function resolveGeneratedImageSource(
@@ -390,6 +468,29 @@ const shellPreview = computed<ShellPreview | undefined>(() => {
   height: auto;
   max-height: 360px;
   object-fit: contain;
+}
+/* User-sent attachment previews. Images use a smaller max-height than
+   AI-generated images so multi-attachment user bubbles stay compact. */
+.v2-message__attachments {
+  margin-top: 8px;
+}
+.v2-message__attachments--images {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 200px));
+  gap: 8px;
+  max-width: min(440px, 100%);
+}
+.v2-message__attachments--docs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.v2-message__attachment-image {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 200px;
+  object-fit: cover;
 }
 .v2-message__tool-header {
   display: flex;

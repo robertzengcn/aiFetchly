@@ -2292,6 +2292,8 @@ export default {
       document_indexing: "ドキュメントをインデックス中…",
       document_ready: "ドキュメント準備完了",
       document_failed: "ドキュメント処理に失敗しました",
+      open_image: "添付画像を開く",
+      image_alt: "添付画像：{name}",
     },
   },
   aifetchlyConfig: {

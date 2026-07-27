@@ -2336,6 +2336,8 @@ export default {
       document_indexing: "Dokument wird indiziert…",
       document_ready: "Dokument bereit",
       document_failed: "Dokumentverarbeitung fehlgeschlagen",
+      open_image: "Angehängtes Bild öffnen",
+      image_alt: "Angehängtes Bild: {name}",
     },
   },
   aifetchlyConfig: {

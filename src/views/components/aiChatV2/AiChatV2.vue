@@ -2292,6 +2292,12 @@ const onSend = async (
         sizeBytes: f.sizeBytes,
         kind: f.kind,
         processingMode: f.kind === "image" ? "image_url" : "staged_markdown",
+        // Carry the downscaled preview so the user's own bubble can render
+        // the image they just sent (matches what the model receives).
+        previewDataUrl:
+          f.kind === "image"
+            ? `data:${f.mimeType};base64,${f.contentBase64}`
+            : undefined,
       }));
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
