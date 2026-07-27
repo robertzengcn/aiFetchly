@@ -170,7 +170,9 @@ AI Chat 可以使用托管的 aiFetchly AI，也可以使用用户配置的 Open
 
 ## 文档
 
-完整文档请访问 [aifetchly.com](https://aifetchly.com)。
+完整文档请访问 [docs.aifetchly.com](https://docs.aifetchly.com)。
+
+应用官方网站是 [sellart-online.com](https://www.sellart-online.com)。
 
 ## 贡献
 

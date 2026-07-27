@@ -168,7 +168,9 @@ AI Chat kann die gehostete aiFetchly-KI oder einen vom Nutzer konfigurierten Ope
 
 ## Dokumentation
 
-Die vollständige Dokumentation finden Sie unter [aifetchly.com](https://aifetchly.com).
+Die vollständige Dokumentation finden Sie unter [docs.aifetchly.com](https://docs.aifetchly.com).
+
+Die offizielle Website der Anwendung ist [sellart-online.com](https://www.sellart-online.com).
 
 ## Mitwirken
 

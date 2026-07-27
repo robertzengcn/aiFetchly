@@ -168,7 +168,9 @@ AI Chat puede usar la IA alojada de aiFetchly o un proveedor compatible con Open
 
 ## Documentación
 
-La documentación completa está en [aifetchly.com](https://aifetchly.com).
+La documentación completa está en [docs.aifetchly.com](https://docs.aifetchly.com).
+
+El sitio web oficial de la aplicación es [sellart-online.com](https://www.sellart-online.com).
 
 ## Contribuir
 

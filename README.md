@@ -292,14 +292,16 @@ The settings screen can refresh available models, test chat and streaming suppor
 
 ## Documentation
 
-Full documentation is available at [aifetchly.com](https://aifetchly.com):
+Full documentation is available at [docs.aifetchly.com](https://docs.aifetchly.com).
 
-- [Introduction](https://aifetchly.com/docs/getting-started/introduction)
-- [Installation Guide](https://aifetchly.com/docs/getting-started/installation)
-- [Automation](https://aifetchly.com/docs/category/automation)
-- [Lead Generation](https://aifetchly.com/docs/category/lead-generation)
-- [AI Outreach](https://aifetchly.com/docs/category/ai-outreach)
-- [Proxy Setup](https://aifetchly.com/docs/getting-started/proxy-setup)
+The official application website is [sellart-online.com](https://www.sellart-online.com).
+
+- [Introduction](https://docs.aifetchly.com/getting-started/introduction)
+- [Installation Guide](https://docs.aifetchly.com/getting-started/installation)
+- [Automation](https://docs.aifetchly.com/category/automation)
+- [Lead Generation](https://docs.aifetchly.com/category/lead-generation)
+- [AI Outreach](https://docs.aifetchly.com/category/ai-outreach)
+- [Proxy Setup](https://docs.aifetchly.com/getting-started/proxy-setup)
 
 ## Contributing
 
