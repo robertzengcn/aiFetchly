@@ -28,9 +28,20 @@ jobs:
       # Python 3.12+ removed distutils; bundled node-gyp in electron-rebuild still imports it.
       # Pin 3.11 so gyp (used by sqlite3/bufferutil rebuild) runs. Same issue as macOS setuptools fix.
       - name: Set up Python for node-gyp
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
+
+      - name: Configure node-gyp Python
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHON_BIN="$(python -c 'import sys; print(sys.executable)')"
+          echo "Using Python for node-gyp: ${PYTHON_BIN}"
+          python --version
+          echo "PYTHON=${PYTHON_BIN}" >> "$GITHUB_ENV"
+          echo "npm_config_python=${PYTHON_BIN}" >> "$GITHUB_ENV"
+          echo "NODE_GYP_FORCE_PYTHON=${PYTHON_BIN}" >> "$GITHUB_ENV"
 
       - name: Calculate version
         id: calculate_version
@@ -178,6 +189,20 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22.14.0
+      - name: Set up Python for node-gyp
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Configure node-gyp Python
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHON_BIN="$(python -c 'import sys; print(sys.executable)')"
+          echo "Using Python for node-gyp: ${PYTHON_BIN}"
+          python --version
+          echo "PYTHON=${PYTHON_BIN}" >> "$GITHUB_ENV"
+          echo "npm_config_python=${PYTHON_BIN}" >> "$GITHUB_ENV"
+          echo "NODE_GYP_FORCE_PYTHON=${PYTHON_BIN}" >> "$GITHUB_ENV"
       - name: Calculate version
         id: calculate_version
         run: |

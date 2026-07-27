@@ -155,6 +155,7 @@ function rebuildForElectron(electronVersion) {
   );
   const result = spawnSync(npmCommand, args, {
     cwd: PROJECT_ROOT,
+    shell: process.platform === "win32",
     stdio: "inherit",
   });
   if (result.error) {

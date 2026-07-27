@@ -70,6 +70,10 @@ describe("Native module version compatibility", () => {
   const projectRoot = path.resolve(__dirname, "../../..");
   const packageJsonPath = path.join(projectRoot, "package.json");
   const forgeConfigPath = path.join(projectRoot, "forge.config.js");
+  const rebuildScriptPath = path.join(
+    projectRoot,
+    "scripts/rebuild-better-sqlite.js"
+  );
   const electronBinaryPath = path.join(
     projectRoot,
     "node_modules/electron/dist/electron"
@@ -142,13 +146,9 @@ describe("Native module version compatibility", () => {
       fs.readFileSync(electronPkgPath, "utf-8")
     ).version;
 
-    const rebuildTargetScript = path.join(
-      projectRoot,
-      "scripts/rebuild-better-sqlite.js"
-    );
     const result = child_process.spawnSync(
       process.execPath,
-      [rebuildTargetScript, "--print-target"],
+      [rebuildScriptPath, "--print-target"],
       {
         encoding: "utf-8",
         timeout: 10000,
@@ -166,6 +166,28 @@ describe("Native module version compatibility", () => {
       `rebuild-better-sqlite targets Electron ${targetVersion} but installed version is ${electronVersion}. ` +
         `Update scripts/rebuild-better-sqlite.js.`
     ).toBe(electronVersion);
+  });
+
+  it("should invoke npm through a shell on Windows rebuilds", () => {
+    const rebuildScript = fs.readFileSync(rebuildScriptPath, "utf-8");
+
+    expect(rebuildScript).toContain('shell: process.platform === "win32"');
+  });
+
+  it("should pin node-gyp Python before GitHub workflow installs", () => {
+    const workflowPaths = [
+      path.join(projectRoot, ".github/workflows/build.yml"),
+      path.join(projectRoot, ".github/workflows/ci.yml"),
+      path.join(projectRoot, ".github/workflows/release.yml"),
+    ];
+
+    for (const workflowPath of workflowPaths) {
+      const workflow = fs.readFileSync(workflowPath, "utf-8");
+
+      expect(workflow).toContain("Configure node-gyp Python");
+      expect(workflow).toContain("npm_config_python");
+      expect(workflow).toContain("NODE_GYP_FORCE_PYTHON");
+    }
   });
 
   it("should verify native modules before Electron startup commands", () => {
