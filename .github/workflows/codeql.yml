@@ -1,4 +1,4 @@
-name: "CodeQL Analysis"
+name: "Advanced CodeQL Analysis"
 
 on:
   push:
@@ -12,6 +12,10 @@ jobs:
   analyze:
     name: Analyze (${{ matrix.language }})
     runs-on: ubuntu-latest
+    # GitHub rejects CodeQL SARIF uploads from advanced workflows while
+    # repository CodeQL default setup is enabled. Keep this workflow opt-in so
+    # default setup can own normal code scanning without failing these runs.
+    if: ${{ vars.CODEQL_ADVANCED_SETUP == 'true' }}
     permissions:
       security-events: write
       packages: read
@@ -27,16 +31,16 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@v3
+        uses: github/codeql-action/init@v4
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
           config-file: ./.github/codeql/codeql-config.yml
 
       - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@v3
+        uses: github/codeql-action/analyze@v4
         with:
           category: "/language:${{ matrix.language }}"
