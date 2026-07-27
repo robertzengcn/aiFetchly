@@ -4,7 +4,10 @@ import { RemoteEmbeddingProvider } from "@/service/embedding/RemoteEmbeddingProv
 import { LocalXenovaEmbeddingProvider } from "@/service/embedding/LocalXenovaEmbeddingProvider";
 import { RagConfigApi } from "@/api/ragConfigApi";
 import { LocalEmbeddingWorkerClient } from "@/service/embedding/LocalEmbeddingWorkerClient";
-import { isLocalXenovaModel } from "@/service/embedding/EmbeddingModelId";
+import {
+  isLocalXenovaModel,
+  normalizeEmbeddingModelId,
+} from "@/service/embedding/EmbeddingModelId";
 
 /**
  * Optional dependency injection seam for the factory. In production both
@@ -25,15 +28,16 @@ export class EmbeddingProviderFactory {
   constructor(private readonly deps: EmbeddingProviderDeps = {}) {}
 
   create(modelName: string, dimensions: number): EmbeddingProvider {
-    if (isLocalXenovaModel(modelName)) {
+    const normalizedModelName = normalizeEmbeddingModelId(modelName);
+    if (isLocalXenovaModel(normalizedModelName)) {
       return new LocalXenovaEmbeddingProvider(
-        modelName,
+        normalizedModelName,
         dimensions,
         this.deps.workerClient
       );
     }
     return new RemoteEmbeddingProvider(
-      modelName,
+      normalizedModelName,
       dimensions,
       this.deps.ragConfigApi
     );

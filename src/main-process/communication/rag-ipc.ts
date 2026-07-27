@@ -11,6 +11,7 @@ import {
 } from "@/entityTypes/commonType";
 import { DocumentInfo } from "@/views/api/rag";
 import { EmbeddingModelCatalogService } from "@/service/embedding/EmbeddingModelCatalogService";
+import { isLocalXenovaModel } from "@/service/embedding/EmbeddingModelId";
 import {
   getUploadGrantService,
   isPathUnderDir,
@@ -618,17 +619,21 @@ export function registerRagIpcHandlers(): void {
     }
   );
 
-  // F6 follow-up — embedding-model update may issue a remote model-list call
-  // before persisting; gate on the AI flag.
-  registerAiValidatedHandler(
+  // Local embedding-model selection must remain available without remote AI
+  // entitlement. Remote model selection is still gated after schema validation.
+  registerValidatedHandler(
     RAG_UPDATE_EMBEDDING_MODEL,
     ragUpdateEmbeddingModelInputSchema,
     async (input) => {
+      const includeRemote = isAiEnabled();
+      if (!includeRemote && !isLocalXenovaModel(input.model)) {
+        throw new Error("AI feature is not enabled");
+      }
       // Validate against the merged catalog (remote + local). listModels()
       // tolerates remote failure, so selecting the local free model still
       // validates when the remote AI server is offline.
       const catalog = new EmbeddingModelCatalogService();
-      const list = await catalog.listModels();
+      const list = await catalog.listModels({ includeRemote });
       const modelInfo = list.models[input.model];
       if (!modelInfo) {
         const names = Object.keys(list.models).join(", ");
