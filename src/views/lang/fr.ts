@@ -327,7 +327,7 @@ export default {
   },
   home: {
     dashboard: "Tableau de bord",
-    agent_headline: "Laissez l’IA vous aider à développer votre activité.",
+    agent_headline: "Votre agent IA pour les opérations commerciales.",
     agent_placeholder:
       "Demandez à l’IA de trouver des prospects, rédiger des messages et analyser des campagnes...",
     agent_input_aria: "Interroger l’agent IA",

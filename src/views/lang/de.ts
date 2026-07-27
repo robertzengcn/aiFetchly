@@ -333,7 +333,7 @@ export default {
   },
   home: {
     dashboard: "Dashboard",
-    agent_headline: "Lass KI dein Geschäft wachsen lassen.",
+    agent_headline: "Dein KI-Agent für Geschäftsabläufe.",
     agent_placeholder:
       "Bitte KI, Leads zu finden, Outreach zu schreiben und Kampagnen zu analysieren...",
     agent_input_aria: "KI-Agent fragen",

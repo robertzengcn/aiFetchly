@@ -326,7 +326,7 @@ export default {
   },
   home: {
     dashboard: "ダッシュボード",
-    agent_headline: "AI がビジネスの成長を支援します。",
+    agent_headline: "ビジネス運営のための AI エージェント。",
     agent_placeholder:
       "リード発掘、アウトリーチ作成、キャンペーン分析を AI に依頼...",
     agent_input_aria: "AI エージェントに質問",
