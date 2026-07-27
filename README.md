@@ -296,13 +296,6 @@ Full documentation is available at [docs.aifetchly.com](https://docs.aifetchly.c
 
 The official application website is [sellart-online.com](https://www.sellart-online.com).
 
-- [Introduction](https://docs.aifetchly.com/getting-started/introduction)
-- [Installation Guide](https://docs.aifetchly.com/getting-started/installation)
-- [Automation](https://docs.aifetchly.com/category/automation)
-- [Lead Generation](https://docs.aifetchly.com/category/lead-generation)
-- [AI Outreach](https://docs.aifetchly.com/category/ai-outreach)
-- [Proxy Setup](https://docs.aifetchly.com/getting-started/proxy-setup)
-
 ## Contributing
 
 Contributions are welcome. Whether it is a bug fix, new feature, workflow improvement, skill, plugin, or translation update:
