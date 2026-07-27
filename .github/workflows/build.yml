@@ -323,10 +323,10 @@ jobs:
           echo "HOMEBREW_PREFIX: $HOMEBREW_PREFIX"
           echo "Platform: $(uname -s)"
           echo "Architecture: $(uname -m)"
-      - name: Update native modules to latest versions
+      - name: Keep native modules pinned
         run: |
-          echo "=== Updating native modules ==="
-          yarn add better-sqlite3@latest sqlite3@latest bufferutil@latest utf-8-validate@latest --exact || echo "Failed to update some modules"
+          echo "Using native module versions from yarn.lock; targeted Electron rebuilds run next."
+          node -e "const p=require('./package.json'); console.log('better-sqlite3:', p.dependencies['better-sqlite3']);"
       - name: Set C++20 environment for build
         run: |
           echo "=== Setting C++20 environment ==="

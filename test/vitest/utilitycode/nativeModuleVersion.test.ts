@@ -9,6 +9,7 @@
  */
 import { describe, it, expect } from "vitest";
 import * as fs from "fs";
+import * as os from "os";
 import * as path from "path";
 import * as child_process from "child_process";
 
@@ -34,6 +35,59 @@ function getElectronModuleVersion(electronBinaryPath: string): number | null {
     return null;
   }
   return parseInt(match[1], 10);
+}
+
+function getElectronBinaryPath(projectRoot: string): string {
+  if (process.platform === "darwin") {
+    return path.join(
+      projectRoot,
+      "node_modules/electron/dist/Electron.app/Contents/MacOS/Electron"
+    );
+  }
+  return path.join(
+    projectRoot,
+    "node_modules/electron/dist",
+    process.platform === "win32" ? "electron.exe" : "electron"
+  );
+}
+
+function getElectronCliPath(projectRoot: string): string {
+  return path.join(
+    projectRoot,
+    "node_modules/.bin",
+    process.platform === "win32" ? "electron.cmd" : "electron"
+  );
+}
+
+function getElectronRuntimeModuleVersion(projectRoot: string): number | null {
+  const electronCliPath = getElectronCliPath(projectRoot);
+  if (!fs.existsSync(electronCliPath)) {
+    return null;
+  }
+  const probePath = path.join(
+    os.tmpdir(),
+    `aifetchly-native-version-${process.pid}-${Date.now()}.js`
+  );
+  fs.writeFileSync(
+    probePath,
+    "process.stdout.write('ELECTRON_MODULE_VERSION:' + process.versions.modules); process.exit(0);"
+  );
+  try {
+    const result = child_process.spawnSync(
+      electronCliPath,
+      ["--no-sandbox", "--headless", "--disable-gpu", probePath],
+      {
+        encoding: "utf-8",
+        timeout: 15000,
+      }
+    );
+    const match = (result.stdout || "").match(
+      /ELECTRON_MODULE_VERSION:(\d+)/
+    );
+    return match ? parseInt(match[1], 10) : null;
+  } finally {
+    fs.rmSync(probePath, { force: true });
+  }
 }
 
 /**
@@ -74,10 +128,7 @@ describe("Native module version compatibility", () => {
     projectRoot,
     "scripts/rebuild-better-sqlite.js"
   );
-  const electronBinaryPath = path.join(
-    projectRoot,
-    "node_modules/electron/dist/electron"
-  );
+  const electronBinaryPath = getElectronBinaryPath(projectRoot);
   const betterSqliteModulePath = path.join(
     projectRoot,
     "node_modules/better-sqlite3/build/Release/better_sqlite3.node"
@@ -118,7 +169,9 @@ describe("Native module version compatibility", () => {
       return;
     }
 
-    const electronModuleVersion = getElectronModuleVersion(electronBinaryPath);
+    const electronModuleVersion =
+      getElectronModuleVersion(electronBinaryPath) ??
+      getElectronRuntimeModuleVersion(projectRoot);
     expect(
       electronModuleVersion,
       "Should be able to read node_module_version from Electron binary"
@@ -174,6 +227,14 @@ describe("Native module version compatibility", () => {
     expect(rebuildScript).toContain('shell: process.platform === "win32"');
   });
 
+  it("should have a direct node-gyp fallback when npm rebuild leaves a bad binary", () => {
+    const rebuildScript = fs.readFileSync(rebuildScriptPath, "utf-8");
+
+    expect(rebuildScript).toContain("rebuildForElectronWithNodeGyp");
+    expect(rebuildScript).toContain("--runtime=electron");
+    expect(rebuildScript).toContain("--dist-url=https://electronjs.org/headers");
+  });
+
   it("should pin node-gyp Python before GitHub workflow installs", () => {
     const workflowPaths = [
       path.join(projectRoot, ".github/workflows/build.yml"),
@@ -187,6 +248,20 @@ describe("Native module version compatibility", () => {
       expect(workflow).toContain("Configure node-gyp Python");
       expect(workflow).toContain("npm_config_python");
       expect(workflow).toContain("NODE_GYP_FORCE_PYTHON");
+    }
+  });
+
+  it("should not upgrade native modules to latest during GitHub builds", () => {
+    const workflowPaths = [
+      path.join(projectRoot, ".github/workflows/build.yml"),
+      path.join(projectRoot, ".github/workflows/release.yml"),
+    ];
+
+    for (const workflowPath of workflowPaths) {
+      const workflow = fs.readFileSync(workflowPath, "utf-8");
+
+      expect(workflow).not.toContain("better-sqlite3@latest");
+      expect(workflow).not.toContain("sqlite3@latest");
     }
   });
 
