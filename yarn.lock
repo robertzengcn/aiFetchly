@@ -798,6 +798,15 @@
     fs-extra "^10.0.0"
     which "^2.0.2"
 
+"@electron-forge/maker-base@7.11.2":
+  version "7.11.2"
+  resolved "https://registry.yarnpkg.com/@electron-forge/maker-base/-/maker-base-7.11.2.tgz#9388c64094dda139a032703cb69f4fcb29484fa9"
+  integrity sha512-9934zYu9WVdgCYQXvtS+eL1oyLagsY8JlWhZmoK8yWTYftSAydH7jb3seVpfy6n85SYmY/yjcAy2lvOTy5dUwA==
+  dependencies:
+    "@electron-forge/shared-types" "7.11.2"
+    fs-extra "^10.0.0"
+    which "^2.0.2"
+
 "@electron-forge/maker-deb@^7.8.0":
   version "7.10.2"
   resolved "https://registry.npmmirror.com/@electron-forge/maker-deb/-/maker-deb-7.10.2.tgz"
@@ -829,13 +838,13 @@
   optionalDependencies:
     electron-installer-redhat "^3.2.0"
 
-"@electron-forge/maker-squirrel@^7.8.0":
-  version "7.10.2"
-  resolved "https://registry.npmmirror.com/@electron-forge/maker-squirrel/-/maker-squirrel-7.10.2.tgz"
-  integrity sha512-Y5EhNSBXf4a7qcq+BK/x5qVDlQ1Gez5V+arUpDvVxf1zwvsB1aSyAjmoBrOKGYD9A5pJzjkMWMDw95MStl1W4A==
+"@electron-forge/maker-squirrel@^7.11.2":
+  version "7.11.2"
+  resolved "https://registry.yarnpkg.com/@electron-forge/maker-squirrel/-/maker-squirrel-7.11.2.tgz#45a14eaf2d7fe7b00d840e29d7a2d39f0b7f1a6f"
+  integrity sha512-4CILo57ZDEQH1mJxjhYCSXuv+WaU7oPq67KqiTLEUOEzmiPg9u9/z7FXE34H/Tn5aKWN3dy+ngAETzv6iERCGg==
   dependencies:
-    "@electron-forge/maker-base" "7.10.2"
-    "@electron-forge/shared-types" "7.10.2"
+    "@electron-forge/maker-base" "7.11.2"
+    "@electron-forge/shared-types" "7.11.2"
     fs-extra "^10.0.0"
   optionalDependencies:
     electron-winstaller "^5.3.0"
@@ -865,13 +874,13 @@
     fs-extra "^10.0.0"
     got "^11.8.5"
 
-"@electron-forge/plugin-auto-unpack-natives@^7.8.0":
-  version "7.10.2"
-  resolved "https://registry.npmmirror.com/@electron-forge/plugin-auto-unpack-natives/-/plugin-auto-unpack-natives-7.10.2.tgz"
-  integrity sha512-uQnahm1DECwqI8hBC7PKccyfovY/YqHNz8de3OxyjQDmwsqQfCA8Ucyh1E9n4NMEpw6Co8KLn+qF2BuIOsftLA==
+"@electron-forge/plugin-auto-unpack-natives@^7.11.2":
+  version "7.11.2"
+  resolved "https://registry.yarnpkg.com/@electron-forge/plugin-auto-unpack-natives/-/plugin-auto-unpack-natives-7.11.2.tgz#21e7785fb82bd2b9cb55b19fe9c7de3d86182718"
+  integrity sha512-ktMQxO80vGjqVXVSFha+kWJscBmJaWud4Kqu7rKkbrCphr1zqaG+8EDNbkpGzV/+mhKOLuA5qII1hJ69gFNpdA==
   dependencies:
-    "@electron-forge/plugin-base" "7.10.2"
-    "@electron-forge/shared-types" "7.10.2"
+    "@electron-forge/plugin-base" "7.11.2"
+    "@electron-forge/shared-types" "7.11.2"
 
 "@electron-forge/plugin-base@7.10.2":
   version "7.10.2"
@@ -879,6 +888,13 @@
   integrity sha512-+4YLmkLZxvS6JFXYNI4dHt8Il8iIvwk2o6lCJGwNysOUq2KOZ3Wu1He4Ko8HhKcO1VWbFvslbh57oQn963Aryw==
   dependencies:
     "@electron-forge/shared-types" "7.10.2"
+
+"@electron-forge/plugin-base@7.11.2":
+  version "7.11.2"
+  resolved "https://registry.yarnpkg.com/@electron-forge/plugin-base/-/plugin-base-7.11.2.tgz#92f832c98f854b943f24f436682e6a10fde05dd1"
+  integrity sha512-tIFzEE2+D9NnCAn/rLwSkh8H59IqN+G973JNl7xmCzquO6qa7/veitZOQFGO79Zmmgkc8R/fmiCbh7LIdLS9Tg==
+  dependencies:
+    "@electron-forge/shared-types" "7.11.2"
 
 "@electron-forge/plugin-vite@^7.8.0":
   version "7.10.2"
@@ -905,6 +921,16 @@
   integrity sha512-e2pd9RsdbKwsNf6UtKoolmJGy92Nc0/XO4SI91doV8cM954hM2XSYz3VHoqXebMFAF1JDfXoEUt6UCRbEDgMgw==
   dependencies:
     "@electron-forge/tracer" "7.10.2"
+    "@electron/packager" "^18.3.5"
+    "@electron/rebuild" "^3.7.0"
+    listr2 "^7.0.2"
+
+"@electron-forge/shared-types@7.11.2":
+  version "7.11.2"
+  resolved "https://registry.yarnpkg.com/@electron-forge/shared-types/-/shared-types-7.11.2.tgz#837c90d5c01eba8bb9a8e1b90354934dd2031786"
+  integrity sha512-Tcles7y74xy3jN5dEC+Pt1duJYk4c7W2xu98tjWW8RewmfKD2uHkie6I1I3yifPFZXZ/QfTlaFOOoKIQ9ENZjg==
+  dependencies:
+    "@electron-forge/tracer" "7.11.2"
     "@electron/packager" "^18.3.5"
     "@electron/rebuild" "^3.7.0"
     listr2 "^7.0.2"
@@ -964,6 +990,13 @@
   version "7.10.2"
   resolved "https://registry.npmmirror.com/@electron-forge/tracer/-/tracer-7.10.2.tgz"
   integrity sha512-jhLLQbttfZViSOYn/3SJc8HML+jNZAytPVJwgGGd3coUiFysWJ2Xald99iqOiouPAhIigBfNPxQb/q/EbcDu4g==
+  dependencies:
+    chrome-trace-event "^1.0.3"
+
+"@electron-forge/tracer@7.11.2":
+  version "7.11.2"
+  resolved "https://registry.yarnpkg.com/@electron-forge/tracer/-/tracer-7.11.2.tgz#454692619efebe3122deaf03c73057af1542e700"
+  integrity sha512-U8j5Hyj2Zt7I5PciJvPJfmEv69Gb/Da9v+k655z3Jj1cuY0UnToEJ61IhXrzlTYqo+jUKC+fgAjDJ6vltJTS0A==
   dependencies:
     chrome-trace-event "^1.0.3"
 
@@ -5084,10 +5117,10 @@ chalk@^4.0.0, chalk@^4.1.0, chalk@^4.1.1, chalk@^4.1.2:
     ansi-styles "^4.1.0"
     supports-color "^7.1.0"
 
-chardet@*, chardet@^2.1.1:
-  version "2.1.1"
-  resolved "https://registry.npmmirror.com/chardet/-/chardet-2.1.1.tgz"
-  integrity sha512-PsezH1rqdV9VvyNhxxOW32/d75r01NY7TQCmOqomRo15ZSOKbpTFVsfjghxo6JloQUCGnH4k1LGu0R4yCLlWQQ==
+chardet@*, chardet@^2.2.0:
+  version "2.2.0"
+  resolved "https://registry.yarnpkg.com/chardet/-/chardet-2.2.0.tgz#005d664f2cbd4961888d2e2c32c5a69e59d8eec4"
+  integrity sha512-rddelWYNPRrXq6PtNEN2S3f6t9ILzvqaN5pVgi4kqt9jHQaXIial9PznB5iSPVlQSLNaaH22ItWz3EJtQ10+OA==
 
 chardet@^0.7.0:
   version "0.7.0"
@@ -8414,10 +8447,10 @@ js-beautify@^1.14.9:
     js-cookie "^3.0.5"
     nopt "^7.2.1"
 
-js-cookie@^3.0.5:
-  version "3.0.5"
-  resolved "https://registry.npmmirror.com/js-cookie/-/js-cookie-3.0.5.tgz"
-  integrity sha512-cEiJEAEoIbWfCZYKWhVwFuvPX1gETRYPw6LlaTKoxD3s2AkXzkCjnp6h0V77ozyqj0jakteJ4YqDJT830+lVGw==
+js-cookie@^3.0.5, js-cookie@^3.0.8:
+  version "3.0.8"
+  resolved "https://registry.yarnpkg.com/js-cookie/-/js-cookie-3.0.8.tgz#444e6f4b27a5d844594fef61c9d6bca5f0787688"
+  integrity sha512-yeJd4aNAdYZQjaon2bpD/Gb0B/omw7HQOsynXXcOiWVCacbBcPlgn8S/d1X6blFSaHao7ozqtW7NZW19xpCtIw==
 
 js-message@1.0.7:
   version "1.0.7"
