@@ -397,6 +397,7 @@ import type {
 } from "@/entityTypes/knowledgeLibraryAiToolTypes";
 
 type WebsiteMode = "single_page" | "url_list" | "site_crawl";
+type FormText = string | null;
 
 const props = defineProps<{ modelValue: boolean }>();
 const emit = defineEmits<{
@@ -408,12 +409,12 @@ const { t } = useI18n();
 
 // ── Form state ──────────────────────────────────────────────────────────
 const mode = ref<WebsiteMode>("single_page");
-const url = ref("");
-const urlsText = ref("");
-const title = ref("");
-const description = ref("");
-const tagsText = ref("");
-const author = ref("Website");
+const url = ref<FormText>("");
+const urlsText = ref<FormText>("");
+const title = ref<FormText>("");
+const description = ref<FormText>("");
+const tagsText = ref<FormText>("");
+const author = ref<FormText>("Website");
 const maxPages = ref(WEBSITE_IMPORT_LIMITS.maxPages.default);
 const maxDepth = ref(WEBSITE_IMPORT_LIMITS.maxDepth.default);
 const duplicatePolicy = ref<"fail" | "allow">("fail");
@@ -433,9 +434,17 @@ const policyOptions = computed(() => [
   { label: t("knowledge.website_import_policy_allow"), value: "allow" },
 ]);
 
+function textValue(value: FormText): string {
+  return value ?? "";
+}
+
+function trimmedText(value: FormText): string {
+  return textValue(value).trim();
+}
+
 /** URLs parsed from the textarea, one per non-empty line. */
 const parsedUrls = computed(() =>
-  urlsText.value
+  textValue(urlsText.value)
     .split(/\r?\n/)
     .map((u) => u.trim())
     .filter((u) => u.length > 0)
@@ -444,7 +453,7 @@ const parsedUrls = computed(() =>
 const canSubmit = computed(() => {
   if (importing.value) return false;
   if (mode.value === "url_list") return parsedUrls.value.length > 0;
-  return url.value.trim().length > 0;
+  return trimmedText(url.value).length > 0;
 });
 
 const hasResult = computed(() => result.value !== null);
@@ -501,7 +510,7 @@ watch(
 );
 
 function parseTags(): string[] {
-  return tagsText.value
+  return textValue(tagsText.value)
     .split(",")
     .map((tg) => tg.trim())
     .filter((tg) => tg.length > 0);
@@ -537,7 +546,7 @@ async function submit(): Promise<void> {
   formError.value = "";
 
   if (mode.value !== "url_list") {
-    if (!url.value.trim()) {
+    if (!trimmedText(url.value)) {
       formError.value = t("knowledge.website_import_url_required");
       return;
     }
@@ -562,19 +571,19 @@ async function submit(): Promise<void> {
     mode: mode.value,
     duplicatePolicy: duplicatePolicy.value,
     tags: parseTags(),
-    description: description.value.trim() || undefined,
-    author: author.value.trim() || undefined,
+    description: trimmedText(description.value) || undefined,
+    author: trimmedText(author.value) || undefined,
   };
 
   if (mode.value === "single_page") {
-    options.url = url.value.trim();
-    const trimmedTitle = title.value.trim();
+    options.url = trimmedText(url.value);
+    const trimmedTitle = trimmedText(title.value);
     if (trimmedTitle) options.title = trimmedTitle;
   } else if (mode.value === "url_list") {
     options.urls = parsedUrls.value;
     options.maxPages = maxPages.value;
   } else {
-    options.url = url.value.trim();
+    options.url = trimmedText(url.value);
     options.maxPages = maxPages.value;
     options.maxDepth = maxDepth.value;
   }

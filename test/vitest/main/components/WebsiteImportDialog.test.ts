@@ -94,6 +94,19 @@ describe("WebsiteImportDialog", () => {
     expect(vm.formError.length).toBeGreaterThan(0);
   });
 
+  it("treats a cleared URL field as empty instead of throwing", async () => {
+    const w = mountDialog();
+    const vm = w.vm as unknown as {
+      url: string | null;
+      submit: () => Promise<void>;
+      formError: string;
+    };
+    vm.url = null;
+    await expect(vm.submit()).resolves.toBeUndefined();
+    expect(ragApiMocks.importWebsiteMock).not.toHaveBeenCalled();
+    expect(vm.formError.length).toBeGreaterThan(0);
+  });
+
   it("parses url_list (trims + drops blanks), forwards payload + duplicatePolicy, emits completed", async () => {
     ragApiMocks.importWebsiteMock.mockResolvedValue(
       successOutcome("url_list", 2)
