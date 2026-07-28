@@ -6,6 +6,7 @@ import type {
   ChatV2Mode,
   AIChatPlanStatus,
 } from "@/entityTypes/aiChatPlanTypes";
+import type { ChatV2AtMentionMetadata } from "@/entityTypes/aiChatAtMentionTypes";
 
 export type {
   ChatV2Mode,
@@ -66,6 +67,8 @@ export interface ChatV2MessageMetadata {
     expectedCount?: number | null;
     updatedAt: number;
   };
+  // @-mention context resolved at send time for user messages.
+  atMentions?: readonly ChatV2AtMentionMetadata[];
 }
 
 /** Renderer request to start a streaming chat turn. */

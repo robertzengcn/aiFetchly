@@ -9,6 +9,7 @@ import type {
 import { SkillRegistry } from "@/config/skillsRegistry";
 import { SkillExecutor } from "@/service/SkillExecutor";
 import { AIChatContextAssembler } from "@/service/AIChatContextAssembler";
+import { AtMentionResolutionService } from "@/service/aiChatAtMentions/AtMentionResolutionService";
 import type { AIChatCompactAgentService } from "@/service/AIChatCompactAgentService";
 import type { AIAutoDreamService } from "@/service/AIAutoDreamService";
 import { PlanModeToolRegistry } from "@/service/PlanModeToolRegistry";
@@ -72,11 +73,7 @@ function isTypedPlanApproval(message: string): boolean {
     return true;
   }
 
-  const looksGoodSignals = [
-    "looks good",
-    "looks fine",
-    "looks correct",
-  ];
+  const looksGoodSignals = ["looks good", "looks fine", "looks correct"];
   const executionSignals = [
     "begin executing",
     "start executing",
@@ -209,10 +206,27 @@ export class AIChatQueryEngine {
         }
       }
 
-      // Save user message before remote call.
+      // Resolve @-mentions: enrich the model-facing message while preserving
+      // the user-visible display text for persistence.
+      const originalUserMessage = request.message || "";
+      const atMentionResolution =
+        await new AtMentionResolutionService().resolveMessage(
+          conversationId,
+          originalUserMessage
+        );
+      const modelUserMessage = atMentionResolution.modelMessage;
+
+      // Save user message before remote call (display text + mention metadata).
       const savedUser = await module.saveUserMessage({
         conversationId,
-        content: request.message,
+        content: originalUserMessage,
+        metadata:
+          atMentionResolution.metadata.length > 0
+            ? {
+                source: "chat-v2",
+                atMentions: atMentionResolution.metadata,
+              }
+            : undefined,
       });
 
       // Load history and build transcript.
@@ -220,7 +234,7 @@ export class AIChatQueryEngine {
         request.systemPrompt ?? module.getDefaultSystemPrompt();
       const assembled = await this.contextAssembler.assemble({
         conversationId,
-        currentUserMessage: request.message,
+        currentUserMessage: modelUserMessage,
         currentUserMessageId: savedUser.messageId,
         baseSystemPrompt: basePrompt,
         mode: isPlanMode ? "plan" : "chat",
