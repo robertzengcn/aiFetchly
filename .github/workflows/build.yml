@@ -139,6 +139,14 @@ jobs:
 
   build-macos:
     runs-on: macos-latest
+    env:
+      MACOS_APP_BUNDLE_ID: com.aifetchly.desktop
+      APPLE_CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
 
     steps:
       - name: Set up C++20 environment
@@ -205,6 +213,70 @@ jobs:
           echo "PYTHON=${PYTHON_BIN}" >> "$GITHUB_ENV"
           echo "npm_config_python=${PYTHON_BIN}" >> "$GITHUB_ENV"
           echo "NODE_GYP_FORCE_PYTHON=${PYTHON_BIN}" >> "$GITHUB_ENV"
+
+      - name: Validate Apple signing secrets
+        if: github.event_name != 'pull_request'
+        shell: bash
+        run: |
+          set -euo pipefail
+          missing=0
+          for secret_name in \
+            APPLE_CERTIFICATE_BASE64 \
+            APPLE_CERTIFICATE_PASSWORD \
+            APPLE_ID \
+            APPLE_APP_SPECIFIC_PASSWORD \
+            APPLE_TEAM_ID
+          do
+            if [ -z "${!secret_name:-}" ]; then
+              echo "::error::${secret_name} is required for signed macOS GitHub Actions artifacts."
+              missing=1
+            fi
+          done
+          if [ "${missing}" -ne 0 ]; then
+            exit 1
+          fi
+          echo "Apple signing secrets are configured."
+
+      - name: Import Apple Developer ID certificate
+        if: github.event_name != 'pull_request'
+        shell: bash
+        run: |
+          set -euo pipefail
+          CERTIFICATE_PATH="${RUNNER_TEMP}/developer-id-application.p12"
+          KEYCHAIN_PATH="${RUNNER_TEMP}/app-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -base64 32)"
+
+          printf '%s' "${APPLE_CERTIFICATE_BASE64}" | base64 --decode > "${CERTIFICATE_PATH}"
+
+          security create-keychain -p "${KEYCHAIN_PASSWORD}" "${KEYCHAIN_PATH}"
+          security set-keychain-settings -lut 21600 "${KEYCHAIN_PATH}"
+          security unlock-keychain -p "${KEYCHAIN_PASSWORD}" "${KEYCHAIN_PATH}"
+          security import "${CERTIFICATE_PATH}" \
+            -P "${APPLE_CERTIFICATE_PASSWORD}" \
+            -A \
+            -t cert \
+            -f pkcs12 \
+            -k "${KEYCHAIN_PATH}"
+          security list-keychains -d user -s "${KEYCHAIN_PATH}" $(security list-keychains -d user | sed s/\"//g)
+          security default-keychain -s "${KEYCHAIN_PATH}"
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s \
+            -k "${KEYCHAIN_PASSWORD}" \
+            "${KEYCHAIN_PATH}"
+
+          echo "Available code signing identities:"
+          security find-identity -v -p codesigning "${KEYCHAIN_PATH}"
+
+          echo "MACOS_CODE_SIGN=true" >> "${GITHUB_ENV}"
+          echo "MACOS_KEYCHAIN_PATH=${KEYCHAIN_PATH}" >> "${GITHUB_ENV}"
+
+      - name: Mark pull request macOS build as unsigned
+        if: github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          echo "MACOS_CODE_SIGN=false" >> "${GITHUB_ENV}"
+
       - name: Calculate version
         id: calculate_version
         run: |
@@ -418,6 +490,7 @@ jobs:
         run: |
           echo "Current working directory: $(pwd)"
           echo "=== Starting macOS build process ==="
+          echo "macOS code signing enabled: ${MACOS_CODE_SIGN:-false}"
 
           # Set environment variables to ensure build output goes to expected location
           export NODE_ENV=test
@@ -504,6 +577,29 @@ jobs:
 
           # Exit with the actual build exit code
           exit ${BUILD_EXIT_CODE}
+
+      - name: Verify macOS signature and notarization
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${MACOS_CODE_SIGN:-false}" != "true" ]; then
+            echo "Skipping Gatekeeper verification because this macOS build is unsigned."
+            exit 0
+          fi
+
+          APP_PATH="$(find out -type d -name "aiFetchly.app" -print -quit)"
+          if [ -z "${APP_PATH}" ]; then
+            echo "::error::Could not find aiFetchly.app in out/."
+            exit 1
+          fi
+
+          echo "Verifying app bundle: ${APP_PATH}"
+          codesign --verify --deep --strict --verbose=4 "${APP_PATH}"
+          codesign -dv --verbose=4 "${APP_PATH}"
+          spctl --assess --type execute --verbose=4 "${APP_PATH}"
+          xcrun stapler validate "${APP_PATH}"
+
       - name: Fallback build if main build fails
         if: failure()
         run: |
@@ -544,7 +640,7 @@ jobs:
           if-no-files-found: ignore
 
       - name: Upload artifact
-        if: success()
+        if: success() && github.event_name != 'pull_request'
         uses: actions/upload-artifact@v4
         with:
           name: electron-app-macos-v${{ steps.calculate_version.outputs.version }}

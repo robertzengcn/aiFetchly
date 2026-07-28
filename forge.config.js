@@ -51,6 +51,61 @@ dotenv.config({ path: path.resolve(__dirname, ".env") });
 const env = process.env.NODE_ENV || "development";
 dotenv.config({ path: path.resolve(__dirname, `.env.${env}`) });
 
+function optionalEnv(name) {
+  const value = process.env[name];
+  if (!value || value.trim() === "") return undefined;
+  return value.trim();
+}
+
+function requireEnvForMacSigning(name) {
+  const value = optionalEnv(name);
+  if (!value) {
+    throw new Error(
+      `MACOS_CODE_SIGN=true requires ${name}. Add it to the GitHub Actions macOS signing secrets.`
+    );
+  }
+  return value;
+}
+
+const MACOS_APP_BUNDLE_ID =
+  optionalEnv("MACOS_APP_BUNDLE_ID") || "com.aifetchly.desktop";
+const MACOS_CODE_SIGN = process.env.MACOS_CODE_SIGN === "true";
+const APPLE_SIGNING_IDENTITY = optionalEnv("APPLE_SIGNING_IDENTITY");
+const MACOS_KEYCHAIN_PATH = optionalEnv("MACOS_KEYCHAIN_PATH");
+
+const macPackagerSigningConfig = MACOS_CODE_SIGN
+  ? {
+      osxSign: {
+        hardenedRuntime: true,
+        strictVerify: true,
+        ...(APPLE_SIGNING_IDENTITY
+          ? { identity: APPLE_SIGNING_IDENTITY }
+          : {}),
+        ...(MACOS_KEYCHAIN_PATH ? { keychain: MACOS_KEYCHAIN_PATH } : {}),
+      },
+      osxNotarize: {
+        tool: "notarytool",
+        appleId: requireEnvForMacSigning("APPLE_ID"),
+        appleIdPassword: requireEnvForMacSigning(
+          "APPLE_APP_SPECIFIC_PASSWORD"
+        ),
+        teamId: requireEnvForMacSigning("APPLE_TEAM_ID"),
+      },
+    }
+  : {};
+
+const macDmgSigningConfig =
+  MACOS_CODE_SIGN && APPLE_SIGNING_IDENTITY
+    ? {
+        additionalDMGOptions: {
+          "code-sign": {
+            "signing-identity": APPLE_SIGNING_IDENTITY,
+            identifier: `${MACOS_APP_BUNDLE_ID}.dmg`,
+          },
+        },
+      }
+    : {};
+
 function ensureBetterSqliteElectronBinary() {
   const scriptPath = join(__dirname, "scripts", "rebuild-better-sqlite.js");
   const result = spawnSync(process.execPath, [scriptPath], {
@@ -71,6 +126,10 @@ function ensureBetterSqliteElectronBinary() {
 module.exports = {
   packagerConfig: {
     icon: "./src/assets/images/icon",
+    appBundleId: MACOS_APP_BUNDLE_ID,
+    helperBundleId: `${MACOS_APP_BUNDLE_ID}.helper`,
+    appCategoryType: "public.app-category.business",
+    ...macPackagerSigningConfig,
     // asar: {
     //   // This ensures native modules are unpacked
     //   unpack: "**/node_modules/better-sqlite3/**",
@@ -225,6 +284,7 @@ module.exports = {
       config: {
         format: "ULFO",
         icon: "./src/assets/images/icon.icns",
+        ...macDmgSigningConfig,
         // Note: background image removed to prevent build failures
         // If needed, create src/assets/images/dmg-background.png and uncomment below
         // background: "./src/assets/images/dmg-background.png",
