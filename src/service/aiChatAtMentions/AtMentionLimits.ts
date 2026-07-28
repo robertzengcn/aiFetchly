@@ -9,6 +9,24 @@ import {
   FILE_TOOL_SIZE_LIMITS,
   DEFAULT_IGNORE_PATTERNS,
 } from "@/config/fileToolConfig";
+import type { ChatV2AtMentionStatus } from "@/entityTypes/aiChatAtMentionTypes";
+
+/**
+ * Mention statuses that surface as compact warnings (to the model context
+ * block and the UI). Canonical single source — services and the context
+ * builder must agree on this set, so it lives here rather than being copied.
+ */
+export const MENTION_WARNING_STATUSES: ReadonlySet<ChatV2AtMentionStatus> =
+  new Set<ChatV2AtMentionStatus>([
+    "workspace_required",
+    "missing",
+    "rejected",
+    "invalid_line_range",
+    "too_large",
+    "binary",
+    "read_error",
+    "too_many_mentions",
+  ]);
 
 /** Maximum suggestion rows returned to the renderer. */
 export const AT_MENTION_MAX_SUGGESTIONS = 50;

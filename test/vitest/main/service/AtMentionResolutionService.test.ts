@@ -163,4 +163,20 @@ describe("AtMentionResolutionService.resolveMessage", () => {
     expect(statuses).toContain("missing");
     expect(result.hasResolvedMentions).toBe(true);
   });
+
+  it("surfaces a too_many_mentions warning when the per-message cap is exceeded", async () => {
+    // Create 11 distinct files so 11 distinct mentions parse.
+    for (let i = 0; i < 11; i++) {
+      fs.writeFileSync(path.join(tmpDir, `f${i}.ts`), "x");
+    }
+    const message = Array.from({ length: 11 }, (_, i) => `@f${i}.ts`).join(" ");
+    const service = new AtMentionResolutionService(makeResolver(tmpDir));
+    const result = await service.resolveMessage(CONV_ID, message);
+
+    const statuses = result.metadata.map((m) => m.status);
+    expect(statuses).toContain("too_many_mentions");
+    // The model-facing message includes a warning about omitted mentions.
+    expect(result.modelMessage).toContain("omitted");
+    expect(result.warnings.length).toBeGreaterThan(0);
+  });
 });

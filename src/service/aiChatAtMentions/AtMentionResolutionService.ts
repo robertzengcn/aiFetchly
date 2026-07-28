@@ -13,29 +13,18 @@ import {
   AT_MENTION_MAX_LINE_RANGE_LINES,
   AT_MENTION_MAX_MENTIONS_PER_MESSAGE,
   AT_MENTION_MAX_TOTAL_CONTEXT_BYTES,
+  MENTION_WARNING_STATUSES,
 } from "./AtMentionLimits";
 import type {
   ChatV2AtMentionMetadata,
   ChatV2AtMentionParsed,
   ChatV2AtMentionResolution,
   ChatV2AtMentionResolutionResult,
-  ChatV2AtMentionStatus,
 } from "@/entityTypes/aiChatAtMentionTypes";
 
 interface ByteBudget {
   remaining: number;
 }
-
-/** Mention statuses surfaced as model warnings (mirrors the context builder). */
-const WARNING_STATUSES: ReadonlySet<ChatV2AtMentionStatus> = new Set([
-  "workspace_required",
-  "missing",
-  "rejected",
-  "invalid_line_range",
-  "too_large",
-  "binary",
-  "read_error",
-]);
 
 /**
  * Send-time mention resolution (technical design §9).
@@ -85,16 +74,28 @@ export class AtMentionResolutionService {
     }
 
     const guard = workspace ? new FilePathGuard([workspace.rootPath]) : null;
-    const budget: ByteBudget = { remaining: AT_MENTION_MAX_TOTAL_CONTEXT_BYTES };
+    const budget: ByteBudget = {
+      remaining: AT_MENTION_MAX_TOTAL_CONTEXT_BYTES,
+    };
 
     const resolutions: ChatV2AtMentionResolution[] = [];
     for (const mention of unique) {
-      resolutions.push(await this.resolveOne(mention, workspace, guard, budget));
+      resolutions.push(
+        await this.resolveOne(mention, workspace, guard, budget)
+      );
+    }
+
+    // PRD FR-016: when the per-message mention cap is hit, surface a warning
+    // instead of silently dropping the excess mentions.
+    if (parsed.truncated) {
+      resolutions.push(this.buildTooManyMentionsResolution());
     }
 
     const built = this.contextBuilder.build(message, resolutions);
     const metadata = resolutions.map((r) => r.metadata);
-    const warnings = metadata.filter((m) => WARNING_STATUSES.has(m.status));
+    const warnings = metadata.filter((m) =>
+      MENTION_WARNING_STATUSES.has(m.status)
+    );
     const hasResolvedMentions = metadata.some((m) => m.status === "resolved");
 
     return {
@@ -103,6 +104,24 @@ export class AtMentionResolutionService {
       metadata,
       warnings,
       hasResolvedMentions,
+    };
+  }
+
+  private buildTooManyMentionsResolution(): ChatV2AtMentionResolution {
+    return {
+      parsed: {
+        rawText: "",
+        pathText: "",
+        quoted: false,
+        startIndex: 0,
+        endIndex: 0,
+      },
+      metadata: {
+        rawText: "",
+        relativePath: "",
+        status: "too_many_mentions",
+        message: `More than ${AT_MENTION_MAX_MENTIONS_PER_MESSAGE} mentions in one message; additional mentions were omitted.`,
+      },
     };
   }
 
@@ -199,7 +218,9 @@ export class AtMentionResolutionService {
 
     let children: fs.Dirent[];
     try {
-      children = await fs.promises.readdir(absolutePath, { withFileTypes: true });
+      children = await fs.promises.readdir(absolutePath, {
+        withFileTypes: true,
+      });
     } catch (err) {
       console.error("[at-mention] directory listing failed:", err);
       return {
@@ -301,8 +322,14 @@ export class AtMentionResolutionService {
     for (let i = start; i <= end; i++) {
       const line = `${i}: ${allLines[i - 1] ?? ""}`;
       const cost = line.length + 1;
-      if (bytesWouldExceed(cost, AT_MENTION_MAX_CONTENT_BYTES_PER_MENTION, formatted) ||
-          budget.remaining - cost < 0) {
+      if (
+        bytesWouldExceed(
+          cost,
+          AT_MENTION_MAX_CONTENT_BYTES_PER_MENTION,
+          formatted
+        ) ||
+        budget.remaining - cost < 0
+      ) {
         truncated = true;
         break;
       }

@@ -107,7 +107,9 @@
           :class="{ 'v2-mention-chip--warning': chip.variant === 'warning' }"
         >
           <v-icon size="x-small">{{ chip.icon }}</v-icon>
-          <span class="v2-mention-chip__label">{{ chip.label }}</span>
+          <span v-if="chip.label" class="v2-mention-chip__label">{{
+            chip.label
+          }}</span>
           <span
             v-if="chip.reason"
             class="v2-mention-chip__reason"
