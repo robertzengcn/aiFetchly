@@ -120,7 +120,7 @@
     "iconv-lite": "^0.7.2",
     "isbinaryfile": "^5.0.4",
     "isolated-vm": "^6.1.2",
-    "js-cookie": "^3.0.5",
+    "js-cookie": "^3.0.8",
     "js-yaml": "^4.1.0",
     "jshint": "^2.13.6",
     "jwt-decode": "3.1.2",
