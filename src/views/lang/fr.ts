@@ -2341,7 +2341,6 @@ export default {
       document_indexing: "Indexation du document…",
       document_ready: "Document prêt",
       document_failed: "Échec du traitement du document",
-      open_image: "Ouvrir l'image jointe",
       image_alt: "Image jointe : {name}",
     },
   },

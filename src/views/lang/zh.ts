@@ -2257,7 +2257,6 @@ export default {
       document_indexing: "正在索引文档…",
       document_ready: "文档就绪",
       document_failed: "文档处理失败",
-      open_image: "打开附件图片",
       image_alt: "附件图片：{name}",
     },
   },

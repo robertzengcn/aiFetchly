@@ -2357,7 +2357,6 @@ export default {
       document_indexing: "Indexando documento…",
       document_ready: "Documento listo",
       document_failed: "Error al procesar el documento",
-      open_image: "Abrir imagen adjunta",
       image_alt: "Imagen adjunta: {name}",
     },
   },

@@ -141,14 +141,11 @@
           v-if="imageAttachments.length > 0"
           class="v2-message__attachments v2-message__attachments--images"
         >
-          <a
+          <div
             v-for="att in imageAttachments"
             :key="att.key"
-            :href="att.previewDataUrl"
             class="v2-message__image-link"
-            target="_blank"
-            rel="noreferrer"
-            :title="t('aiChatV2.attachments.open_image') || 'Open attached image'"
+            :title="t('aiChatV2.attachments.image_alt', { name: att.fileName }) || att.fileName"
           >
             <img
               class="v2-message__attachment-image"
@@ -156,7 +153,7 @@
               :alt="t('aiChatV2.attachments.image_alt', { name: att.fileName }) || att.fileName"
               loading="lazy"
             />
-          </a>
+          </div>
         </div>
         <div
           v-if="fileAttachments.length > 0"
@@ -276,6 +273,24 @@ interface RenderableAttachment {
 }
 
 /**
+ * Type guard for a user attachment that is safe to render as an inline
+ * `<img src>`. Requires `kind === "image"` AND a `data:image/...` preview.
+ * The scheme check is the last line of defense: `previewDataUrl` is persisted
+ * metadata trusted by the renderer, so a non-image `data:` URL (e.g.
+ * `data:text/html`) must never reach an `<img src>` / clickable surface — it
+ * falls through to the chip rendering instead.
+ */
+function isRenderableImageAttachment(
+  att: ChatV2AttachmentMetadata
+): att is ChatV2AttachmentMetadata & { previewDataUrl: string } {
+  return (
+    att.kind === "image" &&
+    typeof att.previewDataUrl === "string" &&
+    att.previewDataUrl.startsWith("data:image/")
+  );
+}
+
+/**
  * User-sent image attachments with an inline preview. Only user messages
  * carry `metadata.attachments`; rendering the preview here lets the user see
  * exactly which image they sent, scrolling with the message history.
@@ -283,10 +298,7 @@ interface RenderableAttachment {
 const imageAttachments = computed<RenderableAttachment[]>(() => {
   if (props.message.role !== "user") return [];
   return (props.message.metadata?.attachments ?? [])
-    .filter(
-      (att): att is ChatV2AttachmentMetadata & { previewDataUrl: string } =>
-        att.kind === "image" && typeof att.previewDataUrl === "string"
-    )
+    .filter(isRenderableImageAttachment)
     .map((att, index) => ({
       key: `${att.fileName}-${index}`,
       fileName: att.fileName,
@@ -295,13 +307,14 @@ const imageAttachments = computed<RenderableAttachment[]>(() => {
 });
 
 /**
- * Non-image attachments (documents) and any image whose preview failed to
- * serialize. Rendered as file chips so the user still sees what they attached.
+ * Non-image attachments (documents) and any image whose preview is missing or
+ * not a safe `data:image/` URL. Rendered as file chips so the user still sees
+ * what they attached — the exact complement of {@link imageAttachments}.
  */
 const fileAttachments = computed<RenderableAttachment[]>(() => {
   if (props.message.role !== "user") return [];
   return (props.message.metadata?.attachments ?? [])
-    .filter((att) => att.kind !== "image" || typeof att.previewDataUrl !== "string")
+    .filter((att) => !isRenderableImageAttachment(att))
     .map((att, index) => ({
       key: `${att.fileName}-${index}`,
       fileName: att.fileName,
