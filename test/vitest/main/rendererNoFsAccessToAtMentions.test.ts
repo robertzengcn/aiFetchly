@@ -11,10 +11,14 @@ const RENDERER_FILES = [
   "src/views/api/aiChatAtMentions.ts",
   "src/views/components/aiChatV2/AiChatV2AtMentionSuggestions.vue",
   "src/views/components/aiChatV2/AiChatV2Composer.vue",
+  "src/views/components/aiChatV2/AiChatV2Message.vue",
 ];
 
 const FORBIDDEN_IMPORTS: ReadonlyArray<{ name: string; pattern: RegExp }> = [
-  { name: "fs", pattern: /from\s+["'](?:node:)?fs["']|require\(\s*["'](?:node:)?fs["']\)/ },
+  {
+    name: "fs",
+    pattern: /from\s+["'](?:node:)?fs["']|require\(\s*["'](?:node:)?fs["']\)/,
+  },
   { name: "path", pattern: /from\s+["'](?:node:)?path["']/ },
   { name: "os", pattern: /from\s+["'](?:node:)?os["']/ },
   { name: "fast-glob", pattern: /from\s+["']fast-glob["']/ },
@@ -22,8 +26,14 @@ const FORBIDDEN_IMPORTS: ReadonlyArray<{ name: string; pattern: RegExp }> = [
   { name: "WorkspaceResolver", pattern: /@\/service\/WorkspaceResolver/ },
   { name: "FilePathGuard", pattern: /@\/service\/FilePathGuard/ },
   { name: "FileToolService", pattern: /@\/service\/FileToolService/ },
-  { name: "AtMentionSuggestionService", pattern: /@\/service\/aiChatAtMentions\/AtMentionSuggestionService/ },
-  { name: "AtMentionResolutionService", pattern: /@\/service\/aiChatAtMentions\/AtMentionResolutionService/ },
+  {
+    name: "AtMentionSuggestionService",
+    pattern: /@\/service\/aiChatAtMentions\/AtMentionSuggestionService/,
+  },
+  {
+    name: "AtMentionResolutionService",
+    pattern: /@\/service\/aiChatAtMentions\/AtMentionResolutionService/,
+  },
 ];
 
 const PROJECT_ROOT = path.resolve(__dirname, "../../..");

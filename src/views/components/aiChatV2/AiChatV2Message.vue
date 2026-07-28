@@ -96,6 +96,26 @@
         :status="status"
         :error-message="errorMessage"
       />
+      <div
+        v-if="message.role === 'user' && mentionChips.length > 0"
+        class="v2-message__mentions"
+      >
+        <span
+          v-for="(chip, index) in mentionChips"
+          :key="`${chip.variant}-${index}`"
+          class="v2-mention-chip"
+          :class="{ 'v2-mention-chip--warning': chip.variant === 'warning' }"
+        >
+          <v-icon size="x-small">{{ chip.icon }}</v-icon>
+          <span class="v2-mention-chip__label">{{ chip.label }}</span>
+          <span
+            v-if="chip.reason"
+            class="v2-mention-chip__reason"
+          >
+            {{ chip.reason }}
+          </span>
+        </span>
+      </div>
     </div>
   </div>
 </template>
@@ -104,6 +124,7 @@
 import { computed } from "vue";
 import { useI18n } from "vue-i18n";
 import type { ChatV2MessageView } from "@/entityTypes/aiChatV2Types";
+import type { ChatV2AtMentionMetadata } from "@/entityTypes/aiChatAtMentionTypes";
 import { MessageType } from "@/entityTypes/commonType";
 import SkillApprovalCard from "@/views/components/aiChat/SkillApprovalCard.vue";
 import AiChatV2StreamStatus from "./AiChatV2StreamStatus.vue";
@@ -196,6 +217,92 @@ const shellPreview = computed<ShellPreview | undefined>(() => {
     timeout_ms: shellData.timeout_ms,
   };
 });
+
+interface MentionChip {
+  variant: "resolved" | "warning";
+  icon: string;
+  label: string;
+  reason?: string;
+}
+
+function mentionChipLabel(m: ChatV2AtMentionMetadata): string {
+  let label = m.relativePath;
+  if (m.kind === "directory" && !label.endsWith("/")) label += "/";
+  if (m.lineStart) {
+    label +=
+      m.lineEnd && m.lineEnd !== m.lineStart
+        ? ` L${m.lineStart}-${m.lineEnd}`
+        : ` L${m.lineStart}`;
+  }
+  return label;
+}
+
+function mentionWarningReason(
+  status: ChatV2AtMentionMetadata["status"]
+): string | undefined {
+  switch (status) {
+    case "missing":
+      return (
+        t("aiChatV2.atMentions.fileNotFound") ||
+        "File not found in this workspace."
+      );
+    case "rejected":
+      return (
+        t("aiChatV2.atMentions.outsideWorkspace") ||
+        "Mention is outside the approved workspace."
+      );
+    case "invalid_line_range":
+      return (
+        t("aiChatV2.atMentions.invalidLineRange") ||
+        "Line range must start before it ends."
+      );
+    case "binary":
+      return t("aiChatV2.atMentions.binaryFile") || "Binary file";
+    case "too_large":
+      return t("aiChatV2.atMentions.tooLarge") || "File is too large to include.";
+    case "workspace_required":
+      return (
+        t("aiChatV2.atMentions.noWorkspace") ||
+        "Choose a workspace to mention files."
+      );
+    case "too_many_mentions":
+      return (
+        t("aiChatV2.atMentions.tooManyMentions") || "Too many mentions."
+      );
+    default:
+      return "Could not be resolved.";
+  }
+}
+
+const mentionChips = computed<MentionChip[]>(() => {
+  if (props.message.role !== "user") return [];
+  const meta = props.message.metadata as
+    | { atMentions?: ChatV2AtMentionMetadata[] }
+    | undefined;
+  const mentions = meta?.atMentions;
+  if (!mentions || mentions.length === 0) return [];
+  return mentions.map(
+    (m): MentionChip => {
+      const label = mentionChipLabel(m);
+      if (m.status === "resolved") {
+        return {
+          variant: "resolved",
+          icon:
+            m.kind === "directory"
+              ? "mdi-folder-outline"
+              : "mdi-file-document-outline",
+          label,
+        };
+      }
+      return {
+        variant: "warning",
+        icon: "mdi-alert-circle-outline",
+        label,
+        reason: mentionWarningReason(m.status),
+      };
+    }
+  );
+});
 </script>
 
 <style scoped>
@@ -258,5 +365,31 @@ const shellPreview = computed<ShellPreview | undefined>(() => {
   margin: 0;
   white-space: pre-wrap;
   font-size: 12px;
+}
+.v2-message__mentions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+.v2-mention-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 6px;
+  border-radius: 6px;
+  font-size: 11px;
+  background: rgba(25, 118, 210, 0.12);
+  color: rgba(0, 0, 0, 0.7);
+}
+.v2-mention-chip--warning {
+  background: rgba(var(--v-theme-error), 0.12);
+}
+.v2-mention-chip__label {
+  font-family: monospace;
+}
+.v2-mention-chip__reason {
+  opacity: 0.75;
+  font-size: 10px;
 }
 </style>
