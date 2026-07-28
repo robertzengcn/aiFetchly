@@ -1113,19 +1113,23 @@ export default {
     embedding_group_description: "ベクトル検索のデフォルト埋め込みモデル。",
     external_system: "外部システム",
     user_preferences: "ユーザー設定",
-    "user-preferences-group-description": "アプリケーション動作のユーザーレベル設定。",
+    "user-preferences-group-description":
+      "アプリケーション動作のユーザーレベル設定。",
     default_embedding_model: "デフォルト埋め込みモデル",
-    "default-embedding-model-description": "ベクトル検索と類似性マッチングに使用する埋め込みモデルを選択します。",
+    "default-embedding-model-description":
+      "ベクトル検索と類似性マッチングに使用する埋め込みモデルを選択します。",
     language_preference: "言語",
     "language-preference-description": "UIの言語設定。",
     ai_website_analysis_business_info: "ビジネス情報",
-    "ai-website-analysis-business-info-description": "ウェブサイトのAI分析で使用されるビジネス情報。",
+    "ai-website-analysis-business-info-description":
+      "ウェブサイトのAI分析で使用されるビジネス情報。",
     "external-system-group-description": "外部システムグループ設定",
     mcp_tools: "MCPツール",
     manage_mcp_tools: "MCPツールを管理",
     manage_skills: "スキルを管理",
     ai_preferences: "AI 設定",
-    "ai-preferences-group-description": "AIチャットの動作、メモリー、コンテキストを制御する設定。",
+    "ai-preferences-group-description":
+      "AIチャットの動作、メモリー、コンテキストを制御する設定。",
     user_ai_auto_dream: "自動要約統合",
     "ai-auto-dream-description":
       "バックグラウンドで過去の会話を自動的に要約し、AIコンテキストトークンを節約します。",
@@ -1781,6 +1785,22 @@ export default {
     draft_label: "下書き — レビュー必須",
   },
   aiChatV2: {
+    atMentions: {
+      ariaLabel: "ワークスペースのファイルをメンション",
+      noWorkspace:
+        "ファイルをメンションするにはワークスペースを選択してください。",
+      chooseWorkspace: "ワークスペースを選択",
+      noMatches: "一致するファイルがありません",
+      file: "ファイル",
+      directory: "ディレクトリ",
+      tooManyMentions:
+        "メンションが多すぎます。いくつかのファイルを削除して再試行してください。",
+      fileNotFound: "このワークスペースにファイルが見つかりません。",
+      outsideWorkspace: "メンションは承認されたワークスペース外です。",
+      invalidLineRange: "行範囲の開始は終了より前でなければなりません。",
+      binaryFile: "バイナリファイル",
+      tooLarge: "ファイルが大きすぎて含められません。",
+    },
     title: "AI アシスタント",
     new_conversation: "新しい会話",
     empty_title: "会話を始める",

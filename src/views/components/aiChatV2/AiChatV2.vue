@@ -194,8 +194,10 @@
 
       <AiChatV2Composer
         :is-streaming="chatIsRunning"
+        :conversation-id="activeConversationId"
         @send="onSend"
         @stop="onStop"
+        @request-workspace="showWorkspaceRequired = true"
       >
         <template #prepend>
           <AiChatV2ModeSelector v-model="mode" :disabled="chatIsRunning" />

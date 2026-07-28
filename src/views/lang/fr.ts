@@ -1125,22 +1125,27 @@ export default {
     chrome_path: "chrome path",
     firefox_path: "firefox path",
     embedding_group: "Modèles d'Embedding",
-    embedding_group_description: "Modèle d'embedding par défaut pour la recherche vectorielle.",
+    embedding_group_description:
+      "Modèle d'embedding par défaut pour la recherche vectorielle.",
     external_system: "Système Externe",
     user_preferences: "Préférences Utilisateur",
-    "user-preferences-group-description": "Préférences utilisateur pour le comportement de l'application.",
+    "user-preferences-group-description":
+      "Préférences utilisateur pour le comportement de l'application.",
     default_embedding_model: "Modèle d'Embedding par Défaut",
-    "default-embedding-model-description": "Sélectionnez le modèle d'embedding utilisé pour la recherche vectorielle et la correspondance de similarité.",
+    "default-embedding-model-description":
+      "Sélectionnez le modèle d'embedding utilisé pour la recherche vectorielle et la correspondance de similarité.",
     language_preference: "Langue",
     "language-preference-description": "Préférence de langue de l'interface.",
     ai_website_analysis_business_info: "Informations Commerciales",
-    "ai-website-analysis-business-info-description": "Informations commerciales utilisées lors de l'analyse IA du site web.",
+    "ai-website-analysis-business-info-description":
+      "Informations commerciales utilisées lors de l'analyse IA du site web.",
     "external-system-group-description": "external system group setting",
     mcp_tools: "MCP Tools",
     manage_mcp_tools: "Manage MCP Tools",
     manage_skills: "Gérer les compétences",
     ai_preferences: "Préférences IA",
-    "ai-preferences-group-description": "Paramètres contrôlant le comportement du chat IA, la mémoire et le contexte.",
+    "ai-preferences-group-description":
+      "Paramètres contrôlant le comportement du chat IA, la mémoire et le contexte.",
     user_ai_auto_dream: "Consolidation Auto-Rêve",
     "ai-auto-dream-description":
       "Résumer automatiquement les conversations passées en arrière-plan pour économiser les tokens de contexte IA.",
@@ -1802,6 +1807,22 @@ export default {
     draft_label: "Brouillon — révision requise",
   },
   aiChatV2: {
+    atMentions: {
+      ariaLabel: "Mentionner des fichiers de l'espace de travail",
+      noWorkspace:
+        "Choisissez un espace de travail pour mentionner des fichiers.",
+      chooseWorkspace: "Choisir l'espace de travail",
+      noMatches: "Aucun fichier correspondant",
+      file: "Fichier",
+      directory: "Dossier",
+      tooManyMentions: "Trop de mentions. Supprimez des fichiers et réessayez.",
+      fileNotFound: "Fichier introuvable dans cet espace de travail.",
+      outsideWorkspace:
+        "La mention est en dehors de l'espace de travail approuvé.",
+      invalidLineRange: "La plage de lignes doit commencer avant de finir.",
+      binaryFile: "Fichier binaire",
+      tooLarge: "Le fichier est trop volumineux pour être inclus.",
+    },
     title: "Assistant IA",
     new_conversation: "Nouvelle conversation",
     empty_title: "Démarrer une conversation",
