@@ -95,7 +95,7 @@
     "argparse": "^2.0.1",
     "better-sqlite3": "^11.9.1",
     "bufferutil": "^4.0.8",
-    "chardet": "^2.1.1",
+    "chardet": "^2.2.0",
     "cheerio": "^1.0.0-rc.3",
     "core-js": "^3.33.0",
     "cron": "^2.3.0",
