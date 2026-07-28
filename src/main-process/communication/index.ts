@@ -21,6 +21,7 @@ import { registerLanguagePreferenceIpcHandlers } from "@/main-process/communicat
 import { registerRagIpcHandlers } from "@/main-process/communication/rag-ipc";
 import { registerAiChatIpcHandlers } from "@/main-process/communication/ai-chat-ipc";
 import { registerAiChatV2IpcHandlers } from "@/main-process/communication/ai-chat-v2-ipc";
+import { registerAiChatAtMentionIpcHandlers } from "@/main-process/communication/ai-chat-at-mention-ipc";
 import { registerAIEmailTemplateHandlers } from "@/main-process/communication/ai-email-template-ipc";
 import { registerDashboardIpcHandlers } from "@/main-process/communication/dashboard-ipc";
 import { registerMCPToolIpcHandlers } from "@/main-process/communication/mcp-tool-ipc";
@@ -68,6 +69,7 @@ export function registerCommunicationIpcHandlers(win: BrowserWindow) {
     registerRagIpcHandlers();
     registerAiChatIpcHandlers();
     registerAiChatV2IpcHandlers();
+    registerAiChatAtMentionIpcHandlers();
     registerAIEmailTemplateHandlers();
     registerDashboardIpcHandlers();
     registerMCPToolIpcHandlers();
