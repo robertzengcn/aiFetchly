@@ -4,9 +4,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import WebsiteImportDialog from "@/views/pages/knowledge/WebsiteImportDialog.vue";
 
 // Mock the renderer API so no IPC is invoked.
-const importWebsiteMock = vi.fn();
+const ragApiMocks = vi.hoisted(() => ({
+  importWebsiteMock: vi.fn(),
+  onWebsiteImportProgressMock: vi.fn(),
+}));
 vi.mock("@/views/api/rag", () => ({
-  importWebsite: (...args: unknown[]) => importWebsiteMock(...args),
+  importWebsite: (...args: unknown[]) => ragApiMocks.importWebsiteMock(...args),
+  onWebsiteImportProgress: (handler: unknown) =>
+    ragApiMocks.onWebsiteImportProgressMock(handler),
 }));
 
 const i18n = createI18n({
@@ -37,6 +42,7 @@ const stubs = {
   VTextField: true,
   VTextarea: true,
   VSlider: true,
+  VProgressLinear: true,
   VSelect: true,
   VRow: { template: "<div><slot /></div>" },
   VCol: { template: "<div><slot /></div>" },
@@ -72,7 +78,9 @@ const successOutcome = (mode: string, requestedCount: number) => ({
 
 describe("WebsiteImportDialog", () => {
   beforeEach(() => {
-    importWebsiteMock.mockReset();
+    ragApiMocks.importWebsiteMock.mockReset();
+    ragApiMocks.onWebsiteImportProgressMock.mockReset();
+    ragApiMocks.onWebsiteImportProgressMock.mockReturnValue(vi.fn());
   });
 
   it("blocks submit and sets formError when url is empty (single_page default)", async () => {
@@ -82,12 +90,14 @@ describe("WebsiteImportDialog", () => {
       formError: string;
     };
     await vm.submit();
-    expect(importWebsiteMock).not.toHaveBeenCalled();
+    expect(ragApiMocks.importWebsiteMock).not.toHaveBeenCalled();
     expect(vm.formError.length).toBeGreaterThan(0);
   });
 
   it("parses url_list (trims + drops blanks), forwards payload + duplicatePolicy, emits completed", async () => {
-    importWebsiteMock.mockResolvedValue(successOutcome("url_list", 2));
+    ragApiMocks.importWebsiteMock.mockResolvedValue(
+      successOutcome("url_list", 2)
+    );
     const w = mountDialog();
     const vm = w.vm as unknown as {
       mode: string;
@@ -100,8 +110,11 @@ describe("WebsiteImportDialog", () => {
     vm.duplicatePolicy = "allow";
     await vm.submit();
     await flushPromises();
-    expect(importWebsiteMock).toHaveBeenCalledTimes(1);
-    const opts = importWebsiteMock.mock.calls[0][0] as Record<string, unknown>;
+    expect(ragApiMocks.importWebsiteMock).toHaveBeenCalledTimes(1);
+    const opts = ragApiMocks.importWebsiteMock.mock.calls[0][0] as Record<
+      string,
+      unknown
+    >;
     expect(opts.mode).toBe("url_list");
     expect(opts.urls).toEqual(["https://a.example", "https://b.example"]);
     expect(opts.duplicatePolicy).toBe("allow");
@@ -122,7 +135,57 @@ describe("WebsiteImportDialog", () => {
       (_, i) => `https://x${i}.example`
     ).join("\n");
     await vm.submit();
-    expect(importWebsiteMock).not.toHaveBeenCalled();
+    expect(ragApiMocks.importWebsiteMock).not.toHaveBeenCalled();
     expect(vm.formError.length).toBeGreaterThan(0);
+  });
+
+  it("subscribes to website import progress and exposes the current page", async () => {
+    let resolveImport: (
+      value: ReturnType<typeof successOutcome>
+    ) => void = () => undefined;
+    ragApiMocks.importWebsiteMock.mockReturnValue(
+      new Promise((resolve) => {
+        resolveImport = resolve;
+      })
+    );
+    const cleanup = vi.fn();
+    ragApiMocks.onWebsiteImportProgressMock.mockReturnValue(cleanup);
+
+    const w = mountDialog();
+    const vm = w.vm as unknown as {
+      url: string;
+      submit: () => Promise<void>;
+      importing: boolean;
+      currentProgress: { url?: string; phase: string } | null;
+      progressEvents: unknown[];
+    };
+    vm.url = "https://example.com/docs";
+    const submitPromise = vm.submit();
+    await flushPromises();
+
+    const handler = ragApiMocks.onWebsiteImportProgressMock.mock
+      .calls[0][0] as (event: {
+      phase: string;
+      mode: string;
+      url: string;
+      importedCount: number;
+      skippedCount: number;
+    }) => void;
+    handler({
+      phase: "scraping",
+      mode: "single_page",
+      url: "https://example.com/docs",
+      importedCount: 0,
+      skippedCount: 0,
+    });
+    await flushPromises();
+
+    expect(vm.currentProgress?.url).toBe("https://example.com/docs");
+    expect(vm.progressEvents).toHaveLength(1);
+
+    resolveImport(successOutcome("single_page", 1));
+    await submitPromise;
+    expect(cleanup).toHaveBeenCalledTimes(1);
+    expect(vm.importing).toBe(false);
   });
 });

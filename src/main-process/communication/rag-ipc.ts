@@ -47,6 +47,7 @@ import {
   RAG_GET_DOCUMENT_ERROR_LOG,
   RAG_CHECK_DOCUMENT_DUPLICATE,
   RAG_IMPORT_WEBSITE,
+  RAG_IMPORT_WEBSITE_PROGRESS,
 } from "@/config/channellist";
 import {
   registerValidatedHandler,
@@ -748,6 +749,9 @@ export function registerRagIpcHandlers(): void {
   registerValidatedHandler(
     RAG_IMPORT_WEBSITE,
     ragImportWebsiteInputSchema,
-    async (input) => handleRagImportWebsite(input)
+    async (input, event) =>
+      handleRagImportWebsite(input, (progress) => {
+        event.sender.send(RAG_IMPORT_WEBSITE_PROGRESS, progress);
+      })
   );
 }

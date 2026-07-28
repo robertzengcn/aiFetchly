@@ -374,3 +374,31 @@ export interface ImportKnowledgeWebsiteResult {
 export type KnowledgeLibraryWebsiteImportOutcome =
   | ImportKnowledgeWebsiteResult
   | KnowledgeLibraryToolError;
+
+export type KnowledgeLibraryWebsiteImportProgressPhase =
+  | "starting"
+  | "scraping"
+  | "importing"
+  | "imported"
+  | "skipped"
+  | "completed";
+
+/**
+ * Main-process progress event for the manual Knowledge Library website import
+ * UI. It deliberately excludes local file paths and page content.
+ */
+export interface KnowledgeLibraryWebsiteImportProgressEvent {
+  readonly phase: KnowledgeLibraryWebsiteImportProgressPhase;
+  readonly mode: KnowledgeWebsiteImportMode;
+  readonly url?: string;
+  readonly title?: string;
+  readonly importedCount: number;
+  readonly skippedCount: number;
+  readonly processedPages?: number;
+  readonly requestedCount?: number;
+  readonly discoveredCount?: number;
+  readonly maxPages?: number;
+  readonly code?: SkippedWebsiteImportCode;
+  readonly reason?: string;
+  readonly summary?: string;
+}

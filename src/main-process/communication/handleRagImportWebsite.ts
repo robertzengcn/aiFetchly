@@ -15,15 +15,19 @@
 
 import { KnowledgeLibraryAiTools } from "@/service/KnowledgeLibraryAiTools";
 import type { SkillExecutionContext } from "@/entityTypes/skillTypes";
-import type { KnowledgeLibraryWebsiteImportOutcome } from "@/entityTypes/knowledgeLibraryAiToolTypes";
+import type {
+  KnowledgeLibraryWebsiteImportOutcome,
+  KnowledgeLibraryWebsiteImportProgressEvent,
+} from "@/entityTypes/knowledgeLibraryAiToolTypes";
 
 export async function handleRagImportWebsite(
-  input: Record<string, unknown>
+  input: Record<string, unknown>,
+  onProgress?: (event: KnowledgeLibraryWebsiteImportProgressEvent) => void
 ): Promise<KnowledgeLibraryWebsiteImportOutcome> {
   const tools = new KnowledgeLibraryAiTools();
   const context: SkillExecutionContext = {
     conversationId: "knowledge-library-ui",
     toolCallId: "ui-website-import",
   };
-  return tools.importWebsite(input, context);
+  return tools.importWebsite(input, context, onProgress);
 }

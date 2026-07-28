@@ -249,6 +249,7 @@ export const RAG_DOWNLOAD_DOCUMENT = "rag:download-document";
 export const RAG_GET_DOCUMENT_ERROR_LOG = "rag:get-document-error-log";
 export const RAG_CHECK_DOCUMENT_DUPLICATE = "rag:check-document-duplicate";
 export const RAG_IMPORT_WEBSITE = "rag:import-website";
+export const RAG_IMPORT_WEBSITE_PROGRESS = "rag:import-website:progress";
 
 // File Dialog Channels
 export const SHOW_OPEN_DIALOG = "show-open-dialog";

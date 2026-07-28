@@ -27,7 +27,7 @@ import {
   WebsiteKnowledgeImportService,
   WEBSITE_DEFAULT_AUTHOR,
   type WebsiteImportSource,
-  type WebsiteImportSkippedSource,
+  type WebsiteImportPagePreparedEvent,
 } from "@/service/WebsiteKnowledgeImportService";
 import type { RAGDocumentEntity } from "@/entity/RAGDocument.entity";
 import type { SkillExecutionContext } from "@/entityTypes/skillTypes";
@@ -45,6 +45,8 @@ import type {
   KnowledgeLibraryToolError,
   KnowledgeLibraryToolErrorCode,
   KnowledgeLibraryWebsiteImportOutcome,
+  KnowledgeLibraryWebsiteImportProgressEvent,
+  ImportKnowledgeWebsiteResult,
   ListKnowledgeDocumentsParsed,
   ImportKnowledgeAttachmentParsed,
   ImportKnowledgeWebsiteParsed,
@@ -500,7 +502,8 @@ export class KnowledgeLibraryAiTools {
    */
   async importWebsite(
     args: Record<string, unknown>,
-    _context: SkillExecutionContext
+    _context: SkillExecutionContext,
+    onProgress?: (event: KnowledgeLibraryWebsiteImportProgressEvent) => void
   ): Promise<KnowledgeLibraryWebsiteImportOutcome> {
     let input: ImportKnowledgeWebsiteParsed;
     try {
@@ -523,31 +526,181 @@ export class KnowledgeLibraryAiTools {
       );
     }
 
+    const imported: ImportedWebsiteDocumentSummary[] = [];
+    const skipped: SkippedWebsiteImportSummary[] = [];
+    const maxPages =
+      input.mode === "single_page"
+        ? 1
+        : input.mode === "url_list"
+        ? Math.min(input.urls?.length ?? input.maxPages, input.maxPages)
+        : input.maxPages;
+    const emitProgress = (
+      event: Omit<
+        KnowledgeLibraryWebsiteImportProgressEvent,
+        "mode" | "importedCount" | "skippedCount"
+      >
+    ): void => {
+      try {
+        onProgress?.({
+          mode: input.mode,
+          importedCount: imported.length,
+          skippedCount: skipped.length,
+          maxPages,
+          ...event,
+        });
+      } catch {
+        // Progress is best-effort; never abort the import if a renderer closes.
+      }
+    };
+
+    emitProgress({
+      phase: "starting",
+      requestedCount: input.mode === "url_list" ? input.urls?.length ?? 0 : 1,
+    });
+
+    const documentModule = this.getRagDocumentModule();
+    const ragModule = this.getRagSearchModule();
+    let ragInitPromise: Promise<void> | null = null;
+    const ensureRagInitialized = (): Promise<void> => {
+      ragInitPromise ??= ragModule.initializeRagModule();
+      return ragInitPromise;
+    };
+
+    const uploadTasks: Promise<void>[] = [];
+    let uploadTail: Promise<void> = Promise.resolve();
+    let pipelinedEvents = 0;
+
+    const recordSkipped = (
+      source: SkippedWebsiteImportSummary,
+      progress?: Partial<KnowledgeLibraryWebsiteImportProgressEvent>
+    ): void => {
+      const summary: SkippedWebsiteImportSummary = { ...source };
+      skipped.push(summary);
+      emitProgress({
+        phase: "skipped",
+        url: summary.url,
+        code: summary.code,
+        reason: summary.reason,
+        processedPages: progress?.processedPages,
+        discoveredCount: progress?.discoveredCount,
+      });
+    };
+
+    const enqueueImport = (
+      source: WebsiteImportSource,
+      progress?: Partial<KnowledgeLibraryWebsiteImportProgressEvent>
+    ): void => {
+      const task = uploadTail.then(async () => {
+        emitProgress({
+          phase: "importing",
+          url: source.sourceUrl,
+          title: source.title,
+          processedPages: progress?.processedPages,
+          discoveredCount: progress?.discoveredCount,
+        });
+
+        try {
+          await ensureRagInitialized();
+        } catch (error) {
+          const reason = error instanceof Error ? error.message : String(error);
+          const skippedSource: SkippedWebsiteImportSummary = {
+            url: source.sourceUrl,
+            reason: sanitizeReason(reason),
+            code: "IMPORT_FAILED",
+          };
+          recordSkipped(skippedSource, progress);
+          return;
+        }
+
+        const staged = await this.stageOneWebsiteSource(
+          source,
+          input,
+          documentModule,
+          ragModule
+        );
+        if (staged.imported) {
+          imported.push(staged.imported);
+          emitProgress({
+            phase: "imported",
+            url: staged.imported.sourceUrl,
+            title: staged.imported.title ?? staged.imported.name,
+            processedPages: progress?.processedPages,
+            discoveredCount: progress?.discoveredCount,
+          });
+        }
+        if (staged.skipped) {
+          skipped.push(staged.skipped);
+          emitProgress({
+            phase: "skipped",
+            url: staged.skipped.url,
+            code: staged.skipped.code,
+            reason: staged.skipped.reason,
+            processedPages: progress?.processedPages,
+            discoveredCount: progress?.discoveredCount,
+          });
+        }
+      });
+      uploadTail = task.catch(() => undefined);
+      uploadTasks.push(task);
+    };
+
+    const handlePreparedPage = (
+      event: WebsiteImportPagePreparedEvent
+    ): void => {
+      pipelinedEvents++;
+      if (event.source) {
+        enqueueImport(event.source, {
+          processedPages: event.processedPages,
+          discoveredCount: event.discoveredCount,
+        });
+      }
+      if (event.skipped) {
+        recordSkipped(event.skipped, {
+          processedPages: event.processedPages,
+          discoveredCount: event.discoveredCount,
+        });
+      }
+    };
+
     let prepare;
     try {
-      prepare = await this.getWebsiteImportService().prepareImportSources({
-        mode: input.mode,
-        url: input.url,
-        urls: input.urls ? [...input.urls] : undefined,
-        maxPages: input.maxPages,
-        maxDepth: input.maxDepth,
-      });
+      prepare = await this.getWebsiteImportService().prepareImportSources(
+        {
+          mode: input.mode,
+          url: input.url,
+          urls: input.urls ? [...input.urls] : undefined,
+          maxPages: input.maxPages,
+          maxDepth: input.maxDepth,
+        },
+        {
+          onPageStart: (event) => {
+            emitProgress({
+              phase: "scraping",
+              url: event.url,
+              processedPages: event.processedPages,
+              discoveredCount: event.discoveredCount,
+            });
+          },
+          onPagePrepared: handlePreparedPage,
+        }
+      );
     } catch (error) {
       return mapError("IMPORT_FAILED", error);
     }
 
-    const imported: ImportedWebsiteDocumentSummary[] = [];
-    const skipped: SkippedWebsiteImportSummary[] = prepare.skipped.map((s) => ({
-      ...s,
-    }));
+    if (uploadTasks.length > 0) {
+      await Promise.all(uploadTasks);
+    }
 
-    if (prepare.sources.length > 0) {
-      const documentModule = this.getRagDocumentModule();
-      const ragModule = this.getRagSearchModule();
-      try {
-        await ragModule.initializeRagModule();
-      } catch (error) {
-        return mapError("IMPORT_FAILED", error);
+    if (pipelinedEvents === 0) {
+      skipped.push(...prepare.skipped.map((s) => ({ ...s })));
+
+      if (prepare.sources.length > 0) {
+        try {
+          await ensureRagInitialized();
+        } catch (error) {
+          return mapError("IMPORT_FAILED", error);
+        }
       }
 
       for (const source of prepare.sources) {
@@ -564,13 +717,20 @@ export class KnowledgeLibraryAiTools {
 
     if (imported.length === 0) {
       const code = aggregateWebsiteFailureCode(skipped);
-      return toolError(
+      const failure = toolError(
         code,
         summarizeWebsiteFailure(skipped, prepare.discoveredCount)
       );
+      emitProgress({
+        phase: "completed",
+        requestedCount: prepare.requestedCount,
+        discoveredCount: prepare.discoveredCount,
+        summary: failure.error,
+      });
+      return failure;
     }
 
-    return {
+    const result: ImportKnowledgeWebsiteResult = {
       success: true,
       mode: input.mode,
       imported,
@@ -585,6 +745,13 @@ export class KnowledgeLibraryAiTools {
         skipped.length
       ),
     };
+    emitProgress({
+      phase: "completed",
+      requestedCount: result.requestedCount,
+      discoveredCount: result.discoveredCount,
+      summary: result.summary,
+    });
+    return result;
   }
 
   /**

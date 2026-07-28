@@ -358,6 +358,17 @@ export default {
     website_import_chunks: "{count} Chunks",
     website_import_status_done:
       "{imported} Seite(n) importiert; {skipped} übersprungen.",
+    website_import_progress_starting: "Website-Import wird gestartet...",
+    website_import_progress_scraping: "Seite wird gecrawlt...",
+    website_import_progress_importing:
+      "Seite wird in die Wissensbibliothek importiert...",
+    website_import_progress_imported: "Seite importiert.",
+    website_import_progress_skipped: "Seite übersprungen.",
+    website_import_progress_completed: "Website-Import abgeschlossen.",
+    website_import_current_page: "Aktuelle Seite",
+    website_import_progress_counts:
+      "{imported} importiert, {skipped} übersprungen",
+    website_import_progress_discovered: "{count} Link(s) gefunden.",
   },
   notifications: {
     cloudflare_protection_detected: "Cloudflare-Schutz erkannt",

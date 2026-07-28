@@ -351,6 +351,19 @@ export default {
     website_import_chunks: "{count} チャンク",
     website_import_status_done:
       "{imported} 件インポート、{skipped} 件スキップしました。",
+    website_import_progress_starting:
+      "ウェブサイトのインポートを開始しています...",
+    website_import_progress_scraping: "ページをクロールしています...",
+    website_import_progress_importing:
+      "ページをナレッジライブラリにインポートしています...",
+    website_import_progress_imported: "ページをインポートしました。",
+    website_import_progress_skipped: "ページをスキップしました。",
+    website_import_progress_completed:
+      "ウェブサイトのインポートが完了しました。",
+    website_import_current_page: "現在のページ",
+    website_import_progress_counts:
+      "{imported} 件インポート、{skipped} 件スキップ",
+    website_import_progress_discovered: "{count} 件のリンクを検出しました。",
   },
   notifications: {
     cloudflare_protection_detected: "Cloudflare保護を検出",

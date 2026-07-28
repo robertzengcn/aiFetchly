@@ -49,6 +49,7 @@ import { KnowledgeLibraryAiTools } from "@/service/KnowledgeLibraryAiTools";
 import type { KnowledgeLibraryAiToolsDeps } from "@/service/KnowledgeLibraryAiTools";
 import type { WebsiteKnowledgeImportService } from "@/service/WebsiteKnowledgeImportService";
 import type { WebsiteImportSource } from "@/service/WebsiteKnowledgeImportService";
+import type { WebsiteImportPrepareCallbacks } from "@/service/WebsiteKnowledgeImportService";
 import type { DocumentService } from "@/service/DocumentService";
 import type { RagSearchModule } from "@/modules/RagSearchModule";
 import type { RAGDocumentModule } from "@/modules/RAGDocumentModule";
@@ -579,6 +580,70 @@ describe("KnowledgeLibraryAiTools.importWebsite", () => {
     expect(result.importedCount).toBe(1);
     expect(result.skippedCount).toBe(1);
     expect(result.skipped[0].code).toBe("UNSUPPORTED_FILE_TYPE");
+  });
+
+  test("imports a page from the prepare callback before returned sources are available", async () => {
+    const { deps, websiteImportService, ragDocumentModule, ragSearchModule } =
+      buildTools();
+    const source = makeSource({
+      sourceUrl: "https://example.com/docs",
+      title: "Docs",
+    });
+    websiteImportService.prepareImportSources.mockImplementation(
+      async (_options: unknown, callbacks?: WebsiteImportPrepareCallbacks) => {
+        await callbacks?.onPageStart?.({
+          url: source.sourceUrl,
+          processedPages: 0,
+          maxPages: 3,
+        });
+        await callbacks?.onPagePrepared?.({
+          url: source.sourceUrl,
+          processedPages: 1,
+          maxPages: 3,
+          source,
+        });
+        return {
+          mode: "site_crawl",
+          sources: [],
+          skipped: [],
+          requestedCount: 1,
+          discoveredCount: 0,
+        };
+      }
+    );
+    ragDocumentModule.validateFile.mockResolvedValue({
+      isValid: true,
+      errors: [],
+      fileType: ".md",
+      fileSize: 4096,
+    });
+    ragDocumentModule.findWebsiteDuplicate.mockResolvedValue(undefined);
+    ragSearchModule.uploadDocument.mockResolvedValue({
+      documentId: 77,
+      chunksCreated: 4,
+      processingTime: 1100,
+      document: makeDoc({ id: 77, name: source.fileName, fileType: ".md" }),
+    });
+    const progress: string[] = [];
+    const tools = new KnowledgeLibraryAiTools(deps);
+
+    const result = await tools.importWebsite(
+      {
+        mode: "site_crawl",
+        url: "https://example.com/docs",
+        maxPages: 3,
+      },
+      baseContext,
+      (event) => progress.push(`${event.phase}:${event.url ?? ""}`)
+    );
+
+    expect(ragSearchModule.uploadDocument).toHaveBeenCalledTimes(1);
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.importedCount).toBe(1);
+    expect(progress).toContain("scraping:https://example.com/docs");
+    expect(progress).toContain("importing:https://example.com/docs");
+    expect(progress).toContain("imported:https://example.com/docs");
   });
 
   test("returns an aggregate failure code when no pages import", async () => {

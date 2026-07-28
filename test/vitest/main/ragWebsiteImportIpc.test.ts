@@ -34,7 +34,8 @@ describe("handleRagImportWebsite", () => {
     importWebsiteMock.mockResolvedValue(outcome);
 
     const input = { mode: "single_page", url: "https://example.com/pricing" };
-    const result = await handleRagImportWebsite(input);
+    const onProgress = vi.fn();
+    const result = await handleRagImportWebsite(input, onProgress);
 
     expect(result).toBe(outcome);
     expect(importWebsiteMock).toHaveBeenCalledTimes(1);
@@ -44,6 +45,7 @@ describe("handleRagImportWebsite", () => {
       conversationId: "knowledge-library-ui",
       toolCallId: "ui-website-import",
     });
+    expect(importWebsiteMock.mock.calls[0][2]).toBe(onProgress);
   });
 
   it("passes structured error outcomes (e.g. AI_DISABLED) through unchanged", async () => {
