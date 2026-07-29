@@ -582,6 +582,76 @@ describe("KnowledgeLibraryAiTools.importWebsite", () => {
     expect(result.skipped[0].code).toBe("UNSUPPORTED_FILE_TYPE");
   });
 
+  test("does not use content hash alone to skip distinct website URLs", async () => {
+    const { deps, websiteImportService, ragDocumentModule, ragSearchModule } =
+      buildTools();
+    const sharedContentHash = "b".repeat(64);
+    websiteImportService.prepareImportSources.mockResolvedValue({
+      mode: "url_list",
+      sources: [
+        makeSource({
+          sourceUrl: "https://finance.example.com/a/1.html",
+          contentSha256: sharedContentHash,
+        }),
+        makeSource({
+          sourceUrl: "https://finance.example.com/a/2.html",
+          contentSha256: sharedContentHash,
+        }),
+      ],
+      skipped: [],
+      requestedCount: 2,
+    });
+    ragDocumentModule.validateFile.mockResolvedValue({
+      isValid: true,
+      errors: [],
+      fileType: ".md",
+      fileSize: 4096,
+    });
+    ragDocumentModule.findWebsiteDuplicate.mockImplementation(
+      async (opts: { sourceUrl?: string; contentSha256?: string }) => {
+        if (opts.contentSha256 === sharedContentHash) {
+          return makeDoc({ id: 88 });
+        }
+        return undefined;
+      }
+    );
+    ragSearchModule.uploadDocument
+      .mockResolvedValueOnce({
+        documentId: 61,
+        chunksCreated: 1,
+        processingTime: 500,
+        document: makeDoc({ id: 61, name: "page-1.md", fileType: ".md" }),
+      })
+      .mockResolvedValueOnce({
+        documentId: 62,
+        chunksCreated: 1,
+        processingTime: 520,
+        document: makeDoc({ id: 62, name: "page-2.md", fileType: ".md" }),
+      });
+    const tools = new KnowledgeLibraryAiTools(deps);
+
+    const result = await tools.importWebsite(
+      {
+        mode: "url_list",
+        urls: [
+          "https://finance.example.com/a/1.html",
+          "https://finance.example.com/a/2.html",
+        ],
+      },
+      baseContext
+    );
+
+    expect(ragDocumentModule.findWebsiteDuplicate).toHaveBeenCalledTimes(2);
+    for (const call of ragDocumentModule.findWebsiteDuplicate.mock.calls) {
+      expect(call[0]).not.toHaveProperty("contentSha256");
+    }
+    expect(ragSearchModule.uploadDocument).toHaveBeenCalledTimes(2);
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.importedCount).toBe(2);
+    expect(result.skippedCount).toBe(0);
+  });
+
   test("imports a page from the prepare callback before returned sources are available", async () => {
     const { deps, websiteImportService, ragDocumentModule, ragSearchModule } =
       buildTools();

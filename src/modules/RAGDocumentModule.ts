@@ -148,10 +148,11 @@ export class RAGDocumentModule extends BaseModule {
   }
 
   /**
-   * Website import duplicate detection. Checks canonical URL → source URL →
-   * content body hash in order and returns the first active match. Used by the
-   * website import tool; URL hashes are derived internally so this stays
-   * consistent with how uploads store them.
+   * Website import duplicate detection. Checks URL identity only: canonical URL
+   * first, then source URL. We still store contentSha256 for future refresh and
+   * diagnostics, but do not use it as a duplicate key because many news/listing
+   * pages can produce identical extracted chrome/template markdown even when the
+   * source URLs are distinct user-visible pages.
    */
   async findWebsiteDuplicate(opts: {
     sourceUrl?: string;
@@ -169,12 +170,6 @@ export class RAGDocumentModule extends BaseModule {
         sha256Hex(opts.sourceUrl)
       );
       if (doc) return doc;
-    }
-    if (opts.contentSha256) {
-      const docs = await this.ragDocumentModel.findActiveByContentSha256(
-        opts.contentSha256
-      );
-      if (docs.length > 0) return docs[0];
     }
     return undefined;
   }

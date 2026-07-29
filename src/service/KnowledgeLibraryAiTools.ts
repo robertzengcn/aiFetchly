@@ -793,15 +793,14 @@ export class KnowledgeLibraryAiTools {
       };
     }
 
-    // Duplicate detection by URL/content hash metadata (canonical → source →
-    // content body hash). Falls back to name+size only when no provenance is
-    // available, which does not happen for website imports (sourceUrl is set).
+    // Duplicate detection by URL identity (canonical → source). Content hashes
+    // are stored as metadata but not used for duplicate decisions because
+    // different news/listing pages can extract identical site chrome.
     if (input.duplicatePolicy === "fail") {
       try {
         const existing = await documentModule.findWebsiteDuplicate({
           sourceUrl: source.sourceUrl,
           canonicalUrl: source.canonicalUrl,
-          contentSha256: source.contentSha256,
         });
         if (existing) {
           return {
