@@ -7,6 +7,12 @@ import type {
   AIChatPlanStatus,
 } from "@/entityTypes/aiChatPlanTypes";
 import type { ChatV2AtMentionMetadata } from "@/entityTypes/aiChatAtMentionTypes";
+import type {
+  ChatV2GoalStateEvent,
+  ChatV2GoalIterationEvent,
+  ChatV2GoalEvidenceEvent,
+  ChatV2GoalVerificationEvent,
+} from "@/entityTypes/aiChatGoalTypes";
 
 export type {
   ChatV2Mode,
@@ -142,7 +148,11 @@ export type ChatV2StreamEventType =
   | "usage_update"
   | "error"
   | "cancelled"
-  | "complete";
+  | "complete"
+  | "goal_state"
+  | "goal_iteration"
+  | "goal_evidence"
+  | "goal_verification";
 
 export interface ChatV2StreamChunk {
   eventType: ChatV2StreamEventType;
@@ -185,4 +195,9 @@ export interface ChatV2StreamChunk {
   promptTokens?: number;
   completionTokens?: number;
   totalTokens?: number;
+  // Goal/loop event payloads (present only on goal_* chunks).
+  goalState?: ChatV2GoalStateEvent;
+  goalIteration?: ChatV2GoalIterationEvent;
+  goalEvidence?: ChatV2GoalEvidenceEvent;
+  goalVerification?: ChatV2GoalVerificationEvent;
 }

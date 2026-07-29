@@ -287,6 +287,11 @@ export const AI_CHAT_V2_GET_TOOL_APPROVAL_MODE =
 export const AI_CHAT_V2_SET_TOOL_APPROVAL_MODE =
   "ai-chat-v2:set-tool-approval-mode";
 export const AI_CHAT_V2_AT_MENTION_SUGGEST = "ai-chat-v2:at-mention-suggest";
+export const AI_CHAT_V2_GOAL_CREATE = "ai-chat-v2:goal-create";
+export const AI_CHAT_V2_GOAL_GET = "ai-chat-v2:goal-get";
+export const AI_CHAT_V2_GOAL_LOOP_START = "ai-chat-v2:goal-loop-start";
+export const AI_CHAT_V2_GOAL_LOOP_STOP = "ai-chat-v2:goal-loop-stop";
+export const AI_CHAT_V2_GOAL_EVENT = "ai-chat-v2:goal-event";
 
 // MCP Tool Management Channels
 export const MCP_TOOL_LIST = "mcp:tool:list";

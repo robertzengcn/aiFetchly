@@ -83,7 +83,7 @@ export class AIChatGoalModule extends BaseModule {
   async createDraftGoal(input: {
     conversationId: string;
     objective: string;
-    criteria: AIChatGoalCriterion[];
+    criteria: readonly AIChatGoalCriterion[];
     planId?: string;
     loopLimits?: AIChatGoalLoopLimits;
     replace?: boolean;
@@ -212,6 +212,33 @@ export class AIChatGoalModule extends BaseModule {
       terminalReason,
       cancelled: cancelled || undefined,
     });
+  }
+
+  /**
+   * Cancel the active run for a conversation's goal (user pressed Stop).
+   * Ends the run as cancelled and transitions the goal running -> cancelled.
+   * Returns cancelled:false if there is no running goal/run.
+   */
+  async cancelActiveRun(conversationId: string): Promise<{
+    cancelled: boolean;
+    goalId?: string;
+    runId?: string;
+  }> {
+    const goal = await this.goalModel.getActiveByConversation(conversationId);
+    if (!goal || goal.status !== "running") {
+      return { cancelled: false };
+    }
+    const run = await this.runModel.getActiveByGoal(goal.goalId);
+    if (run) {
+      await this.runModel.endRun(run.runId, "cancelled", {
+        cancelled: true,
+        terminalReason: "user_stop",
+      });
+    }
+    await this.goalModel.setStatus(goal.goalId, "cancelled", {
+      terminalReason: "user_stop",
+    });
+    return { cancelled: true, goalId: goal.goalId, runId: run?.runId };
   }
 
   // ---------- Evidence ----------
