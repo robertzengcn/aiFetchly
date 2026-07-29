@@ -912,6 +912,177 @@ Puppeteer and its browser executable belong to the plugin dependency plan. The p
 
 Production packaging must not assume a globally installed `node` command. The host must launch the bundled plugin entry using an application-managed JavaScript runtime or another packaged executable strategy.
 
+### 19.4 Current runtime gap
+
+MCP is a protocol, not a JavaScript runtime. An MCP request cannot execute the plugin until the host has started an MCP server process capable of reading and writing JSON-RPC over stdin and stdout.
+
+The current MCP implementation requires every stdio server declaration to contain a non-empty `command`. `MCPClient.connectStdio` passes that command and its arguments directly to `child_process.spawn`. A declaration such as the following therefore depends on a system-installed Node executable:
+
+```json
+{
+  "mcpServers": {
+    "scraper": {
+      "transport": "stdio",
+      "command": "node",
+      "args": ["dist/yellow-pages-mcp.cjs"]
+    }
+  }
+}
+```
+
+This may work in development but is not an acceptable packaged-application design. A user may not have Node installed, the executable may not be on `PATH`, and the available Node version may not match the plugin build.
+
+Until the host-managed runtime described below is implemented, a JavaScript MCP plugin has only two production choices: require an external Node installation or ship a platform-specific standalone executable. Neither is the preferred Yellow Pages plugin architecture.
+
+### 19.5 Proposed host-managed runtime declaration
+
+The plugin declares JavaScript code and a required host runtime rather than an operating-system executable:
+
+```json
+{
+  "mcpServers": {
+    "scraper": {
+      "transport": "stdio",
+      "runtime": "aifetchly-node",
+      "entry": "dist/yellow-pages-mcp.cjs",
+      "timeout": 1800000
+    }
+  }
+}
+```
+
+Required semantics:
+
+- `runtime: "aifetchly-node"` means AiFetchly supplies its embedded JavaScript runtime.
+- `entry` is a plugin-relative path to a built JavaScript file.
+- The loader resolves and validates the entry against the installed plugin root.
+- Absolute paths, path traversal, symlink escape, and entrypoints outside the plugin root are rejected.
+- The plugin does not declare `ELECTRON_RUN_AS_NODE`, `NODE_PATH`, or an AiFetchly executable path.
+- The host decides the actual executable and trusted runtime environment.
+
+The exact persisted representation may use typed runtime fields or an internal command token. The public plugin contract must remain runtime-and-entry based and must not expose the application executable as a plugin-controlled command.
+
+### 19.6 Electron provides the Node runtime
+
+Electron includes a Node runtime. In both development and a packaged application, the main process can launch the executable represented by `process.execPath` in Node mode:
+
+```typescript
+const child = spawn(process.execPath, [resolvedPluginEntry], {
+  cwd: pluginInstallRoot,
+  stdio: ["pipe", "pipe", "pipe"],
+  env: {
+    ...safeHostEnvironment,
+    ELECTRON_RUN_AS_NODE: "1",
+  },
+});
+```
+
+`process.execPath` points to the running Electron executable. `ELECTRON_RUN_AS_NODE=1` tells that executable to run the supplied JavaScript entry as Node instead of starting another Electron application instance.
+
+AiFetchly already uses this mechanism for the application-owned Google Maps and Yandex Maps workers. The plugin runtime should extract this behavior into a generic, policy-checked MCP process launcher rather than duplicating it in Yellow Pages code.
+
+The existing MCP environment filter correctly rejects plugin-supplied `ELECTRON_*` variables, including `ELECTRON_RUN_AS_NODE`, because allowing an untrusted declaration to control Electron startup can enable process hijacking. The generic launcher must:
+
+1. Build the normal allowlisted child environment.
+2. Reject prohibited plugin-supplied variables.
+3. Resolve and validate the plugin entrypoint.
+4. Inject `ELECTRON_RUN_AS_NODE=1` from trusted host code after filtering.
+5. Start the process with `shell: false` and piped stdin, stdout, and stderr.
+6. Keep secrets, database paths, cookies, and unrelated Electron variables out of the child environment.
+
+The plugin never needs to know the path to the Electron executable and cannot override the trusted launch flags.
+
+### 19.7 MCP-to-Puppeteer execution sequence
+
+```text
+AI calls scrape_yellow_pages
+  -> AIChatQueryLoop creates a ToolJobRegistry job
+  -> MCPToolService resolves the installed plugin server
+  -> host launcher resolves dist/yellow-pages-mcp.cjs
+  -> host starts process.execPath in Node mode
+  -> plugin MCP server initializes over stdin/stdout
+  -> host sends tools/call JSON-RPC request
+  -> plugin MCP handler receives scrape_yellow_pages
+  -> handler creates or invokes YellowPagesScraper
+  -> scraper launches the approved Chrome or Chromium executable
+  -> scraper emits progress and partial MCP notifications
+  -> scraper returns the structured final result
+  -> host resolves the job and disconnects after cleanup
+```
+
+The plugin MCP entrypoint is a thin protocol adapter. Its tool handler delegates to plugin-owned scraper modules:
+
+```typescript
+server.setRequestHandler(CallToolRequestSchema, async (request) => {
+  if (request.params.name !== "scrape_yellow_pages") {
+    return createUnknownToolResult(request.params.name);
+  }
+
+  const scraper = new YellowPagesScraper(browserRuntime);
+  return scraper.scrape(request.params.arguments);
+});
+```
+
+The actual page navigation, selectors, pagination, extraction, retries, and browser cleanup remain in modules such as:
+
+```text
+src/scraper/YellowPagesScraper.ts
+src/scraper/BrowserSession.ts
+src/platforms/adapters/YellowPagesComAdapter.ts
+```
+
+The MCP server receives and returns messages. It does not replace the scraper implementation.
+
+### 19.8 Node and Chrome are separate runtime dependencies
+
+Running Puppeteer requires two distinct executables:
+
+| Runtime                  | Purpose                                                                 | Recommended owner                       |
+| ------------------------ | ----------------------------------------------------------------------- | --------------------------------------- |
+| Electron's embedded Node | Executes `yellow-pages-mcp.cjs`, the MCP SDK, and Puppeteer JavaScript. | AiFetchly host                          |
+| Chrome or Chromium       | Loads and interacts with Yellow Pages websites.                         | Generic host browser dependency service |
+
+The plugin does not need to bundle Node. It still needs access to a compatible Chrome or Chromium executable.
+
+The recommended browser design is:
+
+1. The plugin bundles or ships `puppeteer-core` and its JavaScript scraper dependencies.
+2. A generic host browser dependency service locates or installs a supported browser.
+3. The host passes an approved browser executable path through trusted startup configuration or MCP initialization data.
+4. The plugin verifies the supplied file and launches it with `puppeteer.launch({ executablePath })`.
+5. The plugin does not import AiFetchly's internal `BrowserManager`, query application settings directly, or read a browser path from the application database.
+
+Passing the browser path through a trusted host capability keeps browser installation reusable across plugins without coupling the plugin to AiFetchly source modules.
+
+### 19.9 Plugin JavaScript dependency packaging
+
+The plugin has two supported packaging strategies:
+
+1. Bundle the MCP SDK, scraper, adapters, `puppeteer-core`, and compatible pure-JavaScript dependencies into `dist/yellow-pages-mcp.cjs`.
+2. Ship the compiled `dist` files with production-only plugin-local `node_modules` for packages that cannot be bundled reliably.
+
+A mostly bundled CommonJS entrypoint is preferred because it limits module-resolution differences between development and packaged builds. Puppeteer-related packages that depend on dynamic files may remain plugin-local dependencies when required.
+
+The plugin must not:
+
+- Resolve modules through AiFetchly's private application `node_modules`.
+- Depend on `NODE_PATH`.
+- Assume paths inside `app.asar` are writable or executable.
+- Include native modules unless they have a declared, verified Electron/Node ABI compatibility strategy.
+- Download or execute unverified JavaScript during MCP startup.
+
+Using `puppeteer-core` keeps the plugin code independent from the browser binary. Shipping full `puppeteer` with its own Chromium download is allowed only if package-size, signature, update, and cleanup policies explicitly support it.
+
+### 19.10 Alternatives considered
+
+**Require system Node:** Rejected for the default plugin. It adds an undeclared machine dependency and version variance.
+
+**Ship a standalone executable:** Viable for plugins built separately for every operating system and architecture, but it increases package size, signing work, update complexity, and Puppeteer packaging effort.
+
+**Use `utilityProcess.fork`:** Electron can execute JavaScript in a utility process, but the current MCP client expects stdin/stdout JSON-RPC. Adopting `utilityProcess` would require a new MCP transport adapter. It is not the smallest first implementation.
+
+**Import Puppeteer from AiFetchly's application bundle:** Rejected. It couples plugin behavior to private package layout and application releases. The host may manage the browser executable, but the plugin owns its JavaScript client dependency.
+
 ## 20. AiChatV2 Experience
 
 ### 20.1 Tool discovery
@@ -1073,6 +1244,14 @@ In the later phase, expose a provider-neutral, permission-gated, schema-validate
 
 Align `SkillDefinition` comments, built-in skill descriptions, async-job documentation, and tests with the selected managed-async behavior.
 
+### HOST-14: Host-managed JavaScript MCP runtime
+
+Extend plugin MCP declarations with a validated `aifetchly-node` runtime and plugin-relative entrypoint. Add a trusted launcher that runs `process.execPath` with an internally injected `ELECTRON_RUN_AS_NODE=1`, piped stdio, a confined working directory, and the existing sanitized environment. Do not require a system `node` executable.
+
+### HOST-15: Generic browser runtime capability
+
+Expose an approved Chrome or Chromium executable path to browser plugins without allowing them to read application settings or import application browser modules. Browser discovery, installation, version diagnostics, and path approval remain host-owned.
+
 ## 23. Required Plugin Behavior
 
 ### PLUGIN-01: Self-contained scraping runtime
@@ -1114,6 +1293,14 @@ The plugin writes complete results to approved storage and returns only a bounde
 ### PLUGIN-10: Dependency diagnostics
 
 Missing browser or runtime components produce a stable dependency failure instead of a generic process crash.
+
+### PLUGIN-11: Host-runtime-compatible entrypoint
+
+The plugin ships a CommonJS MCP entrypoint that runs under AiFetchly's embedded Node version and resolves all JavaScript dependencies from its bundle or plugin-local production dependencies.
+
+### PLUGIN-12: Browser runtime separation
+
+The plugin uses `puppeteer-core` or an equivalent plugin-owned client library and launches only the host-approved browser executable. It does not import the application's Puppeteer package or `BrowserManager` implementation.
 
 ## 24. Non-Functional Requirements
 
@@ -1180,6 +1367,11 @@ Record these metadata fields without page content or business records:
 
 ### 25.2 MCP client tests
 
+- A host-managed plugin starts when no `node` executable exists on `PATH`.
+- The launcher uses `process.execPath` and internally injects Node mode.
+- A plugin-supplied `ELECTRON_RUN_AS_NODE`, `NODE_PATH`, or other prohibited environment variable remains rejected.
+- Runtime entry path traversal and symlink escape are rejected.
+- The launcher uses the plugin root as `cwd` and `shell: false`.
 - Response correlation remains correct while notifications arrive.
 - Unknown notifications are ignored safely.
 - Progress notifications are schema validated.
@@ -1190,6 +1382,10 @@ Record these metadata fields without page content or business records:
 
 ### 25.3 Plugin unit tests
 
+- The compiled CommonJS MCP entrypoint starts with AiFetchly's embedded Node version.
+- JavaScript dependencies resolve from the bundle or plugin-local production dependencies without `NODE_PATH`.
+- The scraper launches the supplied approved browser executable.
+- A missing or incompatible browser produces `BROWSER_EXECUTABLE_MISSING` or another stable dependency error.
 - Input validation and bounds.
 - Platform selection.
 - Adapter fallback order.
@@ -1288,10 +1484,20 @@ Completion, failure, cancellation, timeout, disablement, uninstall, and applicat
 
 Every host handler that invokes AI recovery checks `USER_AI_ENABLED` before parsing the request or calling an AI service.
 
+### AC-14: No system Node requirement
+
+The installed plugin MCP server starts and executes Puppeteer JavaScript on a machine where `node` is not available on `PATH`, using AiFetchly's embedded Node runtime.
+
+### AC-15: Separate browser dependency
+
+The host supplies a verified Chrome or Chromium executable independently from the Node runtime, and the plugin launches it without importing AiFetchly's private browser modules or application dependencies.
+
 ## 27. Rollout Plan
 
 ### Phase 1: Generic async MCP foundation
 
+- Add the host-managed `aifetchly-node` MCP runtime and confined entrypoint launcher.
+- Add the generic browser executable capability for browser plugins.
 - Add typed plugin MCP tool policy registration.
 - Resolve MCP policy in the query loop.
 - Pass execution context into MCP calls.
@@ -1469,6 +1675,9 @@ Current implementation surfaces used to derive this PRD:
 - `src/service/ToolExecutor.ts`
 - `src/service/MCPToolService.ts`
 - `src/modules/MCPClient.ts`
+- `src/service/PluginMcpDeclaration.ts`
+- `src/modules/GoogleMapsModule.ts`
+- `src/modules/YandexMapsModule.ts`
 - `src/entityTypes/skillTypes.ts`
 - `src/entityTypes/pluginTypes.ts`
 - `src/service/PluginComponentRegistryService.ts`
