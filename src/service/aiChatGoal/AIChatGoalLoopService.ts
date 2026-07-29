@@ -52,7 +52,8 @@ export interface MakerTurnExecutor {
 export interface GoalRevisionProvider {
   current(
     goal: AIChatGoalView,
-    conversationId: string
+    conversationId: string,
+    workspaceRoot: string
   ): Promise<string | undefined>;
 }
 
@@ -228,7 +229,8 @@ export class AIChatGoalLoopService {
         // Maker turn completed normally: collect evidence + verify.
         const currentRevision = await this.deps.revisionProvider.current(
           goal,
-          input.conversationId
+          input.conversationId,
+          workspaceRoot
         );
         const evidence: GoalVerificationEvidence[] = [];
         for (const criterion of goal.criteria) {
