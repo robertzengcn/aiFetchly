@@ -22,7 +22,8 @@ import type {
 export interface CreateGoalRequest {
   conversationId: string;
   objective: string;
-  criteria: AIChatGoalCriterion[];
+  /** Optional; when omitted the backend supplies a default manual criterion. */
+  criteria?: AIChatGoalCriterion[];
   planId?: string;
   loopLimits?: AIChatGoalLoopLimits;
   replace?: boolean;
@@ -68,6 +69,8 @@ export async function startGoalLoop(
 export async function stopGoalLoop(
   conversationId: string
 ): Promise<{ cancelled: boolean } | null> {
-  const resp = await windowInvoke(AI_CHAT_V2_GOAL_LOOP_STOP, { conversationId });
+  const resp = await windowInvoke(AI_CHAT_V2_GOAL_LOOP_STOP, {
+    conversationId,
+  });
   return (resp as { cancelled: boolean } | null) ?? null;
 }

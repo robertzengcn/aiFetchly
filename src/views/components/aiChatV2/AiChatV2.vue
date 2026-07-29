@@ -12,6 +12,32 @@
           :status="planState.status"
           class="ml-2"
         />
+        <v-chip
+          v-if="activeGoal"
+          size="x-small"
+          :color="goalStatusDescriptor.color"
+          class="ml-2"
+        >
+          <v-icon start size="x-small">{{ goalStatusDescriptor.icon }}</v-icon>
+          <span
+            class="text-truncate"
+            style="max-width: 180px"
+            :title="activeGoal.objective"
+          >
+            {{ activeGoal.objective }}
+          </span>
+          <span class="ml-1 font-weight-bold">
+            · {{ goalStatusDescriptor.label }}
+          </span>
+          <v-btn
+            v-if="activeGoal.status === 'running'"
+            size="x-small"
+            variant="text"
+            icon="mdi-stop"
+            :aria-label="t('aiChatV2.goalLoop.stop') || 'Stop loop'"
+            @click="stopActiveLoop"
+          />
+        </v-chip>
       </div>
       <div class="v2-shell__header-actions">
         <AiChatV2ContextBadge
@@ -388,6 +414,17 @@ import AgentTaskListDialog from "./AgentTaskListDialog.vue";
 import WorkspaceBadge from "./WorkspaceBadge.vue";
 import WorkspaceRequiredCard from "./WorkspaceRequiredCard.vue";
 import { getWorkspace } from "@/views/api/workspace";
+import {
+  createGoal,
+  getActiveGoal,
+  startGoalLoop,
+  stopGoalLoop,
+} from "@/views/api/aiChatGoal";
+import {
+  parseAiGoalCommand,
+  isValidLoopCount,
+} from "@/views/utils/aiGoalCommand";
+import type { AIChatGoalView } from "@/entityTypes/aiChatGoalTypes";
 import type { WorkspaceSummary } from "@/entityTypes/workspaceTypes";
 import type { FileOperationRecord } from "@/entityTypes/fileOperationTypes";
 import {
@@ -546,6 +583,70 @@ async function refreshWorkspace(conversationId: string | null): Promise<void> {
 }
 
 /**
+ * Fetch the active goal (if any) for the conversation. Renderer display only;
+ * the main process remains authoritative for goal state.
+ */
+async function refreshActiveGoal(): Promise<void> {
+  const id = activeConversationId.value;
+  if (!id) {
+    activeGoal.value = null;
+    return;
+  }
+  try {
+    activeGoal.value = await getActiveGoal(id);
+  } catch {
+    activeGoal.value = null;
+  }
+}
+
+/** Handle /loop: validate bounds + active goal, then start the loop run. */
+async function runLoopCommand(count: number | null): Promise<void> {
+  if (count === null) {
+    streamError.value =
+      t("aiChatV2.goalLoop.countRequired") || "Please provide an iteration count.";
+    return;
+  }
+  if (!isValidLoopCount(count)) {
+    streamError.value =
+      t("aiChatV2.goalLoop.countRange") ||
+      "Iteration count must be between 1 and 10.";
+    return;
+  }
+  const goal = activeGoal.value;
+  if (!goal) {
+    streamError.value =
+      t("aiChatV2.goalLoop.noActiveGoal") ||
+      "Set a goal first with /goal <objective>.";
+    return;
+  }
+  try {
+    const started = await startGoalLoop({
+      conversationId: activeConversationId.value ?? "",
+      goalId: goal.goalId,
+      maxIterations: count,
+    });
+    if (!started) {
+      streamError.value =
+        t("aiChatV2.goalLoop.startFailed") || "Could not start the loop.";
+    }
+  } catch {
+    streamError.value =
+      t("aiChatV2.goalLoop.startFailed") || "Could not start the loop.";
+  }
+  await refreshActiveGoal();
+}
+
+/** Stop the active loop run (user pressed Stop). */
+async function stopActiveLoop(): Promise<void> {
+  try {
+    await stopGoalLoop(activeConversationId.value ?? "");
+  } catch {
+    /* non-fatal */
+  }
+  await refreshActiveGoal();
+}
+
+/**
  * Handler for the WorkspaceRequiredCard's `approved` event. Updates the badge
  * to reflect the newly-created + approved workspace and hides the card.
  */
@@ -566,6 +667,7 @@ function onWorkspaceApproved(
 // Refresh the workspace badge whenever the active conversation changes.
 watch(activeConversationId, (id) => {
   void refreshWorkspace(id);
+  void refreshActiveGoal();
 });
 
 // Conversation search state
@@ -770,6 +872,51 @@ const showTypingIndicator = computed(() => {
 // Plan Mode state
 const mode = ref<ChatV2Mode>("chat");
 const planState = ref<AIChatPlanStateView | null>(null);
+// Goal / loop state (renderer display only; authoritative state lives in main).
+const activeGoal = ref<AIChatGoalView | null>(null);
+const goalStatusDescriptor = computed(() => {
+  const status = activeGoal.value?.status;
+  switch (status) {
+    case "running":
+      return {
+        color: "primary",
+        icon: "mdi-autorenew",
+        label: t("aiChatV2.goalLoop.statusRunning") || "running",
+      };
+    case "complete":
+      return {
+        color: "success",
+        icon: "mdi-check-circle",
+        label: t("aiChatV2.goalLoop.statusComplete") || "complete",
+      };
+    case "blocked":
+      return {
+        color: "warning",
+        icon: "mdi-alert",
+        label: t("aiChatV2.goalLoop.statusBlocked") || "blocked",
+      };
+    case "needs_user_input":
+      return {
+        color: "info",
+        icon: "mdi-help-circle",
+        label: t("aiChatV2.goalLoop.statusNeedsInput") || "needs input",
+      };
+    case "failed":
+      return {
+        color: "error",
+        icon: "mdi-alert-circle",
+        label: t("aiChatV2.goalLoop.statusFailed") || "failed",
+      };
+    case "cancelled":
+      return {
+        color: "grey-darken-1",
+        icon: "mdi-cancel",
+        label: t("aiChatV2.goalLoop.statusCancelled") || "cancelled",
+      };
+    default:
+      return { color: "default", icon: "mdi-flag", label: status ?? "goal" };
+  }
+});
 const pendingQuestion = ref<AIChatPlanQuestionView | null>(null);
 // While a plan is awaiting the user's decision, its approval card is pinned
 // at the bottom of the chat (alongside the question card). Once the user
@@ -922,6 +1069,7 @@ const loadHistory = async (conversationId: string): Promise<void> => {
     // Load plan state for this conversation.
     try {
       applyPlanState(await getChatV2PlanState(conversationId));
+      void refreshActiveGoal();
       if (planState.value?.pendingQuestion) {
         pendingQuestion.value = planState.value.pendingQuestion;
       } else {
@@ -1409,6 +1557,45 @@ const handleCompactConversation = async (): Promise<void> => {
 const onSend = async (text: string): Promise<void> => {
   if (chatIsRunning.value) return;
   streamError.value = null;
+
+  // /goal and /loop interception (V2 has no slash dispatcher).
+  const cmd = parseAiGoalCommand(text);
+  const displayText = text;
+  let modelMessage = text;
+  let requestMode: ChatV2Mode = mode.value;
+  if (cmd.type === "loop") {
+    await runLoopCommand(cmd.count);
+    return;
+  }
+  if (cmd.type === "goal") {
+    if (!cmd.objective) {
+      streamError.value =
+        t("aiChatV2.goalLoop.objectiveRequired") ||
+        "Please provide a goal objective. Usage: /goal <objective>";
+      return;
+    }
+    try {
+      const created = await createGoal({
+        conversationId: activeConversationId.value ?? "",
+        objective: cmd.objective,
+      });
+      if (!created) {
+        streamError.value =
+          t("aiChatV2.goalLoop.createFailed") || "Could not create the goal.";
+        return;
+      }
+      void refreshActiveGoal();
+      // Keep the typed "/goal …" visible; send the plan prompt to the model
+      // in Plan Mode (display/model content split).
+      modelMessage = created.planPrompt;
+      requestMode = "plan";
+    } catch {
+      streamError.value =
+        t("aiChatV2.goalLoop.createFailed") || "Could not create the goal.";
+      return;
+    }
+  }
+
   if (activeConversationId.value) {
     const nextStopped = new Set(stoppedPendingToolConversationIds.value);
     nextStopped.delete(activeConversationId.value);
@@ -1420,7 +1607,7 @@ const onSend = async (text: string): Promise<void> => {
     id: `temp-user-${Date.now()}`,
     conversationId: activeConversationId.value ?? "",
     role: "user",
-    content: text,
+    content: displayText,
     timestamp: nowIso,
     messageType: "message" as MessageType,
   };
@@ -1487,8 +1674,8 @@ const onSend = async (text: string): Promise<void> => {
     await streamChatV2Message(
       {
         conversationId: activeConversationId.value ?? undefined,
-        message: text,
-        mode: mode.value,
+        message: modelMessage,
+        mode: requestMode,
         model: resolveModelForRequest(),
       },
       (chunk: ChatV2StreamChunk) => {
@@ -1535,6 +1722,21 @@ const onSend = async (text: string): Promise<void> => {
               delayMs: chunk.retryDelayMs ?? 0,
             };
           }
+        } else if (chunk.eventType === "goal_state" && chunk.goalState) {
+          // Loop engine (later phase) pushes goal status; keep display in sync.
+          const g = chunk.goalState;
+          activeGoal.value = {
+            goalId: g.goalId,
+            conversationId: g.conversationId,
+            objective: g.objective,
+            criteria: activeGoal.value?.criteria ?? [],
+            status: g.status,
+            iterationCount: g.iterationCount ?? activeGoal.value?.iterationCount ?? 0,
+            latestVerdict: g.latestVerdict,
+            terminalReason: g.terminalReason,
+            createdAt: activeGoal.value?.createdAt ?? new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          };
         } else {
           // Any non-start/non-retry chunk means the AI has started responding.
           receivedFirstResponse.value = true;
