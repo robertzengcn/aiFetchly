@@ -56,6 +56,9 @@ import { WorkspaceEntity } from "@/entity/Workspace.entity";
 import { AIChatPlanEntity } from "@/entity/AIChatPlan.entity";
 import { AIChatPlanVersionEntity } from "@/entity/AIChatPlanVersion.entity";
 import { AIChatPlanQuestionEntity } from "@/entity/AIChatPlanQuestion.entity";
+import { AIChatGoalEntity } from "@/entity/AIChatGoal.entity";
+import { AIChatGoalRunEntity } from "@/entity/AIChatGoalRun.entity";
+import { AIChatGoalEvidenceEntity } from "@/entity/AIChatGoalEvidence.entity";
 import { AIChatPlanApprovalEntity } from "@/entity/AIChatPlanApproval.entity";
 import { AIChatSessionMemoryEntity } from "@/entity/AIChatSessionMemory.entity";
 import { AIChatCompactSummaryEntity } from "@/entity/AIChatCompactSummary.entity";
@@ -487,6 +490,9 @@ export class SqliteDb {
           AIChatPlanVersionEntity,
           AIChatPlanQuestionEntity,
           AIChatPlanApprovalEntity,
+          AIChatGoalEntity,
+          AIChatGoalRunEntity,
+          AIChatGoalEvidenceEntity,
           AIChatSessionMemoryEntity,
           AIChatCompactSummaryEntity,
           AgentDefinitionEntity,
