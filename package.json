@@ -141,7 +141,7 @@
     "progress-stream": "^2.0.0",
     "protocol-registry": "^2.0.0",
     "puppeteer": "npm:rebrowser-puppeteer@^24.8.1",
-    "puppeteer-cluster": "^0.23.0",
+    "puppeteer-cluster": "^0.25.0",
     "puppeteer-extra": "^3.3.6",
     "puppeteer-extra-plugin-recaptcha": "^3.6.8",
     "puppeteer-extra-plugin-stealth": "^2.11.2",
