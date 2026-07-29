@@ -941,16 +941,16 @@ export const constantRoutes: RouteRecordRaw[] = [
     },
     component: Layout,
     children: [
-      {
-        path: "list",
-        component: () =>
-          import(
-            /* webpackChunkName: "staff-list" */ "@/views/pages/socialaccount/socialaccount.vue"
-          ),
-        name: "SocialAccount",
-        meta: {
-          visible: true,
-          title: "route.tool_account_list",
+        {
+          path: "list",
+          component: () =>
+            import(
+              /* webpackChunkName: "staff-list" */ "@/views/pages/socialaccount/socialaccount.vue"
+            ),
+          name: "SocialAccount",
+          meta: {
+            visible: false,
+            title: "route.tool_account_list",
           icon: "mdi-account-details",
         },
       },

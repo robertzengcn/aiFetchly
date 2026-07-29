@@ -2128,7 +2128,7 @@ export default {
     contact_profile: "連絡先プロフィール",
     statistics_description:
       "アクティビティ、トレンド、キャンペーン成果を追跡します。",
-    market_description: "市場と検索結果の機会を調査します。",
+    market_description: "市場を調査し、機会を見つけます。",
     contact_description:
       "見込み客向けの連絡先プロフィールを抽出して充実させます。",
     directory_description:
@@ -2137,6 +2137,8 @@ export default {
     outreach_description:
       "アウトリーチタスク、テンプレート、フィルター、返信を管理します。",
     proxy_description: "プロキシサーバーを管理・検証します。",
+    tool_account_description:
+      "自動化のためのツールアカウントを追加、管理、接続します。",
   },
   outreach: {
     subtitle:

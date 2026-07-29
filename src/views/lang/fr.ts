@@ -2154,7 +2154,7 @@ export default {
     statistics_description:
       "Suivez l’activité, les tendances et les performances des campagnes.",
     market_description:
-      "Analysez les marchés et les opportunités dans les résultats de recherche.",
+      "Analysez les marchés et trouvez des opportunités.",
     contact_description:
       "Extrayez et enrichissez les profils de contact des prospects.",
     directory_description:
@@ -2164,6 +2164,8 @@ export default {
     outreach_description:
       "Gérez les tâches de prospection, les modèles, les filtres et les réponses.",
     proxy_description: "Gérez et validez vos serveurs proxy.",
+    tool_account_description:
+      "Ajoutez, gérez et connectez des comptes d'outil pour l'automatisation.",
   },
   outreach: {
     subtitle:

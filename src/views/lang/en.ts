@@ -2165,7 +2165,7 @@ export default {
       "Review business signals, find prospects, and manage outreach from one workspace.",
     contact_profile: "Contact Profile",
     statistics_description: "Track activity, trends, and campaign performance.",
-    market_description: "Research markets and search result opportunities.",
+    market_description: "Research markets and find opportunities.",
     contact_description: "Extract and enrich contact profiles for prospects.",
     directory_description:
       "Browse directory tasks and collected business records.",
@@ -2173,6 +2173,8 @@ export default {
     outreach_description:
       "Manage outreach tasks, templates, filters, and replies.",
     proxy_description: "Manage and validate your proxy servers.",
+    tool_account_description:
+      "Add, manage, and connect tool accounts for automation.",
   },
   outreach: {
     subtitle:

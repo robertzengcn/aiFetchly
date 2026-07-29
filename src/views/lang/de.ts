@@ -2162,7 +2162,7 @@ export default {
     contact_profile: "Kontaktprofil",
     statistics_description:
       "Verfolge Aktivitäten, Trends und Kampagnenleistung.",
-    market_description: "Analysiere Märkte und Chancen in Suchergebnissen.",
+    market_description: "Analysiere Märkte und finde Chancen.",
     contact_description:
       "Extrahiere und erweitere Kontaktprofile für Interessenten.",
     directory_description:
@@ -2171,6 +2171,8 @@ export default {
     outreach_description:
       "Verwalte Outreach-Aufgaben, Vorlagen, Filter und Antworten.",
     proxy_description: "Verwalte und validiere deine Proxy-Server.",
+    tool_account_description:
+      "Füge Werkzeugkonten hinzu, verwalte und verbinde sie für die Automatisierung.",
   },
   outreach: {
     subtitle:

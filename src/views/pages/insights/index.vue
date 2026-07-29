@@ -89,20 +89,20 @@ const insightItems = computed<InsightItem[]>(() => [
     path: "/map-scraper",
   },
   {
-    title: t("route.email_marketing") || "Outreach Campaign",
-    description:
-      t("insights.outreach_description") ||
-      "Manage outreach tasks, templates, filters, and replies.",
-    icon: "mdi-email-multiple",
-    path: "/emailmarketing",
-  },
-  {
     title: t("route.proxy") || "Proxy",
     description:
       t("insights.proxy_description") ||
       "Manage and validate your proxy servers.",
     icon: "mdi-shield-outline",
     path: "/proxy/list",
+  },
+  {
+    title: t("route.tool_account_list") || "Tool Account List",
+    description:
+      t("insights.tool_account_description") ||
+      "Add, manage, and connect tool accounts for automation.",
+    icon: "mdi-account-multiple",
+    path: "/socialaccount/list",
   },
 ]);
 
