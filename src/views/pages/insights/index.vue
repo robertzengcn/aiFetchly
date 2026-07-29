@@ -65,14 +65,6 @@ const insightItems = computed<InsightItem[]>(() => [
     path: "/statistic",
   },
   {
-    title: t("route.search") || "Market Insight",
-    description:
-      t("insights.market_description") ||
-      "Research markets and find opportunities.",
-    icon: "mdi-magnify",
-    path: "/search/tasklist",
-  },
-  {
     title: t("insights.contact_profile") || "Contact Profile",
     description:
       t("insights.contact_description") ||
