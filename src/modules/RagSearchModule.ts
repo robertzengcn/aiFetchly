@@ -669,9 +669,13 @@ export class RagSearchModule extends BaseModule {
   async getDocuments(filters?: {
     status?: string;
     processingStatus?: string;
+    fileType?: string;
+    name?: string;
     author?: string;
     tags?: string[];
     dateRange?: { start: Date; end: Date };
+    limit?: number;
+    offset?: number;
   }): Promise<RAGDocumentEntity[]> {
     try {
       return await this.documentService.getDocuments(filters);

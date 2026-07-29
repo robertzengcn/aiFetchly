@@ -196,7 +196,7 @@ export default {
     error: "Error",
     // Document Management translations
     document_management: "Document Management",
-    search_by_name: "Search by name",
+    search_by_name: "Search by name or title",
     status: "Status",
     file_type: "File Type",
     name: "Name",

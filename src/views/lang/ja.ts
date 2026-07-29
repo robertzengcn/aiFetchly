@@ -198,7 +198,7 @@ export default {
       "アカウントのリモート埋め込みクォータが枯渇している可能性があります。サーバー側でプランを補充するか、管理者に連絡してから、もう一度アップロードをお試しください。",
     error: "エラー",
     document_management: "ドキュメント管理",
-    search_by_name: "名前で検索",
+    search_by_name: "名前またはタイトルで検索",
     status: "状態",
     file_type: "ファイルタイプ",
     name: "名前",

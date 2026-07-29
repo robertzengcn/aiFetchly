@@ -198,7 +198,7 @@ export default {
       "Das Remote-Einbettungskontingent Ihres Kontos scheint erschöpft zu sein. Bitte laden Sie Ihr Kontingent serverseitig auf oder wenden Sie sich an einen Administrator und versuchen Sie den Upload erneut.",
     error: "Fehler",
     document_management: "Dokumentenverwaltung",
-    search_by_name: "Nach Name suchen",
+    search_by_name: "Nach Name oder Titel suchen",
     status: "Status",
     file_type: "Dateityp",
     name: "Name",

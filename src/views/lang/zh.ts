@@ -184,7 +184,7 @@ export default {
     error: "错误",
     // Document Management translations
     document_management: "文档管理",
-    search_by_name: "按名称搜索",
+    search_by_name: "按名称或标题搜索",
     status: "状态",
     file_type: "文件类型",
     name: "名称",

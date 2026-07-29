@@ -198,7 +198,7 @@ export default {
       "Parece que la cuota de embeddings remotos de su cuenta está agotada. Recargue su plan en el servidor o contacte a un administrador e intente subir el documento de nuevo.",
     error: "Error",
     document_management: "Gestión de documentos",
-    search_by_name: "Buscar por nombre",
+    search_by_name: "Buscar por nombre o título",
     status: "Estado",
     file_type: "Tipo de archivo",
     name: "Nombre",
