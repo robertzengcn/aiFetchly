@@ -1,7 +1,7 @@
 const path = require("path");
 const dotenv = require("dotenv");
 const { spawnSync } = require("node:child_process");
-const { readdirSync, rmdirSync, statSync } = require("node:fs");
+const { existsSync, readdirSync, rmdirSync, statSync } = require("node:fs");
 const { join, normalize } = require("node:path");
 const { Walker, DepType } = require("flora-colossus");
 let nativeModuleDependenciesToPackage = [];
@@ -51,6 +51,28 @@ dotenv.config({ path: path.resolve(__dirname, ".env") });
 const env = process.env.NODE_ENV || "development";
 dotenv.config({ path: path.resolve(__dirname, `.env.${env}`) });
 
+const isProductionBuild = env === "production";
+const windowsCertificatePath = path.resolve(__dirname, "cert.pfx");
+
+function requireProductionEnv(name) {
+  const value = process.env[name];
+  if (!value) {
+    throw new Error(
+      `Production packaging requires the ${name} environment variable.`
+    );
+  }
+  return value;
+}
+
+if (isProductionBuild && process.platform === "win32") {
+  if (!existsSync(windowsCertificatePath)) {
+    throw new Error(
+      "Production Windows packaging requires cert.pfx. Restore it from a CI secret before running Electron Forge."
+    );
+  }
+  requireProductionEnv("CERTIFICATE_PASSWORD");
+}
+
 function ensureBetterSqliteElectronBinary() {
   const scriptPath = join(__dirname, "scripts", "rebuild-better-sqlite.js");
   const result = spawnSync(process.execPath, [scriptPath], {
@@ -71,6 +93,26 @@ function ensureBetterSqliteElectronBinary() {
 module.exports = {
   packagerConfig: {
     icon: "./src/assets/images/icon",
+    ...(isProductionBuild && process.platform === "darwin"
+      ? {
+          osxSign: {},
+          osxNotarize: {
+            appleId: requireProductionEnv("APPLE_ID"),
+            appleIdPassword: requireProductionEnv(
+              "APPLE_APP_SPECIFIC_PASSWORD"
+            ),
+            teamId: requireProductionEnv("APPLE_TEAM_ID"),
+          },
+        }
+      : {}),
+    ...(isProductionBuild && process.platform === "win32"
+      ? {
+          windowsSign: {
+            certificateFile: windowsCertificatePath,
+            certificatePassword: requireProductionEnv("CERTIFICATE_PASSWORD"),
+          },
+        }
+      : {}),
     // asar: {
     //   // This ensures native modules are unpacked
     //   unpack: "**/node_modules/better-sqlite3/**",
@@ -168,8 +210,12 @@ module.exports = {
       name: "@electron-forge/maker-squirrel",
       config: {
         name: process.env.APP_NAME || "aiFetchly",
-        certificateFile: "./cert.pfx",
-        certificatePassword: process.env.CERTIFICATE_PASSWORD,
+        ...(isProductionBuild && process.platform === "win32"
+          ? {
+              certificateFile: windowsCertificatePath,
+              certificatePassword: requireProductionEnv("CERTIFICATE_PASSWORD"),
+            }
+          : {}),
         // iconUrl should be a valid HTTP/HTTPS URL, not a local path
         // iconUrl: './src/assets/images/icon.png',
         setupIcon: "./src/assets/images/icon.ico",
@@ -200,20 +246,6 @@ module.exports = {
         },
         // Uninstall configuration
         uninstallIcon: "./src/assets/images/icon.ico",
-        // Custom uninstall script
-        uninstallScript: "./installer-scripts/uninstall-windows.js",
-        // Include uninstaller in the installer
-        extraFiles: [
-          {
-            src: "./installer-scripts/uninstall.exe",
-            dest: "uninstall.exe",
-          },
-        ],
-        // Post-installation script to copy uninstaller
-        postInstallScript: "./installer-scripts/copy-uninstaller.js",
-        // Create uninstaller registry entry
-        uninstallDisplayName: "aiFetchly",
-        uninstallString: "%LOCALAPPDATA%\\aiFetchly\\uninstall.exe",
       },
     },
     {
@@ -327,6 +359,12 @@ module.exports = {
     {
       name: "@electron-forge/maker-wix",
       config: {
+        ...(isProductionBuild && process.platform === "win32"
+          ? {
+              certificateFile: windowsCertificatePath,
+              certificatePassword: requireProductionEnv("CERTIFICATE_PASSWORD"),
+            }
+          : {}),
         language: 1033,
         manufacturer: "Robert Zeng",
         icon: "./src/assets/images/icon.ico",
@@ -346,11 +384,6 @@ module.exports = {
         createStartMenuShortcut: true,
         // Install for all users
         //perMachine: false,
-        // Custom images for installer
-        images: {
-          background: "./src/assets/images/installer-background-493x312.bmp",
-          banner: "./src/assets/images/installer-banner-493x58.bmp",
-        },
         // Additional features
         features: {
           // Main application feature
@@ -472,25 +505,6 @@ module.exports = {
     // VS Code/Cursor launch electron-forge directly, bypassing npm prestart/predev.
     preStart: async () => {
       ensureBetterSqliteElectronBinary();
-    },
-    postPackage: async (forgeConfig, options) => {
-      // Copy uninstaller to the packaged application
-      const {
-        postInstallHook,
-      } = require("./installer-scripts/post-install-hook.js");
-
-      console.log("Running post-package hook...");
-      console.log("Output directory:", options.outputPaths[0]);
-
-      // Set the installation directory to the output directory
-      process.env.INSTALLDIR = options.outputPaths[0];
-
-      const success = postInstallHook();
-      if (success) {
-        console.log("✅ Uninstaller copied to packaged application");
-      } else {
-        console.log("❌ Failed to copy uninstaller to packaged application");
-      }
     },
     prePackage: async () => {
       const projectRoot = normalize(__dirname);
