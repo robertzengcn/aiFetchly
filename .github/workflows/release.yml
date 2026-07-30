@@ -1,19 +1,14 @@
-name: Auto Release
+name: Manual Release Build
 
 on:
-  push:
-    branches:
-      - master
+  workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build-windows:
     runs-on: windows-latest
-    outputs:
-      version: ${{ steps.calculate_version.outputs.version }}
-      artifact_name: ${{ steps.calculate_version.outputs.artifact_name }}
 
     steps:
       - name: Checkout code
@@ -101,13 +96,13 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.calculate_version.outputs.artifact_name }}
-          path: out/make
+          path: |
+            out/make/**/*.exe
+            out/make/**/*.msi
+          if-no-files-found: error
 
   build-macos:
     runs-on: macos-latest
-    outputs:
-      version: ${{ steps.calculate_version.outputs.version }}
-      artifact_name: ${{ steps.calculate_version.outputs.artifact_name }}
 
     steps:
       - name: Set up C++20 environment
@@ -236,69 +231,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.calculate_version.outputs.artifact_name }}
-          path: out/make
-
-  create-release:
-    needs: [build-windows, build-macos]
-    runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/master'
-    permissions:
-      contents: write
-    
-    steps:
-      - name: Download Windows artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ needs.build-windows.outputs.artifact_name }}
-          path: ./windows-build
-
-      - name: Download macOS artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ needs.build-macos.outputs.artifact_name }}
-          path: ./macos-build
-
-      - name: Prepare release assets
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p release-assets
-
-          while IFS= read -r -d '' file; do
-            case "$file" in
-              windows-build/*)
-                relative_path="${file#windows-build/}"
-                output_name="windows-${relative_path//\//-}"
-                ;;
-              macos-build/*)
-                relative_path="${file#macos-build/}"
-                output_name="macos-${relative_path//\//-}"
-                ;;
-              *)
-                echo "Skipping unexpected artifact path: $file"
-                continue
-                ;;
-            esac
-
-            cp "$file" "release-assets/$output_name"
-          done < <(find windows-build macos-build -type f -print0)
-
-          echo "Release assets:"
-          find release-assets -maxdepth 1 -type f -print | sort
-          asset_count="$(find release-assets -maxdepth 1 -type f | wc -l | tr -d ' ')"
-          if [ "$asset_count" = "0" ]; then
-            echo "::error::No release assets were prepared."
-            exit 1
-          fi
-
-      - name: Create GitHub release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: v${{ needs.build-windows.outputs.version }}
-          name: aiFetchly v${{ needs.build-windows.outputs.version }}
-          body: |
-            Automated release for `${{ github.ref_name }}`.
-
-            Commit: ${{ github.sha }}
-            Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          files: release-assets/*
+          path: |
+            out/make/**/*.dmg
+            out/make/**/*.zip
+          if-no-files-found: error
