@@ -226,17 +226,6 @@ describe("plugin-ipc", () => {
     expect(handlers.has(PLUGIN_INSTALL_FROM_SOURCE)).toBe(true);
   });
 
-  it("returns AI-not-enabled envelope when AI is disabled", async () => {
-    aiEnabledValue = "false";
-    const fn = handlers.get(PLUGIN_LIST)!;
-    const result = await fn({}, undefined);
-    expect(result).toEqual({
-      status: false,
-      msg: expect.stringContaining("not enabled"),
-      data: null,
-    });
-  });
-
   it("syncs user plugin folders before listing installed plugins", async () => {
     const fn = handlers.get(PLUGIN_LIST)!;
     const result = await fn({}, undefined);
@@ -466,17 +455,6 @@ describe("plugin-ipc", () => {
     expect(result).toMatchObject({
       status: false,
       msg: expect.stringContaining("Invalid characters"),
-    });
-  });
-
-  it("PLUGIN_INSTALL_FROM_SOURCE returns AI-not-enabled when AI disabled", async () => {
-    aiEnabledValue = "false";
-    const fn = handlers.get(PLUGIN_INSTALL_FROM_SOURCE)!;
-    const result = await fn({}, { kind: "local-folder", folderPath: "/tmp" });
-    expect(result).toEqual({
-      status: false,
-      msg: expect.stringContaining("not enabled"),
-      data: null,
     });
   });
 

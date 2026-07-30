@@ -150,3 +150,7 @@ hyperframes-*
 .claude/skills/gstack/lib/*/dist/
 .claude/skills/gstack/lib/diagram-render/dist/BUILD_INFO.json
 .claude/skills/gstack/lib/diagram-render/dist/diagram-render.html
+.test-userData/plugins/installed/my-plugin/.claude-plugin/plugin.json
+.test-userData/plugins/installed/my-plugin/agents/optimizer.md
+.test-userData/plugins/installed/my-plugin/agents/reviewer.md
+.test-userData/*

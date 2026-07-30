@@ -71,6 +71,9 @@ vi.mock("@/service/hooks/HookRegistry", () => ({
         enabled: true,
       },
     ]),
+    // hooks:setEnabled calls HookRegistry.setBuiltinEnabled for builtin hooks
+    // (added in 5ba4c743). Stub it so the builtin path runs to completion.
+    setBuiltinEnabled: vi.fn().mockReturnValue(true),
   },
 }));
 

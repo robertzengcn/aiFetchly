@@ -35,6 +35,14 @@ vi.mock("@/service/aiChatVoice/SherpaVoiceWorkerClient", () => ({
   SherpaVoiceWorkerClient: { getInstance: () => mockClient },
 }));
 
+// AiChatVoiceModule gates state on runtime availability BEFORE checking model
+// files (c1039eaf). Report the native runtime as available so the model-file
+// check is reached and absent models resolve to "missing_model".
+vi.mock("@/service/aiChatVoice/SherpaOnnxNative", () => ({
+  isSherpaOnnxNativeAvailable: () => true,
+  loadSherpaOnnxNative: () => null,
+}));
+
 vi.mock("electron", () => ({
   ipcMain: mockIpcMain,
   app: { getPath: () => os.tmpdir() },
@@ -80,7 +88,9 @@ describe("AiChatV2 voice IPC handlers", () => {
   });
 
   it("status reports missing_model when model files are absent", async () => {
-    const res = (await mockIpcMain.callHandler(AI_CHAT_V2_VOICE_STATUS)) as IpcResult<{
+    const res = (await mockIpcMain.callHandler(
+      AI_CHAT_V2_VOICE_STATUS
+    )) as IpcResult<{
       sttState: string;
       ttsState: string;
     }>;
