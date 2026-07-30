@@ -114,6 +114,7 @@ None yet.
 | #          | Description                                                                                         | Date       | Commit   | Directory                                                                                                                      |
 | ---------- | --------------------------------------------------------------------------------------------------- | ---------- | -------- | ------------------------------------------------------------------------------------------------------------------------------ |
 | 260730-mqb | Fix manual release workflow native rebuilds, production mode, installer resources, and validation | 2026-07-30 | e83e961d | [260730-mqb-fix-manual-release-workflow-native-rebui](./quick/260730-mqb-fix-manual-release-workflow-native-rebui/) |
+| — | Run production release build automatically on master pushes | 2026-07-30 | f34f8d87 | — |
 
 ## Deferred Items
 
