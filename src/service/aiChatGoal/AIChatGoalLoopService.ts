@@ -144,44 +144,52 @@ export class AIChatGoalLoopService {
    * preflight fails (goal missing/not active, or a run is already active).
    */
   async start(input: GoalLoopStartInput): Promise<GoalLoopResult> {
-    const { persistence } = this.deps;
-    const goal = await persistence.getGoal(input.goalId);
-    if (!goal || goal.conversationId !== input.conversationId) {
-      throw new Error("Goal not found for this conversation.");
-    }
-    if (goal.status !== "active") {
-      throw new Error("Goal must be active before starting a loop.");
-    }
+    // Reserve the run slot SYNCHRONOUSLY before any await, to close the TOCTOU
+    // window where two concurrent /loop calls both pass the has-check before
+    // either records its entry.
     if (this.activeRuns.has(input.conversationId)) {
       throw new Error("A loop run is already active for this conversation.");
     }
-
-    const threshold = input.repeatedFailureThreshold ?? 3;
-    const run = await persistence.createRun({
-      goalId: input.goalId,
-      conversationId: input.conversationId,
-      maxIterations: input.maxIterations,
-      maxRuntimeMs: input.maxRuntimeMs ?? 0,
-      repeatedFailureThreshold: threshold,
-    });
-    await persistence.transitionGoalStatus(input.goalId, "running");
-
     const abort = new AbortController();
-    this.activeRuns.set(input.conversationId, { abort, runId: run.runId });
+    this.activeRuns.set(input.conversationId, { abort, runId: "" });
 
-    const workspaceRoot =
-      (await this.deps.workspaceProvider.rootFor(input.conversationId)) ?? "";
+    const { persistence } = this.deps;
     const collector = this.deps.collector ?? new GoalEvidenceCollector();
     const verifier = this.deps.verifier ?? new GoalVerificationService();
     const now = this.deps.now ?? Date.now;
-    const startedAt = now();
-    const failureCounts = new Map<string, number>();
 
+    let goal: AIChatGoalView | null = null;
+    let runId = "";
     let terminalStatus: AIChatGoalStatus = "active";
     let terminalReason = "max_iterations_reached";
     let iterations = 0;
+    const failureCounts = new Map<string, number>();
 
     try {
+      goal = await persistence.getGoal(input.goalId);
+      if (!goal || goal.conversationId !== input.conversationId) {
+        throw new Error("Goal not found for this conversation.");
+      }
+      if (goal.status !== "active") {
+        throw new Error("Goal must be active before starting a loop.");
+      }
+
+      const threshold = input.repeatedFailureThreshold ?? 3;
+      const run = await persistence.createRun({
+        goalId: input.goalId,
+        conversationId: input.conversationId,
+        maxIterations: input.maxIterations,
+        maxRuntimeMs: input.maxRuntimeMs ?? 0,
+        repeatedFailureThreshold: threshold,
+      });
+      runId = run.runId;
+      this.activeRuns.set(input.conversationId, { abort, runId: run.runId });
+      await persistence.transitionGoalStatus(input.goalId, "running");
+
+      const workspaceRoot =
+        (await this.deps.workspaceProvider.rootFor(input.conversationId)) ?? "";
+      const startedAt = now();
+
       for (let iteration = 1; iteration <= input.maxIterations; iteration++) {
         iterations = iteration;
         if (abort.signal.aborted) {
@@ -295,26 +303,36 @@ export class AIChatGoalLoopService {
       this.activeRuns.delete(input.conversationId);
     }
 
-    await persistence.endRun(
-      run.runId,
-      terminalStatus,
-      terminalReason,
-      terminalStatus === "cancelled"
-    );
-    await persistence.transitionGoalStatus(input.goalId, terminalStatus, {
-      iterationCount: iterations,
-      terminalReason,
-    });
+    // Finalize once on normal completion (a preflight throw exits before here).
+    if (runId) {
+      await persistence.endRun(
+        runId,
+        terminalStatus,
+        terminalReason,
+        terminalStatus === "cancelled"
+      );
+    }
+    try {
+      // Best-effort: a concurrent cancel (cancelActiveRun) may have already
+      // transitioned the goal to a terminal state. That is acceptable; do not
+      // surface an "illegal transition" error from the controller.
+      await persistence.transitionGoalStatus(input.goalId, terminalStatus, {
+        iterationCount: iterations,
+        terminalReason,
+      });
+    } catch {
+      // goal already terminal — acceptable
+    }
     this.deps.eventSink?.emitState({
       goalId: input.goalId,
       conversationId: input.conversationId,
       status: terminalStatus,
-      objective: goal.objective,
+      objective: goal?.objective ?? "",
       iterationCount: iterations,
       terminalReason,
     });
 
-    return { runId: run.runId, terminalStatus, terminalReason, iterations };
+    return { runId, terminalStatus, terminalReason, iterations };
   }
 
   /** Request cancellation of the active run for a conversation (user Stop). */
