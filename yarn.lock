@@ -3356,13 +3356,6 @@
   resolved "https://registry.npmmirror.com/@types/sizzle/-/sizzle-2.3.10.tgz"
   integrity sha512-TC0dmN0K8YcWEAEfiPi5gJP14eJe30TTGjkvek3iM/1NdHHsdCA/Td6GvNndMOo/iSnIsZ4HuuhrYPDAmbxzww==
 
-"@types/sqlite3@^3.1.8":
-  version "3.1.11"
-  resolved "https://registry.npmmirror.com/@types/sqlite3/-/sqlite3-3.1.11.tgz"
-  integrity sha512-KYF+QgxAnnAh7DWPdNDroxkDI3/MspH1NMx6m/N/6fT1G6+jvsw4/ZePt8R8cr7ta58aboeTfYFBDxTJ5yv15w==
-  dependencies:
-    "@types/node" "*"
-
 "@types/stack-utils@^2.0.3":
   version "2.0.3"
   resolved "https://registry.npmmirror.com/@types/stack-utils/-/stack-utils-2.0.3.tgz"
@@ -11616,18 +11609,6 @@ sqlite-vec@^0.1.7-alpha.2:
     sqlite-vec-linux-arm64 "0.1.7-alpha.2"
     sqlite-vec-linux-x64 "0.1.7-alpha.2"
     sqlite-vec-windows-x64 "0.1.7-alpha.2"
-
-sqlite3@^5.1.6:
-  version "5.1.7"
-  resolved "https://registry.npmmirror.com/sqlite3/-/sqlite3-5.1.7.tgz"
-  integrity sha512-GGIyOiFaG+TUra3JIfkI/zGP8yZYLPQ0pl1bH+ODjiX57sPhrLU5sQJn1y9bDKZUFYkX1crlrPfSYt0BKKdkog==
-  dependencies:
-    bindings "^1.5.0"
-    node-addon-api "^7.0.0"
-    prebuild-install "^7.1.1"
-    tar "^6.1.11"
-  optionalDependencies:
-    node-gyp "8.x"
 
 ssf@~0.11.2:
   version "0.11.2"

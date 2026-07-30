@@ -1,4 +1,3 @@
-// import { Database } from 'sqlite3';
 import { Scraperdb } from "@/model/scraperdb";
 import { getRecorddatetime } from "@/modules/lib/function";
 import { Database } from 'better-sqlite3';

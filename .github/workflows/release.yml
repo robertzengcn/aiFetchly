@@ -65,9 +65,6 @@ jobs:
       - name: Rebuild electron
         run: yarn electron-rebuild --force --types prod,dev,optional --module-dir .
 
-      - name: Rebuild sqlite3
-        run: yarn rebuild-sqlite3
-
       - name: Rebuild better sqlite
         run: yarn rebuild-better-sqlite
 
@@ -185,11 +182,8 @@ jobs:
           # Rebuild with proper C++20 support
           npx electron-rebuild --force --arch="${TARGET_ARCH}" --types prod,dev,optional --module-dir . || {
             echo "Full rebuild failed, trying selective rebuild..."
-            npx electron-rebuild --force --arch="${TARGET_ARCH}" -w better-sqlite3,sqlite3,bufferutil,utf-8-validate || echo "Selective rebuild failed"
+            npx electron-rebuild --force --arch="${TARGET_ARCH}" -w better-sqlite3,bufferutil,utf-8-validate || echo "Selective rebuild failed"
           }
-
-      - name: Rebuild sqlite3
-        run: CXXFLAGS="-std=c++20" CFLAGS="-std=c11" yarn rebuild-sqlite3
 
       - name: Rebuild better sqlite
         run: CXXFLAGS="-std=c++20" CFLAGS="-std=c11" yarn rebuild-better-sqlite
