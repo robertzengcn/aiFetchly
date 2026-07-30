@@ -6,9 +6,9 @@ current_phase: 18
 current_phase_name: skills-and-plugin-integration
 status: executing
 stopped_at: Phase 18 Plan 18-01 COMPLETE
-last_updated: "2026-07-12T20:09:51.405Z"
-last_activity: 2026-07-12
-last_activity_desc: Phase 18 execution started
+last_updated: "2026-07-30T08:21:59.829Z"
+last_activity: 2026-07-30
+last_activity_desc: "Completed quick task 260730-mqb: harden the manual release workflow"
 progress:
   total_phases: 6
   completed_phases: 5
@@ -54,7 +54,7 @@ Plan 16-02 (loaders-trust-scanner): COMPLETE — 3/3 tasks (TDD RED->GREEN), 6 c
 Plan 16-03 (dispatch-list-context): COMPLETE — 3/3 tasks (TDD RED->GREEN), 6 commits + SUMMARY (92d1a1b7), 51 tests GREEN (AgentRuntime/runSubagentTool/SlashCommandDispatcher/AIChatContextAssembler.aifetchly), tsc 0 errors, AGT-03 satisfied (registry-first dispatch + /agents command + D-Discovery block)
 Phase 16: 3/3 plans executed — all waves complete (16-01 + 16-02 + 16-03); ready for phase verification
 Status: Executing Phase 18
-Last activity: 2026-07-12 — Phase 18 execution started
+Last activity: 2026-07-30 — Completed quick task 260730-mqb: harden the manual release workflow
 Resume note (Waves 2-3 executors): do NOT run bare `yarn testmain` for Self-Check — it hangs 20+ min on a pre-existing Electron/DB integration test unrelated to these plans. Use targeted runs: `AIFETCHLY_SKIP_TSC=1 npx vitest run --config vite.main.config.mjs <new test files>` (+ utilityCode config variant) + a standalone `npx tsc --noEmit`. 16-01 used this and got 104/104 regression + 65 new tests green, tsc 0 errors.
 
 ## Accumulated Context
@@ -108,6 +108,12 @@ None yet.
 - AiChatBox.vue is 1800+ lines -- any AiChatV2 integration must plan insertion carefully
 - PreToolUse hook blocks Write/Edit on .md files outside /docs/ -- GSD planning artifacts are written via Bash heredoc; the gsd-roadmapper subagent cannot write .md, so the roadmap was generated inline by the orchestrator
 - Worker protocol and workspace trust persistence (Phase 17 entity) need careful Model/Module design per the three-layer DB architecture; worker must never access DB
+
+### Quick Tasks Completed
+
+| #          | Description                                                                                         | Date       | Commit   | Directory                                                                                                                      |
+| ---------- | --------------------------------------------------------------------------------------------------- | ---------- | -------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| 260730-mqb | Fix manual release workflow native rebuilds, production mode, installer resources, and validation | 2026-07-30 | e83e961d | [260730-mqb-fix-manual-release-workflow-native-rebui](./quick/260730-mqb-fix-manual-release-workflow-native-rebui/) |
 
 ## Deferred Items
 
