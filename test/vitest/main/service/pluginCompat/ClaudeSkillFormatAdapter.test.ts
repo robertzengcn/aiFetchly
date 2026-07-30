@@ -24,16 +24,16 @@ Instructions here.`;
     expect(result.body).toContain("# Lead Research");
   });
 
-  it("fails when name is missing", () => {
+  it("derives name from the parent directory when name is missing", () => {
     const md = `---
 description: some description
 ---
 body`;
     const result = ClaudeSkillFormatAdapter.adapt(md, "skills/foo/SKILL.md");
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.error.code).toBe("claude-frontmatter-missing-field");
-    expect(result.error.message).toContain("name");
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    // "skills/foo/SKILL.md" → parent dir "foo" → sanitized name "foo".
+    expect(result.manifest.name).toBe("foo");
   });
 
   it("fails when description is missing", () => {

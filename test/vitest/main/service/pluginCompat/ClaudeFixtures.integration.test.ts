@@ -9,7 +9,10 @@ import {
 } from "@/service/pluginCompat/ClaudePluginAdapter";
 import { normalizeInlineMcpMap } from "@/service/PluginMcpDeclaration";
 
-const FIXTURES = path.resolve(__dirname, "../../../../../test/fixtures/claude-plugins");
+const FIXTURES = path.resolve(
+  __dirname,
+  "../../../../../test/fixtures/claude-plugins"
+);
 
 describe("AC-1: install reference Claude plugins (manifest + component validation)", () => {
   it("skills-only plugin: manifest + 2 skills adapt cleanly", async () => {
@@ -31,7 +34,9 @@ describe("AC-1: install reference Claude plugins (manifest + component validatio
         path.join(skillsDir, sub, "SKILL.md"),
         "utf-8"
       );
-      expect(ClaudeSkillFormatAdapter.adapt(md, `skills/${sub}/SKILL.md`).ok).toBe(true);
+      expect(
+        ClaudeSkillFormatAdapter.adapt(md, `skills/${sub}/SKILL.md`).ok
+      ).toBe(true);
     }
   });
 
@@ -69,7 +74,9 @@ describe("AC-1: install reference Claude plugins (manifest + component validatio
       path.join(root, "skills", "lead-research", "SKILL.md"),
       "utf-8"
     );
-    expect(ClaudeSkillFormatAdapter.adapt(md, "skills/lead-research/SKILL.md").ok).toBe(true);
+    expect(
+      ClaudeSkillFormatAdapter.adapt(md, "skills/lead-research/SKILL.md").ok
+    ).toBe(true);
   });
 });
 
@@ -106,11 +113,17 @@ describe("AC-3, AC-5: skill isolation", () => {
     // the other's DB row.
     const root = path.join(FIXTURES, "skills-only");
     const lead = ClaudeSkillFormatAdapter.adapt(
-      fs.readFileSync(path.join(root, "skills", "lead-research", "SKILL.md"), "utf-8"),
+      fs.readFileSync(
+        path.join(root, "skills", "lead-research", "SKILL.md"),
+        "utf-8"
+      ),
       "skills/lead-research/SKILL.md"
     );
     const email = ClaudeSkillFormatAdapter.adapt(
-      fs.readFileSync(path.join(root, "skills", "email-writer", "SKILL.md"), "utf-8"),
+      fs.readFileSync(
+        path.join(root, "skills", "email-writer", "SKILL.md"),
+        "utf-8"
+      ),
       "skills/email-writer/SKILL.md"
     );
     expect(lead.ok && email.ok).toBe(true);
@@ -186,15 +199,15 @@ describe("Opaque carry-through preserves unsupported fields", () => {
     expect(adapted.adapted.opaque.commands).toEqual({
       foo: { source: "commands/foo.md" },
     });
-    expect(adapted.adapted.opaque.agents).toEqual(["agents/bar.md"]);
+    // `agents` is a first-class manifest field, not an opaque carry-through.
+    expect(adapted.adapted.manifest.agents).toEqual(["agents/bar.md"]);
     expect(adapted.adapted.opaque.outputStyles).toEqual(["styles/x.json"]);
 
     // Verify the same data is stashed on the manifest object for downstream
     // re-emission.
-    const opaqueOnManifest = (adapted.adapted.manifest as unknown as Record<
-      string,
-      unknown
-    >)[CLAUDE_OPAQUE_KEY];
+    const opaqueOnManifest = (
+      adapted.adapted.manifest as unknown as Record<string, unknown>
+    )[CLAUDE_OPAQUE_KEY];
     expect(opaqueOnManifest).toBeDefined();
   });
 });
