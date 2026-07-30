@@ -183,6 +183,37 @@ vi.mock("@/modules/AgentDefinitionModule", () => ({
     listActiveForRuntime: vi.fn().mockResolvedValue([]),
   })),
 }));
+vi.mock("@/modules/SystemSettingModule", () => ({
+  SystemSettingModule: vi.fn().mockImplementation(() => ({
+    getSettingValue: vi.fn().mockResolvedValue(null),
+  })),
+}));
+vi.mock("@/service/WorkspaceResolver", () => ({
+  WorkspaceResolver: vi.fn().mockImplementation(() => ({
+    resolve: vi.fn().mockResolvedValue(null),
+  })),
+}));
+vi.mock("@/service/AIUserMemoryRetrievalService", () => ({
+  AIUserMemoryRetrievalService: vi.fn().mockImplementation(() => ({
+    retrieve: vi.fn().mockResolvedValue({ contextBlock: "", memories: [] }),
+  })),
+}));
+vi.mock("@/service/AIWorkspaceMemoryRetrievalService", () => ({
+  AIWorkspaceMemoryRetrievalService: vi.fn().mockImplementation(() => ({
+    retrieve: vi.fn().mockResolvedValue({ contextBlock: "", memories: [] }),
+  })),
+}));
+vi.mock("@/service/aifetchlyConfig/AIFetchlyContextLoader", () => ({
+  AIFetchlyContextLoader: class {
+    static formatInstructionBlock(): string {
+      return "";
+    }
+
+    async getInstructionBlocks(): Promise<[]> {
+      return [];
+    }
+  },
+}));
 
 const mockResetSharedAutoDreamService = vi.hoisted(() => vi.fn());
 const mockResetSharedWorkspaceAutoDreamService = vi.hoisted(() => vi.fn());
