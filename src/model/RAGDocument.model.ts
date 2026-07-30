@@ -174,9 +174,12 @@ export class RAGDocumentModel extends BaseDb {
     }
 
     if (filters?.name) {
-      queryBuilder.andWhere("document.name LIKE :name", {
-        name: `%${filters.name}%`,
-      });
+      queryBuilder.andWhere(
+        "(document.name LIKE :documentName OR document.title LIKE :documentName)",
+        {
+          documentName: `%${filters.name}%`,
+        }
+      );
     }
 
     if (filters?.tags && filters.tags.length > 0) {

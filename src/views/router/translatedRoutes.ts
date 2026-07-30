@@ -670,7 +670,7 @@ export const createTranslatedRoutes = (): RouteRecordRaw[] => {
             ),
           name: "SocialAccount",
           meta: {
-            visible: true,
+            visible: false,
             title: computed(() => t("route.tool_account_list")),
             icon: "mdi-account-details",
           },

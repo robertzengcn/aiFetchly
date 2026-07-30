@@ -4,6 +4,7 @@ import {
   windowSend,
   windowSendBinary,
   windowReceive,
+  windowRemoveListener,
 } from "@/views/utils/apirequest";
 import {
   EmbeddingConfig,
@@ -36,6 +37,8 @@ import {
   RAG_DOWNLOAD_DOCUMENT,
   RAG_GET_DOCUMENT_ERROR_LOG,
   RAG_CHECK_DOCUMENT_DUPLICATE,
+  RAG_IMPORT_WEBSITE,
+  RAG_IMPORT_WEBSITE_PROGRESS,
   SHOW_OPEN_DIALOG,
   GET_FILE_STATS,
   SAVE_TEMP_FILE,
@@ -44,6 +47,10 @@ import {
 } from "@/config/channellist";
 import { DocumentMetadata } from "@/entityTypes/metadataType";
 import { RagStatsResponse } from "@/entityTypes/commonType";
+import type {
+  KnowledgeLibraryWebsiteImportOutcome,
+  KnowledgeLibraryWebsiteImportProgressEvent,
+} from "@/entityTypes/knowledgeLibraryAiToolTypes";
 // RAG API response types
 export interface RAGResponse<T = unknown> {
   success: boolean;
@@ -240,6 +247,56 @@ export async function deleteDocument(
         error instanceof Error ? error.message : "Unknown error occurred",
     };
   }
+}
+
+/**
+ * Website/URL import options for the Knowledge Library manual UI.
+ *
+ * Mirrors the `knowledge_library_import_website` tool args (see
+ * `importKnowledgeWebsiteInputSchema`). The server is authoritative for
+ * validation, SSRF checks, and mode-specific url/urls requirements.
+ */
+export interface WebsiteImportOptions {
+  mode: "single_page" | "url_list" | "site_crawl";
+  url?: string;
+  urls?: string[];
+  maxPages?: number;
+  maxDepth?: number;
+  title?: string;
+  description?: string;
+  tags?: string[];
+  author?: string;
+  duplicatePolicy?: "fail" | "allow" | "replace";
+}
+
+/**
+ * Import public webpage content into the knowledge library by URL.
+ *
+ * Delegates to the same backend path the AI assistant uses
+ * (`KnowledgeLibraryAiTools.importWebsite`). Returns a compact outcome:
+ * `success: true` carries imported/skipped per-page summaries; `success: false`
+ * carries a structured error code (e.g. `AI_DISABLED`, `INVALID_INPUT`,
+ * `URL_BLOCKED`). Never exposes local file paths or page content.
+ */
+export async function importWebsite(
+  options: WebsiteImportOptions
+): Promise<KnowledgeLibraryWebsiteImportOutcome> {
+  return await windowInvoke(RAG_IMPORT_WEBSITE, options);
+}
+
+export function onWebsiteImportProgress(
+  handler: (event: KnowledgeLibraryWebsiteImportProgressEvent) => void
+): () => void {
+  const listener = windowReceive<KnowledgeLibraryWebsiteImportProgressEvent>(
+    RAG_IMPORT_WEBSITE_PROGRESS,
+    handler
+  );
+  return () => {
+    windowRemoveListener(
+      RAG_IMPORT_WEBSITE_PROGRESS,
+      listener as (value: unknown) => void
+    );
+  };
 }
 
 /**

@@ -102,6 +102,33 @@ export interface WebsiteImportPrepareResult {
   readonly discoveredCount?: number;
 }
 
+export interface WebsiteImportPageStartEvent {
+  readonly url: string;
+  readonly depth?: number;
+  readonly processedPages: number;
+  readonly maxPages: number;
+  readonly discoveredCount?: number;
+}
+
+export interface WebsiteImportPagePreparedEvent {
+  readonly url: string;
+  readonly depth?: number;
+  readonly processedPages: number;
+  readonly maxPages: number;
+  readonly discoveredCount?: number;
+  readonly source?: WebsiteImportSource;
+  readonly skipped?: WebsiteImportSkippedSource;
+}
+
+export interface WebsiteImportPrepareCallbacks {
+  readonly onPageStart?: (
+    event: WebsiteImportPageStartEvent
+  ) => void | Promise<void>;
+  readonly onPagePrepared?: (
+    event: WebsiteImportPagePreparedEvent
+  ) => void | Promise<void>;
+}
+
 /** Outcome of staging a single page. */
 interface StageOutcome {
   readonly source?: WebsiteImportSource;
@@ -139,18 +166,19 @@ export class WebsiteKnowledgeImportService {
    * imports can partially succeed.
    */
   async prepareImportSources(
-    options: WebsiteImportPrepareOptions
+    options: WebsiteImportPrepareOptions,
+    callbacks: WebsiteImportPrepareCallbacks = {}
   ): Promise<WebsiteImportPrepareResult> {
     const importGroupId = `web-${Date.now()}-${crypto.randomUUID()}`;
     this.cleanupExpiredStaging();
 
     if (options.mode === "url_list") {
-      return await this.prepareUrlList(options, importGroupId);
+      return await this.prepareUrlList(options, importGroupId, callbacks);
     }
     if (options.mode === "site_crawl") {
-      return await this.prepareSiteCrawl(options, importGroupId);
+      return await this.prepareSiteCrawl(options, importGroupId, callbacks);
     }
-    return await this.prepareSinglePage(options, importGroupId);
+    return await this.prepareSinglePage(options, importGroupId, callbacks);
   }
 
   // -------------------------------------------------------------------------
@@ -159,14 +187,27 @@ export class WebsiteKnowledgeImportService {
 
   private async prepareSinglePage(
     options: WebsiteImportPrepareOptions,
-    importGroupId: string
+    importGroupId: string,
+    callbacks: WebsiteImportPrepareCallbacks
   ): Promise<WebsiteImportPrepareResult> {
     const runDir = this.createRunDir(importGroupId);
+    await callbacks.onPageStart?.({
+      url: options.url!,
+      processedPages: 0,
+      maxPages: 1,
+    });
     const outcome = await this.scrapeAndStage(
       options.url!,
       runDir,
       importGroupId
     );
+    await callbacks.onPagePrepared?.({
+      url: options.url!,
+      processedPages: 1,
+      maxPages: 1,
+      source: outcome.source,
+      skipped: outcome.skipped,
+    });
 
     return {
       mode: "single_page",
@@ -178,7 +219,8 @@ export class WebsiteKnowledgeImportService {
 
   private async prepareUrlList(
     options: WebsiteImportPrepareOptions,
-    importGroupId: string
+    importGroupId: string,
+    callbacks: WebsiteImportPrepareCallbacks
   ): Promise<WebsiteImportPrepareResult> {
     const runDir = this.createRunDir(importGroupId);
     const deduped = dedupeUrlsStable(options.urls ?? []);
@@ -188,10 +230,24 @@ export class WebsiteKnowledgeImportService {
 
     const sources: WebsiteImportSource[] = [];
     const skipped: WebsiteImportSkippedSource[] = [];
+    let processedPages = 0;
     for (const rawUrl of targeted) {
+      await callbacks.onPageStart?.({
+        url: rawUrl,
+        processedPages,
+        maxPages: targeted.length,
+      });
       const outcome = await this.scrapeAndStage(rawUrl, runDir, importGroupId);
+      processedPages++;
       if (outcome.source) sources.push(outcome.source);
       if (outcome.skipped) skipped.push(outcome.skipped);
+      await callbacks.onPagePrepared?.({
+        url: rawUrl,
+        processedPages,
+        maxPages: targeted.length,
+        source: outcome.source,
+        skipped: outcome.skipped,
+      });
     }
 
     return {
@@ -204,11 +260,23 @@ export class WebsiteKnowledgeImportService {
 
   private async prepareSiteCrawl(
     options: WebsiteImportPrepareOptions,
-    importGroupId: string
+    importGroupId: string,
+    callbacks: WebsiteImportPrepareCallbacks
   ): Promise<WebsiteImportPrepareResult> {
     const seedRaw = options.url!;
     const seedCheck = await UrlGuard.validateWithDns(seedRaw);
     if (!seedCheck.safe) {
+      await callbacks.onPagePrepared?.({
+        url: seedRaw,
+        processedPages: 0,
+        maxPages: options.maxPages,
+        discoveredCount: 0,
+        skipped: {
+          url: seedRaw,
+          reason: seedCheck.error ?? "Seed URL rejected by SSRF guard",
+          code: "URL_BLOCKED",
+        },
+      });
       return {
         mode: "site_crawl",
         sources: [],
@@ -226,6 +294,17 @@ export class WebsiteKnowledgeImportService {
 
     const seed = normalizeUrl(seedCheck.normalizedUrl!);
     if (!seed) {
+      await callbacks.onPagePrepared?.({
+        url: seedRaw,
+        processedPages: 0,
+        maxPages: options.maxPages,
+        discoveredCount: 0,
+        skipped: {
+          url: seedRaw,
+          reason: "Invalid seed URL",
+          code: "URL_BLOCKED",
+        },
+      });
       return {
         mode: "site_crawl",
         sources: [],
@@ -254,6 +333,13 @@ export class WebsiteKnowledgeImportService {
 
     while (queue.length > 0 && processedPages < options.maxPages) {
       const item = queue.shift()!;
+      await callbacks.onPageStart?.({
+        url: item.url,
+        depth: item.depth,
+        processedPages,
+        maxPages: options.maxPages,
+        discoveredCount,
+      });
       const outcome = await this.scrapeAndStage(
         item.url,
         runDir,
@@ -263,6 +349,16 @@ export class WebsiteKnowledgeImportService {
       if (outcome.source) sources.push(outcome.source);
       if (outcome.skipped) skipped.push(outcome.skipped);
       processedPages++;
+
+      await callbacks.onPagePrepared?.({
+        url: item.url,
+        depth: item.depth,
+        processedPages,
+        maxPages: options.maxPages,
+        discoveredCount,
+        source: outcome.source,
+        skipped: outcome.skipped,
+      });
 
       if (item.depth >= options.maxDepth) continue;
 

@@ -56,6 +56,14 @@ export interface ChatV2AttachmentMetadata {
   kind: ChatV2AttachmentKind;
   processingMode?: "staged_markdown" | "rag_ingestion" | "image_url";
   documentId?: number;
+  /**
+   * Inline `data:` URL for an image attachment preview. Only present for
+   * `kind === "image"`. Carries the same downscaled base64 bytes sent to the
+   * model, so the user's own message bubble can render the image they sent
+   * without a separate fetch. Persisted on the user row so previews survive
+   * history reloads.
+   */
+  previewDataUrl?: string;
 }
 
 /** Metadata stored on v2 chat rows in the existing ai_chat_messages table. */

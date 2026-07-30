@@ -38,6 +38,14 @@ vi.mock("@/modules/AIChatV2Module", () => ({
   })),
 }));
 
+// --- Mock AIChatAttachmentModule (attachment byte persistence) ----------
+const mockSaveUploadedFiles = vi.fn().mockResolvedValue(undefined);
+vi.mock("@/modules/AIChatAttachmentModule", () => ({
+  AIChatAttachmentModule: vi.fn().mockImplementation(() => ({
+    saveUploadedFiles: mockSaveUploadedFiles,
+  })),
+}));
+
 // --- Mock AIChatPlanModule ---------------------------------------------
 const mockGetPlanState = vi.fn().mockResolvedValue(null);
 const mockEnsurePlanForConversation = vi.fn().mockResolvedValue(null);
@@ -286,6 +294,51 @@ describe("AIChatQueryEngine", () => {
       if (completeEvent?.type === "complete") {
         expect(completeEvent.images).toEqual([localImage]);
       }
+    });
+
+    it("persists image attachment preview data URL in user message metadata", async () => {
+      const fakeRun = vi.fn().mockResolvedValue({
+        type: "completed" as const,
+        conversationId: "v2-test-conv",
+        assistantMessageId: "assistant-test",
+        fullContent: "It's a cat",
+        finishReason: "stop",
+      });
+      const engine = createEngineWithFakeLoop(fakeRun);
+      const { sink } = makeEventCollector();
+
+      await engine.submitMessage({
+        request: {
+          message: "what is this?",
+          uploadedFiles: [
+            {
+              fileName: "cat.png",
+              mimeType: "image/png",
+              sizeBytes: 4,
+              contentBase64: "QkFTRTY0",
+              kind: "image",
+            },
+          ],
+        },
+        eventSink: sink,
+      });
+
+      // The user message must carry a renderable preview (the same data URL
+      // sent to the model) so the chat bubble can show the image the user
+      // attached — both during the live turn and after a history reload.
+      expect(mockSaveUserMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          metadata: expect.objectContaining({
+            attachments: [
+              expect.objectContaining({
+                fileName: "cat.png",
+                kind: "image",
+                previewDataUrl: "data:image/png;base64,QkFTRTY0",
+              }),
+            ],
+          }),
+        })
+      );
     });
 
     it("forwards promptTokens from the loop result to the compact agent", async () => {

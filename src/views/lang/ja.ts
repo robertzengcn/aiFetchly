@@ -198,7 +198,7 @@ export default {
       "アカウントのリモート埋め込みクォータが枯渇している可能性があります。サーバー側でプランを補充するか、管理者に連絡してから、もう一度アップロードをお試しください。",
     error: "エラー",
     document_management: "ドキュメント管理",
-    search_by_name: "名前で検索",
+    search_by_name: "名前またはタイトルで検索",
     status: "状態",
     file_type: "ファイルタイプ",
     name: "名前",
@@ -309,6 +309,61 @@ export default {
     queue_confirm_clear: "待ち行列にメッセージがあります。クリアしますか？",
     queue_confirm_switch:
       "待ち行列にメッセージがあります。破棄して会話を切り替えますか？",
+    import_website: "ウェブサイトをインポート",
+    website_import_title: "ウェブサイトをナレッジライブラリにインポート",
+    website_import_subtitle:
+      "公開ウェブページを Markdown に変換し、検索可能なドキュメントとして追加します。",
+    website_import_mode: "インポートモード",
+    website_import_mode_single: "単一ページ",
+    website_import_mode_list: "URL リスト",
+    website_import_mode_crawl: "サイトクロール",
+    website_import_url: "URL",
+    website_import_url_hint:
+      "公開 http(s) URL、例: https://example.com/pricing",
+    website_import_seed_url: "開始 URL",
+    website_import_urls: "URL",
+    website_import_urls_hint: "1 行に 1 つの URL（最大 {max} 件）。",
+    website_import_too_many_urls: "URL が多すぎます：最大は {max} 件です。",
+    website_import_title_field: "タイトル（任意）",
+    website_import_title_hint: "単一ページモードでのみ適用されます。",
+    website_import_max_pages: "最大ページ数",
+    website_import_max_depth: "最大深さ",
+    website_import_tags: "タグ",
+    website_import_tags_hint: "カンマ区切り。",
+    website_import_author: "作成者",
+    website_import_description: "説明（任意）",
+    website_import_duplicate_policy: "重複ポリシー",
+    website_import_policy_fail: "重複をスキップ",
+    website_import_policy_allow: "重複を許可",
+    website_import_hint:
+      "公開 http(s) ページのみ対応です。各ページが 1 つの検索可能なドキュメントになります。認証が必要なページ・localhost・内部ネットワークのページは拒否されます。",
+    website_import_url_required: "URL を入力してください。",
+    website_import_urls_required: "少なくとも 1 つの URL が必要です。",
+    website_import_import: "インポート",
+    website_import_importing: "インポート中...",
+    website_import_close: "閉じる",
+    website_import_another: "別をインポート",
+    website_import_failed: "インポート失敗",
+    website_import_result_imported: "インポート済み",
+    website_import_result_skipped: "スキップ",
+    website_import_result_discovered:
+      "{count} 件の同一生成元リンクを検出しました。",
+    website_import_chunks: "{count} チャンク",
+    website_import_status_done:
+      "{imported} 件インポート、{skipped} 件スキップしました。",
+    website_import_progress_starting:
+      "ウェブサイトのインポートを開始しています...",
+    website_import_progress_scraping: "ページをクロールしています...",
+    website_import_progress_importing:
+      "ページをナレッジライブラリにインポートしています...",
+    website_import_progress_imported: "ページをインポートしました。",
+    website_import_progress_skipped: "ページをスキップしました。",
+    website_import_progress_completed:
+      "ウェブサイトのインポートが完了しました。",
+    website_import_current_page: "現在のページ",
+    website_import_progress_counts:
+      "{imported} 件インポート、{skipped} 件スキップ",
+    website_import_progress_discovered: "{count} 件のリンクを検出しました。",
   },
   notifications: {
     cloudflare_protection_detected: "Cloudflare保護を検出",
@@ -2073,7 +2128,7 @@ export default {
     contact_profile: "連絡先プロフィール",
     statistics_description:
       "アクティビティ、トレンド、キャンペーン成果を追跡します。",
-    market_description: "市場と検索結果の機会を調査します。",
+    market_description: "市場を調査し、機会を見つけます。",
     contact_description:
       "見込み客向けの連絡先プロフィールを抽出して充実させます。",
     directory_description:
@@ -2082,6 +2137,8 @@ export default {
     outreach_description:
       "アウトリーチタスク、テンプレート、フィルター、返信を管理します。",
     proxy_description: "プロキシサーバーを管理・検証します。",
+    tool_account_description:
+      "自動化のためのツールアカウントを追加、管理、接続します。",
   },
   outreach: {
     subtitle:
@@ -2250,6 +2307,7 @@ export default {
       document_indexing: "ドキュメントをインデックス中…",
       document_ready: "ドキュメント準備完了",
       document_failed: "ドキュメント処理に失敗しました",
+      image_alt: "添付画像：{name}",
     },
   },
   aifetchlyConfig: {

@@ -198,7 +198,7 @@ export default {
     error: "Error",
     // Document Management translations
     document_management: "Document Management",
-    search_by_name: "Search by name",
+    search_by_name: "Rechercher par nom ou titre",
     status: "Status",
     file_type: "File Type",
     name: "Name",
@@ -310,6 +310,60 @@ export default {
     queue_confirm_clear: "Des messages sont en file d'attente. Les effacer ?",
     queue_confirm_switch:
       "Des messages sont en file d'attente. Les abandonner et changer de conversation ?",
+    import_website: "Importer un site web",
+    website_import_title:
+      "Importer un site web dans la bibliothèque de connaissances",
+    website_import_subtitle:
+      "Convertissez les pages web publiques en markdown et ajoutez-les comme documents consultables.",
+    website_import_mode: "Mode d'importation",
+    website_import_mode_single: "Page unique",
+    website_import_mode_list: "Liste d'URL",
+    website_import_mode_crawl: "Exploration du site",
+    website_import_url: "URL",
+    website_import_url_hint:
+      "URL http(s) publique, ex. https://example.com/pricing",
+    website_import_seed_url: "URL de départ",
+    website_import_urls: "URLs",
+    website_import_urls_hint: "Une URL par ligne ({max} max).",
+    website_import_too_many_urls: "Trop d'URL : le maximum est {max}.",
+    website_import_title_field: "Titre (facultatif)",
+    website_import_title_hint: "S'applique uniquement au mode page unique.",
+    website_import_max_pages: "Pages max.",
+    website_import_max_depth: "Profondeur max.",
+    website_import_tags: "Étiquettes",
+    website_import_tags_hint: "Séparées par des virgules.",
+    website_import_author: "Auteur",
+    website_import_description: "Description (facultatif)",
+    website_import_duplicate_policy: "Politique des doublons",
+    website_import_policy_fail: "Ignorer les doublons",
+    website_import_policy_allow: "Autoriser les doublons",
+    website_import_hint:
+      "Seules les pages http(s) publiques sont prises en charge. Chaque page devient un document consultable. Les pages authentifiées, localhost et du réseau interne sont rejetées.",
+    website_import_url_required: "L'URL est requise.",
+    website_import_urls_required: "Au moins une URL est requise.",
+    website_import_import: "Importer",
+    website_import_importing: "Importation...",
+    website_import_close: "Fermer",
+    website_import_another: "Importer une autre",
+    website_import_failed: "Échec de l'importation",
+    website_import_result_imported: "Importées",
+    website_import_result_skipped: "Ignorées",
+    website_import_result_discovered:
+      "{count} lien(s) de même origine découvert(s).",
+    website_import_chunks: "{count} fragments",
+    website_import_status_done:
+      "{imported} page(s) importée(s) ; {skipped} ignorée(s).",
+    website_import_progress_starting: "Démarrage de l'importation du site...",
+    website_import_progress_scraping: "Exploration de la page...",
+    website_import_progress_importing:
+      "Importation de la page dans la bibliothèque de connaissances...",
+    website_import_progress_imported: "Page importée.",
+    website_import_progress_skipped: "Page ignorée.",
+    website_import_progress_completed: "Importation du site terminée.",
+    website_import_current_page: "Page actuelle",
+    website_import_progress_counts:
+      "{imported} importée(s), {skipped} ignorée(s)",
+    website_import_progress_discovered: "{count} lien(s) découvert(s).",
   },
   notifications: {
     cloudflare_protection_detected: "Cloudflare Protection Detected",
@@ -2100,7 +2154,7 @@ export default {
     statistics_description:
       "Suivez l’activité, les tendances et les performances des campagnes.",
     market_description:
-      "Analysez les marchés et les opportunités dans les résultats de recherche.",
+      "Analysez les marchés et trouvez des opportunités.",
     contact_description:
       "Extrayez et enrichissez les profils de contact des prospects.",
     directory_description:
@@ -2110,6 +2164,8 @@ export default {
     outreach_description:
       "Gérez les tâches de prospection, les modèles, les filtres et les réponses.",
     proxy_description: "Gérez et validez vos serveurs proxy.",
+    tool_account_description:
+      "Ajoutez, gérez et connectez des comptes d'outil pour l'automatisation.",
   },
   outreach: {
     subtitle:
@@ -2287,6 +2343,7 @@ export default {
       document_indexing: "Indexation du document…",
       document_ready: "Document prêt",
       document_failed: "Échec du traitement du document",
+      image_alt: "Image jointe : {name}",
     },
   },
   aifetchlyConfig: {

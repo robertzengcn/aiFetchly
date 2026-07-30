@@ -196,7 +196,7 @@ export default {
     error: "Error",
     // Document Management translations
     document_management: "Document Management",
-    search_by_name: "Search by name",
+    search_by_name: "Search by name or title",
     status: "Status",
     file_type: "File Type",
     name: "Name",
@@ -307,6 +307,57 @@ export default {
     queue_confirm_clear: "There are queued messages. Clear them?",
     queue_confirm_switch:
       "There are queued messages. Discard them and switch conversation?",
+    import_website: "Import Website",
+    website_import_title: "Import Website into Knowledge Library",
+    website_import_subtitle:
+      "Convert public webpages to markdown and add them as searchable documents.",
+    website_import_mode: "Import mode",
+    website_import_mode_single: "Single page",
+    website_import_mode_list: "URL list",
+    website_import_mode_crawl: "Site crawl",
+    website_import_url: "URL",
+    website_import_url_hint:
+      "Public http(s) URL, e.g. https://example.com/pricing",
+    website_import_seed_url: "Start URL",
+    website_import_urls: "URLs",
+    website_import_urls_hint: "One URL per line (max {max}).",
+    website_import_too_many_urls: "Too many URLs: the maximum is {max}.",
+    website_import_title_field: "Title (optional)",
+    website_import_title_hint: "Only applies to single page mode.",
+    website_import_max_pages: "Max pages",
+    website_import_max_depth: "Max depth",
+    website_import_tags: "Tags",
+    website_import_tags_hint: "Comma-separated.",
+    website_import_author: "Author",
+    website_import_description: "Description (optional)",
+    website_import_duplicate_policy: "Duplicate policy",
+    website_import_policy_fail: "Skip duplicates",
+    website_import_policy_allow: "Allow duplicates",
+    website_import_hint:
+      "Only public http(s) pages are supported. Each page becomes one searchable document. Authenticated, localhost, and internal-network pages are rejected.",
+    website_import_url_required: "URL is required.",
+    website_import_urls_required: "At least one URL is required.",
+    website_import_import: "Import",
+    website_import_importing: "Importing...",
+    website_import_close: "Close",
+    website_import_another: "Import another",
+    website_import_failed: "Import failed",
+    website_import_result_imported: "Imported",
+    website_import_result_skipped: "Skipped",
+    website_import_result_discovered: "Discovered {count} same-origin link(s).",
+    website_import_chunks: "{count} chunks",
+    website_import_status_done:
+      "Imported {imported} page(s); skipped {skipped}.",
+    website_import_progress_starting: "Starting website import...",
+    website_import_progress_scraping: "Crawling page...",
+    website_import_progress_importing:
+      "Importing page into knowledge library...",
+    website_import_progress_imported: "Page imported.",
+    website_import_progress_skipped: "Page skipped.",
+    website_import_progress_completed: "Website import complete.",
+    website_import_current_page: "Current page",
+    website_import_progress_counts: "Imported {imported}, skipped {skipped}",
+    website_import_progress_discovered: "Discovered {count} link(s).",
   },
   notifications: {
     cloudflare_protection_detected: "Cloudflare Protection Detected",
@@ -2114,7 +2165,7 @@ export default {
       "Review business signals, find prospects, and manage outreach from one workspace.",
     contact_profile: "Contact Profile",
     statistics_description: "Track activity, trends, and campaign performance.",
-    market_description: "Research markets and search result opportunities.",
+    market_description: "Research markets and find opportunities.",
     contact_description: "Extract and enrich contact profiles for prospects.",
     directory_description:
       "Browse directory tasks and collected business records.",
@@ -2122,6 +2173,8 @@ export default {
     outreach_description:
       "Manage outreach tasks, templates, filters, and replies.",
     proxy_description: "Manage and validate your proxy servers.",
+    tool_account_description:
+      "Add, manage, and connect tool accounts for automation.",
   },
   outreach: {
     subtitle:
@@ -2293,6 +2346,7 @@ export default {
       document_indexing: "Indexing document…",
       document_ready: "Document ready",
       document_failed: "Document processing failed",
+      image_alt: "Attached image: {name}",
     },
   },
   aifetchlyConfig: {

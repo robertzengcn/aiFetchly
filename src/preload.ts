@@ -192,6 +192,8 @@ import {
   RAG_DOWNLOAD_DOCUMENT,
   RAG_GET_DOCUMENT_ERROR_LOG,
   RAG_CHECK_DOCUMENT_DUPLICATE,
+  RAG_IMPORT_WEBSITE,
+  RAG_IMPORT_WEBSITE_PROGRESS,
   // File Dialog Channels
   SHOW_OPEN_DIALOG,
   GET_FILE_STATS,
@@ -526,6 +528,7 @@ contextBridge.exposeInMainWorld("api", {
       // Contact Extraction Progress Channel
       CONTACT_EXTRACTION_PROGRESS,
       AI_CHAT_V2_VOICE_MODEL_DOWNLOAD_PROGRESS,
+      RAG_IMPORT_WEBSITE_PROGRESS,
       // System Dependency Prompt (main→renderer)
       SYSTEM_DEPENDENCY_PROMPT,
       // Google Maps Scraper Channels
@@ -591,6 +594,7 @@ contextBridge.exposeInMainWorld("api", {
       // Contact Extraction Progress Channel
       CONTACT_EXTRACTION_PROGRESS,
       AI_CHAT_V2_VOICE_MODEL_DOWNLOAD_PROGRESS,
+      RAG_IMPORT_WEBSITE_PROGRESS,
       // System Dependency Prompt (main→renderer)
       SYSTEM_DEPENDENCY_PROMPT,
       // Google Maps Scraper Channels
@@ -622,6 +626,7 @@ contextBridge.exposeInMainWorld("api", {
       AI_EMAIL_TEMPLATE_ERROR,
       CONTACT_EXTRACTION_PROGRESS,
       AI_CHAT_V2_VOICE_MODEL_DOWNLOAD_PROGRESS,
+      RAG_IMPORT_WEBSITE_PROGRESS,
       GOOGLE_MAPS_SEARCH_RESULT,
       // Yandex Maps Scraper Channels
       YANDEX_MAPS_SEARCH_RESULT,
@@ -803,6 +808,7 @@ contextBridge.exposeInMainWorld("api", {
       RAG_DOWNLOAD_DOCUMENT,
       RAG_GET_DOCUMENT_ERROR_LOG,
       RAG_CHECK_DOCUMENT_DUPLICATE,
+      RAG_IMPORT_WEBSITE,
       // File Dialog Channels
       SHOW_OPEN_DIALOG,
       GET_FILE_STATS,
