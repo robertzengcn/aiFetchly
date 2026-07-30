@@ -1,10 +1,10 @@
-# Downloadable Local AI Runtimes - Technical Design
+# Desktop Package Size Optimization and Optional Local AI Runtimes - Technical Design
 
 ## Document Information
 
 | Field | Value |
 | --- | --- |
-| Document version | v1.0 |
+| Document version | v1.1 |
 | Status | Draft |
 | Created | 2026-07-30 |
 | Owner | AiFetchly engineering |
@@ -15,9 +15,9 @@
 
 ## 1. Purpose
 
-This document translates the Downloadable Local AI Runtimes PRD into an implementation-ready design.
+This document translates the Desktop Package Size Optimization and Optional Local AI Runtimes PRD into an implementation-ready design.
 
-The design removes optional local embedding and voice inference dependencies from the base Electron package and delivers them as first-party, platform-specific runtime archives. GitHub Actions builds the archives on their target operating systems, verifies them in isolation, generates a catalog, and publishes them with the desktop release. The installed application downloads and activates a runtime only after user consent.
+The design removes the unused `sqlite3` driver, makes the app and runtime dependency graphs target-specific, separates the full CI build graph from the production-only shipped graph, and removes optional local embedding and voice inference dependencies from the base Electron package. GitHub Actions builds artifacts on their target operating systems, verifies package and native inventories in isolation, generates a runtime catalog, and publishes approved outputs. The installed application downloads and activates a local AI runtime only after user consent.
 
 The design covers:
 
@@ -27,6 +27,9 @@ The design covers:
 - Downloaded worker resolution for embedding
 - Main-process, worker, IPC, renderer, and filesystem ownership boundaries
 - GitHub Actions build and release topology
+- `sqlite3` removal and database compatibility verification
+- Frozen CI dependency installation and production package staging
+- Target-specific native dependency selection, rebuild, inventory, and load probes
 - Forge packaging migration
 - Security, signing, diagnostics, and tests
 
@@ -46,6 +49,12 @@ The implementation must preserve these invariants:
 8. A failed install or update never destroys the current known-good runtime.
 9. Remote embedding fallback never causes an implicit runtime or model download.
 10. All renderer-visible strings are translated in all six supported languages.
+11. `better-sqlite3` remains the sole Node SQLite driver; `sqlite-vec` remains the vector extension provider.
+12. `sqlite3`, `@types/sqlite3`, and their obsolete packaging/rebuild references are absent.
+13. Every CI dependency install is lockfile-frozen.
+14. The root build may include development tooling, but final app and runtime artifacts contain only verified production dependency closures.
+15. Every artifact contains native packages and binaries only for its declared OS/architecture.
+16. Required native modules are rebuilt through one explicit target policy and load-tested under the packaged Electron ABI.
 
 ## 3. Current System
 
@@ -110,6 +119,35 @@ Neither model location changes. Runtime removal does not remove these directorie
 `.github/workflows/release.yml` currently computes the same release version independently in Windows and macOS jobs, hard-codes an Electron rebuild target in one macOS step, and builds one macOS runner architecture. The workflow is also being narrowed to a manual `workflow_dispatch` build with read-only permissions and selected installer artifacts instead of automatically publishing every file under `out/make`.
 
 The target workflow preserves that narrower artifact allowlist and introduces one version job, explicit platform/architecture runtime jobs, isolated runtime verification, and catalog generation. Publishing remains an explicit protected action. It can be a boolean manual-dispatch input and conditional job in the same workflow, or a separate protected publishing workflow that consumes verified build artifacts.
+
+The current jobs still use plain `yarn install`, broad `electron-rebuild --types prod,dev,optional` behavior, duplicate rebuild paths, obsolete `sqlite3` rebuild labels/fallbacks, and a hard-coded Electron target in one macOS path. Those are replaced by the staged install and native policy in this design.
+
+### 3.6 SQLite driver state
+
+The active database stack is:
+
+```text
+TypeORM type: better-sqlite3
+Node driver:  better-sqlite3
+Vector ext:   sqlite-vec
+Database:     existing SQLite files and schemas
+```
+
+`package.json` also declares `sqlite3` and `@types/sqlite3`, but repository inspection found no active runtime import or TypeORM `type: "sqlite3"` configuration. `forge.config.js` still includes `sqlite3` in ASAR unpack and native rebuild metadata, and release documentation/workflow text still refers to rebuilding it.
+
+The removal is dependency cleanup, not a database migration. `better-sqlite3`, `sqlite-vec`, TypeORM entities, database paths, schemas, and user data remain unchanged.
+
+### 3.7 Native dependency state
+
+Several dependencies use optional target packages. The lockfile may correctly contain all variants, while one artifact must contain only one variant. Relevant families include:
+
+- `sqlite-vec-{windows,darwin,linux}-*`
+- `sherpa-onnx-{win,darwin,linux}-*`
+- ONNX Runtime native distributions
+- Sharp/libvips native distributions
+- Other Electron ABI modules such as `better-sqlite3`
+
+ASAR patterns that enumerate all target packages and broad rebuild commands blur the target boundary. Artifact verification must operate on the unpacked product and native binary inventory, not only on dependency declarations.
 
 ## 4. Key Design Decisions
 
@@ -191,6 +229,24 @@ The existing `PluginArchiveService` provides useful validation patterns but uses
 ### 4.8 Explicit resolver paths
 
 The implementation must not modify global `NODE_PATH`. Voice uses `createRequire()` scoped to the active voice runtime. Embedding forks the active runtime's absolute worker path.
+
+### 4.9 `better-sqlite3` is the only SQLite Node driver
+
+Remove the unused `sqlite3` package rather than treating all SQLite-related packages as equivalent. The removal guard checks active imports, dynamic loads, TypeORM driver configuration, Forge metadata, CI workflow references, and the packaged application. Database compatibility is proven through existing-format startup, CRUD, and vector-extension tests.
+
+### 4.10 Build graph and shipped graph are separate
+
+The root release job uses `yarn install --frozen-lockfile` because Forge, Vite, TypeScript, and packaging plugins are development dependencies. The final packaged application is then pruned and audited as a production graph.
+
+A command such as `yarn install --production=true --frozen-lockfile` is used only in an isolated app/runtime packaging workspace with its own valid manifest and lockfile. It must not replace the root build install until build tooling is moved out of root development dependencies.
+
+### 4.11 Optional dependencies are selected, not globally disabled
+
+`--ignore-optional` is prohibited in release packaging because required target-native implementations may be optional dependencies. The system installs/resolves the locked graph, copies the matching target closure, and rejects sibling target packages during artifact verification.
+
+### 4.12 Native rebuilds are policy-driven
+
+One version-controlled policy maps an artifact target to required native packages, forbidden package families, and load probes. CI rebuilds only modules on that list, once, for the Electron version resolved from the locked `electron` package. The package inventory and load probes are the authoritative completion criteria.
 
 ## 5. Target Architecture
 
@@ -1767,6 +1823,20 @@ jobs:
 
 All app and runtime jobs consume these outputs. Do not independently rewrite `package.json` with potentially divergent versions.
 
+### 25.1.1 CI installation model
+
+The workflow has three dependency contexts:
+
+| Context | Install/content policy | Reason |
+| --- | --- | --- |
+| Root build workspace | `yarn install --frozen-lockfile` | Forge, Vite, TypeScript, tests, and rebuild tools are required to build. |
+| Packaged base app | Forge prune plus production-closure audit | Only runtime dependencies may ship, even though build tools existed in the workspace. |
+| Dedicated runtime staging | Lockfile-derived production closure; preferably `yarn install --production=true --frozen-lockfile` in a dedicated workspace | Each runtime contains only its capability and target dependencies. |
+
+Release jobs fail if `yarn.lock` changes. They must not run plain `yarn install`, globally ignore optional dependencies, or infer the shipped graph from the root `node_modules` tree.
+
+When a dedicated runtime workspace does not yet exist, `build-local-ai-runtime.mjs` must traverse dependency metadata from an explicit runtime root allowlist, copy only production edges, include the matching target optional package, and verify the isolated result. This is an interim implementation, not permission to copy root `node_modules` recursively.
+
 ### 25.2 Runtime matrix
 
 Runner labels are repository/release-infrastructure choices and must be verified before implementation. The logical matrix is:
@@ -1864,6 +1934,28 @@ Resolve ABI by executing the installed Electron binary in the target environment
 
 Remove hard-coded Electron targets such as `35.7.5` once the shared resolver is in place.
 
+### 25.4.1 App native rebuild and package verification
+
+Each app matrix job performs one authoritative native rebuild:
+
+```text
+resolve target policy
+  -> rebuild explicit Electron ABI modules
+  -> package app
+  -> inventory unpacked app/ASAR
+  -> run native load probes with packaged Electron
+  -> create installer
+```
+
+The workflow must remove the generic `electron-rebuild --types prod,dev,optional` step, no-op `sqlite3` steps, fallback lists containing `sqlite3`, duplicate `rebuild-better-sqlite` invocation, and hard-coded Electron target. The final exact rebuild allowlist is stored in the native policy and established by inventory/load testing; it is not embedded independently in YAML.
+
+The app artifact upload depends on successful execution of:
+
+```text
+node scripts/verify-production-package.mjs --app <unpacked-app> --policy <target-policy>
+node scripts/smoke-packaged-database.cjs --electron <electron-path> --app <unpacked-app>
+```
+
 ### 25.5 Catalog job
 
 ```yaml
@@ -1947,11 +2039,124 @@ Publish a table to `$GITHUB_STEP_SUMMARY`:
 | Asset | Platform | Architecture | Compressed | Expanded | SHA-256 prefix |
 | --- | --- | --- | ---: | ---: | --- |
 
-Include base installer sizes and percentage change from a checked-in or release-fetched baseline.
+Include base installer sizes and percentage change from a checked-in or release-fetched baseline. Also include production package count, native binary count, `sqlite3` presence (required to be zero), foreign-target count (required to be zero), and unapproved development-package count (required to be zero).
 
 ## 26. Forge and Dependency Changes
 
-### 26.1 Migration sequence
+### 26.1 Remove `sqlite3`
+
+The change set is intentionally narrow:
+
+| File/area | Required change |
+| --- | --- |
+| `package.json` | Remove `sqlite3` and `@types/sqlite3`; add package audit scripts as needed. |
+| `yarn.lock` | Regenerate through Yarn so unreferenced `sqlite3` and unique transitive entries disappear. |
+| `forge.config.js` | Remove `sqlite3` ASAR unpack entries, `onlyModules` entries, and commented legacy resource logic. |
+| `.github/workflows/release.yml` | Remove no-op/rebuild/fallback references to `sqlite3`. |
+| `src/config/SqliteDb.ts` | Remove stale commented `sqlite3` import; leave `better-sqlite3` configuration unchanged. |
+| `docs/RELEASE_WORKFLOW.md` | Describe `better-sqlite3` and target-native verification accurately. |
+
+Before and after removal, run a static guard over source and build configuration. Allowed post-removal occurrences are limited to migration notes or an explicit denylist test fixture:
+
+```text
+rg -n "from ['\"]sqlite3|require\(['\"]sqlite3|type:\s*['\"]sqlite3|@types/sqlite3" \
+  src test forge.config.js package.json .github scripts
+```
+
+Dynamic package names constructed at runtime must be covered by the database smoke test and dependency inventory. No entity, migration, database path, or user database is changed.
+
+### 26.2 Database compatibility gate
+
+`scripts/smoke-packaged-database.cjs` runs under the target Electron runtime and:
+
+1. Creates a temporary database using the same `SqliteDb`/TypeORM configuration.
+2. Runs representative create, read, update, delete, transaction, and reopen operations.
+3. Opens a copied existing-format fixture to prove no migration is introduced.
+4. Loads the target `sqlite-vec` extension and runs a minimal vector query.
+5. Resolves `better-sqlite3` from the packaged application, not repository `node_modules`.
+6. Emits JSON containing driver version, Electron ABI, target, and probe results.
+
+The test must not use a worker process because database ownership remains in the Electron main process.
+
+### 26.3 Native dependency policy
+
+Add a version-controlled policy, for example `config/native-dependency-policy.json`, validated by Zod in build scripts:
+
+```json
+{
+  "schemaVersion": 1,
+  "targets": {
+    "win32-x64": {
+      "requiredPackages": ["better-sqlite3", "sqlite-vec", "sqlite-vec-windows-x64"],
+      "forbiddenPackagePatterns": ["sqlite3", "sqlite-vec-darwin-*", "sqlite-vec-linux-*", "sherpa-onnx-*"]
+    },
+    "darwin-x64": {
+      "requiredPackages": ["better-sqlite3", "sqlite-vec", "sqlite-vec-darwin-x64"],
+      "forbiddenPackagePatterns": ["sqlite3", "sqlite-vec-windows-*", "sqlite-vec-linux-*", "sherpa-onnx-*"]
+    },
+    "darwin-arm64": {
+      "requiredPackages": ["better-sqlite3", "sqlite-vec", "sqlite-vec-darwin-arm64"],
+      "forbiddenPackagePatterns": ["sqlite3", "sqlite-vec-windows-*", "sqlite-vec-linux-*", "sherpa-onnx-*"]
+    }
+  }
+}
+```
+
+The example shows the policy shape, not the complete final allowlist. The implementation must add independently required production native modules discovered by package inventory and load probes. Runtime policies permit exactly one matching sherpa/ONNX/Sharp target family and remain separate from the base-app policy.
+
+### 26.4 Artifact inventory
+
+`scripts/generate-package-inventory.mjs` walks the unpacked app or extracted runtime and emits:
+
+```typescript
+export interface PackagedDependencyInventory {
+  schemaVersion: 1;
+  artifactName: string;
+  platform: NodeJS.Platform;
+  arch: string;
+  packages: Array<{
+    name: string;
+    version: string;
+    dependencyClass: "production" | "development" | "optional" | "unknown";
+    sizeBytes: number;
+  }>;
+  nativeFiles: Array<{
+    relativePath: string;
+    format: "pe" | "mach-o" | "elf" | "node-addon" | "unknown";
+    detectedPlatform?: string;
+    detectedArch?: string;
+    sizeBytes: number;
+  }>;
+}
+```
+
+Package manifests are parsed as JSON. Native file format/architecture is identified from executable headers or platform tools, not filename alone. The verifier compares package names to root production/dev dependency sets, target policy, and approved exceptions. Unknown native files fail closed in release jobs.
+
+### 26.5 Production closure verification
+
+Forge keeps `prune: true`. After packaging, `verify-production-package.mjs` ensures:
+
+- Every shipped package is reachable from a root production dependency or a reviewed generated runtime manifest.
+- Root-only development dependencies are absent unless a version-controlled exception names the runtime reason and expiry.
+- Test directories, package caches, source maps, and package-manager metadata are absent unless required.
+- `sqlite3` is absent.
+- Exactly the required target `sqlite-vec` package is present.
+- Foreign native binaries and platform packages are absent.
+- Optional local AI dependencies are absent from the slim base app.
+
+This post-package proof is required even when an isolated production install is used because package-manager flags cannot verify Forge copy rules or ASAR contents.
+
+### 26.6 Selective rebuild policy
+
+`scripts/rebuild-native-dependencies.mjs` reads the target policy and invokes Electron rebuild once with an explicit module list. The policy distinguishes:
+
+- Electron ABI Node addons that require rebuild or prebuild selection
+- Native shared libraries/extensions copied without `node-gyp` rebuild
+- Pure JavaScript packages that require no rebuild
+
+Each required module then has a scoped load probe. `better-sqlite3` must open a database; `sqlite-vec` must expose/load its extension. Runtime native modules are tested only from their isolated runtime roots. The script records actual Electron version and `process.versions.modules`; YAML does not duplicate them.
+
+### 26.7 Local AI migration sequence
 
 Do not remove runtime packages from Forge before downloaded resolution passes on all targets.
 
@@ -1974,7 +2179,7 @@ required vec0 native artifacts
 other independently required native dependencies
 ```
 
-### 26.2 Package dependency placement
+### 26.8 Package dependency placement
 
 Inference packages remain available to CI runtime builds. Options:
 
@@ -1982,15 +2187,15 @@ Inference packages remain available to CI runtime builds. Options:
 2. Move them to `devDependencies` after confirming production runtime build jobs install dev dependencies.
 3. Create a workspace/package dedicated to runtime builds in a later cleanup.
 
-Recommended v1: keep current dependency placement while changing Forge packaging. This minimizes lockfile and local-development disruption. Move them to a dedicated build workspace after runtime delivery stabilizes.
+Recommended v1: create dedicated runtime manifests/workspaces early enough to support true frozen production installs for runtime staging. If schedule requires an interim step, keep current dependency placement but use an explicit production-edge copier and isolated verification; never recursively copy the root dependency tree.
 
-### 26.3 Sharp audit
+### 26.9 Sharp audit
 
 Before excluding `sharp`, run a complete import/require audit outside Transformers.js. If another base feature uses Sharp directly, keep one base copy and ensure the embedding runtime does not rely on resolving that base copy.
 
-### 26.4 Base package verification
+### 26.10 Base package verification
 
-`verify-base-package-exclusions.mjs` inspects packaged application files/ASAR and fails if forbidden runtime dependency paths exist. String references in source maps do not count if source maps are not shipped; actual package files do.
+`verify-production-package.mjs` supersedes a runtime-only exclusion check. It inspects packaged application files/ASAR and fails on `sqlite3`, forbidden runtime dependency paths, development-only packages, or foreign native targets. String references in migration documentation do not count; actual package/config/import references and shipped files do.
 
 ## 27. Security Design
 
@@ -2119,7 +2324,29 @@ Do not add remote telemetry without existing telemetry consent.
 
 ## 30. Test Design
 
-### 30.1 Unit test files
+### 30.1 Dependency and database test files
+
+```text
+test/vitest/main/config/SqliteDb.packaged.test.ts
+test/vitest/utilitycode/nativeDependencyPolicy.test.ts
+test/vitest/utilitycode/packageInventory.test.ts
+test/vitest/utilitycode/productionDependencyClosure.test.ts
+scripts/smoke-packaged-database.cjs
+scripts/verify-production-package.mjs
+```
+
+Required cases:
+
+- Static guard rejects active `sqlite3` import, dynamic require, TypeORM driver configuration, or Forge/workflow rebuild reference.
+- Existing-format database opens without migration and survives CRUD/reopen.
+- `better-sqlite3` resolves from the packaged app and reports the expected Electron ABI.
+- Matching `sqlite-vec` extension loads and executes a minimal vector operation.
+- Target policy accepts the matching package and rejects every sibling platform/architecture package.
+- Inventory detects PE, Mach-O, ELF, and `.node` files and rejects architecture mismatches.
+- Production closure rejects root development-only and unknown packages unless an explicit exception is active.
+- Frozen-install validation detects lockfile mutation.
+
+### 30.2 Runtime unit test files
 
 ```text
 test/vitest/main/service/LocalAiRuntimeCatalogService.test.ts
@@ -2135,7 +2362,7 @@ test/vitest/main/ipc/local-ai-runtime-ipc.test.ts
 test/vitest/main/i18n/localAiRuntime.i18n.parity.test.ts
 ```
 
-### 30.2 Catalog tests
+### 30.3 Catalog tests
 
 - Reject unknown schema version.
 - Reject unknown runtime ID.
@@ -2148,7 +2375,7 @@ test/vitest/main/i18n/localAiRuntime.i18n.parity.test.ts
 - Use valid cache offline.
 - Do not replace valid cache with invalid response.
 
-### 30.3 Download tests
+### 30.4 Download tests
 
 - Stream successful response and calculate checksum.
 - Enforce redirect limit.
@@ -2161,7 +2388,7 @@ test/vitest/main/i18n/localAiRuntime.i18n.parity.test.ts
 - Timeout stalled response.
 - Redact query string in error logs.
 
-### 30.4 Extraction tests
+### 30.5 Extraction tests
 
 - Reject `../file`, absolute path, drive path, UNC path, and NUL.
 - Reject symlink/hard link/device entries.
@@ -2173,7 +2400,7 @@ test/vitest/main/i18n/localAiRuntime.i18n.parity.test.ts
 - Reject missing required file.
 - Extract valid package with bounded memory.
 
-### 30.5 Activation tests
+### 30.6 Activation tests
 
 - Previous active pointer survives download failure.
 - Previous active pointer survives extraction failure.
@@ -2185,7 +2412,7 @@ test/vitest/main/i18n/localAiRuntime.i18n.parity.test.ts
 - Leased runtime cannot be removed.
 - Valid previous runtime can roll back.
 
-### 30.6 Worker integration tests
+### 30.7 Worker integration tests
 
 Voice:
 
@@ -2201,7 +2428,7 @@ Embedding:
 - Root project `node_modules` is unavailable during test.
 - Existing initialize/embed/crash/timeout behavior remains.
 
-### 30.7 Renderer tests
+### 30.8 Renderer tests
 
 - Install offer displays both runtime and model sizes correctly.
 - Cancel restores previous embedding model selection.
@@ -2210,7 +2437,7 @@ Embedding:
 - Repair/remove confirmations behave correctly.
 - All six translation files contain every runtime key.
 
-### 30.8 CI tests
+### 30.9 CI tests
 
 - Six archives are present.
 - Catalog contains six unique v1 targets.
@@ -2219,10 +2446,60 @@ Embedding:
 - No unrelated native platform package exists.
 - Base package excludes runtime dependencies after migration.
 - Size summary and baseline comparison are present.
+- `sqlite3` is absent from dependency metadata, Forge/CI configuration, lock ownership, and packaged files.
+- Packaged database CRUD and vector load probes pass on every app target.
+- Root build install is frozen and supplies build tools; shipped app/runtime graphs are production-only.
+- Every artifact inventory reports zero foreign native targets.
+- Every native rebuild is declared by target policy and runs through one authoritative rebuild path.
 
 ## 31. Implementation Plan
 
-### Phase 1: Contracts and local state
+### Phase 1: Baseline, `sqlite3` removal, and database proof
+
+Files:
+
+```text
+package.json
+yarn.lock
+forge.config.js
+.github/workflows/release.yml
+src/config/SqliteDb.ts
+docs/RELEASE_WORKFLOW.md
+scripts/smoke-packaged-database.cjs
+```
+
+Deliverables:
+
+- Before/after package and installer baseline
+- Static evidence that `sqlite3` is unused
+- Removal of `sqlite3`, `@types/sqlite3`, and obsolete build references
+- Existing-database CRUD and `sqlite-vec` compatibility tests
+- Packaged Electron database smoke test
+
+### Phase 2: Reproducible production and target-native packaging
+
+Files:
+
+```text
+config/native-dependency-policy.json
+scripts/resolve-electron-build-metadata.mjs
+scripts/rebuild-native-dependencies.mjs
+scripts/generate-package-inventory.mjs
+scripts/verify-production-package.mjs
+.github/workflows/release.yml
+forge.config.js
+```
+
+Deliverables:
+
+- Frozen root build install
+- Forge-pruned and verified production-only app closure
+- Target package/binary allowlist and denylist
+- One selective rebuild path and native load probes
+- Machine-readable package/native inventory for every app artifact
+- Zero foreign target packages in Windows x64, macOS x64, and macOS arm64 outputs
+
+### Phase 3: Contracts and local state
 
 Files:
 
@@ -2243,7 +2520,7 @@ Deliverables:
 - Atomic active state
 - Compatibility tests
 
-### Phase 2: Build and release artifacts
+### Phase 4: Build and release artifacts
 
 Files:
 
@@ -2251,6 +2528,8 @@ Files:
 scripts/build-local-ai-runtime.mjs
 scripts/verify-local-ai-runtime.mjs
 scripts/generate-local-ai-runtime-catalog.mjs
+.github/runtime-packages/<runtime-id>/package.json
+.github/runtime-packages/<runtime-id>/yarn.lock
 .github/workflows/release.yml
 package.json
 yarn.lock
@@ -2261,9 +2540,11 @@ Deliverables:
 - Six prerelease runtime archives
 - Manifests, hashes, license inventory, and catalog
 - Target-runner smoke tests
+- Frozen production dependency staging for each runtime
+- Runtime package/native inventories with one matching target implementation
 - No base installer exclusions yet
 
-### Phase 3: Runtime installer
+### Phase 5: Runtime installer
 
 Files:
 
@@ -2284,7 +2565,7 @@ Deliverables:
 - Health and rollback
 - Service/module tests
 
-### Phase 4: IPC and UI
+### Phase 6: IPC and UI
 
 Files:
 
@@ -2307,7 +2588,7 @@ Deliverables:
 - Runtime management settings
 - Complete i18n
 
-### Phase 5: Voice pilot
+### Phase 7: Voice pilot
 
 Files:
 
@@ -2328,7 +2609,7 @@ Deliverables:
 - Signed/notarized target tests
 - Temporary bundled fallback
 
-### Phase 6: Embedding integration
+### Phase 8: Embedding integration
 
 Files:
 
@@ -2347,13 +2628,13 @@ Deliverables:
 - No implicit fallback downloads
 - Existing vector compatibility tests
 
-### Phase 7: Slim installer
+### Phase 9: Slim installer
 
 Files:
 
 ```text
 forge.config.js
-scripts/verify-base-package-exclusions.mjs
+scripts/verify-production-package.mjs
 .github/workflows/release.yml
 ```
 
@@ -2363,16 +2644,23 @@ Deliverables:
 - Remove bundled embedding worker
 - Remove migration fallback after beta
 - Installer size regression gate
+- Final proof that the base target contains only required database/native production dependencies
 
 ## 32. Migration and Compatibility
 
-### 32.1 Existing users
+### 32.1 SQLite driver cleanup
+
+Removing `sqlite3` requires no user-data migration because the application already opens databases through `better-sqlite3`. Rollout does not rename database files, change TypeORM entities, execute a schema migration, or rebuild vector indexes.
+
+The release is blocked if an existing-format fixture cannot be opened, if CRUD/reopen behavior changes, or if the matching `sqlite-vec` extension cannot load from the packaged application. Rollback is the normal application rollback; no database downgrade step is introduced.
+
+### 32.2 Existing users
 
 Existing model files remain in their current locations. The first slim application release checks for a downloaded runtime; if absent, it may use the temporary bundled fallback only when that release still contains it.
 
 The next release removes bundled runtimes after runtime download reliability is proven. Users selecting local features then receive the install offer.
 
-### 32.2 Existing embedding indexes
+### 32.3 Existing embedding indexes
 
 No migration is needed. The runtime still uses:
 
@@ -2385,7 +2673,7 @@ L2 normalization
 
 Health tests must verify these values before base runtime removal.
 
-### 32.3 App/Electron upgrades
+### 32.4 App/Electron upgrades
 
 On application version change:
 
@@ -2401,16 +2689,19 @@ Remote features remain available while local components are incompatible.
 
 Before enabling runtime assets in a production release:
 
-1. Confirm all target jobs passed on native target runners.
-2. Confirm runtime archive hashes match catalog.
-3. Confirm release URLs are immutable and accessible without embedded repository credentials.
-4. Confirm macOS native files are signed and tested from the notarized app.
-5. Confirm base installers contain required database natives and exclude optional local AI runtimes.
-6. Compare installer sizes with baseline.
-7. Install each runtime through the production UI on a clean machine/profile.
-8. Restart offline and run one local embedding and one voice operation.
-9. Test cancellation, repair, update, rollback, and removal.
-10. Publish release only after the final asset allowlist passes.
+1. Confirm the frozen install did not modify `yarn.lock`.
+2. Confirm `sqlite3` is absent and packaged database/`sqlite-vec` smoke tests pass.
+3. Confirm package/native inventories contain no foreign target or unapproved development dependency.
+4. Confirm all target jobs passed on native target runners and selective rebuild load probes passed.
+5. Confirm runtime archive hashes match catalog.
+6. Confirm release URLs are immutable and accessible without embedded repository credentials.
+7. Confirm macOS native files are signed and tested from the notarized app.
+8. Confirm base installers contain required database natives and exclude optional local AI runtimes.
+9. Compare installer and dependency-family sizes with baseline.
+10. Install each runtime through the production UI on a clean machine/profile.
+11. Restart offline and run one local embedding and one voice operation.
+12. Test cancellation, repair, update, rollback, and removal.
+13. Publish release only after the final asset and dependency allowlists pass.
 
 If a published runtime is defective:
 
@@ -2443,6 +2734,11 @@ If a published runtime is defective:
 7. Decide the runtime catalog cache TTL and update-check cadence after release operational testing.
 8. Decide whether one combined runtime+model consent dialog is preferable to sequential consent.
 9. Define the production package size baseline and failure threshold after measuring current release artifacts.
+10. Finalize the base-app native rebuild allowlist from observed production inventory and Electron load probes.
+11. Decide whether dedicated runtime workspaces are introduced in the first implementation or after an interim lockfile-derived production copier.
+12. Select the binary-header inspection library/tools used consistently on Windows and macOS runners.
+13. Define the schema, owner, justification, and expiry rules for rare development-package runtime exceptions.
+14. Decide whether dependency/native inventories are workflow-only evidence or published release assets alongside the SBOM.
 
 ## 36. PRD Acceptance Mapping
 
@@ -2462,6 +2758,11 @@ If a published runtime is defective:
 | Offline operation | Local-first resolver and catalog-independent active runtime |
 | macOS production behavior | Protected signing job and notarized-host integration test |
 | Installer reduction | Forge exclusions and base package verification script |
+| Remove `sqlite3` | Dependency/lock/config cleanup, static guard, existing-database CRUD and packaged Electron smoke tests |
+| Preserve SQLite | `better-sqlite3` remains TypeORM driver; matching `sqlite-vec` package and extension load probe remain required |
+| Cross-platform native correctness | Versioned target policy, binary-header inventory, foreign-package denylist, target-runner load probes |
+| Production install in CI | Frozen full root build install plus Forge prune/isolated runtime production staging and post-package closure verification |
+| Selective native rebuild | One policy-driven rebuild script, Electron metadata resolver, and per-module load probes |
 | i18n | Local AI runtime translation group in six language files |
 
 ## 37. Related Documents and Code
@@ -2473,6 +2774,11 @@ If a published runtime is defective:
 - `docs/prd/local-sherpa-onnx-voice-chat-technical-design.md`
 - `.github/workflows/release.yml`
 - `forge.config.js`
+- `package.json`
+- `yarn.lock`
+- `src/config/SqliteDb.ts`
+- `scripts/rebuild-better-sqlite3.js`
+- `docs/RELEASE_WORKFLOW.md`
 - `vite.localEmbeddingWorker.config.mjs`
 - `vite.aiChatVoiceWorker.config.mjs`
 - `src/childprocess/embedding/LocalEmbeddingWorker.ts`
