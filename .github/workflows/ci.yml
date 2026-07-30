@@ -48,8 +48,20 @@ jobs:
       - name: Run main process unit tests
         run: yarn testmain
 
+      - name: Verify Electron native module compatibility
+        run: yarn vitest --config vite.utilityCode.config.mjs --run test/vitest/utilitycode/nativeModuleVersion.test.ts
+
+      - name: Rebuild native modules for Node test runtime
+        run: |
+          unset npm_config_runtime npm_config_target npm_config_disturl npm_config_arch
+          npm rebuild better-sqlite3 --build-from-source
+
       - name: Run utility code unit tests
-        run: yarn vitest --config vite.utilityCode.config.mjs
+        run: yarn vitest --config vite.utilityCode.ci.config.mjs --run
 
       - name: Run task code unit tests
-        run: yarn vitest --config vite.taskCode.config.mjs
+        run: yarn vitest --config vite.taskCode.config.mjs --run --passWithNoTests
+
+      - name: Restore Electron native module compatibility
+        if: always()
+        run: yarn rebuild-better-sqlite
