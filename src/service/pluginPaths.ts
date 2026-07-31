@@ -32,3 +32,12 @@ export function getPluginOwnedSkillRoot(
 ): string {
   return path.join(getPluginInstallRoot(pluginName), "skills", skillName);
 }
+
+/**
+ * Per-plugin options file path. Stores user-supplied MCP option values
+ * (API keys, etc.) keyed by scoped server name. Used for ${VAR} env
+ * resolution at MCP server spawn time.
+ */
+export function getPluginOptionsFile(pluginName: string): string {
+  return path.join(getPluginInstallRoot(pluginName), "options.json");
+}

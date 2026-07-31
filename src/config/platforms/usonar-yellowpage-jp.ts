@@ -26,8 +26,8 @@ export const Platform_usonar_yellowpage_jp: PlatformConfig = {
   selectors: {
     searchForm: {
       keywordInput: 'input[name="keyword"]',
-      locationInput: '',
-      searchButton: 'form button',
+      locationInput: 'input[name="area"], select[name="prefecture"]',
+      searchButton: "form button",
       formContainer: "form",
     },
     businessList:

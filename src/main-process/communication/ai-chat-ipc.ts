@@ -1,6 +1,7 @@
 import { ipcMain } from "electron";
-import { spawn } from "child_process";
+import { spawn, spawnSync } from "child_process";
 import { platform } from "os";
+import { readFileSync } from "fs";
 import {
   AiChatApi,
   ChatRequest,
@@ -11,6 +12,7 @@ import {
 } from "@/api/aiChatApi";
 // import { getAvailableToolFunctions } from "@/config/aiTools.config";
 import { SkillRegistry } from "@/config/skillsRegistry";
+import { formatToolCatalogBreakdown } from "@/service/ToolCatalogDiagnostics";
 import {
   CommonMessage,
   ChatMessage,
@@ -210,7 +212,7 @@ function buildAttachmentReferenceBlock(
   if (references.length === 0) return "";
 
   const sanitizeForPrompt = (value: string): string =>
-    value.replace(/[\r\n]/g, " ").replace(/"/g, '\\"');
+    value.replace(/\\/g, "\\\\").replace(/[\r\n]/g, " ").replace(/"/g, '\\"');
 
   const lines = references.map((ref, index) => {
     const ext = ref.fileName.toLowerCase().slice(ref.fileName.lastIndexOf("."));
@@ -222,9 +224,9 @@ function buildAttachmentReferenceBlock(
       ref.fileName
     )}" attachment_ref="${
       ref.refId
-    }" → call ${suggestedTool} with attachment_ref="${
+    }" file_path="${ref.filePath}" → call ${suggestedTool} with attachment_ref="${
       ref.refId
-    }" to load this file`;
+    }" to load this file. For local shell tools, use file_path to access the file directly on disk.`;
   });
 
   return [
@@ -265,6 +267,7 @@ async function buildMessageWithAttachmentReferences(
           .createHash("sha256")
           .update(Buffer.from(file.contentBase64, "base64"))
           .digest("hex"),
+        originalContentBase64: file.contentBase64,
       }
     );
     stagedReferences.push(staged);
@@ -411,7 +414,9 @@ async function resolveSlashCommandContent(
   switch (parsed.name) {
     case "/skills": {
       const allTools = await SkillRegistry.getAllToolFunctions();
-      return formatSkillsAsChatMarkdown(allTools);
+      const listing = formatSkillsAsChatMarkdown(allTools);
+      const breakdown = formatToolCatalogBreakdown(allTools);
+      return `${listing}\n\n${breakdown}`;
     }
     case "/":
       return "Available commands:\n\n1. `/skills` - List available skills/tools.";
@@ -732,6 +737,15 @@ export function registerAiChatIpcHandlers(): void {
       }
 
       enhancedMessage = truncateForRemote(enhancedMessage);
+      // NOTE: this is the DEPRECATED legacy hosted path (`/api/ai/ask/stream`
+      // with `client_tools`). The active AI server path is the OpenAI-compatible
+      // `/v1/chat/completions`, driven by AIChatQueryEngine/AIChatQueryLoop (V2),
+      // where the full deferred tool catalog IS applied (per-round filtering,
+      // tool_catalog_search, persistence). This legacy path is retained only for
+      // backward compatibility and sends the full tool list; it still benefits
+      // from MCP description/schema caps (FR-7) via getAllToolFunctions. No
+      // deferred client_tools contract is needed here — when this path is
+      // retired, deferral already lives in V2.
       const availableTools = await SkillRegistry.getAllToolFunctions();
 
       const chatRequest: ChatRequest = {
@@ -1216,18 +1230,119 @@ export function registerAiChatIpcHandlers(): void {
     }
   );
 
-  // Open file in system default application.
-  // Uses spawn instead of shell.openPath because shell.openPath on Linux
+  // Open the OS-native "Open With…" chooser so the user can pick which
+  // installed application should handle the file. We avoid opening with the
+  // system default directly so the user stays in control of which program
+  // renders AI-generated content.
+  //
+  // Platform notes:
+  //  - Windows: `rundll32 shell32.dll,OpenAs_RunnableDLL <path>` shows the
+  //    standard "How do you want to open this file?" dialog.
+  //  - macOS: AppleScript `choose application` is the only programmatic way
+  //    to surface the native app picker; we then launch the file via
+  //    `open -a <chosenApp> <path>` so any .app bundle the user picks works.
+  //  - Linux: there is no portable "Open With" dialog callable from the
+  //    shell across desktop environments, so we fall back to `xdg-open`
+  //    (which still respects the user's default-mime associations).
+  //
+  // spawn is used instead of shell.openPath because shell.openPath on Linux
   // uses a blocking C++ call (system("xdg-open ...")) that freezes the main
-  // process event loop, making the UI unresponsive until xdg-open returns.
-  function openFileOnPlatform(filePath: string): void {
-    const [cmd, args] =
-      platform() === "darwin"
-        ? (["open", [filePath]] as const)
-        : platform() === "win32"
-          ? (["cmd.exe", ["/c", "start", "", filePath]] as const)
-          : (["xdg-open", [filePath]] as const);
-    const proc = spawn(cmd, args, { detached: true, stdio: "ignore" });
+  // process event loop while xdg-open runs.
+  // WSL detection is memoized — /proc/sys/kernel/osrelease only changes on
+  // kernel upgrade, so we read it once per process lifetime.
+  let _isWSLCached: boolean | undefined;
+  function isWSL(): boolean {
+    if (_isWSLCached !== undefined) return _isWSLCached;
+    if (platform() !== "linux") {
+      _isWSLCached = false;
+      return false;
+    }
+    try {
+      const release = readFileSync(
+        "/proc/sys/kernel/osrelease",
+        "utf8"
+      ).toLowerCase();
+      _isWSLCached = release.includes("microsoft") || release.includes("wsl");
+    } catch {
+      _isWSLCached = false;
+    }
+    return _isWSLCached;
+  }
+
+  // Translate a WSL/Linux absolute path to a Windows UNC path that rundll32
+  // can consume (e.g. \\wsl.localhost\<distro>\home\...). Returns null if
+  // the translation fails — callers fall back to xdg-open in that case.
+  function wslPathToWindows(linuxPath: string): string | null {
+    try {
+      const result = spawnSync("wslpath", ["-w", linuxPath], {
+        encoding: "utf8",
+      });
+      if (result.status === 0 && result.stdout) {
+        return result.stdout.trim();
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  function openFileWithChooser(filePath: string): void {
+    if (platform() === "win32") {
+      const proc = spawn(
+        "rundll32.exe",
+        ["shell32.dll,OpenAs_RunnableDLL", filePath],
+        { detached: true, stdio: "ignore" }
+      );
+      proc.unref();
+      return;
+    }
+
+    if (platform() === "darwin") {
+      // AppleScript picks the app, then `open -a` launches the file with it.
+      // The file path is passed as argv[1] (not interpolated) so quotes or
+      // backslashes in the path cannot break out of the AppleScript string.
+      // Error number -128 is the user-cancelled case; we silently return.
+      const script = [
+        "on run argv",
+        "  set thePath to item 1 of argv",
+        "  try",
+        '    set chosenApp to choose application with prompt "Choose application to open with"',
+        "  on error number -128",
+        "    return",
+        "  end try",
+        "  set appPath to POSIX path of (chosenApp as alias)",
+        '  do shell script "open -a " & quoted form of appPath & " " & quoted form of thePath',
+        "end run",
+      ].join("\n");
+      const proc = spawn("osascript", ["-e", script, filePath], {
+        detached: true,
+        stdio: "ignore",
+      });
+      proc.unref();
+      return;
+    }
+
+    // Linux fallback: no portable "Open With" dialog exists natively.
+    // On WSL, route through the Windows host's "Open With" dialog so the
+    // user gets the same chooser experience as a native Windows install.
+    // Falls through to xdg-open on plain Linux or if path translation fails.
+    if (isWSL()) {
+      const winPath = wslPathToWindows(filePath);
+      if (winPath) {
+        const proc = spawn(
+          "rundll32.exe",
+          ["shell32.dll,OpenAs_RunnableDLL", winPath],
+          { detached: true, stdio: "ignore" }
+        );
+        proc.unref();
+        return;
+      }
+    }
+
+    const proc = spawn("xdg-open", [filePath], {
+      detached: true,
+      stdio: "ignore",
+    });
     proc.unref();
   }
 
@@ -1245,7 +1360,7 @@ export function registerAiChatIpcHandlers(): void {
       if (input.filePath.includes("..")) {
         throw new Error("Path traversal not allowed");
       }
-      openFileOnPlatform(input.filePath);
+      openFileWithChooser(input.filePath);
       return null;
     }
   );

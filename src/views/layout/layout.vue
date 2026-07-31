@@ -18,7 +18,7 @@ class="my-4 layout_navigation" :rail="navState.rail" expand-on-hover rail-width=
             </v-list>
             <v-divider></v-divider>
 
-            <v-list nav class="mx-2">
+            <v-list nav class="mx-2 navigation_routes">
                 <v-list-subheader>{{ t('route.dashboard') }}</v-list-subheader>
                 <template v-for="(item, key) in navState.routes" :key="key">
                     <v-list-item
@@ -39,11 +39,40 @@ v-if="item.meta?.visible && (!item.children || visibleRouteChildren(item).length
                     </v-list-group>
                     <v-list-subheader v-if="item.name === 'Miscellaneous'">Other</v-list-subheader>
                 </template>
-                <v-list-item prepend-icon="mdi-text-box" class="mx-1">
+                    <v-list-item prepend-icon="mdi-text-box" class="mx-1">
                     <v-list-item-title><a
-target="_blank" href="https://vuetifyjs.com/"
+target="_blank" href="https://docs.aifetchly.com"
                             class="link">Document</a></v-list-item-title>
                 </v-list-item>
+            </v-list>
+            <v-list nav class="mx-2 navigation_account">
+                <v-menu :location="location">
+                    <template v-slot:activator="{ props }">
+                        <v-list-item
+                            v-bind="props"
+                            class="mx-1 account_item"
+                            :title="showAccountText ? accountEmail : undefined"
+                            :subtitle="showAccountText ? accountPlanLabel : undefined"
+                        >
+                            <template v-slot:prepend>
+                                <v-tooltip :text="accountPlanLabel" location="top">
+                                    <template v-slot:activator="{ props: tooltipProps }">
+                                        <v-avatar v-bind="tooltipProps" class="account_plan_icon" size="32">
+                                            <v-icon :icon="accountPlanIcon" size="20" />
+                                        </v-avatar>
+                                    </template>
+                                </v-tooltip>
+                            </template>
+                            <template v-if="showAccountText" v-slot:append>
+                                <v-icon icon="mdi-chevron-up" size="small" />
+                            </template>
+                        </v-list-item>
+                    </template>
+                    <v-list nav class="h_a_menu">
+                        <v-list-item :title="t('layout.system_setting')" prepend-icon="mdi-cog" @click="gotoSystemsetting" />
+                        <v-list-item :title="t('layout.login_out')" prepend-icon="mdi-login" @click="Usersignout" />
+                    </v-list>
+                </v-menu>
             </v-list>
         </v-navigation-drawer>
         <main class="app_main">
@@ -68,11 +97,6 @@ v-if="mainStore.isMobile" variant="text" icon="mdi-menu"
                     <v-btn
 @click="mainStore.onTheme" variant="text" :icon="mainStore.theme === 'light' ? 'mdi-weather-sunny' : 'mdi-weather-night'
         " />
-                    <v-btn variant="text" icon="mdi-bell-outline">
-                        <v-badge content="2" color="error">
-                            <v-icon size="small"></v-icon>
-                        </v-badge>
-                    </v-btn>
                     <v-menu :location="location">
                         <template v-slot:activator="{ props }">
                             <v-btn variant="text" icon="mdi-translate" v-bind="props">
@@ -88,17 +112,6 @@ v-if="mainStore.isMobile" variant="text" icon="mdi-menu"
                     <v-btn variant="text" icon="mdi-chat" @click="toggleChat">
                         <v-icon size="small"></v-icon>
                     </v-btn>
-                    <v-btn variant="text" append-icon="mdi-chevron-down" class="mr-2">
-                        <span v-if="!mainStore.isMobile">{{ userName }}</span>
-                        <v-icon v-if="!mainStore.isMobile && isPlusPlan" icon="mdi-plus-circle" size="small" class="ml-1" color="primary" />
-                        <v-chip v-if="!mainStore.isMobile && userPlan && !isPlusPlan" size="x-small" color="primary" variant="tonal" class="ml-1">{{ userPlan }}</v-chip>
-                        <v-menu activator="parent">
-                            <v-list nav class="h_a_menu">
-                                <v-list-item :title="t('layout.system_setting')" prepend-icon="mdi-cog" @click="gotoSystemsetting" />
-                                <v-list-item :title="t('layout.login_out')" prepend-icon="mdi-login" @click="Usersignout" />
-                            </v-list>
-                        </v-menu>
-                    </v-btn>
                 </div>
                 <div style="position: fixed; right: 20px; bottom: 100px; z-index: 99999">
                     <v-btn icon="mdi-cog" />
@@ -106,7 +119,15 @@ v-if="mainStore.isMobile" variant="text" icon="mdi-menu"
             </header>
             <div class="app_main__body">
                 <div class="router">
-                    <RouterView />
+                    <AiArtifactWorkspace
+                        v-if="activeArtifact"
+                        :artifact="activeArtifact"
+                        :loading="artifactLoading"
+                        :error="artifactError ?? undefined"
+                        @close="closeAiArtifact"
+                        @copy-html="copyActiveArtifactHtml"
+                    />
+                    <RouterView v-else />
                 </div>
                 <div
                     class="ai-chat-dock"
@@ -117,7 +138,12 @@ v-if="mainStore.isMobile" variant="text" icon="mdi-menu"
                         class="chat-resize-handle"
                         @mousedown="startResize"
                     ></div>
-                    <AiChatV2 v-show="v2ChatPanelOpen" />
+                    <AiChatV2
+                        v-show="v2ChatPanelOpen"
+                        :prompt-request="pendingAiPromptRequest"
+                        @open-artifact="openAiArtifact"
+                        @copy-artifact-html="copyArtifactHtml"
+                    />
                 </div>
             </div>
         </main>
@@ -193,10 +219,13 @@ import {CommonDialogMsg} from "@/entityTypes/commonType"
 import NoticeSnackbar from '@/views/components/widgets/noticeSnackbar.vue';
 import AiChatBox from '@/views/components/aiChat/AiChatBox.vue';
 import AiChatV2 from '@/views/components/aiChatV2/AiChatV2.vue';
+import AiArtifactWorkspace from '@/views/components/aiArtifacts/AiArtifactWorkspace.vue';
+import { getAIArtifact } from '@/views/api/aiArtifacts';
+import type { AIArtifactRecord } from '@/entityTypes/aiArtifactTypes';
 import {GetloginUserInfo} from '@/views/api/users'
 import { getAppName } from '@/views/api/app'
 import { packageAppName } from '@/config/appPackage'
-import { updateLanguagePreference, getLanguagePreference } from '@/views/api/language'
+import { getLanguagePreference } from '@/views/api/language'
 import { initializeLanguageDetection } from '@/views/utils/browserLanguageDetection'
 import { initializeLanguageMigration } from '@/views/utils/languageMigration'
 import { initializeLanguageSynchronization, syncLanguageChange } from '@/views/utils/languageSynchronization'
@@ -212,10 +241,20 @@ interface MessageItem {
   timestamp: number;
 }
 
+interface AiChatOpenEventDetail {
+  prompt?: string;
+}
+
+interface AiPromptRequest {
+  id: number;
+  text: string;
+}
+
 const dialogStatus=ref(false)
 const noticeMessage=ref('')
 const noticeType=ref<NoticeType>('info')
 const userName=ref('')
+const userEmail=ref('')
 const userPlan=ref('')
 const isPlusPlan=ref(false)
 const appName=ref(packageAppName)
@@ -223,11 +262,18 @@ const snaptimeout=ref<number>(10000)
 const messages = ref<MessageItem[]>([]);
 const chatPanelOpen = ref(false);
 const v2ChatPanelOpen = ref(false);
+// AI artifact workspace — layout-owned temporary preview state. When set,
+// it replaces the route view; closing restores the prior route.
+const activeArtifact = ref<AIArtifactRecord | null>(null);
+const artifactLoading = ref(false);
+const artifactError = ref<string | null>(null);
 const V2_FLAG_KEY = 'aifetchly:aiChatV2Enabled';
 const aiChatV2Enabled = ref(localStorage.getItem(V2_FLAG_KEY) !== 'false');
-const chatPanelWidth = ref(420);
-const CHAT_PANEL_MIN_WIDTH = 320;
-const CHAT_PANEL_MAX_WIDTH = 900;
+const chatPanelWidth = ref(600);
+const pendingAiPromptRequest = ref<AiPromptRequest | null>(null);
+let aiPromptRequestId = 0;
+const CHAT_PANEL_MIN_WIDTH = 400;
+const CHAT_PANEL_MAX_WIDTH = 1200;
 const mainStore = useMainStore();
 const router = useRouter();
 const navState = reactive({
@@ -245,6 +291,24 @@ const singleVisibleChild = (route: RouteRecordRaw): RouteRecordRaw | undefined =
 };
 const permanent = computed(() => {
     return !mainStore.isMobile;
+});
+const showAccountText = computed(() => {
+    return !navState.isMini || mainStore.isMobile;
+});
+const accountEmail = computed(() => {
+    return userEmail.value || userName.value;
+});
+const accountPlanLabel = computed(() => {
+    return userPlan.value;
+});
+const accountPlanIcon = computed(() => {
+    if (isPlusPlan.value) {
+        return 'mdi-plus-circle';
+    }
+    if (userPlan.value) {
+        return 'mdi-star-circle';
+    }
+    return 'mdi-account-circle';
 });
 const showNotice = ref(false);
 const {t,locale} = useI18n();
@@ -333,6 +397,25 @@ const toggleChat = () => {
     }
 };
 
+const openAiChatFromDashboard = (event: Event): void => {
+    const detail = (event as CustomEvent<AiChatOpenEventDetail>).detail;
+    const text = detail?.prompt?.trim();
+    if (!text) return;
+
+    if (aiChatV2Enabled.value) {
+        pendingAiPromptRequest.value = {
+            id: ++aiPromptRequestId,
+            text,
+        };
+        v2ChatPanelOpen.value = true;
+        chatPanelOpen.value = false;
+        return;
+    }
+
+    chatPanelOpen.value = true;
+    v2ChatPanelOpen.value = false;
+}
+
 const startResize = (e: MouseEvent) => {
     e.preventDefault();
     const startX = e.clientX;
@@ -400,6 +483,51 @@ const addMessage = (type: NoticeType, content: string) => {
 
 const showSuccessMessage = (content: string) => addMessage('success', content);
 const showErrorMessage = (content: string) => addMessage('error', content);
+
+// --- AI artifact workspace ----------------------------------------------
+const openAiArtifact = async (artifactId: string): Promise<void> => {
+  artifactLoading.value = true;
+  artifactError.value = null;
+  try {
+    const artifact = await getAIArtifact(artifactId);
+    if (!artifact) {
+      artifactError.value = t('aiArtifacts.not_found') || 'Artifact not found.';
+      showErrorMessage(artifactError.value);
+      return;
+    }
+    activeArtifact.value = artifact;
+  } catch (error: unknown) {
+    artifactError.value = error instanceof Error ? error.message : String(error);
+    showErrorMessage(artifactError.value);
+  } finally {
+    artifactLoading.value = false;
+  }
+};
+
+const closeAiArtifact = (): void => {
+  activeArtifact.value = null;
+  artifactError.value = null;
+};
+
+const copyArtifactHtml = async (artifactId: string): Promise<void> => {
+  try {
+    const artifact = await getAIArtifact(artifactId);
+    if (!artifact) {
+      showErrorMessage(t('aiArtifacts.not_found') || 'Artifact not found.');
+      return;
+    }
+    await navigator.clipboard.writeText(artifact.content);
+    showSuccessMessage(t('aiArtifacts.copy_success') || 'HTML copied.');
+  } catch {
+    showErrorMessage(t('aiArtifacts.copy_error') || 'Could not copy HTML.');
+  }
+};
+
+const copyActiveArtifactHtml = (): void => {
+  if (activeArtifact.value) {
+    void copyArtifactHtml(activeArtifact.value.id);
+  }
+};
 const showWarningMessage = (content: string) => addMessage('warning', content);
 const showInfoMessage = (content: string) => addMessage('info', content);
 
@@ -407,14 +535,18 @@ onMounted(async () => {
     await GetloginUserInfo().then(res=>{
         console.log(res)
         userName.value=res.name
+        userEmail.value=res.email
         if (res.plans && res.plans.length > 0) {
-            isPlusPlan.value = res.plans.some(
+            const plusPlan = res.plans.find(
                 plan => plan.planName && plan.planName.toLowerCase().includes('aifetch-plus')
             )
+            isPlusPlan.value = Boolean(plusPlan)
             const aifetchlyPlans = res.plans.filter(
                 plan => plan.planName && plan.planName.toLowerCase().includes('aifetchly')
             )
-            if (aifetchlyPlans.length > 0 && !isPlusPlan.value) {
+            if (plusPlan) {
+                userPlan.value = plusPlan.planName
+            } else if (aifetchlyPlans.length > 0) {
                 userPlan.value = aifetchlyPlans.map(plan => plan.planName).join(', ')
             }
         }
@@ -431,7 +563,7 @@ onMounted(async () => {
 
     try {
         const systemLanguage = await getLanguagePreference()
-        if (systemLanguage && systemLanguage !== locale.value) {
+        if (systemLanguage) {
             console.log('Loading language preference from system settings:', systemLanguage)
             locale.value = systemLanguage
             setLanguage(systemLanguage)
@@ -448,6 +580,7 @@ onMounted(async () => {
     await initializeLanguageSynchronization()
 
     window.addEventListener('keydown', handleKeyboardShortcut)
+    window.addEventListener('aifetchly:open-ai-chat', openAiChatFromDashboard)
 
     receiveSystemMessage((res:CommonDialogMsg)=>{
        console.log(res)
@@ -461,6 +594,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
     window.removeEventListener('keydown', handleKeyboardShortcut)
+    window.removeEventListener('aifetchly:open-ai-chat', openAiChatFromDashboard)
 })
 
 const showDialog=(status:boolean, content:string)=>{
@@ -619,18 +753,7 @@ const showDialog=(status:boolean, content:string)=>{
     }
 }
 
-:deep(.v-theme--dark) {
-    .ai-chat-panel {
-        background-color: #1e1e1e;
-        box-shadow: -2px 0 16px rgba(0, 0, 0, 0.5);
-    }
 
-    .ai-chat-dock {
-        background-color: #1e1e1e;
-        border-left-color: rgba(255, 255, 255, 0.12);
-        box-shadow: -2px 0 16px rgba(0, 0, 0, 0.5);
-    }
-}
 
 @media (max-width: 768px) {
     .ai-chat-panel {
@@ -676,5 +799,18 @@ const showDialog=(status:boolean, content:string)=>{
 
 .chat-resize-handle:hover {
     background-color: rgba(var(--v-theme-primary), 0.3);
+}
+</style>
+
+<style>
+:root[theme="dark"] .ai-chat-panel {
+    background-color: #1e1e1e;
+    box-shadow: -2px 0 16px rgba(0, 0, 0, 0.5);
+}
+
+:root[theme="dark"] .ai-chat-dock {
+    background-color: #1e1e1e;
+    border-left-color: rgba(255, 255, 255, 0.12);
+    box-shadow: -2px 0 16px rgba(0, 0, 0, 0.5);
 }
 </style>

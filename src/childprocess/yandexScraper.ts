@@ -155,9 +155,10 @@ export class YandexScraper extends SearchScrape {
 
         // Handle Yandex redirect links similar to Bing
         for (const seval of searchRes) {
+          const sevalHost = seval.link ? new URL(seval.link).hostname : '';
           if (
-            seval.link?.includes("yandex.com") ||
-            seval.link?.includes("yandex.ru")
+            sevalHost.endsWith("yandex.com") ||
+            sevalHost.endsWith("yandex.ru")
           ) {
             const browser = await this.page.browser();
             try {

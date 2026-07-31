@@ -1,17 +1,21 @@
 <template>
-    <v-data-table-server v-model:items-per-page="itemsPerPage" :headers="computedHeaders" :items-length="totalItems"
+    <v-data-table-server
+v-model:items-per-page="itemsPerPage" :headers="computedHeaders" :items-length="totalItems"
         :items="serverItems" :loading="loading" item-value="name" @update:options="loadItems"
         :show-select="isSelectedtable">
         <template v-slot:[`item.actions`]="{ item }">
-            <v-btn v-if="!item.installed" @click="openDialog(item, true)" :loading="item.loading"
+            <v-btn
+v-if="!item.installed" @click="openDialog(item, true)" :loading="item.loading"
                 loading-text="{{$t('common.installing')}}..." size="small">
                 {{ t('common.install') }}
             </v-btn>
-            <v-btn v-if="item.installed" @click="openDialog(item, false)" :loading="item.loading"
+            <v-btn
+v-if="item.installed" @click="openDialog(item, false)" :loading="item.loading"
                 loading-text="{{$t('common.uninstalling')}}..." color="primary" size="small" class="ml-2 mr-2 mb-2">
                 {{ t('common.uninstall') }}
             </v-btn>
-            <v-btn v-if="item.installed&&item.upgradeAvailable" @click="openUpgradeDialog(item)" :loading="item.upgradeLoading"
+            <v-btn
+v-if="item.installed&&item.upgradeAvailable" @click="openUpgradeDialog(item)" :loading="item.upgradeLoading"
                 loading-text="{{$t('common.upgrading')}}..." color="secondary" size="small" class="ml-2 mr-2 mb-2">
                 {{ t('common.upgrade') }}
             </v-btn>
@@ -37,14 +41,17 @@
             <v-card-text>{{ dialogtext }}</v-card-text>
             <v-card-actions>
                 <v-spacer></v-spacer>
-                <v-btn color="green darken-1"
+                <v-btn
+color="green darken-1"
                     @click="dialog = false">{{ CapitalizeFirstLetter(t('common.cancel')) }}</v-btn>
-                <v-btn color="green darken-1"
+                <v-btn
+color="green darken-1"
                     @click="confirmAction">{{ CapitalizeFirstLetter(t('common.confirm')) }}</v-btn>
             </v-card-actions>
         </v-card>
     </v-dialog>
-    <ErrorDialog :showDialog="showDialog" :alertext="alertext" :alertitle="alertitle"
+    <ErrorDialog
+:show-dialog="showDialog" :alertext="alertext" :alertitle="alertitle"
         @dialogclose="showDialog = false" />
 </template>
 
@@ -149,7 +156,7 @@ function loadItems({ page, itemsPerPage, sortBy }) {
                 const tranvardesc = "modules." + data[i].name + ".describe"
 
 
-                let item: ExtraModuleItem = {
+                const item: ExtraModuleItem = {
                     name: data[i].name,
                     packagename: data[i].packagename,
                     packagenameTr: t(tranvarname),

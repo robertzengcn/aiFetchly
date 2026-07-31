@@ -1,0 +1,12 @@
+{
+  "name": "claude-mcp-only-pack",
+  "version": "1.0.0",
+  "description": "Claude plugin with a single inline MCP server.",
+  "mcp": {
+    "demo-server": {
+      "transport": "stdio",
+      "command": "node",
+      "args": ["-e", "console.error('demo mcp server')"]
+    }
+  }
+}

@@ -79,3 +79,29 @@ export const pluginByServerIdInputSchema = lazySchema(() =>
     serverId: z.number().int().positive("serverId is required"),
   })
 );
+
+/** PLUGIN_GET_MCP_OPTIONS: read all options for a plugin */
+export const pluginGetMcpOptionsInputSchema = lazySchema(() =>
+  z.strictObject({
+    pluginName: z
+      .string()
+      .min(1)
+      .regex(/^[a-z0-9][a-z0-9_-]*$/, "Invalid plugin name"),
+  })
+);
+
+/** PLUGIN_SET_MCP_OPTION: set a single option value */
+export const pluginSetMcpOptionInputSchema = lazySchema(() =>
+  z.strictObject({
+    pluginName: z
+      .string()
+      .min(1)
+      .regex(/^[a-z0-9][a-z0-9_-]*$/, "Invalid plugin name"),
+    scopedServerName: z.string().min(1),
+    varName: z
+      .string()
+      .min(1)
+      .regex(/^[A-Z_][A-Z0-9_]*$/, "Var name must be UPPER_SNAKE_CASE"),
+    value: z.string(),
+  })
+);

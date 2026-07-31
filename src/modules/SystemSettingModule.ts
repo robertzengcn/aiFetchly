@@ -2,6 +2,10 @@ import { BaseModule } from "@/modules/baseModule";
 import { SystemSettingModel } from "@/model/SystemSetting.model";
 import { SystemSettingEntity } from "@/entity/SystemSetting.entity";
 import { SystemSettingGroupEntity } from "@/entity/SystemSettingGroup.entity";
+import {
+  normalizeEmbeddingModelId,
+  parseStoredEmbeddingModel,
+} from "@/service/embedding/EmbeddingModelId";
 
 export class SystemSettingModule extends BaseModule {
   private systemSettingModel: SystemSettingModel;
@@ -67,7 +71,7 @@ export class SystemSettingModule extends BaseModule {
     }
 
     // Combine modelName and dimension into the required format
-    const combinedModelName = `${modelName.trim()}:${dimension}`;
+    const combinedModelName = `${normalizeEmbeddingModelId(modelName)}:${dimension}`;
 
     return this.systemSettingModel.updateDefaultEmbeddingModel(
       combinedModelName,
@@ -89,26 +93,18 @@ export class SystemSettingModule extends BaseModule {
       return null;
     }
 
-    // Split the stored value (format: "modelName:dimension")
-    const parts = modelValue.split(":");
-    if (parts.length !== 2) {
+    // Stored format: "modelName:dimension". Local model IDs contain a colon
+    // (e.g. "local-xenova:Xenova/all-MiniLM-L6-v2:384"), so split on the LAST
+    // colon via the shared parser instead of String.split(":").
+    const parsed = parseStoredEmbeddingModel(modelValue);
+    if (!parsed) {
       console.warn(`Invalid default embedding model format: ${modelValue}`);
       return null;
     }
 
-    const [modelName, dimensionStr] = parts;
-    const dimension = parseInt(dimensionStr, 10);
-
-    if (isNaN(dimension) || dimension <= 0) {
-      console.warn(
-        `Invalid dimension value in default embedding model: ${dimensionStr}`
-      );
-      return null;
-    }
-
     return {
-      modelName: modelName.trim(),
-      dimension: dimension,
+      modelName: normalizeEmbeddingModelId(parsed.modelName),
+      dimension: parsed.dimension,
     };
   }
 }

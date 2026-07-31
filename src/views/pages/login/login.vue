@@ -56,9 +56,8 @@
 //import { UserModule } from '@/views/store/modules/user'
 import {openPage, getLoginUrl} from "@/views/api/users"
 import { onMounted, onUnmounted, ref } from "vue";
-import { receiveRedirectevent } from "@/views/api/users";
-//import { defineComponent } from "vue";
 import {NATIVATECOMMAND, LOGIN_STATUS} from "@/config/channellist"
+import { getIpcTransport } from "@/views/utils/ipcTransport"
 import { useI18n } from 'vue-i18n'
 import type { LoginStatusType, NativateDatatype } from "@/entityTypes/commonType"
 
@@ -67,7 +66,7 @@ const alertContent=ref('');
 const dialog=ref(false);    
 const isLoading = ref(false);
 const showLoginUrl = ref(false);
-const loginUrl = ref<any>('');
+const loginUrl = ref('');
 
 
 
@@ -90,15 +89,21 @@ const handleLoginStatus = (data: LoginStatusType): void => {
 };
 
 onMounted(() => {
-  receiveRedirectevent(NATIVATECOMMAND, handleNavigateCommand);
-  window.api.receive(LOGIN_STATUS, handleLoginStatus);
+  const transport = getIpcTransport();
+  transport.receive(NATIVATECOMMAND, handleNavigateCommand as (value: unknown) => void);
+  transport.receive(LOGIN_STATUS, handleLoginStatus as (value: unknown) => void);
 });
 
 onUnmounted(() => {
-  window.api.removeListener(NATIVATECOMMAND, handleNavigateCommand);
-  window.api.removeListener(LOGIN_STATUS, handleLoginStatus);
+  const transport = getIpcTransport();
+  transport.removeListener(NATIVATECOMMAND, handleNavigateCommand as (value: unknown) => void);
+  transport.removeListener(LOGIN_STATUS, handleLoginStatus as (value: unknown) => void);
 });
 const redirectToLogin = async () => {
+    const transport = getIpcTransport();
+    const popup = transport.source === "dev-browser-bridge"
+        ? window.open("", "_blank")
+        : null;
     try {
         isLoading.value = true;
         //showLoginUrl.value = false; // Reset URL display
@@ -108,6 +113,13 @@ const redirectToLogin = async () => {
         console.log("Login URL:", url);
         loginUrl.value = url;
         showLoginUrl.value = true; // Show URL if browser doesn't open
+        if (transport.source === "dev-browser-bridge") {
+            if (popup) {
+                popup.location.href = url;
+            } else {
+                window.open(url, "_blank");
+            }
+        }
         setTimeout(() => {
             if (isLoading.value) {
                 isLoading.value = false;
@@ -118,8 +130,13 @@ const redirectToLogin = async () => {
         }, 20000); 
         
         // Open the browser to the login page
-        await openPage();
+        if (transport.source !== "dev-browser-bridge") {
+            await openPage();
+        }
     } catch (error) {
+        if (popup) {
+            popup.close();
+        }
         console.error('Login failed:', error);
         alertContent.value = t('layout.login_failed');
         dialog.value = true;
@@ -130,13 +147,7 @@ const redirectToLogin = async () => {
 
 const copyToClipboard = async () => {
     try {
-        // Handle the case where loginUrl might be the full response object
-        let urlToCopy = loginUrl.value;
-        if (typeof loginUrl.value === 'object' && loginUrl.value.data) {
-            urlToCopy = loginUrl.value.data;
-        }
-        
-        await navigator.clipboard.writeText(urlToCopy);
+        await navigator.clipboard.writeText(loginUrl.value);
         alertContent.value = t('layout.url_copied');
         dialog.value = true;
     } catch (error) {

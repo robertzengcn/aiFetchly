@@ -6,11 +6,11 @@ export const sanitizeInput = {
   string: (input: string): string => {
     if (!input) return ''
     
-    // Remove HTML tags
-    let sanitized = input.replace(/<[^>]*>/g, '')
+    // Remove script tags and content first (handles nested/broken tags)
+    let sanitized = input.replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi, '')
     
-    // Remove script tags and content
-    sanitized = sanitized.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
+    // Remove remaining HTML tags
+    sanitized = sanitized.replace(/<[^>]*>/g, '')
     
     // Remove dangerous characters
     sanitized = sanitized.replace(/[<>]/g, '')
@@ -134,7 +134,7 @@ export class RateLimiter {
   private maxRequests: number
   private windowMs: number
 
-  constructor(maxRequests: number = 10, windowMs: number = 60000) {
+  constructor(maxRequests = 10, windowMs = 60000) {
     this.maxRequests = maxRequests
     this.windowMs = windowMs
   }
@@ -264,7 +264,7 @@ export const securityValidation = {
   // Check for XSS patterns
   checkXss: (input: string): boolean => {
     const xssPatterns = [
-      /<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi,
+      /<script\b[^>]*>[\s\S]*?<\/script\s*>/gi,
       /javascript:/i,
       /on\w+\s*=/i,
       /<iframe/i,

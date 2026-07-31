@@ -52,26 +52,43 @@ import { AgentTaskMessageEntity } from "@/entity/AgentTaskMessage.entity";
 import { AgentToolCallEntity } from "@/entity/AgentToolCall.entity";
 import { AIUserMemoryEntity } from "@/entity/AIUserMemory.entity";
 import { AIMemoryConsolidationRunEntity } from "@/entity/AIMemoryConsolidationRun.entity";
+import { AIWorkspaceMemoryEntity } from "@/entity/AIWorkspaceMemory.entity";
+import { AIWorkspaceMemoryConsolidationRunEntity } from "@/entity/AIWorkspaceMemoryConsolidationRun.entity";
 import { WorkspaceEntity } from "@/entity/Workspace.entity";
+import { AIFetchlyWorkspaceTrustEntity } from "@/entity/AIFetchlyWorkspaceTrust.entity";
+import { HookConfigEntity } from "@/entity/HookConfig.entity";
+import { HookAuditEntryEntity } from "@/entity/HookAuditEntry.entity";
 import { AIChatPlanEntity } from "@/entity/AIChatPlan.entity";
 import { AIChatPlanVersionEntity } from "@/entity/AIChatPlanVersion.entity";
 import { AIChatPlanQuestionEntity } from "@/entity/AIChatPlanQuestion.entity";
+import { AIChatGoalEntity } from "@/entity/AIChatGoal.entity";
+import { AIChatGoalRunEntity } from "@/entity/AIChatGoalRun.entity";
+import { AIChatGoalEvidenceEntity } from "@/entity/AIChatGoalEvidence.entity";
 import { AIChatPlanApprovalEntity } from "@/entity/AIChatPlanApproval.entity";
 import { AIChatSessionMemoryEntity } from "@/entity/AIChatSessionMemory.entity";
 import { AIChatCompactSummaryEntity } from "@/entity/AIChatCompactSummary.entity";
 import { AIChatAttachmentEntity } from "@/entity/AIChatAttachment.entity";
+import { AIArtifactEntity } from "@/entity/AIArtifact.entity";
 import { VectorEntity, VectorMetadataEntity } from "@/entity/Vector.entity";
 import { MCPToolEntity } from "@/entity/MCPTool.entity";
 import { TaskEntity } from "@/entity/Task.entity";
 import { ContactInfoEntity } from "@/entity/ContactInfo.entity";
 import { InstalledSkillEntity } from "@/entity/InstalledSkill.entity";
 import { InstalledPluginEntity } from "@/entity/InstalledPlugin.entity";
+import { PluginMarketplaceEntity } from "@/entity/PluginMarketplace.entity";
 import { DependencyInstallAuditEntity } from "@/entity/DependencyInstallAudit";
 import { ShellAuditEntity } from "@/entity/ShellAudit.entity";
 import { GoogleMapsSearchRecordEntity } from "@/entity/GoogleMapsSearchRecord.entity";
 import { YandexMapsSearchRecordEntity } from "@/entity/YandexMapsSearchRecord.entity";
 import { AiMessageTaskEntity } from "@/entity/AiMessageTask.entity";
 import { AiMessageTaskRunEntity } from "@/entity/AiMessageTaskRun.entity";
+import { ConversationToolStateEntity } from "@/entity/ConversationToolState.entity";
+import { EmailReceivedMessageEntity } from "@/entity/EmailReceivedMessage.entity";
+import { EmailReplyDraftEntity } from "@/entity/EmailReplyDraft.entity";
+import { EmailReplyIdentityProfileEntity } from "@/entity/EmailReplyIdentityProfile.entity";
+import { EmailAutoReplyRuleEntity } from "@/entity/EmailAutoReplyRule.entity";
+import { EmailReplyAuditLogEntity } from "@/entity/EmailReplyAuditLog.entity";
+import { EmailAutoReplyAuditLogEntity } from "@/entity/EmailAutoReplyAuditLog.entity";
 import Database from "better-sqlite3";
 import { app } from "electron";
 import * as fs from "fs";
@@ -469,6 +486,7 @@ export class SqliteDb {
           // RAGModelEntity,
           AIChatMessageEntity,
           AIChatAttachmentEntity,
+          AIArtifactEntity,
           VectorEntity,
           VectorMetadataEntity,
           MCPToolEntity,
@@ -476,16 +494,27 @@ export class SqliteDb {
           ContactInfoEntity,
           InstalledSkillEntity,
           InstalledPluginEntity,
+          PluginMarketplaceEntity,
           DependencyInstallAuditEntity,
           ShellAuditEntity,
           GoogleMapsSearchRecordEntity,
           YandexMapsSearchRecordEntity,
           AiMessageTaskEntity,
           AiMessageTaskRunEntity,
+          ConversationToolStateEntity,
+          EmailReceivedMessageEntity,
+          EmailReplyDraftEntity,
+          EmailReplyIdentityProfileEntity,
+          EmailAutoReplyRuleEntity,
+          EmailReplyAuditLogEntity,
+          EmailAutoReplyAuditLogEntity,
           AIChatPlanEntity,
           AIChatPlanVersionEntity,
           AIChatPlanQuestionEntity,
           AIChatPlanApprovalEntity,
+          AIChatGoalEntity,
+          AIChatGoalRunEntity,
+          AIChatGoalEvidenceEntity,
           AIChatSessionMemoryEntity,
           AIChatCompactSummaryEntity,
           AgentDefinitionEntity,
@@ -494,7 +523,12 @@ export class SqliteDb {
           AgentToolCallEntity,
           AIUserMemoryEntity,
           AIMemoryConsolidationRunEntity,
+          AIWorkspaceMemoryEntity,
+          AIWorkspaceMemoryConsolidationRunEntity,
           WorkspaceEntity,
+          AIFetchlyWorkspaceTrustEntity,
+          HookConfigEntity,
+          HookAuditEntryEntity,
         ],
         synchronize: true,
         migrations: [],
@@ -502,6 +536,11 @@ export class SqliteDb {
         //logging:  process.env.NODE_ENV !== 'production', /// use this for debugging
         logging: false,
         prepareDatabase: (db: Database.Database) => {
+          db.pragma("journal_mode = WAL");
+          db.pragma("synchronous = NORMAL");
+          db.pragma("busy_timeout = 10000");
+          db.pragma("foreign_keys = ON");
+
           // Load the sqlite-vec extension into the connection
           // Manually resolve path for Electron bundled apps
           // Do NOT use sqliteVec.load() as it internally calls getLoadablePath() which fails in bundled apps
@@ -584,10 +623,6 @@ export class SqliteDb {
   public static getInstance(filepath: string): SqliteDb {
     // Validate filepath - don't create/reset with invalid paths
     if (!filepath || filepath.length === 0) {
-      // If we have a valid instance, return it instead of creating invalid one
-      if (SqliteDb.instance && SqliteDb.instance.connection) {
-        return SqliteDb.instance;
-      }
       throw new Error("Cannot create SqliteDb instance with empty filepath");
     }
 
@@ -618,6 +653,29 @@ export class SqliteDb {
     }
 
     return SqliteDb.instance;
+  }
+
+  /**
+   * Destroy and clear the process-wide database singleton.
+   *
+   * Use this when the active user context is removed (logout/session expiry)
+   * so an empty or missing USERSDBPATH can never fall back to the previous
+   * user's open database connection.
+   */
+  public static async destroyInstance(): Promise<void> {
+    const instance = SqliteDb.instance;
+    SqliteDb.initPromise = null;
+
+    if (instance?.connection?.isInitialized) {
+      try {
+        await instance.connection.destroy();
+      } catch (error) {
+        console.error("Failed to destroy existing SqliteDb connection:", error);
+      }
+    }
+
+    SqliteDb.instance = null;
+    SqliteDb.currentDbPath = null;
   }
 
   /**

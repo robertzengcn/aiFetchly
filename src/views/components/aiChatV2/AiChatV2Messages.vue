@@ -22,6 +22,8 @@
       @approve-plan="emit('approve-plan')"
       @reject-plan="(fb) => emit('reject-plan', fb)"
       @request-plan-changes="(fb) => emit('request-plan-changes', fb)"
+      @open-artifact="(id: string) => emit('open-artifact', id)"
+      @copy-artifact-html="(id: string) => emit('copy-artifact-html', id)"
     />
     <div
       v-if="showTypingIndicator"
@@ -53,6 +55,7 @@
         </span>
       </span>
     </div>
+    <AiChatV2RecoveryStatus v-if="recoveryInfo" :info="recoveryInfo" />
   </div>
 </template>
 
@@ -61,6 +64,7 @@ import { ref, watch, nextTick, onMounted } from "vue";
 import { useI18n } from "vue-i18n";
 import type { ChatV2MessageView } from "@/entityTypes/aiChatV2Types";
 import AiChatV2Message from "./AiChatV2Message.vue";
+import AiChatV2RecoveryStatus from "./AiChatV2RecoveryStatus.vue";
 
 type Status = "idle" | "streaming" | "cancelled" | "error";
 
@@ -72,6 +76,19 @@ const props = defineProps<{
   showTypingIndicator?: boolean;
   isStreaming?: boolean;
   retryInfo?: { attempt: number; maxAttempts: number; delayMs: number } | null;
+  /** Active seven-layer recovery status. Null when no recovery is running. */
+  recoveryInfo?: {
+    layer: import("@/service/AIChatRecoveryTypes").AIChatRecoveryLayer;
+    reason: import("@/service/AIChatRecoveryTypes").AIChatRecoveryReason;
+    attempt?: number;
+    maxAttempts?: number;
+    delayMs?: number;
+    elapsedMs?: number;
+    originalModel?: string;
+    currentModel?: string;
+    fallbackModel?: string;
+    message?: string;
+  } | null;
   workspaceRoot?: string;
 }>();
 const emit = defineEmits<{
@@ -80,6 +97,8 @@ const emit = defineEmits<{
   (e: "approve-plan"): void;
   (e: "reject-plan", feedback: string): void;
   (e: "request-plan-changes", feedback: string): void;
+  (e: "open-artifact", artifactId: string): void;
+  (e: "copy-artifact-html", artifactId: string): void;
 }>();
 const { t } = useI18n();
 

@@ -4,6 +4,7 @@
  */
 
 export const app = {
+  isReady: () => false,
   getName: () => "aiFetchly",
   getPath: (name: string) => {
     const paths: Record<string, string> = {
@@ -13,6 +14,36 @@ export const app = {
       temp: "/tmp/test/temp",
     };
     return paths[name] || "/tmp/test";
+  },
+};
+
+export interface ProtocolPrivilege {
+  standard?: boolean;
+  secure?: boolean;
+  supportFetchAPI?: boolean;
+  corsEnabled?: boolean;
+}
+
+export interface ProtocolScheme {
+  scheme: string;
+  privileges?: ProtocolPrivilege;
+}
+
+export const protocol = {
+  registerSchemesAsPrivileged(_schemes: ProtocolScheme[]): void {
+    // Mock implementation
+  },
+  handle(
+    _scheme: string,
+    _handler: (request: Request) => Response | Promise<Response>
+  ): void {
+    // Mock implementation
+  },
+};
+
+export const net = {
+  async fetch(input: string): Promise<Response> {
+    return fetch(input);
   },
 };
 
@@ -56,6 +87,11 @@ export class BrowserWindow {
 
   static getAllWindows(): unknown[] {
     return [];
+  }
+
+  /** Mirrors Electron's static lookup; returns null in tests. */
+  static fromWebContents(_contents: unknown): BrowserWindow | null {
+    return null;
   }
 }
 
@@ -122,5 +158,7 @@ export default {
   BrowserWindow,
   ipcMain,
   ipcRenderer,
+  protocol,
+  net,
   webUtils,
 };
