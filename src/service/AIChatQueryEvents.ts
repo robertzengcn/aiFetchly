@@ -32,6 +32,14 @@ export interface AIChatQueryTokenEvent {
   model?: string;
 }
 
+export interface AIChatQueryReasoningDeltaEvent {
+  type: "reasoning_delta";
+  conversationId: string;
+  messageId: string;
+  reasoningDelta: string;
+  model?: string;
+}
+
 export interface AIChatQueryRetryEvent {
   type: "retry_connect";
   conversationId: string;
@@ -167,6 +175,7 @@ export interface AIChatQueryUsageUpdateEvent {
 export type AIChatQueryEvent =
   | AIChatQueryStartEvent
   | AIChatQueryTokenEvent
+  | AIChatQueryReasoningDeltaEvent
   | AIChatQueryRetryEvent
   | AIChatQueryToolCallEvent
   | AIChatQueryToolProgressEvent
@@ -200,6 +209,8 @@ export type AIChatQueryLoopResult =
       totalTokens?: number;
       promptTokens?: number;
       completionTokens?: number;
+      /** Final safe-to-show reasoning text accumulated across rounds, if any. */
+      reasoningContent?: string;
     }
   | {
       type: "cancelled";
@@ -211,6 +222,8 @@ export type AIChatQueryLoopResult =
       totalTokens?: number;
       promptTokens?: number;
       completionTokens?: number;
+      /** Partial reasoning captured before the cancel, if any. */
+      reasoningContent?: string;
     }
   | {
       type: "paused_for_permission";
@@ -228,6 +241,8 @@ export type AIChatQueryLoopResult =
       partialContent: string;
       model?: string;
       responseId?: string;
+      /** Partial reasoning captured before the failure, if any. */
+      reasoningContent?: string;
     };
 
 /** State stored when a tool needs user permission. */
