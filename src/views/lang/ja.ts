@@ -658,6 +658,8 @@ export default {
     url_copied: "ログインURLがクリップボードにコピーされました！",
     copy_failed: "URLをコピーできませんでした。手動でコピーしてください。",
     language_updated_successfully: "言語の更新に成功しました",
+    upgrade_plan: "アップグレード",
+    pricing_url_missing: "料金ページのURLが設定されていません",
   },
   extramodule: {
     extramoduleName: "追加モジュール名",

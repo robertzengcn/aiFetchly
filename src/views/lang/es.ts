@@ -673,6 +673,8 @@ export default {
     copy_failed:
       "Error al copiar URL al portapapeles. Por favor, copie manualmente.",
     language_updated_successfully: "Idioma actualizado correctamente",
+    upgrade_plan: "Actualizar",
+    pricing_url_missing: "La URL de la página de precios no está configurada",
   },
   extramodule: {
     extramoduleName: "Nombre del módulo extra",

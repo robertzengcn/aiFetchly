@@ -666,6 +666,8 @@ export default {
     url_copied: "Login URL copied to clipboard!",
     copy_failed: "Failed to copy URL to clipboard. Please copy manually.",
     language_updated_successfully: "Language updated successfully",
+    upgrade_plan: "Upgrade",
+    pricing_url_missing: "Pricing page URL is not configured",
   },
   extramodule: {
     extramoduleName: "Extra Module Name",

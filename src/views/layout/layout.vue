@@ -70,6 +70,13 @@ target="_blank" href="https://docs.aifetchly.com"
                             :prepend-icon="accountPlanIcon"
                             class="plan_menu_item"
                         />
+                        <v-list-item
+                            v-if="showUpgradePlan"
+                            :title="t('layout.upgrade_plan') || 'Upgrade'"
+                            prepend-icon="mdi-rocket-launch"
+                            class="upgrade_menu_item"
+                            @click="openPricingPlan"
+                        />
                         <v-list-item :title="t('layout.system_setting')" prepend-icon="mdi-cog" @click="gotoSystemsetting" />
                         <v-list-item :title="t('layout.login_out')" prepend-icon="mdi-login" @click="Usersignout" />
                     </v-list>
@@ -258,6 +265,7 @@ const noticeType=ref<NoticeType>('info')
 const userName=ref('')
 const userEmail=ref('')
 const userPlan=ref('')
+const currentPlans=ref<Array<UserPlanType>>([])
 const isPlusPlan=ref(false)
 const appName=ref(packageAppName)
 const snaptimeout=ref<number>(10000)
@@ -312,8 +320,19 @@ const accountPlanIcon = computed(() => {
     }
     return 'mdi-account-circle';
 });
+const showUpgradePlan = computed(() => {
+    return currentPlans.value.length > 0 && currentPlans.value.every(isFreeSubscriptionPlan);
+});
+const pricingPlanUrl = computed(() => {
+    const baseUrl = normalizeLoginBaseUrl(import.meta.env.VITE_LOGIN_URL);
+    return baseUrl ? `${baseUrl}/pricing-plan` : '';
+});
 const normalizePlanName = (planName: string): string => {
     return planName.toLowerCase().replace(/[^a-z0-9]/g, '');
+};
+const normalizeLoginBaseUrl = (raw: unknown): string => {
+    if (typeof raw !== 'string') return '';
+    return raw.trim().replace(/^["']|["']$/g, '').replace(/\/+$/g, '');
 };
 const getDisplayPlans = (plans: Array<UserPlanType>): Array<UserPlanType> => {
     const namedPlans = plans.filter(plan => Boolean(plan.planName?.trim()));
@@ -324,6 +343,11 @@ const isPlusSubscriptionPlan = (plan: UserPlanType): boolean => {
     const planName = normalizePlanName(plan.planName || '');
     const planId = (plan.planId || '').toUpperCase();
     return planName.includes('aifetchplus') || planId === 'PLUS';
+};
+const isFreeSubscriptionPlan = (plan: UserPlanType): boolean => {
+    const planName = normalizePlanName(plan.planName || '');
+    const planId = (plan.planId || '').toUpperCase();
+    return planName.includes('community') || planName.includes('free') || planId === 'FREE';
 };
 const showNotice = ref(false);
 const {t,locale} = useI18n();
@@ -360,6 +384,13 @@ const gotoSystemsetting=()=>{
 }
 const gotodashborad=()=>{
     router.push('/dashboard/home')
+}
+const openPricingPlan = (): void => {
+    if (!pricingPlanUrl.value) {
+        showErrorMessage(t('layout.pricing_url_missing') || 'Pricing page URL is not configured')
+        return
+    }
+    window.open(pricingPlanUrl.value, '_blank')
 }
 
 watch(permanent, () => {
@@ -553,6 +584,7 @@ onMounted(async () => {
         userEmail.value=res.email
         if (res.plans && res.plans.length > 0) {
             const displayPlans = getDisplayPlans(res.plans)
+            currentPlans.value = displayPlans
             isPlusPlan.value = displayPlans.some(isPlusSubscriptionPlan)
             userPlan.value = displayPlans.map(plan => plan.planName).join(', ')
         }
