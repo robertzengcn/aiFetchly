@@ -73,7 +73,7 @@
                 min-height: 52px;
                 border-radius: 8px;
             }
-            .account_plan_icon {
+            .account_icon {
                 background-color: rgba(var(--v-theme-primary), 0.12);
                 color: rgb(var(--v-theme-primary));
             }
@@ -206,5 +206,9 @@
     }
     .v-list-item__prepend > .v-icon {
         margin-inline-end: 16px;
+    }
+    .plan_menu_item {
+        color: rgb(var(--v-theme-primary));
+        cursor: default;
     }
 }

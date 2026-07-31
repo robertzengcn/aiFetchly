@@ -52,16 +52,11 @@ target="_blank" href="https://docs.aifetchly.com"
                             v-bind="props"
                             class="mx-1 account_item"
                             :title="showAccountText ? accountEmail : undefined"
-                            :subtitle="showAccountText ? accountPlanLabel : undefined"
                         >
                             <template v-slot:prepend>
-                                <v-tooltip :text="accountPlanLabel" location="top">
-                                    <template v-slot:activator="{ props: tooltipProps }">
-                                        <v-avatar v-bind="tooltipProps" class="account_plan_icon" size="32">
-                                            <v-icon :icon="accountPlanIcon" size="20" />
-                                        </v-avatar>
-                                    </template>
-                                </v-tooltip>
+                                <v-avatar class="account_icon" size="32">
+                                    <v-icon icon="mdi-account-circle" size="20" />
+                                </v-avatar>
                             </template>
                             <template v-if="showAccountText" v-slot:append>
                                 <v-icon icon="mdi-chevron-up" size="small" />
@@ -69,6 +64,12 @@ target="_blank" href="https://docs.aifetchly.com"
                         </v-list-item>
                     </template>
                     <v-list nav class="h_a_menu">
+                        <v-list-item
+                            v-if="accountPlanLabel"
+                            :title="accountPlanLabel"
+                            :prepend-icon="accountPlanIcon"
+                            class="plan_menu_item"
+                        />
                         <v-list-item :title="t('layout.system_setting')" prepend-icon="mdi-cog" @click="gotoSystemsetting" />
                         <v-list-item :title="t('layout.login_out')" prepend-icon="mdi-login" @click="Usersignout" />
                     </v-list>
