@@ -131,7 +131,7 @@ describe("isTransientBackendError", () => {
     ).toBe(true);
   });
 
-  test("RefreshTokenInvalidError is NOT transient", () => {
+  test("RefreshTokenInvalidError is auth-shaped, not transient", () => {
     expect(
       isTransientBackendError(new RefreshTokenInvalidError("expired"))
     ).toBe(false);
@@ -276,7 +276,7 @@ describe("refreshOnce — process-wide serialization", () => {
 
 describe("case-insensitive refresh-token-invalid handling", () => {
   // The background refresh path stops the auto-refresh timer when the refresh
-  // token is invalid. With the merged typed-error design, a body-level code 401
+  // endpoint rejects the token. With the merged typed-error design, a body-level code 401
   // throws RefreshTokenInvalidError regardless of message casing, so the
   // lowercase backend message that previously slipped past a capital-I match
   // is now handled. This test guards that behavior end-to-end.
@@ -308,7 +308,7 @@ describe("case-insensitive refresh-token-invalid handling", () => {
     vi.unstubAllGlobals();
   });
 
-  test("stops auto-refresh on lowercase 'invalid or expired refresh token'", async () => {
+  test("stops auto-refresh without signout on lowercase 'invalid or expired refresh token'", async () => {
     mockFetch.mockResolvedValue(
       fakeResponse({
         status: false,
@@ -329,6 +329,8 @@ describe("case-insensitive refresh-token-invalid handling", () => {
     await vi.waitFor(() => {
       expect(stopSpy).toHaveBeenCalled();
     });
+    expect(mockSignout).not.toHaveBeenCalled();
+    expect(mockRemoveToken).not.toHaveBeenCalled();
 
     stopSpy.mockRestore();
     TokenRefreshService.stopAutoRefresh();
@@ -433,7 +435,7 @@ describe("TokenRefreshService.performAutoRefreshCheck", () => {
     expect(TokenRefreshService.isAutoRefreshRunning()).toBe(false);
   });
 
-  test("refresh token genuinely invalid (API code 401) DOES sign out and stops auto-refresh", async () => {
+  test("refresh endpoint auth failure stops auto-refresh but does NOT sign out", async () => {
     mockFetch.mockResolvedValue(
       fakeResponse(
         {
@@ -449,7 +451,8 @@ describe("TokenRefreshService.performAutoRefreshCheck", () => {
     TokenRefreshService.startAutoRefresh();
     await TokenRefreshService.performAutoRefreshCheck();
 
-    expect(mockSignout).toHaveBeenCalled();
+    expect(mockSignout).not.toHaveBeenCalled();
+    expect(mockRemoveToken).not.toHaveBeenCalled();
     expect(TokenRefreshService.isAutoRefreshRunning()).toBe(false);
   });
 
@@ -495,10 +498,9 @@ describe("TokenRefreshService.performAutoRefreshCheck", () => {
 });
 
 describe("TokenRefreshService.refreshAccessToken throw-type contract", () => {
-  // The linchpin of the transient-vs-auth design: every genuine auth failure
-  // MUST throw RefreshTokenInvalidError so performAutoRefreshCheck signs the
-  // user out (and HttpClient callers handle it). A regression to a plain Error
-  // would silently keep rejected sessions alive.
+  // The linchpin of the transient-vs-auth design: every auth-shaped refresh
+  // failure MUST throw RefreshTokenInvalidError so performAutoRefreshCheck can
+  // stop background refresh without clearing the local session.
 
   beforeEach(() => {
     vi.stubGlobal("fetch", mockFetch);

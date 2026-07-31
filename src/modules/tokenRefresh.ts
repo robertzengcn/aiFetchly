@@ -25,13 +25,12 @@ export interface TokenRefreshData {
 
 /**
  * Thrown by {@link TokenRefreshService._performRefreshNetwork} when the refresh
- * token is genuinely missing, rejected (HTTP 401/403), or expired — the ONLY
- * situation in which signing the user out is the correct response.
+ * token is genuinely missing, rejected (HTTP 401/403), or expired.
  *
  * Network errors and HTTP 5xx (backend unreachable / erroring) are thrown as
- * plain `Error` instead, because the user must STAY logged in and retry. This
- * distinction is what prevents a temporary backend outage from forcing a
- * re-login.
+ * plain `Error` instead. Callers must not clear local auth state for refresh
+ * failures, because backend/proxy/network instability can look like auth
+ * failure and the user can still use local app functionality.
  */
 export class RefreshTokenInvalidError extends Error {
   constructor(message: string) {
@@ -164,8 +163,9 @@ export class TokenRefreshService {
    * Start the background auto-refresh timer.
    *
    * Periodically checks if the access token is about to expire and
-   * refreshes it proactively. If the refresh token itself is invalid
-   * or expired the timer is stopped and the user is signed out.
+   * refreshes it proactively. If the refresh endpoint rejects the token, the
+   * timer is stopped but local auth state is kept so local app functions remain
+   * available.
    *
    * Safe to call multiple times – subsequent calls are no-ops if the
    * timer is already running.
@@ -226,8 +226,8 @@ export class TokenRefreshService {
    *    If yes → call refreshOnce().
    * 3. Handle the refresh result:
    *    - Success → reset the failure counter.
-   *    - Refresh token genuinely invalid/expired ({@link RefreshTokenInvalidError})
-   *      → stop auto-refresh and sign out.
+   *    - Refresh endpoint rejects the token ({@link RefreshTokenInvalidError})
+   *      → stop auto-refresh, but keep local auth state.
    *    - Backend unreachable / HTTP 5xx (transient, {@link isTransientBackendError})
    *      → KEEP the user logged in and keep the timer running so it retries on
    *      the next cycle. A temporary backend outage must NOT force a re-login.
@@ -316,22 +316,14 @@ export class TokenRefreshService {
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
 
-      // Case A: the refresh token is genuinely invalid/expired/missing. This is
-      // the ONLY situation where signing the user out is correct.
+      // Case A: the refresh endpoint rejected the token. Do NOT sign out here:
+      // staging/proxy/backend issues can return auth-shaped failures, and the
+      // user can still use local app functionality while remote calls retry later.
       if (error instanceof RefreshTokenInvalidError) {
         log.warn(
-          `[TokenRefresh] Refresh token is invalid/expired (${errorMsg}), stopping auto-refresh and signing out`
+          `[TokenRefresh] Refresh token refresh failed (${errorMsg}); stopping auto-refresh and keeping local session`
         );
         TokenRefreshService.stopAutoRefresh();
-        try {
-          const userService = new User();
-          await userService.Signout();
-        } catch (signoutError) {
-          log.error(
-            "[TokenRefresh] Error during signout after invalid refresh token:",
-            signoutError
-          );
-        }
         return;
       }
 
@@ -388,7 +380,8 @@ export class TokenRefreshService {
    *
    * @returns Promise resolving to token refresh response with new tokens
    * @throws {RefreshTokenInvalidError} When the refresh token is missing,
-   *   rejected (HTTP 401/403), or expired — callers should sign the user out.
+   *   rejected (HTTP 401/403), or expired. Callers should keep local auth state
+   *   and fail only the current remote request.
    * @throws {Error} For transient failures (network unreachable, HTTP 5xx) —
    *   callers should keep the user logged in and retry.
    */
@@ -429,7 +422,8 @@ export class TokenRefreshService {
    *
    * @returns Promise resolving to token refresh response with new tokens
    * @throws {RefreshTokenInvalidError} When the refresh token is missing,
-   *   rejected (HTTP 401/403), or expired — callers should sign the user out.
+   *   rejected (HTTP 401/403), or expired. Callers should keep local auth state
+   *   and fail only the current remote request.
    * @throws {Error} For transient failures (network unreachable, HTTP 5xx) —
    *   callers should keep the user logged in and retry.
    *
@@ -448,10 +442,10 @@ export class TokenRefreshService {
    *
    * Uses raw fetch() to avoid circular dependency with HttpClient.
    *
-   * Throws {@link RefreshTokenInvalidError} for genuine auth failures (missing /
-   * expired / rejected refresh token) so the caller can decide whether to sign
-   * the user out. Network and HTTP 5xx failures throw a plain `Error` so callers
-   * can treat them as transient and keep the user logged in.
+   * Throws {@link RefreshTokenInvalidError} for auth-shaped refresh failures
+   * (missing / expired / rejected refresh token). Network and HTTP 5xx failures
+   * throw a plain `Error`. Both paths preserve local auth state; callers only
+   * fail the current remote request.
    */
   private async _performRefreshNetwork(): Promise<
     CommonApiresp<TokenRefreshData>
@@ -468,7 +462,7 @@ export class TokenRefreshService {
     if (refreshExpiryStr) {
       const refreshExpiry = parseInt(refreshExpiryStr, 10);
       if (!isNaN(refreshExpiry) && Date.now() >= refreshExpiry) {
-        // Genuine auth failure — the caller decides whether to sign out.
+        // Local expiry is definitive; callers decide the user-facing behavior.
         throw new RefreshTokenInvalidError("Refresh token has expired");
       }
     }
@@ -505,7 +499,8 @@ export class TokenRefreshService {
     if (!response.status) {
       // Check for specific error codes
       if (response.code === 401) {
-        // Genuine auth failure — the caller decides whether to sign out.
+        // Auth-shaped refresh failure. Callers keep local auth state and fail
+        // only the current remote request.
         throw new RefreshTokenInvalidError(
           response.msg || "Invalid or expired refresh token"
         );
