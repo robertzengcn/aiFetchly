@@ -241,6 +241,11 @@ export class AIChatQueryEngine {
           sizeBytes: file.sizeBytes,
           kind: "image",
           processingMode: "image_url",
+          // Persist the inline preview so the user's own message bubble can
+          // re-render the attached image after a history reload, not just
+          // during the live turn. Reuses the downscaled bytes sent to the
+          // model — no extra storage cost beyond the existing request body.
+          previewDataUrl: dataUrl,
         });
       } else if (stagedFileNames.has(file.fileName)) {
         // Only include documents that were successfully staged

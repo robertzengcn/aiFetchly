@@ -75,11 +75,22 @@ export const deleteKnowledgeDocumentInputSchema = z.object({
 });
 
 /**
+ * Shared website-import limits. Single source of truth so the zod schema
+ * (server-side validation) and the Knowledge Library UI (sliders/caps) cannot
+ * drift. Add new fields here and reference them from both places.
+ */
+export const WEBSITE_IMPORT_LIMITS = {
+  maxPages: { min: 1, max: 100, default: 20 },
+  maxDepth: { min: 0, max: 4, default: 2 },
+  maxUrls: 50,
+} as const;
+
+/**
  * Input schema for `knowledge_library_import_website`.
  *
  * Three import modes share one schema:
  *   - `single_page` requires `url`
- *   - `url_list`    requires `urls` (1..50)
+ *   - `url_list`    requires `urls` (1..WEBSITE_IMPORT_LIMITS.maxUrls)
  *   - `site_crawl`  requires `url` and honors `maxPages`/`maxDepth`
  *
  * `url`/`urls` are constrained to absolute URLs and a 2048-char max. Final
@@ -93,9 +104,23 @@ export const importKnowledgeWebsiteInputSchema = z
       .enum(["single_page", "url_list", "site_crawl"])
       .default("single_page"),
     url: z.string().trim().url().max(2048).optional(),
-    urls: z.array(z.string().trim().url().max(2048)).min(1).max(50).optional(),
-    maxPages: z.number().int().min(1).max(100).default(20),
-    maxDepth: z.number().int().min(0).max(4).default(2),
+    urls: z
+      .array(z.string().trim().url().max(2048))
+      .min(1)
+      .max(WEBSITE_IMPORT_LIMITS.maxUrls)
+      .optional(),
+    maxPages: z
+      .number()
+      .int()
+      .min(WEBSITE_IMPORT_LIMITS.maxPages.min)
+      .max(WEBSITE_IMPORT_LIMITS.maxPages.max)
+      .default(WEBSITE_IMPORT_LIMITS.maxPages.default),
+    maxDepth: z
+      .number()
+      .int()
+      .min(WEBSITE_IMPORT_LIMITS.maxDepth.min)
+      .max(WEBSITE_IMPORT_LIMITS.maxDepth.max)
+      .default(WEBSITE_IMPORT_LIMITS.maxDepth.default),
     title: z.string().trim().min(1).max(300).optional(),
     description: z.string().trim().max(2000).optional(),
     tags: z.array(tagSchema).max(20).optional(),
@@ -349,3 +374,31 @@ export interface ImportKnowledgeWebsiteResult {
 export type KnowledgeLibraryWebsiteImportOutcome =
   | ImportKnowledgeWebsiteResult
   | KnowledgeLibraryToolError;
+
+export type KnowledgeLibraryWebsiteImportProgressPhase =
+  | "starting"
+  | "scraping"
+  | "importing"
+  | "imported"
+  | "skipped"
+  | "completed";
+
+/**
+ * Main-process progress event for the manual Knowledge Library website import
+ * UI. It deliberately excludes local file paths and page content.
+ */
+export interface KnowledgeLibraryWebsiteImportProgressEvent {
+  readonly phase: KnowledgeLibraryWebsiteImportProgressPhase;
+  readonly mode: KnowledgeWebsiteImportMode;
+  readonly url?: string;
+  readonly title?: string;
+  readonly importedCount: number;
+  readonly skippedCount: number;
+  readonly processedPages?: number;
+  readonly requestedCount?: number;
+  readonly discoveredCount?: number;
+  readonly maxPages?: number;
+  readonly code?: SkippedWebsiteImportCode;
+  readonly reason?: string;
+  readonly summary?: string;
+}

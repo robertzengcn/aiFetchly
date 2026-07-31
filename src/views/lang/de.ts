@@ -198,7 +198,7 @@ export default {
       "Das Remote-Einbettungskontingent Ihres Kontos scheint erschöpft zu sein. Bitte laden Sie Ihr Kontingent serverseitig auf oder wenden Sie sich an einen Administrator und versuchen Sie den Upload erneut.",
     error: "Fehler",
     document_management: "Dokumentenverwaltung",
-    search_by_name: "Nach Name suchen",
+    search_by_name: "Nach Name oder Titel suchen",
     status: "Status",
     file_type: "Dateityp",
     name: "Name",
@@ -316,6 +316,59 @@ export default {
       "Es befinden sich Nachrichten in der Warteschlange. Diese löschen?",
     queue_confirm_switch:
       "Es befinden sich Nachrichten in der Warteschlange. Verwerfen und Konversation wechseln?",
+    import_website: "Website importieren",
+    website_import_title: "Website in die Wissensbibliothek importieren",
+    website_import_subtitle:
+      "Wandeln Sie öffentliche Webseiten in Markdown um und fügen Sie sie als durchsuchbare Dokumente hinzu.",
+    website_import_mode: "Importmodus",
+    website_import_mode_single: "Einzelne Seite",
+    website_import_mode_list: "URL-Liste",
+    website_import_mode_crawl: "Website-Crawl",
+    website_import_url: "URL",
+    website_import_url_hint:
+      "Öffentliche http(s)-URL, z. B. https://example.com/pricing",
+    website_import_seed_url: "Start-URL",
+    website_import_urls: "URLs",
+    website_import_urls_hint: "Eine URL pro Zeile (max. {max}).",
+    website_import_too_many_urls: "Zu viele URLs: das Maximum ist {max}.",
+    website_import_title_field: "Titel (optional)",
+    website_import_title_hint: "Gilt nur für den Einzelseitenmodus.",
+    website_import_max_pages: "Max. Seiten",
+    website_import_max_depth: "Max. Tiefe",
+    website_import_tags: "Tags",
+    website_import_tags_hint: "Durch Kommas getrennt.",
+    website_import_author: "Autor",
+    website_import_description: "Beschreibung (optional)",
+    website_import_duplicate_policy: "Dublettenrichtlinie",
+    website_import_policy_fail: "Dubletten überspringen",
+    website_import_policy_allow: "Dubletten zulassen",
+    website_import_hint:
+      "Es werden nur öffentliche http(s)-Seiten unterstützt. Jede Seite wird zu einem durchsuchbaren Dokument. Authentifizierte, Localhost- und interne Netzwerkseiten werden abgelehnt.",
+    website_import_url_required: "URL ist erforderlich.",
+    website_import_urls_required: "Mindestens eine URL ist erforderlich.",
+    website_import_import: "Importieren",
+    website_import_importing: "Importiere...",
+    website_import_close: "Schließen",
+    website_import_another: "Weitere importieren",
+    website_import_failed: "Import fehlgeschlagen",
+    website_import_result_imported: "Importiert",
+    website_import_result_skipped: "Übersprungen",
+    website_import_result_discovered:
+      "{count} gleich-ursprüngliche(r) Link(s) gefunden.",
+    website_import_chunks: "{count} Chunks",
+    website_import_status_done:
+      "{imported} Seite(n) importiert; {skipped} übersprungen.",
+    website_import_progress_starting: "Website-Import wird gestartet...",
+    website_import_progress_scraping: "Seite wird gecrawlt...",
+    website_import_progress_importing:
+      "Seite wird in die Wissensbibliothek importiert...",
+    website_import_progress_imported: "Seite importiert.",
+    website_import_progress_skipped: "Seite übersprungen.",
+    website_import_progress_completed: "Website-Import abgeschlossen.",
+    website_import_current_page: "Aktuelle Seite",
+    website_import_progress_counts:
+      "{imported} importiert, {skipped} übersprungen",
+    website_import_progress_discovered: "{count} Link(s) gefunden.",
   },
   notifications: {
     cloudflare_protection_detected: "Cloudflare-Schutz erkannt",
@@ -2109,7 +2162,7 @@ export default {
     contact_profile: "Kontaktprofil",
     statistics_description:
       "Verfolge Aktivitäten, Trends und Kampagnenleistung.",
-    market_description: "Analysiere Märkte und Chancen in Suchergebnissen.",
+    market_description: "Analysiere Märkte und finde Chancen.",
     contact_description:
       "Extrahiere und erweitere Kontaktprofile für Interessenten.",
     directory_description:
@@ -2118,6 +2171,8 @@ export default {
     outreach_description:
       "Verwalte Outreach-Aufgaben, Vorlagen, Filter und Antworten.",
     proxy_description: "Verwalte und validiere deine Proxy-Server.",
+    tool_account_description:
+      "Füge Werkzeugkonten hinzu, verwalte und verbinde sie für die Automatisierung.",
   },
   outreach: {
     subtitle:
@@ -2294,6 +2349,7 @@ export default {
       document_indexing: "Dokument wird indiziert…",
       document_ready: "Dokument bereit",
       document_failed: "Dokumentverarbeitung fehlgeschlagen",
+      image_alt: "Angehängtes Bild: {name}",
     },
   },
   aifetchlyConfig: {

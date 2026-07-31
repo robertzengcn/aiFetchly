@@ -65,28 +65,12 @@ const insightItems = computed<InsightItem[]>(() => [
     path: "/statistic",
   },
   {
-    title: t("route.search") || "Market Insight",
-    description:
-      t("insights.market_description") ||
-      "Research markets and search result opportunities.",
-    icon: "mdi-magnify",
-    path: "/search/tasklist",
-  },
-  {
     title: t("insights.contact_profile") || "Contact Profile",
     description:
       t("insights.contact_description") ||
       "Extract and enrich contact profiles for prospects.",
     icon: "mdi-email-search",
     path: "/emailextraction/tasklist",
-  },
-  {
-    title: t("route.yellow_pages") || "Directory Assistant",
-    description:
-      t("insights.directory_description") ||
-      "Browse directory tasks and collected business records.",
-    icon: "mdi-database-search",
-    path: "/yellowpages/list",
   },
   {
     title: t("route.map_scraper") || "Local Business Finder",
@@ -97,20 +81,20 @@ const insightItems = computed<InsightItem[]>(() => [
     path: "/map-scraper",
   },
   {
-    title: t("route.email_marketing") || "Outreach Campaign",
-    description:
-      t("insights.outreach_description") ||
-      "Manage outreach tasks, templates, filters, and replies.",
-    icon: "mdi-email-multiple",
-    path: "/emailmarketing",
-  },
-  {
     title: t("route.proxy") || "Proxy",
     description:
       t("insights.proxy_description") ||
       "Manage and validate your proxy servers.",
     icon: "mdi-shield-outline",
     path: "/proxy/list",
+  },
+  {
+    title: t("route.tool_account_list") || "Tool Account List",
+    description:
+      t("insights.tool_account_description") ||
+      "Add, manage, and connect tool accounts for automation.",
+    icon: "mdi-account-multiple",
+    path: "/socialaccount/list",
   },
 ]);
 

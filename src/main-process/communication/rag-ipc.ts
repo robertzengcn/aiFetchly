@@ -46,12 +46,15 @@ import {
   SAVE_TEMP_FILE_COMPLETE,
   RAG_GET_DOCUMENT_ERROR_LOG,
   RAG_CHECK_DOCUMENT_DUPLICATE,
+  RAG_IMPORT_WEBSITE,
+  RAG_IMPORT_WEBSITE_PROGRESS,
 } from "@/config/channellist";
 import {
   registerValidatedHandler,
   registerAiValidatedHandler,
 } from "@/main-process/communication/_shared/registerValidatedHandler";
 import { isAiEnabled } from "@/service/AiFeatureGate";
+import { handleRagImportWebsite } from "@/main-process/communication/handleRagImportWebsite";
 import {
   ragShowOpenDialogInputSchema,
   ragFileStatsInputSchema,
@@ -69,6 +72,7 @@ import {
   ragDownloadDocumentInputSchema,
   ragDocumentErrorLogInputSchema,
   ragCheckDuplicateInputSchema,
+  ragImportWebsiteInputSchema,
 } from "@/schemas/ipc/rag";
 
 /**
@@ -737,4 +741,17 @@ export function registerRagIpcHandlers(): void {
     // Cleanup is automatic (controllers are request-scoped); kept for compat.
     return null;
   });
+
+  // Website/URL import for the Knowledge Library UI. Delegates to the AI tool
+  // layer (handleRagImportWebsite) so the manual UI and the AI assistant share
+  // one import implementation. Boundary validation reuses the tool's schema;
+  // the AI gate + replace-policy + per-page result mapping live in the tool.
+  registerValidatedHandler(
+    RAG_IMPORT_WEBSITE,
+    ragImportWebsiteInputSchema,
+    async (input, event) =>
+      handleRagImportWebsite(input, (progress) => {
+        event.sender.send(RAG_IMPORT_WEBSITE_PROGRESS, progress);
+      })
+  );
 }

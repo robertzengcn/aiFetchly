@@ -513,6 +513,20 @@ function validateStreamRequest(
 }
 const MAX_UPLOAD_FILE_BYTES = 5 * 1024 * 1024;
 const MAX_TOTAL_IMAGE_BASE64_BYTES = 10 * 1024 * 1024;
+/**
+ * MIME types accepted for `kind === "image"` attachments. The persisted
+ * `previewDataUrl` is a `data:${mimeType};base64,...` URL rendered in the
+ * renderer DOM, so the MIME must be a real image type — a crafted payload
+ * (filename `.png` + `mimeType:"text/html"`) could otherwise persist a
+ * non-image `data:` URL that a future viewer might execute. Aligns with the
+ * image extensions the composer accepts (png/jpg/jpeg/webp/gif).
+ */
+const ALLOWED_IMAGE_MIME_TYPES = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/webp",
+  "image/gif",
+]);
 
 function classifyAttachment(
   fileName: string,
@@ -595,6 +609,16 @@ function normalizeChatV2UploadedFiles(
 
     // Validate total image payload size
     if (kind === "image") {
+      // Reject non-image MIME types (and any CR/LF/whitespace that could
+      // break the `data:` URL format) so only real image previews reach the
+      // persisted metadata the renderer trusts.
+      const normalizedMime = mimeType.toLowerCase();
+      if (
+        !ALLOWED_IMAGE_MIME_TYPES.has(normalizedMime) ||
+        /[\s\r\n]/.test(mimeType)
+      ) {
+        continue;
+      }
       totalImageBase64Bytes += contentBase64.length;
       if (totalImageBase64Bytes > MAX_TOTAL_IMAGE_BASE64_BYTES) continue;
     }
