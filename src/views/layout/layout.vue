@@ -224,6 +224,7 @@ import AiArtifactWorkspace from '@/views/components/aiArtifacts/AiArtifactWorksp
 import { getAIArtifact } from '@/views/api/aiArtifacts';
 import type { AIArtifactRecord } from '@/entityTypes/aiArtifactTypes';
 import {GetloginUserInfo} from '@/views/api/users'
+import type { UserPlanType } from '@/entityTypes/userType'
 import { getAppName } from '@/views/api/app'
 import { packageAppName } from '@/config/appPackage'
 import { getLanguagePreference } from '@/views/api/language'
@@ -311,6 +312,19 @@ const accountPlanIcon = computed(() => {
     }
     return 'mdi-account-circle';
 });
+const normalizePlanName = (planName: string): string => {
+    return planName.toLowerCase().replace(/[^a-z0-9]/g, '');
+};
+const getDisplayPlans = (plans: Array<UserPlanType>): Array<UserPlanType> => {
+    const namedPlans = plans.filter(plan => Boolean(plan.planName?.trim()));
+    const activePlans = namedPlans.filter(plan => plan.status?.toLowerCase() === 'active');
+    return activePlans.length > 0 ? activePlans : namedPlans;
+};
+const isPlusSubscriptionPlan = (plan: UserPlanType): boolean => {
+    const planName = normalizePlanName(plan.planName || '');
+    const planId = (plan.planId || '').toUpperCase();
+    return planName.includes('aifetchplus') || planId === 'PLUS';
+};
 const showNotice = ref(false);
 const {t,locale} = useI18n();
 const location="end"
@@ -538,18 +552,9 @@ onMounted(async () => {
         userName.value=res.name
         userEmail.value=res.email
         if (res.plans && res.plans.length > 0) {
-            const plusPlan = res.plans.find(
-                plan => plan.planName && plan.planName.toLowerCase().includes('aifetch-plus')
-            )
-            isPlusPlan.value = Boolean(plusPlan)
-            const aifetchlyPlans = res.plans.filter(
-                plan => plan.planName && plan.planName.toLowerCase().includes('aifetchly')
-            )
-            if (plusPlan) {
-                userPlan.value = plusPlan.planName
-            } else if (aifetchlyPlans.length > 0) {
-                userPlan.value = aifetchlyPlans.map(plan => plan.planName).join(', ')
-            }
+            const displayPlans = getDisplayPlans(res.plans)
+            isPlusPlan.value = displayPlans.some(isPlusSubscriptionPlan)
+            userPlan.value = displayPlans.map(plan => plan.planName).join(', ')
         }
     })
 
