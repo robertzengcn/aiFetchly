@@ -7,6 +7,7 @@
 - **Created**: 2026-07-31
 - **Owner**: Engineering Team
 - **Related Systems**: AI Chat V2, OpenAI-compatible Chat Completions API, local AI provider support, Electron IPC, Vue 3 renderer, TypeORM chat persistence
+- **Related Technical Design**: [AI Chat Reasoning Visibility Technical Design](./ai-chat-reasoning-visibility-technical-design.md)
 - **Server companion PRD**: `/home/robertzeng/project/aifetchserver/doc/chat-reasoning-streaming-prd.md`
 
 ## Executive Summary
