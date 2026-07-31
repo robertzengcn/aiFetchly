@@ -301,7 +301,7 @@
         :conversation-id="activeConversationId"
         @send="onSend"
         @stop="onStop"
-        @request-workspace="showWorkspaceRequired = true"
+        @request-workspace="handleWorkspaceSetupRequest"
         @install-voice-model="handleInstallVoiceModel"
         @voice-recording-start="onVoiceRecordingStart"
         @stop-speaking="onStopSpeaking"
@@ -1057,11 +1057,10 @@ async function refreshWorkspace(conversationId: string | null): Promise<void> {
           approvalState: ws.approvalState,
         }
       : null;
-    showWorkspaceRequired.value = false;
+    showWorkspaceRequired.value = ws ? false : showWorkspaceRequired.value;
   } catch {
     // non-fatal; treat as no workspace
     activeWorkspace.value = null;
-    showWorkspaceRequired.value = false;
   }
   void refreshWorkspaceMemoryCount();
 }
