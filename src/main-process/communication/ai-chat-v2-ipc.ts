@@ -207,6 +207,19 @@ function createEventSink(event: IpcEventLike): AIChatQueryEventSink {
             model: e.model,
           });
           break;
+        case "reasoning_delta":
+          // Log length only — never the reasoning text itself (SSR-3 / §14).
+          console.debug(
+            `[ai-chat-v2] reasoning_delta conv=${e.conversationId} message=${e.messageId} deltaLen=${e.reasoningDelta.length}`
+          );
+          sendChunk(event, {
+            eventType: "reasoning_delta",
+            conversationId: e.conversationId,
+            messageId: e.messageId,
+            reasoningDelta: e.reasoningDelta,
+            model: e.model,
+          });
+          break;
         case "retry_connect":
           sendChunk(event, {
             eventType: "retry_connect",
@@ -378,6 +391,22 @@ function validateStreamRequest(
   }
   if (req.mode !== undefined && req.mode !== "chat" && req.mode !== "plan") {
     return "mode must be 'chat' or 'plan'";
+  }
+  if (
+    req.showReasoning !== undefined &&
+    typeof req.showReasoning !== "boolean"
+  ) {
+    return "showReasoning must be a boolean";
+  }
+  if (req.reasoning !== undefined) {
+    const reasoning = req.reasoning as { enabled?: unknown };
+    if (
+      !reasoning ||
+      typeof reasoning !== "object" ||
+      typeof reasoning.enabled !== "boolean"
+    ) {
+      return "reasoning must be an object with a boolean 'enabled' field";
+    }
   }
   return null;
 }
