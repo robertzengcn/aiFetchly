@@ -33,7 +33,10 @@ import type {
   ResumeToolAfterPermissionRequest,
   ResumeTurnResult,
 } from "@/service/AIChatQueryEvents";
-import type { ChatV2StreamRequest } from "@/entityTypes/aiChatV2Types";
+import type {
+  ChatV2ReasoningMetadata,
+  ChatV2StreamRequest,
+} from "@/entityTypes/aiChatV2Types";
 import type { AIChatPlanStateView } from "@/entityTypes/aiChatPlanTypes";
 
 function isActivePlanState(plan?: AIChatPlanStateView | null): boolean {
@@ -43,6 +46,36 @@ function isActivePlanState(plan?: AIChatPlanStateView | null): boolean {
     plan.status !== "cancelled" &&
     plan.status !== "rejected"
   );
+}
+
+/** Maximum persisted reasoning characters per assistant message (32 KB). */
+const CHAT_V2_REASONING_MAX_CHARS = 32 * 1024;
+
+/**
+ * Build persisted reasoning metadata from the loop's final reasoning string.
+ * Returns undefined when there is nothing to persist. Truncates above the cap
+ * and flags truncated=true so history stays bounded while live streaming stays
+ * unbounded.
+ */
+function buildReasoningMetadata(
+  reasoningContent: string | undefined,
+  model: string | undefined
+): { reasoning: ChatV2ReasoningMetadata } | undefined {
+  if (!reasoningContent || reasoningContent.length === 0) {
+    return undefined;
+  }
+  const over = reasoningContent.length > CHAT_V2_REASONING_MAX_CHARS;
+  return {
+    reasoning: {
+      content: over
+        ? reasoningContent.slice(0, CHAT_V2_REASONING_MAX_CHARS)
+        : reasoningContent,
+      format: "plain_text",
+      source: "server",
+      model,
+      truncated: over ? true : false,
+    },
+  };
 }
 
 function isTypedPlanApproval(message: string): boolean {
@@ -72,11 +105,7 @@ function isTypedPlanApproval(message: string): boolean {
     return true;
   }
 
-  const looksGoodSignals = [
-    "looks good",
-    "looks fine",
-    "looks correct",
-  ];
+  const looksGoodSignals = ["looks good", "looks fine", "looks correct"];
   const executionSignals = [
     "begin executing",
     "start executing",
@@ -665,6 +694,7 @@ export class AIChatQueryEngine {
               source: "chat-v2",
               openaiResponseId: result.responseId,
               finishReason: result.finishReason,
+              ...buildReasoningMetadata(result.reasoningContent, result.model),
             },
           });
         }
@@ -720,6 +750,7 @@ export class AIChatQueryEngine {
               openaiResponseId: result.responseId,
               finishReason: "cancelled",
               cancelled: true,
+              ...buildReasoningMetadata(result.reasoningContent, result.model),
             },
           });
         }
@@ -746,6 +777,7 @@ export class AIChatQueryEngine {
               openaiResponseId: result.responseId,
               finishReason: "error",
               error: userSafeError(result.error),
+              ...buildReasoningMetadata(result.reasoningContent, result.model),
             },
           });
         }

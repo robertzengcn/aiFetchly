@@ -342,6 +342,11 @@ export class AIChatQueryLoop {
               round,
               startRound: input.startRound,
             }),
+            reasoning: input.request.reasoning
+              ? input.request.reasoning
+              : input.request.showReasoning
+              ? { enabled: true, summary: "auto" }
+              : undefined,
           },
           (rawChunk) => {
             if (input.abortController.signal.aborted) return;

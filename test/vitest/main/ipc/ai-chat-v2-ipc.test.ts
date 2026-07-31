@@ -684,3 +684,109 @@ describe("AI Chat V2 — conversationId type validation", () => {
     expect((result as { msg: string }).msg).toContain("string");
   });
 });
+
+describe("AI Chat V2 — reasoning streaming + persistence", () => {
+  beforeEach(() => {
+    setupElectronMocks();
+    vi.clearAllMocks();
+    mockOpenAIChatCompletionStream.mockResolvedValue(undefined);
+    registerAiChatV2IpcHandlers();
+  });
+  afterEach(() => {
+    resetElectronMocks();
+  });
+
+  it("emits a reasoning_delta chunk separate from token and persists metadata.reasoning", async () => {
+    mockOpenAIChatCompletionStream.mockImplementation(
+      async (_req, onChunk: (c: unknown) => void) => {
+        // Reasoning arrives before the answer.
+        onChunk({ choices: [{ delta: { reasoning_content: "Thinking..." } }] });
+        onChunk({ choices: [{ delta: { content: "Answer" } }] });
+        onChunk({
+          choices: [{ delta: { content: "" }, finish_reason: "stop" }],
+        });
+      }
+    );
+
+    const senderSend = vi.fn();
+    await mockIpcMain.callHandler(
+      AI_CHAT_V2_STREAM,
+      { sender: { send: senderSend } },
+      JSON.stringify({ message: "hi", showReasoning: true })
+    );
+
+    // 1. A reasoning_delta chunk was sent on the chunk channel.
+    const reasoningChunk = senderSend.mock.calls
+      .filter(([ch]) => ch === AI_CHAT_V2_STREAM_CHUNK)
+      .map(([, p]) => JSON.parse(p as string))
+      .find((c) => c.eventType === "reasoning_delta");
+    expect(reasoningChunk).toMatchObject({
+      reasoningDelta: "Thinking...",
+    });
+
+    // 2. The answer token chunk was sent too, and stays separate.
+    const tokenChunks = senderSend.mock.calls
+      .filter(([ch]) => ch === AI_CHAT_V2_STREAM_CHUNK)
+      .map(([, p]) => JSON.parse(p as string))
+      .filter((c) => c.eventType === "token");
+    expect(tokenChunks).toHaveLength(1);
+    expect(tokenChunks[0].contentDelta).toBe("Answer");
+
+    // 3. Reasoning was persisted on the assistant message, separate from content.
+    expect(mockSaveAssistantMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: "Answer",
+        metadata: expect.objectContaining({
+          reasoning: expect.objectContaining({
+            content: "Thinking...",
+            format: "plain_text",
+            source: "server",
+            truncated: false,
+          }),
+        }),
+      })
+    );
+  });
+
+  it("does not persist reasoning when the model emits none", async () => {
+    mockOpenAIChatCompletionStream.mockImplementation(
+      async (_req, onChunk: (c: unknown) => void) => {
+        onChunk({ choices: [{ delta: { content: "No reasoning here" } }] });
+        onChunk({
+          choices: [{ delta: { content: "" }, finish_reason: "stop" }],
+        });
+      }
+    );
+
+    const senderSend = vi.fn();
+    await mockIpcMain.callHandler(
+      AI_CHAT_V2_STREAM,
+      { sender: { send: senderSend } },
+      JSON.stringify({ message: "hi", showReasoning: true })
+    );
+
+    const reasoningChunk = senderSend.mock.calls
+      .filter(([ch]) => ch === AI_CHAT_V2_STREAM_CHUNK)
+      .map(([, p]) => JSON.parse(p as string))
+      .find((c) => c.eventType === "reasoning_delta");
+    expect(reasoningChunk).toBeUndefined();
+
+    const saved = mockSaveAssistantMessage.mock.calls[0]?.[0] as
+      | { metadata?: { reasoning?: unknown } }
+      | undefined;
+    expect(saved?.metadata?.reasoning).toBeUndefined();
+  });
+
+  it("rejects malformed reasoning option before streaming", async () => {
+    const senderSend = vi.fn();
+    await mockIpcMain.callHandler(
+      AI_CHAT_V2_STREAM,
+      { sender: { send: senderSend } },
+      JSON.stringify({ message: "hi", reasoning: { enabled: "yes" } })
+    );
+    const payload = findCompletePayload(senderSend);
+    expect(payload?.eventType).toBe("error");
+    expect(payload?.errorMessage).toContain("reasoning");
+    expect(mockOpenAIChatCompletionStream).not.toHaveBeenCalled();
+  });
+});
