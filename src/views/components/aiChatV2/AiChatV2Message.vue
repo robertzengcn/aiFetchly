@@ -91,6 +91,13 @@
         </template>
       </template>
       <div v-else class="v2-message__content">{{ message.content }}</div>
+      <details v-if="hasReasoning" class="v2-message__reasoning" open>
+        <summary>
+          <v-icon size="x-small">mdi-brain</v-icon>
+          {{ t("aiChatV2.reasoning_title") || "Reasoning" }}
+        </summary>
+        <div class="v2-message__reasoning-content">{{ reasoningText }}</div>
+      </details>
       <AiChatV2StreamStatus
         v-if="message.role === 'assistant' && status !== 'idle'"
         :status="status"
@@ -176,6 +183,13 @@ const needsPermissionPrompt = computed(
   () => toolResult.value.needsPermissionPrompt === true
 );
 
+const reasoningText = computed(
+  () => props.message.metadata?.reasoning?.content?.trim() ?? ""
+);
+const hasReasoning = computed(
+  () => props.message.role === "assistant" && reasoningText.value.length > 0
+);
+
 const shellPreview = computed<ShellPreview | undefined>(() => {
   const preview = toolResult.value.shellPreview;
   if (!preview || typeof preview !== "object") {
@@ -231,6 +245,29 @@ const shellPreview = computed<ShellPreview | undefined>(() => {
 }
 .v2-message__content {
   white-space: pre-wrap;
+  line-height: 1.45;
+}
+.v2-message__reasoning {
+  margin-top: 8px;
+  padding: 8px;
+  border-left: 3px solid rgba(var(--v-theme-primary), 0.45);
+  background: rgba(var(--v-theme-primary), 0.06);
+  border-radius: 6px;
+}
+.v2-message__reasoning summary {
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.v2-message__reasoning-content {
+  margin-top: 6px;
+  white-space: pre-wrap;
+  max-height: 220px;
+  overflow: auto;
+  font-size: 13px;
   line-height: 1.45;
 }
 .v2-message__tool-header {
