@@ -49,7 +49,10 @@ const ACTIVE: LocalAiRuntimeActiveState = {
   packageSha256: "a".repeat(64),
 };
 
-function setupRuntime(): { paths: LocalAiRuntimePathService; store: LocalAiRuntimeStateStore } {
+function setupRuntime(): {
+  paths: LocalAiRuntimePathService;
+  store: LocalAiRuntimeStateStore;
+} {
   const paths = new LocalAiRuntimePathService(tmpRoot);
   const store = new LocalAiRuntimeStateStore(paths);
   return { paths, store };
@@ -58,16 +61,23 @@ function setupRuntime(): { paths: LocalAiRuntimePathService; store: LocalAiRunti
 async function materialize(
   paths: LocalAiRuntimePathService,
   store: LocalAiRuntimeStateStore,
-  manifest: LocalAiRuntimePackageManifest,
+  manifest: LocalAiRuntimePackageManifest
 ): Promise<void> {
-  const { versionRoot } = paths.getRuntimePaths(manifest.runtimeId, manifest.runtimeVersion);
+  const { versionRoot } = paths.getRuntimePaths(
+    manifest.runtimeId,
+    manifest.runtimeVersion
+  );
   await fs.promises.mkdir(versionRoot, { recursive: true });
   for (const f of manifest.requiredFiles) {
     const fp = path.join(versionRoot, f);
     await fs.promises.mkdir(path.dirname(fp), { recursive: true });
     await fs.promises.writeFile(fp, "{}");
   }
-  await store.writePackageManifest(manifest.runtimeId, manifest.runtimeVersion, manifest);
+  await store.writePackageManifest(
+    manifest.runtimeId,
+    manifest.runtimeVersion,
+    manifest
+  );
   await store.writeActive(ACTIVE);
 }
 
@@ -80,7 +90,10 @@ describe("LocalAiRuntimeResolver", () => {
     expect(resolved?.runtimeVersion).toBe("1.0.0");
     expect(resolved?.manifest).toEqual(MANIFEST);
     expect(resolved?.moduleRequirePath).toBe(
-      path.join(paths.getRuntimePaths("voice-sherpa", "1.0.0").versionRoot, "package.json"),
+      path.join(
+        paths.getRuntimePaths("voice-sherpa", "1.0.0").versionRoot,
+        "package.json"
+      )
     );
   });
 
@@ -92,7 +105,11 @@ describe("LocalAiRuntimeResolver", () => {
 
   test("returns null when platform does not match target", async () => {
     const { paths, store } = setupRuntime();
-    await materialize(paths, store, { ...MANIFEST, platform: "win32", arch: "x64" });
+    await materialize(paths, store, {
+      ...MANIFEST,
+      platform: "win32",
+      arch: "x64",
+    });
     const resolver = new LocalAiRuntimeResolver(paths, store, TARGET);
     expect(await resolver.resolve("voice-sherpa")).toBeNull();
   });
@@ -112,8 +129,8 @@ describe("LocalAiRuntimeResolver", () => {
         paths.getRuntimePaths("voice-sherpa", "1.0.0").versionRoot,
         "node_modules",
         "sherpa-onnx-node",
-        "package.json",
-      ),
+        "package.json"
+      )
     );
     const resolver = new LocalAiRuntimeResolver(paths, store, TARGET);
     expect(await resolver.resolve("voice-sherpa")).toBeNull();
@@ -121,21 +138,37 @@ describe("LocalAiRuntimeResolver", () => {
 
   test("resolves embedding entry point beneath version root", async () => {
     const { paths, store } = setupRuntime();
-    const embeddingManifest: LocalAiRuntimePackageManifest = {
-      ...MANIFEST,
-      runtimeId: "embedding-xenova",
+    const embeddingManifest = {
+      schemaVersion: 1 as const,
+      runtimeId: "embedding-xenova" as const,
+      runtimeVersion: "1.0.0",
+      platform: "darwin" as const,
+      arch: "arm64" as const,
+      electronVersion: "35.7.5",
+      nodeModuleAbi: "135",
       entryPoint: "worker.js",
-      entryModule: undefined,
       requiredFiles: ["worker.js", "package.json"],
+      dependencies: { "@xenova/transformers": "2.17.2" },
+      build: {
+        commit: "abc",
+        workflowRunId: "1",
+        builtAt: "2026-07-30T00:00:00Z",
+      },
     };
-    delete (embeddingManifest as Record<string, unknown>).entryModule;
-    const activeEmbedding: LocalAiRuntimeActiveState = { ...ACTIVE, runtimeId: "embedding-xenova" };
+    const activeEmbedding: LocalAiRuntimeActiveState = {
+      ...ACTIVE,
+      runtimeId: "embedding-xenova",
+    };
     const { versionRoot } = paths.getRuntimePaths("embedding-xenova", "1.0.0");
     await fs.promises.mkdir(versionRoot, { recursive: true });
     for (const f of embeddingManifest.requiredFiles) {
       await fs.promises.writeFile(path.join(versionRoot, f), "{}");
     }
-    await store.writePackageManifest("embedding-xenova", "1.0.0", embeddingManifest);
+    await store.writePackageManifest(
+      "embedding-xenova",
+      "1.0.0",
+      embeddingManifest
+    );
     await store.writeActive(activeEmbedding);
     const resolver = new LocalAiRuntimeResolver(paths, store, TARGET);
     const resolved = await resolver.resolve("embedding-xenova");

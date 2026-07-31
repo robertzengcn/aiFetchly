@@ -2,7 +2,7 @@ import { describe, expect, test, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { crc32 } from "node:zlib";
+import * as CRC32 from "crc-32";
 import AdmZip from "adm-zip";
 import {
   extractRuntimeArchive,
@@ -54,7 +54,7 @@ function writeRawStoreZip(
   for (const entry of entries) {
     const nameBuf = Buffer.from(entry.name, "utf-8");
     const data = Buffer.from(entry.content ?? "", "utf-8");
-    const crc = crc32(data);
+    const crc = CRC32.buf(data) >>> 0;
     const localHeader = Buffer.alloc(30);
     localHeader.writeUInt32LE(0x04034b50, 0);
     localHeader.writeUInt16LE(20, 4);
