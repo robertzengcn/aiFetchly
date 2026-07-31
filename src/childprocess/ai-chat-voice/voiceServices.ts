@@ -34,7 +34,11 @@ export interface SynthesizeOutput {
 }
 
 export interface SherpaSttService {
-  load(modelDir?: string, language?: string): Promise<boolean>;
+  load(
+    modelDir?: string,
+    language?: string,
+    runtimeRoot?: string
+  ): Promise<boolean>;
   isLoaded(): boolean;
   transcribe(
     audioBase64: string,
@@ -44,7 +48,11 @@ export interface SherpaSttService {
 }
 
 export interface SherpaTtsService {
-  load(modelDir?: string, language?: string): Promise<boolean>;
+  load(
+    modelDir?: string,
+    language?: string,
+    runtimeRoot?: string
+  ): Promise<boolean>;
   isLoaded(): boolean;
   synthesize(
     text: string,
@@ -93,8 +101,12 @@ class RealSherpaSttService implements SherpaSttService {
   private recognizer: Recognizer | null = null;
   private loaded = false;
 
-  async load(modelDir?: string): Promise<boolean> {
-    const native = loadSherpaOnnxNative();
+  async load(
+    modelDir?: string,
+    _language?: string,
+    runtimeRoot?: string
+  ): Promise<boolean> {
+    const native = loadSherpaOnnxNative(runtimeRoot);
     if (!native || !modelDir) {
       this.loaded = false;
       return false;
@@ -176,8 +188,12 @@ class RealSherpaTtsService implements SherpaTtsService {
   private native: SherpaOnnxNative | null = null;
   private loaded = false;
 
-  async load(modelDir?: string): Promise<boolean> {
-    const native = loadSherpaOnnxNative();
+  async load(
+    modelDir?: string,
+    _language?: string,
+    runtimeRoot?: string
+  ): Promise<boolean> {
+    const native = loadSherpaOnnxNative(runtimeRoot);
     if (!native || !modelDir) {
       this.loaded = false;
       return false;

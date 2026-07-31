@@ -60,11 +60,13 @@ async function handleInitialize(
 ): Promise<void> {
   const sttAvailable = await services.stt.load(
     message.sttModelPath,
-    message.sttLanguage
+    message.sttLanguage,
+    message.runtimeRoot
   );
   const ttsAvailable = await services.tts.load(
     message.ttsModelPath,
-    message.ttsLanguage
+    message.ttsLanguage,
+    message.runtimeRoot
   );
   sink.post({
     type: "ready",

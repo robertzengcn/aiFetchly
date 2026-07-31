@@ -38,6 +38,13 @@ export interface AiChatVoiceModuleDeps {
   readonly modelRoot?: string;
   readonly fileExists?: (filePath: string) => boolean;
   readonly runtimeAvailable?: () => boolean;
+  /**
+   * Optional voice-sherpa runtime root resolver (Phase 7, design §16.3).
+   * When provided, the module installs it on the worker client so the voice
+   * worker loads sherpa-onnx-node from the active downloaded runtime. Backed
+   * by LocalAiRuntimeResolver in the production composition root.
+   */
+  readonly resolveVoiceRuntime?: () => Promise<string | null>;
 }
 
 export class AiChatVoiceModule {
@@ -59,6 +66,19 @@ export class AiChatVoiceModule {
       modelRoot: this.modelRoot,
       fileExists: this.fileExists,
     });
+    // Phase 7: install the voice-sherpa runtime resolver on the worker client
+    // so inference loads sherpa-onnx-node from the downloaded runtime root.
+    // Defensive guard keeps injected test clients (without the setter) working.
+    if (deps.resolveVoiceRuntime) {
+      const clientWithResolver = this.client as unknown as {
+        setRuntimeRootResolver?: (
+          fn: (() => Promise<string | null>) | undefined
+        ) => void;
+      };
+      if (typeof clientWithResolver.setRuntimeRootResolver === "function") {
+        clientWithResolver.setRuntimeRootResolver(deps.resolveVoiceRuntime);
+      }
+    }
   }
 
   /** Read persisted settings, typed + defaulted (never throws). */

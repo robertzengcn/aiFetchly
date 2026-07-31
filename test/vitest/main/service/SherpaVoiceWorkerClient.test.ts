@@ -182,4 +182,48 @@ describe("SherpaVoiceWorkerClient", () => {
     await expect(p2).rejects.toThrow(/cancelled/i);
     client.dispose();
   });
+
+  it("forwards the resolved voice-sherpa runtimeRoot in the initialize message", async () => {
+    const fx = makeFakeFork({ autoReady: true });
+    const client = SherpaVoiceWorkerClient.createWithFork(fx.fork, 2000);
+    client.setRuntimeRootResolver(async () => "/resolved/voice-sherpa/1.0.0");
+
+    const p = client.transcribe("AAAA", "audio/webm", "en");
+    await vi.waitFor(() => expect(fx.requestIdFor("initialize")).toBeDefined());
+    // Resolve the handshake so transcribe can complete.
+    await vi.waitFor(() => expect(fx.requestIdFor("transcribe")).toBeDefined());
+    fx.emit({
+      type: "transcribe-result",
+      requestId: fx.requestIdFor("transcribe")!,
+      transcript: "ok",
+    });
+    await expect(p).resolves.toMatchObject({ transcript: "ok" });
+
+    const init = fx.posted.find((m) => m.type === "initialize") as
+      | { runtimeRoot?: string }
+      | undefined;
+    expect(init?.runtimeRoot).toBe("/resolved/voice-sherpa/1.0.0");
+    client.dispose();
+  });
+
+  it("omits runtimeRoot when the resolver returns null (bundled fallback)", async () => {
+    const fx = makeFakeFork({ autoReady: true });
+    const client = SherpaVoiceWorkerClient.createWithFork(fx.fork, 2000);
+    client.setRuntimeRootResolver(async () => null);
+
+    const p = client.transcribe("AAAA", "audio/webm", "en");
+    await vi.waitFor(() => expect(fx.requestIdFor("transcribe")).toBeDefined());
+    fx.emit({
+      type: "transcribe-result",
+      requestId: fx.requestIdFor("transcribe")!,
+      transcript: "ok",
+    });
+    await expect(p).resolves.toMatchObject({ transcript: "ok" });
+
+    const init = fx.posted.find((m) => m.type === "initialize") as
+      | { runtimeRoot?: string }
+      | undefined;
+    expect(init?.runtimeRoot).toBeUndefined();
+    client.dispose();
+  });
 });

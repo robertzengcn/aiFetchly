@@ -35,6 +35,13 @@ export interface AiChatVoiceInitializeMessage {
   ttsModelPath?: string;
   sttLanguage?: string;
   ttsLanguage?: string;
+  /**
+   * Optional downloaded voice-sherpa runtime root (Phase 7, design §16.2).
+   * When present, the worker loads sherpa-onnx-node from this directory via a
+   * scoped createRequire instead of the bundled package. Supplied by the main
+   * process LocalAiRuntimeResolver — never renderer-provided.
+   */
+  runtimeRoot?: string;
 }
 
 export interface AiChatVoiceTranscribeMessage {
