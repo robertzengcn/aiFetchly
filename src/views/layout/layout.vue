@@ -207,7 +207,7 @@ import type { AIArtifactRecord } from '@/entityTypes/aiArtifactTypes';
 import {GetloginUserInfo} from '@/views/api/users'
 import { getAppName } from '@/views/api/app'
 import { packageAppName } from '@/config/appPackage'
-import { updateLanguagePreference, getLanguagePreference } from '@/views/api/language'
+import { getLanguagePreference } from '@/views/api/language'
 import { initializeLanguageDetection } from '@/views/utils/browserLanguageDetection'
 import { initializeLanguageMigration } from '@/views/utils/languageMigration'
 import { initializeLanguageSynchronization, syncLanguageChange } from '@/views/utils/languageSynchronization'
@@ -522,7 +522,7 @@ onMounted(async () => {
 
     try {
         const systemLanguage = await getLanguagePreference()
-        if (systemLanguage && systemLanguage !== locale.value) {
+        if (systemLanguage) {
             console.log('Loading language preference from system settings:', systemLanguage)
             locale.value = systemLanguage
             setLanguage(systemLanguage)
