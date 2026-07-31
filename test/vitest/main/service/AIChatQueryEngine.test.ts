@@ -5,7 +5,7 @@ import type {
   AIChatQueryLoop,
   AIChatQueryLoopDeps,
 } from "@/service/AIChatQueryLoop";
-import type { OpenAIChatMessage } from "@/api/aiChatApi";
+import type { OpenAIChatImage, OpenAIChatMessage } from "@/api/aiChatApi";
 import type { AIChatContextAssembler } from "@/service/AIChatContextAssembler";
 import type { AIChatCompactAgentService } from "@/service/AIChatCompactAgentService";
 import type { SessionMemoryUpdateInput } from "@/service/AIChatCompactAgentService";
@@ -15,6 +15,7 @@ import type {
   AIChatQueryLoopResult,
 } from "@/service/AIChatQueryEvents";
 import type { AIChatPlanStateView } from "@/entityTypes/aiChatPlanTypes";
+import { HookRegistry } from "@/service/hooks/HookRegistry";
 
 // --- Mock AIChatV2Module -----------------------------------------------
 const mockSaveUserMessage = vi.fn().mockResolvedValue({ messageId: "user-1" });
@@ -34,6 +35,14 @@ vi.mock("@/modules/AIChatV2Module", () => ({
     saveToolResultMessage: mockSaveToolResultMessage,
     createConversationIfNeeded: mockCreateConversationIfNeeded,
     getDefaultSystemPrompt: mockGetDefaultSystemPrompt,
+  })),
+}));
+
+// --- Mock AIChatAttachmentModule (attachment byte persistence) ----------
+const mockSaveUploadedFiles = vi.fn().mockResolvedValue(undefined);
+vi.mock("@/modules/AIChatAttachmentModule", () => ({
+  AIChatAttachmentModule: vi.fn().mockImplementation(() => ({
+    saveUploadedFiles: mockSaveUploadedFiles,
   })),
 }));
 
@@ -59,6 +68,12 @@ vi.mock("@/modules/AIChatSessionMemoryModule", () => ({
 vi.mock("@/modules/AIChatCompactModule", () => ({
   AIChatCompactModule: vi.fn().mockImplementation(() => ({
     getActiveSummary: vi.fn().mockResolvedValue(null),
+  })),
+}));
+
+vi.mock("@/modules/AgentDefinitionModule", () => ({
+  AgentDefinitionModule: vi.fn().mockImplementation(() => ({
+    listActiveForRuntime: vi.fn().mockResolvedValue([]),
   })),
 }));
 
@@ -125,6 +140,7 @@ describe("AIChatQueryEngine", () => {
     mockGetPlanState.mockResolvedValue(null);
     mockEnsurePlanForConversation.mockResolvedValue(null);
     mockApprovePlan.mockReset();
+    HookRegistry.unregisterSource("plugin:test-hooks");
   });
 
   describe("submitMessage", () => {
@@ -218,6 +234,111 @@ describe("AIChatQueryEngine", () => {
         expect(completeEvent.fullContent).toBe("Hello!");
         expect(completeEvent.model).toBe("gpt-4");
       }
+    });
+
+    it("persists and emits generated images from a completed loop result", async () => {
+      const image: OpenAIChatImage = {
+        type: "image" as const,
+        delivery: "provider_url",
+        url: "https://example.com/generated.png",
+        mime_type: "image/png",
+        download_required: true,
+      };
+      const localImage: OpenAIChatImage = {
+        ...image,
+        delivery: "local_file",
+        url: "aifetchly-generated-image://local/user%40example.com/v2-test-conv/assistant-test/image-1.png",
+        original_url: image.url,
+        local_path:
+          "/tmp/test/userdata/ai-chat-generated-images/user@example.com/v2-test-conv/assistant-test/image-1.png",
+        file_name: "image-1.png",
+        download_required: false,
+      };
+      const fakeRun = vi.fn().mockResolvedValue({
+        type: "completed" as const,
+        conversationId: "v2-test-conv",
+        assistantMessageId: "assistant-test",
+        fullContent: "Image ready",
+        finishReason: "stop",
+        model: "gpt-4",
+        images: [image],
+      });
+      const generatedImageStorage = {
+        storeImages: vi.fn().mockResolvedValue([localImage]),
+      };
+      const engine = createEngineWithFakeLoop(fakeRun, {
+        generatedImageStorage,
+      });
+      const { sink, events } = makeEventCollector();
+
+      await engine.submitMessage({
+        request: { message: "generate an image" },
+        eventSink: sink,
+      });
+
+      expect(generatedImageStorage.storeImages).toHaveBeenCalledWith({
+        conversationId: "v2-test-conv",
+        messageId: "assistant-test",
+        images: [image],
+      });
+      expect(mockSaveAssistantMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          content: "Image ready",
+          metadata: expect.objectContaining({
+            generatedImages: [localImage],
+          }),
+        })
+      );
+      const completeEvent = events.find((e) => e.type === "complete");
+      expect(completeEvent).toBeDefined();
+      if (completeEvent?.type === "complete") {
+        expect(completeEvent.images).toEqual([localImage]);
+      }
+    });
+
+    it("persists image attachment preview data URL in user message metadata", async () => {
+      const fakeRun = vi.fn().mockResolvedValue({
+        type: "completed" as const,
+        conversationId: "v2-test-conv",
+        assistantMessageId: "assistant-test",
+        fullContent: "It's a cat",
+        finishReason: "stop",
+      });
+      const engine = createEngineWithFakeLoop(fakeRun);
+      const { sink } = makeEventCollector();
+
+      await engine.submitMessage({
+        request: {
+          message: "what is this?",
+          uploadedFiles: [
+            {
+              fileName: "cat.png",
+              mimeType: "image/png",
+              sizeBytes: 4,
+              contentBase64: "QkFTRTY0",
+              kind: "image",
+            },
+          ],
+        },
+        eventSink: sink,
+      });
+
+      // The user message must carry a renderable preview (the same data URL
+      // sent to the model) so the chat bubble can show the image the user
+      // attached — both during the live turn and after a history reload.
+      expect(mockSaveUserMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          metadata: expect.objectContaining({
+            attachments: [
+              expect.objectContaining({
+                fileName: "cat.png",
+                kind: "image",
+                previewDataUrl: "data:image/png;base64,QkFTRTY0",
+              }),
+            ],
+          }),
+        })
+      );
     });
 
     it("forwards promptTokens from the loop result to the compact agent", async () => {
@@ -330,6 +451,59 @@ describe("AIChatQueryEngine", () => {
         toolResult: { success: true, summary: "12:00 UTC" },
         replacesPermissionPromptForToolId: undefined,
       });
+    });
+
+    it("attributes the latest usage_update tokens to tool_call rows", async () => {
+      // The real loop (after the per-round usage fix) emits usage_update
+      // BEFORE tool_call. The persisting sink must carry that usage through
+      // to saveToolCallMessage so tool_call rows get a non-null tokensUsed.
+      const fakeRun = vi
+        .fn()
+        .mockImplementation(async (input: AIChatQueryLoopInput) => {
+          input.eventSink.emit({
+            type: "usage_update",
+            conversationId: input.conversationId,
+            messageId: input.assistantMessageId,
+            model: "gpt-4",
+            promptTokens: 100,
+            completionTokens: 20,
+            totalTokens: 120,
+          });
+          input.eventSink.emit({
+            type: "tool_call",
+            conversationId: input.conversationId,
+            messageId: input.assistantMessageId,
+            toolCallId: "call-1",
+            toolName: "get_time",
+            toolArguments: {},
+          });
+          return {
+            type: "completed" as const,
+            conversationId: input.conversationId,
+            assistantMessageId: input.assistantMessageId,
+            fullContent: "done",
+            finishReason: "stop",
+            model: "gpt-4",
+            totalTokens: 120,
+            promptTokens: 100,
+            completionTokens: 20,
+          };
+        });
+      const engine = createEngineWithFakeLoop(fakeRun);
+      const { sink } = makeEventCollector();
+
+      await engine.submitMessage({
+        request: { message: "what time is it?" },
+        eventSink: sink,
+      });
+
+      expect(mockSaveToolCallMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          toolCallId: "call-1",
+          model: "gpt-4",
+          tokensUsed: 120,
+        })
+      );
     });
 
     it("emits error event when loop returns failed", async () => {
@@ -530,6 +704,62 @@ describe("AIChatQueryEngine context assembly", () => {
       { role: "system", content: "custom-sysp" },
       { role: "user", content: "hi" },
     ]);
+  });
+
+  it("injects SessionStart hook system messages into the loop context", async () => {
+    HookRegistry.replaceSource("plugin:test-hooks", [
+      {
+        id: "plugin:test-hooks:0",
+        eventName: "SessionStart",
+        type: "callback",
+        source: "plugin",
+        enabled: true,
+        callback: () => ({ systemMessage: "agent-skills loaded" }),
+      },
+    ]);
+    const fakeRun = vi.fn().mockResolvedValue({
+      type: "completed",
+      conversationId: "v2-test-conv",
+      assistantMessageId: "assistant-1",
+      fullContent: "ok",
+      finishReason: "stop",
+      model: "m",
+    });
+    const engine = new AIChatQueryEngine(
+      { run: fakeRun } as unknown as AIChatQueryLoop,
+      {
+        contextAssembler: {
+          assemble: vi.fn().mockResolvedValue({
+            messages: [
+              { role: "system", content: "base" },
+              { role: "user", content: "hi" },
+            ],
+            tokenEstimate: 0,
+            usedSessionMemory: false,
+            usedFullCompact: false,
+            compactTriggered: false,
+            warnings: [],
+          }),
+        } as unknown as AIChatContextAssembler,
+      }
+    );
+
+    try {
+      const { sink } = makeEventCollector();
+      await engine.submitMessage({
+        request: { message: "hi" },
+        eventSink: sink,
+      });
+
+      expect(fakeRun).toHaveBeenCalledTimes(1);
+      const loopInput = fakeRun.mock.calls[0][0] as AIChatQueryLoopInput;
+      expect(loopInput.messages).toContainEqual({
+        role: "system",
+        content: "agent-skills loaded",
+      });
+    } finally {
+      HookRegistry.unregisterSource("plugin:test-hooks");
+    }
   });
 });
 

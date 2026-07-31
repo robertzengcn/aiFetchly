@@ -13,6 +13,13 @@ import type {
   ChatV2GoalEvidenceEvent,
   ChatV2GoalVerificationEvent,
 } from "@/entityTypes/aiChatGoalTypes";
+import type { AIArtifactToolMetadata } from "@/entityTypes/aiArtifactTypes";
+import type {
+  AIChatRecoveryLayer,
+  AIChatRecoveryReason,
+  ChatV2RecoveryMetadata,
+} from "@/service/AIChatRecoveryTypes";
+import type { OpenAIChatImage } from "@/api/aiChatApi";
 
 export type {
   ChatV2Mode,
@@ -33,9 +40,42 @@ export type ChatToolApprovalMode =
   | "approve_for_me"
   | "full_access";
 
+export type ChatV2GeneratedImage = OpenAIChatImage;
+
+// ---------------------------------------------------------------------------
+// Attachment types
+// ---------------------------------------------------------------------------
+
+export type ChatV2AttachmentKind = "document" | "image";
+
+export interface ChatV2UploadedAttachment {
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+  contentBase64: string;
+  kind: ChatV2AttachmentKind;
+}
+
+export interface ChatV2AttachmentMetadata {
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+  kind: ChatV2AttachmentKind;
+  processingMode?: "staged_markdown" | "rag_ingestion" | "image_url";
+  documentId?: number;
+  /**
+   * Inline `data:` URL for an image attachment preview. Only present for
+   * `kind === "image"`. Carries the same downscaled base64 bytes sent to the
+   * model, so the user's own message bubble can render the image they sent
+   * without a separate fetch. Persisted on the user row so previews survive
+   * history reloads.
+   */
+  previewDataUrl?: string;
+}
+
 /** Metadata stored on v2 chat rows in the existing ai_chat_messages table. */
 export interface ChatV2MessageMetadata {
-  source: "chat-v2";
+  source: "chat-v2" | "slash-command";
   openaiResponseId?: string;
   finishReason?: string | null;
   cancelled?: boolean;
@@ -49,6 +89,8 @@ export interface ChatV2MessageMetadata {
   success?: boolean;
   executionTimeMs?: number;
   summary?: string;
+  attachments?: ChatV2AttachmentMetadata[];
+  generatedImages?: ChatV2GeneratedImage[];
   // Plan-mode fields (present only on plan-related display rows)
   planEventType?:
     | "ask_user_question"
@@ -75,6 +117,16 @@ export interface ChatV2MessageMetadata {
   };
   // @-mention context resolved at send time for user messages.
   atMentions?: readonly ChatV2AtMentionMetadata[];
+  // AI artifact pointer (metadata only — never the full HTML content).
+  // Present on tool_result messages produced by create_html_artifact.
+  artifact?: AIArtifactToolMetadata;
+  // Slash-command result rows. Present only on assistant messages rendered
+  // from a slash-command dispatch's show_result variant.
+  slashCommandResult?: boolean;
+  slashCommandName?: string;
+  /** Recovery metadata persisted on the assistant row when any recovery
+   * layer activated during the turn. Technical-design §15.1. */
+  recovery?: ChatV2RecoveryMetadata;
 }
 
 /** Renderer request to start a streaming chat turn. */
@@ -86,6 +138,8 @@ export interface ChatV2StreamRequest {
   maxTokens?: number;
   systemPrompt?: string;
   mode?: ChatV2Mode;
+  toolApprovalMode?: ChatToolApprovalMode;
+  uploadedFiles?: ChatV2UploadedAttachment[];
 }
 
 export interface ChatV2HistoryRequest {
@@ -96,6 +150,35 @@ export interface ChatV2HistoryRequest {
 
 export interface ChatV2ClearConversationRequest {
   conversationId: string;
+}
+
+export type WorkspaceTrustScope = "instructions" | "all";
+
+export interface WorkspaceWatchAcquireRequest {
+  readonly conversationId: string;
+  readonly workspaceId?: string;
+}
+
+export interface WorkspaceWatchReleaseRequest {
+  readonly conversationId: string;
+  readonly workspaceId?: string;
+}
+
+export interface WorkspaceTrustSetRequest {
+  readonly workspaceId: string;
+  readonly scope: WorkspaceTrustScope;
+}
+
+export interface WorkspaceWatchAcquireResponse {
+  readonly workspaceId: string;
+}
+
+export interface WorkspaceTrustPreviewResponse {
+  readonly content: string;
+}
+
+export interface WorkspaceTrustSetResponse {
+  readonly ok: boolean;
 }
 
 /** Conversation summary for the sidebar. */
@@ -145,6 +228,7 @@ export type ChatV2StreamEventType =
   | "plan_blocked_tool"
   | "plan_changes_requested"
   | "retry_connect"
+  | "recovery_status"
   | "usage_update"
   | "error"
   | "cancelled"
@@ -163,6 +247,7 @@ export interface ChatV2StreamChunk {
   model?: string;
   finishReason?: string | null;
   errorMessage?: string;
+  images?: ChatV2GeneratedImage[];
   toolCallId?: string;
   toolName?: string;
   toolArguments?: Record<string, unknown>;
@@ -190,6 +275,18 @@ export interface ChatV2StreamChunk {
   retryAttempt?: number;
   retryMaxAttempts?: number;
   retryDelayMs?: number;
+  // Recovery fields — present on recovery_status chunks emitted by the
+  // seven-layer recovery strategy. See AIChatQueryRecoveryStatusEvent.
+  recoveryLayer?: AIChatRecoveryLayer;
+  recoveryReason?: AIChatRecoveryReason;
+  recoveryAttempt?: number;
+  recoveryMaxAttempts?: number;
+  recoveryDelayMs?: number;
+  recoveryElapsedMs?: number;
+  recoveryOriginalModel?: string;
+  recoveryCurrentModel?: string;
+  recoveryFallbackModel?: string;
+  recoveryMessage?: string;
   // Usage fields — present on usage_update chunks emitted at the end of each
   // model round when the server returns token counts.
   promptTokens?: number;

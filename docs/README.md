@@ -1,5 +1,9 @@
 # Documentation Index
 
+## Product Requirements
+
+- [PRD: Yellow Pages Scraper Plugin for AI Chat](./prd/yellow-pages-scraper-plugin-prd.md)
+
 ## Marketing Automation Subagent System
 
 - [PRD: Marketing Automation Subagent System](./marketing-subagent-system-prd.md)

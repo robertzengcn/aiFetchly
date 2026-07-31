@@ -127,6 +127,8 @@ export class SearchModule extends BaseModule {
       accounts?: number[];
     }
   ): Promise<number> {
+    await this.ensureConnection();
+
     // Validate inputs
     if (!keywords || keywords.length === 0) {
       throw new Error("Keywords cannot be empty");

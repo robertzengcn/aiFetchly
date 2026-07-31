@@ -11,7 +11,10 @@ import {
 } from "@/config/channellist";
 import { lazySchema } from "@/utils/lazySchema";
 import { registerAiValidatedHandler } from "@/main-process/communication/_shared/registerValidatedHandler";
-import { agentTaskIdInputSchema, agentResumeToolInputSchema } from "@/schemas/ipc/agentRuntime";
+import {
+  agentTaskIdInputSchema,
+  agentResumeToolInputSchema,
+} from "@/schemas/ipc/agentRuntime";
 
 // For handlers that take no meaningful input, but still need to pass through
 // the wrapper (for AI gating + uniform envelope shape).
@@ -30,14 +33,10 @@ const noInputSchema = lazySchema(() => z.unknown());
  * so the wrapper still runs safeParse (always succeeds) + AI check.
  */
 export function registerAgentRuntimeIpcHandlers(): void {
-  registerAiValidatedHandler(
-    AGENT_DEFINITION_LIST,
-    noInputSchema,
-    async () => {
-      const module = new AgentDefinitionModule();
-      return module.listActive();
-    }
-  );
+  registerAiValidatedHandler(AGENT_DEFINITION_LIST, noInputSchema, async () => {
+    const module = new AgentDefinitionModule();
+    return module.listActiveForRuntime();
+  });
 
   registerAiValidatedHandler(
     AGENT_TASK_DETAIL,
@@ -61,14 +60,10 @@ export function registerAgentRuntimeIpcHandlers(): void {
     }
   );
 
-  registerAiValidatedHandler(
-    AGENT_TASK_LIST,
-    noInputSchema,
-    async () => {
-      const module = new AgentTaskModule();
-      return module.listRecent(50);
-    }
-  );
+  registerAiValidatedHandler(AGENT_TASK_LIST, noInputSchema, async () => {
+    const module = new AgentTaskModule();
+    return module.listRecent(50);
+  });
 
   registerAiValidatedHandler(
     AGENT_RESUME_TOOL_AFTER_PERMISSION,

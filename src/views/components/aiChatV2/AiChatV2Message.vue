@@ -74,6 +74,13 @@
             </v-icon>
             <strong>{{ t("aiChatV2.tool_result_title") || "Tool Result" }}</strong>
           </div>
+          <AiArtifactCard
+            v-if="message.metadata?.artifact"
+            :artifact="message.metadata.artifact"
+            :disabled="disabled"
+            @open="(id: string) => emit('open-artifact', id)"
+            @copy-html="(id: string) => emit('copy-artifact-html', id)"
+          />
           <div v-if="message.metadata?.toolName" class="v2-message__tool-field">
             <strong>{{ t("aiChatV2.tool_name") || "Tool" }}:</strong>
             <span>{{ message.metadata.toolName }}</span>
@@ -90,7 +97,80 @@
           </details>
         </template>
       </template>
-      <div v-else class="v2-message__content">{{ message.content }}</div>
+      <template v-else>
+        <div v-if="message.content" class="v2-message__content">
+          {{ message.content }}
+        </div>
+        <div v-if="generatedImages.length > 0" class="v2-message__images">
+          <template v-for="image in generatedImages" :key="image.key">
+            <a
+              v-if="image.externalHref"
+              :href="image.externalHref"
+              class="v2-message__image-link"
+              target="_blank"
+              rel="noreferrer"
+              :title="t('aiChatV2.open_generated_image') || 'Open generated image'"
+            >
+              <img
+                class="v2-message__image"
+                :src="image.src"
+                :alt="t('aiChatV2.generated_image_alt') || 'AI generated image'"
+                loading="lazy"
+              />
+            </a>
+            <button
+              v-else
+              type="button"
+              class="v2-message__image-link v2-message__image-button"
+              :disabled="!image.localPath"
+              :title="t('aiChatV2.open_generated_image') || 'Open generated image'"
+              @click="openGeneratedImageFile(image)"
+            >
+              <img
+                class="v2-message__image"
+                :src="image.src"
+                :alt="t('aiChatV2.generated_image_alt') || 'AI generated image'"
+                loading="lazy"
+              />
+            </button>
+          </template>
+        </div>
+        <!-- User-sent attachments: render inline so the user sees what they
+             attached, scrolling with the message history. -->
+        <div
+          v-if="imageAttachments.length > 0"
+          class="v2-message__attachments v2-message__attachments--images"
+        >
+          <div
+            v-for="att in imageAttachments"
+            :key="att.key"
+            class="v2-message__image-link"
+            :title="t('aiChatV2.attachments.image_alt', { name: att.fileName }) || att.fileName"
+          >
+            <img
+              class="v2-message__attachment-image"
+              :src="att.previewDataUrl"
+              :alt="t('aiChatV2.attachments.image_alt', { name: att.fileName }) || att.fileName"
+              loading="lazy"
+            />
+          </div>
+        </div>
+        <div
+          v-if="fileAttachments.length > 0"
+          class="v2-message__attachments v2-message__attachments--docs"
+        >
+          <v-chip
+            v-for="att in fileAttachments"
+            :key="att.key"
+            size="small"
+            variant="tonal"
+            class="v2-message__attachment-chip"
+          >
+            <v-icon start size="x-small">mdi-file-document-outline</v-icon>
+            {{ att.fileName }}
+          </v-chip>
+        </div>
+      </template>
       <AiChatV2StreamStatus
         v-if="message.role === 'assistant' && status !== 'idle'"
         :status="status"
@@ -125,12 +205,19 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { useI18n } from "vue-i18n";
-import type { ChatV2MessageView } from "@/entityTypes/aiChatV2Types";
+import type {
+  ChatV2AttachmentMetadata,
+  ChatV2GeneratedImage,
+  ChatV2MessageView,
+} from "@/entityTypes/aiChatV2Types";
 import type { ChatV2AtMentionMetadata } from "@/entityTypes/aiChatAtMentionTypes";
 import { MessageType } from "@/entityTypes/commonType";
 import SkillApprovalCard from "@/views/components/aiChat/SkillApprovalCard.vue";
 import AiChatV2StreamStatus from "./AiChatV2StreamStatus.vue";
 import AiChatV2PlanApprovalCard from "./AiChatV2PlanApprovalCard.vue";
+import AiArtifactCard from "@/views/components/aiArtifacts/AiArtifactCard.vue";
+import { AI_FILE_OPEN } from "@/config/channellist";
+import { windowInvoke } from "@/views/utils/apirequest";
 
 type Status = "idle" | "streaming" | "cancelled" | "error";
 type ShellPreview = {
@@ -139,6 +226,8 @@ type ShellPreview = {
   shell: string;
   timeout_ms: number;
 };
+
+const GENERATED_IMAGE_PROTOCOL = "aifetchly-generated-image:";
 
 const props = defineProps<{
   message: ChatV2MessageView;
@@ -157,6 +246,8 @@ const emit = defineEmits<{
   (e: "approve-plan"): void;
   (e: "reject-plan", feedback: string): void;
   (e: "request-plan-changes", feedback: string): void;
+  (e: "open-artifact", artifactId: string): void;
+  (e: "copy-artifact-html", artifactId: string): void;
 }>();
 const { t, te } = useI18n();
 
@@ -174,6 +265,134 @@ const roleLabel = computed(() => {
 
 const status = computed<Status>(() => props.status ?? "idle");
 const disabled = computed(() => props.disabled ?? false);
+
+interface RenderableGeneratedImage {
+  key: string;
+  src: string;
+  externalHref?: string;
+  localPath?: string;
+}
+
+const generatedImages = computed<RenderableGeneratedImage[]>(() => {
+  return (props.message.metadata?.generatedImages ?? [])
+    .map((image, index) => {
+      const src = resolveGeneratedImageSource(image);
+      return src
+        ? {
+            key: `${src}-${index}`,
+            src,
+            externalHref: isExternalImageUrl(src) ? src : undefined,
+            localPath: image.local_path,
+          }
+        : null;
+    })
+    .filter((image): image is RenderableGeneratedImage => image !== null);
+});
+
+interface RenderableAttachment {
+  key: string;
+  fileName: string;
+  previewDataUrl?: string;
+}
+
+/**
+ * Type guard for a user attachment that is safe to render as an inline
+ * `<img src>`. Requires `kind === "image"` AND a `data:image/...` preview.
+ * The scheme check is the last line of defense: `previewDataUrl` is persisted
+ * metadata trusted by the renderer, so a non-image `data:` URL (e.g.
+ * `data:text/html`) must never reach an `<img src>` / clickable surface — it
+ * falls through to the chip rendering instead.
+ */
+function isRenderableImageAttachment(
+  att: ChatV2AttachmentMetadata
+): att is ChatV2AttachmentMetadata & { previewDataUrl: string } {
+  return (
+    att.kind === "image" &&
+    typeof att.previewDataUrl === "string" &&
+    att.previewDataUrl.startsWith("data:image/")
+  );
+}
+
+/**
+ * User-sent image attachments with an inline preview. Only user messages
+ * carry `metadata.attachments`; rendering the preview here lets the user see
+ * exactly which image they sent, scrolling with the message history.
+ */
+const imageAttachments = computed<RenderableAttachment[]>(() => {
+  if (props.message.role !== "user") return [];
+  return (props.message.metadata?.attachments ?? [])
+    .filter(isRenderableImageAttachment)
+    .map((att, index) => ({
+      key: `${att.fileName}-${index}`,
+      fileName: att.fileName,
+      previewDataUrl: att.previewDataUrl,
+    }));
+});
+
+/**
+ * Non-image attachments (documents) and any image whose preview is missing or
+ * not a safe `data:image/` URL. Rendered as file chips so the user still sees
+ * what they attached — the exact complement of {@link imageAttachments}.
+ */
+const fileAttachments = computed<RenderableAttachment[]>(() => {
+  if (props.message.role !== "user") return [];
+  return (props.message.metadata?.attachments ?? [])
+    .filter((att) => !isRenderableImageAttachment(att))
+    .map((att, index) => ({
+      key: `${att.fileName}-${index}`,
+      fileName: att.fileName,
+    }));
+});
+
+function resolveGeneratedImageSource(
+  image: ChatV2GeneratedImage
+): string | null {
+  if (image.url && isAllowedImageUrl(image.url)) {
+    return image.url;
+  }
+  if (image.b64_json) {
+    const mimeType =
+      image.mime_type && image.mime_type.startsWith("image/")
+        ? image.mime_type
+        : "image/png";
+    return `data:${mimeType};base64,${image.b64_json}`;
+  }
+  return null;
+}
+
+function isAllowedImageUrl(url: string): boolean {
+  if (url.startsWith("data:image/")) {
+    return true;
+  }
+  try {
+    const parsed = new URL(url);
+    return (
+      parsed.protocol === "https:" ||
+      parsed.protocol === "http:" ||
+      parsed.protocol === GENERATED_IMAGE_PROTOCOL
+    );
+  } catch {
+    return false;
+  }
+}
+
+function isExternalImageUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "https:" || parsed.protocol === "http:";
+  } catch {
+    return false;
+  }
+}
+
+function openGeneratedImageFile(image: RenderableGeneratedImage): void {
+  if (!image.localPath) return;
+  windowInvoke(AI_FILE_OPEN, { filePath: image.localPath }).catch(
+    (openErr: unknown) => {
+      console.error("[ai-chat-v2] Failed to open generated image:", openErr);
+    }
+  );
+}
 
 const toolResult = computed<Record<string, unknown>>(
   () => props.message.metadata?.toolResult ?? {}
@@ -341,6 +560,59 @@ const mentionChips = computed<MentionChip[]>(() => {
 .v2-message__content {
   white-space: pre-wrap;
   line-height: 1.45;
+}
+.v2-message__images {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 8px;
+  margin-top: 8px;
+  max-width: min(520px, 100%);
+}
+.v2-message__image-link {
+  display: block;
+  overflow: hidden;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.7);
+}
+.v2-message__image-button {
+  padding: 0;
+  color: inherit;
+  cursor: pointer;
+  appearance: none;
+}
+.v2-message__image-button:disabled {
+  cursor: default;
+}
+.v2-message__image {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 360px;
+  object-fit: contain;
+}
+/* User-sent attachment previews. Images use a smaller max-height than
+   AI-generated images so multi-attachment user bubbles stay compact. */
+.v2-message__attachments {
+  margin-top: 8px;
+}
+.v2-message__attachments--images {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 200px));
+  gap: 8px;
+  max-width: min(440px, 100%);
+}
+.v2-message__attachments--docs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.v2-message__attachment-image {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 200px;
+  object-fit: cover;
 }
 .v2-message__tool-header {
   display: flex;

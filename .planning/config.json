@@ -7,5 +7,8 @@
   "plan_check": true,
   "verifier": true,
   "mode": "guided",
-  "created": "2026-04-23"
+  "created": "2026-04-23",
+  "workflow": {
+    "_auto_chain_active": false
+  }
 }

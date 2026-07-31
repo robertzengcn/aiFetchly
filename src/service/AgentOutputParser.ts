@@ -2,7 +2,7 @@
 
 export type ParseResult =
   | { ok: true; output: Record<string, unknown> }
-  | { ok: false; error: string };
+  | { ok: false; error: string; partial?: Record<string, unknown> };
 
 export class AgentOutputParser {
   /**
@@ -55,6 +55,10 @@ export class AgentOutputParser {
       return {
         ok: false,
         error: `Agent output missing required fields: ${missing.join(", ")}`,
+        // Preserve the partially-parsed object so callers can salvage it
+        // (e.g. AgentRuntime falling back to a low-confidence result)
+        // instead of discarding the agent's work entirely.
+        partial: parsed,
       };
     }
 

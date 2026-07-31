@@ -8,6 +8,18 @@
     <v-icon size="small" start>mdi-folder</v-icon>
     <span class="workspace-badge__label">{{ labelText }}:</span>
     <span class="workspace-badge__path">{{ displayPath }}</span>
+    <button
+      type="button"
+      class="workspace-badge__memory"
+      :title="memoryLabel"
+      @click.stop="requestOpenMemory"
+    >
+      <v-icon size="small" start>mdi-brain</v-icon>
+      <span>{{ memoryLabel }}</span>
+      <span v-if="memoryCount > 0" class="workspace-badge__memory-count">{{
+        memoryCount
+      }}</span>
+    </button>
   </div>
   <div
     v-else
@@ -28,12 +40,17 @@ import { computed } from "vue";
 import { useI18n } from "vue-i18n";
 import type { WorkspaceSummary } from "@/entityTypes/workspaceTypes";
 
-const props = defineProps<{
-  workspace: WorkspaceSummary | null;
-}>();
+const props = withDefaults(
+  defineProps<{
+    workspace: WorkspaceSummary | null;
+    memoryCount?: number;
+  }>(),
+  { memoryCount: 0 }
+);
 
 const emit = defineEmits<{
   (e: "request-set-workspace"): void;
+  (e: "request-open-memory"): void;
 }>();
 
 const { t } = useI18n();
@@ -41,6 +58,9 @@ const { t } = useI18n();
 const labelText = computed(() => t("workspace.badgeLabel") || "Workspace");
 const notSetText = computed(
   () => t("workspace.notSet") || "No workspace set"
+);
+const memoryLabel = computed(
+  () => t("workspaceMemory.memoryAction") || "Memory"
 );
 
 const displayPath = computed(() => {
@@ -56,6 +76,11 @@ const displayPath = computed(() => {
 function requestSetWorkspace(): void {
   if (props.workspace) return;
   emit("request-set-workspace");
+}
+
+function requestOpenMemory(): void {
+  if (!props.workspace) return;
+  emit("request-open-memory");
 }
 </script>
 
@@ -84,5 +109,28 @@ function requestSetWorkspace(): void {
 }
 .workspace-badge__path {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.workspace-badge__memory {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 6px;
+  padding: 0 6px;
+  border: none;
+  border-left: 1px solid rgba(var(--v-theme-on-surface), 0.15);
+  background: transparent;
+  color: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  border-radius: 0 4px 4px 0;
+}
+.workspace-badge__memory:hover {
+  background: rgba(var(--v-theme-primary), 0.12);
+}
+.workspace-badge__memory-count {
+  margin-left: 4px;
+  padding: 0 4px;
+  border-radius: 8px;
+  font-size: 11px;
+  background: rgba(var(--v-theme-primary), 0.2);
 }
 </style>
