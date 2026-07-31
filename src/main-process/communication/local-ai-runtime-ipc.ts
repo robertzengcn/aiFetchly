@@ -32,6 +32,8 @@ import { LocalAiRuntimeResolver } from "@/service/localAiRuntime/LocalAiRuntimeR
 import { LocalAiRuntimeOperationCoordinator } from "@/service/localAiRuntime/LocalAiRuntimeOperationCoordinator";
 import { LocalAiRuntimeHealthService } from "@/service/localAiRuntime/LocalAiRuntimeHealthService";
 import { RUNTIME_CATALOG_CACHE_TTL_MS } from "@/service/localAiRuntime/localAiRuntimeConstants";
+import { SherpaVoiceWorkerClient } from "@/service/aiChatVoice/SherpaVoiceWorkerClient";
+import { LocalEmbeddingWorkerClient } from "@/service/embedding/LocalEmbeddingWorkerClient";
 import type { LocalAiRuntimeModule as ModuleType } from "@/modules/LocalAiRuntimeModule";
 
 const noInputSchema = lazySchema(() => z.unknown());
@@ -103,7 +105,7 @@ export function createLocalAiRuntimeModule(
   const resolver = new LocalAiRuntimeResolver(paths, state, target);
   const coordinator = new LocalAiRuntimeOperationCoordinator();
   const health = new LocalAiRuntimeHealthService();
-  return new LocalAiRuntimeModule({
+  const runtimeModule = new LocalAiRuntimeModule({
     paths,
     state,
     catalog,
@@ -124,6 +126,49 @@ export function createLocalAiRuntimeModule(
       }
     },
   });
+
+  // Composition (design §13.1): wire downloaded-runtime resolution into the
+  // voice + embedding worker client singletons so inference loads from the
+  // active runtime. Voice uses the runtime root (scoped sherpa createRequire);
+  // embedding forks the runtime's worker.js entry point. Both fall back to the
+  // bundled packages when no runtime is installed (FR-17). Guarded so a failure
+  // to obtain a singleton (e.g. in a non-main process context) never blocks the
+  // runtime manager itself.
+  installWorkerRuntimeResolvers(runtimeModule);
+
+  return runtimeModule;
+}
+
+/**
+ * Install the LocalAiRuntimeModule-backed resolvers on the voice + embedding
+ * worker client singletons. Idempotent and best-effort.
+ */
+function installWorkerRuntimeResolvers(runtimeModule: ModuleType): void {
+  // Voice: resolve the active voice-sherpa runtime root.
+  try {
+    SherpaVoiceWorkerClient.getInstance().setRuntimeRootResolver(async () => {
+      const resolved = await runtimeModule.resolveForUse("voice-sherpa");
+      return resolved?.runtimeRoot ?? null;
+    });
+  } catch (error) {
+    console.warn(
+      "[local-ai-runtime] Could not install voice runtime resolver:",
+      error instanceof Error ? error.message : String(error)
+    );
+  }
+
+  // Embedding: resolve the active embedding-xenova worker entry path.
+  try {
+    LocalEmbeddingWorkerClient.getInstance().setWorkerPathResolver(async () => {
+      const resolved = await runtimeModule.resolveForUse("embedding-xenova");
+      return resolved?.entryPath ?? null;
+    });
+  } catch (error) {
+    console.warn(
+      "[local-ai-runtime] Could not install embedding runtime resolver:",
+      error instanceof Error ? error.message : String(error)
+    );
+  }
 }
 
 /**

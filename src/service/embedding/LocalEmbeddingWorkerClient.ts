@@ -70,6 +70,15 @@ export class LocalEmbeddingWorkerClient {
   private readyPromise: Promise<LocalEmbeddingReadyPayload> | null = null;
   private readyModel: string | null = null;
 
+  /**
+   * Optional downloaded embedding-xenova worker path resolver (Phase 8,
+   * design §17.2). When installed, the client forks the runtime's worker.js
+   * (the manifest entryPoint) instead of the bundled candidate. The worker then
+   * resolves Transformers.js/ONNX Runtime/Sharp from its colocated node_modules.
+   * Supplied by the main-process LocalAiRuntimeResolver — never renderer-provided.
+   */
+  private workerPathResolver?: () => Promise<string | null>;
+
   private constructor(
     timeoutMs: number = LOCAL_EMBEDDING_REQUEST_TIMEOUT_MS,
     forkImpl: ForkFn = defaultFork,
@@ -78,6 +87,20 @@ export class LocalEmbeddingWorkerClient {
     this.timeoutMs = timeoutMs;
     this.forkImpl = forkImpl;
     this.workerPathOverride = workerPathOverride;
+  }
+
+  /**
+   * Install (or clear) the downloaded embedding worker path resolver. The
+   * composition root calls this with a function backed by
+   * LocalAiRuntimeResolver so the worker forks from the active runtime. Clears
+   * the cached worker path so a newly installed resolver takes effect on the
+   * next fork (the running worker is left alone until it exits).
+   */
+  public setWorkerPathResolver(
+    fn: (() => Promise<string | null>) | undefined
+  ): void {
+    this.workerPathResolver = fn;
+    this.cachedWorkerPath = null;
   }
 
   public static getInstance(): LocalEmbeddingWorkerClient {
@@ -94,7 +117,7 @@ export class LocalEmbeddingWorkerClient {
   public static createWithFork(
     forkImpl: ForkFn,
     timeoutMs: number = LOCAL_EMBEDDING_REQUEST_TIMEOUT_MS,
-    workerPathOverride = "/fake/LocalEmbeddingWorker.js"
+    workerPathOverride: string | null = "/fake/LocalEmbeddingWorker.js"
   ): LocalEmbeddingWorkerClient {
     return new LocalEmbeddingWorkerClient(
       timeoutMs,
@@ -229,7 +252,7 @@ export class LocalEmbeddingWorkerClient {
   }
 
   private async startWorker(): Promise<UtilityProcessLike> {
-    const resolvedPath = this.resolveWorkerPath();
+    const resolvedPath = await this.resolveWorkerPathAsync();
     const worker = this.forkImpl(resolvedPath);
 
     const onError = (error: unknown): void => {
@@ -375,6 +398,29 @@ export class LocalEmbeddingWorkerClient {
       pending.reject(error);
       this.pendingRequests.delete(requestId);
     }
+  }
+
+  /**
+   * Resolve the worker entry path: downloaded runtime first (design §17.2),
+   * then the bundled candidate search as the FR-17 migration fallback.
+   * `workerPathOverride` (tests) short-circuits both.
+   */
+  private async resolveWorkerPathAsync(): Promise<string> {
+    if (this.workerPathOverride) {
+      return this.workerPathOverride;
+    }
+    if (this.workerPathResolver) {
+      try {
+        const runtimeWorkerPath = await this.workerPathResolver();
+        if (runtimeWorkerPath && fs.existsSync(runtimeWorkerPath)) {
+          this.cachedWorkerPath = runtimeWorkerPath;
+          return runtimeWorkerPath;
+        }
+      } catch {
+        // Resolver error → fall through to bundled candidates.
+      }
+    }
+    return this.resolveWorkerPath();
   }
 
   private resolveWorkerPath(): string {
