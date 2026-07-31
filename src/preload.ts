@@ -324,6 +324,17 @@ import {
   // Dialog Channels
   DIALOG_PICK_FOLDER,
 } from "@/config/channellist";
+import {
+  LOCAL_AI_RUNTIME_LIST,
+  LOCAL_AI_RUNTIME_STATUS,
+  LOCAL_AI_RUNTIME_PREPARE_INSTALL,
+  LOCAL_AI_RUNTIME_INSTALL,
+  LOCAL_AI_RUNTIME_CANCEL_INSTALL,
+  LOCAL_AI_RUNTIME_CHECK_UPDATE,
+  LOCAL_AI_RUNTIME_REPAIR,
+  LOCAL_AI_RUNTIME_REMOVE,
+  LOCAL_AI_RUNTIME_PROGRESS,
+} from "@/config/channellist";
 
 // window.ipcRenderer = ipcRenderer
 // console.log('preload.js')
@@ -441,6 +452,8 @@ contextBridge.exposeInMainWorld("api", {
       // Yandex Maps Scraper Channels
       YANDEX_MAPS_SEARCH_RESULT,
       YANDEX_MAPS_SEARCH_PROGRESS,
+      // Local AI Runtime install/update progress (main -> renderer)
+      LOCAL_AI_RUNTIME_PROGRESS,
     ];
     const isSocialTaskLogChannel = /^socialtask:log:/.test(channel);
 
@@ -505,6 +518,8 @@ contextBridge.exposeInMainWorld("api", {
       // Yandex Maps Scraper Channels
       YANDEX_MAPS_SEARCH_RESULT,
       YANDEX_MAPS_SEARCH_PROGRESS,
+      // Local AI Runtime install/update progress (main -> renderer)
+      LOCAL_AI_RUNTIME_PROGRESS,
     ];
     const isSocialTaskLogChannel = /^socialtask:log:/.test(channel);
 
@@ -532,6 +547,8 @@ contextBridge.exposeInMainWorld("api", {
       // Yandex Maps Scraper Channels
       YANDEX_MAPS_SEARCH_RESULT,
       YANDEX_MAPS_SEARCH_PROGRESS,
+      // Local AI Runtime install/update progress (main -> renderer)
+      LOCAL_AI_RUNTIME_PROGRESS,
     ];
     if (validChannels.includes(channel)) {
       ipcRenderer.removeAllListeners(channel);
@@ -822,6 +839,15 @@ contextBridge.exposeInMainWorld("api", {
       AI_WORKSPACE_LIST,
       // Dialog Channels
       DIALOG_PICK_FOLDER,
+      // Local AI Runtime (component management, not AI-gated)
+      LOCAL_AI_RUNTIME_LIST,
+      LOCAL_AI_RUNTIME_STATUS,
+      LOCAL_AI_RUNTIME_PREPARE_INSTALL,
+      LOCAL_AI_RUNTIME_INSTALL,
+      LOCAL_AI_RUNTIME_CANCEL_INSTALL,
+      LOCAL_AI_RUNTIME_CHECK_UPDATE,
+      LOCAL_AI_RUNTIME_REPAIR,
+      LOCAL_AI_RUNTIME_REMOVE,
     ];
     if (validChannels.includes(channel)) {
       return ipcRenderer.invoke(channel, data);

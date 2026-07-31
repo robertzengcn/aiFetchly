@@ -1132,22 +1132,27 @@ export default {
     chrome_path: "Chrome-Pfad",
     firefox_path: "Firefox-Pfad",
     embedding_group: "Einbettungsmodelle",
-    embedding_group_description: "Standard-Einbettungsmodell für die Vektorsuche.",
+    embedding_group_description:
+      "Standard-Einbettungsmodell für die Vektorsuche.",
     external_system: "Externes System",
     user_preferences: "Benutzereinstellungen",
-    "user-preferences-group-description": "Benutzereinstellungen für das Anwendungsverhalten.",
+    "user-preferences-group-description":
+      "Benutzereinstellungen für das Anwendungsverhalten.",
     default_embedding_model: "Standard-Einbettungsmodell",
-    "default-embedding-model-description": "Wählen Sie das Einbettungsmodell für die Vektorsuche und Ähnlichkeitsermittlung.",
+    "default-embedding-model-description":
+      "Wählen Sie das Einbettungsmodell für die Vektorsuche und Ähnlichkeitsermittlung.",
     language_preference: "Sprache",
     "language-preference-description": "UI-Spracheinstellung.",
     ai_website_analysis_business_info: "Geschäftsinformationen",
-    "ai-website-analysis-business-info-description": "Geschäftsinformationen, die bei der KI-Analyse von Websites verwendet werden.",
+    "ai-website-analysis-business-info-description":
+      "Geschäftsinformationen, die bei der KI-Analyse von Websites verwendet werden.",
     "external-system-group-description": "Externe Systemgruppen-Einstellung",
     mcp_tools: "MCP-Tools",
     manage_mcp_tools: "MCP-Tools verwalten",
     manage_skills: "Fähigkeiten verwalten",
     ai_preferences: "KI-Einstellungen",
-    "ai-preferences-group-description": "Einstellungen zur Steuerung des KI-Chat-Verhaltens, des Speichers und des Kontexts.",
+    "ai-preferences-group-description":
+      "Einstellungen zur Steuerung des KI-Chat-Verhaltens, des Speichers und des Kontexts.",
     user_ai_auto_dream: "Auto-Traum-Konsolidierung",
     "ai-auto-dream-description":
       "Automatisches Zusammenfassen vergangener Konversationen im Hintergrund, um KI-Kontext-Token zu sparen.",
@@ -2042,6 +2047,50 @@ export default {
       body: "Wählen Sie einen Ordner, in dem AI-Dateiwerkzeuge lesen und schreiben können. Außerhalb dieses Ordners wird nichts berührt.",
       pick: "Ordner wählen",
       cancel: "Abbrechen",
+    },
+  },
+  localAiRuntime: {
+    title: "Lokale KI-Komponenten",
+    embedding_title: "Lokale Embeddings (auf dem Gerät)",
+    voice_title: "Lokale Sprache (auf dem Gerät)",
+    not_installed: "Nicht installiert",
+    ready: "Bereit",
+    incompatible: "Inkompatibel mit dieser Version",
+    corrupted: "Beschädigt",
+    checking: "Wird geprüft…",
+    download_required: "Download erforderlich",
+    update_available: "Update verfügbar",
+    install: "Installieren",
+    repair: "Reparieren",
+    remove: "Entfernen",
+    check_update: "Auf Update prüfen",
+    download_size: "Downloadgröße",
+    installed_size: "Installierte Größe",
+    version: "Version",
+    downloading: "Wird heruntergeladen",
+    verifying: "Wird verifiziert",
+    extracting: "Wird entpackt",
+    testing: "Wird getestet",
+    activating: "Wird aktiviert",
+    cancel: "Abbrechen",
+    retry: "Erneut versuchen",
+    remove_models: "Heruntergeladene Modelle ebenfalls entfernen",
+    install_confirm:
+      "Diese Komponente installieren? Sie wird bei Bedarf heruntergeladen.",
+    remove_confirm:
+      "Diese Komponente entfernen? Die Funktion ist dann nicht mehr verfügbar.",
+    errors: {
+      catalog_unavailable:
+        "Komponentenkatalog nicht verfügbar. Remote-Funktionen funktionieren weiterhin.",
+      download_failed: "Download fehlgeschlagen.",
+      checksum_mismatch: "Integritätsprüfung fehlgeschlagen.",
+      archive_unsafe: "Archiv hat die Sicherheitsprüfungen nicht bestanden.",
+      incompatible:
+        "Diese Komponente ist nicht mit deiner App-Version kompatibel.",
+      health_check_failed: "Komponenten-Integritätsprüfung fehlgeschlagen.",
+      busy: "Ein anderer Vorgang läuft.",
+      remove_failed:
+        "Entfernen fehlgeschlagen. Nach Neustart erneut versuchen.",
     },
   },
 };
