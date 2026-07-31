@@ -18,7 +18,7 @@ class="my-4 layout_navigation" :rail="navState.rail" expand-on-hover rail-width=
             </v-list>
             <v-divider></v-divider>
 
-            <v-list nav class="mx-2">
+            <v-list nav class="mx-2 navigation_routes">
                 <v-list-subheader>{{ t('route.dashboard') }}</v-list-subheader>
                 <template v-for="(item, key) in navState.routes" :key="key">
                     <v-list-item
@@ -44,6 +44,35 @@ v-if="item.meta?.visible && (!item.children || visibleRouteChildren(item).length
 target="_blank" href="https://docs.aifetchly.com"
                             class="link">Document</a></v-list-item-title>
                 </v-list-item>
+            </v-list>
+            <v-list nav class="mx-2 navigation_account">
+                <v-menu :location="location">
+                    <template v-slot:activator="{ props }">
+                        <v-list-item
+                            v-bind="props"
+                            class="mx-1 account_item"
+                            :title="showAccountText ? accountEmail : undefined"
+                            :subtitle="showAccountText ? accountPlanLabel : undefined"
+                        >
+                            <template v-slot:prepend>
+                                <v-tooltip :text="accountPlanLabel" location="top">
+                                    <template v-slot:activator="{ props: tooltipProps }">
+                                        <v-avatar v-bind="tooltipProps" class="account_plan_icon" size="32">
+                                            <v-icon :icon="accountPlanIcon" size="20" />
+                                        </v-avatar>
+                                    </template>
+                                </v-tooltip>
+                            </template>
+                            <template v-if="showAccountText" v-slot:append>
+                                <v-icon icon="mdi-chevron-up" size="small" />
+                            </template>
+                        </v-list-item>
+                    </template>
+                    <v-list nav class="h_a_menu">
+                        <v-list-item :title="t('layout.system_setting')" prepend-icon="mdi-cog" @click="gotoSystemsetting" />
+                        <v-list-item :title="t('layout.login_out')" prepend-icon="mdi-login" @click="Usersignout" />
+                    </v-list>
+                </v-menu>
             </v-list>
         </v-navigation-drawer>
         <main class="app_main">
@@ -82,17 +111,6 @@ v-if="mainStore.isMobile" variant="text" icon="mdi-menu"
                     </v-menu>
                     <v-btn variant="text" icon="mdi-chat" @click="toggleChat">
                         <v-icon size="small"></v-icon>
-                    </v-btn>
-                    <v-btn variant="text" append-icon="mdi-chevron-down" class="mr-2">
-                        <span v-if="!mainStore.isMobile">{{ userName }}</span>
-                        <v-icon v-if="!mainStore.isMobile && isPlusPlan" icon="mdi-plus-circle" size="small" class="ml-1" color="primary" />
-                        <v-chip v-if="!mainStore.isMobile && userPlan && !isPlusPlan" size="x-small" color="primary" variant="tonal" class="ml-1">{{ userPlan }}</v-chip>
-                        <v-menu activator="parent">
-                            <v-list nav class="h_a_menu">
-                                <v-list-item :title="t('layout.system_setting')" prepend-icon="mdi-cog" @click="gotoSystemsetting" />
-                                <v-list-item :title="t('layout.login_out')" prepend-icon="mdi-login" @click="Usersignout" />
-                            </v-list>
-                        </v-menu>
                     </v-btn>
                 </div>
                 <div style="position: fixed; right: 20px; bottom: 100px; z-index: 99999">
@@ -236,6 +254,7 @@ const dialogStatus=ref(false)
 const noticeMessage=ref('')
 const noticeType=ref<NoticeType>('info')
 const userName=ref('')
+const userEmail=ref('')
 const userPlan=ref('')
 const isPlusPlan=ref(false)
 const appName=ref(packageAppName)
@@ -272,6 +291,24 @@ const singleVisibleChild = (route: RouteRecordRaw): RouteRecordRaw | undefined =
 };
 const permanent = computed(() => {
     return !mainStore.isMobile;
+});
+const showAccountText = computed(() => {
+    return !navState.isMini || mainStore.isMobile;
+});
+const accountEmail = computed(() => {
+    return userEmail.value || userName.value;
+});
+const accountPlanLabel = computed(() => {
+    return userPlan.value;
+});
+const accountPlanIcon = computed(() => {
+    if (isPlusPlan.value) {
+        return 'mdi-plus-circle';
+    }
+    if (userPlan.value) {
+        return 'mdi-star-circle';
+    }
+    return 'mdi-account-circle';
 });
 const showNotice = ref(false);
 const {t,locale} = useI18n();
@@ -498,14 +535,18 @@ onMounted(async () => {
     await GetloginUserInfo().then(res=>{
         console.log(res)
         userName.value=res.name
+        userEmail.value=res.email
         if (res.plans && res.plans.length > 0) {
-            isPlusPlan.value = res.plans.some(
+            const plusPlan = res.plans.find(
                 plan => plan.planName && plan.planName.toLowerCase().includes('aifetch-plus')
             )
+            isPlusPlan.value = Boolean(plusPlan)
             const aifetchlyPlans = res.plans.filter(
                 plan => plan.planName && plan.planName.toLowerCase().includes('aifetchly')
             )
-            if (aifetchlyPlans.length > 0 && !isPlusPlan.value) {
+            if (plusPlan) {
+                userPlan.value = plusPlan.planName
+            } else if (aifetchlyPlans.length > 0) {
                 userPlan.value = aifetchlyPlans.map(plan => plan.planName).join(', ')
             }
         }
