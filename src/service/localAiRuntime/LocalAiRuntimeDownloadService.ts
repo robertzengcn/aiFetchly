@@ -161,9 +161,6 @@ export class LocalAiRuntimeDownloadService {
       // Backpressure-aware copy: web stream -> counter transform -> file.
       // `Readable.fromWeb` exists at runtime (Node 18+) but is absent from the
       // pinned @types/node@16 declarations; access it via a typed cast.
-      counter.on("data", () => {
-        /* flow */
-      });
       const fromWeb = (
         Readable as unknown as {
           fromWeb(stream: ReadableStream<Uint8Array>): Readable;

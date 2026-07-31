@@ -79,9 +79,13 @@ export function createLocalAiRuntimeModule(
     state
   );
   const compatibility = new LocalAiRuntimeCompatibilityService();
+  // Downloads use the catalog entries' URLs (e.g. GitHub release hosts), which
+  // differ from the catalog host. The validated catalog IS the trust root, so
+  // allowlisting the catalog host for downloads would wrongly reject every
+  // archive. HTTPS-per-hop + no-credentials is still enforced by the downloader.
   const download = new LocalAiRuntimeDownloadService({
     enforceHttps: true,
-    allowedHosts,
+    allowedHosts: [],
   });
   // The project narrows Electron's `app` type; read the version defensively.
   const appInfo = app as {
