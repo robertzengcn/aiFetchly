@@ -346,13 +346,23 @@ export class AIChatQueryLoop {
           (rawChunk) => {
             if (input.abortController.signal.aborted) return;
             if (!input.isActiveTurn()) return;
-            const delta = accumulator.ingest(rawChunk);
-            if (delta) {
+            const { contentDelta, reasoningDelta } =
+              accumulator.ingest(rawChunk);
+            if (reasoningDelta) {
+              eventSink.emit({
+                type: "reasoning_delta",
+                conversationId: input.conversationId,
+                messageId: input.assistantMessageId,
+                reasoningDelta,
+                model: accumulator.state.model,
+              });
+            }
+            if (contentDelta) {
               eventSink.emit({
                 type: "token",
                 conversationId: input.conversationId,
                 messageId: input.assistantMessageId,
-                contentDelta: delta,
+                contentDelta,
                 model: accumulator.state.model,
               });
             }
@@ -446,6 +456,7 @@ export class AIChatQueryLoop {
               partialContent: accumulator.state.fullContent ?? "",
               model: accumulator.state.model,
               responseId: accumulator.state.responseId,
+              reasoningContent: accumulator.state.reasoningContent || undefined,
             };
           }
 
@@ -734,6 +745,8 @@ export class AIChatQueryLoop {
               totalTokens: lastReportedUsage?.totalTokens,
               promptTokens: lastReportedUsage?.promptTokens,
               completionTokens: lastReportedUsage?.completionTokens,
+              reasoningContent:
+                finalAccumulator?.state.reasoningContent || undefined,
             };
           }
 
@@ -805,6 +818,8 @@ export class AIChatQueryLoop {
           totalTokens: lastReportedUsage?.totalTokens,
           promptTokens: lastReportedUsage?.promptTokens,
           completionTokens: lastReportedUsage?.completionTokens,
+          reasoningContent:
+            finalAccumulator?.state.reasoningContent || undefined,
         };
       }
 
@@ -864,6 +879,7 @@ export class AIChatQueryLoop {
         totalTokens: lastReportedUsage?.totalTokens,
         promptTokens: lastReportedUsage?.promptTokens,
         completionTokens: lastReportedUsage?.completionTokens,
+        reasoningContent: finalAccumulator?.state.reasoningContent || undefined,
       };
     } catch (err) {
       if (err instanceof Error && err.name === "AbortError") {
@@ -874,6 +890,8 @@ export class AIChatQueryLoop {
           partialContent: activeAccumulator?.state.fullContent ?? "",
           model: activeAccumulator?.state.model,
           responseId: activeAccumulator?.state.responseId,
+          reasoningContent:
+            activeAccumulator?.state.reasoningContent || undefined,
         };
       }
       return {
@@ -884,6 +902,8 @@ export class AIChatQueryLoop {
         partialContent: activeAccumulator?.state.fullContent ?? "",
         model: activeAccumulator?.state.model,
         responseId: activeAccumulator?.state.responseId,
+        reasoningContent:
+          activeAccumulator?.state.reasoningContent || undefined,
       };
     }
   }
