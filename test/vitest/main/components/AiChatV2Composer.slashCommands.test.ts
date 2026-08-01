@@ -140,6 +140,37 @@ describe("AiChatV2Composer slash command selection", () => {
     expect(listSlashCommands).not.toHaveBeenCalled();
   });
 
+  it("closes the suggestion dropdown once a space follows the command token", async () => {
+    vi.mocked(listSlashCommands).mockResolvedValue({
+      status: true,
+      commands: [command("loop")],
+      diagnostics: [],
+      msg: "",
+    });
+    const wrapper = mountComposer();
+    const input = wrapper.find('[data-testid="composer-input"]');
+
+    // Typing the command name opens the dropdown (command selection).
+    await input.setValue("/loop");
+    await vi.advanceTimersByTimeAsync(130);
+    await flushPromises();
+    expect(wrapper.find(".slash-suggestions").exists()).toBe(true);
+
+    // A space after the token means the command is selected and the user is
+    // now typing arguments — the dropdown must close even though the draft
+    // still starts with "/".
+    await input.setValue("/loop ");
+    await vi.advanceTimersByTimeAsync(130);
+    await flushPromises();
+    expect(wrapper.find(".slash-suggestions").exists()).toBe(false);
+
+    // ...and stays closed while the arguments are typed.
+    await input.setValue("/loop 5");
+    await vi.advanceTimersByTimeAsync(130);
+    await flushPromises();
+    expect(wrapper.find(".slash-suggestions").exists()).toBe(false);
+  });
+
   it("sends a message when a stale @-mention dropdown is still open but the cursor is no longer in a mention", async () => {
     const wrapper = mountComposer();
     const input = wrapper.find<HTMLTextAreaElement>(
@@ -154,9 +185,7 @@ describe("AiChatV2Composer slash command selection", () => {
     const message = "@data/ what is in the folder?";
     input.element.value = message;
     input.element.setSelectionRange(message.length, message.length);
-    wrapper
-      .findComponent(TextareaStub)
-      .vm.$emit("update:modelValue", message);
+    wrapper.findComponent(TextareaStub).vm.$emit("update:modelValue", message);
     await wrapper.vm.$nextTick();
 
     await input.trigger("keydown", { key: "Enter", shiftKey: false });

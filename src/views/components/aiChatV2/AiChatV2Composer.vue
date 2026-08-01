@@ -508,6 +508,21 @@ function refreshSlashSuggestions(): void {
     return;
   }
   const query = text.slice(1); // strip leading /
+  // Once a whitespace follows the command token the user has finished
+  // selecting a command and is now typing arguments (e.g. "/loop 5"). The
+  // suggestion dropdown exists for command selection only, so close it and
+  // cancel any in-flight debounced query — even though the draft still
+  // starts with "/".
+  if (/\s/.test(query)) {
+    if (slashDebounce) {
+      clearTimeout(slashDebounce);
+      slashDebounce = null;
+    }
+    slashOpen.value = false;
+    slashCommands.value = [];
+    slashHighlightedIndex.value = -1;
+    return;
+  }
   if (slashDebounce) clearTimeout(slashDebounce);
   const generation = ++slashGeneration;
   slashDebounce = setTimeout(async () => {
