@@ -61,24 +61,27 @@ describe("isPackageForbidden (foreign-target isolation)", () => {
     }
   });
 
-  test("win32-x64 forbids foreign sherpa/sqlite-vec variants but allows the matching one", () => {
+  test("Phase 9 slim base: AI inference families forbidden; sqlite-vec matching variant still allowed", () => {
     const patterns = policy.targets["win32-x64"].forbiddenPackagePatterns;
+    // AI inference packages are download-only now (PRD FR-16).
+    expect(isPackageForbidden("@xenova/transformers", patterns)).toBe(true);
+    expect(isPackageForbidden("onnxruntime-node", patterns)).toBe(true);
+    expect(isPackageForbidden("onnxruntime-win32-x64", patterns)).toBe(true);
+    expect(isPackageForbidden("sharp", patterns)).toBe(true);
+    expect(isPackageForbidden("sherpa-onnx-node", patterns)).toBe(true);
+    expect(isPackageForbidden("sherpa-onnx-win-x64", patterns)).toBe(true);
     expect(isPackageForbidden("sherpa-onnx-darwin-arm64", patterns)).toBe(true);
-    expect(isPackageForbidden("sherpa-onnx-linux-x64", patterns)).toBe(true);
-    expect(isPackageForbidden("sqlite-vec-darwin-x64", patterns)).toBe(true);
-    // The matching variants are NOT forbidden.
-    expect(isPackageForbidden("sherpa-onnx-win-x64", patterns)).toBe(false);
+    // sqlite-vec stays bundled: matching variant allowed, foreign forbidden.
     expect(isPackageForbidden("sqlite-vec-windows-x64", patterns)).toBe(false);
+    expect(isPackageForbidden("sqlite-vec-darwin-x64", patterns)).toBe(true);
   });
 
-  test("darwin-arm64 allows its matching variants, forbids the others", () => {
+  test("darwin-arm64: sqlite-vec matching variant allowed; inference + foreign forbidden", () => {
     const patterns = policy.targets["darwin-arm64"].forbiddenPackagePatterns;
     expect(isPackageForbidden("sqlite-vec-darwin-arm64", patterns)).toBe(false);
-    expect(isPackageForbidden("sherpa-onnx-darwin-arm64", patterns)).toBe(
-      false
-    );
     expect(isPackageForbidden("sqlite-vec-darwin-x64", patterns)).toBe(true);
-    expect(isPackageForbidden("sherpa-onnx-win-x64", patterns)).toBe(true);
+    expect(isPackageForbidden("sherpa-onnx-darwin-arm64", patterns)).toBe(true);
+    expect(isPackageForbidden("sharp", patterns)).toBe(true);
   });
 });
 

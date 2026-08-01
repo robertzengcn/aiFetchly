@@ -37,11 +37,10 @@ const EXTERNAL_DEPENDENCIES = [
   "reflect-metadata",
   "@mixmark-io/domino",
   "electron-log",
-  "@xenova/transformers",
-  "onnxruntime-node",
-  "onnxruntime-common",
-  "sharp",
-  "sherpa-onnx-node",
+  // Phase 9 slim installer: local-AI inference packages are excluded from the
+  // base app — they ship as downloadable runtimes (PRD FR-16, design §26.7).
+  // "@xenova/transformers", "onnxruntime-node", "onnxruntime-common",
+  // "sharp", "sherpa-onnx-node"
 ];
 //import { ForgeConfig } from '@electron-forge/shared-types';
 // import { AutoUnpackNativesPlugin } from "@electron-forge/plugin-auto-unpack-natives";
@@ -120,12 +119,12 @@ module.exports = {
     // },
     asar: {
       // .vite/build holds vec0.* copied by Vite; node_modules holds native deps — both must be real disk.
-      // @xenova/transformers + onnxruntime-* + sharp ship native/WASM/.so artifacts that cannot load
-      // from inside app.asar, so they must be unpacked alongside better-sqlite3/sqlite-vec.
+      // Phase 9 slim installer: only the database natives (better-sqlite3, sqlite-vec) are unpacked.
+      // The AI inference natives (@xenova/transformers, onnxruntime-*, sharp, sherpa-onnx-*) are no
+      // longer bundled — they ship as downloadable runtimes (PRD FR-16, design §26.7).
       unpackDir:
-        "**/{.vite,node_modules/better-sqlite3,node_modules/sqlite-vec,node_modules/@xenova/transformers,node_modules/onnxruntime-node,node_modules/onnxruntime-common,node_modules/sharp,node_modules/sherpa-onnx-node,node_modules/sherpa-onnx-darwin-arm64,node_modules/sherpa-onnx-darwin-x64,node_modules/sherpa-onnx-linux-arm64,node_modules/sherpa-onnx-linux-x64,node_modules/sherpa-onnx-win-ia32,node_modules/sherpa-onnx-win-x64}/**",
-      unpack:
-        "**/{vec0.*,node_modules/sherpa-onnx-darwin-arm64/*,node_modules/sherpa-onnx-darwin-x64/*,node_modules/sherpa-onnx-linux-arm64/*,node_modules/sherpa-onnx-linux-x64/*,node_modules/sherpa-onnx-win-ia32/*,node_modules/sherpa-onnx-win-x64/*}",
+        "**/{.vite,node_modules/better-sqlite3,node_modules/sqlite-vec}/**",
+      unpack: "**/vec0.*",
     },
     ignore: (file) => {
       const filePath = file.toLowerCase();

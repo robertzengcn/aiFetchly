@@ -1,0 +1,8 @@
+{
+  "_comment": "Installer size baseline for the size-regression gate (PRD §18, design §18). Capture these values from the LAST release built BEFORE the Phase 9 slim-installer Forge exclusions landed. 'preSlimSizeBytes' is the reference for the >=15% reduction goal; the per-key entries are the no-growth baseline for subsequent releases. A release engineer must populate the real numbers from CI artifacts before enabling the gate in the release workflow.",
+  "_status": "PLACEHOLDER — replace with measured sizes from the last pre-slim release before enabling the gate.",
+  "preSlimSizeBytes": null,
+  "win32-x64": { "sizeBytes": null },
+  "darwin-x64": { "sizeBytes": null },
+  "darwin-arm64": { "sizeBytes": null }
+}
