@@ -24,6 +24,20 @@
           icon
           size="small"
           variant="text"
+          :color="showReasoning ? 'primary' : undefined"
+          :loading="reasoningSaving"
+          :disabled="reasoningSaving"
+          :title="reasoningToggleTitle"
+          :aria-label="reasoningToggleTitle"
+          :aria-pressed="showReasoning"
+          @click="toggleReasoning"
+        >
+          <v-icon size="small">mdi-brain</v-icon>
+        </v-btn>
+        <v-btn
+          icon
+          size="small"
+          variant="text"
           :loading="isCompacting"
           :disabled="
             !activeConversationId || messages.length === 0 || chatIsRunning
@@ -607,6 +621,47 @@ const availableModels = ref<OpenAIModel[]>([]);
 // User's selected model id. Sent on every stream request. Resolved on mount
 // via: saved localStorage choice → server default_model → first model id.
 const selectedModel = ref<string | undefined>(undefined);
+
+// ---------------------------------------------------------------------------
+// Reasoning visibility toggle (global preference, localStorage-backed).
+// Survives app restarts; sent on each stream request so the main process can
+// add the server `reasoning` option and persist reasoning metadata.
+// ---------------------------------------------------------------------------
+const SHOW_REASONING_STORAGE_KEY = "aiChatV2.showReasoning";
+const showReasoning = ref<boolean>(
+  (() => {
+    try {
+      return window.localStorage.getItem(SHOW_REASONING_STORAGE_KEY) === "true";
+    } catch {
+      return false;
+    }
+  })()
+);
+const reasoningSaving = ref(false);
+const toggleReasoning = (): void => {
+  reasoningSaving.value = true;
+  const next = !showReasoning.value;
+  try {
+    if (next) {
+      window.localStorage.setItem(SHOW_REASONING_STORAGE_KEY, "true");
+    } else {
+      window.localStorage.removeItem(SHOW_REASONING_STORAGE_KEY);
+    }
+  } catch {
+    /* localStorage unavailable — keep in-memory state only */
+  }
+  showReasoning.value = next;
+  // Preference save is synchronous local storage; release the disabled state
+  // on the next microtask so the button's loading flicker stays brief.
+  queueMicrotask(() => {
+    reasoningSaving.value = false;
+  });
+};
+const reasoningToggleTitle = computed(() =>
+  showReasoning.value
+    ? t("aiChatV2.hide_reasoning") || "Hide reasoning"
+    : t("aiChatV2.show_reasoning") || "Show reasoning"
+);
 
 const resolveContextWindowLocal = (model?: string): number =>
   resolveContextWindow(modelContextWindows.value, model);
@@ -1488,6 +1543,10 @@ const onSend = async (text: string): Promise<void> => {
         message: text,
         mode: mode.value,
         model: resolveModelForRequest(),
+        showReasoning: showReasoning.value,
+        reasoning: showReasoning.value
+          ? { enabled: true, summary: "auto" }
+          : undefined,
       },
       (chunk: ChatV2StreamChunk) => {
         if (chunk.eventType === "start") {
@@ -1531,6 +1590,35 @@ const onSend = async (text: string): Promise<void> => {
               attempt: chunk.retryAttempt,
               maxAttempts: chunk.retryMaxAttempts,
               delayMs: chunk.retryDelayMs ?? 0,
+            };
+          }
+        } else if (
+          chunk.eventType === "reasoning_delta" &&
+          chunk.reasoningDelta
+        ) {
+          // Reasoning is an AI response too — surface it in the panel without
+          // touching assistant.content and never route it to voice playback.
+          receivedFirstResponse.value = true;
+          retryInfo.value = null;
+          ensureAssistantAdded();
+          const prevReasoning = assistant.metadata?.reasoning?.content ?? "";
+          assistant.metadata = {
+            ...(assistant.metadata ?? { source: "chat-v2" }),
+            reasoning: {
+              content: prevReasoning + chunk.reasoningDelta,
+              format: "plain_text",
+              source: "server",
+              model: chunk.model,
+              truncated: false,
+            },
+          };
+          const reasoningIdx = messages.value.findIndex(
+            (m) => m.id === assistant.id
+          );
+          if (reasoningIdx !== -1) {
+            messages.value[reasoningIdx] = {
+              ...messages.value[reasoningIdx],
+              metadata: assistant.metadata,
             };
           }
         } else {
