@@ -3,6 +3,19 @@ import { AI_CHAT_V2_CONVERSATION_UPDATED } from "@/config/channellist";
 import type { ChatV2ConversationUpdatedEvent } from "@/entityTypes/aiChatScheduledLoopTypes";
 
 /**
+ * Structural view of the BrowserWindow surface this broadcaster uses. Electron's
+ * type declarations omit `isDestroyed()`/`once()` on BrowserWindow (a typings
+ * quirk documented in userIpc.ts), so we cast through this minimal shape.
+ */
+interface BroadcastWindow {
+  isDestroyed(): boolean;
+  once(event: "closed", listener: () => void): void;
+  readonly webContents: {
+    send(channel: string, ...args: unknown[]): void;
+  };
+}
+
+/**
  * Abstraction over the renderer broadcast so the scheduled runner does not need
  * to import BrowserWindow directly (technical-design §18.1).
  *
@@ -19,7 +32,7 @@ export class AIChatConversationUpdateBroadcaster
   implements AIChatConversationUpdateSink
 {
   private static instance: AIChatConversationUpdateBroadcaster | null = null;
-  private readonly windows = new Set<BrowserWindow>();
+  private readonly windows = new Set<BroadcastWindow>();
 
   // eslint-disable-next-line @typescript-eslint/no-empty-function
   private constructor() {}
@@ -34,9 +47,10 @@ export class AIChatConversationUpdateBroadcaster
 
   /** Register a window's webContents as a broadcast target. */
   register(win: BrowserWindow): void {
-    this.windows.add(win);
-    win.once("closed", () => {
-      this.windows.delete(win);
+    const view = win as unknown as BroadcastWindow;
+    this.windows.add(view);
+    view.once("closed", () => {
+      this.windows.delete(view);
     });
   }
 
