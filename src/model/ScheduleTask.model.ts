@@ -582,6 +582,24 @@ export class ScheduleTaskModel extends BaseDb {
   }
 
   /**
+   * Find the latest chat-created scheduled loop for a conversation regardless
+   * of active state. Used by control operations (resume must find paused
+   * schedules) and status display.
+   */
+  async findLatestChatScheduledLoop(
+    conversationId: string
+  ): Promise<ScheduleTaskEntity | null> {
+    assertNotWorker("findLatestChatScheduledLoop");
+    return await this.repository.findOne({
+      where: {
+        source_conversation_id: conversationId,
+        trigger_type: TriggerType.INTERVAL,
+      },
+      order: { id: "DESC" },
+    });
+  }
+
+  /**
    * Return interval schedules whose next_run_time is due, in due order.
    * Used by the scheduler poll. Caller atomically claims each via
    * claimIntervalOccurrence to close the double-poll race.
@@ -870,6 +888,25 @@ export class ScheduleTaskModel extends BaseDb {
         is_active: false,
         status: ScheduleStatus.PAUSED,
         terminal_reason: reason,
+        last_modified: new Date(),
+      }
+    );
+  }
+
+  /**
+   * Resume an interval schedule: set active, recompute a future next run time,
+   * and clear recoverable terminal state. Does not replay missed occurrences.
+   */
+  async resumeIntervalSchedule(id: number, nextRunAt: Date): Promise<void> {
+    assertNotWorker("resumeIntervalSchedule");
+    await this.repository.update(
+      { id },
+      {
+        is_active: true,
+        status: ScheduleStatus.ACTIVE,
+        next_run_time: nextRunAt,
+        terminal_reason: null,
+        consecutive_failure_count: 0,
         last_modified: new Date(),
       }
     );

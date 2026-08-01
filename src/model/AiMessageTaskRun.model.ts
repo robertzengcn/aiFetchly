@@ -117,6 +117,29 @@ export class AiMessageTaskRunModel extends BaseDb {
     return this.repository.findOne({ where: { idempotency_key: key } });
   }
 
+  /** Most recent occurrence run for a schedule (renderer view + control). */
+  async getLatestBySchedule(
+    scheduleId: number
+  ): Promise<AiMessageTaskRunEntity | null> {
+    assertNotWorker("getLatestBySchedule");
+    return this.repository.findOne({
+      where: { schedule_id: scheduleId },
+      order: { id: "DESC" },
+    });
+  }
+
+  /** Count runs for a schedule, optionally filtered by status. */
+  async countBySchedule(
+    scheduleId: number,
+    status?: AiMessageTaskRunStatus
+  ): Promise<number> {
+    assertNotWorker("countBySchedule");
+    const where = status
+      ? { schedule_id: scheduleId, status }
+      : { schedule_id: scheduleId };
+    return this.repository.count({ where });
+  }
+
   /** Link the persisted scheduled user-message row to the run. */
   async linkUserMessage(runId: number, messageId: string): Promise<void> {
     assertNotWorker("linkUserMessage");
