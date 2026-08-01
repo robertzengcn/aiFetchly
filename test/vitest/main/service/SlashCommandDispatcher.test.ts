@@ -83,7 +83,9 @@ describe("registerBuiltInSlashCommands (CMD-03)", () => {
       [
         "built-in:command:agents",
         "built-in:command:clear",
+        "built-in:command:goal",
         "built-in:command:help",
+        "built-in:command:loop",
         "built-in:command:plugin",
         "built-in:command:reload-config",
         "built-in:command:skills",
@@ -96,6 +98,16 @@ describe("registerBuiltInSlashCommands (CMD-03)", () => {
     { id: "built-in:command:help", name: "help", descMatch: /List available/i },
     { id: "built-in:command:clear", name: "clear", descMatch: /Clear/i },
     { id: "built-in:command:status", name: "status", descMatch: /status/i },
+    {
+      id: "built-in:command:goal",
+      name: "goal",
+      descMatch: /active AI Chat goal|Plan Mode/i,
+    },
+    {
+      id: "built-in:command:loop",
+      name: "loop",
+      descMatch: /active AI Chat goal|bounded/i,
+    },
     {
       id: "built-in:command:reload-config",
       name: "reload-config",
@@ -179,6 +191,8 @@ describe("SlashCommandDispatcher.dispatch (CMD-04, CMD-08, DX-02)", () => {
     expect(r.content).toContain("/help");
     expect(r.content).toContain("/clear");
     expect(r.content).toContain("/status");
+    expect(r.content).toContain("/goal");
+    expect(r.content).toContain("/loop");
     expect(r.content).toContain("/reload-config");
     expect(r.content).toContain("/plugin");
     expect(r.content).toContain("/skills");
@@ -279,6 +293,34 @@ describe("SlashCommandDispatcher.dispatch (CMD-04, CMD-08, DX-02)", () => {
     expect(r.content).toContain("Tool catalog:");
   });
 
+  it("returns show_result guidance for /goal when directly dispatched", async () => {
+    const { dispatcher } = buildStack();
+    const r = await dispatcher.dispatch({
+      conversationId: "conv-1",
+      rawInput: "/goal",
+    });
+    expect(r.status).toBe(true);
+    if (!r.status || r.action !== "show_result") {
+      throw new Error("expected show_result");
+    }
+    expect(r.commandId).toBe("built-in:command:goal");
+    expect(r.content).toContain("/goal <objective>");
+  });
+
+  it("returns show_result guidance for /loop when directly dispatched", async () => {
+    const { dispatcher } = buildStack();
+    const r = await dispatcher.dispatch({
+      conversationId: "conv-1",
+      rawInput: "/loop",
+    });
+    expect(r.status).toBe(true);
+    if (!r.status || r.action !== "show_result") {
+      throw new Error("expected show_result");
+    }
+    expect(r.commandId).toBe("built-in:command:loop");
+    expect(r.content).toContain("/loop <maxIterations>");
+  });
+
   it("returns {status:false, msg} for an unknown command (CMD-08)", async () => {
     const { dispatcher } = buildStack();
     const r = await dispatcher.dispatch({
@@ -373,6 +415,8 @@ describe("SlashCommandModule (three-layer Module)", () => {
     const names = r.commands.map((c) => c.name).sort();
     expect(names).toContain("help");
     expect(names).toContain("clear");
+    expect(names).toContain("goal");
+    expect(names).toContain("loop");
     expect(names).toContain("status");
     expect(names).toContain("skills");
     expect(names).toContain("reload-config");

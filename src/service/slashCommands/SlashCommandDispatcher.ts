@@ -41,6 +41,10 @@ import type {
   AIFetchlyConfigStatus,
 } from "@/service/aifetchlyConfig/AIFetchlyConfigManager";
 import type { AgentDefinitionView } from "@/entityTypes/agentTypes";
+import {
+  GOAL_LOOP_MAX_ITERATIONS,
+  GOAL_LOOP_MIN_ITERATIONS,
+} from "@/config/aiChatGoalConfig";
 
 export interface PluginSlashCommandExecutor {
   execute(rawArgs: string | undefined): Promise<string>;
@@ -218,6 +222,23 @@ export class SlashCommandDispatcher {
           content: await provider.render(),
         };
       }
+
+      case "built-in:command:goal":
+        return {
+          status: true,
+          action: "show_result",
+          commandId,
+          content:
+            "Create or replace the active AI Chat goal. Usage: /goal <objective>",
+        };
+
+      case "built-in:command:loop":
+        return {
+          status: true,
+          action: "show_result",
+          commandId,
+          content: `Continue the active AI Chat goal. Usage: /loop <maxIterations> where maxIterations is ${GOAL_LOOP_MIN_ITERATIONS}-${GOAL_LOOP_MAX_ITERATIONS}.`,
+        };
 
       case "built-in:command:agents": {
         // Phase 16 / Plan 03 (D-AgentsList) — list built-in + dynamic agents

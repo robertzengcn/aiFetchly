@@ -2412,7 +2412,7 @@ const onSend = async (
   // ignored even when spoken responses are enabled.
   speechController.start();
 
-  // /goal and /loop interception (V2 has no slash dispatcher).
+  // /goal and /loop need stateful handling before the generic slash dispatcher.
   const cmd = parseAiGoalCommand(text);
   let modelMessage = text;
   let requestMode: ChatV2Mode = mode.value;

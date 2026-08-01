@@ -75,6 +75,34 @@ const BUILT_IN_COMMANDS: readonly SlashCommandDefinition[] = Object.freeze([
     enabled: true,
   },
   {
+    id: "built-in:command:goal",
+    name: "goal",
+    description:
+      "Create or replace the active AI Chat goal and enter Plan Mode.",
+    aliases: [],
+    type: "local",
+    source: "built-in",
+    sourceId: "built-in",
+    sourceLabel: "Built-in",
+    argumentHint: "<objective>",
+    requiresTrust: false,
+    enabled: true,
+  },
+  {
+    id: "built-in:command:loop",
+    name: "loop",
+    description:
+      "Continue the active AI Chat goal for a bounded number of iterations.",
+    aliases: [],
+    type: "local",
+    source: "built-in",
+    sourceId: "built-in",
+    sourceLabel: "Built-in",
+    argumentHint: "<maxIterations>",
+    requiresTrust: false,
+    enabled: true,
+  },
+  {
     id: "built-in:command:reload-config",
     name: "reload-config",
     description: "Rescan ~/.aifetchly and reload configuration.",
@@ -122,7 +150,7 @@ const BUILT_IN_COMMANDS: readonly SlashCommandDefinition[] = Object.freeze([
 ]);
 
 /**
- * Register the four phase-13 built-in slash commands on the given
+ * Register the built-in slash commands on the given
  * registry. Idempotent — the registry's id-based replace semantics mean
  * re-registering the same ids does not duplicate entries.
  *

@@ -6,9 +6,9 @@ import {
 /**
  * Pure parser for the /goal and /loop commands in AI Chat V2.
  *
- * V2 has no slash-command dispatcher, so this is the focused MVP entry point
- * (design §"Avoid protocol changes for MVP"). It only classifies input; it does
- * no IPC, database, or streaming work.
+ * Goal and loop execution is intercepted before the generic slash dispatcher
+ * so /goal can create state and stream its Plan Mode prompt through Chat V2.
+ * It only classifies input; it does no IPC, database, or streaming work.
  */
 export type AiGoalCommandAction =
   | { readonly type: "none" }
