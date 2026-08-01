@@ -102,16 +102,22 @@ export function resolveClosure(rootDir, roots, { platform, arch }) {
   return closure;
 }
 
-/** True iff a path segment looks like test/doc/build-cache noise to exclude. */
+/**
+ * True iff a path segment is test/doc/cache noise to exclude. Importantly does
+ * NOT exclude `dist`, `build`, or `out` — npm packages ship their compiled JS
+ * and native binaries there (e.g. @xenova/transformers → dist/, sharp and
+ * better-sqlite3 → build/Release/*.node). Nested `node_modules` is also kept so
+ * a package's bundled dependencies are preserved when their version differs
+ * from the hoisted one; the closure resolver hoists the common case.
+ */
 function isExcludedSegment(segment, fileName) {
   const lower = (fileName ?? "").toLowerCase();
   const s = segment.toLowerCase();
   if (s === "test" || s === "tests" || s === "__tests__" || s === "coverage") return true;
   if (s === "docs" || s === "doc" || s === ".github" || s === ".git") return true;
-  if (s === "node_modules" || s === "build" || s === "out" || s === "dist") return true;
   if (lower.endsWith(".md") && !/^license/i.test(segment) && !/^notice/i.test(segment)) return true;
   if (lower.endsWith(".map") || lower.endsWith(".ts")) return true;
-  if (s === ".bin" || s === ".package-lock.json") return true;
+  if (s === ".bin" || s === ".package-lock.json" || s === "package-lock.json") return true;
   return false;
 }
 

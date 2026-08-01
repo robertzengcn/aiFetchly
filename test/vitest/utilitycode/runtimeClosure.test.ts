@@ -142,4 +142,30 @@ describe("copyClosure", () => {
     expect(fs.existsSync(path.join(dest, "test", "harness.js"))).toBe(false);
     expect(fs.existsSync(path.join(dest, "src", "types.ts"))).toBe(false);
   });
+
+  test("regression: keeps dist/ and build/Release/ (compiled code + native binaries)", () => {
+    // npm packages ship compiled JS in dist/ and native binaries in build/Release/.
+    // Excluding them would ship empty packages.
+    writePkg(
+      "@xenova/transformers",
+      { name: "@xenova/transformers", version: "2.17.2" },
+      {
+        "dist/transformers.js": "module.exports={};",
+        "build/Release/native.node": "\0node-binary",
+      }
+    );
+    const closure = resolveClosure(root, ["@xenova/transformers"], {
+      platform: "win32",
+      arch: "x64",
+    });
+    const staging = path.join(root, "staging2");
+    copyClosure(closure, staging);
+    const dest = path.join(staging, "node_modules", "@xenova", "transformers");
+    expect(fs.existsSync(path.join(dest, "dist", "transformers.js"))).toBe(
+      true
+    );
+    expect(
+      fs.existsSync(path.join(dest, "build", "Release", "native.node"))
+    ).toBe(true);
+  });
 });
