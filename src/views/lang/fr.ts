@@ -1125,22 +1125,27 @@ export default {
     chrome_path: "chrome path",
     firefox_path: "firefox path",
     embedding_group: "Modèles d'Embedding",
-    embedding_group_description: "Modèle d'embedding par défaut pour la recherche vectorielle.",
+    embedding_group_description:
+      "Modèle d'embedding par défaut pour la recherche vectorielle.",
     external_system: "Système Externe",
     user_preferences: "Préférences Utilisateur",
-    "user-preferences-group-description": "Préférences utilisateur pour le comportement de l'application.",
+    "user-preferences-group-description":
+      "Préférences utilisateur pour le comportement de l'application.",
     default_embedding_model: "Modèle d'Embedding par Défaut",
-    "default-embedding-model-description": "Sélectionnez le modèle d'embedding utilisé pour la recherche vectorielle et la correspondance de similarité.",
+    "default-embedding-model-description":
+      "Sélectionnez le modèle d'embedding utilisé pour la recherche vectorielle et la correspondance de similarité.",
     language_preference: "Langue",
     "language-preference-description": "Préférence de langue de l'interface.",
     ai_website_analysis_business_info: "Informations Commerciales",
-    "ai-website-analysis-business-info-description": "Informations commerciales utilisées lors de l'analyse IA du site web.",
+    "ai-website-analysis-business-info-description":
+      "Informations commerciales utilisées lors de l'analyse IA du site web.",
     "external-system-group-description": "external system group setting",
     mcp_tools: "MCP Tools",
     manage_mcp_tools: "Manage MCP Tools",
     manage_skills: "Gérer les compétences",
     ai_preferences: "Préférences IA",
-    "ai-preferences-group-description": "Paramètres contrôlant le comportement du chat IA, la mémoire et le contexte.",
+    "ai-preferences-group-description":
+      "Paramètres contrôlant le comportement du chat IA, la mémoire et le contexte.",
     user_ai_auto_dream: "Consolidation Auto-Rêve",
     "ai-auto-dream-description":
       "Résumer automatiquement les conversations passées en arrière-plan pour économiser les tokens de contexte IA.",
@@ -1803,6 +1808,14 @@ export default {
   },
   aiChatV2: {
     title: "Assistant IA",
+    show_reasoning: "Afficher le raisonnement",
+    hide_reasoning: "Masquer le raisonnement",
+    reasoning_title: "Raisonnement",
+    reasoning_streaming: "Raisonnement…",
+    reasoning_unavailable:
+      "Le raisonnement n'est pas disponible pour ce modèle.",
+    copy_reasoning: "Copier le raisonnement",
+    reasoning_copied: "Raisonnement copié",
     new_conversation: "Nouvelle conversation",
     empty_title: "Démarrer une conversation",
     empty_description:
