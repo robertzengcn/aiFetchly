@@ -7,6 +7,7 @@ import type {
   AgentToolCallRecord,
 } from "@/entityTypes/agentTypes";
 import type { AgentTaskEntity } from "@/entity/AgentTask.entity";
+import { WorkspaceResolver } from "@/service/WorkspaceResolver";
 
 const MAX_CHAT_CONVERSATIONS = 5;
 const MAX_AGENT_TASKS = 5;
@@ -34,8 +35,24 @@ export interface AutoDreamSourcePacket {
   }>;
 }
 
+/**
+ * A source packet enriched with the resolved workspace (when the source
+ * conversation has an approved workspace). Agent tasks have no conversation
+ * link in phase 1, so their `workspace` stays undefined and they are skipped
+ * by workspace auto-dream grouping.
+ */
+export interface WorkspaceAwareAutoDreamSourcePacket
+  extends AutoDreamSourcePacket {
+  readonly workspace?: {
+    readonly workspaceId: number;
+    readonly workspaceKey: string;
+    readonly workspaceRoot: string;
+    readonly displayName: string;
+  };
+}
+
 export interface CollectSourcesResult {
-  packets: AutoDreamSourcePacket[];
+  packets: WorkspaceAwareAutoDreamSourcePacket[];
   chatConversationCount: number;
   agentTaskCount: number;
   reviewedThrough: Date;
@@ -44,21 +61,20 @@ export interface CollectSourcesResult {
 export class AIAutoDreamSourceCollector {
   private readonly chatModule = new AIChatV2Module();
   private readonly agentModule = new AgentTaskModule();
+  private readonly workspaceResolver = new WorkspaceResolver();
 
   async collect(input: {
     reviewedSince: Date | null;
   }): Promise<CollectSourcesResult> {
     const reviewedThrough = new Date();
-    const packets: AutoDreamSourcePacket[] = [];
+    const packets: WorkspaceAwareAutoDreamSourcePacket[] = [];
 
     const conversations = await this.chatModule.getConversations();
     const filteredChat = conversations
       .filter((c) => {
         const ts = new Date(c.lastMessageTimestamp).getTime();
         if (!Number.isFinite(ts)) return true;
-        return input.reviewedSince
-          ? ts >= input.reviewedSince.getTime()
-          : true;
+        return input.reviewedSince ? ts >= input.reviewedSince.getTime() : true;
       })
       .slice(0, MAX_CHAT_CONVERSATIONS);
 
@@ -77,12 +93,30 @@ export class AIAutoDreamSourceCollector {
           createdAt:
             r.timestamp instanceof Date ? r.timestamp.toISOString() : undefined,
         }));
+      // Resolve the durable workspace identity for this conversation. Failures
+      // (no approved workspace, revoked, etc.) yield no workspace context — the
+      // packet is still useful for global user-memory consolidation.
+      let workspace: WorkspaceAwareAutoDreamSourcePacket["workspace"];
+      try {
+        const resolved = await this.workspaceResolver.resolveWithKey(convId);
+        if (resolved) {
+          workspace = {
+            workspaceId: resolved.workspaceId,
+            workspaceKey: resolved.workspaceKey,
+            workspaceRoot: resolved.canonicalRootPath,
+            displayName: resolved.displayName,
+          };
+        }
+      } catch {
+        // non-fatal; packet proceeds without workspace context
+      }
       packets.push({
         sourceKind: "chat_v2",
         sourceId: convId,
         updatedAt: c.lastMessageTimestamp ?? reviewedThrough.toISOString(),
         title: c.title ?? convId,
         messages,
+        ...(workspace ? { workspace } : {}),
       });
     }
 
@@ -97,23 +131,20 @@ export class AIAutoDreamSourceCollector {
       if (!id) continue;
       const msgs: AgentTaskMessageRecord[] =
         await this.agentModule.listMessages(id);
-      const messages = msgs
-        .slice(-MAX_MESSAGES_PER_PACKET)
-        .map((m) => ({
-          id: m.toolCallId ?? "",
-          role: m.role,
-          content: clamp(m.content, MAX_MESSAGE_CHARS),
-        }));
-      const tcs: AgentToolCallRecord[] =
-        await this.agentModule.listToolCalls(id);
+      const messages = msgs.slice(-MAX_MESSAGES_PER_PACKET).map((m) => ({
+        id: m.toolCallId ?? "",
+        role: m.role,
+        content: clamp(m.content, MAX_MESSAGE_CHARS),
+      }));
+      const tcs: AgentToolCallRecord[] = await this.agentModule.listToolCalls(
+        id
+      );
       const toolCalls = tcs.map((tc) => ({
         toolCallId: tc.toolCallId,
         toolName: tc.toolName,
         status: tc.status,
-        resultSummary: clamp(
-          tc.resultSummary ?? "",
-          MAX_TOOL_SUMMARY_CHARS
-        ) || undefined,
+        resultSummary:
+          clamp(tc.resultSummary ?? "", MAX_TOOL_SUMMARY_CHARS) || undefined,
         errorMessage: tc.errorMessage ?? undefined,
       }));
       packets.push({
@@ -136,6 +167,29 @@ export class AIAutoDreamSourceCollector {
       reviewedThrough,
     };
   }
+}
+
+/**
+ * Group workspace-aware packets by their resolved workspaceKey. Packets with no
+ * resolved workspace (no approved workspace, or agent tasks without a
+ * conversation link in phase 1) are excluded — they cannot contribute to
+ * workspace-scoped consolidation.
+ */
+export function groupByWorkspace(
+  packets: readonly WorkspaceAwareAutoDreamSourcePacket[]
+): Map<string, WorkspaceAwareAutoDreamSourcePacket[]> {
+  const groups = new Map<string, WorkspaceAwareAutoDreamSourcePacket[]>();
+  for (const p of packets) {
+    const key = p.workspace?.workspaceKey;
+    if (!key) continue;
+    const list = groups.get(key);
+    if (list) {
+      list.push(p);
+    } else {
+      groups.set(key, [p]);
+    }
+  }
+  return groups;
 }
 
 function clamp(s: string, max: number): string {

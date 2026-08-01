@@ -40,6 +40,7 @@ import { HookDispatcher } from "./hooks/HookDispatcher";
 import {
   AggregatedHookResult,
   EMPTY_AGGREGATE,
+  HookInput,
   HookToolDescriptor,
 } from "@/entityTypes/hookTypes";
 
@@ -506,6 +507,10 @@ export class StreamEventProcessor {
         toolResult = this.buildHookBlockedToolResult(preAggregate);
       } else {
         const effectiveParams = preAggregate.updatedInput ?? toolParams;
+        // PreToolUse hook messages/contexts for non-blocking path.
+        // Merged into toolResult after executor runs (below).
+        const preSystemMessages = [...preAggregate.systemMessages];
+        const preContexts = [...preAggregate.additionalContexts];
 
         // Use SkillExecutor for registry-known skills, fall back to ToolExecutor for MCP/legacy
         if (SkillRegistry.isRegistered(toolName)) {
@@ -613,13 +618,15 @@ export class StreamEventProcessor {
             toolResult = { ...toolResult, ...postAggregate.updatedToolOutput };
           }
           if (
+            preSystemMessages.length > 0 ||
+            preContexts.length > 0 ||
             postAggregate.systemMessages.length > 0 ||
             postAggregate.additionalContexts.length > 0
           ) {
             toolResult = {
               ...toolResult,
-              hookMessages: [...postAggregate.systemMessages],
-              hookContexts: [...postAggregate.additionalContexts],
+              hookMessages: [...preSystemMessages, ...postAggregate.systemMessages],
+              hookContexts: [...preContexts, ...postAggregate.additionalContexts],
             };
           }
         }
@@ -837,6 +844,41 @@ export class StreamEventProcessor {
       });
     } catch (err) {
       console.error("PostToolUseFailure hook dispatch failed:", err);
+      return EMPTY_AGGREGATE;
+    }
+  }
+
+  /**
+   * A5 (Phase 17 / Plan 03): SessionStart + Stop lifecycle hook dispatch.
+   * SessionStart fires at stream start (CONVERSATION_START); Stop fires at
+   * graceful stream completion (CONVERSATION_END). Both are observe+inject only
+   * (per D-Blocking they cannot deny) — the aggregate is intentionally not
+   * consulted for a block decision. Never throws; failures are non-fatal.
+   */
+  private async runSessionLifecycleHooks(
+    eventName: "SessionStart" | "Stop"
+  ): Promise<AggregatedHookResult> {
+    try {
+      const base = {
+        hookRunId: `hookrun-${
+          eventName === "SessionStart" ? "session-start" : "stop"
+        }-${Date.now()}`,
+        source: "ai-chat-v2" as const,
+        conversationId: this.state.streamConversationId,
+        messageId: this.state.assistantMessageId,
+        timestamp: new Date().toISOString(),
+      };
+      const input: HookInput =
+        eventName === "SessionStart"
+          ? { eventName: "SessionStart", ...base, mode: "chat" }
+          : { eventName: "Stop", ...base, reason: "completed" };
+      return await HookDispatcher.executeHooks({
+        eventName,
+        input,
+        abortSignal: this.state.abortSignal,
+      });
+    } catch (err) {
+      console.error(`${eventName} hook dispatch failed:`, err);
       return EMPTY_AGGREGATE;
     }
   }
@@ -1187,6 +1229,8 @@ export class StreamEventProcessor {
       conversationId: this.state.streamConversationId,
     };
     this.event.sender.send(AI_CHAT_STREAM_CHUNK, JSON.stringify(chunk));
+    // A5: SessionStart lifecycle hooks fire at stream start (observe+inject).
+    void this.runSessionLifecycleHooks("SessionStart");
   }
 
   /**
@@ -1408,6 +1452,8 @@ export class StreamEventProcessor {
   private handleConversationEndEvent(): void {
     // Clean up plan data when conversation ends
     this.cleanupPlanData();
+    // A5: Stop lifecycle hooks fire at graceful stream completion (observe+inject).
+    void this.runSessionLifecycleHooks("Stop");
 
     const chunk: ChatStreamChunk = {
       content: "",

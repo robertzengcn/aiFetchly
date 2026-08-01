@@ -12,6 +12,32 @@
           :status="planState.status"
           class="ml-2"
         />
+        <v-chip
+          v-if="activeGoal"
+          size="x-small"
+          :color="goalStatusDescriptor.color"
+          class="ml-2"
+        >
+          <v-icon start size="x-small">{{ goalStatusDescriptor.icon }}</v-icon>
+          <span
+            class="text-truncate"
+            style="max-width: 180px"
+            :title="activeGoal.objective"
+          >
+            {{ activeGoal.objective }}
+          </span>
+          <span class="ml-1 font-weight-bold">
+            · {{ goalStatusDescriptor.label }}
+          </span>
+          <v-btn
+            v-if="activeGoal.status === 'running'"
+            size="x-small"
+            variant="text"
+            icon="mdi-stop"
+            :aria-label="t('aiChatV2.goalLoop.stop') || 'Stop loop'"
+            @click="stopActiveLoop"
+          />
+        </v-chip>
       </div>
       <div class="v2-shell__header-actions">
         <AiChatV2ContextBadge
@@ -20,6 +46,24 @@
           :total-tokens="contextTotalTokens"
           class="mx-2"
         />
+        <v-btn
+          icon
+          size="small"
+          variant="text"
+          class="v2-shell__speech-toggle"
+          data-testid="spoken-response-toggle"
+          :color="spokenResponseEnabled ? 'primary' : undefined"
+          :loading="voiceSettingsSaving"
+          :disabled="voiceSettingsSaving"
+          :title="spokenResponseToggleTitle"
+          :aria-label="spokenResponseToggleTitle"
+          :aria-pressed="spokenResponseEnabled"
+          @click="toggleSpokenResponse"
+        >
+          <v-icon size="small">
+            {{ spokenResponseEnabled ? "mdi-volume-high" : "mdi-volume-off" }}
+          </v-icon>
+        </v-btn>
         <v-btn
           icon
           size="small"
@@ -93,13 +137,14 @@
     <!-- Main content (no sidebar) -->
     <div class="v2-shell__body">
       <AiChatV2Messages
-        :messages="messages"
+        :messages="visibleMessages"
         :active-assistant-message-id="activeAssistantMessageId"
         :stream-status="streamStatus"
         :error-message="streamError ?? undefined"
         :show-typing-indicator="showTypingIndicator"
         :is-streaming="chatIsRunning"
         :retry-info="retryInfo"
+        :recovery-info="recoveryInfo"
         :workspace-root="activeWorkspace?.rootPath ?? ''"
         :show-reasoning="showReasoning"
         @grant-permission="handleSkillPermissionGrant"
@@ -107,15 +152,31 @@
         @approve-plan="handleApprovePlan"
         @reject-plan="handleRejectPlan"
         @request-plan-changes="handleRequestPlanChanges"
+        @open-artifact="(id: string) => emit('open-artifact', id)"
+        @copy-artifact-html="(id: string) => emit('copy-artifact-html', id)"
       />
 
-      <!-- Pinned action cards: question + plan approval while awaiting user input.
+      <!-- Pinned action cards: permission + question + plan approval while awaiting user input.
            After the user approves/rejects/requests changes, the plan card moves
            into the message flow (see handleApprovePlan et al.). -->
       <div
-        v-if="mode === 'plan' && (pendingQuestion || pendingPlanApproval)"
+        v-if="
+          pinnedPermissionPrompt ||
+          (mode === 'plan' && (pendingQuestion || pendingPlanApproval))
+        "
         class="v2-shell__plan-panel"
       >
+        <SkillApprovalCard
+          v-if="pinnedPermissionPrompt"
+          :tool-name="pinnedPermissionToolName"
+          :permission-category="pinnedPermissionCategory"
+          :shell-preview="pinnedPermissionShellPreview"
+          :workspace-root="activeWorkspace?.rootPath ?? ''"
+          :disabled="pinnedPermissionResumeInFlight"
+          :loading="pinnedPermissionResumeInFlight"
+          @grant="handlePinnedPermissionGrant"
+          @deny="handlePinnedPermissionDeny"
+        />
         <AiChatV2QuestionCard
           v-if="pendingQuestion"
           :question="pendingQuestion"
@@ -196,8 +257,10 @@
       <div class="v2-shell__workspace-panel">
         <WorkspaceBadge
           :workspace="activeWorkspace"
+          :memory-count="workspaceMemoryCount"
           class="mb-1"
           @request-set-workspace="handleWorkspaceSetupRequest"
+          @request-open-memory="openWorkspaceMemory"
         />
         <WorkspaceRequiredCard
           v-if="showWorkspaceRequired && activeConversationId"
@@ -207,10 +270,57 @@
         />
       </div>
 
+      <v-alert
+        v-if="localToolsUnsupported"
+        type="warning"
+        variant="tonal"
+        density="compact"
+        class="mb-2"
+      >
+        {{ t('aiProvider.tool_warning') || 'This local provider has not confirmed tool support. Tools are disabled for this conversation.' }}
+      </v-alert>
+
+      <v-dialog v-model="showWorkspaceMemory" max-width="760">
+        <v-card>
+          <v-card-title class="d-flex align-center">
+            <v-icon class="mr-2">mdi-brain</v-icon>
+            <span>{{
+              t("workspaceMemory.panelTitle") || "Workspace memory"
+            }}</span>
+            <v-spacer />
+            <v-btn icon="mdi-close" variant="text" size="small" @click="showWorkspaceMemory = false" />
+          </v-card-title>
+          <v-divider />
+          <WorkspaceMemoryPanel
+            v-if="activeConversationId"
+            :conversation-id="activeConversationId"
+            :workspace="activeWorkspace"
+            @change="refreshWorkspaceMemoryCount"
+          />
+        </v-card>
+      </v-dialog>
+
       <AiChatV2Composer
         :is-streaming="chatIsRunning"
+        :is-processing="isPreparingAttachments"
+        :voice-enabled="voiceInputEnabled"
+        :voice-auto-send="voiceAutoSend"
+        :voice-max-recording-ms="voiceMaxRecordingMs"
+        :voice-model-missing="voiceMissingModel"
+        :voice-runtime-unavailable="voiceRuntimeUnavailable"
+        :voice-model-installing="voiceModelInstalling"
+        :voice-model-install-error="voiceModelInstallError"
+        :voice-playback-error="voicePlaybackError"
+        :voice-speaking="voiceSpeaking"
+        :voice-chat-ready="voiceChatReady"
+        :conversation-id="activeConversationId"
         @send="onSend"
         @stop="onStop"
+        @request-workspace="handleWorkspaceSetupRequest"
+        @install-voice-model="handleInstallVoiceModel"
+        @voice-recording-start="onVoiceRecordingStart"
+        @stop-speaking="onStopSpeaking"
+        @open-voice-settings="openAIProviderSettings"
       >
         <template #prepend>
           <AiChatV2ModeSelector v-model="mode" :disabled="chatIsRunning" />
@@ -228,6 +338,23 @@
             class="ml-2"
             @update:model-value="onToolApprovalModeChange"
           />
+          <v-tooltip location="bottom">
+            <template #activator="{ props }">
+              <v-chip
+                v-if="providerLabel"
+                v-bind="props"
+                size="x-small"
+                :color="providerChipColor"
+                variant="tonal"
+                class="ml-2 cursor-pointer"
+                @click="openAIProviderSettings"
+              >
+                <v-icon start size="small">mdi-robot-outline</v-icon>
+                {{ providerLabel }}
+              </v-chip>
+            </template>
+            <span>{{ t('aiProvider.title') || 'AI Provider' }}</span>
+          </v-tooltip>
         </template>
       </AiChatV2Composer>
     </div>
@@ -350,12 +477,18 @@ import {
   onBeforeUnmount,
 } from "vue";
 import { useI18n } from "vue-i18n";
+import { useRouter } from "vue-router";
+import { handleAiNavigationToolResult } from "@/views/utils/aiNavigationResultHandler";
 import { MessageType } from "@/entityTypes/commonType";
 import type {
   ChatV2MessageView,
   ChatV2ConversationSummary,
   ChatV2StreamChunk,
+  ChatV2StreamRequest,
   ChatV2MessageMetadata,
+  ChatV2UploadedAttachment,
+  ChatV2AttachmentKind,
+  ChatV2AttachmentMetadata,
   ChatToolApprovalMode,
 } from "@/entityTypes/aiChatV2Types";
 import type {
@@ -372,6 +505,7 @@ import {
 } from "@/config/channellist";
 import {
   clearChatV2StreamListeners,
+  clearChatV2Conversation,
   getChatV2Conversations,
   getChatV2History,
   streamChatV2Message,
@@ -386,6 +520,27 @@ import {
   getChatV2ToolApprovalMode,
   setChatV2ToolApprovalMode,
 } from "@/views/api/aiChatV2";
+import {
+  AI_CHAT_V2_VOICE_SETTINGS_CHANGED_EVENT,
+  AI_CHAT_V2_VOICE_MODELS_CHANGED_EVENT,
+  cancelVoiceJob,
+  downloadVoiceModel,
+  getVoiceSettings,
+  getVoiceStatus,
+  setVoiceSettings,
+} from "@/views/api/aiChatV2Voice";
+import type {
+  AiChatVoiceRuntimeStatus,
+  AiChatVoiceSettingsView,
+  AiChatVoiceTtsMode,
+} from "@/entityTypes/aiChatVoiceTypes";
+import { SpeechResponseController } from "./voice/SpeechResponseController";
+import {
+  AI_PROVIDER_SETTINGS_CHANGED_EVENT,
+  getAIProviderSettings,
+} from "@/views/api/aiProvider";
+import type { AIProviderSettingsView } from "@/entityTypes/aiProviderTypes";
+import { dispatchSlashCommand } from "@/views/api/slashCommands";
 import AiChatV2Messages from "./AiChatV2Messages.vue";
 import AiChatV2Composer from "./AiChatV2Composer.vue";
 import AiChatV2ModeSelector from "./AiChatV2ModeSelector.vue";
@@ -396,13 +551,28 @@ import AiChatV2PlanApprovalCard from "./AiChatV2PlanApprovalCard.vue";
 import AiChatV2PlanStatusBadge from "./AiChatV2PlanStatusBadge.vue";
 import AiChatV2ContextBadge from "./AiChatV2ContextBadge.vue";
 import FileOperationBadge from "../aiChat/FileOperationBadge.vue";
+import SkillApprovalCard from "../aiChat/SkillApprovalCard.vue";
 import MCPToolManager from "../aiChat/MCPToolManager.vue";
 import AgentTaskListDialog from "./AgentTaskListDialog.vue";
 import WorkspaceBadge from "./WorkspaceBadge.vue";
 import WorkspaceRequiredCard from "./WorkspaceRequiredCard.vue";
+import WorkspaceMemoryPanel from "./WorkspaceMemoryPanel.vue";
 import { getWorkspace } from "@/views/api/workspace";
+import {
+  createGoal,
+  getActiveGoal,
+  startGoalLoop,
+  stopGoalLoop,
+} from "@/views/api/aiChatGoal";
+import {
+  parseAiGoalCommand,
+  isValidLoopCount,
+} from "@/views/utils/aiGoalCommand";
+import type { AIChatGoalView } from "@/entityTypes/aiChatGoalTypes";
+import { workspaceMemoryApi } from "@/views/api/aiWorkspaceMemory";
 import type { WorkspaceSummary } from "@/entityTypes/workspaceTypes";
 import type { FileOperationRecord } from "@/entityTypes/fileOperationTypes";
+import { extractArtifactMetadata, ensureArtifactMetadata } from "./artifactMetadata";
 import {
   subscribeToFileOperations,
   unsubscribeFromFileOperations,
@@ -414,6 +584,10 @@ import {
   DEFAULT_CONTEXT_WINDOW,
 } from "./contextUsageUtil";
 import { hasPendingToolExecution } from "./toolExecutionStateUtil";
+import {
+  downscaleImageAttachment,
+  arrayBufferToBase64,
+} from "./imageScaleUtil";
 import { QUOTA_EXHAUSTED_SENTINEL } from "@/service/AIChatErrorMapper";
 
 /**
@@ -431,9 +605,31 @@ const CHARS_PER_TOKEN_ESTIMATE = 4;
 const AUTO_MODEL_VALUE = "auto";
 
 type Status = "idle" | "streaming" | "cancelled" | "error";
+type ShellPreview = {
+  command: string;
+  cwd?: string;
+  shell: string;
+  timeout_ms: number;
+};
+
+const emit = defineEmits<{
+  (e: "open-artifact", artifactId: string): void;
+  (e: "copy-artifact-html", artifactId: string): void;
+}>();
 
 const { t } = useI18n();
+const router = useRouter();
 
+interface AiPromptRequest {
+  id: number;
+  text: string;
+}
+
+const props = defineProps<{
+  promptRequest?: AiPromptRequest | null;
+}>();
+
+const lastHandledPromptRequestId = ref<number | null>(null);
 const conversations = ref<ChatV2ConversationSummary[]>([]);
 const activeConversationId = ref<string | null>(null);
 const messages = ref<ChatV2MessageView[]>([]);
@@ -445,16 +641,308 @@ const activeAssistantMessageId = ref<string | null>(null);
 const receivedFirstResponse = ref(false);
 // Tracks the active reconnection attempt when the AI server connection
 // drops and is being retried. Null when no retry is in progress.
-const retryInfo = ref<{
+type RetryInfo = {
   attempt: number;
   maxAttempts: number;
   delayMs: number;
-} | null>(null);
+};
+const retryInfo = ref<RetryInfo | null>(null);
+// Active seven-layer recovery status. Null when no recovery layer is
+// running. Cleared on token/tool_call/complete/cancelled/error.
+type RecoveryInfo = {
+  layer: import("@/service/AIChatRecoveryTypes").AIChatRecoveryLayer;
+  reason: import("@/service/AIChatRecoveryTypes").AIChatRecoveryReason;
+  attempt?: number;
+  maxAttempts?: number;
+  delayMs?: number;
+  elapsedMs?: number;
+  originalModel?: string;
+  currentModel?: string;
+  fallbackModel?: string;
+  message?: string;
+};
+const recoveryInfo = ref<RecoveryInfo | null>(null);
 const showConversationsDialog = ref(false);
 const showMCPToolManager = ref(false);
 const isCompacting = ref(false);
 const compactNotice = ref(false);
 const stoppedPendingToolConversationIds = ref<Set<string>>(new Set());
+
+interface MessageListController {
+  get(): ChatV2MessageView[];
+  set(nextMessages: ChatV2MessageView[]): void;
+}
+
+interface ConversationRuntimeState {
+  messages: ChatV2MessageView[];
+  isStreaming: boolean;
+  activeAssistantMessageId: string | null;
+  receivedFirstResponse: boolean;
+  streamError: string | null;
+  retryInfo: RetryInfo | null;
+  recoveryInfo: RecoveryInfo | null;
+}
+
+const conversationRuntime = ref<Map<string, ConversationRuntimeState>>(
+  new Map()
+);
+
+const createIdleRuntimeState = (): ConversationRuntimeState => ({
+  messages: [],
+  isStreaming: false,
+  activeAssistantMessageId: null,
+  receivedFirstResponse: false,
+  streamError: null,
+  retryInfo: null,
+  recoveryInfo: null,
+});
+
+const getConversationRuntimeState = (
+  conversationId: string
+): ConversationRuntimeState => {
+  return (
+    conversationRuntime.value.get(conversationId) ?? createIdleRuntimeState()
+  );
+};
+
+const applyRuntimeFieldsToActive = (
+  state: ConversationRuntimeState,
+  options: { applyMessages?: boolean } = {}
+): void => {
+  if (options.applyMessages) {
+    messages.value = state.messages;
+  }
+  isStreaming.value = state.isStreaming;
+  activeAssistantMessageId.value = state.activeAssistantMessageId;
+  receivedFirstResponse.value = state.receivedFirstResponse;
+  streamError.value = state.streamError;
+  retryInfo.value = state.retryInfo;
+  recoveryInfo.value = state.recoveryInfo;
+};
+
+const resetActiveRuntimeFields = (): void => {
+  isStreaming.value = false;
+  activeAssistantMessageId.value = null;
+  receivedFirstResponse.value = false;
+  streamError.value = null;
+  retryInfo.value = null;
+  recoveryInfo.value = null;
+};
+
+const patchConversationRuntimeState = (
+  conversationId: string,
+  patch: Partial<ConversationRuntimeState>
+): ConversationRuntimeState => {
+  const current = getConversationRuntimeState(conversationId);
+  const nextState: ConversationRuntimeState = {
+    ...current,
+    ...patch,
+  };
+  const nextMap = new Map(conversationRuntime.value);
+  nextMap.set(conversationId, nextState);
+  conversationRuntime.value = nextMap;
+  if (activeConversationId.value === conversationId) {
+    applyRuntimeFieldsToActive(nextState, {
+      applyMessages: patch.messages !== undefined,
+    });
+  }
+  return nextState;
+};
+
+const clearConversationRuntimeState = (conversationId: string): void => {
+  if (!conversationRuntime.value.has(conversationId)) return;
+  const nextMap = new Map(conversationRuntime.value);
+  nextMap.delete(conversationId);
+  conversationRuntime.value = nextMap;
+};
+
+const markConversationRuntimeStopped = (
+  conversationId: string | null | undefined,
+  errorMessage?: string
+): void => {
+  if (!conversationId) {
+    resetActiveRuntimeFields();
+    if (errorMessage) {
+      streamError.value = errorMessage;
+    }
+    return;
+  }
+  patchConversationRuntimeState(conversationId, {
+    isStreaming: false,
+    activeAssistantMessageId: null,
+    retryInfo: null,
+    recoveryInfo: null,
+    streamError: errorMessage ?? null,
+  });
+};
+
+const markActiveConversationRuntimeStopped = (errorMessage?: string): void => {
+  markConversationRuntimeStopped(activeConversationId.value, errorMessage);
+};
+
+const activeMessageListController: MessageListController = {
+  get: () => messages.value,
+  set: (nextMessages: ChatV2MessageView[]): void => {
+    messages.value = nextMessages;
+  },
+};
+
+const hasEquivalentPersistedMessage = (
+  persistedMessages: ChatV2MessageView[],
+  liveMessage: ChatV2MessageView
+): boolean => {
+  const liveToolCallId = liveMessage.metadata?.toolCallId;
+  return persistedMessages.some((persisted) => {
+    if (persisted.id === liveMessage.id) return true;
+    if (
+      liveToolCallId &&
+      persisted.messageType === liveMessage.messageType &&
+      persisted.metadata?.toolCallId === liveToolCallId
+    ) {
+      return true;
+    }
+    return (
+      persisted.role === liveMessage.role &&
+      persisted.messageType === liveMessage.messageType &&
+      persisted.content === liveMessage.content &&
+      liveMessage.content.length > 0
+    );
+  });
+};
+
+const mergePersistedAndLiveMessages = (
+  persistedMessages: ChatV2MessageView[],
+  liveMessages: ChatV2MessageView[]
+): ChatV2MessageView[] => {
+  const merged = [...persistedMessages];
+  const indexById = new Map<string, number>();
+  merged.forEach((message, index) => {
+    indexById.set(message.id, index);
+  });
+
+  for (const liveMessage of liveMessages) {
+    const existingIndex = indexById.get(liveMessage.id);
+    if (existingIndex !== undefined) {
+      const persistedMessage = merged[existingIndex];
+      const liveImageCount =
+        liveMessage.metadata?.generatedImages?.length ?? 0;
+      const persistedImageCount =
+        persistedMessage.metadata?.generatedImages?.length ?? 0;
+      if (
+        liveMessage.content.length > persistedMessage.content.length ||
+        liveImageCount > persistedImageCount
+      ) {
+        const metadataSource =
+          liveMessage.metadata?.source ?? persistedMessage.metadata?.source;
+        const mergedMetadata =
+          metadataSource &&
+          (persistedMessage.metadata || liveMessage.metadata)
+            ? {
+                ...persistedMessage.metadata,
+                ...liveMessage.metadata,
+                source: metadataSource,
+              }
+            : undefined;
+        merged[existingIndex] = {
+          ...persistedMessage,
+          ...liveMessage,
+          metadata: mergedMetadata,
+        };
+      }
+      continue;
+    }
+    if (hasEquivalentPersistedMessage(merged, liveMessage)) {
+      continue;
+    }
+    merged.push(liveMessage);
+    indexById.set(liveMessage.id, merged.length - 1);
+  }
+
+  return merged;
+};
+
+// ---------------------------------------------------------------------------
+// Attachment upload state
+// ---------------------------------------------------------------------------
+const isPreparingAttachments = ref(false);
+const attachmentError = ref<string | null>(null);
+
+const MAX_UPLOAD_FILE_BYTES = 5 * 1024 * 1024;
+
+function classifyAttachment(fileName: string, mimeType: string): ChatV2AttachmentKind | null {
+  const name = fileName.toLowerCase();
+  const mime = mimeType.toLowerCase();
+
+  if (mime.startsWith("image/")) return "image";
+  if (name.endsWith(".png") || name.endsWith(".jpg") || name.endsWith(".jpeg")) return "image";
+  if (name.endsWith(".webp") || name.endsWith(".gif")) return "image";
+
+  if (mime === "application/pdf" || name.endsWith(".pdf")) return "document";
+  if (mime === "text/csv" || mime === "application/csv" || name.endsWith(".csv")) return "document";
+  if (name.endsWith(".docx") || mime.includes("wordprocessingml.document")) return "document";
+  if (name.endsWith(".xlsx") || name.endsWith(".xls") || mime.includes("spreadsheetml.sheet")) return "document";
+
+  return null;
+}
+
+function defaultPromptForAttachments(files: File[]): string {
+  const images = files.filter((f) => classifyAttachment(f.name, f.type) === "image");
+  if (images.length > 0 && files.every((f) => classifyAttachment(f.name, f.type) === "image")) {
+    return "What is in this image?";
+  }
+  return "";
+}
+
+function resolveMimeType(file: File): string {
+  if (file.type && file.type !== "application/octet-stream") {
+    return file.type;
+  }
+  const name = file.name.toLowerCase();
+  if (name.endsWith(".pdf")) return "application/pdf";
+  if (name.endsWith(".csv")) return "text/csv";
+  if (name.endsWith(".docx")) return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+  if (name.endsWith(".xlsx")) return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+  if (name.endsWith(".xls")) return "application/vnd.ms-excel";
+  if (name.endsWith(".png")) return "image/png";
+  if (name.endsWith(".jpg") || name.endsWith(".jpeg")) return "image/jpeg";
+  if (name.endsWith(".webp")) return "image/webp";
+  if (name.endsWith(".gif")) return "image/gif";
+  return file.type || "application/octet-stream";
+}
+
+async function buildUploadedAttachments(files: File[]): Promise<ChatV2UploadedAttachment[]> {
+  const out: ChatV2UploadedAttachment[] = [];
+  for (const file of files) {
+    const kind = classifyAttachment(file.name, file.type);
+    if (!kind) throw new Error(`Unsupported file type: ${file.name}`);
+    if (file.size > MAX_UPLOAD_FILE_BYTES) throw new Error(`File too large: ${file.name}`);
+
+    if (kind === "image") {
+      // Downscale + recompress before base64 so the inline data URL stays
+      // small enough for the AI server's request-body limit (large photos
+      // otherwise trip HTTP 413 "Request Entity Too Large"). Falls back to
+      // the original bytes if canvas processing fails.
+      const processed = await downscaleImageAttachment(file);
+      out.push({
+        fileName: file.name,
+        mimeType: processed.mimeType,
+        sizeBytes: processed.sizeBytes,
+        contentBase64: processed.contentBase64,
+        kind,
+      });
+    } else {
+      const buffer = await file.arrayBuffer();
+      out.push({
+        fileName: file.name,
+        mimeType: resolveMimeType(file),
+        sizeBytes: file.size,
+        contentBase64: arrayBufferToBase64(buffer),
+        kind,
+      });
+    }
+  }
+  return out;
+}
 
 // ---------------------------------------------------------------------------
 // Tool approval mode
@@ -480,8 +968,8 @@ function handleAgentTaskCancel(agentTaskId: string): void {
 }
 
 async function onToolApprovalModeChange(mode: ChatToolApprovalMode): Promise<void> {
-  if (!activeConversationId.value) return;
   toolApprovalMode.value = mode;
+  if (!activeConversationId.value) return;
   try {
     const saved = await setChatV2ToolApprovalMode(activeConversationId.value, mode);
     toolApprovalMode.value = saved;
@@ -499,6 +987,39 @@ async function onToolApprovalModeChange(mode: ChatToolApprovalMode): Promise<voi
 const activeWorkspace = ref<WorkspaceSummary | null>(null);
 // True when the active conversation has no workspace — shows the pick card.
 const showWorkspaceRequired = ref(false);
+
+// Workspace memory panel + count for the active approved workspace.
+const showWorkspaceMemory = ref(false);
+const workspaceMemoryCount = ref(0);
+
+function openWorkspaceMemory(): void {
+  if (!activeWorkspace.value || activeWorkspace.value.approvalState !== "approved") {
+    showWorkspaceMemory.value = false;
+    return;
+  }
+  showWorkspaceMemory.value = true;
+}
+
+async function refreshWorkspaceMemoryCount(): Promise<void> {
+  if (!activeConversationId.value || !activeWorkspace.value || activeWorkspace.value.approvalState !== "approved") {
+    workspaceMemoryCount.value = 0;
+    return;
+  }
+  try {
+    // One IPC + DB round-trip: fetch up to 200 active memories and use the
+    // returned length as the badge count (capped at 200, which is plenty for
+    // a badge — beyond that the exact number doesn't matter to the user).
+    const resp = await workspaceMemoryApi.list({
+      conversationId: activeConversationId.value,
+      status: "active",
+      limit: 200,
+    });
+    workspaceMemoryCount.value =
+      resp.status && Array.isArray(resp.data) ? resp.data.length : 0;
+  } catch {
+    workspaceMemoryCount.value = 0;
+  }
+}
 
 function createLocalConversationId(): string {
   const randomId =
@@ -537,6 +1058,7 @@ async function refreshWorkspace(conversationId: string | null): Promise<void> {
   if (!conversationId) {
     activeWorkspace.value = null;
     showWorkspaceRequired.value = false;
+    void refreshWorkspaceMemoryCount();
     return;
   }
   try {
@@ -550,12 +1072,76 @@ async function refreshWorkspace(conversationId: string | null): Promise<void> {
           approvalState: ws.approvalState,
         }
       : null;
-    showWorkspaceRequired.value = false;
+    showWorkspaceRequired.value = ws ? false : showWorkspaceRequired.value;
   } catch {
     // non-fatal; treat as no workspace
     activeWorkspace.value = null;
-    showWorkspaceRequired.value = false;
   }
+  void refreshWorkspaceMemoryCount();
+}
+
+/**
+ * Fetch the active goal (if any) for the conversation. Renderer display only;
+ * the main process remains authoritative for goal state.
+ */
+async function refreshActiveGoal(): Promise<void> {
+  const id = activeConversationId.value;
+  if (!id) {
+    activeGoal.value = null;
+    return;
+  }
+  try {
+    activeGoal.value = await getActiveGoal(id);
+  } catch {
+    activeGoal.value = null;
+  }
+}
+
+/** Handle /loop: validate bounds + active goal, then start the loop run. */
+async function runLoopCommand(count: number | null): Promise<void> {
+  if (count === null) {
+    streamError.value =
+      t("aiChatV2.goalLoop.countRequired") || "Please provide an iteration count.";
+    return;
+  }
+  if (!isValidLoopCount(count)) {
+    streamError.value =
+      t("aiChatV2.goalLoop.countRange") ||
+      "Iteration count must be between 1 and 10.";
+    return;
+  }
+  const goal = activeGoal.value;
+  if (!goal) {
+    streamError.value =
+      t("aiChatV2.goalLoop.noActiveGoal") ||
+      "Set a goal first with /goal <objective>.";
+    return;
+  }
+  try {
+    const started = await startGoalLoop({
+      conversationId: activeConversationId.value ?? "",
+      goalId: goal.goalId,
+      maxIterations: count,
+    });
+    if (!started) {
+      streamError.value =
+        t("aiChatV2.goalLoop.startFailed") || "Could not start the loop.";
+    }
+  } catch {
+    streamError.value =
+      t("aiChatV2.goalLoop.startFailed") || "Could not start the loop.";
+  }
+  await refreshActiveGoal();
+}
+
+/** Stop the active loop run (user pressed Stop). */
+async function stopActiveLoop(): Promise<void> {
+  try {
+    await stopGoalLoop(activeConversationId.value ?? "");
+  } catch {
+    /* non-fatal */
+  }
+  await refreshActiveGoal();
 }
 
 /**
@@ -579,6 +1165,7 @@ function onWorkspaceApproved(
 // Refresh the workspace badge whenever the active conversation changes.
 watch(activeConversationId, (id) => {
   void refreshWorkspace(id);
+  void refreshActiveGoal();
 });
 
 // Conversation search state
@@ -705,8 +1292,19 @@ const contextTotalTokens = computed(() =>
   resolveContextWindowLocal(effectiveModel.value)
 );
 
-const loadModelContextWindows = async (): Promise<void> => {
+const loadModelContextWindows = async (
+  options: { resetSelection?: boolean } = {}
+): Promise<void> => {
   try {
+    if (options.resetSelection) {
+      availableModels.value = [];
+      defaultModelId.value = undefined;
+      modelContextWindows.value = new Map();
+      selectedModel.value = undefined;
+      activeModel.value = undefined;
+      lastUsage.value = null;
+      streamingEstimatedTokens.value = 0;
+    }
     const resp = await getOpenAIChatModels();
     const data = resp?.data;
     if (!Array.isArray(data)) return;
@@ -733,7 +1331,7 @@ const loadModelContextWindows = async (): Promise<void> => {
     // Resolve the initial model selection once the list is available. Don't
     // override a selection that was already made (e.g. restored from storage
     // before this async load completed, or changed by the user).
-    if (selectedModel.value === undefined) {
+    if (options.resetSelection || selectedModel.value === undefined) {
       selectedModel.value = resolveInitialModel(validModels);
     }
   } catch {
@@ -785,6 +1383,78 @@ watch(selectedModel, (val) => {
   }
 });
 
+// ---------------------------------------------------------------------------
+// Provider indicator (Hosted vs Local). Loaded once on mount; the chip near
+// the model selector reflects which provider is active and links to settings.
+// ---------------------------------------------------------------------------
+// `router` is shared with the rest of the component (declared above).
+const providerSettings = ref<AIProviderSettingsView | null>(null);
+
+const providerLabel = computed<string>(() => {
+  const view = providerSettings.value;
+  if (!view) return "";
+  if (view.mode === "hosted") {
+    return t("aiProvider.indicator_hosted") || "Hosted";
+  }
+  if (view.localProvider) {
+    const name = view.localProvider.name || view.localProvider.preset;
+    return `${t("aiProvider.indicator_local") || "Local"}: ${name}`;
+  }
+  return t("aiProvider.indicator_offline") || "Local offline";
+});
+
+const providerChipColor = computed<string>(() => {
+  const view = providerSettings.value;
+  if (!view) return "grey";
+  if (view.mode === "hosted") return "primary";
+  return view.localProvider ? "success" : "warning";
+});
+
+/** Local providers use tools only when capability is explicitly supported. */
+const localToolsUnsupported = computed<boolean>(() => {
+  const view = providerSettings.value;
+  return (
+    !!view &&
+    view.mode === "local" &&
+    view.localProvider?.capabilities?.tools !== "supported"
+  );
+});
+
+async function loadProviderSettings(): Promise<void> {
+  try {
+    providerSettings.value = await getAIProviderSettings();
+  } catch {
+    // Non-fatal: indicator simply stays blank.
+  }
+}
+
+function isAIProviderSettingsView(value: unknown): value is AIProviderSettingsView {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Partial<AIProviderSettingsView>;
+  return candidate.mode === "hosted" || candidate.mode === "local";
+}
+
+async function refreshProviderStateAfterChange(
+  view?: AIProviderSettingsView
+): Promise<void> {
+  if (view) {
+    providerSettings.value = view;
+  } else {
+    await loadProviderSettings();
+  }
+  await loadModelContextWindows({ resetSelection: true });
+}
+
+function handleProviderSettingsChanged(event: Event): void {
+  const detail = event instanceof CustomEvent ? event.detail : undefined;
+  const view = isAIProviderSettingsView(detail) ? detail : undefined;
+  void refreshProviderStateAfterChange(view);
+}
+
+function openAIProviderSettings(): void {
+  router.push({ name: "system_setting_ai_provider" });
+}
+
 const hasLoadedPendingToolExecution = computed(() => {
   const conversationId = activeConversationId.value;
   if (!conversationId) return false;
@@ -798,13 +1468,100 @@ const chatIsRunning = computed(
   () => isStreaming.value || hasLoadedPendingToolExecution.value
 );
 
+const hasAnyActiveStream = computed(() => {
+  for (const state of conversationRuntime.value.values()) {
+    if (state.isStreaming) return true;
+  }
+  return false;
+});
+
 /**
- * A conversation shows a "running" indicator when it is the active conversation
- * and the chat is currently streaming or waiting on a pending tool execution.
- * Other conversations in the list are idle (no background work happens on them).
+ * A conversation shows a running indicator if it owns a live stream, even when
+ * the user has switched away from it. Pending tool execution is only known for
+ * the currently loaded conversation history, so that remains active-only.
  */
 const isConversationRunning = (conversationId: string): boolean =>
-  chatIsRunning.value && conversationId === activeConversationId.value;
+  conversationRuntime.value.get(conversationId)?.isStreaming === true ||
+  (conversationId === activeConversationId.value &&
+    hasLoadedPendingToolExecution.value);
+
+const isPermissionPromptMessage = (message: ChatV2MessageView): boolean => {
+  if (message.messageType !== MessageType.TOOL_RESULT) return false;
+  return message.metadata?.toolResult?.needsPermissionPrompt === true;
+};
+
+const pinnedPermissionPrompt = computed<ChatV2MessageView | null>(() => {
+  for (let i = messages.value.length - 1; i >= 0; i -= 1) {
+    const message = messages.value[i];
+    if (isPermissionPromptMessage(message)) {
+      return message;
+    }
+  }
+  return null;
+});
+
+const visibleMessages = computed<ChatV2MessageView[]>(() => {
+  const pinnedId = pinnedPermissionPrompt.value?.id;
+  if (!pinnedId) return messages.value;
+  return messages.value.filter((message) => message.id !== pinnedId);
+});
+
+const pinnedPermissionToolResult = computed<Record<string, unknown>>(
+  () => pinnedPermissionPrompt.value?.metadata?.toolResult ?? {}
+);
+
+const pinnedPermissionToolName = computed(() => {
+  const toolName = pinnedPermissionPrompt.value?.metadata?.toolName;
+  return typeof toolName === "string" ? toolName : "";
+});
+
+const pinnedPermissionCategory = computed(() => {
+  const category = pinnedPermissionToolResult.value.permissionCategory;
+  return typeof category === "string" ? category : "";
+});
+
+const pinnedPermissionShellPreview = computed<ShellPreview | undefined>(() => {
+  const preview = pinnedPermissionToolResult.value.shellPreview;
+  if (!preview || typeof preview !== "object") {
+    return undefined;
+  }
+  const shellData = preview as Record<string, unknown>;
+  if (
+    typeof shellData.command !== "string" ||
+    typeof shellData.shell !== "string" ||
+    typeof shellData.timeout_ms !== "number"
+  ) {
+    return undefined;
+  }
+  return {
+    command: shellData.command,
+    cwd: typeof shellData.cwd === "string" ? shellData.cwd : undefined,
+    shell: shellData.shell,
+    timeout_ms: shellData.timeout_ms,
+  };
+});
+
+const permissionResumeInFlightToolIds = ref<Set<string>>(new Set());
+
+const setPermissionResumeInFlight = (
+  toolId: string,
+  inFlight: boolean
+): void => {
+  const next = new Set(permissionResumeInFlightToolIds.value);
+  if (inFlight) {
+    next.add(toolId);
+  } else {
+    next.delete(toolId);
+  }
+  permissionResumeInFlightToolIds.value = next;
+};
+
+const pinnedPermissionResumeInFlight = computed(() => {
+  const toolId = pinnedPermissionPrompt.value
+    ? resolveToolIdForPermissionMessage(pinnedPermissionPrompt.value)
+    : undefined;
+  return !!toolId && permissionResumeInFlightToolIds.value.has(toolId);
+});
 
 // True only between clicking send and the first visible AI chunk. Auto-clears
 // when streaming ends for any reason (complete/error/stop/permission deny).
@@ -827,6 +1584,51 @@ const showTypingIndicator = computed(() => {
 // Plan Mode state
 const mode = ref<ChatV2Mode>("chat");
 const planState = ref<AIChatPlanStateView | null>(null);
+// Goal / loop state (renderer display only; authoritative state lives in main).
+const activeGoal = ref<AIChatGoalView | null>(null);
+const goalStatusDescriptor = computed(() => {
+  const status = activeGoal.value?.status;
+  switch (status) {
+    case "running":
+      return {
+        color: "primary",
+        icon: "mdi-autorenew",
+        label: t("aiChatV2.goalLoop.statusRunning") || "running",
+      };
+    case "complete":
+      return {
+        color: "success",
+        icon: "mdi-check-circle",
+        label: t("aiChatV2.goalLoop.statusComplete") || "complete",
+      };
+    case "blocked":
+      return {
+        color: "warning",
+        icon: "mdi-alert",
+        label: t("aiChatV2.goalLoop.statusBlocked") || "blocked",
+      };
+    case "needs_user_input":
+      return {
+        color: "info",
+        icon: "mdi-help-circle",
+        label: t("aiChatV2.goalLoop.statusNeedsInput") || "needs input",
+      };
+    case "failed":
+      return {
+        color: "error",
+        icon: "mdi-alert-circle",
+        label: t("aiChatV2.goalLoop.statusFailed") || "failed",
+      };
+    case "cancelled":
+      return {
+        color: "grey-darken-1",
+        icon: "mdi-cancel",
+        label: t("aiChatV2.goalLoop.statusCancelled") || "cancelled",
+      };
+    default:
+      return { color: "default", icon: "mdi-flag", label: status ?? "goal" };
+  }
+});
 const pendingQuestion = ref<AIChatPlanQuestionView | null>(null);
 // While a plan is awaiting the user's decision, its approval card is pinned
 // at the bottom of the chat (alongside the question card). Once the user
@@ -837,14 +1639,45 @@ const pendingPlanApproval = ref<AIChatPlanStateView | null>(null);
 // ---------------------------------------------------------------------------
 // File operation tracking
 // ---------------------------------------------------------------------------
-// Map of conversationId → file operation records emitted via IPC during
-// tool execution (create/overwrite/edit). Shown as a collapsible summary
-// panel above the composer so the user can see what the AI changed.
+// Map of conversationId → file operation records emitted via IPC during tool
+// execution. The panel also includes locally downloaded generated images so
+// users can reopen generated files after provider URLs expire.
 const fileOps = ref<Map<string, readonly FileOperationRecord[]>>(new Map());
 const showFileOpsPanel = ref(true);
+const generatedImageFileOps = computed<readonly FileOperationRecord[]>(() => {
+  if (!activeConversationId.value) return [];
+  return messages.value.flatMap((message) =>
+    (message.metadata?.generatedImages ?? [])
+      .map((image, index): FileOperationRecord | null => {
+        if (!image.local_path) return null;
+        const timestamp = Date.parse(message.timestamp);
+        return {
+          id: `generated-image-${message.id}-${index}`,
+          type: "create",
+          filePath: image.local_path,
+          timestamp: Number.isNaN(timestamp) ? 0 : timestamp,
+          success: true,
+          conversationId:
+            message.conversationId || activeConversationId.value || "",
+          skillName: "generated_image",
+        };
+      })
+      .filter((record): record is FileOperationRecord => record !== null)
+  );
+});
 const currentFileOps = computed<readonly FileOperationRecord[]>(() => {
   if (!activeConversationId.value) return [];
-  return fileOps.value.get(activeConversationId.value) ?? [];
+  const records = [
+    ...(fileOps.value.get(activeConversationId.value) ?? []),
+    ...generatedImageFileOps.value,
+  ];
+  const seen = new Set<string>();
+  return records.filter((record) => {
+    const key = `${record.type}:${record.filePath}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 });
 const createCount = computed(
   () => currentFileOps.value.filter((r) => r.type === "create").length
@@ -955,7 +1788,25 @@ watch(showConversationsDialog, (open) => {
 const loadHistory = async (conversationId: string): Promise<void> => {
   try {
     const resp = await getChatV2History(conversationId);
-    messages.value = resp?.messages ?? [];
+    if (activeConversationId.value !== conversationId) return;
+    // Persisted tool-result rows store only the raw `toolResult` (with the
+    // artifact nested under .artifact), not the renderer's `metadata.artifact`
+    // shortcut. Re-derive it on load so artifact cards reappear on history
+    // reopen (PRD ART-009). Auto-open is NOT triggered here — only live
+    // tool_result chunks auto-open.
+    const persistedMessages = (resp?.messages ?? []).map(
+      ensureArtifactMetadata
+    );
+    const runtime = conversationRuntime.value.get(conversationId);
+    messages.value =
+      runtime?.isStreaming && runtime.messages.length > 0
+        ? mergePersistedAndLiveMessages(persistedMessages, runtime.messages)
+        : persistedMessages;
+    if (runtime?.isStreaming) {
+      patchConversationRuntimeState(conversationId, {
+        messages: messages.value,
+      });
+    }
     // Reset context-usage tracking for the loaded conversation. If any
     // history rows carry tokensUsed, seed the baseline estimate from the
     // most recent assistant message; otherwise start at zero until the
@@ -978,7 +1829,10 @@ const loadHistory = async (conversationId: string): Promise<void> => {
     }
     // Load plan state for this conversation.
     try {
-      applyPlanState(await getChatV2PlanState(conversationId));
+      const nextPlanState = await getChatV2PlanState(conversationId);
+      if (activeConversationId.value !== conversationId) return;
+      applyPlanState(nextPlanState);
+      void refreshActiveGoal();
       if (planState.value?.pendingQuestion) {
         pendingQuestion.value = planState.value.pendingQuestion;
       } else {
@@ -1003,15 +1857,15 @@ const loadHistory = async (conversationId: string): Promise<void> => {
     // Load tool approval mode for this conversation
     void loadToolApprovalMode(conversationId);
   } catch (err) {
+    if (activeConversationId.value !== conversationId) return;
     streamError.value = err instanceof Error ? err.message : String(err);
   }
 };
 
 const onNewConversation = (): void => {
-  detachActiveStreamView();
   activeConversationId.value = null;
   messages.value = [];
-  streamError.value = null;
+  resetActiveRuntimeFields();
   applyPlanState(null);
   pendingQuestion.value = null;
   pendingPlanApproval.value = null;
@@ -1026,29 +1880,50 @@ const onClearMessages = (): void => {
   onNewConversation();
 };
 
+async function clearCurrentConversation(): Promise<void> {
+  const conversationId = activeConversationId.value;
+  if (conversationId) {
+    try {
+      await clearChatV2Conversation(conversationId);
+      clearConversationRuntimeState(conversationId);
+    } catch (err) {
+      streamError.value = err instanceof Error ? err.message : String(err);
+      return;
+    }
+  }
+  onNewConversation();
+}
+
 const onSelectConversation = (conversationId: string): void => {
+  speechController.stop();
   detachActiveStreamView();
   activeConversationId.value = conversationId;
-  streamError.value = null;
+  const runtime = conversationRuntime.value.get(conversationId);
+  if (runtime) {
+    applyRuntimeFieldsToActive(runtime, { applyMessages: true });
+  } else {
+    messages.value = [];
+    resetActiveRuntimeFields();
+  }
   showConversationsDialog.value = false;
   void loadHistory(conversationId);
 };
 
 const detachActiveStreamView = (): void => {
-  if (isStreaming.value) {
-    clearChatV2StreamListeners();
-    isStreaming.value = false;
-    activeAssistantMessageId.value = null;
-    retryInfo.value = null;
-  }
+  clearChatV2StreamListeners();
+  resetActiveRuntimeFields();
 };
 
 const onStop = (): void => {
+  speechController.stop();
+  // Cancel in-flight STT/TTS worker work so the shared worker stops
+  // synthesizing for a response the user has abandoned (TODO P0-5).
+  void cancelVoiceJob();
   stopChatV2Stream();
   clearChatV2StreamListeners();
-  isStreaming.value = false;
   const conversationId = activeConversationId.value;
   if (conversationId) {
+    markActiveConversationRuntimeStopped();
     stoppedPendingToolConversationIds.value = new Set([
       ...stoppedPendingToolConversationIds.value,
       conversationId,
@@ -1083,10 +1958,12 @@ const resolveToolIdForPermissionMessage = (
 
 const upsertToolProgress = (
   chunk: ChatV2StreamChunk,
-  conversationId: string
+  conversationId: string,
+  list: MessageListController = activeMessageListController
 ): void => {
   if (!chunk.toolCallId) return;
-  const idx = messages.value.findIndex(
+  const currentMessages = list.get();
+  const idx = currentMessages.findIndex(
     (m) =>
       m.messageType === MessageType.TOOL_CALL &&
       m.metadata?.toolCallId === chunk.toolCallId
@@ -1094,7 +1971,7 @@ const upsertToolProgress = (
   if (idx === -1) {
     return;
   }
-  const existing = messages.value[idx];
+  const existing = currentMessages[idx];
   const nextProgress: {
     phase?: "queued" | "running" | "fetching" | "extracting" | "finalizing";
     message?: string;
@@ -1118,25 +1995,34 @@ const upsertToolProgress = (
       toolProgress: nextProgress,
     } as ChatV2MessageMetadata,
   };
-  messages.value = [
-    ...messages.value.slice(0, idx),
+  list.set([
+    ...currentMessages.slice(0, idx),
     updatedMessage,
-    ...messages.value.slice(idx + 1),
-  ];
+    ...currentMessages.slice(idx + 1),
+  ]);
 };
 
 const upsertToolResultMessage = (
   chunk: ChatV2StreamChunk,
   conversationId: string,
-  insertBeforeAssistantId?: string
+  insertBeforeAssistantId?: string,
+  list: MessageListController = activeMessageListController
 ): void => {
+  const currentMessages = list.get();
   const toolResult = chunk.toolResult ?? {};
+  if (
+    chunk.toolCallId &&
+    toolResult.needsPermissionPrompt !== true &&
+    permissionResumeInFlightToolIds.value.has(chunk.toolCallId)
+  ) {
+    setPermissionResumeInFlight(chunk.toolCallId, false);
+  }
   const content =
     typeof chunk.fullContent === "string" && chunk.fullContent.trim().length > 0
       ? chunk.fullContent
       : JSON.stringify(toolResult, null, 2);
   const existingIdx = chunk.replacesPermissionPromptForToolId
-    ? messages.value.findIndex(
+    ? currentMessages.findIndex(
         (message) =>
           message.messageType === MessageType.TOOL_RESULT &&
           message.metadata?.toolCallId ===
@@ -1161,23 +2047,26 @@ const upsertToolResultMessage = (
     summary:
       typeof toolResult.summary === "string" ? toolResult.summary : undefined,
     error: typeof toolResult.error === "string" ? toolResult.error : undefined,
+    artifact: extractArtifactMetadata(toolResult),
   };
 
   if (existingIdx !== -1) {
-    messages.value[existingIdx] = {
-      ...messages.value[existingIdx],
+    const updatedMessages = [...currentMessages];
+    updatedMessages[existingIdx] = {
+      ...updatedMessages[existingIdx],
       content,
       metadata: {
-        ...messages.value[existingIdx].metadata,
+        ...updatedMessages[existingIdx].metadata,
         ...metadata,
       },
     };
+    list.set(updatedMessages);
     return;
   }
 
   if (
     chunk.toolCallId &&
-    messages.value.some(
+    currentMessages.some(
       (message) =>
         message.messageType === MessageType.TOOL_RESULT &&
         message.metadata?.toolCallId === chunk.toolCallId
@@ -1198,33 +2087,39 @@ const upsertToolResultMessage = (
   // Insert before the assistant placeholder so tool results always
   // appear before the assistant's text response.
   if (insertBeforeAssistantId) {
-    const aIdx = messages.value.findIndex(
+    const aIdx = currentMessages.findIndex(
       (m) => m.id === insertBeforeAssistantId
     );
     if (aIdx !== -1) {
-      messages.value = [
-        ...messages.value.slice(0, aIdx),
+      list.set([
+        ...currentMessages.slice(0, aIdx),
         toolResultMsg,
-        ...messages.value.slice(aIdx),
-      ];
+        ...currentMessages.slice(aIdx),
+      ]);
       return;
     }
   }
-  messages.value = [...messages.value, toolResultMsg];
+  list.set([...currentMessages, toolResultMsg]);
 };
 
 const handleSkillPermissionGrant = async (
-  message: ChatV2MessageView
+  message: ChatV2MessageView,
+  _persistent?: boolean
 ): Promise<void> => {
   const toolId = resolveToolIdForPermissionMessage(message);
   if (!toolId) {
-    streamError.value =
+    const errMsg =
       t("aiChatV2.permission_resume_no_tool_id") ||
       "Missing tool call information; cannot continue execution.";
-    isStreaming.value = false;
-    activeAssistantMessageId.value = null;
+    markConversationRuntimeStopped(message.conversationId, errMsg);
     return;
   }
+
+  if (permissionResumeInFlightToolIds.value.has(toolId)) {
+    return;
+  }
+
+  setPermissionResumeInFlight(toolId, true);
 
   try {
     const raw = await windowInvoke(AI_CHAT_V2_RESUME_TOOL_AFTER_PERMISSION, {
@@ -1251,15 +2146,20 @@ const handleSkillPermissionGrant = async (
           },
         };
       }
-      isStreaming.value = false;
-      activeAssistantMessageId.value = null;
+      markConversationRuntimeStopped(message.conversationId, errMsg);
+      setPermissionResumeInFlight(toolId, false);
     }
   } catch (error) {
     const errMsg = error instanceof Error ? error.message : String(error);
-    streamError.value = errMsg;
-    isStreaming.value = false;
-    activeAssistantMessageId.value = null;
+    markConversationRuntimeStopped(message.conversationId, errMsg);
+    setPermissionResumeInFlight(toolId, false);
   }
+};
+
+const handlePinnedPermissionGrant = (payload: { persistent: boolean }): void => {
+  const message = pinnedPermissionPrompt.value;
+  if (!message) return;
+  void handleSkillPermissionGrant(message, payload.persistent);
 };
 
 const handleSkillPermissionDeny = (message: ChatV2MessageView): void => {
@@ -1281,47 +2181,132 @@ const handleSkillPermissionDeny = (message: ChatV2MessageView): void => {
   }
   clearChatV2StreamListeners();
   stopChatV2Stream();
-  isStreaming.value = false;
-  activeAssistantMessageId.value = null;
+  markConversationRuntimeStopped(message.conversationId);
+};
+
+const handlePinnedPermissionDeny = (): void => {
+  const message = pinnedPermissionPrompt.value;
+  if (!message) return;
+  handleSkillPermissionDeny(message);
 };
 
 // ---------------------------------------------------------------------------
 // Plan Mode handlers
 // ---------------------------------------------------------------------------
 
+const isSubmitPlanToolMessage = (message: ChatV2MessageView): boolean =>
+  message.metadata?.toolName === "SubmitPlanForApproval";
+
+const readPlanToolResultVersion = (
+  message: ChatV2MessageView
+): { planId?: string; version?: number } | null => {
+  if (message.messageType !== MessageType.TOOL_RESULT) return null;
+  const result = message.metadata?.toolResult;
+  if (result) {
+    return {
+      planId: typeof result.planId === "string" ? result.planId : undefined,
+      version: typeof result.version === "number" ? result.version : undefined,
+    };
+  }
+  try {
+    const parsed = JSON.parse(message.content) as Record<string, unknown>;
+    return {
+      planId: typeof parsed.planId === "string" ? parsed.planId : undefined,
+      version: typeof parsed.version === "number" ? parsed.version : undefined,
+    };
+  } catch {
+    return null;
+  }
+};
+
+const findPlanMessageInsertionIndex = (
+  state: AIChatPlanStateView,
+  existingPlanIndex: number,
+  list: MessageListController = activeMessageListController
+): number => {
+  const currentMessages = list.get();
+  let fallbackIndex = -1;
+  for (let i = currentMessages.length - 1; i >= 0; i -= 1) {
+    if (i === existingPlanIndex) continue;
+    const message = currentMessages[i];
+    if (!isSubmitPlanToolMessage(message)) continue;
+    fallbackIndex = i + 1;
+    const versionInfo = readPlanToolResultVersion(message);
+    if (
+      versionInfo?.planId === state.planId &&
+      versionInfo.version === state.currentVersion
+    ) {
+      return i + 1;
+    }
+  }
+  if (fallbackIndex !== -1) return fallbackIndex;
+
+  const planCreatedAt = state.latestVersion
+    ? Date.parse(state.latestVersion.createdAt)
+    : NaN;
+  if (!Number.isNaN(planCreatedAt)) {
+    const chronologicalIndex = currentMessages.findIndex((message, index) => {
+      if (index === existingPlanIndex) return false;
+      const messageTime = Date.parse(message.timestamp);
+      return !Number.isNaN(messageTime) && messageTime > planCreatedAt;
+    });
+    if (chronologicalIndex !== -1) return chronologicalIndex;
+  }
+
+  return currentMessages.length;
+};
+
 /**
  * Insert or update the inline plan-approval message row so the card appears
  * in the conversation flow (not pinned at the bottom). After approval/reject
  * the row stays in place; later messages render below it.
  */
-const upsertPlanMessage = (state: AIChatPlanStateView): void => {
+const upsertPlanMessage = (
+  state: AIChatPlanStateView,
+  list: MessageListController = activeMessageListController
+): void => {
+  const currentMessages = list.get();
   const planMsgId = `plan-${state.planId}`;
-  const existingIdx = messages.value.findIndex((m) => m.id === planMsgId);
+  const existingIdx = currentMessages.findIndex((m) => m.id === planMsgId);
+  const insertIdx = findPlanMessageInsertionIndex(state, existingIdx, list);
   const metadata = {
     source: "chat-v2" as const,
     planEventType: "plan_submitted" as const,
     planId: state.planId,
     planStateView: state,
   };
-  if (existingIdx !== -1) {
-    messages.value[existingIdx] = {
-      ...messages.value[existingIdx],
-      metadata: {
-        ...messages.value[existingIdx].metadata,
-        ...metadata,
-      },
-    };
-    return;
-  }
-  messages.value.push({
+  const planMessage: ChatV2MessageView = {
     id: planMsgId,
     conversationId: state.conversationId,
     role: "assistant",
     content: "",
-    timestamp: new Date().toISOString(),
+    timestamp: state.latestVersion?.createdAt ?? new Date().toISOString(),
     messageType: "message" as MessageType,
     metadata,
-  });
+  };
+  if (existingIdx !== -1) {
+    const existingMessage = currentMessages[existingIdx];
+    planMessage.timestamp = currentMessages[existingIdx].timestamp;
+    planMessage.metadata = {
+      ...existingMessage.metadata,
+      ...metadata,
+    };
+    const withoutExisting = currentMessages.filter((m) => m.id !== planMsgId);
+    const adjustedInsertIdx =
+      existingIdx < insertIdx ? insertIdx - 1 : insertIdx;
+    const targetIdx = Math.min(adjustedInsertIdx, withoutExisting.length);
+    list.set([
+      ...withoutExisting.slice(0, targetIdx),
+      planMessage,
+      ...withoutExisting.slice(targetIdx),
+    ]);
+    return;
+  }
+  list.set([
+    ...currentMessages.slice(0, insertIdx),
+    planMessage,
+    ...currentMessages.slice(insertIdx),
+  ]);
 };
 
 const handleQuestionAnswered = async (
@@ -1463,31 +2448,160 @@ const handleCompactConversation = async (): Promise<void> => {
   }
 };
 
-const onSend = async (text: string): Promise<void> => {
-  if (chatIsRunning.value) return;
+const onSend = async (
+  text: string,
+  files?: File[],
+  options?: { isExpandedPrompt?: boolean; fromVoice?: boolean }
+): Promise<void> => {
+  if (chatIsRunning.value || hasAnyActiveStream.value) return;
   streamError.value = null;
+
+  attachmentError.value = null;
+  voicePlaybackError.value = null;
+  // Record whether this user message originated from voice input so the
+  // `after_voice_input` TTS policy speaks only the reply to a voice send
+  // (PRD §7.5 / TODO P0-2). Reset for every send — typed/programmatic sends
+  // pass no `fromVoice`, which correctly clears the flag.
+  speechController.updateOptions({
+    latestInputWasVoice: options?.fromVoice === true,
+  });
+  // Start a fresh spoken-response session for every assistant turn. The
+  // controller is intentionally stopped by "Stop", conversation switching, and
+  // voice recording; without re-arming here, later replies can be silently
+  // ignored even when spoken responses are enabled.
+  speechController.start();
+
+  // /goal and /loop need stateful handling before the generic slash dispatcher.
+  const cmd = parseAiGoalCommand(text);
+  let modelMessage = text;
+  let requestMode: ChatV2Mode = mode.value;
+  if (cmd.type === "loop") {
+    await runLoopCommand(cmd.count);
+    return;
+  }
+  if (cmd.type === "goal") {
+    if (!cmd.objective) {
+      streamError.value =
+        t("aiChatV2.goalLoop.objectiveRequired") ||
+        "Please provide a goal objective. Usage: /goal <objective>";
+      return;
+    }
+    try {
+      // Bind the goal to the same conversation the plan prompt will stream
+      // against. ensureWorkspaceConversationId() creates the v2- id (and
+      // resets chat state) on a fresh chat, instead of passing "" and
+      // orphaning the goal from the streamed turn below.
+      const goalConversationId = ensureWorkspaceConversationId();
+      const created = await createGoal({
+        conversationId: goalConversationId,
+        objective: cmd.objective,
+      });
+      if (!created) {
+        streamError.value =
+          t("aiChatV2.goalLoop.createFailed") || "Could not create the goal.";
+        return;
+      }
+      void refreshActiveGoal();
+      // Keep the typed "/goal …" visible; send the plan prompt to the model
+      // in Plan Mode (display/model content split).
+      modelMessage = created.planPrompt;
+      requestMode = "plan";
+    } catch {
+      streamError.value =
+        t("aiChatV2.goalLoop.createFailed") || "Could not create the goal.";
+      return;
+    }
+  }
+
   if (activeConversationId.value) {
     const nextStopped = new Set(stoppedPendingToolConversationIds.value);
     nextStopped.delete(activeConversationId.value);
     stoppedPendingToolConversationIds.value = nextStopped;
   }
 
+  // Manual user input that starts with `/` is intercepted as a slash command.
+  // An EXPANDED prompt (from handleSlashCommandSubmission) must bypass this —
+  // even if its body happens to start with `/`, it is chat content to stream,
+  // not a second slash command to re-dispatch (TODO #3).
+  // Goal and loop commands are already handled above (cmd.type !== "none"):
+  // they must NOT fall through to the generic dispatcher, which returns
+  // show_result usage text for /goal and /loop and would swallow the goal's
+  // Plan Mode prompt before it streams.
+  if (
+    !options?.isExpandedPrompt &&
+    (!files || files.length === 0) &&
+    cmd.type === "none" &&
+    text.trim().startsWith("/")
+  ) {
+    const handled = await handleSlashCommandSubmission(text.trim());
+    if (handled) return;
+  }
+
+  // Process attachments if present
+  let uploadedFiles: ChatV2UploadedAttachment[] | undefined;
+  let attachmentMetadata: ChatV2AttachmentMetadata[] | undefined;
+  if (files && files.length > 0) {
+    isPreparingAttachments.value = true;
+    try {
+      uploadedFiles = await buildUploadedAttachments(files);
+      attachmentMetadata = uploadedFiles.map((f) => ({
+        fileName: f.fileName,
+        mimeType: f.mimeType,
+        sizeBytes: f.sizeBytes,
+        kind: f.kind,
+        processingMode: f.kind === "image" ? "image_url" : "staged_markdown",
+        // Carry the downscaled preview so the user's own bubble can render
+        // the image they just sent (matches what the model receives).
+        previewDataUrl:
+          f.kind === "image"
+            ? `data:${f.mimeType};base64,${f.contentBase64}`
+            : undefined,
+      }));
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      attachmentError.value = msg;
+      isPreparingAttachments.value = false;
+      return;
+    }
+    isPreparingAttachments.value = false;
+  }
+
+  // Resolve text: if only images with no text, use default prompt
+  const displayText = text || defaultPromptForAttachments(files ?? []);
+  const streamConversationId = ensureWorkspaceConversationId();
+  const isCurrentStreamView = (): boolean =>
+    activeConversationId.value === streamConversationId;
+  const isCurrentStreamChunk = (chunk: ChatV2StreamChunk): boolean =>
+    (!chunk.conversationId || chunk.conversationId === streamConversationId);
+
   const nowIso = new Date().toISOString();
   const tempUser: ChatV2MessageView = {
     id: `temp-user-${Date.now()}`,
-    conversationId: activeConversationId.value ?? "",
+    conversationId: streamConversationId,
     role: "user",
-    content: text,
+    content: displayText,
     timestamp: nowIso,
     messageType: "message" as MessageType,
+    metadata: attachmentMetadata
+      ? { source: "chat-v2", attachments: attachmentMetadata }
+      : undefined,
   };
-  messages.value = [...messages.value, tempUser];
+  let streamMessages = [...messages.value, tempUser];
+  const streamMessageListController: MessageListController = {
+    get: (): ChatV2MessageView[] => streamMessages,
+    set: (nextMessages: ChatV2MessageView[]): void => {
+      streamMessages = nextMessages;
+      patchConversationRuntimeState(streamConversationId, {
+        messages: nextMessages,
+      });
+    },
+  };
+  streamMessageListController.set(streamMessages);
 
   const assistantId = `temp-assistant-${Date.now()}`;
-  activeAssistantMessageId.value = assistantId;
   const assistant: ChatV2MessageView = {
     id: assistantId,
-    conversationId: activeConversationId.value ?? "",
+    conversationId: streamConversationId,
     role: "assistant",
     content: "",
     timestamp: nowIso,
@@ -1497,6 +2611,7 @@ const onSend = async (text: string): Promise<void> => {
   // This keeps tool_call/tool_result chunks (which typically arrive before
   // the final text tokens) visually above the assistant text message.
   let assistantAdded = false;
+  let speechReceivedTextDelta = false;
   const ensureAssistantAdded = (): void => {
     if (assistantAdded) return;
     // Push a shallow copy so the array element is an independent object,
@@ -1504,7 +2619,10 @@ const onSend = async (text: string): Promise<void> => {
     // reactive proxy fully owns the copy, preventing reactivity gaps
     // where mutations to `assistant.content` (the raw object) fail to
     // trigger DOM updates — especially after many tool-call card pushes.
-    messages.value = [...messages.value, { ...assistant }];
+    streamMessageListController.set([
+      ...streamMessageListController.get(),
+      { ...assistant },
+    ]);
     assistantAdded = true;
   };
   const showAssistantError = (message: string): void => {
@@ -1514,19 +2632,27 @@ const onSend = async (text: string): Promise<void> => {
       source: "chat-v2",
       error: message,
     };
-    const idx = messages.value.findIndex((m) => m.id === assistant.id);
+    const currentMessages = streamMessageListController.get();
+    const idx = currentMessages.findIndex((m) => m.id === assistant.id);
     if (idx !== -1) {
-      messages.value[idx] = {
-        ...messages.value[idx],
+      const nextMessages = [...currentMessages];
+      nextMessages[idx] = {
+        ...nextMessages[idx],
         content: assistant.content,
         metadata: assistant.metadata,
       };
+      streamMessageListController.set(nextMessages);
     }
   };
 
-  isStreaming.value = true;
-  receivedFirstResponse.value = false;
-  retryInfo.value = null;
+  patchConversationRuntimeState(streamConversationId, {
+    isStreaming: true,
+    activeAssistantMessageId: assistantId,
+    receivedFirstResponse: false,
+    streamError: null,
+    retryInfo: null,
+    recoveryInfo: null,
+  });
   // Seed the live context estimate from the last known server usage. If no
   // usage_update has arrived yet this session, fall back to the existing
   // streaming estimate (e.g. seeded from persisted tokensUsed on history
@@ -1541,27 +2667,34 @@ const onSend = async (text: string): Promise<void> => {
   await nextTick();
 
   try {
+    const streamRequest: ChatV2StreamRequest = {
+      conversationId: streamConversationId,
+      message: modelMessage,
+      mode: requestMode,
+      model: resolveModelForRequest(),
+      toolApprovalMode: toolApprovalMode.value,
+      showReasoning: showReasoning.value,
+      reasoning: showReasoning.value
+        ? { enabled: true, summary: "auto" }
+        : undefined,
+    };
+    if (uploadedFiles && uploadedFiles.length > 0) {
+      streamRequest.uploadedFiles = uploadedFiles;
+    }
     await streamChatV2Message(
-      {
-        conversationId: activeConversationId.value ?? undefined,
-        message: text,
-        mode: mode.value,
-        model: resolveModelForRequest(),
-        showReasoning: showReasoning.value,
-        reasoning: showReasoning.value
-          ? { enabled: true, summary: "auto" }
-          : undefined,
-      },
+      streamRequest,
       (chunk: ChatV2StreamChunk) => {
+        if (!isCurrentStreamChunk(chunk)) return;
         if (chunk.eventType === "start") {
           if (chunk.conversationId) {
-            activeConversationId.value = chunk.conversationId;
             tempUser.conversationId = chunk.conversationId;
             assistant.conversationId = chunk.conversationId;
           }
           if (chunk.messageId) {
             assistant.id = chunk.messageId;
-            activeAssistantMessageId.value = chunk.messageId;
+            patchConversationRuntimeState(streamConversationId, {
+              activeAssistantMessageId: chunk.messageId,
+            });
           }
           // `start` is metadata only; keep showing the typing indicator.
         } else if (chunk.eventType === "usage_update") {
@@ -1572,16 +2705,18 @@ const onSend = async (text: string): Promise<void> => {
             typeof chunk.promptTokens === "number" &&
             typeof chunk.completionTokens === "number"
           ) {
-            lastUsage.value = {
-              promptTokens: chunk.promptTokens,
-              completionTokens: chunk.completionTokens,
-              totalTokens: chunk.totalTokens,
-              model: chunk.model,
-            };
-            if (chunk.model) {
-              activeModel.value = chunk.model;
+            if (isCurrentStreamView()) {
+              lastUsage.value = {
+                promptTokens: chunk.promptTokens,
+                completionTokens: chunk.completionTokens,
+                totalTokens: chunk.totalTokens,
+                model: chunk.model,
+              };
+              if (chunk.model) {
+                activeModel.value = chunk.model;
+              }
+              streamingEstimatedTokens.value = chunk.totalTokens;
             }
-            streamingEstimatedTokens.value = chunk.totalTokens;
           }
         } else if (chunk.eventType === "retry_connect") {
           // Connection to AI server is being retried. Show the reconnect
@@ -1590,11 +2725,13 @@ const onSend = async (text: string): Promise<void> => {
             typeof chunk.retryAttempt === "number" &&
             typeof chunk.retryMaxAttempts === "number"
           ) {
-            retryInfo.value = {
-              attempt: chunk.retryAttempt,
-              maxAttempts: chunk.retryMaxAttempts,
-              delayMs: chunk.retryDelayMs ?? 0,
-            };
+            patchConversationRuntimeState(streamConversationId, {
+              retryInfo: {
+                attempt: chunk.retryAttempt,
+                maxAttempts: chunk.retryMaxAttempts,
+                delayMs: chunk.retryDelayMs ?? 0,
+              },
+            });
           }
         } else if (
           chunk.eventType === "reasoning_delta" &&
@@ -1612,8 +2749,11 @@ const onSend = async (text: string): Promise<void> => {
           if (prevReasoning.length >= REASONING_LIVE_MAX_CHARS) {
             return;
           }
-          receivedFirstResponse.value = true;
-          retryInfo.value = null;
+          patchConversationRuntimeState(streamConversationId, {
+            receivedFirstResponse: true,
+            retryInfo: null,
+            recoveryInfo: null,
+          });
           ensureAssistantAdded();
           const combined = prevReasoning + chunk.reasoningDelta;
           const over = combined.length > REASONING_LIVE_MAX_CHARS;
@@ -1638,10 +2778,46 @@ const onSend = async (text: string): Promise<void> => {
               metadata: assistant.metadata,
             };
           }
+        } else if (chunk.eventType === "recovery_status") {
+          // Seven-layer recovery status. Show the badge but keep streaming.
+          if (chunk.recoveryLayer && chunk.recoveryReason) {
+            patchConversationRuntimeState(streamConversationId, {
+              recoveryInfo: {
+                layer: chunk.recoveryLayer,
+                reason: chunk.recoveryReason,
+                attempt: chunk.recoveryAttempt,
+                maxAttempts: chunk.recoveryMaxAttempts,
+                delayMs: chunk.recoveryDelayMs,
+                elapsedMs: chunk.recoveryElapsedMs,
+                originalModel: chunk.recoveryOriginalModel,
+                currentModel: chunk.recoveryCurrentModel,
+                fallbackModel: chunk.recoveryFallbackModel,
+                message: chunk.recoveryMessage,
+              },
+            });
+          }
+        } else if (chunk.eventType === "goal_state" && chunk.goalState) {
+          // Loop engine (later phase) pushes goal status; keep display in sync.
+          const g = chunk.goalState;
+          activeGoal.value = {
+            goalId: g.goalId,
+            conversationId: g.conversationId,
+            objective: g.objective,
+            criteria: activeGoal.value?.criteria ?? [],
+            status: g.status,
+            iterationCount: g.iterationCount ?? activeGoal.value?.iterationCount ?? 0,
+            latestVerdict: g.latestVerdict,
+            terminalReason: g.terminalReason,
+            createdAt: activeGoal.value?.createdAt ?? new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          };
         } else {
           // Any non-start/non-retry chunk means the AI has started responding.
-          receivedFirstResponse.value = true;
-          retryInfo.value = null;
+          patchConversationRuntimeState(streamConversationId, {
+            receivedFirstResponse: true,
+            retryInfo: null,
+            recoveryInfo: null,
+          });
           if (chunk.eventType === "token" && chunk.contentDelta) {
             if (!assistantAdded) {
               console.log(
@@ -1650,32 +2826,45 @@ const onSend = async (text: string): Promise<void> => {
             }
             ensureAssistantAdded();
             assistant.content += chunk.contentDelta;
+            if (chunk.contentDelta.trim().length > 0) {
+              speechReceivedTextDelta = true;
+            }
+            speechController.pushDelta(chunk.contentDelta);
             // Live estimate: each streamed delta adds ~chars/4 tokens to the
             // running context total. The next usage_update event will snap
             // this back to the server's ground-truth count.
             const deltaEstimate = Math.ceil(
               chunk.contentDelta.length / CHARS_PER_TOKEN_ESTIMATE
             );
-            streamingEstimatedTokens.value += deltaEstimate;
-            const idx = messages.value.findIndex((m) => m.id === assistant.id);
+            if (isCurrentStreamView()) {
+              streamingEstimatedTokens.value += deltaEstimate;
+            }
+            const currentMessages = streamMessageListController.get();
+            const idx = currentMessages.findIndex(
+              (m) => m.id === assistant.id
+            );
             if (idx !== -1) {
-              messages.value[idx] = {
-                ...messages.value[idx],
+              const nextMessages = [...currentMessages];
+              nextMessages[idx] = {
+                ...nextMessages[idx],
                 content: assistant.content,
               };
+              streamMessageListController.set(nextMessages);
             }
           } else if (chunk.eventType === ("ask_user_question" as never)) {
             // Plan Mode: show question card, stream may pause
             const planChunk = chunk as ChatV2StreamChunk;
-            if (planChunk.question) {
-              pendingQuestion.value = planChunk.question;
-            }
-            if (planChunk.planState) {
-              applyPlanState(planChunk.planState);
+            if (isCurrentStreamView()) {
+              if (planChunk.question) {
+                pendingQuestion.value = planChunk.question;
+              }
+              if (planChunk.planState) {
+                applyPlanState(planChunk.planState);
+              }
             }
           } else if (chunk.eventType === ("plan_submitted" as never)) {
             const planChunk = chunk as ChatV2StreamChunk;
-            if (planChunk.planState) {
+            if (planChunk.planState && isCurrentStreamView()) {
               applyPlanState(planChunk.planState);
               // Pin the card at the bottom while awaiting the user's action.
               // It moves into the message flow only after the user approves,
@@ -1688,11 +2877,18 @@ const onSend = async (text: string): Promise<void> => {
             // plan content does not exist until SubmitPlanForApproval).
             const planChunk = chunk as ChatV2StreamChunk;
             if (planChunk.planState) {
-              applyPlanState(planChunk.planState);
+              if (isCurrentStreamView()) {
+                applyPlanState(planChunk.planState);
+              }
               if (planChunk.planState.status !== "awaiting_approval") {
-                pendingPlanApproval.value = null;
+                if (isCurrentStreamView()) {
+                  pendingPlanApproval.value = null;
+                }
                 if (planChunk.planState.latestVersion) {
-                  upsertPlanMessage(planChunk.planState);
+                  upsertPlanMessage(
+                    planChunk.planState,
+                    streamMessageListController
+                  );
                 }
               }
             }
@@ -1701,21 +2897,24 @@ const onSend = async (text: string): Promise<void> => {
             const planChunk = chunk as ChatV2StreamChunk;
             upsertToolResultMessage(
               planChunk,
-              planChunk.conversationId || activeConversationId.value || "",
-              assistantAdded ? assistant.id : undefined
+              planChunk.conversationId || streamConversationId,
+              assistantAdded ? assistant.id : undefined,
+              streamMessageListController
             );
           } else if (chunk.eventType === "tool_progress") {
             upsertToolProgress(
               chunk,
-              chunk.conversationId || activeConversationId.value || ""
+              chunk.conversationId || streamConversationId,
+              streamMessageListController
             );
           } else if (chunk.eventType === "tool_call") {
             const toolCallId = chunk.toolCallId;
+            const currentMessages = streamMessageListController.get();
             // Defensive dedup: if the same tool_call event is delivered twice
             // (IPC re-delivery, listener cleanup race, or history already
             // loaded), avoid rendering a duplicate card.
             const alreadyRendered = toolCallId
-              ? messages.value.some(
+              ? currentMessages.some(
                   (m) =>
                     m.messageType === MessageType.TOOL_CALL &&
                     m.metadata?.toolCallId === toolCallId
@@ -1724,8 +2923,7 @@ const onSend = async (text: string): Promise<void> => {
             if (!alreadyRendered) {
               const toolCallMsg: ChatV2MessageView = {
                 id: `tool-call-${toolCallId || Date.now()}`,
-                conversationId:
-                  chunk.conversationId || activeConversationId.value || "",
+                conversationId: chunk.conversationId || streamConversationId,
                 role: "assistant",
                 content: "",
                 timestamp: new Date().toISOString(),
@@ -1741,35 +2939,56 @@ const onSend = async (text: string): Promise<void> => {
               // added (text tokens arrived in an earlier round). This keeps
               // tool calls visually before the assistant's text response.
               if (assistantAdded) {
-                const aIdx = messages.value.findIndex(
+                const aIdx = currentMessages.findIndex(
                   (m) => m.id === assistant.id
                 );
                 if (aIdx !== -1) {
-                  messages.value = [
-                    ...messages.value.slice(0, aIdx),
+                  streamMessageListController.set([
+                    ...currentMessages.slice(0, aIdx),
                     toolCallMsg,
-                    ...messages.value.slice(aIdx),
-                  ];
+                    ...currentMessages.slice(aIdx),
+                  ]);
                 } else {
-                  messages.value = [...messages.value, toolCallMsg];
+                  streamMessageListController.set([
+                    ...currentMessages,
+                    toolCallMsg,
+                  ]);
                 }
               } else {
-                messages.value = [...messages.value, toolCallMsg];
+                streamMessageListController.set([
+                  ...currentMessages,
+                  toolCallMsg,
+                ]);
               }
             }
           } else if (chunk.eventType === "tool_result") {
             upsertToolResultMessage(
               chunk,
-              chunk.conversationId || activeConversationId.value || "",
-              assistantAdded ? assistant.id : undefined
+              chunk.conversationId || streamConversationId,
+              assistantAdded ? assistant.id : undefined,
+              streamMessageListController
             );
+            // Auto-open the artifact preview during a live tool result.
+            // (History loads render the card but must NOT auto-open.)
+            const liveArtifact = extractArtifactMetadata(chunk.toolResult ?? {});
+            if (liveArtifact?.openImmediately && isCurrentStreamView()) {
+              emit("open-artifact", liveArtifact.id);
+            }
+            // AI app navigation: route on open_app_page navigate commands.
+            if (isCurrentStreamView()) {
+              void handleAiNavigationToolResult(router, chunk.toolResult);
+            }
           }
         }
       },
       (complete: ChatV2StreamChunk) => {
-        isStreaming.value = false;
-        activeAssistantMessageId.value = null;
-        retryInfo.value = null;
+        if (!isCurrentStreamChunk(complete)) return;
+        patchConversationRuntimeState(streamConversationId, {
+          isStreaming: false,
+          activeAssistantMessageId: null,
+          retryInfo: null,
+          recoveryInfo: null,
+        });
         // Snap to ground-truth usage carried by the complete event so the
         // badge reflects the real context size even if usage_update chunks
         // didn't fire during the stream (some servers only report usage on
@@ -1780,15 +2999,17 @@ const onSend = async (text: string): Promise<void> => {
           typeof complete.promptTokens === "number" &&
           typeof complete.completionTokens === "number"
         ) {
-          lastUsage.value = {
-            promptTokens: complete.promptTokens,
-            completionTokens: complete.completionTokens,
-            totalTokens: complete.totalTokens,
-            model: complete.model ?? lastUsage.value?.model,
-          };
-          streamingEstimatedTokens.value = complete.totalTokens;
-          if (complete.model) {
-            activeModel.value = complete.model;
+          if (isCurrentStreamView()) {
+            lastUsage.value = {
+              promptTokens: complete.promptTokens,
+              completionTokens: complete.completionTokens,
+              totalTokens: complete.totalTokens,
+              model: complete.model ?? lastUsage.value?.model,
+            };
+            streamingEstimatedTokens.value = complete.totalTokens;
+            if (complete.model) {
+              activeModel.value = complete.model;
+            }
           }
         }
         if (
@@ -1797,21 +3018,49 @@ const onSend = async (text: string): Promise<void> => {
         ) {
           ensureAssistantAdded();
           assistant.content = complete.fullContent;
-          const idx = messages.value.findIndex((m) => m.id === assistant.id);
+          if (!speechReceivedTextDelta) {
+            speechController.pushDelta(complete.fullContent);
+          }
+          speechController.flush();
+        }
+        const generatedImages =
+          complete.images && complete.images.length > 0
+            ? complete.images
+            : undefined;
+        if (generatedImages) {
+          ensureAssistantAdded();
+          assistant.metadata = {
+            ...assistant.metadata,
+            source: "chat-v2",
+            generatedImages,
+          };
+        }
+        if (assistantAdded) {
+          const currentMessages = streamMessageListController.get();
+          const idx = currentMessages.findIndex((m) => m.id === assistant.id);
           console.log(
-            `[ai-chat-v2] stream complete: assistantId=${assistant.id} fullContentLen=${complete.fullContent.length} idxInMessages=${idx} assistantAdded=${assistantAdded} messagesLen=${messages.value.length}`
+            `[ai-chat-v2] stream complete: assistantId=${assistant.id} fullContentLen=${complete.fullContent?.length ?? 0} imageCount=${generatedImages?.length ?? 0} idxInMessages=${idx} assistantAdded=${assistantAdded} messagesLen=${currentMessages.length}`
           );
           if (idx !== -1) {
-            messages.value[idx] = {
-              ...messages.value[idx],
+            const nextMessages = [...currentMessages];
+            nextMessages[idx] = {
+              ...nextMessages[idx],
               content: assistant.content,
+              metadata: assistant.metadata ?? nextMessages[idx].metadata,
             };
+            streamMessageListController.set(nextMessages);
           }
-        } else if (!assistantAdded || assistant.content.length === 0) {
+        }
+        if (
+          (!assistantAdded || assistant.content.length === 0) &&
+          !generatedImages
+        ) {
           const emptyMessage =
             t("aiChatV2.empty_response_error") ||
             "The AI returned an empty response. This is typically a transient server issue (rate limit, timeout, or 502). Please try sending your message again.";
-          streamError.value = emptyMessage;
+          patchConversationRuntimeState(streamConversationId, {
+            streamError: emptyMessage,
+          });
           showAssistantError(emptyMessage);
         }
         // Safety net: ensure the assistant message appears after all tool
@@ -1820,55 +3069,323 @@ const onSend = async (text: string): Promise<void> => {
         // tool calls if text tokens arrived in an earlier round. Moving it
         // to the end guarantees correct final display order.
         {
-          const aIdx = messages.value.findIndex(
+          const currentMessages = streamMessageListController.get();
+          const aIdx = currentMessages.findIndex(
             (m) => m.id === assistant.id
           );
-          if (aIdx !== -1 && aIdx < messages.value.length - 1) {
-            const reordered = [...messages.value];
+          if (aIdx !== -1 && aIdx < currentMessages.length - 1) {
+            const reordered = [...currentMessages];
             const [assistantMsg] = reordered.splice(aIdx, 1);
             reordered.push(assistantMsg);
-            messages.value = reordered;
+            streamMessageListController.set(reordered);
           }
         }
-        if (complete.conversationId) {
-          activeConversationId.value = complete.conversationId;
-        }
-        messages.value = [...messages.value];
+        streamMessageListController.set([...streamMessageListController.get()]);
         // Force a second render pass after Vue's render cycle completes.
         // After many tool-call card pushes followed by the lazy assistant
         // add + token updates, Vue's render scheduler can miss the final
         // state of the newly-added assistant element. This nextTick
         // re-spread guarantees the DOM picks up the final content.
         void nextTick(() => {
-          messages.value = [...messages.value];
+          streamMessageListController.set([
+            ...streamMessageListController.get(),
+          ]);
         });
         void loadConversations();
       },
       (error: Error) => {
-        isStreaming.value = false;
-        activeAssistantMessageId.value = null;
-        retryInfo.value = null;
         const displayMessage = mapStreamErrorMessage(error.message);
-        streamError.value = displayMessage;
+        patchConversationRuntimeState(streamConversationId, {
+          isStreaming: false,
+          activeAssistantMessageId: null,
+          retryInfo: null,
+          recoveryInfo: null,
+          streamError: displayMessage,
+        });
         showAssistantError(displayMessage);
       }
     );
   } catch (err) {
     const rawMessage = err instanceof Error ? err.message : String(err);
-    if (!streamError.value) {
+    const runtimeError = getConversationRuntimeState(streamConversationId)
+      .streamError;
+    if (!runtimeError) {
       const displayMessage = mapStreamErrorMessage(rawMessage);
-      isStreaming.value = false;
-      activeAssistantMessageId.value = null;
-      retryInfo.value = null;
-      streamError.value = displayMessage;
+      patchConversationRuntimeState(streamConversationId, {
+        isStreaming: false,
+        activeAssistantMessageId: null,
+        retryInfo: null,
+        recoveryInfo: null,
+        streamError: displayMessage,
+      });
       showAssistantError(displayMessage);
     }
   }
 };
 
+async function handleSlashCommandSubmission(rawInput: string): Promise<boolean> {
+  const conversationId = ensureWorkspaceConversationId();
+  let result: Awaited<ReturnType<typeof dispatchSlashCommand>>;
+  try {
+    result = await dispatchSlashCommand({
+      conversationId,
+      rawInput,
+    });
+  } catch (err) {
+    appendLocalCommandExchange(
+      conversationId,
+      rawInput,
+      err instanceof Error ? err.message : String(err)
+    );
+    return true;
+  }
+
+  if (!result.status) {
+    appendLocalCommandExchange(conversationId, rawInput, result.msg);
+    return true;
+  }
+
+  if (result.action === "submit_prompt") {
+    // Submit the expanded prompt directly to the Chat V2 stream. The
+    // isExpandedPrompt flag tells onSend to skip slash-command interception
+    // so a prompt body that begins with `/` streams instead of re-dispatching.
+    await onSend(result.prompt, [], { isExpandedPrompt: true });
+    return true;
+  }
+
+  if (result.commandId === "built-in:command:clear") {
+    await clearCurrentConversation();
+    return true;
+  }
+
+  appendLocalCommandExchange(conversationId, rawInput, result.content);
+  return true;
+}
+
+function appendLocalCommandExchange(
+  conversationId: string,
+  input: string,
+  content: string
+): void {
+  const nowIso = new Date().toISOString();
+  const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  messages.value = [
+    ...messages.value,
+    {
+      id: `local-command-user-${suffix}`,
+      conversationId,
+      role: "user",
+      content: input,
+      timestamp: nowIso,
+      messageType: "message" as MessageType,
+    },
+    {
+      id: `local-command-assistant-${suffix}`,
+      conversationId,
+      role: "assistant",
+      content,
+      timestamp: nowIso,
+      messageType: "message" as MessageType,
+      metadata: { source: "slash-command" },
+    },
+  ];
+}
+
+function sendPromptRequest(request: AiPromptRequest | null | undefined): void {
+  if (!request || request.id === lastHandledPromptRequestId.value) return;
+  const text = request.text.trim();
+  if (!text || chatIsRunning.value) return;
+
+  lastHandledPromptRequestId.value = request.id;
+  void nextTick(() => {
+    void onSend(text, []);
+  });
+}
+
+watch(
+  [() => props.promptRequest, chatIsRunning],
+  ([request]) => {
+    sendPromptRequest(request);
+  }
+);
+
+const voiceSpeaking = ref(false);
+const voicePlaybackError = ref<string | null>(null);
+const speechController = new SpeechResponseController(
+  {
+    ttsMode: "disabled",
+    latestInputWasVoice: false,
+  },
+  undefined,
+  undefined,
+  (error) => {
+    const fallback = t("aiChatV2.voice.tts_failed") || "Speech playback failed.";
+    voicePlaybackError.value =
+      error.message.trim().length > 0
+        ? `${fallback} ${error.message}`
+        : fallback;
+  }
+);
+speechController.start();
+const voiceInputEnabled = ref(false);
+// Bridge the controller's imperative speaking state into Vue reactivity so the
+// composer can show a stop-speaking control (TODO P1-2).
+const unsubscribeSpeaking = speechController.subscribe((speaking) => {
+  voiceSpeaking.value = speaking;
+});
+const voiceAutoSend = ref(false);
+const voiceMaxRecordingMs = ref<number>(60_000);
+const voiceStatus = ref<AiChatVoiceRuntimeStatus | null>(null);
+const voiceSettings = ref<AiChatVoiceSettingsView | null>(null);
+const voiceTtsMode = ref<AiChatVoiceTtsMode>("disabled");
+const voiceSettingsSaving = ref(false);
+const voiceModelInstalling = ref(false);
+const voiceModelInstallError = ref<string | null>(null);
+const spokenResponseEnabled = computed(() => voiceTtsMode.value !== "disabled");
+const spokenResponseToggleTitle = computed(() =>
+  spokenResponseEnabled.value
+    ? t("aiChatV2.voice.disable_spoken_responses") || "Disable spoken responses"
+    : t("aiChatV2.voice.enable_spoken_responses") || "Enable spoken responses",
+);
+const voiceMissingModel = computed(
+  () =>
+    voiceInputEnabled.value &&
+    (voiceStatus.value?.sttState === "missing_model" ||
+      voiceStatus.value?.sttState === "unavailable"),
+);
+const voiceRuntimeUnavailable = computed(
+  () => voiceInputEnabled.value && voiceStatus.value?.sttState === "unavailable",
+);
+/**
+ * Whether the chat can accept a voice auto-send right now. The renderer has no
+ * synchronous AI-entitlement flag, so model availability is the proxy: if no
+ * model is selectable the main process would reject the send, so we keep the
+ * transcript in the draft instead (PRD §7.13 / TODO P1-5).
+ */
+const voiceChatReady = computed(() => availableModels.value.length > 0);
+
+function applyVoiceSettings(settings: AiChatVoiceSettingsView): void {
+  voiceSettings.value = settings;
+  voiceInputEnabled.value = settings.inputMode === "push_to_talk";
+  voiceAutoSend.value = settings.autoSendTranscript;
+  voiceMaxRecordingMs.value = settings.maxRecordingMs;
+  voiceTtsMode.value = settings.ttsMode;
+  // Push the full TTS option set into the speech controller so spoken
+  // responses use the saved language/voice/speed (TODO P0-3). "auto"
+  // language defers detection to the worker; an unset voice id is omitted.
+  speechController.updateOptions({
+    ttsMode: settings.ttsMode,
+    ...(settings.ttsLanguage !== "auto"
+      ? { language: settings.ttsLanguage }
+      : {}),
+    ...(settings.ttsVoiceId !== undefined
+      ? { voiceId: settings.ttsVoiceId }
+      : {}),
+    speed: settings.ttsSpeed,
+  });
+}
+
+async function loadVoiceSettings(): Promise<void> {
+  try {
+    const [settings, status] = await Promise.all([
+      getVoiceSettings(),
+      getVoiceStatus(),
+    ]);
+    applyVoiceSettings(settings);
+    voiceStatus.value = status;
+    if (
+      status.sttState !== "missing_model" &&
+      status.sttState !== "unavailable"
+    ) {
+      voiceModelInstallError.value = null;
+    }
+  } catch {
+    voiceInputEnabled.value = false;
+    voiceAutoSend.value = false;
+    voiceMaxRecordingMs.value = 60_000;
+    voiceSettings.value = null;
+    voiceTtsMode.value = "disabled";
+    speechController.updateOptions({ ttsMode: "disabled" });
+    voiceStatus.value = null;
+  }
+}
+
+async function toggleSpokenResponse(): Promise<void> {
+  if (voiceSettingsSaving.value) return;
+  voiceSettingsSaving.value = true;
+  voiceModelInstallError.value = null;
+  voicePlaybackError.value = null;
+  try {
+    const current = voiceSettings.value ?? await getVoiceSettings();
+    const nextTtsMode: AiChatVoiceTtsMode =
+      current.ttsMode === "disabled" ? "all_assistant_messages" : "disabled";
+    const saved = await setVoiceSettings({
+      ...current,
+      ttsMode: nextTtsMode,
+    });
+    applyVoiceSettings(saved);
+  } catch (err) {
+    voiceModelInstallError.value =
+      err instanceof Error ? err.message : String(err);
+  } finally {
+    voiceSettingsSaving.value = false;
+  }
+}
+
+async function handleInstallVoiceModel(): Promise<void> {
+  if (voiceModelInstalling.value) return;
+  voiceModelInstalling.value = true;
+  voiceModelInstallError.value = null;
+  try {
+    await downloadVoiceModel(voiceStatus.value?.sttModelId ?? "sherpa-onnx:stt:auto");
+    await loadVoiceSettings();
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    voiceModelInstallError.value =
+      `${t("aiChatV2.voice.model_install_failed") || "Voice model installation failed."} ${msg}`;
+    await loadVoiceSettings();
+  } finally {
+    voiceModelInstalling.value = false;
+  }
+}
+
+function handleVoiceSettingsChanged(): void {
+  void loadVoiceSettings();
+}
+
+/** Starting a new voice input stops any in-progress TTS playback (PRD §7.5). */
+function onVoiceRecordingStart(): void {
+  voicePlaybackError.value = null;
+  speechController.stop();
+  void cancelVoiceJob();
+}
+
+/** User clicked the stop-speaking control: halt TTS playback + worker synth. */
+function onStopSpeaking(): void {
+  voicePlaybackError.value = null;
+  speechController.stop();
+  void cancelVoiceJob();
+}
+
 onMounted(() => {
   void loadConversations();
+  void loadVoiceSettings();
   void loadModelContextWindows();
+  void loadProviderSettings();
+  window.addEventListener(
+    AI_PROVIDER_SETTINGS_CHANGED_EVENT,
+    handleProviderSettingsChanged
+  );
+  window.addEventListener(
+    AI_CHAT_V2_VOICE_SETTINGS_CHANGED_EVENT,
+    handleVoiceSettingsChanged
+  );
+  // Model install/remove changes installed status without altering settings;
+  // reload voice status so the mic button reflects availability live.
+  window.addEventListener(
+    AI_CHAT_V2_VOICE_MODELS_CHANGED_EVENT,
+    handleVoiceSettingsChanged
+  );
   // Subscribe to file operation events emitted during tool execution.
   // Records are appended per-conversation so the summary panel reflects
   // all changes made within the active conversation.
@@ -1882,7 +3399,21 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  speechController.stop();
+  unsubscribeSpeaking();
   detachActiveStreamView();
+  window.removeEventListener(
+    AI_PROVIDER_SETTINGS_CHANGED_EVENT,
+    handleProviderSettingsChanged
+  );
+  window.removeEventListener(
+    AI_CHAT_V2_VOICE_SETTINGS_CHANGED_EVENT,
+    handleVoiceSettingsChanged
+  );
+  window.removeEventListener(
+    AI_CHAT_V2_VOICE_MODELS_CHANGED_EVENT,
+    handleVoiceSettingsChanged
+  );
   unsubscribeFromFileOperations();
   if (searchDebounceTimer) {
     clearTimeout(searchDebounceTimer);
@@ -1964,5 +3495,24 @@ onBeforeUnmount(() => {
 .v2-shell__file-ops-body {
   padding: 4px 12px 10px;
   border-top: 1px solid rgba(0, 0, 0, 0.05);
+}
+</style>
+
+<style>
+:root[theme="dark"] .v2-shell {
+  background: #1e1e1e;
+}
+:root[theme="dark"] .v2-shell__header {
+  border-bottom-color: rgba(255, 255, 255, 0.12);
+}
+:root[theme="dark"] .v2-shell__file-ops-panel {
+  background: #2d2d2d;
+  border-top-color: rgba(255, 255, 255, 0.12);
+}
+:root[theme="dark"] .v2-shell__file-ops-header:hover {
+  background-color: rgba(255, 255, 255, 0.06);
+}
+:root[theme="dark"] .v2-shell__file-ops-body {
+  border-top-color: rgba(255, 255, 255, 0.08);
 }
 </style>

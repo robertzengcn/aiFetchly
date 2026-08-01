@@ -1,5 +1,9 @@
 // src/service/AIChatQueryEvents.ts
-import type { OpenAIChatMessage, OpenAITool } from "@/api/aiChatApi";
+import type {
+  OpenAIChatImage,
+  OpenAIChatMessage,
+  OpenAITool,
+} from "@/api/aiChatApi";
 import type { ChatV2StreamRequest } from "@/entityTypes/aiChatV2Types";
 import type {
   AIChatPlanQuestionView,
@@ -9,6 +13,16 @@ import type {
   SubmitPlanForApprovalPayload,
 } from "@/entityTypes/aiChatPlanTypes";
 import type { SkillDefinition } from "@/entityTypes/skillTypes";
+import type {
+  ToolCatalog,
+  ToolCatalogModeDecision,
+  ToolCatalogStateSnapshot,
+} from "@/entityTypes/toolCatalogTypes";
+import type {
+  AIChatRecoveryLayer,
+  AIChatRecoveryReason,
+  ChatV2RecoveryMetadata,
+} from "@/service/AIChatRecoveryTypes";
 
 /**
  * Sink the engine emits non-terminal and terminal events into.
@@ -16,6 +30,12 @@ import type { SkillDefinition } from "@/entityTypes/skillTypes";
  */
 export interface AIChatQueryEventSink {
   emit(event: AIChatQueryEvent): void;
+  /**
+   * Optional persistence barrier for sinks that save events asynchronously.
+   * The query loop calls this before executing a tool so tool-call persistence
+   * does not race DB-writing tools such as artifact creation.
+   */
+  flush?(): Promise<void>;
 }
 
 export interface AIChatQueryStartEvent {
@@ -141,6 +161,7 @@ export interface AIChatQueryCompleteEvent {
   conversationId: string;
   messageId: string;
   fullContent: string;
+  images?: OpenAIChatImage[];
   model?: string;
   finishReason?: string | null;
   totalTokens?: number;
@@ -172,11 +193,43 @@ export interface AIChatQueryUsageUpdateEvent {
   totalTokens: number;
 }
 
+/**
+ * Recovery status event for the seven-layer recovery strategy. Emitted
+ * whenever a recovery layer becomes active, advances, or resolves.
+ * Technical-design §4.4.
+ */
+export interface AIChatQueryRecoveryStatusEvent {
+  type: "recovery_status";
+  conversationId: string;
+  messageId: string;
+  /** Which recovery layer is reporting. */
+  layer: AIChatRecoveryLayer;
+  /** Classified reason for the underlying failure. */
+  reason: AIChatRecoveryReason;
+  /** 1-based attempt within this layer. */
+  attempt?: number;
+  /** Max attempts for this layer/profile, when applicable. */
+  maxAttempts?: number;
+  /** Delay before the next retry, when applicable. */
+  delayMs?: number;
+  /** Elapsed time in persistent retry, when applicable. */
+  elapsedMs?: number;
+  /** Original model the turn started with. */
+  originalModel?: string;
+  /** Current model after a fallback. */
+  currentModel?: string;
+  /** Resolved fallback model, on model_fallback events. */
+  fallbackModel?: string;
+  /** Human-readable message (i18n key or English fallback). */
+  message?: string;
+}
+
 export type AIChatQueryEvent =
   | AIChatQueryStartEvent
   | AIChatQueryTokenEvent
   | AIChatQueryReasoningDeltaEvent
   | AIChatQueryRetryEvent
+  | AIChatQueryRecoveryStatusEvent
   | AIChatQueryToolCallEvent
   | AIChatQueryToolProgressEvent
   | AIChatQueryToolResultNormalEvent
@@ -200,6 +253,7 @@ export type AIChatQueryLoopResult =
       assistantMessageId: string;
       fullContent: string;
       finishReason: string;
+      images?: OpenAIChatImage[];
       model?: string;
       responseId?: string;
       /** Server-reported token usage from the final model round, if the
@@ -211,6 +265,12 @@ export type AIChatQueryLoopResult =
       completionTokens?: number;
       /** Final safe-to-show reasoning text accumulated across rounds, if any. */
       reasoningContent?: string;
+      /** Final deferred-catalog discovered-tool snapshot, when deferred mode
+       * was active, so the engine can persist it across restart (FR-5/AC-8). */
+      toolCatalogState?: ToolCatalogStateSnapshot;
+      /** Recovery metadata accumulated during the turn, if any recovery
+       * layers were activated. Persisted on the assistant row metadata. */
+      recoveryMetadata?: ChatV2RecoveryMetadata;
     }
   | {
       type: "cancelled";
@@ -224,6 +284,9 @@ export type AIChatQueryLoopResult =
       completionTokens?: number;
       /** Partial reasoning captured before the cancel, if any. */
       reasoningContent?: string;
+      toolCatalogState?: ToolCatalogStateSnapshot;
+      /** Recovery metadata for the cancelled turn, if any. */
+      recoveryMetadata?: ChatV2RecoveryMetadata;
     }
   | {
       type: "paused_for_permission";
@@ -243,6 +306,9 @@ export type AIChatQueryLoopResult =
       responseId?: string;
       /** Partial reasoning captured before the failure, if any. */
       reasoningContent?: string;
+      toolCatalogState?: ToolCatalogStateSnapshot;
+      /** Recovery metadata accumulated before the failure, if any. */
+      recoveryMetadata?: ChatV2RecoveryMetadata;
     };
 
 /** State stored when a tool needs user permission. */
@@ -259,6 +325,11 @@ export interface PendingPermissionTurn {
   toolArguments: Record<string, unknown>;
   planContext?: AIChatPlanLoopContext;
   eventSink: AIChatQueryEventSink;
+  /**
+   * Deferred tool catalog snapshot so discovered tools remain exposed after
+   * the user grants permission (AC-8). Present only when deferred mode active.
+   */
+  toolCatalogState?: ToolCatalogStateSnapshot;
 }
 
 /** State stored when plan mode asks the user a question. */
@@ -274,6 +345,12 @@ export interface PendingPlanQuestionTurn {
   questionId: string;
   planId: string;
   eventSink: AIChatQueryEventSink;
+  /**
+   * Deferred tool catalog snapshot so discovered tools remain exposed after
+   * the user answers the plan question (AC-8). Present only when deferred
+   * mode active.
+   */
+  toolCatalogState?: ToolCatalogStateSnapshot;
 }
 
 /** Plan context carried through the loop. */
@@ -368,6 +445,15 @@ export interface AIChatQueryLoopInput {
    * but before the abort signal propagates through the underlying fetch.
    */
   isActiveTurn: () => boolean;
+  /**
+   * Deferred tool catalog. When present and `toolCatalogModeDecision.mode`
+   * is "deferred", the loop filters the exposed tool set per round, adds the
+   * `tool_catalog_search` tool, and intercepts discovery calls locally.
+   * Omit (or keep mode "standard") to preserve current full-tool behavior.
+   */
+  toolCatalog?: ToolCatalog;
+  toolCatalogState?: ToolCatalogStateSnapshot;
+  toolCatalogModeDecision?: ToolCatalogModeDecision;
 }
 
 /** Request payload for resumeToolAfterPermission. */

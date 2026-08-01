@@ -23,6 +23,8 @@ import {
 
 export type PluginSource = "local" | "builtin" | "marketplace";
 
+export type PluginFormat = "aifetchly" | "claude";
+
 export type PluginHealth =
   | "healthy"
   | "disabled"
@@ -37,12 +39,20 @@ export interface PluginSummary {
   displayName?: string;
   version: string;
   source: PluginSource;
+  format?: PluginFormat;
   enabled: boolean;
   health: PluginHealth;
   skillCount: number;
   mcpServerCount: number;
+  agentCount: number;
+  commandCount: number;
+  hookCount: number;
   permissions: string[];
   lastUpdated: string;
+  sourceKind?: PluginSourceKind;
+  sourceUri?: string;
+  sourceRef?: string;
+  installPath?: string;
 }
 
 export interface PluginSkillComponent {
@@ -56,6 +66,7 @@ export interface PluginSkillComponent {
 export interface PluginMcpServerComponent {
   id: number;
   name: string;
+  serverName?: string;
   enabled: boolean;
   transport: string;
   health: string;
@@ -63,16 +74,55 @@ export interface PluginMcpServerComponent {
   error?: string;
 }
 
+export interface PluginAgentComponent {
+  id: string;
+  name: string;
+  description: string;
+  enabled: boolean;
+  mode: string;
+  toolCount: number;
+  componentPath: string;
+  health: string;
+  error?: string;
+}
+
+/**
+ * Renderer-safe view of one slash command contributed by a plugin.
+ * The raw prompt body and arbitrary metadata are NEVER included
+ * (PRD §11.1 / AC-9). `sourceId` is exposed so users can see the
+ * canonical `plugin:<name>` identity.
+ */
+export interface PluginCommandView {
+  name: string;
+  description: string;
+  aliases: string[];
+  argumentHint?: string;
+  enabled: boolean;
+  sourceId: string;
+}
+
+export interface PluginHookComponent {
+  id: string;
+  eventName: string;
+  matcher?: string;
+  enabled: boolean;
+  type: string;
+  health: string;
+}
+
 export interface PluginDetail extends PluginSummary {
   description: string;
   author?: string;
   skills: PluginSkillComponent[];
   mcpServers: PluginMcpServerComponent[];
+  agents: PluginAgentComponent[];
+  commands: PluginCommandView[];
+  hooks: PluginHookComponent[];
   errors: Array<{ code: string; message: string; recoverable: boolean }>;
   manifest: Record<string, unknown>;
-  sourceKind?: PluginSourceKind;
-  sourceUri?: string;
-  sourceRef?: string;
+  marketplaceName?: string;
+  entryName?: string;
+  entryVersion?: string;
 }
 
 export type PluginSourceKind =
@@ -116,6 +166,15 @@ export interface PluginDiagnosticsBundle {
     enabled: boolean;
     transport: string;
     health: string;
+  }>;
+  commandDiagnostics: Array<{
+    severity: string;
+    source: string;
+    sourceId: string;
+    filePath: string;
+    code: string;
+    message: string;
+    recoverable: boolean;
   }>;
 }
 

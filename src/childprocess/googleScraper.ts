@@ -638,7 +638,10 @@ export class GoogleScraper extends SearchScrape {
 
         try {
             const url = new URL(pageState.url);
-            return url.hostname.endsWith("google.com") && url.pathname.includes("/search") && url.searchParams.has("q");
+            const allowedHosts = ['google.com'];
+            const hostname = url.hostname;
+            const isGoogleHost = allowedHosts.includes(hostname) || hostname.endsWith('.google.com');
+            return isGoogleHost && url.pathname.includes("/search") && url.searchParams.has("q");
         } catch {
             return false;
         }

@@ -5,7 +5,8 @@ export {};
 // import {ipcRenderer as ipc} from 'electron-better-ipc'
 import {Iresponse} from '@/views/api/types'
 import {windowInvoke,windowSend,windowReceive} from '@/views/utils/apirequest'
-import {QUERY_USER_INFO, GET_LOGIN_URL,USER_CHECK_LOGIN,USER_SIGNOUT} from "@/config/channellist";
+import { getIpcTransport, type InvokeResult } from "@/views/utils/ipcTransport";
+import {QUERY_USER_INFO, GET_LOGIN_URL,USER_SIGNOUT, USER_LOGIN} from "@/config/channellist";
 import {UserInfoType} from "@/entityTypes/userType"
 import {OPENLOGINPAGE} from "@/config/channellist";
 import {NativateDatatype} from "@/entityTypes/commonType"
@@ -17,19 +18,26 @@ import {NativateDatatype} from "@/entityTypes/commonType"
 //     params
 //   })
 
-export const getUserInfo = () =>
-(async () => {
-  const result:Iresponse =await window.api.invoke(QUERY_USER_INFO)
-  // console.log(result);
+function requireIpcResponse(channel: string, result: InvokeResult | undefined): Iresponse {
+  if (!result) {
+    throw new Error(`${channel} returned no response`);
+  }
   return result as Iresponse;
-})();
+}
+
+export const getUserInfo = async (): Promise<Iresponse> => {
+  const result = await getIpcTransport().invoke(QUERY_USER_INFO);
+  return requireIpcResponse(QUERY_USER_INFO, result);
+};
   
-export const login = (data: any) =>
-(async () => {
-  const result =await window.api.invoke("user:Login", data)
+export const login = async (data: { username: string; password: string }): Promise<Iresponse> => {
+  const result = requireIpcResponse(
+    USER_LOGIN,
+    await getIpcTransport().invoke(USER_LOGIN, data)
+  );
   console.log(result);
   return result;
-})();
+};
   // request({
   //   url: '/user/login',
   //   method: 'post',

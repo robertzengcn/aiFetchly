@@ -1,6 +1,14 @@
-export { };
+export {};
 import { HttpClient } from "@/modules/lib/httpclient";
-import { ProxylistResp, ProxyEntity, SaveProxyResp, ProxyParseItem, ImportProxyResp, GetProxyCountResp, ProxyListEntity } from "@/entityTypes/proxyType";
+import {
+  ProxylistResp,
+  ProxyEntity,
+  SaveProxyResp,
+  ProxyParseItem,
+  ImportProxyResp,
+  GetProxyCountResp,
+  ProxyListEntity,
+} from "@/entityTypes/proxyType";
 import { CommonApiresp } from "@/entityTypes/commonType";
 import { IProxyApi } from "@/modules/interface/IProxyApi";
 
@@ -10,9 +18,11 @@ export class ProxyApi implements IProxyApi {
     this._httpClient = new HttpClient();
   }
   //get proxy list
-  public async getProxylist(page: number,
+  public async getProxylist(
+    page: number,
     size: number,
-    search: string): Promise<ProxylistResp> {
+    search: string
+  ): Promise<ProxylistResp> {
     const searchParams: Record<string, any> = new URLSearchParams();
     searchParams.append("page", page);
     searchParams.append("size", size);
@@ -31,10 +41,10 @@ export class ProxyApi implements IProxyApi {
     }
     // console.log("campaign list is following")
     // console.log(campignlistres.data)
-    const proxylistEn: ProxyListEntity[] = []
+    const proxylistEn: ProxyListEntity[] = [];
     if (proxylistres.status) {
       if (proxylistres.data.records) {
-        const plist = proxylistres.data.records as ProxyEntity[]
+        const plist = proxylistres.data.records as ProxyEntity[];
         //convert data to ProxyListEntity
         plist.forEach((item) => {
           const ple: ProxyListEntity = {
@@ -46,27 +56,26 @@ export class ProxyApi implements IProxyApi {
             protocol: item.protocol,
             country_code: item.country_code,
             addtime: "",
-          }
+          };
           if (item.addtime) {
-            ple.addtime = item.addtime
+            ple.addtime = item.addtime;
           }
-          proxylistEn.push(ple)
-        })
+          proxylistEn.push(ple);
+        });
       }
     }
-      const resp: ProxylistResp = {
-        status: proxylistres.status,
-        msg: proxylistres.msg,
-        data: {
-          total: proxylistres.data.total,
-          records: proxylistEn,
-        },
-      };
-      return resp;
-    }
+    const resp: ProxylistResp = {
+      status: proxylistres.status,
+      msg: proxylistres.msg,
+      data: {
+        total: proxylistres.data.total,
+        records: proxylistEn,
+      },
+    };
+    return resp;
+  }
   //delete proxy from api
   public async deleteProxy(id: number): Promise<any> {
-
     const searchParams: Record<string, any> = new URLSearchParams();
     searchParams.append("id", id);
     const paramstring = searchParams.toString();
@@ -122,7 +131,9 @@ export class ProxyApi implements IProxyApi {
     return resp;
   }
   //import proxy list into server
-  public async importProxy(data: Array<ProxyParseItem>): Promise<ImportProxyResp> {
+  public async importProxy(
+    data: Array<ProxyParseItem>
+  ): Promise<ImportProxyResp> {
     const resp = await this._httpClient.postJson("/api/proxy/import", data);
     if (!resp) {
       throw new Error("remote return empty");
@@ -131,15 +142,40 @@ export class ProxyApi implements IProxyApi {
   }
 
   public async getProxycount(): Promise<number> {
-    const resp = await this._httpClient.get("/api/proxy/count") as GetProxyCountResp;
+    const resp = (await this._httpClient.get(
+      "/api/proxy/count"
+    )) as GetProxyCountResp;
     if (!resp) {
       throw new Error("remote return empty");
     }
     if (resp.status) {
-      return resp.data.total
+      return resp.data.total;
     } else {
-      throw new Error(resp.msg)
+      throw new Error(resp.msg);
     }
+  }
 
+  /**
+   * Bulk host:port lookup is only used by the local AI import tool. The legacy
+   * remote backend has no equivalent endpoint, so this is intentionally not
+   * supported here. The local ProxyModule provides the real implementation.
+   */
+  public async getProxiesByHostPortPairs(
+    _pairs: ReadonlyArray<{ host: string; port: string }>
+  ): Promise<ProxyEntity[]> {
+    throw new Error(
+      "getProxiesByHostPortPairs is not supported by the remote ProxyApi"
+    );
+  }
+
+  /**
+   * Bulk id lookup is only used by the local AI tools. The legacy remote
+   * backend has no equivalent endpoint, so this is intentionally not supported
+   * here. The local ProxyModule provides the real implementation.
+   */
+  public async getProxiesByIds(
+    _ids: readonly number[]
+  ): Promise<ProxyEntity[]> {
+    throw new Error("getProxiesByIds is not supported by the remote ProxyApi");
   }
 }

@@ -12,13 +12,20 @@ export class AIChatToolApprovalModule {
   private token: Token;
 
   /**
-   * Static flag: cleared on construction (one per module instance from
-   * transient IPC handlers). On the first getMode() call that encounters
-   * a stored full_access, we downgrade it to ask_for_approval — this
-   * effectively resets full_access across app restarts since the module
-   * is constructed fresh per process.
+   * Tracks whether the startup-reset has already been applied in this
+   * process. When true, full_access reads pass through as-is.
    */
   private static startupResetApplied = false;
+
+  /**
+   * Set to true whenever setMode("full_access") is called in this
+   * process. The startup reset in getMode() checks this flag: if the
+   * user explicitly re-selected "Full access" in the current session,
+   * we do NOT downgrade it. This preserves the security guarantee that
+   * full_access does not survive across app restarts while allowing
+   * the user to enable it within a session.
+   */
+  private static fullAccessExplicitlySet = false;
 
   constructor() {
     this.token = new Token();
@@ -31,10 +38,14 @@ export class AIChatToolApprovalModule {
       return raw;
     }
     if (raw === "full_access") {
-      // Downgrade full_access on first read after app startup (PRD §4.3).
-      // The module is constructed fresh per process, so this static flag
-      // ensures the downgrade happens at most once per app session.
-      if (!AIChatToolApprovalModule.startupResetApplied) {
+      // Downgrade full_access on first read after app startup (PRD §4.3),
+      // but ONLY if the user has NOT explicitly re-selected it in this
+      // session. This prevents the reset from firing on tool-execution
+      // reads right after the user set "Full access".
+      if (
+        !AIChatToolApprovalModule.startupResetApplied &&
+        !AIChatToolApprovalModule.fullAccessExplicitlySet
+      ) {
         AIChatToolApprovalModule.startupResetApplied = true;
         this.setMode(conversationId, "ask_for_approval");
         return "ask_for_approval";
@@ -46,6 +57,9 @@ export class AIChatToolApprovalModule {
 
   setMode(conversationId: string, mode: ChatToolApprovalMode): void {
     if (!conversationId) return;
+    if (mode === "full_access") {
+      AIChatToolApprovalModule.fullAccessExplicitlySet = true;
+    }
     this.token.setValue(tokenKey(conversationId), mode);
   }
 }

@@ -8,10 +8,18 @@ const mockGetByConversation = vi.fn();
 const mockGetActiveSummary = vi.fn();
 const mockGetConversationMessages = vi.fn();
 const mockDurableRetrieve = vi.fn();
+const mockWorkspaceRetrieve = vi.fn();
+const mockListActiveForRuntime = vi.fn();
 
 vi.mock("@/modules/AIChatSessionMemoryModule", () => ({
   AIChatSessionMemoryModule: vi.fn().mockImplementation(() => ({
     getByConversation: mockGetByConversation,
+  })),
+}));
+
+vi.mock("@/service/AIWorkspaceMemoryRetrievalService", () => ({
+  AIWorkspaceMemoryRetrievalService: vi.fn().mockImplementation(() => ({
+    retrieve: mockWorkspaceRetrieve,
   })),
 }));
 
@@ -40,6 +48,12 @@ vi.mock("@/modules/SystemSettingModule", () => ({
   })),
 }));
 
+vi.mock("@/modules/AgentDefinitionModule", () => ({
+  AgentDefinitionModule: vi.fn().mockImplementation(() => ({
+    listActiveForRuntime: mockListActiveForRuntime,
+  })),
+}));
+
 vi.mock("@/modules/token", () => ({
   Token: vi.fn().mockImplementation(() => ({ getValue: vi.fn() })),
 }));
@@ -64,8 +78,14 @@ describe("AIChatContextAssembler", () => {
       tokenEstimate: 0,
       contextBlock: "",
     });
+    mockWorkspaceRetrieve.mockResolvedValue({
+      memories: [],
+      tokenEstimate: 0,
+      contextBlock: "",
+    });
     // Memory injection defaults to enabled (system_setting absent → true).
     mockGetSettingValue.mockResolvedValue(null);
+    mockListActiveForRuntime.mockResolvedValue([]);
   });
 
   it("puts system prompt first and current user message last", async () => {
@@ -189,8 +209,22 @@ describe("AIChatContextAssembler", () => {
       baseSystemPrompt: "sysp",
       mode: "chat",
     });
-    const roles = r.messages.map((m) => m.role + ":" + m.content).join("|");
-    expect(roles).toBe("system:sysp|user:a|assistant:b|user:c");
+    // First two messages are system (sysp + env context); the rest are
+    // history (user:a, assistant:b) then the current user message last.
+    const sysCount = r.messages.filter((m) => m.role === "system").length;
+    expect(sysCount).toBeGreaterThanOrEqual(2);
+    expect(r.messages[r.messages.length - 3]).toEqual({
+      role: "user",
+      content: "a",
+    });
+    expect(r.messages[r.messages.length - 2]).toEqual({
+      role: "assistant",
+      content: "b",
+    });
+    expect(r.messages[r.messages.length - 1]).toEqual({
+      role: "user",
+      content: "c",
+    });
   });
 
   it("does not duplicate the current user message when it was already saved", async () => {
@@ -216,9 +250,11 @@ describe("AIChatContextAssembler", () => {
       (m) => m.role === "user" && m.content === "What is AI?"
     );
     expect(userMessages.length).toBe(1);
-    expect(r.messages.map((m) => `${m.role}:${m.content}`).join("|")).toBe(
-      "system:sysp|user:What is AI?"
-    );
+    // system messages (sysp + env context) followed by the single user message
+    const userMsgs = r.messages.filter((m) => m.role === "user");
+    expect(userMsgs).toHaveLength(1);
+    expect(userMsgs[0].content).toBe("What is AI?");
+    expect(r.messages[r.messages.length - 1]).toEqual(userMsgs[0]);
   });
 
   it("injects durable memory before compact context", async () => {
@@ -313,6 +349,11 @@ describe("AIChatContextAssembler — custom context directive", () => {
       tokenEstimate: 0,
       contextBlock: "",
     });
+    mockWorkspaceRetrieve.mockResolvedValue({
+      memories: [],
+      tokenEstimate: 0,
+      contextBlock: "",
+    });
     mockGetByConversation.mockResolvedValue(null);
     mockGetActiveSummary.mockResolvedValue(null);
     mockGetConversationMessages.mockResolvedValue([]);
@@ -371,12 +412,25 @@ describe("AIChatContextAssembler — custom context directive", () => {
       mode: "chat",
     });
 
-    expect(result.messages).toHaveLength(2);
     expect(result.messages[0]).toEqual({
       role: "system",
       content: "you are helpful",
     });
-    expect(result.messages[1]).toEqual({ role: "user", content: "hello" });
+    expect(
+      result.messages.some(
+        (message) =>
+          message.role === "system" &&
+          typeof message.content === "string" &&
+          message.content.includes("Environment & System Context")
+      )
+    ).toBe(true);
+    expect(
+      result.messages.some((message) => message.content === "")
+    ).toBe(false);
+    expect(result.messages[result.messages.length - 1]).toEqual({
+      role: "user",
+      content: "hello",
+    });
   });
 
   it("skips injection when the setting value is whitespace-only", async () => {
@@ -394,8 +448,25 @@ describe("AIChatContextAssembler — custom context directive", () => {
       mode: "chat",
     });
 
-    expect(result.messages).toHaveLength(2);
-    expect(result.messages[1]).toEqual({ role: "user", content: "hello" });
+    expect(result.messages[0]).toEqual({
+      role: "system",
+      content: "you are helpful",
+    });
+    expect(
+      result.messages.some(
+        (message) =>
+          message.role === "system" &&
+          typeof message.content === "string" &&
+          message.content.includes("Environment & System Context")
+      )
+    ).toBe(true);
+    expect(
+      result.messages.some((message) => message.content === "   \n  ")
+    ).toBe(false);
+    expect(result.messages[result.messages.length - 1]).toEqual({
+      role: "user",
+      content: "hello",
+    });
   });
 
   it("skips injection and does not throw when the setting read fails", async () => {
@@ -413,8 +484,25 @@ describe("AIChatContextAssembler — custom context directive", () => {
       mode: "chat",
     });
 
-    // Should not throw, should not inject the directive
-    expect(result.messages).toHaveLength(2);
-    expect(result.messages[1]).toEqual({ role: "user", content: "hello" });
+    // Should not throw. Directive is not injected.
+    expect(result.messages[0]).toEqual({
+      role: "system",
+      content: "you are helpful",
+    });
+    expect(
+      result.messages.some(
+        (message) =>
+          message.role === "system" &&
+          typeof message.content === "string" &&
+          message.content.includes("Environment & System Context")
+      )
+    ).toBe(true);
+    expect(
+      result.messages.some((message) => message.content === "sqlite locked")
+    ).toBe(false);
+    expect(result.messages[result.messages.length - 1]).toEqual({
+      role: "user",
+      content: "hello",
+    });
   });
 });

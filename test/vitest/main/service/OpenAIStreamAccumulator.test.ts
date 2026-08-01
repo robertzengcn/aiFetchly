@@ -56,6 +56,39 @@ describe("OpenAIStreamAccumulator", () => {
     expect(acc.state.model).toBe("gpt-test");
   });
 
+  it("captures generated image deltas", () => {
+    const acc = new OpenAIStreamAccumulator();
+    acc.ingest(
+      chunk({
+        choices: [
+          {
+            index: 0,
+            delta: {
+              content: "Image ready",
+              images: [
+                {
+                  type: "image",
+                  delivery: "provider_url",
+                  url: "https://example.com/generated.png",
+                  mime_type: "image/png",
+                  download_required: true,
+                },
+              ],
+            },
+            finish_reason: "stop",
+          },
+        ],
+      })
+    );
+    expect(acc.state.fullContent).toBe("Image ready");
+    expect(acc.state.images).toEqual([
+      expect.objectContaining({
+        type: "image",
+        url: "https://example.com/generated.png",
+      }),
+    ]);
+  });
+
   it("stores finishReason when present", () => {
     const acc = new OpenAIStreamAccumulator();
     acc.ingest(

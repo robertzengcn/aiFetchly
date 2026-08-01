@@ -7,6 +7,11 @@
         margin: 16px 0 16px 16px !important;
         overflow: hidden;
         height: calc(100vh - 2rem) !important;
+        .v-navigation-drawer__content {
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+        }
         .v-list-item__prepend > .v-icon, .v-list-item__append > .v-icon {
             opacity: 1 !important;
         }
@@ -51,6 +56,32 @@
             .v-list-item__prepend {
                 width: auto;
                 padding-left: 0;
+            }
+        }
+        .navigation_routes {
+            flex: 1 1 auto;
+            min-height: 0;
+            overflow-y: auto;
+            padding-bottom: 8px;
+        }
+        .navigation_account {
+            flex: 0 0 auto;
+            padding-top: 10px;
+            padding-bottom: 8px;
+            border-top: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+            .account_item {
+                min-height: 52px;
+                border-radius: 8px;
+            }
+            .account_icon {
+                background-color: rgba(var(--v-theme-primary), 0.12);
+                color: rgb(var(--v-theme-primary));
+            }
+            .v-list-item-title,
+            .v-list-item-subtitle {
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
             }
         }
     }
@@ -150,6 +181,15 @@
                 padding-inline-start: 8px !important;
             }
         }
+        .navigation_account {
+            .account_item {
+                padding-inline: 8px !important;
+            }
+            .v-list-item__prepend {
+                width: 40px;
+                margin-inline-end: 0;
+            }
+        }
 
     }
     .app_main {
@@ -166,5 +206,13 @@
     }
     .v-list-item__prepend > .v-icon {
         margin-inline-end: 16px;
+    }
+    .plan_menu_item {
+        color: rgb(var(--v-theme-primary));
+        cursor: default;
+    }
+    .upgrade_menu_item {
+        color: rgb(var(--v-theme-primary));
+        font-weight: 600;
     }
 }

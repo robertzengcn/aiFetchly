@@ -1,9 +1,6 @@
 'use strict';
 // import {authorize,credentials} from '@/modules/google_auth';
 // import {uploadVideo,youtubecategoryIds} from '@/modules/youtube_upload';
-const appRoot = require('app-root-path');
-import * as path from "path";
-const fs = require('fs');
 
 // describe('Module Youtubeupload', function(){
 //     //test google auth
