@@ -1,0 +1,51 @@
+{
+  "schemaVersion": 1,
+  "description": "Native dependency policy for base-app artifacts (PRD FR-21/FR-26, design §26.3). Each target lists required native packages, forbidden foreign-target package patterns, allowed on-disk binary formats, and the modules that require an Electron-ABI rebuild. The verifier fails when a forbidden package or a foreign-format native binary is present, or a required package is missing. Local-AI inference families (sherpa/onnx/sharp) remain bundled until the Phase 9 slim-installer; the foreign-variant of each family is already forbidden here so a target never ships another OS/arch native.",
+  "targets": {
+    "win32-x64": {
+      "requiredPackages": ["better-sqlite3", "sqlite-vec", "sqlite-vec-windows-x64"],
+      "forbiddenPackagePatterns": [
+        "sqlite3",
+        "@types/sqlite3",
+        "sqlite-vec-darwin-*",
+        "sqlite-vec-linux-*",
+        "sherpa-onnx-darwin-*",
+        "sherpa-onnx-linux-*",
+        "sherpa-onnx-win-ia32"
+      ],
+      "allowedBinaryFormats": ["pe", "node-addon"],
+      "rebuildModules": ["better-sqlite3"]
+    },
+    "darwin-x64": {
+      "requiredPackages": ["better-sqlite3", "sqlite-vec", "sqlite-vec-darwin-x64"],
+      "forbiddenPackagePatterns": [
+        "sqlite3",
+        "@types/sqlite3",
+        "sqlite-vec-windows-*",
+        "sqlite-vec-darwin-arm64",
+        "sqlite-vec-linux-*",
+        "sherpa-onnx-darwin-arm64",
+        "sherpa-onnx-linux-*",
+        "sherpa-onnx-win-*"
+      ],
+      "allowedBinaryFormats": ["mach-o", "node-addon"],
+      "rebuildModules": ["better-sqlite3"]
+    },
+    "darwin-arm64": {
+      "requiredPackages": ["better-sqlite3", "sqlite-vec", "sqlite-vec-darwin-arm64"],
+      "forbiddenPackagePatterns": [
+        "sqlite3",
+        "@types/sqlite3",
+        "sqlite-vec-windows-*",
+        "sqlite-vec-darwin-x64",
+        "sqlite-vec-linux-*",
+        "sherpa-onnx-darwin-x64",
+        "sherpa-onnx-linux-*",
+        "sherpa-onnx-win-*"
+      ],
+      "allowedBinaryFormats": ["mach-o", "node-addon"],
+      "rebuildModules": ["better-sqlite3"]
+    }
+  },
+  "reviewedDevelopmentExceptions": []
+}
