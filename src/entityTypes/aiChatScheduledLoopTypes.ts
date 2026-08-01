@@ -28,10 +28,17 @@ export type AiLoopCommand =
       readonly type: "scheduled_loop_control";
       readonly operation: ScheduledLoopControlOperation;
     }
-  | { readonly type: "invalid_loop"; readonly code: ScheduledLoopParseErrorCode };
+  | {
+      readonly type: "invalid_loop";
+      readonly code: ScheduledLoopParseErrorCode;
+    };
 
 /** Control operations for `/loop status|pause|resume|stop`. */
-export type ScheduledLoopControlOperation = "status" | "pause" | "resume" | "stop";
+export type ScheduledLoopControlOperation =
+  | "status"
+  | "pause"
+  | "resume"
+  | "stop";
 
 /** Parser-level error codes (subset of the full error contract). */
 export type ScheduledLoopParseErrorCode =
@@ -160,3 +167,81 @@ export type ScheduledLoopErrorCode =
   | "SCHEDULE_EXPIRED"
   | "MAX_RUNS_REACHED"
   | "RUN_INTERRUPTED";
+
+// ---------------------------------------------------------------------------
+// Model-layer records (technical-design §10)
+// ---------------------------------------------------------------------------
+
+/** Input used to persistently create an interval schedule. */
+export interface CreateIntervalScheduleRecord {
+  readonly name: string;
+  readonly taskId: number;
+  readonly conversationId: string;
+  readonly intervalMs: number;
+  readonly anchorAt: Date;
+  readonly nextRunAt: Date;
+  readonly maxExecutionCount: number;
+  readonly expiresAt: Date;
+  readonly misfirePolicy: ScheduledLoopMisfirePolicy;
+  readonly overlapPolicy: ScheduledLoopOverlapPolicy;
+}
+
+/** Input used to persistently create a chat-bound scheduled AI message task. */
+export interface CreateChatScheduledTaskRecord {
+  readonly name: string;
+  readonly message: string;
+  readonly conversationId: string;
+  readonly model?: string;
+  readonly allowedTools: readonly string[];
+  readonly autoApproveTools: boolean;
+  readonly maxToolCalls: number;
+  readonly maxRuntimeMs: number;
+  readonly maxContinueCalls: number;
+  readonly sourceType: "chat_scheduled_loop";
+}
+
+/** Input for atomically claiming a due interval occurrence. */
+export interface ClaimOccurrenceInput {
+  readonly scheduleId: number;
+  readonly now: Date;
+}
+
+/** Result of claiming a due interval occurrence. */
+export type ClaimOccurrenceResult =
+  | {
+      readonly kind: "claimed";
+      readonly runId: number;
+      readonly occurrence: number;
+      readonly catchUp: boolean;
+      readonly idempotencyKey: string;
+      readonly scheduledFor: Date;
+      readonly coalescedCount: number;
+    }
+  | { readonly kind: "coalesced"; readonly coalescedCount: number }
+  | { readonly kind: "not_due" }
+  | {
+      readonly kind: "expired";
+      readonly reason: "SCHEDULE_EXPIRED" | "MAX_RUNS_REACHED";
+    }
+  | { readonly kind: "not_claimable"; readonly reason: string };
+
+/** Input for updating schedule counters after a run result. */
+export interface IntervalResultUpdate {
+  readonly scheduleId: number;
+  readonly success: boolean;
+  readonly nextRunAt: Date;
+  readonly terminalReason?: string;
+  readonly terminalStatus?: "expired" | "failed" | "stopped";
+  readonly coalescedDelta?: number;
+}
+
+/** Input for persistently creating a scheduled-loop occurrence run row. */
+export interface CreateOccurrenceRecord {
+  readonly taskId: number;
+  readonly scheduleId: number;
+  readonly conversationId: string;
+  readonly occurrence: number;
+  readonly scheduledFor: Date;
+  readonly catchUp: boolean;
+  readonly idempotencyKey: string;
+}

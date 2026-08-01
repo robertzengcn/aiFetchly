@@ -90,8 +90,10 @@ export function isValidMaxLifetimeMs(ms: number): boolean {
 /** Clamp a requested interval to the legal range. Returns null if not a safe int. */
 export function clampIntervalMs(ms: number): number | null {
   if (!Number.isSafeInteger(ms)) return null;
-  if (ms < SCHEDULED_LOOP_MIN_INTERVAL_MS) return SCHEDULED_LOOP_MIN_INTERVAL_MS;
-  if (ms > SCHEDULED_LOOP_MAX_INTERVAL_MS) return SCHEDULED_LOOP_MAX_INTERVAL_MS;
+  if (ms < SCHEDULED_LOOP_MIN_INTERVAL_MS)
+    return SCHEDULED_LOOP_MIN_INTERVAL_MS;
+  if (ms > SCHEDULED_LOOP_MAX_INTERVAL_MS)
+    return SCHEDULED_LOOP_MAX_INTERVAL_MS;
   return ms;
 }
 
@@ -106,7 +108,64 @@ export function clampMaxRuns(count: number): number | null {
 /** Clamp a requested lifetime to the legal range. Returns null if not a safe int. */
 export function clampMaxLifetimeMs(ms: number): number | null {
   if (!Number.isSafeInteger(ms)) return null;
-  if (ms < SCHEDULED_LOOP_MIN_INTERVAL_MS) return SCHEDULED_LOOP_MIN_INTERVAL_MS;
-  if (ms > SCHEDULED_LOOP_MAX_LIFETIME_MS) return SCHEDULED_LOOP_MAX_LIFETIME_MS;
+  if (ms < SCHEDULED_LOOP_MIN_INTERVAL_MS)
+    return SCHEDULED_LOOP_MIN_INTERVAL_MS;
+  if (ms > SCHEDULED_LOOP_MAX_LIFETIME_MS)
+    return SCHEDULED_LOOP_MAX_LIFETIME_MS;
   return ms;
+}
+
+// ---------------------------------------------------------------------------
+// Cadence math (technical-design §16.1-16.2). Pure functions over epoch ms so
+// they can be unit-tested with an injected clock and never touch Date.now().
+// ---------------------------------------------------------------------------
+
+/**
+ * Occurrence number of a cadence slot time. Occurrence n is due at
+ * `anchor + n * interval`. Returns null when the slot is not on the cadence
+ * grid (delta < interval or delta not a whole multiple of the interval).
+ */
+export function occurrenceOfSlot(
+  anchorMs: number,
+  intervalMs: number,
+  slotTimeMs: number
+): number | null {
+  if (!Number.isSafeInteger(anchorMs) || !Number.isSafeInteger(intervalMs)) {
+    return null;
+  }
+  if (intervalMs <= 0) return null;
+  const delta = slotTimeMs - anchorMs;
+  if (delta < intervalMs) return null;
+  if (delta % intervalMs !== 0) return null;
+  return delta / intervalMs;
+}
+
+/**
+ * First cadence occurrence strictly after `nowMs`. Occurrence 1 is the first
+ * run (due at anchor + interval). Uses checked arithmetic and clamps invalid
+ * dates. Returns { occurrence, timeMs }.
+ */
+export function nextFutureOccurrence(
+  anchorMs: number,
+  intervalMs: number,
+  nowMs: number
+): { occurrence: number; timeMs: number } {
+  const interval = Math.max(1, intervalMs);
+  const elapsed = nowMs - anchorMs;
+  let occurrence: number;
+  if (elapsed < interval) {
+    occurrence = 1;
+  } else {
+    occurrence = Math.floor(elapsed / interval) + 1;
+  }
+  const timeMs = checkedMultiply(occurrence, interval);
+  if (timeMs === null) {
+    // Overflow guard: fall back to a very large but safe future slot.
+    occurrence = Math.floor(Number.MAX_SAFE_INTEGER / interval);
+    return {
+      occurrence,
+      timeMs: Number.MAX_SAFE_INTEGER,
+    };
+  }
+  return { occurrence, timeMs: anchorMs + timeMs };
 }
