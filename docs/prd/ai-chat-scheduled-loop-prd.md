@@ -7,6 +7,7 @@
 - **Created**: 2026-08-01
 - **Owner**: AiFetchly Desktop Engineering
 - **Related documents**:
+  - [AI Chat V2 Scheduled Loop Technical Design](./ai-chat-scheduled-loop-technical-design.md)
   - [AI Chat V2 Goal and Loop Commands PRD](./ai-chat-goal-loop-prd.md)
   - [AI Chat V2 Goal and Loop Technical Design](./ai-chat-goal-loop-technical-design.md)
   - `docs/skills/ai-message-task-prd/README.md`
