@@ -97,6 +97,7 @@ export class RagSearchModule extends BaseModule {
   private ragConfigApi: RagConfigApi;
   private systemSettingModule: SystemSettingModule;
   private systemSettingGroupModule: SystemSettingGroupModule;
+  private ragChunkModule: RAGChunkModule;
 
   constructor() {
     super();
@@ -115,6 +116,7 @@ export class RagSearchModule extends BaseModule {
     this.ragConfigApi = new RagConfigApi();
     this.systemSettingModule = new SystemSettingModule();
     this.systemSettingGroupModule = new SystemSettingGroupModule();
+    this.ragChunkModule = new RAGChunkModule();
   }
 
   /**
@@ -905,6 +907,34 @@ export class RagSearchModule extends BaseModule {
           error instanceof Error ? error.message : "Unknown error"
         }`,
       };
+    }
+  }
+
+  /**
+   * Clear the existing chunk/vector state before a manual regeneration run.
+   * The Knowledge Library reload action is a rebuild, not an incremental fill.
+   */
+  async resetDocumentIndex(document: RAGDocumentEntity): Promise<void> {
+    const existingChunks = await this.ragChunkModule.getDocumentChunks(
+      document.id
+    );
+
+    if (
+      existingChunks.length > 0 &&
+      document.modelName &&
+      document.vectorDimensions
+    ) {
+      await this.searchService.vectorStoreService.deleteDocumentIndexByPath(
+        document.id,
+        {
+          name: document.modelName,
+          dimensions: document.vectorDimensions,
+        }
+      );
+    }
+
+    if (existingChunks.length > 0) {
+      await this.ragChunkModule.deleteDocumentChunks(document.id);
     }
   }
 

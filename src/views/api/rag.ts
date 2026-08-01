@@ -715,15 +715,33 @@ export async function chunkAndEmbedDocument(
       // modelName
     };
 
-    const response = await windowInvoke(
+    const response = (await windowInvoke(
       RAG_CHUNK_AND_EMBED_DOCUMENT,
       requestData
-    );
+    )) as CommonMessage<ChunkAndEmbedResponse>;
+
+    if (!response.status) {
+      return {
+        success: false,
+        message: response.msg || "Failed to chunk and embed document",
+      };
+    }
+
+    if (!response.data?.success) {
+      return {
+        success: false,
+        data: response.data || undefined,
+        message:
+          response.data?.message ||
+          response.msg ||
+          "Failed to chunk and embed document",
+      };
+    }
 
     return {
       success: true,
       data: response.data,
-      message: "",
+      message: response.data.message || response.msg || "",
     };
   } catch (error) {
     console.error("Error chunking and embedding document:", error);
