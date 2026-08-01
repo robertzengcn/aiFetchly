@@ -718,30 +718,20 @@ export async function chunkAndEmbedDocument(
     const response = (await windowInvoke(
       RAG_CHUNK_AND_EMBED_DOCUMENT,
       requestData
-    )) as CommonMessage<ChunkAndEmbedResponse>;
+    )) as ChunkAndEmbedResponse;
 
-    if (!response.status) {
+    if (!response.success) {
       return {
         success: false,
-        message: response.msg || "Failed to chunk and embed document",
-      };
-    }
-
-    if (!response.data?.success) {
-      return {
-        success: false,
-        data: response.data || undefined,
-        message:
-          response.data?.message ||
-          response.msg ||
-          "Failed to chunk and embed document",
+        data: response,
+        message: response.message || "Failed to chunk and embed document",
       };
     }
 
     return {
       success: true,
-      data: response.data,
-      message: response.data.message || response.msg || "",
+      data: response,
+      message: response.message || "",
     };
   } catch (error) {
     console.error("Error chunking and embedding document:", error);
