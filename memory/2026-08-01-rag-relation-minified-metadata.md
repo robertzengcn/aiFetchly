@@ -31,10 +31,12 @@ Also replaced the relation `any` types with entity types so future refactors get
 - `npx vitest run --config vite.main.config.mjs test/vitest/main/ragEntityRelations.test.ts` passed.
 - The Vitest global setup ran `tsc --noEmit -p tsconfig.json` and found zero TypeScript errors.
 - `git diff --check` passed.
+- Follow-up audit found no remaining `@OneToMany`, `@ManyToOne`, `@OneToOne`, or `@ManyToMany` decorators in `src/entity` with string relation targets.
 
 ## Regression Test
 
 Added `test/vitest/main/ragEntityRelations.test.ts`, which asserts the RAG relation metadata uses constructor callbacks and resolves to the actual entity constructors instead of string class names.
+Follow-up strengthened the same test to import the production SQLite entity configuration and assert every registered relation target is non-string.
 
 ## Status
 
