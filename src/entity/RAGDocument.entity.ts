@@ -8,6 +8,7 @@ import {
 } from "typeorm";
 import AuditableEntity from "./Auditable.entity";
 import { Order } from "./order.decorator";
+import { RAGChunkEntity } from "./RAGChunk.entity";
 
 @Entity("rag_documents")
 @Index(["status", "processingStatus"])
@@ -130,6 +131,6 @@ export class RAGDocumentEntity extends AuditableEntity {
   crawledAt?: Date;
 
   // Relationships
-  @OneToMany("RAGChunkEntity", "document")
-  chunks?: any[];
+  @OneToMany(() => RAGChunkEntity, (chunk) => chunk.document)
+  chunks?: RAGChunkEntity[];
 }
