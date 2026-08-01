@@ -141,6 +141,7 @@ jobs:
     runs-on: macos-latest
     env:
       MACOS_APP_BUNDLE_ID: com.aifetchly.desktop
+      SIGN_MACOS_ARTIFACTS: "false"
       APPLE_CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
       APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
       APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
@@ -215,7 +216,7 @@ jobs:
           echo "NODE_GYP_FORCE_PYTHON=${PYTHON_BIN}" >> "$GITHUB_ENV"
 
       - name: Validate Apple signing secrets
-        if: github.event_name != 'pull_request'
+        if: env.SIGN_MACOS_ARTIFACTS == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -238,7 +239,7 @@ jobs:
           echo "Apple signing secrets are configured."
 
       - name: Import Apple Developer ID certificate
-        if: github.event_name != 'pull_request'
+        if: env.SIGN_MACOS_ARTIFACTS == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -271,8 +272,8 @@ jobs:
           echo "MACOS_CODE_SIGN=true" >> "${GITHUB_ENV}"
           echo "MACOS_KEYCHAIN_PATH=${KEYCHAIN_PATH}" >> "${GITHUB_ENV}"
 
-      - name: Mark pull request macOS build as unsigned
-        if: github.event_name == 'pull_request'
+      - name: Mark macOS build as unsigned
+        if: env.SIGN_MACOS_ARTIFACTS != 'true'
         shell: bash
         run: |
           echo "MACOS_CODE_SIGN=false" >> "${GITHUB_ENV}"
