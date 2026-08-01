@@ -91,7 +91,11 @@
         </template>
       </template>
       <div v-else class="v2-message__content">{{ message.content }}</div>
-      <details v-if="hasReasoning" class="v2-message__reasoning" open>
+      <details
+        v-if="hasReasoning"
+        class="v2-message__reasoning"
+        :open="status === 'streaming'"
+      >
         <summary>
           <v-icon size="x-small">mdi-brain</v-icon>
           {{ t("aiChatV2.reasoning_title") || "Reasoning" }}
@@ -130,6 +134,8 @@ const props = defineProps<{
   errorMessage?: string;
   disabled?: boolean;
   workspaceRoot?: string;
+  /** Global "Show reasoning" preference — gates whether the panel renders. */
+  showReasoning?: boolean;
 }>();
 const emit = defineEmits<{
   (
@@ -187,7 +193,10 @@ const reasoningText = computed(
   () => props.message.metadata?.reasoning?.content?.trim() ?? ""
 );
 const hasReasoning = computed(
-  () => props.message.role === "assistant" && reasoningText.value.length > 0
+  () =>
+    props.message.role === "assistant" &&
+    props.showReasoning === true &&
+    reasoningText.value.length > 0
 );
 
 const shellPreview = computed<ShellPreview | undefined>(() => {

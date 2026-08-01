@@ -399,13 +399,32 @@ function validateStreamRequest(
     return "showReasoning must be a boolean";
   }
   if (req.reasoning !== undefined) {
-    const reasoning = req.reasoning as { enabled?: unknown };
+    const reasoning = req.reasoning as {
+      enabled?: unknown;
+      effort?: unknown;
+      summary?: unknown;
+    };
     if (
       !reasoning ||
       typeof reasoning !== "object" ||
+      Array.isArray(reasoning) ||
       typeof reasoning.enabled !== "boolean"
     ) {
       return "reasoning must be an object with a boolean 'enabled' field";
+    }
+    if (
+      reasoning.effort !== undefined &&
+      (typeof reasoning.effort !== "string" ||
+        !["low", "medium", "high"].includes(reasoning.effort))
+    ) {
+      return "reasoning.effort must be one of low, medium, high";
+    }
+    if (
+      reasoning.summary !== undefined &&
+      (typeof reasoning.summary !== "string" ||
+        !["auto", "concise", "detailed"].includes(reasoning.summary))
+    ) {
+      return "reasoning.summary must be one of auto, concise, detailed";
     }
   }
   return null;

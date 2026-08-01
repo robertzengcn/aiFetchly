@@ -789,4 +789,32 @@ describe("AI Chat V2 — reasoning streaming + persistence", () => {
     expect(payload?.errorMessage).toContain("reasoning");
     expect(mockOpenAIChatCompletionStream).not.toHaveBeenCalled();
   });
+
+  it("rejects out-of-enum reasoning.effort and array reasoning payloads", async () => {
+    const senderSend = vi.fn();
+    await mockIpcMain.callHandler(
+      AI_CHAT_V2_STREAM,
+      { sender: { send: senderSend } },
+      JSON.stringify({
+        message: "hi",
+        reasoning: { enabled: true, effort: "DROP TABLE" },
+      })
+    );
+    let payload = findCompletePayload(senderSend);
+    expect(payload?.eventType).toBe("error");
+    expect(payload?.errorMessage).toContain("effort");
+
+    // Array with a boolean `enabled` would pass a naive typeof-object check.
+    await mockIpcMain.callHandler(
+      AI_CHAT_V2_STREAM,
+      { sender: { send: senderSend } },
+      JSON.stringify({
+        message: "hi",
+        reasoning: [{ enabled: true }],
+      })
+    );
+    payload = findCompletePayload(senderSend);
+    expect(payload?.eventType).toBe("error");
+    expect(mockOpenAIChatCompletionStream).not.toHaveBeenCalled();
+  });
 });

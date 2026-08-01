@@ -1876,13 +1876,6 @@ export class AiChatApi {
     if (request.user !== undefined) {
       data.user = request.user;
     }
-    if (request.reasoning?.enabled) {
-      data.reasoning = {
-        enabled: true,
-        effort: request.reasoning.effort,
-        summary: request.reasoning.summary ?? "auto",
-      };
-    }
     this._debugLogRequest("/api/ai/v1/chat/completions", data);
     return this._httpClient.postJson("/api/ai/v1/chat/completions", data);
   }
@@ -1932,13 +1925,6 @@ export class AiChatApi {
     }
     if (request.user !== undefined) {
       data.user = request.user;
-    }
-    if (request.reasoning?.enabled) {
-      data.reasoning = {
-        enabled: true,
-        effort: request.reasoning.effort,
-        summary: request.reasoning.summary ?? "auto",
-      };
     }
     // Ask the server to include token usage in the final stream chunk so we
     // can display live context-usage percentage in the UI. Servers that do

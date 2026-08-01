@@ -101,6 +101,7 @@
         :is-streaming="chatIsRunning"
         :retry-info="retryInfo"
         :workspace-root="activeWorkspace?.rootPath ?? ''"
+        :show-reasoning="showReasoning"
         @grant-permission="handleSkillPermissionGrant"
         @deny-permission="handleSkillPermissionDeny"
         @approve-plan="handleApprovePlan"
@@ -628,6 +629,9 @@ const selectedModel = ref<string | undefined>(undefined);
 // add the server `reasoning` option and persist reasoning metadata.
 // ---------------------------------------------------------------------------
 const SHOW_REASONING_STORAGE_KEY = "aiChatV2.showReasoning";
+// Cap live-streamed reasoning length in the renderer (mirrors the persisted
+// 32 KB cap in AIChatQueryEngine) so a misbehaving upstream can't OOM the view.
+const REASONING_LIVE_MAX_CHARS = 32 * 1024;
 const showReasoning = ref<boolean>(
   (() => {
     try {
@@ -1596,20 +1600,33 @@ const onSend = async (text: string): Promise<void> => {
           chunk.eventType === "reasoning_delta" &&
           chunk.reasoningDelta
         ) {
-          // Reasoning is an AI response too — surface it in the panel without
-          // touching assistant.content and never route it to voice playback.
+          // Toggle off → ignore reasoning entirely (PRD UX-2): don't build
+          // metadata, don't touch assistant.content, never route to voice.
+          if (!showReasoning.value) {
+            return;
+          }
+          // Cap live accumulation to bound renderer work on very long reasoning
+          // (matches the persisted 32 KB cap; without this a misbehaving
+          // upstream could jank/OOM the renderer via per-delta concat + spread).
+          const prevReasoning = assistant.metadata?.reasoning?.content ?? "";
+          if (prevReasoning.length >= REASONING_LIVE_MAX_CHARS) {
+            return;
+          }
           receivedFirstResponse.value = true;
           retryInfo.value = null;
           ensureAssistantAdded();
-          const prevReasoning = assistant.metadata?.reasoning?.content ?? "";
+          const combined = prevReasoning + chunk.reasoningDelta;
+          const over = combined.length > REASONING_LIVE_MAX_CHARS;
           assistant.metadata = {
             ...(assistant.metadata ?? { source: "chat-v2" }),
             reasoning: {
-              content: prevReasoning + chunk.reasoningDelta,
+              content: over
+                ? combined.slice(0, REASONING_LIVE_MAX_CHARS)
+                : combined,
               format: "plain_text",
               source: "server",
               model: chunk.model,
-              truncated: false,
+              truncated: over,
             },
           };
           const reasoningIdx = messages.value.findIndex(

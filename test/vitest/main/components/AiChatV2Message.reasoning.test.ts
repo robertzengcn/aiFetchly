@@ -42,9 +42,9 @@ function makeAssistantMessage(reasoning?: {
   } as unknown as ChatV2MessageView;
 }
 
-function mountWith(message: ChatV2MessageView) {
+function mountWith(message: ChatV2MessageView, showReasoning = true) {
   return mount(AiChatV2Message, {
-    props: { message },
+    props: { message, showReasoning },
     global: {
       plugins: [i18n],
       stubs: {
@@ -69,6 +69,16 @@ describe("AiChatV2Message reasoning panel", () => {
 
   it("omits the panel when there is no reasoning metadata", async () => {
     const wrapper = mountWith(makeAssistantMessage());
+    await flushPromises();
+    expect(wrapper.find(".v2-message__reasoning").exists()).toBe(false);
+  });
+
+  it("omits the panel when showReasoning is false even if reasoning exists", async () => {
+    // Toggle off → reasoning must be hidden (PRD UX-2).
+    const wrapper = mountWith(
+      makeAssistantMessage({ content: "secret reasoning" }),
+      false
+    );
     await flushPromises();
     expect(wrapper.find(".v2-message__reasoning").exists()).toBe(false);
   });
