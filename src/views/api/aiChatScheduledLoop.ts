@@ -1,0 +1,66 @@
+import { windowInvoke } from "@/views/utils/apirequest";
+import {
+  AI_CHAT_V2_SCHEDULED_LOOP_CREATE,
+  AI_CHAT_V2_SCHEDULED_LOOP_GET,
+  AI_CHAT_V2_SCHEDULED_LOOP_PAUSE,
+  AI_CHAT_V2_SCHEDULED_LOOP_RESUME,
+  AI_CHAT_V2_SCHEDULED_LOOP_STOP,
+  AI_CHAT_V2_SCHEDULED_LOOP_STOP_RUN,
+} from "@/config/channellist";
+import type {
+  CreateScheduledLoopRequest,
+  CreateScheduledLoopResponse,
+  ScheduledLoopControlOperation,
+  ScheduledLoopView,
+} from "@/entityTypes/aiChatScheduledLoopTypes";
+
+/**
+ * Renderer API for the AI Chat V2 scheduled-loop feature (`/loop <duration>
+ * <prompt>`).
+ *
+ * `windowInvoke` returns the unwrapped `result.data` from the IPC handler.
+ * Renderer-side: must not import TypeORM, models, or modules.
+ */
+
+/** Create a bounded scheduled loop bound to one Chat V2 conversation. */
+export async function createScheduledLoop(
+  req: CreateScheduledLoopRequest
+): Promise<CreateScheduledLoopResponse | null> {
+  const resp = await windowInvoke(AI_CHAT_V2_SCHEDULED_LOOP_CREATE, req);
+  return (resp as CreateScheduledLoopResponse | null) ?? null;
+}
+
+/** Get the renderer-safe schedule view for the conversation's loop. */
+export async function getScheduledLoopStatus(
+  conversationId: string
+): Promise<ScheduledLoopView | null> {
+  const resp = await windowInvoke(AI_CHAT_V2_SCHEDULED_LOOP_GET, {
+    conversationId,
+  });
+  return (resp as ScheduledLoopView | null) ?? null;
+}
+
+/** Run a control operation (status handled by getScheduledLoopStatus). */
+export async function controlScheduledLoop(
+  conversationId: string,
+  operation: Exclude<ScheduledLoopControlOperation, "status">
+): Promise<ScheduledLoopView | null> {
+  const channel =
+    operation === "pause"
+      ? AI_CHAT_V2_SCHEDULED_LOOP_PAUSE
+      : operation === "resume"
+        ? AI_CHAT_V2_SCHEDULED_LOOP_RESUME
+        : AI_CHAT_V2_SCHEDULED_LOOP_STOP;
+  const resp = await windowInvoke(channel, { conversationId });
+  return (resp as ScheduledLoopView | null) ?? null;
+}
+
+/** Stop only the currently-running occurrence (future occurrences continue). */
+export async function stopScheduledLoopRun(
+  conversationId: string
+): Promise<{ cancelled: boolean } | null> {
+  const resp = await windowInvoke(AI_CHAT_V2_SCHEDULED_LOOP_STOP_RUN, {
+    conversationId,
+  });
+  return (resp as { cancelled: boolean } | null) ?? null;
+}
