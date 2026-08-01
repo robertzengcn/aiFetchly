@@ -2428,8 +2428,13 @@ const onSend = async (
       return;
     }
     try {
+      // Bind the goal to the same conversation the plan prompt will stream
+      // against. ensureWorkspaceConversationId() creates the v2- id (and
+      // resets chat state) on a fresh chat, instead of passing "" and
+      // orphaning the goal from the streamed turn below.
+      const goalConversationId = ensureWorkspaceConversationId();
       const created = await createGoal({
-        conversationId: activeConversationId.value ?? "",
+        conversationId: goalConversationId,
         objective: cmd.objective,
       });
       if (!created) {
@@ -2459,9 +2464,14 @@ const onSend = async (
   // An EXPANDED prompt (from handleSlashCommandSubmission) must bypass this —
   // even if its body happens to start with `/`, it is chat content to stream,
   // not a second slash command to re-dispatch (TODO #3).
+  // Goal and loop commands are already handled above (cmd.type !== "none"):
+  // they must NOT fall through to the generic dispatcher, which returns
+  // show_result usage text for /goal and /loop and would swallow the goal's
+  // Plan Mode prompt before it streams.
   if (
     !options?.isExpandedPrompt &&
     (!files || files.length === 0) &&
+    cmd.type === "none" &&
     text.trim().startsWith("/")
   ) {
     const handled = await handleSlashCommandSubmission(text.trim());
