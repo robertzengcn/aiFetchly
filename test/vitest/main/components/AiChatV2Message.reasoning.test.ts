@@ -67,6 +67,14 @@ describe("AiChatV2Message reasoning panel", () => {
     expect(wrapper.text()).toContain("I considered X.");
   });
 
+  it("opens the reasoning panel by default for loaded history messages", async () => {
+    const wrapper = mountWith(
+      makeAssistantMessage({ content: "Historical reasoning." })
+    );
+    await flushPromises();
+    expect(wrapper.find(".v2-message__reasoning").attributes("open")).toBe("");
+  });
+
   it("omits the panel when there is no reasoning metadata", async () => {
     const wrapper = mountWith(makeAssistantMessage());
     await flushPromises();

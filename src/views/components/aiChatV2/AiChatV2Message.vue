@@ -104,7 +104,7 @@
         <details
           v-if="hasReasoning"
           class="v2-message__reasoning"
-          :open="status === 'streaming'"
+          :open="hasReasoning"
         >
           <summary>
             <v-icon size="x-small">mdi-brain</v-icon>

@@ -33,3 +33,15 @@ when the persisted JSON did not include `source: "chat-v2"`.
 - `git diff --check`
 
 Status: DONE
+
+## Follow-up
+
+The IPC hydration fix restored historical reasoning metadata, but the message
+component still rendered historical reasoning in a collapsed `<details>` panel
+because only streaming messages set `open=true`. The UI requirement is that
+enabled reasoning should be shown by default, so `AiChatV2Message` now opens the
+reasoning panel whenever reasoning exists and `showReasoning` is enabled.
+
+Additional verification:
+
+- `./node_modules/.bin/vitest --config test/vitest/main/components/vitest.config.mjs run test/vitest/main/components/AiChatV2Message.reasoning.test.ts`
