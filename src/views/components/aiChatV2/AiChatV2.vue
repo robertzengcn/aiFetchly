@@ -571,7 +571,10 @@ import {
   resolveContextWindow,
   DEFAULT_CONTEXT_WINDOW,
 } from "./contextUsageUtil";
-import { hasPendingToolExecution } from "./toolExecutionStateUtil";
+import {
+  clearToolProgressForToolResult,
+  hasPendingToolExecution,
+} from "./toolExecutionStateUtil";
 import {
   downscaleImageAttachment,
   arrayBufferToBase64,
@@ -2124,7 +2127,14 @@ const upsertToolResultMessage = (
   insertBeforeAssistantId?: string,
   list: MessageListController = activeMessageListController
 ): void => {
-  const currentMessages = list.get();
+  const initialMessages = list.get();
+  const completedToolCallId =
+    chunk.toolCallId ?? chunk.replacesPermissionPromptForToolId;
+  const currentMessages = clearToolProgressForToolResult(
+    initialMessages,
+    completedToolCallId
+  );
+  const toolProgressCleared = currentMessages !== initialMessages;
   const toolResult = chunk.toolResult ?? {};
   if (
     chunk.toolCallId &&
@@ -2148,7 +2158,7 @@ const upsertToolResultMessage = (
 
   const metadata = {
     source: "chat-v2" as const,
-    toolCallId: chunk.toolCallId,
+    toolCallId: completedToolCallId,
     toolName: chunk.toolName,
     toolResult,
     toolResultStatus:
@@ -2181,13 +2191,16 @@ const upsertToolResultMessage = (
   }
 
   if (
-    chunk.toolCallId &&
+    completedToolCallId &&
     currentMessages.some(
       (message) =>
         message.messageType === MessageType.TOOL_RESULT &&
-        message.metadata?.toolCallId === chunk.toolCallId
+        message.metadata?.toolCallId === completedToolCallId
     )
   ) {
+    if (toolProgressCleared) {
+      list.set(currentMessages);
+    }
     return;
   }
 
