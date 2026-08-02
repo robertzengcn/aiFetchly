@@ -2127,6 +2127,10 @@ export default {
       "Lokaler KI-Anbieter gespeichert. AI Chat kann nun Ihr konfiguriertes Modell verwenden.",
     saved_hosted: "Gehosteter KI-Anbieter gespeichert.",
     api_key_cleared: "API-Schlüssel gelöscht.",
+    reasoning_settings_title: "Denkvorgang",
+    reasoning_settings_description:
+      "Legen Sie fest, ob AI Chat den Denkvorgang des Modells anzeigt.",
+    show_reasoning_process: "Denkvorgang anzeigen",
     cap_label_models: "Modelle",
     cap_label_chat: "Chat",
     cap_label_streaming: "Streaming",

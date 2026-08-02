@@ -2135,6 +2135,10 @@ export default {
       "Proveedor de IA local guardado. AI Chat ahora puede usar tu modelo configurado.",
     saved_hosted: "Proveedor de IA alojado guardado.",
     api_key_cleared: "Clave de API borrada.",
+    reasoning_settings_title: "Razonamiento",
+    reasoning_settings_description:
+      "Controla si AI Chat muestra el proceso de razonamiento del modelo.",
+    show_reasoning_process: "Mostrar proceso de razonamiento",
     cap_label_models: "Modelos",
     cap_label_chat: "Chat",
     cap_label_streaming: "Streaming",

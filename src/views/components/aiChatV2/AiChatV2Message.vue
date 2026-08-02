@@ -294,8 +294,8 @@ const generatedImages = computed<RenderableGeneratedImage[]>(() => {
         ? {
             key: `${src}-${index}`,
             src,
-            externalHref: isExternalImageUrl(src) ? src : undefined,
-            localPath: image.local_path,
+            ...(isExternalImageUrl(src) ? { externalHref: src } : {}),
+            ...(image.local_path ? { localPath: image.local_path } : {}),
           }
         : null;
     })

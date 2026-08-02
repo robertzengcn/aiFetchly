@@ -2093,6 +2093,10 @@ export default {
       "ローカル AI プロバイダーを保存しました。AI チャットは設定したモデルを使用できます。",
     saved_hosted: "ホスト型 AI プロバイダーを保存しました。",
     api_key_cleared: "API キーをクリアしました。",
+    reasoning_settings_title: "推論",
+    reasoning_settings_description:
+      "AI チャットでモデルの推論プロセスを表示するかどうかを制御します。",
+    show_reasoning_process: "推論プロセスを表示",
     cap_label_models: "モデル",
     cap_label_chat: "チャット",
     cap_label_streaming: "ストリーミング",

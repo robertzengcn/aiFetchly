@@ -2118,6 +2118,10 @@ export default {
       "Fournisseur d'IA local enregistré. AI Chat peut désormais utiliser votre modèle configuré.",
     saved_hosted: "Fournisseur d'IA hébergé enregistré.",
     api_key_cleared: "Clé API effacée.",
+    reasoning_settings_title: "Raisonnement",
+    reasoning_settings_description:
+      "Contrôlez si AI Chat affiche le processus de raisonnement du modèle.",
+    show_reasoning_process: "Afficher le processus de raisonnement",
     cap_label_models: "Modèles",
     cap_label_chat: "Chat",
     cap_label_streaming: "Streaming",

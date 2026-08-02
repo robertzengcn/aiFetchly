@@ -2131,6 +2131,10 @@ export default {
       "Local AI provider saved. AI Chat can now use your configured model.",
     saved_hosted: "Hosted AI provider saved.",
     api_key_cleared: "API key cleared.",
+    reasoning_settings_title: "Reasoning",
+    reasoning_settings_description:
+      "Control whether AI Chat shows the model reasoning process.",
+    show_reasoning_process: "Show reasoning process",
     cap_label_models: "Models",
     cap_label_chat: "Chat",
     cap_label_streaming: "Streaming",

@@ -68,20 +68,6 @@
           icon
           size="small"
           variant="text"
-          :color="showReasoning ? 'primary' : undefined"
-          :loading="reasoningSaving"
-          :disabled="reasoningSaving"
-          :title="reasoningToggleTitle"
-          :aria-label="reasoningToggleTitle"
-          :aria-pressed="showReasoning"
-          @click="toggleReasoning"
-        >
-          <v-icon size="small">mdi-brain</v-icon>
-        </v-btn>
-        <v-btn
-          icon
-          size="small"
-          variant="text"
           :loading="isCompacting"
           :disabled="
             !activeConversationId || messages.length === 0 || chatIsRunning
@@ -588,6 +574,11 @@ import {
   downscaleImageAttachment,
   arrayBufferToBase64,
 } from "./imageScaleUtil";
+import {
+  AI_CHAT_REASONING_VISIBILITY_CHANGED_EVENT,
+  readAiChatReasoningVisible,
+  type AiChatReasoningVisibilityChangedDetail,
+} from "@/views/utils/aiChatReasoningPreference";
 import { QUOTA_EXHAUSTED_SENTINEL } from "@/service/AIChatErrorMapper";
 
 /**
@@ -1211,48 +1202,22 @@ const availableModels = ref<OpenAIModel[]>([]);
 const selectedModel = ref<string | undefined>(undefined);
 
 // ---------------------------------------------------------------------------
-// Reasoning visibility toggle (global preference, localStorage-backed).
+// Reasoning visibility preference (global preference, localStorage-backed).
 // Survives app restarts; sent on each stream request so the main process can
 // add the server `reasoning` option and persist reasoning metadata.
 // ---------------------------------------------------------------------------
-const SHOW_REASONING_STORAGE_KEY = "aiChatV2.showReasoning";
 // Cap live-streamed reasoning length in the renderer (mirrors the persisted
 // 32 KB cap in AIChatQueryEngine) so a misbehaving upstream can't OOM the view.
 const REASONING_LIVE_MAX_CHARS = 32 * 1024;
-const showReasoning = ref<boolean>(
-  (() => {
-    try {
-      return window.localStorage.getItem(SHOW_REASONING_STORAGE_KEY) === "true";
-    } catch {
-      return false;
-    }
-  })()
-);
-const reasoningSaving = ref(false);
-const toggleReasoning = (): void => {
-  reasoningSaving.value = true;
-  const next = !showReasoning.value;
-  try {
-    if (next) {
-      window.localStorage.setItem(SHOW_REASONING_STORAGE_KEY, "true");
-    } else {
-      window.localStorage.removeItem(SHOW_REASONING_STORAGE_KEY);
-    }
-  } catch {
-    /* localStorage unavailable — keep in-memory state only */
-  }
-  showReasoning.value = next;
-  // Preference save is synchronous local storage; release the disabled state
-  // on the next microtask so the button's loading flicker stays brief.
-  queueMicrotask(() => {
-    reasoningSaving.value = false;
-  });
+const showReasoning = ref<boolean>(readAiChatReasoningVisible());
+const handleReasoningVisibilityChanged = (event: Event): void => {
+  const customEvent =
+    event as CustomEvent<AiChatReasoningVisibilityChangedDetail>;
+  showReasoning.value =
+    typeof customEvent.detail?.visible === "boolean"
+      ? customEvent.detail.visible
+      : readAiChatReasoningVisible();
 };
-const reasoningToggleTitle = computed(() =>
-  showReasoning.value
-    ? t("aiChatV2.hide_reasoning") || "Hide reasoning"
-    : t("aiChatV2.show_reasoning") || "Show reasoning"
-);
 
 const resolveContextWindowLocal = (model?: string): number =>
   resolveContextWindow(modelContextWindows.value, model);
@@ -3386,6 +3351,10 @@ onMounted(() => {
     AI_CHAT_V2_VOICE_MODELS_CHANGED_EVENT,
     handleVoiceSettingsChanged
   );
+  window.addEventListener(
+    AI_CHAT_REASONING_VISIBILITY_CHANGED_EVENT,
+    handleReasoningVisibilityChanged
+  );
   // Subscribe to file operation events emitted during tool execution.
   // Records are appended per-conversation so the summary panel reflects
   // all changes made within the active conversation.
@@ -3413,6 +3382,10 @@ onBeforeUnmount(() => {
   window.removeEventListener(
     AI_CHAT_V2_VOICE_MODELS_CHANGED_EVENT,
     handleVoiceSettingsChanged
+  );
+  window.removeEventListener(
+    AI_CHAT_REASONING_VISIBILITY_CHANGED_EVENT,
+    handleReasoningVisibilityChanged
   );
   unsubscribeFromFileOperations();
   if (searchDebounceTimer) {
