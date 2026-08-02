@@ -65,6 +65,17 @@ export default ({ mode }) => {
         },
         build: {
             rollupOptions: {
+                input: {
+                    ContactExtractionWorker: path.resolve(
+                        __dirname,
+                        'src/childprocess/contact-extraction/ContactExtractionWorker.ts'
+                    ),
+                },
+                output: {
+                    entryFileNames: 'ContactExtractionWorker.js',
+                    chunkFileNames: 'assets/[name]-[hash].js',
+                    format: 'cjs',
+                },
                 external: [
                     ...nodeBuiltins,
                     'sqlite3',
