@@ -143,6 +143,23 @@ export interface ChatV2ConversationUpdatedEvent {
   readonly occurredAt: string;
 }
 
+/**
+ * Live scheduled-turn stream chunk broadcast to the renderer viewing the
+ * originating conversation (technical-design §13.2, strict routing by
+ * conversation + run id). The renderer appends these to an optimistic
+ * assistant bubble only while that conversation is active and no interactive
+ * stream is running; the persisted row (reloaded on the terminal
+ * conversation-updated event) is always authoritative.
+ */
+export interface ChatV2ScheduledStreamEvent {
+  readonly conversationId: string;
+  readonly runId: number;
+  readonly messageId: string;
+  readonly kind: "token" | "done" | "error";
+  readonly contentDelta?: string;
+  readonly errorMessage?: string;
+}
+
 // ---------------------------------------------------------------------------
 // Error contract (stable machine-readable codes)
 // ---------------------------------------------------------------------------

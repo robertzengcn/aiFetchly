@@ -241,6 +241,7 @@ import {
   AI_CHAT_V2_SCHEDULED_LOOP_STOP,
   AI_CHAT_V2_SCHEDULED_LOOP_STOP_RUN,
   AI_CHAT_V2_CONVERSATION_UPDATED,
+  AI_CHAT_V2_SCHEDULED_STREAM,
   // AI Provider (Local/Custom) Settings Channels
   AI_PROVIDER_SETTINGS_GET,
   AI_PROVIDER_SETTINGS_SAVE,
@@ -550,6 +551,8 @@ contextBridge.exposeInMainWorld("api", {
       YANDEX_MAPS_SEARCH_PROGRESS,
       // AI Chat V2 scheduled-loop conversation update broadcast
       AI_CHAT_V2_CONVERSATION_UPDATED,
+      // Live scheduled-turn token stream
+      AI_CHAT_V2_SCHEDULED_STREAM,
     ];
     const isSocialTaskLogChannel = /^socialtask:log:/.test(channel);
 
@@ -618,6 +621,8 @@ contextBridge.exposeInMainWorld("api", {
       YANDEX_MAPS_SEARCH_PROGRESS,
       // AI Chat V2 scheduled-loop conversation update broadcast
       AI_CHAT_V2_CONVERSATION_UPDATED,
+      // Live scheduled-turn token stream
+      AI_CHAT_V2_SCHEDULED_STREAM,
     ];
     const isSocialTaskLogChannel = /^socialtask:log:/.test(channel);
 
@@ -649,6 +654,8 @@ contextBridge.exposeInMainWorld("api", {
       YANDEX_MAPS_SEARCH_PROGRESS,
       // AI Chat V2 scheduled-loop conversation update broadcast
       AI_CHAT_V2_CONVERSATION_UPDATED,
+      // Live scheduled-turn token stream
+      AI_CHAT_V2_SCHEDULED_STREAM,
     ];
     if (validChannels.includes(channel)) {
       ipcRenderer.removeAllListeners(channel);

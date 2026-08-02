@@ -1,6 +1,12 @@
 import type { BrowserWindow } from "electron";
-import { AI_CHAT_V2_CONVERSATION_UPDATED } from "@/config/channellist";
-import type { ChatV2ConversationUpdatedEvent } from "@/entityTypes/aiChatScheduledLoopTypes";
+import {
+  AI_CHAT_V2_CONVERSATION_UPDATED,
+  AI_CHAT_V2_SCHEDULED_STREAM,
+} from "@/config/channellist";
+import type {
+  ChatV2ConversationUpdatedEvent,
+  ChatV2ScheduledStreamEvent,
+} from "@/entityTypes/aiChatScheduledLoopTypes";
 
 /**
  * Structural view of the BrowserWindow surface this broadcaster uses. Electron's
@@ -59,6 +65,20 @@ export class AIChatConversationUpdateBroadcaster
     for (const win of this.windows) {
       if (!win.isDestroyed()) {
         win.webContents.send(AI_CHAT_V2_CONVERSATION_UPDATED, event);
+      }
+    }
+  }
+
+  /**
+   * Forward a live scheduled-turn stream chunk to all live windows. Strict
+   * routing (by conversation + run id) is enforced renderer-side: only the
+   * window viewing the originating conversation renders it, and never into an
+   * active interactive bubble (technical-design §13.2).
+   */
+  emitScheduledStream(event: ChatV2ScheduledStreamEvent): void {
+    for (const win of this.windows) {
+      if (!win.isDestroyed()) {
+        win.webContents.send(AI_CHAT_V2_SCHEDULED_STREAM, event);
       }
     }
   }

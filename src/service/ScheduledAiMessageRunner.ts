@@ -311,7 +311,30 @@ export class ScheduledAiMessageRunner {
       const engine = new AIChatQueryEngineFactory().createScheduled(
         this.parseTaskPolicy(task)
       );
-      const sink = new ScheduledLoopEventSink();
+      const assistantMessageId = `scheduled-assistant-${scheduleId}-${occurrence}`;
+      const sink = new ScheduledLoopEventSink((event) => {
+        // Forward token/done/error chunks for live streaming to a renderer
+        // viewing this conversation (technical-design §13.2). Strict routing
+        // is enforced renderer-side; forwarding failures are non-fatal.
+        if (event.type === "token") {
+          this.broadcaster.emitScheduledStream({
+            conversationId,
+            runId,
+            messageId: assistantMessageId,
+            kind: "token",
+            contentDelta: event.contentDelta,
+          });
+        } else if (event.type === "complete" || event.type === "error") {
+          this.broadcaster.emitScheduledStream({
+            conversationId,
+            runId,
+            messageId: assistantMessageId,
+            kind: event.type === "error" ? "error" : "done",
+            errorMessage:
+              event.type === "error" ? event.errorMessage : undefined,
+          });
+        }
+      });
       await engine.submitMessage({
         eventSink: sink,
         request: {

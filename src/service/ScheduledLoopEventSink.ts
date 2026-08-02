@@ -37,8 +37,22 @@ export type ScheduledTurnOutcome =
  */
 export class ScheduledLoopEventSink implements AIChatQueryEventSink {
   private outcome: ScheduledTurnOutcome | null = null;
+  private readonly forwarder?: (event: AIChatQueryEvent) => void;
+
+  constructor(forwarder?: (event: AIChatQueryEvent) => void) {
+    this.forwarder = forwarder;
+  }
 
   emit(event: AIChatQueryEvent): void {
+    // Forward raw events (tokens, tool calls) for optional live streaming
+    // BEFORE terminal capture so the last token is not lost.
+    if (this.forwarder) {
+      try {
+        this.forwarder(event);
+      } catch {
+        /* forwarding failures must never affect the run */
+      }
+    }
     if (this.outcome) return; // terminal already recorded
     switch (event.type) {
       case "complete":

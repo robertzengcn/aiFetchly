@@ -324,6 +324,8 @@ export const AI_CHAT_V2_SCHEDULED_LOOP_STOP_RUN =
 /** Main->renderer refresh hint after a scheduled turn persists (FR-11). */
 export const AI_CHAT_V2_CONVERSATION_UPDATED =
   "ai-chat-v2:conversation-updated";
+/** Main->renderer live scheduled-turn token stream (technical-design §13.2). */
+export const AI_CHAT_V2_SCHEDULED_STREAM = "ai-chat-v2:scheduled-stream";
 
 // ==================== AiChatV2 Local Voice Channels ====================
 // Local sherpa-onnx STT/TTS for AiChatV2. See

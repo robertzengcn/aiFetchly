@@ -11,9 +11,11 @@ import {
   AI_CHAT_V2_SCHEDULED_LOOP_RESUME,
   AI_CHAT_V2_SCHEDULED_LOOP_STOP,
   AI_CHAT_V2_SCHEDULED_LOOP_STOP_RUN,
+  AI_CHAT_V2_SCHEDULED_STREAM,
 } from "@/config/channellist";
 import type {
   ChatV2ConversationUpdatedEvent,
+  ChatV2ScheduledStreamEvent,
   CreateScheduledLoopRequest,
   CreateScheduledLoopResponse,
   ScheduledLoopControlOperation,
@@ -87,4 +89,23 @@ export function subscribeConversationUpdated(
 /** Remove all conversation-update listeners (call in onBeforeUnmount). */
 export function unsubscribeConversationUpdated(): void {
   windowRemoveAllListeners(AI_CHAT_V2_CONVERSATION_UPDATED);
+}
+
+/**
+ * Subscribe to the live scheduled-turn token stream. Strict routing is enforced
+ * renderer-side: the handler should ignore events whose conversationId is not
+ * active or while an interactive stream is running. Call unsubscribe in
+ * onBeforeUnmount.
+ */
+export function subscribeScheduledStream(
+  handler: (event: ChatV2ScheduledStreamEvent) => void
+): void {
+  windowReceive(AI_CHAT_V2_SCHEDULED_STREAM, (event) => {
+    handler(event as ChatV2ScheduledStreamEvent);
+  });
+}
+
+/** Remove all scheduled-stream listeners (call in onBeforeUnmount). */
+export function unsubscribeScheduledStream(): void {
+  windowRemoveAllListeners(AI_CHAT_V2_SCHEDULED_STREAM);
 }

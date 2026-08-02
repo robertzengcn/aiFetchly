@@ -326,6 +326,23 @@
         </v-card>
       </v-dialog>
 
+      <v-sheet
+        v-if="liveScheduledAssistant"
+        class="px-3 py-2 scheduled-live-bubble"
+        color="grey-lighten-4"
+        elevation="0"
+      >
+        <div class="d-flex align-center text-caption text-medium-emphasis mb-1">
+          <v-icon size="x-small" class="mr-1">mdi-clock-outline</v-icon>
+          <span>{{
+            t("aiChatV2.scheduledLoop.statusRunning") || "running"
+          }}</span>
+        </div>
+        <div class="text-body-2 scheduled-live-content">
+          {{ liveScheduledAssistant.content }}
+        </div>
+      </v-sheet>
+
       <AiChatV2Composer
         :is-streaming="chatIsRunning"
         :is-processing="isPreparingAttachments"
@@ -601,12 +618,15 @@ import {
   getScheduledLoopStatus,
   subscribeConversationUpdated,
   unsubscribeConversationUpdated,
+  subscribeScheduledStream,
+  unsubscribeScheduledStream,
 } from "@/views/api/aiChatScheduledLoop";
 import type { AIChatGoalView } from "@/entityTypes/aiChatGoalTypes";
 import type {
   ScheduledLoopView,
   ScheduledLoopParseErrorCode,
   ChatV2ConversationUpdatedEvent,
+  ChatV2ScheduledStreamEvent,
 } from "@/entityTypes/aiChatScheduledLoopTypes";
 import { workspaceMemoryApi } from "@/views/api/aiWorkspaceMemory";
 import type { WorkspaceSummary } from "@/entityTypes/workspaceTypes";
@@ -1220,6 +1240,10 @@ function handleConversationUpdated(
 ): void {
   void loadConversations();
   if (event.conversationId === activeConversationId.value) {
+    // The persisted row replaces any optimistic live bubble.
+    if (liveScheduledAssistant.value) {
+      liveScheduledAssistant.value = null;
+    }
     if (isStreaming.value) {
       scheduledRefreshPending.value = true;
     } else {
@@ -1239,6 +1263,34 @@ watch(isStreaming, (streaming) => {
     if (id) void loadHistory(id);
   }
 });
+
+/**
+ * Handle a live scheduled-turn stream chunk (technical-design §13.2). Strict
+ * routing: only render when the originating conversation is active and no
+ * interactive stream is running, so scheduled tokens never merge into an
+ * interactive bubble. Transient — the persisted row replaces it on the
+ * terminal conversation-updated reload.
+ */
+function handleScheduledStream(event: ChatV2ScheduledStreamEvent): void {
+  if (event.conversationId !== activeConversationId.value) return;
+  if (isStreaming.value) return;
+  if (event.kind === "token") {
+    const delta = event.contentDelta ?? "";
+    if (
+      !liveScheduledAssistant.value ||
+      liveScheduledAssistant.value.messageId !== event.messageId
+    ) {
+      liveScheduledAssistant.value = { messageId: event.messageId, content: delta };
+    } else {
+      liveScheduledAssistant.value = {
+        messageId: event.messageId,
+        content: liveScheduledAssistant.value.content + delta,
+      };
+    }
+  }
+  // "done" / "error": leave the bubble in place; the terminal
+  // conversation-updated event reloads authoritative history and clears it.
+}
 
 /** Handle /loop <duration> <prompt>: create a bounded scheduled loop. */
 async function runScheduledLoopCreate(
@@ -1713,6 +1765,10 @@ const activeScheduledLoop = ref<ScheduledLoopView | null>(null);
 /** Set when a scheduled turn completes while an interactive stream is active;
  * the history is reloaded once the active stream terminates (design §18.3). */
 const scheduledRefreshPending = ref(false);
+/** Optimistic live content for a scheduled turn streaming into the active
+ * conversation. Transient — cleared on terminal reload; never mutates the
+ * persisted message list (technical-design §13.2). */
+const liveScheduledAssistant = ref<{ messageId: string; content: string } | null>(null);
 const goalStatusDescriptor = computed(() => {
   const status = activeGoal.value?.status;
   switch (status) {
@@ -3557,6 +3613,8 @@ onMounted(() => {
   });
   // Scheduled-loop turn completions arrive as a narrow refresh-hint broadcast.
   subscribeConversationUpdated(handleConversationUpdated);
+  // Live scheduled-turn token stream (strict routing renderer-side).
+  subscribeScheduledStream(handleScheduledStream);
 });
 
 onBeforeUnmount(() => {
@@ -3577,6 +3635,7 @@ onBeforeUnmount(() => {
   );
   unsubscribeFromFileOperations();
   unsubscribeConversationUpdated();
+  unsubscribeScheduledStream();
   if (searchDebounceTimer) {
     clearTimeout(searchDebounceTimer);
     searchDebounceTimer = null;
