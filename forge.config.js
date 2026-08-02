@@ -1,7 +1,13 @@
 const path = require("path");
 const dotenv = require("dotenv");
 const { spawnSync } = require("node:child_process");
-const { existsSync, readdirSync, rmdirSync, statSync } = require("node:fs");
+const {
+  cpSync,
+  existsSync,
+  readdirSync,
+  rmdirSync,
+  statSync,
+} = require("node:fs");
 const { join, normalize } = require("node:path");
 const { Walker, DepType } = require("flora-colossus");
 let nativeModuleDependenciesToPackage = [];
@@ -129,6 +135,20 @@ function fixInteropNamespaceDefault(viteBuildDir) {
       }
     }
   }
+}
+
+function copyBuiltChildProcesses(buildPath) {
+  const sourcePath = join(__dirname, "dist", "childprocess");
+  if (!existsSync(sourcePath)) {
+    console.warn(
+      `No built childprocess directory found at ${sourcePath}; skipping package copy.`
+    );
+    return;
+  }
+
+  const targetPath = join(buildPath, "dist", "childprocess");
+  cpSync(sourcePath, targetPath, { recursive: true });
+  console.log(`Copied built childprocess files into package: ${targetPath}`);
 }
 
 module.exports = {
@@ -592,6 +612,7 @@ module.exports = {
     },
     packageAfterCopy: async (_forgeConfig, buildPath) => {
       fixInteropNamespaceDefault(join(buildPath, ".vite", "build"));
+      copyBuiltChildProcesses(buildPath);
     },
     //   packageAfterPrune: async (_config, buildPath) => {
     //     const gypPath = path.join(

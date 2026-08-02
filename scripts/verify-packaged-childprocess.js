@@ -32,7 +32,7 @@ function walkDirectories(root, visitor) {
 function findResourcesDirs() {
   const resourcesDirs = [];
   walkDirectories(OUT_DIR, (directory) => {
-    if (path.basename(directory) === "resources") {
+    if (path.basename(directory).toLowerCase() === "resources") {
       resourcesDirs.push(directory);
     }
   });
