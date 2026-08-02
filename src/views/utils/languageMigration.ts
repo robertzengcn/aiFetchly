@@ -1,6 +1,5 @@
 import { getLanguage } from '@/views/utils/cookies'
 import { getLanguagePreference, updateLanguagePreference } from '@/views/api/language'
-import { language_preference } from '@/config/settinggroupInit'
 
 /**
  * Language preference migration utilities
@@ -105,7 +104,7 @@ export async function migrateLanguagePreference(): Promise<MigrationResult> {
         return {
             success: false,
             migrated: false,
-            fromValue: getLanguage(),
+            fromValue: getLanguage() ?? null,
             toValue: null,
             error: errorMessage,
             timestamp
@@ -162,7 +161,7 @@ export async function performLanguageMigration(): Promise<MigrationLog> {
         results.push({
             success: false,
             migrated: false,
-            fromValue: getLanguage(),
+            fromValue: getLanguage() ?? null,
             toValue: null,
             error: errorMessage,
             timestamp
@@ -223,7 +222,7 @@ export function getMigrationLogs(): MigrationLog[] {
  * @param hoursThreshold - Hours threshold for recent migration (default: 24)
  * @returns boolean
  */
-export function hasRecentMigration(hoursThreshold: number = 24): boolean {
+export function hasRecentMigration(hoursThreshold = 24): boolean {
     try {
         const logs = getMigrationLogs()
         const now = Date.now()
@@ -273,8 +272,6 @@ export async function initializeLanguageMigration(): Promise<void> {
         console.error('Language migration initialization failed:', error)
     }
 }
-
-
 
 
 

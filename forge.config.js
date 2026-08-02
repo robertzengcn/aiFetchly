@@ -10,6 +10,7 @@ const EXTERNAL_DEPENDENCIES = [
   "electron-squirrel-startup",
   "better-sqlite3",
   "sqlite-vec",
+  "chokidar",
   "puppeteer-cluster",
   "lodash",
   "winston",
@@ -31,6 +32,8 @@ const EXTERNAL_DEPENDENCIES = [
   "openai",
   "typeorm",
   "cheerio",
+  "sanitize-html",
+  "html-to-text",
   "sqlite-vec",
   "canvas",
   "@napi-rs/canvas",
@@ -42,6 +45,15 @@ const EXTERNAL_DEPENDENCIES = [
   // "@xenova/transformers", "onnxruntime-node", "onnxruntime-common",
   // "sharp", "sherpa-onnx-node"
 ];
+
+function getPackageRootName(packageName) {
+  if (packageName.startsWith("@")) {
+    const [scope, name] = packageName.split("/");
+    return name ? `${scope}/${name}` : packageName;
+  }
+  return packageName.split("/")[0];
+}
+
 //import { ForgeConfig } from '@electron-forge/shared-types';
 // import { AutoUnpackNativesPlugin } from "@electron-forge/plugin-auto-unpack-natives";
 // Base .env (CI writes this), then mode-specific overrides e.g. .env.test for NODE_ENV=test.
@@ -51,6 +63,7 @@ const env = process.env.NODE_ENV || "development";
 dotenv.config({ path: path.resolve(__dirname, `.env.${env}`) });
 
 const isProductionBuild = env === "production";
+const shouldBuildMacDmg = process.env.MAKE_MAC_DMG !== "false";
 const windowsCertificatePath = path.resolve(__dirname, "cert.pfx");
 
 function requireProductionEnv(name) {
@@ -86,6 +99,34 @@ function ensureBetterSqliteElectronBinary() {
     throw new Error(
       `better-sqlite3 Electron rebuild failed with exit code ${result.status}`
     );
+  }
+}
+
+function fixInteropNamespaceDefault(viteBuildDir) {
+  const fs = require("fs");
+
+  if (!existsSync(viteBuildDir)) {
+    return;
+  }
+
+  const files = fs.readdirSync(viteBuildDir);
+  for (const file of files) {
+    if (file.startsWith("background") && file.endsWith(".js")) {
+      const filePath = join(viteBuildDir, file);
+      let content = fs.readFileSync(filePath, "utf-8");
+
+      // Fix: d.get ? d : -> d && d.get ? d : (handles undefined property descriptors)
+      const originalContent = content;
+      content = content.replace(
+        /Object\.defineProperty\((\w),(\w),(\w)\.get\?(\w):/g,
+        "Object.defineProperty($1,$2,$3&&$3.get?$4:"
+      );
+
+      if (content !== originalContent) {
+        fs.writeFileSync(filePath, content);
+        console.log("Fixed _interopNamespaceDefault in:", filePath);
+      }
+    }
   }
 }
 
@@ -140,6 +181,11 @@ module.exports = {
         KEEP_FILE.keep = true;
       if (!KEEP_FILE.keep && filePath === "/.vite") KEEP_FILE.keep = true;
       if (!KEEP_FILE.keep && filePath.startsWith("/.vite/"))
+        KEEP_FILE.keep = true;
+      if (!KEEP_FILE.keep && filePath === "/dist") KEEP_FILE.keep = true;
+      if (!KEEP_FILE.keep && filePath === "/dist/childprocess")
+        KEEP_FILE.keep = true;
+      if (!KEEP_FILE.keep && filePath.startsWith("/dist/childprocess/"))
         KEEP_FILE.keep = true;
       if (!KEEP_FILE.keep && filePath.startsWith("/node_modules/")) {
         // check if matches any of the external dependencies
@@ -227,22 +273,26 @@ module.exports = {
       name: "@electron-forge/maker-zip",
       platforms: ["darwin"],
     },
-    {
-      name: "@electron-forge/maker-dmg",
-      config: {
-        format: "ULFO",
-        icon: "./src/assets/images/icon.icns",
-        // Note: background image removed to prevent build failures
-        // If needed, create src/assets/images/dmg-background.png and uncomment below
-        // background: "./src/assets/images/dmg-background.png",
-        // contents array removed - using electron-forge defaults
-        // Defaults will place the app and a link to /Applications automatically
-        window: {
-          width: 540,
-          height: 380,
-        },
-      },
-    },
+    ...(shouldBuildMacDmg
+      ? [
+          {
+            name: "@electron-forge/maker-dmg",
+            config: {
+              format: "ULFO",
+              icon: "./src/assets/images/icon.icns",
+              // Note: background image removed to prevent build failures
+              // If needed, create src/assets/images/dmg-background.png and uncomment below
+              // background: "./src/assets/images/dmg-background.png",
+              // contents array removed - using electron-forge defaults
+              // Defaults will place the app and a link to /Applications automatically
+              window: {
+                width: 540,
+                height: 380,
+              },
+            },
+          },
+        ]
+      : []),
     {
       name: "@electron-forge/maker-deb",
       config: {
@@ -484,35 +534,6 @@ module.exports = {
     prePackage: async () => {
       const projectRoot = normalize(__dirname);
 
-      // Fix _interopNamespaceDefault function to handle undefined property descriptors
-      // This fixes the "Cannot read properties of undefined (reading 'get')" error
-      const viteBuildDir = join(projectRoot, ".vite", "build");
-      const fs = require("fs");
-      const path = require("path");
-
-      try {
-        const files = fs.readdirSync(viteBuildDir);
-        for (const file of files) {
-          if (file.startsWith("background") && file.endsWith(".js")) {
-            const filePath = path.join(viteBuildDir, file);
-            let content = fs.readFileSync(filePath, "utf-8");
-
-            // Fix: d.get ? d : -> d && d.get ? d : (handles undefined property descriptors)
-            const originalContent = content;
-            content = content.replace(
-              /Object\.defineProperty\((\w),(\w),(\w)\.get\?(\w):/g,
-              "Object.defineProperty($1,$2,$3&&$3.get?$4:"
-            );
-
-            if (content !== originalContent) {
-              fs.writeFileSync(filePath, content);
-              console.log("✅ Fixed _interopNamespaceDefault in:", file);
-            }
-          }
-        }
-      } catch (err) {
-        console.error("Failed to fix interop namespace:", err);
-      }
       const getExternalNestedDependencies = async (
         nodeModuleNames,
         includeNestedDeps = true
@@ -533,8 +554,7 @@ module.exports = {
             await walker.walkDependenciesForModule(moduleRoot, DepType.PROD);
             walker.modules
               .filter((dep) => dep.nativeModuleType === DepType.PROD)
-              // for a package like '@realm/fetch', need to split the path and just take the first part
-              .map((dep) => dep.name.split("/")[0])
+              .map((dep) => getPackageRootName(dep.name))
               .forEach((name) => foundModules.add(name));
           }
         }
@@ -544,6 +564,9 @@ module.exports = {
         EXTERNAL_DEPENDENCIES
       );
       nativeModuleDependenciesToPackage = Array.from(nativeModuleDependencies);
+    },
+    packageAfterCopy: async (_forgeConfig, buildPath) => {
+      fixInteropNamespaceDefault(join(buildPath, ".vite", "build"));
     },
     //   packageAfterPrune: async (_config, buildPath) => {
     //     const gypPath = path.join(

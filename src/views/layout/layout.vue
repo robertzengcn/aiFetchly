@@ -52,16 +52,11 @@ target="_blank" href="https://docs.aifetchly.com"
                             v-bind="props"
                             class="mx-1 account_item"
                             :title="showAccountText ? accountEmail : undefined"
-                            :subtitle="showAccountText ? accountPlanLabel : undefined"
                         >
                             <template v-slot:prepend>
-                                <v-tooltip :text="accountPlanLabel" location="top">
-                                    <template v-slot:activator="{ props: tooltipProps }">
-                                        <v-avatar v-bind="tooltipProps" class="account_plan_icon" size="32">
-                                            <v-icon :icon="accountPlanIcon" size="20" />
-                                        </v-avatar>
-                                    </template>
-                                </v-tooltip>
+                                <v-avatar class="account_icon" size="32">
+                                    <v-icon icon="mdi-account-circle" size="20" />
+                                </v-avatar>
                             </template>
                             <template v-if="showAccountText" v-slot:append>
                                 <v-icon icon="mdi-chevron-up" size="small" />
@@ -69,6 +64,19 @@ target="_blank" href="https://docs.aifetchly.com"
                         </v-list-item>
                     </template>
                     <v-list nav class="h_a_menu">
+                        <v-list-item
+                            v-if="accountPlanLabel"
+                            :title="accountPlanLabel"
+                            :prepend-icon="accountPlanIcon"
+                            class="plan_menu_item"
+                        />
+                        <v-list-item
+                            v-if="showUpgradePlan"
+                            :title="t('layout.upgrade_plan') || 'Upgrade'"
+                            prepend-icon="mdi-rocket-launch"
+                            class="upgrade_menu_item"
+                            @click="openPricingPlan"
+                        />
                         <v-list-item :title="t('layout.system_setting')" prepend-icon="mdi-cog" @click="gotoSystemsetting" />
                         <v-list-item :title="t('layout.login_out')" prepend-icon="mdi-login" @click="Usersignout" />
                     </v-list>
@@ -223,11 +231,11 @@ import AiArtifactWorkspace from '@/views/components/aiArtifacts/AiArtifactWorksp
 import { getAIArtifact } from '@/views/api/aiArtifacts';
 import type { AIArtifactRecord } from '@/entityTypes/aiArtifactTypes';
 import {GetloginUserInfo} from '@/views/api/users'
+import type { UserPlanType } from '@/entityTypes/userType'
 import { getAppName } from '@/views/api/app'
 import { packageAppName } from '@/config/appPackage'
 import { getLanguagePreference } from '@/views/api/language'
 import { initializeLanguageDetection } from '@/views/utils/browserLanguageDetection'
-import { initializeLanguageMigration } from '@/views/utils/languageMigration'
 import { initializeLanguageSynchronization, syncLanguageChange } from '@/views/utils/languageSynchronization'
 
 
@@ -256,6 +264,7 @@ const noticeType=ref<NoticeType>('info')
 const userName=ref('')
 const userEmail=ref('')
 const userPlan=ref('')
+const currentPlans=ref<Array<UserPlanType>>([])
 const isPlusPlan=ref(false)
 const appName=ref(packageAppName)
 const snaptimeout=ref<number>(10000)
@@ -310,6 +319,35 @@ const accountPlanIcon = computed(() => {
     }
     return 'mdi-account-circle';
 });
+const showUpgradePlan = computed(() => {
+    return currentPlans.value.length > 0 && currentPlans.value.every(isFreeSubscriptionPlan);
+});
+const pricingPlanUrl = computed(() => {
+    const baseUrl = normalizeLoginBaseUrl(import.meta.env.VITE_LOGIN_URL);
+    return baseUrl ? `${baseUrl}/pricing-plan` : '';
+});
+const normalizePlanName = (planName: string): string => {
+    return planName.toLowerCase().replace(/[^a-z0-9]/g, '');
+};
+const normalizeLoginBaseUrl = (raw: unknown): string => {
+    if (typeof raw !== 'string') return '';
+    return raw.trim().replace(/^["']|["']$/g, '').replace(/\/+$/g, '');
+};
+const getDisplayPlans = (plans: Array<UserPlanType>): Array<UserPlanType> => {
+    const namedPlans = plans.filter(plan => Boolean(plan.planName?.trim()));
+    const activePlans = namedPlans.filter(plan => plan.status?.toLowerCase() === 'active');
+    return activePlans.length > 0 ? activePlans : namedPlans;
+};
+const isPlusSubscriptionPlan = (plan: UserPlanType): boolean => {
+    const planName = normalizePlanName(plan.planName || '');
+    const planId = (plan.planId || '').toUpperCase();
+    return planName.includes('aifetchplus') || planId === 'PLUS';
+};
+const isFreeSubscriptionPlan = (plan: UserPlanType): boolean => {
+    const planName = normalizePlanName(plan.planName || '');
+    const planId = (plan.planId || '').toUpperCase();
+    return planName.includes('community') || planName.includes('free') || planId === 'FREE';
+};
 const showNotice = ref(false);
 const {t,locale} = useI18n();
 const location="end"
@@ -345,6 +383,13 @@ const gotoSystemsetting=()=>{
 }
 const gotodashborad=()=>{
     router.push('/dashboard/home')
+}
+const openPricingPlan = (): void => {
+    if (!pricingPlanUrl.value) {
+        showErrorMessage(t('layout.pricing_url_missing') || 'Pricing page URL is not configured')
+        return
+    }
+    window.open(pricingPlanUrl.value, '_blank')
 }
 
 watch(permanent, () => {
@@ -531,36 +576,7 @@ const copyActiveArtifactHtml = (): void => {
 const showWarningMessage = (content: string) => addMessage('warning', content);
 const showInfoMessage = (content: string) => addMessage('info', content);
 
-onMounted(async () => {
-    await GetloginUserInfo().then(res=>{
-        console.log(res)
-        userName.value=res.name
-        userEmail.value=res.email
-        if (res.plans && res.plans.length > 0) {
-            const plusPlan = res.plans.find(
-                plan => plan.planName && plan.planName.toLowerCase().includes('aifetch-plus')
-            )
-            isPlusPlan.value = Boolean(plusPlan)
-            const aifetchlyPlans = res.plans.filter(
-                plan => plan.planName && plan.planName.toLowerCase().includes('aifetchly')
-            )
-            if (plusPlan) {
-                userPlan.value = plusPlan.planName
-            } else if (aifetchlyPlans.length > 0) {
-                userPlan.value = aifetchlyPlans.map(plan => plan.planName).join(', ')
-            }
-        }
-    })
-
-    try {
-        const name = await getAppName()
-        appName.value = name
-    } catch (error) {
-        console.error('Failed to load app name:', error)
-    }
-
-    await initializeLanguageMigration()
-
+const initializeSavedLanguage = async (): Promise<void> => {
     try {
         const systemLanguage = await getLanguagePreference()
         if (systemLanguage) {
@@ -571,13 +587,39 @@ onMounted(async () => {
     } catch (error) {
         console.warn('Failed to load language preference from system settings, using current locale:', error)
     }
+}
 
-    initializeLanguageDetection(async (selectedLanguage) => {
+onMounted(async () => {
+    await initializeSavedLanguage()
+
+    initializeLanguageDetection(async (selectedLanguage): Promise<void> => {
         console.log('User selected language:', selectedLanguage)
         await switchLanguage(selectedLanguage)
     })
 
     await initializeLanguageSynchronization()
+
+    try {
+        const res = await GetloginUserInfo()
+        console.log(res)
+        userName.value = res.name
+        userEmail.value = res.email
+        if (res.plans && res.plans.length > 0) {
+            const displayPlans = getDisplayPlans(res.plans)
+            currentPlans.value = displayPlans
+            isPlusPlan.value = displayPlans.some(isPlusSubscriptionPlan)
+            userPlan.value = displayPlans.map(plan => plan.planName).join(', ')
+        }
+    } catch (error) {
+        console.error('Failed to load login user info:', error)
+    }
+
+    try {
+        const name = await getAppName()
+        appName.value = name
+    } catch (error) {
+        console.error('Failed to load app name:', error)
+    }
 
     window.addEventListener('keydown', handleKeyboardShortcut)
     window.addEventListener('aifetchly:open-ai-chat', openAiChatFromDashboard)

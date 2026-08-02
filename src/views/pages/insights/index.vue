@@ -57,14 +57,6 @@ const { t } = useI18n();
 
 const insightItems = computed<InsightItem[]>(() => [
   {
-    title: t("route.statistic") || "Statistics",
-    description:
-      t("insights.statistics_description") ||
-      "Track activity, trends, and campaign performance.",
-    icon: "mdi-chart-box-outline",
-    path: "/statistic",
-  },
-  {
     title: t("insights.contact_profile") || "Contact Profile",
     description:
       t("insights.contact_description") ||

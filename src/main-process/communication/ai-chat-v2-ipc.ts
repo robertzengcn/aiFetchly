@@ -307,6 +307,19 @@ function createEventSink(event: IpcEventLike): AIChatQueryEventSink {
             model: e.model,
           });
           break;
+        case "reasoning_delta":
+          // Log length only — never the reasoning text itself (SSR-3 / §14).
+          console.debug(
+            `[ai-chat-v2] reasoning_delta conv=${e.conversationId} message=${e.messageId} deltaLen=${e.reasoningDelta.length}`
+          );
+          sendChunk(event, {
+            eventType: "reasoning_delta",
+            conversationId: e.conversationId,
+            messageId: e.messageId,
+            reasoningDelta: e.reasoningDelta,
+            model: e.model,
+          });
+          break;
         case "retry_connect":
           sendChunk(event, {
             eventType: "retry_connect",
@@ -508,6 +521,41 @@ function validateStreamRequest(
     req.toolApprovalMode !== "full_access"
   ) {
     return "toolApprovalMode must be a valid approval mode";
+  }
+  if (
+    req.showReasoning !== undefined &&
+    typeof req.showReasoning !== "boolean"
+  ) {
+    return "showReasoning must be a boolean";
+  }
+  if (req.reasoning !== undefined) {
+    const reasoning = req.reasoning as {
+      enabled?: unknown;
+      effort?: unknown;
+      summary?: unknown;
+    };
+    if (
+      !reasoning ||
+      typeof reasoning !== "object" ||
+      Array.isArray(reasoning) ||
+      typeof reasoning.enabled !== "boolean"
+    ) {
+      return "reasoning must be an object with a boolean 'enabled' field";
+    }
+    if (
+      reasoning.effort !== undefined &&
+      (typeof reasoning.effort !== "string" ||
+        !["low", "medium", "high"].includes(reasoning.effort))
+    ) {
+      return "reasoning.effort must be one of low, medium, high";
+    }
+    if (
+      reasoning.summary !== undefined &&
+      (typeof reasoning.summary !== "string" ||
+        !["auto", "concise", "detailed"].includes(reasoning.summary))
+    ) {
+      return "reasoning.summary must be one of auto, concise, detailed";
+    }
   }
   return null;
 }
@@ -758,7 +806,16 @@ async function handleConversations(
     const searchQuery =
       typeof req.searchQuery === "string" ? req.searchQuery : undefined;
     const module = new AIChatV2Module();
-    return ok(await module.getConversations(searchQuery));
+    const summaries = await module.getConversations(searchQuery);
+    const engine = getQueryEngine();
+    return ok(
+      summaries.map((summary) => ({
+        ...summary,
+        runtimeStatus: engine.getConversationRuntimeStatus(
+          summary.conversationId
+        ),
+      }))
+    );
   } catch (err) {
     return denied(userSafeError(err));
   }
@@ -766,14 +823,14 @@ async function handleConversations(
 
 async function handleHistory(
   _e: IpcEventLike,
-  data: string
+  data: unknown
 ): Promise<CommonMessage<ChatV2HistoryResponse | null>> {
   const chatAccess = canUseChat();
   if (!chatAccess.ok) {
     return denied(chatAccess.message);
   }
   try {
-    const req = JSON.parse(data ?? "{}");
+    const req = parseObjectPayload(data);
     if (typeof req.conversationId !== "string") {
       return denied("conversationId must be a string");
     }
@@ -788,7 +845,7 @@ async function handleHistory(
       conversationId: r.conversationId,
       role: (r.role as ChatV2MessageView["role"]) ?? "user",
       content: r.content,
-      timestamp: r.timestamp.toISOString(),
+      timestamp: serializeHistoryTimestamp(r.timestamp),
       messageType: r.messageType,
       model: r.model,
       tokensUsed: r.tokensUsed,
@@ -798,6 +855,8 @@ async function handleHistory(
       conversationId,
       messages: views,
       totalMessages: views.length,
+      runtimeStatus:
+        getQueryEngine().getConversationRuntimeStatus(conversationId),
     });
   } catch (err) {
     return denied(userSafeError(err));
@@ -1148,14 +1207,53 @@ async function handleSetToolApprovalMode(
   }
 }
 
+function parseObjectPayload(data: unknown): Record<string, unknown> {
+  if (!data) {
+    return {};
+  }
+  if (typeof data === "string") {
+    return (data ? JSON.parse(data) : {}) as Record<string, unknown>;
+  }
+  if (typeof data === "object") {
+    return data as Record<string, unknown>;
+  }
+  return {};
+}
+
+function serializeHistoryTimestamp(timestamp: unknown): string {
+  if (timestamp instanceof Date) {
+    return timestamp.toISOString();
+  }
+  if (typeof timestamp === "string") {
+    const date = new Date(timestamp);
+    return Number.isNaN(date.getTime()) ? timestamp : date.toISOString();
+  }
+  if (typeof timestamp === "number") {
+    const date = new Date(timestamp);
+    return Number.isNaN(date.getTime())
+      ? new Date(0).toISOString()
+      : date.toISOString();
+  }
+  return new Date(0).toISOString();
+}
+
 function parseMetadata(raw?: string | null): ChatV2MessageMetadata | undefined {
   if (!raw) {
     return undefined;
   }
   try {
     const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed === "object" && parsed.source === "chat-v2") {
-      return parsed as ChatV2MessageMetadata;
+    if (parsed && typeof parsed === "object") {
+      const metadata = parsed as Partial<ChatV2MessageMetadata>;
+      if (metadata.source === "chat-v2") {
+        return metadata as ChatV2MessageMetadata;
+      }
+      if (metadata.reasoning) {
+        return {
+          ...metadata,
+          source: "chat-v2",
+        } as ChatV2MessageMetadata;
+      }
     }
   } catch {
     // ignore
@@ -1173,7 +1271,7 @@ export function registerAiChatV2IpcHandlers(): void {
     handleConversations(data as string)
   );
   ipcMain.handle(AI_CHAT_V2_HISTORY, async (_e, data: unknown) =>
-    handleHistory(_e as IpcEventLike, data as string)
+    handleHistory(_e as IpcEventLike, data)
   );
   ipcMain.handle(AI_CHAT_V2_CLEAR_CONVERSATION, async (_e, data: unknown) =>
     handleClearConversation(_e as IpcEventLike, data as string)

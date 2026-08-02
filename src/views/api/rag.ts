@@ -715,15 +715,23 @@ export async function chunkAndEmbedDocument(
       // modelName
     };
 
-    const response = await windowInvoke(
+    const response = (await windowInvoke(
       RAG_CHUNK_AND_EMBED_DOCUMENT,
       requestData
-    );
+    )) as ChunkAndEmbedResponse;
+
+    if (!response.success) {
+      return {
+        success: false,
+        data: response,
+        message: response.message || "Failed to chunk and embed document",
+      };
+    }
 
     return {
       success: true,
-      data: response.data,
-      message: "",
+      data: response,
+      message: response.message || "",
     };
   } catch (error) {
     console.error("Error chunking and embedding document:", error);

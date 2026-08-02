@@ -7,6 +7,8 @@ import {
   clearChatV2Conversation,
 } from "@/views/api/aiChatV2";
 import { dispatchSlashCommand } from "@/views/api/slashCommands";
+import { createGoal } from "@/views/api/aiChatGoal";
+import type { AIChatGoalView } from "@/entityTypes/aiChatGoalTypes";
 
 vi.mock("@/views/api/aiChatV2", () => ({
   clearChatV2StreamListeners: vi.fn(),
@@ -51,6 +53,13 @@ vi.mock("@/views/api/slashCommands", () => ({
   onAifetchlyConfigChanged: vi.fn().mockReturnValue(() => undefined),
 }));
 
+vi.mock("@/views/api/aiChatGoal", () => ({
+  createGoal: vi.fn().mockResolvedValue(null),
+  getActiveGoal: vi.fn().mockResolvedValue(null),
+  startGoalLoop: vi.fn().mockResolvedValue(null),
+  stopGoalLoop: vi.fn().mockResolvedValue(null),
+}));
+
 const i18n = createI18n({
   legacy: false,
   locale: "en",
@@ -87,7 +96,7 @@ function mountChat() {
         AiChatV2Composer: {
           emits: ["send"],
           template:
-            '<div><button data-testid="send-help" @click="$emit(\'send\', \'/help\', [])">help</button><button data-testid="send-clear" @click="$emit(\'send\', \'/clear\', [])">clear</button><slot name="prepend" /></div>',
+            '<div><button data-testid="send-help" @click="$emit(\'send\', \'/help\', [])">help</button><button data-testid="send-clear" @click="$emit(\'send\', \'/clear\', [])">clear</button><button data-testid="send-goal" @click="$emit(\'send\', \'/goal Build a Facebook campaign scraper and verify it works\', [])">goal</button><slot name="prepend" /></div>',
         },
         AiChatV2ModeSelector: true,
         AiChatV2ModelSelector: true,
@@ -195,6 +204,44 @@ describe("AiChatV2 slash command dispatch", () => {
     const streamCall = vi.mocked(streamChatV2Message).mock.calls[0];
     expect(streamCall?.[0]).toMatchObject({
       message: "/expanded prompt body that begins with a slash",
+    });
+  });
+
+  it("creates the goal and streams its Plan Mode prompt instead of re-dispatching /goal", async () => {
+    const planPrompt =
+      "Plan the Facebook campaign scraper goal and propose acceptance criteria.";
+    vi.mocked(createGoal).mockResolvedValueOnce({
+      goal: {
+        goalId: "goal-1",
+        conversationId: "v2-1",
+        objective: "Build a Facebook campaign scraper and verify it works",
+        criteria: [],
+        status: "active",
+        iterationCount: 0,
+        createdAt: "2026-08-01T00:00:00.000Z",
+        updatedAt: "2026-08-01T00:00:00.000Z",
+      } as AIChatGoalView,
+      planPrompt,
+    });
+    const wrapper = mountChat();
+    await flushPromises();
+
+    await wrapper.find('[data-testid="send-goal"]').trigger("click");
+    await flushPromises();
+
+    // The goal is created with the user's objective.
+    expect(createGoal).toHaveBeenCalledWith({
+      conversationId: expect.stringMatching(/^v2-/),
+      objective: "Build a Facebook campaign scraper and verify it works",
+    });
+    // The generic slash dispatcher must NOT intercept /goal — that would show
+    // the usage text and swallow the plan prompt.
+    expect(dispatchSlashCommand).not.toHaveBeenCalled();
+    // The goal's Plan Mode prompt is streamed once, in plan mode.
+    expect(streamChatV2Message).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(streamChatV2Message).mock.calls[0]?.[0]).toMatchObject({
+      message: planPrompt,
+      mode: "plan",
     });
   });
 });

@@ -508,6 +508,21 @@ function refreshSlashSuggestions(): void {
     return;
   }
   const query = text.slice(1); // strip leading /
+  // Once a whitespace follows the command token the user has finished
+  // selecting a command and is now typing arguments (e.g. "/loop 5"). The
+  // suggestion dropdown exists for command selection only, so close it and
+  // cancel any in-flight debounced query — even though the draft still
+  // starts with "/".
+  if (/\s/.test(query)) {
+    if (slashDebounce) {
+      clearTimeout(slashDebounce);
+      slashDebounce = null;
+    }
+    slashOpen.value = false;
+    slashCommands.value = [];
+    slashHighlightedIndex.value = -1;
+    return;
+  }
   if (slashDebounce) clearTimeout(slashDebounce);
   const generation = ++slashGeneration;
   slashDebounce = setTimeout(async () => {
@@ -797,6 +812,20 @@ function onAtMentionSelect(index: number): void {
   });
 }
 
+function syncAtMentionFromKeyboardEvent(event: KeyboardEvent): void {
+  const target = event.target;
+  if (!(target instanceof HTMLTextAreaElement)) return;
+  textareaEl = target;
+  const cursor = target.selectionStart ?? target.value.length;
+  const active = findActiveAtMention(target.value, cursor);
+  activeAtMentionRange.value = active
+    ? { start: active.start, end: active.end }
+    : null;
+  if (!active) {
+    closeAtMention();
+  }
+}
+
 const onSend = (): void => {
   const text = draft.value.trim();
   if ((!text && selectedFiles.value.length === 0) || props.isStreaming) return;
@@ -809,6 +838,10 @@ const onSend = (): void => {
 };
 
 const onKeydown = (event: KeyboardEvent): void => {
+  if (atMentionOpen.value) {
+    syncAtMentionFromKeyboardEvent(event);
+  }
+
   // @-mention keyboard navigation (priority when the @-mention dropdown is open)
   if (atMentionOpen.value && atMentionSuggestions.value.length > 0) {
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {

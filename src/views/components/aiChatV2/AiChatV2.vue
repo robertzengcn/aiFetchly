@@ -65,6 +65,7 @@
           </v-icon>
         </v-btn>
         <v-btn
+          v-if="showCompactConversationButton"
           icon
           size="small"
           variant="text"
@@ -132,6 +133,7 @@
         :retry-info="retryInfo"
         :recovery-info="recoveryInfo"
         :workspace-root="activeWorkspace?.rootPath ?? ''"
+        :show-reasoning="showReasoning"
         @grant-permission="handleSkillPermissionGrant"
         @deny-permission="handleSkillPermissionDeny"
         @approve-plan="handleApprovePlan"
@@ -301,7 +303,7 @@
         :conversation-id="activeConversationId"
         @send="onSend"
         @stop="onStop"
-        @request-workspace="showWorkspaceRequired = true"
+        @request-workspace="handleWorkspaceSetupRequest"
         @install-voice-model="handleInstallVoiceModel"
         @voice-recording-start="onVoiceRecordingStart"
         @stop-speaking="onStopSpeaking"
@@ -432,7 +434,7 @@
               </v-list-item-subtitle>
               <template v-slot:append>
                 <v-progress-circular
-                  v-if="isConversationRunning(conv.conversationId)"
+                  v-if="isConversationRunning(conv)"
                   indeterminate
                   size="16"
                   width="2"
@@ -475,6 +477,7 @@ import type {
   ChatV2AttachmentKind,
   ChatV2AttachmentMetadata,
   ChatToolApprovalMode,
+  ChatV2RuntimeStatus,
 } from "@/entityTypes/aiChatV2Types";
 import type {
   AIChatPlanStateView,
@@ -568,11 +571,19 @@ import {
   resolveContextWindow,
   DEFAULT_CONTEXT_WINDOW,
 } from "./contextUsageUtil";
-import { hasPendingToolExecution } from "./toolExecutionStateUtil";
+import {
+  clearToolProgressForToolResult,
+  hasPendingToolExecution,
+} from "./toolExecutionStateUtil";
 import {
   downscaleImageAttachment,
   arrayBufferToBase64,
 } from "./imageScaleUtil";
+import {
+  AI_CHAT_REASONING_VISIBILITY_CHANGED_EVENT,
+  readAiChatReasoningVisible,
+  type AiChatReasoningVisibilityChangedDetail,
+} from "@/views/utils/aiChatReasoningPreference";
 import { QUOTA_EXHAUSTED_SENTINEL } from "@/service/AIChatErrorMapper";
 
 /**
@@ -619,6 +630,7 @@ const conversations = ref<ChatV2ConversationSummary[]>([]);
 const activeConversationId = ref<string | null>(null);
 const messages = ref<ChatV2MessageView[]>([]);
 const isStreaming = ref(false);
+const authoritativeRuntimeStatus = ref<ChatV2RuntimeStatus>("idle");
 const streamError = ref<string | null>(null);
 const activeAssistantMessageId = ref<string | null>(null);
 // Flipped to true once the first visible AI chunk (token/tool_call/etc)
@@ -763,6 +775,20 @@ const markConversationRuntimeStopped = (
 
 const markActiveConversationRuntimeStopped = (errorMessage?: string): void => {
   markConversationRuntimeStopped(activeConversationId.value, errorMessage);
+};
+
+const setAuthoritativeRuntimeStatus = (
+  conversationId: string,
+  status: ChatV2RuntimeStatus
+): void => {
+  conversations.value = conversations.value.map((conversation) =>
+    conversation.conversationId === conversationId
+      ? { ...conversation, runtimeStatus: status }
+      : conversation
+  );
+  if (activeConversationId.value === conversationId) {
+    authoritativeRuntimeStatus.value = status;
+  }
 };
 
 const activeMessageListController: MessageListController = {
@@ -1057,11 +1083,10 @@ async function refreshWorkspace(conversationId: string | null): Promise<void> {
           approvalState: ws.approvalState,
         }
       : null;
-    showWorkspaceRequired.value = false;
+    showWorkspaceRequired.value = ws ? false : showWorkspaceRequired.value;
   } catch {
     // non-fatal; treat as no workspace
     activeWorkspace.value = null;
-    showWorkspaceRequired.value = false;
   }
   void refreshWorkspaceMemoryCount();
 }
@@ -1158,6 +1183,8 @@ watch(activeConversationId, (id) => {
 const conversationSearch = ref("");
 const searchingConversations = ref(false);
 let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+let runtimeStatusPollTimer: ReturnType<typeof setTimeout> | null = null;
+const RUNTIME_STATUS_POLL_MS = 1_000;
 
 // ---------------------------------------------------------------------------
 // Context usage tracking
@@ -1196,6 +1223,24 @@ const availableModels = ref<OpenAIModel[]>([]);
 // via: saved localStorage choice → server default_model → first model id.
 const selectedModel = ref<string | undefined>(undefined);
 
+// ---------------------------------------------------------------------------
+// Reasoning visibility preference (global preference, localStorage-backed).
+// Survives app restarts; sent on each stream request so the main process can
+// add the server `reasoning` option and persist reasoning metadata.
+// ---------------------------------------------------------------------------
+// Cap live-streamed reasoning length in the renderer (mirrors the persisted
+// 32 KB cap in AIChatQueryEngine) so a misbehaving upstream can't OOM the view.
+const REASONING_LIVE_MAX_CHARS = 32 * 1024;
+const showReasoning = ref<boolean>(readAiChatReasoningVisible());
+const handleReasoningVisibilityChanged = (event: Event): void => {
+  const customEvent =
+    event as CustomEvent<AiChatReasoningVisibilityChangedDetail>;
+  showReasoning.value =
+    typeof customEvent.detail?.visible === "boolean"
+      ? customEvent.detail.visible
+      : readAiChatReasoningVisible();
+};
+
 const resolveContextWindowLocal = (model?: string): number =>
   resolveContextWindow(modelContextWindows.value, model);
 
@@ -1232,6 +1277,10 @@ const contextUsedTokens = computed(
 
 const contextTotalTokens = computed(() =>
   resolveContextWindowLocal(effectiveModel.value)
+);
+
+const showCompactConversationButton = computed(
+  () => contextPercent.value >= 80
 );
 
 const loadModelContextWindows = async (
@@ -1400,6 +1449,12 @@ function openAIProviderSettings(): void {
 const hasLoadedPendingToolExecution = computed(() => {
   const conversationId = activeConversationId.value;
   if (!conversationId) return false;
+  if (
+    !isStreaming.value &&
+    authoritativeRuntimeStatus.value !== "running"
+  ) {
+    return false;
+  }
   if (stoppedPendingToolConversationIds.value.has(conversationId)) {
     return false;
   }
@@ -1407,7 +1462,8 @@ const hasLoadedPendingToolExecution = computed(() => {
 });
 
 const chatIsRunning = computed(
-  () => isStreaming.value || hasLoadedPendingToolExecution.value
+  () =>
+    isStreaming.value || authoritativeRuntimeStatus.value === "running"
 );
 
 const hasAnyActiveStream = computed(() => {
@@ -1422,10 +1478,11 @@ const hasAnyActiveStream = computed(() => {
  * the user has switched away from it. Pending tool execution is only known for
  * the currently loaded conversation history, so that remains active-only.
  */
-const isConversationRunning = (conversationId: string): boolean =>
-  conversationRuntime.value.get(conversationId)?.isStreaming === true ||
-  (conversationId === activeConversationId.value &&
-    hasLoadedPendingToolExecution.value);
+const isConversationRunning = (
+  conversation: ChatV2ConversationSummary
+): boolean =>
+  conversationRuntime.value.get(conversation.conversationId)?.isStreaming ===
+    true || conversation.runtimeStatus === "running";
 
 const isPermissionPromptMessage = (message: ChatV2MessageView): boolean => {
   if (message.messageType !== MessageType.TOOL_RESULT) return false;
@@ -1511,7 +1568,8 @@ const pinnedPermissionResumeInFlight = computed(() => {
 // the next text token) so the user sees the AI is still working.
 const showTypingIndicator = computed(() => {
   if (hasLoadedPendingToolExecution.value) return true;
-  if (!isStreaming.value) return false;
+  if (!chatIsRunning.value) return false;
+  if (!isStreaming.value) return true;
   if (!receivedFirstResponse.value) return true;
   // Between tool rounds: last message is a tool call/result with no
   // active text streaming — show dots so the user knows the AI is processing.
@@ -1682,11 +1740,117 @@ const mapStreamErrorMessage = (raw: string): string => {
 
 const loadConversations = async (): Promise<void> => {
   try {
-    conversations.value = await getChatV2Conversations();
+    const nextConversations = await getChatV2Conversations();
+    conversations.value = nextConversations;
+    reconcileConversationRuntimeStatuses(nextConversations);
+    scheduleRuntimeStatusPoll();
   } catch {
     // non-fatal; leave list empty
   }
 };
+
+function reconcileConversationRuntimeStatuses(
+  nextConversations: ChatV2ConversationSummary[]
+): void {
+  const activeSummary = nextConversations.find(
+    (conversation) =>
+      conversation.conversationId === activeConversationId.value
+  );
+  if (!isStreaming.value) {
+    authoritativeRuntimeStatus.value =
+      activeSummary?.runtimeStatus ?? "idle";
+  }
+
+  for (const conversation of nextConversations) {
+    if (conversation.runtimeStatus === "running") continue;
+    const runtime = conversationRuntime.value.get(conversation.conversationId);
+    const isAttachedActiveStream =
+      conversation.conversationId === activeConversationId.value &&
+      isStreaming.value;
+    if (runtime?.isStreaming && !isAttachedActiveStream) {
+      markConversationRuntimeStopped(conversation.conversationId);
+    }
+  }
+}
+
+function needsRuntimeStatusPoll(): boolean {
+  return conversations.value.some((conversation) => {
+    if (conversation.runtimeStatus !== "running") return false;
+    return !(
+      conversation.conversationId === activeConversationId.value &&
+      isStreaming.value
+    );
+  });
+}
+
+function stopRuntimeStatusPoll(): void {
+  if (!runtimeStatusPollTimer) return;
+  clearTimeout(runtimeStatusPollTimer);
+  runtimeStatusPollTimer = null;
+}
+
+function scheduleRuntimeStatusPoll(): void {
+  if (runtimeStatusPollTimer || !needsRuntimeStatusPoll()) return;
+  runtimeStatusPollTimer = setTimeout(() => {
+    runtimeStatusPollTimer = null;
+    void pollRuntimeStatuses();
+  }, RUNTIME_STATUS_POLL_MS);
+}
+
+async function pollRuntimeStatuses(): Promise<void> {
+  const previousActiveStatus = authoritativeRuntimeStatus.value;
+  try {
+    const detachedRunningConversations = conversations.value.filter(
+      (conversation) =>
+        conversation.runtimeStatus === "running" &&
+        !(
+          conversation.conversationId === activeConversationId.value &&
+          isStreaming.value
+        )
+    );
+    const statusResults = await Promise.all(
+      detachedRunningConversations.map(async (conversation) => ({
+        conversationId: conversation.conversationId,
+        history: await getChatV2History(conversation.conversationId),
+      }))
+    );
+    const statusByConversation = new Map(
+      statusResults
+        .filter((result) => result.history !== null)
+        .map((result) => [
+          result.conversationId,
+          result.history?.runtimeStatus ?? "idle",
+        ])
+    );
+    const nextConversations = conversations.value.map((conversation) => ({
+      ...conversation,
+      runtimeStatus:
+        statusByConversation.get(conversation.conversationId) ??
+        conversation.runtimeStatus,
+    }));
+    conversations.value = nextConversations;
+    reconcileConversationRuntimeStatuses(nextConversations);
+    const reachedTerminalStatus = statusResults.some(
+      (result) =>
+        result.history !== null && result.history?.runtimeStatus !== "running"
+    );
+    if (
+      previousActiveStatus === "running" &&
+      authoritativeRuntimeStatus.value !== "running" &&
+      activeConversationId.value &&
+      !isStreaming.value
+    ) {
+      await loadHistory(activeConversationId.value);
+    }
+    if (reachedTerminalStatus) {
+      await loadConversations();
+    }
+  } catch {
+    // A transient status-query failure should not change the visible state.
+  } finally {
+    scheduleRuntimeStatusPoll();
+  }
+}
 
 /**
  * Debounced conversation search. Empty query reloads the full list;
@@ -1705,6 +1869,8 @@ const runConversationSearch = (query: string): void => {
       conversations.value = await getChatV2Conversations(
         q.length > 0 ? q : undefined
       );
+      reconcileConversationRuntimeStatuses(conversations.value);
+      scheduleRuntimeStatusPoll();
     } catch {
       // non-fatal; keep previous list
     } finally {
@@ -1731,6 +1897,10 @@ const loadHistory = async (conversationId: string): Promise<void> => {
   try {
     const resp = await getChatV2History(conversationId);
     if (activeConversationId.value !== conversationId) return;
+    setAuthoritativeRuntimeStatus(
+      conversationId,
+      resp?.runtimeStatus ?? "idle"
+    );
     // Persisted tool-result rows store only the raw `toolResult` (with the
     // artifact nested under .artifact), not the renderer's `metadata.artifact`
     // shortcut. Re-derive it on load so artifact cards reappear on history
@@ -1807,6 +1977,7 @@ const loadHistory = async (conversationId: string): Promise<void> => {
 const onNewConversation = (): void => {
   activeConversationId.value = null;
   messages.value = [];
+  authoritativeRuntimeStatus.value = "idle";
   resetActiveRuntimeFields();
   applyPlanState(null);
   pendingQuestion.value = null;
@@ -1840,6 +2011,10 @@ const onSelectConversation = (conversationId: string): void => {
   speechController.stop();
   detachActiveStreamView();
   activeConversationId.value = conversationId;
+  authoritativeRuntimeStatus.value =
+    conversations.value.find(
+      (conversation) => conversation.conversationId === conversationId
+    )?.runtimeStatus ?? "idle";
   const runtime = conversationRuntime.value.get(conversationId);
   if (runtime) {
     applyRuntimeFieldsToActive(runtime, { applyMessages: true });
@@ -1849,6 +2024,7 @@ const onSelectConversation = (conversationId: string): void => {
   }
   showConversationsDialog.value = false;
   void loadHistory(conversationId);
+  scheduleRuntimeStatusPoll();
 };
 
 const detachActiveStreamView = (): void => {
@@ -1866,6 +2042,7 @@ const onStop = (): void => {
   const conversationId = activeConversationId.value;
   if (conversationId) {
     markActiveConversationRuntimeStopped();
+    setAuthoritativeRuntimeStatus(conversationId, "idle");
     stoppedPendingToolConversationIds.value = new Set([
       ...stoppedPendingToolConversationIds.value,
       conversationId,
@@ -1950,7 +2127,14 @@ const upsertToolResultMessage = (
   insertBeforeAssistantId?: string,
   list: MessageListController = activeMessageListController
 ): void => {
-  const currentMessages = list.get();
+  const initialMessages = list.get();
+  const completedToolCallId =
+    chunk.toolCallId ?? chunk.replacesPermissionPromptForToolId;
+  const currentMessages = clearToolProgressForToolResult(
+    initialMessages,
+    completedToolCallId
+  );
+  const toolProgressCleared = currentMessages !== initialMessages;
   const toolResult = chunk.toolResult ?? {};
   if (
     chunk.toolCallId &&
@@ -1974,7 +2158,7 @@ const upsertToolResultMessage = (
 
   const metadata = {
     source: "chat-v2" as const,
-    toolCallId: chunk.toolCallId,
+    toolCallId: completedToolCallId,
     toolName: chunk.toolName,
     toolResult,
     toolResultStatus:
@@ -2007,13 +2191,16 @@ const upsertToolResultMessage = (
   }
 
   if (
-    chunk.toolCallId &&
+    completedToolCallId &&
     currentMessages.some(
       (message) =>
         message.messageType === MessageType.TOOL_RESULT &&
-        message.metadata?.toolCallId === chunk.toolCallId
+        message.metadata?.toolCallId === completedToolCallId
     )
   ) {
+    if (toolProgressCleared) {
+      list.set(currentMessages);
+    }
     return;
   }
 
@@ -2413,7 +2600,7 @@ const onSend = async (
   // ignored even when spoken responses are enabled.
   speechController.start();
 
-  // /goal and /loop interception (V2 has no slash dispatcher).
+  // /goal and /loop need stateful handling before the generic slash dispatcher.
   const cmd = parseAiGoalCommand(text);
   let modelMessage = text;
   let requestMode: ChatV2Mode = mode.value;
@@ -2429,8 +2616,13 @@ const onSend = async (
       return;
     }
     try {
+      // Bind the goal to the same conversation the plan prompt will stream
+      // against. ensureWorkspaceConversationId() creates the v2- id (and
+      // resets chat state) on a fresh chat, instead of passing "" and
+      // orphaning the goal from the streamed turn below.
+      const goalConversationId = ensureWorkspaceConversationId();
       const created = await createGoal({
-        conversationId: activeConversationId.value ?? "",
+        conversationId: goalConversationId,
         objective: cmd.objective,
       });
       if (!created) {
@@ -2460,9 +2652,14 @@ const onSend = async (
   // An EXPANDED prompt (from handleSlashCommandSubmission) must bypass this —
   // even if its body happens to start with `/`, it is chat content to stream,
   // not a second slash command to re-dispatch (TODO #3).
+  // Goal and loop commands are already handled above (cmd.type !== "none"):
+  // they must NOT fall through to the generic dispatcher, which returns
+  // show_result usage text for /goal and /loop and would swallow the goal's
+  // Plan Mode prompt before it streams.
   if (
     !options?.isExpandedPrompt &&
     (!files || files.length === 0) &&
+    cmd.type === "none" &&
     text.trim().startsWith("/")
   ) {
     const handled = await handleSlashCommandSubmission(text.trim());
@@ -2585,6 +2782,7 @@ const onSend = async (
     retryInfo: null,
     recoveryInfo: null,
   });
+  setAuthoritativeRuntimeStatus(streamConversationId, "running");
   // Seed the live context estimate from the last known server usage. If no
   // usage_update has arrived yet this session, fall back to the existing
   // streaming estimate (e.g. seeded from persisted tokensUsed on history
@@ -2605,6 +2803,10 @@ const onSend = async (
       mode: requestMode,
       model: resolveModelForRequest(),
       toolApprovalMode: toolApprovalMode.value,
+      showReasoning: showReasoning.value,
+      reasoning: showReasoning.value
+        ? { enabled: true, summary: "auto" }
+        : undefined,
     };
     if (uploadedFiles && uploadedFiles.length > 0) {
       streamRequest.uploadedFiles = uploadedFiles;
@@ -2660,6 +2862,51 @@ const onSend = async (
                 delayMs: chunk.retryDelayMs ?? 0,
               },
             });
+          }
+        } else if (
+          chunk.eventType === "reasoning_delta" &&
+          chunk.reasoningDelta
+        ) {
+          // Toggle off → ignore reasoning entirely (PRD UX-2): don't build
+          // metadata, don't touch assistant.content, never route to voice.
+          if (!showReasoning.value) {
+            return;
+          }
+          // Cap live accumulation to bound renderer work on very long reasoning
+          // (matches the persisted 32 KB cap; without this a misbehaving
+          // upstream could jank/OOM the renderer via per-delta concat + spread).
+          const prevReasoning = assistant.metadata?.reasoning?.content ?? "";
+          if (prevReasoning.length >= REASONING_LIVE_MAX_CHARS) {
+            return;
+          }
+          patchConversationRuntimeState(streamConversationId, {
+            receivedFirstResponse: true,
+            retryInfo: null,
+            recoveryInfo: null,
+          });
+          ensureAssistantAdded();
+          const combined = prevReasoning + chunk.reasoningDelta;
+          const over = combined.length > REASONING_LIVE_MAX_CHARS;
+          assistant.metadata = {
+            ...(assistant.metadata ?? { source: "chat-v2" }),
+            reasoning: {
+              content: over
+                ? combined.slice(0, REASONING_LIVE_MAX_CHARS)
+                : combined,
+              format: "plain_text",
+              source: "server",
+              model: chunk.model,
+              truncated: over,
+            },
+          };
+          const reasoningIdx = messages.value.findIndex(
+            (m) => m.id === assistant.id
+          );
+          if (reasoningIdx !== -1) {
+            messages.value[reasoningIdx] = {
+              ...messages.value[reasoningIdx],
+              metadata: assistant.metadata,
+            };
           }
         } else if (chunk.eventType === "recovery_status") {
           // Seven-layer recovery status. Show the badge but keep streaming.
@@ -2872,6 +3119,7 @@ const onSend = async (
           retryInfo: null,
           recoveryInfo: null,
         });
+        setAuthoritativeRuntimeStatus(streamConversationId, "idle");
         // Snap to ground-truth usage carried by the complete event so the
         // badge reflects the real context size even if usage_update chunks
         // didn't fire during the stream (some servers only report usage on
@@ -2985,6 +3233,7 @@ const onSend = async (
           recoveryInfo: null,
           streamError: displayMessage,
         });
+        setAuthoritativeRuntimeStatus(streamConversationId, "idle");
         showAssistantError(displayMessage);
       }
     );
@@ -3001,6 +3250,7 @@ const onSend = async (
         recoveryInfo: null,
         streamError: displayMessage,
       });
+      setAuthoritativeRuntimeStatus(streamConversationId, "idle");
       showAssistantError(displayMessage);
     }
   }
@@ -3269,6 +3519,10 @@ onMounted(() => {
     AI_CHAT_V2_VOICE_MODELS_CHANGED_EVENT,
     handleVoiceSettingsChanged
   );
+  window.addEventListener(
+    AI_CHAT_REASONING_VISIBILITY_CHANGED_EVENT,
+    handleReasoningVisibilityChanged
+  );
   // Subscribe to file operation events emitted during tool execution.
   // Records are appended per-conversation so the summary panel reflects
   // all changes made within the active conversation.
@@ -3284,6 +3538,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   speechController.stop();
   unsubscribeSpeaking();
+  stopRuntimeStatusPoll();
   detachActiveStreamView();
   window.removeEventListener(
     AI_PROVIDER_SETTINGS_CHANGED_EVENT,
@@ -3296,6 +3551,10 @@ onBeforeUnmount(() => {
   window.removeEventListener(
     AI_CHAT_V2_VOICE_MODELS_CHANGED_EVENT,
     handleVoiceSettingsChanged
+  );
+  window.removeEventListener(
+    AI_CHAT_REASONING_VISIBILITY_CHANGED_EVENT,
+    handleReasoningVisibilityChanged
   );
   unsubscribeFromFileOperations();
   if (searchDebounceTimer) {

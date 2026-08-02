@@ -668,6 +668,8 @@ export default {
     url_copied: "Login URL copied to clipboard!",
     copy_failed: "Failed to copy URL to clipboard. Please copy manually.",
     language_updated_successfully: "Language updated successfully",
+    upgrade_plan: "Mettre à niveau",
+    pricing_url_missing: "L'URL de la page des tarifs n'est pas configurée",
   },
   extramodule: {
     extramoduleName: "Extra Module Name",
@@ -2116,6 +2118,10 @@ export default {
       "Fournisseur d'IA local enregistré. AI Chat peut désormais utiliser votre modèle configuré.",
     saved_hosted: "Fournisseur d'IA hébergé enregistré.",
     api_key_cleared: "Clé API effacée.",
+    reasoning_settings_title: "Raisonnement",
+    reasoning_settings_description:
+      "Contrôlez si AI Chat affiche le processus de raisonnement du modèle.",
+    show_reasoning_process: "Afficher le processus de raisonnement",
     cap_label_models: "Modèles",
     cap_label_chat: "Chat",
     cap_label_streaming: "Streaming",
@@ -2273,6 +2279,14 @@ export default {
         "Le chat est indisponible. Votre transcription a été conservée dans le composeur.",
     },
     title: "Assistant IA",
+    show_reasoning: "Afficher le raisonnement",
+    hide_reasoning: "Masquer le raisonnement",
+    reasoning_title: "Raisonnement",
+    reasoning_streaming: "Raisonnement…",
+    reasoning_unavailable:
+      "Le raisonnement n'est pas disponible pour ce modèle.",
+    copy_reasoning: "Copier le raisonnement",
+    reasoning_copied: "Raisonnement copié",
     new_conversation: "Nouvelle conversation",
     empty_title: "Démarrer une conversation",
     empty_description:

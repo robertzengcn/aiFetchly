@@ -344,6 +344,21 @@ export class RagSearchController {
       const chunkingOptions: ChunkingConfig = DEFAULT_CHUNKING_CONFIG;
       console.log("Using local chunking configuration:", chunkingOptions);
 
+      const document = await this.getDocument(documentId);
+      if (!document) {
+        return {
+          documentId,
+          chunksCreated: 0,
+          embeddingsGenerated: 0,
+          processingTime: Date.now() - startTime,
+          success: false,
+          message: "Document not found",
+          steps,
+        };
+      }
+
+      await this.ragSearchModule.resetDocumentIndex(document);
+
       // Step 2: Chunk the document
       const chunkResult = await this.chunkDocument(documentId, chunkingOptions);
       if (!chunkResult.success) {

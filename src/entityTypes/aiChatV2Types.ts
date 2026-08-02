@@ -40,7 +40,23 @@ export type ChatToolApprovalMode =
   | "approve_for_me"
   | "full_access";
 
+/** Persisted reasoning metadata for an assistant message. Local user data. */
+export interface ChatV2ReasoningMetadata {
+  content: string;
+  format: "plain_text";
+  source: "server" | "local_provider" | "unknown";
+  model?: string;
+  truncated?: boolean;
+}
+
 export type ChatV2GeneratedImage = OpenAIChatImage;
+
+/** Authoritative main-process lifecycle state for a conversation turn. */
+export type ChatV2RuntimeStatus =
+  | "idle"
+  | "running"
+  | "awaiting_permission"
+  | "awaiting_user";
 
 // ---------------------------------------------------------------------------
 // Attachment types
@@ -89,6 +105,8 @@ export interface ChatV2MessageMetadata {
   success?: boolean;
   executionTimeMs?: number;
   summary?: string;
+  /** Persisted reasoning metadata for an assistant message. Local user data. */
+  reasoning?: ChatV2ReasoningMetadata;
   attachments?: ChatV2AttachmentMetadata[];
   generatedImages?: ChatV2GeneratedImage[];
   // Plan-mode fields (present only on plan-related display rows)
@@ -138,6 +156,14 @@ export interface ChatV2StreamRequest {
   maxTokens?: number;
   systemPrompt?: string;
   mode?: ChatV2Mode;
+  /** UI preference: render the reasoning panel when reasoning data exists. */
+  showReasoning?: boolean;
+  /** Provider/server reasoning request option; derived from showReasoning when omitted. */
+  reasoning?: {
+    enabled: boolean;
+    effort?: "low" | "medium" | "high";
+    summary?: "auto" | "concise" | "detailed";
+  };
   toolApprovalMode?: ChatToolApprovalMode;
   uploadedFiles?: ChatV2UploadedAttachment[];
 }
@@ -191,6 +217,7 @@ export interface ChatV2ConversationSummary {
   createdAt: string;
   planStatus?: AIChatPlanStatus;
   activePlanId?: string;
+  runtimeStatus?: ChatV2RuntimeStatus;
 }
 
 /** Single message view rendered by the UI. */
@@ -210,12 +237,14 @@ export interface ChatV2HistoryResponse {
   conversationId: string;
   messages: ChatV2MessageView[];
   totalMessages: number;
+  runtimeStatus: ChatV2RuntimeStatus;
 }
 
 /** App-level stream chunk sent over IPC to the renderer. */
 export type ChatV2StreamEventType =
   | "start"
   | "token"
+  | "reasoning_delta"
   | "tool_call_delta"
   | "tool_call"
   | "tool_progress"
@@ -243,6 +272,8 @@ export interface ChatV2StreamChunk {
   conversationId: string;
   messageId?: string;
   contentDelta?: string;
+  /** reasoning_delta: incremental safe-to-show reasoning text. */
+  reasoningDelta?: string;
   fullContent?: string;
   model?: string;
   finishReason?: string | null;

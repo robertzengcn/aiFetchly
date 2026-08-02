@@ -1,6 +1,9 @@
 # AI Chat V2 Goal and Loop Commands PRD
 
-Related technical design: [AI Chat V2 Goal and Loop Technical Design](./ai-chat-goal-loop-technical-design.md)
+Related documents:
+
+- [AI Chat V2 Goal and Loop Technical Design](./ai-chat-goal-loop-technical-design.md)
+- [AI Chat V2 Scheduled Loop PRD](./ai-chat-scheduled-loop-prd.md)
 
 ## Overview
 
@@ -81,12 +84,16 @@ Recommended MVP syntax:
 /loop <maxIterations>
 ```
 
-Later syntax may support:
+Later goal-loop syntax may support:
 
 ```text
 /loop until done
-/loop 30m
 ```
+
+Interval-based recurring prompts such as `/loop 5m check deployment` are a
+separate scheduled-message mode defined in the
+[AI Chat V2 Scheduled Loop PRD](./ai-chat-scheduled-loop-prd.md). A duration in
+that syntax is a cadence, not an iteration count or goal-loop runtime cap.
 
 ## Functional Requirements
 
