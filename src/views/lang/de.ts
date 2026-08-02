@@ -2229,6 +2229,8 @@ export default {
       createFailed: "Geplante Schleife konnte nicht erstellt werden.",
       controlFailed: "Geplante Schleife konnte nicht aktualisiert werden.",
       noActiveLoop: "Keine aktive geplante Schleife in dieser Unterhaltung.",
+      clearConfirm:
+        "Diese Unterhaltung hat eine aktive geplante Schleife. Das Leeren stoppt auch die Schleife. Fortfahren?",
       pause: "Pausieren",
       resume: "Fortsetzen",
       stop: "Schleife stoppen",

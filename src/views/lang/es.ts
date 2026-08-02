@@ -2238,6 +2238,8 @@ export default {
       controlFailed: "No se pudo actualizar el bucle programado.",
       noActiveLoop:
         "No hay ningún bucle programado activo en esta conversación.",
+      clearConfirm:
+        "Esta conversación tiene un bucle programado activo. Vaciarla también detendrá el bucle. ¿Continuar?",
       pause: "Pausar",
       resume: "Reanudar",
       stop: "Detener bucle",

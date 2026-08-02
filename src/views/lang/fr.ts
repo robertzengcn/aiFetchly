@@ -2222,6 +2222,8 @@ export default {
       createFailed: "Impossible de créer la boucle planifiée.",
       controlFailed: "Impossible de mettre à jour la boucle planifiée.",
       noActiveLoop: "Aucune boucle planifiée active pour cette conversation.",
+      clearConfirm:
+        "Cette conversation a une boucle planifiée active. L'effacer arrêtera également la boucle. Continuer ?",
       pause: "Pause",
       resume: "Reprendre",
       stop: "Arrêter la boucle",

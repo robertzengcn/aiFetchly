@@ -2229,6 +2229,8 @@ export default {
       createFailed: "Could not create the scheduled loop.",
       controlFailed: "Could not update the scheduled loop.",
       noActiveLoop: "No active scheduled loop for this conversation.",
+      clearConfirm:
+        "This conversation has an active scheduled loop. Clearing will also stop the loop. Continue?",
       pause: "Pause",
       resume: "Resume",
       stop: "Stop loop",

@@ -38,6 +38,47 @@
             @click="stopActiveLoop"
           />
         </v-chip>
+        <v-chip
+          v-if="activeScheduledLoop"
+          size="x-small"
+          :color="scheduledLoopDescriptor.color"
+          class="ml-2"
+        >
+          <v-icon start size="x-small">mdi-clock-outline</v-icon>
+          <span class="font-weight-bold">
+            {{ scheduledLoopDescriptor.label }}
+          </span>
+          <v-btn
+            v-if="
+              activeScheduledLoop.status === 'active' ||
+              activeScheduledLoop.status === 'running'
+            "
+            size="x-small"
+            variant="text"
+            icon="mdi-pause"
+            :aria-label="t('aiChatV2.scheduledLoop.pause') || 'Pause'"
+            @click="runScheduledLoopControl('pause')"
+          />
+          <v-btn
+            v-if="activeScheduledLoop.status === 'paused'"
+            size="x-small"
+            variant="text"
+            icon="mdi-play"
+            :aria-label="t('aiChatV2.scheduledLoop.resume') || 'Resume'"
+            @click="runScheduledLoopControl('resume')"
+          />
+          <v-btn
+            v-if="
+              activeScheduledLoop.status !== 'stopped' &&
+              activeScheduledLoop.status !== 'expired'
+            "
+            size="x-small"
+            variant="text"
+            icon="mdi-stop"
+            :aria-label="t('aiChatV2.scheduledLoop.stop') || 'Stop loop'"
+            @click="runScheduledLoopControl('stop')"
+          />
+        </v-chip>
       </div>
       <div class="v2-shell__header-actions">
         <AiChatV2ContextBadge
@@ -1715,6 +1756,43 @@ const goalStatusDescriptor = computed(() => {
       return { color: "default", icon: "mdi-flag", label: status ?? "goal" };
   }
 });
+const scheduledLoopDescriptor = computed(() => {
+  const status = activeScheduledLoop.value?.status;
+  switch (status) {
+    case "running":
+      return {
+        color: "primary",
+        label: t("aiChatV2.scheduledLoop.statusRunning") || "running",
+      };
+    case "active":
+      return {
+        color: "success",
+        label: t("aiChatV2.scheduledLoop.statusActive") || "active",
+      };
+    case "paused":
+      return {
+        color: "warning",
+        label: t("aiChatV2.scheduledLoop.statusPaused") || "paused",
+      };
+    case "expired":
+      return {
+        color: "grey-darken-1",
+        label: t("aiChatV2.scheduledLoop.statusExpired") || "expired",
+      };
+    case "failed":
+      return {
+        color: "error",
+        label: t("aiChatV2.scheduledLoop.statusFailed") || "failed",
+      };
+    case "stopped":
+      return {
+        color: "grey-darken-1",
+        label: t("aiChatV2.scheduledLoop.statusStopped") || "stopped",
+      };
+    default:
+      return { color: "default", label: status ?? "scheduled" };
+  }
+});
 const pendingQuestion = ref<AIChatPlanQuestionView | null>(null);
 // While a plan is awaiting the user's decision, its approval card is pinned
 // at the bottom of the chat (alongside the question card). Once the user
@@ -1970,6 +2048,26 @@ const onClearMessages = (): void => {
 async function clearCurrentConversation(): Promise<void> {
   const conversationId = activeConversationId.value;
   if (conversationId) {
+    // FR-14: a conversation with an active scheduled loop must confirm the
+    // schedule will also be stopped before its history is cleared.
+    const loop = activeScheduledLoop.value;
+    if (
+      loop &&
+      loop.conversationId === conversationId &&
+      loop.status !== "stopped" &&
+      loop.status !== "expired"
+    ) {
+      const confirmMsg =
+        t("aiChatV2.scheduledLoop.clearConfirm") ||
+        "This conversation has an active scheduled loop. Clearing will also stop the loop. Continue?";
+      if (!window.confirm(confirmMsg)) return;
+      try {
+        await controlScheduledLoop(conversationId, "stop");
+        await refreshScheduledLoopStatus();
+      } catch {
+        /* proceed with clear best-effort */
+      }
+    }
     try {
       await clearChatV2Conversation(conversationId);
       clearConversationRuntimeState(conversationId);

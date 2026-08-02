@@ -2145,6 +2145,7 @@ export default {
       createFailed: "无法创建定时循环。",
       controlFailed: "无法更新定时循环。",
       noActiveLoop: "此会话没有活动的定时循环。",
+      clearConfirm: "此会话有活动的定时循环。清除将同时停止该循环。是否继续？",
       pause: "暂停",
       resume: "恢复",
       stop: "停止循环",
