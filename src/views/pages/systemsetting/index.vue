@@ -209,6 +209,7 @@ import { SystemSettingDisplay, SystemSettingGroupDisplay, OptionSettingDisplay }
 import { getSystemSettinglist, updateSystemSetting, updateSystemSettingWithValidation } from "@/views/api/systemsetting";
 import { updateLanguagePreference } from '@/views/api/language';
 import { language_preference } from '@/config/settinggroupInit';
+import { setLanguage } from '@/views/utils/cookies';
 // i18n setup
 const { t, locale } = useI18n();
 const router = useRouter();
@@ -411,6 +412,7 @@ async function handleLanguageChange(newLanguage: string) {
   try {
     // Update the i18n locale immediately for real-time switching
     locale.value = newLanguage;
+    setLanguage(newLanguage);
     
     // Also update the language preference via the API for consistency
     const success = await updateLanguagePreference(newLanguage);
