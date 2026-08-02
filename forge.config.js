@@ -31,6 +31,8 @@ const EXTERNAL_DEPENDENCIES = [
   "openai",
   "typeorm",
   "cheerio",
+  "sanitize-html",
+  "html-to-text",
   "sqlite-vec",
   "canvas",
   "@napi-rs/canvas",
@@ -43,6 +45,15 @@ const EXTERNAL_DEPENDENCIES = [
   "sharp",
   "sherpa-onnx-node",
 ];
+
+function getPackageRootName(packageName) {
+  if (packageName.startsWith("@")) {
+    const [scope, name] = packageName.split("/");
+    return name ? `${scope}/${name}` : packageName;
+  }
+  return packageName.split("/")[0];
+}
+
 //import { ForgeConfig } from '@electron-forge/shared-types';
 // import { AutoUnpackNativesPlugin } from "@electron-forge/plugin-auto-unpack-natives";
 // Base .env (CI writes this), then mode-specific overrides e.g. .env.test for NODE_ENV=test.
@@ -567,8 +578,7 @@ module.exports = {
             await walker.walkDependenciesForModule(moduleRoot, DepType.PROD);
             walker.modules
               .filter((dep) => dep.nativeModuleType === DepType.PROD)
-              // for a package like '@realm/fetch', need to split the path and just take the first part
-              .map((dep) => dep.name.split("/")[0])
+              .map((dep) => getPackageRootName(dep.name))
               .forEach((name) => foundModules.add(name));
           }
         }
