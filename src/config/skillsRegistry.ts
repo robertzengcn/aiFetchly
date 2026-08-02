@@ -1474,9 +1474,9 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     },
   },
   {
-    name: "start_bulk_email_send_task",
+    name: "start_email_send_task",
     description:
-      "Create and start a bulk email send task. Requires confirmation because it sends email. Provide either template_ids or email_subject and email_html_content, not both empty.",
+      "Create and start an email send task. Requires confirmation because it sends email. Provide either template_ids or email_subject and email_html_content, not both empty.",
     parameters: {
       type: "object",
       properties: {
