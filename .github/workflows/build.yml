@@ -26,6 +26,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22.14.0
+          cache: yarn
 
       # Python 3.12+ removed distutils; bundled node-gyp in electron-rebuild still imports it.
       # Pin 3.11 so gyp (used by sqlite3/bufferutil rebuild) runs. Same issue as macOS setuptools fix.
@@ -201,6 +202,19 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22.14.0
+          cache: yarn
+
+      - name: Cache Electron downloads
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/electron
+            ~/.cache/electron-gyp
+            ~/.electron-gyp
+            ~/Library/Caches/electron
+          key: ${{ runner.os }}-electron-${{ hashFiles('yarn.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-electron-
       - name: Set up Python for node-gyp
         uses: actions/setup-python@v6
         with:
@@ -343,11 +357,9 @@ jobs:
           echo "LDFLAGS=-L/opt/homebrew/lib" >> $GITHUB_ENV
           echo "PKG_CONFIG_PATH=/opt/homebrew/lib/pkgconfig" >> $GITHUB_ENV        
       - name: Install dependencies
-        run: yarn install
+        run: yarn install --frozen-lockfile
       # - name: Run postinstall script
       #   run: yarn postinstall
-      - name: Install DMG maker
-        run: yarn add --dev @electron-forge/maker-dmg
       - name: Verify required assets exist
         run: |
           echo "=== Verifying required macOS build assets ==="
@@ -373,7 +385,6 @@ jobs:
           ls -la src/assets/images/icon.png && echo "✅ icon.png found" || echo "❌ icon.png NOT found"
       - name: Clean previous builds
         run: |
-          rm -rf node_modules/.cache
           rm -rf out/
           rm -rf .vite/
           yarn clean || echo "Clean command not available"
@@ -496,6 +507,7 @@ jobs:
 
           # Set environment variables to ensure build output goes to expected location
           export NODE_ENV=test
+          export MAKE_MAC_DMG=false
 
           # Increase Node.js heap size to prevent out-of-memory errors during build
           # The renderer build (Vite + Vue) requires significant memory
@@ -507,7 +519,8 @@ jobs:
           # Clean any previous build artifacts
           rm -rf out/ || true
 
-          # Try to build with electron-forge make (creates both DMG and ZIP)
+          # Build test artifacts. Test macOS CI skips DMG generation because it is
+          # slow and unsigned builds only need the ZIP artifact for validation.
           echo "Running: yarn make-mac:test"
           yarn make-mac:test 2>&1 | tee build.log
 
@@ -546,32 +559,22 @@ jobs:
             echo "APP bundles:"
             find out -type d -name "*.app" 2>/dev/null || echo "  No APP bundles found"
 
-            # If no DMG/ZIP but APP exists, try to run makers explicitly
+            # If no ZIP exists but APP exists, try to run the zip maker explicitly.
             if find out -type d -name "*.app" 2>/dev/null | grep -q .; then
-              if ! find out -type f \( -name "*.dmg" -o -name "*.zip" \) 2>/dev/null | grep -q .; then
+              if ! find out -type f -name "*.zip" 2>/dev/null | grep -q .; then
                 echo ""
-                echo "⚠️ APP bundle found but no distributables (DMG/ZIP)"
+                echo "⚠️ APP bundle found but no ZIP distributable"
                 echo "Checking build log for maker errors..."
                 echo "=== Last 50 lines of build log ==="
                 tail -50 build.log
 
                 echo ""
-                echo "Attempting to run makers explicitly with --skip-package..."
+                echo "Attempting to run the zip maker explicitly with --skip-package..."
 
-                # Try running makers using electron-forge make with --skip-package
-                # This skips packaging and only runs the makers
-                yarn electron-forge make --skip-package 2>&1 | tee -a build.log || echo "Makers failed again"
+                yarn electron-forge make --skip-package --targets=@electron-forge/maker-zip 2>&1 | tee -a build.log || echo "ZIP maker failed again"
 
-                echo "=== After running makers explicitly ==="
-                find out -type f \( -name "*.dmg" -o -name "*.zip" \) 2>/dev/null || echo "Still no distributables"
-
-                # Last resort: Try to create DMG manually using hdiutil
-                if [ -d "out/aiFetchly-darwin-arm64/aiFetchly.app" ]; then
-                  echo ""
-                  echo "Last resort: Creating DMG manually using hdiutil..."
-                  mkdir -p out/make
-                  hdiutil create -volname "aiFetchly" -srcfolder "out/aiFetchly-darwin-arm64/aiFetchly.app" -ov -format UDZO "out/make/aiFetchly.dmg" || echo "Manual DMG creation failed"
-                fi
+                echo "=== After running zip maker explicitly ==="
+                find out -type f -name "*.zip" 2>/dev/null || echo "Still no ZIP distributable"
               fi
             fi
           else
@@ -606,22 +609,6 @@ jobs:
           spctl --assess --type execute --verbose=4 "${APP_PATH}"
           xcrun stapler validate "${APP_PATH}"
 
-      - name: Fallback build if main build fails
-        if: failure()
-        run: |
-          echo "=== Trying fallback build approach ==="
-
-          # Increase Node.js heap size for fallback builds as well
-          export NODE_OPTIONS="--max-old-space-size=4096"
-
-          # Try to use electron-forge package instead of make
-          echo "Attempting package-only build..."
-          yarn package || echo "Package command failed"
-
-          # Try to create only ZIP if DMG fails
-          echo "Attempting ZIP-only build..."
-          yarn make --platform=darwin --arch="${TARGET_ARCH}" || echo "ZIP build failed"
-  
       - name: Verify electron-forge makers
         run: |
           echo "=== Checking available electron-forge makers ==="

@@ -41,6 +41,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22.14.0
+          cache: yarn
 
       - name: Set up Python for node-gyp
         uses: actions/setup-python@v6
@@ -167,6 +168,7 @@ jobs:
       artifact_name: ${{ steps.calculate_version.outputs.artifact_name }}
     env:
       BUILD_MODE: ${{ github.event_name == 'push' && 'production' || inputs.build_mode }}
+      MAKE_MAC_DMG: ${{ github.event_name == 'push' && 'true' || inputs.build_mode == 'production' && 'true' || 'false' }}
       VITE_LOGIN_URL_TEST: ${{ secrets.VITE_LOGIN_URL_TEST }}
       VITE_LOGIN_URL_PROD: ${{ secrets.VITE_LOGIN_URL_PROD }}
       UPDATESERVER_TEST: ${{ secrets.UPDATESERVER }}
@@ -215,6 +217,19 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22.14.0
+          cache: yarn
+
+      - name: Cache Electron downloads
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/electron
+            ~/.cache/electron-gyp
+            ~/.electron-gyp
+            ~/Library/Caches/electron
+          key: ${{ runner.os }}-electron-${{ hashFiles('yarn.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-electron-
 
       - name: Set up Python for node-gyp
         uses: actions/setup-python@v6
