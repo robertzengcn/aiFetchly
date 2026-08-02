@@ -10,6 +10,7 @@ const EXTERNAL_DEPENDENCIES = [
   "electron-squirrel-startup",
   "better-sqlite3",
   "sqlite-vec",
+  "chokidar",
   "puppeteer-cluster",
   "lodash",
   "winston",
