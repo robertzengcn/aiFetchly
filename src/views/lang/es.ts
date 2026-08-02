@@ -2291,6 +2291,14 @@ export default {
         "El chat no está disponible. Tu transcripción se ha conservado en el compositor.",
     },
     title: "Asistente de IA",
+    show_reasoning: "Mostrar razonamiento",
+    hide_reasoning: "Ocultar razonamiento",
+    reasoning_title: "Razonamiento",
+    reasoning_streaming: "Razonando…",
+    reasoning_unavailable:
+      "El razonamiento no está disponible para este modelo.",
+    copy_reasoning: "Copiar razonamiento",
+    reasoning_copied: "Razonamiento copiado",
     new_conversation: "Nueva conversación",
     empty_title: "Inicia una conversación",
     empty_description:

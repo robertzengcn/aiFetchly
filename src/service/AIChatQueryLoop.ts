@@ -637,17 +637,32 @@ export class AIChatQueryLoop {
               startRound: input.startRound,
               exposedToolNames: exposedTools.map((t) => t.function.name),
             }),
+            // MVP: the `reasoning` server option is intentionally NOT forwarded.
+            // Reasoning is parsed passively from provider-emitted fields (see
+            // OpenAIStreamAccumulator). Forwarding would 400 on strict servers
+            // for non-reasoning models until per-model capability detection
+            // lands (PRD Phase 5). showReasoning is a renderer display pref.
           },
           (rawChunk) => {
             if (input.abortController.signal.aborted) return;
             if (!input.isActiveTurn()) return;
-            const delta = accumulator.ingest(rawChunk);
-            if (delta) {
+            const { contentDelta, reasoningDelta } =
+              accumulator.ingest(rawChunk);
+            if (reasoningDelta) {
+              eventSink.emit({
+                type: "reasoning_delta",
+                conversationId: input.conversationId,
+                messageId: input.assistantMessageId,
+                reasoningDelta,
+                model: accumulator.state.model,
+              });
+            }
+            if (contentDelta) {
               eventSink.emit({
                 type: "token",
                 conversationId: input.conversationId,
                 messageId: input.assistantMessageId,
-                contentDelta: delta,
+                contentDelta,
                 model: accumulator.state.model,
               });
             }
@@ -906,6 +921,7 @@ export class AIChatQueryLoop {
               partialContent: accumulator.state.fullContent ?? "",
               model: accumulator.state.model,
               responseId: accumulator.state.responseId,
+              reasoningContent: accumulator.state.reasoningContent || undefined,
               toolCatalogState: catalogActive
                 ? snapshotToolCatalogState(
                     discoveredToolNames,
@@ -1308,6 +1324,8 @@ export class AIChatQueryLoop {
               totalTokens: lastReportedUsage?.totalTokens,
               promptTokens: lastReportedUsage?.promptTokens,
               completionTokens: lastReportedUsage?.completionTokens,
+              reasoningContent:
+                finalAccumulator?.state.reasoningContent || undefined,
               toolCatalogState: catalogActive
                 ? snapshotToolCatalogState(
                     discoveredToolNames,
@@ -1391,6 +1409,8 @@ export class AIChatQueryLoop {
           totalTokens: lastReportedUsage?.totalTokens,
           promptTokens: lastReportedUsage?.promptTokens,
           completionTokens: lastReportedUsage?.completionTokens,
+          reasoningContent:
+            finalAccumulator?.state.reasoningContent || undefined,
           toolCatalogState: catalogActive
             ? snapshotToolCatalogState(
                 discoveredToolNames,
@@ -1462,6 +1482,7 @@ export class AIChatQueryLoop {
         totalTokens: lastReportedUsage?.totalTokens,
         promptTokens: lastReportedUsage?.promptTokens,
         completionTokens: lastReportedUsage?.completionTokens,
+        reasoningContent: finalAccumulator?.state.reasoningContent || undefined,
         toolCatalogState: catalogActive
           ? snapshotToolCatalogState(
               discoveredToolNames,
@@ -1479,6 +1500,8 @@ export class AIChatQueryLoop {
           partialContent: activeAccumulator?.state.fullContent ?? "",
           model: activeAccumulator?.state.model,
           responseId: activeAccumulator?.state.responseId,
+          reasoningContent:
+            activeAccumulator?.state.reasoningContent || undefined,
           toolCatalogState: catalogActive
             ? snapshotToolCatalogState(
                 discoveredToolNames,
@@ -1550,6 +1573,8 @@ export class AIChatQueryLoop {
         partialContent: activeAccumulator?.state.fullContent ?? "",
         model: activeAccumulator?.state.model,
         responseId: activeAccumulator?.state.responseId,
+        reasoningContent:
+          activeAccumulator?.state.reasoningContent || undefined,
         toolCatalogState: catalogActive
           ? snapshotToolCatalogState(
               discoveredToolNames,

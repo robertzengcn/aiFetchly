@@ -2275,6 +2275,14 @@ export default {
         "Le chat est indisponible. Votre transcription a été conservée dans le composeur.",
     },
     title: "Assistant IA",
+    show_reasoning: "Afficher le raisonnement",
+    hide_reasoning: "Masquer le raisonnement",
+    reasoning_title: "Raisonnement",
+    reasoning_streaming: "Raisonnement…",
+    reasoning_unavailable:
+      "Le raisonnement n'est pas disponible pour ce modèle.",
+    copy_reasoning: "Copier le raisonnement",
+    reasoning_copied: "Raisonnement copié",
     new_conversation: "Nouvelle conversation",
     empty_title: "Démarrer une conversation",
     empty_description:

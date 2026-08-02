@@ -101,6 +101,17 @@
         <div v-if="message.content" class="v2-message__content">
           {{ message.content }}
         </div>
+        <details
+          v-if="hasReasoning"
+          class="v2-message__reasoning"
+          :open="status === 'streaming'"
+        >
+          <summary>
+            <v-icon size="x-small">mdi-brain</v-icon>
+            {{ t("aiChatV2.reasoning_title") || "Reasoning" }}
+          </summary>
+          <div class="v2-message__reasoning-content">{{ reasoningText }}</div>
+        </details>
         <div v-if="generatedImages.length > 0" class="v2-message__images">
           <template v-for="image in generatedImages" :key="image.key">
             <a
@@ -235,6 +246,8 @@ const props = defineProps<{
   errorMessage?: string;
   disabled?: boolean;
   workspaceRoot?: string;
+  /** Global "Show reasoning" preference — gates whether the panel renders. */
+  showReasoning?: boolean;
 }>();
 const emit = defineEmits<{
   (
@@ -418,6 +431,16 @@ const needsPermissionPrompt = computed(
   () => toolResult.value.needsPermissionPrompt === true
 );
 
+const reasoningText = computed(
+  () => props.message.metadata?.reasoning?.content?.trim() ?? ""
+);
+const hasReasoning = computed(
+  () =>
+    props.message.role === "assistant" &&
+    props.showReasoning === true &&
+    reasoningText.value.length > 0
+);
+
 const shellPreview = computed<ShellPreview | undefined>(() => {
   const preview = toolResult.value.shellPreview;
   if (!preview || typeof preview !== "object") {
@@ -559,6 +582,29 @@ const mentionChips = computed<MentionChip[]>(() => {
 }
 .v2-message__content {
   white-space: pre-wrap;
+  line-height: 1.45;
+}
+.v2-message__reasoning {
+  margin-top: 8px;
+  padding: 8px;
+  border-left: 3px solid rgba(var(--v-theme-primary), 0.45);
+  background: rgba(var(--v-theme-primary), 0.06);
+  border-radius: 6px;
+}
+.v2-message__reasoning summary {
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.v2-message__reasoning-content {
+  margin-top: 6px;
+  white-space: pre-wrap;
+  max-height: 220px;
+  overflow: auto;
+  font-size: 13px;
   line-height: 1.45;
 }
 .v2-message__images {

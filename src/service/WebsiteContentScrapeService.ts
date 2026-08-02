@@ -62,6 +62,15 @@ interface WorkerScrapeMessage {
   requestId: string;
 }
 
+interface ChildProcessPathRuntime {
+  dirname: string;
+  cwd: string;
+  resourcesPath?: string;
+  existsSync: (candidate: string) => boolean;
+}
+
+const WEBSITE_CONTENT_SCRAPER_FILE = "websiteContentScraper.js";
+
 export class WebsiteContentScrapeService {
   /**
    * Scrape a single URL through the worker and return the converted markdown
@@ -198,30 +207,107 @@ export class WebsiteContentScrapeService {
    * location first, then relative/cwd fallbacks used by different build modes.
    */
   private static getChildProcessPath(): string | null {
-    const childPath = path.join(
-      __dirname,
-      "./childprocess/websiteContentScraper.js"
-    );
-    if (!fs.existsSync(childPath)) {
-      const altPath1 = path.join(
-        __dirname,
-        "../childprocess/websiteContentScraper.js"
-      );
-      if (fs.existsSync(altPath1)) {
-        return altPath1;
+    const electronProcess = process as NodeJS.Process & {
+      resourcesPath?: string;
+    };
+
+    return WebsiteContentScrapeService.resolveChildProcessPath({
+      dirname: __dirname,
+      cwd: process.cwd(),
+      resourcesPath: electronProcess.resourcesPath,
+      existsSync: fs.existsSync,
+    });
+  }
+
+  static resolveChildProcessPath(
+    runtime: ChildProcessPathRuntime
+  ): string | null {
+    const candidates =
+      WebsiteContentScrapeService.getChildProcessPathCandidates(runtime);
+
+    for (const candidate of candidates) {
+      if (runtime.existsSync(candidate)) {
+        return candidate;
       }
-      const altPath2 = path.join(
-        process.cwd(),
-        "dist/childprocess/websiteContentScraper.js"
-      );
-      if (fs.existsSync(altPath2)) {
-        return altPath2;
-      }
-      console.warn(
-        `Child process file not found. Tried: ${childPath}, ${altPath1}, ${altPath2}`
-      );
-      return null;
     }
-    return childPath;
+
+    console.warn(
+      `Child process file not found. Tried: ${candidates.join(", ")}`
+    );
+    return null;
+  }
+
+  private static getChildProcessPathCandidates(
+    runtime: ChildProcessPathRuntime
+  ): string[] {
+    const candidates: string[] = [];
+    const addCandidate = (candidate: string): void => {
+      const normalized = path.normalize(candidate);
+      const unpacked =
+        WebsiteContentScrapeService.mirrorAppAsarUnpackedPath(normalized);
+      if (unpacked !== normalized && !candidates.includes(unpacked)) {
+        candidates.push(unpacked);
+      }
+      if (!candidates.includes(normalized)) {
+        candidates.push(normalized);
+      }
+    };
+
+    addCandidate(
+      path.join(runtime.dirname, "childprocess", WEBSITE_CONTENT_SCRAPER_FILE)
+    );
+    addCandidate(
+      path.join(runtime.dirname, "../childprocess", WEBSITE_CONTENT_SCRAPER_FILE)
+    );
+    addCandidate(
+      path.join(
+        runtime.dirname,
+        "../../dist/childprocess",
+        WEBSITE_CONTENT_SCRAPER_FILE
+      )
+    );
+    addCandidate(
+      path.join(runtime.cwd, "dist/childprocess", WEBSITE_CONTENT_SCRAPER_FILE)
+    );
+    addCandidate(
+      path.join(
+        runtime.cwd,
+        ".vite/build/childprocess",
+        WEBSITE_CONTENT_SCRAPER_FILE
+      )
+    );
+
+    if (runtime.resourcesPath) {
+      addCandidate(
+        path.join(
+          runtime.resourcesPath,
+          "app.asar.unpacked",
+          "dist/childprocess",
+          WEBSITE_CONTENT_SCRAPER_FILE
+        )
+      );
+      addCandidate(
+        path.join(
+          runtime.resourcesPath,
+          "app.asar.unpacked",
+          ".vite/build/childprocess",
+          WEBSITE_CONTENT_SCRAPER_FILE
+        )
+      );
+      addCandidate(
+        path.join(
+          runtime.resourcesPath,
+          "app.asar",
+          "dist/childprocess",
+          WEBSITE_CONTENT_SCRAPER_FILE
+        )
+      );
+    }
+
+    return candidates;
+  }
+
+  static mirrorAppAsarUnpackedPath(candidate: string): string {
+    return candidate.replace(/app\.asar([\\/])/, "app.asar.unpacked$1");
   }
 }

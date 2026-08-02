@@ -307,6 +307,19 @@ function createEventSink(event: IpcEventLike): AIChatQueryEventSink {
             model: e.model,
           });
           break;
+        case "reasoning_delta":
+          // Log length only — never the reasoning text itself (SSR-3 / §14).
+          console.debug(
+            `[ai-chat-v2] reasoning_delta conv=${e.conversationId} message=${e.messageId} deltaLen=${e.reasoningDelta.length}`
+          );
+          sendChunk(event, {
+            eventType: "reasoning_delta",
+            conversationId: e.conversationId,
+            messageId: e.messageId,
+            reasoningDelta: e.reasoningDelta,
+            model: e.model,
+          });
+          break;
         case "retry_connect":
           sendChunk(event, {
             eventType: "retry_connect",
@@ -508,6 +521,41 @@ function validateStreamRequest(
     req.toolApprovalMode !== "full_access"
   ) {
     return "toolApprovalMode must be a valid approval mode";
+  }
+  if (
+    req.showReasoning !== undefined &&
+    typeof req.showReasoning !== "boolean"
+  ) {
+    return "showReasoning must be a boolean";
+  }
+  if (req.reasoning !== undefined) {
+    const reasoning = req.reasoning as {
+      enabled?: unknown;
+      effort?: unknown;
+      summary?: unknown;
+    };
+    if (
+      !reasoning ||
+      typeof reasoning !== "object" ||
+      Array.isArray(reasoning) ||
+      typeof reasoning.enabled !== "boolean"
+    ) {
+      return "reasoning must be an object with a boolean 'enabled' field";
+    }
+    if (
+      reasoning.effort !== undefined &&
+      (typeof reasoning.effort !== "string" ||
+        !["low", "medium", "high"].includes(reasoning.effort))
+    ) {
+      return "reasoning.effort must be one of low, medium, high";
+    }
+    if (
+      reasoning.summary !== undefined &&
+      (typeof reasoning.summary !== "string" ||
+        !["auto", "concise", "detailed"].includes(reasoning.summary))
+    ) {
+      return "reasoning.summary must be one of auto, concise, detailed";
+    }
   }
   return null;
 }

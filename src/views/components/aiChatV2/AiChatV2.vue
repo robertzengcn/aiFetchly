@@ -68,6 +68,20 @@
           icon
           size="small"
           variant="text"
+          :color="showReasoning ? 'primary' : undefined"
+          :loading="reasoningSaving"
+          :disabled="reasoningSaving"
+          :title="reasoningToggleTitle"
+          :aria-label="reasoningToggleTitle"
+          :aria-pressed="showReasoning"
+          @click="toggleReasoning"
+        >
+          <v-icon size="small">mdi-brain</v-icon>
+        </v-btn>
+        <v-btn
+          icon
+          size="small"
+          variant="text"
           :loading="isCompacting"
           :disabled="
             !activeConversationId || messages.length === 0 || chatIsRunning
@@ -132,6 +146,7 @@
         :retry-info="retryInfo"
         :recovery-info="recoveryInfo"
         :workspace-root="activeWorkspace?.rootPath ?? ''"
+        :show-reasoning="showReasoning"
         @grant-permission="handleSkillPermissionGrant"
         @deny-permission="handleSkillPermissionDeny"
         @approve-plan="handleApprovePlan"
@@ -1194,6 +1209,50 @@ const availableModels = ref<OpenAIModel[]>([]);
 // User's selected model id. Sent on every stream request. Resolved on mount
 // via: saved localStorage choice → server default_model → first model id.
 const selectedModel = ref<string | undefined>(undefined);
+
+// ---------------------------------------------------------------------------
+// Reasoning visibility toggle (global preference, localStorage-backed).
+// Survives app restarts; sent on each stream request so the main process can
+// add the server `reasoning` option and persist reasoning metadata.
+// ---------------------------------------------------------------------------
+const SHOW_REASONING_STORAGE_KEY = "aiChatV2.showReasoning";
+// Cap live-streamed reasoning length in the renderer (mirrors the persisted
+// 32 KB cap in AIChatQueryEngine) so a misbehaving upstream can't OOM the view.
+const REASONING_LIVE_MAX_CHARS = 32 * 1024;
+const showReasoning = ref<boolean>(
+  (() => {
+    try {
+      return window.localStorage.getItem(SHOW_REASONING_STORAGE_KEY) === "true";
+    } catch {
+      return false;
+    }
+  })()
+);
+const reasoningSaving = ref(false);
+const toggleReasoning = (): void => {
+  reasoningSaving.value = true;
+  const next = !showReasoning.value;
+  try {
+    if (next) {
+      window.localStorage.setItem(SHOW_REASONING_STORAGE_KEY, "true");
+    } else {
+      window.localStorage.removeItem(SHOW_REASONING_STORAGE_KEY);
+    }
+  } catch {
+    /* localStorage unavailable — keep in-memory state only */
+  }
+  showReasoning.value = next;
+  // Preference save is synchronous local storage; release the disabled state
+  // on the next microtask so the button's loading flicker stays brief.
+  queueMicrotask(() => {
+    reasoningSaving.value = false;
+  });
+};
+const reasoningToggleTitle = computed(() =>
+  showReasoning.value
+    ? t("aiChatV2.hide_reasoning") || "Hide reasoning"
+    : t("aiChatV2.show_reasoning") || "Show reasoning"
+);
 
 const resolveContextWindowLocal = (model?: string): number =>
   resolveContextWindow(modelContextWindows.value, model);
@@ -2614,6 +2673,10 @@ const onSend = async (
       mode: requestMode,
       model: resolveModelForRequest(),
       toolApprovalMode: toolApprovalMode.value,
+      showReasoning: showReasoning.value,
+      reasoning: showReasoning.value
+        ? { enabled: true, summary: "auto" }
+        : undefined,
     };
     if (uploadedFiles && uploadedFiles.length > 0) {
       streamRequest.uploadedFiles = uploadedFiles;
@@ -2669,6 +2732,51 @@ const onSend = async (
                 delayMs: chunk.retryDelayMs ?? 0,
               },
             });
+          }
+        } else if (
+          chunk.eventType === "reasoning_delta" &&
+          chunk.reasoningDelta
+        ) {
+          // Toggle off → ignore reasoning entirely (PRD UX-2): don't build
+          // metadata, don't touch assistant.content, never route to voice.
+          if (!showReasoning.value) {
+            return;
+          }
+          // Cap live accumulation to bound renderer work on very long reasoning
+          // (matches the persisted 32 KB cap; without this a misbehaving
+          // upstream could jank/OOM the renderer via per-delta concat + spread).
+          const prevReasoning = assistant.metadata?.reasoning?.content ?? "";
+          if (prevReasoning.length >= REASONING_LIVE_MAX_CHARS) {
+            return;
+          }
+          patchConversationRuntimeState(streamConversationId, {
+            receivedFirstResponse: true,
+            retryInfo: null,
+            recoveryInfo: null,
+          });
+          ensureAssistantAdded();
+          const combined = prevReasoning + chunk.reasoningDelta;
+          const over = combined.length > REASONING_LIVE_MAX_CHARS;
+          assistant.metadata = {
+            ...(assistant.metadata ?? { source: "chat-v2" }),
+            reasoning: {
+              content: over
+                ? combined.slice(0, REASONING_LIVE_MAX_CHARS)
+                : combined,
+              format: "plain_text",
+              source: "server",
+              model: chunk.model,
+              truncated: over,
+            },
+          };
+          const reasoningIdx = messages.value.findIndex(
+            (m) => m.id === assistant.id
+          );
+          if (reasoningIdx !== -1) {
+            messages.value[reasoningIdx] = {
+              ...messages.value[reasoningIdx],
+              metadata: assistant.metadata,
+            };
           }
         } else if (chunk.eventType === "recovery_status") {
           // Seven-layer recovery status. Show the badge but keep streaming.
