@@ -806,7 +806,16 @@ async function handleConversations(
     const searchQuery =
       typeof req.searchQuery === "string" ? req.searchQuery : undefined;
     const module = new AIChatV2Module();
-    return ok(await module.getConversations(searchQuery));
+    const summaries = await module.getConversations(searchQuery);
+    const engine = getQueryEngine();
+    return ok(
+      summaries.map((summary) => ({
+        ...summary,
+        runtimeStatus: engine.getConversationRuntimeStatus(
+          summary.conversationId
+        ),
+      }))
+    );
   } catch (err) {
     return denied(userSafeError(err));
   }
@@ -846,6 +855,8 @@ async function handleHistory(
       conversationId,
       messages: views,
       totalMessages: views.length,
+      runtimeStatus:
+        getQueryEngine().getConversationRuntimeStatus(conversationId),
     });
   } catch (err) {
     return denied(userSafeError(err));

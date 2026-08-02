@@ -51,6 +51,13 @@ export interface ChatV2ReasoningMetadata {
 
 export type ChatV2GeneratedImage = OpenAIChatImage;
 
+/** Authoritative main-process lifecycle state for a conversation turn. */
+export type ChatV2RuntimeStatus =
+  | "idle"
+  | "running"
+  | "awaiting_permission"
+  | "awaiting_user";
+
 // ---------------------------------------------------------------------------
 // Attachment types
 // ---------------------------------------------------------------------------
@@ -210,6 +217,7 @@ export interface ChatV2ConversationSummary {
   createdAt: string;
   planStatus?: AIChatPlanStatus;
   activePlanId?: string;
+  runtimeStatus?: ChatV2RuntimeStatus;
 }
 
 /** Single message view rendered by the UI. */
@@ -229,6 +237,7 @@ export interface ChatV2HistoryResponse {
   conversationId: string;
   messages: ChatV2MessageView[];
   totalMessages: number;
+  runtimeStatus: ChatV2RuntimeStatus;
 }
 
 /** App-level stream chunk sent over IPC to the renderer. */

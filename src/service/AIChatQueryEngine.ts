@@ -59,6 +59,7 @@ import type {
   ChatV2AttachmentKind,
   ChatV2AttachmentMetadata,
   ChatV2MessageMetadata,
+  ChatV2RuntimeStatus,
 } from "@/entityTypes/aiChatV2Types";
 import type {
   OpenAITextContentPart,
@@ -235,6 +236,22 @@ export class AIChatQueryEngine {
     this.autoDreamService = deps?.autoDreamService;
     this.workspaceAutoDreamService = deps?.workspaceAutoDreamService;
     this.generatedImageStorage = deps?.generatedImageStorage;
+  }
+
+  /** Return main-process truth for a conversation's current turn. */
+  getConversationRuntimeStatus(
+    conversationId: string
+  ): ChatV2RuntimeStatus {
+    if (this.pendingPermission?.conversationId === conversationId) {
+      return "awaiting_permission";
+    }
+    if (this.pendingPlanQuestion?.conversationId === conversationId) {
+      return "awaiting_user";
+    }
+    if (this.currentConversationId === conversationId) {
+      return "running";
+    }
+    return "idle";
   }
 
   /**

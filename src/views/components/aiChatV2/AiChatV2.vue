@@ -434,7 +434,7 @@
               </v-list-item-subtitle>
               <template v-slot:append>
                 <v-progress-circular
-                  v-if="isConversationRunning(conv.conversationId)"
+                  v-if="isConversationRunning(conv)"
                   indeterminate
                   size="16"
                   width="2"
@@ -477,6 +477,7 @@ import type {
   ChatV2AttachmentKind,
   ChatV2AttachmentMetadata,
   ChatToolApprovalMode,
+  ChatV2RuntimeStatus,
 } from "@/entityTypes/aiChatV2Types";
 import type {
   AIChatPlanStateView,
@@ -626,6 +627,7 @@ const conversations = ref<ChatV2ConversationSummary[]>([]);
 const activeConversationId = ref<string | null>(null);
 const messages = ref<ChatV2MessageView[]>([]);
 const isStreaming = ref(false);
+const authoritativeRuntimeStatus = ref<ChatV2RuntimeStatus>("idle");
 const streamError = ref<string | null>(null);
 const activeAssistantMessageId = ref<string | null>(null);
 // Flipped to true once the first visible AI chunk (token/tool_call/etc)
@@ -770,6 +772,20 @@ const markConversationRuntimeStopped = (
 
 const markActiveConversationRuntimeStopped = (errorMessage?: string): void => {
   markConversationRuntimeStopped(activeConversationId.value, errorMessage);
+};
+
+const setAuthoritativeRuntimeStatus = (
+  conversationId: string,
+  status: ChatV2RuntimeStatus
+): void => {
+  conversations.value = conversations.value.map((conversation) =>
+    conversation.conversationId === conversationId
+      ? { ...conversation, runtimeStatus: status }
+      : conversation
+  );
+  if (activeConversationId.value === conversationId) {
+    authoritativeRuntimeStatus.value = status;
+  }
 };
 
 const activeMessageListController: MessageListController = {
@@ -1164,6 +1180,8 @@ watch(activeConversationId, (id) => {
 const conversationSearch = ref("");
 const searchingConversations = ref(false);
 let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+let runtimeStatusPollTimer: ReturnType<typeof setTimeout> | null = null;
+const RUNTIME_STATUS_POLL_MS = 1_000;
 
 // ---------------------------------------------------------------------------
 // Context usage tracking
@@ -1428,6 +1446,12 @@ function openAIProviderSettings(): void {
 const hasLoadedPendingToolExecution = computed(() => {
   const conversationId = activeConversationId.value;
   if (!conversationId) return false;
+  if (
+    !isStreaming.value &&
+    authoritativeRuntimeStatus.value !== "running"
+  ) {
+    return false;
+  }
   if (stoppedPendingToolConversationIds.value.has(conversationId)) {
     return false;
   }
@@ -1435,7 +1459,8 @@ const hasLoadedPendingToolExecution = computed(() => {
 });
 
 const chatIsRunning = computed(
-  () => isStreaming.value || hasLoadedPendingToolExecution.value
+  () =>
+    isStreaming.value || authoritativeRuntimeStatus.value === "running"
 );
 
 const hasAnyActiveStream = computed(() => {
@@ -1450,10 +1475,11 @@ const hasAnyActiveStream = computed(() => {
  * the user has switched away from it. Pending tool execution is only known for
  * the currently loaded conversation history, so that remains active-only.
  */
-const isConversationRunning = (conversationId: string): boolean =>
-  conversationRuntime.value.get(conversationId)?.isStreaming === true ||
-  (conversationId === activeConversationId.value &&
-    hasLoadedPendingToolExecution.value);
+const isConversationRunning = (
+  conversation: ChatV2ConversationSummary
+): boolean =>
+  conversationRuntime.value.get(conversation.conversationId)?.isStreaming ===
+    true || conversation.runtimeStatus === "running";
 
 const isPermissionPromptMessage = (message: ChatV2MessageView): boolean => {
   if (message.messageType !== MessageType.TOOL_RESULT) return false;
@@ -1539,7 +1565,8 @@ const pinnedPermissionResumeInFlight = computed(() => {
 // the next text token) so the user sees the AI is still working.
 const showTypingIndicator = computed(() => {
   if (hasLoadedPendingToolExecution.value) return true;
-  if (!isStreaming.value) return false;
+  if (!chatIsRunning.value) return false;
+  if (!isStreaming.value) return true;
   if (!receivedFirstResponse.value) return true;
   // Between tool rounds: last message is a tool call/result with no
   // active text streaming — show dots so the user knows the AI is processing.
@@ -1710,11 +1737,117 @@ const mapStreamErrorMessage = (raw: string): string => {
 
 const loadConversations = async (): Promise<void> => {
   try {
-    conversations.value = await getChatV2Conversations();
+    const nextConversations = await getChatV2Conversations();
+    conversations.value = nextConversations;
+    reconcileConversationRuntimeStatuses(nextConversations);
+    scheduleRuntimeStatusPoll();
   } catch {
     // non-fatal; leave list empty
   }
 };
+
+function reconcileConversationRuntimeStatuses(
+  nextConversations: ChatV2ConversationSummary[]
+): void {
+  const activeSummary = nextConversations.find(
+    (conversation) =>
+      conversation.conversationId === activeConversationId.value
+  );
+  if (!isStreaming.value) {
+    authoritativeRuntimeStatus.value =
+      activeSummary?.runtimeStatus ?? "idle";
+  }
+
+  for (const conversation of nextConversations) {
+    if (conversation.runtimeStatus === "running") continue;
+    const runtime = conversationRuntime.value.get(conversation.conversationId);
+    const isAttachedActiveStream =
+      conversation.conversationId === activeConversationId.value &&
+      isStreaming.value;
+    if (runtime?.isStreaming && !isAttachedActiveStream) {
+      markConversationRuntimeStopped(conversation.conversationId);
+    }
+  }
+}
+
+function needsRuntimeStatusPoll(): boolean {
+  return conversations.value.some((conversation) => {
+    if (conversation.runtimeStatus !== "running") return false;
+    return !(
+      conversation.conversationId === activeConversationId.value &&
+      isStreaming.value
+    );
+  });
+}
+
+function stopRuntimeStatusPoll(): void {
+  if (!runtimeStatusPollTimer) return;
+  clearTimeout(runtimeStatusPollTimer);
+  runtimeStatusPollTimer = null;
+}
+
+function scheduleRuntimeStatusPoll(): void {
+  if (runtimeStatusPollTimer || !needsRuntimeStatusPoll()) return;
+  runtimeStatusPollTimer = setTimeout(() => {
+    runtimeStatusPollTimer = null;
+    void pollRuntimeStatuses();
+  }, RUNTIME_STATUS_POLL_MS);
+}
+
+async function pollRuntimeStatuses(): Promise<void> {
+  const previousActiveStatus = authoritativeRuntimeStatus.value;
+  try {
+    const detachedRunningConversations = conversations.value.filter(
+      (conversation) =>
+        conversation.runtimeStatus === "running" &&
+        !(
+          conversation.conversationId === activeConversationId.value &&
+          isStreaming.value
+        )
+    );
+    const statusResults = await Promise.all(
+      detachedRunningConversations.map(async (conversation) => ({
+        conversationId: conversation.conversationId,
+        history: await getChatV2History(conversation.conversationId),
+      }))
+    );
+    const statusByConversation = new Map(
+      statusResults
+        .filter((result) => result.history !== null)
+        .map((result) => [
+          result.conversationId,
+          result.history?.runtimeStatus ?? "idle",
+        ])
+    );
+    const nextConversations = conversations.value.map((conversation) => ({
+      ...conversation,
+      runtimeStatus:
+        statusByConversation.get(conversation.conversationId) ??
+        conversation.runtimeStatus,
+    }));
+    conversations.value = nextConversations;
+    reconcileConversationRuntimeStatuses(nextConversations);
+    const reachedTerminalStatus = statusResults.some(
+      (result) =>
+        result.history !== null && result.history?.runtimeStatus !== "running"
+    );
+    if (
+      previousActiveStatus === "running" &&
+      authoritativeRuntimeStatus.value !== "running" &&
+      activeConversationId.value &&
+      !isStreaming.value
+    ) {
+      await loadHistory(activeConversationId.value);
+    }
+    if (reachedTerminalStatus) {
+      await loadConversations();
+    }
+  } catch {
+    // A transient status-query failure should not change the visible state.
+  } finally {
+    scheduleRuntimeStatusPoll();
+  }
+}
 
 /**
  * Debounced conversation search. Empty query reloads the full list;
@@ -1733,6 +1866,8 @@ const runConversationSearch = (query: string): void => {
       conversations.value = await getChatV2Conversations(
         q.length > 0 ? q : undefined
       );
+      reconcileConversationRuntimeStatuses(conversations.value);
+      scheduleRuntimeStatusPoll();
     } catch {
       // non-fatal; keep previous list
     } finally {
@@ -1759,6 +1894,10 @@ const loadHistory = async (conversationId: string): Promise<void> => {
   try {
     const resp = await getChatV2History(conversationId);
     if (activeConversationId.value !== conversationId) return;
+    setAuthoritativeRuntimeStatus(
+      conversationId,
+      resp?.runtimeStatus ?? "idle"
+    );
     // Persisted tool-result rows store only the raw `toolResult` (with the
     // artifact nested under .artifact), not the renderer's `metadata.artifact`
     // shortcut. Re-derive it on load so artifact cards reappear on history
@@ -1835,6 +1974,7 @@ const loadHistory = async (conversationId: string): Promise<void> => {
 const onNewConversation = (): void => {
   activeConversationId.value = null;
   messages.value = [];
+  authoritativeRuntimeStatus.value = "idle";
   resetActiveRuntimeFields();
   applyPlanState(null);
   pendingQuestion.value = null;
@@ -1868,6 +2008,10 @@ const onSelectConversation = (conversationId: string): void => {
   speechController.stop();
   detachActiveStreamView();
   activeConversationId.value = conversationId;
+  authoritativeRuntimeStatus.value =
+    conversations.value.find(
+      (conversation) => conversation.conversationId === conversationId
+    )?.runtimeStatus ?? "idle";
   const runtime = conversationRuntime.value.get(conversationId);
   if (runtime) {
     applyRuntimeFieldsToActive(runtime, { applyMessages: true });
@@ -1877,6 +2021,7 @@ const onSelectConversation = (conversationId: string): void => {
   }
   showConversationsDialog.value = false;
   void loadHistory(conversationId);
+  scheduleRuntimeStatusPoll();
 };
 
 const detachActiveStreamView = (): void => {
@@ -1894,6 +2039,7 @@ const onStop = (): void => {
   const conversationId = activeConversationId.value;
   if (conversationId) {
     markActiveConversationRuntimeStopped();
+    setAuthoritativeRuntimeStatus(conversationId, "idle");
     stoppedPendingToolConversationIds.value = new Set([
       ...stoppedPendingToolConversationIds.value,
       conversationId,
@@ -2623,6 +2769,7 @@ const onSend = async (
     retryInfo: null,
     recoveryInfo: null,
   });
+  setAuthoritativeRuntimeStatus(streamConversationId, "running");
   // Seed the live context estimate from the last known server usage. If no
   // usage_update has arrived yet this session, fall back to the existing
   // streaming estimate (e.g. seeded from persisted tokensUsed on history
@@ -2959,6 +3106,7 @@ const onSend = async (
           retryInfo: null,
           recoveryInfo: null,
         });
+        setAuthoritativeRuntimeStatus(streamConversationId, "idle");
         // Snap to ground-truth usage carried by the complete event so the
         // badge reflects the real context size even if usage_update chunks
         // didn't fire during the stream (some servers only report usage on
@@ -3072,6 +3220,7 @@ const onSend = async (
           recoveryInfo: null,
           streamError: displayMessage,
         });
+        setAuthoritativeRuntimeStatus(streamConversationId, "idle");
         showAssistantError(displayMessage);
       }
     );
@@ -3088,6 +3237,7 @@ const onSend = async (
         recoveryInfo: null,
         streamError: displayMessage,
       });
+      setAuthoritativeRuntimeStatus(streamConversationId, "idle");
       showAssistantError(displayMessage);
     }
   }
@@ -3375,6 +3525,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   speechController.stop();
   unsubscribeSpeaking();
+  stopRuntimeStatusPoll();
   detachActiveStreamView();
   window.removeEventListener(
     AI_PROVIDER_SETTINGS_CHANGED_EVENT,
