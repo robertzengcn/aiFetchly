@@ -312,6 +312,49 @@ describe("AI Chat V2 IPC handlers", () => {
     expect(result).toMatchObject({ status: true });
   });
 
+  it("loads assistant history content and reasoning from renderer object payloads", async () => {
+    mockGetConversationMessages.mockResolvedValueOnce([
+      {
+        messageId: "assistant-history-1",
+        conversationId: "v2-1",
+        role: "assistant",
+        content: "Historical answer",
+        timestamp: "2026-08-02T08:00:00.000Z",
+        messageType: "message",
+        model: "gpt-test",
+        tokensUsed: 42,
+        metadata: JSON.stringify({
+          reasoning: {
+            content: "Historical reasoning",
+            format: "plain_text",
+            source: "server",
+            truncated: false,
+          },
+        }),
+      },
+    ]);
+
+    const result = await mockIpcMain.callHandler(
+      AI_CHAT_V2_HISTORY,
+      {},
+      { conversationId: "v2-1" }
+    );
+
+    expect(result).toMatchObject({ status: true });
+    const data = (result as { data: { messages: unknown[] } }).data;
+    expect(data.messages).toHaveLength(1);
+    expect(data.messages[0]).toMatchObject({
+      content: "Historical answer",
+      timestamp: "2026-08-02T08:00:00.000Z",
+      metadata: {
+        source: "chat-v2",
+        reasoning: {
+          content: "Historical reasoning",
+        },
+      },
+    });
+  });
+
   it("clears a conversation through the module", async () => {
     const result = await mockIpcMain.callHandler(
       AI_CHAT_V2_CLEAR_CONVERSATION,
