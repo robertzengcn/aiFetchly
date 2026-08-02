@@ -232,6 +232,11 @@ export interface ModuleExecutionContext {
   /** Server-assigned tool call ID for correlating request/response. */
   readonly toolCallId: string;
   /**
+   * When true, the caller already obtained user consent for this exact tool
+   * call. Nested ToolExecutor calls must not prompt again.
+   */
+  readonly skipPermissionCheck?: boolean;
+  /**
    * Emits a progress event for this tool call. Optional — when absent the
    * module should silently skip (no crash, no behavior change).
    */
