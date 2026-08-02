@@ -123,7 +123,7 @@ module.exports = {
       // @xenova/transformers + onnxruntime-* + sharp ship native/WASM/.so artifacts that cannot load
       // from inside app.asar, so they must be unpacked alongside better-sqlite3/sqlite-vec.
       unpackDir:
-        "**/{.vite,node_modules/better-sqlite3,node_modules/sqlite3,node_modules/sqlite-vec,node_modules/@xenova/transformers,node_modules/onnxruntime-node,node_modules/onnxruntime-common,node_modules/sharp,node_modules/sherpa-onnx-node,node_modules/sherpa-onnx-darwin-arm64,node_modules/sherpa-onnx-darwin-x64,node_modules/sherpa-onnx-linux-arm64,node_modules/sherpa-onnx-linux-x64,node_modules/sherpa-onnx-win-ia32,node_modules/sherpa-onnx-win-x64}/**",
+        "**/{.vite,dist/childprocess,node_modules/better-sqlite3,node_modules/sqlite3,node_modules/sqlite-vec,node_modules/@xenova/transformers,node_modules/onnxruntime-node,node_modules/onnxruntime-common,node_modules/sharp,node_modules/sherpa-onnx-node,node_modules/sherpa-onnx-darwin-arm64,node_modules/sherpa-onnx-darwin-x64,node_modules/sherpa-onnx-linux-arm64,node_modules/sherpa-onnx-linux-x64,node_modules/sherpa-onnx-win-ia32,node_modules/sherpa-onnx-win-x64}/**",
       unpack:
         "**/{vec0.*,node_modules/sherpa-onnx-darwin-arm64/*,node_modules/sherpa-onnx-darwin-x64/*,node_modules/sherpa-onnx-linux-arm64/*,node_modules/sherpa-onnx-linux-x64/*,node_modules/sherpa-onnx-win-ia32/*,node_modules/sherpa-onnx-win-x64/*}",
     },
@@ -141,6 +141,11 @@ module.exports = {
         KEEP_FILE.keep = true;
       if (!KEEP_FILE.keep && filePath === "/.vite") KEEP_FILE.keep = true;
       if (!KEEP_FILE.keep && filePath.startsWith("/.vite/"))
+        KEEP_FILE.keep = true;
+      if (!KEEP_FILE.keep && filePath === "/dist") KEEP_FILE.keep = true;
+      if (!KEEP_FILE.keep && filePath === "/dist/childprocess")
+        KEEP_FILE.keep = true;
+      if (!KEEP_FILE.keep && filePath.startsWith("/dist/childprocess/"))
         KEEP_FILE.keep = true;
       if (!KEEP_FILE.keep && filePath.startsWith("/node_modules/")) {
         // check if matches any of the external dependencies

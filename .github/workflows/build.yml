@@ -129,6 +129,7 @@ jobs:
           export NODE_OPTIONS="--max-old-space-size=4096"
           echo "Building with increased heap size (4GB)"
           yarn make-win:test
+          node scripts/verify-packaged-childprocess.js
         shell: bash
 
       - name: Upload artifact
@@ -511,6 +512,10 @@ jobs:
           yarn make-mac:test 2>&1 | tee build.log
 
           BUILD_EXIT_CODE=${PIPESTATUS[0]}
+          if [ ${BUILD_EXIT_CODE} -eq 0 ]; then
+            node scripts/verify-packaged-childprocess.js
+            BUILD_EXIT_CODE=$?
+          fi
           echo "=== Build process completed ==="
           echo "Build exit code: ${BUILD_EXIT_CODE}"
 
