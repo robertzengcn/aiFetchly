@@ -1273,7 +1273,10 @@ watch(isStreaming, (streaming) => {
  */
 function handleScheduledStream(event: ChatV2ScheduledStreamEvent): void {
   if (event.conversationId !== activeConversationId.value) return;
-  if (isStreaming.value) return;
+  // Defer when the conversation has any active interactive turn (streaming OR
+  // a pending tool-permission prompt) so scheduled tokens never render beside
+  // an interactive bubble/card.
+  if (chatIsRunning.value) return;
   if (event.kind === "token") {
     const delta = event.contentDelta ?? "";
     if (

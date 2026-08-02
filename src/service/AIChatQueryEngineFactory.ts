@@ -25,17 +25,20 @@ import type { AiMessageTaskToolPolicy } from "@/entityTypes/aiMessageTaskTypes";
  */
 export class AIChatQueryEngineFactory {
   /**
-   * Create a dedicated engine for a scheduled occurrence. Tool execution is
-   * task-scoped (design §13.3): only allowlisted, policy-approved built-in
-   * tools run with auto-approval; everything else returns a structured failed
-   * tool result so the model continues. No interactive permission prompt is
-   * ever shown (FR-16).
+   * Create a dedicated engine for a scheduled occurrence. Tool exposure AND
+   * execution are task-scoped (FR-16): only allowlisted, policy-approved
+   * built-in tools are advertised to the model and run with auto-approval;
+   * everything else is filtered out of the catalog and, as a backstop, returns
+   * a structured failed tool result if somehow called. No interactive
+   * permission prompt is ever shown.
    *
    * Optional interactive services (compact agent, auto-dream) are omitted — the
    * engine runs fine without them; all deps are optional.
    */
   createScheduled(policy: AiMessageTaskToolPolicy): AIChatQueryEngine {
-    return new AIChatQueryEngine(this.createQueryLoop(policy), {});
+    return new AIChatQueryEngine(this.createQueryLoop(policy), {
+      toolFilter: (name) => this.isToolAllowed(name, policy),
+    });
   }
 
   /** Build the production query loop with task-scoped tool enforcement. */
@@ -57,13 +60,24 @@ export class AIChatQueryEngineFactory {
   }
 
   /**
-   * Task-scoped tool executor for scheduled (unattended) turns.
-   *
-   * 1. Confirm the requested tool exists in the registry.
-   * 2. Revalidate it against the task policy via canAutoApproveScheduledTool.
-   * 3. Execute with skipPermissionCheck only when allowed.
-   * 4. Otherwise return a structured failed tool result so the model can
-   *    continue. Never opens an interactive permission prompt (FR-16).
+   * Task-scoped policy check shared by the catalog filter and the execution
+   * guard. True only for allowlisted, policy-approved built-in tools.
+   */
+  private isToolAllowed(name: string, policy: AiMessageTaskToolPolicy): boolean {
+    const skill = SkillRegistry.getSkill(name);
+    if (!skill || skill.source !== "built-in") return false;
+    return canAutoApproveScheduledTool({
+      skill,
+      taskPolicy: policy,
+      toolName: name,
+    }).allowed;
+  }
+
+  /**
+   * Task-scoped tool executor for scheduled (unattended) turns — the execution
+   * backstop behind the catalog filter. Revalidates the tool against the task
+   * policy and returns a structured failed tool result when blocked so the
+   * model can continue. Never opens an interactive permission prompt (FR-16).
    */
   private async executeScheduledTool(
     name: string,
@@ -71,20 +85,20 @@ export class AIChatQueryEngineFactory {
     context: Parameters<AIChatQueryLoopDeps["executeTool"]>[2],
     policy: AiMessageTaskToolPolicy
   ): Promise<ToolExecutionResult> {
-    const skill = SkillRegistry.getSkill(name);
-    if (!skill || skill.source !== "built-in") {
-      return this.blockedToolResult(name, context, `Tool "${name}" is not available.`);
-    }
-    const decision = canAutoApproveScheduledTool({
-      skill,
-      taskPolicy: policy,
-      toolName: name,
-    });
-    if (!decision.allowed) {
+    if (!this.isToolAllowed(name, policy)) {
+      const skill = SkillRegistry.getSkill(name);
+      const reason =
+        skill && skill.source === "built-in"
+          ? canAutoApproveScheduledTool({
+              skill,
+              taskPolicy: policy,
+              toolName: name,
+            }).reason
+          : `Tool "${name}" is not available.`;
       return this.blockedToolResult(
         name,
         context,
-        decision.reason ?? `Tool "${name}" is blocked by the scheduled task policy.`
+        reason ?? `Tool "${name}" is blocked by the scheduled task policy.`
       );
     }
     return SkillExecutor.execute(name, args, {

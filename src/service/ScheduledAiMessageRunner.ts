@@ -459,19 +459,17 @@ export class ScheduledAiMessageRunner {
           }
         );
       }
-      if (assistantMessageId) {
-        await this.runModule.updateRunStatus(
-          runId,
-          status === "completed" ? "completed" : "failed",
-          {
-            assistant_message_id: assistantMessageId,
-            error_code: resultErrorCode ?? null,
-            delivery_state: "persisted",
-            finished_at: finishedAt,
-            duration_ms: durationMs,
-          } as never
-        );
-      }
+      // Persist the precise terminal status + link the chat message row +
+      // delivery state. This honors the §17.3 status mapping (failed vs
+      // blocked_by_policy vs cancelled) and runs regardless of whether an
+      // assistant row was produced.
+      await this.runModule.updateRunStatus(runId, status, {
+        assistant_message_id: assistantMessageId ?? null,
+        error_code: resultErrorCode ?? null,
+        delivery_state: "persisted",
+        finished_at: finishedAt,
+        duration_ms: durationMs,
+      } as never);
     } catch {
       // Persistence failures are logged by the module; the run is best-effort.
     }

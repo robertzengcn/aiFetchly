@@ -178,6 +178,11 @@ export interface AIChatQueryEngineDeps {
       images: OpenAIChatImage[];
     }): Promise<OpenAIChatImage[]>;
   };
+  /** Optional filter scoping which built-in tool schemas the engine advertises
+   * to the model. Scheduled (unattended) profiles use this to expose only
+   * task-policy-approved tools (FR-16), narrowing the prompt-injection surface
+   * beyond the executeTool guard. */
+  toolFilter?: (toolName: string) => boolean;
 }
 
 /**
@@ -196,6 +201,11 @@ export class AIChatQueryEngine {
   private readonly autoDreamService?: AIAutoDreamService;
   private readonly workspaceAutoDreamService?: AIWorkspaceAutoDreamService;
   private readonly generatedImageStorage?: AIChatQueryEngineDeps["generatedImageStorage"];
+  /** Optional filter that scopes which tool schemas the engine advertises to
+   * the model. Used by the scheduled (unattended) profile to expose only
+   * task-policy-approved tools (FR-16), narrowing the prompt-injection
+   * surface beyond the executeToken guard. */
+  private readonly toolFilter?: (toolName: string) => boolean;
   private readonly pendingEventSaves = new WeakMap<
     AIChatQueryEventSink,
     Promise<unknown>[]
@@ -213,6 +223,7 @@ export class AIChatQueryEngine {
     this.autoDreamService = deps?.autoDreamService;
     this.workspaceAutoDreamService = deps?.workspaceAutoDreamService;
     this.generatedImageStorage = deps?.generatedImageStorage;
+    this.toolFilter = deps?.toolFilter;
   }
 
   /**
@@ -677,7 +688,13 @@ export class AIChatQueryEngine {
     // ------------------------------------------------------------------
     // 4. Resolve tools (skills + plan mode tools)
     // ------------------------------------------------------------------
-    const toolFunctions = await SkillRegistry.getAllToolFunctions();
+    const allToolFunctions = await SkillRegistry.getAllToolFunctions();
+    // Scheduled (unattended) profiles scope the advertised catalog to
+    // task-policy-approved tools so the model only sees tools it may call
+    // (FR-16); the executeTool guard remains the safety backstop.
+    const toolFunctions = this.toolFilter
+      ? allToolFunctions.filter((t) => this.toolFilter!(t.name))
+      : allToolFunctions;
     const openAITools = toOpenAITools(toolFunctions);
 
     // Resolve auto-plan config. Only active in plain chat mode (not when the
