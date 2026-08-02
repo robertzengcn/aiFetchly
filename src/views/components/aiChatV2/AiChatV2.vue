@@ -65,6 +65,7 @@
           </v-icon>
         </v-btn>
         <v-btn
+          v-if="showCompactConversationButton"
           icon
           size="small"
           variant="text"
@@ -1255,6 +1256,10 @@ const contextUsedTokens = computed(
 
 const contextTotalTokens = computed(() =>
   resolveContextWindowLocal(effectiveModel.value)
+);
+
+const showCompactConversationButton = computed(
+  () => contextPercent.value >= 80
 );
 
 const loadModelContextWindows = async (

@@ -11,7 +11,12 @@
   </div>
   <div v-else class="v2-message" :class="`v2-message--${message.role}`">
     <div class="v2-message__bubble">
-      <div class="v2-message__role">{{ roleLabel }}</div>
+      <div class="v2-message__meta">
+        <span class="v2-message__role">{{ roleLabel }}</span>
+        <span v-if="messageTime" class="v2-message__time">
+          {{ messageTime }}
+        </span>
+      </div>
       <template v-if="message.messageType === MessageType.TOOL_CALL">
         <div class="v2-message__tool-header">
           <v-icon size="small" color="purple" class="mr-1">mdi-toolbox</v-icon>
@@ -278,6 +283,12 @@ const roleLabel = computed(() => {
 
 const status = computed<Status>(() => props.status ?? "idle");
 const disabled = computed(() => props.disabled ?? false);
+
+const messageTime = computed(() => {
+  const parsed = Date.parse(props.message.timestamp);
+  if (Number.isNaN(parsed)) return "";
+  return new Date(parsed).toLocaleString();
+});
 
 interface RenderableGeneratedImage {
   key: string;
@@ -575,10 +586,23 @@ const mentionChips = computed<MentionChip[]>(() => {
 .v2-message--user .v2-message__bubble {
   background: rgba(25, 118, 210, 0.12);
 }
-.v2-message__role {
+.v2-message__meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
   font-size: 11px;
   opacity: 0.6;
-  margin-bottom: 2px;
+  margin-bottom: 4px;
+}
+.v2-message--user .v2-message__meta {
+  justify-content: flex-end;
+}
+.v2-message__role {
+  font-weight: 600;
+}
+.v2-message__time {
+  white-space: nowrap;
 }
 .v2-message__content {
   white-space: pre-wrap;
