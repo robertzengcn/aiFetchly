@@ -184,8 +184,12 @@ export class ScheduledAiMessageRunner {
     readonly taskId: number;
     readonly scheduleId: number;
     readonly runId: number;
+    readonly occurrence: number;
+    readonly catchUp: boolean;
+    readonly scheduledFor: Date;
   }): Promise<ScheduledAiMessageRunResult> {
-    const { taskId, scheduleId, runId } = input;
+    const { taskId, scheduleId, runId, occurrence, catchUp, scheduledFor } =
+      input;
     const startedAt = new Date();
     const token = new Token();
 
@@ -300,7 +304,10 @@ export class ScheduledAiMessageRunner {
 
       // 6-9. Execute through the query engine; the engine persists user +
       // assistant messages in the originating conversation. Tool execution is
-      // task-scoped (FR-16): only allowlisted policy-approved tools run.
+      // task-scoped (FR-16): only allowlisted policy-approved tools run. The
+      // scheduled context supplies stable message IDs + trusted metadata that
+      // the renderer cannot forge, and makes the user/assistant rows idempotent
+      // across crash-retries (technical-design §14).
       const engine = new AIChatQueryEngineFactory().createScheduled(
         this.parseTaskPolicy(task)
       );
@@ -311,6 +318,17 @@ export class ScheduledAiMessageRunner {
           conversationId,
           message: task.message,
           model: task.model && task.model !== "auto" ? task.model : undefined,
+        },
+        scheduledContext: {
+          source: "scheduled_loop",
+          taskId,
+          scheduleId,
+          runId,
+          occurrence,
+          scheduledFor: scheduledFor.toISOString(),
+          catchUp,
+          userMessageId: `scheduled-user-${scheduleId}-${occurrence}`,
+          assistantMessageId: `scheduled-assistant-${scheduleId}-${occurrence}`,
         },
       });
       outcome = sink.getOutcome() ?? {

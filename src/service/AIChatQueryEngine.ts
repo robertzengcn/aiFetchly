@@ -59,6 +59,7 @@ import type {
   ChatV2AttachmentMetadata,
   ChatV2MessageMetadata,
 } from "@/entityTypes/aiChatV2Types";
+import type { AIChatScheduledTurnContext } from "@/entityTypes/aiChatScheduledLoopTypes";
 import type {
   OpenAITextContentPart,
   OpenAIImageUrlContentPart,
@@ -145,6 +146,14 @@ interface AttachmentPrepResult {
 export interface AIChatQuerySubmitInput {
   eventSink: AIChatQueryEventSink;
   request: ChatV2StreamRequest;
+  /**
+   * Trusted scheduled-turn context. Supplied only by main-process code (the
+   * scheduled runner); when present the engine uses the stable message IDs,
+   * tags the rows with scheduled-loop metadata, and requires an existing v2-*
+   * conversation (it does not create one). Renderer input cannot forge this
+   * object (technical-design §14.1).
+   */
+  scheduledContext?: AIChatScheduledTurnContext;
 }
 
 export interface AIChatQueryEngineDeps {
@@ -441,7 +450,7 @@ export class AIChatQueryEngine {
    * assemble tools, run the loop, and handle the result.
    */
   async submitMessage(input: AIChatQuerySubmitInput): Promise<void> {
-    const { eventSink, request } = input;
+    const { eventSink, request, scheduledContext } = input;
     const module = new AIChatV2Module();
     const planModule = new AIChatPlanModule();
 
@@ -558,21 +567,44 @@ export class AIChatQueryEngine {
       }
 
       // Build user-message metadata (source + attachments + @-mentions).
-      const userMetadata: ChatV2MessageMetadata = { source: "chat-v2" };
+      const userMetadata: ChatV2MessageMetadata = {
+        source: scheduledContext ? "scheduled-loop" : "chat-v2",
+      };
+      if (scheduledContext) {
+        userMetadata.scheduledLoop = {
+          scheduleId: scheduledContext.scheduleId,
+          taskId: scheduledContext.taskId,
+          runId: scheduledContext.runId,
+          occurrence: scheduledContext.occurrence,
+          scheduledFor: scheduledContext.scheduledFor,
+          catchUp: scheduledContext.catchUp,
+        };
+      }
       if (attachmentMetadata) userMetadata.attachments = attachmentMetadata;
       if (atMentionResolution.metadata.length > 0) {
         userMetadata.atMentions = atMentionResolution.metadata;
       }
       const hasUserMetadataBeyondSource =
-        !!attachmentMetadata || atMentionResolution.metadata.length > 0;
+        !!attachmentMetadata ||
+        atMentionResolution.metadata.length > 0 ||
+        !!scheduledContext;
 
       // Save user message (display text = attachment-enriched message; the
       // @-mention context block lives only in modelUserMessage for the model).
-      const savedUser = await module.saveUserMessage({
-        conversationId,
-        content: messageToSave,
-        metadata: hasUserMetadataBeyondSource ? userMetadata : undefined,
-      });
+      // Scheduled turns use a stable message id + insert-if-absent so a
+      // crash-retry does not duplicate the transcript row (technical-design §14.2).
+      const savedUser = scheduledContext
+        ? await module.saveUserMessageIfAbsent({
+            conversationId,
+            content: messageToSave,
+            messageId: scheduledContext.userMessageId,
+            metadata: userMetadata,
+          })
+        : await module.saveUserMessage({
+            conversationId,
+            content: messageToSave,
+            metadata: hasUserMetadataBeyondSource ? userMetadata : undefined,
+          });
 
       // Persist attachment bytes to DB (original file bytes, not the staged markdown).
       if (hasFiles) {
@@ -598,9 +630,9 @@ export class AIChatQueryEngine {
         currentUserContentParts,
       });
 
-      assistantMessageId = `assistant-${Date.now()}-${Math.random()
-        .toString(36)
-        .slice(2, 8)}`;
+      assistantMessageId = scheduledContext
+        ? scheduledContext.assistantMessageId
+        : `assistant-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       this.currentAssistantMessageId = assistantMessageId;
       messages = [...assembled.messages];
     } catch (err) {

@@ -472,6 +472,9 @@ export class BackgroundScheduler extends BaseDb {
         taskId: schedule.task_id,
         scheduleId: schedule.id,
         runId: claim.runId,
+        occurrence: claim.occurrence,
+        catchUp: claim.catchUp,
+        scheduledFor: claim.scheduledFor,
       });
     } catch (error) {
       console.error(`Error executing interval schedule ${schedule.id}:`, error);

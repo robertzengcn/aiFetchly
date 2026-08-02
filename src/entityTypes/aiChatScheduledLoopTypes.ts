@@ -169,6 +169,29 @@ export type ScheduledLoopErrorCode =
   | "RUN_INTERRUPTED";
 
 // ---------------------------------------------------------------------------
+// Trusted scheduled turn context (technical-design §14.1)
+// ---------------------------------------------------------------------------
+
+/**
+ * Trusted main-process turn context for a scheduled occurrence, supplied only
+ * by main-process code (the runner) — never renderer input. Carries the stable
+ * user/assistant message IDs and bounded identifiers the engine uses to persist
+ * the scheduled turn idempotently. Because the renderer cannot forge this
+ * object, it cannot forge schedule/run ownership metadata.
+ */
+export interface AIChatScheduledTurnContext {
+  readonly source: "scheduled_loop";
+  readonly taskId: number;
+  readonly scheduleId: number;
+  readonly runId: number;
+  readonly occurrence: number;
+  readonly scheduledFor: string;
+  readonly catchUp: boolean;
+  readonly userMessageId: string;
+  readonly assistantMessageId: string;
+}
+
+// ---------------------------------------------------------------------------
 // Model-layer records (technical-design §10)
 // ---------------------------------------------------------------------------
 
