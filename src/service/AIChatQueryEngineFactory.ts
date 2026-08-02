@@ -1,12 +1,15 @@
-import { AiChatApi } from "@/api/aiChatApi";
+import {
+  AiChatApi,
+  type ToolExecutionResult,
+} from "@/api/aiChatApi";
 import { SkillRegistry } from "@/config/skillsRegistry";
 import { SkillExecutor } from "@/service/SkillExecutor";
 import { AIChatQueryLoop } from "@/service/AIChatQueryLoop";
 import type { AIChatQueryLoopDeps } from "@/service/AIChatQueryLoop";
 import { AIChatQueryEngine } from "@/service/AIChatQueryEngine";
 import { AIChatModelFallbackService } from "@/service/AIChatModelFallbackService";
-import { AIChatToolApprovalModule } from "@/modules/AIChatToolApprovalModule";
-import { evaluateToolApproval } from "@/service/AIChatToolApprovalPolicyService";
+import { canAutoApproveScheduledTool } from "@/service/ScheduledAiToolPolicy";
+import type { AiMessageTaskToolPolicy } from "@/entityTypes/aiMessageTaskTypes";
 
 /**
  * Builds production {@link AIChatQueryEngine} instances for non-interactive
@@ -19,55 +22,31 @@ import { evaluateToolApproval } from "@/service/AIChatToolApprovalPolicyService"
  * interactive turn on the same engine instance. The shared
  * {@link AIChatConversationTurnCoordinator} prevents separate instances from
  * racing on one conversation (design §13.2).
- *
- * The loop deps mirror the interactive construction. Tool execution honors the
- * conversation's tool-approval mode; a scheduled turn that needs an
- * unapproved tool surfaces as a pause (FR-16) rather than an interactive prompt.
  */
 export class AIChatQueryEngineFactory {
   /**
-   * Create a dedicated engine for a scheduled occurrence. Optional interactive
-   * services (compact agent, auto-dream) are omitted — the engine runs fine
-   * without them; all deps are optional.
+   * Create a dedicated engine for a scheduled occurrence. Tool execution is
+   * task-scoped (design §13.3): only allowlisted, policy-approved built-in
+   * tools run with auto-approval; everything else returns a structured failed
+   * tool result so the model continues. No interactive permission prompt is
+   * ever shown (FR-16).
+   *
+   * Optional interactive services (compact agent, auto-dream) are omitted — the
+   * engine runs fine without them; all deps are optional.
    */
-  createScheduled(): AIChatQueryEngine {
-    return new AIChatQueryEngine(this.createQueryLoop(), {});
+  createScheduled(policy: AiMessageTaskToolPolicy): AIChatQueryEngine {
+    return new AIChatQueryEngine(this.createQueryLoop(policy), {});
   }
 
-  /** Build the production query loop with real service deps. */
-  private createQueryLoop(): AIChatQueryLoop {
+  /** Build the production query loop with task-scoped tool enforcement. */
+  private createQueryLoop(policy: AiMessageTaskToolPolicy): AIChatQueryLoop {
     const deps: AIChatQueryLoopDeps = {
       streamChatCompletion: (request, onChunk, options) => {
         const api = new AiChatApi();
         return api.openAIChatCompletionStream(request, onChunk, options);
       },
-      executeTool: (name, args, context) => {
-        // Honor the conversation's tool-approval mode; auto-approve eligible
-        // tools without an interactive prompt. Tools that require approval in
-        // ask_for_approval mode surface as a pause the scheduler handles.
-        if (context.conversationId) {
-          try {
-            const module = new AIChatToolApprovalModule();
-            const mode = module.getMode(context.conversationId);
-            if (mode !== "ask_for_approval") {
-              const decision = evaluateToolApproval({
-                conversationId: context.conversationId,
-                mode,
-                toolName: name,
-                isDependencyInstall: name.startsWith(
-                  "install_system_dependency"
-                ),
-              });
-              if (decision.autoApprove) {
-                context = { ...context, skipPermissionCheck: true };
-              }
-            }
-          } catch {
-            // Non-fatal: fall back to the normal permission flow.
-          }
-        }
-        return SkillExecutor.execute(name, args, context);
-      },
+      executeTool: (name, args, context) =>
+        this.executeScheduledTool(name, args, context, policy),
       getSkillDefinition: (name) => SkillRegistry.getSkill(name) ?? undefined,
       resolveFallbackModel: async ({ originalModel, currentModel, reason }) => {
         const svc = new AIChatModelFallbackService();
@@ -75,5 +54,57 @@ export class AIChatQueryEngineFactory {
       },
     };
     return new AIChatQueryLoop(deps);
+  }
+
+  /**
+   * Task-scoped tool executor for scheduled (unattended) turns.
+   *
+   * 1. Confirm the requested tool exists in the registry.
+   * 2. Revalidate it against the task policy via canAutoApproveScheduledTool.
+   * 3. Execute with skipPermissionCheck only when allowed.
+   * 4. Otherwise return a structured failed tool result so the model can
+   *    continue. Never opens an interactive permission prompt (FR-16).
+   */
+  private async executeScheduledTool(
+    name: string,
+    args: Record<string, unknown>,
+    context: Parameters<AIChatQueryLoopDeps["executeTool"]>[2],
+    policy: AiMessageTaskToolPolicy
+  ): Promise<ToolExecutionResult> {
+    const skill = SkillRegistry.getSkill(name);
+    if (!skill || skill.source !== "built-in") {
+      return this.blockedToolResult(name, context, `Tool "${name}" is not available.`);
+    }
+    const decision = canAutoApproveScheduledTool({
+      skill,
+      taskPolicy: policy,
+      toolName: name,
+    });
+    if (!decision.allowed) {
+      return this.blockedToolResult(
+        name,
+        context,
+        decision.reason ?? `Tool "${name}" is blocked by the scheduled task policy.`
+      );
+    }
+    return SkillExecutor.execute(name, args, {
+      ...context,
+      skipPermissionCheck: true,
+    });
+  }
+
+  /** Build a structured failed tool result for a blocked scheduled tool call. */
+  private blockedToolResult(
+    name: string,
+    context: Parameters<AIChatQueryLoopDeps["executeTool"]>[2],
+    reason: string
+  ): ToolExecutionResult {
+    return {
+      tool_call_id: context.toolCallId ?? name,
+      tool_name: name,
+      success: false,
+      result: { error: reason, blocked_by_scheduled_policy: true },
+      execution_time_ms: 0,
+    };
   }
 }

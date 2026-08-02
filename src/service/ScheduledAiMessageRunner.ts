@@ -299,8 +299,11 @@ export class ScheduledAiMessageRunner {
       }
 
       // 6-9. Execute through the query engine; the engine persists user +
-      // assistant messages in the originating conversation.
-      const engine = new AIChatQueryEngineFactory().createScheduled();
+      // assistant messages in the originating conversation. Tool execution is
+      // task-scoped (FR-16): only allowlisted policy-approved tools run.
+      const engine = new AIChatQueryEngineFactory().createScheduled(
+        this.parseTaskPolicy(task)
+      );
       const sink = new ScheduledLoopEventSink();
       await engine.submitMessage({
         eventSink: sink,
