@@ -2172,8 +2172,7 @@ export default {
     contact_profile: "Perfil de contacto",
     statistics_description:
       "Sigue la actividad, las tendencias y el rendimiento de campañas.",
-    market_description:
-      "Investiga mercados y encuentra oportunidades.",
+    market_description: "Investiga mercados y encuentra oportunidades.",
     contact_description:
       "Extrae y enriquece perfiles de contacto para prospectos.",
     directory_description:
@@ -2233,6 +2232,29 @@ export default {
       statusNeedsInput: "requiere entrada",
       statusFailed: "fallido",
       statusCancelled: "cancelado",
+    },
+    scheduledLoop: {
+      createFailed: "No se pudo crear el bucle programado.",
+      controlFailed: "No se pudo actualizar el bucle programado.",
+      noActiveLoop:
+        "No hay ningún bucle programado activo en esta conversación.",
+      pause: "Pausar",
+      resume: "Reanudar",
+      stop: "Detener bucle",
+      stopRun: "Detener ejecución actual",
+      statusActive: "activo",
+      statusPaused: "en pausa",
+      statusRunning: "en ejecución",
+      statusExpired: "caducado",
+      statusFailed: "fallido",
+      statusStopped: "detenido",
+      errors: {
+        INVALID_LOOP_SYNTAX: "No se pudo analizar el comando /loop.",
+        INVALID_INTERVAL: "El intervalo debe estar entre 1 minuto y 24 horas.",
+        INVALID_LOOP_LIMIT:
+          "El recuento de ejecuciones o el límite de duración no son válidos.",
+        PROMPT_REQUIRED: "Se requiere un prompt para un bucle programado.",
+      },
     },
     voice: {
       microphone: "Entrada de voz",

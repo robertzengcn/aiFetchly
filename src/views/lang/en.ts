@@ -2210,7 +2210,8 @@ export default {
       tooLarge: "File is too large to include.",
     },
     goalLoop: {
-      objectiveRequired: "Please provide a goal objective. Usage: /goal <objective>",
+      objectiveRequired:
+        "Please provide a goal objective. Usage: /goal <objective>",
       createFailed: "Could not create the goal.",
       countRequired: "Please provide an iteration count.",
       countRange: "Iteration count must be between 1 and 10.",
@@ -2223,6 +2224,27 @@ export default {
       statusNeedsInput: "needs input",
       statusFailed: "failed",
       statusCancelled: "cancelled",
+    },
+    scheduledLoop: {
+      createFailed: "Could not create the scheduled loop.",
+      controlFailed: "Could not update the scheduled loop.",
+      noActiveLoop: "No active scheduled loop for this conversation.",
+      pause: "Pause",
+      resume: "Resume",
+      stop: "Stop loop",
+      stopRun: "Stop current run",
+      statusActive: "active",
+      statusPaused: "paused",
+      statusRunning: "running",
+      statusExpired: "expired",
+      statusFailed: "failed",
+      statusStopped: "stopped",
+      errors: {
+        INVALID_LOOP_SYNTAX: "The /loop command could not be parsed.",
+        INVALID_INTERVAL: "The interval must be between 1 minute and 24 hours.",
+        INVALID_LOOP_LIMIT: "The run count or lifetime limit is invalid.",
+        PROMPT_REQUIRED: "A prompt is required for a scheduled loop.",
+      },
     },
     voice: {
       microphone: "Voice input",

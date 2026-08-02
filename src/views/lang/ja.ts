@@ -2189,6 +2189,28 @@ export default {
       statusFailed: "失敗",
       statusCancelled: "キャンセル",
     },
+    scheduledLoop: {
+      createFailed: "スケジュール済みループを作成できませんでした。",
+      controlFailed: "スケジュール済みループを更新できませんでした。",
+      noActiveLoop:
+        "この会話にはアクティブなスケジュール済みループがありません。",
+      pause: "一時停止",
+      resume: "再開",
+      stop: "ループを停止",
+      stopRun: "現在の実行を停止",
+      statusActive: "アクティブ",
+      statusPaused: "一時停止中",
+      statusRunning: "実行中",
+      statusExpired: "期限切れ",
+      statusFailed: "失敗",
+      statusStopped: "停止済み",
+      errors: {
+        INVALID_LOOP_SYNTAX: "/loop コマンドを解析できませんでした。",
+        INVALID_INTERVAL: "間隔は 1 分〜 24 時間の範囲で指定してください。",
+        INVALID_LOOP_LIMIT: "実行回数または有効期限の制限が無効です。",
+        PROMPT_REQUIRED: "スケジュール済みループにはプロンプトが必要です。",
+      },
+    },
     voice: {
       microphone: "音声入力",
       start_recording: "録音を開始",

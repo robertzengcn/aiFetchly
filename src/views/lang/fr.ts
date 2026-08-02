@@ -2155,8 +2155,7 @@ export default {
     contact_profile: "Profil de contact",
     statistics_description:
       "Suivez l’activité, les tendances et les performances des campagnes.",
-    market_description:
-      "Analysez les marchés et trouvez des opportunités.",
+    market_description: "Analysez les marchés et trouvez des opportunités.",
     contact_description:
       "Extrayez et enrichissez les profils de contact des prospects.",
     directory_description:
@@ -2218,6 +2217,29 @@ export default {
       statusNeedsInput: "saisie requise",
       statusFailed: "échec",
       statusCancelled: "annulé",
+    },
+    scheduledLoop: {
+      createFailed: "Impossible de créer la boucle planifiée.",
+      controlFailed: "Impossible de mettre à jour la boucle planifiée.",
+      noActiveLoop: "Aucune boucle planifiée active pour cette conversation.",
+      pause: "Pause",
+      resume: "Reprendre",
+      stop: "Arrêter la boucle",
+      stopRun: "Arrêter l'exécution en cours",
+      statusActive: "actif",
+      statusPaused: "en pause",
+      statusRunning: "en cours",
+      statusExpired: "expirée",
+      statusFailed: "échec",
+      statusStopped: "arrêtée",
+      errors: {
+        INVALID_LOOP_SYNTAX: "La commande /loop n'a pas pu être analysée.",
+        INVALID_INTERVAL:
+          "L'intervalle doit être compris entre 1 minute et 24 heures.",
+        INVALID_LOOP_LIMIT:
+          "Le nombre d'exécutions ou la durée maximale n'est pas valide.",
+        PROMPT_REQUIRED: "Une invite est requise pour une boucle planifiée.",
+      },
     },
     voice: {
       microphone: "Saisie vocale",

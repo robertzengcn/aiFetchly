@@ -2225,6 +2225,30 @@ export default {
       statusFailed: "fehlgeschlagen",
       statusCancelled: "abgebrochen",
     },
+    scheduledLoop: {
+      createFailed: "Geplante Schleife konnte nicht erstellt werden.",
+      controlFailed: "Geplante Schleife konnte nicht aktualisiert werden.",
+      noActiveLoop: "Keine aktive geplante Schleife in dieser Unterhaltung.",
+      pause: "Pausieren",
+      resume: "Fortsetzen",
+      stop: "Schleife stoppen",
+      stopRun: "Aktuelle Ausführung stoppen",
+      statusActive: "aktiv",
+      statusPaused: "pausiert",
+      statusRunning: "läuft",
+      statusExpired: "abgelaufen",
+      statusFailed: "fehlgeschlagen",
+      statusStopped: "gestoppt",
+      errors: {
+        INVALID_LOOP_SYNTAX: "Der /loop-Befehl konnte nicht analysiert werden.",
+        INVALID_INTERVAL:
+          "Das Intervall muss zwischen 1 Minute und 24 Stunden liegen.",
+        INVALID_LOOP_LIMIT:
+          "Die Anzahl der Ausführungen oder die Lebensdauer ist ungültig.",
+        PROMPT_REQUIRED:
+          "Für eine geplante Schleife ist ein Prompt erforderlich.",
+      },
+    },
     voice: {
       microphone: "Spracheingabe",
       start_recording: "Aufnahme starten",

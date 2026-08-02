@@ -1,5 +1,10 @@
-import { windowInvoke } from "@/views/utils/apirequest";
 import {
+  windowInvoke,
+  windowReceive,
+  windowRemoveAllListeners,
+} from "@/views/utils/apirequest";
+import {
+  AI_CHAT_V2_CONVERSATION_UPDATED,
   AI_CHAT_V2_SCHEDULED_LOOP_CREATE,
   AI_CHAT_V2_SCHEDULED_LOOP_GET,
   AI_CHAT_V2_SCHEDULED_LOOP_PAUSE,
@@ -8,6 +13,7 @@ import {
   AI_CHAT_V2_SCHEDULED_LOOP_STOP_RUN,
 } from "@/config/channellist";
 import type {
+  ChatV2ConversationUpdatedEvent,
   CreateScheduledLoopRequest,
   CreateScheduledLoopResponse,
   ScheduledLoopControlOperation,
@@ -49,8 +55,8 @@ export async function controlScheduledLoop(
     operation === "pause"
       ? AI_CHAT_V2_SCHEDULED_LOOP_PAUSE
       : operation === "resume"
-        ? AI_CHAT_V2_SCHEDULED_LOOP_RESUME
-        : AI_CHAT_V2_SCHEDULED_LOOP_STOP;
+      ? AI_CHAT_V2_SCHEDULED_LOOP_RESUME
+      : AI_CHAT_V2_SCHEDULED_LOOP_STOP;
   const resp = await windowInvoke(channel, { conversationId });
   return (resp as ScheduledLoopView | null) ?? null;
 }
@@ -63,4 +69,22 @@ export async function stopScheduledLoopRun(
     conversationId,
   });
   return (resp as { cancelled: boolean } | null) ?? null;
+}
+
+/**
+ * Subscribe to the narrow conversation-update broadcast emitted after a
+ * scheduled turn persists. The event is a refresh hint only — the renderer must
+ * reload authoritative history. Call unsubscribe in onBeforeUnmount.
+ */
+export function subscribeConversationUpdated(
+  handler: (event: ChatV2ConversationUpdatedEvent) => void
+): void {
+  windowReceive(AI_CHAT_V2_CONVERSATION_UPDATED, (event) => {
+    handler(event as ChatV2ConversationUpdatedEvent);
+  });
+}
+
+/** Remove all conversation-update listeners (call in onBeforeUnmount). */
+export function unsubscribeConversationUpdated(): void {
+  windowRemoveAllListeners(AI_CHAT_V2_CONVERSATION_UPDATED);
 }
