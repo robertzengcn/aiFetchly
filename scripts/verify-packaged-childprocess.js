@@ -1,12 +1,20 @@
 "use strict";
 
 const fs = require("node:fs");
+const { builtinModules } = require("node:module");
 const path = require("node:path");
 const asar = require("@electron/asar");
 
 const PROJECT_ROOT = path.resolve(__dirname, "..");
-const OUT_DIR = path.join(PROJECT_ROOT, "out");
+const OUT_DIR = process.env.AIFETCHLY_VERIFY_OUT_DIR
+  ? path.resolve(process.env.AIFETCHLY_VERIFY_OUT_DIR)
+  : path.join(PROJECT_ROOT, "out");
 const REQUIRED_WORKERS = ["websiteContentScraper.js"];
+const GENERATED_RUNTIME_REQUIRE_BUNDLES = ["taskCode.js"];
+const NODE_BUILTINS = new Set([
+  ...builtinModules,
+  ...builtinModules.map((moduleName) => `node:${moduleName}`),
+]);
 
 function walkDirectories(root, visitor) {
   if (!fs.existsSync(root)) {
@@ -49,6 +57,40 @@ function listAsarEntries(asarPath) {
       .listPackage(asarPath)
       .map((entry) => entry.replace(/\\/g, "/").replace(/^\/+/, ""))
   );
+}
+
+function getPackageRootName(packageName) {
+  if (packageName.startsWith("@")) {
+    const [scope, name] = packageName.split("/");
+    return name ? `${scope}/${name}` : packageName;
+  }
+  return packageName.split("/")[0];
+}
+
+function getRuntimePackageName(importId) {
+  if (
+    importId.startsWith(".") ||
+    importId.startsWith("/") ||
+    importId === "electron" ||
+    NODE_BUILTINS.has(importId)
+  ) {
+    return null;
+  }
+  return getPackageRootName(importId);
+}
+
+function extractRuntimePackageRequires(source) {
+  const requirePattern = /\brequire\(\s*["']([^"']+)["']\s*\)/g;
+  const packageNames = new Set();
+  let match = requirePattern.exec(source);
+  while (match !== null) {
+    const packageName = getRuntimePackageName(match[1]);
+    if (packageName) {
+      packageNames.add(packageName);
+    }
+    match = requirePattern.exec(source);
+  }
+  return packageNames;
 }
 
 function hasWorker(resourcesDir, workerFile) {
@@ -96,6 +138,91 @@ function hasWorker(resourcesDir, workerFile) {
   };
 }
 
+function readPackagedFile(resourcesDir, relativePath, asarEntries) {
+  const unpackedPath = path.join(
+    resourcesDir,
+    "app.asar.unpacked",
+    relativePath
+  );
+  if (fs.existsSync(unpackedPath)) {
+    return {
+      content: fs.readFileSync(unpackedPath, "utf-8"),
+      location: unpackedPath,
+    };
+  }
+
+  const normalizedRelativePath = relativePath.replace(/\\/g, "/");
+  const asarPath = path.join(resourcesDir, "app.asar");
+  if (asarEntries.has(normalizedRelativePath)) {
+    return {
+      content: asar.extractFile(asarPath, normalizedRelativePath).toString(
+        "utf-8"
+      ),
+      location: path.join(asarPath, normalizedRelativePath),
+    };
+  }
+
+  return null;
+}
+
+function hasPackagedNodeModule(resourcesDir, packageName, asarEntries) {
+  const packageJsonPath = path
+    .join("node_modules", ...packageName.split("/"), "package.json")
+    .replace(/\\/g, "/");
+  const unpackedPackageJsonPath = path.join(
+    resourcesDir,
+    "app.asar.unpacked",
+    packageJsonPath
+  );
+  return (
+    fs.existsSync(unpackedPackageJsonPath) || asarEntries.has(packageJsonPath)
+  );
+}
+
+function verifyRuntimeRequires(resourcesDir) {
+  const asarEntries = listAsarEntries(path.join(resourcesDir, "app.asar"));
+  const missing = [];
+  let checkedBundles = 0;
+
+  for (const bundleFile of GENERATED_RUNTIME_REQUIRE_BUNDLES) {
+    const bundle = readPackagedFile(
+      resourcesDir,
+      path.join(".vite", "build", bundleFile),
+      asarEntries
+    );
+    if (!bundle) {
+      continue;
+    }
+
+    checkedBundles += 1;
+    for (const packageName of extractRuntimePackageRequires(bundle.content)) {
+      if (!hasPackagedNodeModule(resourcesDir, packageName, asarEntries)) {
+        missing.push(`${bundle.location} requires ${packageName}`);
+      }
+    }
+  }
+
+  if (checkedBundles === 0) {
+    console.error(
+      `No generated runtime bundles found in packaged resources: ${resourcesDir}`
+    );
+    return false;
+  }
+
+  if (missing.length > 0) {
+    console.error("Missing packaged runtime dependencies:");
+    for (const item of missing) {
+      console.error(`- ${item}`);
+    }
+    return false;
+  }
+
+  console.log(
+    `Verified packaged runtime dependencies for ${checkedBundles} generated bundle(s) in ${resourcesDir}`
+  );
+  return true;
+}
+
 function run() {
   const resourcesDirs = findResourcesDirs();
   if (resourcesDirs.length === 0) {
@@ -119,6 +246,12 @@ function run() {
 
     for (const match of matches) {
       console.log(`Found packaged child process worker: ${match.location}`);
+    }
+  }
+
+  for (const resourcesDir of resourcesDirs) {
+    if (!verifyRuntimeRequires(resourcesDir)) {
+      failed = true;
     }
   }
 
