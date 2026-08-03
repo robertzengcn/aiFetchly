@@ -2198,6 +2198,36 @@ export default {
       "Überprüfe KI-generierte Antworten, Genehmigungsstatus und Audit-Protokolle.",
   },
   aiChatV2: {
+    imageTool: {
+      name: "Lokale Bilder anhängen",
+      permissionTitle: "Lokale Bilder an den KI-Server senden",
+      permissionDescription:
+        "Der Assistent liest die ausgewählten Bilder und sendet vorbereitete Kopien an {destination}. Genehmigen, um sie an diese Anfrage anzuhängen.",
+      validating: "Bilder werden validiert…",
+      reading: "Bilder werden gelesen…",
+      normalizing: "Bilder werden vorbereitet…",
+      ready: "Bilder bereit",
+      attachedCount: "{count} Bild(er) angehängt",
+      summary: "{count} Bild(er) für die nächste KI-Anfrage vorbereitet.",
+      errors: {
+        workspaceRequired: "Ein genehmigter Arbeitsbereich ist erforderlich.",
+        invalidArguments: "Ungültige Anfrageargumente.",
+        imageLimitReached: "Das Bildlimit für diese Anfrage ist erreicht.",
+        pathOutsideWorkspace:
+          "Der Pfad liegt außerhalb des genehmigten Arbeitsbereichs.",
+        pathNotFound: "Die Datei wurde nicht gefunden.",
+        pathIsDirectory: "Der Pfad ist ein Verzeichnis, kein Bild.",
+        imageFileTooLarge: "Die Bilddatei ist zu groß.",
+        unsupportedImageType: "Nicht unterstützter Bildtyp.",
+        imageSignatureMismatch:
+          "Dateiinhalt stimmt nicht mit der Erweiterung überein.",
+        imageDimensionsTooLarge: "Die Bildabmessungen sind zu groß.",
+        imagePayloadTooLarge: "Die Bildnutzlast ist zu groß.",
+        imageProcessingFailed: "Bildverarbeitung fehlgeschlagen.",
+        permissionDenied: "Erlaubnis verweigert.",
+        cancelled: "Das Anhängen wurde abgebrochen.",
+      },
+    },
     atMentions: {
       ariaLabel: "Arbeitsbereich-Dateien erwähnen",
       noWorkspace: "Wählen Sie einen Arbeitsbereich, um Dateien zu erwähnen.",
@@ -2261,7 +2291,8 @@ export default {
       runtime_install_extracting_model: "Whisper Base wird installiert...",
       runtime_install_prepare_failed:
         "Der Download der Sprach-Laufzeit konnte nicht vorbereitet werden.",
-      runtime_install_failed: "Installation der Sprach-Laufzeit fehlgeschlagen.",
+      runtime_install_failed:
+        "Installation der Sprach-Laufzeit fehlgeschlagen.",
       empty_transcript: "Keine Sprache erkannt.",
       settings_title: "Stimme",
       enable_input: "Spracheingabe aktivieren",

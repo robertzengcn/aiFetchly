@@ -2162,6 +2162,34 @@ export default {
     audit_description: "AI生成の返信、承認ステータス、監査ログを確認します。",
   },
   aiChatV2: {
+    imageTool: {
+      name: "ローカル画像を添付",
+      permissionTitle: "ローカル画像をAIサーバーに送信",
+      permissionDescription:
+        "アシスタントが選択した画像を読み込み、準備したコピーを {destination} に送信します。承認してこのリクエストに添付します。",
+      validating: "画像を検証中…",
+      reading: "画像を読み込み中…",
+      normalizing: "画像を準備中…",
+      ready: "画像の準備が完了しました",
+      attachedCount: "{count} 枚の画像を添付しました",
+      summary: "次のAIリクエスト用に {count} 枚の画像を準備しました。",
+      errors: {
+        workspaceRequired: "承認されたワークスペースが必要です。",
+        invalidArguments: "リクエストの引数が無効です。",
+        imageLimitReached: "このリクエストの画像上限に達しました。",
+        pathOutsideWorkspace: "パスが承認されたワークスペース外です。",
+        pathNotFound: "ファイルが見つかりません。",
+        pathIsDirectory: "パスはディレクトリであり、画像ではありません。",
+        imageFileTooLarge: "画像ファイルが大きすぎます。",
+        unsupportedImageType: "サポートされていない画像形式です。",
+        imageSignatureMismatch: "ファイルの内容が拡張子と一致しません。",
+        imageDimensionsTooLarge: "画像サイズが大きすぎます。",
+        imagePayloadTooLarge: "画像データが大きすぎます。",
+        imageProcessingFailed: "画像処理に失敗しました。",
+        permissionDenied: "権限が拒否されました。",
+        cancelled: "添付はキャンセルされました。",
+      },
+    },
     atMentions: {
       ariaLabel: "ワークスペースのファイルをメンション",
       noWorkspace:

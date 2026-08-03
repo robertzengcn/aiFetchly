@@ -2199,6 +2199,34 @@ export default {
       "Review AI-generated replies, approval status, and audit logs.",
   },
   aiChatV2: {
+    imageTool: {
+      name: "Attach local images",
+      permissionTitle: "Send local images to the AI server",
+      permissionDescription:
+        "The assistant will read the selected image(s) and send prepared copies to {destination}. Approve to attach them to this request.",
+      validating: "Validating images…",
+      reading: "Reading images…",
+      normalizing: "Preparing images…",
+      ready: "Images ready",
+      attachedCount: "Attached {count} image(s)",
+      summary: "Prepared {count} image(s) for the next AI request.",
+      errors: {
+        workspaceRequired: "An approved workspace is required first.",
+        invalidArguments: "Invalid request arguments.",
+        imageLimitReached: "The image limit for this request has been reached.",
+        pathOutsideWorkspace: "The path is outside the approved workspace.",
+        pathNotFound: "The file could not be found.",
+        pathIsDirectory: "The path is a directory, not an image.",
+        imageFileTooLarge: "The image file is too large.",
+        unsupportedImageType: "Unsupported image type.",
+        imageSignatureMismatch: "The file contents do not match its extension.",
+        imageDimensionsTooLarge: "The image dimensions are too large.",
+        imagePayloadTooLarge: "The image payload is too large.",
+        imageProcessingFailed: "Image processing failed.",
+        permissionDenied: "Permission was denied.",
+        cancelled: "The attachment was cancelled.",
+      },
+    },
     atMentions: {
       ariaLabel: "Mention workspace files",
       noWorkspace: "Choose a workspace to mention files.",
@@ -2214,7 +2242,8 @@ export default {
       tooLarge: "File is too large to include.",
     },
     goalLoop: {
-      objectiveRequired: "Please provide a goal objective. Usage: /goal <objective>",
+      objectiveRequired:
+        "Please provide a goal objective. Usage: /goal <objective>",
       createFailed: "Could not create the goal.",
       countRequired: "Please provide an iteration count.",
       countRange: "Iteration count must be between 1 and 10.",
@@ -2254,8 +2283,7 @@ export default {
       runtime_install_size:
         "Runtime download: {runtimeSize}. Whisper Base model: ~{modelSize}.",
       runtime_install_preparing: "Preparing download...",
-      runtime_install_downloading_model:
-        "Downloading Whisper Base... {pct}%",
+      runtime_install_downloading_model: "Downloading Whisper Base... {pct}%",
       runtime_install_verifying_model: "Verifying Whisper Base...",
       runtime_install_extracting_model: "Installing Whisper Base...",
       runtime_install_prepare_failed:

@@ -2159,8 +2159,7 @@ export default {
     contact_profile: "Profil de contact",
     statistics_description:
       "Suivez l’activité, les tendances et les performances des campagnes.",
-    market_description:
-      "Analysez les marchés et trouvez des opportunités.",
+    market_description: "Analysez les marchés et trouvez des opportunités.",
     contact_description:
       "Extrayez et enrichissez les profils de contact des prospects.",
     directory_description:
@@ -2192,6 +2191,37 @@ export default {
       "Examinez les réponses générées par l'IA, le statut d'approbation et les journaux d'audit.",
   },
   aiChatV2: {
+    imageTool: {
+      name: "Joindre des images locales",
+      permissionTitle: "Envoyer des images locales au serveur IA",
+      permissionDescription:
+        "L'assistant lira les images sélectionnées et enverra des copies préparées à {destination}. Approuvez pour les joindre à cette requête.",
+      validating: "Validation des images…",
+      reading: "Lecture des images…",
+      normalizing: "Préparation des images…",
+      ready: "Images prêtes",
+      attachedCount: "{count} image(s) jointe(s)",
+      summary: "{count} image(s) préparée(s) pour la prochaine requête IA.",
+      errors: {
+        workspaceRequired: "Un espace de travail approuvé est requis.",
+        invalidArguments: "Arguments de requête invalides.",
+        imageLimitReached:
+          "La limite d'images pour cette requête est atteinte.",
+        pathOutsideWorkspace:
+          "Le chemin est en dehors de l'espace de travail approuvé.",
+        pathNotFound: "Fichier introuvable.",
+        pathIsDirectory: "Le chemin est un répertoire, pas une image.",
+        imageFileTooLarge: "Le fichier image est trop volumineux.",
+        unsupportedImageType: "Type d'image non pris en charge.",
+        imageSignatureMismatch:
+          "Le contenu du fichier ne correspond pas à son extension.",
+        imageDimensionsTooLarge: "Les dimensions de l'image sont trop grandes.",
+        imagePayloadTooLarge: "La charge de l'image est trop volumineuse.",
+        imageProcessingFailed: "Échec du traitement de l'image.",
+        permissionDenied: "Autorisation refusée.",
+        cancelled: "La jonction a été annulée.",
+      },
+    },
     atMentions: {
       ariaLabel: "Mentionner des fichiers de l'espace de travail",
       noWorkspace:

@@ -2176,8 +2176,7 @@ export default {
     contact_profile: "Perfil de contacto",
     statistics_description:
       "Sigue la actividad, las tendencias y el rendimiento de campañas.",
-    market_description:
-      "Investiga mercados y encuentra oportunidades.",
+    market_description: "Investiga mercados y encuentra oportunidades.",
     contact_description:
       "Extrae y enriquece perfiles de contacto para prospectos.",
     directory_description:
@@ -2207,6 +2206,40 @@ export default {
       "Revisa respuestas generadas por IA, estado de aprobación y registros de auditoría.",
   },
   aiChatV2: {
+    imageTool: {
+      name: "Adjuntar imágenes locales",
+      permissionTitle: "Enviar imágenes locales al servidor de IA",
+      permissionDescription:
+        "El asistente leerá las imágenes seleccionadas y enviará copias preparadas a {destination}. Aprueba para adjuntarlas a esta solicitud.",
+      validating: "Validando imágenes…",
+      reading: "Leyendo imágenes…",
+      normalizing: "Preparando imágenes…",
+      ready: "Imágenes listas",
+      attachedCount: "Se adjuntaron {count} imagen(es)",
+      summary:
+        "Se prepararon {count} imagen(es) para la próxima solicitud de IA.",
+      errors: {
+        workspaceRequired:
+          "Primero se requiere un espacio de trabajo aprobado.",
+        invalidArguments: "Argumentos de solicitud no válidos.",
+        imageLimitReached:
+          "Se alcanzó el límite de imágenes para esta solicitud.",
+        pathOutsideWorkspace:
+          "La ruta está fuera del espacio de trabajo aprobado.",
+        pathNotFound: "No se encontró el archivo.",
+        pathIsDirectory: "La ruta es un directorio, no una imagen.",
+        imageFileTooLarge: "El archivo de imagen es demasiado grande.",
+        unsupportedImageType: "Tipo de imagen no admitido.",
+        imageSignatureMismatch:
+          "El contenido del archivo no coincide con su extensión.",
+        imageDimensionsTooLarge:
+          "Las dimensiones de la imagen son demasiado grandes.",
+        imagePayloadTooLarge: "La carga de la imagen es demasiado grande.",
+        imageProcessingFailed: "Procesamiento de imágenes fallido.",
+        permissionDenied: "Se denegó el permiso.",
+        cancelled: "Se canceló la adjunción.",
+      },
+    },
     atMentions: {
       ariaLabel: "Mencionar archivos del espacio de trabajo",
       noWorkspace: "Elige un espacio de trabajo para mencionar archivos.",
@@ -2265,8 +2298,7 @@ export default {
       runtime_install_size:
         "Descarga del runtime: {runtimeSize}. Modelo Whisper Base: ~{modelSize}.",
       runtime_install_preparing: "Preparando descarga...",
-      runtime_install_downloading_model:
-        "Descargando Whisper Base... {pct}%",
+      runtime_install_downloading_model: "Descargando Whisper Base... {pct}%",
       runtime_install_verifying_model: "Verificando Whisper Base...",
       runtime_install_extracting_model: "Instalando Whisper Base...",
       runtime_install_prepare_failed:

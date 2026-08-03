@@ -2115,6 +2115,34 @@ export default {
     audit_description: "审核 AI 生成的回复、审批状态和审核日志。",
   },
   aiChatV2: {
+    imageTool: {
+      name: "附加本地图片",
+      permissionTitle: "将本地图片发送到 AI 服务器",
+      permissionDescription:
+        "助手将读取所选图片并将准备好的副本发送到 {destination}。批准后将其附加到此请求。",
+      validating: "正在验证图片…",
+      reading: "正在读取图片…",
+      normalizing: "正在准备图片…",
+      ready: "图片已就绪",
+      attachedCount: "已附加 {count} 张图片",
+      summary: "已为下一次 AI 请求准备 {count} 张图片。",
+      errors: {
+        workspaceRequired: "需要先批准一个工作区。",
+        invalidArguments: "请求参数无效。",
+        imageLimitReached: "此请求的图片数量已达上限。",
+        pathOutsideWorkspace: "路径位于已批准的工作区之外。",
+        pathNotFound: "找不到该文件。",
+        pathIsDirectory: "该路径是目录,不是图片。",
+        imageFileTooLarge: "图片文件过大。",
+        unsupportedImageType: "不支持的图片类型。",
+        imageSignatureMismatch: "文件内容与扩展名不匹配。",
+        imageDimensionsTooLarge: "图片尺寸过大。",
+        imagePayloadTooLarge: "图片数据过大。",
+        imageProcessingFailed: "图片处理失败。",
+        permissionDenied: "权限被拒绝。",
+        cancelled: "附加操作已取消。",
+      },
+    },
     atMentions: {
       ariaLabel: "提及工作区文件",
       noWorkspace: "选择一个工作区以提及文件。",
@@ -2170,8 +2198,7 @@ export default {
       runtime_install_size:
         "运行时下载：{runtimeSize}。Whisper Base 模型：约 {modelSize}。",
       runtime_install_preparing: "正在准备下载...",
-      runtime_install_downloading_model:
-        "正在下载 Whisper Base... {pct}%",
+      runtime_install_downloading_model: "正在下载 Whisper Base... {pct}%",
       runtime_install_verifying_model: "正在验证 Whisper Base...",
       runtime_install_extracting_model: "正在安装 Whisper Base...",
       runtime_install_prepare_failed: "无法准备语音运行时下载。",
