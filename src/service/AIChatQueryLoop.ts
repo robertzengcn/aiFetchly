@@ -392,6 +392,27 @@ export function isPermissionPromptResult(result: ToolExecutionResult): boolean {
   return result.result.needsPermissionPrompt === true;
 }
 
+/**
+ * True when `value` is a full ToolExecutionResult rather than a bare data
+ * payload. Async tool jobs resolve with the entire SkillExecutor
+ * ToolExecutionResult; without unwrapping, fields like needsPermissionPrompt
+ * end up nested under `result.result`, breaking permission-prompt detection.
+ */
+function isToolExecutionResultLike(
+  value: unknown
+): value is ToolExecutionResult {
+  if (typeof value !== "object" || value === null) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    typeof record.success === "boolean" &&
+    typeof record.tool_call_id === "string" &&
+    typeof record.tool_name === "string" &&
+    typeof record.result === "object" &&
+    record.result !== null &&
+    typeof record.execution_time_ms === "number"
+  );
+}
+
 export function buildAssistantToolCallMessage(
   parsedCalls: Array<{
     index: number;
@@ -1877,6 +1898,19 @@ export class AIChatQueryLoop {
       }
 
       if (snap.status === "completed") {
+        if (isToolExecutionResultLike(snap.result)) {
+          // The job resolved with a full ToolExecutionResult (e.g. a
+          // permission prompt from SkillExecutor). Propagate it unwrapped so
+          // downstream permission detection (isPermissionPromptResult) and
+          // hook handling see the true shape instead of result.result.
+          return {
+            tool_call_id: snap.result.tool_call_id,
+            tool_name: snap.result.tool_name,
+            success: snap.result.success,
+            result: snap.result.result,
+            execution_time_ms: Date.now() - startedAt,
+          };
+        }
         return {
           tool_call_id: call.id,
           tool_name: call.name,
