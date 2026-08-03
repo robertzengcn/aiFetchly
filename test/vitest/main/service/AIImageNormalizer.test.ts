@@ -340,6 +340,28 @@ describe("AIImageNormalizer", () => {
     ).rejects.toMatchObject({ code: "cancelled" });
   });
 
+  it("rejects an oversized image via pre-decode header sniff (decompression-bomb guard)", async () => {
+    // A PNG whose declared dimensions exceed the ceiling — small on disk but
+    // would decode huge. The sniffer must reject before the codec allocates.
+    const big = Buffer.alloc(24, 0);
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(big, 0);
+    big.writeUInt32BE(20_000, 16); // width
+    big.writeUInt32BE(20_000, 20); // height
+    // Codec whose decode would blow up if reached — proves the sniff ran first.
+    const canaryCodec: ImageCodec = {
+      decode: () => {
+        throw new Error("decode should not be called for an oversized header");
+      },
+    };
+    await expect(
+      new AIImageNormalizer(canaryCodec).normalize(
+        big,
+        "image/png",
+        defaultOpts()
+      )
+    ).rejects.toMatchObject({ code: "image_dimensions_too_large" });
+  });
+
   it("exposes ImageNormalizationError as a typed error", () => {
     const err = new ImageNormalizationError("cancelled", "msg");
     expect(err).toBeInstanceOf(Error);

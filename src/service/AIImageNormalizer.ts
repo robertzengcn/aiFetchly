@@ -24,6 +24,7 @@ import {
   MAX_INPUT_PIXELS,
 } from "@/config/chatImageLimits";
 import { computeScaledDimensions } from "@/utils/imageScaling";
+import { sniffImageDimensions } from "@/service/AIImageDimensions";
 
 // ---------------------------------------------------------------------------
 // Codec interface (injectable; production impl wraps Electron nativeImage)
@@ -111,6 +112,25 @@ export class AIImageNormalizer {
   ): Promise<NormalizedImage> {
     throwIfAborted(opts.signal);
 
+    // Pre-decode dimension sniff: reject a small-on-disk-but-huge-on-decode
+    // image (decompression bomb) BEFORE the codec allocates a giant bitmap.
+    // When the header can be parsed, enforce the same dimension/pixel ceilings
+    // we apply post-decode. Unparseable headers fall through to the
+    // post-decode guards below.
+    const sniffed = sniffImageDimensions(buffer);
+    if (sniffed) {
+      if (
+        sniffed.width > MAX_INPUT_DIMENSION ||
+        sniffed.height > MAX_INPUT_DIMENSION ||
+        sniffed.width * sniffed.height > MAX_INPUT_PIXELS
+      ) {
+        throw new ImageNormalizationError(
+          "image_dimensions_too_large",
+          `Image dimensions ${sniffed.width}x${sniffed.height} exceed the maximum of ${MAX_INPUT_DIMENSION}px / ${MAX_INPUT_PIXELS} pixels.`
+        );
+      }
+    }
+
     let decoded: DecodedImage;
     try {
       decoded = this.codec.decode(buffer);
@@ -173,7 +193,12 @@ export class AIImageNormalizer {
   private encodeJpeg(
     decoded: DecodedImage,
     opts: NormalizeOptions
-  ): { buffer: Buffer; mimeType: PreparedImageMimeType; width: number; height: number } {
+  ): {
+    buffer: Buffer;
+    mimeType: PreparedImageMimeType;
+    width: number;
+    height: number;
+  } {
     const originalLongEdge = Math.max(decoded.width, decoded.height);
     let longEdge = Math.min(opts.maxLongEdge, originalLongEdge);
     let quality = opts.initialJpegQuality;
@@ -219,7 +244,12 @@ export class AIImageNormalizer {
   private encodePng(
     decoded: DecodedImage,
     opts: NormalizeOptions
-  ): { buffer: Buffer; mimeType: PreparedImageMimeType; width: number; height: number } {
+  ): {
+    buffer: Buffer;
+    mimeType: PreparedImageMimeType;
+    width: number;
+    height: number;
+  } {
     const originalLongEdge = Math.max(decoded.width, decoded.height);
     let longEdge = Math.min(opts.maxLongEdge, originalLongEdge);
 
