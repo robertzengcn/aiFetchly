@@ -19,6 +19,7 @@
 import { readFileSync, writeFileSync, mkdirSync, rmSync, readdirSync, existsSync, copyFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
+import { pathToFileURL } from "node:url";
 import {
   resolveClosure,
   copyClosure,
@@ -223,7 +224,12 @@ function main() {
   console.log(`${result.archiveFileName}: ${result.archiveSizeBytes} bytes, sha256=${result.sha256.slice(0, 12)}…`);
 }
 
-const isMain = import.meta.url === `file://${process.argv[1]}`;
+export function isDirectExecution(metaUrl, argvPath = process.argv[1]) {
+  if (!argvPath) return false;
+  return pathToFileURL(path.resolve(argvPath)).href === metaUrl;
+}
+
+const isMain = isDirectExecution(import.meta.url);
 if (isMain) {
   try {
     main();

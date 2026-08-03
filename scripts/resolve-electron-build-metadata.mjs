@@ -19,6 +19,7 @@ import { readFileSync, appendFileSync, existsSync } from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
+import { pathToFileURL } from "node:url";
 
 export function readElectronVersion(projectRoot) {
   const pkgPath = path.join(projectRoot, "node_modules", "electron", "package.json");
@@ -86,9 +87,14 @@ function main() {
   }
 }
 
+export function isDirectExecution(metaUrl, argvPath = process.argv[1]) {
+  if (!argvPath) return false;
+  return pathToFileURL(path.resolve(argvPath)).href === metaUrl;
+}
+
 // Run only when executed directly, not when imported (rebuild-native-dependencies
 // imports readElectronVersion).
-const isMain = import.meta.url === `file://${process.argv[1]}`;
+const isMain = isDirectExecution(import.meta.url);
 if (isMain) {
   try {
     main();
