@@ -269,7 +269,10 @@ export default {
     failed_to_update_embedding_model: "Failed to update embedding model",
     local_runtime_not_installed_title: "Runtime IA local non installé",
     local_runtime_not_installed_message:
-      "Le modèle d'intégration local '{model}' nécessite le composant IA local ({runtime}). Veuillez le télécharger dans Paramètres IA > Composants IA locaux, puis réessayez.",
+      "Le modèle d'intégration local '{model}' nécessite le composant IA local ({runtime}). Téléchargez-le et installez-le maintenant pour continuer.",
+    local_runtime_download: "Télécharger et installer",
+    local_runtime_download_size: "Taille du téléchargement : {size}",
+    local_runtime_install_failed: "Le composant IA local est installé mais pas encore prêt. Veuillez réessayer.",
     max_dimensions: "Max Dimensions",
     model: "Model",
     dimensions: "Dimensions",

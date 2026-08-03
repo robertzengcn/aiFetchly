@@ -253,7 +253,10 @@ export default {
     failed_to_update_embedding_model: "更新嵌入模型失败",
     local_runtime_not_installed_title: "本地 AI 运行组件未安装",
     local_runtime_not_installed_message:
-      "本地嵌入模型“{model}”需要本地 AI 组件（{runtime}）。请前往 AI 设置 > 本地 AI 组件 下载后再试。",
+      "本地嵌入模型“{model}”需要本地 AI 组件（{runtime}）。立即下载并安装即可继续。",
+    local_runtime_download: "下载并安装",
+    local_runtime_download_size: "下载大小：{size}",
+    local_runtime_install_failed: "本地 AI 组件已安装但尚未就绪，请重试。",
     max_dimensions: "最大维度",
     model: "模型",
     dimensions: "维度",

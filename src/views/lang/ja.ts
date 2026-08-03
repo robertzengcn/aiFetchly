@@ -267,7 +267,10 @@ export default {
     failed_to_update_embedding_model: "埋め込みモデルの更新に失敗しました",
     local_runtime_not_installed_title: "ローカルAIランタイムがインストールされていません",
     local_runtime_not_installed_message:
-      "ローカル埋め込みモデル「{model}」にはローカルAIコンポーネント（{runtime}）が必要です。AI設定 > ローカルAIコンポーネントからダウンロードしてから再試行してください。",
+      "ローカル埋め込みモデル「{model}」にはローカルAIコンポーネント（{runtime}）が必要です。今すぐダウンロードしてインストールすると続行できます。",
+    local_runtime_download: "ダウンロードしてインストール",
+    local_runtime_download_size: "ダウンロードサイズ: {size}",
+    local_runtime_install_failed: "ローカルAIコンポーネントはインストールされましたが、まだ準備ができていません。もう一度お試しください。",
     max_dimensions: "最大次元数",
     model: "モデル",
     dimensions: "次元",

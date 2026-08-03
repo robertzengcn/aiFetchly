@@ -270,7 +270,10 @@ export default {
       "Error al actualizar el modelo de incrustación",
     local_runtime_not_installed_title: "Componente de IA local no instalado",
     local_runtime_not_installed_message:
-      "El modelo de incrustación local '{model}' requiere el componente de IA local ({runtime}). Descárguelo en Configuración de IA > Componentes de IA local e inténtelo de nuevo.",
+      "El modelo de incrustación local '{model}' requiere el componente de IA local ({runtime}). Descárguelo e instálelo ahora para continuar.",
+    local_runtime_download: "Descargar e instalar",
+    local_runtime_download_size: "Tamaño de descarga: {size}",
+    local_runtime_install_failed: "El componente de IA local se instaló pero aún no está listo. Inténtelo de nuevo.",
     max_dimensions: "Dimensiones máximas",
     model: "Modelo",
     dimensions: "Dimensiones",
