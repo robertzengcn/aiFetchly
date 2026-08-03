@@ -35,6 +35,8 @@
         </div>
         <v-divider class="my-4"></v-divider>
         <AiChatVoiceSettingsPanel />
+        <v-divider class="my-4"></v-divider>
+        <LocalAiComponentsPanel />
       </v-card-text>
     </v-card>
   </v-container>
@@ -46,6 +48,7 @@ import { useRouter } from "vue-router";
 import { ref } from "vue";
 import AIProviderSettingsPanel from "@/views/components/settings/AIProviderSettingsPanel.vue";
 import AiChatVoiceSettingsPanel from "@/views/components/settings/AiChatVoiceSettingsPanel.vue";
+import LocalAiComponentsPanel from "@/views/components/settings/LocalAiComponentsPanel.vue";
 import {
   readAiChatReasoningVisible,
   writeAiChatReasoningVisible,
