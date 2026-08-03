@@ -278,7 +278,7 @@ const artifactLoading = ref(false);
 const artifactError = ref<string | null>(null);
 const V2_FLAG_KEY = 'aifetchly:aiChatV2Enabled';
 const aiChatV2Enabled = ref(localStorage.getItem(V2_FLAG_KEY) !== 'false');
-const chatPanelWidth = ref(600);
+const chatPanelWidth = ref(720);
 const pendingAiPromptRequest = ref<AiPromptRequest | null>(null);
 let aiPromptRequestId = 0;
 const CHAT_PANEL_MIN_WIDTH = 400;
