@@ -236,7 +236,6 @@ import { getAppName } from '@/views/api/app'
 import { packageAppName } from '@/config/appPackage'
 import { getLanguagePreference } from '@/views/api/language'
 import { initializeLanguageDetection } from '@/views/utils/browserLanguageDetection'
-import { initializeLanguageMigration } from '@/views/utils/languageMigration'
 import { initializeLanguageSynchronization, syncLanguageChange } from '@/views/utils/languageSynchronization'
 
 
@@ -279,7 +278,7 @@ const artifactLoading = ref(false);
 const artifactError = ref<string | null>(null);
 const V2_FLAG_KEY = 'aifetchly:aiChatV2Enabled';
 const aiChatV2Enabled = ref(localStorage.getItem(V2_FLAG_KEY) !== 'false');
-const chatPanelWidth = ref(600);
+const chatPanelWidth = ref(720);
 const pendingAiPromptRequest = ref<AiPromptRequest | null>(null);
 let aiPromptRequestId = 0;
 const CHAT_PANEL_MIN_WIDTH = 400;
@@ -577,28 +576,7 @@ const copyActiveArtifactHtml = (): void => {
 const showWarningMessage = (content: string) => addMessage('warning', content);
 const showInfoMessage = (content: string) => addMessage('info', content);
 
-onMounted(async () => {
-    await GetloginUserInfo().then(res=>{
-        console.log(res)
-        userName.value=res.name
-        userEmail.value=res.email
-        if (res.plans && res.plans.length > 0) {
-            const displayPlans = getDisplayPlans(res.plans)
-            currentPlans.value = displayPlans
-            isPlusPlan.value = displayPlans.some(isPlusSubscriptionPlan)
-            userPlan.value = displayPlans.map(plan => plan.planName).join(', ')
-        }
-    })
-
-    try {
-        const name = await getAppName()
-        appName.value = name
-    } catch (error) {
-        console.error('Failed to load app name:', error)
-    }
-
-    await initializeLanguageMigration()
-
+const initializeSavedLanguage = async (): Promise<void> => {
     try {
         const systemLanguage = await getLanguagePreference()
         if (systemLanguage) {
@@ -609,13 +587,39 @@ onMounted(async () => {
     } catch (error) {
         console.warn('Failed to load language preference from system settings, using current locale:', error)
     }
+}
 
-    initializeLanguageDetection(async (selectedLanguage) => {
+onMounted(async () => {
+    await initializeSavedLanguage()
+
+    initializeLanguageDetection(async (selectedLanguage): Promise<void> => {
         console.log('User selected language:', selectedLanguage)
         await switchLanguage(selectedLanguage)
     })
 
     await initializeLanguageSynchronization()
+
+    try {
+        const res = await GetloginUserInfo()
+        console.log(res)
+        userName.value = res.name
+        userEmail.value = res.email
+        if (res.plans && res.plans.length > 0) {
+            const displayPlans = getDisplayPlans(res.plans)
+            currentPlans.value = displayPlans
+            isPlusPlan.value = displayPlans.some(isPlusSubscriptionPlan)
+            userPlan.value = displayPlans.map(plan => plan.planName).join(', ')
+        }
+    } catch (error) {
+        console.error('Failed to load login user info:', error)
+    }
+
+    try {
+        const name = await getAppName()
+        appName.value = name
+    } catch (error) {
+        console.error('Failed to load app name:', error)
+    }
 
     window.addEventListener('keydown', handleKeyboardShortcut)
     window.addEventListener('aifetchly:open-ai-chat', openAiChatFromDashboard)

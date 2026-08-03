@@ -631,12 +631,68 @@ describe("AIChatQueryEngine", () => {
         eventSink: sink,
       });
 
+      expect(engine.getConversationRuntimeStatus("v2-test-conv")).toBe(
+        "awaiting_permission"
+      );
+
       // After pause, stop the turn. The engine emits cancelled through
       // the pending turn's eventSink (same sink passed to submitMessage).
       engine.stopActiveTurn();
 
+      expect(engine.getConversationRuntimeStatus("v2-test-conv")).toBe(
+        "idle"
+      );
+
       const cancelled = events.find((e) => e.type === "cancelled");
       expect(cancelled).toBeDefined();
+    });
+  });
+
+  describe("getConversationRuntimeStatus", () => {
+    it("reports idle when no turn exists in the current process", () => {
+      const engine = createEngineWithFakeLoop(vi.fn());
+
+      expect(engine.getConversationRuntimeStatus("v2-old-conversation")).toBe(
+        "idle"
+      );
+    });
+
+    it("reports running only while the engine owns the active turn", async () => {
+      let finishLoop: ((result: AIChatQueryLoopResult) => void) | undefined;
+      const fakeRun = vi.fn(
+        () =>
+          new Promise<AIChatQueryLoopResult>((resolve) => {
+            finishLoop = resolve;
+          })
+      );
+      const engine = createEngineWithFakeLoop(fakeRun);
+      const { sink } = makeEventCollector();
+
+      const submission = engine.submitMessage({
+        request: {
+          conversationId: "v2-test-conv",
+          message: "hello",
+        },
+        eventSink: sink,
+      });
+      await vi.waitFor(() => expect(fakeRun).toHaveBeenCalledOnce());
+
+      expect(engine.getConversationRuntimeStatus("v2-test-conv")).toBe(
+        "running"
+      );
+
+      finishLoop?.({
+        type: "completed",
+        conversationId: "v2-test-conv",
+        assistantMessageId: "assistant-test",
+        fullContent: "done",
+        finishReason: "stop",
+      });
+      await submission;
+
+      expect(engine.getConversationRuntimeStatus("v2-test-conv")).toBe(
+        "idle"
+      );
     });
   });
 

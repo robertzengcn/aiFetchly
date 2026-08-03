@@ -504,6 +504,16 @@ export type OpenAIToolChoice =
   | "none"
   | { type: "function"; function: { name: string } };
 
+/** Reasoning effort/summary request option for reasoning-capable models. */
+export type OpenAIReasoningEffort = "low" | "medium" | "high";
+export type OpenAIReasoningSummary = "auto" | "concise" | "detailed";
+
+export interface OpenAIReasoningOptions {
+  enabled: boolean;
+  effort?: OpenAIReasoningEffort;
+  summary?: OpenAIReasoningSummary;
+}
+
 /** OpenAI-compatible chat completion request */
 export interface OpenAIChatCompletionRequest {
   messages: OpenAIChatMessage[];
@@ -512,6 +522,7 @@ export interface OpenAIChatCompletionRequest {
   max_tokens?: number;
   stream?: boolean;
   stream_options?: { include_usage?: boolean };
+  reasoning?: OpenAIReasoningOptions;
   tools?: OpenAITool[];
   tool_choice?: OpenAIToolChoice;
   stop?: string | string[];
@@ -583,6 +594,9 @@ export interface OpenAIChatCompletionResponse {
 export interface OpenAIStreamDelta {
   role?: string;
   content?: string | null;
+  reasoning_content?: string | null;
+  reasoning_summary?: string | null;
+  reasoning_delta?: string | null;
   tool_calls?: OpenAIStreamToolCallDelta[];
   images?: OpenAIChatImage[];
 }

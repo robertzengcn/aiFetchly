@@ -1,5 +1,4 @@
 import { Page } from "puppeteer";
-import { AiChatApi } from "@/api/aiChatApi";
 import {
   ContactInfo,
   ExtractionResult,
@@ -208,6 +207,7 @@ async function extractWithAI(
       : undefined;
 
     // Call AI service with screenshot
+    const { AiChatApi } = await import("@/api/aiChatApi");
     const aiChatApi = new AiChatApi();
     const response = await aiChatApi.extractContactInfo(
       cleanedContent,

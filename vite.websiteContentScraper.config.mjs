@@ -1,6 +1,7 @@
 import { defineConfig, loadEnv } from 'vite';
 import alias from "@rollup/plugin-alias";
 import * as path from 'path';
+import { builtinModules } from 'node:module';
 
 import ClosePlugin from './vite-plugin-close.js'
 import checker from 'vite-plugin-checker'
@@ -37,6 +38,11 @@ function emptyModulesPlugin() {
     };
 }
 
+const nodeBuiltins = builtinModules.flatMap((moduleName) => [
+    moduleName,
+    `node:${moduleName}`,
+]);
+
 export default ({ mode }) => {
     process.env = { ...process.env, ...loadEnv(mode, process.cwd()) };
     return defineConfig({
@@ -68,6 +74,8 @@ export default ({ mode }) => {
                     format: 'cjs'
                 },
                 external: [
+                    ...nodeBuiltins,
+                    'electron',
                     'sqlite3',
                     'better-sqlite3',
                     'bindings',
@@ -82,4 +90,3 @@ export default ({ mode }) => {
         },
     })
 }
-

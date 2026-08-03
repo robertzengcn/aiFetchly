@@ -17,6 +17,7 @@
       :error-message="errorMessage"
       :disabled="isStreaming"
       :workspace-root="workspaceRoot"
+      :show-reasoning="showReasoning"
       @grant-permission="onGrantPermission"
       @deny-permission="onDenyPermission"
       @approve-plan="emit('approve-plan')"
@@ -90,6 +91,7 @@ const props = defineProps<{
     message?: string;
   } | null;
   workspaceRoot?: string;
+  showReasoning?: boolean;
 }>();
 const emit = defineEmits<{
   (e: "grant-permission", message: ChatV2MessageView, persistent: boolean): void;

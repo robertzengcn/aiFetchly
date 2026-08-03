@@ -308,6 +308,7 @@ const emit = defineEmits<{
   (e: "stop"): void;
   (e: "request-workspace"): void;
   (e: "install-voice-model"): void;
+  (e: "install-voice-runtime"): void;
   (e: "voice-recording-start"): void;
   (e: "stop-speaking"): void;
   (e: "open-voice-settings"): void;
@@ -380,6 +381,10 @@ function recorderErrorNotice(err: unknown): string {
 
 async function onMicClick(): Promise<void> {
   if (isTranscribing.value) return;
+  if (props.voiceRuntimeUnavailable) {
+    emit("install-voice-runtime");
+    return;
+  }
   if (props.voiceModelMissing) {
     showVoiceModelNotice.value = true;
     return;

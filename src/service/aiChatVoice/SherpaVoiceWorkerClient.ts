@@ -99,6 +99,15 @@ export class SherpaVoiceWorkerClient {
   private readyPromise: Promise<VoiceReadyPayload> | null = null;
   private readyKey: string | null = null;
 
+  /**
+   * Optional voice-sherpa runtime root resolver (Phase 7, design §16.3).
+   * When installed, the resolved root is forwarded to the worker in the
+   * `initialize` message so sherpa-onnx-node loads from the downloaded runtime
+   * directory. Supplied by the main-process LocalAiRuntimeResolver — never
+   * renderer-provided.
+   */
+  private runtimeRootResolver?: () => Promise<string | null>;
+
   private constructor(
     timeoutMs: number = AI_CHAT_VOICE_REQUEST_TIMEOUT_MS,
     forkImpl: ForkFn = defaultFork,
@@ -107,6 +116,20 @@ export class SherpaVoiceWorkerClient {
     this.timeoutMs = timeoutMs;
     this.forkImpl = forkImpl;
     this.workerPathOverride = workerPathOverride;
+  }
+
+  /**
+   * Install (or clear) the voice-sherpa runtime root resolver. The composition
+   * root calls this with a function backed by LocalAiRuntimeResolver so the
+   * worker loads sherpa-onnx-node from the active downloaded runtime.
+   */
+  public setRuntimeRootResolver(
+    fn: (() => Promise<string | null>) | undefined
+  ): void {
+    this.runtimeRootResolver = fn;
+    // Force re-init so a newly installed resolver takes effect on next use.
+    this.readyPromise = null;
+    this.readyKey = null;
   }
 
   public static getInstance(): SherpaVoiceWorkerClient {
@@ -330,6 +353,17 @@ export class SherpaVoiceWorkerClient {
   ): Promise<VoiceReadyPayload> {
     const worker = await this.ensureWorkerStarted();
     const requestId = `init-${uuidv4()}`;
+    // Resolve the downloaded voice-sherpa runtime root (if any) before building
+    // the init message. Bundled fallback is used when no resolver is installed
+    // or the resolver returns null (runtime not installed).
+    let runtimeRoot: string | null = null;
+    if (this.runtimeRootResolver) {
+      try {
+        runtimeRoot = await this.runtimeRootResolver();
+      } catch {
+        runtimeRoot = null;
+      }
+    }
 
     return new Promise<VoiceReadyPayload>((resolve, reject) => {
       const timeout = setTimeout(() => {
@@ -362,6 +396,7 @@ export class SherpaVoiceWorkerClient {
         ...(init.ttsLanguage !== undefined
           ? { ttsLanguage: init.ttsLanguage }
           : {}),
+        ...(runtimeRoot ? { runtimeRoot } : {}),
       };
 
       try {

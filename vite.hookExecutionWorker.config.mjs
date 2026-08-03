@@ -1,6 +1,7 @@
 import { defineConfig, loadEnv } from 'vite';
 import alias from "@rollup/plugin-alias";
 import * as path from 'path';
+import { builtinModules } from 'node:module';
 
 import ClosePlugin from './vite-plugin-close.js'
 import checker from 'vite-plugin-checker'
@@ -37,6 +38,11 @@ function emptyModulesPlugin() {
     };
 }
 
+const nodeBuiltins = [
+    ...builtinModules,
+    ...builtinModules.map((moduleName) => `node:${moduleName}`),
+];
+
 export default ({ mode }) => {
     process.env = { ...process.env, ...loadEnv(mode, process.cwd()) };
     return defineConfig({
@@ -59,7 +65,19 @@ export default ({ mode }) => {
         },
         build: {
             rollupOptions: {
+                input: {
+                    HookExecutionWorker: path.resolve(
+                        __dirname,
+                        'src/childprocess/hook-execution/HookExecutionWorker.ts'
+                    ),
+                },
+                output: {
+                    entryFileNames: 'HookExecutionWorker.js',
+                    chunkFileNames: 'assets/[name]-[hash].js',
+                    format: 'cjs',
+                },
                 external: [
+                    ...nodeBuiltins,
                     'sqlite3',
                     'better-sqlite3',
                     'bindings',

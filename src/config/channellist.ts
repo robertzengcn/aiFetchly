@@ -591,6 +591,21 @@ export const AI_WORKSPACE_MEMORY_AUTO_DREAM_STATUS =
 // Dialog Channels
 export const DIALOG_PICK_FOLDER = "dialog:pick-folder";
 
+// Local AI Runtime (downloadable first-party runtimes). These are local
+// component-management channels (not hosted AI), so handlers use
+// registerValidatedHandler, not the AI-enabled gate.
+export const LOCAL_AI_RUNTIME_LIST = "local-ai-runtime:list";
+export const LOCAL_AI_RUNTIME_STATUS = "local-ai-runtime:status";
+export const LOCAL_AI_RUNTIME_PREPARE_INSTALL =
+  "local-ai-runtime:prepare-install";
+export const LOCAL_AI_RUNTIME_INSTALL = "local-ai-runtime:install";
+export const LOCAL_AI_RUNTIME_CANCEL_INSTALL =
+  "local-ai-runtime:cancel-install";
+export const LOCAL_AI_RUNTIME_CHECK_UPDATE = "local-ai-runtime:check-update";
+export const LOCAL_AI_RUNTIME_REPAIR = "local-ai-runtime:repair";
+export const LOCAL_AI_RUNTIME_REMOVE = "local-ai-runtime:remove";
+export const LOCAL_AI_RUNTIME_PROGRESS = "local-ai-runtime:progress";
+
 // Hooks system — Phase 4 management UI channels.
 export const HOOKS_LIST = "hooks:list";
 export const HOOKS_CREATE = "hooks:create";

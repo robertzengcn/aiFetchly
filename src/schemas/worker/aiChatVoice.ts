@@ -38,6 +38,8 @@ const aiChatVoiceInitSchema = z.object({
   ttsModelPath: z.string().min(1).max(AI_CHAT_VOICE_MAX_ID_LENGTH).optional(),
   sttLanguage: languageField,
   ttsLanguage: languageField,
+  // Phase 7: optional downloaded voice-sherpa runtime root (absolute path).
+  runtimeRoot: z.string().min(1).max(1024).optional(),
 });
 
 const aiChatVoiceTranscribeSchema = z.object({
@@ -75,7 +77,7 @@ export const aiChatVoiceInboundSchema = lazySchema(() =>
     aiChatVoiceSynthesizeSchema,
     aiChatVoiceCancelSchema,
     aiChatVoiceShutdownSchema,
-  ]),
+  ])
 );
 
 // ─── Worker → Main (outbound) ────────────────────────────────────────────────
@@ -107,5 +109,5 @@ export const aiChatVoiceOutboundSchema = lazySchema(() =>
       requestId: requestIdField,
       error: z.string().min(1),
     }),
-  ]),
+  ])
 );

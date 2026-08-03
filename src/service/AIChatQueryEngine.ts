@@ -53,11 +53,13 @@ import type {
   ResumeTurnResult,
 } from "@/service/AIChatQueryEvents";
 import type {
+  ChatV2ReasoningMetadata,
   ChatV2StreamRequest,
   ChatV2UploadedAttachment,
   ChatV2AttachmentKind,
   ChatV2AttachmentMetadata,
   ChatV2MessageMetadata,
+  ChatV2RuntimeStatus,
 } from "@/entityTypes/aiChatV2Types";
 import type { AIChatScheduledTurnContext } from "@/entityTypes/aiChatScheduledLoopTypes";
 import type {
@@ -79,6 +81,36 @@ function isActivePlanState(plan?: AIChatPlanStateView | null): boolean {
     plan.status !== "cancelled" &&
     plan.status !== "rejected"
   );
+}
+
+/** Maximum persisted reasoning characters per assistant message (32 KB). */
+const CHAT_V2_REASONING_MAX_CHARS = 32 * 1024;
+
+/**
+ * Build persisted reasoning metadata from the loop's final reasoning string.
+ * Returns undefined when there is nothing to persist. Truncates above the cap
+ * and flags truncated=true so history stays bounded while live streaming stays
+ * unbounded.
+ */
+function buildReasoningMetadata(
+  reasoningContent: string | undefined,
+  model: string | undefined
+): { reasoning: ChatV2ReasoningMetadata } | undefined {
+  if (!reasoningContent || reasoningContent.length === 0) {
+    return undefined;
+  }
+  const over = reasoningContent.length > CHAT_V2_REASONING_MAX_CHARS;
+  return {
+    reasoning: {
+      content: over
+        ? reasoningContent.slice(0, CHAT_V2_REASONING_MAX_CHARS)
+        : reasoningContent,
+      format: "plain_text",
+      source: "server",
+      model,
+      truncated: over ? true : false,
+    },
+  };
 }
 
 function isTypedPlanApproval(message: string): boolean {
@@ -224,6 +256,22 @@ export class AIChatQueryEngine {
     this.workspaceAutoDreamService = deps?.workspaceAutoDreamService;
     this.generatedImageStorage = deps?.generatedImageStorage;
     this.toolFilter = deps?.toolFilter;
+  }
+
+  /** Return main-process truth for a conversation's current turn. */
+  getConversationRuntimeStatus(
+    conversationId: string
+  ): ChatV2RuntimeStatus {
+    if (this.pendingPermission?.conversationId === conversationId) {
+      return "awaiting_permission";
+    }
+    if (this.pendingPlanQuestion?.conversationId === conversationId) {
+      return "awaiting_user";
+    }
+    if (this.currentConversationId === conversationId) {
+      return "running";
+    }
+    return "idle";
   }
 
   /**
@@ -1212,6 +1260,7 @@ export class AIChatQueryEngine {
               source: "chat-v2",
               openaiResponseId: result.responseId,
               finishReason: result.finishReason,
+              ...buildReasoningMetadata(result.reasoningContent, result.model),
               generatedImages,
               recovery: result.recoveryMetadata,
             },
@@ -1281,6 +1330,7 @@ export class AIChatQueryEngine {
               openaiResponseId: result.responseId,
               finishReason: "cancelled",
               cancelled: true,
+              ...buildReasoningMetadata(result.reasoningContent, result.model),
             },
           });
         }
@@ -1308,6 +1358,7 @@ export class AIChatQueryEngine {
               openaiResponseId: result.responseId,
               finishReason: "error",
               error: userSafeError(result.error),
+              ...buildReasoningMetadata(result.reasoningContent, result.model),
             },
           });
         }

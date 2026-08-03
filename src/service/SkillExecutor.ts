@@ -776,6 +776,7 @@ async function executeViaToolExecutor(
       context.conversationId,
       {
         toolCallId: context.toolCallId,
+        skipPermissionCheck: context.skipPermissionCheck,
         emitProgress: context.emitProgress,
         signal: context.signal,
       }

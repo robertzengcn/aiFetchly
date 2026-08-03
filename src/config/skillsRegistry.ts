@@ -240,6 +240,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
         context.conversationId,
         {
           toolCallId: context.toolCallId,
+          skipPermissionCheck: context.skipPermissionCheck,
           emitProgress: context.emitProgress,
           signal: context.signal,
         }
@@ -281,7 +282,13 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       const result = await ToolExecutor.execute(
         "extract_emails_from_urls",
         args,
-        context.conversationId
+        context.conversationId,
+        {
+          toolCallId: context.toolCallId,
+          skipPermissionCheck: context.skipPermissionCheck,
+          emitProgress: context.emitProgress,
+          signal: context.signal,
+        }
       );
       return { success: true, result };
     },
@@ -330,7 +337,13 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       const result = await ToolExecutor.execute(
         "search_yellow_pages",
         args,
-        context.conversationId
+        context.conversationId,
+        {
+          toolCallId: context.toolCallId,
+          skipPermissionCheck: context.skipPermissionCheck,
+          emitProgress: context.emitProgress,
+          signal: context.signal,
+        }
       );
       return { success: true, result };
     },
@@ -415,6 +428,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
         context.conversationId,
         {
           toolCallId: context.toolCallId,
+          skipPermissionCheck: context.skipPermissionCheck,
           emitProgress: context.emitProgress,
           signal: context.signal,
         }
@@ -444,7 +458,13 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       const result = await ToolExecutor.execute(
         "get_available_yellow_pages_platforms",
         args,
-        context.conversationId
+        context.conversationId,
+        {
+          toolCallId: context.toolCallId,
+          skipPermissionCheck: context.skipPermissionCheck,
+          emitProgress: context.emitProgress,
+          signal: context.signal,
+        }
       );
       return { success: true, result };
     },
@@ -487,7 +507,13 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       const result = await ToolExecutor.execute(
         "analyze_website",
         args,
-        context.conversationId
+        context.conversationId,
+        {
+          toolCallId: context.toolCallId,
+          skipPermissionCheck: context.skipPermissionCheck,
+          emitProgress: context.emitProgress,
+          signal: context.signal,
+        }
       );
       return { success: true, result };
     },
@@ -530,7 +556,13 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       const result = await ToolExecutor.execute(
         "analyze_website_batch",
         args,
-        context.conversationId
+        context.conversationId,
+        {
+          toolCallId: context.toolCallId,
+          skipPermissionCheck: context.skipPermissionCheck,
+          emitProgress: context.emitProgress,
+          signal: context.signal,
+        }
       );
       return { success: true, result };
     },
@@ -573,7 +605,13 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       const result = await ToolExecutor.execute(
         "analyze_websites",
         args,
-        context.conversationId
+        context.conversationId,
+        {
+          toolCallId: context.toolCallId,
+          skipPermissionCheck: context.skipPermissionCheck,
+          emitProgress: context.emitProgress,
+          signal: context.signal,
+        }
       );
       return { success: true, result };
     },
@@ -606,7 +644,13 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       const result = await ToolExecutor.execute(
         "read_url_content",
         args,
-        context.conversationId
+        context.conversationId,
+        {
+          toolCallId: context.toolCallId,
+          skipPermissionCheck: context.skipPermissionCheck,
+          emitProgress: context.emitProgress,
+          signal: context.signal,
+        }
       );
       return { success: true, result };
     },
@@ -640,7 +684,13 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       const result = await ToolExecutor.execute(
         "read_attachment_content",
         args,
-        context.conversationId
+        context.conversationId,
+        {
+          toolCallId: context.toolCallId,
+          skipPermissionCheck: context.skipPermissionCheck,
+          emitProgress: context.emitProgress,
+          signal: context.signal,
+        }
       );
       return { success: true, result };
     },
@@ -681,7 +731,13 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       const result = await ToolExecutor.execute(
         "generate_keywords",
         args,
-        context.conversationId
+        context.conversationId,
+        {
+          toolCallId: context.toolCallId,
+          skipPermissionCheck: context.skipPermissionCheck,
+          emitProgress: context.emitProgress,
+          signal: context.signal,
+        }
       );
       return { success: true, result };
     },
@@ -747,6 +803,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
         context.conversationId,
         {
           toolCallId: context.toolCallId,
+          skipPermissionCheck: context.skipPermissionCheck,
           emitProgress: context.emitProgress,
           signal: context.signal,
         }
@@ -796,7 +853,13 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       const result = await ToolExecutor.execute(
         "file_read",
         args,
-        context.conversationId
+        context.conversationId,
+        {
+          toolCallId: context.toolCallId,
+          skipPermissionCheck: context.skipPermissionCheck,
+          emitProgress: context.emitProgress,
+          signal: context.signal,
+        }
       );
       return { success: true, result };
     },
@@ -843,7 +906,13 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       const result = await ToolExecutor.execute(
         "glob_files",
         args,
-        context.conversationId
+        context.conversationId,
+        {
+          toolCallId: context.toolCallId,
+          skipPermissionCheck: context.skipPermissionCheck,
+          emitProgress: context.emitProgress,
+          signal: context.signal,
+        }
       );
       return { success: true, result };
     },
@@ -917,7 +986,13 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       const result = await ToolExecutor.execute(
         "grep_files",
         args,
-        context.conversationId
+        context.conversationId,
+        {
+          toolCallId: context.toolCallId,
+          skipPermissionCheck: context.skipPermissionCheck,
+          emitProgress: context.emitProgress,
+          signal: context.signal,
+        }
       );
       return { success: true, result };
     },
@@ -964,7 +1039,13 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       const result = await ToolExecutor.execute(
         "file_edit",
         args,
-        context.conversationId
+        context.conversationId,
+        {
+          toolCallId: context.toolCallId,
+          skipPermissionCheck: context.skipPermissionCheck,
+          emitProgress: context.emitProgress,
+          signal: context.signal,
+        }
       );
       return { success: true, result };
     },
@@ -1006,7 +1087,13 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       const result = await ToolExecutor.execute(
         "file_write",
         args,
-        context.conversationId
+        context.conversationId,
+        {
+          toolCallId: context.toolCallId,
+          skipPermissionCheck: context.skipPermissionCheck,
+          emitProgress: context.emitProgress,
+          signal: context.signal,
+        }
       );
       return { success: true, result };
     },
@@ -1387,9 +1474,9 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     },
   },
   {
-    name: "start_bulk_email_send_task",
+    name: "start_email_send_task",
     description:
-      "Create and start a bulk email send task. Requires confirmation because it sends email. Provide either template_ids or email_subject and email_html_content, not both empty.",
+      "Create and start an email send task. Requires confirmation because it sends email. Provide either template_ids or email_subject and email_html_content, not both empty.",
     parameters: {
       type: "object",
       properties: {

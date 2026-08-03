@@ -59,6 +59,9 @@ export class AiChatVoiceModule {
       modelRoot: this.modelRoot,
       fileExists: this.fileExists,
     });
+    // Note: the voice-sherpa runtime resolver is installed on the worker client
+    // singleton by the production composition root (local-ai-runtime-ipc
+    // installWorkerRuntimeResolvers), not via this module's deps.
   }
 
   /** Read persisted settings, typed + defaulted (never throws). */
@@ -86,9 +89,12 @@ export class AiChatVoiceModule {
   }
 
   /** Resolve STT/TTS model availability into a runtime status. */
-  getRuntimeStatus(): AiChatVoiceRuntimeStatus {
+  getRuntimeStatus(
+    runtimeAvailableOverride?: boolean
+  ): AiChatVoiceRuntimeStatus {
     const settings = this.getSettingsView();
-    const runtimeAvailable = this.runtimeAvailable();
+    const runtimeAvailable =
+      runtimeAvailableOverride ?? this.runtimeAvailable();
     return {
       sttState: this.stateForModel(settings.sttModelId, runtimeAvailable),
       ttsState: this.stateForModel(settings.ttsModelId, runtimeAvailable),

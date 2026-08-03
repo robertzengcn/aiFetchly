@@ -11,7 +11,12 @@
   </div>
   <div v-else class="v2-message" :class="`v2-message--${message.role}`">
     <div class="v2-message__bubble">
-      <div class="v2-message__role">{{ roleLabel }}</div>
+      <div class="v2-message__meta">
+        <span class="v2-message__role">{{ roleLabel }}</span>
+        <span v-if="messageTime" class="v2-message__time">
+          {{ messageTime }}
+        </span>
+      </div>
       <template v-if="message.messageType === MessageType.TOOL_CALL">
         <div class="v2-message__tool-header">
           <v-icon size="small" color="purple" class="mr-1">mdi-toolbox</v-icon>
@@ -101,6 +106,17 @@
         <div v-if="message.content" class="v2-message__content">
           {{ message.content }}
         </div>
+        <details
+          v-if="hasReasoning"
+          class="v2-message__reasoning"
+          :open="hasReasoning"
+        >
+          <summary>
+            <v-icon size="x-small">mdi-brain</v-icon>
+            {{ t("aiChatV2.reasoning_title") || "Reasoning" }}
+          </summary>
+          <div class="v2-message__reasoning-content">{{ reasoningText }}</div>
+        </details>
         <div v-if="generatedImages.length > 0" class="v2-message__images">
           <template v-for="image in generatedImages" :key="image.key">
             <a
@@ -235,6 +251,8 @@ const props = defineProps<{
   errorMessage?: string;
   disabled?: boolean;
   workspaceRoot?: string;
+  /** Global "Show reasoning" preference — gates whether the panel renders. */
+  showReasoning?: boolean;
 }>();
 const emit = defineEmits<{
   (
@@ -266,6 +284,12 @@ const roleLabel = computed(() => {
 const status = computed<Status>(() => props.status ?? "idle");
 const disabled = computed(() => props.disabled ?? false);
 
+const messageTime = computed(() => {
+  const parsed = Date.parse(props.message.timestamp);
+  if (Number.isNaN(parsed)) return "";
+  return new Date(parsed).toLocaleString();
+});
+
 interface RenderableGeneratedImage {
   key: string;
   src: string;
@@ -281,8 +305,8 @@ const generatedImages = computed<RenderableGeneratedImage[]>(() => {
         ? {
             key: `${src}-${index}`,
             src,
-            externalHref: isExternalImageUrl(src) ? src : undefined,
-            localPath: image.local_path,
+            ...(isExternalImageUrl(src) ? { externalHref: src } : {}),
+            ...(image.local_path ? { localPath: image.local_path } : {}),
           }
         : null;
     })
@@ -416,6 +440,16 @@ const toolProgress = computed<ToolProgressView | null>(() => {
 
 const needsPermissionPrompt = computed(
   () => toolResult.value.needsPermissionPrompt === true
+);
+
+const reasoningText = computed(
+  () => props.message.metadata?.reasoning?.content?.trim() ?? ""
+);
+const hasReasoning = computed(
+  () =>
+    props.message.role === "assistant" &&
+    props.showReasoning === true &&
+    reasoningText.value.length > 0
 );
 
 const shellPreview = computed<ShellPreview | undefined>(() => {
@@ -552,13 +586,49 @@ const mentionChips = computed<MentionChip[]>(() => {
 .v2-message--user .v2-message__bubble {
   background: rgba(25, 118, 210, 0.12);
 }
-.v2-message__role {
+.v2-message__meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
   font-size: 11px;
   opacity: 0.6;
-  margin-bottom: 2px;
+  margin-bottom: 4px;
+}
+.v2-message--user .v2-message__meta {
+  justify-content: flex-end;
+}
+.v2-message__role {
+  font-weight: 600;
+}
+.v2-message__time {
+  white-space: nowrap;
 }
 .v2-message__content {
   white-space: pre-wrap;
+  line-height: 1.45;
+}
+.v2-message__reasoning {
+  margin-top: 8px;
+  padding: 8px;
+  border-left: 3px solid rgba(var(--v-theme-primary), 0.45);
+  background: rgba(var(--v-theme-primary), 0.06);
+  border-radius: 6px;
+}
+.v2-message__reasoning summary {
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.v2-message__reasoning-content {
+  margin-top: 6px;
+  white-space: pre-wrap;
+  max-height: 220px;
+  overflow: auto;
+  font-size: 13px;
   line-height: 1.45;
 }
 .v2-message__images {

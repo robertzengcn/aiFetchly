@@ -430,6 +430,17 @@ import {
   DIAGNOSTICS_CLEAR_LOCAL,
   DIAGNOSTICS_LIST_CRASHES,
 } from "@/config/channellist";
+import {
+  LOCAL_AI_RUNTIME_LIST,
+  LOCAL_AI_RUNTIME_STATUS,
+  LOCAL_AI_RUNTIME_PREPARE_INSTALL,
+  LOCAL_AI_RUNTIME_INSTALL,
+  LOCAL_AI_RUNTIME_CANCEL_INSTALL,
+  LOCAL_AI_RUNTIME_CHECK_UPDATE,
+  LOCAL_AI_RUNTIME_REPAIR,
+  LOCAL_AI_RUNTIME_REMOVE,
+  LOCAL_AI_RUNTIME_PROGRESS,
+} from "@/config/channellist";
 
 // window.ipcRenderer = ipcRenderer
 // console.log('preload.js')
@@ -553,6 +564,8 @@ contextBridge.exposeInMainWorld("api", {
       AI_CHAT_V2_CONVERSATION_UPDATED,
       // Live scheduled-turn token stream
       AI_CHAT_V2_SCHEDULED_STREAM,
+      // Local AI Runtime install/update progress (main -> renderer)
+      LOCAL_AI_RUNTIME_PROGRESS,
     ];
     const isSocialTaskLogChannel = /^socialtask:log:/.test(channel);
 
@@ -623,6 +636,8 @@ contextBridge.exposeInMainWorld("api", {
       AI_CHAT_V2_CONVERSATION_UPDATED,
       // Live scheduled-turn token stream
       AI_CHAT_V2_SCHEDULED_STREAM,
+      // Local AI Runtime install/update progress (main -> renderer)
+      LOCAL_AI_RUNTIME_PROGRESS,
     ];
     const isSocialTaskLogChannel = /^socialtask:log:/.test(channel);
 
@@ -656,6 +671,8 @@ contextBridge.exposeInMainWorld("api", {
       AI_CHAT_V2_CONVERSATION_UPDATED,
       // Live scheduled-turn token stream
       AI_CHAT_V2_SCHEDULED_STREAM,
+      // Local AI Runtime install/update progress (main -> renderer)
+      LOCAL_AI_RUNTIME_PROGRESS,
     ];
     if (validChannels.includes(channel)) {
       ipcRenderer.removeAllListeners(channel);
@@ -1034,6 +1051,15 @@ contextBridge.exposeInMainWorld("api", {
       AIFETCHLY_WORKSPACE_TRUST_SET,
       // Dialog Channels
       DIALOG_PICK_FOLDER,
+      // Local AI Runtime (component management, not AI-gated)
+      LOCAL_AI_RUNTIME_LIST,
+      LOCAL_AI_RUNTIME_STATUS,
+      LOCAL_AI_RUNTIME_PREPARE_INSTALL,
+      LOCAL_AI_RUNTIME_INSTALL,
+      LOCAL_AI_RUNTIME_CANCEL_INSTALL,
+      LOCAL_AI_RUNTIME_CHECK_UPDATE,
+      LOCAL_AI_RUNTIME_REPAIR,
+      LOCAL_AI_RUNTIME_REMOVE,
       // Hooks system channels — Phase 4
       HOOKS_LIST,
       HOOKS_CREATE,

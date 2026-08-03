@@ -52,6 +52,14 @@ export interface AIChatQueryTokenEvent {
   model?: string;
 }
 
+export interface AIChatQueryReasoningDeltaEvent {
+  type: "reasoning_delta";
+  conversationId: string;
+  messageId: string;
+  reasoningDelta: string;
+  model?: string;
+}
+
 export interface AIChatQueryRetryEvent {
   type: "retry_connect";
   conversationId: string;
@@ -219,6 +227,7 @@ export interface AIChatQueryRecoveryStatusEvent {
 export type AIChatQueryEvent =
   | AIChatQueryStartEvent
   | AIChatQueryTokenEvent
+  | AIChatQueryReasoningDeltaEvent
   | AIChatQueryRetryEvent
   | AIChatQueryRecoveryStatusEvent
   | AIChatQueryToolCallEvent
@@ -254,6 +263,8 @@ export type AIChatQueryLoopResult =
       totalTokens?: number;
       promptTokens?: number;
       completionTokens?: number;
+      /** Final safe-to-show reasoning text accumulated across rounds, if any. */
+      reasoningContent?: string;
       /** Final deferred-catalog discovered-tool snapshot, when deferred mode
        * was active, so the engine can persist it across restart (FR-5/AC-8). */
       toolCatalogState?: ToolCatalogStateSnapshot;
@@ -271,6 +282,8 @@ export type AIChatQueryLoopResult =
       totalTokens?: number;
       promptTokens?: number;
       completionTokens?: number;
+      /** Partial reasoning captured before the cancel, if any. */
+      reasoningContent?: string;
       toolCatalogState?: ToolCatalogStateSnapshot;
       /** Recovery metadata for the cancelled turn, if any. */
       recoveryMetadata?: ChatV2RecoveryMetadata;
@@ -291,6 +304,8 @@ export type AIChatQueryLoopResult =
       partialContent: string;
       model?: string;
       responseId?: string;
+      /** Partial reasoning captured before the failure, if any. */
+      reasoningContent?: string;
       toolCatalogState?: ToolCatalogStateSnapshot;
       /** Recovery metadata accumulated before the failure, if any. */
       recoveryMetadata?: ChatV2RecoveryMetadata;

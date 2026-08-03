@@ -111,8 +111,9 @@ describe("OpenAIStreamAccumulator", () => {
         choices: [{ index: 0, delta: { content: "" }, finish_reason: null }],
       })
     );
-    expect(d1).toBe("ab");
-    expect(d2).toBe("");
+    expect(d1.contentDelta).toBe("ab");
+    expect(d1.reasoningDelta).toBe("");
+    expect(d2.contentDelta).toBe("");
   });
 
   it("buffers fragmented tool call argument deltas by index", () => {
@@ -298,9 +299,9 @@ describe("OpenAIStreamAccumulator", () => {
     expect(parsed.length).toBe(1);
     expect(parsed[0].ok).toBe(true);
     expect(parsed[0].arguments).toBeDefined();
-    expect(
-      (parsed[0].arguments as Record<string, unknown>).agentId
-    ).toBe("agent-lead-researcher");
+    expect((parsed[0].arguments as Record<string, unknown>).agentId).toBe(
+      "agent-lead-researcher"
+    );
   });
 
   it("captures usage from the final usage-only chunk", () => {

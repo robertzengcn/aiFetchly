@@ -89,7 +89,6 @@ import { EmailReplyIdentityProfileEntity } from "@/entity/EmailReplyIdentityProf
 import { EmailAutoReplyRuleEntity } from "@/entity/EmailAutoReplyRule.entity";
 import { EmailReplyAuditLogEntity } from "@/entity/EmailReplyAuditLog.entity";
 import { EmailAutoReplyAuditLogEntity } from "@/entity/EmailAutoReplyAuditLog.entity";
-// import sqlite3 from "sqlite3";
 import Database from "better-sqlite3";
 import { app } from "electron";
 import * as fs from "fs";
@@ -570,9 +569,6 @@ export class SqliteDb {
             // The error will be logged for debugging
           }
         },
-        // driver: {
-        //     sqlite3: sqlite3
-        // }
       });
       this.initializeConnection = this.connection.initialize.bind(
         this.connection

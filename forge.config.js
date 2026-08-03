@@ -10,6 +10,7 @@ const EXTERNAL_DEPENDENCIES = [
   "electron-squirrel-startup",
   "better-sqlite3",
   "sqlite-vec",
+  "chokidar",
   "puppeteer-cluster",
   "lodash",
   "winston",
@@ -31,18 +32,28 @@ const EXTERNAL_DEPENDENCIES = [
   "openai",
   "typeorm",
   "cheerio",
+  "sanitize-html",
+  "html-to-text",
   "sqlite-vec",
   "canvas",
   "@napi-rs/canvas",
   "reflect-metadata",
   "@mixmark-io/domino",
   "electron-log",
-  "@xenova/transformers",
-  "onnxruntime-node",
-  "onnxruntime-common",
-  "sharp",
-  "sherpa-onnx-node",
+  // Phase 9 slim installer: local-AI inference packages are excluded from the
+  // base app — they ship as downloadable runtimes (PRD FR-16, design §26.7).
+  // "@xenova/transformers", "onnxruntime-node", "onnxruntime-common",
+  // "sharp", "sherpa-onnx-node"
 ];
+
+function getPackageRootName(packageName) {
+  if (packageName.startsWith("@")) {
+    const [scope, name] = packageName.split("/");
+    return name ? `${scope}/${name}` : packageName;
+  }
+  return packageName.split("/")[0];
+}
+
 //import { ForgeConfig } from '@electron-forge/shared-types';
 // import { AutoUnpackNativesPlugin } from "@electron-forge/plugin-auto-unpack-natives";
 // Base .env (CI writes this), then mode-specific overrides e.g. .env.test for NODE_ENV=test.
@@ -52,6 +63,7 @@ const env = process.env.NODE_ENV || "development";
 dotenv.config({ path: path.resolve(__dirname, `.env.${env}`) });
 
 const isProductionBuild = env === "production";
+const shouldBuildMacDmg = process.env.MAKE_MAC_DMG !== "false";
 const windowsCertificatePath = path.resolve(__dirname, "cert.pfx");
 
 function requireProductionEnv(name) {
@@ -90,6 +102,34 @@ function ensureBetterSqliteElectronBinary() {
   }
 }
 
+function fixInteropNamespaceDefault(viteBuildDir) {
+  const fs = require("fs");
+
+  if (!existsSync(viteBuildDir)) {
+    return;
+  }
+
+  const files = fs.readdirSync(viteBuildDir);
+  for (const file of files) {
+    if (file.startsWith("background") && file.endsWith(".js")) {
+      const filePath = join(viteBuildDir, file);
+      let content = fs.readFileSync(filePath, "utf-8");
+
+      // Fix: d.get ? d : -> d && d.get ? d : (handles undefined property descriptors)
+      const originalContent = content;
+      content = content.replace(
+        /Object\.defineProperty\((\w),(\w),(\w)\.get\?(\w):/g,
+        "Object.defineProperty($1,$2,$3&&$3.get?$4:"
+      );
+
+      if (content !== originalContent) {
+        fs.writeFileSync(filePath, content);
+        console.log("Fixed _interopNamespaceDefault in:", filePath);
+      }
+    }
+  }
+}
+
 module.exports = {
   packagerConfig: {
     icon: "./src/assets/images/icon",
@@ -120,12 +160,12 @@ module.exports = {
     // },
     asar: {
       // .vite/build holds vec0.* copied by Vite; node_modules holds native deps — both must be real disk.
-      // @xenova/transformers + onnxruntime-* + sharp ship native/WASM/.so artifacts that cannot load
-      // from inside app.asar, so they must be unpacked alongside better-sqlite3/sqlite-vec.
+      // Phase 9 slim installer: only the database natives (better-sqlite3, sqlite-vec) are unpacked.
+      // The AI inference natives (@xenova/transformers, onnxruntime-*, sharp, sherpa-onnx-*) are no
+      // longer bundled — they ship as downloadable runtimes (PRD FR-16, design §26.7).
       unpackDir:
-        "**/{.vite,node_modules/better-sqlite3,node_modules/sqlite3,node_modules/sqlite-vec,node_modules/@xenova/transformers,node_modules/onnxruntime-node,node_modules/onnxruntime-common,node_modules/sharp,node_modules/sherpa-onnx-node,node_modules/sherpa-onnx-darwin-arm64,node_modules/sherpa-onnx-darwin-x64,node_modules/sherpa-onnx-linux-arm64,node_modules/sherpa-onnx-linux-x64,node_modules/sherpa-onnx-win-ia32,node_modules/sherpa-onnx-win-x64}/**",
-      unpack:
-        "**/{vec0.*,node_modules/sherpa-onnx-darwin-arm64/*,node_modules/sherpa-onnx-darwin-x64/*,node_modules/sherpa-onnx-linux-arm64/*,node_modules/sherpa-onnx-linux-x64/*,node_modules/sherpa-onnx-win-ia32/*,node_modules/sherpa-onnx-win-x64/*}",
+        "**/{.vite,node_modules/better-sqlite3,node_modules/sqlite-vec}/**",
+      unpack: "**/vec0.*",
     },
     ignore: (file) => {
       const filePath = file.toLowerCase();
@@ -141,6 +181,11 @@ module.exports = {
         KEEP_FILE.keep = true;
       if (!KEEP_FILE.keep && filePath === "/.vite") KEEP_FILE.keep = true;
       if (!KEEP_FILE.keep && filePath.startsWith("/.vite/"))
+        KEEP_FILE.keep = true;
+      if (!KEEP_FILE.keep && filePath === "/dist") KEEP_FILE.keep = true;
+      if (!KEEP_FILE.keep && filePath === "/dist/childprocess")
+        KEEP_FILE.keep = true;
+      if (!KEEP_FILE.keep && filePath.startsWith("/dist/childprocess/"))
         KEEP_FILE.keep = true;
       if (!KEEP_FILE.keep && filePath.startsWith("/node_modules/")) {
         // check if matches any of the external dependencies
@@ -174,36 +219,12 @@ module.exports = {
     // ],
     prune: true,
     overwrite: true,
-    // extraResource: [
-    //    // Only include these paths if they exist
-    //    ...(() => {
-    //     const resources:Array<string>= [];
-    //     const sqlite3Path = path.join(__dirname, 'node_modules/sqlite3/lib/binding');
-    //     const betterSqlitePath = path.join(__dirname, 'node_modules/better-sqlite3/build/Release');
-
-    //     if (fsSync.existsSync(sqlite3Path)) {
-    //       resources.push(sqlite3Path);
-    //     }
-
-    //     if (fsSync.existsSync(betterSqlitePath)) {
-    //       resources.push(betterSqlitePath);
-    //     }
-
-    //     return resources;
-    //   })()
-    // ],
   },
   rebuildConfig: {
     // isolated-vm@6.1.2 fails to compile against Electron 35 V8 13.5 headers
     // (known upstream issue: laverdet/isolated-vm#528). Exclude it from rebuild
     // so Forge startup is not blocked; the pre-built Node.js binary is used instead.
-    onlyModules: [
-      "better-sqlite3",
-      "sqlite3",
-      "bufferutil",
-      "utf-8-validate",
-      "keytar",
-    ],
+    onlyModules: ["better-sqlite3", "bufferutil", "utf-8-validate", "keytar"],
   },
   makers: [
     {
@@ -252,22 +273,26 @@ module.exports = {
       name: "@electron-forge/maker-zip",
       platforms: ["darwin"],
     },
-    {
-      name: "@electron-forge/maker-dmg",
-      config: {
-        format: "ULFO",
-        icon: "./src/assets/images/icon.icns",
-        // Note: background image removed to prevent build failures
-        // If needed, create src/assets/images/dmg-background.png and uncomment below
-        // background: "./src/assets/images/dmg-background.png",
-        // contents array removed - using electron-forge defaults
-        // Defaults will place the app and a link to /Applications automatically
-        window: {
-          width: 540,
-          height: 380,
-        },
-      },
-    },
+    ...(shouldBuildMacDmg
+      ? [
+          {
+            name: "@electron-forge/maker-dmg",
+            config: {
+              format: "ULFO",
+              icon: "./src/assets/images/icon.icns",
+              // Note: background image removed to prevent build failures
+              // If needed, create src/assets/images/dmg-background.png and uncomment below
+              // background: "./src/assets/images/dmg-background.png",
+              // contents array removed - using electron-forge defaults
+              // Defaults will place the app and a link to /Applications automatically
+              window: {
+                width: 540,
+                height: 380,
+              },
+            },
+          },
+        ]
+      : []),
     {
       name: "@electron-forge/maker-deb",
       config: {
@@ -509,35 +534,6 @@ module.exports = {
     prePackage: async () => {
       const projectRoot = normalize(__dirname);
 
-      // Fix _interopNamespaceDefault function to handle undefined property descriptors
-      // This fixes the "Cannot read properties of undefined (reading 'get')" error
-      const viteBuildDir = join(projectRoot, ".vite", "build");
-      const fs = require("fs");
-      const path = require("path");
-
-      try {
-        const files = fs.readdirSync(viteBuildDir);
-        for (const file of files) {
-          if (file.startsWith("background") && file.endsWith(".js")) {
-            const filePath = path.join(viteBuildDir, file);
-            let content = fs.readFileSync(filePath, "utf-8");
-
-            // Fix: d.get ? d : -> d && d.get ? d : (handles undefined property descriptors)
-            const originalContent = content;
-            content = content.replace(
-              /Object\.defineProperty\((\w),(\w),(\w)\.get\?(\w):/g,
-              "Object.defineProperty($1,$2,$3&&$3.get?$4:"
-            );
-
-            if (content !== originalContent) {
-              fs.writeFileSync(filePath, content);
-              console.log("✅ Fixed _interopNamespaceDefault in:", file);
-            }
-          }
-        }
-      } catch (err) {
-        console.error("Failed to fix interop namespace:", err);
-      }
       const getExternalNestedDependencies = async (
         nodeModuleNames,
         includeNestedDeps = true
@@ -558,8 +554,7 @@ module.exports = {
             await walker.walkDependenciesForModule(moduleRoot, DepType.PROD);
             walker.modules
               .filter((dep) => dep.nativeModuleType === DepType.PROD)
-              // for a package like '@realm/fetch', need to split the path and just take the first part
-              .map((dep) => dep.name.split("/")[0])
+              .map((dep) => getPackageRootName(dep.name))
               .forEach((name) => foundModules.add(name));
           }
         }
@@ -569,6 +564,9 @@ module.exports = {
         EXTERNAL_DEPENDENCIES
       );
       nativeModuleDependenciesToPackage = Array.from(nativeModuleDependencies);
+    },
+    packageAfterCopy: async (_forgeConfig, buildPath) => {
+      fixInteropNamespaceDefault(join(buildPath, ".vite", "build"));
     },
     //   packageAfterPrune: async (_config, buildPath) => {
     //     const gypPath = path.join(

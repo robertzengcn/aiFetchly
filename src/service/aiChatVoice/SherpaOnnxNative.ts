@@ -5,8 +5,15 @@
  * local voice inference is actually available before advertising STT/TTS as
  * ready. The package is intentionally loaded dynamically because native ONNX
  * artifacts must stay external to the Vite worker bundle.
+ *
+ * Phase 7 (design §16.1, FR-11): when an explicit `runtimeRoot` is supplied by
+ * the LocalAiRuntimeResolver, the addon is loaded from that downloaded runtime
+ * directory via a scoped `createRequire`. This never mutates global NODE_PATH.
+ * When no runtime root is supplied, the legacy bundled resolution is used as a
+ * migration fallback (FR-17) and is removed after runtime delivery is stable.
  */
 import { createRequire } from "node:module";
+import path from "node:path";
 
 export interface RecognizerStream {
   acceptWaveform(input: { sampleRate: number; samples: Float32Array }): void;
@@ -36,9 +43,31 @@ export interface SherpaOnnxNative {
   }) => unknown;
 }
 
-/** Load the native addon at runtime, returning null when it is absent/broken. */
-export function loadSherpaOnnxNative(): SherpaOnnxNative | null {
+/**
+ * Load the native addon at runtime, returning null when it is absent/broken.
+ *
+ * @param runtimeRoot Optional downloaded-runtime root (Phase 7). When supplied,
+ *   the addon is resolved from `<runtimeRoot>/package.json` via a scoped
+ *   `createRequire` — the active voice-sherpa runtime directory. When omitted,
+ *   the legacy bundled resolution is used (migration fallback).
+ */
+export function loadSherpaOnnxNative(
+  runtimeRoot?: string
+): SherpaOnnxNative | null {
   const moduleName = "sherpa-onnx-" + "node";
+
+  // Explicit downloaded runtime root wins (design §16.1, FR-11).
+  if (runtimeRoot) {
+    try {
+      const runtimeRequire = createRequire(
+        path.join(runtimeRoot, "package.json")
+      );
+      return runtimeRequire(moduleName) as SherpaOnnxNative;
+    } catch {
+      return null;
+    }
+  }
+
   const globalRequire = (globalThis as { require?: (id: string) => unknown })
     .require;
   if (typeof globalRequire === "function") {
@@ -57,6 +86,6 @@ export function loadSherpaOnnxNative(): SherpaOnnxNative | null {
   }
 }
 
-export function isSherpaOnnxNativeAvailable(): boolean {
-  return loadSherpaOnnxNative() !== null;
+export function isSherpaOnnxNativeAvailable(runtimeRoot?: string): boolean {
+  return loadSherpaOnnxNative(runtimeRoot) !== null;
 }
