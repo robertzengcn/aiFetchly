@@ -4,14 +4,17 @@ const { spawnSync } = require("node:child_process");
 const {
   cpSync,
   existsSync,
+  readFileSync,
   readdirSync,
   rmdirSync,
   statSync,
 } = require("node:fs");
+const { builtinModules } = require("node:module");
 const { join, normalize } = require("node:path");
 const { Walker, DepType } = require("flora-colossus");
 let nativeModuleDependenciesToPackage = [];
 const EXTERNAL_DEPENDENCIES = [
+  "electron-store",
   "realm",
   "electron-squirrel-startup",
   "better-sqlite3",
@@ -52,6 +55,11 @@ const EXTERNAL_DEPENDENCIES = [
   "sharp",
   "sherpa-onnx-node",
 ];
+const GENERATED_RUNTIME_REQUIRE_BUNDLES = ["taskCode.js"];
+const NODE_BUILTINS = new Set([
+  ...builtinModules,
+  ...builtinModules.map((moduleName) => `node:${moduleName}`),
+]);
 
 function getPackageRootName(packageName) {
   if (packageName.startsWith("@")) {
@@ -59,6 +67,65 @@ function getPackageRootName(packageName) {
     return name ? `${scope}/${name}` : packageName;
   }
   return packageName.split("/")[0];
+}
+
+function getRuntimePackageName(importId) {
+  if (
+    importId.startsWith(".") ||
+    importId.startsWith("/") ||
+    importId === "electron" ||
+    NODE_BUILTINS.has(importId)
+  ) {
+    return null;
+  }
+  return getPackageRootName(importId);
+}
+
+function extractRuntimePackageRequires(filePath) {
+  const source = readFileSync(filePath, "utf-8");
+  const requirePattern = /\brequire\(\s*["']([^"']+)["']\s*\)/g;
+  const packageNames = new Set();
+  let match = requirePattern.exec(source);
+  while (match !== null) {
+    const packageName = getRuntimePackageName(match[1]);
+    if (packageName) {
+      packageNames.add(packageName);
+    }
+    match = requirePattern.exec(source);
+  }
+  return packageNames;
+}
+
+function hasPackagedNodeModule(buildPath, packageName) {
+  return existsSync(
+    join(buildPath, "node_modules", ...packageName.split("/"), "package.json")
+  );
+}
+
+function verifyGeneratedRuntimeRequires(buildPath) {
+  const missing = [];
+  const viteBuildPath = join(buildPath, ".vite", "build");
+
+  for (const bundleFile of GENERATED_RUNTIME_REQUIRE_BUNDLES) {
+    const bundlePath = join(viteBuildPath, bundleFile);
+    if (!existsSync(bundlePath)) {
+      continue;
+    }
+
+    for (const packageName of extractRuntimePackageRequires(bundlePath)) {
+      if (!hasPackagedNodeModule(buildPath, packageName)) {
+        missing.push(`${bundleFile}: ${packageName}`);
+      }
+    }
+  }
+
+  if (missing.length > 0) {
+    throw new Error(
+      `Packaged app is missing runtime dependencies required by generated bundles: ${missing.join(
+        ", "
+      )}. Add the package root to EXTERNAL_DEPENDENCIES in forge.config.js.`
+    );
+  }
 }
 
 //import { ForgeConfig } from '@electron-forge/shared-types';
@@ -695,6 +762,7 @@ module.exports = {
           }
         }
       }
+      verifyGeneratedRuntimeRequires(buildPath);
     },
   },
 };
