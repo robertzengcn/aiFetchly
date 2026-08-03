@@ -91,8 +91,11 @@
             <strong>{{ t("aiChatV2.tool_name") || "Tool" }}:</strong>
             <span>{{ message.metadata.toolName }}</span>
           </div>
-          <div v-if="message.metadata?.error" class="v2-message__tool-error">
-            {{ message.metadata.error }}
+          <div
+            v-if="message.metadata?.error || attachLocalImagesErrorLabel"
+            class="v2-message__tool-error"
+          >
+            {{ attachLocalImagesErrorLabel || message.metadata?.error }}
           </div>
           <div v-if="message.metadata?.summary" class="v2-message__content">
             {{ message.metadata.summary }}
@@ -439,6 +442,35 @@ function openGeneratedImageFile(image: RenderableGeneratedImage): void {
 const toolResult = computed<Record<string, unknown>>(
   () => props.message.metadata?.toolResult ?? {}
 );
+
+// Map attach_local_images result codes to localized messages. Codes are stable
+// English identifiers (PRD FR12); the UI shows the localized text.
+const ATTACH_LOCAL_IMAGES_ERROR_KEY: Record<string, string> = {
+  workspace_required: "workspaceRequired",
+  invalid_arguments: "invalidArguments",
+  image_limit_reached: "imageLimitReached",
+  path_outside_workspace: "pathOutsideWorkspace",
+  path_not_found: "pathNotFound",
+  path_is_directory: "pathIsDirectory",
+  image_file_too_large: "imageFileTooLarge",
+  unsupported_image_type: "unsupportedImageType",
+  image_signature_mismatch: "imageSignatureMismatch",
+  image_dimensions_too_large: "imageDimensionsTooLarge",
+  image_payload_too_large: "imagePayloadTooLarge",
+  image_processing_failed: "imageProcessingFailed",
+  permission_denied: "permissionDenied",
+  cancelled: "cancelled",
+};
+const attachLocalImagesErrorLabel = computed((): string => {
+  if (String(props.message.metadata?.toolName || "") !== "attach_local_images") {
+    return "";
+  }
+  const code = String(toolResult.value.code ?? "");
+  if (!code) return "";
+  const suffix = ATTACH_LOCAL_IMAGES_ERROR_KEY[code];
+  if (!suffix) return "";
+  return t(`aiChatV2.imageTool.errors.${suffix}`) || "";
+});
 
 interface ToolProgressView {
   phase: string;
