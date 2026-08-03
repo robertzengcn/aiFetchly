@@ -54,6 +54,11 @@ import {
   type ToolTimeoutClass,
 } from "@/service/ToolTimeoutPolicy";
 import { CancellationToken } from "@/service/CancellationToken";
+import {
+  buildImageArtifactHandoffMessage,
+  countImageContentParts,
+  countImageDataUrlChars,
+} from "@/service/AIChatImageHandoff";
 import { getDefaultToolJobRegistry } from "@/service/ToolJobRegistry";
 import { USER_AI_ENABLED } from "@/config/usersetting";
 import { Token } from "@/modules/token";
@@ -1392,6 +1397,27 @@ export class AIChatQueryLoop {
             tool_call_id: call.id,
             content: toolContent,
           });
+          // Transient image handoff: if the tool returned prepared images
+          // (attach_local_images), append a model-only role:user multimodal
+          // message carrying them as image_url parts. This is NOT persisted as
+          // ordinary conversation text and is not rendered as a user bubble; it
+          // only gives the next chat-completion round the image input. The
+          // metadata-only tool result above already holds the safe summary.
+          // No handoff for failed / permission-deferred / cancelled / empty
+          // results (those either returned earlier or carry no artifacts).
+          if (
+            toolResult.success &&
+            toolResult.modelArtifacts &&
+            toolResult.modelArtifacts.length > 0
+          ) {
+            messages.push(
+              buildImageArtifactHandoffMessage({
+                artifacts: toolResult.modelArtifacts,
+                originalUserRequest: input.request.message,
+                toolCallId: call.id,
+              })
+            );
+          }
           console.log(
             `[ai-chat-v2] tool ${call.name} result pushed → round ${round} will continue`
           );
@@ -2051,6 +2077,12 @@ export class AIChatQueryLoop {
         args: call.arguments,
         model: input.request.model,
         signal: token.signal,
+        // Combined per-request image capacity: tell image-attaching tools how
+        // many image_url parts and how many data-URL chars the outgoing
+        // transcript already contains, so they can enforce the shared cap and
+        // cumulative budget against user-selected AND tool-selected images.
+        currentRequestImageCount: countImageContentParts(input.messages),
+        currentRequestImageDataUrlChars: countImageDataUrlChars(input.messages),
         emitProgress: (event) => {
           if (token.signal.aborted) return; // drop progress after abort
           input.eventSink.emit({
