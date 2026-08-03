@@ -29,6 +29,11 @@ import {
   normalizeToolResult,
   isPermissionPromptResult,
 } from "@/service/AIChatQueryLoop";
+import {
+  buildImageArtifactHandoffMessage,
+  countImageContentParts,
+  countImageDataUrlChars,
+} from "@/service/AIChatImageHandoff";
 import { userSafeError } from "@/service/AIChatErrorMapper";
 import { Token } from "@/modules/token";
 import { USER_AI_AUTO_PLAN, USER_AI_ENABLED } from "@/config/usersetting";
@@ -239,9 +244,7 @@ export class AIChatQueryEngine {
   }
 
   /** Return main-process truth for a conversation's current turn. */
-  getConversationRuntimeStatus(
-    conversationId: string
-  ): ChatV2RuntimeStatus {
+  getConversationRuntimeStatus(conversationId: string): ChatV2RuntimeStatus {
     if (this.pendingPermission?.conversationId === conversationId) {
       return "awaiting_permission";
     }
@@ -944,6 +947,16 @@ export class AIChatQueryEngine {
           toolCallId: pending.toolCallId,
           args: pending.toolArguments,
           skipPermissionCheck: true,
+          // Mirror the loop's foreground context: combined request image
+          // capacity + cumulative data-URL budget (enforced by the tool), and
+          // the abort signal so the user can still cancel after approval.
+          currentRequestImageCount: countImageContentParts(
+            pending.conversationMessages
+          ),
+          currentRequestImageDataUrlChars: countImageDataUrlChars(
+            pending.conversationMessages
+          ),
+          signal: pending.abortController.signal,
         }
       );
 
@@ -975,6 +988,25 @@ export class AIChatQueryEngine {
         tool_call_id: pending.toolCallId,
         content: toolContent,
       });
+
+      // Transient image handoff (attach_local_images): if the tool returned
+      // prepared images, append the model-only multimodal message so the next
+      // loop round sees them — mirroring AIChatQueryLoop's foreground path.
+      // Without this, the first call in a session (which always takes the
+      // permission-resume path) would deliver metadata but no image parts.
+      if (
+        toolResult.success &&
+        toolResult.modelArtifacts &&
+        toolResult.modelArtifacts.length > 0
+      ) {
+        pending.conversationMessages.push(
+          buildImageArtifactHandoffMessage({
+            artifacts: toolResult.modelArtifacts,
+            originalUserRequest: pending.request.message,
+            toolCallId: pending.toolCallId,
+          })
+        );
+      }
 
       // Rebuild the deferred catalog for the resumed turn and carry forward the
       // discovered-tool snapshot so discovered tools remain exposed (AC-8).

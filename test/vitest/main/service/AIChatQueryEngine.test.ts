@@ -16,6 +16,7 @@ import type {
 } from "@/service/AIChatQueryEvents";
 import type { AIChatPlanStateView } from "@/entityTypes/aiChatPlanTypes";
 import { HookRegistry } from "@/service/hooks/HookRegistry";
+import { SkillExecutor } from "@/service/SkillExecutor";
 
 // --- Mock AIChatV2Module -----------------------------------------------
 const mockSaveUserMessage = vi.fn().mockResolvedValue({ messageId: "user-1" });
@@ -639,9 +640,7 @@ describe("AIChatQueryEngine", () => {
       // the pending turn's eventSink (same sink passed to submitMessage).
       engine.stopActiveTurn();
 
-      expect(engine.getConversationRuntimeStatus("v2-test-conv")).toBe(
-        "idle"
-      );
+      expect(engine.getConversationRuntimeStatus("v2-test-conv")).toBe("idle");
 
       const cancelled = events.find((e) => e.type === "cancelled");
       expect(cancelled).toBeDefined();
@@ -690,9 +689,7 @@ describe("AIChatQueryEngine", () => {
       });
       await submission;
 
-      expect(engine.getConversationRuntimeStatus("v2-test-conv")).toBe(
-        "idle"
-      );
+      expect(engine.getConversationRuntimeStatus("v2-test-conv")).toBe("idle");
     });
   });
 
@@ -706,6 +703,76 @@ describe("AIChatQueryEngine", () => {
       });
       expect(result.ok).toBe(false);
       expect(result.error).toBeDefined();
+    });
+
+    it("appends the image handoff when the resumed tool returns modelArtifacts", async () => {
+      let capturedMessages: OpenAIChatMessage[] | undefined;
+      const fakeRun = vi.fn(async (input: AIChatQueryLoopInput) => {
+        capturedMessages = input.messages;
+        return {
+          type: "completed" as const,
+          conversationId: "v2-test",
+          assistantMessageId: "a-1",
+          fullContent: "",
+          finishReason: "stop",
+        } as AIChatQueryLoopResult;
+      });
+      const engine = createEngineWithFakeLoop(fakeRun);
+
+      // Inject the pending-permission turn the loop would have stored.
+      (engine as unknown as { pendingPermission: unknown }).pendingPermission =
+        {
+          conversationId: "v2-test",
+          assistantMessageId: "a-1",
+          conversationMessages: [
+            { role: "user", content: "edit the image" },
+          ] as OpenAIChatMessage[],
+          abortController: new AbortController(),
+          request: { message: "edit the image" },
+          openAITools: [],
+          nextRound: 1,
+          toolCallId: "call-1",
+          toolName: "attach_local_images",
+          toolArguments: { paths: ["a.png"] },
+          planContext: undefined,
+          eventSink: { emit: vi.fn() },
+          toolCatalogState: undefined,
+        };
+
+      vi.mocked(SkillExecutor.execute).mockResolvedValue({
+        tool_call_id: "call-1",
+        tool_name: "attach_local_images",
+        success: true,
+        result: { success: true, attached_count: 1, summary: "ok" },
+        execution_time_ms: 5,
+        modelArtifacts: [
+          {
+            kind: "image",
+            fileName: "a.png",
+            relativePath: "a.png",
+            mimeType: "image/png",
+            sizeBytes: 100,
+            width: 64,
+            height: 64,
+            sha256: "abc",
+            detail: "auto",
+            dataUrl: "data:image/png;base64,SECRET",
+          },
+        ],
+      });
+
+      const result = await engine.resumeToolAfterPermission({
+        toolId: "call-1",
+        conversationId: "v2-test",
+      });
+      expect(result.ok).toBe(true);
+
+      const serialized = JSON.stringify(capturedMessages ?? []);
+      // The model-only handoff carrying the prepared image reaches the loop.
+      expect(serialized).toContain("[AIFETCHLY_IMAGE_HANDOFF_V1]");
+      expect(serialized).toContain("data:image/png;base64,SECRET");
+      // The metadata-only role:tool message is present too.
+      expect(serialized).toContain('"role":"tool"');
     });
   });
 });
