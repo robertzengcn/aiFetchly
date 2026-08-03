@@ -9,7 +9,10 @@ const PROJECT_ROOT = path.resolve(__dirname, "..");
 const OUT_DIR = process.env.AIFETCHLY_VERIFY_OUT_DIR
   ? path.resolve(process.env.AIFETCHLY_VERIFY_OUT_DIR)
   : path.join(PROJECT_ROOT, "out");
-const REQUIRED_WORKERS = ["websiteContentScraper.js"];
+const REQUIRED_WORKERS = [
+  "websiteContentScraper.js",
+  "ContactExtractionWorker.js",
+];
 const GENERATED_RUNTIME_REQUIRE_BUNDLES = ["taskCode.js"];
 const NODE_BUILTINS = new Set([
   ...builtinModules,
@@ -95,6 +98,7 @@ function extractRuntimePackageRequires(source) {
 
 function hasWorker(resourcesDir, workerFile) {
   const diskCandidates = [
+    path.join(resourcesDir, "app.asar.unpacked", ".vite", "build", workerFile),
     path.join(
       resourcesDir,
       "app.asar.unpacked",
@@ -120,6 +124,7 @@ function hasWorker(resourcesDir, workerFile) {
 
   const asarEntries = listAsarEntries(path.join(resourcesDir, "app.asar"));
   const asarCandidates = [
+    `.vite/build/${workerFile}`,
     `dist/childprocess/${workerFile}`,
     `.vite/build/childprocess/${workerFile}`,
   ];

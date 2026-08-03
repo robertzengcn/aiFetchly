@@ -7,7 +7,6 @@
 
 import { ipcMain, BrowserWindow } from "electron";
 import { spawn, ChildProcess } from "child_process";
-import * as path from "path";
 import { v4 as uuidv4 } from "uuid";
 import { ContactInfoModule } from "@/modules/ContactInfoModule";
 import {
@@ -21,6 +20,7 @@ import { Token } from "@/modules/token";
 import { TOKENNAME, USER_AI_ENABLED } from "@/config/usersetting";
 import type { ModuleExecutionContext } from "@/entityTypes/skillTypes";
 import { ToolExecutor } from "@/service/ToolExecutor";
+import { getContactExtractionWorkerPath } from "./contactExtractionWorkerPath";
 import {
   contactExtractionWorkerOutboundSchema,
   type ContactExtractionWorkerOutbound,
@@ -64,9 +64,10 @@ let contactExtractionWorker: ChildProcess | null = null;
  * Spawn the contact extraction worker process
  */
 function spawnWorker(): ChildProcess {
-  // Use compiled JS file from .vite/build directory
-  // __dirname already points to .vite/build, so just append the filename
-  const workerPath = path.join(__dirname, "ContactExtractionWorker.js");
+  const workerPath = getContactExtractionWorkerPath();
+  if (!workerPath) {
+    throw new Error("Contact extraction worker file not found");
+  }
 
   console.log("Spawning contact extraction worker...");
 
@@ -263,7 +264,18 @@ export async function extractContactFromUrls(
   };
   collector.promise.then(cleanup, cleanup);
 
-  ensureWorkerStarted();
+  try {
+    ensureWorkerStarted();
+  } catch (error) {
+    pendingUrlExtractions.delete(requestId);
+    collector.rejectWithError(
+      error instanceof Error
+        ? error
+        : new Error("Contact extraction worker is not available")
+    );
+    return collector.promise;
+  }
+
   if (contactExtractionWorker?.send) {
     contactExtractionWorker.send({
       type: "extract-contact-from-urls",
