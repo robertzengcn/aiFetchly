@@ -17,7 +17,8 @@ describe("attach_local_images registration", () => {
   it("enforces 1-3 unique paths in the schema", () => {
     const skill = SkillRegistry.getSkill("attach_local_images");
     const params = skill?.parameters as Record<string, unknown>;
-    const paths = params.properties?.paths as Record<string, unknown>;
+    const props = (params.properties ?? {}) as Record<string, unknown>;
+    const paths = props.paths as Record<string, unknown>;
     expect(paths.minItems).toBe(1);
     expect(paths.maxItems).toBe(3);
     expect(paths.uniqueItems).toBe(true);
@@ -34,7 +35,8 @@ describe("attach_local_images registration", () => {
   it("exposes a valid vision detail enum", () => {
     const skill = SkillRegistry.getSkill("attach_local_images");
     const params = skill?.parameters as Record<string, unknown>;
-    const detail = params.properties?.detail as Record<string, unknown>;
+    const props = (params.properties ?? {}) as Record<string, unknown>;
+    const detail = props.detail as Record<string, unknown>;
     expect(detail.enum).toEqual(["auto", "low", "high"]);
     expect(detail.default).toBe("auto");
   });

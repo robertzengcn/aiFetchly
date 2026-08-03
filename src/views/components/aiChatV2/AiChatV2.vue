@@ -158,6 +158,7 @@
           :tool-name="pinnedPermissionToolName"
           :permission-category="pinnedPermissionCategory"
           :shell-preview="pinnedPermissionShellPreview"
+          :permission-preview="pinnedPermissionPermissionPreview"
           :workspace-root="activeWorkspace?.rootPath ?? ''"
           :disabled="pinnedPermissionResumeInFlight"
           :loading="pinnedPermissionResumeInFlight"
@@ -1634,6 +1635,32 @@ const pinnedPermissionShellPreview = computed<ShellPreview | undefined>(() => {
     cwd: typeof shellData.cwd === "string" ? shellData.cwd : undefined,
     shell: shellData.shell,
     timeout_ms: shellData.timeout_ms,
+  };
+});
+
+// Metadata-only file-transfer preview (e.g. attach_local_images): which files
+// will be read and where the prepared copies will be sent. Validated before
+// handoff to the approval card; the tool re-validates paths after a grant.
+const pinnedPermissionPermissionPreview = computed(() => {
+  const preview = pinnedPermissionToolResult.value.permissionPreview;
+  if (!preview || typeof preview !== "object") return undefined;
+  const data = preview as Record<string, unknown>;
+  if (
+    typeof data.titleKey !== "string" ||
+    typeof data.descriptionKey !== "string" ||
+    typeof data.destinationLabel !== "string" ||
+    !Array.isArray(data.items)
+  ) {
+    return undefined;
+  }
+  return {
+    kind: "file_transfer" as const,
+    titleKey: data.titleKey,
+    descriptionKey: data.descriptionKey,
+    destinationLabel: data.destinationLabel,
+    items: (data.items as readonly unknown[]).filter(
+      (i): i is string => typeof i === "string"
+    ),
   };
 });
 

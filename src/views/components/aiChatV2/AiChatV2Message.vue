@@ -64,6 +64,7 @@
           :tool-name="String(message.metadata?.toolName || '')"
           :permission-category="String(toolResult.permissionCategory || '')"
           :shell-preview="shellPreview"
+          :permission-preview="permissionPreview"
           :workspace-root="workspaceRoot"
           @grant="(payload) => emit('grant-permission', message, payload)"
           @deny="emit('deny-permission', message)"
@@ -95,6 +96,23 @@
           </div>
           <div v-if="message.metadata?.summary" class="v2-message__content">
             {{ message.metadata.summary }}
+          </div>
+          <div
+            v-if="attachLocalImagesAttachments.length > 0"
+            class="v2-message__attachments"
+          >
+            <div
+              v-for="(att, i) in attachLocalImagesAttachments"
+              :key="i"
+              class="v2-message__attachment-row"
+            >
+              <v-icon size="x-small" start>mdi-file-image</v-icon>
+              <span class="v2-message__attachment-name">{{ att.file_name }}</span>
+              <span class="v2-message__attachment-meta">
+                {{ att.width }}×{{ att.height }} · {{ att.mime_type }} ·
+                {{ formatBytes(att.prepared_size_bytes) }}
+              </span>
+            </div>
           </div>
           <details v-if="message.content" class="v2-message__details">
             <summary>{{ t("aiChatV2.tool_result_details") || "Details" }}</summary>
@@ -473,6 +491,76 @@ const shellPreview = computed<ShellPreview | undefined>(() => {
   };
 });
 
+// Metadata-only file-transfer preview for the approval card (attach_local_images).
+const permissionPreview = computed(() => {
+  const preview = toolResult.value.permissionPreview;
+  if (!preview || typeof preview !== "object") return undefined;
+  const data = preview as Record<string, unknown>;
+  if (
+    typeof data.titleKey !== "string" ||
+    typeof data.descriptionKey !== "string" ||
+    typeof data.destinationLabel !== "string" ||
+    !Array.isArray(data.items)
+  ) {
+    return undefined;
+  }
+  return {
+    kind: "file_transfer" as const,
+    titleKey: data.titleKey,
+    descriptionKey: data.descriptionKey,
+    destinationLabel: data.destinationLabel,
+    items: (data.items as readonly unknown[]).filter(
+      (i): i is string => typeof i === "string"
+    ),
+  };
+});
+
+// Compact metadata-only rows for a successful attach_local_images result.
+// Renders prepared-image metadata only — never bytes, data URLs, or previews
+// from local paths (the user did not approve those for rendering).
+interface AttachLocalImageRow {
+  file_name: string;
+  mime_type: string;
+  width: number;
+  height: number;
+  prepared_size_bytes: number;
+}
+const attachLocalImagesAttachments = computed<AttachLocalImageRow[]>(() => {
+  if (String(props.message.metadata?.toolName || "") !== "attach_local_images") {
+    return [];
+  }
+  const attachments = toolResult.value.attachments;
+  if (!Array.isArray(attachments)) return [];
+  return attachments
+    .map((a): AttachLocalImageRow | undefined => {
+      if (!a || typeof a !== "object") return undefined;
+      const r = a as Record<string, unknown>;
+      if (
+        typeof r.file_name !== "string" ||
+        typeof r.mime_type !== "string" ||
+        typeof r.width !== "number" ||
+        typeof r.height !== "number" ||
+        typeof r.prepared_size_bytes !== "number"
+      ) {
+        return undefined;
+      }
+      return {
+        file_name: r.file_name,
+        mime_type: r.mime_type,
+        width: r.width,
+        height: r.height,
+        prepared_size_bytes: r.prepared_size_bytes,
+      };
+    })
+    .filter((x): x is AttachLocalImageRow => x !== undefined);
+});
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+}
+
 interface MentionChip {
   variant: "resolved" | "warning";
   icon: string;
@@ -699,6 +787,26 @@ const mentionChips = computed<MentionChip[]>(() => {
   color: rgb(var(--v-theme-error));
   margin-bottom: 6px;
   white-space: pre-wrap;
+}
+.v2-message__attachments {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 4px 0 6px;
+}
+.v2-message__attachment-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+}
+.v2-message__attachment-name {
+  font-weight: 600;
+  word-break: break-all;
+}
+.v2-message__attachment-meta {
+  color: rgba(var(--v-theme-on-surface), 0.6);
+  white-space: nowrap;
 }
 .v2-message__details summary {
   cursor: pointer;

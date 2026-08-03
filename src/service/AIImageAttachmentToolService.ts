@@ -49,7 +49,7 @@ import type {
   SkillExecutionContext,
   SkillExecutionResult,
 } from "@/entityTypes/skillTypes";
-import type { WorkspaceResolver } from "@/service/WorkspaceResolver";
+import { WorkspaceResolver } from "@/service/WorkspaceResolver";
 
 /**
  * Structural port for the normalizer so tests can inject a fake without the
@@ -219,7 +219,10 @@ export class AIImageAttachmentToolService {
     if (!parsed.ok) {
       return toSkillExecutionFailure(failureResult(parsed.code, parsed.error));
     }
-    const { paths, detail } = parsed.args;
+    const { paths } = parsed.args;
+    // parseArgs always supplies detail (default "auto"); normalize the optional
+    // away so downstream code treats it as a concrete ImageDetail.
+    const detail: ImageDetail = parsed.args.detail ?? "auto";
 
     // 2. Enforce cancellation before any work.
     if (context.signal?.aborted) {

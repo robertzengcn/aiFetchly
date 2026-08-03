@@ -6,7 +6,11 @@ import { AIImageAttachmentToolService } from "@/service/AIImageAttachmentToolSer
 import type { ImageNormalizerPort } from "@/service/AIImageAttachmentToolService";
 import { FilePathGuard } from "@/service/FilePathGuard";
 import { CHAT_IMAGE_LIMITS } from "@/config/chatImageLimits";
-import type { SupportedImageMimeType } from "@/entityTypes/aiImageAttachmentToolTypes";
+import type {
+  AttachLocalImagesResult,
+  PreparedImageMimeType,
+  SupportedImageMimeType,
+} from "@/entityTypes/aiImageAttachmentToolTypes";
 import type { SkillExecutionContext } from "@/entityTypes/skillTypes";
 
 // ---------------------------------------------------------------------------
@@ -30,10 +34,11 @@ function makeFakeNormalizer(
   dataUrlChars = 200
 ): ImageNormalizerPort & { calls: () => number } {
   let n = 0;
-  return {
-    normalize: vi.fn(async (_buffer: Buffer, mime: SupportedImageMimeType) => {
+  const normalize: ImageNormalizerPort["normalize"] = vi.fn(
+    async (_buffer: Buffer, mime: SupportedImageMimeType) => {
       n += 1;
-      const outMime = mime === "image/png" ? "image/png" : "image/jpeg";
+      const outMime: PreparedImageMimeType =
+        mime === "image/png" ? "image/png" : "image/jpeg";
       const filler = "x".repeat(Math.max(0, dataUrlChars - 30));
       const dataUrl = `data:${outMime};base64,${filler}`;
       return {
@@ -45,9 +50,9 @@ function makeFakeNormalizer(
         dataUrl,
         dataUrlChars: dataUrl.length,
       };
-    }),
-    calls: () => n,
-  };
+    }
+  );
+  return { normalize, calls: () => n };
 }
 
 // ---------------------------------------------------------------------------
@@ -71,6 +76,13 @@ function makeContext(
     args: {},
     ...overrides,
   };
+}
+
+/** Cast the metadata-only result record to its typed shape for assertions. */
+function asResult(res: {
+  result: Record<string, unknown>;
+}): AttachLocalImagesResult {
+  return res.result as unknown as AttachLocalImagesResult;
 }
 
 function makeService(
@@ -131,10 +143,7 @@ describe("AIImageAttachmentToolService", () => {
   it("deduplicates identical input paths", async () => {
     writeFile("a.png", withSig(PNG_SIG));
     const svc = makeService(makeFakeNormalizer());
-    const res = await svc.execute(
-      { paths: ["a.png", "a.png"] },
-      makeContext()
-    );
+    const res = await svc.execute({ paths: ["a.png", "a.png"] }, makeContext());
     expect(res.success).toBe(true);
     expect(res.result.attached_count).toBe(1);
     expect(res.modelArtifacts?.length).toBe(1);
@@ -175,7 +184,10 @@ describe("AIImageAttachmentToolService", () => {
   // --- path safety ---
   it("rejects a path outside the workspace", async () => {
     writeFile("a.png", withSig(PNG_SIG));
-    const outside = path.join(os.tmpdir(), "aif-outside-" + Date.now() + ".png");
+    const outside = path.join(
+      os.tmpdir(),
+      "aif-outside-" + Date.now() + ".png"
+    );
     fs.writeFileSync(outside, withSig(PNG_SIG));
     const svc = makeService(makeFakeNormalizer());
     const res = await svc.execute({ paths: [outside] }, makeContext());
@@ -186,10 +198,7 @@ describe("AIImageAttachmentToolService", () => {
   it("rejects path traversal (../escape)", async () => {
     writeFile("a.png", withSig(PNG_SIG));
     const svc = makeService(makeFakeNormalizer());
-    const res = await svc.execute(
-      { paths: ["../evil.png"] },
-      makeContext()
-    );
+    const res = await svc.execute({ paths: ["../evil.png"] }, makeContext());
     expect(res.result.code).toBe("path_outside_workspace");
   });
 
@@ -259,7 +268,7 @@ describe("AIImageAttachmentToolService", () => {
     const res = await svc.execute({ paths: ["product.png"] }, makeContext());
     expect(res.success).toBe(true);
     expect(res.result.attached_count).toBe(1);
-    expect(res.result.attachments[0]).toMatchObject({
+    expect(asResult(res).attachments[0]).toMatchObject({
       file_name: "product.png",
       relative_path: "product.png",
       mime_type: "image/png",
@@ -274,7 +283,7 @@ describe("AIImageAttachmentToolService", () => {
     const svc = makeService(makeFakeNormalizer());
     const res = await svc.execute({ paths: [abs] }, makeContext());
     expect(res.success).toBe(true);
-    expect(res.result.attachments[0].relative_path).toBe("abs/jpeg.jpg");
+    expect(asResult(res).attachments[0].relative_path).toBe("abs/jpeg.jpg");
   });
 
   it("attaches up to three images of mixed supported types", async () => {
@@ -299,7 +308,7 @@ describe("AIImageAttachmentToolService", () => {
       makeContext()
     );
     expect(res.modelArtifacts?.[0].detail).toBe("high");
-    expect(res.result.attachments[0].detail).toBe("high");
+    expect(asResult(res).attachments[0].detail).toBe("high");
   });
 
   // --- atomic failure + isolation ---
@@ -314,7 +323,7 @@ describe("AIImageAttachmentToolService", () => {
     expect(res.success).toBe(false);
     // No partial artifacts leaked.
     expect(res.modelArtifacts).toBeUndefined();
-    expect(res.result.file_errors?.length).toBe(1);
+    expect(asResult(res).file_errors?.length).toBe(1);
   });
 
   it("never places data:image/ in the persistable result", async () => {

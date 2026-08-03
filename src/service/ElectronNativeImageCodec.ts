@@ -2,11 +2,15 @@
  * Production {@link ImageCodec} backed by Electron's `nativeImage`.
  *
  * Used by the main-process `attach_local_images` tool to decode/resize/re-encode
- * images without a browser canvas. `nativeImage` is lazy-required inside each
- * operation so that importing this module never throws in environments where
- * Electron is unavailable (e.g. unit tests, which inject a fake codec instead).
+ * images without a browser canvas. `nativeImage` is lazy-required inside
+ * `decode()` so that importing this module never touches Electron (unit tests
+ * inject a fake codec instead).
  *
- * Behaviour matches the design §TD4 / §10:
+ * To stay compatible with both the real Electron type declarations and the
+ * lighter-weight test electron mock (which does not export `NativeImage`), we
+ * depend only on structural views of the small API surface we use.
+ *
+ * Behaviour matches design §TD4 / §10:
  *   - GIF uses the first decoded frame (nativeImage default).
  *   - PNG bytes are re-encoded via toPNG() so transparency is preserved.
  *   - JPEG/WebP/GIF are re-encoded via toJPEG().
@@ -14,15 +18,33 @@
  * `hasAlpha` is advisory only (the PNG encoding loop preserves transparency
  * natively regardless of this flag).
  */
-import type { NativeImage } from "electron";
 import type { DecodedImage, ImageCodec } from "@/service/AIImageNormalizer";
 import { detectImageSignature } from "@/service/AIImageSignature";
 
+/** Structural view of the subset of Electron NativeImage this codec uses. */
+interface NativeImageLike {
+  isEmpty(): boolean;
+  getSize(): { width: number; height: number };
+  resize(options: {
+    width: number;
+    height: number;
+    quality: "good" | "better" | "best";
+  }): NativeImageLike;
+  toPNG(): Buffer;
+  toJPEG(quality: number): Buffer;
+}
+
+/** Structural view of the `nativeImage` module surface this codec uses. */
+interface NativeImageModule {
+  createFromBuffer(buffer: Buffer): NativeImageLike;
+}
+
 /** Lazily load nativeImage from Electron (available only in the main process). */
-function loadNativeImage(): NonNullable<NativeImage>["constructor"] {
+function loadNativeImageModule(): NativeImageModule {
   // `require` (not import) so this runs only when the codec is actually used.
+  // Cast to the structural shape we use; the real electron module satisfies it.
   // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const electron = require("electron") as typeof import("electron");
+  const electron = require("electron") as { nativeImage: NativeImageModule };
   return electron.nativeImage;
 }
 
@@ -32,7 +54,7 @@ function loadNativeImage(): NonNullable<NativeImage>["constructor"] {
  */
 class NativeImageDecoded implements DecodedImage {
   constructor(
-    private readonly image: NativeImage,
+    private readonly image: NativeImageLike,
     readonly width: number,
     readonly height: number,
     readonly hasAlpha: boolean
@@ -56,7 +78,7 @@ class NativeImageDecoded implements DecodedImage {
 /** Electron-native production codec. */
 export class ElectronNativeImageCodec implements ImageCodec {
   decode(buffer: Buffer): DecodedImage {
-    const nativeImage = loadNativeImage();
+    const nativeImage = loadNativeImageModule();
     const image = nativeImage.createFromBuffer(buffer);
     if (image.isEmpty()) {
       throw new Error("nativeImage could not decode the buffer (empty result)");
