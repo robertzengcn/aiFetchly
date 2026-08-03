@@ -85,6 +85,29 @@ const registry: Map<string, SkillDefinition> =
 // ---------------------------------------------------------------------------
 import { RUN_SUBAGENT_TOOL } from "@/service/agentTools/runSubagentTool";
 import { AIAppNavigationToolService } from "@/service/AIAppNavigationToolService";
+import {
+  AIImageAttachmentToolService,
+  createDefaultAIImageAttachmentToolDeps,
+  buildAttachLocalImagesPermissionPreview,
+} from "@/service/AIImageAttachmentToolService";
+
+/**
+ * Best-effort, credential-free label of the configured AI server destination,
+ * shown in the attach_local_images permission preview. Re-read per call so a
+ * runtime config change is reflected.
+ */
+function getAttachLocalImagesDestinationLabel(): string {
+  const remote = process.env.VITE_REMOTEADD;
+  if (typeof remote === "string" && remote.length > 0) {
+    try {
+      const url = new URL(remote);
+      if (url.host) return url.host;
+    } catch {
+      return remote;
+    }
+  }
+  return "the configured AI server";
+}
 
 const BUILT_IN_SKILLS: SkillDefinition[] = [
   {
@@ -124,6 +147,57 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
         result: result as unknown as Record<string, unknown>,
       };
     },
+  },
+  {
+    name: "attach_local_images",
+    description:
+      "Attach one to three exact local image files from the approved conversation workspace " +
+      "to the current AI request, so the model can analyze, compare, edit, or use them as " +
+      "reference images. Use glob_files first when you do not know the exact paths. " +
+      "Only PNG, JPEG, WebP, and GIF are supported. This transfers prepared image content to " +
+      "the configured AI server after the user grants permission.",
+    parameters: {
+      type: "object",
+      properties: {
+        paths: {
+          type: "array",
+          description:
+            "One to three exact image paths, relative to the approved workspace root or " +
+            "absolute inside it. Glob patterns, directories, and URLs are not accepted.",
+          items: { type: "string", minLength: 1 },
+          minItems: 1,
+          maxItems: 3,
+          uniqueItems: true,
+        },
+        detail: {
+          type: "string",
+          description:
+            "Vision detail level forwarded to the model: auto (default), low, or high.",
+          enum: ["auto", "low", "high"],
+          default: "auto",
+        },
+      },
+      required: ["paths"],
+      additionalProperties: false,
+    },
+    tier: "main",
+    requiresConfirmation: true,
+    permissionCategory: "filesystem",
+    source: "built-in",
+    timeoutClass: "fast",
+    execute: async (args, context) => {
+      const service = new AIImageAttachmentToolService(
+        createDefaultAIImageAttachmentToolDeps({
+          destinationLabel: getAttachLocalImagesDestinationLabel(),
+        })
+      );
+      return service.execute(args, context);
+    },
+    buildPermissionPreview: (args) =>
+      buildAttachLocalImagesPermissionPreview(
+        args,
+        getAttachLocalImagesDestinationLabel()
+      ),
   },
   {
     name: "scrape_urls_from_search_engine",
@@ -3178,7 +3252,10 @@ interface InstalledSkillRuntimeState {
 }
 
 interface SkillRuntimeEnablement {
-  readonly installedSkillsByName: ReadonlyMap<string, InstalledSkillRuntimeState> | null;
+  readonly installedSkillsByName: ReadonlyMap<
+    string,
+    InstalledSkillRuntimeState
+  > | null;
   readonly enabledPluginNames: ReadonlySet<string>;
 }
 
@@ -3199,7 +3276,10 @@ async function loadSkillRuntimeEnablement(): Promise<SkillRuntimeEnablement> {
     enabledPluginNames = new Set();
   }
 
-  let installedSkillsByName: ReadonlyMap<string, InstalledSkillRuntimeState> | null;
+  let installedSkillsByName: ReadonlyMap<
+    string,
+    InstalledSkillRuntimeState
+  > | null;
   try {
     const mod = new SkillManagementModule();
     const installedSkills = await mod.listInstalledSkills();
