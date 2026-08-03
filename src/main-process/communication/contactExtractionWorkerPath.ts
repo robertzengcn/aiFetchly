@@ -34,6 +34,7 @@ export function getContactExtractionWorkerPathCandidates(
   addCandidate(
     path.join(runtime.cwd, ".vite", "build", CONTACT_EXTRACTION_WORKER_FILE)
   );
+  addCandidate(path.join(runtime.cwd, "dist", CONTACT_EXTRACTION_WORKER_FILE));
   addCandidate(
     path.join(
       runtime.cwd,
@@ -45,6 +46,14 @@ export function getContactExtractionWorkerPathCandidates(
   );
 
   if (runtime.resourcesPath) {
+    addCandidate(
+      path.join(
+        runtime.resourcesPath,
+        "app.asar.unpacked",
+        "dist",
+        CONTACT_EXTRACTION_WORKER_FILE
+      )
+    );
     addCandidate(
       path.join(
         runtime.resourcesPath,

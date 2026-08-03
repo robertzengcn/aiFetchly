@@ -33,6 +33,10 @@ import { EmailSendResult } from "@/entityTypes/emailmarketingType";
 import { parseChildMessage } from "@/utils/childProcessMessage";
 import { SendStatus } from "@/model/emailMarketingSendLog.model";
 import { EmailMarketingSendLogEntity } from "@/entity/EmailMarketingSendLog.entity";
+import {
+  getPackagedWorkerPathCandidates,
+  resolvePackagedWorkerPath,
+} from "@/utils/packagedWorkerPath";
 import { EmailMarketingSendLogModule } from "@/modules/emailMarketingSendLogModule";
 import { EmailSearchTaskModule } from "@/modules/EmailSearchTaskModule";
 import { EmailTemplateTaskRelationModule } from "@/modules/EmailTemplateTaskRelationModule";
@@ -417,9 +421,28 @@ export class BuckEmailTaskModule extends BaseModule {
     );
     const runLogfile = path.join(logpath, "emailsend_" + uuid + ".runtime.log");
 
-    const childPath = path.join(__dirname, "taskCode.js");
-    if (!fs.existsSync(childPath)) {
-      throw new Error("child js path not exist for the path " + childPath);
+    const electronProcess = process as NodeJS.Process & {
+      resourcesPath?: string;
+    };
+    const runtime = {
+      dirname: __dirname,
+      cwd: process.cwd(),
+      resourcesPath: electronProcess.resourcesPath,
+      existsSync: fs.existsSync,
+    };
+    const workerPathOptions = {
+      dirnameRelativePaths: ["taskCode.js"],
+      cwdRelativePaths: [path.join(".vite", "build", "taskCode.js")],
+    };
+    const childPath = resolvePackagedWorkerPath(runtime, workerPathOptions);
+    if (!childPath) {
+      const candidates = getPackagedWorkerPathCandidates(
+        runtime,
+        workerPathOptions
+      );
+      throw new Error(
+        `child js path not exist. Tried: ${candidates.join(", ")}`
+      );
     }
     const { port1, port2 } = new MessageChannelMain();
 

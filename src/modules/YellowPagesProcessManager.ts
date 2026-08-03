@@ -38,6 +38,10 @@ import {
   isAiSupportRequestMessage,
 } from "@/modules/interface/BackgroundProcessMessages";
 import {
+  getPackagedWorkerPathCandidates,
+  resolvePackagedWorkerPath,
+} from "@/utils/packagedWorkerPath";
+import {
   WriteLog,
   getApplogspath,
   getRandomValues,
@@ -346,11 +350,33 @@ export class YellowPagesProcessManager extends BaseModule {
         `Log files initialized - Runtime: ${runLogfile}, Error: ${errorLogfile}`
       );
 
-      // Resolve scraper path and validate existence
-      //const childPath = path.resolve(process.cwd(), 'dist/childprocess/YellowPagesScraper.js');
-      const childPath = path.join(__dirname, "YellowPagesScraper.js");
-      if (!fs.existsSync(childPath)) {
-        throw new Error(`Child process file not found at path: ${childPath}`);
+      const electronProcess = process as NodeJS.Process & {
+        resourcesPath?: string;
+      };
+      const runtime = {
+        dirname: __dirname,
+        cwd: process.cwd(),
+        resourcesPath: electronProcess.resourcesPath,
+        existsSync: fs.existsSync,
+      };
+      const options = {
+        dirnameRelativePaths: [
+          "YellowPagesScraper.js",
+          path.join("..", "childprocess", "YellowPagesScraper.js"),
+        ],
+        cwdRelativePaths: [
+          path.join(".vite", "build", "YellowPagesScraper.js"),
+          path.join(".vite", "build", "childprocess", "YellowPagesScraper.js"),
+          path.join("dist", "YellowPagesScraper.js"),
+          path.join("dist", "childprocess", "YellowPagesScraper.js"),
+        ],
+      };
+      const childPath = resolvePackagedWorkerPath(runtime, options);
+      if (!childPath) {
+        const candidates = getPackagedWorkerPathCandidates(runtime, options);
+        throw new Error(
+          `Child process file not found. Tried: ${candidates.join(", ")}`
+        );
       }
 
       // Create message channel for IPC communication

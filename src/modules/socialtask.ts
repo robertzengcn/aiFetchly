@@ -10,6 +10,10 @@ import * as path from 'path';
 // import { spawn } from 'node:child_process';
 import * as fs from 'fs';
 import { HttpClient } from "@/modules/lib/httpclient"
+import {
+    getPackagedWorkerPathCandidates,
+    resolvePackagedWorkerPath,
+} from "@/utils/packagedWorkerPath"
 // const fileLocation = path.join(__static, 'myText.txt')
 export class SocialTask {
     private _httpClient: HttpClient
@@ -101,7 +105,7 @@ export class SocialTask {
     async saveSocialTask(data: SocialTaskEntity): Promise<SaveSocialTaskResponse> {
 
 
-        let formData = new FormData();
+        const formData = new FormData();
         // Object.entries(data).forEach(([key, value]) => {
         //     formData.append(key, String(value));
         // });
@@ -140,9 +144,23 @@ export class SocialTask {
     }
 
     public async runsocialtask(entity: SocialTaskRunEntity,callback:((...args: unknown[]) => unknown)|undefined|null) {
-        const childPath = path.join(__dirname, 'taskCode.js')
-        if (!fs.existsSync(childPath)) {
-            throw new Error("child js path not exist for the path " + childPath);
+        const electronProcess = process as NodeJS.Process & {
+            resourcesPath?: string;
+        };
+        const runtime = {
+            dirname: __dirname,
+            cwd: process.cwd(),
+            resourcesPath: electronProcess.resourcesPath,
+            existsSync: fs.existsSync,
+        };
+        const options = {
+            dirnameRelativePaths: ["taskCode.js"],
+            cwdRelativePaths: [path.join(".vite", "build", "taskCode.js")],
+        };
+        const childPath = resolvePackagedWorkerPath(runtime, options)
+        if (!childPath) {
+            const candidates = getPackagedWorkerPathCandidates(runtime, options);
+            throw new Error(`child js path not exist. Tried: ${candidates.join(", ")}`);
         }
         const { port1, port2 } = new MessageChannelMain()
 

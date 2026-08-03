@@ -3,6 +3,11 @@ import type { UtilityProcess } from "electron";
 import * as fs from "fs";
 import * as path from "path";
 import { v4 as uuidv4 } from "uuid";
+import {
+  getPackagedWorkerPathCandidates,
+  resolvePackagedWorkerPath,
+  type PackagedWorkerPathRuntime,
+} from "@/utils/packagedWorkerPath";
 
 interface ExecutePythonMessage {
   type: "EXECUTE_PYTHON";
@@ -264,20 +269,34 @@ export class PythonRuntimeWorkerClient {
       return this.cachedWorkerPath;
     }
 
-    const candidates = [
-      path.join(__dirname, "childprocess", "PythonRuntimeWorker.js"),
-      path.join(__dirname, "../childprocess/PythonRuntimeWorker.js"),
-      path.join(process.cwd(), "dist/childprocess/PythonRuntimeWorker.js"),
-      path.join(process.cwd(), ".vite/build/childprocess/PythonRuntimeWorker.js"),
-    ];
-
-    for (const candidate of candidates) {
-      if (fs.existsSync(candidate)) {
-        this.cachedWorkerPath = candidate;
-        return candidate;
-      }
+    const electronProcess = process as NodeJS.Process & {
+      resourcesPath?: string;
+    };
+    const runtime: PackagedWorkerPathRuntime = {
+      dirname: __dirname,
+      cwd: process.cwd(),
+      resourcesPath: electronProcess.resourcesPath,
+      existsSync: fs.existsSync,
+    };
+    const options = {
+      dirnameRelativePaths: [
+        "PythonRuntimeWorker.js",
+        path.join("childprocess", "PythonRuntimeWorker.js"),
+        path.join("..", "childprocess", "PythonRuntimeWorker.js"),
+      ],
+      cwdRelativePaths: [
+        path.join("dist", "childprocess", "PythonRuntimeWorker.js"),
+        path.join(".vite", "build", "PythonRuntimeWorker.js"),
+        path.join(".vite", "build", "childprocess", "PythonRuntimeWorker.js"),
+      ],
+    };
+    const resolvedPath = resolvePackagedWorkerPath(runtime, options);
+    if (resolvedPath) {
+      this.cachedWorkerPath = resolvedPath;
+      return resolvedPath;
     }
 
+    const candidates = getPackagedWorkerPathCandidates(runtime, options);
     throw new Error(
       `Python runtime worker file not found. Tried: ${candidates.join(", ")}`
     );

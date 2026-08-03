@@ -7,6 +7,10 @@ import { UrlGuard } from "@/service/UrlGuard";
 import { v4 as uuidv4 } from "uuid";
 import type { ModuleExecutionContext } from "@/entityTypes/skillTypes";
 import { ToolExecutor } from "@/service/ToolExecutor";
+import {
+  resolvePackagedWorkerPath,
+  type PackagedWorkerPathRuntime,
+} from "@/utils/packagedWorkerPath";
 
 interface AnalysisJob {
   id: string;
@@ -85,21 +89,30 @@ export class WebsiteAnalysisQueue {
    * Initialize child process path
    */
   private initializeChildProcessPath(): void {
-    let childPath = path.join(
-      __dirname,
-      "./childprocess/websiteContentScraper.js"
-    );
-    if (!fs.existsSync(childPath)) {
-      const altPath = path.join(
-        process.cwd(),
-        "dist/childprocess/websiteContentScraper.js"
-      );
-      if (fs.existsSync(altPath)) {
-        childPath = altPath;
-      } else {
-        console.warn(`Child process file not found at path: ${childPath}`);
-        return;
-      }
+    const electronProcess = process as NodeJS.Process & {
+      resourcesPath?: string;
+    };
+    const runtime: PackagedWorkerPathRuntime = {
+      dirname: __dirname,
+      cwd: process.cwd(),
+      resourcesPath: electronProcess.resourcesPath,
+      existsSync: fs.existsSync,
+    };
+    const childPath = resolvePackagedWorkerPath(runtime, {
+      dirnameRelativePaths: [
+        path.join("childprocess", "websiteContentScraper.js"),
+        path.join("..", "childprocess", "websiteContentScraper.js"),
+      ],
+      cwdRelativePaths: [
+        path.join("dist", "childprocess", "websiteContentScraper.js"),
+        path.join(".vite", "build", "websiteContentScraper.js"),
+        path.join(".vite", "build", "childprocess", "websiteContentScraper.js"),
+      ],
+    });
+
+    if (!childPath) {
+      console.warn("Child process file not found: websiteContentScraper.js");
+      return;
     }
     this.childProcessPath = childPath;
   }

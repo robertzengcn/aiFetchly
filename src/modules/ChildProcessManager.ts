@@ -1,7 +1,12 @@
 import { spawn, ChildProcess } from "child_process";
+import * as fs from "fs";
 import { MessageType } from "@/modules/interface/IPCMessageProtocol";
 import { TaskStatus } from "@/modules/interface/ITaskManager";
 import { getCrashReporterFromGlobal } from "@/modules/diagnostics";
+import {
+  getPackagedWorkerPathCandidates,
+  resolvePackagedWorkerPath,
+} from "@/utils/packagedWorkerPath";
 
 // Define missing interfaces based on usage
 interface IPCMessage {
@@ -126,14 +131,43 @@ export class ChildProcessManager extends BaseModule {
 
       console.log(`Spawning child process for task: ${taskId}`);
 
+      const electronProcess = process as NodeJS.Process & {
+        resourcesPath?: string;
+      };
+      const runtime = {
+        dirname: __dirname,
+        cwd: process.cwd(),
+        resourcesPath: electronProcess.resourcesPath,
+        existsSync: fs.existsSync,
+      };
+      const options = {
+        dirnameRelativePaths: [
+          path.join("..", "childprocess", "YellowPagesScraperProcess.js"),
+        ],
+        cwdRelativePaths: [
+          path.join(".vite", "build", "YellowPagesScraperProcess.js"),
+          path.join("dist", "YellowPagesScraperProcess.js"),
+          path.join("dist", "childprocess", "YellowPagesScraperProcess.js"),
+        ],
+      };
+      const workerPath = resolvePackagedWorkerPath(runtime, options);
+      if (!workerPath) {
+        const candidates = getPackagedWorkerPathCandidates(runtime, options);
+        throw new Error(
+          `Yellow Pages scraper process file not found. Tried: ${candidates.join(
+            ", "
+          )}`
+        );
+      }
+
       // Spawn the child process
-      const childProcess = spawn(
-        "node",
-        [path.join(__dirname, "../childprocess/YellowPagesScraperProcess.js")],
-        {
-          stdio: ["pipe", "pipe", "pipe", "ipc"],
+      const childProcess = spawn(process.execPath, [workerPath], {
+        stdio: ["pipe", "pipe", "pipe", "ipc"],
+        env: {
+          ...process.env,
+          ELECTRON_RUN_AS_NODE: "1",
         }
-      );
+      });
 
       // Setup process event handlers
       this.setupProcessEventHandlers(childProcess, processId, taskId);

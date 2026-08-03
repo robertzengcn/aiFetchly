@@ -27,6 +27,11 @@ import type { YellowPagesTaskProxyConfig } from "@/entityTypes/yellowPagesTaskPr
 import type { GoogleMapsSearchRecordEntity } from "@/entity/GoogleMapsSearchRecord.entity";
 import type { ModuleExecutionContext } from "@/entityTypes/skillTypes";
 import { ToolExecutor } from "@/service/ToolExecutor";
+import {
+  getPackagedWorkerPathCandidates,
+  resolvePackagedWorkerPath,
+  type PackagedWorkerPathRuntime,
+} from "@/utils/packagedWorkerPath";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -161,7 +166,7 @@ export class GoogleMapsModule extends BaseModule {
         if (!fs.existsSync(resolvedWorkerPath)) {
           throw new Error(
             `Google Maps worker not found at ${resolvedWorkerPath}. ` +
-              `Run \`yarn make\` or restart \`yarn dev\` to build dist/childprocess/google-maps/GoogleMapsWorker.js.`
+              `Run yarn make or restart yarn dev to rebuild GoogleMapsWorker.js.`
           );
         }
         // child_process.spawn + ipc stdio (utilityProcess.fork rejects piped stdin with ipc)
@@ -433,21 +438,39 @@ export class GoogleMapsModule extends BaseModule {
    * Resolve the Google Maps worker entry script (built by Forge / vite.googleMapsWorker).
    */
   private resolveWorkerPath(): string {
-    const candidates = [
-      path.join(__dirname, "../childprocess/google-maps/GoogleMapsWorker.js"),
-      path.join(
-        process.cwd(),
-        "dist/childprocess/google-maps/GoogleMapsWorker.js"
-      ),
-      path.join(__dirname, "GoogleMapsWorker.js"),
-    ];
-
-    for (const candidate of candidates) {
-      if (fs.existsSync(candidate)) {
-        return candidate;
-      }
+    const electronProcess = process as NodeJS.Process & {
+      resourcesPath?: string;
+    };
+    const runtime: PackagedWorkerPathRuntime = {
+      dirname: __dirname,
+      cwd: process.cwd(),
+      resourcesPath: electronProcess.resourcesPath,
+      existsSync: fs.existsSync,
+    };
+    const options = {
+      dirnameRelativePaths: [
+        "GoogleMapsWorker.js",
+        path.join("..", "childprocess", "google-maps", "GoogleMapsWorker.js"),
+      ],
+      cwdRelativePaths: [
+        path.join(".vite", "build", "GoogleMapsWorker.js"),
+        path.join(".vite", "build", "childprocess", "GoogleMapsWorker.js"),
+        path.join("dist", "GoogleMapsWorker.js"),
+        path.join("dist", "childprocess", "GoogleMapsWorker.js"),
+        path.join(
+          "dist",
+          "childprocess",
+          "google-maps",
+          "GoogleMapsWorker.js"
+        ),
+      ],
+    };
+    const resolvedPath = resolvePackagedWorkerPath(runtime, options);
+    if (resolvedPath) {
+      return resolvedPath;
     }
 
+    const candidates = getPackagedWorkerPathCandidates(runtime, options);
     throw new Error(
       `Google Maps worker file not found. Tried: ${candidates.join(", ")}`
     );

@@ -12,6 +12,10 @@ import { EmailExtractionTypes } from "@/config/emailextraction";
 import { SortBy, TaskStatus } from "@/entityTypes/commonType";
 import { EmailItem } from "@/entityTypes/emailmarketingType";
 import { BaseModule } from "@/modules/baseModule";
+import {
+  getPackagedWorkerPathCandidates,
+  resolvePackagedWorkerPath,
+} from "@/utils/packagedWorkerPath";
 import { EmailSearchResultDetailEntity } from "@/entity/EmailSearchResultDetail.entity";
 import {
   EmailsearchTaskEntity,
@@ -128,9 +132,25 @@ export class EmailSearchTaskModule extends BaseModule {
     //save search email task
     // const taskId=await this.saveSearchtask(data)
     const data = await this.getEmailContoldata(taskId);
-    const childPath = path.join(__dirname, "taskCode.js");
-    if (!fs.existsSync(childPath)) {
-      throw new Error("child js path not exist for the path " + childPath);
+    const electronProcess = process as NodeJS.Process & {
+      resourcesPath?: string;
+    };
+    const runtime = {
+      dirname: __dirname,
+      cwd: process.cwd(),
+      resourcesPath: electronProcess.resourcesPath,
+      existsSync: fs.existsSync,
+    };
+    const options = {
+      dirnameRelativePaths: ["taskCode.js"],
+      cwdRelativePaths: [path.join(".vite", "build", "taskCode.js")],
+    };
+    const childPath = resolvePackagedWorkerPath(runtime, options);
+    if (!childPath) {
+      const candidates = getPackagedWorkerPathCandidates(runtime, options);
+      throw new Error(
+        `child js path not exist. Tried: ${candidates.join(", ")}`
+      );
     }
 
     const { port1, port2 } = new MessageChannelMain();

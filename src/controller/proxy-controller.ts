@@ -38,6 +38,10 @@ import { IProxyApi } from "@/modules/interface/IProxyApi";
 import { ProxyModule } from "@/modules/ProxyModule";
 import { utilityProcess } from "electron";
 import * as path from "path";
+import {
+  getPackagedWorkerPathCandidates,
+  resolvePackagedWorkerPath,
+} from "@/utils/packagedWorkerPath";
 export class ProxyController {
   //import proxy from csv file
   // public async importProxyfile(filename: string) {
@@ -264,36 +268,36 @@ export class ProxyController {
     timeout = 15000
   ): Promise<boolean> {
     return new Promise((resolve, reject) => {
-      // Resolve child process path with fallback options (similar to WebsiteAnalysisService)
-      let childPath = path.join(
-        __dirname,
-        "../childprocess/googleProxyCheck.js"
-      );
-
-      // Try multiple path locations
-      if (!fs.existsSync(childPath)) {
-        // Try relative path from controller directory
-        const altPath1 = path.join(
-          __dirname,
-          "./childprocess/googleProxyCheck.js"
-        );
-        if (fs.existsSync(altPath1)) {
-          childPath = altPath1;
-        } else {
-          // Try dist directory from project root
-          const altPath2 = path.join(
-            process.cwd(),
-            "dist/childprocess/googleProxyCheck.js"
-          );
-          if (fs.existsSync(altPath2)) {
-            childPath = altPath2;
-          } else {
-            const errorMsg = `Google proxy check child process not found. Tried: ${childPath}, ${altPath1}, ${altPath2}. Please rebuild the application.`;
-            console.error(errorMsg);
-            reject(new Error(errorMsg));
-            return;
-          }
-        }
+      const electronProcess = process as NodeJS.Process & {
+        resourcesPath?: string;
+      };
+      const runtime = {
+        dirname: __dirname,
+        cwd: process.cwd(),
+        resourcesPath: electronProcess.resourcesPath,
+        existsSync: fs.existsSync,
+      };
+      const options = {
+        dirnameRelativePaths: [
+          "googleProxyCheck.js",
+          path.join("childprocess", "googleProxyCheck.js"),
+          path.join("..", "childprocess", "googleProxyCheck.js"),
+        ],
+        cwdRelativePaths: [
+          path.join("dist", "childprocess", "googleProxyCheck.js"),
+          path.join(".vite", "build", "googleProxyCheck.js"),
+          path.join(".vite", "build", "childprocess", "googleProxyCheck.js"),
+        ],
+      };
+      const childPath = resolvePackagedWorkerPath(runtime, options);
+      if (!childPath) {
+        const candidates = getPackagedWorkerPathCandidates(runtime, options);
+        const errorMsg = `Google proxy check child process not found. Tried: ${candidates.join(
+          ", "
+        )}. Please rebuild the application.`;
+        console.error(errorMsg);
+        reject(new Error(errorMsg));
+        return;
       }
 
       const requestId = `google-check-${Date.now()}-${Math.random()

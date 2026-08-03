@@ -27,6 +27,11 @@ import { YandexMapsSearchRecordModel } from "@/model/YandexMapsSearchRecord.mode
 import type { YandexMapsSearchRecordEntity } from "@/entity/YandexMapsSearchRecord.entity";
 import type { ModuleExecutionContext } from "@/entityTypes/skillTypes";
 import { ToolExecutor } from "@/service/ToolExecutor";
+import {
+  getPackagedWorkerPathCandidates,
+  resolvePackagedWorkerPath,
+  type PackagedWorkerPathRuntime,
+} from "@/utils/packagedWorkerPath";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -168,7 +173,7 @@ export class YandexMapsModule extends BaseModule {
         if (!fs.existsSync(resolvedWorkerPath)) {
           throw new Error(
             `Yandex Maps worker not found at ${resolvedWorkerPath}. ` +
-              `Run \`yarn make\` or restart \`yarn dev\` to build dist/childprocess/yandex-maps/YandexMapsWorker.js.`
+              `Run yarn make or restart yarn dev to rebuild YandexMapsWorker.js.`
           );
         }
         // child_process.spawn + ipc stdio (utilityProcess.fork rejects piped stdin with ipc)
@@ -441,21 +446,39 @@ export class YandexMapsModule extends BaseModule {
    * Resolve the Yandex Maps worker entry script (built by Forge / vite.yandexMapsWorker).
    */
   private resolveWorkerPath(): string {
-    const candidates = [
-      path.join(__dirname, "../childprocess/yandex-maps/YandexMapsWorker.js"),
-      path.join(
-        process.cwd(),
-        "dist/childprocess/yandex-maps/YandexMapsWorker.js"
-      ),
-      path.join(__dirname, "YandexMapsWorker.js"),
-    ];
-
-    for (const candidate of candidates) {
-      if (fs.existsSync(candidate)) {
-        return candidate;
-      }
+    const electronProcess = process as NodeJS.Process & {
+      resourcesPath?: string;
+    };
+    const runtime: PackagedWorkerPathRuntime = {
+      dirname: __dirname,
+      cwd: process.cwd(),
+      resourcesPath: electronProcess.resourcesPath,
+      existsSync: fs.existsSync,
+    };
+    const options = {
+      dirnameRelativePaths: [
+        "YandexMapsWorker.js",
+        path.join("..", "childprocess", "yandex-maps", "YandexMapsWorker.js"),
+      ],
+      cwdRelativePaths: [
+        path.join(".vite", "build", "YandexMapsWorker.js"),
+        path.join(".vite", "build", "childprocess", "YandexMapsWorker.js"),
+        path.join("dist", "YandexMapsWorker.js"),
+        path.join("dist", "childprocess", "YandexMapsWorker.js"),
+        path.join(
+          "dist",
+          "childprocess",
+          "yandex-maps",
+          "YandexMapsWorker.js"
+        ),
+      ],
+    };
+    const resolvedPath = resolvePackagedWorkerPath(runtime, options);
+    if (resolvedPath) {
+      return resolvedPath;
     }
 
+    const candidates = getPackagedWorkerPathCandidates(runtime, options);
     throw new Error(
       `Yandex Maps worker file not found. Tried: ${candidates.join(", ")}`
     );

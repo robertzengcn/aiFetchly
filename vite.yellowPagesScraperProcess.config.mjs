@@ -66,11 +66,14 @@ export default ({ mode }) => {
         build: {
             rollupOptions: {
                 input: {
-                    googleProxyCheck: path.resolve(__dirname, 'src/childprocess/googleProxyCheck.ts')
+                    YellowPagesScraperProcess: path.resolve(
+                        __dirname,
+                        'src/childprocess/YellowPagesScraperProcess.ts'
+                    )
                 },
                 output: {
                     dir: 'dist/childprocess',
-                    entryFileNames: 'googleProxyCheck.js',
+                    entryFileNames: 'YellowPagesScraperProcess.js',
                     format: 'cjs'
                 },
                 external: [

@@ -1,9 +1,10 @@
 import path from "node:path";
+import * as fs from "node:fs";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import type { UtilityProcess } from "electron";
 import { utilityProcess } from "electron";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("electron", () => ({
   utilityProcess: {
@@ -36,6 +37,13 @@ function asUtilityProcess(
 
 const mockedFork = vi.mocked(utilityProcess.fork);
 const mockedValidateWithDns = vi.mocked(UrlGuard.validateWithDns);
+const websiteWorkerBundlePath = path.join(
+  process.cwd(),
+  "dist",
+  "childprocess",
+  "websiteContentScraper.js"
+);
+let createdWebsiteWorkerBundle = false;
 
 beforeEach(() => {
   mockedFork.mockReset();
@@ -44,6 +52,15 @@ beforeEach(() => {
     normalizedUrl: "https://example.com/debug",
   });
 });
+
+function ensureWebsiteWorkerBundleExists(): void {
+  if (fs.existsSync(websiteWorkerBundlePath)) {
+    return;
+  }
+  fs.mkdirSync(path.dirname(websiteWorkerBundlePath), { recursive: true });
+  fs.writeFileSync(websiteWorkerBundlePath, "module.exports = {};\n");
+  createdWebsiteWorkerBundle = true;
+}
 
 describe("WebsiteContentScrapeService worker path resolution", () => {
   it("resolves the local dist childprocess worker used by Vite worker builds", () => {
@@ -96,7 +113,15 @@ describe("WebsiteContentScrapeService worker path resolution", () => {
 });
 
 describe("WebsiteContentScrapeService child process diagnostics", () => {
+  afterEach(() => {
+    if (createdWebsiteWorkerBundle) {
+      fs.rmSync(websiteWorkerBundlePath, { force: true });
+      createdWebsiteWorkerBundle = false;
+    }
+  });
+
   it("includes captured stderr and worker context when the child exits", async () => {
+    ensureWebsiteWorkerBundleExists();
     const childProcess = new MockUtilityProcess();
     mockedFork.mockImplementation((childPath: string) => {
       queueMicrotask(() => childProcess.emit("spawn"));
@@ -120,6 +145,7 @@ describe("WebsiteContentScrapeService child process diagnostics", () => {
   });
 
   it("includes worker-reported stack traces in scrape errors", async () => {
+    ensureWebsiteWorkerBundleExists();
     const childProcess = new MockUtilityProcess();
     mockedFork.mockImplementation(() => {
       queueMicrotask(() => childProcess.emit("spawn"));

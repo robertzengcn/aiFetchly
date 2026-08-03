@@ -10,9 +10,19 @@ const OUT_DIR = process.env.AIFETCHLY_VERIFY_OUT_DIR
   ? path.resolve(process.env.AIFETCHLY_VERIFY_OUT_DIR)
   : path.join(PROJECT_ROOT, "out");
 const REQUIRED_WORKERS = [
-  "websiteContentScraper.js",
-  "ContactExtractionWorker.js",
   "AiChatVoiceWorker.js",
+  "ContactExtractionWorker.js",
+  "GoogleMapsWorker.js",
+  "HookExecutionWorker.js",
+  "LocalEmbeddingWorker.js",
+  "PythonRuntimeWorker.js",
+  "SkillWorker.js",
+  "WorkspaceConfigWatchWorker.js",
+  "YandexMapsWorker.js",
+  "YellowPagesScraperProcess.js",
+  "googleProxyCheck.js",
+  "websiteContentScraper.js",
+  "YellowPagesScraper.js",
 ];
 const GENERATED_RUNTIME_REQUIRE_BUNDLES = ["taskCode.js"];
 const NODE_BUILTINS = new Set([
@@ -104,6 +114,12 @@ function hasWorker(resourcesDir, workerFile) {
       resourcesDir,
       "app.asar.unpacked",
       "dist",
+      workerFile
+    ),
+    path.join(
+      resourcesDir,
+      "app.asar.unpacked",
+      "dist",
       "childprocess",
       workerFile
     ),
@@ -126,6 +142,7 @@ function hasWorker(resourcesDir, workerFile) {
   const asarEntries = listAsarEntries(path.join(resourcesDir, "app.asar"));
   const asarCandidates = [
     `.vite/build/${workerFile}`,
+    `dist/${workerFile}`,
     `dist/childprocess/${workerFile}`,
     `.vite/build/childprocess/${workerFile}`,
   ];
