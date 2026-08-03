@@ -41,7 +41,7 @@ jobs:
         include:
           - platform: win32
             arch: x64
-            runner: windows-latest
+            runner: windows-2022
           - platform: darwin
             arch: x64
             runner: macos-15-intel
