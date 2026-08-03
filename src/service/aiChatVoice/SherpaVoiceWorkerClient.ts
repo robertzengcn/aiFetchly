@@ -63,6 +63,134 @@ interface PendingRequest {
   timeout: ReturnType<typeof setTimeout>;
 }
 
+const AI_CHAT_VOICE_WORKER_FILE = "AiChatVoiceWorker.js";
+
+export interface AiChatVoiceWorkerPathRuntime {
+  dirname: string;
+  cwd: string;
+  resourcesPath?: string;
+  existsSync: (candidate: string) => boolean;
+}
+
+export function mirrorAppAsarUnpackedPath(candidate: string): string {
+  return candidate.replace(/app\.asar([\\/])/, "app.asar.unpacked$1");
+}
+
+export function getAiChatVoiceWorkerPathCandidates(
+  runtime: AiChatVoiceWorkerPathRuntime
+): string[] {
+  const candidates: string[] = [];
+  const addCandidate = (candidate: string): void => {
+    const normalized = path.normalize(candidate);
+    const unpacked = mirrorAppAsarUnpackedPath(normalized);
+
+    if (unpacked !== normalized && !candidates.includes(unpacked)) {
+      candidates.push(unpacked);
+    }
+    if (!candidates.includes(normalized)) {
+      candidates.push(normalized);
+    }
+  };
+
+  addCandidate(path.join(runtime.dirname, AI_CHAT_VOICE_WORKER_FILE));
+  addCandidate(
+    path.join(runtime.dirname, "childprocess", AI_CHAT_VOICE_WORKER_FILE)
+  );
+  addCandidate(
+    path.join(runtime.dirname, "../childprocess", AI_CHAT_VOICE_WORKER_FILE)
+  );
+  addCandidate(
+    path.join(runtime.cwd, "dist", "childprocess", AI_CHAT_VOICE_WORKER_FILE)
+  );
+  addCandidate(
+    path.join(runtime.cwd, ".vite", "build", AI_CHAT_VOICE_WORKER_FILE)
+  );
+  addCandidate(
+    path.join(
+      runtime.cwd,
+      ".vite",
+      "build",
+      "childprocess",
+      AI_CHAT_VOICE_WORKER_FILE
+    )
+  );
+
+  if (runtime.resourcesPath) {
+    addCandidate(
+      path.join(
+        runtime.resourcesPath,
+        "app.asar.unpacked",
+        "dist",
+        "childprocess",
+        AI_CHAT_VOICE_WORKER_FILE
+      )
+    );
+    addCandidate(
+      path.join(
+        runtime.resourcesPath,
+        "app.asar.unpacked",
+        ".vite",
+        "build",
+        AI_CHAT_VOICE_WORKER_FILE
+      )
+    );
+    addCandidate(
+      path.join(
+        runtime.resourcesPath,
+        "app.asar.unpacked",
+        ".vite",
+        "build",
+        "childprocess",
+        AI_CHAT_VOICE_WORKER_FILE
+      )
+    );
+    addCandidate(
+      path.join(
+        runtime.resourcesPath,
+        "app.asar",
+        "dist",
+        "childprocess",
+        AI_CHAT_VOICE_WORKER_FILE
+      )
+    );
+    addCandidate(
+      path.join(
+        runtime.resourcesPath,
+        "app.asar",
+        ".vite",
+        "build",
+        AI_CHAT_VOICE_WORKER_FILE
+      )
+    );
+    addCandidate(
+      path.join(
+        runtime.resourcesPath,
+        "app.asar",
+        ".vite",
+        "build",
+        "childprocess",
+        AI_CHAT_VOICE_WORKER_FILE
+      )
+    );
+  }
+
+  return candidates;
+}
+
+export function resolveAiChatVoiceWorkerPath(
+  runtime: AiChatVoiceWorkerPathRuntime
+): string | null {
+  const candidates = getAiChatVoiceWorkerPathCandidates(runtime);
+
+  for (const candidate of candidates) {
+    if (runtime.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+
+  return null;
+}
+
 const defaultFork: ForkFn = (workerPath): UtilityProcessLike => {
   const proc = utilityProcess.fork(workerPath, [], {
     stdio: "pipe",
@@ -464,22 +592,21 @@ export class SherpaVoiceWorkerClient {
     if (this.cachedWorkerPath) {
       return this.cachedWorkerPath;
     }
-    const candidates = [
-      path.join(__dirname, "childprocess", "AiChatVoiceWorker.js"),
-      path.join(__dirname, "../childprocess", "AiChatVoiceWorker.js"),
-      path.join(process.cwd(), "dist/childprocess", "AiChatVoiceWorker.js"),
-      path.join(
-        process.cwd(),
-        ".vite/build/childprocess",
-        "AiChatVoiceWorker.js"
-      ),
-    ];
-    for (const candidate of candidates) {
-      if (fs.existsSync(candidate)) {
-        this.cachedWorkerPath = candidate;
-        return candidate;
-      }
+    const electronProcess = process as NodeJS.Process & {
+      resourcesPath?: string;
+    };
+    const runtime: AiChatVoiceWorkerPathRuntime = {
+      dirname: __dirname,
+      cwd: process.cwd(),
+      resourcesPath: electronProcess.resourcesPath,
+      existsSync: fs.existsSync,
+    };
+    const resolvedPath = resolveAiChatVoiceWorkerPath(runtime);
+    if (resolvedPath) {
+      this.cachedWorkerPath = resolvedPath;
+      return resolvedPath;
     }
+    const candidates = getAiChatVoiceWorkerPathCandidates(runtime);
     throw new Error(
       `Local voice worker file not found. Run yarn dev or yarn make to build AiChatVoiceWorker. Tried: ${candidates.join(
         ", "

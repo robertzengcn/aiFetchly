@@ -12,6 +12,7 @@ const OUT_DIR = process.env.AIFETCHLY_VERIFY_OUT_DIR
 const REQUIRED_WORKERS = [
   "websiteContentScraper.js",
   "ContactExtractionWorker.js",
+  "AiChatVoiceWorker.js",
 ];
 const GENERATED_RUNTIME_REQUIRE_BUNDLES = ["taskCode.js"];
 const NODE_BUILTINS = new Set([
