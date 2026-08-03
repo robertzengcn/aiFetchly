@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   QUOTA_EXHAUSTED_SENTINEL,
+  describeErrorDetail,
   userSafeError,
 } from "@/service/AIChatErrorMapper";
 import { AIProviderError } from "@/service/aiProvider/AIProviderError";
@@ -105,5 +106,36 @@ describe("AIChatErrorMapper - userSafeError", () => {
     expect(userSafeError(new Error("something else entirely"))).toBe(
       "An unexpected error occurred. Please try again."
     );
+  });
+
+  it("describeErrorDetail renders the top error plus its cause chain", () => {
+    const cause = new Error("ECONNRESET");
+    (cause as { code?: string }).code = "ECONNRESET";
+    const terminated = new Error("terminated");
+    (terminated as { cause?: unknown }).cause = cause;
+    const detail = describeErrorDetail(terminated);
+    expect(detail).toContain('error: name=Error message="terminated"');
+    expect(detail).toContain('cause[0]: name=Error message="ECONNRESET"');
+    expect(detail).toContain('cause[0].code="ECONNRESET"');
+  });
+
+  it("logs the full error detail for unmapped errors so the source is traceable", () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(vi.fn());
+    try {
+      const cause = new Error("ECONNRESET");
+      (cause as { code?: string }).code = "ECONNRESET";
+      const terminated = new Error("terminated");
+      (terminated as { cause?: unknown }).cause = cause;
+      expect(userSafeError(terminated)).toBe(
+        "An unexpected error occurred. Please try again."
+      );
+      const logged = spy.mock.calls.map((c) => c.join(" ")).join(" ");
+      expect(logged).toContain("[ai-chat-v2] unmapped error: terminated");
+      expect(logged).toContain('name=Error message="terminated"');
+      expect(logged).toContain("cause[0]");
+      expect(logged).toContain("ECONNRESET");
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

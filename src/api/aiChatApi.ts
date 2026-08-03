@@ -27,6 +27,7 @@ import {
   type AIChatRecoveryProfile,
   type AIChatRetryProfile,
 } from "@/service/AIChatRetryPolicy";
+import { describeErrorDetail } from "@/service/AIChatErrorMapper";
 
 /**
  * Chat request interface
@@ -3012,6 +3013,11 @@ export class AiChatApi {
             streamActive = false;
             throw readError;
           }
+          console.error(
+            `[ai-chat-v2] openai-stream read failed mid-stream (bytes=${rawBody.length}, payloads=${emittedPayloadCount}): ${describeErrorDetail(
+              readError
+            )}`
+          );
           throw readError;
         }
 
