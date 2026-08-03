@@ -267,6 +267,9 @@ export default {
     embedding_model_updated_successfully:
       "Embedding model updated successfully",
     failed_to_update_embedding_model: "Failed to update embedding model",
+    local_runtime_not_installed_title: "Runtime IA local non installé",
+    local_runtime_not_installed_message:
+      "Le modèle d'intégration local '{model}' nécessite le composant IA local ({runtime}). Veuillez le télécharger dans Paramètres IA > Composants IA locaux, puis réessayez.",
     max_dimensions: "Max Dimensions",
     model: "Model",
     dimensions: "Dimensions",

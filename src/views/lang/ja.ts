@@ -265,6 +265,9 @@ export default {
     priority: "優先度",
     embedding_model_updated_successfully: "埋め込みモデルの更新に成功しました",
     failed_to_update_embedding_model: "埋め込みモデルの更新に失敗しました",
+    local_runtime_not_installed_title: "ローカルAIランタイムがインストールされていません",
+    local_runtime_not_installed_message:
+      "ローカル埋め込みモデル「{model}」にはローカルAIコンポーネント（{runtime}）が必要です。AI設定 > ローカルAIコンポーネントからダウンロードしてから再試行してください。",
     max_dimensions: "最大次元数",
     model: "モデル",
     dimensions: "次元",

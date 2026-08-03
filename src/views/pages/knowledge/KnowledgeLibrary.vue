@@ -391,6 +391,11 @@ import { initializeRAG, getRAGStats, uploadDocument, selectFilesNative as select
 import type { SaveTempFileResponse, UploadedDocument } from '@/entityTypes/commonType';
 import { ModelInfo } from '@/api/ragConfigApi';
 import { DocumentMetadata } from '@/entityTypes/metadataType';
+import { getLocalAiRuntimeStatus } from '@/views/api/localAiRuntime';
+import type { LocalAiRuntimeId } from '@/entityTypes/localAiRuntimeTypes';
+import { LOCAL_XENOVA_PROVIDER_PREFIX } from '@/service/embedding/LocalEmbeddingModels';
+
+const LOCAL_EMBEDDING_RUNTIME_ID: LocalAiRuntimeId = 'embedding-xenova';
 
 // i18n setup
 
@@ -637,6 +642,26 @@ async function loadAvailableModels() {
 
 async function handleUpdateEmbeddingModel() {
   if (!selectedEmbeddingModel.value) return;
+  
+  // Local embedding models (Xenova/all-MiniLM-L6-v2) require the
+  // downloadable "embedding-xenova" Local AI Component. If the runtime is not
+  // installed/ready, notify the user to download it instead of updating.
+  if (selectedEmbeddingModel.value.startsWith(LOCAL_XENOVA_PROVIDER_PREFIX)) {
+    const runtimeStatus = await getLocalAiRuntimeStatus(LOCAL_EMBEDDING_RUNTIME_ID);
+    if (runtimeStatus.state !== 'ready') {
+      console.warn('Local embedding runtime not ready:', runtimeStatus);
+      updateResultType.value = 'error';
+      updateResultTitle.value = t('knowledge.local_runtime_not_installed_title');
+      updateResultIcon.value = 'mdi-alert-circle';
+      updateResult.value = null;
+      updateResultMessage.value = t('knowledge.local_runtime_not_installed_message', {
+        model: selectedEmbeddingModel.value,
+        runtime: 'embedding-xenova',
+      });
+      showUpdateResultDialog.value = true;
+      return;
+    }
+  }
   
   updatingModel.value = true;
   try {

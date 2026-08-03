@@ -268,6 +268,9 @@ export default {
       "Modelo de incrustación actualizado correctamente",
     failed_to_update_embedding_model:
       "Error al actualizar el modelo de incrustación",
+    local_runtime_not_installed_title: "Componente de IA local no instalado",
+    local_runtime_not_installed_message:
+      "El modelo de incrustación local '{model}' requiere el componente de IA local ({runtime}). Descárguelo en Configuración de IA > Componentes de IA local e inténtelo de nuevo.",
     max_dimensions: "Dimensiones máximas",
     model: "Modelo",
     dimensions: "Dimensiones",

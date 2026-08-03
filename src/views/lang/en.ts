@@ -265,6 +265,9 @@ export default {
     embedding_model_updated_successfully:
       "Embedding model updated successfully",
     failed_to_update_embedding_model: "Failed to update embedding model",
+    local_runtime_not_installed_title: "Local AI Runtime Not Installed",
+    local_runtime_not_installed_message:
+      "The local embedding model '{model}' requires the Local AI Component ({runtime}). Please download it from AI Settings > Local AI Components, then try again.",
     max_dimensions: "Max Dimensions",
     model: "Model",
     dimensions: "Dimensions",

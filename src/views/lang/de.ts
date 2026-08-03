@@ -269,6 +269,9 @@ export default {
       "Einbettungsmodell erfolgreich aktualisiert",
     failed_to_update_embedding_model:
       "Einbettungsmodell konnte nicht aktualisiert werden",
+    local_runtime_not_installed_title: "Lokale KI-Laufzeit nicht installiert",
+    local_runtime_not_installed_message:
+      "Das lokale Einbettungsmodell '{model}' erfordert die lokale KI-Komponente ({runtime}). Bitte laden Sie sie unter KI-Einstellungen > Lokale KI-Komponenten herunter und versuchen Sie es erneut.",
     max_dimensions: "Maximale Dimensionen",
     model: "Modell",
     dimensions: "Dimensionen",

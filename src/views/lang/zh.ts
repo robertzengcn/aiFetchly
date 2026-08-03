@@ -251,6 +251,9 @@ export default {
     priority: "优先级",
     embedding_model_updated_successfully: "嵌入模型更新成功",
     failed_to_update_embedding_model: "更新嵌入模型失败",
+    local_runtime_not_installed_title: "本地 AI 运行组件未安装",
+    local_runtime_not_installed_message:
+      "本地嵌入模型“{model}”需要本地 AI 组件（{runtime}）。请前往 AI 设置 > 本地 AI 组件 下载后再试。",
     max_dimensions: "最大维度",
     model: "模型",
     dimensions: "维度",
