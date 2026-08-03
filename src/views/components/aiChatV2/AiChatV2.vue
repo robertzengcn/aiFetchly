@@ -305,6 +305,7 @@
         @stop="onStop"
         @request-workspace="handleWorkspaceSetupRequest"
         @install-voice-model="handleInstallVoiceModel"
+        @install-voice-runtime="handleInstallVoiceRuntime"
         @voice-recording-start="onVoiceRecordingStart"
         @stop-speaking="onStopSpeaking"
         @open-voice-settings="openAIProviderSettings"
@@ -357,6 +358,90 @@
         "Conversation compacted into memory."
       }}
     </v-snackbar>
+
+    <v-dialog
+      v-model="voiceRuntimeInstallDialog"
+      max-width="520"
+      persistent
+    >
+      <v-card>
+        <v-card-title class="d-flex align-center">
+          <v-icon class="mr-2" color="primary">mdi-microphone-outline</v-icon>
+          <span>
+            {{
+              t("aiChatV2.voice.runtime_install_title") ||
+              "Install local voice runtime?"
+            }}
+          </span>
+        </v-card-title>
+        <v-card-text>
+          <p class="text-body-2 mb-3">
+            {{
+              t("aiChatV2.voice.runtime_install_message") ||
+              "Voice input needs the local voice runtime and Whisper Base voice model. Download and install them now?"
+            }}
+          </p>
+          <div
+            v-if="voiceRuntimeInstallSizeText"
+            class="text-caption text-medium-emphasis mb-3"
+          >
+            {{ voiceRuntimeInstallSizeText }}
+          </div>
+          <v-alert
+            v-if="voiceRuntimeInstallError"
+            type="error"
+            variant="tonal"
+            density="comfortable"
+            class="mb-3"
+          >
+            {{ voiceRuntimeInstallError }}
+          </v-alert>
+          <div v-if="voiceRuntimeInstalling" class="mt-3">
+            <div class="d-flex align-center mb-2">
+              <v-progress-circular
+                indeterminate
+                size="18"
+                width="2"
+                color="primary"
+                class="mr-2"
+              />
+              <span class="text-body-2">
+                {{ voiceRuntimeInstallProgressText }}
+              </span>
+            </div>
+            <v-progress-linear
+              v-if="voiceRuntimeInstallPercent !== undefined"
+              :model-value="voiceRuntimeInstallPercent"
+              color="primary"
+              height="6"
+              rounded
+            />
+          </div>
+        </v-card-text>
+        <v-card-actions>
+          <v-spacer />
+          <v-btn
+            variant="text"
+            :disabled="voiceRuntimeInstalling"
+            @click="voiceRuntimeInstallDialog = false"
+          >
+            {{ t("common.cancel") || "Cancel" }}
+          </v-btn>
+          <v-btn
+            color="primary"
+            variant="flat"
+            :loading="voiceRuntimeInstalling"
+            :disabled="voiceRuntimeInstalling"
+            @click="confirmInstallVoiceRuntime"
+          >
+            {{
+              t("aiChatV2.voice.runtime_install_confirm") ||
+              "Download and install"
+            }}
+          </v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
 
     <!-- Conversation history dialog -->
     <v-dialog v-model="showConversationsDialog" max-width="500" scrollable>
@@ -515,13 +600,25 @@ import {
   downloadVoiceModel,
   getVoiceSettings,
   getVoiceStatus,
+  notifyVoiceModelsChanged,
+  onVoiceModelDownloadProgress,
   setVoiceSettings,
 } from "@/views/api/aiChatV2Voice";
+import {
+  installLocalAiRuntime,
+  onLocalAiRuntimeProgress,
+  prepareLocalAiRuntimeInstall,
+} from "@/views/api/localAiRuntime";
 import type {
   AiChatVoiceRuntimeStatus,
   AiChatVoiceSettingsView,
   AiChatVoiceTtsMode,
+  VoiceModelDownloadProgress,
 } from "@/entityTypes/aiChatVoiceTypes";
+import type {
+  LocalAiRuntimeDownloadProgress,
+  LocalAiRuntimeInstallOffer,
+} from "@/entityTypes/localAiRuntimeTypes";
 import { SpeechResponseController } from "./voice/SpeechResponseController";
 import {
   AI_PROVIDER_SETTINGS_CHANGED_EVENT,
@@ -3374,6 +3471,15 @@ const voiceTtsMode = ref<AiChatVoiceTtsMode>("disabled");
 const voiceSettingsSaving = ref(false);
 const voiceModelInstalling = ref(false);
 const voiceModelInstallError = ref<string | null>(null);
+const DEFAULT_VOICE_STT_MODEL_ID = "sherpa-onnx:stt:whisper-base";
+const voiceRuntimeInstallDialog = ref(false);
+const voiceRuntimeInstalling = ref(false);
+const voiceRuntimeInstallError = ref<string | null>(null);
+const voiceRuntimeInstallOffer = ref<LocalAiRuntimeInstallOffer | null>(null);
+const voiceRuntimeInstallProgress = ref<LocalAiRuntimeDownloadProgress | null>(null);
+const voiceRuntimeModelProgress = ref<VoiceModelDownloadProgress | null>(null);
+let unsubscribeVoiceRuntimeProgress: (() => void) | null = null;
+let unsubscribeVoiceModelProgress: (() => void) | null = null;
 const spokenResponseEnabled = computed(() => voiceTtsMode.value !== "disabled");
 const spokenResponseToggleTitle = computed(() =>
   spokenResponseEnabled.value
@@ -3396,6 +3502,73 @@ const voiceRuntimeUnavailable = computed(
  * transcript in the draft instead (PRD §7.13 / TODO P1-5).
  */
 const voiceChatReady = computed(() => availableModels.value.length > 0);
+const voiceRuntimeInstallPercent = computed<number | undefined>(() => {
+  if (voiceRuntimeModelProgress.value?.pct !== undefined) {
+    return voiceRuntimeModelProgress.value.pct;
+  }
+  return voiceRuntimeInstallProgress.value?.percent;
+});
+const voiceRuntimeInstallProgressText = computed(() => {
+  const modelProgress = voiceRuntimeModelProgress.value;
+  if (modelProgress) {
+    if (modelProgress.phase === "downloading") {
+      return (
+        t("aiChatV2.voice.runtime_install_downloading_model", {
+          pct: modelProgress.pct ?? 0,
+        }) || `Downloading Whisper Base... ${modelProgress.pct ?? 0}%`
+      );
+    }
+    if (modelProgress.phase === "verifying") {
+      return (
+        t("aiChatV2.voice.runtime_install_verifying_model") ||
+        "Verifying Whisper Base..."
+      );
+    }
+    if (modelProgress.phase === "extracting") {
+      return (
+        t("aiChatV2.voice.runtime_install_extracting_model") ||
+        "Installing Whisper Base..."
+      );
+    }
+  }
+
+  const runtimeProgress = voiceRuntimeInstallProgress.value;
+  if (!runtimeProgress) {
+    return (
+      t("aiChatV2.voice.runtime_install_preparing") ||
+      "Preparing download..."
+    );
+  }
+  const phaseKey = `localAiRuntime.${runtimeProgress.phase}`;
+  const phaseText = t(phaseKey) || runtimeProgress.phase;
+  if (runtimeProgress.percent !== undefined) {
+    return `${phaseText} ${runtimeProgress.percent}%`;
+  }
+  return phaseText;
+});
+const voiceRuntimeInstallSizeText = computed(() => {
+  const offer = voiceRuntimeInstallOffer.value;
+  if (!offer) return "";
+  return (
+    t("aiChatV2.voice.runtime_install_size", {
+      runtimeSize: formatBytes(offer.archiveSizeBytes),
+      modelSize: "198MB",
+    }) ||
+    `Runtime download: ${formatBytes(offer.archiveSizeBytes)}. Whisper Base model: ~198MB.`
+  );
+});
+
+function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB"];
+  let value = bytes;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+  return `${value.toFixed(unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
+}
 
 function applyVoiceSettings(settings: AiChatVoiceSettingsView): void {
   voiceSettings.value = settings;
@@ -3482,6 +3655,74 @@ async function handleInstallVoiceModel(): Promise<void> {
   }
 }
 
+async function handleInstallVoiceRuntime(): Promise<void> {
+  if (voiceRuntimeInstalling.value) return;
+  voiceRuntimeInstallError.value = null;
+  voiceRuntimeInstallOffer.value = null;
+  voiceRuntimeInstallProgress.value = null;
+  voiceRuntimeModelProgress.value = null;
+  voiceRuntimeInstallDialog.value = true;
+  try {
+    voiceRuntimeInstallOffer.value =
+      await prepareLocalAiRuntimeInstall("voice-sherpa");
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    voiceRuntimeInstallError.value =
+      `${
+        t("aiChatV2.voice.runtime_install_prepare_failed") ||
+        "Could not prepare the voice runtime download."
+      } ${msg}`;
+  }
+}
+
+async function confirmInstallVoiceRuntime(): Promise<void> {
+  if (voiceRuntimeInstalling.value) return;
+  voiceRuntimeInstalling.value = true;
+  voiceModelInstalling.value = true;
+  voiceRuntimeInstallError.value = null;
+  voiceModelInstallError.value = null;
+  voiceRuntimeInstallProgress.value = null;
+  voiceRuntimeModelProgress.value = null;
+  try {
+    const offer =
+      voiceRuntimeInstallOffer.value ??
+      (await prepareLocalAiRuntimeInstall("voice-sherpa"));
+    voiceRuntimeInstallOffer.value = offer;
+    await installLocalAiRuntime({
+      operationId: offer.operationId,
+      runtimeId: offer.runtimeId,
+      expectedRuntimeVersion: offer.runtimeVersion,
+      consentToken: offer.consentToken,
+    });
+
+    await downloadVoiceModel(DEFAULT_VOICE_STT_MODEL_ID);
+    notifyVoiceModelsChanged();
+
+    const current = voiceSettings.value ?? (await getVoiceSettings());
+    const saved = await setVoiceSettings({
+      ...current,
+      inputMode: "push_to_talk",
+      sttModelId: DEFAULT_VOICE_STT_MODEL_ID,
+    });
+    applyVoiceSettings(saved);
+    await loadVoiceSettings();
+    voiceRuntimeInstallDialog.value = false;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    voiceRuntimeInstallError.value =
+      `${
+        t("aiChatV2.voice.runtime_install_failed") ||
+        "Voice runtime installation failed."
+      } ${msg}`;
+    await loadVoiceSettings();
+  } finally {
+    voiceRuntimeInstalling.value = false;
+    voiceModelInstalling.value = false;
+    voiceRuntimeInstallProgress.value = null;
+    voiceRuntimeModelProgress.value = null;
+  }
+}
+
 function handleVoiceSettingsChanged(): void {
   void loadVoiceSettings();
 }
@@ -3523,6 +3764,14 @@ onMounted(() => {
     AI_CHAT_REASONING_VISIBILITY_CHANGED_EVENT,
     handleReasoningVisibilityChanged
   );
+  unsubscribeVoiceRuntimeProgress = onLocalAiRuntimeProgress((progress) => {
+    if (progress.runtimeId !== "voice-sherpa") return;
+    voiceRuntimeInstallProgress.value = progress;
+  });
+  unsubscribeVoiceModelProgress = onVoiceModelDownloadProgress((progress) => {
+    if (progress.modelId !== DEFAULT_VOICE_STT_MODEL_ID) return;
+    voiceRuntimeModelProgress.value = progress;
+  });
   // Subscribe to file operation events emitted during tool execution.
   // Records are appended per-conversation so the summary panel reflects
   // all changes made within the active conversation.
@@ -3556,6 +3805,10 @@ onBeforeUnmount(() => {
     AI_CHAT_REASONING_VISIBILITY_CHANGED_EVENT,
     handleReasoningVisibilityChanged
   );
+  unsubscribeVoiceRuntimeProgress?.();
+  unsubscribeVoiceRuntimeProgress = null;
+  unsubscribeVoiceModelProgress?.();
+  unsubscribeVoiceModelProgress = null;
   unsubscribeFromFileOperations();
   if (searchDebounceTimer) {
     clearTimeout(searchDebounceTimer);

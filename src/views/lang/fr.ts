@@ -2242,6 +2242,20 @@ export default {
       installing_model: "Installation...",
       model_install_failed: "Échec de l'installation du modèle vocal.",
       runtime_unavailable: "Le runtime vocal local est indisponible.",
+      runtime_install_title: "Installer le runtime vocal local ?",
+      runtime_install_message:
+        "L'entrée vocale nécessite le runtime vocal local et le modèle vocal Whisper Base. Les télécharger et les installer maintenant ?",
+      runtime_install_confirm: "Télécharger et installer",
+      runtime_install_size:
+        "Téléchargement du runtime : {runtimeSize}. Modèle Whisper Base : ~{modelSize}.",
+      runtime_install_preparing: "Préparation du téléchargement...",
+      runtime_install_downloading_model:
+        "Téléchargement de Whisper Base... {pct}%",
+      runtime_install_verifying_model: "Vérification de Whisper Base...",
+      runtime_install_extracting_model: "Installation de Whisper Base...",
+      runtime_install_prepare_failed:
+        "Impossible de préparer le téléchargement du runtime vocal.",
+      runtime_install_failed: "Échec de l'installation du runtime vocal.",
       empty_transcript: "Aucune parole détectée.",
       settings_title: "Voix",
       enable_input: "Activer la saisie vocale",

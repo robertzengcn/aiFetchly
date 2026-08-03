@@ -2258,6 +2258,20 @@ export default {
       model_install_failed: "Error al instalar el modelo de voz.",
       runtime_unavailable:
         "El tiempo de ejecución de voz local no está disponible.",
+      runtime_install_title: "¿Instalar el runtime de voz local?",
+      runtime_install_message:
+        "La entrada de voz necesita el runtime de voz local y el modelo de voz Whisper Base. ¿Descargarlos e instalarlos ahora?",
+      runtime_install_confirm: "Descargar e instalar",
+      runtime_install_size:
+        "Descarga del runtime: {runtimeSize}. Modelo Whisper Base: ~{modelSize}.",
+      runtime_install_preparing: "Preparando descarga...",
+      runtime_install_downloading_model:
+        "Descargando Whisper Base... {pct}%",
+      runtime_install_verifying_model: "Verificando Whisper Base...",
+      runtime_install_extracting_model: "Instalando Whisper Base...",
+      runtime_install_prepare_failed:
+        "No se pudo preparar la descarga del runtime de voz.",
+      runtime_install_failed: "Error al instalar el runtime de voz.",
       empty_transcript: "No se detectó voz.",
       settings_title: "Voz",
       enable_input: "Habilitar entrada de voz",

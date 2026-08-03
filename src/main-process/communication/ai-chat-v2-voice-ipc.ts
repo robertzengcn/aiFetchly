@@ -20,6 +20,10 @@ import {
 import { AiChatVoiceModule } from "@/modules/AiChatVoiceModule";
 import { VoiceModelCatalogService } from "@/service/aiChatVoice/VoiceModelCatalogService";
 import { VoiceModelDownloadService } from "@/service/aiChatVoice/VoiceModelDownloadService";
+import { LocalAiRuntimePathService } from "@/service/localAiRuntime/LocalAiRuntimePathService";
+import { LocalAiRuntimeStateStore } from "@/service/localAiRuntime/LocalAiRuntimeStateStore";
+import { LocalAiRuntimeResolver } from "@/service/localAiRuntime/LocalAiRuntimeResolver";
+import { isSherpaOnnxNativeAvailable } from "@/service/aiChatVoice/SherpaOnnxNative";
 import {
   AI_CHAT_V2_VOICE_MODEL_LIST,
   AI_CHAT_V2_VOICE_MODEL_DOWNLOAD,
@@ -59,6 +63,32 @@ function voiceModule(): AiChatVoiceModule {
   });
 }
 
+async function isVoiceRuntimeAvailable(): Promise<boolean> {
+  if (isSherpaOnnxNativeAvailable()) {
+    return true;
+  }
+  try {
+    const paths = new LocalAiRuntimePathService(app.getPath("userData"));
+    const state = new LocalAiRuntimeStateStore(paths);
+    const appInfo = app as {
+      getVersion?: () => string;
+    };
+    const resolver = new LocalAiRuntimeResolver(paths, state, {
+      platform: process.platform,
+      arch: process.arch,
+      electronVersion: process.versions.electron ?? "",
+      nodeModuleAbi: String(process.versions.modules ?? ""),
+      appVersion: appInfo.getVersion?.() ?? "0.0.0",
+    });
+    const resolved = await resolver.resolve("voice-sherpa");
+    return (
+      resolved !== null && isSherpaOnnxNativeAvailable(resolved.runtimeRoot)
+    );
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Register AiChatV2 local voice IPC handlers (design §6).
  *
@@ -73,7 +103,9 @@ export function registerAiChatVoiceIpcHandlers(): void {
     AI_CHAT_V2_VOICE_STATUS,
     async (): Promise<CommonMessage<AiChatVoiceRuntimeStatus>> => {
       try {
-        return ok(voiceModule().getRuntimeStatus());
+        return ok(
+          voiceModule().getRuntimeStatus(await isVoiceRuntimeAvailable())
+        );
       } catch (err) {
         return denied(err instanceof Error ? err.message : String(err));
       }

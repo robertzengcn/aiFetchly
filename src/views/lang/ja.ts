@@ -2212,6 +2212,20 @@ export default {
       installing_model: "インストール中...",
       model_install_failed: "音声モデルのインストールに失敗しました。",
       runtime_unavailable: "ローカル音声ランタイムを利用できません。",
+      runtime_install_title: "ローカル音声ランタイムをインストールしますか？",
+      runtime_install_message:
+        "音声入力にはローカル音声ランタイムと Whisper Base 音声モデルが必要です。今すぐダウンロードしてインストールしますか？",
+      runtime_install_confirm: "ダウンロードしてインストール",
+      runtime_install_size:
+        "ランタイムのダウンロード: {runtimeSize}。Whisper Base モデル: 約 {modelSize}。",
+      runtime_install_preparing: "ダウンロードを準備中...",
+      runtime_install_downloading_model:
+        "Whisper Base をダウンロード中... {pct}%",
+      runtime_install_verifying_model: "Whisper Base を検証中...",
+      runtime_install_extracting_model: "Whisper Base をインストール中...",
+      runtime_install_prepare_failed:
+        "音声ランタイムのダウンロードを準備できませんでした。",
+      runtime_install_failed: "音声ランタイムのインストールに失敗しました。",
       empty_transcript: "音声が検出されませんでした。",
       settings_title: "音声",
       enable_input: "音声入力を有効化",

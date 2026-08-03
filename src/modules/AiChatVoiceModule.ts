@@ -89,9 +89,12 @@ export class AiChatVoiceModule {
   }
 
   /** Resolve STT/TTS model availability into a runtime status. */
-  getRuntimeStatus(): AiChatVoiceRuntimeStatus {
+  getRuntimeStatus(
+    runtimeAvailableOverride?: boolean
+  ): AiChatVoiceRuntimeStatus {
     const settings = this.getSettingsView();
-    const runtimeAvailable = this.runtimeAvailable();
+    const runtimeAvailable =
+      runtimeAvailableOverride ?? this.runtimeAvailable();
     return {
       sttState: this.stateForModel(settings.sttModelId, runtimeAvailable),
       ttsState: this.stateForModel(settings.ttsModelId, runtimeAvailable),

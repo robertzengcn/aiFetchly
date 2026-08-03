@@ -2163,6 +2163,19 @@ export default {
       installing_model: "安装中...",
       model_install_failed: "语音模型安装失败。",
       runtime_unavailable: "本地语音运行时不可用。",
+      runtime_install_title: "安装本地语音运行时？",
+      runtime_install_message:
+        "语音输入需要本地语音运行时和 Whisper Base 语音模型。现在下载并安装吗？",
+      runtime_install_confirm: "下载并安装",
+      runtime_install_size:
+        "运行时下载：{runtimeSize}。Whisper Base 模型：约 {modelSize}。",
+      runtime_install_preparing: "正在准备下载...",
+      runtime_install_downloading_model:
+        "正在下载 Whisper Base... {pct}%",
+      runtime_install_verifying_model: "正在验证 Whisper Base...",
+      runtime_install_extracting_model: "正在安装 Whisper Base...",
+      runtime_install_prepare_failed: "无法准备语音运行时下载。",
+      runtime_install_failed: "语音运行时安装失败。",
       empty_transcript: "未检测到语音。",
       settings_title: "语音",
       enable_input: "启用语音输入",

@@ -2248,6 +2248,20 @@ export default {
       installing_model: "Installation...",
       model_install_failed: "Installation des Sprachmodells fehlgeschlagen.",
       runtime_unavailable: "Lokale Sprach-Laufzeit ist nicht verfügbar.",
+      runtime_install_title: "Lokale Sprach-Laufzeit installieren?",
+      runtime_install_message:
+        "Die Spracheingabe benötigt die lokale Sprach-Laufzeit und das Sprachmodell Whisper Base. Jetzt herunterladen und installieren?",
+      runtime_install_confirm: "Herunterladen und installieren",
+      runtime_install_size:
+        "Runtime-Download: {runtimeSize}. Whisper-Base-Modell: ~{modelSize}.",
+      runtime_install_preparing: "Download wird vorbereitet...",
+      runtime_install_downloading_model:
+        "Whisper Base wird heruntergeladen... {pct}%",
+      runtime_install_verifying_model: "Whisper Base wird geprüft...",
+      runtime_install_extracting_model: "Whisper Base wird installiert...",
+      runtime_install_prepare_failed:
+        "Der Download der Sprach-Laufzeit konnte nicht vorbereitet werden.",
+      runtime_install_failed: "Installation der Sprach-Laufzeit fehlgeschlagen.",
       empty_transcript: "Keine Sprache erkannt.",
       settings_title: "Stimme",
       enable_input: "Spracheingabe aktivieren",
