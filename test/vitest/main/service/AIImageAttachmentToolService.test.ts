@@ -94,8 +94,15 @@ function makeService(
       resolveWorkspace ?? (async () => ({ rootPath: workspace })),
     createPathGuard: (roots) => new FilePathGuard(roots),
     normalizer,
-    readFile: (p) => fs.promises.readFile(p),
-    lstat: (p) => fs.promises.lstat(p),
+    openForRead: async (p) => {
+      const fileHandle = await fs.promises.open(p, "r");
+      const stats = await fileHandle.stat();
+      return {
+        stats,
+        read: () => fileHandle.readFile(),
+        close: () => fileHandle.close(),
+      };
+    },
     destinationLabel: "Configured AI Server",
   });
 }

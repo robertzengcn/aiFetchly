@@ -81,12 +81,22 @@ export interface AIImageAttachmentToolDeps {
   readonly createPathGuard: (roots: readonly string[]) => FilePathGuard;
   /** Image normalizer (codec-injected). */
   readonly normalizer: ImageNormalizerPort;
-  /** Reads a file's bytes. */
-  readonly readFile: (filePath: string) => Promise<Buffer>;
-  /** lstat a path (does not follow symlinks). */
-  readonly lstat: (filePath: string) => Promise<Stats>;
+  /**
+   * Opens a resolved path for reading and returns an fd-pinned handle. The
+   * handle's stats come from fstat on the open fd (not the path), and read()
+   * reads from that same fd — so a path/symlink swap between validation and
+   * read cannot change what bytes we actually read (TOCTOU mitigation).
+   */
+  readonly openForRead: (filePath: string) => Promise<OpenedReadFile>;
   /** Label of the configured AI server destination (no credentials), for previews. */
   readonly destinationLabel: string;
+}
+
+/** fd-pinned read handle: stats from fstat, read from the same fd. */
+export interface OpenedReadFile {
+  readonly stats: Stats;
+  read(): Promise<Buffer>;
+  close(): Promise<void>;
 }
 
 // ---------------------------------------------------------------------------
@@ -373,10 +383,12 @@ export class AIImageAttachmentToolService {
     const relativePath =
       validation.relativePath ?? path.relative(rootPath, resolvedPath);
 
-    // lstat — require a regular, non-symlink file (TOCTOU guard).
-    let stats: Stats;
+    // Open the resolved path and pin the fd. Stats come from fstat on the fd
+    // and the read uses the same fd, so a path/symlink swap between validation
+    // and read cannot change which bytes we read (TOCTOU mitigation).
+    let handle: OpenedReadFile;
     try {
-      stats = await this.deps.lstat(resolvedPath);
+      handle = await this.deps.openForRead(resolvedPath);
     } catch {
       return {
         ok: false,
@@ -384,7 +396,11 @@ export class AIImageAttachmentToolService {
         error: `File not found: ${relativePath}`,
       };
     }
+    const stats = handle.stats;
+    // fstat on the fd; a symlink target would already have been followed at
+    // open, so treat a symlink result as a refuse-by-default anomaly.
     if (stats.isSymbolicLink()) {
+      await handle.close().catch(() => undefined);
       return {
         ok: false,
         code: "path_outside_workspace",
@@ -392,6 +408,7 @@ export class AIImageAttachmentToolService {
       };
     }
     if (stats.isDirectory()) {
+      await handle.close().catch(() => undefined);
       return {
         ok: false,
         code: "path_is_directory",
@@ -399,6 +416,7 @@ export class AIImageAttachmentToolService {
       };
     }
     if (!stats.isFile()) {
+      await handle.close().catch(() => undefined);
       return {
         ok: false,
         code: "path_not_found",
@@ -406,6 +424,7 @@ export class AIImageAttachmentToolService {
       };
     }
     if (stats.size > CHAT_IMAGE_LIMITS.maxRawFileBytes) {
+      await handle.close().catch(() => undefined);
       return {
         ok: false,
         code: "image_file_too_large",
@@ -413,6 +432,7 @@ export class AIImageAttachmentToolService {
       };
     }
     if (stats.size <= 0) {
+      await handle.close().catch(() => undefined);
       return {
         ok: false,
         code: "unsupported_image_type",
@@ -420,11 +440,12 @@ export class AIImageAttachmentToolService {
       };
     }
 
-    // Read.
+    // Read from the pinned fd.
     let buffer: Buffer;
     try {
-      buffer = await this.deps.readFile(resolvedPath);
+      buffer = await handle.read();
     } catch {
+      await handle.close().catch(() => undefined);
       return {
         ok: false,
         code: "path_not_found",
@@ -432,15 +453,18 @@ export class AIImageAttachmentToolService {
       };
     }
     if (context.signal?.aborted) {
+      await handle.close().catch(() => undefined);
       return { ok: false, code: "cancelled", error: "Attachment cancelled." };
     }
     if (buffer.length > CHAT_IMAGE_LIMITS.maxRawFileBytes) {
+      await handle.close().catch(() => undefined);
       return {
         ok: false,
         code: "image_file_too_large",
         error: `File exceeds the ${CHAT_IMAGE_LIMITS.maxRawFileBytes} byte limit: ${relativePath}`,
       };
     }
+    await handle.close().catch(() => undefined);
 
     // Signature detection — drives decoding, not the extension.
     const detected = detectImageSignature(buffer);
@@ -611,8 +635,17 @@ export function createDefaultAIImageAttachmentToolDeps(options: {
     resolveWorkspace: (conversationId) => resolver.resolve(conversationId),
     createPathGuard: (roots) => new FilePathGuard(roots),
     normalizer,
-    readFile: (p) => fs.promises.readFile(p),
-    lstat: (p) => fs.promises.lstat(p),
+    // Open + fstat + read on the SAME fd so a path/symlink swap between
+    // validation and read cannot change the bytes we read.
+    openForRead: async (p) => {
+      const fileHandle = await fs.promises.open(p, "r");
+      const stats = await fileHandle.stat();
+      return {
+        stats,
+        read: () => fileHandle.readFile(),
+        close: () => fileHandle.close(),
+      };
+    },
     destinationLabel: options.destinationLabel,
   };
 }
