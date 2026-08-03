@@ -41,11 +41,20 @@ interface ScrapeWebsiteResponse {
   canonicalUrl?: string;
   links?: string[];
   error?: string;
+  stack?: string;
 }
 
 let browserManager: BrowserManager | null = null;
 let browser: Browser | null = null;
 const htmlConversionService = new HtmlConversionService();
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function getErrorStack(error: unknown): string | undefined {
+  return error instanceof Error ? error.stack : undefined;
+}
 
 /**
  * Initialize browser instance
@@ -252,13 +261,22 @@ const parentPort = (
     };
   }
 ).parentPort;
+
+if (!parentPort) {
+  console.error(
+    "[websiteContentScraper] Missing Electron utilityProcess parentPort; worker cannot receive scrape requests."
+  );
+}
+
 if (parentPort) {
   parentPort.on("message", async (e: { data: string }) => {
     try {
       const message: ScrapeWebsiteMessage = JSON.parse(e.data);
 
       if (message.type === "SCRAPE_WEBSITE" && message.url) {
-        console.log(`📄 Scraping website: ${message.url}`);
+        console.log(
+          `[websiteContentScraper] Starting scrape requestId=${message.requestId} url=${message.url}`
+        );
 
         try {
           const result = await scrapeWebsite(message.url);
@@ -276,15 +294,26 @@ if (parentPort) {
           if (parentPort) {
             parentPort.postMessage(JSON.stringify(response));
           }
+          console.log(
+            `[websiteContentScraper] Finished scrape requestId=${message.requestId} finalUrl=${
+              result.finalUrl ?? message.url
+            } markdownLength=${result.markdown.length}`
+          );
         } catch (error) {
-          const errorMessage =
-            error instanceof Error ? error.message : String(error);
-          console.error("Scraping error:", errorMessage);
+          const errorMessage = getErrorMessage(error);
+          const stack = getErrorStack(error);
+          console.error(
+            `[websiteContentScraper] Scraping error requestId=${message.requestId}: ${errorMessage}`
+          );
+          if (stack) {
+            console.error(stack);
+          }
 
           const response: ScrapeWebsiteResponse = {
             type: "SCRAPE_ERROR",
             requestId: message.requestId,
             error: errorMessage,
+            stack,
           };
 
           if (parentPort) {
@@ -292,31 +321,42 @@ if (parentPort) {
           }
         }
       } else {
-        console.warn("⚠️ Unknown message type:", message);
+        console.warn("[websiteContentScraper] Unknown message type:", message);
       }
     } catch (error) {
-      console.error("Error processing message:", error);
+      console.error("[websiteContentScraper] Error processing message:", error);
       const errorResponse: ScrapeWebsiteResponse = {
         type: "SCRAPE_ERROR",
         requestId: "unknown",
-        error: error instanceof Error ? error.message : String(error),
+        error: getErrorMessage(error),
+        stack: getErrorStack(error),
       };
       if (parentPort) {
-        (parentPort as any).postMessage(JSON.stringify(errorResponse));
+        parentPort.postMessage(JSON.stringify(errorResponse));
       }
     }
   });
 }
 
+process.on("uncaughtException", (error: Error) => {
+  console.error("[websiteContentScraper] Uncaught exception:", error);
+  process.exit(1);
+});
+
+process.on("unhandledRejection", (reason: unknown) => {
+  console.error("[websiteContentScraper] Unhandled rejection:", reason);
+  process.exit(1);
+});
+
 // Handle process termination
 process.on("SIGTERM", async () => {
-  console.log("🛑 Received SIGTERM, cleaning up...");
+  console.log("[websiteContentScraper] Received SIGTERM, cleaning up...");
   await cleanupBrowser();
   process.exit(0);
 });
 
 process.on("SIGINT", async () => {
-  console.log("🛑 Received SIGINT, cleaning up...");
+  console.log("[websiteContentScraper] Received SIGINT, cleaning up...");
   await cleanupBrowser();
   process.exit(0);
 });
