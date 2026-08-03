@@ -335,7 +335,7 @@ Example:
     "content": [
       {
         "type": "text",
-        "text": "The desktop attached 2 local images requested by tool call call_attach_123. Continue the user's current request using these images."
+        "text": "[AIFETCHLY_IMAGE_HANDOFF_V1]\nThe desktop attached 2 local images.\nOriginal user request:\nCompare these banner variants and recommend the strongest one."
       },
       {
         "type": "image_url",
@@ -351,7 +351,7 @@ Example:
 
 The synthetic user message is model-only. It is not rendered as a new user-authored bubble and is not persisted as ordinary conversation text. This structure avoids relying on provider support for image parts inside `role: "tool"` messages.
 
-The text part must not include untrusted instructions derived from filenames or image metadata. Filenames remain in the preceding JSON tool result.
+The text part must repeat the original user request so server-side intent detection continues to see the edit, analysis, or generation instruction after the synthetic message becomes the latest user message. It must not include untrusted instructions derived from filenames or image metadata. Filenames remain in the preceding JSON tool result.
 
 ## Image Limits
 
@@ -815,4 +815,3 @@ The desktop may reuse already prepared content within the same active turn when 
 3. What minimum dimensions are acceptable when repeated compression is required to meet the payload target?
 4. Should animated GIF input use the first frame or be rejected explicitly?
 5. Should plan mode allow `attach_local_images`, or should it remain blocked until an approved plan enters execution?
-
