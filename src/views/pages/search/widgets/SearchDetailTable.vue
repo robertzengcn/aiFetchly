@@ -915,11 +915,12 @@ function loadItems({ page, itemsPerPage, sortBy }, isAutoRefresh = false) {
         loading.value = false;
         return
     }
-    // console.log(page);
+    // Vuetify 3 passes sortBy as array [{key, order}]; convert to string for backend
+    const sortByStr: string = Array.isArray(sortBy) ? (sortBy[0]?.key ?? '') : (sortBy ?? '');
     const fetchitem: Fetchparam = {
         page: page,
         itemsPerPage: itemsPerPage,
-        sortBy: sortBy,
+        sortBy: sortByStr,
         taskId:taskid,
         search: search.value
     }

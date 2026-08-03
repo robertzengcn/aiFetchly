@@ -76,7 +76,9 @@ export class BaiduScraper extends SearchScrape {
         const uniqueArray = Array.from(new Set(searchRes));
 //console.log(uniqueArray); // Output: [1, 2, 3, 4, 5]    
         for (const seval of uniqueArray) {
-            if (seval.link?.includes('www.baidu.com')) {
+            const sevalLink = seval.link;
+            const sevalHost = sevalLink ? new URL(sevalLink).hostname : '';
+            if (sevalLink && sevalHost.endsWith('www.baidu.com')) {
                 // const response = await fetch(link, { method: 'GET' });
                 // if(response.status==200){
                 //     link=response.url
@@ -100,7 +102,7 @@ export class BaiduScraper extends SearchScrape {
                             });
                         }
 
-                        const response = await newPage.goto(seval.link, {
+                        const response = await newPage.goto(sevalLink, {
                             waitUntil: "networkidle2",
                             timeout: 60000
                         });

@@ -1,0 +1,54 @@
+{
+  "schemaVersion": 1,
+  "description": "Native dependency policy for base-app artifacts (PRD FR-21/FR-26, design §26.3). Each target lists required native packages, forbidden foreign-target package patterns, allowed on-disk binary formats, and the modules that require an Electron-ABI rebuild. The verifier fails when a forbidden package or a foreign-format native binary is present, or a required package is missing. Phase 9 slim installer: the local-AI inference families (@xenova/transformers, onnxruntime-*, sharp, sherpa-onnx-*) are forbidden in the base app — they ship as downloadable runtimes (PRD FR-16). Only the database natives (better-sqlite3, sqlite-vec) remain bundled; sqlite-vec foreign-target isolation is still enforced.",
+  "targets": {
+    "win32-x64": {
+      "requiredPackages": ["better-sqlite3", "sqlite-vec", "sqlite-vec-windows-x64"],
+      "forbiddenPackagePatterns": [
+        "sqlite3",
+        "@types/sqlite3",
+        "sqlite-vec-darwin-*",
+        "sqlite-vec-linux-*",
+        "@xenova/transformers",
+        "onnxruntime-*",
+        "sharp",
+        "sherpa-onnx-*"
+      ],
+      "allowedBinaryFormats": ["pe", "node-addon"],
+      "rebuildModules": ["better-sqlite3"]
+    },
+    "darwin-x64": {
+      "requiredPackages": ["better-sqlite3", "sqlite-vec", "sqlite-vec-darwin-x64"],
+      "forbiddenPackagePatterns": [
+        "sqlite3",
+        "@types/sqlite3",
+        "sqlite-vec-windows-*",
+        "sqlite-vec-darwin-arm64",
+        "sqlite-vec-linux-*",
+        "@xenova/transformers",
+        "onnxruntime-*",
+        "sharp",
+        "sherpa-onnx-*"
+      ],
+      "allowedBinaryFormats": ["mach-o", "node-addon"],
+      "rebuildModules": ["better-sqlite3"]
+    },
+    "darwin-arm64": {
+      "requiredPackages": ["better-sqlite3", "sqlite-vec", "sqlite-vec-darwin-arm64"],
+      "forbiddenPackagePatterns": [
+        "sqlite3",
+        "@types/sqlite3",
+        "sqlite-vec-windows-*",
+        "sqlite-vec-darwin-x64",
+        "sqlite-vec-linux-*",
+        "@xenova/transformers",
+        "onnxruntime-*",
+        "sharp",
+        "sherpa-onnx-*"
+      ],
+      "allowedBinaryFormats": ["mach-o", "node-addon"],
+      "rebuildModules": ["better-sqlite3"]
+    }
+  },
+  "reviewedDevelopmentExceptions": []
+}

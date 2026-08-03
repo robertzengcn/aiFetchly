@@ -4,25 +4,54 @@
     "version": "2.0.0",
     "tasks": [
       {
-        "label": "electron-debug",
+        "label": "electron-forge-start-debug",
         "type": "process",
-        "command": "./node_modules/.bin/vue-cli-service",
+        "command": "${workspaceFolder}/node_modules/.bin/electron-forge",
         "windows": {
-          "command": "./node_modules/.bin/vue-cli-service.cmd"
+          "command": "${workspaceFolder}/node_modules/.bin/electron-forge.cmd"
+        },
+        "args": [
+          "start",
+          "--inspect-electron",
+          "--",
+          "--disable-gpu",
+          "--disable-software-rasterizer",
+          "--no-sandbox"
+        ],
+        "options": {
+          "cwd": "${workspaceFolder}",
+          "env": {
+            "NODE_OPTIONS": "",
+            "VSCODE_INSPECTOR_OPTIONS": "",
+            "PATH": "${env:HOME}/.nvm/versions/node/v22.19.0/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:${env:PATH}",
+            "AIFETCHLY_SKIP_VITE_CHECKER": "1",
+            "DISPLAY": ":0",
+            "AICHAT_DEBUG_REQUEST": "0",
+            "CHOKIDAR_USEPOLLING": "1",
+            "CHOKIDAR_INTERVAL": "1000",
+            "AIFETCHLY_DEV_BROWSER_BRIDGE": "1",
+            "AIFETCHLY_DEV_BROWSER_BRIDGE_HOST": "127.0.0.1",
+            "AIFETCHLY_DEV_BROWSER_BRIDGE_PORT": "37621",
+            "AIFETCHLY_DEV_BROWSER_BRIDGE_ALLOWED_ORIGIN": "http://localhost:5173"
+          }
         },
         "isBackground": true,
-        "args": ["electron:serve", "--debug"],
+        "presentation": {
+          "reveal": "always",
+          "panel": "dedicated",
+          "clear": true
+        },
         "problemMatcher": {
-          "owner": "custom",
+          "owner": "electron-forge",
           "pattern": {
-            "regexp": ""
+            "regexp": "^$"
           },
           "background": {
-            "beginsPattern": "Starting development server\\.\\.\\.",
-            "endsPattern": "Not launching electron as debug argument was passed\\."
+            "activeOnStart": true,
+            "beginsPattern": ".",
+            "endsPattern": "Launched Electron app"
           }
         }
       }
     ]
   }
-  

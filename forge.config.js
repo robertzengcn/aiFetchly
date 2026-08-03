@@ -1,6 +1,7 @@
 const path = require("path");
 const dotenv = require("dotenv");
-const { readdirSync, rmdirSync, statSync } = require("node:fs");
+const { spawnSync } = require("node:child_process");
+const { existsSync, readdirSync, rmdirSync, statSync } = require("node:fs");
 const { join, normalize } = require("node:path");
 const { Walker, DepType } = require("flora-colossus");
 let nativeModuleDependenciesToPackage = [];
@@ -9,6 +10,7 @@ const EXTERNAL_DEPENDENCIES = [
   "electron-squirrel-startup",
   "better-sqlite3",
   "sqlite-vec",
+  "chokidar",
   "puppeteer-cluster",
   "lodash",
   "winston",
@@ -30,13 +32,28 @@ const EXTERNAL_DEPENDENCIES = [
   "openai",
   "typeorm",
   "cheerio",
+  "sanitize-html",
+  "html-to-text",
   "sqlite-vec",
   "canvas",
   "@napi-rs/canvas",
   "reflect-metadata",
   "@mixmark-io/domino",
   "electron-log",
+  // Phase 9 slim installer: local-AI inference packages are excluded from the
+  // base app — they ship as downloadable runtimes (PRD FR-16, design §26.7).
+  // "@xenova/transformers", "onnxruntime-node", "onnxruntime-common",
+  // "sharp", "sherpa-onnx-node"
 ];
+
+function getPackageRootName(packageName) {
+  if (packageName.startsWith("@")) {
+    const [scope, name] = packageName.split("/");
+    return name ? `${scope}/${name}` : packageName;
+  }
+  return packageName.split("/")[0];
+}
+
 //import { ForgeConfig } from '@electron-forge/shared-types';
 // import { AutoUnpackNativesPlugin } from "@electron-forge/plugin-auto-unpack-natives";
 // Base .env (CI writes this), then mode-specific overrides e.g. .env.test for NODE_ENV=test.
@@ -44,18 +61,110 @@ const EXTERNAL_DEPENDENCIES = [
 dotenv.config({ path: path.resolve(__dirname, ".env") });
 const env = process.env.NODE_ENV || "development";
 dotenv.config({ path: path.resolve(__dirname, `.env.${env}`) });
+
+const isProductionBuild = env === "production";
+const shouldBuildMacDmg = process.env.MAKE_MAC_DMG !== "false";
+const windowsCertificatePath = path.resolve(__dirname, "cert.pfx");
+
+function requireProductionEnv(name) {
+  const value = process.env[name];
+  if (!value) {
+    throw new Error(
+      `Production packaging requires the ${name} environment variable.`
+    );
+  }
+  return value;
+}
+
+if (isProductionBuild && process.platform === "win32") {
+  if (!existsSync(windowsCertificatePath)) {
+    throw new Error(
+      "Production Windows packaging requires cert.pfx. Restore it from a CI secret before running Electron Forge."
+    );
+  }
+  requireProductionEnv("CERTIFICATE_PASSWORD");
+}
+
+function ensureBetterSqliteElectronBinary() {
+  const scriptPath = join(__dirname, "scripts", "rebuild-better-sqlite.js");
+  const result = spawnSync(process.execPath, [scriptPath], {
+    cwd: __dirname,
+    stdio: "inherit",
+  });
+
+  if (result.error) {
+    throw result.error;
+  }
+  if (result.status !== 0) {
+    throw new Error(
+      `better-sqlite3 Electron rebuild failed with exit code ${result.status}`
+    );
+  }
+}
+
+function fixInteropNamespaceDefault(viteBuildDir) {
+  const fs = require("fs");
+
+  if (!existsSync(viteBuildDir)) {
+    return;
+  }
+
+  const files = fs.readdirSync(viteBuildDir);
+  for (const file of files) {
+    if (file.startsWith("background") && file.endsWith(".js")) {
+      const filePath = join(viteBuildDir, file);
+      let content = fs.readFileSync(filePath, "utf-8");
+
+      // Fix: d.get ? d : -> d && d.get ? d : (handles undefined property descriptors)
+      const originalContent = content;
+      content = content.replace(
+        /Object\.defineProperty\((\w),(\w),(\w)\.get\?(\w):/g,
+        "Object.defineProperty($1,$2,$3&&$3.get?$4:"
+      );
+
+      if (content !== originalContent) {
+        fs.writeFileSync(filePath, content);
+        console.log("Fixed _interopNamespaceDefault in:", filePath);
+      }
+    }
+  }
+}
+
 module.exports = {
   packagerConfig: {
     icon: "./src/assets/images/icon",
+    ...(isProductionBuild && process.platform === "darwin"
+      ? {
+          osxSign: {},
+          osxNotarize: {
+            appleId: requireProductionEnv("APPLE_ID"),
+            appleIdPassword: requireProductionEnv(
+              "APPLE_APP_SPECIFIC_PASSWORD"
+            ),
+            teamId: requireProductionEnv("APPLE_TEAM_ID"),
+          },
+        }
+      : {}),
+    ...(isProductionBuild && process.platform === "win32"
+      ? {
+          windowsSign: {
+            certificateFile: windowsCertificatePath,
+            certificatePassword: requireProductionEnv("CERTIFICATE_PASSWORD"),
+          },
+        }
+      : {}),
     // asar: {
     //   // This ensures native modules are unpacked
     //   unpack: "**/node_modules/better-sqlite3/**",
 
     // },
     asar: {
-      // .vite/build holds vec0.* copied by Vite; node_modules holds native deps — both must be real disk
+      // .vite/build holds vec0.* copied by Vite; node_modules holds native deps — both must be real disk.
+      // Phase 9 slim installer: only the database natives (better-sqlite3, sqlite-vec) are unpacked.
+      // The AI inference natives (@xenova/transformers, onnxruntime-*, sharp, sherpa-onnx-*) are no
+      // longer bundled — they ship as downloadable runtimes (PRD FR-16, design §26.7).
       unpackDir:
-        "**/{.vite,node_modules/better-sqlite3,node_modules/sqlite3,node_modules/sqlite-vec}/**",
+        "**/{.vite,node_modules/better-sqlite3,node_modules/sqlite-vec}/**",
       unpack: "**/vec0.*",
     },
     ignore: (file) => {
@@ -72,6 +181,11 @@ module.exports = {
         KEEP_FILE.keep = true;
       if (!KEEP_FILE.keep && filePath === "/.vite") KEEP_FILE.keep = true;
       if (!KEEP_FILE.keep && filePath.startsWith("/.vite/"))
+        KEEP_FILE.keep = true;
+      if (!KEEP_FILE.keep && filePath === "/dist") KEEP_FILE.keep = true;
+      if (!KEEP_FILE.keep && filePath === "/dist/childprocess")
+        KEEP_FILE.keep = true;
+      if (!KEEP_FILE.keep && filePath.startsWith("/dist/childprocess/"))
         KEEP_FILE.keep = true;
       if (!KEEP_FILE.keep && filePath.startsWith("/node_modules/")) {
         // check if matches any of the external dependencies
@@ -105,44 +219,24 @@ module.exports = {
     // ],
     prune: true,
     overwrite: true,
-    // extraResource: [
-    //    // Only include these paths if they exist
-    //    ...(() => {
-    //     const resources:Array<string>= [];
-    //     const sqlite3Path = path.join(__dirname, 'node_modules/sqlite3/lib/binding');
-    //     const betterSqlitePath = path.join(__dirname, 'node_modules/better-sqlite3/build/Release');
-
-    //     if (fsSync.existsSync(sqlite3Path)) {
-    //       resources.push(sqlite3Path);
-    //     }
-
-    //     if (fsSync.existsSync(betterSqlitePath)) {
-    //       resources.push(betterSqlitePath);
-    //     }
-
-    //     return resources;
-    //   })()
-    // ],
   },
   rebuildConfig: {
     // isolated-vm@6.1.2 fails to compile against Electron 35 V8 13.5 headers
     // (known upstream issue: laverdet/isolated-vm#528). Exclude it from rebuild
     // so Forge startup is not blocked; the pre-built Node.js binary is used instead.
-    onlyModules: [
-      "better-sqlite3",
-      "sqlite3",
-      "bufferutil",
-      "utf-8-validate",
-      "keytar",
-    ],
+    onlyModules: ["better-sqlite3", "bufferutil", "utf-8-validate", "keytar"],
   },
   makers: [
     {
       name: "@electron-forge/maker-squirrel",
       config: {
         name: process.env.APP_NAME || "aiFetchly",
-        certificateFile: "./cert.pfx",
-        certificatePassword: process.env.CERTIFICATE_PASSWORD,
+        ...(isProductionBuild && process.platform === "win32"
+          ? {
+              certificateFile: windowsCertificatePath,
+              certificatePassword: requireProductionEnv("CERTIFICATE_PASSWORD"),
+            }
+          : {}),
         // iconUrl should be a valid HTTP/HTTPS URL, not a local path
         // iconUrl: './src/assets/images/icon.png',
         setupIcon: "./src/assets/images/icon.ico",
@@ -173,42 +267,32 @@ module.exports = {
         },
         // Uninstall configuration
         uninstallIcon: "./src/assets/images/icon.ico",
-        // Custom uninstall script
-        uninstallScript: "./installer-scripts/uninstall-windows.js",
-        // Include uninstaller in the installer
-        extraFiles: [
-          {
-            src: "./installer-scripts/uninstall.exe",
-            dest: "uninstall.exe",
-          },
-        ],
-        // Post-installation script to copy uninstaller
-        postInstallScript: "./installer-scripts/copy-uninstaller.js",
-        // Create uninstaller registry entry
-        uninstallDisplayName: "aiFetchly",
-        uninstallString: "%LOCALAPPDATA%\\aiFetchly\\uninstall.exe",
       },
     },
     {
       name: "@electron-forge/maker-zip",
       platforms: ["darwin"],
     },
-    {
-      name: "@electron-forge/maker-dmg",
-      config: {
-        format: "ULFO",
-        icon: "./src/assets/images/icon.icns",
-        // Note: background image removed to prevent build failures
-        // If needed, create src/assets/images/dmg-background.png and uncomment below
-        // background: "./src/assets/images/dmg-background.png",
-        // contents array removed - using electron-forge defaults
-        // Defaults will place the app and a link to /Applications automatically
-        window: {
-          width: 540,
-          height: 380,
-        },
-      },
-    },
+    ...(shouldBuildMacDmg
+      ? [
+          {
+            name: "@electron-forge/maker-dmg",
+            config: {
+              format: "ULFO",
+              icon: "./src/assets/images/icon.icns",
+              // Note: background image removed to prevent build failures
+              // If needed, create src/assets/images/dmg-background.png and uncomment below
+              // background: "./src/assets/images/dmg-background.png",
+              // contents array removed - using electron-forge defaults
+              // Defaults will place the app and a link to /Applications automatically
+              window: {
+                width: 540,
+                height: 380,
+              },
+            },
+          },
+        ]
+      : []),
     {
       name: "@electron-forge/maker-deb",
       config: {
@@ -300,6 +384,12 @@ module.exports = {
     {
       name: "@electron-forge/maker-wix",
       config: {
+        ...(isProductionBuild && process.platform === "win32"
+          ? {
+              certificateFile: windowsCertificatePath,
+              certificatePassword: requireProductionEnv("CERTIFICATE_PASSWORD"),
+            }
+          : {}),
         language: 1033,
         manufacturer: "Robert Zeng",
         icon: "./src/assets/images/icon.ico",
@@ -319,11 +409,6 @@ module.exports = {
         createStartMenuShortcut: true,
         // Install for all users
         //perMachine: false,
-        // Custom images for installer
-        images: {
-          background: "./src/assets/images/installer-background-493x312.bmp",
-          banner: "./src/assets/images/installer-banner-493x58.bmp",
-        },
         // Additional features
         features: {
           // Main application feature
@@ -403,6 +488,15 @@ module.exports = {
             config: "vite.contactExtractionWorker.config.mjs",
           },
           {
+            entry:
+              "src/childprocess/aifetchly-config/WorkspaceConfigWatchWorker.ts",
+            config: "vite.aifetchlyConfigWorker.config.mjs",
+          },
+          {
+            entry: "src/childprocess/hook-execution/HookExecutionWorker.ts",
+            config: "vite.hookExecutionWorker.config.mjs",
+          },
+          {
             entry: "src/childprocess/google-maps/GoogleMapsWorker.ts",
             config: "vite.googleMapsWorker.config.mjs",
           },
@@ -414,6 +508,14 @@ module.exports = {
           //   entry: 'src/buckEmail.ts',
           //   config: 'vite.buckEmail.config.mjs'
           // },
+          {
+            entry: "src/childprocess/embedding/LocalEmbeddingWorker.ts",
+            config: "vite.localEmbeddingWorker.config.mjs",
+          },
+          {
+            entry: "src/childprocess/ai-chat-voice/AiChatVoiceWorker.ts",
+            config: "vite.aiChatVoiceWorker.config.mjs",
+          },
         ],
         renderer: [
           {
@@ -425,57 +527,13 @@ module.exports = {
     },
   ],
   hooks: {
-    postPackage: async (forgeConfig, options) => {
-      // Copy uninstaller to the packaged application
-      const {
-        postInstallHook,
-      } = require("./installer-scripts/post-install-hook.js");
-
-      console.log("Running post-package hook...");
-      console.log("Output directory:", options.outputPaths[0]);
-
-      // Set the installation directory to the output directory
-      process.env.INSTALLDIR = options.outputPaths[0];
-
-      const success = postInstallHook();
-      if (success) {
-        console.log("✅ Uninstaller copied to packaged application");
-      } else {
-        console.log("❌ Failed to copy uninstaller to packaged application");
-      }
+    // VS Code/Cursor launch electron-forge directly, bypassing npm prestart/predev.
+    preStart: async () => {
+      ensureBetterSqliteElectronBinary();
     },
     prePackage: async () => {
       const projectRoot = normalize(__dirname);
 
-      // Fix _interopNamespaceDefault function to handle undefined property descriptors
-      // This fixes the "Cannot read properties of undefined (reading 'get')" error
-      const viteBuildDir = join(projectRoot, ".vite", "build");
-      const fs = require("fs");
-      const path = require("path");
-
-      try {
-        const files = fs.readdirSync(viteBuildDir);
-        for (const file of files) {
-          if (file.startsWith("background") && file.endsWith(".js")) {
-            const filePath = path.join(viteBuildDir, file);
-            let content = fs.readFileSync(filePath, "utf-8");
-
-            // Fix: d.get ? d : -> d && d.get ? d : (handles undefined property descriptors)
-            const originalContent = content;
-            content = content.replace(
-              /Object\.defineProperty\((\w),(\w),(\w)\.get\?(\w):/g,
-              "Object.defineProperty($1,$2,$3&&$3.get?$4:"
-            );
-
-            if (content !== originalContent) {
-              fs.writeFileSync(filePath, content);
-              console.log("✅ Fixed _interopNamespaceDefault in:", file);
-            }
-          }
-        }
-      } catch (err) {
-        console.error("Failed to fix interop namespace:", err);
-      }
       const getExternalNestedDependencies = async (
         nodeModuleNames,
         includeNestedDeps = true
@@ -496,8 +554,7 @@ module.exports = {
             await walker.walkDependenciesForModule(moduleRoot, DepType.PROD);
             walker.modules
               .filter((dep) => dep.nativeModuleType === DepType.PROD)
-              // for a package like '@realm/fetch', need to split the path and just take the first part
-              .map((dep) => dep.name.split("/")[0])
+              .map((dep) => getPackageRootName(dep.name))
               .forEach((name) => foundModules.add(name));
           }
         }
@@ -507,6 +564,9 @@ module.exports = {
         EXTERNAL_DEPENDENCIES
       );
       nativeModuleDependenciesToPackage = Array.from(nativeModuleDependencies);
+    },
+    packageAfterCopy: async (_forgeConfig, buildPath) => {
+      fixInteropNamespaceDefault(join(buildPath, ".vite", "build"));
     },
     //   packageAfterPrune: async (_config, buildPath) => {
     //     const gypPath = path.join(

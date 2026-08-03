@@ -16,7 +16,7 @@ const BING_REDIRECT_HOST = 'www.bing.com';
 function resolveBingRedirectUrl(bingUrl: string): string | null {
     try {
         const parsed = new URL(bingUrl);
-        if (!parsed.hostname?.toLowerCase().includes('bing.com')) {
+        if (!parsed.hostname?.toLowerCase().endsWith('bing.com')) {
             return null;
         }
         const uParam = parsed.searchParams.get('u');
@@ -137,9 +137,11 @@ export class BingScraper extends SearchScrape {
             }
             ))
         for (const seval of searchRes) {
-            if (seval.link?.includes(BING_REDIRECT_HOST)) {
+            const sevalLink = seval.link;
+            const sevalHost = sevalLink ? new URL(sevalLink).hostname : '';
+            if (sevalLink && sevalHost.endsWith(BING_REDIRECT_HOST)) {
                 // Prefer resolving from URL params (no extra page load)
-                const resolvedFromUrl = resolveBingRedirectUrl(seval.link);
+                const resolvedFromUrl = resolveBingRedirectUrl(sevalLink);
                 if (resolvedFromUrl) {
                     seval.link = resolvedFromUrl;
                     result.results.push(seval);
@@ -166,7 +168,7 @@ export class BingScraper extends SearchScrape {
                             });
                         }
 
-                        const response = await newPage.goto(seval.link, {
+                        const response = await newPage.goto(sevalLink, {
                             waitUntil: "networkidle2",
                             timeout: 60000
                         });

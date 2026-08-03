@@ -174,6 +174,9 @@ export interface SkillExecutionContext {
   /** Arguments from the LLM's tool_call event. */
   readonly args?: Record<string, unknown>;
 
+  /** Chat model selected for the parent turn that invoked this skill. */
+  readonly model?: string;
+
   /**
    * When true, the caller has already obtained user consent (e.g. via
    * resume-after-permission-grant). SkillExecutor should skip the
@@ -228,6 +231,11 @@ export interface ToolProgressEvent {
 export interface ModuleExecutionContext {
   /** Server-assigned tool call ID for correlating request/response. */
   readonly toolCallId: string;
+  /**
+   * When true, the caller already obtained user consent for this exact tool
+   * call. Nested ToolExecutor calls must not prompt again.
+   */
+  readonly skipPermissionCheck?: boolean;
   /**
    * Emits a progress event for this tool call. Optional — when absent the
    * module should silently skip (no crash, no behavior change).

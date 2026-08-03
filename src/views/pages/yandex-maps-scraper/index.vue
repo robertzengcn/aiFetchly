@@ -105,16 +105,6 @@
               hide-details
             />
           </v-col>
-          <v-col cols="12" md="2" class="d-flex align-center">
-            <v-switch
-              v-model="showBrowser"
-              :label="t('yandexMaps.show_browser') || 'Show Browser'"
-              color="warning"
-              :disabled="searchState === 'running'"
-              density="compact"
-              hide-details
-            />
-          </v-col>
         </v-row>
 
         <!-- Language and Region row -->

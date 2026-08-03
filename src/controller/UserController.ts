@@ -37,6 +37,7 @@ import {
 import {
   setPendingDesktopAuth,
   clearPendingDesktopAuth,
+  getPendingDesktopAuth,
 } from "@/modules/pendingDesktopAuth";
 import {
   startLoopbackCallbackServer,
@@ -378,7 +379,16 @@ export class UserController {
 
     const cancel = (): void => {
       server.abort();
-      clearPendingDesktopAuth();
+      // Only clear if the current pending auth is still ours — a newer
+      // prepareDesktopLogin() may have already replaced the pending state.
+      // Without this guard, an old cancel() (triggered by
+      // setActiveDesktopLoginCancel replacing the handoff) would wipe the
+      // fresh pending auth, causing the loopback callback to reject with
+      // "no_pending_auth".
+      const current = getPendingDesktopAuth();
+      if (current && current.state === state) {
+        clearPendingDesktopAuth();
+      }
     };
 
     return { loginUrl: loginUrl.toString(), cancel, done };

@@ -1,3 +1,11 @@
+import { getIpcTransport } from "./ipcTransport";
+
+// NOTE: `data` is intentionally typed `any` at this boundary to preserve the
+// historical contract — hundreds of call sites assign windowInvoke's return
+// directly to concrete types. Tightening to `unknown` is a cross-cutting
+// refactor outside the dev-browser-bridge scope. The transport layer itself
+// (ipcTransport.ts) is fully typed and avoids `any`.
+/* eslint-disable @typescript-eslint/no-explicit-any */
 type Iresponse = {
   status: boolean;
   msg: string;
@@ -7,7 +15,7 @@ type Iresponse = {
 export const windowInvoke = async (channel: string, data?: object) => {
   // console.log(data)
   // campaign:list
-  const result = await window.api.invoke(channel, JSON.stringify(data));
+  const result = (await getIpcTransport().invoke(channel, data)) as Iresponse | undefined;
   if (!result) {
     throw new Error("unknow error");
   }
@@ -20,7 +28,7 @@ export const windowInvoke = async (channel: string, data?: object) => {
 
 // Special method for binary data that doesn't use JSON.stringify
 export const windowInvokeBinary = async (channel: string, data?: any) => {
-  const result = await window.api.invoke(channel, data);
+  const result = (await getIpcTransport().invokeBinary(channel, data)) as Iresponse | undefined;
   if (!result) {
     throw new Error("unknow error");
   }
@@ -31,12 +39,12 @@ export const windowInvokeBinary = async (channel: string, data?: any) => {
 };
 //send async message
 export const windowSend = async (channel: string, data?: object) => {
-  window.api.send(channel, JSON.stringify(data));
+  getIpcTransport().send(channel, data);
 };
 
 //send binary data async message (without JSON.stringify)
 export const windowSendBinary = async (channel: string, data?: any) => {
-  window.api.sendBinary(channel, data);
+  getIpcTransport().sendBinary(channel, data);
 };
 
 //receive async message
@@ -49,7 +57,7 @@ export const windowReceive = <T = unknown>(
     //console.log(evnet.data)
     cb(evnet);
   };
-  window.api.receive(channel, listener);
+  getIpcTransport().receive(channel, listener as (value: unknown) => void);
   return listener;
 };
 
@@ -57,9 +65,9 @@ export const windowRemoveListener = (
   channel: string,
   cb: (value: unknown) => void
 ) => {
-  window.api.removeListener(channel, cb);
+  getIpcTransport().removeListener(channel, cb);
 };
 
 export const windowRemoveAllListeners = (channel: string) => {
-  window.api.removeAllListeners(channel);
+  getIpcTransport().removeAllListeners(channel);
 };

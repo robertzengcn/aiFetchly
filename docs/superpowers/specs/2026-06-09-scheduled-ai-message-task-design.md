@@ -7,6 +7,15 @@
 
 ---
 
+> **Supersession note (2026-08-01):** The "new conversation per run" decision
+> below applies to legacy standalone tasks created from schedule management.
+> Chat-created `/loop <duration> <prompt>` tasks must reuse their originating
+> AI Chat V2 conversation as defined by
+> `docs/prd/ai-chat-scheduled-loop-prd.md` and
+> `docs/prd/ai-chat-scheduled-loop-technical-design.md`.
+
+---
+
 ## Design Decisions
 
 | Decision | Choice | Rationale |

@@ -145,10 +145,10 @@ export async function updateEmailSearchTask(
   try {
     const querydata = { id: taskId, data: data };
     const resp = await windowInvoke(UPDATEEMAILSEARCHTASK, querydata);
-    if (!resp || !resp.status) {
-      throw new Error(resp?.msg || "Failed to update task");
+    if (!resp) {
+      throw new Error("Failed to update task");
     }
-    return resp.data;
+    return resp as string;
   } catch (error) {
     console.error("Error updating task:", error);
     throw error;
@@ -165,10 +165,10 @@ export async function deleteEmailSearchTask(taskId: number): Promise<string> {
   try {
     const querydata = { id: taskId };
     const resp = await windowInvoke(DELETEEMAILSEARCHTASK, querydata);
-    if (!resp || !resp.status) {
-      throw new Error(resp?.msg || "Failed to delete task");
+    if (!resp) {
+      throw new Error("Failed to delete task");
     }
-    return resp.data;
+    return resp as string;
   } catch (error) {
     console.error("Error deleting task:", error);
     throw error;

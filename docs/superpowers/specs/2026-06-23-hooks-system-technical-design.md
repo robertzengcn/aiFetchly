@@ -313,6 +313,7 @@ export interface HookDefinitionBase {
   readonly id: string;
   readonly eventName: HookEventName;
   readonly matcher?: string;
+  readonly if?: string;
   readonly source: HookSource;
   readonly enabled: boolean;
   readonly trusted: boolean;
@@ -378,6 +379,31 @@ Supported matcher syntax:
 
 Do not support regular expressions in the MVP. Regex matchers create a denial-of-service surface and make UI validation harder.
 
+### If Condition (Secondary Filter)
+
+The `if` field is an optional secondary filter on tool event hook lookups. It restricts which tool invocations trigger a hook by matching against individual string argument values of the tool input, rather than against the tool name.
+
+Purpose:
+- A hook that already matches tool `shell_execute` via `matcher` may only care about commands that start with `git `.
+- The `if` condition avoids spawning expensive callbacks or command hooks for invocations the hook cannot meaningfully act on.
+
+Semantics:
+- Only evaluated for tool events: `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `PermissionRequest`.
+- For all other events (`SessionStart`, `UserPromptSubmit`, `Stop`, `PermissionDenied`), the `if` field is ignored (matches all).
+- If `if` is missing or `*`, matches all (no additional filtering).
+- If `toolInput` is missing from `HookLookupInput`, matches all (defensive).
+
+Matching algorithm (`matchesHookIfCondition`):
+
+1. Walk all values of the `toolInput` object.
+2. For each string value, apply the same glob-lite pattern algorithm as `matchesHookMatcher` (escape regex chars except `*`, convert `*` to `.*`, anchor with `^` and `$`).
+3. If any string value matches the pattern, return `true`.
+4. If no string value matches, fall back to checking `JSON.stringify(toolInput)` against the pattern.
+5. Non-string values are skipped.
+6. Reject `if` conditions longer than `maxIfChars` (256).
+
+This is a pre-filter only — it does not replace the `matcher` field. Both must match for a tool event hook to fire.
+
 Suggested interface:
 
 ```ts
@@ -418,6 +444,7 @@ Suggested interface:
 export interface HookLookupInput {
   readonly eventName: HookEventName;
   readonly matchQuery?: string;
+  readonly toolInput?: Record<string, unknown>;
   readonly sessionId?: string;
 }
 
@@ -470,6 +497,8 @@ export const HOOK_LIMITS = {
   maxCommandStderrBytes: 64_000,
   defaultCommandTimeoutMs: 5_000,
   maxCommandTimeoutMs: 60_000,
+  maxMatcherChars: 200,
+  maxIfChars: 256,
 } as const;
 ```
 
@@ -870,6 +899,9 @@ export class HookConfigEntity {
   @Column({ nullable: true })
   ownerPluginId?: string;
 
+  @Column({ name: "if_condition", nullable: true })
+  ifCondition?: string;
+
   @CreateDateColumn()
   createdAt!: Date;
 
@@ -985,6 +1017,7 @@ The first UI version should show:
 
 - event name
 - matcher
+- if condition (glob-lite pattern against tool input argument values)
 - command
 - cwd
 - timeout

@@ -292,7 +292,7 @@ export class YellowPagesComAdapter extends BasePlatformAdapter {
         try {
             // Set cookies for yellowpages.com domain
             const yellowPagesCookies = cookies.filter(cookie => 
-                cookie.domain && cookie.domain.includes('yellowpages.com')
+                cookie.domain && cookie.domain.endsWith('yellowpages.com')
             );
 
             if (yellowPagesCookies.length > 0) {

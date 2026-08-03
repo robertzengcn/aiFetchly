@@ -21,7 +21,7 @@ export async function loadLanguagePreference(): Promise<LanguageLoadResult> {
     try {
         // First try: System Settings
         const systemLanguage = await getLanguagePreference()
-        if (systemLanguage && systemLanguage !== 'en') {
+        if (systemLanguage) {
             return {
                 language: systemLanguage,
                 source: 'system_settings',
@@ -141,7 +141,6 @@ export const LANGUAGE_SOURCES = {
     BROWSER: 'browser',
     DEFAULT: 'default'
 } as const
-
 
 
 

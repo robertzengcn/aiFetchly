@@ -1,14 +1,21 @@
 // src/service/AgentRuntimeRegistry.ts
 import { AgentRuntime } from "@/service/AgentRuntime";
 import type { AgentRuntimeDeps } from "@/service/AgentRuntime";
-import { getSharedAutoDreamService } from "@/service/AIAutoDreamFactory";
+import {
+  getSharedAutoDreamService,
+  getSharedWorkspaceAutoDreamService,
+} from "@/service/AIAutoDreamFactory";
 
 let runtime: AgentRuntime | null = null;
 
 /** Production deps for AgentRuntime.runSync — wires the shared auto-dream
- * singleton so completed agent tasks trigger consolidation. */
+ * singletons so completed agent tasks trigger both user-memory and
+ * workspace-memory consolidation. */
 export function getDefaultAgentRuntimeDeps(): AgentRuntimeDeps {
-  return { autoDreamService: getSharedAutoDreamService() };
+  return {
+    autoDreamService: getSharedAutoDreamService(),
+    workspaceAutoDreamService: getSharedWorkspaceAutoDreamService(),
+  };
 }
 
 export const AgentRuntimeRegistry = {

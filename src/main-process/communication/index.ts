@@ -21,6 +21,8 @@ import { registerLanguagePreferenceIpcHandlers } from "@/main-process/communicat
 import { registerRagIpcHandlers } from "@/main-process/communication/rag-ipc";
 import { registerAiChatIpcHandlers } from "@/main-process/communication/ai-chat-ipc";
 import { registerAiChatV2IpcHandlers } from "@/main-process/communication/ai-chat-v2-ipc";
+import { registerAiChatAtMentionIpcHandlers } from "@/main-process/communication/ai-chat-at-mention-ipc";
+import { registerAiChatGoalIpcHandlers } from "@/main-process/communication/ai-chat-goal-ipc";
 import { registerAIEmailTemplateHandlers } from "@/main-process/communication/ai-email-template-ipc";
 import { registerDashboardIpcHandlers } from "@/main-process/communication/dashboard-ipc";
 import { registerMCPToolIpcHandlers } from "@/main-process/communication/mcp-tool-ipc";
@@ -33,9 +35,22 @@ import { registerGoogleMapsHandlers } from "@/main-process/communication/googleM
 import { registerYandexMapsHandlers } from "@/main-process/communication/yandexMaps-ipc";
 import { registerAiMessageTaskIpcHandlers } from "@/main-process/communication/aiMessageTask-ipc";
 import { registerAgentRuntimeIpcHandlers } from "@/main-process/communication/agent-runtime-ipc";
+import { registerAgentDefinitionIpcHandlers } from "@/main-process/communication/agent-definition-ipc";
 import { registerPluginIpcHandlers } from "@/main-process/communication/plugin-ipc";
+import { registerPluginMarketplaceIpcHandlers } from "@/main-process/communication/plugin-marketplace-ipc";
 import { registerAIUserMemoryIpcHandlers } from "@/main-process/communication/ai-user-memory-ipc";
 import { registerAIWorkspaceIpcHandlers } from "@/main-process/communication/ai-workspace-ipc";
+import { registerLocalAiRuntimeIpcHandlers } from "@/main-process/communication/local-ai-runtime-ipc";
+import { registerAIProviderIpcHandlers } from "@/main-process/communication/ai-provider-ipc";
+import { registerAiChatVoiceIpcHandlers } from "@/main-process/communication/ai-chat-v2-voice-ipc";
+import { registerAIArtifactIpcHandlers } from "@/main-process/communication/ai-artifact-ipc";
+import { registerAIWorkspaceMemoryIpcHandlers } from "@/main-process/communication/ai-workspace-memory-ipc";
+import { registerEmailReceiveIpcHandlers } from "@/main-process/communication/emailReceive-ipc";
+import { registerDiagnosticsIpcHandlers } from "@/main-process/communication/diagnostics-ipc";
+import { registerHooksIpcHandlers } from "@/main-process/communication/hooks-ipc";
+import { registerSlashCommandHandlers } from "@/main-process/communication/slash-command-ipc";
+import { registerWorkspaceWatchHandlers } from "@/main-process/communication/workspace-watch-ipc";
+import { initWorkspaceWatchManager } from "@/service/workspaceWatch/WorkspaceWatchManagerSingleton";
 
 type GlobalIpcState = typeof globalThis & {
   __aifetchlyIpcHandlersRegistered?: boolean;
@@ -68,6 +83,8 @@ export function registerCommunicationIpcHandlers(win: BrowserWindow) {
     registerRagIpcHandlers();
     registerAiChatIpcHandlers();
     registerAiChatV2IpcHandlers();
+    registerAiChatAtMentionIpcHandlers();
+    registerAiChatGoalIpcHandlers();
     registerAIEmailTemplateHandlers();
     registerDashboardIpcHandlers();
     registerMCPToolIpcHandlers();
@@ -80,9 +97,22 @@ export function registerCommunicationIpcHandlers(win: BrowserWindow) {
     registerYandexMapsHandlers();
     registerAiMessageTaskIpcHandlers();
     registerAgentRuntimeIpcHandlers();
+    registerAgentDefinitionIpcHandlers();
     registerPluginIpcHandlers();
+    registerPluginMarketplaceIpcHandlers();
     registerAIUserMemoryIpcHandlers();
     registerAIWorkspaceIpcHandlers(win);
+    registerLocalAiRuntimeIpcHandlers(() => win);
+    registerAIProviderIpcHandlers();
+    registerAiChatVoiceIpcHandlers();
+    registerAIArtifactIpcHandlers();
+    registerAIWorkspaceMemoryIpcHandlers();
+    registerEmailReceiveIpcHandlers();
+    registerDiagnosticsIpcHandlers();
+    registerHooksIpcHandlers();
+    registerSlashCommandHandlers(win);
+    const workspaceWatchManager = initWorkspaceWatchManager(win);
+    registerWorkspaceWatchHandlers(win, workspaceWatchManager);
     AsyncMsg();
   } catch (e) {
     console.log("registerCommunicationIpcHandlers error:");

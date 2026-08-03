@@ -7,7 +7,7 @@ export default function ClosePlugin() {
             if(error) {
                 console.error('Error bundling')
                 console.error(error)
-                // process.exit(1)
+                process.exit(1)
             } else {
                 console.log('Build ended')
             }
