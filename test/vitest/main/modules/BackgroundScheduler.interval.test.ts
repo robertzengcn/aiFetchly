@@ -70,7 +70,7 @@ const SCHED = {
   trigger_type: "interval",
 };
 
-type PrivateScheduler = BackgroundScheduler & {
+type PrivateScheduler = {
   isRunning: boolean;
   processIntervalTasks(): Promise<void>;
   recoverIntervalRuns(): Promise<void>;
@@ -103,7 +103,9 @@ describe("BackgroundScheduler.processIntervalTasks", () => {
       idempotencyKey: "scheduled-loop:3:1",
       coalescedCount: 0,
     });
-    const scheduler = new BackgroundScheduler("/tmp/sched-test") as PrivateScheduler;
+    const scheduler = new BackgroundScheduler(
+      "/tmp/sched-test"
+    ) as unknown as PrivateScheduler;
     scheduler.isRunning = true;
 
     await scheduler.processIntervalTasks();
@@ -125,7 +127,9 @@ describe("BackgroundScheduler.processIntervalTasks", () => {
   it("does not invoke the runner when the claim is coalesced", async () => {
     mockFindDue.mockResolvedValue([SCHED]);
     mockClaim.mockResolvedValue({ kind: "coalesced", coalescedCount: 1 });
-    const scheduler = new BackgroundScheduler("/tmp/sched-test") as PrivateScheduler;
+    const scheduler = new BackgroundScheduler(
+      "/tmp/sched-test"
+    ) as unknown as PrivateScheduler;
     scheduler.isRunning = true;
 
     await scheduler.processIntervalTasks();
@@ -135,7 +139,9 @@ describe("BackgroundScheduler.processIntervalTasks", () => {
 
   it("skips work when the scheduler is not running", async () => {
     mockFindDue.mockResolvedValue([SCHED]);
-    const scheduler = new BackgroundScheduler("/tmp/sched-test") as PrivateScheduler;
+    const scheduler = new BackgroundScheduler(
+      "/tmp/sched-test"
+    ) as unknown as PrivateScheduler;
     scheduler.isRunning = false;
 
     await scheduler.processIntervalTasks();
@@ -152,22 +158,21 @@ describe("BackgroundScheduler.recoverIntervalRuns", () => {
       { id: 8, is_active: true, source_conversation_id: "v2-x" },
       { id: 9, is_active: false, source_conversation_id: null },
     ]);
-    const scheduler = new BackgroundScheduler("/tmp/sched-test") as PrivateScheduler;
+    const scheduler = new BackgroundScheduler(
+      "/tmp/sched-test"
+    ) as unknown as PrivateScheduler;
 
     await scheduler.recoverIntervalRuns();
 
     // markInterruptedRuns called with a cutoff near now - stale window.
     expect(mockMarkInterrupted).toHaveBeenCalledTimes(1);
-    expect(mockPauseWithReason).toHaveBeenCalledWith(7, "CONVERSATION_NOT_FOUND");
+    expect(mockPauseWithReason).toHaveBeenCalledWith(
+      7,
+      "CONVERSATION_NOT_FOUND"
+    );
     // Active schedule with a valid conversation is NOT paused.
-    expect(mockPauseWithReason).not.toHaveBeenCalledWith(
-      8,
-      expect.anything()
-    );
+    expect(mockPauseWithReason).not.toHaveBeenCalledWith(8, expect.anything());
     // Inactive orphan is not touched (is_active false → skipped).
-    expect(mockPauseWithReason).not.toHaveBeenCalledWith(
-      9,
-      expect.anything()
-    );
+    expect(mockPauseWithReason).not.toHaveBeenCalledWith(9, expect.anything());
   });
 });
