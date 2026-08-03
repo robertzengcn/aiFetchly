@@ -16,6 +16,7 @@ import {
 import { AIProviderResolver } from "@/service/aiProvider/AIProviderResolver";
 import { OpenAICompatibleProviderClient } from "@/service/aiProvider/OpenAICompatibleProviderClient";
 import type { LocalAIProviderConfig } from "@/entityTypes/aiProviderTypes";
+import type { ModelArtifact } from "@/entityTypes/aiImageAttachmentToolTypes";
 import {
   AIChatRecoverableError,
   type AIChatRecoveryReason,
@@ -118,6 +119,15 @@ export interface ToolExecutionResult {
   readonly expectedCount?: number;
   /** Timeout ceiling that fired, in ms, when partial === true. */
   readonly timedOutAfterMs?: number;
+  /**
+   * Transient model artifacts (e.g. prepared images) for the next AI request
+   * round. A SIBLING of `result`, so metadata-only serializers that spread
+   * only `result` (normalizeToolResult, hooks, persistence, renderer events)
+   * naturally exclude it. The query loop consumes this to append a model-only
+   * multimodal handoff message. Never persisted, logged, or emitted to the
+   * renderer.
+   */
+  readonly modelArtifacts?: readonly ModelArtifact[];
 }
 
 /**
@@ -2725,7 +2735,9 @@ export class AiChatApi {
             return {
               index: choiceIndex,
               delta:
-                typeof content === "string" || content === null || images.length > 0
+                typeof content === "string" ||
+                content === null ||
+                images.length > 0
                   ? {
                       ...(typeof content === "string" || content === null
                         ? { content }
