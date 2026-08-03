@@ -23,8 +23,35 @@ describe("contact extraction worker path resolution", () => {
     expect(resolved).toBe(expected);
   });
 
-  it("resolves the unpacked packaged worker when running from app.asar", () => {
+  it("resolves the app.asar virtual path when running from app.asar", () => {
     const resourcesPath = path.join("/opt", "AiFetchly", "resources");
+    const expected = path.join(
+      resourcesPath,
+      "app.asar",
+      ".vite",
+      "build",
+      "ContactExtractionWorker.js"
+    );
+
+    const resolved = resolveContactExtractionWorkerPath({
+      dirname: path.join(resourcesPath, "app.asar", ".vite", "build"),
+      cwd: "/tmp",
+      resourcesPath,
+      existsSync: (candidate) => candidate === expected,
+    });
+
+    expect(resolved).toBe(expected);
+  });
+
+  it("falls back to the unpacked mirror when the app.asar virtual path is missing", () => {
+    const resourcesPath = path.join("/opt", "AiFetchly", "resources");
+    const asarPath = path.join(
+      resourcesPath,
+      "app.asar",
+      ".vite",
+      "build",
+      "ContactExtractionWorker.js"
+    );
     const expected = path.join(
       resourcesPath,
       "app.asar.unpacked",
@@ -37,7 +64,7 @@ describe("contact extraction worker path resolution", () => {
       dirname: path.join(resourcesPath, "app.asar", ".vite", "build"),
       cwd: "/tmp",
       resourcesPath,
-      existsSync: (candidate) => candidate === expected,
+      existsSync: (candidate) => candidate !== asarPath,
     });
 
     expect(resolved).toBe(expected);

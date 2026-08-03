@@ -5,7 +5,7 @@
  * for contact extraction functionality.
  */
 
-import { ipcMain, BrowserWindow } from "electron";
+import { app, ipcMain, BrowserWindow } from "electron";
 import { spawn, ChildProcess } from "child_process";
 import { v4 as uuidv4 } from "uuid";
 import { ContactInfoModule } from "@/modules/ContactInfoModule";
@@ -85,10 +85,21 @@ function spawnWorker(): ChildProcess {
     console.warn("Failed to read token for worker:", error);
   }
 
-  const worker = spawn("node", [workerPath], {
+  // Spawn the worker with Electron's own binary in RUN_AS_NODE mode (the same
+  // approach GoogleMapsModule uses) instead of the system `node`. Plain `node`
+  // cannot read app.asar, so the worker's external requires (uuid, zod, ...)
+  // would fail in the packaged app. RUN_AS_NODE gives us the asar fs patch and
+  // the packaged app.asar/node_modules. Electron API surface is unavailable, so
+  // the worker receives auth/AI state via env vars (WORKER_AUTH_TOKEN,
+  // WORKER_AI_ENABLED) and communicates over the ipc stdio channel.
+  const worker = spawn(process.execPath, [workerPath], {
     stdio: ["pipe", "pipe", "pipe", "ipc"],
     env: {
       ...process.env,
+      NODE_OPTIONS: "",
+      ELECTRON_RUN_AS_NODE: "1",
+      ELECTRON_APP_NAME: app.getName(),
+      ELECTRON_USER_DATA_PATH: app.getPath("userData"),
       WORKER_TYPE: "contact-extraction",
       WORKER_AUTH_TOKEN: workerAuthToken,
       WORKER_AI_ENABLED: workerAiEnabled,

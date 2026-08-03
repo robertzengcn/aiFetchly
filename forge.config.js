@@ -54,8 +54,45 @@ const EXTERNAL_DEPENDENCIES = [
   "onnxruntime-common",
   "sharp",
   "sherpa-onnx-node",
+  // Runtime deps required by the packaged ContactExtractionWorker bundle
+  // (vite.contactExtractionWorker.config.mjs keeps node_modules external).
+  // The worker is spawned with Electron's RUN_AS_NODE runtime, so these must
+  // be present in app.asar/node_modules. Keep in sync with the bundle's
+  // runtime requires (verified by verifyGeneratedRuntimeRequires).
+  "uuid",
+  "adm-zip",
+  "chardet",
+  "cron",
+  "cron-validator",
+  "debug",
+  "diff",
+  "dotenv",
+  "fast-glob",
+  "form-data",
+  "iconv-lite",
+  "imapflow",
+  "isbinaryfile",
+  "mailparser",
+  "mammoth",
+  "node-fetch",
+  "node-machine-id",
+  "papaparse",
+  "pdf-lib",
+  "pdf2md-ts",
+  "picomatch",
+  "turndown",
+  "write-file-atomic",
+  "ws",
+  "xlsx",
+  "zod",
+  "@puppeteer/browsers",
 ];
-const GENERATED_RUNTIME_REQUIRE_BUNDLES = ["taskCode.js"];
+// Bundles that may emit runtime `require(...)` calls for external packages.
+// packageAfterPrune verifies every such package is actually packaged.
+const GENERATED_RUNTIME_REQUIRE_BUNDLES = [
+  "taskCode.js",
+  "ContactExtractionWorker.js",
+];
 const NODE_BUILTINS = new Set([
   ...builtinModules,
   ...builtinModules.map((moduleName) => `node:${moduleName}`),

@@ -18,52 +18,20 @@ export function getContactExtractionWorkerPathCandidates(
   runtime: ContactExtractionWorkerPathRuntime
 ): string[] {
   const candidates: string[] = [];
-  const addCandidate = (candidate: string): void => {
+  const pushUnique = (candidate: string): void => {
     const normalized = path.normalize(candidate);
-    const unpacked = mirrorAppAsarUnpackedPath(normalized);
-
-    if (unpacked !== normalized && !candidates.includes(unpacked)) {
-      candidates.push(unpacked);
-    }
     if (!candidates.includes(normalized)) {
       candidates.push(normalized);
     }
   };
 
-  addCandidate(path.join(runtime.dirname, CONTACT_EXTRACTION_WORKER_FILE));
-  addCandidate(
-    path.join(runtime.cwd, ".vite", "build", CONTACT_EXTRACTION_WORKER_FILE)
-  );
-  addCandidate(path.join(runtime.cwd, "dist", CONTACT_EXTRACTION_WORKER_FILE));
-  addCandidate(
-    path.join(
-      runtime.cwd,
-      "dist",
-      "childprocess",
-      "contact-extraction",
-      CONTACT_EXTRACTION_WORKER_FILE
-    )
-  );
-
   if (runtime.resourcesPath) {
-    addCandidate(
-      path.join(
-        runtime.resourcesPath,
-        "app.asar.unpacked",
-        "dist",
-        CONTACT_EXTRACTION_WORKER_FILE
-      )
-    );
-    addCandidate(
-      path.join(
-        runtime.resourcesPath,
-        "app.asar.unpacked",
-        ".vite",
-        "build",
-        CONTACT_EXTRACTION_WORKER_FILE
-      )
-    );
-    addCandidate(
+    // Packaged app. Prefer the app.asar virtual path over its app.asar.unpacked
+    // mirror: the worker file is unpacked to disk (Electron's patched fs
+    // redirects the read transparently), but resolving through the virtual
+    // path keeps `require()` walking up through app.asar so the bundle's
+    // external node_modules deps resolve against app.asar/node_modules.
+    pushUnique(
       path.join(
         runtime.resourcesPath,
         "app.asar",
@@ -72,7 +40,39 @@ export function getContactExtractionWorkerPathCandidates(
         CONTACT_EXTRACTION_WORKER_FILE
       )
     );
+    pushUnique(
+      path.join(
+        runtime.resourcesPath,
+        "app.asar.unpacked",
+        ".vite",
+        "build",
+        CONTACT_EXTRACTION_WORKER_FILE
+      )
+    );
+    pushUnique(
+      path.join(
+        runtime.resourcesPath,
+        "app.asar.unpacked",
+        "dist",
+        CONTACT_EXTRACTION_WORKER_FILE
+      )
+    );
   }
+
+  pushUnique(path.join(runtime.dirname, CONTACT_EXTRACTION_WORKER_FILE));
+  pushUnique(
+    path.join(runtime.cwd, ".vite", "build", CONTACT_EXTRACTION_WORKER_FILE)
+  );
+  pushUnique(path.join(runtime.cwd, "dist", CONTACT_EXTRACTION_WORKER_FILE));
+  pushUnique(
+    path.join(
+      runtime.cwd,
+      "dist",
+      "childprocess",
+      "contact-extraction",
+      CONTACT_EXTRACTION_WORKER_FILE
+    )
+  );
 
   return candidates;
 }
