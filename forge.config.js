@@ -211,6 +211,15 @@ module.exports = {
       if (!KEEP_FILE.keep && filePath.startsWith("/node_modules/")) {
         // check if matches any of the external dependencies
         for (const dep of nativeModuleDependenciesToPackage) {
+          const scopeName = dep.startsWith("@") ? dep.split("/")[0] : null;
+          if (
+            scopeName &&
+            (filePath === `/node_modules/${scopeName}/` ||
+              filePath === `/node_modules/${scopeName}`)
+          ) {
+            KEEP_FILE.keep = true;
+            break;
+          }
           if (
             filePath === `/node_modules/${dep}/` ||
             filePath === `/node_modules/${dep}`
