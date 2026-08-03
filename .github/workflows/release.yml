@@ -403,7 +403,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20.18.3
+          node-version: 20.19.3
           cache: yarn
 
       - name: Install dependencies from lockfile
@@ -467,7 +467,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20.18.3
+          node-version: 20.19.3
 
       - name: Download runtime archives
         uses: actions/download-artifact@v4
