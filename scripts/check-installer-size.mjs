@@ -17,6 +17,8 @@
  * regression.
  */
 import { readFileSync, statSync } from "node:fs";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 /**
  * Pure size comparison. Returns ok=false when the current size exceeds the
@@ -96,7 +98,12 @@ function main() {
   if (!ok) process.exit(1);
 }
 
-const isMain = import.meta.url === `file://${process.argv[1]}`;
+export function isDirectExecution(metaUrl, argvPath = process.argv[1]) {
+  if (!argvPath) return false;
+  return pathToFileURL(path.resolve(argvPath)).href === metaUrl;
+}
+
+const isMain = isDirectExecution(import.meta.url);
 if (isMain) {
   try {
     main();
