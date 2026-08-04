@@ -174,25 +174,29 @@ function probeElectronLoad() {
 }
 
 /**
- * Recompile better-sqlite3 from source against Electron's headers. Uses CLI
- * flags (not npm_config_* env vars): they propagate reliably through
- * better-sqlite3's build, where the env-var form silently left a Node build.
+ * Recompile better-sqlite3 from source against Electron's headers using the
+ * same @electron/rebuild implementation that Forge uses for startup.
  */
 function rebuildForElectron(electronVersion) {
-  const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
+  const rebuildCommand =
+    process.platform === "win32" ? "electron-rebuild.cmd" : "electron-rebuild";
+  const rebuildPath = path.join(
+    PROJECT_ROOT,
+    "node_modules",
+    ".bin",
+    rebuildCommand
+  );
   const args = [
-    "rebuild",
-    "better-sqlite3",
-    "--build-from-source",
-    "--runtime=electron",
-    `--target=${electronVersion}`,
-    "--disturl=https://electronjs.org/headers",
+    "--force",
+    "--only=better-sqlite3",
+    `--version=${electronVersion}`,
     `--arch=${process.arch}`,
+    "--build-from-source",
   ];
   console.log(
     `Rebuilding better-sqlite3 for Electron ${electronVersion} (${process.platform}/${process.arch})...`
   );
-  const result = spawnSync(npmCommand, args, {
+  const result = spawnSync(rebuildPath, args, {
     cwd: PROJECT_ROOT,
     shell: process.platform === "win32",
     stdio: "inherit",
@@ -224,6 +228,7 @@ function rebuildForElectronWithNodeGyp(electronVersion) {
     `--target=${electronVersion}`,
     "--dist-url=https://electronjs.org/headers",
     `--arch=${process.arch}`,
+    "--force_build=1",
   ];
   console.log(
     `Retrying better-sqlite3 rebuild with direct node-gyp for Electron ${electronVersion} (${process.platform}/${process.arch})...`
