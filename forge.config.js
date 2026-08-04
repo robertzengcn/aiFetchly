@@ -87,12 +87,37 @@ const EXTERNAL_DEPENDENCIES = [
   "zod",
   "@puppeteer/browsers",
 ];
-// Bundles that may emit runtime `require(...)` calls for external packages.
-// packageAfterPrune verifies every such package is actually packaged.
-const GENERATED_RUNTIME_REQUIRE_BUNDLES = [
-  "taskCode.js",
-  "ContactExtractionWorker.js",
-];
+// Generated bundles may emit runtime `require(...)` calls for external packages.
+// packageAfterPrune discovers every generated JavaScript bundle instead of relying
+// on a hand-maintained worker allow-list.
+function getGeneratedRuntimeRequireBundles(buildPath) {
+  const bundleRoots = [
+    join(buildPath, ".vite", "build"),
+    join(buildPath, "dist", "childprocess"),
+  ];
+  const bundles = [];
+
+  function collectBundles(directoryPath) {
+    if (!existsSync(directoryPath)) {
+      return;
+    }
+
+    for (const fileName of readdirSync(directoryPath)) {
+      const filePath = join(directoryPath, fileName);
+      if (statSync(filePath).isDirectory()) {
+        collectBundles(filePath);
+      } else if (fileName.endsWith(".js")) {
+        bundles.push(filePath);
+      }
+    }
+  }
+
+  for (const bundleRoot of bundleRoots) {
+    collectBundles(bundleRoot);
+  }
+
+  return bundles;
+}
 const NODE_BUILTINS = new Set([
   ...builtinModules,
   ...builtinModules.map((moduleName) => `node:${moduleName}`),
@@ -141,14 +166,9 @@ function hasPackagedNodeModule(buildPath, packageName) {
 
 function verifyGeneratedRuntimeRequires(buildPath) {
   const missing = [];
-  const viteBuildPath = join(buildPath, ".vite", "build");
 
-  for (const bundleFile of GENERATED_RUNTIME_REQUIRE_BUNDLES) {
-    const bundlePath = join(viteBuildPath, bundleFile);
-    if (!existsSync(bundlePath)) {
-      continue;
-    }
-
+  for (const bundlePath of getGeneratedRuntimeRequireBundles(buildPath)) {
+    const bundleFile = path.basename(bundlePath);
     for (const packageName of extractRuntimePackageRequires(bundlePath)) {
       if (!hasPackagedNodeModule(buildPath, packageName)) {
         missing.push(`${bundleFile}: ${packageName}`);

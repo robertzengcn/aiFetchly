@@ -38,6 +38,7 @@ import {
   isAiSupportRequestMessage,
 } from "@/modules/interface/BackgroundProcessMessages";
 import {
+  getPackagedWorkerNodePath,
   getPackagedWorkerPathCandidates,
   resolvePackagedWorkerPath,
 } from "@/utils/packagedWorkerPath";
@@ -383,12 +384,19 @@ export class YellowPagesProcessManager extends BaseModule {
       const { port1, port2 } = new MessageChannelMain();
 
       // Fork the child process using Electron utilityProcess
+      const packagedNodePath = electronProcess.resourcesPath
+        ? getPackagedWorkerNodePath(
+            electronProcess.resourcesPath,
+            process.env.NODE_PATH
+          )
+        : process.env.NODE_PATH;
       const childProcess = utilityProcess.fork(childPath, [], {
         stdio: "pipe",
         execArgv: ["puppeteer-cluster:*"],
         env: {
           ...process.env,
           NODE_OPTIONS: "",
+          NODE_PATH: packagedNodePath,
           ELECTRON_APP_NAME: app.getName(),
           ELECTRON_USER_DATA_PATH: app.getPath("userData"),
         },

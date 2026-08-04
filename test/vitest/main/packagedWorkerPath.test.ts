@@ -1,6 +1,7 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  getPackagedWorkerNodePath,
   getPackagedWorkerPathCandidates,
   mirrorAppAsarUnpackedPath,
   resolvePackagedWorkerPath,
@@ -84,6 +85,20 @@ describe("packaged worker path resolution", () => {
 
     expect(mirrorAppAsarUnpackedPath(packedPath)).toBe(
       "E:\\aifetchly\\app-1.0.131\\resources\\app.asar.unpacked\\.vite\\build\\Worker.js"
+    );
+  });
+
+  it("builds NODE_PATH entries for dependencies stored inside app.asar", () => {
+    const resourcesPath = path.join("/opt", "AiFetchly", "resources");
+
+    expect(
+      getPackagedWorkerNodePath(resourcesPath, "/existing/node_modules")
+    ).toBe(
+      [
+        path.join(resourcesPath, "app.asar", "node_modules"),
+        path.join(resourcesPath, "app.asar.unpacked", "node_modules"),
+        "/existing/node_modules",
+      ].join(path.delimiter)
     );
   });
 });

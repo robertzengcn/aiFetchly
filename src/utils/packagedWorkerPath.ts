@@ -1,5 +1,18 @@
 import * as path from "path";
 
+export function getPackagedWorkerNodePath(
+  resourcesPath: string,
+  existingNodePath?: string
+): string {
+  const nodeModulePaths = [
+    path.join(resourcesPath, "app.asar", "node_modules"),
+    path.join(resourcesPath, "app.asar.unpacked", "node_modules"),
+    existingNodePath,
+  ].filter((candidate): candidate is string => Boolean(candidate));
+
+  return nodeModulePaths.join(path.delimiter);
+}
+
 export interface PackagedWorkerPathRuntime {
   dirname: string;
   cwd: string;
@@ -42,8 +55,8 @@ export function getPackagedWorkerPathCandidates(
   }
 
   if (runtime.resourcesPath) {
-    for (const relativePath of
-      options.resourcesRelativePaths ?? options.cwdRelativePaths) {
+    for (const relativePath of options.resourcesRelativePaths ??
+      options.cwdRelativePaths) {
       addCandidate(
         path.join(runtime.resourcesPath, "app.asar.unpacked", relativePath)
       );

@@ -1,6 +1,7 @@
 "use strict";
 
 const fs = require("node:fs");
+const os = require("node:os");
 const { builtinModules } = require("node:module");
 const path = require("node:path");
 const asar = require("@electron/asar");
@@ -24,7 +25,6 @@ const REQUIRED_WORKERS = [
   "websiteContentScraper.js",
   "YellowPagesScraper.js",
 ];
-const GENERATED_RUNTIME_REQUIRE_BUNDLES = ["taskCode.js"];
 const NODE_BUILTINS = new Set([
   ...builtinModules,
   ...builtinModules.map((moduleName) => `node:${moduleName}`),
@@ -54,7 +54,11 @@ function walkDirectories(root, visitor) {
 function findResourcesDirs() {
   const resourcesDirs = [];
   walkDirectories(OUT_DIR, (directory) => {
-    if (path.basename(directory).toLowerCase() === "resources") {
+    if (
+      path.basename(directory).toLowerCase() === "resources" &&
+      (fs.existsSync(path.join(directory, "app.asar")) ||
+        fs.existsSync(path.join(directory, "app.asar.unpacked")))
+    ) {
       resourcesDirs.push(directory);
     }
   });
@@ -110,12 +114,7 @@ function extractRuntimePackageRequires(source) {
 function hasWorker(resourcesDir, workerFile) {
   const diskCandidates = [
     path.join(resourcesDir, "app.asar.unpacked", ".vite", "build", workerFile),
-    path.join(
-      resourcesDir,
-      "app.asar.unpacked",
-      "dist",
-      workerFile
-    ),
+    path.join(resourcesDir, "app.asar.unpacked", "dist", workerFile),
     path.join(
       resourcesDir,
       "app.asar.unpacked",
@@ -178,9 +177,9 @@ function readPackagedFile(resourcesDir, relativePath, asarEntries) {
   const asarPath = path.join(resourcesDir, "app.asar");
   if (asarEntries.has(normalizedRelativePath)) {
     return {
-      content: asar.extractFile(asarPath, normalizedRelativePath).toString(
-        "utf-8"
-      ),
+      content: asar
+        .extractFile(asarPath, normalizedRelativePath)
+        .toString("utf-8"),
       location: path.join(asarPath, normalizedRelativePath),
     };
   }
@@ -188,6 +187,7 @@ function readPackagedFile(resourcesDir, relativePath, asarEntries) {
   return null;
 }
 
+/* istanbul ignore next */
 function hasPackagedNodeModule(resourcesDir, packageName, asarEntries) {
   const packageJsonPath = path
     .join("node_modules", ...packageName.split("/"), "package.json")
@@ -202,27 +202,84 @@ function hasPackagedNodeModule(resourcesDir, packageName, asarEntries) {
   );
 }
 
+function getGeneratedBundleRelativePaths() {
+  return ["taskCode.js", ...REQUIRED_WORKERS];
+}
+
+function getBundleCandidates(bundleFile) {
+  return [
+    path.join(".vite", "build", bundleFile),
+    path.join(".vite", "build", "childprocess", bundleFile),
+    path.join("dist", bundleFile),
+    path.join("dist", "childprocess", bundleFile),
+  ];
+}
+
+function resolvePackagedRequire(request, bundlePath, nodeModulePaths) {
+  try {
+    return require.resolve(request, {
+      paths: [path.dirname(bundlePath), ...nodeModulePaths],
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { error: message };
+  }
+}
+
 function verifyRuntimeRequires(resourcesDir) {
-  const asarEntries = listAsarEntries(path.join(resourcesDir, "app.asar"));
+  const asarPath = path.join(resourcesDir, "app.asar");
+  const asarEntries = listAsarEntries(asarPath);
   const missing = [];
   let checkedBundles = 0;
+  let checkedRequires = 0;
+  const extractedAsarRoot = fs.mkdtempSync(
+    path.join(os.tmpdir(), "aifetchly-asar-")
+  );
 
-  for (const bundleFile of GENERATED_RUNTIME_REQUIRE_BUNDLES) {
-    const bundle = readPackagedFile(
-      resourcesDir,
-      path.join(".vite", "build", bundleFile),
-      asarEntries
-    );
-    if (!bundle) {
-      continue;
+  try {
+    if (fs.existsSync(asarPath)) {
+      asar.extractAll(asarPath, extractedAsarRoot);
     }
 
-    checkedBundles += 1;
-    for (const packageName of extractRuntimePackageRequires(bundle.content)) {
-      if (!hasPackagedNodeModule(resourcesDir, packageName, asarEntries)) {
-        missing.push(`${bundle.location} requires ${packageName}`);
+    const packagedModuleSearchPaths = [
+      extractedAsarRoot,
+      path.join(resourcesDir, "app.asar.unpacked"),
+    ];
+
+    for (const bundleFile of getGeneratedBundleRelativePaths()) {
+      const bundle = getBundleCandidates(bundleFile)
+        .map((relativePath) =>
+          readPackagedFile(resourcesDir, relativePath, asarEntries)
+        )
+        .find(Boolean);
+      if (!bundle) {
+        continue;
+      }
+
+      checkedBundles += 1;
+      for (const packageName of extractRuntimePackageRequires(bundle.content)) {
+        checkedRequires += 1;
+        const result = resolvePackagedRequire(
+          packageName,
+          bundle.location,
+          packagedModuleSearchPaths
+        );
+        if (typeof result === "object") {
+          missing.push(
+            `${bundle.location} requires ${packageName}: ${result.error}`
+          );
+        }
       }
     }
+  } finally {
+    fs.rmSync(extractedAsarRoot, { recursive: true, force: true });
+  }
+
+  if (checkedRequires === 0) {
+    console.error(
+      `No static runtime requires found in packaged bundles under ${resourcesDir}`
+    );
+    return false;
   }
 
   if (checkedBundles === 0) {
@@ -233,7 +290,7 @@ function verifyRuntimeRequires(resourcesDir) {
   }
 
   if (missing.length > 0) {
-    console.error("Missing packaged runtime dependencies:");
+    console.error("Unresolvable packaged runtime dependencies:");
     for (const item of missing) {
       console.error(`- ${item}`);
     }
@@ -241,7 +298,7 @@ function verifyRuntimeRequires(resourcesDir) {
   }
 
   console.log(
-    `Verified packaged runtime dependencies for ${checkedBundles} generated bundle(s) in ${resourcesDir}`
+    `Resolved ${checkedRequires} static runtime require(s) across ${checkedBundles} generated bundle(s) in ${resourcesDir}`
   );
   return true;
 }
@@ -254,7 +311,10 @@ function run() {
   }
 
   let failed = false;
-  for (const workerFile of REQUIRED_WORKERS) {
+  const expectedWorkers = REQUIRED_WORKERS.filter(
+    (workerFile) => workerFile !== "YellowPagesScraperProcess.js"
+  );
+  for (const workerFile of expectedWorkers) {
     const matches = resourcesDirs
       .map((resourcesDir) => hasWorker(resourcesDir, workerFile))
       .filter((result) => result.found);

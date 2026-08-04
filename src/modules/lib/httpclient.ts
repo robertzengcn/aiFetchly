@@ -6,12 +6,9 @@ export type HttpClientOptions = {
 // }
 //import { AuthInterceptor } from '@/modules/lib/authInterceptor';
 import type FormDataLib from "form-data";
-import { Token } from "@/modules/token";
 import { TOKENNAME, REFRESHTOKEN } from "@/config/usersetting";
-import {
-  RefreshTokenInvalidError,
-  TokenRefreshService,
-} from "@/modules/tokenRefresh";
+import type { Token } from "@/modules/token";
+import { RefreshTokenInvalidError } from "@/modules/tokenRefresh";
 import { resolveViteLoginBase } from "@/config/viteLoginUrl";
 import { userSecretKeyService } from "@/modules/fieldCipher";
 
@@ -82,7 +79,7 @@ export class HttpClient {
         this.setHeader("Authorization", "Bearer " + workerToken);
       }
     } else {
-      this.setheaderToken();
+      void this.setheaderToken();
     }
     // const tokenModel=new Token()
     // const tokenval=tokenModel.getValue("social-market-token")
@@ -92,7 +89,8 @@ export class HttpClient {
     // }
   }
 
-  public setheaderToken() {
+  public async setheaderToken(): Promise<void> {
+    const { Token } = await import("@/modules/token");
     const tokenModel = new Token();
     const tokenval = tokenModel.getValue(TOKENNAME);
     //console.log("prepare to set token:"+tokenval)
@@ -141,6 +139,7 @@ export class HttpClient {
       // refreshOnce() is the process-wide entrypoint. If another caller
       // (background timer or another HttpClient) is already refreshing,
       // this returns the same promise — no concurrent rotation race.
+      const { TokenRefreshService } = await import("@/modules/tokenRefresh");
       const refreshResult = await TokenRefreshService.refreshOnce();
 
       if (refreshResult.status && refreshResult.data) {
@@ -195,6 +194,7 @@ export class HttpClient {
     // forces a re-login instead of a transparent refresh (B5 fix).
     if (res.status === 401 || res.status === 403) {
       console.warn(`Received ${res.status} - Attempting token refresh`);
+      const { Token } = await import("@/modules/token");
       const tokenModel = new Token();
       const refreshToken = tokenModel.getValue(REFRESHTOKEN);
 
@@ -408,12 +408,16 @@ export class HttpClient {
       }
 
       // Check if refresh token exists
+      const { Token } = await import("@/modules/token");
       const tokenModel = new Token();
       const refreshToken = tokenModel.getValue(REFRESHTOKEN);
 
       if (refreshToken && refreshToken.trim().length > 0) {
         try {
           // Process-wide refresh mutex: see _refreshTokenAndRetry.
+          const { TokenRefreshService } = await import(
+            "@/modules/tokenRefresh"
+          );
           const refreshResult = await TokenRefreshService.refreshOnce();
 
           if (refreshResult.status && refreshResult.data) {

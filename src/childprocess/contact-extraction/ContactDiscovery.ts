@@ -6,6 +6,7 @@ import {
 import { browserManager } from "@/modules/browserManager";
 import { UrlGuard } from "@/service/UrlGuard";
 import { applySsrfNavigationGuard } from "@/service/PuppeteerSsrfGuard";
+import { extractContactInfoWithWorkerAi } from "./ContactExtractionAiClient";
 
 /**
  * Contact Discovery - 4-Stage Pipeline
@@ -206,15 +207,14 @@ async function extractWithAI(
       ? await captureScreenshotForAI(page)
       : undefined;
 
-    // Call AI service with screenshot
-    const { AiChatApi } = await import("@/api/aiChatApi");
-    const aiChatApi = new AiChatApi();
-    const response = await aiChatApi.extractContactInfo(
-      cleanedContent,
+    // Call the worker-safe AI client with screenshot. The worker must not
+    // import the main-process AiChatApi/electron-store dependency graph.
+    const response = await extractContactInfoWithWorkerAi({
+      page_content: cleanedContent,
       url,
-      entityName,
-      screenshot
-    );
+      entity_name: entityName,
+      ...(screenshot ? { screenshot } : {}),
+    });
 
     if (response.status && response.data) {
       const aiData = response.data;

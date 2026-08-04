@@ -5,7 +5,6 @@ import {
   ChatApiResponse,
   LLMImageAttachmentPayload,
 } from "@/entityTypes/commonType";
-import { Token } from "@/modules/token";
 import { USER_AI_ENABLED } from "@/config/usersetting";
 import type { AIEmailTemplateRequest } from "@/entityTypes/emailmarketingType";
 import type { AIRecoveryRequest } from "@/entityTypes/processMessage-type";
@@ -13,7 +12,7 @@ import {
   batchKeywordGenerationResponseSchema,
   chatApiResponseSchema,
 } from "@/schemas/api/aiChat";
-import { AIProviderResolver } from "@/service/aiProvider/AIProviderResolver";
+import type { AIProviderResolver } from "@/service/aiProvider/AIProviderResolver";
 import { OpenAICompatibleProviderClient } from "@/service/aiProvider/OpenAICompatibleProviderClient";
 import type { LocalAIProviderConfig } from "@/entityTypes/aiProviderTypes";
 import {
@@ -787,8 +786,11 @@ export class AiChatApi {
    * AiChatApi (e.g. in worker processes) does not touch encrypted storage
    * until a chat call actually happens.
    */
-  private getProviderResolver(): AIProviderResolver {
+  private async getProviderResolver(): Promise<AIProviderResolver> {
     if (!this._providerResolver) {
+      const { AIProviderResolver } = await import(
+        "@/service/aiProvider/AIProviderResolver"
+      );
       this._providerResolver = new AIProviderResolver();
     }
     return this._providerResolver;
@@ -867,7 +869,7 @@ export class AiChatApi {
    *
    * @throws {Error} When AI features are not enabled for the user
    */
-  private ensureAIEnabled(): void {
+  private async ensureAIEnabled(): Promise<void> {
     // Worker processes cannot access ElectronStoreService/Token,
     // so use env var passed from main process instead.
     if (process.env.WORKER_TYPE) {
@@ -880,6 +882,7 @@ export class AiChatApi {
       return;
     }
 
+    const { Token } = await import("@/modules/token");
     const tokenService = new Token();
     const aiEnabled = tokenService.getValue(USER_AI_ENABLED);
     if (aiEnabled !== "true") {
@@ -982,7 +985,7 @@ export class AiChatApi {
   async sendMessage(
     request: ChatRequest
   ): Promise<CommonApiresp<ChatApiResponse>> {
-    this.ensureAIEnabled();
+    await this.ensureAIEnabled();
     const data: ChatApiRequestData = {
       message: request.message,
       conversation_id: request.conversationId,
@@ -1054,7 +1057,7 @@ export class AiChatApi {
     onEvent: (event: StreamEvent) => void,
     options?: { signal?: AbortSignal }
   ): Promise<void> {
-    this.ensureAIEnabled();
+    await this.ensureAIEnabled();
     const data: ChatApiRequestData = {
       message: request.message,
       conversation_id: request.conversationId,
@@ -1110,7 +1113,7 @@ export class AiChatApi {
     onEvent: (event: StreamEvent) => void,
     options?: { messageOverride?: string }
   ): Promise<void> {
-    this.ensureAIEnabled();
+    await this.ensureAIEnabled();
     const body = {
       prompt: request.prompt,
       tone: request.tone,
@@ -1269,7 +1272,7 @@ export class AiChatApi {
   async getAvailableModels(): Promise<
     CommonApiresp<AvailableChatModelsResponse>
   > {
-    this.ensureAIEnabled();
+    await this.ensureAIEnabled();
     return this._httpClient.get("/api/ai/chat/models");
   }
 
@@ -1329,7 +1332,7 @@ export class AiChatApi {
   async batchGenerateKeywords(
     requests: BatchKeywordGenerationRequestItem[]
   ): Promise<CommonApiresp<BatchKeywordGenerationResponse>> {
-    this.ensureAIEnabled();
+    await this.ensureAIEnabled();
     this._debugLogRequest("/api/ai/keywords/generate/batch", requests);
     const raw = await this._httpClient.postJson<
       CommonApiresp<BatchKeywordGenerationResponse>
@@ -1385,7 +1388,7 @@ export class AiChatApi {
   async analyzeWebsite(
     request: WebsiteAnalysisRequest
   ): Promise<CommonApiresp<WebsiteAnalysisResponse>> {
-    this.ensureAIEnabled();
+    await this.ensureAIEnabled();
     const data: WebsiteAnalysisRequest = {
       website_content: request.website_content,
       client_business: request.client_business,
@@ -1421,7 +1424,7 @@ export class AiChatApi {
     threadId?: string,
     options?: { signal?: AbortSignal }
   ): Promise<void> {
-    this.ensureAIEnabled();
+    await this.ensureAIEnabled();
     const data: ContinueRequestData = {
       conversation_id: conversationId,
       tool_results: toolResults,
@@ -1613,7 +1616,7 @@ export class AiChatApi {
     entityName?: string,
     screenshot?: string
   ): Promise<CommonApiresp<ContactExtractionResponse>> {
-    this.ensureAIEnabled();
+    await this.ensureAIEnabled();
 
     // Validate page content size
     this.validatePageSize(pageContent);
@@ -1669,7 +1672,7 @@ export class AiChatApi {
     screenshot: string,
     ttlSeconds?: number
   ): Promise<CommonApiresp<ScreenshotUploadResponse>> {
-    this.ensureAIEnabled();
+    await this.ensureAIEnabled();
     if (screenshot) {
       this.validateScreenshot(screenshot);
     }
@@ -1700,7 +1703,7 @@ export class AiChatApi {
     platformName: string;
     selectorsTried: Record<string, string>;
   }): Promise<CommonApiresp<ScrapeAssistResponse>> {
-    this.ensureAIEnabled();
+    await this.ensureAIEnabled();
 
     // Validate page content size
     this.validatePageSize(params.pageContent);
@@ -1775,7 +1778,7 @@ export class AiChatApi {
     stepContext?: string;
     errorInfo?: string;
   }): Promise<CommonApiresp<ObserveResponse>> {
-    this.ensureAIEnabled();
+    await this.ensureAIEnabled();
     this.validatePageSize(params.pageContent);
     if (params.screenshot && !params.screenshotId) {
       this.validateScreenshot(params.screenshot);
@@ -1844,7 +1847,7 @@ export class AiChatApi {
     sessionId: string,
     success = true
   ): Promise<CommonApiresp<unknown>> {
-    this.ensureAIEnabled();
+    await this.ensureAIEnabled();
     const payload = { session_id: sessionId, success };
     this._debugLogRequest("/api/ai/scrape/complete", payload);
     return this._httpClient.postJson("/api/ai/scrape/complete", payload);
@@ -1857,7 +1860,7 @@ export class AiChatApi {
   async sendPuppeteerRecovery(
     request: AIRecoveryRequest
   ): Promise<CommonApiresp<PuppeteerRecoveryResponseData>> {
-    this.ensureAIEnabled();
+    await this.ensureAIEnabled();
 
     const data: Record<string, unknown> = {
       request_id: request.requestId,
@@ -1907,7 +1910,7 @@ export class AiChatApi {
    */
   async listOpenAIModels(): Promise<OpenAIModelsResponse> {
     if (!process.env.WORKER_TYPE) {
-      const resolved = this.getProviderResolver().resolveForChat();
+      const resolved = (await this.getProviderResolver()).resolveForChat();
       if (!resolved.canUse) {
         throw new Error(resolved.message);
       }
@@ -1917,7 +1920,7 @@ export class AiChatApi {
       return this.listOpenAIModelsHosted();
     }
     // Worker processes have no provider settings; keep the hosted-only gate.
-    this.ensureAIEnabled();
+    await this.ensureAIEnabled();
     return this.listOpenAIModelsHosted();
   }
 
@@ -2077,7 +2080,7 @@ export class AiChatApi {
     request: OpenAIChatCompletionRequest
   ): Promise<OpenAIChatCompletionResponse> {
     if (!process.env.WORKER_TYPE) {
-      const resolved = this.getProviderResolver().resolveForChat();
+      const resolved = (await this.getProviderResolver()).resolveForChat();
       if (!resolved.canUse) {
         throw new Error(resolved.message);
       }
@@ -2088,7 +2091,7 @@ export class AiChatApi {
       }
       return this.openAIChatCompletionHosted(request);
     }
-    this.ensureAIEnabled();
+    await this.ensureAIEnabled();
     return this.openAIChatCompletionHosted(request);
   }
 
@@ -2153,7 +2156,7 @@ export class AiChatApi {
     }
   ): Promise<void> {
     if (!process.env.WORKER_TYPE) {
-      const resolved = this.getProviderResolver().resolveForChat();
+      const resolved = (await this.getProviderResolver()).resolveForChat();
       if (!resolved.canUse) {
         throw new Error(resolved.message);
       }
@@ -2169,7 +2172,7 @@ export class AiChatApi {
       return;
     }
     // Worker processes have no provider settings; keep the hosted-only gate.
-    this.ensureAIEnabled();
+    await this.ensureAIEnabled();
     await this.openAIChatCompletionStreamHosted(request, onChunk, options);
   }
 
@@ -2726,7 +2729,9 @@ export class AiChatApi {
             return {
               index: choiceIndex,
               delta:
-                typeof content === "string" || content === null || images.length > 0
+                typeof content === "string" ||
+                content === null ||
+                images.length > 0
                   ? {
                       ...(typeof content === "string" || content === null
                         ? { content }
@@ -3014,7 +3019,9 @@ export class AiChatApi {
             throw readError;
           }
           console.error(
-            `[ai-chat-v2] openai-stream read failed mid-stream (bytes=${rawBody.length}, payloads=${emittedPayloadCount}): ${describeErrorDetail(
+            `[ai-chat-v2] openai-stream read failed mid-stream (bytes=${
+              rawBody.length
+            }, payloads=${emittedPayloadCount}): ${describeErrorDetail(
               readError
             )}`
           );
@@ -3138,7 +3145,7 @@ export class AiChatApi {
    * @returns Ranked results with relevance scores
    */
   async rerank(request: RerankRequest): Promise<RerankResponse> {
-    this.ensureAIEnabled();
+    await this.ensureAIEnabled();
     const data: RerankRequest = {
       query: request.query,
       documents: request.documents,
