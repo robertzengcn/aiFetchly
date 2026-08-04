@@ -64,8 +64,33 @@ interface ResultMessage {
 // State
 // ---------------------------------------------------------------------------
 
+const workerStartedAt = new Date().toISOString();
 let browser: Browser | null = null;
 let isCancelled = false;
+
+function describeError(error: unknown): string {
+  if (error instanceof Error) {
+    return error.stack ?? `${error.name}: ${error.message}`;
+  }
+  return String(error);
+}
+
+function logWorkerEvent(message: string, error?: unknown): void {
+  const suffix = error === undefined ? "" : `\n${describeError(error)}`;
+  console.error(
+    `[GoogleMapsWorker] pid=${process.pid} started=${workerStartedAt} ${message}${suffix}`
+  );
+}
+
+process.on("uncaughtException", (error: unknown) => {
+  logWorkerEvent("uncaughtException", error);
+});
+
+process.on("unhandledRejection", (reason: unknown) => {
+  logWorkerEvent("unhandledRejection", reason);
+});
+
+logWorkerEvent(`started execPath=${process.execPath} cwd=${process.cwd()}`);
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -218,10 +243,16 @@ function deduplicate(
 async function scrapeGoogleMaps(msg: StartMessage): Promise<void> {
   const { requestId, query, location, maxResults, showBrowser } = msg;
   isCancelled = false;
+  logWorkerEvent(
+    `starting scrape requestId=${requestId} query=${JSON.stringify(
+      query
+    )} location=${JSON.stringify(location)} maxResults=${maxResults}`
+  );
 
   try {
     // Launch browser
     sendProgress(requestId, "launching", 0, maxResults, "Launching browser...");
+    logWorkerEvent(`launching browser requestId=${requestId}`);
     browser = await launch({
       headless: !showBrowser,
       args: [
@@ -231,6 +262,7 @@ async function scrapeGoogleMaps(msg: StartMessage): Promise<void> {
         "--disable-gpu",
       ],
     });
+    logWorkerEvent(`browser launched requestId=${requestId}`);
 
     const page = await browser.newPage();
     await page.setViewport({ width: 1280, height: 800 });
@@ -743,8 +775,10 @@ function buildSummary(
 // ---------------------------------------------------------------------------
 
 process.on("message", (msg: WorkerMessage) => {
+  logWorkerEvent(`message type=${msg.type} requestId=${msg.requestId}`);
   if (msg.type === "start") {
     scrapeGoogleMaps(msg).catch((err) => {
+      logWorkerEvent(`scrape failed requestId=${msg.requestId}`, err);
       send({
         type: "result",
         requestId: msg.requestId,

@@ -32,6 +32,7 @@ import {
   resolvePackagedWorkerPath,
   type PackagedWorkerPathRuntime,
 } from "@/utils/packagedWorkerPath";
+import { formatGoogleMapsWorkerExitDiagnostic } from "@/utils/googleMapsWorkerDiagnostics";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -170,15 +171,21 @@ export class GoogleMapsModule extends BaseModule {
           );
         }
         // child_process.spawn + ipc stdio (utilityProcess.fork rejects piped stdin with ipc)
+        const workerEnv = {
+          ...process.env,
+          NODE_OPTIONS: "",
+          ELECTRON_RUN_AS_NODE: "1",
+          ELECTRON_APP_NAME: app.getName(),
+          ELECTRON_USER_DATA_PATH: app.getPath("userData"),
+        };
+        console.debug(
+          `[GoogleMaps] Spawning worker: path=${resolvedWorkerPath}, cwd=${process.cwd()}, nodePath=${String(
+            process.env.NODE_PATH
+          )}`
+        );
         worker = spawn(process.execPath, [resolvedWorkerPath], {
           stdio: ["pipe", "pipe", "pipe", "ipc"],
-          env: {
-            ...process.env,
-            NODE_OPTIONS: "",
-            ELECTRON_RUN_AS_NODE: "1",
-            ELECTRON_APP_NAME: app.getName(),
-            ELECTRON_USER_DATA_PATH: app.getPath("userData"),
-          },
+          env: workerEnv,
         });
       } catch (err) {
         reject(
@@ -191,8 +198,41 @@ export class GoogleMapsModule extends BaseModule {
         return;
       }
 
+      let workerStdout = "";
+      let workerStderr = "";
+      const appendWorkerOutput = (current: string, chunk: Buffer): string =>
+        `${current}${chunk.toString("utf8")}`.slice(-8000);
+
+      worker.stdout?.on("data", (chunk: Buffer) => {
+        workerStdout = appendWorkerOutput(workerStdout, chunk);
+        console.debug(
+          `[GoogleMaps] Worker stdout (${requestId}): ${chunk
+            .toString("utf8")
+            .trimEnd()}`
+        );
+      });
+      worker.stderr?.on("data", (chunk: Buffer) => {
+        workerStderr = appendWorkerOutput(workerStderr, chunk);
+        console.error(
+          `[GoogleMaps] Worker stderr (${requestId}): ${chunk
+            .toString("utf8")
+            .trimEnd()}`
+        );
+      });
+
+      console.debug(
+        `[GoogleMaps] Worker spawned: requestId=${requestId}, pid=${String(
+          worker.pid
+        )}, execPath=${process.execPath}`
+      );
+
       const timeoutTimer = setTimeout(() => {
         this.activeSearches.delete(requestId);
+        console.error(
+          `[GoogleMaps] Worker timed out: requestId=${requestId}, pid=${String(
+            worker.pid
+          )}`
+        );
         worker.kill();
         reject(new Error("Google Maps search timed out after 10 minutes"));
       }, GoogleMapsModule.DEFAULT_TIMEOUT_MS);
@@ -206,8 +246,16 @@ export class GoogleMapsModule extends BaseModule {
       this.activeSearches.set(requestId, search);
 
       worker.on("message", (raw: unknown) => {
+        console.debug(
+          `[GoogleMaps] Worker message (${requestId}): ${JSON.stringify(raw)}`
+        );
         const data = parseWorkerMessage(raw);
-        if (!data) return;
+        if (!data) {
+          console.warn(
+            `[GoogleMaps] Ignoring invalid worker message (${requestId})`
+          );
+          return;
+        }
         if (data.type === "progress" && data.requestId === requestId) {
           const progress = parseGoogleMapsProgressEvent(data);
           if (search.progressCallback && progress) {
@@ -265,20 +313,45 @@ export class GoogleMapsModule extends BaseModule {
       });
 
       worker.on("error", (err) => {
-        console.error("[GoogleMaps] Worker process error:", err.message);
+        console.error(
+          `[GoogleMaps] Worker process error (${requestId}, pid=${String(
+            worker.pid
+          )}):`,
+          err
+        );
         clearTimeout(timeoutTimer);
         this.activeSearches.delete(requestId);
         reject(new Error(`Worker error: ${err.message}`));
       });
 
-      worker.on("exit", (code) => {
+      worker.on("exit", (code, signal) => {
         if (this.activeSearches.has(requestId)) {
+          const diagnostic = formatGoogleMapsWorkerExitDiagnostic({
+            code,
+            signal,
+            stderr: workerStderr,
+            stdout: workerStdout,
+          });
           console.error(
-            `[GoogleMaps] Worker exited unexpectedly with code ${code}`
+            `[GoogleMaps] Worker exited unexpectedly (${requestId}, pid=${String(
+              worker.pid
+            )}): ${diagnostic}`
           );
           clearTimeout(timeoutTimer);
           this.activeSearches.delete(requestId);
-          reject(new Error(`Worker exited unexpectedly with code ${code}`));
+          reject(
+            new Error(
+              `Worker exited unexpectedly with code ${String(
+                code
+              )}. ${diagnostic}`
+            )
+          );
+        } else {
+          console.debug(
+            `[GoogleMaps] Worker exited after request completion (${requestId}): code=${String(
+              code
+            )}, signal=${String(signal)}`
+          );
         }
       });
 
@@ -457,12 +530,7 @@ export class GoogleMapsModule extends BaseModule {
         path.join(".vite", "build", "childprocess", "GoogleMapsWorker.js"),
         path.join("dist", "GoogleMapsWorker.js"),
         path.join("dist", "childprocess", "GoogleMapsWorker.js"),
-        path.join(
-          "dist",
-          "childprocess",
-          "google-maps",
-          "GoogleMapsWorker.js"
-        ),
+        path.join("dist", "childprocess", "google-maps", "GoogleMapsWorker.js"),
       ],
     };
     const resolvedPath = resolvePackagedWorkerPath(runtime, options);
