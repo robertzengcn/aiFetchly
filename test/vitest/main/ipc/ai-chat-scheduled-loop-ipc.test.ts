@@ -113,6 +113,31 @@ describe("AI Chat scheduled-loop IPC", () => {
     expect(mockCreate).not.toHaveBeenCalled();
   });
 
+  it("accepts the JSON-stringified payload sent by Electron preload", async () => {
+    const response: CreateScheduledLoopResponse = {
+      conversationId: "v2-conv",
+      commandMessageId: "cmd-1",
+      resultMessageId: "res-1",
+      loop: VIEW,
+    };
+    mockCreate.mockResolvedValue(response);
+    const res = await call(
+      AI_CHAT_V2_SCHEDULED_LOOP_CREATE,
+      JSON.stringify({
+        conversationId: "v2-conv",
+        rawCommand: "/loop 5m check deployment",
+        prompt: "check deployment",
+        intervalMs: 300_000,
+        maxRuns: 24,
+        maxLifetimeMs: 86_400_000,
+      })
+    );
+    expect(res.status).toBe(true);
+    expect(mockCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ prompt: "check deployment" })
+    );
+  });
+
   it("creates a scheduled loop and returns the response", async () => {
     const response: CreateScheduledLoopResponse = {
       conversationId: "v2-conv",
@@ -130,7 +155,9 @@ describe("AI Chat scheduled-loop IPC", () => {
       maxLifetimeMs: 86_400_000,
     });
     expect(res.status).toBe(true);
-    expect((res.data as CreateScheduledLoopResponse).loop.status).toBe("active");
+    expect((res.data as CreateScheduledLoopResponse).loop.status).toBe(
+      "active"
+    );
     expect(mockCreate).toHaveBeenCalledWith(
       expect.objectContaining({ prompt: "check deployment" })
     );

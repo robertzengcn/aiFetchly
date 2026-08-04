@@ -31,10 +31,12 @@ const ERROR_MESSAGES: Readonly<Record<ScheduledLoopErrorCode, string>> = {
   INVALID_INTERVAL: "The interval must be between 1 minute and 24 hours.",
   INVALID_LOOP_LIMIT: "The run count or lifetime limit is invalid.",
   PROMPT_REQUIRED: "A prompt is required for a scheduled loop.",
-  LOOP_ALREADY_ACTIVE: "This conversation already has an active scheduled loop.",
+  LOOP_ALREADY_ACTIVE:
+    "This conversation already has an active scheduled loop.",
   CONVERSATION_REQUIRED: "A Chat V2 conversation could not be resolved.",
   CONVERSATION_NOT_FOUND: "The bound conversation no longer exists.",
-  CONVERSATION_MISMATCH: "Conversation identifiers disagree; the loop was paused.",
+  CONVERSATION_MISMATCH:
+    "Conversation identifiers disagree; the loop was paused.",
   CONVERSATION_BUSY:
     "An interactive turn is running; the scheduled run was deferred.",
   AI_DISABLED: "AI functionality is only available to subscribers.",
@@ -71,12 +73,21 @@ const conversationSchema = z.object({
   conversationId: z.string().min(1),
 });
 
-/** Decode an unknown IPC payload with a Zod schema; return null on mismatch. */
+/** Decode a preload payload with a Zod schema. Electron serializes objects
+ * before invoking IPC handlers, while tests/dev bridges may pass objects. */
 function decode<T>(
   schema: z.ZodType<T>,
   data: unknown
 ): { ok: true; value: T } | { ok: false; message: string } {
-  const result = schema.safeParse(data);
+  let payload: unknown = data;
+  if (typeof payload === "string") {
+    try {
+      payload = JSON.parse(payload) as unknown;
+    } catch {
+      return { ok: false, message: "Invalid request payload" };
+    }
+  }
+  const result = schema.safeParse(payload);
   if (result.success) {
     return { ok: true, value: result.data };
   }
@@ -94,9 +105,7 @@ function handleScheduledLoopError(err: unknown): CommonMessage<unknown> {
   return denied(message);
 }
 
-async function handleCreate(
-  data: unknown
-): Promise<CommonMessage<unknown>> {
+async function handleCreate(data: unknown): Promise<CommonMessage<unknown>> {
   if (!isAiEnabled()) {
     return denied(messageForCode("AI_DISABLED"));
   }
@@ -111,9 +120,7 @@ async function handleCreate(
   }
 }
 
-async function handleGet(
-  data: unknown
-): Promise<CommonMessage<unknown>> {
+async function handleGet(data: unknown): Promise<CommonMessage<unknown>> {
   if (!isAiEnabled()) {
     return denied(messageForCode("AI_DISABLED"));
   }
@@ -143,17 +150,15 @@ async function handleControl(
       op === "pause"
         ? await module.pause(decoded.value.conversationId)
         : op === "resume"
-          ? await module.resume(decoded.value.conversationId)
-          : await module.stop(decoded.value.conversationId);
+        ? await module.resume(decoded.value.conversationId)
+        : await module.stop(decoded.value.conversationId);
     return ok(view);
   } catch (err) {
     return handleScheduledLoopError(err);
   }
 }
 
-async function handleStopRun(
-  data: unknown
-): Promise<CommonMessage<unknown>> {
+async function handleStopRun(data: unknown): Promise<CommonMessage<unknown>> {
   if (!isAiEnabled()) {
     return denied(messageForCode("AI_DISABLED"));
   }
@@ -191,7 +196,8 @@ export function registerAiChatScheduledLoopIpcHandlers(): void {
   ipcMain.handle(AI_CHAT_V2_SCHEDULED_LOOP_STOP, async (_e, data: unknown) =>
     handleControl(data, "stop")
   );
-  ipcMain.handle(AI_CHAT_V2_SCHEDULED_LOOP_STOP_RUN, async (_e, data: unknown) =>
-    handleStopRun(data)
+  ipcMain.handle(
+    AI_CHAT_V2_SCHEDULED_LOOP_STOP_RUN,
+    async (_e, data: unknown) => handleStopRun(data)
   );
 }
