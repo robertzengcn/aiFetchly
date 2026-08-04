@@ -45,86 +45,107 @@ const EXTERNAL_DEPENDENCIES = [
 dotenv.config({ path: path.resolve(__dirname, ".env") });
 const env = process.env.NODE_ENV || "development";
 dotenv.config({ path: path.resolve(__dirname, `.env.${env}`) });
-module.exports = {
-  packagerConfig: {
-    icon: "./src/assets/images/icon",
-    // asar: {
-    //   // This ensures native modules are unpacked
-    //   unpack: "**/node_modules/better-sqlite3/**",
+const packagerConfig = {
+  icon: "./src/assets/images/icon",
+  // asar: {
+  //   // This ensures native modules are unpacked
+  //   unpack: "**/node_modules/better-sqlite3/**",
 
-    // },
-    asar: {
-      // .vite/build holds vec0.* copied by Vite; node_modules holds native deps — both must be real disk
-      unpackDir:
-        "**/{.vite,node_modules/better-sqlite3,node_modules/sqlite3,node_modules/sqlite-vec}/**",
-      unpack: "**/vec0.*",
-    },
-    ignore: (file) => {
-      const filePath = file.toLowerCase();
-      const KEEP_FILE = {
-        keep: false,
-        log: true,
-      };
-      // NOTE: must return false for empty string or nothing will be packaged
-      if (filePath === "") KEEP_FILE.keep = true;
-      if (!KEEP_FILE.keep && filePath === "/package.json")
-        KEEP_FILE.keep = true;
-      if (!KEEP_FILE.keep && filePath === "/node_modules")
-        KEEP_FILE.keep = true;
-      if (!KEEP_FILE.keep && filePath === "/.vite") KEEP_FILE.keep = true;
-      if (!KEEP_FILE.keep && filePath.startsWith("/.vite/"))
-        KEEP_FILE.keep = true;
-      if (!KEEP_FILE.keep && filePath.startsWith("/node_modules/")) {
-        // check if matches any of the external dependencies
-        for (const dep of nativeModuleDependenciesToPackage) {
-          if (
-            filePath === `/node_modules/${dep}/` ||
-            filePath === `/node_modules/${dep}`
-          ) {
-            KEEP_FILE.keep = true;
-            break;
-          }
-          if (filePath === `/node_modules/${dep}/package.json`) {
-            KEEP_FILE.keep = true;
-            break;
-          }
-          if (filePath.startsWith(`/node_modules/${dep}/`)) {
-            KEEP_FILE.keep = true;
-            KEEP_FILE.log = false;
-            break;
-          }
+  // },
+  asar: {
+    // .vite/build holds vec0.* copied by Vite; node_modules holds native deps — both must be real disk
+    unpackDir:
+      "**/{.vite,node_modules/better-sqlite3,node_modules/sqlite3,node_modules/sqlite-vec}/**",
+    unpack: "**/vec0.*",
+  },
+  ignore: (file) => {
+    const filePath = file.toLowerCase();
+    const KEEP_FILE = {
+      keep: false,
+      log: true,
+    };
+    // NOTE: must return false for empty string or nothing will be packaged
+    if (filePath === "") KEEP_FILE.keep = true;
+    if (!KEEP_FILE.keep && filePath === "/package.json") KEEP_FILE.keep = true;
+    if (!KEEP_FILE.keep && filePath === "/node_modules") KEEP_FILE.keep = true;
+    if (!KEEP_FILE.keep && filePath === "/.vite") KEEP_FILE.keep = true;
+    if (!KEEP_FILE.keep && filePath.startsWith("/.vite/"))
+      KEEP_FILE.keep = true;
+    if (!KEEP_FILE.keep && filePath.startsWith("/node_modules/")) {
+      // check if matches any of the external dependencies
+      for (const dep of nativeModuleDependenciesToPackage) {
+        if (
+          filePath === `/node_modules/${dep}/` ||
+          filePath === `/node_modules/${dep}`
+        ) {
+          KEEP_FILE.keep = true;
+          break;
+        }
+        if (filePath === `/node_modules/${dep}/package.json`) {
+          KEEP_FILE.keep = true;
+          break;
+        }
+        if (filePath.startsWith(`/node_modules/${dep}/`)) {
+          KEEP_FILE.keep = true;
+          KEEP_FILE.log = false;
+          break;
         }
       }
-      if (KEEP_FILE.keep) {
-        if (KEEP_FILE.log) console.log("Keeping:", file);
-        return false;
-      }
-      return true;
-    },
-    // ignore: [
-    //   /node_modules\/(?!(better-sqlite3|bindings|file-uri-to-path)\/)/,
-    // ],
-    prune: true,
-    overwrite: true,
-    // extraResource: [
-    //    // Only include these paths if they exist
-    //    ...(() => {
-    //     const resources:Array<string>= [];
-    //     const sqlite3Path = path.join(__dirname, 'node_modules/sqlite3/lib/binding');
-    //     const betterSqlitePath = path.join(__dirname, 'node_modules/better-sqlite3/build/Release');
-
-    //     if (fsSync.existsSync(sqlite3Path)) {
-    //       resources.push(sqlite3Path);
-    //     }
-
-    //     if (fsSync.existsSync(betterSqlitePath)) {
-    //       resources.push(betterSqlitePath);
-    //     }
-
-    //     return resources;
-    //   })()
-    // ],
+    }
+    if (KEEP_FILE.keep) {
+      if (KEEP_FILE.log) console.log("Keeping:", file);
+      return false;
+    }
+    return true;
   },
+  // ignore: [
+  //   /node_modules\/(?!(better-sqlite3|bindings|file-uri-to-path)\/)/,
+  // ],
+  prune: true,
+  overwrite: true,
+  // extraResource: [
+  //    // Only include these paths if they exist
+  //    ...(() => {
+  //     const resources:Array<string>= [];
+  //     const sqlite3Path = path.join(__dirname, 'node_modules/sqlite3/lib/binding');
+  //     const betterSqlitePath = path.join(__dirname, 'node_modules/better-sqlite3/build/Release');
+
+  //     if (fsSync.existsSync(sqlite3Path)) {
+  //       resources.push(sqlite3Path);
+  //     }
+
+  //     if (fsSync.existsSync(betterSqlitePath)) {
+  //       resources.push(betterSqlitePath);
+  //     }
+
+  //     return resources;
+  //   })()
+  // ],
+};
+
+// Enable macOS code signing + notarization for release builds only.
+// Squirrel.Mac auto-update requires a signed, notarized app; dev/test
+// builds (make-mac:test) skip signing by leaving these Apple secrets unset.
+if (
+  process.env.OSX_SIGN_IDENTITY &&
+  process.env.APPLE_ID &&
+  process.env.APPLE_APP_SPECIFIC_PASSWORD &&
+  process.env.APPLE_TEAM_ID
+) {
+  packagerConfig.osxSign = {
+    identity: process.env.OSX_SIGN_IDENTITY,
+    "hardened-runtime": true,
+    "signature-flags": "library-validation",
+  };
+  packagerConfig.osxNotarize = {
+    appleId: process.env.APPLE_ID,
+    appleIdPassword: process.env.APPLE_APP_SPECIFIC_PASSWORD,
+    teamId: process.env.APPLE_TEAM_ID,
+  };
+}
+
+module.exports = {
+  packagerConfig,
   rebuildConfig: {
     // isolated-vm@6.1.2 fails to compile against Electron 35 V8 13.5 headers
     // (known upstream issue: laverdet/isolated-vm#528). Exclude it from rebuild
