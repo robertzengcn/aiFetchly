@@ -1,7 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // Capture registered handlers per channel.
-const handlers = new Map<string, (event: unknown, raw: unknown) => Promise<unknown>>();
+const handlers = new Map<
+  string,
+  (event: unknown, raw: unknown) => Promise<unknown>
+>();
 
 vi.mock("electron", () => ({
   ipcMain: {
@@ -22,7 +25,10 @@ vi.mock("@/modules/token", () => ({
   Token: vi.fn().mockImplementation(() => ({ getValue: tokenGetValue })),
 }));
 
-import { registerLocalAiRuntimeIpcHandlers } from "@/main-process/communication/local-ai-runtime-ipc";
+import {
+  registerLocalAiRuntimeIpcHandlers,
+  resolveCatalogSource,
+} from "@/main-process/communication/local-ai-runtime-ipc";
 import {
   LOCAL_AI_RUNTIME_STATUS,
   LOCAL_AI_RUNTIME_LIST,
@@ -38,8 +44,20 @@ type AnyModule = any;
 
 function makeStubModule(): AnyModule {
   return {
-    listStatuses: vi.fn(async () => [{ runtimeId: "voice-sherpa", state: "not_installed", platform: "linux", arch: "x64" }]),
-    getStatus: vi.fn(async (runtimeId: string) => ({ runtimeId, state: "not_installed", platform: "linux", arch: "x64" })),
+    listStatuses: vi.fn(async () => [
+      {
+        runtimeId: "voice-sherpa",
+        state: "not_installed",
+        platform: "linux",
+        arch: "x64",
+      },
+    ]),
+    getStatus: vi.fn(async (runtimeId: string) => ({
+      runtimeId,
+      state: "not_installed",
+      platform: "linux",
+      arch: "x64",
+    })),
     prepareInstall: vi.fn(async (runtimeId: string) => ({
       operationId: "11111111-2222-3333-4444-555555555555",
       runtimeId,
@@ -67,11 +85,38 @@ function makeStubModule(): AnyModule {
   };
 }
 
-async function invoke(channel: string, raw: unknown): Promise<{ status: boolean; msg: string; data: unknown }> {
+async function invoke(
+  channel: string,
+  raw: unknown
+): Promise<{ status: boolean; msg: string; data: unknown }> {
   const h = handlers.get(channel);
   if (!h) throw new Error(`no handler for ${channel}`);
   return (await h({}, raw)) as { status: boolean; msg: string; data: unknown };
 }
+
+describe("local-ai-runtime catalog source", () => {
+  it("defaults to the public GitHub release catalog", () => {
+    delete process.env.AIFETCHLY_RUNTIME_CATALOG_URL;
+    delete process.env.AIFETCHLY_RUNTIME_RELEASE_REPOSITORY;
+    delete process.env.AIFETCHLY_RUNTIME_RELEASE_TAG;
+
+    expect(resolveCatalogSource()).toEqual({
+      catalogUrl:
+        "https://github.com/robertzengcn/aiFetchly/releases/download/local-ai-runtime-v1.0.0/local-ai-runtimes.json",
+      allowedHosts: ["github.com"],
+    });
+  });
+
+  it("prefers an explicitly configured catalog URL", () => {
+    process.env.AIFETCHLY_RUNTIME_CATALOG_URL =
+      "https://downloads.example.test/catalog.json";
+    expect(resolveCatalogSource()).toEqual({
+      catalogUrl: "https://downloads.example.test/catalog.json",
+      allowedHosts: ["downloads.example.test"],
+    });
+    delete process.env.AIFETCHLY_RUNTIME_CATALOG_URL;
+  });
+});
 
 describe("local-ai-runtime IPC registration", () => {
   let stub: AnyModule;
@@ -79,7 +124,10 @@ describe("local-ai-runtime IPC registration", () => {
   beforeEach(() => {
     handlers.clear();
     stub = makeStubModule();
-    registerLocalAiRuntimeIpcHandlers(() => null, () => stub);
+    registerLocalAiRuntimeIpcHandlers(
+      () => null,
+      () => stub
+    );
   });
 
   it("registers all component-management channels", () => {
@@ -97,7 +145,9 @@ describe("local-ai-runtime IPC registration", () => {
   });
 
   it("routes status to module.getStatus", async () => {
-    const res = await invoke(LOCAL_AI_RUNTIME_STATUS, { runtimeId: "voice-sherpa" });
+    const res = await invoke(LOCAL_AI_RUNTIME_STATUS, {
+      runtimeId: "voice-sherpa",
+    });
     expect(res.status).toBe(true);
     expect(stub.getStatus).toHaveBeenCalledWith("voice-sherpa");
     expect((res.data as { runtimeId: string }).runtimeId).toBe("voice-sherpa");
@@ -131,9 +181,15 @@ describe("local-ai-runtime IPC registration", () => {
   });
 
   it("remove wraps into { removed: true }", async () => {
-    const res = await invoke(LOCAL_AI_RUNTIME_REMOVE, { runtimeId: "voice-sherpa", removeModels: false });
+    const res = await invoke(LOCAL_AI_RUNTIME_REMOVE, {
+      runtimeId: "voice-sherpa",
+      removeModels: false,
+    });
     expect(res.status).toBe(true);
     expect(res.data).toEqual({ removed: true });
-    expect(stub.remove).toHaveBeenCalledWith({ runtimeId: "voice-sherpa", removeModels: false });
+    expect(stub.remove).toHaveBeenCalledWith({
+      runtimeId: "voice-sherpa",
+      removeModels: false,
+    });
   });
 });

@@ -41,32 +41,36 @@ const noInputSchema = lazySchema(() => z.unknown());
 /**
  * Resolve the runtime catalog source (design §11.1 / FR-5):
  *   1. AIFETCHLY_RUNTIME_CATALOG_URL build config
- *   2. ${UPDATESERVER}/runtime/local-ai-runtimes.json
- *   3. (public distributions) a GitHub Release URL
- * Returns "" when none is configured; catalog fetches then fail gracefully and
- * remote features keep working — the base app must start without runtimes.
+ *   2. GitHub Release catalog for the public distribution
+ *
+ * Runtime archives and the catalog are published together as GitHub Release
+ * assets by local-ai-runtime-release.yml. The catalog contains immutable URLs
+ * for the platform-specific archives.
  */
-function resolveCatalogSource(): {
+export function resolveCatalogSource(): {
   catalogUrl: string;
   allowedHosts: string[];
 } {
-  const explicit = process.env.AIFETCHLY_RUNTIME_CATALOG_URL;
-  const updateServer = process.env.UPDATESERVER;
+  const explicit = process.env.AIFETCHLY_RUNTIME_CATALOG_URL?.trim();
+  const repository =
+    process.env.AIFETCHLY_RUNTIME_RELEASE_REPOSITORY?.trim() ||
+    "robertzengcn/aiFetchly";
+  const releaseTag =
+    process.env.AIFETCHLY_RUNTIME_RELEASE_TAG?.trim() ||
+    "local-ai-runtime-v1.0.0";
   const catalogUrl =
     explicit ||
-    (updateServer
-      ? `${updateServer.replace(/\/$/, "")}/runtime/local-ai-runtimes.json`
-      : "");
+    `https://github.com/${repository}/releases/download/${encodeURIComponent(
+      releaseTag
+    )}/local-ai-runtimes.json`;
   const allowedHosts: string[] = [];
-  if (catalogUrl) {
-    try {
-      allowedHosts.push(new URL(catalogUrl).host);
-    } catch {
-      // ignore malformed
-    }
+  try {
+    allowedHosts.push(new URL(catalogUrl).host);
+  } catch {
+    // The catalog service reports malformed configured URLs clearly.
   }
-  // GitHub release asset hosts are served via objects.githubusercontent.com etc.;
-  // keep the allowlist permissive (host-validated by TLS) until catalog signing lands.
+  // GitHub redirects release assets to objects.githubusercontent.com. Downloads
+  // remain HTTPS-validated by LocalAiRuntimeDownloadService.
   return { catalogUrl, allowedHosts };
 }
 
