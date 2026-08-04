@@ -113,8 +113,11 @@ async function main() {
   const prefixByRuntime = Object.fromEntries(Object.entries(ARTIFACT_PREFIX).map(([k, v]) => [v, k]));
 
   // 1. Filename contract: <prefix>-runtime-<platform>-<arch>-<version>.zip
-  const m = fileName.match(/^(embedding|voice)-runtime-(win32|darwin)-(x64|arm64)-\d+\.\d+\.\d+\.zip$/);
+  const m = fileName.match(/^(embedding|voice)-runtime-(win32|darwin|linux)-(x64|arm64)-(\d+\.\d+\.\d+)\.zip$/);
   if (!m) violations.push(`Filename does not match the runtime contract: ${fileName}`);
+  else if (m[3] !== args.platform || m[4] !== args.arch) {
+    violations.push(`Filename target (${m[3]}/${m[4]}) != verification target (${args.platform}/${args.arch})`);
+  }
 
   const { entries, manifestBuf } = await collectArchive(args.archive);
   const entryNames = new Set(entries.map((e) => e.name));
@@ -139,6 +142,9 @@ async function main() {
     }
     if (manifest.platform !== args.platform || manifest.arch !== args.arch) {
       violations.push(`manifest target (${manifest.platform}/${manifest.arch}) != verification target (${args.platform}/${args.arch})`);
+    }
+    if (m && manifest.runtimeVersion !== m[5]) {
+      violations.push(`manifest runtimeVersion (${manifest.runtimeVersion}) != filename (${m[5]})`);
     }
     if (manifest.electronVersion !== args.electronVersion) {
       violations.push(`manifest electronVersion (${manifest.electronVersion}) != ${args.electronVersion}`);
