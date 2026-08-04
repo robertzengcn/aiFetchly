@@ -1,149 +1,146 @@
-# Auto Release Workflow
+# Release Workflow
 
-This document explains how to set up and use the automatic release workflow for the Electron app.
+This document explains how AiFetchly is built, signed, and published to GitHub
+Releases so that installed desktop apps can auto-update through
+[`update.electronjs.org`](https://update.electronjs.org).
 
-## Overview
+> The legacy custom update server (`UPDATESERVER`) has been removed. The update
+> source is now compiled into the app at `src/main-process/updater/AppUpdateService.ts`
+> and targets the public repository `robertzengcn/aiFetchly`. There is no
+> build-time update-server configuration to maintain.
 
-The auto-release workflow (`.github/workflows/release.yml`) automatically builds and releases your Electron app when you push to the `main` branch or create a tag starting with `v*`.
+## How auto-update works
 
-## How It Works
+1. `AppUpdateService.initializeAppUpdates()` runs once at packaged startup
+   (Windows + macOS only; skipped for Microsoft Store / MSIX builds and dev runs).
+2. It calls `update-electron-app` with `repo: "robertzengcn/aiFetchly"` and a
+   1-hour check interval.
+3. `update-electron-app` polls feeds equivalent to:
+   - `https://update.electronjs.org/robertzengcn/aiFetchly/win32-x64/<version>`
+   - `https://update.electronjs.org/robertzengcn/aiFetchly/darwin-x64/<version>`
+   - `https://update.electronjs.org/robertzengcn/aiFetchly/darwin-arm64/<version>`
+4. The service only considers the latest **non-draft, non-prerelease** GitHub
+   Release whose assets satisfy the platform requirements below.
 
-1. **Trigger**: Push to `main` branch or create a tag (e.g., `v1.0.12`)
-2. **Build**: Creates builds for both Windows and macOS
-3. **Release**: Automatically creates a GitHub release with the built artifacts
+## Required release artifacts
 
-## Setup Requirements
+A GitHub Release is auto-updatable only when it contains the right assets.
 
-### 1. GitHub Secrets
+### Windows (Squirrel.Windows)
 
-You need to set up the following secrets in your GitHub repository:
+- `RELEASES` (non-empty)
+- `*-full.nupkg` (at least one)
+- `*.exe` (the Squirrel installer)
+- `*-delta.nupkg` — optional, generated when available (faster updates)
 
-Go to your repository → Settings → Secrets and variables → Actions, then add:
+These are produced by `@electron-forge/maker-squirrel`. Windows installers must
+be signed with the existing `cert.pfx` certificate flow (FR-6.6).
 
-- `VITE_REMOTEADD_TEST`: Your test environment remote address
-- `VITE_LOGIN_URL_TEST`: Your test environment login URL
+### macOS (Squirrel.Mac)
 
-### 2. Repository Permissions
+- `*.zip` — **required**; must contain a code-signed, notarized `.app` bundle.
+  Auto-update works from the ZIP, not the DMG.
+- `*.dmg` — recommended for manual download.
 
-Make sure your repository has the following permissions enabled:
+macOS auto-update **requires** code signing and notarization (FR-7.3/7.4).
+`forge.config.js` enables `osxSign` / `osxNotarize` only when the Apple secrets
+below are present, so dev/test builds stay unsigned.
 
-1. Go to Settings → Actions → General
-2. Under "Workflow permissions", select "Read and write permissions"
-3. Check "Allow GitHub Actions to create and approve pull requests"
+## Required GitHub secrets
 
-## Version Management
+Go to **Settings → Secrets and variables → Actions** and configure:
 
-The workflow automatically manages versioning:
+| Secret | Purpose | Required for |
+| --- | --- | --- |
+| `VITE_LOGIN_URL_PROD` (or `VITE_LOGIN_URL_TEST`) | Login URL embedded at build time | All builds |
+| `CERTIFICATE_PFX_B64` | Windows signing cert (`cert.pfx`), base64-encoded | Signed Windows releases |
+| `CERTIFICATE_PASSWORD` | Password for the Windows cert | Signed Windows releases |
+| `OSX_SIGN_IDENTITY` | "Developer ID Application: ..." identity name | Signed macOS releases |
+| `APPLE_ID` | Apple ID used for notarization | Signed macOS releases |
+| `APPLE_APP_SPECIFIC_PASSWORD` | App-specific password for notarization | Signed macOS releases |
+| `APPLE_TEAM_ID` | Apple Developer Team ID | Signed macOS releases |
 
-- Extracts the base version from `package.json` (e.g., `1.0.11`)
-- Appends the GitHub run number as build number (e.g., `1.0.123`)
-- Creates a release tag (e.g., `v1.0.123`)
+`GITHUB_TOKEN` is provided automatically by GitHub Actions; no extra secret is
+needed for release creation. Repository **Settings → Actions → General →
+Workflow permissions** must allow **Read and write permissions**.
 
-## Workflow Steps
+> If the signing secrets are absent, builds still succeed but produce **unsigned**
+> artifacts, and the macOS `--strict-signing` validation step fails for tag
+> releases. Configure the secrets before cutting a public release.
 
-### 1. Build Windows
-- Sets up Node.js 20.18.3
-- Installs dependencies with `yarn install`
-- Rebuilds native modules (electron, sqlite3, better-sqlite)
-- Builds the Windows installer using `yarn make-win:test`
-- Uploads the build as an artifact
+## Cutting a release
 
-### 2. Build macOS
-- Sets up C++20 environment
-- Configures Xcode
-- Installs dependencies and rebuilds native modules
-- Builds the macOS app using `yarn make-mac:test`
-- Uploads the build as an artifact
+The workflow (`.github/workflows/release.yml`) is **tag-driven**.
 
-### 3. Create Release
-- Downloads both Windows and macOS artifacts
-- Creates a GitHub release with:
-  - Tag name: `v{version}`
-  - Release name: `Release v{version}`
-  - Description with build info and download instructions
-  - All build artifacts attached
+1. Bump the version in `package.json` (e.g. `1.0.11` → `1.0.12`).
+2. Commit the version bump.
+3. Tag the commit with a SemVer tag matching the version: `git tag v1.0.12`.
+4. Push the tag: `git push origin v1.0.12`.
 
-## Usage
+The workflow then:
 
-### Automatic Release (Recommended)
-Simply push to the `main` branch:
-```bash
-git push origin main
+1. `prepare-release` — reads the committed `package.json` version and derives the tag.
+2. `build` — builds Windows x64, macOS arm64, and macOS x64 on native-arch
+   runners, signs them, and runs `scripts/validate-update-artifacts.js`
+   (presence always; `--strict-signing` on macOS tag releases).
+3. `publish-release` — creates a **DRAFT** GitHub Release tagged `v<version>`
+   with `RELEASES`, `*.nupkg`, `*.exe`, `*.zip`, and `*.dmg` attached.
+
+Pushes to `main` also build and validate all platforms, but do **not** publish a
+release — this gives CI signal on every merge without creating releases.
+
+## Publish the draft
+
+Draft releases are invisible to `update.electronjs.org`, so users do not see
+them until you publish:
+
+1. Open the release on GitHub (Releases → the draft tagged `v<version>`).
+2. Inspect that all required assets are attached and that the macOS ZIPs are
+   signed/notarized.
+3. Click **Publish release**.
+
+Only after publishing does the release become an auto-update target.
+
+## Artifact validation
+
+`scripts/validate-update-artifacts.js` runs in CI after every build and fails
+closed when required artifacts are missing:
+
+```
+node scripts/validate-update-artifacts.js --platform win32 --arch x64 --root out/make
+node scripts/validate-update-artifacts.js --platform darwin --arch arm64 --root out/make [--strict-signing]
 ```
 
-The workflow will automatically:
-1. Build both platforms
-2. Create a new release
-3. Upload the installers
+- **Windows**: requires `RELEASES` (non-empty), `*-full.nupkg`, `*.exe`; warns on
+  missing `*-delta.nupkg`.
+- **macOS**: requires `*.zip` containing an `.app` bundle; warns on missing
+  `*.dmg`. `--strict-signing` additionally runs `codesign --verify --deep --strict`
+  and `spctl -a -vv` on the extracted bundle (macOS host only).
 
-### Manual Release with Tag
-Create and push a tag:
-```bash
-git tag v1.0.12
-git push origin v1.0.12
-```
+## Versioning policy
 
-## Customization
-
-### Adding Production Environment
-
-To use production environment variables instead of test:
-
-1. Add production secrets to GitHub:
-   - `VITE_REMOTEADD_PROD`
-   - `VITE_LOGIN_URL_PROD`
-
-2. Create production build scripts in `package.json`:
-   ```json
-   {
-     "scripts": {
-       "make-mac:prod": "cross-env NODE_ENV=production electron-forge make --platform=darwin",
-       "make-win:prod": "cross-env NODE_ENV=production electron-forge make --platform=win32"
-     }
-   }
-   ```
-
-3. Update the workflow to use production scripts and environment variables.
-
-### Release Notes
-
-To add custom release notes, you can:
-
-1. Create a `CHANGELOG.md` file
-2. Modify the workflow to read from it
-3. Or manually edit the release description after creation
-
-### Conditional Releases
-
-The workflow only creates releases when pushing to `main` branch. To modify this behavior, edit the condition in the `create-release` job:
-
-```yaml
-if: github.ref == 'refs/heads/main'
-```
+- Every auto-updatable release must increment `package.json` (FR-8.1).
+- Tags must be valid SemVer, e.g. `v1.0.12` (FR-8.2).
+- Draft and prerelease releases are not treated as stable update targets.
+- Downgrades are not supported; rollback means forward-fixing with a higher
+  version (see the PRD rollback plan).
 
 ## Troubleshooting
 
-### Common Issues
+| Symptom | Check |
+| --- | --- |
+| Users don't see an update | Release must be published (not draft/prerelease) and contain required assets. |
+| Windows update silently fails | `RELEASES` / `*-full.nupkg` missing or `RELEASES` empty. |
+| macOS update fails | Release has a DMG but no signed `*.zip`, or the ZIP is unsigned/not notarized. |
+| macOS build is unsigned in CI | Apple signing secrets not set; `forge.config.js` skips signing without them. |
+| Wrong repo in updater | `repo` is hard-coded to `robertzengcn/aiFetchly` in `AppUpdateService.ts`. |
+| Microsoft Store build self-updates | Should not — gating is on `process.windowsStore` in `AppUpdateService`. |
 
-1. **Build Fails**: Check that all dependencies are properly installed and native modules are rebuilt
-2. **Permission Denied**: Ensure repository has proper workflow permissions
-3. **Missing Secrets**: Verify all required secrets are set in GitHub repository settings
+## Security notes
 
-### Debugging
-
-- Check the Actions tab in your GitHub repository for detailed logs
-- Each job (build-windows, build-macos, create-release) has its own logs
-- Failed steps will show detailed error messages
-
-## Security Notes
-
-- The workflow uses `GITHUB_TOKEN` for creating releases
-- Environment variables are properly secured as GitHub secrets
-- Build artifacts are automatically cleaned up after 90 days
-
-## Next Steps
-
-1. Set up the required GitHub secrets
-2. Push to `main` branch to trigger the first release
-3. Monitor the Actions tab to ensure everything works correctly
-4. Consider setting up production environment variables for actual releases 
+- No GitHub tokens, Apple credentials, or Windows cert material are bundled into
+  the app. `repo: "robertzengcn/aiFetchly"` is public metadata.
+- The updater runs only in the Electron main process and never touches SQLite,
+  TypeORM, Models, Modules, or IPC handlers.
+- Release publication is the critical trust boundary — protect the release
+  workflow with branch/tag protection and environment approvals.
