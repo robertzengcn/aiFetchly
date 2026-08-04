@@ -2104,6 +2104,8 @@ export default {
     market_description: "研究市场并找到机会。",
     contact_description: "为潜在客户提取并丰富联系人画像。",
     email_service_description: "配置 SMTP 和 IMAP 邮件服务连接。",
+    email_receive_description: "查看和管理通过已配置服务接收的入站邮件。",
+    email_reply_description: "审查并审核 AI 生成的自动邮件回复。",
     directory_description: "浏览目录任务和已收集的商家记录。",
     maps_description: "从地图服务中查找本地商家。",
     outreach_description: "管理外联任务、模板、过滤器和回复。",

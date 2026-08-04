@@ -2145,6 +2145,10 @@ export default {
       "見込み客向けの連絡先プロフィールを抽出して充実させます。",
     email_service_description:
       "SMTPおよびIMAPのメールサービス接続を設定します。",
+    email_receive_description:
+      "設定済みのサービスで受信したインバウンドメールを表示・管理します。",
+    email_reply_description:
+      "AIが生成した自動メール返信を確認・監査します。",
     directory_description:
       "ディレクトリタスクと収集済みの企業レコードを確認します。",
     maps_description: "地図プロバイダーから地域ビジネスを見つけます。",

@@ -2181,6 +2181,10 @@ export default {
     contact_description: "Extract and enrich contact profiles for prospects.",
     email_service_description:
       "Configure SMTP and IMAP email service connections.",
+    email_receive_description:
+      "View and manage inbound emails received through configured services.",
+    email_reply_description:
+      "Review and audit AI-generated automatic email replies.",
     directory_description:
       "Browse directory tasks and collected business records.",
     maps_description: "Find local businesses from map providers.",

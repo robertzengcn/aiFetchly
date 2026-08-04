@@ -2179,6 +2179,10 @@ export default {
       "Extrahiere und erweitere Kontaktprofile für Interessenten.",
     email_service_description:
       "Konfiguriere SMTP- und IMAP-E-Mail-Dienstverbindungen.",
+    email_receive_description:
+      "Zeige und verwalte eingehende E-Mails über konfigurierte Dienste.",
+    email_reply_description:
+      "Prüfe und überwache KI-generierte automatische E-Mail-Antworten.",
     directory_description:
       "Durchsuche Verzeichnisaufgaben und gesammelte Unternehmensdaten.",
     maps_description: "Finde lokale Unternehmen über Kartendienste.",

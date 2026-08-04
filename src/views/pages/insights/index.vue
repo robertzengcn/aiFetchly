@@ -73,6 +73,22 @@ const insightItems = computed<InsightItem[]>(() => [
     path: "/emailmarketing/emailservice/list",
   },
   {
+    title: t("route.email_receive") || "Received Emails",
+    description:
+      t("insights.email_receive_description") ||
+      "View and manage inbound emails received through configured services.",
+    icon: "mdi-inbox-arrow-down",
+    path: "/emailmarketing/emailreceive/list",
+  },
+  {
+    title: t("route.ai_auto_replies") || "AI Auto Replies",
+    description:
+      t("insights.email_reply_description") ||
+      "Review and audit AI-generated automatic email replies.",
+    icon: "mdi-robot-outline",
+    path: "/emailmarketing/emailreply/audit/list",
+  },
+  {
     title: t("route.map_scraper") || "Local Business Finder",
     description:
       t("insights.maps_description") ||

@@ -2170,6 +2170,10 @@ export default {
       "Extrayez et enrichissez les profils de contact des prospects.",
     email_service_description:
       "Configurez les connexions de services e-mail SMTP et IMAP.",
+    email_receive_description:
+      "Consultez et gérez les e-mails entrants reçus via les services configurés.",
+    email_reply_description:
+      "Examinez et auditez les réponses automatiques générées par IA.",
     directory_description:
       "Parcourez les tâches d’annuaire et les fiches d’entreprises collectées.",
     maps_description:

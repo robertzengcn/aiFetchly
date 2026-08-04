@@ -2187,6 +2187,10 @@ export default {
       "Extrae y enriquece perfiles de contacto para prospectos.",
     email_service_description:
       "Configura conexiones de servicios de correo SMTP e IMAP.",
+    email_receive_description:
+      "Consulta y gestiona los correos entrantes recibidos a través de los servicios configurados.",
+    email_reply_description:
+      "Revisa y audita las respuestas automáticas de correo generadas por IA.",
     directory_description:
       "Consulta tareas de directorio y registros de negocios recopilados.",
     maps_description: "Encuentra negocios locales desde proveedores de mapas.",
