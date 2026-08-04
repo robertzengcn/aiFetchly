@@ -15,13 +15,58 @@
  * Electron smoke step.)
  */
 import { open } from "yauzl";
-import { basename } from "node:path";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
 import {
   matchesTarget,
   looksPlatformSpecific,
 } from "./lib/localAiRuntime/runtimeClosure.mjs";
 
 const ARTIFACT_PREFIX = { "embedding-xenova": "embedding", "voice-sherpa": "voice" };
+
+/**
+ * Runtime archive filename contract:
+ * `<prefix>-runtime-<platform>-<arch>-<version>.zip`. Kept as a single named
+ * regex so the capture-group indices cannot drift again (a previous version
+ * read the wrong groups and mis-reported platform/arch and an `undefined`
+ * version — see parseRuntimeFileName tests).
+ */
+const RUNTIME_FILE_NAME_RE =
+  /^(embedding|voice)-runtime-(win32|darwin|linux)-(x64|arm64)-(\d+\.\d+\.\d+)\.zip$/;
+
+/**
+ * Parse a runtime archive filename into its contract components, or null if it
+ * does not match the contract. Capture groups map 1:1 to fields:
+ * prefix(1) · platform(2) · arch(3) · version(4). Exported for unit testing.
+ * @param {string} fileName
+ * @returns {{prefix: string, platform: string, arch: string, version: string} | null}
+ */
+export function parseRuntimeFileName(fileName) {
+  const m = String(fileName).match(RUNTIME_FILE_NAME_RE);
+  if (!m) return null;
+  return { prefix: m[1], platform: m[2], arch: m[3], version: m[4] };
+}
+
+/**
+ * Validate the filename contract against the verification target. Returns the
+ * (possibly empty) list of human-readable violations. Exported for unit testing.
+ * @param {string} fileName
+ * @param {string} platform
+ * @param {string} arch
+ * @returns {string[]}
+ */
+export function checkFilenameContract(fileName, platform, arch) {
+  const parsed = parseRuntimeFileName(fileName);
+  if (!parsed) {
+    return [`Filename does not match the runtime contract: ${fileName}`];
+  }
+  if (parsed.platform !== platform || parsed.arch !== arch) {
+    return [
+      `Filename target (${parsed.platform}/${parsed.arch}) != verification target (${platform}/${arch})`,
+    ];
+  }
+  return [];
+}
 
 function parseArgs(argv) {
   const a = { archive: null, platform: null, arch: null, electronVersion: null, nodeModuleAbi: null };
@@ -109,15 +154,12 @@ function isForeignPackage(name, platform, arch) {
 async function main() {
   const args = parseArgs(process.argv);
   const violations = [];
-  const fileName = basename(args.archive);
+  const fileName = path.basename(args.archive);
   const prefixByRuntime = Object.fromEntries(Object.entries(ARTIFACT_PREFIX).map(([k, v]) => [v, k]));
 
   // 1. Filename contract: <prefix>-runtime-<platform>-<arch>-<version>.zip
-  const m = fileName.match(/^(embedding|voice)-runtime-(win32|darwin|linux)-(x64|arm64)-(\d+\.\d+\.\d+)\.zip$/);
-  if (!m) violations.push(`Filename does not match the runtime contract: ${fileName}`);
-  else if (m[3] !== args.platform || m[4] !== args.arch) {
-    violations.push(`Filename target (${m[3]}/${m[4]}) != verification target (${args.platform}/${args.arch})`);
-  }
+  violations.push(...checkFilenameContract(fileName, args.platform, args.arch));
+  const parsed = parseRuntimeFileName(fileName);
 
   const { entries, manifestBuf } = await collectArchive(args.archive);
   const entryNames = new Set(entries.map((e) => e.name));
@@ -136,15 +178,15 @@ async function main() {
 
   // 3. Manifest schema (required fields + identity).
   if (manifest) {
-    const expectedRuntime = prefixByRuntime[m?.[1]];
+    const expectedRuntime = prefixByRuntime[parsed?.prefix];
     if (expectedRuntime && manifest.runtimeId !== expectedRuntime) {
       violations.push(`manifest runtimeId (${manifest.runtimeId}) != filename (${expectedRuntime})`);
     }
     if (manifest.platform !== args.platform || manifest.arch !== args.arch) {
       violations.push(`manifest target (${manifest.platform}/${manifest.arch}) != verification target (${args.platform}/${args.arch})`);
     }
-    if (m && manifest.runtimeVersion !== m[5]) {
-      violations.push(`manifest runtimeVersion (${manifest.runtimeVersion}) != filename (${m[5]})`);
+    if (parsed && manifest.runtimeVersion !== parsed.version) {
+      violations.push(`manifest runtimeVersion (${manifest.runtimeVersion}) != filename (${parsed.version})`);
     }
     if (manifest.electronVersion !== args.electronVersion) {
       violations.push(`manifest electronVersion (${manifest.electronVersion}) != ${args.electronVersion}`);
@@ -189,9 +231,17 @@ async function main() {
   if (violations.length > 0) process.exit(1);
 }
 
-try {
-  await main();
-} catch (err) {
-  console.error(`verify-local-ai-runtime: ${err.message}`);
-  process.exit(1);
+export function isDirectExecution(metaUrl, argvPath = process.argv[1]) {
+  if (!argvPath) return false;
+  return pathToFileURL(path.resolve(argvPath)).href === metaUrl;
+}
+
+// Run only when executed directly, not when imported (e.g. by unit tests).
+if (isDirectExecution(import.meta.url)) {
+  try {
+    await main();
+  } catch (err) {
+    console.error(`verify-local-ai-runtime: ${err.message}`);
+    process.exit(1);
+  }
 }
