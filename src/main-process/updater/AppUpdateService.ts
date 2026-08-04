@@ -5,7 +5,7 @@
  *
  * The service is a thin policy layer. Release discovery, feed URL construction,
  * background download, and the restart prompt remain inside `update-electron-app`
- * and Electron's built-in `autoUpdater`. The service never touches SQLite,
+ * and Electron's built-in auto-updater. The service never touches SQLite,
  * TypeORM, Models, Modules, or IPC handlers.
  *
  * See docs/prd/windows-macos-github-auto-upgrade-technical-design.md §7.
