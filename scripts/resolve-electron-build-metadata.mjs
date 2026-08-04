@@ -12,7 +12,13 @@
  * `@electron/rebuild` (used by rebuild-native-dependencies.mjs) trusts. This is
  * never hand-maintained and avoids spawning the GUI Electron binary, which is
  * unreliable in CI (Electron ignores Node's `-e` flag and the GUI process can
- * hang on a headless Windows runner, surfacing as spawnSync ETIMEDOUT).
+ * hang on a headless runner — on Linux it cannot start at all without an X
+ * server, surfacing as `Could not run Electron to resolve ABI: exit null`).
+ *
+ * Because the hoisted top-level `node-abi` can lag behind new Electron majors
+ * (a stale copy throws on the installed version), resolution prefers
+ * @electron/rebuild's own nested copy first, then the top-level copy, trying
+ * each until one returns a numeric ABI before falling back to the binary.
  *
  * As a fail-closed safety net, if `node-abi` is unavailable or does not yet know
  * the installed Electron version, the script falls back to executing the real
@@ -56,24 +62,74 @@ function resolveElectronBinary(projectRoot) {
 }
 
 /**
- * Resolve the ABI deterministically via `node-abi` (primary path).
- * Returns the numeric ABI string, or `null` if node-abi is unavailable or does
- * not yet know this version (caller falls back to running the binary).
+ * node-abi require-context anchor candidates, in priority order. The
+ * authoritative version→ABI table is the one `@electron/rebuild` actually uses
+ * (its own nested copy); older hoisted top-level releases predate new Electron
+ * majors and throw on unknown versions, so {@link resolveAbiFromNodeAbiLoaders}
+ * keeps trying until one returns a numeric ABI rather than stopping at the
+ * first resolvable copy.
+ * @param {string} projectRoot
+ * @returns {Array<() => unknown>}
  */
-function resolveAbiFromNodeAbi(electronVersion) {
-  let nodeAbi;
-  try {
-    nodeAbi = createRequire(import.meta.url)("node-abi");
-  } catch {
-    return null;
+export function buildNodeAbiLoaders(projectRoot) {
+  const loaders = [];
+  const pushAnchor = (anchor) => {
+    let req;
+    try {
+      req = createRequire(anchor);
+    } catch {
+      return; // anchor unusable
+    }
+    loaders.push(() => req("node-abi"));
+  };
+  // 1. @electron/rebuild's nested node-abi — the same table rebuild trusts.
+  const rebuildPkg = path.join(projectRoot, "node_modules/@electron/rebuild/package.json");
+  if (existsSync(rebuildPkg)) pushAnchor(rebuildPkg);
+  // 2. Hoisted top-level copy.
+  pushAnchor(path.join(projectRoot, "package.json"));
+  // 3. This script's own resolution (legacy fallback).
+  pushAnchor(import.meta.url);
+  return loaders;
+}
+
+/**
+ * Given candidate node-abi loaders, return the first numeric ABI they produce for
+ * `electronVersion`, or null if none know it. A loader whose `getAbi` throws
+ * (a stale node-abi that predates the Electron major) or returns a non-numeric
+ * value is skipped, not fatal. Pure + exported for unit testing.
+ * @param {string} electronVersion
+ * @param {Array<() => unknown>} loaders
+ * @returns {string | null}
+ */
+export function resolveAbiFromNodeAbiLoaders(electronVersion, loaders) {
+  for (const load of loaders) {
+    let nodeAbi = null;
+    try {
+      nodeAbi = load();
+    } catch {
+      nodeAbi = null;
+    }
+    if (!nodeAbi) continue;
+    try {
+      const abi = nodeAbi.getAbi(electronVersion, "electron");
+      if (typeof abi === "string" && /^\d+$/.test(abi)) return abi;
+    } catch {
+      // this copy predates the Electron major; try the next loader
+    }
   }
-  try {
-    const abi = nodeAbi.getAbi(electronVersion, "electron");
-    if (typeof abi === "string" && /^\d+$/.test(abi)) return abi;
-    return null;
-  } catch {
-    return null;
-  }
+  return null;
+}
+
+/**
+ * Resolve the ABI deterministically via `node-abi` (primary path). Returns the
+ * numeric ABI string, or `null` if every installed node-abi copy is unavailable
+ * or does not yet know this version (caller falls back to running the binary).
+ * @param {string} electronVersion
+ * @param {string} projectRoot
+ * @returns {string | null}
+ */
+export function resolveAbiFromNodeAbi(electronVersion, projectRoot) {
+  return resolveAbiFromNodeAbiLoaders(electronVersion, buildNodeAbiLoaders(projectRoot));
 }
 
 /**
@@ -124,7 +180,7 @@ function resolveAbiFromBinary(projectRoot) {
 }
 
 function resolveModuleAbi(electronVersion, projectRoot) {
-  const deterministic = resolveAbiFromNodeAbi(electronVersion);
+  const deterministic = resolveAbiFromNodeAbi(electronVersion, projectRoot);
   if (deterministic) return deterministic;
   return resolveAbiFromBinary(projectRoot);
 }
