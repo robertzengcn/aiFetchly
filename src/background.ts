@@ -3,14 +3,13 @@ import "reflect-metadata";
 // import {ipcMain as ipc} from 'electron-better-ipc';
 import { app, BrowserWindow, Menu, dialog } from "electron";
 // eslint-disable-next-line @typescript-eslint/no-var-requires
-const autoUpdater = require("electron").autoUpdater;
-// eslint-disable-next-line @typescript-eslint/no-var-requires
 const globalShortcut = require("electron").globalShortcut;
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const session = require("electron").session;
 // import { createProtocol } from 'vue-cli-plugin-electron-builder/lib'
 import installExtension, { VUEJS3_DEVTOOLS } from "electron-devtools-installer";
 import { registerCommunicationIpcHandlers } from "./main-process/communication/";
+import { initializeAppUpdates } from "@/main-process/updater/AppUpdateService";
 import { SkillImportService } from "@/service/SkillImportService";
 import { FileOperationTracker } from "@/service/FileOperationTracker";
 import { registerBuiltinHooks } from "@/service/hooks/builtinHooks";
@@ -57,6 +56,14 @@ declare const MAIN_WINDOW_VITE_NAME: string;
 
 // const { ipcRenderer: ipc } = require('electron-better-ipc');
 // const { ipcMain } = require("electron");
+
+// Handle Windows Squirrel install/update/uninstall/obsolete events first.
+// These launch the app with special args; quit immediately so installer
+// events don't run normal startup code or open extra windows.
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+if (require("electron-squirrel-startup")) {
+  (app as unknown as { quit: () => void }).quit();
+}
 
 // Get app name for protocol
 const appName = app.getName();
@@ -414,15 +421,10 @@ function initialize() {
         console.error("Failed to load URL:", error);
       }
     } else {
-      //check update
-      const server = import.meta.env.UPDATESERVER as string;
-      if (server) {
-        const url = `${server}/update/${process.platform}/${(
-          app as any
-        ).getVersion()}`;
-        autoUpdater.setFeedURL({ url });
-        autoUpdater.checkForUpdates();
-      }
+      // Initialize GitHub Releases auto-updater for packaged desktop builds.
+      // The service self-gates on packaging state, platform, and Microsoft
+      // Store channel, and is idempotent across repeated window creation.
+      initializeAppUpdates();
       // console.log('app://./index.html')
       // createProtocol('app')
       // Load the index.html when not in development
