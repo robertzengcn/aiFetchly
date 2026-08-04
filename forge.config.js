@@ -86,6 +86,14 @@ const EXTERNAL_DEPENDENCIES = [
   "xlsx",
   "zod",
   "@puppeteer/browsers",
+  // Runtime dependencies emitted by the main and copied Windows bundles.
+  "ajv",
+  "ajv-formats",
+  "puppeteer-core",
+  "winreg",
+  "ejs",
+  "plist",
+  "isolated-vm",
 ];
 // Generated bundles may emit runtime `require(...)` calls for external packages.
 // packageAfterPrune discovers every generated JavaScript bundle instead of relying
@@ -136,6 +144,7 @@ function getRuntimePackageName(importId) {
     importId.startsWith(".") ||
     importId.startsWith("/") ||
     importId === "electron" ||
+    importId.startsWith("@/") ||
     NODE_BUILTINS.has(importId)
   ) {
     return null;
