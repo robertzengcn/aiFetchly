@@ -23,7 +23,8 @@ beforeEach(() => {
     }
   }
   (SqliteDb as unknown as { instance: unknown }).instance = null;
-  (SqliteDb as unknown as { currentDbPath: string | null }).currentDbPath = null;
+  (SqliteDb as unknown as { currentDbPath: string | null }).currentDbPath =
+    null;
   (SqliteDb as unknown as { initPromise: unknown }).initPromise = null;
   process.env.AIFETCHLY_TEST_DBPATH = tmpDir;
 });
@@ -37,6 +38,29 @@ vi.mock("@/modules/token", () => ({
 }));
 
 describe("AIChatScheduledLoopModule.create", () => {
+  it("formats the confirmation next run in local time, not UTC", async () => {
+    const mod = new AIChatScheduledLoopModule();
+    await SqliteDb.ensureInitialized();
+    const response = await mod.create({
+      conversationId: "v2-conv-timezone",
+      rawCommand: "/loop 1m check email",
+      prompt: "check email",
+      intervalMs: 60_000,
+      maxRuns: 24,
+      maxLifetimeMs: 24 * 60 * 60 * 1000,
+    });
+    const { AIChatV2Module } = await import("@/modules/AIChatV2Module");
+    const messages = await new AIChatV2Module().getConversationMessages(
+      "v2-conv-timezone"
+    );
+    const confirmation = messages.find(
+      (message) => message.messageId === response.resultMessageId
+    );
+    expect(confirmation?.content).toMatch(
+      /Next run: \d{4}-\d{2}-\d{2} \d{2}:\d{2}\./
+    );
+  });
+
   it("creates a loop bound to an existing v2 conversation and returns a view", async () => {
     const mod = new AIChatScheduledLoopModule();
     await SqliteDb.ensureInitialized();
@@ -122,7 +146,9 @@ describe("AIChatScheduledLoopModule.create", () => {
     ).rejects.toMatchObject({ code: "INVALID_INTERVAL" });
 
     const schedules = new ScheduleTaskModel(tmpDir);
-    const found = await schedules.findLatestChatScheduledLoop("v2-conv-validate");
+    const found = await schedules.findLatestChatScheduledLoop(
+      "v2-conv-validate"
+    );
     expect(found).toBeNull();
   });
 

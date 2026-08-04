@@ -70,6 +70,22 @@ function describeLifetime(ms: number): string {
   return m === 1 ? "1 minute" : `${m} minutes`;
 }
 
+/** Format a schedule timestamp in the user's local wall-clock timezone. */
+function formatLocalDateTime(value: Date): string {
+  const parts = new Intl.DateTimeFormat("sv-SE", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(value);
+  const fields = Object.fromEntries(
+    parts.map((part) => [part.type, part.value])
+  );
+  return `${fields.year}-${fields.month}-${fields.day} ${fields.hour}:${fields.minute}`;
+}
+
 /**
  * Main-process orchestration for AI Chat V2 scheduled loops.
  *
@@ -257,9 +273,11 @@ export class AIChatScheduledLoopModule extends BaseModule {
     if (schedule.is_active) {
       await this.scheduleModel.stopWithReason(schedule.id, "STOPPED");
     }
-    await this.taskModel.deactivateChatScheduledTask(schedule.task_id).catch(() => {
-      /* task may already be inactive; idempotent */
-    });
+    await this.taskModel
+      .deactivateChatScheduledTask(schedule.task_id)
+      .catch(() => {
+        /* task may already be inactive; idempotent */
+      });
     const refreshed = await this.scheduleModel.getScheduleById(schedule.id);
     return refreshed ? this.toView(refreshed) : null;
   }
@@ -314,7 +332,7 @@ export class AIChatScheduledLoopModule extends BaseModule {
     maxLifetimeMs: number,
     nextRunAt: Date
   ): string {
-    const next = nextRunAt.toISOString().replace("T", " ").slice(0, 16);
+    const next = formatLocalDateTime(nextRunAt);
     return (
       `Scheduled every ${describeInterval(intervalMs)}. ` +
       `Maximum ${maxRuns} runs or ${describeLifetime(maxLifetimeMs)}. ` +
