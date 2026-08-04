@@ -13,6 +13,7 @@ import { SortBy, TaskStatus } from "@/entityTypes/commonType";
 import { EmailItem } from "@/entityTypes/emailmarketingType";
 import { BaseModule } from "@/modules/baseModule";
 import {
+  getPackagedWorkerNodePath,
   getPackagedWorkerPathCandidates,
   resolvePackagedWorkerPath,
 } from "@/utils/packagedWorkerPath";
@@ -174,12 +175,19 @@ export class EmailSearchTaskModule extends BaseModule {
       }
     }
 
+    const packagedNodePath = electronProcess.resourcesPath
+      ? getPackagedWorkerNodePath(
+          electronProcess.resourcesPath,
+          process.env.NODE_PATH
+        )
+      : process.env.NODE_PATH;
     const child = utilityProcess.fork(childPath, [], {
       stdio: "pipe",
       execArgv: [],
       env: {
         ...process.env,
         NODE_OPTIONS: "",
+        NODE_PATH: packagedNodePath,
         TWOCAPTCHA_TOKEN: twoCaptchaTokenvalue,
         ELECTRON_APP_NAME: app.getName(),
         ELECTRON_USER_DATA_PATH: app.getPath("userData"),

@@ -27,6 +27,7 @@ import * as fs from "fs";
 import { SortBy } from "@/entityTypes/commonType";
 import { BaseModule } from "@/modules/baseModule";
 import {
+  getPackagedWorkerNodePath,
   getPackagedWorkerPathCandidates,
   resolvePackagedWorkerPath,
 } from "@/utils/packagedWorkerPath";
@@ -354,12 +355,19 @@ export class SearchModule extends BaseModule {
     //console.log("two captcha token value is "+twoCaptchaTokenvalue)
     //console.log("local browser excute path is "+localBrowserexcutepath)
     //console.log("user data dir is "+userDataDir)
+    const packagedNodePath = electronProcess.resourcesPath
+      ? getPackagedWorkerNodePath(
+          electronProcess.resourcesPath,
+          process.env.NODE_PATH
+        )
+      : process.env.NODE_PATH;
     const child = utilityProcess.fork(childPath, [], {
       stdio: "pipe",
       execArgv: ["puppeteer-cluster:*"],
       env: {
         ...process.env,
         NODE_OPTIONS: "",
+        NODE_PATH: packagedNodePath,
         TWOCAPTCHA_TOKEN: twoCaptchaTokenvalue,
         LOCAL_BROWSER_EXCUTE_PATH: localBrowserexcutepath,
         //USEDATADIR: userDataDir
