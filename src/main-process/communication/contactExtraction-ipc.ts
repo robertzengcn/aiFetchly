@@ -5,9 +5,8 @@
  * for contact extraction functionality.
  */
 
-import { ipcMain, BrowserWindow } from "electron";
+import { app, ipcMain, BrowserWindow } from "electron";
 import { spawn, ChildProcess } from "child_process";
-import * as path from "path";
 import { v4 as uuidv4 } from "uuid";
 import { ContactInfoModule } from "@/modules/ContactInfoModule";
 import {
@@ -21,6 +20,7 @@ import { Token } from "@/modules/token";
 import { TOKENNAME, USER_AI_ENABLED } from "@/config/usersetting";
 import type { ModuleExecutionContext } from "@/entityTypes/skillTypes";
 import { ToolExecutor } from "@/service/ToolExecutor";
+import { getContactExtractionWorkerPath } from "./contactExtractionWorkerPath";
 import {
   contactExtractionWorkerOutboundSchema,
   type ContactExtractionWorkerOutbound,
@@ -64,9 +64,10 @@ let contactExtractionWorker: ChildProcess | null = null;
  * Spawn the contact extraction worker process
  */
 function spawnWorker(): ChildProcess {
-  // Use compiled JS file from .vite/build directory
-  // __dirname already points to .vite/build, so just append the filename
-  const workerPath = path.join(__dirname, "ContactExtractionWorker.js");
+  const workerPath = getContactExtractionWorkerPath();
+  if (!workerPath) {
+    throw new Error("Contact extraction worker file not found");
+  }
 
   console.log("Spawning contact extraction worker...");
 
@@ -84,10 +85,21 @@ function spawnWorker(): ChildProcess {
     console.warn("Failed to read token for worker:", error);
   }
 
-  const worker = spawn("node", [workerPath], {
+  // Spawn the worker with Electron's own binary in RUN_AS_NODE mode (the same
+  // approach GoogleMapsModule uses) instead of the system `node`. Plain `node`
+  // cannot read app.asar, so the worker's external requires (uuid, zod, ...)
+  // would fail in the packaged app. RUN_AS_NODE gives us the asar fs patch and
+  // the packaged app.asar/node_modules. Electron API surface is unavailable, so
+  // the worker receives auth/AI state via env vars (WORKER_AUTH_TOKEN,
+  // WORKER_AI_ENABLED) and communicates over the ipc stdio channel.
+  const worker = spawn(process.execPath, [workerPath], {
     stdio: ["pipe", "pipe", "pipe", "ipc"],
     env: {
       ...process.env,
+      NODE_OPTIONS: "",
+      ELECTRON_RUN_AS_NODE: "1",
+      ELECTRON_APP_NAME: app.getName(),
+      ELECTRON_USER_DATA_PATH: app.getPath("userData"),
       WORKER_TYPE: "contact-extraction",
       WORKER_AUTH_TOKEN: workerAuthToken,
       WORKER_AI_ENABLED: workerAiEnabled,
@@ -263,7 +275,18 @@ export async function extractContactFromUrls(
   };
   collector.promise.then(cleanup, cleanup);
 
-  ensureWorkerStarted();
+  try {
+    ensureWorkerStarted();
+  } catch (error) {
+    pendingUrlExtractions.delete(requestId);
+    collector.rejectWithError(
+      error instanceof Error
+        ? error
+        : new Error("Contact extraction worker is not available")
+    );
+    return collector.promise;
+  }
+
   if (contactExtractionWorker?.send) {
     contactExtractionWorker.send({
       type: "extract-contact-from-urls",

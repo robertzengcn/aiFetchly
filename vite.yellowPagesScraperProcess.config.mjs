@@ -9,11 +9,6 @@ import { optionalChecker } from './vite-checker-toggle.mjs';
 import { nodeResolve } from '@rollup/plugin-node-resolve';
 import sourcemaps from 'rollup-plugin-sourcemaps';
 
-const nodeBuiltins = [
-    ...builtinModules,
-    ...builtinModules.map((moduleName) => `node:${moduleName}`),
-];
-
 function emptyModulesPlugin() {
     const emptyModules = [
         '@sap/hana-client/extension/Stream',
@@ -43,6 +38,11 @@ function emptyModulesPlugin() {
     };
 }
 
+const nodeBuiltins = [
+    ...builtinModules,
+    ...builtinModules.map((moduleName) => `node:${moduleName}`),
+];
+
 export default ({ mode }) => {
     process.env = { ...process.env, ...loadEnv(mode, process.cwd()) };
     return defineConfig({
@@ -65,21 +65,23 @@ export default ({ mode }) => {
         },
         build: {
             rollupOptions: {
-                // input: {
-                //     YellowPagesScraper: path.resolve(__dirname, 'src/childprocess/YellowPagesScraper.ts')
-                // },
-                // output: {
-                //     dir: 'dist/childprocess',
-                //     entryFileNames: 'YellowPagesScraper.js',
-                //     format: 'cjs'
-                // },
+                input: {
+                    YellowPagesScraperProcess: path.resolve(
+                        __dirname,
+                        'src/childprocess/YellowPagesScraperProcess.ts'
+                    )
+                },
+                output: {
+                    dir: 'dist/childprocess',
+                    entryFileNames: 'YellowPagesScraperProcess.js',
+                    format: 'cjs'
+                },
                 external: [
                     ...nodeBuiltins,
                     'sqlite3',
                     'better-sqlite3',
                     'bindings',
-                    'typeorm',
-                    'sanitize-html'
+                    'typeorm'
                 ],
             },
             sourcemap: true,
@@ -90,4 +92,3 @@ export default ({ mode }) => {
         },
     })
 }
-

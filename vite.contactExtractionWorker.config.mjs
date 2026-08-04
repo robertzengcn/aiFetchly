@@ -18,7 +18,9 @@ function emptyModulesPlugin() {
         'mysql', 'mysql2',
         'pg', 'pg-query-stream', 'pg-native',
         'mongodb', 'mssql', 'oracledb',
-        'hdb-pool', 'redis', 'ioredis', 'sql.js'
+        'hdb-pool', 'redis', 'ioredis', 'sql.js',
+        // Worker processes use a dedicated AI client and must not load
+        // main-process provider storage.
     ];
 
     return {
@@ -57,6 +59,14 @@ export default ({ mode }) => {
         resolve: {
             alias: {
                 "@": path.resolve(__dirname, "./src"),
+                electron: path.resolve(
+                    __dirname,
+                    "src/childprocess/electron-shim/electron.js"
+                ),
+                "electron-store": path.resolve(
+                    __dirname,
+                    "src/childprocess/electron-shim/electron-store.js"
+                ),
             },
             conditions: ['node'],
         },

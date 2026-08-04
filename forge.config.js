@@ -1,11 +1,20 @@
 const path = require("path");
 const dotenv = require("dotenv");
 const { spawnSync } = require("node:child_process");
-const { existsSync, readdirSync, rmdirSync, statSync } = require("node:fs");
+const {
+  cpSync,
+  existsSync,
+  readFileSync,
+  readdirSync,
+  rmdirSync,
+  statSync,
+} = require("node:fs");
+const { builtinModules } = require("node:module");
 const { join, normalize } = require("node:path");
 const { Walker, DepType } = require("flora-colossus");
 let nativeModuleDependenciesToPackage = [];
 const EXTERNAL_DEPENDENCIES = [
+  "electron-store",
   "realm",
   "electron-squirrel-startup",
   "update-electron-app",
@@ -45,7 +54,82 @@ const EXTERNAL_DEPENDENCIES = [
   // base app — they ship as downloadable runtimes (PRD FR-16, design §26.7).
   // "@xenova/transformers", "onnxruntime-node", "onnxruntime-common",
   // "sharp", "sherpa-onnx-node"
+  // Runtime deps required by the packaged ContactExtractionWorker bundle
+  // (vite.contactExtractionWorker.config.mjs keeps node_modules external).
+  // The worker is spawned with Electron's RUN_AS_NODE runtime, so these must
+  // be present in app.asar/node_modules. Keep in sync with the bundle's
+  // runtime requires (verified by verifyGeneratedRuntimeRequires).
+  "uuid",
+  "adm-zip",
+  "chardet",
+  "cron",
+  "cron-validator",
+  "debug",
+  "diff",
+  "dotenv",
+  "fast-glob",
+  "form-data",
+  "iconv-lite",
+  "imapflow",
+  "isbinaryfile",
+  "mailparser",
+  "mammoth",
+  "node-fetch",
+  "node-machine-id",
+  "papaparse",
+  "pdf-lib",
+  "pdf2md-ts",
+  "picomatch",
+  "turndown",
+  "write-file-atomic",
+  "ws",
+  "xlsx",
+  "zod",
+  "@puppeteer/browsers",
+  // Runtime dependencies emitted by the main and copied Windows bundles.
+  "ajv",
+  "ajv-formats",
+  "puppeteer-core",
+  "winreg",
+  "ejs",
+  "plist",
+  "isolated-vm",
 ];
+// Generated bundles may emit runtime `require(...)` calls for external packages.
+// packageAfterPrune discovers every generated JavaScript bundle instead of relying
+// on a hand-maintained worker allow-list.
+function getGeneratedRuntimeRequireBundles(buildPath) {
+  const bundleRoots = [
+    join(buildPath, ".vite", "build"),
+    join(buildPath, "dist", "childprocess"),
+  ];
+  const bundles = [];
+
+  function collectBundles(directoryPath) {
+    if (!existsSync(directoryPath)) {
+      return;
+    }
+
+    for (const fileName of readdirSync(directoryPath)) {
+      const filePath = join(directoryPath, fileName);
+      if (statSync(filePath).isDirectory()) {
+        collectBundles(filePath);
+      } else if (fileName.endsWith(".js")) {
+        bundles.push(filePath);
+      }
+    }
+  }
+
+  for (const bundleRoot of bundleRoots) {
+    collectBundles(bundleRoot);
+  }
+
+  return bundles;
+}
+const NODE_BUILTINS = new Set([
+  ...builtinModules,
+  ...builtinModules.map((moduleName) => `node:${moduleName}`),
+]);
 
 function getPackageRootName(packageName) {
   if (packageName.startsWith("@")) {
@@ -53,6 +137,61 @@ function getPackageRootName(packageName) {
     return name ? `${scope}/${name}` : packageName;
   }
   return packageName.split("/")[0];
+}
+
+function getRuntimePackageName(importId) {
+  if (
+    importId.startsWith(".") ||
+    importId.startsWith("/") ||
+    importId === "electron" ||
+    importId.startsWith("@/") ||
+    NODE_BUILTINS.has(importId)
+  ) {
+    return null;
+  }
+  return getPackageRootName(importId);
+}
+
+function extractRuntimePackageRequires(filePath) {
+  const source = readFileSync(filePath, "utf-8");
+  const requirePattern = /\brequire\(\s*["']([^"']+)["']\s*\)/g;
+  const packageNames = new Set();
+  let match = requirePattern.exec(source);
+  while (match !== null) {
+    const packageName = getRuntimePackageName(match[1]);
+    if (packageName) {
+      packageNames.add(packageName);
+    }
+    match = requirePattern.exec(source);
+  }
+  return packageNames;
+}
+
+function hasPackagedNodeModule(buildPath, packageName) {
+  return existsSync(
+    join(buildPath, "node_modules", ...packageName.split("/"), "package.json")
+  );
+}
+
+function verifyGeneratedRuntimeRequires(buildPath) {
+  const missing = [];
+
+  for (const bundlePath of getGeneratedRuntimeRequireBundles(buildPath)) {
+    const bundleFile = path.basename(bundlePath);
+    for (const packageName of extractRuntimePackageRequires(bundlePath)) {
+      if (!hasPackagedNodeModule(buildPath, packageName)) {
+        missing.push(`${bundleFile}: ${packageName}`);
+      }
+    }
+  }
+
+  if (missing.length > 0) {
+    throw new Error(
+      `Packaged app is missing runtime dependencies required by generated bundles: ${missing.join(
+        ", "
+      )}. Add the package root to EXTERNAL_DEPENDENCIES in forge.config.js.`
+    );
+  }
 }
 
 //import { ForgeConfig } from '@electron-forge/shared-types';
@@ -131,6 +270,20 @@ function fixInteropNamespaceDefault(viteBuildDir) {
   }
 }
 
+function copyBuiltChildProcesses(buildPath) {
+  const sourcePath = join(__dirname, "dist", "childprocess");
+  if (!existsSync(sourcePath)) {
+    console.warn(
+      `No built childprocess directory found at ${sourcePath}; skipping package copy.`
+    );
+    return;
+  }
+
+  const targetPath = join(buildPath, "dist", "childprocess");
+  cpSync(sourcePath, targetPath, { recursive: true });
+  console.log(`Copied built childprocess files into package: ${targetPath}`);
+}
+
 module.exports = {
   packagerConfig: {
     icon: "./src/assets/images/icon",
@@ -191,6 +344,15 @@ module.exports = {
       if (!KEEP_FILE.keep && filePath.startsWith("/node_modules/")) {
         // check if matches any of the external dependencies
         for (const dep of nativeModuleDependenciesToPackage) {
+          const scopeName = dep.startsWith("@") ? dep.split("/")[0] : null;
+          if (
+            scopeName &&
+            (filePath === `/node_modules/${scopeName}/` ||
+              filePath === `/node_modules/${scopeName}`)
+          ) {
+            KEEP_FILE.keep = true;
+            break;
+          }
           if (
             filePath === `/node_modules/${dep}/` ||
             filePath === `/node_modules/${dep}`
@@ -487,6 +649,10 @@ module.exports = {
             config: "vite.yellowPages.config.mjs",
           },
           {
+            entry: "src/childprocess/YellowPagesScraperProcess.ts",
+            config: "vite.yellowPagesScraperProcess.config.mjs",
+          },
+          {
             entry: "src/childprocess/websiteContentScraper.ts",
             config: "vite.websiteContentScraper.config.mjs",
           },
@@ -587,6 +753,7 @@ module.exports = {
     },
     packageAfterCopy: async (_forgeConfig, buildPath) => {
       fixInteropNamespaceDefault(join(buildPath, ".vite", "build"));
+      copyBuiltChildProcesses(buildPath);
     },
     //   packageAfterPrune: async (_config, buildPath) => {
     //     const gypPath = path.join(
@@ -660,6 +827,7 @@ module.exports = {
           }
         }
       }
+      verifyGeneratedRuntimeRequires(buildPath);
     },
   },
 };

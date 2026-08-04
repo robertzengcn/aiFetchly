@@ -12,6 +12,11 @@ import {
   type LocalEmbeddingReadyPayload,
 } from "@/childprocess/embedding/LocalEmbeddingWorkerTypes";
 import { underlyingModelFromModelId } from "@/childprocess/embedding/LocalEmbeddingValidation";
+import {
+  getPackagedWorkerPathCandidates,
+  resolvePackagedWorkerPath,
+  type PackagedWorkerPathRuntime,
+} from "@/utils/packagedWorkerPath";
 
 /**
  * Minimal shape of an Electron `UtilityProcess` as used by this client. Abstracted
@@ -430,22 +435,33 @@ export class LocalEmbeddingWorkerClient {
     if (this.cachedWorkerPath) {
       return this.cachedWorkerPath;
     }
-    const candidates = [
-      path.join(__dirname, "childprocess", "LocalEmbeddingWorker.js"),
-      path.join(__dirname, "../childprocess", "LocalEmbeddingWorker.js"),
-      path.join(process.cwd(), "dist/childprocess", "LocalEmbeddingWorker.js"),
-      path.join(
-        process.cwd(),
-        ".vite/build/childprocess",
-        "LocalEmbeddingWorker.js"
-      ),
-    ];
-    for (const candidate of candidates) {
-      if (fs.existsSync(candidate)) {
-        this.cachedWorkerPath = candidate;
-        return candidate;
-      }
+    const electronProcess = process as NodeJS.Process & {
+      resourcesPath?: string;
+    };
+    const runtime: PackagedWorkerPathRuntime = {
+      dirname: __dirname,
+      cwd: process.cwd(),
+      resourcesPath: electronProcess.resourcesPath,
+      existsSync: fs.existsSync,
+    };
+    const options = {
+      dirnameRelativePaths: [
+        "LocalEmbeddingWorker.js",
+        path.join("childprocess", "LocalEmbeddingWorker.js"),
+        path.join("..", "childprocess", "LocalEmbeddingWorker.js"),
+      ],
+      cwdRelativePaths: [
+        path.join("dist", "childprocess", "LocalEmbeddingWorker.js"),
+        path.join(".vite", "build", "LocalEmbeddingWorker.js"),
+        path.join(".vite", "build", "childprocess", "LocalEmbeddingWorker.js"),
+      ],
+    };
+    const resolvedPath = resolvePackagedWorkerPath(runtime, options);
+    if (resolvedPath) {
+      this.cachedWorkerPath = resolvedPath;
+      return resolvedPath;
     }
+    const candidates = getPackagedWorkerPathCandidates(runtime, options);
     throw new Error(
       `Local embedding worker file not found. Tried: ${candidates.join(", ")}`
     );

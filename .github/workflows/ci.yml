@@ -64,6 +64,11 @@ jobs:
       - name: Run main process unit tests
         run: yarn testmain
 
+      - name: Build Linux package for worker smoke test
+        run: yarn package
+
+      - name: Resolve packaged worker dependencies
+        run: yarn verify-packaged-childprocess
       - name: Run utility code unit tests
         run: yarn vitest --config vite.utilityCode.ci.config.mjs --run
 

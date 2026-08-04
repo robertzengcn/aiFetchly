@@ -26,6 +26,11 @@ import * as path from "path";
 import * as fs from "fs";
 import { SortBy } from "@/entityTypes/commonType";
 import { BaseModule } from "@/modules/baseModule";
+import {
+  getPackagedWorkerNodePath,
+  getPackagedWorkerPathCandidates,
+  resolvePackagedWorkerPath,
+} from "@/utils/packagedWorkerPath";
 import { SearchTaskProxyModel } from "@/model/SearchTaskProxy.model";
 import { SearchTaskProxyEntity } from "@/entity/SearchTaskProxy.entity";
 //import { SearchTaskEntity } from "@/entity/SearchTask.entity";
@@ -268,9 +273,25 @@ export class SearchModule extends BaseModule {
       cookies: taskEntity.cookies,
     };
 
-    const childPath = path.join(__dirname, "taskCode.js");
-    if (!fs.existsSync(childPath)) {
-      throw new Error("child js path not exist for the path " + childPath);
+    const electronProcess = process as NodeJS.Process & {
+      resourcesPath?: string;
+    };
+    const runtime = {
+      dirname: __dirname,
+      cwd: process.cwd(),
+      resourcesPath: electronProcess.resourcesPath,
+      existsSync: fs.existsSync,
+    };
+    const options = {
+      dirnameRelativePaths: ["taskCode.js"],
+      cwdRelativePaths: [path.join(".vite", "build", "taskCode.js")],
+    };
+    const childPath = resolvePackagedWorkerPath(runtime, options);
+    if (!childPath) {
+      const candidates = getPackagedWorkerPathCandidates(runtime, options);
+      throw new Error(
+        `child js path not exist. Tried: ${candidates.join(", ")}`
+      );
     }
     const { port1, port2 } = new MessageChannelMain();
     // const tokenService=new Token()
@@ -334,12 +355,19 @@ export class SearchModule extends BaseModule {
     //console.log("two captcha token value is "+twoCaptchaTokenvalue)
     //console.log("local browser excute path is "+localBrowserexcutepath)
     //console.log("user data dir is "+userDataDir)
+    const packagedNodePath = electronProcess.resourcesPath
+      ? getPackagedWorkerNodePath(
+          electronProcess.resourcesPath,
+          process.env.NODE_PATH
+        )
+      : process.env.NODE_PATH;
     const child = utilityProcess.fork(childPath, [], {
       stdio: "pipe",
       execArgv: ["puppeteer-cluster:*"],
       env: {
         ...process.env,
         NODE_OPTIONS: "",
+        NODE_PATH: packagedNodePath,
         TWOCAPTCHA_TOKEN: twoCaptchaTokenvalue,
         LOCAL_BROWSER_EXCUTE_PATH: localBrowserexcutepath,
         //USEDATADIR: userDataDir

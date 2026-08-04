@@ -1,7 +1,7 @@
 "use strict";
 // NOTE: This service intentionally does NOT import HttpClient to avoid circular dependency.
 // HttpClient uses TokenRefreshService for token refresh, so TokenRefreshService uses raw fetch() instead.
-import { Token } from "@/modules/token";
+import type { Token } from "@/modules/token";
 import {
   TOKENNAME,
   REFRESHTOKEN,
@@ -105,7 +105,7 @@ export function isTransientBackendError(error: unknown): boolean {
  */
 export class TokenRefreshService {
   private _baseUrl: string;
-  private _tokenService: Token;
+  private _tokenService: Token | null = null;
 
   // --- Process-wide refresh serialization ---
   /**
@@ -152,7 +152,6 @@ export class TokenRefreshService {
     }
 
     this._baseUrl = loginUrl + "/apis";
-    this._tokenService = new Token();
   }
 
   // =========================================================================
@@ -239,6 +238,7 @@ export class TokenRefreshService {
    * tests without relying on the 60s background timer.
    */
   static async performAutoRefreshCheck(): Promise<void> {
+    const { Token } = await import("@/modules/token");
     const tokenService = new Token();
     const now = Date.now();
 
@@ -450,15 +450,18 @@ export class TokenRefreshService {
   private async _performRefreshNetwork(): Promise<
     CommonApiresp<TokenRefreshData>
   > {
+    const tokenService =
+      this._tokenService ?? new (await import("@/modules/token")).Token();
+    this._tokenService = tokenService;
     // Get refresh token from storage
-    const refreshToken = this._tokenService.getValue(REFRESHTOKEN);
+    const refreshToken = tokenService.getValue(REFRESHTOKEN);
 
     if (!refreshToken || refreshToken.trim().length === 0) {
       throw new RefreshTokenInvalidError("Refresh token not found");
     }
 
     // Check if refresh token has expired before making the request
-    const refreshExpiryStr = this._tokenService.getValue(REFRESHTOKENEXPIRY);
+    const refreshExpiryStr = tokenService.getValue(REFRESHTOKENEXPIRY);
     if (refreshExpiryStr) {
       const refreshExpiry = parseInt(refreshExpiryStr, 10);
       if (!isNaN(refreshExpiry) && Date.now() >= refreshExpiry) {
@@ -511,12 +514,12 @@ export class TokenRefreshService {
 
     // Update stored tokens if refresh was successful
     if (response.data) {
-      this._tokenService.setValue(TOKENNAME, response.data.accessToken);
+      tokenService.setValue(TOKENNAME, response.data.accessToken);
 
       // Update access token expiry
       if (response.data.expiresIn) {
         const newExpiry = Date.now() + response.data.expiresIn * 1000;
-        this._tokenService.setValue(TOKENEXPIRY, newExpiry.toString());
+        tokenService.setValue(TOKENEXPIRY, newExpiry.toString());
       }
 
       // Handle refresh token rotation (backend may return new refresh token)
@@ -524,7 +527,7 @@ export class TokenRefreshService {
         response.data.refreshToken &&
         response.data.refreshToken.trim().length > 0
       ) {
-        this._tokenService.setValue(REFRESHTOKEN, response.data.refreshToken);
+        tokenService.setValue(REFRESHTOKEN, response.data.refreshToken);
       }
 
       if (
@@ -534,10 +537,7 @@ export class TokenRefreshService {
       ) {
         const newRefreshExpiry =
           Date.now() + response.data.refreshExpiresIn * 1000;
-        this._tokenService.setValue(
-          REFRESHTOKENEXPIRY,
-          newRefreshExpiry.toString()
-        );
+        tokenService.setValue(REFRESHTOKENEXPIRY, newRefreshExpiry.toString());
       }
     }
 

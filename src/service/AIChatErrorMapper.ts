@@ -11,6 +11,40 @@ import { AIProviderError } from "./aiProvider/AIProviderError";
 export const QUOTA_EXHAUSTED_SENTINEL = "QUOTA_EXHAUSTED";
 
 /**
+ * Build a single-line diagnostic for an unknown error: the top-level error's
+ * name, message, code, and stack, plus its `cause` chain. Errors that slip
+ * through user-safe mapping (e.g. undici's bare "terminated") are logged with
+ * this detail so the origin is traceable in the app logs.
+ */
+export function describeErrorDetail(err: unknown): string {
+  const parts: string[] = [];
+  let current: unknown = err;
+  let depth = 0;
+  while (current !== undefined && current !== null && depth < 6) {
+    const label = depth === 0 ? "error" : `cause[${depth - 1}]`;
+    if (current instanceof Error) {
+      parts.push(
+        `${label}: name=${current.name} message=${JSON.stringify(
+          current.message
+        )}`
+      );
+      const code = (current as { code?: unknown }).code;
+      if (code !== undefined) {
+        parts.push(`${label}.code=${JSON.stringify(code)}`);
+      }
+      if (depth === 0 && current.stack) {
+        parts.push(`${label}.stack=${current.stack}`);
+      }
+    } else {
+      parts.push(`${label}: ${String(current)}`);
+    }
+    current = (current as { cause?: unknown }).cause;
+    depth += 1;
+  }
+  return parts.join(" | ");
+}
+
+/**
  * Map unknown errors to user-safe messages.
  * Raw server bodies, stack traces, and sensitive request details
  * are logged but never surfaced to the renderer.
@@ -69,7 +103,9 @@ export function userSafeError(err: unknown): string {
     ) {
       return "The AI service is busy or had a transient issue. Please try again in a moment.";
     }
-    console.error("[ai-chat-v2] unmapped error:", msg);
+    console.error(
+      `[ai-chat-v2] unmapped error: ${msg} — ${describeErrorDetail(err)}`
+    );
     return "An unexpected error occurred. Please try again.";
   }
   return "Unknown error";

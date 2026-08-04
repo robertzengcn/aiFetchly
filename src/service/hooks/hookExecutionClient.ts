@@ -20,7 +20,9 @@
 // gates on HookCommandTrustService.isTrusted); this client never re-gates.
 
 import { fork, type ChildProcess, type ForkOptions } from "child_process";
+import * as fs from "fs";
 import * as path from "path";
+import { resolvePackagedWorkerPath } from "@/utils/packagedWorkerPath";
 import type {
   CommandHookDefinition,
   HookExecutionError,
@@ -73,13 +75,42 @@ const CLIENT_TIMEOUT_GRACE_MS = 1000;
  * is not exercised there.
  */
 export function defaultHookWorkerEntry(): string {
-  return path.join(
-    __dirname,
-    "..",
-    "..",
-    "childprocess",
-    "hook-execution",
-    "HookExecutionWorker.js"
+  const electronProcess = process as NodeJS.Process & {
+    resourcesPath?: string;
+  };
+
+  return (
+    resolvePackagedWorkerPath(
+      {
+        dirname: __dirname,
+        cwd: process.cwd(),
+        resourcesPath: electronProcess.resourcesPath,
+        existsSync: fs.existsSync,
+      },
+      {
+        dirnameRelativePaths: [
+          "HookExecutionWorker.js",
+          path.join(
+            "..",
+            "..",
+            "childprocess",
+            "hook-execution",
+            "HookExecutionWorker.js"
+          ),
+        ],
+        cwdRelativePaths: [
+          path.join(".vite", "build", "HookExecutionWorker.js"),
+          path.join("dist", "HookExecutionWorker.js"),
+          path.join(
+            ".vite",
+            "build",
+            "childprocess",
+            "hook-execution",
+            "HookExecutionWorker.js"
+          ),
+        ],
+      }
+    ) ?? path.join(__dirname, "HookExecutionWorker.js")
   );
 }
 

@@ -12,6 +12,11 @@ import { EmailExtractionTypes } from "@/config/emailextraction";
 import { SortBy, TaskStatus } from "@/entityTypes/commonType";
 import { EmailItem } from "@/entityTypes/emailmarketingType";
 import { BaseModule } from "@/modules/baseModule";
+import {
+  getPackagedWorkerNodePath,
+  getPackagedWorkerPathCandidates,
+  resolvePackagedWorkerPath,
+} from "@/utils/packagedWorkerPath";
 import { EmailSearchResultDetailEntity } from "@/entity/EmailSearchResultDetail.entity";
 import {
   EmailsearchTaskEntity,
@@ -128,9 +133,25 @@ export class EmailSearchTaskModule extends BaseModule {
     //save search email task
     // const taskId=await this.saveSearchtask(data)
     const data = await this.getEmailContoldata(taskId);
-    const childPath = path.join(__dirname, "taskCode.js");
-    if (!fs.existsSync(childPath)) {
-      throw new Error("child js path not exist for the path " + childPath);
+    const electronProcess = process as NodeJS.Process & {
+      resourcesPath?: string;
+    };
+    const runtime = {
+      dirname: __dirname,
+      cwd: process.cwd(),
+      resourcesPath: electronProcess.resourcesPath,
+      existsSync: fs.existsSync,
+    };
+    const options = {
+      dirnameRelativePaths: ["taskCode.js"],
+      cwdRelativePaths: [path.join(".vite", "build", "taskCode.js")],
+    };
+    const childPath = resolvePackagedWorkerPath(runtime, options);
+    if (!childPath) {
+      const candidates = getPackagedWorkerPathCandidates(runtime, options);
+      throw new Error(
+        `child js path not exist. Tried: ${candidates.join(", ")}`
+      );
     }
 
     const { port1, port2 } = new MessageChannelMain();
@@ -154,12 +175,19 @@ export class EmailSearchTaskModule extends BaseModule {
       }
     }
 
+    const packagedNodePath = electronProcess.resourcesPath
+      ? getPackagedWorkerNodePath(
+          electronProcess.resourcesPath,
+          process.env.NODE_PATH
+        )
+      : process.env.NODE_PATH;
     const child = utilityProcess.fork(childPath, [], {
       stdio: "pipe",
       execArgv: [],
       env: {
         ...process.env,
         NODE_OPTIONS: "",
+        NODE_PATH: packagedNodePath,
         TWOCAPTCHA_TOKEN: twoCaptchaTokenvalue,
         ELECTRON_APP_NAME: app.getName(),
         ELECTRON_USER_DATA_PATH: app.getPath("userData"),

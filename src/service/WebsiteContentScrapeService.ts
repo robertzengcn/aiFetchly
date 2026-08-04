@@ -29,6 +29,9 @@ import { UrlGuard } from "@/service/UrlGuard";
 /** Hard cap on a single page load before the worker is killed. */
 const SCRAPING_TIMEOUT_MS = 600000; // 10 minutes
 
+/** Bound child output captured for diagnostics so noisy pages cannot flood logs. */
+const MAX_CHILD_OUTPUT_CHARS = 12000;
+
 /** Full scrape result returned by the worker, normalized for callers. */
 export interface WebsitePageScrapeResult {
   /** The URL the caller requested (post-UrlGuard normalization). */
@@ -54,6 +57,7 @@ interface WorkerScrapeResponse {
   canonicalUrl?: string;
   links?: string[];
   error?: string;
+  stack?: string;
 }
 
 interface WorkerScrapeMessage {
@@ -70,6 +74,105 @@ interface ChildProcessPathRuntime {
 }
 
 const WEBSITE_CONTENT_SCRAPER_FILE = "websiteContentScraper.js";
+
+interface ChildOutputCapture {
+  readonly getStdout: () => string;
+  readonly getStderr: () => string;
+  readonly appendStdout: (chunk: unknown) => void;
+  readonly appendStderr: (chunk: unknown) => void;
+}
+
+function appendBoundedOutput(current: string, chunk: string): string {
+  const combined = `${current}${chunk}`;
+  if (combined.length <= MAX_CHILD_OUTPUT_CHARS) {
+    return combined;
+  }
+  return combined.slice(combined.length - MAX_CHILD_OUTPUT_CHARS);
+}
+
+function stringifyOutputChunk(chunk: unknown): string {
+  if (Buffer.isBuffer(chunk)) {
+    return chunk.toString("utf8");
+  }
+  if (typeof chunk === "string") {
+    return chunk;
+  }
+  return String(chunk);
+}
+
+function createChildOutputCapture(): ChildOutputCapture {
+  let stdout = "";
+  let stderr = "";
+
+  return {
+    getStdout: () => stdout,
+    getStderr: () => stderr,
+    appendStdout: (chunk: unknown): void => {
+      stdout = appendBoundedOutput(stdout, stringifyOutputChunk(chunk));
+    },
+    appendStderr: (chunk: unknown): void => {
+      stderr = appendBoundedOutput(stderr, stringifyOutputChunk(chunk));
+    },
+  };
+}
+
+function describeUrlForLog(url: string): string {
+  try {
+    const parsed = new URL(url);
+    return `${parsed.origin}${parsed.pathname}`;
+  } catch {
+    return url;
+  }
+}
+
+function formatChildProcessDiagnostic(params: {
+  requestId: string;
+  childProcessPath: string;
+  url: string;
+  pid: number | null;
+  reason: string;
+  stdout: string;
+  stderr: string;
+}): string {
+  const lines = [
+    params.reason,
+    `requestId=${params.requestId}`,
+    `pid=${params.pid ?? "unknown"}`,
+    `workerPath=${params.childProcessPath}`,
+    `url=${describeUrlForLog(params.url)}`,
+  ];
+
+  const stderr = params.stderr.trim();
+  if (stderr) {
+    lines.push(`stderr:\n${stderr}`);
+  }
+
+  const stdout = params.stdout.trim();
+  if (stdout) {
+    lines.push(`stdout:\n${stdout}`);
+  }
+
+  return lines.join("\n");
+}
+
+function parseWorkerScrapeResponse(rawMessage: unknown): WorkerScrapeResponse {
+  if (typeof rawMessage === "string") {
+    return JSON.parse(rawMessage) as WorkerScrapeResponse;
+  }
+
+  if (
+    rawMessage !== null &&
+    typeof rawMessage === "object" &&
+    "data" in rawMessage &&
+    typeof (rawMessage as { data?: unknown }).data === "string"
+  ) {
+    return JSON.parse(
+      (rawMessage as { data: string }).data
+    ) as WorkerScrapeResponse;
+  }
+
+  return rawMessage as WorkerScrapeResponse;
+}
 
 export class WebsiteContentScrapeService {
   /**
@@ -126,23 +229,65 @@ export class WebsiteContentScrapeService {
       });
 
       const requestId = `scrape-${uuidv4()}-${Date.now()}`;
+      const outputCapture = createChildOutputCapture();
+      let settled = false;
+
+      const rejectWithDiagnostic = (reason: string): void => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timeout);
+        childProcess.removeListener("message", messageHandler);
+        const diagnostic = formatChildProcessDiagnostic({
+          requestId,
+          childProcessPath,
+          url,
+          pid: childProcess.pid,
+          reason,
+          stdout: outputCapture.getStdout(),
+          stderr: outputCapture.getStderr(),
+        });
+        console.error(`[WebsiteContentScrapeService] ${diagnostic}`);
+        reject(new Error(diagnostic));
+      };
+
       const timeout = setTimeout(() => {
         childProcess.kill();
-        reject(new Error("Website scraping timeout"));
+        rejectWithDiagnostic("Website scraping timeout");
       }, SCRAPING_TIMEOUT_MS);
+
+      childProcess.stdout?.on("data", (data: unknown) => {
+        outputCapture.appendStdout(data);
+        const chunk = stringifyOutputChunk(data).trim();
+        if (chunk) {
+          console.log(
+            `[WebsiteContentScrapeService:${requestId}:stdout] ${chunk}`
+          );
+        }
+      });
+
+      childProcess.stderr?.on("data", (data: unknown) => {
+        outputCapture.appendStderr(data);
+        const chunk = stringifyOutputChunk(data).trim();
+        if (chunk) {
+          console.error(
+            `[WebsiteContentScrapeService:${requestId}:stderr] ${chunk}`
+          );
+        }
+      });
 
       const messageHandler = (rawMessage: unknown) => {
         let message: WorkerScrapeResponse;
         try {
-          message =
-            typeof rawMessage === "string"
-              ? (JSON.parse(rawMessage) as WorkerScrapeResponse)
-              : (rawMessage as WorkerScrapeResponse);
-        } catch {
-          clearTimeout(timeout);
-          childProcess.removeListener("message", messageHandler);
+          message = parseWorkerScrapeResponse(rawMessage);
+        } catch (parseError) {
           childProcess.kill();
-          reject(new Error("Error parsing child process message"));
+          const parseMessage =
+            parseError instanceof Error ? parseError.message : String(parseError);
+          rejectWithDiagnostic(
+            `Error parsing child process message: ${parseMessage}`
+          );
           return;
         }
 
@@ -150,20 +295,48 @@ export class WebsiteContentScrapeService {
           return; // Ignore messages for other requests.
         }
 
+        settled = true;
         clearTimeout(timeout);
         childProcess.removeListener("message", messageHandler);
         childProcess.kill();
 
         if (message.type === "SCRAPE_ERROR") {
-          reject(new Error(message.error || "Failed to scrape website"));
+          const diagnostic = formatChildProcessDiagnostic({
+            requestId,
+            childProcessPath,
+            url,
+            pid: childProcess.pid,
+            reason: [message.error || "Failed to scrape website", message.stack]
+              .filter((part): part is string => Boolean(part))
+              .join("\n"),
+            stdout: outputCapture.getStdout(),
+            stderr: outputCapture.getStderr(),
+          });
+          console.error(`[WebsiteContentScrapeService] ${diagnostic}`);
+          reject(new Error(diagnostic));
           return;
         }
 
         if (!message.markdown) {
-          reject(new Error("No content extracted from website"));
+          const diagnostic = formatChildProcessDiagnostic({
+            requestId,
+            childProcessPath,
+            url,
+            pid: childProcess.pid,
+            reason: "No content extracted from website",
+            stdout: outputCapture.getStdout(),
+            stderr: outputCapture.getStderr(),
+          });
+          console.error(`[WebsiteContentScrapeService] ${diagnostic}`);
+          reject(new Error(diagnostic));
           return;
         }
 
+        console.log(
+          `[WebsiteContentScrapeService] Scrape worker completed requestId=${requestId} pid=${
+            childProcess.pid ?? "unknown"
+          } url=${describeUrlForLog(url)}`
+        );
         resolve({
           markdown: message.markdown,
           title: message.title,
@@ -176,22 +349,30 @@ export class WebsiteContentScrapeService {
       childProcess.on("message", messageHandler);
 
       childProcess.on("error", (error: unknown) => {
-        clearTimeout(timeout);
-        childProcess.removeListener("message", messageHandler);
         const errorMessage =
           error instanceof Error ? error.message : String(error);
-        reject(new Error(`Child process error: ${errorMessage}`));
+        rejectWithDiagnostic(`Child process error: ${errorMessage}`);
       });
 
-      childProcess.on("exit", (code) => {
-        if (code !== 0 && code !== null) {
-          clearTimeout(timeout);
-          childProcess.removeListener("message", messageHandler);
-          reject(new Error(`Child process exited with code ${code}`));
+      childProcess.on("exit", (code, signal) => {
+        if (settled) {
+          return;
+        }
+        if (code !== 0 || signal) {
+          const codeDetail = code === null ? "unknown" : String(code);
+          const signalDetail = signal ? ` signal ${signal}` : "";
+          rejectWithDiagnostic(
+            `Child process exited with code ${codeDetail}${signalDetail}`
+          );
         }
       });
 
       childProcess.on("spawn", () => {
+        console.log(
+          `[WebsiteContentScrapeService] Spawned scrape worker requestId=${requestId} pid=${
+            childProcess.pid ?? "unknown"
+          } workerPath=${childProcessPath} url=${describeUrlForLog(url)}`
+        );
         const scrapeMessage: WorkerScrapeMessage = {
           type: "SCRAPE_WEBSITE",
           url,

@@ -6,6 +6,7 @@ import {
 } from "@/model/YellowPagesTask.model";
 import { YellowPagesResultModel } from "@/model/YellowPagesResult.model";
 import { PlatformRegistry } from "@/modules/PlatformRegistry";
+import { PlatformAdapterFactory as WorkerPlatformAdapterFactory } from "@/modules/platforms/PlatformAdapterFactory";
 import { AccountCookiesModule } from "@/modules/accountCookiesModule";
 import { BaseModule } from "@/modules/baseModule";
 import { ScrapingProgress } from "@/modules/interface/IPCMessage";
@@ -36,6 +37,11 @@ import {
   isErrorMessage,
   isAiSupportRequestMessage,
 } from "@/modules/interface/BackgroundProcessMessages";
+import {
+  getPackagedWorkerNodePath,
+  getPackagedWorkerPathCandidates,
+  resolvePackagedWorkerPath,
+} from "@/utils/packagedWorkerPath";
 import {
   WriteLog,
   getApplogspath,
@@ -132,35 +138,6 @@ export class YellowPagesProcessManager extends BaseModule {
   }
 
   /**
-   * Get module path from a class constructor
-   */
-  private getModulePathFromClass(adapterClass: any): string {
-    try {
-      // Try to get the module path from the class
-      if (adapterClass.__modulePath) {
-        return adapterClass.__modulePath;
-      }
-
-      // Fallback: try to infer from the class name
-      const className = adapterClass.name;
-      if (className.includes("Adapter")) {
-        // Convert class name to file name convention
-        const fileName = className
-          .replace(/([A-Z])/g, "-$1")
-          .toLowerCase()
-          .replace(/^-/, "");
-        return `@/modules/platforms/${fileName}`;
-      }
-
-      // Default fallback
-      return `@/modules/platforms/${adapterClass.name}`;
-    } catch (error) {
-      console.warn("Could not determine module path for adapter class:", error);
-      return `@/modules/platforms/${adapterClass.name}`;
-    }
-  }
-
-  /**
    * Spawn a child process for Yellow Pages scraping
    */
   async spawnScraperProcess(taskId: number): Promise<UtilityProcess> {
@@ -220,16 +197,26 @@ export class YellowPagesProcessManager extends BaseModule {
         );
       }
 
-      // Add adapter class information if available
-      if (platform.adapter_class) {
-        // Get the class name and module path from the adapter class
-        const adapterClassName = platform.adapter_class.name;
-        const modulePath = this.getModulePathFromClass(platform.adapter_class);
+      // Add adapter class information if available. Use stable names because
+      // packaged builds may minify constructor names such as adapter_class.name.
+      if (platform.adapter_class || platform.class_name) {
+        const adapterClassName =
+          WorkerPlatformAdapterFactory.getAdapterClassNameForPlatform(platform);
 
-        taskData.adapterClass = {
-          className: adapterClassName,
-          modulePath: modulePath,
-        };
+        if (adapterClassName) {
+          taskData.adapterClass = {
+            className: adapterClassName,
+            modulePath:
+              platform.module_path ||
+              WorkerPlatformAdapterFactory.getAdapterModulePath(
+                adapterClassName
+              ),
+          };
+        } else {
+          console.warn(
+            `Could not determine adapter class name for platform ${platform.id}`
+          );
+        }
       }
 
       // Get cookies if account is specified
@@ -364,23 +351,52 @@ export class YellowPagesProcessManager extends BaseModule {
         `Log files initialized - Runtime: ${runLogfile}, Error: ${errorLogfile}`
       );
 
-      // Resolve scraper path and validate existence
-      //const childPath = path.resolve(process.cwd(), 'dist/childprocess/YellowPagesScraper.js');
-      const childPath = path.join(__dirname, "YellowPagesScraper.js");
-      if (!fs.existsSync(childPath)) {
-        throw new Error(`Child process file not found at path: ${childPath}`);
+      const electronProcess = process as NodeJS.Process & {
+        resourcesPath?: string;
+      };
+      const runtime = {
+        dirname: __dirname,
+        cwd: process.cwd(),
+        resourcesPath: electronProcess.resourcesPath,
+        existsSync: fs.existsSync,
+      };
+      const options = {
+        dirnameRelativePaths: [
+          "YellowPagesScraper.js",
+          path.join("..", "childprocess", "YellowPagesScraper.js"),
+        ],
+        cwdRelativePaths: [
+          path.join(".vite", "build", "YellowPagesScraper.js"),
+          path.join(".vite", "build", "childprocess", "YellowPagesScraper.js"),
+          path.join("dist", "YellowPagesScraper.js"),
+          path.join("dist", "childprocess", "YellowPagesScraper.js"),
+        ],
+      };
+      const childPath = resolvePackagedWorkerPath(runtime, options);
+      if (!childPath) {
+        const candidates = getPackagedWorkerPathCandidates(runtime, options);
+        throw new Error(
+          `Child process file not found. Tried: ${candidates.join(", ")}`
+        );
       }
 
       // Create message channel for IPC communication
       const { port1, port2 } = new MessageChannelMain();
 
       // Fork the child process using Electron utilityProcess
+      const packagedNodePath = electronProcess.resourcesPath
+        ? getPackagedWorkerNodePath(
+            electronProcess.resourcesPath,
+            process.env.NODE_PATH
+          )
+        : process.env.NODE_PATH;
       const childProcess = utilityProcess.fork(childPath, [], {
         stdio: "pipe",
         execArgv: ["puppeteer-cluster:*"],
         env: {
           ...process.env,
           NODE_OPTIONS: "",
+          NODE_PATH: packagedNodePath,
           ELECTRON_APP_NAME: app.getName(),
           ELECTRON_USER_DATA_PATH: app.getPath("userData"),
         },
