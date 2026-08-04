@@ -14,7 +14,7 @@ import {
 
 const runtimeIdSchema = z.enum(LOCAL_AI_RUNTIME_IDS);
 
-const runtimePlatformSchema = z.enum(["win32", "darwin"]);
+const runtimePlatformSchema = z.enum(["win32", "darwin", "linux"]);
 const runtimeArchSchema = z.enum(["x64", "arm64"]);
 
 const semverSchema = z

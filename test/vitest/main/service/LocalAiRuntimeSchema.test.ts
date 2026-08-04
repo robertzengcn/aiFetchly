@@ -123,6 +123,17 @@ describe("localAiRuntimeCatalogEntrySchema", () => {
     const r = localAiRuntimeCatalogEntrySchema.safeParse(entry);
     expect(r.success).toBe(false);
   });
+  test("accepts Linux x64 runtime entries", () => {
+    const entry = baseEntry({
+      platform: "linux",
+      archiveFileName: "voice-runtime-linux-x64-1.0.0.zip",
+      downloadUrl:
+        "https://github.com/o/r/releases/download/v1/voice-runtime-linux-x64-1.0.0.zip",
+    });
+    expect(localAiRuntimeCatalogEntrySchema.safeParse(entry).success).toBe(
+      true
+    );
+  });
   test("expectedArchiveFileName derives deterministic name", () => {
     expect(
       expectedArchiveFileName("voice-sherpa", "darwin", "arm64", "1.2.3")
@@ -130,6 +141,9 @@ describe("localAiRuntimeCatalogEntrySchema", () => {
     expect(
       expectedArchiveFileName("embedding-xenova", "win32", "x64", "1.0.0")
     ).toBe("embedding-runtime-win32-x64-1.0.0.zip");
+    expect(
+      expectedArchiveFileName("embedding-xenova", "linux", "x64", "1.0.0")
+    ).toBe("embedding-runtime-linux-x64-1.0.0.zip");
   });
 });
 
