@@ -3,7 +3,8 @@
  *
  * Provides safe, controlled execution of local shell commands with:
  *   - Input validation via zod schemas
- *   - Destructive command denylist pre-check
+ *   - Layered permission analysis (parse → hazards → split → paths → rules)
+ *   - Destructive command denylist pre-check (defense-in-depth backstop)
  *   - Workspace-restricted working directory (FilePathGuard)
  *   - Cross-platform shell interpreter selection
  *   - Timeout enforcement with process-tree kill
@@ -23,7 +24,6 @@ import {
   SHELL_MIN_TIMEOUT_MS,
   SHELL_STDOUT_MAX_CHARS,
   SHELL_STDERR_MAX_CHARS,
-  SHELL_DENYLIST_PATTERNS,
   SHELL_ENV_ALLOWLIST,
   SHELL_AUTO_BACKGROUND_DEFAULT,
 } from "@/config/shellToolConfig";
@@ -33,6 +33,7 @@ import type {
   ShellExecutionResult,
   ShellInterpreter,
 } from "@/entityTypes/shellTypes";
+import { checkShellPermission } from "@/service/shellSecurity/bashPermissions";
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -58,22 +59,32 @@ export async function executeShellCommand(
   }
   const request = parsed.data;
 
-  // 2. Denylist pre-check
-  const denyResult = checkDenylist(request.command);
-  if (denyResult.blocked) {
-    return makeErrorResult(
-      `Command blocked by safety policy: ${denyResult.reason}`,
-      startTime
-    );
-  }
-
-  // 3. Resolve and validate cwd
+  // 2. Resolve and validate cwd FIRST — the permission layer needs the guard
   const cwdResult = resolveCwd(request.cwd);
   if (!cwdResult.valid) {
     return makeErrorResult(
       cwdResult.error ?? "Invalid working directory",
       startTime
     );
+  }
+
+  // 3. Layered permission check (parse → hazards → split → paths → rules).
+  //    This subsumes the legacy regex denylist — the same SHELL_DENYLIST_PATTERNS
+  //    are now applied inside checkShellPermission via tieredRegexRules, so
+  //    running them again here would be pure duplication.
+  const guard = new FilePathGuard(getDefaultWorkspaceRoots(), []);
+  const verdict = checkShellPermission(request.command, guard);
+  if (verdict.tier !== "allow") {
+    return {
+      ...makeErrorResult(
+        verdict.tier === "deny"
+          ? `Command blocked by safety policy: ${verdict.reason}`
+          : `Command requires approval: ${verdict.reason}`,
+        startTime
+      ),
+      permission_verdict: verdict.tier,
+      permission_code: verdict.code,
+    };
   }
 
   // 4. Resolve timeout (clamp to allowed range)
@@ -106,25 +117,9 @@ export async function executeShellCommand(
     validatedCommand: request.command,
     validatedCwd: cwdResult.path,
     validatedShell: request.shell,
+    permission_verdict: "allow" as const,
+    permission_code: "OK",
   };
-}
-
-// ---------------------------------------------------------------------------
-// Denylist check
-// ---------------------------------------------------------------------------
-
-interface DenylistResult {
-  readonly blocked: boolean;
-  readonly reason?: string;
-}
-
-function checkDenylist(command: string): DenylistResult {
-  for (const entry of SHELL_DENYLIST_PATTERNS) {
-    if (entry.pattern.test(command)) {
-      return { blocked: true, reason: entry.description };
-    }
-  }
-  return { blocked: false };
 }
 
 // ---------------------------------------------------------------------------

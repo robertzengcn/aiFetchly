@@ -14,7 +14,6 @@ import {
 import * as path from "path";
 import * as fs from "fs";
 import { exec } from "child_process";
-import * as process from "process";
 import { SearchModule } from "@/modules/SearchModule";
 import { Token } from "@/modules/token";
 // import {USERSDBPATH} from '@/config/usersetting';

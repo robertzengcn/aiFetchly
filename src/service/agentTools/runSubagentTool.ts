@@ -52,7 +52,11 @@ const PARAMETERS = {
     agentId: {
       type: "string",
       description:
-        "Built-in agent ID to run, e.g. 'agent-lead-researcher'. Must be active.",
+        "Agent ID to run, exactly as it appears in the 'Available agents' block of the system message. " +
+        "Accepted forms: a bare built-in ID (e.g. 'agent-lead-researcher') or a scoped dynamic ID " +
+        "('user:agent:<name>' for a user-global agent, or 'workspace:<workspaceId>:agent:<name>' for a " +
+        "trusted-workspace agent). Unknown IDs return an error — do not guess or abbreviate; copy the " +
+        "exact ID from the 'Available agents' block.",
     },
     prompt: {
       type: "string",
@@ -138,6 +142,7 @@ export const RUN_SUBAGENT_TOOL: SkillDefinition = {
       prompt,
       taskPacket,
       parentConversationId: context.conversationId,
+      model: context.model,
       executionMode: "foreground",
       outputSchemaOverride: args.outputSchema as
         | Record<string, unknown>

@@ -2,6 +2,7 @@ import { describe, it, before, after, beforeEach } from 'mocha';
 import { expect } from 'chai';
 import { DocumentService } from '@/service/DocumentService';
 import { SqliteDb } from '@/config/SqliteDb';
+import { RAGDocumentEntity } from '@/entity/RAGDocument.entity';
 import * as path from 'path';
 import * as fs from 'fs';
 
@@ -31,7 +32,7 @@ describe('DocumentService', () => {
 
     beforeEach(async () => {
         // Clean up before each test
-        const repository = db.connection.getRepository(require('@/entity/RAGDocument.entity').RAGDocumentEntity);
+        const repository = db.connection.getRepository(RAGDocumentEntity);
         await repository.clear();
     });
 
@@ -41,7 +42,7 @@ describe('DocumentService', () => {
             
             // Create test file
             fs.writeFileSync(testFilePath, 'This is a test document content.');
-            
+
             try {
                 const document = await documentService.uploadDocument({
                     filePath: testFilePath,
@@ -295,6 +296,29 @@ describe('DocumentService', () => {
 
                 expect(activeDocs).to.have.length(0);
                 expect(archivedDocs).to.have.length(1);
+            } finally {
+                if (fs.existsSync(testFilePath)) {
+                    fs.unlinkSync(testFilePath);
+                }
+            }
+        });
+
+        it('should filter documents by title using the name filter', async () => {
+            const testFilePath = path.join(__dirname, 'quarterly-report.txt');
+            fs.writeFileSync(testFilePath, 'Quarterly revenue details');
+
+            try {
+                await documentService.uploadDocument({
+                    filePath: testFilePath,
+                    name: 'quarterly-report.txt',
+                    title: 'Northwind Revenue Forecast'
+                });
+
+                const documents = await documentService.getDocuments({ name: 'Revenue Forecast' });
+
+                expect(documents).to.have.length(1);
+                expect(documents[0].name).to.equal('quarterly-report.txt');
+                expect(documents[0].title).to.equal('Northwind Revenue Forecast');
             } finally {
                 if (fs.existsSync(testFilePath)) {
                     fs.unlinkSync(testFilePath);

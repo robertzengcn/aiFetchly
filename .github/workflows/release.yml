@@ -1,243 +1,600 @@
-name: Release
+name: Manual Release Build
 
-# Builds Windows x64, macOS arm64, and macOS x64 distributables on every push,
-# and publishes a DRAFT GitHub Release (with all auto-update assets) when a
-# `v*` tag is pushed. Draft releases stay invisible to update.electronjs.org
-# until a release engineer inspects and publishes them manually.
 on:
   push:
     branches:
-      - main
-    tags:
-      - 'v*'
+      - master
+  workflow_dispatch:
+    inputs:
+      build_mode:
+        description: Build test installers or signed production installers
+        required: true
+        default: test
+        type: choice
+        options:
+          - test
+          - production
 
-# contents: write is required to create GitHub Releases and upload assets.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  # Single source of truth for the release version + tag. Both platform jobs
-  # and the publish job consume this output so every artifact targets the same
-  # version. The version comes from the committed package.json (PRD FR-8.1).
-  prepare-release:
-    runs-on: ubuntu-latest
+  build-windows:
+    # Native modules in this Electron build still rely on node-gyp versions
+    # that do not detect Visual Studio 2026/18.x on newer Windows images.
+    runs-on: windows-2022
     outputs:
-      version: ${{ steps.version.outputs.version }}
-      tag: ${{ steps.version.outputs.tag }}
-      is-release: ${{ steps.version.outputs.is-release }}
-    steps:
-      - uses: actions/checkout@v4
-      - name: Resolve release version and tag
-        id: version
-        shell: bash
-        run: |
-          set -euo pipefail
-          version="$(node -p "require('./package.json').version")"
-          tag="v${version}"
-          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            is_release=true
-          else
-            is_release=false
-          fi
-          # On a tag push, the pushed tag MUST match the committed package.json
-          # version. Otherwise a stale tag could target an already-published
-          # release (e.g. tag v1.0.12 pushed while package.json still says 1.0.11).
-          if [[ "$is_release" == "true" && "$GITHUB_REF_NAME" != "$tag" ]]; then
-            echo "ERROR: pushed tag '$GITHUB_REF_NAME' != package.json version '$tag'."
-            echo "Bump package.json to $version before tagging $tag."
-            exit 1
-          fi
-          echo "is-release=${is_release}" >> "$GITHUB_OUTPUT"
-          echo "version=${version}" >> "$GITHUB_OUTPUT"
-          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
-          echo "Resolved version=${version} tag=${tag} is-release=${is_release} from ${GITHUB_REF}"
-
-  build:
-    needs: prepare-release
-    strategy:
-      fail-fast: false
-      matrix:
-        # Native-arch runners so native module rebuilds never cross-compile.
-        # macos-14 is arm64; macos-13 is x64.
-        include:
-          - os: windows-2022
-            platform: win32
-            arch: x64
-            make-script: make-win:prod
-          - os: macos-14
-            platform: darwin
-            arch: arm64
-            make-script: make-mac:prod
-          - os: macos-13
-            platform: darwin
-            arch: x64
-            make-script: make-mac:prod
-    runs-on: ${{ matrix.os }}
-    # forge.config.js only signs macOS when all Apple secrets are present, and
-    # only signs Windows when cert.pfx + CERTIFICATE_PASSWORD are present.
+      version: ${{ steps.calculate_version.outputs.version }}
+      artifact_name: ${{ steps.calculate_version.outputs.artifact_name }}
     env:
-      OSX_SIGN_IDENTITY: ${{ secrets.OSX_SIGN_IDENTITY }}
-      APPLE_ID: ${{ secrets.APPLE_ID }}
-      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-      CERTIFICATE_PASSWORD: ${{ secrets.CERTIFICATE_PASSWORD }}
+      BUILD_MODE: ${{ github.event_name == 'push' && 'production' || inputs.build_mode }}
+      VITE_LOGIN_URL_TEST: ${{ secrets.VITE_LOGIN_URL_TEST }}
+      VITE_LOGIN_URL_PROD: ${{ secrets.VITE_LOGIN_URL_PROD }}
+      UPDATESERVER_TEST: ${{ secrets.UPDATESERVER }}
+      UPDATESERVER_PROD: ${{ secrets.UPDATESERVER_PROD }}
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20.18.3
+          node-version: 22.14.0
           cache: yarn
 
-      # Python 3.12+ removed distutils; bundled node-gyp in electron-rebuild still imports it.
       - name: Set up Python for node-gyp
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
-      - name: Set up C++20 environment (macOS)
-        if: matrix.platform == 'darwin'
-        run: |
-          ARCH="$(uname -m)"
-          if [ "$ARCH" = "arm64" ]; then
-            ARCH_FLAGS="-arch arm64"
-            HOMEBREW_PREFIX="/opt/homebrew"
-          else
-            ARCH_FLAGS="-arch x86_64"
-            HOMEBREW_PREFIX="/usr/local"
-          fi
-          echo "Detected host architecture: ${ARCH}"
-          echo "ARCH_FLAGS=${ARCH_FLAGS}" >> "$GITHUB_ENV"
-          echo "HOMEBREW_PREFIX=${HOMEBREW_PREFIX}" >> "$GITHUB_ENV"
-          echo "CXXFLAGS=-std=c++20 ${ARCH_FLAGS}" >> "$GITHUB_ENV"
-          echo "CFLAGS=-std=c11 ${ARCH_FLAGS}" >> "$GITHUB_ENV"
-          echo "LDFLAGS=-std=c++20 ${ARCH_FLAGS}" >> "$GITHUB_ENV"
-
-      - name: Select Xcode (macOS)
-        if: matrix.platform == 'darwin'
-        run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer || true
-
-      - name: Install macOS native build dependencies
-        if: matrix.platform == 'darwin'
-        run: brew install python-setuptools xz pkg-config
-
-      - name: Install WiX Toolset (Windows)
-        if: matrix.platform == 'win32'
-        run: |
-          Invoke-WebRequest -Uri https://github.com/wixtoolset/wix3/releases/download/wix3112rtm/wix311-binaries.zip -OutFile wix.zip
-          Expand-Archive -Path wix.zip -DestinationPath "$env:ProgramFiles\WiX Toolset"
-          Remove-Item -Force wix.zip
-        shell: pwsh
-
-      # The GitHub updater source is compiled into the main-process service
-      # (src/main-process/updater/AppUpdateService.ts). There is no UPDATESERVER.
-      - name: Create .env
-        run: |
-          touch .env
-          echo "NODE_ENV=production" >> .env
-          echo "VITE_LOGIN_URL=${{ secrets.VITE_LOGIN_URL_PROD || secrets.VITE_LOGIN_URL_TEST }}" >> .env
-
-      - name: Decode Windows signing certificate
-        if: matrix.platform == 'win32'
-        env:
-          CERTIFICATE_PFX_B64: ${{ secrets.CERTIFICATE_PFX_B64 }}
-        run: |
-          if [ -n "$CERTIFICATE_PFX_B64" ]; then
-            printf '%s' "$CERTIFICATE_PFX_B64" | base64 -d > cert.pfx
-            echo "Decoded cert.pfx for signing"
-          else
-            echo "No CERTIFICATE_PFX_B64 secret; Windows build will be unsigned"
-          fi
-
-      - name: Install dependencies (locked)
-        run: yarn install --frozen-lockfile
-
-      - name: Rebuild native modules (Windows)
-        if: matrix.platform == 'win32'
-        run: |
-          yarn electron-rebuild --force --types prod,dev,optional --module-dir .
-          yarn rebuild-sqlite3
-          yarn rebuild-better-sqlite
-
-      - name: Rebuild native modules (macOS)
-        if: matrix.platform == 'darwin'
-        run: |
-          export CFLAGS="-std=c11 ${ARCH_FLAGS}"
-          export CXXFLAGS="-std=c++20 ${ARCH_FLAGS}"
-          export LDFLAGS="-std=c++20 ${ARCH_FLAGS}"
-          export npm_config_target="35.7.5"
-          export npm_config_disturl="https://electronjs.org/headers"
-          npx electron-rebuild --force --arch="${{ matrix.arch }}" --types prod,dev,optional --module-dir . || {
-            echo "Full rebuild failed, trying selective rebuild..."
-            npx electron-rebuild --force --arch="${{ matrix.arch }}" -w better-sqlite3,sqlite3,bufferutil,utf-8-validate || echo "Selective rebuild failed"
-          }
-          CXXFLAGS="-std=c++20" CFLAGS="-std=c11" yarn rebuild-sqlite3
-          CXXFLAGS="-std=c++20" CFLAGS="-std=c11" yarn rebuild-better-sqlite
-
-      - name: Build application
-        run: yarn ${{ matrix.make-script }}
-        env:
-          NODE_OPTIONS: "--max-old-space-size=4096"
-
-      # Fail closed if required auto-update artifacts are missing (PRD FR-6.7/7.7).
-      # Tag releases also enforce macOS signing/notarization via --strict-signing.
-      - name: Validate auto-update artifacts
+      - name: Configure node-gyp Python
         shell: bash
         run: |
-          EXTRA=""
-          if [ "${{ needs.prepare-release.outputs.is-release }}" = "true" ] && [ "${{ matrix.platform }}" = "darwin" ]; then
-            EXTRA="--strict-signing"
-          fi
-          node scripts/validate-update-artifacts.js \
-            --platform ${{ matrix.platform }} \
-            --arch ${{ matrix.arch }} \
-            --root out/make \
-            $EXTRA
+          set -euo pipefail
+          PYTHON_BIN="$(python -c 'import sys; print(sys.executable)')"
+          echo "Using Python for node-gyp: ${PYTHON_BIN}"
+          python --version
+          echo "PYTHON=${PYTHON_BIN}" >> "$GITHUB_ENV"
+          echo "npm_config_python=${PYTHON_BIN}" >> "$GITHUB_ENV"
+          echo "NODE_GYP_FORCE_PYTHON=${PYTHON_BIN}" >> "$GITHUB_ENV"
 
-      - name: Upload build artifacts
+      - name: Calculate version
+        id: calculate_version
+        shell: bash
+        run: |
+          set -euo pipefail
+          current_version="$(node -e "console.log(require('./package.json').version)")"
+          new_version="${current_version%.*}.${{ github.run_number }}"
+          node -e "const pkg = require('./package.json'); pkg.version = '$new_version'; require('fs').writeFileSync('./package.json', JSON.stringify(pkg, null, 2))"
+          echo "version=$new_version" >> "$GITHUB_OUTPUT"
+          echo "artifact_name=electron-app-windows-${BUILD_MODE}-v${new_version}" >> "$GITHUB_OUTPUT"
+
+      - name: Write build environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$BUILD_MODE" = "production" ]; then
+            node_env="production"
+            login_url="$VITE_LOGIN_URL_PROD"
+            update_server="$UPDATESERVER_PROD"
+          else
+            node_env="test"
+            login_url="$VITE_LOGIN_URL_TEST"
+            update_server="$UPDATESERVER_TEST"
+          fi
+          if [ -z "$login_url" ]; then
+            echo "::error::The login URL secret for ${BUILD_MODE} builds is empty."
+            exit 1
+          fi
+          if [ -z "$update_server" ]; then
+            echo "::error::The update-server secret for ${BUILD_MODE} builds is empty."
+            exit 1
+          fi
+          {
+            echo "NODE_ENV=$node_env"
+            echo "VITE_LOGIN_URL=$login_url"
+            echo "UPDATESERVER=$update_server"
+          } > .env
+          cp .env ".env.${node_env}"
+
+      - name: Install dependencies from lockfile
+        run: yarn install --frozen-lockfile
+
+      - name: Rebuild better-sqlite3 for Electron
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --global node-gyp@latest
+          electron_version="$(node -p "require('./node_modules/electron/package.json').version")"
+          cd node_modules/better-sqlite3
+          node-gyp rebuild --release \
+            --runtime=electron \
+            --target="$electron_version" \
+            --dist-url=https://electronjs.org/headers
+          cd ../..
+          yarn rebuild-better-sqlite
+
+
+      - name: Install WiX Toolset
+        shell: pwsh
+        run: |
+          $wixDirectory = "$env:ProgramFiles\WiX Toolset"
+          Invoke-WebRequest -Uri https://github.com/wixtoolset/wix3/releases/download/wix3112rtm/wix311-binaries.zip -OutFile wix.zip
+          Expand-Archive -Path wix.zip -DestinationPath $wixDirectory
+          Remove-Item -Force wix.zip
+          "WIX=$wixDirectory" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          $wixDirectory | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Restore Windows signing certificate
+        if: ${{ env.BUILD_MODE == 'production' }}
+        shell: bash
+        env:
+          WINDOWS_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "$WINDOWS_CERTIFICATE_BASE64" ] || [ -z "$CERTIFICATE_PASSWORD" ]; then
+            echo "::error::Production builds require WINDOWS_CERTIFICATE_BASE64 and WINDOWS_CERTIFICATE_PASSWORD."
+            exit 1
+          fi
+          printf '%s' "$WINDOWS_CERTIFICATE_BASE64" | base64 --decode > cert.pfx
+
+      - name: Build application
+        shell: bash
+        env:
+          CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          export NODE_OPTIONS="--max-old-space-size=4096"
+          if [ "$BUILD_MODE" = "production" ]; then
+            yarn make-win:prod
+          else
+            yarn make-win:test
+          fi
+
+      - name: Upload Windows installers
         uses: actions/upload-artifact@v4
         with:
-          name: build-${{ matrix.platform }}-${{ matrix.arch }}
-          path: out/make
+          name: ${{ steps.calculate_version.outputs.artifact_name }}
+          path: |
+            out/make/**/*.exe
+            out/make/**/*.msi
+            # Squirrel.Windows auto-update assets (PRD FR-6.2/6.3) — required by
+            # update.electronjs.org alongside the installer.
+            out/make/**/RELEASES
+            out/make/**/*.nupkg
+          if-no-files-found: error
 
-  # Publishes a DRAFT GitHub Release containing every artifact required for
-  # auto-update (RELEASES, *.nupkg, *.exe, *.zip, *.dmg). Runs only on tag push.
-  publish-release:
-    needs: [prepare-release, build]
-    if: needs.prepare-release.outputs.is-release == 'true'
-    runs-on: ubuntu-latest
+  build-macos:
+    runs-on: macos-latest
+    outputs:
+      version: ${{ steps.calculate_version.outputs.version }}
+      artifact_name: ${{ steps.calculate_version.outputs.artifact_name }}
+    env:
+      BUILD_MODE: ${{ github.event_name == 'push' && 'production' || inputs.build_mode }}
+      MAKE_MAC_DMG: ${{ github.event_name == 'push' && 'true' || inputs.build_mode == 'production' && 'true' || 'false' }}
+      VITE_LOGIN_URL_TEST: ${{ secrets.VITE_LOGIN_URL_TEST }}
+      VITE_LOGIN_URL_PROD: ${{ secrets.VITE_LOGIN_URL_PROD }}
+      UPDATESERVER_TEST: ${{ secrets.UPDATESERVER }}
+      UPDATESERVER_PROD: ${{ secrets.UPDATESERVER_PROD }}
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-      - name: Download all build artifacts
+      - name: Set up native build environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          arch="$(uname -m)"
+          if [ "$arch" = "arm64" ]; then
+            target_arch="arm64"
+            arch_flags="-arch arm64"
+            homebrew_prefix="/opt/homebrew"
+          else
+            target_arch="x64"
+            arch_flags="-arch x86_64"
+            homebrew_prefix="/usr/local"
+          fi
+          {
+            echo "TARGET_ARCH=$target_arch"
+            echo "ARCH_FLAGS=$arch_flags"
+            echo "HOMEBREW_PREFIX=$homebrew_prefix"
+            echo "CXX=clang++"
+            echo "CC=clang"
+            echo "CXXFLAGS=-std=c++20 $arch_flags"
+            echo "CFLAGS=-std=c11 $arch_flags"
+            echo "LDFLAGS=-std=c++20 $arch_flags -L${homebrew_prefix}/lib"
+            echo "CPPFLAGS=-I${homebrew_prefix}/include"
+            echo "npm_config_target_platform=darwin"
+            echo "npm_config_arch=$target_arch"
+            echo "npm_config_target_arch=$target_arch"
+            echo "PKG_CONFIG_PATH=${homebrew_prefix}/lib/pkgconfig"
+            echo "LIBLZMA_CFLAGS=-I${homebrew_prefix}/include"
+            echo "LIBLZMA_LIBS=-L${homebrew_prefix}/lib -llzma"
+          } >> "$GITHUB_ENV"
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.14.0
+          cache: yarn
+
+      - name: Cache Electron downloads
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/electron
+            ~/.cache/electron-gyp
+            ~/.electron-gyp
+            ~/Library/Caches/electron
+          key: ${{ runner.os }}-electron-${{ hashFiles('yarn.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-electron-
+
+      - name: Set up Python for node-gyp
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Configure node-gyp Python
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHON_BIN="$(python -c 'import sys; print(sys.executable)')"
+          echo "Using Python for node-gyp: ${PYTHON_BIN}"
+          python --version
+          echo "PYTHON=${PYTHON_BIN}" >> "$GITHUB_ENV"
+          echo "npm_config_python=${PYTHON_BIN}" >> "$GITHUB_ENV"
+          echo "NODE_GYP_FORCE_PYTHON=${PYTHON_BIN}" >> "$GITHUB_ENV"
+
+      - name: Calculate version
+        id: calculate_version
+        shell: bash
+        run: |
+          set -euo pipefail
+          current_version="$(node -e "console.log(require('./package.json').version)")"
+          new_version="${current_version%.*}.${{ github.run_number }}"
+          node -e "const pkg = require('./package.json'); pkg.version = '$new_version'; require('fs').writeFileSync('./package.json', JSON.stringify(pkg, null, 2))"
+          echo "version=$new_version" >> "$GITHUB_OUTPUT"
+          echo "artifact_name=electron-app-macos-${BUILD_MODE}-v${new_version}" >> "$GITHUB_OUTPUT"
+
+      - name: Write build environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$BUILD_MODE" = "production" ]; then
+            node_env="production"
+            login_url="$VITE_LOGIN_URL_PROD"
+            update_server="$UPDATESERVER_PROD"
+          else
+            node_env="test"
+            login_url="$VITE_LOGIN_URL_TEST"
+            update_server="$UPDATESERVER_TEST"
+          fi
+          if [ -z "$login_url" ]; then
+            echo "::error::The login URL secret for ${BUILD_MODE} builds is empty."
+            exit 1
+          fi
+          if [ -z "$update_server" ]; then
+            echo "::error::The update-server secret for ${BUILD_MODE} builds is empty."
+            exit 1
+          fi
+          {
+            echo "NODE_ENV=$node_env"
+            echo "VITE_LOGIN_URL=$login_url"
+            echo "UPDATESERVER=$update_server"
+          } > .env
+          cp .env ".env.${node_env}"
+
+      - name: Install native build dependencies
+        run: brew install python-setuptools xz pkg-config
+
+      - name: Install dependencies from lockfile
+        run: yarn install --frozen-lockfile
+
+      - name: Rebuild native modules for Electron
+        shell: bash
+        run: |
+          set -euo pipefail
+          electron_version="$(node -p "require('./node_modules/electron/package.json').version")"
+          CXXFLAGS="-std=c++20 ${ARCH_FLAGS}" CFLAGS="-std=c11 ${ARCH_FLAGS}" yarn rebuild-better-sqlite
+          npm rebuild bufferutil --build-from-source \
+            --runtime=electron \
+            --target="$electron_version" \
+            --arch="$TARGET_ARCH" \
+            --disturl=https://electronjs.org/headers
+          npm rebuild utf-8-validate --build-from-source \
+            --runtime=electron \
+            --target="$electron_version" \
+            --arch="$TARGET_ARCH" \
+            --disturl=https://electronjs.org/headers
+
+      - name: Configure macOS signing keychain
+        if: ${{ env.BUILD_MODE == 'production' }}
+        shell: bash
+        env:
+          MACOS_CERTIFICATE_BASE64: ${{ secrets.MACOS_CERTIFICATE_BASE64 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          for name in MACOS_CERTIFICATE_BASE64 MACOS_CERTIFICATE_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
+            if [ -z "${!name}" ]; then
+              echo "::error::Production builds require the $name secret."
+              exit 1
+            fi
+          done
+          certificate_path="$RUNNER_TEMP/aifetchly-signing.p12"
+          keychain_path="$RUNNER_TEMP/aifetchly-build.keychain-db"
+          keychain_password="$(uuidgen)"
+          printf '%s' "$MACOS_CERTIFICATE_BASE64" | base64 --decode > "$certificate_path"
+          security create-keychain -p "$keychain_password" "$keychain_path"
+          security set-keychain-settings -lut 21600 "$keychain_path"
+          security unlock-keychain -p "$keychain_password" "$keychain_path"
+          security import "$certificate_path" -P "$MACOS_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$keychain_path"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain_path"
+          security list-keychains -d user -s "$keychain_path" $(security list-keychains -d user | tr -d '"')
+          echo "MACOS_KEYCHAIN_PATH=$keychain_path" >> "$GITHUB_ENV"
+
+      - name: Build application
+        shell: bash
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          export NODE_OPTIONS="--max-old-space-size=4096"
+          if [ "$BUILD_MODE" = "production" ]; then
+            yarn make-mac:prod
+          else
+            yarn make-mac:test
+          fi
+
+      - name: Upload macOS installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.calculate_version.outputs.artifact_name }}
+          path: |
+            out/make/**/*.dmg
+            out/make/**/*.zip
+          if-no-files-found: error
+
+      - name: Remove macOS signing keychain
+        if: ${{ always() && env.BUILD_MODE == 'production' }}
+        shell: bash
+        run: |
+          if [ -n "${MACOS_KEYCHAIN_PATH:-}" ]; then
+            security delete-keychain "$MACOS_KEYCHAIN_PATH" || true
+          fi
+
+  # ===========================================================================
+  # Downloadable local-AI runtimes (PRD Phase 4, design §25). Builds six
+  # runtime ZIPs on their target OS/arch, verifies each, and generates the
+  # signed-release catalog. Runs alongside the app builds; assets are uploaded
+  # as workflow artifacts for the publish step to attach to a GitHub Release.
+  # ===========================================================================
+  build-local-ai-runtimes:
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    env:
+      RUNTIME_VERSION: "1.0.0"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: win32
+            arch: x64
+            runner: windows-2022
+          - platform: darwin
+            arch: x64
+            runner: macos-13
+          - platform: darwin
+            arch: arm64
+            runner: macos-14
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.14.0
+          cache: yarn
+
+      - name: Set up Python for node-gyp
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Configure node-gyp Python
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHON_BIN="$(python -c 'import sys; print(sys.executable)')"
+          echo "Using Python for node-gyp: ${PYTHON_BIN}"
+          python --version
+          echo "PYTHON=${PYTHON_BIN}" >> "$GITHUB_ENV"
+          echo "npm_config_python=${PYTHON_BIN}" >> "$GITHUB_ENV"
+          echo "NODE_GYP_FORCE_PYTHON=${PYTHON_BIN}" >> "$GITHUB_ENV"
+
+      - name: Install dependencies from lockfile
+        run: yarn install --frozen-lockfile
+
+      - name: Resolve Electron build metadata
+        shell: bash
+        run: node scripts/resolve-electron-build-metadata.mjs --github-env "$GITHUB_ENV"
+
+      - name: Build embedding worker
+        shell: bash
+        run: node node_modules/vite/bin/vite.js build --config vite.localEmbeddingWorker.config.mjs
+
+      - name: Build embedding + voice runtimes
+        shell: bash
+        run: |
+          set -euo pipefail
+          for rt in embedding-xenova voice-sherpa; do
+            node scripts/build-local-ai-runtime.mjs \
+              --runtime "$rt" --runtime-version "$RUNTIME_VERSION" \
+              --platform "${{ matrix.platform }}" --arch "${{ matrix.arch }}" \
+              --electron-version "$ELECTRON_VERSION" --node-module-abi "$ELECTRON_MODULE_ABI" \
+              --output out/local-ai-runtimes \
+              --worker-output dist/childprocess \
+              --commit "${{ github.sha }}" --workflow-run-id "${{ github.run_id }}"
+          done
+
+      - name: Verify runtime archives
+        shell: bash
+        run: |
+          set -euo pipefail
+          for f in out/local-ai-runtimes/*.zip; do
+            base="$(basename "$f" .zip)"
+            plat="$(echo "$base" | awk -F- '{print $3}')"
+            arch="$(echo "$base" | awk -F- '{print $4}')"
+            node scripts/verify-local-ai-runtime.mjs \
+              --archive "$f" --platform "$plat" --arch "$arch" \
+              --electron-version "$ELECTRON_VERSION" --node-module-abi "$ELECTRON_MODULE_ABI"
+          done
+
+      - name: Upload runtime archives
+        uses: actions/upload-artifact@v4
+        with:
+          name: local-ai-runtimes-${{ matrix.platform }}-${{ matrix.arch }}
+          path: |
+            out/local-ai-runtimes/*.zip
+            out/local-ai-runtimes/*.metadata.json
+          if-no-files-found: error
+
+  generate-runtime-catalog:
+    needs: build-local-ai-runtimes
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      RUNTIME_VERSION: "1.0.0"
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.14.0
+
+      - name: Download runtime archives
         uses: actions/download-artifact@v4
         with:
-          path: artifacts
+          pattern: local-ai-runtimes-*
+          path: runtime-assets
+          merge-multiple: true
 
-      - name: Create draft GitHub Release with auto-update assets
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ needs.prepare-release.outputs.tag }}
-          VERSION: ${{ needs.prepare-release.outputs.version }}
+      - name: Generate runtime catalog
+        shell: bash
+        run: |
+          node scripts/generate-local-ai-runtime-catalog.mjs \
+            --input runtime-assets \
+            --release-tag "${{ github.ref_name }}" \
+            --repository "${{ github.repository }}" \
+            --runtime-version "$RUNTIME_VERSION" \
+            --output runtime-assets/local-ai-runtimes.json
+
+      - name: Upload release assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: local-ai-runtime-release-assets
+          path: runtime-assets
+          if-no-files-found: error
+
+  # ===========================================================================
+  # Publish a draft GitHub Release with all auto-update assets (PRD FR-9.5).
+  # This is the publish step referenced by the build-local-ai-runtimes comment
+  # above. It validates the Windows Squirrel assets (RELEASES / *-full.nupkg /
+  # *.exe) and the macOS signed ZIP, then attaches every distributable — app
+  # installers + local-AI-runtime catalog — to a DRAFT release tagged v<version>.
+  # Drafts stay invisible to update.electronjs.org until a release engineer
+  # publishes them manually. Runs only for production builds.
+  # ===========================================================================
+  publish-github-release:
+    needs: [build-windows, build-macos, generate-runtime-catalog]
+    if: github.event_name == 'push' || inputs.build_mode == 'production'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.build-windows.outputs.version }}
+      TAG: v${{ needs.build-windows.outputs.version }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.14.0
+
+      - name: Download Windows build
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.build-windows.outputs.artifact_name }}
+          path: windows-assets
+
+      - name: Download macOS build
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.build-macos.outputs.artifact_name }}
+          path: macos-assets
+
+      - name: Download local-AI-runtime release assets
+        uses: actions/download-artifact@v4
+        with:
+          name: local-ai-runtime-release-assets
+          path: runtime-assets
+
+      # Fail closed if required auto-update artifacts are missing (PRD FR-6.7/7.7).
+      - name: Validate Windows auto-update artifacts
+        shell: bash
+        run: |
+          node scripts/validate-update-artifacts.js \
+            --platform win32 --arch x64 --root windows-assets
+
+      - name: Validate macOS auto-update artifacts
+        shell: bash
+        run: |
+          node scripts/validate-update-artifacts.js \
+            --platform darwin --arch arm64 --root macos-assets
+
+      - name: Collect release assets
+        shell: bash
         run: |
           set -euo pipefail
           mkdir -p release-assets
-          # Collect every auto-update distributable across platforms/arches.
-          find artifacts -type f \( \
-            -name 'RELEASES' -o \
-            -name '*.nupkg' -o \
-            -name '*.exe' -o \
-            -name '*.zip' -o \
-            -name '*.dmg' \
-          \) -exec cp {} release-assets/ \;
+          # Windows Squirrel auto-update assets + installer
+          find windows-assets -type f \( -name 'RELEASES' -o -name '*.nupkg' -o -name '*.exe' \) -exec cp {} release-assets/ \;
+          # macOS auto-update ZIP + DMG
+          find macos-assets -type f \( -name '*.zip' -o -name '*.dmg' \) -exec cp {} release-assets/ \;
+          # Local-AI-runtime catalog + archives
+          find runtime-assets -type f -exec cp {} release-assets/ \;
           echo "Collected release assets:"
           ls -la release-assets
+
+      - name: Create or update draft GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
           if gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             is_draft="$(gh release view "$TAG" --json isDraft -q .isDraft -R "$GITHUB_REPOSITORY")"
             if [[ "$is_draft" != "true" ]]; then
-              echo "ERROR: release $TAG already exists and is PUBLISHED. Refusing to clobber a live release."
-              echo "To republish, delete or redraft the release first."
+              echo "::error::Release $TAG already exists and is PUBLISHED. Refusing to clobber a live release."
               exit 1
             fi
             echo "Release $TAG exists as a draft; uploading assets (--clobber)."
@@ -249,5 +606,4 @@ jobs:
               --title "AiFetchly $VERSION" \
               --generate-notes
           fi
-          echo "Draft release $TAG created with auto-update assets."
-          echo "Publish it manually after inspection — draft releases are invisible to update.electronjs.org."
+          echo "Draft release $TAG ready. Publish it manually after inspection — drafts are invisible to update.electronjs.org."

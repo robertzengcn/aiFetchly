@@ -8,19 +8,20 @@ An Electron desktop application (Vue 3 + TypeScript) that combines AI-powered ch
 
 Users can discover, contact, and market to prospects across platforms using AI-assisted workflows — from finding businesses on Google Maps to generating and sending personalized email campaigns.
 
-## Current Milestone: v1.2 Yandex Maps Business Scraper
+## Current Milestone: v2.0 Local Extensibility
 
-**Goal:** Add a built-in Yandex Maps scraping capability with AI skill entry and manual UI page, using a shared YandexMapsModule and child process Puppeteer worker.
+**Goal:** Add a local extensibility layer (`~/.aifetchly` + `<workspace>/.aifetchly`) that parses user/workspace files into typed snapshots and registers them through existing runtime boundaries (CommandRegistry, AgentDefinitionRegistry, HookRegistry, SkillRegistry) — exposing slash commands, assistant instructions, dynamic agents, hooks, and skills in AiChatV2, with live reload via a workspace watcher child process.
 
-**Target features:**
-- TypeScript type contracts (input, output, progress, error types) for Yandex Maps
-- AI built-in skill `search_yandex_maps_businesses` in skillsRegistry
-- ToolExecutor dispatch with validation and rate limiting
-- YandexMapsModule orchestration layer (shared by AI and UI)
-- Puppeteer child process worker for Yandex Maps scraping
-- IPC handlers and frontend API wrappers
-- Manual UI page with form, progress, results display, and export
-- 6-language translations (en, zh, es, fr, de, ja)
+**Source of truth:** `docs/prd/aifetchly-local-extensibility-prd.md` + `docs/prd/aifetchly-local-extensibility-technical-design.md`
+
+**Target features (6 phases, continuing from Phase 13):**
+- Phase 13 — Global `~/.aifetchly` config loader; `AGENTS.md` instruction injection into AiChatV2 context; CommandRegistry + built-in slash commands (`/help`, `/clear`, `/status`, `/reload-config`); renderer slash-suggestions UI with source badges
+- Phase 14 — Workspace watcher **child process** (`src/childprocess/aifetchly-config/`) + `WorkspaceWatchManager` lifecycle with reference counting + worker crash restart
+- Phase 15 — Markdown prompt commands (`commands/*.md`) with `$ARGUMENTS` expansion + source-replacement reconciliation for add/change/delete/rename
+- Phase 16 — Dynamic agents (`agents/*.md`) via refactored `AgentDefinitionRegistry` + `run_subagent` dispatch by scoped ID
+- Phase 17 — Hooks (`hooks/hooks.json`) with trust-gated, worker/sandbox-only dispatch
+- Phase 18 — Local skills (`skills/*`) through existing SkillRegistry/permission flow + plugin `commands/`/`agents/` activation
+- Cross-cutting — Workspace trust model + persistence; `USER_AI_ENABLED` gating on AI-serving IPC; 6-language i18n (en, zh, es, fr, de, ja)
 
 ## Requirements
 
@@ -42,9 +43,19 @@ Users can discover, contact, and market to prospects across platforms using AI-a
 
 ### Active
 
-<!-- Current scope. Building toward these. -->
+<!-- Current scope. Building toward these. v2.0 Local Extensibility. -->
 
-_No active requirements — awaiting next milestone._
+- [ ] Global `~/.aifetchly` config loading (AGENTS.md, settings.json) with bounded async scan + size limits
+- [ ] `AGENTS.md` assistant instructions injected into AiChatV2 context via AIChatContextAssembler
+- [ ] AiChatV2 slash command system: CommandRegistry, parser, dispatcher, built-in commands (`/help`, `/clear`, `/status`, `/reload-config`)
+- [ ] Renderer slash-suggestions UI with source badges (Built-in / User / Workspace / Plugin) + trust state
+- [ ] Workspace watcher child process + WorkspaceWatchManager reference-counted lifecycle
+- [ ] Markdown prompt commands (`commands/*.md`) with `$ARGUMENTS` expansion + source-replacement reconciliation
+- [ ] Workspace trust model + persistence (instructions/commands/agents/hooks/skills)
+- [ ] Dynamic agents (`agents/*.md`) via refactored AgentDefinitionRegistry + run_subagent dispatch
+- [ ] Hooks (`hooks/hooks.json`) with trust-gated, worker/sandbox-only dispatch
+- [ ] Local skills (`skills/*`) + plugin `commands/`/`agents/` integration via existing SkillRegistry
+- [ ] 6-language i18n for all new UI text
 
 ### Out of Scope
 
@@ -133,4 +144,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-05-26 after milestone v1.2 completion*
+*Last updated: 2026-07-04 after milestone v2.0 kickoff*

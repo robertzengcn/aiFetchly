@@ -3,6 +3,9 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 // Mock electron's ipcMain so we can drive handlers without a real Electron.
 const handlers = new Map<string, (...args: unknown[]) => Promise<unknown>>();
 vi.mock("electron", () => ({
+  BrowserWindow: {
+    getAllWindows: () => [],
+  },
   ipcMain: {
     handle: (channel: string, fn: (...args: unknown[]) => Promise<unknown>) => {
       handlers.set(channel, fn);
@@ -24,7 +27,23 @@ vi.mock("@/modules/token", () => ({
 vi.mock("@/modules/PluginManagementModule", () => ({
   PluginManagementModule: class {
     async listInstalledPlugins() {
-      return [];
+      return [
+        {
+          id: 1,
+          name: "demo-plugin",
+          displayName: "Demo Plugin",
+          version: "1.0.0",
+          source: "local",
+          enabled: 1,
+          health: "healthy",
+          permissionsJson: "[]",
+          updatedAt: new Date("2026-06-17T00:00:00.000Z"),
+          installPath: "/app-data/plugins/installed/demo-plugin",
+          sourceKind: "local-folder",
+          sourceUri: "/home/user/.aifetchly/plugins/demo-plugin",
+          sourceRef: "main",
+        },
+      ];
     }
     async getPluginByName(name: string) {
       if (name !== "demo-plugin") return null;
@@ -41,6 +60,10 @@ vi.mock("@/modules/PluginManagementModule", () => ({
         description: "Demo",
         author: "Tester",
         manifestJson: JSON.stringify({ name, version: "1.0.0" }),
+        installPath: "/app-data/plugins/installed/demo-plugin",
+        sourceKind: "local-folder",
+        sourceUri: "/home/user/.aifetchly/plugins/demo-plugin",
+        sourceRef: "main",
       };
     }
     async togglePlugin() {
@@ -67,9 +90,12 @@ vi.mock("@/modules/MCPToolModule", () => ({
       return [
         {
           id: 42,
-          serverName: "demo-mcp",
+          serverName: "demo-plugin__demo-mcp",
           enabled: true,
           transport: "stdio",
+          command: "npx",
+          tools: JSON.stringify(["search", "fetch"]),
+          metadata: JSON.stringify({ pluginServerName: "demo-mcp" }),
         },
       ];
     }
@@ -78,12 +104,45 @@ vi.mock("@/modules/MCPToolModule", () => ({
     }
   },
 }));
+vi.mock("@/modules/AgentDefinitionModule", () => ({
+  AgentDefinitionModule: class {
+    async findAgentsByPluginName() {
+      return [];
+    }
+  },
+}));
 vi.mock("@/service/PluginImportService", () => ({
   PluginImportService: {
     importFromZip: vi.fn(async () => ({
       success: true,
-      plugin: { name: "p", version: "1.0.0", skillCount: 0, mcpServerCount: 0 },
+      plugin: {
+        name: "p",
+        version: "1.0.0",
+        skillCount: 0,
+        mcpServerCount: 0,
+        agentCount: 0,
+        commandCount: 0,
+        hookCount: 0,
+      },
     })),
+  },
+}));
+vi.mock("@/service/PluginInstallService", () => ({
+  PluginInstallService: class {
+    async installFromSource() {
+      return {
+        success: true,
+        plugin: {
+          name: "p",
+          version: "1.0.0",
+          skillCount: 0,
+          mcpServerCount: 0,
+          agentCount: 0,
+          commandCount: 0,
+          hookCount: 0,
+        },
+      };
+    }
   },
 }));
 vi.mock("@/service/MCPToolService", () => ({
@@ -122,9 +181,24 @@ vi.mock("@/service/PluginLoaderService", () => ({
     }),
   },
 }));
+vi.mock("@/service/UserPluginAutoInstallService", () => ({
+  UserPluginAutoInstallService: {
+    syncDefaultUserPlugins: vi.fn(async () => ({
+      scanned: 0,
+      installed: 0,
+      skipped: 0,
+      errors: [],
+    })),
+  },
+}));
 
 // Import AFTER mocks are registered.
 import { registerPluginIpcHandlers } from "@/main-process/communication/plugin-ipc";
+import { UserPluginAutoInstallService } from "@/service/UserPluginAutoInstallService";
+import { PluginComponentRegistryService } from "@/service/PluginComponentRegistryService";
+import { getAIFetchlyConfigManager } from "@/service/aifetchlyConfig/AIFetchlyConfigManager";
+import { HookRegistry } from "@/service/hooks/HookRegistry";
+import type { SlashCommandDefinition } from "@/entityTypes/slashCommandTypes";
 import {
   PLUGIN_LIST,
   PLUGIN_GET,
@@ -139,6 +213,7 @@ describe("plugin-ipc", () => {
   beforeEach(() => {
     handlers.clear();
     aiEnabledValue = "true";
+    HookRegistry.unregisterSource("plugin:demo-plugin");
     registerPluginIpcHandlers();
   });
 
@@ -151,15 +226,23 @@ describe("plugin-ipc", () => {
     expect(handlers.has(PLUGIN_INSTALL_FROM_SOURCE)).toBe(true);
   });
 
-  it("returns AI-not-enabled envelope when AI is disabled", async () => {
-    aiEnabledValue = "false";
+  it("syncs user plugin folders before listing installed plugins", async () => {
     const fn = handlers.get(PLUGIN_LIST)!;
     const result = await fn({}, undefined);
-    expect(result).toEqual({
-      status: false,
-      msg: expect.stringContaining("not enabled"),
-      data: null,
+    expect(result).toMatchObject({
+      status: true,
+      data: [
+        expect.objectContaining({
+          installPath: "/app-data/plugins/installed/demo-plugin",
+          sourceKind: "local-folder",
+          sourceUri: "/home/user/.aifetchly/plugins/demo-plugin",
+          sourceRef: "main",
+        }),
+      ],
     });
+    expect(
+      UserPluginAutoInstallService.syncDefaultUserPlugins
+    ).toHaveBeenCalled();
   });
 
   it("rejects import with path traversal in zipPath", async () => {
@@ -193,10 +276,153 @@ describe("plugin-ipc", () => {
           expect.objectContaining({
             id: 42,
             name: "demo-mcp",
+            serverName: "demo-plugin__demo-mcp",
+            enabled: true,
+            transport: "stdio",
+            health: "healthy",
+            toolCount: 2,
           }),
         ],
+        installPath: "/app-data/plugins/installed/demo-plugin",
+        sourceKind: "local-folder",
+        sourceUri: "/home/user/.aifetchly/plugins/demo-plugin",
+        sourceRef: "main",
       },
     });
+  });
+
+  it("PLUGIN_GET exposes live plugin hooks and hookCount", async () => {
+    HookRegistry.replaceSource("plugin:demo-plugin", [
+      {
+        id: "plugin:demo-plugin:0",
+        eventName: "SessionStart",
+        type: "callback",
+        source: "plugin",
+        enabled: true,
+        matcher: "WebFetch",
+        failureMode: "warn",
+        callback: () => ({ systemMessage: "loaded" }),
+      },
+    ]);
+
+    try {
+      const fn = handlers.get(PLUGIN_GET)!;
+      const result = await fn({}, { name: "demo-plugin" });
+      expect(result).toMatchObject({
+        status: true,
+        data: {
+          hookCount: 1,
+          hooks: [
+            expect.objectContaining({
+              id: "plugin:demo-plugin:0",
+              eventName: "SessionStart",
+              matcher: "WebFetch",
+              enabled: true,
+              type: "callback",
+              health: "healthy",
+            }),
+          ],
+        },
+      });
+    } finally {
+      HookRegistry.unregisterSource("plugin:demo-plugin");
+    }
+  });
+
+  it("PLUGIN_GET exposes a renderer-safe command list + commandCount (no body/metadata)", async () => {
+    // Seed the live registry with one command under plugin:demo-plugin.
+    const registry = getAIFetchlyConfigManager().getCommandRegistry();
+    const reviewDef: SlashCommandDefinition = {
+      id: "plugin:demo-plugin:command:review",
+      name: "review",
+      description: "Review changes",
+      aliases: ["code-review"],
+      type: "prompt",
+      source: "plugin",
+      sourceId: "plugin:demo-plugin",
+      sourceLabel: "Plugin",
+      argumentHint: "[scope]",
+      requiresTrust: false,
+      enabled: true,
+      // Body/metadata must NEVER reach the renderer (PRD §11.1 / AC-9).
+      body: "SECRET PROMPT BODY $ARGUMENTS",
+      metadata: { secret: "leak-me" },
+    };
+    registry.replaceSource("plugin:demo-plugin", [reviewDef]);
+
+    try {
+      const fn = handlers.get(PLUGIN_GET)!;
+      const result = await fn({}, { name: "demo-plugin" });
+      expect(result).toMatchObject({ status: true });
+      const data = (
+        result as { data: { commands: unknown[]; commandCount: number } }
+      ).data;
+      expect(data.commandCount).toBe(1);
+      expect(data.commands).toHaveLength(1);
+      const serialized = JSON.stringify(data.commands);
+      // Renderer-safe fields present...
+      expect(serialized).toContain('"name":"review"');
+      expect(serialized).toContain('"sourceId":"plugin:demo-plugin"');
+      expect(serialized).toContain('"argumentHint":"[scope]"');
+      // ...raw body + metadata stripped.
+      expect(serialized).not.toContain("SECRET PROMPT BODY");
+      expect(serialized).not.toContain("leak-me");
+    } finally {
+      registry.replaceSource("plugin:demo-plugin", []);
+    }
+  });
+
+  it("PLUGIN_LIST summary carries commandCount from the live registry", async () => {
+    const registry = getAIFetchlyConfigManager().getCommandRegistry();
+    registry.replaceSource("plugin:demo-plugin", [
+      {
+        id: "plugin:demo-plugin:command:a",
+        name: "a",
+        description: "A",
+        aliases: [],
+        type: "prompt",
+        source: "plugin",
+        sourceId: "plugin:demo-plugin",
+        sourceLabel: "Plugin",
+        requiresTrust: false,
+        enabled: true,
+      },
+    ]);
+
+    try {
+      const fn = handlers.get(PLUGIN_LIST)!;
+      const result = await fn({}, undefined);
+      expect(result).toMatchObject({
+        status: true,
+        data: [expect.objectContaining({ commandCount: 1 })],
+      });
+    } finally {
+      registry.replaceSource("plugin:demo-plugin", []);
+    }
+  });
+
+  it("PLUGIN_LIST summary carries hookCount from the live hook registry", async () => {
+    HookRegistry.replaceSource("plugin:demo-plugin", [
+      {
+        id: "plugin:demo-plugin:0",
+        eventName: "SessionStart",
+        type: "callback",
+        source: "plugin",
+        enabled: true,
+        callback: () => ({}),
+      },
+    ]);
+
+    try {
+      const fn = handlers.get(PLUGIN_LIST)!;
+      const result = await fn({}, undefined);
+      expect(result).toMatchObject({
+        status: true,
+        data: [expect.objectContaining({ hookCount: 1 })],
+      });
+    } finally {
+      HookRegistry.unregisterSource("plugin:demo-plugin");
+    }
   });
 
   it("PLUGIN_INSTALL_FROM_SOURCE rejects an invalid kind", async () => {
@@ -232,14 +458,44 @@ describe("plugin-ipc", () => {
     });
   });
 
-  it("PLUGIN_INSTALL_FROM_SOURCE returns AI-not-enabled when AI disabled", async () => {
-    aiEnabledValue = "false";
+  it("PLUGIN_IMPORT promotes commands/agents immediately after a successful install (PRD §9.4)", async () => {
+    aiEnabledValue = "true";
+    const applySpy = vi.mocked(
+      PluginComponentRegistryService.applyLoadedPlugins
+    );
+    applySpy.mockClear();
+    const fn = handlers.get(PLUGIN_IMPORT)!;
+    const result = await fn({}, { zipPath: "/tmp/plugin.zip" });
+    expect(result).toMatchObject({ status: true });
+    expect(applySpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("PLUGIN_INSTALL_FROM_SOURCE promotes commands/agents immediately after a successful install (PRD §9.4)", async () => {
+    aiEnabledValue = "true";
+    const applySpy = vi.mocked(
+      PluginComponentRegistryService.applyLoadedPlugins
+    );
+    applySpy.mockClear();
     const fn = handlers.get(PLUGIN_INSTALL_FROM_SOURCE)!;
-    const result = await fn({}, { kind: "local-folder", folderPath: "/tmp" });
-    expect(result).toEqual({
-      status: false,
-      msg: expect.stringContaining("not enabled"),
-      data: null,
-    });
+    const result = await fn(
+      {},
+      { kind: "local-folder", folderPath: "/tmp/plugin" }
+    );
+    expect(result).toMatchObject({ status: true });
+    expect(applySpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("PLUGIN_IMPORT still returns success when post-install promotion throws (recoverable, design §11.3)", async () => {
+    aiEnabledValue = "true";
+    const applySpy = vi.mocked(
+      PluginComponentRegistryService.applyLoadedPlugins
+    );
+    applySpy.mockClear();
+    applySpy.mockRejectedValueOnce(new Error("promotion boom"));
+    const fn = handlers.get(PLUGIN_IMPORT)!;
+    const result = await fn({}, { zipPath: "/tmp/plugin.zip" });
+    // Install itself succeeded; promotion failure must not fail the install.
+    expect(result).toMatchObject({ status: true });
+    expect(applySpy).toHaveBeenCalledTimes(1);
   });
 });

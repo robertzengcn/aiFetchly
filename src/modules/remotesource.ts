@@ -43,11 +43,6 @@ export type socialTask = {
     ResulttaskId?: number
   }
 }
-type configType = {
-  REMOTEADD: string,
-  REMOTEUSERNAME: string,
-  REMOTEPASSWORD: string,
-}
 type keywordItem = {
   keyword: string,
   tag: string,
@@ -87,7 +82,6 @@ type jwtTokenUser = {
 export class RemoteSource {
   private tokenname= TOKENNAME;
   // private static instance: RemoteSource;
-  REMOTEADD: string;
   // REMOTEUSERNAME: string;
   // REMOTEPASSWORD: string;
   // private _Token:string;
@@ -96,7 +90,6 @@ export class RemoteSource {
 
     this._httpClient = new HttpClient();
     // const config = this.readenv();
-    // this.REMOTEADD = config.REMOTEADD;
     // this.tokenname="social-market-token"
     // this.REMOTEUSERNAME = config.REMOTEUSERNAME;
     // this.REMOTEPASSWORD = config.REMOTEPASSWORD;
@@ -115,9 +108,6 @@ export class RemoteSource {
   //   const envcofig = this.readConfig();
   //   debug(envcofig)
   //   //check key exist in object
-  //   if (!envcofig.hasOwnProperty("REMOTEADD")) {
-  //     throw new Error(`REMOTEADD not found in .env file`);
-  //   }
   //   if (!envcofig.hasOwnProperty("REMOTEUSERNAME")) {
   //     throw new Error(`USERNAME not found in .env file`);
   //   }

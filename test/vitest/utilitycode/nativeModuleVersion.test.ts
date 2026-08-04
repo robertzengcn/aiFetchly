@@ -9,6 +9,7 @@
  */
 import { describe, it, expect } from "vitest";
 import * as fs from "fs";
+import * as os from "os";
 import * as path from "path";
 import * as child_process from "child_process";
 
@@ -34,6 +35,59 @@ function getElectronModuleVersion(electronBinaryPath: string): number | null {
     return null;
   }
   return parseInt(match[1], 10);
+}
+
+function getElectronBinaryPath(projectRoot: string): string {
+  if (process.platform === "darwin") {
+    return path.join(
+      projectRoot,
+      "node_modules/electron/dist/Electron.app/Contents/MacOS/Electron"
+    );
+  }
+  return path.join(
+    projectRoot,
+    "node_modules/electron/dist",
+    process.platform === "win32" ? "electron.exe" : "electron"
+  );
+}
+
+function getElectronCliPath(projectRoot: string): string {
+  return path.join(
+    projectRoot,
+    "node_modules/.bin",
+    process.platform === "win32" ? "electron.cmd" : "electron"
+  );
+}
+
+function getElectronRuntimeModuleVersion(projectRoot: string): number | null {
+  const electronCliPath = getElectronCliPath(projectRoot);
+  if (!fs.existsSync(electronCliPath)) {
+    return null;
+  }
+  const probePath = path.join(
+    os.tmpdir(),
+    `aifetchly-native-version-${process.pid}-${Date.now()}.js`
+  );
+  fs.writeFileSync(
+    probePath,
+    "process.stdout.write('ELECTRON_MODULE_VERSION:' + process.versions.modules); process.exit(0);"
+  );
+  try {
+    const result = child_process.spawnSync(
+      electronCliPath,
+      ["--no-sandbox", "--headless", "--disable-gpu", probePath],
+      {
+        encoding: "utf-8",
+        timeout: 15000,
+      }
+    );
+    const match = (result.stdout || "").match(
+      /ELECTRON_MODULE_VERSION:(\d+)/
+    );
+    return match ? parseInt(match[1], 10) : null;
+  } finally {
+    fs.rmSync(probePath, { force: true });
+  }
 }
 
 /**
@@ -68,10 +122,13 @@ function getCompiledModuleVersion(modulePath: string): number | null {
 
 describe("Native module version compatibility", () => {
   const projectRoot = path.resolve(__dirname, "../../..");
-  const electronBinaryPath = path.join(
+  const packageJsonPath = path.join(projectRoot, "package.json");
+  const forgeConfigPath = path.join(projectRoot, "forge.config.js");
+  const rebuildScriptPath = path.join(
     projectRoot,
-    "node_modules/electron/dist/electron"
+    "scripts/rebuild-better-sqlite.js"
   );
+  const electronBinaryPath = getElectronBinaryPath(projectRoot);
   const betterSqliteModulePath = path.join(
     projectRoot,
     "node_modules/better-sqlite3/build/Release/better_sqlite3.node"
@@ -112,7 +169,9 @@ describe("Native module version compatibility", () => {
       return;
     }
 
-    const electronModuleVersion = getElectronModuleVersion(electronBinaryPath);
+    const electronModuleVersion =
+      getElectronModuleVersion(electronBinaryPath) ??
+      getElectronRuntimeModuleVersion(projectRoot);
     expect(
       electronModuleVersion,
       "Should be able to read node_module_version from Electron binary"
@@ -132,10 +191,6 @@ describe("Native module version compatibility", () => {
   });
 
   it("should have the rebuild script target matching the installed Electron version", () => {
-    const pkgPath = path.join(projectRoot, "package.json");
-    const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8"));
-
-    const rebuildScript = pkg.scripts?.["rebuild-better-sqlite"] || "";
     const electronPkgPath = path.join(
       projectRoot,
       "node_modules/electron/package.json"
@@ -144,17 +199,102 @@ describe("Native module version compatibility", () => {
       fs.readFileSync(electronPkgPath, "utf-8")
     ).version;
 
-    const targetMatch = rebuildScript.match(/npm_config_target=([^\s]+)/);
-    expect(
-      targetMatch,
-      "rebuild-better-sqlite script should set npm_config_target"
-    ).not.toBeNull();
+    const result = child_process.spawnSync(
+      process.execPath,
+      [rebuildScriptPath, "--print-target"],
+      {
+        encoding: "utf-8",
+        timeout: 10000,
+      }
+    );
 
-    const targetVersion = targetMatch![1];
+    expect(
+      result.status,
+      `rebuild-better-sqlite target helper failed: ${result.stderr}`
+    ).toBe(0);
+
+    const targetVersion = result.stdout.trim();
     expect(
       targetVersion,
       `rebuild-better-sqlite targets Electron ${targetVersion} but installed version is ${electronVersion}. ` +
-        `Update the npm_config_target in package.json scripts.`
+        `Update scripts/rebuild-better-sqlite.js.`
     ).toBe(electronVersion);
+  });
+
+  it("should invoke npm through a shell on Windows rebuilds", () => {
+    const rebuildScript = fs.readFileSync(rebuildScriptPath, "utf-8");
+
+    expect(rebuildScript).toContain('shell: process.platform === "win32"');
+  });
+
+  it("should have a direct node-gyp fallback when npm rebuild leaves a bad binary", () => {
+    const rebuildScript = fs.readFileSync(rebuildScriptPath, "utf-8");
+
+    expect(rebuildScript).toContain("rebuildForElectronWithNodeGyp");
+    expect(rebuildScript).toContain("--runtime=electron");
+    expect(rebuildScript).toContain("--dist-url=https://electronjs.org/headers");
+  });
+
+  it("should pin node-gyp Python before GitHub workflow installs", () => {
+    const workflowPaths = [
+      path.join(projectRoot, ".github/workflows/build.yml"),
+      path.join(projectRoot, ".github/workflows/ci.yml"),
+      path.join(projectRoot, ".github/workflows/release.yml"),
+    ];
+
+    for (const workflowPath of workflowPaths) {
+      const workflow = fs.readFileSync(workflowPath, "utf-8");
+
+      expect(workflow).toContain("Configure node-gyp Python");
+      expect(workflow).toContain("npm_config_python");
+      expect(workflow).toContain("NODE_GYP_FORCE_PYTHON");
+    }
+  });
+
+  it("should not upgrade native modules to latest during GitHub builds", () => {
+    const workflowPaths = [
+      path.join(projectRoot, ".github/workflows/build.yml"),
+      path.join(projectRoot, ".github/workflows/release.yml"),
+    ];
+
+    for (const workflowPath of workflowPaths) {
+      const workflow = fs.readFileSync(workflowPath, "utf-8");
+
+      expect(workflow).not.toContain("better-sqlite3@latest");
+      expect(workflow).not.toContain("sqlite3@latest");
+    }
+  });
+
+  it("should avoid windows-latest for native Windows build jobs", () => {
+    const workflowPaths = [
+      path.join(projectRoot, ".github/workflows/build.yml"),
+      path.join(projectRoot, ".github/workflows/release.yml"),
+    ];
+
+    for (const workflowPath of workflowPaths) {
+      const workflow = fs.readFileSync(workflowPath, "utf-8");
+
+      expect(workflow).not.toContain("runs-on: windows-latest");
+      expect(workflow).toContain("runs-on: windows-2022");
+    }
+  });
+
+  it("should verify native modules before Electron startup commands", () => {
+    const packageJson = JSON.parse(
+      fs.readFileSync(packageJsonPath, "utf-8")
+    ) as {
+      scripts?: Record<string, string>;
+    };
+
+    expect(packageJson.scripts?.prestart).toBe("yarn rebuild-native");
+    expect(packageJson.scripts?.predev).toBe("yarn rebuild-native");
+  });
+
+  it("should verify native modules inside Forge preStart for direct launches", () => {
+    const forgeConfig = fs.readFileSync(forgeConfigPath, "utf-8");
+
+    expect(forgeConfig).toContain("preStart: async");
+    expect(forgeConfig).toContain("ensureBetterSqliteElectronBinary");
+    expect(forgeConfig).toContain("scripts\", \"rebuild-better-sqlite.js");
   });
 });

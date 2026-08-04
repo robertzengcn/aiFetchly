@@ -1,5 +1,7 @@
 import type {
+  OpenAIChatImage,
   OpenAIChatCompletionChunk,
+  OpenAIStreamDelta,
   OpenAIStreamToolCallDelta,
   OpenAIUsage,
 } from "@/api/aiChatApi";
@@ -8,9 +10,39 @@ export interface OpenAIStreamTextState {
   responseId?: string;
   model?: string;
   fullContent: string;
+  reasoningContent: string;
   finishReason?: string | null;
   sawToolCallDelta: boolean;
   usage?: OpenAIUsage;
+  images: OpenAIChatImage[];
+}
+
+export interface OpenAIStreamIngestResult {
+  contentDelta: string;
+  reasoningDelta: string;
+}
+
+/**
+ * Extract the first non-empty reasoning delta from a choice delta, using the
+ * priority order reasoning_delta → reasoning_content → reasoning_summary.
+ * Only string values are honoured; malformed non-string fields are ignored so
+ * a provider that emits a non-string structure cannot corrupt the transcript.
+ */
+function extractReasoningDelta(delta: OpenAIStreamDelta | undefined): string {
+  if (!delta) {
+    return "";
+  }
+  const candidates: (string | null | undefined)[] = [
+    delta.reasoning_delta,
+    delta.reasoning_content,
+    delta.reasoning_summary,
+  ];
+  for (const value of candidates) {
+    if (typeof value === "string" && value.length > 0) {
+      return value;
+    }
+  }
+  return "";
 }
 
 export interface BufferedOpenAIToolCall {
@@ -38,7 +70,9 @@ export interface ParsedToolCallResult {
 export class OpenAIStreamAccumulator {
   private _state: OpenAIStreamTextState = {
     fullContent: "",
+    reasoningContent: "",
     sawToolCallDelta: false,
+    images: [],
   };
   private _toolCalls: Map<number, BufferedOpenAIToolCall> = new Map();
 
@@ -53,9 +87,11 @@ export class OpenAIStreamAccumulator {
   }
 
   /**
-   * Ingest a single raw chunk. Returns the non-empty content delta (or "").
+   * Ingest a single raw chunk. Returns the non-empty content and reasoning
+   * deltas for this chunk (each "" when absent). Reasoning is accumulated
+   * separately from answer content so the two channels never mix.
    */
-  ingest(chunk: OpenAIChatCompletionChunk): string {
+  ingest(chunk: OpenAIChatCompletionChunk): OpenAIStreamIngestResult {
     if (chunk.id) {
       this._state.responseId = chunk.id;
     }
@@ -69,8 +105,16 @@ export class OpenAIStreamAccumulator {
     }
 
     let contentDelta = "";
+    let reasoningDelta = "";
     for (const choice of chunk.choices ?? []) {
       const delta = choice.delta;
+      // Emit reasoning before content so the renderer sees "thinking before
+      // answer" within a single chunk. Final stored state is order-independent.
+      const nextReasoning = extractReasoningDelta(delta);
+      if (nextReasoning) {
+        this._state.reasoningContent += nextReasoning;
+        reasoningDelta += nextReasoning;
+      }
       if (delta?.content) {
         this._state.fullContent += delta.content;
         contentDelta += delta.content;
@@ -84,8 +128,27 @@ export class OpenAIStreamAccumulator {
           this._bufferToolCall(tc);
         }
       }
+      if (Array.isArray(delta?.images)) {
+        this._appendImages(delta.images);
+      }
     }
-    return contentDelta;
+    return { contentDelta, reasoningDelta };
+  }
+
+  private _appendImages(images: OpenAIChatImage[]): void {
+    for (const image of images) {
+      if (image.type !== "image" || (!image.url && !image.b64_json)) {
+        continue;
+      }
+      const alreadyCaptured = this._state.images.some(
+        (existing) =>
+          (image.url && existing.url === image.url) ||
+          (image.b64_json && existing.b64_json === image.b64_json)
+      );
+      if (!alreadyCaptured) {
+        this._state.images.push(image);
+      }
+    }
   }
 
   private _bufferToolCall(tc: OpenAIStreamToolCallDelta): void {

@@ -4,8 +4,8 @@
     <v-row>
       <v-col cols="12">
         <div class="d-flex align-center mb-4">
-          <v-icon size="32" color="primary" class="mr-3">mdi-view-dashboard</v-icon>
-          <h1 class="text-h4 font-weight-bold">{{ translations.dashboard }}</h1>
+          <v-icon size="32" color="primary" class="mr-3">mdi-chart-box-outline</v-icon>
+          <h1 class="text-h4 font-weight-bold">{{ translations.statistics }}</h1>
           <v-spacer></v-spacer>
           <v-btn
             icon
@@ -121,12 +121,12 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { useRouter } from 'vue-router';
 import { useI18n } from 'vue-i18n';
-import DashboardDateRangeFilter from './components/DashboardDateRangeFilter.vue';
-import DashboardSummaryCards from './components/DashboardSummaryCards.vue';
-import DashboardTrendsChart from './components/DashboardTrendsChart.vue';
-import DashboardSearchEngineChart from './components/DashboardSearchEngineChart.vue';
-import DashboardEmailStatusChart from './components/DashboardEmailStatusChart.vue';
-import DashboardActivityChart from './components/DashboardActivityChart.vue';
+import DashboardDateRangeFilter from '@/views/dashboard/components/DashboardDateRangeFilter.vue';
+import DashboardSummaryCards from '@/views/dashboard/components/DashboardSummaryCards.vue';
+import DashboardTrendsChart from '@/views/dashboard/components/DashboardTrendsChart.vue';
+import DashboardSearchEngineChart from '@/views/dashboard/components/DashboardSearchEngineChart.vue';
+import DashboardEmailStatusChart from '@/views/dashboard/components/DashboardEmailStatusChart.vue';
+import DashboardActivityChart from '@/views/dashboard/components/DashboardActivityChart.vue';
 import {
   getDashboardSummary,
   getDashboardTrends,
@@ -145,7 +145,7 @@ const { t } = useI18n();
 
 // Computed translations
 const translations = computed(() => ({
-  dashboard: t('home.dashboard'),
+  statistics: t('route.statistic'),
   refreshDashboard: t('home.refresh_dashboard'),
   analyticsTrends: t('home.analytics_trends'),
   close: t('common.close'),
@@ -510,8 +510,10 @@ onUnmounted(() => {
   background-color: #f5f5f5;
   min-height: 100vh;
 }
+</style>
 
-:deep(.v-theme--dark) .dashboard-home {
+<style>
+:root[theme="dark"] .dashboard-home {
   background-color: #121212;
 }
 </style>

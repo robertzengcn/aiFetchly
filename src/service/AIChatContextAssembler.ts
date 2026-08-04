@@ -3,15 +3,26 @@ import { AIChatCompactModule } from "@/modules/AIChatCompactModule";
 import { AIChatV2Module } from "@/modules/AIChatV2Module";
 import { AIChatTokenEstimator } from "@/service/AIChatTokenEstimator";
 import { AIUserMemoryRetrievalService } from "@/service/AIUserMemoryRetrievalService";
+import { AIWorkspaceMemoryRetrievalService } from "@/service/AIWorkspaceMemoryRetrievalService";
 import { buildPlanModeSystemPrompt } from "@/service/PlanModePromptBuilder";
 import { SystemSettingModule } from "@/modules/SystemSettingModule";
+import { AgentDefinitionModule } from "@/modules/AgentDefinitionModule";
 import {
   ai_memory_injection_enabled,
+  ai_workspace_memory_injection_enabled,
   ai_custom_context_directive,
 } from "@/config/settinggroupInit";
 import { WorkspaceResolver } from "@/service/WorkspaceResolver";
+import { AIFetchlyContextLoader } from "@/service/aifetchlyConfig/AIFetchlyContextLoader";
+import { buildAvailableAgentsBlock } from "@/service/aifetchlyConfig/availableAgentsBlock";
 import path from "node:path";
-import type { OpenAIChatMessage, OpenAIMessageRole } from "@/api/aiChatApi";
+import os from "node:os";
+import type {
+  OpenAIChatMessage,
+  OpenAIMessageRole,
+  OpenAITextContentPart,
+  OpenAIImageUrlContentPart,
+} from "@/api/aiChatApi";
 import { MessageType } from "@/entityTypes/commonType";
 import type { AIChatPlanStateView } from "@/entityTypes/aiChatPlanTypes";
 
@@ -30,6 +41,7 @@ export interface AIChatContextAssembleInput {
   readonly maxTokens?: number;
   readonly planState?: AIChatPlanStateView | null;
   readonly recentMessageWindow?: number;
+  readonly currentUserContentParts?: Array<OpenAITextContentPart | OpenAIImageUrlContentPart>;
 }
 
 export interface AIChatContextAssembleResult {
@@ -37,6 +49,8 @@ export interface AIChatContextAssembleResult {
   readonly tokenEstimate: number;
   readonly usedSessionMemory: boolean;
   readonly usedFullCompact: boolean;
+  readonly usedWorkspaceMemory: boolean;
+  readonly workspaceMemoryCount: number;
   readonly usedDurableMemory: boolean;
   readonly durableMemoryCount: number;
   readonly compactTriggered: boolean;
@@ -60,7 +74,9 @@ export class AIChatContextAssembler {
   private readonly v2 = new AIChatV2Module();
   private readonly estimator = new AIChatTokenEstimator();
   private readonly durableMemory = new AIUserMemoryRetrievalService();
+  private readonly workspaceMemory = new AIWorkspaceMemoryRetrievalService();
   private readonly systemSettings = new SystemSettingModule();
+  private readonly aifetchlyContext = new AIFetchlyContextLoader();
 
   async assemble(
     input: AIChatContextAssembleInput
@@ -132,9 +148,7 @@ export class AIChatContextAssembler {
     // probing the filesystem. Gracefully degrade on lookup failure.
     try {
       const workspaceResolver = new WorkspaceResolver();
-      const resolved = await workspaceResolver.resolve(
-        input.conversationId
-      );
+      const resolved = await workspaceResolver.resolve(input.conversationId);
       if (resolved) {
         const displayName = path.basename(resolved.rootPath);
         messages.push({
@@ -149,10 +163,103 @@ export class AIChatContextAssembler {
       );
     }
 
+    // Environment & system context. Informs the model of the OS, app
+    // version, and local date/time so OS-specific advice, file-path
+    // lookups, and time-relative queries work correctly.
+    try {
+      const envBlock = await this.buildEnvironmentContext();
+      messages.push({ role: "system", content: envBlock });
+    } catch (err) {
+      console.error(
+        "[ai-chat-context] failed to build environment context:",
+        err
+      );
+    }
+
+    // AiFetchly global AGENTS.md injection. Reads from the in-memory cache
+    // populated by AIFetchlyConfigManager; failures degrade to no-injection.
+    try {
+      const blocks = await this.aifetchlyContext.getInstructionBlocks({
+        conversationId: input.conversationId,
+        mode: input.mode,
+      });
+      for (const block of blocks) {
+        messages.push({
+          role: "system",
+          content: AIFetchlyContextLoader.formatInstructionBlock(block),
+        });
+      }
+    } catch (err) {
+      console.error(
+        "[ai-chat-context] aifetchly instructions injection failed:",
+        err
+      );
+    }
+
+    // Available agents block for run_subagent discovery. Use the same runtime
+    // catalog as AGENT_DEFINITION_LIST so persisted plugin-owned agents are
+    // visible only when active, healthy, and owned by an enabled plugin.
+    try {
+      const agents = await new AgentDefinitionModule().listActiveForRuntime();
+      const agentsBlock = buildAvailableAgentsBlock(agents);
+      if (agentsBlock.length > 0) {
+        messages.push({ role: "system", content: agentsBlock });
+      }
+    } catch (err) {
+      console.error(
+        "[ai-chat-context] available agents injection failed:",
+        err
+      );
+    }
+
     // Durable user memory injection. Reads the user-controllable toggle from
     // the system_setting table (default-on when absent). Placed before compact
     // context so recent conversation history wins when they conflict.
     let injectionEnabled = true;
+
+    // Workspace memory injection. Project-scoped memories for the active
+    // approved workspace. Resolves the workspace (and its key) in the main
+    // process; returns an empty block when no workspace is approved or the
+    // toggle is off. Placed AFTER the active-workspace block and BEFORE durable
+    // user memory so workspace memory wins over global memory for
+    // project-specific behavior. Retrieval failure must never break chat —
+    // degrade to no-injection (do NOT fall back to global user memory).
+    let workspaceInjectionEnabled = true;
+    try {
+      const wv = await this.systemSettings.getSettingValue(
+        ai_workspace_memory_injection_enabled
+      );
+      workspaceInjectionEnabled = wv !== "false";
+    } catch (err) {
+      console.error(
+        "[ai-chat-context] failed to read workspace memory injection toggle:",
+        err
+      );
+    }
+    let workspaceContextBlock = "";
+    let workspaceMemoryCount = 0;
+    if (workspaceInjectionEnabled) {
+      try {
+        // Caps (8 memories / 1800 tokens) are owned by the retrieval service's
+        // own defaults — not duplicated here, so a default change propagates.
+        const workspaceMem = await this.workspaceMemory.retrieve({
+          currentUserMessage: input.currentUserMessage,
+          conversationId: input.conversationId,
+          mode: input.mode,
+        });
+        workspaceContextBlock = workspaceMem.contextBlock;
+        workspaceMemoryCount = workspaceMem.memories.length;
+      } catch (err) {
+        console.error(
+          "[ai-chat-context] workspace memory retrieval failed:",
+          err
+        );
+      }
+    }
+    if (workspaceContextBlock.length > 0) {
+      messages.push({ role: "system", content: workspaceContextBlock });
+    }
+
     try {
       const v = await this.systemSettings.getSettingValue(
         ai_memory_injection_enabled
@@ -204,7 +311,10 @@ export class AIChatContextAssembler {
       messages.push({ role: roleOf(r.role), content: r.content });
     }
 
-    messages.push({ role: "user", content: input.currentUserMessage });
+    messages.push({
+      role: "user",
+      content: input.currentUserContentParts ?? input.currentUserMessage,
+    });
 
     const tokenEstimate = this.estimator.estimateMessages(messages);
 
@@ -213,10 +323,38 @@ export class AIChatContextAssembler {
       tokenEstimate,
       usedSessionMemory: !fullCompact && !!sessionMemory,
       usedFullCompact: !!fullCompact,
+      usedWorkspaceMemory: workspaceMemoryCount > 0,
+      workspaceMemoryCount,
       usedDurableMemory: durableMemoryCount > 0,
       durableMemoryCount,
       compactTriggered: false,
       warnings,
     };
+  }
+
+  private async buildEnvironmentContext(): Promise<string> {
+    const platform = os.type();
+    const release = os.release();
+    const arch = process.arch;
+
+    let appVersion = "unknown";
+    try {
+      const { app } = await import("electron");
+      const fn = (
+        app as unknown as { getVersion?: () => string }
+      ).getVersion;
+      appVersion = typeof fn === "function" ? fn.call(app) : "unknown";
+    } catch {
+      // Not running inside Electron (e.g. test runner) — leave as "unknown".
+    }
+
+    const now = new Date().toISOString().replace("T", " ").replace(/\.\d+Z$/, " UTC");
+
+    return [
+      "# Environment & System Context",
+      `- Operating System: ${platform} ${release} (${arch})`,
+      `- App Version: ${appVersion}`,
+      `- Local Date & Time: ${now}`,
+    ].join("\n");
   }
 }

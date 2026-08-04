@@ -15,7 +15,11 @@ export type AiMessageTaskRunStatus =
   | "failed"
   | "cancelled"
   | "blocked_by_policy"
-  | "timeout";
+  | "timeout"
+  // Recovery-visible states used by the scheduler (technical-design §9.4).
+  | "waiting_for_conversation"
+  | "coalesced"
+  | "interrupted";
 
 /** Structured error codes for AI message task runs. */
 export type AiMessageTaskErrorCode =

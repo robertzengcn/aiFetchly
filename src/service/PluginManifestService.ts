@@ -5,8 +5,10 @@ import {
   PLUGIN_SEMVER_REGEX,
   resolvePluginRelativePath,
   type PluginError,
+  type PluginFormat,
   type PluginManifest,
 } from "@/entityTypes/pluginTypes";
+import { ClaudePluginAdapter } from "@/service/pluginCompat/ClaudePluginAdapter";
 
 /**
  * Loads and validates plugin manifests from disk.
@@ -76,7 +78,7 @@ function validateManifest(
     errors.push({
       code: "manifest-schema-invalid",
       message:
-        'Invalid or missing "name". Must match /^[a-z][a-z0-9_-]*$/ (e.g. "lead-tools").',
+        'Invalid or missing "name". Must match /^[a-z0-9][a-z0-9_-]*$/ (e.g. "lead-tools" or "2-commit-fast").',
       recoverable: false,
     });
   }
@@ -144,13 +146,22 @@ function validateManifest(
       recoverable: false,
     });
   }
+  if (m.agents !== undefined && !isStringArray(m.agents)) {
+    errors.push({
+      code: "manifest-schema-invalid",
+      message: '"agents" must be an array of relative path strings.',
+      recoverable: false,
+    });
+  }
 
   const skills = Array.isArray(m.skills) ? m.skills : [];
   const mcpServers = Array.isArray(m.mcpServers) ? m.mcpServers : [];
-  if (skills.length === 0 && mcpServers.length === 0) {
+  const agents = Array.isArray(m.agents) ? m.agents : [];
+  if (skills.length === 0 && mcpServers.length === 0 && agents.length === 0) {
     errors.push({
       code: "manifest-schema-invalid",
-      message: 'At least one of "skills" or "mcpServers" must be non-empty.',
+      message:
+        'At least one of "skills", "mcpServers", or "agents" must be non-empty.',
       recoverable: false,
     });
   }
@@ -190,6 +201,19 @@ function validateManifest(
       });
     }
   }
+  for (const agentPath of agents) {
+    try {
+      resolvePluginRelativePath(pluginRoot, agentPath);
+    } catch {
+      errors.push({
+        code: "path-outside-plugin",
+        componentType: "agent",
+        path: agentPath,
+        message: `Agent path "${agentPath}" escapes the plugin directory.`,
+        recoverable: false,
+      });
+    }
+  }
 
   if (errors.length > 0) {
     return fail(errors);
@@ -203,19 +227,63 @@ function validateManifest(
 
 /**
  * Locate the plugin manifest file inside `pluginRoot`.
- * Prefers `.aifetchly-plugin/plugin.json`, falls back to root `plugin.json`.
- * Returns the absolute path or null when no manifest is found.
+ *
+ * Probe order (first hit wins):
+ *   1. .aifetchly-plugin/plugin.json   → native AiFetchly format
+ *   2. .claude-plugin/plugin.json      → Claude compat format
+ *   3. plugin.json (root)              → legacy (treated as aifetchly)
+ *
+ * Returns the absolute path plus the detected format, or null when no
+ * manifest is found.
  */
-function locateManifestFile(pluginRoot: string): string | null {
-  const preferred = path.join(pluginRoot, ".aifetchly-plugin", "plugin.json");
-  if (fs.existsSync(preferred)) {
-    return preferred;
-  }
-  const fallback = path.join(pluginRoot, "plugin.json");
-  if (fs.existsSync(fallback)) {
-    return fallback;
-  }
+function locateManifestFile(
+  pluginRoot: string
+): { path: string; format: PluginFormat } | null {
+  const ai = path.join(pluginRoot, ".aifetchly-plugin", "plugin.json");
+  if (fs.existsSync(ai)) return { path: ai, format: "aifetchly" };
+
+  const cc = path.join(pluginRoot, ".claude-plugin", "plugin.json");
+  if (fs.existsSync(cc)) return { path: cc, format: "claude" };
+
+  const root = path.join(pluginRoot, "plugin.json");
+  if (fs.existsSync(root)) return { path: root, format: "aifetchly" };
+
   return null;
+}
+
+/**
+ * Resolve the effective plugin root directory when the given `dir` might be
+ * wrapped inside a single top-level folder — a common pattern when a plugin
+ * author zips their plugin folder directly (e.g. `my-plugin/` becomes
+ * `my-plugin.zip` and extracting produces `/tmp/xxx/my-plugin/...`).
+ *
+ * Returns the deepest directory that contains a manifest, preferring the
+ * original dir if the manifest is already at the root.
+ */
+export function resolvePluginRoot(dir: string): string {
+  if (locateManifestFile(dir)) return dir;
+
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(dir);
+  } catch {
+    return dir;
+  }
+
+  const subdirs = entries.filter((e) => {
+    try {
+      return fs.statSync(path.join(dir, e)).isDirectory();
+    } catch {
+      return false;
+    }
+  });
+
+  if (subdirs.length === 1) {
+    const nested = path.join(dir, subdirs[0]);
+    if (locateManifestFile(nested)) return nested;
+  }
+
+  return dir;
 }
 
 export class PluginManifestService {
@@ -227,18 +295,20 @@ export class PluginManifestService {
   static async loadFromDirectory(
     pluginRoot: string
   ): Promise<PluginManifestLoadResult> {
-    const manifestPath = locateManifestFile(pluginRoot);
-    if (!manifestPath) {
+    const located = locateManifestFile(pluginRoot);
+    if (!located) {
       return fail([
         {
           code: "manifest-not-found",
           path: pluginRoot,
           message:
-            "No plugin manifest found. Expected .aifetchly-plugin/plugin.json (or root plugin.json).",
+            "No plugin manifest found. Expected .aifetchly-plugin/plugin.json, .claude-plugin/plugin.json, or root plugin.json.",
           recoverable: false,
         },
       ]);
     }
+
+    const manifestPath = located.path;
 
     let rawContent: string;
     try {
@@ -272,6 +342,16 @@ export class PluginManifestService {
           recoverable: false,
         },
       ]);
+    }
+
+    // Claude-format plugins skip validateManifest() because that function
+    // enforces AiFetchly-specific rules (description non-empty, semver-strict
+    // version) that do not apply to Claude. The adapter performs its own
+    // validation appropriate to Claude semantics. See tech design §5.
+    if (located.format === "claude") {
+      const adapted = ClaudePluginAdapter.adapt(parsed, { pluginRoot });
+      if (!adapted.ok) return fail(adapted.errors);
+      return ok(adapted.adapted.manifest, manifestPath);
     }
 
     const validation = validateManifest(parsed, pluginRoot);

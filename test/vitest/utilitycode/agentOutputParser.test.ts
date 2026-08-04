@@ -64,4 +64,54 @@ describe("AgentOutputParser", () => {
     }
     expect(true).toBe(true);
   });
+
+  // Regression: parser must preserve partially-parsed object so AgentRuntime
+  // can salvage it into a low-confidence partial result instead of failing
+  // the whole agent task. Reproduces the Acme Corp case where agnes-2.0-flash
+  // returned JSON missing sourceUrls and confidence.
+  it("returns partial object when required fields are missing", () => {
+    const parser = new AgentOutputParser();
+    const r = parser.parse(
+      JSON.stringify({ businessSummary: "have this" }),
+      SCHEMA
+    );
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.error).toMatch(/missing required fields/);
+      expect(r.error).toMatch(/sourceUrls/);
+      expect(r.error).toMatch(/confidence/);
+      expect(r.partial).toBeDefined();
+      expect(r.partial?.businessSummary).toBe("have this");
+    }
+  });
+
+  it("returns no partial when text is not valid JSON", () => {
+    const parser = new AgentOutputParser();
+    const r = parser.parse("just prose, no json here", SCHEMA);
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.error).toMatch(/not valid JSON/);
+      expect(r.partial).toBeUndefined();
+    }
+  });
+
+  it("returns no partial when fenced block is invalid JSON", () => {
+    const parser = new AgentOutputParser();
+    const r = parser.parse("```json\n{not valid}\n```", SCHEMA);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.partial).toBeUndefined();
+  });
+
+  it("returns partial even when the fenced block parsed but missing fields", () => {
+    const parser = new AgentOutputParser();
+    const r = parser.parse(
+      "```json\n" + JSON.stringify({ businessSummary: "x" }) + "\n```",
+      SCHEMA
+    );
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.partial).toBeDefined();
+      expect(r.partial?.businessSummary).toBe("x");
+    }
+  });
 });
