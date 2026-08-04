@@ -169,5 +169,13 @@ describe("AppUpdateService.initializeAppUpdates", () => {
     expect(result.initialized).toBe(false);
     expect(result.reason).toBe("initialization-error");
     expect(result.stopUpdates).toBeUndefined();
+
+    // A failed init must not cache a bad handle — a later call should retry.
+    mocks.updateElectronApp.mockImplementation(() => ({
+      stopUpdates: vi.fn(),
+    }));
+    const retry = initializeAppUpdates({ isPackaged: true, platform: "win32" });
+    expect(retry.initialized).toBe(true);
+    expect(retry.reason).toBe("initialized");
   });
 });

@@ -85,7 +85,9 @@ function zipContainsApp(zipPath) {
     });
     return /\.app\//.test(listing);
   } catch {
-    // unzip unavailable — scan the raw zip central directory for the marker.
+    // unzip unavailable — scan the raw zip bytes for the ".app/" marker.
+    // NOTE: this loads the whole ZIP into memory (macOS app zips can be
+    // 100-300 MB). Only used when `unzip` is absent; CI runners always have it.
     try {
       const buf = fs.readFileSync(zipPath);
       return Buffer.isBuffer(buf) && buf.includes(Buffer.from(".app/"));
@@ -109,16 +111,21 @@ function validateWindows(root, files) {
   } else {
     for (const r of releases) {
       const stat = fs.statSync(r);
-      if (stat.size === 0) errors.push(`RELEASES is empty: ${path.relative(root, r)}`);
+      if (stat.size === 0)
+        errors.push(`RELEASES is empty: ${path.relative(root, r)}`);
     }
     if (releases.length > 1) {
-      warnings.push(`multiple RELEASES files found (${releases.length}); expected one`);
+      warnings.push(
+        `multiple RELEASES files found (${releases.length}); expected one`
+      );
     }
   }
   if (fullNupkgs.length === 0) errors.push("missing required *-full.nupkg");
   if (exes.length === 0) errors.push("missing required *.exe installer");
   if (deltaNupkgs.length === 0) {
-    warnings.push("no *-delta.nupkg found (optional; recommended for faster updates)");
+    warnings.push(
+      "no *-delta.nupkg found (optional; recommended for faster updates)"
+    );
   }
 
   return {
@@ -141,7 +148,9 @@ function validateMacos(root, files, opts) {
   const dmgs = files.filter((f) => /\.dmg$/i.test(f));
 
   if (zips.length === 0) {
-    errors.push("missing required signed *.zip (macOS auto-update requires a ZIP, not only a DMG)");
+    errors.push(
+      "missing required signed *.zip (macOS auto-update requires a ZIP, not only a DMG)"
+    );
   }
   if (dmgs.length === 0) {
     warnings.push("no *.dmg found (optional; recommended for manual download)");
@@ -149,13 +158,17 @@ function validateMacos(root, files, opts) {
 
   for (const zip of zips) {
     if (!zipContainsApp(zip)) {
-      errors.push(`ZIP does not contain an .app bundle: ${path.relative(root, zip)}`);
+      errors.push(
+        `ZIP does not contain an .app bundle: ${path.relative(root, zip)}`
+      );
     }
   }
 
   if (opts["strict-signing"]) {
     if (process.platform !== "darwin") {
-      warnings.push("--strict-signing requested but host is not macOS; skipping codesign/spctl checks");
+      warnings.push(
+        "--strict-signing requested but host is not macOS; skipping codesign/spctl checks"
+      );
     } else {
       for (const zip of zips) {
         verifyMacosSignature(root, zip, errors, warnings);
@@ -177,7 +190,12 @@ function verifyMacosSignature(root, zip, errors, warnings) {
     execFileSync("unzip", ["-o", "-q", zip, "-d", tmp], { stdio: "ignore" });
     const appBundle = findAppBundle(tmp);
     if (!appBundle) {
-      warnings.push(`could not locate .app bundle inside ${path.relative(root, zip)}; skipping codesign`);
+      warnings.push(
+        `could not locate .app bundle inside ${path.relative(
+          root,
+          zip
+        )}; skipping codesign`
+      );
       return;
     }
     try {
@@ -185,7 +203,11 @@ function verifyMacosSignature(root, zip, errors, warnings) {
         stdio: "pipe",
       });
     } catch (err) {
-      errors.push(`codesign verification failed for ${path.relative(root, zip)}: ${err.message}`);
+      errors.push(
+        `codesign verification failed for ${path.relative(root, zip)}: ${
+          err.message
+        }`
+      );
       return;
     }
     try {
@@ -193,7 +215,11 @@ function verifyMacosSignature(root, zip, errors, warnings) {
         stdio: "pipe",
       });
     } catch (err) {
-      errors.push(`notarization check (spctl) failed for ${path.relative(root, zip)}: ${err.message}`);
+      errors.push(
+        `notarization check (spctl) failed for ${path.relative(root, zip)}: ${
+          err.message
+        }`
+      );
     }
   } finally {
     try {
@@ -233,7 +259,9 @@ function main() {
   const root = opts.root;
 
   if (!platform || !root) {
-    console.error("Usage: validate-update-artifacts.js --platform <win32|darwin> --arch <x64|arm64> --root <dir> [--strict-signing]");
+    console.error(
+      "Usage: validate-update-artifacts.js --platform <win32|darwin> --arch <x64|arm64> --root <dir> [--strict-signing]"
+    );
     process.exit(1);
   }
   if (!fs.existsSync(root)) {
@@ -242,21 +270,29 @@ function main() {
   }
 
   const files = collectFiles(root);
-  console.log(`Validating ${platform}/${arch} artifacts under ${root} (${files.length} files)`);
+  console.log(
+    `Validating ${platform}/${arch} artifacts under ${root} (${files.length} files)`
+  );
 
   const result =
     platform === "win32"
       ? validateWindows(root, files)
       : platform === "darwin"
-        ? validateMacos(root, files, opts)
-        : { errors: [`unsupported platform: ${platform}`], warnings: [], summary: {} };
+      ? validateMacos(root, files, opts)
+      : {
+          errors: [`unsupported platform: ${platform}`],
+          warnings: [],
+          summary: {},
+        };
 
   console.log("Artifact summary:", JSON.stringify(result.summary, null, 2));
   for (const w of result.warnings) console.warn(`WARN: ${w}`);
   for (const e of result.errors) console.error(`FAIL: ${e}`);
 
   if (result.errors.length > 0) {
-    console.error(`\n${result.errors.length} required-artifact error(s) for ${platform}/${arch}.`);
+    console.error(
+      `\n${result.errors.length} required-artifact error(s) for ${platform}/${arch}.`
+    );
     process.exit(1);
   }
   console.log(`\nOK: ${platform}/${arch} release artifacts validated.`);

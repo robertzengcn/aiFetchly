@@ -370,9 +370,13 @@ module.exports = {
       },
     },
   ],
-  // GitHub Releases publisher for auto-updatable desktop builds.
-  // `draft: true` keeps new releases invisible to update.electronjs.org
-  // until a release engineer inspects assets and publishes them.
+  // GitHub Releases publisher for Forge-native publishing (`yarn publish` /
+  // `electron-forge publish`). NOTE: CI does NOT use this — it builds with
+  // `electron-forge make` and uploads via `gh release create` (see
+  // .github/workflows/release.yml) for explicit artifact selection + validation.
+  // This block enables local/forge-native publishing to the same repo. Both
+  // paths produce the same draft releases; `draft: true` keeps new releases
+  // invisible to update.electronjs.org until a release engineer publishes them.
   publishers: [
     {
       name: "@electron-forge/publisher-github",

@@ -35,13 +35,22 @@ jobs:
           version="$(node -p "require('./package.json').version")"
           tag="v${version}"
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            echo "is-release=true" >> "$GITHUB_OUTPUT"
+            is_release=true
           else
-            echo "is-release=false" >> "$GITHUB_OUTPUT"
+            is_release=false
           fi
+          # On a tag push, the pushed tag MUST match the committed package.json
+          # version. Otherwise a stale tag could target an already-published
+          # release (e.g. tag v1.0.12 pushed while package.json still says 1.0.11).
+          if [[ "$is_release" == "true" && "$GITHUB_REF_NAME" != "$tag" ]]; then
+            echo "ERROR: pushed tag '$GITHUB_REF_NAME' != package.json version '$tag'."
+            echo "Bump package.json to $version before tagging $tag."
+            exit 1
+          fi
+          echo "is-release=${is_release}" >> "$GITHUB_OUTPUT"
           echo "version=${version}" >> "$GITHUB_OUTPUT"
           echo "tag=${tag}" >> "$GITHUB_OUTPUT"
-          echo "Resolved version=${version} tag=${tag} is-release from ${GITHUB_REF}"
+          echo "Resolved version=${version} tag=${tag} is-release=${is_release} from ${GITHUB_REF}"
 
   build:
     needs: prepare-release
@@ -135,7 +144,7 @@ jobs:
           CERTIFICATE_PFX_B64: ${{ secrets.CERTIFICATE_PFX_B64 }}
         run: |
           if [ -n "$CERTIFICATE_PFX_B64" ]; then
-            echo "$CERTIFICATE_PFX_B64" | base64 -d > cert.pfx
+            printf '%s' "$CERTIFICATE_PFX_B64" | base64 -d > cert.pfx
             echo "Decoded cert.pfx for signing"
           else
             echo "No CERTIFICATE_PFX_B64 secret; Windows build will be unsigned"
@@ -225,7 +234,13 @@ jobs:
           echo "Collected release assets:"
           ls -la release-assets
           if gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "Release $TAG already exists; uploading assets."
+            is_draft="$(gh release view "$TAG" --json isDraft -q .isDraft -R "$GITHUB_REPOSITORY")"
+            if [[ "$is_draft" != "true" ]]; then
+              echo "ERROR: release $TAG already exists and is PUBLISHED. Refusing to clobber a live release."
+              echo "To republish, delete or redraft the release first."
+              exit 1
+            fi
+            echo "Release $TAG exists as a draft; uploading assets (--clobber)."
             gh release upload "$TAG" release-assets/* -R "$GITHUB_REPOSITORY" --clobber
           else
             gh release create "$TAG" release-assets/* \

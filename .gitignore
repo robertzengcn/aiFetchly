@@ -73,6 +73,10 @@ jspm_packages/
 # dotenv environment variables file
 .env
 
+# Windows code-signing certificate (decoded from secret in CI; never commit)
+cert.pfx
+*.pfx
+
 # next.js build output
 .next
 

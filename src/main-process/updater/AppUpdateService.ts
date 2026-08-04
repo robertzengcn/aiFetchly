@@ -64,7 +64,12 @@ export interface AppUpdateInitializeResult {
  */
 let updateStopper: (() => void) | null = null;
 
-/** Reads `app.isPackaged` without relying on the repo's narrowed `app` type. */
+/**
+ * Reads `app.isPackaged`. Full-project `tsc` resolves `app` to a minimal
+ * `{ getName, getPath }` shape in this repo (background.ts works around the
+ * same narrowing with `(app as any)` everywhere). Assert structurally rather
+ * than using `any`.
+ */
 function readAppIsPackaged(): boolean {
   return (app as unknown as { isPackaged: boolean }).isPackaged;
 }
