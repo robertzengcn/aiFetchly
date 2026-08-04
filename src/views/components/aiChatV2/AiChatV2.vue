@@ -1282,22 +1282,32 @@ async function refreshActiveGoal(): Promise<void> {
 
 /** Handle /loop: validate bounds + active goal, then start the loop run. */
 async function runLoopCommand(count: number | null): Promise<void> {
+  const command = `/loop${count === null ? "" : ` ${count}`}`;
   if (count === null) {
-    streamError.value =
-      t("aiChatV2.goalLoop.countRequired") || "Please provide an iteration count.";
+    appendLocalCommandExchange(
+      ensureWorkspaceConversationId(),
+      command,
+      t("aiChatV2.goalLoop.countRequired") || "Please provide an iteration count."
+    );
     return;
   }
   if (!isValidLoopCount(count)) {
-    streamError.value =
+    appendLocalCommandExchange(
+      ensureWorkspaceConversationId(),
+      command,
       t("aiChatV2.goalLoop.countRange") ||
-      "Iteration count must be between 1 and 10.";
+        "Iteration count must be between 1 and 10."
+    );
     return;
   }
   const goal = activeGoal.value;
   if (!goal) {
-    streamError.value =
+    appendLocalCommandExchange(
+      ensureWorkspaceConversationId(),
+      command,
       t("aiChatV2.goalLoop.noActiveGoal") ||
-      "Set a goal first with /goal <objective>.";
+        "Set a goal first with /goal <objective>."
+    );
     return;
   }
   try {
@@ -1440,9 +1450,11 @@ async function runScheduledLoopCreate(
       maxLifetimeMs: action.maxLifetimeMs,
     });
     if (!created) {
-      streamError.value =
+      const message =
         t("aiChatV2.scheduledLoop.createFailed") ||
         "Could not create the scheduled loop.";
+      appendLocalCommandExchange(conversationId, rawCommand, message);
+      streamError.value = message;
       return;
     }
     // The backend persisted the command + confirmation rows; switch to the
@@ -1457,11 +1469,13 @@ async function runScheduledLoopCreate(
     void loadConversations();
     await refreshScheduledLoopStatus();
   } catch (e) {
-    streamError.value =
+    const message =
       e instanceof Error
         ? e.message
         : t("aiChatV2.scheduledLoop.createFailed") ||
           "Could not create the scheduled loop.";
+    appendLocalCommandExchange(conversationId, rawCommand, message);
+    streamError.value = message;
   }
 }
 
@@ -3076,8 +3090,10 @@ const onSend = async (
         objective: cmd.objective,
       });
       if (!created) {
-        streamError.value =
+        const message =
           t("aiChatV2.goalLoop.createFailed") || "Could not create the goal.";
+        appendLocalCommandExchange(goalConversationId, text, message);
+        streamError.value = message;
         return;
       }
       void refreshActiveGoal();
@@ -3085,9 +3101,13 @@ const onSend = async (
       // in Plan Mode (display/model content split).
       modelMessage = created.planPrompt;
       requestMode = "plan";
-    } catch {
-      streamError.value =
-        t("aiChatV2.goalLoop.createFailed") || "Could not create the goal.";
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : t("aiChatV2.goalLoop.createFailed") || "Could not create the goal.";
+      appendLocalCommandExchange(goalConversationId, text, message);
+      streamError.value = message;
       return;
     }
   }
