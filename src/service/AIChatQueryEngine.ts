@@ -66,6 +66,7 @@ import type {
   ChatV2MessageMetadata,
   ChatV2RuntimeStatus,
 } from "@/entityTypes/aiChatV2Types";
+import type { AIChatScheduledTurnContext } from "@/entityTypes/aiChatScheduledLoopTypes";
 import type {
   OpenAITextContentPart,
   OpenAIImageUrlContentPart,
@@ -182,6 +183,14 @@ interface AttachmentPrepResult {
 export interface AIChatQuerySubmitInput {
   eventSink: AIChatQueryEventSink;
   request: ChatV2StreamRequest;
+  /**
+   * Trusted scheduled-turn context. Supplied only by main-process code (the
+   * scheduled runner); when present the engine uses the stable message IDs,
+   * tags the rows with scheduled-loop metadata, and requires an existing v2-*
+   * conversation (it does not create one). Renderer input cannot forge this
+   * object (technical-design §14.1).
+   */
+  scheduledContext?: AIChatScheduledTurnContext;
 }
 
 export interface AIChatQueryEngineDeps {
@@ -206,6 +215,11 @@ export interface AIChatQueryEngineDeps {
       images: OpenAIChatImage[];
     }): Promise<OpenAIChatImage[]>;
   };
+  /** Optional filter scoping which built-in tool schemas the engine advertises
+   * to the model. Scheduled (unattended) profiles use this to expose only
+   * task-policy-approved tools (FR-16), narrowing the prompt-injection surface
+   * beyond the executeTool guard. */
+  toolFilter?: (toolName: string) => boolean;
 }
 
 /**
@@ -224,6 +238,11 @@ export class AIChatQueryEngine {
   private readonly autoDreamService?: AIAutoDreamService;
   private readonly workspaceAutoDreamService?: AIWorkspaceAutoDreamService;
   private readonly generatedImageStorage?: AIChatQueryEngineDeps["generatedImageStorage"];
+  /** Optional filter that scopes which tool schemas the engine advertises to
+   * the model. Used by the scheduled (unattended) profile to expose only
+   * task-policy-approved tools (FR-16), narrowing the prompt-injection
+   * surface beyond the executeToken guard. */
+  private readonly toolFilter?: (toolName: string) => boolean;
   private readonly pendingEventSaves = new WeakMap<
     AIChatQueryEventSink,
     Promise<unknown>[]
@@ -241,6 +260,7 @@ export class AIChatQueryEngine {
     this.autoDreamService = deps?.autoDreamService;
     this.workspaceAutoDreamService = deps?.workspaceAutoDreamService;
     this.generatedImageStorage = deps?.generatedImageStorage;
+    this.toolFilter = deps?.toolFilter;
   }
 
   /** Return main-process truth for a conversation's current turn. */
@@ -492,7 +512,7 @@ export class AIChatQueryEngine {
    * assemble tools, run the loop, and handle the result.
    */
   async submitMessage(input: AIChatQuerySubmitInput): Promise<void> {
-    const { eventSink, request } = input;
+    const { eventSink, request, scheduledContext } = input;
     const module = new AIChatV2Module();
     const planModule = new AIChatPlanModule();
 
@@ -609,21 +629,44 @@ export class AIChatQueryEngine {
       }
 
       // Build user-message metadata (source + attachments + @-mentions).
-      const userMetadata: ChatV2MessageMetadata = { source: "chat-v2" };
+      const userMetadata: ChatV2MessageMetadata = {
+        source: scheduledContext ? "scheduled-loop" : "chat-v2",
+      };
+      if (scheduledContext) {
+        userMetadata.scheduledLoop = {
+          scheduleId: scheduledContext.scheduleId,
+          taskId: scheduledContext.taskId,
+          runId: scheduledContext.runId,
+          occurrence: scheduledContext.occurrence,
+          scheduledFor: scheduledContext.scheduledFor,
+          catchUp: scheduledContext.catchUp,
+        };
+      }
       if (attachmentMetadata) userMetadata.attachments = attachmentMetadata;
       if (atMentionResolution.metadata.length > 0) {
         userMetadata.atMentions = atMentionResolution.metadata;
       }
       const hasUserMetadataBeyondSource =
-        !!attachmentMetadata || atMentionResolution.metadata.length > 0;
+        !!attachmentMetadata ||
+        atMentionResolution.metadata.length > 0 ||
+        !!scheduledContext;
 
       // Save user message (display text = attachment-enriched message; the
       // @-mention context block lives only in modelUserMessage for the model).
-      const savedUser = await module.saveUserMessage({
-        conversationId,
-        content: messageToSave,
-        metadata: hasUserMetadataBeyondSource ? userMetadata : undefined,
-      });
+      // Scheduled turns use a stable message id + insert-if-absent so a
+      // crash-retry does not duplicate the transcript row (technical-design §14.2).
+      const savedUser = scheduledContext
+        ? await module.saveUserMessageIfAbsent({
+            conversationId,
+            content: messageToSave,
+            messageId: scheduledContext.userMessageId,
+            metadata: userMetadata,
+          })
+        : await module.saveUserMessage({
+            conversationId,
+            content: messageToSave,
+            metadata: hasUserMetadataBeyondSource ? userMetadata : undefined,
+          });
 
       // Persist attachment bytes to DB (original file bytes, not the staged markdown).
       if (hasFiles) {
@@ -649,9 +692,9 @@ export class AIChatQueryEngine {
         currentUserContentParts,
       });
 
-      assistantMessageId = `assistant-${Date.now()}-${Math.random()
-        .toString(36)
-        .slice(2, 8)}`;
+      assistantMessageId = scheduledContext
+        ? scheduledContext.assistantMessageId
+        : `assistant-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       this.currentAssistantMessageId = assistantMessageId;
       messages = [...assembled.messages];
     } catch (err) {
@@ -696,7 +739,13 @@ export class AIChatQueryEngine {
     // ------------------------------------------------------------------
     // 4. Resolve tools (skills + plan mode tools)
     // ------------------------------------------------------------------
-    const toolFunctions = await SkillRegistry.getAllToolFunctions();
+    const allToolFunctions = await SkillRegistry.getAllToolFunctions();
+    // Scheduled (unattended) profiles scope the advertised catalog to
+    // task-policy-approved tools so the model only sees tools it may call
+    // (FR-16); the executeTool guard remains the safety backstop.
+    const toolFunctions = this.toolFilter
+      ? allToolFunctions.filter((t) => this.toolFilter!(t.name))
+      : allToolFunctions;
     const openAITools = toOpenAITools(toolFunctions);
 
     // Resolve auto-plan config. Only active in plain chat mode (not when the

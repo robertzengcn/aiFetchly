@@ -269,6 +269,12 @@ export default {
       "Einbettungsmodell erfolgreich aktualisiert",
     failed_to_update_embedding_model:
       "Einbettungsmodell konnte nicht aktualisiert werden",
+    local_runtime_not_installed_title: "Lokale KI-Laufzeit nicht installiert",
+    local_runtime_not_installed_message:
+      "Das lokale Einbettungsmodell '{model}' erfordert die lokale KI-Komponente ({runtime}). Laden Sie sie jetzt herunter und installieren Sie sie, um fortzufahren.",
+    local_runtime_download: "Herunterladen und installieren",
+    local_runtime_download_size: "Download-Größe: {size}",
+    local_runtime_install_failed: "Die lokale KI-Komponente wurde installiert, ist aber noch nicht bereit. Bitte versuchen Sie es erneut.",
     max_dimensions: "Maximale Dimensionen",
     model: "Modell",
     dimensions: "Dimensionen",
@@ -2258,6 +2264,32 @@ export default {
       statusNeedsInput: "Eingabe erforderlich",
       statusFailed: "fehlgeschlagen",
       statusCancelled: "abgebrochen",
+    },
+    scheduledLoop: {
+      createFailed: "Geplante Schleife konnte nicht erstellt werden.",
+      controlFailed: "Geplante Schleife konnte nicht aktualisiert werden.",
+      noActiveLoop: "Keine aktive geplante Schleife in dieser Unterhaltung.",
+      clearConfirm:
+        "Diese Unterhaltung hat eine aktive geplante Schleife. Das Leeren stoppt auch die Schleife. Fortfahren?",
+      pause: "Pausieren",
+      resume: "Fortsetzen",
+      stop: "Schleife stoppen",
+      stopRun: "Aktuelle Ausführung stoppen",
+      statusActive: "aktiv",
+      statusPaused: "pausiert",
+      statusRunning: "läuft",
+      statusExpired: "abgelaufen",
+      statusFailed: "fehlgeschlagen",
+      statusStopped: "gestoppt",
+      errors: {
+        INVALID_LOOP_SYNTAX: "Der /loop-Befehl konnte nicht analysiert werden.",
+        INVALID_INTERVAL:
+          "Das Intervall muss zwischen 1 Minute und 24 Stunden liegen.",
+        INVALID_LOOP_LIMIT:
+          "Die Anzahl der Ausführungen oder die Lebensdauer ist ungültig.",
+        PROMPT_REQUIRED:
+          "Für eine geplante Schleife ist ein Prompt erforderlich.",
+      },
     },
     voice: {
       microphone: "Spracheingabe",

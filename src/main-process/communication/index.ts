@@ -23,6 +23,8 @@ import { registerAiChatIpcHandlers } from "@/main-process/communication/ai-chat-
 import { registerAiChatV2IpcHandlers } from "@/main-process/communication/ai-chat-v2-ipc";
 import { registerAiChatAtMentionIpcHandlers } from "@/main-process/communication/ai-chat-at-mention-ipc";
 import { registerAiChatGoalIpcHandlers } from "@/main-process/communication/ai-chat-goal-ipc";
+import { registerAiChatScheduledLoopIpcHandlers } from "@/main-process/communication/ai-chat-scheduled-loop-ipc";
+import { AIChatConversationUpdateBroadcaster } from "@/service/AIChatConversationUpdateBroadcaster";
 import { registerAIEmailTemplateHandlers } from "@/main-process/communication/ai-email-template-ipc";
 import { registerDashboardIpcHandlers } from "@/main-process/communication/dashboard-ipc";
 import { registerMCPToolIpcHandlers } from "@/main-process/communication/mcp-tool-ipc";
@@ -65,6 +67,9 @@ export function registerCommunicationIpcHandlers(win: BrowserWindow) {
   globalState.__aifetchlyIpcHandlersRegistered = true;
   try {
     SyncMsg(win);
+    // Register the window so scheduled-loop turn completions can broadcast a
+    // narrow conversation-update refresh hint to the renderer (FR-11).
+    AIChatConversationUpdateBroadcaster.getInstance().register(win);
     registerExtraModulesIpcHandlers();
     registerScheduleIpcHandlers();
     registerYellowPagesIpcHandlers();
@@ -85,6 +90,7 @@ export function registerCommunicationIpcHandlers(win: BrowserWindow) {
     registerAiChatV2IpcHandlers();
     registerAiChatAtMentionIpcHandlers();
     registerAiChatGoalIpcHandlers();
+    registerAiChatScheduledLoopIpcHandlers();
     registerAIEmailTemplateHandlers();
     registerDashboardIpcHandlers();
     registerMCPToolIpcHandlers();

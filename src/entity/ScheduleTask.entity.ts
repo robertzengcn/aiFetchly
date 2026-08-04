@@ -15,12 +15,19 @@ export enum ScheduleStatus {
   ACTIVE = "active",
   INACTIVE = "inactive",
   PAUSED = "paused",
+  // Durable terminal states for scheduled loops (technical-design §9.1).
+  // Terminal statuses always set is_active = false.
+  EXPIRED = "expired",
+  FAILED = "failed",
+  STOPPED = "stopped",
 }
 
 export enum TriggerType {
   CRON = "cron",
   DEPENDENCY = "dependency",
   MANUAL = "manual",
+  // Fixed elapsed-interval trigger for AI Chat V2 scheduled loops.
+  INTERVAL = "interval",
 }
 
 export enum DependencyCondition {
@@ -33,6 +40,9 @@ export enum DependencyCondition {
 @Index(["task_type", "task_id"])
 @Index(["is_active", "next_run_time"])
 @Index(["trigger_type", "parent_schedule_id"])
+// Scheduled-loop claim + ownership indexes (technical-design §9.2).
+@Index(["trigger_type", "is_active", "next_run_time"])
+@Index(["source_conversation_id", "task_type", "is_active"])
 export class ScheduleTaskEntity extends AuditableEntity {
   @PrimaryGeneratedColumn()
   id: number;
@@ -53,7 +63,12 @@ export class ScheduleTaskEntity extends AuditableEntity {
   @Column("integer", { comment: "Foreign key to the actual task table" })
   task_id: number;
 
-  @Column("varchar", { length: 100, comment: "Cron expression for scheduling" })
+  @Column("varchar", {
+    length: 100,
+    nullable: true,
+    comment:
+      "Cron expression for scheduling; nullable for interval/manual triggers",
+  })
   cron_expression: string;
 
   @Column("boolean", {
@@ -124,4 +139,81 @@ export class ScheduleTaskEntity extends AuditableEntity {
     comment: "When the schedule was last modified",
   })
   last_modified: Date;
+
+  // ----- AI Chat V2 scheduled-loop fields (technical-design §9.2) -----
+  // All nullable/defaulted so existing cron/dependency/manual rows remain valid.
+
+  @Column("integer", { nullable: true, comment: "Fixed elapsed cadence in ms" })
+  interval_ms: number | null;
+
+  @Column("datetime", {
+    nullable: true,
+    comment:
+      "Stable cadence origin (anchor); first run is due at anchor + interval",
+  })
+  interval_anchor_at: Date | null;
+
+  @Column("integer", {
+    nullable: true,
+    comment: "Maximum claimed occurrences for this schedule",
+  })
+  max_execution_count: number | null;
+
+  @Column("datetime", {
+    nullable: true,
+    comment: "Absolute schedule lifetime bound",
+  })
+  expires_at: Date | null;
+
+  @Column("varchar", {
+    length: 20,
+    nullable: true,
+    comment: "Misfire policy: skip or run_once",
+  })
+  misfire_policy: string | null;
+
+  @Column("varchar", {
+    length: 20,
+    nullable: true,
+    comment: "Overlap policy: coalesce",
+  })
+  overlap_policy: string | null;
+
+  @Column("varchar", {
+    length: 100,
+    nullable: true,
+    comment: "Originating v2-* conversation for chat-created scheduled loops",
+  })
+  source_conversation_id: string | null;
+
+  @Column("integer", {
+    default: 0,
+    comment: "Claimed occurrences including failures",
+  })
+  claimed_execution_count: number;
+
+  @Column("integer", {
+    default: 0,
+    comment: "Consecutive failures; automatic pause/fail threshold",
+  })
+  consecutive_failure_count: number;
+
+  @Column("integer", {
+    default: 0,
+    comment: "Monotonic last-claimed occurrence number",
+  })
+  last_claimed_occurrence: number;
+
+  @Column("integer", {
+    default: 0,
+    comment: "Missed/overlapped occurrence diagnostic count",
+  })
+  coalesced_occurrence_count: number;
+
+  @Column("varchar", {
+    length: 64,
+    nullable: true,
+    comment: "Stable stop/expiry/failure reason code",
+  })
+  terminal_reason: string | null;
 }

@@ -267,6 +267,12 @@ export default {
     embedding_model_updated_successfully:
       "Embedding model updated successfully",
     failed_to_update_embedding_model: "Failed to update embedding model",
+    local_runtime_not_installed_title: "Runtime IA local non installé",
+    local_runtime_not_installed_message:
+      "Le modèle d'intégration local '{model}' nécessite le composant IA local ({runtime}). Téléchargez-le et installez-le maintenant pour continuer.",
+    local_runtime_download: "Télécharger et installer",
+    local_runtime_download_size: "Taille du téléchargement : {size}",
+    local_runtime_install_failed: "Le composant IA local est installé mais pas encore prêt. Veuillez réessayer.",
     max_dimensions: "Max Dimensions",
     model: "Model",
     dimensions: "Dimensions",
@@ -2252,6 +2258,31 @@ export default {
       statusNeedsInput: "saisie requise",
       statusFailed: "échec",
       statusCancelled: "annulé",
+    },
+    scheduledLoop: {
+      createFailed: "Impossible de créer la boucle planifiée.",
+      controlFailed: "Impossible de mettre à jour la boucle planifiée.",
+      noActiveLoop: "Aucune boucle planifiée active pour cette conversation.",
+      clearConfirm:
+        "Cette conversation a une boucle planifiée active. L'effacer arrêtera également la boucle. Continuer ?",
+      pause: "Pause",
+      resume: "Reprendre",
+      stop: "Arrêter la boucle",
+      stopRun: "Arrêter l'exécution en cours",
+      statusActive: "actif",
+      statusPaused: "en pause",
+      statusRunning: "en cours",
+      statusExpired: "expirée",
+      statusFailed: "échec",
+      statusStopped: "arrêtée",
+      errors: {
+        INVALID_LOOP_SYNTAX: "La commande /loop n'a pas pu être analysée.",
+        INVALID_INTERVAL:
+          "L'intervalle doit être compris entre 1 minute et 24 heures.",
+        INVALID_LOOP_LIMIT:
+          "Le nombre d'exécutions ou la durée maximale n'est pas valide.",
+        PROMPT_REQUIRED: "Une invite est requise pour une boucle planifiée.",
+      },
     },
     voice: {
       microphone: "Saisie vocale",

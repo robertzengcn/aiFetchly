@@ -1,6 +1,8 @@
 import { BaseDb } from "@/model/Basedb";
 import { Repository } from "typeorm";
 import { AiMessageTaskEntity } from "@/entity/AiMessageTask.entity";
+import { assertNotWorker } from "@/model/workerDbGuard";
+import type { CreateChatScheduledTaskRecord } from "@/entityTypes/aiChatScheduledLoopTypes";
 
 export class AiMessageTaskModel extends BaseDb {
   private repository: Repository<AiMessageTaskEntity>;
@@ -51,5 +53,45 @@ export class AiMessageTaskModel extends BaseDb {
       last_result_summary: resultSummary ?? undefined,
       last_error_message: errorMessage ?? undefined,
     });
+  }
+
+  // ----- Chat-bound scheduled-loop task operations (technical-design §10.2) -----
+
+  /**
+   * Create a chat-bound scheduled AI message task. Requires a v2-* conversation
+   * and never generates a fallback conversation id (unlike the standalone
+   * schedule-page path).
+   */
+  async createChatScheduledTask(
+    input: CreateChatScheduledTaskRecord
+  ): Promise<number> {
+    assertNotWorker("createChatScheduledTask");
+    const entity = new AiMessageTaskEntity();
+    entity.name = input.name;
+    entity.message = input.message;
+    entity.system_prompt = "";
+    entity.model = input.model ?? "auto";
+    entity.conversation_id = input.conversationId;
+    entity.allowed_tools_json = JSON.stringify(input.allowedTools);
+    entity.auto_approve_tools = input.autoApproveTools;
+    entity.max_tool_calls = input.maxToolCalls;
+    entity.max_runtime_ms = input.maxRuntimeMs;
+    entity.max_continue_calls = input.maxContinueCalls;
+    entity.status = "active";
+    entity.source_type = input.sourceType;
+    const saved = await this.repository.save(entity);
+    return saved.id;
+  }
+
+  /** Find a chat-bound scheduled task by id. */
+  async findChatScheduledTask(id: number): Promise<AiMessageTaskEntity | null> {
+    assertNotWorker("findChatScheduledTask");
+    return this.repository.findOne({ where: { id } });
+  }
+
+  /** Mark a chat-bound scheduled task inactive (history kept). */
+  async deactivateChatScheduledTask(id: number): Promise<void> {
+    assertNotWorker("deactivateChatScheduledTask");
+    await this.repository.update(id, { status: "inactive" });
   }
 }

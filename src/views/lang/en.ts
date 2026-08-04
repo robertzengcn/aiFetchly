@@ -265,6 +265,12 @@ export default {
     embedding_model_updated_successfully:
       "Embedding model updated successfully",
     failed_to_update_embedding_model: "Failed to update embedding model",
+    local_runtime_not_installed_title: "Local AI Runtime Not Installed",
+    local_runtime_not_installed_message:
+      "The local embedding model '{model}' requires the Local AI Component ({runtime}). Download and install it now to continue.",
+    local_runtime_download: "Download & Install",
+    local_runtime_download_size: "Download size: {size}",
+    local_runtime_install_failed: "The Local AI Component installed but is not ready yet. Please try again.",
     max_dimensions: "Max Dimensions",
     model: "Model",
     dimensions: "Dimensions",
@@ -2256,6 +2262,29 @@ export default {
       statusNeedsInput: "needs input",
       statusFailed: "failed",
       statusCancelled: "cancelled",
+    },
+    scheduledLoop: {
+      createFailed: "Could not create the scheduled loop.",
+      controlFailed: "Could not update the scheduled loop.",
+      noActiveLoop: "No active scheduled loop for this conversation.",
+      clearConfirm:
+        "This conversation has an active scheduled loop. Clearing will also stop the loop. Continue?",
+      pause: "Pause",
+      resume: "Resume",
+      stop: "Stop loop",
+      stopRun: "Stop current run",
+      statusActive: "active",
+      statusPaused: "paused",
+      statusRunning: "running",
+      statusExpired: "expired",
+      statusFailed: "failed",
+      statusStopped: "stopped",
+      errors: {
+        INVALID_LOOP_SYNTAX: "The /loop command could not be parsed.",
+        INVALID_INTERVAL: "The interval must be between 1 minute and 24 hours.",
+        INVALID_LOOP_LIMIT: "The run count or lifetime limit is invalid.",
+        PROMPT_REQUIRED: "A prompt is required for a scheduled loop.",
+      },
     },
     voice: {
       microphone: "Voice input",

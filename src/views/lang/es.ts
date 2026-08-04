@@ -268,6 +268,12 @@ export default {
       "Modelo de incrustación actualizado correctamente",
     failed_to_update_embedding_model:
       "Error al actualizar el modelo de incrustación",
+    local_runtime_not_installed_title: "Componente de IA local no instalado",
+    local_runtime_not_installed_message:
+      "El modelo de incrustación local '{model}' requiere el componente de IA local ({runtime}). Descárguelo e instálelo ahora para continuar.",
+    local_runtime_download: "Descargar e instalar",
+    local_runtime_download_size: "Tamaño de descarga: {size}",
+    local_runtime_install_failed: "El componente de IA local se instaló pero aún no está listo. Inténtelo de nuevo.",
     max_dimensions: "Dimensiones máximas",
     model: "Modelo",
     dimensions: "Dimensiones",
@@ -2270,6 +2276,31 @@ export default {
       statusNeedsInput: "requiere entrada",
       statusFailed: "fallido",
       statusCancelled: "cancelado",
+    },
+    scheduledLoop: {
+      createFailed: "No se pudo crear el bucle programado.",
+      controlFailed: "No se pudo actualizar el bucle programado.",
+      noActiveLoop:
+        "No hay ningún bucle programado activo en esta conversación.",
+      clearConfirm:
+        "Esta conversación tiene un bucle programado activo. Vaciarla también detendrá el bucle. ¿Continuar?",
+      pause: "Pausar",
+      resume: "Reanudar",
+      stop: "Detener bucle",
+      stopRun: "Detener ejecución actual",
+      statusActive: "activo",
+      statusPaused: "en pausa",
+      statusRunning: "en ejecución",
+      statusExpired: "caducado",
+      statusFailed: "fallido",
+      statusStopped: "detenido",
+      errors: {
+        INVALID_LOOP_SYNTAX: "No se pudo analizar el comando /loop.",
+        INVALID_INTERVAL: "El intervalo debe estar entre 1 minuto y 24 horas.",
+        INVALID_LOOP_LIMIT:
+          "El recuento de ejecuciones o el límite de duración no son válidos.",
+        PROMPT_REQUIRED: "Se requiere un prompt para un bucle programado.",
+      },
     },
     voice: {
       microphone: "Entrada de voz",

@@ -69,6 +69,32 @@ export class AIChatV2Module extends BaseModule {
     });
   }
 
+  /**
+   * Idempotent user-message insert for scheduled-loop turns. Requires an
+   * explicit messageId (the stable scheduled id); reuses an existing row
+   * without mutation on retry (technical-design §14.2).
+   */
+  async saveUserMessageIfAbsent(params: {
+    conversationId: string;
+    content: string;
+    messageId: string;
+    timestamp?: Date;
+    metadata?: ChatV2MessageMetadata;
+  }): Promise<AIChatMessageEntity> {
+    return this.chatModule.saveMessageIfAbsent({
+      messageId: params.messageId,
+      conversationId: params.conversationId,
+      role: "user",
+      content: params.content,
+      timestamp: params.timestamp,
+      metadata: {
+        source: "chat-v2",
+        ...(params.metadata ?? {}),
+      } as ChatV2MessageMetadata,
+      messageType: MessageType.MESSAGE,
+    });
+  }
+
   async saveAssistantMessage(params: {
     conversationId: string;
     content: string;

@@ -265,6 +265,12 @@ export default {
     priority: "優先度",
     embedding_model_updated_successfully: "埋め込みモデルの更新に成功しました",
     failed_to_update_embedding_model: "埋め込みモデルの更新に失敗しました",
+    local_runtime_not_installed_title: "ローカルAIランタイムがインストールされていません",
+    local_runtime_not_installed_message:
+      "ローカル埋め込みモデル「{model}」にはローカルAIコンポーネント（{runtime}）が必要です。今すぐダウンロードしてインストールすると続行できます。",
+    local_runtime_download: "ダウンロードしてインストール",
+    local_runtime_download_size: "ダウンロードサイズ: {size}",
+    local_runtime_install_failed: "ローカルAIコンポーネントはインストールされましたが、まだ準備ができていません。もう一度お試しください。",
     max_dimensions: "最大次元数",
     model: "モデル",
     dimensions: "次元",
@@ -2220,6 +2226,30 @@ export default {
       statusNeedsInput: "入力が必要",
       statusFailed: "失敗",
       statusCancelled: "キャンセル",
+    },
+    scheduledLoop: {
+      createFailed: "スケジュール済みループを作成できませんでした。",
+      controlFailed: "スケジュール済みループを更新できませんでした。",
+      noActiveLoop:
+        "この会話にはアクティブなスケジュール済みループがありません。",
+      clearConfirm:
+        "この会話にはアクティブなスケジュール済みループがあります。消去するとループも停止します。続行しますか？",
+      pause: "一時停止",
+      resume: "再開",
+      stop: "ループを停止",
+      stopRun: "現在の実行を停止",
+      statusActive: "アクティブ",
+      statusPaused: "一時停止中",
+      statusRunning: "実行中",
+      statusExpired: "期限切れ",
+      statusFailed: "失敗",
+      statusStopped: "停止済み",
+      errors: {
+        INVALID_LOOP_SYNTAX: "/loop コマンドを解析できませんでした。",
+        INVALID_INTERVAL: "間隔は 1 分〜 24 時間の範囲で指定してください。",
+        INVALID_LOOP_LIMIT: "実行回数または有効期限の制限が無効です。",
+        PROMPT_REQUIRED: "スケジュール済みループにはプロンプトが必要です。",
+      },
     },
     voice: {
       microphone: "音声入力",

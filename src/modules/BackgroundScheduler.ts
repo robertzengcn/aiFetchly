@@ -20,6 +20,9 @@ import { USERSDBPATH } from "@/config/usersetting";
 import { SqliteDb } from "@/config/SqliteDb";
 import { SearchController } from "@/controller/SearchController";
 import { YellowPagesController } from "@/controller/YellowPagesController";
+import { AiMessageTaskRunModel } from "@/model/AiMessageTaskRun.model";
+import { ScheduledAiMessageRunner } from "@/service/ScheduledAiMessageRunner";
+import { SCHEDULED_LOOP_STALE_RUN_MS } from "@/config/aiChatScheduledLoopConfig";
 
 export interface SchedulerStatus {
   isRunning: boolean;
@@ -88,6 +91,11 @@ export class BackgroundScheduler extends BaseDb {
   private dependencyCheckInterval: NodeJS.Timeout | null = null;
   private cleanupInterval: NodeJS.Timeout | null = null;
   private queueProcessInterval: NodeJS.Timeout | null = null;
+  private intervalCheckInterval: NodeJS.Timeout | null = null;
+  // Interval-trigger models (chat-bound scheduled loops). Kept lazy so legacy
+  // cron/dependency scheduling pays nothing for them.
+  private intervalScheduleModel: ScheduleTaskModel | null = null;
+  private intervalRunModel: AiMessageTaskRunModel | null = null;
 
   // Statistics
   private lastCheckTime: Date = new Date();
@@ -122,6 +130,10 @@ export class BackgroundScheduler extends BaseDb {
 
       // Load any pending executions from database
       await this.loadPendingExecutions();
+
+      // Recover scheduled-loop occurrences interrupted by a crash/restart and
+      // pause orphaned chat-created schedules (technical-design §19.2).
+      await this.recoverIntervalRuns();
 
       this.isInitialized = true;
       console.log("BackgroundScheduler initialized successfully");
@@ -257,9 +269,17 @@ export class BackgroundScheduler extends BaseDb {
         await this.performCleanup();
       }, 3600000);
 
+      // Start interval-based scheduled-loop checking (every 30 seconds). The
+      // scheduler is the source of truth for when occurrences are due; long
+      // setTimeouts inside the runner are not (FR-8, technical-design §16).
+      this.intervalCheckInterval = setInterval(async () => {
+        await this.processIntervalTasks();
+      }, 30000);
+
       // Process initial tasks
       await this.processScheduledTasks();
       await this.processDependencyQueue();
+      await this.processIntervalTasks();
 
       console.log("BackgroundScheduler started successfully");
     } catch (error) {
@@ -297,6 +317,11 @@ export class BackgroundScheduler extends BaseDb {
       if (this.queueProcessInterval) {
         clearInterval(this.queueProcessInterval);
         this.queueProcessInterval = null;
+      }
+
+      if (this.intervalCheckInterval) {
+        clearInterval(this.intervalCheckInterval);
+        this.intervalCheckInterval = null;
       }
 
       if (this.cleanupInterval) {
@@ -391,6 +416,103 @@ export class BackgroundScheduler extends BaseDb {
       console.log("Application shutdown handled successfully");
     } catch (error) {
       console.error("Error during application shutdown:", error);
+    }
+  }
+
+  private getIntervalScheduleModel(): ScheduleTaskModel {
+    if (!this.intervalScheduleModel) {
+      this.intervalScheduleModel = new ScheduleTaskModel(this.currentDbPath);
+    }
+    return this.intervalScheduleModel;
+  }
+
+  private getIntervalRunModel(): AiMessageTaskRunModel {
+    if (!this.intervalRunModel) {
+      this.intervalRunModel = new AiMessageTaskRunModel(this.currentDbPath);
+    }
+    return this.intervalRunModel;
+  }
+
+  /**
+   * Poll due interval-trigger scheduled loops, atomically claim each
+   * occurrence, and execute it through the chat-bound runner (technical-design
+   * §16). The transactional claim closes the double-poll race; overlapping or
+   * pending runs are coalesced rather than duplicated.
+   */
+  private async processIntervalTasks(): Promise<void> {
+    if (!this.isRunning) return;
+    try {
+      const now = new Date();
+      const due =
+        await this.getIntervalScheduleModel().findDueIntervalSchedules(now, 50);
+      for (const schedule of due) {
+        if (!this.isRunning) break;
+        await this.processIntervalSchedule(schedule);
+      }
+    } catch (error) {
+      console.error("Error processing interval scheduled tasks:", error);
+    }
+  }
+
+  private async processIntervalSchedule(
+    schedule: ScheduleTaskEntity
+  ): Promise<void> {
+    try {
+      const claim =
+        await this.getIntervalScheduleModel().claimIntervalOccurrence({
+          scheduleId: schedule.id,
+          now: new Date(),
+        });
+      if (claim.kind !== "claimed") return;
+      // Execute the claimed occurrence. Sequential execution within a poll is
+      // safe — interval occurrences are infrequent and the conversation-turn
+      // coordinator serializes same-conversation turns regardless (FR-7).
+      const runner = new ScheduledAiMessageRunner();
+      await runner.runChatScheduledLoop({
+        taskId: schedule.task_id,
+        scheduleId: schedule.id,
+        runId: claim.runId,
+        occurrence: claim.occurrence,
+        catchUp: claim.catchUp,
+        scheduledFor: claim.scheduledFor,
+      });
+    } catch (error) {
+      console.error(`Error executing interval schedule ${schedule.id}:`, error);
+    }
+  }
+
+  /**
+   * Startup recovery for chat-created scheduled loops (technical-design §19.2):
+   * mark stale running occurrences interrupted, and pause orphaned schedules
+   * whose conversation has disappeared. In-memory leases vanish at restart, so
+   * durable run rows are the source of truth.
+   */
+  private async recoverIntervalRuns(): Promise<void> {
+    try {
+      const cutoff = new Date(Date.now() - SCHEDULED_LOOP_STALE_RUN_MS);
+      const interrupted = await this.getIntervalRunModel().markInterruptedRuns(
+        cutoff
+      );
+      if (interrupted > 0) {
+        console.log(
+          `Marked ${interrupted} stale scheduled-loop runs interrupted.`
+        );
+      }
+      const intervalSchedules =
+        await this.getIntervalScheduleModel().getSchedulesByTriggerType(
+          TriggerType.INTERVAL
+        );
+      for (const s of intervalSchedules) {
+        if (!s.is_active) continue;
+        if (!s.source_conversation_id) {
+          await this.getIntervalScheduleModel().pauseWithReason(
+            s.id,
+            "CONVERSATION_NOT_FOUND"
+          );
+        }
+      }
+    } catch (error) {
+      console.error("Error recovering interval runs:", error);
     }
   }
 

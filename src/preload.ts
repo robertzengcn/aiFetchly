@@ -234,6 +234,14 @@ import {
   AI_CHAT_V2_GOAL_GET,
   AI_CHAT_V2_GOAL_LOOP_START,
   AI_CHAT_V2_GOAL_LOOP_STOP,
+  AI_CHAT_V2_SCHEDULED_LOOP_CREATE,
+  AI_CHAT_V2_SCHEDULED_LOOP_GET,
+  AI_CHAT_V2_SCHEDULED_LOOP_PAUSE,
+  AI_CHAT_V2_SCHEDULED_LOOP_RESUME,
+  AI_CHAT_V2_SCHEDULED_LOOP_STOP,
+  AI_CHAT_V2_SCHEDULED_LOOP_STOP_RUN,
+  AI_CHAT_V2_CONVERSATION_UPDATED,
+  AI_CHAT_V2_SCHEDULED_STREAM,
   // AI Provider (Local/Custom) Settings Channels
   AI_PROVIDER_SETTINGS_GET,
   AI_PROVIDER_SETTINGS_SAVE,
@@ -552,6 +560,10 @@ contextBridge.exposeInMainWorld("api", {
       // Yandex Maps Scraper Channels
       YANDEX_MAPS_SEARCH_RESULT,
       YANDEX_MAPS_SEARCH_PROGRESS,
+      // AI Chat V2 scheduled-loop conversation update broadcast
+      AI_CHAT_V2_CONVERSATION_UPDATED,
+      // Live scheduled-turn token stream
+      AI_CHAT_V2_SCHEDULED_STREAM,
       // Local AI Runtime install/update progress (main -> renderer)
       LOCAL_AI_RUNTIME_PROGRESS,
     ];
@@ -620,6 +632,10 @@ contextBridge.exposeInMainWorld("api", {
       // Yandex Maps Scraper Channels
       YANDEX_MAPS_SEARCH_RESULT,
       YANDEX_MAPS_SEARCH_PROGRESS,
+      // AI Chat V2 scheduled-loop conversation update broadcast
+      AI_CHAT_V2_CONVERSATION_UPDATED,
+      // Live scheduled-turn token stream
+      AI_CHAT_V2_SCHEDULED_STREAM,
       // Local AI Runtime install/update progress (main -> renderer)
       LOCAL_AI_RUNTIME_PROGRESS,
     ];
@@ -651,6 +667,10 @@ contextBridge.exposeInMainWorld("api", {
       // Yandex Maps Scraper Channels
       YANDEX_MAPS_SEARCH_RESULT,
       YANDEX_MAPS_SEARCH_PROGRESS,
+      // AI Chat V2 scheduled-loop conversation update broadcast
+      AI_CHAT_V2_CONVERSATION_UPDATED,
+      // Live scheduled-turn token stream
+      AI_CHAT_V2_SCHEDULED_STREAM,
       // Local AI Runtime install/update progress (main -> renderer)
       LOCAL_AI_RUNTIME_PROGRESS,
     ];
@@ -859,6 +879,12 @@ contextBridge.exposeInMainWorld("api", {
       AI_CHAT_V2_GOAL_GET,
       AI_CHAT_V2_GOAL_LOOP_START,
       AI_CHAT_V2_GOAL_LOOP_STOP,
+      AI_CHAT_V2_SCHEDULED_LOOP_CREATE,
+      AI_CHAT_V2_SCHEDULED_LOOP_GET,
+      AI_CHAT_V2_SCHEDULED_LOOP_PAUSE,
+      AI_CHAT_V2_SCHEDULED_LOOP_RESUME,
+      AI_CHAT_V2_SCHEDULED_LOOP_STOP,
+      AI_CHAT_V2_SCHEDULED_LOOP_STOP_RUN,
       AI_CHAT_V2_GET_TOOL_APPROVAL_MODE,
       AI_CHAT_V2_SET_TOOL_APPROVAL_MODE,
       // AiChatV2 Local Voice Channels (all request/response invoke handlers)

@@ -194,7 +194,6 @@ v-for="(opt, idx) in setting.options || []" :key="idx" :label="opt.optionLabel"
           </v-card-text>
         </v-card>
 
-        <LocalAiComponentsPanel class="mt-4" />
       </v-col>
     </v-row>
 
@@ -216,7 +215,6 @@ import { setLanguage } from '@/views/utils/cookies';
 const { t, locale } = useI18n();
 const router = useRouter();
 import { chooseFileDialog } from "@/views/api/common"
-import LocalAiComponentsPanel from "@/views/components/settings/LocalAiComponentsPanel.vue";
 import DiagnosticsSection from "@/views/components/settings/DiagnosticsSection.vue"
 
 type TreeNodeId = `group:${number}` | `setting:${number}`;

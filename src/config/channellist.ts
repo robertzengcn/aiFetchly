@@ -309,6 +309,23 @@ export const AI_CHAT_V2_GOAL_GET = "ai-chat-v2:goal-get";
 export const AI_CHAT_V2_GOAL_LOOP_START = "ai-chat-v2:goal-loop-start";
 export const AI_CHAT_V2_GOAL_LOOP_STOP = "ai-chat-v2:goal-loop-stop";
 export const AI_CHAT_V2_GOAL_EVENT = "ai-chat-v2:goal-event";
+// AI Chat V2 Scheduled Loop channels (renderer->main invoke + main->renderer broadcast).
+// Handlers check USER_AI_ENABLED before parsing payloads (FR-17, technical-design §12.2).
+export const AI_CHAT_V2_SCHEDULED_LOOP_CREATE =
+  "ai-chat-v2:scheduled-loop-create";
+export const AI_CHAT_V2_SCHEDULED_LOOP_GET = "ai-chat-v2:scheduled-loop-get";
+export const AI_CHAT_V2_SCHEDULED_LOOP_PAUSE =
+  "ai-chat-v2:scheduled-loop-pause";
+export const AI_CHAT_V2_SCHEDULED_LOOP_RESUME =
+  "ai-chat-v2:scheduled-loop-resume";
+export const AI_CHAT_V2_SCHEDULED_LOOP_STOP = "ai-chat-v2:scheduled-loop-stop";
+export const AI_CHAT_V2_SCHEDULED_LOOP_STOP_RUN =
+  "ai-chat-v2:scheduled-loop-stop-run";
+/** Main->renderer refresh hint after a scheduled turn persists (FR-11). */
+export const AI_CHAT_V2_CONVERSATION_UPDATED =
+  "ai-chat-v2:conversation-updated";
+/** Main->renderer live scheduled-turn token stream (technical-design §13.2). */
+export const AI_CHAT_V2_SCHEDULED_STREAM = "ai-chat-v2:scheduled-stream";
 
 // ==================== AiChatV2 Local Voice Channels ====================
 // Local sherpa-onnx STT/TTS for AiChatV2. See

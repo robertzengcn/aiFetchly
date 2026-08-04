@@ -348,6 +348,77 @@
       </v-card>
     </v-dialog>
 
+    <!-- Local AI Runtime Download Dialog -->
+    <v-dialog v-model="showRuntimeDownloadDialog" max-width="520">
+      <v-card>
+        <v-card-title>
+          <v-icon left class="mr-2" color="warning">mdi-download-circle</v-icon>
+          {{ t('knowledge.local_runtime_not_installed_title') }}
+        </v-card-title>
+        <v-card-text>
+          <p class="mb-2">
+            {{ t('knowledge.local_runtime_not_installed_message', {
+              model: selectedEmbeddingModel,
+              runtime: LOCAL_EMBEDDING_RUNTIME_ID,
+            }) }}
+          </p>
+          <div v-if="runtimeInstallOffer" class="text-caption text-medium-emphasis mb-2">
+            {{ t('knowledge.local_runtime_download_size', {
+              size: formatRuntimeBytes(runtimeInstallOffer.archiveSizeBytes),
+            }) }}
+          </div>
+          <v-alert
+            v-if="runtimeDownloadError"
+            type="error"
+            variant="tonal"
+            density="compact"
+            class="mt-2"
+          >
+            {{ runtimeDownloadError }}
+          </v-alert>
+          <template v-if="runtimeDownloading && runtimeDownloadProgress && isActiveRuntimeProgress(runtimeDownloadProgress.phase)">
+            <v-progress-linear
+              :model-value="runtimeDownloadProgress.percent ?? 0"
+              height="8"
+              color="primary"
+              rounded
+              class="mt-3"
+            />
+            <div class="text-caption mt-1">
+              {{ runtimePhaseLabel(runtimeDownloadProgress.phase) }}
+              <span v-if="runtimeDownloadProgress.totalBytes" class="ml-2">
+                {{ formatRuntimeBytes(runtimeDownloadProgress.downloadedBytes ?? 0) }} / {{ formatRuntimeBytes(runtimeDownloadProgress.totalBytes) }}
+              </span>
+            </div>
+          </template>
+        </v-card-text>
+        <v-card-actions>
+          <v-spacer />
+          <template v-if="!runtimeDownloading">
+            <v-btn variant="text" @click="showRuntimeDownloadDialog = false">
+              {{ t('common.cancel') }}
+            </v-btn>
+            <v-btn
+              color="primary"
+              :disabled="!runtimeInstallOffer"
+              :loading="preparingRuntime"
+              @click="onDownloadRuntime"
+            >
+              {{ t('knowledge.local_runtime_download') }}
+            </v-btn>
+          </template>
+          <template v-else>
+            <v-btn
+              v-if="runtimeDownloadProgress && runtimeDownloadProgress.phase === 'downloading'"
+              variant="text"
+              @click="onCancelRuntimeDownload"
+            >
+              {{ t('localAiRuntime.cancel') }}
+            </v-btn>
+          </template>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
 
     <!-- Update Model Result Dialog -->
     <v-dialog v-model="showUpdateResultDialog" max-width="500">
@@ -391,6 +462,11 @@ import { initializeRAG, getRAGStats, uploadDocument, selectFilesNative as select
 import type { SaveTempFileResponse, UploadedDocument } from '@/entityTypes/commonType';
 import { ModelInfo } from '@/api/ragConfigApi';
 import { DocumentMetadata } from '@/entityTypes/metadataType';
+import { getLocalAiRuntimeStatus, prepareLocalAiRuntimeInstall, installLocalAiRuntime, cancelLocalAiRuntimeInstall, onLocalAiRuntimeProgress } from '@/views/api/localAiRuntime';
+import type { LocalAiRuntimeDownloadPhase, LocalAiRuntimeDownloadProgress, LocalAiRuntimeId, LocalAiRuntimeInstallOffer } from '@/entityTypes/localAiRuntimeTypes';
+import { LOCAL_XENOVA_PROVIDER_PREFIX } from '@/service/embedding/LocalEmbeddingModels';
+
+const LOCAL_EMBEDDING_RUNTIME_ID: LocalAiRuntimeId = 'embedding-xenova';
 
 // i18n setup
 
@@ -417,6 +493,15 @@ const updateResultMessage = ref('');
 const updateResultTitle = ref('');
 const updateResultIcon = ref('mdi-check-circle');
 
+// Local AI runtime download dialog variables
+const showRuntimeDownloadDialog = ref(false);
+const runtimeDownloading = ref(false);
+const preparingRuntime = ref(false);
+const runtimeDownloadError = ref('');
+const runtimeDownloadProgress = ref<LocalAiRuntimeDownloadProgress | null>(null);
+const runtimeInstallOffer = ref<LocalAiRuntimeInstallOffer | null>(null);
+let unsubscribeRuntimeProgress: (() => void) | null = null;
+
 // Upload dialog data
 const uploadFiles = ref<File[]>([]);
 const uploading = ref(false);
@@ -439,11 +524,21 @@ const searchInterface = ref();
 
 // Lifecycle hooks
 onMounted(async () => {
+  unsubscribeRuntimeProgress = onLocalAiRuntimeProgress((progress) => {
+    if (progress.runtimeId !== LOCAL_EMBEDDING_RUNTIME_ID) return;
+    runtimeDownloadProgress.value = progress;
+    if (progress.phase === 'error') {
+      runtimeDownloadError.value = runtimeErrorMessage(progress.errorMessage ?? 'download failed');
+    }
+  });
   await initializeRAGSystem();
 });
 
 onUnmounted(() => {
-  // Cleanup if needed
+  if (unsubscribeRuntimeProgress) {
+    unsubscribeRuntimeProgress();
+    unsubscribeRuntimeProgress = null;
+  }
 });
 
 // Methods
@@ -638,6 +733,19 @@ async function loadAvailableModels() {
 async function handleUpdateEmbeddingModel() {
   if (!selectedEmbeddingModel.value) return;
   
+  // Local embedding models (Xenova/all-MiniLM-L6-v2) require the
+  // downloadable "embedding-xenova" Local AI Component. If the runtime is not
+  // installed/ready, offer an inline download instead of updating.
+  if (selectedEmbeddingModel.value.startsWith(LOCAL_XENOVA_PROVIDER_PREFIX)) {
+    if (!(await ensureLocalEmbeddingRuntime())) {
+      return;
+    }
+  }
+  
+  await performUpdateEmbeddingModel();
+}
+
+async function performUpdateEmbeddingModel() {
   updatingModel.value = true;
   try {
     const result = await updateEmbeddingModel(selectedEmbeddingModel.value);
@@ -681,6 +789,110 @@ async function handleUpdateEmbeddingModel() {
   } finally {
     updatingModel.value = false;
   }
+}
+
+/**
+ * Verifies the embedding-xenova Local AI Component is ready. When it is not,
+ * opens the download dialog with an inline install action. Returns true only
+ * when the runtime is ready (either already or after a successful install).
+ */
+async function ensureLocalEmbeddingRuntime(): Promise<boolean> {
+  const runtimeStatus = await getLocalAiRuntimeStatus(LOCAL_EMBEDDING_RUNTIME_ID);
+  if (runtimeStatus.state === 'ready') {
+    return true;
+  }
+  console.warn('Local embedding runtime not ready:', runtimeStatus);
+  runtimeDownloadError.value = '';
+  runtimeDownloadProgress.value = null;
+  runtimeInstallOffer.value = null;
+  showRuntimeDownloadDialog.value = true;
+  preparingRuntime.value = true;
+  try {
+    runtimeInstallOffer.value = await prepareLocalAiRuntimeInstall(LOCAL_EMBEDDING_RUNTIME_ID);
+  } catch (error) {
+    runtimeDownloadError.value = runtimeErrorMessage(error);
+  } finally {
+    preparingRuntime.value = false;
+  }
+  return false;
+}
+
+async function onDownloadRuntime() {
+  if (!runtimeInstallOffer.value || runtimeDownloading.value) return;
+  runtimeDownloading.value = true;
+  runtimeDownloadError.value = '';
+  try {
+    await installLocalAiRuntime({
+      operationId: runtimeInstallOffer.value.operationId,
+      runtimeId: runtimeInstallOffer.value.runtimeId,
+      expectedRuntimeVersion: runtimeInstallOffer.value.runtimeVersion,
+      consentToken: runtimeInstallOffer.value.consentToken,
+    });
+    runtimeInstallOffer.value = null;
+    const runtimeStatus = await getLocalAiRuntimeStatus(LOCAL_EMBEDDING_RUNTIME_ID);
+    if (runtimeStatus.state === 'ready') {
+      showRuntimeDownloadDialog.value = false;
+      await performUpdateEmbeddingModel();
+    } else {
+      runtimeDownloadError.value = t('knowledge.local_runtime_install_failed') as string;
+    }
+  } catch (error) {
+    console.error('❌ Error installing local embedding runtime:', error);
+    runtimeDownloadError.value = runtimeErrorMessage(error);
+  } finally {
+    runtimeDownloading.value = false;
+  }
+}
+
+function onCancelRuntimeDownload() {
+  if (runtimeDownloading.value && runtimeDownloadProgress.value) {
+    cancelLocalAiRuntimeInstall(runtimeDownloadProgress.value.operationId).catch((error: unknown) => {
+      runtimeDownloadError.value = runtimeErrorMessage(error);
+    });
+  }
+  runtimeDownloading.value = false;
+  showRuntimeDownloadDialog.value = false;
+}
+
+function runtimeErrorMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/checksum|integrity/i.test(message)) return t('localAiRuntime.errors.checksum_mismatch') as string;
+  if (/safety|unsafe|archive/i.test(message)) return t('localAiRuntime.errors.archive_unsafe') as string;
+  if (/health/i.test(message)) return t('localAiRuntime.errors.health_check_failed') as string;
+  if (/busy|in progress/i.test(message)) return t('localAiRuntime.errors.busy') as string;
+  if (/catalog/i.test(message)) return t('localAiRuntime.errors.catalog_unavailable') as string;
+  if (/compatible|incompat/i.test(message)) return t('localAiRuntime.errors.incompatible') as string;
+  if (/download/i.test(message)) return t('localAiRuntime.errors.download_failed') as string;
+  return message;
+}
+
+function isActiveRuntimeProgress(phase: LocalAiRuntimeDownloadPhase): boolean {
+  return (
+    phase === 'resolving' ||
+    phase === 'downloading' ||
+    phase === 'verifying' ||
+    phase === 'extracting' ||
+    phase === 'testing' ||
+    phase === 'activating'
+  );
+}
+
+function runtimePhaseLabel(phase: LocalAiRuntimeDownloadPhase): string {
+  const key = `localAiRuntime.${phase}`;
+  return (t(key) as string) || phase;
+}
+
+function formatRuntimeBytes(bytes?: number): string {
+  if (!bytes && bytes !== 0) return '—';
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ['KB', 'MB', 'GB'];
+  let value = bytes / 1024;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return `${value.toFixed(1)} ${units[unit]}`;
 }
 
 async function openSettingsDialog() {

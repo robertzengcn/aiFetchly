@@ -89,9 +89,21 @@ export interface ChatV2AttachmentMetadata {
   previewDataUrl?: string;
 }
 
+/** Scheduled-loop metadata attached to user/assistant rows produced by a
+ * scheduled occurrence (technical-design §9.5). Bounded and renderer-safe. */
+export interface ChatV2ScheduledLoopMetadata {
+  readonly scheduleId: number;
+  readonly taskId: number;
+  readonly runId: number;
+  readonly occurrence: number;
+  readonly scheduledFor?: string;
+  readonly catchUp: boolean;
+  readonly status?: "running" | "completed" | "failed" | "cancelled";
+}
+
 /** Metadata stored on v2 chat rows in the existing ai_chat_messages table. */
 export interface ChatV2MessageMetadata {
-  source: "chat-v2" | "slash-command";
+  source: "chat-v2" | "slash-command" | "scheduled-loop";
   openaiResponseId?: string;
   finishReason?: string | null;
   cancelled?: boolean;
@@ -145,6 +157,12 @@ export interface ChatV2MessageMetadata {
   /** Recovery metadata persisted on the assistant row when any recovery
    * layer activated during the turn. Technical-design §15.1. */
   recovery?: ChatV2RecoveryMetadata;
+  /** Scheduled-loop metadata for rows produced by a scheduled occurrence. */
+  scheduledLoop?: ChatV2ScheduledLoopMetadata;
+  /** Visible in history but excluded from model, compact, and memory context.
+   * Used for the raw `/loop` command and its local confirmation row so the
+   * model does not interpret schedule-management text as a new instruction. */
+  localOnly?: boolean;
 }
 
 /** Renderer request to start a streaming chat turn. */

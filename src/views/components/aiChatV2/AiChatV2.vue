@@ -38,6 +38,47 @@
             @click="stopActiveLoop"
           />
         </v-chip>
+        <v-chip
+          v-if="activeScheduledLoop"
+          size="x-small"
+          :color="scheduledLoopDescriptor.color"
+          class="ml-2"
+        >
+          <v-icon start size="x-small">mdi-clock-outline</v-icon>
+          <span class="font-weight-bold">
+            {{ scheduledLoopDescriptor.label }}
+          </span>
+          <v-btn
+            v-if="
+              activeScheduledLoop.status === 'active' ||
+              activeScheduledLoop.status === 'running'
+            "
+            size="x-small"
+            variant="text"
+            icon="mdi-pause"
+            :aria-label="t('aiChatV2.scheduledLoop.pause') || 'Pause'"
+            @click="runScheduledLoopControl('pause')"
+          />
+          <v-btn
+            v-if="activeScheduledLoop.status === 'paused'"
+            size="x-small"
+            variant="text"
+            icon="mdi-play"
+            :aria-label="t('aiChatV2.scheduledLoop.resume') || 'Resume'"
+            @click="runScheduledLoopControl('resume')"
+          />
+          <v-btn
+            v-if="
+              activeScheduledLoop.status !== 'stopped' &&
+              activeScheduledLoop.status !== 'expired'
+            "
+            size="x-small"
+            variant="text"
+            icon="mdi-stop"
+            :aria-label="t('aiChatV2.scheduledLoop.stop') || 'Stop loop'"
+            @click="runScheduledLoopControl('stop')"
+          />
+        </v-chip>
       </div>
       <div class="v2-shell__header-actions">
         <AiChatV2ContextBadge
@@ -287,6 +328,23 @@
           />
         </v-card>
       </v-dialog>
+
+      <v-sheet
+        v-if="liveScheduledAssistant"
+        class="px-3 py-2 scheduled-live-bubble"
+        color="grey-lighten-4"
+        elevation="0"
+      >
+        <div class="d-flex align-center text-caption text-medium-emphasis mb-1">
+          <v-icon size="x-small" class="mr-1">mdi-clock-outline</v-icon>
+          <span>{{
+            t("aiChatV2.scheduledLoop.statusRunning") || "running"
+          }}</span>
+        </div>
+        <div class="text-body-2 scheduled-live-content">
+          {{ liveScheduledAssistant.content }}
+        </div>
+      </v-sheet>
 
       <AiChatV2Composer
         :is-streaming="chatIsRunning"
@@ -654,7 +712,23 @@ import {
   parseAiGoalCommand,
   isValidLoopCount,
 } from "@/views/utils/aiGoalCommand";
+import { parseAiLoopCommand } from "@/service/slashCommands/AiChatLoopCommandParser";
+import {
+  createScheduledLoop,
+  controlScheduledLoop,
+  getScheduledLoopStatus,
+  subscribeConversationUpdated,
+  unsubscribeConversationUpdated,
+  subscribeScheduledStream,
+  unsubscribeScheduledStream,
+} from "@/views/api/aiChatScheduledLoop";
 import type { AIChatGoalView } from "@/entityTypes/aiChatGoalTypes";
+import type {
+  ScheduledLoopView,
+  ScheduledLoopParseErrorCode,
+  ChatV2ConversationUpdatedEvent,
+  ChatV2ScheduledStreamEvent,
+} from "@/entityTypes/aiChatScheduledLoopTypes";
 import { workspaceMemoryApi } from "@/views/api/aiWorkspaceMemory";
 import type { WorkspaceSummary } from "@/entityTypes/workspaceTypes";
 import type { FileOperationRecord } from "@/entityTypes/fileOperationTypes";
@@ -1253,6 +1327,167 @@ async function stopActiveLoop(): Promise<void> {
   await refreshActiveGoal();
 }
 
+/** Localized message for a scheduled-loop parser error code. */
+function scheduledLoopErrorMessage(code: ScheduledLoopParseErrorCode): string {
+  const key = `aiChatV2.scheduledLoop.errors.${code}`;
+  const fallback: Record<ScheduledLoopParseErrorCode, string> = {
+    INVALID_LOOP_SYNTAX: "The /loop command could not be parsed.",
+    INVALID_INTERVAL: "The interval must be between 1 minute and 24 hours.",
+    INVALID_LOOP_LIMIT: "The run count or lifetime limit is invalid.",
+    PROMPT_REQUIRED: "A prompt is required for a scheduled loop.",
+  };
+  return t(key) || fallback[code];
+}
+
+/** Fetch the active scheduled loop (if any) for the current conversation. */
+async function refreshScheduledLoopStatus(): Promise<void> {
+  const id = activeConversationId.value;
+  if (!id) {
+    activeScheduledLoop.value = null;
+    return;
+  }
+  try {
+    activeScheduledLoop.value = await getScheduledLoopStatus(id);
+  } catch {
+    activeScheduledLoop.value = null;
+  }
+}
+
+/**
+ * Handle a scheduled-turn completion broadcast (refresh hint only). Reloads the
+ * authoritative history when the originating conversation is active and idle;
+ * defers until the active stream ends so scheduled tokens never merge into an
+ * interactive bubble. Always refreshes the conversation list for previews.
+ */
+function handleConversationUpdated(
+  event: ChatV2ConversationUpdatedEvent
+): void {
+  void loadConversations();
+  if (event.conversationId === activeConversationId.value) {
+    // The persisted row replaces any optimistic live bubble.
+    if (liveScheduledAssistant.value) {
+      liveScheduledAssistant.value = null;
+    }
+    if (isStreaming.value) {
+      scheduledRefreshPending.value = true;
+    } else {
+      void loadHistory(event.conversationId);
+    }
+    void refreshScheduledLoopStatus();
+  }
+}
+
+// When an interactive stream terminates, flush a deferred scheduled-loop
+// refresh so the completed scheduled turn renders without merging into the
+// just-finished interactive bubble.
+watch(isStreaming, (streaming) => {
+  if (!streaming && scheduledRefreshPending.value) {
+    scheduledRefreshPending.value = false;
+    const id = activeConversationId.value;
+    if (id) void loadHistory(id);
+  }
+});
+
+/**
+ * Handle a live scheduled-turn stream chunk (technical-design §13.2). Strict
+ * routing: only render when the originating conversation is active and no
+ * interactive stream is running, so scheduled tokens never merge into an
+ * interactive bubble. Transient — the persisted row replaces it on the
+ * terminal conversation-updated reload.
+ */
+function handleScheduledStream(event: ChatV2ScheduledStreamEvent): void {
+  if (event.conversationId !== activeConversationId.value) return;
+  // Defer when the conversation has any active interactive turn (streaming OR
+  // a pending tool-permission prompt) so scheduled tokens never render beside
+  // an interactive bubble/card.
+  if (chatIsRunning.value) return;
+  if (event.kind === "token") {
+    const delta = event.contentDelta ?? "";
+    if (
+      !liveScheduledAssistant.value ||
+      liveScheduledAssistant.value.messageId !== event.messageId
+    ) {
+      liveScheduledAssistant.value = { messageId: event.messageId, content: delta };
+    } else {
+      liveScheduledAssistant.value = {
+        messageId: event.messageId,
+        content: liveScheduledAssistant.value.content + delta,
+      };
+    }
+  }
+  // "done" / "error": leave the bubble in place; the terminal
+  // conversation-updated event reloads authoritative history and clears it.
+}
+
+/** Handle /loop <duration> <prompt>: create a bounded scheduled loop. */
+async function runScheduledLoopCreate(
+  action: {
+    intervalMs: number;
+    prompt: string;
+    maxRuns: number;
+    maxLifetimeMs: number;
+  },
+  rawCommand: string
+): Promise<void> {
+  const conversationId = ensureWorkspaceConversationId();
+  try {
+    const created = await createScheduledLoop({
+      conversationId,
+      rawCommand,
+      prompt: action.prompt,
+      intervalMs: action.intervalMs,
+      maxRuns: action.maxRuns,
+      maxLifetimeMs: action.maxLifetimeMs,
+    });
+    if (!created) {
+      streamError.value =
+        t("aiChatV2.scheduledLoop.createFailed") ||
+        "Could not create the scheduled loop.";
+      return;
+    }
+    // The backend persisted the command + confirmation rows; switch to the
+    // resolved conversation and reload history so they render immediately.
+    if (
+      !activeConversationId.value ||
+      activeConversationId.value !== created.conversationId
+    ) {
+      activeConversationId.value = created.conversationId;
+    }
+    await loadHistory(created.conversationId);
+    void loadConversations();
+    await refreshScheduledLoopStatus();
+  } catch (e) {
+    streamError.value =
+      e instanceof Error
+        ? e.message
+        : t("aiChatV2.scheduledLoop.createFailed") ||
+          "Could not create the scheduled loop.";
+  }
+}
+
+/** Handle /loop pause|resume|stop (conversation-scoped control). */
+async function runScheduledLoopControl(
+  operation: "pause" | "resume" | "stop"
+): Promise<void> {
+  const id = activeConversationId.value;
+  if (!id) {
+    streamError.value =
+      t("aiChatV2.scheduledLoop.noActiveLoop") ||
+      "No active conversation for this command.";
+    return;
+  }
+  try {
+    await controlScheduledLoop(id, operation);
+    await refreshScheduledLoopStatus();
+  } catch (e) {
+    streamError.value =
+      e instanceof Error
+        ? e.message
+        : t("aiChatV2.scheduledLoop.controlFailed") ||
+          "Could not update the scheduled loop.";
+  }
+}
+
 /**
  * Handler for the WorkspaceRequiredCard's `approved` event. Updates the badge
  * to reflect the newly-created + approved workspace and hides the card.
@@ -1710,6 +1945,16 @@ const mode = ref<ChatV2Mode>("chat");
 const planState = ref<AIChatPlanStateView | null>(null);
 // Goal / loop state (renderer display only; authoritative state lives in main).
 const activeGoal = ref<AIChatGoalView | null>(null);
+/** Active scheduled loop for the current conversation (renderer display only;
+ * the main process is authoritative via getScheduledLoopStatus). */
+const activeScheduledLoop = ref<ScheduledLoopView | null>(null);
+/** Set when a scheduled turn completes while an interactive stream is active;
+ * the history is reloaded once the active stream terminates (design §18.3). */
+const scheduledRefreshPending = ref(false);
+/** Optimistic live content for a scheduled turn streaming into the active
+ * conversation. Transient — cleared on terminal reload; never mutates the
+ * persisted message list (technical-design §13.2). */
+const liveScheduledAssistant = ref<{ messageId: string; content: string } | null>(null);
 const goalStatusDescriptor = computed(() => {
   const status = activeGoal.value?.status;
   switch (status) {
@@ -1751,6 +1996,43 @@ const goalStatusDescriptor = computed(() => {
       };
     default:
       return { color: "default", icon: "mdi-flag", label: status ?? "goal" };
+  }
+});
+const scheduledLoopDescriptor = computed(() => {
+  const status = activeScheduledLoop.value?.status;
+  switch (status) {
+    case "running":
+      return {
+        color: "primary",
+        label: t("aiChatV2.scheduledLoop.statusRunning") || "running",
+      };
+    case "active":
+      return {
+        color: "success",
+        label: t("aiChatV2.scheduledLoop.statusActive") || "active",
+      };
+    case "paused":
+      return {
+        color: "warning",
+        label: t("aiChatV2.scheduledLoop.statusPaused") || "paused",
+      };
+    case "expired":
+      return {
+        color: "grey-darken-1",
+        label: t("aiChatV2.scheduledLoop.statusExpired") || "expired",
+      };
+    case "failed":
+      return {
+        color: "error",
+        label: t("aiChatV2.scheduledLoop.statusFailed") || "failed",
+      };
+    case "stopped":
+      return {
+        color: "grey-darken-1",
+        label: t("aiChatV2.scheduledLoop.statusStopped") || "stopped",
+      };
+    default:
+      return { color: "default", label: status ?? "scheduled" };
   }
 });
 const pendingQuestion = ref<AIChatPlanQuestionView | null>(null);
@@ -2069,6 +2351,7 @@ const loadHistory = async (conversationId: string): Promise<void> => {
       if (activeConversationId.value !== conversationId) return;
       applyPlanState(nextPlanState);
       void refreshActiveGoal();
+      void refreshScheduledLoopStatus();
       if (planState.value?.pendingQuestion) {
         pendingQuestion.value = planState.value.pendingQuestion;
       } else {
@@ -2120,6 +2403,26 @@ const onClearMessages = (): void => {
 async function clearCurrentConversation(): Promise<void> {
   const conversationId = activeConversationId.value;
   if (conversationId) {
+    // FR-14: a conversation with an active scheduled loop must confirm the
+    // schedule will also be stopped before its history is cleared.
+    const loop = activeScheduledLoop.value;
+    if (
+      loop &&
+      loop.conversationId === conversationId &&
+      loop.status !== "stopped" &&
+      loop.status !== "expired"
+    ) {
+      const confirmMsg =
+        t("aiChatV2.scheduledLoop.clearConfirm") ||
+        "This conversation has an active scheduled loop. Clearing will also stop the loop. Continue?";
+      if (!window.confirm(confirmMsg)) return;
+      try {
+        await controlScheduledLoop(conversationId, "stop");
+        await refreshScheduledLoopStatus();
+      } catch {
+        /* proceed with clear best-effort */
+      }
+    }
     try {
       await clearChatV2Conversation(conversationId);
       clearConversationRuntimeState(conversationId);
@@ -2725,6 +3028,29 @@ const onSend = async (
   speechController.start();
 
   // /goal and /loop need stateful handling before the generic slash dispatcher.
+  // The unified /loop parser classifies goal-loop vs scheduled-loop vs control.
+  const loopCmd = parseAiLoopCommand(text);
+  if (loopCmd.type === "goal_loop") {
+    await runLoopCommand(loopCmd.maxIterations);
+    return;
+  }
+  if (loopCmd.type === "scheduled_loop") {
+    await runScheduledLoopCreate(loopCmd, text);
+    return;
+  }
+  if (loopCmd.type === "scheduled_loop_control") {
+    if (loopCmd.operation === "status") {
+      await refreshScheduledLoopStatus();
+    } else {
+      await runScheduledLoopControl(loopCmd.operation);
+    }
+    return;
+  }
+  if (loopCmd.type === "invalid_loop") {
+    streamError.value = scheduledLoopErrorMessage(loopCmd.code);
+    return;
+  }
+
   const cmd = parseAiGoalCommand(text);
   let modelMessage = text;
   let requestMode: ChatV2Mode = mode.value;
@@ -3809,6 +4135,10 @@ onMounted(() => {
     next.set(convId, [...current, record]);
     fileOps.value = next;
   });
+  // Scheduled-loop turn completions arrive as a narrow refresh-hint broadcast.
+  subscribeConversationUpdated(handleConversationUpdated);
+  // Live scheduled-turn token stream (strict routing renderer-side).
+  subscribeScheduledStream(handleScheduledStream);
 });
 
 onBeforeUnmount(() => {
@@ -3837,6 +4167,8 @@ onBeforeUnmount(() => {
   unsubscribeVoiceModelProgress?.();
   unsubscribeVoiceModelProgress = null;
   unsubscribeFromFileOperations();
+  unsubscribeConversationUpdated();
+  unsubscribeScheduledStream();
   if (searchDebounceTimer) {
     clearTimeout(searchDebounceTimer);
     searchDebounceTimer = null;
