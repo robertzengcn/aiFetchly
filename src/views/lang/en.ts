@@ -2179,6 +2179,8 @@ export default {
     statistics_description: "Track activity, trends, and campaign performance.",
     market_description: "Research markets and find opportunities.",
     contact_description: "Extract and enrich contact profiles for prospects.",
+    email_service_description:
+      "Configure SMTP and IMAP email service connections.",
     directory_description:
       "Browse directory tasks and collected business records.",
     maps_description: "Find local businesses from map providers.",

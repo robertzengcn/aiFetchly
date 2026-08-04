@@ -2143,6 +2143,8 @@ export default {
     market_description: "市場を調査し、機会を見つけます。",
     contact_description:
       "見込み客向けの連絡先プロフィールを抽出して充実させます。",
+    email_service_description:
+      "SMTPおよびIMAPのメールサービス接続を設定します。",
     directory_description:
       "ディレクトリタスクと収集済みの企業レコードを確認します。",
     maps_description: "地図プロバイダーから地域ビジネスを見つけます。",

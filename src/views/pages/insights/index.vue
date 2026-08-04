@@ -65,6 +65,14 @@ const insightItems = computed<InsightItem[]>(() => [
     path: "/emailextraction/tasklist",
   },
   {
+    title: t("route.email_service") || "Email Service",
+    description:
+      t("insights.email_service_description") ||
+      "Configure SMTP and IMAP email service connections.",
+    icon: "mdi-email-sync",
+    path: "/emailmarketing/emailservice/list",
+  },
+  {
     title: t("route.map_scraper") || "Local Business Finder",
     description:
       t("insights.maps_description") ||

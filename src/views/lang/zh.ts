@@ -2103,6 +2103,7 @@ export default {
     statistics_description: "跟踪活动、趋势和营销表现。",
     market_description: "研究市场并找到机会。",
     contact_description: "为潜在客户提取并丰富联系人画像。",
+    email_service_description: "配置 SMTP 和 IMAP 邮件服务连接。",
     directory_description: "浏览目录任务和已收集的商家记录。",
     maps_description: "从地图服务中查找本地商家。",
     outreach_description: "管理外联任务、模板、过滤器和回复。",

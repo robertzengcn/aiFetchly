@@ -2168,6 +2168,8 @@ export default {
     market_description: "Analysez les marchés et trouvez des opportunités.",
     contact_description:
       "Extrayez et enrichissez les profils de contact des prospects.",
+    email_service_description:
+      "Configurez les connexions de services e-mail SMTP et IMAP.",
     directory_description:
       "Parcourez les tâches d’annuaire et les fiches d’entreprises collectées.",
     maps_description:
