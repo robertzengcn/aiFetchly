@@ -30,7 +30,7 @@ export const LOCAL_AI_RUNTIME_ARTIFACT_PREFIX: Record<
 };
 
 /** Platforms supported by v1 runtime packages. */
-export type LocalAiRuntimePlatform = "win32" | "darwin";
+export type LocalAiRuntimePlatform = "win32" | "darwin" | "linux";
 
 /** Architectures supported by v1 runtime packages. */
 export type LocalAiRuntimeArch = "x64" | "arm64";
@@ -196,7 +196,7 @@ export class LocalAiRuntimeError extends Error {
   constructor(
     code: LocalAiRuntimeErrorCode,
     message: string,
-    recoverable = false,
+    recoverable = false
   ) {
     super(message);
     this.name = "LocalAiRuntimeError";

@@ -93,6 +93,7 @@ function makeLoopInput(): Record<string, unknown> {
     conversationId: "c1",
     assistantMessageId: "m1",
     eventSink: makeEventSinkStub(),
+    messages: [],
     skillRegistry: undefined,
     request: { model: "test-model" },
   };
