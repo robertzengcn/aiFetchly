@@ -396,6 +396,9 @@ jobs:
           - platform: darwin
             arch: arm64
             runner: macos-14
+          - platform: linux
+            arch: x64
+            runner: ubuntu-22.04
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
