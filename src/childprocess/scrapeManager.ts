@@ -21,7 +21,6 @@ import debug from "debug";
 import clone from "lodash/clone";
 import times from "lodash/times";
 import map from "lodash/map";
-import UserAgent from "user-agents";
 // import randomUseragent from "random-useragent";
 // import { addExtra } from "puppeteer-extra";
 // import puppeteer from 'puppeteer-extra';
@@ -83,20 +82,11 @@ export class ScrapeManager {
     this.config = defaults(config, {
       // remote_username:endcofig.USERNAME,
       // remote_password:endcofig.PASSWORD,
-      // the user agent to scrape with - set based on platform
-      user_agent: (() => {
-        const platform = process.platform;
-        switch (platform) {
-          case "darwin":
-            return "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36";
-          case "linux":
-            return "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36";
-          case "win32":
-          default:
-            return "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36";
-        }
-      })(),
-      // if random_user_agent is set to True, a random user agent is chosen
+      // Empty means Chromium uses its native, executable-matched user agent.
+      // An explicit value remains available for callers that require one.
+      user_agent: "",
+      // Random user-agent rotation is intentionally disabled by default; it can
+      // create browser/version inconsistencies and is not suitable for Google.
       random_user_agent: false,
       // whether to select manual settings in visible mode
       set_manual_settings: false,
@@ -315,27 +305,25 @@ export class ScrapeManager {
 
     //https://github.com/puppeteer/puppeteer/issues/2234
     // Give the per browser options
-    let userAgents: string;
     const perBrowserOptions = map(
       this.proxiesArr.slice(0, this.numClusters),
       (proxy) => {
-        if (this.config.random_user_agent) {
-          const userAgent = new UserAgent({ deviceCategory: "desktop" });
-          console.log("user agent is " + userAgent.toString());
-          userAgents = userAgent.toString();
-        } else {
-          userAgents = this.config.user_agent;
+        const args = [
+          ...this.config.chrome_flags,
+          "--disable-blink-features=AutomationControlled",
+        ];
+
+        // Chromium's native UA always matches the executable version. Only
+        // apply an explicit override when the caller deliberately configured one.
+        if (this.config.user_agent?.trim()) {
+          args.push(`--user-agent=${this.config.user_agent.trim()}`);
         }
 
         const res = {
           headless: this.config.headless,
           ignoreHTTPSErrors: true,
           ignoreDefaultArgs: this.config.ignoreDefaultArgs as string[],
-          args: [
-            ...this.config.chrome_flags,
-            `--user-agent=${userAgents}`,
-            "--disable-blink-features=AutomationControlled",
-          ],
+          args,
         };
         // if(userAgents.length>0){
         //   res.args.push(`--user-agent=${userAgents}`)
@@ -508,11 +496,13 @@ export class ScrapeManager {
     }
 
     const engineFactory = new searchEngineFactory();
-    const execPromises: Array<Promise<{
-      results: RunResult;
-      metadata: MetadataType;
-      num_requests: number;
-    }>> = [];
+    const execPromises: Array<
+      Promise<{
+        results: RunResult;
+        metadata: MetadataType;
+        num_requests: number;
+      }>
+    > = [];
 
     for (let c = 0; c < chunks.length; c++) {
       const scop: ScrapeOptions = {
@@ -562,7 +552,11 @@ export class ScrapeManager {
           return await obj.run({ ...data, resultCallback });
         } catch (error) {
           if (error instanceof Error) {
-            await this.saveDebugArtifacts(data.page, "cluster_task_error", error);
+            await this.saveDebugArtifacts(
+              data.page,
+              "cluster_task_error",
+              error
+            );
           }
           throw error;
         }
