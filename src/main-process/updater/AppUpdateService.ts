@@ -107,16 +107,19 @@ export function initializeAppUpdates(
     };
   }
 
-  // `app` is narrowed to a minimal shape by this repo's type setup (see
-  // src/types/electron.d.ts and the pervasive `(app as any)` casts in
-  // background.ts). Assert the packaged flag structurally instead of `any`.
+  // `app` is narrowed to a minimal shape by this repo's full-project tsc (see
+  // pervasive `(app as any)` casts in background.ts). Assert structurally.
   const isPackaged = options.isPackaged ?? readAppIsPackaged();
   if (!isPackaged) {
+    log.info("[auto-update] Skipping GitHub updater in development mode");
     return { initialized: false, reason: "not-packaged" };
   }
 
   const platform = options.platform ?? process.platform;
   if (platform !== "win32" && platform !== "darwin") {
+    log.info(
+      `[auto-update] Skipping GitHub updater on unsupported platform: ${platform}`
+    );
     return { initialized: false, reason: "unsupported-platform" };
   }
 
