@@ -109,17 +109,7 @@ jobs:
 
       - name: Rebuild better-sqlite3 for Electron
         shell: bash
-        run: |
-          set -euo pipefail
-          echo "Installing latest node-gyp (bundled 9.4.1 cannot detect VS 2022)..."
-          npm install -g node-gyp@latest
-          node-gyp --version
-          echo "Rebuilding better-sqlite3 against Electron headers..."
-          cd node_modules/better-sqlite3
-          node-gyp rebuild --release \
-            --runtime=electron \
-            --target=35.7.5 \
-            --dist-url=https://electronjs.org/headers
+        run: yarn rebuild-better-sqlite
       # - name: Rebuild canvas
       #   run: yarn rebuild-canvas
 
@@ -451,10 +441,8 @@ jobs:
           # This helps find the .pc files
           export PKG_CONFIG_PATH="/opt/homebrew/lib/pkgconfig"
 
-          # Critical: Ensure node-gyp uses C++20 standard
-          export npm_config_target="35.7.5"
-          export npm_config_disturl="https://electronjs.org/headers"
           echo "Skipping broad electron-rebuild because it attempts to rebuild isolated-vm."
+          unset npm_config_runtime npm_config_target npm_config_disturl
           echo "Targeted native module rebuilds run in the following steps."
         env:
           # Ensure this is set for the step
@@ -484,8 +472,9 @@ jobs:
           echo "=== Rebuilding C modules specifically ==="
           # Rebuild bufferutil and utf-8-validate which are C modules
           TARGET_ARCH="${TARGET_ARCH:-$(uname -m)}"
-          npm_config_runtime=electron npm_config_target=35.7.5 npm_config_arch="${TARGET_ARCH}" npm_config_disturl=https://electronjs.org/headers CFLAGS="-std=c11" npm rebuild bufferutil --build-from-source || echo "bufferutil rebuild failed"
-          npm_config_runtime=electron npm_config_target=35.7.5 npm_config_arch="${TARGET_ARCH}" npm_config_disturl=https://electronjs.org/headers CFLAGS="-std=c11" npm rebuild utf-8-validate --build-from-source || echo "utf-8-validate rebuild failed"
+          ELECTRON_VERSION="$(node -p "require('./node_modules/electron/package.json').version")"
+          npm_config_runtime=electron npm_config_target="${ELECTRON_VERSION}" npm_config_arch="${TARGET_ARCH}" npm_config_disturl=https://electronjs.org/headers CFLAGS="-std=c11" npm rebuild bufferutil --build-from-source || echo "bufferutil rebuild failed"
+          npm_config_runtime=electron npm_config_target="${ELECTRON_VERSION}" npm_config_arch="${TARGET_ARCH}" npm_config_disturl=https://electronjs.org/headers CFLAGS="-std=c11" npm rebuild utf-8-validate --build-from-source || echo "utf-8-validate rebuild failed"
       - name: Debug - Check native modules
         run: |
           echo "=== Checking native modules ==="

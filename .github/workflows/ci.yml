@@ -53,22 +53,25 @@ jobs:
       - name: Run lint
         run: yarn lint
 
+      - name: Rebuild native modules for Node test runtime
+        run: |
+          unset npm_config_runtime npm_config_target npm_config_disturl npm_config_arch
+          npm rebuild better-sqlite3 --build-from-source
+
       - name: Run module unit tests
         run: yarn test
 
       - name: Run main process unit tests
         run: yarn testmain
 
-      - name: Verify Electron native module compatibility
-        run: yarn vitest --config vite.utilityCode.config.mjs --run test/vitest/utilitycode/nativeModuleVersion.test.ts
-
-      - name: Rebuild native modules for Node test runtime
-        run: |
-          unset npm_config_runtime npm_config_target npm_config_disturl npm_config_arch
-          npm rebuild better-sqlite3 --build-from-source
-
       - name: Run utility code unit tests
         run: yarn vitest --config vite.utilityCode.ci.config.mjs --run
+
+      - name: Verify Electron native module compatibility
+        run: yarn rebuild-better-sqlite
+
+      - name: Run native module compatibility tests
+        run: yarn vitest --config vite.utilityCode.config.mjs --run test/vitest/utilitycode/nativeModuleVersion.test.ts
 
       - name: Run task code unit tests
         run: yarn vitest --config vite.taskCode.config.mjs --run --passWithNoTests

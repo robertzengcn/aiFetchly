@@ -278,10 +278,6 @@
     "vue-template-compiler": "^2.7.14",
     "vue-tsc": "^2.0.28"
   },
-  "resolutions": {
-    "@electron/rebuild": "4.2.0",
-    "node-abi": "4.33.0"
-  },
   "overrides": {
     "canvas": "npm:@napi-rs/canvas"
   },
