@@ -7,6 +7,7 @@ let nativeModuleDependenciesToPackage = [];
 const EXTERNAL_DEPENDENCIES = [
   "realm",
   "electron-squirrel-startup",
+  "update-electron-app",
   "better-sqlite3",
   "sqlite-vec",
   "puppeteer-cluster",
@@ -345,6 +346,22 @@ module.exports = {
             level: 1,
           },
         },
+      },
+    },
+  ],
+  // GitHub Releases publisher for auto-updatable desktop builds.
+  // `draft: true` keeps new releases invisible to update.electronjs.org
+  // until a release engineer inspects assets and publishes them.
+  publishers: [
+    {
+      name: "@electron-forge/publisher-github",
+      config: {
+        repository: {
+          owner: "robertzengcn",
+          name: "aiFetchly",
+        },
+        draft: true,
+        prerelease: false,
       },
     },
   ],
