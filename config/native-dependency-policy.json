@@ -48,6 +48,21 @@
       ],
       "allowedBinaryFormats": ["mach-o", "node-addon"],
       "rebuildModules": ["better-sqlite3"]
+    },
+    "linux-x64": {
+      "requiredPackages": ["better-sqlite3", "sqlite-vec", "sqlite-vec-linux-x64"],
+      "forbiddenPackagePatterns": [
+        "sqlite3",
+        "@types/sqlite3",
+        "sqlite-vec-windows-*",
+        "sqlite-vec-darwin-*",
+        "@xenova/transformers",
+        "onnxruntime-*",
+        "sharp",
+        "sherpa-onnx-*"
+      ],
+      "allowedBinaryFormats": ["elf", "node-addon"],
+      "rebuildModules": ["better-sqlite3"]
     }
   },
   "reviewedDevelopmentExceptions": []

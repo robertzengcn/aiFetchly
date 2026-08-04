@@ -35,6 +35,7 @@ const SHERPA_PLATFORM_PACKAGE = {
   "win32-x64": "sherpa-onnx-win-x64",
   "darwin-x64": "sherpa-onnx-darwin-x64",
   "darwin-arm64": "sherpa-onnx-darwin-arm64",
+  "linux-x64": "sherpa-onnx-linux-x64",
 };
 
 const ARTIFACT_PREFIX = {

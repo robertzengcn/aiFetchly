@@ -21,9 +21,11 @@ const REQUIRED_TARGETS = [
   "embedding-xenova|win32|x64",
   "embedding-xenova|darwin|x64",
   "embedding-xenova|darwin|arm64",
+  "embedding-xenova|linux|x64",
   "voice-sherpa|win32|x64",
   "voice-sherpa|darwin|x64",
   "voice-sherpa|darwin|arm64",
+  "voice-sherpa|linux|x64",
 ];
 
 function parseArgs(argv) {

@@ -11,7 +11,12 @@ import { readFileSync } from "node:fs";
 import { z } from "zod";
 import picomatch from "picomatch";
 
-export const TARGET_KEYS = ["win32-x64", "darwin-x64", "darwin-arm64"];
+export const TARGET_KEYS = [
+  "win32-x64",
+  "darwin-x64",
+  "darwin-arm64",
+  "linux-x64",
+];
 
 export const nativeDependencyPolicySchema = z.object({
   schemaVersion: z.literal(1),
@@ -31,6 +36,12 @@ export const nativeDependencyPolicySchema = z.object({
         rebuildModules: z.array(z.string().min(1)),
       }),
       "darwin-arm64": z.object({
+        requiredPackages: z.array(z.string().min(1)),
+        forbiddenPackagePatterns: z.array(z.string().min(1)),
+        allowedBinaryFormats: z.array(z.enum(["pe", "mach-o", "elf", "node-addon"])),
+        rebuildModules: z.array(z.string().min(1)),
+      }),
+      "linux-x64": z.object({
         requiredPackages: z.array(z.string().min(1)),
         forbiddenPackagePatterns: z.array(z.string().min(1)),
         allowedBinaryFormats: z.array(z.enum(["pe", "mach-o", "elf", "node-addon"])),

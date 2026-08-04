@@ -43,7 +43,10 @@ describe("native-dependency policy", () => {
     expect(getTargetPolicy(policy, "win32", "x64").requiredPackages).toContain(
       "better-sqlite3"
     );
-    expect(() => getTargetPolicy(policy, "linux", "x64")).toThrow();
+    expect(getTargetPolicy(policy, "linux", "x64").requiredPackages).toContain(
+      "sqlite-vec-linux-x64"
+    );
+    expect(() => getTargetPolicy(policy, "linux", "arm64")).toThrow();
   });
 });
 
