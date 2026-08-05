@@ -100,13 +100,20 @@ export class AccountCookiesModel extends BaseDb {
 
   /**
    * Return up to `limit` rows whose `cookies` value is NOT an ENC1 envelope
-   * (i.e. legacy plaintext candidates) for the background migration.
+   * (i.e. legacy plaintext candidates) for the background migration. Rows
+   * already marked `invalid` are excluded — markRowInvalid preserves the
+   * legacy bytes but must take the row out of the candidate pool so the
+   * migration loop terminates.
    */
   async getLegacyCandidateRows(limit: number): Promise<AccountCookiesEntity[]> {
     assertNotWorker("getLegacyCandidateRows");
     return this.repository
       .createQueryBuilder("row")
       .where("row.cookies NOT LIKE :enc", { enc: "ENC1:%" })
+      .andWhere(
+        "(row.session_status IS NULL OR row.session_status != :invalid)",
+        { invalid: "invalid" }
+      )
       .take(limit)
       .getMany();
   }

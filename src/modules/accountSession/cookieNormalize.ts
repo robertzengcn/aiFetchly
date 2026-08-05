@@ -1,6 +1,5 @@
 import {
   normalizedCookieSchema,
-  cookieSameSiteSchema,
   type NormalizedCookie,
   type CookieSameSite,
   type SafeCookieRejectReason,
@@ -24,7 +23,7 @@ import type { CookiesType } from "@/entityTypes/cookiesType";
  * caller via `matchesDomain` (wired to the platform manifest by the service).
  */
 
-export type CookieAdapterSource = "netscape" | "chromium";
+export type CookieAdapterSource = "netscape" | "chromium" | "legacy";
 
 export interface NormalizeBatchOptions {
   /** Epoch seconds. Defaults to now; injected for deterministic tests. */
@@ -142,7 +141,21 @@ export function normalizeNetscapeCookie(raw: CookiesType): NormalizedCookie {
 }
 
 /**
- * Adapt an Electron / Chromium-extension raw cookie to a candidate.
+ * Adapt a legacy plaintext cookie of unknown shape (migration only). Legacy
+ * rows may be either Netscape `CookiesType[]` (from file upload / worker
+ * refresh) or Electron cookie objects (from old session capture). Try the
+ * chromium adapter first, then fall back to netscape.
+ */
+export function normalizeLegacyCookie(raw: unknown): NormalizedCookie {
+  try {
+    return normalizeChromiumCookie(raw);
+  } catch {
+    // fall through to netscape
+  }
+  return normalizeNetscapeCookie(raw as CookiesType);
+}
+
+/**
  * Input is intentionally loose (passthrough) since Electron and chrome.cookies
  * shapes are nearly identical and both browser-version-dependent.
  */
@@ -214,7 +227,6 @@ export function normalizeCookieBatch(
 ): NormalizeBatchResult {
   const now = options.now ?? Math.floor(Date.now() / 1000);
   const rejected = emptyRejectCounts();
-  const adapter = source === "netscape" ? normalizeNetscapeCookie : normalizeChromiumCookie;
 
   // Use a Map so the dedupe "newest wins" rule is deterministic regardless of
   // input order: we always replace when the incoming cookie's expiry rank is
@@ -225,11 +237,15 @@ export function normalizeCookieBatch(
     let cookie: NormalizedCookie;
     try {
       // The Netscape adapter is typed for CookiesType; cast is safe because the
-      // adapter re-validates every field defensively.
-      cookie =
-        source === "netscape"
-          ? normalizeNetscapeCookie(raw as CookiesType)
-          : normalizeChromiumCookie(raw);
+      // adapter re-validates every field defensively. `legacy` tries chromium
+      // first, then netscape (used by the plaintext migration only).
+      if (source === "netscape") {
+        cookie = normalizeNetscapeCookie(raw as CookiesType);
+      } else if (source === "chromium") {
+        cookie = normalizeChromiumCookie(raw);
+      } else {
+        cookie = normalizeLegacyCookie(raw);
+      }
     } catch (err) {
       if (err instanceof CookieRejectError) {
         rejected[err.reason]++;
