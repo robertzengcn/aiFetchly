@@ -242,6 +242,30 @@ function ensureBetterSqliteElectronBinary() {
   }
 }
 
+/**
+ * Patches node-abi's abi_registry.json with missing Electron ABI entries
+ * (41-44) so @electron/rebuild can resolve Electron 43.x. See
+ * scripts/patch-node-abi.js for the full rationale. Runs as a safety net in
+ * the prePackage hook for cases where electron-forge is launched directly
+ * (e.g. from VS Code/Cursor), bypassing the npm `prepackage` script.
+ */
+function ensureNodeAbiPatched() {
+  const scriptPath = join(__dirname, "scripts", "patch-node-abi.js");
+  const result = spawnSync(process.execPath, [scriptPath], {
+    cwd: __dirname,
+    stdio: "inherit",
+  });
+
+  if (result.error) {
+    throw result.error;
+  }
+  if (result.status !== 0) {
+    throw new Error(
+      `node-abi patch failed with exit code ${result.status}`
+    );
+  }
+}
+
 function fixInteropNamespaceDefault(viteBuildDir) {
   const fs = require("fs");
 
@@ -723,6 +747,10 @@ module.exports = {
       ensureBetterSqliteElectronBinary();
     },
     prePackage: async () => {
+      // Patch node-abi before @electron/rebuild runs so it can resolve
+      // Electron 43.x. Safety net for direct electron-forge invocations.
+      ensureNodeAbiPatched();
+
       const projectRoot = normalize(__dirname);
 
       const getExternalNestedDependencies = async (
