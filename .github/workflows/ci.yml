@@ -89,9 +89,9 @@ jobs:
     name: Package smoke test
     needs: lint-and-test
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 60
     env:
-      # Isolated job + swap: ASAR finalization peaks above 7 GB on ubuntu-latest.
+      # CI=true disables ASAR in forge.config.js to avoid finalize OOM on GHA.
       NODE_OPTIONS: --max-old-space-size=4096
       ELECTRON_FORGE_VITE_CONCURRENT: "1"
       VITE_CONFIG_NATIVE_IGNORE_WARNING: "true"
@@ -133,19 +133,10 @@ jobs:
       - name: Install dependencies
         run: yarn install --frozen-lockfile
 
-      - name: Add swap for electron-forge packaging
-        run: |
-          set -euo pipefail
-          if [ ! -f /swapfile ]; then
-            sudo fallocate -l 8G /swapfile || sudo dd if=/dev/zero of=/swapfile bs=1M count=8192
-            sudo chmod 600 /swapfile
-            sudo mkswap /swapfile
-          fi
-          sudo swapon /swapfile || true
-          free -h
-
       - name: Build Linux package for worker smoke test
-        timeout-minutes: 75
+        timeout-minutes: 45
+        env:
+          CI: "true"
         run: yarn package
 
       - name: Resolve packaged worker dependencies

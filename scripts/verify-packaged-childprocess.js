@@ -56,13 +56,72 @@ function findResourcesDirs() {
   walkDirectories(OUT_DIR, (directory) => {
     if (
       path.basename(directory).toLowerCase() === "resources" &&
-      (fs.existsSync(path.join(directory, "app.asar")) ||
-        fs.existsSync(path.join(directory, "app.asar.unpacked")))
+      resolvePackagedLayout(directory) !== null
     ) {
       resourcesDirs.push(directory);
     }
   });
   return resourcesDirs;
+}
+
+function resolvePackagedLayout(resourcesDir) {
+  const unpackedRoot = path.join(resourcesDir, "app.asar.unpacked");
+  if (fs.existsSync(unpackedRoot)) {
+    return {
+      diskRoot: unpackedRoot,
+      asarPath: fs.existsSync(path.join(resourcesDir, "app.asar"))
+        ? path.join(resourcesDir, "app.asar")
+        : null,
+    };
+  }
+
+  const plainAppRoot = path.join(resourcesDir, "app");
+  if (fs.existsSync(plainAppRoot)) {
+    return {
+      diskRoot: plainAppRoot,
+      asarPath: null,
+    };
+  }
+
+  const asarPath = path.join(resourcesDir, "app.asar");
+  if (fs.existsSync(asarPath)) {
+    return {
+      diskRoot: null,
+      asarPath,
+    };
+  }
+
+  return null;
+}
+
+function getWorkerDiskCandidates(resourcesDir, workerFile) {
+  const layout = resolvePackagedLayout(resourcesDir);
+  const roots = [];
+  if (layout?.diskRoot) {
+    roots.push(layout.diskRoot);
+  }
+  if (layout?.diskRoot !== path.join(resourcesDir, "app.asar.unpacked")) {
+    roots.push(path.join(resourcesDir, "app.asar.unpacked"));
+  }
+  const plainAppRoot = path.join(resourcesDir, "app");
+  if (layout?.diskRoot !== plainAppRoot) {
+    roots.push(plainAppRoot);
+  }
+
+  const relativePaths = [
+    path.join(".vite", "build", workerFile),
+    path.join("dist", workerFile),
+    path.join("dist", "childprocess", workerFile),
+    path.join(".vite", "build", "childprocess", workerFile),
+  ];
+
+  const candidates = [];
+  for (const root of roots) {
+    for (const relativePath of relativePaths) {
+      candidates.push(path.join(root, ...relativePath.split("/")));
+    }
+  }
+  return candidates;
 }
 
 function listAsarEntries(asarPath) {
@@ -112,25 +171,7 @@ function extractRuntimePackageRequires(source) {
 }
 
 function hasWorker(resourcesDir, workerFile) {
-  const diskCandidates = [
-    path.join(resourcesDir, "app.asar.unpacked", ".vite", "build", workerFile),
-    path.join(resourcesDir, "app.asar.unpacked", "dist", workerFile),
-    path.join(
-      resourcesDir,
-      "app.asar.unpacked",
-      "dist",
-      "childprocess",
-      workerFile
-    ),
-    path.join(
-      resourcesDir,
-      "app.asar.unpacked",
-      ".vite",
-      "build",
-      "childprocess",
-      workerFile
-    ),
-  ];
+  const diskCandidates = getWorkerDiskCandidates(resourcesDir, workerFile);
 
   for (const candidate of diskCandidates) {
     if (fs.existsSync(candidate)) {
@@ -138,7 +179,9 @@ function hasWorker(resourcesDir, workerFile) {
     }
   }
 
-  const asarEntries = listAsarEntries(path.join(resourcesDir, "app.asar"));
+  const layout = resolvePackagedLayout(resourcesDir);
+  const asarPath = layout?.asarPath ?? path.join(resourcesDir, "app.asar");
+  const asarEntries = listAsarEntries(asarPath);
   const asarCandidates = [
     `.vite/build/${workerFile}`,
     `dist/${workerFile}`,
@@ -199,6 +242,21 @@ function extractAsarFile(asarPath, posixRelativePath) {
 
 function readPackagedFile(resourcesDir, relativePath, asarEntries) {
   const normalizedRelativePath = toPosixRelativePath(relativePath);
+  const layout = resolvePackagedLayout(resourcesDir);
+
+  if (layout?.diskRoot) {
+    const diskPath = path.join(
+      layout.diskRoot,
+      ...normalizedRelativePath.split("/")
+    );
+    if (fs.existsSync(diskPath)) {
+      return {
+        content: fs.readFileSync(diskPath, "utf-8"),
+        location: diskPath,
+      };
+    }
+  }
+
   const unpackedPath = path.join(
     resourcesDir,
     "app.asar.unpacked",
@@ -211,8 +269,20 @@ function readPackagedFile(resourcesDir, relativePath, asarEntries) {
     };
   }
 
-  const asarPath = path.join(resourcesDir, "app.asar");
-  if (asarEntries.has(normalizedRelativePath)) {
+  const plainAppPath = path.join(
+    resourcesDir,
+    "app",
+    ...normalizedRelativePath.split("/")
+  );
+  if (fs.existsSync(plainAppPath)) {
+    return {
+      content: fs.readFileSync(plainAppPath, "utf-8"),
+      location: plainAppPath,
+    };
+  }
+
+  const asarPath = layout?.asarPath ?? path.join(resourcesDir, "app.asar");
+  if (fs.existsSync(asarPath) && asarEntries.has(normalizedRelativePath)) {
     const content = extractAsarFile(asarPath, normalizedRelativePath);
     if (content) {
       return {
@@ -267,8 +337,14 @@ function resolvePackagedRequire(request, bundlePath, nodeModulePaths) {
 }
 
 function verifyRuntimeRequires(resourcesDir) {
-  const asarPath = path.join(resourcesDir, "app.asar");
-  const asarEntries = listAsarEntries(asarPath);
+  const layout = resolvePackagedLayout(resourcesDir);
+  if (!layout) {
+    console.error(`No packaged app layout found under ${resourcesDir}`);
+    return false;
+  }
+
+  const asarPath = layout.asarPath ?? path.join(resourcesDir, "app.asar");
+  const asarEntries = listAsarEntries(fs.existsSync(asarPath) ? asarPath : "");
   const missing = [];
   let checkedBundles = 0;
   let checkedRequires = 0;
@@ -277,14 +353,20 @@ function verifyRuntimeRequires(resourcesDir) {
   );
 
   try {
-    if (fs.existsSync(asarPath)) {
+    if (layout.diskRoot) {
+      fs.cpSync(layout.diskRoot, extractedAsarRoot, { recursive: true });
+    } else if (fs.existsSync(asarPath)) {
       asar.extractAll(asarPath, extractedAsarRoot);
     }
 
     const packagedModuleSearchPaths = [
       extractedAsarRoot,
       path.join(resourcesDir, "app.asar.unpacked"),
-    ];
+      path.join(resourcesDir, "app"),
+    ].filter(
+      (candidate, index, all) =>
+        fs.existsSync(candidate) && all.indexOf(candidate) === index
+    );
 
     for (const bundleFile of getGeneratedBundleRelativePaths()) {
       const bundle = getBundleCandidates(bundleFile)

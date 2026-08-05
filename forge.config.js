@@ -310,6 +310,23 @@ dotenv.config({ path: path.resolve(__dirname, `.env.${env}`) });
 
 const isProductionBuild = env === "production";
 const shouldBuildMacDmg = process.env.MAKE_MAC_DMG !== "false";
+
+function resolveProductionAsarConfig() {
+  return {
+    // .vite/build holds vec0.* copied by Vite; node_modules holds native deps — both must be real disk.
+    // Phase 9 slim installer: only the database natives (better-sqlite3, sqlite-vec) are unpacked.
+    // The AI inference natives (@xenova/transformers, onnxruntime-*, sharp, sherpa-onnx-*) are no
+    // longer bundled — they ship as downloadable runtimes (PRD FR-16, design §26.7).
+    //
+    // IMPORTANT: @electron/asar matches unpackDir against the *directory* of each file
+    // (path.dirname), not the file path. Patterns like "**/dist/childprocess/**" do NOT
+    // match the directory "dist/childprocess" itself, so workers that live directly in
+    // that folder stay packed. Include both the directory and its descendants.
+    unpackDir:
+      "{**/.vite/**,**/dist/childprocess,**/dist/childprocess/**,**/node_modules/better-sqlite3,**/node_modules/better-sqlite3/**,**/node_modules/sqlite-vec,**/node_modules/sqlite-vec/**}",
+    unpack: "**/vec0.*",
+  };
+}
 const windowsCertificatePath = path.resolve(__dirname, "cert.pfx");
 
 function requireProductionEnv(name) {
@@ -435,24 +452,11 @@ module.exports = {
           },
         }
       : {}),
-    // asar: {
-    //   // This ensures native modules are unpacked
-    //   unpack: "**/node_modules/better-sqlite3/**",
-
-    // },
-    asar: {
-      // .vite/build holds vec0.* copied by Vite; node_modules holds native deps — both must be real disk.
-      // Phase 9 slim installer: only the database natives (better-sqlite3, sqlite-vec) are unpacked.
-      // The AI inference natives (@xenova/transformers, onnxruntime-*, sharp, sherpa-onnx-*) are no
-      // longer bundled — they ship as downloadable runtimes (PRD FR-16, design §26.7).
-      //
-      // IMPORTANT: @electron/asar matches unpackDir against the *directory* of each file
-      // (path.dirname), not the file path. Patterns like "**/dist/childprocess/**" do NOT
-      // match the directory "dist/childprocess" itself, so workers that live directly in
-      // that folder stay packed. Include both the directory and its descendants.
-      unpackDir:
-        "{**/.vite/**,**/dist/childprocess,**/dist/childprocess/**,**/node_modules/better-sqlite3,**/node_modules/better-sqlite3/**,**/node_modules/sqlite-vec,**/node_modules/sqlite-vec/**}",
-      unpack: "**/vec0.*",
+    get asar() {
+      if (process.env.CI === "true") {
+        return false;
+      }
+      return resolveProductionAsarConfig();
     },
     ignore: createPackagerIgnoreFilter(),
     // ignore: [

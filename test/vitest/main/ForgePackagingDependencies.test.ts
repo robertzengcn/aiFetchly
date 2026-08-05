@@ -8,10 +8,12 @@ import { describe, expect, it } from "vitest";
 interface ForgeConfigForTest {
   readonly packagerConfig: {
     readonly ignore: (file: string) => boolean;
-    readonly asar?: {
-      readonly unpackDir?: string;
-      readonly unpack?: string;
-    };
+    readonly asar?:
+      | boolean
+      | {
+          readonly unpackDir?: string;
+          readonly unpack?: string;
+        };
   };
   readonly hooks: {
     readonly prePackage: () => Promise<void>;
@@ -118,6 +120,36 @@ describe("Forge packaging dependencies", () => {
       ).resolves.toBeUndefined();
     } finally {
       fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("disables ASAR when CI=true for memory-safe CI packaging", async () => {
+    const previousCi = process.env.CI;
+    process.env.CI = "true";
+    try {
+      const forgeConfig = await loadForgeConfig();
+      expect(forgeConfig.packagerConfig.asar).toBe(false);
+    } finally {
+      if (previousCi === undefined) {
+        delete process.env.CI;
+      } else {
+        process.env.CI = previousCi;
+      }
+    }
+  });
+
+  it("keeps ASAR enabled outside CI for production packaging", async () => {
+    const previousCi = process.env.CI;
+    delete process.env.CI;
+    try {
+      const forgeConfig = await loadForgeConfig();
+      expect(forgeConfig.packagerConfig.asar).not.toBe(false);
+    } finally {
+      if (previousCi === undefined) {
+        delete process.env.CI;
+      } else {
+        process.env.CI = previousCi;
+      }
     }
   });
 });
