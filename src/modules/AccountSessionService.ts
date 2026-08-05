@@ -231,7 +231,23 @@ export class AccountSessionService {
         sessionStatus: "missing",
       };
     }
-    const cookieCount = row.cookie_count ?? 0;
+    // cookie_count is populated by new encrypted writes; for legacy rows it is
+    // null. Derive a count from legacy PLAINTEXT (count only — this is not
+    // decryption, and only a number is returned) so hasCookies stays accurate
+    // until the background migration rewrites the row.
+    let cookieCount = row.cookie_count;
+    if (cookieCount == null) {
+      if (!FieldCipher.isEncrypted(row.cookies)) {
+        try {
+          const parsed: unknown = JSON.parse(row.cookies);
+          cookieCount = Array.isArray(parsed) ? parsed.length : 0;
+        } catch {
+          cookieCount = 0;
+        }
+      } else {
+        cookieCount = 0;
+      }
+    }
     const sessionStatus: SessionStatus =
       row.session_status ??
       (FieldCipher.isEncrypted(row.cookies)

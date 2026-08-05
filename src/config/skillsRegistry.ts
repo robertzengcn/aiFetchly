@@ -131,14 +131,15 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
             },
           };
         }
-        // Verify the account has cookies stored; if not, ask the user to add them.
+        // Verify the account has a usable cookie snapshot; if not, ask the user
+        // to add them. Presence is read from non-secret session metadata.
         try {
-          const { AccountCookiesModule } = await import(
-            "@/modules/accountCookiesModule"
+          const { AccountSessionService } = await import(
+            "@/modules/AccountSessionService"
           );
-          const cookiesModule = new AccountCookiesModule();
-          const cookies = await cookiesModule.getAccountCookies(accountId);
-          if (!cookies || !cookies.cookies) {
+          const sessionService = new AccountSessionService();
+          const meta = await sessionService.getMetadata(accountId);
+          if (!meta.hasCookies || meta.cookieCount === 0) {
             return {
               success: false,
               result: {

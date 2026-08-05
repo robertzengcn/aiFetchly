@@ -281,3 +281,30 @@ export function normalizeCookieBatch(
 
   return { accepted: Array.from(kept.values()), rejected };
 }
+
+/**
+ * Convert a normalized snapshot back to the legacy `CookiesType[]` shape that
+ * the search/maps/yellowpages worker feeds still consume. This is a pure shape
+ * adapter — values pass through unchanged. Used by AccountSessionService read
+ * paths so downstream workers see the same structure they always did, while the
+ * persisted (encrypted) representation stays normalized.
+ *
+ * `flag` is the Netscape include-subdomains flag (TRUE => domain cookie),
+ * i.e. the inverse of hostOnly. Session cookies (no expirationDate) map to 0.
+ */
+export function normalizedToCookiesType(
+  cookies: NormalizedCookie[]
+): CookiesType[] {
+  return cookies.map((c) => ({
+    domain: c.domain,
+    flag: !(c.hostOnly ?? false),
+    path: c.path,
+    secure: c.secure,
+    expirationDate: c.expirationDate ?? 0,
+    hostOnly: c.hostOnly ?? false,
+    httpOnly: c.httpOnly,
+    name: c.name,
+    value: c.value,
+    sameSite: c.sameSite,
+  }));
+}

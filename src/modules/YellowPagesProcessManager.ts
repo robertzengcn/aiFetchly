@@ -7,6 +7,8 @@ import {
 import { YellowPagesResultModel } from "@/model/YellowPagesResult.model";
 import { PlatformRegistry } from "@/modules/PlatformRegistry";
 import { AccountCookiesModule } from "@/modules/accountCookiesModule";
+import { AccountSessionService } from "@/modules/AccountSessionService";
+import { normalizedToCookiesType } from "@/modules/accountSession/cookieNormalize";
 import { BaseModule } from "@/modules/baseModule";
 import { ScrapingProgress } from "@/modules/interface/IPCMessage";
 import {
@@ -87,6 +89,7 @@ export class YellowPagesProcessManager extends BaseModule {
   private resultModel: YellowPagesResultModel;
   private platformRegistry: PlatformRegistry;
   private accountCookiesModule: AccountCookiesModule;
+  private accountSessionService: AccountSessionService;
   private aiSupportHandler: YellowPagesAiSupportHandler;
 
   /**
@@ -99,6 +102,7 @@ export class YellowPagesProcessManager extends BaseModule {
     this.resultModel = new YellowPagesResultModel(this.dbpath);
     this.platformRegistry = new PlatformRegistry();
     this.accountCookiesModule = new AccountCookiesModule();
+    this.accountSessionService = new AccountSessionService();
     // Initialize AI support handler (will be configured per task)
     this.aiSupportHandler = new YellowPagesAiSupportHandler();
   }
@@ -232,12 +236,16 @@ export class YellowPagesProcessManager extends BaseModule {
         };
       }
 
-      // Get cookies if account is specified
+      // Get cookies if account is specified (decrypted via the session service;
+      // converted back to the CookiesType shape the worker consumes).
       if (task.account_id) {
-        const accountCookies =
-          await this.accountCookiesModule.getAccountCookies(task.account_id);
-        if (accountCookies && accountCookies.cookies) {
-          taskData.cookies = JSON.parse(accountCookies.cookies);
+        const snapshot = await this.accountSessionService.getDecryptedSnapshot(
+          task.account_id
+        );
+        if (snapshot.cookies.length > 0) {
+          taskData.cookies = normalizedToCookiesType(
+            snapshot.cookies
+          ) as typeof taskData.cookies;
         }
       }
 
