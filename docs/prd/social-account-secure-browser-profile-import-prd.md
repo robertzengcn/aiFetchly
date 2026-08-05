@@ -100,6 +100,8 @@ for YouTube.
     import release. Firefox is deferred.
 12. Provide clear user-facing results without revealing cookie names or values
     unnecessarily.
+13. Keep the existing main-process-to-worker cookie handoff intact while ensuring
+    every worker-originated cookie refresh is encrypted before SQLite storage.
 
 ## 4. Non-Goals
 
@@ -191,6 +193,9 @@ a way to add a supported platform without allowing arbitrary domain access.
    row intact. The migration resumes safely later.
 7. New writes from cookie-file upload, browser-profile import, manual login,
    and automated session refresh must be encrypted from the first release.
+8. The migration and secure-write boundary must cover all current writers:
+   Netscape upload, Electron login-window close, and the worker-to-main
+   `updateaccountcookies` refresh path.
 
 ### 7.3 Stable session partition behavior
 
@@ -345,6 +350,11 @@ as required for safety:
 - The module layer owns encryption, decryption, validation, and migration.
 - IPC handlers and renderer APIs must never interact with raw database entities
   containing cookies.
+- Every existing read path, including account-list cookie presence checks, search
+  task assembly, Maps/Yellow Pages flows, and AI scrape preflight checks, must
+  obtain plaintext only from the main-process cookie-session service.
+- Workers continue receiving a validated cookie array from the main process and
+  must never decrypt stored ciphertext or access the cookie database.
 - Reuse `userSecretKeyService` and `FieldCipher`; do not use the legacy
   hard-coded-key `CryptoSource`.
 
@@ -384,6 +394,11 @@ New main-process channels must be registered through
 - `socialaccount:browser-import:start`
 - `socialaccount:browser-import:cancel`
 - `socialaccount:session:metadata`
+
+The existing login, cookie-upload, cookie-clear, and show-platform-page channels
+must also migrate from unvalidated `ipcMain.on(...)` JSON payloads to validated
+handlers. Cookie-related channels must remain blocked from the dev-browser
+allowlist and must not be exposed through general-purpose developer tools.
 
 The renderer may receive only:
 
@@ -428,6 +443,12 @@ approach:
 
 No migration may record raw exception text if it could include a cookie value or
 URL query parameter.
+
+The existing schema has no foreign-key constraint from `account_cookies.account_id`
+to the social-account table. This release must preserve the one-cookie-row-per-
+account behavior. Adding a database foreign key and `ON DELETE CASCADE` is
+deferred until existing orphan-row behavior and migration compatibility are
+verified; account deletion must continue explicitly deleting its cookie record.
 
 Migration algorithm:
 
@@ -552,6 +573,9 @@ application startup. It must be observable through aggregate safe counts only.
   encrypted persistence and lazy migration.
 - Use a mocked Electron session to verify cookie restoration, multi-domain
   capture, filtering, and partition cleanup.
+- Exercise the worker-to-main cookie-refresh message path to confirm refreshed
+  cookies are encrypted at rest while workers still receive only plaintext
+  in-memory payloads.
 - Use a mocked native-message transport to verify the browser-profile import
   state machine without requiring a real browser profile.
 
