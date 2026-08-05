@@ -339,6 +339,13 @@ export default ({ mode }) => {
                 "ioredis": path.resolve(__dirname, "./src/utils/typeorm-shim.ts"),  // Add this line
                 "sql.js": path.resolve(__dirname, "./src/utils/typeorm-shim.ts"),  // Add this line
                 "canvas": '@napi-rs/canvas',
+                // Force tslib's CJS entry. Vite resolves `import … from "tslib"` to
+                // tslib/modules/index.js (package "exports"."import"."node"), which
+                // default-imports tslib.js and destructures `{ __extends }`. Under
+                // Electron CJS output that becomes `.default` === undefined and
+                // crashes packaged ScheduleManager (pdf-lib → nested tslib).
+                // See test/vitest/main/TslibViteBundle.test.ts.
+                "tslib": path.resolve(__dirname, "./node_modules/tslib/tslib.js"),
             },
             conditions: ['node'],
             // mainFields: ['main', 'module', 'browser']
@@ -362,6 +369,10 @@ export default ({ mode }) => {
                     'canvas', 
                     '@napi-rs/canvas',
                     'isolated-vm',
+                    // Already listed in forge EXTERNAL_DEPENDENCIES. Keep it out of
+                    // the main bundle so pdf-lib's ESM+tslib graph is never Vite-
+                    // rewritten into a ScheduleManager/startup CJS chunk.
+                    'pdf-lib',
                 ]
             },
             sourcemap: true,
