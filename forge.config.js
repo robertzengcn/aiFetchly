@@ -659,8 +659,12 @@ module.exports = {
         // (this started once the YellowPagesScraperProcess target was added,
         // pushing the concurrent count past what the runner can sustain).
         // Limit parallelism on CI; keep full concurrency for local dev where
-        // host resources are typically ample.
-        concurrent: process.env.CI ? 4 : true,
+        // host resources are typically ample. concurrent=4 still OOMs
+        // ubuntu-latest (7 GB) during yarn package — runner shutdown mid-build.
+        // Override with ELECTRON_FORGE_VITE_CONCURRENT when needed.
+        concurrent: process.env.CI
+          ? Number(process.env.ELECTRON_FORGE_VITE_CONCURRENT ?? 2)
+          : true,
         // `build` can specify multiple entry builds, which can be
         // Main process, Preload scripts, Worker process, etc.
         build: [
