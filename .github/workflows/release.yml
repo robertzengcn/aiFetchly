@@ -157,9 +157,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.calculate_version.outputs.artifact_name }}
-          path: |
-            out/make/**/*.exe
-            out/make/**/*.msi
+          path: out/make/**/*.msi
           if-no-files-found: error
 
   build-macos:

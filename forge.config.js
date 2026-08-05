@@ -441,48 +441,7 @@ module.exports = {
     ],
   },
   makers: [
-    {
-      name: "@electron-forge/maker-squirrel",
-      config: {
-        name: process.env.APP_NAME || "aiFetchly",
-        ...(isProductionBuild && process.platform === "win32"
-          ? {
-              certificateFile: windowsCertificatePath,
-              certificatePassword: requireProductionEnv("CERTIFICATE_PASSWORD"),
-            }
-          : {}),
-        // iconUrl should be a valid HTTP/HTTPS URL, not a local path
-        // iconUrl: './src/assets/images/icon.png',
-        setupIcon: "./src/assets/images/icon.ico",
-        // Custom installer options
-        // loadingGif should be a valid HTTP/HTTPS URL, not a local path
-        // loadingGif: './src/assets/images/installer-loading.gif', // Optional: Add a loading gif
-        setupExe: "aiFetchlySetup.exe",
-        // Allow users to choose installation directory
-        allowDirectorySelection: true,
-        // Create desktop shortcut
-        createDesktopIcon: true,
-        // Create start menu shortcut
-        createStartMenuShortcut: true,
-        // Install for all users (requires admin)
-        installForAllUsers: false,
-        // Custom installation directory
-        defaultInstallLocation: "%LOCALAPPDATA%\\aiFetchly",
-        // Additional options
-        noMsi: true,
-        // Custom installer text
-        title: "aiFetchly Installer",
-        description: "Install aiFetchly application",
-        authors: "Robert Zeng",
-        // Registry entries for uninstall
-        registry: {
-          key: "Software\\aiFetchly",
-          name: "InstallLocation",
-        },
-        // Uninstall configuration
-        uninstallIcon: "./src/assets/images/icon.ico",
-      },
-    },
+    // Windows: WiX MSI only (no Squirrel Setup.exe).
     {
       name: "@electron-forge/maker-zip",
       platforms: ["darwin"],

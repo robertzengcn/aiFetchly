@@ -129,7 +129,8 @@ jobs:
           # Increase Node.js heap size to prevent out-of-memory errors during build
           export NODE_OPTIONS="--max-old-space-size=4096"
           echo "Building with increased heap size (4GB)"
-          yarn make-win:test
+          # Windows CI ships WiX MSI only (no Squirrel Setup.exe).
+          yarn make-win:test -- --targets=@electron-forge/maker-wix
           node scripts/verify-packaged-childprocess.js
         shell: bash
 
@@ -137,7 +138,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: electron-app-windows-v${{ steps.calculate_version.outputs.version }}
-          path: out/make
+          path: out/make/**/*.msi
+          if-no-files-found: error
 
   build-macos:
     runs-on: macos-latest
