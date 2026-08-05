@@ -40,7 +40,8 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 22.14.0
+          # undici@8 requires Node >=22.19.0; keep aligned with build.yml
+          node-version: 22.19.0
           cache: yarn
 
       - name: Set up Python for node-gyp
@@ -215,7 +216,8 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 22.14.0
+          # undici@8 requires Node >=22.19.0; keep aligned with build.yml
+          node-version: 22.19.0
           cache: yarn
 
       - name: Cache Electron downloads
