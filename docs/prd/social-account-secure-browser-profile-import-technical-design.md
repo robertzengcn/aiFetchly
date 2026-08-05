@@ -102,7 +102,7 @@ flowchart TB
 
 | Boundary | Input | Required protection |
 |---|---|---|
-| Renderer → main | account ID, browser selection, profile ID | Zod schema, account/platform lookup, no caller-supplied domains |
+| Renderer → main | account ID and pairing confirmation | Zod schema, account/platform lookup, no caller-supplied browser profile or domains |
 | Browser extension → native host | one-time request token and cookies | native-host allowlisted extension ID, token expiry/replay check, strict schema and payload size |
 | Native host → main | import result | local OS pipe only, short-lived request correlation, strict schema |
 | SQLite → main | encrypted cookie blob | `ENC1` detection, AES-GCM authentication, schema validation after decrypt |
@@ -128,11 +128,12 @@ flowchart TB
 | `src/views/api/socialaccount.ts` | Use `windowInvoke` for validated operations and typed return values. |
 | `src/views/pages/socialaccount/widgets/SocialaccountTable.vue` | Add import action and status refresh. |
 | `src/views/pages/socialaccount/socialaccountdetail.vue` | Add import dialog trigger and result state. |
-| `src/views/components/socialaccount/BrowserProfileImportDialog.vue` | New dialog for browser/profile selection, consent, progress, success, and error states. |
+| `src/views/components/socialaccount/BrowserProfileImportDialog.vue` | New dialog for account/platform confirmation, extension pairing instructions, progress, success, and error states. |
 | `src/views/lang/{en,zh,es,fr,de,ja}.ts` | Add equivalent translations for every new UI string. |
 | `src/main-process/browserProfileImport/*` | New main-process-only request registry and native-host integration. |
 | `browser-extension/` | New separately packaged Chromium MV3 extension. It is not bundled into renderer code. |
-| `native-host/` | New Node-based native messaging executable/launcher and installer registration assets. |
+| `src/childprocess/browserProfileNativeHost.ts` | New native-messaging process entry point. It only relays bounded messages and never accesses Electron APIs, SQLite, or the user key. |
+| `native-host/` | Native-host packaging and installer registration assets. |
 
 ### 4.2 Layering rules
 
@@ -473,8 +474,7 @@ guarantees validation before work:
 | Open manual login | `socialaccount:show:platformpage` | strict `{ id: positive integer }` |
 | Read session status | `socialaccount:session:metadata` | strict `{ id: positive integer }` |
 | Check profile import | `socialaccount:browser-import:availability` | strict `{ id: positive integer }` |
-| List local browser profiles | `socialaccount:browser-import:profiles` | strict `{ id, browser }` |
-| Start import | `socialaccount:browser-import:start` | strict `{ id, browser, profileId, confirmed: true }` |
+| Start pairing | `socialaccount:browser-import:start-pairing` | strict `{ id, confirmed: true }` |
 | Cancel import | `socialaccount:browser-import:cancel` | strict `{ requestId }` |
 
 Cookie-related IPC channels remain excluded from the dev-browser allowlist.
@@ -518,25 +518,28 @@ Directly opening Chromium's cookie SQLite database would require each browser's
 cookie encryption implementation and the operating system's key chain. It also
 breaks when the browser holds a file lock or changes its schema.
 
-A Chromium extension can use the browser's own authorized cookie API for the
-currently selected profile. Native messaging keeps the transfer local and avoids
-opening a TCP listener or accepting remote-debugging endpoints.
+A Chromium extension can use the browser's own authorized cookie API only for
+the profile in which the extension is installed and running. Chromium does not
+let an extension enumerate or read arbitrary other browser profiles. Native
+messaging keeps the transfer local and avoids accepting remote-debugging
+endpoints.
 
 ### 9.2 Components
 
 ```text
 AiFetchly desktop app
   -> creates a one-time import request in memory
-  -> launches or deep-links to the extension workflow
+  -> shows pairing instructions and a short-lived pairing code
 
 Chromium extension (Manifest V3)
+  -> is opened by the user in the intended Chrome, Edge, or Brave profile
   -> asks for optional host permissions for approved manifest domains
-  -> reads only approved cookies for the selected browser profile
+  -> reads only approved cookies for its own running browser profile
   -> connects to the local native host
 
 Native messaging host
   -> accepts messages only from production AiFetchly extension ID
-  -> proxies one validated reply to the running desktop app
+  -> relays one bounded reply through the app's authenticated named pipe
   -> has no browser-database access and no domain selection authority
 ```
 
@@ -569,8 +572,6 @@ interface PendingBrowserProfileImport {
   requestSecret: string;
   accountId: number;
   platformId: number;
-  browser: "chrome" | "edge" | "brave";
-  profileId: string;
   expiresAtMs: number;
   state: "awaiting_extension" | "receiving";
 }
@@ -586,9 +587,12 @@ The extension must use Manifest V3 and request:
 
 - `cookies`;
 - `storage` only if required for non-secret request state;
-- optional host permissions generated from platform manifest values.
+- a reviewed union of `optional_host_permissions` generated at build time from
+  platform manifest values.
 
-It must not request `<all_urls>`, `history`, `bookmarks`, `downloads`,
+Optional host permissions are declared in the extension manifest and granted by
+the user at runtime. They cannot be generated or broadened dynamically at
+runtime. The extension must not request `<all_urls>`, `history`, `bookmarks`, `downloads`,
 `management`, `webRequest`, clipboard access, or broad filesystem access.
 
 The extension must show the current target platform before it reads cookies. It
@@ -596,9 +600,14 @@ must use a user gesture before granting optional host permissions.
 
 ### 9.5 Native host protocol
 
-Use newline-delimited JSON framed according to Chromium native-messaging
-requirements. Each message has a strict size limit, for example 1 MiB, before
-JSON parsing.
+Use Chromium native-messaging framing: a 32-bit little-endian message length
+followed by a UTF-8 JSON payload. Enforce a strict payload limit, for example
+1 MiB, before JSON parsing.
+
+The desktop app creates the request after the user chooses a Tool Account and
+confirms pairing. It shows a short pairing code. The user then opens the
+extension in the exact browser profile they intend to import from and enters or
+approves that code. The desktop app does not enumerate browser profiles.
 
 Desktop-to-host command:
 
@@ -629,8 +638,9 @@ Extension-to-host result:
 
 The host validates the extension origin using the operating-system native-host
 manifest, checks protocol version and payload size, then forwards results to the
-desktop process through a local, authenticated single-purpose channel. Do not
-implement a general HTTP server.
+desktop process through a local, authenticated named pipe or Unix-domain socket.
+The desktop process authenticates that relay with the request secret and consumes
+the one-time request atomically. Do not implement a general HTTP server.
 
 The desktop process repeats every validation because the native host is a
 transport boundary, not a trust boundary.
@@ -705,7 +715,7 @@ platform-manifest internals, or account partition ID.
 | `KEY_UNAVAILABLE` | Ask user to restore login/connectivity and retry. | Existing snapshot untouched. |
 | `CIPHER_INVALID` | Mark account session invalid; offer reimport/login. | Do not apply row. |
 | `LEGACY_INVALID` | Ask user to reauthenticate. | Preserve legacy bytes; mark metadata invalid. |
-| `NO_ALLOWED_COOKIES` | Explain that selected profile lacks a supported login. | Do not replace existing snapshot. |
+| `NO_ALLOWED_COOKIES` | Explain that the paired browser profile lacks a supported login. | Do not replace existing snapshot. |
 | `REQUEST_EXPIRED` | Restart import. | Delete in-memory request. |
 | `EXTENSION_MISSING` | Show installation/open-extension action. | No mutation. |
 | `PERMISSION_DENIED` | Explain needed platform permission and allow retry. | No mutation. |
@@ -758,7 +768,7 @@ Required coverage:
   new values.
 - Partition cleanup is scoped to the requested account.
 - One-time browser-import requests expire, cannot replay, and reject wrong
-  account/platform/profile combinations.
+  account/platform pairings.
 
 ### 14.2 IPC tests
 
@@ -766,7 +776,7 @@ Required coverage:
   and unexpected fields.
 - Session metadata response has no `cookies` property or raw entity data.
 - Cookie-related channels remain excluded from dev-browser access.
-- An unsupported platform cannot enumerate profiles or start import.
+- An unsupported platform cannot start pairing or import.
 - Renderer cancellation cannot cancel another account's request.
 
 ### 14.3 Integration tests

@@ -90,8 +90,8 @@ for YouTube.
 5. Use one stable persistent Electron partition per Tool Account.
 6. Save all approved first-party and SSO cookies needed by a platform login,
    not merely cookies matching one landing-page URL.
-7. Let users import cookies from a selected Chromium browser profile with
-   explicit user consent.
+7. Let users import cookies from the Chromium browser profile where they open
+   the AiFetchly extension, with explicit user consent.
 8. Import only platform allowlisted cookie domains and only to the Tool Account
    selected by the user.
 9. Keep existing Netscape `.txt` upload and manual-login flows available as
@@ -115,7 +115,8 @@ for YouTube.
    arbitrary network connections as the import mechanism.
 5. Do not synchronize cookie sessions between different AiFetchly users.
 6. Do not automatically import cookies without the account owner explicitly
-   choosing a profile, a Tool Account, and confirming the selected platform.
+   choosing a Tool Account, opening the extension in the intended browser
+   profile, and confirming the selected platform.
 7. Do not guarantee that any third-party social platform will accept imported
    sessions. Sites may expire sessions, require a security challenge, or prohibit
    automation under their terms.
@@ -144,7 +145,8 @@ a way to add a supported platform without allowing arbitrary domain access.
 ## 6. User Stories
 
 1. As a user, I can choose **Import from browser profile** for a Tool Account.
-2. As a user, I can select a supported Chromium browser and one of its profiles.
+2. As a user, I can open the AiFetchly extension in the supported browser profile
+   whose session I want to import.
 3. As a user, I see the target Tool Account and platform before any cookies are
    imported.
 4. As a user, I can cancel at any point without modifying the Tool Account.
@@ -274,18 +276,19 @@ Flow:
    platform with browser-profile import enabled.
 3. The dialog displays:
    - target Tool Account name and platform;
-   - supported browser choices;
-   - discovered profiles for the selected browser;
    - the approved platform domains;
+   - instructions to open the AiFetchly extension in the intended Chrome, Edge,
+     or Brave profile;
    - a short consent statement explaining that only platform cookies are read;
-   - an explicit **Import** button and a **Cancel** button.
-4. The user selects a profile and confirms.
+   - an explicit **Start pairing** button and a **Cancel** button.
+4. The user confirms pairing in the desktop app, opens the extension in the
+   desired browser profile, and confirms the same platform there.
 5. The app creates a short-lived, single-use import request bound to the
-   selected account, platform, browser, profile, and current local user.
+   selected account, platform, and current local user.
 6. The supported AiFetchly extension receives the request through the local
    native-messaging host and asks for browser permission only for the manifest's
    approved domains.
-7. The extension obtains allowed cookies from the user-selected profile,
+7. The extension obtains allowed cookies from the profile in which it is running,
    sends them once to the native host, and clears the one-time request.
 8. The main process validates, normalizes, deduplicates, encrypts, and stores
    the accepted cookies.
@@ -313,8 +316,8 @@ Security requirements:
    for the configured AiFetchly extension ID in production builds.
 3. Each import request carries an unpredictable one-time token with a maximum
    lifetime of five minutes.
-4. The native host verifies the request token, account ID, platform ID, profile
-   selection, extension origin, request expiration, and expected domain set
+4. The native host verifies the request token, account ID, platform ID,
+   extension origin, request expiration, and expected domain set
    before accepting cookie data.
 5. The native host rejects unexpected message types, oversized payloads,
    duplicate requests, invalid JSON, and cookies outside the allowed domains.
@@ -392,8 +395,7 @@ New main-process channels must be registered through
 `registerValidatedHandler` and validate input with Zod v4. Suggested operations:
 
 - `socialaccount:browser-import:availability`
-- `socialaccount:browser-import:profiles`
-- `socialaccount:browser-import:start`
+- `socialaccount:browser-import:start-pairing`
 - `socialaccount:browser-import:cancel`
 - `socialaccount:session:metadata`
 
@@ -422,8 +424,9 @@ interface AccountSessionMetadata {
   Chinese, Spanish, French, German, and Japanese language files.
 - Provide loading, empty, extension-not-installed, permission-denied, expired,
   partial-import, and generic-error states.
-- Require a confirmation after profile selection. The confirmation must include
-  the target account, platform, browser profile label, and domain list.
+- Require a confirmation before pairing. The confirmation must include the
+  target account, platform, domain list, and instruction to open the extension
+  in the browser profile intended for import.
 - Do not display raw filesystem paths for browser profiles unless the user
   explicitly expands troubleshooting information.
 
@@ -480,8 +483,8 @@ application startup. It must be observable through aggregate safe counts only.
    duration.
 4. Key buffers are invalidated and zeroed using the existing secret-key service
    behavior on logout or session change.
-5. IPC inputs are schema-validated before browser profile discovery, native-host
-   request creation, session access, or database writes.
+5. IPC inputs are schema-validated before native-host request creation, session
+   access, or database writes.
 6. Browser profile import requires local interactive confirmation. It is not
    exposed as an AI tool or background automation action.
 7. The import flow must verify that the selected Tool Account's platform matches
@@ -524,8 +527,8 @@ application startup. It must be observable through aggregate safe counts only.
 ### 11.3 Browser profile import
 
 1. An unsaved account cannot start an import.
-2. A supported account can select a supported Chromium browser and profile,
-   confirm, and import only approved cookies.
+2. A supported account can start pairing, then import only approved cookies after
+   the user opens the extension in the intended Chrome, Edge, or Brave profile.
 3. The native host rejects expired, duplicated, malformed, or wrong-platform
    extension messages.
 4. A profile containing unrelated site cookies does not add those cookies to
