@@ -11107,19 +11107,12 @@ nock@^14.0.1:
     json-stringify-safe "^5.0.1"
     propagate "^2.0.0"
 
-node-abi@^3.3.0, node-abi@^3.45.0:
-  version "3.85.0"
-  resolved "https://registry.npmmirror.com/node-abi/-/node-abi-3.85.0.tgz"
-  integrity sha512-zsFhmbkAzwhTft6nd3VxcG0cvJsT70rL+BIGHWVq5fi6MwGrHwzqKaxXE+Hl2GmnGItnDKPPkO5/LQqjVkIdFg==
+node-abi@3.94.0, node-abi@^3.3.0, node-abi@^3.45.0, node-abi@^4.2.0:
+  version "3.94.0"
+  resolved "https://registry.npmmirror.com/node-abi/-/node-abi-3.94.0.tgz#007181ed0d1b56ae9670ea6c084d2bf83538405f"
+  integrity sha512-W5ZNO5KRPB5TkYmGVD9F6YqhsglXJzE6etpbmT+f6EQElhiX/UTG551cnsRGvLG3fyZEg9HwaDmNmj5nwJ4z9g==
   dependencies:
     semver "^7.3.5"
-
-node-abi@^4.2.0:
-  version "4.33.0"
-  resolved "https://registry.npmmirror.com/node-abi/-/node-abi-4.33.0.tgz#cce9b7bce0cbfa1d5d5a9b6908bc5eed698969cc"
-  integrity sha512-vLBWCKb+7LWsX+TbfzWOkw0W81m377tyx3hOweBTjO43CXZnRGS1/JPWs20fr0PgZyDXk6ROYrylsEycK8raDA==
-  dependencies:
-    semver "^7.6.3"
 
 node-addon-api@^4.3.0:
   version "4.3.0"

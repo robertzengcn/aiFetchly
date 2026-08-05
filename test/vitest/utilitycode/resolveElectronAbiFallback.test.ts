@@ -98,6 +98,11 @@ describe("buildNodeAbiLoaders + resolveAbiFromNodeAbi (node_modules layout)", ()
     fs.writeFileSync(path.join(dir, "index.js"), body);
   }
 
+  // Pass `null` for the script-self anchor so resolution stays isolated to the
+  // temp `root` and does not leak to the real project's node_modules via this
+  // module's URL (which would mask the stale-copy scenario under test).
+  const SELF_ANCHOR_NONE = null;
+
   it("prefers @electron/rebuild's nested fresh copy over a stale top-level copy", () => {
     // Top-level copy is stale (throws on 43.x) — simulates hoisted node-abi 3.x.
     writeNodeAbi(
@@ -117,11 +122,11 @@ describe("buildNodeAbiLoaders + resolveAbiFromNodeAbi (node_modules layout)", ()
       JSON.stringify({ name: "@electron/rebuild", version: "4.0.0" })
     );
 
-    const loaders = buildNodeAbiLoaders(root);
+    const loaders = buildNodeAbiLoaders(root, SELF_ANCHOR_NONE);
     // The authoritative (rebuild) loader must come first.
     expect(loaders.length).toBeGreaterThanOrEqual(2);
     // End-to-end: stale top-level must NOT force the binary fallback.
-    expect(resolveAbiFromNodeAbi("43.2.0", root)).toBe("148");
+    expect(resolveAbiFromNodeAbi("43.2.0", root, SELF_ANCHOR_NONE)).toBe("148");
   });
 
   it("still resolves via top-level when @electron/rebuild is absent", () => {
@@ -129,7 +134,7 @@ describe("buildNodeAbiLoaders + resolveAbiFromNodeAbi (node_modules layout)", ()
       path.join(root, "node_modules/node-abi"),
       "module.exports = { getAbi(v) { return v === '43.2.0' ? '148' : null; } };"
     );
-    expect(resolveAbiFromNodeAbi("43.2.0", root)).toBe("148");
+    expect(resolveAbiFromNodeAbi("43.2.0", root, SELF_ANCHOR_NONE)).toBe("148");
   });
 
   it("returns null when no installed node-abi copy knows the version", () => {
@@ -137,6 +142,6 @@ describe("buildNodeAbiLoaders + resolveAbiFromNodeAbi (node_modules layout)", ()
       path.join(root, "node_modules/node-abi"),
       "module.exports = { getAbi() { throw new Error('stale'); } };"
     );
-    expect(resolveAbiFromNodeAbi("43.2.0", root)).toBeNull();
+    expect(resolveAbiFromNodeAbi("43.2.0", root, SELF_ANCHOR_NONE)).toBeNull();
   });
 });

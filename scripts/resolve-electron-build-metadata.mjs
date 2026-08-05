@@ -69,9 +69,12 @@ function resolveElectronBinary(projectRoot) {
  * keeps trying until one returns a numeric ABI rather than stopping at the
  * first resolvable copy.
  * @param {string} projectRoot
+ * @param {string | null | undefined} [selfAnchor] Anchor for the legacy
+ *   script-self fallback (defaults to this module's URL). Pass `null` to skip
+ *   it — used by unit tests to keep resolution isolated to `projectRoot`.
  * @returns {Array<() => unknown>}
  */
-export function buildNodeAbiLoaders(projectRoot) {
+export function buildNodeAbiLoaders(projectRoot, selfAnchor = import.meta.url) {
   const loaders = [];
   const pushAnchor = (anchor) => {
     let req;
@@ -87,8 +90,10 @@ export function buildNodeAbiLoaders(projectRoot) {
   if (existsSync(rebuildPkg)) pushAnchor(rebuildPkg);
   // 2. Hoisted top-level copy.
   pushAnchor(path.join(projectRoot, "package.json"));
-  // 3. This script's own resolution (legacy fallback).
-  pushAnchor(import.meta.url);
+  // 3. This script's own resolution (legacy fallback). Skipped when `selfAnchor`
+  //    is null so unit tests can isolate resolution to `projectRoot` instead of
+  //    leaking to the real project's node_modules via this module's URL.
+  if (selfAnchor) pushAnchor(selfAnchor);
   return loaders;
 }
 
@@ -126,10 +131,16 @@ export function resolveAbiFromNodeAbiLoaders(electronVersion, loaders) {
  * or does not yet know this version (caller falls back to running the binary).
  * @param {string} electronVersion
  * @param {string} projectRoot
+ * @param {string | null | undefined} [selfAnchor] Anchor for the legacy
+ *   script-self fallback (defaults to this module's URL). Pass `null` in tests
+ *   to keep resolution isolated to `projectRoot`.
  * @returns {string | null}
  */
-export function resolveAbiFromNodeAbi(electronVersion, projectRoot) {
-  return resolveAbiFromNodeAbiLoaders(electronVersion, buildNodeAbiLoaders(projectRoot));
+export function resolveAbiFromNodeAbi(electronVersion, projectRoot, selfAnchor) {
+  return resolveAbiFromNodeAbiLoaders(
+    electronVersion,
+    buildNodeAbiLoaders(projectRoot, selfAnchor),
+  );
 }
 
 /**

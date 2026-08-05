@@ -12,6 +12,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import * as child_process from "child_process";
+import { createRequire } from "node:module";
 
 /**
  * Extracts the node_module_version from the Electron binary's embedded config.
@@ -326,5 +327,139 @@ describe("Native module version compatibility", () => {
     expect(forgeConfig).toContain("preStart: async");
     expect(forgeConfig).toContain("ensureBetterSqliteElectronBinary");
     expect(forgeConfig).toContain('scripts", "rebuild-better-sqlite.js');
+  });
+
+  /**
+   * Resolve the `node-abi` module that Forge's internal `@electron/rebuild`
+   * actually loads, by anchoring `createRequire` at the rebuild package's
+   * package.json. This replicates the exact resolution path that threw
+   * `Could not detect abi for version 43.2.0` when the hoisted node-abi was
+   * stale. Returns the node-abi module object, or null when rebuild is absent
+   * (e.g. `install --production`).
+   */
+  function resolveForgeRebuildNodeAbi(): {
+    getAbi: (version: string, runtime: string) => string;
+  } | null {
+    const candidates = [
+      // Forge core-utils nests its own @electron/rebuild (the path in the stack trace).
+      path.join(
+        projectRoot,
+        "node_modules/@electron-forge/core-utils/node_modules/@electron/rebuild/package.json"
+      ),
+      path.join(
+        projectRoot,
+        "node_modules/@electron-forge/core/node_modules/@electron/rebuild/package.json"
+      ),
+      path.join(
+        projectRoot,
+        "node_modules/@electron-forge/shared-types/node_modules/@electron/rebuild/package.json"
+      ),
+      // Top-level @electron/rebuild (devDependency).
+      path.join(projectRoot, "node_modules/@electron/rebuild/package.json"),
+    ];
+    for (const anchor of candidates) {
+      if (!fs.existsSync(anchor)) continue;
+      try {
+        const req = createRequire(anchor);
+        const nodeAbi = req("node-abi");
+        if (nodeAbi && typeof nodeAbi.getAbi === "function") return nodeAbi;
+      } catch {
+        // node-abi not resolvable from this anchor; try the next.
+      }
+    }
+    return null;
+  }
+
+  it("node-abi used by Forge's rebuild must resolve the installed Electron ABI (regression for 'Could not detect abi for version 43.2.0')", () => {
+    const electronPkgPath = path.join(
+      projectRoot,
+      "node_modules/electron/package.json"
+    );
+    if (!fs.existsSync(electronPkgPath)) {
+      console.warn("Skipping: electron package not installed.");
+      return;
+    }
+    const electronVersion = JSON.parse(
+      fs.readFileSync(electronPkgPath, "utf-8")
+    ).version as string;
+
+    const nodeAbi = resolveForgeRebuildNodeAbi();
+    expect(
+      nodeAbi,
+      "Could not resolve node-abi from any @electron/rebuild copy. " +
+        "Run `yarn install` to install devDependencies."
+    ).not.toBeNull();
+
+    // This is the exact call that threw `Could not detect abi for version
+    // 43.2.0 and runtime electron` when the hoisted node-abi@3.85.0 predates
+    // Electron 43. It must return a numeric ABI string without throwing.
+    let abi: string | null = null;
+    expect(
+      () => {
+        abi = nodeAbi!.getAbi(electronVersion, "electron");
+      },
+      `node-abi could not resolve ABI for installed Electron ${electronVersion}. ` +
+        "Bump the `node-abi` resolution in package.json to a release that knows this Electron major."
+    ).not.toThrow();
+
+    expect(abi, "getAbi returned a non-string").toBeTypeOf("string");
+    expect(
+      abi,
+      `getAbi('${electronVersion}', 'electron') returned '${abi}', expected a numeric ABI. ` +
+        "The hoisted node-abi is stale — update the package.json resolution."
+    ).toMatch(/^\d+$/);
+  });
+
+  it("node-abi resolution in package.json must pin a version that knows the installed Electron major", () => {
+    const pkg = JSON.parse(
+      fs.readFileSync(packageJsonPath, "utf-8")
+    ) as {
+      resolutions?: Record<string, string>;
+      devDependencies?: Record<string, string>;
+    };
+
+    // The resolution is what actually keeps the hoisted copy fresh across
+    // `yarn install`. Without it, Yarn is free to hoist a stale 3.x that
+    // predates the installed Electron major (the recurring regression).
+    expect(
+      pkg.resolutions?.["node-abi"],
+      "package.json is missing a `resolutions.node-abi` pin. " +
+        "Without it, a stale hoisted node-abi can resurface and break Forge startup " +
+        "with `Could not detect abi for version <electron>`."
+    ).toBeDefined();
+
+    const electronPkgPath = path.join(
+      projectRoot,
+      "node_modules/electron/package.json"
+    );
+    if (!fs.existsSync(electronPkgPath)) {
+      console.warn("Skipping ABI cross-check: electron package not installed.");
+      return;
+    }
+    const electronVersion = JSON.parse(
+      fs.readFileSync(electronPkgPath, "utf-8")
+    ).version as string;
+
+    // Resolve the ACTUALLY hoisted node-abi (what Forge's nested CJS
+    // @electron/rebuild loads) and assert it knows the installed Electron.
+    const hoistedNodeAbiPath = path.join(
+      projectRoot,
+      "node_modules/node-abi/package.json"
+    );
+    expect(
+      fs.existsSync(hoistedNodeAbiPath),
+      "node-abi is not installed at the hoisted top-level. Run `yarn install`."
+    ).toBe(true);
+
+    const req = createRequire(path.join(projectRoot, "package.json"));
+    const nodeAbi = req("node-abi") as {
+      getAbi: (version: string, runtime: string) => string;
+    };
+    expect(
+      () => nodeAbi.getAbi(electronVersion, "electron"),
+      `The hoisted node-abi (pinned to ${pkg.resolutions?.["node-abi"]}) ` +
+        `cannot resolve installed Electron ${electronVersion}. ` +
+        "Bump the `node-abi` resolution to a release that includes this Electron major."
+    ).not.toThrow();
   });
 });
