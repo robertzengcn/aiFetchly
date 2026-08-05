@@ -42,6 +42,11 @@ jobs:
           echo "npm_config_python=${PYTHON_BIN}" >> "$GITHUB_ENV"
           echo "NODE_GYP_FORCE_PYTHON=${PYTHON_BIN}" >> "$GITHUB_ENV"
 
+      - name: Install Linux system dependencies for native modules
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsecret-1-dev
+
       - name: Use HTTPS for GitHub dependencies
         run: |
           git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
