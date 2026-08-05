@@ -118,7 +118,7 @@
     "http-proxy-agent": "^7.0.2",
     "https-proxy-agent": "^7.0.4",
     "iconv-lite": "^0.7.2",
-    "isbinaryfile": "^5.0.4",
+    "isbinaryfile": "^6.0.0",
     "isolated-vm": "^6.1.2",
     "js-cookie": "^3.0.8",
     "js-yaml": "^4.3.0",
