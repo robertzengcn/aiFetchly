@@ -91,7 +91,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
-      # CI=true disables ASAR in forge.config.js to avoid finalize OOM on GHA.
+      # Unpacked layout avoids ASAR finalize OOM on GHA (see forge.config.js).
+      FORGE_DISABLE_ASAR: "1"
       NODE_OPTIONS: --max-old-space-size=4096
       ELECTRON_FORGE_VITE_CONCURRENT: "1"
       VITE_CONFIG_NATIVE_IGNORE_WARNING: "true"
@@ -135,8 +136,6 @@ jobs:
 
       - name: Build Linux package for worker smoke test
         timeout-minutes: 45
-        env:
-          CI: "true"
         run: yarn package
 
       - name: Resolve packaged worker dependencies

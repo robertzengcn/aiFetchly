@@ -75,8 +75,8 @@ describe("Forge packaging dependencies", () => {
   });
 
   it("unpacks dist/childprocess so packaged workers are extractable on Windows", async () => {
-    const previousCi = process.env.CI;
-    delete process.env.CI;
+    const previousDisableAsar = process.env.FORGE_DISABLE_ASAR;
+    delete process.env.FORGE_DISABLE_ASAR;
     try {
       const forgeConfig = await loadForgeConfig();
       const asarConfig = forgeConfig.packagerConfig.asar;
@@ -102,10 +102,10 @@ describe("Forge packaging dependencies", () => {
         false
       );
     } finally {
-      if (previousCi === undefined) {
-        delete process.env.CI;
+      if (previousDisableAsar === undefined) {
+        delete process.env.FORGE_DISABLE_ASAR;
       } else {
-        process.env.CI = previousCi;
+        process.env.FORGE_DISABLE_ASAR = previousDisableAsar;
       }
     }
   });
@@ -144,32 +144,32 @@ describe("Forge packaging dependencies", () => {
     }
   });
 
-  it("disables ASAR when CI=true for memory-safe CI packaging", async () => {
-    const previousCi = process.env.CI;
-    process.env.CI = "true";
+  it("disables ASAR when FORGE_DISABLE_ASAR=1 for memory-safe CI packaging", async () => {
+    const previousDisableAsar = process.env.FORGE_DISABLE_ASAR;
+    process.env.FORGE_DISABLE_ASAR = "1";
     try {
       const forgeConfig = await loadForgeConfig();
       expect(forgeConfig.packagerConfig.asar).toBe(false);
     } finally {
-      if (previousCi === undefined) {
-        delete process.env.CI;
+      if (previousDisableAsar === undefined) {
+        delete process.env.FORGE_DISABLE_ASAR;
       } else {
-        process.env.CI = previousCi;
+        process.env.FORGE_DISABLE_ASAR = previousDisableAsar;
       }
     }
   });
 
-  it("keeps ASAR enabled outside CI for production packaging", async () => {
-    const previousCi = process.env.CI;
-    delete process.env.CI;
+  it("keeps ASAR enabled without FORGE_DISABLE_ASAR for production packaging", async () => {
+    const previousDisableAsar = process.env.FORGE_DISABLE_ASAR;
+    delete process.env.FORGE_DISABLE_ASAR;
     try {
       const forgeConfig = await loadForgeConfig();
       expect(forgeConfig.packagerConfig.asar).not.toBe(false);
     } finally {
-      if (previousCi === undefined) {
-        delete process.env.CI;
+      if (previousDisableAsar === undefined) {
+        delete process.env.FORGE_DISABLE_ASAR;
       } else {
-        process.env.CI = previousCi;
+        process.env.FORGE_DISABLE_ASAR = previousDisableAsar;
       }
     }
   });

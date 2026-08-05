@@ -327,6 +327,11 @@ function resolveProductionAsarConfig() {
     unpack: "**/vec0.*",
   };
 }
+
+/** CI smoke packaging: unpacked resources/app layout avoids ASAR finalize OOM on GHA. */
+function usesUnpackedCiPackageLayout() {
+  return process.env.FORGE_DISABLE_ASAR === "1";
+}
 const windowsCertificatePath = path.resolve(__dirname, "cert.pfx");
 
 function requireProductionEnv(name) {
@@ -453,7 +458,7 @@ module.exports = {
         }
       : {}),
     get asar() {
-      if (process.env.CI === "true") {
+      if (usesUnpackedCiPackageLayout()) {
         return false;
       }
       return resolveProductionAsarConfig();
@@ -698,10 +703,14 @@ module.exports = {
     },
   ],
   plugins: [
-    {
-      name: "@electron-forge/plugin-auto-unpack-natives",
-      config: {},
-    },
+    ...(usesUnpackedCiPackageLayout()
+      ? []
+      : [
+          {
+            name: "@electron-forge/plugin-auto-unpack-natives",
+            config: {},
+          },
+        ]),
     {
       name: "@electron-forge/plugin-vite",
       config: {
