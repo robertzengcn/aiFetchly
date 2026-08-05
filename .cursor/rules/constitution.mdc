@@ -110,6 +110,7 @@ Rules are applied in the following order of precedence:
 
 - **Type Safety Violations**: Must be fixed immediately - no exceptions
 - **Security Issues**: Critical priority - must be addressed before merge
+- **Uncommitted completed work**: Must not happen — every bug fix and finished task requires a git commit per [auto-commit.mdc](mdc:.cursor/rules/auto-commit.mdc)
 - **Code Quality**: Should be addressed in code review
 - **Rule Updates**: Should be proposed when patterns emerge
 
