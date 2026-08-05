@@ -409,6 +409,16 @@
     <!-- MCP Tool Manager Dialog -->
     <MCPToolManager v-model="showMCPToolManager" />
 
+    <!-- Scheduled-loop read-only tool approval (FR-16): unattended execution
+         cannot prompt at run time, so approval happens once before persistence. -->
+    <ScheduledLoopToolApprovalDialog
+      v-if="pendingScheduledLoop"
+      v-model="showScheduledLoopApproval"
+      :raw-command="pendingScheduledLoop.rawCommand"
+      @confirm="onScheduledLoopApprovalConfirm"
+      @cancel="onScheduledLoopApprovalCancel"
+    />
+
 
 
     <v-snackbar v-model="compactNotice" timeout="3000" location="bottom">
@@ -698,6 +708,7 @@ import FileOperationBadge from "../aiChat/FileOperationBadge.vue";
 import SkillApprovalCard from "../aiChat/SkillApprovalCard.vue";
 import MCPToolManager from "../aiChat/MCPToolManager.vue";
 import AgentTaskListDialog from "./AgentTaskListDialog.vue";
+import ScheduledLoopToolApprovalDialog from "./ScheduledLoopToolApprovalDialog.vue";
 import WorkspaceBadge from "./WorkspaceBadge.vue";
 import WorkspaceRequiredCard from "./WorkspaceRequiredCard.vue";
 import WorkspaceMemoryPanel from "./WorkspaceMemoryPanel.vue";
@@ -1437,7 +1448,8 @@ async function runScheduledLoopCreate(
     maxRuns: number;
     maxLifetimeMs: number;
   },
-  rawCommand: string
+  rawCommand: string,
+  approval?: { allowedTools: string[]; autoApproveTools: boolean }
 ): Promise<void> {
   const conversationId = ensureWorkspaceConversationId();
   try {
@@ -1448,6 +1460,8 @@ async function runScheduledLoopCreate(
       intervalMs: action.intervalMs,
       maxRuns: action.maxRuns,
       maxLifetimeMs: action.maxLifetimeMs,
+      allowedTools: approval?.allowedTools,
+      autoApproveTools: approval?.autoApproveTools,
     });
     if (!created) {
       const message =
@@ -1478,6 +1492,7 @@ async function runScheduledLoopCreate(
     streamError.value = message;
   }
 }
+
 
 /** Handle /loop pause|resume|stop (conversation-scoped control). */
 async function runScheduledLoopControl(
@@ -1962,6 +1977,39 @@ const activeGoal = ref<AIChatGoalView | null>(null);
 /** Active scheduled loop for the current conversation (renderer display only;
  * the main process is authoritative via getScheduledLoopStatus). */
 const activeScheduledLoop = ref<ScheduledLoopView | null>(null);
+/** Parsed scheduled-loop action staged for tool approval before persistence. */
+type PendingScheduledLoop = {
+  readonly action: {
+    readonly intervalMs: number;
+    readonly prompt: string;
+    readonly maxRuns: number;
+    readonly maxLifetimeMs: number;
+  };
+  readonly rawCommand: string;
+};
+const pendingScheduledLoop = ref<PendingScheduledLoop | null>(null);
+const showScheduledLoopApproval = ref(false);
+
+/** Confirm tool approval and create the staged scheduled loop. */
+async function onScheduledLoopApprovalConfirm(payload: {
+  allowedTools: string[];
+  autoApproveTools: boolean;
+}): Promise<void> {
+  const staged = pendingScheduledLoop.value;
+  if (!staged) {
+    showScheduledLoopApproval.value = false;
+    return;
+  }
+  pendingScheduledLoop.value = null;
+  showScheduledLoopApproval.value = false;
+  await runScheduledLoopCreate(staged.action, staged.rawCommand, payload);
+}
+
+/** Cancel staged scheduled-loop creation (user closed the approval dialog). */
+function onScheduledLoopApprovalCancel(): void {
+  pendingScheduledLoop.value = null;
+  showScheduledLoopApproval.value = false;
+}
 /** Set when a scheduled turn completes while an interactive stream is active;
  * the history is reloaded once the active stream terminates (design §18.3). */
 const scheduledRefreshPending = ref(false);
@@ -3049,7 +3097,11 @@ const onSend = async (
     return;
   }
   if (loopCmd.type === "scheduled_loop") {
-    await runScheduledLoopCreate(loopCmd, text);
+    // Stage the parsed loop and ask the user to approve any read-only tools
+    // before persisting (FR-16). Unattended execution cannot prompt at run
+    // time, so approval happens once, up front.
+    pendingScheduledLoop.value = { action: loopCmd, rawCommand: text };
+    showScheduledLoopApproval.value = true;
     return;
   }
   if (loopCmd.type === "scheduled_loop_control") {

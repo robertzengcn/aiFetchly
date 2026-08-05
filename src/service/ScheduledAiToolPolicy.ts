@@ -10,9 +10,14 @@ import type {
  *
  * Unattended execution cannot show an interactive permission prompt, so the
  * allowlist must be conservative and FAIL CLOSED. A tool is schedulable only
- * when it appears in {@link SCHEDULED_LOOP_READ_ONLY_TOOLS} AND is not in the
- * permanent deny set. Category, `requiresConfirmation`, and the task's own
- * allowlist are NOT sufficient — they are necessary but not sufficient.
+ * when it appears in {@link SCHEDULED_LOOP_READ_ONLY_TOOLS} or
+ * {@link SCHEDULED_LOOP_AUTOMATION_TOOLS} AND is not in the permanent deny set.
+ *
+ * Two tiers of schedulable tools exist:
+ *  - **Read-only** (pure): auto-approved when `autoApproveTools` is on; no
+ *    per-tool allowlist entry required.
+ *  - **Automation**: schedulable but requires explicit per-tool allowlisting
+ *    because they perform network checks or other side effects.
  *
  * Source: PRD §FR-16, technical-design §15 (safety boundaries).
  */
@@ -61,6 +66,18 @@ export const SCHEDULED_LOOP_READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
   "file_read",
   "glob_files",
   "grep_files",
+  // Proxy management (read-only listing — no side effects, no password reveal)
+  "proxy_list",
+]);
+
+/**
+ * Automation tools that are schedulable in unattended mode but require explicit
+ * allowlisting because they perform network checks or other side effects. These
+ * are NOT auto-approved by the read-only allowlist alone — the task's
+ * `allowedTools` must explicitly include them.
+ */
+export const SCHEDULED_LOOP_AUTOMATION_TOOLS: ReadonlySet<string> = new Set([
+  "proxy_check",
 ]);
 
 /** Maximum number of tools a single scheduled loop may approve. */
@@ -74,6 +91,23 @@ export function isScheduledReadOnlyTool(toolName: string): boolean {
   );
 }
 
+/** True when a built-in tool is an automation tool that requires allowlisting. */
+export function isScheduledAutomationTool(toolName: string): boolean {
+  return (
+    SCHEDULED_LOOP_AUTOMATION_TOOLS.has(toolName) &&
+    !SCHEDULED_LOOP_ALWAYS_BLOCKED_TOOLS.has(toolName)
+  );
+}
+
+/** True when a built-in tool is schedulable (read-only OR automation). */
+export function isSchedulableBuiltInTool(toolName: string): boolean {
+  return (
+    (isScheduledReadOnlyTool(toolName) ||
+      isScheduledAutomationTool(toolName)) &&
+    !SCHEDULED_LOOP_ALWAYS_BLOCKED_TOOLS.has(toolName)
+  );
+}
+
 /** Validation result for a requested allowed-tools list at creation time. */
 export interface ScheduledLoopToolValidation {
   readonly valid: boolean;
@@ -82,27 +116,28 @@ export interface ScheduledLoopToolValidation {
 
 /**
  * Validate a requested allowed-tools list for a scheduled loop BEFORE any
- * persistence. Every requested tool must be a read-only allowlisted built-in.
- * Unknown or denied tools make the whole request invalid — they are never
- * silently dropped, so the user is forced to approve explicitly.
+ * persistence. Every requested tool must be a schedulable built-in (read-only
+ * or automation). Unknown or denied tools make the whole request invalid —
+ * they are never silently dropped, so the user is forced to approve explicitly.
  */
 export function validateScheduledLoopAllowedTools(
   toolNames: readonly string[]
 ): ScheduledLoopToolValidation {
-  const invalid = toolNames.filter((name) => !isScheduledReadOnlyTool(name));
+  const invalid = toolNames.filter((name) => !isSchedulableBuiltInTool(name));
   return { valid: invalid.length === 0, invalidTools: invalid };
 }
 
 /**
- * Describes a built-in skill for the AI message task catalog UI. Only curated
- * read-only tools are marked `schedulable`; everything else is blocked with a
- * concrete reason.
+ * Describes a built-in skill for the AI message task catalog UI. Curated
+ * read-only and automation tools are marked `schedulable`; everything else is
+ * blocked with a concrete reason.
  */
 export function describeBuiltInToolForSchedule(
   skill: SkillDefinition
 ): SchedulableAiToolSummary {
   const blocked = SCHEDULED_LOOP_ALWAYS_BLOCKED_TOOLS.has(skill.name);
   const readOnly = isScheduledReadOnlyTool(skill.name);
+  const automation = isScheduledAutomationTool(skill.name);
 
   if (blocked) {
     return {
@@ -132,6 +167,19 @@ export function describeBuiltInToolForSchedule(
     };
   }
 
+  if (automation) {
+    return {
+      name: skill.name,
+      description: skill.description,
+      permissionCategory: skill.permissionCategory,
+      source: "built-in",
+      requiresConfirmation: skill.requiresConfirmation,
+      schedulable: true,
+      autoApproveAllowed: true,
+      riskLevel: "medium",
+    };
+  }
+
   return {
     name: skill.name,
     description: skill.description,
@@ -141,7 +189,7 @@ export function describeBuiltInToolForSchedule(
     schedulable: false,
     autoApproveAllowed: false,
     blockedReason:
-      "Only explicitly reviewed read-only tools may run unattended in scheduled loops.",
+      "Only explicitly reviewed read-only or automation tools may run unattended in scheduled loops.",
     riskLevel: "blocked",
   };
 }
@@ -151,6 +199,10 @@ export function describeBuiltInToolForSchedule(
  * Defense-in-depth — the catalog filter should already hide disallowed tools,
  * but this backstop blocks any model-hallucinated tool call and returns a
  * structured reason the model can read.
+ *
+ * Read-only tools are auto-approved when `autoApproveTools` is on (no per-tool
+ * allowlist entry needed). Automation tools require both `autoApproveTools` AND
+ * explicit inclusion in the task's `allowedTools` list.
  */
 export function canAutoApproveScheduledTool(params: {
   readonly skill: SkillDefinition;
@@ -184,21 +236,26 @@ export function canAutoApproveScheduledTool(params: {
     };
   }
 
-  if (!isScheduledReadOnlyTool(toolName)) {
-    return {
-      allowed: false,
-      reason: `Tool "${toolName}" is not an approved read-only tool for unattended scheduled execution.`,
-      riskLevel: "high",
-    };
+  // Read-only tools: auto-approved without per-tool allowlisting.
+  if (isScheduledReadOnlyTool(toolName)) {
+    return { allowed: true, riskLevel: "low" };
   }
 
-  if (!taskPolicy.allowedTools.includes(toolName)) {
-    return {
-      allowed: false,
-      reason: `Tool "${toolName}" is not in the task's allowed tools list.`,
-      riskLevel: "high",
-    };
+  // Automation tools: require explicit per-tool allowlisting.
+  if (isScheduledAutomationTool(toolName)) {
+    if (!taskPolicy.allowedTools.includes(toolName)) {
+      return {
+        allowed: false,
+        reason: `Tool "${toolName}" is an automation tool and must be explicitly added to the task's allowed tools list.`,
+        riskLevel: "high",
+      };
+    }
+    return { allowed: true, riskLevel: "low" };
   }
 
-  return { allowed: true, riskLevel: "low" };
+  return {
+    allowed: false,
+    reason: `Tool "${toolName}" is not an approved tool for unattended scheduled execution.`,
+    riskLevel: "high",
+  };
 }

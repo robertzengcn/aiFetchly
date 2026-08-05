@@ -270,7 +270,8 @@ export default {
       "The local embedding model '{model}' requires the Local AI Component ({runtime}). Download and install it now to continue.",
     local_runtime_download: "Download & Install",
     local_runtime_download_size: "Download size: {size}",
-    local_runtime_install_failed: "The Local AI Component installed but is not ready yet. Please try again.",
+    local_runtime_install_failed:
+      "The Local AI Component installed but is not ready yet. Please try again.",
     max_dimensions: "Max Dimensions",
     model: "Model",
     dimensions: "Dimensions",
@@ -2285,6 +2286,17 @@ export default {
       statusExpired: "expired",
       statusFailed: "failed",
       statusStopped: "stopped",
+      toolApprovalTitle: "Approve unattended tools",
+      toolApprovalIntro:
+        "Scheduled loops run without supervision. Optionally approve read-only tools the loop may use. Sending email, drafts, shell, file writes, and subagents stay blocked.",
+      toolApprovalCommand: "Command",
+      noReadOnlyTools: "No read-only tools are available.",
+      allowedTools: "Allowed read-only tools",
+      allowedToolsHint: "Optionally select tools the loop may run",
+      autoApprove: "Run approved tools without asking",
+      autoApproveWarning:
+        "These tools will run automatically on every occurrence while the loop is active.",
+      createLoop: "Schedule loop",
       errors: {
         INVALID_LOOP_SYNTAX: "The /loop command could not be parsed.",
         INVALID_INTERVAL: "The interval must be between 1 minute and 24 hours.",
