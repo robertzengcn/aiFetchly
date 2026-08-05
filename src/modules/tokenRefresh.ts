@@ -1,7 +1,7 @@
 "use strict";
 // NOTE: This service intentionally does NOT import HttpClient to avoid circular dependency.
 // HttpClient uses TokenRefreshService for token refresh, so TokenRefreshService uses raw fetch() instead.
-import type { Token } from "@/modules/token";
+import { Token } from "@/modules/token";
 import {
   TOKENNAME,
   REFRESHTOKEN,
@@ -105,7 +105,7 @@ export function isTransientBackendError(error: unknown): boolean {
  */
 export class TokenRefreshService {
   private _baseUrl: string;
-  private _tokenService: Token | null = null;
+  private _tokenService: Token;
 
   // --- Process-wide refresh serialization ---
   /**
@@ -152,6 +152,7 @@ export class TokenRefreshService {
     }
 
     this._baseUrl = loginUrl + "/apis";
+    this._tokenService = new Token();
   }
 
   // =========================================================================
@@ -238,7 +239,6 @@ export class TokenRefreshService {
    * tests without relying on the 60s background timer.
    */
   static async performAutoRefreshCheck(): Promise<void> {
-    const { Token } = await import("@/modules/token");
     const tokenService = new Token();
     const now = Date.now();
 
@@ -450,9 +450,7 @@ export class TokenRefreshService {
   private async _performRefreshNetwork(): Promise<
     CommonApiresp<TokenRefreshData>
   > {
-    const tokenService =
-      this._tokenService ?? new (await import("@/modules/token")).Token();
-    this._tokenService = tokenService;
+    const tokenService = this._tokenService;
     // Get refresh token from storage
     const refreshToken = tokenService.getValue(REFRESHTOKEN);
 
