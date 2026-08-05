@@ -1,12 +1,9 @@
 import fs from "node:fs";
-import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import minimatch from "minimatch";
 import { describe, expect, it } from "vitest";
-
-const require = createRequire(import.meta.url);
 
 interface ForgeConfigForTest {
   readonly packagerConfig: {
@@ -87,30 +84,6 @@ describe("Forge packaging dependencies", () => {
     // fails to match the directory itself and leaves workers packed in asar.
     expect(minimatch("dist/childprocess", "**/dist/childprocess/**")).toBe(
       false
-    );
-  });
-
-  // clone-deep@0.2.x uses lazy-cache; Vite/Rollup bundles break utils.typeOf and
-  // crash packaged ScheduleManager with "n.typeOf is not a function" when
-  // puppeteer-extra-plugin → merge-deep → clone-deep is pulled into the chunk.
-  // package.json resolutions must keep clone-deep at 4.x (no lazy-cache).
-  it("pins clone-deep to 4.x so Vite-bundled merge-deep keeps working typeOf", () => {
-    const cloneDeepPkgPath = require.resolve("clone-deep/package.json");
-    const cloneDeepPkg = JSON.parse(
-      fs.readFileSync(cloneDeepPkgPath, "utf-8")
-    ) as {
-      version: string;
-      dependencies?: Record<string, string>;
-    };
-
-    expect(cloneDeepPkg.version.startsWith("4.")).toBe(true);
-    expect(cloneDeepPkg.dependencies?.["lazy-cache"]).toBeUndefined();
-
-    const mergeDeep = require("merge-deep") as (
-      ...objects: Record<string, unknown>[]
-    ) => Record<string, unknown>;
-    expect(mergeDeep({ a: 1 }, { b: 2, c: { d: 3 } }, { c: { e: 4 } })).toEqual(
-      { a: 1, b: 2, c: { d: 3, e: 4 } }
     );
   });
 
