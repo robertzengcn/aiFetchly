@@ -1,4 +1,4 @@
-import type { SkillDefinition, SkillPermissionCategory } from "@/entityTypes/skillTypes";
+import type { SkillDefinition } from "@/entityTypes/skillTypes";
 import type {
   SchedulableAiToolSummary,
   ScheduledToolDecision,
@@ -6,56 +6,124 @@ import type {
 } from "@/entityTypes/aiMessageTaskTypes";
 
 /**
- * Tool categories that are always blocked for unattended scheduled AI tasks in v1.
+ * Security policy for tools exposed to unattended (scheduled-loop) AI turns.
+ *
+ * Unattended execution cannot show an interactive permission prompt, so the
+ * allowlist must be conservative and FAIL CLOSED. A tool is schedulable only
+ * when it appears in {@link SCHEDULED_LOOP_READ_ONLY_TOOLS} AND is not in the
+ * permanent deny set. Category, `requiresConfirmation`, and the task's own
+ * allowlist are NOT sufficient — they are necessary but not sufficient.
+ *
+ * Source: PRD §FR-16, technical-design §15 (safety boundaries).
  */
-const BLOCKED_CATEGORIES: ReadonlySet<SkillPermissionCategory> = new Set([
-  "shell",
+
+/**
+ * Tools that may NEVER run unattended, regardless of category or allowlist.
+ * `run_subagent` is denied because it can indirectly invoke many other tools;
+ * the rest mutate local/mailbox state or send external side effects.
+ */
+export const SCHEDULED_LOOP_ALWAYS_BLOCKED_TOOLS: ReadonlySet<string> = new Set([
+  "run_subagent",
+  "shell_execute",
+  "file_write",
+  "file_edit",
+  "send_email_reply",
+  "start_email_send_task",
+  "create_email_reply_draft",
+  "mark_email_processed",
+  // Inbox tools that look like reads but mutate mailbox/local state:
+  "fetch_unread_emails", // stores messages locally
+  "get_email_message", // marks the message read
 ]);
 
 /**
- * Describes a built-in skill for the AI message task catalog UI.
+ * Curated allowlist of genuinely read-only built-in tools safe for unattended
+ * execution. Each entry was reviewed to confirm it performs no local write,
+ * no mailbox state change, and no external side effect. Add entries here ONLY
+ * after that review — never infer "read-only" from category or name.
+ */
+export const SCHEDULED_LOOP_READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
+  // Email inbox/service configuration (read-only listings)
+  "list_email_inboxes",
+  "list_email_services",
+  "get_email_service_config",
+  "list_email_templates",
+  "list_email_filters",
+  "list_email_search_tasks",
+  "get_email_search_task_emails",
+  // Schedule inspection (read-only)
+  "list_schedules",
+  "get_schedule_details",
+  "list_schedule_executions",
+  // General read-only
+  "open_app_page",
+  "knowledge_library_search",
+  "file_read",
+  "glob_files",
+  "grep_files",
+]);
+
+/** Maximum number of tools a single scheduled loop may approve. */
+export const SCHEDULED_LOOP_MAX_ALLOWED_TOOLS = 50;
+
+/** True when a built-in tool is on the curated read-only allowlist. */
+export function isScheduledReadOnlyTool(toolName: string): boolean {
+  return (
+    SCHEDULED_LOOP_READ_ONLY_TOOLS.has(toolName) &&
+    !SCHEDULED_LOOP_ALWAYS_BLOCKED_TOOLS.has(toolName)
+  );
+}
+
+/** Validation result for a requested allowed-tools list at creation time. */
+export interface ScheduledLoopToolValidation {
+  readonly valid: boolean;
+  readonly invalidTools: readonly string[];
+}
+
+/**
+ * Validate a requested allowed-tools list for a scheduled loop BEFORE any
+ * persistence. Every requested tool must be a read-only allowlisted built-in.
+ * Unknown or denied tools make the whole request invalid — they are never
+ * silently dropped, so the user is forced to approve explicitly.
+ */
+export function validateScheduledLoopAllowedTools(
+  toolNames: readonly string[]
+): ScheduledLoopToolValidation {
+  const invalid = toolNames.filter((name) => !isScheduledReadOnlyTool(name));
+  return { valid: invalid.length === 0, invalidTools: invalid };
+}
+
+/**
+ * Describes a built-in skill for the AI message task catalog UI. Only curated
+ * read-only tools are marked `schedulable`; everything else is blocked with a
+ * concrete reason.
  */
 export function describeBuiltInToolForSchedule(
   skill: SkillDefinition
 ): SchedulableAiToolSummary {
-  const category = skill.permissionCategory;
+  const blocked = SCHEDULED_LOOP_ALWAYS_BLOCKED_TOOLS.has(skill.name);
+  const readOnly = isScheduledReadOnlyTool(skill.name);
 
-  // Shell is always blocked in v1
-  if (category === "shell") {
+  if (blocked) {
     return {
       name: skill.name,
       description: skill.description,
-      permissionCategory: category,
+      permissionCategory: skill.permissionCategory,
       source: "built-in",
       requiresConfirmation: skill.requiresConfirmation,
       schedulable: false,
       autoApproveAllowed: false,
-      blockedReason: "Shell execution is blocked for unattended scheduled AI tasks in v1.",
+      blockedReason:
+        "This tool is permanently blocked for unattended scheduled tasks because it can mutate state or send external messages.",
       riskLevel: "blocked",
     };
   }
 
-  // Filesystem write/edit is blocked in v1
-  if (category === "filesystem" && skill.requiresConfirmation) {
+  if (readOnly) {
     return {
       name: skill.name,
       description: skill.description,
-      permissionCategory: category,
-      source: "built-in",
-      requiresConfirmation: skill.requiresConfirmation,
-      schedulable: false,
-      autoApproveAllowed: false,
-      blockedReason: "Filesystem write/edit tools are blocked for unattended scheduled AI tasks in v1.",
-      riskLevel: "blocked",
-    };
-  }
-
-  // Pure tools are always schedulable
-  if (category === "pure") {
-    return {
-      name: skill.name,
-      description: skill.description,
-      permissionCategory: category,
+      permissionCategory: skill.permissionCategory,
       source: "built-in",
       requiresConfirmation: false,
       schedulable: true,
@@ -64,64 +132,25 @@ export function describeBuiltInToolForSchedule(
     };
   }
 
-  // Network tools require explicit allowlisting
-  if (category === "network") {
-    return {
-      name: skill.name,
-      description: skill.description,
-      permissionCategory: category,
-      source: "built-in",
-      requiresConfirmation: skill.requiresConfirmation,
-      schedulable: true,
-      autoApproveAllowed: true,
-      riskLevel: skill.requiresConfirmation ? "medium" : "low",
-    };
-  }
-
-  // Automation tools require explicit allowlisting
-  if (category === "automation") {
-    return {
-      name: skill.name,
-      description: skill.description,
-      permissionCategory: category,
-      source: "built-in",
-      requiresConfirmation: skill.requiresConfirmation,
-      schedulable: true,
-      autoApproveAllowed: true,
-      riskLevel: "medium",
-    };
-  }
-
-  // Filesystem read-only (requiresConfirmation=false) can be schedulable
-  if (category === "filesystem") {
-    return {
-      name: skill.name,
-      description: skill.description,
-      permissionCategory: category,
-      source: "built-in",
-      requiresConfirmation: false,
-      schedulable: true,
-      autoApproveAllowed: true,
-      riskLevel: "low",
-    };
-  }
-
-  // Default: not schedulable
   return {
     name: skill.name,
     description: skill.description,
-    permissionCategory: category,
+    permissionCategory: skill.permissionCategory,
     source: "built-in",
     requiresConfirmation: skill.requiresConfirmation,
     schedulable: false,
     autoApproveAllowed: false,
-    blockedReason: "This tool category is not supported for scheduled AI tasks in v1.",
+    blockedReason:
+      "Only explicitly reviewed read-only tools may run unattended in scheduled loops.",
     riskLevel: "blocked",
   };
 }
 
 /**
  * Runtime decision: can a requested tool call proceed in scheduled mode?
+ * Defense-in-depth — the catalog filter should already hide disallowed tools,
+ * but this backstop blocks any model-hallucinated tool call and returns a
+ * structured reason the model can read.
  */
 export function canAutoApproveScheduledTool(params: {
   readonly skill: SkillDefinition;
@@ -130,42 +159,39 @@ export function canAutoApproveScheduledTool(params: {
 }): ScheduledToolDecision {
   const { skill, taskPolicy, toolName } = params;
 
-  // Shell is always blocked
-  if (BLOCKED_CATEGORIES.has(skill.permissionCategory)) {
+  if (SCHEDULED_LOOP_ALWAYS_BLOCKED_TOOLS.has(toolName)) {
     return {
       allowed: false,
-      reason: `Tool "${toolName}" has permission category "${skill.permissionCategory}" which is blocked for scheduled tasks.`,
+      reason: `Tool "${toolName}" is permanently blocked for unattended scheduled tasks.`,
       riskLevel: "blocked",
     };
   }
 
-  // Filesystem write/edit blocked
-  if (
-    skill.permissionCategory === "filesystem" &&
-    skill.requiresConfirmation
-  ) {
+  if (skill.source !== "built-in") {
     return {
       allowed: false,
-      reason: `Tool "${toolName}" is a filesystem write/edit tool blocked for scheduled tasks in v1.`,
+      reason: `Tool "${toolName}" is not a built-in tool and cannot run unattended.`,
       riskLevel: "blocked",
     };
   }
 
-  // Auto-approve must be enabled
   if (!taskPolicy.autoApproveTools) {
     return {
       allowed: false,
-      reason: "Auto-approve is not enabled for this AI message task.",
+      reason:
+        "Auto-approve is not enabled for this AI message task. Approve read-only tools when creating the loop.",
       riskLevel: "high",
     };
   }
 
-  // Pure tools always allowed
-  if (skill.permissionCategory === "pure") {
-    return { allowed: true, riskLevel: "low" };
+  if (!isScheduledReadOnlyTool(toolName)) {
+    return {
+      allowed: false,
+      reason: `Tool "${toolName}" is not an approved read-only tool for unattended scheduled execution.`,
+      riskLevel: "high",
+    };
   }
 
-  // Non-pure tools must be in the allowlist
   if (!taskPolicy.allowedTools.includes(toolName)) {
     return {
       allowed: false,
@@ -174,11 +200,5 @@ export function canAutoApproveScheduledTool(params: {
     };
   }
 
-  // Tool is allowlisted — check risk level
-  const summary = describeBuiltInToolForSchedule(skill);
-  return {
-    allowed: summary.schedulable,
-    reason: summary.blockedReason,
-    riskLevel: summary.riskLevel,
-  };
+  return { allowed: true, riskLevel: "low" };
 }
