@@ -393,15 +393,19 @@ export class TokenRefreshService {
     const p = instance._performRefreshNetwork();
     TokenRefreshService._inFlight = p;
     // Clear the slot once the refresh settles so the next refresh can run.
-    // Use `.then/.catch/.then` rather than `finally` to ensure the slot is
-    // cleared regardless of resolution while still returning the original
-    // promise to all callers.
+    // Only clear when this promise is still the active slot — otherwise a
+    // stale settlement (e.g. after tests reset _inFlight, or a superseded
+    // caller) would wipe a newer in-flight refresh.
     p.then(
       () => {
-        TokenRefreshService._inFlight = null;
+        if (TokenRefreshService._inFlight === p) {
+          TokenRefreshService._inFlight = null;
+        }
       },
       () => {
-        TokenRefreshService._inFlight = null;
+        if (TokenRefreshService._inFlight === p) {
+          TokenRefreshService._inFlight = null;
+        }
       }
     );
     return p;
