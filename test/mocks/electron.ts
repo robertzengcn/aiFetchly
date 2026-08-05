@@ -30,8 +30,25 @@ export class BrowserWindow {
     // Mock constructor
   }
 
-  loadURL(_url: string): void {
+  loadURL(_url: string): Promise<void> {
+    // Mock implementation (real Electron returns Promise<void>)
+    return Promise.resolve();
+  }
+
+  setTitle(_title: string): void {
     // Mock implementation
+  }
+
+  setMenu(_menu: unknown): void {
+    // Mock implementation
+  }
+
+  on(_event: string, _handler: (...args: unknown[]) => void): this {
+    return this;
+  }
+
+  once(_event: string, _handler: (...args: unknown[]) => void): this {
+    return this;
   }
 
   reload(): void {

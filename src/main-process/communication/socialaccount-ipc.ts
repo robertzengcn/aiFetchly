@@ -221,7 +221,7 @@ export function registerSocialAccountIpcHandlers(mainWindow: BrowserWindow) {
     }
     try {
       const sac = new SocialAccountController();
-      await sac.showSocialmediaWin(qdata.id, undefined, () => {
+      await sac.showSocialmediaWin(qdata.id, () => {
         const comMsgs: CommonDialogMsg = {
           status: true,
           code: 0,
