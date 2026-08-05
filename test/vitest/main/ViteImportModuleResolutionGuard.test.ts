@@ -76,20 +76,34 @@ describe("vite import vs tsconfig moduleResolution guard", () => {
     expect(offenders).toEqual([]);
   });
 
-  it("loads CloneDeepViteBundle vite API via createRequire", () => {
-    const cloneDeepTest = path.join(
-      testRoot,
-      "vitest",
-      "main",
-      "CloneDeepViteBundle.test.ts"
-    );
-    const source = fs.readFileSync(cloneDeepTest, "utf-8");
-    const code = stripTsComments(source);
+  it("loads packaging Vite bundle tests without static vite ESM imports", () => {
+    const packagingTests = [
+      "CloneDeepViteBundle.test.ts",
+      "TslibViteBundle.test.ts",
+      "PdfLibViteBundle.test.ts",
+      path.join("helpers", "viteCjsBundle.ts"),
+    ];
 
-    expect(code).toMatch(/createRequire\s*\(/);
-    expect(code).toMatch(/require\s*\(\s*["']vite["']\s*\)/);
-    expect(code).not.toMatch(
-      /(?:^|\n)\s*import\s[\s\S]*?\bfrom\s*['"]vite['"]/
-    );
+    for (const relativePath of packagingTests) {
+      const filePath = path.join(testRoot, "vitest", "main", relativePath);
+      expect(fs.existsSync(filePath)).toBe(true);
+
+      const code = stripTsComments(fs.readFileSync(filePath, "utf-8"));
+      expect(code).not.toMatch(
+        /(?:^|\n)\s*import\s[\s\S]*?\bfrom\s*['"]vite['"]/
+      );
+
+      // Either load vite via createRequire directly, or via the shared helper
+      // that itself uses createRequire (PdfLib/Tslib tests).
+      if (relativePath.endsWith("viteCjsBundle.ts")) {
+        expect(code).toMatch(/createRequire\s*\(/);
+        expect(code).toMatch(/require\s*\(\s*["']vite["']\s*\)/);
+      } else if (relativePath === "CloneDeepViteBundle.test.ts") {
+        expect(code).toMatch(/createRequire\s*\(/);
+        expect(code).toMatch(/require\s*\(\s*["']vite["']\s*\)/);
+      } else {
+        expect(code).toMatch(/buildAndRunViteCjsBundle/);
+      }
+    }
   });
 });

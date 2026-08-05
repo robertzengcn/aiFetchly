@@ -66,6 +66,22 @@ describe("Forge packaging dependencies", () => {
     ).toBe(false);
   });
 
+  // pdf-lib must ship in packaged node_modules because vite.main.config.mjs
+  // externalizes it. If Forge ignores it, Windows launch fails when
+  // DocumentService/RAG (pulled via ScheduleManager) requires("pdf-lib").
+  it("keeps pdf-lib for packaged main-process external require", async () => {
+    const forgeConfig = await loadForgeConfig();
+
+    await forgeConfig.hooks.prePackage();
+
+    expect(
+      forgeConfig.packagerConfig.ignore("/node_modules/pdf-lib/package.json")
+    ).toBe(false);
+    expect(
+      forgeConfig.packagerConfig.ignore("/node_modules/pdf-lib/cjs/index.js")
+    ).toBe(false);
+  });
+
   it("unpacks dist/childprocess so packaged workers are extractable on Windows", async () => {
     const forgeConfig = await loadForgeConfig();
     const unpackDir = forgeConfig.packagerConfig.asar?.unpackDir;

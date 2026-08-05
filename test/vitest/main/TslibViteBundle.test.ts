@@ -1,28 +1,13 @@
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
-import { createRequire } from "node:module";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { buildAndRunViteCjsBundle } from "./helpers/viteCjsBundle";
 
-const require = createRequire(import.meta.url);
 const testDir = path.dirname(fileURLToPath(import.meta.url));
 const fixtureEntryPath = path.join(testDir, "fixtures", "tslibViteEntry.mjs");
 const tslibCjsPath = path.resolve(process.cwd(), "node_modules/tslib/tslib.js");
 const viteMainConfigPath = path.resolve(process.cwd(), "vite.main.config.mjs");
-
-/**
- * Vite 8 only exposes types via package "exports", which need
- * moduleResolution node16/nodenext/bundler. This project's tsconfig uses
- * "node", so a static `import { build } from "vite"` fails `tsc --noEmit`.
- * Load via createRequire and a narrow local type instead.
- */
-interface ViteBuildFn {
-  (inlineConfig: Record<string, unknown>): Promise<unknown>;
-}
-
-const { build } = require("vite") as { build: ViteBuildFn };
 
 /**
  * Regression for packaged ScheduleManager crash:
@@ -48,134 +33,32 @@ describe("tslib Vite bundle __extends regression", () => {
   });
 
   it("crashes without the tslib CJS alias (documents the packaging failure mode)", async () => {
-    const tempRoot = fs.mkdtempSync(
-      path.join(os.tmpdir(), "aifetchly-tslib-vite-broken-")
+    const result = await buildAndRunViteCjsBundle({
+      entryPath: fixtureEntryPath,
+      tempPrefix: "aifetchly-tslib-vite-broken-",
+      fileName: "tslib-bundle.cjs",
+    });
+
+    expect(result.run).not.toBeNull();
+    expect(result.run?.status).not.toBe(0);
+    expect(result.combinedOutput).toMatch(
+      /Cannot destructure property '__extends'.*\.default/i
     );
-    const outDir = path.join(tempRoot, "dist");
-    const bundlePath = path.join(outDir, "tslib-bundle.cjs");
-
-    try {
-      await build({
-        configFile: false,
-        root: process.cwd(),
-        logLevel: "error",
-        build: {
-          lib: {
-            entry: fixtureEntryPath,
-            formats: ["cjs"],
-            fileName: () => "tslib-bundle.cjs",
-          },
-          outDir,
-          emptyOutDir: true,
-          minify: true,
-          target: "node18",
-          commonjsOptions: {
-            transformMixedEsModules: true,
-            include: [/node_modules/],
-          },
-          rollupOptions: {
-            external: [
-              "fs",
-              "path",
-              "os",
-              "crypto",
-              "util",
-              "stream",
-              "events",
-              "buffer",
-              "url",
-            ],
-          },
-        },
-        resolve: {
-          conditions: ["node"],
-        },
-      });
-
-      expect(fs.existsSync(bundlePath)).toBe(true);
-
-      const run = spawnSync(process.execPath, [bundlePath], {
-        cwd: process.cwd(),
-        encoding: "utf-8",
-        env: { ...process.env },
-      });
-
-      const combinedOutput = `${run.stdout}\n${run.stderr}`;
-      expect(run.status).not.toBe(0);
-      expect(combinedOutput).toMatch(
-        /Cannot destructure property '__extends'.*\.default/i
-      );
-    } finally {
-      fs.rmSync(tempRoot, { recursive: true, force: true });
-    }
   });
 
   it("survives Vite CJS bundling when tslib is aliased to the CJS entry", async () => {
-    const tempRoot = fs.mkdtempSync(
-      path.join(os.tmpdir(), "aifetchly-tslib-vite-fixed-")
+    const result = await buildAndRunViteCjsBundle({
+      entryPath: fixtureEntryPath,
+      tempPrefix: "aifetchly-tslib-vite-fixed-",
+      fileName: "tslib-bundle.cjs",
+      alias: { tslib: tslibCjsPath },
+    });
+
+    expect(result.combinedOutput).not.toMatch(
+      /Cannot destructure property '__extends'/i
     );
-    const outDir = path.join(tempRoot, "dist");
-    const bundlePath = path.join(outDir, "tslib-bundle.cjs");
-
-    try {
-      expect(fs.existsSync(fixtureEntryPath)).toBe(true);
-
-      await build({
-        configFile: false,
-        root: process.cwd(),
-        logLevel: "error",
-        build: {
-          lib: {
-            entry: fixtureEntryPath,
-            formats: ["cjs"],
-            fileName: () => "tslib-bundle.cjs",
-          },
-          outDir,
-          emptyOutDir: true,
-          minify: true,
-          target: "node18",
-          commonjsOptions: {
-            transformMixedEsModules: true,
-            include: [/node_modules/],
-          },
-          rollupOptions: {
-            external: [
-              "fs",
-              "path",
-              "os",
-              "crypto",
-              "util",
-              "stream",
-              "events",
-              "buffer",
-              "url",
-            ],
-          },
-        },
-        resolve: {
-          conditions: ["node"],
-          alias: {
-            tslib: tslibCjsPath,
-          },
-        },
-      });
-
-      expect(fs.existsSync(bundlePath)).toBe(true);
-
-      const run = spawnSync(process.execPath, [bundlePath], {
-        cwd: process.cwd(),
-        encoding: "utf-8",
-        env: { ...process.env },
-      });
-
-      const combinedOutput = `${run.stdout}\n${run.stderr}`;
-      expect(combinedOutput).not.toMatch(
-        /Cannot destructure property '__extends'/i
-      );
-      expect(run.status).toBe(0);
-      expect(combinedOutput).toContain("tslib-vite-ok");
-    } finally {
-      fs.rmSync(tempRoot, { recursive: true, force: true });
-    }
+    expect(result.run).not.toBeNull();
+    expect(result.run?.status).toBe(0);
+    expect(result.combinedOutput).toContain("tslib-vite-ok");
   });
 });
