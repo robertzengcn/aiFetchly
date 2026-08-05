@@ -3,7 +3,8 @@
  * Local embedding worker.
  *
  * Runs in an Electron `utilityProcess` spawned by `LocalEmbeddingWorkerClient`.
- * Loads `@xenova/transformers`, caches the pipeline after first load, and
+ * Loads `@xenova/transformers` at runtime via a bundler-opaque require (see
+ * `LocalTransformersLoader`), caches the pipeline after first load, and
  * produces mean-pooled, L2-normalized embeddings.
  *
  * Hard rules (per architecture):
@@ -12,9 +13,13 @@
  *    Transformers.js hosts and cached on disk
  *  - never receives document or database paths — only the text to embed
  *  - validates every inbound message and every produced vector before returning
+ *
+ * Phase 9 slim installer (PRD FR-16, design §26.7): `@xenova/transformers` is
+ * not bundled into the base app — it ships as a downloadable runtime. The
+ * worker loads it via `loadTransformersRuntime()` and reports a clear error
+ * when the runtime is not installed.
  */
 import * as fs from "node:fs";
-import { env as transformersEnv, pipeline } from "@xenova/transformers";
 import { LOCAL_XENOVA_ALL_MINILM_DIMENSIONS } from "@/service/embedding/LocalEmbeddingModels";
 import {
   type LocalEmbeddingBatchMessage,
@@ -32,6 +37,10 @@ import {
   type LocalTransformersConfig,
   resolveLocalTransformersConfig,
 } from "@/childprocess/embedding/LocalTransformersEnvironment";
+import {
+  type TransformersRuntime,
+  loadTransformersRuntime,
+} from "@/childprocess/embedding/LocalTransformersLoader";
 
 interface ParentPortMessageEvent {
   data: string;
@@ -65,6 +74,27 @@ const activeRequestIds = new Set<string>();
 const transformersConfig = resolveLocalTransformersConfig();
 let configuredRemoteHost: string | null = null;
 let configuredBaseEnvironment = false;
+
+// Lazily-loaded Transformers.js runtime. Loaded once on first use via the
+// bundler-opaque loader so the worker bundle stays free of a static
+// `require("@xenova/transformers")` call.
+let transformersRuntime: TransformersRuntime | null = null;
+
+function getTransformersRuntime(): TransformersRuntime {
+  if (transformersRuntime) {
+    return transformersRuntime;
+  }
+  const runtime = loadTransformersRuntime();
+  if (!runtime) {
+    throw new Error(
+      "Local embedding runtime (@xenova/transformers) is not installed. " +
+        "Install the local-AI embedding runtime via the in-app runtime manager " +
+        "and retry."
+    );
+  }
+  transformersRuntime = runtime;
+  return runtime;
+}
 
 function postMessageSafe(message: LocalEmbeddingOutboundMessage): void {
   if (!parentPort) {
@@ -113,18 +143,19 @@ function configureTransformersEnvironment(
   config: LocalTransformersConfig,
   remoteHost: string | null
 ): void {
+  const runtime = getTransformersRuntime();
   if (!configuredBaseEnvironment) {
     fs.mkdirSync(config.cacheDir, { recursive: true });
-    transformersEnv.cacheDir = config.cacheDir;
-    transformersEnv.allowRemoteModels = config.allowRemoteModels;
+    runtime.env.cacheDir = config.cacheDir;
+    runtime.env.allowRemoteModels = config.allowRemoteModels;
     if (config.localModelPath) {
-      transformersEnv.localModelPath = config.localModelPath;
+      runtime.env.localModelPath = config.localModelPath;
     }
     configuredBaseEnvironment = true;
   }
 
   if (remoteHost && configuredRemoteHost !== remoteHost) {
-    transformersEnv.remoteHost = remoteHost;
+    runtime.env.remoteHost = remoteHost;
     configuredRemoteHost = remoteHost;
   }
 }
@@ -133,13 +164,14 @@ async function createExtractorWithFallback(
   underlyingModel: string,
   config: LocalTransformersConfig
 ): Promise<unknown> {
+  const runtime = getTransformersRuntime();
   const remoteHosts = config.allowRemoteModels ? config.remoteHosts : [null];
   let lastError: unknown = null;
 
   for (const remoteHost of remoteHosts) {
     configureTransformersEnvironment(config, remoteHost);
     try {
-      return await pipeline("feature-extraction", underlyingModel);
+      return await runtime.pipeline("feature-extraction", underlyingModel);
     } catch (error) {
       lastError = error;
       const message = error instanceof Error ? error.message : String(error);
