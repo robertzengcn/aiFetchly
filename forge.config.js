@@ -13,6 +13,64 @@ const { builtinModules } = require("node:module");
 const { join, normalize } = require("node:path");
 const { Walker, DepType } = require("flora-colossus");
 let nativeModuleDependenciesToPackage = [];
+/** @type {Set<string>} */
+let allowedPackagedModules = new Set();
+/** @type {Set<string>} */
+let allowedScopedDirectories = new Set();
+
+function rebuildPackagerAllowLists(moduleNames) {
+  allowedPackagedModules = new Set(moduleNames);
+  allowedScopedDirectories = new Set();
+  for (const dep of allowedPackagedModules) {
+    if (dep.startsWith("@")) {
+      allowedScopedDirectories.add(dep.split("/")[0]);
+    }
+  }
+}
+
+/**
+ * O(1) keep/ignore decision for electron-packager's ignore filter.
+ * The previous implementation scanned the full dependency list for every file
+ * under node_modules (100k+ calls × hundreds of deps), which hung CI packaging.
+ */
+function shouldKeepPackagedPath(filePath) {
+  if (filePath === "") return true;
+  if (filePath === "/package.json") return true;
+  if (filePath === "/node_modules") return true;
+  if (filePath === "/.vite" || filePath.startsWith("/.vite/")) return true;
+  if (filePath === "/dist") return true;
+  if (
+    filePath === "/dist/childprocess" ||
+    filePath.startsWith("/dist/childprocess/")
+  ) {
+    return true;
+  }
+
+  if (!filePath.startsWith("/node_modules/")) return false;
+
+  const relPath = filePath.slice("/node_modules/".length).replace(/\/$/, "");
+  if (relPath === "") return true;
+
+  const segments = relPath.split("/").filter(Boolean);
+  if (segments[0].startsWith("@")) {
+    if (segments.length === 1) {
+      return allowedScopedDirectories.has(segments[0]);
+    }
+    return allowedPackagedModules.has(`${segments[0]}/${segments[1]}`);
+  }
+  return allowedPackagedModules.has(segments[0]);
+}
+
+function createPackagerIgnoreFilter() {
+  const logKeeps = process.env.FORGE_PACKAGER_LOG_KEEPS === "1";
+  return (file) => {
+    const keep = shouldKeepPackagedPath(file.toLowerCase());
+    if (keep && logKeeps) {
+      console.log("Keeping:", file);
+    }
+    return !keep;
+  };
+}
 const EXTERNAL_DEPENDENCIES = [
   "electron-store",
   "realm",
@@ -348,62 +406,7 @@ module.exports = {
         "{**/.vite/**,**/dist/childprocess,**/dist/childprocess/**,**/node_modules/better-sqlite3,**/node_modules/better-sqlite3/**,**/node_modules/sqlite-vec,**/node_modules/sqlite-vec/**}",
       unpack: "**/vec0.*",
     },
-    ignore: (file) => {
-      const filePath = file.toLowerCase();
-      const KEEP_FILE = {
-        keep: false,
-        log: true,
-      };
-      // NOTE: must return false for empty string or nothing will be packaged
-      if (filePath === "") KEEP_FILE.keep = true;
-      if (!KEEP_FILE.keep && filePath === "/package.json")
-        KEEP_FILE.keep = true;
-      if (!KEEP_FILE.keep && filePath === "/node_modules")
-        KEEP_FILE.keep = true;
-      if (!KEEP_FILE.keep && filePath === "/.vite") KEEP_FILE.keep = true;
-      if (!KEEP_FILE.keep && filePath.startsWith("/.vite/"))
-        KEEP_FILE.keep = true;
-      if (!KEEP_FILE.keep && filePath === "/dist") KEEP_FILE.keep = true;
-      if (!KEEP_FILE.keep && filePath === "/dist/childprocess")
-        KEEP_FILE.keep = true;
-      if (!KEEP_FILE.keep && filePath.startsWith("/dist/childprocess/"))
-        KEEP_FILE.keep = true;
-      if (!KEEP_FILE.keep && filePath.startsWith("/node_modules/")) {
-        // check if matches any of the external dependencies
-        for (const dep of nativeModuleDependenciesToPackage) {
-          const scopeName = dep.startsWith("@") ? dep.split("/")[0] : null;
-          if (
-            scopeName &&
-            (filePath === `/node_modules/${scopeName}/` ||
-              filePath === `/node_modules/${scopeName}`)
-          ) {
-            KEEP_FILE.keep = true;
-            break;
-          }
-          if (
-            filePath === `/node_modules/${dep}/` ||
-            filePath === `/node_modules/${dep}`
-          ) {
-            KEEP_FILE.keep = true;
-            break;
-          }
-          if (filePath === `/node_modules/${dep}/package.json`) {
-            KEEP_FILE.keep = true;
-            break;
-          }
-          if (filePath.startsWith(`/node_modules/${dep}/`)) {
-            KEEP_FILE.keep = true;
-            KEEP_FILE.log = false;
-            break;
-          }
-        }
-      }
-      if (KEEP_FILE.keep) {
-        if (KEEP_FILE.log) console.log("Keeping:", file);
-        return false;
-      }
-      return true;
-    },
+    ignore: createPackagerIgnoreFilter(),
     // ignore: [
     //   /node_modules\/(?!(better-sqlite3|bindings|file-uri-to-path)\/)/,
     // ],
@@ -796,6 +799,7 @@ module.exports = {
         EXTERNAL_DEPENDENCIES
       );
       nativeModuleDependenciesToPackage = Array.from(nativeModuleDependencies);
+      rebuildPackagerAllowLists(nativeModuleDependenciesToPackage);
     },
     packageAfterCopy: async (_forgeConfig, buildPath) => {
       fixInteropNamespaceDefault(join(buildPath, ".vite", "build"));

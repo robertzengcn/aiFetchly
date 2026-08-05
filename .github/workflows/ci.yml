@@ -6,10 +6,6 @@ on:
       - dev
   workflow_dispatch:
 
-concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
 permissions:
   contents: read
 
@@ -21,7 +17,8 @@ jobs:
     env:
       # electron-forge package builds 15+ Vite bundles; ubuntu-latest is 7 GB RAM.
       NODE_OPTIONS: --max-old-space-size=4096
-      ELECTRON_FORGE_VITE_CONCURRENT: "2"
+      # Sequential Vite builds avoid OOM on 7 GB ubuntu-latest runners.
+      ELECTRON_FORGE_VITE_CONCURRENT: "1"
 
     steps:
       - name: Checkout code
@@ -78,7 +75,7 @@ jobs:
         run: yarn testmain
 
       - name: Build Linux package for worker smoke test
-        timeout-minutes: 40
+        timeout-minutes: 60
         run: yarn package
 
       - name: Resolve packaged worker dependencies
