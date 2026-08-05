@@ -2166,6 +2166,14 @@ export default {
       binaryFile: "二进制文件",
       tooLarge: "文件过大，无法包含。",
     },
+    pastedText: {
+      chip_label: "已粘贴文本 #{id} · {lines} 行",
+      truncated_chip_label: "已截断的粘贴文本 #{id} · {lines} 行",
+      view_content: "查看已粘贴内容",
+      hide_content: "隐藏已粘贴内容",
+      removed: "已移除已粘贴内容",
+      loading: "正在加载已粘贴内容...",
+    },
     goalLoop: {
       objectiveRequired: "请提供目标内容。用法：/goal <目标>",
       createFailed: "无法创建目标。",
@@ -2196,6 +2204,16 @@ export default {
       statusExpired: "已过期",
       statusFailed: "已失败",
       statusStopped: "已停止",
+      toolApprovalTitle: "批准无人值守工具",
+      toolApprovalIntro:
+        "定时循环在无人值守下运行。可选择允许循环使用的只读工具。发送邮件、草稿、Shell、文件写入及子代理将始终被阻止。",
+      toolApprovalCommand: "命令",
+      noReadOnlyTools: "没有可用的只读工具。",
+      allowedTools: "允许的只读工具",
+      allowedToolsHint: "可选择循环可运行的工具",
+      autoApprove: "自动运行已批准的工具",
+      autoApproveWarning: "在循环激活期间，这些工具将在每次执行时自动运行。",
+      createLoop: "创建定时循环",
       errors: {
         INVALID_LOOP_SYNTAX: "无法解析 /loop 命令。",
         INVALID_INTERVAL: "间隔必须在 1 分钟到 24 小时之间。",

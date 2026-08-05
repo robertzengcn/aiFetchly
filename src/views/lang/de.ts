@@ -274,7 +274,8 @@ export default {
       "Das lokale Einbettungsmodell '{model}' erfordert die lokale KI-Komponente ({runtime}). Laden Sie sie jetzt herunter und installieren Sie sie, um fortzufahren.",
     local_runtime_download: "Herunterladen und installieren",
     local_runtime_download_size: "Download-Größe: {size}",
-    local_runtime_install_failed: "Die lokale KI-Komponente wurde installiert, ist aber noch nicht bereit. Bitte versuchen Sie es erneut.",
+    local_runtime_install_failed:
+      "Die lokale KI-Komponente wurde installiert, ist aber noch nicht bereit. Bitte versuchen Sie es erneut.",
     max_dimensions: "Maximale Dimensionen",
     model: "Modell",
     dimensions: "Dimensionen",
@@ -2256,6 +2257,15 @@ export default {
       binaryFile: "Binärdatei",
       tooLarge: "Datei ist zu groß zum Einbinden.",
     },
+    pastedText: {
+      chip_label: "Eingefügter Text #{id} · {lines} Zeilen",
+      truncated_chip_label:
+        "Abgeschnittener eingefügter Text #{id} · {lines} Zeilen",
+      view_content: "Eingefügten Inhalt ansehen",
+      hide_content: "Eingefügten Inhalt ausblenden",
+      removed: "Eingefügter Inhalt entfernt",
+      loading: "Eingefügter Inhalt wird geladen...",
+    },
     goalLoop: {
       objectiveRequired: "Gib ein Ziel an. Verwendung: /goal <Ziel>",
       createFailed: "Ziel konnte nicht erstellt werden.",
@@ -2287,6 +2297,18 @@ export default {
       statusExpired: "abgelaufen",
       statusFailed: "fehlgeschlagen",
       statusStopped: "gestoppt",
+      toolApprovalTitle: "Unbeaufsichtigte Tools genehmigen",
+      toolApprovalIntro:
+        "Geplante Schleifen laufen ohne Aufsicht. Genehmigen Sie optional schreibgeschützte Tools, die die Schleife verwenden darf. E-Mail-Versand, Entwürfe, Shell, Dateischreibvorgänge und Subagenten bleiben gesperrt.",
+      toolApprovalCommand: "Befehl",
+      noReadOnlyTools: "Keine schreibgeschützten Tools verfügbar.",
+      allowedTools: "Erlaubte schreibgeschützte Tools",
+      allowedToolsHint:
+        "Wählen Sie optional Tools, die die Schleife ausführen darf",
+      autoApprove: "Genehmigte Tools ohne Nachfrage ausführen",
+      autoApproveWarning:
+        "Diese Tools werden bei jedem Durchlauf automatisch ausgeführt, solange die Schleife aktiv ist.",
+      createLoop: "Schleife planen",
       errors: {
         INVALID_LOOP_SYNTAX: "Der /loop-Befehl konnte nicht analysiert werden.",
         INVALID_INTERVAL:

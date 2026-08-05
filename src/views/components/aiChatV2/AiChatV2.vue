@@ -3069,7 +3069,11 @@ const handleCompactConversation = async (): Promise<void> => {
 const onSend = async (
   text: string,
   files?: File[],
-  options?: { isExpandedPrompt?: boolean; fromVoice?: boolean }
+  options?: {
+    isExpandedPrompt?: boolean;
+    fromVoice?: boolean;
+    pastedContents?: Record<string, string>;
+  }
 ): Promise<void> => {
   if (chatIsRunning.value || hasAnyActiveStream.value) return;
   streamError.value = null;
@@ -3184,7 +3188,10 @@ const onSend = async (
     cmd.type === "none" &&
     text.trim().startsWith("/")
   ) {
-    const handled = await handleSlashCommandSubmission(text.trim());
+    const handled = await handleSlashCommandSubmission(
+      text.trim(),
+      options?.pastedContents
+    );
     if (handled) return;
   }
 
@@ -3324,6 +3331,7 @@ const onSend = async (
       message: modelMessage,
       mode: requestMode,
       model: resolveModelForRequest(),
+      pastedContents: options?.pastedContents,
       toolApprovalMode: toolApprovalMode.value,
       showReasoning: showReasoning.value,
       reasoning: showReasoning.value
@@ -3778,7 +3786,10 @@ const onSend = async (
   }
 };
 
-async function handleSlashCommandSubmission(rawInput: string): Promise<boolean> {
+async function handleSlashCommandSubmission(
+  rawInput: string,
+  pastedContents?: Record<string, string>
+): Promise<boolean> {
   const conversationId = ensureWorkspaceConversationId();
   let result: Awaited<ReturnType<typeof dispatchSlashCommand>>;
   try {
@@ -3804,7 +3815,10 @@ async function handleSlashCommandSubmission(rawInput: string): Promise<boolean> 
     // Submit the expanded prompt directly to the Chat V2 stream. The
     // isExpandedPrompt flag tells onSend to skip slash-command interception
     // so a prompt body that begins with `/` streams instead of re-dispatching.
-    await onSend(result.prompt, [], { isExpandedPrompt: true });
+    await onSend(result.prompt, [], {
+      isExpandedPrompt: true,
+      pastedContents,
+    });
     return true;
   }
 

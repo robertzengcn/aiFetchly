@@ -19,6 +19,7 @@ import { SkillExecutor } from "@/service/SkillExecutor";
 import { HookDispatcher } from "@/service/hooks/HookDispatcher";
 import { AIChatContextAssembler } from "@/service/AIChatContextAssembler";
 import { AtMentionResolutionService } from "@/service/aiChatAtMentions/AtMentionResolutionService";
+import { PastedTextResolutionService } from "@/service/pastedText/PastedTextResolutionService";
 import type { AIChatCompactAgentService } from "@/service/AIChatCompactAgentService";
 import type { AIAutoDreamService } from "@/service/AIAutoDreamService";
 import type { AIWorkspaceAutoDreamService } from "@/service/AIWorkspaceAutoDreamService";
@@ -612,12 +613,22 @@ export class AIChatQueryEngine {
         }
       }
 
-      // Resolve @-mentions on the (attachment-enriched) message: append a
-      // model-facing context block while keeping it out of the saved display.
+      // Resolve pasted-text placeholders on the (attachment-enriched)
+      // message BEFORE resolving @-mentions. This ensures mention tokens
+      // inside pasted content get expanded correctly.
+      const pastedTextResolution =
+        await new PastedTextResolutionService().resolveMessage(
+          messageToSave,
+          request.pastedContents
+        );
+
+      // Resolve @-mentions on the pasted-expanded (model-facing) message:
+      // append a model-facing context block while keeping it out of the
+      // saved display.
       const atMentionResolution =
         await new AtMentionResolutionService().resolveMessage(
           conversationId,
-          messageToSave
+          pastedTextResolution.modelMessage
         );
       const modelUserMessage = atMentionResolution.modelMessage;
       if (currentUserContentParts && currentUserContentParts.length > 0) {
@@ -646,9 +657,13 @@ export class AIChatQueryEngine {
       if (atMentionResolution.metadata.length > 0) {
         userMetadata.atMentions = atMentionResolution.metadata;
       }
+      if (pastedTextResolution.pastedBlocks.length > 0) {
+        userMetadata.pastedBlocks = pastedTextResolution.pastedBlocks;
+      }
       const hasUserMetadataBeyondSource =
         !!attachmentMetadata ||
         atMentionResolution.metadata.length > 0 ||
+        pastedTextResolution.pastedBlocks.length > 0 ||
         !!scheduledContext;
 
       // Save user message (display text = attachment-enriched message; the

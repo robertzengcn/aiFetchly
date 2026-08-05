@@ -50,6 +50,25 @@
       </v-chip>
     </div>
 
+    <!-- Pasted-text chips (display collapsed refs) -->
+    <div v-if="pastedChips.length > 0" class="v2-composer__files">
+      <v-chip
+        v-for="chip in pastedChips"
+        :key="chip.id"
+        size="small"
+        closable
+        class="mr-1 mb-1"
+        @click:close="removePastedChip(chip.id)"
+      >
+        <v-icon start size="x-small">mdi-file-document-outline</v-icon>
+        {{
+          chip.kind === "truncated"
+            ? pastedTruncatedChipLabel(chip.id, chip.lineCount)
+            : pastedChipLabel(chip.id, chip.lineCount)
+        }}
+      </v-chip>
+    </div>
+
     <v-textarea
       v-model="draft"
       :placeholder="t('aiChatV2.input_placeholder') || 'Send a message…'"
@@ -65,6 +84,7 @@
       @input="onTextareaInput"
       @keyup="onTextareaCursor"
       @click="onTextareaCursor"
+      @paste="onPaste"
     >
       <template v-if="voiceEnabled" #append-inner>
         <v-btn
@@ -247,6 +267,18 @@ import {
   classifyRecorderError,
   type VoiceRecorderErrorKind,
 } from "./voice/voiceErrors";
+import type { ChatV2PastedBlockKind } from "@/entityTypes/pastedTextTypes";
+import {
+  PASTED_TEXT_COLLAPSE_MAX_CHARS,
+  PASTED_TEXT_COLLAPSE_MAX_NEWLINES,
+  PASTED_TEXT_TRUNCATE_HEAD_CHARS,
+  PASTED_TEXT_TRUNCATE_MAX_CHARS,
+  PASTED_TEXT_TRUNCATE_TAIL_CHARS,
+} from "@/service/pastedText/PastedTextLimits";
+import { cleanPastedText, countPastedNewlines } from "@/service/pastedText/PastedTextCleaner";
+import { formatPastedTextRef } from "@/service/pastedText/PastedTextFormatter";
+import { formatTruncatedTierDisplay } from "@/service/pastedText/PastedTextTruncator";
+import { parsePastedTextRefs } from "@/service/pastedText/PastedTextParser";
 
 const MAX_UPLOAD_FILES = 3;
 const MAX_UPLOAD_FILE_BYTES = 5 * 1024 * 1024; // 5 MB
@@ -304,7 +336,12 @@ const props = defineProps<{
   conversationId?: string | null;
 }>();
 const emit = defineEmits<{
-  (e: "send", text: string, files: File[], options?: { fromVoice?: boolean }): void;
+  (
+    e: "send",
+    text: string,
+    files: File[],
+    options?: { fromVoice?: boolean; pastedContents?: Record<string, string> }
+  ): void;
   (e: "stop"): void;
   (e: "request-workspace"): void;
   (e: "install-voice-model"): void;
@@ -317,6 +354,19 @@ const { t } = useI18n();
 
 const draft = ref("");
 const selectedFiles = ref<File[]>([]);
+// Display-only placeholder refs for collapsed/truncated pastes live inside
+// `draft`, while the full paste bodies live in this send-time map.
+const pastedContentsById = ref<Record<string, string>>({});
+const pastedChips = ref<
+  Array<{ id: number; lineCount: number; kind: ChatV2PastedBlockKind }>
+>([]);
+let nextPasteId = 1;
+
+function resetPastedState(): void {
+  pastedContentsById.value = {};
+  pastedChips.value = [];
+  nextPasteId = 1;
+}
 
 // --- Local voice input (push-to-talk; PRD §7.1/§7.2) ---
 // The composer owns the recorder + transcribe call for the MVP: the transcript
@@ -447,6 +497,7 @@ async function onMicClick(): Promise<void> {
         emit("send", transcript, files, { fromVoice: true });
         draft.value = "";
         selectedFiles.value = [];
+        resetPastedState();
       } else {
         appendTranscript(transcript);
       }
@@ -675,6 +726,107 @@ function removeFile(idx: number): void {
   selectedFiles.value = selectedFiles.value.filter((_, i) => i !== idx);
 }
 
+function pastedChipLabel(id: number, lineCount: number): string {
+  return (
+    t("aiChatV2.pastedText.chip_label", { id, lines: lineCount }) ||
+    `Pasted text #${id} · ${lineCount} lines`
+  );
+}
+
+function pastedTruncatedChipLabel(id: number, lineCount: number): string {
+  return (
+    t("aiChatV2.pastedText.truncated_chip_label", { id, lines: lineCount }) ||
+    `Pasted text #${id} · ${lineCount} lines`
+  );
+}
+
+function removePastedChip(pasteId: number): void {
+  const fullText = pastedContentsById.value[String(pasteId)];
+
+  // Best-effort draft removal (if placeholder text still exists).
+  const refs = parsePastedTextRefs(draft.value);
+  const ref = refs.find((r) => r.pasteId === pasteId);
+  if (ref) {
+    let removeStart = ref.start;
+    let removeEnd = ref.end;
+
+    if (ref.kind === "truncated" && typeof fullText === "string") {
+      const head = fullText.slice(0, PASTED_TEXT_TRUNCATE_HEAD_CHARS);
+      const tail =
+        fullText.length <= PASTED_TEXT_TRUNCATE_TAIL_CHARS
+          ? fullText
+          : fullText.slice(-PASTED_TEXT_TRUNCATE_TAIL_CHARS);
+      const expectedStart = ref.start - head.length;
+      const expectedEnd = ref.end + tail.length;
+      if (
+        expectedStart >= 0 &&
+        expectedEnd <= draft.value.length &&
+        draft.value.slice(expectedStart, ref.start) === head &&
+        draft.value.slice(ref.end, expectedEnd) === tail
+      ) {
+        removeStart = expectedStart;
+        removeEnd = expectedEnd;
+      }
+    }
+
+    draft.value =
+      draft.value.slice(0, removeStart) + draft.value.slice(removeEnd);
+  }
+
+  delete pastedContentsById.value[String(pasteId)];
+  pastedChips.value = pastedChips.value.filter((c) => c.id !== pasteId);
+}
+
+function onPaste(event: ClipboardEvent): void {
+  if (props.isStreaming || props.isProcessing) return;
+  event.preventDefault();
+
+  const target = event.target;
+  if (!(target instanceof HTMLTextAreaElement)) return;
+  textareaEl = target;
+
+  const raw = event.clipboardData?.getData("text/plain") ?? "";
+  const cleaned = cleanPastedText(raw);
+  if (cleaned.length === 0) return;
+
+  const value = target.value ?? draft.value;
+  const start = target.selectionStart ?? value.length;
+  const end = target.selectionEnd ?? start;
+
+  const lineCount = countPastedNewlines(cleaned);
+  const shouldTruncate = cleaned.length > PASTED_TEXT_TRUNCATE_MAX_CHARS;
+  const shouldCollapse =
+    cleaned.length > PASTED_TEXT_COLLAPSE_MAX_CHARS ||
+    lineCount > PASTED_TEXT_COLLAPSE_MAX_NEWLINES;
+
+  let insertText = cleaned;
+  if (shouldTruncate || shouldCollapse) {
+    const pasteId = nextPasteId++;
+    pastedContentsById.value[String(pasteId)] = cleaned;
+
+    if (shouldTruncate) {
+      insertText = formatTruncatedTierDisplay(pasteId, cleaned).displayText;
+      pastedChips.value = [
+        ...pastedChips.value,
+        { id: pasteId, lineCount, kind: "truncated" },
+      ];
+    } else {
+      insertText = formatPastedTextRef(pasteId, lineCount);
+      pastedChips.value = [
+        ...pastedChips.value,
+        { id: pasteId, lineCount, kind: "full" },
+      ];
+    }
+  }
+
+  draft.value = value.slice(0, start) + insertText + value.slice(end);
+  const pos = start + insertText.length;
+  void nextTick(() => {
+    target.focus();
+    target.setSelectionRange(pos, pos);
+  });
+}
+
 // ---------------------------------------------------------------------------
 // @-mention autocomplete state (renderer-side; all resolution is in main)
 // ---------------------------------------------------------------------------
@@ -836,9 +988,14 @@ const onSend = (): void => {
   if ((!text && selectedFiles.value.length === 0) || props.isStreaming) return;
   closeAtMention();
   const files = [...selectedFiles.value];
-  emit("send", text, files);
+  const pastedContents =
+    Object.keys(pastedContentsById.value).length > 0
+      ? { ...pastedContentsById.value }
+      : undefined;
+  emit("send", text, files, pastedContents ? { pastedContents } : undefined);
   draft.value = "";
   selectedFiles.value = [];
+  resetPastedState();
   closeSlash();
 };
 
@@ -914,6 +1071,7 @@ watch(
   () => {
     closeAtMention();
     closeSlash();
+    resetPastedState();
   }
 );
 </script>

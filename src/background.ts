@@ -28,6 +28,7 @@ import { FileOperationTracker } from "@/service/FileOperationTracker";
 import { registerBuiltinHooks } from "@/service/hooks/builtinHooks";
 import { isAppTrustedOrigin } from "@/service/OriginTrust";
 import { buildAppContentSecurityPolicy } from "@/service/AppContentSecurityPolicy";
+import { PasteStoreService } from "@/service/pastedText/PasteStoreService";
 import * as path from "path";
 import { pathToFileURL } from "url";
 import { Token } from "@/modules/token";
@@ -984,6 +985,18 @@ function initialize() {
       const appDataSource = SqliteDb.getInstance(userdataPath);
       if (!appDataSource.connection.isInitialized) {
         await SqliteDb.ensureInitialized();
+      }
+
+      // Best-effort cache cleanup so stale paste expansions do not grow
+      // without bound. Fire-and-forget so it never blocks startup.
+      try {
+        const pasteCacheRoot = path.join(userdataPath, "paste-cache");
+        void new PasteStoreService(pasteCacheRoot).cleanupOldPastes();
+      } catch (err) {
+        log.warn(
+          "[paste-cache] cleanupOldPastes init failed:",
+          err instanceof Error ? err.message : String(err)
+        );
       }
 
       // Seed built-in agent definitions (marketing subagent system).

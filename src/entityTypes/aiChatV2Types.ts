@@ -7,6 +7,7 @@ import type {
   AIChatPlanStatus,
 } from "@/entityTypes/aiChatPlanTypes";
 import type { ChatV2AtMentionMetadata } from "@/entityTypes/aiChatAtMentionTypes";
+import type { ChatV2PastedBlockMetadata } from "@/entityTypes/pastedTextTypes";
 import type {
   ChatV2GoalStateEvent,
   ChatV2GoalIterationEvent,
@@ -147,6 +148,12 @@ export interface ChatV2MessageMetadata {
   };
   // @-mention context resolved at send time for user messages.
   atMentions?: readonly ChatV2AtMentionMetadata[];
+  /**
+   * Pasted-text placeholders resolved at send time.
+   * Visible in UI, excluded from compact/memory/model context unless the
+   * resolution service expands it.
+   */
+  pastedBlocks?: readonly ChatV2PastedBlockMetadata[];
   // AI artifact pointer (metadata only — never the full HTML content).
   // Present on tool_result messages produced by create_html_artifact.
   artifact?: AIArtifactToolMetadata;
@@ -184,6 +191,11 @@ export interface ChatV2StreamRequest {
   };
   toolApprovalMode?: ChatToolApprovalMode;
   uploadedFiles?: ChatV2UploadedAttachment[];
+  /**
+   * Send-time only: pasteId -> full cleaned paste body. Expanded into the
+   * model-facing message right before mention resolution.
+   */
+  pastedContents?: Record<string, string>;
 }
 
 export interface ChatV2HistoryRequest {

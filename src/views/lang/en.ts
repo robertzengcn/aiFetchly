@@ -2254,6 +2254,14 @@ export default {
       binaryFile: "Binary file",
       tooLarge: "File is too large to include.",
     },
+    pastedText: {
+      chip_label: "Pasted text #{id} · {lines} lines",
+      truncated_chip_label: "Truncated pasted text #{id} · {lines} lines",
+      view_content: "View pasted content",
+      hide_content: "Hide pasted content",
+      removed: "Removed pasted content",
+      loading: "Loading pasted content...",
+    },
     goalLoop: {
       objectiveRequired:
         "Please provide a goal objective. Usage: /goal <objective>",

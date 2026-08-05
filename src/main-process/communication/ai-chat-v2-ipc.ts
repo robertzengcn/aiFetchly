@@ -46,6 +46,7 @@ import {
   AI_CHAT_V2_COMPACT_CONVERSATION,
   AI_CHAT_V2_GET_TOOL_APPROVAL_MODE,
   AI_CHAT_V2_SET_TOOL_APPROVAL_MODE,
+  AI_CHAT_V2_READ_PASTE_CACHE,
 } from "@/config/channellist";
 import type {
   AIChatPlanStateView,
@@ -65,6 +66,8 @@ import type {
   ChatV2AttachmentKind,
   ChatToolApprovalMode,
 } from "@/entityTypes/aiChatV2Types";
+import { aiChatV2PastedContentsSchema } from "@/schemas/aiChatV2PastedText";
+import { PasteStoreService } from "@/service/pastedText/PasteStoreService";
 
 /**
  * Minimal structural type for the IPC event object.
@@ -555,6 +558,13 @@ function validateStreamRequest(
         !["auto", "concise", "detailed"].includes(reasoning.summary))
     ) {
       return "reasoning.summary must be one of auto, concise, detailed";
+    }
+  }
+
+  if (req.pastedContents !== undefined) {
+    const parsed = aiChatV2PastedContentsSchema.safeParse(req.pastedContents);
+    if (!parsed.success) {
+      return parsed.error.issues[0]?.message ?? "invalid pastedContents";
     }
   }
   return null;
@@ -1261,6 +1271,42 @@ function parseMetadata(raw?: string | null): ChatV2MessageMetadata | undefined {
   return undefined;
 }
 
+async function handleReadPasteCache(
+  data: unknown
+): Promise<CommonMessage<string | null>> {
+  const chatAccess = canUseChat();
+  if (!chatAccess.ok) {
+    return denied(chatAccess.message);
+  }
+
+  const candidate: unknown =
+    typeof data === "string"
+      ? data
+      : (() => {
+          const req = parseObjectPayload(data);
+          return (
+            req.contentHash ?? req.hash ?? req.pasteCacheHash ?? req.pasteHash
+          );
+        })();
+
+  if (typeof candidate !== "string") {
+    return denied("hash must be a string");
+  }
+
+  const hash = candidate.trim().toLowerCase();
+  if (!/^[a-f0-9]{16}$/.test(hash)) {
+    return denied("invalid paste cache hash");
+  }
+
+  try {
+    const store = new PasteStoreService();
+    const content = await store.read(hash);
+    return ok(content);
+  } catch (err) {
+    return denied(userSafeError(err));
+  }
+}
+
 export function registerAiChatV2IpcHandlers(): void {
   ipcMain.handle(
     AI_CHAT_V2_RESUME_TOOL_AFTER_PERMISSION,
@@ -1303,6 +1349,9 @@ export function registerAiChatV2IpcHandlers(): void {
   );
   ipcMain.handle(AI_CHAT_V2_SET_TOOL_APPROVAL_MODE, async (_e, data: unknown) =>
     handleSetToolApprovalMode((data as string) ?? "")
+  );
+  ipcMain.handle(AI_CHAT_V2_READ_PASTE_CACHE, async (_e, data: unknown) =>
+    handleReadPasteCache(data)
   );
   // Stream handler send message to the AI engine and receive chunks back
   ipcMain.on(AI_CHAT_V2_STREAM, async (event, data: unknown) => {

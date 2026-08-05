@@ -273,7 +273,8 @@ export default {
       "El modelo de incrustación local '{model}' requiere el componente de IA local ({runtime}). Descárguelo e instálelo ahora para continuar.",
     local_runtime_download: "Descargar e instalar",
     local_runtime_download_size: "Tamaño de descarga: {size}",
-    local_runtime_install_failed: "El componente de IA local se instaló pero aún no está listo. Inténtelo de nuevo.",
+    local_runtime_install_failed:
+      "El componente de IA local se instaló pero aún no está listo. Inténtelo de nuevo.",
     max_dimensions: "Dimensiones máximas",
     model: "Modelo",
     dimensions: "Dimensiones",
@@ -2268,6 +2269,14 @@ export default {
       binaryFile: "Archivo binario",
       tooLarge: "El archivo es demasiado grande para incluir.",
     },
+    pastedText: {
+      chip_label: "Texto pegado #{id} · {lines} líneas",
+      truncated_chip_label: "Texto pegado truncado #{id} · {lines} líneas",
+      view_content: "Ver contenido pegado",
+      hide_content: "Ocultar contenido pegado",
+      removed: "Contenido pegado eliminado",
+      loading: "Cargando contenido pegado...",
+    },
     goalLoop: {
       objectiveRequired: "Indica un objetivo. Uso: /goal <objetivo>",
       createFailed: "No se pudo crear el objetivo.",
@@ -2300,6 +2309,18 @@ export default {
       statusExpired: "caducado",
       statusFailed: "fallido",
       statusStopped: "detenido",
+      toolApprovalTitle: "Aprobar herramientas desatendidas",
+      toolApprovalIntro:
+        "Los bucles programados se ejecutan sin supervisión. Opcionalmente aprueba herramientas de solo lectura que el bucle puede usar. Enviar correo, borradores, shell, escritura de archivos y subagentes siguen bloqueados.",
+      toolApprovalCommand: "Comando",
+      noReadOnlyTools: "No hay herramientas de solo lectura disponibles.",
+      allowedTools: "Herramientas de solo lectura permitidas",
+      allowedToolsHint:
+        "Selecciona opcionalmente las herramientas que el bucle puede ejecutar",
+      autoApprove: "Ejecutar herramientas aprobadas sin preguntar",
+      autoApproveWarning:
+        "Estas herramientas se ejecutarán automáticamente en cada ocurrencia mientras el bucle esté activo.",
+      createLoop: "Programar bucle",
       errors: {
         INVALID_LOOP_SYNTAX: "No se pudo analizar el comando /loop.",
         INVALID_INTERVAL: "El intervalo debe estar entre 1 minuto y 24 horas.",

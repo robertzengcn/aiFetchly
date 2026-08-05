@@ -37,6 +37,7 @@ import {
   AI_CHAT_V2_PLAN_VERSIONS,
   AI_CHAT_V2_GET_TOOL_APPROVAL_MODE,
   AI_CHAT_V2_SET_TOOL_APPROVAL_MODE,
+  AI_CHAT_V2_READ_PASTE_CACHE,
 } from "@/config/channellist";
 
 let activeChunkHandler: ((raw: unknown) => void) | null = null;
@@ -96,6 +97,19 @@ export async function getChatV2History(
 ): Promise<ChatV2HistoryResponse | null> {
   const resp = await windowInvoke(AI_CHAT_V2_HISTORY, { conversationId });
   return (resp as ChatV2HistoryResponse | null) ?? null;
+}
+
+/**
+ * Read cached expanded pasted-text body for history preview dialogs.
+ * Returns null when the cache entry is missing.
+ */
+export async function readPasteCache(
+  contentHash: string
+): Promise<string | null> {
+  const resp = await windowInvoke(AI_CHAT_V2_READ_PASTE_CACHE, {
+    contentHash,
+  });
+  return (resp as string | null) ?? null;
 }
 
 /**

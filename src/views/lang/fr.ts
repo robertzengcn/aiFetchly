@@ -272,7 +272,8 @@ export default {
       "Le modèle d'intégration local '{model}' nécessite le composant IA local ({runtime}). Téléchargez-le et installez-le maintenant pour continuer.",
     local_runtime_download: "Télécharger et installer",
     local_runtime_download_size: "Taille du téléchargement : {size}",
-    local_runtime_install_failed: "Le composant IA local est installé mais pas encore prêt. Veuillez réessayer.",
+    local_runtime_install_failed:
+      "Le composant IA local est installé mais pas encore prêt. Veuillez réessayer.",
     max_dimensions: "Max Dimensions",
     model: "Model",
     dimensions: "Dimensions",
@@ -2250,6 +2251,14 @@ export default {
       binaryFile: "Fichier binaire",
       tooLarge: "Le fichier est trop volumineux pour être inclus.",
     },
+    pastedText: {
+      chip_label: "Texte collé #{id} · {lines} lignes",
+      truncated_chip_label: "Texte collé tronqué #{id} · {lines} lignes",
+      view_content: "Voir le contenu collé",
+      hide_content: "Masquer le contenu collé",
+      removed: "Contenu collé supprimé",
+      loading: "Chargement du contenu collé...",
+    },
     goalLoop: {
       objectiveRequired: "Indique un objectif. Utilisation : /goal <objectif>",
       createFailed: "Impossible de créer l'objectif.",
@@ -2281,6 +2290,18 @@ export default {
       statusExpired: "expirée",
       statusFailed: "échec",
       statusStopped: "arrêtée",
+      toolApprovalTitle: "Approuver les outils sans surveillance",
+      toolApprovalIntro:
+        "Les boucles planifiées s'exécutent sans surveillance. Approuvez facultativement les outils en lecture seule que la boucle peut utiliser. L'envoi d'e-mails, les brouillons, le shell, les écritures de fichiers et les sous-agents restent bloqués.",
+      toolApprovalCommand: "Commande",
+      noReadOnlyTools: "Aucun outil en lecture seule disponible.",
+      allowedTools: "Outils en lecture seule autorisés",
+      allowedToolsHint:
+        "Sélectionnez facultativement les outils que la boucle peut exécuter",
+      autoApprove: "Exécuter les outils approuvés sans demander",
+      autoApproveWarning:
+        "Ces outils s'exécuteront automatiquement à chaque occurrence tant que la boucle est active.",
+      createLoop: "Planifier la boucle",
       errors: {
         INVALID_LOOP_SYNTAX: "La commande /loop n'a pas pu être analysée.",
         INVALID_INTERVAL:

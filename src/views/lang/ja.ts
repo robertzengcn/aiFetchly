@@ -265,12 +265,14 @@ export default {
     priority: "優先度",
     embedding_model_updated_successfully: "埋め込みモデルの更新に成功しました",
     failed_to_update_embedding_model: "埋め込みモデルの更新に失敗しました",
-    local_runtime_not_installed_title: "ローカルAIランタイムがインストールされていません",
+    local_runtime_not_installed_title:
+      "ローカルAIランタイムがインストールされていません",
     local_runtime_not_installed_message:
       "ローカル埋め込みモデル「{model}」にはローカルAIコンポーネント（{runtime}）が必要です。今すぐダウンロードしてインストールすると続行できます。",
     local_runtime_download: "ダウンロードしてインストール",
     local_runtime_download_size: "ダウンロードサイズ: {size}",
-    local_runtime_install_failed: "ローカルAIコンポーネントはインストールされましたが、まだ準備ができていません。もう一度お試しください。",
+    local_runtime_install_failed:
+      "ローカルAIコンポーネントはインストールされましたが、まだ準備ができていません。もう一度お試しください。",
     max_dimensions: "最大次元数",
     model: "モデル",
     dimensions: "次元",
@@ -2147,8 +2149,7 @@ export default {
       "SMTPおよびIMAPのメールサービス接続を設定します。",
     email_receive_description:
       "設定済みのサービスで受信したインバウンドメールを表示・管理します。",
-    email_reply_description:
-      "AIが生成した自動メール返信を確認・監査します。",
+    email_reply_description: "AIが生成した自動メール返信を確認・監査します。",
     directory_description:
       "ディレクトリタスクと収集済みの企業レコードを確認します。",
     maps_description: "地図プロバイダーから地域ビジネスを見つけます。",
@@ -2218,6 +2219,14 @@ export default {
       binaryFile: "バイナリファイル",
       tooLarge: "ファイルが大きすぎて含められません。",
     },
+    pastedText: {
+      chip_label: "貼り付けテキスト #{id} · {lines} 行",
+      truncated_chip_label: "省略貼り付けテキスト #{id} · {lines} 行",
+      view_content: "貼り付け内容を見る",
+      hide_content: "貼り付け内容を隠す",
+      removed: "貼り付け内容を削除",
+      loading: "貼り付け内容を読み込み中...",
+    },
     goalLoop: {
       objectiveRequired: "目標を入力してください。使い方: /goal <目標>",
       createFailed: "目標を作成できませんでした。",
@@ -2250,6 +2259,17 @@ export default {
       statusExpired: "期限切れ",
       statusFailed: "失敗",
       statusStopped: "停止済み",
+      toolApprovalTitle: "無人ツールを承認",
+      toolApprovalIntro:
+        "スケジュール済みループは監視なしで実行されます。ループが使用できる読み取り専用ツールを任意で承認できます。メール送信、下書き、シェル、ファイル書き込み、サブエージェントは引き続きブロックされます。",
+      toolApprovalCommand: "コマンド",
+      noReadOnlyTools: "利用可能な読み取り専用ツールがありません。",
+      allowedTools: "許可する読み取り専用ツール",
+      allowedToolsHint: "ループが実行できるツールを任意で選択",
+      autoApprove: "承認したツールを確認なしで実行",
+      autoApproveWarning:
+        "ループがアクティブな間、これらのツールは毎回自動的に実行されます。",
+      createLoop: "ループをスケジュール",
       errors: {
         INVALID_LOOP_SYNTAX: "/loop コマンドを解析できませんでした。",
         INVALID_INTERVAL: "間隔は 1 分〜 24 時間の範囲で指定してください。",

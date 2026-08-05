@@ -235,12 +235,61 @@
           </span>
         </span>
       </div>
+
+      <div
+        v-if="message.role === 'user' && pastedChips.length > 0"
+        class="v2-message__mentions"
+      >
+        <span
+          v-for="(chip, index) in pastedChips"
+          :key="`${chip.id}-${chip.kind}-${index}`"
+          class="v2-mention-chip"
+        >
+          <v-icon size="x-small">{{ chip.icon }}</v-icon>
+          <span v-if="chip.label" class="v2-mention-chip__label">{{
+            chip.label
+          }}</span>
+
+          <details
+            v-if="chip.hasPreview"
+            class="v2-paste-details"
+            @toggle="
+              (e) =>
+                onPasteDetailsToggle(
+                  chip,
+                  (e.target as HTMLDetailsElement).open
+                )
+            "
+          >
+            <summary>
+              {{
+                t("aiChatV2.pastedText.view_content") ||
+                "View pasted content"
+              }}
+            </summary>
+            <pre v-if="chip.inlineContent">{{ chip.inlineContent }}</pre>
+            <pre
+              v-else-if="
+                chip.contentHash &&
+                pastePreviewByHash[chip.contentHash]?.status === 'ready'
+              "
+            >
+              {{ pastePreviewByHash[chip.contentHash]?.content }}
+            </pre>
+            <div v-else>
+              {{
+                t("aiChatV2.pastedText.loading") || "Loading pasted content..."
+              }}
+            </div>
+          </details>
+        </span>
+      </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import type {
   ChatV2AttachmentMetadata,
@@ -248,12 +297,14 @@ import type {
   ChatV2MessageView,
 } from "@/entityTypes/aiChatV2Types";
 import type { ChatV2AtMentionMetadata } from "@/entityTypes/aiChatAtMentionTypes";
+import type { ChatV2PastedBlockMetadata } from "@/entityTypes/pastedTextTypes";
 import { MessageType } from "@/entityTypes/commonType";
 import SkillApprovalCard from "@/views/components/aiChat/SkillApprovalCard.vue";
 import AiChatV2StreamStatus from "./AiChatV2StreamStatus.vue";
 import AiChatV2PlanApprovalCard from "./AiChatV2PlanApprovalCard.vue";
 import AiArtifactCard from "@/views/components/aiArtifacts/AiArtifactCard.vue";
 import { AI_FILE_OPEN } from "@/config/channellist";
+import { readPasteCache } from "@/views/api/aiChatV2";
 import { windowInvoke } from "@/views/utils/apirequest";
 
 type Status = "idle" | "streaming" | "cancelled" | "error";
@@ -677,6 +728,91 @@ const mentionChips = computed<MentionChip[]>(() => {
       };
     }
   );
+});
+
+type PastePreviewState =
+  | { status: "loading" }
+  | { status: "ready"; content: string }
+  | { status: "missing" };
+
+interface PastedChip {
+  readonly id: number;
+  readonly kind: ChatV2PastedBlockMetadata["kind"];
+  readonly lineCount: number;
+  readonly icon: string;
+  readonly label: string;
+  readonly inlineContent?: string;
+  readonly contentHash?: string;
+  readonly hasPreview: boolean;
+}
+
+const pastePreviewByHash = ref<Record<string, PastePreviewState>>({});
+
+function pastedChipLabel(id: number, lineCount: number): string {
+  return (
+    t("aiChatV2.pastedText.chip_label", { id, lines: lineCount }) ||
+    `Pasted text #${id} · ${lineCount} lines`
+  );
+}
+
+function pastedTruncatedChipLabel(id: number, lineCount: number): string {
+  return (
+    t("aiChatV2.pastedText.truncated_chip_label", { id, lines: lineCount }) ||
+    `Pasted text #${id} · ${lineCount} lines`
+  );
+}
+
+async function onPasteDetailsToggle(
+  chip: PastedChip,
+  open: boolean
+): Promise<void> {
+  if (!open) return;
+  if (chip.inlineContent) return; // inline previews are already present
+  if (!chip.contentHash) return;
+
+  // Already fetched (ready/loading/missing).
+  if (pastePreviewByHash.value[chip.contentHash]) return;
+
+  pastePreviewByHash.value[chip.contentHash] = { status: "loading" };
+  try {
+    const content = await readPasteCache(chip.contentHash);
+    pastePreviewByHash.value[chip.contentHash] = content
+      ? { status: "ready", content }
+      : { status: "missing" };
+  } catch (err) {
+    console.error("[ai-chat-v2] readPasteCache failed:", err);
+    pastePreviewByHash.value[chip.contentHash] = { status: "missing" };
+  }
+}
+
+const pastedChips = computed<PastedChip[]>(() => {
+  if (props.message.role !== "user") return [];
+  const meta = props.message.metadata as
+    | { pastedBlocks?: ChatV2PastedBlockMetadata[] }
+    | undefined;
+  const blocks = meta?.pastedBlocks;
+  if (!blocks || blocks.length === 0) return [];
+
+  return blocks.map((b): PastedChip => {
+    const label =
+      b.kind === "truncated"
+        ? pastedTruncatedChipLabel(b.id, b.lineCount)
+        : pastedChipLabel(b.id, b.lineCount);
+    const icon = b.kind === "truncated" ? "mdi-alert-circle-outline" : "mdi-file-document-outline";
+    const hasPreview =
+      typeof b.inlineContent === "string" ||
+      typeof b.contentHash === "string";
+    return {
+      id: b.id,
+      kind: b.kind,
+      lineCount: b.lineCount,
+      icon,
+      label,
+      inlineContent: b.inlineContent,
+      contentHash: b.contentHash,
+      hasPreview,
+    };
+  });
 });
 </script>
 
