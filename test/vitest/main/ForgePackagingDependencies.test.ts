@@ -32,6 +32,12 @@ async function loadForgeConfig(): Promise<ForgeConfigForTest> {
   return module.default as ForgeConfigForTest;
 }
 
+function isProductionAsarConfig(
+  asar: ForgeConfigForTest["packagerConfig"]["asar"]
+): asar is { readonly unpackDir?: string; readonly unpack?: string } {
+  return typeof asar === "object" && asar !== null;
+}
+
 describe("Forge packaging dependencies", () => {
   it("keeps TypeORM SQL formatter dependency in packaged node_modules", async () => {
     const forgeConfig = await loadForgeConfig();
@@ -69,24 +75,39 @@ describe("Forge packaging dependencies", () => {
   });
 
   it("unpacks dist/childprocess so packaged workers are extractable on Windows", async () => {
-    const forgeConfig = await loadForgeConfig();
-    const unpackDir = forgeConfig.packagerConfig.asar?.unpackDir;
+    const previousCi = process.env.CI;
+    delete process.env.CI;
+    try {
+      const forgeConfig = await loadForgeConfig();
+      const asarConfig = forgeConfig.packagerConfig.asar;
+      expect(isProductionAsarConfig(asarConfig)).toBe(true);
+      if (!isProductionAsarConfig(asarConfig)) {
+        return;
+      }
+      const unpackDir = asarConfig.unpackDir;
 
-    expect(unpackDir).toBeTruthy();
+      expect(unpackDir).toBeTruthy();
 
-    // @electron/asar matches unpackDir against path.dirname(file), so worker
-    // files in dist/childprocess/*.js are checked as "dist/childprocess".
-    expect(minimatch("dist/childprocess", unpackDir as string)).toBe(true);
-    expect(minimatch(".vite/build", unpackDir as string)).toBe(true);
-    expect(minimatch("node_modules/better-sqlite3", unpackDir as string)).toBe(
-      true
-    );
+      // @electron/asar matches unpackDir against path.dirname(file), so worker
+      // files in dist/childprocess/*.js are checked as "dist/childprocess".
+      expect(minimatch("dist/childprocess", unpackDir as string)).toBe(true);
+      expect(minimatch(".vite/build", unpackDir as string)).toBe(true);
+      expect(
+        minimatch("node_modules/better-sqlite3", unpackDir as string)
+      ).toBe(true);
 
-    // Guard against regressing to "**/dist/childprocess/**" alone, which
-    // fails to match the directory itself and leaves workers packed in asar.
-    expect(minimatch("dist/childprocess", "**/dist/childprocess/**")).toBe(
-      false
-    );
+      // Guard against regressing to "**/dist/childprocess/**" alone, which
+      // fails to match the directory itself and leaves workers packed in asar.
+      expect(minimatch("dist/childprocess", "**/dist/childprocess/**")).toBe(
+        false
+      );
+    } finally {
+      if (previousCi === undefined) {
+        delete process.env.CI;
+      } else {
+        process.env.CI = previousCi;
+      }
+    }
   });
 
   it("fails packaging when generated taskCode requires an omitted package", async () => {
