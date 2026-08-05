@@ -260,9 +260,7 @@ function ensureNodeAbiPatched() {
     throw result.error;
   }
   if (result.status !== 0) {
-    throw new Error(
-      `node-abi patch failed with exit code ${result.status}`
-    );
+    throw new Error(`node-abi patch failed with exit code ${result.status}`);
   }
 }
 
@@ -340,8 +338,13 @@ module.exports = {
       // .vite/build holds vec0.* copied by Vite; node_modules holds native deps — both must be real disk.
       // @xenova/transformers + onnxruntime-* + sharp ship native/WASM/.so artifacts that cannot load
       // from inside app.asar, so they must be unpacked alongside better-sqlite3/sqlite-vec.
+      //
+      // IMPORTANT: @electron/asar matches unpackDir against the *directory* of each file
+      // (path.dirname), not the file path. Patterns like "**/dist/childprocess/**" do NOT
+      // match the directory "dist/childprocess" itself, so workers that live directly in
+      // that folder stay packed. Include both the directory and its descendants.
       unpackDir:
-        "**/{.vite,dist/childprocess,node_modules/better-sqlite3,node_modules/sqlite3,node_modules/sqlite-vec,node_modules/@xenova/transformers,node_modules/onnxruntime-node,node_modules/onnxruntime-common,node_modules/sharp,node_modules/sherpa-onnx-node,node_modules/sherpa-onnx-darwin-arm64,node_modules/sherpa-onnx-darwin-x64,node_modules/sherpa-onnx-linux-arm64,node_modules/sherpa-onnx-linux-x64,node_modules/sherpa-onnx-win-ia32,node_modules/sherpa-onnx-win-x64}/**",
+        "{**/.vite/**,**/dist/childprocess,**/dist/childprocess/**,**/node_modules/better-sqlite3,**/node_modules/better-sqlite3/**,**/node_modules/sqlite3,**/node_modules/sqlite3/**,**/node_modules/sqlite-vec,**/node_modules/sqlite-vec/**,**/node_modules/@xenova/transformers,**/node_modules/@xenova/transformers/**,**/node_modules/onnxruntime-node,**/node_modules/onnxruntime-node/**,**/node_modules/onnxruntime-common,**/node_modules/onnxruntime-common/**,**/node_modules/sharp,**/node_modules/sharp/**,**/node_modules/sherpa-onnx-node,**/node_modules/sherpa-onnx-node/**,**/node_modules/sherpa-onnx-darwin-arm64,**/node_modules/sherpa-onnx-darwin-arm64/**,**/node_modules/sherpa-onnx-darwin-x64,**/node_modules/sherpa-onnx-darwin-x64/**,**/node_modules/sherpa-onnx-linux-arm64,**/node_modules/sherpa-onnx-linux-arm64/**,**/node_modules/sherpa-onnx-linux-x64,**/node_modules/sherpa-onnx-linux-x64/**,**/node_modules/sherpa-onnx-win-ia32,**/node_modules/sherpa-onnx-win-ia32/**,**/node_modules/sherpa-onnx-win-x64,**/node_modules/sherpa-onnx-win-x64/**}",
       unpack:
         "**/{vec0.*,node_modules/sherpa-onnx-darwin-arm64/*,node_modules/sherpa-onnx-darwin-x64/*,node_modules/sherpa-onnx-linux-arm64/*,node_modules/sherpa-onnx-linux-x64/*,node_modules/sherpa-onnx-win-ia32/*,node_modules/sherpa-onnx-win-x64/*}",
     },
