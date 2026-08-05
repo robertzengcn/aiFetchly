@@ -160,11 +160,49 @@ function hasWorker(resourcesDir, workerFile) {
   };
 }
 
+function toPosixRelativePath(relativePath) {
+  return relativePath.replace(/\\/g, "/");
+}
+
+function toAsarLookupPath(posixRelativePath) {
+  // @electron/asar Filesystem.searchNodeFromDirectory splits on path.sep.
+  // On Windows, forward-slash paths fail lookup even when listPackage entries
+  // normalize to POSIX form, so convert to platform separators for extractFile.
+  return posixRelativePath.split("/").join(path.sep);
+}
+
+function extractAsarFile(asarPath, posixRelativePath) {
+  const lookupCandidates = [
+    toAsarLookupPath(posixRelativePath),
+    posixRelativePath,
+  ];
+  const tried = new Set();
+
+  for (const candidate of lookupCandidates) {
+    if (tried.has(candidate)) {
+      continue;
+    }
+    tried.add(candidate);
+    try {
+      return asar.extractFile(asarPath, candidate);
+    } catch (error) {
+      if (!(error instanceof Error)) {
+        throw error;
+      }
+      // Keep trying alternate separators / skip stub entries that are not
+      // extractable from the archive body (e.g. unpacked placeholders).
+    }
+  }
+
+  return null;
+}
+
 function readPackagedFile(resourcesDir, relativePath, asarEntries) {
+  const normalizedRelativePath = toPosixRelativePath(relativePath);
   const unpackedPath = path.join(
     resourcesDir,
     "app.asar.unpacked",
-    relativePath
+    ...normalizedRelativePath.split("/")
   );
   if (fs.existsSync(unpackedPath)) {
     return {
@@ -173,15 +211,15 @@ function readPackagedFile(resourcesDir, relativePath, asarEntries) {
     };
   }
 
-  const normalizedRelativePath = relativePath.replace(/\\/g, "/");
   const asarPath = path.join(resourcesDir, "app.asar");
   if (asarEntries.has(normalizedRelativePath)) {
-    return {
-      content: asar
-        .extractFile(asarPath, normalizedRelativePath)
-        .toString("utf-8"),
-      location: path.join(asarPath, normalizedRelativePath),
-    };
+    const content = extractAsarFile(asarPath, normalizedRelativePath);
+    if (content) {
+      return {
+        content: content.toString("utf-8"),
+        location: path.join(asarPath, ...normalizedRelativePath.split("/")),
+      };
+    }
   }
 
   return null;
@@ -207,11 +245,13 @@ function getGeneratedBundleRelativePaths() {
 }
 
 function getBundleCandidates(bundleFile) {
+  // Keep POSIX-relative candidates so asar entry lookups stay consistent on
+  // Windows (path.join would otherwise inject backslashes).
   return [
-    path.join(".vite", "build", bundleFile),
-    path.join(".vite", "build", "childprocess", bundleFile),
-    path.join("dist", bundleFile),
-    path.join("dist", "childprocess", bundleFile),
+    `.vite/build/${bundleFile}`,
+    `.vite/build/childprocess/${bundleFile}`,
+    `dist/${bundleFile}`,
+    `dist/childprocess/${bundleFile}`,
   ];
 }
 

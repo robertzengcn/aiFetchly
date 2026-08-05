@@ -242,6 +242,28 @@ function ensureBetterSqliteElectronBinary() {
   }
 }
 
+/**
+ * Patches node-abi's abi_registry.json with missing Electron ABI entries
+ * (41-44) so @electron/rebuild can resolve Electron 43.x. See
+ * scripts/patch-node-abi.js for the full rationale. Runs as a safety net in
+ * the prePackage hook for cases where electron-forge is launched directly
+ * (e.g. from VS Code/Cursor), bypassing the npm `prepackage` script.
+ */
+function ensureNodeAbiPatched() {
+  const scriptPath = join(__dirname, "scripts", "patch-node-abi.js");
+  const result = spawnSync(process.execPath, [scriptPath], {
+    cwd: __dirname,
+    stdio: "inherit",
+  });
+
+  if (result.error) {
+    throw result.error;
+  }
+  if (result.status !== 0) {
+    throw new Error(`node-abi patch failed with exit code ${result.status}`);
+  }
+}
+
 function fixInteropNamespaceDefault(viteBuildDir) {
   const fs = require("fs");
 
@@ -317,8 +339,13 @@ module.exports = {
       // Phase 9 slim installer: only the database natives (better-sqlite3, sqlite-vec) are unpacked.
       // The AI inference natives (@xenova/transformers, onnxruntime-*, sharp, sherpa-onnx-*) are no
       // longer bundled — they ship as downloadable runtimes (PRD FR-16, design §26.7).
+      //
+      // IMPORTANT: @electron/asar matches unpackDir against the *directory* of each file
+      // (path.dirname), not the file path. Patterns like "**/dist/childprocess/**" do NOT
+      // match the directory "dist/childprocess" itself, so workers that live directly in
+      // that folder stay packed. Include both the directory and its descendants.
       unpackDir:
-        "**/{.vite,node_modules/better-sqlite3,node_modules/sqlite-vec}/**",
+        "{**/.vite/**,**/dist/childprocess,**/dist/childprocess/**,**/node_modules/better-sqlite3,**/node_modules/better-sqlite3/**,**/node_modules/sqlite-vec,**/node_modules/sqlite-vec/**}",
       unpack: "**/vec0.*",
     },
     ignore: (file) => {
@@ -729,6 +756,10 @@ module.exports = {
       ensureBetterSqliteElectronBinary();
     },
     prePackage: async () => {
+      // Patch node-abi before @electron/rebuild runs so it can resolve
+      // Electron 43.x. Safety net for direct electron-forge invocations.
+      ensureNodeAbiPatched();
+
       const projectRoot = normalize(__dirname);
 
       const getExternalNestedDependencies = async (
