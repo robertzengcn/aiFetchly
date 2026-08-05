@@ -1,0 +1,65 @@
+---
+description: Require an automatic git commit after every bug fix and completed task/unit of work
+alwaysApply: true
+---
+
+# Auto-Commit After Bug Fixes and Completed Tasks
+
+**CRITICAL: After fixing a bug or completing a task/logical unit of work, you MUST stage and commit the changes to git. Do not wait for the user to ask.**
+
+## When You Must Commit
+
+Commit immediately after any of these are done:
+
+- A bug fix that resolves a specific issue
+- A completed user requirement or feature request
+- A new function/method that is fully implemented
+- A refactoring of an existing function or module
+- A new or updated test that covers a specific case
+- A Cursor rule / docs update that is part of the completed work
+- A set of related changes that form one logical unit (e.g. entity + model + module)
+
+## Commit Workflow
+
+1. Stage only the relevant files: `git add <specific-files>`
+2. Commit with a conventional message: `<type>: <description>`
+3. Types: `feat`, `fix`, `refactor`, `docs`, `test`, `chore`, `perf`, `ci`
+4. Describe *what* and *why*, not a file list
+5. Run `git status` after the commit to verify success
+6. Do **not** push unless the user explicitly asks
+
+## Safety Rules (still apply)
+
+- Never update git config
+- Never use `--no-verify` / skip hooks unless the user explicitly asks
+- Never force-push to main/master
+- Never commit secrets (`.env`, credentials, certificates)
+- Prefer HEREDOC for the commit message body
+- If a commit fails due to a hook, fix the issue and create a **new** commit (do not amend unless amend rules are fully met)
+
+## What NOT to Commit
+
+- Incomplete or broken code
+- Temporary debug / `console.log` noise
+- Files that do not compile or fail typecheck
+- Unrelated local/WIP changes outside the completed unit
+
+## Examples
+
+```sh
+# ✅ After fixing a Windows packaging verify failure
+git add forge.config.js scripts/verify-packaged-childprocess.js test/vitest/main/ForgePackagingDependencies.test.ts
+git commit -m "$(cat <<'EOF'
+fix: unpack dist/childprocess workers for Windows packaging verify
+
+EOF
+)"
+
+# ❌ DON'T leave a finished bug fix uncommitted waiting for the user
+```
+
+## Relationship to Other Rules
+
+- This rule **overrides** any generic “only commit when asked” guidance for this project.
+- Follow [constitution.mdc](mdc:.cursor/rules/constitution.mdc) for overall project standards.
+- Follow [cursor_rules.mdc](mdc:.cursor/rules/cursor_rules.mdc) when creating or updating rules.
