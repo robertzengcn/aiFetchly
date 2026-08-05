@@ -13,12 +13,7 @@ jobs:
   lint-and-test:
     name: Lint and unit tests
     runs-on: ubuntu-latest
-    timeout-minutes: 90
-    env:
-      # electron-forge package builds 15+ Vite bundles; ubuntu-latest is 7 GB RAM.
-      NODE_OPTIONS: --max-old-space-size=4096
-      # Sequential Vite builds avoid OOM on 7 GB ubuntu-latest runners.
-      ELECTRON_FORGE_VITE_CONCURRENT: "1"
+    timeout-minutes: 60
 
     steps:
       - name: Checkout code
@@ -74,12 +69,6 @@ jobs:
       - name: Run main process unit tests
         run: yarn testmain
 
-      - name: Build Linux package for worker smoke test
-        timeout-minutes: 60
-        run: yarn package
-
-      - name: Resolve packaged worker dependencies
-        run: yarn verify-packaged-childprocess
       - name: Run utility code unit tests
         run: yarn vitest --config vite.utilityCode.ci.config.mjs --run
 
@@ -95,3 +84,69 @@ jobs:
       - name: Restore Electron native module compatibility
         if: always()
         run: yarn rebuild-better-sqlite
+
+  package-smoke:
+    name: Package smoke test
+    needs: lint-and-test
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      # Isolated job + swap: ASAR finalization peaks above 7 GB on ubuntu-latest.
+      NODE_OPTIONS: --max-old-space-size=4096
+      ELECTRON_FORGE_VITE_CONCURRENT: "1"
+      VITE_CONFIG_NATIVE_IGNORE_WARNING: "true"
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
+          cache: yarn
+
+      - name: Set up Python for node-gyp
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Configure node-gyp Python
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHON_BIN="$(python -c 'import sys; print(sys.executable)')"
+          echo "PYTHON=${PYTHON_BIN}" >> "$GITHUB_ENV"
+          echo "npm_config_python=${PYTHON_BIN}" >> "$GITHUB_ENV"
+          echo "NODE_GYP_FORCE_PYTHON=${PYTHON_BIN}" >> "$GITHUB_ENV"
+
+      - name: Install Linux system dependencies for native modules
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsecret-1-dev
+
+      - name: Use HTTPS for GitHub dependencies
+        run: |
+          git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
+          git config --global url."https://github.com/".insteadOf "git@github.com:"
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Add swap for electron-forge packaging
+        run: |
+          set -euo pipefail
+          if [ ! -f /swapfile ]; then
+            sudo fallocate -l 8G /swapfile || sudo dd if=/dev/zero of=/swapfile bs=1M count=8192
+            sudo chmod 600 /swapfile
+            sudo mkswap /swapfile
+          fi
+          sudo swapon /swapfile || true
+          free -h
+
+      - name: Build Linux package for worker smoke test
+        timeout-minutes: 75
+        run: yarn package
+
+      - name: Resolve packaged worker dependencies
+        run: yarn verify-packaged-childprocess

@@ -197,6 +197,54 @@ function getPackageRootName(packageName) {
   return packageName.split("/")[0];
 }
 
+function removeEmptyDirectories(rootDir) {
+  if (!existsSync(rootDir)) {
+    return;
+  }
+
+  const removeIfEmpty = (dirPath) => {
+    let entries;
+    try {
+      entries = readdirSync(dirPath);
+    } catch {
+      return false;
+    }
+
+    let isEmpty = true;
+    for (const entry of entries) {
+      const entryPath = join(dirPath, entry);
+      let entryStats;
+      try {
+        entryStats = statSync(entryPath);
+      } catch {
+        isEmpty = false;
+        continue;
+      }
+
+      if (entryStats.isDirectory()) {
+        if (!removeIfEmpty(entryPath)) {
+          isEmpty = false;
+        }
+      } else {
+        isEmpty = false;
+      }
+    }
+
+    if (isEmpty && normalize(dirPath) !== normalize(rootDir)) {
+      try {
+        rmdirSync(dirPath);
+        return true;
+      } catch {
+        return false;
+      }
+    }
+
+    return false;
+  };
+
+  removeIfEmpty(rootDir);
+}
+
 function getRuntimePackageName(importId) {
   if (
     importId.startsWith(".") ||
@@ -825,58 +873,7 @@ module.exports = {
 
     //  }
     packageAfterPrune: async (_forgeConfig, buildPath) => {
-      function getItemsFromFolder(path, totalCollection = []) {
-        try {
-          const normalizedPath = normalize(path);
-          const childItems = readdirSync(normalizedPath);
-          const getItemStats = statSync(normalizedPath);
-          if (getItemStats.isDirectory()) {
-            totalCollection.push({
-              path: normalizedPath,
-              type: "directory",
-              empty: childItems.length === 0,
-            });
-          }
-          childItems.forEach((childItem) => {
-            const childItemNormalizedPath = join(normalizedPath, childItem);
-            const childItemStats = statSync(childItemNormalizedPath);
-            if (childItemStats.isDirectory()) {
-              getItemsFromFolder(childItemNormalizedPath, totalCollection);
-            } else {
-              totalCollection.push({
-                path: childItemNormalizedPath,
-                type: "file",
-                empty: false,
-              });
-            }
-          });
-        } catch {
-          return;
-        }
-        return totalCollection;
-      }
-
-      const getItems = getItemsFromFolder(buildPath) ?? [];
-      for (const item of getItems) {
-        const DELETE_EMPTY_DIRECTORIES = true;
-        if (item.empty === true) {
-          if (DELETE_EMPTY_DIRECTORIES) {
-            const pathToDelete = normalize(item.path);
-            // one last check to make sure it is a directory and is empty
-            const stats = statSync(pathToDelete);
-            if (!stats.isDirectory()) {
-              // SKIPPING DELETION: pathToDelete is not a directory
-              return;
-            }
-            const childItems = readdirSync(pathToDelete);
-            if (childItems.length !== 0) {
-              // SKIPPING DELETION: pathToDelete is not empty
-              return;
-            }
-            rmdirSync(pathToDelete);
-          }
-        }
-      }
+      removeEmptyDirectories(buildPath);
       verifyGeneratedRuntimeRequires(buildPath);
     },
   },
