@@ -8,6 +8,8 @@
 - **Owner**: Engineering Team
 - **Related areas**: Social Accounts, Electron main process, session persistence,
   secure local storage, browser extension integration
+- **Technical design**:
+  [`social-account-secure-browser-profile-import-technical-design.md`](social-account-secure-browser-profile-import-technical-design.md)
 - **Related files**:
   - `src/entity/AccountCookies.entity.ts`
   - `src/model/AccountCookies.model.ts`
