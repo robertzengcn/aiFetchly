@@ -127,9 +127,7 @@ describe("AiChatV2Composer pasted text", () => {
     });
 
     // Paste should have replaced the draft content with a short placeholder.
-    expect(wrapper.find('[data-testid="composer-input"]').element.value).toBe(
-      "[Pasted text #1 +2 lines]"
-    );
+    expect(textarea.element.value).toBe("[Pasted text #1 +2 lines]");
 
     // Press Enter to send.
     await textarea.trigger("keydown", {
