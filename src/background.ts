@@ -1,7 +1,15 @@
 "use strict";
 import "reflect-metadata";
 // import {ipcMain as ipc} from 'electron-better-ipc';
-import { app, BrowserWindow, Menu, dialog, shell, protocol, net } from "electron";
+import {
+  app,
+  BrowserWindow,
+  Menu,
+  dialog,
+  shell,
+  protocol,
+  net,
+} from "electron";
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const globalShortcut = require("electron").globalShortcut;
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -49,6 +57,7 @@ import ProtocolRegistry from "protocol-registry";
 //import { RemoteSource } from '@/modules/remotesource'
 import { LOGIN_STATUS } from "@/config/channellist";
 import { ScheduleManager } from "@/modules/ScheduleManager";
+import { BackgroundScheduler } from "@/modules/BackgroundScheduler";
 import { runafterbootup } from "@/modules/bootuprun";
 import { YellowPagesController } from "./controller/YellowPagesController";
 import {
@@ -72,6 +81,8 @@ import {
 } from "@/service/AIChatGeneratedImageProtocol";
 import { acquireSingleInstanceLock } from "@/main-process/singleInstanceGuard";
 import type { SingleInstanceApp } from "@/main-process/singleInstanceGuard";
+
+let chatScheduledBackgroundScheduler: BackgroundScheduler | null = null;
 // import { RAGIpcHandlers } from '@/main-process/ragIpcHandlers';
 // import { createProtocol } from 'electron';
 const isDevelopment = process.env.NODE_ENV !== "production";
@@ -282,7 +293,10 @@ function delay(ms: number): Promise<void> {
 }
 
 function isConnectionRefusedError(error: unknown): boolean {
-  if (error instanceof Error && error.message.includes("ERR_CONNECTION_REFUSED")) {
+  if (
+    error instanceof Error &&
+    error.message.includes("ERR_CONNECTION_REFUSED")
+  ) {
     return true;
   }
 
@@ -837,7 +851,11 @@ function initialize() {
       if (userdataPath && userdataPath.length > 0) {
         const scheduleManager = ScheduleManager.getInstance();
         await scheduleManager.handleAppShutdown();
-        log.info("ScheduleManager shutdown completed");
+        if (chatScheduledBackgroundScheduler) {
+          await chatScheduledBackgroundScheduler.stop();
+          chatScheduledBackgroundScheduler = null;
+        }
+        log.info("Schedulers shutdown completed");
       }
     } catch (error) {
       log.error("Failed to shutdown ScheduleManager:", error);
@@ -1011,14 +1029,18 @@ function initialize() {
       //   log.error('Failed to initialize RAG IPC handlers:', error);
       // }
 
-      // Initialize ScheduleManager with auto-start functionality
+      // Initialize the legacy scheduler and the interval-based Chat V2 scheduler.
       try {
         await runafterbootup();
         const scheduleManager = ScheduleManager.getInstance();
         await scheduleManager.initializeWithDatabaseStatus();
-        log.info("ScheduleManager initialized with auto-start functionality");
+        chatScheduledBackgroundScheduler = new BackgroundScheduler(
+          userdataPath
+        );
+        await chatScheduledBackgroundScheduler.start();
+        log.info("Schedulers initialized with auto-start functionality");
       } catch (error) {
-        log.error("Failed to initialize ScheduleManager:", error);
+        log.error("Failed to initialize schedulers:", error);
       }
 
       // Check for orphaned Yellow Pages processes on startup
