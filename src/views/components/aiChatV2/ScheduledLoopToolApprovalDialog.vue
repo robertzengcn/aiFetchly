@@ -17,6 +17,7 @@
           size="small"
           variant="text"
           :disabled="submitting"
+          data-testid="scheduled-loop-approval-cancel"
           @click="cancel"
         />
       </v-card-title>
@@ -125,6 +126,7 @@
           variant="flat"
           :loading="submitting"
           :disabled="loading"
+          data-testid="scheduled-loop-approval-confirm"
           @click="confirm"
         >
           {{ t("aiChatV2.scheduledLoop.createLoop") || "Schedule loop" }}
@@ -186,7 +188,8 @@ watch(
       autoApprove.value = false;
       void loadTools();
     }
-  }
+  },
+  { immediate: true }
 );
 
 function close(): void {
@@ -205,4 +208,8 @@ function confirm(): void {
     autoApproveTools: autoApprove.value && selectedTools.value.length > 0,
   });
 }
+
+// Exposed for component tests (drive the approval state without a full DOM
+// interaction). Not part of the public dialog contract.
+defineExpose({ selectedTools, autoApprove });
 </script>
