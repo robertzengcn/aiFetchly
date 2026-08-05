@@ -4,7 +4,6 @@ import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { build } from "vite";
 import { describe, expect, it } from "vitest";
 
 const require = createRequire(import.meta.url);
@@ -14,6 +13,19 @@ const fixtureEntryPath = path.join(
   "fixtures",
   "mergeDeepViteEntry.mjs"
 );
+
+/**
+ * Vite 8 only exposes types via package "exports", which need
+ * moduleResolution node16/nodenext/bundler. This project's tsconfig uses
+ * "node", so a static `import { build } from "vite"` fails `tsc --noEmit`
+ * (and vite-plugin-checker during electron-forge packaging). Load via
+ * createRequire and a narrow local type instead.
+ */
+interface ViteBuildFn {
+  (inlineConfig: Record<string, unknown>): Promise<unknown>;
+}
+
+const { build } = require("vite") as { build: ViteBuildFn };
 
 /**
  * Regression for packaged ScheduleManager crash:
