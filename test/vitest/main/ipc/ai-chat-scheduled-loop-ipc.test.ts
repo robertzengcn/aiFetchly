@@ -163,6 +163,47 @@ describe("AI Chat scheduled-loop IPC", () => {
     );
   });
 
+  it("forwards approved read-only tools to the module", async () => {
+    mockCreate.mockResolvedValue({
+      conversationId: "v2-conv",
+      commandMessageId: "cmd-1",
+      resultMessageId: "res-1",
+      loop: VIEW,
+    });
+    const res = await call(AI_CHAT_V2_SCHEDULED_LOOP_CREATE, {
+      conversationId: "v2-conv",
+      rawCommand: "/loop 5m check email",
+      prompt: "check email",
+      intervalMs: 300_000,
+      maxRuns: 24,
+      maxLifetimeMs: 86_400_000,
+      allowedTools: ["list_email_inboxes"],
+      autoApproveTools: true,
+    });
+    expect(res.status).toBe(true);
+    expect(mockCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allowedTools: ["list_email_inboxes"],
+        autoApproveTools: true,
+      })
+    );
+  });
+
+  it("rejects a tool list with too many entries at the schema layer", async () => {
+    const res = await call(AI_CHAT_V2_SCHEDULED_LOOP_CREATE, {
+      conversationId: "v2-conv",
+      rawCommand: "/loop 5m x",
+      prompt: "x",
+      intervalMs: 300_000,
+      maxRuns: 24,
+      maxLifetimeMs: 86_400_000,
+      allowedTools: Array.from({ length: 51 }, (_, i) => `tool_${i}`),
+      autoApproveTools: true,
+    });
+    expect(res.status).toBe(false);
+    expect(mockCreate).not.toHaveBeenCalled();
+  });
+
   it("maps a ScheduledLoopError code to a stable message", async () => {
     const { ScheduledLoopError } = await import(
       "@/modules/AIChatScheduledLoopModule"

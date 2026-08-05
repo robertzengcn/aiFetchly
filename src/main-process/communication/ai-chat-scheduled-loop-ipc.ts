@@ -67,6 +67,8 @@ const createSchema = z.object({
   maxRuns: z.number().int().positive(),
   maxLifetimeMs: z.number().int().positive(),
   model: z.string().optional(),
+  allowedTools: z.array(z.string().min(1)).max(50).optional(),
+  autoApproveTools: z.boolean().optional(),
 });
 
 const conversationSchema = z.object({

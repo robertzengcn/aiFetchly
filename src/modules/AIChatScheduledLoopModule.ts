@@ -5,6 +5,10 @@ import { AiMessageTaskModel } from "@/model/AiMessageTask.model";
 import { AiMessageTaskRunModel } from "@/model/AiMessageTaskRun.model";
 import { ScheduledLoopRunRegistry } from "@/service/ScheduledLoopRunRegistry";
 import {
+  SCHEDULED_LOOP_MAX_ALLOWED_TOOLS,
+  validateScheduledLoopAllowedTools,
+} from "@/service/ScheduledAiToolPolicy";
+import {
   SCHEDULED_LOOP_DEFAULT_MISFIRE_POLICY,
   SCHEDULED_LOOP_DEFAULT_OVERLAP_POLICY,
   isValidIntervalMs,
@@ -86,6 +90,21 @@ function formatLocalDateTime(value: Date): string {
   return `${fields.year}-${fields.month}-${fields.day} ${fields.hour}:${fields.minute}`;
 }
 
+/** De-duplicate and trim a requested allowed-tools list, dropping empties. */
+function dedupeTools(tools: readonly string[] | undefined): string[] {
+  if (!tools) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of tools) {
+    if (typeof raw !== "string") continue;
+    const name = raw.trim();
+    if (name.length === 0 || seen.has(name)) continue;
+    seen.add(name);
+    out.push(name);
+  }
+  return out;
+}
+
 /**
  * Main-process orchestration for AI Chat V2 scheduled loops.
  *
@@ -132,6 +151,21 @@ export class AIChatScheduledLoopModule extends BaseModule {
       throw new ScheduledLoopError("INVALID_LOOP_LIMIT");
     }
 
+    // Tool approval (FR-16): only curated read-only built-in tools may run
+    // unattended. Validate BEFORE any persistence so a bad request leaves no
+    // command/confirmation rows. autoApprove without allowedTools is a no-op
+    // (persisted as empty + false), not an error.
+    const requestedTools = dedupeTools(request.allowedTools);
+    if (requestedTools.length > SCHEDULED_LOOP_MAX_ALLOWED_TOOLS) {
+      throw new ScheduledLoopError("INVALID_LOOP_LIMIT");
+    }
+    const toolValidation = validateScheduledLoopAllowedTools(requestedTools);
+    if (!toolValidation.valid) {
+      throw new ScheduledLoopError("BLOCKED_BY_POLICY");
+    }
+    const autoApproveTools =
+      request.autoApproveTools === true && requestedTools.length > 0;
+
     // Resolve one authoritative v2-* conversation id (never an ai-msg-* fallback).
     const conversationId = this.chatV2.createConversationIfNeeded(
       request.conversationId
@@ -177,8 +211,8 @@ export class AIChatScheduledLoopModule extends BaseModule {
         message: request.prompt,
         conversationId,
         model: request.model,
-        allowedTools: [],
-        autoApproveTools: false,
+        allowedTools: requestedTools,
+        autoApproveTools,
         maxToolCalls: 10,
         maxRuntimeMs: 300_000,
         maxContinueCalls: 10,
@@ -201,7 +235,9 @@ export class AIChatScheduledLoopModule extends BaseModule {
         request.intervalMs,
         request.maxRuns,
         request.maxLifetimeMs,
-        nextRunAt
+        nextRunAt,
+        requestedTools,
+        autoApproveTools
       );
       await this.chatV2.saveAssistantMessage({
         conversationId,
@@ -330,13 +366,20 @@ export class AIChatScheduledLoopModule extends BaseModule {
     intervalMs: number,
     maxRuns: number,
     maxLifetimeMs: number,
-    nextRunAt: Date
+    nextRunAt: Date,
+    allowedTools: readonly string[],
+    autoApproveTools: boolean
   ): string {
     const next = formatLocalDateTime(nextRunAt);
+    const toolsLine =
+      autoApproveTools && allowedTools.length > 0
+        ? ` Unattended read-only tools: ${allowedTools.join(", ")}.`
+        : " No tools approved — the loop can only respond from context.";
     return (
       `Scheduled every ${describeInterval(intervalMs)}. ` +
       `Maximum ${maxRuns} runs or ${describeLifetime(maxLifetimeMs)}. ` +
-      `Next run: ${next}.`
+      `Next run: ${next}.` +
+      toolsLine
     );
   }
 

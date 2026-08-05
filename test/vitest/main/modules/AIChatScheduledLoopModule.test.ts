@@ -170,6 +170,90 @@ describe("AIChatScheduledLoopModule.create", () => {
     expect(ids).toContain(resp.commandMessageId);
     expect(ids).toContain(resp.resultMessageId);
   });
+
+  it("persists approved read-only tools and auto-approve on the task", async () => {
+    const mod = new AIChatScheduledLoopModule();
+    await SqliteDb.ensureInitialized();
+    const resp = await mod.create({
+      conversationId: "v2-conv-tools",
+      rawCommand: "/loop 1m check email",
+      prompt: "check email",
+      intervalMs: 60_000,
+      maxRuns: 24,
+      maxLifetimeMs: 24 * 60 * 60 * 1000,
+      allowedTools: ["list_email_inboxes", "list_email_services"],
+      autoApproveTools: true,
+    });
+    const { AIChatV2Module } = await import("@/modules/AIChatV2Module");
+    const messages = await new AIChatV2Module().getConversationMessages(
+      "v2-conv-tools"
+    );
+    const confirmation = messages.find(
+      (m) => m.messageId === resp.resultMessageId
+    );
+    expect(confirmation?.content).toMatch(/list_email_inboxes/);
+    // Persisted task carries the validated policy.
+    const { ScheduleTaskModel } = await import("@/model/ScheduleTask.model");
+    const schedule = await new ScheduleTaskModel(
+      process.env.AIFETCHLY_TEST_DBPATH ?? tmpDir
+    ).findChatScheduledLoop("v2-conv-tools");
+    expect(schedule).toBeTruthy();
+    const { AiMessageTaskModel } = await import("@/model/AiMessageTask.model");
+    const task = await new AiMessageTaskModel(
+      process.env.AIFETCHLY_TEST_DBPATH ?? tmpDir
+    ).findChatScheduledTask(schedule!.task_id);
+    expect(task).toBeTruthy();
+    expect(task!.auto_approve_tools).toBe(true);
+    expect(task!.allowed_tools_json).toContain("list_email_inboxes");
+    expect(task!.allowed_tools_json).toContain("list_email_services");
+  });
+
+  it("rejects dangerous or unknown tools with BLOCKED_BY_POLICY before persisting", async () => {
+    const mod = new AIChatScheduledLoopModule();
+    await SqliteDb.ensureInitialized();
+    await expect(
+      mod.create({
+        conversationId: "v2-conv-blocked",
+        rawCommand: "/loop 1m x",
+        prompt: "x",
+        intervalMs: 60_000,
+        maxRuns: 24,
+        maxLifetimeMs: 24 * 60 * 60 * 1000,
+        allowedTools: ["run_subagent"],
+        autoApproveTools: true,
+      })
+    ).rejects.toMatchObject({ code: "BLOCKED_BY_POLICY" });
+    // Nothing persisted.
+    const { ScheduleTaskModel } = await import("@/model/ScheduleTask.model");
+    const found = await new ScheduleTaskModel(
+      process.env.AIFETCHLY_TEST_DBPATH ?? tmpDir
+    ).findChatScheduledLoop("v2-conv-blocked");
+    expect(found).toBeNull();
+  });
+
+  it("treats autoApprove without allowedTools as a no-op (no tools persisted)", async () => {
+    const mod = new AIChatScheduledLoopModule();
+    await SqliteDb.ensureInitialized();
+    await mod.create({
+      conversationId: "v2-conv-noop",
+      rawCommand: "/loop 1m x",
+      prompt: "x",
+      intervalMs: 60_000,
+      maxRuns: 24,
+      maxLifetimeMs: 24 * 60 * 60 * 1000,
+      autoApproveTools: true,
+    });
+    const { ScheduleTaskModel } = await import("@/model/ScheduleTask.model");
+    const schedule = await new ScheduleTaskModel(
+      process.env.AIFETCHLY_TEST_DBPATH ?? tmpDir
+    ).findChatScheduledLoop("v2-conv-noop");
+    const { AiMessageTaskModel } = await import("@/model/AiMessageTask.model");
+    const task = await new AiMessageTaskModel(
+      process.env.AIFETCHLY_TEST_DBPATH ?? tmpDir
+    ).findChatScheduledTask(schedule!.task_id);
+    expect(task!.auto_approve_tools).toBe(false);
+    expect(task!.allowed_tools_json).toBe("[]");
+  });
 });
 
 describe("AIChatScheduledLoopModule control operations", () => {
