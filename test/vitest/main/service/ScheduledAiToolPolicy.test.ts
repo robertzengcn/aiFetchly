@@ -112,11 +112,20 @@ describe("ScheduledAiToolPolicy canAutoApproveScheduledTool", () => {
     expect(decision.reason).toMatch(/Auto-approve is not enabled/);
   });
 
-  it("denies when the tool is absent from the task allowlist", () => {
+  it("auto-approves read-only tools without a per-tool allowlist entry", () => {
     const decision = canAutoApproveScheduledTool({
       skill: skill("list_email_services"),
       taskPolicy: policy({ allowedTools: ["list_email_inboxes"] }),
       toolName: "list_email_services",
+    });
+    expect(decision.allowed).toBe(true);
+  });
+
+  it("denies automation tools absent from the task allowlist", () => {
+    const decision = canAutoApproveScheduledTool({
+      skill: skill("proxy_check"),
+      taskPolicy: policy({ allowedTools: ["list_email_inboxes"] }),
+      toolName: "proxy_check",
     });
     expect(decision.allowed).toBe(false);
     expect(decision.reason).toMatch(/allowed tools list/);
