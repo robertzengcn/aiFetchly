@@ -623,6 +623,17 @@ module.exports = {
     {
       name: "@electron-forge/plugin-vite",
       config: {
+        // By default plugin-vite runs every build target concurrently
+        // (see @electron-forge/plugin-vite VitePlugin.js: `concurrent ?? true`).
+        // On resource-constrained CI runners (2 vCPU / 7 GB) running 17 Vite
+        // bundles in parallel exhausts memory, leaving the heaviest targets
+        // (main, renderer, taskCode, and the puppeteer-bundling worker builds)
+        // stuck — `yarn package` then hangs until the runner is shut down
+        // (this started once the YellowPagesScraperProcess target was added,
+        // pushing the concurrent count past what the runner can sustain).
+        // Limit parallelism on CI; keep full concurrency for local dev where
+        // host resources are typically ample.
+        concurrent: process.env.CI ? 4 : true,
         // `build` can specify multiple entry builds, which can be
         // Main process, Preload scripts, Worker process, etc.
         build: [
