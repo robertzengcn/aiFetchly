@@ -2314,7 +2314,7 @@ export default {
       statusStopped: "detenido",
       toolApprovalTitle: "Aprobar herramientas desatendidas",
       toolApprovalIntro:
-        "Los bucles programados se ejecutan sin supervisión. Las herramientas de solo lectura se aprueban automáticamente al habilitar herramientas desatendidas. Escritura/correo y sincronización de bandeja requieren confirmación explícita abajo. Shell, subagentes y marcar-procesado siguen bloqueados.",
+        "Los bucles programados se ejecutan sin supervisión. Las herramientas de solo lectura se aprueban automáticamente al habilitar herramientas desatendidas. Escritura/correo requieren confirmación explícita abajo. Shell, subagentes y marcar-procesado siguen bloqueados.",
       toolApprovalCommand: "Comando",
       noReadOnlyTools: "No hay herramientas de solo lectura disponibles.",
       allowedTools: "Herramientas de solo lectura permitidas",
@@ -2328,8 +2328,7 @@ export default {
       readOnlyAutoApproved:
         "Las herramientas de solo lectura se aprueban automáticamente",
       automationTools: "Herramientas de automatización",
-      automationToolsHint:
-        "Opcional — selecciona comprobaciones de red o sincronización de bandeja",
+      automationToolsHint: "Opcional — selecciona comprobaciones de red",
       highImpactTools:
         "Herramientas de escritura / correo — escribe el nombre para habilitar",
       highImpactWarning:

@@ -64,7 +64,7 @@ const TOOLS: SchedulableAiToolSummary[] = [
     requiresConfirmation: false,
     schedulable: true,
     autoApproveAllowed: true,
-    riskLevel: "medium",
+    riskLevel: "low",
   },
 ];
 
@@ -169,7 +169,7 @@ describe("ScheduledLoopToolApprovalDialog (3-tier)", () => {
     expect(payload.allowedTools).toEqual([]);
   });
 
-  it("pre-enables tools and fetch_unread_emails for inbox-check prompts", async () => {
+  it("pre-enables unattended tools for inbox-check prompts (unread fetch is read-only)", async () => {
     vi.mocked(listAvailableAiMessageTaskTools).mockResolvedValue(TOOLS);
     const wrapper = mountDialog({
       rawCommand: "/loop 1m check whether there is new email in my emaibox",
@@ -178,7 +178,7 @@ describe("ScheduledLoopToolApprovalDialog (3-tier)", () => {
     await flushPromises();
     const vm = vmOf(wrapper);
     expect(vm.toolsEnabled).toBe(true);
-    expect(vm.selectedAutomation).toContain("fetch_unread_emails");
+    expect(vm.selectedAutomation).not.toContain("fetch_unread_emails");
     await wrapper
       .find('[data-testid="scheduled-loop-approval-confirm"]')
       .trigger("click");
@@ -186,8 +186,9 @@ describe("ScheduledLoopToolApprovalDialog (3-tier)", () => {
       allowedTools: string[];
       autoApproveTools: boolean;
     };
+    // Empty allowlist + autoApprove → read-only set includes fetch_unread_emails.
     expect(payload.autoApproveTools).toBe(true);
-    expect(payload.allowedTools).toContain("fetch_unread_emails");
+    expect(payload.allowedTools).toEqual([]);
   });
 
   it("does NOT confirm a high-impact tool until its exact name is typed", async () => {

@@ -53,7 +53,7 @@ describe("ScheduledAiToolPolicy read-only allowlist", () => {
     expect(isScheduledReadOnlyTool("")).toBe(false);
   });
 
-  it("mutating mark-processed stays permanently blocked; inbox sync is schedulable", () => {
+  it("mutating mark-processed stays permanently blocked; unread fetch is read-only", () => {
     expect(
       SCHEDULED_LOOP_ALWAYS_BLOCKED_TOOLS.has("mark_email_processed")
     ).toBe(true);
@@ -63,7 +63,7 @@ describe("ScheduledAiToolPolicy read-only allowlist", () => {
     expect(SCHEDULED_LOOP_ALWAYS_BLOCKED_TOOLS.has("get_email_message")).toBe(
       false
     );
-    expect(isScheduledReadOnlyTool("fetch_unread_emails")).toBe(false);
+    expect(isScheduledReadOnlyTool("fetch_unread_emails")).toBe(true);
     expect(isScheduledReadOnlyTool("get_email_message")).toBe(false);
   });
 });
@@ -167,7 +167,7 @@ describe("ScheduledAiToolPolicy canAutoApproveScheduledTool", () => {
     expect(decision.reason).toMatch(/permanently blocked/);
   });
 
-  it("permanently blocks shell and mark-processed; inbox sync/read are approvable", () => {
+  it("permanently blocks shell and mark-processed; unread fetch auto-approves as read-only", () => {
     for (const name of ["shell_execute", "mark_email_processed"]) {
       const decision = canAutoApproveScheduledTool({
         skill: skill(name),
@@ -177,17 +177,23 @@ describe("ScheduledAiToolPolicy canAutoApproveScheduledTool", () => {
       expect(decision.allowed, `${name} should be blocked`).toBe(false);
     }
 
+    // fetch_unread_emails is read-only: auto-approves with empty allowlist.
     expect(
       canAutoApproveScheduledTool({
         skill: skill("fetch_unread_emails"),
-        taskPolicy: policy({
-          allowedTools: ["fetch_unread_emails"],
-          autoApproveTools: true,
-        }),
+        taskPolicy: policy({ allowedTools: [], autoApproveTools: true }),
         toolName: "fetch_unread_emails",
       }).allowed
     ).toBe(true);
 
+    // get_email_message stays high-impact: needs explicit allowlist.
+    expect(
+      canAutoApproveScheduledTool({
+        skill: skill("get_email_message"),
+        taskPolicy: policy({ allowedTools: [], autoApproveTools: true }),
+        toolName: "get_email_message",
+      }).allowed
+    ).toBe(false);
     expect(
       canAutoApproveScheduledTool({
         skill: skill("get_email_message"),
@@ -198,17 +204,9 @@ describe("ScheduledAiToolPolicy canAutoApproveScheduledTool", () => {
         toolName: "get_email_message",
       }).allowed
     ).toBe(true);
-
-    expect(
-      canAutoApproveScheduledTool({
-        skill: skill("fetch_unread_emails"),
-        taskPolicy: policy({ allowedTools: [], autoApproveTools: true }),
-        toolName: "fetch_unread_emails",
-      }).allowed
-    ).toBe(false);
   });
 
-  it("suggests fetch_unread_emails for inbox-check prompts", () => {
+  it("detects inbox-check intent; automation suggestions stay empty", () => {
     expect(
       hasScheduledLoopEmailInboxIntent(
         "check whether there is new email in my emaibox"
@@ -218,7 +216,7 @@ describe("ScheduledAiToolPolicy canAutoApproveScheduledTool", () => {
       suggestScheduledLoopAutomationTools(
         "check whether there is new email in my emaibox"
       )
-    ).toEqual(["fetch_unread_emails"]);
+    ).toEqual([]);
     expect(suggestScheduledLoopAutomationTools("summarize status")).toEqual([]);
   });
 

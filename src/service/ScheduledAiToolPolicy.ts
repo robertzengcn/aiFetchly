@@ -34,9 +34,8 @@ import type {
  * reply-state without a human in the loop. These stay blocked even if a user
  * requests them — they are not approvable.
  *
- * Inbox sync/read tools (`fetch_unread_emails`, `get_email_message`) are
- * intentionally schedulable (automation / high-impact) so loops can check
- * mailboxes; they require explicit approval at loop creation.
+ * Inbox check sync (`fetch_unread_emails`) is treated as read-only auto-approve.
+ * Full message body access (`get_email_message`) remains high-impact.
  */
 export const SCHEDULED_LOOP_ALWAYS_BLOCKED_TOOLS: ReadonlySet<string> = new Set(
   ["run_subagent", "shell_execute", "mark_email_processed"]
@@ -50,7 +49,7 @@ export const SCHEDULED_LOOP_ALWAYS_BLOCKED_TOOLS: ReadonlySet<string> = new Set(
  * by injected content, in exchange for not having to approve each one.
  */
 export const SCHEDULED_LOOP_READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
-  // Email inbox/service configuration (read-only listings)
+  // Email inbox/service configuration (read-only listings + bounded unread sync)
   "list_email_inboxes",
   "list_email_services",
   "get_email_service_config",
@@ -58,6 +57,7 @@ export const SCHEDULED_LOOP_READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
   "list_email_filters",
   "list_email_search_tasks",
   "get_email_search_task_emails",
+  "fetch_unread_emails",
   // Schedule inspection (read-only)
   "list_schedules",
   "get_schedule_details",
@@ -91,17 +91,15 @@ export const SCHEDULED_LOOP_HIGH_IMPACT_TOOLS: ReadonlySet<string> = new Set([
 
 /**
  * Automation tools that are schedulable in unattended mode but require explicit
- * allowlisting because they perform network checks, inbound sync, or other
- * side effects.
+ * allowlisting because they perform network checks or other side effects.
  */
 export const SCHEDULED_LOOP_AUTOMATION_TOOLS: ReadonlySet<string> = new Set([
   "proxy_check",
-  "fetch_unread_emails",
 ]);
 
 /**
- * Natural-language inbox-check intent used to pre-enable tools for scheduled
- * loops that ask to check email / inbox / mailbox.
+ * Natural-language inbox-check intent used to pre-enable unattended tools for
+ * scheduled loops that ask to check email / inbox / mailbox.
  */
 export const SCHEDULED_LOOP_EMAIL_INBOX_INTENT_RE =
   /\b(inbox|inboxes|mailbox|mailboxes|emaibox)\b|\b(unread|new|received|inbound)\s+emails?\b|\bcheck(?:ing)?\b[^.]{0,60}?\b(emails?|mails?|inbox|mailbox|emaibox)\b|\b(emails?|mails?)\b[^.]{0,60}?\b(inbox|mailbox|emaibox|unread)\b/i;
@@ -112,14 +110,13 @@ export function hasScheduledLoopEmailInboxIntent(prompt: string): boolean {
 }
 
 /**
- * Automation tools to pre-select when creating a loop whose prompt matches
- * inbox-check intent. Callers still require the user to enable unattended tools.
+ * @deprecated Inbox sync is now read-only auto-approve. Kept for callers that
+ * still invoke suggestion helpers; always returns an empty list.
  */
 export function suggestScheduledLoopAutomationTools(
-  prompt: string
+  _prompt: string
 ): readonly string[] {
-  if (!hasScheduledLoopEmailInboxIntent(prompt)) return [];
-  return ["fetch_unread_emails"];
+  return [];
 }
 
 /** Maximum number of tools a single scheduled loop may approve. */

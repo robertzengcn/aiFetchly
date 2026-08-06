@@ -2302,7 +2302,7 @@ export default {
       statusStopped: "gestoppt",
       toolApprovalTitle: "Unbeaufsichtigte Tools genehmigen",
       toolApprovalIntro:
-        "Geplante Schleifen laufen ohne Aufsicht. Schreibgeschützte Tools werden automatisch genehmigt, wenn unbeaufsichtigte Tools aktiviert sind. Schreib-/E-Mail-Tools und Posteingangs-Sync erfordern unten eine explizite Bestätigung. Shell, Subagenten und Als-verarbeitet-markieren bleiben gesperrt.",
+        "Geplante Schleifen laufen ohne Aufsicht. Schreibgeschützte Tools werden automatisch genehmigt, wenn unbeaufsichtigte Tools aktiviert sind. Schreib-/E-Mail-Tools erfordern unten eine explizite Bestätigung. Shell, Subagenten und Als-verarbeitet-markieren bleiben gesperrt.",
       toolApprovalCommand: "Befehl",
       noReadOnlyTools: "Keine schreibgeschützten Tools verfügbar.",
       allowedTools: "Erlaubte schreibgeschützte Tools",
@@ -2316,8 +2316,7 @@ export default {
       readOnlyAutoApproved:
         "Schreibgeschützte Tools werden automatisch genehmigt",
       automationTools: "Automatisierungs-Tools",
-      automationToolsHint:
-        "Optional — Netzwerkprüfungen oder Posteingangs-Sync auswählen",
+      automationToolsHint: "Optional — Netzwerkprüfungen auswählen",
       highImpactTools: "Schreib-/E-Mail-Tools — Namen eingeben zum Aktivieren",
       highImpactWarning:
         "Diese werden bei jedem Durchlauf unbeaufsichtigt ausgeführt. Injizierter Inhalt könnte Dateien überschreiben oder E-Mails in Ihrem Namen senden. Geben Sie jeden Tool-Namen ein, um zu bestätigen.",

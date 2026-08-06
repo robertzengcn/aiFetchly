@@ -30,7 +30,7 @@
         <p class="text-body-2 mb-3">
           {{
             t("aiChatV2.scheduledLoop.toolApprovalIntro") ||
-            "Scheduled loops run without supervision. Read-only tools auto-approve when unattended tools are enabled. Write/email tools and inbound sync require explicit confirmation below. Shell, subagents, and mark-processed stay blocked."
+            "Scheduled loops run without supervision. Read-only tools auto-approve when unattended tools are enabled. Write/email tools require explicit confirmation below. Shell, subagents, and mark-processed stay blocked."
           }}
         </p>
 
@@ -194,7 +194,6 @@ import { listAvailableAiMessageTaskTools } from "@/views/api/aiMessageTask";
 import type { SchedulableAiToolSummary } from "@/entityTypes/aiMessageTaskTypes";
 import {
   hasScheduledLoopEmailInboxIntent,
-  suggestScheduledLoopAutomationTools,
 } from "@/service/ScheduledAiToolPolicy";
 
 const props = defineProps<{
@@ -248,11 +247,11 @@ function onConfirmInput(name: string): void {
 
 function applyPromptSuggestions(): void {
   const prompt = props.prompt ?? props.rawCommand ?? "";
-  if (!hasScheduledLoopEmailInboxIntent(prompt)) return;
-  toolsEnabled.value = true;
-  const suggested = suggestScheduledLoopAutomationTools(prompt);
-  const available = new Set(automationTools.value.map((tool) => tool.name));
-  selectedAutomation.value = suggested.filter((name) => available.has(name));
+  // Inbox-check prompts only need the master switch: fetch_unread_emails is
+  // in the read-only auto-approve set.
+  if (hasScheduledLoopEmailInboxIntent(prompt)) {
+    toolsEnabled.value = true;
+  }
 }
 
 async function loadTools(): Promise<void> {

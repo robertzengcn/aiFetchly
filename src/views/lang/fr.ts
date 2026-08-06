@@ -2295,7 +2295,7 @@ export default {
       statusStopped: "arrêtée",
       toolApprovalTitle: "Approuver les outils sans surveillance",
       toolApprovalIntro:
-        "Les boucles planifiées s'exécutent sans surveillance. Les outils en lecture seule sont auto-approuvés lorsque les outils non supervisés sont activés. Écriture/e-mail et sync boîte de réception nécessitent une confirmation explicite ci-dessous. Shell, sous-agents et marquage traité restent bloqués.",
+        "Les boucles planifiées s'exécutent sans surveillance. Les outils en lecture seule sont auto-approuvés lorsque les outils non supervisés sont activés. Écriture/e-mail nécessitent une confirmation explicite ci-dessous. Shell, sous-agents et marquage traité restent bloqués.",
       toolApprovalCommand: "Commande",
       noReadOnlyTools: "Aucun outil en lecture seule disponible.",
       allowedTools: "Outils en lecture seule autorisés",
@@ -2308,8 +2308,7 @@ export default {
       enableTools: "Autoriser les outils à s'exécuter sans surveillance",
       readOnlyAutoApproved: "Les outils en lecture seule sont auto-approuvés",
       automationTools: "Outils d'automatisation",
-      automationToolsHint:
-        "Optionnel — sélectionner des vérifications réseau ou la sync boîte de réception",
+      automationToolsHint: "Optionnel — sélectionner des vérifications réseau",
       highImpactTools:
         "Outils d'écriture / e-mail — saisir le nom pour activer",
       highImpactWarning:
