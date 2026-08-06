@@ -2,6 +2,7 @@
 import type {
   OpenAIChatCompletionChunk,
   OpenAIChatCompletionRequest,
+  OpenAIChatImage,
   OpenAIChatMessage,
   OpenAITool,
   OpenAIToolCall,
@@ -61,6 +62,7 @@ import {
   stripConsumedImageHandoffs,
 } from "@/service/AIChatImageHandoff";
 import { getDefaultToolJobRegistry } from "@/service/ToolJobRegistry";
+import { extractToolResultImages } from "@/service/toolResultImageHarvest";
 import { USER_AI_ENABLED } from "@/config/usersetting";
 import { Token } from "@/modules/token";
 import { TOOL_CATALOG_SEARCH_TOOL_NAME } from "@/config/toolCatalogConfig";
@@ -619,6 +621,12 @@ export class AIChatQueryLoop {
           announcedDeferredNames
         );
       }
+
+      // FR-4: images contributed by tool results this turn (e.g. a
+      // run_subagent batch worker's edited outputs). Folded into the
+      // completed result.images so the engine persists + renders them like
+      // any other generated image.
+      const collectedToolImages: OpenAIChatImage[] = [];
 
       for (
         let round = input.startRound;
@@ -1408,6 +1416,13 @@ export class AIChatQueryLoop {
             preparedCall.blockedResult ??
             (await this.executePreparedToolWithTimeout(input, preparedCall));
 
+          // FR-4: a tool (e.g. run_subagent batch worker) may contribute
+          // generated/edited image descriptors on result.outputImages. Fold
+          // them into the turn's image set; non-batch tools contribute nothing.
+          for (const outImg of extractToolResultImages(toolResult)) {
+            collectedToolImages.push(outImg);
+          }
+
           // If the abort fired during the tool (e.g. user clicked Stop during
           // async polling), skip the tool_result emit — the outer abort handler
           // will return { type: "cancelled" } for the whole turn. Emitting a
@@ -1597,7 +1612,10 @@ export class AIChatQueryLoop {
         assistantMessageId: input.assistantMessageId,
         fullContent,
         finishReason,
-        images: finalAccumulator?.state.images,
+        images: [
+          ...(finalAccumulator?.state.images ?? []),
+          ...collectedToolImages,
+        ],
         model: finalAccumulator?.state.model,
         responseId: finalAccumulator?.state.responseId,
         totalTokens: lastReportedUsage?.totalTokens,
