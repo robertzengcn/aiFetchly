@@ -1449,6 +1449,9 @@ export default {
     user_ai_workspace_manual_memory: "Mémoire d'espace de travail manuelle",
     "ai-workspace-manual-memory-description":
       "Autorise la création, modification et suppression manuelles des mémoires d'espace de travail. La désactivation ne supprime pas les mémoires stockées.",
+    user_ai_desktop_notify: "Notification de fin sur le bureau",
+    "ai-desktop-notify-description":
+      "Affiche une notification en bas à droite lorsque l'agent IA principal a terminé une réponse ou qu'un plan est prêt à être approuvé (uniquement si l'application est en arrière-plan).",
   },
   skills: {
     title: "Gestion des Compétences",

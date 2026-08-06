@@ -804,11 +804,18 @@ interface AiPromptRequest {
   text: string;
 }
 
+interface AiOpenConversationRequest {
+  id: number;
+  conversationId: string;
+}
+
 const props = defineProps<{
   promptRequest?: AiPromptRequest | null;
+  openConversationRequest?: AiOpenConversationRequest | null;
 }>();
 
 const lastHandledPromptRequestId = ref<number | null>(null);
+const lastHandledOpenConversationRequestId = ref<number | null>(null);
 const conversations = ref<ChatV2ConversationSummary[]>([]);
 const activeConversationId = ref<string | null>(null);
 const messages = ref<ChatV2MessageView[]>([]);
@@ -3875,6 +3882,18 @@ watch(
   [() => props.promptRequest, chatIsRunning],
   ([request]) => {
     sendPromptRequest(request);
+  }
+);
+
+watch(
+  () => props.openConversationRequest,
+  (request) => {
+    if (!request) return;
+    if (lastHandledOpenConversationRequestId.value === request.id) return;
+    const conversationId = request.conversationId.trim();
+    if (!conversationId) return;
+    lastHandledOpenConversationRequestId.value = request.id;
+    onSelectConversation(conversationId);
   }
 );
 

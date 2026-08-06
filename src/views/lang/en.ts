@@ -1456,6 +1456,9 @@ export default {
     user_ai_workspace_manual_memory: "Manual Workspace Memory",
     "ai-workspace-manual-memory-description":
       "Allow creating, editing, and deleting workspace memories by hand. Disabling does not delete stored memories.",
+    user_ai_desktop_notify: "Desktop Completion Notice",
+    "ai-desktop-notify-description":
+      "Show a bottom-right desktop notice when the main AI agent finishes a reply or a plan is ready for approval (only when the app is in the background).",
   },
   skills: {
     title: "Skills Management",

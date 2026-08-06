@@ -1453,6 +1453,9 @@ export default {
     user_ai_workspace_manual_memory: "Manuelles Workspace-Memory",
     "ai-workspace-manual-memory-description":
       "Erlaubt manuelles Erstellen, Bearbeiten und Löschen von Workspace-Memories. Deaktivieren löscht keine gespeicherten Memories.",
+    user_ai_desktop_notify: "Desktop-Abschlussbenachrichtigung",
+    "ai-desktop-notify-description":
+      "Zeigt unten rechts eine Desktop-Benachrichtigung, wenn der Haupt-KI-Agent eine Antwort fertiggestellt hat oder ein Plan zur Freigabe bereit ist (nur wenn die App im Hintergrund ist).",
   },
   skills: {
     title: "Fähigkeiten verwalten",

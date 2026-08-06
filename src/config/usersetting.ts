@@ -15,6 +15,12 @@ export const USERPLANS = "user_plans";
 export const USER_AI_ENABLED = "user_ai_enabled";
 export const USER_AI_AUTO_PLAN = "user_ai_auto_plan";
 /**
+ * Desktop float notice when the main AI agent finishes a turn or a plan is
+ * ready for approval. Stored in system_setting (AI Preferences toggle).
+ * Default-on; values "1"/"0" from the settings UI.
+ */
+export const USER_AI_DESKTOP_NOTIFY = "user_ai_desktop_notify";
+/**
  * Local/custom OpenAI-compatible provider availability for AiChatV2.
  * Independent of hosted subscription entitlement (`USER_AI_ENABLED`).
  * Set to "true" when a valid local provider config is saved.

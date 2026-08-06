@@ -1431,6 +1431,9 @@ export default {
     user_ai_workspace_manual_memory: "手動ワークスペース記憶",
     "ai-workspace-manual-memory-description":
       "ワークスペース記憶の手動作成・編集・削除を許可します。無効化しても保存済みの記憶は削除されません。",
+    user_ai_desktop_notify: "デスクトップ完了通知",
+    "ai-desktop-notify-description":
+      "メイン AI エージェントの返信完了、または計画の承認待ち時に右下へデスクトップ通知を表示します（アプリがバックグラウンドのときのみ）。",
   },
   skills: {
     title: "スキル管理",

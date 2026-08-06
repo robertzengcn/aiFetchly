@@ -1462,6 +1462,9 @@ export default {
     user_ai_workspace_manual_memory: "Memoria de workspace manual",
     "ai-workspace-manual-memory-description":
       "Permite crear, editar y eliminar memorias de workspace manualmente. Desactivarlo no elimina las memorias almacenadas.",
+    user_ai_desktop_notify: "Aviso de finalización en escritorio",
+    "ai-desktop-notify-description":
+      "Muestra un aviso en la esquina inferior derecha cuando el agente de IA principal termina una respuesta o un plan está listo para aprobar (solo si la app está en segundo plano).",
   },
   skills: {
     title: "Gestión de Habilidades",

@@ -1402,6 +1402,9 @@ export default {
     user_ai_workspace_manual_memory: "手动工作区记忆",
     "ai-workspace-manual-memory-description":
       "允许手动创建、编辑和删除工作区记忆。禁用不会删除已存储的记忆。",
+    user_ai_desktop_notify: "桌面完成通知",
+    "ai-desktop-notify-description":
+      "当主 AI 代理完成回复或计划待审批时，在桌面右下角显示通知（仅在应用处于后台时）。",
   },
   skills: {
     title: "技能管理",

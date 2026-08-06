@@ -284,6 +284,8 @@ export const AI_CHAT_V2_STREAM = "ai-chat-v2:stream";
 export const AI_CHAT_V2_STREAM_STOP = "ai-chat-v2:stream-stop";
 export const AI_CHAT_V2_STREAM_CHUNK = "ai-chat-v2:stream-chunk";
 export const AI_CHAT_V2_STREAM_COMPLETE = "ai-chat-v2:stream-complete";
+/** Main→Renderer: open AI Chat V2 and select a conversation (desktop notify click). */
+export const AI_CHAT_V2_OPEN_FROM_NOTIFY = "ai-chat-v2:open-from-notify";
 export const AI_CHAT_V2_CLEAR_CONVERSATION = "ai-chat-v2:clear-conversation";
 export const AI_CHAT_V2_CLEAR_ALL = "ai-chat-v2:clear-all";
 /** Resume a V2 skill/tool call after the user granted permission in the chat UI. */

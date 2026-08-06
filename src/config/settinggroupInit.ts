@@ -26,6 +26,8 @@ export const ai_workspace_memory_injection_enabled =
 export const ai_workspace_auto_dream_enabled = "user_ai_workspace_auto_dream";
 export const ai_workspace_manual_memory_enabled =
   "user_ai_workspace_manual_memory";
+/** Desktop completion float (bottom-right). Key matches USER_AI_DESKTOP_NOTIFY. */
+export const ai_desktop_notify_enabled = "user_ai_desktop_notify";
 export const settinggroupInit: Array<SystemSettingGroupdf> = [
   {
     name: twocaptchagroup,
@@ -140,6 +142,14 @@ export const settinggroupInit: Array<SystemSettingGroupdf> = [
         key: ai_workspace_manual_memory_enabled,
         value: "1",
         description: "ai-workspace-manual-memory-description",
+        type: "toggle",
+      },
+      {
+        // Bottom-right desktop float when main AI agent completes a turn or
+        // a plan is ready for approval (only when main window is unfocused).
+        key: ai_desktop_notify_enabled,
+        value: "1",
+        description: "ai-desktop-notify-description",
         type: "toggle",
       },
     ],

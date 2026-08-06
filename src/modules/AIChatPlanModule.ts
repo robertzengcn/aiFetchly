@@ -14,6 +14,7 @@ import type {
   SubmitPlanForApprovalPayload,
   AIChatPlanVersionAuthor,
 } from "@/entityTypes/aiChatPlanTypes";
+import { DesktopNotifyService } from "@/service/DesktopNotifyService";
 
 const V2_PREFIX = "v2-";
 
@@ -112,7 +113,9 @@ export class AIChatPlanModule extends BaseModule {
     let approvedAt = plan.approvedAt
       ? plan.approvedAt.toISOString()
       : undefined;
-    let rejectedAt = plan.rejectedAt ? plan.rejectedAt.toISOString() : undefined;
+    let rejectedAt = plan.rejectedAt
+      ? plan.rejectedAt.toISOString()
+      : undefined;
 
     if (currentDecision?.decision === "approved") {
       if (status === "awaiting_approval" || status === "draft") {
@@ -315,7 +318,19 @@ export class AIChatPlanModule extends BaseModule {
       planId: plan.planId,
       status: "awaiting_approval",
     });
-    return (await this.buildStateView(plan.planId))!;
+    const stateView = (await this.buildStateView(plan.planId))!;
+    DesktopNotifyService.getInstance()
+      .show({
+        type: "plan_ready",
+        title: "Plan ready for approval",
+        body: title,
+        conversationId: input.conversationId,
+        planId: plan.planId,
+      })
+      .catch((err: unknown) =>
+        console.error("[desktop-notify] plan_ready failed:", err)
+      );
+    return stateView;
   }
 
   async approvePlan(input: {

@@ -23,6 +23,7 @@ import { PastedTextResolutionService } from "@/service/pastedText/PastedTextReso
 import type { AIChatCompactAgentService } from "@/service/AIChatCompactAgentService";
 import type { AIAutoDreamService } from "@/service/AIAutoDreamService";
 import type { AIWorkspaceAutoDreamService } from "@/service/AIWorkspaceAutoDreamService";
+import { DesktopNotifyService } from "@/service/DesktopNotifyService";
 import { PlanModeToolRegistry } from "@/service/PlanModeToolRegistry";
 import type { AIChatQueryLoop } from "@/service/AIChatQueryLoop";
 import {
@@ -1360,6 +1361,16 @@ export class AIChatQueryEngine {
               console.error("[workspace-auto-dream] chat trigger failed:", err)
             );
         }
+        DesktopNotifyService.getInstance()
+          .show({
+            type: "turn_complete",
+            title: "AI reply ready",
+            body: "Your AI chat response is ready.",
+            conversationId,
+          })
+          .catch((err: unknown) =>
+            console.error("[desktop-notify] turn_complete failed:", err)
+          );
         this.dispatchStop(conversationId, "completed");
         this.clearActiveTurnState();
         break;

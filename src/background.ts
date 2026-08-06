@@ -20,6 +20,7 @@ const crashReporter = require("electron").crashReporter;
 import installExtension, { VUEJS3_DEVTOOLS } from "electron-devtools-installer";
 import { patchSessionExtensionsApi } from "@/main-process/devtools/patchSessionExtensionsApi";
 import { registerCommunicationIpcHandlers } from "./main-process/communication/";
+import { setMainWindow } from "@/main-process/mainWindowRegistry";
 import { initializeAppUpdates } from "@/main-process/updater/AppUpdateService";
 import { SkillImportService } from "@/service/SkillImportService";
 import { getAIFetchlyConfigManager } from "@/service/aifetchlyConfig/AIFetchlyConfigManager";
@@ -562,6 +563,7 @@ function initialize() {
       icon: path.join(__dirname, "/icon.png"),
       width: 800,
       height: 600,
+      show: false,
       webPreferences: {
         // Use pluginOptions.nodeIntegration, leave this alone
         // See nklayman.github.io/vue-cli-plugin-electron-builder/guide/security.html#node-integration for more info
@@ -575,6 +577,10 @@ function initialize() {
         preload: path.join(__dirname + "/preload.js"),
       },
     });
+
+    win.maximize();
+    win.show();
+    setMainWindow(win);
 
     if (win) {
       // Ensure menu bar is hidden by default + register shortcuts to show/toggle.
@@ -659,6 +665,7 @@ function initialize() {
       console.log("Window closed event triggered");
       // INIT-02: Clear tracker webContents reference when window closes
       FileOperationTracker.clear();
+      setMainWindow(null);
       win = null;
     });
     // In this example, only windows with the `about:blank` url will be created.

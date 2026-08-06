@@ -149,6 +149,7 @@ v-if="mainStore.isMobile" variant="text" icon="mdi-menu"
                     <AiChatV2
                         v-show="v2ChatPanelOpen"
                         :prompt-request="pendingAiPromptRequest"
+                        :open-conversation-request="pendingOpenConversationRequest"
                         @open-artifact="openAiArtifact"
                         @copy-artifact-html="copyArtifactHtml"
                     />
@@ -237,6 +238,8 @@ import { packageAppName } from '@/config/appPackage'
 import { getLanguagePreference } from '@/views/api/language'
 import { initializeLanguageDetection } from '@/views/utils/browserLanguageDetection'
 import { initializeLanguageSynchronization, syncLanguageChange } from '@/views/utils/languageSynchronization'
+import { getIpcTransport } from '@/views/utils/ipcTransport'
+import { AI_CHAT_V2_OPEN_FROM_NOTIFY } from '@/config/channellist'
 
 
 // import {ref, watchEffect} from "vue";
@@ -256,6 +259,11 @@ interface AiChatOpenEventDetail {
 interface AiPromptRequest {
   id: number;
   text: string;
+}
+
+interface AiOpenConversationRequest {
+  id: number;
+  conversationId: string;
 }
 
 const dialogStatus=ref(false)
@@ -281,6 +289,8 @@ const aiChatV2Enabled = ref(localStorage.getItem(V2_FLAG_KEY) !== 'false');
 const chatPanelWidth = ref(720);
 const pendingAiPromptRequest = ref<AiPromptRequest | null>(null);
 let aiPromptRequestId = 0;
+const pendingOpenConversationRequest = ref<AiOpenConversationRequest | null>(null);
+let openConversationRequestId = 0;
 const CHAT_PANEL_MIN_WIDTH = 400;
 const CHAT_PANEL_MAX_WIDTH = 1200;
 const mainStore = useMainStore();
@@ -461,6 +471,32 @@ const openAiChatFromDashboard = (event: Event): void => {
     v2ChatPanelOpen.value = false;
 }
 
+const handleOpenFromNotify = (raw: unknown): void => {
+    const payload =
+        raw && typeof raw === "object"
+            ? (raw as { conversationId?: string | null })
+            : null;
+    const conversationId =
+        typeof payload?.conversationId === "string"
+            ? payload.conversationId.trim()
+            : "";
+
+    if (aiChatV2Enabled.value) {
+        v2ChatPanelOpen.value = true;
+        chatPanelOpen.value = false;
+        if (conversationId.length > 0) {
+            pendingOpenConversationRequest.value = {
+                id: ++openConversationRequestId,
+                conversationId,
+            };
+        }
+        return;
+    }
+
+    chatPanelOpen.value = true;
+    v2ChatPanelOpen.value = false;
+};
+
 const startResize = (e: MouseEvent) => {
     e.preventDefault();
     const startX = e.clientX;
@@ -623,6 +659,10 @@ onMounted(async () => {
 
     window.addEventListener('keydown', handleKeyboardShortcut)
     window.addEventListener('aifetchly:open-ai-chat', openAiChatFromDashboard)
+    getIpcTransport().receive(
+        AI_CHAT_V2_OPEN_FROM_NOTIFY,
+        handleOpenFromNotify as (value: unknown) => void
+    )
 
     receiveSystemMessage((res:CommonDialogMsg)=>{
        console.log(res)
@@ -637,6 +677,10 @@ onMounted(async () => {
 onUnmounted(() => {
     window.removeEventListener('keydown', handleKeyboardShortcut)
     window.removeEventListener('aifetchly:open-ai-chat', openAiChatFromDashboard)
+    getIpcTransport().removeListener(
+        AI_CHAT_V2_OPEN_FROM_NOTIFY,
+        handleOpenFromNotify as (value: unknown) => void
+    )
 })
 
 const showDialog=(status:boolean, content:string)=>{
