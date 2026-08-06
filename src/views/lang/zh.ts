@@ -1102,17 +1102,20 @@ export default {
     user_preferences: "用户偏好",
     "user-preferences-group-description": "应用程序行为的用户级偏好设置。",
     default_embedding_model: "默认嵌入模型",
-    "default-embedding-model-description": "选择用于向量搜索和相似度匹配的嵌入模型。",
+    "default-embedding-model-description":
+      "选择用于向量搜索和相似度匹配的嵌入模型。",
     language_preference: "语言",
     "language-preference-description": "界面语言偏好。",
     ai_website_analysis_business_info: "业务信息",
-    "ai-website-analysis-business-info-description": "网站AI分析中使用的业务信息。",
+    "ai-website-analysis-business-info-description":
+      "网站AI分析中使用的业务信息。",
     "external-system-group-description": "外部系统组设置",
     mcp_tools: "MCP工具",
     manage_mcp_tools: "管理MCP工具",
     manage_skills: "管理技能",
     ai_preferences: "AI 偏好设置",
-    "ai-preferences-group-description": "控制 AI 聊天行为、记忆和上下文的设置。",
+    "ai-preferences-group-description":
+      "控制 AI 聊天行为、记忆和上下文的设置。",
     user_ai_auto_dream: "自动摘要整合",
     "ai-auto-dream-description":
       "在后台自动汇总过去的对话，以节省 AI 上下文令牌。",
@@ -1822,7 +1825,8 @@ export default {
     tool_approval_mode_full: "完全访问",
     tool_approval_mode_ask_desc: "在需要权限的工具运行前询问。",
     tool_approval_mode_auto_desc: "自动批准本对话中受信任的非 shell 工具。",
-    tool_approval_mode_full_desc: "自动批准本对话中注册的工具。安全限制仍然生效。",
+    tool_approval_mode_full_desc:
+      "自动批准本对话中注册的工具。安全限制仍然生效。",
     tool_approval_mode_full_confirm_title: "启用完全访问？",
     tool_approval_mode_full_confirm_text:
       "注册工具将在本对话中无需审批提示直接运行。依赖安装和硬安全限制仍需要您的批准。",
@@ -1976,5 +1980,23 @@ export default {
       pick: "选择文件夹",
       cancel: "取消",
     },
+  },
+  about: {
+    title: "关于 AiFetchly",
+    app_name: "AiFetchly",
+    version: "版本",
+    website: "网站",
+    open_website: "打开网站",
+    check_for_updates: "检查更新",
+    restart_to_install: "重启并更新",
+    status_idle: "点击检查最新版本。",
+    status_checking: "正在检查更新…",
+    status_up_to_date: "已是最新版本 ({version})。",
+    status_downloading: "正在下载更新…",
+    status_ready_to_restart: "更新已下载，重启以应用。",
+    status_error: "无法检查更新，请稍后再试。",
+    unsupported_development: "开发版本不支持更新检查。",
+    unsupported_store: "更新由 Microsoft Store 管理。",
+    unsupported_platform: "此平台不支持自动更新。",
   },
 };

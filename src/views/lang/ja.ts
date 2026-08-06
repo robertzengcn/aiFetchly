@@ -1113,19 +1113,23 @@ export default {
     embedding_group_description: "ベクトル検索のデフォルト埋め込みモデル。",
     external_system: "外部システム",
     user_preferences: "ユーザー設定",
-    "user-preferences-group-description": "アプリケーション動作のユーザーレベル設定。",
+    "user-preferences-group-description":
+      "アプリケーション動作のユーザーレベル設定。",
     default_embedding_model: "デフォルト埋め込みモデル",
-    "default-embedding-model-description": "ベクトル検索と類似性マッチングに使用する埋め込みモデルを選択します。",
+    "default-embedding-model-description":
+      "ベクトル検索と類似性マッチングに使用する埋め込みモデルを選択します。",
     language_preference: "言語",
     "language-preference-description": "UIの言語設定。",
     ai_website_analysis_business_info: "ビジネス情報",
-    "ai-website-analysis-business-info-description": "ウェブサイトのAI分析で使用されるビジネス情報。",
+    "ai-website-analysis-business-info-description":
+      "ウェブサイトのAI分析で使用されるビジネス情報。",
     "external-system-group-description": "外部システムグループ設定",
     mcp_tools: "MCPツール",
     manage_mcp_tools: "MCPツールを管理",
     manage_skills: "スキルを管理",
     ai_preferences: "AI 設定",
-    "ai-preferences-group-description": "AIチャットの動作、メモリー、コンテキストを制御する設定。",
+    "ai-preferences-group-description":
+      "AIチャットの動作、メモリー、コンテキストを制御する設定。",
     user_ai_auto_dream: "自動要約統合",
     "ai-auto-dream-description":
       "バックグラウンドで過去の会話を自動的に要約し、AIコンテキストトークンを節約します。",
@@ -2003,5 +2007,25 @@ export default {
       pick: "フォルダを選択",
       cancel: "キャンセル",
     },
+  },
+  about: {
+    title: "AiFetchly について",
+    app_name: "AiFetchly",
+    version: "バージョン",
+    website: "ウェブサイト",
+    open_website: "ウェブサイトを開く",
+    check_for_updates: "更新を確認",
+    restart_to_install: "再起動して更新",
+    status_idle: "クリックして最新バージョンを確認します。",
+    status_checking: "更新を確認しています…",
+    status_up_to_date: "最新バージョンです ({version})。",
+    status_downloading: "更新をダウンロードしています…",
+    status_ready_to_restart:
+      "更新がダウンロードされました。再起動して適用します。",
+    status_error: "更新を確認できませんでした。後でもう一度お試しください。",
+    unsupported_development: "開発ビルドでは更新確認は利用できません。",
+    unsupported_store: "更新は Microsoft Store によって管理されます。",
+    unsupported_platform:
+      "このプラットフォームでは自動更新はサポートされていません。",
   },
 };

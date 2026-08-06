@@ -1132,22 +1132,27 @@ export default {
     chrome_path: "Chrome-Pfad",
     firefox_path: "Firefox-Pfad",
     embedding_group: "Einbettungsmodelle",
-    embedding_group_description: "Standard-Einbettungsmodell für die Vektorsuche.",
+    embedding_group_description:
+      "Standard-Einbettungsmodell für die Vektorsuche.",
     external_system: "Externes System",
     user_preferences: "Benutzereinstellungen",
-    "user-preferences-group-description": "Benutzereinstellungen für das Anwendungsverhalten.",
+    "user-preferences-group-description":
+      "Benutzereinstellungen für das Anwendungsverhalten.",
     default_embedding_model: "Standard-Einbettungsmodell",
-    "default-embedding-model-description": "Wählen Sie das Einbettungsmodell für die Vektorsuche und Ähnlichkeitsermittlung.",
+    "default-embedding-model-description":
+      "Wählen Sie das Einbettungsmodell für die Vektorsuche und Ähnlichkeitsermittlung.",
     language_preference: "Sprache",
     "language-preference-description": "UI-Spracheinstellung.",
     ai_website_analysis_business_info: "Geschäftsinformationen",
-    "ai-website-analysis-business-info-description": "Geschäftsinformationen, die bei der KI-Analyse von Websites verwendet werden.",
+    "ai-website-analysis-business-info-description":
+      "Geschäftsinformationen, die bei der KI-Analyse von Websites verwendet werden.",
     "external-system-group-description": "Externe Systemgruppen-Einstellung",
     mcp_tools: "MCP-Tools",
     manage_mcp_tools: "MCP-Tools verwalten",
     manage_skills: "Fähigkeiten verwalten",
     ai_preferences: "KI-Einstellungen",
-    "ai-preferences-group-description": "Einstellungen zur Steuerung des KI-Chat-Verhaltens, des Speichers und des Kontexts.",
+    "ai-preferences-group-description":
+      "Einstellungen zur Steuerung des KI-Chat-Verhaltens, des Speichers und des Kontexts.",
     user_ai_auto_dream: "Auto-Traum-Konsolidierung",
     "ai-auto-dream-description":
       "Automatisches Zusammenfassen vergangener Konversationen im Hintergrund, um KI-Kontext-Token zu sparen.",
@@ -2043,5 +2048,27 @@ export default {
       pick: "Ordner wählen",
       cancel: "Abbrechen",
     },
+  },
+  about: {
+    title: "Über AiFetchly",
+    app_name: "AiFetchly",
+    version: "Version",
+    website: "Website",
+    open_website: "Website öffnen",
+    check_for_updates: "Nach Updates suchen",
+    restart_to_install: "Zum Aktualisieren neu starten",
+    status_idle: "Klicken Sie, um nach der neuesten Version zu suchen.",
+    status_checking: "Suche nach Updates…",
+    status_up_to_date: "Sie verwenden die neueste Version ({version}).",
+    status_downloading: "Update wird heruntergeladen…",
+    status_ready_to_restart:
+      "Update heruntergeladen. Zum Anwenden neu starten.",
+    status_error:
+      "Suche nach Updates nicht möglich. Versuchen Sie es später erneut.",
+    unsupported_development:
+      "Update-Prüfungen sind in Entwicklungsversionen nicht verfügbar.",
+    unsupported_store: "Updates werden über den Microsoft Store verwaltet.",
+    unsupported_platform:
+      "Automatische Updates werden auf dieser Plattform nicht unterstützt.",
   },
 };

@@ -1125,22 +1125,27 @@ export default {
     chrome_path: "chrome path",
     firefox_path: "firefox path",
     embedding_group: "Modèles d'Embedding",
-    embedding_group_description: "Modèle d'embedding par défaut pour la recherche vectorielle.",
+    embedding_group_description:
+      "Modèle d'embedding par défaut pour la recherche vectorielle.",
     external_system: "Système Externe",
     user_preferences: "Préférences Utilisateur",
-    "user-preferences-group-description": "Préférences utilisateur pour le comportement de l'application.",
+    "user-preferences-group-description":
+      "Préférences utilisateur pour le comportement de l'application.",
     default_embedding_model: "Modèle d'Embedding par Défaut",
-    "default-embedding-model-description": "Sélectionnez le modèle d'embedding utilisé pour la recherche vectorielle et la correspondance de similarité.",
+    "default-embedding-model-description":
+      "Sélectionnez le modèle d'embedding utilisé pour la recherche vectorielle et la correspondance de similarité.",
     language_preference: "Langue",
     "language-preference-description": "Préférence de langue de l'interface.",
     ai_website_analysis_business_info: "Informations Commerciales",
-    "ai-website-analysis-business-info-description": "Informations commerciales utilisées lors de l'analyse IA du site web.",
+    "ai-website-analysis-business-info-description":
+      "Informations commerciales utilisées lors de l'analyse IA du site web.",
     "external-system-group-description": "external system group setting",
     mcp_tools: "MCP Tools",
     manage_mcp_tools: "Manage MCP Tools",
     manage_skills: "Gérer les compétences",
     ai_preferences: "Préférences IA",
-    "ai-preferences-group-description": "Paramètres contrôlant le comportement du chat IA, la mémoire et le contexte.",
+    "ai-preferences-group-description":
+      "Paramètres contrôlant le comportement du chat IA, la mémoire et le contexte.",
     user_ai_auto_dream: "Consolidation Auto-Rêve",
     "ai-auto-dream-description":
       "Résumer automatiquement les conversations passées en arrière-plan pour économiser les tokens de contexte IA.",
@@ -2030,5 +2035,27 @@ export default {
       pick: "Choisir un dossier",
       cancel: "Annuler",
     },
+  },
+  about: {
+    title: "À propos de AiFetchly",
+    app_name: "AiFetchly",
+    version: "Version",
+    website: "Site web",
+    open_website: "Ouvrir le site web",
+    check_for_updates: "Rechercher des mises à jour",
+    restart_to_install: "Redémarrer pour mettre à jour",
+    status_idle: "Cliquez pour vérifier la dernière version.",
+    status_checking: "Recherche de mises à jour…",
+    status_up_to_date: "Vous disposez de la dernière version ({version}).",
+    status_downloading: "Téléchargement de la mise à jour…",
+    status_ready_to_restart:
+      "Mise à jour téléchargée. Redémarrez pour l'appliquer.",
+    status_error:
+      "Impossible de rechercher les mises à jour. Réessayez plus tard.",
+    unsupported_development:
+      "Les vérifications de mise à jour ne sont pas disponibles dans les versions de développement.",
+    unsupported_store: "Les mises à jour sont gérées par Microsoft Store.",
+    unsupported_platform:
+      "Les mises à jour automatiques ne sont pas prises en charge sur cette plateforme.",
   },
 };
