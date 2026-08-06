@@ -93,7 +93,13 @@ jobs:
     env:
       # Unpacked layout avoids ASAR finalize OOM on GHA (see forge.config.js).
       FORGE_DISABLE_ASAR: "1"
-      NODE_OPTIONS: --max-old-space-size=4096
+      # Skip electron-forge's packaging-time native rebuild in CI. rebuild-native
+      # (run by package:ci) already builds better-sqlite3 for Electron before
+      # packaging copies node_modules, so re-rebuilding during "Preparing native
+      # dependencies" is redundant work that has been observed to stall the
+      # smoke build. The smoke test only verifies worker files, not native loads.
+      FORGE_SKIP_NATIVE_REBUILD: "1"
+      NODE_OPTIONS: --max-old-space-size=8192
       ELECTRON_FORGE_VITE_CONCURRENT: "1"
       VITE_CONFIG_NATIVE_IGNORE_WARNING: "true"
 
@@ -134,15 +140,33 @@ jobs:
       - name: Install dependencies
         run: yarn install --frozen-lockfile
 
+      # The standard runner has only 14 GB SSD. Unpacked packaging duplicates
+      # node_modules into /tmp/electron-packager AND out/, which can exhaust the
+      # disk and stall "Copying files"/"Finalizing package". Reclaim ~20-30 GB
+      # of preinstalled toolchains we don't need for a Linux smoke build.
+      - name: Free up disk space
+        run: |
+          echo "Disk before cleanup:"; df -h /
+          sudo rm -rf /usr/local/lib/android || true
+          sudo rm -rf /usr/share/dotnet || true
+          sudo rm -rf /opt/ghc || true
+          sudo rm -rf /usr/local/.ghcup || true
+          sudo rm -rf /usr/local/share/boost || true
+          sudo rm -rf /usr/local/lib/node_modules || true
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY" || true
+          sudo rm -rf /opt/hostedtoolcache/CodeQL || true
+          sudo docker image prune --all --force || true
+          echo "Disk after cleanup:"; df -h /
+
       - name: Build Linux package for worker smoke test
-        timeout-minutes: 40
+        timeout-minutes: 30
         # electron-forge's underlying process can hang after packaging fully
         # completes (see scripts/run-packaging-with-hang-guard.js for the
         # full explanation). yarn package:ci detects true completion from
         # the CLI's own log output and force-exits instead of waiting on a
-        # natural process exit that may never happen, so this step fails
-        # fast with a clear reason instead of being silently canceled by the
-        # step timeout above.
+        # natural process exit that may never happen. The guard also dumps
+        # disk/mem/process diagnostics on stall and fails fast with a clear
+        # reason instead of being silently canceled by the step timeout above.
         run: yarn package:ci
 
       - name: Resolve packaged worker dependencies

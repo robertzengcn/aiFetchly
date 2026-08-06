@@ -474,7 +474,17 @@ module.exports = {
     // isolated-vm@6.1.2 fails to compile against Electron 35 V8 13.5 headers
     // (known upstream issue: laverdet/isolated-vm#528). Exclude it from rebuild
     // so Forge startup is not blocked; the pre-built Node.js binary is used instead.
-    onlyModules: ["better-sqlite3", "bufferutil", "utf-8-validate", "keytar"],
+    //
+    // FORGE_SKIP_NATIVE_REBUILD=1 (set by the CI package-smoke job) skips the
+    // packaging-time rebuild entirely. That job runs rebuild-native first, so
+    // better-sqlite3 is already built for Electron before node_modules is
+    // copied; re-rebuilding during "Preparing native dependencies" is redundant
+    // and has been observed to stall the smoke build. The smoke test only
+    // verifies packaged worker files, not native module loading at runtime.
+    onlyModules:
+      process.env.FORGE_SKIP_NATIVE_REBUILD === "1"
+        ? []
+        : ["better-sqlite3", "bufferutil", "utf-8-validate", "keytar"],
   },
   makers: [
     {
