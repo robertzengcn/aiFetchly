@@ -71,6 +71,20 @@ import type {
 
 export type { TaskDetailsForEdit, SearchTaskUpdateData };
 
+/** Normalize utilityProcess stdout/stderr chunks (Buffer or string) to UTF-8. */
+export function chunkToUtf8(data: unknown): string {
+  if (typeof data === "string") {
+    return data;
+  }
+  if (Buffer.isBuffer(data)) {
+    return data.toString("utf8");
+  }
+  if (data instanceof Uint8Array) {
+    return Buffer.from(data).toString("utf8");
+  }
+  return String(data);
+}
+
 export class SearchModule extends BaseModule {
   // private dbpath: string
   private taskdbModel: SearchTaskModel;
@@ -395,23 +409,28 @@ export class SearchModule extends BaseModule {
     });
 
     child.stdout?.on("data", (data) => {
-      console.log(`Received data chunk ${data}`);
-      WriteLog(runLogfile, data);
+      const text = chunkToUtf8(data);
+      console.log(`Received data chunk ${text}`);
+      WriteLog(runLogfile, text);
       // child.kill()
     });
+    // stderr is diagnostic only. Chrome/Puppeteer (especially on Windows)
+    // frequently emit non-fatal warnings to stderr while scraping succeeds.
+    // Never mark the task Error here — exit code / searcherror messages own that.
     child.stderr?.on("data", (data) => {
-      const ingoreStr = [
+      const text = chunkToUtf8(data);
+      const ignoreStr = [
         "Debugger attached",
         "Waiting for the debugger to disconnect",
         "Most NODE_OPTIONs are not supported in packaged apps",
       ];
-      if (!ingoreStr.some((value) => data.includes(value))) {
-        // seModel.saveTaskerrorlog(taskId,data)
-        console.log(`Received error chunk ${data}`);
-        WriteLog(errorLogfile, data);
-        this.updateTaskStatus(taskId, SearchTaskStatus.Error);
-        //child.kill()
+      if (ignoreStr.some((value) => text.includes(value))) {
+        return;
       }
+      console.log(
+        `[SearchModule] task ${taskId} stderr (not failing task): ${text}`
+      );
+      WriteLog(errorLogfile, text);
     });
     child.on("exit", async (code) => {
       // Clear PID and unregister process
