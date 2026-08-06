@@ -3,6 +3,8 @@
 // See docs/marketing-subagent-system-prd.md and
 // docs/marketing-subagent-system-technical-design.md for the product context.
 
+import type { OpenAIChatImage } from "@/api/aiChatApi";
+
 /** Agent execution modes. */
 export type AgentExecutionMode = "foreground" | "background" | "scheduled";
 
@@ -95,14 +97,24 @@ export interface LeadContactInput {
   sourceUrl?: string;
 }
 
-/** Self-contained task packet handed to a specialist agent. */
+/** Self-contained task packet handed to a specialist agent.
+ *
+ * The lead-researcher family fields are optional so generic agents — e.g.
+ * the batch worker, which carries `{ files, instruction }` — can reuse the
+ * same packet type without lead-shaped boilerplate. Undefined-valued keys
+ * are dropped by JSON.stringify when AgentPromptBuilder forwards the packet. */
 export interface AgentTaskPacket {
   workflowRunId?: string;
-  lead: LeadInput;
-  userGoal: string;
-  constraints: AgentWorkflowConstraints;
-  priorFindings: AgentFinding[];
-  requiredOutputSchema: Record<string, unknown>;
+  lead?: LeadInput;
+  userGoal?: string;
+  constraints?: AgentWorkflowConstraints;
+  priorFindings?: AgentFinding[];
+  requiredOutputSchema?: Record<string, unknown>;
+  /** Generic file-batch family: candidate file paths + the single instruction
+   * to apply to every file. Used by agent-batch-worker. The main agent caps
+   * this at 3 entries before spawning (matches attach_local_images maxItems). */
+  files?: string[];
+  instruction?: string;
 }
 
 export interface AgentWorkflowConstraints {
@@ -155,6 +167,17 @@ export interface AgentResult {
    * means the output parsed cleanly. Surface this to callers for observability.
    */
   parseWarning?: string;
+  /** On-disk paths of artifacts (e.g. edited images) produced by the agent.
+   * Paths only — NEVER image bytes (PRD non-goal 8). Populated by
+   * AgentRuntime when the sub-agent's loop returns edited images that get
+   * persisted to local storage. Undefined for agents that produce no files. */
+  outputFilePaths?: string[];
+  /** Persisted artifact image descriptors mirroring {@link outputFilePaths}
+   * (each carries `local_path` + the `aifetchly-generated-image://` URL, no
+   * bytes). Surfaced so the main chat loop can fold them into
+   * metadata.generatedImages for rendering. Undefined for agents that
+   * produce no images. */
+  outputImages?: OpenAIChatImage[];
 }
 
 /** Snapshot returned by getTask / tool polling. */
