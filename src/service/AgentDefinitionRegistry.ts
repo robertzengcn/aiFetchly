@@ -49,6 +49,46 @@ const LEAD_RESEARCHER_OUTPUT_SCHEMA = {
   },
 };
 
+const BATCH_WORKER_PROMPT = `You are the Batch Worker specialist.
+Your single responsibility is to process a batch of up to 3 files according to the instruction in the task packet.
+
+Rules:
+1. Read the file paths from "files" and the instruction from "instruction" in the task packet.
+2. Call attach_local_images with the given file paths (up to 3).
+3. The AI server edits each image independently and returns the edited results.
+4. Do not ask questions. Do not deviate from the instruction.
+5. Do not call run_subagent (nested batch workers are not allowed).
+6. If a file fails, record its path in "errors" with the reason and continue with the others.
+7. If attach_local_images returns an error, report it in "errors" and return a partial result with an empty "processedFiles" list.
+8. Your ENTIRE response MUST be a single raw JSON object — no markdown fences, no prose before or after.`;
+
+const BATCH_WORKER_OUTPUT_SCHEMA = {
+  type: "object",
+  required: ["status", "processedFiles", "summary", "errors"],
+  properties: {
+    status: { type: "string", enum: ["completed", "partial", "failed"] },
+    processedFiles: {
+      type: "array",
+      items: { type: "string" },
+      description: "File paths of successfully processed output files on disk.",
+    },
+    summary: {
+      type: "string",
+      description: "One-sentence summary of what was done.",
+    },
+    errors: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          file: { type: "string" },
+          reason: { type: "string" },
+        },
+      },
+    },
+  },
+};
+
 const BUILT_INS: readonly AgentDefinitionView[] = [
   {
     id: "agent-lead-researcher",
@@ -76,6 +116,28 @@ const BUILT_INS: readonly AgentDefinitionView[] = [
     maxRuntimeMs: 180000,
     maxContinueCalls: 8,
     outputSchema: LEAD_RESEARCHER_OUTPUT_SCHEMA,
+    status: "active",
+    source: "built-in",
+    health: "healthy",
+    manifest: {},
+  },
+  {
+    id: "agent-batch-worker",
+    name: "Batch Worker",
+    description:
+      "Processes a batch of up to 3 files (images, audio, documents) according to one instruction. Returns output file paths.",
+    version: 1,
+    systemPrompt: BATCH_WORKER_PROMPT,
+    // Generic file-batch allowlist. AgentToolPolicyService intersects
+    // these with registered skills and auto-injects check_tool_job_status /
+    // cancel_tool_job. Future batch job types (audio, docs, thumbnails) need
+    // only an allowlist addition here — no new runtime, no new agent.
+    allowedTools: ["glob_files", "attach_local_images", "file_read"],
+    mode: "specialist",
+    maxToolCalls: 6,
+    maxRuntimeMs: 240000,
+    maxContinueCalls: 4,
+    outputSchema: BATCH_WORKER_OUTPUT_SCHEMA,
     status: "active",
     source: "built-in",
     health: "healthy",
@@ -261,10 +323,7 @@ export class AgentDefinitionRegistryImpl {
         continue;
       }
       const currentSource = this.idToSource.get(current.id);
-      if (
-        currentSource &&
-        SOURCE_RANK[source] < SOURCE_RANK[currentSource]
-      ) {
+      if (currentSource && SOURCE_RANK[source] < SOURCE_RANK[currentSource]) {
         this.byName.set(agent.name, agent);
       }
     }
