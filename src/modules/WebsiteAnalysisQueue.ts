@@ -8,6 +8,7 @@ import { v4 as uuidv4 } from "uuid";
 import type { ModuleExecutionContext } from "@/entityTypes/skillTypes";
 import { ToolExecutor } from "@/service/ToolExecutor";
 import {
+  getPackagedWorkerNodePath,
   resolvePackagedWorkerPath,
   type PackagedWorkerPathRuntime,
 } from "@/utils/packagedWorkerPath";
@@ -376,12 +377,24 @@ export class WebsiteAnalysisQueue {
     }
 
     return new Promise((resolve, reject) => {
+      // Packaged scrape workers under app.asar.unpacked cannot resolve puppeteer
+      // from app.asar/node_modules without NODE_PATH (Windows MODULE_NOT_FOUND).
+      const electronProcess = process as NodeJS.Process & {
+        resourcesPath?: string;
+      };
+      const packagedNodePath = electronProcess.resourcesPath
+        ? getPackagedWorkerNodePath(
+            electronProcess.resourcesPath,
+            process.env.NODE_PATH
+          )
+        : process.env.NODE_PATH;
       const childProcess = utilityProcess.fork(this.childProcessPath!, [], {
         stdio: "pipe",
         execArgv: ["puppeteer-cluster:*"],
         env: {
           ...process.env,
           NODE_OPTIONS: "",
+          NODE_PATH: packagedNodePath,
         },
       });
 

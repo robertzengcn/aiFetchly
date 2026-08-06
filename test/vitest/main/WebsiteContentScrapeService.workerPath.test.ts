@@ -80,7 +80,39 @@ describe("WebsiteContentScrapeService worker path resolution", () => {
     expect(resolved).toBe(expected);
   });
 
-  it("resolves the unpacked packaged worker when running from app.asar", () => {
+  it("prefers the app.asar virtual path over the unpacked mirror when packaged", () => {
+    // Loading through app.asar keeps Electron module resolution able to find
+    // puppeteer in app.asar/node_modules. Preferring unpacked first caused
+    // MODULE_NOT_FOUND on Windows packaged builds.
+    const resourcesPath = path.join("/opt", "AiFetchly", "resources");
+    const asarPath = path.join(
+      resourcesPath,
+      "app.asar",
+      "dist",
+      "childprocess",
+      "websiteContentScraper.js"
+    );
+    const unpackedPath = path.join(
+      resourcesPath,
+      "app.asar.unpacked",
+      "dist",
+      "childprocess",
+      "websiteContentScraper.js"
+    );
+
+    const resolved = WebsiteContentScrapeService.resolveChildProcessPath({
+      dirname: path.join(resourcesPath, "app.asar", ".vite", "build"),
+      cwd: "/tmp",
+      resourcesPath,
+      existsSync: (candidate) =>
+        candidate === asarPath || candidate === unpackedPath,
+    });
+
+    expect(resolved).toBe(asarPath);
+    expect(resolved).not.toBe(unpackedPath);
+  });
+
+  it("falls back to the unpacked packaged worker when the asar virtual path is missing", () => {
     const resourcesPath = path.join("/opt", "AiFetchly", "resources");
     const expected = path.join(
       resourcesPath,
@@ -142,6 +174,56 @@ describe("WebsiteContentScrapeService child process diagnostics", () => {
     await expect(service.scrapePage("https://example.com/debug")).rejects.toThrow(
       /Child process exited with code 1[\s\S]*requestId=scrape-[\s\S]*workerPath=.*websiteContentScraper\.js[\s\S]*Cannot find module 'puppeteer'/
     );
+  });
+
+  it("passes packaged NODE_PATH so unpacked workers can resolve puppeteer", async () => {
+    ensureWebsiteWorkerBundleExists();
+    const resourcesPath = path.join("/opt", "AiFetchly", "resources");
+    const previousResourcesPath = (process as NodeJS.Process & {
+      resourcesPath?: string;
+    }).resourcesPath;
+    (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath =
+      resourcesPath;
+
+    const childProcess = new MockUtilityProcess();
+    mockedFork.mockImplementation((_childPath, _args, options) => {
+      const env = (options as { env?: NodeJS.ProcessEnv } | undefined)?.env;
+      expect(env?.NODE_PATH).toContain(
+        path.join(resourcesPath, "app.asar", "node_modules")
+      );
+      expect(env?.NODE_PATH).toContain(
+        path.join(resourcesPath, "app.asar.unpacked", "node_modules")
+      );
+      queueMicrotask(() => childProcess.emit("spawn"));
+      childProcess.postMessage.mockImplementation((rawMessage: string) => {
+        const request = JSON.parse(rawMessage) as { requestId: string };
+        childProcess.emit("message", {
+          data: JSON.stringify({
+            type: "SCRAPE_SUCCESS",
+            requestId: request.requestId,
+            markdown: "# ok",
+            finalUrl: "https://example.com/debug",
+            links: [],
+          }),
+        });
+      });
+      return asUtilityProcess(childProcess);
+    });
+
+    try {
+      const service = new WebsiteContentScrapeService();
+      await expect(
+        service.scrapePage("https://example.com/debug")
+      ).resolves.toMatchObject({ markdown: "# ok" });
+    } finally {
+      if (previousResourcesPath === undefined) {
+        delete (process as NodeJS.Process & { resourcesPath?: string })
+          .resourcesPath;
+      } else {
+        (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath =
+          previousResourcesPath;
+      }
+    }
   });
 
   it("includes worker-reported stack traces in scrape errors", async () => {
