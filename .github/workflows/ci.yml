@@ -145,6 +145,11 @@ jobs:
       # disk and stall "Copying files"/"Finalizing package". Reclaim ~20-30 GB
       # of preinstalled toolchains we don't need for a Linux smoke build.
       - name: Free up disk space
+        # Only remove toolchains we do not use for a Linux smoke build. Do NOT
+        # touch $AGENT_TOOLSDIRECTORY (/opt/hostedtoolcache/{node,Python,...}) or
+        # /usr/local/lib/node_modules — those hold the Node.js, yarn shim, and
+        # Python that setup-node/setup-python put on PATH; deleting them breaks
+        # the very `yarn` this job runs (exit 127 "yarn: command not found").
         run: |
           echo "Disk before cleanup:"; df -h /
           sudo rm -rf /usr/local/lib/android || true
@@ -152,8 +157,6 @@ jobs:
           sudo rm -rf /opt/ghc || true
           sudo rm -rf /usr/local/.ghcup || true
           sudo rm -rf /usr/local/share/boost || true
-          sudo rm -rf /usr/local/lib/node_modules || true
-          sudo rm -rf "$AGENT_TOOLSDIRECTORY" || true
           sudo rm -rf /opt/hostedtoolcache/CodeQL || true
           sudo docker image prune --all --force || true
           echo "Disk after cleanup:"; df -h /
