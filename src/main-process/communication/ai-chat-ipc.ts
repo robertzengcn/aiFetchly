@@ -1236,7 +1236,7 @@ export function registerAiChatIpcHandlers(): void {
   // renders AI-generated content.
   //
   // Platform notes:
-  //  - Windows: `rundll32 shell32.dll,OpenAs_RunnableDLL <path>` shows the
+  //  - Windows: `rundll32 shell32.dll,OpenAs_RunDLL <path>` shows the
   //    standard "How do you want to open this file?" dialog.
   //  - macOS: AppleScript `choose application` is the only programmatic way
   //    to surface the native app picker; we then launch the file via
@@ -1290,7 +1290,7 @@ export function registerAiChatIpcHandlers(): void {
     if (platform() === "win32") {
       const proc = spawn(
         "rundll32.exe",
-        ["shell32.dll,OpenAs_RunnableDLL", filePath],
+        ["shell32.dll,OpenAs_RunDLL", filePath],
         { detached: true, stdio: "ignore" }
       );
       proc.unref();
@@ -1331,7 +1331,7 @@ export function registerAiChatIpcHandlers(): void {
       if (winPath) {
         const proc = spawn(
           "rundll32.exe",
-          ["shell32.dll,OpenAs_RunnableDLL", winPath],
+          ["shell32.dll,OpenAs_RunDLL", winPath],
           { detached: true, stdio: "ignore" }
         );
         proc.unref();
