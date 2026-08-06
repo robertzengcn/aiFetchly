@@ -33,6 +33,7 @@
     "make-installer": "yarn make-win:prod && yarn make-mac:prod && yarn make-linux:prod",
     "build-uninstaller": "cd installer-scripts && yarn install --no-lockfile && yarn build",
     "package": "electron-forge package",
+    "package:ci": "npm run rebuild-native && node scripts/run-packaging-with-hang-guard.js",
     "verify-packaged-childprocess": "node scripts/verify-packaged-childprocess.js",
     "prestart": "yarn rebuild-native",
     "start": "electron-forge start",

@@ -135,8 +135,15 @@ jobs:
         run: yarn install --frozen-lockfile
 
       - name: Build Linux package for worker smoke test
-        timeout-minutes: 45
-        run: yarn package
+        timeout-minutes: 40
+        # electron-forge's underlying process can hang after packaging fully
+        # completes (see scripts/run-packaging-with-hang-guard.js for the
+        # full explanation). yarn package:ci detects true completion from
+        # the CLI's own log output and force-exits instead of waiting on a
+        # natural process exit that may never happen, so this step fails
+        # fast with a clear reason instead of being silently canceled by the
+        # step timeout above.
+        run: yarn package:ci
 
       - name: Resolve packaged worker dependencies
         run: yarn verify-packaged-childprocess
