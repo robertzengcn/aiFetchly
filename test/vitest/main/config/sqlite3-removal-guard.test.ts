@@ -85,8 +85,11 @@ describe("sqlite3 removal guard", () => {
     const forge = readText("forge.config.js");
     expect(forge).not.toMatch(/node_modules\/sqlite3\b/);
     // The rebuild onlyModules list is the only place a bare "sqlite3" string
-    // could reappear; ensure it is gone while better-sqlite3 remains.
-    const onlyModulesMatch = forge.match(/onlyModules:\s*\[([\s\S]*?)\]/);
+    // could reappear; ensure it is gone while better-sqlite3 remains. The value
+    // may be a plain array or a conditional expression (CI skips the rebuild),
+    // so capture the whole assignment up to the end of rebuildConfig rather than
+    // assuming a literal array literal directly follows the key.
+    const onlyModulesMatch = forge.match(/onlyModules:([\s\S]*?)\n\s*\},/);
     expect(onlyModulesMatch).not.toBeNull();
     const onlyModulesBlock = onlyModulesMatch![1];
     expect(onlyModulesBlock).not.toMatch(/["']sqlite3["']/);

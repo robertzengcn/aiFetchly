@@ -7,7 +7,7 @@ import {
 import type { AiMessageTaskToolPolicy } from "@/entityTypes/aiMessageTaskTypes";
 
 function policy(
-  overrides: Partial<AiMessageTaskToolPolicy> = {},
+  overrides: Partial<AiMessageTaskToolPolicy> = {}
 ): AiMessageTaskToolPolicy {
   return {
     autoApproveTools: false,
@@ -90,11 +90,28 @@ describe("proxy AI tools scheduled policy", () => {
     expect(blocked.allowed).toBe(false);
   });
 
-  it("allows proxy_list in scheduled mode once auto-approve is on (pure, no allowlist needed)", () => {
+  it("blocks proxy_list when auto-approve is on but it is not allowlisted (FR-16 least-privilege)", () => {
+    // Even a pure read-only tool must be explicitly selected by the user: the
+    // catalog filter advertises ANY tool this function allows, so read-only
+    // tools now require an allowedTools entry (see commit
+    // "fix(scheduled-loop): enforce per-tool allowlist for read-only auto-approve").
     const skill = SkillRegistry.getSkill("proxy_list")!;
     const decision = canAutoApproveScheduledTool({
       skill,
-      taskPolicy: policy({ autoApproveTools: true }),
+      taskPolicy: policy({ autoApproveTools: true, allowedTools: [] }),
+      toolName: "proxy_list",
+    });
+    expect(decision.allowed).toBe(false);
+  });
+
+  it("allows proxy_list in scheduled mode once auto-approve is on AND it is allowlisted", () => {
+    const skill = SkillRegistry.getSkill("proxy_list")!;
+    const decision = canAutoApproveScheduledTool({
+      skill,
+      taskPolicy: policy({
+        autoApproveTools: true,
+        allowedTools: ["proxy_list"],
+      }),
       toolName: "proxy_list",
     });
     expect(decision.allowed).toBe(true);
