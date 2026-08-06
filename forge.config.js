@@ -154,7 +154,8 @@ function getRuntimePackageName(importId) {
 
 function extractRuntimePackageRequires(filePath) {
   const source = readFileSync(filePath, "utf-8");
-  const requirePattern = /\brequire\(\s*["']([^"']+)["']\s*\)/g;
+  // Ignore require(...) text embedded in template literals (ajv codegen).
+  const requirePattern = /(?<![`\\])\brequire\(\s*["']([^"']+)["']\s*\)/g;
   const packageNames = new Set();
   let match = requirePattern.exec(source);
   while (match !== null) {

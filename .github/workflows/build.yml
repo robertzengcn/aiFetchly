@@ -131,6 +131,7 @@ jobs:
           echo "Building with increased heap size (4GB)"
           # Windows CI ships WiX MSI only (no Squirrel Setup.exe).
           yarn make-win:test -- --targets=@electron-forge/maker-wix
+          # Fail if unpacked workers require asar-only pure-JS packages.
           node scripts/verify-packaged-childprocess.js
         shell: bash
 

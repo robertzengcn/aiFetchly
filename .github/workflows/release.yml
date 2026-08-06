@@ -152,6 +152,7 @@ jobs:
           else
             yarn make-win:test
           fi
+          # Fail if unpacked workers require asar-only pure-JS packages.
           node scripts/verify-packaged-childprocess.js
 
       - name: Upload Windows installers

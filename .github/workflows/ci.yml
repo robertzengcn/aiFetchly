@@ -61,7 +61,10 @@ jobs:
       - name: Build Linux package for worker smoke test
         run: yarn package
 
-      - name: Resolve packaged worker dependencies
+      # Catches Windows MODULE_NOT_FOUND class bugs: unpacked workers under
+      # app.asar.unpacked/.vite/build that require pure-JS deps only shipped
+      # inside app.asar (e.g. electron-store, sanitize-html).
+      - name: Verify packaged worker runtime requires
         run: yarn verify-packaged-childprocess
 
       - name: Verify Electron native module compatibility

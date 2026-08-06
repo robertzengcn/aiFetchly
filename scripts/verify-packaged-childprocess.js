@@ -30,6 +30,59 @@ const NODE_BUILTINS = new Set([
   ...builtinModules.map((moduleName) => `node:${moduleName}`),
 ]);
 
+// Workers under app.asar.unpacked/.vite/build cannot reliably resolve pure-JS
+// packages that only exist inside app.asar/node_modules (Windows Electron
+// utilityProcess + NODE_PATH gap). Heavy/native deps that we intentionally
+// keep external and resolve via NODE_PATH / asar may stay allowlisted.
+// Everything else required by an unpacked worker must be present under
+// app.asar.unpacked/node_modules, or bundled via vite ssr.noExternal.
+const UNPACKED_WORKER_ASAR_REQUIRE_ALLOWLIST = [
+  /^puppeteer(-|$)/,
+  /^puppeteer-extra/,
+  /^puppeteer-cluster/,
+  /^@puppeteer\//,
+  /^@lem0-packages\/puppeteer-page-proxy$/,
+  /^winston(-|$)/,
+  /^lodash$/,
+  // cheerio is ESM and fails Vite SSR default-export bundling; keep external.
+  /^cheerio$/,
+  /^nodemailer$/,
+  /^debug$/,
+  /^user-agents$/,
+  /^better-sqlite3$/,
+  /^sqlite3$/,
+  /^sqlite-vec$/,
+  /^bindings$/,
+  /^typeorm$/,
+  /^onnxruntime-/,
+  /^@xenova\/transformers$/,
+  /^sharp$/,
+  /^sherpa-onnx/,
+  /^@napi-rs\/canvas$/,
+  /^canvas$/,
+];
+
+function isUnpackedBundleLocation(location) {
+  return location.replace(/\\/g, "/").includes("/app.asar.unpacked/");
+}
+
+function isAllowedAsarRequireForUnpackedWorker(packageName) {
+  return UNPACKED_WORKER_ASAR_REQUIRE_ALLOWLIST.some((pattern) =>
+    pattern.test(packageName)
+  );
+}
+
+function hasUnpackedNodeModule(resourcesDir, packageName) {
+  const packageJsonPath = path.join(
+    resourcesDir,
+    "app.asar.unpacked",
+    "node_modules",
+    ...packageName.split("/"),
+    "package.json"
+  );
+  return fs.existsSync(packageJsonPath);
+}
+
 function walkDirectories(root, visitor) {
   if (!fs.existsSync(root)) {
     return;
@@ -98,7 +151,9 @@ function getRuntimePackageName(importId) {
 }
 
 function extractRuntimePackageRequires(source) {
-  const requirePattern = /\brequire\(\s*["']([^"']+)["']\s*\)/g;
+  // Ignore require(...) text embedded in template literals (ajv codegen emits
+  // `require("ajv/...")` strings that are not real runtime dependencies).
+  const requirePattern = /(?<![`\\])\brequire\(\s*["']([^"']+)["']\s*\)/g;
   const packageNames = new Set();
   let match = requirePattern.exec(source);
   while (match !== null) {
@@ -275,16 +330,12 @@ function verifyRuntimeRequires(resourcesDir) {
   const extractedAsarRoot = fs.mkdtempSync(
     path.join(os.tmpdir(), "aifetchly-asar-")
   );
+  const unpackedRoot = path.join(resourcesDir, "app.asar.unpacked");
 
   try {
     if (fs.existsSync(asarPath)) {
       asar.extractAll(asarPath, extractedAsarRoot);
     }
-
-    const packagedModuleSearchPaths = [
-      extractedAsarRoot,
-      path.join(resourcesDir, "app.asar.unpacked"),
-    ];
 
     for (const bundleFile of getGeneratedBundleRelativePaths()) {
       const bundle = getBundleCandidates(bundleFile)
@@ -297,12 +348,47 @@ function verifyRuntimeRequires(resourcesDir) {
       }
 
       checkedBundles += 1;
+      const unpackedBundle = isUnpackedBundleLocation(bundle.location);
+
       for (const packageName of extractRuntimePackageRequires(bundle.content)) {
         checkedRequires += 1;
+
+        // Unpacked workers: pure-JS deps that only live in app.asar are a
+        // known Windows MODULE_NOT_FOUND class (sanitize-html, electron-store).
+        // Allow only the intentional heavy/native externals; everything else
+        // must be unpacked or bundled via ssr.noExternal.
+        if (
+          unpackedBundle &&
+          !isAllowedAsarRequireForUnpackedWorker(packageName) &&
+          !hasUnpackedNodeModule(resourcesDir, packageName)
+        ) {
+          const inAsar = asarEntries.has(
+            path
+              .join("node_modules", ...packageName.split("/"), "package.json")
+              .replace(/\\/g, "/")
+          );
+          missing.push(
+            `${bundle.location} requires ${packageName}: package is not in ` +
+              `app.asar.unpacked/node_modules` +
+              (inAsar
+                ? " (only inside app.asar). Bundle it via vite ssr.noExternal " +
+                  "or add it to UNPACKED_WORKER_ASAR_REQUIRE_ALLOWLIST if it is " +
+                  "an intentional heavy external."
+                : " and is missing from the package entirely.")
+          );
+          continue;
+        }
+
+        const searchPaths = unpackedBundle
+          ? isAllowedAsarRequireForUnpackedWorker(packageName)
+            ? [extractedAsarRoot, unpackedRoot]
+            : [unpackedRoot]
+          : [extractedAsarRoot, unpackedRoot];
+
         const result = resolvePackagedRequire(
           packageName,
           bundle.location,
-          packagedModuleSearchPaths
+          searchPaths
         );
         if (typeof result === "object") {
           missing.push(
@@ -315,16 +401,16 @@ function verifyRuntimeRequires(resourcesDir) {
     fs.rmSync(extractedAsarRoot, { recursive: true, force: true });
   }
 
-  if (checkedRequires === 0) {
+  if (checkedBundles === 0) {
     console.error(
-      `No static runtime requires found in packaged bundles under ${resourcesDir}`
+      `No generated runtime bundles found in packaged resources: ${resourcesDir}`
     );
     return false;
   }
 
-  if (checkedBundles === 0) {
+  if (checkedRequires === 0) {
     console.error(
-      `No generated runtime bundles found in packaged resources: ${resourcesDir}`
+      `No static runtime requires found in packaged bundles under ${resourcesDir}`
     );
     return false;
   }
@@ -381,4 +467,18 @@ function run() {
   return failed ? 1 : 0;
 }
 
-process.exit(run());
+if (require.main === module) {
+  process.exit(run());
+}
+
+module.exports = {
+  REQUIRED_WORKERS,
+  UNPACKED_WORKER_ASAR_REQUIRE_ALLOWLIST,
+  extractRuntimePackageRequires,
+  getRuntimePackageName,
+  hasUnpackedNodeModule,
+  isAllowedAsarRequireForUnpackedWorker,
+  isUnpackedBundleLocation,
+  verifyRuntimeRequires,
+  run,
+};

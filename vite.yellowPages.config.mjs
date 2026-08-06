@@ -63,6 +63,31 @@ export default ({ mode }) => {
         optimizeDeps: {
             include: ['winston-transport', 'bufferutil', 'utf-8-validate']
         },
+        // SSR builds externalize node_modules by default. Force-bundle
+        // sanitize-html and its pure-JS dependency tree so packaged
+        // YellowPagesScraper (loaded from app.asar.unpacked/.vite/build) does
+        // not need runtime requires that fail with MODULE_NOT_FOUND on Windows.
+        ssr: {
+            noExternal: [
+                'sanitize-html',
+                'htmlparser2',
+                'escape-string-regexp',
+                'is-plain-object',
+                'deepmerge',
+                'parse-srcset',
+                'postcss',
+                'launder',
+                'entities',
+                'domhandler',
+                'domutils',
+                'domelementtype',
+                'dom-serializer',
+                'nanoid',
+                'picocolors',
+                'source-map-js',
+                'dayjs',
+            ],
+        },
         build: {
             rollupOptions: {
                 // input: {
@@ -78,8 +103,7 @@ export default ({ mode }) => {
                     'sqlite3',
                     'better-sqlite3',
                     'bindings',
-                    'typeorm',
-                    'sanitize-html'
+                    'typeorm'
                 ],
             },
             sourcemap: true,
