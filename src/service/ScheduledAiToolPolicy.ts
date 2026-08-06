@@ -14,10 +14,11 @@ import type {
  * {@link SCHEDULED_LOOP_AUTOMATION_TOOLS} AND is not in the permanent deny set.
  *
  * Two tiers of schedulable tools exist:
- *  - **Read-only** (pure): auto-approved when `autoApproveTools` is on; no
- *    per-tool allowlist entry required.
- *  - **Automation**: schedulable but requires explicit per-tool allowlisting
- *    because they perform network checks or other side effects.
+ *  - **Read-only** (pure): schedulable, but still requires the tool to be in
+ *    the task's `allowedTools` (the user's explicit selection) AND
+ *    `autoApproveTools` to be on.
+ *  - **Automation**: same gating as read-only; the tier exists for risk
+ *    labeling because these tools perform network checks or other side effects.
  *
  * Source: PRD §FR-16, technical-design §15 (safety boundaries).
  */
@@ -27,19 +28,21 @@ import type {
  * `run_subagent` is denied because it can indirectly invoke many other tools;
  * the rest mutate local/mailbox state or send external side effects.
  */
-export const SCHEDULED_LOOP_ALWAYS_BLOCKED_TOOLS: ReadonlySet<string> = new Set([
-  "run_subagent",
-  "shell_execute",
-  "file_write",
-  "file_edit",
-  "send_email_reply",
-  "start_email_send_task",
-  "create_email_reply_draft",
-  "mark_email_processed",
-  // Inbox tools that look like reads but mutate mailbox/local state:
-  "fetch_unread_emails", // stores messages locally
-  "get_email_message", // marks the message read
-]);
+export const SCHEDULED_LOOP_ALWAYS_BLOCKED_TOOLS: ReadonlySet<string> = new Set(
+  [
+    "run_subagent",
+    "shell_execute",
+    "file_write",
+    "file_edit",
+    "send_email_reply",
+    "start_email_send_task",
+    "create_email_reply_draft",
+    "mark_email_processed",
+    // Inbox tools that look like reads but mutate mailbox/local state:
+    "fetch_unread_emails", // stores messages locally
+    "get_email_message", // marks the message read
+  ]
+);
 
 /**
  * Curated allowlist of genuinely read-only built-in tools safe for unattended
@@ -200,9 +203,10 @@ export function describeBuiltInToolForSchedule(
  * but this backstop blocks any model-hallucinated tool call and returns a
  * structured reason the model can read.
  *
- * Read-only tools are auto-approved when `autoApproveTools` is on (no per-tool
- * allowlist entry needed). Automation tools require both `autoApproveTools` AND
- * explicit inclusion in the task's `allowedTools` list.
+ * Both tiers require `autoApproveTools` AND explicit inclusion in the task's
+ * `allowedTools` list. The catalog filter (AIChatQueryEngine) advertises every
+ * tool this function allows, so the allowlist check is what enforces the
+ * user's per-tool selection — never skip it.
  */
 export function canAutoApproveScheduledTool(params: {
   readonly skill: SkillDefinition;
@@ -236,8 +240,19 @@ export function canAutoApproveScheduledTool(params: {
     };
   }
 
-  // Read-only tools: auto-approved without per-tool allowlisting.
+  // Read-only tools still require explicit per-tool selection — the catalog
+  // filter advertises ANY tool this returns true for (AIChatQueryEngine
+  // filters the FULL registry), so without this check every read-only tool
+  // would be exposed and auto-run when autoApproveTools is on, ignoring the
+  // subset the user actually approved (FR-16 least-privilege).
   if (isScheduledReadOnlyTool(toolName)) {
+    if (!taskPolicy.allowedTools.includes(toolName)) {
+      return {
+        allowed: false,
+        reason: `Tool "${toolName}" is a read-only tool and must be explicitly added to the task's allowed tools list.`,
+        riskLevel: "high",
+      };
+    }
     return { allowed: true, riskLevel: "low" };
   }
 

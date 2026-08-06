@@ -112,10 +112,23 @@ describe("ScheduledAiToolPolicy canAutoApproveScheduledTool", () => {
     expect(decision.reason).toMatch(/Auto-approve is not enabled/);
   });
 
-  it("auto-approves read-only tools without a per-tool allowlist entry", () => {
+  it("denies a read-only tool that is not in the task's allowed tools", () => {
+    // FR-16 least-privilege: the catalog filter advertises ANY tool this
+    // function allows, so a read-only tool must be explicitly selected by the
+    // user (present in allowedTools) before it can be exposed or auto-run.
     const decision = canAutoApproveScheduledTool({
       skill: skill("list_email_services"),
       taskPolicy: policy({ allowedTools: ["list_email_inboxes"] }),
+      toolName: "list_email_services",
+    });
+    expect(decision.allowed).toBe(false);
+    expect(decision.reason).toMatch(/allowed tools list/);
+  });
+
+  it("auto-approves a read-only tool that IS in the task's allowed tools", () => {
+    const decision = canAutoApproveScheduledTool({
+      skill: skill("list_email_services"),
+      taskPolicy: policy({ allowedTools: ["list_email_services"] }),
       toolName: "list_email_services",
     });
     expect(decision.allowed).toBe(true);
