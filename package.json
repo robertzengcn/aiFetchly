@@ -157,6 +157,7 @@
     "sqlite3": "^5.1.6",
     "turndown": "^7.2.1",
     "typeorm": "^0.3.31",
+    "update-electron-app": "^3.3.0",
     "user-agents": "^1.1.550",
     "utf-8-validate": "^6.0.4",
     "uuid": "^14.0.1",

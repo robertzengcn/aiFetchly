@@ -3,14 +3,13 @@ import "reflect-metadata";
 // import {ipcMain as ipc} from 'electron-better-ipc';
 import { app, BrowserWindow, Menu, dialog } from "electron";
 // eslint-disable-next-line @typescript-eslint/no-var-requires
-const autoUpdater = require("electron").autoUpdater;
-// eslint-disable-next-line @typescript-eslint/no-var-requires
 const globalShortcut = require("electron").globalShortcut;
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const session = require("electron").session;
 // import { createProtocol } from 'vue-cli-plugin-electron-builder/lib'
 import installExtension, { VUEJS3_DEVTOOLS } from "electron-devtools-installer";
 import { registerCommunicationIpcHandlers } from "./main-process/communication/";
+import { getAppUpdateService } from "@/main-process/updater/createAppUpdateService";
 import { SkillImportService } from "@/service/SkillImportService";
 import { FileOperationTracker } from "@/service/FileOperationTracker";
 import { registerBuiltinHooks } from "@/service/hooks/builtinHooks";
@@ -350,6 +349,11 @@ function initialize() {
       //if (userdataPath){//register communication ipc handlers
       registerCommunicationIpcHandlers(win);
 
+      // Configure the GitHub auto-update feed (About > Check for updates).
+      // Idempotent; internally no-ops on unpackaged / Store / unsupported-platform
+      // builds (PRD FR-5, NFR-5).
+      getAppUpdateService().initializeAppUpdates();
+
       // INIT-01: Wire FileOperationTracker to the window's webContents
       FileOperationTracker.setWebContents(win.webContents);
 
@@ -414,15 +418,9 @@ function initialize() {
         console.error("Failed to load URL:", error);
       }
     } else {
-      //check update
-      const server = import.meta.env.UPDATESERVER as string;
-      if (server) {
-        const url = `${server}/update/${process.platform}/${(
-          app as any
-        ).getVersion()}`;
-        autoUpdater.setFeedURL({ url });
-        autoUpdater.checkForUpdates();
-      }
+      // Auto-update is initialized above via AppUpdateService (GitHub Releases
+      // through update-electron-app). The legacy UPDATESERVER feed path was
+      // removed in favor of that shared service.
       // console.log('app://./index.html')
       // createProtocol('app')
       // Load the index.html when not in development
