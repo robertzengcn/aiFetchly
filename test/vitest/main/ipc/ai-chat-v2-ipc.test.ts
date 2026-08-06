@@ -40,8 +40,9 @@ const mockToolApprovalState = vi.hoisted(() => ({
   modes: new Map<string, string>(),
 }));
 const mockGetToolApprovalMode = vi.hoisted(() =>
-  vi.fn((conversationId: string) =>
-    mockToolApprovalState.modes.get(conversationId) ?? "ask_for_approval"
+  vi.fn(
+    (conversationId: string) =>
+      mockToolApprovalState.modes.get(conversationId) ?? "ask_for_approval"
   )
 );
 const mockSetToolApprovalMode = vi.hoisted(() =>
@@ -64,11 +65,13 @@ vi.mock("@/modules/token", () => {
       deleteValue: vi.fn().mockImplementation((key: string) => {
         mockState.tokenStore.delete(key);
       }),
-      hasValue: vi.fn().mockImplementation(
-        (key: string) =>
-          mockState.tokenStore.has(key) &&
-          (mockState.tokenStore.get(key)?.length ?? 0) > 0
-      ),
+      hasValue: vi
+        .fn()
+        .mockImplementation(
+          (key: string) =>
+            mockState.tokenStore.has(key) &&
+            (mockState.tokenStore.get(key)?.length ?? 0) > 0
+        ),
     })),
   };
 });
@@ -122,11 +125,23 @@ vi.mock("@/modules/user", () => ({
   })),
 }));
 
-vi.mock("@/api/aiChatApi", () => ({
-  AiChatApi: vi.fn().mockImplementation(() => ({
-    openAIChatCompletionStream: mockOpenAIChatCompletionStream,
-    listOpenAIModels: mockListOpenAIModels,
-  })),
+vi.mock("@/api/aiChatApi", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/api/aiChatApi")>();
+  return {
+    ...actual,
+    AiChatApi: vi.fn().mockImplementation(() => ({
+      openAIChatCompletionStream: mockOpenAIChatCompletionStream,
+      listOpenAIModels: mockListOpenAIModels,
+    })),
+  };
+});
+
+vi.mock("@/service/DesktopNotifyService", () => ({
+  DesktopNotifyService: {
+    getInstance: () => ({
+      show: vi.fn().mockResolvedValue(false),
+    }),
+  },
 }));
 
 vi.mock("@/config/skillsRegistry", () => ({
@@ -239,7 +254,8 @@ vi.mock("@/service/AIAutoDreamFactory", () => ({
   getSharedWorkspaceAutoDreamService: vi.fn(
     () => mockSharedWorkspaceAutoDreamService
   ),
-  resetSharedWorkspaceAutoDreamService: mockResetSharedWorkspaceAutoDreamService,
+  resetSharedWorkspaceAutoDreamService:
+    mockResetSharedWorkspaceAutoDreamService,
 }));
 
 import {

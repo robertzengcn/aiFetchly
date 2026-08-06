@@ -79,8 +79,20 @@ vi.mock("@/modules/AgentDefinitionModule", () => ({
 }));
 
 // --- Mock AiChatApi ----------------------------------------------------
-vi.mock("@/api/aiChatApi", () => ({
-  AiChatApi: vi.fn().mockImplementation(() => ({})),
+vi.mock("@/api/aiChatApi", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/api/aiChatApi")>();
+  return {
+    ...actual,
+    AiChatApi: vi.fn().mockImplementation(() => ({})),
+  };
+});
+
+vi.mock("@/service/DesktopNotifyService", () => ({
+  DesktopNotifyService: {
+    getInstance: () => ({
+      show: vi.fn().mockResolvedValue(false),
+    }),
+  },
 }));
 
 // --- Mock SkillRegistry ------------------------------------------------

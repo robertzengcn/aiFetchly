@@ -62,10 +62,29 @@ function defaultIsSettingEnabled(): Promise<boolean> {
 function defaultGetDisplayWorkArea(
   main: BrowserWindow | null
 ): Electron.Rectangle {
-  if (main && !main.isDestroyed()) {
-    return screen.getDisplayMatching(main.getBounds()).workArea;
+  const fallback: Electron.Rectangle = {
+    x: 0,
+    y: 0,
+    width: 1280,
+    height: 720,
+  };
+  // Outside a real Electron runtime (e.g. vitest), `screen` may be missing.
+  if (
+    !screen ||
+    typeof screen.getPrimaryDisplay !== "function" ||
+    typeof screen.getDisplayMatching !== "function"
+  ) {
+    return fallback;
   }
-  return screen.getPrimaryDisplay().workArea;
+  try {
+    if (main && !main.isDestroyed()) {
+      return screen.getDisplayMatching(main.getBounds()).workArea;
+    }
+    return screen.getPrimaryDisplay().workArea;
+  } catch (err: unknown) {
+    console.error("[desktop-notify] getDisplayWorkArea failed:", err);
+    return fallback;
+  }
 }
 
 function defaultSendOpenConversation(
@@ -314,7 +333,9 @@ export class DesktopNotifyService {
 
     if (this.showing && this.currentPayload) {
       this.currentPayload = merged;
-      void this.renderCurrent();
+      void this.renderCurrent().catch((err: unknown) => {
+        console.error("[desktop-notify] coalesce re-render failed:", err);
+      });
       this.scheduleDismiss();
       return true;
     }
