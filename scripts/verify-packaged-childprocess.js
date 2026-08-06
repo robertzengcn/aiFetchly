@@ -46,6 +46,8 @@ const UNPACKED_WORKER_ASAR_REQUIRE_ALLOWLIST = [
   /^lodash$/,
   // cheerio is ESM and fails Vite SSR default-export bundling; keep external.
   /^cheerio$/,
+  /^chokidar$/,
+  /^isolated-vm$/,
   /^nodemailer$/,
   /^debug$/,
   /^user-agents$/,

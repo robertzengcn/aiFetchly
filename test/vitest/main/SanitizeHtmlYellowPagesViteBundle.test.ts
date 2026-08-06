@@ -51,17 +51,21 @@ const SANITIZE_HTML_RUNTIME_DEPS = [
 describe("YellowPagesScraper sanitize-html Vite bundle packaging", () => {
   it("lists sanitize-html and its deps in ssr.noExternal", () => {
     const config = fs.readFileSync(yellowPagesViteConfigPath, "utf-8");
+    const shared = fs.readFileSync(
+      path.resolve(process.cwd(), "vite.workerSsrNoExternal.mjs"),
+      "utf-8"
+    );
     const rollupExternalMatch = config.match(
       /rollupOptions:\s*\{[\s\S]*?external:\s*\[([\s\S]*?)\]/
     );
 
     expect(rollupExternalMatch).not.toBeNull();
     expect(rollupExternalMatch?.[1]).not.toMatch(/sanitize-html/);
+    expect(config).toMatch(/noExternal:\s*SANITIZE_HTML_SSR_NO_EXTERNAL/);
 
     for (const dep of SANITIZE_HTML_RUNTIME_DEPS) {
-      expect(config).toContain(`'${dep}'`);
+      expect(shared).toContain(`"${dep}"`);
     }
-    expect(config).toMatch(/noExternal:\s*\[/);
   });
 
   it("bundles sanitize-html into a CJS worker-style build without runtime require", async () => {

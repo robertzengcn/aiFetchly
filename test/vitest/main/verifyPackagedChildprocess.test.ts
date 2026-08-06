@@ -105,7 +105,13 @@ describe("verify-packaged-childprocess unpacked worker policy", () => {
       false
     );
     expect(verify.isAllowedAsarRequireForUnpackedWorker("cheerio")).toBe(true);
+    expect(verify.isAllowedAsarRequireForUnpackedWorker("chokidar")).toBe(true);
+    expect(verify.isAllowedAsarRequireForUnpackedWorker("isolated-vm")).toBe(
+      true
+    );
     expect(verify.isAllowedAsarRequireForUnpackedWorker("uuid")).toBe(false);
+    expect(verify.isAllowedAsarRequireForUnpackedWorker("zod")).toBe(false);
+    expect(verify.isAllowedAsarRequireForUnpackedWorker("turndown")).toBe(false);
   });
 
   it("extracts package roots from worker require() calls", () => {

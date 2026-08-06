@@ -6,6 +6,7 @@ import { builtinModules } from 'node:module';
 import ClosePlugin from './vite-plugin-close.js'
 import checker from 'vite-plugin-checker'
 import { optionalChecker } from './vite-checker-toggle.mjs';
+import { SANITIZE_HTML_SSR_NO_EXTERNAL } from './vite.workerSsrNoExternal.mjs';
 import { nodeResolve } from '@rollup/plugin-node-resolve';
 import sourcemaps from 'rollup-plugin-sourcemaps';
 
@@ -68,25 +69,7 @@ export default ({ mode }) => {
         // YellowPagesScraper (loaded from app.asar.unpacked/.vite/build) does
         // not need runtime requires that fail with MODULE_NOT_FOUND on Windows.
         ssr: {
-            noExternal: [
-                'sanitize-html',
-                'htmlparser2',
-                'escape-string-regexp',
-                'is-plain-object',
-                'deepmerge',
-                'parse-srcset',
-                'postcss',
-                'launder',
-                'entities',
-                'domhandler',
-                'domutils',
-                'domelementtype',
-                'dom-serializer',
-                'nanoid',
-                'picocolors',
-                'source-map-js',
-                'dayjs',
-            ],
+            noExternal: SANITIZE_HTML_SSR_NO_EXTERNAL,
         },
         build: {
             rollupOptions: {
