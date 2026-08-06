@@ -1091,6 +1091,37 @@ export default {
     form_not_valid: "フォームが無効です",
     save_success: "保存成功、アカウントIDは",
     save_fail: "保存失敗",
+    session_status_available: "セッション利用可能",
+    session_status_missing: "セッションなし",
+    session_status_invalid: "セッション無効 — 再ログインしてください",
+    session_status_migration_pending: "セッションをアップグレード中",
+    import: {
+      button: "ブラウザプロファイルからインポート",
+      title: "ブラウザプロファイルからインポート",
+      subtitle:
+        "このプラットフォームの承認済み Cookie のみをブラウザプロファイルから読み取ります。",
+      target: "対象アカウントのプラットフォーム",
+      approved_domains: "承認済み Cookie ドメイン",
+      instructions:
+        "インポート元の Chrome・Edge・Brave プロファイルで AiFetchly 拡張を開き、プラットフォームを承認してください。以下の承認済み Cookie のみ一度だけ読み取られます。",
+      start: "ペアリングを開始",
+      cancel: "キャンセル",
+      close: "閉じる",
+      reason_feature_disabled:
+        "このビルドではブラウザプロファイルからのインポートは有効になっていません。",
+      reason_platform_unsupported:
+        "このプラットフォームはまだブラウザプロファイルからのインポートに対応していません。",
+      reason_unavailable:
+        "このアカウントではブラウザプロファイルからのインポートは利用できません。",
+      result_success:
+        "承認済み Cookie {count} 個をインポートしました。セッションを確認してください。",
+      result_no_cookies:
+        "ペアリングしたブラウザプロファイルに承認済み Cookie が見つかりませんでした。",
+      result_expired:
+        "ペアリングリクエストの有効期限が切れました。もう一度開始してください。",
+      result_failed:
+        "インポートに失敗しました。再試行するか手動でログインしてください。",
+    },
   },
   video_download_list: {},
   system_settings: {
@@ -1113,19 +1144,23 @@ export default {
     embedding_group_description: "ベクトル検索のデフォルト埋め込みモデル。",
     external_system: "外部システム",
     user_preferences: "ユーザー設定",
-    "user-preferences-group-description": "アプリケーション動作のユーザーレベル設定。",
+    "user-preferences-group-description":
+      "アプリケーション動作のユーザーレベル設定。",
     default_embedding_model: "デフォルト埋め込みモデル",
-    "default-embedding-model-description": "ベクトル検索と類似性マッチングに使用する埋め込みモデルを選択します。",
+    "default-embedding-model-description":
+      "ベクトル検索と類似性マッチングに使用する埋め込みモデルを選択します。",
     language_preference: "言語",
     "language-preference-description": "UIの言語設定。",
     ai_website_analysis_business_info: "ビジネス情報",
-    "ai-website-analysis-business-info-description": "ウェブサイトのAI分析で使用されるビジネス情報。",
+    "ai-website-analysis-business-info-description":
+      "ウェブサイトのAI分析で使用されるビジネス情報。",
     "external-system-group-description": "外部システムグループ設定",
     mcp_tools: "MCPツール",
     manage_mcp_tools: "MCPツールを管理",
     manage_skills: "スキルを管理",
     ai_preferences: "AI 設定",
-    "ai-preferences-group-description": "AIチャットの動作、メモリー、コンテキストを制御する設定。",
+    "ai-preferences-group-description":
+      "AIチャットの動作、メモリー、コンテキストを制御する設定。",
     user_ai_auto_dream: "自動要約統合",
     "ai-auto-dream-description":
       "バックグラウンドで過去の会話を自動的に要約し、AIコンテキストトークンを節約します。",

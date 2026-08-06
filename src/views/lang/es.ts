@@ -1119,6 +1119,37 @@ export default {
     form_not_valid: "El formulario no es válido",
     save_success: "Guardado correctamente, el ID de la cuenta es",
     save_fail: "Error al guardar",
+    session_status_available: "Sesión lista",
+    session_status_missing: "Sin sesión",
+    session_status_invalid: "Sesión inválida: vuelve a iniciar sesión",
+    session_status_migration_pending: "Actualizando sesión",
+    import: {
+      button: "Importar del perfil del navegador",
+      title: "Importar del perfil del navegador",
+      subtitle:
+        "Leer solo las cookies aprobadas para esta plataforma desde tu perfil del navegador.",
+      target: "Plataforma de la cuenta de destino",
+      approved_domains: "Dominios de cookies aprobados",
+      instructions:
+        "Abre la extensión AiFetchly en el perfil de Chrome, Edge o Brave desde el que quieres importar y aprueba la plataforma. Solo se leen una vez las cookies aprobadas.",
+      start: "Iniciar emparejamiento",
+      cancel: "Cancelar",
+      close: "Cerrar",
+      reason_feature_disabled:
+        "La importación desde el perfil del navegador no está habilitada en esta versión.",
+      reason_platform_unsupported:
+        "Esta plataforma aún no admite la importación desde el perfil del navegador.",
+      reason_unavailable:
+        "La importación desde el perfil del navegador no está disponible para esta cuenta.",
+      result_success:
+        "Se importaron {count} cookie(s) aprobadas. Verifica la sesión.",
+      result_no_cookies:
+        "No se encontraron cookies aprobadas en el perfil emparejado.",
+      result_expired:
+        "La solicitud de emparejamiento expiró. Vuelve a empezar.",
+      result_failed:
+        "La importación falló. Reintenta o inicia sesión manualmente.",
+    },
   },
   video_download_list: {},
   system_settings: {
@@ -1139,23 +1170,28 @@ export default {
     chrome_path: "Ruta de Chrome",
     firefox_path: "Ruta de Firefox",
     embedding_group: "Modelos de Embedding",
-    embedding_group_description: "Modelo de embedding predeterminado para búsqueda vectorial.",
+    embedding_group_description:
+      "Modelo de embedding predeterminado para búsqueda vectorial.",
     external_system: "Sistema Externo",
     user_preferences: "Preferencias de Usuario",
-    "user-preferences-group-description": "Preferencias a nivel de usuario para el comportamiento de la aplicación.",
+    "user-preferences-group-description":
+      "Preferencias a nivel de usuario para el comportamiento de la aplicación.",
     default_embedding_model: "Modelo de Embedding Predeterminado",
-    "default-embedding-model-description": "Seleccione el modelo de embedding utilizado para la búsqueda vectorial y la coincidencia de similitud.",
+    "default-embedding-model-description":
+      "Seleccione el modelo de embedding utilizado para la búsqueda vectorial y la coincidencia de similitud.",
     language_preference: "Idioma",
     "language-preference-description": "Preferencia de idioma de la interfaz.",
     ai_website_analysis_business_info: "Información de Negocio",
-    "ai-website-analysis-business-info-description": "Información comercial utilizada durante el análisis de IA del sitio web.",
+    "ai-website-analysis-business-info-description":
+      "Información comercial utilizada durante el análisis de IA del sitio web.",
     "external-system-group-description":
       "Configuración del grupo de sistema externo",
     mcp_tools: "Herramientas MCP",
     manage_mcp_tools: "Gestionar herramientas MCP",
     manage_skills: "Gestionar habilidades",
     ai_preferences: "Preferencias de IA",
-    "ai-preferences-group-description": "Configuración que controla el comportamiento del chat de IA, la memoria y el contexto.",
+    "ai-preferences-group-description":
+      "Configuración que controla el comportamiento del chat de IA, la memoria y el contexto.",
     user_ai_auto_dream: "Consolidación Auto-Sueño",
     "ai-auto-dream-description":
       "Resumir automáticamente conversaciones pasadas en segundo plano para ahorrar tokens de contexto de IA.",

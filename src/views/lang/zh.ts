@@ -1078,6 +1078,29 @@ export default {
     form_not_valid: "表单无效",
     save_success: "保存成功，账户ID为",
     save_fail: "保存失败",
+    session_status_available: "会话可用",
+    session_status_missing: "无会话",
+    session_status_invalid: "会话失效，请重新登录",
+    session_status_migration_pending: "会话升级中",
+    import: {
+      button: "从浏览器配置文件导入",
+      title: "从浏览器配置文件导入",
+      subtitle: "仅读取该平台在您浏览器配置文件中已授权的 Cookie。",
+      target: "目标账户平台",
+      approved_domains: "已授权的 Cookie 域名",
+      instructions:
+        "在您要导入的 Chrome、Edge 或 Brave 配置文件中打开 AiFetchly 扩展，然后确认平台。仅一次性读取下列已授权的 Cookie。",
+      start: "开始配对",
+      cancel: "取消",
+      close: "关闭",
+      reason_feature_disabled: "当前版本未启用浏览器配置文件导入。",
+      reason_platform_unsupported: "该平台暂不支持浏览器配置文件导入。",
+      reason_unavailable: "该账户无法使用浏览器配置文件导入。",
+      result_success: "已导入 {count} 个已授权 Cookie，请验证会话。",
+      result_no_cookies: "在配对的浏览器配置文件中未找到已授权的 Cookie。",
+      result_expired: "配对请求已过期，请重新开始。",
+      result_failed: "导入失败，请重试或手动登录。",
+    },
   },
   video_download_list: {},
   system_settings: {
@@ -1102,17 +1125,20 @@ export default {
     user_preferences: "用户偏好",
     "user-preferences-group-description": "应用程序行为的用户级偏好设置。",
     default_embedding_model: "默认嵌入模型",
-    "default-embedding-model-description": "选择用于向量搜索和相似度匹配的嵌入模型。",
+    "default-embedding-model-description":
+      "选择用于向量搜索和相似度匹配的嵌入模型。",
     language_preference: "语言",
     "language-preference-description": "界面语言偏好。",
     ai_website_analysis_business_info: "业务信息",
-    "ai-website-analysis-business-info-description": "网站AI分析中使用的业务信息。",
+    "ai-website-analysis-business-info-description":
+      "网站AI分析中使用的业务信息。",
     "external-system-group-description": "外部系统组设置",
     mcp_tools: "MCP工具",
     manage_mcp_tools: "管理MCP工具",
     manage_skills: "管理技能",
     ai_preferences: "AI 偏好设置",
-    "ai-preferences-group-description": "控制 AI 聊天行为、记忆和上下文的设置。",
+    "ai-preferences-group-description":
+      "控制 AI 聊天行为、记忆和上下文的设置。",
     user_ai_auto_dream: "自动摘要整合",
     "ai-auto-dream-description":
       "在后台自动汇总过去的对话，以节省 AI 上下文令牌。",
@@ -1822,7 +1848,8 @@ export default {
     tool_approval_mode_full: "完全访问",
     tool_approval_mode_ask_desc: "在需要权限的工具运行前询问。",
     tool_approval_mode_auto_desc: "自动批准本对话中受信任的非 shell 工具。",
-    tool_approval_mode_full_desc: "自动批准本对话中注册的工具。安全限制仍然生效。",
+    tool_approval_mode_full_desc:
+      "自动批准本对话中注册的工具。安全限制仍然生效。",
     tool_approval_mode_full_confirm_title: "启用完全访问？",
     tool_approval_mode_full_confirm_text:
       "注册工具将在本对话中无需审批提示直接运行。依赖安装和硬安全限制仍需要您的批准。",

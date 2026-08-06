@@ -1106,6 +1106,36 @@ export default {
     form_not_valid: "form is not valid",
     save_success: "Save success, the account id is",
     save_fail: "Save fail",
+    session_status_available: "Session prête",
+    session_status_missing: "Aucune session",
+    session_status_invalid: "Session invalide — reconnectez-vous",
+    session_status_migration_pending: "Mise à niveau de la session",
+    import: {
+      button: "Importer depuis le profil du navigateur",
+      title: "Importer depuis le profil du navigateur",
+      subtitle:
+        "Lire uniquement les cookies approuvés pour cette plateforme depuis votre profil de navigateur.",
+      target: "Plateforme du compte cible",
+      approved_domains: "Domaines de cookies approuvés",
+      instructions:
+        "Ouvrez l'extension AiFetchly dans le profil Chrome, Edge ou Brave depuis lequel vous souhaitez importer, puis approuvez la plateforme. Seuls les cookies approuvés ci-dessous sont lus, une fois.",
+      start: "Démarrer l'association",
+      cancel: "Annuler",
+      close: "Fermer",
+      reason_feature_disabled:
+        "L'importation depuis le profil du navigateur n'est pas activée dans cette version.",
+      reason_platform_unsupported:
+        "Cette plateforme ne prend pas encore en charge l'importation depuis le profil du navigateur.",
+      reason_unavailable:
+        "L'importation depuis le profil du navigateur n'est pas disponible pour ce compte.",
+      result_success:
+        "{count} cookie(s) approuvé(s) importé(s). Veuillez vérifier la session.",
+      result_no_cookies: "Aucun cookie approuvé trouvé dans le profil associé.",
+      result_expired:
+        "La demande d'association a expiré. Veuillez recommencer.",
+      result_failed:
+        "Échec de l'importation. Réessayez ou connectez-vous manuellement.",
+    },
   },
   video_download_list: {},
   system_settings: {
@@ -1125,22 +1155,27 @@ export default {
     chrome_path: "chrome path",
     firefox_path: "firefox path",
     embedding_group: "Modèles d'Embedding",
-    embedding_group_description: "Modèle d'embedding par défaut pour la recherche vectorielle.",
+    embedding_group_description:
+      "Modèle d'embedding par défaut pour la recherche vectorielle.",
     external_system: "Système Externe",
     user_preferences: "Préférences Utilisateur",
-    "user-preferences-group-description": "Préférences utilisateur pour le comportement de l'application.",
+    "user-preferences-group-description":
+      "Préférences utilisateur pour le comportement de l'application.",
     default_embedding_model: "Modèle d'Embedding par Défaut",
-    "default-embedding-model-description": "Sélectionnez le modèle d'embedding utilisé pour la recherche vectorielle et la correspondance de similarité.",
+    "default-embedding-model-description":
+      "Sélectionnez le modèle d'embedding utilisé pour la recherche vectorielle et la correspondance de similarité.",
     language_preference: "Langue",
     "language-preference-description": "Préférence de langue de l'interface.",
     ai_website_analysis_business_info: "Informations Commerciales",
-    "ai-website-analysis-business-info-description": "Informations commerciales utilisées lors de l'analyse IA du site web.",
+    "ai-website-analysis-business-info-description":
+      "Informations commerciales utilisées lors de l'analyse IA du site web.",
     "external-system-group-description": "external system group setting",
     mcp_tools: "MCP Tools",
     manage_mcp_tools: "Manage MCP Tools",
     manage_skills: "Gérer les compétences",
     ai_preferences: "Préférences IA",
-    "ai-preferences-group-description": "Paramètres contrôlant le comportement du chat IA, la mémoire et le contexte.",
+    "ai-preferences-group-description":
+      "Paramètres contrôlant le comportement du chat IA, la mémoire et le contexte.",
     user_ai_auto_dream: "Consolidation Auto-Rêve",
     "ai-auto-dream-description":
       "Résumer automatiquement les conversations passées en arrière-plan pour économiser les tokens de contexte IA.",

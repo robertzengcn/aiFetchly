@@ -1112,6 +1112,37 @@ export default {
     form_not_valid: "Formular ist ungültig",
     save_success: "Erfolgreich gespeichert, die Konto-ID ist",
     save_fail: "Speichern fehlgeschlagen",
+    session_status_available: "Sitzung bereit",
+    session_status_missing: "Keine Sitzung",
+    session_status_invalid: "Sitzung ungültig — bitte neu anmelden",
+    session_status_migration_pending: "Sitzung wird aktualisiert",
+    import: {
+      button: "Aus Browserprofil importieren",
+      title: "Aus Browserprofil importieren",
+      subtitle:
+        "Nur die für diese Plattform genehmigten Cookies aus Ihrem Browserprofil lesen.",
+      target: "Zielkontoplattform",
+      approved_domains: "Genehmigte Cookie-Domains",
+      instructions:
+        "Öffnen Sie die AiFetchly-Erweiterung im Chrome-, Edge- oder Brave-Profil, aus dem Sie importieren möchten, und bestätigen Sie die Plattform. Nur die unten genehmigten Cookies werden einmalig gelesen.",
+      start: "Kopplung starten",
+      cancel: "Abbrechen",
+      close: "Schließen",
+      reason_feature_disabled:
+        "Der Import aus dem Browserprofil ist in diesem Build nicht aktiviert.",
+      reason_platform_unsupported:
+        "Diese Plattform unterstützt noch keinen Import aus dem Browserprofil.",
+      reason_unavailable:
+        "Der Import aus dem Browserprofil ist für dieses Konto nicht verfügbar.",
+      result_success:
+        "{count} genehmigte Cookie(s) importiert. Bitte Sitzung überprüfen.",
+      result_no_cookies:
+        "Im gekoppelten Browserprofil wurden keine genehmigten Cookies gefunden.",
+      result_expired:
+        "Die Kopplungsanfrage ist abgelaufen. Bitte erneut starten.",
+      result_failed:
+        "Import fehlgeschlagen. Bitte erneut versuchen oder manuell anmelden.",
+    },
   },
   video_download_list: {},
   system_settings: {
@@ -1132,22 +1163,27 @@ export default {
     chrome_path: "Chrome-Pfad",
     firefox_path: "Firefox-Pfad",
     embedding_group: "Einbettungsmodelle",
-    embedding_group_description: "Standard-Einbettungsmodell für die Vektorsuche.",
+    embedding_group_description:
+      "Standard-Einbettungsmodell für die Vektorsuche.",
     external_system: "Externes System",
     user_preferences: "Benutzereinstellungen",
-    "user-preferences-group-description": "Benutzereinstellungen für das Anwendungsverhalten.",
+    "user-preferences-group-description":
+      "Benutzereinstellungen für das Anwendungsverhalten.",
     default_embedding_model: "Standard-Einbettungsmodell",
-    "default-embedding-model-description": "Wählen Sie das Einbettungsmodell für die Vektorsuche und Ähnlichkeitsermittlung.",
+    "default-embedding-model-description":
+      "Wählen Sie das Einbettungsmodell für die Vektorsuche und Ähnlichkeitsermittlung.",
     language_preference: "Sprache",
     "language-preference-description": "UI-Spracheinstellung.",
     ai_website_analysis_business_info: "Geschäftsinformationen",
-    "ai-website-analysis-business-info-description": "Geschäftsinformationen, die bei der KI-Analyse von Websites verwendet werden.",
+    "ai-website-analysis-business-info-description":
+      "Geschäftsinformationen, die bei der KI-Analyse von Websites verwendet werden.",
     "external-system-group-description": "Externe Systemgruppen-Einstellung",
     mcp_tools: "MCP-Tools",
     manage_mcp_tools: "MCP-Tools verwalten",
     manage_skills: "Fähigkeiten verwalten",
     ai_preferences: "KI-Einstellungen",
-    "ai-preferences-group-description": "Einstellungen zur Steuerung des KI-Chat-Verhaltens, des Speichers und des Kontexts.",
+    "ai-preferences-group-description":
+      "Einstellungen zur Steuerung des KI-Chat-Verhaltens, des Speichers und des Kontexts.",
     user_ai_auto_dream: "Auto-Traum-Konsolidierung",
     "ai-auto-dream-description":
       "Automatisches Zusammenfassen vergangener Konversationen im Hintergrund, um KI-Kontext-Token zu sparen.",
