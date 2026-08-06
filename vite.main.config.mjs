@@ -2,6 +2,7 @@
 import { defineConfig, loadEnv } from 'vite';
 import alias from "@rollup/plugin-alias";
 import * as path from 'path';
+import { builtinModules } from 'node:module';
 import copy from 'rollup-plugin-copy'
 import fs from 'fs';
 // import { viteStaticCopy } from 'vite-plugin-static-copy'
@@ -74,6 +75,40 @@ function fixInteropNamespacePlugin() {
         }
     };
 }
+
+// Puppeteer packages use lazy require() patterns (clone-deep, merge-deep) that
+// break when Vite/Rolldown bundles them. Keep in sync with forge.config.js
+// EXTERNAL_DEPENDENCIES puppeteer entries.
+const PUPPETEER_EXTERNALS = [
+    'puppeteer',
+    'puppeteer-core',
+    'puppeteer-extra',
+    'puppeteer-extra-plugin-stealth',
+    'puppeteer-extra-plugin-recaptcha',
+    '@puppeteer/browsers',
+    '@lem0-packages/puppeteer-page-proxy',
+];
+
+const NODE_BUILTINS = [
+    'electron',
+    'electron/main',
+    'electron/common',
+    ...builtinModules,
+    ...builtinModules.map((moduleName) => `node:${moduleName}`),
+];
+
+const MAIN_PROCESS_EXTERNALS = [
+    ...NODE_BUILTINS,
+    'sqlite3',
+    'better-sqlite3',
+    'bindings',
+    'typeorm',
+    'sqlite-vec',
+    'canvas',
+    '@napi-rs/canvas',
+    'isolated-vm',
+    ...PUPPETEER_EXTERNALS,
+];
 
 // Custom platform-aware copy plugin
 function platformCopyPlugin() {
@@ -353,16 +388,7 @@ export default ({ mode }) => {
         },
         build: {
             rollupOptions: {
-                external: [
-                    'sqlite3',  // Mark sqlite3 as external
-                    'better-sqlite3',
-                    'bindings',
-                    'typeorm',
-                    'sqlite-vec',
-                    'canvas', 
-                    '@napi-rs/canvas',
-                    'isolated-vm',
-                ]
+                external: MAIN_PROCESS_EXTERNALS,
             },
             sourcemap: true,
         },
