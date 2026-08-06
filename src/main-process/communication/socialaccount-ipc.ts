@@ -10,15 +10,14 @@ import {
   SOCIAL_ACCOUNT_LOGIN_UPLOADCOOKIES,
   SOCIAL_ACCOUNT_CLEAN_COOKIES,
   SOCIAL_ACCOUNT_SHOW_PLATFORMPAGE,
+  SOCIAL_ACCOUNT_SESSION_METADATA,
 } from "@/config/channellist";
 import { SocialAccount } from "@/modules/socialaccount";
 import { SocialPlatform } from "@/modules/social_platform";
 import { SocialAccountController } from "@/controller/socialaccount-controller";
+import { AccountSessionService } from "@/modules/AccountSessionService";
+import { log } from "@/modules/Logger";
 import { CommonDialogMsg } from "@/entityTypes/commonType";
-import {
-  RequireCookiesParam,
-  RequireCookiesMsgbox,
-} from "@/entityTypes/cookiesType";
 import fs from "fs";
 import { SocialAccountDetailData } from "@/entityTypes/socialaccount-type";
 import { SocialPlatformList } from "@/config/generate";
@@ -29,6 +28,40 @@ import {
   socialPlatformListInputSchema,
   socialAccountSaveInputSchema,
 } from "@/schemas/ipc/socialAccount";
+import { sessionMetadataInputSchema } from "@/schemas/ipc/browserProfileImport";
+
+/**
+ * Run the legacy-plaintext -> ENC1 cookie migration once per process, after the
+ * user secret key is available. Non-blocking: failures only log aggregate safe
+ * counts. Re-entry is a no-op. Triggered lazily from the session-metadata
+ * handler (the first time the UI asks for cookie status).
+ */
+let cookieMigrationStarted = false;
+function scheduleCookieMigrationOnce(): void {
+  if (cookieMigrationStarted) {
+    return;
+  }
+  cookieMigrationStarted = true;
+  void (async () => {
+    try {
+      const summary =
+        await new AccountSessionService().migrateLegacySnapshots();
+      log.info(
+        `[cookie-migration] scanned=${summary.scanned} migrated=${summary.migrated} ` +
+          `invalid=${summary.invalid} deferred=${summary.deferredKeyUnavailable} ` +
+          `failed=${summary.persistenceFailed} alreadyEncrypted=${summary.alreadyEncrypted}`
+      );
+    } catch (err) {
+      log.warn(
+        `[cookie-migration] aborted: ${
+          err instanceof Error ? err.message : "unknown"
+        }`
+      );
+      // Allow a later retry if the attempt itself blew up before counting.
+      cookieMigrationStarted = false;
+    }
+  })();
+}
 
 export function registerSocialAccountIpcHandlers(mainWindow: BrowserWindow) {
   registerValidatedHandler(
@@ -74,12 +107,24 @@ export function registerSocialAccountIpcHandlers(mainWindow: BrowserWindow) {
       );
     }
   );
+
+  // Renderer-safe session metadata (no cookie values). Also kicks off the
+  // one-time background migration of any legacy plaintext rows.
+  registerValidatedHandler(
+    SOCIAL_ACCOUNT_SESSION_METADATA,
+    sessionMetadataInputSchema,
+    async (input) => {
+      scheduleCookieMigrationOnce();
+      const service = new AccountSessionService();
+      return service.getMetadata(input.id);
+    }
+  );
+
   //login social account
   ipcMain.on(SOCIAL_ACCOUNT_LOGIN, async (event, data) => {
-    const qdata = JSON.parse(data as string) as RequireCookiesMsgbox;
-    if (!("id" in qdata)) {
-      throw new Error("id not found");
-    }
+    const qdata = socialAccountByIdInputSchema().parse(
+      JSON.parse(data as string)
+    );
     // if (!("platform" in qdata)) {
     //   throw new Error("platform not found");
     // }
@@ -215,10 +260,9 @@ export function registerSocialAccountIpcHandlers(mainWindow: BrowserWindow) {
     }
   });
   ipcMain.on(SOCIAL_ACCOUNT_SHOW_PLATFORMPAGE, async (event, data) => {
-    const qdata = JSON.parse(data as string) as RequireCookiesParam;
-    if (!("id" in qdata)) {
-      throw new Error("id not found");
-    }
+    const qdata = socialAccountByIdInputSchema().parse(
+      JSON.parse(data as string)
+    );
     try {
       const sac = new SocialAccountController();
       await sac.showSocialmediaWin(qdata.id, () => {
@@ -279,9 +323,10 @@ export function registerSocialAccountIpcHandlers(mainWindow: BrowserWindow) {
     }
   );
   ipcMain.on(SOCIAL_ACCOUNT_LOGIN_UPLOADCOOKIES, async (event, data) => {
-    const qdata = JSON.parse(data as string) as RequireCookiesParam;
-    if (!("id" in qdata)) {
-      //throw new Error("id not found");
+    let qdata: { id: number };
+    try {
+      qdata = socialAccountByIdInputSchema().parse(JSON.parse(data as string));
+    } catch {
       const cmsg = {
         status: false,
         msg: "id not found",
@@ -291,6 +336,7 @@ export function registerSocialAccountIpcHandlers(mainWindow: BrowserWindow) {
           sender: { send: (channel: string, message: string) => void };
         }
       ).sender.send(SOCIAL_ACCOUNT_LOGIN_MESSSAGE, JSON.stringify(cmsg));
+      return;
     }
     const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow, {
       properties: ["openFile"],
@@ -306,7 +352,7 @@ export function registerSocialAccountIpcHandlers(mainWindow: BrowserWindow) {
     } else {
       if (filePaths) {
         console.log(filePaths[0]);
-        fs.access(filePaths[0], fs.constants.W_OK, async (e) => {
+        fs.access(filePaths[0], fs.constants.R_OK, async (e) => {
           if (e) {
             if (e instanceof Error) {
               const cmsg = { status: false, msg: e.message } as CommonDialogMsg;
@@ -367,16 +413,14 @@ export function registerSocialAccountIpcHandlers(mainWindow: BrowserWindow) {
   });
   //remove cookies
   ipcMain.on(SOCIAL_ACCOUNT_CLEAN_COOKIES, async (event, data) => {
-    const qdata = JSON.parse(data as string) as RequireCookiesParam;
-    if (!("id" in qdata)) {
-      //throw new Error("id not found");
-      return {
-        status: false,
-        msg: "id not found",
-      };
+    let qdata: { id: number };
+    try {
+      qdata = socialAccountByIdInputSchema().parse(JSON.parse(data as string));
+    } catch {
+      return { status: false, msg: "id not found" };
     }
     const sac = new SocialAccountController();
-    sac.cleanCookies(qdata.id);
+    await sac.cleanCookies(qdata.id);
     const comMsgs: CommonDialogMsg = {
       status: true,
       code: 0,
