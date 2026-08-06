@@ -232,7 +232,10 @@
           </v-icon>
         </div>
         <div v-if="showFileOpsPanel" class="v2-shell__file-ops-body">
-          <FileOperationBadge :records="currentFileOps" />
+          <FileOperationBadge
+            :records="currentFileOps"
+            :workspace-root="activeWorkspace?.rootPath"
+          />
         </div>
       </div>
 

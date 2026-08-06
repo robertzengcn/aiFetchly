@@ -1348,9 +1348,11 @@ export function registerAiChatIpcHandlers(): void {
     aiChatFileOpenInputSchema,
     async (input) => {
       // Security: path must be absolute and contain no traversal sequences.
+      // Accept POSIX (/...), Windows drive (C:\ or C:/), and UNC (\\server\...).
       if (
         !input.filePath.startsWith("/") &&
-        !input.filePath.match(/^[A-Za-z]:\\/)
+        !/^[A-Za-z]:[\\/]/.test(input.filePath) &&
+        !input.filePath.startsWith("\\\\")
       ) {
         throw new Error("File path must be absolute");
       }

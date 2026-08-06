@@ -8,6 +8,7 @@ import {
   extractFileOperationsFromMessages,
   mergeFileOperationRecords,
   resolveFileOperationPath,
+  resolveOpenableFilePath,
   type MessageWithMaybeFileToolResult,
 } from "@/views/components/aiChatV2/fileOperationMetadata";
 import type { FileOperationRecord } from "@/entityTypes/fileOperationTypes";
@@ -61,6 +62,42 @@ describe("resolveFileOperationPath", () => {
     expect(resolveFileOperationPath("notes\\a.md", "C:\\proj")).toBe(
       "C:\\proj\\notes\\a.md"
     );
+  });
+});
+
+describe("resolveOpenableFilePath", () => {
+  it("returns absolute filePath unchanged", () => {
+    expect(
+      resolveOpenableFilePath({
+        filePath: "/tmp/a.md",
+        workspaceRoot: "/workspace",
+      })
+    ).toBe("/tmp/a.md");
+  });
+
+  it("joins relative history paths with workspace root for AI_FILE_OPEN", () => {
+    expect(
+      resolveOpenableFilePath(
+        {
+          filePath: "notes/a.md",
+          relativePath: "notes/a.md",
+          workspaceRoot: undefined,
+        },
+        "/Users/me/proj"
+      )
+    ).toBe("/Users/me/proj/notes/a.md");
+  });
+
+  it("prefers record.workspaceRoot over the UI fallback", () => {
+    expect(
+      resolveOpenableFilePath(
+        {
+          filePath: "a.md",
+          workspaceRoot: "/from-record",
+        },
+        "/from-ui"
+      )
+    ).toBe("/from-record/a.md");
   });
 });
 

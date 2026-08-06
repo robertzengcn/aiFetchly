@@ -25,6 +25,8 @@ function isAbsoluteFilePath(filePath: string): boolean {
   );
 }
 
+export { isAbsoluteFilePath };
+
 /**
  * Resolve a tool path against an optional workspace root so Open With can
  * receive an absolute path after history reopen.
@@ -40,6 +42,25 @@ export function resolveFileOperationPath(
   const root = workspaceRoot.replace(/[/\\]+$/, "");
   const sep = workspaceRoot.includes("\\") ? "\\" : "/";
   return `${root}${sep}${trimmed.replace(/^[/\\]+/, "")}`;
+}
+
+/**
+ * Build an absolute path suitable for AI_FILE_OPEN from a file-op record.
+ * Prefers workspaceRoot on the record, then an optional UI fallback root.
+ */
+export function resolveOpenableFilePath(
+  record: Pick<
+    FileOperationRecord,
+    "filePath" | "workspaceRoot" | "relativePath"
+  >,
+  workspaceRootFallback?: string | null
+): string {
+  const root = record.workspaceRoot ?? workspaceRootFallback ?? null;
+  if (isAbsoluteFilePath(record.filePath)) {
+    return record.filePath;
+  }
+  const candidate = record.relativePath || record.filePath;
+  return resolveFileOperationPath(candidate, root);
 }
 
 function readStringField(
