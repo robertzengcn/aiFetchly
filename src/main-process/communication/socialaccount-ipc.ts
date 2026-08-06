@@ -29,6 +29,17 @@ import {
   socialAccountSaveInputSchema,
 } from "@/schemas/ipc/socialAccount";
 import { sessionMetadataInputSchema } from "@/schemas/ipc/browserProfileImport";
+import {
+  browserImportAvailabilityInputSchema,
+  browserImportStartPairingInputSchema,
+  browserImportCancelInputSchema,
+} from "@/schemas/ipc/browserProfileImport";
+import {
+  SOCIAL_ACCOUNT_BROWSER_IMPORT_AVAILABILITY,
+  SOCIAL_ACCOUNT_BROWSER_IMPORT_START,
+  SOCIAL_ACCOUNT_BROWSER_IMPORT_CANCEL,
+} from "@/config/channellist";
+import { BrowserImportCoordinator } from "@/main-process/browserProfileImport/BrowserImportCoordinator";
 
 /**
  * Run the legacy-plaintext -> ENC1 cookie migration once per process, after the
@@ -64,6 +75,8 @@ function scheduleCookieMigrationOnce(): void {
 }
 
 export function registerSocialAccountIpcHandlers(mainWindow: BrowserWindow) {
+  // Browser-profile import coordinator (main-process only; feature-flagged).
+  const browserImportCoordinator = new BrowserImportCoordinator();
   registerValidatedHandler(
     SOCIALACCOUNTlIST,
     socialAccountListInputSchema,
@@ -118,6 +131,29 @@ export function registerSocialAccountIpcHandlers(mainWindow: BrowserWindow) {
       const service = new AccountSessionService();
       return service.getMetadata(input.id);
     }
+  );
+
+  // Browser-profile import: availability is resolved in the main process
+  // (flag + platform manifest). The renderer can only ask; it cannot choose
+  // domains, a platform, or a profile path.
+  registerValidatedHandler(
+    SOCIAL_ACCOUNT_BROWSER_IMPORT_AVAILABILITY,
+    browserImportAvailabilityInputSchema,
+    async (input) => browserImportCoordinator.availability(input.id)
+  );
+
+  registerValidatedHandler(
+    SOCIAL_ACCOUNT_BROWSER_IMPORT_START,
+    browserImportStartPairingInputSchema,
+    async (input) => browserImportCoordinator.startPairing(input.id)
+  );
+
+  registerValidatedHandler(
+    SOCIAL_ACCOUNT_BROWSER_IMPORT_CANCEL,
+    browserImportCancelInputSchema,
+    async (input) => ({
+      cancelled: await browserImportCoordinator.cancel(input.requestId),
+    })
   );
 
   //login social account
