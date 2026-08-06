@@ -26,9 +26,20 @@ describe("packaged worker path resolution", () => {
     expect(resolved).toBe(expected);
   });
 
-  it("prefers the unpacked packaged worker mirror when running from app.asar", () => {
+  it("prefers the app.asar virtual path when running packaged", () => {
+    // Loading the worker through the app.asar virtual path keeps Electron's
+    // fs/module-resolution patch active so bare requires (puppeteer, etc.)
+    // resolve against app.asar/node_modules. The unpacked disk mirror is a
+    // fallback, not the preferred path.
     const resourcesPath = path.join("/opt", "AiFetchly", "resources");
-    const expected = path.join(
+    const asarPath = path.join(
+      resourcesPath,
+      "app.asar",
+      ".vite",
+      "build",
+      "Worker.js"
+    );
+    const unpackedPath = path.join(
       resourcesPath,
       "app.asar.unpacked",
       ".vite",
@@ -41,7 +52,7 @@ describe("packaged worker path resolution", () => {
         dirname: path.join(resourcesPath, "app.asar", ".vite", "build"),
         cwd: "/tmp",
         resourcesPath,
-        existsSync: (candidate) => candidate === expected,
+        existsSync: (candidate) => candidate === asarPath,
       },
       {
         dirnameRelativePaths: ["Worker.js"],
@@ -49,10 +60,37 @@ describe("packaged worker path resolution", () => {
       }
     );
 
-    expect(resolved).toBe(expected);
+    expect(resolved).toBe(asarPath);
+    expect(resolved).not.toBe(unpackedPath);
   });
 
-  it("deduplicates candidates while preserving fallback order", () => {
+  it("falls back to the unpacked mirror when the virtual asar path is missing", () => {
+    const resourcesPath = path.join("/opt", "AiFetchly", "resources");
+    const unpackedPath = path.join(
+      resourcesPath,
+      "app.asar.unpacked",
+      ".vite",
+      "build",
+      "Worker.js"
+    );
+
+    const resolved = resolvePackagedWorkerPath(
+      {
+        dirname: path.join(resourcesPath, "app.asar", ".vite", "build"),
+        cwd: "/tmp",
+        resourcesPath,
+        existsSync: (candidate) => candidate === unpackedPath,
+      },
+      {
+        dirnameRelativePaths: ["Worker.js"],
+        cwdRelativePaths: [path.join(".vite", "build", "Worker.js")],
+      }
+    );
+
+    expect(resolved).toBe(unpackedPath);
+  });
+
+  it("deduplicates candidates and lists the app.asar virtual path before its unpacked mirror", () => {
     const resourcesPath = path.join("/opt", "AiFetchly", "resources");
     const candidates = getPackagedWorkerPathCandidates(
       {
@@ -67,16 +105,19 @@ describe("packaged worker path resolution", () => {
       }
     );
 
+    // Regression for the packaged-puppeteer bug: the app.asar virtual path
+    // MUST come before app.asar.unpacked, or workers loaded from unpacked
+    // disk cannot resolve deps shipped inside app.asar/node_modules.
     expect(candidates).toEqual([...new Set(candidates)]);
-    expect(candidates[0]).toBe(
-      path.join(
-        resourcesPath,
-        "app.asar.unpacked",
-        ".vite",
-        "build",
-        "Worker.js"
-      )
+    const asarIndex = candidates.findIndex((c) =>
+      c.includes(path.join("app.asar", ".vite", "build", "Worker.js"))
     );
+    const unpackedIndex = candidates.findIndex((c) =>
+      c.includes(path.join("app.asar.unpacked", ".vite", "build", "Worker.js"))
+    );
+    expect(asarIndex).toBeGreaterThanOrEqual(0);
+    expect(unpackedIndex).toBeGreaterThanOrEqual(0);
+    expect(asarIndex).toBeLessThan(unpackedIndex);
   });
 
   it("maps Windows app.asar paths to app.asar.unpacked", () => {

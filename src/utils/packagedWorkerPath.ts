@@ -39,11 +39,17 @@ export function getPackagedWorkerPathCandidates(
     const normalized = path.normalize(candidate);
     const unpacked = mirrorAppAsarUnpackedPath(normalized);
 
-    if (unpacked !== normalized && !candidates.includes(unpacked)) {
-      candidates.push(unpacked);
-    }
+    // Prefer the app.asar virtual path over the app.asar.unpacked disk mirror.
+    // When a script is loaded through the virtual asar path, Electron patches
+    // fs/module resolution so `require()` walks up through app.asar and finds
+    // app.asar/node_modules. Loading the unpacked disk mirror breaks that
+    // fallback and hides deps shipped inside the packed asar (e.g. puppeteer).
+    // See contactExtractionWorkerPath.ts for the canonical ordering.
     if (!candidates.includes(normalized)) {
       candidates.push(normalized);
+    }
+    if (unpacked !== normalized && !candidates.includes(unpacked)) {
+      candidates.push(unpacked);
     }
   };
 
@@ -57,10 +63,12 @@ export function getPackagedWorkerPathCandidates(
   if (runtime.resourcesPath) {
     for (const relativePath of options.resourcesRelativePaths ??
       options.cwdRelativePaths) {
+      // addCandidate normalizes the asar path ahead of its unpacked mirror,
+      // so passing the virtual path first is the documented preferred order.
+      addCandidate(path.join(runtime.resourcesPath, "app.asar", relativePath));
       addCandidate(
         path.join(runtime.resourcesPath, "app.asar.unpacked", relativePath)
       );
-      addCandidate(path.join(runtime.resourcesPath, "app.asar", relativePath));
     }
   }
 
