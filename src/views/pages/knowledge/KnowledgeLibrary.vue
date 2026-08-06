@@ -964,6 +964,9 @@ function formatFileSize(bytes: number): string {
 
 function cancelUpload() {
   showUploadDialog.value = false;
+  showDuplicateDialog.value = false;
+  duplicateFiles.value = [];
+  pendingUploadAfterDuplicateCheck.value = [];
   uploadFiles.value = [];
   uploadError.value = '';
   uploading.value = false;
