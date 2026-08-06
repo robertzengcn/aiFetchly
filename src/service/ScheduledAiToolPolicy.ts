@@ -9,16 +9,20 @@ import type {
  * Security policy for tools exposed to unattended (scheduled-loop) AI turns.
  *
  * Unattended execution cannot show an interactive permission prompt, so the
- * allowlist must be conservative and FAIL CLOSED. A tool is schedulable only
- * when it appears in {@link SCHEDULED_LOOP_READ_ONLY_TOOLS} or
- * {@link SCHEDULED_LOOP_AUTOMATION_TOOLS} AND is not in the permanent deny set.
+ * allowlist must FAIL CLOSED. A tool is schedulable only when it appears in one
+ * of the three tiers below AND is not in the permanent deny set.
  *
- * Two tiers of schedulable tools exist:
- *  - **Read-only** (pure): schedulable, but still requires the tool to be in
- *    the task's `allowedTools` (the user's explicit selection) AND
- *    `autoApproveTools` to be on.
- *  - **Automation**: same gating as read-only; the tier exists for risk
- *    labeling because these tools perform network checks or other side effects.
+ * Three tiers of schedulable tools:
+ *  - **Read-only**: AUTO-APPROVE whenever `autoApproveTools` is on. No per-tool
+ *    selection — the model may call any of them. The user accepted that
+ *    read-only file tools can read secrets if the model is steered by injected
+ *    content, in exchange for zero-friction approvals.
+ *  - **High-impact** (file write/edit, email send/draft): approvable, but
+ *    require explicit per-tool selection at loop creation (gated by a typed
+ *    confirmation in the approval dialog). At runtime they need
+ *    `autoApproveTools` AND membership in the task's `allowedTools`.
+ *  - **Automation**: same runtime gating as high-impact; tier exists for risk
+ *    labeling (network checks / side effects).
  *
  * Source: PRD §FR-16, technical-design §15 (safety boundaries).
  */
@@ -26,17 +30,14 @@ import type {
 /**
  * Tools that may NEVER run unattended, regardless of category or allowlist.
  * `run_subagent` is denied because it can indirectly invoke many other tools;
- * the rest mutate local/mailbox state or send external side effects.
+ * `shell_execute` runs arbitrary commands; the email inbox tools mutate
+ * mailbox/local state and expose message bodies. These stay blocked even if a
+ * user requests them — they are not approvable.
  */
 export const SCHEDULED_LOOP_ALWAYS_BLOCKED_TOOLS: ReadonlySet<string> = new Set(
   [
     "run_subagent",
     "shell_execute",
-    "file_write",
-    "file_edit",
-    "send_email_reply",
-    "start_email_send_task",
-    "create_email_reply_draft",
     "mark_email_processed",
     // Inbox tools that look like reads but mutate mailbox/local state:
     "fetch_unread_emails", // stores messages locally
@@ -45,10 +46,11 @@ export const SCHEDULED_LOOP_ALWAYS_BLOCKED_TOOLS: ReadonlySet<string> = new Set(
 );
 
 /**
- * Curated allowlist of genuinely read-only built-in tools safe for unattended
- * execution. Each entry was reviewed to confirm it performs no local write,
- * no mailbox state change, and no external side effect. Add entries here ONLY
- * after that review — never infer "read-only" from category or name.
+ * Curated allowlist of genuinely read-only built-in tools. These AUTO-APPROVE
+ * whenever `autoApproveTools` is on — the model may call any of them with no
+ * per-tool selection. The user explicitly accepted that read-only file tools
+ * (file_read/glob_files/grep_files) can read secrets if the model is steered
+ * by injected content, in exchange for not having to approve each one.
  */
 export const SCHEDULED_LOOP_READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
   // Email inbox/service configuration (read-only listings)
@@ -74,10 +76,23 @@ export const SCHEDULED_LOOP_READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * High-impact tools (file write/edit, email send/draft) that ARE approvable
+ * for unattended execution but require EXPLICIT per-tool selection at loop
+ * creation — gated behind a typed confirmation in the approval dialog because
+ * prompt injection in scraped/emailed content can drive them to overwrite files
+ * or send email as the user while they are away.
+ */
+export const SCHEDULED_LOOP_HIGH_IMPACT_TOOLS: ReadonlySet<string> = new Set([
+  "file_write",
+  "file_edit",
+  "send_email_reply",
+  "start_email_send_task",
+  "create_email_reply_draft",
+]);
+
+/**
  * Automation tools that are schedulable in unattended mode but require explicit
- * allowlisting because they perform network checks or other side effects. These
- * are NOT auto-approved by the read-only allowlist alone — the task's
- * `allowedTools` must explicitly include them.
+ * allowlisting because they perform network checks or other side effects.
  */
 export const SCHEDULED_LOOP_AUTOMATION_TOOLS: ReadonlySet<string> = new Set([
   "proxy_check",
@@ -94,6 +109,14 @@ export function isScheduledReadOnlyTool(toolName: string): boolean {
   );
 }
 
+/** True when a built-in tool is a high-impact tool that requires explicit approval. */
+export function isHighImpactSchedulableTool(toolName: string): boolean {
+  return (
+    SCHEDULED_LOOP_HIGH_IMPACT_TOOLS.has(toolName) &&
+    !SCHEDULED_LOOP_ALWAYS_BLOCKED_TOOLS.has(toolName)
+  );
+}
+
 /** True when a built-in tool is an automation tool that requires allowlisting. */
 export function isScheduledAutomationTool(toolName: string): boolean {
   return (
@@ -102,10 +125,11 @@ export function isScheduledAutomationTool(toolName: string): boolean {
   );
 }
 
-/** True when a built-in tool is schedulable (read-only OR automation). */
+/** True when a built-in tool is schedulable (read-only, high-impact, or automation). */
 export function isSchedulableBuiltInTool(toolName: string): boolean {
   return (
     (isScheduledReadOnlyTool(toolName) ||
+      isHighImpactSchedulableTool(toolName) ||
       isScheduledAutomationTool(toolName)) &&
     !SCHEDULED_LOOP_ALWAYS_BLOCKED_TOOLS.has(toolName)
   );
@@ -132,14 +156,15 @@ export function validateScheduledLoopAllowedTools(
 
 /**
  * Describes a built-in skill for the AI message task catalog UI. Curated
- * read-only and automation tools are marked `schedulable`; everything else is
- * blocked with a concrete reason.
+ * read-only, high-impact, and automation tools are marked `schedulable`;
+ * everything else is blocked with a concrete reason.
  */
 export function describeBuiltInToolForSchedule(
   skill: SkillDefinition
 ): SchedulableAiToolSummary {
   const blocked = SCHEDULED_LOOP_ALWAYS_BLOCKED_TOOLS.has(skill.name);
   const readOnly = isScheduledReadOnlyTool(skill.name);
+  const highImpact = isHighImpactSchedulableTool(skill.name);
   const automation = isScheduledAutomationTool(skill.name);
 
   if (blocked) {
@@ -152,7 +177,7 @@ export function describeBuiltInToolForSchedule(
       schedulable: false,
       autoApproveAllowed: false,
       blockedReason:
-        "This tool is permanently blocked for unattended scheduled tasks because it can mutate state or send external messages.",
+        "This tool is permanently blocked for unattended scheduled tasks.",
       riskLevel: "blocked",
     };
   }
@@ -167,6 +192,19 @@ export function describeBuiltInToolForSchedule(
       schedulable: true,
       autoApproveAllowed: true,
       riskLevel: "low",
+    };
+  }
+
+  if (highImpact) {
+    return {
+      name: skill.name,
+      description: skill.description,
+      permissionCategory: skill.permissionCategory,
+      source: "built-in",
+      requiresConfirmation: skill.requiresConfirmation,
+      schedulable: true,
+      autoApproveAllowed: true,
+      riskLevel: "high",
     };
   }
 
@@ -192,7 +230,7 @@ export function describeBuiltInToolForSchedule(
     schedulable: false,
     autoApproveAllowed: false,
     blockedReason:
-      "Only explicitly reviewed read-only or automation tools may run unattended in scheduled loops.",
+      "Only explicitly reviewed read-only, high-impact, or automation tools may run unattended in scheduled loops.",
     riskLevel: "blocked",
   };
 }
@@ -203,10 +241,10 @@ export function describeBuiltInToolForSchedule(
  * but this backstop blocks any model-hallucinated tool call and returns a
  * structured reason the model can read.
  *
- * Both tiers require `autoApproveTools` AND explicit inclusion in the task's
- * `allowedTools` list. The catalog filter (AIChatQueryEngine) advertises every
- * tool this function allows, so the allowlist check is what enforces the
- * user's per-tool selection — never skip it.
+ *  - Read-only tools AUTO-APPROVE when `autoApproveTools` is on (no per-tool
+ *    selection). The catalog advertises every read-only tool — by design.
+ *  - High-impact and automation tools additionally require explicit inclusion
+ *    in the task's `allowedTools` (the user's per-tool selection at creation).
  */
 export function canAutoApproveScheduledTool(params: {
   readonly skill: SkillDefinition;
@@ -240,28 +278,24 @@ export function canAutoApproveScheduledTool(params: {
     };
   }
 
-  // Read-only tools still require explicit per-tool selection — the catalog
-  // filter advertises ANY tool this returns true for (AIChatQueryEngine
-  // filters the FULL registry), so without this check every read-only tool
-  // would be exposed and auto-run when autoApproveTools is on, ignoring the
-  // subset the user actually approved (FR-16 least-privilege).
+  // Read-only tools AUTO-APPROVE whenever autoApproveTools is on — no per-tool
+  // selection. The catalog intentionally advertises every read-only tool.
   if (isScheduledReadOnlyTool(toolName)) {
-    if (!taskPolicy.allowedTools.includes(toolName)) {
-      return {
-        allowed: false,
-        reason: `Tool "${toolName}" is a read-only tool and must be explicitly added to the task's allowed tools list.`,
-        riskLevel: "high",
-      };
-    }
     return { allowed: true, riskLevel: "low" };
   }
 
-  // Automation tools: require explicit per-tool allowlisting.
-  if (isScheduledAutomationTool(toolName)) {
+  // High-impact and automation tools require explicit per-tool selection.
+  const requiresExplicitAllowlist =
+    isHighImpactSchedulableTool(toolName) ||
+    isScheduledAutomationTool(toolName);
+  if (requiresExplicitAllowlist) {
     if (!taskPolicy.allowedTools.includes(toolName)) {
+      const tier = isHighImpactSchedulableTool(toolName)
+        ? "high-impact"
+        : "automation";
       return {
         allowed: false,
-        reason: `Tool "${toolName}" is an automation tool and must be explicitly added to the task's allowed tools list.`,
+        reason: `Tool "${toolName}" is a ${tier} tool and must be explicitly added to the task's allowed tools list.`,
         riskLevel: "high",
       };
     }

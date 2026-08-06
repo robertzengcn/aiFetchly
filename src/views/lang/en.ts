@@ -2296,7 +2296,7 @@ export default {
       statusStopped: "stopped",
       toolApprovalTitle: "Approve unattended tools",
       toolApprovalIntro:
-        "Scheduled loops run without supervision. Optionally approve read-only tools the loop may use. Sending email, drafts, shell, file writes, and subagents stay blocked.",
+        "Scheduled loops run without supervision. Read-only tools auto-approve when unattended tools are enabled. Write/email tools require explicit confirmation below. Shell, subagents, and mailbox mutations stay blocked.",
       toolApprovalCommand: "Command",
       noReadOnlyTools: "No read-only tools are available.",
       allowedTools: "Allowed read-only tools",
@@ -2304,6 +2304,15 @@ export default {
       autoApprove: "Run approved tools without asking",
       autoApproveWarning:
         "These tools will run automatically on every occurrence while the loop is active.",
+      enableTools: "Allow tools to run unattended",
+      readOnlyAutoApproved: "Read-only tools auto-approve",
+      automationTools: "Automation tools",
+      automationToolsHint:
+        "Optional — select tools that perform network checks",
+      highImpactTools: "Write / email tools — type the name to enable",
+      highImpactWarning:
+        "These run unattended on every occurrence. Injected content could overwrite files or send email as you. Type each tool name to confirm.",
+      typeToConfirm: "Type {name} to confirm",
       createLoop: "Schedule loop",
       errors: {
         INVALID_LOOP_SYNTAX: "The /loop command could not be parsed.",

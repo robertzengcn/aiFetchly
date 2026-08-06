@@ -2270,6 +2270,14 @@ export default {
       autoApproveWarning:
         "ループがアクティブな間、これらのツールは毎回自動的に実行されます。",
       createLoop: "ループをスケジュール",
+      enableTools: "ツールの無人実行を許可",
+      readOnlyAutoApproved: "読み取り専用ツールは自動承認",
+      automationTools: "自動化ツール",
+      automationToolsHint: "任意 — ネットワークチェックを行うツールを選択",
+      highImpactTools: "書き込み / メールツール — 名前を入力して有効化",
+      highImpactWarning:
+        "これらは毎回無人で実行されます。注入コンテンツがファイルを上書きしたり、あなたの名前でメールを送信する可能性があります。ツール名をそれぞれ入力して確認してください。",
+      typeToConfirm: "確認するには {name} と入力",
       errors: {
         INVALID_LOOP_SYNTAX: "/loop コマンドを解析できませんでした。",
         INVALID_INTERVAL: "間隔は 1 分〜 24 時間の範囲で指定してください。",

@@ -371,10 +371,17 @@ export class AIChatScheduledLoopModule extends BaseModule {
     autoApproveTools: boolean
   ): string {
     const next = formatLocalDateTime(nextRunAt);
-    const toolsLine =
-      autoApproveTools && allowedTools.length > 0
-        ? ` Unattended read-only tools: ${allowedTools.join(", ")}.`
-        : " No tools approved — the loop can only respond from context.";
+    let toolsLine: string;
+    if (autoApproveTools && allowedTools.length > 0) {
+      toolsLine = ` Unattended tools enabled — read-only auto-approved; explicitly approved: ${allowedTools.join(
+        ", "
+      )}.`;
+    } else if (autoApproveTools) {
+      toolsLine = " Unattended tools enabled — read-only auto-approved.";
+    } else {
+      toolsLine =
+        " No tools approved — the loop can only respond from context.";
+    }
     return (
       `Scheduled every ${describeInterval(intervalMs)}. ` +
       `Maximum ${maxRuns} runs or ${describeLifetime(maxLifetimeMs)}. ` +

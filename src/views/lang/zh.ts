@@ -2214,6 +2214,14 @@ export default {
       autoApprove: "自动运行已批准的工具",
       autoApproveWarning: "在循环激活期间，这些工具将在每次执行时自动运行。",
       createLoop: "创建定时循环",
+      enableTools: "允许工具无人值守运行",
+      readOnlyAutoApproved: "只读工具自动批准",
+      automationTools: "自动化工具",
+      automationToolsHint: "可选 — 选择执行网络检查的工具",
+      highImpactTools: "写入 / 邮件工具 — 输入名称以启用",
+      highImpactWarning:
+        "这些将在每次执行时无人值守运行。注入内容可能覆盖文件或以你的身份发送邮件。请逐个输入工具名称以确认。",
+      typeToConfirm: "输入 {name} 以确认",
       errors: {
         INVALID_LOOP_SYNTAX: "无法解析 /loop 命令。",
         INVALID_INTERVAL: "间隔必须在 1 分钟到 24 小时之间。",

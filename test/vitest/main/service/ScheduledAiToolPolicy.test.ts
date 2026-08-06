@@ -112,23 +112,12 @@ describe("ScheduledAiToolPolicy canAutoApproveScheduledTool", () => {
     expect(decision.reason).toMatch(/Auto-approve is not enabled/);
   });
 
-  it("denies a read-only tool that is not in the task's allowed tools", () => {
-    // FR-16 least-privilege: the catalog filter advertises ANY tool this
-    // function allows, so a read-only tool must be explicitly selected by the
-    // user (present in allowedTools) before it can be exposed or auto-run.
+  it("auto-approves ANY read-only tool when auto-approve is on (no selection)", () => {
+    // Per product decision: read-only tools auto-approve without per-tool
+    // selection. The catalog intentionally advertises every read-only tool.
     const decision = canAutoApproveScheduledTool({
       skill: skill("list_email_services"),
-      taskPolicy: policy({ allowedTools: ["list_email_inboxes"] }),
-      toolName: "list_email_services",
-    });
-    expect(decision.allowed).toBe(false);
-    expect(decision.reason).toMatch(/allowed tools list/);
-  });
-
-  it("auto-approves a read-only tool that IS in the task's allowed tools", () => {
-    const decision = canAutoApproveScheduledTool({
-      skill: skill("list_email_services"),
-      taskPolicy: policy({ allowedTools: ["list_email_services"] }),
+      taskPolicy: policy({ allowedTools: [] }),
       toolName: "list_email_services",
     });
     expect(decision.allowed).toBe(true);
@@ -144,6 +133,24 @@ describe("ScheduledAiToolPolicy canAutoApproveScheduledTool", () => {
     expect(decision.reason).toMatch(/allowed tools list/);
   });
 
+  it("high-impact tools are denied without explicit allowlist but allowed with it", () => {
+    // Without selection → blocked.
+    const denied = canAutoApproveScheduledTool({
+      skill: skill("file_write"),
+      taskPolicy: policy({ allowedTools: [] }),
+      toolName: "file_write",
+    });
+    expect(denied.allowed).toBe(false);
+    expect(denied.reason).toMatch(/high-impact/);
+    // With explicit selection + autoApprove → allowed unattended.
+    const allowed = canAutoApproveScheduledTool({
+      skill: skill("send_email_reply"),
+      taskPolicy: policy({ allowedTools: ["send_email_reply"] }),
+      toolName: "send_email_reply",
+    });
+    expect(allowed.allowed).toBe(true);
+  });
+
   it("always denies run_subagent even if allowlisted and auto-approved", () => {
     const decision = canAutoApproveScheduledTool({
       skill: skill("run_subagent"),
@@ -157,15 +164,12 @@ describe("ScheduledAiToolPolicy canAutoApproveScheduledTool", () => {
     expect(decision.reason).toMatch(/permanently blocked/);
   });
 
-  it("denies shell, file write/edit, and email send tools", () => {
+  it("permanently blocks shell, mailbox-mutating, and message-body tools", () => {
     for (const name of [
       "shell_execute",
-      "file_write",
-      "file_edit",
-      "send_email_reply",
-      "start_email_send_task",
-      "create_email_reply_draft",
       "mark_email_processed",
+      "fetch_unread_emails",
+      "get_email_message",
     ]) {
       const decision = canAutoApproveScheduledTool({
         skill: skill(name),

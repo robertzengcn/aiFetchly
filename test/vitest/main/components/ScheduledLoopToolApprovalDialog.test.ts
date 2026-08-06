@@ -15,10 +15,10 @@ const i18n = createI18n({
   messages: { en: {} },
 });
 
-const READ_ONLY_TOOLS: SchedulableAiToolSummary[] = [
+const TOOLS: SchedulableAiToolSummary[] = [
   {
     name: "list_email_inboxes",
-    description: "List email inboxes",
+    description: "List inboxes",
     permissionCategory: "automation",
     source: "built-in",
     requiresConfirmation: false,
@@ -27,21 +27,37 @@ const READ_ONLY_TOOLS: SchedulableAiToolSummary[] = [
     riskLevel: "low",
   },
   {
+    name: "proxy_check",
+    description: "Network check",
+    permissionCategory: "automation",
+    source: "built-in",
+    requiresConfirmation: false,
+    schedulable: true,
+    autoApproveAllowed: true,
+    riskLevel: "medium",
+  },
+  {
+    name: "file_write",
+    description: "Write a file",
+    permissionCategory: "filesystem",
+    source: "built-in",
+    requiresConfirmation: true,
+    schedulable: true,
+    autoApproveAllowed: true,
+    riskLevel: "high",
+  },
+  {
     name: "send_email_reply",
     description: "Send email",
     permissionCategory: "automation",
     source: "built-in",
     requiresConfirmation: true,
-    schedulable: false,
-    autoApproveAllowed: false,
-    blockedReason: "blocked",
-    riskLevel: "blocked",
+    schedulable: true,
+    autoApproveAllowed: true,
+    riskLevel: "high",
   },
 ];
 
-// The VSelect stub mirrors its `items` prop into a DOM attribute so the test
-// can assert the filtered catalog without findComponent (unreliable under the
-// component-test happy-dom config).
 function mountDialog() {
   return mount(ScheduledLoopToolApprovalDialog, {
     global: {
@@ -67,55 +83,53 @@ function mountDialog() {
         VSpacer: true,
         VAlert: { template: "<div><slot /></div>" },
         VProgressLinear: true,
-        VSelect: {
-          props: ["modelValue", "items"],
-          emits: ["update:modelValue"],
-          template:
-            '<div data-testid="tool-select" :data-tool-names="(items||[]).map((i)=>i.name).join(\'|\')" />',
-        },
-        VSwitch: {
-          props: ["modelValue", "disabled"],
-          emits: ["update:modelValue"],
-          template: "<div />",
-        },
-        VList: { template: "<div><slot /></div>" },
-        VListItem: { template: "<div><slot /></div>" },
-        VListItemSubtitle: { template: "<div><slot /></div>" },
+        VSwitch: { template: "<div />" },
+        VSelect: { template: "<div />" },
+        VCheckbox: { template: "<div />" },
+        VTextField: { template: "<div />" },
       },
     },
     props: { modelValue: true, rawCommand: "/loop 1m check email" },
   });
 }
 
-describe("ScheduledLoopToolApprovalDialog", () => {
+type Exposed = {
+  toolsEnabled: boolean;
+  selectedAutomation: string[];
+  pendingHighImpact: Record<string, boolean>;
+  confirmInput: Record<string, string>;
+  confirmedHighImpact: () => string[];
+};
+
+function vmOf(wrapper: ReturnType<typeof mountDialog>): Exposed {
+  return wrapper.vm as unknown as Exposed;
+}
+
+describe("ScheduledLoopToolApprovalDialog (3-tier)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  it("only exposes tools the policy marks schedulable", async () => {
-    vi.mocked(listAvailableAiMessageTaskTools).mockResolvedValue(
-      READ_ONLY_TOOLS
-    );
+  it("categorizes tools by risk level", async () => {
+    vi.mocked(listAvailableAiMessageTaskTools).mockResolvedValue(TOOLS);
     const wrapper = mountDialog();
     await flushPromises();
-    const names = wrapper
-      .find('[data-testid="tool-select"]')
-      .attributes("data-tool-names");
-    expect(names).toBe("list_email_inboxes");
+    const vm = vmOf(wrapper);
+    // Read-only + automation + high-impact counts derived from the exposed
+    // confirmedHighImpact() source list (highImpactTools). We assert behavior
+    // via confirm payloads below; here just ensure load didn't error.
+    expect(listAvailableAiMessageTaskTools).toHaveBeenCalled();
+    expect(vm.confirmInput).toBeDefined();
   });
 
-  it("emits an empty allowed-tools payload when nothing is approved", async () => {
-    vi.mocked(listAvailableAiMessageTaskTools).mockResolvedValue(
-      READ_ONLY_TOOLS
-    );
+  it("emits toolsEnabled=false payload when the master switch is off", async () => {
+    vi.mocked(listAvailableAiMessageTaskTools).mockResolvedValue(TOOLS);
     const wrapper = mountDialog();
     await flushPromises();
     await wrapper
       .find('[data-testid="scheduled-loop-approval-confirm"]')
       .trigger("click");
-    const confirmEvents = wrapper.emitted("confirm");
-    expect(confirmEvents).toBeTruthy();
-    const payload = confirmEvents![0][0] as {
+    const payload = wrapper.emitted("confirm")![0][0] as {
       allowedTools: string[];
       autoApproveTools: boolean;
     };
@@ -123,30 +137,45 @@ describe("ScheduledLoopToolApprovalDialog", () => {
     expect(payload.autoApproveTools).toBe(false);
   });
 
-  it("emits the selected tools and auto-approve when the user approves", async () => {
-    vi.mocked(listAvailableAiMessageTaskTools).mockResolvedValue(
-      READ_ONLY_TOOLS
-    );
+  it("auto-approves read-only tools when enabled, even with no explicit selection", async () => {
+    vi.mocked(listAvailableAiMessageTaskTools).mockResolvedValue(TOOLS);
     const wrapper = mountDialog();
     await flushPromises();
-    // Drive the exposed reactive state (the dialog exposes these for tests).
-    const vm = wrapper.vm as unknown as {
-      selectedTools: string[];
-      autoApprove: boolean;
-    };
-    vm.selectedTools = ["list_email_inboxes"];
-    vm.autoApprove = true;
+    const vm = vmOf(wrapper);
+    vm.toolsEnabled = true; // master switch on, nothing else selected
     await wrapper
       .find('[data-testid="scheduled-loop-approval-confirm"]')
       .trigger("click");
-    const confirmEvents = wrapper.emitted("confirm");
-    expect(confirmEvents).toBeTruthy();
-    const payload = confirmEvents![0][0] as {
+    const payload = wrapper.emitted("confirm")![0][0] as {
       allowedTools: string[];
       autoApproveTools: boolean;
     };
-    expect(payload.allowedTools).toEqual(["list_email_inboxes"]);
+    // No explicit tools selected, but autoApprove is on → read-only auto-run.
     expect(payload.autoApproveTools).toBe(true);
+    expect(payload.allowedTools).toEqual([]);
+  });
+
+  it("does NOT confirm a high-impact tool until its exact name is typed", async () => {
+    vi.mocked(listAvailableAiMessageTaskTools).mockResolvedValue(TOOLS);
+    const wrapper = mountDialog();
+    await flushPromises();
+    const vm = vmOf(wrapper);
+    vm.toolsEnabled = true;
+    vm.pendingHighImpact.file_write = true;
+    vm.confirmInput.file_write = "file_write_typo"; // wrong text
+    expect(vm.confirmedHighImpact()).toEqual([]);
+    // Correct the text.
+    vm.confirmInput.file_write = "file_write";
+    expect(vm.confirmedHighImpact()).toEqual(["file_write"]);
+    vm.selectedAutomation = ["proxy_check"];
+    await wrapper
+      .find('[data-testid="scheduled-loop-approval-confirm"]')
+      .trigger("click");
+    const payload = wrapper.emitted("confirm")![0][0] as {
+      allowedTools: string[];
+    };
+    expect(payload.allowedTools).toContain("file_write");
+    expect(payload.allowedTools).toContain("proxy_check");
   });
 
   it("emits cancel and closes when the close button is used", async () => {

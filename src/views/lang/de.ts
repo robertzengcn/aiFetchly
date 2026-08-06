@@ -2309,6 +2309,16 @@ export default {
       autoApproveWarning:
         "Diese Tools werden bei jedem Durchlauf automatisch ausgeführt, solange die Schleife aktiv ist.",
       createLoop: "Schleife planen",
+      enableTools: "Tools unbeaufsichtigt ausführen erlauben",
+      readOnlyAutoApproved:
+        "Schreibgeschützte Tools werden automatisch genehmigt",
+      automationTools: "Automatisierungs-Tools",
+      automationToolsHint:
+        "Optional — Tools auswählen, die Netzwerkprüfungen durchführen",
+      highImpactTools: "Schreib-/E-Mail-Tools — Namen eingeben zum Aktivieren",
+      highImpactWarning:
+        "Diese werden bei jedem Durchlauf unbeaufsichtigt ausgeführt. Injizierter Inhalt könnte Dateien überschreiben oder E-Mails in Ihrem Namen senden. Geben Sie jeden Tool-Namen ein, um zu bestätigen.",
+      typeToConfirm: "{name} eingeben zum Bestätigen",
       errors: {
         INVALID_LOOP_SYNTAX: "Der /loop-Befehl konnte nicht analysiert werden.",
         INVALID_INTERVAL:

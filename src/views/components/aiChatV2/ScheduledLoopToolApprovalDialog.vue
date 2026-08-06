@@ -1,7 +1,7 @@
 <template>
   <v-dialog
     :model-value="modelValue"
-    max-width="560"
+    max-width="620"
     persistent
     @update:model-value="(v: boolean) => emit('update:modelValue', v)"
   >
@@ -9,7 +9,10 @@
       <v-card-title class="d-flex align-center">
         <v-icon class="mr-2" color="primary">mdi-shield-lock-outline</v-icon>
         <span>
-          {{ t("aiChatV2.scheduledLoop.toolApprovalTitle") || "Approve unattended tools" }}
+          {{
+            t("aiChatV2.scheduledLoop.toolApprovalTitle") ||
+            "Approve unattended tools"
+          }}
         </span>
         <v-spacer />
         <v-btn
@@ -27,14 +30,13 @@
         <p class="text-body-2 mb-3">
           {{
             t("aiChatV2.scheduledLoop.toolApprovalIntro") ||
-            "Scheduled loops run without supervision. Optionally approve read-only tools the loop may use. Sending email, drafts, shell, file writes, and subagents stay blocked."
+            "Scheduled loops run without supervision. Read-only tools auto-approve when unattended tools are enabled. Write/email tools require explicit confirmation below. Shell, subagents, and mailbox mutations stay blocked."
           }}
         </p>
 
         <v-alert type="info" variant="tonal" density="compact" class="mb-3">
-          {{
-            t("aiChatV2.scheduledLoop.toolApprovalCommand") || "Command"
-          }}: <code>{{ rawCommand }}</code>
+          {{ t("aiChatV2.scheduledLoop.toolApprovalCommand") || "Command" }}:
+          <code>{{ rawCommand }}</code>
         </v-alert>
 
         <v-progress-linear
@@ -53,66 +55,115 @@
         </div>
 
         <template v-else>
-          <div
-            v-if="readOnlyTools.length === 0"
-            class="pa-4 text-center text-grey text-caption"
-          >
-            {{
-              t("aiChatV2.scheduledLoop.noReadOnlyTools") ||
-              "No read-only tools are available."
-            }}
-          </div>
-          <v-select
-            v-else
-            v-model="selectedTools"
-            :items="readOnlyTools"
-            item-title="name"
-            item-value="name"
-            :label="
-              t('aiChatV2.scheduledLoop.allowedTools') || 'Allowed read-only tools'
-            "
-            :placeholder="
-              t('aiChatV2.scheduledLoop.allowedToolsHint') ||
-              'Optionally select tools the loop may run'
-            "
-            multiple
-            chips
-            closable-chips
-            density="compact"
-            variant="outlined"
-          >
-            <template v-slot:item="{ props: itemProps, item }">
-              <v-list-item v-bind="itemProps">
-                <v-list-item-subtitle class="text-caption">
-                  {{ item.raw.description }}
-                </v-list-item-subtitle>
-              </v-list-item>
-            </template>
-          </v-select>
-
+          <!-- Master switch: enable the unattended-tool layer. -->
           <v-switch
-            v-model="autoApprove"
-            :disabled="selectedTools.length === 0"
+            v-model="toolsEnabled"
             :label="
-              t('aiChatV2.scheduledLoop.autoApprove') ||
-              'Run approved tools without asking'
+              t('aiChatV2.scheduledLoop.enableTools') ||
+              'Allow tools to run unattended'
             "
-            color="warning"
+            color="primary"
             density="compact"
             hide-details
+            data-testid="scheduled-loop-tools-enabled"
           />
-          <v-alert
-            v-if="autoApprove && selectedTools.length > 0"
-            type="warning"
-            variant="tonal"
-            density="compact"
-            class="mt-2"
-          >
-            {{
-              t("aiChatV2.scheduledLoop.autoApproveWarning") ||
-              "These tools will run automatically on every occurrence while the loop is active."
-            }}
-          </v-alert>
+
+          <template v-if="toolsEnabled">
+            <!-- Read-only tools: auto-approved, no per-tool action. -->
+            <v-alert
+              type="success"
+              variant="tonal"
+              density="compact"
+              class="mt-3 mb-2"
+            >
+              <div class="text-caption">
+                <strong>{{
+                  t("aiChatV2.scheduledLoop.readOnlyAutoApproved") ||
+                  "Read-only tools auto-approve"
+                }}</strong>
+                —
+                {{ readOnlyTools.map((t) => t.name).join(", ") }}
+              </div>
+            </v-alert>
+
+            <!-- Automation tools: plain selection. -->
+            <div v-if="automationTools.length > 0" class="mt-2">
+              <div class="text-caption font-weight-bold mb-1">
+                {{ t("aiChatV2.scheduledLoop.automationTools") || "Automation tools" }}
+              </div>
+              <v-select
+                v-model="selectedAutomation"
+                :items="automationTools"
+                item-title="name"
+                item-value="name"
+                :placeholder="
+                  t('aiChatV2.scheduledLoop.automationToolsHint') ||
+                  'Optional — select tools that perform network checks'
+                "
+                multiple
+                chips
+                closable-chips
+                density="compact"
+                variant="outlined"
+                hide-details
+                data-testid="scheduled-loop-automation-select"
+              />
+            </div>
+
+            <!-- High-impact tools: per-tool typed confirmation required. -->
+            <div v-if="highImpactTools.length > 0" class="mt-3">
+              <div class="text-caption font-weight-bold mb-1">
+                {{
+                  t("aiChatV2.scheduledLoop.highImpactTools") ||
+                  "Write / email tools — type the name to enable"
+                }}
+              </div>
+              <v-alert
+                type="warning"
+                variant="tonal"
+                density="compact"
+                class="mb-2"
+              >
+                {{
+                  t("aiChatV2.scheduledLoop.highImpactWarning") ||
+                  "These run unattended on every occurrence. Injected content could overwrite files or send email as you. Type each tool name to confirm."
+                }}
+              </v-alert>
+              <div
+                v-for="tool in highImpactTools"
+                :key="tool.name"
+                class="d-flex align-center mb-2"
+              >
+                <v-checkbox
+                  v-model="pendingHighImpact[tool.name]"
+                  hide-details
+                  density="compact"
+                  class="shrink-0"
+                  :data-testid="`high-impact-check-${tool.name}`"
+                />
+                <div class="ml-2 flex-grow-1">
+                  <div class="text-body-2">{{ tool.name }}</div>
+                  <div class="text-caption text-medium-emphasis">
+                    {{ tool.description }}
+                  </div>
+                  <v-text-field
+                    v-if="pendingHighImpact[tool.name]"
+                    v-model="confirmInput[tool.name]"
+                    :placeholder="
+                      t('aiChatV2.scheduledLoop.typeToConfirm', {
+                        name: tool.name,
+                      }) || `Type ${tool.name} to confirm`
+                    "
+                    density="compact"
+                    variant="outlined"
+                    hide-details
+                    :data-testid="`high-impact-confirm-${tool.name}`"
+                    @input="onConfirmInput(tool.name)"
+                  />
+                </div>
+              </div>
+            </div>
+          </template>
         </template>
       </v-card-text>
 
@@ -137,7 +188,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch } from "vue";
+import { ref, watch, reactive } from "vue";
 import { useI18n } from "vue-i18n";
 import { listAvailableAiMessageTaskTools } from "@/views/api/aiMessageTask";
 import type { SchedulableAiToolSummary } from "@/entityTypes/aiMessageTaskTypes";
@@ -162,19 +213,47 @@ const loading = ref(false);
 const submitting = ref(false);
 const loadError = ref<string | null>(null);
 const readOnlyTools = ref<SchedulableAiToolSummary[]>([]);
-const selectedTools = ref<string[]>([]);
-const autoApprove = ref(false);
+const automationTools = ref<SchedulableAiToolSummary[]>([]);
+const highImpactTools = ref<SchedulableAiToolSummary[]>([]);
+
+const toolsEnabled = ref(false);
+const selectedAutomation = ref<string[]>([]);
+// checkbox state per high-impact tool (ticked = user intends to enable)
+const pendingHighImpact = reactive<Record<string, boolean>>({});
+// typed confirmation text per high-impact tool
+const confirmInput = reactive<Record<string, string>>({});
+
+/** The high-impact tools the user has correctly typed-in to confirm. */
+function confirmedHighImpact(): string[] {
+  return highImpactTools.value
+    .filter(
+      (tool) =>
+        pendingHighImpact[tool.name] && confirmInput[tool.name] === tool.name
+    )
+    .map((tool) => tool.name);
+}
+
+/** Clear the confirmation text if the user edited away from the exact name. */
+function onConfirmInput(name: string): void {
+  if (confirmInput[name] !== name) {
+    // no-op; confirmedHighImpact() re-checks on confirm
+  }
+}
 
 async function loadTools(): Promise<void> {
   loading.value = true;
   loadError.value = null;
   try {
     const all = await listAvailableAiMessageTaskTools();
-    readOnlyTools.value = all.filter((tool) => tool.schedulable);
+    readOnlyTools.value = all.filter((tool) => tool.riskLevel === "low");
+    automationTools.value = all.filter((tool) => tool.riskLevel === "medium");
+    highImpactTools.value = all.filter((tool) => tool.riskLevel === "high");
   } catch (err) {
     loadError.value =
       err instanceof Error ? err.message : "Failed to load available tools.";
     readOnlyTools.value = [];
+    automationTools.value = [];
+    highImpactTools.value = [];
   } finally {
     loading.value = false;
   }
@@ -184,13 +263,19 @@ watch(
   () => props.modelValue,
   (open) => {
     if (open) {
-      selectedTools.value = [];
-      autoApprove.value = false;
+      reset();
       void loadTools();
     }
   },
   { immediate: true }
 );
+
+function reset(): void {
+  toolsEnabled.value = false;
+  selectedAutomation.value = [];
+  for (const key of Object.keys(pendingHighImpact)) delete pendingHighImpact[key];
+  for (const key of Object.keys(confirmInput)) delete confirmInput[key];
+}
 
 function close(): void {
   emit("update:modelValue", false);
@@ -203,13 +288,19 @@ function cancel(): void {
 }
 
 function confirm(): void {
+  const allowedTools = [...selectedAutomation.value, ...confirmedHighImpact()];
   emit("confirm", {
-    allowedTools: selectedTools.value,
-    autoApproveTools: autoApprove.value && selectedTools.value.length > 0,
+    allowedTools,
+    autoApproveTools: toolsEnabled.value,
   });
 }
 
-// Exposed for component tests (drive the approval state without a full DOM
-// interaction). Not part of the public dialog contract.
-defineExpose({ selectedTools, autoApprove });
+// Exposed for component tests (drive approval state without DOM interaction).
+defineExpose({
+  toolsEnabled,
+  selectedAutomation,
+  pendingHighImpact,
+  confirmInput,
+  confirmedHighImpact,
+});
 </script>
