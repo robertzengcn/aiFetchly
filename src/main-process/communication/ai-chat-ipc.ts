@@ -213,7 +213,10 @@ function buildAttachmentReferenceBlock(
   if (references.length === 0) return "";
 
   const sanitizeForPrompt = (value: string): string =>
-    value.replace(/\\/g, "\\\\").replace(/[\r\n]/g, " ").replace(/"/g, '\\"');
+    value
+      .replace(/\\/g, "\\\\")
+      .replace(/[\r\n]/g, " ")
+      .replace(/"/g, '\\"');
 
   const lines = references.map((ref, index) => {
     const ext = ref.fileName.toLowerCase().slice(ref.fileName.lastIndexOf("."));
@@ -223,9 +226,9 @@ function buildAttachmentReferenceBlock(
       : "`read_attachment_content`";
     return `${index + 1}. file_name="${sanitizeForPrompt(
       ref.fileName
-    )}" attachment_ref="${
-      ref.refId
-    }" file_path="${ref.filePath}" → call ${suggestedTool} with attachment_ref="${
+    )}" attachment_ref="${ref.refId}" file_path="${
+      ref.filePath
+    }" → call ${suggestedTool} with attachment_ref="${
       ref.refId
     }" to load this file. For local shell tools, use file_path to access the file directly on disk.`;
   });
@@ -1238,8 +1241,11 @@ export function registerAiChatIpcHandlers(): void {
   // renders AI-generated content.
   //
   // Platform notes:
-  //  - Windows: `rundll32 shell32.dll,OpenAs_RunDLL <path>` shows the
-  //    standard "How do you want to open this file?" dialog.
+  //  - Windows: `Start-Process -Verb OpenAs` uses ShellExecute and both
+  //    shows the chooser and launches the selected app. Do NOT use
+  //    `rundll32 shell32.dll,OpenAs_RunDLL` from Electron — that entry
+  //    point often shows the dialog but never launches when spawned from
+  //    a non-shell context (exact failure users reported).
   //  - macOS: AppleScript `choose application` is the only programmatic way
   //    to surface the native app picker; we then launch the file via
   //    `open -a <chosenApp> <path>` so any .app bundle the user picks works.
@@ -1271,9 +1277,10 @@ export function registerAiChatIpcHandlers(): void {
     return _isWSLCached;
   }
 
-  // Translate a WSL/Linux absolute path to a Windows UNC path that rundll32
-  // can consume (e.g. \\wsl.localhost\<distro>\home\...). Returns null if
-  // the translation fails — callers fall back to xdg-open in that case.
+  // Translate a WSL/Linux absolute path to a Windows UNC path that the
+  // Windows Open With dialog can consume
+  // (e.g. \\wsl.localhost\<distro>\home\...). Returns null if the
+  // translation fails — callers fall back to xdg-open in that case.
   function wslPathToWindows(linuxPath: string): string | null {
     try {
       const result = spawnSync("wslpath", ["-w", linuxPath], {
@@ -1288,14 +1295,36 @@ export function registerAiChatIpcHandlers(): void {
     }
   }
 
+  /** Escape a path for PowerShell single-quoted -LiteralPath usage. */
+  function escapePowerShellSingleQuoted(value: string): string {
+    return `'${value.replace(/'/g, "''")}'`;
+  }
+
+  /**
+   * Show Windows "Open With" and launch the chosen app via ShellExecute.
+   * Path must already be a Windows-native or UNC path.
+   */
+  function openWindowsOpenWithDialog(windowsPath: string): void {
+    const proc = spawn(
+      "powershell.exe",
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-WindowStyle",
+        "Hidden",
+        "-Command",
+        `Start-Process -LiteralPath ${escapePowerShellSingleQuoted(
+          windowsPath
+        )} -Verb OpenAs`,
+      ],
+      { detached: true, stdio: "ignore", windowsHide: true }
+    );
+    proc.unref();
+  }
+
   function openFileWithChooser(filePath: string): void {
     if (platform() === "win32") {
-      const proc = spawn(
-        "rundll32.exe",
-        ["shell32.dll,OpenAs_RunDLL", filePath],
-        { detached: true, stdio: "ignore" }
-      );
-      proc.unref();
+      openWindowsOpenWithDialog(filePath);
       return;
     }
 
@@ -1331,12 +1360,7 @@ export function registerAiChatIpcHandlers(): void {
     if (isWSL()) {
       const winPath = wslPathToWindows(filePath);
       if (winPath) {
-        const proc = spawn(
-          "rundll32.exe",
-          ["shell32.dll,OpenAs_RunDLL", winPath],
-          { detached: true, stdio: "ignore" }
-        );
-        proc.unref();
+        openWindowsOpenWithDialog(winPath);
         return;
       }
     }
