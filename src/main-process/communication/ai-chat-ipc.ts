@@ -12,6 +12,7 @@ import {
 } from "@/api/aiChatApi";
 // import { getAvailableToolFunctions } from "@/config/aiTools.config";
 import { SkillRegistry } from "@/config/skillsRegistry";
+import { redirectToLoginOnAuthExpired } from "@/service/AIChatErrorMapper";
 import { formatToolCatalogBreakdown } from "@/service/ToolCatalogDiagnostics";
 import {
   CommonMessage,
@@ -1057,6 +1058,7 @@ export function registerAiChatIpcHandlers(): void {
           sender.send(AI_CHAT_STREAM_COMPLETE, JSON.stringify(cancelledChunk));
         } else {
           console.error("AI Chat stream error:", error);
+          void redirectToLoginOnAuthExpired(error);
           const errorChunk: ChatStreamChunk = {
             content: "",
             isComplete: true,

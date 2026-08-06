@@ -584,7 +584,10 @@ import {
   readAiChatReasoningVisible,
   type AiChatReasoningVisibilityChangedDetail,
 } from "@/views/utils/aiChatReasoningPreference";
-import { QUOTA_EXHAUSTED_SENTINEL } from "@/service/AIChatErrorMapper";
+import {
+  AUTH_EXPIRED_SENTINEL,
+  QUOTA_EXHAUSTED_SENTINEL,
+} from "@/service/AIChatErrorMapper";
 
 /**
  * Rough chars→tokens ratio used to drive a live-updating estimate while
@@ -1733,6 +1736,12 @@ const mapStreamErrorMessage = (raw: string): string => {
     return (
       t("aiChatV2.quota_exhausted") ||
       "The AI tokens included in your subscription plan have been exhausted. Please recharge your account to continue using AI features."
+    );
+  }
+  if (raw === AUTH_EXPIRED_SENTINEL) {
+    return (
+      t("aiChatV2.auth_expired") ||
+      "Your session has expired. Please sign in again."
     );
   }
   return raw;

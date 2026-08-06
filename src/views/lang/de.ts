@@ -2357,6 +2357,8 @@ export default {
       "Das Werkzeug konnte nach der Freigabe nicht fortgesetzt werden.",
     permission_resume_no_tool_id:
       "Werkzeugaufrufinformationen fehlen; Fortsetzung nicht möglich.",
+    auth_expired:
+      "Ihre Sitzung ist abgelaufen. Bitte melden Sie sich erneut an.",
     quota_exhausted:
       "Die in Ihrem Abonnement enthaltenen KI-Token sind aufgebraucht. Bitte laden Sie Ihr Konto auf, um die KI-Funktionen weiterhin zu nutzen.",
     empty_response_error:

@@ -2368,6 +2368,8 @@ export default {
       "No se pudo continuar la herramienta después de conceder el permiso.",
     permission_resume_no_tool_id:
       "Falta la información de la llamada de herramienta; no se puede continuar.",
+    auth_expired:
+      "Tu sesión ha caducado. Inicia sesión de nuevo.",
     quota_exhausted:
       "Los tokens de IA incluidos en su plan de suscripción se han agotado. Recargue su cuenta para seguir utilizando las funciones de IA.",
     empty_response_error:

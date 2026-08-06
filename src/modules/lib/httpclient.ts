@@ -132,7 +132,9 @@ export class HttpClient {
     // request but keep local auth state for offline/local features.
     if (isRetry) {
       console.warn("Token refresh retry still failed; keeping local session");
-      throw new Error("Authentication failed after token refresh retry.");
+      throw new Error(
+        "Authentication failed after token refresh retry (HTTP 401/403)."
+      );
     }
 
     try {
@@ -233,7 +235,9 @@ export class HttpClient {
         console.warn(
           "[HttpClient] No refresh token available; keeping local session"
         );
-        throw new Error("Authentication failed: refresh token unavailable.");
+        throw new Error(
+          `Authentication failed: refresh token unavailable (HTTP ${res.status}).`
+        );
       }
     }
 
@@ -404,7 +408,9 @@ export class HttpClient {
       // but keep local auth state.
       if (isRetry) {
         console.warn("Token refresh retry still failed; keeping local session");
-        throw new Error("Authentication failed after token refresh retry.");
+        throw new Error(
+          `Authentication failed after token refresh retry (HTTP ${res.status}).`
+        );
       }
 
       // Check if refresh token exists
@@ -451,11 +457,13 @@ export class HttpClient {
         // No refresh token available. Fail this request but keep local auth
         // state so local features remain usable.
         console.warn("No refresh token available; keeping local session");
-        throw new Error("Authentication failed: refresh token unavailable.");
+        throw new Error(
+          `Authentication failed: refresh token unavailable (HTTP ${res.status}).`
+        );
       }
     }
 
-    if (!res.ok) throw new Error(res.statusText);
+    if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
     return res;
   }
 }

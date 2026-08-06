@@ -2316,6 +2316,8 @@ export default {
     permission_resume_failed: "許可後にツールを再開できませんでした。",
     permission_resume_no_tool_id:
       "ツール呼び出し情報が不足しているため、続行できません。",
+    auth_expired:
+      "セッションの有効期限が切れました。もう一度サインインしてください。",
     quota_exhausted:
       "サブスクリプションプランに含まれるAIトークンが尽きました。AI機能を続けてご利用いただくには、アカウントをチャージしてください。",
     empty_response_error:
