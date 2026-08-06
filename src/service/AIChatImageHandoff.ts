@@ -11,23 +11,50 @@ import type {
   OpenAIChatMessage,
   OpenAIMessageContent,
   OpenAIImageUrlContentPart,
+  OpenAITextContentPart,
 } from "@/api/aiChatApi";
 import type { ImageModelArtifact } from "@/entityTypes/aiImageAttachmentToolTypes";
 
+/** Marker prefix for synthetic attach_local_images handoff messages. */
+export const IMAGE_HANDOFF_MARKER = "[AIFETCHLY_IMAGE_HANDOFF_V1]";
+
 /** True when a content part is an image_url part. */
-function isImageUrlPart(
-  part: unknown
-): part is OpenAIImageUrlContentPart {
+function isImageUrlPart(part: unknown): part is OpenAIImageUrlContentPart {
   if (typeof part !== "object" || part === null) return false;
   const p = part as { type?: unknown };
   return p.type === "image_url";
 }
 
 /** Extract image_url parts from a message's content (array form only). */
-function imageUrlParts(message: OpenAIChatMessage): OpenAIImageUrlContentPart[] {
+function imageUrlParts(
+  message: OpenAIChatMessage
+): OpenAIImageUrlContentPart[] {
   const content = message.content as OpenAIMessageContent | null;
   if (!Array.isArray(content)) return [];
   return content.filter(isImageUrlPart);
+}
+
+function handoffTextParts(message: OpenAIChatMessage): OpenAITextContentPart[] {
+  const content = message.content as OpenAIMessageContent | null;
+  if (!Array.isArray(content)) return [];
+  return content.filter(
+    (part): part is OpenAITextContentPart =>
+      typeof part === "object" &&
+      part !== null &&
+      (part as { type?: unknown }).type === "text" &&
+      typeof (part as { text?: unknown }).text === "string"
+  );
+}
+
+/**
+ * True when a message is a synthetic attach_local_images handoff carrying
+ * (or formerly carrying) prepared local images.
+ */
+export function isImageHandoffMessage(message: OpenAIChatMessage): boolean {
+  if (message.role !== "user") return false;
+  return handoffTextParts(message).some((part) =>
+    part.text.includes(IMAGE_HANDOFF_MARKER)
+  );
 }
 
 /**
@@ -63,6 +90,55 @@ export function countImageDataUrlChars(
 }
 
 /**
+ * After the model has already seen a handoff in a prior completion round
+ * (there is a later assistant message), drop its image_url parts and keep
+ * only the text summary.
+ *
+ * This frees the per-request 3-image budget for the next batch once the AI
+ * server has finished with the previous images, and avoids resending large
+ * data URLs on every subsequent round. Mutates `messages` in place.
+ *
+ * @returns number of image_url parts removed
+ */
+export function stripConsumedImageHandoffs(
+  messages: OpenAIChatMessage[]
+): number {
+  let removed = 0;
+  for (let i = 0; i < messages.length; i++) {
+    const message = messages[i];
+    if (!isImageHandoffMessage(message)) continue;
+    const imageParts = imageUrlParts(message);
+    if (imageParts.length === 0) continue;
+
+    const consumedByLaterAssistant = messages
+      .slice(i + 1)
+      .some((later) => later.role === "assistant");
+    if (!consumedByLaterAssistant) continue;
+
+    const textParts = handoffTextParts(message);
+    const textOnly: OpenAITextContentPart[] =
+      textParts.length > 0
+        ? textParts
+        : [
+            {
+              type: "text",
+              text:
+                `${IMAGE_HANDOFF_MARKER}\n` +
+                `Previously attached ${imageParts.length} local image(s) ` +
+                `(bytes released after the model round completed).`,
+            },
+          ];
+
+    messages[i] = {
+      ...message,
+      content: textOnly,
+    };
+    removed += imageParts.length;
+  }
+  return removed;
+}
+
+/**
  * Build the synthetic model-only `role: "user"` multimodal handoff message
  * that delivers prepared tool images to the next chat-completion round.
  *
@@ -81,7 +157,7 @@ export function buildImageArtifactHandoffMessage(input: {
   readonly toolCallId: string;
 }): OpenAIChatMessage {
   const text =
-    `[AIFETCHLY_IMAGE_HANDOFF_V1]\n` +
+    `${IMAGE_HANDOFF_MARKER}\n` +
     `The desktop attached ${input.artifacts.length} local image(s).\n` +
     `Original user request:\n${input.originalUserRequest}`;
 

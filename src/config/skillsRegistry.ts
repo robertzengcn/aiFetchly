@@ -151,19 +151,30 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
   {
     name: "attach_local_images",
     description:
-      "Attach one to three exact local image files from the approved conversation workspace " +
-      "to the current AI request, so the model can analyze, compare, edit, or use them as " +
-      "reference images. Use glob_files first when you do not know the exact paths. " +
-      "Only PNG, JPEG, WebP, and GIF are supported. This transfers prepared image content to " +
-      "the configured AI server after the user grants permission.",
+      "REQUIRED for analyzing or editing local workspace images (change background color, " +
+      "make background white, remove background, product photo edits, compare images, visual Q&A). " +
+      "After glob_files finds image paths, call this tool with exact paths — do NOT use " +
+      "shell_execute, Python, Pillow/PIL, ImageMagick, or file_read for image editing. " +
+      "HARD LIMIT: at most 3 images per call and per AI request. " +
+      "When more than 3 images need editing: (1) attach ONLY the first batch of up to 3 paths, " +
+      "(2) wait for the AI to finish editing that batch and return results, " +
+      "(3) then call this tool again with the next up to 3 paths, and repeat until done. " +
+      "NEVER pass more than 3 paths in one call. " +
+      "NEVER issue multiple attach_local_images calls in the same assistant turn/tool round — " +
+      "one batch per round only. " +
+      "Only PNG, JPEG, WebP, and GIF are supported. Transfers prepared image content to the " +
+      "configured AI server after the user grants permission.",
     parameters: {
       type: "object",
       properties: {
         paths: {
           type: "array",
           description:
-            "One to three exact image paths, relative to the approved workspace root or " +
-            "absolute inside it. Glob patterns, directories, and URLs are not accepted.",
+            "Exactly 1 to 3 image paths for THIS batch only (never more). " +
+            "Relative to the approved workspace root, or absolute paths inside it. " +
+            "If many files need work, take the next 3 remaining paths and leave the rest " +
+            "for a later call after this batch completes. " +
+            "Glob patterns, directories, and URLs are not accepted.",
           items: { type: "string", minLength: 1 },
           minItems: 1,
           maxItems: 3,

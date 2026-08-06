@@ -58,6 +58,7 @@ import {
   buildImageArtifactHandoffMessage,
   countImageContentParts,
   countImageDataUrlChars,
+  stripConsumedImageHandoffs,
 } from "@/service/AIChatImageHandoff";
 import { getDefaultToolJobRegistry } from "@/service/ToolJobRegistry";
 import { USER_AI_ENABLED } from "@/config/usersetting";
@@ -127,6 +128,31 @@ const SHELL_EXECUTE_TOOL_NAME = "shell_execute";
 
 const SHELL_ACTION_INTENT_RE =
   /\b(rm|unlink)\b|(?:\b(delete|remove)\b.*(?:\b(file|folder|directory|path)\b|[./~]|\.[A-Za-z0-9]{1,8}\b))|(?:\b(run|execute)\b.*\b(shell|terminal|bash|powershell|cmd|command)\b)/i;
+
+const IMAGE_SHELL_WORKAROUND_RE =
+  /\b(pil|pillow|imagemagick|magick|convert)\b|\bfrom\s+PIL\b|\bimport\s+Image\b|\b(opencv|cv2)\b/i;
+
+/**
+ * Detect shell/Python image-editing workarounds so we can steer the model to
+ * attach_local_images instead of auto-loading shell_execute for that path.
+ */
+function looksLikeImageShellWorkaround(rawArgs: unknown): boolean {
+  if (rawArgs == null) return true;
+  let text = "";
+  if (typeof rawArgs === "string") {
+    text = rawArgs;
+  } else if (typeof rawArgs === "object") {
+    const record = rawArgs as Record<string, unknown>;
+    const command = record.command;
+    const description = record.description;
+    text = [
+      typeof command === "string" ? command : "",
+      typeof description === "string" ? description : "",
+    ].join(" ");
+  }
+  if (!text.trim()) return true;
+  return IMAGE_SHELL_WORKAROUND_RE.test(text);
+}
 
 /**
  * Legacy global timeout ceiling for foreground tool calls.
@@ -599,6 +625,10 @@ export class AIChatQueryLoop {
         round < CHAT_V2_MAX_TOOL_ROUNDS;
         round += 1
       ) {
+        // Free capacity from handoffs the model already saw in an earlier
+        // round (or before a permission/plan resume). Idempotent.
+        stripConsumedImageHandoffs(messages);
+
         const accumulator = new OpenAIStreamAccumulator();
         activeAccumulator = accumulator;
 
@@ -1026,6 +1056,16 @@ export class AIChatQueryLoop {
           )
         );
 
+        // Previous attach_local_images handoffs were included in the request
+        // that just completed. Drop their image bytes now so the next batch
+        // can use the 3-image budget and we do not resend large data URLs.
+        const stripped = stripConsumedImageHandoffs(messages);
+        if (stripped > 0) {
+          console.log(
+            `[ai-chat-v2] stripped ${stripped} consumed image handoff part(s) after model round`
+          );
+        }
+
         // Push error tool results for malformed calls so the model can
         // self-correct in the next round. The assistant message above
         // includes ALL calls (valid + malformed) with their tool_call_ids,
@@ -1153,6 +1193,40 @@ export class AIChatQueryLoop {
               entry.loadPolicy === "deferred" &&
               !discoveredToolNames.has(call.name)
             ) {
+              // Image-edit workflows must use attach_local_images, not shell/Pillow.
+              // Refuse to auto-load shell for that purpose and steer the model.
+              if (
+                call.name === SHELL_EXECUTE_TOOL_NAME &&
+                catalog.byName.has("attach_local_images") &&
+                looksLikeImageShellWorkaround(call.arguments)
+              ) {
+                const steerContent = serializeToolResultContent({
+                  success: false,
+                  error:
+                    `Do not use shell_execute / Python / Pillow for local image editing. ` +
+                    `Use attach_local_images with 1-3 exact workspace image paths ` +
+                    `(discover paths with glob_files first), then continue the edit request.`,
+                });
+                eventSink.emit({
+                  type: "tool_result",
+                  conversationId: input.conversationId,
+                  messageId: input.assistantMessageId,
+                  toolCallId: call.id,
+                  toolName: call.name,
+                  fullContent: steerContent,
+                  toolResult: {
+                    success: false,
+                    error: "use attach_local_images instead",
+                  },
+                });
+                messages.push({
+                  role: "tool",
+                  tool_call_id: call.id,
+                  content: steerContent,
+                });
+                continue;
+              }
+
               discoveredToolNames.add(call.name);
               const retryContent = serializeToolResultContent({
                 success: false,

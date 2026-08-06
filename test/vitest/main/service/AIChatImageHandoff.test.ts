@@ -3,6 +3,8 @@ import {
   buildImageArtifactHandoffMessage,
   countImageContentParts,
   countImageDataUrlChars,
+  isImageHandoffMessage,
+  stripConsumedImageHandoffs,
 } from "@/service/AIChatImageHandoff";
 import type { OpenAIChatMessage } from "@/api/aiChatApi";
 import type { ImageModelArtifact } from "@/entityTypes/aiImageAttachmentToolTypes";
@@ -11,7 +13,9 @@ function imageUrl(url: string, detail: "auto" | "low" | "high" = "auto") {
   return { type: "image_url" as const, image_url: { url, detail } };
 }
 
-function artifact(overrides: Partial<ImageModelArtifact> = {}): ImageModelArtifact {
+function artifact(
+  overrides: Partial<ImageModelArtifact> = {}
+): ImageModelArtifact {
   return {
     kind: "image",
     fileName: "a.jpg",
@@ -108,7 +112,8 @@ describe("buildImageArtifactHandoffMessage", () => {
       originalUserRequest: "Find the front-view photo and edit it.",
       toolCallId: "call_1",
     });
-    const text = (msg.content as Array<{ type: string; text?: string }>)[0].text;
+    const text = (msg.content as Array<{ type: string; text?: string }>)[0]
+      .text;
     expect(text).toContain("[AIFETCHLY_IMAGE_HANDOFF_V1]");
     expect(text).toContain("attached 1 local image(s)");
     expect(text).toContain("Find the front-view photo and edit it.");
@@ -124,12 +129,20 @@ describe("buildImageArtifactHandoffMessage", () => {
       originalUserRequest: "compare",
       toolCallId: "call_1",
     });
-    const parts = (msg.content as Array<{
-      type: string;
-      image_url?: { url: string; detail?: string };
-    }>).filter((p) => p.type === "image_url");
-    expect(parts[0].image_url).toEqual({ url: "data:image/jpeg;base64,AAA", detail: "low" });
-    expect(parts[1].image_url).toEqual({ url: "data:image/png;base64,BBB", detail: "high" });
+    const parts = (
+      msg.content as Array<{
+        type: string;
+        image_url?: { url: string; detail?: string };
+      }>
+    ).filter((p) => p.type === "image_url");
+    expect(parts[0].image_url).toEqual({
+      url: "data:image/jpeg;base64,AAA",
+      detail: "low",
+    });
+    expect(parts[1].image_url).toEqual({
+      url: "data:image/png;base64,BBB",
+      detail: "high",
+    });
   });
 
   it("does not embed untrusted filenames into the text part", () => {
@@ -138,7 +151,85 @@ describe("buildImageArtifactHandoffMessage", () => {
       originalUserRequest: "edit it",
       toolCallId: "call_1",
     });
-    const text = (msg.content as Array<{ type: string; text?: string }>)[0].text;
+    const text = (msg.content as Array<{ type: string; text?: string }>)[0]
+      .text;
     expect(text).not.toContain("secret-filename.png");
+  });
+});
+
+describe("stripConsumedImageHandoffs", () => {
+  it("keeps handoff images until an assistant message follows them", () => {
+    const handoff = buildImageArtifactHandoffMessage({
+      artifacts: [
+        artifact({ dataUrl: "data:image/jpeg;base64,AAA" }),
+        artifact({ dataUrl: "data:image/jpeg;base64,BBB" }),
+        artifact({ dataUrl: "data:image/jpeg;base64,CCC" }),
+      ],
+      originalUserRequest: "make backgrounds white",
+      toolCallId: "call_1",
+    });
+    const messages: OpenAIChatMessage[] = [
+      { role: "user", content: "make backgrounds white" },
+      handoff,
+    ];
+    expect(stripConsumedImageHandoffs(messages)).toBe(0);
+    expect(countImageContentParts(messages)).toBe(3);
+  });
+
+  it("strips handoff image parts after the model round completes", () => {
+    const handoff = buildImageArtifactHandoffMessage({
+      artifacts: [
+        artifact({ dataUrl: "data:image/jpeg;base64,AAA" }),
+        artifact({ dataUrl: "data:image/jpeg;base64,BBB" }),
+        artifact({ dataUrl: "data:image/jpeg;base64,CCC" }),
+      ],
+      originalUserRequest: "make backgrounds white",
+      toolCallId: "call_1",
+    });
+    const messages: OpenAIChatMessage[] = [
+      { role: "user", content: "make backgrounds white" },
+      {
+        role: "tool",
+        tool_call_id: "call_1",
+        content: '{"success":true,"attached_count":3}',
+      },
+      handoff,
+      {
+        role: "assistant",
+        content: "Edited the first three. Attaching the next batch.",
+        tool_calls: [
+          {
+            id: "call_2",
+            type: "function",
+            function: { name: "attach_local_images", arguments: "{}" },
+          },
+        ],
+      },
+    ];
+
+    expect(countImageContentParts(messages)).toBe(3);
+    expect(stripConsumedImageHandoffs(messages)).toBe(3);
+    expect(countImageContentParts(messages)).toBe(0);
+    expect(isImageHandoffMessage(messages[2])).toBe(true);
+    const text = (
+      messages[2].content as Array<{ type: string; text?: string }>
+    )[0].text;
+    expect(text).toContain("[AIFETCHLY_IMAGE_HANDOFF_V1]");
+    expect(JSON.stringify(messages[2].content)).not.toContain("data:image/");
+  });
+
+  it("does not strip ordinary user-selected image parts", () => {
+    const messages: OpenAIChatMessage[] = [
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "look at this" },
+          imageUrl("data:image/jpeg;base64,USERIMG"),
+        ],
+      },
+      { role: "assistant", content: "nice photo" },
+    ];
+    expect(stripConsumedImageHandoffs(messages)).toBe(0);
+    expect(countImageContentParts(messages)).toBe(1);
   });
 });

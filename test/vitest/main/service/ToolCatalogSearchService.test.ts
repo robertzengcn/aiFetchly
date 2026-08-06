@@ -141,14 +141,67 @@ describe("ToolCatalogSearchService.search — query ranking", () => {
     });
     expect(r.matches.length).toBe(2);
   });
+
+  it("discovers attach_local_images for image edit / background queries", () => {
+    const catalog = buildCatalog([
+      tool(
+        "attach_local_images",
+        "REQUIRED for analyzing or editing local workspace images. " +
+          "Change background color, product photo edits. Prefer over shell or Pillow."
+      ),
+      tool(
+        "orch-change-feature",
+        "Orchestrate altering an existing, working feature to new desired behavior"
+      ),
+      tool(
+        "shell_execute",
+        "Execute a local shell command with explicit user confirmation"
+      ),
+      tool("file_write", "Create a new file or overwrite an existing file"),
+      tool(
+        "python-patterns",
+        "[documentation-only skill] Pythonic idioms, PEP 8 standards, type hints"
+      ),
+    ]);
+    const svc = new ToolCatalogSearchService();
+    const r = svc.search({
+      args: { query: "image processing background change edit photo" },
+      catalog,
+      state: emptyState,
+      context: ctx,
+    });
+    expect(r.matches.map((m) => m.name)).toContain("attach_local_images");
+    expect(r.selectedToolNames).toContain("attach_local_images");
+    expect(r.matches[0].name).toBe("attach_local_images");
+  });
+
+  it("ranks attach_local_images above python-patterns for pillow image queries", () => {
+    const catalog = buildCatalog([
+      tool(
+        "attach_local_images",
+        "REQUIRED for editing local workspace images; do not use Pillow"
+      ),
+      tool(
+        "python-patterns",
+        "[documentation-only skill] Pythonic idioms, PEP 8 standards, type hints"
+      ),
+      tool("shell_execute", "Execute a local shell command"),
+    ]);
+    const svc = new ToolCatalogSearchService();
+    const r = svc.search({
+      args: { query: "image processing python pillow" },
+      catalog,
+      state: emptyState,
+      context: ctx,
+    });
+    expect(r.matches.map((m) => m.name)).toContain("attach_local_images");
+    expect(r.matches[0].name).toBe("attach_local_images");
+  });
 });
 
 describe("ToolCatalogSearchService.search — policy", () => {
   it("never returns blocked tools", () => {
-    const catalog = buildCatalog([
-      tool("mcp_1_alpha"),
-      tool("mcp_1_beta"),
-    ]);
+    const catalog = buildCatalog([tool("mcp_1_alpha"), tool("mcp_1_beta")]);
     const svc = new ToolCatalogSearchService();
     const r = svc.search({
       args: { query: "alpha beta" },
@@ -161,10 +214,7 @@ describe("ToolCatalogSearchService.search — policy", () => {
   });
 
   it("restricts to agent allowed tools when allowedToolNames is set", () => {
-    const catalog = buildCatalog([
-      tool("mcp_1_alpha"),
-      tool("mcp_1_beta"),
-    ]);
+    const catalog = buildCatalog([tool("mcp_1_alpha"), tool("mcp_1_beta")]);
     const svc = new ToolCatalogSearchService();
     const r = svc.search({
       args: { query: "alpha beta" },

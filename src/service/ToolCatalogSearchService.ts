@@ -73,6 +73,7 @@ export class ToolCatalogSearchService {
         const descWords = tokenizeText(
           entry.shortDescription || entry.description
         );
+        const hintWords = tokenizeText(entry.searchHints.join(" "));
 
         // Required-term gate.
         if (
@@ -81,6 +82,7 @@ export class ToolCatalogSearchService {
             (req) =>
               parts.includes(req) ||
               descWords.includes(req) ||
+              hintWords.includes(req) ||
               partialNameMatch(parts, req)
           )
         ) {
@@ -95,11 +97,13 @@ export class ToolCatalogSearchService {
           if (parts.includes(term)) score += 20;
           else if (partialNameMatch(parts, term)) score += 8;
           if (descWords.includes(term)) score += 5;
+          if (hintWords.includes(term)) score += 12;
         }
         for (const req of required) {
           if (
             parts.includes(req) ||
             descWords.includes(req) ||
+            hintWords.includes(req) ||
             partialNameMatch(parts, req)
           ) {
             score += 16;

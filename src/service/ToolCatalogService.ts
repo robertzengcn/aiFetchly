@@ -13,7 +13,10 @@
 
 import * as crypto from "crypto";
 import type { OpenAITool } from "@/api/aiChatApi";
-import { TOOL_CATALOG_DEFAULTS, TOOL_CATALOG_SEARCH_TOOL_NAME } from "@/config/toolCatalogConfig";
+import {
+  TOOL_CATALOG_DEFAULTS,
+  TOOL_CATALOG_SEARCH_TOOL_NAME,
+} from "@/config/toolCatalogConfig";
 import { estimateToolTokens } from "@/service/ToolPromptBudgetService";
 import { ToolLoadPolicyService } from "@/service/ToolLoadPolicyService";
 import {
@@ -42,7 +45,7 @@ export const TOOL_CATALOG_SEARCH_OPENAI_TOOL: OpenAITool = {
   function: {
     name: TOOL_CATALOG_SEARCH_TOOL_NAME,
     description:
-      "Search the available deferred tool catalog and select tools to load before calling them. Use this when a capability (workspace file creation/editing/deletion, shell command, subagent, knowledge-library management, schedule automation, HTML artifact, email/social/proxy action, integration, MCP server, plugin tool, imported skill, scraper, marketing workflow) you need is not currently exposed.",
+      "Search the available deferred tool catalog and select tools to load before calling them. Use this when a capability (workspace file creation/editing/deletion, shell command, local image attach/edit/analysis via attach_local_images, subagent, knowledge-library management, schedule automation, HTML artifact, email/social/proxy action, integration, MCP server, plugin tool, imported skill, scraper, marketing workflow) you need is not currently exposed.",
     parameters: {
       type: "object",
       properties: {
@@ -88,6 +91,31 @@ const SOURCE_PRIORITY: Record<ToolCatalogSource, number> = {
 
 const LEGACY_MCP_NAME_RE = /^mcp_\d+_/;
 
+/**
+ * Extra searchable phrases for tools whose natural discovery queries diverge
+ * from the tool name (e.g. models search "pillow" / "image processing" when
+ * they should load attach_local_images).
+ */
+const TOOL_SEARCH_HINTS: ReadonlyMap<string, readonly string[]> = new Map([
+  [
+    "attach_local_images",
+    [
+      "image",
+      "images",
+      "photo",
+      "photos",
+      "background",
+      "edit image",
+      "image processing",
+      "image edit",
+      "pillow",
+      "pil",
+      "imagemagick",
+      "white background",
+    ],
+  ],
+]);
+
 export class ToolCatalogService {
   private readonly policyService: ToolLoadPolicyService;
   private readonly getSkillDefinition?: ToolCatalogServiceDeps["getSkillDefinition"];
@@ -122,7 +150,7 @@ export class ToolCatalogService {
         loadPolicy,
         description,
         shortDescription: shortenDescription(description),
-        searchHints: [],
+        searchHints: TOOL_SEARCH_HINTS.get(name) ?? [],
         estimatedTokens: estimateToolTokens(raw),
         schemaHash: hashTool(raw),
         openAITool: raw,
@@ -157,9 +185,7 @@ export class ToolCatalogService {
       };
     }
 
-    const deferredNames = new Set(
-      catalog.deferred.map((e) => e.name)
-    );
+    const deferredNames = new Set(catalog.deferred.map((e) => e.name));
     const discovered = state.discoveredToolNames;
     const exposed: OpenAITool[] = [];
     const exposedNames: string[] = [];
@@ -243,10 +269,7 @@ export class ToolCatalogService {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function bySourceThenName(
-  a: ToolCatalogEntry,
-  b: ToolCatalogEntry
-): number {
+function bySourceThenName(a: ToolCatalogEntry, b: ToolCatalogEntry): number {
   const s = SOURCE_PRIORITY[a.source] - SOURCE_PRIORITY[b.source];
   return s !== 0 ? s : a.name.localeCompare(b.name);
 }

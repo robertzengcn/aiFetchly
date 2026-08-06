@@ -184,7 +184,11 @@ function parseArgs(raw: Record<string, unknown>): ParsedArgs {
     return {
       ok: false,
       code: "invalid_arguments",
-      error: `At most ${CHAT_IMAGE_LIMITS.maxImagesPerRequest} images may be attached per request.`,
+      error:
+        `At most ${CHAT_IMAGE_LIMITS.maxImagesPerRequest} images may be attached per call. ` +
+        `You passed ${stringPaths.length}. Attach the first ${CHAT_IMAGE_LIMITS.maxImagesPerRequest} ` +
+        `paths only, wait for that batch to finish editing, then call again with the next batch. ` +
+        `Do not send multiple attach_local_images calls in the same tool round.`,
     };
   }
   // Deduplicate identical input strings deterministically (order-preserving).
@@ -253,7 +257,10 @@ export class AIImageAttachmentToolService {
             remaining
           )} more can be attached (max ${
             CHAT_IMAGE_LIMITS.maxImagesPerRequest
-          } per request).`
+          } per request). ` +
+            `Do not call attach_local_images again in this same tool round. ` +
+            `Wait for the current batch to finish editing, then attach the next ` +
+            `up to ${CHAT_IMAGE_LIMITS.maxImagesPerRequest} paths in a later round.`
         )
       );
     }

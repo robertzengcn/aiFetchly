@@ -74,6 +74,7 @@ import type {
   OpenAIImageUrlContentPart,
   OpenAIMessageContent,
 } from "@/api/aiChatApi";
+import { openAIContentToString } from "@/api/aiChatApi";
 import type { AIChatPlanStateView } from "@/entityTypes/aiChatPlanTypes";
 import type {
   ToolCatalog,
@@ -88,6 +89,27 @@ function isActivePlanState(plan?: AIChatPlanStateView | null): boolean {
     plan.status !== "cancelled" &&
     plan.status !== "rejected"
   );
+}
+
+/**
+ * Collect recent user message texts from an assembled transcript so contextual
+ * tool promotion can inherit intent across short follow-ups like "continue".
+ * Excludes synthetic image-handoff markers. Newest messages last; capped.
+ */
+function collectRecentUserMessages(
+  messages: readonly OpenAIChatMessage[],
+  limit = 6
+): string[] {
+  const collected: string[] = [];
+  for (let i = messages.length - 1; i >= 0 && collected.length < limit; i--) {
+    const message = messages[i];
+    if (message.role !== "user") continue;
+    const text = openAIContentToString(message.content).trim();
+    if (!text) continue;
+    if (text.includes("[AIFETCHLY_IMAGE_HANDOFF_V1]")) continue;
+    collected.push(text);
+  }
+  return collected.reverse();
 }
 
 /** Maximum persisted reasoning characters per assistant message (32 KB). */
@@ -452,6 +474,7 @@ export class AIChatQueryEngine {
     readonly isPlanMode: boolean;
     readonly autoPlanEnabled: boolean;
     readonly userMessage: string;
+    readonly recentUserMessages?: readonly string[];
     readonly model?: string;
     readonly contextWindowTokens?: number;
     readonly initialState?: ToolCatalogRuntimeContext;
@@ -471,6 +494,7 @@ export class AIChatQueryEngine {
       isPlanMode: input.isPlanMode,
       autoPlanEnabled: input.autoPlanEnabled,
       currentUserMessage: input.userMessage,
+      recentUserMessages: input.recentUserMessages,
       uploadedFileTypes: [],
       contextWindowTokens: input.contextWindowTokens,
       ...(input.initialState ?? {}),
@@ -789,6 +813,7 @@ export class AIChatQueryEngine {
       isPlanMode,
       autoPlanEnabled,
       userMessage: request.message,
+      recentUserMessages: collectRecentUserMessages(messages),
       model: request.model,
     });
 
@@ -1081,6 +1106,9 @@ export class AIChatQueryEngine {
         isPlanMode: Boolean(pending.planContext),
         autoPlanEnabled: false,
         userMessage: pending.request.message,
+        recentUserMessages: collectRecentUserMessages(
+          pending.conversationMessages
+        ),
         model: pending.request.model,
       });
 
@@ -1220,6 +1248,9 @@ export class AIChatQueryEngine {
       isPlanMode: Boolean(planContext),
       autoPlanEnabled: false,
       userMessage: pending.request.message,
+      recentUserMessages: collectRecentUserMessages(
+        pending.conversationMessages
+      ),
       model: pending.request.model,
     });
 
