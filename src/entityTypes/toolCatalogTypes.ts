@@ -65,6 +65,12 @@ export interface ToolCatalogRuntimeContext {
   readonly isPlanMode: boolean;
   readonly autoPlanEnabled: boolean;
   readonly currentUserMessage: string;
+  /**
+   * Recent prior user message texts (newest last or any order). Used only when
+   * the current message is a short continuation ("continue", "yes", …) so
+   * contextual tool promotion can inherit intent from the previous request.
+   */
+  readonly recentUserMessages?: readonly string[];
   readonly uploadedFileTypes: readonly string[];
   readonly routeName?: string;
   /** Agent allowlist: when set, discovery only returns these names. */

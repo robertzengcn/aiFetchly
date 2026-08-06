@@ -51,6 +51,68 @@ describe("ToolLoadPolicyService.classify", () => {
     expect(classify("run_subagent", "builtin")).toBe("always");
   });
 
+  it("keeps attach_local_images deferred by default (not always-loaded)", () => {
+    expect(classify("attach_local_images", "builtin")).toBe("deferred");
+    expect(
+      classify("attach_local_images", "builtin", {
+        currentUserMessage: "write a short product tagline",
+      })
+    ).toBe("deferred");
+  });
+
+  it("promotes attach_local_images for local image edit/analyze intent", () => {
+    expect(
+      classify("attach_local_images", "builtin", {
+        currentUserMessage:
+          "please update the backgroud color of image in workspace to white",
+      })
+    ).toBe("contextual");
+    expect(
+      classify("attach_local_images", "builtin", {
+        currentUserMessage:
+          "Find the front-view product photo and make the background white.",
+      })
+    ).toBe("contextual");
+    expect(
+      classify("attach_local_images", "builtin", {
+        currentUserMessage: "compare these three banner images",
+      })
+    ).toBe("contextual");
+  });
+
+  it("promotes attach_local_images on continue when recent history has image intent", () => {
+    expect(
+      classify("attach_local_images", "builtin", {
+        currentUserMessage: "continue",
+        recentUserMessages: [
+          "please update the backgroud color of image in workspace to white",
+        ],
+      })
+    ).toBe("contextual");
+    expect(
+      classify("attach_local_images", "builtin", {
+        currentUserMessage: "yes",
+        recentUserMessages: ["compare these three banner images"],
+      })
+    ).toBe("contextual");
+    // Continuation without image history stays deferred.
+    expect(
+      classify("attach_local_images", "builtin", {
+        currentUserMessage: "continue",
+        recentUserMessages: ["write a short product tagline"],
+      })
+    ).toBe("deferred");
+    // Non-continuation messages do not inherit old image intent.
+    expect(
+      classify("attach_local_images", "builtin", {
+        currentUserMessage: "what is the weather today",
+        recentUserMessages: [
+          "please update the backgroud color of image in workspace to white",
+        ],
+      })
+    ).toBe("deferred");
+  });
+
   it("classifies MCP tools as deferred regardless of name style", () => {
     expect(classify("mcp__crm__server__create_lead", "mcp")).toBe("deferred");
     expect(classify("mcp_42_search", "mcp")).toBe("deferred");
@@ -193,6 +255,89 @@ describe("ToolLoadPolicyService.classify", () => {
         currentUserMessage: "show this as an interactive dashboard",
       })
     ).toBe("contextual");
+  });
+
+  it("keeps email inbox tools deferred by default and for outbound email phrasing", () => {
+    expect(classify("list_email_inboxes", "builtin")).toBe("deferred");
+    expect(classify("fetch_unread_emails", "builtin")).toBe("deferred");
+    expect(classify("get_email_message", "builtin")).toBe("deferred");
+    expect(classify("mark_email_processed", "builtin")).toBe("deferred");
+    expect(
+      classify("fetch_unread_emails", "builtin", {
+        currentUserMessage: "start a bulk email marketing campaign",
+      })
+    ).toBe("deferred");
+    expect(
+      classify("list_email_inboxes", "builtin", {
+        currentUserMessage: "generate an email template for our newsletter",
+      })
+    ).toBe("deferred");
+    // Reply tools stay deferred unless named or discovered via catalog search.
+    expect(
+      classify("create_email_reply_draft", "builtin", {
+        currentUserMessage: "check whether there is new email in my emaibox",
+      })
+    ).toBe("deferred");
+    expect(
+      classify("send_email_reply", "builtin", {
+        currentUserMessage: "check my inbox for unread emails",
+      })
+    ).toBe("deferred");
+  });
+
+  it("promotes email inbox tools for check-inbox / unread / mailbox intent", () => {
+    expect(
+      classify("list_email_inboxes", "builtin", {
+        currentUserMessage: "check whether there is new email in my emaibox",
+      })
+    ).toBe("contextual");
+    expect(
+      classify("fetch_unread_emails", "builtin", {
+        currentUserMessage: "check whether there is new email in my emaibox",
+      })
+    ).toBe("contextual");
+    expect(
+      classify("get_email_message", "builtin", {
+        currentUserMessage: "check my inbox for unread emails",
+      })
+    ).toBe("contextual");
+    expect(
+      classify("mark_email_processed", "builtin", {
+        currentUserMessage: "are there any new emails in my mailbox",
+      })
+    ).toBe("contextual");
+    expect(
+      classify("fetch_unread_emails", "builtin", {
+        currentUserMessage: "fetch unread emails from my inbox",
+      })
+    ).toBe("contextual");
+  });
+
+  it("promotes email inbox tools on continue when recent history has inbox intent", () => {
+    expect(
+      classify("fetch_unread_emails", "builtin", {
+        currentUserMessage: "continue",
+        recentUserMessages: ["check whether there is new email in my emaibox"],
+      })
+    ).toBe("contextual");
+    expect(
+      classify("list_email_inboxes", "builtin", {
+        currentUserMessage: "yes",
+        recentUserMessages: ["check my inbox"],
+      })
+    ).toBe("contextual");
+    expect(
+      classify("fetch_unread_emails", "builtin", {
+        currentUserMessage: "continue",
+        recentUserMessages: ["write a short product tagline"],
+      })
+    ).toBe("deferred");
+    expect(
+      classify("fetch_unread_emails", "builtin", {
+        currentUserMessage: "what is the weather today",
+        recentUserMessages: ["check my inbox for unread emails"],
+      })
+    ).toBe("deferred");
   });
 
   it("treats plan tools as always only in plan mode", () => {

@@ -41,12 +41,10 @@ describe("ToolCatalogService.buildFromOpenAITools", () => {
       tools: [tool("mcp__crm__server__create_lead")],
       context: ctx,
     });
-    expect(cat.byName.get("mcp__crm__server__create_lead")?.source).toBe(
-      "mcp"
+    expect(cat.byName.get("mcp__crm__server__create_lead")?.source).toBe("mcp");
+    expect(cat.byName.get("mcp__crm__server__create_lead")?.loadPolicy).toBe(
+      "deferred"
     );
-    expect(
-      cat.byName.get("mcp__crm__server__create_lead")?.loadPolicy
-    ).toBe("deferred");
   });
 
   it("detects legacy MCP names", () => {
@@ -61,9 +59,7 @@ describe("ToolCatalogService.buildFromOpenAITools", () => {
   it("classifies core helpers as always via injected skill resolver", () => {
     const svc = new ToolCatalogService({
       getSkillDefinition: (name) =>
-        name === "file_read"
-          ? ({ name, source: "built-in" } as never)
-          : null,
+        name === "file_read" ? ({ name, source: "built-in" } as never) : null,
     });
     const cat = svc.buildFromOpenAITools({
       tools: [tool("file_read")],
@@ -221,12 +217,8 @@ describe("ToolCatalogService.filterForRound", () => {
       },
     });
 
-    expect(catalog.byName.get("shell_execute")?.loadPolicy).toBe(
-      "contextual"
-    );
-    expect(catalog.byName.get("check_shell_status")?.loadPolicy).toBe(
-      "always"
-    );
+    expect(catalog.byName.get("shell_execute")?.loadPolicy).toBe("contextual");
+    expect(catalog.byName.get("check_shell_status")?.loadPolicy).toBe("always");
     expect(r.exposedToolNames).toContain("shell_execute");
     expect(r.exposedToolNames).toContain("check_shell_status");
     expect(r.exposedToolNames).not.toContain("mcp_1_secret");
@@ -309,6 +301,54 @@ describe("ToolCatalogService.filterForRound", () => {
     expect(catalog.byName.get("file_edit")?.loadPolicy).toBe("contextual");
     expect(r.exposedToolNames).toContain("file_edit");
     expect(r.exposedToolNames).not.toContain("mcp_1_secret");
+  });
+
+  it("exposes attach_local_images for image intent and continue follow-ups", () => {
+    const svc = new ToolCatalogService();
+    const imageCtx: ToolCatalogRuntimeContext = {
+      ...ctx,
+      currentUserMessage:
+        "please update the backgroud color of image in workspace to white",
+    };
+    const continueCtx: ToolCatalogRuntimeContext = {
+      ...ctx,
+      currentUserMessage: "continue",
+      recentUserMessages: [
+        "please update the backgroud color of image in workspace to white",
+      ],
+    };
+    const liveTools = [
+      tool("glob_files"),
+      tool("attach_local_images"),
+      tool("shell_execute"),
+      tool("mcp_1_secret"),
+    ];
+
+    for (const roundCtx of [imageCtx, continueCtx]) {
+      const catalog = svc.buildFromOpenAITools({
+        tools: liveTools,
+        context: roundCtx,
+      });
+      const r = svc.filterForRound({
+        catalog,
+        liveTools,
+        state: emptyState,
+        modeDecision: {
+          mode: "deferred",
+          configuredMode: "on",
+          reason: "on",
+          estimatedDeferredTokens: 1000,
+        },
+      });
+
+      expect(catalog.byName.get("attach_local_images")?.loadPolicy).toBe(
+        "contextual"
+      );
+      expect(r.exposedToolNames).toContain("attach_local_images");
+      expect(r.exposedToolNames).toContain("glob_files");
+      expect(r.exposedToolNames).not.toContain("shell_execute");
+      expect(r.exposedToolNames).not.toContain("mcp_1_secret");
+    }
   });
 
   it("exposes file mutation tools for implicit file-content update requests", () => {
@@ -399,6 +439,49 @@ describe("ToolCatalogService.filterForRound", () => {
     expect(r.exposedToolNames).toContain("knowledge_library_list_documents");
     expect(r.exposedToolNames).toContain("create_schedule");
     expect(r.exposedToolNames).toContain("create_html_artifact");
+    expect(r.exposedToolNames).not.toContain("mcp_1_secret");
+  });
+
+  it("exposes email inbox tools for check-inbox intent and keeps reply tools deferred", () => {
+    const svc = new ToolCatalogService();
+    const inboxCtx: ToolCatalogRuntimeContext = {
+      ...ctx,
+      currentUserMessage: "check whether there is new email in my emaibox",
+    };
+    const liveTools = [
+      tool("list_email_inboxes"),
+      tool("fetch_unread_emails"),
+      tool("get_email_message"),
+      tool("mark_email_processed"),
+      tool("create_email_reply_draft"),
+      tool("send_email_reply"),
+      tool("mcp_1_secret"),
+    ];
+    const catalog = svc.buildFromOpenAITools({
+      tools: liveTools,
+      context: inboxCtx,
+    });
+    const r = svc.filterForRound({
+      catalog,
+      liveTools,
+      state: emptyState,
+      modeDecision: {
+        mode: "deferred",
+        configuredMode: "on",
+        reason: "on",
+        estimatedDeferredTokens: 1000,
+      },
+    });
+
+    expect(catalog.byName.get("fetch_unread_emails")?.loadPolicy).toBe(
+      "contextual"
+    );
+    expect(r.exposedToolNames).toContain("list_email_inboxes");
+    expect(r.exposedToolNames).toContain("fetch_unread_emails");
+    expect(r.exposedToolNames).toContain("get_email_message");
+    expect(r.exposedToolNames).toContain("mark_email_processed");
+    expect(r.exposedToolNames).not.toContain("create_email_reply_draft");
+    expect(r.exposedToolNames).not.toContain("send_email_reply");
     expect(r.exposedToolNames).not.toContain("mcp_1_secret");
   });
 

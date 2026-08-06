@@ -170,8 +170,8 @@ export function buildDeferredAnnouncement(input: {
     return (
       "Tool catalog mode is active. Some tools are deferred to reduce context usage. " +
       "Use `tool_catalog_search` when a task may need an integration, MCP server, " +
-      "plugin tool, imported skill, browser automation, scraper, or specialist workflow " +
-      "tool that is not currently available." +
+      "plugin tool, imported skill, browser automation, scraper, email inbox/receive tool, " +
+      "specialist workflow, or local image attach/edit tool (`attach_local_images`) that is not currently available." +
       (categories.length > 0
         ? ` Deferred tool categories: ${categories.join(", ")}.`
         : "")

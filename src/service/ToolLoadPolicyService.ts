@@ -73,6 +73,22 @@ const CONTEXTUAL_HTML_ARTIFACT_TOOL_NAMES: ReadonlySet<string> = new Set([
   "create_html_artifact",
 ]);
 
+const CONTEXTUAL_IMAGE_ATTACH_TOOL_NAMES: ReadonlySet<string> = new Set([
+  "attach_local_images",
+]);
+
+/**
+ * Inbound mailbox read tools. Promoted when the user asks to check inbox /
+ * unread / new mail so the model does not claim email tools are missing
+ * while they sit deferred behind tool_catalog_search.
+ */
+const CONTEXTUAL_EMAIL_INBOX_TOOL_NAMES: ReadonlySet<string> = new Set([
+  "list_email_inboxes",
+  "fetch_unread_emails",
+  "get_email_message",
+  "mark_email_processed",
+]);
+
 const SHELL_INTENT_RE =
   /\b(shell|terminal|bash|powershell|cmd|command|execute|run|rm|unlink)\b|(?:\b(delete|remove)\b.*(?:\b(file|folder|directory|path)\b|[./~]|\.[A-Za-z0-9]{1,8}\b))/i;
 
@@ -99,6 +115,31 @@ const SCHEDULE_INTENT_RE =
 
 const HTML_ARTIFACT_INTENT_RE =
   /\b(html artifact|artifact|dashboard|chart|visual report|interactive report|formatted document|landing[- ]page preview|comparison table)\b/i;
+
+/**
+ * Natural-language local-image attach / analyze / edit intent.
+ * Surfaces `attach_local_images` so the model does not fall back to
+ * shell/Pillow for workspace image edits (PRD UC1).
+ * `backgroun\w*` tolerates common typos such as "backgroud".
+ */
+const IMAGE_ATTACH_INTENT_RE =
+  /\b(attach|analyze|compare|edit|modify|update|change|fix|replace|remove)\b[^.]{0,100}?\b(images?|photos?|pictures?|jpe?g|png|webp|gif|background)\b|\b(images?|photos?|pictures?)\b[^.]{0,100}?\b(attach|analyze|compare|edit|background|white|transparent)\b|\b(make|change|set|update)\b[^.]{0,60}?\bbackgroun\w*\b/i;
+
+/**
+ * Natural-language inbound mailbox check intent.
+ * Surfaces list/fetch/read inbox tools so "check my email / inbox / mailbox"
+ * does not leave those tools deferred. Tolerates common typos such as
+ * "emaibox". Avoids outbound marketing phrasing (bulk send, templates).
+ */
+const EMAIL_INBOX_INTENT_RE =
+  /\b(inbox|inboxes|mailbox|mailboxes|emaibox)\b|\b(unread|new|received|inbound)\s+emails?\b|\bcheck(?:ing)?\b[^.]{0,60}?\b(emails?|mails?|inbox|mailbox|emaibox)\b|\b(emails?|mails?)\b[^.]{0,60}?\b(inbox|mailbox|emaibox|unread)\b/i;
+
+/**
+ * Short follow-ups that should inherit intent from recent prior user messages
+ * (e.g. "continue" after an image-edit request).
+ */
+const CONTINUATION_MESSAGE_RE =
+  /^(continue|yes|y|ok|okay|sure|go\s*on|go\s*ahead|retry|try\s*again|please\s*continue|do\s*it|proceed|keep\s*going)\.?$/i;
 
 /** Source types that are always deferred by default. */
 const DEFERRED_SOURCES: ReadonlySet<ToolCatalogSource> = new Set([
@@ -137,7 +178,11 @@ export class ToolLoadPolicyService {
     if (DEFERRED_SOURCES.has(input.source)) return "deferred";
 
     // 6. Contextual promotion: user explicitly named this tool.
-    if (this.isMentionedInMessage(name, input.context.currentUserMessage)) {
+    if (
+      this.messageMatchesIntent(input.context, (msg) =>
+        this.isMentionedInMessage(name, msg)
+      )
+    ) {
       return "contextual";
     }
 
@@ -147,7 +192,9 @@ export class ToolLoadPolicyService {
     // deleting a file. Existing shell permission prompts remain authoritative.
     if (
       CONTEXTUAL_SHELL_TOOL_NAMES.has(name) &&
-      this.hasShellIntent(input.context.currentUserMessage)
+      this.messageMatchesIntent(input.context, (msg) =>
+        this.hasShellIntent(msg)
+      )
     ) {
       return "contextual";
     }
@@ -157,13 +204,17 @@ export class ToolLoadPolicyService {
     // create or modify files. Confirmation still gates the actual mutation.
     if (
       CONTEXTUAL_FILE_WRITE_TOOL_NAMES.has(name) &&
-      this.hasFileWriteIntent(input.context.currentUserMessage)
+      this.messageMatchesIntent(input.context, (msg) =>
+        this.hasFileWriteIntent(msg)
+      )
     ) {
       return "contextual";
     }
     if (
       CONTEXTUAL_FILE_EDIT_TOOL_NAMES.has(name) &&
-      this.hasFileEditIntent(input.context.currentUserMessage)
+      this.messageMatchesIntent(input.context, (msg) =>
+        this.hasFileEditIntent(msg)
+      )
     ) {
       return "contextual";
     }
@@ -173,25 +224,68 @@ export class ToolLoadPolicyService {
     // are not user-visible.
     if (
       CONTEXTUAL_KNOWLEDGE_LIBRARY_TOOL_NAMES.has(name) &&
-      this.hasKnowledgeLibraryIntent(input.context.currentUserMessage)
+      this.messageMatchesIntent(input.context, (msg) =>
+        this.hasKnowledgeLibraryIntent(msg)
+      )
     ) {
       return "contextual";
     }
     if (
       CONTEXTUAL_SCHEDULE_TOOL_NAMES.has(name) &&
-      this.hasScheduleIntent(input.context.currentUserMessage)
+      this.messageMatchesIntent(input.context, (msg) =>
+        this.hasScheduleIntent(msg)
+      )
     ) {
       return "contextual";
     }
     if (
       CONTEXTUAL_HTML_ARTIFACT_TOOL_NAMES.has(name) &&
-      this.hasHtmlArtifactIntent(input.context.currentUserMessage)
+      this.messageMatchesIntent(input.context, (msg) =>
+        this.hasHtmlArtifactIntent(msg)
+      )
+    ) {
+      return "contextual";
+    }
+    if (
+      CONTEXTUAL_IMAGE_ATTACH_TOOL_NAMES.has(name) &&
+      this.messageMatchesIntent(input.context, (msg) =>
+        this.hasImageAttachIntent(msg)
+      )
+    ) {
+      return "contextual";
+    }
+    if (
+      CONTEXTUAL_EMAIL_INBOX_TOOL_NAMES.has(name) &&
+      this.messageMatchesIntent(input.context, (msg) =>
+        this.hasEmailInboxIntent(msg)
+      )
     ) {
       return "contextual";
     }
 
     // 10. Built-in default: specialized tools are deferred and discoverable.
     return "deferred";
+  }
+
+  /**
+   * Intent texts to evaluate. Always includes the current user message. When
+   * the current message is a short continuation ("continue", "yes", …), also
+   * includes recent prior user messages so contextual tools stay promoted.
+   */
+  private intentMessages(context: ToolCatalogRuntimeContext): string[] {
+    const current = context.currentUserMessage ?? "";
+    const recent = context.recentUserMessages ?? [];
+    if (CONTINUATION_MESSAGE_RE.test(current.trim()) && recent.length > 0) {
+      return [current, ...recent];
+    }
+    return [current];
+  }
+
+  private messageMatchesIntent(
+    context: ToolCatalogRuntimeContext,
+    tester: (message: string) => boolean
+  ): boolean {
+    return this.intentMessages(context).some((msg) => tester(msg));
   }
 
   private isMentionedInMessage(name: string, message: string): boolean {
@@ -226,5 +320,13 @@ export class ToolLoadPolicyService {
 
   private hasHtmlArtifactIntent(message: string): boolean {
     return HTML_ARTIFACT_INTENT_RE.test(message);
+  }
+
+  private hasImageAttachIntent(message: string): boolean {
+    return IMAGE_ATTACH_INTENT_RE.test(message);
+  }
+
+  private hasEmailInboxIntent(message: string): boolean {
+    return EMAIL_INBOX_INTENT_RE.test(message);
   }
 }
