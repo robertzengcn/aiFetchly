@@ -373,6 +373,10 @@ export default ({ mode }) => {
                     // the main bundle so pdf-lib's ESM+tslib graph is never Vite-
                     // rewritten into a ScheduleManager/startup CJS chunk.
                     'pdf-lib',
+                    // Keep a single node_modules copy so electron-store's
+                    // module-level IPC init flag is shared (avoids stacking
+                    // electron-store-get-data listeners across Vite chunks/HMR).
+                    'electron-store',
                 ]
             },
             sourcemap: true,

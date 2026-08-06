@@ -51,6 +51,8 @@ describe("Forge packaging dependencies", () => {
     ).toBe(false);
   });
 
+  // electron-store must ship in packaged node_modules: taskCode inlines it for
+  // the worker, and vite.main.config.mjs externalizes it for the main process.
   it("keeps electron-store for packaged taskCode runtime", async () => {
     const forgeConfig = await loadForgeConfig();
 
