@@ -415,6 +415,7 @@
       v-if="pendingScheduledLoop"
       v-model="showScheduledLoopApproval"
       :raw-command="pendingScheduledLoop.rawCommand"
+      :prompt="pendingScheduledLoop.action.prompt"
       @confirm="onScheduledLoopApprovalConfirm"
       @cancel="onScheduledLoopApprovalCancel"
     />

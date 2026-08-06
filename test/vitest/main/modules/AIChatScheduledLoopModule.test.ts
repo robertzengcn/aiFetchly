@@ -231,7 +231,7 @@ describe("AIChatScheduledLoopModule.create", () => {
     expect(found).toBeNull();
   });
 
-  it("treats autoApprove without allowedTools as a no-op (no tools persisted)", async () => {
+  it("persists autoApprove with empty allowedTools so read-only tools can run", async () => {
     const mod = new AIChatScheduledLoopModule();
     await SqliteDb.ensureInitialized();
     await mod.create({
@@ -251,7 +251,7 @@ describe("AIChatScheduledLoopModule.create", () => {
     const task = await new AiMessageTaskModel(
       process.env.AIFETCHLY_TEST_DBPATH ?? tmpDir
     ).findChatScheduledTask(schedule!.task_id);
-    expect(task!.auto_approve_tools).toBe(false);
+    expect(task!.auto_approve_tools).toBe(true);
     expect(task!.allowed_tools_json).toBe("[]");
   });
 });

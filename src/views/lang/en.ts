@@ -2299,7 +2299,7 @@ export default {
       statusStopped: "stopped",
       toolApprovalTitle: "Approve unattended tools",
       toolApprovalIntro:
-        "Scheduled loops run without supervision. Read-only tools auto-approve when unattended tools are enabled. Write/email tools require explicit confirmation below. Shell, subagents, and mailbox mutations stay blocked.",
+        "Scheduled loops run without supervision. Read-only tools auto-approve when unattended tools are enabled. Write/email tools and inbound sync require explicit confirmation below. Shell, subagents, and mark-processed stay blocked.",
       toolApprovalCommand: "Command",
       noReadOnlyTools: "No read-only tools are available.",
       allowedTools: "Allowed read-only tools",
@@ -2311,7 +2311,7 @@ export default {
       readOnlyAutoApproved: "Read-only tools auto-approve",
       automationTools: "Automation tools",
       automationToolsHint:
-        "Optional — select tools that perform network checks",
+        "Optional — select network checks or inbox sync tools",
       highImpactTools: "Write / email tools — type the name to enable",
       highImpactWarning:
         "These run unattended on every occurrence. Injected content could overwrite files or send email as you. Type each tool name to confirm.",

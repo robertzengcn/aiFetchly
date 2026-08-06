@@ -90,18 +90,16 @@ describe("proxy AI tools scheduled policy", () => {
     expect(blocked.allowed).toBe(false);
   });
 
-  it("blocks proxy_list when auto-approve is on but it is not allowlisted (FR-16 least-privilege)", () => {
-    // Even a pure read-only tool must be explicitly selected by the user: the
-    // catalog filter advertises ANY tool this function allows, so read-only
-    // tools now require an allowedTools entry (see commit
-    // "fix(scheduled-loop): enforce per-tool allowlist for read-only auto-approve").
+  it("auto-approves proxy_list when auto-approve is on without per-tool selection", () => {
+    // Read-only tools auto-approve whenever autoApproveTools is on — no
+    // per-tool allowlist entry required (matches ScheduledLoopToolApprovalDialog).
     const skill = SkillRegistry.getSkill("proxy_list")!;
     const decision = canAutoApproveScheduledTool({
       skill,
       taskPolicy: policy({ autoApproveTools: true, allowedTools: [] }),
       toolName: "proxy_list",
     });
-    expect(decision.allowed).toBe(false);
+    expect(decision.allowed).toBe(true);
   });
 
   it("allows proxy_list in scheduled mode once auto-approve is on AND it is allowlisted", () => {

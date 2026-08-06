@@ -4,7 +4,9 @@ import {
   SCHEDULED_LOOP_READ_ONLY_TOOLS,
   canAutoApproveScheduledTool,
   describeBuiltInToolForSchedule,
+  hasScheduledLoopEmailInboxIntent,
   isScheduledReadOnlyTool,
+  suggestScheduledLoopAutomationTools,
   validateScheduledLoopAllowedTools,
 } from "@/service/ScheduledAiToolPolicy";
 import type { SkillDefinition } from "@/entityTypes/skillTypes";
@@ -51,14 +53,15 @@ describe("ScheduledAiToolPolicy read-only allowlist", () => {
     expect(isScheduledReadOnlyTool("")).toBe(false);
   });
 
-  it("mutating inbox tools are never read-only even if listed", () => {
-    // Sanity: the mutating tools are in the deny set, so even a hypothetical
-    // duplicate entry in the read-only set could not make them schedulable.
+  it("mutating mark-processed stays permanently blocked; inbox sync is schedulable", () => {
+    expect(
+      SCHEDULED_LOOP_ALWAYS_BLOCKED_TOOLS.has("mark_email_processed")
+    ).toBe(true);
     expect(SCHEDULED_LOOP_ALWAYS_BLOCKED_TOOLS.has("fetch_unread_emails")).toBe(
-      true
+      false
     );
     expect(SCHEDULED_LOOP_ALWAYS_BLOCKED_TOOLS.has("get_email_message")).toBe(
-      true
+      false
     );
     expect(isScheduledReadOnlyTool("fetch_unread_emails")).toBe(false);
     expect(isScheduledReadOnlyTool("get_email_message")).toBe(false);
@@ -164,13 +167,8 @@ describe("ScheduledAiToolPolicy canAutoApproveScheduledTool", () => {
     expect(decision.reason).toMatch(/permanently blocked/);
   });
 
-  it("permanently blocks shell, mailbox-mutating, and message-body tools", () => {
-    for (const name of [
-      "shell_execute",
-      "mark_email_processed",
-      "fetch_unread_emails",
-      "get_email_message",
-    ]) {
+  it("permanently blocks shell and mark-processed; inbox sync/read are approvable", () => {
+    for (const name of ["shell_execute", "mark_email_processed"]) {
       const decision = canAutoApproveScheduledTool({
         skill: skill(name),
         taskPolicy: policy({ allowedTools: [name], autoApproveTools: true }),
@@ -178,6 +176,50 @@ describe("ScheduledAiToolPolicy canAutoApproveScheduledTool", () => {
       });
       expect(decision.allowed, `${name} should be blocked`).toBe(false);
     }
+
+    expect(
+      canAutoApproveScheduledTool({
+        skill: skill("fetch_unread_emails"),
+        taskPolicy: policy({
+          allowedTools: ["fetch_unread_emails"],
+          autoApproveTools: true,
+        }),
+        toolName: "fetch_unread_emails",
+      }).allowed
+    ).toBe(true);
+
+    expect(
+      canAutoApproveScheduledTool({
+        skill: skill("get_email_message"),
+        taskPolicy: policy({
+          allowedTools: ["get_email_message"],
+          autoApproveTools: true,
+        }),
+        toolName: "get_email_message",
+      }).allowed
+    ).toBe(true);
+
+    expect(
+      canAutoApproveScheduledTool({
+        skill: skill("fetch_unread_emails"),
+        taskPolicy: policy({ allowedTools: [], autoApproveTools: true }),
+        toolName: "fetch_unread_emails",
+      }).allowed
+    ).toBe(false);
+  });
+
+  it("suggests fetch_unread_emails for inbox-check prompts", () => {
+    expect(
+      hasScheduledLoopEmailInboxIntent(
+        "check whether there is new email in my emaibox"
+      )
+    ).toBe(true);
+    expect(
+      suggestScheduledLoopAutomationTools(
+        "check whether there is new email in my emaibox"
+      )
+    ).toEqual(["fetch_unread_emails"]);
+    expect(suggestScheduledLoopAutomationTools("summarize status")).toEqual([]);
   });
 
   it("denies non-built-in skills", () => {

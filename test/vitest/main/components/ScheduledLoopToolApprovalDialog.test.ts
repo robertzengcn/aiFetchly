@@ -56,9 +56,19 @@ const TOOLS: SchedulableAiToolSummary[] = [
     autoApproveAllowed: true,
     riskLevel: "high",
   },
+  {
+    name: "fetch_unread_emails",
+    description: "Fetch unread emails",
+    permissionCategory: "automation",
+    source: "built-in",
+    requiresConfirmation: false,
+    schedulable: true,
+    autoApproveAllowed: true,
+    riskLevel: "medium",
+  },
 ];
 
-function mountDialog() {
+function mountDialog(props: { rawCommand?: string; prompt?: string } = {}) {
   return mount(ScheduledLoopToolApprovalDialog, {
     global: {
       plugins: [i18n],
@@ -89,7 +99,11 @@ function mountDialog() {
         VTextField: { template: "<div />" },
       },
     },
-    props: { modelValue: true, rawCommand: "/loop 1m check email" },
+    props: {
+      modelValue: true,
+      rawCommand: props.rawCommand ?? "/loop 1m summarize status",
+      prompt: props.prompt,
+    },
   });
 }
 
@@ -153,6 +167,27 @@ describe("ScheduledLoopToolApprovalDialog (3-tier)", () => {
     // No explicit tools selected, but autoApprove is on → read-only auto-run.
     expect(payload.autoApproveTools).toBe(true);
     expect(payload.allowedTools).toEqual([]);
+  });
+
+  it("pre-enables tools and fetch_unread_emails for inbox-check prompts", async () => {
+    vi.mocked(listAvailableAiMessageTaskTools).mockResolvedValue(TOOLS);
+    const wrapper = mountDialog({
+      rawCommand: "/loop 1m check whether there is new email in my emaibox",
+      prompt: "check whether there is new email in my emaibox",
+    });
+    await flushPromises();
+    const vm = vmOf(wrapper);
+    expect(vm.toolsEnabled).toBe(true);
+    expect(vm.selectedAutomation).toContain("fetch_unread_emails");
+    await wrapper
+      .find('[data-testid="scheduled-loop-approval-confirm"]')
+      .trigger("click");
+    const payload = wrapper.emitted("confirm")![0][0] as {
+      allowedTools: string[];
+      autoApproveTools: boolean;
+    };
+    expect(payload.autoApproveTools).toBe(true);
+    expect(payload.allowedTools).toContain("fetch_unread_emails");
   });
 
   it("does NOT confirm a high-impact tool until its exact name is typed", async () => {

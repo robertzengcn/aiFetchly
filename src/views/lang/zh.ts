@@ -2209,7 +2209,7 @@ export default {
       statusStopped: "已停止",
       toolApprovalTitle: "批准无人值守工具",
       toolApprovalIntro:
-        "定时循环在无人值守下运行。可选择允许循环使用的只读工具。发送邮件、草稿、Shell、文件写入及子代理将始终被阻止。",
+        "定时循环在无人值守下运行。启用无人值守工具后，只读工具会自动批准。写入/发信与收件同步需在下方显式确认。Shell、子代理与标记已处理仍被阻止。",
       toolApprovalCommand: "命令",
       noReadOnlyTools: "没有可用的只读工具。",
       allowedTools: "允许的只读工具",
@@ -2220,7 +2220,7 @@ export default {
       enableTools: "允许工具无人值守运行",
       readOnlyAutoApproved: "只读工具自动批准",
       automationTools: "自动化工具",
-      automationToolsHint: "可选 — 选择执行网络检查的工具",
+      automationToolsHint: "可选 — 选择网络检查或收件箱同步工具",
       highImpactTools: "写入 / 邮件工具 — 输入名称以启用",
       highImpactWarning:
         "这些将在每次执行时无人值守运行。注入内容可能覆盖文件或以你的身份发送邮件。请逐个输入工具名称以确认。",

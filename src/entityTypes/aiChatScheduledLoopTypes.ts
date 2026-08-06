@@ -84,15 +84,17 @@ export interface CreateScheduledLoopRequest {
   readonly maxLifetimeMs: number;
   readonly model?: string;
   /**
-   * Read-only built-in tools the user explicitly approved for unattended
-   * execution. The backend re-validates each name against the scheduled
-   * read-only policy before persisting; dangerous or unknown names are
-   * rejected with BLOCKED_BY_POLICY (FR-16).
+   * Read-only / automation / high-impact tools the user approved for
+   * unattended execution. The backend re-validates each name against the
+   * scheduled tool policy before persisting; dangerous or unknown names are
+   * rejected with BLOCKED_BY_POLICY (FR-16). Empty is valid when
+   * autoApproveTools is true (read-only auto-approve only).
    */
   readonly allowedTools?: readonly string[];
   /**
-   * When true (and allowedTools is non-empty), approved tools auto-run during
-   * scheduled occurrences without an interactive prompt. Defaults to false.
+   * When true, curated read-only tools auto-run during scheduled occurrences
+   * without an interactive prompt. High-impact and automation tools still
+   * require membership in allowedTools. Defaults to false.
    */
   readonly autoApproveTools?: boolean;
 }

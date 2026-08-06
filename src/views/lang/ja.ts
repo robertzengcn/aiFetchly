@@ -2264,7 +2264,7 @@ export default {
       statusStopped: "停止済み",
       toolApprovalTitle: "無人ツールを承認",
       toolApprovalIntro:
-        "スケジュール済みループは監視なしで実行されます。ループが使用できる読み取り専用ツールを任意で承認できます。メール送信、下書き、シェル、ファイル書き込み、サブエージェントは引き続きブロックされます。",
+        "スケジュール済みループは監視なしで実行されます。無人ツールを有効にすると読み取り専用ツールは自動承認されます。書き込み/メール送信と受信同期は下で明示確認が必要です。Shell、サブエージェント、処理済みマークは引き続きブロックされます。",
       toolApprovalCommand: "コマンド",
       noReadOnlyTools: "利用可能な読み取り専用ツールがありません。",
       allowedTools: "許可する読み取り専用ツール",
@@ -2276,7 +2276,8 @@ export default {
       enableTools: "ツールの無人実行を許可",
       readOnlyAutoApproved: "読み取り専用ツールは自動承認",
       automationTools: "自動化ツール",
-      automationToolsHint: "任意 — ネットワークチェックを行うツールを選択",
+      automationToolsHint:
+        "任意 — ネットワークチェックや受信トレイ同期ツールを選択",
       highImpactTools: "書き込み / メールツール — 名前を入力して有効化",
       highImpactWarning:
         "これらは毎回無人で実行されます。注入コンテンツがファイルを上書きしたり、あなたの名前でメールを送信する可能性があります。ツール名をそれぞれ入力して確認してください。",

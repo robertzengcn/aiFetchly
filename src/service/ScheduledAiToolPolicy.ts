@@ -30,19 +30,16 @@ import type {
 /**
  * Tools that may NEVER run unattended, regardless of category or allowlist.
  * `run_subagent` is denied because it can indirectly invoke many other tools;
- * `shell_execute` runs arbitrary commands; the email inbox tools mutate
- * mailbox/local state and expose message bodies. These stay blocked even if a
- * user requests them — they are not approvable.
+ * `shell_execute` runs arbitrary commands; `mark_email_processed` mutates
+ * reply-state without a human in the loop. These stay blocked even if a user
+ * requests them — they are not approvable.
+ *
+ * Inbox sync/read tools (`fetch_unread_emails`, `get_email_message`) are
+ * intentionally schedulable (automation / high-impact) so loops can check
+ * mailboxes; they require explicit approval at loop creation.
  */
 export const SCHEDULED_LOOP_ALWAYS_BLOCKED_TOOLS: ReadonlySet<string> = new Set(
-  [
-    "run_subagent",
-    "shell_execute",
-    "mark_email_processed",
-    // Inbox tools that look like reads but mutate mailbox/local state:
-    "fetch_unread_emails", // stores messages locally
-    "get_email_message", // marks the message read
-  ]
+  ["run_subagent", "shell_execute", "mark_email_processed"]
 );
 
 /**
@@ -76,11 +73,12 @@ export const SCHEDULED_LOOP_READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * High-impact tools (file write/edit, email send/draft) that ARE approvable
- * for unattended execution but require EXPLICIT per-tool selection at loop
- * creation — gated behind a typed confirmation in the approval dialog because
- * prompt injection in scraped/emailed content can drive them to overwrite files
- * or send email as the user while they are away.
+ * High-impact tools (file write/edit, email send/draft, message body access)
+ * that ARE approvable for unattended execution but require EXPLICIT per-tool
+ * selection at loop creation — gated behind a typed confirmation in the
+ * approval dialog because prompt injection in scraped/emailed content can
+ * drive them to overwrite files, send email, or expose message bodies while
+ * the user is away.
  */
 export const SCHEDULED_LOOP_HIGH_IMPACT_TOOLS: ReadonlySet<string> = new Set([
   "file_write",
@@ -88,15 +86,41 @@ export const SCHEDULED_LOOP_HIGH_IMPACT_TOOLS: ReadonlySet<string> = new Set([
   "send_email_reply",
   "start_email_send_task",
   "create_email_reply_draft",
+  "get_email_message",
 ]);
 
 /**
  * Automation tools that are schedulable in unattended mode but require explicit
- * allowlisting because they perform network checks or other side effects.
+ * allowlisting because they perform network checks, inbound sync, or other
+ * side effects.
  */
 export const SCHEDULED_LOOP_AUTOMATION_TOOLS: ReadonlySet<string> = new Set([
   "proxy_check",
+  "fetch_unread_emails",
 ]);
+
+/**
+ * Natural-language inbox-check intent used to pre-enable tools for scheduled
+ * loops that ask to check email / inbox / mailbox.
+ */
+export const SCHEDULED_LOOP_EMAIL_INBOX_INTENT_RE =
+  /\b(inbox|inboxes|mailbox|mailboxes|emaibox)\b|\b(unread|new|received|inbound)\s+emails?\b|\bcheck(?:ing)?\b[^.]{0,60}?\b(emails?|mails?|inbox|mailbox|emaibox)\b|\b(emails?|mails?)\b[^.]{0,60}?\b(inbox|mailbox|emaibox|unread)\b/i;
+
+/** True when a scheduled-loop prompt is asking to check inbound email. */
+export function hasScheduledLoopEmailInboxIntent(prompt: string): boolean {
+  return SCHEDULED_LOOP_EMAIL_INBOX_INTENT_RE.test(prompt);
+}
+
+/**
+ * Automation tools to pre-select when creating a loop whose prompt matches
+ * inbox-check intent. Callers still require the user to enable unattended tools.
+ */
+export function suggestScheduledLoopAutomationTools(
+  prompt: string
+): readonly string[] {
+  if (!hasScheduledLoopEmailInboxIntent(prompt)) return [];
+  return ["fetch_unread_emails"];
+}
 
 /** Maximum number of tools a single scheduled loop may approve. */
 export const SCHEDULED_LOOP_MAX_ALLOWED_TOOLS = 50;

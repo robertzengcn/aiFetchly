@@ -151,10 +151,14 @@ export class AIChatScheduledLoopModule extends BaseModule {
       throw new ScheduledLoopError("INVALID_LOOP_LIMIT");
     }
 
-    // Tool approval (FR-16): only curated read-only built-in tools may run
+    // Tool approval (FR-16): only curated schedulable built-in tools may run
     // unattended. Validate BEFORE any persistence so a bad request leaves no
-    // command/confirmation rows. autoApprove without allowedTools is a no-op
-    // (persisted as empty + false), not an error.
+    // command/confirmation rows.
+    //
+    // autoApproveTools=true with an empty allowedTools list is intentional:
+    // it enables the read-only auto-approve tier (no per-tool selection).
+    // Explicit allowedTools entries are required only for high-impact /
+    // automation tools.
     const requestedTools = dedupeTools(request.allowedTools);
     if (requestedTools.length > SCHEDULED_LOOP_MAX_ALLOWED_TOOLS) {
       throw new ScheduledLoopError("INVALID_LOOP_LIMIT");
@@ -163,8 +167,7 @@ export class AIChatScheduledLoopModule extends BaseModule {
     if (!toolValidation.valid) {
       throw new ScheduledLoopError("BLOCKED_BY_POLICY");
     }
-    const autoApproveTools =
-      request.autoApproveTools === true && requestedTools.length > 0;
+    const autoApproveTools = request.autoApproveTools === true;
 
     // Resolve one authoritative v2-* conversation id (never an ai-msg-* fallback).
     const conversationId = this.chatV2.createConversationIfNeeded(

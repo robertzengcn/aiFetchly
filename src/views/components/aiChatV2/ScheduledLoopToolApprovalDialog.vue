@@ -30,7 +30,7 @@
         <p class="text-body-2 mb-3">
           {{
             t("aiChatV2.scheduledLoop.toolApprovalIntro") ||
-            "Scheduled loops run without supervision. Read-only tools auto-approve when unattended tools are enabled. Write/email tools require explicit confirmation below. Shell, subagents, and mailbox mutations stay blocked."
+            "Scheduled loops run without supervision. Read-only tools auto-approve when unattended tools are enabled. Write/email tools and inbound sync require explicit confirmation below. Shell, subagents, and mark-processed stay blocked."
           }}
         </p>
 
@@ -192,10 +192,16 @@ import { ref, watch, reactive } from "vue";
 import { useI18n } from "vue-i18n";
 import { listAvailableAiMessageTaskTools } from "@/views/api/aiMessageTask";
 import type { SchedulableAiToolSummary } from "@/entityTypes/aiMessageTaskTypes";
+import {
+  hasScheduledLoopEmailInboxIntent,
+  suggestScheduledLoopAutomationTools,
+} from "@/service/ScheduledAiToolPolicy";
 
 const props = defineProps<{
   modelValue: boolean;
   rawCommand: string;
+  /** Loop prompt used to pre-enable tools for matching intents (e.g. inbox check). */
+  prompt?: string;
 }>();
 
 const emit = defineEmits<{
@@ -240,6 +246,15 @@ function onConfirmInput(name: string): void {
   }
 }
 
+function applyPromptSuggestions(): void {
+  const prompt = props.prompt ?? props.rawCommand ?? "";
+  if (!hasScheduledLoopEmailInboxIntent(prompt)) return;
+  toolsEnabled.value = true;
+  const suggested = suggestScheduledLoopAutomationTools(prompt);
+  const available = new Set(automationTools.value.map((tool) => tool.name));
+  selectedAutomation.value = suggested.filter((name) => available.has(name));
+}
+
 async function loadTools(): Promise<void> {
   loading.value = true;
   loadError.value = null;
@@ -248,6 +263,7 @@ async function loadTools(): Promise<void> {
     readOnlyTools.value = all.filter((tool) => tool.riskLevel === "low");
     automationTools.value = all.filter((tool) => tool.riskLevel === "medium");
     highImpactTools.value = all.filter((tool) => tool.riskLevel === "high");
+    applyPromptSuggestions();
   } catch (err) {
     loadError.value =
       err instanceof Error ? err.message : "Failed to load available tools.";

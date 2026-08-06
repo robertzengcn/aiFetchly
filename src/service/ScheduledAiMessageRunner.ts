@@ -14,7 +14,10 @@ import { SkillExecutor } from "@/service/SkillExecutor";
 import { AiMessageTaskModule } from "@/modules/AiMessageTaskModule";
 import { AiMessageTaskRunModule } from "@/modules/AiMessageTaskRunModule";
 import { AiMessageTaskEntity } from "@/entity/AiMessageTask.entity";
-import { canAutoApproveScheduledTool } from "@/service/ScheduledAiToolPolicy";
+import {
+  canAutoApproveScheduledTool,
+  SCHEDULED_LOOP_READ_ONLY_TOOLS,
+} from "@/service/ScheduledAiToolPolicy";
 import { skillDefinitionToToolFunction } from "@/entityTypes/skillTypes";
 import type {
   AiMessageTaskToolPolicy,
@@ -723,17 +726,23 @@ export class ScheduledAiMessageRunner {
 
   /**
    * Build filtered client_tools list to send to the AI server.
-   * Only includes tools that are allowed by the task policy.
+   * When auto-approve is on, advertise every curated read-only tool plus any
+   * explicitly allowlisted high-impact / automation tools (FR-16).
    */
   private buildFilteredClientTools(
     policy: AiMessageTaskToolPolicy
   ): ToolFunction[] {
-    if (!policy.autoApproveTools || policy.allowedTools.length === 0) {
+    if (!policy.autoApproveTools) {
       return [];
     }
 
+    const candidateNames = new Set<string>([
+      ...SCHEDULED_LOOP_READ_ONLY_TOOLS,
+      ...policy.allowedTools,
+    ]);
+
     const tools: ToolFunction[] = [];
-    for (const toolName of policy.allowedTools) {
+    for (const toolName of candidateNames) {
       const skill = SkillRegistry.getSkill(toolName);
       if (skill && skill.source === "built-in") {
         const decision = canAutoApproveScheduledTool({
