@@ -57,14 +57,6 @@ const { t } = useI18n();
 
 const insightItems = computed<InsightItem[]>(() => [
   {
-    title: t("insights.contact_profile") || "Contact Profile",
-    description:
-      t("insights.contact_description") ||
-      "Extract and enrich contact profiles for prospects.",
-    icon: "mdi-email-search",
-    path: "/emailextraction/tasklist",
-  },
-  {
     title: t("route.email_service") || "Email Service",
     description:
       t("insights.email_service_description") ||
