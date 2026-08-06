@@ -1,6 +1,7 @@
 import { describe, expect, test, vi } from "vitest";
 import * as fs from "fs";
 import * as path from "path";
+import { chunkToUtf8 } from "@/modules/SearchModule";
 
 vi.mock("electron", () => ({
   utilityProcess: {
@@ -23,8 +24,6 @@ vi.mock("@/modules/token", () => ({
     }
   },
 }));
-
-const { chunkToUtf8 } = await import("@/modules/SearchModule");
 
 describe("chunkToUtf8", () => {
   test("returns strings unchanged", () => {
