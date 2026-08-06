@@ -10,6 +10,7 @@ import {
   getPackagedWorkerPathCandidates,
   resolvePackagedWorkerPath,
   type PackagedWorkerPathRuntime,
+  buildPackagedWorkerEnv,
 } from "@/utils/packagedWorkerPath";
 
 interface ExecuteSkillMessage {
@@ -261,10 +262,7 @@ export class SkillWorkerClient {
 
     const worker = utilityProcess.fork(resolvedPath, [], {
       stdio: "pipe",
-      env: {
-        ...process.env,
-        NODE_OPTIONS: "",
-      },
+      env: buildPackagedWorkerEnv(),
     });
 
     // Attach lifecycle handlers before exposing the worker to callers.

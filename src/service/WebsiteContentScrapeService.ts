@@ -26,7 +26,7 @@ import * as fs from "fs";
 import { v4 as uuidv4 } from "uuid";
 import { UrlGuard } from "@/service/UrlGuard";
 import {
-  getPackagedWorkerNodePath,
+  buildPackagedWorkerEnv,
   mirrorAppAsarUnpackedPath,
   resolvePackagedWorkerPath,
   type PackagedWorkerPathRuntime,
@@ -186,26 +186,6 @@ function parseWorkerScrapeResponse(rawMessage: unknown): WorkerScrapeResponse {
   return rawMessage as WorkerScrapeResponse;
 }
 
-function buildScrapeWorkerEnv(): NodeJS.ProcessEnv {
-  // Packaged workers often resolve under app.asar.unpacked while puppeteer and
-  // other heavy deps ship inside app.asar/node_modules. NODE_PATH bridges that
-  // gap on Windows (same pattern as SearchModule / GoogleMapsModule).
-  const electronProcess = process as NodeJS.Process & {
-    resourcesPath?: string;
-  };
-  const packagedNodePath = electronProcess.resourcesPath
-    ? getPackagedWorkerNodePath(
-        electronProcess.resourcesPath,
-        process.env.NODE_PATH
-      )
-    : process.env.NODE_PATH;
-
-  return {
-    ...process.env,
-    NODE_OPTIONS: "",
-    NODE_PATH: packagedNodePath,
-  };
-}
 
 export class WebsiteContentScrapeService {
   /**
@@ -255,7 +235,7 @@ export class WebsiteContentScrapeService {
       const childProcess = utilityProcess.fork(childProcessPath, [], {
         stdio: "pipe",
         execArgv: ["puppeteer-cluster:*"],
-        env: buildScrapeWorkerEnv(),
+        env: buildPackagedWorkerEnv(),
       });
 
       const requestId = `scrape-${uuidv4()}-${Date.now()}`;

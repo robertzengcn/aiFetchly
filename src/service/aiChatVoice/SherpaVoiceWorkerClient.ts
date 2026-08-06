@@ -3,6 +3,7 @@ import { utilityProcess } from "electron";
 import * as fs from "fs";
 import * as path from "path";
 import { v4 as uuidv4 } from "uuid";
+import { buildPackagedWorkerEnv } from "@/utils/packagedWorkerPath";
 import {
   AI_CHAT_VOICE_REQUEST_TIMEOUT_MS,
   type AiChatVoiceInitializeMessage,
@@ -194,11 +195,11 @@ export function resolveAiChatVoiceWorkerPath(
 const defaultFork: ForkFn = (workerPath): UtilityProcessLike => {
   const proc = utilityProcess.fork(workerPath, [], {
     stdio: "pipe",
-    env: {
-      ...process.env,
-      NODE_OPTIONS: "",
-      WORKER_TYPE: "ai-chat-voice",
-    },
+    env: buildPackagedWorkerEnv({
+      extraEnv: {
+        WORKER_TYPE: "ai-chat-voice",
+      },
+    }),
   });
   return proc as unknown as UtilityProcessLike;
 };

@@ -16,6 +16,7 @@ import {
   getPackagedWorkerPathCandidates,
   resolvePackagedWorkerPath,
   type PackagedWorkerPathRuntime,
+  buildPackagedWorkerEnv,
 } from "@/utils/packagedWorkerPath";
 
 /**
@@ -43,10 +44,7 @@ interface PendingRequest {
 const defaultFork: ForkFn = (workerPath): UtilityProcessLike => {
   const proc = utilityProcess.fork(workerPath, [], {
     stdio: "pipe",
-    env: {
-      ...process.env,
-      NODE_OPTIONS: "",
-    },
+    env: buildPackagedWorkerEnv(),
   });
   return proc as unknown as UtilityProcessLike;
 };

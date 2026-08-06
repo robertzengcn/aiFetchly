@@ -7,6 +7,7 @@ import {
   getPackagedWorkerPathCandidates,
   resolvePackagedWorkerPath,
   type PackagedWorkerPathRuntime,
+  buildPackagedWorkerEnv,
 } from "@/utils/packagedWorkerPath";
 
 interface ExecutePythonMessage {
@@ -167,10 +168,7 @@ export class PythonRuntimeWorkerClient {
     );
     const worker = utilityProcess.fork(resolvedPath, [], {
       stdio: "pipe",
-      env: {
-        ...process.env,
-        NODE_OPTIONS: "",
-      },
+      env: buildPackagedWorkerEnv(),
     });
 
     this.workerProcess = worker;
