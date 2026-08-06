@@ -40,6 +40,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
+          # undici@8 requires Node >=22.19.0; keep aligned with build.yml
           node-version: 22.19.0
           cache: yarn
 
@@ -152,6 +153,7 @@ jobs:
           else
             yarn make-win:test
           fi
+          # Fail if unpacked workers require asar-only pure-JS packages.
           node scripts/verify-packaged-childprocess.js
 
       - name: Upload Windows installers
@@ -222,6 +224,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
+          # undici@8 requires Node >=22.19.0; keep aligned with build.yml
           node-version: 22.19.0
           cache: yarn
 

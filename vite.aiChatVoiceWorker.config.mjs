@@ -5,6 +5,7 @@ import * as path from "path";
 import ClosePlugin from "./vite-plugin-close.js";
 import checker from "vite-plugin-checker";
 import { optionalChecker } from "./vite-checker-toggle.mjs";
+import { ZOD_SSR_NO_EXTERNAL } from "./vite.workerSsrNoExternal.mjs";
 import { nodeResolve } from "@rollup/plugin-node-resolve";
 import sourcemaps from "rollup-plugin-sourcemaps";
 
@@ -64,6 +65,9 @@ export default ({ mode }) => {
         "@": path.resolve(__dirname, "./src"),
       },
       conditions: ["node"],
+    },
+    ssr: {
+      noExternal: ZOD_SSR_NO_EXTERNAL,
     },
     build: {
       rollupOptions: {

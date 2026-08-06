@@ -59,6 +59,8 @@ describe("Forge packaging dependencies", () => {
     ).toBe(false);
   });
 
+  // electron-store must ship in packaged node_modules: taskCode inlines it for
+  // the worker, and vite.main.config.mjs externalizes it for the main process.
   it("keeps electron-store for packaged taskCode runtime", async () => {
     const forgeConfig = await loadForgeConfig();
 
@@ -71,6 +73,22 @@ describe("Forge packaging dependencies", () => {
     ).toBe(false);
     expect(
       forgeConfig.packagerConfig.ignore("/node_modules/electron-store/index.js")
+    ).toBe(false);
+  });
+
+  // pdf-lib must ship in packaged node_modules because vite.main.config.mjs
+  // externalizes it. If Forge ignores it, Windows launch fails when
+  // DocumentService/RAG (pulled via ScheduleManager) requires("pdf-lib").
+  it("keeps pdf-lib for packaged main-process external require", async () => {
+    const forgeConfig = await loadForgeConfig();
+
+    await forgeConfig.hooks.prePackage();
+
+    expect(
+      forgeConfig.packagerConfig.ignore("/node_modules/pdf-lib/package.json")
+    ).toBe(false);
+    expect(
+      forgeConfig.packagerConfig.ignore("/node_modules/pdf-lib/cjs/index.js")
     ).toBe(false);
   });
 

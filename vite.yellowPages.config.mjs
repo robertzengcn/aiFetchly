@@ -6,6 +6,7 @@ import { builtinModules } from 'node:module';
 import ClosePlugin from './vite-plugin-close.js'
 import checker from 'vite-plugin-checker'
 import { optionalChecker } from './vite-checker-toggle.mjs';
+import { SANITIZE_HTML_SSR_NO_EXTERNAL } from './vite.workerSsrNoExternal.mjs';
 import { nodeResolve } from '@rollup/plugin-node-resolve';
 import sourcemaps from 'rollup-plugin-sourcemaps';
 
@@ -63,6 +64,13 @@ export default ({ mode }) => {
         optimizeDeps: {
             include: ['winston-transport', 'bufferutil', 'utf-8-validate']
         },
+        // SSR builds externalize node_modules by default. Force-bundle
+        // sanitize-html and its pure-JS dependency tree so packaged
+        // YellowPagesScraper (loaded from app.asar.unpacked/.vite/build) does
+        // not need runtime requires that fail with MODULE_NOT_FOUND on Windows.
+        ssr: {
+            noExternal: SANITIZE_HTML_SSR_NO_EXTERNAL,
+        },
         build: {
             rollupOptions: {
                 // input: {
@@ -78,8 +86,7 @@ export default ({ mode }) => {
                     'sqlite3',
                     'better-sqlite3',
                     'bindings',
-                    'typeorm',
-                    'sanitize-html'
+                    'typeorm'
                 ],
             },
             sourcemap: true,

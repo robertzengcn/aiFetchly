@@ -18,6 +18,7 @@ const session = require("electron").session;
 const crashReporter = require("electron").crashReporter;
 // import { createProtocol } from 'vue-cli-plugin-electron-builder/lib'
 import installExtension, { VUEJS3_DEVTOOLS } from "electron-devtools-installer";
+import { patchSessionExtensionsApi } from "@/main-process/devtools/patchSessionExtensionsApi";
 import { registerCommunicationIpcHandlers } from "./main-process/communication/";
 import { initializeAppUpdates } from "@/main-process/updater/AppUpdateService";
 import { SkillImportService } from "@/service/SkillImportService";
@@ -189,6 +190,22 @@ if ((app as any).isPackaged) {
 }
 
 log.info("Application starting...");
+
+// Puppeteer registers process "exit" listeners per launched browser, and
+// electron-store historically stacked ipcMain "electron-store-get-data"
+// listeners when multiple Store copies were constructed. Raise the default
+// limit early so legitimate multi-browser / store usage does not spam
+// MaxListenersExceededWarning (store instances are also singleton-cached).
+process.setMaxListeners(50);
+try {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { ipcMain } = require("electron") as {
+    ipcMain?: { setMaxListeners?: (n: number) => void };
+  };
+  ipcMain?.setMaxListeners?.(50);
+} catch {
+  // electron ipcMain unavailable in non-Electron test hosts
+}
 
 if (
   isDevelopment &&
@@ -1099,8 +1116,9 @@ function initialize() {
     }
 
     if (isDevelopment && !process.env.IS_TEST) {
-      // Install Vue Devtools
+      // Install Vue Devtools (route Session.* through session.extensions)
       try {
+        patchSessionExtensionsApi(session.defaultSession);
         await installExtension(VUEJS3_DEVTOOLS);
       } catch (e) {
         if (e instanceof Error) {

@@ -234,6 +234,11 @@ test/
 - **Not Sanitizing User Input:** Failing to sanitize user input can lead to XSS vulnerabilities.
 - **Using the Remote Module:** The `remote` module provides direct access to main process functionality from the renderer, but bypassing IPC exposes security risks. Use `contextBridge` and IPC.
 - **Blocking the Main Process:** Performing long-running tasks in the main process can block the UI and make the application unresponsive.
+- **Vite Main-Process Packaging Interop (Windows launch crashes):**
+  - Electron Forge packages the main process as CJS via `vite.main.config.mjs`. Dependencies that work in `yarn dev` can still crash the packaged app at module load.
+  - Recurring failure modes: broken CJS/ESM interop (`Cannot destructure … .default`), lazy-cache/helper graphs (e.g. old `clone-deep`), and heavy graphs pulled into startup chunks such as `ScheduleManager`.
+  - When fixing a packaged launch crash: (1) identify the dependency via source maps / a minimal Vite CJS bundle repro, (2) prefer `resolve.alias`, `resolutions`, or `build.rollupOptions.external` (keep forge `EXTERNAL_DEPENDENCIES` in sync), (3) add a Vitest regression under `test/vitest/main/*ViteBundle.test.ts` that builds and executes the failing import path so CI catches regressions before Windows packaging.
+  - Known guards: `tslib` → CJS alias + `pdf-lib` external (`TslibViteBundle.test.ts`); `clone-deep@4` resolution (`CloneDeepViteBundle.test.ts`).
 - **Edge Cases:**
 - **Handling Different Screen Resolutions:** Test your application on different screen resolutions to ensure proper UI rendering.
 - **Handling Different Operating Systems:** Test your application on different operating systems (Windows, macOS, Linux) to ensure compatibility.

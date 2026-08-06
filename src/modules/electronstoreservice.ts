@@ -3,6 +3,10 @@
 
 import Store from "electron-store";
 
+type GlobalElectronStoreState = typeof globalThis & {
+  __aifetchlyElectronStores?: Map<string, Store>;
+};
+
 /**
  * Get app name. Safe when run in child/worker process where electron.app is undefined.
  * In that case uses ELECTRON_APP_NAME env (set by main when forking) or fallback 'aiFetchly'.
@@ -45,13 +49,41 @@ function getStoreOptions(serviceName: string): { name: string; cwd?: string } {
   return opts;
 }
 
+function getStoreCache(): Map<string, Store> {
+  const globalState = globalThis as GlobalElectronStoreState;
+  if (!globalState.__aifetchlyElectronStores) {
+    globalState.__aifetchlyElectronStores = new Map<string, Store>();
+  }
+  return globalState.__aifetchlyElectronStores;
+}
+
+/**
+ * Reuse one electron-store instance per service name.
+ *
+ * Creating `new Store()` repeatedly re-enters electron-store's IPC setup. With
+ * Vite HMR / multiple bundle copies that can stack `electron-store-get-data`
+ * listeners on ipcMain and trigger MaxListenersExceededWarning. Caching on
+ * globalThis keeps a single Store (and a single IPC registration) for the
+ * process lifetime.
+ */
+function getOrCreateStore(serviceName: string): Store {
+  const cache = getStoreCache();
+  const existing = cache.get(serviceName);
+  if (existing) {
+    return existing;
+  }
+  const store = new Store(getStoreOptions(serviceName));
+  cache.set(serviceName, store);
+  return store;
+}
+
 export class ElectronStoreService {
   private store: Store;
   // private service:string;
   constructor(service: string) {
     const appName = getAppName();
     const serviceName = `${appName}_${service}`;
-    this.store = new Store(getStoreOptions(serviceName));
+    this.store = getOrCreateStore(serviceName);
     // console.log('Store Path:', this.store.path);
   }
   public setValue(key: string, value: string): void {
@@ -68,5 +100,10 @@ export class ElectronStoreService {
 
   public clearStore(): void {
     this.store.clear();
+  }
+
+  /** Test helper: expose whether two services share one Store instance. */
+  public getStoreForTests(): Store {
+    return this.store;
   }
 }
