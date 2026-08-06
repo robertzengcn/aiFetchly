@@ -21,10 +21,8 @@ import {
 } from "@/service/AIAutoDreamFactory";
 import { AIChatToolApprovalModule } from "@/modules/AIChatToolApprovalModule";
 import { evaluateToolApproval } from "@/service/AIChatToolApprovalPolicyService";
-import {
-  redirectToLoginOnAuthExpired,
-  userSafeError,
-} from "@/service/AIChatErrorMapper";
+import { redirectToLoginOnAuthExpired } from "@/service/AIChatAuthExpiredHandler";
+import { userSafeError } from "@/service/AIChatErrorMapper";
 import type {
   AIChatQueryEvent,
   AIChatQueryEventSink,

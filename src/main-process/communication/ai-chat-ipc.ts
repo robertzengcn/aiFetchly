@@ -12,7 +12,7 @@ import {
 } from "@/api/aiChatApi";
 // import { getAvailableToolFunctions } from "@/config/aiTools.config";
 import { SkillRegistry } from "@/config/skillsRegistry";
-import { redirectToLoginOnAuthExpired } from "@/service/AIChatErrorMapper";
+import { redirectToLoginOnAuthExpired } from "@/service/AIChatAuthExpiredHandler";
 import { formatToolCatalogBreakdown } from "@/service/ToolCatalogDiagnostics";
 import {
   CommonMessage,

@@ -29,10 +29,8 @@ import {
   normalizeToolResult,
   isPermissionPromptResult,
 } from "@/service/AIChatQueryLoop";
-import {
-  redirectToLoginOnAuthExpired,
-  userSafeError,
-} from "@/service/AIChatErrorMapper";
+import { redirectToLoginOnAuthExpired } from "@/service/AIChatAuthExpiredHandler";
+import { userSafeError } from "@/service/AIChatErrorMapper";
 import { Token } from "@/modules/token";
 import { USER_AI_AUTO_PLAN, USER_AI_ENABLED } from "@/config/usersetting";
 import { ENTER_PLAN_MODE_TOOL } from "@/service/EnterPlanModeTool";

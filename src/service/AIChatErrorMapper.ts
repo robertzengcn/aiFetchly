@@ -1,6 +1,5 @@
 // src/service/AIChatErrorMapper.ts
 
-import { User } from "@/modules/user";
 import { AIProviderError } from "./aiProvider/AIProviderError";
 import { isAIChatRecoverableError } from "./AIChatRecoveryTypes";
 
@@ -46,27 +45,6 @@ export function isAuthExpiredError(err: unknown): boolean {
     return AUTH_EXPIRED_MESSAGE_PATTERN.test(err);
   }
   return false;
-}
-
-/**
- * When the hosted AI session has expired, clear local auth and navigate the
- * renderer to the login page (same path as manual sign-out). Fire-and-forget
- * friendly: callers should not block error reporting on this.
- */
-export async function redirectToLoginOnAuthExpired(
-  err: unknown
-): Promise<void> {
-  if (!isAuthExpiredError(err)) {
-    return;
-  }
-  try {
-    await new User().Signout();
-  } catch (signoutError) {
-    console.error(
-      "[ai-chat] failed to sign out after auth expiry:",
-      signoutError
-    );
-  }
 }
 
 /**
