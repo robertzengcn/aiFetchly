@@ -3205,12 +3205,13 @@ const onSend = async (
         "Please provide a goal objective. Usage: /goal <objective>";
       return;
     }
+    // Bind the goal to the same conversation the plan prompt will stream
+    // against. ensureWorkspaceConversationId() creates the v2- id (and
+    // resets chat state) on a fresh chat, instead of passing "" and
+    // orphaning the goal from the streamed turn below.
+    // Declared outside try so the catch path can still append a local exchange.
+    const goalConversationId = ensureWorkspaceConversationId();
     try {
-      // Bind the goal to the same conversation the plan prompt will stream
-      // against. ensureWorkspaceConversationId() creates the v2- id (and
-      // resets chat state) on a fresh chat, instead of passing "" and
-      // orphaning the goal from the streamed turn below.
-      const goalConversationId = ensureWorkspaceConversationId();
       const created = await createGoal({
         conversationId: goalConversationId,
         objective: cmd.objective,
