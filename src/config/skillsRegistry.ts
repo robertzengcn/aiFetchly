@@ -156,9 +156,9 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       "After glob_files finds image paths, call this tool with exact paths — do NOT use " +
       "shell_execute, Python, Pillow/PIL, ImageMagick, or file_read for image editing. " +
       "HARD LIMIT: at most 3 images per call and per AI request. " +
-      "When more than 3 images need editing: (1) attach ONLY the first batch of up to 3 paths, " +
-      "(2) wait for the AI to finish editing that batch and return results, " +
-      "(3) then call this tool again with the next up to 3 paths, and repeat until done. " +
+      "WHEN MORE THAN 3 files need the same edit, do NOT try to attach the next batch yourself within this turn — the AI server ends the turn after editing a batch, so a follow-up attach_local_images call in the same turn will not run. " +
+      "Instead, delegate each batch: call run_subagent once per batch of up to 3 paths with agentId 'agent-batch-worker', passing { files: [<up to 3 paths>], instruction: <the edit> } as the taskPacket, and poll each job with check_tool_job_status. " +
+      "Each batch worker attaches + edits its own batch under its own 3-image budget and returns the output file paths. " +
       "NEVER pass more than 3 paths in one call. " +
       "NEVER issue multiple attach_local_images calls in the same assistant turn/tool round — " +
       "one batch per round only. " +

@@ -114,6 +114,7 @@ export const RUN_SUBAGENT_TOOL: SkillDefinition = {
   name: "run_subagent",
   description:
     "Run a built-in marketing specialist agent (e.g. lead researcher) and return its structured result. Use this to delegate a focused research/enrichment task to a specialist with its own narrowed tools. " +
+    "Also use it to process batches of files when a single request is capped — e.g. agent-batch-worker edits up to 3 images per batch (its own 3-image budget) and returns output file paths; when more than 3 files need the same edit, spawn one run_subagent per batch of up to 3 paths, passing { files: [...], instruction } as the taskPacket, and poll each job. " +
     "This tool ALWAYS runs ASYNCHRONOUSLY: it returns { async: true, job_id } within ~2 seconds and continues working in the background. " +
     "Poll the result with check_tool_job_status(job_id) every 15-30 seconds until status is 'completed' or 'failed'. " +
     "Do not call run_subagent again while a job is running. Use cancel_tool_job(job_id) if the user wants to stop the specialist early.",
