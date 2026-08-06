@@ -66,6 +66,9 @@ describe("ElectronStoreService store singleton cache", () => {
       path.resolve(process.cwd(), "vite.main.config.mjs"),
       "utf-8"
     );
-    expect(viteMain).toMatch(/external\s*:\s*\[[\s\S]*['"]electron-store['"]/);
+    expect(viteMain).toMatch(
+      /const MAIN_PROCESS_EXTERNALS[\s\S]*['"]electron-store['"]/
+    );
+    expect(viteMain).toMatch(/external:\s*MAIN_PROCESS_EXTERNALS/);
   });
 });

@@ -32,17 +32,19 @@ describe("tslib Vite bundle __extends regression", () => {
     expect(fs.existsSync(tslibCjsPath)).toBe(true);
   });
 
-  it("crashes without the tslib CJS alias (documents the packaging failure mode)", async () => {
+  it("emits broken tslib __extends.default interop when tslib is not aliased to CJS", async () => {
+    // Vite 8 may execute this bundle successfully in Node even though the
+    // emitted interop still destructures from `.default` (the Electron CJS
+    // packaging failure mode). Static pattern check is the stable signal.
     const result = await buildAndRunViteCjsBundle({
       entryPath: fixtureEntryPath,
       tempPrefix: "aifetchly-tslib-vite-broken-",
       fileName: "tslib-bundle.cjs",
+      skipRun: true,
     });
 
-    expect(result.run).not.toBeNull();
-    expect(result.run?.status).not.toBe(0);
-    expect(result.combinedOutput).toMatch(
-      /Cannot destructure property '__extends'.*\.default/i
+    expect(result.code).toMatch(
+      /\{__extends:[^}]+\}=\s*[\s\S]{0,200000}?\.default/
     );
   });
 
