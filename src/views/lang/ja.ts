@@ -2050,7 +2050,7 @@ export default {
     show_full_diff: "すべての差分を表示 ({count} 行)",
     collapse_diff: "差分を折りたたむ",
     open_file_tooltip: "ファイルを開く",
-    open_with_tooltip: "プログラムから開く…",
+    open_with_tooltip: "ファイルを開く",
   },
   agentWorkflow: {
     status_queued: "待機中",

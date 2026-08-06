@@ -2084,7 +2084,7 @@ export default {
     show_full_diff: "Vollständigen Diff anzeigen ({count} Zeilen)",
     collapse_diff: "Diff einklappen",
     open_file_tooltip: "Datei öffnen",
-    open_with_tooltip: "Öffnen mit…",
+    open_with_tooltip: "Datei öffnen",
   },
   agentWorkflow: {
     status_queued: "In Warteschlange",

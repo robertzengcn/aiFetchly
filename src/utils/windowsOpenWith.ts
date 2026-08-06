@@ -1,69 +1,45 @@
-import { spawn, type ChildProcess, type SpawnOptions } from "child_process";
+import { shell } from "electron";
 
 /**
- * Windows "Open With…" launcher for AI-created files.
+ * Open an AI-created file on Windows (and WSL→Windows) with the default
+ * associated application, passing the file path through correctly.
  *
  * History / why this module exists:
  * 1. `OpenAs_RunnableDLL` is not exported by shell32.dll → "missing entry" alert.
- * 2. `rundll32 shell32.dll,OpenAs_RunDLL` often shows the dialog but does not
- *    launch the selected app when spawned from Electron (non-shell context).
+ * 2. `rundll32 shell32.dll,OpenAs_RunDLL` often shows a chooser but never
+ *    launches the selected app from Electron.
+ * 3. PowerShell `Start-Process -Verb OpenAs` can launch the chosen app
+ *    without handing off the file, so the user has to pick the file again
+ *    inside the app.
  *
- * Correct approach: PowerShell `Start-Process -LiteralPath … -Verb OpenAs`,
- * which uses ShellExecute and both shows the chooser and launches the app.
+ * Correct approach: Electron `shell.openPath`, which uses the OS default
+ * file association and opens the file in that app.
  *
- * Keep this logic centralized so PackagedWorker-style guard tests can ban
- * the broken rundll32 patterns across `src/`.
+ * Keep this logic centralized so guard tests can ban the broken OpenAs /
+ * rundll32 patterns across `src/`.
  */
 
-export type WindowsOpenWithSpawnInvocation = {
-  command: string;
-  args: string[];
-  options: SpawnOptions;
-};
-
-/** Escape a path for PowerShell single-quoted -LiteralPath usage. */
-export function escapePowerShellSingleQuoted(value: string): string {
-  return `'${value.replace(/'/g, "''")}'`;
-}
+export type OpenWindowsFileFn = (windowsPath: string) => Promise<string>;
 
 /**
- * Build the spawn invocation for Windows Open With (does not execute).
- * `windowsPath` must already be a Windows-native or UNC path.
+ * Open a Windows-native or UNC path with the default associated app.
+ * Returns an empty string on success, or an error message on failure
+ * (Electron `shell.openPath` contract).
  */
-export function buildWindowsOpenWithSpawn(
-  windowsPath: string
-): WindowsOpenWithSpawnInvocation {
-  return {
-    command: "powershell.exe",
-    args: [
-      "-NoProfile",
-      "-NonInteractive",
-      "-WindowStyle",
-      "Hidden",
-      "-Command",
-      `Start-Process -LiteralPath ${escapePowerShellSingleQuoted(
-        windowsPath
-      )} -Verb OpenAs`,
-    ],
-    options: { detached: true, stdio: "ignore", windowsHide: true },
-  };
-}
-
-export type SpawnLike = (
-  command: string,
-  args: ReadonlyArray<string>,
-  options: SpawnOptions
-) => ChildProcess;
-
-/**
- * Show Windows "Open With" and launch the chosen app via ShellExecute.
- * Path must already be a Windows-native or UNC path.
- */
-export function openWindowsOpenWithDialog(
+export async function openWindowsFile(
   windowsPath: string,
-  spawnFn: SpawnLike = spawn
-): void {
-  const invocation = buildWindowsOpenWithSpawn(windowsPath);
-  const proc = spawnFn(invocation.command, invocation.args, invocation.options);
-  proc.unref();
+  openPathFn: OpenWindowsFileFn = (p) => shell.openPath(p)
+): Promise<string> {
+  return openPathFn(windowsPath);
+}
+
+/**
+ * @deprecated Prefer {@link openWindowsFile}. Kept as a stable alias for
+ * existing call sites / tests that still use the older name.
+ */
+export async function openWindowsOpenWithDialog(
+  windowsPath: string,
+  openPathFn?: OpenWindowsFileFn
+): Promise<string> {
+  return openWindowsFile(windowsPath, openPathFn);
 }

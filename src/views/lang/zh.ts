@@ -2017,7 +2017,7 @@ export default {
     show_full_diff: "显示完整差异 ({count} 行)",
     collapse_diff: "收起差异",
     open_file_tooltip: "打开文件",
-    open_with_tooltip: "打开方式…",
+    open_with_tooltip: "打开文件",
   },
   agentWorkflow: {
     status_queued: "排队中",
@@ -2265,8 +2265,7 @@ export default {
     permission_denied: "权限被拒绝。该工具不会执行。",
     permission_resume_failed: "授权后无法继续执行该工具。",
     permission_resume_no_tool_id: "缺少工具调用信息，无法继续执行。",
-    auth_expired:
-      "您的登录已过期，请重新登录。",
+    auth_expired: "您的登录已过期，请重新登录。",
     quota_exhausted:
       "您的订阅计划中包含的 AI 代币已用尽。请充值以继续使用 AI 功能。",
     empty_response_error:

@@ -2,7 +2,7 @@ import { ipcMain } from "electron";
 import { spawn, spawnSync } from "child_process";
 import { platform } from "os";
 import { readFileSync } from "fs";
-import { openWindowsOpenWithDialog } from "@/utils/windowsOpenWith";
+import { openWindowsFile } from "@/utils/windowsOpenWith";
 import {
   AiChatApi,
   ChatRequest,
@@ -1236,24 +1236,17 @@ export function registerAiChatIpcHandlers(): void {
     }
   );
 
-  // Open the OS-native "Open With…" chooser so the user can pick which
-  // installed application should handle the file. We avoid opening with the
-  // system default directly so the user stays in control of which program
-  // renders AI-generated content.
+  // Open the file in an external application.
   //
   // Platform notes:
-  //  - Windows/WSL: see `@/utils/windowsOpenWith` (PowerShell Start-Process
-  //    -Verb OpenAs). Do NOT use rundll32 OpenAs_RunDLL / OpenAs_RunnableDLL.
-  //  - macOS: AppleScript `choose application` is the only programmatic way
-  //    to surface the native app picker; we then launch the file via
-  //    `open -a <chosenApp> <path>` so any .app bundle the user picks works.
-  //  - Linux: there is no portable "Open With" dialog callable from the
-  //    shell across desktop environments, so we fall back to `xdg-open`
-  //    (which still respects the user's default-mime associations).
+  //  - Windows/WSL: Electron `shell.openPath` (see `@/utils/windowsOpenWith`).
+  //    Do NOT use rundll32 OpenAs_* or Start-Process -Verb OpenAs — those
+  //    either fail or launch an app without handing off the file path.
+  //  - macOS: AppleScript `choose application` then `open -a` so the user
+  //    picks which app opens the file and the path is passed correctly.
+  //  - Linux: `xdg-open` via spawn (shell.openPath on Linux blocks the main
+  //    process on system("xdg-open ...")).
   //
-  // spawn is used instead of shell.openPath because shell.openPath on Linux
-  // uses a blocking C++ call (system("xdg-open ...")) that freezes the main
-  // process event loop while xdg-open runs.
   // WSL detection is memoized — /proc/sys/kernel/osrelease only changes on
   // kernel upgrade, so we read it once per process lifetime.
   let _isWSLCached: boolean | undefined;
@@ -1276,9 +1269,8 @@ export function registerAiChatIpcHandlers(): void {
   }
 
   // Translate a WSL/Linux absolute path to a Windows UNC path that the
-  // Windows Open With dialog can consume
-  // (e.g. \\wsl.localhost\<distro>\home\...). Returns null if the
-  // translation fails — callers fall back to xdg-open in that case.
+  // Windows shell can open (e.g. \\wsl.localhost\<distro>\home\...).
+  // Returns null if the translation fails — callers fall back to xdg-open.
   function wslPathToWindows(linuxPath: string): string | null {
     try {
       const result = spawnSync("wslpath", ["-w", linuxPath], {
@@ -1293,9 +1285,12 @@ export function registerAiChatIpcHandlers(): void {
     }
   }
 
-  function openFileWithChooser(filePath: string): void {
+  async function openFileWithChooser(filePath: string): Promise<void> {
     if (platform() === "win32") {
-      openWindowsOpenWithDialog(filePath);
+      const errorMessage = await openWindowsFile(filePath);
+      if (errorMessage) {
+        throw new Error(errorMessage);
+      }
       return;
     }
 
@@ -1325,13 +1320,15 @@ export function registerAiChatIpcHandlers(): void {
     }
 
     // Linux fallback: no portable "Open With" dialog exists natively.
-    // On WSL, route through the Windows host's "Open With" dialog so the
-    // user gets the same chooser experience as a native Windows install.
+    // On WSL, open via the Windows host default association.
     // Falls through to xdg-open on plain Linux or if path translation fails.
     if (isWSL()) {
       const winPath = wslPathToWindows(filePath);
       if (winPath) {
-        openWindowsOpenWithDialog(winPath);
+        const errorMessage = await openWindowsFile(winPath);
+        if (errorMessage) {
+          throw new Error(errorMessage);
+        }
         return;
       }
     }
@@ -1359,7 +1356,7 @@ export function registerAiChatIpcHandlers(): void {
       if (input.filePath.includes("..")) {
         throw new Error("Path traversal not allowed");
       }
-      openFileWithChooser(input.filePath);
+      await openFileWithChooser(input.filePath);
       return null;
     }
   );
