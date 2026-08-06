@@ -28,6 +28,7 @@ import type { YandexMapsSearchRecordEntity } from "@/entity/YandexMapsSearchReco
 import type { ModuleExecutionContext } from "@/entityTypes/skillTypes";
 import { ToolExecutor } from "@/service/ToolExecutor";
 import {
+  getPackagedWorkerNodePath,
   getPackagedWorkerPathCandidates,
   resolvePackagedWorkerPath,
   type PackagedWorkerPathRuntime,
@@ -176,12 +177,27 @@ export class YandexMapsModule extends BaseModule {
               `Run yarn make or restart yarn dev to rebuild YandexMapsWorker.js.`
           );
         }
-        // child_process.spawn + ipc stdio (utilityProcess.fork rejects piped stdin with ipc)
+        // child_process.spawn + ipc stdio (utilityProcess.fork rejects piped stdin with ipc).
+        // In packaged apps the worker lives under app.asar.unpacked/.vite/build/, which makes
+        // Node's default module resolution walk the unpacked tree and miss deps that live
+        // inside the packed app.asar/node_modules (e.g. puppeteer). getPackagedWorkerNodePath
+        // appends app.asar/node_modules + app.asar.unpacked/node_modules as a NODE_PATH
+        // fallback so bare `require("puppeteer")` resolves. Mirrors YellowPagesProcessManager.
+        const electronProcess = process as NodeJS.Process & {
+          resourcesPath?: string;
+        };
+        const workerNodePath = electronProcess.resourcesPath
+          ? getPackagedWorkerNodePath(
+              electronProcess.resourcesPath,
+              process.env.NODE_PATH
+            )
+          : process.env.NODE_PATH;
         worker = spawn(process.execPath, [resolvedWorkerPath], {
           stdio: ["pipe", "pipe", "pipe", "ipc"],
           env: {
             ...process.env,
             NODE_OPTIONS: "",
+            NODE_PATH: workerNodePath,
             ELECTRON_RUN_AS_NODE: "1",
             ELECTRON_APP_NAME: app.getName(),
             ELECTRON_USER_DATA_PATH: app.getPath("userData"),
@@ -465,12 +481,7 @@ export class YandexMapsModule extends BaseModule {
         path.join(".vite", "build", "childprocess", "YandexMapsWorker.js"),
         path.join("dist", "YandexMapsWorker.js"),
         path.join("dist", "childprocess", "YandexMapsWorker.js"),
-        path.join(
-          "dist",
-          "childprocess",
-          "yandex-maps",
-          "YandexMapsWorker.js"
-        ),
+        path.join("dist", "childprocess", "yandex-maps", "YandexMapsWorker.js"),
       ],
     };
     const resolvedPath = resolvePackagedWorkerPath(runtime, options);
