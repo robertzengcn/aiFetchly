@@ -12,6 +12,7 @@
 | Target platforms | Windows x64, macOS x64, macOS arm64 (About page on all platforms; GitHub upgrade actions gated) |
 | Website URL | `https://www.sellart-online.com` |
 | Related PRD | [Windows and macOS GitHub Auto Upgrade PRD](./windows-macos-github-auto-upgrade-prd.md) |
+| Technical design | [System Settings About aiFetchly Technical Design](./system-settings-about-aifetchly-technical-design.md) |
 | Related technical design | [Windows and macOS GitHub Auto Upgrade Technical Design](./windows-macos-github-auto-upgrade-technical-design.md) |
 | Related code | `src/views/pages/systemsetting/`, `src/main-process/updater/AppUpdateService.ts`, `src/modules/MainProcessAppInfoModule.ts`, `src/views/api/app.ts`, `src/config/channellist.ts`, `src/config/aiNavigationRouteManifest.ts` |
 
