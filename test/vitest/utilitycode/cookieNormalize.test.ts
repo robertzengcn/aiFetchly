@@ -201,6 +201,41 @@ describe("normalizeCookieBatch", () => {
 
 describe("normalizedToCookiesType", () => {
   const now = 1_700_000_000;
+  it("rejects oversize NAME (oversize, not malformed)", () => {
+    expect(() =>
+      normalizeNetscapeCookie(baseNetscape({ name: "x".repeat(4097) }))
+    ).toThrow();
+    const res = normalizeCookieBatch(
+      [baseNetscape({ name: "x".repeat(4097) })],
+      "netscape",
+      { now }
+    );
+    expect(res.accepted).toHaveLength(0);
+    expect(res.rejected.oversize).toBe(1);
+  });
+
+  it("on equal-expiry tie the later-seen cookie wins", () => {
+    const res = normalizeCookieBatch(
+      [
+        baseNetscape({
+          name: "SID",
+          value: "first",
+          expirationDate: now + 500,
+        }),
+        baseNetscape({
+          name: "SID",
+          value: "second",
+          expirationDate: now + 500,
+        }),
+      ],
+      "netscape",
+      { now }
+    );
+    expect(res.accepted).toHaveLength(1);
+    expect(res.accepted[0]?.value).toBe("second");
+    expect(res.rejected.duplicate).toBe(1);
+  });
+
   it("converts a normalized snapshot back to the CookiesType shape workers expect", () => {
     const accepted = normalizeCookieBatch(
       [baseNetscape({ domain: ".youtube.com", name: "SID", flag: true })],

@@ -218,7 +218,7 @@ export class BrowserImportCoordinator {
         verificationUrl: manifest?.verificationUrl ?? "",
       };
     } catch (err) {
-      const state:
+      const errState:
         | "key_unavailable"
         | "no_eligible_cookies"
         | "storage_failed" =
@@ -229,7 +229,7 @@ export class BrowserImportCoordinator {
           ? "no_eligible_cookies"
           : "storage_failed";
       return {
-        state,
+        state: errState,
         importedCookieCount: 0,
         rejectedCookieCounts: emptyRejectCounts(),
       };

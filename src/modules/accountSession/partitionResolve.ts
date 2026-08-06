@@ -10,7 +10,14 @@
  */
 
 const PARTITION_PREFIX = "persist:";
-/** Allows alphanumerics, underscore, dash, slash, dot. Blocks traversal/odd chars. */
+/**
+ * Allows alphanumerics, underscore, dash, slash, dot. The slash and dot are
+ * INTENTIONALLY permitted because legacy stored partitions have the shape
+ * `persist:path/<timestamp>-<rand>` and must be reused, not reset. Electron
+ * treats the partition name as an opaque string (never a filesystem path), so
+ * this guard is a charset sanity check that blocks colons, wildcards, control
+ * chars, and whitespace — NOT a path-traversal defense.
+ */
 const VALID_PARTITION_NAME = /^[A-Za-z0-9_./-]+$/;
 
 export function isValidPersistentPartition(

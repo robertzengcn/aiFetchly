@@ -232,6 +232,43 @@ describe("BrowserImportCoordinator.receiveImportResult", () => {
     expect(result.state).toBe("key_unavailable");
   });
 
+  it("maps NO_ALLOWED_COOKIES to no_eligible_cookies", async () => {
+    const failing = serviceStub(() => {
+      throw new CookieServiceError("NO_ALLOWED_COOKIES");
+    });
+    const { coordinator, transport } = makeCoordinator({
+      enabled: true,
+      platformId: 2,
+      service: failing,
+    });
+    const info = await coordinator.startPairing(1);
+    const secret = (transport.announced[0] as { requestSecret: string })
+      .requestSecret;
+    const result = await coordinator.receiveImportResult(
+      buildResult(info.requestId, secret)
+    );
+    expect(result.state).toBe("no_eligible_cookies");
+    expect(result.importedCookieCount).toBe(0);
+  });
+
+  it("maps a generic persistence error to storage_failed", async () => {
+    const failing = serviceStub(() => {
+      throw new Error("disk full");
+    });
+    const { coordinator, transport } = makeCoordinator({
+      enabled: true,
+      platformId: 2,
+      service: failing,
+    });
+    const info = await coordinator.startPairing(1);
+    const secret = (transport.announced[0] as { requestSecret: string })
+      .requestSecret;
+    const result = await coordinator.receiveImportResult(
+      buildResult(info.requestId, secret)
+    );
+    expect(result.state).toBe("storage_failed");
+  });
+
   it("rejects a malformed wire payload (throws)", async () => {
     const { coordinator } = makeCoordinator({ enabled: true, platformId: 2 });
     await expect(

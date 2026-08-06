@@ -112,6 +112,8 @@ function adapterForSource(source: StoredCookieSource): CookieAdapterSource {
 }
 
 const ENCRYPTION_VERSION = 1;
+/** Ceiling for legacy plaintext parsed on the hot metadata path (OOM defense). */
+const LEGACY_PARSE_MAX_BYTES = 8 * 1024 * 1024;
 
 /**
  * Resolve the user DB path for the default model. Mirrors BaseModule's logic
@@ -237,7 +239,10 @@ export class AccountSessionService {
     // until the background migration rewrites the row.
     let cookieCount = row.cookie_count;
     if (cookieCount == null) {
-      if (!FieldCipher.isEncrypted(row.cookies)) {
+      if (
+        !FieldCipher.isEncrypted(row.cookies) &&
+        row.cookies.length <= LEGACY_PARSE_MAX_BYTES
+      ) {
         try {
           const parsed: unknown = JSON.parse(row.cookies);
           cookieCount = Array.isArray(parsed) ? parsed.length : 0;
@@ -245,6 +250,9 @@ export class AccountSessionService {
           cookieCount = 0;
         }
       } else {
+        // Encrypted-but-uncounted, or a pathologically large legacy blob we
+        // refuse to parse on the hot metadata path (defense vs. OOM). Fall back
+        // to 0; the background migration will rewrite the row with a real count.
         cookieCount = 0;
       }
     }
@@ -439,6 +447,10 @@ export class AccountSessionService {
       let progress = false;
 
       for (const row of candidates) {
+        // Defensive: getLegacyCandidateRows already SQL-filters ENC1 rows, but a
+        // concurrent saveEncryptedSnapshot (e.g. a worker refresh) can encrypt a
+        // row between the SELECT and this in-memory check. Treat that as a no-op
+        // win rather than re-encrypting and clobbering the fresher snapshot.
         if (FieldCipher.isEncrypted(row.cookies)) {
           summary.alreadyEncrypted++;
           progress = true;
@@ -446,9 +458,21 @@ export class AccountSessionService {
         }
         const normalized = this.tryNormalize(row.cookies);
         if (!normalized.ok) {
-          await this.safeMarkInvalid(row.account_id, "LEGACY_INVALID");
-          summary.invalid++;
-          progress = true;
+          // Only count progress if the row was actually marked (a persistent DB
+          // failure must NOT set progress=true, or the loop could spin forever).
+          if (await this.safeMarkInvalid(row.account_id, "LEGACY_INVALID")) {
+            summary.invalid++;
+            progress = true;
+          }
+          continue;
+        }
+        if (normalized.cookies.length === 0) {
+          // Legacy "[]" (or all-rejected) must not become an empty "available"
+          // snapshot — persistSnapshot forbids empty writes; migration must too.
+          if (await this.safeMarkInvalid(row.account_id, "LEGACY_INVALID")) {
+            summary.invalid++;
+            progress = true;
+          }
           continue;
         }
         try {
@@ -500,16 +524,23 @@ export class AccountSessionService {
     }
   }
 
+  /**
+   * Mark a row invalid without surfacing a throw. Returns true only when the
+   * row was actually advanced (so the migration loop can tell real progress
+   * from a persistent DB failure and avoid spinning on a row that won't update).
+   */
   private async safeMarkInvalid(
     accountId: number,
     code: CookieErrorCode
-  ): Promise<void> {
+  ): Promise<boolean> {
     try {
       await this.cookiesModel.markRowInvalid(accountId, code);
+      return true;
     } catch (err) {
       log.warn(
         `AccountSessionService: failed to mark account ${accountId} invalid (${code})`
       );
+      return false;
     }
   }
 

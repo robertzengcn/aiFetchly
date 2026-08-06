@@ -6,27 +6,27 @@ import { Token } from "@/modules/token";
  *
  * Browser-profile import requires a reviewed, signed Chromium extension AND an
  * OS-installer-registered native-messaging host (design Open Implementation
- * Decisions #1–#2). Those external pieces are not yet shipped, so the flag
+ * Decisions #1-#2). Those external pieces are not yet shipped, so the flag
  * defaults to OFF. Flipping it requires the Token store to contain the
  * explicit value "true".
+ *
+ * Read on each call (no process-lifetime cache): Token is a local electron-store
+ * file read and this is invoked per user action, not on a hot path — so a runtime
+ * toggle by support staff takes effect without an app restart.
  */
 export const BROWSER_PROFILE_IMPORT_FLAG = "browser_profile_import_enabled";
 
-let cachedFlag: boolean | null = null;
-
 export function isBrowserProfileImportEnabled(): boolean {
-  if (cachedFlag !== null) {
-    return cachedFlag;
-  }
   try {
-    cachedFlag = new Token().getValue(BROWSER_PROFILE_IMPORT_FLAG) === "true";
+    return new Token().getValue(BROWSER_PROFILE_IMPORT_FLAG) === "true";
   } catch {
-    cachedFlag = false;
+    // Token store unreadable (DB not initialized, encrypted store corrupt):
+    // fail closed — never silently enable a gated feature.
+    return false;
   }
-  return cachedFlag;
 }
 
-/** Test-only: reset the cache (e.g. after toggling the Token store in a test). */
+// Kept for any external caller / test that referenced the cache reset hook.
 export function resetFeatureFlagCacheForTest(): void {
-  cachedFlag = null;
+  /* no-op: flag is read live and not cached. */
 }

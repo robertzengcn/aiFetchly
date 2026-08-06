@@ -31,9 +31,9 @@ describe("ImportRequestRegistry", () => {
     const reg = new ImportRequestRegistry();
     const created = reg.create(1, 2, ["youtube.com"], ttl, now);
     reg.consume(created.requestId, created.requestSecret, now);
-    expect(() => reg.consume(created.requestId, created.requestSecret, now)).toThrow(
-      ImportRequestValidationError
-    );
+    expect(() =>
+      reg.consume(created.requestId, created.requestSecret, now)
+    ).toThrow(ImportRequestValidationError);
   });
 
   it("a wrong secret is rejected but the entry stays for a legitimate retry", () => {
@@ -52,6 +52,25 @@ describe("ImportRequestRegistry", () => {
       reg.consume(created.requestId, created.requestSecret, now + ttl + 1)
     ).toThrow(ImportRequestValidationError);
     expect(reg.size()).toBe(0);
+  });
+
+  it("rejects a same-length wrong secret via timingSafeEqual (not the length guard)", () => {
+    const reg = new ImportRequestRegistry();
+    const created = reg.create(1, 2, ["youtube.com"], ttl, now);
+    // Flip one byte of the base64url secret: same length, different value, so
+    // the comparison reaches crypto.timingSafeEqual rather than the length guard.
+    const sameLenWrong =
+      created.requestSecret[0] === "A"
+        ? "B" + created.requestSecret.slice(1)
+        : "A" + created.requestSecret.slice(1);
+    expect(sameLenWrong.length).toBe(created.requestSecret.length);
+    expect(sameLenWrong).not.toBe(created.requestSecret);
+    expect(() => reg.consume(created.requestId, sameLenWrong, now)).toThrow(
+      ImportRequestValidationError
+    );
+    // Entry still present for a legitimate retry within TTL.
+    const pending = reg.consume(created.requestId, created.requestSecret, now);
+    expect(pending.accountId).toBe(1);
   });
 
   it("cancel removes a pending request", () => {

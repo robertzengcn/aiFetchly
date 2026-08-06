@@ -1,4 +1,5 @@
 import crypto from "crypto";
+import { REQUEST_SECRET_BYTES } from "@/schemas/nativeMessaging";
 
 /**
  * In-memory, single-use browser-profile import request registry (design §9.3).
@@ -74,7 +75,9 @@ export class ImportRequestRegistry {
     now: number = Date.now()
   ): CreatedRequest {
     const requestId = crypto.randomUUID();
-    const requestSecret = crypto.randomBytes(32).toString("base64url");
+    const requestSecret = crypto
+      .randomBytes(REQUEST_SECRET_BYTES)
+      .toString("base64url");
     const expiresAtMs = now + ttlMs;
     this.requests.set(requestId, {
       requestId,
@@ -128,13 +131,16 @@ export class ImportRequestRegistry {
       throw new ImportRequestValidationError("REQUEST_EXPIRED");
     }
 
-    // Constant-time-ish secret comparison to avoid timing leaks.
+    // Constant-time-ish secret comparison to avoid timing leaks. Compare the
+    // UTF-8 BYTE lengths (not the JS string .length, which counts UTF-16 code
+    // units): a same-code-unit-length string containing surrogates could pass
+    // the guard but produce a different byte length, making timingSafeEqual
+    // throw RangeError instead of returning the intended SECRET_INVALID result.
+    const expectedSecret = Buffer.from(req.requestSecret);
+    const suppliedSecret = Buffer.from(requestSecret);
     const secretOk =
-      req.requestSecret.length === requestSecret.length &&
-      crypto.timingSafeEqual(
-        Buffer.from(req.requestSecret),
-        Buffer.from(requestSecret)
-      );
+      expectedSecret.length === suppliedSecret.length &&
+      crypto.timingSafeEqual(expectedSecret, suppliedSecret);
     if (!secretOk) {
       // Leave the entry so the legitimate extension can still retry within TTL.
       throw new ImportRequestValidationError("SECRET_INVALID");

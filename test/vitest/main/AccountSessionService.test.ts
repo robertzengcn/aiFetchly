@@ -372,6 +372,49 @@ describe("AccountSessionService Electron session lifecycle", () => {
     expect(captured.importedCookieCount).toBe(2); // evil cookie rejected
     expect(captured.rejectedCounts.outside_allowed_domains).toBe(1);
   });
+
+  it("applies __Host- cookies as host-only (no domain) and __Secure- as httpOnly", async () => {
+    const fake = makeFakeSession();
+    const { service } = await newService({ platformId: 2 });
+    const cookies: NormalizedCookie[] = [
+      {
+        domain: "youtube.com",
+        path: "/",
+        name: "__Host-token",
+        value: "hv",
+        secure: true,
+        httpOnly: false,
+        sameSite: "lax",
+        expirationDate: 4_000_000_000,
+      },
+      {
+        domain: "youtube.com",
+        path: "/",
+        name: "__Secure-sid",
+        value: "sv",
+        secure: true,
+        httpOnly: false,
+        sameSite: "lax",
+        expirationDate: 4_000_000_000,
+      },
+    ];
+    await service.persistSnapshot({
+      accountId: 31,
+      cookies: cookies as unknown[],
+      source: "manual_login",
+      partitionPath: "persist:social-account-31",
+    });
+    await service.applySnapshotToSession(31, fake.session);
+    const hostDetail = fake.stored.find((d) =>
+      String(d.name).startsWith("__Host-")
+    );
+    const secureDetail = fake.stored.find((d) =>
+      String(d.name).startsWith("__Secure-")
+    );
+    expect(hostDetail).toBeDefined();
+    expect(hostDetail?.domain).toBeUndefined(); // __Host- => host-only, domain omitted
+    expect(secureDetail?.httpOnly).toBe(true); // __Secure- => force httpOnly
+  });
 });
 
 // Ensure FieldCipher round-trips with the test key (sanity for the envelope).

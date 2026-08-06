@@ -16,6 +16,10 @@ import { z } from "zod";
  * See docs/prd/secure-browser-profile-import-IMPLEMENTATION-PLAN.md §2.
  */
 
+/** Shared size limits for cookie name/value (referenced by the normalizer too). */
+export const COOKIE_NAME_MAX = 4096;
+export const COOKIE_VALUE_MAX = 16384;
+
 /** SameSite as Electron / chrome.cookies represents it. */
 export const cookieSameSiteSchema = z.enum([
   "unspecified",
@@ -35,19 +39,18 @@ export type CookieSameSite = z.infer<typeof cookieSameSiteSchema>;
  * semantic rules (expiry, SameSite+Secure combination, domain allowlist) are
  * enforced by the normalizer/service which have runtime context (now, manifest).
  */
-export const normalizedCookieSchema = z
-  .strictObject({
-    domain: z.string().min(1).max(253),
-    path: z.string().min(1).max(1024).default("/"),
-    name: z.string().min(1).max(4096),
-    value: z.string().max(16384),
-    secure: z.boolean(),
-    httpOnly: z.boolean().default(false),
-    /** Seconds since epoch. Omitted for session cookies. */
-    expirationDate: z.number().finite().positive().optional(),
-    sameSite: cookieSameSiteSchema.optional(),
-    hostOnly: z.boolean().optional(),
-  });
+export const normalizedCookieSchema = z.strictObject({
+  domain: z.string().min(1).max(253),
+  path: z.string().min(1).max(1024).default("/"),
+  name: z.string().min(1).max(COOKIE_NAME_MAX),
+  value: z.string().max(COOKIE_VALUE_MAX),
+  secure: z.boolean(),
+  httpOnly: z.boolean().default(false),
+  /** Seconds since epoch. Omitted for session cookies. */
+  expirationDate: z.number().finite().positive().optional(),
+  sameSite: cookieSameSiteSchema.optional(),
+  hostOnly: z.boolean().optional(),
+});
 export type NormalizedCookie = z.infer<typeof normalizedCookieSchema>;
 
 /** Array form used for the encrypted snapshot. */
@@ -112,7 +115,9 @@ export const safeCookieRejectReasonSchema = z.enum([
   "oversize",
   "invalid_samesite",
 ]);
-export type SafeCookieRejectReason = z.infer<typeof safeCookieRejectReasonSchema>;
+export type SafeCookieRejectReason = z.infer<
+  typeof safeCookieRejectReasonSchema
+>;
 
 /** Empty-count map helper type for reject tallies. */
 export type RejectCounts = Record<SafeCookieRejectReason, number>;
@@ -127,9 +132,11 @@ export const accountSessionMetadataSchema = z.strictObject({
   cookieCount: z.number().int().nonnegative(),
   lastUpdatedAt: z.string().nullable(),
   importSource: rendererImportSourceSchema.nullable(),
-  sessionStatus: z.enum(["available", "missing", "invalid", "migration_pending"]),
+  sessionStatus: sessionStatusSchema,
 });
-export type AccountSessionMetadata = z.infer<typeof accountSessionMetadataSchema>;
+export type AccountSessionMetadata = z.infer<
+  typeof accountSessionMetadataSchema
+>;
 
 /**
  * Result of a cookie import / capture operation. Success variants carry a
@@ -182,4 +189,6 @@ export const cookieMigrationSummarySchema = z.strictObject({
   persistenceFailed: z.number().int().nonnegative(),
   alreadyEncrypted: z.number().int().nonnegative(),
 });
-export type CookieMigrationSummary = z.infer<typeof cookieMigrationSummarySchema>;
+export type CookieMigrationSummary = z.infer<
+  typeof cookieMigrationSummarySchema
+>;

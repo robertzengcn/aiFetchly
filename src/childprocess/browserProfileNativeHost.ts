@@ -1,4 +1,7 @@
-import { nativeMessageSchema, NATIVE_MESSAGE_MAX_BYTES } from "@/schemas/nativeMessaging";
+import {
+  nativeMessageSchema,
+  NATIVE_MESSAGE_MAX_BYTES,
+} from "@/schemas/nativeMessaging";
 import type { NativeMessage } from "@/schemas/nativeMessaging";
 import { log } from "@/modules/Logger";
 
@@ -96,6 +99,15 @@ export async function runNativeHost(
       const length = parseLengthPrefix(buffer);
       if (length === null) {
         break;
+      }
+      // Reject oversize frames BEFORE accumulating their bytes: a hostile stdin
+      // peer could otherwise declare length ~ 2^31 and force us to buffer GiB
+      // before decodeNativeMessage's 1 MiB cap ever runs.
+      if (length > NATIVE_MESSAGE_MAX_BYTES) {
+        log.warn(`[native-host] rejected oversize frame length ${length}`);
+        // Drop the 4-byte prefix and resync on the next 4-byte boundary.
+        buffer = buffer.subarray(4);
+        continue;
       }
       const total = 4 + length;
       if (buffer.length < total) {

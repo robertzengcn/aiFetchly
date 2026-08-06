@@ -1,5 +1,7 @@
 import {
   normalizedCookieSchema,
+  COOKIE_NAME_MAX,
+  COOKIE_VALUE_MAX,
   type NormalizedCookie,
   type CookieSameSite,
   type SafeCookieRejectReason,
@@ -62,8 +64,8 @@ export function emptyRejectCounts(): RejectCounts {
   };
 }
 
-const MAX_VALUE_LENGTH = 16384;
-const MAX_NAME_LENGTH = 4096;
+const MAX_VALUE_LENGTH = COOKIE_VALUE_MAX;
+const MAX_NAME_LENGTH = COOKIE_NAME_MAX;
 
 /** Map any raw sameSite spelling to the canonical enum, defaulting to lax. */
 function coerceSameSite(raw: unknown): CookieSameSite {
