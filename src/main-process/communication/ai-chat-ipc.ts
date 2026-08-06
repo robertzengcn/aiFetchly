@@ -2,6 +2,7 @@ import { ipcMain } from "electron";
 import { spawn, spawnSync } from "child_process";
 import { platform } from "os";
 import { readFileSync } from "fs";
+import { openWindowsOpenWithDialog } from "@/utils/windowsOpenWith";
 import {
   AiChatApi,
   ChatRequest,
@@ -1241,11 +1242,8 @@ export function registerAiChatIpcHandlers(): void {
   // renders AI-generated content.
   //
   // Platform notes:
-  //  - Windows: `Start-Process -Verb OpenAs` uses ShellExecute and both
-  //    shows the chooser and launches the selected app. Do NOT use
-  //    `rundll32 shell32.dll,OpenAs_RunDLL` from Electron — that entry
-  //    point often shows the dialog but never launches when spawned from
-  //    a non-shell context (exact failure users reported).
+  //  - Windows/WSL: see `@/utils/windowsOpenWith` (PowerShell Start-Process
+  //    -Verb OpenAs). Do NOT use rundll32 OpenAs_RunDLL / OpenAs_RunnableDLL.
   //  - macOS: AppleScript `choose application` is the only programmatic way
   //    to surface the native app picker; we then launch the file via
   //    `open -a <chosenApp> <path>` so any .app bundle the user picks works.
@@ -1293,33 +1291,6 @@ export function registerAiChatIpcHandlers(): void {
     } catch {
       return null;
     }
-  }
-
-  /** Escape a path for PowerShell single-quoted -LiteralPath usage. */
-  function escapePowerShellSingleQuoted(value: string): string {
-    return `'${value.replace(/'/g, "''")}'`;
-  }
-
-  /**
-   * Show Windows "Open With" and launch the chosen app via ShellExecute.
-   * Path must already be a Windows-native or UNC path.
-   */
-  function openWindowsOpenWithDialog(windowsPath: string): void {
-    const proc = spawn(
-      "powershell.exe",
-      [
-        "-NoProfile",
-        "-NonInteractive",
-        "-WindowStyle",
-        "Hidden",
-        "-Command",
-        `Start-Process -LiteralPath ${escapePowerShellSingleQuoted(
-          windowsPath
-        )} -Verb OpenAs`,
-      ],
-      { detached: true, stdio: "ignore", windowsHide: true }
-    );
-    proc.unref();
   }
 
   function openFileWithChooser(filePath: string): void {
