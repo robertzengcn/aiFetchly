@@ -2085,7 +2085,7 @@ export default {
     show_full_diff: "Afficher le diff complet ({count} lignes)",
     collapse_diff: "Réduire le diff",
     open_file_tooltip: "Ouvrir le fichier",
-    open_with_tooltip: "Ouvrir avec…",
+    open_with_tooltip: "Ouvrir le fichier",
   },
   agentWorkflow: {
     status_queued: "En file d'attente",
@@ -2466,6 +2466,7 @@ export default {
       "Impossible de reprendre l'outil après l'autorisation.",
     permission_resume_no_tool_id:
       "Informations d'appel d'outil manquantes ; impossible de continuer.",
+    auth_expired: "Votre session a expiré. Veuillez vous reconnecter.",
     quota_exhausted:
       "Les jetons IA inclus dans votre abonnement sont épuisés. Veuillez recharger votre compte pour continuer à utiliser les fonctions IA.",
     empty_response_error:

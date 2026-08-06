@@ -89,3 +89,62 @@ export function resolvePackagedWorkerPath(
 
   return null;
 }
+
+export interface BuildPackagedWorkerEnvOptions {
+  /**
+   * Extra env vars merged on top of process.env (e.g. WORKER_TYPE, tokens).
+   * Cannot override NODE_PATH / NODE_OPTIONS / ELECTRON_RUN_AS_NODE — those are
+   * forced by this helper so packaged workers always resolve app.asar deps.
+   */
+  extraEnv?: NodeJS.ProcessEnv | Record<string, string | undefined>;
+  /**
+   * When true, set ELECTRON_RUN_AS_NODE=1 for child_process.spawn workers that
+   * run Electron's binary as plain Node (GoogleMaps, ContactExtraction, etc.).
+   */
+  runAsNode?: boolean;
+  /** Injectable for unit tests. Defaults to process.resourcesPath. */
+  resourcesPath?: string;
+  /** Injectable for unit tests. Defaults to process.env.NODE_PATH. */
+  existingNodePath?: string;
+  /** Injectable for unit tests. Defaults to process.env. */
+  processEnv?: NodeJS.ProcessEnv;
+}
+
+/**
+ * Canonical env for every packaged child/utility worker spawn/fork.
+ *
+ * Unpacked workers under app.asar.unpacked cannot resolve bare requires for
+ * deps that only live in app.asar/node_modules (classic Windows
+ * MODULE_NOT_FOUND for puppeteer). Always set NODE_PATH via
+ * getPackagedWorkerNodePath. Call sites must use this helper — see
+ * PackagedWorkerEnvGuard.test.ts.
+ */
+export function buildPackagedWorkerEnv(
+  options: BuildPackagedWorkerEnvOptions = {}
+): NodeJS.ProcessEnv {
+  const processEnv = options.processEnv ?? process.env;
+  const electronProcess = process as NodeJS.Process & {
+    resourcesPath?: string;
+  };
+  const resourcesPath = options.resourcesPath ?? electronProcess.resourcesPath;
+  const existingNodePath =
+    options.existingNodePath !== undefined
+      ? options.existingNodePath
+      : processEnv.NODE_PATH;
+  const packagedNodePath = resourcesPath
+    ? getPackagedWorkerNodePath(resourcesPath, existingNodePath)
+    : existingNodePath;
+
+  const env: NodeJS.ProcessEnv = {
+    ...processEnv,
+    ...options.extraEnv,
+    NODE_OPTIONS: "",
+    NODE_PATH: packagedNodePath,
+  };
+
+  if (options.runAsNode) {
+    env.ELECTRON_RUN_AS_NODE = "1";
+  }
+
+  return env;
+}

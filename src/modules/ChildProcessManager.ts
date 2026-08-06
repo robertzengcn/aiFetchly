@@ -6,6 +6,7 @@ import { getCrashReporterFromGlobal } from "@/modules/diagnostics";
 import {
   getPackagedWorkerPathCandidates,
   resolvePackagedWorkerPath,
+  buildPackagedWorkerEnv,
 } from "@/utils/packagedWorkerPath";
 
 // Define missing interfaces based on usage
@@ -163,10 +164,7 @@ export class ChildProcessManager extends BaseModule {
       // Spawn the child process
       const childProcess = spawn(process.execPath, [workerPath], {
         stdio: ["pipe", "pipe", "pipe", "ipc"],
-        env: {
-          ...process.env,
-          ELECTRON_RUN_AS_NODE: "1",
-        }
+        env: buildPackagedWorkerEnv({ runAsNode: true }),
       });
 
       // Setup process event handlers

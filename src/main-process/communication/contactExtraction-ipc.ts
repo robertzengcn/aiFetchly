@@ -6,6 +6,7 @@
  */
 
 import { app, ipcMain, BrowserWindow } from "electron";
+import { buildPackagedWorkerEnv } from "@/utils/packagedWorkerPath";
 import { spawn, ChildProcess } from "child_process";
 import { v4 as uuidv4 } from "uuid";
 import { ContactInfoModule } from "@/modules/ContactInfoModule";
@@ -94,16 +95,16 @@ function spawnWorker(): ChildProcess {
   // WORKER_AI_ENABLED) and communicates over the ipc stdio channel.
   const worker = spawn(process.execPath, [workerPath], {
     stdio: ["pipe", "pipe", "pipe", "ipc"],
-    env: {
-      ...process.env,
-      NODE_OPTIONS: "",
-      ELECTRON_RUN_AS_NODE: "1",
-      ELECTRON_APP_NAME: app.getName(),
-      ELECTRON_USER_DATA_PATH: app.getPath("userData"),
-      WORKER_TYPE: "contact-extraction",
-      WORKER_AUTH_TOKEN: workerAuthToken,
-      WORKER_AI_ENABLED: workerAiEnabled,
-    },
+    env: buildPackagedWorkerEnv({
+      runAsNode: true,
+      extraEnv: {
+        ELECTRON_APP_NAME: app.getName(),
+        ELECTRON_USER_DATA_PATH: app.getPath("userData"),
+        WORKER_TYPE: "contact-extraction",
+        WORKER_AUTH_TOKEN: workerAuthToken,
+        WORKER_AI_ENABLED: workerAiEnabled,
+      },
+    }),
   });
 
   // Handle worker output

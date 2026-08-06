@@ -332,7 +332,7 @@ export class FileToolService {
 
     return {
       success: true,
-      path: params.path,
+      path: filePath,
       bytesWritten,
       mode: isOverwrite ? "overwritten" : "created",
     };
@@ -416,7 +416,7 @@ export class FileToolService {
 
     return {
       success: true,
-      path: params.path,
+      path: filePath,
       replacements: replaceAll ? matchCount : 1,
       diff: diffLines.join("\n"),
     };

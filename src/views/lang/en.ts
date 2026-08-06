@@ -2098,7 +2098,7 @@ export default {
     show_full_diff: "Show full diff ({count} lines)",
     collapse_diff: "Collapse diff",
     open_file_tooltip: "Open file",
-    open_with_tooltip: "Open with…",
+    open_with_tooltip: "Open file",
   },
   agentWorkflow: {
     status_queued: "Queued",
@@ -2461,6 +2461,7 @@ export default {
       "Could not continue the tool after permission was granted.",
     permission_resume_no_tool_id:
       "Missing tool call information; cannot continue execution.",
+    auth_expired: "Your session has expired. Please sign in again.",
     quota_exhausted:
       "The AI tokens included in your subscription plan have been exhausted. Please recharge your account to continue using AI features.",
     empty_response_error:

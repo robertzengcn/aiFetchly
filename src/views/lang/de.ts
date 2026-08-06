@@ -2094,7 +2094,7 @@ export default {
     show_full_diff: "Vollständigen Diff anzeigen ({count} Zeilen)",
     collapse_diff: "Diff einklappen",
     open_file_tooltip: "Datei öffnen",
-    open_with_tooltip: "Öffnen mit…",
+    open_with_tooltip: "Datei öffnen",
   },
   agentWorkflow: {
     status_queued: "In Warteschlange",
@@ -2474,6 +2474,8 @@ export default {
       "Das Werkzeug konnte nach der Freigabe nicht fortgesetzt werden.",
     permission_resume_no_tool_id:
       "Werkzeugaufrufinformationen fehlen; Fortsetzung nicht möglich.",
+    auth_expired:
+      "Ihre Sitzung ist abgelaufen. Bitte melden Sie sich erneut an.",
     quota_exhausted:
       "Die in Ihrem Abonnement enthaltenen KI-Token sind aufgebraucht. Bitte laden Sie Ihr Konto auf, um die KI-Funktionen weiterhin zu nutzen.",
     empty_response_error:

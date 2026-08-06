@@ -114,6 +114,14 @@ vi.mock("@/modules/AIChatV2Module", () => ({
 // Mock AiChatApi — openAIChatCompletionStream is controllable per-test.
 const mockOpenAIChatCompletionStream = vi.fn().mockResolvedValue(undefined);
 const mockListOpenAIModels = vi.fn().mockResolvedValue({ data: [] });
+const mockUserSignout = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+vi.mock("@/modules/user", () => ({
+  User: vi.fn().mockImplementation(() => ({
+    Signout: mockUserSignout,
+    removeToken: vi.fn().mockResolvedValue(undefined),
+  })),
+}));
+
 vi.mock("@/api/aiChatApi", () => ({
   AiChatApi: vi.fn().mockImplementation(() => ({
     openAIChatCompletionStream: mockOpenAIChatCompletionStream,
@@ -648,7 +656,8 @@ describe("AI Chat V2 — stream lifecycle", () => {
     );
   });
 
-  it("maps 401 errors to a sign-in prompt", async () => {
+  it("maps 401/403 errors to AUTH_EXPIRED and signs the user out", async () => {
+    mockUserSignout.mockClear();
     mockOpenAIChatCompletionStream.mockRejectedValue(
       new Error("Server returned 401: Unauthorized")
     );
@@ -662,7 +671,11 @@ describe("AI Chat V2 — stream lifecycle", () => {
 
     const payload = findCompletePayload(senderSend);
     expect(payload?.eventType).toBe("error");
-    expect(payload?.errorMessage).toBe("Please sign in again.");
+    expect(payload?.errorMessage).toBe("AUTH_EXPIRED");
+    // Signout is fire-and-forget; give the microtask a tick.
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(mockUserSignout).toHaveBeenCalled();
   });
 
   it("maps unmapped errors to a generic message (no raw leak)", async () => {

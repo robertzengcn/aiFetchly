@@ -274,7 +274,10 @@
           </v-icon>
         </div>
         <div v-if="showFileOpsPanel" class="v2-shell__file-ops-body">
-          <FileOperationBadge :records="currentFileOps" />
+          <FileOperationBadge
+            :records="currentFileOps"
+            :workspace-root="activeWorkspace?.rootPath"
+          />
         </div>
       </div>
 
@@ -746,6 +749,11 @@ import type { WorkspaceSummary } from "@/entityTypes/workspaceTypes";
 import type { FileOperationRecord } from "@/entityTypes/fileOperationTypes";
 import { extractArtifactMetadata, ensureArtifactMetadata } from "./artifactMetadata";
 import {
+  extractFileOperationsFromMessages,
+  mergeFileOperationRecords,
+  type MessageWithMaybeFileToolResult,
+} from "./fileOperationMetadata";
+import {
   subscribeToFileOperations,
   unsubscribeFromFileOperations,
 } from "@/views/api/aiChat";
@@ -768,7 +776,10 @@ import {
   readAiChatReasoningVisible,
   type AiChatReasoningVisibilityChangedDetail,
 } from "@/views/utils/aiChatReasoningPreference";
-import { QUOTA_EXHAUSTED_SENTINEL } from "@/service/AIChatErrorMapper";
+import {
+  AUTH_EXPIRED_SENTINEL,
+  QUOTA_EXHAUSTED_SENTINEL,
+} from "@/service/AIChatErrorMapper";
 
 /**
  * Rough chars→tokens ratio used to drive a live-updating estimate while
@@ -1280,6 +1291,18 @@ async function refreshWorkspace(conversationId: string | null): Promise<void> {
     activeWorkspace.value = null;
   }
   void refreshWorkspaceMemoryCount();
+  // Re-resolve relative file-op paths once workspace root is known.
+  if (
+    conversationId &&
+    activeConversationId.value === conversationId &&
+    messages.value.length > 0
+  ) {
+    hydrateFileOpsFromMessages(
+      conversationId,
+      messages.value,
+      activeWorkspace.value?.rootPath
+    );
+  }
 }
 
 /**
@@ -2165,6 +2188,29 @@ const overwriteCount = computed(
   () => currentFileOps.value.filter((r) => r.type === "overwrite").length
 );
 
+/**
+ * Rebuild the bottom file-ops panel from persisted tool_result messages.
+ * Live IPC records are session-only; without this, reopening a conversation
+ * from history hides AI-created file chips (same pattern as ensureArtifactMetadata).
+ */
+function hydrateFileOpsFromMessages(
+  conversationId: string,
+  msgs: readonly MessageWithMaybeFileToolResult[],
+  workspaceRoot?: string | null
+): void {
+  const fromHistory = extractFileOperationsFromMessages(
+    msgs,
+    conversationId,
+    workspaceRoot
+  );
+  const live = fileOps.value.get(conversationId) ?? [];
+  if (fromHistory.length === 0 && live.length === 0) return;
+  const merged = mergeFileOperationRecords(live, fromHistory);
+  const next = new Map(fileOps.value);
+  next.set(conversationId, merged);
+  fileOps.value = next;
+}
+
 const applyPlanState = (state: AIChatPlanStateView | null): void => {
   planState.value = state;
   if (
@@ -2209,6 +2255,12 @@ const mapStreamErrorMessage = (raw: string): string => {
     return (
       t("aiChatV2.quota_exhausted") ||
       "The AI tokens included in your subscription plan have been exhausted. Please recharge your account to continue using AI features."
+    );
+  }
+  if (raw === AUTH_EXPIRED_SENTINEL) {
+    return (
+      t("aiChatV2.auth_expired") ||
+      "Your session has expired. Please sign in again."
     );
   }
   return raw;
@@ -2395,6 +2447,13 @@ const loadHistory = async (conversationId: string): Promise<void> => {
         messages: messages.value,
       });
     }
+    // Restore bottom file-ops panel from persisted file_write/file_edit
+    // tool results. Live IPC records alone are wiped on reload.
+    hydrateFileOpsFromMessages(
+      conversationId,
+      messages.value,
+      activeWorkspace.value?.rootPath
+    );
     // Reset context-usage tracking for the loaded conversation. If any
     // history rows carry tokensUsed, seed the baseline estimate from the
     // most recent assistant message; otherwise start at zero until the
@@ -2496,6 +2555,9 @@ async function clearCurrentConversation(): Promise<void> {
     try {
       await clearChatV2Conversation(conversationId);
       clearConversationRuntimeState(conversationId);
+      const next = new Map(fileOps.value);
+      next.delete(conversationId);
+      fileOps.value = next;
     } catch (err) {
       streamError.value = err instanceof Error ? err.message : String(err);
       return;

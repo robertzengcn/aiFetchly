@@ -1,6 +1,7 @@
 // src/service/AIChatErrorMapper.ts
 
 import { AIProviderError } from "./aiProvider/AIProviderError";
+import { isAIChatRecoverableError } from "./AIChatRecoveryTypes";
 
 /**
  * Sentinel returned by {@link userSafeError} when the AI server reports
@@ -9,6 +10,42 @@ import { AIProviderError } from "./aiProvider/AIProviderError";
  * recharge prompt instead of the raw sentinel.
  */
 export const QUOTA_EXHAUSTED_SENTINEL = "QUOTA_EXHAUSTED";
+
+/**
+ * Sentinel returned by {@link userSafeError} when the hosted AI server reports
+ * HTTP 401/403 (session/access token expired or rejected). The main process
+ * signs the user out and navigates to login; the renderer maps this sentinel
+ * to a short translated message if the UI is still visible briefly.
+ */
+export const AUTH_EXPIRED_SENTINEL = "AUTH_EXPIRED";
+
+const AUTH_EXPIRED_MESSAGE_PATTERN =
+  /401|403|Authentication failed|Please login again|RefreshTokenInvalidError|refresh token rejected|invalid or expired refresh token|refresh token not found|refresh token has expired|refresh token is invalid|Forbidden/i;
+
+/**
+ * True when the failure means the hosted app session is no longer valid
+ * (AI server 401/403, refresh-token rejection, or classified auth recovery
+ * error). Local provider API-key failures ({@link AIProviderError}) are
+ * excluded — those should not force an app re-login.
+ */
+export function isAuthExpiredError(err: unknown): boolean {
+  if (err instanceof AIProviderError) {
+    return false;
+  }
+  if (isAIChatRecoverableError(err) && err.reason === "auth") {
+    return true;
+  }
+  if (err instanceof Error) {
+    if (err.name === "RefreshTokenInvalidError") {
+      return true;
+    }
+    return AUTH_EXPIRED_MESSAGE_PATTERN.test(err.message || "");
+  }
+  if (typeof err === "string") {
+    return AUTH_EXPIRED_MESSAGE_PATTERN.test(err);
+  }
+  return false;
+}
 
 /**
  * Build a single-line diagnostic for an unknown error: the top-level error's
@@ -69,12 +106,8 @@ export function userSafeError(err: unknown): string {
     ) {
       return QUOTA_EXHAUSTED_SENTINEL;
     }
-    if (
-      /401|403|Authentication failed: Token expired|Please login again|RefreshTokenInvalidError|refresh token rejected|invalid or expired refresh token|refresh token not found|refresh token has expired|refresh token is invalid/i.test(
-        msg
-      )
-    ) {
-      return "Please sign in again.";
+    if (isAuthExpiredError(err)) {
+      return AUTH_EXPIRED_SENTINEL;
     }
     if (/404/.test(msg)) {
       return "Selected model is not available.";
@@ -107,6 +140,9 @@ export function userSafeError(err: unknown): string {
       `[ai-chat-v2] unmapped error: ${msg} — ${describeErrorDetail(err)}`
     );
     return "An unexpected error occurred. Please try again.";
+  }
+  if (typeof err === "string" && isAuthExpiredError(err)) {
+    return AUTH_EXPIRED_SENTINEL;
   }
   return "Unknown error";
 }
