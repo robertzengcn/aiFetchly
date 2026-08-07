@@ -1,5 +1,6 @@
 import type {
   PluginError,
+  PluginSource,
   PluginSourceKind,
 } from "@/entityTypes/pluginTypes";
 
@@ -11,6 +12,10 @@ import type {
 export interface PluginSourceRequest {
   readonly kind: PluginSourceKind;
   readonly overwrite?: boolean;
+  /** Optional override for the installed row's `source` (e.g. "marketplace"). */
+  readonly source?: PluginSource;
+  /** Optional extra provenance merged into sourceMetaJson. */
+  readonly sourceMeta?: Record<string, unknown>;
   /** local-zip */
   readonly zipPath?: string;
   /** local-folder */

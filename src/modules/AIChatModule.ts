@@ -57,6 +57,32 @@ export class AIChatModule extends BaseModule {
   }
 
   /**
+   * Idempotent insert for scheduled-loop turns (technical-design §14.2). If a
+   * row with the message id already exists (crash-retry / restart), validate
+   * that it belongs to the same conversation and role and return it WITHOUT
+   * mutation. A conversation/role mismatch fails loudly (CONVERSATION_MISMATCH)
+   * so a stable-id collision across conversations cannot silently corrupt the
+   * transcript. When no row exists, insert as {@link saveMessage} would.
+   */
+  async saveMessageIfAbsent(
+    options: SaveMessageOptions
+  ): Promise<AIChatMessageEntity> {
+    const existing = await this.chatMessageModel.getMessageByMessageId(
+      options.messageId
+    );
+    if (existing) {
+      if (
+        existing.conversationId !== options.conversationId ||
+        existing.role !== options.role
+      ) {
+        throw new Error("CONVERSATION_MISMATCH");
+      }
+      return existing;
+    }
+    return this.saveMessage(options);
+  }
+
+  /**
    * Get messages for a conversation
    */
   async getConversationMessages(

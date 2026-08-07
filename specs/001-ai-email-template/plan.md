@@ -211,7 +211,7 @@ The implementation follows all mandatory project patterns:
 ## Dependencies
 
 ### External Dependencies
-- Remote AI server must be accessible (via `VITE_REMOTEADD`)
+- Remote AI server must be accessible
 - RAG embeddings API must be operational
 
 ### Internal Dependencies

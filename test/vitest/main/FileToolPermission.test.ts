@@ -1,8 +1,8 @@
 /**
  * Permission flow verification tests for AI file tools (US4).
  *
- * Verifies that read tools skip permission prompts while write/edit tools
- * trigger the filesystem permission category, and that the SkillExecutor
+ * Verifies that all file tools (read AND write/edit) trigger the filesystem
+ * permission category and require confirmation, and that the SkillExecutor
  * permission flow handles them correctly.
  */
 import { describe, it, expect } from "vitest";
@@ -11,31 +11,34 @@ import type { SkillDefinition } from "@/entityTypes/skillTypes";
 
 describe("File Tool Permission Flow", () => {
   // ---------------------------------------------------------------------------
-  // Read tools: no permission prompt
+  // All file tools (including reads) require the filesystem permission prompt.
+  // file_read/glob_files/grep_files were intentionally moved from 'pure' to
+  // 'filesystem' with requiresConfirmation=true (83101eda3) so the consent
+  // card appears before any file operation.
   // ---------------------------------------------------------------------------
 
-  describe("read tools bypass permission", () => {
-    it("file_read has permissionCategory 'pure'", () => {
+  describe("read tools require permission", () => {
+    it("file_read has permissionCategory 'filesystem'", () => {
       const skill = SkillRegistry.getSkill("file_read");
       expect(skill).not.toBeNull();
-      expect(skill!.permissionCategory).toBe("pure");
+      expect(skill!.permissionCategory).toBe("filesystem");
     });
 
-    it("file_read does not require confirmation", () => {
+    it("file_read requires confirmation", () => {
       const skill = SkillRegistry.getSkill("file_read");
-      expect(skill!.requiresConfirmation).toBe(false);
+      expect(skill!.requiresConfirmation).toBe(true);
     });
 
-    it("glob_files has permissionCategory 'pure'", () => {
+    it("glob_files has permissionCategory 'filesystem'", () => {
       const skill = SkillRegistry.getSkill("glob_files");
       expect(skill).not.toBeNull();
-      expect(skill!.permissionCategory).toBe("pure");
+      expect(skill!.permissionCategory).toBe("filesystem");
     });
 
-    it("grep_files has permissionCategory 'pure'", () => {
+    it("grep_files has permissionCategory 'filesystem'", () => {
       const skill = SkillRegistry.getSkill("grep_files");
       expect(skill).not.toBeNull();
-      expect(skill!.permissionCategory).toBe("pure");
+      expect(skill!.permissionCategory).toBe("filesystem");
     });
   });
 

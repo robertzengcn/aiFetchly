@@ -1,5 +1,8 @@
 import { MessageType } from "@/entityTypes/commonType";
-import type { ChatV2MessageView } from "@/entityTypes/aiChatV2Types";
+import type {
+  ChatV2MessageMetadata,
+  ChatV2MessageView,
+} from "@/entityTypes/aiChatV2Types";
 import { isPlanToolName } from "@/service/PlanModeToolPolicy";
 import { isEnterPlanModeToolName } from "@/service/EnterPlanModeTool";
 
@@ -41,4 +44,33 @@ export const hasPendingToolExecution = (
   }
 
   return pendingToolCallIds.size > 0 || anonymousToolCalls > 0;
+};
+
+export const clearToolProgressForToolResult = (
+  messages: ChatV2MessageView[],
+  toolCallId: string | undefined
+): ChatV2MessageView[] => {
+  if (!toolCallId) return messages;
+
+  let cleared = false;
+  const nextMessages = messages.map((message) => {
+    if (
+      message.messageType !== MessageType.TOOL_CALL ||
+      message.metadata?.toolCallId !== toolCallId ||
+      !message.metadata.toolProgress
+    ) {
+      return message;
+    }
+
+    const metadata: ChatV2MessageMetadata = { ...message.metadata };
+    delete metadata.toolProgress;
+    cleared = true;
+
+    return {
+      ...message,
+      metadata,
+    };
+  });
+
+  return cleared ? nextMessages : messages;
 };

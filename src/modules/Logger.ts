@@ -1,12 +1,47 @@
-import * as path from 'path';
-import * as os from 'os';
-import fs from 'fs';
+import * as path from "path";
+import * as os from "os";
+import fs from "fs";
 
 /** True when running in a worker/child process that has process.send (e.g. contact-extraction worker). */
 const isWorker =
-  typeof process !== 'undefined' &&
+  typeof process !== "undefined" &&
   !!process.env?.WORKER_TYPE &&
-  typeof process.send === 'function';
+  typeof process.send === "function";
+
+/** True outside production builds. Used to gate dev-only behavior like console mirroring. */
+const isDevelopment = process.env.NODE_ENV !== "production";
+
+/**
+ * Returns true when verbose "debug-level" file logging should be active.
+ *
+ * Enabled via either:
+ *   - env var AIFETCHLY_DEBUG_LOGS=true (manual override), or
+ *   - a diagnostics/.debug-enabled file inside Electron's userData dir containing an ISO
+ *     timestamp in the future (written by the diagnostics IPC handler).
+ *
+ * In production without either signal, this returns false and the file transport
+ * stays at 'warn', preventing debug/test chatter from polluting app.log.
+ */
+function isDebugLoggingEnabled(): boolean {
+  if (process.env.AIFETCHLY_DEBUG_LOGS === "true") return true;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const electron = require("electron") as typeof import("electron");
+    const app = electron?.app;
+    if (!app) return false;
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const debugPath = require("path").join(
+      app.getPath("userData"),
+      "diagnostics",
+      ".debug-enabled"
+    );
+    if (!fs.existsSync(debugPath)) return false;
+    const expiry = fs.readFileSync(debugPath, "utf8").trim();
+    return expiry.length > 0 && Date.parse(expiry) > Date.now();
+  } catch {
+    return false;
+  }
+}
 
 type GlobalLoggerState = typeof globalThis & {
   __aifetchlyLoggerInstance?: Logger;
@@ -25,18 +60,18 @@ function createWorkerLogProxy(): {
 } {
   const send = (level: string, ...args: unknown[]) => {
     try {
-      if (typeof process.send === 'function') {
-        process.send({ type: 'worker-log', level, args });
+      if (typeof process.send === "function") {
+        process.send({ type: "worker-log", level, args });
       }
     } catch (_) {
       // ignore send errors (e.g. channel closed)
     }
   };
   return {
-    info: (...args: unknown[]) => send('info', ...args),
-    error: (...args: unknown[]) => send('error', ...args),
-    warn: (...args: unknown[]) => send('warn', ...args),
-    debug: (...args: unknown[]) => send('debug', ...args),
+    info: (...args: unknown[]) => send("info", ...args),
+    error: (...args: unknown[]) => send("error", ...args),
+    warn: (...args: unknown[]) => send("warn", ...args),
+    debug: (...args: unknown[]) => send("debug", ...args),
   };
 }
 
@@ -52,7 +87,7 @@ function createWorkerLoggerStub(
   stopLogCleanup: () => void;
 } {
   return {
-    getLogDir: () => '',
+    getLogDir: () => "",
     getLogger: () => workerLog,
     scheduleLogCleanup: () => {
       // Worker process stub - no-op
@@ -67,15 +102,15 @@ function createWorkerLoggerStub(
 function getLogDirectory(): string {
   try {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const electron = require('electron') as typeof import('electron');
+    const electron = require("electron") as typeof import("electron");
     const app = electron?.app;
-    if (app && typeof app.getPath === 'function') {
-      return path.join(app.getPath('userData'), 'logs');
+    if (app && typeof app.getPath === "function") {
+      return path.join(app.getPath("userData"), "logs");
     }
   } catch {
     // electron not available (e.g. worker process)
   }
-  return path.join(os.tmpdir(), 'aifetchly-logs');
+  return path.join(os.tmpdir(), "aifetchly-logs");
 }
 
 /**
@@ -86,13 +121,18 @@ export class Logger {
   private static instance: Logger;
   private cleanupInterval: NodeJS.Timeout | null = null;
   private logDir: string;
-  private electronLog: { info: (...args: unknown[]) => void; error: (...args: unknown[]) => void; warn: (...args: unknown[]) => void; debug: (...args: unknown[]) => void };
+  private electronLog: {
+    info: (...args: unknown[]) => void;
+    error: (...args: unknown[]) => void;
+    warn: (...args: unknown[]) => void;
+    debug: (...args: unknown[]) => void;
+  };
 
   private constructor() {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const electronLogModule = require('electron-log/main');
+    const electronLogModule = require("electron-log/main");
     // Ensure electron-log has the required methods, fall back to console if not
-    if (electronLogModule && typeof electronLogModule.info === 'function') {
+    if (electronLogModule && typeof electronLogModule.info === "function") {
       this.electronLog = electronLogModule;
     } else {
       // Fallback to console if electron-log is not available
@@ -128,19 +168,28 @@ export class Logger {
     }
 
     const elog = this.electronLog;
-    if (typeof (elog as unknown as { initialize?: () => void }).initialize === 'function') {
+    if (
+      typeof (elog as unknown as { initialize?: () => void }).initialize ===
+      "function"
+    ) {
       (elog as unknown as { initialize: () => void }).initialize();
     }
     globalState.__aifetchlyLoggerInitialized = true;
 
-    if ((elog as unknown as { transports?: { file?: { level?: string } } }).transports?.file) {
-      (elog as unknown as { transports: { file: { level: string } } }).transports.file.level = 'debug';
+    // File transport: 'warn' in production by default, 'debug' only when
+    // explicit diagnostic/debug logging is enabled (PRD acceptance criterion:
+    // production startup must not write debug/test messages to app.log).
+    const fileTransport = (
+      elog as unknown as { transports?: { file?: { level?: string } } }
+    ).transports?.file;
+    if (fileTransport) {
+      fileTransport.level = isDebugLoggingEnabled() ? "debug" : "warn";
     }
 
     const today = new Date();
     const year = today.getFullYear();
-    const month = String(today.getMonth() + 1).padStart(2, '0');
-    const day = String(today.getDate()).padStart(2, '0');
+    const month = String(today.getMonth() + 1).padStart(2, "0");
+    const day = String(today.getDate()).padStart(2, "0");
     const dateFolder = `${year}-${month}-${day}`;
     const dailyLogDir = path.join(this.logDir, dateFolder);
 
@@ -151,51 +200,61 @@ export class Logger {
       if (!fs.existsSync(dailyLogDir)) {
         fs.mkdirSync(dailyLogDir, { recursive: true });
       }
-      elog.info(`Log directory created/verified at: ${this.logDir}`);
-      elog.info(`Daily log directory created/verified at: ${dailyLogDir}`);
+      // Intentionally no startup info log: production startup must stay quiet.
     } catch (err) {
-      console.error('Failed to create log directory:', err);
+      console.error("Failed to create log directory:", err);
     }
 
-    const logTransports = (elog as unknown as {
-      transports?: {
-        file?: {
-          fileName?: string;
-          resolvePathFn?: () => string;
-          maxSize?: number;
+    const logTransports = (
+      elog as unknown as {
+        transports?: {
+          file?: {
+            fileName?: string;
+            resolvePathFn?: () => string;
+            maxSize?: number;
+          };
         };
-      };
-    }).transports;
+      }
+    ).transports;
     if (logTransports?.file) {
-      logTransports.file.fileName = 'main.log';
+      logTransports.file.fileName = "main.log";
       const currentLogDir = this.logDir;
       logTransports.file.resolvePathFn = () => {
         const now = new Date();
         const y = now.getFullYear();
-        const m = String(now.getMonth() + 1).padStart(2, '0');
-        const d = String(now.getDate()).padStart(2, '0');
+        const m = String(now.getMonth() + 1).padStart(2, "0");
+        const d = String(now.getDate()).padStart(2, "0");
         const currentDateFolder = `${y}-${m}-${d}`;
         const currentDailyLogDir = path.join(currentLogDir, currentDateFolder);
         if (!fs.existsSync(currentDailyLogDir)) {
           try {
             fs.mkdirSync(currentDailyLogDir, { recursive: true });
           } catch (err) {
-            console.error('Failed to create daily log directory:', err);
+            console.error("Failed to create daily log directory:", err);
           }
         }
-        return path.join(currentDailyLogDir, 'main.log');
+        return path.join(currentDailyLogDir, "main.log");
       };
       logTransports.file.maxSize = 1000000;
     }
 
-    const logTransportsWithConsole = logTransports as { file?: unknown; console?: { level?: string } };
+    // Console transport: 'debug' in development so devs still see logs in the
+    // terminal; disabled entirely ('false') in production to keep stdout clean
+    // and ensure console.* calls do not echo through electron-log.
+    const logTransportsWithConsole = logTransports as {
+      file?: unknown;
+      console?: { level?: string | false };
+    };
     if (logTransportsWithConsole?.console) {
-      logTransportsWithConsole.console.level = 'debug';
+      logTransportsWithConsole.console.level = isDevelopment ? "debug" : false;
     }
 
-    this.setupConsoleOverrides();
-    elog.info('Console override test - this should appear in both terminal and log file');
-    this.verifyLogFile();
+    // Only monkey-patch console.* to mirror into electron-log during development.
+    // In production we leave the global console untouched (PRD acceptance
+    // criterion: calling console.log must not write to app.log in production).
+    if (isDevelopment) {
+      this.setupConsoleOverrides();
+    }
   }
 
   private setupConsoleOverrides(): void {
@@ -230,18 +289,6 @@ export class Logger {
     };
   }
 
-  private verifyLogFile(): void {
-    try {
-      const logFilePath = path.join(this.logDir, 'main.log');
-      console.log(`Log file path: ${logFilePath}`);
-      console.log(`Log file exists: ${fs.existsSync(logFilePath)}`);
-      this.electronLog.info('Testing log file write capability...');
-      console.log('Log file write test completed');
-    } catch (err) {
-      console.error('Error checking log file:', err);
-    }
-  }
-
   private cleanupOldLogs(): void {
     try {
       if (!fs.existsSync(this.logDir)) return;
@@ -265,13 +312,16 @@ export class Logger {
         });
       }
     } catch (err) {
-      console.error('Failed to cleanup old logs:', err);
+      console.error("Failed to cleanup old logs:", err);
     }
   }
 
   public scheduleLogCleanup(): void {
     setTimeout(() => this.cleanupOldLogs(), 5000);
-    this.cleanupInterval = setInterval(() => this.cleanupOldLogs(), 24 * 60 * 60 * 1000);
+    this.cleanupInterval = setInterval(
+      () => this.cleanupOldLogs(),
+      24 * 60 * 60 * 1000
+    );
   }
 
   public stopLogCleanup(): void {
@@ -310,9 +360,9 @@ if (isWorker) {
   logger = createWorkerLoggerStub(workerLog);
 } else {
   // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const electronLogModule = require('electron-log/main');
+  const electronLogModule = require("electron-log/main");
   // Ensure electron-log has the required methods, fall back to console if not
-  if (electronLogModule && typeof electronLogModule.info === 'function') {
+  if (electronLogModule && typeof electronLogModule.info === "function") {
     log = electronLogModule;
   } else {
     // Fallback to console if electron-log is not available

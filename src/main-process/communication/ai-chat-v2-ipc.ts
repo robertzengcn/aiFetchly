@@ -1,6 +1,8 @@
 import { ipcMain } from "electron";
 import { Token } from "@/modules/token";
-import { USER_AI_ENABLED } from "@/config/usersetting";
+import { AIProviderResolver } from "@/service/aiProvider/AIProviderResolver";
+import type { OpenAIChatCompletionRequest } from "@/api/aiChatApi";
+import { USERSDBPATH } from "@/config/usersetting";
 import { AiChatApi } from "@/api/aiChatApi";
 import { AIChatV2Module } from "@/modules/AIChatV2Module";
 import { AIChatPlanModule } from "@/modules/AIChatPlanModule";
@@ -10,9 +12,16 @@ import { AIChatQueryLoop } from "@/service/AIChatQueryLoop";
 import type { AIChatQueryLoopDeps } from "@/service/AIChatQueryLoop";
 import { AIChatQueryEngine } from "@/service/AIChatQueryEngine";
 import { AIChatCompactAgentService } from "@/service/AIChatCompactAgentService";
-import { getSharedAutoDreamService } from "@/service/AIAutoDreamFactory";
+import { AIChatModelFallbackService } from "@/service/AIChatModelFallbackService";
+import {
+  getSharedAutoDreamService,
+  resetSharedAutoDreamService,
+  getSharedWorkspaceAutoDreamService,
+  resetSharedWorkspaceAutoDreamService,
+} from "@/service/AIAutoDreamFactory";
 import { AIChatToolApprovalModule } from "@/modules/AIChatToolApprovalModule";
 import { evaluateToolApproval } from "@/service/AIChatToolApprovalPolicyService";
+import { redirectToLoginOnAuthExpired } from "@/service/AIChatAuthExpiredHandler";
 import { userSafeError } from "@/service/AIChatErrorMapper";
 import type {
   AIChatQueryEvent,
@@ -38,6 +47,7 @@ import {
   AI_CHAT_V2_COMPACT_CONVERSATION,
   AI_CHAT_V2_GET_TOOL_APPROVAL_MODE,
   AI_CHAT_V2_SET_TOOL_APPROVAL_MODE,
+  AI_CHAT_V2_READ_PASTE_CACHE,
 } from "@/config/channellist";
 import type {
   AIChatPlanStateView,
@@ -53,8 +63,12 @@ import type {
   ChatV2HistoryResponse,
   ChatV2ConversationSummary,
   ChatV2MessageMetadata,
+  ChatV2UploadedAttachment,
+  ChatV2AttachmentKind,
   ChatToolApprovalMode,
 } from "@/entityTypes/aiChatV2Types";
+import { aiChatV2PastedContentsSchema } from "@/schemas/aiChatV2PastedText";
+import { PasteStoreService } from "@/service/pastedText/PasteStoreService";
 
 /**
  * Minimal structural type for the IPC event object.
@@ -70,13 +84,19 @@ type IpcEventLike = {
 
 let queryEngine: AIChatQueryEngine | null = null;
 let compactAgent: AIChatCompactAgentService | null = null;
+let queryEngineDbPath: string | null = null;
+let compactAgentDbPath: string | null = null;
 
 /** Build the production AIChatQueryLoop with real service deps. */
 function createQueryLoop(): AIChatQueryLoop {
   const deps: AIChatQueryLoopDeps = {
     streamChatCompletion: (request, onChunk, options) => {
       const api = new AiChatApi();
-      return api.openAIChatCompletionStream(request, onChunk, options);
+      return api.openAIChatCompletionStream(
+        applyLocalToolPolicy(request),
+        onChunk,
+        options
+      );
     },
     executeTool: (name, args, context) => {
       // Tool approval mode check — auto-approve eligible tools without
@@ -110,28 +130,67 @@ function createQueryLoop(): AIChatQueryLoop {
       return SkillExecutor.execute(name, args, context);
     },
     getSkillDefinition: (name) => SkillRegistry.getSkill(name) ?? undefined,
+    resolveFallbackModel: async ({ originalModel, currentModel, reason }) => {
+      // Lazily construct the fallback service so we don't pay the catalog
+      // fetch on every loop construction — only when recovery triggers.
+      const svc = new AIChatModelFallbackService();
+      return svc.resolve({ originalModel, currentModel, reason });
+    },
   };
   return new AIChatQueryLoop(deps);
 }
 
+function getCurrentUserDbPath(): string | null {
+  const tokenService = new Token();
+  return tokenService.getValue(USERSDBPATH) || null;
+}
+
+export function resetAiChatV2RuntimeForDatabaseSwitch(): void {
+  if (queryEngine) {
+    queryEngine.stopActiveTurn();
+  }
+  queryEngine = null;
+  compactAgent = null;
+  queryEngineDbPath = null;
+  compactAgentDbPath = null;
+  resetSharedAutoDreamService();
+  resetSharedWorkspaceAutoDreamService();
+}
+
 function getCompactAgent(): AIChatCompactAgentService {
+  const dbPath = getCurrentUserDbPath();
+  if (compactAgent && compactAgentDbPath !== dbPath) {
+    compactAgent = null;
+    compactAgentDbPath = null;
+    resetSharedAutoDreamService();
+    resetSharedWorkspaceAutoDreamService();
+  }
   if (!compactAgent) {
     const tokenService = new Token();
     compactAgent = new AIChatCompactAgentService(tokenService, {
       completeChat: (request) => new AiChatApi().openAIChatCompletion(request),
-      isEnabled: () => tokenService.getValue(USER_AI_ENABLED) === "true",
+      // Compact follows the chat availability resolver so local-provider users
+      // can compact conversations without a hosted subscription.
+      isEnabled: () => canUseChat().ok,
     });
+    compactAgentDbPath = dbPath;
   }
   return compactAgent;
 }
 
 function getQueryEngine(): AIChatQueryEngine {
+  const dbPath = getCurrentUserDbPath();
+  if (queryEngine && queryEngineDbPath !== dbPath) {
+    resetAiChatV2RuntimeForDatabaseSwitch();
+  }
   if (!queryEngine) {
     const loop = createQueryLoop();
     queryEngine = new AIChatQueryEngine(loop, {
       compactAgent: getCompactAgent(),
       autoDreamService: getSharedAutoDreamService(),
+      workspaceAutoDreamService: getSharedWorkspaceAutoDreamService(),
     });
+    queryEngineDbPath = dbPath;
   }
   return queryEngine;
 }
@@ -140,10 +199,55 @@ function getQueryEngine(): AIChatQueryEngine {
 // IPC helpers
 // -------------------------------------------------------------------------
 
-function isAIEnabled(): boolean {
-  const tokenService = new Token();
-  const value = tokenService.getValue(USER_AI_ENABLED);
-  return value === "true";
+/**
+ * Chat availability resolver — shared across all AiChatV2 handlers. Allows the
+ * hosted path (subscribed) AND the local-provider path (valid config) while
+ * every hosted-only AI feature outside this file keeps its own
+ * `ensureHostedAIEnabled()` gate.
+ *
+ * Lazily constructed so importing this module does not touch electron-store.
+ */
+let chatResolver: AIProviderResolver | null = null;
+function getChatResolver(): AIProviderResolver {
+  if (!chatResolver) {
+    chatResolver = new AIProviderResolver();
+  }
+  return chatResolver;
+}
+
+function canUseChat(): { ok: true } | { ok: false; message: string } {
+  const provider = getChatResolver().resolveForChat();
+  if (provider.canUse) {
+    return { ok: true };
+  }
+  return { ok: false, message: provider.message };
+}
+
+/**
+ * When the active provider is local and tool support is not confirmed
+ * (capability "unsupported" or unknown/absent), strip tools from the request
+ * so the query loop runs plain chat. This is the conservative MVP behavior
+ * (design §23.1): unknown → no tools.
+ */
+function applyLocalToolPolicy(
+  request: OpenAIChatCompletionRequest
+): OpenAIChatCompletionRequest {
+  const provider = getChatResolver().resolveForChat();
+  if (!provider.canUse || provider.kind !== "local") {
+    return request;
+  }
+  const tools = provider.config.capabilities?.tools;
+  if (tools === "supported") {
+    return request;
+  }
+  // unsupported | unknown | failed → omit tools/tool_choice.
+  if (request.tools === undefined && request.tool_choice === undefined) {
+    return request;
+  }
+  const rest: OpenAIChatCompletionRequest = { ...request };
+  delete rest.tools;
+  delete rest.tool_choice;
+  return rest;
 }
 
 function denied<T>(msg: string): CommonMessage<T> {
@@ -207,6 +311,19 @@ function createEventSink(event: IpcEventLike): AIChatQueryEventSink {
             model: e.model,
           });
           break;
+        case "reasoning_delta":
+          // Log length only — never the reasoning text itself (SSR-3 / §14).
+          console.debug(
+            `[ai-chat-v2] reasoning_delta conv=${e.conversationId} message=${e.messageId} deltaLen=${e.reasoningDelta.length}`
+          );
+          sendChunk(event, {
+            eventType: "reasoning_delta",
+            conversationId: e.conversationId,
+            messageId: e.messageId,
+            reasoningDelta: e.reasoningDelta,
+            model: e.model,
+          });
+          break;
         case "retry_connect":
           sendChunk(event, {
             eventType: "retry_connect",
@@ -215,6 +332,23 @@ function createEventSink(event: IpcEventLike): AIChatQueryEventSink {
             retryAttempt: e.retryAttempt,
             retryMaxAttempts: e.retryMaxAttempts,
             retryDelayMs: e.retryDelayMs,
+          });
+          break;
+        case "recovery_status":
+          sendChunk(event, {
+            eventType: "recovery_status",
+            conversationId: e.conversationId,
+            messageId: e.messageId,
+            recoveryLayer: e.layer,
+            recoveryReason: e.reason,
+            recoveryAttempt: e.attempt,
+            recoveryMaxAttempts: e.maxAttempts,
+            recoveryDelayMs: e.delayMs,
+            recoveryElapsedMs: e.elapsedMs,
+            recoveryOriginalModel: e.originalModel,
+            recoveryCurrentModel: e.currentModel,
+            recoveryFallbackModel: e.fallbackModel,
+            recoveryMessage: e.message,
           });
           break;
         case "tool_progress":
@@ -315,6 +449,7 @@ function createEventSink(event: IpcEventLike): AIChatQueryEventSink {
             conversationId: e.conversationId,
             messageId: e.messageId,
             fullContent: e.fullContent,
+            images: e.images,
             model: e.model,
             finishReason: e.finishReason,
             promptTokens: e.promptTokens,
@@ -350,12 +485,16 @@ function createEventSink(event: IpcEventLike): AIChatQueryEventSink {
 function validateStreamRequest(
   req: Partial<ChatV2StreamRequest>
 ): string | null {
+  const hasFiles =
+    Array.isArray(req.uploadedFiles) && req.uploadedFiles.length > 0;
   if (
     !req ||
     typeof req.message !== "string" ||
     req.message.trim().length === 0
   ) {
-    return "Message must be a non-empty string";
+    if (!hasFiles) {
+      return "Message must be a non-empty string";
+    }
   }
   if (req.conversationId !== undefined && req.conversationId === "pending") {
     return "conversationId must not be 'pending'";
@@ -379,16 +518,191 @@ function validateStreamRequest(
   if (req.mode !== undefined && req.mode !== "chat" && req.mode !== "plan") {
     return "mode must be 'chat' or 'plan'";
   }
+  if (
+    req.toolApprovalMode !== undefined &&
+    req.toolApprovalMode !== "ask_for_approval" &&
+    req.toolApprovalMode !== "approve_for_me" &&
+    req.toolApprovalMode !== "full_access"
+  ) {
+    return "toolApprovalMode must be a valid approval mode";
+  }
+  if (
+    req.showReasoning !== undefined &&
+    typeof req.showReasoning !== "boolean"
+  ) {
+    return "showReasoning must be a boolean";
+  }
+  if (req.reasoning !== undefined) {
+    const reasoning = req.reasoning as {
+      enabled?: unknown;
+      effort?: unknown;
+      summary?: unknown;
+    };
+    if (
+      !reasoning ||
+      typeof reasoning !== "object" ||
+      Array.isArray(reasoning) ||
+      typeof reasoning.enabled !== "boolean"
+    ) {
+      return "reasoning must be an object with a boolean 'enabled' field";
+    }
+    if (
+      reasoning.effort !== undefined &&
+      (typeof reasoning.effort !== "string" ||
+        !["low", "medium", "high"].includes(reasoning.effort))
+    ) {
+      return "reasoning.effort must be one of low, medium, high";
+    }
+    if (
+      reasoning.summary !== undefined &&
+      (typeof reasoning.summary !== "string" ||
+        !["auto", "concise", "detailed"].includes(reasoning.summary))
+    ) {
+      return "reasoning.summary must be one of auto, concise, detailed";
+    }
+  }
+
+  if (req.pastedContents !== undefined) {
+    const parsed = aiChatV2PastedContentsSchema.safeParse(req.pastedContents);
+    if (!parsed.success) {
+      return parsed.error.issues[0]?.message ?? "invalid pastedContents";
+    }
+  }
   return null;
 }
+const MAX_UPLOAD_FILE_BYTES = 5 * 1024 * 1024;
+const MAX_TOTAL_IMAGE_BASE64_BYTES = 10 * 1024 * 1024;
+/**
+ * MIME types accepted for `kind === "image"` attachments. The persisted
+ * `previewDataUrl` is a `data:${mimeType};base64,...` URL rendered in the
+ * renderer DOM, so the MIME must be a real image type — a crafted payload
+ * (filename `.png` + `mimeType:"text/html"`) could otherwise persist a
+ * non-image `data:` URL that a future viewer might execute. Aligns with the
+ * image extensions the composer accepts (png/jpg/jpeg/webp/gif).
+ */
+const ALLOWED_IMAGE_MIME_TYPES = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/webp",
+  "image/gif",
+]);
+
+function classifyAttachment(
+  fileName: string,
+  mimeType: string
+): ChatV2AttachmentKind | null {
+  const name = fileName.toLowerCase();
+  const mime = mimeType.toLowerCase();
+
+  if (mime.startsWith("image/")) return "image";
+  if (name.endsWith(".png") || name.endsWith(".jpg") || name.endsWith(".jpeg"))
+    return "image";
+  if (name.endsWith(".webp") || name.endsWith(".gif")) return "image";
+
+  if (mime === "application/pdf" || name.endsWith(".pdf")) return "document";
+  if (
+    mime === "text/csv" ||
+    mime === "application/csv" ||
+    name.endsWith(".csv")
+  )
+    return "document";
+  if (name.endsWith(".docx") || mime.includes("wordprocessingml.document"))
+    return "document";
+  if (
+    name.endsWith(".xlsx") ||
+    name.endsWith(".xls") ||
+    mime.includes("spreadsheetml.sheet")
+  )
+    return "document";
+
+  return null;
+}
+
+function normalizeChatV2UploadedFiles(
+  input: unknown
+): ChatV2UploadedAttachment[] {
+  if (!Array.isArray(input)) return [];
+  const out: ChatV2UploadedAttachment[] = [];
+  let totalImageBase64Bytes = 0;
+
+  for (const item of input) {
+    if (!item || typeof item !== "object") continue;
+
+    const fileName =
+      typeof (item as Record<string, unknown>).fileName === "string"
+        ? ((item as Record<string, unknown>).fileName as string)
+        : "";
+    const mimeType =
+      typeof (item as Record<string, unknown>).mimeType === "string"
+        ? ((item as Record<string, unknown>).mimeType as string)
+        : "";
+    const sizeBytes =
+      typeof (item as Record<string, unknown>).sizeBytes === "number"
+        ? ((item as Record<string, unknown>).sizeBytes as number)
+        : 0;
+    const contentBase64 =
+      typeof (item as Record<string, unknown>).contentBase64 === "string"
+        ? ((item as Record<string, unknown>).contentBase64 as string)
+        : "";
+    const kind =
+      typeof (item as Record<string, unknown>).kind === "string"
+        ? ((item as Record<string, unknown>).kind as string)
+        : "";
+
+    if (!fileName || !contentBase64) continue;
+
+    // Classify attachment to verify kind matches content
+    const detectedKind = classifyAttachment(fileName, mimeType);
+    if (!detectedKind) continue;
+    if (kind !== "document" && kind !== "image") continue;
+    if (kind !== detectedKind) continue;
+
+    // Validate base64 length vs declared size
+    if (sizeBytes <= 0 || sizeBytes > MAX_UPLOAD_FILE_BYTES) continue;
+    try {
+      const decodedLen = Buffer.from(contentBase64, "base64").length;
+      if (decodedLen !== sizeBytes) continue;
+    } catch {
+      continue;
+    }
+
+    // Validate total image payload size
+    if (kind === "image") {
+      // Reject non-image MIME types (and any CR/LF/whitespace that could
+      // break the `data:` URL format) so only real image previews reach the
+      // persisted metadata the renderer trusts.
+      const normalizedMime = mimeType.toLowerCase();
+      if (
+        !ALLOWED_IMAGE_MIME_TYPES.has(normalizedMime) ||
+        /[\s\r\n]/.test(mimeType)
+      ) {
+        continue;
+      }
+      totalImageBase64Bytes += contentBase64.length;
+      if (totalImageBase64Bytes > MAX_TOTAL_IMAGE_BASE64_BYTES) continue;
+    }
+
+    out.push({
+      fileName,
+      mimeType,
+      sizeBytes,
+      contentBase64,
+      kind: kind as ChatV2AttachmentKind,
+    });
+  }
+
+  return out;
+}
+
 //handleStream is the main function that handles the stream request
 async function handleStream(event: IpcEventLike, data: string): Promise<void> {
-  // AI gate FIRST, before parsing request data.
-  if (!isAIEnabled()) {
+  // Chat availability gate FIRST, before parsing request data.
+  const chatAccess = canUseChat();
+  if (!chatAccess.ok) {
     sendComplete(event, {
       eventType: "error",
       conversationId: "",
-      errorMessage: "AI functionality is only available to subscribers.",
+      errorMessage: chatAccess.message,
     });
     return;
   }
@@ -418,7 +732,14 @@ async function handleStream(event: IpcEventLike, data: string): Promise<void> {
   const engine = getQueryEngine();
   const eventSink = createEventSink(event);
 
-  await engine.submitMessage({ request: req, eventSink });
+  // Normalize uploaded files
+  const uploadedFiles = normalizeChatV2UploadedFiles(req.uploadedFiles);
+  const processedReq = {
+    ...req,
+    uploadedFiles: uploadedFiles.length > 0 ? uploadedFiles : undefined,
+  };
+
+  await engine.submitMessage({ request: processedReq, eventSink });
 }
 
 function handleStop(): void {
@@ -430,15 +751,27 @@ function handleStop(): void {
 // -------------------------------------------------------------------------
 
 async function handleResumeToolAfterPermission(
-  data: string
+  data: unknown
 ): Promise<CommonMessage<{ ok: boolean; error?: string } | null>> {
-  if (!isAIEnabled()) {
-    return denied("AI functionality is only available to subscribers.");
+  const chatAccess = canUseChat();
+  if (!chatAccess.ok) {
+    return denied(chatAccess.message);
   }
 
-  const parsed = data
-    ? (JSON.parse(data) as { toolId?: string; conversationId?: string })
-    : {};
+  let parsed: { toolId?: unknown; conversationId?: unknown };
+  try {
+    parsed =
+      typeof data === "string"
+        ? ((data ? JSON.parse(data) : {}) as {
+            toolId?: unknown;
+            conversationId?: unknown;
+          })
+        : data && typeof data === "object"
+        ? (data as { toolId?: unknown; conversationId?: unknown })
+        : {};
+  } catch {
+    return denied("Invalid resume payload");
+  }
   if (!parsed.toolId || typeof parsed.toolId !== "string") {
     return denied("toolId is required");
   }
@@ -446,7 +779,10 @@ async function handleResumeToolAfterPermission(
   const engine = getQueryEngine();
   const result = await engine.resumeToolAfterPermission({
     toolId: parsed.toolId,
-    conversationId: parsed.conversationId,
+    conversationId:
+      typeof parsed.conversationId === "string"
+        ? parsed.conversationId
+        : undefined,
   });
   return ok(result);
 }
@@ -456,8 +792,9 @@ async function handleResumeToolAfterPermission(
 // -------------------------------------------------------------------------
 
 async function handleModels(): Promise<CommonMessage<unknown>> {
-  if (!isAIEnabled()) {
-    return denied("AI functionality is only available to subscribers.");
+  const chatAccess = canUseChat();
+  if (!chatAccess.ok) {
+    return denied(chatAccess.message);
   }
   try {
     const api = new AiChatApi();
@@ -471,15 +808,25 @@ async function handleModels(): Promise<CommonMessage<unknown>> {
 async function handleConversations(
   data?: string
 ): Promise<CommonMessage<ChatV2ConversationSummary[]>> {
-  if (!isAIEnabled()) {
-    return denied("AI functionality is only available to subscribers.");
+  const chatAccess = canUseChat();
+  if (!chatAccess.ok) {
+    return denied(chatAccess.message);
   }
   try {
     const req = data ? JSON.parse(data) : {};
     const searchQuery =
       typeof req.searchQuery === "string" ? req.searchQuery : undefined;
     const module = new AIChatV2Module();
-    return ok(await module.getConversations(searchQuery));
+    const summaries = await module.getConversations(searchQuery);
+    const engine = getQueryEngine();
+    return ok(
+      summaries.map((summary) => ({
+        ...summary,
+        runtimeStatus: engine.getConversationRuntimeStatus(
+          summary.conversationId
+        ),
+      }))
+    );
   } catch (err) {
     return denied(userSafeError(err));
   }
@@ -487,13 +834,14 @@ async function handleConversations(
 
 async function handleHistory(
   _e: IpcEventLike,
-  data: string
+  data: unknown
 ): Promise<CommonMessage<ChatV2HistoryResponse | null>> {
-  if (!isAIEnabled()) {
-    return denied("AI functionality is only available to subscribers.");
+  const chatAccess = canUseChat();
+  if (!chatAccess.ok) {
+    return denied(chatAccess.message);
   }
   try {
-    const req = JSON.parse(data ?? "{}");
+    const req = parseObjectPayload(data);
     if (typeof req.conversationId !== "string") {
       return denied("conversationId must be a string");
     }
@@ -508,7 +856,7 @@ async function handleHistory(
       conversationId: r.conversationId,
       role: (r.role as ChatV2MessageView["role"]) ?? "user",
       content: r.content,
-      timestamp: r.timestamp.toISOString(),
+      timestamp: serializeHistoryTimestamp(r.timestamp),
       messageType: r.messageType,
       model: r.model,
       tokensUsed: r.tokensUsed,
@@ -518,6 +866,8 @@ async function handleHistory(
       conversationId,
       messages: views,
       totalMessages: views.length,
+      runtimeStatus:
+        getQueryEngine().getConversationRuntimeStatus(conversationId),
     });
   } catch (err) {
     return denied(userSafeError(err));
@@ -528,8 +878,9 @@ async function handleClearConversation(
   _e: IpcEventLike,
   data: string
 ): Promise<CommonMessage<{ deleted: number } | null>> {
-  if (!isAIEnabled()) {
-    return denied("AI functionality is only available to subscribers.");
+  const chatAccess = canUseChat();
+  if (!chatAccess.ok) {
+    return denied(chatAccess.message);
   }
   try {
     const req = JSON.parse(data ?? "{}");
@@ -558,8 +909,9 @@ async function handleClearConversation(
 async function handleClearAll(): Promise<
   CommonMessage<{ deleted: number } | null>
 > {
-  if (!isAIEnabled()) {
-    return denied("AI functionality is only available to subscribers.");
+  const chatAccess = canUseChat();
+  if (!chatAccess.ok) {
+    return denied(chatAccess.message);
   }
   try {
     const module = new AIChatV2Module();
@@ -577,8 +929,9 @@ async function handleClearAll(): Promise<
 async function handlePlanState(
   data: string
 ): Promise<CommonMessage<AIChatPlanStateView | null>> {
-  if (!isAIEnabled()) {
-    return denied("AI functionality is only available to subscribers.");
+  const chatAccess = canUseChat();
+  if (!chatAccess.ok) {
+    return denied(chatAccess.message);
   }
   try {
     const req = data ? JSON.parse(data) : {};
@@ -596,8 +949,9 @@ async function handlePlanState(
 async function handleAnswerQuestion(
   data: string
 ): Promise<CommonMessage<{ ok: boolean; error?: string } | null>> {
-  if (!isAIEnabled()) {
-    return denied("AI functionality is only available to subscribers.");
+  const chatAccess = canUseChat();
+  if (!chatAccess.ok) {
+    return denied(chatAccess.message);
   }
   const parsed = data
     ? (JSON.parse(data) as {
@@ -628,8 +982,9 @@ async function handleAnswerQuestion(
 async function handleApprovePlan(
   data: string
 ): Promise<CommonMessage<AIChatPlanStateView | null>> {
-  if (!isAIEnabled()) {
-    return denied("AI functionality is only available to subscribers.");
+  const chatAccess = canUseChat();
+  if (!chatAccess.ok) {
+    return denied(chatAccess.message);
   }
   const parsed = data
     ? (JSON.parse(data) as {
@@ -663,8 +1018,9 @@ async function handleApprovePlan(
 async function handleRejectPlan(
   data: string
 ): Promise<CommonMessage<AIChatPlanStateView | null>> {
-  if (!isAIEnabled()) {
-    return denied("AI functionality is only available to subscribers.");
+  const chatAccess = canUseChat();
+  if (!chatAccess.ok) {
+    return denied(chatAccess.message);
   }
   const parsed = data
     ? (JSON.parse(data) as {
@@ -700,8 +1056,9 @@ async function handleRejectPlan(
 async function handleRequestPlanChanges(
   data: string
 ): Promise<CommonMessage<AIChatPlanStateView | null>> {
-  if (!isAIEnabled()) {
-    return denied("AI functionality is only available to subscribers.");
+  const chatAccess = canUseChat();
+  if (!chatAccess.ok) {
+    return denied(chatAccess.message);
   }
   const parsed = data
     ? (JSON.parse(data) as {
@@ -740,8 +1097,9 @@ async function handleRequestPlanChanges(
 async function handlePlanVersions(
   data: string
 ): Promise<CommonMessage<AIChatPlanVersionView[] | null>> {
-  if (!isAIEnabled()) {
-    return denied("AI functionality is only available to subscribers.");
+  const chatAccess = canUseChat();
+  if (!chatAccess.ok) {
+    return denied(chatAccess.message);
   }
   const parsed = data ? (JSON.parse(data) as { planId?: string }) : {};
   if (!parsed.planId) {
@@ -759,8 +1117,9 @@ async function handlePlanVersions(
 async function handleCompactConversation(
   data: string
 ): Promise<CommonMessage<AIChatCompactSummaryView | null>> {
-  if (!isAIEnabled()) {
-    return denied("AI functionality is only available to subscribers.");
+  const chatAccess = canUseChat();
+  if (!chatAccess.ok) {
+    return denied(chatAccess.message);
   }
   const parsed = data
     ? (JSON.parse(data) as { conversationId?: string; model?: string })
@@ -816,8 +1175,9 @@ function parseSetApprovalModePayload(
 async function handleGetToolApprovalMode(
   data: string
 ): Promise<CommonMessage<string>> {
-  if (!isAIEnabled()) {
-    return denied("AI functionality is only available to subscribers.");
+  const chatAccess = canUseChat();
+  if (!chatAccess.ok) {
+    return denied(chatAccess.message);
   }
   const parsed = data ? (JSON.parse(data) as { conversationId?: string }) : {};
   if (!parsed.conversationId) {
@@ -835,8 +1195,9 @@ async function handleGetToolApprovalMode(
 async function handleSetToolApprovalMode(
   data: string
 ): Promise<CommonMessage<string>> {
-  if (!isAIEnabled()) {
-    return denied("AI functionality is only available to subscribers.");
+  const chatAccess = canUseChat();
+  if (!chatAccess.ok) {
+    return denied(chatAccess.message);
   }
   const payload = parseSetApprovalModePayload(data);
   if (!payload) {
@@ -848,12 +1209,43 @@ async function handleSetToolApprovalMode(
       payload.conversationId,
       payload.mode as ChatToolApprovalMode
     );
-    // Return the stored mode (in case of downgrade from full_access)
-    const saved = module.getMode(payload.conversationId);
-    return ok(saved);
+    // Return the mode that was just set. Do NOT call getMode() here —
+    // its startup-reset downgrades full_access back to ask_for_approval
+    // on the very first read, making it impossible to select "Full access".
+    return ok(payload.mode);
   } catch (err) {
     return denied(userSafeError(err));
   }
+}
+
+function parseObjectPayload(data: unknown): Record<string, unknown> {
+  if (!data) {
+    return {};
+  }
+  if (typeof data === "string") {
+    return (data ? JSON.parse(data) : {}) as Record<string, unknown>;
+  }
+  if (typeof data === "object") {
+    return data as Record<string, unknown>;
+  }
+  return {};
+}
+
+function serializeHistoryTimestamp(timestamp: unknown): string {
+  if (timestamp instanceof Date) {
+    return timestamp.toISOString();
+  }
+  if (typeof timestamp === "string") {
+    const date = new Date(timestamp);
+    return Number.isNaN(date.getTime()) ? timestamp : date.toISOString();
+  }
+  if (typeof timestamp === "number") {
+    const date = new Date(timestamp);
+    return Number.isNaN(date.getTime())
+      ? new Date(0).toISOString()
+      : date.toISOString();
+  }
+  return new Date(0).toISOString();
 }
 
 function parseMetadata(raw?: string | null): ChatV2MessageMetadata | undefined {
@@ -862,8 +1254,17 @@ function parseMetadata(raw?: string | null): ChatV2MessageMetadata | undefined {
   }
   try {
     const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed === "object" && parsed.source === "chat-v2") {
-      return parsed as ChatV2MessageMetadata;
+    if (parsed && typeof parsed === "object") {
+      const metadata = parsed as Partial<ChatV2MessageMetadata>;
+      if (metadata.source === "chat-v2") {
+        return metadata as ChatV2MessageMetadata;
+      }
+      if (metadata.reasoning) {
+        return {
+          ...metadata,
+          source: "chat-v2",
+        } as ChatV2MessageMetadata;
+      }
     }
   } catch {
     // ignore
@@ -871,18 +1272,53 @@ function parseMetadata(raw?: string | null): ChatV2MessageMetadata | undefined {
   return undefined;
 }
 
+async function handleReadPasteCache(
+  data: unknown
+): Promise<CommonMessage<string | null>> {
+  const chatAccess = canUseChat();
+  if (!chatAccess.ok) {
+    return denied(chatAccess.message);
+  }
+
+  const candidate: unknown =
+    typeof data === "string"
+      ? data
+      : (() => {
+          const req = parseObjectPayload(data);
+          return (
+            req.contentHash ?? req.hash ?? req.pasteCacheHash ?? req.pasteHash
+          );
+        })();
+
+  if (typeof candidate !== "string") {
+    return denied("hash must be a string");
+  }
+
+  const hash = candidate.trim().toLowerCase();
+  if (!/^[a-f0-9]{16}$/.test(hash)) {
+    return denied("invalid paste cache hash");
+  }
+
+  try {
+    const store = new PasteStoreService();
+    const content = await store.read(hash);
+    return ok(content);
+  } catch (err) {
+    return denied(userSafeError(err));
+  }
+}
+
 export function registerAiChatV2IpcHandlers(): void {
   ipcMain.handle(
     AI_CHAT_V2_RESUME_TOOL_AFTER_PERMISSION,
-    async (_e, data: unknown) =>
-      handleResumeToolAfterPermission((data as string) ?? "")
+    async (_e, data: unknown) => handleResumeToolAfterPermission(data ?? "")
   );
   ipcMain.handle(AI_CHAT_V2_MODELS, async () => handleModels());
   ipcMain.handle(AI_CHAT_V2_CONVERSATIONS, async (_e, data: unknown) =>
     handleConversations(data as string)
   );
   ipcMain.handle(AI_CHAT_V2_HISTORY, async (_e, data: unknown) =>
-    handleHistory(_e as IpcEventLike, data as string)
+    handleHistory(_e as IpcEventLike, data)
   );
   ipcMain.handle(AI_CHAT_V2_CLEAR_CONVERSATION, async (_e, data: unknown) =>
     handleClearConversation(_e as IpcEventLike, data as string)
@@ -915,12 +1351,16 @@ export function registerAiChatV2IpcHandlers(): void {
   ipcMain.handle(AI_CHAT_V2_SET_TOOL_APPROVAL_MODE, async (_e, data: unknown) =>
     handleSetToolApprovalMode((data as string) ?? "")
   );
+  ipcMain.handle(AI_CHAT_V2_READ_PASTE_CACHE, async (_e, data: unknown) =>
+    handleReadPasteCache(data)
+  );
   // Stream handler send message to the AI engine and receive chunks back
   ipcMain.on(AI_CHAT_V2_STREAM, async (event, data: unknown) => {
     try {
       await handleStream(event as IpcEventLike, data as string);
     } catch (err) {
       console.error("[ai-chat-v2] unhandled stream error:", err);
+      void redirectToLoginOnAuthExpired(err);
       const evt = event as IpcEventLike;
       sendComplete(evt, {
         eventType: "error",

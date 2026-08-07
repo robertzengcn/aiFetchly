@@ -1,5 +1,5 @@
 "use strict";
-import { describe, expect, test } from "vitest";
+import { expect } from "chai";
 import type { SkillManifest } from "@/entityTypes/skillTypes";
 import {
   SystemDependencyCatalog,
@@ -8,7 +8,7 @@ import {
 import { SystemDependencyResolver } from "@/service/SystemDependencyResolver";
 
 describe("SystemDependencyModule.resolve()", () => {
-  test("resolve with known failure returns recommendation with platform_candidates", () => {
+  it("resolve with known failure returns recommendation with platform_candidates", () => {
     // Unit test — module.resolve delegates to resolver
     // We verify the contract: known stderr + manifest → resolved with candidates
     const input = {
@@ -48,13 +48,13 @@ describe("SystemDependencyModule.resolve()", () => {
     const resolver = new SystemDependencyResolver(catalog);
     const result = resolver.resolve(input);
 
-    expect(result.resolved).toBe(true);
-    expect(result.dependency_id).toBe("poppler");
-    expect(result.platform_candidates?.darwin).toBeDefined();
-    expect(result.requires_manual_review).toBe(false);
+    expect(result.resolved).to.equal(true);
+    expect(result.dependency_id).to.equal("poppler");
+    expect(result.platform_candidates?.darwin).to.not.equal(undefined);
+    expect(result.requires_manual_review).to.equal(false);
   });
 
-  test("resolve with low confidence flags manual review", () => {
+  it("resolve with low confidence flags manual review", () => {
     const catalogData = {
       version: 1,
       dependencies: {
@@ -76,11 +76,11 @@ describe("SystemDependencyModule.resolve()", () => {
       platform: "darwin" as NodeJS.Platform,
     });
 
-    expect(result.resolved).toBe(true);
-    expect(result.requires_manual_review).toBe(true);
+    expect(result.resolved).to.equal(true);
+    expect(result.requires_manual_review).to.equal(true);
   });
 
-  test("resolve with unknown error returns not-resolved", () => {
+  it("resolve with unknown error returns not-resolved", () => {
     const catalogData = {
       version: 1,
       dependencies: {},
@@ -95,7 +95,7 @@ describe("SystemDependencyModule.resolve()", () => {
       platform: "darwin" as NodeJS.Platform,
     });
 
-    expect(result.resolved).toBe(false);
-    expect(result.confidence).toBe(0);
+    expect(result.resolved).to.equal(false);
+    expect(result.confidence).to.equal(0);
   });
 });

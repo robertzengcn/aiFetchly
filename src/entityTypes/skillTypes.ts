@@ -8,6 +8,10 @@
 
 import type { ToolFunction } from "@/api/aiChatApi";
 import type { ToolTimeoutClass } from "@/service/ToolTimeoutPolicy";
+import type {
+  ModelArtifact,
+  PermissionPreview,
+} from "@/entityTypes/aiImageAttachmentToolTypes";
 
 /**
  * Result returned by a skill's execute function.
@@ -16,6 +20,17 @@ import type { ToolTimeoutClass } from "@/service/ToolTimeoutPolicy";
 export interface SkillExecutionResult {
   readonly success: boolean;
   readonly result: Record<string, unknown>;
+  /**
+   * Transient model artifacts (e.g. prepared images) destined for the next AI
+   * request round. This is a SIBLING of `result`, never a child, so that the
+   * metadata-only serializers (normalizeToolResult, hooks, persistence, renderer
+   * events) — which spread only `result` — naturally exclude it.
+   *
+   * The query loop reads this off the wrapped ToolExecutionResult and appends a
+   * model-only handoff message. It MUST NOT be persisted, logged, emitted to the
+   * renderer, or passed to hooks.
+   */
+  readonly modelArtifacts?: readonly ModelArtifact[];
 }
 
 // ---------------------------------------------------------------------------
@@ -154,6 +169,21 @@ export interface SkillDefinition {
    * plugin is enabled (plugin.enabled && skill.enabled). (Design §8.3)
    */
   readonly pluginOwner?: string;
+
+  /**
+   * Optional metadata-only permission preview builder. When a tool requires
+   * confirmation, SkillExecutor calls this with the (already-sanitized)
+   * resolved args and attaches the returned preview to the deferred
+   * permission-result so the UI can describe the call beyond the generic
+   * category prompt (e.g. listing the files that will be transferred).
+   *
+   * The returned `items` are UNVALIDATED requested values for display only.
+   * They are never treated as proof of safety — the skill re-validates paths
+   * after approval.
+   */
+  readonly buildPermissionPreview?: (
+    args: Record<string, unknown>
+  ) => PermissionPreview | undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -173,6 +203,9 @@ export interface SkillExecutionContext {
 
   /** Arguments from the LLM's tool_call event. */
   readonly args?: Record<string, unknown>;
+
+  /** Chat model selected for the parent turn that invoked this skill. */
+  readonly model?: string;
 
   /**
    * When true, the caller has already obtained user consent (e.g. via
@@ -200,6 +233,24 @@ export interface SkillExecutionContext {
    * signal.aborted between long steps to fail fast.
    */
   readonly signal?: AbortSignal;
+
+  /**
+   * Number of `image_url` content parts already present in the outgoing
+   * request transcript, computed by AIChatQueryLoop immediately before tool
+   * execution. Image-attaching tools use this to enforce the combined
+   * per-request image cap (<= 3) across user-selected AND tool-selected
+   * images. Undefined when the caller does not supply it (tools should
+   * treat undefined as 0).
+   */
+  readonly currentRequestImageCount?: number;
+
+  /**
+   * Total character length of all `image_url.url` data URLs already present
+   * in the outgoing request transcript, computed by AIChatQueryLoop. Lets
+   * image-attaching tools enforce the cumulative client data-URL budget
+   * (<= 6,000,000 chars). Undefined when the caller does not supply it.
+   */
+  readonly currentRequestImageDataUrlChars?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -228,6 +279,11 @@ export interface ToolProgressEvent {
 export interface ModuleExecutionContext {
   /** Server-assigned tool call ID for correlating request/response. */
   readonly toolCallId: string;
+  /**
+   * When true, the caller already obtained user consent for this exact tool
+   * call. Nested ToolExecutor calls must not prompt again.
+   */
+  readonly skipPermissionCheck?: boolean;
   /**
    * Emits a progress event for this tool call. Optional — when absent the
    * module should silently skip (no crash, no behavior change).

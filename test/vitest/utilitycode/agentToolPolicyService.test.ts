@@ -17,6 +17,9 @@ const researcher: AgentDefinitionView = {
   maxContinueCalls: 8,
   outputSchema: {},
   status: "active",
+  source: "built-in",
+  health: "healthy",
+  manifest: {},
 };
 
 describe("AgentToolPolicyService", () => {

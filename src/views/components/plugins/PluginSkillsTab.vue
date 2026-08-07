@@ -27,7 +27,9 @@
       </tr>
     </tbody>
   </v-table>
-  <div v-else class="text-grey pa-4">No skills in this plugin.</div>
+  <div v-else class="text-grey pa-4">
+    {{ t("plugins.no_skills") || "No skills in this plugin." }}
+  </div>
 </template>
 
 <script setup lang="ts">

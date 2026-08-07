@@ -17,6 +17,15 @@ import type {
   GoogleMapsProgressStatus,
 } from "@/entityTypes/googleMapsTypes";
 import type { YellowPagesTaskProxyConfig } from "@/entityTypes/yellowPagesTaskProxyType";
+import { safeGoto } from "@/childprocess/google-maps/mapsNavigation";
+import {
+  collectMapsPageDiagnostics,
+  countMapsResultCards,
+  formatMapsPageDiagnostics,
+  queryMapsResultCards,
+  scrollMapsResultsList,
+  waitForMapsResultsReady,
+} from "@/childprocess/google-maps/mapsResultsReady";
 
 // ---------------------------------------------------------------------------
 // Message types (internal)
@@ -63,8 +72,33 @@ interface ResultMessage {
 // State
 // ---------------------------------------------------------------------------
 
+const workerStartedAt = new Date().toISOString();
 let browser: Browser | null = null;
 let isCancelled = false;
+
+function describeError(error: unknown): string {
+  if (error instanceof Error) {
+    return error.stack ?? `${error.name}: ${error.message}`;
+  }
+  return String(error);
+}
+
+function logWorkerEvent(message: string, error?: unknown): void {
+  const suffix = error === undefined ? "" : `\n${describeError(error)}`;
+  console.error(
+    `[GoogleMapsWorker] pid=${process.pid} started=${workerStartedAt} ${message}${suffix}`
+  );
+}
+
+process.on("uncaughtException", (error: unknown) => {
+  logWorkerEvent("uncaughtException", error);
+});
+
+process.on("unhandledRejection", (reason: unknown) => {
+  logWorkerEvent("unhandledRejection", reason);
+});
+
+logWorkerEvent(`started execPath=${process.execPath} cwd=${process.cwd()}`);
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -217,10 +251,16 @@ function deduplicate(
 async function scrapeGoogleMaps(msg: StartMessage): Promise<void> {
   const { requestId, query, location, maxResults, showBrowser } = msg;
   isCancelled = false;
+  logWorkerEvent(
+    `starting scrape requestId=${requestId} query=${JSON.stringify(
+      query
+    )} location=${JSON.stringify(location)} maxResults=${maxResults}`
+  );
 
   try {
     // Launch browser
     sendProgress(requestId, "launching", 0, maxResults, "Launching browser...");
+    logWorkerEvent(`launching browser requestId=${requestId}`);
     browser = await launch({
       headless: !showBrowser,
       args: [
@@ -230,6 +270,7 @@ async function scrapeGoogleMaps(msg: StartMessage): Promise<void> {
         "--disable-gpu",
       ],
     });
+    logWorkerEvent(`browser launched requestId=${requestId}`);
 
     const page = await browser.newPage();
     await page.setViewport({ width: 1280, height: 800 });
@@ -263,33 +304,92 @@ async function scrapeGoogleMaps(msg: StartMessage): Promise<void> {
       );
     }
 
-    // Navigate to Google Maps search
+    // Navigate to Google Maps search. Use waitUntil="domcontentloaded" — not
+    // "networkidle2", which never resolves on Google Maps and causes a spurious
+    // 30s navigation timeout. safeGoto additionally recovers from such a
+    // timeout. Readiness is multi-signal (feed / cards / place), not feed-only.
     sendProgress(requestId, "loading", 0, maxResults, "Loading Google Maps...");
     const searchUrl = `https://www.google.com/maps/search/${encodeURIComponent(
       query
     )}+${encodeURIComponent(location)}`;
-    await page.goto(searchUrl, { waitUntil: "networkidle2", timeout: 30000 });
+    console.log(`[DEBUG] Navigating to ${searchUrl}`);
+    await safeGoto(page, searchUrl, {
+      timeout: 30000,
+      waitUntil: "domcontentloaded",
+    });
 
-    // Wait for results feed to load
+    // Wait for scrapable results UI (consent dismiss + feed/cards/place)
     sendProgress(requestId, "loading", 0, maxResults, "Waiting for results...");
+    const initialDiag = await collectMapsPageDiagnostics(page);
+    console.log(
+      `[DEBUG] Post-navigation diagnostics: ${formatMapsPageDiagnostics(
+        initialDiag
+      )}`
+    );
 
+    let readyState: "feed" | "cards" | "place";
     try {
-      await page.waitForSelector('[role="feed"]', { timeout: 15000 });
-    } catch {
-      // Try dismissing consent dialog if present
-      const consentBtn = await page.$(
-        'button[aria-label*="Accept"], button[aria-label*="agree"], form[action*="consent"] button'
+      readyState = await waitForMapsResultsReady(page, {
+        timeoutMs: 45_000,
+        log: (m) => console.log(`[DEBUG] ${m}`),
+      });
+    } catch (readyErr) {
+      const failDiag = await collectMapsPageDiagnostics(page);
+      console.error(
+        `[DEBUG] Maps readiness failed: ${formatMapsPageDiagnostics(failDiag)}`
       );
-      if (consentBtn) {
-        await consentBtn.click();
-        await consentBtn.dispose();
-        await sleep(2000);
-        await page.waitForSelector('[role="feed"]', { timeout: 15000 });
-      } else {
-        throw new Error(
-          "Google Maps results feed not found. The page structure may have changed."
-        );
+      throw readyErr;
+    }
+    console.log(`[DEBUG] Maps ready state=${readyState}`);
+
+    const collectedCards: GoogleMapsBusinessResult[] = [];
+
+    // Single-place landing: extract the open detail panel and finish.
+    if (readyState === "place") {
+      console.log(
+        `[DEBUG] Single-place landing detected — extracting detail panel`
+      );
+      sendProgress(
+        requestId,
+        "extracting",
+        0,
+        maxResults,
+        "Extracting place details..."
+      );
+      await randomDelay(500, 1000);
+      const business = await extractBusinessData(page);
+      console.log(
+        `[DEBUG] Place extract: name="${business.name}", phone="${
+          business.phone ?? "N/A"
+        }", website="${business.website ?? "N/A"}"`
+      );
+      if (business.name) {
+        collectedCards.push(business);
       }
+
+      const finalResults = deduplicate(collectedCards);
+      const summary = buildSummary(query, location, finalResults);
+      sendProgress(
+        requestId,
+        "completed",
+        finalResults.length,
+        maxResults,
+        `Found ${finalResults.length} businesses`
+      );
+      send({
+        type: "result",
+        requestId,
+        success: true,
+        data: {
+          success: true,
+          query,
+          location,
+          totalResults: finalResults.length,
+          summary,
+          results: finalResults,
+        },
+      });
+      return;
     }
 
     // Scroll to load more results
@@ -301,7 +401,6 @@ async function scrapeGoogleMaps(msg: StartMessage): Promise<void> {
       "Loading result cards..."
     );
 
-    const collectedCards: GoogleMapsBusinessResult[] = [];
     let noNewCardsCount = 0;
     const maxNoNewCards = 3;
     let previousCardCount = 0;
@@ -334,13 +433,7 @@ async function scrapeGoogleMaps(msg: StartMessage): Promise<void> {
         return;
       }
 
-      // Get current card elements on the page
-      const cardCount = await page.evaluate(() => {
-        const cards = document.querySelectorAll(
-          'div[role="feed"] > div > div[jsaction]'
-        );
-        return cards.length;
-      });
+      const cardCount = await countMapsResultCards(page);
 
       const elapsed = Date.now() - scrollStartTime;
       console.log(
@@ -357,14 +450,7 @@ async function scrapeGoogleMaps(msg: StartMessage): Promise<void> {
         );
       }
 
-      // Scroll the feed container to load more
-      await page.evaluate(() => {
-        const feed = document.querySelector('[role="feed"]');
-        if (feed) {
-          feed.scrollTop = feed.scrollHeight;
-        }
-      });
-
+      await scrollMapsResultsList(page);
       await sleep(1500);
     }
 
@@ -379,7 +465,7 @@ async function scrapeGoogleMaps(msg: StartMessage): Promise<void> {
     );
 
     // Get all card elements — capture fresh handles after scrolling is done
-    const cardHandles = await page.$$('div[role="feed"] > div > div[jsaction]');
+    const cardHandles = await queryMapsResultCards(page);
     const limit = Math.min(cardHandles.length, maxResults);
     console.log(
       `[DEBUG] cardHandles.length=${cardHandles.length}, limit=${limit}`
@@ -435,35 +521,29 @@ async function scrapeGoogleMaps(msg: StartMessage): Promise<void> {
 
       try {
         // Re-query fresh card handles each iteration (DOM changes after goBack)
-        const freshCards = await page.$$(
-          'div[role="feed"] > div > div[jsaction]'
-        );
+        const freshCards = await queryMapsResultCards(page);
         console.log(`[DEBUG] Fresh card handles on page: ${freshCards.length}`);
 
         if (i >= freshCards.length) {
           console.log(
             `[DEBUG] Card index ${i} out of range (only ${freshCards.length} cards). Re-navigating to search URL.`
           );
-          await page.goto(searchUrl, {
-            waitUntil: "networkidle2",
+          await safeGoto(page, searchUrl, {
             timeout: 30000,
+            waitUntil: "domcontentloaded",
           });
-          await page
-            .waitForSelector('[role="feed"]', { timeout: 15000 })
-            .catch(() => {
-              console.log(`[DEBUG] Feed not found after re-navigate`);
-            });
+          await waitForMapsResultsReady(page, {
+            timeoutMs: 20_000,
+            log: (m) => console.log(`[DEBUG] ${m}`),
+          }).catch(() => {
+            console.log(`[DEBUG] Results UI not ready after re-navigate`);
+          });
           // Scroll down to where we were
           for (let s = 0; s < Math.ceil((i + 1) / 10); s++) {
-            await page.evaluate(() => {
-              const feed = document.querySelector('[role="feed"]');
-              if (feed) feed.scrollTop = feed.scrollHeight;
-            });
+            await scrollMapsResultsList(page);
             await sleep(1000);
           }
-          const retryCards = await page.$$(
-            'div[role="feed"] > div > div[jsaction]'
-          );
+          const retryCards = await queryMapsResultCards(page);
           console.log(
             `[DEBUG] After re-navigate and scroll: ${retryCards.length} cards`
           );
@@ -512,23 +592,24 @@ async function scrapeGoogleMaps(msg: StartMessage): Promise<void> {
         // Go back to results list
         console.log(`[DEBUG] Navigating back to results list...`);
         await page
-          .goBack({ waitUntil: "networkidle2", timeout: 10000 })
+          .goBack({ waitUntil: "domcontentloaded", timeout: 10000 })
           .catch(async () => {
             // If goBack fails, re-navigate
             console.log(`[DEBUG] goBack failed, re-navigating to searchUrl`);
-            await page.goto(searchUrl, {
-              waitUntil: "networkidle2",
+            await safeGoto(page, searchUrl, {
               timeout: 30000,
+              waitUntil: "domcontentloaded",
             });
           });
         await randomDelay(800, 1500);
 
-        // Wait for feed again
-        await page
-          .waitForSelector('[role="feed"]', { timeout: 10000 })
-          .catch(() => {
-            console.log(`[DEBUG] Feed did not re-appear after goBack`);
-          });
+        // Wait for results list again (feed or cards)
+        await waitForMapsResultsReady(page, {
+          timeoutMs: 15_000,
+          log: (m) => console.log(`[DEBUG] ${m}`),
+        }).catch(() => {
+          console.log(`[DEBUG] Results UI did not re-appear after goBack`);
+        });
         console.log(
           `[DEBUG] Back on results page, collectedCards so far: ${collectedCards.length}`
         );
@@ -538,11 +619,12 @@ async function scrapeGoogleMaps(msg: StartMessage): Promise<void> {
           err instanceof Error ? err.message : err
         );
         // Continue to next card
-        await page
-          .goto(searchUrl, { waitUntil: "networkidle2", timeout: 30000 })
-          .catch(() => {
-            /* re-navigation already attempted */
-          });
+        await safeGoto(page, searchUrl, {
+          timeout: 30000,
+          waitUntil: "domcontentloaded",
+        }).catch(() => {
+          /* re-navigation already attempted */
+        });
         await sleep(2000);
       }
     }
@@ -735,8 +817,10 @@ function buildSummary(
 // ---------------------------------------------------------------------------
 
 process.on("message", (msg: WorkerMessage) => {
+  logWorkerEvent(`message type=${msg.type} requestId=${msg.requestId}`);
   if (msg.type === "start") {
     scrapeGoogleMaps(msg).catch((err) => {
+      logWorkerEvent(`scrape failed requestId=${msg.requestId}`, err);
       send({
         type: "result",
         requestId: msg.requestId,

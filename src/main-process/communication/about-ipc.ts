@@ -10,7 +10,7 @@ import {
 import { AIFETCHLY_WEBSITE_URL } from "@/config/appInfo";
 import { CommonMessage } from "@/entityTypes/commonType";
 import type { UpdateStatusSnapshot } from "@/main-process/updater/UpdateStatus";
-import { getAppUpdateService } from "@/main-process/updater/createAppUpdateService";
+import { getManualUpdateService } from "@/main-process/updater/createManualUpdateService";
 
 function describeError(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -53,7 +53,7 @@ export function createWindowStatusSink(
 export function registerAboutIpcHandlers(
   getWin: () => BrowserWindow | null
 ): void {
-  const service = getAppUpdateService();
+  const service = getManualUpdateService();
 
   // Push every status transition to the renderer (FR-4.8: events, not polling).
   service.setStatusSink(createWindowStatusSink(getWin));

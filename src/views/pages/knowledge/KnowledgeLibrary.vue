@@ -15,6 +15,14 @@
           {{ t('knowledge.upload_document') }}
         </v-btn>
         <v-btn
+          color="success"
+          prepend-icon="mdi-web"
+          :loading="checkingEmbeddingRuntime"
+          @click="openWebsiteImportDialog"
+        >
+          {{ t('knowledge.import_website') }}
+        </v-btn>
+        <v-btn
           color="info"
           prepend-icon="mdi-cog"
           @click="openSettingsDialog"
@@ -65,6 +73,7 @@
           <v-window-item value="documents">
             <DocumentManagement
               ref="documentManagement"
+              :ensure-embedding-ready="() => ensureCurrentEmbeddingRuntimeReady(null)"
               @document-uploaded="handleDocumentUploaded"
               @document-deleted="handleDocumentDeleted"
               @error="handleError"
@@ -226,6 +235,13 @@
     </v-dialog>
 
 
+    <!-- Website Import Dialog -->
+    <WebsiteImportDialog
+      v-model="showWebsiteImportDialog"
+      :before-import="() => ensureCurrentEmbeddingRuntimeReady(null)"
+      @completed="handleWebsiteImportCompleted"
+    />
+
     <!-- Duplicate Confirmation Dialog -->
     <v-dialog v-model="showDuplicateDialog" max-width="550px" persistent>
       <v-card>
@@ -281,7 +297,7 @@
               :items="availableModels"
               :label="t('knowledge.embedding_model')"
               :loading="loadingModels"
-              item-title="name"
+              item-title="displayName"
               item-value="name"
               :hint="t('knowledge.embedding_model_hint')"
               persistent-hint
@@ -289,11 +305,22 @@
               <template v-slot:item="{ props, item }">
                 <v-list-item v-bind="props">
                   <template v-slot:title>
-                    {{ item.raw.name }}
+                    {{ item.raw.displayName || item.raw.name }}
                   </template>
                   <template v-slot:subtitle>
-                    {{ item.raw.description }} - 
+                    {{ item.raw.description }} -
                     {{ t('knowledge.max_dimensions') }}: {{ item.raw.dimensions }}
+                  </template>
+                  <template v-slot:append>
+                    <v-chip
+                      v-if="item.raw.is_free"
+                      size="x-small"
+                      variant="tonal"
+                      color="success"
+                      class="ml-2"
+                    >
+                      {{ t('knowledge.model_free') }}
+                    </v-chip>
                   </template>
                 </v-list-item>
               </template>
@@ -324,6 +351,77 @@
       </v-card>
     </v-dialog>
 
+    <!-- Local AI Runtime Download Dialog -->
+    <v-dialog v-model="showRuntimeDownloadDialog" max-width="520">
+      <v-card>
+        <v-card-title>
+          <v-icon left class="mr-2" color="warning">mdi-download-circle</v-icon>
+          {{ t('knowledge.local_runtime_not_installed_title') }}
+        </v-card-title>
+        <v-card-text>
+          <p class="mb-2">
+            {{ t('knowledge.local_runtime_not_installed_message', {
+              model: selectedEmbeddingModel,
+              runtime: LOCAL_EMBEDDING_RUNTIME_ID,
+            }) }}
+          </p>
+          <div v-if="runtimeInstallOffer" class="text-caption text-medium-emphasis mb-2">
+            {{ t('knowledge.local_runtime_download_size', {
+              size: formatRuntimeBytes(runtimeInstallOffer.archiveSizeBytes),
+            }) }}
+          </div>
+          <v-alert
+            v-if="runtimeDownloadError"
+            type="error"
+            variant="tonal"
+            density="compact"
+            class="mt-2"
+          >
+            {{ runtimeDownloadError }}
+          </v-alert>
+          <template v-if="runtimeDownloading && runtimeDownloadProgress && isActiveRuntimeProgress(runtimeDownloadProgress.phase)">
+            <v-progress-linear
+              :model-value="runtimeDownloadProgress.percent ?? 0"
+              height="8"
+              color="primary"
+              rounded
+              class="mt-3"
+            />
+            <div class="text-caption mt-1">
+              {{ runtimePhaseLabel(runtimeDownloadProgress.phase) }}
+              <span v-if="runtimeDownloadProgress.totalBytes" class="ml-2">
+                {{ formatRuntimeBytes(runtimeDownloadProgress.downloadedBytes ?? 0) }} / {{ formatRuntimeBytes(runtimeDownloadProgress.totalBytes) }}
+              </span>
+            </div>
+          </template>
+        </v-card-text>
+        <v-card-actions>
+          <v-spacer />
+          <template v-if="!runtimeDownloading">
+            <v-btn variant="text" @click="showRuntimeDownloadDialog = false">
+              {{ t('common.cancel') }}
+            </v-btn>
+            <v-btn
+              color="primary"
+              :disabled="!runtimeInstallOffer"
+              :loading="preparingRuntime"
+              @click="onDownloadRuntime"
+            >
+              {{ t('knowledge.local_runtime_download') }}
+            </v-btn>
+          </template>
+          <template v-else>
+            <v-btn
+              v-if="runtimeDownloadProgress && runtimeDownloadProgress.phase === 'downloading'"
+              variant="text"
+              @click="onCancelRuntimeDownload"
+            >
+              {{ t('localAiRuntime.cancel') }}
+            </v-btn>
+          </template>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
 
     <!-- Update Model Result Dialog -->
     <v-dialog v-model="showUpdateResultDialog" max-width="500">
@@ -346,21 +444,6 @@
       </v-card>
     </v-dialog>
 
-    <!-- Loading Overlay -->
-    <v-overlay
-      v-model="isLoading"
-      class="align-center justify-center"
-    >
-      <v-progress-circular
-        color="primary"
-        indeterminate
-        size="64"
-      />
-      <div class="mt-4 text-center">
-        <div class="text-h6">{{ loadingMessage }}</div>
-        <div class="text-caption">{{ loadingSubMessage }}</div>
-      </div>
-    </v-overlay>
   </div>
 </template>
 
@@ -376,20 +459,25 @@ const { t } = useI18n();
 
 import DocumentManagement from '@/views/pages/knowledge/DocumentManagement.vue';
 import SearchInterface from '@/views/pages/knowledge/SearchInterface.vue';
+import WebsiteImportDialog from '@/views/pages/knowledge/WebsiteImportDialog.vue';
+import type { ImportKnowledgeWebsiteResult } from '@/entityTypes/knowledgeLibraryAiToolTypes';
 import { initializeRAG, getRAGStats, uploadDocument, selectFilesNative as selectFilesNativeAPI, copyFileToTemp as copyFileToTempAPI, chunkAndEmbedDocument, getAvailableEmbeddingModelsWithDefault, updateEmbeddingModel, FileUploadProgress, FileUploadComplete, checkDocumentDuplicate } from '@/views/api/rag';
 import type { SaveTempFileResponse, UploadedDocument } from '@/entityTypes/commonType';
 import { ModelInfo } from '@/api/ragConfigApi';
 import { DocumentMetadata } from '@/entityTypes/metadataType';
+import { getLocalAiRuntimeStatus, prepareLocalAiRuntimeInstall, installLocalAiRuntime, cancelLocalAiRuntimeInstall, onLocalAiRuntimeProgress } from '@/views/api/localAiRuntime';
+import type { LocalAiRuntimeDownloadPhase, LocalAiRuntimeDownloadProgress, LocalAiRuntimeId, LocalAiRuntimeInstallOffer } from '@/entityTypes/localAiRuntimeTypes';
+import { LOCAL_XENOVA_PROVIDER_PREFIX } from '@/service/embedding/LocalEmbeddingModels';
+
+const LOCAL_EMBEDDING_RUNTIME_ID: LocalAiRuntimeId = 'embedding-xenova';
 
 // i18n setup
 
 // Reactive data
 const activeTab = ref('documents');
 const showUploadDialog = ref(false);
+const showWebsiteImportDialog = ref(false);
 const showSettingsDialog = ref(false);
-const isLoading = ref(false);
-const loadingMessage = ref('');
-const loadingSubMessage = ref('');
 const statusMessage = ref('');
 const statusType = ref<'success' | 'error' | 'warning' | 'info'>('info');
 
@@ -407,6 +495,19 @@ const updateResult = ref<{ modelName: string; dimension: number } | null>(null);
 const updateResultMessage = ref('');
 const updateResultTitle = ref('');
 const updateResultIcon = ref('mdi-check-circle');
+
+// Local AI runtime download dialog variables
+const showRuntimeDownloadDialog = ref(false);
+const runtimeDownloading = ref(false);
+const preparingRuntime = ref(false);
+const checkingEmbeddingRuntime = ref(false);
+const runtimeDownloadError = ref('');
+const runtimeDownloadProgress = ref<LocalAiRuntimeDownloadProgress | null>(null);
+const runtimeInstallOffer = ref<LocalAiRuntimeInstallOffer | null>(null);
+/** What to resume after a successful runtime install (settings update vs open import). */
+type RuntimeInstallResume = 'update-model' | 'open-website-import' | null;
+const pendingRuntimeAction = ref<RuntimeInstallResume>(null);
+let unsubscribeRuntimeProgress: (() => void) | null = null;
 
 // Upload dialog data
 const uploadFiles = ref<File[]>([]);
@@ -430,18 +531,26 @@ const searchInterface = ref();
 
 // Lifecycle hooks
 onMounted(async () => {
+  unsubscribeRuntimeProgress = onLocalAiRuntimeProgress((progress) => {
+    if (progress.runtimeId !== LOCAL_EMBEDDING_RUNTIME_ID) return;
+    runtimeDownloadProgress.value = progress;
+    if (progress.phase === 'error') {
+      runtimeDownloadError.value = runtimeErrorMessage(progress.errorMessage ?? 'download failed');
+    }
+  });
   await initializeRAGSystem();
 });
 
 onUnmounted(() => {
-  // Cleanup if needed
+  if (unsubscribeRuntimeProgress) {
+    unsubscribeRuntimeProgress();
+    unsubscribeRuntimeProgress = null;
+  }
 });
 
 // Methods
 async function initializeRAGSystem() {
   try {
-    setLoading(true, t('knowledge.initializing_rag_system'), t('knowledge.setting_up_knowledge_library'));
-    
     // Check if RAG is already initialized and get stats including default embedding model
     const response = await getRAGStats();
     console.log('RAG Stats Response:', response);
@@ -452,17 +561,8 @@ async function initializeRAGSystem() {
       selectedEmbeddingModel.value = response.data.defaultEmbeddingModel;
       console.log('✅ Default embedding model set from stats:', response.data.defaultEmbeddingModel);
     }
-    
-    // if (!response.success) {
-    //   // Initialize with default configuration
-    //   //await initializeWithDefaultConfig();
-    // }
-    
-    setLoading(false);
-    //showStatus(t('knowledge.rag_system_initialized_successfully'), 'success');
   } catch (error) {
     console.error('Failed to initialize RAG system:', error);
-    setLoading(false);
     showStatus(`${t('knowledge.failed_to_initialize_rag_system')}: ${error}`, 'error');
   }
 }
@@ -489,12 +589,6 @@ async function initializeRAGSystem() {
 //   }
 // }
 
-function setLoading(loading: boolean, message = '', subMessage = '') {
-  isLoading.value = loading;
-  loadingMessage.value = message;
-  loadingSubMessage.value = subMessage;
-}
-
 function showStatus(message: string, type: 'success' | 'error' | 'warning' | 'info' = 'info') {
   statusMessage.value = message;
   statusType.value = type;
@@ -520,6 +614,21 @@ function handleDocumentDeleted(documentId: number) {
   showStatus(t('knowledge.document_deleted_successfully'), 'success');
   // Refresh document management if needed
   if (documentManagement.value) {
+    documentManagement.value.refreshDocuments();
+  }
+}
+
+function handleWebsiteImportCompleted(outcome: ImportKnowledgeWebsiteResult) {
+  showStatus(
+    t('knowledge.website_import_status_done', {
+      imported: outcome.importedCount,
+      skipped: outcome.skippedCount,
+    }),
+    outcome.importedCount > 0 ? 'success' : 'warning'
+  );
+  // Refresh the documents list only when at least one page was imported —
+  // avoids a needless IPC + DB round-trip when every page was skipped.
+  if (documentManagement.value && outcome.importedCount > 0) {
     documentManagement.value.refreshDocuments();
   }
 }
@@ -631,6 +740,58 @@ async function loadAvailableModels() {
 async function handleUpdateEmbeddingModel() {
   if (!selectedEmbeddingModel.value) return;
   
+  // Local embedding models (Xenova/all-MiniLM-L6-v2) require the
+  // downloadable "embedding-xenova" Local AI Component. If the runtime is not
+  // installed/ready, offer an inline download instead of updating.
+  if (selectedEmbeddingModel.value.startsWith(LOCAL_XENOVA_PROVIDER_PREFIX)) {
+    if (!(await ensureLocalEmbeddingRuntime('update-model'))) {
+      return;
+    }
+  }
+  
+  await performUpdateEmbeddingModel();
+}
+
+/**
+ * Gate for import/upload/re-embed: if the current default embedding model is
+ * local-xenova, require the embedding-xenova runtime to be ready (or show the
+ * install dialog). Remote models pass through without a runtime check.
+ */
+async function ensureCurrentEmbeddingRuntimeReady(
+  resume: RuntimeInstallResume = null
+): Promise<boolean> {
+  checkingEmbeddingRuntime.value = true;
+  try {
+    if (!currentModel.value) {
+      try {
+        const response = await getRAGStats();
+        if (response.data?.defaultEmbeddingModel) {
+          currentModel.value = response.data.defaultEmbeddingModel;
+          selectedEmbeddingModel.value = response.data.defaultEmbeddingModel;
+        }
+      } catch (error) {
+        console.error('Failed to load current embedding model for runtime check:', error);
+      }
+    }
+
+    if (!currentModel.value.startsWith(LOCAL_XENOVA_PROVIDER_PREFIX)) {
+      return true;
+    }
+
+    return ensureLocalEmbeddingRuntime(resume);
+  } finally {
+    checkingEmbeddingRuntime.value = false;
+  }
+}
+
+async function openWebsiteImportDialog(): Promise<void> {
+  if (!(await ensureCurrentEmbeddingRuntimeReady('open-website-import'))) {
+    return;
+  }
+  showWebsiteImportDialog.value = true;
+}
+
+async function performUpdateEmbeddingModel() {
   updatingModel.value = true;
   try {
     const result = await updateEmbeddingModel(selectedEmbeddingModel.value);
@@ -674,6 +835,121 @@ async function handleUpdateEmbeddingModel() {
   } finally {
     updatingModel.value = false;
   }
+}
+
+/**
+ * Verifies the embedding-xenova Local AI Component is ready. When it is not,
+ * opens the download dialog with an inline install action. Returns true only
+ * when the runtime is already ready; otherwise returns false after opening the
+ * install dialog (caller should abort and let the user install first).
+ */
+async function ensureLocalEmbeddingRuntime(
+  resume: RuntimeInstallResume = null
+): Promise<boolean> {
+  const runtimeStatus = await getLocalAiRuntimeStatus(LOCAL_EMBEDDING_RUNTIME_ID);
+  if (runtimeStatus.state === 'ready') {
+    return true;
+  }
+  console.warn('Local embedding runtime not ready:', runtimeStatus);
+  pendingRuntimeAction.value = resume;
+  runtimeDownloadError.value = '';
+  runtimeDownloadProgress.value = null;
+  runtimeInstallOffer.value = null;
+  showRuntimeDownloadDialog.value = true;
+  preparingRuntime.value = true;
+  try {
+    runtimeInstallOffer.value = await prepareLocalAiRuntimeInstall(LOCAL_EMBEDDING_RUNTIME_ID);
+  } catch (error) {
+    runtimeDownloadError.value = runtimeErrorMessage(error);
+  } finally {
+    preparingRuntime.value = false;
+  }
+  return false;
+}
+
+async function onDownloadRuntime() {
+  if (!runtimeInstallOffer.value || runtimeDownloading.value) return;
+  runtimeDownloading.value = true;
+  runtimeDownloadError.value = '';
+  try {
+    await installLocalAiRuntime({
+      operationId: runtimeInstallOffer.value.operationId,
+      runtimeId: runtimeInstallOffer.value.runtimeId,
+      expectedRuntimeVersion: runtimeInstallOffer.value.runtimeVersion,
+      consentToken: runtimeInstallOffer.value.consentToken,
+    });
+    runtimeInstallOffer.value = null;
+    const runtimeStatus = await getLocalAiRuntimeStatus(LOCAL_EMBEDDING_RUNTIME_ID);
+    if (runtimeStatus.state === 'ready') {
+      showRuntimeDownloadDialog.value = false;
+      const action = pendingRuntimeAction.value;
+      pendingRuntimeAction.value = null;
+      if (action === 'update-model') {
+        await performUpdateEmbeddingModel();
+      } else if (action === 'open-website-import') {
+        showWebsiteImportDialog.value = true;
+      }
+    } else {
+      runtimeDownloadError.value = t('knowledge.local_runtime_install_failed') as string;
+    }
+  } catch (error) {
+    console.error('❌ Error installing local embedding runtime:', error);
+    runtimeDownloadError.value = runtimeErrorMessage(error);
+  } finally {
+    runtimeDownloading.value = false;
+  }
+}
+
+function onCancelRuntimeDownload() {
+  if (runtimeDownloading.value && runtimeDownloadProgress.value) {
+    cancelLocalAiRuntimeInstall(runtimeDownloadProgress.value.operationId).catch((error: unknown) => {
+      runtimeDownloadError.value = runtimeErrorMessage(error);
+    });
+  }
+  pendingRuntimeAction.value = null;
+  runtimeDownloading.value = false;
+  showRuntimeDownloadDialog.value = false;
+}
+
+function runtimeErrorMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/checksum|integrity/i.test(message)) return t('localAiRuntime.errors.checksum_mismatch') as string;
+  if (/safety|unsafe|archive/i.test(message)) return t('localAiRuntime.errors.archive_unsafe') as string;
+  if (/health/i.test(message)) return t('localAiRuntime.errors.health_check_failed') as string;
+  if (/busy|in progress/i.test(message)) return t('localAiRuntime.errors.busy') as string;
+  if (/catalog/i.test(message)) return t('localAiRuntime.errors.catalog_unavailable') as string;
+  if (/compatible|incompat/i.test(message)) return t('localAiRuntime.errors.incompatible') as string;
+  if (/download/i.test(message)) return t('localAiRuntime.errors.download_failed') as string;
+  return message;
+}
+
+function isActiveRuntimeProgress(phase: LocalAiRuntimeDownloadPhase): boolean {
+  return (
+    phase === 'resolving' ||
+    phase === 'downloading' ||
+    phase === 'verifying' ||
+    phase === 'extracting' ||
+    phase === 'testing' ||
+    phase === 'activating'
+  );
+}
+
+function runtimePhaseLabel(phase: LocalAiRuntimeDownloadPhase): string {
+  const key = `localAiRuntime.${phase}`;
+  return (t(key) as string) || phase;
+}
+
+function formatRuntimeBytes(bytes?: number): string {
+  if (!bytes && bytes !== 0) return '—';
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ['KB', 'MB', 'GB'];
+  let value = bytes / 1024;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return `${value.toFixed(1)} ${units[unit]}`;
 }
 
 async function openSettingsDialog() {
@@ -745,6 +1021,9 @@ function formatFileSize(bytes: number): string {
 
 function cancelUpload() {
   showUploadDialog.value = false;
+  showDuplicateDialog.value = false;
+  duplicateFiles.value = [];
+  pendingUploadAfterDuplicateCheck.value = [];
   uploadFiles.value = [];
   uploadError.value = '';
   uploading.value = false;
@@ -756,6 +1035,11 @@ function cancelUpload() {
 async function confirmUpload() {
   if (!uploadFiles.value || uploadFiles.value.length === 0) {
     uploadError.value = t('knowledge.no_files_selected');
+    return;
+  }
+
+  // Local embedding models need the Xenova runtime before upload/embedding starts.
+  if (!(await ensureCurrentEmbeddingRuntimeReady(null))) {
     return;
   }
 
@@ -800,6 +1084,9 @@ async function confirmUpload() {
     uploading.value = false;
     currentUploadingFile.value = '';
     uploadProgress.value.clear();
+    if (documentManagement.value) {
+      documentManagement.value.refreshDocuments();
+    }
   }
 }
 
@@ -928,8 +1215,6 @@ async function copyFileToTemp(file: File, metadata?: DocumentMetadata)
       // Automatically start chunking and embedding process for database-saved documents
       if (uploadResult.document.id) {
         try {
-          setLoading(true, t('knowledge.processing_document'), t('knowledge.chunking_and_embedding_document'));
-          
           const chunkEmbedResult = await chunkAndEmbedDocument(uploadResult.document.id);
           
           if (chunkEmbedResult.success && chunkEmbedResult.data) {
@@ -962,8 +1247,6 @@ async function copyFileToTemp(file: File, metadata?: DocumentMetadata)
             }), 
             'error'
           );
-        } finally {
-          setLoading(false);
         }
       }
     } else if (uploadResult.databaseError) {
@@ -1066,11 +1349,6 @@ defineExpose({
   .knowledge-content {
     margin: 8px;
   }
-}
-
-/* Loading overlay styles */
-.v-overlay {
-  background-color: rgba(0, 0, 0, 0.7);
 }
 
 /* Status alert styles */

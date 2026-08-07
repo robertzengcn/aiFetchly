@@ -1,9 +1,11 @@
 import { defineConfig, loadEnv } from 'vite';
 import alias from "@rollup/plugin-alias";
 import * as path from 'path';
+import { builtinModules } from 'node:module';
 
 import ClosePlugin from './vite-plugin-close.js'
 import checker from 'vite-plugin-checker'
+import { optionalChecker } from './vite-checker-toggle.mjs';
 import { nodeResolve } from '@rollup/plugin-node-resolve';
 import sourcemaps from 'rollup-plugin-sourcemaps';
 
@@ -36,6 +38,11 @@ function emptyModulesPlugin() {
     };
 }
 
+const nodeBuiltins = [
+    ...builtinModules,
+    ...builtinModules.map((moduleName) => `node:${moduleName}`),
+];
+
 export default ({ mode }) => {
     process.env = { ...process.env, ...loadEnv(mode, process.cwd()) };
     return defineConfig({
@@ -45,7 +52,7 @@ export default ({ mode }) => {
             emptyModulesPlugin(),
             sourcemaps(),
             ClosePlugin(),
-            checker({ typescript: true }),
+            ...optionalChecker(() => checker({ typescript: true })),
         ],
         resolve: {
             alias: {
@@ -67,6 +74,7 @@ export default ({ mode }) => {
                     format: 'cjs'
                 },
                 external: [
+                    ...nodeBuiltins,
                     'sqlite3',
                     'better-sqlite3',
                     'bindings',

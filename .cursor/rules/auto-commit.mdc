@@ -1,0 +1,89 @@
+---
+description: MANDATORY — git commit immediately after every bug fix and completed task; do not wait for the user to ask
+alwaysApply: true
+---
+
+# Auto-Commit After Bug Fixes and Completed Tasks
+
+**MANDATORY: When you fix a bug or finish a task, you MUST create a git commit before ending your turn. Do not wait for the user to say "commit".**
+
+This rule applies to **all agents** working in this repository and **overrides** generic "only commit when asked" guidance for this project.
+
+## Triggers — commit is required when ANY of these happen
+
+- **Bug fix** — a specific error, regression, or defect is resolved
+- **Task complete** — a user request, feature slice, or planned subtask is done
+- **Logical unit done** — one coherent change set (e.g. entity + model + module, or CI workflow fix)
+- **Rule/docs update** — Cursor rule or project doc change that is part of finished work
+- **Test added/updated** — meaningful test coverage for the change just made
+
+## Commit workflow (do this before you reply "done")
+
+1. **Stage only relevant files:** `git add <specific-files>` — never `git add .` / `git add -A`
+2. **Write a conventional commit:** `<type>: <description>`
+   - Types: `feat`, `fix`, `refactor`, `docs`, `test`, `chore`, `perf`, `ci`
+   - Explain *what* and *why*, not a file list
+3. **Use HEREDOC for the message:**
+   ```sh
+   git commit -m "$(cat <<'EOF'
+   fix: short summary of the fix
+
+   EOF
+   )"
+   ```
+4. **Verify:** run `git status` and confirm the completed work is committed
+5. **Push:** only when the user explicitly asks — commit is always required; push is optional
+
+## Agent completion checklist
+
+Before finishing a turn where you changed code or config, confirm:
+
+- [ ] Bug fix or task is fully complete (not half-done WIP)
+- [ ] Only files for this unit of work are staged
+- [ ] Commit message matches conventional format
+- [ ] `git status` shows no unstaged changes for the completed unit
+- [ ] You did **not** skip commit because the user did not say "commit"
+
+## What NOT to commit
+
+- Incomplete or broken code
+- Temporary debug / `console.log` noise
+- Files that fail typecheck or lint
+- Unrelated WIP from other tasks still in the working tree
+
+## Safety rules (still apply)
+
+- Never update git config
+- Never use `--no-verify` unless the user explicitly asks
+- Never force-push to `main` / `master`
+- Never commit secrets (`.env`, credentials, certificates)
+- If a hook fails, fix the issue and create a **new** commit (do not amend unless amend rules are fully met)
+
+## Examples
+
+```sh
+# ✅ Bug fix — commit immediately
+git add .github/workflows/ci.yml
+git commit -m "$(cat <<'EOF'
+fix(ci): install libsecret-1-dev for keytar on Linux runners
+
+EOF
+)"
+
+# ✅ Finished feature slice — commit immediately
+git add src/modules/ContactInfoModule.ts src/model/ContactInfo.model.ts
+git commit -m "$(cat <<'EOF'
+feat(contact): add ContactInfoModule for extraction persistence
+
+EOF
+)"
+
+# ❌ WRONG — telling the user "you can commit when ready"
+# ❌ WRONG — leaving a finished fix uncommitted until asked
+# ❌ WRONG — batching unrelated bug fixes into one vague commit
+```
+
+## Related rules
+
+- [constitution.mdc](mdc:.cursor/rules/constitution.mdc) — project principles; references this rule in Development Workflow
+- [cursor_rules.mdc](mdc:.cursor/rules/cursor_rules.mdc) — format for authoring/updating rules

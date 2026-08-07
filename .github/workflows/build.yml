@@ -8,9 +8,14 @@ on:
     branches:
       - test
 
+permissions:
+  contents: read
+
 jobs:
   build-windows:
-    runs-on: windows-latest
+    # Native modules in this Electron build still rely on node-gyp versions
+    # that do not detect Visual Studio 2026/18.x on newer Windows images.
+    runs-on: windows-2022
 
  
     steps:      
@@ -20,14 +25,26 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 22.14.0
+          node-version: 22.19.0
+          cache: yarn
 
       # Python 3.12+ removed distutils; bundled node-gyp in electron-rebuild still imports it.
       # Pin 3.11 so gyp (used by sqlite3/bufferutil rebuild) runs. Same issue as macOS setuptools fix.
       - name: Set up Python for node-gyp
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
+
+      - name: Configure node-gyp Python
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHON_BIN="$(python -c 'import sys; print(sys.executable)')"
+          echo "Using Python for node-gyp: ${PYTHON_BIN}"
+          python --version
+          echo "PYTHON=${PYTHON_BIN}" >> "$GITHUB_ENV"
+          echo "npm_config_python=${PYTHON_BIN}" >> "$GITHUB_ENV"
+          echo "NODE_GYP_FORCE_PYTHON=${PYTHON_BIN}" >> "$GITHUB_ENV"
 
       - name: Calculate version
         id: calculate_version
@@ -88,23 +105,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          echo "package.json rebuild-sqlite3 script:"
-          node -e "console.log(require('./package.json').scripts['rebuild-sqlite3'])"
-          yarn rebuild-sqlite3
+          echo "rebuild-sqlite3 no-op script removed; sqlite3 package is unused. better-sqlite3 is rebuilt via postinstall and the 'Rebuild better sqlite' step."
 
       - name: Rebuild better-sqlite3 for Electron
         shell: bash
-        run: |
-          set -euo pipefail
-          echo "Installing latest node-gyp (bundled 9.4.1 cannot detect VS 2022)..."
-          npm install -g node-gyp@latest
-          node-gyp --version
-          echo "Rebuilding better-sqlite3 against Electron headers..."
-          cd node_modules/better-sqlite3
-          node-gyp rebuild --release \
-            --runtime=electron \
-            --target=35.7.5 \
-            --dist-url=https://electronjs.org/headers
+        run: yarn rebuild-better-sqlite
       # - name: Rebuild canvas
       #   run: yarn rebuild-canvas
 
@@ -114,17 +119,30 @@ jobs:
           # Increase Node.js heap size to prevent out-of-memory errors during build
           export NODE_OPTIONS="--max-old-space-size=4096"
           echo "Building with increased heap size (4GB)"
-          yarn make-win:test
+          # Windows CI ships WiX MSI only (no Squirrel Setup.exe).
+          yarn make-win:test -- --targets=@electron-forge/maker-wix
+          # Fail if unpacked workers require asar-only pure-JS packages.
+          yarn verify-packaged-app
         shell: bash
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: electron-app-windows-v${{ steps.calculate_version.outputs.version }}
-          path: out/make
+          path: out/make/**/*.msi
+          if-no-files-found: error
 
   build-macos:
     runs-on: macos-latest
+    env:
+      MACOS_APP_BUNDLE_ID: com.aifetchly.desktop
+      SIGN_MACOS_ARTIFACTS: "false"
+      APPLE_CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
 
     steps:
       - name: Set up C++20 environment
@@ -176,7 +194,98 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 22.14.0
+          node-version: 22.19.0
+          cache: yarn
+
+      - name: Cache Electron downloads
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/electron
+            ~/.cache/electron-gyp
+            ~/.electron-gyp
+            ~/Library/Caches/electron
+          key: ${{ runner.os }}-electron-${{ hashFiles('yarn.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-electron-
+      - name: Set up Python for node-gyp
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Configure node-gyp Python
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHON_BIN="$(python -c 'import sys; print(sys.executable)')"
+          echo "Using Python for node-gyp: ${PYTHON_BIN}"
+          python --version
+          echo "PYTHON=${PYTHON_BIN}" >> "$GITHUB_ENV"
+          echo "npm_config_python=${PYTHON_BIN}" >> "$GITHUB_ENV"
+          echo "NODE_GYP_FORCE_PYTHON=${PYTHON_BIN}" >> "$GITHUB_ENV"
+
+      - name: Validate Apple signing secrets
+        if: env.SIGN_MACOS_ARTIFACTS == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          missing=0
+          for secret_name in \
+            APPLE_CERTIFICATE_BASE64 \
+            APPLE_CERTIFICATE_PASSWORD \
+            APPLE_ID \
+            APPLE_APP_SPECIFIC_PASSWORD \
+            APPLE_TEAM_ID
+          do
+            if [ -z "${!secret_name:-}" ]; then
+              echo "::error::${secret_name} is required for signed macOS GitHub Actions artifacts."
+              missing=1
+            fi
+          done
+          if [ "${missing}" -ne 0 ]; then
+            exit 1
+          fi
+          echo "Apple signing secrets are configured."
+
+      - name: Import Apple Developer ID certificate
+        if: env.SIGN_MACOS_ARTIFACTS == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          CERTIFICATE_PATH="${RUNNER_TEMP}/developer-id-application.p12"
+          KEYCHAIN_PATH="${RUNNER_TEMP}/app-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -base64 32)"
+
+          printf '%s' "${APPLE_CERTIFICATE_BASE64}" | base64 --decode > "${CERTIFICATE_PATH}"
+
+          security create-keychain -p "${KEYCHAIN_PASSWORD}" "${KEYCHAIN_PATH}"
+          security set-keychain-settings -lut 21600 "${KEYCHAIN_PATH}"
+          security unlock-keychain -p "${KEYCHAIN_PASSWORD}" "${KEYCHAIN_PATH}"
+          security import "${CERTIFICATE_PATH}" \
+            -P "${APPLE_CERTIFICATE_PASSWORD}" \
+            -A \
+            -t cert \
+            -f pkcs12 \
+            -k "${KEYCHAIN_PATH}"
+          security list-keychains -d user -s "${KEYCHAIN_PATH}" $(security list-keychains -d user | sed s/\"//g)
+          security default-keychain -s "${KEYCHAIN_PATH}"
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s \
+            -k "${KEYCHAIN_PASSWORD}" \
+            "${KEYCHAIN_PATH}"
+
+          echo "Available code signing identities:"
+          security find-identity -v -p codesigning "${KEYCHAIN_PATH}"
+
+          echo "MACOS_CODE_SIGN=true" >> "${GITHUB_ENV}"
+          echo "MACOS_KEYCHAIN_PATH=${KEYCHAIN_PATH}" >> "${GITHUB_ENV}"
+
+      - name: Mark macOS build as unsigned
+        if: env.SIGN_MACOS_ARTIFACTS != 'true'
+        shell: bash
+        run: |
+          echo "MACOS_CODE_SIGN=false" >> "${GITHUB_ENV}"
+
       - name: Calculate version
         id: calculate_version
         run: |
@@ -241,11 +350,9 @@ jobs:
           echo "LDFLAGS=-L/opt/homebrew/lib" >> $GITHUB_ENV
           echo "PKG_CONFIG_PATH=/opt/homebrew/lib/pkgconfig" >> $GITHUB_ENV        
       - name: Install dependencies
-        run: yarn install
+        run: yarn install --frozen-lockfile
       # - name: Run postinstall script
       #   run: yarn postinstall
-      - name: Install DMG maker
-        run: yarn add --dev @electron-forge/maker-dmg
       - name: Verify required assets exist
         run: |
           echo "=== Verifying required macOS build assets ==="
@@ -271,7 +378,6 @@ jobs:
           ls -la src/assets/images/icon.png && echo "✅ icon.png found" || echo "❌ icon.png NOT found"
       - name: Clean previous builds
         run: |
-          rm -rf node_modules/.cache
           rm -rf out/
           rm -rf .vite/
           yarn clean || echo "Clean command not available"
@@ -295,10 +401,10 @@ jobs:
           echo "HOMEBREW_PREFIX: $HOMEBREW_PREFIX"
           echo "Platform: $(uname -s)"
           echo "Architecture: $(uname -m)"
-      - name: Update native modules to latest versions
+      - name: Keep native modules pinned
         run: |
-          echo "=== Updating native modules ==="
-          yarn add better-sqlite3@latest sqlite3@latest bufferutil@latest utf-8-validate@latest --exact || echo "Failed to update some modules"
+          echo "Using native module versions from yarn.lock; targeted Electron rebuilds run next."
+          node -e "const p=require('./package.json'); console.log('better-sqlite3:', p.dependencies['better-sqlite3']);"
       - name: Set C++20 environment for build
         run: |
           echo "=== Setting C++20 environment ==="
@@ -338,17 +444,15 @@ jobs:
           # This helps find the .pc files
           export PKG_CONFIG_PATH="/opt/homebrew/lib/pkgconfig"
 
-          # Critical: Ensure node-gyp uses C++20 standard
-          export npm_config_target="35.7.5"
-          export npm_config_disturl="https://electronjs.org/headers"
           echo "Skipping broad electron-rebuild because it attempts to rebuild isolated-vm."
+          unset npm_config_runtime npm_config_target npm_config_disturl
           echo "Targeted native module rebuilds run in the following steps."
         env:
           # Ensure this is set for the step
           TARGET_ARCH: arm64
-      - name: Rebuild sqlite3
+      - name: Rebuild sqlite3 (no-op; sqlite3 unused)
         run: |
-          CXXFLAGS="-std=c++20" CFLAGS="-std=c11" yarn rebuild-sqlite3
+          echo "rebuild-sqlite3 removed; sqlite3 package is unused. Skipping."
       - name: Rebuild better sqlite
         run: |
           CXXFLAGS="-std=c++20" CFLAGS="-std=c11" yarn rebuild-better-sqlite    
@@ -364,15 +468,16 @@ jobs:
           echo "=== Native rebuild configuration ==="
           TARGET_ARCH="${TARGET_ARCH:-$(uname -m)}"
           echo "TARGET_ARCH: ${TARGET_ARCH}"
-          node -e "console.log('rebuild-sqlite3: ' + require('./package.json').scripts['rebuild-sqlite3'])"
+          echo "rebuild-sqlite3: (removed; sqlite3 package is unused)"
           node -e "console.log('rebuild-better-sqlite: ' + require('./package.json').scripts['rebuild-better-sqlite'])"
       - name: Rebuild C modules specifically
         run: |
           echo "=== Rebuilding C modules specifically ==="
           # Rebuild bufferutil and utf-8-validate which are C modules
           TARGET_ARCH="${TARGET_ARCH:-$(uname -m)}"
-          npm_config_runtime=electron npm_config_target=35.7.5 npm_config_arch="${TARGET_ARCH}" npm_config_disturl=https://electronjs.org/headers CFLAGS="-std=c11" npm rebuild bufferutil --build-from-source || echo "bufferutil rebuild failed"
-          npm_config_runtime=electron npm_config_target=35.7.5 npm_config_arch="${TARGET_ARCH}" npm_config_disturl=https://electronjs.org/headers CFLAGS="-std=c11" npm rebuild utf-8-validate --build-from-source || echo "utf-8-validate rebuild failed"
+          ELECTRON_VERSION="$(node -p "require('./node_modules/electron/package.json').version")"
+          npm_config_runtime=electron npm_config_target="${ELECTRON_VERSION}" npm_config_arch="${TARGET_ARCH}" npm_config_disturl=https://electronjs.org/headers CFLAGS="-std=c11" npm rebuild bufferutil --build-from-source || echo "bufferutil rebuild failed"
+          npm_config_runtime=electron npm_config_target="${ELECTRON_VERSION}" npm_config_arch="${TARGET_ARCH}" npm_config_disturl=https://electronjs.org/headers CFLAGS="-std=c11" npm rebuild utf-8-validate --build-from-source || echo "utf-8-validate rebuild failed"
       - name: Debug - Check native modules
         run: |
           echo "=== Checking native modules ==="
@@ -390,9 +495,11 @@ jobs:
         run: |
           echo "Current working directory: $(pwd)"
           echo "=== Starting macOS build process ==="
+          echo "macOS code signing enabled: ${MACOS_CODE_SIGN:-false}"
 
           # Set environment variables to ensure build output goes to expected location
           export NODE_ENV=test
+          export MAKE_MAC_DMG=false
 
           # Increase Node.js heap size to prevent out-of-memory errors during build
           # The renderer build (Vite + Vue) requires significant memory
@@ -404,11 +511,16 @@ jobs:
           # Clean any previous build artifacts
           rm -rf out/ || true
 
-          # Try to build with electron-forge make (creates both DMG and ZIP)
+          # Build test artifacts. Test macOS CI skips DMG generation because it is
+          # slow and unsigned builds only need the ZIP artifact for validation.
           echo "Running: yarn make-mac:test"
           yarn make-mac:test 2>&1 | tee build.log
 
           BUILD_EXIT_CODE=${PIPESTATUS[0]}
+          if [ ${BUILD_EXIT_CODE} -eq 0 ]; then
+            yarn verify-packaged-app
+            BUILD_EXIT_CODE=$?
+          fi
           echo "=== Build process completed ==="
           echo "Build exit code: ${BUILD_EXIT_CODE}"
 
@@ -439,32 +551,22 @@ jobs:
             echo "APP bundles:"
             find out -type d -name "*.app" 2>/dev/null || echo "  No APP bundles found"
 
-            # If no DMG/ZIP but APP exists, try to run makers explicitly
+            # If no ZIP exists but APP exists, try to run the zip maker explicitly.
             if find out -type d -name "*.app" 2>/dev/null | grep -q .; then
-              if ! find out -type f \( -name "*.dmg" -o -name "*.zip" \) 2>/dev/null | grep -q .; then
+              if ! find out -type f -name "*.zip" 2>/dev/null | grep -q .; then
                 echo ""
-                echo "⚠️ APP bundle found but no distributables (DMG/ZIP)"
+                echo "⚠️ APP bundle found but no ZIP distributable"
                 echo "Checking build log for maker errors..."
                 echo "=== Last 50 lines of build log ==="
                 tail -50 build.log
 
                 echo ""
-                echo "Attempting to run makers explicitly with --skip-package..."
+                echo "Attempting to run the zip maker explicitly with --skip-package..."
 
-                # Try running makers using electron-forge make with --skip-package
-                # This skips packaging and only runs the makers
-                yarn electron-forge make --skip-package 2>&1 | tee -a build.log || echo "Makers failed again"
+                yarn electron-forge make --skip-package --targets=@electron-forge/maker-zip 2>&1 | tee -a build.log || echo "ZIP maker failed again"
 
-                echo "=== After running makers explicitly ==="
-                find out -type f \( -name "*.dmg" -o -name "*.zip" \) 2>/dev/null || echo "Still no distributables"
-
-                # Last resort: Try to create DMG manually using hdiutil
-                if [ -d "out/aiFetchly-darwin-arm64/aiFetchly.app" ]; then
-                  echo ""
-                  echo "Last resort: Creating DMG manually using hdiutil..."
-                  mkdir -p out/make
-                  hdiutil create -volname "aiFetchly" -srcfolder "out/aiFetchly-darwin-arm64/aiFetchly.app" -ov -format UDZO "out/make/aiFetchly.dmg" || echo "Manual DMG creation failed"
-                fi
+                echo "=== After running zip maker explicitly ==="
+                find out -type f -name "*.zip" 2>/dev/null || echo "Still no ZIP distributable"
               fi
             fi
           else
@@ -476,22 +578,29 @@ jobs:
 
           # Exit with the actual build exit code
           exit ${BUILD_EXIT_CODE}
-      - name: Fallback build if main build fails
-        if: failure()
+
+      - name: Verify macOS signature and notarization
+        if: success()
+        shell: bash
         run: |
-          echo "=== Trying fallback build approach ==="
+          set -euo pipefail
+          if [ "${MACOS_CODE_SIGN:-false}" != "true" ]; then
+            echo "Skipping Gatekeeper verification because this macOS build is unsigned."
+            exit 0
+          fi
 
-          # Increase Node.js heap size for fallback builds as well
-          export NODE_OPTIONS="--max-old-space-size=4096"
+          APP_PATH="$(find out -type d -name "aiFetchly.app" -print -quit)"
+          if [ -z "${APP_PATH}" ]; then
+            echo "::error::Could not find aiFetchly.app in out/."
+            exit 1
+          fi
 
-          # Try to use electron-forge package instead of make
-          echo "Attempting package-only build..."
-          yarn package || echo "Package command failed"
+          echo "Verifying app bundle: ${APP_PATH}"
+          codesign --verify --deep --strict --verbose=4 "${APP_PATH}"
+          codesign -dv --verbose=4 "${APP_PATH}"
+          spctl --assess --type execute --verbose=4 "${APP_PATH}"
+          xcrun stapler validate "${APP_PATH}"
 
-          # Try to create only ZIP if DMG fails
-          echo "Attempting ZIP-only build..."
-          yarn make --platform=darwin --arch="${TARGET_ARCH}" || echo "ZIP build failed"
-  
       - name: Verify electron-forge makers
         run: |
           echo "=== Checking available electron-forge makers ==="
@@ -516,7 +625,7 @@ jobs:
           if-no-files-found: ignore
 
       - name: Upload artifact
-        if: success()
+        if: success() && github.event_name != 'pull_request'
         uses: actions/upload-artifact@v4
         with:
           name: electron-app-macos-v${{ steps.calculate_version.outputs.version }}

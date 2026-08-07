@@ -332,7 +332,7 @@ export class FileToolService {
 
     return {
       success: true,
-      path: params.path,
+      path: filePath,
       bytesWritten,
       mode: isOverwrite ? "overwritten" : "created",
     };
@@ -416,10 +416,94 @@ export class FileToolService {
 
     return {
       success: true,
-      path: params.path,
+      path: filePath,
       replacements: replaceAll ? matchCount : 1,
       diff: diffLines.join("\n"),
     };
+  }
+
+  // ---------------------------------------------------------------------------
+  // glob discovery helper (shared by glob_files / grep_files)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Stream-match files under `searchCwd` without blocking the Electron main
+   * process. Uses async iteration + periodic setImmediate yields, and stops
+   * after `maxGlobScanEntries` raw hits so broad patterns (e.g. recursive
+   * globs under $HOME after "Always Allow") cannot freeze the UI.
+   */
+  private async collectGlobMatches(options: {
+    readonly pattern: string;
+    readonly searchCwd: string;
+    readonly ignore: readonly string[];
+    readonly maxScanEntries: number;
+    /** Optional early exit once this many safe matches are collected. */
+    readonly stopAfterSafeMatches?: number;
+  }): Promise<{ matches: string[]; scanCapped: boolean }> {
+    const { pattern, searchCwd, ignore, maxScanEntries, stopAfterSafeMatches } =
+      options;
+    const matches: string[] = [];
+    let scanned = 0;
+    let sinceYield = 0;
+    let scanCapped = false;
+
+    // F11 — do not follow symlinks; callers must not escape the workspace.
+    const stream = fg.stream(pattern, {
+      cwd: searchCwd,
+      ignore: [...ignore],
+      dot: false,
+      onlyFiles: true,
+      followSymbolicLinks: false,
+    });
+
+    try {
+      for await (const entry of stream) {
+        const rel = String(entry);
+        scanned += 1;
+        sinceYield += 1;
+
+        // Keep the main-process event loop responsive during large walks.
+        if (sinceYield >= 50) {
+          sinceYield = 0;
+          await new Promise<void>((resolve) => {
+            setImmediate(resolve);
+          });
+        }
+
+        // F11 / F4 — FilePathGuard enforces deny-list + realpath containment.
+        // fast-glob ignore alone does not cover .env / symlink escapes.
+        const candidate = path.isAbsolute(rel)
+          ? rel
+          : path.join(searchCwd, rel);
+        const verdict = this.guard.validate(candidate);
+        if (verdict.safe) {
+          matches.push(rel);
+        }
+
+        if (
+          typeof stopAfterSafeMatches === "number" &&
+          matches.length >= stopAfterSafeMatches
+        ) {
+          // Enough safe hits to satisfy head_limit + truncated detection.
+          scanCapped = true;
+          break;
+        }
+
+        if (scanned >= maxScanEntries) {
+          scanCapped = true;
+          break;
+        }
+      }
+    } finally {
+      const readable = stream as NodeJS.ReadableStream & {
+        destroy?: (error?: Error) => void;
+      };
+      if (typeof readable.destroy === "function") {
+        readable.destroy();
+      }
+    }
+
+    return { matches, scanCapped };
   }
 
   // ---------------------------------------------------------------------------
@@ -447,15 +531,18 @@ export class FileToolService {
       params.head_limit ?? FILE_TOOL_SIZE_LIMITS.defaultHeadLimit;
     const ignore = [...DEFAULT_IGNORE_PATTERNS, ...(params.ignore ?? [])];
 
-    const allMatches = fg.sync(params.pattern, {
-      cwd: searchCwd,
+    const { matches: allMatches, scanCapped } = await this.collectGlobMatches({
+      pattern: params.pattern,
+      searchCwd,
       ignore,
-      dot: false,
-      onlyFiles: true,
-    }) as string[];
+      maxScanEntries: FILE_TOOL_SIZE_LIMITS.maxGlobScanEntries,
+      // Stop once we can fill the response and know truncation status.
+      // Avoids walking the rest of $HOME after "Always Allow".
+      stopAfterSafeMatches: headLimit + 1,
+    });
 
     const total = allMatches.length;
-    const truncated = total > headLimit;
+    const truncated = total > headLimit || scanCapped;
     const matches = allMatches.slice(0, headLimit);
 
     return { success: true, matches, total, truncated };
@@ -502,15 +589,17 @@ export class FileToolService {
       };
     }
 
-    // Find files to search using glob (M6 fix — include params.ignore)
+    // Find files to search using async streamed glob (same freeze-safe path
+    // as glob_files). Broad recursive globs under $HOME must not block the UI.
     const globPattern = params.glob ?? "**/*";
     const grepIgnore = [...DEFAULT_IGNORE_PATTERNS, ...(params.ignore ?? [])];
-    const files = fg.sync(globPattern, {
-      cwd: searchPath,
-      ignore: grepIgnore,
-      dot: false,
-      onlyFiles: true,
-    }) as string[];
+    const { matches: files, scanCapped: grepScanCapped } =
+      await this.collectGlobMatches({
+        pattern: globPattern,
+        searchCwd: searchPath,
+        ignore: grepIgnore,
+        maxScanEntries: FILE_TOOL_SIZE_LIMITS.maxGlobScanEntries,
+      });
 
     const contextBefore = params.context_before ?? 0;
     const contextAfter = params.context_after ?? 0;
@@ -585,7 +674,7 @@ export class FileToolService {
       }
     }
 
-    const truncated = totalMatches > headLimit;
+    const truncated = totalMatches > headLimit || grepScanCapped;
 
     switch (outputMode) {
       case "files_with_matches":

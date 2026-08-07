@@ -4,7 +4,7 @@ import {
   HookEventName,
   HookSource,
 } from "@/entityTypes/hookTypes";
-import { matchesHookMatcher } from "./HookMatcher";
+import { matchesHookMatcher, matchesHookIfCondition } from "./HookMatcher";
 
 /**
  * In-memory registry of hook definitions grouped by event.
@@ -32,13 +32,37 @@ export interface HookLookupInput {
   readonly eventName: HookEventName;
   readonly matchQuery?: string;
   readonly sessionId?: string;
+  /**
+   * Tool input arguments, used to evaluate the hook's `if` condition
+   * (a glob-lite pattern matched against argument string values).
+   * Omitted or undefined for non-tool events (SessionStart, Stop, etc.).
+   */
+  readonly toolInput?: Record<string, unknown>;
+}
+
+export interface ListAllFilter {
+  readonly eventName?: HookEventName;
+  readonly source?: HookSource;
+  readonly includeSession?: boolean;
 }
 
 export interface HookRegistryApi {
   registerBuiltinHook(hook: CallbackHookDefinition): void;
   registerSessionHook(sessionId: string, hook: HookDefinition): void;
+  registerUserHook(hook: HookDefinition): void;
+  replaceUserHooks(hooks: HookDefinition[]): void;
   clearSessionHooks(sessionId: string): void;
+  replaceSource(sourceId: string, hooks: readonly HookDefinition[]): void;
+  unregisterSource(sourceId: string): void;
   getMatchingHooks(input: HookLookupInput): readonly HookDefinition[];
+  listAll(filter?: ListAllFilter): readonly HookDefinition[];
+  /**
+   * Mutate the `enabled` flag on an already-registered builtin hook
+   * in place. Used at startup to apply user-specified overrides from
+   * the Token store. Returns true if a builtin with the given id was
+   * found and updated, false otherwise.
+   */
+  setBuiltinEnabled(id: string, enabled: boolean): boolean;
   /** Test-only: wipe all hooks including built-ins. */
   resetForTests(): void;
 }
@@ -53,6 +77,7 @@ interface RegistryEntry {
 
 class HookRegistryImpl implements HookRegistryApi {
   private readonly byEvent = new Map<HookEventName, RegistryEntry[]>();
+  private readonly sourceIndex = new Map<string, Set<string>>();
   private seq = 0;
 
   registerBuiltinHook(hook: CallbackHookDefinition): void {
@@ -68,6 +93,24 @@ class HookRegistryImpl implements HookRegistryApi {
     this.push(hook, sessionId);
   }
 
+  registerUserHook(hook: HookDefinition): void {
+    this.assertNoLeak(hook);
+    this.push(hook);
+  }
+
+  replaceUserHooks(hooks: HookDefinition[]): void {
+    // Remove all existing user-source entries from every event list.
+    for (const list of this.byEvent.values()) {
+      const filtered = list.filter((e) => e.hook.source !== "user");
+      list.length = 0;
+      list.push(...filtered);
+    }
+    // Push the new user hooks.
+    for (const hook of hooks) {
+      this.push(hook);
+    }
+  }
+
   clearSessionHooks(sessionId: string): void {
     if (!sessionId) return;
     for (const list of this.byEvent.values()) {
@@ -76,6 +119,27 @@ class HookRegistryImpl implements HookRegistryApi {
       list.length = 0;
       list.push(...filtered);
     }
+  }
+
+  replaceSource(sourceId: string, hooks: readonly HookDefinition[]): void {
+    const existing = this.sourceIndex.get(sourceId);
+    if (existing) {
+      for (const id of existing) {
+        this.removeHookIdFromAllEvents(id);
+      }
+    }
+
+    const next = new Set<string>();
+    for (const hook of hooks) {
+      const copy = { ...hook } as HookDefinition;
+      this.push(copy);
+      next.add(copy.id);
+    }
+    this.sourceIndex.set(sourceId, next);
+  }
+
+  unregisterSource(sourceId: string): void {
+    this.replaceSource(sourceId, []);
   }
 
   getMatchingHooks(input: HookLookupInput): readonly HookDefinition[] {
@@ -88,10 +152,12 @@ class HookRegistryImpl implements HookRegistryApi {
     for (const entry of list) {
       if (!entry.hook.enabled) continue;
       if (entry.sessionId && input.sessionId !== entry.sessionId) continue;
-      // Untrusted command hooks are excluded — trust gate is enforced
-      // at registration time for command hooks, but defense-in-depth.
-      if (entry.hook.type === "command" && !entry.hook.trusted) continue;
-      if (!matchesHookMatcher(entry.hook.matcher, input.matchQuery ?? "")) continue;
+      if (entry.hook.type === "command" && entry.hook.trusted === false)
+        continue;
+      if (!matchesHookMatcher(entry.hook.matcher, input.matchQuery ?? ""))
+        continue;
+      if (!matchesHookIfCondition(entry.hook.if, input.toolInput))
+        continue;
       if (seen.has(entry.hook.id)) continue;
       seen.add(entry.hook.id);
       matched.push(entry);
@@ -109,9 +175,65 @@ class HookRegistryImpl implements HookRegistryApi {
     return matched.map((e) => e.hook);
   }
 
+  listAll(filter?: ListAllFilter): readonly HookDefinition[] {
+    const seen = new Set<string>();
+    const collected: RegistryEntry[] = [];
+
+    for (const list of this.byEvent.values()) {
+      for (const entry of list) {
+        if (entry.hook.source === "session" && !filter?.includeSession)
+          continue;
+        if (filter?.eventName && entry.hook.eventName !== filter.eventName)
+          continue;
+        if (filter?.source && entry.hook.source !== filter.source) continue;
+        if (seen.has(entry.hook.id)) continue;
+        seen.add(entry.hook.id);
+        collected.push(entry);
+      }
+    }
+
+    collected.sort((a, b) => {
+      const pa = SOURCE_PRIORITY[a.hook.source];
+      const pb = SOURCE_PRIORITY[b.hook.source];
+      if (pa !== pb) return pa - pb;
+      return a.seq - b.seq;
+    });
+
+    return collected.map((e) => e.hook);
+  }
+
+  setBuiltinEnabled(id: string, enabled: boolean): boolean {
+    for (const list of this.byEvent.values()) {
+      for (let i = 0; i < list.length; i++) {
+        const entry = list[i];
+        if (entry.hook.id === id && entry.hook.source === "builtin") {
+          // Replace the entry with an updated copy (immutability).
+          list[i] = {
+            hook: { ...entry.hook, enabled },
+            sessionId: entry.sessionId,
+            seq: entry.seq,
+          };
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
   resetForTests(): void {
     this.byEvent.clear();
+    this.sourceIndex.clear();
     this.seq = 0;
+  }
+
+  private removeHookIdFromAllEvents(id: string): void {
+    for (const list of this.byEvent.values()) {
+      for (let i = list.length - 1; i >= 0; i--) {
+        if (list[i].hook.id === id) {
+          list.splice(i, 1);
+        }
+      }
+    }
   }
 
   private push(hook: HookDefinition, sessionId?: string): void {

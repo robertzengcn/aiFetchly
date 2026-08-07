@@ -13,7 +13,7 @@ describe("FilePathGuard", () => {
   let tmpDir: string;
 
   beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fpg-test-"));
+    tmpDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "fpg-test-")));
     guard = new FilePathGuard([tmpDir]);
   });
 
@@ -194,7 +194,7 @@ describe("FilePathGuard", () => {
 
   describe("multiple workspace roots", () => {
     it("accepts paths in any configured root", () => {
-      const secondTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fpg-test2-"));
+      const secondTmpDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "fpg-test2-")));
       try {
         const multiGuard = new FilePathGuard([tmpDir, secondTmpDir]);
 

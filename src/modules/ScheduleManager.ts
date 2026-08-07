@@ -11,7 +11,7 @@ import { CronJob } from 'cron';
 import {ScheduleExecutionLogInterface} from "@/modules/interface/ScheduleExecutionLogInterface"
 import { ScheduleExecutionLogModule } from "./ScheduleExecutionLogModule";
 import { ScheduleDependencyModule } from "./ScheduleDependencyModule";
-import { ScheduleDependencyInterface } from "./interface/ScheduleDependencyInterface";
+import { ScheduleDependencyInterface, DependencyStatistics } from "./interface/ScheduleDependencyInterface";
 import { SchedulerStatusModel } from "@/model/SchedulerStatus.model";
 import { Token } from "@/modules/token";
 import { USERSDBPATH } from '@/config/usersetting';
@@ -86,6 +86,25 @@ export class ScheduleManager {
 
         ScheduleManager.instance = new ScheduleManager();
         return ScheduleManager.instance;
+    }
+
+    /**
+     * Stop and clear the singleton without creating a replacement.
+     *
+     * Logout clears USERSDBPATH, so resetInstance() would create a temp-db
+     * manager. During user teardown we only want to stop old jobs and drop
+     * references to DB-backed modules from the previous account.
+     */
+    public static async destroyInstance(): Promise<void> {
+        if (ScheduleManager.instance) {
+            try {
+                await ScheduleManager.instance.stop(true);
+            } catch (error) {
+                console.error('Failed to stop existing ScheduleManager during destroy:', error);
+            }
+        }
+
+        ScheduleManager.instance = null;
     }
 
     /**
@@ -345,6 +364,14 @@ export class ScheduleManager {
     async removeDependency(parentId: number, childId: number): Promise<void> {
         await this.scheduleDependencyModule.deleteDependencyByParentChild(parentId, childId);
         console.log(`Removed dependency: ${parentId} -> ${childId}`);
+    }
+
+    async cleanupInactiveDependencies(): Promise<number> {
+        return this.scheduleDependencyModule.cleanupInactiveDependencies();
+    }
+
+    async getDependencyStatistics(): Promise<DependencyStatistics> {
+        return this.scheduleDependencyModule.getDependencyStatistics();
     }
 
     /**

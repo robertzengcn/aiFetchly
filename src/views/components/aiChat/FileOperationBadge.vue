@@ -4,12 +4,15 @@ import type { FileOperationRecord } from "@/entityTypes/fileOperationTypes";
 import { AI_FILE_OPEN } from "@/config/channellist";
 import { windowInvoke } from "@/views/utils/apirequest";
 import { useI18n } from "vue-i18n";
+import { resolveOpenableFilePath } from "@/views/components/aiChatV2/fileOperationMetadata";
 
 interface Props {
   records: readonly FileOperationRecord[];
+  /** Fallback workspace root when a record only has a relative path. */
+  workspaceRoot?: string | null;
 }
 
-defineProps<Props>();
+const props = defineProps<Props>();
 
 const { t } = useI18n();
 
@@ -72,7 +75,8 @@ function getAppendIcon(record: FileOperationRecord): string {
   return record.success ? "mdi-check-circle" : "mdi-alert-circle";
 }
 
-function openFile(filePath: string): void {
+function openFile(record: FileOperationRecord): void {
+  const filePath = resolveOpenableFilePath(record, props.workspaceRoot);
   windowInvoke(AI_FILE_OPEN, { filePath }).catch((openErr: unknown) => {
     console.error("[file-ops] Failed to open file:", openErr);
   });
@@ -116,8 +120,8 @@ function getDiffLineClass(line: string): string {
         variant="tonal"
         density="compact"
         class="cursor-pointer"
-        :title="t('fileOperations.open_file_tooltip') || 'Open file'"
-        @click="openFile(record.filePath)"
+        :title="t('fileOperations.open_with_tooltip') || 'Open file'"
+        @click="openFile(record)"
       >
         <v-icon start size="x-small">{{ getIcon(record) }}</v-icon>
         {{ getBasename(record.filePath) }}

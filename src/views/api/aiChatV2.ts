@@ -37,6 +37,7 @@ import {
   AI_CHAT_V2_PLAN_VERSIONS,
   AI_CHAT_V2_GET_TOOL_APPROVAL_MODE,
   AI_CHAT_V2_SET_TOOL_APPROVAL_MODE,
+  AI_CHAT_V2_READ_PASTE_CACHE,
 } from "@/config/channellist";
 
 let activeChunkHandler: ((raw: unknown) => void) | null = null;
@@ -99,6 +100,19 @@ export async function getChatV2History(
 }
 
 /**
+ * Read cached expanded pasted-text body for history preview dialogs.
+ * Returns null when the cache entry is missing.
+ */
+export async function readPasteCache(
+  contentHash: string
+): Promise<string | null> {
+  const resp = await windowInvoke(AI_CHAT_V2_READ_PASTE_CACHE, {
+    contentHash,
+  });
+  return (resp as string | null) ?? null;
+}
+
+/**
  * Stream a chat message over IPC.
  *
  * Registers listeners for chunk and complete events, then sends the stream
@@ -118,6 +132,18 @@ export async function streamChatV2Message(
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     let tokenLogCount = 0;
+    const expectedConversationId =
+      typeof request.conversationId === "string" &&
+      request.conversationId.length > 0
+        ? request.conversationId
+        : undefined;
+    const isChunkForRequest = (chunk: ChatV2StreamChunk): boolean => {
+      if (!expectedConversationId) return true;
+      if (chunk.conversationId === expectedConversationId) return true;
+      // The main process checks the AI entitlement before parsing the request,
+      // so that specific denial cannot echo the request conversation id.
+      return !chunk.conversationId && chunk.eventType === "error";
+    };
     const cleanup = (): void => {
       detachChatV2StreamListeners(false);
     };
@@ -125,6 +151,14 @@ export async function streamChatV2Message(
     const chunkHandler = (raw: unknown): void => {
       try {
         const chunk: ChatV2StreamChunk = JSON.parse(String(raw));
+        if (!isChunkForRequest(chunk)) {
+          console.debug(
+            `[aiChatV2] ignored stale chunk event=${chunk.eventType} conv=${
+              chunk.conversationId || "(none)"
+            } expected=${expectedConversationId}`
+          );
+          return;
+        }
         if (chunk.eventType === "token") {
           if (tokenLogCount < 5 || tokenLogCount % 25 === 0) {
             console.debug(
@@ -152,8 +186,18 @@ export async function streamChatV2Message(
     };
 
     const completeHandler = (raw: unknown): void => {
+      let shouldCleanup = true;
       try {
         const chunk: ChatV2StreamChunk = JSON.parse(String(raw));
+        if (!isChunkForRequest(chunk)) {
+          console.debug(
+            `[aiChatV2] ignored stale complete event=${chunk.eventType} conv=${
+              chunk.conversationId || "(none)"
+            } expected=${expectedConversationId}`
+          );
+          shouldCleanup = false;
+          return;
+        }
         console.debug(
           `[aiChatV2] stream complete event=${chunk.eventType} conv=${
             chunk.conversationId || "(none)"
@@ -179,7 +223,9 @@ export async function streamChatV2Message(
         onError(error);
         reject(error);
       } finally {
-        cleanup();
+        if (shouldCleanup) {
+          cleanup();
+        }
       }
     };
 

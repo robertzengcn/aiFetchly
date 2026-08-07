@@ -1,9 +1,4 @@
-import {
-  Entity,
-  Column,
-  PrimaryGeneratedColumn,
-  Index,
-} from "typeorm";
+import { Entity, Column, PrimaryGeneratedColumn, Index } from "typeorm";
 import AuditableEntity from "@/entity/Auditable.entity";
 import type { AiMessageTaskStatus } from "@/entityTypes/aiMessageTaskTypes";
 
@@ -37,6 +32,15 @@ export class AiMessageTaskEntity extends AuditableEntity {
   @Column("boolean", { default: false })
   auto_approve_tools: boolean;
 
+  @Column("boolean", { default: false })
+  allow_skills: boolean;
+
+  @Column("boolean", { default: false })
+  allow_mcp: boolean;
+
+  @Column("boolean", { default: false })
+  allow_subagents: boolean;
+
   @Column("integer", { default: 10 })
   max_tool_calls: number;
 
@@ -61,4 +65,10 @@ export class AiMessageTaskEntity extends AuditableEntity {
 
   @Column("text", { nullable: true })
   last_error_message: string;
+
+  /** Origin of this task. `chat_scheduled_loop` tasks are bound to a v2-*
+   * conversation and route through AIChatQueryEngine; null means legacy
+   * standalone schedule-page behavior (technical-design §9.3). */
+  @Column("varchar", { length: 32, nullable: true })
+  source_type?: "schedule_ui" | "chat_scheduled_loop";
 }

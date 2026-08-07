@@ -50,4 +50,8 @@ alwaysApply: true
   - Keep descriptions concise
   - Include both DO and DON'T examples
   - Reference actual code over theoretical examples
-  - Use consistent formatting across rules 
+  - Use consistent formatting across rules
+
+- **Mandatory project rules (always apply):**
+  - [auto-commit.mdc](mdc:.cursor/rules/auto-commit.mdc) — agents MUST git commit after every bug fix and completed task; push only when the user asks
+  - [constitution.mdc](mdc:.cursor/rules/constitution.mdc) — core project principles and workflow

@@ -1,8 +1,12 @@
 import { Token } from "@/modules/token";
 import { USER_AI_ENABLED } from "@/config/usersetting";
 import { SystemSettingModule } from "@/modules/SystemSettingModule";
-import { ai_auto_dream_enabled } from "@/config/settinggroupInit";
+import {
+  ai_auto_dream_enabled,
+  ai_workspace_auto_dream_enabled,
+} from "@/config/settinggroupInit";
 import { AIAutoDreamService } from "@/service/AIAutoDreamService";
+import { AIWorkspaceAutoDreamService } from "@/service/AIWorkspaceAutoDreamService";
 import { AiChatApi } from "@/api/aiChatApi";
 
 /**
@@ -18,8 +22,7 @@ export function getSharedAutoDreamService(): AIAutoDreamService {
   if (!sharedAutoDreamService) {
     const tokenService = new Token();
     sharedAutoDreamService = new AIAutoDreamService({
-      completeChat: (request) =>
-        new AiChatApi().openAIChatCompletion(request),
+      completeChat: (request) => new AiChatApi().openAIChatCompletion(request),
       isAIEnabled: () => tokenService.getValue(USER_AI_ENABLED) === "true",
       isAutoDreamEnabled: async () => {
         try {
@@ -40,7 +43,53 @@ export function getSharedAutoDreamService(): AIAutoDreamService {
   return sharedAutoDreamService;
 }
 
+export function resetSharedAutoDreamService(): void {
+  sharedAutoDreamService = null;
+}
+
 /** Test-only: reset the cached singleton so mocks take effect. */
 export function _resetSharedAutoDreamServiceForTesting(): void {
-  sharedAutoDreamService = null;
+  resetSharedAutoDreamService();
+}
+
+/**
+ * Shared singleton for the workspace-scoped auto-dream service. Kept separate
+ * from the user-memory service so each has its own in-flight lock and they can
+ * consolidate independently. The chat-v2 post-turn trigger and the
+ * workspace-memory IPC must share this same instance.
+ */
+let sharedWorkspaceAutoDreamService: AIWorkspaceAutoDreamService | null = null;
+
+export function getSharedWorkspaceAutoDreamService(): AIWorkspaceAutoDreamService {
+  if (!sharedWorkspaceAutoDreamService) {
+    const tokenService = new Token();
+    sharedWorkspaceAutoDreamService = new AIWorkspaceAutoDreamService({
+      completeChat: (request) => new AiChatApi().openAIChatCompletion(request),
+      isAIEnabled: () => tokenService.getValue(USER_AI_ENABLED) === "true",
+      isAutoDreamEnabled: async () => {
+        try {
+          const v = await new SystemSettingModule().getSettingValue(
+            ai_workspace_auto_dream_enabled
+          );
+          return v !== "false";
+        } catch (err) {
+          console.error(
+            "[workspace-auto-dream] failed to read system_setting toggle:",
+            err
+          );
+          return true;
+        }
+      },
+    });
+  }
+  return sharedWorkspaceAutoDreamService;
+}
+
+export function resetSharedWorkspaceAutoDreamService(): void {
+  sharedWorkspaceAutoDreamService = null;
+}
+
+/** Test-only: reset the cached workspace auto-dream singleton. */
+export function _resetSharedWorkspaceAutoDreamServiceForTesting(): void {
+  resetSharedWorkspaceAutoDreamService();
 }

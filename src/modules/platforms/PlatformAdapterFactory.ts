@@ -18,11 +18,70 @@ import { USonarYellowPageAdapter } from "./USonarYellowPageAdapter";
 import { KoreaLocalPagesAdapter } from "./KoreaLocalPagesAdapter";
 import { YellowPagesComSgAdapter } from "./YellowPagesComSgAdapter";
 
+const PLATFORM_ADAPTER_CLASS_NAMES: Record<string, string> = {
+  "192-com": "ComAdapter192",
+  "11880-de": "Adapter11880",
+  "gelbeseiten-de": "AdapterGelbeseiten",
+  "itownpage-jp": "ITownPageAdapter",
+  "korealocalpages-kr": "KoreaLocalPagesAdapter",
+  "pagesjaunes-fr": "PagesJaunesAdapter",
+  "paginegialle-it": "PagineGialleItAdapter",
+  "usonar-yellowpage-jp": "USonarYellowPageAdapter",
+  "yellowpages-com": "YellowPagesComAdapter",
+  "yellowpages-com-sg": "YellowPagesComSgAdapter",
+  "yelp-com": "YelpComAdapter",
+};
+
+const ADAPTER_MODULE_PATHS: Record<string, string> = {
+  Adapter11880: "@/modules/platforms/11880Adapter",
+  AdapterGelbeseiten: "@/modules/platforms/GelbeseitenAdapter",
+  ComAdapter192: "@/modules/platforms/192ComAdapter",
+  ExampleClassBasedAdapter: "@/modules/platforms/ExampleClassBasedAdapter",
+  ExampleHybridAdapter: "@/modules/platforms/ExampleHybridAdapter",
+  ITownPageAdapter: "@/modules/platforms/ITownPageAdapter",
+  KoreaLocalPagesAdapter: "@/modules/platforms/KoreaLocalPagesAdapter",
+  PagesJaunesAdapter: "@/modules/platforms/PagesJaunesAdapter",
+  PagineGialleItAdapter: "@/modules/platforms/PagineGialleItAdapter",
+  USonarYellowPageAdapter: "@/modules/platforms/USonarYellowPageAdapter",
+  YellowPagesCaAdapter: "@/modules/platforms/YellowPagesCaAdapter",
+  YellowPagesComAdapter: "@/modules/platforms/YellowPagesComAdapter",
+  YellowPagesComSgAdapter: "@/modules/platforms/YellowPagesComSgAdapter",
+  YelpComAdapter: "@/modules/platforms/YelpComAdapter",
+};
+
 /**
  * Factory class for creating platform adapters
  * This avoids dynamic imports in child processes by using direct class references
  */
 export class PlatformAdapterFactory {
+  /**
+   * Resolve a stable adapter class name for a platform configuration.
+   *
+   * Packaged builds may minify constructor names, so worker payloads must not
+   * rely on adapter_class.name. Prefer explicit config, then platform id.
+   */
+  static getAdapterClassNameForPlatform(
+    platformConfig: Pick<PlatformConfig, "id" | "class_name" | "adapter_class">
+  ): string | undefined {
+    if (platformConfig.class_name) {
+      return platformConfig.class_name;
+    }
+
+    const registeredClassName = PLATFORM_ADAPTER_CLASS_NAMES[platformConfig.id];
+    if (registeredClassName) {
+      return registeredClassName;
+    }
+
+    return platformConfig.adapter_class?.name;
+  }
+
+  /**
+   * Resolve the source module path for a stable adapter class name.
+   */
+  static getAdapterModulePath(className: string): string {
+    return ADAPTER_MODULE_PATHS[className] || `@/modules/platforms/${className}`;
+  }
+
   /**
    * Create an adapter instance by class name
    * @param className The name of the adapter class

@@ -7,13 +7,36 @@ import type { AIChatQueryLoopDeps } from "@/service/AIChatQueryLoop";
 import type { AIChatQueryEventSink } from "@/service/AIChatQueryEvents";
 import type { OpenAITool } from "@/api/aiChatApi";
 import { AiChatApi } from "@/api/aiChatApi";
+import type { OpenAIChatImage } from "@/api/aiChatApi";
+import { AIChatGeneratedImageStorageService } from "@/service/AIChatGeneratedImageStorageService";
+import {
+  persistAgentImages,
+  type AgentImageStorage,
+} from "@/service/persistAgentImages";
 import { AgentDefinitionModule } from "@/modules/AgentDefinitionModule";
 import { AgentTaskModule } from "@/modules/AgentTaskModule";
 import { AgentPromptBuilder } from "@/service/AgentPromptBuilder";
 import { AgentOutputParser } from "@/service/AgentOutputParser";
 import { AgentTranscriptService } from "@/service/AgentTranscriptService";
 import { AgentToolPolicyService } from "@/service/AgentToolPolicyService";
+import {
+  isClaudeModelAlias,
+  normalizeClaudeAgentToolName,
+} from "@/service/pluginCompat/ClaudeAgentFormatAdapter";
+import {
+  resolveToolCatalogMode,
+  resolvePositiveIntEnv,
+  TOOL_CATALOG_ENV,
+} from "@/config/toolCatalogConfig";
+import { ToolCatalogService } from "@/service/ToolCatalogService";
+import { ToolPromptBudgetService } from "@/service/ToolPromptBudgetService";
+import type {
+  ToolCatalog,
+  ToolCatalogModeDecision,
+  ToolCatalogRuntimeContext,
+} from "@/entityTypes/toolCatalogTypes";
 import type { AIAutoDreamService } from "@/service/AIAutoDreamService";
+import type { AIWorkspaceAutoDreamService } from "@/service/AIWorkspaceAutoDreamService";
 import type {
   AgentDefinitionView,
   AgentResult,
@@ -36,6 +59,28 @@ function toOpenAITool(
   };
 }
 
+function normalizeRuntimeDefinition(
+  definition: AgentDefinitionView
+): AgentDefinitionView {
+  const normalizedTools = definition.allowedTools
+    .map((name) => normalizeClaudeAgentToolName(name))
+    .filter((name): name is string => typeof name === "string");
+  const defaultModel =
+    definition.defaultModel && isClaudeModelAlias(definition.defaultModel)
+      ? undefined
+      : definition.defaultModel;
+  const normalized: AgentDefinitionView = {
+    ...definition,
+    allowedTools: Array.from(new Set(normalizedTools)),
+  };
+  if (defaultModel) {
+    normalized.defaultModel = defaultModel;
+  } else {
+    delete normalized.defaultModel;
+  }
+  return normalized;
+}
+
 export interface AgentRuntimeDeps {
   /** Override the AI transport (used in tests). Defaults to AiChatApi. */
   streamChatCompletion?: AIChatQueryLoopDeps["streamChatCompletion"];
@@ -48,6 +93,15 @@ export interface AgentRuntimeDeps {
   /** Optional. When provided, the runtime triggers auto-dream consolidation
    * after a completed task. Failures are logged and swallowed. */
   autoDreamService?: AIAutoDreamService;
+  /** Optional. When provided, the runtime triggers workspace-scoped auto-dream
+   * consolidation after a completed task. Runs independently of the user-memory
+   * service. Failures are logged and swallowed. */
+  workspaceAutoDreamService?: AIWorkspaceAutoDreamService;
+  /** Optional. Persists generated images (e.g. a batch worker's edited
+   * outputs) to disk so their file paths can be returned without carrying
+   * bytes. Defaults to AIChatGeneratedImageStorageService when images are
+   * present. */
+  generatedImageStorage?: AgentImageStorage;
 }
 
 /**
@@ -60,6 +114,8 @@ export class AgentRuntime {
   private readonly policy = new AgentToolPolicyService();
   private readonly promptBuilder = new AgentPromptBuilder();
   private readonly outputParser = new AgentOutputParser();
+  private readonly agentCatalogService = new ToolCatalogService();
+  private readonly agentBudgetService = new ToolPromptBudgetService();
   private readonly defModule = new AgentDefinitionModule();
   private readonly taskModule = new AgentTaskModule();
   private readonly api = new AiChatApi();
@@ -68,13 +124,16 @@ export class AgentRuntime {
     request: RunAgentRequest,
     deps?: AgentRuntimeDeps
   ): Promise<AgentResult> {
-    const definition = await this.defModule.getActiveById(request.agentId);
-    if (!definition) {
+    const storedDefinition = await this.defModule.getActiveById(
+      request.agentId
+    );
+    if (!storedDefinition) {
       return this.fail(
         request,
         `Unknown or disabled agent: ${request.agentId}`
       );
     }
+    const definition = normalizeRuntimeDefinition(storedDefinition);
 
     const agentTaskId = `agt-${randomUUID()}`;
     const agentConversationId = `agent-v2-${randomUUID()}`;
@@ -127,6 +186,21 @@ export class AgentRuntime {
         description: def?.description,
         parameters: def?.parameters,
       });
+    });
+
+    // Build a deferred tool catalog scoped to the agent's allowlist. The
+    // catalog is constructed from the already-allowlisted exposedTools and the
+    // runtime context carries allowedToolNames/blockedToolNames, so discovery
+    // can never surface a blocked or non-allowlisted tool (AC-4). Agent tasks
+    // are ephemeral, so discovered state is per-task (in-memory) — no
+    // persistence. Small allowlists stay standard under auto mode (design §16).
+    const agentToolCatalogContext = this.buildAgentToolCatalog({
+      tools: exposedTools,
+      conversationId: agentConversationId,
+      userMessage: request.prompt,
+      model: request.model ?? definition.defaultModel,
+      allowedToolNames: new Set(exposedNames),
+      blockedToolNames: new Set(constraints.blockedTools ?? []),
     });
 
     // 3. Injected executeTool enforces the agent allowlist at runtime.
@@ -223,6 +297,7 @@ export class AgentRuntime {
     }, definition.maxRuntimeMs);
 
     let finalText = "";
+    let capturedImages: OpenAIChatImage[] | undefined;
     const sink: AIChatQueryEventSink = deps?.eventSink ?? {
       emit: () => {
         // no-op sink for headless runs
@@ -245,11 +320,15 @@ export class AgentRuntime {
         eventSink: sink,
         startRound: 0,
         isActiveTurn: () => true,
+        toolCatalog: agentToolCatalogContext.toolCatalog,
+        toolCatalogModeDecision:
+          agentToolCatalogContext.toolCatalogModeDecision,
       };
       const result = await loop.run(loopInput);
 
       if (result.type === "completed") {
         finalText = result.fullContent;
+        capturedImages = result.images;
       } else if (result.type === "cancelled") {
         finalText = result.partialContent;
         await this.taskModule.setStatus(agentTaskId, "cancelled", {
@@ -312,45 +391,102 @@ export class AgentRuntime {
 
     // 6. Parse output.
     await transcript.appendAssistantText(agentTaskId, finalText);
-    const parseResult = this.outputParser.parse(
-      finalText,
-      definition.outputSchema as { required?: string[] }
-    );
-    if (!parseResult.ok) {
-      await this.taskModule.setStatus(agentTaskId, "failed", {
-        finishedAt: new Date(),
-        errorMessage: parseResult.error,
-      });
-      return this.buildResult(
-        agentTaskId,
-        definition,
-        "failed",
-        finalText,
-        parseResult.error
-      );
-    }
 
-    const outputObj = parseResult.output;
+    // Caller-supplied narrower schema takes precedence over the agent default.
+    // (Fixes a bug where outputSchemaOverride was plumbed through RunAgentRequest
+    // but silently ignored here — callers could not actually narrow the schema.)
+    const effectiveSchema =
+      (request.outputSchemaOverride as { required?: string[] } | undefined) ??
+      (definition.outputSchema as { required?: string[] });
+    const parseResult = this.outputParser.parse(finalText, effectiveSchema);
+
     // Trust boundary: validate LLM-generated values before persistence.
     // sourceUrls must be http(s) URLs (PRD §14.4 + SSRF defense for later
     // milestones that may resolve them). confidence must be a finite number.
-    const rawUrls = Array.isArray(outputObj.sourceUrls)
-      ? (outputObj.sourceUrls as unknown[])
-      : [];
-    const sourceUrls = rawUrls.filter((u): u is string => {
-      if (typeof u !== "string") return false;
-      try {
-        const parsed = new URL(u);
-        return parsed.protocol === "http:" || parsed.protocol === "https:";
-      } catch {
-        return false;
-      }
-    });
-    const rawConfidence = outputObj.confidence;
-    const confidence =
-      typeof rawConfidence === "number" && Number.isFinite(rawConfidence)
-        ? rawConfidence
-        : undefined;
+    const extractSourceUrls = (obj: Record<string, unknown>): string[] => {
+      const raw = Array.isArray(obj.sourceUrls)
+        ? (obj.sourceUrls as unknown[])
+        : [];
+      return raw.filter((u): u is string => {
+        if (typeof u !== "string") return false;
+        try {
+          const parsed = new URL(u);
+          return parsed.protocol === "http:" || parsed.protocol === "https:";
+        } catch {
+          return false;
+        }
+      });
+    };
+    const extractConfidence = (
+      obj: Record<string, unknown>
+    ): number | undefined => {
+      const v = obj.confidence;
+      return typeof v === "number" && Number.isFinite(v) ? v : undefined;
+    };
+
+    let outputObj: Record<string, unknown>;
+    let sourceUrls: string[];
+    let confidence: number | undefined;
+    let parseWarning: string | undefined;
+
+    if (parseResult.ok) {
+      outputObj = parseResult.output;
+      sourceUrls = extractSourceUrls(outputObj);
+      confidence = extractConfidence(outputObj);
+    } else {
+      // Lenient fallback: the agent finished its loop but its final text
+      // wasn't valid JSON matching the schema (a common failure when a model
+      // hits an "I can't complete this" state and writes a prose summary
+      // instead). Salvage the work as a low-confidence partial result rather
+      // than failing the whole task — callers already handle low confidence,
+      // and the agent's research is often still useful in the text body.
+      parseWarning = parseResult.error;
+      const base = parseResult.partial ?? {};
+      const fallbackSummary =
+        typeof base.businessSummary === "string" &&
+        base.businessSummary.trim().length > 0
+          ? base.businessSummary
+          : finalText.trim().slice(0, 4000);
+      outputObj = {
+        ...base,
+        businessSummary: fallbackSummary,
+        sourceUrls: Array.isArray(base.sourceUrls) ? base.sourceUrls : [],
+        confidence:
+          typeof base.confidence === "number" &&
+          Number.isFinite(base.confidence)
+            ? base.confidence
+            : 0,
+      };
+      sourceUrls = extractSourceUrls(outputObj);
+      confidence = extractConfidence(outputObj) ?? 0;
+    }
+
+    // Persist any edited/generated images the sub-agent's loop produced
+    // (e.g. a batch worker's attach_local_images edits) to local storage and
+    // derive their on-disk paths + descriptors. Bytes are never carried on
+    // AgentResult (PRD non-goal 8). Failure is swallowed by persistAgentImages
+    // so a storage hiccup never fails an otherwise-successful task.
+    //
+    // The default AIChatGeneratedImageStorageService reads Electron's
+    // app.getPath("userData") at construction, so it is constructed LAZILY —
+    // only when there are images to persist. This keeps image-less runs (incl.
+    // tests without an Electron `app`) from touching Electron at all.
+    let outputFilePaths: string[] | undefined;
+    let outputImages: OpenAIChatImage[] | undefined;
+    let storageWarning: string | undefined;
+    if (capturedImages && capturedImages.length > 0) {
+      const persisted = await persistAgentImages({
+        images: capturedImages,
+        conversationId: agentConversationId,
+        messageId: `agent-assistant-${agentTaskId}`,
+        storage:
+          deps?.generatedImageStorage ??
+          new AIChatGeneratedImageStorageService(),
+      });
+      outputFilePaths = persisted.outputFilePaths;
+      outputImages = persisted.outputImages;
+      storageWarning = persisted.storageWarning;
+    }
 
     const result: AgentResult = {
       agentTaskId,
@@ -362,6 +498,10 @@ export class AgentRuntime {
       toolCallsCount: 0,
       sourceUrls,
       confidence,
+      ...(parseWarning ? { parseWarning } : {}),
+      ...(outputFilePaths ? { outputFilePaths } : {}),
+      ...(outputImages ? { outputImages } : {}),
+      ...(storageWarning ? { storageWarning } : {}),
     };
     await this.taskModule.saveResult(agentTaskId, result);
     await this.taskModule.setStatus(agentTaskId, "completed", {
@@ -379,11 +519,81 @@ export class AgentRuntime {
           console.error("[ai-auto-dream] agent trigger failed:", err)
         );
     }
+    if (deps?.workspaceAutoDreamService) {
+      deps.workspaceAutoDreamService
+        .evaluateAfterAgentTask({
+          agentTaskId,
+          reason: "agent_task_completed",
+        })
+        .catch((err) =>
+          console.error("[workspace-auto-dream] agent trigger failed:", err)
+        );
+    }
     return result;
   }
 
   async getTask(agentTaskId: string): Promise<AgentTaskSnapshot | null> {
     return this.taskModule.getSnapshot(agentTaskId);
+  }
+
+  /**
+   * Build a deferred tool catalog scoped to the agent's allowlist (AC-4).
+   * The catalog is constructed from the already-allowlisted tool set, and the
+   * runtime context carries allowedToolNames/blockedToolNames as defense in
+   * depth so discovery can never surface a blocked tool. Returns empty when
+   * the flag is off, the catalog build throws, or auto mode stays standard
+   * (small allowlists).
+   */
+  private buildAgentToolCatalog(input: {
+    readonly tools: readonly OpenAITool[];
+    readonly conversationId: string;
+    readonly userMessage: string;
+    readonly model?: string;
+    readonly allowedToolNames: ReadonlySet<string>;
+    readonly blockedToolNames: ReadonlySet<string>;
+  }): {
+    toolCatalog?: ToolCatalog;
+    toolCatalogModeDecision?: ToolCatalogModeDecision;
+  } {
+    const mode = resolveToolCatalogMode(process.env[TOOL_CATALOG_ENV.mode]);
+    if (mode.mode === "off") return {};
+
+    const context: ToolCatalogRuntimeContext = {
+      conversationId: input.conversationId,
+      model: input.model,
+      isPlanMode: false,
+      autoPlanEnabled: false,
+      currentUserMessage: input.userMessage,
+      uploadedFileTypes: [],
+      allowedToolNames: input.allowedToolNames,
+      blockedToolNames: input.blockedToolNames,
+    };
+
+    let catalog: ToolCatalog;
+    try {
+      catalog = this.agentCatalogService.buildFromOpenAITools({
+        tools: input.tools,
+        context,
+      });
+    } catch (err) {
+      console.warn(
+        `[agent-runtime] catalog build failed, using standard mode:`,
+        err
+      );
+      return {};
+    }
+
+    const thresholdPercent = resolvePositiveIntEnv(
+      process.env[TOOL_CATALOG_ENV.thresholdPercent]
+    );
+    const decision = this.agentBudgetService.resolveMode({
+      configuredMode: mode.mode,
+      deferredEstimatedTokens: catalog.deferredEstimatedTokens,
+      thresholdPercent,
+    });
+    if (decision.mode === "standard") return {};
+
+    return { toolCatalog: catalog, toolCatalogModeDecision: decision };
   }
 
   private async fail(
