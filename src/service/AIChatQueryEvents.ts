@@ -353,6 +353,17 @@ export interface AIChatQueryLoopInput {
    * but before the abort signal propagates through the underlying fetch.
    */
   isActiveTurn: () => boolean;
+  /**
+   * Optional override for the transient-failure auto-retry policy. When
+   * omitted the loop uses its module-level defaults. Mainly used by tests
+   * to make retries instantaneous; production callers leave this unset.
+   */
+  transientRetryConfig?: {
+    /** Number of retry attempts after the initial failure. */
+    maxAttempts?: number;
+    /** Base delay (ms) for exponential backoff between retries. */
+    baseDelayMs?: number;
+  };
 }
 
 /** Request payload for resumeToolAfterPermission. */

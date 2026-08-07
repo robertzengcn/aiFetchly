@@ -43,6 +43,7 @@ import { CancellationToken } from "@/service/CancellationToken";
 import { getDefaultToolJobRegistry } from "@/service/ToolJobRegistry";
 import { USER_AI_ENABLED } from "@/config/usersetting";
 import { Token } from "@/modules/token";
+import { isTransientRetryableError } from "@/service/AIChatErrorMapper";
 
 /**
  * Max model→tool→model rounds per user turn. Must be high enough to
@@ -76,6 +77,59 @@ const ASYNC_POLL_MAX_MS = 30 * 60_000;
  * particular tool schema.
  */
 const MAX_MALFORMED_ARGUMENT_RETRIES = 3;
+
+/**
+ * Number of times to retry a round that failed with a transient AI-server
+ * error (empty response, finish_reason=error, rate limit, timeout, 502)
+ * AFTER the initial attempt. These failures recover on a fresh request, so
+ * auto-retry hides them from the user instead of surfacing "The AI service
+ * is busy". Retries are only attempted when nothing has been delivered to
+ * the UI yet (no tokens streamed, no tool calls shown) so we never duplicate
+ * visible content.
+ */
+const DEFAULT_TRANSIENT_RETRY_MAX_ATTEMPTS = 3;
+
+/**
+ * Base delay for exponential backoff between transient-failure retries.
+ * Actual delay for attempt N (1-indexed) is base * 2^(N-1), so the sequence
+ * is 800ms, 1.6s, 3.2s — enough for most transient overload/rate-limit
+ * conditions to clear without making the user wait too long.
+ */
+const DEFAULT_TRANSIENT_RETRY_BASE_DELAY_MS = 800;
+
+/**
+ * Tracks whether any content (streamed tokens or tool calls) has been
+ * delivered to the UI during the current turn. Shared across retry attempts
+ * so that a failure after content has been shown is never retried (which
+ * would duplicate the visible output).
+ */
+interface RoundContentTracker {
+  delivered: boolean;
+}
+
+/**
+ * Resolve after `ms`, unless `signal` aborts first (in which case resolve
+ * immediately so the caller can observe the abort on its next iteration).
+ * Used for backoff between transient-failure retries.
+ */
+function abortableDelay(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise<void>((resolve) => {
+    if (ms <= 0 || signal.aborted) {
+      resolve();
+      return;
+    }
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
 
 /**
  * Legacy global timeout ceiling for foreground tool calls.
@@ -279,7 +333,68 @@ export function buildAssistantToolCallMessage(
 export class AIChatQueryLoop {
   constructor(private readonly deps: AIChatQueryLoopDeps) {}
 
+  /**
+   * Public entry point. Runs the turn, auto-retrying if the first (and only
+   * the first, content-free) round fails with a transient AI-server error.
+   * See {@link runOnce} for the per-attempt logic.
+   */
   async run(input: AIChatQueryLoopInput): Promise<AIChatQueryLoopResult> {
+    const maxAttempts =
+      input.transientRetryConfig?.maxAttempts ??
+      DEFAULT_TRANSIENT_RETRY_MAX_ATTEMPTS;
+    const baseDelayMs =
+      input.transientRetryConfig?.baseDelayMs ??
+      DEFAULT_TRANSIENT_RETRY_BASE_DELAY_MS;
+    // Shared across attempts: once the UI has seen any content for this turn,
+    // a later failure must not be retried (it would duplicate visible output).
+    const tracker: RoundContentTracker = { delivered: false };
+    const initialMessages = input.messages;
+
+    for (let attempt = 0; attempt <= maxAttempts; attempt += 1) {
+      // Each attempt starts from the original message history. runOnce never
+      // mutates input.messages on a transient failure (it throws before any
+      // messages.push), but pass a fresh copy to be safe against future changes.
+      const attemptInput: AIChatQueryLoopInput =
+        attempt === 0 ? input : { ...input, messages: [...initialMessages] };
+
+      const result = await this.runOnce(attemptInput, tracker);
+
+      if (result.type !== "failed") {
+        return result;
+      }
+
+      const canRetry =
+        attempt < maxAttempts &&
+        !input.abortController.signal.aborted &&
+        input.isActiveTurn() &&
+        !tracker.delivered &&
+        isTransientRetryableError(result.error);
+
+      if (!canRetry) {
+        return result;
+      }
+
+      const delayMs = baseDelayMs * 2 ** attempt;
+      input.eventSink.emit({
+        type: "retry_connect",
+        conversationId: input.conversationId,
+        messageId: input.assistantMessageId,
+        retryAttempt: attempt + 1,
+        retryMaxAttempts: maxAttempts,
+        retryDelayMs: delayMs,
+      });
+      await abortableDelay(delayMs, input.abortController.signal);
+    }
+
+    // Unreachable: the loop always returns on the final attempt. Returned
+    // purely to satisfy the type checker.
+    throw new Error("AIChatQueryLoop.run exited its retry loop unexpectedly");
+  }
+
+  async runOnce(
+    input: AIChatQueryLoopInput,
+    tracker: RoundContentTracker
+  ): Promise<AIChatQueryLoopResult> {
     const { eventSink } = input;
     let activeAccumulator: OpenAIStreamAccumulator | null = null;
     let finalAccumulator: OpenAIStreamAccumulator | null = null;
@@ -348,6 +463,10 @@ export class AIChatQueryLoop {
             if (!input.isActiveTurn()) return;
             const delta = accumulator.ingest(rawChunk);
             if (delta) {
+              // Mark that the UI has now seen streamed content for this turn.
+              // The retry wrapper uses this to avoid re-running a turn whose
+              // output is already visible (which would duplicate it).
+              tracker.delivered = true;
               eventSink.emit({
                 type: "token",
                 conversationId: input.conversationId,
@@ -578,6 +697,9 @@ export class AIChatQueryLoop {
             toolName: call.name,
             toolArguments: call.arguments ?? {},
           });
+          // A tool call is visible UI content for this turn; from here on a
+          // later failure must not be retried.
+          tracker.delivered = true;
 
           // Model-initiated Plan Mode entry (chat mode only).
           if (

@@ -3,7 +3,10 @@ import {
   AIChatQueryLoop,
   resolveToolChoiceForRound,
 } from "@/service/AIChatQueryLoop";
-import type { AIChatQueryLoopInput } from "@/service/AIChatQueryEvents";
+import type {
+  AIChatQueryEventSink,
+  AIChatQueryLoopInput,
+} from "@/service/AIChatQueryEvents";
 import type { OpenAIChatCompletionChunk } from "@/api/aiChatApi";
 
 function makeChunk(
@@ -554,7 +557,11 @@ describe("AIChatQueryLoop", () => {
       const truncated =
         '{"agentId":"agent-lead-researcher","prompt":"Research Stripe","taskPacket":' +
         '{"lead":{"companyName":"Stripe","contacts":[{"name":"John"';
-      const truncChunk = makeToolCallChunk("call-trunc", "run_subagent", truncated);
+      const truncChunk = makeToolCallChunk(
+        "call-trunc",
+        "run_subagent",
+        truncated
+      );
 
       const eventSink = { emit: vi.fn() };
 
@@ -591,14 +598,22 @@ describe("AIChatQueryLoop", () => {
 
       // Check that at least one tool_result event carried the compact-payload
       // guidance message (emitted before the retry limit was exhausted)
-      const toolResultEvents = (eventSink.emit as ReturnType<typeof vi.fn>).mock.calls
-        .filter((call: unknown[]) => (call[0] as { type?: string }).type === "tool_result")
-        .map((call: unknown[]) => (call[0] as { toolResult?: { error?: string } }).toolResult?.error ?? "");
+      const toolResultEvents = (
+        eventSink.emit as ReturnType<typeof vi.fn>
+      ).mock.calls
+        .filter(
+          (call: unknown[]) =>
+            (call[0] as { type?: string }).type === "tool_result"
+        )
+        .map(
+          (call: unknown[]) =>
+            (call[0] as { toolResult?: { error?: string } }).toolResult
+              ?.error ?? ""
+        );
 
       expect(toolResultEvents.length).toBeGreaterThan(0);
       const hasTruncationGuidance = toolResultEvents.some(
-        (msg: string) =>
-          msg.includes("cut off") && msg.includes("incomplete")
+        (msg: string) => msg.includes("cut off") && msg.includes("incomplete")
       );
       expect(hasTruncationGuidance).toBe(true);
     });
@@ -634,6 +649,9 @@ describe("AIChatQueryLoop", () => {
         eventSink: { emit: vi.fn() },
         startRound: 0,
         isActiveTurn: () => true,
+        // Exhaust the built-in transient retry instantly so this stays a
+        // unit test of the error-surfacing path rather than a slow backoff.
+        transientRetryConfig: { maxAttempts: 1, baseDelayMs: 0 },
       };
 
       const result = await loop.run(input);
@@ -644,6 +662,170 @@ describe("AIChatQueryLoop", () => {
         expect(msg).toMatch(/finish_reason=error/i);
         expect(msg).toMatch(/transient server/i);
       }
+    });
+  });
+
+  describe("transient failure auto-retry", () => {
+    const makeRetryInput = (
+      fakeStream: unknown,
+      eventSink: AIChatQueryEventSink,
+      overrides: Partial<AIChatQueryLoopInput> = {}
+    ): AIChatQueryLoopInput => ({
+      conversationId: "v2-retry",
+      assistantMessageId: "assistant-retry",
+      messages: [],
+      request: { message: "hi" },
+      openAITools: [],
+      abortController: new AbortController(),
+      eventSink,
+      startRound: 0,
+      isActiveTurn: () => true,
+      // Instant retries so the suite stays fast.
+      transientRetryConfig: { maxAttempts: 3, baseDelayMs: 0 },
+      ...overrides,
+    });
+
+    it("retries a transient empty-response failure and succeeds on the next attempt", async () => {
+      let calls = 0;
+      const fakeStream = vi.fn(
+        async (
+          _req: unknown,
+          onChunk: (c: OpenAIChatCompletionChunk) => void
+        ) => {
+          calls += 1;
+          if (calls === 1) {
+            // First attempt: server returns nothing (transient empty response).
+            return;
+          }
+          onChunk(makeChunk("Hello, "));
+          onChunk(makeChunk("world!", "stop"));
+        }
+      );
+      const events: string[] = [];
+      const loop = new AIChatQueryLoop({
+        streamChatCompletion: fakeStream,
+        executeTool: vi.fn(),
+        getSkillDefinition: vi.fn().mockReturnValue(undefined),
+      });
+      const result = await loop.run(
+        makeRetryInput(fakeStream, {
+          emit: (e) => {
+            if (e.type === "retry_connect") {
+              events.push(`retry:${e.retryAttempt}`);
+            }
+          },
+        })
+      );
+
+      expect(result.type).toBe("completed");
+      if (result.type === "completed") {
+        expect(result.fullContent).toBe("Hello, world!");
+      }
+      expect(calls).toBe(2);
+      expect(events).toEqual(["retry:1"]);
+    });
+
+    it("returns failed after exhausting transient retries", async () => {
+      let calls = 0;
+      const fakeStream = vi.fn(async () => {
+        calls += 1; // always returns an empty response
+      });
+      const events: string[] = [];
+      const loop = new AIChatQueryLoop({
+        streamChatCompletion: fakeStream,
+        executeTool: vi.fn(),
+        getSkillDefinition: vi.fn().mockReturnValue(undefined),
+      });
+      const result = await loop.run(
+        makeRetryInput(
+          fakeStream,
+          {
+            emit: (e) => {
+              if (e.type === "retry_connect") {
+                events.push(`retry:${e.retryAttempt}`);
+              }
+            },
+          },
+          { transientRetryConfig: { maxAttempts: 2, baseDelayMs: 0 } }
+        )
+      );
+
+      expect(result.type).toBe("failed");
+      // initial attempt + 2 retries
+      expect(calls).toBe(3);
+      expect(events).toEqual(["retry:1", "retry:2"]);
+    });
+
+    it("does not retry non-transient errors", async () => {
+      let calls = 0;
+      const fakeStream = vi.fn(async () => {
+        calls += 1;
+        throw new Error("totally unexpected explosion");
+      });
+      const events: string[] = [];
+      const loop = new AIChatQueryLoop({
+        streamChatCompletion: fakeStream,
+        executeTool: vi.fn(),
+        getSkillDefinition: vi.fn().mockReturnValue(undefined),
+      });
+      const result = await loop.run(
+        makeRetryInput(fakeStream, {
+          emit: (e) => {
+            if (e.type === "retry_connect") events.push("retry");
+          },
+        })
+      );
+
+      expect(result.type).toBe("failed");
+      expect(calls).toBe(1);
+      expect(events).toEqual([]);
+    });
+
+    it("does not retry once content has been delivered to the UI", async () => {
+      // Round 1 delivers a tool call (visible UI content), executes it, then
+      // round 2 fails with a transient empty response. Because content was
+      // already shown, the turn must NOT be retried.
+      const toolCallChunk = makeToolCallChunk("call-1", "search", '{"q":"x"}');
+      let streamCalls = 0;
+      const fakeStream = vi.fn(
+        async (
+          _req: unknown,
+          onChunk: (c: OpenAIChatCompletionChunk) => void
+        ) => {
+          streamCalls += 1;
+          if (streamCalls === 1) {
+            onChunk(toolCallChunk);
+          } else {
+            // second round: empty transient failure
+            return;
+          }
+        }
+      );
+      const fakeExecute = vi.fn().mockResolvedValue({
+        tool_call_id: "call-1",
+        tool_name: "search",
+        success: true,
+        result: { answer: "ok" },
+        execution_time_ms: 1,
+      });
+      const events: string[] = [];
+      const loop = new AIChatQueryLoop({
+        streamChatCompletion: fakeStream,
+        executeTool: fakeExecute,
+        getSkillDefinition: vi.fn().mockReturnValue(undefined),
+      });
+      const result = await loop.run(
+        makeRetryInput(fakeStream, {
+          emit: (e) => {
+            if (e.type === "retry_connect") events.push("retry");
+          },
+        })
+      );
+
+      expect(result.type).toBe("failed");
+      // Only the two real rounds — no extra retry attempt.
+      expect(streamCalls).toBe(2);
+      expect(events).toEqual([]);
     });
   });
 });
