@@ -44,6 +44,16 @@ describe("verify-packaged-childprocess layout detection", () => {
         'require("electron-store"); require("node:path"); require("./local");'
       );
 
+      const rendererHtml = path.join(
+        appRoot,
+        ".vite",
+        "renderer",
+        "main_window",
+        "index.html"
+      );
+      fs.mkdirSync(path.dirname(rendererHtml), { recursive: true });
+      fs.writeFileSync(rendererHtml, "<!doctype html><title>ci</title>");
+
       fs.mkdirSync(path.join(appRoot, "node_modules", "uuid"), {
         recursive: true,
       });
