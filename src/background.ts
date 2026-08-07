@@ -88,6 +88,10 @@ import {
   getPackagedRendererHtmlCandidates,
   resolvePackagedRendererHtmlPath,
 } from "@/utils/packagedRendererPath";
+import {
+  HtmlFileLoader,
+  loadHtmlFileWithUrlFallback,
+} from "@/utils/loadHtmlFileWithUrlFallback";
 
 let chatScheduledBackgroundScheduler: BackgroundScheduler | null = null;
 // import { RAGIpcHandlers } from '@/main-process/ragIpcHandlers';
@@ -417,6 +421,18 @@ function initialize() {
   }
   makeSingleInstance();
 
+  function createHtmlFileLoader(targetWindow: BrowserWindow): HtmlFileLoader {
+    const windowWithLoadFile = targetWindow as BrowserWindow & {
+      loadFile(filePath: string): Promise<void>;
+    };
+    return {
+      loadFile: (filePath: string): Promise<void> =>
+        windowWithLoadFile.loadFile(filePath),
+      loadURL: (url: string): Promise<void> => targetWindow.loadURL(url),
+      isDestroyed: (): boolean => targetWindow.isDestroyed(),
+    };
+  }
+
   // Helper function to try alternative HTML file paths with detailed error handling
   async function tryAlternativePaths(
     win: BrowserWindow,
@@ -427,9 +443,8 @@ function initialize() {
     const alternativePaths = getPackagedRendererHtmlCandidates(
       {
         dirname: __dirname,
-        resourcesPath: (
-          process as NodeJS.Process & { resourcesPath?: string }
-        ).resourcesPath,
+        resourcesPath: (process as NodeJS.Process & { resourcesPath?: string })
+          .resourcesPath,
         existsSync: fs.existsSync,
       },
       MAIN_WINDOW_VITE_NAME
@@ -456,10 +471,14 @@ function initialize() {
             //console.log('Alternative path exists, attempting to load...');
             // log.info('Alternative path exists, attempting to load:', altPath);
 
-            await (win as any).loadFile(altPath);
+            const loadResult = await loadHtmlFileWithUrlFallback(
+              createHtmlFileLoader(win),
+              altPath
+            );
             console.log(
               "Successfully loaded HTML file from alternative path:",
-              altPath
+              altPath,
+              loadResult.method === "loadURL" ? `via ${loadResult.fileUrl}` : ""
             );
             // log.info('Successfully loaded HTML file from alternative path:', altPath);
             loaded = true;
@@ -753,18 +772,22 @@ function initialize() {
           },
           MAIN_WINDOW_VITE_NAME
         ) ??
-        path.join(
-          __dirname,
-          `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`
-        );
+        path.join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`);
 
       if (fs.existsSync(htmlPath)) {
         log.info("Attempting to load HTML file from:", htmlPath);
 
         try {
           if (win && !(win as any).isDestroyed()) {
-            await (win as any).loadFile(htmlPath);
-            console.log("Successfully loaded HTML file from:", htmlPath);
+            const loadResult = await loadHtmlFileWithUrlFallback(
+              createHtmlFileLoader(win),
+              htmlPath
+            );
+            console.log(
+              "Successfully loaded HTML file from:",
+              htmlPath,
+              loadResult.method === "loadURL" ? `via ${loadResult.fileUrl}` : ""
+            );
           } else {
             console.error("Window has been destroyed, cannot load file");
             dialog.showErrorBox(
