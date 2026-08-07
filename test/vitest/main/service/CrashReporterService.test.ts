@@ -49,4 +49,12 @@ describe('CrashReporterService', () => {
     const records = CrashLogSink.readAll();
     expect(records[0].crashType).toBe('unhandled-rejection');
   });
+
+  test('recordUncleanShutdown returns a crash id that was written', () => {
+    const crashId = svc.recordUncleanShutdown('prev-sess');
+    const records = CrashLogSink.readAll();
+    expect(crashId).toBeTruthy();
+    expect(records[0].crashType).toBe('unclean-shutdown');
+    expect(records[0].crashId).toBe(crashId);
+  });
 });

@@ -55,6 +55,11 @@ import {
   getOrCreateInstallId,
 } from "@/modules/diagnostics/DiagnosticIdentity";
 import { DiagnosticRetentionService } from "@/modules/diagnostics/DiagnosticRetentionService";
+import {
+  getLastPromptedCrashId,
+  setLastPromptedCrashId,
+  shouldShowUncleanShutdownPrompt,
+} from "@/modules/diagnostics/CrashPromptState";
 import fs from "fs";
 import ProtocolRegistry from "protocol-registry";
 //import { RemoteSource } from '@/modules/remotesource'
@@ -174,6 +179,8 @@ __diagnosticsRetention.schedule();
 // dev kill as a real unclean shutdown. `app.isPackaged` is the reliable signal
 // here (NODE_ENV is not auto-set to "production" in packaged Electron builds).
 const __startupMarker = getStartupMarkerPath();
+/** Set only when THIS launch found a leftover startup marker. */
+let __uncleanShutdownCrashIdThisLaunch: string | null = null;
 if ((app as any).isPackaged) {
   let __previousSessionId: string | undefined;
   if (fs.existsSync(__startupMarker)) {
@@ -182,9 +189,11 @@ if ((app as any).isPackaged) {
         sessionId?: string;
       };
       __previousSessionId = prev.sessionId;
-      __crashReporter.recordUncleanShutdown(__previousSessionId);
+      __uncleanShutdownCrashIdThisLaunch =
+        __crashReporter.recordUncleanShutdown(__previousSessionId);
     } catch {
-      __crashReporter.recordUncleanShutdown();
+      __uncleanShutdownCrashIdThisLaunch =
+        __crashReporter.recordUncleanShutdown();
     }
   }
   fs.writeFileSync(
@@ -195,6 +204,15 @@ if ((app as any).isPackaged) {
   // Dev: clear any stale marker left by a previous (killed) run.
   try {
     fs.rmSync(__startupMarker, { force: true });
+  } catch {
+    /* ignore */
+  }
+}
+
+function clearStartupMarker(): void {
+  try {
+    const marker = getStartupMarkerPath();
+    if (fs.existsSync(marker)) fs.rmSync(marker, { force: true });
   } catch {
     /* ignore */
   }
@@ -263,6 +281,9 @@ let onSecondInstanceActivate: (() => void) | null = null;
 function scheduleForcedAppExit(reason: string): void {
   log.error(`[startup] scheduling forced exit: ${reason}`);
   setTimeout(() => {
+    // app.exit() skips before-quit; clear the marker first so the next launch
+    // does not treat this recovery exit as an unexpected crash.
+    clearStartupMarker();
     try {
       (app as unknown as { exit: (code?: number) => void }).exit(1);
     } catch {
@@ -931,12 +952,7 @@ function initialize() {
   (app as any).on("before-quit", async () => {
     // Remove startup marker on clean shutdown so the next launch does not
     // mistake a graceful exit for a crash.
-    try {
-      const __startupMarker = getStartupMarkerPath();
-      if (fs.existsSync(__startupMarker)) fs.rmSync(__startupMarker);
-    } catch {
-      /* ignore */
-    }
+    clearStartupMarker();
 
     // Stop the dev browser bridge (no-op if it never started).
     try {
@@ -1232,6 +1248,7 @@ function initialize() {
   });
 
   (app as any).on("will-quit", () => {
+    clearStartupMarker();
     globalShortcut.unregisterAll();
   });
 
@@ -1537,26 +1554,29 @@ function sendLoginError(message: string): void {
 }
 
 /**
- * Show the "report crash" prompt if the previous session ended in an
- * unclean shutdown. No-op when there is no `unclean-shutdown` record on
- * disk (e.g. first launch or after a clean exit). The function is wrapped
- * in a try/catch so a failure in the diagnostics layer can never block
- * app startup — `maybeShowCrashPrompt` is invoked fire-and-forget via
- * `void` from `app.whenReady`.
- *
- * v1 note: this is not throttled by `lastPromptedCrashId`. The prompt
- * shows at most once per session that has an unread unclean-shutdown
- * record. Throttling is a P2 follow-up.
+ * Show the "report crash" prompt only when THIS launch detected a leftover
+ * startup marker (true unclean previous exit). Historical crash.jsonl rows
+ * alone must not re-open the dialog after a normal quit. After any user
+ * choice (including Dismiss), persist the crashId so the same event cannot
+ * prompt again.
  */
 async function maybeShowCrashPrompt(): Promise<void> {
   // Production only (see startup-marker logic above). Dev builds are killed
   // repeatedly without graceful shutdown, so prompting would be noise.
   if (!(app as any).isPackaged) return;
   try {
-    const { CrashLogSink } = await import("@/modules/diagnostics/CrashLogSink");
-    const records = CrashLogSink.readAll();
-    const latest = records.find((r) => r.crashType === "unclean-shutdown");
-    if (!latest) return;
+    const crashId = __uncleanShutdownCrashIdThisLaunch;
+    if (
+      !shouldShowUncleanShutdownPrompt({
+        detectedThisLaunch: crashId !== null,
+        crashId,
+        lastPromptedCrashId: getLastPromptedCrashId(),
+      })
+    ) {
+      return;
+    }
+    if (!crashId) return;
+
     const choice = await dialog.showMessageBox({
       type: "question",
       title: "AiFetchly",
@@ -1567,16 +1587,20 @@ async function maybeShowCrashPrompt(): Promise<void> {
       defaultId: 0,
       cancelId: 2,
     });
+    // Always mark prompted after the dialog — including Dismiss — so a single
+    // historical unclean-shutdown cannot reappear on every normal launch.
+    setLastPromptedCrashId(crashId);
+
     if (choice.response === 0) {
       const { uploadLatestUncleanShutdown } = await import(
         "@/main-process/communication/diagnostics-ipc"
       );
-      await uploadLatestUncleanShutdown(latest.crashId);
+      await uploadLatestUncleanShutdown(crashId);
     } else if (choice.response === 1) {
       const { exportLatestReport } = await import(
         "@/main-process/communication/diagnostics-ipc"
       );
-      await exportLatestReport(latest.crashId);
+      await exportLatestReport(crashId);
     }
   } catch (e) {
     log.warn("[crash-prompt] failed", e);

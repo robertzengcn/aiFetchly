@@ -148,8 +148,8 @@ export class CrashReporterService {
     });
   }
 
-  recordUncleanShutdown(previousSessionId?: string): void {
-    this.write({
+  recordUncleanShutdown(previousSessionId?: string): string {
+    return this.write({
       processType: "main",
       crashType: "unclean-shutdown",
       message: previousSessionId
@@ -191,7 +191,7 @@ export class CrashReporterService {
     feature?: string;
     taskId?: string;
     workerType?: string;
-  }): void {
+  }): string {
     const rec: CrashRecord = {
       schemaVersion: 1,
       timestamp: new Date().toISOString(),
@@ -217,6 +217,7 @@ export class CrashReporterService {
       message: redactedMsg,
       level: "error",
     });
+    return rec.crashId;
   }
 }
 
