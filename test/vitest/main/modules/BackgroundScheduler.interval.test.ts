@@ -7,6 +7,8 @@ const mockGetByTrigger = vi.hoisted(() => vi.fn());
 const mockPauseWithReason = vi.hoisted(() => vi.fn());
 const mockMarkInterrupted = vi.hoisted(() => vi.fn());
 const mockRunChatLoop = vi.hoisted(() => vi.fn());
+const mockCleanupInactiveDependencies = vi.hoisted(() => vi.fn());
+const mockCleanupOldExecutions = vi.hoisted(() => vi.fn());
 
 vi.mock("@/config/SqliteDb", () => ({
   SqliteDb: {
@@ -23,6 +25,7 @@ vi.mock("@/modules/ScheduleManager", () => ({
       stop: vi.fn(async () => undefined),
       handleAppShutdown: vi.fn(async () => undefined),
       getSchedulerStatus: () => ({ activeSchedules: 0, totalSchedules: 0 }),
+      cleanupInactiveDependencies: mockCleanupInactiveDependencies,
       resetInstance: vi.fn(async () => ({})),
     }),
   },
@@ -35,7 +38,9 @@ vi.mock("@/modules/ScheduleTaskModule", () => ({
   })),
 }));
 vi.mock("@/model/ScheduleExecutionLog.model", () => ({
-  ScheduleExecutionLogModel: vi.fn().mockImplementation(() => ({})),
+  ScheduleExecutionLogModel: vi.fn().mockImplementation(() => ({
+    cleanupOldExecutions: mockCleanupOldExecutions,
+  })),
 }));
 vi.mock("@/modules/TaskExecutorService", () => ({
   TaskExecutorService: vi.fn().mockImplementation(() => ({})),
@@ -74,6 +79,7 @@ type PrivateScheduler = {
   isRunning: boolean;
   processIntervalTasks(): Promise<void>;
   recoverIntervalRuns(): Promise<void>;
+  performCleanup(): Promise<void>;
 };
 
 beforeEach(() => {
@@ -82,12 +88,29 @@ beforeEach(() => {
   mockClaim.mockResolvedValue({ kind: "not_due" });
   mockGetByTrigger.mockResolvedValue([]);
   mockMarkInterrupted.mockResolvedValue(0);
+  mockCleanupInactiveDependencies.mockResolvedValue(0);
+  mockCleanupOldExecutions.mockResolvedValue(0);
   mockRunChatLoop.mockResolvedValue({
     runId: 5,
     status: "completed",
     assistantFinalMessage: "",
     toolCallsCount: 0,
     blockedToolCalls: [],
+  });
+});
+
+describe("BackgroundScheduler.performCleanup", () => {
+  it("uses the ScheduleManager dependency cleanup API", async () => {
+    mockCleanupOldExecutions.mockResolvedValue(2);
+    mockCleanupInactiveDependencies.mockResolvedValue(1);
+    const scheduler = new BackgroundScheduler(
+      "/tmp/sched-test"
+    ) as unknown as PrivateScheduler;
+
+    await scheduler.performCleanup();
+
+    expect(mockCleanupOldExecutions).toHaveBeenCalledWith(30);
+    expect(mockCleanupInactiveDependencies).toHaveBeenCalledTimes(1);
   });
 });
 
