@@ -43,7 +43,7 @@ import { CancellationToken } from "@/service/CancellationToken";
 import { getDefaultToolJobRegistry } from "@/service/ToolJobRegistry";
 import { USER_AI_ENABLED } from "@/config/usersetting";
 import { Token } from "@/modules/token";
-import { isTransientRetryableError } from "@/service/AIChatErrorMapper";
+import { isContentLevelTransientError } from "@/service/AIChatErrorMapper";
 
 /**
  * Max model→tool→model rounds per user turn. Must be high enough to
@@ -348,12 +348,13 @@ export class AIChatQueryLoop {
     // Shared across attempts: once the UI has seen any content for this turn,
     // a later failure must not be retried (it would duplicate visible output).
     const tracker: RoundContentTracker = { delivered: false };
-    const initialMessages = input.messages;
+    // Snapshot the original transcript up front. runOnce mutates the messages
+    // array it receives (pushing assistant tool-call / tool-result rows as the
+    // round advances), so a retry must start from this pristine copy — not the
+    // (possibly mutated) input.messages reference.
+    const initialMessages = [...input.messages];
 
     for (let attempt = 0; attempt <= maxAttempts; attempt += 1) {
-      // Each attempt starts from the original message history. runOnce never
-      // mutates input.messages on a transient failure (it throws before any
-      // messages.push), but pass a fresh copy to be safe against future changes.
       const attemptInput: AIChatQueryLoopInput =
         attempt === 0 ? input : { ...input, messages: [...initialMessages] };
 
@@ -363,12 +364,16 @@ export class AIChatQueryLoop {
         return result;
       }
 
+      // Only retry CONTENT-level transients (empty response, finish_reason=
+      // error). Transport-layer conditions (502, 429, timeouts, network) are
+      // already retried by the streaming HTTP client; retrying them here too
+      // would stack the two layers into a burst of ~16 requests per turn.
       const canRetry =
         attempt < maxAttempts &&
         !input.abortController.signal.aborted &&
         input.isActiveTurn() &&
         !tracker.delivered &&
-        isTransientRetryableError(result.error);
+        isContentLevelTransientError(result.error);
 
       if (!canRetry) {
         return result;
@@ -636,6 +641,12 @@ export class AIChatQueryLoop {
             accumulator.state.fullContent
           )
         );
+        // The round has committed to tool calls: the loops below will emit
+        // tool_result events for malformed calls and tool_call events for
+        // valid ones — all visible UI content. Mark the turn as having
+        // delivered content so a later transient failure is not retried
+        // (which would duplicate those events and orphan the persisted rows).
+        tracker.delivered = true;
 
         // Push error tool results for malformed calls so the model can
         // self-correct in the next round. The assistant message above
@@ -697,9 +708,6 @@ export class AIChatQueryLoop {
             toolName: call.name,
             toolArguments: call.arguments ?? {},
           });
-          // A tool call is visible UI content for this turn; from here on a
-          // later failure must not be retried.
-          tracker.delivered = true;
 
           // Model-initiated Plan Mode entry (chat mode only).
           if (

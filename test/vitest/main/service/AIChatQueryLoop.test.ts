@@ -827,5 +827,75 @@ describe("AIChatQueryLoop", () => {
       expect(streamCalls).toBe(2);
       expect(events).toEqual([]);
     });
+
+    it("does not retry after malformed tool-call results have been emitted", async () => {
+      // Regression: a malformed tool call emits a tool_result (visible UI
+      // content + persisted) and pushes messages, but does not stream text.
+      // A later transient empty round must NOT trigger a retry, otherwise the
+      // tool_result is duplicated in the UI and orphaned in the DB.
+      const malformedChunk = makeToolCallChunk("call-1", "search", "{bad json");
+      let streamCalls = 0;
+      const fakeStream = vi.fn(
+        async (
+          _req: unknown,
+          onChunk: (c: OpenAIChatCompletionChunk) => void
+        ) => {
+          streamCalls += 1;
+          if (streamCalls === 1) {
+            onChunk(malformedChunk); // round 1: malformed tool call
+          } else {
+            // round 2: transient empty response
+            return;
+          }
+        }
+      );
+      const events: string[] = [];
+      const loop = new AIChatQueryLoop({
+        streamChatCompletion: fakeStream,
+        executeTool: vi.fn(),
+        getSkillDefinition: vi.fn().mockReturnValue(undefined),
+      });
+      const result = await loop.run(
+        makeRetryInput(fakeStream, {
+          emit: (e) => {
+            if (e.type === "retry_connect") events.push("retry");
+            if (e.type === "tool_result") events.push("tool_result");
+          },
+        })
+      );
+
+      expect(result.type).toBe("failed");
+      // The malformed tool_result was emitted (UI saw content) → no retry.
+      expect(events).toContain("tool_result");
+      expect(events).not.toContain("retry");
+      expect(streamCalls).toBe(2);
+    });
+
+    it("does not retry transport-layer errors already handled by the HTTP client", async () => {
+      // A 502 is retried by the underlying stream client; the loop must not
+      // stack another retry layer on top of it.
+      let calls = 0;
+      const fakeStream = vi.fn(async () => {
+        calls += 1;
+        throw new Error("Server returned 502");
+      });
+      const events: string[] = [];
+      const loop = new AIChatQueryLoop({
+        streamChatCompletion: fakeStream,
+        executeTool: vi.fn(),
+        getSkillDefinition: vi.fn().mockReturnValue(undefined),
+      });
+      const result = await loop.run(
+        makeRetryInput(fakeStream, {
+          emit: (e) => {
+            if (e.type === "retry_connect") events.push("retry");
+          },
+        })
+      );
+
+      expect(result.type).toBe("failed");
+      expect(calls).toBe(1);
+      expect(events).toEqual([]);
+    });
   });
 });

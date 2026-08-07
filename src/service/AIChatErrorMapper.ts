@@ -21,13 +21,41 @@ const TRANSIENT_ERROR_PATTERN =
 /**
  * Returns true when the error represents a transient, retryable AI-server
  * failure (overload, rate limit, timeout, empty/error response). Aborts and
- * non-Error values are never retryable. Used by {@link AIChatQueryLoop} to
- * decide whether to auto-retry a failed round.
+ * non-Error values are never retryable. Used by {@link userSafeError} to pick
+ * the user-facing message.
  */
 export function isTransientRetryableError(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
   if (err.name === "AbortError") return false;
   return TRANSIENT_ERROR_PATTERN.test(err.message || "");
+}
+
+/**
+ * Narrower pattern for transient failures that originate from the STREAM
+ * CONTENT (the HTTP request itself succeeded with 200 OK, but the model's
+ * response was empty or signalled finish_reason=error). These are NOT seen
+ * by the HTTP transport's own retry layer, so the query loop is the only
+ * layer that can recover them.
+ *
+ * Deliberately excludes rate-limit / timeout / 502 signals: those are
+ * transport-layer conditions already retried by the streaming HTTP client
+ * (see aiChatApi.isRetryableStreamStatus). Having the query loop retry them
+ * too would stack the two layers (up to ~16 requests for one user message).
+ */
+const STREAM_CONTENT_TRANSIENT_PATTERN =
+  /finish_reason=error|empty response|no finish reason/i;
+
+/**
+ * Returns true when the error is a transient failure of the model's streamed
+ * content (empty response, finish_reason=error) — i.e. a content-level
+ * transient that the HTTP transport did NOT already retry. Used by
+ * {@link AIChatQueryLoop} to decide whether to auto-retry a failed round
+ * without stacking on top of the transport-layer retries.
+ */
+export function isContentLevelTransientError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  if (err.name === "AbortError") return false;
+  return STREAM_CONTENT_TRANSIENT_PATTERN.test(err.message || "");
 }
 
 /**

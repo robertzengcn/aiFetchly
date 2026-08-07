@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   QUOTA_EXHAUSTED_SENTINEL,
+  isContentLevelTransientError,
   isTransientRetryableError,
   userSafeError,
 } from "@/service/AIChatErrorMapper";
@@ -120,5 +121,52 @@ describe("AIChatErrorMapper - isTransientRetryableError", () => {
     expect(isTransientRetryableError("a string")).toBe(false);
     expect(isTransientRetryableError(null)).toBe(false);
     expect(isTransientRetryableError(undefined)).toBe(false);
+  });
+});
+
+describe("AIChatErrorMapper - isContentLevelTransientError", () => {
+  it("flags finish_reason=error and empty-response content failures", () => {
+    expect(
+      isContentLevelTransientError(
+        new Error(
+          "AI server returned finish_reason=error (transient server-side failure)."
+        )
+      )
+    ).toBe(true);
+    expect(
+      isContentLevelTransientError(
+        new Error("AI server returned an empty response with no finish reason.")
+      )
+    ).toBe(true);
+  });
+
+  it("does not flag transport-layer conditions the HTTP client already retries", () => {
+    // These are retried by aiChatApi's transport layer; the query loop must
+    // not stack a second retry layer on top of them.
+    expect(isContentLevelTransientError(new Error("Server returned 502"))).toBe(
+      false
+    );
+    expect(isContentLevelTransientError(new Error("Server returned 429"))).toBe(
+      false
+    );
+    expect(isContentLevelTransientError(new Error("rate limit exceeded"))).toBe(
+      false
+    );
+    expect(isContentLevelTransientError(new Error("request timeout"))).toBe(
+      false
+    );
+    expect(isContentLevelTransientError(new Error("fetch failed"))).toBe(false);
+  });
+
+  it("does not flag aborts, auth, or unknown errors", () => {
+    const abort = new Error("stopped");
+    abort.name = "AbortError";
+    expect(isContentLevelTransientError(abort)).toBe(false);
+    expect(isContentLevelTransientError(new Error("401 Unauthorized"))).toBe(
+      false
+    );
+    expect(isContentLevelTransientError(new Error("totally unexpected"))).toBe(
+      false
+    );
   });
 });
