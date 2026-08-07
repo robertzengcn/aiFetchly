@@ -143,6 +143,7 @@
           icon
           size="small"
           variant="text"
+          data-testid="new-conversation"
           @click="onNewConversation"
           :title="t('aiChatV2.new_conversation') || 'New conversation'"
         >
@@ -2556,6 +2557,10 @@ const onNewConversation = (): void => {
   streamingEstimatedTokens.value = 0;
   activeModel.value = undefined;
   toolApprovalMode.value = "ask_for_approval";
+  // Refresh the model list so newly-added server-side models appear in the
+  // selector without an app restart. Non-blocking and preserves the user's
+  // chosen model (loadModelContextWindows only re-resolves when undefined).
+  void loadModelContextWindows();
 };
 
 const onClearMessages = (): void => {
