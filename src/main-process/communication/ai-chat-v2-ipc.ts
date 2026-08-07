@@ -742,8 +742,28 @@ async function handleStream(event: IpcEventLike, data: string): Promise<void> {
   await engine.submitMessage({ request: processedReq, eventSink });
 }
 
-function handleStop(): void {
-  getQueryEngine().stopActiveTurn();
+/**
+ * Stop active chat turn(s). Accepts an optional `{ conversationId }` payload so
+ * the renderer can stop ONE conversation's turn (the Stop button / permission
+ * deny) without aborting other conversations' background turns. When no
+ * conversationId is supplied, every active + pending turn is stopped (used by
+ * DB switch / sign-out via resetAiChatV2RuntimeForDatabaseSwitch).
+ */
+function handleStop(data?: unknown): void {
+  let conversationId: string | undefined;
+  let raw: unknown = data;
+  if (typeof raw === "string" && raw.length > 0) {
+    try {
+      raw = JSON.parse(raw);
+    } catch {
+      raw = undefined;
+    }
+  }
+  if (raw && typeof raw === "object") {
+    const value = (raw as { conversationId?: unknown }).conversationId;
+    conversationId = typeof value === "string" ? value : undefined;
+  }
+  getQueryEngine().stopActiveTurn(conversationId);
 }
 
 // -------------------------------------------------------------------------
@@ -1369,5 +1389,5 @@ export function registerAiChatV2IpcHandlers(): void {
       });
     }
   });
-  ipcMain.on(AI_CHAT_V2_STREAM_STOP, () => handleStop());
+  ipcMain.on(AI_CHAT_V2_STREAM_STOP, (_e, data?: unknown) => handleStop(data));
 }
