@@ -252,12 +252,23 @@ export interface AIChatQueryEngineDeps {
  * and stop. The engine delegates the inner model/tool round loop to
  * AIChatQueryLoop and handles the result.
  */
+interface ActiveTurnState {
+  abortController: AbortController;
+  assistantMessageId: string;
+  eventSink: AIChatQueryEventSink;
+}
+
 export class AIChatQueryEngine {
-  private currentAbortController: AbortController | null = null;
-  private currentConversationId: string | null = null;
-  private currentAssistantMessageId: string | null = null;
-  private pendingPermission: PendingPermissionTurn | null = null;
-  private pendingPlanQuestion: PendingPlanQuestionTurn | null = null;
+  /**
+   * Per-conversation active turns. Replaces the singleton trio
+   * (currentAbortController/currentConversationId/currentAssistantMessageId).
+   * Keyed by conversationId so concurrent background turns do not collide.
+   * Invariant: for any conversationId, at most one entry exists here OR in
+   * pendingPermissions/pendingPlanQuestions — the three maps are disjoint.
+   */
+  private activeTurns = new Map<string, ActiveTurnState>();
+  private pendingPermissions = new Map<string, PendingPermissionTurn>();
+  private pendingPlanQuestions = new Map<string, PendingPlanQuestionTurn>();
   private readonly contextAssembler: AIChatContextAssembler;
   private readonly compactAgent?: AIChatCompactAgentService;
   private readonly autoDreamService?: AIAutoDreamService;
@@ -290,13 +301,13 @@ export class AIChatQueryEngine {
 
   /** Return main-process truth for a conversation's current turn. */
   getConversationRuntimeStatus(conversationId: string): ChatV2RuntimeStatus {
-    if (this.pendingPermission?.conversationId === conversationId) {
+    if (this.pendingPermissions.has(conversationId)) {
       return "awaiting_permission";
     }
-    if (this.pendingPlanQuestion?.conversationId === conversationId) {
+    if (this.pendingPlanQuestions.has(conversationId)) {
       return "awaiting_user";
     }
-    if (this.currentConversationId === conversationId) {
+    if (this.activeTurns.has(conversationId)) {
       return "running";
     }
     return "idle";
@@ -568,7 +579,6 @@ export class AIChatQueryEngine {
       conversationId = module.createConversationIfNeeded(
         request.conversationId
       );
-      this.currentConversationId = conversationId;
       if (request.toolApprovalMode) {
         new AIChatToolApprovalModule().setMode(
           conversationId,
@@ -736,11 +746,10 @@ export class AIChatQueryEngine {
       assistantMessageId = scheduledContext
         ? scheduledContext.assistantMessageId
         : `assistant-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      this.currentAssistantMessageId = assistantMessageId;
       messages = [...assembled.messages];
     } catch (err) {
       console.error("[ai-chat-v2] pre-stream error:", err);
-      this.clearActiveTurnState();
+      this.clearActiveTurnState(request.conversationId ?? "");
       void redirectToLoginOnAuthExpired(err);
       eventSink.emit({
         type: "error",
@@ -826,15 +835,22 @@ export class AIChatQueryEngine {
       : undefined;
 
     // ------------------------------------------------------------------
-    // 4. Abort any prior active turn, create new abort controller
+    // 4. Abort any prior active turn FOR THIS CONVERSATION ONLY, then register
+    //    the new turn. Cross-conversation turns are left alone so background
+    //    streaming can continue (concurrent-turns support).
     // ------------------------------------------------------------------
-    const abortController = new AbortController();
-    if (this.currentAbortController) {
-      this.currentAbortController.abort();
+    const prior = this.activeTurns.get(conversationId);
+    if (prior) {
+      prior.abortController.abort();
     }
-    this.currentAbortController = abortController;
-    this.pendingPermission = null;
-    this.pendingPlanQuestion = null;
+    const abortController = new AbortController();
+    this.activeTurns.set(conversationId, {
+      abortController,
+      assistantMessageId,
+      eventSink,
+    });
+    this.pendingPermissions.delete(conversationId);
+    this.pendingPlanQuestions.delete(conversationId);
 
     // ------------------------------------------------------------------
     // 5. Emit start event
@@ -910,9 +926,10 @@ export class AIChatQueryEngine {
           }
         : undefined,
       startRound: 0,
-      isActiveTurn: () =>
-        this.currentAssistantMessageId === assistantMessageId &&
-        this.currentConversationId === conversationId,
+      isActiveTurn: () => {
+        const entry = this.activeTurns.get(conversationId);
+        return !!entry && entry.assistantMessageId === assistantMessageId;
+      },
       toolCatalog: toolCatalogContext.toolCatalog,
       toolCatalogModeDecision: toolCatalogContext.toolCatalogModeDecision,
       toolCatalogState: persistedToolCatalogState,
@@ -924,14 +941,16 @@ export class AIChatQueryEngine {
     } catch (err) {
       this.handleFailure(err, conversationId, assistantMessageId, eventSink);
     } finally {
-      // Clear active turn unless paused for permission or plan question.
-      if (
-        this.currentConversationId === conversationId &&
-        !this.pendingPermission &&
-        !this.pendingPlanQuestion
-      ) {
-        this.currentAbortController = null;
-        this.currentConversationId = null;
+      // Clear this turn's map entry unless it was paused (permission/plan
+      // question handlers move the entry into the pending maps themselves).
+      // Only delete when the current entry still points at THIS turn AND
+      // the conversation has not been paused.
+      const entry = this.activeTurns.get(conversationId);
+      const paused =
+        this.pendingPermissions.has(conversationId) ||
+        this.pendingPlanQuestions.has(conversationId);
+      if (entry && entry.assistantMessageId === assistantMessageId && !paused) {
+        this.activeTurns.delete(conversationId);
       }
     }
   }
@@ -956,43 +975,71 @@ export class AIChatQueryEngine {
   }
 
   /**
-   * Stop the active turn: abort streaming, cancel pending permission/plan
-   * question turns, and emit cancelled events through the stored event sinks.
+   * Stop the active turn(s).
+   *
+   * - With `conversationId`: stops ONLY that conversation — aborts its active
+   *   controller, cancels any pending permission/plan-question for it, and
+   *   emits `cancelled` on the pending sink. Does NOT touch other
+   *   conversations' background turns. The active-loop's own `cancelled` path
+   *   handles emit/persist for running turns (so we do not emit here for
+   *   active streaming turns — only for pending-permission/plan-question turns
+   *   which have no running loop to resolve).
+   * - Without `conversationId`: stops ALL active + pending turns across every
+   *   conversation (used by DB switch / unmount).
    */
-  stopActiveTurn(): void {
-    this.dispatchStop(this.currentConversationId ?? undefined, "user_stopped");
-    if (this.pendingPermission) {
-      const pending = this.pendingPermission;
-      this.pendingPermission = null;
-      this.currentAbortController = null;
-      this.currentConversationId = null;
-      this.currentAssistantMessageId = null;
-      pending.eventSink.emit({
+  stopActiveTurn(conversationId?: string): void {
+    if (conversationId) {
+      this.stopConversation(conversationId);
+      return;
+    }
+    // Stop-all: iterate over snapshots so deletion during iteration is safe.
+    for (const id of [...this.activeTurns.keys()]) {
+      this.stopConversation(id);
+    }
+    for (const id of [...this.pendingPermissions.keys()]) {
+      this.stopConversation(id);
+    }
+    for (const id of [...this.pendingPlanQuestions.keys()]) {
+      this.stopConversation(id);
+    }
+  }
+
+  /**
+   * Stop a single conversation's active or pending turn. Only emits `cancelled`
+   * for pending-permission / pending-plan-question turns — running streaming
+   * turns are aborted and their loop resolves `cancelled`, which emits + persists.
+   */
+  private stopConversation(conversationId: string): void {
+    this.dispatchStop(conversationId, "user_stopped");
+    const pendingPermission = this.pendingPermissions.get(conversationId);
+    if (pendingPermission) {
+      this.pendingPermissions.delete(conversationId);
+      pendingPermission.abortController.abort();
+      pendingPermission.eventSink.emit({
         type: "cancelled",
-        conversationId: pending.conversationId,
-        messageId: pending.assistantMessageId,
+        conversationId: pendingPermission.conversationId,
+        messageId: pendingPermission.assistantMessageId,
         fullContent: "",
       });
     }
-    if (this.pendingPlanQuestion) {
-      const pending = this.pendingPlanQuestion;
-      this.pendingPlanQuestion = null;
-      this.currentAbortController = null;
-      this.currentConversationId = null;
-      this.currentAssistantMessageId = null;
-      pending.eventSink.emit({
+    const pendingPlanQuestion = this.pendingPlanQuestions.get(conversationId);
+    if (pendingPlanQuestion) {
+      this.pendingPlanQuestions.delete(conversationId);
+      pendingPlanQuestion.abortController.abort();
+      pendingPlanQuestion.eventSink.emit({
         type: "cancelled",
-        conversationId: pending.conversationId,
-        messageId: pending.assistantMessageId,
+        conversationId: pendingPlanQuestion.conversationId,
+        messageId: pendingPlanQuestion.assistantMessageId,
         fullContent: "",
       });
     }
-    if (this.currentAbortController) {
-      this.currentAbortController.abort();
-      this.currentAbortController = null;
+    const active = this.activeTurns.get(conversationId);
+    if (active) {
+      // Abort the controller; do NOT delete the entry — the loop's own
+      // `cancelled` resolution path calls handleLoopResult which clears it.
+      // Pre-deleting would make isActiveTurn return false inside the loop.
+      active.abortController.abort();
     }
-    this.currentConversationId = null;
-    this.currentAssistantMessageId = null;
   }
 
   // -------------------------------------------------------------------------
@@ -1006,8 +1053,17 @@ export class AIChatQueryEngine {
   async resumeToolAfterPermission(
     request: ResumeToolAfterPermissionRequest
   ): Promise<ResumeTurnResult> {
-    const pending = this.pendingPermission;
-    if (!pending || pending.toolCallId !== request.toolId) {
+    const convId = request.conversationId;
+    // When the renderer provides conversationId, key by it directly; otherwise
+    // fall back to the single-entry assumption (only meaningful when exactly
+    // one permission is pending).
+    const lookupKey = convId ?? undefined;
+    const pending = lookupKey
+      ? this.pendingPermissions.get(lookupKey)
+      : this.firstEntry(this.pendingPermissions);
+    const matchedByToolId =
+      pending && pending.toolCallId === request.toolId ? pending : undefined;
+    if (!matchedByToolId) {
       return {
         ok: false,
         error: "No active permission-gated tool call to continue.",
@@ -1015,7 +1071,7 @@ export class AIChatQueryEngine {
     }
     if (
       request.conversationId &&
-      request.conversationId !== pending.conversationId
+      request.conversationId !== matchedByToolId.conversationId
     ) {
       return {
         ok: false,
@@ -1023,32 +1079,38 @@ export class AIChatQueryEngine {
       };
     }
 
-    this.pendingPermission = null;
-    this.currentAbortController = pending.abortController;
-    this.currentConversationId = pending.conversationId;
-    this.currentAssistantMessageId = pending.assistantMessageId;
+    const conversationId = matchedByToolId.conversationId;
+    this.pendingPermissions.delete(conversationId);
+    this.activeTurns.set(conversationId, {
+      abortController: matchedByToolId.abortController,
+      assistantMessageId: matchedByToolId.assistantMessageId,
+      eventSink: matchedByToolId.eventSink,
+    });
     const module = new AIChatV2Module();
-    const eventSink = this.createPersistingEventSink(module, pending.eventSink);
+    const eventSink = this.createPersistingEventSink(
+      module,
+      matchedByToolId.eventSink
+    );
 
     try {
       const toolResult = await SkillExecutor.execute(
-        pending.toolName,
-        pending.toolArguments,
+        matchedByToolId.toolName,
+        matchedByToolId.toolArguments,
         {
-          conversationId: pending.conversationId,
-          toolCallId: pending.toolCallId,
-          args: pending.toolArguments,
+          conversationId: matchedByToolId.conversationId,
+          toolCallId: matchedByToolId.toolCallId,
+          args: matchedByToolId.toolArguments,
           skipPermissionCheck: true,
           // Mirror the loop's foreground context: combined request image
           // capacity + cumulative data-URL budget (enforced by the tool), and
           // the abort signal so the user can still cancel after approval.
           currentRequestImageCount: countImageContentParts(
-            pending.conversationMessages
+            matchedByToolId.conversationMessages
           ),
           currentRequestImageDataUrlChars: countImageDataUrlChars(
-            pending.conversationMessages
+            matchedByToolId.conversationMessages
           ),
-          signal: pending.abortController.signal,
+          signal: matchedByToolId.abortController.signal,
         }
       );
 
@@ -1057,27 +1119,31 @@ export class AIChatQueryEngine {
 
       eventSink.emit({
         type: "tool_result",
-        conversationId: pending.conversationId,
-        messageId: pending.assistantMessageId,
-        toolCallId: pending.toolCallId,
-        toolName: pending.toolName,
+        conversationId: matchedByToolId.conversationId,
+        messageId: matchedByToolId.assistantMessageId,
+        toolCallId: matchedByToolId.toolCallId,
+        toolName: matchedByToolId.toolName,
         fullContent: toolContent,
         toolResult: toolPayload,
-        replacesPermissionPromptForToolId: pending.toolCallId,
+        replacesPermissionPromptForToolId: matchedByToolId.toolCallId,
       });
 
       if (isPermissionPromptResult(toolResult)) {
         await this.flushEventSaves(eventSink);
-        this.pendingPermission = pending;
+        // Permission still required — move back to the pending map. The
+        // activeTurns entry we just created must be removed so the disjoint
+        // invariant holds.
+        this.activeTurns.delete(conversationId);
+        this.pendingPermissions.set(conversationId, matchedByToolId);
         return {
           ok: false,
           error: "Permission is still required for this tool.",
         };
       }
 
-      pending.conversationMessages.push({
+      matchedByToolId.conversationMessages.push({
         role: "tool",
-        tool_call_id: pending.toolCallId,
+        tool_call_id: matchedByToolId.toolCallId,
         content: toolContent,
       });
 
@@ -1091,11 +1157,11 @@ export class AIChatQueryEngine {
         toolResult.modelArtifacts &&
         toolResult.modelArtifacts.length > 0
       ) {
-        pending.conversationMessages.push(
+        matchedByToolId.conversationMessages.push(
           buildImageArtifactHandoffMessage({
             artifacts: toolResult.modelArtifacts,
-            originalUserRequest: pending.request.message,
-            toolCallId: pending.toolCallId,
+            originalUserRequest: matchedByToolId.request.message,
+            toolCallId: matchedByToolId.toolCallId,
           })
         );
       }
@@ -1103,34 +1169,38 @@ export class AIChatQueryEngine {
       // Rebuild the deferred catalog for the resumed turn and carry forward the
       // discovered-tool snapshot so discovered tools remain exposed (AC-8).
       const resumeCatalogContext = this.buildToolCatalogForTurn({
-        tools: pending.openAITools,
-        conversationId: pending.conversationId,
-        isPlanMode: Boolean(pending.planContext),
+        tools: matchedByToolId.openAITools,
+        conversationId: matchedByToolId.conversationId,
+        isPlanMode: Boolean(matchedByToolId.planContext),
         autoPlanEnabled: false,
-        userMessage: pending.request.message,
+        userMessage: matchedByToolId.request.message,
         recentUserMessages: collectRecentUserMessages(
-          pending.conversationMessages
+          matchedByToolId.conversationMessages
         ),
-        model: pending.request.model,
+        model: matchedByToolId.request.model,
       });
 
       const loopInput: AIChatQueryLoopInput = {
-        conversationId: pending.conversationId,
-        assistantMessageId: pending.assistantMessageId,
-        messages: pending.conversationMessages,
-        request: pending.request,
-        openAITools: pending.openAITools,
-        abortController: pending.abortController,
+        conversationId: matchedByToolId.conversationId,
+        assistantMessageId: matchedByToolId.assistantMessageId,
+        messages: matchedByToolId.conversationMessages,
+        request: matchedByToolId.request,
+        openAITools: matchedByToolId.openAITools,
+        abortController: matchedByToolId.abortController,
         eventSink,
         skillRegistry: SkillRegistry,
-        planContext: pending.planContext,
-        startRound: pending.nextRound,
-        isActiveTurn: () =>
-          this.currentAssistantMessageId === pending.assistantMessageId &&
-          this.currentConversationId === pending.conversationId,
+        planContext: matchedByToolId.planContext,
+        startRound: matchedByToolId.nextRound,
+        isActiveTurn: () => {
+          const entry = this.activeTurns.get(matchedByToolId.conversationId);
+          return (
+            !!entry &&
+            entry.assistantMessageId === matchedByToolId.assistantMessageId
+          );
+        },
         toolCatalog: resumeCatalogContext.toolCatalog,
         toolCatalogModeDecision: resumeCatalogContext.toolCatalogModeDecision,
-        toolCatalogState: pending.toolCatalogState,
+        toolCatalogState: matchedByToolId.toolCatalogState,
       };
 
       void this.loop
@@ -1141,24 +1211,28 @@ export class AIChatQueryEngine {
         .catch((err) => {
           console.error("[ai-chat-v2] resume loop failed:", err);
           void redirectToLoginOnAuthExpired(err);
-          pending.eventSink.emit({
+          matchedByToolId.eventSink.emit({
             type: "error",
-            conversationId: pending.conversationId,
-            messageId: pending.assistantMessageId,
+            conversationId: matchedByToolId.conversationId,
+            messageId: matchedByToolId.assistantMessageId,
             errorMessage: userSafeError(err),
           });
-          this.clearActiveTurnState();
-          this.pendingPermission = null;
-          this.pendingPlanQuestion = null;
+          this.clearActiveTurnState(matchedByToolId.conversationId);
+          this.pendingPermissions.delete(matchedByToolId.conversationId);
+          this.pendingPlanQuestions.delete(matchedByToolId.conversationId);
         });
 
       return { ok: true };
     } catch (err) {
-      this.currentAbortController = null;
-      this.currentConversationId = null;
-      this.currentAssistantMessageId = null;
+      this.clearActiveTurnState(conversationId);
       return { ok: false, error: userSafeError(err) };
     }
+  }
+
+  /** Helper: return the first value from a Map, or undefined. */
+  private firstEntry<V>(map: Map<string, V>): V | undefined {
+    for (const v of map.values()) return v;
+    return undefined;
   }
 
   /**
@@ -1183,7 +1257,7 @@ export class AIChatQueryEngine {
       return { ok: false, error: userSafeError(err) };
     }
 
-    const pending = this.pendingPlanQuestion;
+    const pending = this.pendingPlanQuestions.get(request.conversationId);
     if (
       !pending ||
       pending.questionId !== request.questionId ||
@@ -1192,7 +1266,12 @@ export class AIChatQueryEngine {
       return { ok: true };
     }
 
-    this.pendingPlanQuestion = null;
+    this.pendingPlanQuestions.delete(request.conversationId);
+    this.activeTurns.set(request.conversationId, {
+      abortController: pending.abortController,
+      assistantMessageId: pending.assistantMessageId,
+      eventSink: pending.eventSink,
+    });
 
     const answerContent = serializeToolResultContent({
       success: true,
@@ -1217,10 +1296,6 @@ export class AIChatQueryEngine {
         content: answerContent,
       });
     }
-
-    this.currentAbortController = pending.abortController;
-    this.currentConversationId = pending.conversationId;
-    this.currentAssistantMessageId = pending.assistantMessageId;
 
     const planState = await planModule.getPlanStateByPlanId(pending.planId);
     const toolFunctions = await SkillRegistry.getAllToolFunctions();
@@ -1268,9 +1343,12 @@ export class AIChatQueryEngine {
       skillRegistry: SkillRegistry,
       planContext,
       startRound: pending.nextRound,
-      isActiveTurn: () =>
-        this.currentAssistantMessageId === pending.assistantMessageId &&
-        this.currentConversationId === pending.conversationId,
+      isActiveTurn: () => {
+        const entry = this.activeTurns.get(pending.conversationId);
+        return (
+          !!entry && entry.assistantMessageId === pending.assistantMessageId
+        );
+      },
       toolCatalog: resumePlanCatalogContext.toolCatalog,
       toolCatalogModeDecision: resumePlanCatalogContext.toolCatalogModeDecision,
       toolCatalogState: pending.toolCatalogState,
@@ -1293,9 +1371,9 @@ export class AIChatQueryEngine {
           messageId: pending.assistantMessageId,
           errorMessage: userSafeError(err),
         });
-        this.clearActiveTurnState();
-        this.pendingPermission = null;
-        this.pendingPlanQuestion = null;
+        this.clearActiveTurnState(pending.conversationId);
+        this.pendingPermissions.delete(pending.conversationId);
+        this.pendingPlanQuestions.delete(pending.conversationId);
       });
 
     return { ok: true };
@@ -1407,7 +1485,7 @@ export class AIChatQueryEngine {
             console.error("[desktop-notify] turn_complete failed:", err)
           );
         this.dispatchStop(conversationId, "completed");
-        this.clearActiveTurnState();
+        this.clearActiveTurnState(conversationId);
         break;
       }
       case "cancelled": {
@@ -1435,7 +1513,7 @@ export class AIChatQueryEngine {
           fullContent: result.partialContent,
         });
         this.dispatchStop(conversationId, "user_stopped");
-        this.clearActiveTurnState();
+        this.clearActiveTurnState(conversationId);
         break;
       }
       case "failed": {
@@ -1464,20 +1542,31 @@ export class AIChatQueryEngine {
           errorMessage: userSafeError(result.error),
         });
         this.dispatchStop(conversationId, "error");
-        this.clearActiveTurnState();
-        this.pendingPermission = null;
-        this.pendingPlanQuestion = null;
+        this.clearActiveTurnState(conversationId);
+        this.pendingPermissions.delete(conversationId);
+        this.pendingPlanQuestions.delete(conversationId);
         break;
       }
       case "paused_for_permission": {
-        this.pendingPermission = result.pending;
+        // Move the turn from activeTurns into pendingPermissions so the three
+        // maps stay disjoint (a conversation is in exactly one of them). The
+        // activeTurns entry is dropped; resuming re-adds it.
+        this.activeTurns.delete(result.pending.conversationId);
+        this.pendingPermissions.set(
+          result.pending.conversationId,
+          result.pending
+        );
         console.log(
           `[ai-chat-v2] tool ${result.pending.toolName} needs permission — paused (nextRound=${result.pending.nextRound})`
         );
         break;
       }
       case "paused_for_plan_question": {
-        this.pendingPlanQuestion = result.pending;
+        this.activeTurns.delete(result.pending.conversationId);
+        this.pendingPlanQuestions.set(
+          result.pending.conversationId,
+          result.pending
+        );
         console.log(
           `[ai-chat-v2] AskUserQuestion paused (questionId=${result.pending.questionId}, nextRound=${result.pending.nextRound})`
         );
@@ -1487,13 +1576,14 @@ export class AIChatQueryEngine {
   }
 
   /**
-   * Clear active-turn singleton state. Called after terminal results
-   * (completed/cancelled/failed) and on unexpected failures.
+   * Remove the active-turn entry for ONE conversation only. Called after
+   * terminal results (completed/cancelled/failed) and on unexpected failures.
+   * Scoped by conversationId so a terminal result for conversation A never
+   * touches conversation B's entry — this is the fix for the cross-conversation
+   * clobber bug (a cancelled result for A used to wipe B's singleton state).
    */
-  private clearActiveTurnState(): void {
-    this.currentAbortController = null;
-    this.currentConversationId = null;
-    this.currentAssistantMessageId = null;
+  private clearActiveTurnState(conversationId: string): void {
+    this.activeTurns.delete(conversationId);
   }
 
   private createPersistingEventSink(
@@ -1625,8 +1715,8 @@ export class AIChatQueryEngine {
       messageId: assistantMessageId,
       errorMessage: userSafeError(err),
     });
-    this.clearActiveTurnState();
-    this.pendingPermission = null;
-    this.pendingPlanQuestion = null;
+    this.clearActiveTurnState(conversationId);
+    this.pendingPermissions.delete(conversationId);
+    this.pendingPlanQuestions.delete(conversationId);
   }
 }
