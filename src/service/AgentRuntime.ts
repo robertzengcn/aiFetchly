@@ -466,13 +466,15 @@ export class AgentRuntime {
     // derive their on-disk paths + descriptors. Bytes are never carried on
     // AgentResult (PRD non-goal 8). Failure is swallowed by persistAgentImages
     // so a storage hiccup never fails an otherwise-successful task.
-    const { outputFilePaths, outputImages } = await persistAgentImages({
-      images: capturedImages,
-      conversationId: agentConversationId,
-      messageId: `agent-assistant-${agentTaskId}`,
-      storage:
-        deps?.generatedImageStorage ?? new AIChatGeneratedImageStorageService(),
-    });
+    const { outputFilePaths, outputImages, storageWarning } =
+      await persistAgentImages({
+        images: capturedImages,
+        conversationId: agentConversationId,
+        messageId: `agent-assistant-${agentTaskId}`,
+        storage:
+          deps?.generatedImageStorage ??
+          new AIChatGeneratedImageStorageService(),
+      });
 
     const result: AgentResult = {
       agentTaskId,
@@ -487,6 +489,7 @@ export class AgentRuntime {
       ...(parseWarning ? { parseWarning } : {}),
       ...(outputFilePaths ? { outputFilePaths } : {}),
       ...(outputImages ? { outputImages } : {}),
+      ...(storageWarning ? { storageWarning } : {}),
     };
     await this.taskModule.saveResult(agentTaskId, result);
     await this.taskModule.setStatus(agentTaskId, "completed", {

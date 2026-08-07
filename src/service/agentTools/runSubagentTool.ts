@@ -163,6 +163,7 @@ export const RUN_SUBAGENT_TOOL: SkillDefinition = {
         error: result.errorMessage,
         outputFilePaths: result.outputFilePaths,
         outputImages: result.outputImages,
+        storageWarning: result.storageWarning,
       },
     };
   },

@@ -71,7 +71,7 @@ describe("persistAgentImages", () => {
     expect(out).toEqual({});
   });
 
-  it("swallows storage errors and returns empty (never throws)", async () => {
+  it("swallows storage errors and surfaces a storageWarning (never throws)", async () => {
     const out = await persistAgentImages({
       images: [{ type: "image" }],
       conversationId: "c",
@@ -82,21 +82,57 @@ describe("persistAgentImages", () => {
         },
       },
     });
-    expect(out).toEqual({});
+    expect(out.outputFilePaths).toBeUndefined();
+    expect(out.outputImages).toBeUndefined();
+    expect(out.storageWarning).toContain("disk full");
   });
 
-  it("returns undefined paths when stored images lack local_path", async () => {
+  it("returns undefined paths when accepted descriptors lack local_path", async () => {
+    // Sanctioned protocol URL (accepted by the filter) but no local_path.
     const out = await persistAgentImages({
-      images: [{ type: "image", url: "https://x/y.png" }],
+      images: [{ type: "image" }],
       conversationId: "c",
       messageId: "m",
       storage: {
         storeImages: async (): Promise<OpenAIChatImage[]> => [
-          { type: "image", url: "https://x/y.png" },
+          {
+            type: "image",
+            url: "aifetchly-generated-image://local/u/c/m/image-1.png",
+          },
         ],
       },
     });
     expect(out.outputFilePaths).toBeUndefined();
     expect(out.outputImages).toHaveLength(1);
+    expect(out.storageWarning).toBeUndefined();
+  });
+
+  it("drops descriptors whose url is not the sanctioned protocol + sets storageWarning", async () => {
+    // A provider/file URL (e.g. from storage's per-item fallback or an
+    // attacker-chosen response) must NOT be surfaced as a generated image.
+    const out = await persistAgentImages({
+      images: [{ type: "image" }, { type: "image" }],
+      conversationId: "c",
+      messageId: "m",
+      storage: {
+        storeImages: async (): Promise<OpenAIChatImage[]> => [
+          {
+            type: "image",
+            url: "file:///etc/passwd",
+            local_path: "/etc/passwd",
+          } as OpenAIChatImage,
+          {
+            type: "image",
+            delivery: "local_file",
+            local_path: "/p/ok.png",
+            url: "aifetchly-generated-image://local/u/c/m/ok.png",
+          },
+        ],
+      },
+    });
+    expect(out.outputImages).toHaveLength(1);
+    expect(out.outputImages?.[0]?.local_path).toBe("/p/ok.png");
+    expect(out.outputFilePaths).toEqual(["/p/ok.png"]);
+    expect(out.storageWarning).toContain("1 of 2");
   });
 });

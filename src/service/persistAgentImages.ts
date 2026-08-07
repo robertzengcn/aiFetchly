@@ -4,6 +4,7 @@
 // Electron/TypeORM imports — so it is unit-testable in isolation and reusable
 // by AgentRuntime without pulling the chat-loop graph into the test.
 import type { OpenAIChatImage } from "@/api/aiChatApi";
+import { AI_CHAT_GENERATED_IMAGE_PROTOCOL } from "@/service/AIChatGeneratedImageProtocol";
 
 /** Storage seam for persisting generated/edited images to disk. Mirrors the
  * shape AIChatGeneratedImageStorageService (and AIChatQueryEngine's
@@ -18,12 +19,16 @@ export interface AgentImageStorage {
 }
 
 /** Result of persisting a sub-agent's edited images. All fields undefined when
- * the agent produced no images or storage failed. */
+ * the agent produced no images. */
 export interface PersistAgentImagesResult {
   /** On-disk paths of the persisted images (never bytes). */
   outputFilePaths?: string[];
   /** Persisted image descriptors (local_path + protocol URL, no bytes). */
   outputImages?: OpenAIChatImage[];
+  /** Set when some images could not be persisted (storage error, or
+   * descriptors with a non-sanctioned URL were dropped). Callers should
+   * surface it so the user knows the batch's artifacts may be incomplete. */
+  storageWarning?: string;
 }
 
 /**
@@ -52,27 +57,42 @@ export async function persistAgentImages(input: {
       messageId: input.messageId,
       images: input.images,
     });
-    // Enforce PRD non-goal 8 (no image bytes persisted) at THIS boundary.
-    // AIChatGeneratedImageStorageService.storeImages is fault-tolerant: when a
-    // single per-image write fails it falls back to the ORIGINAL image, which
-    // still carries b64_json bytes. Strip base64 from every descriptor so the
-    // AgentResult we return (and persist via taskModule.saveResult) never
-    // carries bytes, regardless of what storage handed back. Descriptors keep
+    // Defense-in-depth: keep ONLY descriptors that resolved to the sanctioned
+    // generated-image protocol URL. Storage's per-item fallback can return the
+    // ORIGINAL image (carrying a provider http/file URL) on a write failure,
+    // and an external (provider) response could carry an attacker-chosen
+    // file:// URL + local_path. Dropping non-protocol descriptors prevents an
+    // external URL/local_path from being surfaced as a "generated image".
+    const sanctionedPrefix = `${AI_CHAT_GENERATED_IMAGE_PROTOCOL}:`;
+    const accepted = stored.filter(
+      (img) =>
+        typeof img.url === "string" && img.url.startsWith(sanctionedPrefix)
+    );
+    const droppedCount = stored.length - accepted.length;
+    // Enforce PRD non-goal 8 (no image bytes persisted) at THIS boundary:
+    // strip base64 regardless of what storage handed back. Descriptors keep
     // their protocol url + local_path, which is all rendering needs.
     const outputImages =
-      stored.length > 0
-        ? stored.map((image) => ({ ...image, b64_json: undefined }))
+      accepted.length > 0
+        ? accepted.map((image) => ({ ...image, b64_json: undefined }))
         : undefined;
     const paths = outputImages
       ?.map((img) => img.local_path)
       .filter((p): p is string => typeof p === "string");
     const outputFilePaths = paths && paths.length > 0 ? paths : undefined;
-    return { outputFilePaths, outputImages };
+    const storageWarning =
+      droppedCount > 0
+        ? `${droppedCount} of ${stored.length} generated image(s) could not be stored locally and were dropped.`
+        : undefined;
+    return { outputFilePaths, outputImages, storageWarning };
   } catch (err) {
     console.warn(
       `[agent-runtime] failed to store generated images for ${input.conversationId}/${input.messageId}:`,
       err
     );
-    return {};
+    const msg = err instanceof Error ? err.message : String(err);
+    return {
+      storageWarning: `Failed to store ${input.images.length} generated image(s) locally: ${msg}`,
+    };
   }
 }

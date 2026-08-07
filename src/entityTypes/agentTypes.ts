@@ -178,6 +178,11 @@ export interface AgentResult {
    * metadata.generatedImages for rendering. Undefined for agents that
    * produce no images. */
   outputImages?: OpenAIChatImage[];
+  /** Set when some generated images could not be persisted locally (storage
+   * error, or descriptors with a non-sanctioned URL were dropped). The task
+   * still completes, but callers should surface this so the user knows the
+   * batch's artifacts may be incomplete. */
+  storageWarning?: string;
 }
 
 /** Snapshot returned by getTask / tool polling. */
