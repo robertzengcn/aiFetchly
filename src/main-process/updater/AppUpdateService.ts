@@ -148,7 +148,7 @@ export function initializeAppUpdates(
     return {
       initialized: true,
       reason: "initialized",
-      stopUpdates: updateStopper,
+      stopUpdates: updateStopper ?? undefined,
     };
   } catch (error: unknown) {
     log.error("[auto-update] Failed to initialize GitHub updater", error);
