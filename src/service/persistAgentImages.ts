@@ -52,12 +52,21 @@ export async function persistAgentImages(input: {
       messageId: input.messageId,
       images: input.images,
     });
-    const outputImages = stored.length > 0 ? stored : undefined;
+    // Enforce PRD non-goal 8 (no image bytes persisted) at THIS boundary.
+    // AIChatGeneratedImageStorageService.storeImages is fault-tolerant: when a
+    // single per-image write fails it falls back to the ORIGINAL image, which
+    // still carries b64_json bytes. Strip base64 from every descriptor so the
+    // AgentResult we return (and persist via taskModule.saveResult) never
+    // carries bytes, regardless of what storage handed back. Descriptors keep
+    // their protocol url + local_path, which is all rendering needs.
+    const outputImages =
+      stored.length > 0
+        ? stored.map((image) => ({ ...image, b64_json: undefined }))
+        : undefined;
     const paths = outputImages
       ?.map((img) => img.local_path)
       .filter((p): p is string => typeof p === "string");
-    const outputFilePaths =
-      paths && paths.length > 0 ? paths : undefined;
+    const outputFilePaths = paths && paths.length > 0 ? paths : undefined;
     return { outputFilePaths, outputImages };
   } catch (err) {
     console.warn(

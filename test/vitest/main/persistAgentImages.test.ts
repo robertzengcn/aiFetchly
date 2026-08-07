@@ -24,6 +24,33 @@ describe("persistAgentImages", () => {
     expect(out.outputImages?.[0]?.local_path).toBe("/p/image-1.png");
   });
 
+  it("strips b64_json from descriptors even when storage returns bytes (PRD non-goal 8)", async () => {
+    // Storage's per-item fallback can return the ORIGINAL image (with b64
+    // bytes) when a single write fails. persistAgentImages must guarantee no
+    // bytes leave it, so AgentResult never persists base64 to the DB.
+    const out = await persistAgentImages({
+      images: [{ type: "image", b64_json: "SHOULD-NOT-LEAK" }],
+      conversationId: "c",
+      messageId: "m",
+      storage: {
+        storeImages: async (): Promise<OpenAIChatImage[]> => [
+          {
+            type: "image",
+            delivery: "local_file",
+            local_path: "/p/image-1.png",
+            url: "aifetchly-generated-image://local/u/c/m/image-1.png",
+            mime_type: "image/png",
+            b64_json: "SHOULD-NOT-LEAK",
+          } as OpenAIChatImage,
+        ],
+      },
+    });
+    expect(out.outputFilePaths).toEqual(["/p/image-1.png"]);
+    expect(out.outputImages?.[0]?.b64_json).toBeUndefined();
+    // path + url survive (rendering needs them)
+    expect(out.outputImages?.[0]?.local_path).toBe("/p/image-1.png");
+  });
+
   it("returns empty result for no images", async () => {
     const out = await persistAgentImages({
       images: [],

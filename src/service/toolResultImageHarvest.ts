@@ -15,13 +15,42 @@ import type { OpenAIChatImage } from "@/api/aiChatApi";
 export function extractToolResultImages(toolResult: {
   result?: Record<string, unknown>;
 }): OpenAIChatImage[] {
-  const maybe = toolResult?.result?.outputImages;
-  if (!Array.isArray(maybe)) return [];
+  // outputImages can sit at two depths:
+  //   - result.outputImages — foreground/sync tools, where `result` IS the
+  //     tool's payload directly.
+  //   - result.result.outputImages — async tools (e.g. run_subagent). Their
+  //     execute() returns a bare SkillExecutionResult { success, result: {...} }
+  //     that lacks tool_call_id/tool_name/execution_time_ms, so
+  //     isToolExecutionResultLike returns false and pollAsyncJobToCompletion
+  //     wraps the whole SkillExecutionResult under a SECOND `result` envelope
+  //     (AIChatQueryLoop.ts ~line 2032). Reading only result.outputImages
+  //     silently drops every async tool's images.
+  const outer = toolResult?.result;
+  const candidates: unknown[] = [outer?.outputImages];
+  const inner = outer?.result;
+  if (inner && typeof inner === "object") {
+    candidates.push((inner as Record<string, unknown>).outputImages);
+  }
+  const maybe = candidates.find((c): c is unknown[] => Array.isArray(c));
+  if (!maybe) return [];
   const out: OpenAIChatImage[] = [];
   for (const img of maybe) {
-    if (img && typeof img === "object") {
+    // Trust-boundary shape check: accept only objects that look like an image
+    // descriptor (carry at least one string locator). Rejects arbitrary
+    // objects/arrays that would otherwise be cast unchecked into the turn's
+    // image set. Rendering's isAllowedImageUrl still gates which URLs display.
+    if (img && typeof img === "object" && isImageDescriptorLike(img)) {
       out.push(img as OpenAIChatImage);
     }
   }
   return out;
+}
+
+function isImageDescriptorLike(value: object): boolean {
+  const record = value as Record<string, unknown>;
+  return (
+    typeof record.url === "string" ||
+    typeof record.b64_json === "string" ||
+    typeof record.local_path === "string"
+  );
 }
