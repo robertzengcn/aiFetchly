@@ -38,6 +38,18 @@ function isProductionAsarConfig(
   return typeof asar === "object" && asar !== null;
 }
 
+function stageRendererHtml(root: string): void {
+  const rendererHtmlPath = path.join(
+    root,
+    ".vite",
+    "renderer",
+    "main_window",
+    "index.html"
+  );
+  fs.mkdirSync(path.dirname(rendererHtmlPath), { recursive: true });
+  fs.writeFileSync(rendererHtmlPath, "<!doctype html><title>ok</title>");
+}
+
 describe("Forge packaging dependencies", () => {
   it("keeps TypeORM SQL formatter dependency in packaged node_modules", async () => {
     const forgeConfig = await loadForgeConfig();
@@ -117,9 +129,9 @@ describe("Forge packaging dependencies", () => {
       // Renderer must stay packed: unpacking .vite/renderer breaks
       // BrowserWindow.loadFile with ERR_FAILED (-2) on Windows.
       expect(minimatch(".vite/renderer", unpackDir as string)).toBe(false);
-      expect(
-        minimatch(".vite/renderer/main_window", unpackDir as string)
-      ).toBe(false);
+      expect(minimatch(".vite/renderer/main_window", unpackDir as string)).toBe(
+        false
+      );
 
       // Guard against regressing to "**/dist/childprocess/**" alone, which
       // fails to match the directory itself and leaves workers packed in asar.
@@ -143,6 +155,7 @@ describe("Forge packaging dependencies", () => {
     const taskBundlePath = path.join(tempRoot, ".vite", "build", "taskCode.js");
 
     try {
+      stageRendererHtml(tempRoot);
       fs.mkdirSync(path.dirname(taskBundlePath), { recursive: true });
       fs.writeFileSync(
         taskBundlePath,
@@ -164,6 +177,21 @@ describe("Forge packaging dependencies", () => {
       await expect(
         forgeConfig.hooks.packageAfterPrune({}, tempRoot)
       ).resolves.toBeUndefined();
+    } finally {
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("fails packaging when the staged renderer HTML is missing", async () => {
+    const forgeConfig = await loadForgeConfig();
+    const tempRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "aifetchly-package-renderer-")
+    );
+
+    try {
+      await expect(
+        forgeConfig.hooks.packageAfterPrune({}, tempRoot)
+      ).rejects.toThrow(/missing renderer HTML/i);
     } finally {
       fs.rmSync(tempRoot, { recursive: true, force: true });
     }

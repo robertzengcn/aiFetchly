@@ -82,6 +82,20 @@ describe("verifyPackagedRenderer", () => {
     expect(verify.verifyPackagedRenderer(resourcesDir)).toBe(true);
   });
 
+  it("rejects an empty renderer HTML entry inside app.asar", async () => {
+    const resourcesDir = makeTempResources();
+    const stage = path.join(resourcesDir, "_asar_src");
+    const htmlRel = verify.RENDERER_HTML_RELATIVE;
+    const stagedHtml = path.join(stage, ...htmlRel.split("/"));
+    fs.mkdirSync(path.dirname(stagedHtml), { recursive: true });
+    fs.writeFileSync(stagedHtml, "");
+
+    const asarPath = path.join(resourcesDir, "app.asar");
+    await asar.createPackage(stage, asarPath);
+
+    expect(verify.verifyPackagedRenderer(resourcesDir)).toBe(false);
+  });
+
   it("fails when asar exists but renderer HTML is missing", async () => {
     const resourcesDir = makeTempResources();
     const stage = path.join(resourcesDir, "_asar_src");
