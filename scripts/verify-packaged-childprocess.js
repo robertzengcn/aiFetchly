@@ -511,9 +511,12 @@ function verifyRuntimeRequires(resourcesDir) {
   return true;
 }
 
-
 function verifyPackagedRenderer(resourcesDir) {
-  const plainHtml = path.join(resourcesDir, "app", ...RENDERER_HTML_RELATIVE.split("/"));
+  const plainHtml = path.join(
+    resourcesDir,
+    "app",
+    ...RENDERER_HTML_RELATIVE.split("/")
+  );
   const unpackedHtml = path.join(
     resourcesDir,
     "app.asar.unpacked",
@@ -547,9 +550,9 @@ function verifyPackagedRenderer(resourcesDir) {
     return false;
   }
 
-  let inAsar = false;
+  let asarEntries;
   try {
-    inAsar = listAsarEntries(asarPath).has(RENDERER_HTML_RELATIVE);
+    asarEntries = listAsarEntries(asarPath);
   } catch (error) {
     console.error(
       `Failed to read app.asar while verifying renderer HTML: ${
@@ -559,25 +562,30 @@ function verifyPackagedRenderer(resourcesDir) {
     return false;
   }
 
-  if (!inAsar) {
+  const renderer = readPackagedFile(
+    resourcesDir,
+    RENDERER_HTML_RELATIVE,
+    asarEntries
+  );
+
+  if (!renderer) {
     console.error(
-      `Missing packaged renderer HTML in app.asar: ${RENDERER_HTML_RELATIVE} ` +
+      `Missing extractable packaged renderer HTML in app.asar: ${RENDERER_HTML_RELATIVE} ` +
         `(resources: ${resourcesDir})`
     );
     return false;
   }
 
-  console.log(
-    `Found packaged renderer HTML in asar: ${path.join(
-      asarPath,
-      ...RENDERER_HTML_RELATIVE.split("/")
-    )}`
-  );
+  if (renderer.content.trim().length === 0) {
+    console.error(`Packaged renderer HTML is empty: ${renderer.location}`);
+    return false;
+  }
+
+  console.log(`Found extractable packaged renderer HTML: ${renderer.location}`);
   return true;
 }
 
 function run() {
-
   const resourcesDirs = findResourcesDirs();
   if (resourcesDirs.length === 0) {
     console.error(`No packaged resources directories found under ${OUT_DIR}`);

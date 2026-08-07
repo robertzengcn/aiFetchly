@@ -11,7 +11,7 @@ import { CronJob } from 'cron';
 import {ScheduleExecutionLogInterface} from "@/modules/interface/ScheduleExecutionLogInterface"
 import { ScheduleExecutionLogModule } from "./ScheduleExecutionLogModule";
 import { ScheduleDependencyModule } from "./ScheduleDependencyModule";
-import { ScheduleDependencyInterface } from "./interface/ScheduleDependencyInterface";
+import { ScheduleDependencyInterface, DependencyStatistics } from "./interface/ScheduleDependencyInterface";
 import { SchedulerStatusModel } from "@/model/SchedulerStatus.model";
 import { Token } from "@/modules/token";
 import { USERSDBPATH } from '@/config/usersetting';
@@ -364,6 +364,14 @@ export class ScheduleManager {
     async removeDependency(parentId: number, childId: number): Promise<void> {
         await this.scheduleDependencyModule.deleteDependencyByParentChild(parentId, childId);
         console.log(`Removed dependency: ${parentId} -> ${childId}`);
+    }
+
+    async cleanupInactiveDependencies(): Promise<number> {
+        return this.scheduleDependencyModule.cleanupInactiveDependencies();
+    }
+
+    async getDependencyStatistics(): Promise<DependencyStatistics> {
+        return this.scheduleDependencyModule.getDependencyStatistics();
     }
 
     /**

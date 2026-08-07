@@ -17,6 +17,12 @@ let nativeModuleDependenciesToPackage = [];
 let allowedPackagedModules = new Set();
 /** @type {Set<string>} */
 let allowedScopedDirectories = new Set();
+const PACKAGED_RENDERER_HTML_RELATIVE = join(
+  ".vite",
+  "renderer",
+  "main_window",
+  "index.html"
+);
 
 function rebuildPackagerAllowLists(moduleNames) {
   allowedPackagedModules = new Set(moduleNames);
@@ -297,6 +303,16 @@ function verifyGeneratedRuntimeRequires(buildPath) {
       `Packaged app is missing runtime dependencies required by generated bundles: ${missing.join(
         ", "
       )}. Add the package root to EXTERNAL_DEPENDENCIES in forge.config.js.`
+    );
+  }
+}
+
+function verifyStagedRendererHtml(buildPath) {
+  const rendererHtmlPath = join(buildPath, PACKAGED_RENDERER_HTML_RELATIVE);
+  if (!existsSync(rendererHtmlPath)) {
+    throw new Error(
+      `Packaged app is missing renderer HTML: ${rendererHtmlPath}. ` +
+        "The Windows app will fail at startup with BrowserWindow.loadFile ERR_FAILED (-2)."
     );
   }
 }
@@ -860,6 +876,7 @@ module.exports = {
     //  }
     packageAfterPrune: async (_forgeConfig, buildPath) => {
       removeEmptyDirectories(buildPath);
+      verifyStagedRendererHtml(buildPath);
       verifyGeneratedRuntimeRequires(buildPath);
     },
   },
