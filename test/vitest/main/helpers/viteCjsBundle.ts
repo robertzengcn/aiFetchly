@@ -41,6 +41,11 @@ export interface ViteCjsBundleOptions {
   readonly fileName?: string;
   readonly alias?: Record<string, string>;
   readonly external?: readonly string[];
+  /**
+   * Force-bundle these packages (Vite `ssr.noExternal`), matching worker
+   * packaging that cannot rely on NODE_PATH→asar for pure-JS deps.
+   */
+  readonly ssrNoExternal?: readonly string[];
   /** When true, set NODE_PATH to the project node_modules for external requires. */
   readonly nodePathModules?: boolean;
   /** Defaults to true. Set false for readable crash-mode stacks. */
@@ -75,25 +80,44 @@ export async function buildAndRunViteCjsBundle(
       throw new Error(`Vite CJS fixture entry missing: ${options.entryPath}`);
     }
 
+    const ssrNoExternal = options.ssrNoExternal ?? [];
+    const useSsrNoExternal = ssrNoExternal.length > 0;
+    // SSR builds ignore lib.fileName and emit <entryBasename>.js; use explicit
+    // rollup output names so packaging regressions can assert on a stable path.
     await build({
       configFile: false,
       root: process.cwd(),
       logLevel: "error",
+      ...(useSsrNoExternal ? { ssr: { noExternal: [...ssrNoExternal] } } : {}),
       build: {
-        lib: {
-          entry: options.entryPath,
-          formats: ["cjs"],
-          fileName: () => fileName,
-        },
+        ...(useSsrNoExternal
+          ? {}
+          : {
+              lib: {
+                entry: options.entryPath,
+                formats: ["cjs"],
+                fileName: () => fileName,
+              },
+            }),
         outDir,
         emptyOutDir: true,
         minify,
         target: "node18",
+        ...(useSsrNoExternal ? { ssr: true } : {}),
         commonjsOptions: {
           transformMixedEsModules: true,
           include: [/node_modules/],
         },
         rollupOptions: {
+          ...(useSsrNoExternal
+            ? {
+                input: options.entryPath,
+                output: {
+                  entryFileNames: fileName,
+                  format: "cjs",
+                },
+              }
+            : {}),
           external: [...NODE_BUILTIN_EXTERNALS, ...(options.external ?? [])],
         },
       },
