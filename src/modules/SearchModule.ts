@@ -26,6 +26,11 @@ import * as path from "path";
 import * as fs from "fs";
 import { SortBy } from "@/entityTypes/commonType";
 import { BaseModule } from "@/modules/baseModule";
+import {
+  buildPackagedWorkerEnv,
+  getPackagedWorkerPathCandidates,
+  resolvePackagedWorkerPath,
+} from "@/utils/packagedWorkerPath";
 import { SearchTaskProxyModel } from "@/model/SearchTaskProxy.model";
 import { SearchTaskProxyEntity } from "@/entity/SearchTaskProxy.entity";
 //import { SearchTaskEntity } from "@/entity/SearchTask.entity";
@@ -71,6 +76,20 @@ import type {
 } from "@/entityTypes/searchControlType";
 
 export type { TaskDetailsForEdit, SearchTaskUpdateData };
+
+/** Normalize utilityProcess stdout/stderr chunks (Buffer or string) to UTF-8. */
+export function chunkToUtf8(data: unknown): string {
+  if (typeof data === "string") {
+    return data;
+  }
+  if (Buffer.isBuffer(data)) {
+    return data.toString("utf8");
+  }
+  if (data instanceof Uint8Array) {
+    return Buffer.from(data).toString("utf8");
+  }
+  return String(data);
+}
 
 export class SearchModule extends BaseModule {
   // private dbpath: string
@@ -135,6 +154,8 @@ export class SearchModule extends BaseModule {
       accounts?: number[];
     }
   ): Promise<number> {
+    await this.ensureConnection();
+
     // Validate inputs
     if (!keywords || keywords.length === 0) {
       throw new Error("Keywords cannot be empty");
@@ -274,9 +295,25 @@ export class SearchModule extends BaseModule {
       cookies: taskEntity.cookies,
     };
 
-    const childPath = path.join(__dirname, "taskCode.js");
-    if (!fs.existsSync(childPath)) {
-      throw new Error("child js path not exist for the path " + childPath);
+    const electronProcess = process as NodeJS.Process & {
+      resourcesPath?: string;
+    };
+    const runtime = {
+      dirname: __dirname,
+      cwd: process.cwd(),
+      resourcesPath: electronProcess.resourcesPath,
+      existsSync: fs.existsSync,
+    };
+    const options = {
+      dirnameRelativePaths: ["taskCode.js"],
+      cwdRelativePaths: [path.join(".vite", "build", "taskCode.js")],
+    };
+    const childPath = resolvePackagedWorkerPath(runtime, options);
+    if (!childPath) {
+      const candidates = getPackagedWorkerPathCandidates(runtime, options);
+      throw new Error(
+        `child js path not exist. Tried: ${candidates.join(", ")}`
+      );
     }
     const { port1, port2 } = new MessageChannelMain();
     // const tokenService=new Token()
@@ -343,13 +380,13 @@ export class SearchModule extends BaseModule {
     const child = utilityProcess.fork(childPath, [], {
       stdio: "pipe",
       execArgv: ["puppeteer-cluster:*"],
-      env: {
-        ...process.env,
-        NODE_OPTIONS: "",
-        TWOCAPTCHA_TOKEN: twoCaptchaTokenvalue,
-        LOCAL_BROWSER_EXCUTE_PATH: localBrowserexcutepath,
-        //USEDATADIR: userDataDir
-      },
+      env: buildPackagedWorkerEnv({
+        extraEnv: {
+          TWOCAPTCHA_TOKEN: twoCaptchaTokenvalue,
+          LOCAL_BROWSER_EXCUTE_PATH: localBrowserexcutepath,
+          //USEDATADIR: userDataDir
+        },
+      }),
     });
     child.on("spawn", async () => {
       console.log("child process satart, pid is" + child.pid);
@@ -373,23 +410,28 @@ export class SearchModule extends BaseModule {
     });
 
     child.stdout?.on("data", (data) => {
-      console.log(`Received data chunk ${data}`);
-      WriteLog(runLogfile, data);
+      const text = chunkToUtf8(data);
+      console.log(`Received data chunk ${text}`);
+      WriteLog(runLogfile, text);
       // child.kill()
     });
+    // stderr is diagnostic only. Chrome/Puppeteer (especially on Windows)
+    // frequently emit non-fatal warnings to stderr while scraping succeeds.
+    // Never mark the task Error here — exit code / searcherror messages own that.
     child.stderr?.on("data", (data) => {
-      const ingoreStr = [
+      const text = chunkToUtf8(data);
+      const ignoreStr = [
         "Debugger attached",
         "Waiting for the debugger to disconnect",
         "Most NODE_OPTIONs are not supported in packaged apps",
       ];
-      if (!ingoreStr.some((value) => data.includes(value))) {
-        // seModel.saveTaskerrorlog(taskId,data)
-        console.log(`Received error chunk ${data}`);
-        WriteLog(errorLogfile, data);
-        this.updateTaskStatus(taskId, SearchTaskStatus.Error);
-        //child.kill()
+      if (ignoreStr.some((value) => text.includes(value))) {
+        return;
       }
+      console.log(
+        `[SearchModule] task ${taskId} stderr (not failing task): ${text}`
+      );
+      WriteLog(errorLogfile, text);
     });
     child.on("exit", async (code) => {
       // Clear PID and unregister process

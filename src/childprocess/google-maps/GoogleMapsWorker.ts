@@ -17,6 +17,7 @@ import type {
   GoogleMapsProgressStatus,
 } from "@/entityTypes/googleMapsTypes";
 import type { YellowPagesTaskProxyConfig } from "@/entityTypes/yellowPagesTaskProxyType";
+import { safeGoto } from "@/childprocess/google-maps/mapsNavigation";
 
 // ---------------------------------------------------------------------------
 // Message types (internal)
@@ -63,8 +64,33 @@ interface ResultMessage {
 // State
 // ---------------------------------------------------------------------------
 
+const workerStartedAt = new Date().toISOString();
 let browser: Browser | null = null;
 let isCancelled = false;
+
+function describeError(error: unknown): string {
+  if (error instanceof Error) {
+    return error.stack ?? `${error.name}: ${error.message}`;
+  }
+  return String(error);
+}
+
+function logWorkerEvent(message: string, error?: unknown): void {
+  const suffix = error === undefined ? "" : `\n${describeError(error)}`;
+  console.error(
+    `[GoogleMapsWorker] pid=${process.pid} started=${workerStartedAt} ${message}${suffix}`
+  );
+}
+
+process.on("uncaughtException", (error: unknown) => {
+  logWorkerEvent("uncaughtException", error);
+});
+
+process.on("unhandledRejection", (reason: unknown) => {
+  logWorkerEvent("unhandledRejection", reason);
+});
+
+logWorkerEvent(`started execPath=${process.execPath} cwd=${process.cwd()}`);
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -217,10 +243,16 @@ function deduplicate(
 async function scrapeGoogleMaps(msg: StartMessage): Promise<void> {
   const { requestId, query, location, maxResults, showBrowser } = msg;
   isCancelled = false;
+  logWorkerEvent(
+    `starting scrape requestId=${requestId} query=${JSON.stringify(
+      query
+    )} location=${JSON.stringify(location)} maxResults=${maxResults}`
+  );
 
   try {
     // Launch browser
     sendProgress(requestId, "launching", 0, maxResults, "Launching browser...");
+    logWorkerEvent(`launching browser requestId=${requestId}`);
     browser = await launch({
       headless: !showBrowser,
       args: [
@@ -230,6 +262,7 @@ async function scrapeGoogleMaps(msg: StartMessage): Promise<void> {
         "--disable-gpu",
       ],
     });
+    logWorkerEvent(`browser launched requestId=${requestId}`);
 
     const page = await browser.newPage();
     await page.setViewport({ width: 1280, height: 800 });
@@ -263,12 +296,18 @@ async function scrapeGoogleMaps(msg: StartMessage): Promise<void> {
       );
     }
 
-    // Navigate to Google Maps search
+    // Navigate to Google Maps search. Use waitUntil="domcontentloaded" — not
+    // "networkidle2", which never resolves on Google Maps and causes a spurious
+    // 30s navigation timeout. safeGoto additionally recovers from such a
+    // timeout. The real readiness gate is waitForSelector('[role="feed"]').
     sendProgress(requestId, "loading", 0, maxResults, "Loading Google Maps...");
     const searchUrl = `https://www.google.com/maps/search/${encodeURIComponent(
       query
     )}+${encodeURIComponent(location)}`;
-    await page.goto(searchUrl, { waitUntil: "networkidle2", timeout: 30000 });
+    await safeGoto(page, searchUrl, {
+      timeout: 30000,
+      waitUntil: "domcontentloaded",
+    });
 
     // Wait for results feed to load
     sendProgress(requestId, "loading", 0, maxResults, "Waiting for results...");
@@ -444,9 +483,9 @@ async function scrapeGoogleMaps(msg: StartMessage): Promise<void> {
           console.log(
             `[DEBUG] Card index ${i} out of range (only ${freshCards.length} cards). Re-navigating to search URL.`
           );
-          await page.goto(searchUrl, {
-            waitUntil: "networkidle2",
+          await safeGoto(page, searchUrl, {
             timeout: 30000,
+            waitUntil: "domcontentloaded",
           });
           await page
             .waitForSelector('[role="feed"]', { timeout: 15000 })
@@ -512,13 +551,13 @@ async function scrapeGoogleMaps(msg: StartMessage): Promise<void> {
         // Go back to results list
         console.log(`[DEBUG] Navigating back to results list...`);
         await page
-          .goBack({ waitUntil: "networkidle2", timeout: 10000 })
+          .goBack({ waitUntil: "domcontentloaded", timeout: 10000 })
           .catch(async () => {
             // If goBack fails, re-navigate
             console.log(`[DEBUG] goBack failed, re-navigating to searchUrl`);
-            await page.goto(searchUrl, {
-              waitUntil: "networkidle2",
+            await safeGoto(page, searchUrl, {
               timeout: 30000,
+              waitUntil: "domcontentloaded",
             });
           });
         await randomDelay(800, 1500);
@@ -538,11 +577,12 @@ async function scrapeGoogleMaps(msg: StartMessage): Promise<void> {
           err instanceof Error ? err.message : err
         );
         // Continue to next card
-        await page
-          .goto(searchUrl, { waitUntil: "networkidle2", timeout: 30000 })
-          .catch(() => {
-            /* re-navigation already attempted */
-          });
+        await safeGoto(page, searchUrl, {
+          timeout: 30000,
+          waitUntil: "domcontentloaded",
+        }).catch(() => {
+          /* re-navigation already attempted */
+        });
         await sleep(2000);
       }
     }
@@ -735,8 +775,10 @@ function buildSummary(
 // ---------------------------------------------------------------------------
 
 process.on("message", (msg: WorkerMessage) => {
+  logWorkerEvent(`message type=${msg.type} requestId=${msg.requestId}`);
   if (msg.type === "start") {
     scrapeGoogleMaps(msg).catch((err) => {
+      logWorkerEvent(`scrape failed requestId=${msg.requestId}`, err);
       send({
         type: "result",
         requestId: msg.requestId,

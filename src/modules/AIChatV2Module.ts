@@ -2,6 +2,7 @@ import { BaseModule } from "@/modules/baseModule";
 import { AIChatModule } from "@/modules/AIChatModule";
 import { AIChatSessionMemoryModule } from "@/modules/AIChatSessionMemoryModule";
 import { AIChatCompactModule } from "@/modules/AIChatCompactModule";
+import { AIArtifactModule } from "@/modules/AIArtifactModule";
 import { AIChatMessageEntity } from "@/entity/AIChatMessage.entity";
 import { MessageType } from "@/entityTypes/commonType";
 import { Token } from "@/modules/token";
@@ -13,7 +14,8 @@ import type {
 } from "@/entityTypes/aiChatV2Types";
 
 const V2_CONVERSATION_PREFIX = "v2-";
-const V2_DEFAULT_SYSTEM_PROMPT = "You are a helpful assistant.";
+const V2_DEFAULT_SYSTEM_PROMPT =
+  "You are aiFetchly's built-in helpful assistant.";
 
 function uuid(): string {
   // Crypto.randomUUID is available in Electron (Node 16+ / Chromium).
@@ -51,6 +53,7 @@ export class AIChatV2Module extends BaseModule {
     content: string;
     messageId?: string;
     timestamp?: Date;
+    metadata?: ChatV2MessageMetadata;
   }): Promise<AIChatMessageEntity> {
     return this.chatModule.saveMessage({
       messageId: params.messageId ?? `user-${uuid()}`,
@@ -58,7 +61,36 @@ export class AIChatV2Module extends BaseModule {
       role: "user",
       content: params.content,
       timestamp: params.timestamp,
-      metadata: { source: "chat-v2" } as ChatV2MessageMetadata,
+      metadata: {
+        source: "chat-v2",
+        ...(params.metadata ?? {}),
+      } as ChatV2MessageMetadata,
+      messageType: MessageType.MESSAGE,
+    });
+  }
+
+  /**
+   * Idempotent user-message insert for scheduled-loop turns. Requires an
+   * explicit messageId (the stable scheduled id); reuses an existing row
+   * without mutation on retry (technical-design §14.2).
+   */
+  async saveUserMessageIfAbsent(params: {
+    conversationId: string;
+    content: string;
+    messageId: string;
+    timestamp?: Date;
+    metadata?: ChatV2MessageMetadata;
+  }): Promise<AIChatMessageEntity> {
+    return this.chatModule.saveMessageIfAbsent({
+      messageId: params.messageId,
+      conversationId: params.conversationId,
+      role: "user",
+      content: params.content,
+      timestamp: params.timestamp,
+      metadata: {
+        source: "chat-v2",
+        ...(params.metadata ?? {}),
+      } as ChatV2MessageMetadata,
       messageType: MessageType.MESSAGE,
     });
   }
@@ -194,6 +226,15 @@ export class AIChatV2Module extends BaseModule {
         err
       );
     }
+    // Cascade artifact clear so generated HTML is removed with the chat.
+    try {
+      await new AIArtifactModule().deleteByConversation(conversationId);
+    } catch (err) {
+      console.error(
+        "[ai-chat-v2] clearConversation: artifact clear failed:",
+        err
+      );
+    }
     return deleted;
   }
 
@@ -203,6 +244,15 @@ export class AIChatV2Module extends BaseModule {
     let total = 0;
     for (const s of summaries) {
       total += await this.chatModule.clearConversation(s.conversationId);
+      // Remove generated artifacts scoped to this v2 conversation.
+      try {
+        await new AIArtifactModule().deleteByConversation(s.conversationId);
+      } catch (err) {
+        console.error(
+          "[ai-chat-v2] clearAllV2History: artifact clear failed:",
+          err
+        );
+      }
     }
     try {
       await this.sessionMemoryModule.deleteAllV2();

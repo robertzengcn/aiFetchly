@@ -1,0 +1,175 @@
+name: CI
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint-and-test:
+    name: Lint and unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          # undici@8 requires Node >=22.19.0; keep aligned with build.yml
+          node-version: 22.19.0
+          cache: yarn
+
+      # Python 3.12+ can break older node-gyp dependency chains used by native modules.
+      - name: Set up Python for node-gyp
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Configure node-gyp Python
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHON_BIN="$(python -c 'import sys; print(sys.executable)')"
+          echo "Using Python for node-gyp: ${PYTHON_BIN}"
+          python --version
+          echo "PYTHON=${PYTHON_BIN}" >> "$GITHUB_ENV"
+          echo "npm_config_python=${PYTHON_BIN}" >> "$GITHUB_ENV"
+          echo "NODE_GYP_FORCE_PYTHON=${PYTHON_BIN}" >> "$GITHUB_ENV"
+
+      - name: Install Linux system dependencies for native modules
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsecret-1-dev
+
+      - name: Use HTTPS for GitHub dependencies
+        run: |
+          git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
+          git config --global url."https://github.com/".insteadOf "git@github.com:"
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Run lint
+        run: yarn lint
+
+      - name: Rebuild native modules for Node test runtime
+        run: |
+          unset npm_config_runtime npm_config_target npm_config_disturl npm_config_arch
+          npm rebuild better-sqlite3 --build-from-source
+
+      - name: Run module unit tests
+        run: yarn test
+
+      - name: Run main process unit tests
+        run: yarn testmain
+
+      - name: Run utility code unit tests
+        run: yarn vitest --config vite.utilityCode.ci.config.mjs --run
+
+      - name: Verify Electron native module compatibility
+        run: yarn rebuild-better-sqlite
+
+      - name: Run native module compatibility tests
+        run: yarn vitest --config vite.utilityCode.config.mjs --run test/vitest/utilitycode/nativeModuleVersion.test.ts
+
+      - name: Run task code unit tests
+        run: yarn vitest --config vite.taskCode.config.mjs --run --passWithNoTests
+
+      - name: Restore Electron native module compatibility
+        if: always()
+        run: yarn rebuild-better-sqlite
+
+  package-smoke:
+    name: Package smoke test
+    needs: lint-and-test
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      # Unpacked layout avoids ASAR finalize OOM on GHA (see forge.config.js).
+      FORGE_DISABLE_ASAR: "1"
+      # Skip electron-forge's packaging-time native rebuild in CI. rebuild-native
+      # (run by package:ci) already builds better-sqlite3 for Electron before
+      # packaging copies node_modules, so re-rebuilding during "Preparing native
+      # dependencies" is redundant work that has been observed to stall the
+      # smoke build. The smoke test only verifies worker files, not native loads.
+      FORGE_SKIP_NATIVE_REBUILD: "1"
+      NODE_OPTIONS: --max-old-space-size=8192
+      ELECTRON_FORGE_VITE_CONCURRENT: "1"
+      VITE_CONFIG_NATIVE_IGNORE_WARNING: "true"
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
+          cache: yarn
+
+      - name: Set up Python for node-gyp
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Configure node-gyp Python
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHON_BIN="$(python -c 'import sys; print(sys.executable)')"
+          echo "PYTHON=${PYTHON_BIN}" >> "$GITHUB_ENV"
+          echo "npm_config_python=${PYTHON_BIN}" >> "$GITHUB_ENV"
+          echo "NODE_GYP_FORCE_PYTHON=${PYTHON_BIN}" >> "$GITHUB_ENV"
+
+      - name: Install Linux system dependencies for native modules
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsecret-1-dev
+
+      - name: Use HTTPS for GitHub dependencies
+        run: |
+          git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
+          git config --global url."https://github.com/".insteadOf "git@github.com:"
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      # The standard runner has only 14 GB SSD. Unpacked packaging duplicates
+      # node_modules into /tmp/electron-packager AND out/, which can exhaust the
+      # disk and stall "Copying files"/"Finalizing package". Reclaim ~20-30 GB
+      # of preinstalled toolchains we don't need for a Linux smoke build.
+      - name: Free up disk space
+        # Only remove toolchains we do not use for a Linux smoke build. Do NOT
+        # touch $AGENT_TOOLSDIRECTORY (/opt/hostedtoolcache/{node,Python,...}) or
+        # /usr/local/lib/node_modules — those hold the Node.js, yarn shim, and
+        # Python that setup-node/setup-python put on PATH; deleting them breaks
+        # the very `yarn` this job runs (exit 127 "yarn: command not found").
+        run: |
+          echo "Disk before cleanup:"; df -h /
+          sudo rm -rf /usr/local/lib/android || true
+          sudo rm -rf /usr/share/dotnet || true
+          sudo rm -rf /opt/ghc || true
+          sudo rm -rf /usr/local/.ghcup || true
+          sudo rm -rf /usr/local/share/boost || true
+          sudo rm -rf /opt/hostedtoolcache/CodeQL || true
+          sudo docker image prune --all --force || true
+          echo "Disk after cleanup:"; df -h /
+
+      - name: Build Linux package for worker smoke test
+        timeout-minutes: 30
+        # electron-forge's underlying process can hang after packaging fully
+        # completes (see scripts/run-packaging-with-hang-guard.js for the
+        # full explanation). yarn package:ci detects true completion from
+        # the CLI's own log output and force-exits instead of waiting on a
+        # natural process exit that may never happen. The guard also dumps
+        # disk/mem/process diagnostics on stall and fails fast with a clear
+        # reason instead of being silently canceled by the step timeout above.
+        run: yarn package:ci
+
+      - name: Resolve packaged worker dependencies
+        run: yarn verify-packaged-childprocess

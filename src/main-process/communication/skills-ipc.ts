@@ -1,8 +1,9 @@
 /**
  * Skills IPC handlers — permission management and skill import for skill execution.
  *
- * All 10 handlers migrated to registerAiValidatedHandler (centralizes the
- * USER_AI_ENABLED check that was previously a per-handler checkAiEnabled()).
+ * Execution/permission/import handlers are AI-gated. Read-only management and
+ * enable/disable/uninstall handlers are not AI-gated because users must be
+ * able to inspect or disable skills even when AI is unavailable.
  *
  * Handles:
  * - SKILL_CHECK_PERMISSION / GRANT / DENY / REVOKE / GET_STATUS: by skillName
@@ -29,7 +30,11 @@ import {
 import { SkillPermissionService } from "@/service/SkillPermissionService";
 import { SkillManagementModule } from "@/modules/SkillManagementModule";
 import { SkillImportService } from "@/service/SkillImportService";
-import { registerAiValidatedHandler } from "@/main-process/communication/_shared/registerValidatedHandler";
+import {
+  registerAiValidatedHandler,
+  registerValidatedHandler,
+} from "@/main-process/communication/_shared/registerValidatedHandler";
+import { broadcastAifetchlyConfigChanged } from "@/main-process/communication/aifetchlyConfigEvents";
 import {
   skillByNameInputSchema,
   skillGrantPermissionInputSchema,
@@ -102,7 +107,7 @@ export function registerSkillsIpcHandlers(): void {
     },
   );
 
-  registerAiValidatedHandler(
+  registerValidatedHandler(
     SKILL_LIST_INSTALLED,
     skillListInstalledInputSchema,
     async () => {
@@ -112,16 +117,20 @@ export function registerSkillsIpcHandlers(): void {
     },
   );
 
-  registerAiValidatedHandler(
+  registerValidatedHandler(
     SKILL_TOGGLE,
     skillToggleInputSchema,
     async (input) => {
       const module = new SkillManagementModule();
       const success = await module.toggleSkill(input.skillName, input.enabled);
-      if (success && !input.enabled) {
-        // Unregister disabled skill from runtime
+      if (success) {
         const { SkillRegistry } = await import("@/config/skillsRegistry");
-        SkillRegistry.unregisterSkill(input.skillName);
+        if (input.enabled) {
+          await SkillImportService.loadPersistedSkill(input.skillName);
+        } else {
+          SkillRegistry.unregisterSkill(input.skillName);
+        }
+        broadcastAifetchlyConfigChanged({ source: "skill" });
       }
       if (!success) {
         throw new Error("Skill not found");
@@ -130,7 +139,7 @@ export function registerSkillsIpcHandlers(): void {
     },
   );
 
-  registerAiValidatedHandler(
+  registerValidatedHandler(
     SKILL_UNINSTALL,
     skillByNameInputSchema,
     async (input) => {
@@ -139,6 +148,7 @@ export function registerSkillsIpcHandlers(): void {
       if (success) {
         const { SkillRegistry } = await import("@/config/skillsRegistry");
         SkillRegistry.unregisterSkill(input.skillName);
+        broadcastAifetchlyConfigChanged({ source: "skill" });
         // Clean up skill files from disk (best-effort)
         try {
           const skillsDir = path.join(

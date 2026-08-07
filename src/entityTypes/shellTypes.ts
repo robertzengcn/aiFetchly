@@ -86,6 +86,14 @@ export interface ShellExecutionResult {
   readonly validatedCwd?: string;
   /** Validated shell interpreter (only present when input passed zod validation). */
   readonly validatedShell?: string;
+  /**
+   * Outcome of the layered permission analysis (allow / deny / ask).
+   * Present only when the permission layer ran. Empty/undefined means the
+   * legacy denylist path was used (backwards-compat).
+   */
+  readonly permission_verdict?: "allow" | "deny" | "ask";
+  /** Machine-readable verdict code, present when permission_verdict is set. */
+  readonly permission_code?: string;
 }
 
 // ---------------------------------------------------------------------------

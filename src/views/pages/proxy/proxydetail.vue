@@ -196,14 +196,15 @@ async function onSubmit() {
 
         loading.value = false;
         console.log(res)
-        if (res.id > 0) {
+        if (res.id > 0 || res.data?.id > 0) {
+          const savedId = res.data?.id || res.id;
           alert.value = true;
           alertcolor.value = "success";
-          alertContent.value = t('common.save_success') + ", " + t('proxy.id') + ": " + res.id;
-          pe.id = res.id;
-          $route.params.id = res.id.toString();
+          alertContent.value = t('common.save_success') + ", " + t('proxy.id') + ": " + savedId;
+          pe.id = savedId;
+          $route.params.id = savedId.toString();
           isEdit.value = true;
-          proxyId.value =res.id;
+          proxyId.value = savedId;
         } else {
           alert.value = true;
           alertcolor.value = "error";

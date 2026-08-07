@@ -2,6 +2,7 @@ import { Page } from 'puppeteer';
 import { AIRecoveryRequest } from '@/entityTypes/processMessage-type';
 import { v4 as uuidv4 } from 'uuid';
 import { createLogger } from './logger';
+import sanitizeHtml from 'sanitize-html';
 
 const logger = createLogger('PageStateCapture');
 
@@ -88,13 +89,36 @@ export async function capturePageState(
  * Focus on main content area if possible
  */
 function cleanHtml(html: string, maxLength: number): string {
-    // Remove script and style content
-    let cleaned = html
-        .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
-        .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '')
-        .replace(/<!--[\s\S]*?-->/g, '')
-        .replace(/\s+/g, ' ')
-        .trim();
+    // Use sanitize-html to safely strip dangerous tags and attributes
+    let cleaned = sanitizeHtml(html, {
+        allowedTags: [
+            "h1", "h2", "h3", "h4", "h5", "h6", "p", "br", "hr",
+            "ul", "ol", "li", "dl", "dt", "dd",
+            "table", "thead", "tbody", "tfoot", "tr", "td", "th", "caption",
+            "div", "span", "section", "article", "aside", "header", "footer", "nav", "main",
+            "pre", "code", "blockquote", "em", "strong", "b", "i", "u", "s", "small", "sub", "sup",
+            "a", "img", "figure", "figcaption",
+            "abbr", "address", "del", "ins", "mark", "q", "time", "var",
+            "details", "summary",
+        ],
+        allowedAttributes: {
+            "*": ["class", "id", "title", "role", "aria-label"],
+            "a": ["href", "target", "rel"],
+            "img": ["src", "alt", "width", "height"],
+            "td": ["colspan", "rowspan"],
+            "th": ["colspan", "rowspan", "scope"],
+        },
+    });
+
+    // Remove HTML comments (loop to handle nested/overlapping cases)
+    let prevComments: string;
+    do {
+        prevComments = cleaned;
+        cleaned = cleaned.replace(/<!--[\s\S]*?-->/g, '');
+    } while (cleaned !== prevComments);
+
+    // Collapse whitespace
+    cleaned = cleaned.replace(/\s+/g, ' ').trim();
 
     // Focus on main content area if possible
     const mainMatch = cleaned.match(/<main[^>]*>[\s\S]*?<\/main>/i) ||

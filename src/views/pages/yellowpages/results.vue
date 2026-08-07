@@ -357,7 +357,7 @@ const loadTaskDetails = async () => {
   }
 }
 
-const loadResults = async (page: number = 0) => {
+const loadResults = async (page = 0) => {
   loading.value = true
   try {
     if(page==0){
@@ -562,5 +562,4 @@ onMounted(() => {
   }
 }
 </style>
-
 

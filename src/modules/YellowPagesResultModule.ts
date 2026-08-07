@@ -13,12 +13,18 @@ export class YellowPagesResultModule extends BaseModule {
         this.yellowPagesResultModel = new YellowPagesResultModel(this.dbpath);
     }
 
+    private async withConnection<T>(fn: () => Promise<T>): Promise<T> {
+        await this.ensureConnection();
+        return fn();
+    }
+
     /**
      * Create a new Yellow Pages result
      * @param result The result data to create
      * @returns The ID of the created result
      */
     async createResult(result: YellowPagesResult): Promise<number> {
+        await this.ensureConnection();
         try {
             // Convert result data to entity format
             const resultEntity = this.convertResultToEntity(result);
@@ -54,6 +60,7 @@ export class YellowPagesResultModule extends BaseModule {
      * @returns The result entity
      */
     async getResultById(id: number): Promise<YellowPagesResultEntity | undefined> {
+        await this.ensureConnection();
         try {
             const result = await this.yellowPagesResultModel.getResultById(id);
             return result || undefined;
@@ -90,6 +97,7 @@ export class YellowPagesResultModule extends BaseModule {
      * @param id The result ID
      */
     async deleteResult(id: number): Promise<void> {
+        await this.ensureConnection();
         try {
             const success = await this.yellowPagesResultModel.deleteResult(id);
             if (!success) {
@@ -108,7 +116,8 @@ export class YellowPagesResultModule extends BaseModule {
      * @param size Page size
      * @returns Array of results for the specified task
      */
-    async getResultsByTaskId(taskId: number, page: number = 0, size: number = 20): Promise<YellowPagesResult[]> {
+    async getResultsByTaskId(taskId: number, page = 0, size = 20): Promise<YellowPagesResult[]> {
+        await this.ensureConnection();
         try {
             // The model now expects 0-based pagination, so pass page directly
             const resultEntities = await this.yellowPagesResultModel.getResultsByTaskId(taskId, page, size);
@@ -126,7 +135,7 @@ export class YellowPagesResultModule extends BaseModule {
      * @param size Page size
      * @returns Array of results for the specified platform
      */
-    async getResultsByPlatform(platform: string, page: number = 0, size: number = 20): Promise<YellowPagesResult[]> {
+    async getResultsByPlatform(platform: string, page = 0, size = 20): Promise<YellowPagesResult[]> {
         try {
             const resultEntities = await this.yellowPagesResultModel.getResultsByPlatform(platform, page, size);
             return resultEntities.map(entity => this.convertEntityToResult(entity));
@@ -143,7 +152,7 @@ export class YellowPagesResultModule extends BaseModule {
      * @param size Page size
      * @returns Array of matching results
      */
-    async searchResults(searchTerm: string, page: number = 0, size: number = 20): Promise<YellowPagesResult[]> {
+    async searchResults(searchTerm: string, page = 0, size = 20): Promise<YellowPagesResult[]> {
         try {
             const resultEntities = await this.yellowPagesResultModel.searchByBusinessName(searchTerm, page, size);
             return resultEntities.map(entity => this.convertEntityToResult(entity));
@@ -159,12 +168,14 @@ export class YellowPagesResultModule extends BaseModule {
      * @returns Number of results for the specified task
      */
     async getResultsCountByTaskId(taskId: number): Promise<number> {
+        return this.withConnection(async () => {
         try {
             return await this.yellowPagesResultModel.getResultCountByTaskId(taskId);
         } catch (error) {
             console.error('Error getting results count by task ID:', error);
             throw new Error(`Failed to get results count for task ${taskId}: ${error instanceof Error ? error.message : 'Unknown error'}`);
         }
+        });
     }
 
     /**
@@ -206,7 +217,7 @@ export class YellowPagesResultModule extends BaseModule {
      * @param sort Sort parameters (optional)
      * @returns Array of result entities
      */
-    async listResults(page: number = 0, size: number = 50, sort?: SortBy): Promise<YellowPagesResultEntity[]> {
+    async listResults(page = 0, size = 50, sort?: SortBy): Promise<YellowPagesResultEntity[]> {
         try {
             // The model now expects 0-based pagination, so pass page directly
             return await this.yellowPagesResultModel.listResults(page, size, sort);
@@ -410,6 +421,7 @@ export class YellowPagesResultModule extends BaseModule {
      * @returns Number of results deleted
      */
     async deleteResultsByTaskId(taskId: number): Promise<number> {
+        await this.ensureConnection();
         try {
             // First get the count of results to be deleted
             const count = await this.yellowPagesResultModel.getResultCountByTaskId(taskId);
@@ -433,7 +445,7 @@ export class YellowPagesResultModule extends BaseModule {
      * @param daysOld Number of days old to consider for cleanup
      * @returns Number of results cleaned up
      */
-    async cleanupOldResults(daysOld: number = 90): Promise<number> {
+    async cleanupOldResults(daysOld = 90): Promise<number> {
         try {
             const cutoffDate = new Date();
             cutoffDate.setDate(cutoffDate.getDate() - daysOld);
@@ -465,6 +477,7 @@ export class YellowPagesResultModule extends BaseModule {
      * @returns Exported data
      */
     async exportResults(taskId?: number, format: 'json' | 'csv' = 'json'): Promise<any> {
+        await this.ensureConnection();
         let results: YellowPagesResult[];
         
         if (taskId) {

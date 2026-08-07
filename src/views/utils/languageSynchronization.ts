@@ -94,6 +94,14 @@ export class LanguageSynchronizer {
         try {
             const currentSystemLanguage = await getLanguagePreference()
             const currentCookieLanguage = getLanguage()
+
+            if (!currentCookieLanguage) {
+                await this.syncRemoteToLocal(currentSystemLanguage)
+                this.syncState.lastSyncTime = Date.now()
+                this.syncState.lastKnownValue = currentSystemLanguage
+                this.syncState.pendingChanges = false
+                return
+            }
             
             // Check for conflicts (system language changed externally)
             if (this.syncState.lastKnownValue !== currentSystemLanguage && this.isInitialized) {
@@ -128,7 +136,10 @@ export class LanguageSynchronizer {
             setLanguage(newLanguage)
             
             // Sync to remote system settings
-            await this.syncLocalToRemote(newLanguage)
+            const success = await this.syncLocalToRemote(newLanguage)
+            if (!success) {
+                throw new Error('Failed to save language preference')
+            }
             
             // Update state
             this.syncState.lastKnownValue = newLanguage
@@ -189,7 +200,7 @@ export class LanguageSynchronizer {
     /**
      * Sync local changes to remote
      */
-    private async syncLocalToRemote(localLanguage: string): Promise<void> {
+    private async syncLocalToRemote(localLanguage: string): Promise<boolean> {
         try {
             console.log(`Syncing local language to remote: ${localLanguage}`)
             
@@ -205,11 +216,15 @@ export class LanguageSynchronizer {
                     newValue: localLanguage,
                     source: 'local'
                 })
+
+                return true
             } else {
                 console.warn('Failed to sync local language to remote')
+                return false
             }
         } catch (error) {
             console.error('Error syncing local to remote:', error)
+            return false
         }
     }
 
@@ -315,8 +330,6 @@ export async function forceLanguageSync(): Promise<void> {
     const synchronizer = getLanguageSynchronizer()
     await synchronizer.forceSync()
 }
-
-
 
 
 

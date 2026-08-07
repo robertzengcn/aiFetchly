@@ -20,9 +20,33 @@ export interface BuiltPrompt {
 
 export class AgentPromptBuilder {
   build(input: BuildPromptInput): BuiltPrompt {
+    // Inject the output schema inline into the system message. Models comply
+    // much more reliably when the schema is in the system prompt (not just
+    // the user message body), especially in failure modes where they would
+    // otherwise drift to prose summaries. The explicit "raw JSON, no markdown"
+    // reinforcement and the partial-findings escape hatch prevent the agent
+    // from writing a narrative conclusion when it cannot complete the task.
+    const schema =
+      input.packet.requiredOutputSchema ?? input.definition.outputSchema;
+    const schemaJson = JSON.stringify(schema, null, 2);
+    const schemaReinforcement = [
+      "",
+      "",
+      "## Output format (MANDATORY)",
+      "Respond with a SINGLE raw JSON object. Rules:",
+      "1. NO markdown fences (no ```json blocks).",
+      "2. NO prose, headings, or commentary before or after the JSON.",
+      "3. The JSON object MUST satisfy this JSON schema:",
+      schemaJson,
+      "4. If you cannot gather enough evidence to fill a required field,",
+      "   still return a JSON object — put the explanation inside",
+      "   `businessSummary`, set `sourceUrls` to an empty array, and set",
+      "   `confidence` to 0. NEVER respond with prose instead of JSON.",
+    ].join("\n");
+
     const systemMessage: AgentPromptMessage = {
       role: "system",
-      content: input.definition.systemPrompt,
+      content: input.definition.systemPrompt + schemaReinforcement,
     };
     // The packet is the entire context the agent sees — no parent chat history.
     const userMessage: AgentPromptMessage = {
@@ -33,8 +57,7 @@ export class AgentPromptBuilder {
           userGoal: input.packet.userGoal,
           constraints: input.packet.constraints,
           priorFindings: input.packet.priorFindings,
-          requiredOutputSchema:
-            input.packet.requiredOutputSchema ?? input.definition.outputSchema,
+          requiredOutputSchema: schema,
         },
         null,
         2

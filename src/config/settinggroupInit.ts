@@ -20,6 +20,14 @@ export const ai_preferences_description = "ai-preferences-group-description";
 export const ai_auto_dream_enabled = "user_ai_auto_dream";
 export const ai_memory_injection_enabled = "user_ai_memory_injection";
 export const ai_custom_context_directive = "user_ai_custom_context_directive";
+// Workspace memory preferences (stored in system_setting table).
+export const ai_workspace_memory_injection_enabled =
+  "user_ai_workspace_memory_injection";
+export const ai_workspace_auto_dream_enabled = "user_ai_workspace_auto_dream";
+export const ai_workspace_manual_memory_enabled =
+  "user_ai_workspace_manual_memory";
+/** Desktop completion float (bottom-right). Key matches USER_AI_DESKTOP_NOTIFY. */
+export const ai_desktop_notify_enabled = "user_ai_desktop_notify";
 export const settinggroupInit: Array<SystemSettingGroupdf> = [
   {
     name: twocaptchagroup,
@@ -113,6 +121,36 @@ export const settinggroupInit: Array<SystemSettingGroupdf> = [
         value: "",
         description: "ai-custom-context-directive-description",
         type: "textarea",
+      },
+      {
+        // Workspace memory prompt injection. Default-on.
+        key: ai_workspace_memory_injection_enabled,
+        value: "1",
+        description: "ai-workspace-memory-injection-description",
+        type: "toggle",
+      },
+      {
+        // Workspace auto-dream background consolidation. Default-on.
+        key: ai_workspace_auto_dream_enabled,
+        value: "1",
+        description: "ai-workspace-auto-dream-description",
+        type: "toggle",
+      },
+      {
+        // Manual workspace memory create/edit/delete. Default-on; disabling
+        // does NOT delete stored memories and does NOT disable auto-dream.
+        key: ai_workspace_manual_memory_enabled,
+        value: "1",
+        description: "ai-workspace-manual-memory-description",
+        type: "toggle",
+      },
+      {
+        // Bottom-right desktop float when main AI agent completes a turn or
+        // a plan is ready for approval (only when main window is unfocused).
+        key: ai_desktop_notify_enabled,
+        value: "1",
+        description: "ai-desktop-notify-description",
+        type: "toggle",
       },
     ],
   },

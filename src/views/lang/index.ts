@@ -55,7 +55,7 @@ export const getLocaleAsync = async (): Promise<string> => {
     try {
         // First try to get from system settings
         const systemLanguage = await getLanguagePreference()
-        if (systemLanguage && systemLanguage !== 'en') {
+        if (systemLanguage) {
             document.documentElement.lang = systemLanguage
             return systemLanguage
         }

@@ -1,4 +1,11 @@
-import { ProxylistResp, ProxyEntity, SaveProxyResp, ProxyParseItem, ImportProxyResp, GetProxyCountResp } from "@/entityTypes/proxyType";
+import {
+  ProxylistResp,
+  ProxyEntity,
+  SaveProxyResp,
+  ProxyParseItem,
+  ImportProxyResp,
+  GetProxyCountResp,
+} from "@/entityTypes/proxyType";
 import { CommonApiresp } from "@/entityTypes/commonType";
 
 export interface IProxyApi {
@@ -9,7 +16,11 @@ export interface IProxyApi {
    * @param search - Search term to filter proxies
    * @returns Promise<ProxylistResp> - Paginated proxy list response
    */
-  getProxylist(page: number, size: number, search: string): Promise<ProxylistResp>;
+  getProxylist(
+    page: number,
+    size: number,
+    search: string
+  ): Promise<ProxylistResp>;
 
   /**
    * Delete a proxy by ID
@@ -44,4 +55,23 @@ export interface IProxyApi {
    * @returns Promise<number> - Total number of proxies
    */
   getProxycount(): Promise<number>;
-} 
+
+  /**
+   * Return proxies matching any of the provided (host, port) pairs.
+   * Used by AI import for duplicate detection and post-import reload.
+   * @param pairs - host/port pairs to look up
+   * @returns Promise<ProxyEntity[]> - matching proxies
+   */
+  getProxiesByHostPortPairs(
+    pairs: ReadonlyArray<{ host: string; port: string }>
+  ): Promise<ProxyEntity[]>;
+
+  /**
+   * Return proxies matching any of the provided numeric ids, in one query.
+   * Replaces N per-id getProxyDetail round-trips when building summaries
+   * for a set of proxies (proxy_check results, remove-failed candidates).
+   * @param ids - proxy ids to look up
+   * @returns Promise<ProxyEntity[]> - matching proxies (order not guaranteed)
+   */
+  getProxiesByIds(ids: readonly number[]): Promise<ProxyEntity[]>;
+}

@@ -5,6 +5,7 @@ import * as path from 'path';
 import ClosePlugin from './vite-plugin-close.js'
 
 import checker from 'vite-plugin-checker'
+import { optionalChecker } from './vite-checker-toggle.mjs';
 
 //import commonjs from '@rollup/plugin-commonjs';
 //import copy from 'rollup-plugin-copy'
@@ -79,10 +80,10 @@ export default ({ mode }) => {
         // }),
         sourcemaps(),
         ClosePlugin(),
-        checker({
+        ...optionalChecker(() => checker({
             // e.g. use TypeScript check
             typescript: true,
-        }),
+        })),
             // nodePolyfills()
         ],
         resolve: {
@@ -111,6 +112,61 @@ export default ({ mode }) => {
         optimizeDeps: {
             // disabled:false,
             include: ['winston-transport', 'bufferutil', 'utf-8-validate', 'puppeteer-cluster']
+        },
+        // SSR builds externalize node_modules by default. Force-bundle
+        // electron-store (and its pure-JS dependency tree) so packaged
+        // taskCode (loaded from app.asar.unpacked/.vite/build) does not
+        // need a runtime require that fails with MODULE_NOT_FOUND on Windows.
+        // taskCode must use the real store (Token / USER_AI_ENABLED), so do
+        // NOT alias electron-store to the ContactExtractionWorker shim.
+        ssr: {
+            noExternal: [
+                // Token / settings store
+                'electron-store',
+                'conf',
+                'type-fest',
+                'ajv',
+                'ajv-formats',
+                'atomically',
+                'debounce-fn',
+                'dot-prop',
+                'env-paths',
+                'fast-deep-equal',
+                'fast-uri',
+                'find-up',
+                'is-obj',
+                'json-schema-traverse',
+                'json-schema-typed',
+                'locate-path',
+                'mimic-fn',
+                'onetime',
+                'p-limit',
+                'p-locate',
+                'p-try',
+                'path-exists',
+                'pkg-up',
+                'require-from-string',
+                'semver',
+                // HTML helpers (pure JS; fail from app.asar.unpacked without NODE_PATH)
+                'sanitize-html',
+                'htmlparser2',
+                'escape-string-regexp',
+                'is-plain-object',
+                'deepmerge',
+                'parse-srcset',
+                'postcss',
+                'launder',
+                'entities',
+                'domhandler',
+                'domutils',
+                'domelementtype',
+                'dom-serializer',
+                'nanoid',
+                'picocolors',
+                'source-map-js',
+                'dayjs',
+                'uuid',
+            ],
         },
         build: {
             rollupOptions: {

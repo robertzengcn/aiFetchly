@@ -1,9 +1,95 @@
 /**
  * Mock for Electron module
- * This file is loaded by tests to mock Electron APIs
+ * This file is loaded by tests (and via tsconfig paths) to mock Electron APIs.
+ * Keep surface area aligned with production imports so `tsc --noEmit` stays green.
  */
 
+export interface Rectangle {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface WebPreferences {
+  nodeIntegration?: boolean;
+  contextIsolation?: boolean;
+  sandbox?: boolean;
+  preload?: string;
+  session?: unknown;
+  // Allow additional Electron webPreferences keys used across the app.
+  [key: string]: unknown;
+}
+
+export interface BrowserWindowConstructorOptions {
+  width?: number;
+  height?: number;
+  x?: number;
+  y?: number;
+  show?: boolean;
+  frame?: boolean;
+  transparent?: boolean;
+  alwaysOnTop?: boolean;
+  skipTaskbar?: boolean;
+  resizable?: boolean;
+  maximizable?: boolean;
+  minimizable?: boolean;
+  fullscreenable?: boolean;
+  focusable?: boolean;
+  hasShadow?: boolean;
+  webPreferences?: WebPreferences;
+  // Allow additional BrowserWindow option keys used across the app.
+  [key: string]: unknown;
+}
+
+export interface EventLike {
+  preventDefault(): void;
+}
+
+declare global {
+  // Production code references the global Electron namespace (real electron.d.ts).
+  // When tsconfig remaps "electron" → this mock, that global is never loaded, so
+  // we declare the subset used by src/.
+  // eslint-disable-next-line @typescript-eslint/no-namespace
+  namespace Electron {
+    interface Rectangle {
+      x: number;
+      y: number;
+      width: number;
+      height: number;
+    }
+    interface WebPreferences {
+      nodeIntegration?: boolean;
+      contextIsolation?: boolean;
+      sandbox?: boolean;
+      preload?: string;
+      session?: unknown;
+      [key: string]: unknown;
+    }
+    interface BrowserWindowConstructorOptions {
+      width?: number;
+      height?: number;
+      x?: number;
+      y?: number;
+      show?: boolean;
+      frame?: boolean;
+      transparent?: boolean;
+      alwaysOnTop?: boolean;
+      skipTaskbar?: boolean;
+      resizable?: boolean;
+      maximizable?: boolean;
+      minimizable?: boolean;
+      fullscreenable?: boolean;
+      focusable?: boolean;
+      hasShadow?: boolean;
+      webPreferences?: Electron.WebPreferences;
+      [key: string]: unknown;
+    }
+  }
+}
+
 export const app = {
+  isReady: () => false,
   getName: () => "aiFetchly",
   getPath: (name: string) => {
     const paths: Record<string, string> = {
@@ -16,6 +102,58 @@ export const app = {
   },
 };
 
+export interface ProtocolPrivilege {
+  standard?: boolean;
+  secure?: boolean;
+  supportFetchAPI?: boolean;
+  corsEnabled?: boolean;
+}
+
+export interface ProtocolScheme {
+  scheme: string;
+  privileges?: ProtocolPrivilege;
+}
+
+export const protocol = {
+  registerSchemesAsPrivileged(_schemes: ProtocolScheme[]): void {
+    // Mock implementation
+  },
+  handle(
+    _scheme: string,
+    _handler: (request: Request) => Response | Promise<Response>
+  ): void {
+    // Mock implementation
+  },
+};
+
+export const net = {
+  async fetch(input: string): Promise<Response> {
+    return fetch(input);
+  },
+};
+
+export const screen = {
+  getDisplayMatching(_rect: Rectangle): { workArea: Rectangle } {
+    return { workArea: { x: 0, y: 0, width: 1920, height: 1080 } };
+  },
+  getPrimaryDisplay(): { workArea: Rectangle } {
+    return { workArea: { x: 0, y: 0, width: 1920, height: 1080 } };
+  },
+};
+
+/** Mock WebContents for services that need to send IPC to renderer. */
+export type WebContentsListener = (
+  event: EventLike,
+  url: string,
+  ...rest: unknown[]
+) => void;
+
+export interface WebContents {
+  send(_channel: string, ..._args: unknown[]): void;
+  isDestroyed(): boolean;
+  on(event: string, listener: WebContentsListener): void;
+}
+
 export class BrowserWindow {
   readonly webContents: WebContents = {
     send(_channel: string, ..._args: unknown[]): void {
@@ -24,9 +162,12 @@ export class BrowserWindow {
     isDestroyed(): boolean {
       return false;
     },
+    on(_event: string, _listener: WebContentsListener): void {
+      // Mock implementation
+    },
   };
 
-  constructor(_options?: unknown) {
+  constructor(_options?: BrowserWindowConstructorOptions) {
     // Mock constructor
   }
 
@@ -41,10 +182,6 @@ export class BrowserWindow {
 
   setMenu(_menu: unknown): void {
     // Mock implementation
-  }
-
-  on(_event: string, _handler: (...args: unknown[]) => void): this {
-    return this;
   }
 
   once(_event: string, _handler: (...args: unknown[]) => void): this {
@@ -63,6 +200,10 @@ export class BrowserWindow {
     // Mock implementation
   }
 
+  showInactive(): void {
+    // Mock implementation
+  }
+
   hide(): void {
     // Mock implementation
   }
@@ -71,8 +212,64 @@ export class BrowserWindow {
     // Mock implementation
   }
 
+  maximize(): void {
+    // Mock implementation
+  }
+
+  restore(): void {
+    // Mock implementation
+  }
+
+  focus(): void {
+    // Mock implementation
+  }
+
+  isDestroyed(): boolean {
+    return false;
+  }
+
+  isMinimized(): boolean {
+    return false;
+  }
+
+  isFocused(): boolean {
+    return false;
+  }
+
+  isVisible(): boolean {
+    return true;
+  }
+
+  getBounds(): Rectangle {
+    return { x: 0, y: 0, width: 800, height: 600 };
+  }
+
+  setBounds(_bounds: Rectangle): void {
+    // Mock implementation
+  }
+
+  setAlwaysOnTop(_flag: boolean, _level?: string): void {
+    // Mock implementation
+  }
+
+  setVisibleOnAllWorkspaces(
+    _visible: boolean,
+    _options?: { visibleOnFullScreen?: boolean }
+  ): void {
+    // Mock implementation
+  }
+
+  on(_event: string, _listener: (...args: unknown[]) => void): this {
+    return this;
+  }
+
   static getAllWindows(): unknown[] {
     return [];
+  }
+
+  /** Mirrors Electron's static lookup; returns null in tests. */
+  static fromWebContents(_contents: unknown): BrowserWindow | null {
+    return null;
   }
 }
 
@@ -122,12 +319,6 @@ export const ipcRenderer = {
 };
 
 /** Matches Electron `webUtils`; runtime preload resolves real `electron` from node_modules. */
-/** Mock WebContents for services that need to send IPC to renderer. */
-export interface WebContents {
-  send(_channel: string, ..._args: unknown[]): void;
-  isDestroyed(): boolean;
-}
-
 export const webUtils = {
   getPathForFile(_file: File): string {
     return "";
@@ -139,5 +330,8 @@ export default {
   BrowserWindow,
   ipcMain,
   ipcRenderer,
+  protocol,
+  net,
+  screen,
   webUtils,
 };

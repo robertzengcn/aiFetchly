@@ -136,6 +136,7 @@ export interface ChunkAndEmbedResponse {
   embeddingsGenerated: number;
   processingTime: number;
   success: boolean;
+  message?: string;
   steps: {
     chunking: boolean;
     embedding: boolean;

@@ -118,10 +118,11 @@ export function registerBuckEmailIpcHandlers() {
     buckEmailTaskListInputSchema,
     async (input) => {
       const buckemailCon = new BuckemailController();
+      const sortby = Array.isArray(input.sortby) ? input.sortby[0] : input.sortby;
       const res = await buckemailCon.getBuckEmailTaskList(
         input.page ?? 0,
         input.size ?? 100,
-        input.sortby
+        sortby
       );
       // Wrapper wraps this in {status: true, msg: 'ok', data: {...}},
       // matching the original CommonResponse<BuckEmailListType> wire shape
@@ -141,12 +142,13 @@ export function registerBuckEmailIpcHandlers() {
       // Schema now requires TaskId as positive int; missing/invalid is
       // rejected at boundary by the wrapper with a clear zod message.
       const buckemailCon = new BuckemailController();
+      const sortby = Array.isArray(input.sortby) ? input.sortby[0] : input.sortby;
       const res = await buckemailCon.getBuckEmailSendLog(
         input.TaskId,
         input.page ?? 0,
         input.size ?? 100,
         input.where,
-        input.sortby
+        sortby
       );
       return {
         records: res.records,

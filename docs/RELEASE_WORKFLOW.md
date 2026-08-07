@@ -1,149 +1,78 @@
-# Auto Release Workflow
+# Manual Release Build Workflow
 
-This document explains how to set up and use the automatic release workflow for the Electron app.
+The `.github/workflows/release.yml` workflow builds Windows and macOS installers (plus downloadable local-AI runtimes) on demand. For **production** builds it also runs a `publish-github-release` job that validates the auto-update assets and attaches them to a **DRAFT** GitHub Release so installed apps can auto-update via `update.electronjs.org`. Test builds only retain installers as GitHub Actions artifacts for manual download and testing. Draft releases stay invisible to the auto-updater until a release engineer publishes them manually.
 
-## Overview
+## Running a build
 
-The auto-release workflow (`.github/workflows/release.yml`) automatically builds and releases your Electron app when you push to the `main` branch or create a tag starting with `v*`.
+1. Open the repository's **Actions** tab.
+2. Select **Manual Release Build**.
+3. Choose **Run workflow**.
+4. Select a build mode:
+   - `test` (default): uses test services and creates unsigned installers for manual testing.
+   - `production`: uses production services and requires signing credentials.
+5. Download the Windows and macOS artifacts after both jobs pass.
 
-## How It Works
+Only final installer formats are uploaded (plus the Squirrel auto-update assets the updater needs):
 
-1. **Trigger**: Push to `main` branch or create a tag (e.g., `v1.0.12`)
-2. **Build**: Creates builds for both Windows and macOS
-3. **Release**: Automatically creates a GitHub release with the built artifacts
+- Windows: `.exe`, `.msi`, `RELEASES`, and `*.nupkg`
+- macOS: `.dmg` and `.zip`
 
-## Setup Requirements
+The workflow never uploads the entire `out/make` directory. Production builds publish a **draft** GitHub Release automatically (see [GitHub Auto-Update](#github-auto-update)); test builds never publish a release.
 
-### 1. GitHub Secrets
+## Required GitHub Actions secrets
 
-You need to set up the following secrets in your GitHub repository:
+Test builds require:
 
-Go to your repository → Settings → Secrets and variables → Actions, then add:
+- `VITE_LOGIN_URL_TEST`
+- `UPDATESERVER`
 
-- `VITE_REMOTEADD_TEST`: Your test environment remote address
-- `VITE_LOGIN_URL_TEST`: Your test environment login URL
+Production builds require:
 
-### 2. Repository Permissions
+- `VITE_LOGIN_URL_PROD`
+- `UPDATESERVER_PROD`
+- `WINDOWS_CERTIFICATE_BASE64`: base64-encoded Windows `.pfx` signing certificate
+- `WINDOWS_CERTIFICATE_PASSWORD`
+- `MACOS_CERTIFICATE_BASE64`: base64-encoded Apple Developer ID `.p12` certificate
+- `MACOS_CERTIFICATE_PASSWORD`
+- `APPLE_ID`
+- `APPLE_APP_SPECIFIC_PASSWORD`
+- `APPLE_TEAM_ID`
 
-Make sure your repository has the following permissions enabled:
+Missing secrets fail the corresponding job before packaging. The certificates are restored only on ephemeral GitHub-hosted runners and are not uploaded as artifacts.
 
-1. Go to Settings → Actions → General
-2. Under "Workflow permissions", select "Read and write permissions"
-3. Check "Allow GitHub Actions to create and approve pull requests"
+## Build guarantees
 
-## Version Management
+- Dependencies are installed from `yarn.lock` with `--frozen-lockfile`.
+- Native modules are rebuilt against the lockfile-installed Electron version using targeted rebuilds.
+- Native rebuild failures stop the job instead of being ignored.
+- Windows production installers are signed using the restored `.pfx` certificate.
+- macOS production applications are signed and notarized before the DMG and ZIP makers run.
+- Artifact upload fails if no expected installer is produced.
 
-The workflow automatically manages versioning:
+## Publishing manually
 
-- Extracts the base version from `package.json` (e.g., `1.0.11`)
-- Appends the GitHub run number as build number (e.g., `1.0.123`)
-- Creates a release tag (e.g., `v1.0.123`)
+Production builds already create a **draft** GitHub Release (tagged `v<version>`) with the validated installer and auto-update assets attached. After inspecting the draft, publish it from the GitHub Releases UI so it becomes visible to the auto-updater. Do not attach build logs, unpacked application directories, intermediate packages, or the full `out/make` directory.
 
-## Workflow Steps
+## GitHub Auto-Update
 
-### 1. Build Windows
-- Sets up Node.js 20.18.3
-- Installs dependencies with `yarn install`
-- Rebuilds native modules (electron, sqlite3, better-sqlite)
-- Builds the Windows installer using `yarn make-win:test`
-- Uploads the build as an artifact
+Installed Windows and macOS apps self-update from GitHub Releases via `update-electron-app` (configured in `src/main-process/updater/AppUpdateService.ts`), targeting the public repository `robertzengcn/aiFetchly`. The updater polls feeds equivalent to:
 
-### 2. Build macOS
-- Sets up C++20 environment
-- Configures Xcode
-- Installs dependencies and rebuilds native modules
-- Builds the macOS app using `yarn make-mac:test`
-- Uploads the build as an artifact
+- `https://update.electronjs.org/robertzengcn/aiFetchly/win32-x64/<version>`
+- `https://update.electronjs.org/robertzengcn/aiFetchly/darwin-arm64/<version>`
 
-### 3. Create Release
-- Downloads both Windows and macOS artifacts
-- Creates a GitHub release with:
-  - Tag name: `v{version}`
-  - Release name: `Release v{version}`
-  - Description with build info and download instructions
-  - All build artifacts attached
+The updater considers only the latest **non-draft, non-prerelease** GitHub Release whose assets satisfy the platform requirements below. Microsoft Store / MSIX builds skip the GitHub updater entirely (`process.windowsStore`).
 
-## Usage
+### Required release assets
 
-### Automatic Release (Recommended)
-Simply push to the `main` branch:
-```bash
-git push origin main
-```
+- **Windows (Squirrel.Windows):** `RELEASES` (non-empty), `*-full.nupkg`, and the `*.exe` installer. `*-delta.nupkg` is optional.
+- **macOS (Squirrel.Mac):** a signed, notarized `*.zip` containing the `.app` bundle (the updater requires ZIP, not only DMG). `*.dmg` is for manual download.
 
-The workflow will automatically:
-1. Build both platforms
-2. Create a new release
-3. Upload the installers
+The `publish-github-release` job runs `scripts/validate-update-artifacts.js` and fails closed if any required asset is missing or invalid.
 
-### Manual Release with Tag
-Create and push a tag:
-```bash
-git tag v1.0.12
-git push origin v1.0.12
-```
+### Versioning caveat
 
-## Customization
+`update.electronjs.org` requires strict SemVer release tags. The build pipeline currently derives versions from the GitHub run number (e.g. `1.0.11.42` → tag `v1.0.11.42`), which is **not** strict SemVer and may not be served by the public updater. For auto-update to work, publish releases with strict SemVer tags (e.g. `v1.0.12`) — bump `package.json` to a clean SemVer version before triggering a production build, or retag the draft release before publishing.
 
-### Adding Production Environment
+### Legacy `UPDATESERVER`
 
-To use production environment variables instead of test:
-
-1. Add production secrets to GitHub:
-   - `VITE_REMOTEADD_PROD`
-   - `VITE_LOGIN_URL_PROD`
-
-2. Create production build scripts in `package.json`:
-   ```json
-   {
-     "scripts": {
-       "make-mac:prod": "cross-env NODE_ENV=production electron-forge make --platform=darwin",
-       "make-win:prod": "cross-env NODE_ENV=production electron-forge make --platform=win32"
-     }
-   }
-   ```
-
-3. Update the workflow to use production scripts and environment variables.
-
-### Release Notes
-
-To add custom release notes, you can:
-
-1. Create a `CHANGELOG.md` file
-2. Modify the workflow to read from it
-3. Or manually edit the release description after creation
-
-### Conditional Releases
-
-The workflow only creates releases when pushing to `main` branch. To modify this behavior, edit the condition in the `create-release` job:
-
-```yaml
-if: github.ref == 'refs/heads/main'
-```
-
-## Troubleshooting
-
-### Common Issues
-
-1. **Build Fails**: Check that all dependencies are properly installed and native modules are rebuilt
-2. **Permission Denied**: Ensure repository has proper workflow permissions
-3. **Missing Secrets**: Verify all required secrets are set in GitHub repository settings
-
-### Debugging
-
-- Check the Actions tab in your GitHub repository for detailed logs
-- Each job (build-windows, build-macos, create-release) has its own logs
-- Failed steps will show detailed error messages
-
-## Security Notes
-
-- The workflow uses `GITHUB_TOKEN` for creating releases
-- Environment variables are properly secured as GitHub secrets
-- Build artifacts are automatically cleaned up after 90 days
-
-## Next Steps
-
-1. Set up the required GitHub secrets
-2. Push to `main` branch to trigger the first release
-3. Monitor the Actions tab to ensure everything works correctly
-4. Consider setting up production environment variables for actual releases 
+The build pipeline still writes `UPDATESERVER`/`UPDATESERVER_PROD` into `.env` (and fails without them), but the runtime no longer reads them — auto-update is sourced exclusively from GitHub Releases. These secrets remain only to satisfy the legacy build step and can be removed once the `.env` writing in `release.yml` is dropped.

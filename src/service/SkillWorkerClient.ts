@@ -5,6 +5,13 @@ import * as path from "path";
 import { v4 as uuidv4 } from "uuid";
 import type { SkillExecutionContext } from "@/entityTypes/skillTypes";
 import type { SandboxedResult } from "@/service/SandboxedSkillExecutor";
+import type { HookInput, HookOutput } from "@/entityTypes/hookTypes";
+import {
+  getPackagedWorkerPathCandidates,
+  resolvePackagedWorkerPath,
+  type PackagedWorkerPathRuntime,
+  buildPackagedWorkerEnv,
+} from "@/utils/packagedWorkerPath";
 
 interface ExecuteSkillMessage {
   type: "EXECUTE_SKILL";
@@ -14,10 +21,27 @@ interface ExecuteSkillMessage {
   context: SkillExecutionContext;
 }
 
+interface ExecuteHookMessage {
+  type: "EXECUTE_HOOK";
+  requestId: string;
+  /** JS function body: receives `input`, returns a HookOutput object. */
+  script: string;
+  /** Serialized HookInput payload. */
+  input: HookInput;
+}
+
+type WorkerRequestMessage = ExecuteSkillMessage | ExecuteHookMessage;
+
 interface SkillResultMessage {
   type: "SKILL_RESULT";
   requestId: string;
   result: SandboxedResult;
+}
+
+interface HookResultMessage {
+  type: "HOOK_RESULT";
+  requestId: string;
+  result: HookOutput;
 }
 
 interface SkillErrorMessage {
@@ -26,12 +50,20 @@ interface SkillErrorMessage {
   error: string;
 }
 
-type WorkerResponseMessage = SkillResultMessage | SkillErrorMessage;
+type WorkerResponseMessage =
+  | SkillResultMessage
+  | HookResultMessage
+  | SkillErrorMessage;
 
 interface PendingRequest {
-  resolve: (value: SandboxedResult) => void;
+  resolve: (value: SandboxedResult | HookOutput) => void;
   reject: (reason: unknown) => void;
   timeout: ReturnType<typeof setTimeout>;
+  /**
+   * Discriminator so the message handler knows which response shape to
+   * pull out of the union.
+   */
+  expected: "skill" | "hook";
 }
 
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -97,9 +129,11 @@ export class SkillWorkerClient {
       }, this.timeoutMs);
 
       this.pendingRequests.set(requestId, {
-        resolve,
+        resolve: (value: SandboxedResult | HookOutput): void =>
+          resolve(value as SandboxedResult),
         reject,
         timeout,
+        expected: "skill",
       });
 
       const message: ExecuteSkillMessage = {
@@ -122,6 +156,66 @@ export class SkillWorkerClient {
           postError instanceof Error ? postError.message : String(postError);
         reject(
           new Error(`Failed to post message to skill worker: ${errorMessage}`)
+        );
+      }
+    });
+  }
+
+  /**
+   * Execute a plugin hook's JS script in the SkillWorker sandbox.
+   *
+   * The script is a JS function body that receives `input` (HookInput) and
+   * returns a HookOutput. Runs in the existing isolated-vm sandbox; never
+   * touches the main process.
+   *
+   * Returns the HookOutput (with permissionDecision: "allow" | "deny" | ...).
+   */
+  public async executeHook(
+    script: string,
+    input: HookInput
+  ): Promise<HookOutput> {
+    const worker = await this.ensureWorkerStarted();
+    if (!this.workerProcess) {
+      throw new Error("Skill worker became unavailable after startup");
+    }
+
+    const requestId = `hook-${uuidv4()}-${Date.now()}`;
+
+    return new Promise<HookOutput>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        this.pendingRequests.delete(requestId);
+        reject(new Error(`Hook worker timeout after ${this.timeoutMs}ms`));
+      }, this.timeoutMs);
+
+      this.pendingRequests.set(requestId, {
+        resolve: (value: SandboxedResult | HookOutput): void =>
+          resolve(value as HookOutput),
+        reject,
+        timeout,
+        expected: "hook",
+      });
+
+      const message: ExecuteHookMessage = {
+        type: "EXECUTE_HOOK",
+        requestId,
+        script,
+        input,
+      };
+
+      try {
+        worker.postMessage(JSON.stringify(message));
+      } catch (postError) {
+        const pending = this.pendingRequests.get(requestId);
+        if (pending) {
+          clearTimeout(pending.timeout);
+          this.pendingRequests.delete(requestId);
+        }
+        const errorMessage =
+          postError instanceof Error ? postError.message : String(postError);
+        reject(
+          new Error(
+            `Failed to post hook message to skill worker: ${errorMessage}`
+          )
         );
       }
     });
@@ -168,10 +262,7 @@ export class SkillWorkerClient {
 
     const worker = utilityProcess.fork(resolvedPath, [], {
       stdio: "pipe",
-      env: {
-        ...process.env,
-        NODE_OPTIONS: "",
-      },
+      env: buildPackagedWorkerEnv(),
     });
 
     // Attach lifecycle handlers before exposing the worker to callers.
@@ -291,6 +382,11 @@ export class SkillWorkerClient {
       return;
     }
 
+    if (message.type === "HOOK_RESULT") {
+      pending.resolve(message.result);
+      return;
+    }
+
     if (message.type === "SKILL_ERROR") {
       pending.reject(new Error(message.error));
       return;
@@ -310,20 +406,34 @@ export class SkillWorkerClient {
       return this.cachedWorkerPath;
     }
 
-    const candidates = [
-      path.join(__dirname, "childprocess", "SkillWorker.js"),
-      path.join(__dirname, "../childprocess/SkillWorker.js"),
-      path.join(process.cwd(), "dist/childprocess/SkillWorker.js"),
-      path.join(process.cwd(), ".vite/build/childprocess/SkillWorker.js"),
-    ];
-
-    for (const candidate of candidates) {
-      if (fs.existsSync(candidate)) {
-        this.cachedWorkerPath = candidate;
-        return candidate;
-      }
+    const electronProcess = process as NodeJS.Process & {
+      resourcesPath?: string;
+    };
+    const runtime: PackagedWorkerPathRuntime = {
+      dirname: __dirname,
+      cwd: process.cwd(),
+      resourcesPath: electronProcess.resourcesPath,
+      existsSync: fs.existsSync,
+    };
+    const options = {
+      dirnameRelativePaths: [
+        "SkillWorker.js",
+        path.join("childprocess", "SkillWorker.js"),
+        path.join("..", "childprocess", "SkillWorker.js"),
+      ],
+      cwdRelativePaths: [
+        path.join("dist", "childprocess", "SkillWorker.js"),
+        path.join(".vite", "build", "SkillWorker.js"),
+        path.join(".vite", "build", "childprocess", "SkillWorker.js"),
+      ],
+    };
+    const resolvedPath = resolvePackagedWorkerPath(runtime, options);
+    if (resolvedPath) {
+      this.cachedWorkerPath = resolvedPath;
+      return resolvedPath;
     }
 
+    const candidates = getPackagedWorkerPathCandidates(runtime, options);
     throw new Error(
       `Skill worker file not found. Tried: ${candidates.join(", ")}`
     );

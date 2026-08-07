@@ -14,4 +14,9 @@ describe("buildAutoPlanPromptSection", () => {
     expect(out).toContain("Do NOT enter Plan Mode");
     expect(out.toLowerCase()).toContain("simple lookup");
   });
+
+  it("uses ASCII punctuation so JSON logs do not contain unicode escapes", () => {
+    const out = buildAutoPlanPromptSection();
+    expect(out).not.toContain(String.fromCharCode(0x2014));
+  });
 });

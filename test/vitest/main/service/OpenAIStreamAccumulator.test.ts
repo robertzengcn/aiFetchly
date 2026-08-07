@@ -56,6 +56,39 @@ describe("OpenAIStreamAccumulator", () => {
     expect(acc.state.model).toBe("gpt-test");
   });
 
+  it("captures generated image deltas", () => {
+    const acc = new OpenAIStreamAccumulator();
+    acc.ingest(
+      chunk({
+        choices: [
+          {
+            index: 0,
+            delta: {
+              content: "Image ready",
+              images: [
+                {
+                  type: "image",
+                  delivery: "provider_url",
+                  url: "https://example.com/generated.png",
+                  mime_type: "image/png",
+                  download_required: true,
+                },
+              ],
+            },
+            finish_reason: "stop",
+          },
+        ],
+      })
+    );
+    expect(acc.state.fullContent).toBe("Image ready");
+    expect(acc.state.images).toEqual([
+      expect.objectContaining({
+        type: "image",
+        url: "https://example.com/generated.png",
+      }),
+    ]);
+  });
+
   it("stores finishReason when present", () => {
     const acc = new OpenAIStreamAccumulator();
     acc.ingest(
@@ -78,8 +111,9 @@ describe("OpenAIStreamAccumulator", () => {
         choices: [{ index: 0, delta: { content: "" }, finish_reason: null }],
       })
     );
-    expect(d1).toBe("ab");
-    expect(d2).toBe("");
+    expect(d1.contentDelta).toBe("ab");
+    expect(d1.reasoningDelta).toBe("");
+    expect(d2.contentDelta).toBe("");
   });
 
   it("buffers fragmented tool call argument deltas by index", () => {
@@ -265,9 +299,9 @@ describe("OpenAIStreamAccumulator", () => {
     expect(parsed.length).toBe(1);
     expect(parsed[0].ok).toBe(true);
     expect(parsed[0].arguments).toBeDefined();
-    expect(
-      (parsed[0].arguments as Record<string, unknown>).agentId
-    ).toBe("agent-lead-researcher");
+    expect((parsed[0].arguments as Record<string, unknown>).agentId).toBe(
+      "agent-lead-researcher"
+    );
   });
 
   it("captures usage from the final usage-only chunk", () => {

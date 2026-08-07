@@ -7,8 +7,8 @@
           <v-card-title>{{ t('system_settings.title') }}</v-card-title>
           <v-card-text>
             <v-treeview
-:items="groupItems" color="warning" activatable open-all item-value="id" item-title="name"
-              item-children="children" v-model:activated="activeGroups" />
+              :items="groupItems" color="warning" activatable open-all item-value="id" item-title="name"
+              item-children="children" select-strategy="single-leaf" v-model:activated="activeGroups" />
             <v-divider class="my-4"></v-divider>
             <v-btn
               color="primary"
@@ -30,6 +30,36 @@
               <v-icon left>mdi-view-dashboard</v-icon>
               {{ t('system_settings.manage_skills') }}
             </v-btn>
+            <v-btn
+              color="primary"
+              variant="outlined"
+              block
+              @click="navigateToAIProvider"
+              class="mb-2"
+            >
+              <v-icon left>mdi-robot-outline</v-icon>
+              {{ t('system_settings.manage_ai_provider') || 'AI Provider' }}
+            </v-btn>
+            <v-btn
+              color="primary"
+              variant="outlined"
+              block
+              @click="navigateToHooks"
+              class="mb-2"
+            >
+              <v-icon left>mdi-hook</v-icon>
+              {{ t('system_settings.manage_hooks') || 'Manage Hooks' }}
+            </v-btn>
+            <v-btn
+              color="primary"
+              variant="outlined"
+              block
+              @click="navigateToSubagents"
+              class="mb-2"
+            >
+              <v-icon left>mdi-robot-outline</v-icon>
+              {{ t('system_settings.manage_subagents') || 'Manage Subagents' }}
+            </v-btn>
           </v-card-text>
         </v-card>
       </v-col>
@@ -45,7 +75,7 @@
             <v-list>
               <v-list-item
 v-for="setting in settinglist" :key="setting.id"
-              :class="{ 'highlighted-item': setting.id === selectItemid }"
+              :class="{ 'highlighted-item': setting.id === selectedSettingId }"
               >
                 <v-list-item-content>
                   <v-list-item-title>
@@ -163,8 +193,12 @@ v-for="(opt, idx) in setting.options || []" :key="idx" :label="opt.optionLabel"
             </v-alert>
           </v-card-text>
         </v-card>
+
       </v-col>
     </v-row>
+
+    <!-- Diagnostics section (always visible, independent of selected group) -->
+    <DiagnosticsSection />
   </v-container>
 </template>
 
@@ -176,10 +210,40 @@ import { SystemSettingDisplay, SystemSettingGroupDisplay, OptionSettingDisplay }
 import { getSystemSettinglist, updateSystemSetting, updateSystemSettingWithValidation } from "@/views/api/systemsetting";
 import { updateLanguagePreference } from '@/views/api/language';
 import { language_preference } from '@/config/settinggroupInit';
+import { setLanguage } from '@/views/utils/cookies';
 // i18n setup
 const { t, locale } = useI18n();
 const router = useRouter();
 import { chooseFileDialog } from "@/views/api/common"
+import DiagnosticsSection from "@/views/components/settings/DiagnosticsSection.vue"
+
+type TreeNodeId = `group:${number}` | `setting:${number}`;
+
+interface SettingTreeItem {
+  id: TreeNodeId;
+  name: string;
+  description?: string;
+  children?: SettingTreeItem[];
+}
+
+function groupNodeId(id: number): TreeNodeId {
+  return `group:${id}`;
+}
+
+function settingNodeId(id: number): TreeNodeId {
+  return `setting:${id}`;
+}
+
+function parseTreeNodeId(nodeId: TreeNodeId): { type: "group" | "setting"; id: number } {
+  const [type, rawId] = nodeId.split(":");
+  const id = Number(rawId);
+
+  if ((type !== "group" && type !== "setting") || !Number.isInteger(id)) {
+    throw new Error(`Invalid system setting tree node id: ${nodeId}`);
+  }
+
+  return { type, id };
+}
 
 // Store references for settings, groups, and tree state
 //const systemSettings = ref<SystemSettingDisplay[]>([]);
@@ -187,19 +251,19 @@ const settingGroups = ref<SystemSettingGroupDisplay[]>([]);
 const settinglist = ref<SystemSettingDisplay[]>([])
 const selectedGroup = ref<SystemSettingGroupDisplay | null>(null);
 // For Vuetify's Treeview
-const activeGroups = ref<number[]>([]);
-const selectItemid=ref<number>(0)
+const activeGroups = ref<TreeNodeId[]>([]);
+const selectedSettingId = ref<number | null>(null);
 const loadingSettings = ref<Record<number, boolean>>({});
 //const openGroups = ref<number[]>([]);
 
 // Convert each group into a tree item with translated labels.
-const groupItems = computed(() => {
+const groupItems = computed<SettingTreeItem[]>(() => {
   return settingGroups.value.map(group => ({
-    id: group.id,
+    id: groupNodeId(group.id),
     name: t('system_settings.' + group.name) || group.name,
     description: group.description,
     children: group.items.map(item => ({
-      id: item.id,
+      id: settingNodeId(item.id),
       name: t('system_settings.' + item.key) || item.key,
       description: item.description,
     })),
@@ -215,28 +279,31 @@ const groupItems = computed(() => {
 // Watch for changes in activeGroups
 watch(activeGroups, (newVal) => {
   if (newVal && newVal.length > 0) {
-    console.log('Selected group changed:', newVal[0]);
-
     //console.log("activeGroups value " + newVal)
 
     // if (!activeGroups.value.length || !activeGroups.value) return null;
-    selectItemid.value = newVal[0]
     // Extract the selected item ID
-    const itemId = activeGroups.value[0];
-    // Initialize groupId with itemId in case it's already a group ID
-    let groupId = itemId;
+    const treeNode = parseTreeNodeId(activeGroups.value[0]);
+    selectedSettingId.value = treeNode.type === "setting" ? treeNode.id : null;
+    let groupId = treeNode.type === "group" ? treeNode.id : null;
 
     // Check if this is an item (not a group)
     //let foundInGroup = false;
-    for (const group of settingGroups.value) {
-      // Check if itemId is a setting item ID in this group
-      const matchingItem = group.items.find(item => item.id === itemId);
-      if (matchingItem) {
-        // If found, use the parent group's ID
-        groupId = group.id;
-        //foundInGroup = true;
-        break;
+    if (treeNode.type === "setting") {
+      for (const group of settingGroups.value) {
+        // Check if itemId is a setting item ID in this group
+        const matchingItem = group.items.find(item => item.id === treeNode.id);
+        if (matchingItem) {
+          // If found, use the parent group's ID
+          groupId = group.id;
+          //foundInGroup = true;
+          break;
+        }
       }
+    }
+
+    if (groupId === null) {
+      return;
     }
 
     settinglist.value = settingsByGroup(groupId)
@@ -252,10 +319,8 @@ watch(activeGroups, (newVal) => {
 // Return settings belonging to the given group
 function settingsByGroup(groupId: number): SystemSettingDisplay[] {
   let result: SystemSettingDisplay[] = []
-  console.log("groupId", groupId)
   if (settingGroups.value.length > 0) {
     settingGroups.value.forEach((group) => {
-      console.log(group)
       if (group.id === groupId) {
         result = group.items
       }
@@ -290,7 +355,6 @@ function settingsByGroup(groupId: number): SystemSettingDisplay[] {
 // Mock fetching settings and groups
 async function fetchSettings() {
   await getSystemSettinglist().then((res) => {
-    console.log(res)
     settingGroups.value = res
   })
   // // Replace with real API / DB calls
@@ -349,6 +413,7 @@ async function handleLanguageChange(newLanguage: string) {
   try {
     // Update the i18n locale immediately for real-time switching
     locale.value = newLanguage;
+    setLanguage(newLanguage);
     
     // Also update the language preference via the API for consistency
     const success = await updateLanguagePreference(newLanguage);
@@ -385,12 +450,23 @@ function navigateToSkills() {
   router.push({ name: 'system_setting_skills' });
 }
 
+function navigateToAIProvider() {
+  router.push({ name: 'system_setting_ai_provider' });
+}
+
+function navigateToHooks() {
+  router.push({ name: 'system_setting_hooks' });
+}
+
+function navigateToSubagents() {
+  router.push({ name: 'system_setting_subagents' });
+}
+
 onMounted(() => {
   fetchSettings().then(() => {
     if (settingGroups.value.length > 0 && activeGroups.value.length === 0) {
-      activeGroups.value = [settingGroups.value[0].id];
+      activeGroups.value = [groupNodeId(settingGroups.value[0].id)];
     }
-    console.log("activegroup.value", activeGroups.value)
   })
 });
 </script>
