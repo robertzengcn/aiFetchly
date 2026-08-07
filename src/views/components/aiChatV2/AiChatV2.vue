@@ -399,6 +399,7 @@ import {
   DEFAULT_CONTEXT_WINDOW,
 } from "./contextUsageUtil";
 import { hasPendingToolExecution } from "./toolExecutionStateUtil";
+import { isPlanStateActive } from "./planStateUtil";
 import { QUOTA_EXHAUSTED_SENTINEL } from "@/service/AIChatErrorMapper";
 
 /**
@@ -799,14 +800,13 @@ const overwriteCount = computed(
 
 const applyPlanState = (state: AIChatPlanStateView | null): void => {
   planState.value = state;
-  if (
-    state &&
-    state.status !== "completed" &&
-    state.status !== "cancelled" &&
-    state.status !== "rejected"
-  ) {
-    mode.value = "plan";
-  }
+  // Drive the mode selector from the plan state: an in-progress plan keeps
+  // the conversation in "plan" mode, while a cleared or terminal plan
+  // (completed / cancelled / rejected) returns it to "chat". This is what
+  // prevents plan mode from leaking into a newly created or switched-to
+  // conversation — previously mode was only ever set to "plan" and never
+  // reset, so it persisted across conversations.
+  mode.value = isPlanStateActive(state) ? "plan" : "chat";
 };
 
 const streamStatus = computed<Status>(() => {
