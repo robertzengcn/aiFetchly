@@ -132,6 +132,8 @@ async function collectArchive(archive) {
         entries.push({ name: entry.fileName, uncompressedSize: entry.uncompressedSize });
         if (entry.fileName === "manifest.json") {
           manifestBuf = await readEntry(zipfile, entry);
+        } else if (entry.fileName === "worker.js") {
+          files.set(entry.fileName, await readEntry(zipfile, entry));
         }
         zipfile.readEntry();
       } catch (e) {
@@ -142,7 +144,7 @@ async function collectArchive(archive) {
     zipfile.on("error", reject);
     zipfile.readEntry();
   });
-  return { entries, manifestBuf };
+  return { entries, manifestBuf, files };
 }
 
 function isForeignPackage(name, platform, arch) {
@@ -161,7 +163,7 @@ async function main() {
   violations.push(...checkFilenameContract(fileName, args.platform, args.arch));
   const parsed = parseRuntimeFileName(fileName);
 
-  const { entries, manifestBuf } = await collectArchive(args.archive);
+  const { entries, manifestBuf, files } = await collectArchive(args.archive);
   const entryNames = new Set(entries.map((e) => e.name));
 
   if (!manifestBuf) {
@@ -197,6 +199,17 @@ async function main() {
     // 4. Required files present.
     for (const rf of manifest.requiredFiles ?? []) {
       if (!entryNames.has(rf)) violations.push(`Required file missing: ${rf}`);
+    }
+    // 4b. Embedding worker must bundle zod (no bare require) — see build assert.
+    if (manifest.runtimeId === "embedding-xenova") {
+      const workerBuf = files.get("worker.js");
+      if (!workerBuf) {
+        violations.push("embedding-xenova archive missing worker.js content for zod check");
+      } else if (/require\(\s*["']zod(?:\/v4)?["']\s*\)/.test(workerBuf.toString("utf8"))) {
+        violations.push(
+          'embedding worker.js still contains require("zod"); rebuild with zod bundled via ssr.noExternal',
+        );
+      }
     }
     // 6. Every declared dependency has a node_modules package in the archive.
     for (const depName of Object.keys(manifest.dependencies ?? {})) {

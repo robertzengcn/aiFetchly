@@ -103,6 +103,23 @@ function collectEntries(stagingRoot) {
   return entries;
 }
 
+/**
+ * The downloadable embedding worker must inline zod (vite ssr.noExternal).
+ * A bare require("zod") would fail when forked from userData because the
+ * slim runtime does not ship app packages, and NODE_PATH→asar is unreliable
+ * across platforms for external workers.
+ */
+export function assertEmbeddingWorkerBundlesZod(workerPath) {
+  const source = readFileSync(workerPath, "utf8");
+  if (/require\(\s*["']zod(?:\/v4)?["']\s*\)/.test(source)) {
+    throw new Error(
+      `Embedding worker still externalizes zod (found require("zod") in ${workerPath}). ` +
+        "Rebuild with vite.localEmbeddingWorker.config.mjs (ssr.noExternal includes zod) " +
+        "so the downloadable runtime is self-contained.",
+    );
+  }
+}
+
 function locateEmbeddingWorker(args) {
   const candidates = [];
   if (args.workerOutput) candidates.push(path.join(args.workerOutput, "LocalEmbeddingWorker.js"));
@@ -145,7 +162,9 @@ export function buildRuntimeArchive(args) {
 
   const requiredFiles = ["package.json"];
   if (isEmbedding) {
-    copyFileSync(locateEmbeddingWorker(args), path.join(stagingRoot, "worker.js"));
+    const workerSrc = locateEmbeddingWorker(args);
+    assertEmbeddingWorkerBundlesZod(workerSrc);
+    copyFileSync(workerSrc, path.join(stagingRoot, "worker.js"));
     requiredFiles.push("worker.js");
   } else {
     requiredFiles.push("node_modules/sherpa-onnx-node/package.json");

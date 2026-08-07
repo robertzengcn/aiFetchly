@@ -1262,7 +1262,7 @@ The embedding package manifest contains:
 }
 ```
 
-`worker.js` is built from `src/childprocess/embedding/LocalEmbeddingWorker.ts` with the existing CommonJS worker Vite configuration. Inference packages remain external so they resolve from the runtime's `node_modules`.
+`worker.js` is built from `src/childprocess/embedding/LocalEmbeddingWorker.ts` with the existing CommonJS worker Vite configuration (`vite.localEmbeddingWorker.config.mjs`). **Zod must be inlined** via `ssr.noExternal: ZOD_SSR_NO_EXTERNAL` — do not ship a bare `require("zod")` into the downloadable archive (userData workers cannot rely on app `NODE_PATH`→asar). Inference packages (`@xenova/transformers`, onnxruntime, sharp) remain external and resolve from the runtime's `node_modules`. `scripts/build-local-ai-runtime.mjs` and `scripts/verify-local-ai-runtime.mjs` assert the worker has no bare zod require.
 
 ### 17.2 Worker client changes
 
