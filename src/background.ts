@@ -93,6 +93,7 @@ import {
   HtmlFileLoadError,
   loadHtmlFileWithUrlFallback,
 } from "@/utils/loadHtmlFileWithUrlFallback";
+import { resolveSecondInstanceWindowAction } from "@/utils/mainWindowSecondInstance";
 
 let chatScheduledBackgroundScheduler: BackgroundScheduler | null = null;
 // import { RAGIpcHandlers } from '@/main-process/ragIpcHandlers';
@@ -246,6 +247,29 @@ process.on("uncaughtException", (error) => {
 });
 
 let win: BrowserWindow | null;
+/** True only after the packaged/dev renderer document successfully loaded. */
+let rendererHtmlLoaded = false;
+/**
+ * Set from initialize() after createWindow exists. second-instance fires later,
+ * so a late-bound callback avoids circular ordering issues.
+ */
+let onSecondInstanceActivate: (() => void) | null = null;
+
+/**
+ * If quit hangs after a fatal renderer load (dialog / AV / locked asar), force
+ * exit so the single-instance lock is released and the next launch can recover
+ * without a reboot.
+ */
+function scheduleForcedAppExit(reason: string): void {
+  log.error(`[startup] scheduling forced exit: ${reason}`);
+  setTimeout(() => {
+    try {
+      (app as unknown as { exit: (code?: number) => void }).exit(1);
+    } catch {
+      process.exit(1);
+    }
+  }, 2500);
+}
 
 /**
  * Dev browser bridge instance (dev-only). Null in production or when the
@@ -482,6 +506,7 @@ function initialize() {
               loadResult.method === "loadURL" ? `via ${loadResult.fileUrl}` : ""
             );
             // log.info('Successfully loaded HTML file from alternative path:', altPath);
+            rendererHtmlLoaded = true;
             loaded = true;
             break;
           } else {
@@ -529,37 +554,70 @@ function initialize() {
 
       dialog.showErrorBox(
         "Application Error",
-        "Could not load the application interface. This may be due to a corrupted installation.\n\nPlease try:\n1. Reinstalling the application\n2. Running as administrator\n3. Checking antivirus software\n\nError details have been logged."
+        "Could not load the application interface. This may be due to a temporary file lock (antivirus) or a previous stuck instance.\n\nPlease try:\n1. Closing all aiFetchly processes in Task Manager\n2. Waiting a few seconds and relaunching\n3. Reinstalling if it keeps failing\n\nError details have been logged."
       );
+      rendererHtmlLoaded = false;
       (app as any).quit();
+      scheduleForcedAppExit("renderer HTML load failed on all paths");
     }
   }
 
   /** Prevents concurrent createWindow() races (e.g. whenReady + activate) that double-register ipcMain handlers. */
   let createWindowInFlight: Promise<void> | null = null;
 
+  async function destroyUnhealthyMainWindows(): Promise<void> {
+    const windows = BrowserWindow.getAllWindows() as BrowserWindow[];
+    for (const existing of windows) {
+      if (!existing.isDestroyed()) {
+        try {
+          existing.destroy();
+        } catch (err: unknown) {
+          log.warn(
+            "[window] failed to destroy unhealthy main window",
+            err instanceof Error ? err.message : String(err)
+          );
+        }
+      }
+    }
+    win = null;
+    rendererHtmlLoaded = false;
+  }
+
   async function createWindow(): Promise<void> {
-    const existingWindows = BrowserWindow.getAllWindows() as any[];
+    const existingWindows = BrowserWindow.getAllWindows() as BrowserWindow[];
     if (existingWindows.length > 0) {
       const existing = existingWindows[0];
       if (!existing.isDestroyed()) {
-        console.log("Window already exists and is valid, focusing...");
-        if (!win) win = existing;
-        existing.focus();
-        return;
+        const action = resolveSecondInstanceWindowAction({
+          hasLiveWindow: true,
+          rendererHtmlLoaded,
+        });
+        if (action === "focus") {
+          console.log("Window already exists and is valid, focusing...");
+          if (!win) win = existing;
+          existing.focus();
+          return;
+        }
+        log.warn(
+          "[window] existing main window has no loaded renderer; recreating"
+        );
+        await destroyUnhealthyMainWindows();
       }
     }
     if (createWindowInFlight) {
       await createWindowInFlight;
-      const existingWindows2 = BrowserWindow.getAllWindows() as any[];
+      const existingWindows2 = BrowserWindow.getAllWindows() as BrowserWindow[];
       if (existingWindows2.length > 0) {
         const existing = existingWindows2[0];
-        if (!existing.isDestroyed()) {
+        if (!existing.isDestroyed() && rendererHtmlLoaded) {
           if (!win) win = existing;
           existing.focus();
+          return;
         }
       }
-      return;
+      if (rendererHtmlLoaded) {
+        return;
+      }
     }
     createWindowInFlight = createWindowBody();
     try {
@@ -570,6 +628,7 @@ function initialize() {
   }
 
   async function createWindowBody(): Promise<void> {
+    rendererHtmlLoaded = false;
     // Create the browser window.
     win = new BrowserWindow({
       // Hide by default on Windows/Linux. (macOS uses the system menu bar.)
@@ -681,6 +740,7 @@ function initialize() {
       FileOperationTracker.clear();
       setMainWindow(null);
       win = null;
+      rendererHtmlLoaded = false;
     });
     // In this example, only windows with the `about:blank` url will be created.
     // All other urls will be blocked.
@@ -746,6 +806,7 @@ function initialize() {
       try {
         if (win && !(win as any).isDestroyed()) {
           await loadDevServerUrl(win, MAIN_WINDOW_VITE_DEV_SERVER_URL);
+          rendererHtmlLoaded = true;
           if (!process.env.IS_TEST) (win as any).webContents.openDevTools();
         }
       } catch (error) {
@@ -789,6 +850,7 @@ function initialize() {
               htmlPath,
               loadResult.method === "loadURL" ? `via ${loadResult.fileUrl}` : ""
             );
+            rendererHtmlLoaded = true;
           } else {
             console.error("Window has been destroyed, cannot load file");
             dialog.showErrorBox(
@@ -796,6 +858,7 @@ function initialize() {
               "The application window was destroyed before it could load. Please restart the application."
             );
             (app as any).quit();
+            scheduleForcedAppExit("main window destroyed before HTML load");
             return;
           }
         } catch (error) {
@@ -825,6 +888,7 @@ function initialize() {
               "The application window was destroyed during loading. Please restart the application."
             );
             (app as any).quit();
+            scheduleForcedAppExit("main window destroyed during HTML load");
             return;
           }
 
@@ -836,6 +900,23 @@ function initialize() {
       }
     }
   }
+
+  onSecondInstanceActivate = () => {
+    const hasLiveWindow = !!(win && !(win as any).isDestroyed());
+    const action = resolveSecondInstanceWindowAction({
+      hasLiveWindow,
+      rendererHtmlLoaded,
+    });
+    if (action === "focus" && win && !(win as any).isDestroyed()) {
+      if ((win as any).isMinimized()) (win as any).restore();
+      (win as any).focus();
+      return;
+    }
+    log.warn(
+      "[second-instance] recreating main window (missing or unloaded renderer)"
+    );
+    void createWindow();
+  };
 
   // Quit when all windows are closed.
   (app as any).on("window-all-closed", () => {
@@ -1233,9 +1314,18 @@ function makeSingleInstance(): void {
     // console.log('gotThelock:', gotThelock)
 
     (app as any).on("second-instance", (event, argv, workingDirectory) => {
-      if (win) {
-        if ((win as any).isMinimized()) (win as any).restore();
-        (win as any).focus();
+      try {
+        if (onSecondInstanceActivate) {
+          onSecondInstanceActivate();
+        } else if (win && !(win as any).isDestroyed()) {
+          if ((win as any).isMinimized()) (win as any).restore();
+          (win as any).focus();
+        }
+      } catch (err: unknown) {
+        log.error(
+          "[second-instance] activate failed",
+          err instanceof Error ? err.message : String(err)
+        );
       }
 
       // console.log("second-instance call")
