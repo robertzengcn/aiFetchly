@@ -315,6 +315,12 @@ function verifyStagedRendererHtml(buildPath) {
         "The Windows app will fail at startup with BrowserWindow.loadFile ERR_FAILED (-2)."
     );
   }
+  if (readFileSync(rendererHtmlPath, "utf-8").trim().length === 0) {
+    throw new Error(
+      `Packaged app has empty renderer HTML: ${rendererHtmlPath}. ` +
+        "The Windows app will fail at startup with BrowserWindow.loadFile ERR_FAILED (-2)."
+    );
+  }
 }
 
 //import { ForgeConfig } from '@electron-forge/shared-types';

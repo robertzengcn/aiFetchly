@@ -532,6 +532,10 @@ function verifyPackagedRenderer(resourcesDir) {
       );
       return false;
     }
+    if (fs.readFileSync(plainHtml, "utf-8").trim().length === 0) {
+      console.error(`Packaged renderer HTML is empty: ${plainHtml}`);
+      return false;
+    }
     console.log(`Found packaged renderer HTML: ${plainHtml}`);
     return true;
   }
