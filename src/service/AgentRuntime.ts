@@ -466,8 +466,16 @@ export class AgentRuntime {
     // derive their on-disk paths + descriptors. Bytes are never carried on
     // AgentResult (PRD non-goal 8). Failure is swallowed by persistAgentImages
     // so a storage hiccup never fails an otherwise-successful task.
-    const { outputFilePaths, outputImages, storageWarning } =
-      await persistAgentImages({
+    //
+    // The default AIChatGeneratedImageStorageService reads Electron's
+    // app.getPath("userData") at construction, so it is constructed LAZILY —
+    // only when there are images to persist. This keeps image-less runs (incl.
+    // tests without an Electron `app`) from touching Electron at all.
+    let outputFilePaths: string[] | undefined;
+    let outputImages: OpenAIChatImage[] | undefined;
+    let storageWarning: string | undefined;
+    if (capturedImages && capturedImages.length > 0) {
+      const persisted = await persistAgentImages({
         images: capturedImages,
         conversationId: agentConversationId,
         messageId: `agent-assistant-${agentTaskId}`,
@@ -475,6 +483,10 @@ export class AgentRuntime {
           deps?.generatedImageStorage ??
           new AIChatGeneratedImageStorageService(),
       });
+      outputFilePaths = persisted.outputFilePaths;
+      outputImages = persisted.outputImages;
+      storageWarning = persisted.storageWarning;
+    }
 
     const result: AgentResult = {
       agentTaskId,
