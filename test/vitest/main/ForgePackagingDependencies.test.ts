@@ -114,6 +114,13 @@ describe("Forge packaging dependencies", () => {
         minimatch("node_modules/better-sqlite3", unpackDir as string)
       ).toBe(true);
 
+      // Renderer must stay packed: unpacking .vite/renderer breaks
+      // BrowserWindow.loadFile with ERR_FAILED (-2) on Windows.
+      expect(minimatch(".vite/renderer", unpackDir as string)).toBe(false);
+      expect(
+        minimatch(".vite/renderer/main_window", unpackDir as string)
+      ).toBe(false);
+
       // Guard against regressing to "**/dist/childprocess/**" alone, which
       // fails to match the directory itself and leaves workers packed in asar.
       expect(minimatch("dist/childprocess", "**/dist/childprocess/**")).toBe(
