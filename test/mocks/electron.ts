@@ -35,13 +35,6 @@ export const autoUpdater = {
   },
 };
 
-/** Minimal `shell` surface for opening external URLs from the main process. */
-export const shell = {
-  openExternal(_url: string): Promise<void> {
-    return Promise.resolve();
-  },
-};
-
 export class BrowserWindow {
   readonly webContents: WebContents = {
     send(_channel: string, ..._args: unknown[]): void {
@@ -54,6 +47,10 @@ export class BrowserWindow {
 
   constructor(_options?: unknown) {
     // Mock constructor
+  }
+
+  isDestroyed(): boolean {
+    return false;
   }
 
   loadURL(_url: string): void {
@@ -146,7 +143,6 @@ export const webUtils = {
 export default {
   app,
   autoUpdater,
-  shell,
   BrowserWindow,
   ipcMain,
   ipcRenderer,

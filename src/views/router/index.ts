@@ -87,6 +87,18 @@ export const constantRoutes: RouteRecordRaw[] = [
         component: () => import("@/views/pages/systemsetting/plugins.vue"),
         children: [],
       },
+      {
+        path: "about",
+        name: "system_setting_about",
+        meta: {
+          title: "about.title",
+          icon: "mdi-information-outline",
+          keepAlive: false,
+          visible: false,
+        },
+        component: () => import("@/views/pages/systemsetting/about.vue"),
+        children: [],
+      },
     ],
   },
 
