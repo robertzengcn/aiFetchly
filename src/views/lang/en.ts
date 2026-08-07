@@ -2330,7 +2330,7 @@ export default {
       statusStopped: "stopped",
       toolApprovalTitle: "Approve unattended tools",
       toolApprovalIntro:
-        "Scheduled loops run without supervision. Read-only tools auto-approve when unattended tools are enabled. Write/email tools require explicit confirmation below. Shell, subagents, and mark-processed stay blocked.",
+        "Scheduled loops run without supervision. Choose built-in tools and extended capabilities (imported skills, MCP, subagents) below. Shell and mark-processed stay blocked.",
       toolApprovalCommand: "Command",
       noReadOnlyTools: "No read-only tools are available.",
       allowedTools: "Allowed read-only tools",
@@ -2338,7 +2338,11 @@ export default {
       autoApprove: "Run approved tools without asking",
       autoApproveWarning:
         "These tools will run automatically on every occurrence while the loop is active.",
-      enableTools: "Allow tools to run unattended",
+      enableTools: "Allow built-in tools to run unattended",
+      extendedCapabilities: "Extended capabilities",
+      allowSkills: "Allow imported skills",
+      allowMcp: "Allow MCP tools",
+      allowSubagents: "Allow subagents",
       readOnlyAutoApproved: "Read-only tools auto-approve",
       automationTools: "Automation tools",
       automationToolsHint: "Optional — select network check tools",

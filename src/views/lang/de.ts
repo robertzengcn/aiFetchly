@@ -2333,7 +2333,7 @@ export default {
       statusStopped: "gestoppt",
       toolApprovalTitle: "Unbeaufsichtigte Tools genehmigen",
       toolApprovalIntro:
-        "Geplante Schleifen laufen ohne Aufsicht. Schreibgeschützte Tools werden automatisch genehmigt, wenn unbeaufsichtigte Tools aktiviert sind. Schreib-/E-Mail-Tools erfordern unten eine explizite Bestätigung. Shell, Subagenten und Als-verarbeitet-markieren bleiben gesperrt.",
+        "Geplante Schleifen laufen ohne Aufsicht. Wählen Sie unten integrierte Tools und erweiterte Fähigkeiten (importierte Skills, MCP, Subagenten). Shell und Als-verarbeitet-markieren bleiben gesperrt.",
       toolApprovalCommand: "Befehl",
       noReadOnlyTools: "Keine schreibgeschützten Tools verfügbar.",
       allowedTools: "Erlaubte schreibgeschützte Tools",
@@ -2343,7 +2343,11 @@ export default {
       autoApproveWarning:
         "Diese Tools werden bei jedem Durchlauf automatisch ausgeführt, solange die Schleife aktiv ist.",
       createLoop: "Schleife planen",
-      enableTools: "Tools unbeaufsichtigt ausführen erlauben",
+      enableTools: "Integrierte Tools unbeaufsichtigt ausführen erlauben",
+      extendedCapabilities: "Erweiterte Fähigkeiten",
+      allowSkills: "Importierte Skills erlauben",
+      allowMcp: "MCP-Tools erlauben",
+      allowSubagents: "Subagenten erlauben",
       readOnlyAutoApproved:
         "Schreibgeschützte Tools werden automatisch genehmigt",
       automationTools: "Automatisierungs-Tools",

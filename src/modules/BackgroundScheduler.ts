@@ -869,9 +869,8 @@ export class BackgroundScheduler extends BaseDb {
       }
 
       // Clean up inactive dependencies
-      const deletedDependencies = await (
-        this.scheduleManager as any
-      ).scheduleDependencyModel.cleanupInactiveDependencies();
+      const deletedDependencies =
+        await this.scheduleManager.cleanupInactiveDependencies();
       if (deletedDependencies > 0) {
         console.log(`Cleaned up ${deletedDependencies} inactive dependencies`);
       }
@@ -959,9 +958,8 @@ export class BackgroundScheduler extends BaseDb {
       );
 
       // Get dependency statistics
-      const dependencyStats = await (
-        this.scheduleManager as any
-      ).scheduleDependencyModel.getDependencyStatistics();
+      const dependencyStats =
+        await this.scheduleManager.getDependencyStatistics();
 
       return {
         scheduler: schedulerStatus,

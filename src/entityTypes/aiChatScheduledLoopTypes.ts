@@ -97,6 +97,12 @@ export interface CreateScheduledLoopRequest {
    * require membership in allowedTools. Defaults to false.
    */
   readonly autoApproveTools?: boolean;
+  /** Imported / marketplace skills may run unattended. Defaults to true. */
+  readonly allowSkills?: boolean;
+  /** MCP tools may run unattended. Defaults to true. */
+  readonly allowMcp?: boolean;
+  /** run_subagent may run unattended. Defaults to true. */
+  readonly allowSubagents?: boolean;
 }
 
 /** Renderer-safe schedule view (no raw tool output, secrets, or stacks). */
@@ -248,6 +254,9 @@ export interface CreateChatScheduledTaskRecord {
   readonly model?: string;
   readonly allowedTools: readonly string[];
   readonly autoApproveTools: boolean;
+  readonly allowSkills: boolean;
+  readonly allowMcp: boolean;
+  readonly allowSubagents: boolean;
   readonly maxToolCalls: number;
   readonly maxRuntimeMs: number;
   readonly maxContinueCalls: number;

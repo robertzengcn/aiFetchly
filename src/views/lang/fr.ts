@@ -2325,7 +2325,7 @@ export default {
       statusStopped: "arrêtée",
       toolApprovalTitle: "Approuver les outils sans surveillance",
       toolApprovalIntro:
-        "Les boucles planifiées s'exécutent sans surveillance. Les outils en lecture seule sont auto-approuvés lorsque les outils non supervisés sont activés. Écriture/e-mail nécessitent une confirmation explicite ci-dessous. Shell, sous-agents et marquage traité restent bloqués.",
+        "Les boucles planifiées s'exécutent sans surveillance. Choisissez les outils intégrés et les capacités étendues (compétences importées, MCP, sous-agents) ci-dessous. Shell et marquage traité restent bloqués.",
       toolApprovalCommand: "Commande",
       noReadOnlyTools: "Aucun outil en lecture seule disponible.",
       allowedTools: "Outils en lecture seule autorisés",
@@ -2335,7 +2335,11 @@ export default {
       autoApproveWarning:
         "Ces outils s'exécuteront automatiquement à chaque occurrence tant que la boucle est active.",
       createLoop: "Planifier la boucle",
-      enableTools: "Autoriser les outils à s'exécuter sans surveillance",
+      enableTools: "Autoriser les outils intégrés sans surveillance",
+      extendedCapabilities: "Capacités étendues",
+      allowSkills: "Autoriser les compétences importées",
+      allowMcp: "Autoriser les outils MCP",
+      allowSubagents: "Autoriser les sous-agents",
       readOnlyAutoApproved: "Les outils en lecture seule sont auto-approuvés",
       automationTools: "Outils d'automatisation",
       automationToolsHint: "Optionnel — sélectionner des vérifications réseau",

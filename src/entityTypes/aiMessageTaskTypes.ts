@@ -38,6 +38,12 @@ export type AiMessageTaskErrorCode =
 export interface AiMessageTaskToolPolicy {
   readonly allowedTools: readonly string[];
   readonly autoApproveTools: boolean;
+  /** Imported / marketplace skills may run unattended when true. */
+  readonly allowSkills: boolean;
+  /** MCP tools (mcp_* prefix) may run unattended when true. */
+  readonly allowMcp: boolean;
+  /** run_subagent may run unattended when true. */
+  readonly allowSubagents: boolean;
   readonly maxToolCalls: number;
   readonly maxRuntimeMs: number;
   readonly maxContinueCalls: number;
@@ -48,6 +54,9 @@ export const AI_MESSAGE_TASK_DEFAULTS = {
   model: "auto",
   autoApproveTools: false,
   allowedTools: [] as readonly string[],
+  allowSkills: false,
+  allowMcp: false,
+  allowSubagents: false,
   maxToolCalls: 10,
   maxRuntimeMs: 300_000,
   maxContinueCalls: 10,

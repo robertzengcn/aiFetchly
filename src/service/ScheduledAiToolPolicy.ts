@@ -4,6 +4,7 @@ import type {
   ScheduledToolDecision,
   AiMessageTaskToolPolicy,
 } from "@/entityTypes/aiMessageTaskTypes";
+import { TOOL_CATALOG_SEARCH_TOOL_NAME } from "@/config/toolCatalogConfig";
 
 /**
  * Security policy for tools exposed to unattended (scheduled-loop) AI turns.
@@ -29,16 +30,15 @@ import type {
 
 /**
  * Tools that may NEVER run unattended, regardless of category or allowlist.
- * `run_subagent` is denied because it can indirectly invoke many other tools;
  * `shell_execute` runs arbitrary commands; `mark_email_processed` mutates
- * reply-state without a human in the loop. These stay blocked even if a user
- * requests them — they are not approvable.
+ * reply-state without a human in the loop. `run_subagent` is blocked unless
+ * `allowSubagents` is enabled on the task policy.
  *
  * Inbox check sync (`fetch_unread_emails`) is treated as read-only auto-approve.
  * Full message body access (`get_email_message`) remains high-impact.
  */
 export const SCHEDULED_LOOP_ALWAYS_BLOCKED_TOOLS: ReadonlySet<string> = new Set(
-  ["run_subagent", "shell_execute", "mark_email_processed"]
+  ["shell_execute", "mark_email_processed"]
 );
 
 /**
@@ -203,6 +203,19 @@ export function describeBuiltInToolForSchedule(
     };
   }
 
+  if (skill.name === "run_subagent") {
+    return {
+      name: skill.name,
+      description: skill.description,
+      permissionCategory: skill.permissionCategory,
+      source: "built-in",
+      requiresConfirmation: skill.requiresConfirmation,
+      schedulable: true,
+      autoApproveAllowed: true,
+      riskLevel: "medium",
+    };
+  }
+
   if (readOnly) {
     return {
       name: skill.name,
@@ -256,19 +269,28 @@ export function describeBuiltInToolForSchedule(
   };
 }
 
+/** True when extended (skills / MCP / subagent) unattended execution is enabled. */
+export function isScheduledExtendedCapabilitiesEnabled(
+  taskPolicy: AiMessageTaskToolPolicy
+): boolean {
+  return (
+    taskPolicy.allowSkills || taskPolicy.allowMcp || taskPolicy.allowSubagents
+  );
+}
+
+/** True for MCP tool names (`mcp_*` prefix). */
+export function isScheduledMcpToolName(toolName: string): boolean {
+  return toolName.startsWith("mcp_");
+}
+
 /**
  * Runtime decision: can a requested tool call proceed in scheduled mode?
  * Defense-in-depth — the catalog filter should already hide disallowed tools,
  * but this backstop blocks any model-hallucinated tool call and returns a
  * structured reason the model can read.
- *
- *  - Read-only tools AUTO-APPROVE when `autoApproveTools` is on (no per-tool
- *    selection). The catalog advertises every read-only tool — by design.
- *  - High-impact and automation tools additionally require explicit inclusion
- *    in the task's `allowedTools` (the user's per-tool selection at creation).
  */
 export function canAutoApproveScheduledTool(params: {
-  readonly skill: SkillDefinition;
+  readonly skill: SkillDefinition | null;
   readonly taskPolicy: AiMessageTaskToolPolicy;
   readonly toolName: string;
 }): ScheduledToolDecision {
@@ -282,12 +304,54 @@ export function canAutoApproveScheduledTool(params: {
     };
   }
 
-  if (skill.source !== "built-in") {
+  if (toolName === "run_subagent") {
+    if (!taskPolicy.allowSubagents) {
+      return {
+        allowed: false,
+        reason:
+          "Subagents are not enabled for this scheduled loop. Enable them when creating the loop.",
+        riskLevel: "blocked",
+      };
+    }
+    return { allowed: true, riskLevel: "medium" };
+  }
+
+  if (isScheduledMcpToolName(toolName)) {
+    if (!taskPolicy.allowMcp) {
+      return {
+        allowed: false,
+        reason:
+          "MCP tools are not enabled for this scheduled loop. Enable them when creating the loop.",
+        riskLevel: "blocked",
+      };
+    }
+    return { allowed: true, riskLevel: "medium" };
+  }
+
+  if (toolName === TOOL_CATALOG_SEARCH_TOOL_NAME) {
+    if (isScheduledExtendedCapabilitiesEnabled(taskPolicy)) {
+      return { allowed: true, riskLevel: "low" };
+    }
+  }
+
+  if (!skill) {
     return {
       allowed: false,
-      reason: `Tool "${toolName}" is not a built-in tool and cannot run unattended.`,
+      reason: `Tool "${toolName}" is not available.`,
       riskLevel: "blocked",
     };
+  }
+
+  if (skill.source !== "built-in") {
+    if (!taskPolicy.allowSkills) {
+      return {
+        allowed: false,
+        reason:
+          "Imported skills are not enabled for this scheduled loop. Enable them when creating the loop.",
+        riskLevel: "blocked",
+      };
+    }
+    return { allowed: true, riskLevel: "medium" };
   }
 
   if (!taskPolicy.autoApproveTools) {

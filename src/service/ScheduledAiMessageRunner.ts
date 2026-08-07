@@ -704,6 +704,9 @@ export class ScheduledAiMessageRunner {
     return {
       allowedTools,
       autoApproveTools: task.auto_approve_tools,
+      allowSkills: task.allow_skills === true,
+      allowMcp: task.allow_mcp === true,
+      allowSubagents: task.allow_subagents === true,
       maxToolCalls: task.max_tool_calls,
       maxRuntimeMs: task.max_runtime_ms,
       maxContinueCalls: task.max_continue_calls,

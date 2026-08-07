@@ -168,6 +168,9 @@ export class AIChatScheduledLoopModule extends BaseModule {
       throw new ScheduledLoopError("BLOCKED_BY_POLICY");
     }
     const autoApproveTools = request.autoApproveTools === true;
+    const allowSkills = request.allowSkills !== false;
+    const allowMcp = request.allowMcp !== false;
+    const allowSubagents = request.allowSubagents !== false;
 
     // Resolve one authoritative v2-* conversation id (never an ai-msg-* fallback).
     const conversationId = this.chatV2.createConversationIfNeeded(
@@ -216,6 +219,9 @@ export class AIChatScheduledLoopModule extends BaseModule {
         model: request.model,
         allowedTools: requestedTools,
         autoApproveTools,
+        allowSkills,
+        allowMcp,
+        allowSubagents,
         maxToolCalls: 10,
         maxRuntimeMs: 300_000,
         maxContinueCalls: 10,
@@ -240,7 +246,10 @@ export class AIChatScheduledLoopModule extends BaseModule {
         request.maxLifetimeMs,
         nextRunAt,
         requestedTools,
-        autoApproveTools
+        autoApproveTools,
+        allowSkills,
+        allowMcp,
+        allowSubagents
       );
       await this.chatV2.saveAssistantMessage({
         conversationId,
@@ -371,7 +380,10 @@ export class AIChatScheduledLoopModule extends BaseModule {
     maxLifetimeMs: number,
     nextRunAt: Date,
     allowedTools: readonly string[],
-    autoApproveTools: boolean
+    autoApproveTools: boolean,
+    allowSkills: boolean,
+    allowMcp: boolean,
+    allowSubagents: boolean
   ): string {
     const next = formatLocalDateTime(nextRunAt);
     let toolsLine: string;
@@ -383,7 +395,14 @@ export class AIChatScheduledLoopModule extends BaseModule {
       toolsLine = " Unattended tools enabled — read-only auto-approved.";
     } else {
       toolsLine =
-        " No tools approved — the loop can only respond from context.";
+        " No built-in tools approved — the loop can only respond from context.";
+    }
+    const extended: string[] = [];
+    if (allowSkills) extended.push("imported skills");
+    if (allowMcp) extended.push("MCP tools");
+    if (allowSubagents) extended.push("subagents");
+    if (extended.length > 0) {
+      toolsLine += ` Extended capabilities enabled: ${extended.join(", ")}.`;
     }
     return (
       `Scheduled every ${describeInterval(intervalMs)}. ` +

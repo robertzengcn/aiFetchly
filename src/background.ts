@@ -84,6 +84,10 @@ import {
 } from "@/service/AIChatGeneratedImageProtocol";
 import { acquireSingleInstanceLock } from "@/main-process/singleInstanceGuard";
 import type { SingleInstanceApp } from "@/main-process/singleInstanceGuard";
+import {
+  getPackagedRendererHtmlCandidates,
+  resolvePackagedRendererHtmlPath,
+} from "@/utils/packagedRendererPath";
 
 let chatScheduledBackgroundScheduler: BackgroundScheduler | null = null;
 // import { RAGIpcHandlers } from '@/main-process/ragIpcHandlers';
@@ -420,26 +424,16 @@ function initialize() {
     log: any,
     dialog: any
   ): Promise<void> {
-    const alternativePaths = [
-      path.join(__dirname, "../.vite/renderer/main_window/index.html"),
-      path.join(__dirname, "../renderer/main_window/index.html"),
-      path.join(__dirname, "./index.html"),
-      path.join(
-        (process as NodeJS.Process & { resourcesPath: string }).resourcesPath,
-        "app.asar",
-        ".vite",
-        "renderer",
-        "main_window",
-        "index.html"
-      ),
-      path.join(
-        (process as NodeJS.Process & { resourcesPath: string }).resourcesPath,
-        ".vite",
-        "renderer",
-        "main_window",
-        "index.html"
-      ),
-    ];
+    const alternativePaths = getPackagedRendererHtmlCandidates(
+      {
+        dirname: __dirname,
+        resourcesPath: (
+          process as NodeJS.Process & { resourcesPath?: string }
+        ).resourcesPath,
+        existsSync: fs.existsSync,
+      },
+      MAIN_WINDOW_VITE_NAME
+    ).filter((candidate) => candidate !== path.normalize(originalPath));
 
     //console.log('Trying alternative paths for HTML file...');
     // log.info('Trying alternative paths for HTML file. Original path was:', originalPath);
@@ -744,40 +738,35 @@ function initialize() {
       initializeAppUpdates();
       // console.log('app://./index.html')
       // createProtocol('app')
-      // Load the index.html when not in development
-      // In production, the renderer files are in .vite/renderer/main_window/
-      const htmlPath = path.join(
-        __dirname,
-        `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`
-      );
+      // Load the index.html when not in development.
+      // Prefer app.asar.unpacked when the renderer was unpacked — Chromium
+      // loadFile fails with ERR_FAILED (-2) on the virtual app.asar path for
+      // unpacked files even though Node fs.existsSync still returns true.
+      const htmlPath =
+        resolvePackagedRendererHtmlPath(
+          {
+            dirname: __dirname,
+            resourcesPath: (
+              process as NodeJS.Process & { resourcesPath?: string }
+            ).resourcesPath,
+            existsSync: fs.existsSync,
+          },
+          MAIN_WINDOW_VITE_NAME
+        ) ??
+        path.join(
+          __dirname,
+          `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`
+        );
 
-      // console.log('=== HTML File Loading Debug Info ===');
-      // console.log('App is packaged:', app.isPackaged);
-      // console.log('MAIN_WINDOW_VITE_NAME:', MAIN_WINDOW_VITE_NAME);
-      // console.log('__dirname:', __dirname);
-      // console.log('process.resourcesPath:', process.resourcesPath);
-      // console.log('Loading HTML from:', htmlPath);
-      // log.info('=== HTML File Loading Debug Info ===');
-      // log.info('App is packaged:', app.isPackaged);
-      // log.info('MAIN_WINDOW_VITE_NAME:', MAIN_WINDOW_VITE_NAME);
-      // log.info('__dirname:', __dirname);
-      // log.info('process.resourcesPath:', process.resourcesPath);
-      // log.info('Loading HTML from:', htmlPath);
-
-      // Check if file exists before loading
       if (fs.existsSync(htmlPath)) {
-        //console.log('HTML file exists, loading...');
         log.info("Attempting to load HTML file from:", htmlPath);
 
         try {
-          // Check if window is still valid before attempting to load
           if (win && !(win as any).isDestroyed()) {
             await (win as any).loadFile(htmlPath);
             console.log("Successfully loaded HTML file from:", htmlPath);
-            //log.info('Successfully loaded HTML file from:', htmlPath);
           } else {
             console.error("Window has been destroyed, cannot load file");
-            //log.error('Window has been destroyed, cannot load file');
             dialog.showErrorBox(
               "Application Error",
               "The application window was destroyed before it could load. Please restart the application."
@@ -791,16 +780,12 @@ function initialize() {
             htmlPath
           );
           console.error("Error details:", error);
-          // log.error('Failed to load HTML file from primary path:', htmlPath);
-          // log.error('Error details:', error);
 
-          // Check if the error is due to window destruction
           if (
             error instanceof Error &&
             error.message.includes("Object has been destroyed")
           ) {
             console.error("Window was destroyed during loading");
-            //log.error('Window was destroyed during loading');
             dialog.showErrorBox(
               "Application Error",
               "The application window was destroyed during loading. Please restart the application."
@@ -809,14 +794,10 @@ function initialize() {
             return;
           }
 
-          // Try alternative paths with detailed error handling
-          //await tryAlternativePaths(win, htmlPath, log, dialog);
+          await tryAlternativePaths(win, htmlPath, log, dialog);
         }
       } else {
         console.error("HTML file not found at:", htmlPath);
-        //log.error('HTML file not found at:', htmlPath);
-
-        // Try alternative paths with detailed error handling
         await tryAlternativePaths(win, htmlPath, log, dialog);
       }
     }

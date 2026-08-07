@@ -2345,7 +2345,7 @@ export default {
       statusStopped: "detenido",
       toolApprovalTitle: "Aprobar herramientas desatendidas",
       toolApprovalIntro:
-        "Los bucles programados se ejecutan sin supervisión. Las herramientas de solo lectura se aprueban automáticamente al habilitar herramientas desatendidas. Escritura/correo requieren confirmación explícita abajo. Shell, subagentes y marcar-procesado siguen bloqueados.",
+        "Los bucles programados se ejecutan sin supervisión. Elige herramientas integradas y capacidades extendidas (skills importadas, MCP, subagentes) abajo. Shell y marcar-procesado siguen bloqueados.",
       toolApprovalCommand: "Comando",
       noReadOnlyTools: "No hay herramientas de solo lectura disponibles.",
       allowedTools: "Herramientas de solo lectura permitidas",
@@ -2355,7 +2355,11 @@ export default {
       autoApproveWarning:
         "Estas herramientas se ejecutarán automáticamente en cada ocurrencia mientras el bucle esté activo.",
       createLoop: "Programar bucle",
-      enableTools: "Permitir que las herramientas se ejecuten sin supervisión",
+      enableTools: "Permitir herramientas integradas sin supervisión",
+      extendedCapabilities: "Capacidades extendidas",
+      allowSkills: "Permitir skills importadas",
+      allowMcp: "Permitir herramientas MCP",
+      allowSubagents: "Permitir subagentes",
       readOnlyAutoApproved:
         "Las herramientas de solo lectura se aprueban automáticamente",
       automationTools: "Herramientas de automatización",

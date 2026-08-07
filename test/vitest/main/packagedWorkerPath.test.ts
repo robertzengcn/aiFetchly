@@ -198,5 +198,19 @@ describe("buildPackagedWorkerEnv", () => {
     expect(env.NODE_PATH).not.toBe("/evil/override");
     expect(env.NODE_OPTIONS).toBe("");
   });
-});
 
+  it("preserves explicit ELECTRON_APP_NAME and ELECTRON_USER_DATA_PATH from extraEnv", () => {
+    // Search/taskCode workers need these so Token → ElectronStoreService can
+    // open the same store as main when utilityProcess has app but no ipcMain.
+    const env = buildPackagedWorkerEnv({
+      resourcesPath: path.join("/opt", "AiFetchly", "resources"),
+      processEnv: {},
+      extraEnv: {
+        ELECTRON_APP_NAME: "custom-app",
+        ELECTRON_USER_DATA_PATH: "/custom/userData",
+      },
+    });
+    expect(env.ELECTRON_APP_NAME).toBe("custom-app");
+    expect(env.ELECTRON_USER_DATA_PATH).toBe("/custom/userData");
+  });
+});

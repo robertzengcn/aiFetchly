@@ -102,11 +102,27 @@ describe("SkillDefinition timeout-class fields", () => {
  * contract explicit so future registry edits don't regress.
  */
 describe("regression: previously-broken tool annotations", () => {
-  it("scrape_urls_from_search_engine is registered with timeoutClass network + supportsPartialResult", () => {
+  it("scrape_urls_from_search_engine routes unconditionally to async + supportsPartialResult", () => {
+    // Previously timeoutClass: "network" (90s). SERP scrapes regularly
+    // exceeded that ceiling and returned timedOut:true even when the
+    // worker would have succeeded. Now resolveTimeoutClass always returns
+    // "async" so the loop dispatches via ToolJobRegistry (same pattern as
+    // heavy search_maps_businesses / run_subagent).
     const skill = SkillRegistry.getSkill("scrape_urls_from_search_engine");
     expect(skill).to.not.equal(undefined);
-    expect(skill?.timeoutClass).to.equal("network");
+    expect(skill?.async).to.equal(true);
+    expect(skill?.resolveTimeoutClass).to.be.a("function");
+    expect(skill?.resolveTimeoutClass!({})).to.equal("async");
+    expect(
+      skill?.resolveTimeoutClass!({
+        search_engine: "bing",
+        query: "dentists",
+        num_results: 10,
+      })
+    ).to.equal("async");
+    expect(skill?.resolveAsync!({})).to.equal(true);
     expect(skill?.supportsPartialResult).to.equal(true);
+    expect(resolveTimeoutMs(skill!.resolveTimeoutClass!({}))).to.equal(null);
   });
 
   it("run_subagent routes unconditionally to async (no synchronous ceiling)", () => {
@@ -132,7 +148,7 @@ describe("regression: previously-broken tool annotations", () => {
 
   it("legacy scrape_urls_from_google/bing/yandex/baidu route through the same skill", () => {
     // Legacy names are remapped in SkillExecutor.resolveSearchScrapeInvocation
-    // to scrape_urls_from_search_engine, so they inherit the network class.
+    // to scrape_urls_from_search_engine, so they inherit the async routing.
     for (const legacy of [
       "scrape_urls_from_google",
       "scrape_urls_from_bing",

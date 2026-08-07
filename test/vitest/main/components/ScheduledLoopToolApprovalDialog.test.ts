@@ -109,6 +109,9 @@ function mountDialog(props: { rawCommand?: string; prompt?: string } = {}) {
 
 type Exposed = {
   toolsEnabled: boolean;
+  allowSkills: boolean;
+  allowMcp: boolean;
+  allowSubagents: boolean;
   selectedAutomation: string[];
   pendingHighImpact: Record<string, boolean>;
   confirmInput: Record<string, string>;
@@ -129,26 +132,44 @@ describe("ScheduledLoopToolApprovalDialog (3-tier)", () => {
     const wrapper = mountDialog();
     await flushPromises();
     const vm = vmOf(wrapper);
-    // Read-only + automation + high-impact counts derived from the exposed
-    // confirmedHighImpact() source list (highImpactTools). We assert behavior
-    // via confirm payloads below; here just ensure load didn't error.
     expect(listAvailableAiMessageTaskTools).toHaveBeenCalled();
     expect(vm.confirmInput).toBeDefined();
   });
 
-  it("emits toolsEnabled=false payload when the master switch is off", async () => {
+  it("defaults extended capabilities and built-in tools to enabled", async () => {
     vi.mocked(listAvailableAiMessageTaskTools).mockResolvedValue(TOOLS);
     const wrapper = mountDialog();
     await flushPromises();
+    const vm = vmOf(wrapper);
+    expect(vm.toolsEnabled).toBe(true);
+    expect(vm.allowSkills).toBe(true);
+    expect(vm.allowMcp).toBe(true);
+    expect(vm.allowSubagents).toBe(true);
+  });
+
+  it("emits extended capability flags on confirm", async () => {
+    vi.mocked(listAvailableAiMessageTaskTools).mockResolvedValue(TOOLS);
+    const wrapper = mountDialog();
+    await flushPromises();
+    const vm = vmOf(wrapper);
+    vm.toolsEnabled = false;
+    vm.allowSkills = true;
+    vm.allowMcp = false;
+    vm.allowSubagents = true;
     await wrapper
       .find('[data-testid="scheduled-loop-approval-confirm"]')
       .trigger("click");
     const payload = wrapper.emitted("confirm")![0][0] as {
       allowedTools: string[];
       autoApproveTools: boolean;
+      allowSkills: boolean;
+      allowMcp: boolean;
+      allowSubagents: boolean;
     };
-    expect(payload.allowedTools).toEqual([]);
     expect(payload.autoApproveTools).toBe(false);
+    expect(payload.allowSkills).toBe(true);
+    expect(payload.allowMcp).toBe(false);
+    expect(payload.allowSubagents).toBe(true);
   });
 
   it("auto-approves read-only tools when enabled, even with no explicit selection", async () => {
@@ -156,7 +177,7 @@ describe("ScheduledLoopToolApprovalDialog (3-tier)", () => {
     const wrapper = mountDialog();
     await flushPromises();
     const vm = vmOf(wrapper);
-    vm.toolsEnabled = true; // master switch on, nothing else selected
+    vm.toolsEnabled = true;
     await wrapper
       .find('[data-testid="scheduled-loop-approval-confirm"]')
       .trigger("click");
@@ -164,7 +185,6 @@ describe("ScheduledLoopToolApprovalDialog (3-tier)", () => {
       allowedTools: string[];
       autoApproveTools: boolean;
     };
-    // No explicit tools selected, but autoApprove is on → read-only auto-run.
     expect(payload.autoApproveTools).toBe(true);
     expect(payload.allowedTools).toEqual([]);
   });
@@ -185,10 +205,11 @@ describe("ScheduledLoopToolApprovalDialog (3-tier)", () => {
     const payload = wrapper.emitted("confirm")![0][0] as {
       allowedTools: string[];
       autoApproveTools: boolean;
+      allowSkills: boolean;
     };
-    // Empty allowlist + autoApprove → read-only set includes fetch_unread_emails.
     expect(payload.autoApproveTools).toBe(true);
     expect(payload.allowedTools).toEqual([]);
+    expect(payload.allowSkills).toBe(true);
   });
 
   it("does NOT confirm a high-impact tool until its exact name is typed", async () => {
@@ -198,9 +219,8 @@ describe("ScheduledLoopToolApprovalDialog (3-tier)", () => {
     const vm = vmOf(wrapper);
     vm.toolsEnabled = true;
     vm.pendingHighImpact.file_write = true;
-    vm.confirmInput.file_write = "file_write_typo"; // wrong text
+    vm.confirmInput.file_write = "file_write_typo";
     expect(vm.confirmedHighImpact()).toEqual([]);
-    // Correct the text.
     vm.confirmInput.file_write = "file_write";
     expect(vm.confirmedHighImpact()).toEqual(["file_write"]);
     vm.selectedAutomation = ["proxy_check"];

@@ -122,7 +122,7 @@ jobs:
           # Windows CI ships WiX MSI only (no Squirrel Setup.exe).
           yarn make-win:test -- --targets=@electron-forge/maker-wix
           # Fail if unpacked workers require asar-only pure-JS packages.
-          node scripts/verify-packaged-childprocess.js
+          yarn verify-packaged-app
         shell: bash
 
       - name: Upload artifact
@@ -518,7 +518,7 @@ jobs:
 
           BUILD_EXIT_CODE=${PIPESTATUS[0]}
           if [ ${BUILD_EXIT_CODE} -eq 0 ]; then
-            node scripts/verify-packaged-childprocess.js
+            yarn verify-packaged-app
             BUILD_EXIT_CODE=$?
           fi
           echo "=== Build process completed ==="

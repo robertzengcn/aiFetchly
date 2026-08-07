@@ -107,6 +107,23 @@ export class AIChatGoalModule extends BaseModule {
       );
     }
 
+    // When replacing, terminalize the prior active goal (and any run) so
+    // getActiveByConversation cannot keep returning the superseded draft.
+    if (existing && input.replace) {
+      if (existing.status === "running") {
+        const run = await this.runModel.getActiveByGoal(existing.goalId);
+        if (run) {
+          await this.runModel.endRun(run.runId, "cancelled", {
+            cancelled: true,
+            terminalReason: "replaced",
+          });
+        }
+      }
+      await this.goalModel.setStatus(existing.goalId, "cancelled", {
+        terminalReason: "replaced",
+      });
+    }
+
     const goalId = `goal-${uuid()}`;
     const entity = await this.goalModel.createGoal({
       goalId,
