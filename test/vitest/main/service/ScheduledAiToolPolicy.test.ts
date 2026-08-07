@@ -35,6 +35,9 @@ const policy = (
 ): AiMessageTaskToolPolicy => ({
   allowedTools: ["list_email_inboxes"],
   autoApproveTools: true,
+  allowSkills: false,
+  allowMcp: false,
+  allowSubagents: false,
   maxToolCalls: 10,
   maxRuntimeMs: 300_000,
   maxContinueCalls: 10,
@@ -78,11 +81,19 @@ describe("ScheduledAiToolPolicy describeBuiltInToolForSchedule", () => {
 
   it("blocks permanently denied tools with a concrete reason", () => {
     const summary = describeBuiltInToolForSchedule(
-      skill("run_subagent", { permissionCategory: "automation" })
+      skill("shell_execute", { permissionCategory: "shell" })
     );
     expect(summary.schedulable).toBe(false);
     expect(summary.autoApproveAllowed).toBe(false);
     expect(summary.blockedReason).toMatch(/permanently blocked/);
+  });
+
+  it("marks run_subagent as schedulable when subagents are enabled at creation", () => {
+    const summary = describeBuiltInToolForSchedule(
+      skill("run_subagent", { permissionCategory: "automation" })
+    );
+    expect(summary.schedulable).toBe(true);
+    expect(summary.riskLevel).toBe("medium");
   });
 
   it("blocks non-curated tools even when they look low-risk", () => {
@@ -154,17 +165,41 @@ describe("ScheduledAiToolPolicy canAutoApproveScheduledTool", () => {
     expect(allowed.allowed).toBe(true);
   });
 
-  it("always denies run_subagent even if allowlisted and auto-approved", () => {
+  it("allows run_subagent when allowSubagents is enabled", () => {
     const decision = canAutoApproveScheduledTool({
       skill: skill("run_subagent"),
-      taskPolicy: policy({
-        allowedTools: ["run_subagent"],
-        autoApproveTools: true,
-      }),
+      taskPolicy: policy({ allowSubagents: true, autoApproveTools: false }),
+      toolName: "run_subagent",
+    });
+    expect(decision.allowed).toBe(true);
+  });
+
+  it("denies run_subagent when allowSubagents is disabled", () => {
+    const decision = canAutoApproveScheduledTool({
+      skill: skill("run_subagent"),
+      taskPolicy: policy({ allowSubagents: false }),
       toolName: "run_subagent",
     });
     expect(decision.allowed).toBe(false);
-    expect(decision.reason).toMatch(/permanently blocked/);
+    expect(decision.reason).toMatch(/Subagents are not enabled/);
+  });
+
+  it("allows MCP tools when allowMcp is enabled", () => {
+    const decision = canAutoApproveScheduledTool({
+      skill: null,
+      taskPolicy: policy({ allowMcp: true, autoApproveTools: false }),
+      toolName: "mcp_github_search",
+    });
+    expect(decision.allowed).toBe(true);
+  });
+
+  it("allows imported skills when allowSkills is enabled", () => {
+    const decision = canAutoApproveScheduledTool({
+      skill: skill("list_email_inboxes", { source: "user" }),
+      taskPolicy: policy({ allowSkills: true, autoApproveTools: false }),
+      toolName: "list_email_inboxes",
+    });
+    expect(decision.allowed).toBe(true);
   });
 
   it("permanently blocks shell and mark-processed; unread fetch auto-approves as read-only", () => {
@@ -220,14 +255,14 @@ describe("ScheduledAiToolPolicy canAutoApproveScheduledTool", () => {
     expect(suggestScheduledLoopAutomationTools("summarize status")).toEqual([]);
   });
 
-  it("denies non-built-in skills", () => {
+  it("denies non-built-in skills when allowSkills is off", () => {
     const decision = canAutoApproveScheduledTool({
       skill: skill("list_email_inboxes", { source: "user" }),
       taskPolicy: policy(),
       toolName: "list_email_inboxes",
     });
     expect(decision.allowed).toBe(false);
-    expect(decision.reason).toMatch(/built-in/);
+    expect(decision.reason).toMatch(/Imported skills are not enabled/);
   });
 });
 

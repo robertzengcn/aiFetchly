@@ -74,6 +74,9 @@ export class AiMessageTaskModel extends BaseDb {
     entity.conversation_id = input.conversationId;
     entity.allowed_tools_json = JSON.stringify(input.allowedTools);
     entity.auto_approve_tools = input.autoApproveTools;
+    entity.allow_skills = input.allowSkills;
+    entity.allow_mcp = input.allowMcp;
+    entity.allow_subagents = input.allowSubagents;
     entity.max_tool_calls = input.maxToolCalls;
     entity.max_runtime_ms = input.maxRuntimeMs;
     entity.max_continue_calls = input.maxContinueCalls;

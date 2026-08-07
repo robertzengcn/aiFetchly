@@ -30,7 +30,7 @@
         <p class="text-body-2 mb-3">
           {{
             t("aiChatV2.scheduledLoop.toolApprovalIntro") ||
-            "Scheduled loops run without supervision. Read-only tools auto-approve when unattended tools are enabled. Write/email tools require explicit confirmation below. Shell, subagents, and mark-processed stay blocked."
+            "Scheduled loops run without supervision. Choose built-in tools and extended capabilities (imported skills, MCP, subagents) below. Shell and mark-processed stay blocked."
           }}
         </p>
 
@@ -55,12 +55,54 @@
         </div>
 
         <template v-else>
-          <!-- Master switch: enable the unattended-tool layer. -->
+          <!-- Extended capabilities: skills, MCP, subagents (default on). -->
+          <div class="mb-3">
+            <div class="text-caption font-weight-bold mb-1">
+              {{
+                t("aiChatV2.scheduledLoop.extendedCapabilities") ||
+                "Extended capabilities"
+              }}
+            </div>
+            <v-switch
+              v-model="allowSkills"
+              :label="
+                t('aiChatV2.scheduledLoop.allowSkills') ||
+                'Allow imported skills'
+              "
+              color="primary"
+              density="compact"
+              hide-details
+              data-testid="scheduled-loop-allow-skills"
+            />
+            <v-switch
+              v-model="allowMcp"
+              :label="
+                t('aiChatV2.scheduledLoop.allowMcp') || 'Allow MCP tools'
+              "
+              color="primary"
+              density="compact"
+              hide-details
+              data-testid="scheduled-loop-allow-mcp"
+            />
+            <v-switch
+              v-model="allowSubagents"
+              :label="
+                t('aiChatV2.scheduledLoop.allowSubagents') ||
+                'Allow subagents'
+              "
+              color="primary"
+              density="compact"
+              hide-details
+              data-testid="scheduled-loop-allow-subagents"
+            />
+          </div>
+
+          <!-- Master switch: enable the unattended built-in tool layer. -->
           <v-switch
             v-model="toolsEnabled"
             :label="
               t('aiChatV2.scheduledLoop.enableTools') ||
-              'Allow tools to run unattended'
+              'Allow built-in tools to run unattended'
             "
             color="primary"
             density="compact"
@@ -207,7 +249,13 @@ const emit = defineEmits<{
   (e: "update:modelValue", value: boolean): void;
   (
     e: "confirm",
-    payload: { allowedTools: string[]; autoApproveTools: boolean }
+    payload: {
+      allowedTools: string[];
+      autoApproveTools: boolean;
+      allowSkills: boolean;
+      allowMcp: boolean;
+      allowSubagents: boolean;
+    }
   ): void;
   (e: "cancel"): void;
 }>();
@@ -221,7 +269,10 @@ const readOnlyTools = ref<SchedulableAiToolSummary[]>([]);
 const automationTools = ref<SchedulableAiToolSummary[]>([]);
 const highImpactTools = ref<SchedulableAiToolSummary[]>([]);
 
-const toolsEnabled = ref(false);
+const toolsEnabled = ref(true);
+const allowSkills = ref(true);
+const allowMcp = ref(true);
+const allowSubagents = ref(true);
 const selectedAutomation = ref<string[]>([]);
 // checkbox state per high-impact tool (ticked = user intends to enable)
 const pendingHighImpact = reactive<Record<string, boolean>>({});
@@ -247,8 +298,7 @@ function onConfirmInput(name: string): void {
 
 function applyPromptSuggestions(): void {
   const prompt = props.prompt ?? props.rawCommand ?? "";
-  // Inbox-check prompts only need the master switch: fetch_unread_emails is
-  // in the read-only auto-approve set.
+  // Inbox-check prompts need built-in tools: fetch_unread_emails is read-only.
   if (hasScheduledLoopEmailInboxIntent(prompt)) {
     toolsEnabled.value = true;
   }
@@ -286,7 +336,10 @@ watch(
 );
 
 function reset(): void {
-  toolsEnabled.value = false;
+  toolsEnabled.value = true;
+  allowSkills.value = true;
+  allowMcp.value = true;
+  allowSubagents.value = true;
   selectedAutomation.value = [];
   for (const key of Object.keys(pendingHighImpact)) delete pendingHighImpact[key];
   for (const key of Object.keys(confirmInput)) delete confirmInput[key];
@@ -307,12 +360,18 @@ function confirm(): void {
   emit("confirm", {
     allowedTools,
     autoApproveTools: toolsEnabled.value,
+    allowSkills: allowSkills.value,
+    allowMcp: allowMcp.value,
+    allowSubagents: allowSubagents.value,
   });
 }
 
 // Exposed for component tests (drive approval state without DOM interaction).
 defineExpose({
   toolsEnabled,
+  allowSkills,
+  allowMcp,
+  allowSubagents,
   selectedAutomation,
   pendingHighImpact,
   confirmInput,

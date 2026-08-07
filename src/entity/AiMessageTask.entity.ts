@@ -32,6 +32,15 @@ export class AiMessageTaskEntity extends AuditableEntity {
   @Column("boolean", { default: false })
   auto_approve_tools: boolean;
 
+  @Column("boolean", { default: false })
+  allow_skills: boolean;
+
+  @Column("boolean", { default: false })
+  allow_mcp: boolean;
+
+  @Column("boolean", { default: false })
+  allow_subagents: boolean;
+
   @Column("integer", { default: 10 })
   max_tool_calls: number;
 

@@ -1,7 +1,4 @@
-import {
-  AiChatApi,
-  type ToolExecutionResult,
-} from "@/api/aiChatApi";
+import { AiChatApi, type ToolExecutionResult } from "@/api/aiChatApi";
 import { SkillRegistry } from "@/config/skillsRegistry";
 import { SkillExecutor } from "@/service/SkillExecutor";
 import { AIChatQueryLoop } from "@/service/AIChatQueryLoop";
@@ -61,11 +58,14 @@ export class AIChatQueryEngineFactory {
 
   /**
    * Task-scoped policy check shared by the catalog filter and the execution
-   * guard. True only for allowlisted, policy-approved built-in tools.
+   * guard. Built-in tools follow the curated allowlist; extended capabilities
+   * (imported skills, MCP, subagents) follow separate task flags.
    */
-  private isToolAllowed(name: string, policy: AiMessageTaskToolPolicy): boolean {
-    const skill = SkillRegistry.getSkill(name);
-    if (!skill || skill.source !== "built-in") return false;
+  private isToolAllowed(
+    name: string,
+    policy: AiMessageTaskToolPolicy
+  ): boolean {
+    const skill = SkillRegistry.getSkill(name) ?? null;
     return canAutoApproveScheduledTool({
       skill,
       taskPolicy: policy,
@@ -86,15 +86,12 @@ export class AIChatQueryEngineFactory {
     policy: AiMessageTaskToolPolicy
   ): Promise<ToolExecutionResult> {
     if (!this.isToolAllowed(name, policy)) {
-      const skill = SkillRegistry.getSkill(name);
-      const reason =
-        skill && skill.source === "built-in"
-          ? canAutoApproveScheduledTool({
-              skill,
-              taskPolicy: policy,
-              toolName: name,
-            }).reason
-          : `Tool "${name}" is not available.`;
+      const skill = SkillRegistry.getSkill(name) ?? null;
+      const reason = canAutoApproveScheduledTool({
+        skill,
+        taskPolicy: policy,
+        toolName: name,
+      }).reason;
       return this.blockedToolResult(
         name,
         context,

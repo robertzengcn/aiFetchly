@@ -1480,7 +1480,13 @@ async function runScheduledLoopCreate(
     maxLifetimeMs: number;
   },
   rawCommand: string,
-  approval?: { allowedTools: string[]; autoApproveTools: boolean }
+  approval?: {
+    allowedTools: string[];
+    autoApproveTools: boolean;
+    allowSkills: boolean;
+    allowMcp: boolean;
+    allowSubagents: boolean;
+  }
 ): Promise<void> {
   const conversationId = ensureWorkspaceConversationId();
   try {
@@ -1493,6 +1499,9 @@ async function runScheduledLoopCreate(
       maxLifetimeMs: action.maxLifetimeMs,
       allowedTools: approval?.allowedTools,
       autoApproveTools: approval?.autoApproveTools,
+      allowSkills: approval?.allowSkills,
+      allowMcp: approval?.allowMcp,
+      allowSubagents: approval?.allowSubagents,
     });
     if (!created) {
       const message =
@@ -2025,6 +2034,9 @@ const showScheduledLoopApproval = ref(false);
 async function onScheduledLoopApprovalConfirm(payload: {
   allowedTools: string[];
   autoApproveTools: boolean;
+  allowSkills: boolean;
+  allowMcp: boolean;
+  allowSubagents: boolean;
 }): Promise<void> {
   const staged = pendingScheduledLoop.value;
   if (!staged) {

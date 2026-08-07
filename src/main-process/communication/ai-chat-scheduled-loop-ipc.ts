@@ -69,6 +69,9 @@ const createSchema = z.object({
   model: z.string().optional(),
   allowedTools: z.array(z.string().min(1)).max(50).optional(),
   autoApproveTools: z.boolean().optional(),
+  allowSkills: z.boolean().optional(),
+  allowMcp: z.boolean().optional(),
+  allowSubagents: z.boolean().optional(),
 });
 
 const conversationSchema = z.object({
