@@ -1485,7 +1485,7 @@ export class AIChatQueryEngine {
             console.error("[desktop-notify] turn_complete failed:", err)
           );
         this.dispatchStop(conversationId, "completed");
-        this.clearActiveTurnState(conversationId);
+        this.clearActiveTurnState(conversationId, assistantMessageId);
         break;
       }
       case "cancelled": {
@@ -1513,7 +1513,7 @@ export class AIChatQueryEngine {
           fullContent: result.partialContent,
         });
         this.dispatchStop(conversationId, "user_stopped");
-        this.clearActiveTurnState(conversationId);
+        this.clearActiveTurnState(conversationId, assistantMessageId);
         break;
       }
       case "failed": {
@@ -1542,7 +1542,7 @@ export class AIChatQueryEngine {
           errorMessage: userSafeError(result.error),
         });
         this.dispatchStop(conversationId, "error");
-        this.clearActiveTurnState(conversationId);
+        this.clearActiveTurnState(conversationId, assistantMessageId);
         this.pendingPermissions.delete(conversationId);
         this.pendingPlanQuestions.delete(conversationId);
         break;
@@ -1581,8 +1581,24 @@ export class AIChatQueryEngine {
    * Scoped by conversationId so a terminal result for conversation A never
    * touches conversation B's entry — this is the fix for the cross-conversation
    * clobber bug (a cancelled result for A used to wipe B's singleton state).
+   *
+   * When `assistantMessageId` is supplied, the entry is deleted ONLY if it
+   * still belongs to that turn. A same-conversation re-send replaces the entry
+   * with a newer turn; the stale turn's late terminal result must not delete
+   * the newer turn's entry.
    */
-  private clearActiveTurnState(conversationId: string): void {
+  private clearActiveTurnState(
+    conversationId: string,
+    assistantMessageId?: string
+  ): void {
+    const entry = this.activeTurns.get(conversationId);
+    if (!entry) return;
+    if (
+      assistantMessageId !== undefined &&
+      entry.assistantMessageId !== assistantMessageId
+    ) {
+      return;
+    }
     this.activeTurns.delete(conversationId);
   }
 
@@ -1715,7 +1731,7 @@ export class AIChatQueryEngine {
       messageId: assistantMessageId,
       errorMessage: userSafeError(err),
     });
-    this.clearActiveTurnState(conversationId);
+    this.clearActiveTurnState(conversationId, assistantMessageId);
     this.pendingPermissions.delete(conversationId);
     this.pendingPlanQuestions.delete(conversationId);
   }
