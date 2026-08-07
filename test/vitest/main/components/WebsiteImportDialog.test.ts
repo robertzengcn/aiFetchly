@@ -134,6 +134,43 @@ describe("WebsiteImportDialog", () => {
     expect(w.emitted("completed")).toBeTruthy();
   });
 
+  it("aborts submit when beforeImport returns false", async () => {
+    const beforeImport = vi.fn().mockResolvedValue(false);
+    const w = mount(WebsiteImportDialog, {
+      props: { modelValue: true, beforeImport },
+      global: { plugins: [i18n], stubs },
+    });
+    const vm = w.vm as unknown as {
+      url: string;
+      submit: () => Promise<void>;
+    };
+    vm.url = "https://example.com/docs";
+    await vm.submit();
+    await flushPromises();
+    expect(beforeImport).toHaveBeenCalledTimes(1);
+    expect(ragApiMocks.importWebsiteMock).not.toHaveBeenCalled();
+  });
+
+  it("calls importWebsite when beforeImport returns true", async () => {
+    const beforeImport = vi.fn().mockResolvedValue(true);
+    ragApiMocks.importWebsiteMock.mockResolvedValue(
+      successOutcome("single_page", 1)
+    );
+    const w = mount(WebsiteImportDialog, {
+      props: { modelValue: true, beforeImport },
+      global: { plugins: [i18n], stubs },
+    });
+    const vm = w.vm as unknown as {
+      url: string;
+      submit: () => Promise<void>;
+    };
+    vm.url = "https://example.com/docs";
+    await vm.submit();
+    await flushPromises();
+    expect(beforeImport).toHaveBeenCalledTimes(1);
+    expect(ragApiMocks.importWebsiteMock).toHaveBeenCalledTimes(1);
+  });
+
   it("rejects more than the max-URL cap client-side without calling the API", async () => {
     const w = mountDialog();
     const vm = w.vm as unknown as {

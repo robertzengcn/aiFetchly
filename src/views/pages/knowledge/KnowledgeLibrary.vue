@@ -17,7 +17,8 @@
         <v-btn
           color="success"
           prepend-icon="mdi-web"
-          @click="showWebsiteImportDialog = true"
+          :loading="checkingEmbeddingRuntime"
+          @click="openWebsiteImportDialog"
         >
           {{ t('knowledge.import_website') }}
         </v-btn>
@@ -72,6 +73,7 @@
           <v-window-item value="documents">
             <DocumentManagement
               ref="documentManagement"
+              :ensure-embedding-ready="() => ensureCurrentEmbeddingRuntimeReady(null)"
               @document-uploaded="handleDocumentUploaded"
               @document-deleted="handleDocumentDeleted"
               @error="handleError"
@@ -236,6 +238,7 @@
     <!-- Website Import Dialog -->
     <WebsiteImportDialog
       v-model="showWebsiteImportDialog"
+      :before-import="() => ensureCurrentEmbeddingRuntimeReady(null)"
       @completed="handleWebsiteImportCompleted"
     />
 
@@ -497,9 +500,13 @@ const updateResultIcon = ref('mdi-check-circle');
 const showRuntimeDownloadDialog = ref(false);
 const runtimeDownloading = ref(false);
 const preparingRuntime = ref(false);
+const checkingEmbeddingRuntime = ref(false);
 const runtimeDownloadError = ref('');
 const runtimeDownloadProgress = ref<LocalAiRuntimeDownloadProgress | null>(null);
 const runtimeInstallOffer = ref<LocalAiRuntimeInstallOffer | null>(null);
+/** What to resume after a successful runtime install (settings update vs open import). */
+type RuntimeInstallResume = 'update-model' | 'open-website-import' | null;
+const pendingRuntimeAction = ref<RuntimeInstallResume>(null);
 let unsubscribeRuntimeProgress: (() => void) | null = null;
 
 // Upload dialog data
@@ -737,12 +744,51 @@ async function handleUpdateEmbeddingModel() {
   // downloadable "embedding-xenova" Local AI Component. If the runtime is not
   // installed/ready, offer an inline download instead of updating.
   if (selectedEmbeddingModel.value.startsWith(LOCAL_XENOVA_PROVIDER_PREFIX)) {
-    if (!(await ensureLocalEmbeddingRuntime())) {
+    if (!(await ensureLocalEmbeddingRuntime('update-model'))) {
       return;
     }
   }
   
   await performUpdateEmbeddingModel();
+}
+
+/**
+ * Gate for import/upload/re-embed: if the current default embedding model is
+ * local-xenova, require the embedding-xenova runtime to be ready (or show the
+ * install dialog). Remote models pass through without a runtime check.
+ */
+async function ensureCurrentEmbeddingRuntimeReady(
+  resume: RuntimeInstallResume = null
+): Promise<boolean> {
+  checkingEmbeddingRuntime.value = true;
+  try {
+    if (!currentModel.value) {
+      try {
+        const response = await getRAGStats();
+        if (response.data?.defaultEmbeddingModel) {
+          currentModel.value = response.data.defaultEmbeddingModel;
+          selectedEmbeddingModel.value = response.data.defaultEmbeddingModel;
+        }
+      } catch (error) {
+        console.error('Failed to load current embedding model for runtime check:', error);
+      }
+    }
+
+    if (!currentModel.value.startsWith(LOCAL_XENOVA_PROVIDER_PREFIX)) {
+      return true;
+    }
+
+    return ensureLocalEmbeddingRuntime(resume);
+  } finally {
+    checkingEmbeddingRuntime.value = false;
+  }
+}
+
+async function openWebsiteImportDialog(): Promise<void> {
+  if (!(await ensureCurrentEmbeddingRuntimeReady('open-website-import'))) {
+    return;
+  }
+  showWebsiteImportDialog.value = true;
 }
 
 async function performUpdateEmbeddingModel() {
@@ -794,14 +840,18 @@ async function performUpdateEmbeddingModel() {
 /**
  * Verifies the embedding-xenova Local AI Component is ready. When it is not,
  * opens the download dialog with an inline install action. Returns true only
- * when the runtime is ready (either already or after a successful install).
+ * when the runtime is already ready; otherwise returns false after opening the
+ * install dialog (caller should abort and let the user install first).
  */
-async function ensureLocalEmbeddingRuntime(): Promise<boolean> {
+async function ensureLocalEmbeddingRuntime(
+  resume: RuntimeInstallResume = null
+): Promise<boolean> {
   const runtimeStatus = await getLocalAiRuntimeStatus(LOCAL_EMBEDDING_RUNTIME_ID);
   if (runtimeStatus.state === 'ready') {
     return true;
   }
   console.warn('Local embedding runtime not ready:', runtimeStatus);
+  pendingRuntimeAction.value = resume;
   runtimeDownloadError.value = '';
   runtimeDownloadProgress.value = null;
   runtimeInstallOffer.value = null;
@@ -832,7 +882,13 @@ async function onDownloadRuntime() {
     const runtimeStatus = await getLocalAiRuntimeStatus(LOCAL_EMBEDDING_RUNTIME_ID);
     if (runtimeStatus.state === 'ready') {
       showRuntimeDownloadDialog.value = false;
-      await performUpdateEmbeddingModel();
+      const action = pendingRuntimeAction.value;
+      pendingRuntimeAction.value = null;
+      if (action === 'update-model') {
+        await performUpdateEmbeddingModel();
+      } else if (action === 'open-website-import') {
+        showWebsiteImportDialog.value = true;
+      }
     } else {
       runtimeDownloadError.value = t('knowledge.local_runtime_install_failed') as string;
     }
@@ -850,6 +906,7 @@ function onCancelRuntimeDownload() {
       runtimeDownloadError.value = runtimeErrorMessage(error);
     });
   }
+  pendingRuntimeAction.value = null;
   runtimeDownloading.value = false;
   showRuntimeDownloadDialog.value = false;
 }
@@ -978,6 +1035,11 @@ function cancelUpload() {
 async function confirmUpload() {
   if (!uploadFiles.value || uploadFiles.value.length === 0) {
     uploadError.value = t('knowledge.no_files_selected');
+    return;
+  }
+
+  // Local embedding models need the Xenova runtime before upload/embedding starts.
+  if (!(await ensureCurrentEmbeddingRuntimeReady(null))) {
     return;
   }
 
