@@ -143,6 +143,7 @@
           icon
           size="small"
           variant="text"
+          data-testid="new-conversation"
           @click="onNewConversation"
           :title="t('aiChatV2.new_conversation') || 'New conversation'"
         >
@@ -1888,12 +1889,30 @@ const chatIsRunning = computed(
     isStreaming.value || authoritativeRuntimeStatus.value === "running"
 );
 
-const hasAnyActiveStream = computed(() => {
-  for (const state of conversationRuntime.value.values()) {
-    if (state.isStreaming) return true;
+/**
+ * The IPC stream client is single-listener: starting a send in conversation B
+ * while A is still running must abort A's turn and release its renderer
+ * listeners. Main-process `submitMessage` also aborts any prior abort
+ * controller; this keeps conversationRuntime / list badges in sync.
+ */
+const preemptOtherConversationStreams = (
+  nextConversationId: string
+): void => {
+  let hadOtherActiveStream = false;
+  for (const [conversationId, state] of conversationRuntime.value.entries()) {
+    if (conversationId === nextConversationId || !state.isStreaming) {
+      continue;
+    }
+    hadOtherActiveStream = true;
+    markConversationRuntimeStopped(conversationId);
+    setAuthoritativeRuntimeStatus(conversationId, "idle");
   }
-  return false;
-});
+  if (!hadOtherActiveStream) {
+    return;
+  }
+  clearChatV2StreamListeners();
+  stopChatV2Stream();
+};
 
 /**
  * A conversation shows a running indicator if it owns a live stream, even when
@@ -3187,10 +3206,11 @@ const onSend = async (
     loopCmd.type === "scheduled_loop_control" ||
     loopCmd.type === "invalid_loop";
 
-  if (
-    !loopBypassesStreamGuard &&
-    (chatIsRunning.value || hasAnyActiveStream.value)
-  ) {
+  // Block only when the *active* conversation is already streaming. A
+  // background conversation may still be running after New Chat / switch;
+  // allowing send here is required so the composer-cleared draft is not
+  // silently dropped. preemptOtherConversationStreams() aborts that turn.
+  if (!loopBypassesStreamGuard && chatIsRunning.value) {
     return;
   }
   streamError.value = null;
@@ -3348,6 +3368,7 @@ const onSend = async (
   // Resolve text: if only images with no text, use default prompt
   const displayText = text || defaultPromptForAttachments(files ?? []);
   const streamConversationId = ensureWorkspaceConversationId();
+  preemptOtherConversationStreams(streamConversationId);
   const isCurrentStreamView = (): boolean =>
     activeConversationId.value === streamConversationId;
   const isCurrentStreamChunk = (chunk: ChatV2StreamChunk): boolean =>
