@@ -35,6 +35,8 @@
     "package": "electron-forge package",
     "package:ci": "npm run rebuild-native && node scripts/run-packaging-with-hang-guard.js",
     "verify-packaged-childprocess": "node scripts/verify-packaged-childprocess.js",
+    "verify-forge-asar-unpack": "node scripts/verify-forge-asar-unpack.js",
+    "verify-packaged-app": "node scripts/verify-forge-asar-unpack.js && node scripts/verify-packaged-childprocess.js",
     "prestart": "yarn rebuild-native",
     "start": "electron-forge start",
     "publish": "electron-forge publish",

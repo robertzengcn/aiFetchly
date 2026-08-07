@@ -3224,9 +3224,13 @@ const onSend = async (
     // Declared outside try so the catch path can still append a local exchange.
     const goalConversationId = ensureWorkspaceConversationId();
     try {
+      // /goal is create-or-replace. Always pass replace so a retry after a
+      // failed stream (e.g. "AI server is busy") does not hit the module's
+      // "active goal already exists" guard from the leftover draft.
       const created = await createGoal({
         conversationId: goalConversationId,
         objective: cmd.objective,
+        replace: true,
       });
       if (!created) {
         const message =

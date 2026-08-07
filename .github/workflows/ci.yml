@@ -68,6 +68,12 @@ jobs:
       - name: Run main process unit tests
         run: yarn testmain
 
+      - name: Guard forge asar unpack (renderer must stay packed)
+        run: yarn verify-forge-asar-unpack
+
+      - name: Run packaging renderer path unit tests
+        run: yarn vitest --config vite.main.config.mjs --run test/vitest/main/packagedRendererPath.test.ts test/vitest/main/verifyPackagedRenderer.test.ts test/vitest/main/verifyForgeAsarUnpack.test.ts test/vitest/main/ForgePackagingDependencies.test.ts
+
       - name: Run utility code unit tests
         run: yarn vitest --config vite.utilityCode.ci.config.mjs --run
 
@@ -96,7 +102,7 @@ jobs:
       # (run by package:ci) already builds better-sqlite3 for Electron before
       # packaging copies node_modules, so re-rebuilding during "Preparing native
       # dependencies" is redundant work that has been observed to stall the
-      # smoke build. The smoke test only verifies worker files, not native loads.
+      # smoke build. Post-package verify checks workers + renderer HTML layout.
       FORGE_SKIP_NATIVE_REBUILD: "1"
       NODE_OPTIONS: --max-old-space-size=8192
       ELECTRON_FORGE_VITE_CONCURRENT: "1"
@@ -160,6 +166,9 @@ jobs:
           sudo docker image prune --all --force || true
           echo "Disk after cleanup:"; df -h /
 
+      - name: Guard forge asar unpack before packaging
+        run: yarn verify-forge-asar-unpack
+
       - name: Build Linux package for worker smoke test
         timeout-minutes: 30
         # electron-forge's underlying process can hang after packaging fully
@@ -171,5 +180,7 @@ jobs:
         # reason instead of being silently canceled by the step timeout above.
         run: yarn package:ci
 
-      - name: Resolve packaged worker dependencies
-        run: yarn verify-packaged-childprocess
+      - name: Verify packaged workers and renderer HTML layout
+        # Fails if .vite/renderer was asar-unpacked (Windows ERR_FAILED -2 startup)
+        # or if main_window/index.html is missing from the package.
+        run: yarn verify-packaged-app

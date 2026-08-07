@@ -154,7 +154,7 @@ jobs:
             yarn make-win:test
           fi
           # Fail if unpacked workers require asar-only pure-JS packages.
-          node scripts/verify-packaged-childprocess.js
+          yarn verify-packaged-app
 
       - name: Upload Windows installers
         uses: actions/upload-artifact@v4
@@ -361,7 +361,7 @@ jobs:
           else
             yarn make-mac:test
           fi
-          node scripts/verify-packaged-childprocess.js
+          yarn verify-packaged-app
 
       - name: Upload macOS installers
         uses: actions/upload-artifact@v4

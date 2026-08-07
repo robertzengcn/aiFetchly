@@ -314,17 +314,20 @@ const shouldBuildMacDmg = process.env.MAKE_MAC_DMG !== "false";
 
 function resolveProductionAsarConfig() {
   return {
-    // .vite/build holds vec0.* copied by Vite; node_modules holds native deps — both must be real disk.
-    // Phase 9 slim installer: only the database natives (better-sqlite3, sqlite-vec) are unpacked.
-    // The AI inference natives (@xenova/transformers, onnxruntime-*, sharp, sherpa-onnx-*) are no
-    // longer bundled — they ship as downloadable runtimes (PRD FR-16, design §26.7).
+    // .vite/build holds vec0.* + worker bundles — must be real disk (spawn/dlopen).
+    // Do NOT unpack .vite/renderer: Chromium loadFile fails with ERR_FAILED (-2) when
+    // index.html is only on the app.asar.unpacked mirror but loaded via the app.asar
+    // virtual path (Windows packaged startup crash). Keep the renderer inside asar.
+    // Phase 9 slim installer: only the database natives (better-sqlite3, sqlite-vec)
+    // are unpacked besides .vite/build workers. AI inference natives ship as
+    // downloadable runtimes (PRD FR-16, design §26.7).
     //
     // IMPORTANT: @electron/asar matches unpackDir against the *directory* of each file
     // (path.dirname), not the file path. Patterns like "**/dist/childprocess/**" do NOT
     // match the directory "dist/childprocess" itself, so workers that live directly in
     // that folder stay packed. Include both the directory and its descendants.
     unpackDir:
-      "{**/.vite/**,**/dist/childprocess,**/dist/childprocess/**,**/node_modules/better-sqlite3,**/node_modules/better-sqlite3/**,**/node_modules/sqlite-vec,**/node_modules/sqlite-vec/**}",
+      "{**/.vite/build,**/.vite/build/**,**/dist/childprocess,**/dist/childprocess/**,**/node_modules/better-sqlite3,**/node_modules/better-sqlite3/**,**/node_modules/sqlite-vec,**/node_modules/sqlite-vec/**}",
     unpack: "**/vec0.*",
   };
 }

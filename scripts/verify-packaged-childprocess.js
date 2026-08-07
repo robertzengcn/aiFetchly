@@ -25,6 +25,8 @@ const REQUIRED_WORKERS = [
   "websiteContentScraper.js",
   "YellowPagesScraper.js",
 ];
+const RENDERER_HTML_RELATIVE = ".vite/renderer/main_window/index.html";
+
 const NODE_BUILTINS = new Set([
   ...builtinModules,
   ...builtinModules.map((moduleName) => `node:${moduleName}`),
@@ -509,7 +511,73 @@ function verifyRuntimeRequires(resourcesDir) {
   return true;
 }
 
+
+function verifyPackagedRenderer(resourcesDir) {
+  const plainHtml = path.join(resourcesDir, "app", ...RENDERER_HTML_RELATIVE.split("/"));
+  const unpackedHtml = path.join(
+    resourcesDir,
+    "app.asar.unpacked",
+    ...RENDERER_HTML_RELATIVE.split("/")
+  );
+  const asarPath = path.join(resourcesDir, "app.asar");
+
+  // CI smoke packaging (FORGE_DISABLE_ASAR=1) uses resources/app.
+  if (fs.existsSync(path.join(resourcesDir, "app"))) {
+    if (!fs.existsSync(plainHtml)) {
+      console.error(
+        `Missing packaged renderer HTML for unpacked app layout: ${plainHtml}`
+      );
+      return false;
+    }
+    console.log(`Found packaged renderer HTML: ${plainHtml}`);
+    return true;
+  }
+
+  // Real disk presence under app.asar.unpacked means the HTML was asar-unpacked.
+  // Chromium loadFile then fails with ERR_FAILED (-2) on the virtual asar URL.
+  // Check this before reading asar metadata so invalid/partial asar fixtures still
+  // fail closed on the known-bad layout.
+  const onUnpackedDisk = fs.existsSync(unpackedHtml);
+  if (onUnpackedDisk) {
+    console.error(
+      "Packaged renderer HTML must stay inside app.asar (not app.asar.unpacked). " +
+        "Unpacking .vite/renderer breaks Windows startup (ERR_FAILED -2). " +
+        `Found unpacked file: ${unpackedHtml}`
+    );
+    return false;
+  }
+
+  let inAsar = false;
+  try {
+    inAsar = listAsarEntries(asarPath).has(RENDERER_HTML_RELATIVE);
+  } catch (error) {
+    console.error(
+      `Failed to read app.asar while verifying renderer HTML: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
+    return false;
+  }
+
+  if (!inAsar) {
+    console.error(
+      `Missing packaged renderer HTML in app.asar: ${RENDERER_HTML_RELATIVE} ` +
+        `(resources: ${resourcesDir})`
+    );
+    return false;
+  }
+
+  console.log(
+    `Found packaged renderer HTML in asar: ${path.join(
+      asarPath,
+      ...RENDERER_HTML_RELATIVE.split("/")
+    )}`
+  );
+  return true;
+}
+
 function run() {
+
   const resourcesDirs = findResourcesDirs();
   if (resourcesDirs.length === 0) {
     console.error(`No packaged resources directories found under ${OUT_DIR}`);
@@ -542,6 +610,9 @@ function run() {
     if (!verifyRuntimeRequires(resourcesDir)) {
       failed = true;
     }
+    if (!verifyPackagedRenderer(resourcesDir)) {
+      failed = true;
+    }
   }
 
   return failed ? 1 : 0;
@@ -553,12 +624,14 @@ if (require.main === module) {
 
 module.exports = {
   REQUIRED_WORKERS,
+  RENDERER_HTML_RELATIVE,
   UNPACKED_WORKER_ASAR_REQUIRE_ALLOWLIST,
   extractRuntimePackageRequires,
   getRuntimePackageName,
   hasUnpackedNodeModule,
   isAllowedAsarRequireForUnpackedWorker,
   isUnpackedBundleLocation,
+  verifyPackagedRenderer,
   verifyRuntimeRequires,
   run,
 };

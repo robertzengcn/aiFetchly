@@ -291,17 +291,19 @@ export class SearchScrape implements searchEngineImpl {
                         httpOnly: cookie.httpOnly ?? true,
                         expires: cookie.expirationDate ?? 0
                     };
-                    console.log("prepare to set cookies of",mappedCookie)
-                    //console.log("Setting cookie in browser context:", mappedCookie);
+                    // Never log cookie values — stdout is captured into the
+                    // search runtime log and would leak session credentials.
                     await this.page.setCookie(mappedCookie)
                     // Set cookie in browser context
                     //await browserContext.setCookie(mappedCookie);
                     
-                    // Also set cookie in page context
-                    console.log("Setting cookie in page context:", mappedCookie);
                     //await pageContext.browser().setCookie(mappedCookie);
                 }
             }
+            console.log(
+                `Applied ${data.data.cookies.length} account cookie(s)` +
+                    (this.accountId ? ` for account ${this.accountId}` : "")
+            );
             
             // Verify cookies were set in both contexts
             //const browserCookies = await browserContext.cookies();

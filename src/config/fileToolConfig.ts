@@ -49,7 +49,9 @@ export const DEFAULT_DENY_LIST: readonly DenyListConfig[] = [
 
 export const DEFAULT_IGNORE_PATTERNS: readonly string[] = [
   "node_modules/**",
+  "**/node_modules/**",
   ".git/**",
+  "**/.git/**",
   "dist/**",
   "build/**",
   "out/**",
@@ -57,6 +59,18 @@ export const DEFAULT_IGNORE_PATTERNS: readonly string[] = [
   "coverage/**",
   "__pycache__/**",
   ".DS_Store",
+  // Heavy / low-signal trees often present when the search root is $HOME
+  // (legacy fallback when no workspace is approved for the conversation).
+  "Library/**",
+  ".Trash/**",
+  ".cache/**",
+  ".npm/**",
+  ".yarn/**",
+  ".pnpm-store/**",
+  "**/AppData/**",
+  ".local/share/**",
+  "**/vendor/**",
+  "**/target/**",
 ];
 
 // ---------------------------------------------------------------------------
@@ -68,6 +82,9 @@ export const FILE_TOOL_SIZE_LIMITS: FileToolSizeLimits = {
   maxWriteBytes: 5_000_000, // 5 MB
   maxGrepOutputBytes: 500_000, // 500 KB
   defaultHeadLimit: 100,
+  // Cap discovery walks so permission-resume never blocks the main process
+  // for minutes on broad recursive patterns under $HOME.
+  maxGlobScanEntries: 5_000,
 };
 
 // ---------------------------------------------------------------------------
