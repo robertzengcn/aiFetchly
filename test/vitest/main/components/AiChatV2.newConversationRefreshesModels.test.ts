@@ -92,7 +92,21 @@ function mountChat() {
           template: '<div><slot name="prepend" /></div>',
         },
         AiChatV2ModeSelector: true,
-        AiChatV2ModelSelector: true,
+        // Reflect modelValue to the DOM (data-model) so the test can read the
+        // current selection, and emit update:modelValue so it can be set —
+        // this is what the real selector does under v-model.
+        AiChatV2ModelSelector: {
+          props: ["modelValue", "items", "defaultModel", "disabled", "loading"],
+          emits: ["update:modelValue"],
+          template: `
+            <div data-testid="model-selector" :data-model="modelValue ?? ''">
+              <button
+                data-testid="model-selector-set"
+                @click="$emit('update:modelValue', 'gpt-test')"
+              >set</button>
+            </div>
+          `,
+        },
         AiChatV2ToolApprovalModeSelector: true,
         AiChatV2PlanStatusBadge: true,
         AiChatV2ContextBadge: true,
@@ -147,5 +161,29 @@ describe("AiChatV2 new-conversation model refresh", () => {
     // Clicking "New conversation" must refresh the model list so newly-added
     // server-side models appear without an app restart.
     expect(getOpenAIChatModelsMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves the user's selected model across the new-conversation refresh", async () => {
+    const wrapper = mountChat();
+    await flushPromises();
+
+    // User picks a concrete model.
+    await wrapper.find('[data-testid="model-selector-set"]').trigger("click");
+    await flushPromises();
+    expect(
+      wrapper.find('[data-testid="model-selector"]').attributes("data-model")
+    ).toBe("gpt-test");
+
+    getOpenAIChatModelsMock.mockClear();
+
+    // New conversation refreshes the model list but must NOT reset the
+    // selection (loadModelContextWindows only re-resolves when undefined).
+    await wrapper.find('[data-testid="new-conversation"]').trigger("click");
+    await flushPromises();
+
+    expect(getOpenAIChatModelsMock).toHaveBeenCalledTimes(1);
+    expect(
+      wrapper.find('[data-testid="model-selector"]').attributes("data-model")
+    ).toBe("gpt-test");
   });
 });
