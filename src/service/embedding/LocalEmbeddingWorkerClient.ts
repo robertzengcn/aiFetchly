@@ -106,6 +106,26 @@ export class LocalEmbeddingWorkerClient {
     this.cachedWorkerPath = null;
   }
 
+  /**
+   * True when the downloadable embedding-xenova runtime worker path resolves.
+   * When no resolver is wired (tests / unusual setups), returns true so the
+   * bundled fallback path can still be attempted.
+   */
+  public async hasInstalledRuntimeWorker(): Promise<boolean> {
+    if (this.workerPathOverride) {
+      return true;
+    }
+    if (!this.workerPathResolver) {
+      return true;
+    }
+    try {
+      const runtimeWorkerPath = await this.workerPathResolver();
+      return Boolean(runtimeWorkerPath && fs.existsSync(runtimeWorkerPath));
+    } catch {
+      return false;
+    }
+  }
+
   public static getInstance(): LocalEmbeddingWorkerClient {
     if (LocalEmbeddingWorkerClient.instance === null) {
       LocalEmbeddingWorkerClient.instance = new LocalEmbeddingWorkerClient();

@@ -189,7 +189,8 @@ export type KnowledgeLibraryToolErrorCode =
   | "EMPTY_CONTENT"
   | "IMPORT_FAILED"
   | "DELETE_FAILED"
-  | "LIST_FAILED";
+  | "LIST_FAILED"
+  | "LOCAL_EMBEDDING_RUNTIME_MISSING";
 
 /**
  * Failure payload shared by every knowledge library tool.

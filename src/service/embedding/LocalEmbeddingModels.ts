@@ -59,3 +59,31 @@ export function getLocalEmbeddingModels(): EmbeddingModelInfo[] {
     },
   ];
 }
+
+/**
+ * Normalize legacy local model IDs (bare underlying/display names) to the
+ * canonical namespaced ID. Safe for renderer and main process.
+ */
+export function normalizeLocalEmbeddingModelId(modelId: string): string {
+  const normalized = modelId.trim();
+  if (
+    normalized === LOCAL_XENOVA_ALL_MINILM_UNDERLYING_MODEL ||
+    normalized === LOCAL_XENOVA_ALL_MINILM_DISPLAY_NAME
+  ) {
+    return LOCAL_XENOVA_ALL_MINILM_MODEL_ID;
+  }
+  return normalized;
+}
+
+/** True when the model ID routes to the local Xenova provider. */
+export function isLocalXenovaModelId(
+  modelId: string | null | undefined
+): boolean {
+  if (typeof modelId !== "string" || modelId.length === 0) {
+    return false;
+  }
+  return normalizeLocalEmbeddingModelId(modelId).startsWith(
+    LOCAL_XENOVA_PROVIDER_PREFIX
+  );
+}
+

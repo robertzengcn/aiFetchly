@@ -22,6 +22,8 @@ import { Token } from "@/modules/token";
 import { USER_AI_ENABLED } from "@/config/usersetting";
 import { DocumentService } from "@/service/DocumentService";
 import { RagSearchModule } from "@/modules/RagSearchModule";
+import { isLocalXenovaModel } from "@/service/embedding/EmbeddingModelId";
+import { LocalEmbeddingWorkerClient } from "@/service/embedding/LocalEmbeddingWorkerClient";
 import { RAGDocumentModule } from "@/modules/RAGDocumentModule";
 import {
   WebsiteKnowledgeImportService,
@@ -519,6 +521,11 @@ export class KnowledgeLibraryAiTools {
       );
     }
 
+    const localRuntimeError = await this.ensureLocalEmbeddingRuntimeForImport();
+    if (localRuntimeError) {
+      return localRuntimeError;
+    }
+
     if (input.duplicatePolicy === "replace") {
       return toolError(
         "INVALID_INPUT",
@@ -752,6 +759,37 @@ export class KnowledgeLibraryAiTools {
       summary: result.summary,
     });
     return result;
+  }
+
+
+  /**
+   * Fail fast when the default embedding model is local-xenova but the
+   * downloadable embedding runtime is not installed. Avoids scraping pages
+   * only to fail during upload/embed.
+   */
+  private async ensureLocalEmbeddingRuntimeForImport(): Promise<KnowledgeLibraryToolError | null> {
+    try {
+      const defaultModel = await this.getRagSearchModule().getDefaultEmbeddingModel();
+      if (!defaultModel || !isLocalXenovaModel(defaultModel.modelName)) {
+        return null;
+      }
+      const ready =
+        await LocalEmbeddingWorkerClient.getInstance().hasInstalledRuntimeWorker();
+      if (ready) {
+        return null;
+      }
+      return toolError(
+        "LOCAL_EMBEDDING_RUNTIME_MISSING",
+        "Local embedding runtime (@xenova/transformers) is not installed. Install the local-AI embedding runtime via the in-app runtime manager and retry."
+      );
+    } catch (error) {
+      // Status probe failure should not block import; embed path still errors clearly.
+      console.warn(
+        "[KnowledgeLibraryAiTools] Local embedding runtime preflight failed:",
+        error
+      );
+      return null;
+    }
   }
 
   /**

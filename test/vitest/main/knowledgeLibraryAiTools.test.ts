@@ -45,7 +45,17 @@ vi.mock("@/modules/SystemSettingGroupModule", () => ({
   }),
 }));
 
+
+vi.mock("@/service/embedding/LocalEmbeddingWorkerClient", () => ({
+  LocalEmbeddingWorkerClient: {
+    getInstance: vi.fn(() => ({
+      hasInstalledRuntimeWorker: vi.fn().mockResolvedValue(true),
+    })),
+  },
+}));
+
 import { KnowledgeLibraryAiTools } from "@/service/KnowledgeLibraryAiTools";
+import { LocalEmbeddingWorkerClient } from "@/service/embedding/LocalEmbeddingWorkerClient";
 import type { KnowledgeLibraryAiToolsDeps } from "@/service/KnowledgeLibraryAiTools";
 import type { WebsiteKnowledgeImportService } from "@/service/WebsiteKnowledgeImportService";
 import type { WebsiteImportSource } from "@/service/WebsiteKnowledgeImportService";
@@ -95,6 +105,7 @@ interface FakeDeps {
   ragSearchModule: {
     initializeRagModule: ReturnType<typeof vi.fn>;
     uploadDocument: ReturnType<typeof vi.fn>;
+    getDefaultEmbeddingModel: ReturnType<typeof vi.fn>;
   };
   websiteImportService: {
     prepareImportSources: ReturnType<typeof vi.fn>;
@@ -116,6 +127,7 @@ function buildTools(opts: { aiEnabled?: boolean } = {}): FakeDeps {
   const ragSearchModule = {
     initializeRagModule: vi.fn().mockResolvedValue(undefined),
     uploadDocument: vi.fn(),
+    getDefaultEmbeddingModel: vi.fn().mockResolvedValue(null),
   };
   const websiteImportService = {
     prepareImportSources: vi.fn(),
@@ -425,6 +437,27 @@ describe("KnowledgeLibraryAiTools.importWebsite", () => {
     expect(result.success).toBe(false);
     if (result.success) return;
     expect(result.code).toBe("AI_DISABLED");
+    expect(websiteImportService.prepareImportSources).not.toHaveBeenCalled();
+  });
+
+  test("returns LOCAL_EMBEDDING_RUNTIME_MISSING before scraping when local runtime absent", async () => {
+    const { deps, websiteImportService, ragSearchModule } = buildTools();
+    ragSearchModule.getDefaultEmbeddingModel.mockResolvedValue({
+      modelName: "local-xenova:Xenova/all-MiniLM-L6-v2",
+      dimension: 384,
+    });
+    vi.mocked(LocalEmbeddingWorkerClient.getInstance).mockReturnValue({
+      hasInstalledRuntimeWorker: vi.fn().mockResolvedValue(false),
+    } as never);
+
+    const tools = new KnowledgeLibraryAiTools(deps);
+    const result = await tools.importWebsite(
+      { mode: "single_page", url: "https://example.com" },
+      baseContext
+    );
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.code).toBe("LOCAL_EMBEDDING_RUNTIME_MISSING");
     expect(websiteImportService.prepareImportSources).not.toHaveBeenCalled();
   });
 

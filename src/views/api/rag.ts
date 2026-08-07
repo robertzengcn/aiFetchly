@@ -139,8 +139,12 @@ export async function initializeRAG(config: {
 /**
  * Get RAG statistics
  */
-export async function getRAGStats(): Promise<CommonMessage<RagStatsResponse>> {
-  return await windowInvoke(RAG_GET_STATS, {});
+/**
+ * Returns RAG stats plus the current default embedding model name.
+ * `windowInvoke` unwraps `{ status, data }` so callers receive RagStatsResponse directly.
+ */
+export async function getRAGStats(): Promise<RagStatsResponse> {
+  return (await windowInvoke(RAG_GET_STATS, {})) as RagStatsResponse;
 }
 
 /**

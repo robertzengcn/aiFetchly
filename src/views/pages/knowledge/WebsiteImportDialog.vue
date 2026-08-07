@@ -410,6 +410,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: "update:modelValue", value: boolean): void;
   (e: "completed", outcome: ImportKnowledgeWebsiteResult): void;
+  (e: "local-runtime-required"): void;
 }>();
 
 const { t } = useI18n();
@@ -612,10 +613,19 @@ async function submit(): Promise<void> {
     result.value = outcome;
     if (outcome.success) {
       emit("completed", outcome);
+    } else if (
+      outcome.code === "LOCAL_EMBEDDING_RUNTIME_MISSING" ||
+      /local embedding runtime/i.test(outcome.error)
+    ) {
+      emit("local-runtime-required");
     }
   } catch (err) {
     // windowInvoke throws on an IPC-level failure (e.g. boundary validation).
-    formError.value = err instanceof Error ? err.message : String(err);
+    const message = err instanceof Error ? err.message : String(err);
+    formError.value = message;
+    if (/local embedding runtime/i.test(message)) {
+      emit("local-runtime-required");
+    }
   } finally {
     importing.value = false;
     stopProgressListener();
