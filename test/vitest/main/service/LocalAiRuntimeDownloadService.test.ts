@@ -106,6 +106,29 @@ describe("LocalAiRuntimeDownloadService", () => {
     );
   });
 
+
+  test("creates missing parent directory before writing the partial archive", async () => {
+    const payload = Buffer.from("nested download destination");
+    const nestedDest = path.join(tmpRoot, ".downloads", "op.zip.part");
+    expect(fs.existsSync(path.dirname(nestedDest))).toBe(false);
+    await withServer(
+      (_req, res) => res.end(payload),
+      async (base) => {
+        const e = entry(`${base}/a.zip`, payload.length, sha256hex(payload));
+        const result = await svc().download({
+          operationId: "op",
+          entry: e,
+          destinationPath: nestedDest,
+          signal: new AbortController().signal,
+          onProgress,
+        });
+        expect(result.downloadedBytes).toBe(payload.length);
+        expect(fs.existsSync(nestedDest)).toBe(true);
+        expect(fs.readFileSync(nestedDest)).toEqual(payload);
+      }
+    );
+  });
+
   test("rejects checksum mismatch and removes the partial file", async () => {
     const payload = Buffer.from("tampered content");
     await withServer(
