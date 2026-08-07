@@ -111,6 +111,55 @@ export interface BuildPackagedWorkerEnvOptions {
 }
 
 /**
+ * Best-effort Electron app defaults for worker env.
+ *
+ * Utility/taskCode workers construct Token → ElectronStoreService. That path
+ * needs ELECTRON_APP_NAME / ELECTRON_USER_DATA_PATH when ipcMain is absent
+ * (utilityProcess), otherwise electron-store/conf cannot locate the main
+ * process store. Call sites may still override via extraEnv.
+ */
+function tryGetElectronWorkerEnvDefaults(): {
+  ELECTRON_APP_NAME?: string;
+  ELECTRON_USER_DATA_PATH?: string;
+} {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { app } = require("electron") as {
+      app?: {
+        getName?: () => string;
+        getPath?: (name: string) => string;
+      };
+    };
+    if (!app) {
+      return {};
+    }
+    const defaults: {
+      ELECTRON_APP_NAME?: string;
+      ELECTRON_USER_DATA_PATH?: string;
+    } = {};
+    if (typeof app.getName === "function") {
+      const name = app.getName();
+      if (typeof name === "string" && name.trim().length > 0) {
+        defaults.ELECTRON_APP_NAME = name;
+      }
+    }
+    if (typeof app.getPath === "function") {
+      try {
+        const userData = app.getPath("userData");
+        if (typeof userData === "string" && userData.trim().length > 0) {
+          defaults.ELECTRON_USER_DATA_PATH = userData;
+        }
+      } catch {
+        // Some process types expose app without a working getPath.
+      }
+    }
+    return defaults;
+  } catch {
+    return {};
+  }
+}
+
+/**
  * Canonical env for every packaged child/utility worker spawn/fork.
  *
  * Unpacked workers under app.asar.unpacked cannot resolve bare requires for
@@ -118,6 +167,10 @@ export interface BuildPackagedWorkerEnvOptions {
  * MODULE_NOT_FOUND for puppeteer). Always set NODE_PATH via
  * getPackagedWorkerNodePath. Call sites must use this helper — see
  * PackagedWorkerEnvGuard.test.ts.
+ *
+ * Also fills ELECTRON_APP_NAME / ELECTRON_USER_DATA_PATH from electron.app
+ * when missing so Token/electron-store works in utilityProcess workers
+ * (e.g. taskCode search scraper + AiSupportBridge).
  */
 export function buildPackagedWorkerEnv(
   options: BuildPackagedWorkerEnvOptions = {}
@@ -144,6 +197,21 @@ export function buildPackagedWorkerEnv(
 
   if (options.runAsNode) {
     env.ELECTRON_RUN_AS_NODE = "1";
+  }
+
+  const electronDefaults = tryGetElectronWorkerEnvDefaults();
+  if (
+    (!env.ELECTRON_APP_NAME || env.ELECTRON_APP_NAME.trim() === "") &&
+    electronDefaults.ELECTRON_APP_NAME
+  ) {
+    env.ELECTRON_APP_NAME = electronDefaults.ELECTRON_APP_NAME;
+  }
+  if (
+    (!env.ELECTRON_USER_DATA_PATH ||
+      env.ELECTRON_USER_DATA_PATH.trim() === "") &&
+    electronDefaults.ELECTRON_USER_DATA_PATH
+  ) {
+    env.ELECTRON_USER_DATA_PATH = electronDefaults.ELECTRON_USER_DATA_PATH;
   }
 
   return env;
