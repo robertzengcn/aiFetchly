@@ -3,7 +3,8 @@
  *
  * Covers file_read, glob_files, and grep_files (US1 read tools).
  */
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { FilePathGuard } from "@/service/FilePathGuard";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
@@ -211,8 +212,50 @@ describe("FileToolService", () => {
       expect(result.success).toBe(true);
       expect((result.matches as string[]).length).toBe(5);
       expect(result.truncated).toBe(true);
+      // Early-stop collects at most head_limit+1 safe matches (not all 80).
+      expect(result.total).toBeLessThanOrEqual(6);
       // Should finish quickly via stopAfterSafeMatches, not full-tree sync walk.
       expect(elapsedMs).toBeLessThan(2000);
+    });
+
+    it("does not path-validate every file after Always Allow style broad glob", async () => {
+      // Regression: permission resume used to fg.sync + validate every hit on
+      // the main process (often under $HOME), freezing the UI.
+      for (let i = 0; i < 40; i++) {
+        fs.writeFileSync(path.join(tmpDir, `wide${i}.ts`), "");
+      }
+
+      const validateSpy = vi.spyOn(FilePathGuard.prototype, "validate");
+      try {
+        const result = await service.execute("glob_files", {
+          pattern: "**/*.ts",
+          head_limit: 4,
+        });
+
+        expect(result.success).toBe(true);
+        expect(result.truncated).toBe(true);
+        expect((result.matches as string[]).length).toBe(4);
+        expect(result.total).toBeLessThanOrEqual(5);
+        // One validate per streamed match; early-stop at head_limit+1.
+        expect(validateSpy).toHaveBeenCalledTimes(5);
+      } finally {
+        validateSpy.mockRestore();
+      }
+    });
+
+    it("returns exact totals when results fit within head_limit", async () => {
+      fs.writeFileSync(path.join(tmpDir, "only-a.txt"), "");
+      fs.writeFileSync(path.join(tmpDir, "only-b.txt"), "");
+
+      const result = await service.execute("glob_files", {
+        pattern: "**/*.txt",
+        head_limit: 10,
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.truncated).toBe(false);
+      expect(result.total).toBe(2);
+      expect(result.matches).toHaveLength(2);
     });
 
     it("supports cwd option", async () => {
