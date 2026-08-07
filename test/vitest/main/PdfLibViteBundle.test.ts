@@ -27,7 +27,10 @@ describe("pdf-lib Vite bundle packaging regression", () => {
     const viteMain = fs.readFileSync(viteMainConfigPath, "utf-8");
     const forge = fs.readFileSync(forgeConfigPath, "utf-8");
 
-    expect(viteMain).toMatch(/external\s*:\s*\[[\s\S]*['"]pdf-lib['"]/);
+    expect(viteMain).toMatch(
+      /const MAIN_PROCESS_EXTERNALS[\s\S]*['"]pdf-lib['"]/
+    );
+    expect(viteMain).toMatch(/external:\s*MAIN_PROCESS_EXTERNALS/);
     expect(viteMain).toContain("node_modules/tslib/tslib.js");
     expect(forge).toMatch(
       /EXTERNAL_DEPENDENCIES\s*=\s*\[[\s\S]*['"]pdf-lib['"]/

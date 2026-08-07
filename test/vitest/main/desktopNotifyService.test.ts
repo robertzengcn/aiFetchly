@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BrowserWindow } from "electron";
 import {
   DesktopNotifyService,
+  type DesktopNotifyDeps,
   coalescePayloads,
   computeBottomRightBounds,
   isMainWindowQuiet,
@@ -102,30 +103,46 @@ describe("DesktopNotifyService helpers", () => {
 describe("DesktopNotifyService", () => {
   let main: BrowserWindow;
   let floatWin: BrowserWindow;
-  let createWindow: ReturnType<typeof vi.fn>;
-  let isSettingEnabled: ReturnType<typeof vi.fn>;
-  let sendOpenConversation: ReturnType<typeof vi.fn>;
+  let createWindow: ReturnType<
+    typeof vi.fn<[Electron.BrowserWindowConstructorOptions], BrowserWindow>
+  >;
+  let isSettingEnabled: ReturnType<typeof vi.fn<[], Promise<boolean>>>;
+  let sendOpenConversation: ReturnType<
+    typeof vi.fn<[BrowserWindow, string | undefined], void>
+  >;
   let now: number;
   let service: DesktopNotifyService;
+
+  function buildDeps(
+    overrides: Partial<DesktopNotifyDeps> = {}
+  ): DesktopNotifyDeps {
+    return {
+      getMainWindow: () => main,
+      isSettingEnabled,
+      createWindow,
+      getDisplayWorkArea: () => ({ x: 0, y: 0, width: 1280, height: 720 }),
+      now: () => now,
+      sendOpenConversation,
+      ...overrides,
+    };
+  }
 
   beforeEach(() => {
     DesktopNotifyService._resetForTesting();
     main = createMockWindow({ isFocused: false });
     floatWin = createMockWindow();
-    createWindow = vi.fn(() => floatWin);
-    isSettingEnabled = vi.fn(async () => true);
-    sendOpenConversation = vi.fn();
+    createWindow = vi.fn(
+      (_options: Electron.BrowserWindowConstructorOptions): BrowserWindow =>
+        floatWin
+    );
+    isSettingEnabled = vi.fn(async (): Promise<boolean> => true);
+    sendOpenConversation = vi.fn(
+      (_main: BrowserWindow, _conversationId: string | undefined): void => {
+        // mock
+      }
+    );
     now = 1_000_000;
-    service = new DesktopNotifyService({
-      getMainWindow: () => main,
-      isSettingEnabled,
-      createWindow: createWindow as DesktopNotifyService["deps"] extends never
-        ? never
-        : typeof createWindow,
-      getDisplayWorkArea: () => ({ x: 0, y: 0, width: 1280, height: 720 }),
-      now: () => now,
-      sendOpenConversation,
-    });
+    service = new DesktopNotifyService(buildDeps());
   });
 
   afterEach(() => {
@@ -147,14 +164,7 @@ describe("DesktopNotifyService", () => {
 
   it("does not show when main window is focused", async () => {
     main = createMockWindow({ isFocused: true });
-    service = new DesktopNotifyService({
-      getMainWindow: () => main,
-      isSettingEnabled,
-      createWindow: createWindow as never,
-      getDisplayWorkArea: () => ({ x: 0, y: 0, width: 1280, height: 720 }),
-      now: () => now,
-      sendOpenConversation,
-    });
+    service = new DesktopNotifyService(buildDeps());
     const shown = await service.show({
       type: "turn_complete",
       title: "AI reply ready",
@@ -174,12 +184,7 @@ describe("DesktopNotifyService", () => {
     });
     expect(shown).toBe(true);
     expect(createWindow).toHaveBeenCalledTimes(1);
-    const options = createWindow.mock.calls[0][0] as {
-      x: number;
-      y: number;
-      width: number;
-      height: number;
-    };
+    const options = createWindow.mock.calls[0][0];
     expect(options).toMatchObject({
       x: 1280 - 320 - 16,
       y: 720 - 96 - 16,

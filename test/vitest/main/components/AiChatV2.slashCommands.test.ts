@@ -229,10 +229,12 @@ describe("AiChatV2 slash command dispatch", () => {
     await wrapper.find('[data-testid="send-goal"]').trigger("click");
     await flushPromises();
 
-    // The goal is created with the user's objective.
+    // The goal is created with the user's objective. replace:true so a retry
+    // after a failed first stream (busy server, etc.) supersedes the leftover draft.
     expect(createGoal).toHaveBeenCalledWith({
       conversationId: expect.stringMatching(/^v2-/),
       objective: "Build a Facebook campaign scraper and verify it works",
+      replace: true,
     });
     // The generic slash dispatcher must NOT intercept /goal — that would show
     // the usage text and swallow the plan prompt.

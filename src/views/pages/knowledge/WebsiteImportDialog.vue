@@ -399,7 +399,14 @@ import type {
 type WebsiteMode = "single_page" | "url_list" | "site_crawl";
 type FormText = string | null;
 
-const props = defineProps<{ modelValue: boolean }>();
+const props = defineProps<{
+  modelValue: boolean;
+  /**
+   * Optional preflight gate (e.g. local embedding runtime ready).
+   * Return false to abort import without calling the backend.
+   */
+  beforeImport?: () => Promise<boolean>;
+}>();
 const emit = defineEmits<{
   (e: "update:modelValue", value: boolean): void;
   (e: "completed", outcome: ImportKnowledgeWebsiteResult): void;
@@ -565,6 +572,15 @@ async function submit(): Promise<void> {
       max: WEBSITE_IMPORT_LIMITS.maxUrls,
     });
     return;
+  }
+
+  // Block import when the current local embedding runtime is missing.
+  // Parent shows the install dialog; user can retry after install.
+  if (props.beforeImport) {
+    const ready = await props.beforeImport();
+    if (!ready) {
+      return;
+    }
   }
 
   const options: WebsiteImportOptions = {

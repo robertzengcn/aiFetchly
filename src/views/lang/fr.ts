@@ -1308,6 +1308,36 @@ export default {
     form_not_valid: "form is not valid",
     save_success: "Enregistrement réussi, l’ID du compte d’outil est",
     save_fail: "Save fail",
+    session_status_available: "Session prête",
+    session_status_missing: "Aucune session",
+    session_status_invalid: "Session invalide — reconnectez-vous",
+    session_status_migration_pending: "Mise à niveau de la session",
+    import: {
+      button: "Importer depuis le profil du navigateur",
+      title: "Importer depuis le profil du navigateur",
+      subtitle:
+        "Lire uniquement les cookies approuvés pour cette plateforme depuis votre profil de navigateur.",
+      target: "Plateforme du compte cible",
+      approved_domains: "Domaines de cookies approuvés",
+      instructions:
+        "Ouvrez l'extension AiFetchly dans le profil Chrome, Edge ou Brave depuis lequel vous souhaitez importer, puis approuvez la plateforme. Seuls les cookies approuvés ci-dessous sont lus, une fois.",
+      start: "Démarrer l'association",
+      cancel: "Annuler",
+      close: "Fermer",
+      reason_feature_disabled:
+        "L'importation depuis le profil du navigateur n'est pas activée dans cette version.",
+      reason_platform_unsupported:
+        "Cette plateforme ne prend pas encore en charge l'importation depuis le profil du navigateur.",
+      reason_unavailable:
+        "L'importation depuis le profil du navigateur n'est pas disponible pour ce compte.",
+      result_success:
+        "{count} cookie(s) approuvé(s) importé(s). Veuillez vérifier la session.",
+      result_no_cookies: "Aucun cookie approuvé trouvé dans le profil associé.",
+      result_expired:
+        "La demande d'association a expiré. Veuillez recommencer.",
+      result_failed:
+        "Échec de l'importation. Réessayez ou connectez-vous manuellement.",
+    },
   },
   video_download_list: {},
   system_settings: {
@@ -2085,7 +2115,7 @@ export default {
     show_full_diff: "Afficher le diff complet ({count} lignes)",
     collapse_diff: "Réduire le diff",
     open_file_tooltip: "Ouvrir le fichier",
-    open_with_tooltip: "Ouvrir avec…",
+    open_with_tooltip: "Ouvrir le fichier",
   },
   agentWorkflow: {
     status_queued: "En file d'attente",
@@ -2295,7 +2325,7 @@ export default {
       statusStopped: "arrêtée",
       toolApprovalTitle: "Approuver les outils sans surveillance",
       toolApprovalIntro:
-        "Les boucles planifiées s'exécutent sans surveillance. Les outils en lecture seule sont auto-approuvés lorsque les outils non supervisés sont activés. Écriture/e-mail nécessitent une confirmation explicite ci-dessous. Shell, sous-agents et marquage traité restent bloqués.",
+        "Les boucles planifiées s'exécutent sans surveillance. Choisissez les outils intégrés et les capacités étendues (compétences importées, MCP, sous-agents) ci-dessous. Shell et marquage traité restent bloqués.",
       toolApprovalCommand: "Commande",
       noReadOnlyTools: "Aucun outil en lecture seule disponible.",
       allowedTools: "Outils en lecture seule autorisés",
@@ -2305,7 +2335,11 @@ export default {
       autoApproveWarning:
         "Ces outils s'exécuteront automatiquement à chaque occurrence tant que la boucle est active.",
       createLoop: "Planifier la boucle",
-      enableTools: "Autoriser les outils à s'exécuter sans surveillance",
+      enableTools: "Autoriser les outils intégrés sans surveillance",
+      extendedCapabilities: "Capacités étendues",
+      allowSkills: "Autoriser les compétences importées",
+      allowMcp: "Autoriser les outils MCP",
+      allowSubagents: "Autoriser les sous-agents",
       readOnlyAutoApproved: "Les outils en lecture seule sont auto-approuvés",
       automationTools: "Outils d'automatisation",
       automationToolsHint: "Optionnel — sélectionner des vérifications réseau",
@@ -2466,6 +2500,7 @@ export default {
       "Impossible de reprendre l'outil après l'autorisation.",
     permission_resume_no_tool_id:
       "Informations d'appel d'outil manquantes ; impossible de continuer.",
+    auth_expired: "Votre session a expiré. Veuillez vous reconnecter.",
     quota_exhausted:
       "Les jetons IA inclus dans votre abonnement sont épuisés. Veuillez recharger votre compte pour continuer à utiliser les fonctions IA.",
     empty_response_error:

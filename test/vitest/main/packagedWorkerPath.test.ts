@@ -1,6 +1,7 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  buildPackagedWorkerEnv,
   getPackagedWorkerNodePath,
   getPackagedWorkerPathCandidates,
   mirrorAppAsarUnpackedPath,
@@ -141,5 +142,75 @@ describe("packaged worker path resolution", () => {
         "/existing/node_modules",
       ].join(path.delimiter)
     );
+  });
+});
+
+describe("buildPackagedWorkerEnv", () => {
+  it("always sets NODE_PATH for packaged resources and clears NODE_OPTIONS", () => {
+    const resourcesPath = path.join("/opt", "AiFetchly", "resources");
+    const env = buildPackagedWorkerEnv({
+      resourcesPath,
+      existingNodePath: "/existing/node_modules",
+      processEnv: {
+        NODE_OPTIONS: "--inspect",
+        FOO: "bar",
+      },
+      extraEnv: {
+        WORKER_TYPE: "test-worker",
+      },
+    });
+
+    expect(env.FOO).toBe("bar");
+    expect(env.WORKER_TYPE).toBe("test-worker");
+    expect(env.NODE_OPTIONS).toBe("");
+    expect(env.NODE_PATH).toBe(
+      [
+        path.join(resourcesPath, "app.asar", "node_modules"),
+        path.join(resourcesPath, "app.asar.unpacked", "node_modules"),
+        "/existing/node_modules",
+      ].join(path.delimiter)
+    );
+    expect(env.ELECTRON_RUN_AS_NODE).toBeUndefined();
+  });
+
+  it("sets ELECTRON_RUN_AS_NODE when runAsNode is requested", () => {
+    const env = buildPackagedWorkerEnv({
+      resourcesPath: path.join("/opt", "AiFetchly", "resources"),
+      processEnv: {},
+      runAsNode: true,
+    });
+    expect(env.ELECTRON_RUN_AS_NODE).toBe("1");
+  });
+
+  it("does not let extraEnv override NODE_PATH", () => {
+    const resourcesPath = path.join("/opt", "AiFetchly", "resources");
+    const env = buildPackagedWorkerEnv({
+      resourcesPath,
+      processEnv: {},
+      extraEnv: {
+        NODE_PATH: "/evil/override",
+        NODE_OPTIONS: "--inspect",
+      },
+    });
+    expect(env.NODE_PATH).toContain(
+      path.join(resourcesPath, "app.asar", "node_modules")
+    );
+    expect(env.NODE_PATH).not.toBe("/evil/override");
+    expect(env.NODE_OPTIONS).toBe("");
+  });
+
+  it("preserves explicit ELECTRON_APP_NAME and ELECTRON_USER_DATA_PATH from extraEnv", () => {
+    // Search/taskCode workers need these so Token → ElectronStoreService can
+    // open the same store as main when utilityProcess has app but no ipcMain.
+    const env = buildPackagedWorkerEnv({
+      resourcesPath: path.join("/opt", "AiFetchly", "resources"),
+      processEnv: {},
+      extraEnv: {
+        ELECTRON_APP_NAME: "custom-app",
+        ELECTRON_USER_DATA_PATH: "/custom/userData",
+      },
+    });
+    expect(env.ELECTRON_APP_NAME).toBe("custom-app");
+    expect(env.ELECTRON_USER_DATA_PATH).toBe("/custom/userData");
   });
 });

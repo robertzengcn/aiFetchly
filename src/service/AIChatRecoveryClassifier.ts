@@ -179,6 +179,14 @@ export class AIChatRecoveryClassifier {
           originalError: error,
         });
       }
+      const fromAuth = this.classifyAuthText(text);
+      if (fromAuth) {
+        return new AIChatRecoverableError({
+          reason: fromAuth,
+          message: error.message || text,
+          originalError: error,
+        });
+      }
       const fromText = this.classifyNetworkText(text);
       if (fromText) {
         return new AIChatRecoverableError({
@@ -349,6 +357,17 @@ export class AIChatRecoveryClassifier {
   private classifyNameLike(name: string): AIChatRecoveryReason | undefined {
     if (name === "aborterror") return "cancelled";
     if (name === "timeouterror") return "timeout";
+    return undefined;
+  }
+
+  private classifyAuthText(text: string): AIChatRecoveryReason | undefined {
+    if (/\b401\b/.test(text) || /\b403\b/.test(text)) return "auth";
+    if (/authentication failed/.test(text)) return "auth";
+    if (/refresh\s+token/.test(text) && /(invalid|expired|rejected|not found)/.test(text)) {
+      return "auth";
+    }
+    if (/please login again/.test(text)) return "auth";
+    if (/forbidden/.test(text) && /http/.test(text)) return "auth";
     return undefined;
   }
 

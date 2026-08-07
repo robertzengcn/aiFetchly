@@ -40,8 +40,9 @@ const mockToolApprovalState = vi.hoisted(() => ({
   modes: new Map<string, string>(),
 }));
 const mockGetToolApprovalMode = vi.hoisted(() =>
-  vi.fn((conversationId: string) =>
-    mockToolApprovalState.modes.get(conversationId) ?? "ask_for_approval"
+  vi.fn(
+    (conversationId: string) =>
+      mockToolApprovalState.modes.get(conversationId) ?? "ask_for_approval"
   )
 );
 const mockSetToolApprovalMode = vi.hoisted(() =>
@@ -64,11 +65,13 @@ vi.mock("@/modules/token", () => {
       deleteValue: vi.fn().mockImplementation((key: string) => {
         mockState.tokenStore.delete(key);
       }),
-      hasValue: vi.fn().mockImplementation(
-        (key: string) =>
-          mockState.tokenStore.has(key) &&
-          (mockState.tokenStore.get(key)?.length ?? 0) > 0
-      ),
+      hasValue: vi
+        .fn()
+        .mockImplementation(
+          (key: string) =>
+            mockState.tokenStore.has(key) &&
+            (mockState.tokenStore.get(key)?.length ?? 0) > 0
+        ),
     })),
   };
 });
@@ -114,11 +117,31 @@ vi.mock("@/modules/AIChatV2Module", () => ({
 // Mock AiChatApi — openAIChatCompletionStream is controllable per-test.
 const mockOpenAIChatCompletionStream = vi.fn().mockResolvedValue(undefined);
 const mockListOpenAIModels = vi.fn().mockResolvedValue({ data: [] });
-vi.mock("@/api/aiChatApi", () => ({
-  AiChatApi: vi.fn().mockImplementation(() => ({
-    openAIChatCompletionStream: mockOpenAIChatCompletionStream,
-    listOpenAIModels: mockListOpenAIModels,
+const mockUserSignout = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+vi.mock("@/modules/user", () => ({
+  User: vi.fn().mockImplementation(() => ({
+    Signout: mockUserSignout,
+    removeToken: vi.fn().mockResolvedValue(undefined),
   })),
+}));
+
+vi.mock("@/api/aiChatApi", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/api/aiChatApi")>();
+  return {
+    ...actual,
+    AiChatApi: vi.fn().mockImplementation(() => ({
+      openAIChatCompletionStream: mockOpenAIChatCompletionStream,
+      listOpenAIModels: mockListOpenAIModels,
+    })),
+  };
+});
+
+vi.mock("@/service/DesktopNotifyService", () => ({
+  DesktopNotifyService: {
+    getInstance: () => ({
+      show: vi.fn().mockResolvedValue(false),
+    }),
+  },
 }));
 
 vi.mock("@/config/skillsRegistry", () => ({
@@ -231,7 +254,8 @@ vi.mock("@/service/AIAutoDreamFactory", () => ({
   getSharedWorkspaceAutoDreamService: vi.fn(
     () => mockSharedWorkspaceAutoDreamService
   ),
-  resetSharedWorkspaceAutoDreamService: mockResetSharedWorkspaceAutoDreamService,
+  resetSharedWorkspaceAutoDreamService:
+    mockResetSharedWorkspaceAutoDreamService,
 }));
 
 import {
@@ -648,7 +672,8 @@ describe("AI Chat V2 — stream lifecycle", () => {
     );
   });
 
-  it("maps 401 errors to a sign-in prompt", async () => {
+  it("maps 401/403 errors to AUTH_EXPIRED and signs the user out", async () => {
+    mockUserSignout.mockClear();
     mockOpenAIChatCompletionStream.mockRejectedValue(
       new Error("Server returned 401: Unauthorized")
     );
@@ -662,7 +687,11 @@ describe("AI Chat V2 — stream lifecycle", () => {
 
     const payload = findCompletePayload(senderSend);
     expect(payload?.eventType).toBe("error");
-    expect(payload?.errorMessage).toBe("Please sign in again.");
+    expect(payload?.errorMessage).toBe("AUTH_EXPIRED");
+    // Signout is fire-and-forget; give the microtask a tick.
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(mockUserSignout).toHaveBeenCalled();
   });
 
   it("maps unmapped errors to a generic message (no raw leak)", async () => {

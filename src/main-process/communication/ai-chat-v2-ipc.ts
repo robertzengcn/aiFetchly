@@ -21,6 +21,7 @@ import {
 } from "@/service/AIAutoDreamFactory";
 import { AIChatToolApprovalModule } from "@/modules/AIChatToolApprovalModule";
 import { evaluateToolApproval } from "@/service/AIChatToolApprovalPolicyService";
+import { redirectToLoginOnAuthExpired } from "@/service/AIChatAuthExpiredHandler";
 import { userSafeError } from "@/service/AIChatErrorMapper";
 import type {
   AIChatQueryEvent,
@@ -1359,6 +1360,7 @@ export function registerAiChatV2IpcHandlers(): void {
       await handleStream(event as IpcEventLike, data as string);
     } catch (err) {
       console.error("[ai-chat-v2] unhandled stream error:", err);
+      void redirectToLoginOnAuthExpired(err);
       const evt = event as IpcEventLike;
       sendComplete(evt, {
         eventType: "error",

@@ -56,7 +56,21 @@ vi.mock("@/modules/token", () => ({
   })),
 }));
 
-vi.mock("@/api/aiChatApi", () => ({ AiChatApi: vi.fn() }));
+vi.mock("@/api/aiChatApi", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/api/aiChatApi")>();
+  return {
+    ...actual,
+    AiChatApi: vi.fn(),
+  };
+});
+
+vi.mock("@/service/DesktopNotifyService", () => ({
+  DesktopNotifyService: {
+    getInstance: () => ({
+      show: vi.fn().mockResolvedValue(false),
+    }),
+  },
+}));
 
 let lastAtMentionMessageToSave: string | null = null;
 vi.mock("@/service/aiChatAtMentions/AtMentionResolutionService", () => ({

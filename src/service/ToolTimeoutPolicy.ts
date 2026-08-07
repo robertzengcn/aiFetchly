@@ -48,6 +48,9 @@ export function resolveTimeoutMs(
  * and add an explicit one. Pure/fast tools (file_*, glob_files, grep_files,
  * read_url_content) are still matched explicitly above so they keep failing
  * fast when they hang.
+ * Note: `scrape_urls_from_search_engine` now declares resolveTimeoutClass →
+ * "async" in the skill registry (ToolJobRegistry background path); the
+ * name-based fallback below only applies when no skill annotation is loaded.
  */
 export function inferTimeoutClassByName(name: string): ToolTimeoutClass {
   if (

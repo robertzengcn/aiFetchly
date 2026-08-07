@@ -19,7 +19,7 @@ import * as path from "path";
 import * as fs from "fs";
 import { HttpClient } from "@/modules/lib/httpclient";
 import {
-  getPackagedWorkerNodePath,
+  buildPackagedWorkerEnv,
   getPackagedWorkerPathCandidates,
   resolvePackagedWorkerPath,
 } from "@/utils/packagedWorkerPath";
@@ -197,18 +197,12 @@ export class SocialTask {
       {
         stdio: "pipe",
         execArgv: ["puppeteer-cluster:*"],
-        env: {
-          ...process.env,
-          NODE_OPTIONS: "",
-          NODE_PATH: electronProcess.resourcesPath
-            ? getPackagedWorkerNodePath(
-                electronProcess.resourcesPath,
-                process.env.NODE_PATH
-              )
-            : process.env.NODE_PATH,
-          ELECTRON_APP_NAME: app.getName(),
-          ELECTRON_USER_DATA_PATH: app.getPath("userData"),
-        },
+        env: buildPackagedWorkerEnv({
+          extraEnv: {
+            ELECTRON_APP_NAME: app.getName(),
+            ELECTRON_USER_DATA_PATH: app.getPath("userData"),
+          },
+        }),
       }
     );
     //console.log(path.join(__dirname, 'utilityCode.js'))

@@ -1312,6 +1312,37 @@ export default {
     form_not_valid: "Formular ist ungültig",
     save_success: "Erfolgreich gespeichert, die Werkzeugkonto-ID ist",
     save_fail: "Speichern fehlgeschlagen",
+    session_status_available: "Sitzung bereit",
+    session_status_missing: "Keine Sitzung",
+    session_status_invalid: "Sitzung ungültig — bitte neu anmelden",
+    session_status_migration_pending: "Sitzung wird aktualisiert",
+    import: {
+      button: "Aus Browserprofil importieren",
+      title: "Aus Browserprofil importieren",
+      subtitle:
+        "Nur die für diese Plattform genehmigten Cookies aus Ihrem Browserprofil lesen.",
+      target: "Zielkontoplattform",
+      approved_domains: "Genehmigte Cookie-Domains",
+      instructions:
+        "Öffnen Sie die AiFetchly-Erweiterung im Chrome-, Edge- oder Brave-Profil, aus dem Sie importieren möchten, und bestätigen Sie die Plattform. Nur die unten genehmigten Cookies werden einmalig gelesen.",
+      start: "Kopplung starten",
+      cancel: "Abbrechen",
+      close: "Schließen",
+      reason_feature_disabled:
+        "Der Import aus dem Browserprofil ist in diesem Build nicht aktiviert.",
+      reason_platform_unsupported:
+        "Diese Plattform unterstützt noch keinen Import aus dem Browserprofil.",
+      reason_unavailable:
+        "Der Import aus dem Browserprofil ist für dieses Konto nicht verfügbar.",
+      result_success:
+        "{count} genehmigte Cookie(s) importiert. Bitte Sitzung überprüfen.",
+      result_no_cookies:
+        "Im gekoppelten Browserprofil wurden keine genehmigten Cookies gefunden.",
+      result_expired:
+        "Die Kopplungsanfrage ist abgelaufen. Bitte erneut starten.",
+      result_failed:
+        "Import fehlgeschlagen. Bitte erneut versuchen oder manuell anmelden.",
+    },
   },
   video_download_list: {},
   system_settings: {
@@ -2094,7 +2125,7 @@ export default {
     show_full_diff: "Vollständigen Diff anzeigen ({count} Zeilen)",
     collapse_diff: "Diff einklappen",
     open_file_tooltip: "Datei öffnen",
-    open_with_tooltip: "Öffnen mit…",
+    open_with_tooltip: "Datei öffnen",
   },
   agentWorkflow: {
     status_queued: "In Warteschlange",
@@ -2302,7 +2333,7 @@ export default {
       statusStopped: "gestoppt",
       toolApprovalTitle: "Unbeaufsichtigte Tools genehmigen",
       toolApprovalIntro:
-        "Geplante Schleifen laufen ohne Aufsicht. Schreibgeschützte Tools werden automatisch genehmigt, wenn unbeaufsichtigte Tools aktiviert sind. Schreib-/E-Mail-Tools erfordern unten eine explizite Bestätigung. Shell, Subagenten und Als-verarbeitet-markieren bleiben gesperrt.",
+        "Geplante Schleifen laufen ohne Aufsicht. Wählen Sie unten integrierte Tools und erweiterte Fähigkeiten (importierte Skills, MCP, Subagenten). Shell und Als-verarbeitet-markieren bleiben gesperrt.",
       toolApprovalCommand: "Befehl",
       noReadOnlyTools: "Keine schreibgeschützten Tools verfügbar.",
       allowedTools: "Erlaubte schreibgeschützte Tools",
@@ -2312,7 +2343,11 @@ export default {
       autoApproveWarning:
         "Diese Tools werden bei jedem Durchlauf automatisch ausgeführt, solange die Schleife aktiv ist.",
       createLoop: "Schleife planen",
-      enableTools: "Tools unbeaufsichtigt ausführen erlauben",
+      enableTools: "Integrierte Tools unbeaufsichtigt ausführen erlauben",
+      extendedCapabilities: "Erweiterte Fähigkeiten",
+      allowSkills: "Importierte Skills erlauben",
+      allowMcp: "MCP-Tools erlauben",
+      allowSubagents: "Subagenten erlauben",
       readOnlyAutoApproved:
         "Schreibgeschützte Tools werden automatisch genehmigt",
       automationTools: "Automatisierungs-Tools",
@@ -2474,6 +2509,8 @@ export default {
       "Das Werkzeug konnte nach der Freigabe nicht fortgesetzt werden.",
     permission_resume_no_tool_id:
       "Werkzeugaufrufinformationen fehlen; Fortsetzung nicht möglich.",
+    auth_expired:
+      "Ihre Sitzung ist abgelaufen. Bitte melden Sie sich erneut an.",
     quota_exhausted:
       "Die in Ihrem Abonnement enthaltenen KI-Token sind aufgebraucht. Bitte laden Sie Ihr Konto auf, um die KI-Funktionen weiterhin zu nutzen.",
     empty_response_error:

@@ -274,7 +274,10 @@
           </v-icon>
         </div>
         <div v-if="showFileOpsPanel" class="v2-shell__file-ops-body">
-          <FileOperationBadge :records="currentFileOps" />
+          <FileOperationBadge
+            :records="currentFileOps"
+            :workspace-root="activeWorkspace?.rootPath"
+          />
         </div>
       </div>
 
@@ -746,6 +749,11 @@ import type { WorkspaceSummary } from "@/entityTypes/workspaceTypes";
 import type { FileOperationRecord } from "@/entityTypes/fileOperationTypes";
 import { extractArtifactMetadata, ensureArtifactMetadata } from "./artifactMetadata";
 import {
+  extractFileOperationsFromMessages,
+  mergeFileOperationRecords,
+  type MessageWithMaybeFileToolResult,
+} from "./fileOperationMetadata";
+import {
   subscribeToFileOperations,
   unsubscribeFromFileOperations,
 } from "@/views/api/aiChat";
@@ -768,7 +776,10 @@ import {
   readAiChatReasoningVisible,
   type AiChatReasoningVisibilityChangedDetail,
 } from "@/views/utils/aiChatReasoningPreference";
-import { QUOTA_EXHAUSTED_SENTINEL } from "@/service/AIChatErrorMapper";
+import {
+  AUTH_EXPIRED_SENTINEL,
+  QUOTA_EXHAUSTED_SENTINEL,
+} from "@/service/AIChatErrorMapper";
 
 /**
  * Rough chars→tokens ratio used to drive a live-updating estimate while
@@ -1280,6 +1291,18 @@ async function refreshWorkspace(conversationId: string | null): Promise<void> {
     activeWorkspace.value = null;
   }
   void refreshWorkspaceMemoryCount();
+  // Re-resolve relative file-op paths once workspace root is known.
+  if (
+    conversationId &&
+    activeConversationId.value === conversationId &&
+    messages.value.length > 0
+  ) {
+    hydrateFileOpsFromMessages(
+      conversationId,
+      messages.value,
+      activeWorkspace.value?.rootPath
+    );
+  }
 }
 
 /**
@@ -1376,10 +1399,24 @@ async function refreshScheduledLoopStatus(): Promise<void> {
     return;
   }
   try {
-    activeScheduledLoop.value = await getScheduledLoopStatus(id);
+    const loop = await getScheduledLoopStatus(id);
+    // Ignore stale responses when the user switched conversations mid-flight.
+    if (activeConversationId.value !== id) return;
+    activeScheduledLoop.value = loop;
   } catch {
-    activeScheduledLoop.value = null;
+    if (activeConversationId.value === id) {
+      activeScheduledLoop.value = null;
+    }
   }
+}
+
+/** Clear scheduled-loop UI state when leaving the current conversation. */
+function resetScheduledLoopViewState(): void {
+  activeScheduledLoop.value = null;
+  liveScheduledAssistant.value = null;
+  scheduledRefreshPending.value = false;
+  pendingScheduledLoop.value = null;
+  showScheduledLoopApproval.value = false;
 }
 
 /**
@@ -1457,7 +1494,13 @@ async function runScheduledLoopCreate(
     maxLifetimeMs: number;
   },
   rawCommand: string,
-  approval?: { allowedTools: string[]; autoApproveTools: boolean }
+  approval?: {
+    allowedTools: string[];
+    autoApproveTools: boolean;
+    allowSkills: boolean;
+    allowMcp: boolean;
+    allowSubagents: boolean;
+  }
 ): Promise<void> {
   const conversationId = ensureWorkspaceConversationId();
   try {
@@ -1470,6 +1513,9 @@ async function runScheduledLoopCreate(
       maxLifetimeMs: action.maxLifetimeMs,
       allowedTools: approval?.allowedTools,
       autoApproveTools: approval?.autoApproveTools,
+      allowSkills: approval?.allowSkills,
+      allowMcp: approval?.allowMcp,
+      allowSubagents: approval?.allowSubagents,
     });
     if (!created) {
       const message =
@@ -1544,9 +1590,15 @@ function onWorkspaceApproved(
 }
 
 // Refresh the workspace badge whenever the active conversation changes.
-watch(activeConversationId, (id) => {
+watch(activeConversationId, (id, previousId) => {
+  if (id !== previousId) {
+    resetScheduledLoopViewState();
+  }
   void refreshWorkspace(id);
   void refreshActiveGoal();
+  if (id) {
+    void refreshScheduledLoopStatus();
+  }
 });
 
 // Conversation search state
@@ -2002,6 +2054,9 @@ const showScheduledLoopApproval = ref(false);
 async function onScheduledLoopApprovalConfirm(payload: {
   allowedTools: string[];
   autoApproveTools: boolean;
+  allowSkills: boolean;
+  allowMcp: boolean;
+  allowSubagents: boolean;
 }): Promise<void> {
   const staged = pendingScheduledLoop.value;
   if (!staged) {
@@ -2165,6 +2220,29 @@ const overwriteCount = computed(
   () => currentFileOps.value.filter((r) => r.type === "overwrite").length
 );
 
+/**
+ * Rebuild the bottom file-ops panel from persisted tool_result messages.
+ * Live IPC records are session-only; without this, reopening a conversation
+ * from history hides AI-created file chips (same pattern as ensureArtifactMetadata).
+ */
+function hydrateFileOpsFromMessages(
+  conversationId: string,
+  msgs: readonly MessageWithMaybeFileToolResult[],
+  workspaceRoot?: string | null
+): void {
+  const fromHistory = extractFileOperationsFromMessages(
+    msgs,
+    conversationId,
+    workspaceRoot
+  );
+  const live = fileOps.value.get(conversationId) ?? [];
+  if (fromHistory.length === 0 && live.length === 0) return;
+  const merged = mergeFileOperationRecords(live, fromHistory);
+  const next = new Map(fileOps.value);
+  next.set(conversationId, merged);
+  fileOps.value = next;
+}
+
 const applyPlanState = (state: AIChatPlanStateView | null): void => {
   planState.value = state;
   if (
@@ -2209,6 +2287,12 @@ const mapStreamErrorMessage = (raw: string): string => {
     return (
       t("aiChatV2.quota_exhausted") ||
       "The AI tokens included in your subscription plan have been exhausted. Please recharge your account to continue using AI features."
+    );
+  }
+  if (raw === AUTH_EXPIRED_SENTINEL) {
+    return (
+      t("aiChatV2.auth_expired") ||
+      "Your session has expired. Please sign in again."
     );
   }
   return raw;
@@ -2395,6 +2479,13 @@ const loadHistory = async (conversationId: string): Promise<void> => {
         messages: messages.value,
       });
     }
+    // Restore bottom file-ops panel from persisted file_write/file_edit
+    // tool results. Live IPC records alone are wiped on reload.
+    hydrateFileOpsFromMessages(
+      conversationId,
+      messages.value,
+      activeWorkspace.value?.rootPath
+    );
     // Reset context-usage tracking for the loaded conversation. If any
     // history rows carry tokensUsed, seed the baseline estimate from the
     // most recent assistant message; otherwise start at zero until the
@@ -2456,6 +2547,7 @@ const onNewConversation = (): void => {
   messages.value = [];
   authoritativeRuntimeStatus.value = "idle";
   resetActiveRuntimeFields();
+  resetScheduledLoopViewState();
   applyPlanState(null);
   pendingQuestion.value = null;
   pendingPlanApproval.value = null;
@@ -2496,6 +2588,9 @@ async function clearCurrentConversation(): Promise<void> {
     try {
       await clearChatV2Conversation(conversationId);
       clearConversationRuntimeState(conversationId);
+      const next = new Map(fileOps.value);
+      next.delete(conversationId);
+      fileOps.value = next;
     } catch (err) {
       streamError.value = err instanceof Error ? err.message : String(err);
       return;
@@ -3083,7 +3178,21 @@ const onSend = async (
     pastedContents?: Record<string, string>;
   }
 ): Promise<void> => {
-  if (chatIsRunning.value || hasAnyActiveStream.value) return;
+  // Parse /loop before the stream guard so scheduled-loop staging (approval
+  // dialog only — no interactive stream) works while another conversation
+  // is still running.
+  const loopCmd = parseAiLoopCommand(text);
+  const loopBypassesStreamGuard =
+    loopCmd.type === "scheduled_loop" ||
+    loopCmd.type === "scheduled_loop_control" ||
+    loopCmd.type === "invalid_loop";
+
+  if (
+    !loopBypassesStreamGuard &&
+    (chatIsRunning.value || hasAnyActiveStream.value)
+  ) {
+    return;
+  }
   streamError.value = null;
 
   attachmentError.value = null;
@@ -3103,7 +3212,6 @@ const onSend = async (
 
   // /goal and /loop need stateful handling before the generic slash dispatcher.
   // The unified /loop parser classifies goal-loop vs scheduled-loop vs control.
-  const loopCmd = parseAiLoopCommand(text);
   if (loopCmd.type === "goal_loop") {
     await runLoopCommand(loopCmd.maxIterations);
     return;
@@ -3143,15 +3251,20 @@ const onSend = async (
         "Please provide a goal objective. Usage: /goal <objective>";
       return;
     }
+    // Bind the goal to the same conversation the plan prompt will stream
+    // against. ensureWorkspaceConversationId() creates the v2- id (and
+    // resets chat state) on a fresh chat, instead of passing "" and
+    // orphaning the goal from the streamed turn below.
+    // Declared outside try so the catch path can still append a local exchange.
+    const goalConversationId = ensureWorkspaceConversationId();
     try {
-      // Bind the goal to the same conversation the plan prompt will stream
-      // against. ensureWorkspaceConversationId() creates the v2- id (and
-      // resets chat state) on a fresh chat, instead of passing "" and
-      // orphaning the goal from the streamed turn below.
-      const goalConversationId = ensureWorkspaceConversationId();
+      // /goal is create-or-replace. Always pass replace so a retry after a
+      // failed stream (e.g. "AI server is busy") does not hit the module's
+      // "active goal already exists" guard from the leftover draft.
       const created = await createGoal({
         conversationId: goalConversationId,
         objective: cmd.objective,
+        replace: true,
       });
       if (!created) {
         const message =

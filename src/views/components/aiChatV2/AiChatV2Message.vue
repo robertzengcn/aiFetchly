@@ -270,11 +270,10 @@
             <pre v-if="chip.inlineContent">{{ chip.inlineContent }}</pre>
             <pre
               v-else-if="
-                chip.contentHash &&
-                pastePreviewByHash[chip.contentHash]?.status === 'ready'
+                chip.contentHash && pastePreviewContent(chip.contentHash)
               "
             >
-              {{ pastePreviewByHash[chip.contentHash]?.content }}
+              {{ pastePreviewContent(chip.contentHash) }}
             </pre>
             <div v-else>
               {{
@@ -747,6 +746,12 @@ interface PastedChip {
 }
 
 const pastePreviewByHash = ref<Record<string, PastePreviewState>>({});
+
+/** Narrow ready paste preview content for template use (union-safe). */
+function pastePreviewContent(contentHash: string): string | null {
+  const state = pastePreviewByHash.value[contentHash];
+  return state?.status === "ready" ? state.content : null;
+}
 
 function pastedChipLabel(id: number, lineCount: number): string {
   return (

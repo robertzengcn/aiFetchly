@@ -8,6 +8,7 @@ import { v4 as uuidv4 } from "uuid";
 import type { ModuleExecutionContext } from "@/entityTypes/skillTypes";
 import { ToolExecutor } from "@/service/ToolExecutor";
 import {
+  buildPackagedWorkerEnv,
   resolvePackagedWorkerPath,
   type PackagedWorkerPathRuntime,
 } from "@/utils/packagedWorkerPath";
@@ -379,10 +380,7 @@ export class WebsiteAnalysisQueue {
       const childProcess = utilityProcess.fork(this.childProcessPath!, [], {
         stdio: "pipe",
         execArgv: ["puppeteer-cluster:*"],
-        env: {
-          ...process.env,
-          NODE_OPTIONS: "",
-        },
+        env: buildPackagedWorkerEnv(),
       });
 
       const requestId = `analyze-${jobId}-${Date.now()}`;

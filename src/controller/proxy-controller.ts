@@ -41,6 +41,7 @@ import * as path from "path";
 import {
   getPackagedWorkerPathCandidates,
   resolvePackagedWorkerPath,
+  buildPackagedWorkerEnv,
 } from "@/utils/packagedWorkerPath";
 export class ProxyController {
   //import proxy from csv file
@@ -307,7 +308,7 @@ export class ProxyController {
       const child = utilityProcess.fork(childPath, [], {
         stdio: "pipe",
         execArgv: [],
-        env: { ...process.env, NODE_OPTIONS: "" },
+        env: buildPackagedWorkerEnv(),
       });
 
       // Set timeout to kill child process if it hangs

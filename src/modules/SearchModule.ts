@@ -27,7 +27,7 @@ import * as fs from "fs";
 import { SortBy } from "@/entityTypes/commonType";
 import { BaseModule } from "@/modules/baseModule";
 import {
-  getPackagedWorkerNodePath,
+  buildPackagedWorkerEnv,
   getPackagedWorkerPathCandidates,
   resolvePackagedWorkerPath,
 } from "@/utils/packagedWorkerPath";
@@ -39,6 +39,12 @@ import { SearchAccountEntity } from "@/entity/SearchAccount.entity";
 import { SearchKeywordEntity } from "@/entity/SearchKeyword.entity";
 import { CookiesType } from "@/entityTypes/cookiesType";
 import { AccountCookiesModule } from "./accountCookiesModule";
+import {
+  AccountSessionService,
+  CookieServiceError,
+} from "@/modules/AccountSessionService";
+import { normalizedToCookiesType } from "@/modules/accountSession/cookieNormalize";
+import { log } from "@/modules/Logger";
 import { Usersearchdata } from "@/entityTypes/searchControlType";
 import { utilityProcess, MessageChannelMain } from "electron";
 import { SystemSettingGroupModule } from "@/modules/SystemSettingGroupModule";
@@ -71,6 +77,20 @@ import type {
 
 export type { TaskDetailsForEdit, SearchTaskUpdateData };
 
+/** Normalize utilityProcess stdout/stderr chunks (Buffer or string) to UTF-8. */
+export function chunkToUtf8(data: unknown): string {
+  if (typeof data === "string") {
+    return data;
+  }
+  if (Buffer.isBuffer(data)) {
+    return data.toString("utf8");
+  }
+  if (data instanceof Uint8Array) {
+    return Buffer.from(data).toString("utf8");
+  }
+  return String(data);
+}
+
 export class SearchModule extends BaseModule {
   // private dbpath: string
   private taskdbModel: SearchTaskModel;
@@ -79,6 +99,7 @@ export class SearchModule extends BaseModule {
   private searchTaskProxyModel: SearchTaskProxyModel;
   private searchAccountModel: SearchAccountModel;
   private accountCookiesModule: AccountCookiesModule;
+  private accountSessionService: AccountSessionService;
   private systemSettingGroupModule: SystemSettingGroupModule;
   private socialAccountModule: SocialAccountModule;
   private aiRecoveryHandler: AIRecoveryHandler;
@@ -96,6 +117,7 @@ export class SearchModule extends BaseModule {
     this.searchTaskProxyModel = new SearchTaskProxyModel(this.dbpath);
     this.searchAccountModel = new SearchAccountModel(this.dbpath);
     this.accountCookiesModule = new AccountCookiesModule();
+    this.accountSessionService = new AccountSessionService();
     this.systemSettingGroupModule = new SystemSettingGroupModule();
     this.socialAccountModule = new SocialAccountModule();
     // Initialize AI recovery handler with default config
@@ -355,23 +377,16 @@ export class SearchModule extends BaseModule {
     //console.log("two captcha token value is "+twoCaptchaTokenvalue)
     //console.log("local browser excute path is "+localBrowserexcutepath)
     //console.log("user data dir is "+userDataDir)
-    const packagedNodePath = electronProcess.resourcesPath
-      ? getPackagedWorkerNodePath(
-          electronProcess.resourcesPath,
-          process.env.NODE_PATH
-        )
-      : process.env.NODE_PATH;
     const child = utilityProcess.fork(childPath, [], {
       stdio: "pipe",
       execArgv: ["puppeteer-cluster:*"],
-      env: {
-        ...process.env,
-        NODE_OPTIONS: "",
-        NODE_PATH: packagedNodePath,
-        TWOCAPTCHA_TOKEN: twoCaptchaTokenvalue,
-        LOCAL_BROWSER_EXCUTE_PATH: localBrowserexcutepath,
-        //USEDATADIR: userDataDir
-      },
+      env: buildPackagedWorkerEnv({
+        extraEnv: {
+          TWOCAPTCHA_TOKEN: twoCaptchaTokenvalue,
+          LOCAL_BROWSER_EXCUTE_PATH: localBrowserexcutepath,
+          //USEDATADIR: userDataDir
+        },
+      }),
     });
     child.on("spawn", async () => {
       console.log("child process satart, pid is" + child.pid);
@@ -395,23 +410,28 @@ export class SearchModule extends BaseModule {
     });
 
     child.stdout?.on("data", (data) => {
-      console.log(`Received data chunk ${data}`);
-      WriteLog(runLogfile, data);
+      const text = chunkToUtf8(data);
+      console.log(`Received data chunk ${text}`);
+      WriteLog(runLogfile, text);
       // child.kill()
     });
+    // stderr is diagnostic only. Chrome/Puppeteer (especially on Windows)
+    // frequently emit non-fatal warnings to stderr while scraping succeeds.
+    // Never mark the task Error here — exit code / searcherror messages own that.
     child.stderr?.on("data", (data) => {
-      const ingoreStr = [
+      const text = chunkToUtf8(data);
+      const ignoreStr = [
         "Debugger attached",
         "Waiting for the debugger to disconnect",
         "Most NODE_OPTIONs are not supported in packaged apps",
       ];
-      if (!ingoreStr.some((value) => data.includes(value))) {
-        // seModel.saveTaskerrorlog(taskId,data)
-        console.log(`Received error chunk ${data}`);
-        WriteLog(errorLogfile, data);
-        this.updateTaskStatus(taskId, SearchTaskStatus.Error);
-        //child.kill()
+      if (ignoreStr.some((value) => text.includes(value))) {
+        return;
       }
+      console.log(
+        `[SearchModule] task ${taskId} stderr (not failing task): ${text}`
+      );
+      WriteLog(errorLogfile, text);
     });
     child.on("exit", async (code) => {
       // Clear PID and unregister process
@@ -688,20 +708,14 @@ export class SearchModule extends BaseModule {
       throw new Error("search.google_account_cookies_required");
     }
 
-    // Check if any account has valid cookies
+    // Check if any account has a usable cookie snapshot (decrypted via the
+    // session service; legacy rows are parsed, ENC1 rows are decrypted).
     for (const account of accounts) {
-      const cookies = await this.accountCookiesModule.getAccountCookies(
+      const snapshot = await this.accountSessionService.getDecryptedSnapshot(
         account.id
       );
-      if (cookies && cookies.cookies) {
-        try {
-          const parsed = JSON.parse(cookies.cookies);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            return; // Found an account with valid cookies
-          }
-        } catch {
-          // Invalid cookies JSON, continue checking other accounts
-        }
+      if (snapshot.cookies.length > 0) {
+        return; // Found an account with valid cookies
       }
     }
 
@@ -974,12 +988,11 @@ export class SearchModule extends BaseModule {
     const cookiesArray: Array<Array<CookiesType>> = [];
     if (accounts) {
       for (const account of accountList) {
-        const cookies = await this.accountCookiesModule.getAccountCookies(
+        const snapshot = await this.accountSessionService.getDecryptedSnapshot(
           account
         );
-        if (cookies) {
-          const cookiesits: Array<CookiesType> = JSON.parse(cookies.cookies);
-          cookiesArray.push(cookiesits);
+        if (snapshot.cookies.length > 0) {
+          cookiesArray.push(normalizedToCookiesType(snapshot.cookies));
         }
       }
     }
@@ -1227,39 +1240,29 @@ export class SearchModule extends BaseModule {
     cookies: Array<CookiesType>
   ): Promise<void> {
     try {
-      // Get existing cookies entity for this account
-      const existingCookies = await this.accountCookiesModule.getAccountCookies(
-        accountId
-      );
-
-      if (existingCookies) {
-        // Update existing cookies
-        existingCookies.cookies = JSON.stringify(cookies);
-        existingCookies.record_time = getRecorddatetime();
-        await this.accountCookiesModule.saveAccountCookies(existingCookies);
-        console.log(`Successfully updated cookies for account ${accountId}`);
-      } else {
-        // Create new cookies entry if it doesn't exist
-        const { AccountCookiesEntity } = await import(
-          "@/entity/AccountCookies.entity"
+      const partitionPath =
+        await this.accountSessionService.getOrCreatePartition(accountId);
+      await this.accountSessionService.persistSnapshot({
+        accountId,
+        cookies: cookies as unknown[],
+        source: "worker_refresh",
+        partitionPath,
+      });
+      log.info(`Updated cookies for account ${accountId}`);
+    } catch (err) {
+      if (
+        err instanceof CookieServiceError &&
+        (err.code === "NO_ALLOWED_COOKIES" || err.code === "KEY_UNAVAILABLE")
+      ) {
+        // Safe skip: do not fail the worker over an empty/filtered refresh or a
+        // missing key. The existing snapshot is left intact by the service.
+        log.warn(
+          `Worker cookie refresh skipped for account ${accountId} (${err.code})`
         );
-        const newCookies = new AccountCookiesEntity();
-        newCookies.account_id = accountId;
-        newCookies.cookies = JSON.stringify(cookies);
-        newCookies.record_time = getRecorddatetime();
-        newCookies.partition_path =
-          this.accountCookiesModule.genPartitionPath();
-        await this.accountCookiesModule.saveAccountCookies(newCookies);
-        console.log(
-          `Successfully created new cookies entry for account ${accountId}`
-        );
+        return;
       }
-    } catch (error) {
-      console.error(
-        `Failed to update cookies for account ${accountId}:`,
-        error
-      );
-      throw error;
+      log.error(`Failed to update cookies for account ${accountId}`);
+      throw err;
     }
   }
 }

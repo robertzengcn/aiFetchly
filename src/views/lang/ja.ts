@@ -1292,6 +1292,37 @@ export default {
     form_not_valid: "フォームが無効です",
     save_success: "保存成功、ツールアカウントIDは",
     save_fail: "保存失敗",
+    session_status_available: "セッション利用可能",
+    session_status_missing: "セッションなし",
+    session_status_invalid: "セッション無効 — 再ログインしてください",
+    session_status_migration_pending: "セッションをアップグレード中",
+    import: {
+      button: "ブラウザプロファイルからインポート",
+      title: "ブラウザプロファイルからインポート",
+      subtitle:
+        "このプラットフォームの承認済み Cookie のみをブラウザプロファイルから読み取ります。",
+      target: "対象アカウントのプラットフォーム",
+      approved_domains: "承認済み Cookie ドメイン",
+      instructions:
+        "インポート元の Chrome・Edge・Brave プロファイルで AiFetchly 拡張を開き、プラットフォームを承認してください。以下の承認済み Cookie のみ一度だけ読み取られます。",
+      start: "ペアリングを開始",
+      cancel: "キャンセル",
+      close: "閉じる",
+      reason_feature_disabled:
+        "このビルドではブラウザプロファイルからのインポートは有効になっていません。",
+      reason_platform_unsupported:
+        "このプラットフォームはまだブラウザプロファイルからのインポートに対応していません。",
+      reason_unavailable:
+        "このアカウントではブラウザプロファイルからのインポートは利用できません。",
+      result_success:
+        "承認済み Cookie {count} 個をインポートしました。セッションを確認してください。",
+      result_no_cookies:
+        "ペアリングしたブラウザプロファイルに承認済み Cookie が見つかりませんでした。",
+      result_expired:
+        "ペアリングリクエストの有効期限が切れました。もう一度開始してください。",
+      result_failed:
+        "インポートに失敗しました。再試行するか手動でログインしてください。",
+    },
   },
   video_download_list: {},
   system_settings: {
@@ -2061,7 +2092,7 @@ export default {
     show_full_diff: "すべての差分を表示 ({count} 行)",
     collapse_diff: "差分を折りたたむ",
     open_file_tooltip: "ファイルを開く",
-    open_with_tooltip: "プログラムから開く…",
+    open_with_tooltip: "ファイルを開く",
   },
   agentWorkflow: {
     status_queued: "待機中",
@@ -2264,7 +2295,7 @@ export default {
       statusStopped: "停止済み",
       toolApprovalTitle: "無人ツールを承認",
       toolApprovalIntro:
-        "スケジュール済みループは監視なしで実行されます。無人ツールを有効にすると読み取り専用ツールは自動承認されます。書き込み/メール送信は下で明示確認が必要です。Shell、サブエージェント、処理済みマークは引き続きブロックされます。",
+        "スケジュール済みループは監視なしで実行されます。下で組み込みツールと拡張機能（インポートスキル、MCP、サブエージェント）を選択してください。Shell と処理済みマークは引き続きブロックされます。",
       toolApprovalCommand: "コマンド",
       noReadOnlyTools: "利用可能な読み取り専用ツールがありません。",
       allowedTools: "許可する読み取り専用ツール",
@@ -2273,7 +2304,11 @@ export default {
       autoApproveWarning:
         "ループがアクティブな間、これらのツールは毎回自動的に実行されます。",
       createLoop: "ループをスケジュール",
-      enableTools: "ツールの無人実行を許可",
+      enableTools: "組み込みツールの無人実行を許可",
+      extendedCapabilities: "拡張機能",
+      allowSkills: "インポートスキルを許可",
+      allowMcp: "MCP ツールを許可",
+      allowSubagents: "サブエージェントを許可",
       readOnlyAutoApproved: "読み取り専用ツールは自動承認",
       automationTools: "自動化ツール",
       automationToolsHint: "任意 — ネットワークチェックツールを選択",
@@ -2425,6 +2460,8 @@ export default {
     permission_resume_failed: "許可後にツールを再開できませんでした。",
     permission_resume_no_tool_id:
       "ツール呼び出し情報が不足しているため、続行できません。",
+    auth_expired:
+      "セッションの有効期限が切れました。もう一度サインインしてください。",
     quota_exhausted:
       "サブスクリプションプランに含まれるAIトークンが尽きました。AI機能を続けてご利用いただくには、アカウントをチャージしてください。",
     empty_response_error:

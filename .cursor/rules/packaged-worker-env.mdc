@@ -1,0 +1,67 @@
+---
+description: Prevent packaged child-worker MODULE_NOT_FOUND by requiring buildPackagedWorkerEnv for every spawn/fork.
+globs: src/**/*.{ts,tsx,js}, test/vitest/main/PackagedWorkerEnvGuard.test.ts, src/utils/packagedWorkerPath.ts
+alwaysApply: false
+---
+
+# Packaged Worker Env (NODE_PATH)
+
+## Problem
+
+Packaged Electron workers often live under `app.asar.unpacked/`. Bare
+`require("puppeteer")` (and other EXTERNAL_DEPENDENCIES) resolve against that
+tree and miss packages that only exist in `app.asar/node_modules`. On Windows
+this becomes a recurring `MODULE_NOT_FOUND` crash after packaging.
+
+## Required Pattern
+
+**Every** `utilityProcess.fork(...)` and `spawn(process.execPath, ...)` call in
+`src/` MUST pass env from `buildPackagedWorkerEnv`:
+
+```typescript
+import { buildPackagedWorkerEnv } from "@/utils/packagedWorkerPath";
+
+// utilityProcess workers
+utilityProcess.fork(workerPath, [], {
+  stdio: "pipe",
+  env: buildPackagedWorkerEnv({
+    extraEnv: { WORKER_TYPE: "my-worker" },
+  }),
+});
+
+// child_process.spawn workers that run Electron as Node
+spawn(process.execPath, [workerPath], {
+  stdio: ["pipe", "pipe", "pipe", "ipc"],
+  env: buildPackagedWorkerEnv({
+    runAsNode: true,
+    extraEnv: {
+      ELECTRON_APP_NAME: app.getName(),
+      ELECTRON_USER_DATA_PATH: app.getPath("userData"),
+    },
+  }),
+});
+```
+
+Also resolve worker paths with `resolvePackagedWorkerPath` so the `app.asar`
+virtual path is preferred over `app.asar.unpacked` when both exist.
+
+## Do Not
+
+```typescript
+// ❌ DON'T: hand-roll env without NODE_PATH
+utilityProcess.fork(path, [], {
+  env: { ...process.env, NODE_OPTIONS: "" },
+});
+
+// ❌ DON'T: invent a one-off getPackagedWorkerNodePath call site
+// ❌ DON'T: add PackagedWorkerEnvGuard allowlist entries for new spawn sites
+```
+
+## Enforcement
+
+- Unit tests: [packagedWorkerPath.test.ts](mdc:test/vitest/main/packagedWorkerPath.test.ts)
+- Static gate: [PackagedWorkerEnvGuard.test.ts](mdc:test/vitest/main/PackagedWorkerEnvGuard.test.ts)
+- Helper: [packagedWorkerPath.ts](mdc:src/utils/packagedWorkerPath.ts)
+
+If the guard fails, wire the spawn through `buildPackagedWorkerEnv` — do not
+weaken the gate.

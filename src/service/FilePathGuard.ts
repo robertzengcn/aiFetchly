@@ -29,8 +29,17 @@ export class FilePathGuard {
     roots: readonly string[],
     denyList: readonly DenyListConfig[] = DEFAULT_DENY_LIST
   ) {
-    // Normalise roots to resolved absolute paths
-    this.roots = roots.map((r) => path.resolve(r));
+    // Normalise roots to real absolute paths. On macOS, os.tmpdir() is often
+    // /var/... while fs.realpathSync returns /private/var/... — without this,
+    // every validated existing file looks "outside" the workspace root.
+    this.roots = roots.map((r) => {
+      const resolved = path.resolve(r);
+      try {
+        return fs.existsSync(resolved) ? fs.realpathSync(resolved) : resolved;
+      } catch {
+        return resolved;
+      }
+    });
     this.denyList = denyList;
     this.denyMatchers = denyList.map((entry) =>
       picomatch(entry.patterns, { dot: true, nocase: true })

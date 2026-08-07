@@ -97,6 +97,18 @@ export const SOCIAL_ACCOUNT_LOGIN_UPLOADCOOKIES =
 export const SOCIAL_ACCOUNT_CLEAN_COOKIES = "socialaccount:clean:cookies";
 export const SOCIAL_ACCOUNT_SHOW_PLATFORMPAGE =
   "socialaccount:show:platformpage";
+// Secure session metadata (renderer-safe: no cookie values).
+export const SOCIAL_ACCOUNT_SESSION_METADATA = "socialaccount:session:metadata";
+// Browser-profile import (feature-flagged; see src/config/featureFlags.ts).
+export const SOCIAL_ACCOUNT_BROWSER_IMPORT_AVAILABILITY =
+  "socialaccount:browser-import:availability";
+export const SOCIAL_ACCOUNT_BROWSER_IMPORT_START =
+  "socialaccount:browser-import:start-pairing";
+export const SOCIAL_ACCOUNT_BROWSER_IMPORT_CANCEL =
+  "socialaccount:browser-import:cancel";
+// Main -> renderer import events (progress + terminal result).
+export const SOCIAL_ACCOUNT_BROWSER_IMPORT_EVENT =
+  "socialaccount:browser-import:event";
 export const VIDEODOWNLOADTASK_RETRY = "video:downloadtask:retry";
 export const VIDEODOWNLOADITEM_RETRY = "video:downloaditem:retry";
 export const VIDEODOWNLOADITEM_EXPLORER = "video:downloaditem:explorer";

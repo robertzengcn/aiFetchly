@@ -1318,6 +1318,37 @@ export default {
     form_not_valid: "form is not valid",
     save_success: "Save success, the account id is",
     save_fail: "Save fail",
+    // Secure session status (no cookie values shown)
+    session_status_available: "Session ready",
+    session_status_missing: "No session",
+    session_status_invalid: "Session invalid - re-sign-in required",
+    session_status_migration_pending: "Session upgrading",
+    // Browser-profile import dialog
+    import: {
+      button: "Import from browser profile",
+      title: "Import from browser profile",
+      subtitle:
+        "Read only the approved cookies for this platform from your browser profile.",
+      target: "Target account platform",
+      approved_domains: "Approved cookie domains",
+      instructions:
+        "Open the AiFetchly extension in the Chrome, Edge, or Brave profile you want to import from, then approve the platform. Only the approved cookies below are read, once.",
+      start: "Start pairing",
+      cancel: "Cancel",
+      close: "Close",
+      reason_feature_disabled:
+        "Browser-profile import is not enabled in this build.",
+      reason_platform_unsupported:
+        "This platform does not support browser-profile import yet.",
+      reason_unavailable:
+        "Browser-profile import is unavailable for this account.",
+      result_success:
+        "{count} approved cookie(s) imported. Please verify the session.",
+      result_no_cookies:
+        "No approved cookies were found in the paired browser profile.",
+      result_expired: "The pairing request expired. Please start again.",
+      result_failed: "Import failed. Please retry or sign in manually.",
+    },
   },
   video_download_list: {},
   system_settings: {
@@ -2098,7 +2129,7 @@ export default {
     show_full_diff: "Show full diff ({count} lines)",
     collapse_diff: "Collapse diff",
     open_file_tooltip: "Open file",
-    open_with_tooltip: "Open with…",
+    open_with_tooltip: "Open file",
   },
   agentWorkflow: {
     status_queued: "Queued",
@@ -2299,7 +2330,7 @@ export default {
       statusStopped: "stopped",
       toolApprovalTitle: "Approve unattended tools",
       toolApprovalIntro:
-        "Scheduled loops run without supervision. Read-only tools auto-approve when unattended tools are enabled. Write/email tools require explicit confirmation below. Shell, subagents, and mark-processed stay blocked.",
+        "Scheduled loops run without supervision. Choose built-in tools and extended capabilities (imported skills, MCP, subagents) below. Shell and mark-processed stay blocked.",
       toolApprovalCommand: "Command",
       noReadOnlyTools: "No read-only tools are available.",
       allowedTools: "Allowed read-only tools",
@@ -2307,7 +2338,11 @@ export default {
       autoApprove: "Run approved tools without asking",
       autoApproveWarning:
         "These tools will run automatically on every occurrence while the loop is active.",
-      enableTools: "Allow tools to run unattended",
+      enableTools: "Allow built-in tools to run unattended",
+      extendedCapabilities: "Extended capabilities",
+      allowSkills: "Allow imported skills",
+      allowMcp: "Allow MCP tools",
+      allowSubagents: "Allow subagents",
       readOnlyAutoApproved: "Read-only tools auto-approve",
       automationTools: "Automation tools",
       automationToolsHint: "Optional — select network check tools",
@@ -2461,6 +2496,7 @@ export default {
       "Could not continue the tool after permission was granted.",
     permission_resume_no_tool_id:
       "Missing tool call information; cannot continue execution.",
+    auth_expired: "Your session has expired. Please sign in again.",
     quota_exhausted:
       "The AI tokens included in your subscription plan have been exhausted. Please recharge your account to continue using AI features.",
     empty_response_error:

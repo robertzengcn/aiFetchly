@@ -98,6 +98,9 @@ describe("AIChatGoalModule", () => {
       })
     ).rejects.toThrow(/active goal already exists/);
 
+    const first = await mod.getActiveGoal("v2-conv-4");
+    expect(first?.objective).toBe("first goal");
+
     const replaced = await mod.createDraftGoal({
       conversationId: "v2-conv-4",
       objective: "second goal",
@@ -105,6 +108,15 @@ describe("AIChatGoalModule", () => {
       replace: true,
     });
     expect(replaced.objective).toBe("second goal");
+
+    const active = await mod.getActiveGoal("v2-conv-4");
+    expect(active?.goalId).toBe(replaced.goalId);
+    expect(active?.objective).toBe("second goal");
+
+    // Prior goal must be terminal so retries do not stack active drafts.
+    const prior = first ? await mod.getGoal(first.goalId) : null;
+    expect(prior?.status).toBe("cancelled");
+    expect(prior?.terminalReason).toBe("replaced");
   });
 
   it("enforces legal status transitions", async () => {

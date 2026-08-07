@@ -109,6 +109,22 @@ describe("AI Chat goal/loop IPC", () => {
     const passed = mockCreateDraftGoal.mock.calls[0][0];
     expect(passed.criteria).toHaveLength(1);
     expect(passed.criteria[0].verification.kind).toBe("manual");
+    expect(passed.replace).toBe(false);
+  });
+
+  it("forwards replace=true so /goal retries can supersede a leftover draft", async () => {
+    mockCreateDraftGoal.mockResolvedValue(GOAL_VIEW);
+    const res = await call(
+      AI_CHAT_V2_GOAL_CREATE,
+      JSON.stringify({
+        conversationId: "v2-conv",
+        objective: "Build a scraper",
+        replace: true,
+      })
+    );
+    expect(res.status).toBe(true);
+    const passed = mockCreateDraftGoal.mock.calls[0][0];
+    expect(passed.replace).toBe(true);
   });
 
   it("rejects goal-create with an empty objective", async () => {

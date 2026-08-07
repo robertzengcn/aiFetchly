@@ -25,6 +25,12 @@ import * as path from "path";
 import * as fs from "fs";
 import { v4 as uuidv4 } from "uuid";
 import { UrlGuard } from "@/service/UrlGuard";
+import {
+  buildPackagedWorkerEnv,
+  mirrorAppAsarUnpackedPath,
+  resolvePackagedWorkerPath,
+  type PackagedWorkerPathRuntime,
+} from "@/utils/packagedWorkerPath";
 
 /** Hard cap on a single page load before the worker is killed. */
 const SCRAPING_TIMEOUT_MS = 600000; // 10 minutes
@@ -66,14 +72,20 @@ interface WorkerScrapeMessage {
   requestId: string;
 }
 
-interface ChildProcessPathRuntime {
-  dirname: string;
-  cwd: string;
-  resourcesPath?: string;
-  existsSync: (candidate: string) => boolean;
-}
-
 const WEBSITE_CONTENT_SCRAPER_FILE = "websiteContentScraper.js";
+
+const WEBSITE_CONTENT_SCRAPER_PATH_OPTIONS = {
+  dirnameRelativePaths: [
+    path.join("childprocess", WEBSITE_CONTENT_SCRAPER_FILE),
+    path.join("..", "childprocess", WEBSITE_CONTENT_SCRAPER_FILE),
+    path.join("..", "..", "dist", "childprocess", WEBSITE_CONTENT_SCRAPER_FILE),
+  ],
+  cwdRelativePaths: [
+    path.join("dist", "childprocess", WEBSITE_CONTENT_SCRAPER_FILE),
+    path.join(".vite", "build", "childprocess", WEBSITE_CONTENT_SCRAPER_FILE),
+    path.join(".vite", "build", WEBSITE_CONTENT_SCRAPER_FILE),
+  ],
+} as const;
 
 interface ChildOutputCapture {
   readonly getStdout: () => string;
@@ -174,6 +186,7 @@ function parseWorkerScrapeResponse(rawMessage: unknown): WorkerScrapeResponse {
   return rawMessage as WorkerScrapeResponse;
 }
 
+
 export class WebsiteContentScrapeService {
   /**
    * Scrape a single URL through the worker and return the converted markdown
@@ -222,10 +235,7 @@ export class WebsiteContentScrapeService {
       const childProcess = utilityProcess.fork(childProcessPath, [], {
         stdio: "pipe",
         execArgv: ["puppeteer-cluster:*"],
-        env: {
-          ...process.env,
-          NODE_OPTIONS: "",
-        },
+        env: buildPackagedWorkerEnv(),
       });
 
       const requestId = `scrape-${uuidv4()}-${Date.now()}`;
@@ -284,7 +294,9 @@ export class WebsiteContentScrapeService {
         } catch (parseError) {
           childProcess.kill();
           const parseMessage =
-            parseError instanceof Error ? parseError.message : String(parseError);
+            parseError instanceof Error
+              ? parseError.message
+              : String(parseError);
           rejectWithDiagnostic(
             `Error parsing child process message: ${parseMessage}`
           );
@@ -384,8 +396,9 @@ export class WebsiteContentScrapeService {
   }
 
   /**
-   * Resolve the compiled websiteContentScraper worker path. Tries the bundled
-   * location first, then relative/cwd fallbacks used by different build modes.
+   * Resolve the compiled websiteContentScraper worker path. Prefers the
+   * app.asar virtual path in packaged builds so Electron's module resolution
+   * can reach app.asar/node_modules (puppeteer, etc.).
    */
   private static getChildProcessPath(): string | null {
     const electronProcess = process as NodeJS.Process & {
@@ -401,94 +414,21 @@ export class WebsiteContentScrapeService {
   }
 
   static resolveChildProcessPath(
-    runtime: ChildProcessPathRuntime
+    runtime: PackagedWorkerPathRuntime
   ): string | null {
-    const candidates =
-      WebsiteContentScrapeService.getChildProcessPathCandidates(runtime);
-
-    for (const candidate of candidates) {
-      if (runtime.existsSync(candidate)) {
-        return candidate;
-      }
-    }
-
-    console.warn(
-      `Child process file not found. Tried: ${candidates.join(", ")}`
+    const resolved = resolvePackagedWorkerPath(
+      runtime,
+      WEBSITE_CONTENT_SCRAPER_PATH_OPTIONS
     );
-    return null;
-  }
-
-  private static getChildProcessPathCandidates(
-    runtime: ChildProcessPathRuntime
-  ): string[] {
-    const candidates: string[] = [];
-    const addCandidate = (candidate: string): void => {
-      const normalized = path.normalize(candidate);
-      const unpacked =
-        WebsiteContentScrapeService.mirrorAppAsarUnpackedPath(normalized);
-      if (unpacked !== normalized && !candidates.includes(unpacked)) {
-        candidates.push(unpacked);
-      }
-      if (!candidates.includes(normalized)) {
-        candidates.push(normalized);
-      }
-    };
-
-    addCandidate(
-      path.join(runtime.dirname, "childprocess", WEBSITE_CONTENT_SCRAPER_FILE)
-    );
-    addCandidate(
-      path.join(runtime.dirname, "../childprocess", WEBSITE_CONTENT_SCRAPER_FILE)
-    );
-    addCandidate(
-      path.join(
-        runtime.dirname,
-        "../../dist/childprocess",
-        WEBSITE_CONTENT_SCRAPER_FILE
-      )
-    );
-    addCandidate(
-      path.join(runtime.cwd, "dist/childprocess", WEBSITE_CONTENT_SCRAPER_FILE)
-    );
-    addCandidate(
-      path.join(
-        runtime.cwd,
-        ".vite/build/childprocess",
-        WEBSITE_CONTENT_SCRAPER_FILE
-      )
-    );
-
-    if (runtime.resourcesPath) {
-      addCandidate(
-        path.join(
-          runtime.resourcesPath,
-          "app.asar.unpacked",
-          "dist/childprocess",
-          WEBSITE_CONTENT_SCRAPER_FILE
-        )
-      );
-      addCandidate(
-        path.join(
-          runtime.resourcesPath,
-          "app.asar.unpacked",
-          ".vite/build/childprocess",
-          WEBSITE_CONTENT_SCRAPER_FILE
-        )
-      );
-      addCandidate(
-        path.join(
-          runtime.resourcesPath,
-          "app.asar",
-          "dist/childprocess",
-          WEBSITE_CONTENT_SCRAPER_FILE
-        )
+    if (!resolved) {
+      console.warn(
+        `Child process file not found: ${WEBSITE_CONTENT_SCRAPER_FILE}`
       );
     }
-
-    return candidates;
+    return resolved;
   }
 
   static mirrorAppAsarUnpackedPath(candidate: string): string {
-    return candidate.replace(/app\.asar([\\/])/, "app.asar.unpacked$1");
+    return mirrorAppAsarUnpackedPath(candidate);
   }
 }

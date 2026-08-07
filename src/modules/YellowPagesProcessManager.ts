@@ -8,6 +8,8 @@ import { YellowPagesResultModel } from "@/model/YellowPagesResult.model";
 import { PlatformRegistry } from "@/modules/PlatformRegistry";
 import { PlatformAdapterFactory as WorkerPlatformAdapterFactory } from "@/modules/platforms/PlatformAdapterFactory";
 import { AccountCookiesModule } from "@/modules/accountCookiesModule";
+import { AccountSessionService } from "@/modules/AccountSessionService";
+import { normalizedToCookiesType } from "@/modules/accountSession/cookieNormalize";
 import { BaseModule } from "@/modules/baseModule";
 import { ScrapingProgress } from "@/modules/interface/IPCMessage";
 import {
@@ -38,7 +40,7 @@ import {
   isAiSupportRequestMessage,
 } from "@/modules/interface/BackgroundProcessMessages";
 import {
-  getPackagedWorkerNodePath,
+  buildPackagedWorkerEnv,
   getPackagedWorkerPathCandidates,
   resolvePackagedWorkerPath,
 } from "@/utils/packagedWorkerPath";
@@ -93,6 +95,7 @@ export class YellowPagesProcessManager extends BaseModule {
   private resultModel: YellowPagesResultModel;
   private platformRegistry: PlatformRegistry;
   private accountCookiesModule: AccountCookiesModule;
+  private accountSessionService: AccountSessionService;
   private aiSupportHandler: YellowPagesAiSupportHandler;
 
   /**
@@ -105,6 +108,7 @@ export class YellowPagesProcessManager extends BaseModule {
     this.resultModel = new YellowPagesResultModel(this.dbpath);
     this.platformRegistry = new PlatformRegistry();
     this.accountCookiesModule = new AccountCookiesModule();
+    this.accountSessionService = new AccountSessionService();
     // Initialize AI support handler (will be configured per task)
     this.aiSupportHandler = new YellowPagesAiSupportHandler();
   }
@@ -219,12 +223,16 @@ export class YellowPagesProcessManager extends BaseModule {
         }
       }
 
-      // Get cookies if account is specified
+      // Get cookies if account is specified (decrypted via the session service;
+      // converted back to the CookiesType shape the worker consumes).
       if (task.account_id) {
-        const accountCookies =
-          await this.accountCookiesModule.getAccountCookies(task.account_id);
-        if (accountCookies && accountCookies.cookies) {
-          taskData.cookies = JSON.parse(accountCookies.cookies);
+        const snapshot = await this.accountSessionService.getDecryptedSnapshot(
+          task.account_id
+        );
+        if (snapshot.cookies.length > 0) {
+          taskData.cookies = normalizedToCookiesType(
+            snapshot.cookies
+          ) as typeof taskData.cookies;
         }
       }
 
@@ -384,22 +392,15 @@ export class YellowPagesProcessManager extends BaseModule {
       const { port1, port2 } = new MessageChannelMain();
 
       // Fork the child process using Electron utilityProcess
-      const packagedNodePath = electronProcess.resourcesPath
-        ? getPackagedWorkerNodePath(
-            electronProcess.resourcesPath,
-            process.env.NODE_PATH
-          )
-        : process.env.NODE_PATH;
       const childProcess = utilityProcess.fork(childPath, [], {
         stdio: "pipe",
         execArgv: ["puppeteer-cluster:*"],
-        env: {
-          ...process.env,
-          NODE_OPTIONS: "",
-          NODE_PATH: packagedNodePath,
-          ELECTRON_APP_NAME: app.getName(),
-          ELECTRON_USER_DATA_PATH: app.getPath("userData"),
-        },
+        env: buildPackagedWorkerEnv({
+          extraEnv: {
+            ELECTRON_APP_NAME: app.getName(),
+            ELECTRON_USER_DATA_PATH: app.getPath("userData"),
+          },
+        }),
       });
 
       // Set up process info

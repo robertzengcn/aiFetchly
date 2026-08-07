@@ -413,6 +413,7 @@ export default ({ mode }) => {
             // Skip that subtree in the root suite; it runs via a dedicated config:
             //   test/vitest/main/components/vitest.config.mjs
             include: ['test/vitest/main/**/*.test.ts', '!test/vitest/main/components/**'],
+            exclude: ['**/.claude/**', '**/.worktrees/**', '**/node_modules/**'],
             // NOTE: Do NOT set `environment: 'happy-dom'` globally here.
             // Doing so breaks non-component tests (e.g. AIChatQueryLoopAsyncPoll)
             // because happy-dom interferes with resolution of Node builtins

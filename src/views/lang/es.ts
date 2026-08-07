@@ -1320,6 +1320,37 @@ export default {
     save_success:
       "Guardado correctamente, el ID de la cuenta de herramienta es",
     save_fail: "Error al guardar",
+    session_status_available: "Sesión lista",
+    session_status_missing: "Sin sesión",
+    session_status_invalid: "Sesión inválida: vuelve a iniciar sesión",
+    session_status_migration_pending: "Actualizando sesión",
+    import: {
+      button: "Importar del perfil del navegador",
+      title: "Importar del perfil del navegador",
+      subtitle:
+        "Leer solo las cookies aprobadas para esta plataforma desde tu perfil del navegador.",
+      target: "Plataforma de la cuenta de destino",
+      approved_domains: "Dominios de cookies aprobados",
+      instructions:
+        "Abre la extensión AiFetchly en el perfil de Chrome, Edge o Brave desde el que quieres importar y aprueba la plataforma. Solo se leen una vez las cookies aprobadas.",
+      start: "Iniciar emparejamiento",
+      cancel: "Cancelar",
+      close: "Cerrar",
+      reason_feature_disabled:
+        "La importación desde el perfil del navegador no está habilitada en esta versión.",
+      reason_platform_unsupported:
+        "Esta plataforma aún no admite la importación desde el perfil del navegador.",
+      reason_unavailable:
+        "La importación desde el perfil del navegador no está disponible para esta cuenta.",
+      result_success:
+        "Se importaron {count} cookie(s) aprobadas. Verifica la sesión.",
+      result_no_cookies:
+        "No se encontraron cookies aprobadas en el perfil emparejado.",
+      result_expired:
+        "La solicitud de emparejamiento expiró. Vuelve a empezar.",
+      result_failed:
+        "La importación falló. Reintenta o inicia sesión manualmente.",
+    },
   },
   video_download_list: {},
   system_settings: {
@@ -2101,7 +2132,7 @@ export default {
     show_full_diff: "Mostrar diff completo ({count} líneas)",
     collapse_diff: "Colapsar diff",
     open_file_tooltip: "Abrir archivo",
-    open_with_tooltip: "Abrir con…",
+    open_with_tooltip: "Abrir archivo",
   },
   agentWorkflow: {
     status_queued: "En cola",
@@ -2314,7 +2345,7 @@ export default {
       statusStopped: "detenido",
       toolApprovalTitle: "Aprobar herramientas desatendidas",
       toolApprovalIntro:
-        "Los bucles programados se ejecutan sin supervisión. Las herramientas de solo lectura se aprueban automáticamente al habilitar herramientas desatendidas. Escritura/correo requieren confirmación explícita abajo. Shell, subagentes y marcar-procesado siguen bloqueados.",
+        "Los bucles programados se ejecutan sin supervisión. Elige herramientas integradas y capacidades extendidas (skills importadas, MCP, subagentes) abajo. Shell y marcar-procesado siguen bloqueados.",
       toolApprovalCommand: "Comando",
       noReadOnlyTools: "No hay herramientas de solo lectura disponibles.",
       allowedTools: "Herramientas de solo lectura permitidas",
@@ -2324,7 +2355,11 @@ export default {
       autoApproveWarning:
         "Estas herramientas se ejecutarán automáticamente en cada ocurrencia mientras el bucle esté activo.",
       createLoop: "Programar bucle",
-      enableTools: "Permitir que las herramientas se ejecuten sin supervisión",
+      enableTools: "Permitir herramientas integradas sin supervisión",
+      extendedCapabilities: "Capacidades extendidas",
+      allowSkills: "Permitir skills importadas",
+      allowMcp: "Permitir herramientas MCP",
+      allowSubagents: "Permitir subagentes",
       readOnlyAutoApproved:
         "Las herramientas de solo lectura se aprueban automáticamente",
       automationTools: "Herramientas de automatización",
@@ -2485,6 +2520,7 @@ export default {
       "No se pudo continuar la herramienta después de conceder el permiso.",
     permission_resume_no_tool_id:
       "Falta la información de la llamada de herramienta; no se puede continuar.",
+    auth_expired: "Tu sesión ha caducado. Inicia sesión de nuevo.",
     quota_exhausted:
       "Los tokens de IA incluidos en su plan de suscripción se han agotado. Recargue su cuenta para seguir utilizando las funciones de IA.",
     empty_response_error:

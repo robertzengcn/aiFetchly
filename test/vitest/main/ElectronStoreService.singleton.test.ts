@@ -61,11 +61,54 @@ describe("ElectronStoreService store singleton cache", () => {
     );
   });
 
+  it("passes absolute cwd and projectName so packaged utilityProcess does not crash Conf", async () => {
+    // Regression: utilityProcess has app without ipcMain. electron-store then
+    // leaves cwd undefined and Conf throws "Project name could not be inferred".
+    // Workers receive these via buildPackagedWorkerEnv; prefer env over app APIs.
+    const prevUserData = process.env.ELECTRON_USER_DATA_PATH;
+    const prevAppName = process.env.ELECTRON_APP_NAME;
+    process.env.ELECTRON_USER_DATA_PATH = "/tmp/aifetchly-worker-userData";
+    process.env.ELECTRON_APP_NAME = "aiFetchly-worker";
+    try {
+      const { ElectronStoreService } = await import(
+        "@/modules/electronstoreservice"
+      );
+
+      new ElectronStoreService("userservice");
+
+      expect(storeCtor).toHaveBeenCalledTimes(1);
+      const firstCall = storeCtor.mock.calls[0] as unknown as
+        | [{ name: string; cwd?: string; projectName?: string }]
+        | undefined;
+      expect(firstCall).toBeDefined();
+      const options = firstCall![0];
+      expect(options.cwd).toBe("/tmp/aifetchly-worker-userData");
+      // projectName must always be set (Conf fallback); source may be env or app.getName.
+      expect(typeof options.projectName).toBe("string");
+      expect((options.projectName ?? "").length).toBeGreaterThan(0);
+      expect(options.name).toContain("userservice");
+    } finally {
+      if (prevUserData === undefined) {
+        delete process.env.ELECTRON_USER_DATA_PATH;
+      } else {
+        process.env.ELECTRON_USER_DATA_PATH = prevUserData;
+      }
+      if (prevAppName === undefined) {
+        delete process.env.ELECTRON_APP_NAME;
+      } else {
+        process.env.ELECTRON_APP_NAME = prevAppName;
+      }
+    }
+  });
+
   it("keeps electron-store external in vite.main.config.mjs", () => {
     const viteMain = fs.readFileSync(
       path.resolve(process.cwd(), "vite.main.config.mjs"),
       "utf-8"
     );
-    expect(viteMain).toMatch(/external\s*:\s*\[[\s\S]*['"]electron-store['"]/);
+    expect(viteMain).toMatch(
+      /const MAIN_PROCESS_EXTERNALS[\s\S]*['"]electron-store['"]/
+    );
+    expect(viteMain).toMatch(/external:\s*MAIN_PROCESS_EXTERNALS/);
   });
 });

@@ -1,9 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
+
 import {
+  AUTH_EXPIRED_SENTINEL,
   QUOTA_EXHAUSTED_SENTINEL,
   describeErrorDetail,
+  isAuthExpiredError,
   userSafeError,
 } from "@/service/AIChatErrorMapper";
+import { AIChatRecoverableError } from "@/service/AIChatRecoveryTypes";
 import { AIProviderError } from "@/service/aiProvider/AIProviderError";
 
 describe("AIChatErrorMapper - userSafeError", () => {
@@ -16,19 +20,46 @@ describe("AIChatErrorMapper - userSafeError", () => {
     );
   });
 
-  it("returns a sign-in prompt on 401/403", () => {
+  it("returns the auth-expired sentinel on 401/403 and refresh failures", () => {
     expect(userSafeError(new Error("401 Unauthorized"))).toBe(
-      "Please sign in again."
+      AUTH_EXPIRED_SENTINEL
     );
     expect(
       userSafeError(
         new Error("Authentication failed: Token expired. Please login again.")
       )
-    ).toBe("Please sign in again.");
+    ).toBe(AUTH_EXPIRED_SENTINEL);
     expect(
       userSafeError(new Error("Refresh token rejected (HTTP 401)"))
-    ).toBe("Please sign in again.");
+    ).toBe(AUTH_EXPIRED_SENTINEL);
+    expect(
+      userSafeError(
+        new Error("Authentication failed after token refresh retry (HTTP 403).")
+      )
+    ).toBe(AUTH_EXPIRED_SENTINEL);
+    expect(
+      isAuthExpiredError(
+        new AIChatRecoverableError({
+          reason: "auth",
+          message: "HTTP 403 Forbidden (auth)",
+          status: 403,
+        })
+      )
+    ).toBe(true);
   });
+
+  it("does not treat local provider auth errors as hosted session expiry", () => {
+    const auth = new AIProviderError(
+      "AI provider authentication failed. Check your API key.",
+      "auth",
+      { status: 401 }
+    );
+    expect(isAuthExpiredError(auth)).toBe(false);
+    expect(userSafeError(auth)).toBe(
+      "AI provider authentication failed. Check your API key."
+    );
+  });
+
 
   it("surfaces AIProviderError messages directly instead of the generic fallback", () => {
     const auth = new AIProviderError(

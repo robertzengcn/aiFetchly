@@ -36,6 +36,7 @@ import {
   countImageContentParts,
   countImageDataUrlChars,
 } from "@/service/AIChatImageHandoff";
+import { redirectToLoginOnAuthExpired } from "@/service/AIChatAuthExpiredHandler";
 import { userSafeError } from "@/service/AIChatErrorMapper";
 import { Token } from "@/modules/token";
 import { USER_AI_AUTO_PLAN, USER_AI_ENABLED } from "@/config/usersetting";
@@ -740,6 +741,7 @@ export class AIChatQueryEngine {
     } catch (err) {
       console.error("[ai-chat-v2] pre-stream error:", err);
       this.clearActiveTurnState();
+      void redirectToLoginOnAuthExpired(err);
       eventSink.emit({
         type: "error",
         conversationId: request.conversationId ?? "",
@@ -1138,6 +1140,7 @@ export class AIChatQueryEngine {
         })
         .catch((err) => {
           console.error("[ai-chat-v2] resume loop failed:", err);
+          void redirectToLoginOnAuthExpired(err);
           pending.eventSink.emit({
             type: "error",
             conversationId: pending.conversationId,
@@ -1283,6 +1286,7 @@ export class AIChatQueryEngine {
       })
       .catch((err) => {
         console.error("[ai-chat-v2] answer-question loop failed:", err);
+        void redirectToLoginOnAuthExpired(err);
         pending.eventSink.emit({
           type: "error",
           conversationId: pending.conversationId,
@@ -1436,6 +1440,7 @@ export class AIChatQueryEngine {
       }
       case "failed": {
         const { conversationId, assistantMessageId } = result;
+        void redirectToLoginOnAuthExpired(result.error);
         if (result.partialContent.length > 0) {
           await module.saveAssistantMessage({
             conversationId,
@@ -1613,6 +1618,7 @@ export class AIChatQueryEngine {
   ): void {
     this.dispatchStop(conversationId, "error");
     console.error("[ai-chat-v2] engine failure:", err);
+    void redirectToLoginOnAuthExpired(err);
     eventSink.emit({
       type: "error",
       conversationId,
