@@ -214,6 +214,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     name: "scrape_urls_from_search_engine",
     description:
       "Scrape search result URLs from a supported engine (Google, Bing, or Yandex) using a query string. Returns titles, snippets, and URLs. This tool is for collecting URLs from a SERP, not for answering questions from page text.\n\n" +
+      "This tool always runs ASYNCHRONOUSLY via a background job (same pattern as heavy search_maps_businesses calls): the query loop registers a ToolJobRegistry job with no synchronous 90s ceiling, emits progress while the SERP scrape runs, and returns the final result when the worker finishes (up to ~30 minutes). Do not retry while a job for the same call is still running; use cancel_tool_job(job_id) if the user wants to stop early.\n\n" +
       "MANDATORY WORKFLOW for google or yandex (these engines require login cookies):\n" +
       '  1. FIRST call `list_social_accounts` with platform="google" (or platform="yandex") to obtain a valid tool account ID. Only tool accounts with `cookies: true` and a successful `status` are usable.\n' +
       "  2. THEN call this tool with that tool account ID in the `account` field.\n" +
@@ -264,7 +265,17 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     requiresConfirmation: false,
     permissionCategory: "network",
     source: "built-in",
-    timeoutClass: "network",
+    // Always async: SERP scraping launches a Puppeteer worker, may wait on
+    // login cookies / anti-bot, and polls up to 10 minutes inside
+    // ToolExecutor.executeSearchEngineTool. The previous static
+    // timeoutClass: "network" (90s) caused frequent
+    // `timedOut after 90000ms` failures even when the worker would have
+    // succeeded. Route every call through ToolJobRegistry like heavy
+    // search_maps_businesses / run_subagent so there is no synchronous
+    // Promise.race ceiling; the query loop polls until completion.
+    async: true,
+    resolveTimeoutClass: () => "async",
+    resolveAsync: () => true,
     supportsPartialResult: true,
     execute: async (args, context) => {
       const engineRaw =
