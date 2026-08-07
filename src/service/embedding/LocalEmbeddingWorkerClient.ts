@@ -23,12 +23,19 @@ import {
  * Minimal shape of an Electron `UtilityProcess` as used by this client. Abstracted
  * so tests can inject a fake fork implementation without depending on Electron.
  */
+export interface UtilityProcessStreamLike {
+  on(event: "data", handler: (chunk: Buffer | string) => void): unknown;
+}
+
 export interface UtilityProcessLike {
   on(event: "error", handler: (error: unknown) => void): unknown;
   on(event: "exit", handler: (code: number | null) => void): unknown;
   on(event: "message", handler: (message: unknown) => void): unknown;
   postMessage(message: string): unknown;
   kill(): unknown;
+  /** Present when forked with `stdio: "pipe"`. */
+  stderr?: UtilityProcessStreamLike;
+  stdout?: UtilityProcessStreamLike;
 }
 
 export type ForkFn = (workerPath: string) => UtilityProcessLike;
@@ -41,10 +48,74 @@ interface PendingRequest {
   timeout: ReturnType<typeof setTimeout>;
 }
 
+/**
+ * Extra NODE_PATH entries for the local embedding utility worker.
+ *
+ * The downloadable embedding-xenova worker.js lives under userData and
+ * `require()`s both:
+ *  - runtime-local packages (`@xenova/transformers`, onnxruntime, sharp)
+ *  - app packages the slim runtime does not ship (notably `zod`)
+ *
+ * In packaged builds, `buildPackagedWorkerEnv` already puts app.asar
+ * node_modules on NODE_PATH. In electron-forge / unpackaged runs,
+ * resourcesPath has no app.asar, so we also add `<cwd>/node_modules`.
+ * Always prepend the runtime's own node_modules when present.
+ */
+export function buildLocalEmbeddingWorkerNodePathExtras(
+  workerPath: string,
+  options: {
+    cwd?: string;
+    resourcesPath?: string;
+    existsSync?: (candidate: string) => boolean;
+    existingNodePath?: string;
+    pathDelimiter?: string;
+  } = {}
+): string {
+  const existsSync = options.existsSync ?? fs.existsSync;
+  const delimiter = options.pathDelimiter ?? path.delimiter;
+  const parts: string[] = [];
+
+  const runtimeNodeModules = path.join(path.dirname(workerPath), "node_modules");
+  if (existsSync(runtimeNodeModules)) {
+    parts.push(runtimeNodeModules);
+  }
+
+  const electronProcess = process as NodeJS.Process & {
+    resourcesPath?: string;
+  };
+  const resourcesPath =
+    options.resourcesPath ?? electronProcess.resourcesPath ?? "";
+  const asarNodeModules = resourcesPath
+    ? path.join(resourcesPath, "app.asar", "node_modules")
+    : "";
+  const hasPackagedAppModules = Boolean(
+    asarNodeModules && existsSync(asarNodeModules)
+  );
+  if (!hasPackagedAppModules) {
+    const cwd = options.cwd ?? process.cwd();
+    const cwdNodeModules = path.join(cwd, "node_modules");
+    if (existsSync(cwdNodeModules)) {
+      parts.push(cwdNodeModules);
+    }
+  }
+
+  const existing =
+    options.existingNodePath !== undefined
+      ? options.existingNodePath
+      : process.env.NODE_PATH;
+  if (existing && existing.trim().length > 0) {
+    parts.push(existing);
+  }
+
+  return parts.join(delimiter);
+}
+
 const defaultFork: ForkFn = (workerPath): UtilityProcessLike => {
   const proc = utilityProcess.fork(workerPath, [], {
     stdio: "pipe",
-    env: buildPackagedWorkerEnv(),
+    env: buildPackagedWorkerEnv({
+      existingNodePath: buildLocalEmbeddingWorkerNodePathExtras(workerPath),
+    }),
   });
   return proc as unknown as UtilityProcessLike;
 };
@@ -72,6 +143,8 @@ export class LocalEmbeddingWorkerClient {
   private startupPromise: Promise<UtilityProcessLike> | null = null;
   private readyPromise: Promise<LocalEmbeddingReadyPayload> | null = null;
   private readyModel: string | null = null;
+  /** Truncated stderr/stdout from the current worker for crash diagnostics. */
+  private lastWorkerDiag = "";
 
   /**
    * Optional downloaded embedding-xenova worker path resolver (Phase 8,
@@ -124,6 +197,15 @@ export class LocalEmbeddingWorkerClient {
     } catch {
       return false;
     }
+  }
+
+  /**
+   * Fail-fast readiness probe: fork the worker and complete the initialize
+   * handshake for `modelId`. Used before multi-page website imports so a
+   * broken runtime does not scrape dozens of pages only to fail on embed.
+   */
+  public async probeInitialize(modelId: string): Promise<void> {
+    await this.ensureReady(modelId);
   }
 
   public static getInstance(): LocalEmbeddingWorkerClient {
@@ -276,7 +358,18 @@ export class LocalEmbeddingWorkerClient {
 
   private async startWorker(): Promise<UtilityProcessLike> {
     const resolvedPath = await this.resolveWorkerPathAsync();
+    console.log(
+      `[LocalEmbeddingWorkerClient] forking worker path=${resolvedPath}`
+    );
+    this.lastWorkerDiag = "";
     const worker = this.forkImpl(resolvedPath);
+
+    const appendDiag = (chunk: Buffer | string): void => {
+      const text = typeof chunk === "string" ? chunk : chunk.toString("utf8");
+      this.lastWorkerDiag = (this.lastWorkerDiag + text).slice(-4000);
+    };
+    worker.stderr?.on("data", appendDiag);
+    worker.stdout?.on("data", appendDiag);
 
     const onError = (error: unknown): void => {
       const msg = error instanceof Error ? error.message : String(error);
@@ -300,13 +393,25 @@ export class LocalEmbeddingWorkerClient {
   }
 
   private handleWorkerGone(detail: string): void {
+    const diag = this.lastWorkerDiag.trim();
+    if (diag) {
+      console.error(
+        `[LocalEmbeddingWorkerClient] worker gone (${detail}); output:\n${diag}`
+      );
+    } else {
+      console.error(`[LocalEmbeddingWorkerClient] worker gone (${detail})`);
+    }
+    const suffix = diag
+      ? `; worker output: ${diag.replace(/\s+/g, " ").slice(0, 500)}`
+      : "";
     this.rejectAllPending(
-      new Error(`Local embedding worker unavailable (${detail})`)
+      new Error(`Local embedding worker unavailable (${detail})${suffix}`)
     );
     this.workerProcess = null;
     this.startupPromise = null;
     this.readyPromise = null;
     this.readyModel = null;
+    this.lastWorkerDiag = "";
   }
 
   private async startAndInitialize(

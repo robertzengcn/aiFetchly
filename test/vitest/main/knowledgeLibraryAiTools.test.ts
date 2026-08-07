@@ -50,6 +50,7 @@ vi.mock("@/service/embedding/LocalEmbeddingWorkerClient", () => ({
   LocalEmbeddingWorkerClient: {
     getInstance: vi.fn(() => ({
       hasInstalledRuntimeWorker: vi.fn().mockResolvedValue(true),
+      probeInitialize: vi.fn().mockResolvedValue(undefined),
     })),
   },
 }));
@@ -101,11 +102,13 @@ interface FakeDeps {
     validateFile: ReturnType<typeof vi.fn>;
     checkDuplicate: ReturnType<typeof vi.fn>;
     findWebsiteDuplicate: ReturnType<typeof vi.fn>;
+    findIncompleteWebsiteDocument: ReturnType<typeof vi.fn>;
   };
   ragSearchModule: {
     initializeRagModule: ReturnType<typeof vi.fn>;
     uploadDocument: ReturnType<typeof vi.fn>;
     getDefaultEmbeddingModel: ReturnType<typeof vi.fn>;
+    deleteDocument: ReturnType<typeof vi.fn>;
   };
   websiteImportService: {
     prepareImportSources: ReturnType<typeof vi.fn>;
@@ -123,11 +126,13 @@ function buildTools(opts: { aiEnabled?: boolean } = {}): FakeDeps {
     validateFile: vi.fn(),
     checkDuplicate: vi.fn(),
     findWebsiteDuplicate: vi.fn().mockResolvedValue(undefined),
+    findIncompleteWebsiteDocument: vi.fn().mockResolvedValue(undefined),
   };
   const ragSearchModule = {
     initializeRagModule: vi.fn().mockResolvedValue(undefined),
     uploadDocument: vi.fn(),
     getDefaultEmbeddingModel: vi.fn().mockResolvedValue(null),
+    deleteDocument: vi.fn().mockResolvedValue(true),
   };
   const websiteImportService = {
     prepareImportSources: vi.fn(),
@@ -566,6 +571,48 @@ describe("KnowledgeLibraryAiTools.importWebsite", () => {
     expect(result.success).toBe(false);
     if (result.success) return;
     expect(result.code).toBe("DUPLICATE_DOCUMENT");
+  });
+
+  test("removes failed prior website stub and re-imports successfully", async () => {
+    const { deps, websiteImportService, ragDocumentModule, ragSearchModule } =
+      buildTools();
+    const source = makeSource();
+    websiteImportService.prepareImportSources.mockResolvedValue({
+      mode: "single_page",
+      sources: [source],
+      skipped: [],
+      requestedCount: 1,
+    });
+    ragDocumentModule.validateFile.mockResolvedValue({
+      isValid: true,
+      errors: [],
+      fileType: ".md",
+      fileSize: 4096,
+    });
+    // Completed duplicate check returns nothing; incomplete stub remains.
+    ragDocumentModule.findWebsiteDuplicate.mockResolvedValue(undefined);
+    ragDocumentModule.findIncompleteWebsiteDocument.mockResolvedValue(
+      makeDoc({ id: 42, processingStatus: "failed" })
+    );
+    ragSearchModule.uploadDocument.mockResolvedValue({
+      documentId: 99,
+      chunksCreated: 4,
+      processingTime: 500,
+      document: makeDoc({ id: 99, fileType: ".md" }),
+    });
+    const tools = new KnowledgeLibraryAiTools(deps);
+
+    const result = await tools.importWebsite(
+      { mode: "single_page", url: "https://example.com/pricing" },
+      baseContext
+    );
+
+    expect(ragSearchModule.deleteDocument).toHaveBeenCalledWith(42, true);
+    expect(ragSearchModule.uploadDocument).toHaveBeenCalledTimes(1);
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.importedCount).toBe(1);
+    expect(result.skippedCount).toBe(0);
   });
 
   test("returns partial success when url_list has a mix of good and bad pages", async () => {

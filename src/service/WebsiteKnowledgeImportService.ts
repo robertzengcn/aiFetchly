@@ -397,6 +397,11 @@ export class WebsiteKnowledgeImportService {
     // DNS-aware SSRF validation before spawning the worker.
     const urlCheck = await UrlGuard.validateWithDns(rawUrl);
     if (!urlCheck.safe) {
+      console.warn(
+        `[WebsiteImport] scrape skip URL_BLOCKED url=${rawUrl} reason=${
+          urlCheck.error ?? "URL rejected by SSRF guard"
+        }`
+      );
       return {
         skipped: {
           url: rawUrl,
@@ -413,6 +418,9 @@ export class WebsiteKnowledgeImportService {
       scrape = await this.getScrapeService().scrapePage(safeUrl);
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
+      console.warn(
+        `[WebsiteImport] scrape skip SCRAPE_FAILED url=${safeUrl} reason=${reason}`
+      );
       return {
         skipped: { url: safeUrl, reason, code: "SCRAPE_FAILED" },
         links: [],
@@ -421,6 +429,10 @@ export class WebsiteKnowledgeImportService {
 
     const body = scrape.markdown ?? "";
     if (!isUsefulMarkdown(body)) {
+      console.warn(
+        `[WebsiteImport] scrape skip EMPTY_CONTENT url=${safeUrl} ` +
+          `markdownLength=${body.length}`
+      );
       return {
         skipped: {
           url: safeUrl,
@@ -466,6 +478,13 @@ export class WebsiteKnowledgeImportService {
     const canonicalUrl = sanitizeCanonicalUrl(scrape.canonicalUrl);
 
     const stats = fs.statSync(filePath);
+    console.log(
+      `[WebsiteImport] scrape staged url=${safeUrl} ` +
+        `finalUrl=${scrape.finalUrl ?? "(same)"} ` +
+        `canonical=${canonicalUrl ?? "(none)"} ` +
+        `file=${fileName} sizeBytes=${stats.size} ` +
+        `markdownLength=${body.length} links=${scrape.links.length}`
+    );
     return {
       source: {
         sourceUrl: safeUrl,

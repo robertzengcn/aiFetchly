@@ -101,10 +101,9 @@ describe("LocalEmbeddingWorkerClient runtime worker resolution (Phase 8 §17.2)"
     const client = LocalEmbeddingWorkerClient.createWithFork(fork, 2000, null);
     client.setWorkerPathResolver(async () => null);
 
-    // No bundled worker exists in the test env → the fallback search throws.
-    await expect(
-      client.embedBatch(LOCAL_XENOVA_ALL_MINILM_MODEL_ID, ["hello"]),
-    ).rejects.toThrow(/worker file not found/i);
+    // Resolver miss → bundled candidate search (dev dist/ or packaged path).
+    await client.embedBatch(LOCAL_XENOVA_ALL_MINILM_MODEL_ID, ["hello"]);
+    expect(worker.forkedPath).toMatch(/LocalEmbeddingWorker\.js$/);
     client.dispose();
   });
 
@@ -117,9 +116,9 @@ describe("LocalEmbeddingWorkerClient runtime worker resolution (Phase 8 §17.2)"
     const client = LocalEmbeddingWorkerClient.createWithFork(fork, 2000, null);
     client.setWorkerPathResolver(async () => path.join(tmpRoot, "missing-worker.js"));
 
-    await expect(
-      client.embedBatch(LOCAL_XENOVA_ALL_MINILM_MODEL_ID, ["hello"]),
-    ).rejects.toThrow(/worker file not found/i);
+    await client.embedBatch(LOCAL_XENOVA_ALL_MINILM_MODEL_ID, ["hello"]);
+    expect(worker.forkedPath).toMatch(/LocalEmbeddingWorker\.js$/);
+    expect(worker.forkedPath).not.toContain("missing-worker.js");
     client.dispose();
   });
 
