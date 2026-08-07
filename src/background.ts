@@ -90,6 +90,7 @@ import {
 } from "@/utils/packagedRendererPath";
 import {
   HtmlFileLoader,
+  HtmlFileLoadError,
   loadHtmlFileWithUrlFallback,
 } from "@/utils/loadHtmlFileWithUrlFallback";
 
@@ -803,6 +804,16 @@ function initialize() {
             htmlPath
           );
           console.error("Error details:", error);
+          if (error instanceof HtmlFileLoadError) {
+            console.error(
+              "Renderer load failed for both strategies. file URL:",
+              error.fileUrl,
+              "| loadURL error:",
+              error.loadUrlError,
+              "| loadFile error:",
+              error.loadFileError
+            );
+          }
 
           if (
             error instanceof Error &&
