@@ -82,14 +82,17 @@ export function clearChatV2StreamListeners(): void {
 }
 
 /**
- * Detach listeners for a single conversation (used when switching away from a
- * conversation whose live view is being released, without touching other
- * conversations' background streams).
+ * Detach listeners for a single conversation without touching other
+ * conversations' background streams. Pass `resolvePending: true` to also
+ * resolve that conversation's pending streamChatV2Message promise — required
+ * when stopping the stream from the renderer side (Stop button / permission
+ * deny) so the awaited stream call in onSend unblocks instead of hanging.
  */
 export function detachChatV2ConversationStreamListeners(
-  conversationId: string
+  conversationId: string,
+  resolvePending = false
 ): void {
-  detachConversationStreamListeners(conversationId, false);
+  detachConversationStreamListeners(conversationId, resolvePending);
 }
 
 /**

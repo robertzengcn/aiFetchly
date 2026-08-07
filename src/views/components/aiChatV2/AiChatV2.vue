@@ -666,6 +666,7 @@ import {
   getOpenAIChatModels,
   getChatV2ToolApprovalMode,
   setChatV2ToolApprovalMode,
+  detachChatV2ConversationStreamListeners,
 } from "@/views/api/aiChatV2";
 import {
   AI_CHAT_V2_VOICE_SETTINGS_CHANGED_EVENT,
@@ -1890,31 +1891,6 @@ const chatIsRunning = computed(
 );
 
 /**
- * The IPC stream client is single-listener: starting a send in conversation B
- * while A is still running must abort A's turn and release its renderer
- * listeners. Main-process `submitMessage` also aborts any prior abort
- * controller; this keeps conversationRuntime / list badges in sync.
- */
-const preemptOtherConversationStreams = (
-  nextConversationId: string
-): void => {
-  let hadOtherActiveStream = false;
-  for (const [conversationId, state] of conversationRuntime.value.entries()) {
-    if (conversationId === nextConversationId || !state.isStreaming) {
-      continue;
-    }
-    hadOtherActiveStream = true;
-    markConversationRuntimeStopped(conversationId);
-    setAuthoritativeRuntimeStatus(conversationId, "idle");
-  }
-  if (!hadOtherActiveStream) {
-    return;
-  }
-  clearChatV2StreamListeners();
-  stopChatV2Stream();
-};
-
-/**
  * A conversation shows a running indicator if it owns a live stream, even when
  * the user has switched away from it. Pending tool execution is only known for
  * the currently loaded conversation history, so that remains active-only.
@@ -2620,7 +2596,11 @@ async function clearCurrentConversation(): Promise<void> {
 
 const onSelectConversation = (conversationId: string): void => {
   speechController.stop();
-  detachActiveStreamView();
+  // Release only the active-view fields — do NOT clear stream listeners. Each
+  // conversation owns its own listener now; a backgrounded streaming turn must
+  // keep its listener so its chunks keep updating conversationRuntime[conv]
+  // for switch-back. (Full listener teardown happens only on unmount.)
+  resetActiveRuntimeFields();
   activeConversationId.value = conversationId;
   authoritativeRuntimeStatus.value =
     conversations.value.find(
@@ -2648,16 +2628,21 @@ const onStop = (): void => {
   // Cancel in-flight STT/TTS worker work so the shared worker stops
   // synthesizing for a response the user has abandoned (TODO P0-5).
   void cancelVoiceJob();
-  stopChatV2Stream();
-  clearChatV2StreamListeners();
   const conversationId = activeConversationId.value;
+  // Stop ONLY the active conversation's turn — background conversations keep
+  // streaming. Detach this conversation's listener and resolve its pending
+  // stream promise so the awaited streamChatV2Message call in onSend unblocks.
+  stopChatV2Stream(conversationId ?? undefined);
   if (conversationId) {
+    detachChatV2ConversationStreamListeners(conversationId, true);
     markActiveConversationRuntimeStopped();
     setAuthoritativeRuntimeStatus(conversationId, "idle");
     stoppedPendingToolConversationIds.value = new Set([
       ...stoppedPendingToolConversationIds.value,
       conversationId,
     ]);
+  } else {
+    clearChatV2StreamListeners();
   }
 };
 
@@ -2919,8 +2904,16 @@ const handleSkillPermissionDeny = (message: ChatV2MessageView): void => {
       },
     };
   }
-  clearChatV2StreamListeners();
-  stopChatV2Stream();
+  // Stop only the conversation that owns the denied tool — background
+  // conversations are unaffected. Detach its listener and resolve its pending
+  // stream promise so its onSend await unblocks.
+  const targetConversationId = message.conversationId || undefined;
+  stopChatV2Stream(targetConversationId);
+  if (message.conversationId) {
+    detachChatV2ConversationStreamListeners(message.conversationId, true);
+  } else {
+    clearChatV2StreamListeners();
+  }
   markConversationRuntimeStopped(message.conversationId);
 };
 
@@ -3209,7 +3202,8 @@ const onSend = async (
   // Block only when the *active* conversation is already streaming. A
   // background conversation may still be running after New Chat / switch;
   // allowing send here is required so the composer-cleared draft is not
-  // silently dropped. preemptOtherConversationStreams() aborts that turn.
+  // silently dropped. Background turns are NOT aborted — they keep streaming
+  // on the main process and update their own conversationRuntime entry.
   if (!loopBypassesStreamGuard && chatIsRunning.value) {
     return;
   }
@@ -3368,7 +3362,6 @@ const onSend = async (
   // Resolve text: if only images with no text, use default prompt
   const displayText = text || defaultPromptForAttachments(files ?? []);
   const streamConversationId = ensureWorkspaceConversationId();
-  preemptOtherConversationStreams(streamConversationId);
   const isCurrentStreamView = (): boolean =>
     activeConversationId.value === streamConversationId;
   const isCurrentStreamChunk = (chunk: ChatV2StreamChunk): boolean =>
