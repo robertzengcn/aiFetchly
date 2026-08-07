@@ -1399,10 +1399,24 @@ async function refreshScheduledLoopStatus(): Promise<void> {
     return;
   }
   try {
-    activeScheduledLoop.value = await getScheduledLoopStatus(id);
+    const loop = await getScheduledLoopStatus(id);
+    // Ignore stale responses when the user switched conversations mid-flight.
+    if (activeConversationId.value !== id) return;
+    activeScheduledLoop.value = loop;
   } catch {
-    activeScheduledLoop.value = null;
+    if (activeConversationId.value === id) {
+      activeScheduledLoop.value = null;
+    }
   }
+}
+
+/** Clear scheduled-loop UI state when leaving the current conversation. */
+function resetScheduledLoopViewState(): void {
+  activeScheduledLoop.value = null;
+  liveScheduledAssistant.value = null;
+  scheduledRefreshPending.value = false;
+  pendingScheduledLoop.value = null;
+  showScheduledLoopApproval.value = false;
 }
 
 /**
@@ -1576,9 +1590,15 @@ function onWorkspaceApproved(
 }
 
 // Refresh the workspace badge whenever the active conversation changes.
-watch(activeConversationId, (id) => {
+watch(activeConversationId, (id, previousId) => {
+  if (id !== previousId) {
+    resetScheduledLoopViewState();
+  }
   void refreshWorkspace(id);
   void refreshActiveGoal();
+  if (id) {
+    void refreshScheduledLoopStatus();
+  }
 });
 
 // Conversation search state
@@ -2527,6 +2547,7 @@ const onNewConversation = (): void => {
   messages.value = [];
   authoritativeRuntimeStatus.value = "idle";
   resetActiveRuntimeFields();
+  resetScheduledLoopViewState();
   applyPlanState(null);
   pendingQuestion.value = null;
   pendingPlanApproval.value = null;
@@ -3157,7 +3178,21 @@ const onSend = async (
     pastedContents?: Record<string, string>;
   }
 ): Promise<void> => {
-  if (chatIsRunning.value || hasAnyActiveStream.value) return;
+  // Parse /loop before the stream guard so scheduled-loop staging (approval
+  // dialog only — no interactive stream) works while another conversation
+  // is still running.
+  const loopCmd = parseAiLoopCommand(text);
+  const loopBypassesStreamGuard =
+    loopCmd.type === "scheduled_loop" ||
+    loopCmd.type === "scheduled_loop_control" ||
+    loopCmd.type === "invalid_loop";
+
+  if (
+    !loopBypassesStreamGuard &&
+    (chatIsRunning.value || hasAnyActiveStream.value)
+  ) {
+    return;
+  }
   streamError.value = null;
 
   attachmentError.value = null;
@@ -3177,7 +3212,6 @@ const onSend = async (
 
   // /goal and /loop need stateful handling before the generic slash dispatcher.
   // The unified /loop parser classifies goal-loop vs scheduled-loop vs control.
-  const loopCmd = parseAiLoopCommand(text);
   if (loopCmd.type === "goal_loop") {
     await runLoopCommand(loopCmd.maxIterations);
     return;
