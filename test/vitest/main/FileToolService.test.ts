@@ -14,7 +14,7 @@ describe("FileToolService", () => {
   let tmpDir: string;
 
   beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fts-test-"));
+    tmpDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "fts-test-")));
     // Create service with overridden workspace root to our tmpDir
     service = new FileToolService([tmpDir]);
   });
@@ -188,9 +188,31 @@ describe("FileToolService", () => {
       });
 
       expect(result.success).toBe(true);
-      expect((result.matches as string[]).length).toBeLessThanOrEqual(3);
-      expect(result.total).toBe(10);
+      expect((result.matches as string[]).length).toBe(3);
+      // Early-stop after head_limit+1 safe hits: total is a lower bound.
+      expect(result.total).toBeGreaterThan(3);
       expect(result.truncated).toBe(true);
+    });
+
+    it("early-stops broad globs instead of walking the entire tree", async () => {
+      const bulk = path.join(tmpDir, "bulk");
+      fs.mkdirSync(bulk);
+      for (let i = 0; i < 80; i++) {
+        fs.writeFileSync(path.join(bulk, `n${i}.txt`), "");
+      }
+
+      const started = Date.now();
+      const result = await service.execute("glob_files", {
+        pattern: "**/*",
+        head_limit: 5,
+      });
+      const elapsedMs = Date.now() - started;
+
+      expect(result.success).toBe(true);
+      expect((result.matches as string[]).length).toBe(5);
+      expect(result.truncated).toBe(true);
+      // Should finish quickly via stopAfterSafeMatches, not full-tree sync walk.
+      expect(elapsedMs).toBeLessThan(2000);
     });
 
     it("supports cwd option", async () => {
