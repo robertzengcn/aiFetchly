@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   QUOTA_EXHAUSTED_SENTINEL,
+  isTransientRetryableError,
   userSafeError,
 } from "@/service/AIChatErrorMapper";
 
@@ -65,5 +66,59 @@ describe("AIChatErrorMapper - userSafeError", () => {
     expect(userSafeError(new Error("something else entirely"))).toBe(
       "An unexpected error occurred. Please try again."
     );
+  });
+});
+
+describe("AIChatErrorMapper - isTransientRetryableError", () => {
+  it("flags finish_reason=error as retryable", () => {
+    expect(
+      isTransientRetryableError(
+        new Error(
+          "AI server returned finish_reason=error (transient server-side failure)."
+        )
+      )
+    ).toBe(true);
+  });
+
+  it("flags empty-response / no-finish-reason errors as retryable", () => {
+    expect(
+      isTransientRetryableError(
+        new Error("AI server returned an empty response with no finish reason.")
+      )
+    ).toBe(true);
+  });
+
+  it("flags rate limit, timeout, and 502 as retryable", () => {
+    expect(isTransientRetryableError(new Error("rate limit exceeded"))).toBe(
+      true
+    );
+    expect(isTransientRetryableError(new Error("request timeout"))).toBe(true);
+    expect(isTransientRetryableError(new Error("upstream returned 502"))).toBe(
+      true
+    );
+  });
+
+  it("does not flag auth, quota, or unknown errors as retryable", () => {
+    expect(isTransientRetryableError(new Error("401 Unauthorized"))).toBe(
+      false
+    );
+    expect(isTransientRetryableError(new Error("402 Payment Required"))).toBe(
+      false
+    );
+    expect(
+      isTransientRetryableError(new Error("something else entirely"))
+    ).toBe(false);
+  });
+
+  it("does not flag aborts as retryable", () => {
+    const err = new Error("stopped");
+    err.name = "AbortError";
+    expect(isTransientRetryableError(err)).toBe(false);
+  });
+
+  it("returns false for non-Error values", () => {
+    expect(isTransientRetryableError("a string")).toBe(false);
+    expect(isTransientRetryableError(null)).toBe(false);
+    expect(isTransientRetryableError(undefined)).toBe(false);
   });
 });

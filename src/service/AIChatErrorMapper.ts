@@ -9,6 +9,28 @@
 export const QUOTA_EXHAUSTED_SENTINEL = "QUOTA_EXHAUSTED";
 
 /**
+ * Pattern for transient, retryable server-side failures: empty responses,
+ * finish_reason=error, rate limits, timeouts, and 502s. These recover on a
+ * fresh attempt after a short backoff, so the query loop auto-retries them
+ * and the user-facing mapper translates them into an actionable message
+ * instead of the generic "unexpected error" fallback.
+ */
+const TRANSIENT_ERROR_PATTERN =
+  /finish_reason=error|empty response|no finish reason|transient server|rate limit|timeout|\b502\b/i;
+
+/**
+ * Returns true when the error represents a transient, retryable AI-server
+ * failure (overload, rate limit, timeout, empty/error response). Aborts and
+ * non-Error values are never retryable. Used by {@link AIChatQueryLoop} to
+ * decide whether to auto-retry a failed round.
+ */
+export function isTransientRetryableError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  if (err.name === "AbortError") return false;
+  return TRANSIENT_ERROR_PATTERN.test(err.message || "");
+}
+
+/**
  * Map unknown errors to user-safe messages.
  * Raw server bodies, stack traces, and sensitive request details
  * are logged but never surfaced to the renderer.
@@ -42,11 +64,7 @@ export function userSafeError(err: unknown): string {
     // rate limits, timeouts, and 502s. These are recoverable by retrying
     // after a short wait, so surface a clear, actionable message instead of
     // the generic "unexpected error" fallback.
-    if (
-      /finish_reason=error|empty response|no finish reason|transient server|rate limit|timeout|\b502\b/i.test(
-        msg
-      )
-    ) {
+    if (isTransientRetryableError(err)) {
       return "The AI service is busy or had a transient issue. Please try again in a moment.";
     }
     console.error("[ai-chat-v2] unmapped error:", msg);
