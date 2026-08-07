@@ -58,6 +58,12 @@ export interface AppUpdateServiceDeps {
   readonly getUpdateElectronApp: () => UpdateElectronAppLike;
   /** Injectable clock (scripts/tests cannot use Date.now directly). */
   readonly now: () => number;
+  /**
+   * Manual-check watchdog. If a manual check stays in `checking` longer than
+   * this without a terminal event, it is forced to `error` so the UI cannot
+   * hang forever on a stuck network. 0 disables (tests). Production: 60_000.
+   */
+  readonly watchdogMs: number;
 }
 
 /**
@@ -104,6 +110,7 @@ export class AppUpdateService {
   private initialized = false;
   private subscribed = false;
   private sink: ((snapshot: UpdateStatusSnapshot) => void) | null = null;
+  private watchdogTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(private readonly deps: AppUpdateServiceDeps) {
     const support = computeUpdateSupport({
@@ -210,12 +217,14 @@ export class AppUpdateService {
     this.availableVersion = undefined;
     this.state = "checking";
     this.emitSnapshot();
+    this.armCheckWatchdog();
 
     try {
       await this.deps.getAutoUpdater().checkForUpdates();
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
       log.error(`[auto-update] manual checkForUpdates threw: ${detail}`);
+      this.clearCheckWatchdog();
       this.errorCode = ERROR_CODE_UPDATE_CHECK_FAILED;
       this.lastCheckedAt = this.deps.now();
       this.state = "error";
@@ -223,6 +232,36 @@ export class AppUpdateService {
     }
 
     return this.getStatus();
+  }
+
+  /**
+   * Arm the manual-check watchdog. If the state is still `checking` after
+   * `watchdogMs`, force `error` so the UI never hangs on a stuck network.
+   */
+  private armCheckWatchdog(): void {
+    this.clearCheckWatchdog();
+    const ms = this.deps.watchdogMs;
+    if (ms <= 0) {
+      return;
+    }
+    this.watchdogTimer = setTimeout(() => {
+      this.watchdogTimer = null;
+      if (this.state !== "checking") {
+        return; // a terminal event already arrived
+      }
+      log.warn("[auto-update] manual check watchdog timed out");
+      this.errorCode = ERROR_CODE_UPDATE_CHECK_FAILED;
+      this.lastCheckedAt = this.deps.now();
+      this.state = "error";
+      this.emitSnapshot();
+    }, ms);
+  }
+
+  private clearCheckWatchdog(): void {
+    if (this.watchdogTimer) {
+      clearTimeout(this.watchdogTimer);
+      this.watchdogTimer = null;
+    }
   }
 
   /** Quit and install a downloaded update; no-op unless ready-to-restart. */
@@ -284,22 +323,30 @@ export class AppUpdateService {
         this.availableVersion = extractAvailableVersion(args);
         this.lastCheckedAt = this.deps.now();
         this.errorCode = undefined;
+        this.clearCheckWatchdog();
         break;
       case "up-to-date":
         this.availableVersion = undefined;
         this.lastCheckedAt = this.deps.now();
         this.errorCode = undefined;
+        this.clearCheckWatchdog();
+        break;
+      case "downloading":
+        // 'update-available' carries the incoming version; surface it during
+        // the (possibly long) download, not only after it completes.
+        this.availableVersion = extractAvailableVersion(args);
+        this.clearCheckWatchdog();
         break;
       case "error":
         this.errorCode = ERROR_CODE_UPDATE_CHECK_FAILED;
         this.lastCheckedAt = this.deps.now();
         this.availableVersion = undefined;
+        this.clearCheckWatchdog();
         break;
       case "checking":
         this.errorCode = undefined;
         break;
       default:
-        // 'downloading' — no auxiliary fields to refresh.
         break;
     }
     this.state = next;

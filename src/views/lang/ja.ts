@@ -2027,5 +2027,9 @@ export default {
     unsupported_store: "更新は Microsoft Store によって管理されます。",
     unsupported_platform:
       "このプラットフォームでは自動更新はサポートされていません。",
+    open_website_failed:
+      "ウェブサイトを開けませんでした。後でもう一度お試しください。",
+    cooldown_active:
+      "最近確認しました。しばらく待ってからもう一度お試しください。",
   },
 };

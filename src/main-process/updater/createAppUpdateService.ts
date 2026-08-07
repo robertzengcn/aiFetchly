@@ -1,11 +1,11 @@
-import { app, autoUpdater } from 'electron';
-import { updateElectronApp } from 'update-electron-app';
+import { app, autoUpdater } from "electron";
+import { updateElectronApp } from "update-electron-app";
 import {
   AppUpdateService,
   type AppUpdateServiceDeps,
   type AutoUpdaterLike,
   type UpdateElectronAppLike,
-} from './AppUpdateService';
+} from "./AppUpdateService";
 
 let instance: AppUpdateService | null = null;
 
@@ -25,7 +25,7 @@ export function getAppUpdateService(): AppUpdateService {
   // `process.windowsStore` is set by Electron for Microsoft Store / MSIX builds
   // but is not in Node's process type.
   const isWindowsStore = Boolean(
-    (process as unknown as { windowsStore?: unknown }).windowsStore,
+    (process as unknown as { windowsStore?: unknown }).windowsStore
   );
 
   const deps: AppUpdateServiceDeps = {
@@ -37,6 +37,7 @@ export function getAppUpdateService(): AppUpdateService {
     getUpdateElectronApp: () =>
       updateElectronApp as unknown as UpdateElectronAppLike,
     now: () => Date.now(),
+    watchdogMs: 60_000,
   };
 
   instance = new AppUpdateService(deps);

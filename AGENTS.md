@@ -566,7 +566,8 @@ Current branch (`sqlite-vec-merge`) is integrating sqlite-vec for vector similar
 
 ### Required Environment Variables
 - `VITE_REMOTEADD` - Backend API URL
-- `UPDATESERVER` - Update server URL for auto-updater
+
+> Auto-updates use `update-electron-app` against the GitHub Releases feed (`AIFETCHLY_UPDATE_REPO` in `src/config/appInfo.ts`); no `UPDATESERVER` environment variable is required.
 
 ### Development Setup
 1. Install dependencies with `yarn`

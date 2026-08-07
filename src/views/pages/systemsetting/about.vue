@@ -105,7 +105,6 @@ import {
   installUpdate,
   onUpdateStatus,
   offUpdateStatus,
-  removeAllUpdateStatusListeners,
   type UpdateStatusListener,
 } from "@/views/api/app";
 import { AIFETCHLY_WEBSITE_URL } from "@/config/appInfo";
@@ -211,20 +210,35 @@ async function onOpenWebsite(): Promise<void> {
   try {
     await openWebsite();
   } catch (err) {
-    const detail = err instanceof Error ? err.message : String(err);
-    showSnackbar(detail || t("about.status_error") || "Failed to open website.");
+    // Don't surface the raw backend code (e.g. OPEN_WEBSITE_FAILED); use i18n.
+    console.error("Failed to open website:", err);
+    showSnackbar(
+      t("about.open_website_failed") || "Could not open the website. Try again later.",
+    );
   } finally {
     openingWebsite.value = false;
   }
 }
 
 async function onCheckForUpdates(): Promise<void> {
+  const prevState = updateStatus.value.state;
   try {
     const snapshot = await checkForUpdates();
+    // If the state did not change, the main-process cooldown rejected the
+    // request — tell the user instead of looking like a dead button (PRD FR-4.4).
+    if (snapshot.state === prevState) {
+      showSnackbar(
+        t("about.cooldown_active") ||
+          "Checked recently. Please wait a minute before trying again.",
+        "info",
+      );
+    }
     applySnapshot(snapshot);
   } catch (err) {
-    const detail = err instanceof Error ? err.message : String(err);
-    showSnackbar(detail || t("about.status_error") || "Failed to check for updates.");
+    console.error("Failed to check for updates:", err);
+    showSnackbar(
+      t("about.status_error") || "Could not check for updates. Try again later.",
+    );
   }
 }
 
@@ -263,10 +277,11 @@ onMounted(async () => {
 });
 
 onBeforeUnmount(() => {
+  // Remove only this page's listener. A global removeAllListeners() would
+  // silently kill any other future consumer of the same channel.
   if (statusListener) {
     offUpdateStatus(statusListener);
     statusListener = null;
   }
-  removeAllUpdateStatusListeners();
 });
 </script>

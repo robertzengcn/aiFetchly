@@ -42,7 +42,10 @@ type GlobalIpcState = typeof globalThis & {
   __aifetchlyIpcHandlersRegistered?: boolean;
 };
 
-export function registerCommunicationIpcHandlers(win: BrowserWindow) {
+export function registerCommunicationIpcHandlers(
+  win: BrowserWindow,
+  getWin: () => BrowserWindow | null
+) {
   const globalState = globalThis as GlobalIpcState;
   if (globalState.__aifetchlyIpcHandlersRegistered) {
     console.warn("[IPC] Skipping duplicate handler registration (HMR guard)");
@@ -84,7 +87,7 @@ export function registerCommunicationIpcHandlers(win: BrowserWindow) {
     registerPluginIpcHandlers();
     registerAIUserMemoryIpcHandlers();
     registerAIWorkspaceIpcHandlers(win);
-    registerAboutIpcHandlers(win);
+    registerAboutIpcHandlers(getWin);
     AsyncMsg();
   } catch (e) {
     console.log("registerCommunicationIpcHandlers error:");

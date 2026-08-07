@@ -1998,5 +1998,7 @@ export default {
     unsupported_development: "开发版本不支持更新检查。",
     unsupported_store: "更新由 Microsoft Store 管理。",
     unsupported_platform: "此平台不支持自动更新。",
+    open_website_failed: "无法打开网站，请稍后再试。",
+    cooldown_active: "刚刚已检查，请稍候一分钟后再试。",
   },
 };

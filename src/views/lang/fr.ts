@@ -2057,5 +2057,9 @@ export default {
     unsupported_store: "Les mises à jour sont gérées par Microsoft Store.",
     unsupported_platform:
       "Les mises à jour automatiques ne sont pas prises en charge sur cette plateforme.",
+    open_website_failed:
+      "Impossible d'ouvrir le site web. Réessayez plus tard.",
+    cooldown_active:
+      "Vérifié récemment. Attendez une minute avant de réessayer.",
   },
 };

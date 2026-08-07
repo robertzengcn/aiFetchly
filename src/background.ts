@@ -347,7 +347,7 @@ function initialize() {
         }
       }
       //if (userdataPath){//register communication ipc handlers
-      registerCommunicationIpcHandlers(win);
+      registerCommunicationIpcHandlers(win, () => win);
 
       // Configure the GitHub auto-update feed (About > Check for updates).
       // Idempotent; internally no-ops on unpackaged / Store / unsupported-platform

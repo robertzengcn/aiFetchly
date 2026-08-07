@@ -2072,5 +2072,8 @@ export default {
     unsupported_store: "Updates are managed by Microsoft Store.",
     unsupported_platform:
       "Automatic updates are not supported on this platform.",
+    open_website_failed: "Could not open the website. Try again later.",
+    cooldown_active:
+      "Checked recently. Please wait a minute before trying again.",
   },
 };

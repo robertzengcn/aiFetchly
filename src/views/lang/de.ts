@@ -2070,5 +2070,9 @@ export default {
     unsupported_store: "Updates werden über den Microsoft Store verwaltet.",
     unsupported_platform:
       "Automatische Updates werden auf dieser Plattform nicht unterstützt.",
+    open_website_failed:
+      "Die Website konnte nicht geöffnet werden. Versuchen Sie es später erneut.",
+    cooldown_active:
+      "Kürzlich geprüft. Bitte warten Sie eine Minute, bevor Sie es erneut versuchen.",
   },
 };

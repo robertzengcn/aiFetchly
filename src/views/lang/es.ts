@@ -2075,5 +2075,8 @@ export default {
       "Las actualizaciones se gestionan mediante Microsoft Store.",
     unsupported_platform:
       "Las actualizaciones automáticas no son compatibles con esta plataforma.",
+    open_website_failed: "No se pudo abrir el sitio web. Inténtalo más tarde.",
+    cooldown_active:
+      "Comprobado hace poco. Espera un minuto antes de intentarlo de nuevo.",
   },
 };
