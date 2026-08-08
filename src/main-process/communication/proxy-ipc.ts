@@ -19,28 +19,33 @@ export function registeProxyIpcHandlers() {
 
   // ── ipcMain.on handlers (push model, out of scope for validated wrapper) ──
   ipcMain.on(CHECKALLPROXY, async (event, data: unknown) => {
-    const qdata = JSON.parse(data as string) as { timeout?: number; proxyIds?: number[] };
-    const proxyCon = new ProxyController()
-    await proxyCon.checkAllproxy(function (num, total) {
-      const process = Math.round(num / total * 100)
-      const messageData: CommonMessage<NumProcessdata> = {
-        status: true,
-        msg: "success",
-        data: {
-          process: process
-        }
-      };
-      (event as { sender: { send: (channel: string, message: string) => void } }).sender.send(CHECKALLPROXYMESSAGE, JSON.stringify(messageData))
-    }, function () {
-      const finmessageData: CommonMessage<NumProcessdata> = {
-        status: true,
-        msg: "success",
-        data: {
-          process: 100
-        }
-      };
-      (event as { sender: { send: (channel: string, message: string) => void } }).sender.send(CHECKALLPROXYMESSAGE, JSON.stringify(finmessageData))
-    }, qdata.timeout, qdata.proxyIds)
+    try {
+      const qdata = JSON.parse(data as string) as { timeout?: number; timeoutMs?: number; proxyIds?: number[] };
+      const proxyCon = new ProxyController()
+      const timeout = qdata.timeout ?? qdata.timeoutMs
+      await proxyCon.checkAllproxy(function (num, total) {
+        const process = Math.round(num / total * 100)
+        const messageData: CommonMessage<NumProcessdata> = {
+          status: true,
+          msg: "success",
+          data: {
+            process: process
+          }
+        };
+        (event as { sender: { send: (channel: string, message: string) => void } }).sender.send(CHECKALLPROXYMESSAGE, JSON.stringify(messageData))
+      }, function () {
+        const finmessageData: CommonMessage<NumProcessdata> = {
+          status: true,
+          msg: "success",
+          data: {
+            process: 100
+          }
+        };
+        (event as { sender: { send: (channel: string, message: string) => void } }).sender.send(CHECKALLPROXYMESSAGE, JSON.stringify(finmessageData))
+      }, timeout, qdata.proxyIds)
+    } catch (error) {
+      console.error('Error in checkAllproxy handler:', error)
+    }
   })
 
   ipcMain.on(REMOVEFAILUREPROXY, async (event) => {

@@ -29,5 +29,6 @@ describe("AI chat V2 panel layout", () => {
     expect(bodyRule).toContain("overflow: hidden");
     expect(messagesRule).toContain("min-height: 0");
     expect(composerRule).toContain("flex: 0 0 auto");
+    expect(composerRule).toContain("position: relative");
   });
 });

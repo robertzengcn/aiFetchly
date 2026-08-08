@@ -1,5 +1,6 @@
 const path = require("path");
 const dotenv = require("dotenv");
+const { spawnSync } = require("node:child_process");
 const { readdirSync, rmdirSync, statSync } = require("node:fs");
 const { join, normalize } = require("node:path");
 const { Walker, DepType } = require("flora-colossus");
@@ -36,6 +37,11 @@ const EXTERNAL_DEPENDENCIES = [
   "reflect-metadata",
   "@mixmark-io/domino",
   "electron-log",
+  "@xenova/transformers",
+  "onnxruntime-node",
+  "onnxruntime-common",
+  "sharp",
+  "sherpa-onnx-node",
 ];
 //import { ForgeConfig } from '@electron-forge/shared-types';
 // import { AutoUnpackNativesPlugin } from "@electron-forge/plugin-auto-unpack-natives";
@@ -44,6 +50,24 @@ const EXTERNAL_DEPENDENCIES = [
 dotenv.config({ path: path.resolve(__dirname, ".env") });
 const env = process.env.NODE_ENV || "development";
 dotenv.config({ path: path.resolve(__dirname, `.env.${env}`) });
+
+function ensureBetterSqliteElectronBinary() {
+  const scriptPath = join(__dirname, "scripts", "rebuild-better-sqlite.js");
+  const result = spawnSync(process.execPath, [scriptPath], {
+    cwd: __dirname,
+    stdio: "inherit",
+  });
+
+  if (result.error) {
+    throw result.error;
+  }
+  if (result.status !== 0) {
+    throw new Error(
+      `better-sqlite3 Electron rebuild failed with exit code ${result.status}`
+    );
+  }
+}
+
 module.exports = {
   packagerConfig: {
     icon: "./src/assets/images/icon",
@@ -53,10 +77,13 @@ module.exports = {
 
     // },
     asar: {
-      // .vite/build holds vec0.* copied by Vite; node_modules holds native deps — both must be real disk
+      // .vite/build holds vec0.* copied by Vite; node_modules holds native deps — both must be real disk.
+      // @xenova/transformers + onnxruntime-* + sharp ship native/WASM/.so artifacts that cannot load
+      // from inside app.asar, so they must be unpacked alongside better-sqlite3/sqlite-vec.
       unpackDir:
-        "**/{.vite,node_modules/better-sqlite3,node_modules/sqlite3,node_modules/sqlite-vec}/**",
-      unpack: "**/vec0.*",
+        "**/{.vite,node_modules/better-sqlite3,node_modules/sqlite3,node_modules/sqlite-vec,node_modules/@xenova/transformers,node_modules/onnxruntime-node,node_modules/onnxruntime-common,node_modules/sharp,node_modules/sherpa-onnx-node,node_modules/sherpa-onnx-darwin-arm64,node_modules/sherpa-onnx-darwin-x64,node_modules/sherpa-onnx-linux-arm64,node_modules/sherpa-onnx-linux-x64,node_modules/sherpa-onnx-win-ia32,node_modules/sherpa-onnx-win-x64}/**",
+      unpack:
+        "**/{vec0.*,node_modules/sherpa-onnx-darwin-arm64/*,node_modules/sherpa-onnx-darwin-x64/*,node_modules/sherpa-onnx-linux-arm64/*,node_modules/sherpa-onnx-linux-x64/*,node_modules/sherpa-onnx-win-ia32/*,node_modules/sherpa-onnx-win-x64/*}",
     },
     ignore: (file) => {
       const filePath = file.toLowerCase();
@@ -403,6 +430,15 @@ module.exports = {
             config: "vite.contactExtractionWorker.config.mjs",
           },
           {
+            entry:
+              "src/childprocess/aifetchly-config/WorkspaceConfigWatchWorker.ts",
+            config: "vite.aifetchlyConfigWorker.config.mjs",
+          },
+          {
+            entry: "src/childprocess/hook-execution/HookExecutionWorker.ts",
+            config: "vite.hookExecutionWorker.config.mjs",
+          },
+          {
             entry: "src/childprocess/google-maps/GoogleMapsWorker.ts",
             config: "vite.googleMapsWorker.config.mjs",
           },
@@ -414,6 +450,14 @@ module.exports = {
           //   entry: 'src/buckEmail.ts',
           //   config: 'vite.buckEmail.config.mjs'
           // },
+          {
+            entry: "src/childprocess/embedding/LocalEmbeddingWorker.ts",
+            config: "vite.localEmbeddingWorker.config.mjs",
+          },
+          {
+            entry: "src/childprocess/ai-chat-voice/AiChatVoiceWorker.ts",
+            config: "vite.aiChatVoiceWorker.config.mjs",
+          },
         ],
         renderer: [
           {
@@ -425,6 +469,10 @@ module.exports = {
     },
   ],
   hooks: {
+    // VS Code/Cursor launch electron-forge directly, bypassing npm prestart/predev.
+    preStart: async () => {
+      ensureBetterSqliteElectronBinary();
+    },
     postPackage: async (forgeConfig, options) => {
       // Copy uninstaller to the packaged application
       const {

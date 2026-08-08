@@ -11,8 +11,11 @@ vi.mock("electron", () => ({
   app: { getPath: vi.fn().mockReturnValue("/tmp") },
 }));
 
-// Mock Token so AI-enabled is controllable per-test via mockState.aiEnabled.
-const mockState = vi.hoisted(() => ({ aiEnabled: "true" }));
+// Mock Token so hosted entitlement and local-provider settings are controllable.
+const mockState = vi.hoisted(() => ({
+  aiEnabled: "true",
+  tokenStore: new Map<string, string>(),
+}));
 const mockGetAllToolFunctions = vi.hoisted(() =>
   vi.fn().mockResolvedValue([
     {
@@ -30,11 +33,42 @@ const mockGetAllToolFunctions = vi.hoisted(() =>
     },
   ])
 );
+const mockGetSkill = vi.hoisted(() => vi.fn().mockReturnValue(undefined));
+const mockIsRegistered = vi.hoisted(() => vi.fn().mockReturnValue(false));
 const mockSkillExecute = vi.hoisted(() => vi.fn());
+const mockToolApprovalState = vi.hoisted(() => ({
+  modes: new Map<string, string>(),
+}));
+const mockGetToolApprovalMode = vi.hoisted(() =>
+  vi.fn((conversationId: string) =>
+    mockToolApprovalState.modes.get(conversationId) ?? "ask_for_approval"
+  )
+);
+const mockSetToolApprovalMode = vi.hoisted(() =>
+  vi.fn((conversationId: string, mode: string) => {
+    mockToolApprovalState.modes.set(conversationId, mode);
+  })
+);
 vi.mock("@/modules/token", () => {
   return {
     Token: vi.fn().mockImplementation(() => ({
-      getValue: vi.fn().mockImplementation(() => mockState.aiEnabled),
+      getValue: vi.fn().mockImplementation((key: string) => {
+        if (key === "USER_AI_ENABLED") {
+          return mockState.aiEnabled;
+        }
+        return mockState.tokenStore.get(key) ?? "";
+      }),
+      setValue: vi.fn().mockImplementation((key: string, value: string) => {
+        mockState.tokenStore.set(key, value);
+      }),
+      deleteValue: vi.fn().mockImplementation((key: string) => {
+        mockState.tokenStore.delete(key);
+      }),
+      hasValue: vi.fn().mockImplementation(
+        (key: string) =>
+          mockState.tokenStore.has(key) &&
+          (mockState.tokenStore.get(key)?.length ?? 0) > 0
+      ),
     })),
   };
 });
@@ -90,7 +124,8 @@ vi.mock("@/api/aiChatApi", () => ({
 vi.mock("@/config/skillsRegistry", () => ({
   SkillRegistry: {
     getAllToolFunctions: mockGetAllToolFunctions,
-    getSkill: vi.fn().mockReturnValue(undefined),
+    getSkill: mockGetSkill,
+    isRegistered: mockIsRegistered,
   },
 }));
 
@@ -98,6 +133,13 @@ vi.mock("@/service/SkillExecutor", () => ({
   SkillExecutor: {
     execute: mockSkillExecute,
   },
+}));
+
+vi.mock("@/modules/AIChatToolApprovalModule", () => ({
+  AIChatToolApprovalModule: vi.fn().mockImplementation(() => ({
+    getMode: mockGetToolApprovalMode,
+    setMode: mockSetToolApprovalMode,
+  })),
 }));
 
 // Mock plan module
@@ -123,18 +165,48 @@ vi.mock("@/service/OpenAIChatTranscriptBuilder", () => ({
 }));
 
 // Mock compact-related modules used by AIChatContextAssembler (T11/T12).
-vi.mock("@/modules/AIChatSessionMemoryModule", () => ({
-  AIChatSessionMemoryModule: vi.fn().mockImplementation(() => ({
+const mockAIChatSessionMemoryModule = vi.hoisted(() =>
+  vi.fn().mockImplementation(() => ({
     getByConversation: vi.fn().mockResolvedValue(null),
-  })),
+  }))
+);
+vi.mock("@/modules/AIChatSessionMemoryModule", () => ({
+  AIChatSessionMemoryModule: mockAIChatSessionMemoryModule,
 }));
 vi.mock("@/modules/AIChatCompactModule", () => ({
   AIChatCompactModule: vi.fn().mockImplementation(() => ({
     getActiveSummary: vi.fn().mockResolvedValue(null),
   })),
 }));
+vi.mock("@/modules/AgentDefinitionModule", () => ({
+  AgentDefinitionModule: vi.fn().mockImplementation(() => ({
+    listActiveForRuntime: vi.fn().mockResolvedValue([]),
+  })),
+}));
 
-import { registerAiChatV2IpcHandlers } from "@/main-process/communication/ai-chat-v2-ipc";
+const mockResetSharedAutoDreamService = vi.hoisted(() => vi.fn());
+const mockResetSharedWorkspaceAutoDreamService = vi.hoisted(() => vi.fn());
+const mockSharedAutoDreamService = vi.hoisted(() => ({
+  evaluateAfterChatTurn: vi.fn().mockResolvedValue(undefined),
+  evaluateAfterAgentTask: vi.fn().mockResolvedValue(undefined),
+}));
+const mockSharedWorkspaceAutoDreamService = vi.hoisted(() => ({
+  evaluateAfterChatTurn: vi.fn().mockResolvedValue(undefined),
+  evaluateAfterAgentTask: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock("@/service/AIAutoDreamFactory", () => ({
+  getSharedAutoDreamService: vi.fn(() => mockSharedAutoDreamService),
+  resetSharedAutoDreamService: mockResetSharedAutoDreamService,
+  getSharedWorkspaceAutoDreamService: vi.fn(
+    () => mockSharedWorkspaceAutoDreamService
+  ),
+  resetSharedWorkspaceAutoDreamService: mockResetSharedWorkspaceAutoDreamService,
+}));
+
+import {
+  registerAiChatV2IpcHandlers,
+  resetAiChatV2RuntimeForDatabaseSwitch,
+} from "@/main-process/communication/ai-chat-v2-ipc";
 import {
   AI_CHAT_V2_RESUME_TOOL_AFTER_PERMISSION,
   AI_CHAT_V2_CONVERSATIONS,
@@ -145,12 +217,50 @@ import {
   AI_CHAT_V2_STREAM_STOP,
   AI_CHAT_V2_STREAM_CHUNK,
   AI_CHAT_V2_STREAM_COMPLETE,
+  AI_CHAT_V2_MODELS,
 } from "@/config/channellist";
+
+function enableLocalAiChat(capabilities?: { tools?: string }): void {
+  mockState.tokenStore.set("user_ai_provider_mode", "local");
+  mockState.tokenStore.set("user_local_ai_enabled", "true");
+  mockState.tokenStore.set(
+    "user_local_ai_provider_config",
+    JSON.stringify({
+      preset: "ollama",
+      name: "Ollama",
+      baseUrl: "http://localhost:11434/v1",
+      defaultModel: "llama3.1",
+      ...(capabilities
+        ? {
+            capabilities: {
+              modelsEndpoint: "supported",
+              chat: "supported",
+              streaming: "supported",
+              tools: capabilities.tools ?? "unknown",
+              vision: "unknown",
+            },
+          }
+        : {}),
+    })
+  );
+}
+
+function resetProviderState(): void {
+  mockState.aiEnabled = "true";
+  mockState.tokenStore.clear();
+}
+
+beforeEach(() => {
+  resetProviderState();
+});
 
 describe("AI Chat V2 IPC handlers", () => {
   beforeEach(() => {
     setupElectronMocks();
     vi.clearAllMocks();
+    mockToolApprovalState.modes.clear();
+    mockGetSkill.mockReturnValue(undefined);
+    mockIsRegistered.mockReturnValue(false);
     registerAiChatV2IpcHandlers();
   });
 
@@ -204,6 +314,9 @@ describe("AI Chat V2 — AI-disabled gate", () => {
   beforeEach(() => {
     setupElectronMocks();
     vi.clearAllMocks();
+    mockToolApprovalState.modes.clear();
+    mockGetSkill.mockReturnValue(undefined);
+    mockIsRegistered.mockReturnValue(false);
     registerAiChatV2IpcHandlers();
   });
   afterEach(() => {
@@ -216,7 +329,7 @@ describe("AI Chat V2 — AI-disabled gate", () => {
     const result = await mockIpcMain.callHandler(AI_CHAT_V2_CONVERSATIONS);
     expect(result).toMatchObject({
       status: false,
-      msg: "AI functionality is only available to subscribers.",
+      msg: "Hosted aiFetchly AI requires a subscription. Configure a local AI provider or upgrade your plan to use AI Chat.",
     });
     expect(mockGetConversations).not.toHaveBeenCalled();
   });
@@ -233,8 +346,51 @@ describe("AI Chat V2 — AI-disabled gate", () => {
     expect(payload).toBeDefined();
     expect(payload?.eventType).toBe("error");
     expect(payload?.errorMessage).toBe(
-      "AI functionality is only available to subscribers."
+      "Hosted aiFetchly AI requires a subscription. Configure a local AI provider or upgrade your plan to use AI Chat."
     );
+  });
+
+  it("allows stream when hosted AI is disabled but local provider config is valid", async () => {
+    mockState.aiEnabled = "false";
+    enableLocalAiChat();
+    mockOpenAIChatCompletionStream.mockImplementation(
+      async (_req, onChunk: (c: unknown) => void) => {
+        onChunk({ choices: [{ delta: { content: "local pong" } }] });
+        onChunk({ choices: [{ delta: {}, finish_reason: "stop" }] });
+      }
+    );
+
+    const senderSend = vi.fn();
+    await mockIpcMain.callHandler(
+      AI_CHAT_V2_STREAM,
+      { sender: { send: senderSend } },
+      JSON.stringify({ message: "hi" })
+    );
+
+    expect(mockOpenAIChatCompletionStream).toHaveBeenCalledTimes(1);
+    const payload = findCompletePayload(senderSend);
+    expect(payload?.eventType).toBe("complete");
+    expect(payload?.fullContent).toBe("local pong");
+  });
+
+  it("allows model listing when hosted AI is disabled but local provider config is valid", async () => {
+    mockState.aiEnabled = "false";
+    enableLocalAiChat();
+    mockListOpenAIModels.mockResolvedValue({
+      object: "list",
+      data: [
+        { id: "llama3.1", object: "model", created: 0, owned_by: "Ollama" },
+      ],
+      default_model: "llama3.1",
+    });
+
+    const result = await mockIpcMain.callHandler(AI_CHAT_V2_MODELS);
+
+    expect(result).toMatchObject({ status: true });
+    expect(mockListOpenAIModels).toHaveBeenCalledTimes(1);
+    expect(
+      (result as { data: { default_model: string } }).data.default_model
+    ).toBe("llama3.1");
   });
 });
 
@@ -242,6 +398,9 @@ describe("AI Chat V2 — stream validation", () => {
   beforeEach(() => {
     setupElectronMocks();
     vi.clearAllMocks();
+    mockToolApprovalState.modes.clear();
+    mockGetSkill.mockReturnValue(undefined);
+    mockIsRegistered.mockReturnValue(false);
     registerAiChatV2IpcHandlers();
   });
   afterEach(() => {
@@ -289,6 +448,9 @@ describe("AI Chat V2 — stream lifecycle", () => {
   beforeEach(() => {
     setupElectronMocks();
     vi.clearAllMocks();
+    mockToolApprovalState.modes.clear();
+    mockGetSkill.mockReturnValue(undefined);
+    mockIsRegistered.mockReturnValue(false);
     mockOpenAIChatCompletionStream.mockResolvedValue(undefined);
     registerAiChatV2IpcHandlers();
   });
@@ -327,6 +489,46 @@ describe("AI Chat V2 — stream lifecycle", () => {
     expect(mockSaveAssistantMessage).toHaveBeenCalledWith(
       expect.objectContaining({ content: "Hello world" })
     );
+  });
+
+  it("rebuilds stream runtime after a database account switch", async () => {
+    mockOpenAIChatCompletionStream.mockImplementation(
+      async (_req, onChunk: (c: unknown) => void) => {
+        onChunk({ choices: [{ delta: { content: "ok" } }] });
+        onChunk({
+          choices: [{ delta: { content: "" }, finish_reason: "stop" }],
+        });
+      }
+    );
+
+    const firstSenderSend = vi.fn();
+    await mockIpcMain.callHandler(
+      AI_CHAT_V2_STREAM,
+      { sender: { send: firstSenderSend } },
+      JSON.stringify({ message: "before switch" })
+    );
+    const firstRuntimeConstructCount =
+      mockAIChatSessionMemoryModule.mock.calls.length;
+
+    resetAiChatV2RuntimeForDatabaseSwitch();
+
+    const secondSenderSend = vi.fn();
+    await mockIpcMain.callHandler(
+      AI_CHAT_V2_STREAM,
+      { sender: { send: secondSenderSend } },
+      JSON.stringify({ message: "after switch" })
+    );
+
+    expect(mockAIChatSessionMemoryModule.mock.calls.length).toBeGreaterThan(
+      firstRuntimeConstructCount + 1
+    );
+  });
+
+  it("resets both auto-dream singletons after a database account switch", () => {
+    resetAiChatV2RuntimeForDatabaseSwitch();
+
+    expect(mockResetSharedAutoDreamService).toHaveBeenCalledTimes(1);
+    expect(mockResetSharedWorkspaceAutoDreamService).toHaveBeenCalledTimes(1);
   });
 
   it("saves partial content and emits cancelled on abort", async () => {
@@ -531,6 +733,32 @@ describe("AI Chat V2 — stream lifecycle", () => {
     expect(payload?.fullContent).toBe("Found one supplier.");
   });
 
+  it("strips tools from local-provider requests when tool support is not confirmed", async () => {
+    mockState.aiEnabled = "false";
+    enableLocalAiChat({ tools: "unsupported" });
+    mockOpenAIChatCompletionStream.mockImplementation(
+      async (req, onChunk: (c: unknown) => void) => {
+        expect(req.tools).toBeUndefined();
+        expect(req.tool_choice).toBeUndefined();
+        onChunk({ choices: [{ delta: { content: "Plain local answer." } }] });
+        onChunk({ choices: [{ delta: {}, finish_reason: "stop" }] });
+      }
+    );
+
+    const senderSend = vi.fn();
+    await mockIpcMain.callHandler(
+      AI_CHAT_V2_STREAM,
+      { sender: { send: senderSend } },
+      JSON.stringify({ message: "please search milk wholesale in google" })
+    );
+
+    expect(mockGetAllToolFunctions).toHaveBeenCalled();
+    expect(mockSkillExecute).not.toHaveBeenCalled();
+    const payload = findCompletePayload(senderSend);
+    expect(payload?.eventType).toBe("complete");
+    expect(payload?.fullContent).toBe("Plain local answer.");
+  });
+
   it("surfaces permission prompts and resumes the stream after approval", async () => {
     mockSkillExecute
       .mockResolvedValueOnce({
@@ -617,10 +845,10 @@ describe("AI Chat V2 — stream lifecycle", () => {
     const resumeResult = await mockIpcMain.callHandler(
       AI_CHAT_V2_RESUME_TOOL_AFTER_PERMISSION,
       {},
-      JSON.stringify({
+      {
         toolId: "call_1",
         conversationId: "v2-test-conv",
-      })
+      }
     );
     expect(resumeResult).toMatchObject({
       status: true,
@@ -652,12 +880,116 @@ describe("AI Chat V2 — stream lifecycle", () => {
       })
     );
   });
+
+  it("applies full access from a new conversation stream before executing shell tools", async () => {
+    mockGetSkill.mockImplementation((name: string) =>
+      name === "shell_execute"
+        ? {
+            name: "shell_execute",
+            permissionCategory: "shell",
+          }
+        : undefined
+    );
+    mockIsRegistered.mockImplementation(
+      (name: string) => name === "shell_execute"
+    );
+    mockSkillExecute.mockResolvedValueOnce({
+      tool_call_id: "call_shell",
+      tool_name: "shell_execute",
+      success: true,
+      result: {
+        exit_code: 0,
+        stdout: "ok\n",
+        stderr: "",
+      },
+      execution_time_ms: 9,
+    });
+
+    mockOpenAIChatCompletionStream
+      .mockImplementationOnce(async (_req, onChunk: (c: unknown) => void) => {
+        onChunk({
+          choices: [
+            {
+              index: 0,
+              delta: {
+                tool_calls: [
+                  {
+                    index: 0,
+                    id: "call_shell",
+                    type: "function",
+                    function: {
+                      name: "shell_execute",
+                      arguments: '{"command":"pwd"}',
+                    },
+                  },
+                ],
+              },
+              finish_reason: "tool_calls",
+            },
+          ],
+        });
+      })
+      .mockImplementationOnce(async (_req, onChunk: (c: unknown) => void) => {
+        onChunk({ choices: [{ delta: { content: "Shell completed." } }] });
+        onChunk({
+          choices: [
+            {
+              delta: { content: "" },
+              finish_reason: "stop",
+            },
+          ],
+        });
+      });
+
+    const senderSend = vi.fn();
+    const event = { sender: { send: senderSend } };
+
+    await mockIpcMain.callHandler(
+      AI_CHAT_V2_STREAM,
+      event,
+      JSON.stringify({
+        message: "run pwd",
+        toolApprovalMode: "full_access",
+      })
+    );
+
+    expect(mockSetToolApprovalMode).toHaveBeenCalledWith(
+      "v2-test-conv",
+      "full_access"
+    );
+    expect(mockSkillExecute).toHaveBeenCalledWith(
+      "shell_execute",
+      { command: "pwd" },
+      expect.objectContaining({
+        conversationId: "v2-test-conv",
+        toolCallId: "call_shell",
+        skipPermissionCheck: true,
+      })
+    );
+
+    const toolResultChunks = senderSend.mock.calls
+      .filter(([channel]) => channel === AI_CHAT_V2_STREAM_CHUNK)
+      .map(([, payload]) => JSON.parse(payload as string))
+      .filter((chunk) => chunk.eventType === "tool_result");
+    expect(
+      toolResultChunks.some(
+        (chunk) => chunk.toolResult?.needsPermissionPrompt === true
+      )
+    ).toBe(false);
+
+    const payload = findCompletePayload(senderSend);
+    expect(payload?.eventType).toBe("complete");
+    expect(payload?.fullContent).toBe("Shell completed.");
+  });
 });
 
 describe("AI Chat V2 — conversationId type validation", () => {
   beforeEach(() => {
     setupElectronMocks();
     vi.clearAllMocks();
+    mockToolApprovalState.modes.clear();
+    mockGetSkill.mockReturnValue(undefined);
+    mockIsRegistered.mockReturnValue(false);
     registerAiChatV2IpcHandlers();
   });
   afterEach(() => {

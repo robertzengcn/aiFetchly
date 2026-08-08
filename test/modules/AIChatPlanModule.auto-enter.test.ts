@@ -6,6 +6,7 @@ import { AIChatPlanModule } from "@/modules/AIChatPlanModule";
 import { AIChatPlanModel } from "@/model/AIChatPlan.model";
 import { AIChatPlanVersionModel } from "@/model/AIChatPlanVersion.model";
 import { AIChatPlanQuestionModel } from "@/model/AIChatPlanQuestion.model";
+import { AIChatPlanApprovalModel } from "@/model/AIChatPlanApproval.model";
 import type { AIChatPlanEntity } from "@/entity/AIChatPlan.entity";
 
 /**
@@ -34,6 +35,9 @@ describe("AIChatPlanModule.ensurePlanForConversation idempotency", function () {
   beforeEach(function () {
     sinon.restore();
     mod = new AIChatPlanModule();
+    sinon
+      .stub(AIChatPlanApprovalModel.prototype, "getLatestByPlanVersion")
+      .resolves(null);
   });
 
   afterEach(function () {
@@ -132,6 +136,89 @@ describe("AIChatPlanModule.ensurePlanForConversation idempotency", function () {
       expect((err as Error).message).to.contain("v2-");
     }
     expect(threw).to.be.true;
+  });
+});
+
+describe("AIChatPlanModule.getPlanState current-version approvals", function () {
+  this.timeout(5000);
+
+  let mod: AIChatPlanModule;
+
+  beforeEach(function () {
+    sinon.restore();
+    mod = new AIChatPlanModule();
+  });
+
+  afterEach(function () {
+    sinon.restore();
+  });
+
+  it("returns approved when the current version already has an approval decision", async function () {
+    const approvedAt = new Date("2026-01-01T00:00:00.000Z");
+    const fakePlan = {
+      planId: "plan-approved-history-001",
+      conversationId: "v2-test-approved-history",
+      status: "awaiting_approval",
+      title: "Approved history plan",
+      objective: "Avoid a sticky history approval card",
+      currentVersion: 2,
+      approvedAt: null,
+      rejectedAt: null,
+    } as unknown as AIChatPlanEntity;
+
+    sinon
+      .stub(AIChatPlanModel.prototype, "getActiveByConversation")
+      .resolves(fakePlan);
+    sinon.stub(AIChatPlanModel.prototype, "getByPlanId").resolves(fakePlan);
+    sinon.stub(AIChatPlanVersionModel.prototype, "getLatest").resolves(null);
+    sinon
+      .stub(AIChatPlanQuestionModel.prototype, "getPendingByPlan")
+      .resolves(null);
+    sinon
+      .stub(AIChatPlanApprovalModel.prototype, "getLatestByPlanVersion")
+      .resolves({
+        planId: fakePlan.planId,
+        version: 2,
+        decision: "approved",
+        createdAt: approvedAt,
+      } as unknown as Awaited<
+        ReturnType<AIChatPlanApprovalModel["getLatestByPlanVersion"]>
+      >);
+
+    const result = await mod.getPlanState("v2-test-approved-history");
+
+    expect(result?.status).to.equal("approved");
+    expect(result?.approvedAt).to.equal(approvedAt.toISOString());
+  });
+
+  it("keeps awaiting approval when the current version has no decision", async function () {
+    const fakePlan = {
+      planId: "plan-current-awaiting-002",
+      conversationId: "v2-test-current-awaiting",
+      status: "awaiting_approval",
+      title: "Current plan",
+      objective: "Current version still needs approval",
+      currentVersion: 2,
+      approvedAt: null,
+      rejectedAt: null,
+    } as unknown as AIChatPlanEntity;
+
+    sinon
+      .stub(AIChatPlanModel.prototype, "getActiveByConversation")
+      .resolves(fakePlan);
+    sinon.stub(AIChatPlanModel.prototype, "getByPlanId").resolves(fakePlan);
+    sinon.stub(AIChatPlanVersionModel.prototype, "getLatest").resolves(null);
+    sinon
+      .stub(AIChatPlanQuestionModel.prototype, "getPendingByPlan")
+      .resolves(null);
+    const approvalStub = sinon
+      .stub(AIChatPlanApprovalModel.prototype, "getLatestByPlanVersion")
+      .resolves(null);
+
+    const result = await mod.getPlanState("v2-test-current-awaiting");
+
+    expect(result?.status).to.equal("awaiting_approval");
+    expect(approvalStub.calledOnceWithExactly(fakePlan.planId, 2)).to.be.true;
   });
 });
 

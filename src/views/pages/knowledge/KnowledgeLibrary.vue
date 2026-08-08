@@ -281,7 +281,7 @@
               :items="availableModels"
               :label="t('knowledge.embedding_model')"
               :loading="loadingModels"
-              item-title="name"
+              item-title="displayName"
               item-value="name"
               :hint="t('knowledge.embedding_model_hint')"
               persistent-hint
@@ -289,11 +289,22 @@
               <template v-slot:item="{ props, item }">
                 <v-list-item v-bind="props">
                   <template v-slot:title>
-                    {{ item.raw.name }}
+                    {{ item.raw.displayName || item.raw.name }}
                   </template>
                   <template v-slot:subtitle>
-                    {{ item.raw.description }} - 
+                    {{ item.raw.description }} -
                     {{ t('knowledge.max_dimensions') }}: {{ item.raw.dimensions }}
+                  </template>
+                  <template v-slot:append>
+                    <v-chip
+                      v-if="item.raw.is_free"
+                      size="x-small"
+                      variant="tonal"
+                      color="success"
+                      class="ml-2"
+                    >
+                      {{ t('knowledge.model_free') }}
+                    </v-chip>
                   </template>
                 </v-list-item>
               </template>
@@ -346,21 +357,6 @@
       </v-card>
     </v-dialog>
 
-    <!-- Loading Overlay -->
-    <v-overlay
-      v-model="isLoading"
-      class="align-center justify-center"
-    >
-      <v-progress-circular
-        color="primary"
-        indeterminate
-        size="64"
-      />
-      <div class="mt-4 text-center">
-        <div class="text-h6">{{ loadingMessage }}</div>
-        <div class="text-caption">{{ loadingSubMessage }}</div>
-      </div>
-    </v-overlay>
   </div>
 </template>
 
@@ -387,9 +383,6 @@ import { DocumentMetadata } from '@/entityTypes/metadataType';
 const activeTab = ref('documents');
 const showUploadDialog = ref(false);
 const showSettingsDialog = ref(false);
-const isLoading = ref(false);
-const loadingMessage = ref('');
-const loadingSubMessage = ref('');
 const statusMessage = ref('');
 const statusType = ref<'success' | 'error' | 'warning' | 'info'>('info');
 
@@ -440,8 +433,6 @@ onUnmounted(() => {
 // Methods
 async function initializeRAGSystem() {
   try {
-    setLoading(true, t('knowledge.initializing_rag_system'), t('knowledge.setting_up_knowledge_library'));
-    
     // Check if RAG is already initialized and get stats including default embedding model
     const response = await getRAGStats();
     console.log('RAG Stats Response:', response);
@@ -452,17 +443,8 @@ async function initializeRAGSystem() {
       selectedEmbeddingModel.value = response.data.defaultEmbeddingModel;
       console.log('✅ Default embedding model set from stats:', response.data.defaultEmbeddingModel);
     }
-    
-    // if (!response.success) {
-    //   // Initialize with default configuration
-    //   //await initializeWithDefaultConfig();
-    // }
-    
-    setLoading(false);
-    //showStatus(t('knowledge.rag_system_initialized_successfully'), 'success');
   } catch (error) {
     console.error('Failed to initialize RAG system:', error);
-    setLoading(false);
     showStatus(`${t('knowledge.failed_to_initialize_rag_system')}: ${error}`, 'error');
   }
 }
@@ -488,12 +470,6 @@ async function initializeRAGSystem() {
 //     throw new Error(response.message);
 //   }
 // }
-
-function setLoading(loading: boolean, message = '', subMessage = '') {
-  isLoading.value = loading;
-  loadingMessage.value = message;
-  loadingSubMessage.value = subMessage;
-}
 
 function showStatus(message: string, type: 'success' | 'error' | 'warning' | 'info' = 'info') {
   statusMessage.value = message;
@@ -800,6 +776,9 @@ async function confirmUpload() {
     uploading.value = false;
     currentUploadingFile.value = '';
     uploadProgress.value.clear();
+    if (documentManagement.value) {
+      documentManagement.value.refreshDocuments();
+    }
   }
 }
 
@@ -928,8 +907,6 @@ async function copyFileToTemp(file: File, metadata?: DocumentMetadata)
       // Automatically start chunking and embedding process for database-saved documents
       if (uploadResult.document.id) {
         try {
-          setLoading(true, t('knowledge.processing_document'), t('knowledge.chunking_and_embedding_document'));
-          
           const chunkEmbedResult = await chunkAndEmbedDocument(uploadResult.document.id);
           
           if (chunkEmbedResult.success && chunkEmbedResult.data) {
@@ -962,8 +939,6 @@ async function copyFileToTemp(file: File, metadata?: DocumentMetadata)
             }), 
             'error'
           );
-        } finally {
-          setLoading(false);
         }
       }
     } else if (uploadResult.databaseError) {
@@ -1066,11 +1041,6 @@ defineExpose({
   .knowledge-content {
     margin: 8px;
   }
-}
-
-/* Loading overlay styles */
-.v-overlay {
-  background-color: rgba(0, 0, 0, 0.7);
 }
 
 /* Status alert styles */

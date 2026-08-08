@@ -25,6 +25,17 @@ import {
   contactExtractionWorkerOutboundSchema,
   type ContactExtractionWorkerOutbound,
 } from "@/schemas/worker/contactExtraction";
+import {
+  UrlExtractionCollector,
+  type UrlContactExtractionOutcome,
+  type UrlContactExtractionResult,
+} from "./urlExtractionCollector";
+
+// Re-export the URL-extraction result/outcome types so existing import sites
+// (`@/main-process/communication/contactExtraction-ipc`) keep resolving. The
+// canonical definitions now live in urlExtractionCollector.ts so the
+// settlement logic can be unit-tested in isolation.
+export type { UrlContactExtractionResult, UrlContactExtractionOutcome };
 
 // Type for IPC request with resultIds
 interface ContactExtractionRequest {
@@ -36,31 +47,13 @@ interface ContactExtractionRequest {
 // automatically inside switch(msg.type), eliminating the loose index-signature
 // that previously allowed silent field drift.
 
-/** Result item for URL-only contact extraction (AI tool) */
-export interface UrlContactExtractionResult {
-  url: string;
-  success: boolean;
-  data?: {
-    emails?: string[];
-    phones?: string[];
-    address?: string | null;
-    socialLinks?: string[] | null;
-  };
-  error?: string;
-}
+/** Result item for URL-only contact extraction (AI tool) — defined in
+ * urlExtractionCollector.ts and re-exported above. */
 
-/** Pending URL extraction requests: requestId -> resolver and collected results */
-const pendingUrlExtractions = new Map<
-  string,
-  {
-    resolve: (results: UrlContactExtractionResult[]) => void;
-    reject: (err: Error) => void;
-    results: UrlContactExtractionResult[];
-    total: number;
-    timeoutId: ReturnType<typeof setTimeout>;
-    context?: ModuleExecutionContext;
-  }
->();
+/** Pending URL extraction requests: requestId -> collector that gathers
+ * per-URL results and settles (resolve-with-partials on timeout, or reject
+ * only when zero results were collected). */
+const pendingUrlExtractions = new Map<string, UrlExtractionCollector>();
 
 const URL_EXTRACTION_TIMEOUT_MS = 300000; // 5 minutes total for all URLs
 
@@ -192,96 +185,99 @@ function handleUrlExtractionResult(
     { type: "extract-contact-url-result" }
   >
 ): void {
-  const pending = pendingUrlExtractions.get(message.requestId);
-  if (!pending) return;
+  const collector = pendingUrlExtractions.get(message.requestId);
+  if (!collector) return;
 
-  pending.results.push({
+  const done = collector.addResult({
     url: message.url,
     success: message.success,
     data: message.data,
     error: message.error,
   });
-
-  // Forward progress to the execution context (AI tool-progress pipeline).
-  // Each per-URL result counts as one unit of progress.
-  if (pending.context) {
-    const collected = pending.results.length;
-    const expected = pending.total;
-    const phase = collected >= expected ? "finalizing" : "extracting";
-    pending.context.emitProgress?.({
-      phase,
-      message: `Extracted ${collected} of ${expected} contacts`,
-      partialCount: collected,
-      expectedCount: expected,
-    });
-    if (pending.context.toolCallId) {
-      ToolExecutor.updatePartialSnapshot(pending.context.toolCallId, {
-        collectedCount: collected,
-        expectedCount: expected,
-        data: { results: pending.results },
-      });
-    }
-  }
-
-  if (pending.results.length >= pending.total) {
-    clearTimeout(pending.timeoutId);
+  if (done) {
     pendingUrlExtractions.delete(message.requestId);
-    pending.resolve(pending.results);
   }
 }
 
 /**
  * Extract contact information from URLs via the worker (no DB write).
- * Used by the AI tool extract_contact_info. Returns when all URLs are processed or timeout.
+ * Used by the AI tool extract_contact_info.
+ *
+ * Settles when every URL has reported, the 5-minute deadline fires, or the
+ * worker is unavailable. On a partial deadline (some URLs reported), the
+ * promise RESOLVES with the partial set (outcome.timedOut === true) so the
+ * model still receives the contacts that were collected — instead of the
+ * opaque "Contact extraction timed out" error that previously discarded
+ * everything. Only a zero-result deadline rejects.
  */
 export async function extractContactFromUrls(
   urls: string[],
   context?: ModuleExecutionContext
-): Promise<UrlContactExtractionResult[]> {
+): Promise<UrlContactExtractionOutcome> {
   const validUrls = urls.filter(
     (u): u is string => typeof u === "string" && u.trim().length > 0
   );
   if (validUrls.length === 0) {
-    return [];
+    return { results: [], expectedTotal: 0, timedOut: false };
   }
 
   const requestId = uuidv4();
-  return new Promise<UrlContactExtractionResult[]>((resolve, reject) => {
-    const timeoutId = setTimeout(() => {
-      if (pendingUrlExtractions.has(requestId)) {
-        pendingUrlExtractions.delete(requestId);
-        reject(
-          new Error(
-            `Contact extraction timed out after ${
-              URL_EXTRACTION_TIMEOUT_MS / 60000
-            } minutes`
-          )
-        );
-      }
-    }, URL_EXTRACTION_TIMEOUT_MS);
-
-    pendingUrlExtractions.set(requestId, {
-      resolve,
-      reject,
-      results: [],
-      total: validUrls.length,
-      timeoutId,
-      context,
-    });
-
-    ensureWorkerStarted();
-    if (contactExtractionWorker?.send) {
-      contactExtractionWorker.send({
-        type: "extract-contact-from-urls",
-        requestId,
-        urls: validUrls,
+  const collector = new UrlExtractionCollector({
+    total: validUrls.length,
+    timeoutMs: URL_EXTRACTION_TIMEOUT_MS,
+    onResult: (_result, accumulated, collected, expected) => {
+      // Forward progress + a partial snapshot to the execution context. The
+      // snapshot is the sync-path timeout recovery path: if the outer 240s
+      // browser ceiling fires before this collector settles, the query loop
+      // reads it and returns whatever was collected instead of a hard error.
+      if (!context) return;
+      const phase = collected >= expected ? "finalizing" : "extracting";
+      context.emitProgress?.({
+        phase,
+        message: `Extracted ${collected} of ${expected} contacts`,
+        partialCount: collected,
+        expectedCount: expected,
       });
-    } else {
-      clearTimeout(timeoutId);
-      pendingUrlExtractions.delete(requestId);
-      reject(new Error("Contact extraction worker is not available"));
-    }
+      if (context.toolCallId) {
+        ToolExecutor.updatePartialSnapshot(context.toolCallId, {
+          collectedCount: collected,
+          expectedCount: expected,
+          data: {
+            success: true,
+            partial: true,
+            collectedCount: collected,
+            expectedCount: expected,
+            results: accumulated,
+            message: `Collected ${collected} of ${expected} contact results before the timeout ceiling fired.`,
+          },
+        });
+      }
+    },
   });
+  pendingUrlExtractions.set(requestId, collector);
+
+  // Drop the registry entry on settlement (success, partial, or reject) so
+  // the map cannot leak. Late worker results for this requestId are ignored.
+  const cleanup = (): void => {
+    pendingUrlExtractions.delete(requestId);
+  };
+  collector.promise.then(cleanup, cleanup);
+
+  ensureWorkerStarted();
+  if (contactExtractionWorker?.send) {
+    contactExtractionWorker.send({
+      type: "extract-contact-from-urls",
+      requestId,
+      urls: validUrls,
+    });
+  } else {
+    pendingUrlExtractions.delete(requestId);
+    collector.rejectWithError(
+      new Error("Contact extraction worker is not available")
+    );
+  }
+
+  return collector.promise;
 }
 
 /**

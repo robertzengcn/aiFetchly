@@ -128,10 +128,11 @@ export function registerSearchIpcHandlers(): void {
     searchListInputSchema,
     async (input) => {
       const searchControl = SearchController.getInstance();
+      const sortby = Array.isArray(input.sortby) ? input.sortby[0] : input.sortby;
       const res = await searchControl.listSearchresult(
         input.page ?? 0,
         input.size ?? 10,
-        input.sortby,
+        sortby,
         input.search,
       );
       return { records: res.records, num: res.total };

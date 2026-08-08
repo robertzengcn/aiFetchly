@@ -13,6 +13,20 @@ import {
   batchKeywordGenerationResponseSchema,
   chatApiResponseSchema,
 } from "@/schemas/api/aiChat";
+import { AIProviderResolver } from "@/service/aiProvider/AIProviderResolver";
+import { OpenAICompatibleProviderClient } from "@/service/aiProvider/OpenAICompatibleProviderClient";
+import type { LocalAIProviderConfig } from "@/entityTypes/aiProviderTypes";
+import {
+  AIChatRecoverableError,
+  type AIChatRecoveryReason,
+} from "@/service/AIChatRecoveryTypes";
+import { AIChatRecoveryClassifier } from "@/service/AIChatRecoveryClassifier";
+import {
+  AI_CHAT_RECOVERY_DEFAULTS,
+  AIChatRetryPolicy,
+  type AIChatRecoveryProfile,
+  type AIChatRetryProfile,
+} from "@/service/AIChatRetryPolicy";
 
 /**
  * Chat request interface
@@ -412,6 +426,23 @@ export interface OpenAIToolCall {
   function: OpenAIToolCallFunction;
 }
 
+/** Non-standard image payload returned by aiFetchly's OpenAI-compatible chat endpoint. */
+export interface OpenAIChatImage {
+  type: "image";
+  delivery?: "provider_url" | "base64" | string;
+  url?: string;
+  original_url?: string;
+  local_path?: string;
+  file_name?: string;
+  b64_json?: string;
+  expires_at?: string;
+  download_required?: boolean;
+  mime_type?: string;
+  width?: number | null;
+  height?: number | null;
+  metadata?: Record<string, unknown>;
+}
+
 /** OpenAI-compatible streaming tool call delta */
 export interface OpenAIStreamToolCallDelta {
   index: number;
@@ -423,12 +454,48 @@ export interface OpenAIStreamToolCallDelta {
   };
 }
 
+/** OpenAI-compatible text content part */
+export type OpenAITextContentPart = {
+  type: "text";
+  text: string;
+};
+
+/** OpenAI-compatible image URL content part */
+export type OpenAIImageUrlContentPart = {
+  type: "image_url";
+  image_url: {
+    url: string;
+    detail?: "auto" | "low" | "high";
+  };
+};
+
+/** OpenAI-compatible message content: string (text-only) or content parts array (multimodal). */
+export type OpenAIMessageContent =
+  | string
+  | Array<OpenAITextContentPart | OpenAIImageUrlContentPart>;
+
 /** OpenAI-compatible chat message */
 export interface OpenAIChatMessage {
   role: OpenAIMessageRole;
-  content: string | null;
+  content: OpenAIMessageContent | null;
   tool_calls?: OpenAIToolCall[];
   tool_call_id?: string;
+  images?: OpenAIChatImage[];
+}
+
+/** Safely convert OpenAIMessageContent to a display string. */
+export function openAIContentToString(
+  content: OpenAIMessageContent | null | undefined
+): string {
+  if (content == null) return "";
+  if (typeof content === "string") return content;
+  return content
+    .map((part) =>
+      part.type === "text"
+        ? part.text
+        : `[Image: ${part.image_url.url.slice(0, 60)}...]`
+    )
+    .join("\n");
 }
 
 /** OpenAI-compatible tool choice */
@@ -469,6 +536,11 @@ export interface OpenAIModel {
   context_size?: number;
   /** Max output tokens, when reported by the server. */
   max_tokens?: number;
+  /**
+   * Whether the model is free to use (no input/output cost). Reported by the
+   * AI server's `/api/ai/v1/models` endpoint as `is_free`.
+   */
+  is_free?: boolean;
 }
 
 /** OpenAI-compatible models list response */
@@ -512,6 +584,7 @@ export interface OpenAIStreamDelta {
   role?: string;
   content?: string | null;
   tool_calls?: OpenAIStreamToolCallDelta[];
+  images?: OpenAIChatImage[];
 }
 
 /** OpenAI-compatible streaming chunk choice */
@@ -641,6 +714,29 @@ export interface StreamRetryInfo {
 }
 
 /**
+ * Information passed to the onRecoveryStatus callback when a classified
+ * failure has been processed by the recovery policy and the API layer is
+ * about to retry or escalate. Mirrors AIChatQueryRecoveryStatusEvent at
+ * the API boundary.
+ */
+export interface StreamRecoveryInfo {
+  /** Layer reporting (Layer 1: api_retry, Layer 2: overload_retry). */
+  layer: "api_retry" | "overload_retry";
+  /** Classified reason for the failure. */
+  reason: AIChatRecoveryReason;
+  /** 1-based retry attempt within this layer. */
+  attempt: number;
+  /** Max retry attempts for this layer's profile. */
+  maxAttempts: number;
+  /** Delay (ms) before the next attempt. */
+  delayMs: number;
+  /** Cumulative consecutive 529 count (overload escalation tracker). */
+  consecutiveOverloadCount?: number;
+  /** Classified error message (redacted of user content). */
+  message: string;
+}
+
+/**
  * Maximum number of retry attempts for a streaming connection failure
  * (so up to maxAttempts + 1 total tries including the initial attempt).
  */
@@ -651,10 +747,13 @@ const STREAM_RETRY_MAX_ATTEMPTS = 3;
  * exponential backoff: base * 2^attempt (1s, 2s, 4s).
  */
 const STREAM_RETRY_BASE_DELAY_MS = 1000;
+const MODEL_LIST_RETRY_MAX_ATTEMPTS = 3;
+const MODEL_LIST_RETRY_BASE_DELAY_MS = 500;
 
 export class AiChatApi {
   private _httpClient: HttpClient;
   private validationConfig: AiValidationConfig;
+  private _providerResolver?: AIProviderResolver;
 
   /**
    * Creates a new AiChatApi instance
@@ -666,6 +765,29 @@ export class AiChatApi {
       ...DEFAULT_VALIDATION_CONFIG,
       ...validationConfig,
     };
+  }
+
+  /**
+   * Lazy chat-availability resolver. Constructed on first use so creating an
+   * AiChatApi (e.g. in worker processes) does not touch encrypted storage
+   * until a chat call actually happens.
+   */
+  private getProviderResolver(): AIProviderResolver {
+    if (!this._providerResolver) {
+      this._providerResolver = new AIProviderResolver();
+    }
+    return this._providerResolver;
+  }
+
+  /**
+   * Build a one-off OpenAI-compatible client for a resolved local provider.
+   * Never cached — provider settings may change while the app is open.
+   */
+  private localClient(
+    config: LocalAIProviderConfig,
+    apiKey: string
+  ): OpenAICompatibleProviderClient {
+    return new OpenAICompatibleProviderClient(config, apiKey);
   }
 
   /**
@@ -779,12 +901,15 @@ export class AiChatApi {
   }
 
   /**
-   * Return a copy of the payload with large base64 fields replaced by a
-   * placeholder so request logs stay readable. Does not mutate the original
-   * request payload (immutability rule).
+   * Return a copy of the payload with large base64 fields and secrets replaced
+   * by placeholders so request logs stay readable and never leak credentials.
+   * Does not mutate the original request payload (immutability rule).
    */
   private _redactDebugPayload(data: unknown): unknown {
     if (data === null || typeof data !== "object") {
+      if (typeof data === "string" && data.startsWith("data:image/")) {
+        return `<image data url len=${data.length}>`;
+      }
       return data;
     }
     if (Array.isArray(data)) {
@@ -794,7 +919,17 @@ export class AiChatApi {
     for (const [key, value] of Object.entries(
       data as Record<string, unknown>
     )) {
+      const lcKey = key.toLowerCase();
       if (
+        lcKey === "authorization" ||
+        lcKey === "api_key" ||
+        lcKey === "apikey" ||
+        lcKey === "user_local_ai_provider_api_key"
+      ) {
+        redacted[key] = "<redacted>";
+      } else if (typeof value === "string" && value.startsWith("data:image/")) {
+        redacted[key] = `<image data url len=${value.length}>`;
+      } else if (
         (key === "screenshot" || key === "attachments") &&
         typeof value === "string" &&
         value.length > 200
@@ -1756,17 +1891,103 @@ export class AiChatApi {
    * @returns Promise resolving to models list in OpenAI format
    */
   async listOpenAIModels(): Promise<OpenAIModelsResponse> {
-    this.ensureAIEnabled();
-    try {
-      const raw = await this._httpClient.get("/api/ai/v1/models");
-      return this.normalizeModelsResponse(raw);
-    } catch (error) {
-      if (!this.isNotFoundError(error)) {
-        throw error;
+    if (!process.env.WORKER_TYPE) {
+      const resolved = this.getProviderResolver().resolveForChat();
+      if (!resolved.canUse) {
+        throw new Error(resolved.message);
       }
-      const legacyModels = await this._httpClient.get("/api/ai/chat/models");
-      return this.normalizeLegacyModelsResponse(legacyModels);
+      if (resolved.kind === "local") {
+        return this.localClient(resolved.config, resolved.apiKey).listModels();
+      }
+      return this.listOpenAIModelsHosted();
     }
+    // Worker processes have no provider settings; keep the hosted-only gate.
+    this.ensureAIEnabled();
+    return this.listOpenAIModelsHosted();
+  }
+
+  /** Hosted aiFetchly model listing, wrapped in dev's model-list retry policy. */
+  private async listOpenAIModelsHosted(): Promise<OpenAIModelsResponse> {
+    return this.withModelListRetry(async () => {
+      try {
+        const raw = await this._httpClient.get("/api/ai/v1/models");
+        return this.normalizeModelsResponse(raw);
+      } catch (error) {
+        if (!this.isNotFoundError(error)) {
+          throw error;
+        }
+        const legacyModels = await this._httpClient.get("/api/ai/chat/models");
+        return this.normalizeLegacyModelsResponse(legacyModels);
+      }
+    });
+  }
+
+  private async withModelListRetry<T>(operation: () => Promise<T>): Promise<T> {
+    let attempt = 1;
+    try {
+      return await operation();
+    } catch (error) {
+      let lastError: unknown = error;
+      while (
+        attempt < MODEL_LIST_RETRY_MAX_ATTEMPTS &&
+        this.isRetryableModelListError(lastError)
+      ) {
+        await this.sleepWithAbort(this.computeModelListRetryDelay(attempt));
+        attempt += 1;
+        try {
+          return await operation();
+        } catch (retryError) {
+          lastError = retryError;
+        }
+      }
+      throw lastError;
+    }
+  }
+
+  private computeModelListRetryDelay(attempt: number): number {
+    return MODEL_LIST_RETRY_BASE_DELAY_MS * Math.pow(2, attempt - 1);
+  }
+
+  private isRetryableModelListError(error: unknown): boolean {
+    if (this.isNotFoundError(error)) {
+      return false;
+    }
+
+    const status = this.getErrorStatus(error);
+    if (typeof status === "number") {
+      return status === 0 || status === 429 || (status >= 500 && status < 600);
+    }
+
+    if (!(error instanceof Error)) {
+      return false;
+    }
+
+    const text = `${error.name} ${error.message}`.toLowerCase();
+    return (
+      text.includes("network") ||
+      text.includes("fetch failed") ||
+      text.includes("failed to fetch") ||
+      text.includes("timeout") ||
+      text.includes("timed out") ||
+      text.includes("econnrefused") ||
+      text.includes("econnreset") ||
+      text.includes("enotfound") ||
+      text.includes("etimedout") ||
+      text.includes("socket hang up") ||
+      text.includes("too many requests") ||
+      text.includes("internal server error") ||
+      text.includes("bad gateway") ||
+      text.includes("service unavailable") ||
+      text.includes("gateway timeout")
+    );
+  }
+
+  private getErrorStatus(error: unknown): number | undefined {
+    if (!this.isRecord(error)) {
+      return undefined;
+    }
+    const status = error.status ?? error.statusCode;
+    return typeof status === "number" ? status : undefined;
   }
 
   /**
@@ -1816,6 +2037,10 @@ export class AiChatApi {
       if (typeof maxTokens === "number" && maxTokens > 0) {
         model.max_tokens = maxTokens;
       }
+      const isFreeRaw = (entry as { is_free?: unknown }).is_free;
+      if (typeof isFreeRaw === "boolean") {
+        model.is_free = isFreeRaw;
+      }
       data.push(model);
     }
     const defaultModel = this.getStringField(response, "default_model");
@@ -1836,7 +2061,26 @@ export class AiChatApi {
   async openAIChatCompletion(
     request: OpenAIChatCompletionRequest
   ): Promise<OpenAIChatCompletionResponse> {
+    if (!process.env.WORKER_TYPE) {
+      const resolved = this.getProviderResolver().resolveForChat();
+      if (!resolved.canUse) {
+        throw new Error(resolved.message);
+      }
+      if (resolved.kind === "local") {
+        return this.localClient(resolved.config, resolved.apiKey).complete(
+          request
+        );
+      }
+      return this.openAIChatCompletionHosted(request);
+    }
     this.ensureAIEnabled();
+    return this.openAIChatCompletionHosted(request);
+  }
+
+  /** Hosted aiFetchly non-streaming completion (existing behavior, unchanged). */
+  private async openAIChatCompletionHosted(
+    request: OpenAIChatCompletionRequest
+  ): Promise<OpenAIChatCompletionResponse> {
     const data: OpenAIChatCompletionRequest = {
       messages: request.messages,
       stream: false,
@@ -1870,13 +2114,16 @@ export class AiChatApi {
    * Streaming chat completion using the OpenAI-compatible API.
    * POST /v1/chat/completions (stream: true)
    *
+   * Recovery behavior: classified failures (network, timeout, 429, 5xx,
+   * 529) are retried by `AIChatRetryPolicy` with exponential backoff and
+   * 25% jitter. The legacy `onRetry` callback keeps emitting for backward
+   * compatibility (the renderer's `retry_connect` badge). New callers can
+   * also pass `onRecoveryStatus` to receive structured Layer 1/Layer 2
+   * recovery events.
+   *
    * @param request - Chat completion request with messages and optional parameters
    * @param onChunk - Callback invoked for each parsed streaming chunk
-   * @param options - Optional abort signal and retry callback. When the
-   *   initial connection to the AI server fails (network error, 5xx, or
-   *   429), the client retries up to `STREAM_RETRY_MAX_ATTEMPTS` times with
-   *   exponential backoff. The `onRetry` callback is invoked before each
-   *   retry so callers can surface the reconnection attempt in the UI.
+   * @param options - Optional abort signal, retry callback, and recovery callback.
    */
   async openAIChatCompletionStream(
     request: OpenAIChatCompletionRequest,
@@ -1884,9 +2131,49 @@ export class AiChatApi {
     options?: {
       signal?: AbortSignal;
       onRetry?: (info: StreamRetryInfo) => void;
+      /** Recovery profile (default: foreground). Background = 1 retry, persistent = 6h. */
+      retryProfile?: AIChatRecoveryProfile;
+      /** Structured recovery status callback (Layer 1/2). */
+      onRecoveryStatus?: (info: StreamRecoveryInfo) => void;
     }
   ): Promise<void> {
+    if (!process.env.WORKER_TYPE) {
+      const resolved = this.getProviderResolver().resolveForChat();
+      if (!resolved.canUse) {
+        throw new Error(resolved.message);
+      }
+      if (resolved.kind === "local") {
+        await this.localClient(resolved.config, resolved.apiKey).stream(
+          request,
+          onChunk,
+          options
+        );
+        return;
+      }
+      await this.openAIChatCompletionStreamHosted(request, onChunk, options);
+      return;
+    }
+    // Worker processes have no provider settings; keep the hosted-only gate.
     this.ensureAIEnabled();
+    await this.openAIChatCompletionStreamHosted(request, onChunk, options);
+  }
+
+  /**
+   * Hosted aiFetchly streaming completion. Preserves the existing retry,
+   * legacy-endpoint fallback, and SSE parsing behavior exactly.
+   */
+  private async openAIChatCompletionStreamHosted(
+    request: OpenAIChatCompletionRequest,
+    onChunk: (chunk: OpenAIChatCompletionChunk) => void,
+    options?: {
+      signal?: AbortSignal;
+      onRetry?: (info: StreamRetryInfo) => void;
+      /** Recovery profile (default: foreground). Background = 1 retry, persistent = 6h. */
+      retryProfile?: AIChatRecoveryProfile;
+      /** Structured recovery status callback (Layer 1/2). */
+      onRecoveryStatus?: (info: StreamRecoveryInfo) => void;
+    }
+  ): Promise<void> {
     const data: OpenAIChatCompletionRequest = {
       messages: request.messages,
       stream: true,
@@ -1922,15 +2209,27 @@ export class AiChatApi {
       fetchOptions.signal = options.signal;
     }
 
+    const profileName: AIChatRecoveryProfile =
+      options?.retryProfile ?? "foreground";
+    const policy = new AIChatRetryPolicy(AI_CHAT_RECOVERY_DEFAULTS);
+    const classifier = new AIChatRecoveryClassifier();
+    const profile: AIChatRetryProfile = policy.profileOf(profileName);
+
     let response: Response | null = null;
     let lastError: unknown = null;
+    let attempt = 1;
+    let consecutiveOverload = 0;
+    // Turn start for the persistent-profile hard-cap check. Wall-clock
+    // epoch (Date.now()) would always exceed the 6h cap, so we anchor
+    // here and pass elapsed delta into the policy.
+    const turnStartedAt = Date.now();
 
-    for (let attempt = 0; attempt <= STREAM_RETRY_MAX_ATTEMPTS; attempt += 1) {
+    while (response === null) {
       let res: Response;
       try {
         this._debugLogRequest(
           `/api/ai/v1/chat/completions${
-            attempt > 0 ? ` (retry ${attempt})` : ""
+            attempt > 1 ? ` (retry ${attempt - 1})` : ""
           }`,
           data
         );
@@ -1948,44 +2247,101 @@ export class AiChatApi {
             fetchOptions
           );
         }
+        const classified = classifier.classifyThrown(error);
         // Never retry user-initiated aborts.
-        if (error instanceof Error && error.name === "AbortError") {
-          throw error;
+        if (classified.reason === "cancelled") {
+          throw classified.originalError instanceof Error
+            ? classified.originalError
+            : error;
         }
-        // Network errors (server unreachable, DNS failure, etc.) are retryable.
-        lastError = error;
-        if (attempt < STREAM_RETRY_MAX_ATTEMPTS) {
-          const delayMs = this.computeStreamRetryDelay(attempt);
-          options?.onRetry?.({
-            attempt: attempt + 1,
-            maxAttempts: STREAM_RETRY_MAX_ATTEMPTS,
-            delayMs,
-            error: error instanceof Error ? error.message : String(error),
-          });
-          await this.sleepWithAbort(delayMs, options?.signal);
-          continue;
+        lastError = classified;
+        const decision = policy.decide({
+          reason: classified.reason,
+          attempt,
+          profile: profileName,
+          retryAfterMs: classified.retryAfterMs,
+          rateLimitResetMs: classified.rateLimitResetMs,
+          consecutiveOverloadCount: consecutiveOverload,
+          hasFallback: false,
+          turnElapsedMs: Date.now() - turnStartedAt,
+        });
+        if (decision.type !== "retry") {
+          throw classified;
         }
-        throw error;
+        const layer = "api_retry";
+        options?.onRecoveryStatus?.({
+          layer,
+          reason: classified.reason,
+          attempt: decision.attempt,
+          maxAttempts: profile.maxAttempts,
+          delayMs: decision.delayMs,
+          consecutiveOverloadCount: consecutiveOverload,
+          message: classified.message,
+        });
+        options?.onRetry?.({
+          attempt: decision.attempt,
+          maxAttempts: profile.maxAttempts,
+          delayMs: decision.delayMs,
+          error: classified.message,
+        });
+        await this.sleepWithAbort(decision.delayMs, options?.signal);
+        attempt = decision.attempt;
+        continue;
       }
 
-      // Retryable HTTP status codes (server errors, rate limiting).
-      if (this.isRetryableStreamStatus(res.status)) {
-        lastError = new Error(`Server returned ${res.status}`);
-        if (attempt < STREAM_RETRY_MAX_ATTEMPTS) {
-          // Drain the body so the connection can be reused/closed cleanly.
-          await res.text().catch(() => undefined);
-          const delayMs = this.computeStreamRetryDelay(attempt);
-          options?.onRetry?.({
-            attempt: attempt + 1,
-            maxAttempts: STREAM_RETRY_MAX_ATTEMPTS,
-            delayMs,
-            error: `HTTP ${res.status}`,
-          });
-          await this.sleepWithAbort(delayMs, options?.signal);
-          continue;
+      // HTTP-level retryable classification.
+      if (!res.ok || res.status !== 200) {
+        const bodyText = await this.readErrorBody(res);
+        const classified = classifier.classifyHttpFailure({
+          status: res.status,
+          statusText: res.statusText,
+          responseBody: bodyText,
+          headers: res.headers,
+        });
+        // Drain the body so the connection can be reused/closed cleanly.
+        // (readErrorBody already consumed it.)
+
+        // Track consecutive overload even when we ultimately fall back.
+        if (classified.reason === "overload") {
+          consecutiveOverload += 1;
+        } else if (classified.reason !== "rate_limit") {
+          // Only overload/rate_limit are "consecutive" tracked; others reset.
+          consecutiveOverload = 0;
         }
-        const errorText = await res.text().catch(() => "Unknown error");
-        throw new Error(`Server returned ${res.status}: ${errorText}`);
+
+        const decision = policy.decide({
+          reason: classified.reason,
+          attempt,
+          profile: profileName,
+          retryAfterMs: classified.retryAfterMs,
+          rateLimitResetMs: classified.rateLimitResetMs,
+          consecutiveOverloadCount: consecutiveOverload,
+          hasFallback: false,
+        });
+        if (decision.type !== "retry") {
+          // Surface the typed error so the loop/coordinator can fall back.
+          throw classified;
+        }
+        const layer =
+          classified.reason === "overload" ? "overload_retry" : "api_retry";
+        options?.onRecoveryStatus?.({
+          layer,
+          reason: classified.reason,
+          attempt: decision.attempt,
+          maxAttempts: profile.maxAttempts,
+          delayMs: decision.delayMs,
+          consecutiveOverloadCount: consecutiveOverload,
+          message: classified.message,
+        });
+        options?.onRetry?.({
+          attempt: decision.attempt,
+          maxAttempts: profile.maxAttempts,
+          delayMs: decision.delayMs,
+          error: `HTTP ${res.status}`,
+        });
+        await this.sleepWithAbort(decision.delayMs, options?.signal);
+        attempt = decision.attempt;
+        continue;
       }
 
       // Non-retryable response — proceed with normal handling.
@@ -1994,14 +2350,10 @@ export class AiChatApi {
     }
 
     if (!response) {
+      // Unreachable — the while loop only exits via return/throw/break-with-assign.
       throw lastError instanceof Error
         ? lastError
         : new Error("Failed to connect to the AI server after retries");
-    }
-
-    if (!response.ok || response.status !== 200) {
-      const errorText = await response.text().catch(() => "Unknown error");
-      throw new Error(`Server returned ${response.status}: ${errorText}`);
     }
 
     if (!response.body) {
@@ -2009,6 +2361,22 @@ export class AiChatApi {
     }
 
     await this._consumeOpenAIStreamResponse(response, onChunk);
+  }
+
+  /**
+   * Read up to 8KB of an error response body as text. Bounded so a
+   * malicious or buggy server cannot OOM the client with a huge body.
+   */
+  private async readErrorBody(res: Response): Promise<string> {
+    try {
+      const buf = await res.arrayBuffer();
+      const text = new TextDecoder("utf-8", { fatal: false }).decode(
+        buf.slice(0, 8000)
+      );
+      return text;
+    } catch {
+      return "";
+    }
   }
 
   /**
@@ -2148,12 +2516,16 @@ export class AiChatApi {
     const conversationText = request.messages
       .filter((m) => m.role !== "system")
       .map((m) =>
-        `${this.getLegacyRoleLabel(m.role)}: ${m.content ?? ""}`.trim()
+        `${this.getLegacyRoleLabel(m.role)}: ${openAIContentToString(
+          m.content
+        )}`.trim()
       )
       .join("\n\n");
 
     return {
-      message: conversationText || request.messages.at(-1)?.content || "",
+      message:
+        conversationText ||
+        openAIContentToString(request.messages.at(-1)?.content),
       model: request.model,
       system_prompt:
         typeof systemPrompt === "string" ? systemPrompt : undefined,
@@ -2235,6 +2607,7 @@ export class AiChatApi {
     content?: string | null;
     finishReason?: string | null;
     usage?: OpenAIUsage;
+    images?: OpenAIChatImage[];
   }): OpenAIChatCompletionChunk {
     const chunk: OpenAIChatCompletionChunk = {
       id: params.id ?? `normalized-${Date.now()}`,
@@ -2245,7 +2618,14 @@ export class AiChatApi {
         {
           index: 0,
           delta:
-            params.content !== undefined ? { content: params.content } : {},
+            params.content !== undefined || params.images
+              ? {
+                  ...(params.content !== undefined
+                    ? { content: params.content }
+                    : {}),
+                  ...(params.images ? { images: params.images } : {}),
+                }
+              : {},
           finish_reason: params.finishReason ?? null,
         },
       ],
@@ -2327,11 +2707,17 @@ export class AiChatApi {
           const message = choice.message;
           if (this.isRecord(message)) {
             const content = message.content;
+            const images = this.normalizeOpenAIChatImages(message.images);
             return {
               index: choiceIndex,
               delta:
-                typeof content === "string" || content === null
-                  ? { content }
+                typeof content === "string" || content === null || images.length > 0
+                  ? {
+                      ...(typeof content === "string" || content === null
+                        ? { content }
+                        : {}),
+                      ...(images.length > 0 ? { images } : {}),
+                    }
                   : {},
               finish_reason: finishReason,
             };
@@ -2377,6 +2763,7 @@ export class AiChatApi {
         model,
         content: directContent,
         finishReason: this.isTerminalStreamEvent(eventType) ? "stop" : null,
+        images: this.normalizeOpenAIChatImages(payload.images),
       });
     }
 
@@ -2390,11 +2777,109 @@ export class AiChatApi {
           model,
           content: nestedContent,
           finishReason: this.isTerminalStreamEvent(eventType) ? "stop" : null,
+          images: this.normalizeOpenAIChatImages(nestedData.images),
         });
       }
     }
 
     return null;
+  }
+
+  private normalizeOpenAIChatImages(input: unknown): OpenAIChatImage[] {
+    if (!Array.isArray(input)) {
+      return [];
+    }
+    const images: OpenAIChatImage[] = [];
+    for (const item of input) {
+      if (!this.isRecord(item)) {
+        continue;
+      }
+      const type = this.getStringField(item, "type");
+      const url = this.getStringField(item, "url");
+      const b64Json = this.getStringField(item, "b64_json");
+      if (type !== "image" || (!url && !b64Json)) {
+        continue;
+      }
+      images.push({
+        type: "image",
+        delivery: this.getStringField(item, "delivery"),
+        url,
+        original_url: this.getStringField(item, "original_url"),
+        local_path: this.getStringField(item, "local_path"),
+        file_name: this.getStringField(item, "file_name"),
+        b64_json: b64Json,
+        expires_at: this.getStringField(item, "expires_at"),
+        download_required:
+          typeof item.download_required === "boolean"
+            ? item.download_required
+            : undefined,
+        mime_type: this.getStringField(item, "mime_type"),
+        width:
+          typeof item.width === "number" || item.width === null
+            ? item.width
+            : undefined,
+        height:
+          typeof item.height === "number" || item.height === null
+            ? item.height
+            : undefined,
+        metadata: this.isRecord(item.metadata) ? item.metadata : undefined,
+      });
+    }
+    return images;
+  }
+
+  private buildApiEnvelopeError(payload: unknown): Error | null {
+    if (!this.isRecord(payload)) {
+      return null;
+    }
+
+    const hasEnvelopeShape =
+      "status" in payload ||
+      "code" in payload ||
+      "msg" in payload ||
+      "message" in payload;
+    if (!hasEnvelopeShape || Array.isArray(payload.choices)) {
+      return null;
+    }
+
+    const status = payload.status;
+    const code = payload.code;
+    const msg =
+      this.getStringField(payload, "msg") ??
+      this.getStringField(payload, "message") ??
+      this.getStringField(payload, "error");
+    const isErrorStatus = status === false;
+    const numericCode = typeof code === "number" ? code : undefined;
+    const stringCode = typeof code === "string" ? code : undefined;
+    const isErrorCode =
+      numericCode !== undefined
+        ? numericCode >= 400
+        : stringCode !== undefined && !["0", "200", "ok"].includes(stringCode);
+
+    if (!isErrorStatus && !isErrorCode) {
+      return null;
+    }
+
+    const codeText =
+      numericCode !== undefined ? String(numericCode) : stringCode ?? "unknown";
+    const safeMessage = this.truncateForLog(
+      msg ?? "AI server returned an error"
+    );
+    const data = payload.data;
+    const dataType = Array.isArray(data) ? "array" : typeof data;
+    console.error(
+      `[ai-chat-v2] openai-stream server envelope error status=${String(
+        status
+      )} code=${codeText} msg="${safeMessage}" dataType=${dataType}`
+    );
+    return new Error(`AI server error code=${codeText}: ${safeMessage}`);
+  }
+
+  private truncateForLog(value: string, maxLength = 500): string {
+    if (value.length <= maxLength) {
+      return value;
+    }
+    return `${value.slice(0, maxLength)}...`;
   }
 
   private describeOpenAIStreamPayload(
@@ -2479,6 +2964,10 @@ export class AiChatApi {
             : "AI server returned a stream error";
         throw new Error(message);
       }
+      const envelopeError = this.buildApiEnvelopeError(payload);
+      if (envelopeError) {
+        throw envelopeError;
+      }
       const chunk = this.normalizeOpenAIStreamPayload(payload, eventType);
       if (!chunk) {
         console.warn(
@@ -2542,15 +3031,17 @@ export class AiChatApi {
               streamActive = false;
               break;
             }
+            let payload: unknown;
             try {
-              const payload: unknown = JSON.parse(jsonStr);
-              emitPayload(payload, currentEventType);
+              payload = JSON.parse(jsonStr);
             } catch (err) {
               console.warn(
                 `[ai-chat-v2] openai-stream failed to parse payload length=${jsonStr.length}:`,
                 err
               );
+              continue;
             }
+            emitPayload(payload, currentEventType);
           }
         }
       }
@@ -2564,14 +3055,18 @@ export class AiChatApi {
         trimmedBuffer.startsWith("data:")
       ) {
         const jsonStr = trimmedBuffer.substring(5).trim();
+        let payload: unknown;
         try {
-          const payload: unknown = JSON.parse(jsonStr);
-          emitPayload(payload, currentEventType);
+          payload = JSON.parse(jsonStr);
         } catch (err) {
           console.warn(
             `[ai-chat-v2] openai-stream failed to parse final payload length=${jsonStr.length}:`,
             err
           );
+          payload = undefined;
+        }
+        if (payload !== undefined) {
+          emitPayload(payload, currentEventType);
         }
       }
 
@@ -2590,17 +3085,21 @@ export class AiChatApi {
           trimmedBody !== "data:[DONE]" &&
           !trimmedBody.startsWith("data:")
         ) {
+          let payload: unknown;
           try {
-            const payload: unknown = JSON.parse(trimmedBody);
+            payload = JSON.parse(trimmedBody);
             console.warn(
               `[ai-chat-v2] openai-stream recovered non-SSE JSON body (length=${trimmedBody.length}); treating as single payload.`
             );
-            emitPayload(payload, currentEventType);
           } catch (err) {
             console.warn(
               `[ai-chat-v2] openai-stream body was not valid JSON and emitted no SSE chunks (length=${trimmedBody.length}):`,
               err
             );
+            payload = undefined;
+          }
+          if (payload !== undefined) {
+            emitPayload(payload, currentEventType);
           }
         }
       }

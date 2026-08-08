@@ -25,7 +25,7 @@ vi.mock("@/modules/token", () => ({
   })),
 }));
 
-import { SkillExecutor } from "@/service/SkillExecutor";
+import { SkillExecutor, sanitizeForLog } from "@/service/SkillExecutor";
 import { ToolExecutor } from "@/service/ToolExecutor";
 import { SkillPermissionService } from "@/service/SkillPermissionService";
 import type { SkillExecutionContext } from "@/entityTypes/skillTypes";
@@ -221,6 +221,39 @@ describe("SkillExecutor", () => {
         num_results: 10,
       });
       expect(result.valid).toBe(true);
+    });
+  });
+
+  describe("sanitizeForLog", () => {
+    test("redacts sensitive top-level keys", () => {
+      const out = sanitizeForLog({
+        user: "demo",
+        pass: "topsecret",
+        host: "h",
+      });
+      expect(out).toEqual({ user: "demo", pass: "[REDACTED]", host: "h" });
+    });
+
+    test("redacts sensitive keys nested inside arrays and objects (proxy_import shape)", () => {
+      const out = sanitizeForLog({
+        proxies: [
+          { host: "1.1.1.1", port: 80, protocol: "http", pass: "p1" },
+          { host: "2.2.2.2", port: 80, protocol: "http", password: "p2" },
+        ],
+        duplicatePolicy: "skip",
+      });
+      const serialized = JSON.stringify(out);
+      expect(serialized).not.toContain("p1");
+      expect(serialized).not.toContain("p2");
+      expect((out.proxies as Array<Record<string, unknown>>)[0].pass).toBe(
+        "[REDACTED]"
+      );
+    });
+
+    test("still truncates long non-sensitive strings", () => {
+      const long = "x".repeat(200);
+      const out = sanitizeForLog({ query: long });
+      expect(String(out.query)).toContain("[truncated");
     });
   });
 });

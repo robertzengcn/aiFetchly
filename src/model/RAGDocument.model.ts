@@ -274,4 +274,59 @@ export class RAGDocumentModel extends BaseDb {
       vectorIndexPath: row.vectorIndexPath,
     }));
   }
+
+  // -------------------------------------------------------------------------
+  // Website import provenance lookups (URL/hash-based duplicate detection)
+  // -------------------------------------------------------------------------
+
+  /** First non-deleted document whose canonical URL hash matches. */
+  async findActiveByCanonicalUrlSha256(
+    canonicalUrlSha256: string
+  ): Promise<RAGDocumentEntity | undefined> {
+    const doc = await this.repository
+      .createQueryBuilder("document")
+      .where("document.canonicalUrlSha256 = :canonicalUrlSha256", {
+        canonicalUrlSha256,
+      })
+      .andWhere("document.status != :deleted", { deleted: "deleted" })
+      .getOne();
+    return doc ?? undefined;
+  }
+
+  /** First non-deleted document whose source URL hash matches. */
+  async findActiveBySourceUrlSha256(
+    sourceUrlSha256: string
+  ): Promise<RAGDocumentEntity | undefined> {
+    const doc = await this.repository
+      .createQueryBuilder("document")
+      .where("document.sourceUrlSha256 = :sourceUrlSha256", {
+        sourceUrlSha256,
+      })
+      .andWhere("document.status != :deleted", { deleted: "deleted" })
+      .getOne();
+    return doc ?? undefined;
+  }
+
+  /** All non-deleted documents sharing a content body hash. */
+  async findActiveByContentSha256(
+    contentSha256: string
+  ): Promise<RAGDocumentEntity[]> {
+    return await this.repository
+      .createQueryBuilder("document")
+      .where("document.contentSha256 = :contentSha256", { contentSha256 })
+      .andWhere("document.status != :deleted", { deleted: "deleted" })
+      .getMany();
+  }
+
+  /** All non-deleted documents belonging to one website import group. */
+  async getDocumentsByImportGroup(
+    importGroupId: string
+  ): Promise<RAGDocumentEntity[]> {
+    return await this.repository
+      .createQueryBuilder("document")
+      .where("document.importGroupId = :importGroupId", { importGroupId })
+      .andWhere("document.status != :deleted", { deleted: "deleted" })
+      .orderBy("document.uploadedAt", "ASC")
+      .getMany();
+  }
 }

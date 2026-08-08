@@ -44,128 +44,23 @@ export interface DocumentContent {
 }
 
 export class ChunkingService {
-  // private db: SqliteDb;
   private ragConfigApi: RagConfigApi;
   private ragChunkModule: RAGChunkModule;
   private htmlConversionService: HtmlConversionService;
   private spreadsheetService: SpreadsheetConversionService;
-  private cachedConfig: ChunkingConfig | null = null;
-  private configCacheExpiry = 0;
-  private readonly CACHE_DURATION_MS = 30 * 60 * 1000; // 30 minutes
-  private readonly defaultOptions: ChunkingOptions = {
-    chunkSize: 1000,
-    overlapSize: 200,
-    strategy: "sentence",
-    preserveWhitespace: true,
-    minChunkSize: 100,
-  };
 
   constructor() {
-    // this.db = db;
     this.ragConfigApi = new RagConfigApi();
     this.ragChunkModule = new RAGChunkModule();
     this.htmlConversionService = new HtmlConversionService();
     this.spreadsheetService = new SpreadsheetConversionService();
-    this.initializeConfig();
   }
 
   /**
-   * Initialize chunking configuration from remote API or cache
+   * Get default chunking configuration (local, no remote fetch)
    */
-  private async initializeConfig(): Promise<void> {
-    try {
-      await this.loadChunkingConfig();
-      console.log("ChunkingService initialized with remote configuration");
-    } catch (error) {
-      console.warn(
-        "Failed to load remote chunking configuration, using defaults:",
-        error
-      );
-    }
-  }
-
-  /**
-   * Load chunking configuration from remote API or cache
-   */
-  private async loadChunkingConfig(): Promise<void> {
-    // Check if cache is still valid
-    if (this.cachedConfig && Date.now() < this.configCacheExpiry) {
-      console.log("Using cached chunking configuration");
-      return;
-    }
-
-    try {
-      // Check if remote service is online
-      const healthCheck = await this.ragConfigApi.isOnline();
-      if (!healthCheck.status || !healthCheck.data) {
-        console.warn("Remote configuration service is offline, using defaults");
-        return;
-      }
-
-      // Fetch configuration from remote API
-      const configResponse = await this.ragConfigApi.getChunkingConfig();
-      if (configResponse.status && configResponse.data) {
-        this.cachedConfig = configResponse.data.default_config;
-        this.configCacheExpiry = Date.now() + this.CACHE_DURATION_MS;
-        console.log("Chunking configuration loaded from remote API:", {
-          chunkSize: this.cachedConfig.chunkSize,
-          overlapSize: this.cachedConfig.overlapSize,
-          strategy: this.cachedConfig.strategy,
-        });
-      } else {
-        console.warn("Failed to fetch chunking configuration from remote API");
-      }
-    } catch (error) {
-      console.error("Error loading chunking configuration:", error);
-      throw error;
-    }
-  }
-
-  /**
-   * Get current chunking configuration (cached or default)
-   */
-  private async getChunkingConfig(): Promise<ChunkingConfig> {
-    await this.loadChunkingConfig();
-
-    if (this.cachedConfig) {
-      return this.cachedConfig;
-    }
-
-    // Return default configuration if no cached config is available
-    return {
-      chunkSize: this.defaultOptions.chunkSize,
-      overlapSize: this.defaultOptions.overlapSize,
-      strategy: this.defaultOptions.strategy,
-      preserveWhitespace: this.defaultOptions.preserveWhitespace ?? true,
-      minChunkSize: this.defaultOptions.minChunkSize || 100,
-      maxChunkSize: this.defaultOptions.chunkSize * 2,
-      splitOnSentences: true,
-      splitOnParagraphs: true,
-    };
-  }
-
-  /**
-   * Refresh configuration cache from remote API
-   */
-  async refreshConfig(): Promise<void> {
-    this.cachedConfig = null;
-    this.configCacheExpiry = 0;
-    await this.loadChunkingConfig();
-  }
-
-  /**
-   * Get cached configuration info
-   */
-  getConfigInfo(): {
-    hasCachedConfig: boolean;
-    cacheExpiry: number;
-    config: ChunkingConfig | null;
-  } {
-    return {
-      hasCachedConfig: this.cachedConfig !== null,
-      cacheExpiry: this.configCacheExpiry,
-      config: this.cachedConfig,
-    };
+  private getChunkingConfig(): ChunkingConfig {
+    return this.ragConfigApi.getDefaultChunkingConfig();
   }
 
   /**
@@ -175,20 +70,16 @@ export class ChunkingService {
     document: RAGDocumentEntity,
     options?: Partial<ChunkingOptions>
   ): Promise<RAGChunkEntity[]> {
-    // Get configuration from cache or remote API
-    const remoteConfig = await this.getChunkingConfig();
+    // Get configuration from local defaults
+    const remoteConfig = this.getChunkingConfig();
 
-    // Start with defaults, then override with remote config only if values are defined
+    // Use local config directly (no fallback needed)
     const chunkingOptions: ChunkingOptions = {
-      chunkSize: remoteConfig.chunkSize ?? this.defaultOptions.chunkSize,
-      overlapSize: remoteConfig.overlapSize ?? this.defaultOptions.overlapSize,
-      strategy: remoteConfig.strategy ?? this.defaultOptions.strategy,
-      preserveWhitespace:
-        remoteConfig.preserveWhitespace ??
-        this.defaultOptions.preserveWhitespace ??
-        true,
-      minChunkSize:
-        remoteConfig.minChunkSize ?? this.defaultOptions.minChunkSize ?? 100,
+      chunkSize: remoteConfig.chunkSize,
+      overlapSize: remoteConfig.overlapSize,
+      strategy: remoteConfig.strategy,
+      preserveWhitespace: remoteConfig.preserveWhitespace,
+      minChunkSize: remoteConfig.minChunkSize,
     };
 
     // Apply user-provided options only if they are defined (not undefined)

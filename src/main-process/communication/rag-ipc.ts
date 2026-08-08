@@ -10,7 +10,12 @@ import {
   RagStatsResponse,
 } from "@/entityTypes/commonType";
 import { DocumentInfo } from "@/views/api/rag";
-import { RagConfigApi, AvailableModelsResponse } from "@/api/ragConfigApi";
+import { EmbeddingModelCatalogService } from "@/service/embedding/EmbeddingModelCatalogService";
+import { isLocalXenovaModel } from "@/service/embedding/EmbeddingModelId";
+import {
+  getUploadGrantService,
+  isPathUnderDir,
+} from "@/service/UploadGrantService";
 import * as fs from "fs";
 import * as path from "path";
 import {
@@ -42,7 +47,11 @@ import {
   RAG_GET_DOCUMENT_ERROR_LOG,
   RAG_CHECK_DOCUMENT_DUPLICATE,
 } from "@/config/channellist";
-import { registerValidatedHandler } from "@/main-process/communication/_shared/registerValidatedHandler";
+import {
+  registerValidatedHandler,
+  registerAiValidatedHandler,
+} from "@/main-process/communication/_shared/registerValidatedHandler";
+import { isAiEnabled } from "@/service/AiFeatureGate";
 import {
   ragShowOpenDialogInputSchema,
   ragFileStatsInputSchema,
@@ -82,6 +91,10 @@ export function registerRagIpcHandlers(): void {
 
   // ── Out-of-scope: streaming on handler ───────────────────────────────
   ipcMain.on(SAVE_TEMP_FILE, async (event, data): Promise<void> => {
+    // File upload is NOT an AI feature — it just saves a file to disk and
+    // database. The AI-related chunking/embedding is handled separately by
+    // RAG_CHUNK_AND_EMBED_DOCUMENT (which uses registerAiValidatedHandler).
+
     let documentInfo: UploadedDocument | null = null;
     let databaseSaved = false;
     let databaseError: string | null = null;
@@ -328,9 +341,18 @@ export function registerRagIpcHandlers(): void {
     SHOW_OPEN_DIALOG,
     ragShowOpenDialogInputSchema,
     async (input) => {
-      return dialog.showOpenDialog(
+      const result = await dialog.showOpenDialog(
         input as Parameters<typeof dialog.showOpenDialog>[0]
       );
+      // F2 follow-up — every path the native dialog returns is authorized
+      // for a subsequent RAG upload. Issue a one-shot, short-lived grant for
+      // each so RAG_UPLOAD_DOCUMENT can accept these user-selected paths
+      // while still rejecting arbitrary renderer-supplied paths (which would
+      // otherwise let a compromised renderer read & embed any local file).
+      if (result && !result.canceled && result.filePaths.length > 0) {
+        getUploadGrantService().issueForPaths(result.filePaths, "rag-upload");
+      }
+      return result;
     }
   );
 
@@ -338,7 +360,34 @@ export function registerRagIpcHandlers(): void {
     GET_FILE_STATS,
     ragFileStatsInputSchema,
     async (input) => {
-      const stats = fs.statSync(input.filePath);
+      // F5 fix (bypass) — confine file-stat probing to app-owned directories
+      // (RAG upload staging + error logs). Without this, a compromised
+      // renderer could stat arbitrary local paths to learn existence, size,
+      // and mtime — an information leak.
+      const appDataDir = app.getPath("userData");
+      const allowedRoots = [
+        path.join(appDataDir, "rag_uploads"),
+        path.join(appDataDir, "error_logs"),
+      ];
+      let resolved: string;
+      try {
+        resolved = fs.realpathSync(input.filePath);
+      } catch {
+        throw new Error("File not found");
+      }
+      const isContained = allowedRoots.some((root) => {
+        try {
+          const realRoot = fs.realpathSync(root);
+          const rel = path.relative(realRoot, resolved);
+          return !rel.startsWith("..") && !path.isAbsolute(rel) && rel !== "";
+        } catch {
+          return false;
+        }
+      });
+      if (!isContained) {
+        throw new Error("File path is outside allowed directories");
+      }
+      const stats = fs.statSync(resolved);
       return {
         size: stats.size,
         mtime: stats.mtime,
@@ -366,7 +415,8 @@ export function registerRagIpcHandlers(): void {
     return enhancedStats;
   });
 
-  registerValidatedHandler(RAG_QUERY, ragQueryInputSchema, async (input) => {
+  // F6 fix — RAG_QUERY triggers remote embedding/model work; gate on AI flag.
+  registerAiValidatedHandler(RAG_QUERY, ragQueryInputSchema, async (input) => {
     const ragSearchController = await createRagController();
     const searchRequest: SearchRequest = {
       query: input.query,
@@ -375,10 +425,27 @@ export function registerRagIpcHandlers(): void {
     return ragSearchController.search(searchRequest);
   });
 
-  registerValidatedHandler(
+  // F6 fix — upload triggers chunking + remote embedding; gate on AI flag.
+  registerAiValidatedHandler(
     RAG_UPLOAD_DOCUMENT,
     ragUploadDocumentInputSchema,
     async (input): Promise<DocumentUploadResponse> => {
+      // F2 follow-up — refuse arbitrary renderer-supplied file paths. Only
+      // paths under the app-owned uploads dir (SAVE_TEMP_FILE destination)
+      // or paths backed by a grant issued by SHOW_OPEN_DIALOG may be read,
+      // closing the arbitrary-local-file-read -> embedding vector.
+      const uploadsDir = path.join(app.getPath("userData"), "uploads");
+      const isAppOwned = isPathUnderDir(input.filePath, uploadsDir);
+      const granted = getUploadGrantService().consume(
+        input.filePath,
+        "rag-upload"
+      );
+      if (!isAppOwned && !granted) {
+        throw new Error(
+          "Upload rejected: file path was not selected through the app's file dialog."
+        );
+      }
+
       const ragSearchController = await createRagController();
       const uploadResult = await ragSearchController.uploadDocument(input);
       return {
@@ -476,16 +543,20 @@ export function registerRagIpcHandlers(): void {
     ragUpdateDocumentInputSchema,
     async (input) => {
       const ragSearchController = await createRagController();
-      await ragSearchController.updateDocument(
-        input.id,
-        input.metadata as {
-          title?: string;
-          description?: string;
-          tags?: string[];
-          author?: string;
-          log?: string;
-        }
-      );
+      // F5 fix — `log` is write-only from the renderer's perspective. The
+      // path is generated server-side by RAGDocumentModule.saveErrorLog under
+      // the app's error_logs dir. Allowing the renderer to set it would let a
+      // compromised renderer redirect getDocumentErrorLog reads to arbitrary
+      // local files.
+      const metadata = Object.assign({}, input.metadata) as {
+        title?: string;
+        description?: string;
+        tags?: string[];
+        author?: string;
+        log?: string;
+      };
+      delete metadata.log;
+      await ragSearchController.updateDocument(input.id, metadata);
       return null;
     }
   );
@@ -515,15 +586,20 @@ export function registerRagIpcHandlers(): void {
     }
   );
 
-  registerValidatedHandler(RAG_SEARCH, ragSearchInputSchema, async (input) => {
-    const req = input as unknown as SearchRequest;
-    const ragSearchController = await createRagController();
-    return ragSearchController.search({
-      query: req.query,
-      options: req.options,
-      filters: req.filters,
-    }) as Promise<SearchResponse>;
-  });
+  // F6 fix — RAG_SEARCH runs remote embedding on the query; gate on AI flag.
+  registerAiValidatedHandler(
+    RAG_SEARCH,
+    ragSearchInputSchema,
+    async (input) => {
+      const req = input as unknown as SearchRequest;
+      const ragSearchController = await createRagController();
+      return ragSearchController.search({
+        query: req.query,
+        options: req.options,
+        filters: req.filters,
+      }) as Promise<SearchResponse>;
+    }
+  );
 
   registerValidatedHandler(
     RAG_GET_SUGGESTIONS,
@@ -543,18 +619,24 @@ export function registerRagIpcHandlers(): void {
     }
   );
 
+  // Local embedding-model selection must remain available without remote AI
+  // entitlement. Remote model selection is still gated after schema validation.
   registerValidatedHandler(
     RAG_UPDATE_EMBEDDING_MODEL,
     ragUpdateEmbeddingModelInputSchema,
     async (input) => {
-      const ragConfigApi = new RagConfigApi();
-      const modelsResponse = await ragConfigApi.getAvailableEmbeddingModels();
-      if (!modelsResponse.status || !modelsResponse.data) {
-        throw new Error("Failed to fetch available models for validation");
+      const includeRemote = isAiEnabled();
+      if (!includeRemote && !isLocalXenovaModel(input.model)) {
+        throw new Error("AI feature is not enabled");
       }
-      const modelInfo = modelsResponse.data.models[input.model];
+      // Validate against the merged catalog (remote + local). listModels()
+      // tolerates remote failure, so selecting the local free model still
+      // validates when the remote AI server is offline.
+      const catalog = new EmbeddingModelCatalogService();
+      const list = await catalog.listModels({ includeRemote });
+      const modelInfo = list.models[input.model];
       if (!modelInfo) {
-        const names = Object.keys(modelsResponse.data.models).join(", ");
+        const names = Object.keys(list.models).join(", ");
         throw new Error(
           `Invalid model name "${input.model}". Available models: ${names}`
         );
@@ -566,26 +648,20 @@ export function registerRagIpcHandlers(): void {
     }
   );
 
+  // Model discovery is also needed by free users to select the built-in local
+  // Xenova model. Only include remote models when the AI entitlement is active;
+  // this keeps free-user settings completely local and avoids a remote call.
   registerValidatedHandler(
     RAG_GET_AVAILABLE_MODELS,
     ragNoInputSchema,
     async () => {
-      const ragConfigApi = new RagConfigApi();
-      const response = await ragConfigApi.getAvailableEmbeddingModels();
-      if (!response.status || !response.data) {
-        throw new Error(response.msg || "Failed to retrieve available models");
-      }
-      const ragController = await createRagController();
-      const defaultModelFromSettings =
-        await ragController.getDefaultEmbeddingModel();
-      if (defaultModelFromSettings) {
-        response.data.default_model = defaultModelFromSettings.modelName;
-      }
-      return response.data satisfies AvailableModelsResponse;
+      const catalog = new EmbeddingModelCatalogService();
+      return await catalog.listModels({ includeRemote: isAiEnabled() });
     }
   );
 
-  registerValidatedHandler(
+  // F6 fix — embedding-service test issues a remote model call.
+  registerAiValidatedHandler(
     RAG_TEST_EMBEDDING_SERVICE,
     ragNoInputSchema,
     async () => {
@@ -600,7 +676,8 @@ export function registerRagIpcHandlers(): void {
     return null;
   });
 
-  registerValidatedHandler(
+  // F6 fix — chunk-and-embed issues remote embedding work.
+  registerAiValidatedHandler(
     RAG_CHUNK_AND_EMBED_DOCUMENT,
     ragChunkAndEmbedInputSchema,
     async (input) => {

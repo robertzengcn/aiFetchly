@@ -13,6 +13,8 @@ import {
   IDENTIFIER_VECTOR_WEIGHT,
   IDENTIFIER_KEYWORD_WEIGHT,
 } from "./RagSearchTypes";
+import { EmbeddingProviderFactory } from "@/service/embedding/EmbeddingProviderFactory";
+import { isLocalXenovaModel } from "@/service/embedding/EmbeddingModelId";
 
 export interface SearchResult {
   chunkId: number;
@@ -47,6 +49,29 @@ export interface SearchOptions {
     start: Date;
     end: Date;
   };
+}
+
+/**
+ * A model group that could not be searched, e.g. because its query embedding
+ * failed after retry. Used to surface partial-search warnings without blocking
+ * results from other groups.
+ */
+export interface SkippedModelGroup {
+  modelName: string;
+  dimensions: number;
+  reason: string;
+}
+
+/**
+ * Enriched search response carrying both results and any model groups that were
+ * skipped. `search()` keeps returning `SearchResult[]` for backward
+ * compatibility; this type is exported so a future UI pass can surface the PRD
+ * partial-search warning ("Some remote-indexed documents could not be searched
+ * because remote query embedding failed.").
+ */
+export interface VectorSearchResponse {
+  results: SearchResult[];
+  skippedModelGroups: SkippedModelGroup[];
 }
 
 export class VectorSearchService {
@@ -112,6 +137,11 @@ export class VectorSearchService {
         documentId: number;
       }> = [];
 
+      // Model groups whose query embedding failed and were skipped. The first
+      // release logs these; a future UI pass can surface the partial-search
+      // warning from VectorSearchResponse.
+      const skippedModelGroups: SkippedModelGroup[] = [];
+
       // Process each unique model group
       for (const [modelKey, docs] of documentsByModel.entries()) {
         const separatorIndex = modelKey.lastIndexOf(":");
@@ -136,6 +166,20 @@ export class VectorSearchService {
           numericDimensions
         );
         if (!queryVector) {
+          // Do NOT fall back from a remote query vector to a local vector here:
+          // remote-indexed and local-indexed embedding spaces are incompatible,
+          // so mixing them would produce invalid similarity results. Skip this
+          // group and keep searching the others.
+          skippedModelGroups.push({
+            modelName,
+            dimensions: numericDimensions,
+            reason: isLocalXenovaModel(modelName)
+              ? "local query embedding failed"
+              : "remote query embedding failed after retry",
+          });
+          console.warn(
+            `[VectorSearchService] Skipping model group ${modelName}:${numericDimensions} — query embedding unavailable`
+          );
           continue;
         }
 
@@ -191,6 +235,15 @@ export class VectorSearchService {
         combinedResults.distances,
         options
       );
+
+      if (skippedModelGroups.length > 0) {
+        console.warn(
+          `[VectorSearchService] Partial search: ${skippedModelGroups.length} model group(s) skipped — ` +
+            skippedModelGroups
+              .map((g) => `${g.modelName}:${g.dimensions} (${g.reason})`)
+              .join(", ")
+        );
+      }
 
       return results;
     } catch (error) {
@@ -380,6 +433,33 @@ export class VectorSearchService {
     modelName: string,
     expectedDimensions: number
   ): Promise<number[] | null> {
+    // Local-indexed documents are queried through the local provider only.
+    // Never route a local query through the remote API, and never query a
+    // remote-indexed group with the local model — the embedding spaces differ.
+    if (isLocalXenovaModel(modelName)) {
+      try {
+        const provider = new EmbeddingProviderFactory().create(
+          modelName,
+          expectedDimensions
+        );
+        const result = await provider.embedText(query);
+        if (result.embedding.length !== expectedDimensions) {
+          console.warn(
+            `Local query vector dimensions (${result.embedding.length}) do not match expected dimensions (${expectedDimensions}) for model "${modelName}"`
+          );
+          return null;
+        }
+        return result.embedding;
+      } catch (error) {
+        console.warn(
+          `Local query embedding failed for model ${modelName}: ${
+            error instanceof Error ? error.message : error
+          }`
+        );
+        return null;
+      }
+    }
+
     const availableModels = await this.getAvailableEmbeddingModels();
     const modelCandidates = this.getModelCandidates(modelName, availableModels);
     let lastErrorMessage: string | null = null;
