@@ -446,6 +446,19 @@ export interface AIChatQueryLoopInput {
    */
   isActiveTurn: () => boolean;
   /**
+   * Optional override for the transient-failure auto-retry policy. When
+   * omitted the loop uses its module-level defaults (3 attempts, exponential
+   * backoff from 800ms). Mainly used by tests to make retries instantaneous
+   * and by AgentRuntime (which sets baseDelayMs to 0 so subagents don't spend
+   * their tight maxRuntimeMs budget on backoff sleeps).
+   */
+  transientRetryConfig?: {
+    /** Number of retry attempts after the initial failure. */
+    maxAttempts?: number;
+    /** Base delay (ms) for exponential backoff between retries. */
+    baseDelayMs?: number;
+  };
+  /**
    * Deferred tool catalog. When present and `toolCatalogModeDecision.mode`
    * is "deferred", the loop filters the exposed tool set per round, adds the
    * `tool_catalog_search` tool, and intercepts discovery calls locally.

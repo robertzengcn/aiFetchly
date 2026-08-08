@@ -34,6 +34,7 @@ import {
   isAIChatRecoverableError,
   type AIChatRecoveryReason,
 } from "@/service/AIChatRecoveryTypes";
+import { isContentLevelTransientError } from "@/service/AIChatErrorMapper";
 import { AIChatRecoveryClassifier } from "@/service/AIChatRecoveryClassifier";
 import { AIChatRecoveryCoordinator } from "@/service/AIChatRecoveryCoordinator";
 import {
@@ -115,6 +116,62 @@ const ASYNC_POLL_MAX_MS = 30 * 60_000;
  * particular tool schema.
  */
 const MAX_MALFORMED_ARGUMENT_RETRIES = 3;
+
+/**
+ * Number of times to retry a round that failed with a transient AI-server
+ * CONTENT error (empty response, finish_reason=error) AFTER the initial
+ * attempt. These failures recover on a fresh request, so auto-retry hides
+ * them from the user instead of surfacing "The AI service is busy". Retries
+ * are only attempted when nothing has been delivered to the UI yet (no
+ * tokens streamed, no tool calls shown) so we never duplicate visible
+ * content. Only content-level transients are retried here — transport-layer
+ * conditions (502/429/timeout) are already retried by the streaming HTTP
+ * client and must not be retried at this layer too (anti-stacking).
+ */
+const DEFAULT_TRANSIENT_RETRY_MAX_ATTEMPTS = 3;
+
+/**
+ * Base delay for exponential backoff between transient-failure retries.
+ * Actual delay for attempt N (0-indexed) is base * 2^N, so the sequence is
+ * 800ms, 1.6s, 3.2s — enough for most transient overload conditions to
+ * clear without making the user wait too long. AgentRuntime overrides this
+ * to 0 because subagents run under a tight maxRuntimeMs deadline.
+ */
+const DEFAULT_TRANSIENT_RETRY_BASE_DELAY_MS = 800;
+
+/**
+ * Tracks whether any content (streamed tokens/reasoning or tool calls) has
+ * been delivered to the UI during the current turn. Shared across retry
+ * attempts so that a failure AFTER content has been shown is never retried
+ * (which would duplicate the visible output and orphan persisted rows).
+ */
+interface RoundContentTracker {
+  delivered: boolean;
+}
+
+/**
+ * Resolve after `ms`, unless `signal` aborts first (in which case resolve
+ * immediately so the caller can observe the abort on its next iteration).
+ * Used for backoff between transient-failure retries.
+ */
+function abortableDelay(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise<void>((resolve) => {
+    if (ms <= 0 || signal.aborted) {
+      resolve();
+      return;
+    }
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
 
 const MAX_TEXT_TOOL_CALL_MARKER_RETRIES = 1;
 
@@ -554,7 +611,83 @@ export class AIChatQueryLoop {
     messages.splice(insertAt, 0, { role: "system", content: announcement });
   }
 
+  /**
+   * Public entry point. Runs the turn, auto-retrying if a content-level
+   * transient AI-server failure (empty response, finish_reason=error) ends
+   * the turn BEFORE any content has been delivered to the UI. See
+   * {@link runOnce} for the per-attempt logic.
+   *
+   * Retry safety invariants:
+   *  - Only CONTENT-level transients are retried ({@link
+   *    isContentLevelTransientError}); transport conditions (502/429/timeout)
+   *    are already retried by the streaming HTTP client, so retrying them
+   *    here too would stack the layers into a burst of ~16 requests.
+   *  - Retry only while no content has been delivered (`tracker.delivered`),
+   *    so a failure after the UI has seen tokens/tool calls is surfaced
+   *    rather than re-run (which would duplicate visible output).
+   *  - Each retry starts from a pristine snapshot of the original transcript,
+   *    because runOnce mutates its messages array in place as the round
+   *    advances.
+   *  - Honors the abort signal, the turn-active flag, and a bounded count.
+   */
   async run(input: AIChatQueryLoopInput): Promise<AIChatQueryLoopResult> {
+    const maxAttempts =
+      input.transientRetryConfig?.maxAttempts ??
+      DEFAULT_TRANSIENT_RETRY_MAX_ATTEMPTS;
+    const baseDelayMs =
+      input.transientRetryConfig?.baseDelayMs ??
+      DEFAULT_TRANSIENT_RETRY_BASE_DELAY_MS;
+    // Snapshot the original transcript up front. runOnce mutates the messages
+    // array it receives (pushing assistant tool-call / tool-result rows as the
+    // round advances), so a retry must start from this pristine copy — not the
+    // (possibly mutated) input.messages reference.
+    const initialMessages = [...input.messages];
+    // Shared across attempts: once the UI has seen any content for this turn,
+    // a later failure must not be retried (it would duplicate visible output).
+    const tracker: RoundContentTracker = { delivered: false };
+
+    for (let attempt = 0; attempt <= maxAttempts; attempt += 1) {
+      const attemptInput: AIChatQueryLoopInput =
+        attempt === 0 ? input : { ...input, messages: [...initialMessages] };
+
+      const result = await this.runOnce(attemptInput, tracker);
+
+      if (result.type !== "failed") {
+        return result;
+      }
+
+      const canRetry =
+        attempt < maxAttempts &&
+        !input.abortController.signal.aborted &&
+        input.isActiveTurn() &&
+        !tracker.delivered &&
+        isContentLevelTransientError(result.error);
+
+      if (!canRetry) {
+        return result;
+      }
+
+      const delayMs = baseDelayMs * 2 ** attempt;
+      input.eventSink.emit({
+        type: "retry_connect",
+        conversationId: input.conversationId,
+        messageId: input.assistantMessageId,
+        retryAttempt: attempt + 1,
+        retryMaxAttempts: maxAttempts,
+        retryDelayMs: delayMs,
+      });
+      await abortableDelay(delayMs, input.abortController.signal);
+    }
+
+    // Unreachable: the loop always returns on the final attempt. Returned
+    // purely to satisfy the type checker.
+    throw new Error("AIChatQueryLoop.run exited its retry loop unexpectedly");
+  }
+
+  async runOnce(
+    input: AIChatQueryLoopInput,
+    tracker: RoundContentTracker
+  ): Promise<AIChatQueryLoopResult> {
     const { eventSink } = input;
     let activeAccumulator: OpenAIStreamAccumulator | null = null;
     let finalAccumulator: OpenAIStreamAccumulator | null = null;
@@ -705,6 +838,9 @@ export class AIChatQueryLoop {
             const { contentDelta, reasoningDelta } =
               accumulator.ingest(rawChunk);
             if (reasoningDelta) {
+              // Reasoning is visible UI content for this turn; from here on a
+              // later failure must not be retried (it would duplicate it).
+              tracker.delivered = true;
               eventSink.emit({
                 type: "reasoning_delta",
                 conversationId: input.conversationId,
@@ -714,6 +850,10 @@ export class AIChatQueryLoop {
               });
             }
             if (contentDelta) {
+              // Mark that the UI has now seen streamed content for this turn.
+              // The retry wrapper uses this to avoid re-running a turn whose
+              // output is already visible (which would duplicate it).
+              tracker.delivered = true;
               eventSink.emit({
                 type: "token",
                 conversationId: input.conversationId,
@@ -1049,6 +1189,12 @@ export class AIChatQueryLoop {
           consecutiveMalformedRounds = 0;
         }
 
+        // The round has committed to tool calls: the loops below will emit
+        // tool_result events for malformed calls and tool_call events for
+        // valid ones — all visible UI content. Mark the turn as having
+        // delivered content so a later transient failure is not retried
+        // (which would duplicate those events and orphan the persisted rows).
+        tracker.delivered = true;
         messages.push(
           buildAssistantToolCallMessage(
             parsedCalls,
