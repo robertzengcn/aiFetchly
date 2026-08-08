@@ -190,6 +190,38 @@ describe("AiChatV2Composer slash command selection", () => {
 
     await input.trigger("keydown", { key: "Enter", shiftKey: false });
 
-    expect(wrapper.emitted("send")?.[0]).toEqual([message, []]);
+    expect(wrapper.emitted("send")?.[0]?.slice(0, 2)).toEqual([message, []]);
+  });
+
+  it("keeps the draft until the parent accepts the send", async () => {
+    const wrapper = mountComposer();
+    const input = wrapper.find<HTMLInputElement>(
+      '[data-testid="composer-input"]'
+    );
+    const message = "/goal keep this draft";
+
+    await input.setValue(message);
+    await input.trigger("keydown", { key: "Enter", shiftKey: false });
+
+    expect(wrapper.emitted("send")).toHaveLength(1);
+    expect(input.element.value).toBe(message);
+  });
+
+  it("clears the draft after the parent accepts the send", async () => {
+    const wrapper = mountComposer();
+    const input = wrapper.find<HTMLInputElement>(
+      '[data-testid="composer-input"]'
+    );
+
+    await input.setValue("accepted message");
+    await input.trigger("keydown", { key: "Enter", shiftKey: false });
+
+    const options = wrapper.emitted("send")?.[0]?.[2] as
+      | { onAccepted?: () => void }
+      | undefined;
+    options?.onAccepted?.();
+    await wrapper.vm.$nextTick();
+
+    expect(input.element.value).toBe("");
   });
 });

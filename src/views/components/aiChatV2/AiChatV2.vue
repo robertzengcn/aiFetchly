@@ -3245,6 +3245,7 @@ const onSend = async (
     isExpandedPrompt?: boolean;
     fromVoice?: boolean;
     pastedContents?: Record<string, string>;
+    onAccepted?: () => void;
   }
 ): Promise<void> => {
   // Parse /loop before the stream guard so scheduled-loop staging (approval
@@ -3264,6 +3265,11 @@ const onSend = async (
   if (!loopBypassesStreamGuard && chatIsRunning.value) {
     return;
   }
+  // The composer owns the draft and clears it only after this handler accepts
+  // the request. Runtime status can change between the child's render and this
+  // synchronous guard (especially while switching conversations), so clearing
+  // before acknowledgement would silently discard a rejected message.
+  options?.onAccepted?.();
   streamError.value = null;
 
   attachmentError.value = null;

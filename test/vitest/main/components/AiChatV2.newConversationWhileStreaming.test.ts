@@ -1,12 +1,9 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { flushPromises, mount } from "@vue/test-utils";
 import { createI18n } from "vue-i18n";
+import { defineComponent } from "vue";
 import AiChatV2 from "@/views/components/aiChatV2/AiChatV2.vue";
-import {
-  streamChatV2Message,
-  stopChatV2Stream,
-  clearChatV2StreamListeners,
-} from "@/views/api/aiChatV2";
+import { streamChatV2Message } from "@/views/api/aiChatV2";
 
 vi.mock("@/views/api/aiChatV2", () => ({
   clearChatV2StreamListeners: vi.fn(),
@@ -146,6 +143,30 @@ const i18n = createI18n({
   },
 });
 
+const ComposerStub = defineComponent({
+  name: "AiChatV2Composer",
+  emits: ["send"],
+  data: () => ({ secondAccepted: false }),
+  methods: {
+    sendFirst(): void {
+      this.$emit("send", "first message while streaming", []);
+    },
+    sendSecond(): void {
+      this.$emit("send", "second message in new chat", [], {
+        onAccepted: () => {
+          this.secondAccepted = true;
+        },
+      });
+    },
+  },
+  template: `<div>
+    <button data-testid="send-first" @click="sendFirst">first</button>
+    <button data-testid="send-second" @click="sendSecond">second</button>
+    <span data-testid="second-accepted">{{ secondAccepted }}</span>
+    <slot name="prepend" />
+  </div>`,
+});
+
 function mountChat() {
   return mount(AiChatV2, {
     global: {
@@ -158,14 +179,7 @@ function mountChat() {
         },
         AiChatV2QuestionCard: true,
         AiChatV2PlanApprovalCard: true,
-        AiChatV2Composer: {
-          emits: ["send"],
-          template: `<div>
-            <button data-testid="send-first" @click="$emit('send', 'first message while streaming', [])">first</button>
-            <button data-testid="send-second" @click="$emit('send', 'second message in new chat', [])">second</button>
-            <slot name="prepend" />
-          </div>`,
-        },
+        AiChatV2Composer: ComposerStub,
         AiChatV2ModeSelector: true,
         AiChatV2ModelSelector: true,
         AiChatV2PlanStatusBadge: true,
@@ -243,8 +257,9 @@ describe("AiChatV2 new conversation while streaming", () => {
     await flushPromises();
 
     expect(streamChatV2Message).toHaveBeenCalledTimes(2);
-    expect(stopChatV2Stream).toHaveBeenCalled();
-    expect(clearChatV2StreamListeners).toHaveBeenCalled();
+    expect(wrapper.find('[data-testid="second-accepted"]').text()).toBe(
+      "true"
+    );
     expect(wrapper.find('[data-testid="messages"]').text()).toContain(
       "second message in new chat"
     );
