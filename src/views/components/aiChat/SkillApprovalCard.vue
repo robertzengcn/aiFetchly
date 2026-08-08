@@ -49,13 +49,34 @@
           <code class="shell-preview-value">{{ formatTimeout(shellPreview.timeout_ms) }}</code>
         </div>
       </div>
+      <!-- File-transfer permission preview (e.g. attach_local_images) -->
+      <div v-if="permissionPreview" class="permission-preview mt-3">
+        <div class="permission-preview-row permission-preview-title">
+          {{ t(permissionPreview.titleKey) }}
+        </div>
+        <div class="permission-preview-row permission-preview-desc">
+          {{
+            t(permissionPreview.descriptionKey, {
+              destination: permissionPreview.destinationLabel,
+            })
+          }}
+        </div>
+        <div
+          v-for="(item, i) in permissionPreview.items"
+          :key="i"
+          class="permission-preview-row"
+        >
+          <v-icon size="x-small" start>mdi-file-image</v-icon>
+          <code class="permission-preview-item">{{ item }}</code>
+        </div>
+      </div>
     </div>
     <div class="approval-actions">
       <v-btn
         size="small"
         variant="text"
         color="error"
-        :disabled="isProcessing"
+        :disabled="isDisabled"
         @click="handleDeny"
       >
         {{ t('skills.approval_deny') }}
@@ -64,7 +85,7 @@
         size="small"
         variant="outlined"
         color="primary"
-        :disabled="isProcessing"
+        :disabled="isDisabled"
         @click="handleAllowOnce"
       >
         {{ t('skills.approval_allow_once') }}
@@ -73,7 +94,8 @@
         size="small"
         variant="flat"
         color="primary"
-        :loading="isProcessing"
+        :loading="isLoading"
+        :disabled="isDisabled"
         @click="handleAlwaysAllow"
       >
         {{ isShellCategory ? t('skills.approval_always_allow_session') : t('skills.approval_always_allow') }}
@@ -95,12 +117,29 @@ interface ShellPreview {
   timeout_ms: number;
 }
 
+/**
+ * Metadata-only, display-only preview for tools that transfer local files
+ * off-device (e.g. attach_local_images). Lets the approval card describe the
+ * call beyond the generic category prompt — which files, and where they go.
+ * `items` are unvalidated requested values; the tool re-validates after grant.
+ */
+interface PermissionPreview {
+  kind: "file_transfer";
+  titleKey: string;
+  descriptionKey: string;
+  items: readonly string[];
+  destinationLabel: string;
+}
+
 interface Props {
   toolName: string;
   permissionCategory?: string;
   shellPreview?: ShellPreview;
+  permissionPreview?: PermissionPreview;
   workspaceRoot?: string;
   relativePath?: string;
+  disabled?: boolean;
+  loading?: boolean;
 }
 
 const props = defineProps<Props>();
@@ -111,6 +150,8 @@ const emit = defineEmits<{
 }>();
 
 const isProcessing = ref(false);
+const isLoading = computed(() => isProcessing.value || props.loading === true);
+const isDisabled = computed(() => isLoading.value || props.disabled === true);
 
 const isShellCategory = computed(() => props.permissionCategory === "shell");
 
@@ -137,6 +178,7 @@ function formatTimeout(ms: number): string {
 }
 
 async function handleAllowOnce(): Promise<void> {
+  if (isDisabled.value) return;
   isProcessing.value = true;
   try {
     await window.api.invoke("skill:grant-permission", {
@@ -150,6 +192,7 @@ async function handleAllowOnce(): Promise<void> {
 }
 
 async function handleAlwaysAllow(): Promise<void> {
+  if (isDisabled.value) return;
   isProcessing.value = true;
   try {
     // Shell "Always Allow" is session-only for safety; other categories persist.
@@ -165,6 +208,7 @@ async function handleAlwaysAllow(): Promise<void> {
 }
 
 async function handleDeny(): Promise<void> {
+  if (isDisabled.value) return;
   isProcessing.value = true;
   try {
     await window.api.invoke("skill:deny-permission", {
@@ -256,6 +300,41 @@ async function handleDeny(): Promise<void> {
 .shell-command-code {
   font-weight: 600;
   color: rgb(var(--v-theme-error));
+}
+
+.permission-preview {
+  background: rgba(var(--v-theme-on-surface), 0.05);
+  border-radius: 6px;
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.permission-preview-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.82rem;
+}
+
+.permission-preview-title {
+  font-weight: 600;
+}
+
+.permission-preview-desc {
+  color: rgba(var(--v-theme-on-surface), 0.7);
+  align-items: flex-start;
+}
+
+.permission-preview-item {
+  font-size: 0.8rem;
+  word-break: break-all;
+  /* Clamp long paths so a wide path never resizes the approval card. */
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .approval-actions {

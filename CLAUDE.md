@@ -16,11 +16,14 @@ AiFetchly is an AI-powered marketing automation Electron application for social 
 - `yarn test` - Run test suite with Mocha
 - `yarn tsc` - Type check with TypeScript (watch mode)
 
+### Local Testing URL
+- The application can be tested in a browser at `http://localhost:5173` after running `yarn dev`.
+
 ### Specialized Commands
 - `yarn login -c <campaignId>` - Login to social platform for specific campaign
 - `yarn task -t <taskDetails>` - Run specific task
 - `yarn init` - Initialize SQL database
-- `yarn rebuild-sqlite3` - Rebuild SQLite3 native module
+- `yarn rebuild-better-sqlite` - Rebuild better-sqlite3 for the installed Electron version (also runs automatically via `postinstall`)
 - `yarn vue-check` - Vue TypeScript type checking
 
 ### Testing Commands
@@ -95,6 +98,7 @@ src/
 - **Vite** - Build tool and dev server
 - **Pinia** - State management
 - **Vuetify** - UI component library
+- **Zod v4** (`zod/v4`) - Full-stack type validation infrastructure
 
 ### Key Dependencies
 - **Puppeteer** - Web automation and scraping
@@ -102,6 +106,7 @@ src/
 - **better-sqlite3** - SQLite database driver
 - **node-cron** - Task scheduling
 - **openai** - AI integration
+- **zod** - Schema definition and runtime validation (imported via `zod/v4`)
 
 ## Development Patterns
 
@@ -110,6 +115,28 @@ src/
 - Define explicit interfaces for complex data structures
 - All functions must have explicit return types
 - Use proper error handling with `unknown` instead of `any` for catch blocks
+
+### Zod v4 Validation Infrastructure - MANDATORY RULE
+**This project uses Zod v4** (`zod/v4`) as its full-stack type validation infrastructure. Tool definition, configuration management, cross-process communication, and setting validation all require Zod for type safety validation.
+
+#### Import Convention
+- Always import from `zod/v4` (not from bare `zod`) to opt into the v4 API:
+  ```typescript
+  import { z } from "zod/v4";
+  ```
+- Derive TypeScript types from schemas with `z.infer<typeof schema>` rather than hand-writing interfaces that mirror the schema.
+
+#### Where Zod Is Required
+1. **Tool definitions** - AI tool parameter schemas must be declared as Zod schemas so input can be validated before execution.
+2. **Configuration management** - Configuration objects (user settings, feature flags, runtime config) must be validated with Zod schemas at load boundaries.
+3. **Cross-process communication** - IPC payloads between main and renderer (or main and worker processes) must be validated against Zod schemas on the receiving side before use.
+4. **Setting validation** - Any persisted or externally-supplied setting must pass a Zod schema before being trusted.
+
+#### Workflow
+1. Define a `z.object({ ... })` schema at the boundary where untrusted data enters the process.
+2. Call `.parse()` (throw on invalid) or `.safeParse()` (collect errors) at the entry point.
+3. Export the inferred TypeScript type alongside the schema so consumers get static types for free.
+4. Never `as`-cast untrusted input to a type without running it through the schema first.
 
 ### Code Organization
 - Use PascalCase for classes/components, camelCase for variables/functions
@@ -143,10 +170,16 @@ src/
    - Temporary debug code or console.log statements
    - Files with compilation errors
 
-5. **Example**:
+5. **Each fix task MUST be committed immediately upon completion**:
+   - After fixing TypeScript errors, lint issues, or any code defects, stage and commit right away.
+   - Do not batch multiple fixes into one commit unless they form a single logical unit.
+   - The commit message must reference what was fixed (e.g., `fix: resolve TS2339 in PluginManager.vue`).
+
+6. **Example**:
    - Implement `SystemDependencyCatalog.getDependencies()` → stage and commit
    - Implement `SystemDependencyRetryService.retry()` → stage and commit
    - Add entity `DependencyInstallAudit` → stage and commit
+   - Fix TypeScript error in `PluginManager.vue` → stage and commit
 
 ### AI Feature IPC Handlers - MANDATORY RULE
 **When adding or modifying IPC handlers that serve AI functions (e.g. AI chat, keyword generation, AI tools):**
@@ -426,6 +459,41 @@ private getRepository(): Repository<SomeEntity> {
 - User input validation and sanitization
 - Secure token storage using Electron's safeStorage
 
+### AI Navigation Route Metadata - MANDATORY RULE
+**CRITICAL: When adding or modifying Vue routes, keep AI app navigation metadata accurate so users can ask AI Chat to open pages by natural language.**
+
+#### Required Route Metadata Workflow
+
+1. **For safe parameter-free application pages**, allow AI navigation by default or set `meta.aiNavigable = true`.
+   - Good candidates: list pages, dashboard pages, settings pages, logs, management screens, and normal index pages.
+   - Add `meta.aiAliases` when users may describe the page differently from its route title.
+   - Add `meta.aiDescription` when the page purpose is not obvious from the route title.
+
+2. **For unsafe or unsupported pages**, explicitly set `meta.aiNavigable = false`.
+   - Always exclude login, auth callback, logout, error-only, internal helper, destructive workflow, and action-on-load pages.
+   - Exclude detail/edit pages that require route params such as `:id` unless a safe default behavior is implemented.
+
+3. **Use route names, not component file paths, as navigation targets.**
+   - AI tools should return validated route names such as `Email_Marketing_Service_LIST`.
+   - Actual `router.push(...)` calls must run in the renderer process, never directly from Electron main process.
+
+4. **Example route metadata**:
+```typescript
+{
+  path: "emailreply/audit/list",
+  name: "AI_Auto_Reply_Audit_List",
+  meta: {
+    visible: true,
+    title: "route.ai_auto_replies",
+    icon: "mdi-robot-outline",
+    aiNavigable: true,
+    aiAliases: ["email reply log", "auto reply log", "reply audit", "ai replies"],
+    aiDescription: "Review AI auto-reply decisions, sent replies, skipped replies, and audit logs"
+  },
+  component: () => import("@/views/pages/emailreply/auditlist.vue")
+}
+```
+
 ### Internationalization (i18n) - MANDATORY RULE
 **CRITICAL: When adding or modifying any user-facing text in the UI, you MUST update translations for ALL supported languages.**
 
@@ -479,6 +547,32 @@ alert(t('contactExtraction.select_items_hint') || 'Please select at least one it
    - Ensure all new features have complete translations
 
 **FAILURE TO UPDATE ALL LANGUAGE FILES WILL RESULT IN INCOMPLETE INTERNATIONALIZATION AND USER EXPERIENCE ISSUES.**
+
+### AI App Navigation (open_app_page tool) - MANDATORY RULE
+**CRITICAL: The AI navigation catalog is driven by the route manifest, NOT the router. The manifest is the single source of truth for model-facing route discovery.**
+
+#### Source Of Truth
+- **Manifest** (`src/config/aiNavigationRouteManifest.ts`): the authoritative list of AI-navigable routes, aliases, and descriptions. The `open_app_page` tool builds its catalog from this file. It is pure data (main-process safe — no Vue / Vue Router imports).
+- **Router meta** (`src/views/router/index.ts`): secondary / documentation only. The renderer re-validates every route against `router.getRoutes()` and blocks any route with `meta.aiNavigable === false`.
+
+#### When Adding Or Modifying A Route
+1. **Safe parameter-free list/index/settings pages**: add an entry to `aiNavigationRouteManifest.ts` with `aiNavigable: true`, accurate `aiAliases` (natural-language phrases users would actually say), and `aiDescription`.
+2. **Aliases**: pick phrases a user would type (e.g. `"email reply log"`, `"smtp settings"`). Do NOT add bare single-word aliases for entities that have detail/edit param routes (e.g. bare `"campaign"`) — otherwise a detail request like `"campaign detail"` matches the list page instead of returning `needsRouteParams`.
+3. **Unsafe routes** (login, auth callback, required-param detail/edit pages, destructive workflows, internal helper pages): do NOT add them to the manifest. Optionally set `meta.aiNavigable = false` in the router for defense-in-depth.
+4. Verify the `routeName` and `path` EXACTLY match `src/views/router/index.ts` — the catalog/matcher/tool tests assert against real names.
+
+#### Why A Manifest (not router meta) Is Authoritative
+`src/views/router/index.ts` imports Vue Router, `Layout`, and lazy `.vue` components. Importing it from main-process tool code would pull renderer-only code into the main bundle. The pure manifest avoids this. See `docs/prd/ai-app-navigation-tool-technical-design.md` §7.
+
+#### Architecture Boundary
+- **Main process / tool layer** (`src/service/AIAppNavigationToolService.ts`): resolves intent to a validated navigation command. NEVER calls Vue Router, NEVER mutates data, NEVER echoes raw user input.
+- **Renderer** (`src/views/utils/aiNavigationResultHandler.ts`): owns Vue Router; re-validates the route and calls `router.push`. Wired in `AiChatBox.vue` (V1) and `AiChatV2.vue` (V2) `tool_result` handlers.
+
+#### Tests
+- Catalog / matcher / renderer-helper: `test/vitest/utilitycode/aiAppNavigation*.test.ts`
+- Tool service: `test/vitest/main/aiAppNavigationTool.test.ts`
+
+Run the relevant scenario through these tests before shipping manifest changes.
 
 ### Testing Strategy
 
@@ -572,8 +666,8 @@ Current branch (`sqlite-vec-merge`) is integrating sqlite-vec for vector similar
 ## Environment Configuration
 
 ### Required Environment Variables
-- `VITE_REMOTEADD` - Backend API URL
-- `UPDATESERVER` - Update server URL for auto-updater
+
+> Auto-updates use `update-electron-app` against the GitHub Releases feed (`AIFETCHLY_UPDATE_REPO` in `src/config/appInfo.ts`); no `UPDATESERVER` environment variable is required.
 
 ### Development Setup
 1. Install dependencies with `yarn`

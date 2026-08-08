@@ -1,8 +1,8 @@
-'use strict';
-import { describe, test, expect, beforeEach } from 'vitest';
-import { RateLimiter, RateLimitConfig } from '@/service/RateLimiter';
+"use strict";
+import { describe, test, expect, beforeEach } from "vitest";
+import { RateLimiter, RateLimitConfig } from "@/service/RateLimiter";
 
-describe('RateLimiter', () => {
+describe("RateLimiter", () => {
   let rateLimiter: RateLimiter;
   let config: RateLimitConfig;
 
@@ -15,8 +15,8 @@ describe('RateLimiter', () => {
     rateLimiter = new RateLimiter(config);
   });
 
-  describe('acquire', () => {
-    test('should allow acquisition when within limits', async () => {
+  describe("acquire", () => {
+    test("should allow acquisition when within limits", async () => {
       await rateLimiter.acquire();
       const status = rateLimiter.getStatus();
       expect(status.perMinute).toBe(1);
@@ -25,7 +25,7 @@ describe('RateLimiter', () => {
       rateLimiter.release();
     });
 
-    test('should track multiple acquisitions', async () => {
+    test("should track multiple acquisitions", async () => {
       await rateLimiter.acquire();
       await rateLimiter.acquire();
       await rateLimiter.acquire();
@@ -37,21 +37,26 @@ describe('RateLimiter', () => {
       rateLimiter.release();
     });
 
-    test('should respect concurrent limit', async () => {
+    test("should respect concurrent limit", async () => {
       const promises: Promise<void>[] = [];
       for (let i = 0; i < 5; i++) {
         promises.push(rateLimiter.acquire());
       }
-      await Promise.all(promises);
-      const status = rateLimiter.getStatus();
-      expect(status.concurrent).toBeLessThanOrEqual(config.maxConcurrent);
-      // Release all
+      // Let the limiter gate the burst, then assert the cap held. Don't await
+      // Promise.all before releasing: with maxConcurrent 3, two acquires block
+      // until a slot is released, so awaiting first would deadlock.
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(rateLimiter.getStatus().concurrent).toBeLessThanOrEqual(
+        config.maxConcurrent
+      );
+      // Release held slots so the queued acquires can proceed.
       for (let i = 0; i < 5; i++) {
         rateLimiter.release();
       }
+      await Promise.all(promises);
     });
 
-    test('should apply cooldown when configured', async () => {
+    test("should apply cooldown when configured", async () => {
       const cooldownConfig: RateLimitConfig = {
         maxPerMinute: 100,
         maxConcurrent: 10,
@@ -66,8 +71,8 @@ describe('RateLimiter', () => {
     });
   });
 
-  describe('release', () => {
-    test('should decrease concurrent count', async () => {
+  describe("release", () => {
+    test("should decrease concurrent count", async () => {
       await rateLimiter.acquire();
       await rateLimiter.acquire();
       expect(rateLimiter.getStatus().concurrent).toBe(2);
@@ -77,15 +82,15 @@ describe('RateLimiter', () => {
       expect(rateLimiter.getStatus().concurrent).toBe(0);
     });
 
-    test('should not go below zero', async () => {
+    test("should not go below zero", async () => {
       rateLimiter.release();
       rateLimiter.release();
       expect(rateLimiter.getStatus().concurrent).toBe(0);
     });
   });
 
-  describe('getStatus', () => {
-    test('should return correct status when within limits', async () => {
+  describe("getStatus", () => {
+    test("should return correct status when within limits", async () => {
       await rateLimiter.acquire();
       const status = rateLimiter.getStatus();
       expect(status.perMinute).toBe(1);
@@ -94,7 +99,7 @@ describe('RateLimiter', () => {
       rateLimiter.release();
     });
 
-    test('should return withinLimits false when at concurrent limit', async () => {
+    test("should return withinLimits false when at concurrent limit", async () => {
       const promises: Promise<void>[] = [];
       for (let i = 0; i < config.maxConcurrent; i++) {
         promises.push(rateLimiter.acquire());
@@ -109,7 +114,7 @@ describe('RateLimiter', () => {
       }
     });
 
-    test('should clean old execution times', async () => {
+    test("should clean old execution times", async () => {
       // Add executions that are old (simulate by manipulating internal state)
       // Note: This test is limited by the private nature of executionTimes
       // We can test the behavior through status checks
@@ -120,8 +125,8 @@ describe('RateLimiter', () => {
     });
   });
 
-  describe('edge cases', () => {
-    test('should handle zero maxPerMinute', async () => {
+  describe("edge cases", () => {
+    test("should handle zero maxPerMinute", async () => {
       const zeroConfig: RateLimitConfig = {
         maxPerMinute: 0,
         maxConcurrent: 1,
@@ -135,7 +140,7 @@ describe('RateLimiter', () => {
       zeroLimiter.release();
     });
 
-    test('should handle zero maxConcurrent', async () => {
+    test("should handle zero maxConcurrent", async () => {
       const zeroConfig: RateLimitConfig = {
         maxPerMinute: 10,
         maxConcurrent: 0,

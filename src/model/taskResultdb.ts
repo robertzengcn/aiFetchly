@@ -1,7 +1,6 @@
-// import { Database,RunResult } from "sqlite3";
 import { Scraperdb } from "@/model/scraperdb";
 import { getRecorddatetime } from "@/modules/lib/function";
-import { Database } from 'better-sqlite3';
+import { Database } from "better-sqlite3";
 export interface TaskResultEntity {
   id?: number;
   taskrun_id: number;
@@ -11,14 +10,14 @@ export interface TaskResultEntity {
   lang?: string;
   record_time?: string;
 }
-export type TaskResultSearchres={
-  Total:number
-  Records:Array<TaskResultEntity>
-}
+export type TaskResultSearchres = {
+  Total: number;
+  Records: Array<TaskResultEntity>;
+};
 export class TaskResultdb {
   db: Database;
   taskresultTable = "task_result";
-  constructor(filepath:string) {
+  constructor(filepath: string) {
     const scraperModel = Scraperdb.getInstance(filepath);
     this.db = scraperModel.getdb();
   }
@@ -26,7 +25,7 @@ export class TaskResultdb {
   public saveTaskresult(
     taskresult: TaskResultEntity,
     callback: ((arg: any) => void) | undefined | null
-  ):number|bigint {
+  ): number | bigint {
     if (!taskresult.taskrun_id) {
       throw new Error(`task run id empty`);
     }
@@ -36,7 +35,7 @@ export class TaskResultdb {
         this.taskresultTable +
         ` (taskrun_id,url,title,content,lang,record_time) VALUES (?,?,?,?,?,?)`
     );
-    const info =stmt.run(
+    const info = stmt.run(
       taskresult.taskrun_id,
       taskresult.url,
       taskresult.title,
@@ -44,7 +43,7 @@ export class TaskResultdb {
       taskresult.lang,
       recordtime
     );
-    if(info.changes){
+    if (info.changes) {
       if (callback) {
         callback(info.lastInsertRowid);
       }
@@ -63,9 +62,15 @@ export class TaskResultdb {
         this.taskresultTable +
         ` WHERE taskrun_id = ? ORDER BY id DESC LIMIT ? OFFSET ?`
     );
-    const taskresult = stmt.all(taskrunId, size, page ) as Array<TaskResultEntity>;
+    const taskresult = stmt.all(
+      taskrunId,
+      size,
+      page
+    ) as Array<TaskResultEntity>;
     const totalstmt = this.db.prepare(
-      `SELECT COUNT(*) as total FROM ` + this.taskresultTable + ` WHERE taskrun_id = ?`
+      `SELECT COUNT(*) as total FROM ` +
+        this.taskresultTable +
+        ` WHERE taskrun_id = ?`
     );
     const total = totalstmt.get(taskrunId) as { total: number };
     const res: TaskResultSearchres = {

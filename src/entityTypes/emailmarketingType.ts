@@ -2,6 +2,7 @@ import { EmailsearchTaskEntityDisplay } from "@/entityTypes/emailextraction-type
 import { BuckEmailType } from "@/model/buckEmailTaskdb";
 import { EmailTemplateVariable } from "@/config/emailTemplateVariables";
 import { BuckemailTaskEntity } from "@/entity/BuckemailTask.entity";
+import { EmailReceiveProtocol } from "@/entityTypes/emailReceiveTypes";
 
 /**
  * AI Email Template tone options
@@ -161,13 +162,55 @@ export type EmailServiceEntitydata = {
   port: string;
   name: string;
   ssl: number;
+  // ---- inbound receive settings (optional; required only when receiveEnabled === 1) ----
+  receiveProtocol?: EmailReceiveProtocol;
+  imapHost?: string | null;
+  imapPort?: string | null;
+  imapSsl?: number;
+  pop3Host?: string | null;
+  pop3Port?: string | null;
+  pop3Ssl?: number;
+  receiveUsername?: string | null;
+  receivePassword?: string | null;
+  receiveFolder?: string;
+  receiveEnabled?: number;
+  lastReceiveSyncAt?: string | null;
+  lastReceiveSyncError?: string | null;
 };
 export type EmailServiceListdata = {
   id: number;
   name: string;
   from: string;
   host: string;
+  receiveProtocol: EmailReceiveProtocol;
   create_time: string;
+};
+
+/**
+ * Receive-facing summary of an email service, with all secrets stripped.
+ * Returned by the `list_email_inboxes` AI tool and the receive settings UI list.
+ * Never includes `password` or `receivePassword`.
+ */
+export type EmailServiceReceiveSummary = {
+  id: number;
+  name: string;
+  emailAddress: string;
+  host: string;
+  port: string;
+  ssl: number;
+  status: number;
+  receiveProtocol: EmailReceiveProtocol;
+  imapHost: string | null;
+  imapPort: string | null;
+  imapSsl: number;
+  pop3Host: string | null;
+  pop3Port: string | null;
+  pop3Ssl: number;
+  receiveUsername: string | null;
+  receiveFolder: string;
+  receiveEnabled: number;
+  lastReceiveSyncAt: string | null;
+  lastReceiveSyncError: string | null;
 };
 export type EmailMarketingsubdata = {
   sourceType: number;

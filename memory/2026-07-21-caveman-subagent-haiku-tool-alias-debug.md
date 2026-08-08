@@ -1,0 +1,8 @@
+# DEBUG REPORT: Caveman Subagent Fails With AI Server 500
+
+- **Symptom:** Running `caveman:cavecrew-investigator` from AI chat created an agent task, then failed with `AI server error code=500: Failed to send streaming chat completions`.
+- **Root cause:** The caveman agent frontmatter is Claude Code format: `model: haiku` and `tools: [Read, Grep, Glob, Bash]`. AiFetchly imported those literally. `AgentRuntime` then sent the child LLM request as `model: "haiku"` instead of the selected parent model (`deepseek-v4-flash` in the trace), and the agent had no useful AiFetchly file-search tools because `Read/Grep/Glob` did not match `file_read/grep_files/glob_files`.
+- **Fix:** Claude plugin agent import now maps safe read-only Claude tool aliases (`Read`, `Grep`, `Glob`) to AiFetchly file tools, ignores shell/mutation aliases for v1 (`Bash`, `Edit`, `MultiEdit`, `Write`), and ignores Claude shorthand model aliases (`haiku`, `sonnet`, `opus`) while storing the alias in manifest diagnostics. `AgentRuntime` also normalizes persisted definitions at runtime so already-installed plugin rows work without reinstall.
+- **Related fix:** The available-agent formatter now uses `AgentDefinitionView.source` for the source badge because plugin IDs are shaped like `caveman:cavecrew-investigator`, not `plugin:<name>:agent:<name>`.
+- **Evidence:** `yarn vitest run --config vite.utilityCode.config.mjs test/vitest/utilitycode/claudeAgentFormatAdapter.test.ts` passed with 8 tests. `yarn vitest run --config vite.main.config.mjs test/vitest/main/service/AgentRuntime.test.ts test/vitest/main/service/AIChatContextAssembler.aifetchly.test.ts` passed with 17 tests and TypeScript reported 0 errors.
+- **Status:** DONE

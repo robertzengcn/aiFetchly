@@ -5,13 +5,20 @@ import { SkillManagementModule } from "@/modules/SkillManagementModule";
 import { MCPToolModule } from "@/modules/MCPToolModule";
 import { MCPToolEntity } from "@/entity/MCPTool.entity";
 import { PluginArchiveService } from "@/service/PluginArchiveService";
-import { PluginManifestService } from "@/service/PluginManifestService";
+import {
+  PluginManifestService,
+  resolvePluginRoot,
+} from "@/service/PluginManifestService";
 import {
   parseServersJson,
   normalizeMcpDeclaration,
+  normalizeInlineMcpMap,
   type NormalizedMcpServer,
 } from "@/service/PluginMcpDeclaration";
-import { getPluginInstallRoot } from "@/service/pluginPaths";
+import {
+  getPluginInstallRoot,
+  getPluginOwnedSkillRoot,
+} from "@/service/pluginPaths";
 import {
   resolvePluginRelativePath,
   type PluginError,
@@ -19,8 +26,19 @@ import {
   type PluginSource,
   type PluginSourceProvenance,
 } from "@/entityTypes/pluginTypes";
+import { MCPToolService } from "@/service/MCPToolService";
 import { SkillImportService } from "@/service/SkillImportService";
-import type { SkillManifest } from "@/entityTypes/skillTypes";
+import { ClaudeSkillFormatAdapter } from "@/service/pluginCompat/ClaudeSkillFormatAdapter";
+import { ClaudePluginAdapter } from "@/service/pluginCompat/ClaudePluginAdapter";
+import { AgentDefinitionModule } from "@/modules/AgentDefinitionModule";
+import { PluginAgentImportService } from "@/service/PluginAgentImportService";
+import { SkillRegistry } from "@/config/skillsRegistry";
+import type {
+  SkillDefinition,
+  SkillExecutionContext,
+  SkillExecutionResult,
+  SkillManifest,
+} from "@/entityTypes/skillTypes";
 
 /**
  * Atomic plugin import from a local zip package.
@@ -161,6 +179,152 @@ function readPluginSkillManifest(
   return { ok: true, manifest: validation.manifest, absPath };
 }
 
+/**
+ * Read Claude SKILL.md file(s) at a declared skill path.
+ *
+ * A Claude skills path may be:
+ *   - A directory (typically `skills/`): scan for `<name>/SKILL.md` (depth 1).
+ *     Each match is a separate skill.
+ *   - A direct path to a `SKILL.md` file.
+ *
+ * Returns one or more translated SkillManifest entries. Errors are
+ * collected per skill (one bad skill doesn't fail the rest).
+ *
+ * See tech design §6 / §7.3.
+ */
+function readPluginClaudeSkillsFromPath(
+  pluginRoot: string,
+  skillPath: string
+):
+  | {
+      ok: true;
+      skills: Array<{ manifest: SkillManifest; relManifestPath: string }>;
+    }
+  | { ok: false; errors: PluginError[] } {
+  let absPath: string;
+  try {
+    absPath = resolvePluginRelativePath(pluginRoot, skillPath);
+  } catch {
+    return {
+      ok: false,
+      errors: [
+        {
+          code: "path-outside-plugin",
+          componentType: "skill",
+          path: skillPath,
+          message: `Claude skill path "${skillPath}" escapes the plugin directory.`,
+          recoverable: false,
+        },
+      ],
+    };
+  }
+
+  // Build the list of SKILL.md files to translate.
+  const mdFiles: Array<{ abs: string; rel: string }> = [];
+  try {
+    const stat = fs.statSync(absPath);
+    if (stat.isDirectory()) {
+      // Depth-1 scan: <dir>/<skill-name>/SKILL.md
+      const entries = fs.readdirSync(absPath, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+        const candidateAbs = path.join(absPath, entry.name, "SKILL.md");
+        if (fs.existsSync(candidateAbs)) {
+          mdFiles.push({
+            abs: candidateAbs,
+            rel: `${skillPath.replace(/\/$/, "")}/${entry.name}/SKILL.md`,
+          });
+        }
+      }
+      // Also accept a SKILL.md directly inside the scanned directory
+      // (Claude plugins occasionally ship a single skill at skills/SKILL.md).
+      const direct = path.join(absPath, "SKILL.md");
+      if (fs.existsSync(direct)) {
+        mdFiles.push({
+          abs: direct,
+          rel: `${skillPath.replace(/\/$/, "")}/SKILL.md`,
+        });
+      }
+    } else {
+      mdFiles.push({ abs: absPath, rel: skillPath });
+    }
+  } catch (e: unknown) {
+    if (
+      e instanceof Error &&
+      "code" in e &&
+      (e as { code: string }).code === "ENOENT"
+    ) {
+      return { ok: true, skills: [] };
+    }
+    return {
+      ok: false,
+      errors: [
+        {
+          code: "component-not-found",
+          componentType: "skill",
+          componentName: skillPath,
+          path: absPath,
+          message:
+            e instanceof Error
+              ? `Claude skill path not accessible: ${e.message}`
+              : `Claude skill path not accessible: ${skillPath}`,
+          recoverable: false,
+        },
+      ],
+    };
+  }
+
+  if (mdFiles.length === 0) {
+    return {
+      ok: false,
+      errors: [
+        {
+          code: "component-not-found",
+          componentType: "skill",
+          componentName: skillPath,
+          path: absPath,
+          message: `No SKILL.md files found under Claude skill path: ${skillPath}`,
+          recoverable: false,
+        },
+      ],
+    };
+  }
+
+  const skills: Array<{ manifest: SkillManifest; relManifestPath: string }> =
+    [];
+  const errors: PluginError[] = [];
+
+  for (const mdFile of mdFiles) {
+    let content: string;
+    try {
+      content = fs.readFileSync(mdFile.abs, "utf-8");
+    } catch (e: unknown) {
+      errors.push({
+        code: "skill-manifest-invalid",
+        componentType: "skill",
+        componentName: mdFile.rel,
+        message:
+          e instanceof Error
+            ? `Failed to read SKILL.md: ${e.message}`
+            : "Failed to read SKILL.md",
+        recoverable: false,
+      });
+      continue;
+    }
+    const adapted = ClaudeSkillFormatAdapter.adapt(content, mdFile.rel);
+    if (!adapted.ok) {
+      errors.push(adapted.error);
+      continue;
+    }
+    skills.push({ manifest: adapted.manifest, relManifestPath: mdFile.rel });
+  }
+
+  if (skills.length === 0) {
+    return { ok: false, errors };
+  }
+  return { ok: true, skills };
+}
+
 /** Read and normalize an MCP servers.json declared by a plugin. */
 function readPluginMcpServers(
   pluginRoot: string,
@@ -221,10 +385,24 @@ function readPluginMcpServers(
   return { ok: true, servers: out };
 }
 
+/**
+ * Directories stripped from plugin copies at install time.
+ *
+ * `.git` is stripped because plugin archives fetched from git sources may
+ * contain a `.git/hooks/` directory with attacker-controlled hook scripts
+ * (post-checkout, etc.) that would execute on subsequent git operations.
+ * `.github` workflows similarly contain arbitrary shell. We never want
+ * this content on disk inside an installed plugin.
+ */
+const STRIPPED_DIR_NAMES: ReadonlySet<string> = new Set([".git", ".github"]);
+
 function copyDirSync(src: string, dest: string): void {
   fs.mkdirSync(dest, { recursive: true });
   const entries = fs.readdirSync(src, { withFileTypes: true });
   for (const entry of entries) {
+    if (entry.isDirectory() && STRIPPED_DIR_NAMES.has(entry.name)) {
+      continue;
+    }
     const s = path.join(src, entry.name);
     const d = path.join(dest, entry.name);
     if (entry.isDirectory()) {
@@ -303,7 +481,10 @@ export class PluginImportService {
   ): Promise<PluginImportResult> {
     const { overwrite = false, provenance } = opts;
 
-    // 3. Load + validate plugin manifest
+    // 3. Resolve effective root (unwrap single-wrapper-directory zips)
+    localRoot = resolvePluginRoot(localRoot);
+
+    // 4. Load + validate plugin manifest
     const manifestResult = await PluginManifestService.loadFromDirectory(
       localRoot
     );
@@ -328,8 +509,21 @@ export class PluginImportService {
         ],
       };
     }
-    // If overwrite, uninstall the old one first (rows + files).
+    // If overwrite, uninstall the old one first (rows + files). Capture the
+    // user's previously-disabled agent IDs first so reinstall honors them (D5).
+    let preservedDisabledAgentIds = new Set<string>();
     if (existing && overwrite) {
+      try {
+        const prevAgents =
+          await new AgentDefinitionModule().findAgentsByPluginName(
+            manifest.name
+          );
+        preservedDisabledAgentIds = new Set(
+          prevAgents.filter((a) => a.status === "disabled").map((a) => a.id)
+        );
+      } catch {
+        // best-effort
+      }
       await pluginModule.uninstallPlugin(manifest.name);
       removePath(getPluginInstallRoot(manifest.name));
     }
@@ -341,15 +535,25 @@ export class PluginImportService {
       relManifestPath: string;
     }> = [];
     const skillErrors: PluginError[] = [];
+    const isClaudeFormat = manifest.format === "claude";
     for (const skillPath of skillPaths) {
-      const r = readPluginSkillManifest(localRoot, skillPath);
-      if (!r.ok) {
-        skillErrors.push(r.error);
+      if (isClaudeFormat) {
+        const r = readPluginClaudeSkillsFromPath(localRoot, skillPath);
+        if (!r.ok) {
+          skillErrors.push(...r.errors);
+        } else {
+          skills.push(...r.skills);
+        }
       } else {
-        skills.push({
-          manifest: r.manifest,
-          relManifestPath: skillPath,
-        });
+        const r = readPluginSkillManifest(localRoot, skillPath);
+        if (!r.ok) {
+          skillErrors.push(r.error);
+        } else {
+          skills.push({
+            manifest: r.manifest,
+            relManifestPath: skillPath,
+          });
+        }
       }
     }
     if (skillErrors.length > 0) {
@@ -360,16 +564,100 @@ export class PluginImportService {
     const mcpPaths = manifest.mcpServers ?? [];
     const mcpServers: NormalizedMcpServer[] = [];
     const mcpErrors: PluginError[] = [];
-    for (const mcpPath of mcpPaths) {
-      const r = readPluginMcpServers(localRoot, mcpPath);
-      if (!r.ok) {
-        mcpErrors.push(...r.errors);
+    const isClaudeMcp = manifest.format === "claude";
+
+    if (isClaudeMcp) {
+      // Claude plugins: prefer inline mcp map (alternative B); fall back to
+      // sibling .mcp.json (alternative A). Re-adapt here to recover the
+      // inlineMcp / mcpServersPaths context the adapter produced.
+      const claudeManifestPath = path.join(
+        localRoot,
+        ".claude-plugin",
+        "plugin.json"
+      );
+      let claudeRaw: unknown;
+      try {
+        claudeRaw = JSON.parse(fs.readFileSync(claudeManifestPath, "utf-8"));
+      } catch (e: unknown) {
+        return {
+          success: false,
+          errors: toErrors([
+            {
+              code: "manifest-invalid-json",
+              path: claudeManifestPath,
+              message:
+                e instanceof Error
+                  ? `Failed to re-read Claude manifest: ${e.message}`
+                  : "Failed to re-read Claude manifest",
+              recoverable: false,
+            },
+          ]),
+        };
+      }
+      const adapted = ClaudePluginAdapter.adapt(claudeRaw, {
+        pluginRoot: localRoot,
+      });
+      if (!adapted.ok) {
+        return { success: false, errors: toErrors([...adapted.errors]) };
+      }
+
+      if (adapted.adapted.inlineMcp) {
+        const r = normalizeInlineMcpMap(adapted.adapted.inlineMcp, localRoot);
+        if (!r.ok) mcpErrors.push(...r.errors);
+        else mcpServers.push(...r.servers);
       } else {
-        mcpServers.push(...r.servers);
+        // Try sibling .mcp.json at plugin root.
+        const siblingMcp = path.join(localRoot, ".mcp.json");
+        if (fs.existsSync(siblingMcp)) {
+          const r = readPluginMcpServers(localRoot, ".mcp.json");
+          if (!r.ok) mcpErrors.push(...r.errors);
+          else mcpServers.push(...r.servers);
+        }
+      }
+    } else {
+      // AiFetchly native path: each path is a servers.json file.
+      for (const mcpPath of mcpPaths) {
+        const r = readPluginMcpServers(localRoot, mcpPath);
+        if (!r.ok) {
+          mcpErrors.push(...r.errors);
+        } else {
+          mcpServers.push(...r.servers);
+        }
       }
     }
     if (mcpErrors.length > 0) {
       return { success: false, errors: toErrors(mcpErrors) };
+    }
+
+    // 6c. Validate plugin agents (design §12.1). Errors fail import before
+    // any files are copied; warnings do not.
+    const agentParse = PluginAgentImportService.parsePluginAgents({
+      pluginRoot: localRoot,
+      manifest,
+    });
+    if (!agentParse.ok) {
+      return { success: false, errors: toErrors([...agentParse.errors]) };
+    }
+    const pluginAgents = agentParse.agents;
+
+    // 6b. Apply name scoping for plugin-owned MCP servers. Two plugins with
+    // a server named "linkedin" become "plugin-a__linkedin" and
+    // "plugin-b__linkedin" to prevent collisions in the MCP client manager.
+    // The original (un-scoped) name is preserved in metadata.serverName.
+    if (isClaudeMcp || manifest.format === "aifetchly") {
+      for (let i = 0; i < mcpServers.length; i += 1) {
+        const s = mcpServers[i];
+        const scopedName = `${manifest.name}__${s.serverName}`;
+        mcpServers[i] = {
+          ...s,
+          serverName: scopedName,
+          metadata: {
+            ...s.metadata,
+            pluginServerName: s.serverName,
+            pluginOwner: manifest.name,
+          },
+        };
+      }
     }
 
     // 7. Resolve final install path + copy via sibling temp (atomic-ish rename)
@@ -429,7 +717,9 @@ export class PluginImportService {
         version: manifest.version,
         description: manifest.description,
         author: manifest.author,
-        source: (manifest.source ?? "local") as PluginSource,
+        source: (provenance?.source ??
+          manifest.source ??
+          "local") as PluginSource,
         installPath,
         manifestJson: JSON.stringify(manifest),
         permissionsJson: JSON.stringify(manifest.permissions ?? []),
@@ -492,8 +782,65 @@ export class PluginImportService {
       };
     }
 
+    // 9b. Hot-register plugin skills in SkillRegistry so they're available
+    // immediately without requiring an app restart. Also write the
+    // __skill_md_wrapper__.js file so loadPersistedSkills() can find it
+    // on restart.
+    for (const { manifest: skillManifest, relManifestPath } of skills) {
+      try {
+        const skillDir = path.join(installPath, path.dirname(relManifestPath));
+        const skillMdPath = path.join(skillDir, "SKILL.md");
+        const execute = buildDocSkillExecuteHandler(skillMdPath);
+
+        // Write the wrapper JS so registerImportedSkill() works on restart
+        let skillMdContent = "";
+        try {
+          skillMdContent = fs.readFileSync(skillMdPath, "utf-8");
+        } catch (e) {
+          console.warn(`[PluginImport]   SKILL.md not readable:`, e);
+        }
+        const wrapperCode = `setResult({
+  success: true,
+  mode: "documentation_skill",
+  skillName: ${JSON.stringify(skillManifest.name)},
+  skillFile: ${JSON.stringify(skillMdPath)},
+  guidance: ${JSON.stringify(skillMdContent)},
+  message: "This skill was imported from SKILL.md and runs in documentation-only mode.",
+});`;
+        const wrapperPath = path.join(skillDir, "__skill_md_wrapper__.js");
+        fs.writeFileSync(wrapperPath, wrapperCode, "utf-8");
+
+        // Idempotent: if the plugin-owned skill is already registered
+        // (e.g. from a prior install in the same session, because
+        // globalThis.__aifetchlySkillRegistry survives HMR), unregister
+        // it first so the reinstall doesn't throw.
+        if (SkillRegistry.isRegistered(skillManifest.name)) {
+          SkillRegistry.unregisterSkill(skillManifest.name);
+        }
+        SkillRegistry.registerSkill({
+          name: skillManifest.name,
+          description: skillManifest.description,
+          parameters: skillManifest.parameters ?? {},
+          tier: "sandboxed",
+          permissionCategory: "pure",
+          requiresConfirmation: false,
+          source: "user",
+          documentationOnly: true,
+          supportedFileTypes: skillManifest.supportedFileTypes,
+          pluginOwner: manifest.name,
+          execute,
+        });
+      } catch (e) {
+        console.warn(
+          `Failed to hot-register skill "${skillManifest.name}":`,
+          e
+        );
+      }
+    }
+
     // 10. Persist plugin-owned MCP rows
     const mcpModule = new MCPToolModule();
+    const mcpServerIds: Array<{ id: number; isStdio: boolean }> = [];
     try {
       for (const server of mcpServers) {
         const entity = new MCPToolEntity();
@@ -514,7 +861,8 @@ export class PluginImportService {
         if (server.url) entity.url = server.url;
         if (server.host) entity.host = server.host;
         if (server.port) entity.port = server.port;
-        await mcpModule.saveMCPTool(entity);
+        const id = await mcpModule.saveMCPTool(entity);
+        mcpServerIds.push({ id, isStdio: server.transport === "stdio" });
       }
     } catch (e: unknown) {
       await rollbackRowsAndFiles(manifest.name, installPath);
@@ -527,6 +875,46 @@ export class PluginImportService {
               e instanceof Error
                 ? `Failed to persist plugin MCP servers: ${e.message}`
                 : "Failed to persist plugin MCP servers",
+            recoverable: false,
+          },
+        ],
+      };
+    }
+
+    // 10b. Auto-trust and discover MCP tools so they're available immediately.
+    for (const { id, isStdio } of mcpServerIds) {
+      try {
+        if (isStdio) {
+          new MCPToolService().setTrust(id, true);
+        }
+        await new MCPToolService().discoverTools(id);
+      } catch (e) {
+        console.warn(`Failed to discover MCP tools for server ${id}:`, e);
+      }
+    }
+
+    // 10c. Persist plugin-owned agent definitions (design §12.2). Roll back
+    // rows + files on failure so no partial agent rows survive.
+    const agentModule = new AgentDefinitionModule();
+    try {
+      await agentModule.upsertPluginAgents(
+        manifest.name,
+        pluginAgents,
+        preservedDisabledAgentIds
+      );
+    } catch (e: unknown) {
+      await rollbackRowsAndFiles(manifest.name, installPath);
+      return {
+        success: false,
+        errors: [
+          {
+            code: "agent-manifest-invalid",
+            componentType: "agent",
+            pluginName: manifest.name,
+            message:
+              e instanceof Error
+                ? `Failed to persist plugin agents: ${e.message}`
+                : "Failed to persist plugin agents",
             recoverable: false,
           },
         ],
@@ -561,6 +949,17 @@ export class PluginImportService {
       }
     }
 
+    // 11c. Surface agent parser warnings (forbidden/unknown fields) as
+    // non-fatal load errors so they show in diagnostics. Plugin health stays
+    // healthy — warnings never block the runtime (design §12.5).
+    if (agentParse.warnings.length > 0) {
+      try {
+        await pluginModule.setLoadErrors(manifest.name, agentParse.warnings);
+      } catch {
+        // best-effort
+      }
+    }
+
     // 12. Return summary
     const summary: PluginSummary = {
       id: pluginId,
@@ -572,11 +971,49 @@ export class PluginImportService {
       health: hasPythonSkill ? "needs_configuration" : "healthy",
       skillCount: skills.length,
       mcpServerCount: mcpServers.length,
+      agentCount: pluginAgents.length,
+      // Commands are promoted post-install by PluginComponentRegistryService,
+      // not during import — report 0 here; the live count is read on demand.
+      commandCount: 0,
+      // Hooks are promoted post-install by PluginComponentRegistryService.
+      hookCount: 0,
       permissions: manifest.permissions ?? [],
       lastUpdated: new Date().toISOString(),
     };
     return { success: true, plugin: summary };
   }
+}
+
+/**
+ * Build an execute handler for a documentation-only (SKILL.md) skill.
+ * Reads the SKILL.md on each invocation to pick up live edits.
+ */
+function buildDocSkillExecuteHandler(
+  skillMdPath: string
+): (
+  args: Record<string, unknown>,
+  context: SkillExecutionContext
+) => Promise<SkillExecutionResult> {
+  return async (): Promise<SkillExecutionResult> => {
+    let guidance = "";
+    try {
+      const content = fs.readFileSync(skillMdPath, "utf-8");
+      guidance =
+        content.length > 8000
+          ? `${content.slice(0, 8000)}\n...[skill guidance truncated]`
+          : content;
+    } catch {
+      // SKILL.md not readable; return empty guidance
+    }
+    return {
+      success: true,
+      result: {
+        mode: "documentation_skill",
+        skillFile: skillMdPath,
+        guidance,
+      },
+    };
+  };
 }
 
 /** Best-effort rollback of files only. */

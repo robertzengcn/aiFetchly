@@ -13,6 +13,7 @@ import {CookiesType} from "@/entityTypes/cookiesType"
 import { isWorkerProcess } from "@/childprocess/worker"
 import type { ParentPort } from "@/childprocess/worker"
 import { requestAiSupport } from "@/childprocess/utils/AiSupportBridge"
+import sanitizeHtml from 'sanitize-html';
 import { runObserveExecuteLoop } from "@/childprocess/utils/ObserveExecuteLoop"
 import type { ObserveExecuteRoundResult } from "@/childprocess/utils/ObserveExecuteLoop"
 import { executePuppeteerAction } from "@/childprocess/utils/ObserveExecuteExecutor"
@@ -179,7 +180,25 @@ export class SearchScrape implements searchEngineImpl {
         try {
             const pageUrl = await this.page.url();
             let pageContent = await this.page.content();
-            pageContent = pageContent.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, "").replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, "").replace(/<!--[\s\S]*?-->/g, "").replace(/\s+/g, " ").trim().substring(0, 10000);
+            pageContent = sanitizeHtml(pageContent, {
+                allowedTags: [
+                    "h1", "h2", "h3", "h4", "h5", "h6", "p", "br", "hr",
+                    "ul", "ol", "li", "dl", "dt", "dd",
+                    "table", "thead", "tbody", "tfoot", "tr", "td", "th", "caption",
+                    "div", "span", "section", "article", "aside", "header", "footer", "nav", "main",
+                    "pre", "code", "blockquote", "em", "strong", "b", "i", "u", "s", "small", "sub", "sup",
+                    "a", "img", "figure", "figcaption",
+                    "abbr", "address", "del", "ins", "mark", "q", "time", "var",
+                    "details", "summary",
+                ],
+                allowedAttributes: {
+                    "*": ["class", "id", "title", "role", "aria-label"],
+                    "a": ["href", "target", "rel"],
+                    "img": ["src", "alt", "width", "height"],
+                    "td": ["colspan", "rowspan"],
+                    "th": ["colspan", "rowspan", "scope"],
+                },
+            }).replace(/\s+/g, " ").trim().substring(0, 10000);
             let screenshot: string | undefined;
             try {
                 screenshot = (await this.page.screenshot({ type: "png", encoding: "base64", fullPage: false })) as string;
@@ -272,17 +291,19 @@ export class SearchScrape implements searchEngineImpl {
                         httpOnly: cookie.httpOnly ?? true,
                         expires: cookie.expirationDate ?? 0
                     };
-                    console.log("prepare to set cookies of",mappedCookie)
-                    //console.log("Setting cookie in browser context:", mappedCookie);
+                    // Never log cookie values — stdout is captured into the
+                    // search runtime log and would leak session credentials.
                     await this.page.setCookie(mappedCookie)
                     // Set cookie in browser context
                     //await browserContext.setCookie(mappedCookie);
                     
-                    // Also set cookie in page context
-                    console.log("Setting cookie in page context:", mappedCookie);
                     //await pageContext.browser().setCookie(mappedCookie);
                 }
             }
+            console.log(
+                `Applied ${data.data.cookies.length} account cookie(s)` +
+                    (this.accountId ? ` for account ${this.accountId}` : "")
+            );
             
             // Verify cookies were set in both contexts
             //const browserCookies = await browserContext.cookies();

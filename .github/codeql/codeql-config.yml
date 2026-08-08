@@ -1,0 +1,9 @@
+name: "AiFetchly CodeQL config"
+
+paths-ignore:
+  - ".claude/**"
+  - ".agents/**"
+  - "node_modules/**"
+  - "dist/**"
+  - "out/**"
+  - "release/**"

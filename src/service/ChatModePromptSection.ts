@@ -8,7 +8,7 @@ export function buildAutoPlanPromptSection(): string {
 
 You have access to an EnterPlanMode tool. Call it when the user's request is
 complex or touches high-impact actions. This is an aiFetchly marketing
-automation product — Plan Mode is the safest path for anything that could
+automation product - Plan Mode is the safest path for anything that could
 contact leads, modify campaigns, post to social platforms, schedule
 automation, or scrape at scale.
 
@@ -28,7 +28,7 @@ Do NOT enter Plan Mode for:
 - One-line clarifications or factual Q&A
 - Tasks the user explicitly asked to do immediately without planning
 
-The switch is silent — the user sees a Plan Mode indicator. After calling
+The switch is silent - the user sees a Plan Mode indicator. After calling
 EnterPlanMode, immediately continue with the plan-mode workflow. Do not ask
 permission to enter; the tool call IS the entry. If unsure, lean toward
 planning: a wasted plan is cheaper than a wrongly-sent email blast.`;

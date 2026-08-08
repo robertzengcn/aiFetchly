@@ -7,14 +7,15 @@
             </div> -->
            
             <div class="ml-auto">
-            <v-btn class="btn" variant="flat" prepend-icon="mdi-plus" color="#5865f2" @click="createTask()">
-                {{CapitalizeFirstLetter(t('buckemailtask.create_task'))}}
+            <v-btn class="btn ml-2" variant="outlined" prepend-icon="mdi-email-sync" @click="goToEmailService()">
+                {{ CapitalizeFirstLetter(t('buckemailtask.email_service')) }}
             </v-btn>
         </div>
         </div>
 
     </div>
-    <v-data-table-server v-model="selected" :items-per-page="itemsPerPage" :search="search" :headers="computedHeaders"
+    <v-data-table-server
+v-model="selected" :items-per-page="itemsPerPage" :search="search" :headers="computedHeaders"
         :items-length="totalItems" :items="serverItems" :loading="loading" item-value="id" @update:options="loadItems" return-object
         class="mt-5" :show-select="isSelectedtable">
         <template v-slot:[`item.actions`]="{ item }" v-if="isSelectedtable!=true">
@@ -119,7 +120,7 @@ function loadItems({ page, itemsPerPage, sortBy }) {
     const fetchitem: Fetchparam = {
         page: page,
         itemsPerPage: itemsPerPage,
-        sortBy: sortBy,
+        sortBy: sortBy?.[0],
         search: search.value
     }
     FakeAPI.fetch(fetchitem).then(
@@ -148,6 +149,12 @@ const openItem = (item: BuckEmailListType) => {
         name: "BUCK_Email_TASK_LOG_LIST", params: { id: item.TaskId }
     });
 };
+
+function goToEmailService() {
+    router.push({
+        name: 'Email_Marketing_Service_LIST'
+    });
+}
 
 function createTask() {
     console.log("create email Service")

@@ -2,11 +2,13 @@
 import { defineConfig, loadEnv } from 'vite';
 import alias from "@rollup/plugin-alias";
 import * as path from 'path';
+import { builtinModules } from 'node:module';
 import copy from 'rollup-plugin-copy'
 import fs from 'fs';
 // import { viteStaticCopy } from 'vite-plugin-static-copy'
 import ClosePlugin from './vite-plugin-close'
 import checker from 'vite-plugin-checker'
+import { optionalChecker } from './vite-checker-toggle.mjs';
 // rollup-plugin-sourcemaps removed: it conflicts with Vite's built-in source map
 // handling and causes empty `sources` arrays in generated .map files,
 // which breaks debugger breakpoint resolution.
@@ -73,6 +75,48 @@ function fixInteropNamespacePlugin() {
         }
     };
 }
+
+// Puppeteer packages use lazy require() patterns (clone-deep, merge-deep) that
+// break when Vite/Rolldown bundles them. Keep in sync with forge.config.js
+// EXTERNAL_DEPENDENCIES puppeteer entries.
+const PUPPETEER_EXTERNALS = [
+    'puppeteer',
+    'puppeteer-core',
+    'puppeteer-extra',
+    'puppeteer-extra-plugin-stealth',
+    'puppeteer-extra-plugin-recaptcha',
+    '@puppeteer/browsers',
+    '@lem0-packages/puppeteer-page-proxy',
+];
+
+const NODE_BUILTINS = [
+    'electron',
+    'electron/main',
+    'electron/common',
+    ...builtinModules,
+    ...builtinModules.map((moduleName) => `node:${moduleName}`),
+];
+
+const MAIN_PROCESS_EXTERNALS = [
+    ...NODE_BUILTINS,
+    'sqlite3',
+    'better-sqlite3',
+    'bindings',
+    'typeorm',
+    'sqlite-vec',
+    'canvas',
+    '@napi-rs/canvas',
+    'isolated-vm',
+    // Already listed in forge EXTERNAL_DEPENDENCIES. Keep it out of the main
+    // bundle so pdf-lib's ESM+tslib graph is never Vite-rewritten into a
+    // ScheduleManager/startup CJS chunk.
+    'pdf-lib',
+    // Keep a single node_modules copy so electron-store's module-level IPC init
+    // flag is shared (avoids stacking electron-store-get-data listeners across
+    // Vite chunks/HMR).
+    'electron-store',
+    ...PUPPETEER_EXTERNALS,
+];
 
 // Custom platform-aware copy plugin
 function platformCopyPlugin() {
@@ -308,10 +352,10 @@ export default ({ mode }) => {
             // ViteEjsPlugin(),
             emptyModulesPlugin(),
             ClosePlugin(),
-            checker({
+            ...optionalChecker(() => checker({
                 // e.g. use TypeScript check
                 typescript: true,
-            }),
+            })),
             platformCopyPlugin(),
             fixInteropNamespacePlugin(),
             // ejsTemplateProcessorPlugin(),
@@ -338,6 +382,13 @@ export default ({ mode }) => {
                 "ioredis": path.resolve(__dirname, "./src/utils/typeorm-shim.ts"),  // Add this line
                 "sql.js": path.resolve(__dirname, "./src/utils/typeorm-shim.ts"),  // Add this line
                 "canvas": '@napi-rs/canvas',
+                // Force tslib's CJS entry. Vite resolves `import … from "tslib"` to
+                // tslib/modules/index.js (package "exports"."import"."node"), which
+                // default-imports tslib.js and destructures `{ __extends }`. Under
+                // Electron CJS output that becomes `.default` === undefined and
+                // crashes packaged ScheduleManager (pdf-lib → nested tslib).
+                // See test/vitest/main/TslibViteBundle.test.ts.
+                "tslib": path.resolve(__dirname, "./node_modules/tslib/tslib.js"),
             },
             conditions: ['node'],
             // mainFields: ['main', 'module', 'browser']
@@ -352,16 +403,7 @@ export default ({ mode }) => {
         },
         build: {
             rollupOptions: {
-                external: [
-                    'sqlite3',  // Mark sqlite3 as external
-                    'better-sqlite3',
-                    'bindings',
-                    'typeorm',
-                    'sqlite-vec',
-                    'canvas', 
-                    '@napi-rs/canvas',
-                    'isolated-vm',
-                ]
+                external: MAIN_PROCESS_EXTERNALS,
             },
             sourcemap: true,
         },
@@ -371,6 +413,7 @@ export default ({ mode }) => {
             // Skip that subtree in the root suite; it runs via a dedicated config:
             //   test/vitest/main/components/vitest.config.mjs
             include: ['test/vitest/main/**/*.test.ts', '!test/vitest/main/components/**'],
+            exclude: ['**/.claude/**', '**/.worktrees/**', '**/node_modules/**'],
             // NOTE: Do NOT set `environment: 'happy-dom'` globally here.
             // Doing so breaks non-component tests (e.g. AIChatQueryLoopAsyncPoll)
             // because happy-dom interferes with resolution of Node builtins

@@ -1,0 +1,20 @@
+CREATE TABLE IF NOT EXISTS email_reply_draft(
+id INTEGER PRIMARY KEY AUTOINCREMENT,
+messageId INTEGER NOT NULL,
+emailServiceId INTEGER,
+subject VARCHAR(998) NOT NULL,
+bodyText TEXT NOT NULL,
+bodyHtml TEXT,
+status VARCHAR(50) DEFAULT 'draft',
+generationSource VARCHAR(20) DEFAULT 'ai',
+modelName VARCHAR(100),
+promptVersion VARCHAR(50),
+confidence REAL,
+knowledgeSourcesJson TEXT,
+ownerStyleProfileJson TEXT,
+warningsJson TEXT,
+sentAt DATETIME,
+sendError TEXT,
+createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
+updatedAt DATETIME DEFAULT CURRENT_TIMESTAMP
+)

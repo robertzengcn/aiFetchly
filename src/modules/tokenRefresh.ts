@@ -20,6 +20,61 @@ export interface TokenRefreshData {
   accessToken: string;
   refreshToken: string;
   expiresIn: number;
+  refreshExpiresIn?: number;
+}
+
+/**
+ * Thrown by {@link TokenRefreshService._performRefreshNetwork} when the refresh
+ * token is genuinely missing, rejected (HTTP 401/403), or expired.
+ *
+ * Network errors and HTTP 5xx (backend unreachable / erroring) are thrown as
+ * plain `Error` instead. Callers must not clear local auth state for refresh
+ * failures, because backend/proxy/network instability can look like auth
+ * failure and the user can still use local app functionality.
+ */
+export class RefreshTokenInvalidError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RefreshTokenInvalidError";
+  }
+}
+
+/**
+ * Returns `true` when a refresh failure is caused by the backend being
+ * unreachable or misbehaving — a transient condition that must NOT log the
+ * user out.
+ *
+ * Covers:
+ *  - Node `fetch` network failures (`TypeError: fetch failed`, optionally with
+ *    a system-error `cause` such as ECONNREFUSED / ETIMEDOUT / EAI_AGAIN).
+ *  - HTTP 5xx server errors (thrown by `_performRefreshNetwork` as
+ *    `HTTP error: <status> ...`).
+ */
+export function isTransientBackendError(error: unknown): boolean {
+  const msg = error instanceof Error ? error.message : String(error);
+
+  // Node's undici fetch throws `TypeError: fetch failed` for any network issue.
+  if (msg.includes("fetch failed")) {
+    return true;
+  }
+
+  // HTTP 5xx surfaced as "HTTP error: 5xx ...".
+  if (/HTTP error:\s*5\d\d/.test(msg)) {
+    return true;
+  }
+
+  // Belt-and-suspenders: inspect the undici `cause` for system-level errors.
+  const cause = (error as Error & { cause?: unknown }).cause;
+  const causeMsg = cause instanceof Error ? cause.message : "";
+  if (
+    /ECONN|ENOTFOUND|ETIMEDOUT|EAI_AGAIN|ECONNRESET|ECONNREFUSED|EHOSTUNREACH|ENETUNREACH|socket hang up|UND_ERR|network/i.test(
+      causeMsg
+    )
+  ) {
+    return true;
+  }
+
+  return false;
 }
 
 /**
@@ -51,8 +106,19 @@ export interface TokenRefreshData {
 export class TokenRefreshService {
   private _baseUrl: string;
   private _tokenService: Token;
-  private _userService: User;
-  private _isRefreshing = false;
+
+  // --- Process-wide refresh serialization ---
+  /**
+   * A single in-flight refresh promise shared across ALL callers in the process.
+   *
+   * Why: refresh-token rotation makes concurrent refresh requests unsafe —
+   * the backend revokes the old refresh token on the winner, and the loser's
+   * request (still carrying the now-revoked token) fails with "invalid refresh
+   * token", which historically forced a sign-out. Serializing at the process
+   * level guarantees only one network refresh is ever in flight.
+   */
+  private static _inFlight: Promise<CommonApiresp<TokenRefreshData>> | null =
+    null;
 
   // --- Singleton background auto-refresh state ---
   private static _autoRefreshTimer: ReturnType<typeof setInterval> | null =
@@ -87,7 +153,6 @@ export class TokenRefreshService {
 
     this._baseUrl = loginUrl + "/apis";
     this._tokenService = new Token();
-    this._userService = new User();
   }
 
   // =========================================================================
@@ -98,8 +163,9 @@ export class TokenRefreshService {
    * Start the background auto-refresh timer.
    *
    * Periodically checks if the access token is about to expire and
-   * refreshes it proactively. If the refresh token itself is invalid
-   * or expired the timer is stopped and the user is signed out.
+   * refreshes it proactively. If the refresh endpoint rejects the token, the
+   * timer is stopped but local auth state is kept so local app functions remain
+   * available.
    *
    * Safe to call multiple times – subsequent calls are no-ops if the
    * timer is already running.
@@ -157,11 +223,22 @@ export class TokenRefreshService {
    * 1. Check if the refresh token is still valid (not expired).
    *    If expired → stop auto-refresh and sign out.
    * 2. Check if the access token is about to expire.
-   *    If yes → call refreshAccessToken().
-   * 3. Track consecutive failures. After MAX_CONSECUTIVE_FAILURES
-   *    the timer is stopped to avoid hammering the server.
+   *    If yes → call refreshOnce().
+   * 3. Handle the refresh result:
+   *    - Success → reset the failure counter.
+   *    - Refresh endpoint rejects the token ({@link RefreshTokenInvalidError})
+   *      → stop auto-refresh, but keep local auth state.
+   *    - Backend unreachable / HTTP 5xx (transient, {@link isTransientBackendError})
+   *      → KEEP the user logged in and keep the timer running so it retries on
+   *      the next cycle. A temporary backend outage must NOT force a re-login.
+   *    - Any other unexpected error → count toward MAX_CONSECUTIVE_FAILURES;
+   *      after the threshold the timer is stopped (but the user is NOT signed
+   *      out, since persistent failures are most likely backend issues).
+   *
+   * Exposed as public (rather than private) so it can be invoked directly in
+   * tests without relying on the 60s background timer.
    */
-  private static async performAutoRefreshCheck(): Promise<void> {
+  static async performAutoRefreshCheck(): Promise<void> {
     const tokenService = new Token();
     const now = Date.now();
 
@@ -221,10 +298,9 @@ export class TokenRefreshService {
       // If no expiry stored, refresh proactively to be safe
     }
 
-    // --- 3. Perform the refresh ---
+    // --- 3. Perform the refresh (process-wide serialized) ---
     try {
-      const service = new TokenRefreshService();
-      const result = await service.refreshAccessToken();
+      const result = await TokenRefreshService.refreshOnce();
 
       if (result.status && result.data) {
         // Update the stored expiry time based on the new expiresIn value
@@ -238,45 +314,49 @@ export class TokenRefreshService {
         throw new Error(result.msg || "Refresh returned unsuccessful status");
       }
     } catch (error) {
-      TokenRefreshService._consecutiveFailures++;
       const errorMsg = error instanceof Error ? error.message : String(error);
-      log.error(
-        `[TokenRefresh] Background refresh failed (${TokenRefreshService._consecutiveFailures}/${TokenRefreshService.MAX_CONSECUTIVE_FAILURES}):`,
-        errorMsg
-      );
 
-      // If the error indicates an invalid/expired refresh token, stop immediately
-      if (
-        errorMsg.includes("Invalid or expired refresh token") ||
-        errorMsg.includes("Refresh token not found")
-      ) {
+      // Case A: the refresh endpoint rejected the token. Do NOT sign out here:
+      // staging/proxy/backend issues can return auth-shaped failures, and the
+      // user can still use local app functionality while remote calls retry later.
+      if (error instanceof RefreshTokenInvalidError) {
         log.warn(
-          "[TokenRefresh] Refresh token is invalid, stopping auto-refresh"
+          `[TokenRefresh] Refresh token refresh failed (${errorMsg}); stopping auto-refresh and keeping local session`
         );
         TokenRefreshService.stopAutoRefresh();
         return;
       }
 
-      // Stop after too many consecutive failures
+      // Case B: the backend is unreachable or erroring (network down, DNS,
+      // timeout, HTTP 5xx). Keep the user logged in and keep the timer running
+      // so the next cycle retries automatically once the backend is reachable.
+      // Do NOT increment the failure counter and do NOT sign out.
+      if (isTransientBackendError(error)) {
+        log.warn(
+          `[TokenRefresh] Backend unreachable (${errorMsg}). User remains logged in; will retry next cycle.`
+        );
+        return;
+      }
+
+      // Case C: any other unexpected failure. Count toward the threshold; once
+      // it is reached, stop the timer to avoid hammering the server. The user
+      // is intentionally NOT signed out — persistent failures are far more
+      // likely to be backend issues than invalid credentials, and only an
+      // explicit auth error (Case A) should end the session.
+      TokenRefreshService._consecutiveFailures++;
+      log.error(
+        `[TokenRefresh] Background refresh failed (${TokenRefreshService._consecutiveFailures}/${TokenRefreshService.MAX_CONSECUTIVE_FAILURES}):`,
+        errorMsg
+      );
+
       if (
         TokenRefreshService._consecutiveFailures >=
         TokenRefreshService.MAX_CONSECUTIVE_FAILURES
       ) {
         log.error(
-          "[TokenRefresh] Max consecutive failures reached, stopping auto-refresh"
+          "[TokenRefresh] Max consecutive failures reached, stopping auto-refresh. User remains logged in."
         );
         TokenRefreshService.stopAutoRefresh();
-
-        // Sign out user as the session is likely invalid
-        try {
-          const userService = new User();
-          await userService.Signout();
-        } catch (signoutError) {
-          log.error(
-            "[TokenRefresh] Error during signout after max failures:",
-            signoutError
-          );
-        }
       }
     }
   }
@@ -286,12 +366,70 @@ export class TokenRefreshService {
   // =========================================================================
 
   /**
-   * Refreshes the access token using the stored refresh token
+   * Process-wide entrypoint for refreshing the access token.
    *
-   * Uses raw fetch() to avoid circular dependency with HttpClient.
+   * All callers (background timer, every HttpClient instance) MUST go through
+   * this method so that only one refresh network request is ever in flight at
+   * a time. This is critical because the backend rotates the refresh token and
+   * revokes the old one — concurrent refreshes race the rotation and one of
+   * them will see its (now-revoked) token rejected, which historically caused
+   * spurious forced sign-outs.
+   *
+   * If a refresh is already in flight, returns the same promise (callers wait
+   * for it to settle and then retry their original request).
    *
    * @returns Promise resolving to token refresh response with new tokens
-   * @throws {Error} When refresh token is missing, invalid, or expired
+   * @throws {RefreshTokenInvalidError} When the refresh token is missing,
+   *   rejected (HTTP 401/403), or expired. Callers should keep local auth state
+   *   and fail only the current remote request.
+   * @throws {Error} For transient failures (network unreachable, HTTP 5xx) —
+   *   callers should keep the user logged in and retry.
+   */
+  static refreshOnce(): Promise<CommonApiresp<TokenRefreshData>> {
+    if (TokenRefreshService._inFlight) {
+      return TokenRefreshService._inFlight;
+    }
+    const instance = new TokenRefreshService();
+    const p = instance._performRefreshNetwork();
+    TokenRefreshService._inFlight = p;
+    // Clear the slot once the refresh settles so the next refresh can run.
+    // Only clear when this promise is still the active slot — otherwise a
+    // stale settlement (e.g. after tests reset _inFlight, or a superseded
+    // caller) would wipe a newer in-flight refresh.
+    p.then(
+      () => {
+        if (TokenRefreshService._inFlight === p) {
+          TokenRefreshService._inFlight = null;
+        }
+      },
+      () => {
+        if (TokenRefreshService._inFlight === p) {
+          TokenRefreshService._inFlight = null;
+        }
+      }
+    );
+    return p;
+  }
+
+  /**
+   * Check whether a refresh is currently in flight process-wide.
+   */
+  static isRefreshInFlight(): boolean {
+    return TokenRefreshService._inFlight !== null;
+  }
+
+  /**
+   * Refreshes the access token using the stored refresh token.
+   *
+   * Delegates to the process-wide {@link TokenRefreshService.refreshOnce} so
+   * concurrent callers are serialized. Kept for backward compatibility.
+   *
+   * @returns Promise resolving to token refresh response with new tokens
+   * @throws {RefreshTokenInvalidError} When the refresh token is missing,
+   *   rejected (HTTP 401/403), or expired. Callers should keep local auth state
+   *   and fail only the current remote request.
+   * @throws {Error} For transient failures (network unreachable, HTTP 5xx) —
+   *   callers should keep the user logged in and retry.
    *
    * @example
    * ```typescript
@@ -299,119 +437,112 @@ export class TokenRefreshService {
    * ```
    */
   async refreshAccessToken(): Promise<CommonApiresp<TokenRefreshData>> {
-    // Prevent concurrent refresh requests
-    if (this._isRefreshing) {
-      throw new Error("Token refresh already in progress");
-    }
-
-    this._isRefreshing = true;
-
-    try {
-      // Get refresh token from storage
-      const refreshToken = this._tokenService.getValue(REFRESHTOKEN);
-
-      if (!refreshToken || refreshToken.trim().length === 0) {
-        throw new Error("Refresh token not found");
-      }
-
-      // Check if refresh token has expired before making the request
-      const refreshExpiryStr = this._tokenService.getValue(REFRESHTOKENEXPIRY);
-      if (refreshExpiryStr) {
-        const refreshExpiry = parseInt(refreshExpiryStr, 10);
-        if (!isNaN(refreshExpiry) && Date.now() >= refreshExpiry) {
-          // Stop auto-refresh if running
-          TokenRefreshService.stopAutoRefresh();
-
-          // Sign out user
-          try {
-            await this._userService.Signout();
-          } catch (signoutError) {
-            console.error("Error during signout:", signoutError);
-          }
-
-          throw new Error("Refresh token has expired");
-        }
-      }
-
-      // Call refresh API endpoint using raw fetch (to avoid circular dependency with HttpClient)
-      const requestBody = {
-        refreshToken: refreshToken.trim(),
-      };
-
-      const res = await fetch(this._baseUrl + "/api/auth/refresh", {
-        method: "POST",
-        headers: {
-          Accept: "application/json",
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(requestBody),
-      });
-
-      if (!res.ok) {
-        throw new Error(`HTTP error: ${res.status} ${res.statusText}`);
-      }
-
-      const response: CommonApiresp<TokenRefreshData> = await res.json();
-
-      // Handle API response errors
-      if (!response.status) {
-        // Check for specific error codes
-        if (response.code === 401) {
-          const errorMsg = response.msg || "Invalid or expired refresh token";
-
-          // Stop auto-refresh if running
-          TokenRefreshService.stopAutoRefresh();
-
-          // Sign out user on authentication failure
-          try {
-            await this._userService.Signout();
-          } catch (signoutError) {
-            console.error("Error during signout:", signoutError);
-          }
-
-          throw new Error(errorMsg);
-        } else {
-          throw new Error(response.msg || "Token refresh failed");
-        }
-      }
-
-      // Update stored tokens if refresh was successful
-      if (response.data) {
-        this._tokenService.setValue(TOKENNAME, response.data.accessToken);
-
-        // Update access token expiry
-        if (response.data.expiresIn) {
-          const newExpiry = Date.now() + response.data.expiresIn * 1000;
-          this._tokenService.setValue(TOKENEXPIRY, newExpiry.toString());
-        }
-
-        // Handle refresh token rotation (backend may return new refresh token)
-        if (
-          response.data.refreshToken &&
-          response.data.refreshToken.trim().length > 0
-        ) {
-          this._tokenService.setValue(REFRESHTOKEN, response.data.refreshToken);
-        }
-      }
-
-      return response;
-    } catch (error) {
-      // Re-throw with more context
-      if (error instanceof Error) {
-        throw error;
-      }
-      throw new Error(`Token refresh failed: ${String(error)}`);
-    } finally {
-      this._isRefreshing = false;
-    }
+    return TokenRefreshService.refreshOnce();
   }
 
   /**
-   * Check if a token refresh is currently in progress
+   * Internal network refresh. Only invoked via {@link TokenRefreshService.refreshOnce}
+   * so exactly one of these runs at a time per process.
    *
-   * @returns boolean indicating if refresh is in progress
+   * Uses raw fetch() to avoid circular dependency with HttpClient.
+   *
+   * Throws {@link RefreshTokenInvalidError} for auth-shaped refresh failures
+   * (missing / expired / rejected refresh token). Network and HTTP 5xx failures
+   * throw a plain `Error`. Both paths preserve local auth state; callers only
+   * fail the current remote request.
    */
-  isRefreshing(): boolean {
-    return this._isRefreshing;
+  private async _performRefreshNetwork(): Promise<
+    CommonApiresp<TokenRefreshData>
+  > {
+    const tokenService = this._tokenService;
+    // Get refresh token from storage
+    const refreshToken = tokenService.getValue(REFRESHTOKEN);
+
+    if (!refreshToken || refreshToken.trim().length === 0) {
+      throw new RefreshTokenInvalidError("Refresh token not found");
+    }
+
+    // Check if refresh token has expired before making the request
+    const refreshExpiryStr = tokenService.getValue(REFRESHTOKENEXPIRY);
+    if (refreshExpiryStr) {
+      const refreshExpiry = parseInt(refreshExpiryStr, 10);
+      if (!isNaN(refreshExpiry) && Date.now() >= refreshExpiry) {
+        // Local expiry is definitive; callers decide the user-facing behavior.
+        throw new RefreshTokenInvalidError("Refresh token has expired");
+      }
+    }
+
+    // Call refresh API endpoint using raw fetch (to avoid circular dependency with HttpClient)
+    const requestBody = {
+      refreshToken: refreshToken.trim(),
+    };
+
+    const res = await fetch(this._baseUrl + "/api/auth/refresh", {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(requestBody),
+    });
+
+    if (!res.ok) {
+      // 401/403 means the refresh token was rejected — a genuine auth
+      // failure. Everything else (5xx, etc.) stays a plain Error so callers
+      // can treat it as a transient/backend issue.
+      if (res.status === 401 || res.status === 403) {
+        throw new RefreshTokenInvalidError(
+          `Refresh token rejected (HTTP ${res.status})`
+        );
+      }
+      throw new Error(`HTTP error: ${res.status} ${res.statusText}`);
+    }
+
+    const response: CommonApiresp<TokenRefreshData> = await res.json();
+
+    // Handle API response errors
+    if (!response.status) {
+      // Check for specific error codes
+      if (response.code === 401) {
+        // Auth-shaped refresh failure. Callers keep local auth state and fail
+        // only the current remote request.
+        throw new RefreshTokenInvalidError(
+          response.msg || "Invalid or expired refresh token"
+        );
+      } else {
+        throw new Error(response.msg || "Token refresh failed");
+      }
+    }
+
+    // Update stored tokens if refresh was successful
+    if (response.data) {
+      tokenService.setValue(TOKENNAME, response.data.accessToken);
+
+      // Update access token expiry
+      if (response.data.expiresIn) {
+        const newExpiry = Date.now() + response.data.expiresIn * 1000;
+        tokenService.setValue(TOKENEXPIRY, newExpiry.toString());
+      }
+
+      // Handle refresh token rotation (backend may return new refresh token)
+      if (
+        response.data.refreshToken &&
+        response.data.refreshToken.trim().length > 0
+      ) {
+        tokenService.setValue(REFRESHTOKEN, response.data.refreshToken);
+      }
+
+      if (
+        typeof response.data.refreshExpiresIn === "number" &&
+        !Number.isNaN(response.data.refreshExpiresIn) &&
+        response.data.refreshExpiresIn > 0
+      ) {
+        const newRefreshExpiry =
+          Date.now() + response.data.refreshExpiresIn * 1000;
+        tokenService.setValue(REFRESHTOKENEXPIRY, newRefreshExpiry.toString());
+      }
+    }
+
+    return response;
   }
 }

@@ -12,6 +12,11 @@ import { EmailExtractionTypes } from "@/config/emailextraction";
 import { SortBy, TaskStatus } from "@/entityTypes/commonType";
 import { EmailItem } from "@/entityTypes/emailmarketingType";
 import { BaseModule } from "@/modules/baseModule";
+import {
+  buildPackagedWorkerEnv,
+  getPackagedWorkerPathCandidates,
+  resolvePackagedWorkerPath,
+} from "@/utils/packagedWorkerPath";
 import { EmailSearchResultDetailEntity } from "@/entity/EmailSearchResultDetail.entity";
 import {
   EmailsearchTaskEntity,
@@ -88,6 +93,8 @@ export class EmailSearchTaskModule extends BaseModule {
     this.emailsearchTaskProxydb = new EmailSearchTaskProxyModule();
   }
   public async getEmailContoldata(taskid: number): Promise<EmailsControldata> {
+    await this.ensureConnection();
+
     const task = await this.emailsearchTaskdb.getTaskById(taskid);
     if (!task) {
       throw new Error("task not found");
@@ -121,12 +128,30 @@ export class EmailSearchTaskModule extends BaseModule {
     return data;
   }
   public async searchEmail(taskId: number) {
+    await this.ensureConnection();
+
     //save search email task
     // const taskId=await this.saveSearchtask(data)
     const data = await this.getEmailContoldata(taskId);
-    const childPath = path.join(__dirname, "taskCode.js");
-    if (!fs.existsSync(childPath)) {
-      throw new Error("child js path not exist for the path " + childPath);
+    const electronProcess = process as NodeJS.Process & {
+      resourcesPath?: string;
+    };
+    const runtime = {
+      dirname: __dirname,
+      cwd: process.cwd(),
+      resourcesPath: electronProcess.resourcesPath,
+      existsSync: fs.existsSync,
+    };
+    const options = {
+      dirnameRelativePaths: ["taskCode.js"],
+      cwdRelativePaths: [path.join(".vite", "build", "taskCode.js")],
+    };
+    const childPath = resolvePackagedWorkerPath(runtime, options);
+    if (!childPath) {
+      const candidates = getPackagedWorkerPathCandidates(runtime, options);
+      throw new Error(
+        `child js path not exist. Tried: ${candidates.join(", ")}`
+      );
     }
 
     const { port1, port2 } = new MessageChannelMain();
@@ -152,14 +177,14 @@ export class EmailSearchTaskModule extends BaseModule {
 
     const child = utilityProcess.fork(childPath, [], {
       stdio: "pipe",
-      execArgv: ["--inspect"],
-      env: {
-        ...process.env,
-        NODE_OPTIONS: "",
-        TWOCAPTCHA_TOKEN: twoCaptchaTokenvalue,
-        ELECTRON_APP_NAME: app.getName(),
-        ELECTRON_USER_DATA_PATH: app.getPath("userData"),
-      },
+      execArgv: [],
+      env: buildPackagedWorkerEnv({
+        extraEnv: {
+          TWOCAPTCHA_TOKEN: twoCaptchaTokenvalue,
+          ELECTRON_APP_NAME: app.getName(),
+          ELECTRON_USER_DATA_PATH: app.getPath("userData"),
+        },
+      }),
     });
     // console.log(path.join(__dirname, 'utilityCode.js'))
     let logpath = tokenService.getValue(USERLOGPATH);
@@ -348,6 +373,8 @@ export class EmailSearchTaskModule extends BaseModule {
    * @throws Error if task is already running
    */
   public async startTask(taskId: number): Promise<void> {
+    await this.ensureConnection();
+
     if (EmailSearchTaskModule.processMap.has(taskId)) {
       throw new Error("Task is already running");
     }
@@ -392,6 +419,8 @@ export class EmailSearchTaskModule extends BaseModule {
 
   //save search task, call it when user start search email
   public async saveSearchtask(data: EmailsControldata): Promise<number> {
+    await this.ensureConnection();
+
     console.log("save search task");
     //
     const task = new EmailSearchTaskEntity();
@@ -469,6 +498,8 @@ export class EmailSearchTaskModule extends BaseModule {
       searchResultId?: number;
     }
   ): Promise<number> {
+    await this.ensureConnection();
+
     // Validate URLs
     if (!urls || urls.length === 0) {
       throw new Error("URL list cannot be empty");
@@ -508,6 +539,8 @@ export class EmailSearchTaskModule extends BaseModule {
     runtimeLog: string,
     errorLog: string
   ) {
+    await this.ensureConnection();
+
     if (runtimeLog) {
       await this.emailsearchTaskdb.updateruntimelog(taskId, runtimeLog);
     }
@@ -517,10 +550,14 @@ export class EmailSearchTaskModule extends BaseModule {
   }
   //upate task status
   public async updateTaskStatus(taskId: number, status: TaskStatus) {
+    await this.ensureConnection();
+
     await this.emailsearchTaskdb.updateTaskStatus(taskId, status);
   }
   //save search result
   public async saveSearchResult(taskId: number, res: EmailResult) {
+    await this.ensureConnection();
+
     const data = buildEmailSearchResultEntity(taskId, res);
     const resultId = await this.emailsearchresultdb.create(data);
     if (!resultId) {
@@ -540,6 +577,8 @@ export class EmailSearchTaskModule extends BaseModule {
     size: number,
     sortby?: SortBy
   ): Promise<{ records: EmailSearchTaskEntity[]; total: number }> {
+    await this.ensureConnection();
+
     return await this.emailsearchTaskdb.listSearchtask(page, size, sortby);
   }
   //convert task status to string
@@ -555,6 +594,8 @@ export class EmailSearchTaskModule extends BaseModule {
     page: number,
     size: number
   ): Promise<string[]> {
+    await this.ensureConnection();
+
     const res = await this.emailsearchUrldb.getUrls(taskId, page, size);
     const urls: string[] = [];
     for (const value of res) {
@@ -568,6 +609,8 @@ export class EmailSearchTaskModule extends BaseModule {
     page: number,
     size: number
   ): Promise<EmailResultDisplay[]> {
+    await this.ensureConnection();
+
     console.log("get task result,task id is" + taskId);
     const res = await this.emailsearchresultdb.getTaskResult(
       taskId,
@@ -607,6 +650,8 @@ export class EmailSearchTaskModule extends BaseModule {
   public async getAllTaskResults(
     taskId: number
   ): Promise<EmailResultDisplay[]> {
+    await this.ensureConnection();
+
     console.log("get all task results for export, task id is" + taskId);
     const res = await this.emailsearchresultdb.getAllResultsByTaskId(taskId);
     const result: EmailResultDisplay[] = [];
@@ -637,15 +682,21 @@ export class EmailSearchTaskModule extends BaseModule {
   }
   //get task detail count
   public async getTaskResultCount(taskId: number): Promise<number> {
+    await this.ensureConnection();
+
     return await this.emailsearchresultdb.getTaskResultCount(taskId);
   }
   public async countAllResults(): Promise<number> {
+    await this.ensureConnection();
+
     return this.emailsearchresultdb.countAll();
   }
   public async countResultsByDateRange(
     startDate: Date,
     endDate: Date
   ): Promise<number> {
+    await this.ensureConnection();
+
     return this.emailsearchresultdb.countByDateRange(startDate, endDate);
   }
   public async aggregateResultsByDateRange(
@@ -653,6 +704,8 @@ export class EmailSearchTaskModule extends BaseModule {
     endDate: Date,
     granularity: "day" | "week" | "month"
   ): Promise<AggregatedCount[]> {
+    await this.ensureConnection();
+
     const rows = await this.emailsearchresultdb.aggregateByDateRange(
       startDate,
       endDate,
@@ -662,6 +715,8 @@ export class EmailSearchTaskModule extends BaseModule {
   }
   //get all email in email search task
   public async getAllEmails(taskId: number): Promise<EmailItem[]> {
+    await this.ensureConnection();
+
     const res = await this.emailsearchresultdb.getTaskResultCount(taskId);
     const emails: EmailItem[] = [];
     const loopNum = 100;
@@ -692,11 +747,15 @@ export class EmailSearchTaskModule extends BaseModule {
   public async getTaskDetail(
     taskId: number
   ): Promise<EmailSearchTaskEntity | undefined> {
+    await this.ensureConnection();
+
     return await this.emailsearchTaskdb.getTaskById(taskId);
   }
 
   // Get task proxies
   public async getTaskProxies(taskId: number): Promise<ProxyEntity[]> {
+    await this.ensureConnection();
+
     const proxies =
       await this.emailsearchTaskProxydb.getEmailSearchTaskProxiesByTaskId(
         taskId
@@ -713,6 +772,8 @@ export class EmailSearchTaskModule extends BaseModule {
     taskId: number,
     data: EmailsControldata
   ): Promise<void> {
+    await this.ensureConnection();
+
     // Update main task data
     const task = await this.emailsearchTaskdb.getTaskById(taskId);
     if (task) {
@@ -762,6 +823,8 @@ export class EmailSearchTaskModule extends BaseModule {
 
   // Delete task
   public async deleteTask(taskId: number): Promise<void> {
+    await this.ensureConnection();
+
     // Delete task results first
     const results = await this.emailsearchresultdb.getTaskResult(
       taskId,

@@ -1,6 +1,6 @@
 <template>
     <div class="proxy-toolbar mt-4">
-        <div class="d-flex flex-wrap align-center gap-2 search_tool">
+        <div class="d-flex flex-wrap align-center search_tool" style="column-gap: 12px; row-gap: 24px">
             <div class="search_wrap flex-grow-1" style="min-width: 200px; max-width: 420px">
                 <v-text-field
 rounded class="elevation-0" density="compact" variant="solo" label="Search"
@@ -486,7 +486,7 @@ const parsedProxies = ref<Array<ProxyParseItem>>([]);
 const checkUploadLoading = ref(false);
 const importUploadLoading = ref(false);
 /** Seconds; used for main list check and batch-upload dialog check. */
-const proxyCheckTimeoutSeconds = ref(10);
+const proxyCheckTimeoutSeconds = ref(60);
 const showUploadAlert = ref(false);
 const uploadAlertText = ref('');
 const uploadAlertTitle = ref('');
@@ -510,11 +510,14 @@ function loadItems({ page, itemsPerPage, sortBy }) {
     loading.value = true
     options.page = page;
   options.itemsPerPage = itemsPerPage;
+    const sortValue = Array.isArray(sortBy)
+        ? (sortBy[0] ?? undefined)
+        : (sortBy || undefined);
     const fetchitem: Fetchparam = {
         // id:parseInt(campaignId),
         page: page,
         itemsPerPage: itemsPerPage,
-        sortBy: sortBy,
+        sortBy: sortValue,
         search: search.value
     }
     FakeAPI.fetch(fetchitem).then(

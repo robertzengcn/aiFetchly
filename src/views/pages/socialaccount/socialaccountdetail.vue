@@ -3,7 +3,7 @@
     <v-form ref="form" @submit.prevent="onSubmit">
       <v-text-field
         v-model="socialaccountId"
-        :label="t('socialaccount.id')"
+        :label="t('socialaccount.col_id')"
         type="input"
         v-show="isEdit"
         :readonly="true"
@@ -123,8 +123,18 @@
           <v-icon size="small" class="me-2">mdi-cookie</v-icon>
           {{ t('socialaccount.cookies') }}
         </v-card-title>
-        <v-card-subtitle class="text-caption pb-2">
-          {{ t('socialaccount.uploadfilemsg_title') }}
+        <v-card-subtitle class="text-caption pb-2 d-flex align-center">
+          <span>{{ t('socialaccount.uploadfilemsg_title') }}</span>
+          <v-chip
+            v-if="sessionStatus"
+            size="x-small"
+            class="ms-2"
+            :color="sessionStatusColor"
+            label
+          >
+            {{ t(`socialaccount.session_status_${sessionStatus}`) }}
+            <span v-if="cookieCount > 0" class="ms-1">({{ cookieCount }})</span>
+          </v-chip>
         </v-card-subtitle>
         <v-card-actions>
           <v-btn
@@ -137,6 +147,12 @@
           </v-btn>
         </v-card-actions>
       </v-card>
+
+      <BrowserProfileImportDialog
+        v-model="importDialog"
+        :account-id="socialaccountId"
+        @imported="refreshMetadata"
+      />
 
       <v-alert
         v-model="alert"
@@ -168,13 +184,14 @@
   </v-sheet>
 </template>
 <script setup lang="ts">
-import { ref, onMounted, watch } from "vue";
+import { ref, onMounted, watch, computed } from "vue";
 import { useI18n } from "vue-i18n";
 import {
   getSocialaccountinfo,
   saveSocialAccount,
   requireCookiesselecttab,
   receiveAccountLoginevent,
+  getSessionMetadata,
 } from "@/views/api/socialaccount";
 import { SOCIAL_ACCOUNT_LOGIN_MESSSAGE } from "@/config/channellist";
 import { CommonDialogMsg } from "@/entityTypes/commonType";
@@ -183,6 +200,7 @@ import { SocialAccountDetailData } from "@/entityTypes/socialaccount-type";
 import ProxyTableselected from "@/views/pages/proxy/widgets/ProxySelectedTable.vue";
 import { ProxyListEntity, Proxy } from "@/entityTypes/proxyType";
 import { SocialPlatformList } from "@/config/generate";
+import BrowserProfileImportDialog from "@/views/components/socialaccount/BrowserProfileImportDialog.vue";
 
 // Interface for platform items with proper typing
 interface PlatformItem {
@@ -240,6 +258,36 @@ const showProxytable = () => {
 function uploadCookies(): void {
   if (socialaccountId.value <= 0) return;
   requireCookiesselecttab({ id: socialaccountId.value });
+}
+
+// ---- Secure session metadata + browser-profile import ----
+const importDialog = ref(false);
+const sessionStatus = ref<"available" | "missing" | "invalid" | "migration_pending" | null>(null);
+const cookieCount = ref(0);
+const sessionStatusColor = computed(() => {
+  switch (sessionStatus.value) {
+    case "available":
+      return "success";
+    case "missing":
+      return "default";
+    case "invalid":
+      return "error";
+    case "migration_pending":
+      return "warning";
+    default:
+      return "default";
+  }
+});
+
+async function refreshMetadata(): Promise<void> {
+  if (socialaccountId.value <= 0) return;
+  try {
+    const meta = await getSessionMetadata(socialaccountId.value);
+    sessionStatus.value = meta.sessionStatus;
+    cookieCount.value = meta.cookieCount;
+  } catch {
+    // Non-fatal: status chip simply stays empty.
+  }
 }
 
 function setupUploadCookiesListener(): void {
@@ -400,6 +448,7 @@ onMounted(async () => {
     console.log('Component mounted, initializing...');
     await initialize();
     setupUploadCookiesListener();
+    void refreshMetadata();
     console.log('Initialization complete');
   } catch (error) {
     console.error('Error during initialization:', error);
