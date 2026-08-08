@@ -2326,12 +2326,18 @@ const formatTimestamp = (iso: string): string => {
  * classes (e.g. QUOTA_EXHAUSTED for HTTP 402); unknown strings pass through
  * verbatim so ad-hoc server messages still surface.
  */
+const normalizeLoginBaseUrl = (raw: unknown): string => {
+  if (typeof raw !== "string") return "";
+  return raw.trim().replace(/^["']|["']$/g, "").replace(/\/+$/g, "");
+};
+
 const mapStreamErrorMessage = (raw: string): string => {
   if (raw === QUOTA_EXHAUSTED_SENTINEL) {
-    return (
+    const baseMessage =
       t("aiChatV2.quota_exhausted") ||
-      "The AI tokens included in your subscription plan have been exhausted. Please recharge your account to continue using AI features."
-    );
+      "The AI tokens included in your subscription plan have been exhausted. Please recharge your account to continue using AI features.";
+    const loginBaseUrl = normalizeLoginBaseUrl(import.meta.env.VITE_LOGIN_URL);
+    return loginBaseUrl ? `${baseMessage} ${loginBaseUrl}` : baseMessage;
   }
   if (raw === AUTH_EXPIRED_SENTINEL) {
     return (
