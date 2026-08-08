@@ -731,25 +731,30 @@ describe("AIChatQueryEngine", () => {
       });
       const engine = createEngineWithFakeLoop(fakeRun);
 
-      // Inject the pending-permission turn the loop would have stored.
-      (engine as unknown as { pendingPermission: unknown }).pendingPermission =
-        {
-          conversationId: "v2-test",
-          assistantMessageId: "a-1",
-          conversationMessages: [
-            { role: "user", content: "edit the image" },
-          ] as OpenAIChatMessage[],
-          abortController: new AbortController(),
-          request: { message: "edit the image" },
-          openAITools: [],
-          nextRound: 1,
-          toolCallId: "call-1",
-          toolName: "attach_local_images",
-          toolArguments: { paths: ["a.png"] },
-          planContext: undefined,
-          eventSink: { emit: vi.fn() },
-          toolCatalogState: undefined,
-        };
+      // Inject the pending-permission turn the loop would have stored. The
+      // engine now keeps these in a per-conversation Map (pendingPermissions)
+      // rather than a single singleton.
+      (
+        engine as unknown as {
+          pendingPermissions: Map<string, unknown>;
+        }
+      ).pendingPermissions.set("v2-test", {
+        conversationId: "v2-test",
+        assistantMessageId: "a-1",
+        conversationMessages: [
+          { role: "user", content: "edit the image" },
+        ] as OpenAIChatMessage[],
+        abortController: new AbortController(),
+        request: { message: "edit the image" },
+        openAITools: [],
+        nextRound: 1,
+        toolCallId: "call-1",
+        toolName: "attach_local_images",
+        toolArguments: { paths: ["a.png"] },
+        planContext: undefined,
+        eventSink: { emit: vi.fn() },
+        toolCatalogState: undefined,
+      });
 
       vi.mocked(SkillExecutor.execute).mockResolvedValue({
         tool_call_id: "call-1",

@@ -8,7 +8,8 @@
  */
 import { createHash } from "node:crypto";
 import { createWriteStream } from "node:fs";
-import { access, rm } from "node:fs/promises";
+import { access, mkdir, rm } from "node:fs/promises";
+import path from "node:path";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import {
@@ -102,6 +103,11 @@ export class LocalAiRuntimeDownloadService {
         );
       }
     }
+
+    // Operation paths point at `<runtimeRoot>/.downloads/<id>.zip.part`; the
+    // downloads dir is created lazily here so first-time installs do not fail
+    // with ENOENT when opening the partial file.
+    await mkdir(path.dirname(destinationPath), { recursive: true });
 
     const out = createWriteStream(destinationPath, { flags: "wx" });
     const hash = createHash("sha256");

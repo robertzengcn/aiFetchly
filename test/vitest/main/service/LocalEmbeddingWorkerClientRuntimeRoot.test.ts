@@ -12,10 +12,50 @@ import { LOCAL_XENOVA_ALL_MINILM_MODEL_ID } from "@/service/embedding/LocalEmbed
 
 let tmpRoot: string;
 
+/**
+ * CI / clean checkouts do not build LocalEmbeddingWorker.js before yarn
+ * testmain. Fallback tests need one candidate path to exist on disk.
+ */
+const BUNDLED_CANDIDATE = path.join(
+  process.cwd(),
+  "dist",
+  "childprocess",
+  "LocalEmbeddingWorker.js"
+);
+const STUB_MARKER = "/* aifetchly-test-stub-LocalEmbeddingWorker */\n";
+let createdBundledStub = false;
+
+function ensureBundledCandidateStub(): void {
+  if (fs.existsSync(BUNDLED_CANDIDATE)) {
+    return;
+  }
+  fs.mkdirSync(path.dirname(BUNDLED_CANDIDATE), { recursive: true });
+  fs.writeFileSync(
+    BUNDLED_CANDIDATE,
+    `${STUB_MARKER}// stub for resolver fallback tests\n`
+  );
+  createdBundledStub = true;
+}
+
+function removeBundledCandidateStubIfCreated(): void {
+  if (!createdBundledStub) {
+    return;
+  }
+  createdBundledStub = false;
+  if (!fs.existsSync(BUNDLED_CANDIDATE)) {
+    return;
+  }
+  const contents = fs.readFileSync(BUNDLED_CANDIDATE, "utf8");
+  if (contents.startsWith(STUB_MARKER)) {
+    fs.unlinkSync(BUNDLED_CANDIDATE);
+  }
+}
+
 beforeEach(() => {
   tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aifetchly-embed-"));
 });
 afterEach(() => {
+  removeBundledCandidateStubIfCreated();
   fs.rmSync(tmpRoot, { recursive: true, force: true });
 });
 
@@ -54,7 +94,9 @@ class RecordingFakeWorker {
         requestId: m.requestId,
         modelId: LOCAL_XENOVA_ALL_MINILM_MODEL_ID,
         dimensions: 384,
-        embeddings: new Array(count).fill(0).map(() => new Array(384).fill(0.1)),
+        embeddings: new Array(count)
+          .fill(0)
+          .map(() => new Array(384).fill(0.1)),
       };
     }
     if (response) {
@@ -93,6 +135,7 @@ describe("LocalEmbeddingWorkerClient runtime worker resolution (Phase 8 §17.2)"
   });
 
   it("falls back to bundled candidates when the resolver returns null", async () => {
+    ensureBundledCandidateStub();
     const worker = new RecordingFakeWorker();
     const fork: ForkFn = (workerPath: string) => {
       worker.forkedPath = workerPath;
@@ -101,25 +144,27 @@ describe("LocalEmbeddingWorkerClient runtime worker resolution (Phase 8 §17.2)"
     const client = LocalEmbeddingWorkerClient.createWithFork(fork, 2000, null);
     client.setWorkerPathResolver(async () => null);
 
-    // No bundled worker exists in the test env → the fallback search throws.
-    await expect(
-      client.embedBatch(LOCAL_XENOVA_ALL_MINILM_MODEL_ID, ["hello"]),
-    ).rejects.toThrow(/worker file not found/i);
+    // Resolver miss → bundled candidate search (dev dist/ or packaged path).
+    await client.embedBatch(LOCAL_XENOVA_ALL_MINILM_MODEL_ID, ["hello"]);
+    expect(worker.forkedPath).toMatch(/LocalEmbeddingWorker\.js$/);
     client.dispose();
   });
 
   it("falls back when the resolver returns a path that does not exist on disk", async () => {
+    ensureBundledCandidateStub();
     const worker = new RecordingFakeWorker();
     const fork: ForkFn = (workerPath: string) => {
       worker.forkedPath = workerPath;
       return worker as unknown as UtilityProcessLike;
     };
     const client = LocalEmbeddingWorkerClient.createWithFork(fork, 2000, null);
-    client.setWorkerPathResolver(async () => path.join(tmpRoot, "missing-worker.js"));
+    client.setWorkerPathResolver(async () =>
+      path.join(tmpRoot, "missing-worker.js")
+    );
 
-    await expect(
-      client.embedBatch(LOCAL_XENOVA_ALL_MINILM_MODEL_ID, ["hello"]),
-    ).rejects.toThrow(/worker file not found/i);
+    await client.embedBatch(LOCAL_XENOVA_ALL_MINILM_MODEL_ID, ["hello"]);
+    expect(worker.forkedPath).toMatch(/LocalEmbeddingWorker\.js$/);
+    expect(worker.forkedPath).not.toContain("missing-worker.js");
     client.dispose();
   });
 

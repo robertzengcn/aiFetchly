@@ -2386,6 +2386,11 @@ export default {
       conversion_failed: "无法转换录音。",
       open_model_settings: "打开设置",
       chat_unavailable: "聊天不可用，您的转写内容已保留在输入框中。",
+      tts_model_missing: "语音回复需要语音模型，请先安装再启用。",
+      install_tts_model: "安装语音模型",
+      tts_model_install_failed: "语音模型安装失败。",
+      tts_runtime_missing:
+        "语音回复需要本地语音运行时，但尚未安装。请在聊天中使用语音输入进行安装，然后再启用语音回复。",
     },
     title: "AI 助手",
     show_reasoning: "显示推理",

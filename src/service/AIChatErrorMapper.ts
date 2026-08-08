@@ -12,6 +12,60 @@ import { isAIChatRecoverableError } from "./AIChatRecoveryTypes";
 export const QUOTA_EXHAUSTED_SENTINEL = "QUOTA_EXHAUSTED";
 
 /**
+ * Broad pattern for transient, retryable server-side failures: empty
+ * responses, finish_reason=error, rate limits, timeouts, 502s, AI-server 5xx
+ * codes, and the SQLite "database connection is not open" hiccup. These
+ * recover on a fresh attempt after a short backoff. Drives the user-facing
+ * message only — the query loop's auto-retry decision uses the narrower
+ * {@link isContentLevelTransientError} to avoid stacking on top of the
+ * streaming HTTP client's own retry layer.
+ */
+const TRANSIENT_ERROR_PATTERN =
+  /finish_reason=error|empty response|no finish reason|transient server|rate limit|timeout|\b502\b|AI server error code=5\d\d|database connection is not open/i;
+
+/**
+ * Returns true when the error represents a transient, retryable AI-server
+ * failure (overload, rate limit, timeout, empty/error response, 5xx). Aborts
+ * and non-Error values are never retryable. Used by {@link userSafeError} to
+ * pick the user-facing message. NOTE: do NOT use this to decide the query
+ * loop's auto-retry — use {@link isContentLevelTransientError} instead, so
+ * transport-layer conditions (502/429/timeout) are not retried at two layers.
+ */
+export function isTransientRetryableError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  if (err.name === "AbortError") return false;
+  return TRANSIENT_ERROR_PATTERN.test(err.message || "");
+}
+
+/**
+ * Narrower pattern for transient failures that originate from the STREAM
+ * CONTENT (the HTTP request itself succeeded with 200 OK, but the model's
+ * response was empty or signalled finish_reason=error). These are NOT seen
+ * by the HTTP transport's own retry layer, so the query loop is the only
+ * layer that can recover them.
+ *
+ * Deliberately excludes rate-limit / timeout / 502 signals: those are
+ * transport-layer conditions already retried by the streaming HTTP client
+ * (see aiChatApi.isRetryableStreamStatus). Having the query loop retry them
+ * too would stack the two layers (up to ~16 requests for one user message).
+ */
+const STREAM_CONTENT_TRANSIENT_PATTERN =
+  /finish_reason=error|empty response|no finish reason/i;
+
+/**
+ * Returns true when the error is a transient failure of the model's streamed
+ * content (empty response, finish_reason=error) — i.e. a content-level
+ * transient that the HTTP transport did NOT already retry. Used by
+ * {@link AIChatQueryLoop} to decide whether to auto-retry a failed round
+ * without stacking on top of the transport-layer retries.
+ */
+export function isContentLevelTransientError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  if (err.name === "AbortError") return false;
+  return STREAM_CONTENT_TRANSIENT_PATTERN.test(err.message || "");
+}
+
+/**
  * Sentinel returned by {@link userSafeError} when the hosted AI server reports
  * HTTP 401/403 (session/access token expired or rejected). The main process
  * signs the user out and navigates to login; the renderer maps this sentinel
@@ -129,11 +183,7 @@ export function userSafeError(err: unknown): string {
     // rate limits, timeouts, and 502s. These are recoverable by retrying
     // after a short wait, so surface a clear, actionable message instead of
     // the generic "unexpected error" fallback.
-    if (
-      /finish_reason=error|empty response|no finish reason|transient server|rate limit|timeout|\b502\b|AI server error code=5\d\d|database connection is not open/i.test(
-        msg
-      )
-    ) {
+    if (isTransientRetryableError(err)) {
       return "The AI service is busy or had a transient issue. Please try again in a moment.";
     }
     console.error(

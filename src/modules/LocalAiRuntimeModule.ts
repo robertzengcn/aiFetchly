@@ -363,6 +363,9 @@ export class LocalAiRuntimeModule {
 
     try {
       this.emit(operationId, entry, "resolving");
+      // Ensure sibling operation roots exist before download/extract (first install).
+      await fs.mkdir(this.deps.paths.downloadsRoot, { recursive: true });
+      await fs.mkdir(path.dirname(stagingRoot), { recursive: true });
       this.emit(operationId, entry, "downloading");
       await this.deps.download.download({
         operationId,

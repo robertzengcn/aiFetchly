@@ -157,6 +157,7 @@ let lastLoopInput:
   | {
       request: { model?: string };
       openAITools: Array<{ function: { name: string } }>;
+      transientRetryConfig?: { maxAttempts?: number; baseDelayMs?: number };
     }
   | undefined;
 
@@ -247,6 +248,17 @@ describe("AgentRuntime", () => {
 
     expect(result.status).toBe("failed");
     expect(result.errorMessage).toContain("exceeded max tool calls");
+  });
+
+  // Regression: subagents run under a tight maxRuntimeMs deadline, so they
+  // must retry transient AI-server failures INSTANTLY (baseDelayMs: 0) rather
+  // than burning their runtime budget on exponential backoff sleeps. The
+  // actual retry mechanics are covered by AIChatQueryLoop's transient-retry
+  // suite; here we verify AgentRuntime wires the instant-retry contract.
+  it("passes instant-retry config (baseDelayMs: 0) to the agent's query loop", async () => {
+    const runtime = new AgentRuntime();
+    await runtime.runSync(makeRequest());
+    expect(lastLoopInput?.transientRetryConfig).toEqual({ baseDelayMs: 0 });
   });
 
   // Regression: when the inner agent emits prose instead of JSON, the runtime

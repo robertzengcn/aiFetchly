@@ -672,6 +672,58 @@ describe("AI Chat V2 — stream lifecycle", () => {
     );
   });
 
+  it("targeted stream-stop cancels only the named conversation", async () => {
+    mockOpenAIChatCompletionStream.mockImplementation(
+      async (
+        _req,
+        onChunk: (c: unknown) => void,
+        opts: { signal: AbortSignal }
+      ) => {
+        onChunk({ choices: [{ delta: { content: "partial" } }] });
+        return new Promise((_resolve, reject) => {
+          if (opts.signal.aborted) {
+            reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
+            return;
+          }
+          opts.signal.addEventListener("abort", () => {
+            reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
+          });
+        });
+      }
+    );
+
+    const senderSend = vi.fn();
+    const event = { sender: { send: senderSend } };
+
+    const streamPromise = mockIpcMain.callHandler(
+      AI_CHAT_V2_STREAM,
+      event,
+      JSON.stringify({ message: "hi" })
+    );
+    // Allow the chunk callback to fire before stopping.
+    await new Promise((r) => setTimeout(r, 30));
+
+    // A stop for a DIFFERENT conversation must not touch this stream.
+    await mockIpcMain.callHandler(
+      AI_CHAT_V2_STREAM_STOP,
+      event,
+      JSON.stringify({ conversationId: "v2-other" })
+    );
+    await new Promise((r) => setTimeout(r, 30));
+    expect(findCompletePayload(senderSend)).toBeUndefined();
+
+    // A stop naming THIS conversation (v2-test-conv) cancels it.
+    await mockIpcMain.callHandler(
+      AI_CHAT_V2_STREAM_STOP,
+      event,
+      JSON.stringify({ conversationId: "v2-test-conv" })
+    );
+    await streamPromise;
+
+    const payload = findCompletePayload(senderSend);
+    expect(payload?.eventType).toBe("cancelled");
+  });
+
   it("maps 401/403 errors to AUTH_EXPIRED and signs the user out", async () => {
     mockUserSignout.mockClear();
     mockOpenAIChatCompletionStream.mockRejectedValue(

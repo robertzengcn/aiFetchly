@@ -197,6 +197,31 @@ describe("Forge packaging dependencies", () => {
     }
   });
 
+  it("fails packaging when the staged renderer HTML is empty", async () => {
+    const forgeConfig = await loadForgeConfig();
+    const tempRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "aifetchly-package-renderer-empty-")
+    );
+
+    try {
+      const rendererHtmlPath = path.join(
+        tempRoot,
+        ".vite",
+        "renderer",
+        "main_window",
+        "index.html"
+      );
+      fs.mkdirSync(path.dirname(rendererHtmlPath), { recursive: true });
+      fs.writeFileSync(rendererHtmlPath, "");
+
+      await expect(
+        forgeConfig.hooks.packageAfterPrune({}, tempRoot)
+      ).rejects.toThrow(/empty renderer HTML/i);
+    } finally {
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
   it("disables ASAR when FORGE_DISABLE_ASAR=1 for memory-safe CI packaging", async () => {
     const previousDisableAsar = process.env.FORGE_DISABLE_ASAR;
     process.env.FORGE_DISABLE_ASAR = "1";

@@ -350,6 +350,50 @@
         </div>
       </v-sheet>
 
+      <!-- TTS prerequisite notice: shown when the user tries to enable spoken
+           responses (the header speaker toggle) before a TTS model is installed.
+           Mirrors the STT model-missing notice in AiChatV2Composer so the user
+           is guided to install instead of seeing silent failures on every reply. -->
+      <div
+        v-if="voiceTtsInstallPrompt"
+        class="v2-shell__tts-notice"
+        role="status"
+        aria-live="polite"
+      >
+        <v-icon size="x-small" color="warning" class="mr-1">mdi-volume-off</v-icon>
+        <span class="v2-shell__tts-notice-text">
+          {{
+            t("aiChatV2.voice.tts_model_missing") ||
+            "Spoken responses need a speech model. Install it to enable."
+          }}
+        </span>
+        <v-btn
+          size="x-small"
+          color="primary"
+          variant="tonal"
+          class="ml-2"
+          data-testid="install-tts-model"
+          :loading="voiceModelInstalling"
+          :disabled="voiceModelInstalling"
+          @click="handleInstallTtsModel"
+        >
+          {{
+            voiceModelInstalling
+              ? t("aiChatV2.voice.installing_model") || "Installing..."
+              : t("aiChatV2.voice.install_tts_model") || "Install speech model"
+          }}
+        </v-btn>
+        <v-btn
+          size="x-small"
+          variant="text"
+          class="ml-1"
+          :aria-label="t('aiChatV2.voice.open_model_settings') || 'Open settings'"
+          @click="openAIProviderSettings"
+        >
+          {{ t("aiChatV2.voice.open_model_settings") || "Open settings" }}
+        </v-btn>
+      </div>
+
       <AiChatV2Composer
         :is-streaming="chatIsRunning"
         :is-processing="isPreparingAttachments"
@@ -666,6 +710,7 @@ import {
   getOpenAIChatModels,
   getChatV2ToolApprovalMode,
   setChatV2ToolApprovalMode,
+  detachChatV2ConversationStreamListeners,
 } from "@/views/api/aiChatV2";
 import {
   AI_CHAT_V2_VOICE_SETTINGS_CHANGED_EVENT,
@@ -768,6 +813,7 @@ import {
   clearToolProgressForToolResult,
   hasPendingToolExecution,
 } from "./toolExecutionStateUtil";
+import { isPlanStateActive } from "./planStateUtil";
 import {
   downscaleImageAttachment,
   arrayBufferToBase64,
@@ -1252,6 +1298,7 @@ function ensureWorkspaceConversationId(): string {
   messages.value = [];
   streamError.value = null;
   applyPlanState(null);
+  mode.value = "chat";
   pendingQuestion.value = null;
   pendingPlanApproval.value = null;
   return conversationId;
@@ -1889,13 +1936,6 @@ const chatIsRunning = computed(
     isStreaming.value || authoritativeRuntimeStatus.value === "running"
 );
 
-const hasAnyActiveStream = computed(() => {
-  for (const state of conversationRuntime.value.values()) {
-    if (state.isStreaming) return true;
-  }
-  return false;
-});
-
 /**
  * A conversation shows a running indicator if it owns a live stream, even when
  * the user has switched away from it. Pending tool execution is only known for
@@ -2246,13 +2286,16 @@ function hydrateFileOpsFromMessages(
 
 const applyPlanState = (state: AIChatPlanStateView | null): void => {
   planState.value = state;
-  if (
-    state &&
-    state.status !== "completed" &&
-    state.status !== "cancelled" &&
-    state.status !== "rejected"
-  ) {
-    mode.value = "plan";
+  // Drive the mode selector from the plan state ONLY when a plan actually
+  // exists: an active plan forces "plan"; a terminal plan (completed /
+  // cancelled / rejected) returns the conversation to "chat" (the leak this
+  // guards against — mode used to be set to "plan" and never reset). When
+  // state is null (no plan at all) we leave mode untouched, so a user's
+  // manually-selected "plan" mode survives a conversation switch or a
+  // mid-turn plan_state:null chunk. Explicit fresh starts (new conversation)
+  // reset mode directly at their call sites.
+  if (state !== null) {
+    mode.value = isPlanStateActive(state) ? "plan" : "chat";
   }
 };
 
@@ -2283,12 +2326,18 @@ const formatTimestamp = (iso: string): string => {
  * classes (e.g. QUOTA_EXHAUSTED for HTTP 402); unknown strings pass through
  * verbatim so ad-hoc server messages still surface.
  */
+const normalizeLoginBaseUrl = (raw: unknown): string => {
+  if (typeof raw !== "string") return "";
+  return raw.trim().replace(/^["']|["']$/g, "").replace(/\/+$/g, "");
+};
+
 const mapStreamErrorMessage = (raw: string): string => {
   if (raw === QUOTA_EXHAUSTED_SENTINEL) {
-    return (
+    const baseMessage =
       t("aiChatV2.quota_exhausted") ||
-      "The AI tokens included in your subscription plan have been exhausted. Please recharge your account to continue using AI features."
-    );
+      "The AI tokens included in your subscription plan have been exhausted. Please recharge your account to continue using AI features.";
+    const loginBaseUrl = normalizeLoginBaseUrl(import.meta.env.VITE_LOGIN_URL);
+    return loginBaseUrl ? `${baseMessage} ${loginBaseUrl}` : baseMessage;
   }
   if (raw === AUTH_EXPIRED_SENTINEL) {
     return (
@@ -2532,6 +2581,7 @@ const loadHistory = async (conversationId: string): Promise<void> => {
       }
     } catch {
       applyPlanState(null);
+      mode.value = "chat";
       pendingQuestion.value = null;
       pendingPlanApproval.value = null;
     }
@@ -2550,6 +2600,7 @@ const onNewConversation = (): void => {
   resetActiveRuntimeFields();
   resetScheduledLoopViewState();
   applyPlanState(null);
+  mode.value = "chat";
   pendingQuestion.value = null;
   pendingPlanApproval.value = null;
   // Reset context-usage tracking for the new conversation.
@@ -2606,7 +2657,11 @@ async function clearCurrentConversation(): Promise<void> {
 
 const onSelectConversation = (conversationId: string): void => {
   speechController.stop();
-  detachActiveStreamView();
+  // Release only the active-view fields — do NOT clear stream listeners. Each
+  // conversation owns its own listener now; a backgrounded streaming turn must
+  // keep its listener so its chunks keep updating conversationRuntime[conv]
+  // for switch-back. (Full listener teardown happens only on unmount.)
+  resetActiveRuntimeFields();
   activeConversationId.value = conversationId;
   authoritativeRuntimeStatus.value =
     conversations.value.find(
@@ -2634,16 +2689,21 @@ const onStop = (): void => {
   // Cancel in-flight STT/TTS worker work so the shared worker stops
   // synthesizing for a response the user has abandoned (TODO P0-5).
   void cancelVoiceJob();
-  stopChatV2Stream();
-  clearChatV2StreamListeners();
   const conversationId = activeConversationId.value;
+  // Stop ONLY the active conversation's turn — background conversations keep
+  // streaming. Detach this conversation's listener and resolve its pending
+  // stream promise so the awaited streamChatV2Message call in onSend unblocks.
+  stopChatV2Stream(conversationId ?? undefined);
   if (conversationId) {
+    detachChatV2ConversationStreamListeners(conversationId, true);
     markActiveConversationRuntimeStopped();
     setAuthoritativeRuntimeStatus(conversationId, "idle");
     stoppedPendingToolConversationIds.value = new Set([
       ...stoppedPendingToolConversationIds.value,
       conversationId,
     ]);
+  } else {
+    clearChatV2StreamListeners();
   }
 };
 
@@ -2905,8 +2965,16 @@ const handleSkillPermissionDeny = (message: ChatV2MessageView): void => {
       },
     };
   }
-  clearChatV2StreamListeners();
-  stopChatV2Stream();
+  // Stop only the conversation that owns the denied tool — background
+  // conversations are unaffected. Detach its listener and resolve its pending
+  // stream promise so its onSend await unblocks.
+  const targetConversationId = message.conversationId || undefined;
+  stopChatV2Stream(targetConversationId);
+  if (message.conversationId) {
+    detachChatV2ConversationStreamListeners(message.conversationId, true);
+  } else {
+    clearChatV2StreamListeners();
+  }
   markConversationRuntimeStopped(message.conversationId);
 };
 
@@ -3181,6 +3249,7 @@ const onSend = async (
     isExpandedPrompt?: boolean;
     fromVoice?: boolean;
     pastedContents?: Record<string, string>;
+    onAccepted?: () => void;
   }
 ): Promise<void> => {
   // Parse /loop before the stream guard so scheduled-loop staging (approval
@@ -3192,12 +3261,19 @@ const onSend = async (
     loopCmd.type === "scheduled_loop_control" ||
     loopCmd.type === "invalid_loop";
 
-  if (
-    !loopBypassesStreamGuard &&
-    (chatIsRunning.value || hasAnyActiveStream.value)
-  ) {
+  // Block only when the *active* conversation is already streaming. A
+  // background conversation may still be running after New Chat / switch;
+  // allowing send here is required so the composer-cleared draft is not
+  // silently dropped. Background turns are NOT aborted — they keep streaming
+  // on the main process and update their own conversationRuntime entry.
+  if (!loopBypassesStreamGuard && chatIsRunning.value) {
     return;
   }
+  // The composer owns the draft and clears it only after this handler accepts
+  // the request. Runtime status can change between the child's render and this
+  // synchronous guard (especially while switching conversations), so clearing
+  // before acknowledgement would silently discard a rejected message.
+  options?.onAccepted?.();
   streamError.value = null;
 
   attachmentError.value = null;
@@ -3615,7 +3691,15 @@ const onSend = async (
             if (chunk.contentDelta.trim().length > 0) {
               speechReceivedTextDelta = true;
             }
-            speechController.pushDelta(chunk.contentDelta);
+            // Only feed the shared speech synth for the conversation the user
+            // is currently viewing. Background concurrent streams are kept
+            // alive (concurrent-turns feature), so without this guard their
+            // deltas would fire/garble spoken responses for a conversation the
+            // user isn't looking at — every sibling active-view mutation below
+            // is already gated by isCurrentStreamView().
+            if (isCurrentStreamView()) {
+              speechController.pushDelta(chunk.contentDelta);
+            }
             // Live estimate: each streamed delta adds ~chars/4 tokens to the
             // running context total. The next usage_update event will snap
             // this back to the server's ground-truth count.
@@ -3805,10 +3889,15 @@ const onSend = async (
         ) {
           ensureAssistantAdded();
           assistant.content = complete.fullContent;
-          if (!speechReceivedTextDelta) {
-            speechController.pushDelta(complete.fullContent);
+          // Same view guard as the streaming token path: a background
+          // conversation's completion must not speak/flush into the shared
+          // speech synth while the user is viewing a different conversation.
+          if (isCurrentStreamView()) {
+            if (!speechReceivedTextDelta) {
+              speechController.pushDelta(complete.fullContent);
+            }
+            speechController.flush();
           }
-          speechController.flush();
         }
         const generatedImages =
           complete.images && complete.images.length > 0
@@ -4048,6 +4137,13 @@ const voiceTtsMode = ref<AiChatVoiceTtsMode>("disabled");
 const voiceSettingsSaving = ref(false);
 const voiceModelInstalling = ref(false);
 const voiceModelInstallError = ref<string | null>(null);
+/**
+ * True when the user tried to enable spoken responses (TTS) but the speech
+ * model isn't installed. Drives an inline install affordance so we never
+ * persist a TTS enablement that would silently fail on every reply. Mirrors
+ * the STT model-missing notice in AiChatV2Composer.
+ */
+const voiceTtsInstallPrompt = ref(false);
 const DEFAULT_VOICE_STT_MODEL_ID = "sherpa-onnx:stt:whisper-base";
 const voiceRuntimeInstallDialog = ref(false);
 const voiceRuntimeInstalling = ref(false);
@@ -4198,10 +4294,33 @@ async function toggleSpokenResponse(): Promise<void> {
   voiceSettingsSaving.value = true;
   voiceModelInstallError.value = null;
   voicePlaybackError.value = null;
+  voiceTtsInstallPrompt.value = false;
   try {
-    const current = voiceSettings.value ?? await getVoiceSettings();
-    const nextTtsMode: AiChatVoiceTtsMode =
-      current.ttsMode === "disabled" ? "all_assistant_messages" : "disabled";
+    const current = voiceSettings.value ?? (await getVoiceSettings());
+    const enabling = current.ttsMode === "disabled";
+    if (enabling) {
+      // Verify the TTS runtime + model are installed before persisting an
+      // enablement that would otherwise silently fail synthesis on every
+      // assistant reply. Mirrors the voice-input (STT) prerequisite check in
+      // AiChatV2Composer.onMicClick.
+      const status = await getVoiceStatus();
+      voiceStatus.value = status;
+      if (status.ttsState === "unavailable") {
+        // Shared sherpa-onnx runtime missing -> offer the runtime installer
+        // (it fixes both STT and TTS). Do not persist ttsMode yet.
+        handleInstallVoiceRuntime();
+        return;
+      }
+      if (status.ttsState === "missing_model") {
+        // TTS model missing -> surface an install affordance in the chat.
+        // Do not persist ttsMode until the model is installed.
+        voiceTtsInstallPrompt.value = true;
+        return;
+      }
+    }
+    const nextTtsMode: AiChatVoiceTtsMode = enabling
+      ? "all_assistant_messages"
+      : "disabled";
     const saved = await setVoiceSettings({
       ...current,
       ttsMode: nextTtsMode,
@@ -4226,6 +4345,32 @@ async function handleInstallVoiceModel(): Promise<void> {
     const msg = err instanceof Error ? err.message : String(err);
     voiceModelInstallError.value =
       `${t("aiChatV2.voice.model_install_failed") || "Voice model installation failed."} ${msg}`;
+    await loadVoiceSettings();
+  } finally {
+    voiceModelInstalling.value = false;
+  }
+}
+
+/**
+ * Download the configured TTS (speech response) model. Triggered when the user
+ * tries to enable spoken responses before a TTS model is installed. Mirrors
+ * `handleInstallVoiceModel` but targets `ttsModelId` instead of the STT model.
+ */
+async function handleInstallTtsModel(): Promise<void> {
+  if (voiceModelInstalling.value) return;
+  voiceModelInstalling.value = true;
+  voiceModelInstallError.value = null;
+  voiceTtsInstallPrompt.value = false;
+  try {
+    const ttsModelId =
+      voiceSettings.value?.ttsModelId ?? "sherpa-onnx:tts:auto";
+    await downloadVoiceModel(ttsModelId);
+    notifyVoiceModelsChanged();
+    await loadVoiceSettings();
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    voiceModelInstallError.value =
+      `${t("aiChatV2.voice.tts_model_install_failed") || "Speech model installation failed."} ${msg}`;
     await loadVoiceSettings();
   } finally {
     voiceModelInstalling.value = false;
@@ -4435,6 +4580,22 @@ onBeforeUnmount(() => {
   flex-direction: column;
   min-height: 0;
   overflow: hidden;
+}
+.v2-shell__tts-notice {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: 4px;
+  margin: 0 12px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  background: rgba(255, 152, 0, 0.1);
+  color: rgba(0, 0, 0, 0.7);
+  font-size: 12px;
+}
+.v2-shell__tts-notice-text {
+  min-width: 0;
+  flex: 1 1 auto;
 }
 .v2-shell__plan-panel {
   flex: 0 0 auto;

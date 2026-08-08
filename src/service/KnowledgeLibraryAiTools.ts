@@ -22,6 +22,8 @@ import { Token } from "@/modules/token";
 import { USER_AI_ENABLED } from "@/config/usersetting";
 import { DocumentService } from "@/service/DocumentService";
 import { RagSearchModule } from "@/modules/RagSearchModule";
+import { isLocalXenovaModel } from "@/service/embedding/EmbeddingModelId";
+import { LocalEmbeddingWorkerClient } from "@/service/embedding/LocalEmbeddingWorkerClient";
 import { RAGDocumentModule } from "@/modules/RAGDocumentModule";
 import {
   WebsiteKnowledgeImportService,
@@ -519,6 +521,11 @@ export class KnowledgeLibraryAiTools {
       );
     }
 
+    const localRuntimeError = await this.ensureLocalEmbeddingRuntimeForImport();
+    if (localRuntimeError) {
+      return localRuntimeError;
+    }
+
     if (input.duplicatePolicy === "replace") {
       return toolError(
         "INVALID_INPUT",
@@ -730,6 +737,18 @@ export class KnowledgeLibraryAiTools {
       return failure;
     }
 
+    const skipCodeCounts: Record<string, number> = {};
+    for (const item of skipped) {
+      skipCodeCounts[item.code] = (skipCodeCounts[item.code] ?? 0) + 1;
+    }
+    console.log(
+      `[WebsiteImport] completed mode=${input.mode} ` +
+        `imported=${imported.length} skipped=${skipped.length} ` +
+        `requested=${prepare.requestedCount} ` +
+        `discovered=${prepare.discoveredCount ?? 0} ` +
+        `skipCodes=${JSON.stringify(skipCodeCounts)}`
+    );
+
     const result: ImportKnowledgeWebsiteResult = {
       success: true,
       mode: input.mode,
@@ -755,6 +774,63 @@ export class KnowledgeLibraryAiTools {
   }
 
   /**
+   * Fail fast when the default embedding model is local-xenova but the
+   * downloadable embedding runtime is not installed. Avoids scraping pages
+   * only to fail during upload/embed.
+   */
+  private async ensureLocalEmbeddingRuntimeForImport(): Promise<KnowledgeLibraryToolError | null> {
+    try {
+      const defaultModel =
+        await this.getRagSearchModule().getDefaultEmbeddingModel();
+      if (!defaultModel || !isLocalXenovaModel(defaultModel.modelName)) {
+        console.log(
+          `[WebsiteImport] embedding preflight skip (non-local model=${
+            defaultModel?.modelName ?? "(none)"
+          })`
+        );
+        return null;
+      }
+      const client = LocalEmbeddingWorkerClient.getInstance();
+      const ready = await client.hasInstalledRuntimeWorker();
+      console.log(
+        `[WebsiteImport] embedding preflight model=${defaultModel.modelName} runtimeReady=${ready}`
+      );
+      if (!ready) {
+        return toolError(
+          "LOCAL_EMBEDDING_RUNTIME_MISSING",
+          "Local embedding runtime (@xenova/transformers) is not installed. Install the local-AI embedding runtime via the in-app runtime manager and retry."
+        );
+      }
+      // Path exists is not enough — the utility worker must actually start
+      // (NODE_PATH / native deps). Probe before scraping many pages.
+      try {
+        await client.probeInitialize(defaultModel.modelName);
+        console.log(
+          `[WebsiteImport] embedding preflight probeInitialize ok model=${defaultModel.modelName}`
+        );
+      } catch (probeError) {
+        const reason =
+          probeError instanceof Error ? probeError.message : String(probeError);
+        console.error(
+          `[WebsiteImport] embedding preflight probeInitialize failed: ${reason}`
+        );
+        return toolError(
+          "LOCAL_EMBEDDING_RUNTIME_MISSING",
+          `Local embedding worker failed to start: ${reason}`
+        );
+      }
+      return null;
+    } catch (error) {
+      // Status probe failure should not block import; embed path still errors clearly.
+      console.warn(
+        "[WebsiteImport] Local embedding runtime preflight failed:",
+        error
+      );
+      return null;
+    }
+  }
+
+  /**
    * Validate, duplicate-check, and upload one staged webpage source. Returns
    * either an imported summary or a skipped summary (never throws — failures are
    * surfaced as skipped so a multi-page import can partially succeed).
@@ -768,11 +844,21 @@ export class KnowledgeLibraryAiTools {
     imported?: ImportedWebsiteDocumentSummary;
     skipped?: SkippedWebsiteImportSummary;
   }> {
+    console.log(
+      `[WebsiteImport] stage start url=${source.sourceUrl} ` +
+        `canonical=${source.canonicalUrl ?? "(none)"} ` +
+        `file=${source.fileName} sizeBytes=${source.sizeBytes} ` +
+        `duplicatePolicy=${input.duplicatePolicy}`
+    );
+
     let validation;
     try {
       validation = await documentModule.validateFile(source.filePath);
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
+      console.warn(
+        `[WebsiteImport] validate threw url=${source.sourceUrl} reason=${reason}`
+      );
       return {
         skipped: {
           url: source.sourceUrl,
@@ -788,14 +874,18 @@ export class KnowledgeLibraryAiTools {
       )
         ? "FILE_TOO_LARGE"
         : "UNSUPPORTED_FILE_TYPE";
+      console.warn(
+        `[WebsiteImport] validate failed url=${source.sourceUrl} code=${code} reason=${combined}`
+      );
       return {
         skipped: { url: source.sourceUrl, reason: combined, code },
       };
     }
 
-    // Duplicate detection by URL identity (canonical → source). Content hashes
-    // are stored as metadata but not used for duplicate decisions because
-    // different news/listing pages can extract identical site chrome.
+    // Duplicate detection by URL identity (canonical → source). Only completed
+    // documents block under fail policy. Content hashes are stored as metadata
+    // but not used for duplicate decisions because different news/listing pages
+    // can extract identical site chrome.
     if (input.duplicatePolicy === "fail") {
       try {
         const existing = await documentModule.findWebsiteDuplicate({
@@ -803,6 +893,10 @@ export class KnowledgeLibraryAiTools {
           canonicalUrl: source.canonicalUrl,
         });
         if (existing) {
+          console.warn(
+            `[WebsiteImport] skip DUPLICATE_DOCUMENT url=${source.sourceUrl} ` +
+              `existingId=${existing.id} processingStatus=${existing.processingStatus}`
+          );
           return {
             skipped: {
               url: source.sourceUrl,
@@ -813,9 +907,33 @@ export class KnowledgeLibraryAiTools {
             },
           };
         }
-      } catch {
-        // Treat duplicate-check failure as non-fatal: proceed to import.
+      } catch (error) {
+        console.warn(
+          `[WebsiteImport] duplicate check failed (continuing) url=${source.sourceUrl}`,
+          error
+        );
       }
+    }
+
+    // Prior embed/upload failures leave status=active + processingStatus=failed
+    // stubs. Remove them before creating a fresh document so retries succeed.
+    try {
+      const incomplete = await documentModule.findIncompleteWebsiteDocument({
+        sourceUrl: source.sourceUrl,
+        canonicalUrl: source.canonicalUrl,
+      });
+      if (incomplete) {
+        console.log(
+          `[WebsiteImport] removing incomplete prior doc id=${incomplete.id} ` +
+            `processingStatus=${incomplete.processingStatus} url=${source.sourceUrl}`
+        );
+        await ragModule.deleteDocument(incomplete.id, true);
+      }
+    } catch (error) {
+      console.warn(
+        `[WebsiteImport] incomplete cleanup failed (continuing) url=${source.sourceUrl}`,
+        error
+      );
     }
 
     // A user title override only applies to single_page; for multi-page imports
@@ -844,6 +962,12 @@ export class KnowledgeLibraryAiTools {
         crawledAt: source.crawledAt,
       });
 
+      console.log(
+        `[WebsiteImport] imported url=${source.sourceUrl} ` +
+          `documentId=${upload.documentId} chunks=${upload.chunksCreated} ` +
+          `ms=${upload.processingTime}`
+      );
+
       return {
         imported: {
           ...toDocumentSummary(upload.document),
@@ -855,6 +979,9 @@ export class KnowledgeLibraryAiTools {
       };
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
+      console.error(
+        `[WebsiteImport] IMPORT_FAILED url=${source.sourceUrl} reason=${reason}`
+      );
       return {
         skipped: {
           url: source.sourceUrl,

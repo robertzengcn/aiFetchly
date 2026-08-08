@@ -282,7 +282,11 @@ export class RAGDocumentModel extends BaseDb {
   // Website import provenance lookups (URL/hash-based duplicate detection)
   // -------------------------------------------------------------------------
 
-  /** First non-deleted document whose canonical URL hash matches. */
+  /**
+   * First successfully indexed (completed) non-deleted document whose
+   * canonical URL hash matches. Failed/pending prior imports must not block
+   * re-import under duplicatePolicy=fail.
+   */
   async findActiveByCanonicalUrlSha256(
     canonicalUrlSha256: string
   ): Promise<RAGDocumentEntity | undefined> {
@@ -292,11 +296,17 @@ export class RAGDocumentModel extends BaseDb {
         canonicalUrlSha256,
       })
       .andWhere("document.status != :deleted", { deleted: "deleted" })
+      .andWhere("document.processingStatus = :completed", {
+        completed: "completed",
+      })
       .getOne();
     return doc ?? undefined;
   }
 
-  /** First non-deleted document whose source URL hash matches. */
+  /**
+   * First successfully indexed (completed) non-deleted document whose source
+   * URL hash matches.
+   */
   async findActiveBySourceUrlSha256(
     sourceUrlSha256: string
   ): Promise<RAGDocumentEntity | undefined> {
@@ -306,6 +316,46 @@ export class RAGDocumentModel extends BaseDb {
         sourceUrlSha256,
       })
       .andWhere("document.status != :deleted", { deleted: "deleted" })
+      .andWhere("document.processingStatus = :completed", {
+        completed: "completed",
+      })
+      .getOne();
+    return doc ?? undefined;
+  }
+
+  /**
+   * First non-deleted, non-completed document for a website URL hash.
+   * Used to clean up failed/pending stubs before a re-import.
+   */
+  async findIncompleteByCanonicalUrlSha256(
+    canonicalUrlSha256: string
+  ): Promise<RAGDocumentEntity | undefined> {
+    const doc = await this.repository
+      .createQueryBuilder("document")
+      .where("document.canonicalUrlSha256 = :canonicalUrlSha256", {
+        canonicalUrlSha256,
+      })
+      .andWhere("document.status != :deleted", { deleted: "deleted" })
+      .andWhere("document.processingStatus != :completed", {
+        completed: "completed",
+      })
+      .getOne();
+    return doc ?? undefined;
+  }
+
+  /** First non-deleted, non-completed document for a source URL hash. */
+  async findIncompleteBySourceUrlSha256(
+    sourceUrlSha256: string
+  ): Promise<RAGDocumentEntity | undefined> {
+    const doc = await this.repository
+      .createQueryBuilder("document")
+      .where("document.sourceUrlSha256 = :sourceUrlSha256", {
+        sourceUrlSha256,
+      })
+      .andWhere("document.status != :deleted", { deleted: "deleted" })
+      .andWhere("document.processingStatus != :completed", {
+        completed: "completed",
+      })
       .getOne();
     return doc ?? undefined;
   }

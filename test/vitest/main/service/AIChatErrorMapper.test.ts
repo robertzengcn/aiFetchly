@@ -5,6 +5,8 @@ import {
   QUOTA_EXHAUSTED_SENTINEL,
   describeErrorDetail,
   isAuthExpiredError,
+  isContentLevelTransientError,
+  isTransientRetryableError,
   userSafeError,
 } from "@/service/AIChatErrorMapper";
 import { AIChatRecoverableError } from "@/service/AIChatRecoveryTypes";
@@ -29,9 +31,9 @@ describe("AIChatErrorMapper - userSafeError", () => {
         new Error("Authentication failed: Token expired. Please login again.")
       )
     ).toBe(AUTH_EXPIRED_SENTINEL);
-    expect(
-      userSafeError(new Error("Refresh token rejected (HTTP 401)"))
-    ).toBe(AUTH_EXPIRED_SENTINEL);
+    expect(userSafeError(new Error("Refresh token rejected (HTTP 401)"))).toBe(
+      AUTH_EXPIRED_SENTINEL
+    );
     expect(
       userSafeError(
         new Error("Authentication failed after token refresh retry (HTTP 403).")
@@ -59,7 +61,6 @@ describe("AIChatErrorMapper - userSafeError", () => {
       "AI provider authentication failed. Check your API key."
     );
   });
-
 
   it("surfaces AIProviderError messages directly instead of the generic fallback", () => {
     const auth = new AIProviderError(
@@ -168,5 +169,99 @@ describe("AIChatErrorMapper - userSafeError", () => {
     } finally {
       spy.mockRestore();
     }
+  });
+});
+
+describe("AIChatErrorMapper - isTransientRetryableError", () => {
+  it("flags the broad set of transient server-side failures for the user message", () => {
+    expect(
+      isTransientRetryableError(
+        new Error(
+          "AI server returned finish_reason=error (transient server-side failure)."
+        )
+      )
+    ).toBe(true);
+    expect(isTransientRetryableError(new Error("empty response"))).toBe(true);
+    expect(isTransientRetryableError(new Error("no finish reason"))).toBe(true);
+    expect(isTransientRetryableError(new Error("rate limit exceeded"))).toBe(
+      true
+    );
+    expect(isTransientRetryableError(new Error("Request timeout"))).toBe(true);
+    expect(
+      isTransientRetryableError(new Error("upstream returned 502 Bad Gateway"))
+    ).toBe(true);
+    // Patterns added on the test branch that must be preserved.
+    expect(
+      isTransientRetryableError(new Error("AI server error code=503"))
+    ).toBe(true);
+    expect(
+      isTransientRetryableError(new Error("database connection is not open"))
+    ).toBe(true);
+  });
+
+  it("never classifies aborts or non-Error values as retryable", () => {
+    const abort = new Error("user stopped");
+    abort.name = "AbortError";
+    expect(isTransientRetryableError(abort)).toBe(false);
+    expect(isTransientRetryableError("finish_reason=error")).toBe(false);
+    expect(isTransientRetryableError(null)).toBe(false);
+    expect(isTransientRetryableError(undefined)).toBe(false);
+    expect(isTransientRetryableError({ message: "timeout" })).toBe(false);
+  });
+
+  it("does not flag unrelated errors", () => {
+    expect(
+      isTransientRetryableError(new Error("Selected model is not available"))
+    ).toBe(false);
+    expect(
+      isTransientRetryableError(new Error("something else entirely"))
+    ).toBe(false);
+  });
+});
+
+describe("AIChatErrorMapper - isContentLevelTransientError", () => {
+  it("flags only stream-content failures (empty response / finish_reason=error)", () => {
+    expect(
+      isContentLevelTransientError(
+        new Error(
+          "AI server returned finish_reason=error (transient server-side failure)."
+        )
+      )
+    ).toBe(true);
+    expect(
+      isContentLevelTransientError(
+        new Error("AI server returned an empty response with no finish reason.")
+      )
+    ).toBe(true);
+  });
+
+  it("does NOT flag transport-layer conditions the HTTP client already retries (anti-stacking)", () => {
+    // These are retried by aiChatApi's transport layer; the query loop must NOT
+    // also retry them, or the two layers stack into a burst of ~16 requests.
+    expect(
+      isContentLevelTransientError(
+        new Error("upstream returned 502 Bad Gateway")
+      )
+    ).toBe(false);
+    expect(isContentLevelTransientError(new Error("rate limit exceeded"))).toBe(
+      false
+    );
+    expect(isContentLevelTransientError(new Error("Request timeout"))).toBe(
+      false
+    );
+    expect(
+      isContentLevelTransientError(new Error("transient server error"))
+    ).toBe(false);
+    expect(
+      isContentLevelTransientError(new Error("AI server error code=503"))
+    ).toBe(false);
+  });
+
+  it("never classifies aborts or non-Error values as content-level retryable", () => {
+    const abort = new Error("user stopped");
+    abort.name = "AbortError";
+    expect(isContentLevelTransientError(abort)).toBe(false);
+    expect(isContentLevelTransientError("finish_reason=error")).toBe(false);
+    expect(isContentLevelTransientError(null)).toBe(false);
   });
 });

@@ -2511,6 +2511,12 @@ export default {
       open_model_settings: "Abrir ajustes",
       chat_unavailable:
         "El chat no está disponible. Tu transcripción se ha conservado en el compositor.",
+      tts_model_missing:
+        "Las respuestas habladas necesitan un modelo de voz. Instálalo para activarlo.",
+      install_tts_model: "Instalar modelo de voz",
+      tts_model_install_failed: "Error en la instalación del modelo de voz.",
+      tts_runtime_missing:
+        "Las respuestas habladas necesitan el entorno de voz local, que aún no está instalado. Usa la entrada de voz en el chat para instalarlo y luego activa las respuestas habladas.",
     },
     title: "Asistente de IA",
     show_reasoning: "Mostrar razonamiento",

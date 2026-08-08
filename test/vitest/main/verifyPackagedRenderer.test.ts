@@ -53,6 +53,19 @@ describe("verifyPackagedRenderer", () => {
     expect(verify.verifyPackagedRenderer(resourcesDir)).toBe(true);
   });
 
+  it("rejects empty CI-style resources/app renderer HTML", () => {
+    const resourcesDir = makeTempResources();
+    const htmlPath = path.join(
+      resourcesDir,
+      "app",
+      ...verify.RENDERER_HTML_RELATIVE.split("/")
+    );
+    fs.mkdirSync(path.dirname(htmlPath), { recursive: true });
+    fs.writeFileSync(htmlPath, "");
+
+    expect(verify.verifyPackagedRenderer(resourcesDir)).toBe(false);
+  });
+
   it("rejects renderer HTML that only exists under app.asar.unpacked", () => {
     const resourcesDir = makeTempResources();
     const unpackedHtml = path.join(

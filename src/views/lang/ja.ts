@@ -2454,6 +2454,12 @@ export default {
       open_model_settings: "設定を開く",
       chat_unavailable:
         "チャットを利用できません。書き起こしは入力欄に残しています。",
+      tts_model_missing:
+        "音声応答には音声モデルが必要です。有効にするにはインストールしてください。",
+      install_tts_model: "音声モデルをインストール",
+      tts_model_install_failed: "音声モデルのインストールに失敗しました。",
+      tts_runtime_missing:
+        "音声応答にはローカル音声ランタイムが必要ですが、まだインストールされていません。チャットで音声入力を使用してインストールしてから、音声応答を有効にしてください。",
     },
     title: "AI アシスタント",
     show_reasoning: "推論を表示",

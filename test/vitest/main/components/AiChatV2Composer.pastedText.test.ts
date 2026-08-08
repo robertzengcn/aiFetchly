@@ -142,10 +142,13 @@ describe("AiChatV2Composer pasted text", () => {
     // send(text, files, options?)
     expect(sendEvents![0][0]).toBe("[Pasted text #1 +2 lines]");
     expect(sendEvents![0][1]).toEqual([]);
-    expect(sendEvents![0][2]).toEqual({
-      pastedContents: {
-        "1": raw,
-      },
-    });
+    expect(sendEvents![0][2]).toEqual(
+      expect.objectContaining({
+        pastedContents: {
+          "1": raw,
+        },
+        onAccepted: expect.any(Function),
+      })
+    );
   });
 });

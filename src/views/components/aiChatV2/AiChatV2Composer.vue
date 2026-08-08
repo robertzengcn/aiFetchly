@@ -340,7 +340,11 @@ const emit = defineEmits<{
     e: "send",
     text: string,
     files: File[],
-    options?: { fromVoice?: boolean; pastedContents?: Record<string, string> }
+    options?: {
+      fromVoice?: boolean;
+      pastedContents?: Record<string, string>;
+      onAccepted?: () => void;
+    }
   ): void;
   (e: "stop"): void;
   (e: "request-workspace"): void;
@@ -494,10 +498,18 @@ async function onMicClick(): Promise<void> {
         // preserving any selected attachments (PRD §7.4). Flag the send as
         // voice-originated so `after_voice_input` TTS speaks the reply.
         const files = [...selectedFiles.value];
-        emit("send", transcript, files, { fromVoice: true });
-        draft.value = "";
-        selectedFiles.value = [];
-        resetPastedState();
+        const draftBeforeVoiceSend = draft.value;
+        appendTranscript(transcript);
+        emit("send", transcript, files, {
+          fromVoice: true,
+          onAccepted: () => {
+            // Only the transcript and attachments belong to this voice
+            // request. Preserve older typed/pasted content that was never
+            // included in the emitted message.
+            draft.value = draftBeforeVoiceSend;
+            selectedFiles.value = [];
+          },
+        });
       } else {
         appendTranscript(transcript);
       }
@@ -992,11 +1004,15 @@ const onSend = (): void => {
     Object.keys(pastedContentsById.value).length > 0
       ? { ...pastedContentsById.value }
       : undefined;
-  emit("send", text, files, pastedContents ? { pastedContents } : undefined);
-  draft.value = "";
-  selectedFiles.value = [];
-  resetPastedState();
-  closeSlash();
+  emit("send", text, files, {
+    pastedContents,
+    onAccepted: () => {
+      draft.value = "";
+      selectedFiles.value = [];
+      resetPastedState();
+      closeSlash();
+    },
+  });
 };
 
 const onKeydown = (event: KeyboardEvent): void => {

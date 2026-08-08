@@ -267,6 +267,8 @@ export interface ResumeTaskMessage extends BaseBackgroundMessage {
  */
 export interface TaskPausedMessage extends BaseBackgroundMessage {
   type: "TASK_PAUSED";
+  /** When true, main process updates status/logs but does not show a UI notify. */
+  suppressUiNotify?: boolean;
 }
 
 /**

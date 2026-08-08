@@ -568,15 +568,7 @@ export class YellowPagesProcessManager extends BaseModule {
           console.log(
             `Task ${taskId}: CAPTCHA detected, may need manual intervention`
           );
-          // Send system message to frontend to notify user
-          sendSystemMessage({
-            status: true,
-            data: {
-              title: "CAPTCHA Detected",
-              content: `Yellow Pages task ${taskId} has detected a CAPTCHA challenge. Manual intervention may be required to continue scraping.`,
-            },
-          });
-          // Log to error log for user notification
+          // Log only — no UI notification for captcha/Cloudflare blocks
           if (processInfo?.logFiles) {
             const captchaMessage = `[${new Date().toISOString()}] CAPTCHA DETECTED: Task ${taskId} has detected a CAPTCHA challenge. Manual intervention may be required.`;
             WriteLog(processInfo.logFiles.errorLog, captchaMessage);
@@ -597,18 +589,7 @@ export class YellowPagesProcessManager extends BaseModule {
               }`
             );
 
-            // Send system message to frontend to notify user
-            sendSystemMessage({
-              status: true,
-              data: {
-                title: "Cloudflare Protection Detected",
-                content: `Yellow Pages task ${taskId} has detected Cloudflare protection. This may temporarily block scraping. URL: ${
-                  message.details?.url || "unknown"
-                }`,
-              },
-            });
-
-            // Log to error log for user notification
+            // Log only — no UI notification for captcha/Cloudflare blocks
             if (processInfo?.logFiles) {
               const cloudflareMessage = `[${new Date().toISOString()}] CLOUDFLARE DETECTED: ${contentMessage}. URL: ${
                 message.details?.url || "unknown"
@@ -625,16 +606,7 @@ export class YellowPagesProcessManager extends BaseModule {
               message.content || "Scraping paused due to Cloudflare protection";
             console.log(`Task ${taskId}: ${pauseContentMessage}`);
 
-            // Send system message to frontend to notify user
-            sendSystemMessage({
-              status: true,
-              data: {
-                title: "Scraping Paused - Cloudflare Protection",
-                content: `Yellow Pages task ${taskId} has been paused due to Cloudflare protection. The task will remain paused until manually resumed.`,
-              },
-            });
-
-            // Log to error log for user notification
+            // Log only — no UI notification for captcha/Cloudflare blocks
             if (processInfo?.logFiles) {
               const cloudflarePauseMessage = `[${new Date().toISOString()}] CLOUDFLARE PAUSE: ${pauseContentMessage}`;
               WriteLog(processInfo.logFiles.errorLog, cloudflarePauseMessage);
@@ -679,18 +651,7 @@ export class YellowPagesProcessManager extends BaseModule {
               }`
             );
 
-            // Send system message to frontend to notify user
-            sendSystemMessage({
-              status: true,
-              data: {
-                title: "Robot Verification Challenge Detected",
-                content: `Yellow Pages task ${taskId} has detected a robot verification challenge. The task has been paused and requires manual intervention to complete the verification. URL: ${
-                  message.details?.url || "unknown"
-                }`,
-              },
-            });
-
-            // Log to error log for user notification
+            // Log only — no UI notification for captcha/Cloudflare blocks
             if (processInfo?.logFiles) {
               const robotVerificationMessage = `[${new Date().toISOString()}] ROBOT VERIFICATION DETECTED: ${robotContentMessage}. URL: ${
                 message.details?.url || "unknown"
@@ -738,16 +699,19 @@ export class YellowPagesProcessManager extends BaseModule {
                 );
               });
 
-            // Send system message to frontend to notify user
-            sendSystemMessage({
-              status: true,
-              data: {
-                title: "Task Paused",
-                content:
-                  message.content ||
-                  `Yellow Pages task ${taskId} has been paused successfully.`,
-              },
-            });
+            // Skip UI toast for captcha/Cloudflare auto-pauses
+            const pausedMsg = message as TaskPausedMessage;
+            if (!pausedMsg.suppressUiNotify) {
+              sendSystemMessage({
+                status: true,
+                data: {
+                  title: "Task Paused",
+                  content:
+                    message.content ||
+                    `Yellow Pages task ${taskId} has been paused successfully.`,
+                },
+              });
+            }
           }
           break;
         case "TASK_RESUMED":

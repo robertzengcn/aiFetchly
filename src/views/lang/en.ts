@@ -2490,6 +2490,12 @@ export default {
       open_model_settings: "Open settings",
       chat_unavailable:
         "Chat is unavailable. Your transcript was kept in the composer.",
+      tts_model_missing:
+        "Spoken responses need a speech model. Install it to enable.",
+      install_tts_model: "Install speech model",
+      tts_model_install_failed: "Speech model installation failed.",
+      tts_runtime_missing:
+        "Spoken responses need the local voice runtime, which isn't installed yet. Use voice input in the chat to install it, then enable spoken responses.",
     },
     title: "AI Assistant",
     show_reasoning: "Show reasoning",

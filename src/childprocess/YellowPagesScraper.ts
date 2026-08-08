@@ -1473,8 +1473,10 @@ export class YellowPagesScraper {
 
   /**
    * Pause the scraping process
+   * @param options.suppressUiNotify Skip the frontend system-message toast
+   *   (used for captcha/Cloudflare auto-pauses).
    */
-  async pause(): Promise<void> {
+  async pause(options?: { suppressUiNotify?: boolean }): Promise<void> {
     if (this.isPaused) return;
 
     console.log(
@@ -1493,6 +1495,7 @@ export class YellowPagesScraper {
         type: "TASK_PAUSED",
         taskId: this.taskData.taskId,
         content: "Task has been paused successfully",
+        suppressUiNotify: options?.suppressUiNotify === true,
       };
       parentPortLocal.postMessage(pauseMessage);
     }
@@ -6545,14 +6548,14 @@ The initial deterministic filling did not succeed for ${
           parentPortLocal3.postMessage(robotVerificationMessage);
         }
 
-        // Pause the scraping process
+        // Pause without UI toast — captcha/robot blocks should stay silent in UI
         console.log(
           "⏸️ Pausing scraping due to robot verification challenge..."
         );
-        this.pause();
+        this.pause({ suppressUiNotify: true });
 
         console.log(
-          "✅ Robot verification detection notification sent to parent process"
+          "✅ Robot verification pause signaled to parent process (no UI notify)"
         );
       }
     } catch (error) {
@@ -6651,13 +6654,13 @@ The initial deterministic filling did not succeed for ${
         console.log("     - Reduce scraping frequency");
         console.log("     - Check if manual access works in browser");
 
-        // Pause the scraping process due to Cloudflare protection
+        // Pause without UI toast — Cloudflare blocks should stay silent in UI
         if (this.isRunning) {
           console.log(
             "⏸️ Pausing scraping process due to Cloudflare protection..."
           );
           try {
-            await this.pause();
+            await this.pause({ suppressUiNotify: true });
             console.log(
               "✅ Scraping paused successfully due to Cloudflare protection"
             );

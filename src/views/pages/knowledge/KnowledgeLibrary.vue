@@ -240,6 +240,7 @@
       v-model="showWebsiteImportDialog"
       :before-import="() => ensureCurrentEmbeddingRuntimeReady(null)"
       @completed="handleWebsiteImportCompleted"
+      @local-runtime-required="handleLocalRuntimeRequired"
     />
 
     <!-- Duplicate Confirmation Dialog -->
@@ -467,7 +468,10 @@ import { ModelInfo } from '@/api/ragConfigApi';
 import { DocumentMetadata } from '@/entityTypes/metadataType';
 import { getLocalAiRuntimeStatus, prepareLocalAiRuntimeInstall, installLocalAiRuntime, cancelLocalAiRuntimeInstall, onLocalAiRuntimeProgress } from '@/views/api/localAiRuntime';
 import type { LocalAiRuntimeDownloadPhase, LocalAiRuntimeDownloadProgress, LocalAiRuntimeId, LocalAiRuntimeInstallOffer } from '@/entityTypes/localAiRuntimeTypes';
-import { LOCAL_XENOVA_PROVIDER_PREFIX } from '@/service/embedding/LocalEmbeddingModels';
+import {
+  LOCAL_XENOVA_PROVIDER_PREFIX,
+  isLocalXenovaModelId,
+} from '@/service/embedding/LocalEmbeddingModels';
 
 const LOCAL_EMBEDDING_RUNTIME_ID: LocalAiRuntimeId = 'embedding-xenova';
 
@@ -551,15 +555,14 @@ onUnmounted(() => {
 // Methods
 async function initializeRAGSystem() {
   try {
-    // Check if RAG is already initialized and get stats including default embedding model
-    const response = await getRAGStats();
-    console.log('RAG Stats Response:', response);
-    
-    // Set the default embedding model from the stats response
-    if (response.data?.defaultEmbeddingModel) {
-      currentModel.value = response.data.defaultEmbeddingModel;
-      selectedEmbeddingModel.value = response.data.defaultEmbeddingModel;
-      console.log('✅ Default embedding model set from stats:', response.data.defaultEmbeddingModel);
+    // windowInvoke unwraps IPC `{ status, data }` — getRAGStats returns RagStatsResponse.
+    const stats = await getRAGStats();
+    console.log('RAG Stats Response:', stats);
+
+    if (stats.defaultEmbeddingModel) {
+      currentModel.value = stats.defaultEmbeddingModel;
+      selectedEmbeddingModel.value = stats.defaultEmbeddingModel;
+      console.log('✅ Default embedding model set from stats:', stats.defaultEmbeddingModel);
     }
   } catch (error) {
     console.error('Failed to initialize RAG system:', error);
@@ -631,6 +634,11 @@ function handleWebsiteImportCompleted(outcome: ImportKnowledgeWebsiteResult) {
   if (documentManagement.value && outcome.importedCount > 0) {
     documentManagement.value.refreshDocuments();
   }
+}
+
+function handleLocalRuntimeRequired(): void {
+  showWebsiteImportDialog.value = false;
+  void ensureLocalEmbeddingRuntime(null);
 }
 
 function handleSearchCompleted(results: { totalResults: number; [key: string]: any }) {
@@ -743,7 +751,7 @@ async function handleUpdateEmbeddingModel() {
   // Local embedding models (Xenova/all-MiniLM-L6-v2) require the
   // downloadable "embedding-xenova" Local AI Component. If the runtime is not
   // installed/ready, offer an inline download instead of updating.
-  if (selectedEmbeddingModel.value.startsWith(LOCAL_XENOVA_PROVIDER_PREFIX)) {
+  if (isLocalXenovaModelId(selectedEmbeddingModel.value)) {
     if (!(await ensureLocalEmbeddingRuntime('update-model'))) {
       return;
     }
@@ -762,19 +770,20 @@ async function ensureCurrentEmbeddingRuntimeReady(
 ): Promise<boolean> {
   checkingEmbeddingRuntime.value = true;
   try {
-    if (!currentModel.value) {
-      try {
-        const response = await getRAGStats();
-        if (response.data?.defaultEmbeddingModel) {
-          currentModel.value = response.data.defaultEmbeddingModel;
-          selectedEmbeddingModel.value = response.data.defaultEmbeddingModel;
-        }
-      } catch (error) {
-        console.error('Failed to load current embedding model for runtime check:', error);
+    // Always refresh — do not trust a stale/empty currentModel (windowInvoke
+    // returns unwrapped stats, so older `.data?.defaultEmbeddingModel` reads
+    // never populated the model and skipped this gate).
+    try {
+      const stats = await getRAGStats();
+      if (stats.defaultEmbeddingModel) {
+        currentModel.value = stats.defaultEmbeddingModel;
+        selectedEmbeddingModel.value = stats.defaultEmbeddingModel;
       }
+    } catch (error) {
+      console.error('Failed to load current embedding model for runtime check:', error);
     }
 
-    if (!currentModel.value.startsWith(LOCAL_XENOVA_PROVIDER_PREFIX)) {
+    if (!isLocalXenovaModelId(currentModel.value)) {
       return true;
     }
 

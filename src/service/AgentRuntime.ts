@@ -320,6 +320,11 @@ export class AgentRuntime {
         eventSink: sink,
         startRound: 0,
         isActiveTurn: () => true,
+        // Retry transient content failures instantly. Agents run under a tight
+        // maxRuntimeMs deadline (the abort timer above); spending that budget
+        // on exponential backoff sleeps can starve actual work. The agent's
+        // own abort signal still bounds total runtime regardless.
+        transientRetryConfig: { baseDelayMs: 0 },
         toolCatalog: agentToolCatalogContext.toolCatalog,
         toolCatalogModeDecision:
           agentToolCatalogContext.toolCatalogModeDecision,

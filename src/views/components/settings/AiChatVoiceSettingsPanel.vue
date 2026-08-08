@@ -36,13 +36,13 @@
         @update:model-value="save"
       />
       <v-switch
-        v-model="spokenOn"
+        :model-value="spokenOn"
         color="primary"
         hide-details
         density="compact"
         class="mb-2"
         :label="t('aiChatV2.voice.enable_spoken_responses') || 'Enable spoken responses'"
-        @update:model-value="save"
+        @update:model-value="onToggleSpoken"
       />
       <v-switch
         v-if="spokenOn"
@@ -148,6 +148,10 @@
         v-for="model in models"
         :key="model.id"
         class="d-flex align-center justify-space-between pa-2 mb-2 rounded"
+        :class="{
+          'ai-voice-panel__model--highlight':
+            highlightTtsModel && model.type === 'tts' && !model.installed,
+        }"
       >
         <div>
           <div class="text-body-2 font-weight-medium">
@@ -207,7 +211,9 @@
 import { ref, computed, onMounted, onBeforeUnmount } from "vue";
 import { useI18n } from "vue-i18n";
 import {
+  AI_CHAT_V2_VOICE_MODELS_CHANGED_EVENT,
   getVoiceSettings,
+  getVoiceStatus,
   setVoiceSettings,
   listVoiceModels,
   downloadVoiceModel,
@@ -216,6 +222,7 @@ import {
   notifyVoiceModelsChanged,
 } from "@/views/api/aiChatV2Voice";
 import type {
+  AiChatVoiceRuntimeState,
   AiChatVoiceSettingsView,
   VoiceModelDownloadProgress,
 } from "@/entityTypes/aiChatVoiceTypes";
@@ -238,6 +245,14 @@ const ttsModelId = ref("sherpa-onnx:tts:auto");
 const ttsVoiceId = ref<string | undefined>(undefined);
 const speed = ref(1);
 const maxRecordingMs = ref(60_000);
+/**
+ * TTS runtime/model readiness ("ready" | "missing_model" | "unavailable" | …).
+ * Used to gate the spoken-responses switch so we never persist an enablement
+ * that would silently fail synthesis on every reply.
+ */
+const ttsRuntimeState = ref<AiChatVoiceRuntimeState>("ready");
+/** Briefly highlights the TTS model row when the user must install it. */
+const highlightTtsModel = ref(false);
 
 const voiceInputOn = computed({
   get: () => inputMode.value === "push_to_talk",
@@ -245,14 +260,12 @@ const voiceInputOn = computed({
     inputMode.value = value ? "push_to_talk" : "disabled";
   },
 });
-const spokenOn = computed({
-  get: () => ttsMode.value !== "disabled",
-  set: (value: boolean) => {
-    // Enabling spoken responses should speak normal assistant replies. Users
-    // can still narrow this with the "Speak only after voice input" switch.
-    ttsMode.value = value ? "all_assistant_messages" : "disabled";
-  },
-});
+// Read-only mirror of the persisted TTS mode. The spoken-responses switch uses
+// a controlled (:model-value) binding + `onToggleSpoken` so the gate decides
+// whether ttsMode actually changes — a v-model setter would flip ttsMode
+// before the prerequisite check, leaving the switch visually on while
+// unpersisted.
+const spokenOn = computed(() => ttsMode.value !== "disabled");
 const speakAfterVoiceOnly = computed({
   get: () => ttsMode.value === "after_voice_input",
   set: (value: boolean) => {
@@ -282,7 +295,10 @@ async function load(): Promise<void> {
   loading.value = true;
   error.value = null;
   try {
-    const s = await getVoiceSettings();
+    const [s, status] = await Promise.all([
+      getVoiceSettings(),
+      getVoiceStatus().catch(() => null),
+    ]);
     inputMode.value = s.inputMode;
     ttsMode.value = s.ttsMode;
     autoSend.value = s.autoSendTranscript;
@@ -293,11 +309,45 @@ async function load(): Promise<void> {
     ttsVoiceId.value = s.ttsVoiceId;
     speed.value = s.ttsSpeed;
     maxRecordingMs.value = s.maxRecordingMs;
+    if (status) {
+      ttsRuntimeState.value = status.ttsState;
+      if (status.ttsState === "ready") highlightTtsModel.value = false;
+    }
   } catch (err) {
     error.value = err instanceof Error ? err.message : String(err);
   } finally {
     loading.value = false;
   }
+}
+
+/**
+ * Guard the spoken-responses switch: only persist an enablement when the TTS
+ * runtime + model are installed. Otherwise block and guide the user (error
+ * alert + highlight the TTS model row whose Download button installs it).
+ * Disabling is always allowed. Mirrors the AiChatV2 speaker-toggle gate.
+ */
+async function onToggleSpoken(value: boolean | null): Promise<void> {
+  highlightTtsModel.value = false;
+  if (!value) {
+    ttsMode.value = "disabled";
+    await save();
+    return;
+  }
+  if (ttsRuntimeState.value === "unavailable") {
+    error.value =
+      t("aiChatV2.voice.tts_runtime_missing") ||
+      "Spoken responses need the local voice runtime, which isn't installed yet. Use voice input in the chat to install it, then enable spoken responses.";
+    return;
+  }
+  if (ttsRuntimeState.value === "missing_model") {
+    error.value =
+      t("aiChatV2.voice.tts_model_missing") ||
+      "Spoken responses need a speech model. Install it to enable.";
+    highlightTtsModel.value = true;
+    return;
+  }
+  ttsMode.value = "all_assistant_messages";
+  await save();
 }
 
 async function save(): Promise<void> {
@@ -394,6 +444,27 @@ function voiceModelName(model: VoiceModelCatalogEntry): string {
   return model.name;
 }
 
+/**
+ * Refresh TTS runtime/model readiness from the backend. Used after this
+ * panel's own downloads AND after model installs/removes triggered from other
+ * surfaces (e.g. the AiChatV2 chat header), which broadcast
+ * AI_CHAT_V2_VOICE_MODELS_CHANGED_EVENT. Without this, ttsRuntimeState would
+ * stay stale and the spoken-responses gate could block enablement after an
+ * external install — or wrongly allow it after an external uninstall.
+ */
+async function refreshTtsRuntimeState(): Promise<void> {
+  const status = await getVoiceStatus().catch(() => null);
+  if (status) {
+    ttsRuntimeState.value = status.ttsState;
+    if (status.ttsState === "ready") highlightTtsModel.value = false;
+  }
+}
+
+/** Window-event handler for model availability changes from any surface. */
+function handleVoiceModelsChanged(): void {
+  void refreshTtsRuntimeState();
+}
+
 async function onDownload(modelId: string): Promise<void> {
   downloadProgress.value = {
     ...downloadProgress.value,
@@ -405,6 +476,9 @@ async function onDownload(modelId: string): Promise<void> {
     // Installed model availability changed -> tell the chat surface to refresh
     // its voiceMissingModel state without a remount (TODO P2 status refresh).
     notifyVoiceModelsChanged();
+    // Refresh TTS readiness so the spoken-responses gate reflects the newly
+    // installed model (e.g. unblock enabling after the Piper TTS download).
+    await refreshTtsRuntimeState();
   } catch {
     /* error shown via progress */
   }
@@ -422,14 +496,29 @@ onMounted(() => {
   unsubscribeProgress = onVoiceModelDownloadProgress((p) => {
     downloadProgress.value = { ...downloadProgress.value, [p.modelId]: p };
   });
+  // Model availability can change from other surfaces (e.g. the AiChatV2 chat
+  // header install flow). Refresh TTS readiness live so the spoken-responses
+  // gate never goes stale.
+  window.addEventListener(
+    AI_CHAT_V2_VOICE_MODELS_CHANGED_EVENT,
+    handleVoiceModelsChanged
+  );
 });
 onBeforeUnmount(() => {
   unsubscribeProgress?.();
+  window.removeEventListener(
+    AI_CHAT_V2_VOICE_MODELS_CHANGED_EVENT,
+    handleVoiceModelsChanged
+  );
 });
 </script>
 
 <style scoped>
 .ai-voice-panel {
   margin-top: 1.5rem;
+}
+.ai-voice-panel__model--highlight {
+  background: rgba(255, 152, 0, 0.12);
+  outline: 1px solid rgba(255, 152, 0, 0.4);
 }
 </style>

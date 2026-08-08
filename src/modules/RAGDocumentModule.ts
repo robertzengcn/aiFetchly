@@ -149,10 +149,12 @@ export class RAGDocumentModule extends BaseModule {
 
   /**
    * Website import duplicate detection. Checks URL identity only: canonical URL
-   * first, then source URL. We still store contentSha256 for future refresh and
-   * diagnostics, but do not use it as a duplicate key because many news/listing
-   * pages can produce identical extracted chrome/template markdown even when the
-   * source URLs are distinct user-visible pages.
+   * first, then source URL. Only successfully completed documents count as
+   * duplicates — failed/pending stubs from a prior embed failure must not block
+   * retry. We still store contentSha256 for future refresh and diagnostics, but
+   * do not use it as a duplicate key because many news/listing pages can produce
+   * identical extracted chrome/template markdown even when the source URLs are
+   * distinct user-visible pages.
    */
   async findWebsiteDuplicate(opts: {
     sourceUrl?: string;
@@ -167,6 +169,30 @@ export class RAGDocumentModule extends BaseModule {
     }
     if (opts.sourceUrl) {
       const doc = await this.ragDocumentModel.findActiveBySourceUrlSha256(
+        sha256Hex(opts.sourceUrl)
+      );
+      if (doc) return doc;
+    }
+    return undefined;
+  }
+
+  /**
+   * Find a non-completed website document for the same URL identity so a
+   * re-import can delete the failed/pending stub before uploading again.
+   */
+  async findIncompleteWebsiteDocument(opts: {
+    sourceUrl?: string;
+    canonicalUrl?: string;
+  }): Promise<RAGDocumentEntity | undefined> {
+    if (opts.canonicalUrl) {
+      const doc =
+        await this.ragDocumentModel.findIncompleteByCanonicalUrlSha256(
+          sha256Hex(opts.canonicalUrl)
+        );
+      if (doc) return doc;
+    }
+    if (opts.sourceUrl) {
+      const doc = await this.ragDocumentModel.findIncompleteBySourceUrlSha256(
         sha256Hex(opts.sourceUrl)
       );
       if (doc) return doc;

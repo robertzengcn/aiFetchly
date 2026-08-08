@@ -181,7 +181,53 @@ describe("AiChatV2Composer voice controls", () => {
     const sendEvents = wrapper.emitted("send");
     expect(sendEvents).toHaveLength(1);
     expect(sendEvents![0][0]).toBe("hello world");
-    expect(sendEvents![0][2]).toEqual({ fromVoice: true });
+    expect(sendEvents![0][2]).toEqual(
+      expect.objectContaining({
+        fromVoice: true,
+        onAccepted: expect.any(Function),
+      })
+    );
+    const options = sendEvents![0][2] as { onAccepted: () => void };
+    options.onAccepted();
+    await wrapper.vm.$nextTick();
+    expect(wrapper.findComponent(TextareaStub).props("modelValue")).toBe("");
+  });
+
+  it("keeps an auto-send transcript until the parent accepts the send", async () => {
+    const wrapper = mountComposer({ voiceEnabled: true, voiceAutoSend: true });
+    await wrapper.find(".v2-composer__voice-button").trigger("click");
+    await flushPromises();
+    await wrapper.find(".v2-composer__voice-button").trigger("click");
+    await flushPromises();
+
+    expect(wrapper.emitted("send")).toHaveLength(1);
+    expect(wrapper.findComponent(TextareaStub).props("modelValue")).toBe(
+      "hello world"
+    );
+  });
+
+  it("preserves an older typed draft after a voice send is accepted", async () => {
+    const wrapper = mountComposer({ voiceEnabled: true, voiceAutoSend: true });
+    wrapper.findComponent(TextareaStub).vm.$emit(
+      "update:modelValue",
+      "older typed draft"
+    );
+    await wrapper.vm.$nextTick();
+
+    await wrapper.find(".v2-composer__voice-button").trigger("click");
+    await flushPromises();
+    await wrapper.find(".v2-composer__voice-button").trigger("click");
+    await flushPromises();
+
+    const options = wrapper.emitted("send")?.[0]?.[2] as {
+      onAccepted: () => void;
+    };
+    options.onAccepted();
+    await wrapper.vm.$nextTick();
+
+    expect(wrapper.findComponent(TextareaStub).props("modelValue")).toBe(
+      "older typed draft"
+    );
   });
 
   it("does not send an empty transcript", async () => {

@@ -55,6 +55,11 @@ import {
   getOrCreateInstallId,
 } from "@/modules/diagnostics/DiagnosticIdentity";
 import { DiagnosticRetentionService } from "@/modules/diagnostics/DiagnosticRetentionService";
+import {
+  getLastPromptedCrashId,
+  setLastPromptedCrashId,
+  shouldShowUncleanShutdownPrompt,
+} from "@/modules/diagnostics/CrashPromptState";
 import fs from "fs";
 import ProtocolRegistry from "protocol-registry";
 //import { RemoteSource } from '@/modules/remotesource'
@@ -88,6 +93,12 @@ import {
   getPackagedRendererHtmlCandidates,
   resolvePackagedRendererHtmlPath,
 } from "@/utils/packagedRendererPath";
+import {
+  HtmlFileLoader,
+  HtmlFileLoadError,
+  loadHtmlFileWithUrlFallback,
+} from "@/utils/loadHtmlFileWithUrlFallback";
+import { resolveSecondInstanceWindowAction } from "@/utils/mainWindowSecondInstance";
 
 let chatScheduledBackgroundScheduler: BackgroundScheduler | null = null;
 // import { RAGIpcHandlers } from '@/main-process/ragIpcHandlers';
@@ -168,6 +179,8 @@ __diagnosticsRetention.schedule();
 // dev kill as a real unclean shutdown. `app.isPackaged` is the reliable signal
 // here (NODE_ENV is not auto-set to "production" in packaged Electron builds).
 const __startupMarker = getStartupMarkerPath();
+/** Set only when THIS launch found a leftover startup marker. */
+let __uncleanShutdownCrashIdThisLaunch: string | null = null;
 if ((app as any).isPackaged) {
   let __previousSessionId: string | undefined;
   if (fs.existsSync(__startupMarker)) {
@@ -176,9 +189,11 @@ if ((app as any).isPackaged) {
         sessionId?: string;
       };
       __previousSessionId = prev.sessionId;
-      __crashReporter.recordUncleanShutdown(__previousSessionId);
+      __uncleanShutdownCrashIdThisLaunch =
+        __crashReporter.recordUncleanShutdown(__previousSessionId);
     } catch {
-      __crashReporter.recordUncleanShutdown();
+      __uncleanShutdownCrashIdThisLaunch =
+        __crashReporter.recordUncleanShutdown();
     }
   }
   fs.writeFileSync(
@@ -189,6 +204,15 @@ if ((app as any).isPackaged) {
   // Dev: clear any stale marker left by a previous (killed) run.
   try {
     fs.rmSync(__startupMarker, { force: true });
+  } catch {
+    /* ignore */
+  }
+}
+
+function clearStartupMarker(): void {
+  try {
+    const marker = getStartupMarkerPath();
+    if (fs.existsSync(marker)) fs.rmSync(marker, { force: true });
   } catch {
     /* ignore */
   }
@@ -241,6 +265,32 @@ process.on("uncaughtException", (error) => {
 });
 
 let win: BrowserWindow | null;
+/** True only after the packaged/dev renderer document successfully loaded. */
+let rendererHtmlLoaded = false;
+/**
+ * Set from initialize() after createWindow exists. second-instance fires later,
+ * so a late-bound callback avoids circular ordering issues.
+ */
+let onSecondInstanceActivate: (() => void) | null = null;
+
+/**
+ * If quit hangs after a fatal renderer load (dialog / AV / locked asar), force
+ * exit so the single-instance lock is released and the next launch can recover
+ * without a reboot.
+ */
+function scheduleForcedAppExit(reason: string): void {
+  log.error(`[startup] scheduling forced exit: ${reason}`);
+  setTimeout(() => {
+    // app.exit() skips before-quit; clear the marker first so the next launch
+    // does not treat this recovery exit as an unexpected crash.
+    clearStartupMarker();
+    try {
+      (app as unknown as { exit: (code?: number) => void }).exit(1);
+    } catch {
+      process.exit(1);
+    }
+  }, 2500);
+}
 
 /**
  * Dev browser bridge instance (dev-only). Null in production or when the
@@ -417,6 +467,18 @@ function initialize() {
   }
   makeSingleInstance();
 
+  function createHtmlFileLoader(targetWindow: BrowserWindow): HtmlFileLoader {
+    const windowWithLoadFile = targetWindow as BrowserWindow & {
+      loadFile(filePath: string): Promise<void>;
+    };
+    return {
+      loadFile: (filePath: string): Promise<void> =>
+        windowWithLoadFile.loadFile(filePath),
+      loadURL: (url: string): Promise<void> => targetWindow.loadURL(url),
+      isDestroyed: (): boolean => targetWindow.isDestroyed(),
+    };
+  }
+
   // Helper function to try alternative HTML file paths with detailed error handling
   async function tryAlternativePaths(
     win: BrowserWindow,
@@ -455,12 +517,17 @@ function initialize() {
             //console.log('Alternative path exists, attempting to load...');
             // log.info('Alternative path exists, attempting to load:', altPath);
 
-            await (win as any).loadFile(altPath);
-            console.log(
-              "Successfully loaded HTML file from alternative path:",
+            const loadResult = await loadHtmlFileWithUrlFallback(
+              createHtmlFileLoader(win),
               altPath
             );
+            console.log(
+              "Successfully loaded HTML file from alternative path:",
+              altPath,
+              loadResult.method === "loadURL" ? `via ${loadResult.fileUrl}` : ""
+            );
             // log.info('Successfully loaded HTML file from alternative path:', altPath);
+            rendererHtmlLoaded = true;
             loaded = true;
             break;
           } else {
@@ -508,37 +575,70 @@ function initialize() {
 
       dialog.showErrorBox(
         "Application Error",
-        "Could not load the application interface. This may be due to a corrupted installation.\n\nPlease try:\n1. Reinstalling the application\n2. Running as administrator\n3. Checking antivirus software\n\nError details have been logged."
+        "Could not load the application interface. This may be due to a temporary file lock (antivirus) or a previous stuck instance.\n\nPlease try:\n1. Closing all aiFetchly processes in Task Manager\n2. Waiting a few seconds and relaunching\n3. Reinstalling if it keeps failing\n\nError details have been logged."
       );
+      rendererHtmlLoaded = false;
       (app as any).quit();
+      scheduleForcedAppExit("renderer HTML load failed on all paths");
     }
   }
 
   /** Prevents concurrent createWindow() races (e.g. whenReady + activate) that double-register ipcMain handlers. */
   let createWindowInFlight: Promise<void> | null = null;
 
+  async function destroyUnhealthyMainWindows(): Promise<void> {
+    const windows = BrowserWindow.getAllWindows() as BrowserWindow[];
+    for (const existing of windows) {
+      if (!existing.isDestroyed()) {
+        try {
+          existing.destroy();
+        } catch (err: unknown) {
+          log.warn(
+            "[window] failed to destroy unhealthy main window",
+            err instanceof Error ? err.message : String(err)
+          );
+        }
+      }
+    }
+    win = null;
+    rendererHtmlLoaded = false;
+  }
+
   async function createWindow(): Promise<void> {
-    const existingWindows = BrowserWindow.getAllWindows() as any[];
+    const existingWindows = BrowserWindow.getAllWindows() as BrowserWindow[];
     if (existingWindows.length > 0) {
       const existing = existingWindows[0];
       if (!existing.isDestroyed()) {
-        console.log("Window already exists and is valid, focusing...");
-        if (!win) win = existing;
-        existing.focus();
-        return;
+        const action = resolveSecondInstanceWindowAction({
+          hasLiveWindow: true,
+          rendererHtmlLoaded,
+        });
+        if (action === "focus") {
+          console.log("Window already exists and is valid, focusing...");
+          if (!win) win = existing;
+          existing.focus();
+          return;
+        }
+        log.warn(
+          "[window] existing main window has no loaded renderer; recreating"
+        );
+        await destroyUnhealthyMainWindows();
       }
     }
     if (createWindowInFlight) {
       await createWindowInFlight;
-      const existingWindows2 = BrowserWindow.getAllWindows() as any[];
+      const existingWindows2 = BrowserWindow.getAllWindows() as BrowserWindow[];
       if (existingWindows2.length > 0) {
         const existing = existingWindows2[0];
-        if (!existing.isDestroyed()) {
+        if (!existing.isDestroyed() && rendererHtmlLoaded) {
           if (!win) win = existing;
           existing.focus();
+          return;
         }
       }
-      return;
+      if (rendererHtmlLoaded) {
+        return;
+      }
     }
     createWindowInFlight = createWindowBody();
     try {
@@ -549,6 +649,7 @@ function initialize() {
   }
 
   async function createWindowBody(): Promise<void> {
+    rendererHtmlLoaded = false;
     // Create the browser window.
     win = new BrowserWindow({
       // Hide by default on Windows/Linux. (macOS uses the system menu bar.)
@@ -660,6 +761,7 @@ function initialize() {
       FileOperationTracker.clear();
       setMainWindow(null);
       win = null;
+      rendererHtmlLoaded = false;
     });
     // In this example, only windows with the `about:blank` url will be created.
     // All other urls will be blocked.
@@ -725,6 +827,7 @@ function initialize() {
       try {
         if (win && !(win as any).isDestroyed()) {
           await loadDevServerUrl(win, MAIN_WINDOW_VITE_DEV_SERVER_URL);
+          rendererHtmlLoaded = true;
           if (!process.env.IS_TEST) (win as any).webContents.openDevTools();
         }
       } catch (error) {
@@ -759,8 +862,16 @@ function initialize() {
 
         try {
           if (win && !(win as any).isDestroyed()) {
-            await (win as any).loadFile(htmlPath);
-            console.log("Successfully loaded HTML file from:", htmlPath);
+            const loadResult = await loadHtmlFileWithUrlFallback(
+              createHtmlFileLoader(win),
+              htmlPath
+            );
+            console.log(
+              "Successfully loaded HTML file from:",
+              htmlPath,
+              loadResult.method === "loadURL" ? `via ${loadResult.fileUrl}` : ""
+            );
+            rendererHtmlLoaded = true;
           } else {
             console.error("Window has been destroyed, cannot load file");
             dialog.showErrorBox(
@@ -768,6 +879,7 @@ function initialize() {
               "The application window was destroyed before it could load. Please restart the application."
             );
             (app as any).quit();
+            scheduleForcedAppExit("main window destroyed before HTML load");
             return;
           }
         } catch (error) {
@@ -776,6 +888,16 @@ function initialize() {
             htmlPath
           );
           console.error("Error details:", error);
+          if (error instanceof HtmlFileLoadError) {
+            console.error(
+              "Renderer load failed for both strategies. file URL:",
+              error.fileUrl,
+              "| loadURL error:",
+              error.loadUrlError,
+              "| loadFile error:",
+              error.loadFileError
+            );
+          }
 
           if (
             error instanceof Error &&
@@ -787,6 +909,7 @@ function initialize() {
               "The application window was destroyed during loading. Please restart the application."
             );
             (app as any).quit();
+            scheduleForcedAppExit("main window destroyed during HTML load");
             return;
           }
 
@@ -798,6 +921,23 @@ function initialize() {
       }
     }
   }
+
+  onSecondInstanceActivate = () => {
+    const hasLiveWindow = !!(win && !(win as any).isDestroyed());
+    const action = resolveSecondInstanceWindowAction({
+      hasLiveWindow,
+      rendererHtmlLoaded,
+    });
+    if (action === "focus" && win && !(win as any).isDestroyed()) {
+      if ((win as any).isMinimized()) (win as any).restore();
+      (win as any).focus();
+      return;
+    }
+    log.warn(
+      "[second-instance] recreating main window (missing or unloaded renderer)"
+    );
+    void createWindow();
+  };
 
   // Quit when all windows are closed.
   (app as any).on("window-all-closed", () => {
@@ -812,12 +952,7 @@ function initialize() {
   (app as any).on("before-quit", async () => {
     // Remove startup marker on clean shutdown so the next launch does not
     // mistake a graceful exit for a crash.
-    try {
-      const __startupMarker = getStartupMarkerPath();
-      if (fs.existsSync(__startupMarker)) fs.rmSync(__startupMarker);
-    } catch {
-      /* ignore */
-    }
+    clearStartupMarker();
 
     // Stop the dev browser bridge (no-op if it never started).
     try {
@@ -1113,6 +1248,7 @@ function initialize() {
   });
 
   (app as any).on("will-quit", () => {
+    clearStartupMarker();
     globalShortcut.unregisterAll();
   });
 
@@ -1195,9 +1331,18 @@ function makeSingleInstance(): void {
     // console.log('gotThelock:', gotThelock)
 
     (app as any).on("second-instance", (event, argv, workingDirectory) => {
-      if (win) {
-        if ((win as any).isMinimized()) (win as any).restore();
-        (win as any).focus();
+      try {
+        if (onSecondInstanceActivate) {
+          onSecondInstanceActivate();
+        } else if (win && !(win as any).isDestroyed()) {
+          if ((win as any).isMinimized()) (win as any).restore();
+          (win as any).focus();
+        }
+      } catch (err: unknown) {
+        log.error(
+          "[second-instance] activate failed",
+          err instanceof Error ? err.message : String(err)
+        );
       }
 
       // console.log("second-instance call")
@@ -1409,26 +1554,29 @@ function sendLoginError(message: string): void {
 }
 
 /**
- * Show the "report crash" prompt if the previous session ended in an
- * unclean shutdown. No-op when there is no `unclean-shutdown` record on
- * disk (e.g. first launch or after a clean exit). The function is wrapped
- * in a try/catch so a failure in the diagnostics layer can never block
- * app startup — `maybeShowCrashPrompt` is invoked fire-and-forget via
- * `void` from `app.whenReady`.
- *
- * v1 note: this is not throttled by `lastPromptedCrashId`. The prompt
- * shows at most once per session that has an unread unclean-shutdown
- * record. Throttling is a P2 follow-up.
+ * Show the "report crash" prompt only when THIS launch detected a leftover
+ * startup marker (true unclean previous exit). Historical crash.jsonl rows
+ * alone must not re-open the dialog after a normal quit. After any user
+ * choice (including Dismiss), persist the crashId so the same event cannot
+ * prompt again.
  */
 async function maybeShowCrashPrompt(): Promise<void> {
   // Production only (see startup-marker logic above). Dev builds are killed
   // repeatedly without graceful shutdown, so prompting would be noise.
   if (!(app as any).isPackaged) return;
   try {
-    const { CrashLogSink } = await import("@/modules/diagnostics/CrashLogSink");
-    const records = CrashLogSink.readAll();
-    const latest = records.find((r) => r.crashType === "unclean-shutdown");
-    if (!latest) return;
+    const crashId = __uncleanShutdownCrashIdThisLaunch;
+    if (
+      !shouldShowUncleanShutdownPrompt({
+        detectedThisLaunch: crashId !== null,
+        crashId,
+        lastPromptedCrashId: getLastPromptedCrashId(),
+      })
+    ) {
+      return;
+    }
+    if (!crashId) return;
+
     const choice = await dialog.showMessageBox({
       type: "question",
       title: "AiFetchly",
@@ -1439,16 +1587,20 @@ async function maybeShowCrashPrompt(): Promise<void> {
       defaultId: 0,
       cancelId: 2,
     });
+    // Always mark prompted after the dialog — including Dismiss — so a single
+    // historical unclean-shutdown cannot reappear on every normal launch.
+    setLastPromptedCrashId(crashId);
+
     if (choice.response === 0) {
       const { uploadLatestUncleanShutdown } = await import(
         "@/main-process/communication/diagnostics-ipc"
       );
-      await uploadLatestUncleanShutdown(latest.crashId);
+      await uploadLatestUncleanShutdown(crashId);
     } else if (choice.response === 1) {
       const { exportLatestReport } = await import(
         "@/main-process/communication/diagnostics-ipc"
       );
-      await exportLatestReport(latest.crashId);
+      await exportLatestReport(crashId);
     }
   } catch (e) {
     log.warn("[crash-prompt] failed", e);
