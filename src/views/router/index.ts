@@ -87,6 +87,18 @@ export const constantRoutes: RouteRecordRaw[] = [
         component: () => import("@/views/pages/systemsetting/plugins.vue"),
         children: [],
       },
+      {
+        path: "ai-memory",
+        name: "system_setting_ai_memory",
+        meta: {
+          title: "route.ai_memory_management",
+          icon: "mdi-brain",
+          keepAlive: false,
+          visible: false,
+        },
+        component: () => import("@/views/pages/systemsetting/aiMemory.vue"),
+        children: [],
+      },
     ],
   },
 
