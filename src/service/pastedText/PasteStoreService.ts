@@ -23,6 +23,26 @@ async function ensureDir(dir: string): Promise<void> {
   await fs.mkdir(dir, { recursive: true });
 }
 
+/**
+ * Best-effort bulk delete: unlinks each entry concurrently, swallowing
+ * per-file errors so one failure (e.g. a concurrently-removed file) doesn't
+ * abort the rest of cleanup. Awaited so callers see deletions completed.
+ */
+async function deleteEntries(
+  cacheRoot: string,
+  toDelete: ReadonlyArray<{ name: string }>
+): Promise<void> {
+  await Promise.all(
+    toDelete.map(async (e) => {
+      try {
+        await fs.unlink(path.join(cacheRoot, e.name));
+      } catch {
+        // ignore: best-effort cleanup
+      }
+    })
+  );
+}
+
 export class PasteStoreService {
   constructor(private readonly cacheRoot?: string) {}
 
@@ -95,13 +115,15 @@ export class PasteStoreService {
     const maxAgeMs = Math.max(0, maxAgeDays) * 24 * 60 * 60 * 1000;
 
     const survivors: typeof entries = [];
+    const agedOut: typeof entries = [];
     for (const e of entries) {
       if (maxAgeMs > 0 && now - e.mtimeMs > maxAgeMs) {
-        void fs.unlink(path.join(cacheRoot, e.name)).catch(() => undefined);
+        agedOut.push(e);
       } else {
         survivors.push(e);
       }
     }
+    await deleteEntries(cacheRoot, agedOut);
 
     if (survivors.length <= maxFiles) return;
 
@@ -110,14 +132,6 @@ export class PasteStoreService {
       0,
       Math.max(0, survivors.length - maxFiles)
     );
-    await Promise.all(
-      toDelete.map(async (e) => {
-        try {
-          await fs.unlink(path.join(cacheRoot, e.name));
-        } catch {
-          // ignore: best-effort cleanup
-        }
-      })
-    );
+    await deleteEntries(cacheRoot, toDelete);
   }
 }
