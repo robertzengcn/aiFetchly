@@ -56,6 +56,15 @@ interface ChatV2StreamListeners {
 }
 const streamListenersByConversation = new Map<string, ChatV2StreamListeners>();
 
+/**
+ * Registry key used when a stream request omits a conversation id. V2 always
+ * sets one in production, but the API still supports the legacy no-id path;
+ * this sentinel keeps those listeners tracked so cleanup can detach them
+ * instead of leaking (windowReceive registered them, but without a key the
+ * registry had no handle to remove them with).
+ */
+const GLOBAL_STREAM_CONVERSATION_KEY = "__aiChatV2_global_stream__";
+
 const detachConversationStreamListeners = (
   conversationId: string,
   resolvePending: boolean
@@ -168,6 +177,11 @@ export async function streamChatV2Message(
       request.conversationId.length > 0
         ? request.conversationId
         : undefined;
+    // Registry key always resolves to a string so listeners are tracked even
+    // on the legacy no-conversationId path (otherwise they could never be
+    // detached, leaking windowReceive registrations).
+    const conversationKey =
+      expectedConversationId ?? GLOBAL_STREAM_CONVERSATION_KEY;
     const isChunkForRequest = (chunk: ChatV2StreamChunk): boolean => {
       if (!expectedConversationId) return true;
       if (chunk.conversationId === expectedConversationId) return true;
@@ -176,12 +190,7 @@ export async function streamChatV2Message(
       return !chunk.conversationId && chunk.eventType === "error";
     };
     const cleanup = (): void => {
-      if (expectedConversationId) {
-        detachConversationStreamListeners(expectedConversationId, false);
-      } else {
-        // Legacy no-conversationId fallback (V2 always sets one): clear all.
-        clearChatV2StreamListeners();
-      }
+      detachConversationStreamListeners(conversationKey, false);
     };
 
     const chunkHandler = (raw: unknown): void => {
@@ -270,11 +279,7 @@ export async function streamChatV2Message(
       // conversation re-send supersedes the in-flight stream). Other
       // conversations' listeners are intentionally left registered so their
       // background streams keep receiving their own chunks.
-      if (expectedConversationId) {
-        detachConversationStreamListeners(expectedConversationId, false);
-      } else {
-        clearChatV2StreamListeners();
-      }
+      detachConversationStreamListeners(conversationKey, false);
       const chunkListener = windowReceive(
         AI_CHAT_V2_STREAM_CHUNK,
         chunkHandler
@@ -283,13 +288,11 @@ export async function streamChatV2Message(
         AI_CHAT_V2_STREAM_COMPLETE,
         completeHandler
       );
-      if (expectedConversationId) {
-        streamListenersByConversation.set(expectedConversationId, {
-          chunkListener,
-          completeListener,
-          detachedResolve: resolve,
-        });
-      }
+      streamListenersByConversation.set(conversationKey, {
+        chunkListener,
+        completeListener,
+        detachedResolve: resolve,
+      });
       void windowSend(AI_CHAT_V2_STREAM, request).catch((err: unknown) => {
         cleanup();
         const error =
