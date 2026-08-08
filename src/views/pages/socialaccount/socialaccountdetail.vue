@@ -145,14 +145,6 @@
           >
             {{ t('socialaccount.upload_cookies_button') }}
           </v-btn>
-          <v-btn
-            color="secondary"
-            variant="tonal"
-            prepend-icon="mdi-import"
-            @click="openImportDialog"
-          >
-            {{ t('socialaccount.import.button') }}
-          </v-btn>
         </v-card-actions>
       </v-card>
 
@@ -296,10 +288,6 @@ async function refreshMetadata(): Promise<void> {
   } catch {
     // Non-fatal: status chip simply stays empty.
   }
-}
-
-function openImportDialog(): void {
-  importDialog.value = true;
 }
 
 function setupUploadCookiesListener(): void {
