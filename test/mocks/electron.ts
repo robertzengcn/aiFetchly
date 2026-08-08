@@ -91,6 +91,8 @@ declare global {
 export const app = {
   isReady: () => false,
   getName: () => "aiFetchly",
+  getVersion: () => "1.0.0",
+  isPackaged: false,
   getPath: (name: string) => {
     const paths: Record<string, string> = {
       home: "/tmp/test/home",
@@ -99,6 +101,23 @@ export const app = {
       temp: "/tmp/test/temp",
     };
     return paths[name] || "/tmp/test";
+  },
+};
+
+/**
+ * Minimal `autoUpdater` surface used by AppUpdateService. Tests inject their
+ * own fake via the service's dependency interface, so this only needs to
+ * satisfy TypeScript for main-process wiring code.
+ */
+export const autoUpdater = {
+  on(_event: string, _listener: (...args: unknown[]) => void): unknown {
+    return undefined;
+  },
+  checkForUpdates(): void {
+    // mock
+  },
+  quitAndInstall(): void {
+    // mock
   },
 };
 
@@ -327,6 +346,7 @@ export const webUtils = {
 
 export default {
   app,
+  autoUpdater,
   BrowserWindow,
   ipcMain,
   ipcRenderer,

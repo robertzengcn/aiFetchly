@@ -143,6 +143,11 @@ import {
   USER_CHECK_LOGIN,
   USER_SIGNOUT,
   GET_APP_INFO,
+  APP_OPEN_WEBSITE,
+  APP_GET_UPDATE_STATUS,
+  APP_CHECK_FOR_UPDATES,
+  APP_INSTALL_UPDATE,
+  APP_UPDATE_STATUS_EVENT,
   GETEMAILSEARCHTASK,
   GET_SEARCH_TASK_DETAILS,
   UPDATE_SEARCH_TASK,
@@ -568,6 +573,7 @@ contextBridge.exposeInMainWorld("api", {
       // Yandex Maps Scraper Channels
       YANDEX_MAPS_SEARCH_RESULT,
       YANDEX_MAPS_SEARCH_PROGRESS,
+      APP_UPDATE_STATUS_EVENT,
       // AI Chat V2 scheduled-loop conversation update broadcast
       AI_CHAT_V2_CONVERSATION_UPDATED,
       // Live scheduled-turn token stream
@@ -642,6 +648,7 @@ contextBridge.exposeInMainWorld("api", {
       // Yandex Maps Scraper Channels
       YANDEX_MAPS_SEARCH_RESULT,
       YANDEX_MAPS_SEARCH_PROGRESS,
+      APP_UPDATE_STATUS_EVENT,
       // AI Chat V2 scheduled-loop conversation update broadcast
       AI_CHAT_V2_CONVERSATION_UPDATED,
       // Live scheduled-turn token stream
@@ -678,6 +685,7 @@ contextBridge.exposeInMainWorld("api", {
       // Yandex Maps Scraper Channels
       YANDEX_MAPS_SEARCH_RESULT,
       YANDEX_MAPS_SEARCH_PROGRESS,
+      APP_UPDATE_STATUS_EVENT,
       // AI Chat V2 scheduled-loop conversation update broadcast
       AI_CHAT_V2_CONVERSATION_UPDATED,
       // Live scheduled-turn token stream
@@ -811,6 +819,10 @@ contextBridge.exposeInMainWorld("api", {
       CRON_NEXT_RUN_TIME,
       GET_LOGIN_URL,
       GET_APP_INFO,
+      APP_OPEN_WEBSITE,
+      APP_GET_UPDATE_STATUS,
+      APP_CHECK_FOR_UPDATES,
+      APP_INSTALL_UPDATE,
       GETEMAILSEARCHTASK,
       GET_SEARCH_TASK_DETAILS,
       UPDATE_SEARCH_TASK,

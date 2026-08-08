@@ -2939,4 +2939,29 @@ export default {
     sendSuccess: "レポートを送信しました。ありがとうございます！",
     sendFailed: "送信に失敗しました：",
   },
+  about: {
+    title: "AiFetchly について",
+    app_name: "AiFetchly",
+    version: "バージョン",
+    website: "ウェブサイト",
+    open_website: "ウェブサイトを開く",
+    check_for_updates: "更新を確認",
+    restart_to_install: "再起動して更新",
+    status_idle: "クリックして最新バージョンを確認します。",
+    status_checking: "更新を確認しています…",
+    status_up_to_date: "最新バージョンです ({version})。",
+    status_downloading: "更新をダウンロードしています…",
+    status_ready_to_restart:
+      "更新がダウンロードされました。再起動して適用します。",
+    status_error: "更新を確認できませんでした。後でもう一度お試しください。",
+    unsupported_development: "開発ビルドでは更新確認は利用できません。",
+    unsupported_store: "更新は Microsoft Store によって管理されます。",
+    unsupported_platform:
+      "このプラットフォームでは自動更新はサポートされていません。",
+    open_website_failed:
+      "ウェブサイトを開けませんでした。後でもう一度お試しください。",
+    cooldown_active:
+      "最近確認しました。しばらく待ってからもう一度お試しください。",
+
+  },
 };

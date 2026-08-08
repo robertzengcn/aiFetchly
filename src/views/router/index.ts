@@ -176,6 +176,21 @@ export const constantRoutes: RouteRecordRaw[] = [
         component: () => import("@/views/pages/systemsetting/subagents.vue"),
         children: [],
       },
+      {
+        path: "about",
+        name: "system_setting_about",
+        meta: {
+          title: "about.title",
+          icon: "mdi-information-outline",
+          keepAlive: false,
+          visible: false,
+          aiNavigable: true,
+          aiAliases: ["about", "app version", "check for updates"],
+          aiDescription: "View the app version and check for updates",
+        },
+        component: () => import("@/views/pages/systemsetting/about.vue"),
+        children: [],
+      },
     ],
   },
 
@@ -941,16 +956,16 @@ export const constantRoutes: RouteRecordRaw[] = [
     },
     component: Layout,
     children: [
-        {
-          path: "list",
-          component: () =>
-            import(
-              /* webpackChunkName: "staff-list" */ "@/views/pages/socialaccount/socialaccount.vue"
-            ),
-          name: "SocialAccount",
-          meta: {
-            visible: false,
-            title: "route.tool_account_list",
+      {
+        path: "list",
+        component: () =>
+          import(
+            /* webpackChunkName: "staff-list" */ "@/views/pages/socialaccount/socialaccount.vue"
+          ),
+        name: "SocialAccount",
+        meta: {
+          visible: false,
+          title: "route.tool_account_list",
           icon: "mdi-account-details",
         },
       },

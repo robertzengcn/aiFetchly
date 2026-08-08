@@ -2994,4 +2994,31 @@ export default {
     sendSuccess: "Bericht gesendet. Vielen Dank!",
     sendFailed: "Senden fehlgeschlagen:",
   },
+  about: {
+    title: "Über AiFetchly",
+    app_name: "AiFetchly",
+    version: "Version",
+    website: "Website",
+    open_website: "Website öffnen",
+    check_for_updates: "Nach Updates suchen",
+    restart_to_install: "Zum Aktualisieren neu starten",
+    status_idle: "Klicken Sie, um nach der neuesten Version zu suchen.",
+    status_checking: "Suche nach Updates…",
+    status_up_to_date: "Sie verwenden die neueste Version ({version}).",
+    status_downloading: "Update wird heruntergeladen…",
+    status_ready_to_restart:
+      "Update heruntergeladen. Zum Anwenden neu starten.",
+    status_error:
+      "Suche nach Updates nicht möglich. Versuchen Sie es später erneut.",
+    unsupported_development:
+      "Update-Prüfungen sind in Entwicklungsversionen nicht verfügbar.",
+    unsupported_store: "Updates werden über den Microsoft Store verwaltet.",
+    unsupported_platform:
+      "Automatische Updates werden auf dieser Plattform nicht unterstützt.",
+    open_website_failed:
+      "Die Website konnte nicht geöffnet werden. Versuchen Sie es später erneut.",
+    cooldown_active:
+      "Kürzlich geprüft. Bitte warten Sie eine Minute, bevor Sie es erneut versuchen.",
+
+  },
 };

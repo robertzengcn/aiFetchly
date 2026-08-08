@@ -427,9 +427,8 @@ function initialize() {
     const alternativePaths = getPackagedRendererHtmlCandidates(
       {
         dirname: __dirname,
-        resourcesPath: (
-          process as NodeJS.Process & { resourcesPath?: string }
-        ).resourcesPath,
+        resourcesPath: (process as NodeJS.Process & { resourcesPath?: string })
+          .resourcesPath,
         existsSync: fs.existsSync,
       },
       MAIN_WINDOW_VITE_NAME
@@ -610,7 +609,7 @@ function initialize() {
         }
       }
       //if (userdataPath){//register communication ipc handlers
-      registerCommunicationIpcHandlers(win);
+      registerCommunicationIpcHandlers(win, () => win);
 
       // INIT-01: Wire FileOperationTracker to the window's webContents
       FileOperationTracker.setWebContents(win.webContents);
@@ -753,10 +752,7 @@ function initialize() {
           },
           MAIN_WINDOW_VITE_NAME
         ) ??
-        path.join(
-          __dirname,
-          `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`
-        );
+        path.join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`);
 
       if (fs.existsSync(htmlPath)) {
         log.info("Attempting to load HTML file from:", htmlPath);

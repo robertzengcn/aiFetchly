@@ -196,6 +196,18 @@ export const USER_SIGNOUT = "user:signout";
 // App Information Channels
 export const GET_APP_INFO = "app:info";
 
+// About / App Update Channels (About aiFetchly page)
+/** Renderer→Main: open the allowlisted official website via shell.openExternal. */
+export const APP_OPEN_WEBSITE = "app:open:website";
+/** Renderer→Main: fetch a snapshot of the current update status. */
+export const APP_GET_UPDATE_STATUS = "app:update:status";
+/** Renderer→Main: trigger a manual GitHub update check (cooldown + concurrency guarded). */
+export const APP_CHECK_FOR_UPDATES = "app:check-for-updates";
+/** Renderer→Main: quit and install a downloaded update (only when ready-to-restart). */
+export const APP_INSTALL_UPDATE = "app:install-update";
+/** Main→Renderer: pushed on every update status state transition. */
+export const APP_UPDATE_STATUS_EVENT = "app:update:status:event";
+
 // Platform Management Channels
 export const PLATFORM_LIST = "platform:list";
 export const PLATFORM_DETAIL = "platform:detail";

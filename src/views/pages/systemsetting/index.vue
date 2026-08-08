@@ -60,6 +60,16 @@
               <v-icon left>mdi-robot-outline</v-icon>
               {{ t('system_settings.manage_subagents') || 'Manage Subagents' }}
             </v-btn>
+            <v-btn
+              color="primary"
+              variant="outlined"
+              block
+              @click="navigateToAbout"
+              class="mb-2"
+            >
+              <v-icon left>mdi-information-outline</v-icon>
+              {{ t('about.title') || 'About aiFetchly' }}
+            </v-btn>
           </v-card-text>
         </v-card>
       </v-col>
@@ -460,6 +470,10 @@ function navigateToHooks() {
 
 function navigateToSubagents() {
   router.push({ name: 'system_setting_subagents' });
+}
+
+function navigateToAbout() {
+  router.push({ name: 'system_setting_about' });
 }
 
 onMounted(() => {
