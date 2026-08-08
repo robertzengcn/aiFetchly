@@ -769,6 +769,7 @@ import {
   clearToolProgressForToolResult,
   hasPendingToolExecution,
 } from "./toolExecutionStateUtil";
+import { isPlanStateActive } from "./planStateUtil";
 import {
   downscaleImageAttachment,
   arrayBufferToBase64,
@@ -2240,14 +2241,13 @@ function hydrateFileOpsFromMessages(
 
 const applyPlanState = (state: AIChatPlanStateView | null): void => {
   planState.value = state;
-  if (
-    state &&
-    state.status !== "completed" &&
-    state.status !== "cancelled" &&
-    state.status !== "rejected"
-  ) {
-    mode.value = "plan";
-  }
+  // Drive the mode selector from the plan state: an in-progress plan keeps
+  // the conversation in "plan" mode, while a cleared or terminal plan
+  // (completed / cancelled / rejected) returns it to "chat". This prevents
+  // plan mode from leaking into a newly created or switched-to conversation
+  // — previously mode was only ever set to "plan" and never reset, so it
+  // persisted across conversations.
+  mode.value = isPlanStateActive(state) ? "plan" : "chat";
 };
 
 const streamStatus = computed<Status>(() => {
