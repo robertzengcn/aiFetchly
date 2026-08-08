@@ -78,4 +78,24 @@ describe("AiMemoryPage actions", () => {
     expect(api.delete).toHaveBeenCalledWith("m1");
     expect(api.list.mock.calls.length).toBeGreaterThan(before);
   });
+
+  it("does not refresh when archive fails", async () => {
+    api.archive.mockResolvedValue({ status: false, msg: "nope", data: null });
+    const w = mountPage();
+    await flushPromises();
+    const before = api.list.mock.calls.length;
+    await w.vm.handleArchive(mem);
+    expect(api.archive).toHaveBeenCalledWith("m1");
+    expect(api.list.mock.calls.length).toBe(before);
+  });
+
+  it("does not refresh when delete fails", async () => {
+    api.delete.mockResolvedValue({ status: false, msg: "nope", data: 0 });
+    const w = mountPage();
+    await flushPromises();
+    const before = api.list.mock.calls.length;
+    await w.vm.handleDelete(mem);
+    expect(api.delete).toHaveBeenCalledWith("m1");
+    expect(api.list.mock.calls.length).toBe(before);
+  });
 });
