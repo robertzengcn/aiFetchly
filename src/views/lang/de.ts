@@ -2404,6 +2404,13 @@ export default {
       open_model_settings: "Einstellungen öffnen",
       chat_unavailable:
         "Chat nicht verfügbar. Ihr Transkript wurde im Eingabefeld behalten.",
+      tts_model_missing:
+        "Gesprochene Antworten benötigen ein Sprachmodell. Installieren Sie es, um sie zu aktivieren.",
+      install_tts_model: "Sprachmodell installieren",
+      tts_model_install_failed:
+        "Installation des Sprachmodells fehlgeschlagen.",
+      tts_runtime_missing:
+        "Gesprochene Antworten benötigen die lokale Sprachlaufzeit, die noch nicht installiert ist. Verwenden Sie die Spracheingabe im Chat, um sie zu installieren, und aktivieren Sie dann gesprochene Antworten.",
     },
     title: "KI-Assistent",
     show_reasoning: "Denkvorgang anzeigen",

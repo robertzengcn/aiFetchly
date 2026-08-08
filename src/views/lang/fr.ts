@@ -2395,6 +2395,12 @@ export default {
       open_model_settings: "Ouvrir les paramètres",
       chat_unavailable:
         "Le chat est indisponible. Votre transcription a été conservée dans le composeur.",
+      tts_model_missing:
+        "Les réponses parlées nécessitent un modèle vocal. Installez-le pour l'activer.",
+      install_tts_model: "Installer le modèle vocal",
+      tts_model_install_failed: "Échec de l'installation du modèle vocal.",
+      tts_runtime_missing:
+        "Les réponses parlées nécessitent le runtime vocal local, qui n'est pas encore installé. Utilisez la saisie vocale dans le chat pour l'installer, puis activez les réponses parlées.",
     },
     title: "Assistant IA",
     show_reasoning: "Afficher le raisonnement",
