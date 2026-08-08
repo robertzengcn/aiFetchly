@@ -14,6 +14,10 @@
 
         <!-- Toolbar -->
         <div class="d-flex flex-wrap align-center ga-3 mb-4">
+          <v-btn color="primary" variant="flat" @click="openCreate">
+            <v-icon left>mdi-plus</v-icon>
+            {{ t('aiMemory.button_create') }}
+          </v-btn>
           <v-text-field
             v-model="filters.query"
             :placeholder="t('aiMemory.search_placeholder')"
@@ -109,7 +113,17 @@
                 </td>
                 <td>{{ m.sourceKind ? t(`aiMemory.source_${m.sourceKind}`) : '' }}</td>
                 <td>{{ m.updatedAt }}</td>
-                <td><!-- actions added in Task 4 --></td>
+                <td class="d-flex ga-1">
+                  <v-btn icon size="x-small" variant="text" :title="t('aiMemory.action_edit')" @click="openEdit(m)">
+                    <v-icon>mdi-pencil</v-icon>
+                  </v-btn>
+                  <v-btn icon size="x-small" variant="text" :title="t('aiMemory.action_archive')" @click="requestArchive(m)">
+                    <v-icon>mdi-archive</v-icon>
+                  </v-btn>
+                  <v-btn icon size="x-small" variant="text" color="error" :title="t('aiMemory.action_delete')" @click="requestDelete(m)">
+                    <v-icon>mdi-delete</v-icon>
+                  </v-btn>
+                </td>
               </tr>
             </tbody>
           </v-table>
@@ -128,6 +142,36 @@
         </div>
       </v-card-text>
     </v-card>
+
+    <AiMemoryFormDialog
+      v-model="dialogVisible"
+      :mode="dialogMode"
+      :memory="dialogMemory"
+      @saved="onSaved"
+    />
+
+    <v-dialog :model-value="confirmState !== null" max-width="480" @update:model-value="closeConfirm">
+      <v-card v-if="confirmState">
+        <v-card-title>
+          {{ confirmState.kind === 'archive' ? t('aiMemory.confirm_archive_title') : t('aiMemory.confirm_delete_title') }}
+        </v-card-title>
+        <v-card-text>
+          {{ confirmState.kind === 'archive' ? t('aiMemory.confirm_archive_text') : t('aiMemory.confirm_delete_text') }}
+        </v-card-text>
+        <v-card-actions>
+          <v-spacer />
+          <v-btn variant="text" @click="closeConfirm">{{ t('aiMemory.button_cancel') }}</v-btn>
+          <v-btn
+            :color="confirmState.kind === 'delete' ? 'error' : 'primary'"
+            @click="runConfirmed"
+          >
+            {{ confirmState.kind === 'archive' ? t('aiMemory.button_archive') : t('aiMemory.button_delete') }}
+          </v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
+    <v-snackbar v-model="snack" :timeout="2500">{{ snackMsg }}</v-snackbar>
   </v-container>
 </template>
 
@@ -136,6 +180,7 @@ import { ref, reactive, computed, watch, onMounted } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRouter } from "vue-router";
 import { aiUserMemoryApi } from "@/views/api/aiUserMemory";
+import AiMemoryFormDialog from "./components/AiMemoryFormDialog.vue";
 import {
   AI_USER_MEMORY_TYPES,
   AI_USER_MEMORY_STATUSES,
@@ -149,6 +194,84 @@ import {
 
 const { t } = useI18n();
 const router = useRouter();
+
+const dialogVisible = ref(false);
+const dialogMode = ref<"create" | "edit">("create");
+const dialogMemory = ref<AIUserMemoryView | null>(null);
+const confirmState = ref<{ kind: "archive" | "delete"; memory: AIUserMemoryView } | null>(null);
+const snack = ref(false);
+const snackMsg = ref("");
+
+function showToast(msg: string): void {
+  snackMsg.value = msg;
+  snack.value = true;
+}
+
+function openCreate(): void {
+  dialogMode.value = "create";
+  dialogMemory.value = null;
+  dialogVisible.value = true;
+}
+function openEdit(m: AIUserMemoryView): void {
+  dialogMode.value = "edit";
+  dialogMemory.value = m;
+  dialogVisible.value = true;
+}
+function onSaved(): void {
+  const wasCreate = dialogMode.value === "create";
+  dialogVisible.value = false;
+  showToast(wasCreate ? t("aiMemory.toast_created") : t("aiMemory.toast_updated"));
+  loadMemories();
+}
+
+function requestArchive(m: AIUserMemoryView): void {
+  confirmState.value = { kind: "archive", memory: m };
+}
+function requestDelete(m: AIUserMemoryView): void {
+  confirmState.value = { kind: "delete", memory: m };
+}
+function closeConfirm(): void {
+  confirmState.value = null;
+}
+
+async function runConfirmed(): Promise<void> {
+  const state = confirmState.value;
+  if (!state) return;
+  if (state.kind === "archive") {
+    await handleArchive(state.memory);
+  } else {
+    await handleDelete(state.memory);
+  }
+  closeConfirm();
+}
+
+async function handleArchive(m: AIUserMemoryView): Promise<void> {
+  try {
+    const res = await aiUserMemoryApi.archive(m.memoryId);
+    if (res.status) {
+      showToast(t("aiMemory.toast_archived"));
+      await loadMemories();
+    } else {
+      showToast(res.msg || t("aiMemory.toast_error"));
+    }
+  } catch {
+    showToast(t("aiMemory.toast_error"));
+  }
+}
+
+async function handleDelete(m: AIUserMemoryView): Promise<void> {
+  try {
+    const res = await aiUserMemoryApi.delete(m.memoryId);
+    if (res.status) {
+      showToast(t("aiMemory.toast_deleted"));
+      await loadMemories();
+    } else {
+      showToast(res.msg || t("aiMemory.toast_error"));
+    }
+  } catch {
+    showToast(t("aiMemory.toast_error"));
+  }
+}
 
 const memories = ref<AIUserMemoryView[]>([]);
 const isLoading = ref(false);
@@ -267,7 +390,16 @@ onMounted(() => {
   loadMemories();
 });
 
-defineExpose({ memories, loadMemories });
+defineExpose({
+  memories,
+  loadMemories,
+  openCreate,
+  openEdit,
+  handleArchive,
+  handleDelete,
+  dialogVisible,
+  dialogMode,
+});
 </script>
 
 <style scoped>
