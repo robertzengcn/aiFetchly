@@ -1217,9 +1217,7 @@ export class AIChatQueryEngine {
             messageId: matchedByToolId.assistantMessageId,
             errorMessage: userSafeError(err),
           });
-          this.clearActiveTurnState(matchedByToolId.conversationId);
-          this.pendingPermissions.delete(matchedByToolId.conversationId);
-          this.pendingPlanQuestions.delete(matchedByToolId.conversationId);
+          this.clearConversationTurnState(matchedByToolId.conversationId);
         });
 
       return { ok: true };
@@ -1371,9 +1369,7 @@ export class AIChatQueryEngine {
           messageId: pending.assistantMessageId,
           errorMessage: userSafeError(err),
         });
-        this.clearActiveTurnState(pending.conversationId);
-        this.pendingPermissions.delete(pending.conversationId);
-        this.pendingPlanQuestions.delete(pending.conversationId);
+        this.clearConversationTurnState(pending.conversationId);
       });
 
     return { ok: true };
@@ -1542,9 +1538,7 @@ export class AIChatQueryEngine {
           errorMessage: userSafeError(result.error),
         });
         this.dispatchStop(conversationId, "error");
-        this.clearActiveTurnState(conversationId, assistantMessageId);
-        this.pendingPermissions.delete(conversationId);
-        this.pendingPlanQuestions.delete(conversationId);
+        this.clearConversationTurnState(conversationId, assistantMessageId);
         break;
       }
       case "paused_for_permission": {
@@ -1600,6 +1594,22 @@ export class AIChatQueryEngine {
       return;
     }
     this.activeTurns.delete(conversationId);
+  }
+
+  /**
+   * Defensively clear ALL turn state for one conversation — the active entry
+   * plus any pending permission / plan-question entries. Used on
+   * failure / catch paths where state may be inconsistent. Terminal success
+   * paths (completed/cancelled) do NOT use this: a streaming turn lives only
+   * in activeTurns, so they call clearActiveTurnState directly.
+   */
+  private clearConversationTurnState(
+    conversationId: string,
+    assistantMessageId?: string
+  ): void {
+    this.clearActiveTurnState(conversationId, assistantMessageId);
+    this.pendingPermissions.delete(conversationId);
+    this.pendingPlanQuestions.delete(conversationId);
   }
 
   private createPersistingEventSink(
@@ -1731,8 +1741,6 @@ export class AIChatQueryEngine {
       messageId: assistantMessageId,
       errorMessage: userSafeError(err),
     });
-    this.clearActiveTurnState(conversationId, assistantMessageId);
-    this.pendingPermissions.delete(conversationId);
-    this.pendingPlanQuestions.delete(conversationId);
+    this.clearConversationTurnState(conversationId, assistantMessageId);
   }
 }
