@@ -4545,6 +4545,22 @@ onBeforeUnmount(() => {
   min-height: 0;
   overflow: hidden;
 }
+.v2-shell__tts-notice {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: 4px;
+  margin: 0 12px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  background: rgba(255, 152, 0, 0.1);
+  color: rgba(0, 0, 0, 0.7);
+  font-size: 12px;
+}
+.v2-shell__tts-notice-text {
+  min-width: 0;
+  flex: 1 1 auto;
+}
 .v2-shell__plan-panel {
   flex: 0 0 auto;
   padding: 0 12px;

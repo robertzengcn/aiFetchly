@@ -36,7 +36,7 @@
         @update:model-value="save"
       />
       <v-switch
-        v-model="spokenOn"
+        :model-value="spokenOn"
         color="primary"
         hide-details
         density="compact"
@@ -259,14 +259,12 @@ const voiceInputOn = computed({
     inputMode.value = value ? "push_to_talk" : "disabled";
   },
 });
-const spokenOn = computed({
-  get: () => ttsMode.value !== "disabled",
-  set: (value: boolean) => {
-    // Enabling spoken responses should speak normal assistant replies. Users
-    // can still narrow this with the "Speak only after voice input" switch.
-    ttsMode.value = value ? "all_assistant_messages" : "disabled";
-  },
-});
+// Read-only mirror of the persisted TTS mode. The spoken-responses switch uses
+// a controlled (:model-value) binding + `onToggleSpoken` so the gate decides
+// whether ttsMode actually changes — a v-model setter would flip ttsMode
+// before the prerequisite check, leaving the switch visually on while
+// unpersisted.
+const spokenOn = computed(() => ttsMode.value !== "disabled");
 const speakAfterVoiceOnly = computed({
   get: () => ttsMode.value === "after_voice_input",
   set: (value: boolean) => {
