@@ -1,5 +1,7 @@
 # PRD: Automated Electron UI Testing Pipeline
 
+Technical design: `docs/prd/playwright-ui-testing-technical-design.md`
+
 ## 1. Objective
 
 Establish a reliable automated end-to-end (E2E) testing pipeline for the
