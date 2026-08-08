@@ -211,6 +211,7 @@
 import { ref, computed, onMounted, onBeforeUnmount } from "vue";
 import { useI18n } from "vue-i18n";
 import {
+  AI_CHAT_V2_VOICE_MODELS_CHANGED_EVENT,
   getVoiceSettings,
   getVoiceStatus,
   setVoiceSettings,
@@ -443,6 +444,27 @@ function voiceModelName(model: VoiceModelCatalogEntry): string {
   return model.name;
 }
 
+/**
+ * Refresh TTS runtime/model readiness from the backend. Used after this
+ * panel's own downloads AND after model installs/removes triggered from other
+ * surfaces (e.g. the AiChatV2 chat header), which broadcast
+ * AI_CHAT_V2_VOICE_MODELS_CHANGED_EVENT. Without this, ttsRuntimeState would
+ * stay stale and the spoken-responses gate could block enablement after an
+ * external install — or wrongly allow it after an external uninstall.
+ */
+async function refreshTtsRuntimeState(): Promise<void> {
+  const status = await getVoiceStatus().catch(() => null);
+  if (status) {
+    ttsRuntimeState.value = status.ttsState;
+    if (status.ttsState === "ready") highlightTtsModel.value = false;
+  }
+}
+
+/** Window-event handler for model availability changes from any surface. */
+function handleVoiceModelsChanged(): void {
+  void refreshTtsRuntimeState();
+}
+
 async function onDownload(modelId: string): Promise<void> {
   downloadProgress.value = {
     ...downloadProgress.value,
@@ -456,11 +478,7 @@ async function onDownload(modelId: string): Promise<void> {
     notifyVoiceModelsChanged();
     // Refresh TTS readiness so the spoken-responses gate reflects the newly
     // installed model (e.g. unblock enabling after the Piper TTS download).
-    const status = await getVoiceStatus().catch(() => null);
-    if (status) {
-      ttsRuntimeState.value = status.ttsState;
-      if (status.ttsState === "ready") highlightTtsModel.value = false;
-    }
+    await refreshTtsRuntimeState();
   } catch {
     /* error shown via progress */
   }
@@ -478,9 +496,20 @@ onMounted(() => {
   unsubscribeProgress = onVoiceModelDownloadProgress((p) => {
     downloadProgress.value = { ...downloadProgress.value, [p.modelId]: p };
   });
+  // Model availability can change from other surfaces (e.g. the AiChatV2 chat
+  // header install flow). Refresh TTS readiness live so the spoken-responses
+  // gate never goes stale.
+  window.addEventListener(
+    AI_CHAT_V2_VOICE_MODELS_CHANGED_EVENT,
+    handleVoiceModelsChanged
+  );
 });
 onBeforeUnmount(() => {
   unsubscribeProgress?.();
+  window.removeEventListener(
+    AI_CHAT_V2_VOICE_MODELS_CHANGED_EVENT,
+    handleVoiceModelsChanged
+  );
 });
 </script>
 

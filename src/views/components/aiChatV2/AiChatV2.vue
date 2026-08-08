@@ -1298,6 +1298,7 @@ function ensureWorkspaceConversationId(): string {
   messages.value = [];
   streamError.value = null;
   applyPlanState(null);
+  mode.value = "chat";
   pendingQuestion.value = null;
   pendingPlanApproval.value = null;
   return conversationId;
@@ -2285,13 +2286,17 @@ function hydrateFileOpsFromMessages(
 
 const applyPlanState = (state: AIChatPlanStateView | null): void => {
   planState.value = state;
-  // Drive the mode selector from the plan state: an in-progress plan keeps
-  // the conversation in "plan" mode, while a cleared or terminal plan
-  // (completed / cancelled / rejected) returns it to "chat". This prevents
-  // plan mode from leaking into a newly created or switched-to conversation
-  // — previously mode was only ever set to "plan" and never reset, so it
-  // persisted across conversations.
-  mode.value = isPlanStateActive(state) ? "plan" : "chat";
+  // Drive the mode selector from the plan state ONLY when a plan actually
+  // exists: an active plan forces "plan"; a terminal plan (completed /
+  // cancelled / rejected) returns the conversation to "chat" (the leak this
+  // guards against — mode used to be set to "plan" and never reset). When
+  // state is null (no plan at all) we leave mode untouched, so a user's
+  // manually-selected "plan" mode survives a conversation switch or a
+  // mid-turn plan_state:null chunk. Explicit fresh starts (new conversation)
+  // reset mode directly at their call sites.
+  if (state !== null) {
+    mode.value = isPlanStateActive(state) ? "plan" : "chat";
+  }
 };
 
 const streamStatus = computed<Status>(() => {
@@ -2570,6 +2575,7 @@ const loadHistory = async (conversationId: string): Promise<void> => {
       }
     } catch {
       applyPlanState(null);
+      mode.value = "chat";
       pendingQuestion.value = null;
       pendingPlanApproval.value = null;
     }
@@ -2588,6 +2594,7 @@ const onNewConversation = (): void => {
   resetActiveRuntimeFields();
   resetScheduledLoopViewState();
   applyPlanState(null);
+  mode.value = "chat";
   pendingQuestion.value = null;
   pendingPlanApproval.value = null;
   // Reset context-usage tracking for the new conversation.
@@ -3668,7 +3675,15 @@ const onSend = async (
             if (chunk.contentDelta.trim().length > 0) {
               speechReceivedTextDelta = true;
             }
-            speechController.pushDelta(chunk.contentDelta);
+            // Only feed the shared speech synth for the conversation the user
+            // is currently viewing. Background concurrent streams are kept
+            // alive (concurrent-turns feature), so without this guard their
+            // deltas would fire/garble spoken responses for a conversation the
+            // user isn't looking at — every sibling active-view mutation below
+            // is already gated by isCurrentStreamView().
+            if (isCurrentStreamView()) {
+              speechController.pushDelta(chunk.contentDelta);
+            }
             // Live estimate: each streamed delta adds ~chars/4 tokens to the
             // running context total. The next usage_update event will snap
             // this back to the server's ground-truth count.
@@ -3858,10 +3873,15 @@ const onSend = async (
         ) {
           ensureAssistantAdded();
           assistant.content = complete.fullContent;
-          if (!speechReceivedTextDelta) {
-            speechController.pushDelta(complete.fullContent);
+          // Same view guard as the streaming token path: a background
+          // conversation's completion must not speak/flush into the shared
+          // speech synth while the user is viewing a different conversation.
+          if (isCurrentStreamView()) {
+            if (!speechReceivedTextDelta) {
+              speechController.pushDelta(complete.fullContent);
+            }
+            speechController.flush();
           }
-          speechController.flush();
         }
         const generatedImages =
           complete.images && complete.images.length > 0
