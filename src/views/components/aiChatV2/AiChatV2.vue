@@ -350,6 +350,50 @@
         </div>
       </v-sheet>
 
+      <!-- TTS prerequisite notice: shown when the user tries to enable spoken
+           responses (the header speaker toggle) before a TTS model is installed.
+           Mirrors the STT model-missing notice in AiChatV2Composer so the user
+           is guided to install instead of seeing silent failures on every reply. -->
+      <div
+        v-if="voiceTtsInstallPrompt"
+        class="v2-shell__tts-notice"
+        role="status"
+        aria-live="polite"
+      >
+        <v-icon size="x-small" color="warning" class="mr-1">mdi-volume-off</v-icon>
+        <span class="v2-shell__tts-notice-text">
+          {{
+            t("aiChatV2.voice.tts_model_missing") ||
+            "Spoken responses need a speech model. Install it to enable."
+          }}
+        </span>
+        <v-btn
+          size="x-small"
+          color="primary"
+          variant="tonal"
+          class="ml-2"
+          data-testid="install-tts-model"
+          :loading="voiceModelInstalling"
+          :disabled="voiceModelInstalling"
+          @click="handleInstallTtsModel"
+        >
+          {{
+            voiceModelInstalling
+              ? t("aiChatV2.voice.installing_model") || "Installing..."
+              : t("aiChatV2.voice.install_tts_model") || "Install speech model"
+          }}
+        </v-btn>
+        <v-btn
+          size="x-small"
+          variant="text"
+          class="ml-1"
+          :aria-label="t('aiChatV2.voice.open_model_settings') || 'Open settings'"
+          @click="openAIProviderSettings"
+        >
+          {{ t("aiChatV2.voice.open_model_settings") || "Open settings" }}
+        </v-btn>
+      </div>
+
       <AiChatV2Composer
         :is-streaming="chatIsRunning"
         :is-processing="isPreparingAttachments"
@@ -4057,6 +4101,13 @@ const voiceTtsMode = ref<AiChatVoiceTtsMode>("disabled");
 const voiceSettingsSaving = ref(false);
 const voiceModelInstalling = ref(false);
 const voiceModelInstallError = ref<string | null>(null);
+/**
+ * True when the user tried to enable spoken responses (TTS) but the speech
+ * model isn't installed. Drives an inline install affordance so we never
+ * persist a TTS enablement that would silently fail on every reply. Mirrors
+ * the STT model-missing notice in AiChatV2Composer.
+ */
+const voiceTtsInstallPrompt = ref(false);
 const DEFAULT_VOICE_STT_MODEL_ID = "sherpa-onnx:stt:whisper-base";
 const voiceRuntimeInstallDialog = ref(false);
 const voiceRuntimeInstalling = ref(false);
@@ -4207,10 +4258,33 @@ async function toggleSpokenResponse(): Promise<void> {
   voiceSettingsSaving.value = true;
   voiceModelInstallError.value = null;
   voicePlaybackError.value = null;
+  voiceTtsInstallPrompt.value = false;
   try {
-    const current = voiceSettings.value ?? await getVoiceSettings();
-    const nextTtsMode: AiChatVoiceTtsMode =
-      current.ttsMode === "disabled" ? "all_assistant_messages" : "disabled";
+    const current = voiceSettings.value ?? (await getVoiceSettings());
+    const enabling = current.ttsMode === "disabled";
+    if (enabling) {
+      // Verify the TTS runtime + model are installed before persisting an
+      // enablement that would otherwise silently fail synthesis on every
+      // assistant reply. Mirrors the voice-input (STT) prerequisite check in
+      // AiChatV2Composer.onMicClick.
+      const status = await getVoiceStatus();
+      voiceStatus.value = status;
+      if (status.ttsState === "unavailable") {
+        // Shared sherpa-onnx runtime missing -> offer the runtime installer
+        // (it fixes both STT and TTS). Do not persist ttsMode yet.
+        handleInstallVoiceRuntime();
+        return;
+      }
+      if (status.ttsState === "missing_model") {
+        // TTS model missing -> surface an install affordance in the chat.
+        // Do not persist ttsMode until the model is installed.
+        voiceTtsInstallPrompt.value = true;
+        return;
+      }
+    }
+    const nextTtsMode: AiChatVoiceTtsMode = enabling
+      ? "all_assistant_messages"
+      : "disabled";
     const saved = await setVoiceSettings({
       ...current,
       ttsMode: nextTtsMode,
@@ -4235,6 +4309,32 @@ async function handleInstallVoiceModel(): Promise<void> {
     const msg = err instanceof Error ? err.message : String(err);
     voiceModelInstallError.value =
       `${t("aiChatV2.voice.model_install_failed") || "Voice model installation failed."} ${msg}`;
+    await loadVoiceSettings();
+  } finally {
+    voiceModelInstalling.value = false;
+  }
+}
+
+/**
+ * Download the configured TTS (speech response) model. Triggered when the user
+ * tries to enable spoken responses before a TTS model is installed. Mirrors
+ * `handleInstallVoiceModel` but targets `ttsModelId` instead of the STT model.
+ */
+async function handleInstallTtsModel(): Promise<void> {
+  if (voiceModelInstalling.value) return;
+  voiceModelInstalling.value = true;
+  voiceModelInstallError.value = null;
+  voiceTtsInstallPrompt.value = false;
+  try {
+    const ttsModelId =
+      voiceSettings.value?.ttsModelId ?? "sherpa-onnx:tts:auto";
+    await downloadVoiceModel(ttsModelId);
+    notifyVoiceModelsChanged();
+    await loadVoiceSettings();
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    voiceModelInstallError.value =
+      `${t("aiChatV2.voice.tts_model_install_failed") || "Speech model installation failed."} ${msg}`;
     await loadVoiceSettings();
   } finally {
     voiceModelInstalling.value = false;

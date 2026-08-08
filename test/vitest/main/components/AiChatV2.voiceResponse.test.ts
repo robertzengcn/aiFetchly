@@ -5,10 +5,13 @@ import AiChatV2 from "@/views/components/aiChatV2/AiChatV2.vue";
 import AiChatVoiceSettingsPanel from "@/views/components/settings/AiChatVoiceSettingsPanel.vue";
 import { streamChatV2Message } from "@/views/api/aiChatV2";
 import {
+  downloadVoiceModel,
   getVoiceSettings,
+  getVoiceStatus,
   setVoiceSettings,
   synthesizeVoice,
 } from "@/views/api/aiChatV2Voice";
+import { prepareLocalAiRuntimeInstall } from "@/views/api/localAiRuntime";
 import type { ChatV2StreamRequest } from "@/entityTypes/aiChatV2Types";
 import type { AiChatVoiceSettingsView } from "@/entityTypes/aiChatVoiceTypes";
 
@@ -65,11 +68,27 @@ vi.mock("@/views/api/aiChatV2Voice", () => ({
   listVoiceModels: vi.fn().mockResolvedValue([]),
   notifyVoiceModelsChanged: vi.fn(),
   onVoiceModelDownloadProgress: vi.fn().mockReturnValue(() => undefined),
-  setVoiceSettings: vi.fn(async (settings: AiChatVoiceSettingsView) => settings),
+  setVoiceSettings: vi.fn(
+    async (settings: AiChatVoiceSettingsView) => settings
+  ),
   synthesizeVoice: vi.fn().mockResolvedValue({
     audioBase64: "d2F2",
     mimeType: "audio/wav",
   }),
+}));
+
+vi.mock("@/views/api/localAiRuntime", () => ({
+  prepareLocalAiRuntimeInstall: vi.fn().mockResolvedValue({
+    operationId: "op-1",
+    runtimeId: "voice-sherpa",
+    runtimeVersion: "1.0.0",
+    archiveSizeBytes: 5_000_000,
+    installedSizeBytes: 12_000_000,
+    consentToken: "consent",
+    expiresAt: "2099-01-01T00:00:00Z",
+  }),
+  installLocalAiRuntime: vi.fn().mockResolvedValue(undefined),
+  onLocalAiRuntimeProgress: vi.fn().mockReturnValue(() => undefined),
 }));
 
 vi.mock("@/views/api/aiProvider", () => ({
@@ -143,6 +162,10 @@ const i18n = createI18n({
           speech_speed: "Speech speed",
           max_recording_duration: "Max recording duration",
           voice_models: "Voice Models",
+          tts_model_missing:
+            "Spoken responses need a speech model. Install it to enable.",
+          install_tts_model: "Install speech model",
+          tts_runtime_missing: "Spoken responses need the local voice runtime.",
         },
       },
       common: {
@@ -215,6 +238,10 @@ describe("AiChatV2 spoken responses", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(getVoiceSettings).mockResolvedValue({ ...defaultVoiceSettings });
+    vi.mocked(getVoiceStatus).mockResolvedValue({
+      sttState: "ready",
+      ttsState: "ready",
+    });
     vi.mocked(streamChatV2Message).mockImplementation(
       async (
         request: ChatV2StreamRequest,
@@ -326,13 +353,67 @@ describe("AiChatV2 spoken responses", () => {
     const wrapper = mountChat();
     await flushPromises();
 
-    await wrapper.find('[data-testid="spoken-response-toggle"]').trigger("click");
+    await wrapper
+      .find('[data-testid="spoken-response-toggle"]')
+      .trigger("click");
 
     await vi.waitFor(() =>
       expect(setVoiceSettings).toHaveBeenCalledWith(
         expect.objectContaining({ ttsMode: "all_assistant_messages" })
       )
     );
+  });
+
+  it("does not enable spoken responses when the TTS model is missing; offers to install the speech model", async () => {
+    vi.mocked(getVoiceSettings).mockResolvedValue({
+      ...defaultVoiceSettings,
+      ttsMode: "disabled",
+    });
+    vi.mocked(getVoiceStatus).mockResolvedValue({
+      sttState: "ready",
+      ttsState: "missing_model",
+    });
+    const wrapper = mountChat();
+    await flushPromises();
+
+    await wrapper
+      .find('[data-testid="spoken-response-toggle"]')
+      .trigger("click");
+    await flushPromises();
+
+    // Must NOT persist an enablement that would silently fail every reply.
+    expect(setVoiceSettings).not.toHaveBeenCalled();
+
+    // Guidance is surfaced with an install affordance in the chat surface.
+    const installBtn = wrapper.find('[data-testid="install-tts-model"]');
+    expect(installBtn.exists()).toBe(true);
+    await installBtn.trigger("click");
+    await flushPromises();
+
+    await vi.waitFor(() =>
+      expect(downloadVoiceModel).toHaveBeenCalledWith("sherpa-onnx:tts:auto")
+    );
+  });
+
+  it("does not enable spoken responses when the TTS runtime is unavailable; opens the runtime installer", async () => {
+    vi.mocked(getVoiceSettings).mockResolvedValue({
+      ...defaultVoiceSettings,
+      ttsMode: "disabled",
+    });
+    vi.mocked(getVoiceStatus).mockResolvedValue({
+      sttState: "unavailable",
+      ttsState: "unavailable",
+    });
+    const wrapper = mountChat();
+    await flushPromises();
+
+    await wrapper
+      .find('[data-testid="spoken-response-toggle"]')
+      .trigger("click");
+    await flushPromises();
+
+    expect(setVoiceSettings).not.toHaveBeenCalled();
+    expect(prepareLocalAiRuntimeInstall).toHaveBeenCalledWith("voice-sherpa");
   });
 });
 
@@ -341,7 +422,7 @@ function mountVoiceSettingsPanel() {
     global: {
       plugins: [i18n],
       stubs: {
-        VAlert: true,
+        VAlert: { template: "<div><slot /></div>" },
         VBtn: true,
         VChip: true,
         VCol: true,
@@ -370,6 +451,10 @@ describe("AiChatVoiceSettingsPanel spoken response mode", () => {
       ...defaultVoiceSettings,
       ttsMode: "disabled",
     });
+    vi.mocked(getVoiceStatus).mockResolvedValue({
+      sttState: "ready",
+      ttsState: "ready",
+    });
   });
 
   it("enables spoken responses for normal assistant messages by default", async () => {
@@ -389,5 +474,29 @@ describe("AiChatVoiceSettingsPanel spoken response mode", () => {
         expect.objectContaining({ ttsMode: "all_assistant_messages" })
       )
     );
+  });
+
+  it("does not enable spoken responses when the TTS model is missing; shows an error", async () => {
+    vi.mocked(getVoiceSettings).mockResolvedValue({
+      ...defaultVoiceSettings,
+      ttsMode: "disabled",
+    });
+    vi.mocked(getVoiceStatus).mockResolvedValue({
+      sttState: "ready",
+      ttsState: "missing_model",
+    });
+    const wrapper = mountVoiceSettingsPanel();
+    await flushPromises();
+
+    const spokenSwitch = wrapper
+      .findAll(".voice-switch")
+      .find((button) =>
+        button.attributes("data-label")?.includes("spoken responses")
+      );
+    await spokenSwitch?.trigger("click");
+    await flushPromises();
+
+    expect(setVoiceSettings).not.toHaveBeenCalled();
+    expect(wrapper.text()).toContain("speech model");
   });
 });
