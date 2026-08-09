@@ -228,14 +228,24 @@ describe("UserSecretKeyService.getKey", () => {
     expect(key.length).toBe(32);
   });
 
-  it("discards an in-flight key when invalidate() fires during fetch (race fix)", async () => {
-    // Simulate a slow HTTP response that arrives AFTER invalidate() has bumped
-    // the generation. The stale key must be discarded, not cached.
-    let resolveHttp!: (value: unknown) => void;
-    const httpPromise = new Promise<unknown>((resolve) => {
-      resolveHttp = resolve;
+  it("refetches after invalidate() discards an in-flight key", async () => {
+    // A token refresh can invalidate the request generation while the
+    // secret-key request is in flight. The first response must be discarded,
+    // then getKey() must transparently fetch the current session's key.
+    let resolveFirstHttp!: (value: unknown) => void;
+    const firstHttpPromise = new Promise<unknown>((resolve) => {
+      resolveFirstHttp = resolve;
     });
-    const mock = makeMockedHttpClient(() => httpPromise);
+    let calls = 0;
+    const freshKeyBase64 = Buffer.alloc(32, 0x99).toString("base64");
+    const mock = makeMockedHttpClient(async () => {
+      calls++;
+      if (calls === 1) return await firstHttpPromise;
+      return {
+        status: true,
+        data: { secretKey: freshKeyBase64 },
+      };
+    });
     const service = new UserSecretKeyService(mock);
 
     // Start the fetch — it's now in-flight.
@@ -245,27 +255,14 @@ describe("UserSecretKeyService.getKey", () => {
     service.invalidate();
 
     // Now let the stale HTTP response arrive.
-    resolveHttp({
+    resolveFirstHttp({
       status: true,
       data: { secretKey: VALID_B64_KEY },
     });
 
-    // The in-flight fetch must reject with SecretKeyUnavailableError because
-    // the response belongs to the previous generation.
-    await expect(fetchPromise).rejects.toBeInstanceOf(
-      SecretKeyUnavailableError
-    );
-
-    // The stale key must NOT be cached — a fresh fetch should fire.
-    const mock2 = makeMockedHttpClient(async () => ({
-      status: true,
-      data: { secretKey: Buffer.alloc(32, 0x99).toString("base64") },
-    }));
-    Object.defineProperty(service, "httpClient", { value: mock2 });
-    const freshKey = await service.getKey();
-    expect(freshKey.length).toBe(32);
-    // The fresh key is the one we just returned, not the stale one.
+    const freshKey = await fetchPromise;
     expect(freshKey[0]).toBe(0x99);
+    expect(calls).toBe(2);
   });
 
   it("throws SecretKeyUnavailableError when backend returns status:false even if data.secretKey present", async () => {
