@@ -19,6 +19,30 @@ import * as path from "path";
 import * as crypto from "crypto";
 import { E2E_RUN_ROOT_SEGMENT, type E2ETestRoot } from "./types";
 
+/** Manifest written by the fixture, read + validated by the bootstrap seeder. */
+export interface E2EStateManifestInput {
+  readonly authState: "authenticated" | "unauthenticated";
+  readonly aiState: "hosted-disabled" | "local-enabled";
+  readonly fakeAiBaseUrl: string;
+  readonly workspacePath: string;
+}
+
+/** Write the validated state.json the E2EStateSeeder consumes. */
+export function writeStateManifest(
+  root: E2ETestRoot,
+  manifest: E2EStateManifestInput
+): void {
+  const payload = {
+    schemaVersion: 1,
+    authState: manifest.authState,
+    aiState: manifest.aiState,
+    locale: "en",
+    fakeAiBaseUrl: manifest.fakeAiBaseUrl,
+    workspacePath: manifest.workspacePath,
+  };
+  fs.writeFileSync(root.stateFilePath, JSON.stringify(payload), "utf8");
+}
+
 export interface CreateTemporaryRootOptions {
   /** Stable test identifier (title path). Sanitized into a path segment. */
   readonly testId: string;
@@ -28,19 +52,19 @@ export interface CreateTemporaryRootOptions {
 
 /** Replace any non-[a-zA-Z0-9-] run so the id is safe as a path segment. */
 export function sanitizeTestId(id: string): string {
-  return id
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 60) || "test";
+  return (
+    id
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 60) || "test"
+  );
 }
 
 function assertContainedUnderRunRoot(target: string): void {
   const resolved = path.resolve(target);
-  const runRootIndex = resolved
-    .split(path.sep)
-    .indexOf(E2E_RUN_ROOT_SEGMENT);
+  const runRootIndex = resolved.split(path.sep).indexOf(E2E_RUN_ROOT_SEGMENT);
   if (runRootIndex === -1) {
     throw new Error(
       `Refusing to delete path outside the ${E2E_RUN_ROOT_SEGMENT} run tree: ${resolved}`

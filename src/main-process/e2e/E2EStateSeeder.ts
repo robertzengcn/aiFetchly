@@ -25,7 +25,12 @@ import type { E2EEnvironment } from "./E2EEnvironment";
 import { parseStateManifest } from "./E2EEnvironment";
 import { AIProviderSettingsService } from "@/service/aiProvider/AIProviderSettingsService";
 import { Token } from "@/modules/token";
-import { USERSDBPATH, USER_AI_ENABLED } from "@/config/usersetting";
+import {
+  USERSDBPATH,
+  USER_AI_ENABLED,
+  USEREMAIL,
+  USERNAME,
+} from "@/config/usersetting";
 
 /** Must match FAKE_MODEL_ID in test/e2e/scenarios/openAiProtocol.ts. */
 const E2E_MODEL_ID = "aifetchly-e2e-model";
@@ -47,6 +52,15 @@ export function seedE2EState(environment: E2EEnvironment): void {
   // The database path always resolves through Token/USERSDBPATH; pin it to the
   // isolated root so Models/Modules never touch a real database (design §8.2).
   token.setValue(USERSDBPATH, environment.databasePath);
+
+  // Deterministic authenticated state: the router guard reads user info from
+  // the local Token store (UserController.getUserInfo -> USEREMAIL/USERNAME),
+  // so seeding these lets the app leave /login WITHOUT any remote login service
+  // (design §8.3). Unauthenticated state leaves them empty -> redirect to /login.
+  if (manifest.authState === "authenticated") {
+    token.setValue(USEREMAIL, "e2e@aifetchly.test");
+    token.setValue(USERNAME, "AiFetchly E2E");
+  }
 
   if (manifest.aiState === "local-enabled") {
     const settings = new AIProviderSettingsService(token);

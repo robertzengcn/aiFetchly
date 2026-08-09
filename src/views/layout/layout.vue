@@ -117,7 +117,7 @@ v-if="mainStore.isMobile" variant="text" icon="mdi-menu"
                             </v-list-item>
                         </v-list>
                     </v-menu>
-                    <v-btn variant="text" icon="mdi-chat" @click="toggleChat">
+                    <v-btn variant="text" icon="mdi-chat" data-testid="ai-chat-toggle" @click="toggleChat">
                         <v-icon size="small"></v-icon>
                     </v-btn>
                 </div>
