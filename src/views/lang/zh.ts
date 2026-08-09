@@ -2763,6 +2763,7 @@ export default {
     errors: {
       catalog_unavailable: "组件目录不可用，远程功能仍可正常使用。",
       download_failed: "下载失败。",
+      install_failed: "安装失败。请重试；如果仍然失败，请重启应用。",
       checksum_mismatch: "完整性校验失败。",
       archive_unsafe: "压缩包未通过安全检查。",
       incompatible: "该组件与当前应用版本不兼容。",

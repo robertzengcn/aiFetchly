@@ -2881,6 +2881,8 @@ export default {
       catalog_unavailable:
         "Catalogue de composants indisponible. Les fonctions distantes fonctionnent toujours.",
       download_failed: "Échec du téléchargement.",
+      install_failed:
+        "Échec de l'installation. Réessayez ; si le problème persiste, redémarrez l'application.",
       checksum_mismatch: "Échec de la vérification d'intégrité.",
       archive_unsafe: "L'archive a échoué aux contrôles de sécurité.",
       incompatible:

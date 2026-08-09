@@ -233,6 +233,7 @@ function formatBytes(bytes?: number): string {
 function errorMessageFor(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   // Best-effort mapping to localized strings.
+  if (/rename|eperm|operation not permitted|activat/i.test(message)) return t("localAiRuntime.errors.install_failed") as string;
   if (/checksum|integrity/i.test(message)) return t("localAiRuntime.errors.checksum_mismatch") as string;
   if (/safety|unsafe|archive/i.test(message)) return t("localAiRuntime.errors.archive_unsafe") as string;
   if (/health/i.test(message)) return t("localAiRuntime.errors.health_check_failed") as string;
@@ -314,6 +315,9 @@ async function onInstall(row: RuntimeRow): Promise<void> {
     await refresh();
   } catch (error) {
     lastError.value = errorMessageFor(error);
+    // Refresh so the row reflects the true post-failure state instead of
+    // staying on the stale pre-install status (e.g. still "download_required").
+    await refresh();
   } finally {
     row.busy = false;
   }

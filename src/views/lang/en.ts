@@ -2871,6 +2871,8 @@ export default {
       catalog_unavailable:
         "Component catalog unavailable. Remote features still work.",
       download_failed: "Download failed.",
+      install_failed:
+        "Installation failed. Please try again; if it keeps failing, restart the app.",
       checksum_mismatch: "Integrity check failed.",
       archive_unsafe: "Archive failed safety checks.",
       incompatible: "This component is not compatible with your app version.",

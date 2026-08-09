@@ -2838,6 +2838,8 @@ export default {
       catalog_unavailable:
         "コンポーネントカタログを利用できません。リモート機能は引き続き利用できます。",
       download_failed: "ダウンロードに失敗しました。",
+      install_failed:
+        "インストールに失敗しました。再試行してください。解決しない場合はアプリを再起動してください。",
       checksum_mismatch: "整合性チェックに失敗しました。",
       archive_unsafe: "アーカイブがセキュリティチェックを通過しませんでした。",
       incompatible:

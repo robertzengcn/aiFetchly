@@ -2892,6 +2892,8 @@ export default {
       catalog_unavailable:
         "Komponentenkatalog nicht verfügbar. Remote-Funktionen funktionieren weiterhin.",
       download_failed: "Download fehlgeschlagen.",
+      install_failed:
+        "Installation fehlgeschlagen. Bitte erneut versuchen; falls es weiterhin fehlschlägt, App neu starten.",
       checksum_mismatch: "Integritätsprüfung fehlgeschlagen.",
       archive_unsafe: "Archiv hat die Sicherheitsprüfungen nicht bestanden.",
       incompatible:
