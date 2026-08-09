@@ -8,6 +8,7 @@
 
 import { defineConfig } from "vite";
 import * as path from "path";
+import { builtinModules } from "node:module";
 
 export default defineConfig({
   resolve: {
@@ -26,7 +27,21 @@ export default defineConfig({
       fileName: () => "preload.js",
     },
     rollupOptions: {
-      external: ["sqlite3"],
+      // `electron` MUST stay external so the preload's `import ... from
+      // "electron"` resolves to Electron's built-in module at runtime. Without
+      // this, Vite bundles the `electron` npm package's index.js (which uses
+      // __dirname/spawnSync/path.txt to locate the binary), and that throws
+      // `ReferenceError: __dirname is not defined` in the sandboxed preload,
+      // so contextBridge never runs and `window.api` is never exposed.
+      external: [
+        "electron",
+        "electron/main",
+        "electron/renderer",
+        "electron/common",
+        ...builtinModules,
+        ...builtinModules.map((m) => `node:${m}`),
+        "sqlite3",
+      ],
     },
   },
 });

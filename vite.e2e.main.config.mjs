@@ -28,7 +28,18 @@ import {
   emptyModulesPlugin,
   fixInteropNamespacePlugin,
   platformCopyPlugin,
+  projectRoot,
 } from "./vite.main.shared.mjs";
+
+// Plain `vite build` (unlike forge plugin-vite) applies the `browser` field in
+// package.json, which resolves `form-data` (a nodemailer dep) to its browser
+// shim `lib/browser.js` — that shim references `window.FormData` at module load
+// and crashes the Electron MAIN process. Force the Node entry so the main
+// bundle matches production bundling.
+const E2E_MAIN_ALIAS = {
+  ...MAIN_PROCESS_RESOLVE_ALIAS,
+  "form-data": path.resolve(projectRoot, "node_modules/form-data/lib/form_data.js"),
+};
 
 // The renderer dev server Playwright starts via playwright.config.ts `webServer`.
 export const E2E_RENDERER_ORIGIN =
@@ -45,7 +56,7 @@ export default defineConfig({
     fixInteropNamespacePlugin(),
   ],
   resolve: {
-    alias: MAIN_PROCESS_RESOLVE_ALIAS,
+    alias: E2E_MAIN_ALIAS,
     conditions: ["node"],
   },
   define: {

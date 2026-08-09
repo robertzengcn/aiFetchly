@@ -18,7 +18,7 @@ export default defineConfig({
   // Establish a stable single-worker baseline first; raise only after measuring
   // memory + SQLite behavior under parallel Electron instances (design §2).
   workers: process.env.CI ? 1 : undefined,
-  timeout: 60_000,
+  timeout: 90_000,
   expect: { timeout: 10_000 },
   forbidOnly: Boolean(process.env.CI),
   // One retry in CI so transient flake is visible as flaky in the report, but

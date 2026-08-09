@@ -22,6 +22,7 @@
 
 import { app } from "electron";
 import { loadE2EEnvironment } from "./E2EEnvironment";
+import { installE2ENetworkGuard } from "./E2ENetworkGuard";
 
 async function start(): Promise<void> {
   const environment = loadE2EEnvironment(process.env);
@@ -35,7 +36,30 @@ async function start(): Promise<void> {
   process.env.IS_TEST = "1";
   process.env.NODE_ENV = "test";
 
-  // Dynamic import: lets background.ts run only AFTER userData/flags are set.
+  // Plain `vite build` (unlike forge plugin-vite) resolves the package.json
+  // `browser` field for some Node packages (e.g. joi, form-data), pulling
+  // browser/worker builds whose UMD wrappers reference `self`/`window` at
+  // module load and crash the Electron MAIN process (ReferenceError: self is
+  // not defined). Node 22 already provides FormData/fetch/Response on
+  // globalThis, so alias the web globals so those browser bundles resolve
+  // against the real Node implementations. E2E-only; production main builds
+  // (forge plugin-vite) bundle the Node entries and are unaffected.
+  const globalScope = globalThis as Record<string, unknown>;
+  if (globalScope.self === undefined) {
+    globalScope.self = globalThis;
+  }
+  if (globalScope.window === undefined) {
+    globalScope.window = globalThis;
+  }
+
+  // Install the default-deny network guard BEFORE importing production code so
+  // any outbound non-loopback request fails closed and is recorded (design §10.1).
+  installE2ENetworkGuard(environment);
+
+  // State seeder (Step 3) runs here for local-enabled/hosted-disabled scenarios,
+  // before the production window/IPC graph initializes.
+
+  // Dynamic import: lets background.ts run only AFTER userData/flags/policy are set.
   await import("../../background");
 }
 
