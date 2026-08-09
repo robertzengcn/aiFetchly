@@ -23,6 +23,7 @@
 import { app } from "electron";
 import { loadE2EEnvironment } from "./E2EEnvironment";
 import { installE2ENetworkGuard } from "./E2ENetworkGuard";
+import { seedE2EState } from "./E2EStateSeeder";
 
 async function start(): Promise<void> {
   const environment = loadE2EEnvironment(process.env);
@@ -56,8 +57,9 @@ async function start(): Promise<void> {
   // any outbound non-loopback request fails closed and is recorded (design §10.1).
   installE2ENetworkGuard(environment);
 
-  // State seeder (Step 3) runs here for local-enabled/hosted-disabled scenarios,
-  // before the production window/IPC graph initializes.
+  // Seed deterministic AI/auth/database state from the validated state manifest
+  // before the production window/IPC graph initializes (design §8.3).
+  seedE2EState(environment);
 
   // Dynamic import: lets background.ts run only AFTER userData/flags/policy are set.
   await import("../../background");

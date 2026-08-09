@@ -157,7 +157,13 @@ export function installE2ENetworkGuard(
       typeof input === "string" || input instanceof URL
         ? input
         : (input as Request).url;
-    assertAllowed("fetch", target as string | URL, "https:");
+    // fetch() must return a rejected Promise (not throw synchronously) so caller
+    // await/try-catch semantics match real fetch; http.request() below throws sync.
+    try {
+      assertAllowed("fetch", target as string | URL, "https:");
+    } catch (err) {
+      return Promise.reject(err);
+    }
     return originalFetch(input as RequestInfo | URL, init as RequestInit);
   };
   globalThis.fetch = patchedFetch as typeof fetch;
@@ -201,11 +207,24 @@ export function installE2ENetworkGuard(
         originalGet as unknown as (...a: unknown[]) => http.ClientRequest
       ).apply(mod, args as unknown[]);
     };
-    mod.request = patchedRequest as typeof mod.request;
-    mod.get = patchedGet as typeof mod.get;
+    // Some runtimes expose http.request as a non-writable property; patching is
+    // best-effort here. The fetch patch above always covers the AI transport
+    // path; the http/https patch is defense-in-depth for legacy callers.
+    try {
+      mod.request = patchedRequest as typeof mod.request;
+      mod.get = patchedGet as typeof mod.get;
+    } catch {
+      return () => {
+        /* nothing was patched */
+      };
+    }
     return () => {
-      mod.request = originalRequest;
-      mod.get = originalGet;
+      try {
+        mod.request = originalRequest;
+        mod.get = originalGet;
+      } catch {
+        /* ignore */
+      }
     };
   };
 
