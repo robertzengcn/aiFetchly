@@ -25,6 +25,11 @@ export interface E2EStateManifestInput {
   readonly aiState: "hosted-disabled" | "local-enabled";
   readonly fakeAiBaseUrl: string;
   readonly workspacePath: string;
+  /** Optional native-dialog responses consumed by E2ENativeDialogService. */
+  readonly dialogResponses?: Record<
+    string,
+    { action: "canceled" | "confirmed"; paths?: readonly string[] }
+  >;
 }
 
 /** Write the validated state.json the E2EStateSeeder consumes. */
@@ -32,7 +37,7 @@ export function writeStateManifest(
   root: E2ETestRoot,
   manifest: E2EStateManifestInput
 ): void {
-  const payload = {
+  const payload: Record<string, unknown> = {
     schemaVersion: 1,
     authState: manifest.authState,
     aiState: manifest.aiState,
@@ -40,6 +45,9 @@ export function writeStateManifest(
     fakeAiBaseUrl: manifest.fakeAiBaseUrl,
     workspacePath: manifest.workspacePath,
   };
+  if (manifest.dialogResponses) {
+    payload.dialogResponses = manifest.dialogResponses;
+  }
   fs.writeFileSync(root.stateFilePath, JSON.stringify(payload), "utf8");
 }
 

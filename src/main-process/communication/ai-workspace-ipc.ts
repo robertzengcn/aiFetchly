@@ -1,6 +1,7 @@
-import { ipcMain, BrowserWindow, dialog } from "electron";
+import { ipcMain, BrowserWindow } from "electron";
 import { Token } from "@/modules/token";
 import { USER_AI_ENABLED } from "@/config/usersetting";
+import { getNativeDialogService } from "@/service/dialogs/NativeDialogServiceProvider";
 import {
   AI_WORKSPACE_SET,
   AI_WORKSPACE_GET,
@@ -179,7 +180,7 @@ export function registerAIWorkspaceIpcHandlers(_win: BrowserWindow): void {
         return denied("AI functionality is only available to subscribers.");
       }
       try {
-        const result = await dialog.showOpenDialog(_win, {
+        const result = await getNativeDialogService().showOpenDialog({
           properties: ["openDirectory"],
         });
         if (result.canceled || result.filePaths.length === 0) {
