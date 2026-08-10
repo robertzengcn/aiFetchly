@@ -2273,6 +2273,11 @@ export default {
     audit_description: "AI生成の返信、承認ステータス、監査ログを確認します。",
   },
   aiChatV2: {
+    artifactExport: {
+      permissionTitle: "生成されたアーティファクトをエクスポート",
+      permissionDescription:
+        "AiFetchly が生成したアーティファクトを {destination} にコピーします。",
+    },
     imageTool: {
       name: "ローカル画像を添付",
       permissionTitle: "ローカル画像をAIサーバーに送信",
@@ -3032,6 +3037,5 @@ export default {
       "ウェブサイトを開けませんでした。後でもう一度お試しください。",
     cooldown_active:
       "最近確認しました。しばらく待ってからもう一度お試しください。",
-
   },
 };

@@ -94,6 +94,14 @@ describe("ToolLoadPolicyService.classify", () => {
     ).toBe("deferred");
   });
 
+  it("promotes generated-artifact export for explicit workspace save intent", () => {
+    expect(
+      classify("export_generated_artifacts", "builtin", {
+        currentUserMessage: "save the generated files into my workspace",
+      })
+    ).toBe("contextual");
+  });
+
   it("promotes attach_local_images on continue when recent history has image intent", () => {
     expect(
       classify("attach_local_images", "builtin", {

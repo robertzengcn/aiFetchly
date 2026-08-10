@@ -2312,6 +2312,11 @@ export default {
       "Review AI-generated replies, approval status, and audit logs.",
   },
   aiChatV2: {
+    artifactExport: {
+      permissionTitle: "Export generated artifacts",
+      permissionDescription:
+        "Copy these AiFetchly-generated artifacts into {destination}.",
+    },
     imageTool: {
       name: "Attach local images",
       permissionTitle: "Send local images to the AI server",
@@ -3064,6 +3069,5 @@ export default {
     open_website_failed: "Could not open the website. Try again later.",
     cooldown_active:
       "Checked recently. Please wait a minute before trying again.",
-
   },
 };

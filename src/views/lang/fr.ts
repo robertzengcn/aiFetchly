@@ -2303,6 +2303,11 @@ export default {
       "Examinez les réponses générées par l'IA, le statut d'approbation et les journaux d'audit.",
   },
   aiChatV2: {
+    artifactExport: {
+      permissionTitle: "Exporter les artefacts générés",
+      permissionDescription:
+        "Copiez ces artefacts générés par AiFetchly vers {destination}.",
+    },
     imageTool: {
       name: "Joindre des images locales",
       permissionTitle: "Envoyer des images locales au serveur IA",
@@ -3079,6 +3084,5 @@ export default {
       "Impossible d'ouvrir le site web. Réessayez plus tard.",
     cooldown_active:
       "Vérifié récemment. Attendez une minute avant de réessayer.",
-
   },
 };

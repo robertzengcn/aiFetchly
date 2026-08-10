@@ -85,6 +85,7 @@ const registry: Map<string, SkillDefinition> =
 // ---------------------------------------------------------------------------
 import { RUN_SUBAGENT_TOOL } from "@/service/agentTools/runSubagentTool";
 import { PROCESS_ARTIFACT_BATCH_TOOL } from "@/service/agentTools/processArtifactBatchTool";
+import { EXPORT_GENERATED_ARTIFACTS_TOOL } from "@/service/agentTools/exportGeneratedArtifactsTool";
 import { AIAppNavigationToolService } from "@/service/AIAppNavigationToolService";
 import {
   AIImageAttachmentToolService,
@@ -2854,6 +2855,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     },
   },
   PROCESS_ARTIFACT_BATCH_TOOL,
+  EXPORT_GENERATED_ARTIFACTS_TOOL,
   RUN_SUBAGENT_TOOL,
   {
     name: "proxy_list",

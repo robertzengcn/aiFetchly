@@ -200,6 +200,12 @@ const SHELL_ACTION_INTENT_RE =
 const IMAGE_SHELL_WORKAROUND_RE =
   /\b(pil|pillow|imagemagick|magick|convert)\b|\bfrom\s+PIL\b|\bimport\s+Image\b|\b(opencv|cv2)\b/i;
 
+const GENERATED_ARTIFACT_SHELL_TRANSFER_RE =
+  /\b(cp|mv|copy|move|copy-item|move-item)\b/i;
+
+const GENERATED_ARTIFACT_PATH_RE =
+  /aifetchly-generated-image:|[\\/]\.config[\\/]aiFetchly[\\/]ai-chat-generated-images[\\/]/i;
+
 /**
  * Detect shell/Python image-editing workarounds so we can steer the model to
  * attach_local_images instead of auto-loading shell_execute for that path.
@@ -220,6 +226,19 @@ function looksLikeImageShellWorkaround(rawArgs: unknown): boolean {
   }
   if (!text.trim()) return true;
   return IMAGE_SHELL_WORKAROUND_RE.test(text);
+}
+
+function looksLikeGeneratedArtifactShellTransfer(rawArgs: unknown): boolean {
+  const text =
+    typeof rawArgs === "string"
+      ? rawArgs
+      : rawArgs && typeof rawArgs === "object"
+      ? JSON.stringify(rawArgs)
+      : "";
+  return (
+    GENERATED_ARTIFACT_SHELL_TRANSFER_RE.test(text) &&
+    GENERATED_ARTIFACT_PATH_RE.test(text)
+  );
 }
 
 /**
@@ -1011,17 +1030,14 @@ export class AIChatQueryLoop {
           .tryParseToolCallArguments()
           .filter((call) => call.name && call.id);
         const textualParsedCalls =
-          nativeParsedCalls.length === 0 &&
-          !accumulator.state.sawToolCallDelta
+          nativeParsedCalls.length === 0 && !accumulator.state.sawToolCallDelta
             ? parseTextToolCalls(
                 accumulator.state.fullContent,
                 `text_tool_call_${round}`
               )
             : [];
         const parsedCalls =
-          nativeParsedCalls.length > 0
-            ? nativeParsedCalls
-            : textualParsedCalls;
+          nativeParsedCalls.length > 0 ? nativeParsedCalls : textualParsedCalls;
 
         // Some OpenAI-compatible servers emit finish_reason="stop" (or omit
         // it entirely) even when tool-call deltas were streamed. The
@@ -1293,9 +1309,7 @@ export class AIChatQueryLoop {
         messages.push(
           buildAssistantToolCallMessage(
             parsedCalls,
-            textualParsedCalls.length > 0
-              ? ""
-              : accumulator.state.fullContent
+            textualParsedCalls.length > 0 ? "" : accumulator.state.fullContent
           )
         );
 
@@ -1426,6 +1440,46 @@ export class AIChatQueryLoop {
             continue;
           }
 
+          // Generated artifacts are app-managed capabilities, not arbitrary
+          // filesystem paths. Never let the model route their export through
+          // shell_execute: that crosses the ~/.config critical-path boundary
+          // and loses the artifact ownership/workspace checks provided by the
+          // dedicated export tool.
+          if (
+            call.name === SHELL_EXECUTE_TOOL_NAME &&
+            collectedToolImages.length > 0 &&
+            looksLikeGeneratedArtifactShellTransfer(call.arguments)
+          ) {
+            if (catalog?.byName.has("export_generated_artifacts")) {
+              discoveredToolNames.add("export_generated_artifacts");
+            }
+            const steerContent = serializeToolResultContent({
+              success: false,
+              error:
+                "Do not copy or move AiFetchly-generated artifacts with shell_execute. " +
+                "They are already rendered in chat. If the user requested persistent workspace files, " +
+                "call export_generated_artifacts with the returned artifact URLs and workspace-relative destinations.",
+            });
+            eventSink.emit({
+              type: "tool_result",
+              conversationId: input.conversationId,
+              messageId: input.assistantMessageId,
+              toolCallId: call.id,
+              toolName: call.name,
+              fullContent: steerContent,
+              toolResult: {
+                success: false,
+                error: "use export_generated_artifacts instead",
+              },
+            });
+            messages.push({
+              role: "tool",
+              tool_call_id: call.id,
+              content: steerContent,
+            });
+            continue;
+          }
+
           // Unknown-deferred-tool recovery (design §14.4): if the model calls a
           // deferred tool that is not yet exposed, load it and ask the model to
           // retry instead of failing the turn.
@@ -1447,8 +1501,8 @@ export class AIChatQueryLoop {
                   success: false,
                   error:
                     `Do not use shell_execute / Python / Pillow for local image editing. ` +
-                    `Use attach_local_images with 1-3 exact workspace image paths ` +
-                    `(discover paths with glob_files first), then continue the edit request.`,
+                    `Use attach_local_images with exactly one workspace image, or process_artifact_batch ` +
+                    `for multiple images (discover paths with glob_files first).`,
                 });
                 eventSink.emit({
                   type: "tool_result",

@@ -374,6 +374,7 @@ export const PROCESS_ARTIFACT_BATCH_TOOL: SkillDefinition = {
     "Process many workspace artifacts with one instruction using bounded concurrent, isolated provider operations. " +
     "Use this for editing 2 or more local images; do not attach several editable images in one request and do not spawn one run_subagent call per file. " +
     "The tool preserves an input-to-output mapping, reports per-item failures, and returns generated artifacts for automatic chat rendering. " +
+    "If the user requested persistent workspace files, pass the returned artifact URLs to export_generated_artifacts; never copy app-managed paths with shell_execute. " +
     "Currently processor='image_edit' is supported. The operation is asynchronous and the runtime waits for the batch job result.",
   parameters: {
     type: "object",
