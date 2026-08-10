@@ -5,9 +5,13 @@
  * - Typo export OpenAs_RunnableDLL → shell32 "missing entry" alert
  * - rundll32 / Start-Process -Verb OpenAs → app launches without the file
  */
+import { EventEmitter } from "events";
+import type { ChildProcess } from "child_process";
 import { describe, expect, it, vi } from "vitest";
 import {
+  launchDetachedProcess,
   openWindowsFile,
+  openWindowsFileFromWsl,
   openWindowsOpenWithDialog,
 } from "@/utils/windowsOpenWith";
 
@@ -49,6 +53,59 @@ describe("windowsOpenWith", () => {
       const openPathFn = vi.fn(async () => "");
       await openWindowsOpenWithDialog("C:\\tmp\\note.md", openPathFn);
       expect(openPathFn).toHaveBeenCalledWith("C:\\tmp\\note.md");
+    });
+  });
+
+  describe("detached Windows host launch", () => {
+    function createChildProcessDouble(): ChildProcess {
+      const proc = new EventEmitter() as EventEmitter & {
+        unref: ReturnType<typeof vi.fn>;
+      };
+      proc.unref = vi.fn();
+      return proc as unknown as ChildProcess;
+    }
+
+    it("opens WSL paths through the Windows default file association", async () => {
+      const proc = createChildProcessDouble();
+      const spawnFn = vi.fn(() => proc);
+      const openPromise = openWindowsFileFromWsl(
+        "\\\\wsl.localhost\\Ubuntu\\home\\user\\image.png",
+        spawnFn
+      );
+
+      proc.emit("spawn");
+      await openPromise;
+
+      expect(spawnFn).toHaveBeenCalledWith(
+        "rundll32.exe",
+        [
+          "url.dll,FileProtocolHandler",
+          "\\\\wsl.localhost\\Ubuntu\\home\\user\\image.png",
+        ],
+        expect.objectContaining({
+          detached: true,
+          stdio: "ignore",
+          windowsHide: true,
+        })
+      );
+      expect(proc.unref).toHaveBeenCalledOnce();
+    });
+
+    it("rejects when a detached opener cannot be spawned", async () => {
+      const proc = createChildProcessDouble();
+      const spawnFn = vi.fn(() => proc);
+      const launchPromise = launchDetachedProcess(
+        "missing-opener",
+        ["/tmp/image.png"],
+        {},
+        spawnFn
+      );
+      const spawnError = new Error("spawn missing-opener ENOENT");
+
+      proc.emit("error", spawnError);
+
+      await expect(launchPromise).rejects.toBe(spawnError);
+      expect(proc.unref).not.toHaveBeenCalled();
     });
   });
 });
