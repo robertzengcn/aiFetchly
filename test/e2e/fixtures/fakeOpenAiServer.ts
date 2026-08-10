@@ -21,6 +21,8 @@ import * as http from "http";
 import * as crypto from "crypto";
 import {
   MODELS_RESPONSE,
+  toolCallChunk,
+  toolCallFinishChunk,
   type FakeAiScenarioName,
 } from "../scenarios/openAiProtocol";
 import { resolveScenario } from "../scenarios/aiChatScenarios";
@@ -42,6 +44,8 @@ export interface FakeOpenAiController {
   readonly providerBaseUrl: string;
   readonly port: number;
   setScenario(name: FakeAiScenarioName): Promise<void>;
+  /** Configure a tool call for the next (non-continuation) chat request. */
+  setToolCall(name: string, argsJson: string): Promise<void>;
   getRequests(): Promise<readonly RedactedRequest[]>;
   reset(): Promise<void>;
   stop(): Promise<void>;
@@ -103,7 +107,22 @@ function redactChatRequest(
 export async function startFakeOpenAiServer(): Promise<FakeOpenAiController> {
   const controlToken = crypto.randomBytes(8).toString("hex");
   let scenario: FakeAiScenarioName = "stream-text";
+  /** Optional tool call to emit on the next (non-continuation) chat request. */
+  let toolCallConfig: { name: string; arguments: string } | null = null;
   const requestLog: RedactedRequest[] = [];
+
+  /** True when a chat request carries a tool-result message (the continuation
+   * after the app executed an approved tool). */
+  function hasToolResultMessage(rawBody: string): boolean {
+    try {
+      const parsed = JSON.parse(rawBody) as { messages?: unknown[] };
+      return Array.isArray(parsed.messages)
+        ? parsed.messages.some((m) => (m as { role?: string }).role === "tool")
+        : false;
+    } catch {
+      return false;
+    }
+  }
 
   const server = http.createServer(async (req, res) => {
     const url = req.url ?? "/";
@@ -132,6 +151,28 @@ export async function startFakeOpenAiServer(): Promise<FakeOpenAiController> {
       if (req.method === "POST" && url === "/__e2e/reset") {
         requestLog.length = 0;
         scenario = "stream-text";
+        toolCallConfig = null;
+        res.writeHead(204);
+        res.end();
+        return;
+      }
+      if (req.method === "POST" && url === "/__e2e/tool-call") {
+        try {
+          const parsed = JSON.parse(body) as {
+            name?: string;
+            arguments?: string;
+          };
+          if (parsed.name) {
+            toolCallConfig = {
+              name: parsed.name,
+              arguments: parsed.arguments ?? "{}",
+            };
+          } else {
+            toolCallConfig = null;
+          }
+        } catch {
+          /* ignore */
+        }
         res.writeHead(204);
         res.end();
         return;
@@ -173,7 +214,35 @@ export async function startFakeOpenAiServer(): Promise<FakeOpenAiController> {
       req.on("close", onClientGone);
       req.on("aborted", onClientGone);
       res.on("close", onClientGone);
-      const plan = resolveScenario(scenario);
+      // Determine the effective plan for this request:
+      //  - a tool-result continuation (app executed an approved tool + fed the
+      //    result back) -> short follow-up completion.
+      //  - else a configured tool call -> emit tool_calls so the app's approval
+      //    flow can gate execution.
+      //  - else the active scenario.
+      const isContinuation = hasToolResultMessage(rawBody);
+      let plan;
+      if (isContinuation) {
+        plan = resolveScenario("tool-success-followup");
+      } else if (toolCallConfig) {
+        plan = {
+          kind: "sse" as const,
+          frames: [
+            {
+              delayMs: 0,
+              payload: toolCallChunk({
+                index: 0,
+                id: "call_e2e_1",
+                name: toolCallConfig.name,
+                arguments: toolCallConfig.arguments,
+              }),
+            },
+            { delayMs: 0, payload: toolCallFinishChunk() },
+          ],
+        };
+      } else {
+        plan = resolveScenario(scenario);
+      }
 
       if (plan.kind === "http-error") {
         requestLog.push(redactChatRequest(req, rawBody, false));
@@ -263,6 +332,13 @@ export async function startFakeOpenAiServer(): Promise<FakeOpenAiController> {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name }),
+      });
+    },
+    async setToolCall(name: string, argsJson: string): Promise<void> {
+      await controlFetch("/__e2e/tool-call", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, arguments: argsJson }),
       });
     },
     async getRequests(): Promise<readonly RedactedRequest[]> {
