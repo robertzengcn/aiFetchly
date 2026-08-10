@@ -26,7 +26,10 @@ import type {
   AIChatQueryLoopInput,
   AIChatQueryLoopResult,
 } from "@/service/AIChatQueryEvents";
-import { OpenAIStreamAccumulator } from "@/service/OpenAIStreamAccumulator";
+import {
+  OpenAIStreamAccumulator,
+  type ParsedToolCallResult,
+} from "@/service/OpenAIStreamAccumulator";
 import { ToolExecutor } from "@/service/ToolExecutor";
 import {
   AIChatRecoverableError,
@@ -180,6 +183,12 @@ const MAX_TEXT_TOOL_CALL_MARKER_RETRIES = 1;
 const TEXT_TOOL_CALL_MARKER_RE =
   /^(?:(?:assistant|user|system):)?tool_call::def_tool_call:\d+\s*$/i;
 
+const TEXT_TOOL_CALL_BLOCK_RE =
+  /<tool_call>[\s¶]*<function=([A-Za-z0-9_.:-]+)>([\s\S]*?)<\/function>[\s¶]*<\/tool_call>/gi;
+
+const TEXT_TOOL_CALL_PARAMETER_RE =
+  /<parameter=([A-Za-z0-9_.:-]+)>([\s\S]*?)<\/parameter>/gi;
+
 const TEXT_TOOL_CALL_MARKER_RETRY_PROMPT =
   "Your previous response was a malformed tool-call marker instead of a valid assistant response. Retry now. If you need a tool, emit a real OpenAI tool call with the function name and JSON arguments. Do not write tool_call::def_tool_call markers as text.";
 
@@ -317,6 +326,72 @@ export function shouldForceSubmitPlanForApproval(message: string): boolean {
 
 function isTextToolCallMarker(content: string): boolean {
   return TEXT_TOOL_CALL_MARKER_RE.test(content.trim());
+}
+
+function parseTextToolCallValue(raw: string): unknown {
+  const value = raw.replace(/^[\s¶]+|[\s¶]+$/g, "");
+  if (!value) return "";
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return value;
+  }
+}
+
+/**
+ * Parse the XML-style text tool protocol emitted by some OpenAI-compatible
+ * providers (notably Agnes). We accept it only when the entire assistant
+ * response consists of tool-call blocks plus whitespace/pilcrow separators,
+ * so ordinary prose or code samples containing these tags are never executed.
+ * Parsed calls still pass through the normal tool policy and permission gates.
+ */
+export function parseTextToolCalls(
+  content: string,
+  idPrefix = "text_tool_call"
+): ParsedToolCallResult[] {
+  const blocks = [...content.matchAll(TEXT_TOOL_CALL_BLOCK_RE)];
+  if (blocks.length === 0) return [];
+
+  const residual = content
+    .replace(TEXT_TOOL_CALL_BLOCK_RE, "")
+    .replace(/[\s¶]+/g, "");
+  if (residual.length > 0) return [];
+
+  const calls: ParsedToolCallResult[] = [];
+  for (const [index, block] of blocks.entries()) {
+    const name = block[1];
+    const body = block[2] ?? "";
+    const parameters = [...body.matchAll(TEXT_TOOL_CALL_PARAMETER_RE)];
+    const bodyResidual = body
+      .replace(TEXT_TOOL_CALL_PARAMETER_RE, "")
+      .replace(/[\s¶]+/g, "");
+    if (bodyResidual.length > 0) return [];
+
+    const args: Record<string, unknown> = {};
+    for (const parameter of parameters) {
+      args[parameter[1]] = parseTextToolCallValue(parameter[2] ?? "");
+    }
+    // Agnes sometimes uses the catalog result's `category` vocabulary as an
+    // input even though the actual search schema calls this field `query`.
+    if (
+      name === TOOL_CATALOG_SEARCH_TOOL_NAME &&
+      args.query === undefined &&
+      typeof args.category === "string"
+    ) {
+      args.query = args.category;
+      delete args.category;
+    }
+
+    calls.push({
+      index,
+      id: `${idPrefix}_${index}`,
+      name,
+      ok: true,
+      arguments: args,
+      rawArgumentsJson: JSON.stringify(args),
+    });
+  }
+  return calls;
 }
 
 function shouldForceShellExecute(input: {
@@ -932,9 +1007,21 @@ export class AIChatQueryLoop {
           totalTokens: resolvedUsage.totalTokens,
         });
 
-        const parsedCalls = accumulator
+        const nativeParsedCalls = accumulator
           .tryParseToolCallArguments()
           .filter((call) => call.name && call.id);
+        const textualParsedCalls =
+          nativeParsedCalls.length === 0 &&
+          !accumulator.state.sawToolCallDelta
+            ? parseTextToolCalls(
+                accumulator.state.fullContent,
+                `text_tool_call_${round}`
+              )
+            : [];
+        const parsedCalls =
+          nativeParsedCalls.length > 0
+            ? nativeParsedCalls
+            : textualParsedCalls;
 
         // Some OpenAI-compatible servers emit finish_reason="stop" (or omit
         // it entirely) even when tool-call deltas were streamed. The
@@ -1206,7 +1293,9 @@ export class AIChatQueryLoop {
         messages.push(
           buildAssistantToolCallMessage(
             parsedCalls,
-            accumulator.state.fullContent
+            textualParsedCalls.length > 0
+              ? ""
+              : accumulator.state.fullContent
           )
         );
 
