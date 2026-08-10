@@ -172,6 +172,16 @@ AI Chat は hosted aiFetchly AI またはユーザー設定の OpenAI 互換 Pro
 
 アプリケーションの公式 Web サイトは [sellart-online.com](https://www.sellart-online.com) です。
 
+## aiFetchly を支援する
+
+aiFetchly が時間の節約や仕事に役立った場合は、Ko-fi で継続的な開発を支援できます。
+
+<p>
+  <a href="https://ko-fi.com/aifetchly">
+    <img src="https://ko-fi.com/img/githubbutton_sm.svg" alt="Ko-fi で aiFetchly を支援する">
+  </a>
+</p>
+
 ## コントリビューション
 
 バグ修正、新機能、ワークフロー改善、スキル、プラグイン、翻訳の貢献を歓迎します。貢献前に [CLAUDE.md](./CLAUDE.md) を読んでください。
