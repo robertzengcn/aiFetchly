@@ -961,6 +961,7 @@ export const constantRoutes: RouteRecordRaw[] = [
   {
     path: "/socialaccount",
     name: "Socialaccount",
+    redirect: "/socialaccount/list",
     meta: {
       visible: true,
       title: "route.tool_account",

@@ -38,7 +38,7 @@ function init() {
             {
                 title: t('route.dashboard'),
                 disabled: false,
-                to: '/dashboard',
+                to: '/dashboard/home',
             },
         ];
         return;
@@ -48,7 +48,7 @@ function init() {
             {
                 title: t('route.home'),
                 disabled: false,
-                to: '/dashboard',
+                to: '/dashboard/home',
             },
             {
                 title: translateRouteTitle(matched[0].meta.title as string),

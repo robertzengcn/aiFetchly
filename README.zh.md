@@ -174,6 +174,16 @@ AI Chat 可以使用托管的 aiFetchly AI，也可以使用用户配置的 Open
 
 应用官方网站是 [sellart-online.com](https://www.sellart-online.com)。
 
+## 支持 aiFetchly
+
+如果 aiFetchly 帮助你节省了时间或提高了工作效率，欢迎通过 Ko-fi 支持项目的持续开发。
+
+<p>
+  <a href="https://ko-fi.com/aifetchly">
+    <img src="https://ko-fi.com/img/githubbutton_sm.svg" alt="在 Ko-fi 上支持 aiFetchly">
+  </a>
+</p>
+
 ## 贡献
 
 欢迎贡献代码、修复问题、改进工作流、添加技能、插件或翻译。请先阅读 [CLAUDE.md](./CLAUDE.md) 中的架构和编码约定。

@@ -172,6 +172,16 @@ Die vollständige Dokumentation finden Sie unter [docs.aifetchly.com](https://do
 
 Die offizielle Website der Anwendung ist [sellart-online.com](https://www.sellart-online.com).
 
+## aiFetchly unterstützen
+
+Wenn aiFetchly Ihnen Zeit spart oder bei Ihrer Arbeit hilft, können Sie die weitere Entwicklung über Ko-fi unterstützen.
+
+<p>
+  <a href="https://ko-fi.com/aifetchly">
+    <img src="https://ko-fi.com/img/githubbutton_sm.svg" alt="aiFetchly auf Ko-fi unterstützen">
+  </a>
+</p>
+
 ## Mitwirken
 
 Beiträge sind willkommen: Bugfixes, neue Funktionen, Workflow-Verbesserungen, Skills, Plugins oder Übersetzungen. Lesen Sie vor dem Mitwirken [CLAUDE.md](./CLAUDE.md).

@@ -655,6 +655,7 @@ export const createTranslatedRoutes = (): RouteRecordRaw[] => {
     {
       path: "/socialaccount",
       name: "Socialaccount",
+      redirect: "/socialaccount/list",
       meta: {
         visible: true,
         title: computed(() => t("route.tool_account")),

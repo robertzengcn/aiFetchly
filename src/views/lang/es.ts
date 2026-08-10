@@ -3001,6 +3001,8 @@ export default {
       catalog_unavailable:
         "Catálogo de componentes no disponible. Las funciones remotas siguen funcionando.",
       download_failed: "Error en la descarga.",
+      install_failed:
+        "Error en la instalación. Inténtalo de nuevo; si persiste, reinicia la aplicación.",
       checksum_mismatch: "Verificación de integridad fallida.",
       archive_unsafe: "El archivo no pasó las comprobaciones de seguridad.",
       incompatible:
