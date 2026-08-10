@@ -84,6 +84,7 @@ const registry: Map<string, SkillDefinition> =
 // Built-in skill definitions (statically imported)
 // ---------------------------------------------------------------------------
 import { RUN_SUBAGENT_TOOL } from "@/service/agentTools/runSubagentTool";
+import { PROCESS_ARTIFACT_BATCH_TOOL } from "@/service/agentTools/processArtifactBatchTool";
 import { AIAppNavigationToolService } from "@/service/AIAppNavigationToolService";
 import {
   AIImageAttachmentToolService,
@@ -156,9 +157,9 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       "After glob_files finds image paths, call this tool with exact paths — do NOT use " +
       "shell_execute, Python, Pillow/PIL, ImageMagick, or file_read for image editing. " +
       "HARD LIMIT: at most 3 images per call and per AI request. " +
-      "WHEN MORE THAN 3 files need the same edit, do NOT try to attach the next batch yourself within this turn — the AI server ends the turn after editing a batch, so a follow-up attach_local_images call in the same turn will not run. " +
-      "Instead, delegate each batch: call run_subagent once per batch of up to 3 paths with agentId 'agent-batch-worker', passing { files: [<up to 3 paths>], instruction: <the edit> } as the taskPacket, and poll each job with check_tool_job_status. " +
-      "Each batch worker attaches + edits its own batch under its own 3-image budget and returns the output file paths. " +
+      "For image EDITING, use this directly with exactly 1 image. A provider may accept 3 inputs but return only 1 output, so multiple editable images must not share one request. " +
+      "WHEN 2 OR MORE files need the same edit, call process_artifact_batch once with all exact paths and the shared instruction. It runs one isolated provider operation per input with bounded concurrency and returns every output with its input mapping. " +
+      "The 3-image form remains available for analysis/comparison requests that intentionally consume several images together. " +
       "NEVER pass more than 3 paths in one call. " +
       "NEVER issue multiple attach_local_images calls in the same assistant turn/tool round — " +
       "one batch per round only. " +
@@ -2852,6 +2853,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       };
     },
   },
+  PROCESS_ARTIFACT_BATCH_TOOL,
   RUN_SUBAGENT_TOOL,
   {
     name: "proxy_list",

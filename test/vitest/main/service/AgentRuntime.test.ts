@@ -157,6 +157,7 @@ let lastLoopInput:
   | {
       request: { model?: string };
       openAITools: Array<{ function: { name: string } }>;
+      abortController: AbortController;
       transientRetryConfig?: { maxAttempts?: number; baseDelayMs?: number };
     }
   | undefined;
@@ -175,6 +176,7 @@ vi.mock("@/service/AIChatQueryLoop", () => ({
     async run(input: {
       request: { model?: string };
       openAITools: Array<{ function: { name: string } }>;
+      abortController: AbortController;
     }) {
       lastLoopInput = input;
       for (let i = 0; i < mockLoopCallCount; i++) {
@@ -395,6 +397,16 @@ describe("AgentRuntime", () => {
     expect(toolNames).toContain("glob_files");
     expect(toolNames).not.toContain("Bash");
     expect(toolNames).not.toContain("haiku");
+  });
+
+  it("propagates an already-aborted parent signal into the agent loop", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const runtime = new AgentRuntime();
+
+    await runtime.runSync(makeRequest(), { signal: controller.signal });
+
+    expect(lastLoopInput?.abortController.signal.aborted).toBe(true);
   });
 
   it("rejects override-mismatched JSON with a parseWarning (lenient fallback)", async () => {

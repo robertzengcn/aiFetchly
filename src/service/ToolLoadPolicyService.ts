@@ -75,6 +75,7 @@ const CONTEXTUAL_HTML_ARTIFACT_TOOL_NAMES: ReadonlySet<string> = new Set([
 
 const CONTEXTUAL_IMAGE_ATTACH_TOOL_NAMES: ReadonlySet<string> = new Set([
   "attach_local_images",
+  "process_artifact_batch",
 ]);
 
 /**

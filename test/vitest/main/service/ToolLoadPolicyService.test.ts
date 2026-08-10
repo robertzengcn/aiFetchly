@@ -80,6 +80,20 @@ describe("ToolLoadPolicyService.classify", () => {
     ).toBe("contextual");
   });
 
+  it("promotes process_artifact_batch for the same multi-image edit intent", () => {
+    expect(
+      classify("process_artifact_batch", "builtin", {
+        currentUserMessage:
+          "please update all image backgrounds in the workspace to white",
+      })
+    ).toBe("contextual");
+    expect(
+      classify("process_artifact_batch", "builtin", {
+        currentUserMessage: "write a short product tagline",
+      })
+    ).toBe("deferred");
+  });
+
   it("promotes attach_local_images on continue when recent history has image intent", () => {
     expect(
       classify("attach_local_images", "builtin", {

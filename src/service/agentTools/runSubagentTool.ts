@@ -66,15 +66,15 @@ const PARAMETERS = {
     taskPacket: {
       type: "object",
       description:
-        "Self-contained task packet. For research agents, pass lead, userGoal, constraints, priorFindings, and requiredOutputSchema. For agent-batch-worker, pass files (up to 3 workspace paths) and instruction (the operation to apply to every file).",
+        "Self-contained task packet. For research agents, pass lead, userGoal, constraints, priorFindings, and requiredOutputSchema. For agent-batch-worker, pass a files array containing exactly one workspace path plus its instruction. Use process_artifact_batch for multi-file processing.",
       properties: {
         files: {
           type: "array",
           description:
-            "Batch-worker input paths. Pass 1 to 3 exact workspace file paths; split larger file sets across multiple agent-batch-worker calls.",
+            "Batch-worker input path. Pass exactly one workspace file; use process_artifact_batch for multiple files.",
           items: { type: "string", minLength: 1 },
           minItems: 1,
-          maxItems: 3,
+          maxItems: 1,
         },
         instruction: {
           type: "string",
@@ -128,10 +128,10 @@ export const RUN_SUBAGENT_TOOL: SkillDefinition = {
   name: "run_subagent",
   description:
     "Run a built-in marketing specialist agent (e.g. lead researcher) and return its structured result. Use this to delegate a focused research/enrichment task to a specialist with its own narrowed tools. " +
-    "Also use it to process batches of files when a single request is capped — e.g. agent-batch-worker edits up to 3 images per batch (its own 3-image budget) and returns output file paths; when more than 3 files need the same edit, spawn one run_subagent per batch of up to 3 paths, passing { files: [...], instruction } as the taskPacket, and poll each job. " +
+    "For multiple files with one operation, use process_artifact_batch instead; it coordinates bounded concurrent per-item provider requests and preserves input/output mappings. run_subagent remains available for a single specialized file task via agent-batch-worker. " +
     "This tool ALWAYS runs ASYNCHRONOUSLY: it returns { async: true, job_id } within ~2 seconds and continues working in the background. " +
     "Poll the result with check_tool_job_status(job_id) every 15-30 seconds until status is 'completed' or 'failed'. " +
-    "For independent batches, emit one run_subagent tool call per batch; each call is tracked as a separate job. Use cancel_tool_job(job_id) if the user wants to stop a specialist early.",
+    "Use cancel_tool_job(job_id) if the user wants to stop a specialist early.",
   parameters: PARAMETERS,
   tier: "main",
   requiresConfirmation: false,

@@ -50,7 +50,7 @@ describe("run_subagent tool definition", () => {
     expect(taskPacket.description).toMatch(/files/i);
     expect(taskPacket.description).toMatch(/instruction/i);
     expect(files.type).toBe("array");
-    expect(files.maxItems).toBe(3);
+    expect(files.maxItems).toBe(1);
     expect(instruction.type).toBe("string");
   });
 
@@ -99,6 +99,13 @@ describe("run_subagent tool definition", () => {
   it("does not contradict the multi-batch delegation contract", () => {
     expect(RUN_SUBAGENT_TOOL.description).not.toMatch(
       /do not call run_subagent again while a job is running/i
+    );
+  });
+
+  it("routes multi-file work to process_artifact_batch", () => {
+    expect(RUN_SUBAGENT_TOOL.description).toMatch(/process_artifact_batch/i);
+    expect(RUN_SUBAGENT_TOOL.description).not.toMatch(
+      /up to 3 images per batch/i
     );
   });
 
