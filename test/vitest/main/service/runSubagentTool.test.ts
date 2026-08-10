@@ -37,6 +37,21 @@ describe("run_subagent tool definition", () => {
     expect(taskPacketProps).toHaveProperty("constraints");
     expect(taskPacketProps).toHaveProperty("priorFindings");
     expect(taskPacketProps).toHaveProperty("requiredOutputSchema");
+    expect(taskPacketProps).toHaveProperty("files");
+    expect(taskPacketProps).toHaveProperty("instruction");
+  });
+
+  it("describes the batch-worker task packet in the model-facing schema", () => {
+    const taskPacket = props.taskPacket as Record<string, unknown>;
+    const taskPacketProps = taskPacket.properties as Record<string, unknown>;
+    const files = taskPacketProps.files as Record<string, unknown>;
+    const instruction = taskPacketProps.instruction as Record<string, unknown>;
+
+    expect(taskPacket.description).toMatch(/files/i);
+    expect(taskPacket.description).toMatch(/instruction/i);
+    expect(files.type).toBe("array");
+    expect(files.maxItems).toBe(3);
+    expect(instruction.type).toBe("string");
   });
 
   it("taskPacket.lead describes the lead data the model can pass", () => {
@@ -79,6 +94,12 @@ describe("run_subagent tool definition", () => {
     expect(RUN_SUBAGENT_TOOL.async).toBe(true);
     expect(RUN_SUBAGENT_TOOL.description).toMatch(/ASYNCHRONOUSLY/i);
     expect(RUN_SUBAGENT_TOOL.description).toMatch(/check_tool_job_status/i);
+  });
+
+  it("does not contradict the multi-batch delegation contract", () => {
+    expect(RUN_SUBAGENT_TOOL.description).not.toMatch(
+      /do not call run_subagent again while a job is running/i
+    );
   });
 
   it("routes unconditionally to async timeout class", () => {

@@ -66,8 +66,22 @@ const PARAMETERS = {
     taskPacket: {
       type: "object",
       description:
-        "Self-contained task packet: lead (target company/contact data including companyName, website, description, existing contacts), userGoal, constraints, priorFindings, requiredOutputSchema.",
+        "Self-contained task packet. For research agents, pass lead, userGoal, constraints, priorFindings, and requiredOutputSchema. For agent-batch-worker, pass files (up to 3 workspace paths) and instruction (the operation to apply to every file).",
       properties: {
+        files: {
+          type: "array",
+          description:
+            "Batch-worker input paths. Pass 1 to 3 exact workspace file paths; split larger file sets across multiple agent-batch-worker calls.",
+          items: { type: "string", minLength: 1 },
+          minItems: 1,
+          maxItems: 3,
+        },
+        instruction: {
+          type: "string",
+          description:
+            "Batch-worker instruction to apply identically to every path in files.",
+          minLength: 1,
+        },
         lead: {
           type: "object",
           description:
@@ -117,7 +131,7 @@ export const RUN_SUBAGENT_TOOL: SkillDefinition = {
     "Also use it to process batches of files when a single request is capped — e.g. agent-batch-worker edits up to 3 images per batch (its own 3-image budget) and returns output file paths; when more than 3 files need the same edit, spawn one run_subagent per batch of up to 3 paths, passing { files: [...], instruction } as the taskPacket, and poll each job. " +
     "This tool ALWAYS runs ASYNCHRONOUSLY: it returns { async: true, job_id } within ~2 seconds and continues working in the background. " +
     "Poll the result with check_tool_job_status(job_id) every 15-30 seconds until status is 'completed' or 'failed'. " +
-    "Do not call run_subagent again while a job is running. Use cancel_tool_job(job_id) if the user wants to stop the specialist early.",
+    "For independent batches, emit one run_subagent tool call per batch; each call is tracked as a separate job. Use cancel_tool_job(job_id) if the user wants to stop a specialist early.",
   parameters: PARAMETERS,
   tier: "main",
   requiresConfirmation: false,
