@@ -225,6 +225,62 @@ describe("AIChatQueryLoop tool catalog integration", () => {
     ).toBe(true);
   });
 
+  it("recovers an empty catalog search by selecting the batch tool for plural image edits", async () => {
+    const userMessage =
+      "please modify the background color of those image in the workspace to white";
+    const tools = [
+      tool("glob_files"),
+      tool("attach_local_images"),
+      tool("process_artifact_batch"),
+    ];
+    const catalog = new ToolCatalogService().buildFromOpenAITools({
+      tools,
+      context: { ...runtimeCtx, currentUserMessage: userMessage },
+    });
+    const toolResults: Array<Record<string, unknown>> = [];
+    let round = 0;
+    const fakeStream = vi.fn(
+      async (
+        _req: { tools?: OpenAITool[] },
+        onChunk: (chunk: OpenAIChatCompletionChunk) => void
+      ): Promise<void> => {
+        if (round === 0) {
+          onChunk(
+            makeToolCallChunk("search-call", "tool_catalog_search", "{}")
+          );
+        } else {
+          onChunk(makeChunk("done", "stop"));
+        }
+        round += 1;
+      }
+    );
+    const loop = new AIChatQueryLoop({
+      streamChatCompletion: fakeStream,
+      executeTool: vi.fn(),
+      getSkillDefinition: vi.fn().mockReturnValue(undefined),
+    });
+
+    await loop.run({
+      ...buildInput().input,
+      messages: [{ role: "user", content: userMessage }],
+      request: { message: userMessage },
+      openAITools: tools,
+      toolCatalog: catalog,
+      eventSink: {
+        emit: (event) => {
+          if (event.type === "tool_result") {
+            toolResults.push(event.toolResult);
+          }
+        },
+      },
+    });
+
+    expect(toolResults[0]).toMatchObject({
+      success: true,
+      selectedToolNames: ["process_artifact_batch"],
+    });
+  });
+
   it("falls back to the full tool list when catalog filtering throws", async () => {
     const captured: string[][] = [];
     let call = 0;

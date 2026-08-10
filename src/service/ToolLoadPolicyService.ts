@@ -127,6 +127,19 @@ const HTML_ARTIFACT_INTENT_RE =
 const IMAGE_ATTACH_INTENT_RE =
   /\b(attach|analyze|compare|edit|modify|update|change|fix|replace|remove)\b[^.]{0,100}?\b(images?|photos?|pictures?|jpe?g|png|webp|gif|background)\b|\b(images?|photos?|pictures?)\b[^.]{0,100}?\b(attach|analyze|compare|edit|background|white|transparent)\b|\b(make|change|set|update)\b[^.]{0,60}?\bbackgroun\w*\b/i;
 
+const IMAGE_EDIT_ACTION_RE =
+  /\b(edit|modify|update|change|fix|replace|remove|make|set|convert|transform)\b|\bbackgroun\w*\b[^.]{0,60}?\b(white|transparent|color|colour)\b/i;
+
+const IMAGE_BATCH_SCOPE_RE =
+  /\b(all|every|each|those|these|multiple|several|batch|bulk)\b|\b(images|photos|pictures|backgrounds)\b/i;
+
+/** True when the user asks for one edit across a plural image scope. */
+export function hasBatchImageEditIntent(message: string): boolean {
+  return (
+    IMAGE_EDIT_ACTION_RE.test(message) && IMAGE_BATCH_SCOPE_RE.test(message)
+  );
+}
+
 /**
  * Natural-language inbound mailbox check intent.
  * Surfaces list/fetch/read inbox tools so "check my email / inbox / mailbox"
@@ -247,6 +260,14 @@ export class ToolLoadPolicyService {
       )
     ) {
       return "contextual";
+    }
+    if (
+      name === "attach_local_images" &&
+      this.messageMatchesIntent(input.context, (msg) =>
+        hasBatchImageEditIntent(msg)
+      )
+    ) {
+      return "deferred";
     }
     if (
       CONTEXTUAL_IMAGE_ATTACH_TOOL_NAMES.has(name) &&

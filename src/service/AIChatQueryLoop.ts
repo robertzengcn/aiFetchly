@@ -72,6 +72,7 @@ import { Token } from "@/modules/token";
 import { TOOL_CATALOG_SEARCH_TOOL_NAME } from "@/config/toolCatalogConfig";
 import { ToolCatalogService } from "@/service/ToolCatalogService";
 import { ToolCatalogSearchService } from "@/service/ToolCatalogSearchService";
+import { hasBatchImageEditIntent } from "@/service/ToolLoadPolicyService";
 import { logToolCatalogFilter } from "@/service/ToolCatalogMetricsService";
 import { toolCatalogCounters } from "@/service/ToolCatalogCounters";
 import { buildDeferredAnnouncement } from "@/service/ConversationToolStateService";
@@ -193,6 +194,8 @@ const TEXT_TOOL_CALL_MARKER_RETRY_PROMPT =
   "Your previous response was a malformed tool-call marker instead of a valid assistant response. Retry now. If you need a tool, emit a real OpenAI tool call with the function name and JSON arguments. Do not write tool_call::def_tool_call markers as text.";
 
 const SHELL_EXECUTE_TOOL_NAME = "shell_execute";
+const ATTACH_LOCAL_IMAGES_TOOL_NAME = "attach_local_images";
+const PROCESS_ARTIFACT_BATCH_TOOL_NAME = "process_artifact_batch";
 
 const SHELL_ACTION_INTENT_RE =
   /\b(rm|unlink)\b|(?:\b(delete|remove)\b.*(?:\b(file|folder|directory|path)\b|[./~]|\.[A-Za-z0-9]{1,8}\b))|(?:\b(run|execute)\b.*\b(shell|terminal|bash|powershell|cmd|command)\b)/i;
@@ -238,6 +241,25 @@ function looksLikeGeneratedArtifactShellTransfer(rawArgs: unknown): boolean {
   return (
     GENERATED_ARTIFACT_SHELL_TRANSFER_RE.test(text) &&
     GENERATED_ARTIFACT_PATH_RE.test(text)
+  );
+}
+
+function shouldRouteImageAttachmentToBatch(input: {
+  rawArgs: unknown;
+  userMessage: string;
+}): boolean {
+  const args =
+    input.rawArgs && typeof input.rawArgs === "object"
+      ? (input.rawArgs as Record<string, unknown>)
+      : {};
+  const paths = Array.isArray(args.paths)
+    ? args.paths.filter((value): value is string => typeof value === "string")
+    : [];
+  const carriesEditInstruction =
+    typeof args.instruction === "string" && args.instruction.trim().length > 0;
+  return (
+    hasBatchImageEditIntent(input.userMessage) ||
+    (paths.length > 1 && carriesEditInstruction)
   );
 }
 
@@ -652,8 +674,20 @@ export class AIChatQueryLoop {
     readonly currentUserMessage: string;
   }): ToolCatalogSearchResult {
     try {
+      const hasQuery =
+        typeof input.args.query === "string" &&
+        input.args.query.trim().length > 0;
+      const hasSelection =
+        Array.isArray(input.args.select) && input.args.select.length > 0;
+      const effectiveArgs: ToolCatalogSearchArgs =
+        !hasQuery &&
+        !hasSelection &&
+        hasBatchImageEditIntent(input.currentUserMessage) &&
+        input.catalog.byName.has(PROCESS_ARTIFACT_BATCH_TOOL_NAME)
+          ? { select: [PROCESS_ARTIFACT_BATCH_TOOL_NAME] }
+          : input.args;
       return this.catalogSearchService.search({
-        args: input.args,
+        args: effectiveArgs,
         catalog: input.catalog,
         state: {
           discoveredToolNames: input.discoveredToolNames,
@@ -1470,6 +1504,45 @@ export class AIChatQueryLoop {
               toolResult: {
                 success: false,
                 error: "use export_generated_artifacts instead",
+              },
+            });
+            messages.push({
+              role: "tool",
+              tool_call_id: call.id,
+              content: steerContent,
+            });
+            continue;
+          }
+
+          // `attach_local_images` is valid for one image edit or multi-image
+          // analysis, but it cannot guarantee one edited output per input.
+          // Enforce the batch route in application code because provider
+          // models may ignore tool descriptions and attach several edit inputs.
+          if (
+            call.name === ATTACH_LOCAL_IMAGES_TOOL_NAME &&
+            shouldRouteImageAttachmentToBatch({
+              rawArgs: call.arguments,
+              userMessage: input.request.message,
+            })
+          ) {
+            if (catalog?.byName.has(PROCESS_ARTIFACT_BATCH_TOOL_NAME)) {
+              discoveredToolNames.add(PROCESS_ARTIFACT_BATCH_TOOL_NAME);
+            }
+            const steerContent = serializeToolResultContent({
+              success: false,
+              error:
+                "Do not attach multiple images for independent edits. Call process_artifact_batch once with every exact workspace path and the shared edit instruction. It runs one provider request per input with bounded concurrency.",
+            });
+            eventSink.emit({
+              type: "tool_result",
+              conversationId: input.conversationId,
+              messageId: input.assistantMessageId,
+              toolCallId: call.id,
+              toolName: call.name,
+              fullContent: steerContent,
+              toolResult: {
+                success: false,
+                error: "use process_artifact_batch instead",
               },
             });
             messages.push({

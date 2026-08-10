@@ -344,4 +344,84 @@ describe("AIChatQueryLoop image-artifact handoff", () => {
       expect(result.images).toEqual([generatedImage]);
     }
   });
+
+  it("blocks multi-image edit attachments and routes the model to the batch processor", async () => {
+    const chunks = [
+      makeToolCallChunk(
+        "call-attach",
+        "attach_local_images",
+        JSON.stringify({
+          paths: ["images (1).jpg", "images (2).jpg", "images (3).jpg"],
+          instruction: "Change the background color to white",
+        })
+      ),
+      makeToolCallChunk(
+        "call-batch",
+        "process_artifact_batch",
+        JSON.stringify({
+          files: ["images (1).jpg", "images (2).jpg", "images (3).jpg"],
+          instruction: "Change the background color to white",
+        })
+      ),
+      makeChunk("Processed the batch.", "stop"),
+    ];
+    let round = 0;
+    const fakeStream = vi.fn(
+      async (
+        _request: OpenAIChatCompletionRequest,
+        onChunk: (chunk: OpenAIChatCompletionChunk) => void
+      ): Promise<void> => {
+        onChunk(chunks[round]);
+        round += 1;
+      }
+    );
+    const fakeExecute = vi.fn(
+      async (name: string): Promise<ToolExecutionResult> => ({
+        tool_call_id: "call-batch",
+        tool_name: name,
+        success: true,
+        result: { status: "completed", completedCount: 3 },
+        execution_time_ms: 5,
+      })
+    );
+    const emitted: Array<Record<string, unknown>> = [];
+    const loop = new AIChatQueryLoop({
+      streamChatCompletion: fakeStream,
+      executeTool: fakeExecute,
+      getSkillDefinition: vi.fn().mockReturnValue(undefined),
+    });
+    const userMessage =
+      "please modify the background color of those image in the workspace to white";
+
+    const result = await loop.run({
+      conversationId: "v2-test",
+      assistantMessageId: "a-1",
+      messages: [{ role: "user", content: userMessage }],
+      request: { message: userMessage },
+      openAITools: [],
+      abortController: new AbortController(),
+      eventSink: {
+        emit: (event) =>
+          emitted.push(event as unknown as Record<string, unknown>),
+      },
+      startRound: 0,
+      isActiveTurn: () => true,
+    });
+
+    expect(result.type).toBe("completed");
+    expect(fakeExecute).toHaveBeenCalledOnce();
+    expect(fakeExecute).toHaveBeenCalledWith(
+      "process_artifact_batch",
+      expect.any(Object),
+      expect.any(Object)
+    );
+    expect(
+      emitted.some(
+        (event) =>
+          event.type === "tool_result" &&
+          event.toolName === "attach_local_images" &&
+          JSON.stringify(event).includes("process_artifact_batch")
+      )
+    ).toBe(true);
+  });
 });
