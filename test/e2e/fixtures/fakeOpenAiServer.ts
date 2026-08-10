@@ -65,7 +65,12 @@ function redactChatRequest(
   rawBody: string,
   clientDisconnected: boolean
 ): RedactedRequest {
-  let parsed: { model?: string; messages?: unknown[]; stream?: boolean; tools?: unknown[] } = {};
+  let parsed: {
+    model?: string;
+    messages?: unknown[];
+    stream?: boolean;
+    tools?: unknown[];
+  } = {};
   try {
     parsed = JSON.parse(rawBody) as typeof parsed;
   } catch {
@@ -100,129 +105,135 @@ export async function startFakeOpenAiServer(): Promise<FakeOpenAiController> {
   let scenario: FakeAiScenarioName = "stream-text";
   const requestLog: RedactedRequest[] = [];
 
-  const server = http.createServer(
-    async (req, res) => {
-      const url = req.url ?? "/";
-      const isControl = url.startsWith("/__e2e/");
-      if (isControl) {
-        const provided = req.headers["x-e2e-control-token"];
-        if (provided !== controlToken) {
-          res.writeHead(403, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: "forbidden" }));
-          return;
-        }
-        const body = await readBody(req);
-        if (req.method === "POST" && url === "/__e2e/scenario") {
-          try {
-            const parsed = JSON.parse(body) as { name?: FakeAiScenarioName };
-            if (parsed.name) {
-              scenario = parsed.name;
-            }
-          } catch {
-            /* ignore */
+  const server = http.createServer(async (req, res) => {
+    const url = req.url ?? "/";
+    const isControl = url.startsWith("/__e2e/");
+    if (isControl) {
+      const provided = req.headers["x-e2e-control-token"];
+      if (provided !== controlToken) {
+        res.writeHead(403, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "forbidden" }));
+        return;
+      }
+      const body = await readBody(req);
+      if (req.method === "POST" && url === "/__e2e/scenario") {
+        try {
+          const parsed = JSON.parse(body) as { name?: FakeAiScenarioName };
+          if (parsed.name) {
+            scenario = parsed.name;
           }
-          res.writeHead(204);
-          res.end();
-          return;
+        } catch {
+          /* ignore */
         }
-        if (req.method === "POST" && url === "/__e2e/reset") {
-          requestLog.length = 0;
-          scenario = "stream-text";
-          res.writeHead(204);
-          res.end();
-          return;
-        }
-        if (req.method === "GET" && url === "/__e2e/requests") {
-          res.writeHead(200, { "Content-Type": "application/json" });
-          res.end(JSON.stringify(requestLog));
-          return;
-        }
-        res.writeHead(404);
+        res.writeHead(204);
         res.end();
         return;
       }
-
-      // Provider endpoints.
-      if (url === "/v1/models" && req.method === "GET") {
+      if (req.method === "POST" && url === "/__e2e/reset") {
+        requestLog.length = 0;
+        scenario = "stream-text";
+        res.writeHead(204);
+        res.end();
+        return;
+      }
+      if (req.method === "GET" && url === "/__e2e/requests") {
         res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify(MODELS_RESPONSE));
+        res.end(JSON.stringify(requestLog));
         return;
       }
-
-      if (url === "/v1/chat/completions" && req.method === "POST") {
-        const rawBody = await readBody(req);
-        let clientDisconnected = false;
-        req.on("close", () => {
-          // `close` fires after the response ends OR when the client aborts.
-          // We only flag a disconnect if the response wasn't finished.
-          if (!res.writableEnded) {
-            clientDisconnected = true;
-          }
-        });
-        const plan = resolveScenario(scenario);
-
-        if (plan.kind === "http-error") {
-          requestLog.push(
-            redactChatRequest(req, rawBody, false)
-          );
-          res.writeHead(plan.status, { "Content-Type": "application/json" });
-          res.end(plan.body);
-          return;
-        }
-
-        // Stream-ish scenarios all start an SSE response.
-        res.writeHead(200, {
-          "Content-Type": "text/event-stream",
-          "Cache-Control": "no-cache",
-          Connection: "keep-alive",
-        });
-
-        const frames =
-          plan.kind === "sse"
-            ? plan.frames
-            : plan.kind === "disconnect"
-            ? plan.leadingFrames
-            : [];
-
-        try {
-          if (plan.kind === "raw-bytes") {
-            res.write(plan.bytes);
-            res.end();
-          } else {
-            for (const f of frames) {
-              if (f.delayMs > 0) {
-                await sleep(f.delayMs);
-              }
-              if (res.destroyed || clientDisconnected) {
-                break;
-              }
-              res.write(`data: ${f.payload}\n\n`);
-            }
-            if (!res.destroyed && !clientDisconnected) {
-              res.write("data: [DONE]\n\n");
-            }
-            res.end();
-          }
-        } catch {
-          try {
-            res.destroy();
-          } catch {
-            /* ignore */
-          }
-        }
-
-        // Record AFTER handling so clientDisconnected reflects the outcome. For
-        // the disconnect scenario the recorded value is true only if the client
-        // actually went away; otherwise (server severed) it stays false here and
-        // the cancellation test asserts via client abort.
-        requestLog.push(redactChatRequest(req, rawBody, clientDisconnected));
-        return;
-      }
-
-      res.writeHead(404, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: { message: "not found" } }));
+      res.writeHead(404);
+      res.end();
+      return;
     }
-  );
+
+    // Provider endpoints.
+    if (url === "/v1/models" && req.method === "GET") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(MODELS_RESPONSE));
+      return;
+    }
+
+    if (url === "/v1/chat/completions" && req.method === "POST") {
+      const rawBody = await readBody(req);
+      let clientDisconnected = false;
+      // An interruptible signal that resolves the moment the client aborts
+      // mid-stream, so long delay frames (the cancel barrier) wake at once and
+      // the request is recorded with clientDisconnected=true promptly.
+      let signalGone: () => void = () => {};
+      const clientGone = new Promise<void>((resolve) => {
+        signalGone = resolve;
+      });
+      const onClientGone = (): void => {
+        if (!res.writableEnded) {
+          clientDisconnected = true;
+          signalGone();
+        }
+      };
+      // Cover the different ways Node http signals a mid-stream client abort.
+      req.on("close", onClientGone);
+      req.on("aborted", onClientGone);
+      res.on("close", onClientGone);
+      const plan = resolveScenario(scenario);
+
+      if (plan.kind === "http-error") {
+        requestLog.push(redactChatRequest(req, rawBody, false));
+        res.writeHead(plan.status, { "Content-Type": "application/json" });
+        res.end(plan.body);
+        return;
+      }
+
+      // Stream-ish scenarios all start an SSE response.
+      res.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        Connection: "keep-alive",
+      });
+
+      const frames =
+        plan.kind === "sse"
+          ? plan.frames
+          : plan.kind === "disconnect"
+          ? plan.leadingFrames
+          : [];
+
+      try {
+        if (plan.kind === "raw-bytes") {
+          res.write(plan.bytes);
+          res.end();
+        } else {
+          for (const f of frames) {
+            if (f.delayMs > 0) {
+              await Promise.race([sleep(f.delayMs), clientGone]);
+            }
+            if (res.destroyed || clientDisconnected) {
+              break;
+            }
+            res.write(`data: ${f.payload}\n\n`);
+          }
+          if (!res.destroyed && !clientDisconnected) {
+            res.write("data: [DONE]\n\n");
+          }
+          res.end();
+        }
+      } catch {
+        try {
+          res.destroy();
+        } catch {
+          /* ignore */
+        }
+      }
+
+      // Record AFTER handling so clientDisconnected reflects the outcome. For
+      // the disconnect scenario the recorded value is true only if the client
+      // actually went away; otherwise (server severed) it stays false here and
+      // the cancellation test asserts via client abort.
+      requestLog.push(redactChatRequest(req, rawBody, clientDisconnected));
+      return;
+    }
+
+    res.writeHead(404, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: { message: "not found" } }));
+  });
 
   await new Promise<void>((resolve) => {
     server.listen(0, "127.0.0.1", () => resolve());
@@ -237,7 +248,10 @@ export async function startFakeOpenAiServer(): Promise<FakeOpenAiController> {
   ): Promise<Response> => {
     return fetch(`http://127.0.0.1:${port}${path}`, {
       ...init,
-      headers: { "x-e2e-control-token": controlToken, ...(init?.headers ?? {}) },
+      headers: {
+        "x-e2e-control-token": controlToken,
+        ...(init?.headers ?? {}),
+      },
     });
   };
 

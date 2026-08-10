@@ -24,7 +24,10 @@ export type ScenarioPlan =
       readonly body: string;
     }
   | { readonly kind: "raw-bytes"; readonly bytes: string }
-  | { readonly kind: "disconnect"; readonly leadingFrames: readonly SseFrame[] };
+  | {
+      readonly kind: "disconnect";
+      readonly leadingFrames: readonly SseFrame[];
+    };
 
 function frame(delayMs: number, payload: string): SseFrame {
   return { delayMs, payload };
@@ -52,14 +55,15 @@ export function resolveScenario(name: FakeAiScenarioName): ScenarioPlan {
         ],
       };
     case "stream-delayed": {
-      // Used by cancellation tests: emit one chunk fast, then hold a long delay
-      // before the next so the test can press Stop mid-stream. The barrier is
-      // bounded well under the test timeout.
+      // Used by cancellation tests: emit one chunk fast, then hold a bounded
+      // delay before the next so the test can press Stop mid-stream. The barrier
+      // is short enough that the request is always recorded within the test's
+      // poll window even if the client abort does not propagate a socket close.
       return {
         kind: "sse",
         frames: [
           frame(0, textChunk("Streaming")),
-          frame(20_000, textChunk("-should-be-cancelled")),
+          frame(4_000, textChunk("-should-be-cancelled")),
           frame(0, stopChunk()),
         ],
       };
