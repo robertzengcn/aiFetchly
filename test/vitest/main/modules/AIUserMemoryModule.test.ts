@@ -101,6 +101,28 @@ describe("AIUserMemoryModule", () => {
     expect(after.length).toBe(1);
   });
 
+  it("lists all statuses when status is 'all'", async () => {
+    const mod = new AIUserMemoryModule();
+    await SqliteDb.ensureInitialized();
+    const a = await mod.createMemory({
+      type: "fact",
+      title: "a",
+      content: "aa",
+    });
+    await mod.createMemory({
+      type: "fact",
+      title: "b",
+      content: "bb",
+    });
+    await mod.archiveMemory(a.memoryId);
+    const all = await mod.listMemories({ status: "all" });
+    expect(all.length).toBe(2);
+    expect(all.some((m) => m.status === "archived")).toBe(true);
+    const archived = await mod.listMemories({ status: "archived" });
+    expect(archived.length).toBe(1);
+    expect(archived[0].status).toBe("archived");
+  });
+
   it("updates memory fields", async () => {
     const mod = new AIUserMemoryModule();
     await SqliteDb.ensureInitialized();

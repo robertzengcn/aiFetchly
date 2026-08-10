@@ -189,6 +189,7 @@ import {
   type AIUserMemorySearchInput,
   type AIUserMemoryType,
   type AIUserMemoryStatus,
+  type AIUserMemoryListStatus,
   type AIUserMemorySourceKind,
 } from "@/entityTypes/aiUserMemoryTypes";
 
@@ -280,7 +281,7 @@ const errorMsg = ref("");
 const filters = reactive<{
   query: string;
   type: AIUserMemoryType | "";
-  status: AIUserMemoryStatus | "";
+  status: AIUserMemoryListStatus | "";
   sourceKind: AIUserMemorySourceKind | "";
 }>({
   query: "",
@@ -297,7 +298,7 @@ const typeOptions = computed(() => [
   ...AI_USER_MEMORY_TYPES.map((v) => ({ value: v, label: t(`aiMemory.type_${v}`) })),
 ]);
 const statusOptions = computed(() => [
-  { value: "", label: t("aiMemory.filter_all") },
+  { value: "all", label: t("aiMemory.filter_all") },
   ...AI_USER_MEMORY_STATUSES.map((v) => ({ value: v, label: t(`aiMemory.status_${v}`) })),
 ]);
 const sourceOptions = computed(() => [

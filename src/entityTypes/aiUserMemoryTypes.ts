@@ -7,6 +7,8 @@ export type AIUserMemoryType =
 
 export type AIUserMemoryStatus = "active" | "archived" | "contradicted";
 
+export type AIUserMemoryListStatus = AIUserMemoryStatus | "all";
+
 export type AIUserMemorySourceKind =
   | "manual"
   | "chat_v2"
@@ -113,7 +115,7 @@ export interface AIUserMemoryUpdateInput {
 export interface AIUserMemorySearchInput {
   query?: string;
   type?: AIUserMemoryType;
-  status?: AIUserMemoryStatus;
+  status?: AIUserMemoryListStatus;
   sourceKind?: AIUserMemorySourceKind;
   limit?: number;
   offset?: number;
