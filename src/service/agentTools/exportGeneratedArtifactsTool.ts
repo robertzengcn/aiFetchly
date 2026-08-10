@@ -15,6 +15,8 @@ import {
   resolveGeneratedImageProtocolPath,
 } from "@/service/AIChatGeneratedImageProtocol";
 import { WorkspaceResolver } from "@/service/WorkspaceResolver";
+import { FileOperationTracker } from "@/service/FileOperationTracker";
+import type { FileOperationRecord } from "@/entityTypes/fileOperationTypes";
 
 const MAX_EXPORT_ITEMS = 50;
 const DEFAULT_EXPORT_DIRECTORY = "generated-artifacts";
@@ -61,6 +63,9 @@ export interface ExportGeneratedArtifactsDeps {
   copyFile: typeof fs.copyFile;
   access: typeof fs.access;
   realpath: typeof fs.realpath;
+  trackFileOperation: (
+    record: Omit<FileOperationRecord, "id" | "timestamp">
+  ) => void;
 }
 
 function defaultDeps(): ExportGeneratedArtifactsDeps {
@@ -74,6 +79,7 @@ function defaultDeps(): ExportGeneratedArtifactsDeps {
     copyFile: fs.copyFile,
     access: fs.access,
     realpath: fs.realpath,
+    trackFileOperation: (record) => FileOperationTracker.emit(record),
   };
 }
 
@@ -155,7 +161,7 @@ async function selectDestination(input: {
   mkdir: ExportGeneratedArtifactsDeps["mkdir"];
   access: ExportGeneratedArtifactsDeps["access"];
   realpath: ExportGeneratedArtifactsDeps["realpath"];
-}): Promise<{ path: string; renamed: boolean }> {
+}): Promise<{ path: string; renamed: boolean; existed: boolean }> {
   if (path.isAbsolute(input.requested)) {
     throw new Error("Artifact destinations must be relative to the workspace.");
   }
@@ -188,10 +194,10 @@ async function selectDestination(input: {
   }
   const destination = afterMkdir.resolvedPath;
   if (!(await exists(destination, input.access))) {
-    return { path: destination, renamed: false };
+    return { path: destination, renamed: false, existed: false };
   }
   if (input.policy === "overwrite") {
-    return { path: destination, renamed: false };
+    return { path: destination, renamed: false, existed: true };
   }
   if (input.policy === "fail") {
     throw new Error(`Destination already exists: ${input.requested}`);
@@ -201,7 +207,7 @@ async function selectDestination(input: {
   for (let suffix = 1; suffix <= 1000; suffix += 1) {
     const candidate = `${stem}-${suffix}${extension}`;
     if (!(await exists(candidate, input.access))) {
-      return { path: candidate, renamed: true };
+      return { path: candidate, renamed: true, existed: false };
     }
   }
   throw new Error("Could not find an available destination filename.");
@@ -266,7 +272,7 @@ export class ExportGeneratedArtifactsService {
     const guard = new FilePathGuard([workspace.rootPath]);
     const items: ExportedArtifactItem[] = [];
 
-    for (const artifact of parsed.value.artifacts) {
+    for (const [artifactIndex, artifact] of parsed.value.artifacts.entries()) {
       if (context.signal?.aborted) {
         items.push({
           artifactUrl: artifact.artifactUrl,
@@ -318,6 +324,23 @@ export class ExportGeneratedArtifactsService {
           status: "exported",
           renamed: destination.renamed,
         });
+        try {
+          this.deps.trackFileOperation({
+            type: destination.existed ? "overwrite" : "create",
+            filePath: destination.path,
+            success: true,
+            conversationId: context.conversationId,
+            skillName: "export_generated_artifacts",
+            toolCallId: `${context.toolCallId}:${artifactIndex}`,
+            sizeBytes: sourceStats.size,
+            workspaceRoot: workspace.rootPath,
+            relativePath: path.relative(workspace.rootPath, destination.path),
+          });
+        } catch {
+          // File-operation telemetry must never turn a successful copy into a
+          // failed export. The default tracker is already fail-safe; this also
+          // protects custom/test dependencies.
+        }
       } catch (error) {
         items.push({
           artifactUrl: artifact.artifactUrl,

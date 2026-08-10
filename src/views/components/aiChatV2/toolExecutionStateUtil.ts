@@ -74,3 +74,41 @@ export const clearToolProgressForToolResult = (
 
   return cleared ? nextMessages : messages;
 };
+
+/**
+ * Replace an approved permission card with a non-interactive running state.
+ * Long-running tools can take minutes after approval; keeping the approval
+ * button spinning for that whole interval incorrectly implies that the click
+ * itself is stuck. The final streamed tool result replaces this local state.
+ */
+export const markPermissionPromptExecuting = (
+  messages: ChatV2MessageView[],
+  messageId: string
+): ChatV2MessageView[] => {
+  let changed = false;
+  const nextMessages = messages.map((message) => {
+    if (
+      message.id !== messageId ||
+      message.messageType !== MessageType.TOOL_RESULT ||
+      message.metadata?.toolResult?.needsPermissionPrompt !== true
+    ) {
+      return message;
+    }
+
+    changed = true;
+    return {
+      ...message,
+      content: "",
+      metadata: {
+        ...message.metadata,
+        toolResult: {
+          ...message.metadata.toolResult,
+          needsPermissionPrompt: false,
+          executionPending: true,
+        },
+      },
+    };
+  });
+
+  return changed ? nextMessages : messages;
+};

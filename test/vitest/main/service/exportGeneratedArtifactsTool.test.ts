@@ -80,12 +80,14 @@ describe("ExportGeneratedArtifactsService", () => {
       copyFile: fs.copyFile,
       access: fs.access,
       realpath: fs.realpath,
+      trackFileOperation: vi.fn(),
     };
   }
 
   it("exports an owned generated artifact into the approved workspace", async () => {
     const artifact = await createArtifact();
-    const service = new ExportGeneratedArtifactsService(deps());
+    const exportDeps = deps();
+    const service = new ExportGeneratedArtifactsService(exportDeps);
 
     const response = await service.execute(
       {
@@ -106,6 +108,16 @@ describe("ExportGeneratedArtifactsService", () => {
     expect(typeof exportedPath).toBe("string");
     expect(await fs.readFile(exportedPath ?? "", "utf8")).toBe(
       "generated-data"
+    );
+    expect(exportDeps.trackFileOperation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "create",
+        filePath: path.join(workspacePath, "outputs", "white-bg.png"),
+        conversationId: "conversation-1",
+        skillName: "export_generated_artifacts",
+        toolCallId: "call-1:0",
+        success: true,
+      })
     );
   });
 

@@ -136,3 +136,24 @@ describe("AiChatV2Message tool progress badge", () => {
     expect(wrapper.text()).toContain("4/10");
   });
 });
+
+describe("AiChatV2Message approved tool execution", () => {
+  it("shows a running state instead of a completed result", async () => {
+    const message = makeBaseMessage();
+    message.messageType = MessageType.TOOL_RESULT;
+    message.metadata = {
+      ...message.metadata,
+      source: "chat-v2",
+      toolResult: {
+        needsPermissionPrompt: false,
+        executionPending: true,
+      },
+    };
+
+    const wrapper = mountWith(message);
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("Running...");
+    expect(wrapper.find(".v2-message__tool-running").exists()).toBe(true);
+  });
+});

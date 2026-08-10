@@ -218,6 +218,48 @@ describe("extractFileOperationsFromMessages (history reopen)", () => {
     expect(records).toHaveLength(2);
     expect(records.map((r) => r.type)).toEqual(["create", "edit"]);
   });
+
+  it("rebuilds every exported artifact as a file operation", () => {
+    const records = extractFileOperationsFromMessages(
+      [
+        toolResultMessage({
+          toolName: "export_generated_artifacts",
+          toolCallId: "export-1",
+          toolResult: {
+            success: true,
+            status: "completed",
+            items: [
+              {
+                status: "exported",
+                destination: "/workspace/outputs/a.png",
+              },
+              {
+                status: "exported",
+                destination: "/workspace/outputs/b.png",
+              },
+            ],
+          },
+        }),
+      ],
+      "v2-conv",
+      "/workspace"
+    );
+
+    expect(records).toHaveLength(2);
+    expect(records.map((record) => record.filePath)).toEqual([
+      "/workspace/outputs/a.png",
+      "/workspace/outputs/b.png",
+    ]);
+    expect(records.map((record) => record.toolCallId)).toEqual([
+      "export-1:0",
+      "export-1:1",
+    ]);
+    expect(
+      records.every(
+        (record) => record.skillName === "export_generated_artifacts"
+      )
+    ).toBe(true);
+  });
 });
 
 describe("mergeFileOperationRecords", () => {
