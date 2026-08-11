@@ -7,6 +7,7 @@ import {
   emptyRejectCounts,
 } from "@/modules/accountSession/cookieNormalize";
 import type { CookiesType } from "@/entityTypes/cookiesType";
+import { isSameRegistrableHost } from "@/modules/lib/urlHostAllowlist";
 
 const baseNetscape = (over: Partial<CookiesType> = {}): CookiesType => ({
   domain: ".youtube.com",
@@ -116,7 +117,7 @@ describe("normalizeCookieBatch", () => {
         baseNetscape({ domain: ".evil.com", name: "b" }),
       ],
       "netscape",
-      { now, matchesDomain: (d) => d.endsWith("youtube.com") }
+      { now, matchesDomain: (d) => isSameRegistrableHost(d, "youtube.com") }
     );
     expect(res.accepted).toHaveLength(1);
     expect(res.accepted[0]?.name).toBe("a");
@@ -190,7 +191,7 @@ describe("normalizeCookieBatch", () => {
         }), // invalid_samesite
       ],
       "netscape",
-      { now, matchesDomain: (d) => d.endsWith("youtube.com") }
+      { now, matchesDomain: (d) => isSameRegistrableHost(d, "youtube.com") }
     );
     expect(res.accepted).toHaveLength(0);
     expect(res.rejected.outside_allowed_domains).toBe(1);
