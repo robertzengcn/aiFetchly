@@ -341,6 +341,7 @@
     "tar": "^7.5.19",
     "pdfjs-dist": "^4.2.67",
     "node-abi": "3.94.0",
-    "clone-deep": "4.0.1"
+    "clone-deep": "4.0.1",
+    "minimist": "^1.2.8"
   }
 }
