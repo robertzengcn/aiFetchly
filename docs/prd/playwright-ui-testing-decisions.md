@@ -52,3 +52,24 @@ errors in memory. Redaction is unit-tested (`test/e2e/support/redact.ts` +
 `test/vitest/main/e2e/ArtifactRedaction.test.ts`): auth/cookie headers, API
 keys/tokens/passwords, base64 payloads, and external paths are stripped before
 diagnostics reach the output directory.
+
+## 5. Cancellation transport-abort (TODO 4 / T-06)
+
+The app's Stop propagates to the stream consumer: `stopActiveTurn` →
+`abortController.abort()` → the fetch `AbortSignal` fires → `OpenAIStreamParser`
+stops reading → the UI stops rendering + the composer returns to actionable. This
+user-visible cancellation is asserted in T-06.
+
+The fake server does NOT observe a socket-level disconnect within the test window:
+Node's undici (the `fetch` implementation) aborts the request body reader but does
+not promptly reset the underlying TCP connection on a keep-alive SSE stream, so
+the server's `req.on('close')` does not fire in time. The fake server's
+disconnect-detection machinery (clientGone promise + req `close`/`aborted` + res
+`close` listeners) is in place and would record the disconnect if the socket
+closed.
+
+To make the server observe the abort, `OpenAICompatibleProviderClient.stream`
+would need to explicitly destroy the response body / underlying socket on abort
+(e.g. `response.body.cancel()` or a socket-level destroy). That is a production
+client change, deferred as separate scope. T-06 asserts the guaranteed contract
+(UI cancel + composer actionable + the request reached the provider).

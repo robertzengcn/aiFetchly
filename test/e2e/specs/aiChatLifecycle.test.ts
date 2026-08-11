@@ -71,10 +71,14 @@ test.describe("AI chat lifecycle + failure recovery", () => {
     // The composer returns to an actionable state (send button shown again).
     await actionableAgain(aiApp);
 
-    // The request reached the fake provider over the real transport path. (A
-    // server-side socket-close observation is contingent on the app propagating
-    // the abort to the fetch transport; the user-visible cancel above is the
-    // guaranteed contract.)
+    // The cancel propagates to the stream consumer (the AbortController fires,
+    // OpenAIStreamParser stops), so the delayed suffix never renders. The
+    // underlying fetch socket is not observed as a server-side disconnect within
+    // the test window (undici keep-alive behavior); forcing it would require
+    // OpenAICompatibleProviderClient to destroy the response body on abort — a
+    // separate, deferred change. The user-visible cancel above is the guaranteed
+    // contract (TODO §4 partial: UI-cancel asserted; transport socket-close
+    // observation pending a production client change).
     await expect
       .poll(
         async () =>
