@@ -30,8 +30,6 @@ jobs:
       BUILD_MODE: ${{ github.event_name == 'push' && 'production' || inputs.build_mode }}
       VITE_LOGIN_URL_TEST: ${{ secrets.VITE_LOGIN_URL_TEST }}
       VITE_LOGIN_URL_PROD: ${{ secrets.VITE_LOGIN_URL_PROD }}
-      UPDATESERVER_TEST: ${{ secrets.UPDATESERVER }}
-      UPDATESERVER_PROD: ${{ secrets.UPDATESERVER_PROD }}
 
     steps:
       - name: Checkout code
@@ -78,24 +76,17 @@ jobs:
           if [ "$BUILD_MODE" = "production" ]; then
             node_env="production"
             login_url="$VITE_LOGIN_URL_PROD"
-            update_server="$UPDATESERVER_PROD"
           else
             node_env="test"
             login_url="$VITE_LOGIN_URL_TEST"
-            update_server="$UPDATESERVER_TEST"
           fi
           if [ -z "$login_url" ]; then
             echo "::error::The login URL secret for ${BUILD_MODE} builds is empty."
             exit 1
           fi
-          if [ -z "$update_server" ]; then
-            echo "::error::The update-server secret for ${BUILD_MODE} builds is empty."
-            exit 1
-          fi
           {
             echo "NODE_ENV=$node_env"
             echo "VITE_LOGIN_URL=$login_url"
-            echo "UPDATESERVER=$update_server"
           } > .env
           cp .env ".env.${node_env}"
 
@@ -179,8 +170,6 @@ jobs:
       MAKE_MAC_DMG: ${{ github.event_name == 'push' && 'true' || inputs.build_mode == 'production' && 'true' || 'false' }}
       VITE_LOGIN_URL_TEST: ${{ secrets.VITE_LOGIN_URL_TEST }}
       VITE_LOGIN_URL_PROD: ${{ secrets.VITE_LOGIN_URL_PROD }}
-      UPDATESERVER_TEST: ${{ secrets.UPDATESERVER }}
-      UPDATESERVER_PROD: ${{ secrets.UPDATESERVER_PROD }}
 
     steps:
       - name: Checkout code
@@ -274,24 +263,17 @@ jobs:
           if [ "$BUILD_MODE" = "production" ]; then
             node_env="production"
             login_url="$VITE_LOGIN_URL_PROD"
-            update_server="$UPDATESERVER_PROD"
           else
             node_env="test"
             login_url="$VITE_LOGIN_URL_TEST"
-            update_server="$UPDATESERVER_TEST"
           fi
           if [ -z "$login_url" ]; then
             echo "::error::The login URL secret for ${BUILD_MODE} builds is empty."
             exit 1
           fi
-          if [ -z "$update_server" ]; then
-            echo "::error::The update-server secret for ${BUILD_MODE} builds is empty."
-            exit 1
-          fi
           {
             echo "NODE_ENV=$node_env"
             echo "VITE_LOGIN_URL=$login_url"
-            echo "UPDATESERVER=$update_server"
           } > .env
           cp .env ".env.${node_env}"
 

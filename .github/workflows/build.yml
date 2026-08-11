@@ -79,7 +79,6 @@ jobs:
           {
             echo "NODE_ENV=test"
             echo "VITE_LOGIN_URL=${{ secrets.VITE_LOGIN_URL_TEST }}"
-            echo "UPDATESERVER=${{ secrets.UPDATESERVER }}"
           } > .env
           cp .env .env.test
           if ! grep -qE '^VITE_LOGIN_URL=.' .env; then
@@ -318,7 +317,6 @@ jobs:
           {
             echo "NODE_ENV=test"
             echo "VITE_LOGIN_URL=${{ secrets.VITE_LOGIN_URL_TEST }}"
-            echo "UPDATESERVER=${{ secrets.UPDATESERVER }}"
           } > .env
           cp .env .env.test
           if ! grep -qE '^VITE_LOGIN_URL=.' .env; then
@@ -328,7 +326,7 @@ jobs:
           echo "OK: .env and .env.test written (VITE_LOGIN_URL non-empty)"
       - name: Install setuptools
         run: |
-            brew install python-setuptools                 
+            brew install python-setuptools
       - name: Install system dependencies for native modules
         run: |
             brew install xz pkg-config
