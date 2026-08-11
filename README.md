@@ -62,6 +62,10 @@ aiFetchly helps you turn business intent into executable workflows:
 
 ![aiFetchly AI provider settings](docs/images/readme/ai-provider-settings.png)
 
+### AI Memory Management
+
+![aiFetchly AI memory management](docs/images/readme/memory_edit.png)
+
 ## Agent Capabilities
 
 ### AI Agent Workspace
@@ -69,6 +73,7 @@ aiFetchly helps you turn business intent into executable workflows:
 | Capability | Description |
 |------------|-------------|
 | **Tool-Using AI Chat** | Work with an AI assistant that can call approved tools, use business context, and complete multi-step tasks from one desktop workspace. |
+| **AI Memory Management** | Manage durable AI memory in a dedicated UI: user memory (facts and preferences the AI remembers across conversations) and workspace memory (project-scoped knowledge). Create, edit, archive, or delete memories, filter by type/status/source, search, and run memory consolidation from chat and agent activity. |
 | **Custom AI Providers** | Power AI Chat with your own OpenAI-compatible provider, including Ollama, LM Studio, OpenAI, OpenRouter, vLLM, LocalAI, or a custom endpoint. |
 | **Business Task Execution** | Run research, extraction, file processing, message drafting, scheduling, and automation workflows without switching across multiple SaaS tools. |
 | **AI Customer Email Assistant** | Use AI to draft, send, and reply to customer emails with business context from your documents and workflow data. |
