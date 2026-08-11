@@ -34,6 +34,16 @@
               color="primary"
               variant="outlined"
               block
+              @click="navigateToAIMemory"
+              class="mb-2"
+            >
+              <v-icon left>mdi-brain</v-icon>
+              {{ t('system_settings.manage_ai_memories') }}
+            </v-btn>
+            <v-btn
+              color="primary"
+              variant="outlined"
+              block
               @click="navigateToAIProvider"
               class="mb-2"
             >
@@ -59,6 +69,16 @@
             >
               <v-icon left>mdi-robot-outline</v-icon>
               {{ t('system_settings.manage_subagents') || 'Manage Subagents' }}
+            </v-btn>
+            <v-btn
+              color="primary"
+              variant="outlined"
+              block
+              @click="navigateToAbout"
+              class="mb-2"
+            >
+              <v-icon left>mdi-information-outline</v-icon>
+              {{ t('about.title') || 'About aiFetchly' }}
             </v-btn>
           </v-card-text>
         </v-card>
@@ -450,6 +470,10 @@ function navigateToSkills() {
   router.push({ name: 'system_setting_skills' });
 }
 
+function navigateToAIMemory() {
+  router.push({ name: 'system_setting_ai_memory' });
+}
+
 function navigateToAIProvider() {
   router.push({ name: 'system_setting_ai_provider' });
 }
@@ -460,6 +484,10 @@ function navigateToHooks() {
 
 function navigateToSubagents() {
   router.push({ name: 'system_setting_subagents' });
+}
+
+function navigateToAbout() {
+  router.push({ name: 'system_setting_about' });
 }
 
 onMounted(() => {

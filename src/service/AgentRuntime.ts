@@ -7,6 +7,12 @@ import type { AIChatQueryLoopDeps } from "@/service/AIChatQueryLoop";
 import type { AIChatQueryEventSink } from "@/service/AIChatQueryEvents";
 import type { OpenAITool } from "@/api/aiChatApi";
 import { AiChatApi } from "@/api/aiChatApi";
+import type { OpenAIChatImage } from "@/api/aiChatApi";
+import { AIChatGeneratedImageStorageService } from "@/service/AIChatGeneratedImageStorageService";
+import {
+  persistAgentImages,
+  type AgentImageStorage,
+} from "@/service/persistAgentImages";
 import { AgentDefinitionModule } from "@/modules/AgentDefinitionModule";
 import { AgentTaskModule } from "@/modules/AgentTaskModule";
 import { AgentPromptBuilder } from "@/service/AgentPromptBuilder";
@@ -91,6 +97,14 @@ export interface AgentRuntimeDeps {
    * consolidation after a completed task. Runs independently of the user-memory
    * service. Failures are logged and swallowed. */
   workspaceAutoDreamService?: AIWorkspaceAutoDreamService;
+  /** Optional. Persists generated images (e.g. a batch worker's edited
+   * outputs) to disk so their file paths can be returned without carrying
+   * bytes. Defaults to AIChatGeneratedImageStorageService when images are
+   * present. */
+  generatedImageStorage?: AgentImageStorage;
+  /** Optional parent cancellation signal. Batch coordinators use this to
+   * cancel every in-flight item when the user stops the outer tool job. */
+  signal?: AbortSignal;
 }
 
 /**
@@ -281,11 +295,18 @@ export class AgentRuntime {
 
     // 5. Run with abort controller + runtime timeout.
     const abortController = new AbortController();
+    const abortFromParent = (): void => abortController.abort();
+    if (deps?.signal?.aborted) {
+      abortController.abort();
+    } else {
+      deps?.signal?.addEventListener("abort", abortFromParent, { once: true });
+    }
     const timer = setTimeout(() => {
       abortController.abort();
     }, definition.maxRuntimeMs);
 
     let finalText = "";
+    let capturedImages: OpenAIChatImage[] | undefined;
     const sink: AIChatQueryEventSink = deps?.eventSink ?? {
       emit: () => {
         // no-op sink for headless runs
@@ -321,6 +342,7 @@ export class AgentRuntime {
 
       if (result.type === "completed") {
         finalText = result.fullContent;
+        capturedImages = result.images;
       } else if (result.type === "cancelled") {
         finalText = result.partialContent;
         await this.taskModule.setStatus(agentTaskId, "cancelled", {
@@ -379,6 +401,7 @@ export class AgentRuntime {
       );
     } finally {
       clearTimeout(timer);
+      deps?.signal?.removeEventListener("abort", abortFromParent);
     }
 
     // 6. Parse output.
@@ -453,6 +476,33 @@ export class AgentRuntime {
       confidence = extractConfidence(outputObj) ?? 0;
     }
 
+    // Persist any edited/generated images the sub-agent's loop produced
+    // (e.g. a batch worker's attach_local_images edits) to local storage and
+    // derive their on-disk paths + descriptors. Bytes are never carried on
+    // AgentResult (PRD non-goal 8). Failure is swallowed by persistAgentImages
+    // so a storage hiccup never fails an otherwise-successful task.
+    //
+    // The default AIChatGeneratedImageStorageService reads Electron's
+    // app.getPath("userData") at construction, so it is constructed LAZILY —
+    // only when there are images to persist. This keeps image-less runs (incl.
+    // tests without an Electron `app`) from touching Electron at all.
+    let outputFilePaths: string[] | undefined;
+    let outputImages: OpenAIChatImage[] | undefined;
+    let storageWarning: string | undefined;
+    if (capturedImages && capturedImages.length > 0) {
+      const persisted = await persistAgentImages({
+        images: capturedImages,
+        conversationId: agentConversationId,
+        messageId: `agent-assistant-${agentTaskId}`,
+        storage:
+          deps?.generatedImageStorage ??
+          new AIChatGeneratedImageStorageService(),
+      });
+      outputFilePaths = persisted.outputFilePaths;
+      outputImages = persisted.outputImages;
+      storageWarning = persisted.storageWarning;
+    }
+
     const result: AgentResult = {
       agentTaskId,
       agentId: definition.id,
@@ -464,6 +514,9 @@ export class AgentRuntime {
       sourceUrls,
       confidence,
       ...(parseWarning ? { parseWarning } : {}),
+      ...(outputFilePaths ? { outputFilePaths } : {}),
+      ...(outputImages ? { outputImages } : {}),
+      ...(storageWarning ? { storageWarning } : {}),
     };
     await this.taskModule.saveResult(agentTaskId, result);
     await this.taskModule.setStatus(agentTaskId, "completed", {

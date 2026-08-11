@@ -84,6 +84,8 @@ const registry: Map<string, SkillDefinition> =
 // Built-in skill definitions (statically imported)
 // ---------------------------------------------------------------------------
 import { RUN_SUBAGENT_TOOL } from "@/service/agentTools/runSubagentTool";
+import { PROCESS_ARTIFACT_BATCH_TOOL } from "@/service/agentTools/processArtifactBatchTool";
+import { EXPORT_GENERATED_ARTIFACTS_TOOL } from "@/service/agentTools/exportGeneratedArtifactsTool";
 import { AIAppNavigationToolService } from "@/service/AIAppNavigationToolService";
 import {
   AIImageAttachmentToolService,
@@ -156,9 +158,9 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       "After glob_files finds image paths, call this tool with exact paths — do NOT use " +
       "shell_execute, Python, Pillow/PIL, ImageMagick, or file_read for image editing. " +
       "HARD LIMIT: at most 3 images per call and per AI request. " +
-      "When more than 3 images need editing: (1) attach ONLY the first batch of up to 3 paths, " +
-      "(2) wait for the AI to finish editing that batch and return results, " +
-      "(3) then call this tool again with the next up to 3 paths, and repeat until done. " +
+      "For image EDITING, use this directly with exactly 1 image. A provider may accept 3 inputs but return only 1 output, so multiple editable images must not share one request. " +
+      "WHEN 2 OR MORE files need the same edit, call process_artifact_batch once with all exact paths and the shared instruction. It runs one isolated provider operation per input with bounded concurrency and returns every output with its input mapping. " +
+      "The 3-image form remains available for analysis/comparison requests that intentionally consume several images together. " +
       "NEVER pass more than 3 paths in one call. " +
       "NEVER issue multiple attach_local_images calls in the same assistant turn/tool round — " +
       "one batch per round only. " +
@@ -301,14 +303,15 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
             },
           };
         }
-        // Verify the account has cookies stored; if not, ask the user to add them.
+        // Verify the account has a usable cookie snapshot; if not, ask the user
+        // to add them. Presence is read from non-secret session metadata.
         try {
-          const { AccountCookiesModule } = await import(
-            "@/modules/accountCookiesModule"
+          const { AccountSessionService } = await import(
+            "@/modules/AccountSessionService"
           );
-          const cookiesModule = new AccountCookiesModule();
-          const cookies = await cookiesModule.getAccountCookies(accountId);
-          if (!cookies || !cookies.cookies) {
+          const sessionService = new AccountSessionService();
+          const meta = await sessionService.getMetadata(accountId);
+          if (!meta.hasCookies || meta.cookieCount === 0) {
             return {
               success: false,
               result: {
@@ -2851,6 +2854,8 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       };
     },
   },
+  PROCESS_ARTIFACT_BATCH_TOOL,
+  EXPORT_GENERATED_ARTIFACTS_TOOL,
   RUN_SUBAGENT_TOOL,
   {
     name: "proxy_list",

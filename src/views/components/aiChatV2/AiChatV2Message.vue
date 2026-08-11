@@ -73,12 +73,15 @@
           <div class="v2-message__tool-header">
             <v-icon
               size="small"
-              :color="message.metadata?.success === false ? 'error' : 'success'"
+              :color="executionPending ? 'purple' : message.metadata?.success === false ? 'error' : 'success'"
               class="mr-1"
+              :class="{ 'mdi-spin': executionPending }"
             >
-              {{ message.metadata?.success === false ? 'mdi-alert-circle' : 'mdi-check-circle' }}
+              {{ executionPending ? 'mdi-loading' : message.metadata?.success === false ? 'mdi-alert-circle' : 'mdi-check-circle' }}
             </v-icon>
-            <strong>{{ t("aiChatV2.tool_result_title") || "Tool Result" }}</strong>
+            <strong :class="{ 'v2-message__tool-running': executionPending }">
+              {{ executionPending ? t("aiChatV2.tool_running") || "Running..." : t("aiChatV2.tool_result_title") || "Tool Result" }}
+            </strong>
           </div>
           <AiArtifactCard
             v-if="message.metadata?.artifact"
@@ -540,6 +543,9 @@ const toolProgress = computed<ToolProgressView | null>(() => {
 
 const needsPermissionPrompt = computed(
   () => toolResult.value.needsPermissionPrompt === true
+);
+const executionPending = computed(
+  () => toolResult.value.executionPending === true
 );
 
 const reasoningText = computed(

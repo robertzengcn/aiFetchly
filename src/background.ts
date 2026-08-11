@@ -710,7 +710,7 @@ function initialize() {
         }
       }
       //if (userdataPath){//register communication ipc handlers
-      registerCommunicationIpcHandlers(win);
+      registerCommunicationIpcHandlers(win, () => win);
 
       // INIT-01: Wire FileOperationTracker to the window's webContents
       FileOperationTracker.setWebContents(win.webContents);

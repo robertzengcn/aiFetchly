@@ -4,6 +4,7 @@ import type { ChatV2MessageView } from "@/entityTypes/aiChatV2Types";
 import {
   clearToolProgressForToolResult,
   hasPendingToolExecution,
+  markPermissionPromptExecuting,
 } from "@/views/components/aiChatV2/toolExecutionStateUtil";
 
 const makeMessage = (
@@ -70,5 +71,34 @@ describe("toolExecutionStateUtil", () => {
     expect(nextMessages[0].metadata?.toolProgress).toBeUndefined();
     expect(nextMessages[1].metadata?.toolProgress).toBeUndefined();
     expect(nextMessages[1]).toBe(messages[1]);
+  });
+
+  it("replaces an approved permission prompt with an executing state", () => {
+    const prompt = makeMessage(
+      "tool-result-1",
+      MessageType.TOOL_RESULT,
+      "call-1"
+    );
+    prompt.metadata = {
+      ...prompt.metadata,
+      source: "chat-v2",
+      toolResult: {
+        needsPermissionPrompt: true,
+        permissionCategory: "filesystem",
+      },
+    };
+
+    const messages = [prompt];
+    const nextMessages = markPermissionPromptExecuting(
+      messages,
+      "tool-result-1"
+    );
+
+    expect(nextMessages).not.toBe(messages);
+    expect(nextMessages[0].metadata?.toolResult).toMatchObject({
+      needsPermissionPrompt: false,
+      executionPending: true,
+    });
+    expect(prompt.metadata?.toolResult?.needsPermissionPrompt).toBe(true);
   });
 });

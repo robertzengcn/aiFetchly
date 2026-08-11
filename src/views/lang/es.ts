@@ -154,6 +154,7 @@ export default {
     mcp_tools: "Herramientas MCP",
     skills: "Habilidades",
     skills_management: "Gestión de Habilidades",
+    ai_memory_management: "Recuerdos de IA",
     hooks_management: "Gestión de Hooks",
     plugins: "Complementos",
     subagents: "Subagentes",
@@ -1320,6 +1321,37 @@ export default {
     save_success:
       "Guardado correctamente, el ID de la cuenta de herramienta es",
     save_fail: "Error al guardar",
+    session_status_available: "Sesión lista",
+    session_status_missing: "Sin sesión",
+    session_status_invalid: "Sesión inválida: vuelve a iniciar sesión",
+    session_status_migration_pending: "Actualizando sesión",
+    import: {
+      button: "Importar del perfil del navegador",
+      title: "Importar del perfil del navegador",
+      subtitle:
+        "Leer solo las cookies aprobadas para esta plataforma desde tu perfil del navegador.",
+      target: "Plataforma de la cuenta de destino",
+      approved_domains: "Dominios de cookies aprobados",
+      instructions:
+        "Abre la extensión AiFetchly en el perfil de Chrome, Edge o Brave desde el que quieres importar y aprueba la plataforma. Solo se leen una vez las cookies aprobadas.",
+      start: "Iniciar emparejamiento",
+      cancel: "Cancelar",
+      close: "Cerrar",
+      reason_feature_disabled:
+        "La importación desde el perfil del navegador no está habilitada en esta versión.",
+      reason_platform_unsupported:
+        "Esta plataforma aún no admite la importación desde el perfil del navegador.",
+      reason_unavailable:
+        "La importación desde el perfil del navegador no está disponible para esta cuenta.",
+      result_success:
+        "Se importaron {count} cookie(s) aprobadas. Verifica la sesión.",
+      result_no_cookies:
+        "No se encontraron cookies aprobadas en el perfil emparejado.",
+      result_expired:
+        "La solicitud de emparejamiento expiró. Vuelve a empezar.",
+      result_failed:
+        "La importación falló. Reintenta o inicia sesión manualmente.",
+    },
   },
   video_download_list: {},
   system_settings: {
@@ -1359,6 +1391,7 @@ export default {
     mcp_tools: "Herramientas MCP",
     manage_mcp_tools: "Gestionar herramientas MCP",
     manage_skills: "Gestionar habilidades",
+    manage_ai_memories: "Gestionar recuerdos de IA",
     manage_ai_provider: "Proveedor de IA",
     manage_hooks: "Administrar Hooks",
     manage_subagents: "Administrar subagentes",
@@ -1465,6 +1498,70 @@ export default {
     user_ai_desktop_notify: "Aviso de finalización en escritorio",
     "ai-desktop-notify-description":
       "Muestra un aviso en la esquina inferior derecha cuando el agente de IA principal termina una respuesta o un plan está listo para aprobar (solo si la app está en segundo plano).",
+  },
+  aiMemory: {
+    title: "Recuerdos de IA",
+    description:
+      "Hechos y preferencias duraderos que la IA recuerda entre conversaciones.",
+    search_placeholder: "Buscar título o contenido...",
+    filter_type: "Tipo",
+    filter_status: "Estado",
+    filter_source: "Origen",
+    filter_all: "Todos",
+    button_create: "Nuevo recuerdo",
+    button_refresh: "Actualizar",
+    col_title: "Título",
+    col_type: "Tipo",
+    col_content: "Contenido",
+    col_status: "Estado",
+    col_source: "Origen",
+    col_updated: "Actualizado",
+    col_actions: "Acciones",
+    type_preference: "Preferencia",
+    type_fact: "Hecho",
+    type_decision: "Decisión",
+    type_reference: "Referencia",
+    type_workflow: "Flujo",
+    status_active: "Activo",
+    status_archived: "Archivado",
+    status_contradicted: "Contradicho",
+    source_manual: "Manual",
+    source_chat_v2: "Chat",
+    source_agent_task: "Tarea de agente",
+    source_auto_dream: "Auto-consolidación",
+    loading: "Cargando...",
+    empty_title: "Aún no hay recuerdos",
+    empty_description:
+      "Crea un recuerdo para que la IA lo recuerde entre conversaciones.",
+    error_load: "Error al cargar los recuerdos.",
+    page_of: "Página {page} de {total}",
+    dialog_title_create: "Nuevo recuerdo",
+    dialog_title_edit: "Editar recuerdo",
+    field_type: "Tipo",
+    field_title: "Título",
+    field_content: "Contenido",
+    field_status: "Estado",
+    field_confidence: "Confianza",
+    field_source: "Origen",
+    button_save: "Guardar",
+    button_cancel: "Cancelar",
+    err_title_required: "El título es obligatorio.",
+    err_content_required: "El contenido es obligatorio.",
+    action_edit: "Editar",
+    action_archive: "Archivar",
+    action_delete: "Eliminar",
+    confirm_archive_title: "¿Archivar este recuerdo?",
+    confirm_archive_text:
+      "Los recuerdos archivados se ocultan de la IA. Puedes restaurarlos editándolos.",
+    confirm_delete_title: "¿Eliminar este recuerdo de forma permanente?",
+    confirm_delete_text: "Esta acción no se puede deshacer.",
+    button_archive: "Archivar",
+    button_delete: "Eliminar",
+    toast_created: "Recuerdo creado.",
+    toast_updated: "Recuerdo actualizado.",
+    toast_archived: "Recuerdo archivado.",
+    toast_deleted: "Recuerdo eliminado.",
+    toast_error: "Algo salió mal.",
   },
   skills: {
     title: "Gestión de Habilidades",
@@ -2222,6 +2319,11 @@ export default {
       "Revisa respuestas generadas por IA, estado de aprobación y registros de auditoría.",
   },
   aiChatV2: {
+    artifactExport: {
+      permissionTitle: "Exportar artefactos generados",
+      permissionDescription:
+        "Copia estos artefactos generados por AiFetchly en {destination}.",
+    },
     imageTool: {
       name: "Adjuntar imágenes locales",
       permissionTitle: "Enviar imágenes locales al servidor de IA",
@@ -2976,5 +3078,29 @@ export default {
     exportFailed: "Exportación fallida o cancelada.",
     sendSuccess: "Informe enviado. ¡Gracias!",
     sendFailed: "Envío fallido:",
+  },
+  about: {
+    title: "Acerca de AiFetchly",
+    app_name: "AiFetchly",
+    version: "Versión",
+    website: "Sitio web",
+    open_website: "Abrir sitio web",
+    check_for_updates: "Buscar actualizaciones",
+    restart_to_install: "Reiniciar para actualizar",
+    status_idle: "Haga clic para buscar la versión más reciente.",
+    status_checking: "Buscando actualizaciones…",
+    status_up_to_date: "Tienes la versión más reciente ({version}).",
+    status_downloading: "Descargando actualización…",
+    status_ready_to_restart: "Actualización descargada. Reinicia para aplicar.",
+    status_error: "No se pudieron buscar actualizaciones. Inténtalo más tarde.",
+    unsupported_development:
+      "La búsqueda de actualizaciones no está disponible en compilaciones de desarrollo.",
+    unsupported_store:
+      "Las actualizaciones se gestionan mediante Microsoft Store.",
+    unsupported_platform:
+      "Las actualizaciones automáticas no son compatibles con esta plataforma.",
+    open_website_failed: "No se pudo abrir el sitio web. Inténtalo más tarde.",
+    cooldown_active:
+      "Comprobado hace poco. Espera un minuto antes de intentarlo de nuevo.",
   },
 };

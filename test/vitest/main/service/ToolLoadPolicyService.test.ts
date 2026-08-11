@@ -80,6 +80,40 @@ describe("ToolLoadPolicyService.classify", () => {
     ).toBe("contextual");
   });
 
+  it("promotes process_artifact_batch for the same multi-image edit intent", () => {
+    expect(
+      classify("process_artifact_batch", "builtin", {
+        currentUserMessage:
+          "please update all image backgrounds in the workspace to white",
+      })
+    ).toBe("contextual");
+    expect(
+      classify("process_artifact_batch", "builtin", {
+        currentUserMessage: "write a short product tagline",
+      })
+    ).toBe("deferred");
+  });
+
+  it("exposes only the batch processor for plural workspace image edits", () => {
+    const currentUserMessage =
+      "please modify the background color of those image in the workspace to white";
+
+    expect(
+      classify("attach_local_images", "builtin", { currentUserMessage })
+    ).toBe("deferred");
+    expect(
+      classify("process_artifact_batch", "builtin", { currentUserMessage })
+    ).toBe("contextual");
+  });
+
+  it("promotes generated-artifact export for explicit workspace save intent", () => {
+    expect(
+      classify("export_generated_artifacts", "builtin", {
+        currentUserMessage: "save the generated files into my workspace",
+      })
+    ).toBe("contextual");
+  });
+
   it("promotes attach_local_images on continue when recent history has image intent", () => {
     expect(
       classify("attach_local_images", "builtin", {

@@ -16,6 +16,7 @@ export interface MessageWithMaybeFileToolResult {
 }
 
 const FILE_MUTATION_TOOLS = new Set(["file_write", "file_edit"]);
+const ARTIFACT_EXPORT_TOOL = "export_generated_artifacts";
 
 function isAbsoluteFilePath(filePath: string): boolean {
   return (
@@ -152,6 +153,56 @@ export function extractFileOperationFromMessage(
   return record;
 }
 
+function extractArtifactExportOperations(
+  message: MessageWithMaybeFileToolResult,
+  conversationId: string,
+  workspaceRoot?: string | null
+): FileOperationRecord[] {
+  if (
+    message.messageType !== "tool_result" ||
+    message.metadata?.toolName !== ARTIFACT_EXPORT_TOOL
+  ) {
+    return [];
+  }
+  const toolResult = message.metadata.toolResult;
+  if (!toolResult || !Array.isArray(toolResult.items)) return [];
+
+  const timestampMs = Date.parse(message.timestamp ?? "");
+  const baseToolCallId = message.metadata.toolCallId;
+  const records: FileOperationRecord[] = [];
+  for (const [index, rawItem] of toolResult.items.entries()) {
+    if (!rawItem || typeof rawItem !== "object") continue;
+    const item = rawItem as Record<string, unknown>;
+    if (item.status !== "exported" || typeof item.destination !== "string") {
+      continue;
+    }
+    const filePath = resolveFileOperationPath(item.destination, workspaceRoot);
+    records.push({
+      id: `history-file-op-${
+        message.id ?? baseToolCallId ?? filePath
+      }-${index}`,
+      type: "create",
+      filePath,
+      timestamp: Number.isNaN(timestampMs) ? 0 : timestampMs,
+      success: true,
+      conversationId: message.conversationId || conversationId,
+      skillName: ARTIFACT_EXPORT_TOOL,
+      ...(baseToolCallId ? { toolCallId: `${baseToolCallId}:${index}` } : {}),
+      ...(workspaceRoot
+        ? {
+            workspaceRoot,
+            relativePath: isAbsoluteFilePath(item.destination)
+              ? item.destination
+                  .slice(workspaceRoot.length)
+                  .replace(/^[/\\]+/, "")
+              : item.destination.replace(/^[/\\]+/, ""),
+          }
+        : {}),
+    });
+  }
+  return records;
+}
+
 function recordDedupeKey(record: FileOperationRecord): string {
   if (record.toolCallId) return `tc:${record.toolCallId}`;
   return `${record.type}:${record.filePath}`;
@@ -186,6 +237,15 @@ export function extractFileOperationsFromMessages(
 ): FileOperationRecord[] {
   const records: FileOperationRecord[] = [];
   for (const message of messages) {
+    const exported = extractArtifactExportOperations(
+      message,
+      conversationId,
+      workspaceRoot
+    );
+    if (exported.length > 0) {
+      records.push(...exported);
+      continue;
+    }
     const record = extractFileOperationFromMessage(
       message,
       conversationId,

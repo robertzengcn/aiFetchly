@@ -154,6 +154,7 @@ export default {
     mcp_tools: "MCP-Tools",
     skills: "Fähigkeiten",
     skills_management: "Skills-Verwaltung",
+    ai_memory_management: "KI-Erinnerungen",
     hooks_management: "Hooks-Verwaltung",
     plugins: "Plugins",
     subagents: "Unteragenten",
@@ -1312,6 +1313,37 @@ export default {
     form_not_valid: "Formular ist ungültig",
     save_success: "Erfolgreich gespeichert, die Werkzeugkonto-ID ist",
     save_fail: "Speichern fehlgeschlagen",
+    session_status_available: "Sitzung bereit",
+    session_status_missing: "Keine Sitzung",
+    session_status_invalid: "Sitzung ungültig — bitte neu anmelden",
+    session_status_migration_pending: "Sitzung wird aktualisiert",
+    import: {
+      button: "Aus Browserprofil importieren",
+      title: "Aus Browserprofil importieren",
+      subtitle:
+        "Nur die für diese Plattform genehmigten Cookies aus Ihrem Browserprofil lesen.",
+      target: "Zielkontoplattform",
+      approved_domains: "Genehmigte Cookie-Domains",
+      instructions:
+        "Öffnen Sie die AiFetchly-Erweiterung im Chrome-, Edge- oder Brave-Profil, aus dem Sie importieren möchten, und bestätigen Sie die Plattform. Nur die unten genehmigten Cookies werden einmalig gelesen.",
+      start: "Kopplung starten",
+      cancel: "Abbrechen",
+      close: "Schließen",
+      reason_feature_disabled:
+        "Der Import aus dem Browserprofil ist in diesem Build nicht aktiviert.",
+      reason_platform_unsupported:
+        "Diese Plattform unterstützt noch keinen Import aus dem Browserprofil.",
+      reason_unavailable:
+        "Der Import aus dem Browserprofil ist für dieses Konto nicht verfügbar.",
+      result_success:
+        "{count} genehmigte Cookie(s) importiert. Bitte Sitzung überprüfen.",
+      result_no_cookies:
+        "Im gekoppelten Browserprofil wurden keine genehmigten Cookies gefunden.",
+      result_expired:
+        "Die Kopplungsanfrage ist abgelaufen. Bitte erneut starten.",
+      result_failed:
+        "Import fehlgeschlagen. Bitte erneut versuchen oder manuell anmelden.",
+    },
   },
   video_download_list: {},
   system_settings: {
@@ -1350,6 +1382,7 @@ export default {
     mcp_tools: "MCP-Tools",
     manage_mcp_tools: "MCP-Tools verwalten",
     manage_skills: "Fähigkeiten verwalten",
+    manage_ai_memories: "KI-Erinnerungen verwalten",
     manage_ai_provider: "KI-Anbieter",
     manage_hooks: "Hooks verwalten",
     manage_subagents: "Unteragenten verwalten",
@@ -1456,6 +1489,70 @@ export default {
     user_ai_desktop_notify: "Desktop-Abschlussbenachrichtigung",
     "ai-desktop-notify-description":
       "Zeigt unten rechts eine Desktop-Benachrichtigung, wenn der Haupt-KI-Agent eine Antwort fertiggestellt hat oder ein Plan zur Freigabe bereit ist (nur wenn die App im Hintergrund ist).",
+  },
+  aiMemory: {
+    title: "KI-Erinnerungen",
+    description:
+      "Dauerhafte Fakten und Einstellungen, die sich die KI über Gespräche hinweg merkt.",
+    search_placeholder: "Titel oder Inhalt suchen...",
+    filter_type: "Typ",
+    filter_status: "Status",
+    filter_source: "Quelle",
+    filter_all: "Alle",
+    button_create: "Neue Erinnerung",
+    button_refresh: "Aktualisieren",
+    col_title: "Titel",
+    col_type: "Typ",
+    col_content: "Inhalt",
+    col_status: "Status",
+    col_source: "Quelle",
+    col_updated: "Aktualisiert",
+    col_actions: "Aktionen",
+    type_preference: "Präferenz",
+    type_fact: "Fakt",
+    type_decision: "Entscheidung",
+    type_reference: "Referenz",
+    type_workflow: "Ablauf",
+    status_active: "Aktiv",
+    status_archived: "Archiviert",
+    status_contradicted: "Widersprochen",
+    source_manual: "Manuell",
+    source_chat_v2: "Chat",
+    source_agent_task: "Agentenaufgabe",
+    source_auto_dream: "Auto-Konsolidierung",
+    loading: "Wird geladen...",
+    empty_title: "Noch keine Erinnerungen",
+    empty_description:
+      "Erstelle eine Erinnerung, damit die KI sie über Gespräche hinweg behält.",
+    error_load: "Erinnerungen konnten nicht geladen werden.",
+    page_of: "Seite {page} von {total}",
+    dialog_title_create: "Neue Erinnerung",
+    dialog_title_edit: "Erinnerung bearbeiten",
+    field_type: "Typ",
+    field_title: "Titel",
+    field_content: "Inhalt",
+    field_status: "Status",
+    field_confidence: "Konfidenz",
+    field_source: "Quelle",
+    button_save: "Speichern",
+    button_cancel: "Abbrechen",
+    err_title_required: "Titel ist erforderlich.",
+    err_content_required: "Inhalt ist erforderlich.",
+    action_edit: "Bearbeiten",
+    action_archive: "Archivieren",
+    action_delete: "Löschen",
+    confirm_archive_title: "Diese Erinnerung archivieren?",
+    confirm_archive_text:
+      "Archivierte Erinnerungen werden der KI vorenthalten. Du kannst sie später durch Bearbeiten wiederherstellen.",
+    confirm_delete_title: "Diese Erinnerung dauerhaft löschen?",
+    confirm_delete_text: "Diese Aktion kann nicht rückgängig gemacht werden.",
+    button_archive: "Archivieren",
+    button_delete: "Löschen",
+    toast_created: "Erinnerung erstellt.",
+    toast_updated: "Erinnerung aktualisiert.",
+    toast_archived: "Erinnerung archiviert.",
+    toast_deleted: "Erinnerung gelöscht.",
+    toast_error: "Etwas ist schiefgelaufen.",
   },
   skills: {
     title: "Fähigkeiten verwalten",
@@ -2214,6 +2311,11 @@ export default {
       "Überprüfe KI-generierte Antworten, Genehmigungsstatus und Audit-Protokolle.",
   },
   aiChatV2: {
+    artifactExport: {
+      permissionTitle: "Generierte Artefakte exportieren",
+      permissionDescription:
+        "Kopiere diese von AiFetchly generierten Artefakte nach {destination}.",
+    },
     imageTool: {
       name: "Lokale Bilder anhängen",
       permissionTitle: "Lokale Bilder an den KI-Server senden",
@@ -2971,5 +3073,31 @@ export default {
     exportFailed: "Export fehlgeschlagen oder abgebrochen.",
     sendSuccess: "Bericht gesendet. Vielen Dank!",
     sendFailed: "Senden fehlgeschlagen:",
+  },
+  about: {
+    title: "Über AiFetchly",
+    app_name: "AiFetchly",
+    version: "Version",
+    website: "Website",
+    open_website: "Website öffnen",
+    check_for_updates: "Nach Updates suchen",
+    restart_to_install: "Zum Aktualisieren neu starten",
+    status_idle: "Klicken Sie, um nach der neuesten Version zu suchen.",
+    status_checking: "Suche nach Updates…",
+    status_up_to_date: "Sie verwenden die neueste Version ({version}).",
+    status_downloading: "Update wird heruntergeladen…",
+    status_ready_to_restart:
+      "Update heruntergeladen. Zum Anwenden neu starten.",
+    status_error:
+      "Suche nach Updates nicht möglich. Versuchen Sie es später erneut.",
+    unsupported_development:
+      "Update-Prüfungen sind in Entwicklungsversionen nicht verfügbar.",
+    unsupported_store: "Updates werden über den Microsoft Store verwaltet.",
+    unsupported_platform:
+      "Automatische Updates werden auf dieser Plattform nicht unterstützt.",
+    open_website_failed:
+      "Die Website konnte nicht geöffnet werden. Versuchen Sie es später erneut.",
+    cooldown_active:
+      "Kürzlich geprüft. Bitte warten Sie eine Minute, bevor Sie es erneut versuchen.",
   },
 };

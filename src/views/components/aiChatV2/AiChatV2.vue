@@ -812,6 +812,7 @@ import {
 import {
   clearToolProgressForToolResult,
   hasPendingToolExecution,
+  markPermissionPromptExecuting,
 } from "./toolExecutionStateUtil";
 import { isPlanStateActive } from "./planStateUtil";
 import {
@@ -2608,6 +2609,10 @@ const onNewConversation = (): void => {
   streamingEstimatedTokens.value = 0;
   activeModel.value = undefined;
   toolApprovalMode.value = "ask_for_approval";
+  // Refresh the model list so newly-added server-side models appear in the
+  // selector without an app restart. Non-blocking and preserves the user's
+  // chosen model (loadModelContextWindows only re-resolves when undefined).
+  void loadModelContextWindows();
 };
 
 const onClearMessages = (): void => {
@@ -2902,6 +2907,7 @@ const handleSkillPermissionGrant = async (
   }
 
   setPermissionResumeInFlight(toolId, true);
+  messages.value = markPermissionPromptExecuting(messages.value, message.id);
 
   try {
     const raw = await windowInvoke(AI_CHAT_V2_RESUME_TOOL_AFTER_PERMISSION, {

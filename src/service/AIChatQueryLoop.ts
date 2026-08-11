@@ -2,6 +2,7 @@
 import type {
   OpenAIChatCompletionChunk,
   OpenAIChatCompletionRequest,
+  OpenAIChatImage,
   OpenAIChatMessage,
   OpenAITool,
   OpenAIToolCall,
@@ -25,7 +26,10 @@ import type {
   AIChatQueryLoopInput,
   AIChatQueryLoopResult,
 } from "@/service/AIChatQueryEvents";
-import { OpenAIStreamAccumulator } from "@/service/OpenAIStreamAccumulator";
+import {
+  OpenAIStreamAccumulator,
+  type ParsedToolCallResult,
+} from "@/service/OpenAIStreamAccumulator";
 import { ToolExecutor } from "@/service/ToolExecutor";
 import {
   AIChatRecoverableError,
@@ -62,11 +66,13 @@ import {
   stripConsumedImageHandoffs,
 } from "@/service/AIChatImageHandoff";
 import { getDefaultToolJobRegistry } from "@/service/ToolJobRegistry";
+import { extractToolResultImages } from "@/service/toolResultImageHarvest";
 import { USER_AI_ENABLED } from "@/config/usersetting";
 import { Token } from "@/modules/token";
 import { TOOL_CATALOG_SEARCH_TOOL_NAME } from "@/config/toolCatalogConfig";
 import { ToolCatalogService } from "@/service/ToolCatalogService";
 import { ToolCatalogSearchService } from "@/service/ToolCatalogSearchService";
+import { hasBatchImageEditIntent } from "@/service/ToolLoadPolicyService";
 import { logToolCatalogFilter } from "@/service/ToolCatalogMetricsService";
 import { toolCatalogCounters } from "@/service/ToolCatalogCounters";
 import { buildDeferredAnnouncement } from "@/service/ConversationToolStateService";
@@ -178,16 +184,30 @@ const MAX_TEXT_TOOL_CALL_MARKER_RETRIES = 1;
 const TEXT_TOOL_CALL_MARKER_RE =
   /^(?:(?:assistant|user|system):)?tool_call::def_tool_call:\d+\s*$/i;
 
+const TEXT_TOOL_CALL_BLOCK_RE =
+  /<tool_call>[\s¶]*<function=([A-Za-z0-9_.:-]+)>([\s\S]*?)<\/function>[\s¶]*<\/tool_call>/gi;
+
+const TEXT_TOOL_CALL_PARAMETER_RE =
+  /<parameter=([A-Za-z0-9_.:-]+)>([\s\S]*?)<\/parameter>/gi;
+
 const TEXT_TOOL_CALL_MARKER_RETRY_PROMPT =
   "Your previous response was a malformed tool-call marker instead of a valid assistant response. Retry now. If you need a tool, emit a real OpenAI tool call with the function name and JSON arguments. Do not write tool_call::def_tool_call markers as text.";
 
 const SHELL_EXECUTE_TOOL_NAME = "shell_execute";
+const ATTACH_LOCAL_IMAGES_TOOL_NAME = "attach_local_images";
+const PROCESS_ARTIFACT_BATCH_TOOL_NAME = "process_artifact_batch";
 
 const SHELL_ACTION_INTENT_RE =
   /\b(rm|unlink)\b|(?:\b(delete|remove)\b.*(?:\b(file|folder|directory|path)\b|[./~]|\.[A-Za-z0-9]{1,8}\b))|(?:\b(run|execute)\b.*\b(shell|terminal|bash|powershell|cmd|command)\b)/i;
 
 const IMAGE_SHELL_WORKAROUND_RE =
   /\b(pil|pillow|imagemagick|magick|convert)\b|\bfrom\s+PIL\b|\bimport\s+Image\b|\b(opencv|cv2)\b/i;
+
+const GENERATED_ARTIFACT_SHELL_TRANSFER_RE =
+  /\b(cp|mv|copy|move|copy-item|move-item)\b/i;
+
+const GENERATED_ARTIFACT_PATH_RE =
+  /aifetchly-generated-image:|[\\/]\.config[\\/]aiFetchly[\\/]ai-chat-generated-images[\\/]/i;
 
 /**
  * Detect shell/Python image-editing workarounds so we can steer the model to
@@ -209,6 +229,38 @@ function looksLikeImageShellWorkaround(rawArgs: unknown): boolean {
   }
   if (!text.trim()) return true;
   return IMAGE_SHELL_WORKAROUND_RE.test(text);
+}
+
+function looksLikeGeneratedArtifactShellTransfer(rawArgs: unknown): boolean {
+  const text =
+    typeof rawArgs === "string"
+      ? rawArgs
+      : rawArgs && typeof rawArgs === "object"
+      ? JSON.stringify(rawArgs)
+      : "";
+  return (
+    GENERATED_ARTIFACT_SHELL_TRANSFER_RE.test(text) &&
+    GENERATED_ARTIFACT_PATH_RE.test(text)
+  );
+}
+
+function shouldRouteImageAttachmentToBatch(input: {
+  rawArgs: unknown;
+  userMessage: string;
+}): boolean {
+  const args =
+    input.rawArgs && typeof input.rawArgs === "object"
+      ? (input.rawArgs as Record<string, unknown>)
+      : {};
+  const paths = Array.isArray(args.paths)
+    ? args.paths.filter((value): value is string => typeof value === "string")
+    : [];
+  const carriesEditInstruction =
+    typeof args.instruction === "string" && args.instruction.trim().length > 0;
+  return (
+    hasBatchImageEditIntent(input.userMessage) ||
+    (paths.length > 1 && carriesEditInstruction)
+  );
 }
 
 /**
@@ -315,6 +367,72 @@ export function shouldForceSubmitPlanForApproval(message: string): boolean {
 
 function isTextToolCallMarker(content: string): boolean {
   return TEXT_TOOL_CALL_MARKER_RE.test(content.trim());
+}
+
+function parseTextToolCallValue(raw: string): unknown {
+  const value = raw.replace(/^[\s¶]+|[\s¶]+$/g, "");
+  if (!value) return "";
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return value;
+  }
+}
+
+/**
+ * Parse the XML-style text tool protocol emitted by some OpenAI-compatible
+ * providers (notably Agnes). We accept it only when the entire assistant
+ * response consists of tool-call blocks plus whitespace/pilcrow separators,
+ * so ordinary prose or code samples containing these tags are never executed.
+ * Parsed calls still pass through the normal tool policy and permission gates.
+ */
+export function parseTextToolCalls(
+  content: string,
+  idPrefix = "text_tool_call"
+): ParsedToolCallResult[] {
+  const blocks = [...content.matchAll(TEXT_TOOL_CALL_BLOCK_RE)];
+  if (blocks.length === 0) return [];
+
+  const residual = content
+    .replace(TEXT_TOOL_CALL_BLOCK_RE, "")
+    .replace(/[\s¶]+/g, "");
+  if (residual.length > 0) return [];
+
+  const calls: ParsedToolCallResult[] = [];
+  for (const [index, block] of blocks.entries()) {
+    const name = block[1];
+    const body = block[2] ?? "";
+    const parameters = [...body.matchAll(TEXT_TOOL_CALL_PARAMETER_RE)];
+    const bodyResidual = body
+      .replace(TEXT_TOOL_CALL_PARAMETER_RE, "")
+      .replace(/[\s¶]+/g, "");
+    if (bodyResidual.length > 0) return [];
+
+    const args: Record<string, unknown> = {};
+    for (const parameter of parameters) {
+      args[parameter[1]] = parseTextToolCallValue(parameter[2] ?? "");
+    }
+    // Agnes sometimes uses the catalog result's `category` vocabulary as an
+    // input even though the actual search schema calls this field `query`.
+    if (
+      name === TOOL_CATALOG_SEARCH_TOOL_NAME &&
+      args.query === undefined &&
+      typeof args.category === "string"
+    ) {
+      args.query = args.category;
+      delete args.category;
+    }
+
+    calls.push({
+      index,
+      id: `${idPrefix}_${index}`,
+      name,
+      ok: true,
+      arguments: args,
+      rawArgumentsJson: JSON.stringify(args),
+    });
+  }
+  return calls;
 }
 
 function shouldForceShellExecute(input: {
@@ -556,8 +674,20 @@ export class AIChatQueryLoop {
     readonly currentUserMessage: string;
   }): ToolCatalogSearchResult {
     try {
+      const hasQuery =
+        typeof input.args.query === "string" &&
+        input.args.query.trim().length > 0;
+      const hasSelection =
+        Array.isArray(input.args.select) && input.args.select.length > 0;
+      const effectiveArgs: ToolCatalogSearchArgs =
+        !hasQuery &&
+        !hasSelection &&
+        hasBatchImageEditIntent(input.currentUserMessage) &&
+        input.catalog.byName.has(PROCESS_ARTIFACT_BATCH_TOOL_NAME)
+          ? { select: [PROCESS_ARTIFACT_BATCH_TOOL_NAME] }
+          : input.args;
       return this.catalogSearchService.search({
-        args: input.args,
+        args: effectiveArgs,
         catalog: input.catalog,
         state: {
           discoveredToolNames: input.discoveredToolNames,
@@ -753,6 +883,12 @@ export class AIChatQueryLoop {
         );
       }
 
+      // FR-4: images contributed by tool results this turn (e.g. a
+      // run_subagent batch worker's edited outputs). Folded into the
+      // completed result.images so the engine persists + renders them like
+      // any other generated image.
+      const collectedToolImages: OpenAIChatImage[] = [];
+
       for (
         let round = input.startRound;
         round < CHAT_V2_MAX_TOOL_ROUNDS;
@@ -924,9 +1060,18 @@ export class AIChatQueryLoop {
           totalTokens: resolvedUsage.totalTokens,
         });
 
-        const parsedCalls = accumulator
+        const nativeParsedCalls = accumulator
           .tryParseToolCallArguments()
           .filter((call) => call.name && call.id);
+        const textualParsedCalls =
+          nativeParsedCalls.length === 0 && !accumulator.state.sawToolCallDelta
+            ? parseTextToolCalls(
+                accumulator.state.fullContent,
+                `text_tool_call_${round}`
+              )
+            : [];
+        const parsedCalls =
+          nativeParsedCalls.length > 0 ? nativeParsedCalls : textualParsedCalls;
 
         // Some OpenAI-compatible servers emit finish_reason="stop" (or omit
         // it entirely) even when tool-call deltas were streamed. The
@@ -1198,7 +1343,7 @@ export class AIChatQueryLoop {
         messages.push(
           buildAssistantToolCallMessage(
             parsedCalls,
-            accumulator.state.fullContent
+            textualParsedCalls.length > 0 ? "" : accumulator.state.fullContent
           )
         );
 
@@ -1329,6 +1474,85 @@ export class AIChatQueryLoop {
             continue;
           }
 
+          // Generated artifacts are app-managed capabilities, not arbitrary
+          // filesystem paths. Never let the model route their export through
+          // shell_execute: that crosses the ~/.config critical-path boundary
+          // and loses the artifact ownership/workspace checks provided by the
+          // dedicated export tool.
+          if (
+            call.name === SHELL_EXECUTE_TOOL_NAME &&
+            collectedToolImages.length > 0 &&
+            looksLikeGeneratedArtifactShellTransfer(call.arguments)
+          ) {
+            if (catalog?.byName.has("export_generated_artifacts")) {
+              discoveredToolNames.add("export_generated_artifacts");
+            }
+            const steerContent = serializeToolResultContent({
+              success: false,
+              error:
+                "Do not copy or move AiFetchly-generated artifacts with shell_execute. " +
+                "They are already rendered in chat. If the user requested persistent workspace files, " +
+                "call export_generated_artifacts with the returned artifact URLs and workspace-relative destinations.",
+            });
+            eventSink.emit({
+              type: "tool_result",
+              conversationId: input.conversationId,
+              messageId: input.assistantMessageId,
+              toolCallId: call.id,
+              toolName: call.name,
+              fullContent: steerContent,
+              toolResult: {
+                success: false,
+                error: "use export_generated_artifacts instead",
+              },
+            });
+            messages.push({
+              role: "tool",
+              tool_call_id: call.id,
+              content: steerContent,
+            });
+            continue;
+          }
+
+          // `attach_local_images` is valid for one image edit or multi-image
+          // analysis, but it cannot guarantee one edited output per input.
+          // Enforce the batch route in application code because provider
+          // models may ignore tool descriptions and attach several edit inputs.
+          if (
+            call.name === ATTACH_LOCAL_IMAGES_TOOL_NAME &&
+            shouldRouteImageAttachmentToBatch({
+              rawArgs: call.arguments,
+              userMessage: input.request.message,
+            })
+          ) {
+            if (catalog?.byName.has(PROCESS_ARTIFACT_BATCH_TOOL_NAME)) {
+              discoveredToolNames.add(PROCESS_ARTIFACT_BATCH_TOOL_NAME);
+            }
+            const steerContent = serializeToolResultContent({
+              success: false,
+              error:
+                "Do not attach multiple images for independent edits. Call process_artifact_batch once with every exact workspace path and the shared edit instruction. It runs one provider request per input with bounded concurrency.",
+            });
+            eventSink.emit({
+              type: "tool_result",
+              conversationId: input.conversationId,
+              messageId: input.assistantMessageId,
+              toolCallId: call.id,
+              toolName: call.name,
+              fullContent: steerContent,
+              toolResult: {
+                success: false,
+                error: "use process_artifact_batch instead",
+              },
+            });
+            messages.push({
+              role: "tool",
+              tool_call_id: call.id,
+              content: steerContent,
+            });
+            continue;
+          }
+
           // Unknown-deferred-tool recovery (design §14.4): if the model calls a
           // deferred tool that is not yet exposed, load it and ask the model to
           // retry instead of failing the turn.
@@ -1350,8 +1574,8 @@ export class AIChatQueryLoop {
                   success: false,
                   error:
                     `Do not use shell_execute / Python / Pillow for local image editing. ` +
-                    `Use attach_local_images with 1-3 exact workspace image paths ` +
-                    `(discover paths with glob_files first), then continue the edit request.`,
+                    `Use attach_local_images with exactly one workspace image, or process_artifact_batch ` +
+                    `for multiple images (discover paths with glob_files first).`,
                 });
                 eventSink.emit({
                   type: "tool_result",
@@ -1554,6 +1778,13 @@ export class AIChatQueryLoop {
             preparedCall.blockedResult ??
             (await this.executePreparedToolWithTimeout(input, preparedCall));
 
+          // FR-4: a tool (e.g. run_subagent batch worker) may contribute
+          // generated/edited image descriptors on result.outputImages. Fold
+          // them into the turn's image set; non-batch tools contribute nothing.
+          for (const outImg of extractToolResultImages(toolResult)) {
+            collectedToolImages.push(outImg);
+          }
+
           // If the abort fired during the tool (e.g. user clicked Stop during
           // async polling), skip the tool_result emit — the outer abort handler
           // will return { type: "cancelled" } for the whole turn. Emitting a
@@ -1743,7 +1974,10 @@ export class AIChatQueryLoop {
         assistantMessageId: input.assistantMessageId,
         fullContent,
         finishReason,
-        images: finalAccumulator?.state.images,
+        images: [
+          ...(finalAccumulator?.state.images ?? []),
+          ...collectedToolImages,
+        ],
         model: finalAccumulator?.state.model,
         responseId: finalAccumulator?.state.responseId,
         totalTokens: lastReportedUsage?.totalTokens,

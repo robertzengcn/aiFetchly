@@ -53,12 +53,16 @@ import { registerHooksIpcHandlers } from "@/main-process/communication/hooks-ipc
 import { registerSlashCommandHandlers } from "@/main-process/communication/slash-command-ipc";
 import { registerWorkspaceWatchHandlers } from "@/main-process/communication/workspace-watch-ipc";
 import { initWorkspaceWatchManager } from "@/service/workspaceWatch/WorkspaceWatchManagerSingleton";
+import { registerAboutIpcHandlers } from "@/main-process/communication/about-ipc";
 
 type GlobalIpcState = typeof globalThis & {
   __aifetchlyIpcHandlersRegistered?: boolean;
 };
 
-export function registerCommunicationIpcHandlers(win: BrowserWindow) {
+export function registerCommunicationIpcHandlers(
+  win: BrowserWindow,
+  getWin: () => BrowserWindow | null
+) {
   const globalState = globalThis as GlobalIpcState;
   if (globalState.__aifetchlyIpcHandlersRegistered) {
     console.warn("[IPC] Skipping duplicate handler registration (HMR guard)");
@@ -119,6 +123,7 @@ export function registerCommunicationIpcHandlers(win: BrowserWindow) {
     registerSlashCommandHandlers(win);
     const workspaceWatchManager = initWorkspaceWatchManager(win);
     registerWorkspaceWatchHandlers(win, workspaceWatchManager);
+    registerAboutIpcHandlers(getWin);
     AsyncMsg();
   } catch (e) {
     console.log("registerCommunicationIpcHandlers error:");

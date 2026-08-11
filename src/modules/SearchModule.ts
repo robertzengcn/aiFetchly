@@ -39,6 +39,12 @@ import { SearchAccountEntity } from "@/entity/SearchAccount.entity";
 import { SearchKeywordEntity } from "@/entity/SearchKeyword.entity";
 import { CookiesType } from "@/entityTypes/cookiesType";
 import { AccountCookiesModule } from "./accountCookiesModule";
+import {
+  AccountSessionService,
+  CookieServiceError,
+} from "@/modules/AccountSessionService";
+import { normalizedToCookiesType } from "@/modules/accountSession/cookieNormalize";
+import { log } from "@/modules/Logger";
 import { Usersearchdata } from "@/entityTypes/searchControlType";
 import { utilityProcess, MessageChannelMain } from "electron";
 import { SystemSettingGroupModule } from "@/modules/SystemSettingGroupModule";
@@ -93,6 +99,7 @@ export class SearchModule extends BaseModule {
   private searchTaskProxyModel: SearchTaskProxyModel;
   private searchAccountModel: SearchAccountModel;
   private accountCookiesModule: AccountCookiesModule;
+  private accountSessionService: AccountSessionService;
   private systemSettingGroupModule: SystemSettingGroupModule;
   private socialAccountModule: SocialAccountModule;
   private aiRecoveryHandler: AIRecoveryHandler;
@@ -110,6 +117,7 @@ export class SearchModule extends BaseModule {
     this.searchTaskProxyModel = new SearchTaskProxyModel(this.dbpath);
     this.searchAccountModel = new SearchAccountModel(this.dbpath);
     this.accountCookiesModule = new AccountCookiesModule();
+    this.accountSessionService = new AccountSessionService();
     this.systemSettingGroupModule = new SystemSettingGroupModule();
     this.socialAccountModule = new SocialAccountModule();
     // Initialize AI recovery handler with default config
@@ -700,20 +708,14 @@ export class SearchModule extends BaseModule {
       throw new Error("search.google_account_cookies_required");
     }
 
-    // Check if any account has valid cookies
+    // Check if any account has a usable cookie snapshot (decrypted via the
+    // session service; legacy rows are parsed, ENC1 rows are decrypted).
     for (const account of accounts) {
-      const cookies = await this.accountCookiesModule.getAccountCookies(
+      const snapshot = await this.accountSessionService.getDecryptedSnapshot(
         account.id
       );
-      if (cookies && cookies.cookies) {
-        try {
-          const parsed = JSON.parse(cookies.cookies);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            return; // Found an account with valid cookies
-          }
-        } catch {
-          // Invalid cookies JSON, continue checking other accounts
-        }
+      if (snapshot.cookies.length > 0) {
+        return; // Found an account with valid cookies
       }
     }
 
@@ -986,12 +988,11 @@ export class SearchModule extends BaseModule {
     const cookiesArray: Array<Array<CookiesType>> = [];
     if (accounts) {
       for (const account of accountList) {
-        const cookies = await this.accountCookiesModule.getAccountCookies(
+        const snapshot = await this.accountSessionService.getDecryptedSnapshot(
           account
         );
-        if (cookies) {
-          const cookiesits: Array<CookiesType> = JSON.parse(cookies.cookies);
-          cookiesArray.push(cookiesits);
+        if (snapshot.cookies.length > 0) {
+          cookiesArray.push(normalizedToCookiesType(snapshot.cookies));
         }
       }
     }
@@ -1239,39 +1240,29 @@ export class SearchModule extends BaseModule {
     cookies: Array<CookiesType>
   ): Promise<void> {
     try {
-      // Get existing cookies entity for this account
-      const existingCookies = await this.accountCookiesModule.getAccountCookies(
-        accountId
-      );
-
-      if (existingCookies) {
-        // Update existing cookies
-        existingCookies.cookies = JSON.stringify(cookies);
-        existingCookies.record_time = getRecorddatetime();
-        await this.accountCookiesModule.saveAccountCookies(existingCookies);
-        console.log(`Successfully updated cookies for account ${accountId}`);
-      } else {
-        // Create new cookies entry if it doesn't exist
-        const { AccountCookiesEntity } = await import(
-          "@/entity/AccountCookies.entity"
+      const partitionPath =
+        await this.accountSessionService.getOrCreatePartition(accountId);
+      await this.accountSessionService.persistSnapshot({
+        accountId,
+        cookies: cookies as unknown[],
+        source: "worker_refresh",
+        partitionPath,
+      });
+      log.info(`Updated cookies for account ${accountId}`);
+    } catch (err) {
+      if (
+        err instanceof CookieServiceError &&
+        (err.code === "NO_ALLOWED_COOKIES" || err.code === "KEY_UNAVAILABLE")
+      ) {
+        // Safe skip: do not fail the worker over an empty/filtered refresh or a
+        // missing key. The existing snapshot is left intact by the service.
+        log.warn(
+          `Worker cookie refresh skipped for account ${accountId} (${err.code})`
         );
-        const newCookies = new AccountCookiesEntity();
-        newCookies.account_id = accountId;
-        newCookies.cookies = JSON.stringify(cookies);
-        newCookies.record_time = getRecorddatetime();
-        newCookies.partition_path =
-          this.accountCookiesModule.genPartitionPath();
-        await this.accountCookiesModule.saveAccountCookies(newCookies);
-        console.log(
-          `Successfully created new cookies entry for account ${accountId}`
-        );
+        return;
       }
-    } catch (error) {
-      console.error(
-        `Failed to update cookies for account ${accountId}:`,
-        error
-      );
-      throw error;
+      log.error(`Failed to update cookies for account ${accountId}`);
+      throw err;
     }
   }
 }

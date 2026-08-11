@@ -9,6 +9,7 @@ import {
   SavesocialaccountResp,
 } from "@/entityTypes/socialaccount-type";
 import { AccountCookiesModule } from "@/modules/accountCookiesModule";
+import { AccountSessionService } from "@/modules/AccountSessionService";
 import { ProxyModule } from "./ProxyModule";
 import { SocialPlatformList } from "@/config/generate";
 import { FieldCipher } from "@/modules/fieldCipher/FieldCipher";
@@ -18,11 +19,13 @@ import { SecretKeyUnavailableError } from "@/modules/fieldCipher/SecretKeyUnavai
 export class SocialAccountModule extends BaseModule {
   private socialAccountModel: SocialAccountModel;
   private accountCookiesModule: AccountCookiesModule;
+  private accountSessionService: AccountSessionService;
 
   constructor() {
     super();
     this.socialAccountModel = new SocialAccountModel(this.dbpath);
     this.accountCookiesModule = new AccountCookiesModule();
+    this.accountSessionService = new AccountSessionService();
   }
 
   /**
@@ -117,14 +120,10 @@ export class SocialAccountModule extends BaseModule {
       // Add cookies information to each account
       const recordsWithCookies = await Promise.all(
         result.records.map(async (account) => {
-          const cookies = await this.accountCookiesModule.getAccountCookies(
-            account.id
-          );
-          const hasCookies = !!(
-            cookies &&
-            cookies.cookies &&
-            JSON.parse(cookies.cookies).length > 0
-          );
+          // Presence is derived from non-secret session metadata (cookie count),
+          // never by parsing cookie values into the renderer payload.
+          const meta = await this.accountSessionService.getMetadata(account.id);
+          const hasCookies = meta.hasCookies && meta.cookieCount > 0;
 
           // Map social_type_id to platform name
           const platform = SocialPlatformList.find(
@@ -305,8 +304,9 @@ export class SocialAccountModule extends BaseModule {
       );
 
       if (affectedRows > 0) {
-        // Also delete associated cookies
-        await this.accountCookiesModule.deleteCookies(id);
+        // Also delete the encrypted cookie snapshot and clear the account's
+        // Electron partition storage (scoped to this account only).
+        await this.accountSessionService.clearAccountSession(id);
 
         return {
           status: true,
