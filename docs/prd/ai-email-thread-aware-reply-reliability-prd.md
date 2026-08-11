@@ -11,6 +11,7 @@
 - **Related documents**:
   - `docs/prd/ai-email-receive-auto-reply-prd.md`
   - `docs/prd/ai-email-receive-auto-reply-technical-design.md`
+  - `docs/prd/ai-email-thread-aware-reply-reliability-technical-design.md`
   - `docs/ai-chat-tool-approval-modes-prd.md`
   - `docs/prd/knowledge-library-management-ai-tools-prd.md`
 
