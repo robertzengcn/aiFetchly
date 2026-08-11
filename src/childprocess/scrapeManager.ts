@@ -31,6 +31,7 @@ import * as path from "path";
 import { pluggableType } from "@/entityTypes/scrapeType";
 import { ProxyServer } from "@/entityTypes/proxyType";
 import { CookiesType } from "@/entityTypes/cookiesType";
+import { pickRandomIndex } from "@/modules/lib/randomIndex";
 // import vanillaPuppeteer from 'puppeteer';
 // import {addExtra} from 'puppeteer-extra';
 // import StealthPlugin from 'puppeteer-extra-plugin-stealth';
@@ -517,7 +518,7 @@ export class ScrapeManager {
       let cookiesArray: Array<CookiesType> = [];
       let selectedAccountId: number | undefined;
       if (param.cookies && param.cookies.length > 0) {
-        const randomIndex = Math.floor(Math.random() * param.cookies.length);
+        const randomIndex = pickRandomIndex(param.cookies.length);
         cookiesArray = param.cookies[randomIndex];
         // Only set accountId when this chunk has non-empty cookies so the callback can update the DB
         if (
@@ -535,7 +536,7 @@ export class ScrapeManager {
       };
       console.log("cludata=%O", cludata);
       if (this.proxiesArr && this.proxiesArr.length > 0) {
-        const randomIndex = Math.floor(Math.random() * this.proxiesArr.length);
+        const randomIndex = pickRandomIndex(this.proxiesArr.length);
         cludata.proxyServer = this.proxiesArr[randomIndex];
       }
       // if(param.cookies){
