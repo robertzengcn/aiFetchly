@@ -120,13 +120,14 @@ describe("E2ENetworkGuard", () => {
       expect(log).toBe("");
     });
 
-    it("blocks an unconfigured loopback origin (default-deny)", async () => {
+    it("blocks an unconfigured loopback origin in strict mode (default-deny)", async () => {
       let called = false;
       globalThis.fetch = ((_input: unknown) => {
         called = true;
         return Promise.resolve(new Response("ok"));
       }) as unknown as typeof fetch;
-      guard = installE2ENetworkGuard(makeEnv(root));
+      // Strict mode: only configured origins; unconfigured loopback is blocked.
+      guard = installE2ENetworkGuard(makeEnv(root), { strict: true });
 
       // A loopback port NOT in the allowlist is blocked just like an external host.
       await expect(

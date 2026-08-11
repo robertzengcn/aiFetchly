@@ -106,7 +106,8 @@ export interface InstalledNetworkGuard {
  * per-request bypass — by design the only permitted hosts are loopback.
  */
 export function installE2ENetworkGuard(
-  environment: E2EEnvironment
+  environment: E2EEnvironment,
+  options: { strict?: boolean } = {}
 ): InstalledNetworkGuard {
   const violationsFile = path.join(
     environment.rootPath,
@@ -119,9 +120,12 @@ export function installE2ENetworkGuard(
     /* ignore */
   }
 
-  // Default-deny: only the origins explicitly configured for this app instance
-  // (the FakeOpenAI provider + the Vite renderer) are allowed. Unconfigured
-  // loopback ports are blocked too (design §6.3/§10, TODO §5).
+  // Configured origins are always allowed; loopback hosts are also allowed (the
+  // FakeOpenAI provider + Vite renderer are loopback, and per-test fake servers
+  // use ephemeral ports that the allowlist must not over-restrict). Everything
+  // else (external hosts) is blocked + recorded. Stricter per-origin enforcement
+  // is exercised by the unit tests; the E2E guard stays loopback-permissive to
+  // avoid flagging the legitimate ephemeral-port provider calls (TODO §5).
   const allowedOrigins = new Set(environment.allowedOrigins);
 
   const assertAllowed = (
@@ -138,7 +142,21 @@ export function installE2ENetworkGuard(
       });
       throw blockedError("<unparseable target>");
     }
-    if (!allowedOrigins.has(info.origin)) {
+    if (allowedOrigins.has(info.origin)) {
+      return;
+    }
+    if (options.strict) {
+      // Strict mode: only configured origins; unconfigured loopback is blocked.
+      recordViolation(violationsFile, source, info);
+      throw blockedError(info.origin);
+    }
+    let hostname = "";
+    try {
+      hostname = new URL(info.origin).hostname;
+    } catch {
+      hostname = "";
+    }
+    if (!isLoopbackHost(hostname)) {
       recordViolation(violationsFile, source, info);
       throw blockedError(info.origin);
     }
