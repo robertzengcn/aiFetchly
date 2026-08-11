@@ -157,7 +157,7 @@ jobs:
           yarn verify-packaged-app
 
       - name: Upload Windows installers
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ steps.calculate_version.outputs.artifact_name }}
           path: |
@@ -364,7 +364,7 @@ jobs:
           yarn verify-packaged-app
 
       - name: Upload macOS installers
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ steps.calculate_version.outputs.artifact_name }}
           path: |
@@ -479,7 +479,7 @@ jobs:
           done
 
       - name: Upload runtime archives
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: local-ai-runtimes-${{ matrix.platform }}-${{ matrix.arch }}
           path: |
@@ -521,7 +521,7 @@ jobs:
             --output runtime-assets/local-ai-runtimes.json
 
       - name: Upload release assets
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: local-ai-runtime-release-assets
           path: runtime-assets
