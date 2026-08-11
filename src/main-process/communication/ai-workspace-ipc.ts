@@ -180,7 +180,8 @@ export function registerAIWorkspaceIpcHandlers(_win: BrowserWindow): void {
         return denied("AI functionality is only available to subscribers.");
       }
       try {
-        const result = await getNativeDialogService().showOpenDialog({
+        const dialogService = await getNativeDialogService();
+        const result = await dialogService.showOpenDialog({
           properties: ["openDirectory"],
         });
         if (result.canceled || result.filePaths.length === 0) {

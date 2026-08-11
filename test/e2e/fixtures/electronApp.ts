@@ -50,7 +50,10 @@ function buildSanitizedEnv(
   testRoot: E2ETestRoot,
   fakeAiBaseUrl: string | undefined
 ): Record<string, string> {
-  const ALLOWED_PREFIXES = [
+  // Exact-name allowlist for safe OS/runtime variables. Broad names are matched
+  // EXACTLY (not as prefixes) so e.g. `CI` does not also pass `CI_REPOSITORY_URL`
+  // (which carries GitLab job credentials) and `HOME` does not pass `HOMEBREW_*`.
+  const ALLOWED_EXACT = new Set([
     "PATH",
     "HOME",
     "USER",
@@ -59,23 +62,21 @@ function buildSanitizedEnv(
     "SHELL",
     "TERM",
     "LANG",
-    "LC_",
     "LANGUAGE",
     "DISPLAY",
     "XAUTHORITY",
     "WAYLAND_DISPLAY",
-    "XDG_",
-    "DBUS_",
     "NODE_OPTIONS",
-    "PLAYWRIGHT_",
-    "CI",
+    "CI", // the boolean CI flag only — not CI_* (which may carry credentials)
     "PYTHON",
     "PYTHONPATH",
     "SYSTEMROOT",
     "TEMP",
     "TMP",
     "TMPDIR",
-  ];
+  ]);
+  // Genuine multi-var families, matched by prefix only when narrow.
+  const ALLOWED_PREFIXES = ["LC_", "XDG_", "DBUS_", "PLAYWRIGHT_"];
 
   // Display/X11 variables must always be preserved so the Electron child can
   // authenticate to Xvfb. (XAUTHORITY contains "AUTH" and would otherwise be
@@ -105,7 +106,10 @@ function buildSanitizedEnv(
     ) {
       continue;
     }
-    if (ALLOWED_PREFIXES.some((p) => upper === p || upper.startsWith(p))) {
+    if (
+      ALLOWED_EXACT.has(upper) ||
+      ALLOWED_PREFIXES.some((p) => upper.startsWith(p))
+    ) {
       allowed[key] = value;
     }
   }
@@ -211,18 +215,36 @@ export async function launchAiFetchly(
     void route.abort("blockedbyclient");
   });
 
-  // Wait for the page to navigate to the Vite renderer origin. Use a regex so
-  // the bare root URL (http://127.0.0.1:5173/) matches — a `**` glob would
-  // require a non-empty path and never resolve.
-  await mainWindow.waitForURL(/127\.0\.0\.1:5173(\/|$)/, { timeout: 60_000 });
-  // Preload bridge must be present (implies the page loaded + contextBridge ran).
-  await mainWindow.waitForFunction(
-    () => Boolean((window as unknown as { api?: unknown }).api),
-    undefined,
-    { timeout: 60_000 }
-  );
-  // Vue app landmark mounted.
-  await mainWindow.waitForSelector("#app", { timeout: 60_000 });
+  try {
+    // Wait for the page to navigate to the Vite renderer origin. Use a regex so
+    // the bare root URL (http://127.0.0.1:5173/) matches — a `**` glob would
+    // require a non-empty path and never resolve.
+    await mainWindow.waitForURL(/127\.0\.0\.1:5173(\/|$)/, { timeout: 60_000 });
+    // Preload bridge must be present (implies the page loaded + contextBridge ran).
+    await mainWindow.waitForFunction(
+      () => Boolean((window as unknown as { api?: unknown }).api),
+      undefined,
+      { timeout: 60_000 }
+    );
+    // Vue app landmark mounted.
+    await mainWindow.waitForSelector("#app", { timeout: 60_000 });
+  } catch (err) {
+    // Readiness failed after Electron already started — close it so CI retries
+    // don't accumulate orphan processes. Best-effort; rethrow the real error.
+    try {
+      await electronApp.close();
+    } catch {
+      const pid = proc.pid;
+      if (pid !== undefined) {
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {
+          /* already gone */
+        }
+      }
+    }
+    throw err;
+  }
 
   return {
     electronApp,

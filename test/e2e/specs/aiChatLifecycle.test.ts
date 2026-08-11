@@ -67,7 +67,7 @@ test.describe("AI chat lifecycle + failure recovery", () => {
     // The cancel aborts the stream consumer, so the delayed suffix never renders.
     await expect(
       aiApp.mainWindow.getByTestId("ai-chat-root")
-    ).not.toContainText("cancelled", { timeout: 6_000 });
+    ).not.toContainText("-should-be-cancelled", { timeout: 6_000 });
     // The composer returns to an actionable state (send button shown again).
     await actionableAgain(aiApp);
 

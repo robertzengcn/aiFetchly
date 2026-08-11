@@ -34,7 +34,10 @@ export interface MessageBoxResult {
 export interface OpenDialogOptions {
   readonly title?: string;
   readonly defaultPath?: string;
-  readonly filters?: ReadonlyArray<{ readonly name: string; readonly extensions: readonly string[] }>;
+  readonly filters?: ReadonlyArray<{
+    readonly name: string;
+    readonly extensions: readonly string[];
+  }>;
   readonly properties?: readonly string[];
   readonly buttonLabel?: string;
 }
@@ -42,7 +45,10 @@ export interface OpenDialogOptions {
 export interface SaveDialogOptions {
   readonly title?: string;
   readonly defaultPath?: string;
-  readonly filters?: ReadonlyArray<{ readonly name: string; readonly extensions: readonly string[] }>;
+  readonly filters?: ReadonlyArray<{
+    readonly name: string;
+    readonly extensions: readonly string[];
+  }>;
   readonly buttonLabel?: string;
 }
 
@@ -58,14 +64,4 @@ export interface NativeDialogService {
   showOpenDialog(options: OpenDialogOptions): Promise<DialogResult>;
   showSaveDialog(options: SaveDialogOptions): Promise<DialogResult>;
   showMessageBox(options: MessageBoxOptions): Promise<MessageBoxResult>;
-}
-
-/**
- * Whether the E2E native-dialog override is active. IPC handlers that obtain a
- * dialog service check this in tests; production always returns false.
- */
-export function isE2eNativeDialogOverrideActive(
-  environment: NodeJS.ProcessEnv
-): boolean {
-  return environment.AIFETCHLY_E2E === "1";
 }

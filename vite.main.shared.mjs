@@ -325,14 +325,3 @@ export const MAIN_PROCESS_RESOLVE_ALIAS = {
   tslib: path.resolve(projectRoot, "./node_modules/tslib/tslib.js"),
 };
 
-// The base plugin set every main-process build uses (alias resolution, empty
-// db-driver shims, sqlite-vec/icon copies, interop fix). Config files add their
-// own extras (ClosePlugin, vite-plugin-checker) on top.
-export function createMainBasePlugins({ outDir } = {}) {
-  return [
-    alias(),
-    emptyModulesPlugin(),
-    platformCopyPlugin({ outDir }),
-    fixInteropNamespacePlugin(),
-  ];
-}

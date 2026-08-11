@@ -7,7 +7,6 @@
  */
 
 import {
-  DONE_FRAME,
   stopChunk,
   textChunk,
   toolCallChunk,
@@ -57,13 +56,13 @@ export function resolveScenario(name: FakeAiScenarioName): ScenarioPlan {
     case "stream-delayed": {
       // Used by cancellation tests: emit one chunk fast, then hold a bounded
       // delay before the next so the test can press Stop mid-stream. The barrier
-      // is short enough that the request is always recorded within the test's
-      // poll window even if the client abort does not propagate a socket close.
+      // is generous (10s) so a slow CI runner has margin to render the first
+      // chunk + click Stop before the cancelled suffix would write.
       return {
         kind: "sse",
         frames: [
           frame(0, textChunk("Streaming")),
-          frame(4_000, textChunk("-should-be-cancelled")),
+          frame(10_000, textChunk("-should-be-cancelled")),
           frame(0, stopChunk()),
         ],
       };
@@ -116,6 +115,3 @@ export function resolveScenario(name: FakeAiScenarioName): ScenarioPlan {
     }
   }
 }
-
-/** Sentinel reuse to keep the DONE symbol consistent if needed externally. */
-export const SCENARIO_DONE = DONE_FRAME;

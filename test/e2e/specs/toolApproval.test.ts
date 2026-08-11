@@ -12,6 +12,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { e2eTest as test, expect } from "../fixtures/base";
 import type { Locator } from "@playwright/test";
+import { assertCleanTeardown } from "../support/assertions";
 import type { LaunchedApp } from "../fixtures/electronApp";
 import type { FakeOpenAiController } from "../fixtures/fakeOpenAiServer";
 
@@ -97,11 +98,10 @@ async function setupGatedFileRead(
 test.describe("AI tool approval (Electron integration)", () => {
   test.afterEach(({ app, aiApp, disabledApp }) => {
     const a = app ?? aiApp ?? disabledApp;
-    if (a) {
-      // Tool-approval turns touch the workspace + AI transport; allow the
-      // recoverable denial/recovery messages these scenarios intentionally emit.
-      // (No external renderer/main network violations are permitted.)
-    }
+    if (!a) return;
+    // Enforce the same no-unexpected-pageerror / no-external-network invariant
+    // as the sibling specs across the tool-use loop.
+    assertCleanTeardown(a);
   });
 
   test("the tool does not execute before approval (T-07)", async ({

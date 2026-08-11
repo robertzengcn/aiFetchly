@@ -36,12 +36,20 @@ describe("AppStartupPolicy", () => {
     expect(policy.connectMarketingWebSocket).toBe(true);
   });
 
+  it("rejects the E2E policy in packaged builds even when AIFETCHLY_E2E=1", () => {
+    // Design acceptance #12: a shipped app must never honor the E2E override.
+    const policy = resolveAppStartupPolicy({ AIFETCHLY_E2E: "1" }, true);
+    expect(policy.startSchedulers).toBe(true);
+    expect(policy.registerProtocol).toBe(true);
+    expect(policy.connectMarketingWebSocket).toBe(true);
+  });
+
   it("requires the exact sentinel '1'", () => {
-    expect(resolveAppStartupPolicy({ AIFETCHLY_E2E: "true" }, false).startSchedulers).toBe(
-      true
-    );
-    expect(resolveAppStartupPolicy({ AIFETCHLY_E2E: "0" }, false).startSchedulers).toBe(
-      true
-    );
+    expect(
+      resolveAppStartupPolicy({ AIFETCHLY_E2E: "true" }, false).startSchedulers
+    ).toBe(true);
+    expect(
+      resolveAppStartupPolicy({ AIFETCHLY_E2E: "0" }, false).startSchedulers
+    ).toBe(true);
   });
 });

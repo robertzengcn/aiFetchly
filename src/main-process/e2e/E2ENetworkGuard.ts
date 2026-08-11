@@ -209,11 +209,19 @@ export function installE2ENetworkGuard(
     };
     // Some runtimes expose http.request as a non-writable property; patching is
     // best-effort here. The fetch patch above always covers the AI transport
-    // path; the http/https patch is defense-in-depth for legacy callers.
+    // path; the http/https patch is defense-in-depth for legacy callers. A patch
+    // failure is logged loudly (not silent) so a partial install is observable.
     try {
       mod.request = patchedRequest as typeof mod.request;
       mod.get = patchedGet as typeof mod.get;
-    } catch {
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[E2E network guard] could not patch ${source}.request/get (non-writable); ` +
+          `only fetch is guarded. Reason: ${
+            err instanceof Error ? err.message : String(err)
+          }`
+      );
       return () => {
         /* nothing was patched */
       };

@@ -77,9 +77,13 @@ const E2E_POLICY: AppStartupPolicy = {
  */
 export function resolveAppStartupPolicy(
   environment: NodeJS.ProcessEnv,
-  _isPackaged: boolean
+  isPackaged: boolean
 ): AppStartupPolicy {
-  if (environment.AIFETCHLY_E2E === "1") {
+  // E2E mode is rejected in packaged production regardless of env: the test
+  // policy disables updater/schedulers/WebSocket/etc., which must never take
+  // effect in a shipped app. (E2EMain.ts also refuses to run when packaged;
+  // this centralizes the same guard for the background.ts call site.)
+  if (!isPackaged && environment.AIFETCHLY_E2E === "1") {
     return E2E_POLICY;
   }
   return PRODUCTION_POLICY;
