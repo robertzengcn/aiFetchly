@@ -803,6 +803,10 @@ module.exports = {
             entry: "src/childprocess/ai-chat-voice/AiChatVoiceWorker.ts",
             config: "vite.aiChatVoiceWorker.config.mjs",
           },
+          {
+            entry: "src/childprocess/local-ai-runtime/RuntimeProbeWorker.ts",
+            config: "vite.runtimeProbeWorker.config.mjs",
+          },
         ],
         renderer: [
           {

@@ -2303,6 +2303,11 @@ export default {
       "Examinez les réponses générées par l'IA, le statut d'approbation et les journaux d'audit.",
   },
   aiChatV2: {
+    artifactExport: {
+      permissionTitle: "Exporter les artefacts générés",
+      permissionDescription:
+        "Copiez ces artefacts générés par AiFetchly vers {destination}.",
+    },
     imageTool: {
       name: "Joindre des images locales",
       permissionTitle: "Envoyer des images locales au serveur IA",
@@ -2977,6 +2982,8 @@ export default {
       catalog_unavailable:
         "Catalogue de composants indisponible. Les fonctions distantes fonctionnent toujours.",
       download_failed: "Échec du téléchargement.",
+      install_failed:
+        "Échec de l'installation. Réessayez ; si le problème persiste, redémarrez l'application.",
       checksum_mismatch: "Échec de la vérification d'intégrité.",
       archive_unsafe: "L'archive a échoué aux contrôles de sécurité.",
       incompatible:
@@ -3079,6 +3086,5 @@ export default {
       "Impossible d'ouvrir le site web. Réessayez plus tard.",
     cooldown_active:
       "Vérifié récemment. Attendez une minute avant de réessayer.",
-
   },
 };

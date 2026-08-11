@@ -812,6 +812,7 @@ import {
 import {
   clearToolProgressForToolResult,
   hasPendingToolExecution,
+  markPermissionPromptExecuting,
 } from "./toolExecutionStateUtil";
 import { isPlanStateActive } from "./planStateUtil";
 import {
@@ -2906,6 +2907,7 @@ const handleSkillPermissionGrant = async (
   }
 
   setPermissionResumeInFlight(toolId, true);
+  messages.value = markPermissionPromptExecuting(messages.value, message.id);
 
   try {
     const raw = await windowInvoke(AI_CHAT_V2_RESUME_TOOL_AFTER_PERMISSION, {

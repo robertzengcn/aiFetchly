@@ -2311,6 +2311,11 @@ export default {
       "Überprüfe KI-generierte Antworten, Genehmigungsstatus und Audit-Protokolle.",
   },
   aiChatV2: {
+    artifactExport: {
+      permissionTitle: "Generierte Artefakte exportieren",
+      permissionDescription:
+        "Kopiere diese von AiFetchly generierten Artefakte nach {destination}.",
+    },
     imageTool: {
       name: "Lokale Bilder anhängen",
       permissionTitle: "Lokale Bilder an den KI-Server senden",
@@ -2989,6 +2994,8 @@ export default {
       catalog_unavailable:
         "Komponentenkatalog nicht verfügbar. Remote-Funktionen funktionieren weiterhin.",
       download_failed: "Download fehlgeschlagen.",
+      install_failed:
+        "Installation fehlgeschlagen. Bitte erneut versuchen; falls es weiterhin fehlschlägt, App neu starten.",
       checksum_mismatch: "Integritätsprüfung fehlgeschlagen.",
       archive_unsafe: "Archiv hat die Sicherheitsprüfungen nicht bestanden.",
       incompatible:
@@ -3092,6 +3099,5 @@ export default {
       "Die Website konnte nicht geöffnet werden. Versuchen Sie es später erneut.",
     cooldown_active:
       "Kürzlich geprüft. Bitte warten Sie eine Minute, bevor Sie es erneut versuchen.",
-
   },
 };

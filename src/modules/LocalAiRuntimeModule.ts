@@ -37,6 +37,7 @@ import {
   extractRuntimeArchive,
   validateExtractedPackage,
 } from "@/service/localAiRuntime/LocalAiRuntimeExtractor";
+import { renameWithRetry } from "@/service/localAiRuntime/renameWithRetry";
 import { RUNTIME_CONSENT_TTL_MS } from "@/service/localAiRuntime/localAiRuntimeConstants";
 
 interface ConsentGrant {
@@ -464,8 +465,11 @@ export class LocalAiRuntimeModule {
       );
     }
     await fs.rm(versionRoot, { recursive: true, force: true });
-    // rename is atomic on the same filesystem (both under runtimeRoot).
-    await fs.rename(stagingRoot, versionRoot);
+    // Atomic on the same filesystem (both beneath runtimeRoot). The voice
+    // runtime's native addon is loaded in a disposable probe WORKER (never this
+    // main process), so no in-process file lock blocks the rename; the bounded
+    // retry handles transient AV/indexer locks on freshly extracted files.
+    await renameWithRetry(stagingRoot, versionRoot);
 
     // Persist the manifest inside the version dir (extraction already wrote it,
     // but ensure the state store index matches) and flip the active pointer.

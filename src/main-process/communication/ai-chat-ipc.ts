@@ -2,7 +2,11 @@ import { ipcMain } from "electron";
 import { spawn, spawnSync } from "child_process";
 import { platform } from "os";
 import { readFileSync } from "fs";
-import { openWindowsFile } from "@/utils/windowsOpenWith";
+import {
+  launchDetachedProcess,
+  openWindowsFile,
+  openWindowsFileFromWsl,
+} from "@/utils/windowsOpenWith";
 import {
   AiChatApi,
   ChatRequest,
@@ -1311,11 +1315,7 @@ export function registerAiChatIpcHandlers(): void {
         '  do shell script "open -a " & quoted form of appPath & " " & quoted form of thePath',
         "end run",
       ].join("\n");
-      const proc = spawn("osascript", ["-e", script, filePath], {
-        detached: true,
-        stdio: "ignore",
-      });
-      proc.unref();
+      await launchDetachedProcess("osascript", ["-e", script, filePath]);
       return;
     }
 
@@ -1325,19 +1325,12 @@ export function registerAiChatIpcHandlers(): void {
     if (isWSL()) {
       const winPath = wslPathToWindows(filePath);
       if (winPath) {
-        const errorMessage = await openWindowsFile(winPath);
-        if (errorMessage) {
-          throw new Error(errorMessage);
-        }
+        await openWindowsFileFromWsl(winPath);
         return;
       }
     }
 
-    const proc = spawn("xdg-open", [filePath], {
-      detached: true,
-      stdio: "ignore",
-    });
-    proc.unref();
+    await launchDetachedProcess("xdg-open", [filePath]);
   }
 
   registerValidatedHandler(

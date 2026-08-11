@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   AIChatQueryLoop,
+  parseTextToolCalls,
   resolveToolChoiceForRound,
   type AIChatQueryLoopDeps,
 } from "@/service/AIChatQueryLoop";
@@ -197,6 +198,42 @@ describe("AIChatQueryLoop", () => {
   });
 
   describe("tool calls", () => {
+    it("parses a textual run_subagent call with a structured batch packet", () => {
+      const calls = parseTextToolCalls(
+        "<tool_call>\n" +
+          "<function=run_subagent>\n" +
+          "<parameter=agentId>agent-batch-worker</parameter>\n" +
+          "<parameter=prompt>Make every background white</parameter>\n" +
+          '<parameter=taskPacket>{"files":["a.png","b.png"],"instruction":"make the background white"}</parameter>\n' +
+          "</function>\n" +
+          "</tool_call>"
+      );
+
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toMatchObject({
+        name: "run_subagent",
+        ok: true,
+        arguments: {
+          agentId: "agent-batch-worker",
+          prompt: "Make every background white",
+          taskPacket: {
+            files: ["a.png", "b.png"],
+            instruction: "make the background white",
+          },
+        },
+      });
+    });
+
+    it("does not parse textual tool-call tags mixed with assistant prose", () => {
+      const calls = parseTextToolCalls(
+        "For example, <tool_call><function=file_read>" +
+          "<parameter=path>README.md</parameter>" +
+          "</function></tool_call> is a tool-call format."
+      );
+
+      expect(calls).toEqual([]);
+    });
+
     it("submits an immediate approval plan when explicit submit-now plan mode gets an empty model response", async () => {
       const fakeStream = vi.fn(
         async (
@@ -404,6 +441,73 @@ describe("AIChatQueryLoop", () => {
           type: "recovery_status",
           message: "Retrying malformed tool-call marker response",
         })
+      );
+    });
+
+    it("executes Agnes XML-style textual tool calls instead of persisting them as assistant text", async () => {
+      const textualToolCalls =
+        "¶¶<tool_call>¶<function=tool_catalog_search>¶<parameter=category>¶filesystem¶</parameter>¶</function>¶</tool_call>" +
+        "¶<tool_call>¶<function=tool_catalog_search>¶<parameter=category>¶image¶</parameter>¶</function>¶</tool_call>";
+      let callCount = 0;
+      const fakeStream = vi.fn(
+        async (
+          _req: unknown,
+          onChunk: (c: OpenAIChatCompletionChunk) => void
+        ) => {
+          if (callCount === 0) {
+            callCount += 1;
+            onChunk(makeChunk(textualToolCalls, "stop"));
+            return;
+          }
+          onChunk(makeChunk("Done", "stop"));
+        }
+      );
+      const fakeExecute = vi.fn().mockImplementation(
+        async (toolName: string, args: Record<string, unknown>) => ({
+          tool_call_id: `text-call-${String(args.query)}`,
+          tool_name: toolName,
+          success: true,
+          result: { selected: args.query },
+          execution_time_ms: 1,
+        })
+      );
+      const loop = new AIChatQueryLoop({
+        streamChatCompletion: fakeStream,
+        executeTool: fakeExecute,
+        getSkillDefinition: vi.fn().mockReturnValue(undefined),
+      });
+
+      const result = await loop.run({
+        conversationId: "v2-agnes-text-tools",
+        assistantMessageId: "a-agnes-text-tools",
+        messages: [],
+        request: {
+          message:
+            "please convert those backgroud color of image in workspace to white",
+        },
+        openAITools: [tool("tool_catalog_search")],
+        abortController: new AbortController(),
+        eventSink: { emit: vi.fn() },
+        startRound: 0,
+        isActiveTurn: () => true,
+      });
+
+      expect(result.type).toBe("completed");
+      if (result.type === "completed") {
+        expect(result.fullContent).toBe("Done");
+      }
+      expect(fakeStream).toHaveBeenCalledTimes(2);
+      expect(fakeExecute).toHaveBeenNthCalledWith(
+        1,
+        "tool_catalog_search",
+        { query: "filesystem" },
+        expect.objectContaining({ toolCallId: expect.any(String) })
+      );
+      expect(fakeExecute).toHaveBeenNthCalledWith(
+        2,
+        "tool_catalog_search",
+        { query: "image" },
+        expect.objectContaining({ toolCallId: expect.any(String) })
       );
     });
 

@@ -31,6 +31,7 @@ import { LocalAiRuntimeDownloadService } from "@/service/localAiRuntime/LocalAiR
 import { LocalAiRuntimeResolver } from "@/service/localAiRuntime/LocalAiRuntimeResolver";
 import { LocalAiRuntimeOperationCoordinator } from "@/service/localAiRuntime/LocalAiRuntimeOperationCoordinator";
 import { LocalAiRuntimeHealthService } from "@/service/localAiRuntime/LocalAiRuntimeHealthService";
+import { DisposableVoiceRuntimeProbe } from "@/service/localAiRuntime/DisposableVoiceRuntimeProbe";
 import { RUNTIME_CATALOG_CACHE_TTL_MS } from "@/service/localAiRuntime/localAiRuntimeConstants";
 import { SherpaVoiceWorkerClient } from "@/service/aiChatVoice/SherpaVoiceWorkerClient";
 import { LocalEmbeddingWorkerClient } from "@/service/embedding/LocalEmbeddingWorkerClient";
@@ -108,7 +109,16 @@ export function createLocalAiRuntimeModule(
   };
   const resolver = new LocalAiRuntimeResolver(paths, state, target);
   const coordinator = new LocalAiRuntimeOperationCoordinator();
-  const health = new LocalAiRuntimeHealthService();
+  // Voice probe runs in a disposable utility process so the native addon is
+  // never loaded (and file-locked) in THIS main process — otherwise the
+  // staging -> versionRoot rename fails with EPERM on Windows. The embedding
+  // probe stays the default in-process check (it only stat()s the worker entry,
+  // no native dlopen). See DisposableVoiceRuntimeProbe + design §19.
+  const voiceProbe = new DisposableVoiceRuntimeProbe();
+  const health = new LocalAiRuntimeHealthService({
+    "voice-sherpa": (runtime, mode, signal) =>
+      voiceProbe.run(runtime, mode, signal),
+  });
   const runtimeModule = new LocalAiRuntimeModule({
     paths,
     state,

@@ -1,5 +1,9 @@
 # AI Email Receive And Auto-Reply - Technical Design
 
+> Reliability follow-up: `docs/prd/ai-email-thread-aware-reply-reliability-technical-design.md`
+> extends this design and takes precedence for conversation context, policy,
+> approval, knowledge scoping, and reply delivery behavior.
+
 ## 1. Purpose
 
 This document translates `docs/prd/ai-email-receive-auto-reply-prd.md` into an implementation-facing technical design.
@@ -1565,4 +1569,3 @@ At minimum:
 - [ ] Verify AI generation checks `USER_AI_ENABLED`.
 - [ ] Verify `send_email_reply` requires confirmation.
 - [ ] Verify audit UI shows every AI auto-reply audit row.
-

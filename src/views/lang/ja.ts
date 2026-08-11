@@ -2273,6 +2273,11 @@ export default {
     audit_description: "AI生成の返信、承認ステータス、監査ログを確認します。",
   },
   aiChatV2: {
+    artifactExport: {
+      permissionTitle: "生成されたアーティファクトをエクスポート",
+      permissionDescription:
+        "AiFetchly が生成したアーティファクトを {destination} にコピーします。",
+    },
     imageTool: {
       name: "ローカル画像を添付",
       permissionTitle: "ローカル画像をAIサーバーに送信",
@@ -2933,6 +2938,8 @@ export default {
       catalog_unavailable:
         "コンポーネントカタログを利用できません。リモート機能は引き続き利用できます。",
       download_failed: "ダウンロードに失敗しました。",
+      install_failed:
+        "インストールに失敗しました。再試行してください。解決しない場合はアプリを再起動してください。",
       checksum_mismatch: "整合性チェックに失敗しました。",
       archive_unsafe: "アーカイブがセキュリティチェックを通過しませんでした。",
       incompatible:
@@ -3032,6 +3039,5 @@ export default {
       "ウェブサイトを開けませんでした。後でもう一度お試しください。",
     cooldown_active:
       "最近確認しました。しばらく待ってからもう一度お試しください。",
-
   },
 };

@@ -110,9 +110,9 @@ export interface AgentTaskPacket {
   constraints?: AgentWorkflowConstraints;
   priorFindings?: AgentFinding[];
   requiredOutputSchema?: Record<string, unknown>;
-  /** Generic file-batch family: candidate file paths + the single instruction
-   * to apply to every file. Used by agent-batch-worker. The main agent caps
-   * this at 3 entries before spawning (matches attach_local_images maxItems). */
+  /** Generic artifact-processing family: candidate file paths + instruction.
+   * Direct agent-batch-worker calls carry one path; process_artifact_batch owns
+   * multi-file concurrency and creates isolated one-path agent requests. */
   files?: string[];
   instruction?: string;
 }

@@ -102,6 +102,9 @@ export interface AgentRuntimeDeps {
    * bytes. Defaults to AIChatGeneratedImageStorageService when images are
    * present. */
   generatedImageStorage?: AgentImageStorage;
+  /** Optional parent cancellation signal. Batch coordinators use this to
+   * cancel every in-flight item when the user stops the outer tool job. */
+  signal?: AbortSignal;
 }
 
 /**
@@ -292,6 +295,12 @@ export class AgentRuntime {
 
     // 5. Run with abort controller + runtime timeout.
     const abortController = new AbortController();
+    const abortFromParent = (): void => abortController.abort();
+    if (deps?.signal?.aborted) {
+      abortController.abort();
+    } else {
+      deps?.signal?.addEventListener("abort", abortFromParent, { once: true });
+    }
     const timer = setTimeout(() => {
       abortController.abort();
     }, definition.maxRuntimeMs);
@@ -392,6 +401,7 @@ export class AgentRuntime {
       );
     } finally {
       clearTimeout(timer);
+      deps?.signal?.removeEventListener("abort", abortFromParent);
     }
 
     // 6. Parse output.

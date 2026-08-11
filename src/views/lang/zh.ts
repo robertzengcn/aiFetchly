@@ -2213,6 +2213,11 @@ export default {
     audit_description: "审核 AI 生成的回复、审批状态和审核日志。",
   },
   aiChatV2: {
+    artifactExport: {
+      permissionTitle: "导出生成的工件",
+      permissionDescription:
+        "将这些由 AiFetchly 生成的工件复制到 {destination}。",
+    },
     imageTool: {
       name: "附加本地图片",
       permissionTitle: "将本地图片发送到 AI 服务器",
@@ -2849,6 +2854,7 @@ export default {
     errors: {
       catalog_unavailable: "组件目录不可用，远程功能仍可正常使用。",
       download_failed: "下载失败。",
+      install_failed: "安装失败。请重试；如果仍然失败，请重启应用。",
       checksum_mismatch: "完整性校验失败。",
       archive_unsafe: "压缩包未通过安全检查。",
       incompatible: "该组件与当前应用版本不兼容。",
@@ -2942,6 +2948,5 @@ export default {
     unsupported_platform: "此平台不支持自动更新。",
     open_website_failed: "无法打开网站，请稍后再试。",
     cooldown_active: "刚刚已检查，请稍候一分钟后再试。",
-
   },
 };

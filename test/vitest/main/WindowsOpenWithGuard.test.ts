@@ -6,7 +6,8 @@
  * 2. `rundll32 … OpenAs_RunDLL` — dialog appears but selected app never launches
  * 3. `Start-Process -Verb OpenAs` — app launches but without the file path
  *
- * Correct path: `@/utils/windowsOpenWith` → Electron `shell.openPath`.
+ * Correct paths live in `@/utils/windowsOpenWith`: Electron `shell.openPath`
+ * on native Windows and the Windows FileProtocolHandler under WSL.
  *
  * If this test fails, do NOT reintroduce OpenAs/rundll32. Use
  * `openWindowsFile` instead.
@@ -73,7 +74,7 @@ describe("WindowsOpenWithGuard", () => {
     ).toEqual([]);
   });
 
-  it("AI chat file-open routes through windowsOpenWith shell.openPath helper", () => {
+  it("AI chat file-open routes through the guarded Windows/WSL helpers", () => {
     expect(existsSync(HELPER_MODULE)).toBe(true);
     expect(existsSync(AI_CHAT_IPC)).toBe(true);
 
@@ -83,7 +84,8 @@ describe("WindowsOpenWithGuard", () => {
 
     const helperSource = stripComments(readFileSync(HELPER_MODULE, "utf8"));
     expect(helperSource).toMatch(/shell\.openPath/);
-    expect(helperSource).not.toMatch(/rundll32/i);
+    expect(helperSource).not.toMatch(/rundll32(?:\.exe)?[\s\S]{0,80}OpenAs/i);
+    expect(helperSource).toMatch(/url\.dll,FileProtocolHandler/);
     expect(helperSource).not.toMatch(/-Verb\s+OpenAs/);
   });
 });

@@ -50,12 +50,12 @@ const LEAD_RESEARCHER_OUTPUT_SCHEMA = {
 };
 
 const BATCH_WORKER_PROMPT = `You are the Batch Worker specialist.
-Your single responsibility is to process a batch of up to 3 files according to the instruction in the task packet.
+Your single responsibility is to process exactly one file according to the instruction in the task packet. Multi-file concurrency is coordinated by process_artifact_batch outside this agent.
 
 Rules:
-1. Read the file paths from "files" and the instruction from "instruction" in the task packet.
-2. Call attach_local_images with the given file paths (up to 3).
-3. The AI server edits each image independently and returns the edited results.
+1. Read the single file path from "files" and the instruction from "instruction" in the task packet.
+2. Call attach_local_images with that one file path.
+3. The AI server edits that image and returns its generated artifact.
 4. Do not ask questions. Do not deviate from the instruction.
 5. Do not call run_subagent (nested batch workers are not allowed).
 6. If a file fails, record its path in "errors" with the reason and continue with the others.
@@ -125,7 +125,7 @@ const BUILT_INS: readonly AgentDefinitionView[] = [
     id: "agent-batch-worker",
     name: "Batch Worker",
     description:
-      "Processes a batch of up to 3 files (images, audio, documents) according to one instruction. Returns output file paths.",
+      "Processes one artifact according to one instruction. Multi-file jobs use process_artifact_batch for bounded concurrency.",
     version: 1,
     systemPrompt: BATCH_WORKER_PROMPT,
     // Generic file-batch allowlist. AgentToolPolicyService intersects

@@ -114,6 +114,28 @@ const TOOL_SEARCH_HINTS: ReadonlyMap<string, readonly string[]> = new Map([
       "white background",
     ],
   ],
+  [
+    "process_artifact_batch",
+    [
+      "batch image edit",
+      "edit all images",
+      "multiple images",
+      "folder images",
+      "white background",
+      "concurrent image processing",
+      "bulk artifact processing",
+    ],
+  ],
+  [
+    "export_generated_artifacts",
+    [
+      "save generated files",
+      "copy generated image to workspace",
+      "export artifact",
+      "persist output",
+      "workspace output",
+    ],
+  ],
 ]);
 
 export class ToolCatalogService {
