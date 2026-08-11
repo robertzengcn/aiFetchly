@@ -10727,10 +10727,10 @@ make-fetch-happen@^10.2.1:
     socks-proxy-agent "^7.0.0"
     ssri "^9.0.0"
 
-mammoth@^1.11.0:
-  version "1.11.0"
-  resolved "https://registry.npmmirror.com/mammoth/-/mammoth-1.11.0.tgz"
-  integrity sha512-BcEqqY/BOwIcI1iR5tqyVlqc3KIaMRa4egSoK83YAVrBf6+yqdAAbtUcFDCWX8Zef8/fgNZ6rl4VUv+vVX8ddQ==
+mammoth@^1.12.0:
+  version "1.12.0"
+  resolved "https://registry.yarnpkg.com/mammoth/-/mammoth-1.12.0.tgz#102ed719a933ac08ed65b37e9856622f1051effb"
+  integrity sha512-cwnK1RIcRdDMi2HRx2EXGYlxqIEh0Oo3bLhorgnsVJi2UkbX1+jKxuBNR9PC5+JaX7EkmJxFPmo6mjLpqShI2w==
   dependencies:
     "@xmldom/xmldom" "^0.8.6"
     argparse "~1.0.3"
