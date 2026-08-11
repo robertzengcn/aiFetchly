@@ -103,7 +103,23 @@ async function main() {
     if (!hasBridge) {
       throw new Error("preload bridge (window.api) not available in the packaged app");
     }
-    console.log("[packaged-smoke] OK: window opened, renderer loaded, preload bridge present");
+
+    // One non-destructive local IPC through the real preload bridge (T-13):
+    // GET_APP_INFO returns app name/version without touching the network.
+    const ipcOk = await page
+      .evaluate(async () => {
+        try {
+          const r = await window.api.invoke("app:info");
+          return Boolean(r && r.status !== false);
+        } catch {
+          return false;
+        }
+      })
+      .catch(() => false);
+    if (!ipcOk) {
+      throw new Error("local IPC (app:info) did not succeed through the preload bridge");
+    }
+    console.log("[packaged-smoke] OK: window + renderer + preload + local IPC (app:info)");
   } catch (err) {
     console.error("[packaged-smoke] FAIL:", err.message);
     exitCode = 1;

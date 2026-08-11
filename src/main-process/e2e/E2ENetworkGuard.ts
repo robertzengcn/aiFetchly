@@ -119,6 +119,11 @@ export function installE2ENetworkGuard(
     /* ignore */
   }
 
+  // Default-deny: only the origins explicitly configured for this app instance
+  // (the FakeOpenAI provider + the Vite renderer) are allowed. Unconfigured
+  // loopback ports are blocked too (design §6.3/§10, TODO §5).
+  const allowedOrigins = new Set(environment.allowedOrigins);
+
   const assertAllowed = (
     source: NetworkViolationRecord["source"],
     target: string | URL | http.RequestOptions,
@@ -133,13 +138,7 @@ export function installE2ENetworkGuard(
       });
       throw blockedError("<unparseable target>");
     }
-    let hostname = "";
-    try {
-      hostname = new URL(info.origin).hostname;
-    } catch {
-      hostname = "";
-    }
-    if (!isLoopbackHost(hostname)) {
+    if (!allowedOrigins.has(info.origin)) {
       recordViolation(violationsFile, source, info);
       throw blockedError(info.origin);
     }

@@ -19,7 +19,7 @@ function makeEnv(root: string): E2EEnvironment {
     downloadsPath: path.join(root, "downloads"),
     logsPath: path.join(root, "logs"),
     fakeAiBaseUrl: "http://127.0.0.1:6000/v1",
-    allowedOrigins: ["http://127.0.0.1:5173"],
+    allowedOrigins: ["http://127.0.0.1:5173", "http://127.0.0.1:6000"],
     stateFilePath: null,
   };
 }
@@ -105,14 +105,12 @@ describe("E2ENetworkGuard", () => {
       expect(entry.source).toBe("fetch");
     });
 
-    it("allows a loopback fetch (not blocked, no violation recorded)", async () => {
+    it("allows a configured-origin fetch (not blocked, no violation)", async () => {
       globalThis.fetch = ((_input: unknown) =>
         Promise.resolve(new Response("ok"))) as unknown as typeof fetch;
       guard = installE2ENetworkGuard(makeEnv(root));
 
-      // A loopback fetch must resolve (not be blocked) and record no violation.
-      // (The violations file is created lazily on the first violation, so it may
-      // not exist at all for a clean loopback call.)
+      // An origin in the configured allowlist must resolve and record nothing.
       await expect(
         globalThis.fetch("http://127.0.0.1:6000/v1/models")
       ).resolves.toBeDefined();
@@ -120,6 +118,23 @@ describe("E2ENetworkGuard", () => {
         ? fs.readFileSync(guard.violationsFile, "utf8").trim()
         : "";
       expect(log).toBe("");
+    });
+
+    it("blocks an unconfigured loopback origin (default-deny)", async () => {
+      let called = false;
+      globalThis.fetch = ((_input: unknown) => {
+        called = true;
+        return Promise.resolve(new Response("ok"));
+      }) as unknown as typeof fetch;
+      guard = installE2ENetworkGuard(makeEnv(root));
+
+      // A loopback port NOT in the allowlist is blocked just like an external host.
+      await expect(
+        globalThis.fetch("http://127.0.0.1:7000/v1/models")
+      ).rejects.toThrow(/E2E network guard blocked/);
+      expect(called).toBe(false);
+      const log = fs.readFileSync(guard.violationsFile, "utf8").trim();
+      expect(log).toContain("http://127.0.0.1:7000");
     });
   });
 });

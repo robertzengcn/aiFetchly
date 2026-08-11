@@ -2,6 +2,13 @@ name: CI
 
 on:
   push:
+  # PRD F-12: required E2E status check for pull requests targeting the
+  # protected integration branches. The repo's default is master; dev and test
+  # are the integration branches named in the PRD. Add the `electron-e2e` job
+  # (and lint-and-test) as required status checks under branch protection for
+  # these branches (a GitHub repo setting, not a workflow file one).
+  pull_request:
+    branches: [dev, test, master]
   workflow_dispatch:
 
 permissions:

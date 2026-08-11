@@ -86,28 +86,35 @@ test.describe("AI chat lifecycle + failure recovery", () => {
       .toBeGreaterThanOrEqual(1);
   });
 
-  test("recovers from an HTTP transport failure and accepts a next message (T-10)", async ({
-    aiApp,
-    fakeAi,
-  }) => {
-    await openChat(aiApp);
+  // T-10: each transport failure mode surfaces a recoverable state and a
+  // subsequent healthy message succeeds end-to-end (design §15.6).
+  for (const scenario of [
+    "http-500",
+    "malformed-sse",
+    "disconnect-mid-stream",
+  ] as const) {
+    test(`recovers from a ${scenario} transport failure and accepts a next message (T-10)`, async ({
+      aiApp,
+      fakeAi,
+    }) => {
+      await openChat(aiApp);
 
-    // First message hits a 500 -> recoverable user-safe state.
-    await fakeAi.setScenario("http-500");
-    await sendUnique(aiApp, "e2e-fail");
-    await actionableAgain(aiApp);
+      // First message hits the failure scenario -> recoverable user-safe state.
+      await fakeAi.setScenario(scenario);
+      await sendUnique(aiApp, `e2e-${scenario}`);
+      await actionableAgain(aiApp);
 
-    // A subsequent message with a healthy scenario succeeds end-to-end.
-    await fakeAi.setScenario("stream-text");
-    const second = await sendUnique(aiApp, "e2e-retry");
-    await expect(aiApp.mainWindow.getByTestId("ai-chat-root")).toContainText(
-      "Hello world!",
-      { timeout: 30_000 }
-    );
-    // The user's second message persisted into the conversation view.
-    await expect(aiApp.mainWindow.getByTestId("ai-chat-root")).toContainText(
-      second,
-      { timeout: 15_000 }
-    );
-  });
+      // A subsequent message with a healthy scenario succeeds end-to-end.
+      await fakeAi.setScenario("stream-text");
+      const second = await sendUnique(aiApp, "e2e-retry");
+      await expect(aiApp.mainWindow.getByTestId("ai-chat-root")).toContainText(
+        "Hello world!",
+        { timeout: 30_000 }
+      );
+      await expect(aiApp.mainWindow.getByTestId("ai-chat-root")).toContainText(
+        second,
+        { timeout: 15_000 }
+      );
+    });
+  }
 });
