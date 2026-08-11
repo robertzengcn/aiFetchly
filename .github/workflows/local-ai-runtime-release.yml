@@ -53,7 +53,7 @@ jobs:
             runner: ubuntu-22.04
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set reproducible build timestamp
         shell: bash
@@ -145,7 +145,7 @@ jobs:
       MIN_APP_VERSION: ${{ inputs.min_app_version }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set reproducible catalog timestamp
         shell: bash
