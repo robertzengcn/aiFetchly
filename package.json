@@ -254,7 +254,7 @@
     "chai-string": "^1.5.0",
     "cross-env": "^7.0.3",
     "ejs": "^3.1.10",
-    "electron": "43.2.0",
+    "electron": "43.3.0",
     "electron-devtools-installer": "^3.2.0",
     "eslint": "^8.52.0",
     "eslint-plugin-prettier": "^5.0.1",
