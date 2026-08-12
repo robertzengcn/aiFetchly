@@ -17,7 +17,7 @@ const mockFileToolExecute = vi.fn();
 
 // Spy on FileOperationTracker.emit
 type EmitRecord = Omit<FileOperationRecord, "id" | "timestamp">;
-let emitSpy: MockInstance<[record: EmitRecord], void>;
+let emitSpy: MockInstance<(...args: [record: EmitRecord]) => void>;
 
 beforeEach(() => {
   // Reset all mocks before each test

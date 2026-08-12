@@ -4,8 +4,8 @@ import { PluginHookRegistrar } from "@/service/pluginCompat/PluginHookRegistrar"
 // Capture calls to SkillWorkerClient.executeHook so we can assert dispatch
 // happened (AC-17) and what the script returned (AC-7).
 const executeHookMock = vi.fn<
-  [script: string, input: unknown],
-  Promise<{ permissionDecision: "allow" | "deny"; reason?: string }>
+  (script: string, input: unknown) =>
+    Promise<{ permissionDecision: "allow" | "deny"; reason?: string }>
 >();
 
 vi.mock("@/service/hooks/HookRegistry", () => {

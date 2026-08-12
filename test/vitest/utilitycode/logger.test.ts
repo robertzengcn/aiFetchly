@@ -1,13 +1,13 @@
 /**
  * Tests for logger utility
  */
-import { describe, it, expect, vi, beforeEach, type SpyInstance } from 'vitest';
+import { describe, it, expect, vi, beforeEach, type MockInstance } from 'vitest';
 import { createLogger } from '@/childprocess/utils/logger';
 
 describe('Logger', () => {
-    let consoleLogSpy: SpyInstance;
-    let consoleWarnSpy: SpyInstance;
-    let consoleErrorSpy: SpyInstance;
+    let consoleLogSpy: MockInstance;
+    let consoleWarnSpy: MockInstance;
+    let consoleErrorSpy: MockInstance;
 
     beforeEach(() => {
         consoleLogSpy = vi.spyOn(console, 'log').mockImplementation(() => {

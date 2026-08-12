@@ -104,11 +104,11 @@ describe("DesktopNotifyService", () => {
   let main: BrowserWindow;
   let floatWin: BrowserWindow;
   let createWindow: ReturnType<
-    typeof vi.fn<[Electron.BrowserWindowConstructorOptions], BrowserWindow>
+    typeof vi.fn<(...args: [Electron.BrowserWindowConstructorOptions]) => BrowserWindow>
   >;
-  let isSettingEnabled: ReturnType<typeof vi.fn<[], Promise<boolean>>>;
+  let isSettingEnabled: ReturnType<typeof vi.fn<(...args: []) => Promise<boolean>>>;
   let sendOpenConversation: ReturnType<
-    typeof vi.fn<[BrowserWindow, string | undefined], void>
+    typeof vi.fn<(...args: [BrowserWindow, string | undefined]) => void>
   >;
   let now: number;
   let service: DesktopNotifyService;

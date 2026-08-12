@@ -22,10 +22,10 @@ const mockState = vi.hoisted(() => ({
 }));
 
 const mockTokenSetValue = vi.hoisted(() =>
-  vi.fn<[string, string], void>()
+  vi.fn<(...args: [string, string]) => void>()
 );
 const mockTokenGetValue = vi.hoisted(() =>
-  vi.fn<[string], string>().mockReturnValue("")
+  vi.fn<(...args: [string]) => string>().mockReturnValue("")
 );
 
 vi.mock("electron", () => ({

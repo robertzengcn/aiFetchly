@@ -4,9 +4,9 @@ import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 // --- Mocks ----------------------------------------------------------------
 
 const mockTokenGetValue = vi.hoisted(() =>
-  vi.fn<[string], string>().mockReturnValue("")
+  vi.fn<(...args: [string]) => string>().mockReturnValue("")
 );
-const mockTokenSetValue = vi.hoisted(() => vi.fn<[string, string], void>());
+const mockTokenSetValue = vi.hoisted(() => vi.fn<(...args: [string, string]) => void>());
 
 vi.mock("@/modules/token", () => ({
   Token: vi.fn().mockImplementation(() => ({
@@ -15,7 +15,7 @@ vi.mock("@/modules/token", () => ({
   })),
 }));
 
-const mockRemoveToken = vi.hoisted(() => vi.fn<[], void>());
+const mockRemoveToken = vi.hoisted(() => vi.fn<(...args: []) => void>());
 
 vi.mock("@/modules/user", () => ({
   User: vi.fn().mockImplementation(() => ({
@@ -25,7 +25,7 @@ vi.mock("@/modules/user", () => ({
 
 // Mock TokenRefreshService so we can control refresh outcomes without going
 // through real network code in these HttpClient-level tests.
-const mockRefreshOnce = vi.hoisted(() => vi.fn<[], Promise<unknown>>());
+const mockRefreshOnce = vi.hoisted(() => vi.fn<(...args: []) => Promise<unknown>>());
 
 vi.mock("@/modules/tokenRefresh", () => {
   class RefreshTokenInvalidError extends Error {
