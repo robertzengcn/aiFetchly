@@ -2,8 +2,13 @@ import { BaseModule } from "@/modules/baseModule";
 import {
   EmailReplyDraftModel,
   ReplyDraftListInput,
+  AppendRevisionInput,
+  ClaimSendInput,
+  ClaimSendResult,
+  FinalizeOutcomeInput,
 } from "@/model/EmailReplyDraft.model";
 import { EmailReplyDraftEntity } from "@/entity/EmailReplyDraft.entity";
+import { EmailReplyDraftRevisionEntity } from "@/entity/EmailReplyDraftRevision.entity";
 import { EmailReplyDraftStatus } from "@/entityTypes/emailReceiveTypes";
 
 /** Business-logic facade over {@link EmailReplyDraftModel}. */
@@ -15,9 +20,7 @@ export class EmailReplyDraftModule extends BaseModule {
     this.draftModel = new EmailReplyDraftModel(this.dbpath);
   }
 
-  async create(
-    entity: EmailReplyDraftEntity
-  ): Promise<EmailReplyDraftEntity> {
+  async create(entity: EmailReplyDraftEntity): Promise<EmailReplyDraftEntity> {
     try {
       await this.ensureConnection();
       return await this.draftModel.create(entity);
@@ -75,9 +78,7 @@ export class EmailReplyDraftModule extends BaseModule {
     }
   }
 
-  async listByMessage(
-    messageId: number
-  ): Promise<EmailReplyDraftEntity[]> {
+  async listByMessage(messageId: number): Promise<EmailReplyDraftEntity[]> {
     try {
       await this.ensureConnection();
       return await this.draftModel.listByMessage(messageId);
@@ -97,6 +98,85 @@ export class EmailReplyDraftModule extends BaseModule {
       return { records, total };
     } catch (error) {
       console.error("Error listing reply drafts:", error);
+      throw error;
+    }
+  }
+
+  // ---- Reliability extension (Milestone 1) ----
+
+  async readAggregate(id: number): Promise<EmailReplyDraftEntity | null> {
+    try {
+      await this.ensureConnection();
+      return await this.draftModel.readAggregate(id);
+    } catch (error) {
+      console.error("Error reading reply draft aggregate:", error);
+      throw error;
+    }
+  }
+
+  async markApproved(
+    draftId: number,
+    revisionId: number,
+    approvedHash: string,
+    policyVersion: string,
+    at: Date
+  ): Promise<boolean> {
+    try {
+      await this.ensureConnection();
+      return await this.draftModel.markApproved(
+        draftId,
+        revisionId,
+        approvedHash,
+        policyVersion,
+        at
+      );
+    } catch (error) {
+      console.error("Error marking reply draft approved:", error);
+      throw error;
+    }
+  }
+
+  async appendRevision(input: AppendRevisionInput): Promise<{
+    revision: EmailReplyDraftRevisionEntity;
+    invalidatedApprovals: number;
+  }> {
+    try {
+      await this.ensureConnection();
+      return await this.draftModel.appendRevision(input);
+    } catch (error) {
+      console.error("Error appending reply draft revision:", error);
+      throw error;
+    }
+  }
+
+  async claimApprovedRevisionForSend(
+    input: ClaimSendInput
+  ): Promise<ClaimSendResult> {
+    try {
+      await this.ensureConnection();
+      return await this.draftModel.claimApprovedRevisionForSend(input);
+    } catch (error) {
+      console.error("Error claiming reply draft for send:", error);
+      throw error;
+    }
+  }
+
+  async finalizeSendOutcome(input: FinalizeOutcomeInput): Promise<void> {
+    try {
+      await this.ensureConnection();
+      await this.draftModel.finalizeSendOutcome(input);
+    } catch (error) {
+      console.error("Error finalizing reply send outcome:", error);
+      throw error;
+    }
+  }
+
+  async countActiveSendAttempts(draftId: number): Promise<number> {
+    try {
+      await this.ensureConnection();
+      return await this.draftModel.countActiveSendAttempts(draftId);
+    } catch (error) {
+      console.error("Error counting active reply send attempts:", error);
       throw error;
     }
   }
