@@ -14,6 +14,9 @@ import {
   EMAIL_REPLY_DRAFT_DETAIL,
   EMAIL_REPLY_DRAFT_UPDATE,
   EMAIL_REPLY_SEND,
+  EMAIL_REPLY_DRAFT_APPROVE,
+  EMAIL_REPLY_SEND_ATTEMPT_DETAIL,
+  EMAIL_REPLY_DELIVERY_RECONCILE,
   EMAIL_AUTO_REPLY_AUDIT_LIST,
   EMAIL_AUTO_REPLY_AUDIT_DETAIL,
 } from "@/config/channellist";
@@ -31,6 +34,9 @@ import {
   emailReplyDraftDetailInputSchema,
   emailReplyDraftUpdateInputSchema,
   emailReplySendInputSchema,
+  emailReplyDraftApproveInputSchema,
+  emailReplySendAttemptDetailInputSchema,
+  emailReplyDeliveryReconcileInputSchema,
   emailAutoReplyAuditListInputSchema,
   emailAutoReplyAuditDetailInputSchema,
 } from "@/schemas/ipc/emailReply";
@@ -40,6 +46,8 @@ import { EmailServiceModule } from "@/modules/emailServiceModule";
 import { EmailReceivedMessageModule } from "@/modules/EmailReceivedMessageModule";
 import { EmailReplyDraftModule } from "@/modules/EmailReplyDraftModule";
 import { EmailReplyAuditLogModule } from "@/modules/EmailReplyAuditLogModule";
+import { EmailReplySendAttemptModule } from "@/modules/EmailReplySendAttemptModule";
+import { isEmailReplyApprovalV2Enabled } from "@/config/featureFlags";
 import { EmailReplyIdentityProfileModule } from "@/modules/EmailReplyIdentityProfileModule";
 import { EmailAutoReplyAuditLogModule } from "@/modules/EmailAutoReplyAuditLogModule";
 import { EmailReceivedMessageEntity } from "@/entity/EmailReceivedMessage.entity";
@@ -87,7 +95,10 @@ export function registerEmailReceiveIpcHandlers(): void {
     emailReceiveConnectionTestInputSchema,
     async (input) => {
       const syncService = new EmailReceiveSyncService();
-      return await syncService.testConnection(input.emailServiceId, input.settings);
+      return await syncService.testConnection(
+        input.emailServiceId,
+        input.settings
+      );
     }
   );
 
@@ -332,18 +343,89 @@ export function registerEmailReceiveIpcHandlers(): void {
   );
 
   // ---- Confirmed reply send (UI Send button) ----
+  // Routes to the v2 idempotent delivery path when the approval-v2 flag is on
+  // (requires an approval token), otherwise preserves the legacy path verbatim.
   registerValidatedHandler(
     EMAIL_REPLY_SEND,
     emailReplySendInputSchema,
     async (input) => {
-      // Delegate to the AI tool implementation so the send path, header
-      // preservation, and dual audit writes stay in one place.
+      if (isEmailReplyApprovalV2Enabled()) {
+        if (!input.approvalToken) {
+          throw new Error(
+            "approval_v2_enabled: approve the draft before sending (EMAIL_REPLY_DRAFT_APPROVE)"
+          );
+        }
+        const { EmailReplyDeliveryService } = await import(
+          "@/service/emailReply/EmailReplyDeliveryService"
+        );
+        return await new EmailReplyDeliveryService().sendApprovedReply({
+          draftId: input.draftId,
+          approvalToken: input.approvalToken,
+        });
+      }
+      // Legacy path — delegate to the AI tool implementation.
       const { sendEmailReply } = await import("@/service/EmailReceiveAiTools");
       const result = await sendEmailReply(input);
       if (!result.success) {
         throw new Error(result.error);
       }
       return result;
+    }
+  );
+
+  // ---- Approve the current revision of a draft (reliability v2) ----
+  // Returns the one-time approval token ONCE. The renderer passes it straight
+  // back to EMAIL_REPLY_SEND; it is never persisted in the clear and never
+  // surfaced to the LLM transcript.
+  registerValidatedHandler(
+    EMAIL_REPLY_DRAFT_APPROVE,
+    emailReplyDraftApproveInputSchema,
+    async (input) => {
+      const { EmailReplyApprovalService } = await import(
+        "@/service/emailReply/EmailReplyApprovalService"
+      );
+      const result = await new EmailReplyApprovalService().approveDraft({
+        draftId: input.draftId,
+        approvedByType: "user",
+      });
+      return result;
+    }
+  );
+
+  // ---- Send-attempt detail for a draft (audit / recovery UI) ----
+  registerValidatedHandler(
+    EMAIL_REPLY_SEND_ATTEMPT_DETAIL,
+    emailReplySendAttemptDetailInputSchema,
+    async (input) => {
+      const attemptModule = new EmailReplySendAttemptModule();
+      const records = await attemptModule.listByDraft(input.draftId);
+      return {
+        records: records.map((a) => ({
+          id: a.id,
+          status: a.status,
+          claimedAt: a.claimedAt ? new Date(a.claimedAt).toISOString() : null,
+          completedAt: a.completedAt
+            ? new Date(a.completedAt).toISOString()
+            : null,
+          providerMessageId: a.providerMessageId,
+          failureCode: a.failureCode,
+          sanitizedError: a.sanitizedError,
+        })),
+      };
+    }
+  );
+
+  // ---- Manually trigger stale-attempt recovery (operational) ----
+  registerValidatedHandler(
+    EMAIL_REPLY_DELIVERY_RECONCILE,
+    emailReplyDeliveryReconcileInputSchema,
+    async (input) => {
+      const { EmailReplySendRecoveryService } = await import(
+        "@/service/emailReply/EmailReplySendRecoveryService"
+      );
+      return await new EmailReplySendRecoveryService().recoverStaleAttempts(
+        input.ageMs
+      );
     }
   );
 }

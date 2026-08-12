@@ -24,6 +24,30 @@ export function isBrowserProfileImportEnabled(): boolean {
   }
 }
 
+/**
+ * Thread-aware reply reliability (Milestone 1: send safety). When enabled, the
+ * send path requires an approved immutable revision + one-time approval token
+ * and routes through the idempotent delivery service (no mailbox override,
+ * at-most-once SMTP, ambiguous-delivery handling). When disabled, the legacy
+ * send path is preserved verbatim.
+ *
+ * DEFAULTS OFF: enabling changes the send contract (the UI must approve-then-
+ * send), so it ships behind an explicit opt-in per the rollout plan (technical
+ * design §23 step 3 — enable approval/revision and idempotent delivery
+ * together, never split across states that permit legacy sending).
+ */
+export const EMAIL_REPLY_APPROVAL_V2_FLAG = "email_reply_approval_v2";
+
+export function isEmailReplyApprovalV2Enabled(): boolean {
+  try {
+    return new Token().getValue(EMAIL_REPLY_APPROVAL_V2_FLAG) === "true";
+  } catch {
+    // Token store unreadable: keep the legacy path (fail closed to the new
+    // contract rather than silently changing send behavior on a storage hiccup).
+    return false;
+  }
+}
+
 // Kept for any external caller / test that referenced the cache reset hook.
 export function resetFeatureFlagCacheForTest(): void {
   /* no-op: flag is read live and not cached. */

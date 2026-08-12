@@ -11,6 +11,9 @@ import { EmailReplyDraftGenerationService } from "@/service/emailReply/EmailRepl
 import { ReplyEmailService } from "@/modules/lib/replyEmailService";
 import { decodeAddresses } from "@/service/emailReceive/EmailMessageParser";
 import { isAutomatedSender } from "@/service/emailReceive/EmailMessageParser";
+import { isEmailReplyApprovalV2Enabled } from "@/config/featureFlags";
+import { EmailReplyApprovalService } from "@/service/emailReply/EmailReplyApprovalService";
+import { EmailReplyDeliveryService } from "@/service/emailReply/EmailReplyDeliveryService";
 import {
   listEmailInboxesSchema,
   fetchUnreadEmailsSchema,
@@ -265,6 +268,58 @@ export async function sendEmailReply(args: unknown): Promise<
 > {
   try {
     const input = sendEmailReplySchema.parse(args);
+
+    // ---- Reliability v2 path (approval + idempotent delivery) ----
+    // The tool's `requiresConfirmation` gate is the user gesture, so the
+    // confirmed execution mints a one-time tool_confirmation approval inline and
+    // delivers through the atomic-claim path. The LLM never sees the token.
+    if (isEmailReplyApprovalV2Enabled()) {
+      const draftModule = new EmailReplyDraftModule();
+      await draftModule.ensureConnection();
+      const draft = await draftModule.read(input.draft_id);
+      if (!draft) {
+        return { success: false, error: "Draft not found" };
+      }
+      let approvalToken: string;
+      if (draft.status === "draft") {
+        const approval = await new EmailReplyApprovalService().approveDraft({
+          draftId: draft.id,
+          approvedByType: "tool_confirmation",
+          approvedById: "ai_tool",
+        });
+        approvalToken = approval.token;
+      } else {
+        return {
+          success: false,
+          error: `approval_v2: cannot send a draft in state '${draft.status}' via the AI tool`,
+        };
+      }
+      const outcome = await new EmailReplyDeliveryService().sendApprovedReply({
+        draftId: draft.id,
+        approvalToken,
+      });
+      if (outcome.status === "sent") {
+        return {
+          success: true,
+          draft_id: draft.id,
+          message_id: draft.messageId,
+          sent_at: outcome.sentAt,
+        };
+      }
+      if (outcome.status === "already_processed") {
+        return {
+          success: false,
+          error: "A send was already submitted for this approved revision",
+        };
+      }
+      return {
+        success: false,
+        error:
+          outcome.status === "delivery_unknown"
+            ? "Delivery unknown: verify the Sent folder manually"
+            : outcome.error,
+      };
+    }
 
     const draftModule = new EmailReplyDraftModule();
     await draftModule.ensureConnection();
