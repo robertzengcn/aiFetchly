@@ -8,6 +8,9 @@ import {
 } from "@/service/emailReply/replyReliabilityVersions";
 import type { EmailReplyApprovalEnvelope } from "@/entityTypes/emailReplyReliabilityTypes";
 
+/** Placeholder used only between insert and the immediate applyContentHash call. */
+const BACKFILL_PENDING_HASH = "pending-backfill";
+
 /**
  * One-shot, restartable migration that lifts legacy reply drafts (created before
  * Milestone 1) onto the immutable-revision + content-hash model (technical
@@ -66,9 +69,29 @@ export class EmailReplyDraftBackfillService {
           continue;
         }
 
-        const envelope: EmailReplyApprovalEnvelope = {
+        // Two-step (insert with placeholder, then recompute with the real
+        // revision id) so the persisted hash matches what a later approval will
+        // compute. The model method owns terminal-state handling; applyContentHash
+        // overwrites the placeholder atomically.
+        const result =
+          await this.draftModule.materializeRevision1ForLegacyDraft({
+            draftId: draft.id,
+            actor: draft.generationSource === "manual" ? "user" : "ai",
+            subject: draft.subject,
+            bodyText: draft.bodyText,
+            bodyHtml: draft.bodyHtml,
+            senderAddress,
+            recipientAddress,
+            contentHash: BACKFILL_PENDING_HASH,
+            emailServiceId,
+          });
+        if (!result) {
+          skipped += 1;
+          continue;
+        }
+        const realEnvelope: EmailReplyApprovalEnvelope = {
           draftId: draft.id,
-          revisionId: 0, // revision 1; the hash is recomputed when a real approval is later issued
+          revisionId: result.revisionId,
           emailServiceId,
           originalMessageId: message.id,
           senderAddress,
@@ -79,24 +102,13 @@ export class EmailReplyDraftBackfillService {
           policyVersion: REPLY_POLICY_VERSION,
           validationVersion: REPLY_VALIDATOR_VERSION,
         };
-        const contentHash = hashApprovalEnvelope(envelope);
-
-        const result = await this.draftModule.materializeRevision1ForLegacyDraft({
-          draftId: draft.id,
-          actor: draft.generationSource === "manual" ? "user" : "ai",
-          subject: draft.subject,
-          bodyText: draft.bodyText,
-          bodyHtml: draft.bodyHtml,
-          senderAddress,
-          recipientAddress,
-          contentHash,
-          emailServiceId,
-        });
-        if (result) {
-          processed += 1;
-        } else {
-          skipped += 1;
-        }
+        const realHash = hashApprovalEnvelope(realEnvelope);
+        await this.draftModule.applyContentHash(
+          draft.id,
+          result.revisionId,
+          realHash
+        );
+        processed += 1;
       } catch (error) {
         console.error(`Backfill failed for draft ${draft.id}:`, error);
         failed += 1;

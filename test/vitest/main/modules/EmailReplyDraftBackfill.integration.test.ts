@@ -80,7 +80,11 @@ describe("Legacy draft backfill (model layer) — PRD §19", () => {
 
   it("materializes revision 1 and demotes legacy 'approved' to 'draft'", async () => {
     const draftId = await seedLegacyDraft("approved");
-    const contentHash = hashFor(draftId, "owner@svc.com", "prospect@example.com");
+    const contentHash = hashFor(
+      draftId,
+      "owner@svc.com",
+      "prospect@example.com"
+    );
 
     const result = await draftModel.materializeRevision1ForLegacyDraft({
       draftId,
@@ -108,7 +112,11 @@ describe("Legacy draft backfill (model layer) — PRD §19", () => {
 
   it("keeps terminal 'sent' drafts terminal after materialization", async () => {
     const draftId = await seedLegacyDraft("sent");
-    const contentHash = hashFor(draftId, "owner@svc.com", "prospect@example.com");
+    const contentHash = hashFor(
+      draftId,
+      "owner@svc.com",
+      "prospect@example.com"
+    );
 
     const result = await draftModel.materializeRevision1ForLegacyDraft({
       draftId,
@@ -130,7 +138,11 @@ describe("Legacy draft backfill (model layer) — PRD §19", () => {
 
   it("never synthesizes an approval record during migration", async () => {
     const draftId = await seedLegacyDraft("draft");
-    const contentHash = hashFor(draftId, "owner@svc.com", "prospect@example.com");
+    const contentHash = hashFor(
+      draftId,
+      "owner@svc.com",
+      "prospect@example.com"
+    );
     const result = await draftModel.materializeRevision1ForLegacyDraft({
       draftId,
       actor: "ai",
@@ -151,7 +163,11 @@ describe("Legacy draft backfill (model layer) — PRD §19", () => {
 
   it("is idempotent: a second call is a no-op that preserves the revision", async () => {
     const draftId = await seedLegacyDraft("draft");
-    const contentHash = hashFor(draftId, "owner@svc.com", "prospect@example.com");
+    const contentHash = hashFor(
+      draftId,
+      "owner@svc.com",
+      "prospect@example.com"
+    );
 
     const first = await draftModel.materializeRevision1ForLegacyDraft({
       draftId,
@@ -180,5 +196,65 @@ describe("Legacy draft backfill (model layer) — PRD §19", () => {
     // listLegacyDrafts no longer includes it.
     const legacy = await draftModel.listLegacyDrafts();
     expect(legacy.some((d) => d.id === draftId)).toBe(false);
+  });
+
+  it("backfill two-step stores a hash that matches the real approval envelope (P0.5)", async () => {
+    // Regression: backfill previously hashed with revisionId:0, so the stored
+    // hash could never match an approval computed with the real revision id.
+    const draftId = await seedLegacyDraft("draft");
+    const sender = "owner@svc.com";
+    const recipient = "prospect@example.com";
+
+    // Step 1: insert with placeholder (as the BackfillService now does).
+    const inserted = await draftModel.materializeRevision1ForLegacyDraft({
+      draftId,
+      actor: "ai",
+      subject: "Re: Pricing",
+      bodyText: "Body",
+      bodyHtml: null,
+      senderAddress: sender,
+      recipientAddress: recipient,
+      contentHash: "pending-backfill",
+      emailServiceId: 7,
+    });
+    expect(inserted).not.toBeNull();
+
+    // Step 2: recompute with the REAL revision id and persist via applyContentHash.
+    const realHash = hashApprovalEnvelope({
+      draftId,
+      revisionId: inserted!.revisionId,
+      emailServiceId: 7,
+      originalMessageId: 100,
+      senderAddress: sender,
+      recipientAddress: recipient,
+      subject: "Re: Pricing",
+      bodyText: "Body",
+      bodyHtml: null,
+      policyVersion: "reply-policy-v2-1",
+      validationVersion: "reply-validator-v2-1",
+    });
+    await draftModel.applyContentHash(draftId, inserted!.revisionId, realHash);
+
+    // The persisted revision + draft hashes match what a fresh approval would
+    // compute, so a later approveDraft() will accept the revision as-is.
+    const revision = await revisionModel.read(inserted!.revisionId);
+    expect(revision?.contentHash).toBe(realHash);
+    const draft = await draftModel.readAggregate(draftId);
+    expect(draft?.contentHash).toBe(realHash);
+    expect(realHash).not.toBe(
+      hashApprovalEnvelope({
+        draftId,
+        revisionId: 0,
+        emailServiceId: 7,
+        originalMessageId: 100,
+        senderAddress: sender,
+        recipientAddress: recipient,
+        subject: "Re: Pricing",
+        bodyText: "Body",
+        bodyHtml: null,
+        policyVersion: "reply-policy-v2-1",
+        validationVersion: "reply-validator-v2-1",
+      })
+    );
   });
 });

@@ -118,6 +118,12 @@ export function registerCommunicationIpcHandlers(
     registerAIArtifactIpcHandlers();
     registerAIWorkspaceMemoryIpcHandlers();
     registerEmailReceiveIpcHandlers();
+    // Best-effort reply-reliability startup: lift legacy drafts onto immutable
+    // revisions and sweep stale in-flight send attempts to delivery_unknown.
+    // Fire-and-forget; never blocks app startup.
+    new (require("@/service/emailReply/EmailReplyReliabilityStartup").EmailReplyReliabilityStartup)()
+      .start()
+      .catch((e) => console.error("[reply-reliability] startup failed:", e));
     registerDiagnosticsIpcHandlers();
     registerHooksIpcHandlers();
     registerSlashCommandHandlers(win);
