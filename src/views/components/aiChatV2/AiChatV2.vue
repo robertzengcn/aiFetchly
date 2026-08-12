@@ -209,6 +209,7 @@
         />
         <AiChatV2QuestionCard
           v-if="pendingQuestion"
+          ref="questionCardRef"
           :question="pendingQuestion"
           @answered="handleQuestionAnswered"
         />
@@ -2205,6 +2206,9 @@ const scheduledLoopDescriptor = computed(() => {
   }
 });
 const pendingQuestion = ref<AIChatPlanQuestionView | null>(null);
+// Template handle on the pinned question card so we can un-lock it if the
+// answer IPC rejects (see handleQuestionAnswered's catch path).
+const questionCardRef = ref<{ resetSubmitted: () => void } | null>(null);
 // While a plan is awaiting the user's decision, its approval card is pinned
 // at the bottom of the chat (alongside the question card). Once the user
 // approves/rejects/requests changes, it is moved into the message flow and
@@ -3112,6 +3116,8 @@ const handleQuestionAnswered = async (
   answers: AskUserQuestionAnswer[]
 ): Promise<void> => {
   if (!activeConversationId.value) return;
+  // Clear any previous error so a retry isn't pre-emptively flagged.
+  streamError.value = null;
   try {
     await answerChatV2Question(activeConversationId.value, questionId, answers);
     pendingQuestion.value = null;
@@ -3119,6 +3125,9 @@ const handleQuestionAnswered = async (
     applyPlanState(await getChatV2PlanState(activeConversationId.value));
   } catch (err) {
     streamError.value = err instanceof Error ? err.message : String(err);
+    // Un-lock the card so the user can correct and resubmit instead of being
+    // stuck with a frozen UI until reload (their in-progress draft is kept).
+    questionCardRef.value?.resetSubmitted();
   }
 };
 

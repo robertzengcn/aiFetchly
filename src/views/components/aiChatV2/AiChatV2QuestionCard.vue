@@ -232,6 +232,17 @@ const onSubmit = (): void => {
   );
   emit("answered", props.question.questionId, answers);
 };
+
+/**
+ * Re-enable editing after a failed submit. The parent calls this when the
+ * downstream answer IPC rejects, so the user can correct and retry without
+ * losing what they typed (a full remount would discard their draft).
+ */
+const resetSubmitted = (): void => {
+  submitted.value = false;
+};
+
+defineExpose({ resetSubmitted });
 </script>
 
 <style scoped>

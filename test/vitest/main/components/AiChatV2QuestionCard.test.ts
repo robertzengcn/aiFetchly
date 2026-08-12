@@ -227,7 +227,32 @@ describe("AiChatV2QuestionCard — free-text 'Other' option", () => {
 
     // Re-open "Other": the text area must start empty, not show the old draft.
     await otherOption(wrapper).trigger("click");
-    expect(customInput(wrapper).element.value).toBe("");
+    expect((customInput(wrapper).element as HTMLTextAreaElement).value).toBe(
+      ""
+    );
+  });
+
+  it("re-enables editing after resetSubmitted() (IPC-error recovery)", async () => {
+    const wrapper = mountCard(makeQuestion([SINGLE]));
+    const options = wrapper.findAll('[data-testid="question-option"]');
+    await options[0]!.trigger("click"); // Apple
+    await submitBtn(wrapper).trigger("click");
+    oneAnswered(wrapper); // submitted lock now on
+
+    // While locked, switching options is a no-op.
+    await options[1]!.trigger("click");
+    expect(options[1]!.classes()).not.toContain(
+      "v2-question-card__option--selected"
+    );
+
+    // Parent calls resetSubmitted() when the answer IPC rejects.
+    (wrapper.vm as unknown as { resetSubmitted: () => void }).resetSubmitted();
+
+    // Editing works again.
+    await options[1]!.trigger("click");
+    expect(options[1]!.classes()).toContain(
+      "v2-question-card__option--selected"
+    );
   });
 
   it("preserves existing preset-only behavior (no customText)", async () => {
