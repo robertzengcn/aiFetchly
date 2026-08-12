@@ -76,9 +76,11 @@
     "typecheck": "tsc --noEmit",
     "rebuild-better-sqlite": "node scripts/rebuild-better-sqlite.js",
     "prepackage": "npm run rebuild-native",
-    "rebuild-native": "yarn patch-node-abi && yarn rebuild-better-sqlite",
+    "rebuild-native": "yarn patch-node-abi && yarn patch-remote-rebuild && yarn rebuild-better-sqlite",
     "patch-node-abi": "node scripts/patch-node-abi.js",
-    "postinstall": "node scripts/patch-node-abi.js && node scripts/rebuild-better-sqlite.js",
+    "patch-remote-rebuild": "node scripts/patch-remote-rebuild.js",
+    "postinstall":
+      "node scripts/patch-node-abi.js && node scripts/patch-remote-rebuild.js && node scripts/rebuild-better-sqlite.js",
     "vue-check": "vue-tsc --noEmit --watch",
     "vue-typecheck": "vue-tsc --noEmit",
     "test-installer": "node installer-scripts/test-installer.js",
