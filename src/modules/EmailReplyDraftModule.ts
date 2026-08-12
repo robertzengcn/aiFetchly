@@ -194,4 +194,34 @@ export class EmailReplyDraftModule extends BaseModule {
       throw error;
     }
   }
+
+  async listLegacyDrafts(): Promise<EmailReplyDraftEntity[]> {
+    try {
+      await this.ensureConnection();
+      return await this.draftModel.listLegacyDrafts();
+    } catch (error) {
+      console.error("Error listing legacy reply drafts:", error);
+      throw error;
+    }
+  }
+
+  async materializeRevision1ForLegacyDraft(input: {
+    draftId: number;
+    actor: "ai" | "user";
+    subject: string;
+    bodyText: string;
+    bodyHtml: string | null;
+    senderAddress: string;
+    recipientAddress: string;
+    contentHash: string;
+    emailServiceId: number | null;
+  }): Promise<{ revisionId: number; status: EmailReplyDraftStatus } | null> {
+    try {
+      await this.ensureConnection();
+      return await this.draftModel.materializeRevision1ForLegacyDraft(input);
+    } catch (error) {
+      console.error("Error materializing revision 1 for legacy draft:", error);
+      throw error;
+    }
+  }
 }

@@ -466,6 +466,85 @@ export class EmailReplyDraftModel extends BaseDb {
       });
     return await qb.getCount();
   }
+
+  /** Legacy drafts created before Milestone 1 have no revision row. */
+  async listLegacyDrafts(): Promise<EmailReplyDraftEntity[]> {
+    return await this.repository
+      .createQueryBuilder("draft")
+      .where("draft.currentRevisionId IS NULL")
+      .orderBy("draft.id", "ASC")
+      .getMany();
+  }
+
+  /**
+   * One-shot migration for a legacy draft (technical design §22.3): create
+   * revision 1 from the current subject/body/envelope and materialize the
+   * content hash + projection. Unlike {@link appendRevision}, this does NOT
+   * invalidate approvals (there are none) and does NOT force the status to
+   * `draft` — terminal states (`sent`/`discarded`) stay terminal, and a legacy
+   * `approved` row is demoted to `draft` because the PRD requires existing
+   * drafts to default to unapproved. Never synthesizes an approval record.
+   *
+   * Idempotent: if the draft already has a currentRevisionId it is a no-op.
+   */
+  async materializeRevision1ForLegacyDraft(input: {
+    draftId: number;
+    actor: "ai" | "user";
+    subject: string;
+    bodyText: string;
+    bodyHtml: string | null;
+    senderAddress: string;
+    recipientAddress: string;
+    contentHash: string;
+    emailServiceId: number | null;
+  }): Promise<{ revisionId: number; status: EmailReplyDraftStatus } | null> {
+    return await runReplyTxn(this.sqliteDb, async (manager) => {
+      const draftRepo = manager.getRepository(EmailReplyDraftEntity);
+      const revisionRepo = manager.getRepository(EmailReplyDraftRevisionEntity);
+      const draft = await draftRepo.findOne({ where: { id: input.draftId } });
+      if (!draft) return null;
+      if (draft.currentRevisionId) {
+        return { revisionId: draft.currentRevisionId, status: draft.status };
+      }
+
+      const revisionEntity = new EmailReplyDraftRevisionEntity();
+      revisionEntity.draftId = input.draftId;
+      revisionEntity.revisionNumber = 1;
+      revisionEntity.actor = input.actor;
+      revisionEntity.subject = input.subject;
+      revisionEntity.bodyText = input.bodyText;
+      revisionEntity.bodyHtml = input.bodyHtml;
+      revisionEntity.senderAddress = input.senderAddress;
+      revisionEntity.recipientAddress = input.recipientAddress;
+      revisionEntity.contentHash = input.contentHash;
+      revisionEntity.generationMetadataJson = null;
+      revisionEntity.validationFindingsJson = null;
+      const stripped = parseAndStrip(
+        revisionEntity,
+        emailReplyDraftRevisionWriteSchema()
+      ) as unknown as EmailReplyDraftRevisionEntity;
+      const saved = await revisionRepo.save(revisionRepo.create(stripped));
+
+      // PRD §19: existing drafts default to unapproved. Legacy 'approved'
+      // (which pre-dates the binding rules) is demoted; terminal states stay.
+      const nextStatus: EmailReplyDraftStatus =
+        draft.status === "approved" ? "draft" : draft.status;
+
+      await draftRepo.update(
+        { id: input.draftId },
+        {
+          currentRevisionId: saved.id,
+          revisionNumber: 1,
+          contentHash: input.contentHash,
+          senderAddress: input.senderAddress,
+          recipientAddress: input.recipientAddress,
+          emailServiceId: input.emailServiceId ?? draft.emailServiceId,
+          status: nextStatus,
+        }
+      );
+      return { revisionId: saved.id, status: nextStatus };
+    });
+  }
 }
 
 /** Inputs and results for the reliability transaction methods above. */
