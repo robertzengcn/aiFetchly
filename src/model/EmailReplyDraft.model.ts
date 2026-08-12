@@ -1,5 +1,5 @@
 import { BaseDb } from "@/model/Basedb";
-import { Repository, IsNull } from "typeorm";
+import { Repository, IsNull, EntityManager } from "typeorm";
 import { EmailReplyDraftEntity } from "@/entity/EmailReplyDraft.entity";
 import { EmailReplyDraftRevisionEntity } from "@/entity/EmailReplyDraftRevision.entity";
 import { EmailReplyApprovalEntity } from "@/entity/EmailReplyApproval.entity";
@@ -12,6 +12,26 @@ import { parseAndStrip } from "@/utils/parseAndStrip";
 import { emailReplyDraftWriteSchema } from "@/schemas/entity/emailReplyDraft";
 import { emailReplyDraftRevisionWriteSchema } from "@/schemas/entity/emailReplyDraftRevision";
 import { rejectDatabaseAccessFromWorker } from "@/model/_workerBoundaryGuard";
+import { AsyncMutex } from "@/utils/asyncMutex";
+
+/**
+ * Process-wide serializer for reply-reliability write transactions. See
+ * {@link AsyncMutex} for why overlapping TypeORM/better-sqlite3 transactions
+ * must not run concurrently on the shared connection.
+ */
+const replyWriteMutex = new AsyncMutex();
+
+/** Run a transaction body under the shared reliability write mutex. */
+function runReplyTxn<T>(
+  sqliteDb: {
+    connection: {
+      transaction: <R>(fn: (m: EntityManager) => Promise<R>) => Promise<R>;
+    };
+  },
+  fn: (manager: EntityManager) => Promise<T>
+): Promise<T> {
+  return replyWriteMutex.run(() => sqliteDb.connection.transaction(fn));
+}
 
 export interface ReplyDraftListInput {
   emailServiceId?: number;
@@ -135,6 +155,27 @@ export class EmailReplyDraftModel extends BaseDb {
   }
 
   /**
+   * Persist the canonical content hash onto a revision and its draft
+   * projection in one transaction. The hash binds approval to exact content +
+   * envelope and includes the revision id assigned at insert, so it can only be
+   * computed AFTER {@link appendRevision} has run. The generation/approval
+   * services therefore append with a placeholder hash, read back the assigned
+   * revision id, recompute, and call this to persist the real value.
+   */
+  async applyContentHash(
+    draftId: number,
+    revisionId: number,
+    contentHash: string
+  ): Promise<void> {
+    await runReplyTxn(this.sqliteDb, async (manager) => {
+      const draftRepo = manager.getRepository(EmailReplyDraftEntity);
+      const revisionRepo = manager.getRepository(EmailReplyDraftRevisionEntity);
+      await revisionRepo.update({ id: revisionId }, { contentHash });
+      await draftRepo.update({ id: draftId }, { contentHash });
+    });
+  }
+
+  /**
    * Atomically transition `draft -> approved` for a specific revision + hash.
    * Only succeeds if the draft is currently `draft` and the current revision's
    * hash matches {@link approvedHash}. Returns false if a concurrent edit moved
@@ -175,7 +216,7 @@ export class EmailReplyDraftModel extends BaseDb {
     revision: EmailReplyDraftRevisionEntity;
     invalidatedApprovals: number;
   }> {
-    return await this.sqliteDb.connection.transaction(async (manager) => {
+    return await runReplyTxn(this.sqliteDb, async (manager) => {
       const draftRepo = manager.getRepository(EmailReplyDraftEntity);
       const revisionRepo = manager.getRepository(EmailReplyDraftRevisionEntity);
       const approvalRepo = manager.getRepository(EmailReplyApprovalEntity);
@@ -267,7 +308,7 @@ export class EmailReplyDraftModel extends BaseDb {
   async claimApprovedRevisionForSend(
     input: ClaimSendInput
   ): Promise<ClaimSendResult> {
-    return await this.sqliteDb.connection.transaction(async (manager) => {
+    return await runReplyTxn(this.sqliteDb, async (manager) => {
       const draftRepo = manager.getRepository(EmailReplyDraftEntity);
       const attemptRepo = manager.getRepository(EmailReplySendAttemptEntity);
       const auditRepo = manager.getRepository(EmailReplyAuditLogEntity);
@@ -351,7 +392,7 @@ export class EmailReplyDraftModel extends BaseDb {
    * revision is required.
    */
   async finalizeSendOutcome(input: FinalizeOutcomeInput): Promise<void> {
-    await this.sqliteDb.connection.transaction(async (manager) => {
+    await runReplyTxn(this.sqliteDb, async (manager) => {
       const attemptRepo = manager.getRepository(EmailReplySendAttemptEntity);
       const draftRepo = manager.getRepository(EmailReplyDraftEntity);
       const approvalRepo = manager.getRepository(EmailReplyApprovalEntity);

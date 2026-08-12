@@ -114,6 +114,20 @@ export class EmailReplyDraftModule extends BaseModule {
     }
   }
 
+  async applyContentHash(
+    draftId: number,
+    revisionId: number,
+    contentHash: string
+  ): Promise<void> {
+    try {
+      await this.ensureConnection();
+      await this.draftModel.applyContentHash(draftId, revisionId, contentHash);
+    } catch (error) {
+      console.error("Error applying reply draft content hash:", error);
+      throw error;
+    }
+  }
+
   async markApproved(
     draftId: number,
     revisionId: number,
