@@ -10,6 +10,16 @@
     <span class="workspace-badge__path">{{ displayPath }}</span>
     <button
       type="button"
+      class="workspace-badge__change"
+      :title="changeFolderText"
+      :aria-label="changeFolderText"
+      @click.stop="requestSetWorkspace"
+    >
+      <v-icon size="small" start>mdi-folder-swap-outline</v-icon>
+      <span>{{ changeFolderText }}</span>
+    </button>
+    <button
+      type="button"
       class="workspace-badge__memory"
       :title="memoryLabel"
       @click.stop="requestOpenMemory"
@@ -62,6 +72,9 @@ const notSetText = computed(
 const memoryLabel = computed(
   () => t("workspaceMemory.memoryAction") || "Memory"
 );
+const changeFolderText = computed(
+  () => t("workspace.changeFolder") || "Change folder"
+);
 
 const displayPath = computed(() => {
   const p = props.workspace?.rootPath ?? "";
@@ -74,7 +87,8 @@ const displayPath = computed(() => {
 });
 
 function requestSetWorkspace(): void {
-  if (props.workspace) return;
+  // Allow re-picking even when a workspace is already set, so the user can
+  // change folders. The parent decides whether to prompt for a new folder.
   emit("request-set-workspace");
 }
 
@@ -109,6 +123,22 @@ function requestOpenMemory(): void {
 }
 .workspace-badge__path {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.workspace-badge__change {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 6px;
+  padding: 0 6px;
+  border: none;
+  border-left: 1px solid rgba(var(--v-theme-on-surface), 0.15);
+  background: transparent;
+  color: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  border-radius: 0;
+}
+.workspace-badge__change:hover {
+  background: rgba(var(--v-theme-primary), 0.12);
 }
 .workspace-badge__memory {
   display: inline-flex;

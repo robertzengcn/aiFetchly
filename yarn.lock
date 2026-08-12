@@ -1027,6 +1027,19 @@
   optionalDependencies:
     electron-installer-dmg "^5.0.1"
 
+"@electron-forge/maker-msix@^7.11.2":
+  version "7.11.2"
+  resolved "https://registry.yarnpkg.com/@electron-forge/maker-msix/-/maker-msix-7.11.2.tgz#32932e9729a875096a54c8a34b42ee4c15f6bf1c"
+  integrity sha512-02+KlzPyY1aJRT3mNLyx8j5PUPVUA6fvx4DzCgUUkE1XJlu+YPkKoJZL/n1o05Y9UzoIJ1y5b9o1nmNuzyeiXQ==
+  dependencies:
+    "@electron-forge/core-utils" "7.11.2"
+    "@electron-forge/maker-base" "7.11.2"
+    "@electron-forge/shared-types" "7.11.2"
+    cross-spawn "^7.0.3"
+    electron-windows-msix "^2.0.4"
+    fs-extra "^10.0.0"
+    parse-author "^2.0.0"
+
 "@electron-forge/maker-rpm@^7.11.2":
   version "7.11.2"
   resolved "https://registry.npmmirror.com/@electron-forge/maker-rpm/-/maker-rpm-7.11.2.tgz#41f4f212a0cc8acb09f6f601cf3c4e8b819adc54"
@@ -1345,7 +1358,7 @@
     minimatch "^9.0.3"
     plist "^3.1.0"
 
-"@electron/windows-sign@^1.0.0", "@electron/windows-sign@^1.1.2":
+"@electron/windows-sign@^1.0.0", "@electron/windows-sign@^1.1.2", "@electron/windows-sign@^1.2.2":
   version "1.2.2"
   resolved "https://registry.npmmirror.com/@electron/windows-sign/-/windows-sign-1.2.2.tgz"
   integrity sha512-dfZeox66AvdPtb2lD8OsIIQh12Tp0GNCRUDfBHIKGpbmopZto2/A8nSpYYLoedPIHpqkeblZ/k8OV0Gy7PYuyQ==
@@ -7506,6 +7519,18 @@ electron-to-chromium@^1.5.389:
   resolved "https://registry.npmmirror.com/electron-to-chromium/-/electron-to-chromium-1.5.393.tgz#aec971df2a6f4f7e51fbacb200d66cebfc7d3c17"
   integrity sha512-kiDJdIUawuEIcp9XoICKp1iTYDEbgguIPq526N1Q7jIQDeQ3CqoMx71025PI/7E48Ddtw2HuWsVjY7afEgNxmg==
 
+electron-windows-msix@^2.0.4:
+  version "2.0.4"
+  resolved "https://registry.yarnpkg.com/electron-windows-msix/-/electron-windows-msix-2.0.4.tgz#7a483d5674755572b182b61d30a65b309fd9f116"
+  integrity sha512-rYRrCWT7Hey52995JNgtmXKwG0saTTVPRd4KymeejOdIgNrSP5hHC5nSmVyClOICGbc5/vL4U5A2Am6L/5t0lw==
+  dependencies:
+    "@electron/windows-sign" "^1.2.2"
+    "@malept/cross-spawn-promise" "^2.0.0"
+    chalk "^3.0.0"
+    debug "^4.4.1"
+    fs-extra "^11.2.0"
+    xml-escape "^1.1.0"
+
 electron-winstaller@^5.3.0:
   version "5.4.0"
   resolved "https://registry.npmmirror.com/electron-winstaller/-/electron-winstaller-5.4.0.tgz"
@@ -8590,6 +8615,15 @@ fs-extra@^11.1.0, fs-extra@^11.1.1:
   version "11.3.2"
   resolved "https://registry.npmmirror.com/fs-extra/-/fs-extra-11.3.2.tgz"
   integrity sha512-Xr9F6z6up6Ws+NjzMCZc6WXg2YFRlrLP9NQDO3VQrWrfiojdhS56TzueT88ze0uBdCTwEIhQ3ptnmKeWGFAe0A==
+  dependencies:
+    graceful-fs "^4.2.0"
+    jsonfile "^6.0.1"
+    universalify "^2.0.0"
+
+fs-extra@^11.2.0:
+  version "11.4.0"
+  resolved "https://registry.yarnpkg.com/fs-extra/-/fs-extra-11.4.0.tgz#f88ed6d180ac9e14b61b08e679468f0b1b6b4730"
+  integrity sha512-EQsFzMUJkCKGr1ePqlYADkIUmHW1s3ZXr5Yqy6wbGrfUCphpl2maM/kyOIRA2HpP3AaFQTZXD4ldjek+nccddA==
   dependencies:
     graceful-fs "^4.2.0"
     jsonfile "^6.0.1"
@@ -15984,6 +16018,11 @@ xlsx@^0.18.5:
     ssf "~0.11.2"
     wmf "~1.0.1"
     word "~0.3.0"
+
+xml-escape@^1.1.0:
+  version "1.1.0"
+  resolved "https://registry.yarnpkg.com/xml-escape/-/xml-escape-1.1.0.tgz#3904c143fa8eb3a0030ec646d2902a2f1b706c44"
+  integrity sha512-B/T4sDK8Z6aUh/qNr7mjKAwwncIljFuUP+DO/D5hloYFj+90O88z8Wf7oSucZTHxBAsC1/CTP4rtx/x1Uf72Mg==
 
 xml-name-validator@^4.0.0:
   version "4.0.0"

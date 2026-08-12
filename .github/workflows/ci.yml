@@ -100,11 +100,19 @@ jobs:
       FORGE_DISABLE_ASAR: "1"
       # Skip electron-forge's packaging-time native rebuild in CI. rebuild-native
       # (run by package:ci) already builds better-sqlite3 for Electron before
-      # packaging copies node_modules, so re-rebuilding during "Preparing native
-      # dependencies" is redundant work that has been observed to stall the
-      # smoke build. Post-package verify checks workers + renderer HTML layout.
+      # packaging copies node_modules, and the forked remote-rebuild worker is
+      # patched to no-op under this flag (scripts/patch-remote-rebuild.js), so
+      # "Preparing native dependencies" skips @electron/rebuild's full tree walk
+      # too. Post-package verify checks workers + renderer HTML layout, not
+      # runtime native loading.
       FORGE_SKIP_NATIVE_REBUILD: "1"
-      NODE_OPTIONS: --max-old-space-size=8192
+      # ubuntu-latest has ~7 GB RAM. An 8 GB heap (the previous value) exceeds
+      # physical RAM and causes the kernel to OOM-kill electron-packager's
+      # finalize/prune phase silently — the runner then "loses communication"
+      # mid-"Finalizing package" with no error. 4096 matches build.yml/release.yml
+      # and stays safely under RAM. Pair with the swap setup step below so
+      # transient allocation spikes during galactus prune don't get us killed.
+      NODE_OPTIONS: --max-old-space-size=4096
       ELECTRON_FORGE_VITE_CONCURRENT: "1"
       VITE_CONFIG_NATIVE_IGNORE_WARNING: "true"
 
@@ -165,6 +173,21 @@ jobs:
           sudo rm -rf /opt/hostedtoolcache/CodeQL || true
           sudo docker image prune --all --force || true
           echo "Disk after cleanup:"; df -h /
+
+      # electron-packager's finalize/prune phase (galactus building an in-memory
+      # map of the whole dependency tree) produces transient memory spikes that
+      # can OOM-kill the process on a ~7 GB runner, surfacing as "lost
+      # communication with the server" mid-"Finalizing package". A 4 GB swap
+      # file absorbs those spikes. This was introduced by 7e1e14eb and
+      # accidentally dropped when the job was reworked; restored here.
+      - name: Add swap to absorb finalize memory spikes
+        run: |
+          echo "Memory/swap before:"; free -h
+          sudo fallocate -l 4G /swapfile || true
+          sudo chmod 600 /swapfile || true
+          sudo mkswap /swapfile >/dev/null || true
+          sudo swapon /swapfile || true
+          echo "Memory/swap after:"; free -h
 
       - name: Guard forge asar unpack before packaging
         run: yarn verify-forge-asar-unpack

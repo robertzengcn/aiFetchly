@@ -9,6 +9,7 @@ import { CustomError } from "@/modules/customError";
 import { TimeoutError, InterceptResolutionAction } from "puppeteer";
 import useProxy from "@lem0-packages/puppeteer-page-proxy";
 import { convertProxyServertourl } from "@/modules/lib/function";
+import { hostMatchesAny, ALLOWED_HOSTS } from "@/modules/lib/urlHostAllowlist";
 
 export class YandexScraper extends SearchScrape {
   search_engine_name = "yandex";
@@ -155,11 +156,8 @@ export class YandexScraper extends SearchScrape {
 
         // Handle Yandex redirect links similar to Bing
         for (const seval of searchRes) {
-          const sevalHost = seval.link ? new URL(seval.link).hostname : '';
-          if (
-            sevalHost.endsWith("yandex.com") ||
-            sevalHost.endsWith("yandex.ru")
-          ) {
+          const sevalHost = seval.link ? new URL(seval.link).hostname : "";
+          if (hostMatchesAny(sevalHost, ALLOWED_HOSTS.yandex)) {
             const browser = await this.page.browser();
             try {
               const newPage = await browser.newPage();

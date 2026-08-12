@@ -7,6 +7,7 @@
 - **Created**: 2026-07-05
 - **Owner**: Engineering Team
 - **Related docs**:
+  - `docs/prd/ai-email-thread-aware-reply-reliability-prd.md` (v2 reliability requirements; takes precedence for reply generation, approval, and sending)
   - `docs/skills/PRD_AI_Skills_System.md`
   - `docs/ai-chat-tool-approval-modes-prd.md`
   - `docs/contact-profile-ai-enrichment-prd.md`

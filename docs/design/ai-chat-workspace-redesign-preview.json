@@ -1,0 +1,13 @@
+{
+  "source_mockup": null,
+  "source_plan": "docs/prd/ai-chat-workspace-ui-redesign-technical-design.md",
+  "source_requirements": "docs/prd/ai-chat-workspace-ui-redesign-prd.md",
+  "mode": "plan-driven",
+  "html_file": "docs/design/ai-chat-workspace-redesign-preview.html",
+  "pretext_tier": "chat-messaging",
+  "framework": "vanilla",
+  "iterations": 0,
+  "date": "2026-08-11",
+  "screen": "ai-chat-workspace-redesign",
+  "branch": "dev"
+}

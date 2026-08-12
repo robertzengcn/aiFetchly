@@ -7,13 +7,14 @@ on:
   workflow_dispatch:
     inputs:
       build_mode:
-        description: Build test installers or signed production installers
+        description: Build test installers, signed direct installers, or a Microsoft Store package
         required: true
         default: test
         type: choice
         options:
           - test
           - production
+          - store
 
 permissions:
   contents: read
@@ -27,11 +28,15 @@ jobs:
       version: ${{ steps.calculate_version.outputs.version }}
       artifact_name: ${{ steps.calculate_version.outputs.artifact_name }}
     env:
-      BUILD_MODE: ${{ github.event_name == 'push' && 'production' || inputs.build_mode }}
+      # Master produces the Store submission artifact. Direct-download
+      # production MSI builds remain available through workflow_dispatch.
+      BUILD_MODE: ${{ github.event_name == 'push' && 'store' || inputs.build_mode }}
+      WINDOWS_DISTRIBUTION: ${{ (github.event_name == 'push' || inputs.build_mode == 'store') && 'store' || 'direct' }}
+      WINDOWS_STORE_PACKAGE_IDENTITY: ${{ vars.WINDOWS_STORE_PACKAGE_IDENTITY }}
+      WINDOWS_STORE_PUBLISHER: ${{ vars.WINDOWS_STORE_PUBLISHER }}
+      WINDOWS_STORE_PUBLISHER_DISPLAY_NAME: ${{ vars.WINDOWS_STORE_PUBLISHER_DISPLAY_NAME }}
       VITE_LOGIN_URL_TEST: ${{ secrets.VITE_LOGIN_URL_TEST }}
       VITE_LOGIN_URL_PROD: ${{ secrets.VITE_LOGIN_URL_PROD }}
-      UPDATESERVER_TEST: ${{ secrets.UPDATESERVER }}
-      UPDATESERVER_PROD: ${{ secrets.UPDATESERVER_PROD }}
 
     steps:
       - name: Checkout code
@@ -75,27 +80,20 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [ "$BUILD_MODE" = "production" ]; then
+          if [ "$BUILD_MODE" = "production" ] || [ "$BUILD_MODE" = "store" ]; then
             node_env="production"
             login_url="$VITE_LOGIN_URL_PROD"
-            update_server="$UPDATESERVER_PROD"
           else
             node_env="test"
             login_url="$VITE_LOGIN_URL_TEST"
-            update_server="$UPDATESERVER_TEST"
           fi
           if [ -z "$login_url" ]; then
             echo "::error::The login URL secret for ${BUILD_MODE} builds is empty."
             exit 1
           fi
-          if [ -z "$update_server" ]; then
-            echo "::error::The update-server secret for ${BUILD_MODE} builds is empty."
-            exit 1
-          fi
           {
             echo "NODE_ENV=$node_env"
             echo "VITE_LOGIN_URL=$login_url"
-            echo "UPDATESERVER=$update_server"
           } > .env
           cp .env ".env.${node_env}"
 
@@ -116,8 +114,8 @@ jobs:
           cd ../..
           yarn rebuild-better-sqlite
 
-
       - name: Install WiX Toolset
+        if: ${{ env.BUILD_MODE != 'store' }}
         shell: pwsh
         run: |
           $wixDirectory = "$env:ProgramFiles\WiX Toolset"
@@ -126,6 +124,18 @@ jobs:
           Remove-Item -Force wix.zip
           "WIX=$wixDirectory" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           $wixDirectory | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Validate Microsoft Store identity
+        if: ${{ env.BUILD_MODE == 'store' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in WINDOWS_STORE_PACKAGE_IDENTITY WINDOWS_STORE_PUBLISHER WINDOWS_STORE_PUBLISHER_DISPLAY_NAME; do
+            if [ -z "${!name}" ]; then
+              echo "::error::Store builds require the repository variable $name. Copy its exact value from Partner Center > Product identity."
+              exit 1
+            fi
+          done
 
       - name: Restore Windows signing certificate
         if: ${{ env.BUILD_MODE == 'production' }}
@@ -148,7 +158,9 @@ jobs:
         run: |
           set -euo pipefail
           export NODE_OPTIONS="--max-old-space-size=4096"
-          if [ "$BUILD_MODE" = "production" ]; then
+          if [ "$BUILD_MODE" = "store" ]; then
+            yarn make-win:store
+          elif [ "$BUILD_MODE" = "production" ]; then
             yarn make-win:prod
           else
             yarn make-win:test
@@ -163,6 +175,8 @@ jobs:
           path: |
             out/make/**/*.exe
             out/make/**/*.msi
+            # Unsigned Store submission package. Partner Center signs it after certification.
+            out/make/**/*.msix
             # Squirrel.Windows auto-update assets (PRD FR-6.2/6.3) — required by
             # update.electronjs.org alongside the installer.
             out/make/**/RELEASES
@@ -170,6 +184,7 @@ jobs:
           if-no-files-found: error
 
   build-macos:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.build_mode != 'store' }}
     runs-on: macos-latest
     outputs:
       version: ${{ steps.calculate_version.outputs.version }}
@@ -179,8 +194,6 @@ jobs:
       MAKE_MAC_DMG: ${{ github.event_name == 'push' && 'true' || inputs.build_mode == 'production' && 'true' || 'false' }}
       VITE_LOGIN_URL_TEST: ${{ secrets.VITE_LOGIN_URL_TEST }}
       VITE_LOGIN_URL_PROD: ${{ secrets.VITE_LOGIN_URL_PROD }}
-      UPDATESERVER_TEST: ${{ secrets.UPDATESERVER }}
-      UPDATESERVER_PROD: ${{ secrets.UPDATESERVER_PROD }}
 
     steps:
       - name: Checkout code
@@ -274,24 +287,17 @@ jobs:
           if [ "$BUILD_MODE" = "production" ]; then
             node_env="production"
             login_url="$VITE_LOGIN_URL_PROD"
-            update_server="$UPDATESERVER_PROD"
           else
             node_env="test"
             login_url="$VITE_LOGIN_URL_TEST"
-            update_server="$UPDATESERVER_TEST"
           fi
           if [ -z "$login_url" ]; then
             echo "::error::The login URL secret for ${BUILD_MODE} builds is empty."
             exit 1
           fi
-          if [ -z "$update_server" ]; then
-            echo "::error::The update-server secret for ${BUILD_MODE} builds is empty."
-            exit 1
-          fi
           {
             echo "NODE_ENV=$node_env"
             echo "VITE_LOGIN_URL=$login_url"
-            echo "UPDATESERVER=$update_server"
           } > .env
           cp .env ".env.${node_env}"
 
@@ -387,6 +393,7 @@ jobs:
   # as workflow artifacts for the publish step to attach to a GitHub Release.
   # ===========================================================================
   build-local-ai-runtimes:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.build_mode != 'store' }}
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
@@ -488,6 +495,7 @@ jobs:
           if-no-files-found: error
 
   generate-runtime-catalog:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.build_mode != 'store' }}
     needs: build-local-ai-runtimes
     runs-on: ubuntu-latest
     permissions:
@@ -538,7 +546,7 @@ jobs:
   # ===========================================================================
   publish-github-release:
     needs: [build-windows, build-macos, generate-runtime-catalog]
-    if: github.event_name == 'push' || inputs.build_mode == 'production'
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.build_mode == 'production' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write

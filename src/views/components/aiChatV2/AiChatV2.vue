@@ -1306,7 +1306,9 @@ function ensureWorkspaceConversationId(): string {
 }
 
 function handleWorkspaceSetupRequest(): void {
-  if (activeWorkspace.value) return;
+  // Allow re-picking even when a workspace is already set, so the user can
+  // change folders. Re-picking creates a new pending workspace that supersedes
+  // the previous one once approved (see WorkspaceModule.setWorkspace).
   ensureWorkspaceConversationId();
   showWorkspaceRequired.value = true;
 }
