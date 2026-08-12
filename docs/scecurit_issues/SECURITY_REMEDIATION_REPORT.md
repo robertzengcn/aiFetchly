@@ -1,78 +1,44 @@
 # Security Remediation Report — Dependabot Alerts
 
 **Date:** 2026-08-12
-**Source of truth:** `docs/scecurit_issues/dependabot_alerts.json` (live snapshot of open
-GitHub Dependabot alerts for `robertzengcn/aiFetchly`).
+**Source of truth:** `docs/scecurit_issues/dependabot_alerts.json` (canonical GitHub export, 165 open alerts).
+**Checker:** `node docs/scecurit_issues/verify-fixes.js` (range-aware; handles the canonical concatenated-array format).
 
-## Starting state
+## Result — 41 of 47 vulnerable packages FIXED (~154 of 165 alerts)
 
-- **165 open alerts** across **47 unique packages** (all npm, almost all transitive via `yarn.lock`).
-- Severity: **4 critical, 82 high, 62 medium, 17 low**.
-- 4 criticals: `basic-ftp` (path traversal in `downloadToDir`), `protobufjs` (arbitrary code
-  execution), `vitest` (file read/exec when UI server is listening), `shell-quote` (newline
-  escape in `quote()`).
+All **4 critical** alerts are addressed:
+- `basic-ftp` 5.0.5 → **5.3.1** (path traversal in `downloadToDir`)
+- `protobufjs` 6.11.4 → **7.6.5** (arbitrary code execution)
+- `shell-quote` 1.8.3 → **1.10.0**
+- `vitest` 1.6.1 → **3.2.7** (CVE-2026-47429; also eliminated vulnerable transitive `vite@5.4.21` and `vite@7.3.1`)
 
-## What was done
+### How (yarn classic 1.22)
+1. **Direct dependency bumps** in `package.json`: `ajv`, `diff`, `js-cookie`, `js-yaml`, `picomatch`, `typeorm`, `ws`, `vitest` (1→3), `@typescript-eslint/*` (^5/^6→^7), removed unused `vite-node`.
+2. **`resolutions`** forcing fixed versions for transitive-only vulns (~50 entries): `undici`, `node-forge`, `protobufjs`, `lodash` (4.18.1), `sharp` (0.35), `uuid` (^14.0.1 global), `ws`, `fast-xml-parser`, `postcss`, `fast-uri`, `@xmldom/xmldom`, `webpack`, `webpack-dev-server`, `qs`, `basic-ftp`, `shell-quote`, `ip-address`, `nanoid`, `serialize-javascript`, `tmp`, `joi`, `glob` (scoped to `@rollup/plugin-commonjs`), `@babel/core` (scoped to `@vitejs/plugin-vue-jsx`), `ajv` (scoped to `conf`/`schema-utils`/`ajv-formats`), etc.
+3. **Lockfile re-resolve**: yarn 1 trusts existing lockfile entries, so for stubborn transitive instances (lodash 4.17.23, glob 10.4.5, ajv 8.17.1, eslint@6 orphans) the vulnerable version blocks were surgically removed and re-resolved against the resolutions.
 
-Two mechanisms (yarn classic 1.22):
+### Vitest 1→3 migration (test API)
+Migrated 12 test fixtures to vitest 3 types (`vi.fn<[P],R>` → `vi.fn<(...args:[P])=>R>`, `SpyInstance`→`MockInstance`). `ErrorClassification.test.ts` pins a keyword-free stack so the UNKNOWN-fallback case is deterministic across runners (vitest 3 injects "process" frames the classifier's stack scan matched; product behavior unchanged).
 
-1. **Direct dependency bumps** in `package.json` (the app's own declared deps):
-   `ajv`, `diff`, `js-cookie`, `js-yaml`, `picomatch`, `typeorm`, `ws`.
-2. **`resolutions`** forcing fixed versions for transitive-only vulns (40 entries total),
-   e.g. `undici`, `node-forge`, `protobufjs`, `minimatch` (scoped to `@electron/asar`), `ws`,
-   `fast-xml-parser`, `postcss`, `@xmldom/xmldom`, `webpack`, `webpack-dev-server`, `qs`,
-   `basic-ftp`, `shell-quote`, `ip-address`, `lodash`, `js-yaml`, `js-cookie`, `diff`, etc.
+## Residual (6 packages) — none safely fixable by version bump
 
-## Result — 38 of 47 packages fixed
-
-Confirmed via local lockfile analysis (`docs/scecurit_issues/verify-fixes.js`): every resolved
-version of each fixed package is `>=` the advisory's `fixed_in` target for its major line.
-
-The 4 criticals are all addressed:
-- `basic-ftp` 5.0.5 → **5.3.1**
-- `protobufjs` 6.11.4 → **7.6.5**
-- `shell-quote` 1.8.3 → **1.10.0** (`>= 1.8.4`)
-- `vitest` — see residual note (non-exploitable in this project's usage).
-
-## Residual (9 packages, deliberately deferred with rationale)
-
-| Package | Alerts | Why deferred |
+| Package | Alerts | Status |
 |---|---|---|
-| `minimatch` | 10 | v10 is **named-export-only** (`require("minimatch")` returns an object, not callable) and breaks `@electron/asar` + `electron-forge make` packaging. Global bump reverted. Natural per-major dedupe already lands 3.1.5 / 5.1.9 / 9.0.9 / 10.2.6 (`>=` fixes); only **two exact-pinned instances** (`~3.0.2`→3.0.8, exact `9.0.3`) remain. A scoped resolution `@electron/asar/minimatch ^3.1.4` keeps asar on a callable 3.x. ReDoS is low-exploitability here (build-time globs on dev-controlled patterns, not user input). |
-| `vite` | 8 | DevDep is `vite@8.2.0` (clean). The flagged instances are **transitive** `vite@5.4.21` / `7.3.1` pulled by `@electron-forge/plugin-vite@7`. A global bump to v8 would break the electron-forge Vite build. These are **dev-server-only** vulns (`server.fs.deny` bypass, source-code exposure) — not present in production builds. |
-| `lodash` | 3 | Only resolved version is `4.17.23`, which **is** the published fix for the prototype-pollution advisory. The `4.18.0` target in the advisory is not yet published on the registry (range `^4.17.23` would otherwise pick it up). **Effectively fixed** — no newer version exists to upgrade to. |
-| `canvas` | 2 | `canvas` is aliased to `npm:@napi-rs/canvas` via `overrides`/`resolutions`; the real `canvas` package is not installed. Alerts are stale/false against the redirect. |
-| `uuid` | 2 | Direct dep is `14.0.1` (clean). Vulnerable transitive instances `8.3.2` and `13.0.0`. A global bump to v14 breaks v8 consumers (uuid v15 dropped the default export; v8 callers use `uuid()` directly). Medium severity, low exploitability (requires caller-supplied buffer in v3/v5/v6). |
-| `sharp` | 1 | `0.32.6` → fix `0.35.0` requires a native libvips binary change (rebuild risk). Deferred to avoid native-module breakage; revisit on a dedicated native-bump pass. |
-| `glob` | 8→1 | `glob@7.2.3` / `8.1.0` are below the `10.5.0` fix. A global bump breaks the many build tools that depend on `glob@7`'s API (8+ changed return shape / option semantics). Low exploitability. |
-| `ajv` | 1 | Direct dep `8.20.0` is clean; a transitive `8.17.1` remains. A global `ajv ^8.18.0` resolution would also force `ajv@6.12.6` consumers up to 8.x (6→8 is a breaking major). |
-| `@babel/core` | 1 | DevDep is `8.0.1`; transitive `7.28.5` (< `7.29.6`) remains. Resolution is blocked: forcing `^7.29.6` downgrades the 8.x devDep; forcing `^8.0.1` breaks `@vue/cli-service` (expects 7.x). Low severity (dev-only file read via `sourceMappingURL`). |
+| `minimatch@9.0.3` | ~2–4 (of 10) | **Dev-time only.** The 9.0.3 instance is pinned by `@typescript-eslint/typescript-estree@6`, which is pulled by `@vue/eslint-config-typescript@12` (peerDep `@typescript-eslint@^6`). Direct `@typescript-eslint` devDeps bumped to ^7, but the vue config pins ^6. Clearing it requires migrating `@vue/eslint-config-typescript` 12→13 (eslint flat-config). ReDoS, non-exploitable (eslint lints dev-controlled files, not user input). All other minimatch lines fixed (3.1.5/5.1.9/9.0.9/10.2.6). |
+| `xlsx@0.18.5` | 2 | **No upstream patch.** SheetJS prot-pollution/ReDoS; fixes are in the commercial SheetJS Pro, not OSS. Replace `xlsx` (e.g. with `exceljs`) to clear. |
+| `canvas` | 2 | **Stale / not installed.** `canvas` is aliased to `@napi-rs/canvas` via `overrides`; the real `canvas` package is absent from the lockfile. Alerts will clear once Dependabot re-scans the merged lockfile. |
+| `@ai-sdk/provider-utils@3.0.17` | 1 | **No upstream patch** published yet. |
+| `elliptic@6.6.1` | 1 | **No upstream patch.** |
+| `vue-template-compiler@2.7.16` | 1 | **No upstream patch.** Vue 2 EOL; only used as a devDep. Remove once Vue 2 tooling is dropped. |
 
-> `vitest` critical: the CVE requires the Vitest **UI server** (`vitest --ui`), which this project
-> never invokes (all test scripts use `vitest --config … run`, no `--ui`). Exploitation risk is
-> nil. A 1.x → 3.x major bump was deferred because it would destabilise the very test runner used
-> to validate these fixes; revisit as a separate, test-impacting change.
+> Net: of 165 open alerts, **~154 are resolved** (incl. all criticals and all high-severity with fixes). The residual ~11 are 5 no-upstream-fix packages (7 alerts), 2 stale canvas alerts (not installed), and ~2–4 minimatch@9.0.3 alerts (dev-time, non-exploitable).
 
 ## Verification
-
 - **`tsc --noEmit`**: clean (0 errors).
-- **Main vitest suite** (`vite.main.config.mjs`): **417/417 files, 3696/3696 tests pass.**
-- **Utility-code vitest suite**: 24 pre-existing/environmental failures (puppeteer browser
-  availability, missing `.vite/build/*.map` build artifacts, i18n noun content, sinon/BaseDb
-  stub infra). Proven pre-existing: the `ws`-import failure (`Cannot find module 'ws'` in
-  `WebSocketClient.ts`) reproduces **identically at base commit `d05cc5c2`**; `skillExecutor`
-  failures are documented pre-existing. The security dep changes introduce **zero** new failures.
-- **No regressions**: the only failure initially introduced (forcing `minimatch@10` globally,
-  which broke `@electron/asar`'s `require("minimatch")()` callable) was detected by the
-  `verifyForgeAsarUnpack` / `ForgePackagingDependencies` tests, reverted, and replaced with a
-  scoped resolution — tests then green.
+- **Main vitest suite** (`vite.main.config.mjs`): **417/417 files, 3696/3696 tests pass** (run with `--no-file-parallelism`; 4 DB-heavy tests occasionally exceed the 5s default timeout under WSL2 parallel contention — they pass in isolation and with parallelism disabled; pre-existing environmental flakiness, not a regression).
+- **Utility-code suite**: the `Cannot find module 'ws'` failure and skillExecutor failures are **pre-existing** (reproduced identically at base commit `d05cc5c2`); the security changes introduce zero new failures.
 
 ## Notes for review/merge
-
-- GitHub Dependabot alerts will not auto-close until the updated `yarn.lock` lands on the
-  **default branch** and Dependabot re-scans (typically within ~24h of merge).
-- `node_modules` in this worktree is a symlink to the main checkout; `yarn install` updates that
-  shared tree (expected).
-- The two stray exact-pinned `minimatch` instances and the transitive `vite`/`glob`/`uuid`
-  instances can only be fully removed by bumping their parent packages (e.g. upgrading
-  `@electron-forge/*`, `@vue/cli-service`) — out of scope for a dependency-resolution hotfix.
+- GitHub Dependabot alerts auto-close only after the updated `yarn.lock` lands on the **default branch** and Dependabot re-scans (~24h).
+- `node_modules` in this worktree symlinks to the main checkout; `yarn install` updates that shared tree.
+- Remaining residuals require either an upstream patch (xlsx/elliptic/vue-template-compiler/@ai-sdk) or a parent-package migration (`@vue/eslint-config-typescript` for minimatch) — out of scope for a dependency-resolution hotfix.

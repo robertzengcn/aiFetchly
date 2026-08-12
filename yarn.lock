@@ -4313,7 +4313,7 @@
 
 "@typescript-eslint/eslint-plugin@^6.7.0":
   version "6.21.0"
-  resolved "https://registry.npmmirror.com/@typescript-eslint/eslint-plugin/-/eslint-plugin-6.21.0.tgz"
+  resolved "https://registry.npmmirror.com/@typescript-eslint/eslint-plugin/-/eslint-plugin-6.21.0.tgz#30830c1ca81fd5f3c2714e524c4303e0194f9cd3"
   integrity sha512-oy9+hTPCUFpngkEZUSzbf9MxI65wbKFoQYsgPdILTfbUldp5ovUuphZVe4i30emU9M/kP+T64Di0mxl7dSw3MA==
   dependencies:
     "@eslint-community/regexpp" "^4.5.1"
@@ -4345,7 +4345,7 @@
 
 "@typescript-eslint/parser@^6.7.0":
   version "6.21.0"
-  resolved "https://registry.npmmirror.com/@typescript-eslint/parser/-/parser-6.21.0.tgz"
+  resolved "https://registry.npmmirror.com/@typescript-eslint/parser/-/parser-6.21.0.tgz#af8fcf66feee2edc86bc5d1cf45e33b0630bf35b"
   integrity sha512-tbsV1jPne5CkFQCgPBcDOt30ItF7aJoZL997JSF7MhGQqOeT3svWRYxiqlfA5RUdlHN6Fi+EI9bxqbdyAUZjYQ==
   dependencies:
     "@typescript-eslint/scope-manager" "6.21.0"
@@ -4367,7 +4367,7 @@
 
 "@typescript-eslint/scope-manager@6.21.0":
   version "6.21.0"
-  resolved "https://registry.npmmirror.com/@typescript-eslint/scope-manager/-/scope-manager-6.21.0.tgz"
+  resolved "https://registry.npmmirror.com/@typescript-eslint/scope-manager/-/scope-manager-6.21.0.tgz#ea8a9bfc8f1504a6ac5d59a6df308d3a0630a2b1"
   integrity sha512-OwLUIWZJry80O99zvqXVEioyniJMa+d2GrqpUTqi5/v5D5rOrppJVBPa0yKCblcigC0/aYAzxxqQ1B+DS2RYsg==
   dependencies:
     "@typescript-eslint/types" "6.21.0"
@@ -4383,7 +4383,7 @@
 
 "@typescript-eslint/type-utils@6.21.0":
   version "6.21.0"
-  resolved "https://registry.npmmirror.com/@typescript-eslint/type-utils/-/type-utils-6.21.0.tgz"
+  resolved "https://registry.npmmirror.com/@typescript-eslint/type-utils/-/type-utils-6.21.0.tgz#6473281cfed4dacabe8004e8521cee0bd9d4c01e"
   integrity sha512-rZQI7wHfao8qMX3Rd3xqeYSMCL3SoiSQLBATSiVKARdFGCYSRvmViieZjqc58jKgs8Y8i9YvVVhRbHSTA4VBag==
   dependencies:
     "@typescript-eslint/typescript-estree" "6.21.0"
@@ -4413,7 +4413,7 @@
 
 "@typescript-eslint/typescript-estree@6.21.0":
   version "6.21.0"
-  resolved "https://registry.npmmirror.com/@typescript-eslint/typescript-estree/-/typescript-estree-6.21.0.tgz"
+  resolved "https://registry.npmmirror.com/@typescript-eslint/typescript-estree/-/typescript-estree-6.21.0.tgz#c47ae7901db3b8bddc3ecd73daff2d0895688c46"
   integrity sha512-6npJTkZcO+y2/kr+z0hc4HwNfrrP4kNYh57ek7yCNlrBjWQ1Y0OS7jiZTkgumrvkX5HkEKXFZkkdFNkaW2wmUQ==
   dependencies:
     "@typescript-eslint/types" "6.21.0"
@@ -4441,7 +4441,7 @@
 
 "@typescript-eslint/utils@6.21.0":
   version "6.21.0"
-  resolved "https://registry.npmmirror.com/@typescript-eslint/utils/-/utils-6.21.0.tgz"
+  resolved "https://registry.npmmirror.com/@typescript-eslint/utils/-/utils-6.21.0.tgz#4714e7a6b39e773c1c8e97ec587f520840cd8134"
   integrity sha512-NfWVaC8HP9T8cbKQxHcsJBY5YE1O33+jpMwN45qzWWaPDZgLIbo12toGMWnmhvCpd3sIxkpDw3Wv1B3dYrbDQQ==
   dependencies:
     "@eslint-community/eslint-utils" "^4.4.0"
@@ -15325,20 +15325,10 @@ uuid@*, uuid@^13.0.1:
   resolved "https://registry.npmmirror.com/uuid/-/uuid-13.0.2.tgz#41bc9c07b12f665089c205f6507976adbdf84ff8"
   integrity sha512-vzi9uRZ926x4XV73S/4qQaTwPXM2JBj6/6lI/byHH1jOpCzb0zDbfytgA9LcN/hzb2l7WQSQnxITOVx5un/wGw==
 
-uuid@^11.1.1:
-  version "11.1.1"
-  resolved "https://registry.npmmirror.com/uuid/-/uuid-11.1.1.tgz#f6d81d2e1c65d00762e5e29b16c5d2d995e208ad"
-  integrity sha512-vIYxrBCC/N/K+Js3qSN88go7kIfNPssr/hHCesKCQNAjmgvYS2oqr69kIufEG+O4+PfezOH4EbIeHCfFov8ZgQ==
-
-uuid@^14.0.1:
+uuid@^11.1.1, uuid@^14.0.1, uuid@^8.3.2:
   version "14.0.1"
   resolved "https://registry.npmmirror.com/uuid/-/uuid-14.0.1.tgz#8a5975b3e038902bfd169a10b5202f5ec0cf3faf"
   integrity sha512-6ZxzVpzDXDa3bJWaHilVayA+BH/1zmxCJoVgvmqJnid/gPoKHxUrS/aC/T6LGQtNHT+XHG9fXPJB4d+IrU30Ew==
-
-uuid@^8.3.2:
-  version "8.3.2"
-  resolved "https://registry.npmmirror.com/uuid/-/uuid-8.3.2.tgz#80d5b5ced271bb9af6c445f21a1a04c606cefbe2"
-  integrity sha512-+NYs2QeMWy+GWFOEm9xnn6HCDp0l7QBD7ml8zLUmJ+93Q5NF0NocErnwkTkXVFNiX3/fpC6afS8Dhb/gz7R7eg==
 
 v8-compile-cache-lib@^3.0.1:
   version "3.0.1"
