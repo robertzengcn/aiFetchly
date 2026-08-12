@@ -332,6 +332,7 @@ const env = process.env.NODE_ENV || "development";
 dotenv.config({ path: path.resolve(__dirname, `.env.${env}`) });
 
 const isProductionBuild = env === "production";
+const isWindowsStoreBuild = process.env.WINDOWS_DISTRIBUTION === "store";
 const shouldBuildMacDmg = process.env.MAKE_MAC_DMG !== "false";
 
 function resolveProductionAsarConfig() {
@@ -370,7 +371,7 @@ function requireProductionEnv(name) {
   return value;
 }
 
-if (isProductionBuild && process.platform === "win32") {
+if (isProductionBuild && process.platform === "win32" && !isWindowsStoreBuild) {
   if (!existsSync(windowsCertificatePath)) {
     throw new Error(
       "Production Windows packaging requires cert.pfx. Restore it from a CI secret before running Electron Forge."
@@ -475,7 +476,9 @@ module.exports = {
           },
         }
       : {}),
-    ...(isProductionBuild && process.platform === "win32"
+    ...(isProductionBuild &&
+    process.platform === "win32" &&
+    !isWindowsStoreBuild
       ? {
           windowsSign: {
             certificateFile: windowsCertificatePath,
@@ -513,7 +516,32 @@ module.exports = {
         : ["better-sqlite3", "bufferutil", "utf-8-validate", "keytar"],
   },
   makers: [
-    // Windows: WiX MSI only (no Squirrel Setup.exe).
+    // Microsoft Store submissions are unsigned MSIX packages. Partner Center
+    // re-signs the package after certification, so no PFX belongs in this path.
+    ...(isWindowsStoreBuild
+      ? [
+          {
+            name: "@electron-forge/maker-msix",
+            platforms: ["win32"],
+            config: {
+              sign: false,
+              manifestVariables: {
+                packageIdentity: requireProductionEnv(
+                  "WINDOWS_STORE_PACKAGE_IDENTITY"
+                ),
+                publisher: requireProductionEnv("WINDOWS_STORE_PUBLISHER"),
+                publisherDisplayName: requireProductionEnv(
+                  "WINDOWS_STORE_PUBLISHER_DISPLAY_NAME"
+                ),
+                packageVersion: `${require("./package.json").version}.0`,
+                packageDisplayName: "AiFetchly",
+                appDisplayName: "AiFetchly",
+              },
+            },
+          },
+        ]
+      : []),
+    // Direct Windows distribution: WiX MSI, signed only for production.
     {
       name: "@electron-forge/maker-zip",
       platforms: ["darwin"],
@@ -629,7 +657,9 @@ module.exports = {
     {
       name: "@electron-forge/maker-wix",
       config: {
-        ...(isProductionBuild && process.platform === "win32"
+        ...(isProductionBuild &&
+        process.platform === "win32" &&
+        !isWindowsStoreBuild
           ? {
               certificateFile: windowsCertificatePath,
               certificatePassword: requireProductionEnv("CERTIFICATE_PASSWORD"),
