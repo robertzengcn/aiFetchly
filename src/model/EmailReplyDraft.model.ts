@@ -1,5 +1,5 @@
 import { BaseDb } from "@/model/Basedb";
-import { Repository, IsNull, EntityManager } from "typeorm";
+import { Repository, IsNull, EntityManager, In } from "typeorm";
 import { EmailReplyDraftEntity } from "@/entity/EmailReplyDraft.entity";
 import { EmailReplyDraftRevisionEntity } from "@/entity/EmailReplyDraftRevision.entity";
 import { EmailReplyApprovalEntity } from "@/entity/EmailReplyApproval.entity";
@@ -367,8 +367,7 @@ export class EmailReplyDraftModel extends BaseDb {
       audit.emailServiceId = input.emailServiceId;
       audit.messageId = input.messageId;
       audit.draftId = input.draftId;
-      audit.action =
-        "send_claimed" as unknown as EmailReplyAuditLogEntity["action"];
+      audit.action = "send_claimed";
       audit.actor = "system";
       audit.reason = "Atomic approved->sending claim before SMTP";
       audit.metadataJson = JSON.stringify({
@@ -400,8 +399,13 @@ export class EmailReplyDraftModel extends BaseDb {
 
       const completedAt = new Date();
       const attemptStatus: EmailReplySendAttemptStatus = input.outcome;
-      await attemptRepo.update(
-        { id: input.attemptId },
+      // CONDITIONAL finalize: only advance an attempt that is still in-flight.
+      // A recovery sweep can select a stale 'claimed' attempt and then race with
+      // a late delivery finalize; without this guard, recovery would clobber a
+      // successful 'sent' -> 'delivery_unknown'. If 0 rows match, another caller
+      // already finalized — leave the attempt, draft, and approval untouched.
+      const attemptUpdate = await attemptRepo.update(
+        { id: input.attemptId, status: In(["claimed", "submitted"]) },
         {
           status: attemptStatus,
           completedAt,
@@ -410,6 +414,9 @@ export class EmailReplyDraftModel extends BaseDb {
           sanitizedError: input.sanitizedError ?? null,
         }
       );
+      if ((attemptUpdate.affected ?? 0) === 0) {
+        return;
+      }
 
       const draftPatch: Partial<EmailReplyDraftEntity> = {
         status: input.outcome,
@@ -437,10 +444,10 @@ export class EmailReplyDraftModel extends BaseDb {
       audit.draftId = input.draftId;
       audit.action =
         input.outcome === "sent"
-          ? ("reply_sent" as unknown as EmailReplyAuditLogEntity["action"])
+          ? "reply_sent"
           : input.outcome === "failed"
-          ? ("send_failed" as unknown as EmailReplyAuditLogEntity["action"])
-          : ("delivery_unknown" as unknown as EmailReplyAuditLogEntity["action"]);
+          ? "send_failed"
+          : "delivery_unknown";
       audit.actor = "system";
       audit.reason =
         input.outcome === "sent"

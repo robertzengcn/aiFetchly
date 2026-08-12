@@ -156,7 +156,9 @@ export type EmailReplyAuditAction =
   | "reply_sent"
   | "reply_skipped"
   | "auto_reply_blocked"
-  | "send_failed";
+  | "send_failed"
+  | "send_claimed"
+  | "delivery_unknown";
 
 /** Who triggered an audit action. */
 export type EmailReplyAuditActor = "user" | "ai" | "system";
