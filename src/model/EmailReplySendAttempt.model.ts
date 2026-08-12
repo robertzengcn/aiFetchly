@@ -38,9 +38,7 @@ export class EmailReplySendAttemptModel extends BaseDb {
     return await this.repository.findOne({ where: { idempotencyKey: key } });
   }
 
-  async listByDraft(
-    draftId: number
-  ): Promise<EmailReplySendAttemptEntity[]> {
+  async listByDraft(draftId: number): Promise<EmailReplySendAttemptEntity[]> {
     return await this.repository.find({
       where: { draftId },
       order: { id: "DESC" },
@@ -77,5 +75,26 @@ export class EmailReplySendAttemptModel extends BaseDb {
     }
   ): Promise<void> {
     await this.repository.update({ id }, { status, ...fields });
+  }
+
+  /** Count successful sends for a mailbox since {@link since} (daily-limit input). */
+  async countSentByServiceSince(
+    emailServiceId: number,
+    since: Date
+  ): Promise<number> {
+    return await this.repository
+      .createQueryBuilder("attempt")
+      .where("attempt.emailServiceId = :emailServiceId", { emailServiceId })
+      .andWhere("attempt.status = :status", { status: "sent" })
+      .andWhere("attempt.claimedAt >= :since", { since })
+      .getCount();
+  }
+
+  /** Count all attempts for a source message (per-thread-limit proxy). */
+  async countAttemptsForMessage(messageId: number): Promise<number> {
+    return await this.repository
+      .createQueryBuilder("attempt")
+      .where("attempt.messageId = :messageId", { messageId })
+      .getCount();
   }
 }

@@ -138,7 +138,8 @@ describe("EmailReply send-safety (Milestone 1) — DB integration", () => {
       idempotencyKey: buildSendIdempotencyKey(
         savedDraft.id,
         appended.revision.id,
-        contentHash
+        contentHash,
+        approvalRow.id
       ),
     };
   }
@@ -337,7 +338,8 @@ describe("EmailReply send-safety (Milestone 1) — DB integration", () => {
       idempotencyKey: buildSendIdempotencyKey(
         seed.draftId,
         seed.revisionId,
-        seed.contentHash
+        seed.contentHash,
+        seed.approvalId
       ),
       approvalId: seed.approvalId,
       messageId: 100,

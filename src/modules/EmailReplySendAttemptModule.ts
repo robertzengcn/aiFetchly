@@ -29,14 +29,15 @@ export class EmailReplySendAttemptModule extends BaseModule {
       await this.ensureConnection();
       return await this.attemptModel.findByIdempotencyKey(key);
     } catch (error) {
-      console.error("Error finding reply send attempt by idempotency key:", error);
+      console.error(
+        "Error finding reply send attempt by idempotency key:",
+        error
+      );
       throw error;
     }
   }
 
-  async listByDraft(
-    draftId: number
-  ): Promise<EmailReplySendAttemptEntity[]> {
+  async listByDraft(draftId: number): Promise<EmailReplySendAttemptEntity[]> {
     try {
       await this.ensureConnection();
       return await this.attemptModel.listByDraft(draftId);
@@ -74,6 +75,32 @@ export class EmailReplySendAttemptModule extends BaseModule {
       await this.attemptModel.markOutcome(id, status, fields);
     } catch (error) {
       console.error("Error marking reply send attempt outcome:", error);
+      throw error;
+    }
+  }
+
+  async countSentByServiceSince(
+    emailServiceId: number,
+    since: Date
+  ): Promise<number> {
+    try {
+      await this.ensureConnection();
+      return await this.attemptModel.countSentByServiceSince(
+        emailServiceId,
+        since
+      );
+    } catch (error) {
+      console.error("Error counting sent reply attempts:", error);
+      throw error;
+    }
+  }
+
+  async countAttemptsForMessage(messageId: number): Promise<number> {
+    try {
+      await this.ensureConnection();
+      return await this.attemptModel.countAttemptsForMessage(messageId);
+    } catch (error) {
+      console.error("Error counting reply attempts for message:", error);
       throw error;
     }
   }

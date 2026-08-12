@@ -162,22 +162,28 @@ describe("canonicalizeApprovalEnvelope — delimiter safety", () => {
 });
 
 describe("buildSendIdempotencyKey", () => {
-  it("is deterministic for the same approved revision", () => {
-    expect(buildSendIdempotencyKey(5, 1, "deadbeef")).toBe(
-      buildSendIdempotencyKey(5, 1, "deadbeef")
+  it("is deterministic for the same approved revision + approval", () => {
+    expect(buildSendIdempotencyKey(5, 1, "deadbeef", 9)).toBe(
+      buildSendIdempotencyKey(5, 1, "deadbeef", 9)
     );
   });
 
   it("changes when the approved hash changes", () => {
-    expect(buildSendIdempotencyKey(5, 1, "aaa")).not.toBe(
-      buildSendIdempotencyKey(5, 1, "bbb")
+    expect(buildSendIdempotencyKey(5, 1, "aaa", 9)).not.toBe(
+      buildSendIdempotencyKey(5, 1, "bbb", 9)
+    );
+  });
+
+  it("changes when the approval id changes (allows retry after failure)", () => {
+    expect(buildSendIdempotencyKey(5, 1, "aaa", 9)).not.toBe(
+      buildSendIdempotencyKey(5, 1, "aaa", 10)
     );
   });
 
   it("carries a stable versioned prefix", () => {
-    expect(buildSendIdempotencyKey(5, 1, "x").startsWith("erv1:5:1:")).toBe(
-      true
-    );
+    expect(
+      buildSendIdempotencyKey(5, 1, "x", 9).startsWith("erv1:5:1:9:")
+    ).toBe(true);
   });
 });
 
