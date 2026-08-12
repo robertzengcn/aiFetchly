@@ -70,7 +70,11 @@ export class EmailReplyPolicyOrchestrator {
       rule,
       sendCounts: { todayForService: 0, threadCount: 0 },
     });
-    return mapLegacyDecision(decision.status, decision.reason, rule?.id ?? null);
+    return mapLegacyDecision(
+      decision.status,
+      decision.reason,
+      rule?.id ?? null
+    );
   }
 
   private async evaluatePreSend(
@@ -87,7 +91,10 @@ export class EmailReplyPolicyOrchestrator {
     revisionId: number | undefined
   ): Promise<EmailReplyPolicyDecision> {
     if (!draftId) {
-      return deny("draft_not_approved", "Draft id is required for pre-send policy");
+      return deny(
+        "draft_not_approved",
+        "Draft id is required for pre-send policy"
+      );
     }
 
     // 1. Draft existence + mailbox consistency.
@@ -95,9 +102,11 @@ export class EmailReplyPolicyOrchestrator {
     if (!draft) {
       return deny("draft_terminal", "Draft no longer exists");
     }
-    const boundServiceId =
-      draft.emailServiceId ?? message.emailServiceId;
-    if (draft.emailServiceId != null && draft.emailServiceId !== message.emailServiceId) {
+    const boundServiceId = draft.emailServiceId ?? message.emailServiceId;
+    if (
+      draft.emailServiceId != null &&
+      draft.emailServiceId !== message.emailServiceId
+    ) {
       return deny(
         "mailbox_mismatch",
         "Draft mailbox differs from the original message mailbox"
@@ -110,10 +119,16 @@ export class EmailReplyPolicyOrchestrator {
       draft.status === "discarded" ||
       draft.status === "delivery_unknown"
     ) {
-      return deny("draft_terminal", `Draft is in terminal state '${draft.status}'`);
+      return deny(
+        "draft_terminal",
+        `Draft is in terminal state '${draft.status}'`
+      );
     }
     if (draft.status === "sending") {
-      return deny("draft_terminal", "A send for this draft is already in flight");
+      return deny(
+        "draft_terminal",
+        "A send for this draft is already in flight"
+      );
     }
     if (draft.status !== "approved" && draft.status !== "failed") {
       return deny(
@@ -123,7 +138,8 @@ export class EmailReplyPolicyOrchestrator {
     }
 
     // 3. Active approval bound to the current revision (FR-015).
-    const resolvedRevisionId = revisionId ?? draft.currentRevisionId ?? undefined;
+    const resolvedRevisionId =
+      revisionId ?? draft.currentRevisionId ?? undefined;
     if (!resolvedRevisionId) {
       return deny("draft_not_approved", "Draft has no current revision");
     }
@@ -138,12 +154,21 @@ export class EmailReplyPolicyOrchestrator {
       );
     }
     if (approval.revisionId !== resolvedRevisionId) {
-      return deny("approval_stale", "Approval is bound to a different revision");
+      return deny(
+        "approval_stale",
+        "Approval is bound to a different revision"
+      );
     }
 
     // 4. Recipient validity (FR-017).
-    if (!draft.recipientAddress || !isValidReplyAddress(draft.recipientAddress)) {
-      return deny("invalid_recipient", "Reply recipient address is missing or invalid");
+    if (
+      !draft.recipientAddress ||
+      !isValidReplyAddress(draft.recipientAddress)
+    ) {
+      return deny(
+        "invalid_recipient",
+        "Reply recipient address is missing or invalid"
+      );
     }
 
     // 5. Deterministic hard blocks + sensitive review (reused evaluator).
@@ -156,7 +181,9 @@ export class EmailReplyPolicyOrchestrator {
       boundServiceId,
       startOfDay
     );
-    const threadCount = await this.attemptModule.countAttemptsForMessage(message.id);
+    const threadCount = await this.attemptModule.countAttemptsForMessage(
+      message.id
+    );
     const legacy = evaluateAutoReplyPolicy({
       message: message as never,
       classification: message.classification as never,
@@ -167,11 +194,7 @@ export class EmailReplyPolicyOrchestrator {
 
     // Hard-block categories forbid sending outright.
     if (legacy.status === "blocked" || legacy.status === "skipped") {
-      return mapLegacyDecision(
-        legacy.status,
-        legacy.reason,
-        rule?.id ?? null
-      );
+      return mapLegacyDecision(legacy.status, legacy.reason, rule?.id ?? null);
     }
     // Sensitive / low-confidence content may still be sent AFTER explicit human
     // approval in this assisted release; flag it for the audit trail.
@@ -192,7 +215,10 @@ export class EmailReplyPolicyOrchestrator {
   }
 }
 
-function deny(code: EmailReplyPolicyCode, reason: string): EmailReplyPolicyDecision {
+function deny(
+  code: EmailReplyPolicyCode,
+  reason: string
+): EmailReplyPolicyDecision {
   return {
     allowed: false,
     requiresHumanReview: false,
@@ -204,7 +230,7 @@ function deny(code: EmailReplyPolicyCode, reason: string): EmailReplyPolicyDecis
 }
 
 /** Map the legacy evaluator's status onto the v2 policy code vocabulary. */
-function mapLegacyDecision(
+export function mapLegacyDecision(
   status: string,
   reason: string,
   ruleId: number | null
@@ -268,7 +294,8 @@ function classifyBlock(reason: string): EmailReplyPolicyCode {
   const r = reason.toLowerCase();
   if (r.includes("bounce")) return "bounce";
   if (r.includes("unsubscribe")) return "unsubscribe";
-  if (r.includes("automated") || r.includes("no-reply")) return "automated_sender";
+  if (r.includes("automated") || r.includes("no-reply"))
+    return "automated_sender";
   if (r.includes("domain")) return "blocked_domain";
   if (r.includes("sender") || r.includes("pattern")) return "blocked_sender";
   return "blocked_sender";
