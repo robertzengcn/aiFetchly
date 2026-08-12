@@ -10,6 +10,7 @@
 - **Primary areas**: Customer-facing routed pages, shared page templates, design-system convergence, responsive behavior, accessibility, and incremental migration
 - **Parent product contract**: [`AI Chat Workspace UI Redesign PRD`](./ai-chat-workspace-ui-redesign-prd.md)
 - **Parent technical design**: [`AI Chat Workspace UI Redesign Technical Design`](./ai-chat-workspace-ui-redesign-technical-design.md)
+- **Technical design**: [`Inner-Page UI Convergence Technical Design`](./inner-page-ui-convergence-technical-design.md)
 - **Visual reference**: [`AI Chat Workspace Redesign Preview`](../design/ai-chat-workspace-redesign-preview.html)
 
 ## 1. Executive Summary
