@@ -67,18 +67,6 @@ export const emailReplySendInputSchema = lazySchema(() =>
   })
 );
 
-/**
- * Approved reply send (reliability v2). The draft id plus an opaque one-time
- * approval token issued by EMAIL_REPLY_DRAFT_APPROVE. There is NO emailServiceId
- * override — the bound mailbox is enforced by the delivery service (FR-017).
- */
-export const emailReplySendInputSchemaV2 = lazySchema(() =>
-  z.strictObject({
-    draftId: z.number().int().positive("Draft id is required"),
-    approvalToken: z.string().min(1, "Approval token is required"),
-  })
-);
-
 /** Approve the current revision of a draft for sending (reliability v2). */
 export const emailReplyDraftApproveInputSchema = lazySchema(() =>
   z.strictObject({
