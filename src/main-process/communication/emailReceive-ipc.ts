@@ -324,7 +324,40 @@ export function registerEmailReceiveIpcHandlers(): void {
       const module = new EmailReplyDraftModule();
       const existing = await module.read(input.id);
       if (!existing) throw new Error("emailreceive.draft_not_found");
-      await module.updateBody(input.id, input.bodyText, input.bodyHtml ?? null);
+
+      // Reliability v2: route the edit through materializeRevision1 so it
+      // appends an immutable revision (subject + body), invalidates any active
+      // approval (FR-014), and recomputes the canonical hash. Legacy drafts
+      // without a v2 envelope identity fall back to the mutable updateBody path
+      // until backfill materializes their revision 1.
+      const canV2 =
+        isEmailReplyApprovalV2Enabled() &&
+        !!existing.senderAddress &&
+        !!existing.recipientAddress &&
+        existing.emailServiceId != null;
+      if (canV2) {
+        const { materializeRevision1 } = await import(
+          "@/service/emailReply/EmailReplyRevisionMaterializer"
+        );
+        await materializeRevision1(module, {
+          draftId: input.id,
+          actor: "user",
+          subject: input.subject,
+          bodyText: input.bodyText,
+          bodyHtml: input.bodyHtml ?? null,
+          senderAddress: existing.senderAddress as string,
+          recipientAddress: existing.recipientAddress as string,
+          emailServiceId: existing.emailServiceId as number,
+          originalMessageId: existing.messageId,
+        });
+      } else {
+        await module.updateBody(
+          input.id,
+          input.bodyText,
+          input.bodyHtml ?? null
+        );
+      }
+
       // Best-effort audit of the human edit.
       try {
         const audit = new EmailReplyAuditLogEntity();
