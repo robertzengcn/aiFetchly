@@ -434,10 +434,10 @@
             @update:model-value="onToolApprovalModeChange"
           />
           <v-tooltip location="bottom">
-            <template #activator="{ props }">
+            <template #activator="{ props: activatorProps }">
               <v-chip
                 v-if="providerLabel"
-                v-bind="props"
+                v-bind="activatorProps"
                 size="x-small"
                 :color="providerChipColor"
                 variant="tonal"
@@ -2893,7 +2893,6 @@ const upsertToolResultMessage = (
 
 const handleSkillPermissionGrant = async (
   message: ChatV2MessageView,
-  _persistent?: boolean
 ): Promise<void> => {
   const toolId = resolveToolIdForPermissionMessage(message);
   if (!toolId) {
@@ -2946,10 +2945,10 @@ const handleSkillPermissionGrant = async (
   }
 };
 
-const handlePinnedPermissionGrant = (payload: { persistent: boolean }): void => {
+const handlePinnedPermissionGrant = (): void => {
   const message = pinnedPermissionPrompt.value;
   if (!message) return;
-  void handleSkillPermissionGrant(message, payload.persistent);
+  void handleSkillPermissionGrant(message);
 };
 
 const handleSkillPermissionDeny = (message: ChatV2MessageView): void => {
