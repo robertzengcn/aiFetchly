@@ -89,7 +89,13 @@ describe("sqlite3 removal guard", () => {
     // may be a plain array or a conditional expression (CI skips the rebuild),
     // so capture the whole assignment up to the end of rebuildConfig rather than
     // assuming a literal array literal directly follows the key.
-    const onlyModulesMatch = forge.match(/onlyModules:([\s\S]*?)\n\s*\},/);
+    // Anchor on an onlyModules assignment that is NOT inside a comment: require
+    // the line to begin with optional whitespace then onlyModules: (a bare key
+    // in an object literal), so inline `onlyModules:` mentions in comment
+    // bodies do not shadow the real assignment.
+    const onlyModulesMatch = forge.match(
+      /^[ \t]*onlyModules:([\s\S]*?)\n\s*\},/m
+    );
     expect(onlyModulesMatch).not.toBeNull();
     const onlyModulesBlock = onlyModulesMatch![1];
     expect(onlyModulesBlock).not.toMatch(/["']sqlite3["']/);

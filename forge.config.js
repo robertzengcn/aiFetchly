@@ -423,8 +423,8 @@ function ensureNodeAbiPatched() {
  * Patches @electron-forge/core-utils' forked `remote-rebuild.js` to no-op when
  * FORGE_SKIP_NATIVE_REBUILD=1 is set, so the packaging-time "Preparing native
  * dependencies" step does not perform @electron/rebuild's full dependency-graph
- * walk (which stalls the CI smoke runner even though onlyModules:[] compiles
- * nothing). See scripts/patch-remote-rebuild.js for the full rationale. Runs as
+ * walk (which stalls the CI smoke runner even though the empty onlyModules
+ * list compiles nothing). See scripts/patch-remote-rebuild.js for the full rationale. Runs as
  * a safety net in the prePackage hook for direct electron-forge invocations.
  */
 function ensureRemoteRebuildPatched() {
@@ -536,14 +536,14 @@ module.exports = {
     // and has been observed to stall the smoke build. The smoke test only
     // verifies packaged worker files, not native module loading at runtime.
     //
-    // NOTE: `onlyModules: []` alone is NOT enough to skip the work — an empty
-    // array is truthy in @electron/rebuild's ModuleWalker, so it still walks the
+    // NOTE: an empty onlyModules array alone is NOT enough to skip the work —
+    // it is truthy in @electron/rebuild's ModuleWalker, so it still walks the
     // entire dependency graph and scans every nested node_modules (only the
     // final compile is skipped). That walk is what stalled the CI runner. The
     // true skip is delivered by scripts/patch-remote-rebuild.js (wired via
     // postinstall + prePackage), which makes the forked remote-rebuild worker
-    // exit immediately when this env var is set. onlyModules:[] is kept as a
-    // secondary guard so nothing compiles even if the patch is absent.
+    // exit immediately when this env var is set. The empty array here is kept
+    // as a secondary guard so nothing compiles even if the patch is absent.
     onlyModules:
       process.env.FORGE_SKIP_NATIVE_REBUILD === "1"
         ? []
