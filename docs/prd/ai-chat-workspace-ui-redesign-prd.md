@@ -10,6 +10,7 @@
 - **Product**: AiFetchly Electron desktop application
 - **Primary areas**: Application navigation, AI Chat V2, workspace conversations, background execution, artifacts, renderer performance
 - **Related documents**:
+  - [`inner-page-ui-convergence-prd.md`](./inner-page-ui-convergence-prd.md) — downstream application-wide adoption of this PRD's shell, hierarchy, and visual language
   - [`ai-html-artifacts-prd.md`](./ai-html-artifacts-prd.md)
   - [`ai-html-artifacts-technical-design.md`](./ai-html-artifacts-technical-design.md)
   - [`ai-chat-scheduled-loop-prd.md`](./ai-chat-scheduled-loop-prd.md)
