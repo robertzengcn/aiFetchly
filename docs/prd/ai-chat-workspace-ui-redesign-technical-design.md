@@ -2,9 +2,10 @@
 
 ## Document Information
 
-- **Version**: 1.0
+- **Version**: 1.1
 - **Status**: Proposed
 - **Created**: 2026-08-11
+- **Updated**: 2026-08-12
 - **Owner**: AiFetchly Desktop Engineering
 - **Product**: AiFetchly Electron desktop application
 - **Source requirements**: [`ai-chat-workspace-ui-redesign-prd.md`](./ai-chat-workspace-ui-redesign-prd.md)
@@ -43,6 +44,8 @@ The renderer will not keep inactive conversation histories mounted. Changing sel
 
 The right inspector will contain `Artifacts`, `Activity`, and `Context`. Generated HTML will be fetched by artifact ID and displayed in the existing strict sandbox pattern. Only one preview surface will be mounted for the active artifact; inactive artifacts will not own renderers or iframes.
 
+Tool and plan presentation will use renderer-side projections over existing durable events. A tool call and result sharing a stable tool-call ID become one evolving execution row. One plan ID becomes lifecycle-specific summary, question, decision, receipt, execution, and Activity-detail views. Conversation surfaces show progress, outcomes, and required decisions; Activity keeps safe technical detail, plan documents, versions, answers, and history.
+
 ## 3. Scope
 
 ### 3.1 In scope
@@ -59,6 +62,8 @@ The right inspector will contain `Artifacts`, `Activity`, and `Context`. Generat
 - Detailed selected-conversation events and lightweight global summary events.
 - Durable conversation metadata, run state, unread state, history pagination, and restart reconciliation.
 - HTML artifact sandboxing and lifecycle management.
+- Cohesive tool execution groups with semantic output rendering and legacy-history fallback.
+- Lifecycle-specific plan summaries, clarification flows, approval decisions, receipts, full Activity review, and version history.
 - Performance, accessibility, localization, security, observability, migration, and rollback requirements.
 
 ### 3.2 Out of scope
@@ -99,6 +104,9 @@ The current code already provides several strong foundations:
 | Runtime states are mostly in-memory and non-terminal state is not uniformly durable | Restart cannot explain every interrupted run | Durable run envelope with startup reconciliation |
 | Workspace rows are conversation bindings without a stable key column | Grouping the same canonical workspace is unreliable | Persist `workspaceKey` and canonical path on bindings and group by stable key |
 | Artifact preview replaces route content | Chat and result compete for the center surface | Artifact preview lives in the right inspector |
+| `AiChatV2Message.vue` renders generic tool-call and tool-result messages separately | One execution appears as disconnected diagnostic cards with duplicate identity and raw detail | Reduce related persisted rows/events into one evolving execution projection keyed by tool-call identity |
+| `AiChatV2PlanApprovalCard.vue` combines full plan text, lifecycle state, approval, rejection, and feedback | Long nested scrolling, equal action weight, and repeated full cards obscure the next decision | Split plan presentation into summary, question, decision, receipt, execution, and Activity document components |
+| `AiChatV2QuestionCard.vue` renders all questions and options in one vertical card | Multi-question plans consume the transcript and weaken focus | Use a pinned one-question-at-a-time flow with progress, back navigation, and optional final review |
 
 ## 5. Architecture Principles
 
@@ -111,6 +119,9 @@ The current code already provides several strong foundations:
 7. **Minimal event disclosure.** Inactive-conversation updates contain status metadata, not prompts, answers, tool bodies, or artifact HTML.
 8. **Stable identifiers everywhere.** `conversationId`, `runId`, `messageId`, `workspaceKey`, and `artifactId` make stale-event rejection deterministic.
 9. **Incremental migration.** Existing chat capabilities remain functional behind a feature flag while ownership is moved in stages.
+10. **Projection over mutation.** Existing persisted message and plan records remain authoritative; new reducers create cohesive presentation models without rewriting history.
+11. **One identity, one visible lifecycle.** `toolCallId` and `planId`/version prevent duplicate call/result or plan-transition surfaces.
+12. **Action before detail.** Conversation components expose the next useful action. Activity exposes safe arguments, results, complete plans, versions, and audit history.
 
 ## 6. Target Process Architecture
 
@@ -427,6 +438,19 @@ Conversation titles follow this precedence:
 
 Generated or fallback titles are persisted once and are not recomputed on every sidebar load. Clearing messages does not silently discard a user-renamed title; deleting the conversation removes its projection under the confirmed delete policy.
 
+### 8.7 Tool and plan presentation persistence
+
+The redesigned cards are read projections over existing durable records, not replacement persistence models:
+
+- Tool execution projections are derived from persisted call/result message rows and live events using `toolCallId`. The migration must not merge, delete, or rewrite those transcript rows merely to produce one visual execution row.
+- Plan presentation projections use the existing plan state, version, question, answer, and approval records as their authority. No parallel plan entity or duplicated plan body is introduced for the redesign.
+- A resolved tool row or plan receipt may be cached in renderer state, but it is rebuilt from durable data after reload and is never the source of truth.
+- New records must retain stable `runId`, `assistantMessageId`, `toolCallId`, `planId`, and plan `version` associations wherever the producing subsystem provides them. These identifiers are passed through typed IPC contracts without being inferred from display order.
+- Legacy tool records without a stable call identifier remain separate compatibility receipts. They may be grouped visually under `Previous activity`, but must not be guessed into a call/result pair.
+- If persisted and live terminal updates describe the same execution, the projection reducer deduplicates the presentation by stable identity and revision; it does not suppress either persistence or audit history.
+
+This keeps transcript replay, auditability, and backward compatibility independent from the new visual hierarchy.
+
 ## 9. Run State Machine
 
 ```mermaid
@@ -608,6 +632,8 @@ interface ChatRunDetailEvent {
 
 `sequence` is monotonic within one run. The renderer stores the highest applied value per selected `runId` and ignores duplicates. Gaps do not trigger blind replay of sensitive deltas; the renderer schedules an authoritative selected snapshot/history refresh.
 
+Tool-related payloads retain stable `toolCallId`, `toolName`, phase, bounded progress, and result status. Plan payloads retain stable `planId`, version, status, question ID, and the existing typed plan views. The presentation reducer must never pair events using display position, tool name alone, or timing proximity.
+
 ### 11.5 Summary event envelope
 
 ```typescript
@@ -746,6 +772,8 @@ Owns replaceable selected-chat state:
 - Highest event sequence by run.
 - In-progress assistant presentation row.
 - Pending decision card views.
+- Tool execution projections keyed by `runId + assistantMessageId + toolCallId`.
+- Plan presentation projections keyed by `planId`, with latest actionable version and durable receipts.
 - Scroll anchor.
 - Loading and error states.
 
@@ -772,17 +800,26 @@ AiChatWorkspaceShell.vue
 ├── AiChatConversationPane.vue
 │   ├── AiChatConversationHeader.vue
 │   ├── AiChatV2Messages.vue
+│   │   ├── AiChatExecutionGroup.vue
+│   │   │   ├── AiChatExecutionRow.vue
+│   │   │   └── SemanticToolResult.vue
+│   │   └── AiChatPlanReceipt.vue
 │   ├── AiChatDecisionDock.vue
+│   │   ├── AiChatPlanQuestionFlow.vue
+│   │   ├── AiChatPlanDecisionCard.vue
+│   │   └── SkillApprovalCard.vue
 │   ├── AiChatRunStrip.vue
 │   └── AiChatV2Composer.vue
 └── AiChatInspector.vue
     ├── AiChatArtifactsPanel.vue
     │   └── AiArtifactWorkspace.vue
     ├── AiChatActivityPanel.vue
+    │   ├── AiChatExecutionDetail.vue
+    │   └── AiChatPlanActivityView.vue
     └── AiChatContextPanel.vue
 ```
 
-Existing message, composer, model selector, mode selector, approval selector, question card, plan approval card, recovery, and artifact card components should be reused and moved with minimal semantic change.
+Existing message, composer, model selector, mode selector, approval selector, permission, recovery, and artifact components should be reused where their responsibility already matches the new hierarchy. `AiChatV2Message.vue`, `AiChatV2PlanApprovalCard.vue`, `AiChatV2QuestionCard.vue`, and `AiChatV2PlanStatusBadge.vue` require decomposition or compatibility wrappers because their current visual responsibilities conflict with the new execution and plan lifecycle surfaces.
 
 ### 15.2 Shell ownership
 
@@ -868,12 +905,12 @@ Context usage may appear adjacent to the composer and link to Context. Spoken-re
 | Spoken-response configuration | Settings | Global preference; avoid permanent header control |
 | Send/stop | Composer | Stop targets the selected active `runId` |
 | Context usage | Composer-adjacent affordance and Context tab | Summary near action; details in inspector |
-| Plan questions and approval | Inline/pinned decision card and Activity | Never inspector-only when action is required |
+| Plan questions and approval | Focused pinned question/decision surfaces and Activity | Never inspector-only when action is required; full plan review remains available |
 | Tool permission | Inline/pinned decision card, run strip, and Activity | Sidebar shows attention without private content |
 | Goal state and iterations | Run strip and Activity | Primary stop action may appear in strip |
 | Scheduled loops | Sidebar awareness, run strip, and Activity | Pause/resume/stop details in Activity |
 | Recovery | Inline active response, run strip, and Activity | Header receives only summarized precedence state |
-| Tool progress and results | Active message and Activity | Bounded summaries outside selected transcript |
+| Tool progress and results | Evolving execution group and Activity | Pair call/result by identity; show safe outcome before technical detail |
 | Agent tasks | Activity or global activity center | Not conversation identity/header content |
 | Workspace trust and memory | Inline decision when required and Context | Main-process path validation remains authoritative |
 | MCP/provider/global agent management | Customize or Settings | Never conversation header/overflow |
@@ -890,6 +927,195 @@ The shell uses three layout modes chosen from measured available content width r
 - **Narrow**: navigation and inspector are separate overlays; the center conversation receives the full working width.
 
 The selected conversation, active run, and drafts do not change when crossing breakpoints. Resizing never remounts background conversations because they have no mounted transcript. Inspector width is stored as a clamped preference; overlay width is derived from the viewport rather than reusing an unsafe desktop pixel value.
+
+### 15.9 Tool execution presentation model
+
+The renderer derives cohesive execution views from live events and persisted `TOOL_CALL`/`TOOL_RESULT` messages. It does not rewrite or merge authoritative database rows.
+
+```typescript
+type ToolExecutionStatus =
+  | "queued"
+  | "running"
+  | "awaiting_permission"
+  | "awaiting_user"
+  | "completed"
+  | "failed"
+  | "cancelled"
+  | "interrupted";
+
+type ToolOutputKind =
+  | "summary"
+  | "artifact"
+  | "files"
+  | "images"
+  | "permission"
+  | "error"
+  | "structured";
+
+interface ToolExecutionView {
+  readonly key: string;
+  readonly runId?: string;
+  readonly assistantMessageId: string;
+  readonly toolCallId: string | null;
+  readonly toolName: string;
+  readonly actionLabel: string;
+  readonly status: ToolExecutionStatus;
+  readonly phase?: string;
+  readonly progress?: number;
+  readonly partialCount?: number;
+  readonly expectedCount?: number;
+  readonly summary?: string;
+  readonly outputKind: ToolOutputKind;
+  readonly startedAt?: string;
+  readonly finishedAt?: string;
+  readonly durationMs?: number;
+  readonly isLegacyUnpaired: boolean;
+}
+
+interface ToolExecutionGroupView {
+  readonly key: string;
+  readonly runId?: string;
+  readonly assistantMessageId: string;
+  readonly executions: readonly ToolExecutionView[];
+  readonly completedCount: number;
+  readonly totalCount: number;
+  readonly hasUnresolvedAttention: boolean;
+  readonly defaultExpanded: boolean;
+}
+```
+
+`actionLabel` is produced by a localized registry keyed by tool name and phase. Unknown tools fall back to a localized pattern such as `Running {toolName}` without discarding the technical name.
+
+### 15.10 Tool execution reducer
+
+`buildToolExecutionGroups(messages, liveEvents)` is a pure selector with these rules:
+
+1. Partition tool messages by owning assistant message and run when available.
+2. Pair call and result only when non-empty `toolCallId` values match.
+3. Apply live progress to the matching projection without mutating persisted message objects.
+4. Treat the persisted terminal result as authoritative after reload.
+5. Ignore duplicate terminal events and any non-terminal event received after the terminal fence.
+6. Preserve original sequence order for multiple tool calls.
+7. Create a compact `isLegacyUnpaired` receipt when stable identity is missing.
+8. Never pair records based only on `toolName`, adjacency, or timestamps.
+
+The selector produces one visible execution row per paired lifecycle. `AiChatExecutionRow.vue` changes icon, label, progress, summary, and available actions as the view changes. It does not mount a second generic result component.
+
+Default expansion policy:
+
+| State | Default |
+| --- | --- |
+| Any running execution | Expanded |
+| Permission, user input, failure, or recovery required | Expanded and not automatically collapsible away from the action |
+| All completed successfully | Collapsed after completion, with user override preserved for the session |
+| Cancelled or interrupted | Compact receipt with visible state and details action |
+
+### 15.11 Semantic tool results
+
+`SemanticToolResult.vue` dispatches by validated output metadata:
+
+- `artifact` -> existing `AiArtifactCard`, without a generic result wrapper.
+- `files` -> bounded changed/generated-file summary with Activity disclosure.
+- `images` -> existing safe generated-image presentation.
+- `permission` -> existing `SkillApprovalCard` in the decision dock.
+- `error` -> concise safe error, retry when supported, and Activity details.
+- `summary` -> human-readable outcome text.
+- `structured` -> concise fallback summary; safe raw structure only in Details or Activity.
+
+Arguments and raw result bodies remain escaped text. They are never inserted with `v-html`. Result-specific security rules, including artifact sandboxing and image URL validation, remain unchanged.
+
+### 15.12 Plan presentation model
+
+The existing durable `AIChatPlanStateView`, `AIChatPlanVersionView`, `AIChatPlanQuestionView`, and approval records remain authoritative. A pure selector chooses one conversation presentation:
+
+```typescript
+type PlanSurfaceKind =
+  | "drafting"
+  | "question"
+  | "approval"
+  | "changes_requested"
+  | "approved_receipt"
+  | "executing"
+  | "completed_receipt"
+  | "rejected_receipt"
+  | "cancelled_receipt";
+
+interface PlanPresentationView {
+  readonly planId: string;
+  readonly version: number;
+  readonly status: AIChatPlanStatus;
+  readonly surface: PlanSurfaceKind;
+  readonly title: string;
+  readonly objective: string;
+  readonly changeReason?: string;
+  readonly scopeSummary?: {
+    readonly stepCount?: number;
+    readonly affectedFileCount?: number;
+    readonly riskLabel?: string;
+  };
+  readonly pendingQuestion?: AIChatPlanQuestionView;
+}
+```
+
+Scope values are read from validated `planJson` or other authoritative plan metadata. The UI must omit unknown values rather than estimate them. `changeReason` from the persisted version is the primary `Changed since vN` explanation. A derived textual diff is optional and must never replace the stored versions.
+
+### 15.13 Plan surface selection
+
+The selected-conversation selector applies this precedence:
+
+1. Pending clarification question -> `AiChatPlanQuestionFlow` in the decision dock.
+2. Awaiting approval -> `AiChatPlanDecisionCard` in the decision dock.
+3. Drafting or executing -> `AiChatRunStrip` plus Activity progress.
+4. Resolved lifecycle event -> compact `AiChatPlanReceipt` in transcript history.
+
+Only the latest unresolved decision for a plan is pinned. Previous questions, versions, decisions, and receipts remain in chronological history and Activity but are not simultaneously rendered as full actionable cards.
+
+`AiChatPlanDecisionCard` shows the concise objective, secondary version metadata, validated scope summary, important steps or stored change reason, `Review full plan`, `Request changes`, primary `Approve plan`, and an overflow action for permanent discard/rejection when supported. Feedback uses one focused field. Existing separate backend decisions (`changes_requested` and `rejected`) remain distinct even when rejection moves to overflow.
+
+### 15.14 Plan question flow
+
+`AiChatPlanQuestionFlow.vue` keeps unsent answers in renderer state keyed by `questionId`:
+
+```typescript
+interface PlanQuestionDraft {
+  readonly questionId: string;
+  currentIndex: number;
+  selectedByIndex: Record<number, readonly number[]>;
+  customTextByIndex: Record<number, string>;
+  reviewVisible: boolean;
+}
+```
+
+It renders one question at a time, exposes `Back` and `Continue`, and presents a final review when the flow contains multiple consequential decisions. Submission converts the draft into the existing `AskUserQuestionAnswer[]` contract and calls the existing answer API once. A successful persisted answer clears the draft and replaces the actionable flow with a compact receipt. A failed submission retains answers and displays a retryable error.
+
+### 15.15 Full plan document in Activity
+
+`AiChatPlanActivityView.vue` provides:
+
+- Plan title, objective, status, current version, and version selector.
+- Structured headings, ordered steps, lists, code blocks, and file references.
+- Stored `changeReason` and optional safe version comparison.
+- Clarification questions and submitted answers.
+- Approval, request-change, reject/discard, and completion receipts with timestamps.
+- Affected scope, risks, validation, and plan execution progress when represented in validated plan data.
+- Sticky decision actions while the current version awaits approval.
+
+Plan Markdown must not be rendered as raw HTML. The implementation should parse Markdown with HTML disabled into an allowlisted token tree and render Vue nodes/components for headings, paragraphs, lists, code, and safe links. Unsafe schemes and embedded HTML are rejected. This replaces the current plain `<pre>` behavior while avoiding `v-html`.
+
+On wide screens, Activity remains resizable up to the configured inspector maximum. On medium and narrow screens, full plan review uses the inspector overlay or full-width surface with the decision footer kept visible. The conversation itself never receives a nested 400px plan scroller.
+
+### 15.16 Status ownership and visual tokens
+
+The same plan state must not be repeated as equally prominent chips. Ownership is:
+
+- Sidebar: cross-conversation attention only.
+- Header: one summarized state only.
+- Run strip: immediate active progress and primary run control.
+- Decision dock: the required question, permission, or approval action.
+- Transcript receipt: resolved durable event.
+- Activity: full lifecycle and technical detail.
+
+Execution rows and plan surfaces use neutral backgrounds and low-contrast borders. Amber indicates required attention, green indicates successful terminal state, and red indicates failure or permanent discard. Icon, text, and accessible label carry meaning independently of color.
 
 ## 16. Sidebar Projection
 
@@ -952,14 +1178,17 @@ When the selected conversation creates an artifact, the product may automaticall
 Activity combines bounded views of:
 
 - Current and recent run envelopes.
-- Tool progress and summaries.
-- Plan and goal state.
+- Tool execution groups, safe arguments and results, progress, timing, errors, and legacy-unpaired receipts.
+- Full rendered plan, current and prior versions, stored change reasons, clarification answers, decisions, affected scope, validation, and execution progress.
+- Goal state.
 - Scheduled-loop state and controls.
 - Agent tasks.
 - Recovery attempts.
 - File operation summaries.
 
 It requests details lazily. It does not subscribe to high-volume raw deltas for inactive historical runs.
+
+Selecting `Details` on an execution row or `Review full plan` on a plan decision opens Activity at the matching `runId + toolCallId` or `planId + version`. The inspector validates that the requested target belongs to the selected conversation before displaying it.
 
 ### 17.4 Context tab
 
@@ -1138,6 +1367,8 @@ Use restrained live regions:
 - Announce permission/user-input requirement once.
 - Announce terminal completion or failure once for the selected conversation.
 - Background completion relies on the sidebar accessible state and OS notification rather than interrupting the current conversation.
+- Execution groups announce aggregate changes at meaningful phase or terminal boundaries, not every progress event.
+- Plan question flows announce question position and validation; opening Activity plan review announces the plan title and selected version.
 
 ### 22.3 Reduced motion
 
@@ -1167,6 +1398,8 @@ English fallbacks follow the existing `t(key) || "English text"` pattern. State 
 - History and activity use bounded pages/windows.
 - Stream deltas are batched.
 - Scheduler and process counts are bounded.
+- Completed tool groups use bounded collapsed DOM while unresolved actions remain mounted and discoverable.
+- Full plan bodies and non-current versions load lazily in Activity.
 
 ### 23.2 Targets
 
@@ -1211,6 +1444,8 @@ Record durations for:
 - Dropped stale, duplicate, post-terminal, and wrong-selection events.
 - Conversation bootstrap and history query latency.
 - Stream batching size and flush frequency.
+- Tool call/result pairing success, unpaired legacy fallback, group size, collapse state, and semantic-output classification failure.
+- Plan question completion, version selection, full-review opening, request-change, approval, rejection/discard, and terminal receipt transitions without content bodies.
 - Artifact preview create, reuse, close, and validation failure.
 - Startup reconciliation outcomes.
 
@@ -1259,6 +1494,7 @@ Any new worker entry point must be under `src/childprocess/` and registered in `
 | `src/entity/AIChatMessage.entity.ts` | Add nullable run association/index |
 | `src/config/SqliteDb.ts` | Register new entities; preserve database path rules |
 | `src/entityTypes/aiChatV2Types.ts` | Add run-aware compatibility fields and expanded runtime states |
+| `src/entityTypes/aiChatPlanTypes.ts` | Preserve existing plan-state semantics; expose the fields needed by presentation selectors without duplicating plan data |
 | `src/service/AIChatConversationTurnCoordinator.ts` | Reuse lease semantics; integrate scheduler dispatch |
 | `src/service/AIChatConversationUpdateBroadcaster.ts` | Replace/evolve into summary routing adapter |
 | `src/service/AIChatQueryEngine.ts` | Accept run-owned sink and coordinator cancellation context |
@@ -1266,6 +1502,10 @@ Any new worker entry point must be under `src/childprocess/` and registered in `
 | `src/main-process/communication/ai-chat-v2-ipc.ts` | Delegate stream lifecycle to coordinator; preserve AI gate first |
 | `src/preload.ts` | Add allowlisted typed channels/subscription cleanup |
 | `src/config/channellist.ts` | Add new channel constants |
+| `src/views/components/aiChatV2/AiChatV2Message.vue` | Delegate tool call/result rows to the execution projection while preserving ordinary message rendering |
+| `src/views/components/aiChatV2/AiChatV2PlanApprovalCard.vue` | Become a compatibility wrapper for the concise plan decision surface during migration |
+| `src/views/components/aiChatV2/AiChatV2QuestionCard.vue` | Delegate to the focused question flow while preserving current answer submission contracts |
+| `src/views/components/aiChatV2/AiChatV2PlanStatusBadge.vue` | Map existing statuses to the single owning lifecycle surface and avoid duplicate badges |
 
 ### 25.3 Renderer files
 
@@ -1281,9 +1521,20 @@ Any new worker entry point must be under `src/childprocess/` and registered in `
 | `src/views/components/aiChatWorkspace/AiChatInspector.vue` | Inspector layout and tabs |
 | `src/views/components/aiChatWorkspace/AiChatArtifactsPanel.vue` | Artifact metadata and active preview |
 | `src/views/components/aiChatWorkspace/AiChatActivityPanel.vue` | Run/tool/goal/schedule/agent activity |
+| `src/views/components/aiChatWorkspace/AiChatExecutionGroup.vue` | Aggregate and collapse related tool executions for one assistant response |
+| `src/views/components/aiChatWorkspace/AiChatExecutionRow.vue` | Evolving queued/running/waiting/terminal tool lifecycle row |
+| `src/views/components/aiChatWorkspace/SemanticToolResult.vue` | Dispatch validated result metadata to artifact, file, image, permission, error, or summary output |
+| `src/views/components/aiChatWorkspace/AiChatExecutionDetail.vue` | Safe arguments, result detail, timing, and errors in Activity |
+| `src/views/components/aiChatWorkspace/AiChatPlanDecisionCard.vue` | Concise awaiting-approval summary and actions |
+| `src/views/components/aiChatWorkspace/AiChatPlanQuestionFlow.vue` | Focused multi-question flow with local draft and review |
+| `src/views/components/aiChatWorkspace/AiChatPlanReceipt.vue` | Compact resolved plan lifecycle history item |
+| `src/views/components/aiChatWorkspace/AiChatPlanActivityView.vue` | Full rendered plan, versions, answers, decisions, and execution progress |
+| `src/views/components/aiChatWorkspace/SafePlanMarkdown.vue` | HTML-disabled allowlisted Markdown-token rendering to Vue nodes |
+| `src/views/components/aiChatWorkspace/toolExecutionProjection.ts` | Pure call/result/live-event reduction and semantic output classification |
+| `src/views/components/aiChatWorkspace/planPresentationProjection.ts` | Pure latest-actionable-surface and receipt selection |
 | `src/views/components/aiChatWorkspace/AiChatContextPanel.vue` | Context, trust, memory, attachments, compaction |
 
-`AiChatV2.vue` should be decomposed gradually. Existing child components remain in place until the new shell owns their state; avoid a single large rewrite.
+`AiChatV2.vue` should be decomposed gradually. Existing child components remain in place until the new shell owns their state; avoid a single large rewrite. During migration, `AiChatV2Message.vue` may delegate tool and plan messages to the new projection components while preserving all other message rendering.
 
 ## 26. Database Evolution and Backfill
 
@@ -1370,9 +1621,14 @@ Exit gate: 1,000-conversation synthetic dataset does not increase renderer/proce
 - Introduce minimal header.
 - Remove robot icon and `AI Assistant` string.
 - Move scoped controls to composer, run strip, Activity, Context, Settings, or overflow according to the PRD matrix.
+- Introduce pure tool-execution and plan-presentation projections over existing persisted messages and typed plan views.
+- Route paired tool call/result records into one evolving execution row and use compact legacy receipts when stable pairing identity is absent.
+- Introduce semantic result dispatch so artifacts, files, images, permissions, and errors do not receive redundant generic wrappers.
+- Replace the all-purpose plan card with focused question, approval, receipt, execution, and Activity-document components.
+- Keep existing plan answer, approval, request-change, and rejection APIs and durable records; change presentation before changing domain semantics.
 - Preserve all current capabilities.
 
-Exit gate: control-placement compatibility matrix is complete.
+Exit gate: control-placement compatibility matrix is complete; tool and plan lifecycle fixtures pass without duplicate cards or lost actions.
 
 ### Phase 6: Inspector and artifacts
 
@@ -1465,6 +1721,17 @@ Rollback: disable the feature flag. New durable projections remain additive and 
 - Delta buffer flush and selection disposal.
 - Inspector tabs, resizing, overlays, and lazy data.
 - All loading, empty, partial, error, and missing artifact states.
+- Tool reducer pairs call/result/live progress only by stable identity and preserves order.
+- Duplicate or late tool events cannot reopen terminal rows.
+- Unknown and unpairable legacy tools render compact safe receipts.
+- Execution groups remain expanded while running or awaiting action and collapse successful history without losing manual expansion state.
+- Semantic results select artifact, file, image, permission, error, summary, or structured fallback without a generic duplicate wrapper.
+- Plan selector chooses exactly one latest actionable question or approval surface.
+- Question flow supports selection, multiple questions, Back, Continue, optional review, retry after failed submission, and answered receipt.
+- Plan decision card uses approve as primary, request changes as secondary, and discard/reject overflow while preserving distinct emitted decisions.
+- Activity renders the complete selected plan version, stored change reason, prior answers, decisions, and execution progress.
+- Safe plan Markdown rejects embedded HTML and unsafe link schemes and never uses `v-html`.
+- Plan and tool states have keyboard focus, localized accessible names, reduced motion, and non-color cues.
 
 ### 28.6 Artifact tests
 
@@ -1488,6 +1755,10 @@ Rollback: disable the feature flag. New durable projections remain additive and 
 8. Navigate 1,000 conversations and a 10,000-message history dataset within budgets.
 9. Complete every interaction with keyboard only.
 10. Repeat principal flows in all six locales and at narrow width.
+11. Stream three tool calls with progress and results; verify three evolving rows, one aggregate group, no duplicate generic result cards, and full Activity details.
+12. Reload paired and unpaired legacy tool history and verify deterministic grouping or standalone receipts.
+13. Generate plan v1, answer multiple questions, request changes, review v2, approve, execute, and complete; verify one actionable surface and complete Activity history at each state.
+14. Review a long plan on wide and narrow layouts; verify structured rendering, visible decision controls, and no nested plan scroller in the transcript.
 
 ### 28.8 Performance tests
 
@@ -1498,6 +1769,8 @@ Rollback: disable the feature flag. New durable projections remain additive and 
 - Cursor-page query p95 on large local database.
 - Inspector iframe lifecycle and memory release.
 - Scheduler throughput, queue age, and cancellation latency.
+- DOM-node and layout cost for 100 completed tool rows before and after execution-group collapse.
+- Long plan rendering and version-switch latency in Activity.
 
 ## 29. Requirement Traceability
 
@@ -1525,6 +1798,13 @@ Rollback: disable the feature flag. New durable projections remain additive and 
 | FR-038–039 | Keyboard model, ARIA patterns, restrained announcements | Accessibility tests |
 | FR-040 | Six language files and key-parity check | Localization test |
 | FR-041 | Icon/label semantics independent of color | Accessibility and visual tests |
+| FR-042–050 | Tool execution projection, stable identity reducer, semantic result dispatch, collapse policy, legacy fallback | Reducer, component, history, and E2E tests |
+| FR-051–053 | Plan presentation selector and concise latest-actionable decision surface | Selector and decision-card tests |
+| FR-054–055 | Safe structured plan document in Activity with no nested transcript scroller | Markdown security, Activity, and responsive tests |
+| FR-056 | Action hierarchy and distinct decision mapping | Plan action component and API contract tests |
+| FR-057–059 | Focused question flow, receipts, and durable Activity history | Question-flow and lifecycle E2E tests |
+| FR-060–062 | Version change metadata, run-strip integration, and status ownership | Version and status-deduplication tests |
+| FR-063–064 | Responsive full-plan review, keyboard, localization, and non-color semantics | Responsive, accessibility, and locale tests |
 
 ## 30. Compatibility Checklist
 
@@ -1532,7 +1812,7 @@ Before the legacy UI can be retired, the new shell must demonstrate destinations
 
 - Hosted and local provider model selection.
 - Attachments, image previews, pasted text, at-mentions, and slash commands.
-- Plan/Build modes, questions, approval, rejection, and change requests.
+- Plan/Build modes, focused questions, full version review, approval, rejection/discard, change requests, receipts, and execution progress.
 - Tool approval modes and permission prompts.
 - Goals, iterations, evidence, and verification.
 - Scheduled-loop state and pause/resume/stop controls.
@@ -1541,7 +1821,7 @@ Before the legacy UI can be retired, the new shell must demonstrate destinations
 - Workspace trust and workspace/session memory.
 - Context usage and conversation compaction.
 - Agent task list and cancellation.
-- Tool progress/results and file-operation summaries.
+- Cohesive tool execution groups, safe technical details, semantic results, and file-operation summaries.
 - Generated images and HTML artifacts.
 - Conversation search, rename, duplicate, clear, and delete.
 - Notification navigation.
@@ -1564,6 +1844,12 @@ No capability may be silently omitted because its old header button was removed.
 | New shell attempts a big-bang rewrite | Feature regression | Compatibility adapter and phased component extraction |
 | Priority starves schedules | Automation delay | Bounded age boost and starvation metrics |
 | Three runs overload a provider/device | Reliability issue | Configurable 1–3 bound, provider backoff, resource classes, telemetry |
+| Legacy tool messages lack a reliable call ID | Incorrect call/result pairing | Pair only on stable non-empty identity; render standalone legacy receipts otherwise |
+| Presentation reducer diverges from durable messages | Incorrect tool or plan status | Keep reducer pure, persisted terminal state authoritative, and cover reload fixtures |
+| Semantic result classifier exposes raw data | Privacy or clutter regression | Validate metadata, keep bounded summaries in conversation, and put escaped safe detail in Activity |
+| Concise plan card encourages approval without reading | Unsafe or misunderstood approval | Always expose the exact complete version in Activity and keep approval controls version-bound |
+| Full plan Markdown introduces script or link injection | Trusted renderer compromise | Disable HTML, render allowlisted tokens as Vue nodes, validate link schemes, never use `v-html` |
+| Question draft disappears on transient submission failure | User must repeat decisions | Retain renderer draft until persisted success; show retry without clearing selections |
 
 ## 32. Explicit Design Decisions
 
@@ -1587,18 +1873,27 @@ The following decisions are settled for implementation planning:
 16. HTML artifacts use one lazy empty-sandbox iframe in the inspector.
 17. Restart reconciliation marks unsupported abandoned runs `interrupted`; it does not pretend they completed.
 18. Migration is feature-flagged, additive, measurable, and reversible.
+19. A paired tool call and result have one evolving visible execution row; persisted source records remain unchanged.
+20. Related tool executions form one group, and safe full detail belongs in Activity.
+21. Specialized results do not receive a redundant generic result wrapper.
+22. Plans use lifecycle-specific question, decision, receipt, execution, and full-document surfaces.
+23. The complete selected plan version renders safely in Activity before approval.
+24. Plan approval is primary, revision is secondary, and permanent discard/rejection is infrequent while preserving backend semantics.
+25. Only the latest unresolved plan decision is pinned; prior versions, answers, and decisions remain durable and inspectable.
 
 ## 33. Definition of Done
 
 The redesign is technically complete only when:
 
-- All 41 PRD functional requirements have passing traceable verification.
+- All 64 PRD functional requirements have passing traceable verification.
 - Current chat capabilities have a tested destination in the new interface.
 - Conversation count no longer increases renderer count or mounted detailed histories.
 - A running conversation survives selection changes and renderer reload.
 - Bounded scheduling, fairness, cancellation, same-conversation serialization, and restart reconciliation pass integration tests.
 - Summary events are proven free of private bodies.
 - Artifact previews remain isolated and limited to one active surface.
+- Tool calls/results form cohesive execution groups with stable identity, semantic output, safe details, and legacy fallback.
+- Plan clarification, review, revision, approval, execution, and terminal receipts remain cohesive without hiding the complete version or required action.
 - The six-language, keyboard, focus, reduced-motion, and non-color requirements pass.
 - Performance budgets are met on a representative legacy database and supported hardware.
 - The feature can be disabled without losing messages, artifacts, workspace associations, or legacy access.

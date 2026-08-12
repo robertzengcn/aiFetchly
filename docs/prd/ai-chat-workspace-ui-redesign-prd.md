@@ -2,9 +2,10 @@
 
 ## Document Information
 
-- **Version**: 1.0
+- **Version**: 1.1
 - **Status**: Proposed
 - **Created**: 2026-08-11
+- **Updated**: 2026-08-12
 - **Owner**: AiFetchly Desktop Engineering
 - **Product**: AiFetchly Electron desktop application
 - **Primary areas**: Application navigation, AI Chat V2, workspace conversations, background execution, artifacts, renderer performance
@@ -132,6 +133,8 @@ The redesign must answer four questions clearly:
 8. **Context survives navigation.** Switching away from a running conversation does not stop it, lose its transcript, or redirect the user when it completes.
 9. **Space is earned.** Persistent UI elements must serve orientation, immediate action, or ongoing awareness.
 10. **Existing capabilities remain available.** The redesign must preserve plan mode, goals, scheduled loops, recovery, voice, provider selection, permissions, agent tasks, attachments, artifacts, workspace memory, slash commands, and at-mentions.
+11. **Conversation content is semantic, not diagnostic.** Tool and plan surfaces explain outcomes, progress, and required decisions in user language. Raw arguments, result bodies, and lifecycle history belong in expandable details or Activity.
+12. **One domain object has one evolving presentation.** A tool execution or plan changes state in place instead of producing visually disconnected call, result, approval, and completion cards.
 
 ## 5. Product Decisions
 
@@ -157,6 +160,11 @@ The following decisions are requirements, not open implementation choices:
 18. IPC handlers will not access TypeORM repositories directly. Database work will remain in Model and Module classes.
 19. AI IPC entry points will check the appropriate AI enablement policy before parsing or executing an AI request.
 20. All new or modified user-facing text will be translated in English, Chinese, Spanish, French, German, and Japanese.
+21. Tool calls and matching results will render as one evolving execution row keyed by tool-call identity, not as separate generic `Tool Call` and `Tool Result` cards.
+22. Related tool executions from one assistant response will form a compact execution group in the conversation; complete technical execution records will live in Activity.
+23. Plan generation, clarification, approval, revision, execution, and completion will use lifecycle-specific surfaces rather than one large all-purpose plan card.
+24. The conversation will show concise plan summaries and required decisions. Activity will show the complete rendered plan, versions, changes, affected scope, execution history, and technical details.
+25. `Approve plan` will be the primary approval action, `Request changes` will be secondary, and permanent discard or rejection will be an infrequent action rather than an equally prominent default.
 
 ## 6. Goals
 
@@ -453,6 +461,84 @@ The following remain in the conversation flow or pinned immediately above the co
 
 Completed decision cards return to normal message history after resolution.
 
+### 12.5 Tool execution groups
+
+Tool activity in the conversation must read as part of the assistant response, not as internal diagnostic messages.
+
+1. A tool call and its matching result form one evolving execution row associated by tool-call identity.
+2. The row changes from queued or running to completed, failed, cancelled, interrupted, or waiting without appending a second generic result card.
+3. Related rows from one assistant response are grouped into one execution stack with aggregate progress such as `2 of 3 complete`.
+4. The primary label uses a human-readable action such as `Searching project files` or `Creating HTML report`.
+5. The raw tool name, such as `create_html_artifact`, is secondary monospace metadata when it helps expert users.
+6. Arguments, raw structured results, logs, and full timing details are collapsed by default and available through Details or Activity.
+7. Running groups remain expanded. Successful historical groups may collapse to one summary row.
+8. Permission, user-input, failure, and unresolved recovery states never collapse automatically.
+9. Specialized outputs replace the generic result body: artifacts use artifact cards, files use file summaries, images use image output, and permissions use decision cards.
+10. If legacy history cannot reliably pair a call and result, it uses a compact standalone execution receipt instead of inventing a relationship.
+
+Example:
+
+```text
+Execution                                      2 of 3 complete
+────────────────────────────────────────────────────────────
+✓ Analyze project files                         18.4s
+✓ Compare import workflows                       7.2s
+◌ Create visual report                         Running
+```
+
+### 12.6 Plan lifecycle presentation
+
+A plan is one durable domain object with state-specific presentation:
+
+```text
+Drafting
+  -> Needs clarification
+  -> Ready for review
+  -> Changes requested
+  -> Approved
+  -> Executing
+  -> Completed, failed, cancelled, or interrupted
+```
+
+Requirements:
+
+1. Only the latest unresolved plan decision is prominent in the conversation.
+2. Drafting and executing use the run strip plus compact execution or progress rows.
+3. Clarification uses a pinned question flow.
+4. Awaiting approval uses a concise plan decision card.
+5. Approved, changes-requested, discarded, and completed states collapse to durable receipts in history.
+6. Previous versions, prior answers, decisions, full plan content, and execution history remain available in Activity.
+7. The UI must not append another full-size plan card for every lifecycle transition.
+
+### 12.7 Plan approval card
+
+The awaiting-approval card contains:
+
+- `Plan ready for review` or an equivalent localized decision heading.
+- Plan title and concise objective.
+- Version as secondary metadata.
+- Authoritative step count, affected-file count, risk, or impact only when those values exist.
+- Two or three important steps or a short `Changed since vN` summary.
+- `Review full plan`, which opens the plan detail view in Activity.
+- Primary `Approve plan` action.
+- Secondary `Request changes` action.
+- Infrequent `Discard plan` or rejection action in overflow when supported.
+
+The conversation card must not contain a long nested scrolling plan document. Approval must not require trusting a truncated summary: the complete plan and its version are available before approval through Activity.
+
+### 12.8 Plan clarification and revision
+
+1. Multiple clarification questions use a focused one-question-at-a-time flow with progress such as `1 of 3`.
+2. Single-select and multi-select semantics remain explicit.
+3. Option rows include concise descriptions when the trade-off is not self-evident.
+4. Users can move backward before final submission.
+5. Consequential multi-question flows provide an answer review before submission.
+6. Required questions remain inline or pinned above the composer even when the inspector is closed.
+7. Submitted questions collapse to a receipt such as `Answered 3 planning questions`; answers remain available in Activity.
+8. `Request changes` opens one focused feedback field with optional prompt suggestions such as reduce scope, add validation, or clarify migration.
+9. After feedback submission, the conversation shows a compact `Changes requested · Creating plan vN` receipt and progress state.
+10. Reject and request-changes flows remain separate only when they have materially different durable semantics.
+
 ## 13. Composer and Contextual Run Strip
 
 ### 13.1 Composer controls
@@ -544,9 +630,9 @@ When `create_html_artifact` returns `openImmediately: true`, AiFetchly opens the
 The Activity tab displays:
 
 - Current run and queue state.
-- Tool calls and progress.
+- Tool execution groups, individual calls, arguments, safe result details, progress, timing, and errors.
 - Goal objective, iteration, evidence, and verification state.
-- Plan state and version.
+- Full rendered plan document, current state and version, prior versions, changes between versions, prior clarification answers, approval or revision decisions, affected scope, risks, validation, and execution progress.
 - Scheduled-loop state, next run, limits, pause, resume, and stop actions.
 - Agent tasks and cancellation actions.
 - Recovery attempts.
@@ -578,8 +664,11 @@ The Context tab displays:
 | Search conversations | Left sidebar search | Applies across workspaces and conversations |
 | Running status | Sidebar plus summarized header state | Awareness in list, orientation in selected chat |
 | Detailed stream status | Active assistant response and Activity inspector | Detail belongs with execution |
+| Tool calls and results | Evolving execution group plus Activity inspector | Conversation shows progress and outcome; Activity holds raw technical detail |
 | Stop generation | Composer Send/Stop control | Directly controls current response |
-| Plan status | Contextual run strip and Activity inspector | Important while active, detailed on demand |
+| Plan status | Contextual run strip, lifecycle receipt, and Activity inspector | Important while active, durable after resolution, detailed on demand |
+| Plan approval | Pinned plan decision card; full plan in Activity | Required action remains visible without embedding a long document |
+| Plan questions | Focused pinned question flow; answers in Activity | Reduces vertical overload and preserves decision history |
 | Active goal | Contextual run strip and Activity inspector | Avoids long header chips |
 | Scheduled loop | Sidebar indicator, run strip, Activity inspector | Supports awareness and detailed controls |
 | Context usage | Composer indicator and Context inspector | Affects model input and compaction |
@@ -1063,6 +1152,9 @@ At every supported width:
 10. Icon-only buttons have localized accessible names and tooltips.
 11. The artifact iframe or isolated view has an accessible title derived from artifact metadata.
 12. Reduced-motion preference disables nonessential animation while retaining state communication.
+13. Execution groups expose aggregate state, each tool row, expansion state, progress, and details actions to assistive technology without announcing every progress tick.
+14. Plan question flows expose question position, selection mode, selected options, validation, Back, Continue, review, and submission state programmatically.
+15. Opening full plan review preserves or moves focus predictably; completing approval or revision restores focus to the resulting receipt or logical next control.
 
 ## 26. Internationalization Requirements
 
@@ -1084,6 +1176,8 @@ This includes:
 - Run-strip labels and controls.
 - Queue, interruption, and recovery messages.
 - Artifact states.
+- Human-readable tool action labels, execution states, group summaries, details actions, and legacy receipts.
+- Plan lifecycle headings, scope labels, version changes, question progress, navigation, approval, revision, discard, and receipt labels.
 - Confirmations and errors.
 - Accessible names.
 
@@ -1097,6 +1191,8 @@ Layouts must tolerate longer translations. Truncation may be used for titles but
 2. Inactive conversation count must not increase mounted message-component count.
 3. Only selected-conversation high-volume events may trigger message rendering.
 4. Inactive conversations receive summary events only.
+5. Completed execution groups should collapse without unmounting unresolved actions or creating a reactive update per hidden raw result field.
+6. Full plan documents and prior versions load lazily in Activity rather than with every transcript page.
 
 ### 27.2 Interaction targets
 
@@ -1162,6 +1258,8 @@ The redesign should expose structured diagnostics without recording private mess
 - Artifact preview creation and disposal.
 - Renderer memory snapshots in development or diagnostics mode.
 - Interrupted-run reconciliation outcomes.
+- Tool pairing failures, legacy fallback count, group expansion, and semantic-result classification failures.
+- Plan question, review, request-change, approval, discard, version-switch, and execution transitions using identifiers and bounded metadata only.
 
 Logs must use identifiers and bounded metadata. They must not log prompts, assistant bodies, API keys, raw attachments, or artifact HTML by default.
 
@@ -1229,6 +1327,35 @@ Logs must use identifiers and bounded metadata. They must not log prompts, assis
 - **FR-040**: New user-facing text must be translated in all six supported languages.
 - **FR-041**: Status must not depend on color alone.
 
+### Tool execution presentation
+
+- **FR-042**: A tool call and matching result must render as one evolving execution row keyed by tool-call identity.
+- **FR-043**: The UI must not render separate generic `Tool Call` and `Tool Result` cards when the events can be paired safely.
+- **FR-044**: Related executions in one assistant response must form a compact execution group with aggregate progress.
+- **FR-045**: Tool rows must use a human-readable action as the primary label and treat the raw tool name as secondary technical metadata.
+- **FR-046**: Raw arguments, structured result bodies, logs, and full timing must be collapsed by default and available through Details or Activity.
+- **FR-047**: Specialized results must use specialized output surfaces instead of an additional generic result wrapper.
+- **FR-048**: Running groups may remain expanded and successful historical groups may collapse, but unresolved permission, user-input, failure, and recovery states must remain discoverable.
+- **FR-049**: Tool execution states must use the same queued, running, waiting, completed, failed, cancelled, and interrupted vocabulary as the run system.
+- **FR-050**: Unpairable legacy tool history must remain readable through compact standalone execution receipts.
+
+### Plan and question presentation
+
+- **FR-051**: One durable plan must use lifecycle-specific presentations for drafting, clarification, review, revision, approval, execution, and terminal states.
+- **FR-052**: Only the latest unresolved plan decision must be prominent in the conversation; resolved transitions must collapse to durable receipts.
+- **FR-053**: An awaiting-approval card must show a concise objective, version, meaningful scope summary, important steps or version changes, and a path to review the complete plan.
+- **FR-054**: The complete plan must render as structured Markdown in Activity with versions, changes, affected scope, risks, validation, decisions, and execution history.
+- **FR-055**: Long plan content must not create a nested scrolling document inside the conversation flow.
+- **FR-056**: `Approve plan` must be the primary action, `Request changes` the secondary action, and discard or permanent rejection an infrequent action when supported.
+- **FR-057**: Multi-question clarification must use a focused flow with progress, explicit selection semantics, backward navigation, and review when decisions are consequential.
+- **FR-058**: Required plan questions and approval must remain inline or pinned when the inspector is closed.
+- **FR-059**: Submitted answers, requested changes, approvals, discards, and completions must become compact receipts and remain inspectable in Activity.
+- **FR-060**: A new plan version must identify meaningful changes from the prior version when change data is available.
+- **FR-061**: Plan drafting and execution must integrate with the contextual run strip and tool execution presentation instead of creating competing status cards.
+- **FR-062**: Plan status must not be redundantly displayed in the header, run strip, decision card, and status chip at the same level of detail.
+- **FR-063**: Full plan review must support a resizable inspector on wide screens and a full-width or overlay surface on narrow screens.
+- **FR-064**: Plan questions, decisions, receipts, and version navigation must be keyboard accessible, localized, and understandable without color.
+
 ## 32. Compatibility Requirements
 
 The redesign must preserve or deliberately migrate the following current capabilities:
@@ -1241,7 +1368,7 @@ The redesign must preserve or deliberately migrate the following current capabil
 | At-mentions | Composer suggestions and Context inspector |
 | Slash commands | Composer suggestions and message flow |
 | Plan/Build modes | Composer selector |
-| Plan questions and approval | Inline or pinned decision cards; Activity details |
+| Plan questions and approval | Focused pinned question/decision surfaces; full plan, answers, versions, and decisions in Activity |
 | Tool approval modes | Composer selector |
 | Permission prompts | Pinned decision card; sidebar attention state |
 | Goals and iterations | Run strip and Activity inspector |
@@ -1251,7 +1378,7 @@ The redesign must preserve or deliberately migrate the following current capabil
 | Workspace trust and memory | Inline decision where needed; Context inspector |
 | Conversation compaction | Context inspector and overflow menu |
 | Agent tasks | Activity inspector or global activity surface |
-| Tool progress | Active response and Activity inspector |
+| Tool calls, progress, and results | One evolving execution group in the active response; complete technical record in Activity |
 | File-operation summaries | Inline summary plus Activity or Artifacts |
 | Generated images | Message history and Artifacts tab |
 | HTML artifacts | Artifact card plus sandboxed inspector preview |
@@ -1296,6 +1423,9 @@ The redesign should ship incrementally behind a feature flag until acceptance cr
 - Add conversation title and summarized status.
 - Move controls according to the placement matrix.
 - Add contextual run strip and overflow menu.
+- Replace paired generic tool-call/result cards with evolving execution groups and specialized result surfaces.
+- Replace the all-purpose plan card with plan summary, decision, question, receipt, and Activity-detail surfaces.
+- Preserve tool-call identity, plan identity, plan version, and existing durable approval/question semantics through compatibility adapters.
 
 ### Phase 6: Right inspector and artifact migration
 
@@ -1331,6 +1461,9 @@ The redesign should ship incrementally behind a feature flag until acceptance cr
 - Draft and scroll-state cache behavior.
 - Artifact lifecycle and sandbox configuration.
 - Overflow and run-strip action availability.
+- Tool call/result pairing, event reduction, aggregate group progress, collapse policy, and legacy fallback.
+- Plan lifecycle presentation selection, latest-actionable-plan selection, version-change summary, and status deduplication.
+- Question-flow progress, backward navigation, answer review, and receipt creation.
 
 ### 34.2 Main-process and IPC tests
 
@@ -1352,6 +1485,11 @@ The redesign should ship incrementally behind a feature flag until acceptance cr
 - Contextual run-strip variants.
 - Loading, empty, error, success, partial, and interrupted states.
 - Long-title and long-translation behavior.
+- Tool execution rows in queued, running, waiting, completed, failed, cancelled, and interrupted states.
+- Tool group expansion, successful collapse, unresolved-state persistence, specialized output, and Activity disclosure.
+- Plan summary, approval, request-changes, discard overflow, question flow, version receipt, execution progress, and completed receipt.
+- Full rendered plan in Activity without a nested conversation scroll region.
+- Keyboard and focus behavior across plan questions, plan review, decisions, and version navigation.
 
 ### 34.4 End-to-end scenarios
 
@@ -1367,6 +1505,10 @@ The redesign should ship incrementally behind a feature flag until acceptance cr
 10. Exercise keyboard-only navigation through sidebar, conversation, composer, and inspector.
 11. Switch among 100 long conversations repeatedly and verify bounded memory behavior.
 12. Verify all six locales for clipping, missing keys, and accessible labels.
+13. Execute a multi-tool response and verify each result updates its original row without duplicate generic cards.
+14. Reload legacy paired and unpaired tool history and verify readable execution groups or receipts.
+15. Generate plan v1, answer several questions, request changes, review v2, approve it, execute it, and inspect the complete lifecycle in Activity.
+16. Review and approve a long plan at desktop and narrow widths without nested conversation scrolling or hidden required actions.
 
 ### 34.5 Performance tests
 
@@ -1404,6 +1546,13 @@ The redesign is ready for default rollout only when all of the following are tru
 21. Keyboard navigation and screen-reader labeling pass the accessibility test plan.
 22. All new and modified strings are present in all six supported language files.
 23. Existing plan, goal, loop, recovery, voice, attachment, permission, provider, memory, task, and artifact tests remain passing or are migrated with equivalent coverage.
+24. Paired tool calls and results appear as one evolving row; raw details remain available without dominating the conversation.
+25. Related tool rows group under one assistant execution summary, and unresolved states never disappear through automatic collapse.
+26. Specialized artifacts, files, images, permissions, and errors do not receive a redundant generic result card.
+27. Awaiting plan approval presents a concise decision card with access to the complete plan before approval.
+28. Complete plans render in Activity with structured hierarchy, versions, changes, affected scope, risks, validation, and decision history.
+29. Multi-question clarification is focused, keyboard operable, reviewable when consequential, and collapses to a durable receipt after submission.
+30. Approved, revised, discarded, executing, completed, failed, cancelled, and interrupted plans remain distinguishable without duplicating the same status across surfaces.
 
 ## 36. Risks and Mitigations
 
@@ -1419,6 +1568,10 @@ The redesign is ready for default rollout only when all of the following are tru
 | Artifact preview weakens isolation during redesign | Generated HTML reaches privileged APIs | Preserve empty sandbox baseline and add automated security assertions |
 | Feature migration loses a current header action | Power-user regression | Use the compatibility and placement matrices as release gates |
 | Multiple stores become competing sources of truth | Stale UI and duplicate messages | Database authoritative, main runtime authoritative for live work, renderer replaceable |
+| Call and result events cannot always be paired in legacy history | Missing or misleading execution presentation | Pair only with stable identity; use compact standalone receipts when identity is absent |
+| Compact tool rows hide information power users need | Reduced debuggability | Keep safe arguments, results, timing, and logs available through Details and Activity |
+| Plan summary encourages approval without enough review | Users approve incomplete or risky work | Always provide complete versioned plan review before approval; keep summary metadata authoritative |
+| Plan and question surfaces create another set of competing status chips | Visual clutter returns | Define one status owner per hierarchy level and collapse resolved transitions to receipts |
 
 ## 37. Trade-offs and Alternatives Considered
 
@@ -1446,6 +1599,14 @@ The redesign is ready for default rollout only when all of the following are tru
 
 **Rejected for the redesigned chat workspace.** It prevents the user from keeping the conversation and artifact visible together. The right inspector supports refinement workflows more directly.
 
+### 37.7 Separate generic cards for every tool call and result
+
+**Rejected.** It exposes implementation events as conversation content, duplicates tool identity, increases vertical noise, and separates an action from its outcome. One evolving execution row preserves causality and reduces clutter.
+
+### 37.8 Keep the complete plan document inside every approval card
+
+**Rejected.** Long nested scrolling cards make comparison, version review, responsive layout, and decision focus worse. The conversation owns the concise decision; Activity owns the complete versioned document.
+
 ## 38. Metrics for Product Evaluation
 
 The release should compare the redesign with the current UI using:
@@ -1457,6 +1618,8 @@ The release should compare the redesign with the current UI using:
 - Percentage of background completions correctly marked unread.
 - Permission requests missed or abandoned.
 - Artifact open and revision completion rate.
+- Tool execution detail-open rate, unpairable legacy receipt rate, and duplicate visual-result defects.
+- Plan clarification completion, full-review open, request-change, approval, and approval-without-full-review rates for product evaluation without recording plan content.
 - Header actions moved without discoverability-related support issues.
 - Queue wait time and cancellation success rate.
 - Crash and interrupted-run rate.
@@ -1478,6 +1641,11 @@ Metrics must not include private conversation or artifact content.
 - [ ] Minimal header implemented without robot icon or `AI Assistant`.
 - [ ] Control placement matrix completed.
 - [ ] Contextual run strip implemented.
+- [ ] Tool call/result events render as cohesive execution groups with legacy fallback.
+- [ ] Specialized tool outputs replace redundant generic result wrappers.
+- [ ] Plan lifecycle uses distinct summary, question, decision, receipt, execution, and Activity-detail surfaces.
+- [ ] Full plans render as structured versioned documents in Activity.
+- [ ] Plan question and decision flows pass keyboard, focus, localization, and responsive checks.
 - [ ] Right inspector tabs implemented.
 - [ ] HTML artifact preview migrated and security verified.
 - [ ] Responsive layouts implemented.
@@ -1500,6 +1668,9 @@ The successful redesign is not merely a new visual shell. It is a change in owne
 - The header owns identity and one-line orientation.
 - The composer owns next-message controls.
 - The contextual run strip owns immediate active-run control.
+- Evolving execution groups own concise tool progress and outcomes in the conversation.
+- The plan decision dock owns the latest required clarification or approval.
+- Activity owns safe technical tool detail and the complete versioned plan lifecycle.
 - The inspector owns artifacts, detailed activity, and context.
 - The database remains the durable source of truth.
 - The renderer remains a replaceable presentation client.
