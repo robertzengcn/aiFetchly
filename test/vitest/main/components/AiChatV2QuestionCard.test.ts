@@ -227,4 +227,36 @@ describe("AiChatV2QuestionCard — free-text 'Other' option", () => {
     const [, answers] = oneAnswered(wrapper);
     expect(answers).toEqual([{ question: "Pick a fruit", answer: "Banana" }]);
   });
+
+  it("treats whitespace-only free-text as unanswered (trim path)", async () => {
+    const wrapper = mountCard(makeQuestion([SINGLE]));
+
+    await otherOption(wrapper).trigger("click");
+    await customInput(wrapper).setValue("   ");
+    // Whitespace-only does NOT satisfy the question → submit stays disabled.
+    expect(submitBtn(wrapper).attributes("disabled")).toBeDefined();
+  });
+
+  it("requires every question answered before submit (multi-question card)", async () => {
+    const wrapper = mountCard(
+      makeQuestion([SINGLE, { ...MULTI, question: "Pick more fruits" }])
+    );
+
+    // Answer only the first question (custom); second still pending.
+    await otherOption(wrapper).trigger("click");
+    await customInput(wrapper).setValue("Mango");
+    expect(submitBtn(wrapper).attributes("disabled")).toBeDefined();
+
+    // Now answer the second question (a preset).
+    const allOptions = wrapper.findAll('[data-testid="question-option"]');
+    // Options for q0 come first (2), then q1's options (2). Pick q1's first.
+    await allOptions[2]!.trigger("click");
+    expect(submitBtn(wrapper).attributes("disabled")).toBeUndefined();
+
+    await submitBtn(wrapper).trigger("click");
+    const [, answers] = oneAnswered(wrapper);
+    expect(answers).toHaveLength(2);
+    expect(answers[0]!.answer).toBe("Mango");
+    expect(answers[1]!.answer).toEqual(["Apple"]);
+  });
 });

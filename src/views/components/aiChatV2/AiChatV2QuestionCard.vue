@@ -81,6 +81,8 @@
             rows="2"
             auto-grow
             hide-details
+            :maxlength="MAX_CUSTOM_ANSWER_LENGTH"
+            counter
             :placeholder="
               t('aiChatV2Plan.custom_answer_placeholder') ||
               'Type your answer...'
@@ -124,6 +126,10 @@ const emit = defineEmits<{
   (e: "answered", questionId: string, answers: AskUserQuestionAnswer[]): void;
 }>();
 const { t } = useI18n();
+
+/** Cap free-text answers so a paste can't bloat the persisted answersJson
+ * (SQLite TEXT) or inflate the AI tool-message tokens. */
+const MAX_CUSTOM_ANSWER_LENGTH = 2000;
 
 /** selected[questionIndex] = array of selected option indices */
 const selected = ref<Record<number, number[]>>({});
