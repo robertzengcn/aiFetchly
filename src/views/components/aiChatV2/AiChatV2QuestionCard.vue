@@ -176,9 +176,12 @@ const toggleSelect = (qi: number, oi: number): void => {
         : [...current, oi],
     };
   } else {
-    // Single-select: picking a preset option clears any free-text choice.
+    // Single-select: picking a preset option clears any free-text choice
+    // (both the selection and its draft text, so re-clicking "Other" later
+    // does not silently restore a stale answer).
     selected.value = { ...selected.value, [qi]: [oi] };
     customSelected.value = { ...customSelected.value, [qi]: false };
+    customText.value = { ...customText.value, [qi]: "" };
   }
 };
 

@@ -217,6 +217,19 @@ describe("AiChatV2QuestionCard — free-text 'Other' option", () => {
     expect(answers).toEqual([{ question: "Pick a fruit", answer: "Apple" }]);
   });
 
+  it("does not restore a stale Other draft after switching to a preset", async () => {
+    const wrapper = mountCard(makeQuestion([SINGLE]));
+
+    await otherOption(wrapper).trigger("click");
+    await customInput(wrapper).setValue("should be forgotten");
+    const options = wrapper.findAll('[data-testid="question-option"]');
+    await options[0]!.trigger("click"); // Apple clears Other + its draft
+
+    // Re-open "Other": the text area must start empty, not show the old draft.
+    await otherOption(wrapper).trigger("click");
+    expect(customInput(wrapper).element.value).toBe("");
+  });
+
   it("preserves existing preset-only behavior (no customText)", async () => {
     const wrapper = mountCard(makeQuestion([SINGLE]));
 
