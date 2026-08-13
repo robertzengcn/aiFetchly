@@ -20,6 +20,7 @@ beforeAll(() => {
       invoke: vi.fn().mockResolvedValue(undefined),
       receive: vi.fn(),
       removeListener: vi.fn(),
+      removeAllListeners: vi.fn(),
       send: vi.fn(),
     },
   });
