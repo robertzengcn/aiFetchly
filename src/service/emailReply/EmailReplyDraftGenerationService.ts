@@ -26,6 +26,7 @@ import {
 } from "@/service/emailReply/EmailReplyPromptBuilder";
 import { EmailServiceModule } from "@/modules/emailServiceModule";
 import { materializeRevision1 } from "@/service/emailReply/EmailReplyRevisionMaterializer";
+import { EmailReplyPolicyOrchestrator } from "@/service/emailReply/EmailReplyPolicyOrchestrator";
 
 const VALID_CLASSIFICATIONS: ReadonlySet<string> = new Set([
   "interested",
@@ -82,6 +83,33 @@ export class EmailReplyDraftGenerationService {
     const message = await this.messageModule.read(input.messageId);
     if (!message) {
       return { success: false, error: "Message not found" };
+    }
+
+    // 2b. Pre-draft policy gate (FR-005, P0.3): run the authoritative policy
+    //     BEFORE knowledge retrieval or the LLM. A hard-blocked message (bounce,
+    //     unsubscribe, automated sender, blocked sender/domain) yields no draft
+    //     and no model call. Audit the decision (best-effort) and surface a
+    //     structured code so the UI can map it to a translated reason.
+    const policyDecision = await new EmailReplyPolicyOrchestrator().evaluate({
+      stage: "pre_draft",
+      messageId: message.id,
+    });
+    if (!policyDecision.allowed) {
+      try {
+        const audit = new EmailReplyAuditLogEntity();
+        audit.emailServiceId = message.emailServiceId;
+        audit.messageId = message.id;
+        audit.action = "auto_reply_blocked";
+        audit.actor = "system";
+        audit.reason = `[${policyDecision.code}] ${policyDecision.reason}`;
+        await this.replyAuditModule.create(audit);
+      } catch (e) {
+        console.error("Failed to write pre-draft policy audit:", e);
+      }
+      return {
+        success: false,
+        error: `[${policyDecision.code}] ${policyDecision.reason}`,
+      };
     }
 
     // 3. Load owner-voice profile.
