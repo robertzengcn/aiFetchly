@@ -5,8 +5,12 @@ import { EmailReplyDraftRevisionEntity } from "@/entity/EmailReplyDraftRevision.
 import { EmailReplyApprovalEntity } from "@/entity/EmailReplyApproval.entity";
 import { EmailReplySendAttemptEntity } from "@/entity/EmailReplySendAttempt.entity";
 import { EmailReplyAuditLogEntity } from "@/entity/EmailReplyAuditLog.entity";
+import { EmailReceivedMessageEntity } from "@/entity/EmailReceivedMessage.entity";
 import { SortBy } from "@/entityTypes/commonType";
-import { EmailReplyDraftStatus } from "@/entityTypes/emailReceiveTypes";
+import {
+  EmailReplyDraftStatus,
+  EmailReplyStatus,
+} from "@/entityTypes/emailReceiveTypes";
 import type { EmailReplySendAttemptStatus } from "@/entityTypes/emailReplyReliabilityTypes";
 import { parseAndStrip } from "@/utils/parseAndStrip";
 import { emailReplyDraftWriteSchema } from "@/schemas/entity/emailReplyDraft";
@@ -396,6 +400,7 @@ export class EmailReplyDraftModel extends BaseDb {
       const draftRepo = manager.getRepository(EmailReplyDraftEntity);
       const approvalRepo = manager.getRepository(EmailReplyApprovalEntity);
       const auditRepo = manager.getRepository(EmailReplyAuditLogEntity);
+      const messageRepo = manager.getRepository(EmailReceivedMessageEntity);
 
       const completedAt = new Date();
       const attemptStatus: EmailReplySendAttemptStatus = input.outcome;
@@ -428,6 +433,16 @@ export class EmailReplyDraftModel extends BaseDb {
         draftPatch.sendError = input.sanitizedError ?? null;
       }
       await draftRepo.update({ id: input.draftId }, draftPatch);
+
+      // Received-message reply status travels in the SAME transaction as the
+      // attempt/draft/approval/audit (P0.6). 'delivery_unknown' leaves the
+      // message status untouched (no EmailReplyStatus for ambiguous delivery).
+      if (input.messageReplyStatus) {
+        await messageRepo.update(
+          { id: input.messageId },
+          { replyStatus: input.messageReplyStatus, processedAt: completedAt }
+        );
+      }
 
       // Consume the one-time approval (idempotent: only if still active).
       await approvalRepo.update(
@@ -481,6 +496,83 @@ export class EmailReplyDraftModel extends BaseDb {
       .where("draft.currentRevisionId IS NULL")
       .orderBy("draft.id", "ASC")
       .getMany();
+  }
+
+  /**
+   * Operator-driven manual reconciliation of an ambiguous delivery (P0.6,
+   * FR-019, technical design §16). UNCONDITIONAL transactional update (the
+   * operator is the trusted authority here, unlike the conditional auto-finalize):
+   *   - confirm_sent: attempt -> 'sent', draft -> 'sent', message -> 'sent'.
+   *   - confirm_not_sent: attempt -> 'failed', draft -> 'draft' (re-editable;
+   *     the user's next edit creates a fresh revision via materializeRevision1).
+   *   - leave_unresolved: no state change (audit only).
+   * Always writes a reconciliation audit row with the supplied evidence.
+   */
+  async reconcileDelivery(input: {
+    attemptId: number;
+    draftId: number;
+    messageId: number;
+    emailServiceId: number;
+    action: "confirm_sent" | "confirm_not_sent" | "leave_unresolved";
+    evidence?: string | null;
+    providerMessageId?: string | null;
+  }): Promise<void> {
+    await runReplyTxn(this.sqliteDb, async (manager) => {
+      const attemptRepo = manager.getRepository(EmailReplySendAttemptEntity);
+      const draftRepo = manager.getRepository(EmailReplyDraftEntity);
+      const messageRepo = manager.getRepository(EmailReceivedMessageEntity);
+      const auditRepo = manager.getRepository(EmailReplyAuditLogEntity);
+      const now = new Date();
+
+      if (input.action === "confirm_sent") {
+        await attemptRepo.update(
+          { id: input.attemptId },
+          {
+            status: "sent",
+            completedAt: now,
+            providerMessageId: input.providerMessageId ?? null,
+            sanitizedError: input.evidence ?? null,
+          }
+        );
+        await draftRepo.update(
+          { id: input.draftId },
+          { status: "sent", sentAt: now, sendError: null }
+        );
+        await messageRepo.update(
+          { id: input.messageId },
+          { replyStatus: "sent", processedAt: now }
+        );
+      } else if (input.action === "confirm_not_sent") {
+        await attemptRepo.update(
+          { id: input.attemptId },
+          {
+            status: "failed",
+            completedAt: now,
+            sanitizedError: input.evidence ?? "Operator confirmed not sent",
+          }
+        );
+        await draftRepo.update(
+          { id: input.draftId },
+          { status: "draft", sendError: input.evidence ?? null }
+        );
+      }
+      // leave_unresolved: no state change.
+
+      const audit = new EmailReplyAuditLogEntity();
+      audit.emailServiceId = input.emailServiceId;
+      audit.messageId = input.messageId;
+      audit.draftId = input.draftId;
+      audit.action =
+        input.action === "confirm_sent" ? "reply_sent" : "send_failed";
+      audit.actor = "system";
+      audit.reason = `Manual reconciliation: ${input.action}`;
+      audit.metadataJson = JSON.stringify({
+        attemptId: input.attemptId,
+        evidence: input.evidence ?? null,
+        providerMessageId: input.providerMessageId ?? null,
+      });
+      await auditRepo.save(audit);
+    });
   }
 
   /**
@@ -605,4 +697,10 @@ export interface FinalizeOutcomeInput {
   providerMessageId?: string | null;
   failureCode?: string | null;
   sanitizedError?: string | null;
+  /**
+   * If provided, the received message's replyStatus is updated in the SAME
+   * transaction as the attempt/draft/approval/audit (P0.6). Omit for
+   * delivery_unknown (no EmailReplyStatus for ambiguous delivery).
+   */
+  messageReplyStatus?: EmailReplyStatus;
 }

@@ -63,6 +63,23 @@ export class EmailReplySendAttemptModel extends BaseDb {
     return await qb.getMany();
   }
 
+  /**
+   * Mark an in-flight attempt `submitted` at the SMTP handoff boundary (P0.6).
+   * Conditional on status IN (claimed, submitted) so it's idempotent and can't
+   * revive a finalized attempt.
+   */
+  async markSubmitted(id: number, at: Date): Promise<void> {
+    await this.repository
+      .createQueryBuilder()
+      .update()
+      .set({ status: "submitted", submittedAt: at })
+      .where("id = :id AND status IN (:...statuses)", {
+        id,
+        statuses: ["claimed", "submitted"] as EmailReplySendAttemptStatus[],
+      })
+      .execute();
+  }
+
   /** Lightweight status update used by the recovery service. */
   async markOutcome(
     id: number,

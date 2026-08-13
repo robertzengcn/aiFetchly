@@ -58,4 +58,36 @@ export class EmailReplySendRecoveryService {
     // Each delivery_unknown is a high-visibility operational event (§15.5).
     return { recovered, needsAttention: recovered > 0 };
   }
+
+  /**
+   * Manual reconciliation of one ambiguous attempt (P0.6, FR-019, technical
+   * design §16). The operator supplies the verified outcome and evidence:
+   *   - confirm_sent:     mark sent (mailbox verified).
+   *   - confirm_not_sent: mark failed + return the draft to 'draft' so a fresh
+   *     revision/approval/send can follow.
+   *   - leave_unresolved: audit only.
+   */
+  async reconcileAttempt(input: {
+    attemptId: number;
+    action: "confirm_sent" | "confirm_not_sent" | "leave_unresolved";
+    evidence?: string | null;
+    providerMessageId?: string | null;
+  }): Promise<{ reconciled: boolean }> {
+    const attempt = await this.attemptModule.read(input.attemptId);
+    if (!attempt) {
+      throw new Error(
+        `Cannot reconcile: send attempt ${input.attemptId} not found`
+      );
+    }
+    await this.draftModule.reconcileDelivery({
+      attemptId: attempt.id,
+      draftId: attempt.draftId,
+      messageId: attempt.messageId,
+      emailServiceId: attempt.emailServiceId,
+      action: input.action,
+      evidence: input.evidence ?? null,
+      providerMessageId: input.providerMessageId ?? null,
+    });
+    return { reconciled: input.action !== "leave_unresolved" };
+  }
 }

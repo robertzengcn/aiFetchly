@@ -60,6 +60,16 @@ export class EmailReplySendAttemptModule extends BaseModule {
     }
   }
 
+  async markSubmitted(id: number, at: Date): Promise<void> {
+    try {
+      await this.ensureConnection();
+      await this.attemptModel.markSubmitted(id, at);
+    } catch (error) {
+      console.error("Error marking reply send attempt submitted:", error);
+      throw error;
+    }
+  }
+
   async markOutcome(
     id: number,
     status: EmailReplySendAttemptStatus,

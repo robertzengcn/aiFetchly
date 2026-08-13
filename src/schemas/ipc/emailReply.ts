@@ -83,8 +83,16 @@ export const emailReplySendAttemptDetailInputSchema = lazySchema(() =>
 
 /** Manually trigger recovery of stale in-flight send attempts. */
 export const emailReplyDeliveryReconcileInputSchema = lazySchema(() =>
-  z.strictObject({
+  z.object({
     ageMs: z.number().int().positive().optional(),
+    // Manual per-attempt reconciliation (FR-019, P0.6). When attemptId + action
+    // are present, reconcile that one attempt; otherwise run the auto sweep.
+    attemptId: z.number().int().positive().optional(),
+    action: z
+      .enum(["confirm_sent", "confirm_not_sent", "leave_unresolved"])
+      .optional(),
+    evidence: z.string().max(500).optional(),
+    providerMessageId: z.string().max(998).optional(),
   })
 );
 

@@ -23,6 +23,45 @@ import type {
   SendApprovedReplyOutcome,
 } from "@/entityTypes/emailReplyReliabilityTypes";
 import type { EmailReplyStatus } from "@/entityTypes/emailReceiveTypes";
+import type { EmailSendResult } from "@/entityTypes/emailmarketingType";
+
+/**
+ * Sender interface the delivery service uses for the SMTP handoff. The default
+ * factory builds a real {@link ReplyEmailService}; tests inject a fake to drive
+ * the accepted / rejected / disconnect / post-SMTP-DB-failure scenarios.
+ */
+export interface ReplySender {
+  sendReplyEmail(req: {
+    receiver: string;
+    subject: string;
+    text: string;
+    html?: string | null;
+    inReplyTo?: string | null;
+    references?: string | null;
+  }): Promise<EmailSendResult>;
+}
+
+export type ReplySenderFactory = (service: {
+  id?: number;
+  from: string;
+  password: string;
+  host: string;
+  port: string;
+  name: string;
+  ssl: number;
+}) => ReplySender;
+
+/** Minimal mailbox shape the delivery service consumes (a subset of the entity). */
+export interface BoundMailbox {
+  id: number;
+  from: string;
+  status: number;
+  password: string;
+  host: string;
+  port: string;
+  name: string;
+  ssl: number;
+}
 
 /**
  * Idempotent approved-send orchestrator (technical design §15, FR-017/018/019,
@@ -41,6 +80,21 @@ export class EmailReplyDeliveryService {
   private readonly messageModule = new EmailReceivedMessageModule();
   private readonly serviceModule = new EmailServiceModule();
   private readonly policy = new EmailReplyPolicyOrchestrator();
+  private readonly senderFactory: ReplySenderFactory;
+  private readonly serviceLoader: (id: number) => Promise<BoundMailbox | null>;
+
+  constructor(options?: {
+    senderFactory?: ReplySenderFactory;
+    serviceLoader?: (id: number) => Promise<BoundMailbox | null>;
+  }) {
+    this.senderFactory =
+      options?.senderFactory ??
+      ((svc) => new ReplyEmailService(svc) as unknown as ReplySender);
+    this.serviceLoader =
+      options?.serviceLoader ??
+      ((id) =>
+        this.serviceModule.getEmailService(id) as Promise<BoundMailbox | null>);
+  }
 
   async sendApprovedReply(
     input: SendApprovedReplyInput
@@ -67,7 +121,7 @@ export class EmailReplyDeliveryService {
     }
 
     const emailServiceId = draft.emailServiceId ?? message.emailServiceId;
-    const service = await this.serviceModule.getEmailService(emailServiceId);
+    const service = await this.serviceLoader(emailServiceId);
     if (!service) {
       throw new Error("Send rejected: bound email service not found");
     }
@@ -169,9 +223,13 @@ export class EmailReplyDeliveryService {
     }
     const attemptId = claim.attemptId;
 
-    // 7. SMTP submission. classifySubmissionResult turns the raw result into a
+    // 7. Mark the attempt `submitted` at the SMTP handoff boundary (P0.6) so a
+    //    crash here is recoverable to delivery_unknown rather than left claimed.
+    await this.attemptModule.markSubmitted(attemptId, new Date());
+
+    // 8. SMTP submission. classifySubmissionResult turns the raw result into a
     //    certainty; unknown outcomes become delivery_unknown (never retried).
-    const sender = new ReplyEmailService({
+    const sender = this.senderFactory({
       id: service.id,
       from: service.from,
       password: service.password,
@@ -205,6 +263,10 @@ export class EmailReplyDeliveryService {
     }
 
     const outcome = certaintyToOutcome(certainty);
+    // Finalize attempt + draft + approval + audit + received-message status in
+    // ONE transaction (P0.6). delivery_unknown leaves the message status as-is.
+    const messageReplyStatus: EmailReplyStatus | undefined =
+      outcome === "sent" ? "sent" : outcome === "failed" ? "failed" : undefined;
     await this.draftModule.finalizeSendOutcome({
       attemptId,
       draftId: draft.id,
@@ -215,14 +277,8 @@ export class EmailReplyDeliveryService {
       providerMessageId,
       failureCode: certainty === "accepted" ? null : certainty,
       sanitizedError,
+      messageReplyStatus,
     });
-
-    // Secondary UI hint on the inbound message (truth lives in attempt + draft).
-    if (outcome === "sent") {
-      await this.updateMessageStatus(message.id, "sent");
-    } else if (outcome === "failed") {
-      await this.updateMessageStatus(message.id, "failed");
-    }
 
     if (outcome === "sent") {
       return {
@@ -236,17 +292,6 @@ export class EmailReplyDeliveryService {
       attemptId,
       error: sanitizedError ?? outcome,
     };
-  }
-
-  private async updateMessageStatus(
-    messageId: number,
-    status: EmailReplyStatus
-  ): Promise<void> {
-    try {
-      await this.messageModule.updateReplyStatus(messageId, status, new Date());
-    } catch (e) {
-      console.error("Failed to update received-message reply status:", e);
-    }
   }
 }
 

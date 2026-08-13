@@ -224,4 +224,22 @@ export class EmailReplyDraftModule extends BaseModule {
       throw error;
     }
   }
+
+  async reconcileDelivery(input: {
+    attemptId: number;
+    draftId: number;
+    messageId: number;
+    emailServiceId: number;
+    action: "confirm_sent" | "confirm_not_sent" | "leave_unresolved";
+    evidence?: string | null;
+    providerMessageId?: string | null;
+  }): Promise<void> {
+    try {
+      await this.ensureConnection();
+      await this.draftModel.reconcileDelivery(input);
+    } catch (error) {
+      console.error("Error reconciling reply delivery:", error);
+      throw error;
+    }
+  }
 }

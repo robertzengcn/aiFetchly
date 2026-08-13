@@ -452,7 +452,7 @@ export function registerEmailReceiveIpcHandlers(): void {
     }
   );
 
-  // ---- Manually trigger stale-attempt recovery (operational) ----
+  // ---- Recovery + manual reconciliation (operational) ----
   registerValidatedHandler(
     EMAIL_REPLY_DELIVERY_RECONCILE,
     emailReplyDeliveryReconcileInputSchema,
@@ -460,9 +460,18 @@ export function registerEmailReceiveIpcHandlers(): void {
       const { EmailReplySendRecoveryService } = await import(
         "@/service/emailReply/EmailReplySendRecoveryService"
       );
-      return await new EmailReplySendRecoveryService().recoverStaleAttempts(
-        input.ageMs
-      );
+      const svc = new EmailReplySendRecoveryService();
+      // Manual per-attempt reconcile when an attemptId + action are supplied;
+      // otherwise run the bounded auto sweep of stale in-flight attempts.
+      if (input.attemptId && input.action) {
+        return await svc.reconcileAttempt({
+          attemptId: input.attemptId,
+          action: input.action,
+          evidence: input.evidence,
+          providerMessageId: input.providerMessageId,
+        });
+      }
+      return await svc.recoverStaleAttempts(input.ageMs);
     }
   );
 }
