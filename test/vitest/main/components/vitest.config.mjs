@@ -39,5 +39,9 @@ export default defineConfig({
   test: {
     environment: "happy-dom",
     include: ["test/vitest/main/components/**/*.test.ts"],
+    // Stubs window.api (invoke/receive/removeListener/send) once per file so
+    // AiChatV2-mount tests don't have to mock every @/views/api/* module just
+    // to survive onMounted. See _setup.windowApi.ts.
+    setupFiles: ["./test/vitest/main/components/_setup.windowApi.ts"],
   },
 });
