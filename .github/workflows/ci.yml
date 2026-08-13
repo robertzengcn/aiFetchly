@@ -65,14 +65,8 @@ jobs:
       - name: Run module unit tests
         run: yarn test
 
-      # Vue component test suite (happy-dom). Advisory for now: the suite has
-      # pre-existing failures in files unrelated to current work
-      # (AiChatV2.workspaceTrust, .slashCommands, .workspace,
-      # AiChatV2Composer.slashScope, diag-workspace) that predate the branches
-      # that added this step. Remove `continue-on-error` once those are triaged
-      # so component tests become a hard gate.
+      # Vue component test suite (happy-dom, @vue/test-utils). Hard gate.
       - name: Run Vue component unit tests
-        continue-on-error: true
         run: yarn test:components
 
       - name: Run main process unit tests
