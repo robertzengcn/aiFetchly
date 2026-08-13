@@ -1086,7 +1086,14 @@ watch(
   () => props.conversationId,
   () => {
     closeAtMention();
-    closeSlash();
+    // If the user is mid-slash-command, keep the dropdown open and let the
+    // earlier conversation-switch watcher (above) refresh it for the new
+    // conversation. Calling closeSlash() here would clearTimeout the debounced
+    // refresh it just scheduled, silently breaking the FR-1 refetch; the
+    // slashGeneration guard already drops any stale result from the old chat.
+    if (!draft.value.startsWith("/")) {
+      closeSlash();
+    }
     resetPastedState();
   }
 );
