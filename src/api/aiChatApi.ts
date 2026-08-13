@@ -2301,14 +2301,14 @@ export class AiChatApi {
           layer,
           reason: classified.reason,
           attempt: decision.attempt,
-          maxAttempts: profile.maxAttempts,
+          maxAttempts: profile.maxAttempts + 1,
           delayMs: decision.delayMs,
           consecutiveOverloadCount: consecutiveOverload,
           message: classified.message,
         });
         options?.onRetry?.({
           attempt: decision.attempt,
-          maxAttempts: profile.maxAttempts,
+          maxAttempts: profile.maxAttempts + 1,
           delayMs: decision.delayMs,
           error: classified.message,
         });
@@ -2356,14 +2356,14 @@ export class AiChatApi {
           layer,
           reason: classified.reason,
           attempt: decision.attempt,
-          maxAttempts: profile.maxAttempts,
+          maxAttempts: profile.maxAttempts + 1,
           delayMs: decision.delayMs,
           consecutiveOverloadCount: consecutiveOverload,
           message: classified.message,
         });
         options?.onRetry?.({
           attempt: decision.attempt,
-          maxAttempts: profile.maxAttempts,
+          maxAttempts: profile.maxAttempts + 1,
           delayMs: decision.delayMs,
           error: `HTTP ${res.status}`,
         });

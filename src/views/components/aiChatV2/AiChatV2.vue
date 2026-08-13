@@ -3489,6 +3489,7 @@ const onSend = async (
     assistantAdded = true;
   };
   const showAssistantError = (message: string): void => {
+    assistant.timestamp = new Date().toISOString();
     ensureAssistantAdded();
     assistant.content = message;
     assistant.metadata = {
@@ -3502,6 +3503,7 @@ const onSend = async (
       nextMessages[idx] = {
         ...nextMessages[idx],
         content: assistant.content,
+        timestamp: assistant.timestamp,
         metadata: assistant.metadata,
       };
       streamMessageListController.set(nextMessages);
