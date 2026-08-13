@@ -29,12 +29,12 @@ class MemoryStorage implements Storage {
 }
 
 const cookieMock = vi.hoisted(() => ({
-  get: vi.fn<(...args: []) => string | undefined>(),
-  set: vi.fn<(...args: [string, string, { expires: number }]) => void>(),
+  get: vi.fn<[], string | undefined>(),
+  set: vi.fn<[string, string, { expires: number }], void>(),
 }));
 
 const languageApiMock = vi.hoisted(() => ({
-  getLanguagePreference: vi.fn<(...args: []) => Promise<string>>(),
+  getLanguagePreference: vi.fn<[], Promise<string>>(),
 }));
 
 vi.mock("js-cookie", () => ({

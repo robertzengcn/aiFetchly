@@ -21,11 +21,9 @@ const mockState = vi.hoisted(() => ({
   userInfo: null as RemoteUserInfo | null,
 }));
 
-const mockTokenSetValue = vi.hoisted(() =>
-  vi.fn<(...args: [string, string]) => void>()
-);
+const mockTokenSetValue = vi.hoisted(() => vi.fn<[string, string], void>());
 const mockTokenGetValue = vi.hoisted(() =>
-  vi.fn<(...args: [string]) => string>().mockReturnValue("")
+  vi.fn<[string], string>().mockReturnValue("")
 );
 
 vi.mock("electron", () => ({
