@@ -14,9 +14,10 @@ import { spawn, type ChildProcess, type SpawnOptions } from "child_process";
  *    inside the app.
  *
  * Correct approach on native Windows: Electron `shell.openPath`, which uses
- * the OS default file association and opens the file in that app. Under WSL,
- * launch the Windows FileProtocolHandler because Linux shell.openPath can
- * remain pending indefinitely.
+ * the OS default file association and opens the file in that app. If Windows
+ * cannot resolve that association, retry through FileProtocolHandler so it
+ * can offer the system app chooser. Under WSL, use FileProtocolHandler
+ * directly because Linux shell.openPath can remain pending indefinitely.
  *
  * Keep this logic centralized so guard tests can ban the broken OpenAs /
  * rundll32 patterns across `src/`.
@@ -59,14 +60,20 @@ export function launchDetachedProcess(
 
 /**
  * Open a Windows-native or UNC path with the default associated app.
- * Returns an empty string on success, or an error message on failure
- * (Electron `shell.openPath` contract).
+ * Returns an empty string after either the default association or Windows'
+ * protocol handler accepts the file-open request.
  */
 export async function openWindowsFile(
   windowsPath: string,
-  openPathFn: OpenWindowsFileFn = (p) => shell.openPath(p)
+  openPathFn: OpenWindowsFileFn = (p) => shell.openPath(p),
+  fallbackSpawn?: DetachedSpawnFn
 ): Promise<string> {
-  return openPathFn(windowsPath);
+  const errorMessage = await openPathFn(windowsPath);
+  if (!errorMessage) {
+    return "";
+  }
+  await openWindowsFileFromWsl(windowsPath, fallbackSpawn);
+  return "";
 }
 
 /**
