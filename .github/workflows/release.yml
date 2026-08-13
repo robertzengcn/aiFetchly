@@ -115,7 +115,7 @@ jobs:
           yarn rebuild-better-sqlite
 
       - name: Install WiX Toolset
-        if: ${{ env.BUILD_MODE != 'store' }}
+        if: ${{ github.event_name == 'push' || env.BUILD_MODE != 'store' }}
         shell: pwsh
         run: |
           $wixDirectory = "$env:ProgramFiles\WiX Toolset"
@@ -167,6 +167,28 @@ jobs:
           fi
           # Fail if unpacked workers require asar-only pure-JS packages.
           yarn verify-packaged-app
+
+      - name: Build MSI for local testing
+        if: ${{ github.event_name == 'push' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          yarn electron-forge make --skip-package --platform=win32 --targets @electron-forge/maker-wix
+
+      - name: Validate master Windows installers
+        if: ${{ github.event_name == 'push' }}
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $msixFiles = @(Get-ChildItem -Path out/make -Recurse -Filter *.msix)
+          $msiFiles = @(Get-ChildItem -Path out/make -Recurse -Filter *.msi)
+          if ($msixFiles.Count -eq 0) {
+            throw "Master build did not produce an MSIX package."
+          }
+          if ($msiFiles.Count -eq 0) {
+            throw "Master build did not produce an MSI package."
+          }
 
       - name: Upload Windows installers
         uses: actions/upload-artifact@v7
