@@ -25,25 +25,24 @@ export function isBrowserProfileImportEnabled(): boolean {
 }
 
 /**
- * Thread-aware reply reliability (Milestone 1: send safety). When enabled, the
- * send path requires an approved immutable revision + one-time approval token
- * and routes through the idempotent delivery service (no mailbox override,
- * at-most-once SMTP, ambiguous-delivery handling). When disabled, the legacy
- * send path is preserved verbatim.
+ * Emergency kill switch for the AI email-reply subsystem (technical design §23
+ * "emergency kill switch"; P0.1). When ON, draft generation and new send claims
+ * are refused immediately. Message viewing, audit reads, send-attempt detail,
+ * and delivery reconciliation stay available so operators can diagnose and
+ * recover. There is NO flag that restores the legacy unapproved/mutable send
+ * path — the approved-revision + idempotent-delivery path is authoritative.
  *
- * DEFAULTS OFF: enabling changes the send contract (the UI must approve-then-
- * send), so it ships behind an explicit opt-in per the rollout plan (technical
- * design §23 step 3 — enable approval/revision and idempotent delivery
- * together, never split across states that permit legacy sending).
+ * DEFAULTS OFF (kill switch inactive = normal operation). Fail-closed on a
+ * Token store error: a broken store must not silently enable drafting/sending.
  */
-export const EMAIL_REPLY_APPROVAL_V2_FLAG = "email_reply_approval_v2";
+export const EMAIL_REPLY_KILL_SWITCH_FLAG = "email_reply_kill_switch";
 
-export function isEmailReplyApprovalV2Enabled(): boolean {
+export function isEmailReplyKillSwitchOn(): boolean {
   try {
-    return new Token().getValue(EMAIL_REPLY_APPROVAL_V2_FLAG) === "true";
+    return new Token().getValue(EMAIL_REPLY_KILL_SWITCH_FLAG) === "true";
   } catch {
-    // Token store unreadable: keep the legacy path (fail closed to the new
-    // contract rather than silently changing send behavior on a storage hiccup).
+    // Unreadable store: treat as NOT killed so a storage hiccup doesn't paralyze
+    // the feature. Operators who want the switch on set it explicitly.
     return false;
   }
 }

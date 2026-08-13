@@ -47,7 +47,7 @@ import { EmailReceivedMessageModule } from "@/modules/EmailReceivedMessageModule
 import { EmailReplyDraftModule } from "@/modules/EmailReplyDraftModule";
 import { EmailReplyAuditLogModule } from "@/modules/EmailReplyAuditLogModule";
 import { EmailReplySendAttemptModule } from "@/modules/EmailReplySendAttemptModule";
-import { isEmailReplyApprovalV2Enabled } from "@/config/featureFlags";
+import { isEmailReplyKillSwitchOn } from "@/config/featureFlags";
 import { EmailReplyIdentityProfileModule } from "@/modules/EmailReplyIdentityProfileModule";
 import { EmailAutoReplyAuditLogModule } from "@/modules/EmailAutoReplyAuditLogModule";
 import { EmailReceivedMessageEntity } from "@/entity/EmailReceivedMessage.entity";
@@ -276,6 +276,14 @@ export function registerEmailReceiveIpcHandlers(): void {
     EMAIL_REPLY_DRAFT_CREATE,
     emailReplyDraftCreateInputSchema,
     async (input) => {
+      // Kill switch (P0.1): block draft generation. The AI gate already ran
+      // before this handler body; the kill switch is an independent emergency
+      // shutoff that leaves viewing/audit/recovery available.
+      if (isEmailReplyKillSwitchOn()) {
+        throw new Error(
+          "Reply drafting is temporarily disabled by the kill switch"
+        );
+      }
       const genService = new EmailReplyDraftGenerationService();
       const result = await genService.createDraft(input);
       if (!result.success) {
@@ -325,13 +333,12 @@ export function registerEmailReceiveIpcHandlers(): void {
       const existing = await module.read(input.id);
       if (!existing) throw new Error("emailreceive.draft_not_found");
 
-      // Reliability v2: route the edit through materializeRevision1 so it
-      // appends an immutable revision (subject + body), invalidates any active
-      // approval (FR-014), and recomputes the canonical hash. Legacy drafts
-      // without a v2 envelope identity fall back to the mutable updateBody path
-      // until backfill materializes their revision 1.
+      // Reliability: route the edit through materializeRevision1 so it appends
+      // an immutable revision (subject + body), invalidates any active approval
+      // (FR-014), and recomputes the canonical hash. Legacy drafts without a v2
+      // envelope identity fall back to the mutable updateBody path until backfill
+      // materializes their revision 1.
       const canV2 =
-        isEmailReplyApprovalV2Enabled() &&
         !!existing.senderAddress &&
         !!existing.recipientAddress &&
         existing.emailServiceId != null;
@@ -376,33 +383,30 @@ export function registerEmailReceiveIpcHandlers(): void {
   );
 
   // ---- Confirmed reply send (UI Send button) ----
-  // Routes to the v2 idempotent delivery path when the approval-v2 flag is on
-  // (requires an approval token), otherwise preserves the legacy path verbatim.
+  // The reliable send path is authoritative (P0.1): every send requires a valid
+  // approval token and goes through the idempotent delivery service. There is no
+  // legacy branch and no mailbox override. The kill switch refuses new claims.
   registerValidatedHandler(
     EMAIL_REPLY_SEND,
     emailReplySendInputSchema,
     async (input) => {
-      if (isEmailReplyApprovalV2Enabled()) {
-        if (!input.approvalToken) {
-          throw new Error(
-            "approval_v2_enabled: approve the draft before sending (EMAIL_REPLY_DRAFT_APPROVE)"
-          );
-        }
-        const { EmailReplyDeliveryService } = await import(
-          "@/service/emailReply/EmailReplyDeliveryService"
+      if (isEmailReplyKillSwitchOn()) {
+        throw new Error(
+          "Reply sending is temporarily disabled by the kill switch"
         );
-        return await new EmailReplyDeliveryService().sendApprovedReply({
-          draftId: input.draftId,
-          approvalToken: input.approvalToken,
-        });
       }
-      // Legacy path — delegate to the AI tool implementation.
-      const { sendEmailReply } = await import("@/service/EmailReceiveAiTools");
-      const result = await sendEmailReply(input);
-      if (!result.success) {
-        throw new Error(result.error);
+      if (!input.approvalToken) {
+        throw new Error(
+          "Approve the draft before sending (EMAIL_REPLY_DRAFT_APPROVE issues the one-time token)"
+        );
       }
-      return result;
+      const { EmailReplyDeliveryService } = await import(
+        "@/service/emailReply/EmailReplyDeliveryService"
+      );
+      return await new EmailReplyDeliveryService().sendApprovedReply({
+        draftId: input.draftId,
+        approvalToken: input.approvalToken,
+      });
     }
   );
 

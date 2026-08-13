@@ -25,7 +25,6 @@ import {
   REPLY_PROMPT_VERSION,
 } from "@/service/emailReply/EmailReplyPromptBuilder";
 import { EmailServiceModule } from "@/modules/emailServiceModule";
-import { isEmailReplyApprovalV2Enabled } from "@/config/featureFlags";
 import { materializeRevision1 } from "@/service/emailReply/EmailReplyRevisionMaterializer";
 
 const VALID_CLASSIFICATIONS: ReadonlySet<string> = new Set([
@@ -187,38 +186,37 @@ export class EmailReplyDraftGenerationService {
     draft.warningsJson = JSON.stringify(warnings);
     const savedDraft = await this.draftModule.create(draft);
 
-    // 7b. Reliability v2: materialize immutable revision 1 + canonical hash so
-    // the draft is approvable through the idempotent delivery path. A
-    // materialization failure is logged but does not break draft creation —
-    // the draft still exists; approveDraft will give a clear error until a
-    // later edit or backfill creates the revision.
-    if (isEmailReplyApprovalV2Enabled()) {
-      try {
-        const service = await new EmailServiceModule().getEmailService(
-          message.emailServiceId
-        );
-        const senderAddress = service?.from ?? "";
-        const recipientAddress = (
-          message.replyToAddress ||
-          message.fromAddress ||
-          ""
-        ).trim();
-        if (senderAddress && recipientAddress) {
-          await materializeRevision1(this.draftModule, {
-            draftId: savedDraft.id,
-            actor: "ai",
-            subject,
-            bodyText,
-            bodyHtml: null,
-            senderAddress,
-            recipientAddress,
-            emailServiceId: message.emailServiceId,
-            originalMessageId: message.id,
-          });
-        }
-      } catch (error) {
-        console.error("Failed to materialize revision 1 for v2 draft:", error);
+    // 7b. Materialize immutable revision 1 + canonical hash so the draft is
+    // approvable through the idempotent delivery path (P0.1: this is now
+    // unconditional — the approved-revision path is authoritative). A
+    // materialization failure is logged but does not break draft creation; the
+    // draft still exists and approveDraft will give a clear error until a later
+    // edit or backfill creates the revision.
+    try {
+      const service = await new EmailServiceModule().getEmailService(
+        message.emailServiceId
+      );
+      const senderAddress = service?.from ?? "";
+      const recipientAddress = (
+        message.replyToAddress ||
+        message.fromAddress ||
+        ""
+      ).trim();
+      if (senderAddress && recipientAddress) {
+        await materializeRevision1(this.draftModule, {
+          draftId: savedDraft.id,
+          actor: "ai",
+          subject,
+          bodyText,
+          bodyHtml: null,
+          senderAddress,
+          recipientAddress,
+          emailServiceId: message.emailServiceId,
+          originalMessageId: message.id,
+        });
       }
+    } catch (error) {
+      console.error("Failed to materialize revision 1 for draft:", error);
     }
 
     // 8. Update message state.
