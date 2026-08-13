@@ -12,7 +12,11 @@ import {
   hashApprovalToken,
   hashApprovalEnvelope,
 } from "@/service/emailReply/EmailReplyRevisionHasher";
-import { REPLY_POLICY_VERSION, REPLY_VALIDATOR_VERSION } from "@/service/emailReply/replyReliabilityVersions";
+import { validateReplyOutput } from "@/service/emailReply/EmailReplyOutputValidator";
+import {
+  REPLY_POLICY_VERSION,
+  REPLY_VALIDATOR_VERSION,
+} from "@/service/emailReply/replyReliabilityVersions";
 import { evaluateAutoReplyPolicy } from "@/service/emailReply/EmailAutoReplyPolicyService";
 import { EmailAutoReplyRuleModule } from "@/modules/EmailAutoReplyRuleModule";
 import { isValidReplyAddress } from "@/service/emailReply/EmailReplyPolicyOrchestrator";
@@ -66,23 +70,51 @@ export class EmailReplyApprovalService {
       throw new Error("Cannot approve: current revision missing");
     }
 
+    // Re-run the deterministic output validator against the trusted revision
+    // content (do not trust persisted JSON alone) and refuse approval for any
+    // block/review finding (FR-012, P0.4). Block findings are never sendable;
+    // review findings need a resolution path that doesn't exist yet, so they
+    // also block approval in this release.
+    const validation = validateReplyOutput(revision.subject, revision.bodyText);
+    if (!validation.sendableAfterApproval) {
+      const codes = validation.findings
+        .filter((f) => f.severity !== "warning")
+        .map((f) => f.code)
+        .join(",");
+      throw new Error(
+        `Cannot approve: validation findings [${codes}] require review before sending`
+      );
+    }
+
     const message = await this.messageModule.read(draft.messageId);
     if (!message) {
       throw new Error("Cannot approve: original message not found");
     }
 
     const emailServiceId = draft.emailServiceId ?? message.emailServiceId;
-    if (draft.emailServiceId != null && draft.emailServiceId !== message.emailServiceId) {
-      throw new Error("Cannot approve: draft mailbox differs from original message");
+    if (
+      draft.emailServiceId != null &&
+      draft.emailServiceId !== message.emailServiceId
+    ) {
+      throw new Error(
+        "Cannot approve: draft mailbox differs from original message"
+      );
     }
 
-    if (!revision.recipientAddress || !isValidReplyAddress(revision.recipientAddress)) {
-      throw new Error("Cannot approve: recipient address is missing or invalid");
+    if (
+      !revision.recipientAddress ||
+      !isValidReplyAddress(revision.recipientAddress)
+    ) {
+      throw new Error(
+        "Cannot approve: recipient address is missing or invalid"
+      );
     }
 
     // Refuse approval for hard-blocked inbound messages (bounce/unsubscribe/
     // automated/blocked sender). A draft may exist, but it must not be sent.
-    const rule = await this.ruleModule.getEffectiveRule(emailServiceId).catch(() => null);
+    const rule = await this.ruleModule
+      .getEffectiveRule(emailServiceId)
+      .catch(() => null);
     const hardBlock = evaluateAutoReplyPolicy({
       message: message as never,
       classification: message.classification as never,
@@ -147,7 +179,9 @@ export class EmailReplyApprovalService {
         "Draft changed before approval could be committed",
         new Date()
       );
-      throw new Error("Cannot approve: draft changed before approval committed");
+      throw new Error(
+        "Cannot approve: draft changed before approval committed"
+      );
     }
 
     return {

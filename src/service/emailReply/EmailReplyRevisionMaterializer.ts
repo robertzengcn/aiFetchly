@@ -1,6 +1,7 @@
 import type { EmailReplyDraftModule } from "@/modules/EmailReplyDraftModule";
 import type { AppendRevisionInput } from "@/model/EmailReplyDraft.model";
 import { hashApprovalEnvelope } from "@/service/emailReply/EmailReplyRevisionHasher";
+import { validateReplyOutput } from "@/service/emailReply/EmailReplyOutputValidator";
 import {
   REPLY_POLICY_VERSION,
   REPLY_VALIDATOR_VERSION,
@@ -57,6 +58,11 @@ export async function materializeRevision1(
   revisionNumber: number;
   contentHash: string;
 }> {
+  // Run the deterministic output validator and persist machine-readable findings
+  // on the immutable revision (FR-012, P0.4). The approval service blocks any
+  // revision with a block/review finding.
+  const validation = validateReplyOutput(input.subject, input.bodyText);
+
   const appended = await draftAccess.appendRevision({
     draftId: input.draftId,
     actor: input.actor,
@@ -68,6 +74,11 @@ export async function materializeRevision1(
     contentHash: "pending-materialize",
     policyVersion: REPLY_POLICY_VERSION,
     validationVersion: REPLY_VALIDATOR_VERSION,
+    validationFindingsJson: JSON.stringify({
+      findings: validation.findings,
+      sendableAfterApproval: validation.sendableAfterApproval,
+      validatorVersion: validation.validatorVersion,
+    }),
   });
 
   const envelope: EmailReplyApprovalEnvelope = {
