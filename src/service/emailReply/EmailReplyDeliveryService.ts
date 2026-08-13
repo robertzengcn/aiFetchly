@@ -12,7 +12,11 @@ import {
   hashApprovalToken,
   hashApprovalEnvelope,
 } from "@/service/emailReply/EmailReplyRevisionHasher";
-import { REPLY_POLICY_VERSION, REPLY_VALIDATOR_VERSION } from "@/service/emailReply/replyReliabilityVersions";
+import { validateSendBinding } from "@/service/emailReply/EmailReplySendBinding";
+import {
+  REPLY_POLICY_VERSION,
+  REPLY_VALIDATOR_VERSION,
+} from "@/service/emailReply/replyReliabilityVersions";
 import type {
   EmailReplyApprovalEnvelope,
   SendApprovedReplyInput,
@@ -49,7 +53,6 @@ export class EmailReplyDeliveryService {
         "Send rejected: approval token is invalid, expired, or already used"
       );
     }
-
     const draft = await this.draftModule.readAggregate(approval.draftId);
     if (!draft) {
       throw new Error("Send rejected: draft no longer exists");
@@ -64,21 +67,12 @@ export class EmailReplyDeliveryService {
     }
 
     const emailServiceId = draft.emailServiceId ?? message.emailServiceId;
-
-    // 2. Mailbox binding: load the draft's bound mailbox. No override is allowed.
     const service = await this.serviceModule.getEmailService(emailServiceId);
     if (!service) {
       throw new Error("Send rejected: bound email service not found");
     }
-    if (service.status !== 1) {
-      throw new Error("Send rejected: bound email service is not active");
-    }
-    if (draft.emailServiceId != null && draft.emailServiceId !== message.emailServiceId) {
-      throw new Error("Send rejected: draft mailbox differs from original message");
-    }
 
-    // 3. Recompute the envelope hash from trusted state; require it to match the
-    //    approval + revision. Any content/envelope change blocks the send.
+    // Recompute the envelope hash from trusted state.
     const envelope: EmailReplyApprovalEnvelope = {
       draftId: draft.id,
       revisionId: revision.id,
@@ -93,14 +87,38 @@ export class EmailReplyDeliveryService {
       validationVersion: REPLY_VALIDATOR_VERSION,
     };
     const recomputedHash = hashApprovalEnvelope(envelope);
-    if (
-      recomputedHash !== approval.approvedHash ||
-      (revision.contentHash && recomputedHash !== revision.contentHash)
-    ) {
-      throw new Error(
-        "Send rejected: approved content no longer matches the current revision (approval stale)"
-      );
-    }
+
+    // 2. Mailbox + envelope binding (FR-017, P0.2). Pure validation; throws
+    //    SendBindingError before the atomic claim so no SMTP submission can
+    //    occur on any mismatch (wrong mailbox / sender / recipient / draft).
+    validateSendBinding({
+      requestedDraftId: input.draftId,
+      approval: {
+        draftId: approval.draftId,
+        revisionId: approval.revisionId,
+        approvedHash: approval.approvedHash,
+      },
+      draft: {
+        id: draft.id,
+        currentRevisionId: draft.currentRevisionId,
+        contentHash: draft.contentHash,
+        emailServiceId: draft.emailServiceId,
+      },
+      revision: {
+        id: revision.id,
+        senderAddress: revision.senderAddress,
+        recipientAddress: revision.recipientAddress,
+        contentHash: revision.contentHash,
+      },
+      message: {
+        id: message.id,
+        emailServiceId: message.emailServiceId,
+        fromAddress: message.fromAddress,
+        replyToAddress: message.replyToAddress,
+      },
+      service: { id: service.id, from: service.from, status: service.status },
+      recomputedHash,
+    });
 
     // 4. Send-time policy (reloaded, never cached). FR-006.
     const decision = await this.policy.evaluate({
@@ -121,7 +139,9 @@ export class EmailReplyDeliveryService {
       recomputedHash,
       approval.id
     );
-    const existing = await this.attemptModule.findByIdempotencyKey(idempotencyKey);
+    const existing = await this.attemptModule.findByIdempotencyKey(
+      idempotencyKey
+    );
     if (existing) {
       return { status: "already_processed", attemptId: existing.id };
     }
