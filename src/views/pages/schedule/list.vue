@@ -245,6 +245,7 @@ import {
   startScheduler,
   stopScheduler,
   exportSchedules as exportSchedulesApi,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   importSchedules as importSchedulesApi
 } from '@/views/api/schedule'
 import { ScheduleListResponse } from '@/entityTypes/schedule-type'
@@ -254,6 +255,7 @@ const { t } = useI18n()
 const router = useRouter()
 
 // Reactive data
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const schedules = ref<any[]>([])
 const total = ref(0)
 const currentPage = ref(0)
@@ -499,7 +501,7 @@ const exportSchedules = async () => {
       taskType: taskTypeFilter.value || undefined,
       triggerType: triggerTypeFilter.value || undefined
     }
-    const data = await exportSchedulesApi(filters)
+    await exportSchedulesApi(filters)
     // Handle file download
     showAlert(t('common.success'), t('schedule.schedules_exported_successfully'), 'success')
   } catch (error) {

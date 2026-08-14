@@ -27,7 +27,7 @@ import { useI18n } from "vue-i18n";
 import type { PluginDetail, PluginMcpServerComponent } from "@/views/api/plugins";
 import { togglePluginMcpServer } from "@/views/api/plugins";
 
-const props = defineProps<{ detail: PluginDetail }>();
+defineProps<{ detail: PluginDetail }>();
 const emit = defineEmits<{ changed: [] }>();
 const { t } = useI18n();
 

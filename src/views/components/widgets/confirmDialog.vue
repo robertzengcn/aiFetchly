@@ -1,6 +1,6 @@
 <template>
   <v-dialog
-    :modelValue="showDialog"
+    :model-value="showDialog"
     max-width="400"
     persistent
     @keydown.esc="closeDialog"

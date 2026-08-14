@@ -46,16 +46,17 @@ const loading = ref(false);
 const totalItems = ref(0);
 const selected = ref<YandexMapsHistoryRecord>();
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const headers = ref<Array<any>>([]);
 headers.value = [
   {
-    title: computed((_) => CapitalizeFirstLetter(t("common.id") || "ID")),
+    title: computed(() => CapitalizeFirstLetter(t("common.id") || "ID")),
     align: "center",
     sortable: false,
     key: "id",
   },
   {
-    title: computed((_) =>
+    title: computed(() =>
       CapitalizeFirstLetter(t("yandexMaps.query_label") || "Query")
     ),
     align: "start",
@@ -63,7 +64,7 @@ headers.value = [
     key: "query",
   },
   {
-    title: computed((_) =>
+    title: computed(() =>
       CapitalizeFirstLetter(t("yandexMaps.location_label") || "Location")
     ),
     align: "start",
@@ -71,7 +72,7 @@ headers.value = [
     key: "location",
   },
   {
-    title: computed((_) =>
+    title: computed(() =>
       CapitalizeFirstLetter(t("common.status") || "Status")
     ),
     align: "start",
@@ -79,7 +80,7 @@ headers.value = [
     key: "status",
   },
   {
-    title: computed((_) =>
+    title: computed(() =>
       CapitalizeFirstLetter(t("yandexMaps.results_count") || "Results")
     ),
     align: "center",
@@ -87,7 +88,7 @@ headers.value = [
     key: "totalResults",
   },
   {
-    title: computed((_) =>
+    title: computed(() =>
       CapitalizeFirstLetter(t("common.created_at") || "Created")
     ),
     align: "start",

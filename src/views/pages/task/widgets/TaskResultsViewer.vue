@@ -364,6 +364,7 @@ const loadResults = async () => {
   }
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const handleTableUpdate = (options: any) => {
   if (options.page !== undefined) {
     currentPage.value = options.page
@@ -404,6 +405,7 @@ const confirmExport = async () => {
   }
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const exportToCSV = async (data: any[], filename: string) => {
   const headers = selectedColumns.value
   const csvContent = [
@@ -419,11 +421,13 @@ const exportToCSV = async (data: any[], filename: string) => {
   downloadFile(csvContent, `${filename}.csv`, 'text/csv')
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const exportToJSON = async (data: any[], filename: string) => {
   const jsonContent = JSON.stringify(data, null, 2)
   downloadFile(jsonContent, `${filename}.json`, 'application/json')
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const exportToExcel = async (data: any[], filename: string) => {
   // TODO: Implement Excel export using a library like xlsx
   console.log('Excel export not implemented yet')

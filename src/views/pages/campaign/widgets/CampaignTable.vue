@@ -2,10 +2,11 @@
     <div class="search_bar mt-4 d-flex jsb">
         <div class="d-flex jsb search_tool">
             <div class="search_wrap mr-4">
-                <v-text-field rounded class="elevation-0" density="compact" variant="solo" label="Search sample"
+                <v-text-field
+rounded class="elevation-0" density="compact" variant="solo" label="Search sample"
                     append-inner-icon="mdi-magnify" single-line hide-details></v-text-field>
             </div>
-            <v-btn class="btn" variant="flat" prepend-icon="mdi-filter-variant"><span> {{t('common.more')}}</span></v-btn>
+            <v-btn class="btn" variant="flat" prepend-icon="mdi-filter-variant"><span> {{ t('common.more') }}</span></v-btn>
         </div>
         <!-- <div>
             <v-chip class="mx-2" closable color="pink"> Secondary </v-chip>
@@ -13,7 +14,8 @@
             <v-chip class="mx-2"> Status </v-chip>
         </div> -->
     </div>
-    <v-data-table-server v-model:items-per-page="itemsPerPage" :search="search" :headers="headers"
+    <v-data-table-server
+v-model:items-per-page="itemsPerPage" :search="search" :headers="headers"
         :items-length="totalItems" :items="serverItems" :loading="loading" item-value="name" @update:options="loadItems">
         <template v-slot:[`item.actions`]="{ item }">
             <v-icon
@@ -77,40 +79,41 @@ const FakeAPI = {
     }
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const headers=ref<Array<any>>([])
 headers.value = [
     {
-        title: computed(_ => t("campaign.campaignId")),
+        title: computed(() => t("campaign.campaignId")),
         align: 'start',
         sortable: false,
         key: 'CampaignId',
     },
     {
-        title: computed(_ => t("campaign.campaignName")),
+        title: computed(() => t("campaign.campaignName")),
         align: 'start',
         sortable: false,
         key: 'CampaignName',
     },
     {
-        title: computed(_ => t("campaign.campaignDescription")),
+        title: computed(() => t("campaign.campaignDescription")),
         align: 'start',
         sortable: false,
         key: 'CampaignDescription',
     },
     {
-        title: computed(_ => t("campaign.campaignStatus")),
+        title: computed(() => t("campaign.campaignStatus")),
         align: 'start',
         sortable: false,
         key: 'Disable',
         value: value=>value.Disable == 0 ? 'enable' : 'disable'
     },
     {
-        title: computed(_ => t("campaign.campaignTypes")),
+        title: computed(() => t("campaign.campaignTypes")),
         align: 'start',
         sortable: false,
         key: 'Types',
     },
-    { title: computed(_ => t("common.actions")), key: 'actions', sortable: false },
+    { title: computed(() => t("common.actions")), key: 'actions', sortable: false },
 
 ];
 const itemsPerPage = ref(10);
@@ -149,7 +152,8 @@ function loadItems({ page, itemsPerPage, sortBy }) {
 }
 // },
 // }
-const editItem = (item) => {
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+const editItem = (item: unknown) => {
  
     // else if(item.Types=="social task"){
         

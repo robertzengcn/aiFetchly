@@ -8,6 +8,7 @@
 
 import { ref } from 'vue';
 import ExtramodulesTable from '@/views/pages/extramodules/widgets/ExtramodulesTable.vue'
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const dialog = ref(false);
 
 // onMounted(() => {

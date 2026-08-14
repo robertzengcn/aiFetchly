@@ -94,24 +94,26 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import ExecutionStatusBadge from './ExecutionStatusBadge.vue'
-import { ExecutionStatus } from '@/entity/ScheduleExecutionLog.entity'
 
 // Props
 interface Props {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   executions: any[]
   loading?: boolean
 }
 
-const props = withDefaults(defineProps<Props>(), {
+withDefaults(defineProps<Props>(), {
   loading: false
 })
 
 // Emits
 const emit = defineEmits<{
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   'view-details': [execution: any]
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   'cancel-execution': [execution: any]
 }>()
 
@@ -185,10 +187,12 @@ const getRunningDuration = (startTime: string): string => {
   return formatDuration(duration)
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const viewDetails = (execution: any) => {
   emit('view-details', execution)
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const cancelExecution = (execution: any) => {
   emit('cancel-execution', execution)
 }

@@ -44,7 +44,7 @@
 //import { useI18n } from "vue-i18n";
 //const { t } = useI18n({ inheritLocale: true });
 //import {CapitalizeFirstLetter} from "@/views/utils/function"
-const props = defineProps({
+defineProps({
     showDialog: {
       type: Boolean,
       required: true

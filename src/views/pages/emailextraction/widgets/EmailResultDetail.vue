@@ -73,7 +73,7 @@ import { useRoute } from "vue-router";
 const {t} = useI18n({inheritLocale: true});
 const $route = useRoute();
 // Define props
-const props = defineProps({
+defineProps({
   isSelectedtable: {
     type: Boolean,
     
@@ -103,54 +103,55 @@ const FakeAPI = {
     }
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const headers=ref<Array<any>>([])
 let refreshInterval:ReturnType<typeof setInterval> | undefined;
 
 headers.value = [
     {
-        title: computed(_ => CapitalizeFirstLetter(t("emailextraction.id"))),
+        title: computed(() => CapitalizeFirstLetter(t("emailextraction.id"))),
         align: 'center',
         sortable: true,
         key: 'id',
         width: '5%'
     },
     {
-        title: computed(_ => CapitalizeFirstLetter(t("emailextraction.url"))),
+        title: computed(() => CapitalizeFirstLetter(t("emailextraction.url"))),
         align: 'start',
         sortable: false,
         key: 'url',
         width: '10%'
     },
     {
-        title: computed(_ => CapitalizeFirstLetter(t("common.record_time"))),
+        title: computed(() => CapitalizeFirstLetter(t("common.record_time"))),
         align: 'start',
         sortable: false,
         key: 'recordTime',
         width: '10%'
     },
     {
-        title: computed(_ => CapitalizeFirstLetter(t("emailextraction.phone"))),
+        title: computed(() => CapitalizeFirstLetter(t("emailextraction.phone"))),
         align: 'start',
         sortable: false,
         key: 'phone',
         width: '10%'
     },
     {
-        title: computed(_ => CapitalizeFirstLetter(t("emailextraction.address"))),
+        title: computed(() => CapitalizeFirstLetter(t("emailextraction.address"))),
         align: 'start',
         sortable: false,
         key: 'address',
         width: '10%'
     },
     {
-        title: computed(_ => CapitalizeFirstLetter(t("emailextraction.social_links"))),
+        title: computed(() => CapitalizeFirstLetter(t("emailextraction.social_links"))),
         align: 'start',
         sortable: false,
         key: 'socialLinks',
         width: '10%'
     },
     {
-        title: computed(_ => CapitalizeFirstLetter(t("emailextraction.ai_enrichment_status"))),
+        title: computed(() => CapitalizeFirstLetter(t("emailextraction.ai_enrichment_status"))),
         align: 'start',
         sortable: false,
         key: 'aiEnrichmentStatus',
@@ -164,6 +165,7 @@ const loading = ref(false);
 
 const totalItems = ref(0);
 const search = ref('');
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const emailresulttaskdetailId=ref(0);
 const exporting = ref(false);
 const startAutoRefresh = () => {
@@ -233,7 +235,8 @@ const openfolder=async (item)=>{
         console.error('openfolder navigation failed:', error);
     }
     }
-const downloadErrorlog=(item)=>{
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+const downloadErrorlog=()=>{
     // console.log(item)
     
         // const url = window.URL.createObjectURL(new Blob([res.data]));

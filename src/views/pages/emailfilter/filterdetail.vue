@@ -2,13 +2,15 @@
   <v-sheet class="mx-auto" rounded>
 
     <v-form ref="form" @submit.prevent="onSubmit" class="ml-2 mr-2">
-      <v-alert v-model="alert" border="start" variant="tonal" closable close-label="Close Alert" title="Information"
+      <v-alert
+v-model="alert" border="start" variant="tonal" closable close-label="Close Alert" title="Information"
         :color="alertcolor">
         {{ alertContent }}
       </v-alert>
       <v-row>
         <v-col cols="12" md="12">
-          <v-text-field ref="inputs" v-model="filteName" :label="t('emailfilter.name')" type="input"
+          <v-text-field
+ref="inputs" v-model="filteName" :label="t('emailfilter.name')" type="input"
             :hint="t('emailfilter.inputname_hint')" :readonly="loading" clearable required></v-text-field>
           <!-- <v-text-field v-model="tplcontent" :label="$t('emailmarketing.content')" type="input"
             :hint="$t('emailmarketing.title_content')" :rules="[rules.required]" required :readonly="loading"
@@ -19,7 +21,8 @@
       </v-row>
       <v-row>
         <v-col cols="12" md="12">
-          <v-text-field v-model="description" :label="t('emailfilter.description')" type="input"
+          <v-text-field
+v-model="description" :label="t('emailfilter.description')" type="input"
             :hint="t('emailfilter.description_hint')" :readonly="loading" clearable required></v-text-field>
         </v-col>
       </v-row>
@@ -27,13 +30,15 @@
         <v-col v-for="(filter, index) in filterDetailArr" :key="index" cols="12" md="12">
           <v-row>
             <v-col cols="8" md="8">
-                <v-text-field v-model="filter.content" :label="t('emailfilter.filtercontent')"
+                <v-text-field
+v-model="filter.content" :label="t('emailfilter.filtercontent')"
                 :hint="t('emailfilter.filtercontent_hint')" :readonly="loading" clearable required></v-text-field>
             </v-col>
             <v-col cols="4" md="4">
               <!--if item is last one in filterDetailArr-->
               <div class="mt-3">
-                <v-btn v-if="index === filterDetailArr.length - 1" @click="filterDetailArr.push({ content: '' })"
+                <v-btn
+v-if="index === filterDetailArr.length - 1" @click="filterDetailArr.push({ content: '' })"
                   density="compact" icon="mdi-plus">
                 </v-btn>
                 <v-btn v-if="index != 0" density="compact" icon="mdi-minus" class="ml-2" @click="removeFilter(index)">
@@ -53,7 +58,8 @@
           </v-col>
         </v-row>
       </div>
-      <v-alert v-model="alert" border="start" variant="tonal" closable close-label="Close Alert" title="Information"
+      <v-alert
+v-model="alert" border="start" variant="tonal" closable close-label="Close Alert" title="Information"
         :color="alertcolor">
         {{ alertContent }}
       </v-alert>

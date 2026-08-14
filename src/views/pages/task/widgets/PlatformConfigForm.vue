@@ -92,7 +92,7 @@
           label="Custom Headers (JSON)"
           rows="4"
           @update:model-value="updateConfig"
-          placeholder='{"User-Agent": "Custom Bot", "Accept": "text/html"}'
+          placeholder="{&quot;User-Agent&quot;: &quot;Custom Bot&quot;, &quot;Accept&quot;: &quot;text/html&quot;}"
         />
       </v-col>
     </v-row>
@@ -104,7 +104,7 @@
           label="Cookies (JSON)"
           rows="4"
           @update:model-value="updateConfig"
-          placeholder='{"session": "value", "auth": "token"}'
+          placeholder="{&quot;session&quot;: &quot;value&quot;, &quot;auth&quot;: &quot;token&quot;}"
         />
       </v-col>
     </v-row>
@@ -116,6 +116,7 @@ import { ref, watch, onMounted } from 'vue'
 
 // Props
 interface Props {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   config: any
 }
 
@@ -123,6 +124,7 @@ const props = defineProps<Props>()
 
 // Emits
 const emit = defineEmits<{
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   update: [config: any]
 }>()
 

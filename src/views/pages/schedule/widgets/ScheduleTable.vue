@@ -214,23 +214,24 @@
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import ScheduleStatusBadge from './ScheduleStatusBadge.vue'
-import { TaskType, ScheduleStatus, TriggerType } from '@/entity/ScheduleTask.entity'
+import { TaskType, TriggerType } from '@/entity/ScheduleTask.entity'
 
 // I18n
 const { t } = useI18n()
 
 // Props
 interface Props {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   schedules: any[]
   loading?: boolean
 }
 
-const props = withDefaults(defineProps<Props>(), {
+withDefaults(defineProps<Props>(), {
   loading: false
 })
 
 // Emits
-const emit = defineEmits<{
+defineEmits<{
   edit: [id: number]
   delete: [id: number]
   enable: [id: number]
