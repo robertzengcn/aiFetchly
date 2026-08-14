@@ -596,6 +596,7 @@ test/
 #### Test Frameworks
 - **Mocha**: Used for module tests (CommonJS style) - `test/modules/*.test.ts`
 - **Vitest**: Used for main process and utility code tests - `test/vitest/*/*.test.ts`
+- **Playwright**: Electron end-to-end tests - `test/e2e/specs/*.test.ts` (see "Electron E2E (Playwright)" below)
 - All test files use `.test.ts` extension
 
 #### Test Placement Guidelines
@@ -619,6 +620,21 @@ Vitest's default esbuild mode strips types without checking them, so type errors
 
 - **Behavior**: If `tsc` reports any error, the whole vitest run aborts before tests execute.
 - **To bypass** (only for tight inner loops when you know types are clean): `AIFETCHLY_SKIP_TSC=1 yarn testmain`. Do not commit code that needs this.
+
+#### Electron E2E (Playwright)
+The E2E suite launches the source-built Electron app via Playwright's `_electron.launch()` (NOT electron-forge) and drives the real renderer → preload → IPC → module → SQLite path. See `docs/prd/playwright_for_uitest.md` + `docs/prd/playwright-ui-testing-technical-design.md`.
+
+- **Build the E2E artifacts** (main + preload into `.vite/e2e/build`): `yarn build:e2e`
+- **Run the E2E suite** (Linux requires `xvfb-run`): `xvfb-run -a yarn playwright test` (or `yarn test:e2e` which builds first)
+- **HTML report**: `yarn test:e2e:report`
+
+Key invariants (enforced by the bootstrap under `AIFETCHLY_E2E=1`):
+- **Isolation**: every run gets a unique temp root under `${tmpdir}/aifetchly-e2e/...` redirected via `ELECTRON_USER_DATA_PATH` + `app.setPath("userData")`; Token/USERSDBPATH/AI-provider config never touch real data.
+- **No external network**: the main-process `E2ENetworkGuard` default-denies non-loopback fetch/http/https; the renderer route guard aborts external origins. `AppStartupPolicy` disables schedulers, WebSocket, token-refresh, protocol registration, single-instance lock, updater, dev-tools, and the global config scan.
+- **Deterministic AI**: the `FakeOpenAI` loopback server serves OpenAI-compatible SSE scenarios; the `E2EStateSeeder` seeds `local-enabled` or `hosted-disabled` state via the production `AIProviderSettingsService`. The test layer (`test/e2e/`) is compiled by Playwright and is deliberately decoupled from `src/` (relative imports only, no `@/`).
+- **E2E harness unit tests** live in `test/vitest/main/e2e/` (env validation, startup policy, network guard, fake-server scenarios parsed through the production `OpenAIStreamParser`) and run via `yarn testmain`.
+- **Test ID contract**: AI chat exposes `data-testid` landmarks (`ai-chat-root`, `ai-chat-composer`, `ai-chat-send`, `ai-chat-stop`); prefer roles/accessible names and add IDs only where those are unstable (design §14).
+
 - **To extend to other configs**: add `globalSetup: ['./test/vitest/_typecheck/globalSetup.ts']` to the config's `test` block.
 
 ## Database Schema

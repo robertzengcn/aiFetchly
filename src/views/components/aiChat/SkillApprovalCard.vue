@@ -1,5 +1,5 @@
 <template>
-  <div class="skill-approval-card">
+  <div class="skill-approval-card" data-testid="ai-chat-permission-card">
     <div class="approval-header">
       <v-icon size="small" color="warning" class="mr-2">mdi-shield-alert</v-icon>
       <span class="approval-title">{{
@@ -77,6 +77,7 @@
         variant="text"
         color="error"
         :disabled="isDisabled"
+        data-testid="ai-chat-permission-deny"
         @click="handleDeny"
       >
         {{ t('skills.approval_deny') }}
@@ -86,6 +87,7 @@
         variant="outlined"
         color="primary"
         :disabled="isDisabled"
+        data-testid="ai-chat-permission-allow-once"
         @click="handleAllowOnce"
       >
         {{ t('skills.approval_allow_once') }}
@@ -96,6 +98,7 @@
         color="primary"
         :loading="isLoading"
         :disabled="isDisabled"
+        data-testid="ai-chat-permission-always-allow"
         @click="handleAlwaysAllow"
       >
         {{ isShellCategory ? t('skills.approval_always_allow_session') : t('skills.approval_always_allow') }}

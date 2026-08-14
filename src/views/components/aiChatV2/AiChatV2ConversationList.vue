@@ -17,6 +17,7 @@
         :active="conv.conversationId === activeConversationId"
         :title="conv.title"
         :subtitle="formatTime(conv.lastMessageTimestamp)"
+        data-testid="ai-chat-conversation-item"
         @click="$emit('select', conv.conversationId)"
       />
     </v-list>

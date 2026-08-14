@@ -1,5 +1,5 @@
 <template>
-  <div class="v2-shell">
+  <div class="v2-shell" data-testid="ai-chat-root">
     <!-- Header with icon actions like old AiChatBox -->
     <div class="v2-shell__header">
       <div class="v2-shell__header-left">
