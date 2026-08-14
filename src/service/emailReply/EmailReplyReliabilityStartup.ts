@@ -24,7 +24,11 @@ export class EmailReplyReliabilityStartup {
    */
   async start(
     recoveryIntervalMs: number = DEFAULT_RECOVERY_INTERVAL_MS
-  ): Promise<{ backfill: { processed: number; skipped: number; failed: number }; recovered: number }> {
+  ): Promise<{
+    backfill: { processed: number; skipped: number; failed: number };
+    recovered: number;
+    conversations: { processed: number; skipped: number; failed: number };
+  }> {
     const backfill = await this.runBackfill();
     const recovered = await this.runRecoverySweep();
     if (this.intervalHandle) {
@@ -37,7 +41,11 @@ export class EmailReplyReliabilityStartup {
     }, recoveryIntervalMs);
     // Don't keep the process alive just for the sweep.
     this.intervalHandle.unref?.();
-    return { backfill, recovered };
+    return {
+      backfill,
+      recovered,
+      conversations: await this.runConversationBackfill(),
+    };
   }
 
   /** Stop the interval sweep (e.g. on shutdown). */
@@ -48,10 +56,39 @@ export class EmailReplyReliabilityStartup {
     }
   }
 
-  /** One-shot backfill. Never throws. */
-  async runBackfill(): Promise<{ processed: number; skipped: number; failed: number }> {
+  /** One-shot conversation backfill (P1). Never throws. */
+  async runConversationBackfill(): Promise<{
+    processed: number;
+    skipped: number;
+    failed: number;
+  }> {
     try {
-      const result = await new EmailReplyDraftBackfillService().backfillLegacyDrafts();
+      const { EmailConversationBackfillService } = await import(
+        "@/service/emailReceive/EmailConversationBackfillService"
+      );
+      const result =
+        await new EmailConversationBackfillService().backfillConversations();
+      if (result.processed > 0 || result.failed > 0) {
+        console.log(
+          `[reply-reliability] conversation backfill: processed=${result.processed} skipped=${result.skipped} failed=${result.failed}`
+        );
+      }
+      return result;
+    } catch (error) {
+      console.error("[reply-reliability] conversation backfill failed:", error);
+      return { processed: 0, skipped: 0, failed: 0 };
+    }
+  }
+
+  /** One-shot backfill. Never throws. */
+  async runBackfill(): Promise<{
+    processed: number;
+    skipped: number;
+    failed: number;
+  }> {
+    try {
+      const result =
+        await new EmailReplyDraftBackfillService().backfillLegacyDrafts();
       if (result.processed > 0 || result.failed > 0) {
         console.log(
           `[reply-reliability] backfill: processed=${result.processed} skipped=${result.skipped} failed=${result.failed}`
@@ -67,7 +104,8 @@ export class EmailReplyReliabilityStartup {
   /** One-shot stale-attempt recovery. Never throws. */
   async runRecoverySweep(): Promise<number> {
     try {
-      const result = await new EmailReplySendRecoveryService().recoverStaleAttempts();
+      const result =
+        await new EmailReplySendRecoveryService().recoverStaleAttempts();
       if (result.needsAttention) {
         // High-visibility operational signal (FR-019, §15.5).
         console.warn(

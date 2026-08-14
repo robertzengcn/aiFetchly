@@ -91,6 +91,52 @@ export class EmailReceivedMessageModel extends BaseDb {
     return await this.repository.findOne({ where: { id } });
   }
 
+  /** Associate a received message with a conversation (P1, FR-001). */
+  async setConversation(
+    messageId: number,
+    conversationId: number
+  ): Promise<void> {
+    await this.repository.update({ id: messageId }, { conversationId });
+  }
+
+  /** Messages not yet placed in a conversation (conversation backfill input). */
+  async listWithoutConversation(
+    emailServiceId?: number,
+    limit = 100000
+  ): Promise<EmailReceivedMessageEntity[]> {
+    const qb = this.repository
+      .createQueryBuilder("msg")
+      .where("msg.conversationId IS NULL")
+      .orderBy("msg.emailServiceId", "ASC")
+      .addOrderBy("msg.receivedAt", "ASC")
+      .take(limit);
+    if (emailServiceId != null) {
+      qb.andWhere("msg.emailServiceId = :emailServiceId", { emailServiceId });
+    }
+    return await qb.getMany();
+  }
+
+  /** Bulk-set normalization + conversation fields at sync time (P1/P2). */
+  async updateNormalization(
+    messageId: number,
+    fields: {
+      normalizedMessageId?: string | null;
+      normalizedInReplyTo?: string | null;
+      normalizedReferencesJson?: string | null;
+      normalizedBodyText?: string | null;
+      newContentText?: string | null;
+      autoSubmittedHeader?: string | null;
+      precedenceHeader?: string | null;
+      listIdHeader?: string | null;
+      listUnsubscribeHeader?: string | null;
+      hasAttachments?: number;
+      attachmentMetadataJson?: string | null;
+      conversationId?: number | null;
+    }
+  ): Promise<void> {
+    await this.repository.update({ id: messageId }, fields);
+  }
+
   async updateReplyStatus(
     id: number,
     status: EmailReplyStatus,
@@ -156,13 +202,16 @@ export class EmailReceivedMessageModel extends BaseDb {
     if (input.sortby?.key && input.sortby?.order) {
       const key = input.sortby.key.toLowerCase();
       const order = input.sortby.order.toLowerCase();
-      const allowKeys = ["id", "receivedat", "subject", "replystatus", "isunread"];
+      const allowKeys = [
+        "id",
+        "receivedat",
+        "subject",
+        "replystatus",
+        "isunread",
+      ];
       const allowOrders = ["asc", "desc"];
       if (allowKeys.includes(key) && allowOrders.includes(order)) {
-        qb = qb.orderBy(
-          `msg.${key}`,
-          order.toUpperCase() as "ASC" | "DESC"
-        );
+        qb = qb.orderBy(`msg.${key}`, order.toUpperCase() as "ASC" | "DESC");
       } else {
         qb = qb.orderBy("msg.receivedAt", "DESC");
       }

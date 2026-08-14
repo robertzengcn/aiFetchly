@@ -23,6 +23,12 @@ export type EmailReplySendAttemptStatus =
   | "failed"
   | "delivery_unknown";
 
+/** How confidently a message was placed in a conversation (FR-001, §7.3). */
+export type EmailConversationContextConfidence =
+  | "exact"
+  | "partial"
+  | "ambiguous";
+
 /** Policy evaluation stage. `pre_draft` gates drafting; `pre_send` gates SMTP. */
 export type EmailReplyPolicyStage = "pre_draft" | "pre_send";
 
@@ -115,8 +121,16 @@ export interface SendApprovedReplyInput {
  * never automatically retried (FR-019).
  */
 export type SendApprovedReplyOutcome =
-  | { readonly status: "sent"; readonly attemptId: number; readonly sentAt: string }
-  | { readonly status: "failed"; readonly attemptId: number; readonly error: string }
+  | {
+      readonly status: "sent";
+      readonly attemptId: number;
+      readonly sentAt: string;
+    }
+  | {
+      readonly status: "failed";
+      readonly attemptId: number;
+      readonly error: string;
+    }
   | {
       readonly status: "delivery_unknown";
       readonly attemptId: number;
