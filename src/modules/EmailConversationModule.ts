@@ -2,6 +2,7 @@ import { BaseModule } from "@/modules/baseModule";
 import { EmailConversationModel } from "@/model/EmailConversation.model";
 import { EmailConversationEntity } from "@/entity/EmailConversation.entity";
 import type { EmailConversationContextConfidence } from "@/entityTypes/emailReplyReliabilityTypes";
+import type { EmailConversationTurn } from "@/service/emailReply/EmailThreadContextBuilder";
 
 /** Business-logic facade over {@link EmailConversationModel}. */
 export class EmailConversationModule extends BaseModule {
@@ -59,9 +60,30 @@ export class EmailConversationModule extends BaseModule {
   ): Promise<EmailConversationEntity[]> {
     try {
       await this.ensureConnection();
-      return await this.conversationModel.listByEmailService(emailServiceId, limit);
+      return await this.conversationModel.listByEmailService(
+        emailServiceId,
+        limit
+      );
     } catch (error) {
       console.error("Error listing conversations:", error);
+      throw error;
+    }
+  }
+
+  async listOrderedTurns(
+    emailServiceId: number,
+    conversationId: number,
+    limit = 100
+  ): Promise<EmailConversationTurn[]> {
+    try {
+      await this.ensureConnection();
+      return await this.conversationModel.listOrderedTurns(
+        emailServiceId,
+        conversationId,
+        limit
+      );
+    } catch (error) {
+      console.error("Error listing conversation turns:", error);
       throw error;
     }
   }

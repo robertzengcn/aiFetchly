@@ -2,10 +2,13 @@ import { BaseDb } from "@/model/Basedb";
 import { Repository, IsNull, In } from "typeorm";
 import { EmailConversationEntity } from "@/entity/EmailConversation.entity";
 import { EmailReceivedMessageEntity } from "@/entity/EmailReceivedMessage.entity";
+import { EmailReplySendAttemptEntity } from "@/entity/EmailReplySendAttempt.entity";
+import { EmailReplyDraftRevisionEntity } from "@/entity/EmailReplyDraftRevision.entity";
 import { parseAndStrip } from "@/utils/parseAndStrip";
 import { emailConversationWriteSchema } from "@/schemas/entity/emailConversation";
 import { rejectDatabaseAccessFromWorker } from "@/model/_workerBoundaryGuard";
 import type { EmailConversationContextConfidence } from "@/entityTypes/emailReplyReliabilityTypes";
+import type { EmailConversationTurn } from "@/service/emailReply/EmailThreadContextBuilder";
 
 /**
  * Data access for mailbox-scoped email conversations (technical design §6.1,
@@ -165,5 +168,94 @@ export class EmailConversationModel extends BaseDb {
       order: { lastMessageAt: "DESC" },
       take: limit,
     });
+  }
+
+  /**
+   * Ordered inbound + outbound turns for one conversation (P1.3, FR-002).
+   * Inbound turns come from received messages; outbound turns come ONLY from
+   * confirmed `sent` send attempts joined to their immutable revision. Ordered
+   * by provider timestamp with a deterministic id fallback.
+   *
+   * Outbound entries missing a provider message id (historical data) are
+   * returned but flagged via providerMessageId === null — callers label them
+   * partial-confidence history (NFR-005).
+   */
+  async listOrderedTurns(
+    emailServiceId: number,
+    conversationId: number,
+    limit = 100
+  ): Promise<EmailConversationTurn[]> {
+    const msgRepo = this.sqliteDb.connection.getRepository(
+      EmailReceivedMessageEntity
+    );
+    const inbound = await msgRepo
+      .createQueryBuilder("msg")
+      .where("msg.emailServiceId = :emailServiceId", { emailServiceId })
+      .andWhere("msg.conversationId = :conversationId", { conversationId })
+      .orderBy("msg.receivedAt", "ASC")
+      .addOrderBy("msg.id", "ASC")
+      .take(limit)
+      .getMany();
+
+    const attemptRepo = this.sqliteDb.connection.getRepository(
+      EmailReplySendAttemptEntity
+    );
+    const revisionRepo = this.sqliteDb.connection.getRepository(
+      EmailReplyDraftRevisionEntity
+    );
+    const attempts = await attemptRepo
+      .createQueryBuilder("attempt")
+      .where("attempt.emailServiceId = :emailServiceId", { emailServiceId })
+      .andWhere("attempt.conversationId = :conversationId", { conversationId })
+      .andWhere("attempt.status = :status", { status: "sent" })
+      .orderBy("attempt.claimedAt", "ASC")
+      .addOrderBy("attempt.id", "ASC")
+      .take(limit)
+      .getMany();
+
+    const inboundTurns: EmailConversationTurn[] = inbound.map((m) => ({
+      sourceType: "received_message",
+      sourceId: m.id,
+      direction: "inbound",
+      timestamp: m.receivedAt,
+      sender: m.fromAddress,
+      recipients: safeParseAddresses(m.toAddressesJson),
+      subject: m.subject,
+      bodyText: m.normalizedBodyText ?? m.bodyText ?? "",
+      providerMessageId: m.normalizedMessageId ?? m.messageId ?? null,
+    }));
+
+    const outboundTurns: EmailConversationTurn[] = [];
+    for (const attempt of attempts) {
+      const revision = await revisionRepo.findOne({
+        where: { id: attempt.revisionId },
+      });
+      outboundTurns.push({
+        sourceType: "send_attempt",
+        sourceId: attempt.id,
+        direction: "outbound",
+        timestamp: attempt.claimedAt,
+        sender: attempt.senderAddress,
+        recipients: [attempt.recipientAddress],
+        subject: revision?.subject ?? "",
+        bodyText: revision?.bodyText ?? "",
+        providerMessageId: attempt.providerMessageId ?? null,
+      });
+    }
+
+    return [...inboundTurns, ...outboundTurns].sort(
+      (a, b) =>
+        a.timestamp.getTime() - b.timestamp.getTime() || a.sourceId - b.sourceId
+    );
+  }
+}
+
+function safeParseAddresses(json: string | null): string[] {
+  if (!json) return [];
+  try {
+    const parsed = JSON.parse(json);
+    return Array.isArray(parsed) ? parsed.map((s) => String(s)) : [];
+  } catch {
+    return [];
   }
 }
