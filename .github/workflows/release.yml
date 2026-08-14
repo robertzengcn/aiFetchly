@@ -534,7 +534,7 @@ jobs:
           node-version: 22.19.0
 
       - name: Download runtime archives
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: local-ai-runtimes-*
           path: runtime-assets
@@ -585,19 +585,19 @@ jobs:
           node-version: 22.19.0
 
       - name: Download Windows build
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: ${{ needs.build-windows.outputs.artifact_name }}
           path: windows-assets
 
       - name: Download macOS build
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: ${{ needs.build-macos.outputs.artifact_name }}
           path: macos-assets
 
       - name: Download local-AI-runtime release assets
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: local-ai-runtime-release-assets
           path: runtime-assets
