@@ -333,7 +333,16 @@ dotenv.config({ path: path.resolve(__dirname, `.env.${env}`) });
 
 const isProductionBuild = env === "production";
 const isWindowsStoreBuild = process.env.WINDOWS_DISTRIBUTION === "store";
+const isMacStoreBuild = process.env.MAC_DISTRIBUTION === "store";
 const shouldBuildMacDmg = process.env.MAKE_MAC_DMG !== "false";
+const macStoreEntitlementsPath = path.resolve(
+  __dirname,
+  "build/entitlements.mas.plist"
+);
+const macStoreChildEntitlementsPath = path.resolve(
+  __dirname,
+  "build/entitlements.mas.inherit.plist"
+);
 
 function resolveProductionAsarConfig() {
   return {
@@ -369,6 +378,23 @@ function requireProductionEnv(name) {
     );
   }
   return value;
+}
+
+function resolveMacStoreProvisioningProfile() {
+  const configuredPath = requireProductionEnv(
+    "MAC_STORE_PROVISIONING_PROFILE"
+  );
+  const profilePath = path.resolve(__dirname, configuredPath);
+  if (!existsSync(profilePath)) {
+    throw new Error(
+      `Mac App Store packaging requires an existing provisioning profile: ${profilePath}`
+    );
+  }
+  return profilePath;
+}
+
+function isMainApplicationBundle(filePath) {
+  return filePath.endsWith(".app") && !filePath.includes(".app/Contents/");
 }
 
 if (isProductionBuild && process.platform === "win32" && !isWindowsStoreBuild) {
@@ -488,18 +514,32 @@ function copyBuiltChildProcesses(buildPath) {
 
 module.exports = {
   packagerConfig: {
+    appBundleId: "com.aifetchly.desktop",
     icon: "./src/assets/images/icon",
     ...(isProductionBuild && process.platform === "darwin"
-      ? {
-          osxSign: {},
-          osxNotarize: {
-            appleId: requireProductionEnv("APPLE_ID"),
-            appleIdPassword: requireProductionEnv(
-              "APPLE_APP_SPECIFIC_PASSWORD"
-            ),
-            teamId: requireProductionEnv("APPLE_TEAM_ID"),
-          },
-        }
+      ? isMacStoreBuild
+        ? {
+            osxSign: {
+              identity: requireProductionEnv("MAC_STORE_SIGNING_IDENTITY"),
+              type: "development",
+              provisioningProfile: resolveMacStoreProvisioningProfile(),
+              optionsForFile: (filePath) => ({
+                entitlements: isMainApplicationBundle(filePath)
+                  ? macStoreEntitlementsPath
+                  : macStoreChildEntitlementsPath,
+              }),
+            },
+          }
+        : {
+            osxSign: {},
+            osxNotarize: {
+              appleId: requireProductionEnv("APPLE_ID"),
+              appleIdPassword: requireProductionEnv(
+                "APPLE_APP_SPECIFIC_PASSWORD"
+              ),
+              teamId: requireProductionEnv("APPLE_TEAM_ID"),
+            },
+          }
       : {}),
     ...(isProductionBuild &&
     process.platform === "win32" &&
