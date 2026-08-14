@@ -35,6 +35,7 @@
     "build-uninstaller": "cd installer-scripts && yarn install --no-lockfile && yarn build",
     "package": "electron-forge package",
     "package-mac:store": "yarn rebuild-native && cross-env NODE_ENV=production MAC_DISTRIBUTION=store electron-forge package --platform=mas",
+    "verify-mac:store": "node scripts/verify-mac-store-app.js",
     "package:ci": "npm run rebuild-native && node scripts/run-packaging-with-hang-guard.js",
     "verify-packaged-childprocess": "node scripts/verify-packaged-childprocess.js",
     "verify-forge-asar-unpack": "node scripts/verify-forge-asar-unpack.js",
