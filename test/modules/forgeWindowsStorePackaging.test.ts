@@ -33,6 +33,9 @@ interface ReleaseWorkflow {
     "build-windows"?: {
       steps?: WorkflowStep[];
     };
+    "build-macos"?: {
+      if?: string;
+    };
   };
 }
 
@@ -127,5 +130,15 @@ describe("Windows Store packaging", (): void => {
     const uploadStep = stepByName("Upload Windows installers");
     expect(uploadStep.with?.path).to.include("out/make/**/*.msix");
     expect(uploadStep.with?.path).to.include("out/make/**/*.msi");
+  });
+
+  it("builds a macOS package for master pushes", (): void => {
+    const workflow = load(
+      readFileSync(releaseWorkflowPath, "utf8")
+    ) as ReleaseWorkflow;
+
+    expect(workflow.jobs?.["build-macos"]?.if).to.equal(
+      "${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.build_mode != 'store') }}"
+    );
   });
 });

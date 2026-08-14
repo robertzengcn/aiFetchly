@@ -206,7 +206,7 @@ jobs:
           if-no-files-found: error
 
   build-macos:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.build_mode != 'store' }}
+    if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.build_mode != 'store') }}
     runs-on: macos-latest
     outputs:
       version: ${{ steps.calculate_version.outputs.version }}
