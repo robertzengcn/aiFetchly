@@ -75,6 +75,24 @@ export class EmailReceivedMessageModule extends BaseModule {
     }
   }
 
+  async updateClassificationProvenance(
+    id: number,
+    source: string,
+    version: string
+  ): Promise<void> {
+    try {
+      await this.ensureConnection();
+      await this.messageModel.updateClassificationProvenance(
+        id,
+        source,
+        version
+      );
+    } catch (error) {
+      console.error("Error updating classification provenance:", error);
+      throw error;
+    }
+  }
+
   async setConversation(
     messageId: number,
     conversationId: number

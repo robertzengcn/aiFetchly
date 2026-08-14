@@ -151,6 +151,22 @@ export class EmailReceivedMessageModel extends BaseDb {
     await this.repository.save(entity);
   }
 
+  /** Record classification provenance so deterministic results are auditable (FR-007). */
+  async updateClassificationProvenance(
+    id: number,
+    source: string,
+    version: string
+  ): Promise<void> {
+    await this.repository.update(
+      { id },
+      {
+        classificationSource: source,
+        classificationVersion: version,
+        classifiedAt: new Date(),
+      }
+    );
+  }
+
   async updateClassification(
     id: number,
     classification: EmailMessageClassification | null,

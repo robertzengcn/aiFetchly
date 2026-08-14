@@ -1,15 +1,26 @@
 import { EmailServiceModule } from "@/modules/emailServiceModule";
 import { EmailReceivedMessageModule } from "@/modules/EmailReceivedMessageModule";
 import { EmailReplyAuditLogModule } from "@/modules/EmailReplyAuditLogModule";
+import { EmailConversationModule } from "@/modules/EmailConversationModule";
 import { EmailReceivedMessageEntity } from "@/entity/EmailReceivedMessage.entity";
 import { EmailReplyAuditLogEntity } from "@/entity/EmailReplyAuditLog.entity";
-import { EmailReceiveFetchOptions, EmailReceiveConnectionConfig, EmailReceiveProtocol } from "@/entityTypes/emailReceiveTypes";
+import {
+  EmailReceiveFetchOptions,
+  EmailReceiveConnectionConfig,
+  EmailReceiveProtocol,
+} from "@/entityTypes/emailReceiveTypes";
 import { EmailReceiveClientFactory } from "@/service/emailReceive/EmailReceiveClientFactory";
 import { ParsedInboundEmail } from "@/service/emailReceive/EmailReceiveClient";
 import {
   buildSnippet,
   encodeAddresses,
 } from "@/service/emailReceive/EmailMessageParser";
+import {
+  normalizeThreadHeaders,
+  resolveConversationRoot,
+} from "@/service/emailReceive/EmailThreadResolver";
+import { normalizeEmailBody } from "@/service/emailReceive/EmailBodyNormalizationService";
+import { classifyDeterministic } from "@/service/emailReply/EmailMessageClassificationService";
 
 /** Result of a manual or AI-triggered sync. */
 export interface EmailReceiveSyncResult {
@@ -35,10 +46,12 @@ export class EmailReceiveSyncService {
   private serviceModule: EmailServiceModule;
   private messageModule: EmailReceivedMessageModule;
   private auditModule: EmailReplyAuditLogModule;
+  private conversationModule: EmailConversationModule;
 
   constructor() {
     this.serviceModule = new EmailServiceModule();
     this.messageModule = new EmailReceivedMessageModule();
+    this.conversationModule = new EmailConversationModule();
     this.auditModule = new EmailReplyAuditLogModule();
   }
 
@@ -66,13 +79,18 @@ export class EmailReceiveSyncService {
         const storedConfig =
           settings.password && settings.password.length > 0
             ? null
-            : await this.serviceModule.getEmailServiceReceiveConfig(emailServiceId);
+            : await this.serviceModule.getEmailServiceReceiveConfig(
+                emailServiceId
+              );
         const password =
           settings.password && settings.password.length > 0
             ? settings.password
             : storedConfig?.password ?? "";
         if (!password) {
-          return { success: false, error: "Receive is not configured for this service." };
+          return {
+            success: false,
+            error: "Receive is not configured for this service.",
+          };
         }
         config = {
           emailServiceId,
@@ -85,17 +103,24 @@ export class EmailReceiveSyncService {
           folder: settings.folder,
         };
       } else {
-        config = await this.serviceModule.getEmailServiceReceiveConfig(emailServiceId);
+        config = await this.serviceModule.getEmailServiceReceiveConfig(
+          emailServiceId
+        );
       }
       if (!config) {
-        return { success: false, error: "Receive is not configured for this service." };
+        return {
+          success: false,
+          error: "Receive is not configured for this service.",
+        };
       }
       const normalizedConfig = normalizeReceiveConnectionConfig(config);
       const validationError = validateReceiveEndpointConfig(normalizedConfig);
       if (validationError) {
         return { success: false, error: validationError };
       }
-      const client = EmailReceiveClientFactory.createClient(normalizedConfig.protocol);
+      const client = EmailReceiveClientFactory.createClient(
+        normalizedConfig.protocol
+      );
       await client.testConnection(normalizedConfig);
       return { success: true, error: null };
     } catch (error) {
@@ -118,7 +143,9 @@ export class EmailReceiveSyncService {
       since: options.since,
     };
 
-    const config = await this.serviceModule.getEmailServiceReceiveConfig(emailServiceId);
+    const config = await this.serviceModule.getEmailServiceReceiveConfig(
+      emailServiceId
+    );
     if (!config) {
       throw new Error("Receive is not configured or enabled for this service.");
     }
@@ -128,14 +155,26 @@ export class EmailReceiveSyncService {
     if (validationError) {
       throw new Error(validationError);
     }
-    const client = EmailReceiveClientFactory.createClient(normalizedConfig.protocol);
+    const client = EmailReceiveClientFactory.createClient(
+      normalizedConfig.protocol
+    );
     let parsed: ParsedInboundEmail[];
     try {
       parsed = await client.fetchMessages(normalizedConfig, fetchOptions);
     } catch (error) {
       const message = sanitizeError(error);
-      await this.serviceModule.updateReceiveSyncState(emailServiceId, new Date(), message);
-      await this.writeAudit(emailServiceId, null, "message_fetched", "system", message);
+      await this.serviceModule.updateReceiveSyncState(
+        emailServiceId,
+        new Date(),
+        message
+      );
+      await this.writeAudit(
+        emailServiceId,
+        null,
+        "message_fetched",
+        "system",
+        message
+      );
       throw error;
     }
 
@@ -144,6 +183,7 @@ export class EmailReceiveSyncService {
       const entity = this.toEntity(emailServiceId, p);
       const saved = await this.messageModule.upsertByProviderUid(entity);
       messageIds.push(saved.id);
+      await this.normalizeAndAssociate(emailServiceId, p, saved.id);
       await this.writeAudit(
         emailServiceId,
         saved.id,
@@ -153,7 +193,11 @@ export class EmailReceiveSyncService {
       );
     }
 
-    await this.serviceModule.updateReceiveSyncState(emailServiceId, new Date(), null);
+    await this.serviceModule.updateReceiveSyncState(
+      emailServiceId,
+      new Date(),
+      null
+    );
 
     return {
       emailServiceId,
@@ -178,7 +222,8 @@ export class EmailReceiveSyncService {
     entity.fromName = p.fromName;
     entity.replyToAddress = p.replyToAddress;
     entity.toAddressesJson = encodeAddresses(p.toAddresses);
-    entity.ccAddressesJson = p.ccAddresses.length > 0 ? encodeAddresses(p.ccAddresses) : null;
+    entity.ccAddressesJson =
+      p.ccAddresses.length > 0 ? encodeAddresses(p.ccAddresses) : null;
     entity.subject = p.subject;
     entity.bodyText = p.bodyText;
     entity.bodyHtmlSanitized = p.bodyHtmlSanitized;
@@ -188,6 +233,94 @@ export class EmailReceiveSyncService {
     entity.isUnread = p.isUnread ? 1 : 0;
     entity.replyStatus = p.isAnswered ? "sent" : "not_started";
     return entity;
+  }
+
+  /**
+   * Persist-time normalization + classification + conversation resolution
+   * (P1/P2, FR-001/007/020). Best-effort per message: a normalization failure
+   * must never abort a receive sync — the raw fields are already stored.
+   */
+  private async normalizeAndAssociate(
+    emailServiceId: number,
+    p: ParsedInboundEmail,
+    savedMessageId: number
+  ): Promise<void> {
+    try {
+      const headers = normalizeThreadHeaders({
+        messageId: p.messageId,
+        inReplyTo: p.inReplyTo,
+        references: p.referencesHeader,
+      });
+      const resolution = resolveConversationRoot({
+        headers,
+        providerUid: p.providerUid,
+      });
+      const body = normalizeEmailBody({
+        plainText: p.bodyText,
+        sanitizedHtml: p.bodyHtmlSanitized,
+      });
+      const classification = classifyDeterministic({
+        fromAddress: p.fromAddress,
+        subject: p.subject,
+        bodyText: body.newContentText || body.safeText,
+        replyToAddress: p.replyToAddress,
+        autoSubmittedHeader: p.autoSubmitted,
+        precedenceHeader: p.precedence,
+        listIdHeader: p.listIdHeader,
+        listUnsubscribeHeader: p.listUnsubscribeHeader,
+      });
+
+      const conversation = await this.conversationModule.resolveOrCreate({
+        emailServiceId,
+        rootKey: resolution.rootKey,
+        matchCandidates: resolution.matchCandidates,
+        confidence: resolution.confidence,
+        ambiguityReason: resolution.ambiguityReason,
+        displaySubject: p.subject,
+        lastMessageAt: p.receivedAt,
+      });
+
+      await this.messageModule.updateNormalization(savedMessageId, {
+        normalizedMessageId: headers.messageId,
+        normalizedInReplyTo: headers.inReplyTo,
+        normalizedReferencesJson: JSON.stringify(headers.references),
+        normalizedBodyText: body.safeText,
+        newContentText: body.newContentText,
+        autoSubmittedHeader: p.autoSubmitted ?? null,
+        precedenceHeader: p.precedence ?? null,
+        listIdHeader: p.listIdHeader ?? null,
+        listUnsubscribeHeader: p.listUnsubscribeHeader ?? null,
+        hasAttachments: p.attachments?.length ? 1 : 0,
+        attachmentMetadataJson: p.attachments?.length
+          ? JSON.stringify(
+              p.attachments.map((a) => ({
+                filename: String(a.filename ?? "").slice(0, 255),
+                contentType: String(a.contentType ?? "").slice(0, 255),
+                size: Number(a.size ?? 0),
+              }))
+            )
+          : null,
+        conversationId: conversation.id,
+      });
+
+      // Persist the deterministic classification with provenance so draft
+      // generation can never silently overwrite it (FR-007).
+      await this.messageModule.updateClassification(
+        savedMessageId,
+        classification.classification,
+        classification.confidence
+      );
+      await this.messageModule.updateClassificationProvenance(
+        savedMessageId,
+        classification.source,
+        classification.version
+      );
+    } catch (error) {
+      console.error(
+        `Normalization/association failed for message ${savedMessageId}:`,
+        error
+      );
+    }
   }
 
   private async writeAudit(
@@ -221,7 +354,9 @@ export function normalizeReceiveConnectionConfig(
   config: EmailReceiveConnectionConfig
 ): EmailReceiveConnectionConfig {
   const implicitTlsPort =
-    config.protocol === "pop3" ? POP3_IMPLICIT_TLS_PORT : IMAP_IMPLICIT_TLS_PORT;
+    config.protocol === "pop3"
+      ? POP3_IMPLICIT_TLS_PORT
+      : IMAP_IMPLICIT_TLS_PORT;
 
   if (config.port !== implicitTlsPort || config.ssl) {
     return config;
@@ -244,11 +379,17 @@ export function validateReceiveEndpointConfig(
     );
   }
 
-  if (config.protocol === "imap" && config.host.toLowerCase().startsWith("smtp.")) {
+  if (
+    config.protocol === "imap" &&
+    config.host.toLowerCase().startsWith("smtp.")
+  ) {
     return "SMTP host is configured for IMAP receive. Use an IMAP host, such as imap.qiye.aliyun.com for Aliyun.";
   }
 
-  if (config.protocol === "pop3" && config.host.toLowerCase().startsWith("smtp.")) {
+  if (
+    config.protocol === "pop3" &&
+    config.host.toLowerCase().startsWith("smtp.")
+  ) {
     return "SMTP host is configured for POP3 receive. Use a POP3 host, such as pop.qiye.aliyun.com for Aliyun.";
   }
 
