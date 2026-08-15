@@ -599,6 +599,9 @@ module.exports = {
             platforms: ["win32"],
             config: {
               sign: false,
+              // Build with the current Windows SDK while retaining compatibility
+              // with the oldest Windows release accepted by Partner Center.
+              windowsKitVersion: "10.0.26100.0",
               manifestVariables: {
                 packageIdentity: requireProductionEnv(
                   "WINDOWS_STORE_PACKAGE_IDENTITY"
@@ -610,6 +613,8 @@ module.exports = {
                 packageVersion: `${require("./package.json").version}.0`,
                 packageDisplayName: "AiFetchly",
                 appDisplayName: "AiFetchly",
+                packageMinOSVersion: "10.0.17763.0",
+                packageMaxOSVersionTested: "10.0.26100.0",
               },
             },
           },

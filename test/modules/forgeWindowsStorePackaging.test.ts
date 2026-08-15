@@ -7,6 +7,7 @@ interface ForgeMaker {
   name: string;
   config?: {
     sign?: boolean;
+    windowsKitVersion?: string;
     manifestVariables?: Record<string, string>;
   };
 }
@@ -73,10 +74,13 @@ describe("Windows Store packaging", (): void => {
 
     expect(maker).to.not.equal(undefined);
     expect(maker?.config?.sign).to.equal(false);
+    expect(maker?.config?.windowsKitVersion).to.equal("10.0.26100.0");
     expect(maker?.config?.manifestVariables).to.include({
       packageIdentity: "12345RobertZeng.AiFetchly",
       publisher: "CN=STORE-PUBLISHER-ID",
       publisherDisplayName: "Robert Zeng",
+      packageMinOSVersion: "10.0.17763.0",
+      packageMaxOSVersionTested: "10.0.26100.0",
     });
   });
 
