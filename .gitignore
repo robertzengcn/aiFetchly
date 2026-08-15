@@ -158,3 +158,6 @@ hyperframes-*
 .test-userData/plugins/installed/my-plugin/agents/optimizer.md
 .test-userData/plugins/installed/my-plugin/agents/reviewer.md
 .test-userData/*
+playwright-report/index.html
+test-results/playwright-results.json
+test-results/playwright/.last-run.json
