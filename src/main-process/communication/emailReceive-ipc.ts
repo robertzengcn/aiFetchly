@@ -232,6 +232,16 @@ export function registerEmailReceiveIpcHandlers(): void {
       );
       entity.discloseAutomation = input.discloseAutomation ?? 0;
       const saved = await module.upsertForEmailService(entity);
+      // FR-013: changing the identity invalidates every not-yet-sent draft for
+      // the mailbox (they were written in the old voice; re-review required).
+      try {
+        await new EmailReplyDraftModule().invalidateUnsentDraftsForMailbox(
+          input.emailServiceId,
+          "Identity profile changed"
+        );
+      } catch (e) {
+        console.error("Failed to invalidate drafts after identity change:", e);
+      }
       return toIdentityProfileDto(saved);
     }
   );

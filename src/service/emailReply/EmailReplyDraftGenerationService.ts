@@ -115,10 +115,15 @@ export class EmailReplyDraftGenerationService {
       };
     }
 
-    // 3. Load owner-voice profile.
+    // 3. Load owner-voice profile + derive its version stamp (FR-013): id@updatedAt
+    //    identifies the exact profile content used; the identity-update handler
+    //    invalidates unsent drafts when this changes.
     const profile = await this.profileModule.getByEmailServiceId(
       message.emailServiceId
     );
+    const identityProfileVersion = profile
+      ? `${profile.id}@${new Date(profile.updatedAt ?? 0).getTime()}`
+      : null;
 
     // 4. Retrieve knowledge-library context (never throws).
     const knowledge = await retrieveReplyKnowledge({
@@ -308,6 +313,7 @@ export class EmailReplyDraftGenerationService {
           originalMessageId: message.id,
           generationMetadataJson: JSON.stringify({
             promptVersion: REPLY_PROMPT_VERSION,
+            identityProfileVersion,
             knowledgeScopeVersion: knowledge.scopeVersion,
             knowledgeAbstained: knowledge.abstained,
             knowledgeOutcome: knowledge.relevance?.outcome ?? null,
