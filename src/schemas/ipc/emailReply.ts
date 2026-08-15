@@ -96,6 +96,24 @@ export const emailReplyDeliveryReconcileInputSchema = lazySchema(() =>
   })
 );
 
+/** Read the knowledge scope for one mailbox (FR-008, P3.1). */
+export const emailReplyKnowledgeScopeGetInputSchema = lazySchema(() =>
+  z.strictObject({
+    emailServiceId: z.number().int().positive(),
+  })
+);
+
+/** Upsert the knowledge scope for one mailbox (FR-008, P3.1). */
+export const emailReplyKnowledgeScopeUpdateInputSchema = lazySchema(() =>
+  z.strictObject({
+    emailServiceId: z.number().int().positive(),
+    documentIds: z.array(z.number().int().positive()).max(2000),
+    tags: z.array(z.string().min(1).max(100)).max(100),
+    allowAllDocuments: z.boolean(),
+    excludeInactiveDocuments: z.boolean(),
+  })
+);
+
 /** AI auto-reply audit list. */
 export const emailAutoReplyAuditListInputSchema = lazySchema(() =>
   z.strictObject({

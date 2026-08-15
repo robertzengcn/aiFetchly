@@ -17,6 +17,8 @@ import {
   EMAIL_REPLY_DRAFT_APPROVE,
   EMAIL_REPLY_SEND_ATTEMPT_DETAIL,
   EMAIL_REPLY_DELIVERY_RECONCILE,
+  EMAIL_REPLY_KNOWLEDGE_SCOPE_GET,
+  EMAIL_REPLY_KNOWLEDGE_SCOPE_UPDATE,
   EMAIL_AUTO_REPLY_AUDIT_LIST,
   EMAIL_AUTO_REPLY_AUDIT_DETAIL,
 } from "@/config/channellist";
@@ -37,6 +39,8 @@ import {
   emailReplyDraftApproveInputSchema,
   emailReplySendAttemptDetailInputSchema,
   emailReplyDeliveryReconcileInputSchema,
+  emailReplyKnowledgeScopeGetInputSchema,
+  emailReplyKnowledgeScopeUpdateInputSchema,
   emailAutoReplyAuditListInputSchema,
   emailAutoReplyAuditDetailInputSchema,
 } from "@/schemas/ipc/emailReply";
@@ -472,6 +476,72 @@ export function registerEmailReceiveIpcHandlers(): void {
         });
       }
       return await svc.recoverStaleAttempts(input.ageMs);
+    }
+  );
+
+  // ---- Knowledge scope settings (FR-008, P3.1) ----
+  registerValidatedHandler(
+    EMAIL_REPLY_KNOWLEDGE_SCOPE_GET,
+    emailReplyKnowledgeScopeGetInputSchema,
+    async (input) => {
+      const { EmailReplyKnowledgeScopeModule } = await import(
+        "@/modules/EmailReplyKnowledgeScopeModule"
+      );
+      const scope =
+        await new EmailReplyKnowledgeScopeModule().getByEmailServiceId(
+          input.emailServiceId
+        );
+      // Defaults when unset: legacy behavior (search all eligible docs).
+      let documentIds: number[] = [];
+      let tags: string[] = [];
+      if (scope) {
+        try {
+          documentIds = JSON.parse(scope.documentIdsJson) as number[];
+        } catch {
+          documentIds = [];
+        }
+        try {
+          tags = JSON.parse(scope.tagsJson) as string[];
+        } catch {
+          tags = [];
+        }
+      }
+      return {
+        emailServiceId: input.emailServiceId,
+        version: scope?.version ?? 0,
+        documentIds,
+        tags,
+        allowAllDocuments: scope ? scope.allowAllDocuments === 1 : true,
+        excludeInactiveDocuments: scope
+          ? scope.excludeInactiveDocuments === 1
+          : true,
+      };
+    }
+  );
+
+  // ---- Knowledge scope update: upsert + invalidate unsent drafts (FR-008) ----
+  registerValidatedHandler(
+    EMAIL_REPLY_KNOWLEDGE_SCOPE_UPDATE,
+    emailReplyKnowledgeScopeUpdateInputSchema,
+    async (input) => {
+      const { EmailReplyKnowledgeScopeModule } = await import(
+        "@/modules/EmailReplyKnowledgeScopeModule"
+      );
+      const saved = await new EmailReplyKnowledgeScopeModule().upsert({
+        emailServiceId: input.emailServiceId,
+        documentIds: input.documentIds,
+        tags: input.tags,
+        allowAllDocuments: input.allowAllDocuments,
+        excludeInactiveDocuments: input.excludeInactiveDocuments,
+      });
+      // Changing the scope invalidates every not-yet-sent draft for the mailbox
+      // (FR-008): approved drafts return to 'draft' and approvals are consumed.
+      const invalidated =
+        await new EmailReplyDraftModule().invalidateUnsentDraftsForMailbox(
+          input.emailServiceId,
+          `Knowledge scope changed (v${saved.version})`
+        );
+      return { version: saved.version, invalidatedDrafts: invalidated };
     }
   );
 }

@@ -502,6 +502,46 @@ export class EmailReplyDraftModel extends BaseDb {
   }
 
   /**
+   * Invalidate every not-yet-sent draft for a mailbox after its knowledge scope
+   * or identity profile changed (FR-008/FR-013): approved drafts return to
+   * 'draft', active approvals are invalidated, and approvalInvalidatedAt is
+   * stamped so the UI visibly clears approval state. Terminal states (sent /
+   * discarded / delivery_unknown) are untouched.
+   */
+  async invalidateUnsentDraftsForMailbox(
+    emailServiceId: number,
+    reason: string
+  ): Promise<number> {
+    return await runReplyTxn(this.sqliteDb, async (manager) => {
+      const draftRepo = manager.getRepository(EmailReplyDraftEntity);
+      const approvalRepo = manager.getRepository(EmailReplyApprovalEntity);
+      const now = new Date();
+
+      const approved = await draftRepo.find({
+        where: { emailServiceId, status: "approved" as EmailReplyDraftStatus },
+      });
+      if (approved.length > 0) {
+        await draftRepo.update(
+          { emailServiceId, status: "approved" as EmailReplyDraftStatus },
+          { status: "draft", approvalInvalidatedAt: now }
+        );
+        for (const d of approved) {
+          await approvalRepo.update(
+            { draftId: d.id, invalidatedAt: IsNull() as never },
+            { invalidatedAt: now, invalidationReason: reason }
+          );
+        }
+      }
+      // Plain 'draft' rows get the stamp too so the UI can show a stale marker.
+      await draftRepo.update(
+        { emailServiceId, status: "draft" as EmailReplyDraftStatus },
+        { approvalInvalidatedAt: now }
+      );
+      return approved.length;
+    });
+  }
+
+  /**
    * Operator-driven manual reconciliation of an ambiguous delivery (P0.6,
    * FR-019, technical design §16). UNCONDITIONAL transactional update (the
    * operator is the trusted authority here, unlike the conditional auto-finalize):

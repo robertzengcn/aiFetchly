@@ -89,6 +89,10 @@ export const EMAIL_REPLY_DRAFT_APPROVE = "email:reply:draft:approve";
 export const EMAIL_REPLY_SEND_ATTEMPT_DETAIL =
   "email:reply:send:attempt:detail";
 export const EMAIL_REPLY_DELIVERY_RECONCILE = "email:reply:delivery:reconcile";
+export const EMAIL_REPLY_KNOWLEDGE_SCOPE_GET =
+  "email:reply:knowledge:scope:get";
+export const EMAIL_REPLY_KNOWLEDGE_SCOPE_UPDATE =
+  "email:reply:knowledge:scope:update";
 export const EMAIL_AUTO_REPLY_AUDIT_LIST = "email:autoreply:audit:list";
 export const EMAIL_AUTO_REPLY_AUDIT_DETAIL = "email:autoreply:audit:detail";
 export const SOCIALACCOUNTlIST = "socialaccount:list";

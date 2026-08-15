@@ -225,6 +225,22 @@ export class EmailReplyDraftModule extends BaseModule {
     }
   }
 
+  async invalidateUnsentDraftsForMailbox(
+    emailServiceId: number,
+    reason: string
+  ): Promise<number> {
+    try {
+      await this.ensureConnection();
+      return await this.draftModel.invalidateUnsentDraftsForMailbox(
+        emailServiceId,
+        reason
+      );
+    } catch (error) {
+      console.error("Error invalidating unsent drafts for mailbox:", error);
+      throw error;
+    }
+  }
+
   async reconcileDelivery(input: {
     attemptId: number;
     draftId: number;

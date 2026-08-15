@@ -10,6 +10,8 @@ import {
   EMAIL_REPLY_DRAFT_APPROVE,
   EMAIL_REPLY_SEND_ATTEMPT_DETAIL,
   EMAIL_REPLY_DELIVERY_RECONCILE,
+  EMAIL_REPLY_KNOWLEDGE_SCOPE_GET,
+  EMAIL_REPLY_KNOWLEDGE_SCOPE_UPDATE,
   EMAIL_AUTO_REPLY_AUDIT_LIST,
   EMAIL_AUTO_REPLY_AUDIT_DETAIL,
 } from "@/config/channellist";
@@ -132,6 +134,39 @@ export async function reconcileEmailReplyDelivery(
   ageMs?: number
 ): Promise<{ recovered: number; needsAttention: boolean }> {
   return await windowInvoke(EMAIL_REPLY_DELIVERY_RECONCILE, { ageMs });
+}
+
+// ---- Knowledge scope settings (FR-008) ----
+
+export interface ReplyKnowledgeScopeDto {
+  emailServiceId: number;
+  version: number;
+  documentIds: number[];
+  tags: string[];
+  allowAllDocuments: boolean;
+  excludeInactiveDocuments: boolean;
+}
+
+export async function getReplyKnowledgeScope(
+  emailServiceId: number
+): Promise<ReplyKnowledgeScopeDto> {
+  return await windowInvoke(EMAIL_REPLY_KNOWLEDGE_SCOPE_GET, {
+    emailServiceId,
+  });
+}
+
+/**
+ * Update the mailbox knowledge scope. Changing the scope invalidates every
+ * not-yet-sent draft for the mailbox (they must be re-reviewed/re-approved).
+ */
+export async function updateReplyKnowledgeScope(input: {
+  emailServiceId: number;
+  documentIds: number[];
+  tags: string[];
+  allowAllDocuments: boolean;
+  excludeInactiveDocuments: boolean;
+}): Promise<{ version: number; invalidatedDrafts: number }> {
+  return await windowInvoke(EMAIL_REPLY_KNOWLEDGE_SCOPE_UPDATE, input);
 }
 
 // ---- AI auto-reply audit ----
