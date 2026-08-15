@@ -30,17 +30,11 @@ import { EmailReplyPolicyOrchestrator } from "@/service/emailReply/EmailReplyPol
 import { correlationIdForMessage } from "@/service/emailReply/EmailReplyCorrelation";
 import { EmailConversationContextService } from "@/service/emailReply/EmailConversationContextService";
 import { renderConversationContext } from "@/service/emailReply/EmailThreadContextBuilder";
-
-const VALID_CLASSIFICATIONS: ReadonlySet<string> = new Set([
-  "interested",
-  "not_interested",
-  "unsubscribe",
-  "bounce",
-  "auto_reply",
-  "support_request",
-  "needs_human_review",
-  "unknown",
-]);
+import {
+  parseStrictGeneratedReply,
+  buildCorrectionPrompt,
+  type GeneratedEmailReply,
+} from "@/service/emailReply/EmailReplyGenerationSchema";
 
 /** Input to {@link EmailReplyDraftGenerationService.createDraft}. */
 export interface CreateDraftInput {
@@ -182,14 +176,39 @@ export class EmailReplyDraftGenerationService {
       conversationSection,
     });
 
-    let generated: {
-      subject: string;
-      bodyText: string;
-      classification: string;
-      confidence: number;
-    };
+    // 6. Call the LLM and STRICTLY validate (FR-011): at most one bounded
+    //    regeneration carrying only validation codes; a second failure routes
+    //    to needs_human_review and persists NO sendable prose.
+    let generated: GeneratedEmailReply;
     try {
-      generated = await this.callLlm(systemMsg, userMsg);
+      const first = parseStrictGeneratedReply(
+        await this.callLlmRaw(systemMsg, userMsg)
+      );
+      if (first.ok) {
+        generated = first.value;
+      } else {
+        const second = parseStrictGeneratedReply(
+          await this.callLlmRaw(systemMsg, {
+            role: "user",
+            content: buildCorrectionPrompt(first.codes),
+          })
+        );
+        if (!second.ok) {
+          const allCodes = [...first.codes, ...second.codes];
+          await this.recordFailure(
+            message.emailServiceId,
+            message.id,
+            `[needs_human_review] generation failed validation twice: ${allCodes.join(
+              ","
+            )}`
+          );
+          return {
+            success: false,
+            error: `[needs_human_review] Generation failed validation twice (${allCodes.length} codes); no draft persisted`,
+          };
+        }
+        generated = second.value;
+      }
     } catch (error) {
       const errMsg = error instanceof Error ? error.message : String(error);
       await this.recordFailure(
@@ -200,14 +219,14 @@ export class EmailReplyDraftGenerationService {
       return { success: false, error: errMsg };
     }
 
-    // 6. Validate output.
+    // 6b. Validate output.
     const warnings: string[] = [];
     if (knowledge.warning) warnings.push(knowledge.warning);
 
     const subject = (generated.subject || `Re: ${message.subject}`)
       .trim()
       .slice(0, 998);
-    const bodyText = (generated.bodyText || "").trim();
+    const bodyText = generated.bodyText.trim();
     if (!bodyText) {
       warnings.push("Generated body was empty; draft not persisted.");
       await this.recordFailure(
@@ -229,9 +248,10 @@ export class EmailReplyDraftGenerationService {
       warnings.push(`Possible prompt leakage detected: "${leakage}"`);
     }
 
-    const classification = VALID_CLASSIFICATIONS.has(generated.classification)
-      ? (generated.classification as EmailMessageClassification)
-      : "unknown";
+    // The strict schema guarantees a valid enum + finite 0..1 confidence, so no
+    // silent coercion is needed (FR-011); the model's suggestion is metadata
+    // only and never overwrites a deterministic classification (FR-007).
+    const classification = generated.intentSuggestion;
     const confidence = clamp(Number(generated.confidence), 0, 1);
 
     // 7. Persist draft.
@@ -341,23 +361,17 @@ export class EmailReplyDraftGenerationService {
   }
 
   /** Call the LLM and parse the JSON reply. Overrideable shape for tests. */
-  private async callLlm(
+  private async callLlmRaw(
     systemMsg: OpenAIChatMessage,
     userMsg: OpenAIChatMessage
-  ): Promise<{
-    subject: string;
-    bodyText: string;
-    classification: string;
-    confidence: number;
-  }> {
+  ): Promise<string> {
     const api = new AiChatApi();
     const resp = await api.openAIChatCompletion({
       messages: [systemMsg, userMsg],
       temperature: 0.4,
       max_tokens: 700,
     });
-    const raw = openAIContentToString(resp.choices?.[0]?.message?.content);
-    return parseReplyJson(raw);
+    return openAIContentToString(resp.choices?.[0]?.message?.content);
   }
 
   private async writeReplyAudit(
