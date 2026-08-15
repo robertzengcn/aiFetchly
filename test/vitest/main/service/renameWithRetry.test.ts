@@ -10,19 +10,19 @@ function errWithCode(code: string): NodeJS.ErrnoException {
 describe("renameWithRetry", () => {
   test("succeeds on the first attempt without sleeping", async () => {
     const rename = vi.fn(async () => undefined);
-    const sleep = vi.fn<[ms: number], Promise<void>>(async () => undefined);
+    const sleep = vi.fn<(...args: [ms: number]) => Promise<void>>(async () => undefined);
     await renameWithRetry("a", "b", { rename, sleep, maxAttempts: 5 });
     expect(rename).toHaveBeenCalledTimes(1);
     expect(sleep).not.toHaveBeenCalled();
   });
 
   test("retries transient EPERM then succeeds", async () => {
-    const rename = vi.fn<[string, string], Promise<void>>();
+    const rename = vi.fn<(...args: [string, string]) => Promise<void>>();
     rename
       .mockRejectedValueOnce(errWithCode("EPERM"))
       .mockRejectedValueOnce(errWithCode("ENOTEMPTY"))
       .mockResolvedValueOnce(undefined);
-    const sleep = vi.fn<[ms: number], Promise<void>>(async () => undefined);
+    const sleep = vi.fn<(...args: [ms: number]) => Promise<void>>(async () => undefined);
     await renameWithRetry("a", "b", { rename, sleep, maxAttempts: 5 });
     expect(rename).toHaveBeenCalledTimes(3);
     expect(sleep).toHaveBeenCalledTimes(2);
@@ -35,7 +35,7 @@ describe("renameWithRetry", () => {
     const rename = vi.fn(async () => {
       throw errWithCode("ENOENT");
     });
-    const sleep = vi.fn<[ms: number], Promise<void>>(async () => undefined);
+    const sleep = vi.fn<(...args: [ms: number]) => Promise<void>>(async () => undefined);
     await expect(
       renameWithRetry("a", "b", { rename, sleep, maxAttempts: 5 })
     ).rejects.toThrow("mock ENOENT");
@@ -47,7 +47,7 @@ describe("renameWithRetry", () => {
     const rename = vi.fn(async () => {
       throw errWithCode("EACCES");
     });
-    const sleep = vi.fn<[ms: number], Promise<void>>(async () => undefined);
+    const sleep = vi.fn<(...args: [ms: number]) => Promise<void>>(async () => undefined);
     await expect(
       renameWithRetry("a", "b", { rename, sleep, maxAttempts: 3 })
     ).rejects.toThrow("mock EACCES");

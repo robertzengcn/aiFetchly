@@ -214,7 +214,6 @@ v-if="mainStore.isMobile" variant="text" icon="mdi-menu"
 </template>
 <script setup lang="ts">
 import logo from '@/assets/images/icon.png';
-import wxtx from '@/assets/wx.png';
 import { RouterView, type RouteRecordRaw, useRouter } from 'vue-router';
 import Breadcrumbs from '@/views/components/breadcrumbs/breadcrumbs.vue';
 import { reactive, computed, watch } from 'vue';
@@ -266,6 +265,7 @@ interface AiOpenConversationRequest {
   conversationId: string;
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const dialogStatus=ref(false)
 const noticeMessage=ref('')
 const noticeType=ref<NoticeType>('info')
@@ -609,7 +609,9 @@ const copyActiveArtifactHtml = (): void => {
     void copyArtifactHtml(activeArtifact.value.id);
   }
 };
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const showWarningMessage = (content: string) => addMessage('warning', content);
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const showInfoMessage = (content: string) => addMessage('info', content);
 
 const initializeSavedLanguage = async (): Promise<void> => {

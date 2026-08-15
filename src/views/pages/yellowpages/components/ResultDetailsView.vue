@@ -351,7 +351,7 @@ interface Props {
 const props = defineProps<Props>()
 
 // Emits
-const emit = defineEmits<{
+defineEmits<{
   'close': []
 }>()
 
@@ -368,6 +368,7 @@ const hasAdditionalInfo = computed(() => {
 })
 
 // Methods
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const parseCategories = (categories: string): string[] => {
   try {
     const parsed = JSON.parse(categories)
@@ -377,6 +378,7 @@ const parseCategories = (categories: string): string[] => {
   }
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const parseArrayField = (field: string): string[] => {
   try {
     const parsed = JSON.parse(field)

@@ -79,7 +79,6 @@ jobs:
           {
             echo "NODE_ENV=test"
             echo "VITE_LOGIN_URL=${{ secrets.VITE_LOGIN_URL_TEST }}"
-            echo "UPDATESERVER=${{ secrets.UPDATESERVER }}"
           } > .env
           cp .env .env.test
           if ! grep -qE '^VITE_LOGIN_URL=.' .env; then
@@ -126,7 +125,7 @@ jobs:
         shell: bash
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: electron-app-windows-v${{ steps.calculate_version.outputs.version }}
           path: out/make/**/*.msi
@@ -318,7 +317,6 @@ jobs:
           {
             echo "NODE_ENV=test"
             echo "VITE_LOGIN_URL=${{ secrets.VITE_LOGIN_URL_TEST }}"
-            echo "UPDATESERVER=${{ secrets.UPDATESERVER }}"
           } > .env
           cp .env .env.test
           if ! grep -qE '^VITE_LOGIN_URL=.' .env; then
@@ -328,7 +326,7 @@ jobs:
           echo "OK: .env and .env.test written (VITE_LOGIN_URL non-empty)"
       - name: Install setuptools
         run: |
-            brew install python-setuptools                 
+            brew install python-setuptools
       - name: Install system dependencies for native modules
         run: |
             brew install xz pkg-config
@@ -618,7 +616,7 @@ jobs:
 
       - name: Upload build log for debugging
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: macos-build-log-v${{ steps.calculate_version.outputs.version }}
           path: build.log
@@ -626,7 +624,7 @@ jobs:
 
       - name: Upload artifact
         if: success() && github.event_name != 'pull_request'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: electron-app-macos-v${{ steps.calculate_version.outputs.version }}
           path: |

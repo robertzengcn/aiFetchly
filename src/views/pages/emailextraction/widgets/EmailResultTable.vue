@@ -118,7 +118,7 @@ headers.value = [
     width: '10%'
   },
   // {
-  //     title: computed(_ => CapitalizeFirstLetter(t("emailextraction.url"))),
+  //     title: computed(() => CapitalizeFirstLetter(t("emailextraction.url"))),
   //     align: 'start',
   //     sortable: false,
   //     key: 'url',
@@ -237,7 +237,8 @@ const downloadErrorlog = async (item) => {
 }
 
 // always allow edit
-const canEdit = (item: EmailsearchTaskEntityDisplay): boolean => {
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+const canEdit = (item: unknown): boolean => {
   // return item.statusName === 'Pending' || item.statusName === 'Error'
   return true
 }

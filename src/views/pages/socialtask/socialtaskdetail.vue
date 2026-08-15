@@ -1,20 +1,25 @@
 <template>
     <v-sheet class="mx-auto" rounded>
         <v-form ref="form" @submit.prevent="onSubmit">
-            <v-text-field v-model="socialtaskId" label="Id" type="input"
+            <v-text-field
+v-model="socialtaskId" label="Id" type="input"
                 v-show="isEdit" :readonly="true"></v-text-field>
-            <v-text-field v-model="name" label="Name" type="input" hint="input the name" :rules="[rules.required]" required
+            <v-text-field
+v-model="name" label="Name" type="input" hint="input the name" :rules="[rules.required]" required
                 :readonly="loading"></v-text-field>
 
-            <v-select v-model="type" item-title="name" item-value="id" :items="typeitems" label="Type" required
+            <v-select
+v-model="type" item-title="name" item-value="id" :items="typeitems" label="Type" required
                 :readonly="loading" :rules="[rules.required]"></v-select>
 
-            <v-combobox v-model="infokeyword" :items="keywords" label="Select keyword or create a new one" multiple
+            <v-combobox
+v-model="infokeyword" :items="keywords" label="Select keyword or create a new one" multiple
                 chips></v-combobox>
 
             <v-combobox v-model="infotag" :items="tags" label="Select tag or create a new one" multiple chips></v-combobox>
             <input type="hidden" :value="campaignId" name="campaignId" />
-            <v-alert v-model="alert" border="start" variant="tonal" closable close-label="Close Alert" title="Information"
+            <v-alert
+v-model="alert" border="start" variant="tonal" closable close-label="Close Alert" title="Information"
                 :color="alertcolor">
                 {{ alertContent }}
             </v-alert>

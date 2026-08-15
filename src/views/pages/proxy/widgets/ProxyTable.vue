@@ -331,39 +331,40 @@ type Fetchparam = {
 const checkButtonName=ref("")
 
 // Parsed proxy headers for batch upload
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const parsedProxyHeaders: Array<any> = [
     {
-        title: computed(_ => CapitalizeFirstLetter(t("proxy.host"))),
+        title: computed(() => CapitalizeFirstLetter(t("proxy.host"))),
         align: 'start',
         sortable: false,
         key: 'host',
     },
     {
-        title: computed(_ => CapitalizeFirstLetter(t("proxy.port"))),
+        title: computed(() => CapitalizeFirstLetter(t("proxy.port"))),
         align: 'start',
         sortable: false,
         key: 'port',
     },
     {
-        title: computed(_ => CapitalizeFirstLetter(t("proxy.protocol"))),
+        title: computed(() => CapitalizeFirstLetter(t("proxy.protocol"))),
         align: 'start',
         sortable: false,
         key: 'protocol',
     },
     {
-        title: computed(_ => CapitalizeFirstLetter(t("proxy.user_name"))),
+        title: computed(() => CapitalizeFirstLetter(t("proxy.user_name"))),
         align: 'start',
         sortable: false,
         key: 'user',
     },
     {
-        title: computed(_ => CapitalizeFirstLetter(t("proxy.password"))),
+        title: computed(() => CapitalizeFirstLetter(t("proxy.password"))),
         align: 'start',
         sortable: false,
         key: 'pass',
     },
     {
-        title: computed(_ => CapitalizeFirstLetter(t("proxy.status"))),
+        title: computed(() => CapitalizeFirstLetter(t("proxy.status"))),
         align: 'start',
         sortable: false,
         key: 'status',
@@ -381,63 +382,64 @@ const FakeAPI = {
 }
 
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const headers: Array<any> = [
     {
-        title: computed(_ => CapitalizeFirstLetter(t("proxy.id"))),
+        title: computed(() => CapitalizeFirstLetter(t("proxy.id"))),
         align: 'start',
         sortable: false,
         key: 'id',
     },
     {
-        title: computed(_ => CapitalizeFirstLetter(t("proxy.host"))),
+        title: computed(() => CapitalizeFirstLetter(t("proxy.host"))),
         align: 'start',
         sortable: false,
         key: 'host',
     },
     {
-        title: computed(_ => CapitalizeFirstLetter(t("proxy.port"))),
+        title: computed(() => CapitalizeFirstLetter(t("proxy.port"))),
         align: 'start',
         sortable: false,
         key: 'port',
     },
     {
-        title: computed(_ => CapitalizeFirstLetter(t("proxy.user_name"))),
+        title: computed(() => CapitalizeFirstLetter(t("proxy.user_name"))),
         align: 'start',
         sortable: false,
         key: 'username',
     },
     {
-        title: computed(_ => CapitalizeFirstLetter(t("proxy.password"))),
+        title: computed(() => CapitalizeFirstLetter(t("proxy.password"))),
         align: 'start',
         sortable: false,
         key: 'password',
     },
     {
-        title: computed(_ => CapitalizeFirstLetter(t("proxy.protocol"))),
+        title: computed(() => CapitalizeFirstLetter(t("proxy.protocol"))),
         align: 'start',
         sortable: false,
         key: 'protocol',
     },
     {
-        title: computed(_ => CapitalizeFirstLetter(t("proxy.status"))),
+        title: computed(() => CapitalizeFirstLetter(t("proxy.status"))),
         align: 'start',
         sortable: false,
         key: 'statusName',
     },
     {
-        title: computed(_ => CapitalizeFirstLetter(t("proxy.check_time"))),
+        title: computed(() => CapitalizeFirstLetter(t("proxy.check_time"))),
         align: 'start',
         sortable: false,
         key: 'checktime',
     },
     // Filled from API after "Check Proxy": Google reachability (Puppeteer in main process), not the batch-upload preview check.
     {
-        title: computed(_ => CapitalizeFirstLetter(t("proxy.google_pass"))),
+        title: computed(() => CapitalizeFirstLetter(t("proxy.google_pass"))),
         align: 'start',
         sortable: false,
         key: 'googlePassName',
     },
-    { title: computed(_ => CapitalizeFirstLetter(t("common.actions"))), key: 'actions', sortable: false },
+    { title: computed(() => CapitalizeFirstLetter(t("common.actions"))), key: 'actions', sortable: false },
 
 ];
 
@@ -707,6 +709,7 @@ const downloadTemplate = () => {
     window.location.href = encodedUri;
 };
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const parseCsvData = (data: any[], hasColonSeparatedFormat: boolean) => {
     const parsed: Array<ProxyParseItem> = [];
     const invalidRowNumbers: number[] = [];
@@ -1033,6 +1036,7 @@ const importParsedProxies = async () => {
         });
 
         const results = await Promise.all(promises);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const successCount = results.filter((r: any) => r && r.status).length;
 
         if (successCount === results.length) {
@@ -1059,6 +1063,7 @@ const importParsedProxies = async () => {
             // Refresh proxy list
             loadItems({ page: options.page, itemsPerPage: options.itemsPerPage, sortBy: '' });
         }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } catch (error: any) {
         setUploadAlert(
             error.message || t('proxy.import_fail') || 'Import failed',

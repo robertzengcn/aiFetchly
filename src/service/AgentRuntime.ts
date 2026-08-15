@@ -263,6 +263,49 @@ export class AgentRuntime {
       }
       executedToolCalls += 1;
       const res = await baseExecute(name, args, ctx);
+
+      // Headless agents have no UI to surface SkillExecutor's interactive
+      // permission prompt, and the v1 runtime has no pause/resume path for
+      // them — letting the prompt result through makes AIChatQueryLoop return
+      // paused_for_permission, which fails the whole task (see the loop result
+      // handling below). Rewrite the prompt into an explicit denied result so
+      // the loop feeds the failure back to the agent's model, which can adapt
+      // (switch tools or report the permission gap) instead of dying. This is
+      // the headless semantics AgentToolPolicyService.checkToolCall documents:
+      // "the runtime surfaces [the permission prompt] as a blocked tool result
+      // in headless mode". Agents stay limited to tools the user has already
+      // granted (persistent Token grants or session grants) — we never bypass
+      // the permission system itself.
+      const rawResult = res.result as Record<string, unknown> | undefined;
+      if (rawResult?.needsPermissionPrompt === true) {
+        const category =
+          typeof rawResult.permissionCategory === "string"
+            ? rawResult.permissionCategory
+            : "unknown";
+        const message =
+          `Permission for tool "${name}" (category: ${category}) has not been ` +
+          "granted, and headless agent tasks cannot show a permission prompt. " +
+          "Do not retry this tool call within this task. The user can grant " +
+          "the permission by calling the tool once in the main chat and " +
+          "approving the prompt, then re-run the task.";
+        await transcript.recordToolCall({
+          agentTaskId,
+          toolCallId: ctx.toolCallId,
+          toolName: name,
+          argumentsSummary: args,
+          status: "blocked",
+          errorMessage: message,
+          durationMs: Date.now() - startedAt,
+        });
+        return {
+          tool_call_id: ctx.toolCallId,
+          tool_name: name,
+          success: false,
+          result: { agentPermissionDenied: true, error: message },
+          execution_time_ms: Date.now() - startedAt,
+        };
+      }
+
       const summary = res.result.summary;
       await transcript.recordToolCall({
         agentTaskId,
@@ -368,12 +411,15 @@ export class AgentRuntime {
           String(result.error)
         );
       } else {
-        // paused_for_permission / paused_for_plan_question: not wired for v1
-        // foreground specialist runs. Treat as failed with a clear message.
+        // paused_for_permission / paused_for_plan_question fallback. The
+        // permission case is normally intercepted in policyCheckedExecute
+        // above (rewritten as a denied tool result so the loop continues);
+        // reaching this branch means a prompt slipped through another path —
+        // surface an actionable message instead of an opaque v1 note.
         const msg =
           result.type === "paused_for_permission"
-            ? "Agent task paused for permission (not supported in v1 runtime)."
-            : "Agent task paused for plan question (not supported in v1 runtime).";
+            ? `Agent task paused for permission on tool "${result.pending.toolName}" — headless agent tasks cannot show permission prompts. Grant the tool permission in the main chat (run it once and approve) or in settings, then re-run this task.`
+            : "Agent task paused for plan question (not supported in headless agent runtime).";
         await this.taskModule.setStatus(agentTaskId, "failed", {
           finishedAt: new Date(),
           errorMessage: msg,

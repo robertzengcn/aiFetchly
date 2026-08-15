@@ -39,7 +39,8 @@ export interface AIChatRecoveryDefaults {
 export const AI_CHAT_RECOVERY_DEFAULTS: AIChatRecoveryDefaults = {
   foreground: {
     profile: "foreground",
-    maxAttempts: 3,
+    // Nine retries plus the initial request = ten total attempts.
+    maxAttempts: 9,
     baseDelayMs: 1_000,
     maxDelayMs: 30_000,
     jitterRatio: 0.25,

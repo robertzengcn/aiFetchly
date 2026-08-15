@@ -266,7 +266,7 @@ describe("SlashCommandDispatcher.dispatch (CMD-04, CMD-08, DX-02)", () => {
     const { registry, manager } = buildStack();
     const skillsProvider: SkillsSlashCommandProvider = {
       render: vi
-        .fn<[], Promise<string>>()
+        .fn<(...args: []) => Promise<string>>()
         .mockResolvedValue(
           "Available skills (1):\n\n1. `file_read` - Read a file\n\nTool catalog: 1 total"
         ),

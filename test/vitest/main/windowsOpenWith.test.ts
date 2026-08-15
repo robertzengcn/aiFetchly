@@ -29,11 +29,35 @@ describe("windowsOpenWith", () => {
       );
     });
 
-    it("propagates shell.openPath error messages", async () => {
+    it("falls back to the Windows protocol handler when no default app opens the file", async () => {
+      const proc = new EventEmitter() as EventEmitter & {
+        unref: ReturnType<typeof vi.fn>;
+      };
+      proc.unref = vi.fn();
+      const spawnFn = vi.fn(() => proc as unknown as ChildProcess);
       const openPathFn = vi.fn(async () => "Failed to open path");
-      await expect(
-        openWindowsFile("D:\\missing.txt", openPathFn)
-      ).resolves.toBe("Failed to open path");
+
+      const openPromise = openWindowsFile(
+        "C:\\Users\\me\\Documents\\ai-created.csv",
+        openPathFn,
+        spawnFn
+      );
+      await Promise.resolve();
+      proc.emit("spawn");
+
+      await expect(openPromise).resolves.toBe("");
+      expect(spawnFn).toHaveBeenCalledWith(
+        "rundll32.exe",
+        [
+          "url.dll,FileProtocolHandler",
+          "C:\\Users\\me\\Documents\\ai-created.csv",
+        ],
+        expect.objectContaining({
+          detached: true,
+          stdio: "ignore",
+          windowsHide: true,
+        })
+      );
     });
 
     it("supports UNC paths from WSL translation", async () => {

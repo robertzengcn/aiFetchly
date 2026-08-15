@@ -1,5 +1,5 @@
 <template>
-    <v-dialog :modelValue="dialogModel" max-width="600px">
+    <v-dialog :model-value="dialogModel" max-width="600px">
         <v-card>
           <v-card-title>{{ CapitalizeFirstLetter(t('common.log_content')) }}</v-card-title>
           <v-card-text>
@@ -16,7 +16,7 @@ import { useI18n } from "vue-i18n";
 const { t } = useI18n({ inheritLocale: true });
 import {CapitalizeFirstLetter} from "@/views/utils/function"
 const emit = defineEmits(['dialogclose']);
-const props = defineProps({
+defineProps({
     dialogModel: {
       type: Boolean,
       required: true

@@ -7,6 +7,7 @@
 // import router from '@/views/router';
 import { ref, onMounted } from 'vue';
 import SocialaccountTable from '@/views/pages/socialaccount/widgets/SocialaccountTable.vue'
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const dialog = ref(false);
 
 onMounted(() => {

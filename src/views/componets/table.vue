@@ -154,7 +154,6 @@
     </div>
 </template>
 <script setup lang="ts">
-import router from '@/views/router';
 import { ref, onMounted } from 'vue';
 const dialog = ref(false);
 const list = ref([

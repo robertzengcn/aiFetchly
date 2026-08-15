@@ -102,43 +102,44 @@ const FakeAPI = {
     }
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const headers=ref<Array<any>>([])
 let refreshInterval:ReturnType<typeof setInterval> | undefined;
 
 headers.value = [
     {
-        title: computed(_ => CapitalizeFirstLetter(t("searchtask.id"))),
+        title: computed(() => CapitalizeFirstLetter(t("searchtask.id"))),
         align: 'center',
         sortable: true,
         key: 'id',
     },
     {
-        title: computed(_ => CapitalizeFirstLetter(t("search.search_enginer_name"))),
+        title: computed(() => CapitalizeFirstLetter(t("search.search_enginer_name"))),
         align: 'start',
         sortable: false,
         key: 'enginer_name',
         
     },
     {
-        title: computed(_ => CapitalizeFirstLetter(t("search.keyword"))),
+        title: computed(() => CapitalizeFirstLetter(t("search.keyword"))),
         align: 'start',
         sortable: false,
         key: 'keywordline',
         // value: computed(value => value.join(', '))
     },
     {
-        title: computed(_ => CapitalizeFirstLetter(t("searchresult.status"))),
+        title: computed(() => CapitalizeFirstLetter(t("searchresult.status"))),
         align: 'start',
         sortable: false,
         key: 'status',
     },
     {
-        title: computed(_ => CapitalizeFirstLetter(t("searchresult.record_time"))),
+        title: computed(() => CapitalizeFirstLetter(t("searchresult.record_time"))),
         align: 'start',
         sortable: false,
         key: 'record_time',
     },
-    { title: computed(_ => CapitalizeFirstLetter(t("common.actions"))), key: 'actions', sortable: false },
+    { title: computed(() => CapitalizeFirstLetter(t("common.actions"))), key: 'actions', sortable: false },
 ];
 const itemsPerPage = ref(10);
 const serverItems = ref<Array<SearchtaskItem>>([]);
@@ -255,6 +256,7 @@ const isTaskEditable = (status: string): boolean => {
 }
 
 // Edit task function
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const editTask = (item: any) => {
     // Navigate to edit page or open edit dialog
     router.push({
@@ -264,6 +266,7 @@ const editTask = (item: any) => {
 }
 
 // Run task function
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const runTask = async (item: any) => {
     try {
         // Call the run task API
@@ -276,6 +279,7 @@ const runTask = async (item: any) => {
 }
 
 // Kill process function
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const killProcess = async (item: any) => {
     try {
         const result = await killSearchProcess(item.pid, item.id);

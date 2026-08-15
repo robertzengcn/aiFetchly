@@ -1,5 +1,5 @@
 <template>
-<v-dialog :modelValue="dialog" width="auto">
+<v-dialog :model-value="dialog" width="auto">
     <v-card>
       <v-card-title class="headline">{{ CapitalizeFirstLetter(t('common.comfirm_delete')) }}</v-card-title>
       <v-card-text>
@@ -20,7 +20,7 @@ const { t } = useI18n({ inheritLocale: true });
 import {CapitalizeFirstLetter} from "@/views/utils/function"
 
 // Define props
-const props = defineProps({
+defineProps({
   dialog: {
     type: Boolean,
     required: true

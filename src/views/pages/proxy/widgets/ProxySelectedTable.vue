@@ -33,6 +33,7 @@ const FakeAPI = {
 }
 
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const headers: Array<any> = [
     {
         title: 'Id',
@@ -71,7 +72,7 @@ const headers: Array<any> = [
         key: 'protocol',
     },
     {
-        title: computed(_ => CapitalizeFirstLetter(t("proxy.status"))),
+        title: computed(() => CapitalizeFirstLetter(t("proxy.status"))),
         align: 'start',
         sortable: false,
         key: 'statusName',

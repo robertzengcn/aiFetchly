@@ -183,6 +183,7 @@ const closeCreateTaskDialog = () => {
   createTaskDialog.value.show = false
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const handleCreateTask = async (taskData: any) => {
   try {
     createTaskDialog.value.loading = true
@@ -206,7 +207,7 @@ const editTask = (task: TaskEntity) => {
   router.push({ name: 'EditTask', params: { id: task.id } })
 }
 
-const deleteTask = async (task: TaskEntity) => {
+const deleteTask = async () => {
   try {
     // TODO: Implement API call to delete task
     showAlert('Success', 'Task deleted successfully', 'success')
@@ -216,7 +217,7 @@ const deleteTask = async (task: TaskEntity) => {
   }
 }
 
-const runTask = async (task: TaskEntity) => {
+const runTask = async () => {
   try {
     // TODO: Implement API call to run task
     showAlert('Success', 'Task started successfully', 'success')

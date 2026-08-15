@@ -332,7 +332,17 @@ const env = process.env.NODE_ENV || "development";
 dotenv.config({ path: path.resolve(__dirname, `.env.${env}`) });
 
 const isProductionBuild = env === "production";
+const isWindowsStoreBuild = process.env.WINDOWS_DISTRIBUTION === "store";
+const isMacStoreBuild = process.env.MAC_DISTRIBUTION === "store";
 const shouldBuildMacDmg = process.env.MAKE_MAC_DMG !== "false";
+const macStoreEntitlementsPath = path.resolve(
+  __dirname,
+  "build/entitlements.mas.plist"
+);
+const macStoreChildEntitlementsPath = path.resolve(
+  __dirname,
+  "build/entitlements.mas.inherit.plist"
+);
 
 function resolveProductionAsarConfig() {
   return {
@@ -370,7 +380,24 @@ function requireProductionEnv(name) {
   return value;
 }
 
-if (isProductionBuild && process.platform === "win32") {
+function resolveMacStoreProvisioningProfile() {
+  const configuredPath = requireProductionEnv(
+    "MAC_STORE_PROVISIONING_PROFILE"
+  );
+  const profilePath = path.resolve(__dirname, configuredPath);
+  if (!existsSync(profilePath)) {
+    throw new Error(
+      `Mac App Store packaging requires an existing provisioning profile: ${profilePath}`
+    );
+  }
+  return profilePath;
+}
+
+function isMainApplicationBundle(filePath) {
+  return filePath.endsWith(".app") && !filePath.includes(".app/Contents/");
+}
+
+if (isProductionBuild && process.platform === "win32" && !isWindowsStoreBuild) {
   if (!existsSync(windowsCertificatePath)) {
     throw new Error(
       "Production Windows packaging requires cert.pfx. Restore it from a CI secret before running Electron Forge."
@@ -418,6 +445,31 @@ function ensureNodeAbiPatched() {
   }
 }
 
+/**
+ * Patches @electron-forge/core-utils' forked `remote-rebuild.js` to no-op when
+ * FORGE_SKIP_NATIVE_REBUILD=1 is set, so the packaging-time "Preparing native
+ * dependencies" step does not perform @electron/rebuild's full dependency-graph
+ * walk (which stalls the CI smoke runner even though the empty onlyModules
+ * list compiles nothing). See scripts/patch-remote-rebuild.js for the full rationale. Runs as
+ * a safety net in the prePackage hook for direct electron-forge invocations.
+ */
+function ensureRemoteRebuildPatched() {
+  const scriptPath = join(__dirname, "scripts", "patch-remote-rebuild.js");
+  const result = spawnSync(process.execPath, [scriptPath], {
+    cwd: __dirname,
+    stdio: "inherit",
+  });
+
+  if (result.error) {
+    throw result.error;
+  }
+  if (result.status !== 0) {
+    throw new Error(
+      `remote-rebuild patch failed with exit code ${result.status}`
+    );
+  }
+}
+
 function fixInteropNamespaceDefault(viteBuildDir) {
   const fs = require("fs");
 
@@ -462,20 +514,36 @@ function copyBuiltChildProcesses(buildPath) {
 
 module.exports = {
   packagerConfig: {
+    appBundleId: "com.aifetchly.desktop",
     icon: "./src/assets/images/icon",
     ...(isProductionBuild && process.platform === "darwin"
-      ? {
-          osxSign: {},
-          osxNotarize: {
-            appleId: requireProductionEnv("APPLE_ID"),
-            appleIdPassword: requireProductionEnv(
-              "APPLE_APP_SPECIFIC_PASSWORD"
-            ),
-            teamId: requireProductionEnv("APPLE_TEAM_ID"),
-          },
-        }
+      ? isMacStoreBuild
+        ? {
+            osxSign: {
+              identity: requireProductionEnv("MAC_STORE_SIGNING_IDENTITY"),
+              type: "development",
+              provisioningProfile: resolveMacStoreProvisioningProfile(),
+              optionsForFile: (filePath) => ({
+                entitlements: isMainApplicationBundle(filePath)
+                  ? macStoreEntitlementsPath
+                  : macStoreChildEntitlementsPath,
+              }),
+            },
+          }
+        : {
+            osxSign: {},
+            osxNotarize: {
+              appleId: requireProductionEnv("APPLE_ID"),
+              appleIdPassword: requireProductionEnv(
+                "APPLE_APP_SPECIFIC_PASSWORD"
+              ),
+              teamId: requireProductionEnv("APPLE_TEAM_ID"),
+            },
+          }
       : {}),
-    ...(isProductionBuild && process.platform === "win32"
+    ...(isProductionBuild &&
+    process.platform === "win32" &&
+    !isWindowsStoreBuild
       ? {
           windowsSign: {
             certificateFile: windowsCertificatePath,
@@ -507,13 +575,52 @@ module.exports = {
     // copied; re-rebuilding during "Preparing native dependencies" is redundant
     // and has been observed to stall the smoke build. The smoke test only
     // verifies packaged worker files, not native module loading at runtime.
+    //
+    // NOTE: an empty onlyModules array alone is NOT enough to skip the work —
+    // it is truthy in @electron/rebuild's ModuleWalker, so it still walks the
+    // entire dependency graph and scans every nested node_modules (only the
+    // final compile is skipped). That walk is what stalled the CI runner. The
+    // true skip is delivered by scripts/patch-remote-rebuild.js (wired via
+    // postinstall + prePackage), which makes the forked remote-rebuild worker
+    // exit immediately when this env var is set. The empty array here is kept
+    // as a secondary guard so nothing compiles even if the patch is absent.
     onlyModules:
       process.env.FORGE_SKIP_NATIVE_REBUILD === "1"
         ? []
         : ["better-sqlite3", "bufferutil", "utf-8-validate", "keytar"],
   },
   makers: [
-    // Windows: WiX MSI only (no Squirrel Setup.exe).
+    // Microsoft Store submissions are unsigned MSIX packages. Partner Center
+    // re-signs the package after certification, so no PFX belongs in this path.
+    ...(isWindowsStoreBuild
+      ? [
+          {
+            name: "@electron-forge/maker-msix",
+            platforms: ["win32"],
+            config: {
+              sign: false,
+              // Build with the current Windows SDK while retaining compatibility
+              // with the oldest Windows release accepted by Partner Center.
+              windowsKitVersion: "10.0.26100.0",
+              manifestVariables: {
+                packageIdentity: requireProductionEnv(
+                  "WINDOWS_STORE_PACKAGE_IDENTITY"
+                ),
+                publisher: requireProductionEnv("WINDOWS_STORE_PUBLISHER"),
+                publisherDisplayName: requireProductionEnv(
+                  "WINDOWS_STORE_PUBLISHER_DISPLAY_NAME"
+                ),
+                packageVersion: `${require("./package.json").version}.0`,
+                packageDisplayName: "AiFetchly",
+                appDisplayName: "AiFetchly",
+                packageMinOSVersion: "10.0.17763.0",
+                packageMaxOSVersionTested: "10.0.26100.0",
+              },
+            },
+          },
+        ]
+      : []),
+    // Direct Windows distribution: WiX MSI, signed only for production.
     {
       name: "@electron-forge/maker-zip",
       platforms: ["darwin"],
@@ -629,7 +736,9 @@ module.exports = {
     {
       name: "@electron-forge/maker-wix",
       config: {
-        ...(isProductionBuild && process.platform === "win32"
+        ...(isProductionBuild &&
+        process.platform === "win32" &&
+        !isWindowsStoreBuild
           ? {
               certificateFile: windowsCertificatePath,
               certificatePassword: requireProductionEnv("CERTIFICATE_PASSWORD"),
@@ -826,6 +935,7 @@ module.exports = {
       // Patch node-abi before @electron/rebuild runs so it can resolve
       // Electron 43.x. Safety net for direct electron-forge invocations.
       ensureNodeAbiPatched();
+      ensureRemoteRebuildPatched();
 
       const projectRoot = normalize(__dirname);
 

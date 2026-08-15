@@ -201,11 +201,13 @@ const showDeleteModal = ref(false);
 const deleteAccountid = ref(0);
 const showClearCookiesModal = ref(false);
 const clearCookiesAccountid = ref(0);
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const showDialog = ref(false);
 const confirmDialogctl = ref(false);
 
 
 const tmpId = ref(0);
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const tmpPlatform = ref("");
 function loadItems({ page, itemsPerPage, sortBy }) {
     loading.value = true

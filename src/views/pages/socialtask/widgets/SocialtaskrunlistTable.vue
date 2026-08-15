@@ -1,9 +1,11 @@
 <template>
-    <v-data-table-server v-model:items-per-page="itemsPerPage" :search="search" :headers="headers"
+    <v-data-table-server
+v-model:items-per-page="itemsPerPage" :search="search" :headers="headers"
         :items-length="totalItems" :items="serverItems" :loading="loading" item-value="name" @update:options="loadItems">
         <template v-slot:[`item.actions`]="{ item }">
             
-            <v-icon size="small"
+            <v-icon
+size="small"
             
             @click="checkList(item)"
             >
@@ -26,6 +28,7 @@ type Fetchparam = {
     itemsPerPage: number,
 }
 type taskrunresp = {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     data: any,
     total: number
 }
@@ -37,6 +40,7 @@ const FakeAPI = {
 }
 
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const headers: Array<any> = [
     {
         title: 'Id',
@@ -67,7 +71,7 @@ const search = ref('');
 const $route = useRoute();
 const taskId = $route.params.id.toString();
 
-function loadItems({ page, itemsPerPage, sortBy }) {
+function loadItems({ page, itemsPerPage }) {
     loading.value = true
     const fetchitem: Fetchparam = {
         id: parseInt(taskId),

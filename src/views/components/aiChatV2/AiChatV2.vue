@@ -434,10 +434,10 @@
             @update:model-value="onToolApprovalModeChange"
           />
           <v-tooltip location="bottom">
-            <template #activator="{ props }">
+            <template #activator="{ props: activatorProps }">
               <v-chip
                 v-if="providerLabel"
-                v-bind="props"
+                v-bind="activatorProps"
                 size="x-small"
                 :color="providerChipColor"
                 variant="tonal"
@@ -1306,7 +1306,9 @@ function ensureWorkspaceConversationId(): string {
 }
 
 function handleWorkspaceSetupRequest(): void {
-  if (activeWorkspace.value) return;
+  // Allow re-picking even when a workspace is already set, so the user can
+  // change folders. Re-picking creates a new pending workspace that supersedes
+  // the previous one once approved (see WorkspaceModule.setWorkspace).
   ensureWorkspaceConversationId();
   showWorkspaceRequired.value = true;
 }
@@ -2891,7 +2893,6 @@ const upsertToolResultMessage = (
 
 const handleSkillPermissionGrant = async (
   message: ChatV2MessageView,
-  _persistent?: boolean
 ): Promise<void> => {
   const toolId = resolveToolIdForPermissionMessage(message);
   if (!toolId) {
@@ -2944,10 +2945,10 @@ const handleSkillPermissionGrant = async (
   }
 };
 
-const handlePinnedPermissionGrant = (payload: { persistent: boolean }): void => {
+const handlePinnedPermissionGrant = (): void => {
   const message = pinnedPermissionPrompt.value;
   if (!message) return;
-  void handleSkillPermissionGrant(message, payload.persistent);
+  void handleSkillPermissionGrant(message);
 };
 
 const handleSkillPermissionDeny = (message: ChatV2MessageView): void => {
@@ -3488,6 +3489,7 @@ const onSend = async (
     assistantAdded = true;
   };
   const showAssistantError = (message: string): void => {
+    assistant.timestamp = new Date().toISOString();
     ensureAssistantAdded();
     assistant.content = message;
     assistant.metadata = {
@@ -3501,6 +3503,7 @@ const onSend = async (
       nextMessages[idx] = {
         ...nextMessages[idx],
         content: assistant.content,
+        timestamp: assistant.timestamp,
         metadata: assistant.metadata,
       };
       streamMessageListController.set(nextMessages);
