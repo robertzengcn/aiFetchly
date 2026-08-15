@@ -161,6 +161,9 @@ let lastLoopInput:
       transientRetryConfig?: { maxAttempts?: number; baseDelayMs?: number };
     }
   | undefined;
+// Results the mocked loop received from the runtime's policy-checked
+// executeTool wrapper — lets tests assert how AgentRuntime rewrote them.
+let executeToolResults: Array<Record<string, unknown>> = [];
 
 vi.mock("@/service/AIChatQueryLoop", () => ({
   AIChatQueryLoop: class {
@@ -180,11 +183,12 @@ vi.mock("@/service/AIChatQueryLoop", () => ({
     }) {
       lastLoopInput = input;
       for (let i = 0; i < mockLoopCallCount; i++) {
-        await this.deps.executeTool(
+        const res = await this.deps.executeTool(
           "lookup",
           { q: `call-${i}` },
           { toolCallId: `call-${i}` }
         );
+        executeToolResults.push(res as Record<string, unknown>);
       }
       return mockLoopResult;
     }
@@ -227,6 +231,7 @@ describe("AgentRuntime", () => {
       }),
     };
     lastLoopInput = undefined;
+    executeToolResults = [];
   });
 
   it("fails when an agent exceeds its max tool calls", async () => {
@@ -407,6 +412,50 @@ describe("AgentRuntime", () => {
     await runtime.runSync(makeRequest(), { signal: controller.signal });
 
     expect(lastLoopInput?.abortController.signal.aborted).toBe(true);
+  });
+
+  // Regression: headless agent tasks cannot show SkillExecutor's interactive
+  // permission prompt. Previously the prompt result flowed through untouched,
+  // AIChatQueryLoop returned paused_for_permission, and the whole task failed
+  // with "Agent task paused for permission (not supported in v1 runtime)"
+  // (e.g. agent-batch-worker calling file_read with no stored grant). The
+  // runtime must rewrite the prompt into an explicit denied result so the
+  // loop feeds the failure back to the agent model and the task continues.
+  it("rewrites permission-prompt results as denied tool results instead of pausing", async () => {
+    mockLoopCallCount = 1;
+    const runtime = new AgentRuntime();
+    const result = await runtime.runSync(makeRequest(), {
+      executeTool: vi.fn(async (name, _args, ctx) => ({
+        tool_call_id: ctx.toolCallId,
+        tool_name: name,
+        success: false,
+        result: {
+          error: "Permission required",
+          needsPermissionPrompt: true,
+          permissionCategory: "filesystem",
+        },
+        execution_time_ms: 1,
+      })),
+    });
+
+    // The task itself completes — the permission denial is a per-tool
+    // failure the agent model can adapt to, not a task-killing pause.
+    expect(result.status).toBe("completed");
+    expect(result.errorMessage).toBeUndefined();
+
+    // What the loop received must be a plain denied result: no
+    // needsPermissionPrompt flag (so the loop never enters its
+    // paused_for_permission branch) plus an actionable message.
+    expect(executeToolResults).toHaveLength(1);
+    const rewritten = executeToolResults[0] as {
+      success: boolean;
+      result: Record<string, unknown>;
+    };
+    expect(rewritten.success).toBe(false);
+    expect(rewritten.result.needsPermissionPrompt).toBeUndefined();
+    expect(rewritten.result.agentPermissionDenied).toBe(true);
+    expect(rewritten.result.error).toMatch(/has not been granted/);
+    expect(rewritten.result.error).toMatch(/category: filesystem/);
   });
 
   it("rejects override-mismatched JSON with a parseWarning (lenient fallback)", async () => {
