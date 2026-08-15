@@ -462,13 +462,14 @@ import DocumentManagement from '@/views/pages/knowledge/DocumentManagement.vue';
 import SearchInterface from '@/views/pages/knowledge/SearchInterface.vue';
 import WebsiteImportDialog from '@/views/pages/knowledge/WebsiteImportDialog.vue';
 import type { ImportKnowledgeWebsiteResult } from '@/entityTypes/knowledgeLibraryAiToolTypes';
-import { initializeRAG, getRAGStats, uploadDocument, selectFilesNative as selectFilesNativeAPI, copyFileToTemp as copyFileToTempAPI, chunkAndEmbedDocument, getAvailableEmbeddingModelsWithDefault, updateEmbeddingModel, FileUploadProgress, FileUploadComplete, checkDocumentDuplicate } from '@/views/api/rag';
+import { getRAGStats, selectFilesNative as selectFilesNativeAPI, copyFileToTemp as copyFileToTempAPI, chunkAndEmbedDocument, getAvailableEmbeddingModelsWithDefault, updateEmbeddingModel, FileUploadProgress, FileUploadComplete, checkDocumentDuplicate } from '@/views/api/rag';
 import type { SaveTempFileResponse, UploadedDocument } from '@/entityTypes/commonType';
 import { ModelInfo } from '@/api/ragConfigApi';
 import { DocumentMetadata } from '@/entityTypes/metadataType';
 import { getLocalAiRuntimeStatus, prepareLocalAiRuntimeInstall, installLocalAiRuntime, cancelLocalAiRuntimeInstall, onLocalAiRuntimeProgress } from '@/views/api/localAiRuntime';
 import type { LocalAiRuntimeDownloadPhase, LocalAiRuntimeDownloadProgress, LocalAiRuntimeId, LocalAiRuntimeInstallOffer } from '@/entityTypes/localAiRuntimeTypes';
 import {
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   LOCAL_XENOVA_PROVIDER_PREFIX,
   isLocalXenovaModelId,
 } from '@/service/embedding/LocalEmbeddingModels';
@@ -613,7 +614,7 @@ function handleDocumentUploaded(document: UploadedDocument) {
   }
 }
 
-function handleDocumentDeleted(documentId: number) {
+function handleDocumentDeleted() {
   showStatus(t('knowledge.document_deleted_successfully'), 'success');
   // Refresh document management if needed
   if (documentManagement.value) {
@@ -641,6 +642,7 @@ function handleLocalRuntimeRequired(): void {
   void ensureLocalEmbeddingRuntime(null);
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function handleSearchCompleted(results: { totalResults: number; [key: string]: any }) {
   showStatus(t('knowledge.found_results', { count: results.totalResults }), 'success');
 }
@@ -708,6 +710,7 @@ async function handleUploadSuccess(document: UploadedDocument) {
   }
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function handleUploadError(error: string) {
   showStatus(`${t('knowledge.upload_failed')}: ${error}`, 'error');
 }
@@ -1127,6 +1130,7 @@ async function doUpload(files: File[]) {
     const uploadPromises = files.map(async (file): Promise<UploadedDocument | null> => {
       // For Electron, we can access the file path directly if available
       // Otherwise, use the webkitRelativePath or create a temporary file
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       let filePath = (file as any).path || file.webkitRelativePath;
       
       if (!filePath) {
@@ -1208,6 +1212,7 @@ async function doUpload(files: File[]) {
 }
 
 // Helper function to copy file to temporary location
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 async function copyFileToTemp(file: File, metadata?: DocumentMetadata) 
   : Promise<{ filePath: string; uploadResult: SaveTempFileResponse }> {
   try {

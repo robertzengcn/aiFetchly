@@ -37,7 +37,7 @@ import { useI18n } from "vue-i18n";
 import type { PluginDetail } from "@/views/api/plugins";
 import { togglePluginSkill } from "@/views/api/plugins";
 
-const props = defineProps<{ detail: PluginDetail }>();
+defineProps<{ detail: PluginDetail }>();
 const emit = defineEmits<{ changed: [] }>();
 const { t } = useI18n();
 

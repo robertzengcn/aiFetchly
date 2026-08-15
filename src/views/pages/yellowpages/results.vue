@@ -222,7 +222,7 @@
         </v-card-title>
         <v-card-text>
           <ResultDetailsView
-            v-if="resultDetailsDialog.show"
+            v-if="resultDetailsDialog.show && resultDetailsDialog.result"
             :result="resultDetailsDialog.result"
             @close="resultDetailsDialog.show = false"
           />
@@ -241,6 +241,18 @@ import ResultDetailsView from './components/ResultDetailsView.vue'
 import { getYellowPagesTaskResults, getYellowPagesTaskDetail } from '@/views/api/yellowpages'
 import { YellowPagesResult, TaskStatus } from '@/modules/interface/ITaskManager'
 
+// Shape of the task-detail payload returned by getYellowPagesTaskDetail.
+interface TaskDetailsResponse {
+  name?: string
+  status?: TaskStatus
+  task?: {
+    platform?: string
+    keywords?: string[]
+    location?: string
+    created_at?: string | Date
+  }
+}
+
 // Route and router
 const route = useRoute()
 const router = useRouter()
@@ -257,14 +269,14 @@ const categoryFilter = ref('')
 const currentPage = ref(0)
 const pageSize = ref(20)
 const results = ref<YellowPagesResult[]>([])
-const taskDetails = ref<any>(null)
+const taskDetails = ref<TaskDetailsResponse | null>(null)
 const totalResults = ref(0)
 const totalPages = ref(0)
 
 // Dialog states
 const resultDetailsDialog = reactive({
   show: false,
-  result: null as any
+  result: null as YellowPagesResult | null
 })
 
 // Computed properties
@@ -474,7 +486,7 @@ const viewResultDetails = (result: YellowPagesResult) => {
   resultDetailsDialog.show = true
 }
 
-const getStatusColor = (status: TaskStatus) => {
+const getStatusColor = (status: TaskStatus | undefined) => {
   switch (status) {
     case TaskStatus.Completed:
       return 'text-success'
@@ -489,7 +501,7 @@ const getStatusColor = (status: TaskStatus) => {
   }
 }
 
-const getStatusText = (status: TaskStatus) => {
+const getStatusText = (status: TaskStatus | undefined) => {
   switch (status) {
     case TaskStatus.Completed:
       return t('home.completed')
@@ -504,7 +516,7 @@ const getStatusText = (status: TaskStatus) => {
   }
 }
 
-const formatDate = (date: string | Date) => {
+const formatDate = (date: string | Date | undefined) => {
   if (!date) return 'N/A'
   return new Date(date).toLocaleDateString()
 }

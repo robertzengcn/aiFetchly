@@ -137,67 +137,84 @@ describe("Native module version compatibility", () => {
     "node_modules/better-sqlite3/build/Release/better_sqlite3.node"
   );
 
-  it("should have better-sqlite3 compiled for Electron (not system Node.js)", () => {
-    if (!fs.existsSync(betterSqliteModulePath)) {
-      console.warn(
-        "Skipping: better-sqlite3 native binary not found. Run `yarn rebuild-better-sqlite` first."
+  // These tests spawn the Electron binary under `spawnSync` with an internal
+  // 15s timeout. On a cold CI runner Electron can take ~10-15s to spin up
+  // (and the "matching Electron binary" test spawns it twice), so the
+  // spawned work alone can run for ~30s while never exceeding each
+  // spawnSync's own 15s cap. Vitest's default testTimeout is 5000ms, which
+  // kills the test while spawnSync is still waiting and reports a spurious
+  // "Test timed out" failure. Use a generous per-test timeout so Vitest
+  // waits for the spawned Electron to finish (or hit its own timeout and
+  // return cleanly), instead of cutting it off mid-spawn.
+  it(
+    "should have better-sqlite3 compiled for Electron (not system Node.js)",
+    { timeout: 60000 },
+    () => {
+      if (!fs.existsSync(betterSqliteModulePath)) {
+        console.warn(
+          "Skipping: better-sqlite3 native binary not found. Run `yarn rebuild-better-sqlite` first."
+        );
+        return;
+      }
+
+      const compiledVersion = getCompiledModuleVersion(
+        betterSqliteModulePath,
+        projectRoot
       );
-      return;
+      expect(
+        compiledVersion,
+        "Should be able to read compiled module version from binary"
+      ).not.toBeNull();
+
+      const systemVersion = parseInt(process.versions.modules, 10);
+
+      // The compiled version must differ from system Node.js version,
+      // meaning it was built for Electron, not the system Node.js.
+      expect(
+        compiledVersion,
+        `better-sqlite3 was compiled for system Node.js (MODULE_VERSION ${compiledVersion}). ` +
+          `Run \`yarn rebuild-better-sqlite\` to compile it for Electron.`
+      ).not.toBe(systemVersion);
     }
+  );
 
-    const compiledVersion = getCompiledModuleVersion(
-      betterSqliteModulePath,
-      projectRoot
-    );
-    expect(
-      compiledVersion,
-      "Should be able to read compiled module version from binary"
-    ).not.toBeNull();
+  it(
+    "should have better-sqlite3 module version matching Electron binary",
+    { timeout: 60000 },
+    () => {
+      if (!fs.existsSync(electronBinaryPath)) {
+        console.warn("Skipping: Electron binary not found.");
+        return;
+      }
+      if (!fs.existsSync(betterSqliteModulePath)) {
+        console.warn("Skipping: better-sqlite3 native binary not found.");
+        return;
+      }
 
-    const systemVersion = parseInt(process.versions.modules, 10);
+      const electronModuleVersion =
+        getElectronModuleVersion(electronBinaryPath) ??
+        getElectronRuntimeModuleVersion(projectRoot);
+      expect(
+        electronModuleVersion,
+        "Should be able to read node_module_version from Electron binary"
+      ).not.toBeNull();
 
-    // The compiled version must differ from system Node.js version,
-    // meaning it was built for Electron, not the system Node.js.
-    expect(
-      compiledVersion,
-      `better-sqlite3 was compiled for system Node.js (MODULE_VERSION ${compiledVersion}). ` +
-        `Run \`yarn rebuild-better-sqlite\` to compile it for Electron.`
-    ).not.toBe(systemVersion);
-  });
+      const compiledVersion = getCompiledModuleVersion(
+        betterSqliteModulePath,
+        projectRoot
+      );
+      expect(
+        compiledVersion,
+        "Should be able to read compiled module version from binary"
+      ).not.toBeNull();
 
-  it("should have better-sqlite3 module version matching Electron binary", () => {
-    if (!fs.existsSync(electronBinaryPath)) {
-      console.warn("Skipping: Electron binary not found.");
-      return;
+      expect(
+        compiledVersion,
+        `better-sqlite3 MODULE_VERSION (${compiledVersion}) does not match Electron's expected version (${electronModuleVersion}). ` +
+          `Run \`yarn rebuild-better-sqlite\` to fix this.`
+      ).toBe(electronModuleVersion);
     }
-    if (!fs.existsSync(betterSqliteModulePath)) {
-      console.warn("Skipping: better-sqlite3 native binary not found.");
-      return;
-    }
-
-    const electronModuleVersion =
-      getElectronModuleVersion(electronBinaryPath) ??
-      getElectronRuntimeModuleVersion(projectRoot);
-    expect(
-      electronModuleVersion,
-      "Should be able to read node_module_version from Electron binary"
-    ).not.toBeNull();
-
-    const compiledVersion = getCompiledModuleVersion(
-      betterSqliteModulePath,
-      projectRoot
-    );
-    expect(
-      compiledVersion,
-      "Should be able to read compiled module version from binary"
-    ).not.toBeNull();
-
-    expect(
-      compiledVersion,
-      `better-sqlite3 MODULE_VERSION (${compiledVersion}) does not match Electron's expected version (${electronModuleVersion}). ` +
-        `Run \`yarn rebuild-better-sqlite\` to fix this.`
-    ).toBe(electronModuleVersion);
-  });
+  );
 
   it("should have the rebuild script target matching the installed Electron version", () => {
     const electronPkgPath = path.join(
@@ -394,13 +411,9 @@ describe("Native module version compatibility", () => {
     // 43.2.0 and runtime electron` when the hoisted node-abi@3.85.0 predates
     // Electron 43. It must return a numeric ABI string without throwing.
     let abi: string | null = null;
-    expect(
-      () => {
-        abi = nodeAbi!.getAbi(electronVersion, "electron");
-      },
-      `node-abi could not resolve ABI for installed Electron ${electronVersion}. ` +
-        "Bump the `node-abi` resolution in package.json to a release that knows this Electron major."
-    ).not.toThrow();
+    expect(() => {
+      abi = nodeAbi!.getAbi(electronVersion, "electron");
+    }, `node-abi could not resolve ABI for installed Electron ${electronVersion}. ` + "Bump the `node-abi` resolution in package.json to a release that knows this Electron major.").not.toThrow();
 
     expect(abi, "getAbi returned a non-string").toBeTypeOf("string");
     expect(
@@ -411,9 +424,7 @@ describe("Native module version compatibility", () => {
   });
 
   it("node-abi resolution in package.json must pin a version that knows the installed Electron major", () => {
-    const pkg = JSON.parse(
-      fs.readFileSync(packageJsonPath, "utf-8")
-    ) as {
+    const pkg = JSON.parse(fs.readFileSync(packageJsonPath, "utf-8")) as {
       resolutions?: Record<string, string>;
       devDependencies?: Record<string, string>;
     };

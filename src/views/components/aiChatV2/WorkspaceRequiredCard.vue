@@ -41,7 +41,6 @@ import {
   approveWorkspace,
   pickFolder,
 } from "@/views/api/workspace";
-import type { WorkspaceRecord } from "@/entityTypes/workspaceTypes";
 
 const props = defineProps<{
   conversationId: string;

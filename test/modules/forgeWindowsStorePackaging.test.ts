@@ -1,11 +1,13 @@
 import { expect } from "chai";
 import { readFileSync } from "node:fs";
 import path from "node:path";
+import { load } from "js-yaml";
 
 interface ForgeMaker {
   name: string;
   config?: {
     sign?: boolean;
+    windowsKitVersion?: string;
     manifestVariables?: Record<string, string>;
   };
 }
@@ -17,6 +19,25 @@ interface ForgeConfig {
 interface ForgeConfigModule {
   default?: ForgeConfig;
   makers?: ForgeMaker[];
+}
+
+interface WorkflowStep {
+  name?: string;
+  if?: string;
+  run?: string;
+  uses?: string;
+  with?: Record<string, string>;
+}
+
+interface ReleaseWorkflow {
+  jobs?: {
+    "build-windows"?: {
+      steps?: WorkflowStep[];
+    };
+    "build-macos"?: {
+      if?: string;
+    };
+  };
 }
 
 const forgeConfigPath = path.resolve(__dirname, "../../forge.config.js");
@@ -53,10 +74,13 @@ describe("Windows Store packaging", (): void => {
 
     expect(maker).to.not.equal(undefined);
     expect(maker?.config?.sign).to.equal(false);
+    expect(maker?.config?.windowsKitVersion).to.equal("10.0.26100.0");
     expect(maker?.config?.manifestVariables).to.include({
       packageIdentity: "12345RobertZeng.AiFetchly",
       publisher: "CN=STORE-PUBLISHER-ID",
       publisherDisplayName: "Robert Zeng",
+      packageMinOSVersion: "10.0.17763.0",
+      packageMaxOSVersionTested: "10.0.26100.0",
     });
   });
 
@@ -72,6 +96,53 @@ describe("Windows Store packaging", (): void => {
     );
     expect(workflow).to.include(
       "if: ${{ github.event_name == 'workflow_dispatch' && inputs.build_mode == 'production' }}"
+    );
+  });
+
+  it("adds an unsigned MSI to master push artifacts", (): void => {
+    const workflow = load(
+      readFileSync(releaseWorkflowPath, "utf8")
+    ) as ReleaseWorkflow;
+    const steps = workflow.jobs?.["build-windows"]?.steps ?? [];
+    const stepByName = (name: string): WorkflowStep => {
+      const step = steps.find((candidate: WorkflowStep): boolean => {
+        return candidate.name === name;
+      });
+      expect(step, `missing workflow step: ${name}`).to.not.equal(undefined);
+      return step as WorkflowStep;
+    };
+
+    expect(stepByName("Install WiX Toolset").if).to.equal(
+      "${{ github.event_name == 'push' || env.BUILD_MODE != 'store' }}"
+    );
+
+    const msiStep = stepByName("Build MSI for local testing");
+    expect(msiStep.if).to.equal("${{ github.event_name == 'push' }}");
+    expect(msiStep.run).to.include(
+      "electron-forge make --skip-package --platform=win32 --targets @electron-forge/maker-wix"
+    );
+
+    const validationStep = stepByName("Validate master Windows installers");
+    expect(validationStep.if).to.equal("${{ github.event_name == 'push' }}");
+    expect(validationStep.run).to.include(
+      "Get-ChildItem -Path out/make -Recurse -Filter *.msix"
+    );
+    expect(validationStep.run).to.include(
+      "Get-ChildItem -Path out/make -Recurse -Filter *.msi"
+    );
+
+    const uploadStep = stepByName("Upload Windows installers");
+    expect(uploadStep.with?.path).to.include("out/make/**/*.msix");
+    expect(uploadStep.with?.path).to.include("out/make/**/*.msi");
+  });
+
+  it("builds a macOS package for master pushes", (): void => {
+    const workflow = load(
+      readFileSync(releaseWorkflowPath, "utf8")
+    ) as ReleaseWorkflow;
+
+    expect(workflow.jobs?.["build-macos"]?.if).to.equal(
+      "${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.build_mode != 'store') }}"
     );
   });
 });

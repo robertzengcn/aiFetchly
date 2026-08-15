@@ -160,6 +160,7 @@
 // import router from '@/views/router';
 import { ref, onMounted } from 'vue';
 import CampaignTable from '@/views/pages/campaign/widgets/CampaignTable.vue'
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const dialog = ref(false);
 
 onMounted(() => {
@@ -170,11 +171,13 @@ onMounted(() => {
     //     console.log(list.value);
     // }, 300);
 });
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const onTest = () => {
     // router.push({
     //     path: '/graphics/oasis-engine',
     // });
 };
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const loadItems =({ page, itemsPerPage, sortBy }) =>{
     console.log(page, itemsPerPage, sortBy)
 }

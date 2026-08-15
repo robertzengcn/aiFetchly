@@ -134,6 +134,10 @@ const i18n = createI18n({
         conversation_history: "Conversation history",
         manage_mcp_tools: "Manage MCP Tools",
         new_conversation: "New conversation",
+        voice: {
+          enable_spoken_responses: "Enable spoken responses",
+          disable_spoken_responses: "Disable spoken responses",
+        },
       },
       workspace: {
         badgeLabel: "Workspace",
@@ -175,7 +179,7 @@ function mountChat() {
         AiChatV2Messages: {
           props: ["messages"],
           template:
-            '<div data-testid="messages">{{ messages.map((m) => m.content).join("\\n") }}</div>',
+            '<div data-testid="messages">{{ messages.map((m) => `${m.content}|${m.timestamp}`).join("\\n") }}</div>',
         },
         AiChatV2QuestionCard: true,
         AiChatV2PlanApprovalCard: true,
@@ -263,5 +267,32 @@ describe("AiChatV2 new conversation while streaming", () => {
     expect(wrapper.find('[data-testid="messages"]').text()).toContain(
       "second message in new chat"
     );
+  });
+
+  it("timestamps a delayed stream error when the failure occurs", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-13T06:57:57.000Z"));
+    try {
+      vi.mocked(streamChatV2Message).mockImplementation(
+        async (_request, _onChunk, _onComplete, onError) => {
+          vi.setSystemTime(new Date("2026-08-13T07:02:03.000Z"));
+          const error = new Error("HTTP 520: <none>");
+          onError(error);
+          throw error;
+        }
+      );
+
+      const wrapper = mountChat();
+      await flushPromises();
+
+      await wrapper.find('[data-testid="send-first"]').trigger("click");
+      await flushPromises();
+
+      expect(wrapper.find('[data-testid="messages"]').text()).toContain(
+        "HTTP 520: <none>|2026-08-13T07:02:03.000Z"
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

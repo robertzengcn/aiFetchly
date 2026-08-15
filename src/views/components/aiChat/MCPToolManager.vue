@@ -425,7 +425,6 @@
 
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue';
-import { useI18n } from 'vue-i18n';
 import {
   getMCPTools,
   addMCPServer,
@@ -438,8 +437,6 @@ import {
   type MCPServer,
   type MCPServerConfig
 } from '@/views/api/mcpTools';
-
-const { t } = useI18n();
 
 // Props
 interface Props {
@@ -849,7 +846,7 @@ async function deleteServer() {
 
   deletingServer.value = true;
   try {
-    const response = await deleteMCPServer(serverToDelete.value.id);
+    await deleteMCPServer(serverToDelete.value.id);
     // if (response) {
     //   showDeleteDialog.value = false;
     //   await loadServers();

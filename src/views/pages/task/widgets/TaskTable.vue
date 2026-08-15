@@ -83,7 +83,7 @@ const props = withDefaults(defineProps<Props>(), {
 })
 
 // Emits
-const emit = defineEmits<{
+defineEmits<{
   'edit-task': [task: TaskEntity]
   'delete-task': [task: TaskEntity]
   'run-task': [task: TaskEntity]
@@ -107,7 +107,7 @@ const totalItems = ref(0)
 const search = ref('')
 
 // Methods
-const loadItems = ({ page, itemsPerPage, sortBy }) => {
+const loadItems = () => {
   // This would typically call an API
   serverItems.value = props.tasks
   totalItems.value = props.tasks.length

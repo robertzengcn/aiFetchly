@@ -49,43 +49,44 @@ const FakeAPI = {
     }
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const headers=ref<Array<any>>([])
 // let refreshInterval:ReturnType<typeof setInterval> | undefined;
 
 headers.value = [
     {
-        title: computed(_ => CapitalizeFirstLetter(t("searchtask.id"))),
+        title: computed(() => CapitalizeFirstLetter(t("searchtask.id"))),
         align: 'center',
         sortable: false,
         key: 'id',
     },
     {
-        title: computed(_ => CapitalizeFirstLetter(t("search.search_enginer_name"))),
+        title: computed(() => CapitalizeFirstLetter(t("search.search_enginer_name"))),
         align: 'start',
         sortable: false,
         key: 'enginer_name',
     },
     {
-        title: computed(_ => CapitalizeFirstLetter(t("search.keyword"))),
+        title: computed(() => CapitalizeFirstLetter(t("search.keyword"))),
         align: 'start',
         sortable: false,
         key: 'keywordline',
         // value: computed(value => value.join(', '))
     },
     {
-        title: computed(_ => CapitalizeFirstLetter(t("searchresult.numbers"))),
+        title: computed(() => CapitalizeFirstLetter(t("searchresult.numbers"))),
         align: 'center',
         sortable: false,
         key: 'result_count',
     },
     {
-        title: computed(_ => CapitalizeFirstLetter(t("searchresult.status"))),
+        title: computed(() => CapitalizeFirstLetter(t("searchresult.status"))),
         align: 'start',
         sortable: false,
         key: 'status',
     },
     {
-        title: computed(_ => CapitalizeFirstLetter(t("searchresult.record_time"))),
+        title: computed(() => CapitalizeFirstLetter(t("searchresult.record_time"))),
         align: 'start',
         sortable: false,
         key: 'record_time',

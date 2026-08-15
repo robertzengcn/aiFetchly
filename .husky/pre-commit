@@ -1,5 +1,12 @@
 npx lint-staged
 
+# Full-project lint (matches CI's `yarn lint` exactly). Block the commit
+# if ANY file in the project has an eslint error — not just staged files.
+# This catches errors that lint-staged misses (e.g. errors in files the
+# developer edited but didn't stage) so commits can't pass locally while
+# failing CI. `yarn lint` runs `vue-cli-service lint --no-fix`.
+yarn lint
+
 # Full-project typechecks (no --watch). Fail the commit on type errors.
 yarn typecheck
 yarn vue-typecheck

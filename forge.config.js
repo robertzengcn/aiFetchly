@@ -333,7 +333,16 @@ dotenv.config({ path: path.resolve(__dirname, `.env.${env}`) });
 
 const isProductionBuild = env === "production";
 const isWindowsStoreBuild = process.env.WINDOWS_DISTRIBUTION === "store";
+const isMacStoreBuild = process.env.MAC_DISTRIBUTION === "store";
 const shouldBuildMacDmg = process.env.MAKE_MAC_DMG !== "false";
+const macStoreEntitlementsPath = path.resolve(
+  __dirname,
+  "build/entitlements.mas.plist"
+);
+const macStoreChildEntitlementsPath = path.resolve(
+  __dirname,
+  "build/entitlements.mas.inherit.plist"
+);
 
 function resolveProductionAsarConfig() {
   return {
@@ -369,6 +378,21 @@ function requireProductionEnv(name) {
     );
   }
   return value;
+}
+
+function resolveMacStoreProvisioningProfile() {
+  const configuredPath = requireProductionEnv("MAC_STORE_PROVISIONING_PROFILE");
+  const profilePath = path.resolve(__dirname, configuredPath);
+  if (!existsSync(profilePath)) {
+    throw new Error(
+      `Mac App Store packaging requires an existing provisioning profile: ${profilePath}`
+    );
+  }
+  return profilePath;
+}
+
+function isMainApplicationBundle(filePath) {
+  return filePath.endsWith(".app") && !filePath.includes(".app/Contents/");
 }
 
 if (isProductionBuild && process.platform === "win32" && !isWindowsStoreBuild) {
@@ -488,18 +512,32 @@ function copyBuiltChildProcesses(buildPath) {
 
 module.exports = {
   packagerConfig: {
+    appBundleId: "com.aifetchly.desktop",
     icon: "./src/assets/images/icon",
     ...(isProductionBuild && process.platform === "darwin"
-      ? {
-          osxSign: {},
-          osxNotarize: {
-            appleId: requireProductionEnv("APPLE_ID"),
-            appleIdPassword: requireProductionEnv(
-              "APPLE_APP_SPECIFIC_PASSWORD"
-            ),
-            teamId: requireProductionEnv("APPLE_TEAM_ID"),
-          },
-        }
+      ? isMacStoreBuild
+        ? {
+            osxSign: {
+              identity: requireProductionEnv("MAC_STORE_SIGNING_IDENTITY"),
+              type: "development",
+              provisioningProfile: resolveMacStoreProvisioningProfile(),
+              optionsForFile: (filePath) => ({
+                entitlements: isMainApplicationBundle(filePath)
+                  ? macStoreEntitlementsPath
+                  : macStoreChildEntitlementsPath,
+              }),
+            },
+          }
+        : {
+            osxSign: {},
+            osxNotarize: {
+              appleId: requireProductionEnv("APPLE_ID"),
+              appleIdPassword: requireProductionEnv(
+                "APPLE_APP_SPECIFIC_PASSWORD"
+              ),
+              teamId: requireProductionEnv("APPLE_TEAM_ID"),
+            },
+          }
       : {}),
     ...(isProductionBuild &&
     process.platform === "win32" &&
@@ -559,6 +597,9 @@ module.exports = {
             platforms: ["win32"],
             config: {
               sign: false,
+              // Build with the current Windows SDK while retaining compatibility
+              // with the oldest Windows release accepted by Partner Center.
+              windowsKitVersion: "10.0.26100.0",
               manifestVariables: {
                 packageIdentity: requireProductionEnv(
                   "WINDOWS_STORE_PACKAGE_IDENTITY"
@@ -570,6 +611,8 @@ module.exports = {
                 packageVersion: `${require("./package.json").version}.0`,
                 packageDisplayName: "AiFetchly",
                 appDisplayName: "AiFetchly",
+                packageMinOSVersion: "10.0.17763.0",
+                packageMaxOSVersionTested: "10.0.26100.0",
               },
             },
           },
@@ -920,10 +963,28 @@ module.exports = {
         }
         return foundModules;
       };
-      const nativeModuleDependencies = await getExternalNestedDependencies(
-        EXTERNAL_DEPENDENCIES
-      );
-      nativeModuleDependenciesToPackage = Array.from(nativeModuleDependencies);
+      // FORGE_SKIP_NATIVE_REBUILD=1 (set by the CI package-smoke job) also skips
+      // this prePackage dependency-graph walk. The walk uses @electron-forge
+      // core-utils' Walker to recursively realpath-scan every EXTERNAL_DEPENDENCIES
+      // subtree (puppeteer, typeorm, canvas, ...) to discover nested native
+      // deps and add them to the packager keep-list. On the constrained CI
+      // runner this same full-graph walk (mirroring the @electron/rebuild walk
+      // scripts/patch-remote-rebuild.js already no-ops) can stall packaging
+      // before it reaches "Copying files". The smoke test only verifies packaged
+      // worker files + renderer HTML layout — it never loads native binaries at
+      // runtime — so the static EXTERNAL_DEPENDENCIES allow-list (which already
+      // lists every direct native dep) is sufficient. Mirrors the
+      // FORGE_SKIP_NATIVE_REBUILD skip rationale in scripts/patch-remote-rebuild.js.
+      if (process.env.FORGE_SKIP_NATIVE_REBUILD === "1") {
+        nativeModuleDependenciesToPackage = Array.from(EXTERNAL_DEPENDENCIES);
+      } else {
+        const nativeModuleDependencies = await getExternalNestedDependencies(
+          EXTERNAL_DEPENDENCIES
+        );
+        nativeModuleDependenciesToPackage = Array.from(
+          nativeModuleDependencies
+        );
+      }
       rebuildPackagerAllowLists(nativeModuleDependenciesToPackage);
     },
     packageAfterCopy: async (_forgeConfig, buildPath) => {

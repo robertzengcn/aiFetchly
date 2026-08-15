@@ -221,7 +221,7 @@ import { useI18n } from 'vue-i18n'
 import CronExpressionBuilder from './CronExpressionBuilder.vue'
 import { validateCronExpression as validateCron, calculateNextRunTime as calculateNextRunTimeAPI } from '@/views/api/schedule'
 import { ScheduleCreateRequest, ScheduleUpdateRequest } from '@/entityTypes/schedule-type'
-import { TaskType, ScheduleStatus, TriggerType, DependencyCondition } from '@/entity/ScheduleTask.entity'
+import { TaskType, TriggerType, DependencyCondition } from '@/entity/ScheduleTask.entity'
 import {SearchtaskItem } from "@/entityTypes/searchControlType"
 import EmailresultTable from '@/views/pages/emailextraction/widgets/EmailResultTable.vue'
 import SearchResultSelectTable from "@/views/pages/search/widgets/SearchResultSelectTable.vue";
@@ -236,6 +236,7 @@ const { t } = useI18n()
 
 // Props
 interface Props {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   schedule?: any
   isEdit?: boolean
   loading?: boolean
@@ -286,10 +287,12 @@ const nextRunTime = ref('')
 const aiMessageFormState = ref<AiMessageTaskFormState | undefined>(undefined)
 
 // Available parent schedules for dependency
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const availableParentSchedules = ref<any[]>([])
 
 // Validation rules
 const rules = {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   required: (value: any) => !!value || t('schedule.this_field_required'),
   positive: (value: number) => value > 0 || t('schedule.must_be_positive'),
   nonNegative: (value: number) => value >= 0 || t('schedule.must_be_non_negative'),

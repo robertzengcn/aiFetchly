@@ -5,7 +5,8 @@
             <v-col cols="6" class="ps-3">
                 <v-list lines="two">
                     <v-list-subheader>Task Info</v-list-subheader>
-                    <v-list-item v-for="(item, i) in items" :key="i" :value="item" :title=item.title :subtitle=item.content
+                    <v-list-item
+v-for="(item, i) in items" :key="i" :value="item" :title="item.title" :subtitle="item.content"
                         color="primary">
                         <!-- <template v-slot:prepend>
             <v-icon :icon="item.icon"></v-icon>
@@ -15,7 +16,8 @@
                 </v-list>
             </v-col>
             <v-col cols="6" class="ps-3">
-                <v-textarea label="Log" clearable
+                <v-textarea
+label="Log" clearable
                 clear-icon="mdi-close-circle" v-model="runlog"></v-textarea>
             </v-col>
         </v-row>

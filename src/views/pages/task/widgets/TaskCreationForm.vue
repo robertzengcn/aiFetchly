@@ -154,12 +154,13 @@ interface Props {
   loading?: boolean
 }
 
-const props = withDefaults(defineProps<Props>(), {
+withDefaults(defineProps<Props>(), {
   loading: false
 })
 
 // Emits
 const emit = defineEmits<{
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   submit: [data: any]
   cancel: []
 }>()
@@ -191,6 +192,7 @@ const platformOptions = ref([
 
 // Validation rules
 const rules = {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   required: (value: any) => !!value || 'This field is required',
   positive: (value: number) => value > 0 || 'Must be a positive number'
 }

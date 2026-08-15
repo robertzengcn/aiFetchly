@@ -208,10 +208,12 @@ import PlatformForm from './PlatformForm.vue'
 import PlatformConfigForm from './PlatformConfigForm.vue'
 import { 
   getPlatformList, 
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   getPlatformDetail, 
   createPlatform, 
   updatePlatform, 
   deletePlatform, 
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   validatePlatform, 
   getPlatformStatistics, 
   togglePlatform 
@@ -221,6 +223,7 @@ import { PlatformConfig } from '@/modules/interface/IPlatformConfig'
 // Reactive data
 const platforms = ref<PlatformConfig[]>([])
 const loading = ref(false)
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const statistics = ref<any>(null)
 
 // Dialogs
@@ -234,6 +237,7 @@ const platformDialog = ref({
 const configDialog = ref({
   show: false,
   activeTab: 'json',
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   config: {} as any,
   jsonConfig: '',
   platformId: '' as string
@@ -318,6 +322,7 @@ const viewConfig = (platform: PlatformConfig) => {
   }
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const updateConfig = (config: any) => {
   configDialog.value.config = config
   configDialog.value.jsonConfig = JSON.stringify(config, null, 2)

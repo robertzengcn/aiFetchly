@@ -42,7 +42,7 @@ interface Props {
   lines?: number
 }
 
-const props = withDefaults(defineProps<Props>(), {
+withDefaults(defineProps<Props>(), {
   type: 'default',
   fields: 5,
   columns: 4,

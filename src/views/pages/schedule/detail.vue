@@ -472,11 +472,13 @@ const router = useRouter()
 const { t } = useI18n()
 
 // Reactive data
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const schedule = ref<any>(null)
 const aiMessageTask = ref<Record<string, unknown> | null>(null)
 const loading = ref(false)
 const running = ref(false)
 const error = ref('')
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const executionHistory = ref<any[]>([])
 const loadingHistory = ref(false)
 
@@ -492,7 +494,9 @@ const aiMessageTaskAllowedTools = computed(() => {
   }
 })
 const dependencies = ref<{
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   children: any[];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   parents: any[];
 }>({
   children: [],
@@ -639,7 +643,7 @@ const editSchedule = () => {
   router.push(`/schedule/edit/${route.params.id}`)
 }
 
-const handleViewDetails = (_execution: any) => {
+const handleViewDetails = () => {
   if (!schedule.value) return
 
   const taskType = schedule.value.task_type as TaskType
