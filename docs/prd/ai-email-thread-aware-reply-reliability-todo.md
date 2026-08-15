@@ -9,22 +9,44 @@
 - **Audited branch:** `worktree-ai-email-thread-aware-reply-reliability`
 - **Audit baseline:** `e3d99633`
 
-### Progress (2026-08-14)
+### Progress (2026-08-15)
 
-- **P0 (send-safety release blockers): IMPLEMENTED.** All six P0 items landed in
-  commits through `c07c1631` — authoritative approved-revision send + kill switch
-  (P0.1), full mailbox/envelope binding (P0.2), mandatory pre-draft policy
-  (P0.3), blocking output validator (P0.4), backfill correctness + startup
-  migration (P0.5), and delivery state + recovery + manual reconciliation
-  (P0.6). 0 tsc errors; 65 utility + 207 module tests pass (module tests run
-  serialized with `--no-file-parallelism` because they share the Token-fallback
-  SQLite DB). The detailed P0 checkboxes below are largely satisfied; a few
-  sub-items that depend on the conversation engine (Milestone 2 / P1) are
-  marked deferred.
-- **P1–P5: NOT STARTED.** Conversation entity/resolver/context (P1), inbound
-  content normalization + independent classification (P2), scoped knowledge +
-  relevance abstention (P3), reply headers + review UI + audit completeness
-  (P4), and performance/metrics/eval/QA gates (P5) remain.
+- **P0 (send-safety release blockers): IMPLEMENTED** (commits through `c07c1631`)
+  — authoritative approved-revision send + kill switch (P0.1), full mailbox/
+  envelope binding (P0.2), mandatory pre-draft policy (P0.3), blocking output
+  validator (P0.4), backfill correctness + startup migration (P0.5), and
+  delivery state + recovery + manual reconciliation (P0.6).
+- **P1 (conversation correctness): IMPLEMENTED** (`3110d280`, `99dc0db6`) —
+  EmailConversationEntity + received-message normalization fields + write
+  schema (P1.1); pure thread resolver (normalize/parse/resolve + provider
+  singleton fallback, never subject-only) + restartable conversation backfill
+  wired into startup (P1.2); ordered inbound+sent-outbound turn query with
+  mailbox/conversation isolation (P1.3); bounded context builder with
+  quote/signature reduction, budgets, deterministic commitment/summary
+  extraction, conflict→review, and the short-reply guard (P1.4).
+- **P2 (normalization + classification): IMPLEMENTED** (`90a28d18`) — receive-time
+  body normalization (HTML-only via sanitize-html + html-to-text, control-char
+  strip, tail+question-preserving truncation), automated-header + attachment-
+  metadata persistence (P2.1); deterministic-first independent classifier
+  (multilingual unsubscribe, bounce, automated, sensitive→review, unknown
+  fallback) with source/version provenance that draft generation cannot
+  overwrite (P2.2). The constrained-model classification stage (P2.2 bullet 3)
+  is deferred with the deterministic stage authoritative.
+- **P3 (scoped knowledge + abstention): IMPLEMENTED** (`c52848ae`) — knowledge
+  scope entity/model/module with empty=none semantics enforced at the retrieval
+  caller (P3.1); relevance/conflict/staleness/abstention decision with neighbor
+  + duplicate rules (P3.2); untrusted-reference prompt boundary replacing the
+  trusted label + no-general-knowledge abstention mode (P3.3). Strict
+  structured generation schema + bounded regeneration (P3.4) and full identity
+  versioning (P3.5) remain partially covered by the P0.4 validator and are
+  candidates for the generation-refactor pass with the review UI.
+- **P4 (headers + audit): IMPLEMENTED for 4.1 + 4.3** (`6d36f916`) — validated
+  reply-header builder wired into delivery (P4.1); deterministic correlation id
+  + version stamps across generation/policy/claim/outcome/reconciliation audit
+  metadata, with transactional pre-SMTP audit already fail-closed from P0 (P4.3).
+- **REMAINING (need a running app or dedicated sessions):** P4.2 review UI +
+  six-language i18n; P4.4 retention/deletion sweep + DTO privacy audit; P5
+  performance benchmarks, metrics, evaluation fixture suites, and UI QA.
 
 ## Purpose
 
