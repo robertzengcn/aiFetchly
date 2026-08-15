@@ -115,8 +115,28 @@ const WEBSITE_IMPORT_INTENT_RE =
 const SCHEDULE_INTENT_RE =
   /\b(schedule|scheduled|scheduler|cron|run .*\b(?:later|daily|weekly|monthly)|automation schedule)\b/i;
 
+/**
+ * Intent for the `create_html_artifact` tool.
+ *
+ * The model only sees this tool when it is promoted to "contextual", so the
+ * regex must match the phrasings a user actually types. The original alternation
+ * (compound nouns: "html artifact", "dashboard", "chart", …) misses very common
+ * verb-near-html phrasings such as "show result in html", "display the data as
+ * html", "render the table in html", or "make an html report". Without a match
+ * the tool stays deferred, the model falls back to the always-loaded file tools,
+ * and ends up pasting raw HTML into chat.
+ *
+ * Two added branches catch those phrasings while keeping generic HTML *knowledge*
+ * questions deferred:
+ *   - A render/display/show/generate verb within ~40 chars of "html"
+ *     (the proximity cap stops long-distance false positives).
+ *   - "html" immediately followed by a deliverable noun (report / file / page /
+ *     view / dashboard / document / table).
+ * Bare "html" with no nearby verb or noun does NOT match — so "what is HTML?",
+ * "how do I center a div in html", or "why is my html broken" stay deferred.
+ */
 const HTML_ARTIFACT_INTENT_RE =
-  /\b(html artifact|artifact|dashboard|chart|visual report|interactive report|formatted document|landing[- ]page preview|comparison table)\b/i;
+  /\b(?:show|display|render|present|view|generate|create|make|build|put|output|format)\b[^.!?\n]{0,40}?\bhtml\b|\bhtml\b[^.!?\n]{0,30}?\b(?:report|file|page|view|dashboard|document|table)\b|\b(?:html artifact|artifact|dashboard|chart|visual report|interactive report|formatted document|landing[- ]page preview|comparison table)\b/i;
 
 /**
  * Natural-language local-image attach / analyze / edit intent.

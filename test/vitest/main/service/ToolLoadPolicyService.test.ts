@@ -291,6 +291,42 @@ describe("ToolLoadPolicyService.classify", () => {
     ).toBe("contextual");
   });
 
+  it("promotes create_html_artifact for 'show/render/display ... in html' phrasings", () => {
+    const phrases = [
+      "show result in html",
+      "show data in html",
+      "show data in html file",
+      "show the results as html",
+      "display the results as html",
+      "render the table in html",
+      "make an html report",
+      "generate an html page for the contacts",
+      "put this into an html page",
+      "output the report as html",
+    ];
+    for (const currentUserMessage of phrases) {
+      expect(
+        classify("create_html_artifact", "builtin", { currentUserMessage })
+      ).toBe("contextual");
+    }
+  });
+
+  it("does NOT promote create_html_artifact for generic HTML knowledge questions", () => {
+    const phrases = [
+      "what is HTML?",
+      "how do I center a div in html",
+      "why is my html broken",
+      "explain how HTML works",
+      "write a short product tagline",
+      "what is the weather today",
+    ];
+    for (const currentUserMessage of phrases) {
+      expect(
+        classify("create_html_artifact", "builtin", { currentUserMessage })
+      ).toBe("deferred");
+    }
+  });
+
   it("keeps email inbox tools deferred by default and for outbound email phrasing", () => {
     expect(classify("list_email_inboxes", "builtin")).toBe("deferred");
     expect(classify("fetch_unread_emails", "builtin")).toBe("deferred");
