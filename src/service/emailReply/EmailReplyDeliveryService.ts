@@ -13,6 +13,7 @@ import {
   hashApprovalEnvelope,
 } from "@/service/emailReply/EmailReplyRevisionHasher";
 import { validateSendBinding } from "@/service/emailReply/EmailReplySendBinding";
+import { buildOutboundHeaders } from "@/service/emailReply/EmailReplyHeaderBuilder";
 import {
   REPLY_POLICY_VERSION,
   REPLY_VALIDATOR_VERSION,
@@ -243,13 +244,22 @@ export class EmailReplyDeliveryService {
     let providerMessageId: string | null = null;
     let sanitizedError: string | null = null;
     try {
-      const raw = await sender.sendReplyEmail({
-        receiver: revision.recipientAddress,
+      // Thread-correct, validated headers (FR-022): normalized parent id,
+      // deduped References chain, single Re: prefix. Malformed values are
+      // omitted; a bad recipient blocks the send before SMTP.
+      const headers = buildOutboundHeaders({
         subject: revision.subject,
+        recipientAddress: revision.recipientAddress,
+        parentMessageId: message.messageId,
+        parentReferences: message.referencesHeader,
+      });
+      const raw = await sender.sendReplyEmail({
+        receiver: headers.recipientAddress,
+        subject: headers.subject,
         text: revision.bodyText,
         html: revision.bodyHtml,
-        inReplyTo: message.messageId,
-        references: message.referencesHeader,
+        inReplyTo: headers.thread.inReplyTo,
+        references: headers.thread.references.join(" "),
       });
       const classified = classifySubmissionResult(raw);
       certainty = classified.certainty;

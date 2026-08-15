@@ -27,6 +27,7 @@ import {
 import { EmailServiceModule } from "@/modules/emailServiceModule";
 import { materializeRevision1 } from "@/service/emailReply/EmailReplyRevisionMaterializer";
 import { EmailReplyPolicyOrchestrator } from "@/service/emailReply/EmailReplyPolicyOrchestrator";
+import { correlationIdForMessage } from "@/service/emailReply/EmailReplyCorrelation";
 
 const VALID_CLASSIFICATIONS: ReadonlySet<string> = new Set([
   "interested",
@@ -102,6 +103,12 @@ export class EmailReplyDraftGenerationService {
         audit.action = "auto_reply_blocked";
         audit.actor = "system";
         audit.reason = `[${policyDecision.code}] ${policyDecision.reason}`;
+        audit.metadataJson = JSON.stringify({
+          correlationId: correlationIdForMessage(message.id),
+          policyVersion: policyDecision.policyVersion,
+          ruleId: policyDecision.ruleId,
+          stage: "pre_draft",
+        });
         await this.replyAuditModule.create(audit);
       } catch (e) {
         console.error("Failed to write pre-draft policy audit:", e);
@@ -322,6 +329,10 @@ export class EmailReplyDraftGenerationService {
       log.action = "draft_created";
       log.actor = "ai";
       log.reason = "AI generated knowledge-grounded reply draft";
+      log.metadataJson = JSON.stringify({
+        correlationId: correlationIdForMessage(messageId),
+        promptVersion: REPLY_PROMPT_VERSION,
+      });
       await this.replyAuditModule.create(log);
     } catch (e) {
       console.error("Failed to write draft_created audit:", e);

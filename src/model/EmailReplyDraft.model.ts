@@ -17,6 +17,7 @@ import { emailReplyDraftWriteSchema } from "@/schemas/entity/emailReplyDraft";
 import { emailReplyDraftRevisionWriteSchema } from "@/schemas/entity/emailReplyDraftRevision";
 import { rejectDatabaseAccessFromWorker } from "@/model/_workerBoundaryGuard";
 import { AsyncMutex } from "@/utils/asyncMutex";
+import { correlationIdForMessage } from "@/service/emailReply/EmailReplyCorrelation";
 
 /**
  * Process-wide serializer for reply-reliability write transactions. See
@@ -375,6 +376,7 @@ export class EmailReplyDraftModel extends BaseDb {
       audit.actor = "system";
       audit.reason = "Atomic approved->sending claim before SMTP";
       audit.metadataJson = JSON.stringify({
+        correlationId: correlationIdForMessage(input.messageId),
         attemptId: savedAttempt.id,
         revisionId: input.revisionId,
         policyVersion: input.policyVersion,
@@ -469,6 +471,7 @@ export class EmailReplyDraftModel extends BaseDb {
           ? "SMTP accepted reply"
           : input.sanitizedError ?? input.outcome;
       audit.metadataJson = JSON.stringify({
+        correlationId: correlationIdForMessage(input.messageId),
         attemptId: input.attemptId,
         providerMessageId: input.providerMessageId ?? null,
         failureCode: input.failureCode ?? null,
@@ -567,6 +570,7 @@ export class EmailReplyDraftModel extends BaseDb {
       audit.actor = "system";
       audit.reason = `Manual reconciliation: ${input.action}`;
       audit.metadataJson = JSON.stringify({
+        correlationId: correlationIdForMessage(input.messageId),
         attemptId: input.attemptId,
         evidence: input.evidence ?? null,
         providerMessageId: input.providerMessageId ?? null,
