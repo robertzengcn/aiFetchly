@@ -15,6 +15,7 @@ import {
 import { WorkspaceResolver } from "@/service/WorkspaceResolver";
 import { AIFetchlyContextLoader } from "@/service/aifetchlyConfig/AIFetchlyContextLoader";
 import { buildAvailableAgentsBlock } from "@/service/aifetchlyConfig/availableAgentsBlock";
+import { buildHtmlArtifactGuidanceSection } from "@/service/HtmlArtifactPromptSection";
 import path from "node:path";
 import os from "node:os";
 import type {
@@ -41,7 +42,9 @@ export interface AIChatContextAssembleInput {
   readonly maxTokens?: number;
   readonly planState?: AIChatPlanStateView | null;
   readonly recentMessageWindow?: number;
-  readonly currentUserContentParts?: Array<OpenAITextContentPart | OpenAIImageUrlContentPart>;
+  readonly currentUserContentParts?: Array<
+    OpenAITextContentPart | OpenAIImageUrlContentPart
+  >;
 }
 
 export interface AIChatContextAssembleResult {
@@ -212,6 +215,23 @@ export class AIChatContextAssembler {
       );
     }
 
+    // HTML-artifact usage guidance (design §15). A static, main-process-safe
+    // instruction that tells the model to call create_html_artifact instead of
+    // pasting raw HTML into chat or reaching for workspace file tools. Static
+    // text — injection can never meaningfully fail, but degrade to no-injection
+    // like the surrounding blocks so a future change cannot break chat.
+    try {
+      messages.push({
+        role: "system",
+        content: buildHtmlArtifactGuidanceSection(),
+      });
+    } catch (err) {
+      console.error(
+        "[ai-chat-context] html artifact guidance injection failed:",
+        err
+      );
+    }
+
     // Durable user memory injection. Reads the user-controllable toggle from
     // the system_setting table (default-on when absent). Placed before compact
     // context so recent conversation history wins when they conflict.
@@ -340,15 +360,16 @@ export class AIChatContextAssembler {
     let appVersion = "unknown";
     try {
       const { app } = await import("electron");
-      const fn = (
-        app as unknown as { getVersion?: () => string }
-      ).getVersion;
+      const fn = (app as unknown as { getVersion?: () => string }).getVersion;
       appVersion = typeof fn === "function" ? fn.call(app) : "unknown";
     } catch {
       // Not running inside Electron (e.g. test runner) — leave as "unknown".
     }
 
-    const now = new Date().toISOString().replace("T", " ").replace(/\.\d+Z$/, " UTC");
+    const now = new Date()
+      .toISOString()
+      .replace("T", " ")
+      .replace(/\.\d+Z$/, " UTC");
 
     return [
       "# Environment & System Context",

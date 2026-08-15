@@ -424,9 +424,9 @@ describe("AIChatContextAssembler — custom context directive", () => {
           message.content.includes("Environment & System Context")
       )
     ).toBe(true);
-    expect(
-      result.messages.some((message) => message.content === "")
-    ).toBe(false);
+    expect(result.messages.some((message) => message.content === "")).toBe(
+      false
+    );
     expect(result.messages[result.messages.length - 1]).toEqual({
       role: "user",
       content: "hello",
@@ -504,5 +504,68 @@ describe("AIChatContextAssembler — custom context directive", () => {
       role: "user",
       content: "hello",
     });
+  });
+});
+
+describe("AIChatContextAssembler — HTML artifact guidance", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockDurableRetrieve.mockResolvedValue({
+      memories: [],
+      tokenEstimate: 0,
+      contextBlock: "",
+    });
+    mockWorkspaceRetrieve.mockResolvedValue({
+      memories: [],
+      tokenEstimate: 0,
+      contextBlock: "",
+    });
+    mockGetByConversation.mockResolvedValue(null);
+    mockGetActiveSummary.mockResolvedValue(null);
+    mockGetConversationMessages.mockResolvedValue([]);
+    mockGetSettingValue.mockResolvedValue(null);
+    mockListActiveForRuntime.mockResolvedValue([]);
+  });
+
+  it("injects the create_html_artifact usage guidance as a system message", async () => {
+    const assembler = new AIChatContextAssembler();
+    const result = await assembler.assemble({
+      conversationId: "conv-html",
+      currentUserMessage: "show result in html",
+      baseSystemPrompt: "you are helpful",
+      mode: "chat",
+    });
+
+    const guidance = result.messages.find(
+      (m) =>
+        m.role === "system" &&
+        typeof m.content === "string" &&
+        m.content.includes("create_html_artifact")
+    );
+    expect(guidance).toBeTruthy();
+    // Steering toward the artifact tool, away from raw HTML and file tools.
+    expect(guidance!.content).toContain("main content area");
+    expect(guidance!.content).toContain("file_read");
+    expect(guidance!.content).toContain("tool_catalog_search");
+  });
+
+  it("injects the guidance even for a plain conversational message", async () => {
+    const assembler = new AIChatContextAssembler();
+    const result = await assembler.assemble({
+      conversationId: "conv-html",
+      currentUserMessage: "what is the weather today",
+      baseSystemPrompt: "you are helpful",
+      mode: "chat",
+    });
+
+    const guidance = result.messages.find(
+      (m) =>
+        m.role === "system" &&
+        typeof m.content === "string" &&
+        m.content.includes("HTML Artifacts")
+    );
+    // Guidance is always injected (cheap, static) so the model knows the
+    // intent to reach for the artifact tool before it is promoted.
+    expect(guidance).toBeTruthy();
   });
 });
