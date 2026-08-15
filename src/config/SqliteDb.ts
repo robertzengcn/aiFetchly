@@ -92,6 +92,7 @@ import { EmailAutoReplyAuditLogEntity } from "@/entity/EmailAutoReplyAuditLog.en
 import { EmailReplyDraftRevisionEntity } from "@/entity/EmailReplyDraftRevision.entity";
 import { EmailReplyApprovalEntity } from "@/entity/EmailReplyApproval.entity";
 import { EmailReplySendAttemptEntity } from "@/entity/EmailReplySendAttempt.entity";
+import { EmailReplyKnowledgeScopeEntity } from "@/entity/EmailReplyKnowledgeScope.entity";
 import { EmailConversationEntity } from "@/entity/EmailConversation.entity";
 import Database from "better-sqlite3";
 import { app } from "electron";
@@ -516,6 +517,7 @@ export class SqliteDb {
           EmailReplyApprovalEntity,
           EmailReplySendAttemptEntity,
           EmailConversationEntity,
+          EmailReplyKnowledgeScopeEntity,
           AIChatPlanEntity,
           AIChatPlanVersionEntity,
           AIChatPlanQuestionEntity,

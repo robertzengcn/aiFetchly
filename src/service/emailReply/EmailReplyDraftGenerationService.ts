@@ -119,9 +119,9 @@ export class EmailReplyDraftGenerationService {
 
     // 4. Retrieve knowledge-library context (never throws).
     const knowledge = await retrieveReplyKnowledge({
+      emailServiceId: message.emailServiceId,
       subject: message.subject,
       bodyText: message.bodyText,
-      fromName: message.fromName,
       goal: input.goal,
       classification: message.classification,
       useKnowledgeLibrary: input.useKnowledgeLibrary ?? true,
@@ -135,6 +135,7 @@ export class EmailReplyDraftGenerationService {
       tone: input.tone,
       goal: input.goal,
       extraInstructions: input.extraInstructions,
+      knowledgeAbstained: knowledge.abstained,
     });
 
     let generated: {
