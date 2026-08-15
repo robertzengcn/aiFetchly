@@ -123,6 +123,8 @@ export function buildReplyUserMessage(args: {
   extraInstructions?: string;
   /** True when retrieval abstained (no/weak/conflicting results). */
   knowledgeAbstained?: boolean;
+  /** Rendered bounded conversation context (FR-003/004), placed before the email. */
+  conversationSection?: string | null;
 }): OpenAIChatMessage {
   const { message, knowledgeSources, tone, goal, extraInstructions } = args;
   const lines: string[] = [];
@@ -145,6 +147,11 @@ export function buildReplyUserMessage(args: {
     lines.push(
       "No knowledge evidence applies to this message. Reply with conversational content only; do NOT invent company-specific facts.\n"
     );
+  }
+
+  if (args.conversationSection) {
+    lines.push(args.conversationSection);
+    lines.push("");
   }
 
   lines.push(

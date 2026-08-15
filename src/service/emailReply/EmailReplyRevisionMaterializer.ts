@@ -52,6 +52,8 @@ export async function materializeRevision1(
     recipientAddress: string;
     emailServiceId: number;
     originalMessageId: number;
+    /** Sanitized generation metadata (prompt/scope/context versions) — no prompts. */
+    generationMetadataJson?: string | null;
   }
 ): Promise<{
   revisionId: number;
@@ -74,6 +76,7 @@ export async function materializeRevision1(
     contentHash: "pending-materialize",
     policyVersion: REPLY_POLICY_VERSION,
     validationVersion: REPLY_VALIDATOR_VERSION,
+    generationMetadataJson: input.generationMetadataJson ?? null,
     validationFindingsJson: JSON.stringify({
       findings: validation.findings,
       sendableAfterApproval: validation.sendableAfterApproval,

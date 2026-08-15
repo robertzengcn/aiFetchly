@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   buildBoundedThreadContext,
+  renderConversationContext,
   reduceQuotedAndSignature,
   isShortReply,
   summarizeOlderTurns,
@@ -150,5 +151,45 @@ describe("estimateTokens", () => {
     expect(estimateTokens("")).toBe(0);
     expect(estimateTokens("abcd")).toBe(1);
     expect(estimateTokens("a".repeat(400))).toBe(100);
+  });
+});
+
+describe("renderConversationContext (FR-003/004 prompt rendering)", () => {
+  it("renders recent turns + commitment-preservation instruction", () => {
+    const ctx = buildBoundedThreadContext([
+      turn(1, "outbound", "We'll ship Friday.", 1000),
+      turn(2, "inbound", "Yes", 2000),
+    ]);
+    const rendered = renderConversationContext(ctx);
+    expect(rendered).toContain("UNTRUSTED conversation history");
+    expect(rendered).toContain("We'll ship Friday.");
+    expect(rendered).toContain("Preserve earlier commitments");
+    expect(rendered).toContain("very short reply");
+  });
+
+  it("returns null when there is no context", () => {
+    expect(renderConversationContext({
+      recentTurns: [],
+      olderSummary: null,
+      truncated: false,
+      estimatedTokens: 0,
+      shortReplyGuardApplied: false,
+      requiresHumanReview: false,
+    })).toBeNull();
+  });
+
+  it("warns about conflicting commitments in the summary block", () => {
+    const ctx = buildBoundedThreadContext([
+      turn(1, "outbound", "We'll charge $500.", 1000),
+      turn(2, "inbound", "k", 2000),
+      turn(3, "outbound", "Actually $750.", 3000),
+      turn(4, "inbound", "fine", 4000),
+      turn(5, "inbound", "a", 5000),
+      turn(6, "inbound", "b", 6000),
+      turn(7, "inbound", "c", 7000),
+      turn(8, "inbound", "current", 8000),
+    ], { budget: { totalTokens: 1500, maxRecentTurns: 2, maxOlderTurnChars: 400 } });
+    const rendered = renderConversationContext(ctx);
+    expect(rendered).toContain("CONFLICTING prior commitments");
   });
 });

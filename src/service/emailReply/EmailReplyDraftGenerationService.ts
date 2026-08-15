@@ -28,6 +28,8 @@ import { EmailServiceModule } from "@/modules/emailServiceModule";
 import { materializeRevision1 } from "@/service/emailReply/EmailReplyRevisionMaterializer";
 import { EmailReplyPolicyOrchestrator } from "@/service/emailReply/EmailReplyPolicyOrchestrator";
 import { correlationIdForMessage } from "@/service/emailReply/EmailReplyCorrelation";
+import { EmailConversationContextService } from "@/service/emailReply/EmailConversationContextService";
+import { renderConversationContext } from "@/service/emailReply/EmailThreadContextBuilder";
 
 const VALID_CLASSIFICATIONS: ReadonlySet<string> = new Set([
   "interested",
@@ -135,6 +137,40 @@ export class EmailReplyDraftGenerationService {
     });
 
     // 5. Build prompt + call LLM.
+    // 5a. Load the bounded conversation context (FR-002/003/004) — the thread
+    //     history feeds the prompt when the message belongs to a conversation.
+    let conversationSection: string | null = null;
+    let contextMeta: {
+      truncated?: boolean;
+      shortReplyGuardApplied?: boolean;
+      requiresHumanReview?: boolean;
+      recentTurns?: number;
+      estimatedTokens?: number;
+    } | null = null;
+    if (message.conversationId) {
+      try {
+        const context =
+          await new EmailConversationContextService().buildContextForMessage({
+            emailServiceId: message.emailServiceId,
+            conversationId: message.conversationId,
+            currentMessageId: message.id,
+          });
+        conversationSection = renderConversationContext(context);
+        contextMeta = {
+          truncated: context.truncated,
+          shortReplyGuardApplied: context.shortReplyGuardApplied,
+          requiresHumanReview: context.requiresHumanReview,
+          recentTurns: context.recentTurns.length,
+          estimatedTokens: context.estimatedTokens,
+        };
+      } catch (e) {
+        console.error(
+          "Failed to build conversation context; drafting without it:",
+          e
+        );
+      }
+    }
+
     const systemMsg = buildReplySystemMessage(profile);
     const userMsg = buildReplyUserMessage({
       message,
@@ -143,6 +179,7 @@ export class EmailReplyDraftGenerationService {
       goal: input.goal,
       extraInstructions: input.extraInstructions,
       knowledgeAbstained: knowledge.abstained,
+      conversationSection,
     });
 
     let generated: {
@@ -249,6 +286,13 @@ export class EmailReplyDraftGenerationService {
           recipientAddress,
           emailServiceId: message.emailServiceId,
           originalMessageId: message.id,
+          generationMetadataJson: JSON.stringify({
+            promptVersion: REPLY_PROMPT_VERSION,
+            knowledgeScopeVersion: knowledge.scopeVersion,
+            knowledgeAbstained: knowledge.abstained,
+            knowledgeOutcome: knowledge.relevance?.outcome ?? null,
+            conversationContext: contextMeta,
+          }),
         });
       }
     } catch (error) {
