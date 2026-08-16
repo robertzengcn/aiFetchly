@@ -13,8 +13,7 @@ const STATIC_TOOL_FUNCTIONS: ToolFunction[] = [
       properties: {
         search_engine: {
           type: "string",
-          description:
-            "Which search engine to scrape: google, bing, or yandex",
+          description: "Which search engine to scrape: google, bing, or yandex",
           enum: ["google", "bing", "yandex"],
         },
         query: {
@@ -83,7 +82,7 @@ const STATIC_TOOL_FUNCTIONS: ToolFunction[] = [
         platform: {
           type: "string",
           description:
-            'Platform name (e.g., "yellowpages.com"). Use get_available_yellow_pages_platforms to see available options.',
+            'Platform id (e.g., "yellowpages-com"). Call get_available_yellow_pages_platforms first and pass the returned id verbatim; display names like "YellowPages.com" also work.',
         },
         search_term: {
           type: "string",

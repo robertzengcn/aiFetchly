@@ -144,6 +144,20 @@ let mockLoopResult: {
   fullContent: string;
   partialContent?: string;
   error?: unknown;
+  /** Present only for type: "paused_for_permission" results. */
+  pending?: {
+    conversationId: string;
+    assistantMessageId: string;
+    conversationMessages: unknown[];
+    abortController: AbortController;
+    request: Record<string, unknown>;
+    openAITools: unknown[];
+    nextRound: number;
+    toolCallId: string;
+    toolName: string;
+    toolArguments: Record<string, unknown>;
+    eventSink: { emit: () => void };
+  };
 } = {
   type: "completed",
   fullContent: JSON.stringify({
@@ -456,6 +470,54 @@ describe("AgentRuntime", () => {
     expect(rewritten.result.agentPermissionDenied).toBe(true);
     expect(rewritten.result.error).toMatch(/has not been granted/);
     expect(rewritten.result.error).toMatch(/category: filesystem/);
+  });
+
+  // Regression: if a permission pause ever slips past policyCheckedExecute
+  // (e.g. a future code path bypasses the wrapper), the fallback branch must
+  // fail with an ACTIONABLE message naming the tool and how to grant the
+  // permission — not the old opaque "not supported in v1 runtime".
+  it("fails with an actionable message when a permission pause slips through to the loop-result fallback", async () => {
+    mockLoopResult = {
+      type: "paused_for_permission",
+      fullContent: "",
+      pending: {
+        conversationId: "agent-v2-x",
+        assistantMessageId: "agent-assistant-x",
+        conversationMessages: [],
+        abortController: new AbortController(),
+        request: { message: "x", conversationId: "agent-v2-x", mode: "chat" },
+        openAITools: [],
+        nextRound: 1,
+        toolCallId: "call-1",
+        toolName: "scrape_urls_from_search_engine",
+        toolArguments: { search_engine: "bing", query: "dentists" },
+        eventSink: { emit: () => {} },
+      },
+    };
+
+    const runtime = new AgentRuntime();
+    const result = await runtime.runSync(makeRequest());
+
+    expect(result.status).toBe("failed");
+    expect(result.errorMessage).toContain("scrape_urls_from_search_engine");
+    expect(result.errorMessage).toMatch(
+      /cannot show permission prompts|Grant the tool permission/
+    );
+  });
+
+  // The plan-question pause shares the same fallback branch; keep its
+  // message contract stable too.
+  it("fails with a clear message when the loop pauses for a plan question", async () => {
+    mockLoopResult = {
+      type: "paused_for_plan_question",
+      fullContent: "",
+    };
+
+    const runtime = new AgentRuntime();
+    const result = await runtime.runSync(makeRequest());
+
+    expect(result.status).toBe("failed");
+    expect(result.errorMessage).toMatch(/plan question/);
   });
 
   it("rejects override-mismatched JSON with a parseWarning (lenient fallback)", async () => {
