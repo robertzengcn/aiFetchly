@@ -28,6 +28,11 @@ const CIRCUIT_BREAKER_COOLDOWN_MS = 10 * 60 * 1000;
 /** Trigger session-memory compaction when prompt tokens reach this fraction
  * of the configured context window. Mirrors Claude Code's autocompact layer. */
 const SESSION_MEMORY_TOKEN_THRESHOLD_FRACTION = 0.8;
+/** Trigger an automatic FULL compact (which actually shrinks the assembled
+ * context) when prompt tokens reach this fraction of the model's real context
+ * window. Kept in sync with the renderer badge threshold (compact button at
+ * 80%) so the badge and the backend agree on when compaction should happen. */
+const AUTO_COMPACT_THRESHOLD_FRACTION = 0.8;
 /** Fallback context-window size when the model limit is unknown. */
 const DEFAULT_CONTEXT_WINDOW_TOKENS = 128_000;
 /** Trigger session-memory compaction when more than this long has passed
@@ -44,6 +49,13 @@ export interface AIChatCompactAgentDeps {
   ): Promise<OpenAIChatCompletionResponse>;
   /** Returns true when the user has AI enabled (USER_AI_ENABLED === 'true'). */
   isEnabled(): boolean;
+  /** Resolves the real context window (tokens) for a model. Optional; the
+   * 128k fallback is used when omitted. Wired to AIChatModelCatalogService in
+   * production so thresholds match the renderer's per-model badge denominator. */
+  getContextWindow?(model?: string): Promise<number>;
+  /** Notified after a successful automatic full compact so the renderer can
+   * drop the context badge immediately (mirrors the manual compact flow). */
+  onAutoCompacted?(summary: AIChatCompactSummaryView): void;
 }
 
 export interface SessionMemoryUpdateInput {
@@ -98,6 +110,11 @@ export class AIChatCompactAgentService {
       );
       return;
     }
+    // Resolve the model's REAL context window before the in-flight check. The
+    // remainder of this method must stay synchronous up to this.inFlight.set
+    // so concurrent enqueues dedupe correctly. Falls back to 128k when the
+    // resolver is not wired (tests) — matching the renderer's default.
+    const contextWindow = await this.resolveContextWindow(input.model);
     // Per-conversation serialization.
     const existing = this.inFlight.get(input.conversationId);
     if (existing) {
@@ -109,7 +126,7 @@ export class AIChatCompactAgentService {
     // Threshold gate: skip all DB and LLM work unless either (A) the latest
     // prompt-token count is near the context-window limit, or (B) more than
     // SESSION_MEMORY_MAX_AGE_MS has passed since the last successful update.
-    const gate = this.shouldAttemptSessionMemoryUpdate(input);
+    const gate = this.shouldAttemptSessionMemoryUpdate(input, contextWindow);
     if (!gate.attempt) {
       console.log(
         `[ai-chat-compact] session update skipped (threshold gate) conv=${
@@ -128,19 +145,137 @@ export class AIChatCompactAgentService {
   }
 
   /**
+   * Resolve the model's real context window, or the 128k fallback when no
+   * resolver is wired. Never throws (resolver implementations don't throw).
+   */
+  private async resolveContextWindow(model?: string): Promise<number> {
+    return this.deps.getContextWindow
+      ? this.deps.getContextWindow(model)
+      : DEFAULT_CONTEXT_WINDOW_TOKENS;
+  }
+
+  /**
+   * Enqueue an automatic FULL compact when the turn's prompt tokens reach the
+   * threshold fraction of the model's real context window. Unlike a session
+   * memory update, a full compact creates a boundary that actually shrinks
+   * the assembled context on the next turn. Returns true when a compact was
+   * saved. Never throws.
+   */
+  async enqueueAutoCompact(input: SessionMemoryUpdateInput): Promise<boolean> {
+    if (!input.conversationId || !input.conversationId.startsWith(V2_PREFIX)) {
+      return false;
+    }
+    if (!this.deps.isEnabled()) {
+      return false;
+    }
+    if (typeof input.promptTokens !== "number" || input.promptTokens <= 0) {
+      return false;
+    }
+    // Track the latest prompt tokens (mirrors the session-memory gate) so the
+    // session-memory path re-evaluates against the freshest count next turn.
+    this.lastPromptTokens.set(input.conversationId, input.promptTokens);
+    const existing = this.inFlight.get(input.conversationId);
+    if (existing) {
+      console.log(
+        `[ai-chat-compact] auto compact skipped (already running) conv=${input.conversationId}`
+      );
+      return false;
+    }
+    const contextWindow = await this.resolveContextWindow(input.model);
+    const threshold = Math.floor(
+      AUTO_COMPACT_THRESHOLD_FRACTION * contextWindow
+    );
+    if (input.promptTokens < threshold) {
+      console.log(
+        `[ai-chat-compact] auto compact skipped (below threshold) conv=${
+          input.conversationId
+        } promptTokens=${input.promptTokens} threshold=${threshold}`
+      );
+      return false;
+    }
+    console.log(
+      `[ai-chat-compact] auto compact triggered conv=${
+        input.conversationId
+      } promptTokens=${input.promptTokens} threshold=${threshold} window=${contextWindow}`
+    );
+    let compacted = false;
+    const p = this.runAutoCompact(input)
+      .then((ran) => {
+        compacted = ran;
+      })
+      .finally(() => {
+        this.inFlight.delete(input.conversationId);
+      });
+    this.inFlight.set(input.conversationId, p);
+    await p;
+    return compacted;
+  }
+
+  /**
+   * Run the auto full compact: skip when the active compact boundary already
+   * covers every message row (prevents compact loops when the summary itself
+   * fills the window), otherwise reuse runFullCompact and notify listeners.
+   * Returns true when a new compact was saved. Never throws.
+   */
+  private async runAutoCompact(
+    input: SessionMemoryUpdateInput
+  ): Promise<boolean> {
+    try {
+      const [active, rows] = await Promise.all([
+        this.compact.getActiveSummary(input.conversationId),
+        this.v2.getConversationMessages(input.conversationId),
+      ]);
+      if (active) {
+        const boundaryTime = new Date(active.throughTimestamp).getTime();
+        const hasNewMessages = rows.some(
+          (r) => isMessageRow(r) && r.timestamp.getTime() > boundaryTime
+        );
+        if (!hasNewMessages) {
+          console.log(
+            `[ai-chat-compact] auto compact skipped (boundary covers all messages) conv=${input.conversationId}`
+          );
+          return false;
+        }
+      }
+      const summary = await this.runFullCompact({
+        conversationId: input.conversationId,
+        model: input.model,
+      });
+      if (this.deps.onAutoCompacted) {
+        try {
+          this.deps.onAutoCompacted(summary);
+        } catch (err) {
+          console.error(
+            "[ai-chat-compact] auto-compact notification failed:",
+            err
+          );
+        }
+      }
+      return true;
+    } catch (err) {
+      console.error(
+        `[ai-chat-compact] auto compact failed conv=${input.conversationId}:`,
+        err
+      );
+      return false;
+    }
+  }
+
+  /**
    * Decide whether to actually run a session-memory update this turn.
    * Cheap, in-memory only — never touches the DB. Always tracks the latest
    * promptTokens even when skipping, so the gate re-evaluates next turn.
    */
   private shouldAttemptSessionMemoryUpdate(
-    input: SessionMemoryUpdateInput
+    input: SessionMemoryUpdateInput,
+    contextWindow: number
   ): { attempt: true; reason: string } | { attempt: false; reason: string } {
     if (typeof input.promptTokens === "number") {
       this.lastPromptTokens.set(input.conversationId, input.promptTokens);
     }
     const lastTokens = this.lastPromptTokens.get(input.conversationId) ?? 0;
     const tokenThreshold = Math.floor(
-      SESSION_MEMORY_TOKEN_THRESHOLD_FRACTION * DEFAULT_CONTEXT_WINDOW_TOKENS
+      SESSION_MEMORY_TOKEN_THRESHOLD_FRACTION * contextWindow
     );
     const nearLimit = lastTokens >= tokenThreshold;
     if (nearLimit) {

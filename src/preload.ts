@@ -253,6 +253,7 @@ import {
   AI_CHAT_V2_SCHEDULED_LOOP_STOP_RUN,
   AI_CHAT_V2_CONVERSATION_UPDATED,
   AI_CHAT_V2_SCHEDULED_STREAM,
+  AI_CHAT_V2_AUTO_COMPACTED,
   // AI Provider (Local/Custom) Settings Channels
   AI_PROVIDER_SETTINGS_GET,
   AI_PROVIDER_SETTINGS_SAVE,
@@ -578,6 +579,8 @@ contextBridge.exposeInMainWorld("api", {
       AI_CHAT_V2_CONVERSATION_UPDATED,
       // Live scheduled-turn token stream
       AI_CHAT_V2_SCHEDULED_STREAM,
+      // Auto full-compact broadcast (context badge reset)
+      AI_CHAT_V2_AUTO_COMPACTED,
       // Local AI Runtime install/update progress (main -> renderer)
       LOCAL_AI_RUNTIME_PROGRESS,
     ];
@@ -653,6 +656,8 @@ contextBridge.exposeInMainWorld("api", {
       AI_CHAT_V2_CONVERSATION_UPDATED,
       // Live scheduled-turn token stream
       AI_CHAT_V2_SCHEDULED_STREAM,
+      // Auto full-compact broadcast (context badge reset)
+      AI_CHAT_V2_AUTO_COMPACTED,
       // Local AI Runtime install/update progress (main -> renderer)
       LOCAL_AI_RUNTIME_PROGRESS,
     ];
@@ -690,6 +695,8 @@ contextBridge.exposeInMainWorld("api", {
       AI_CHAT_V2_CONVERSATION_UPDATED,
       // Live scheduled-turn token stream
       AI_CHAT_V2_SCHEDULED_STREAM,
+      // Auto full-compact broadcast (context badge reset)
+      AI_CHAT_V2_AUTO_COMPACTED,
       // Local AI Runtime install/update progress (main -> renderer)
       LOCAL_AI_RUNTIME_PROGRESS,
     ];

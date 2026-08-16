@@ -681,6 +681,7 @@ import type {
   ChatV2AttachmentMetadata,
   ChatToolApprovalMode,
   ChatV2RuntimeStatus,
+  ChatV2AutoCompactedEvent,
 } from "@/entityTypes/aiChatV2Types";
 import type {
   AIChatPlanStateView,
@@ -703,6 +704,8 @@ import {
   stopChatV2Stream,
   getChatV2PlanState,
   compactChatV2Conversation,
+  subscribeAutoCompacted,
+  unsubscribeAutoCompacted,
   answerChatV2Question,
   approveChatV2Plan,
   rejectChatV2Plan,
@@ -1468,6 +1471,25 @@ function resetScheduledLoopViewState(): void {
   scheduledRefreshPending.value = false;
   pendingScheduledLoop.value = null;
   showScheduledLoopApproval.value = false;
+}
+
+/**
+ * Handle the auto full-compact broadcast: the main process compacted the
+ * conversation after a turn pushed the context near the model's window.
+ * Reset the badge baseline to the summary's token estimate — same behavior
+ * as the manual compact flow — and confirm via the compact snackbar.
+ */
+function handleAutoCompacted(event: ChatV2AutoCompactedEvent): void {
+  if (event.conversationId !== activeConversationId.value) return;
+  streamingEstimatedTokens.value =
+    typeof event.outputTokenEstimate === "number" && event.outputTokenEstimate > 0
+      ? event.outputTokenEstimate
+      : 0;
+  lastUsage.value = null;
+  if (event.model) {
+    activeModel.value = event.model;
+  }
+  compactNotice.value = true;
 }
 
 /**
@@ -4513,6 +4535,9 @@ onMounted(() => {
   subscribeConversationUpdated(handleConversationUpdated);
   // Live scheduled-turn token stream (strict routing renderer-side).
   subscribeScheduledStream(handleScheduledStream);
+  // Auto full-compact completions reset the context badge (strict routing
+  // renderer-side: only the active conversation's badge updates).
+  subscribeAutoCompacted(handleAutoCompacted);
 });
 
 onBeforeUnmount(() => {
@@ -4543,6 +4568,7 @@ onBeforeUnmount(() => {
   unsubscribeFromFileOperations();
   unsubscribeConversationUpdated();
   unsubscribeScheduledStream();
+  unsubscribeAutoCompacted();
   if (searchDebounceTimer) {
     clearTimeout(searchDebounceTimer);
     searchDebounceTimer = null;

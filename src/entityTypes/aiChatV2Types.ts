@@ -359,3 +359,18 @@ export interface ChatV2StreamChunk {
   goalEvidence?: ChatV2GoalEvidenceEvent;
   goalVerification?: ChatV2GoalVerificationEvent;
 }
+
+/**
+ * Main->renderer broadcast emitted after an automatic full compact completes
+ * (context reached the threshold fraction of the model's window). The
+ * renderer drops the context badge to the summary's token estimate — same
+ * behavior as the manual compact button.
+ */
+export interface ChatV2AutoCompactedEvent {
+  readonly conversationId: string;
+  /** Estimated tokens of the compact summary — the new context baseline. */
+  readonly outputTokenEstimate: number;
+  /** Model that produced the summary, when known. */
+  readonly model?: string;
+  readonly occurredAt: string;
+}

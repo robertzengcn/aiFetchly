@@ -1,8 +1,12 @@
 import type { BrowserWindow } from "electron";
 import {
+  AI_CHAT_V2_AUTO_COMPACTED,
   AI_CHAT_V2_CONVERSATION_UPDATED,
   AI_CHAT_V2_SCHEDULED_STREAM,
 } from "@/config/channellist";
+import type {
+  ChatV2AutoCompactedEvent,
+} from "@/entityTypes/aiChatV2Types";
 import type {
   ChatV2ConversationUpdatedEvent,
   ChatV2ScheduledStreamEvent,
@@ -79,6 +83,20 @@ export class AIChatConversationUpdateBroadcaster
     for (const win of this.windows) {
       if (!win.isDestroyed()) {
         win.webContents.send(AI_CHAT_V2_SCHEDULED_STREAM, event);
+      }
+    }
+  }
+
+  /**
+   * Notify all live windows that a conversation was automatically
+   * full-compacted (context reached the threshold fraction of the model's
+   * window). Renderer-side, only the window viewing the originating
+   * conversation resets its context badge to the summary estimate.
+   */
+  emitAutoCompacted(event: ChatV2AutoCompactedEvent): void {
+    for (const win of this.windows) {
+      if (!win.isDestroyed()) {
+        win.webContents.send(AI_CHAT_V2_AUTO_COMPACTED, event);
       }
     }
   }
