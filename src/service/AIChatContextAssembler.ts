@@ -15,7 +15,7 @@ import {
 import { WorkspaceResolver } from "@/service/WorkspaceResolver";
 import { AIFetchlyContextLoader } from "@/service/aifetchlyConfig/AIFetchlyContextLoader";
 import { buildAvailableAgentsBlock } from "@/service/aifetchlyConfig/availableAgentsBlock";
-import { buildHtmlArtifactGuidanceSection } from "@/service/HtmlArtifactPromptSection";
+import { buildBuiltInToolCapabilitiesSection } from "@/service/BuiltInToolCapabilitiesPromptSection";
 import path from "node:path";
 import os from "node:os";
 import type {
@@ -215,19 +215,22 @@ export class AIChatContextAssembler {
       );
     }
 
-    // HTML-artifact usage guidance (design §15). A static, main-process-safe
-    // instruction that tells the model to call create_html_artifact instead of
-    // pasting raw HTML into chat or reaching for workspace file tools. Static
-    // text — injection can never meaningfully fail, but degrade to no-injection
-    // like the surrounding blocks so a future change cannot break chat.
+    // Built-in tool capabilities guidance (HTML-artifacts design §15,
+    // generalized to every contextual/deferred built-in family). A static,
+    // main-process-safe "capability → tool → search query" table that tells
+    // the model which specialized tool to reach for (or to load via
+    // tool_catalog_search when it is not exposed) so it does not fall back to
+    // file_read/glob_files or paste rendered output into chat. One compact
+    // block (~350 tokens) keeps the always-injected budget close to the
+    // category-level approach preferred by tool-list-management design §20.
     try {
       messages.push({
         role: "system",
-        content: buildHtmlArtifactGuidanceSection(),
+        content: buildBuiltInToolCapabilitiesSection(),
       });
     } catch (err) {
       console.error(
-        "[ai-chat-context] html artifact guidance injection failed:",
+        "[ai-chat-context] built-in tool capabilities injection failed:",
         err
       );
     }

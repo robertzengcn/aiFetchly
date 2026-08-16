@@ -507,7 +507,7 @@ describe("AIChatContextAssembler — custom context directive", () => {
   });
 });
 
-describe("AIChatContextAssembler — HTML artifact guidance", () => {
+describe("AIChatContextAssembler — built-in tool capabilities", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockDurableRetrieve.mockResolvedValue({
@@ -527,10 +527,10 @@ describe("AIChatContextAssembler — HTML artifact guidance", () => {
     mockListActiveForRuntime.mockResolvedValue([]);
   });
 
-  it("injects the create_html_artifact usage guidance as a system message", async () => {
+  it("injects the built-in tool capabilities table as a system message", async () => {
     const assembler = new AIChatContextAssembler();
     const result = await assembler.assemble({
-      conversationId: "conv-html",
+      conversationId: "conv-caps",
       currentUserMessage: "show result in html",
       baseSystemPrompt: "you are helpful",
       mode: "chat",
@@ -540,19 +540,20 @@ describe("AIChatContextAssembler — HTML artifact guidance", () => {
       (m) =>
         m.role === "system" &&
         typeof m.content === "string" &&
-        m.content.includes("create_html_artifact")
+        m.content.includes("Built-in Tool Capabilities")
     );
     expect(guidance).toBeTruthy();
-    // Steering toward the artifact tool, away from raw HTML and file tools.
-    expect(guidance!.content).toContain("main content area");
+    // The table covers the HTML artifact capability plus the discovery
+    // fallback, and steers the model away from substituting file_read.
+    expect(guidance!.content).toContain("create_html_artifact");
     expect(guidance!.content).toContain("file_read");
     expect(guidance!.content).toContain("tool_catalog_search");
   });
 
-  it("injects the guidance even for a plain conversational message", async () => {
+  it("injects the capabilities table even for a plain conversational message", async () => {
     const assembler = new AIChatContextAssembler();
     const result = await assembler.assemble({
-      conversationId: "conv-html",
+      conversationId: "conv-caps",
       currentUserMessage: "what is the weather today",
       baseSystemPrompt: "you are helpful",
       mode: "chat",
@@ -562,7 +563,7 @@ describe("AIChatContextAssembler — HTML artifact guidance", () => {
       (m) =>
         m.role === "system" &&
         typeof m.content === "string" &&
-        m.content.includes("HTML Artifacts")
+        m.content.includes("Built-in Tool Capabilities")
     );
     // Guidance is always injected (cheap, static) so the model knows the
     // intent to reach for the artifact tool before it is promoted.
