@@ -33,7 +33,7 @@ describe("SqliteDb", () => {
   });
 
   test("destroyInstance clears an existing singleton and initialized connection", async () => {
-    const destroy = vi.fn<[], Promise<void>>(async () => undefined);
+    const destroy = vi.fn<() => Promise<void>>(async () => undefined);
     const existingInstance = {
       connection: {
         isInitialized: true,
