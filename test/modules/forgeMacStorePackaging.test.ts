@@ -114,6 +114,7 @@ describe("Mac App Store packaging", (): void => {
     const result = projectForgeConfig({
       NODE_ENV: "production",
       MAC_DISTRIBUTION: "store",
+      MAC_STORE_SIGNING_TYPE: "distribution",
       MAC_STORE_SIGNING_IDENTITY:
         "Apple Distribution: Test Developer (TESTTEAM)",
       MAC_STORE_PROVISIONING_PROFILE: provisioningProfilePath,
@@ -132,6 +133,26 @@ describe("Mac App Store packaging", (): void => {
       mainEntitlements: mainEntitlementsPath,
       childEntitlements: childEntitlementsPath,
     });
+  });
+
+  it("preserves development signing for local MAS sandbox testing", (): void => {
+    const result = projectForgeConfig({
+      NODE_ENV: "production",
+      MAC_DISTRIBUTION: "store",
+      MAC_STORE_SIGNING_TYPE: undefined,
+      MAC_STORE_SIGNING_IDENTITY:
+        "Apple Development: Test Developer (TESTTEAM)",
+      MAC_STORE_PROVISIONING_PROFILE: provisioningProfilePath,
+      APPLE_ID: undefined,
+      APPLE_APP_SPECIFIC_PASSWORD: undefined,
+      APPLE_TEAM_ID: undefined,
+    });
+
+    expect(result.status, result.output).to.equal(0);
+    expect(result.projection?.identity).to.equal(
+      "Apple Development: Test Developer (TESTTEAM)"
+    );
+    expect(result.projection?.type).to.equal("development");
   });
 
   it("preserves notarization for direct production distribution", (): void => {

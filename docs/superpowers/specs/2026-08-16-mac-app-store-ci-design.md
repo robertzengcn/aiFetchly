@@ -67,10 +67,12 @@ notarization service. Upload remains a manual Transporter step.
 
 ## Forge Configuration
 
-The `MAC_DISTRIBUTION=store` branch in `forge.config.js` uses
-`type: "distribution"`. This is required for App Store Connect submissions;
-development-signed MAS applications are only suitable for local testing and
-are rejected for submission.
+The CI job sets `MAC_STORE_SIGNING_TYPE=distribution`, and the
+`MAC_DISTRIBUTION=store` branch in `forge.config.js` passes that value to
+`@electron/osx-sign`. Distribution signing is required for App Store Connect
+submissions; development-signed MAS applications are only suitable for local
+testing and are rejected for submission. When the new variable is omitted,
+the existing local Store command retains its development-signing default.
 
 The existing bundle ID, provisioning profile, and App Sandbox entitlement
 selection remain unchanged. The direct Developer ID signing and notarization
