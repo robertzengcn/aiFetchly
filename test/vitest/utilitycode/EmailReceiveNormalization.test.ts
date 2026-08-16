@@ -5,6 +5,8 @@ import {
 } from "@/service/emailReceive/EmailBodyNormalizationService";
 import {
   classifyDeterministic,
+  classifyMessage,
+  MODEL_CLASSIFIER_VERSION,
   CLASSIFIER_VERSION,
 } from "@/service/emailReply/EmailMessageClassificationService";
 
@@ -32,7 +34,7 @@ describe("normalizeEmailBody", () => {
     const r = normalizeEmailBody({
       plainText: null,
       sanitizedHtml:
-        "<p>ok</p><script>alert(1)</script><img src=\"http://tracker/x.gif\" onerror=\"steal()\">",
+        '<p>ok</p><script>alert(1)</script><img src="http://tracker/x.gif" onerror="steal()">',
     });
     expect(r.safeText).not.toContain("script");
     expect(r.safeText).not.toContain("onerror");
@@ -109,7 +111,8 @@ describe("classifyDeterministic (FR-007)", () => {
 
   it("classifies list mail by Precedence/List headers", () => {
     expect(
-      classifyDeterministic({ ...base, precedenceHeader: "bulk" }).classification
+      classifyDeterministic({ ...base, precedenceHeader: "bulk" })
+        .classification
     ).toBe("auto_reply");
     expect(
       classifyDeterministic({ ...base, listIdHeader: "<dev.lists.x>" })
@@ -126,7 +129,13 @@ describe("classifyDeterministic (FR-007)", () => {
   });
 
   it("classifies unsubscribe intent multilingually (zh/ja/es/fr/de)", () => {
-    for (const phrase of ["取消订阅", "配信停止", "deseo desinscribirme", "se désabonner", "abbestellen"]) {
+    for (const phrase of [
+      "取消订阅",
+      "配信停止",
+      "deseo desinscribirme",
+      "se désabonner",
+      "abbestellen",
+    ]) {
       const d = classifyDeterministic({ ...base, bodyText: phrase });
       expect(d.classification).toBe("unsubscribe");
     }
@@ -159,5 +168,71 @@ describe("classifyDeterministic (FR-007)", () => {
       listIdHeader: "<list.x>",
     });
     expect(d.classification).toBe("bounce");
+  });
+});
+
+describe("classifyMessage two-stage (FR-007 stage 2, P2.2)", () => {
+  const base = {
+    fromAddress: "person@example.com",
+    subject: "Hello",
+    bodyText: "Hi there",
+  };
+  const inconclusive = {
+    fromAddress: "person@example.com",
+    subject: "Quick question",
+    bodyText: "Can you tell me more about what you do?",
+  };
+
+  it("never calls the model when deterministic rules conclude", async () => {
+    let called = 0;
+    const d = await classifyMessage(
+      { ...base, bodyText: "please unsubscribe me" },
+      async () => {
+        called++;
+        return '{"classification":"interested","confidence":0.99}';
+      }
+    );
+    expect(called).toBe(0);
+    expect(d.classification).toBe("unsubscribe");
+    expect(d.source).toBe("deterministic");
+  });
+
+  it("uses the constrained model when rules are inconclusive", async () => {
+    const d = await classifyMessage(inconclusive, async () =>
+      JSON.stringify({ classification: "support_request", confidence: 0.9 })
+    );
+    expect(d.classification).toBe("support_request");
+    expect(d.source).toBe("model");
+    expect(d.version).toBe(MODEL_CLASSIFIER_VERSION);
+  });
+
+  it("routes low model confidence to needs_human_review", async () => {
+    const d = await classifyMessage(inconclusive, async () =>
+      JSON.stringify({ classification: "interested", confidence: 0.3 })
+    );
+    expect(d.classification).toBe("needs_human_review");
+    expect(d.source).toBe("review");
+  });
+
+  it("routes schema-invalid model output to needs_human_review (never trusts it)", async () => {
+    const d = await classifyMessage(inconclusive, async () =>
+      JSON.stringify({ classification: "definitely_interested", confidence: 5 })
+    );
+    expect(d.classification).toBe("needs_human_review");
+  });
+
+  it("routes a model 'unknown' verdict to needs_human_review", async () => {
+    const d = await classifyMessage(inconclusive, async () =>
+      JSON.stringify({ classification: "unknown", confidence: 0.95 })
+    );
+    expect(d.classification).toBe("needs_human_review");
+  });
+
+  it("survives a model caller that throws", async () => {
+    const d = await classifyMessage(inconclusive, async () => {
+      throw new Error("provider down");
+    });
+    expect(d.classification).toBe("needs_human_review");
+    expect(d.source).toBe("review");
   });
 });
