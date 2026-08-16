@@ -400,6 +400,12 @@ export default ({ mode }) => {
             'process.env.VITE_LOGIN_URL': JSON.stringify(
                 process.env.VITE_LOGIN_URL || process.env.VITE_LOGIN_URL_TEST || ''
             ),
+            // Plugin Hub (community catalog) base URL — first-party constant
+            // consumed by src/config/pluginHubUrl.ts (see that file for why
+            // process.env is used instead of import.meta.env).
+            'process.env.VITE_PLUGIN_HUB_URL': JSON.stringify(
+                process.env.VITE_PLUGIN_HUB_URL || ''
+            ),
         },
         build: {
             rollupOptions: {
