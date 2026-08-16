@@ -44,9 +44,6 @@ vi.mock("electron", () => ({
   BrowserWindow: vi.fn(),
 }));
 
-process.env.VITE_LOGIN_URL = "http://localhost:3000";
-process.env.VITE_PLUGIN_HUB_URL = "https://plugins.example.com";
-
 import { HttpClient } from "@/modules/lib/httpclient";
 
 const HUB_URL = "https://plugins.example.com/api/v1/plugins/catalog";
@@ -69,6 +66,9 @@ describe("HttpClient.getFirstParty", () => {
   let client: HttpClient;
 
   beforeEach(() => {
+    // Restore for this file only; vitest restores the originals on unstub.
+    vi.stubEnv("VITE_LOGIN_URL", "http://localhost:3000");
+    vi.stubEnv("VITE_PLUGIN_HUB_URL", "https://plugins.example.com");
     mockTokenGetValue.mockReset();
     mockRefreshOnce.mockReset();
     mockTokenGetValue.mockImplementation((key: string) => {
@@ -81,6 +81,7 @@ describe("HttpClient.getFirstParty", () => {
   });
 
   afterEach(() => {
+    vi.unstubAllEnvs();
     vi.unstubAllGlobals();
   });
 
