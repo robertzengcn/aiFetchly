@@ -3,6 +3,7 @@ import {
   windowSend,
   windowReceive,
   windowRemoveListener,
+  windowRemoveAllListeners,
 } from "@/views/utils/apirequest";
 import type {
   ChatV2StreamRequest,
@@ -10,6 +11,7 @@ import type {
   ChatV2HistoryResponse,
   ChatV2ConversationSummary,
   ChatToolApprovalMode,
+  ChatV2AutoCompactedEvent,
 } from "@/entityTypes/aiChatV2Types";
 import type { AIChatCompactSummaryView } from "@/entityTypes/aiChatCompactTypes";
 import type {
@@ -38,6 +40,7 @@ import {
   AI_CHAT_V2_GET_TOOL_APPROVAL_MODE,
   AI_CHAT_V2_SET_TOOL_APPROVAL_MODE,
   AI_CHAT_V2_READ_PASTE_CACHE,
+  AI_CHAT_V2_AUTO_COMPACTED,
 } from "@/config/channellist";
 
 /**
@@ -361,6 +364,26 @@ export async function compactChatV2Conversation(
     model,
   });
   return (resp as AIChatCompactSummaryView | null) ?? null;
+}
+
+/**
+ * Subscribe to the auto full-compact broadcast. The main process emits this
+ * after it automatically compacts a conversation whose context reached the
+ * threshold fraction of the model's window. Handlers must filter by
+ * conversationId (only the active conversation's badge should reset).
+ * Call unsubscribeAutoCompacted in onBeforeUnmount.
+ */
+export function subscribeAutoCompacted(
+  handler: (event: ChatV2AutoCompactedEvent) => void
+): void {
+  windowReceive(AI_CHAT_V2_AUTO_COMPACTED, (event) => {
+    handler(event as ChatV2AutoCompactedEvent);
+  });
+}
+
+/** Remove all auto-compacted listeners (call in onBeforeUnmount). */
+export function unsubscribeAutoCompacted(): void {
+  windowRemoveAllListeners(AI_CHAT_V2_AUTO_COMPACTED);
 }
 
 // ---------------------------------------------------------------------------

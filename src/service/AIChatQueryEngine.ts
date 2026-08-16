@@ -64,7 +64,6 @@ import type {
   ChatV2ReasoningMetadata,
   ChatV2StreamRequest,
   ChatV2UploadedAttachment,
-  ChatV2AttachmentKind,
   ChatV2AttachmentMetadata,
   ChatV2MessageMetadata,
   ChatV2RuntimeStatus,
@@ -73,7 +72,6 @@ import type { AIChatScheduledTurnContext } from "@/entityTypes/aiChatScheduledLo
 import type {
   OpenAITextContentPart,
   OpenAIImageUrlContentPart,
-  OpenAIMessageContent,
 } from "@/api/aiChatApi";
 import { openAIContentToString } from "@/api/aiChatApi";
 import type { AIChatPlanStateView } from "@/entityTypes/aiChatPlanTypes";
@@ -1435,17 +1433,27 @@ export class AIChatQueryEngine {
           promptTokens: result.promptTokens,
           completionTokens: result.completionTokens,
         });
-        if (this.compactAgent) {
-          this.compactAgent
-            .enqueueSessionMemoryUpdate({
-              conversationId,
-              reason: "assistant_turn_completed",
-              promptTokens: result.promptTokens,
-              model: result.model,
-            })
+        const compactAgent = this.compactAgent;
+        if (compactAgent) {
+          const compactInput = {
+            conversationId,
+            reason: "assistant_turn_completed",
+            promptTokens: result.promptTokens,
+            model: result.model,
+          };
+          // Auto full-compact takes priority when the turn pushed the context
+          // near the model's window: it actually shrinks the next assembled
+          // prompt. Fall back to the advisory session-memory update otherwise.
+          // Optional call guards test fakes that only stub one method.
+          Promise.resolve(compactAgent.enqueueAutoCompact?.(compactInput) ?? false)
+            .then((compacted) =>
+              compacted
+                ? undefined
+                : compactAgent.enqueueSessionMemoryUpdate(compactInput)
+            )
             .catch((err) =>
               console.error(
-                "[ai-chat-compact] session memory update failed:",
+                "[ai-chat-compact] post-turn compaction failed:",
                 err
               )
             );

@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       build_mode:
-        description: Build test installers, signed direct installers, or a Microsoft Store package
+        description: Build test installers, signed direct installers, or Store submission packages
         required: true
         default: test
         type: choice
@@ -406,6 +406,266 @@ jobs:
         run: |
           if [ -n "${MACOS_KEYCHAIN_PATH:-}" ]; then
             security delete-keychain "$MACOS_KEYCHAIN_PATH" || true
+          fi
+
+  build-macos-store:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.build_mode == 'store' }}
+    runs-on: macos-latest
+    outputs:
+      version: ${{ steps.calculate_version.outputs.version }}
+      artifact_name: ${{ steps.calculate_version.outputs.artifact_name }}
+    env:
+      VITE_LOGIN_URL_PROD: ${{ secrets.VITE_LOGIN_URL_PROD }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up native build environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          arch="$(uname -m)"
+          if [ "$arch" = "arm64" ]; then
+            target_arch="arm64"
+            arch_flags="-arch arm64"
+            homebrew_prefix="/opt/homebrew"
+          else
+            target_arch="x64"
+            arch_flags="-arch x86_64"
+            homebrew_prefix="/usr/local"
+          fi
+          {
+            echo "TARGET_ARCH=$target_arch"
+            echo "ARCH_FLAGS=$arch_flags"
+            echo "HOMEBREW_PREFIX=$homebrew_prefix"
+            echo "CXX=clang++"
+            echo "CC=clang"
+            echo "CXXFLAGS=-std=c++20 $arch_flags"
+            echo "CFLAGS=-std=c11 $arch_flags"
+            echo "LDFLAGS=-std=c++20 $arch_flags -L${homebrew_prefix}/lib"
+            echo "CPPFLAGS=-I${homebrew_prefix}/include"
+            echo "npm_config_target_platform=darwin"
+            echo "npm_config_arch=$target_arch"
+            echo "npm_config_target_arch=$target_arch"
+            echo "PKG_CONFIG_PATH=${homebrew_prefix}/lib/pkgconfig"
+            echo "LIBLZMA_CFLAGS=-I${homebrew_prefix}/include"
+            echo "LIBLZMA_LIBS=-L${homebrew_prefix}/lib -llzma"
+          } >> "$GITHUB_ENV"
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
+          cache: yarn
+
+      - name: Cache Electron downloads
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/electron
+            ~/.cache/electron-gyp
+            ~/.electron-gyp
+            ~/Library/Caches/electron
+          key: ${{ runner.os }}-electron-${{ hashFiles('yarn.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-electron-
+
+      - name: Set up Python for node-gyp
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Configure node-gyp Python
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHON_BIN="$(python -c 'import sys; print(sys.executable)')"
+          echo "Using Python for node-gyp: ${PYTHON_BIN}"
+          python --version
+          echo "PYTHON=${PYTHON_BIN}" >> "$GITHUB_ENV"
+          echo "npm_config_python=${PYTHON_BIN}" >> "$GITHUB_ENV"
+          echo "NODE_GYP_FORCE_PYTHON=${PYTHON_BIN}" >> "$GITHUB_ENV"
+
+      - name: Calculate version
+        id: calculate_version
+        shell: bash
+        run: |
+          set -euo pipefail
+          current_version="$(node -e "console.log(require('./package.json').version)")"
+          new_version="${current_version%.*}.${{ github.run_number }}"
+          node -e "const pkg = require('./package.json'); pkg.version = '$new_version'; require('fs').writeFileSync('./package.json', JSON.stringify(pkg, null, 2))"
+          echo "version=$new_version" >> "$GITHUB_OUTPUT"
+          echo "artifact_name=electron-app-macos-store-v${new_version}" >> "$GITHUB_OUTPUT"
+
+      - name: Write build environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "$VITE_LOGIN_URL_PROD" ]; then
+            echo "::error::Store builds require the VITE_LOGIN_URL_PROD secret."
+            exit 1
+          fi
+          {
+            echo "NODE_ENV=production"
+            echo "VITE_LOGIN_URL=$VITE_LOGIN_URL_PROD"
+          } > .env
+          cp .env .env.production
+
+      - name: Install native build dependencies
+        run: brew install python-setuptools xz pkg-config
+
+      - name: Install dependencies from lockfile
+        run: yarn install --frozen-lockfile
+
+      - name: Rebuild native modules for Electron
+        shell: bash
+        run: |
+          set -euo pipefail
+          electron_version="$(node -p "require('./node_modules/electron/package.json').version")"
+          CXXFLAGS="-std=c++20 ${ARCH_FLAGS}" CFLAGS="-std=c11 ${ARCH_FLAGS}" yarn rebuild-better-sqlite
+          npm rebuild bufferutil --build-from-source \
+            --runtime=electron \
+            --target="$electron_version" \
+            --arch="$TARGET_ARCH" \
+            --disturl=https://electronjs.org/headers
+          npm rebuild utf-8-validate --build-from-source \
+            --runtime=electron \
+            --target="$electron_version" \
+            --arch="$TARGET_ARCH" \
+            --disturl=https://electronjs.org/headers
+
+      - name: Configure Mac App Store signing
+        shell: bash
+        env:
+          APPLE_DISTRIBUTION_CERTIFICATE_BASE64: ${{ secrets.APPLE_DISTRIBUTION_CERTIFICATE_BASE64 }}
+          MAC_INSTALLER_DISTRIBUTION_CERTIFICATE_BASE64: ${{ secrets.MAC_INSTALLER_DISTRIBUTION_CERTIFICATE_BASE64 }}
+          MAC_STORE_PROVISIONING_PROFILE_BASE64: ${{ secrets.MAC_STORE_PROVISIONING_PROFILE_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          MAC_STORE_SIGNING_IDENTITY: ${{ secrets.MAC_STORE_SIGNING_IDENTITY }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+        run: |
+          set -euo pipefail
+          for name in \
+            APPLE_DISTRIBUTION_CERTIFICATE_BASE64 \
+            MAC_INSTALLER_DISTRIBUTION_CERTIFICATE_BASE64 \
+            MAC_STORE_PROVISIONING_PROFILE_BASE64 \
+            APPLE_CERTIFICATE_PASSWORD \
+            MAC_STORE_SIGNING_IDENTITY \
+            APPLE_TEAM_ID \
+            APPLE_ID \
+            APPLE_APP_SPECIFIC_PASSWORD; do
+            if [ -z "${!name}" ]; then
+              echo "::error::Mac App Store builds require the $name secret."
+              exit 1
+            fi
+          done
+
+          application_certificate_path="$RUNNER_TEMP/apple-distribution.p12"
+          installer_certificate_path="$RUNNER_TEMP/mac-installer-distribution.p12"
+          provisioning_profile_path="$RUNNER_TEMP/AiFetchly-AppStore.provisionprofile"
+          keychain_path="$RUNNER_TEMP/aifetchly-mac-store.keychain-db"
+          keychain_password="$(uuidgen)"
+
+          printf '%s' "$APPLE_DISTRIBUTION_CERTIFICATE_BASE64" | base64 --decode > "$application_certificate_path"
+          printf '%s' "$MAC_INSTALLER_DISTRIBUTION_CERTIFICATE_BASE64" | base64 --decode > "$installer_certificate_path"
+          printf '%s' "$MAC_STORE_PROVISIONING_PROFILE_BASE64" | base64 --decode > "$provisioning_profile_path"
+
+          security create-keychain -p "$keychain_password" "$keychain_path"
+          echo "MAC_STORE_KEYCHAIN_PATH=$keychain_path" >> "$GITHUB_ENV"
+          security set-keychain-settings -lut 21600 "$keychain_path"
+          security unlock-keychain -p "$keychain_password" "$keychain_path"
+          security import "$application_certificate_path" \
+            -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$keychain_path"
+          security import "$installer_certificate_path" \
+            -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$keychain_path"
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s -k "$keychain_password" "$keychain_path"
+          security list-keychains -d user -s "$keychain_path"
+          security default-keychain -d user -s "$keychain_path"
+
+          if ! security find-identity -v -p codesigning "$keychain_path" | grep -Fq "\"$MAC_STORE_SIGNING_IDENTITY\""; then
+            echo "::error::The imported certificate does not provide MAC_STORE_SIGNING_IDENTITY: $MAC_STORE_SIGNING_IDENTITY"
+            security find-identity -v -p codesigning "$keychain_path"
+            exit 1
+          fi
+
+          installer_identity="$(
+            security find-identity -v -p basic "$keychain_path" |
+              awk -v team="$APPLE_TEAM_ID" '
+                /3rd Party Mac Developer Installer|Mac Installer Distribution/ && index($0, "(" team ")") {
+                  split($0, quoted, "\"")
+                  print quoted[2]
+                  exit
+                }
+              '
+          )"
+          if [ -z "$installer_identity" ]; then
+            echo "::error::No Mac Installer Distribution identity was found for team $APPLE_TEAM_ID."
+            security find-identity -v -p basic "$keychain_path"
+            exit 1
+          fi
+
+          echo "MAC_STORE_PROVISIONING_PROFILE=$provisioning_profile_path" >> "$GITHUB_ENV"
+          echo "MAC_INSTALLER_SIGNING_IDENTITY=$installer_identity" >> "$GITHUB_ENV"
+
+      - name: Build Mac App Store application
+        shell: bash
+        env:
+          MAC_STORE_SIGNING_IDENTITY: ${{ secrets.MAC_STORE_SIGNING_IDENTITY }}
+          MAC_STORE_SIGNING_TYPE: distribution
+        run: |
+          set -euo pipefail
+          export NODE_OPTIONS="--max-old-space-size=4096"
+          yarn package-mac:store
+
+          app_paths_file="$RUNNER_TEMP/aifetchly-mas-app-paths.txt"
+          find out -type d -name '*.app' -prune -print > "$app_paths_file"
+          app_count="$(wc -l < "$app_paths_file" | tr -d ' ')"
+          if [ "$app_count" -ne 1 ]; then
+            echo "::error::Expected exactly one packaged Mac App Store application, found $app_count."
+            sed -n '1,20p' "$app_paths_file"
+            exit 1
+          fi
+          app_path="$(sed -n '1p' "$app_paths_file")"
+          yarn verify-mac:store "$app_path"
+          echo "MAC_STORE_APP_PATH=$app_path" >> "$GITHUB_ENV"
+
+      - name: Create signed Mac App Store installer
+        shell: bash
+        run: |
+          set -euo pipefail
+          app_path="$MAC_STORE_APP_PATH"
+          output_directory="out/mac-app-store"
+          pkg_path="$output_directory/AiFetchly-mac-app-store-${{ steps.calculate_version.outputs.version }}.pkg"
+          mkdir -p "$output_directory"
+
+          codesign --verify --deep --strict --verbose=2 "$app_path"
+          productbuild --component "$app_path" /Applications \
+            --sign "$MAC_INSTALLER_SIGNING_IDENTITY" \
+            --keychain "$MAC_STORE_KEYCHAIN_PATH" \
+            "$pkg_path"
+          pkgutil --check-signature "$pkg_path"
+
+      - name: Upload Mac App Store package
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.calculate_version.outputs.artifact_name }}
+          path: out/mac-app-store/*.pkg
+          if-no-files-found: error
+
+      - name: Remove Mac App Store signing keychain
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          if [ -n "${MAC_STORE_KEYCHAIN_PATH:-}" ]; then
+            security delete-keychain "$MAC_STORE_KEYCHAIN_PATH" || true
           fi
 
   # ===========================================================================
