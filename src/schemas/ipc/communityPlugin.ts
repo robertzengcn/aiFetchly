@@ -1,4 +1,7 @@
-import { z } from "zod/v4";
+// NOTE: imports classic `zod` (not `zod/v4`) because registerValidatedHandler
+// and the shared zodToJsonSchema machinery type against root-zod ZodType —
+// same as every other file in src/schemas/ipc/.
+import { z } from "zod";
 import { lazySchema } from "@/utils/lazySchema";
 import { noInputSchema } from "@/schemas/ipc/_shared/common";
 

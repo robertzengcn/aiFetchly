@@ -40,6 +40,7 @@ import { registerAgentRuntimeIpcHandlers } from "@/main-process/communication/ag
 import { registerAgentDefinitionIpcHandlers } from "@/main-process/communication/agent-definition-ipc";
 import { registerPluginIpcHandlers } from "@/main-process/communication/plugin-ipc";
 import { registerPluginMarketplaceIpcHandlers } from "@/main-process/communication/plugin-marketplace-ipc";
+import { registerCommunityPluginIpcHandlers } from "@/main-process/communication/community-plugin-ipc";
 import { registerAIUserMemoryIpcHandlers } from "@/main-process/communication/ai-user-memory-ipc";
 import { registerAIWorkspaceIpcHandlers } from "@/main-process/communication/ai-workspace-ipc";
 import { registerLocalAiRuntimeIpcHandlers } from "@/main-process/communication/local-ai-runtime-ipc";
@@ -110,6 +111,7 @@ export function registerCommunicationIpcHandlers(
     registerAgentDefinitionIpcHandlers();
     registerPluginIpcHandlers();
     registerPluginMarketplaceIpcHandlers();
+    registerCommunityPluginIpcHandlers();
     registerAIUserMemoryIpcHandlers();
     registerAIWorkspaceIpcHandlers(win);
     registerLocalAiRuntimeIpcHandlers(() => win);
