@@ -134,6 +134,20 @@ describe("AIChatErrorMapper - userSafeError", () => {
     );
   });
 
+  it("maps a classified HTTP 520 server failure to the transient-issue message", () => {
+    expect(
+      userSafeError(
+        new AIChatRecoverableError({
+          reason: "server_error",
+          status: 520,
+          message: "HTTP 520: <none>",
+        })
+      )
+    ).toBe(
+      "The AI service is busy or had a transient issue. Please try again in a moment."
+    );
+  });
+
   it("still falls back to the generic message for unknown errors", () => {
     expect(userSafeError(new Error("something else entirely"))).toBe(
       "An unexpected error occurred. Please try again."

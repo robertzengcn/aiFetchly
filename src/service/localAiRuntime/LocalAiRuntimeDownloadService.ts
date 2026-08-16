@@ -223,9 +223,31 @@ export class LocalAiRuntimeDownloadService {
 
     for (;;) {
       this.validateUrl(currentUrl, opts.enforceHttps, opts.allowedHosts);
+      // Inline HTTPS guard so the secure-protocol guarantee is visible in the
+      // data flow into fetch (CodeQL js/insecure-download, CWE-829): tests of
+      // localhost disable enforceHttps, but production always requires https:.
+      let fetchUrl = currentUrl;
+      if (opts.enforceHttps) {
+        let parsedFetch: URL;
+        try {
+          parsedFetch = new URL(fetchUrl);
+        } catch {
+          throw new LocalAiRuntimeError(
+            "runtime_download_failed",
+            "Invalid download URL."
+          );
+        }
+        if (parsedFetch.protocol !== "https:") {
+          throw new LocalAiRuntimeError(
+            "runtime_download_failed",
+            "Download URL must use HTTPS."
+          );
+        }
+        fetchUrl = parsedFetch.href; // proven-https URL flows into fetch
+      }
       let res: Response;
       try {
-        res = await fetch(currentUrl, {
+        res = await fetch(fetchUrl, {
           method: "GET",
           signal: combined,
           redirect: "manual",

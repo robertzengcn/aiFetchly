@@ -113,7 +113,9 @@ const route = useRoute()
 const router = useRouter()
 
 // Reactive data
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const schedule = ref<any>(null)
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const aiMessageTask = ref<any>(null)
 const loading = ref(false)
 const submitting = ref(false)

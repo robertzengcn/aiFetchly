@@ -8,12 +8,14 @@
 
 import { ref } from 'vue';
 import EmailFilterTable from '@/views/pages/emailfilter/widgets/EmailFilterTable.vue'
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const dialog = ref(false);
 
 // onMounted(() => {
     
 // });
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const loadItems =({ page, itemsPerPage, sortBy }) =>{
     console.log(page, itemsPerPage, sortBy)
 }

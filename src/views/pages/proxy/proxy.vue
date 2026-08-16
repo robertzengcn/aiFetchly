@@ -5,8 +5,9 @@
 </template>
 <script setup lang="ts">
 // import router from '@/views/router';
-import { ref, onMounted } from 'vue';
+import { ref } from 'vue';
 import ProxyTable from '@/views/pages/proxy/widgets/ProxyTable.vue'
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const dialog = ref(false);
 
 // onMounted(() => {

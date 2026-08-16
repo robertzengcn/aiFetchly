@@ -241,11 +241,7 @@ describe("SlashCommandDispatcher.dispatch (CMD-04, CMD-08, DX-02)", () => {
     const executor: PluginSlashCommandExecutor = {
       execute: vi.fn().mockResolvedValue("Plugin command completed."),
     };
-    const dispatcher = new SlashCommandDispatcher(
-      registry,
-      manager,
-      executor
-    );
+    const dispatcher = new SlashCommandDispatcher(registry, manager, executor);
     const r = await dispatcher.dispatch({
       conversationId: "conv-1",
       rawInput:
@@ -266,7 +262,7 @@ describe("SlashCommandDispatcher.dispatch (CMD-04, CMD-08, DX-02)", () => {
     const { registry, manager } = buildStack();
     const skillsProvider: SkillsSlashCommandProvider = {
       render: vi
-        .fn<[], Promise<string>>()
+        .fn<() => Promise<string>>()
         .mockResolvedValue(
           "Available skills (1):\n\n1. `file_read` - Read a file\n\nTool catalog: 1 total"
         ),
@@ -703,9 +699,7 @@ describe("SlashCommandDispatcher /agents command (Phase 16 / Plan 03, D-AgentsLi
 
   it("labels Claude plugin agents as plugin even when IDs use pluginName:name format", async () => {
     const { dispatcher, manager } = buildStack();
-    manager
-      .getAgentRegistry()
-      .replaceSource("plugin:ecc", [claudePluginAgent]);
+    manager.getAgentRegistry().replaceSource("plugin:ecc", [claudePluginAgent]);
 
     const r = await dispatcher.dispatch({
       conversationId: "conv-1",

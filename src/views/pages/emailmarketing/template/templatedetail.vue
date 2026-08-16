@@ -355,22 +355,22 @@ const initialize = async () => {
 
 };
 
-watch(Sendervar, (newValue, oldValue) => {
+watch(Sendervar, () => {
   //console.log('EmailContentpreview changed from', oldValue, 'to', newValue);
   // Call your function here
   onEmailContentpreviewChange();
 });
-watch(Receivervar, (newValue, oldValue) => {
+watch(Receivervar, () => {
   //console.log('EmailContentpreview changed from', oldValue, 'to', newValue);
   // Call your function here
   onEmailContentpreviewChange();
 });
-watch(DescriptionVar, (newValue, oldValue) => {
+watch(DescriptionVar, () => {
   //console.log('EmailContentpreview changed from', oldValue, 'to', newValue);
   // Call your function here
   onEmailContentpreviewChange();
 });
-watch(Sourcevar, (newValue, oldValue) => {
+watch(Sourcevar, () => {
   //console.log('EmailContentpreview changed from', oldValue, 'to', newValue);
   // Call your function here
   onEmailContentpreviewChange();
@@ -534,7 +534,9 @@ async function generateTemplate() {
 
   const requestData: AIEmailTemplateRequest = {
     prompt: prompt.value,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     tone: tone.value as any,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     templateType: templateType.value as any,
     useRAG: useRAG.value,
   };

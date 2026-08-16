@@ -226,7 +226,7 @@ v-for="(opt, idx) in setting.options || []" :key="idx" :label="opt.optionLabel"
 import { ref, computed, onMounted, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useRouter } from 'vue-router';
-import { SystemSettingDisplay, SystemSettingGroupDisplay, OptionSettingDisplay } from "@/entityTypes/systemsettingType";
+import { SystemSettingDisplay, SystemSettingGroupDisplay } from "@/entityTypes/systemsettingType";
 import { getSystemSettinglist, updateSystemSetting, updateSystemSettingWithValidation } from "@/views/api/systemsetting";
 import { updateLanguagePreference } from '@/views/api/language';
 import { language_preference } from '@/config/settinggroupInit';

@@ -1455,6 +1455,50 @@ describe("AiChatApi - Recovery-driven streaming retry", () => {
     }
   });
 
+  it("keeps retrying a transient HTTP 520 until the tenth foreground attempt succeeds", async () => {
+    vi.useFakeTimers();
+    try {
+      for (let attempt = 1; attempt < 10; attempt += 1) {
+        mockPostStreamShared.mockResolvedValueOnce(
+          makeResponse("temporary upstream failure", 520)
+        );
+      }
+      mockPostStreamShared.mockResolvedValueOnce(successStream());
+
+      const api = new AiChatApi();
+      const chunks: string[] = [];
+      const retries: Array<{ attempt: number; maxAttempts: number }> = [];
+      const p = api.openAIChatCompletionStream(
+        {
+          model: "m",
+          messages: [{ role: "user", content: "hi" }],
+          max_tokens: 16,
+        },
+        (chunk) => {
+          const content = chunk.choices[0]?.delta?.content;
+          if (content) chunks.push(content);
+        },
+        {
+          retryProfile: "foreground",
+          onRetry: (info) =>
+            retries.push({
+              attempt: info.attempt,
+              maxAttempts: info.maxAttempts,
+            }),
+        }
+      );
+
+      await vi.runAllTimersAsync();
+      await p;
+
+      expect(chunks.join("")).toBe("ok");
+      expect(mockPostStreamShared).toHaveBeenCalledTimes(10);
+      expect(retries.at(-1)).toEqual({ attempt: 10, maxAttempts: 10 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("aborts during retry sleep reject immediately", async () => {
     mockPostStreamShared.mockRejectedValueOnce(new Error("ECONNRESET"));
 

@@ -106,7 +106,6 @@ describe("LocalAiRuntimeDownloadService", () => {
     );
   });
 
-
   test("creates missing parent directory before writing the partial archive", async () => {
     const payload = Buffer.from("nested download destination");
     const nestedDest = path.join(tmpRoot, ".downloads", "op.zip.part");
@@ -198,6 +197,33 @@ describe("LocalAiRuntimeDownloadService", () => {
     ).rejects.toThrow(LocalAiRuntimeError);
   });
 
+  test("rejects oversized declared content-length before streaming", async () => {
+    // CodeQL js/insecure-download (#48) robustness: the preflight must
+    // refuse an archive whose declared size exceeds the local ceiling
+    // before any bytes hit disk.
+    const payload = Buffer.from("tiny");
+    await withServer(
+      (_req, res) => {
+        // Lie about the size: declare far more than maxArchiveBytes.
+        res.setHeader("Content-Length", String(1024 * 1024));
+        res.end(payload);
+      },
+      async (base) => {
+        const e = entry(`${base}/big.zip`, 1024 * 1024, sha256hex(payload));
+        await expect(
+          svc({ maxArchiveBytes: 4096 }).download({
+            operationId: "op",
+            entry: e,
+            destinationPath: destPath,
+            signal: new AbortController().signal,
+            onProgress,
+          })
+        ).rejects.toThrow(LocalAiRuntimeError);
+        expect(fs.existsSync(destPath)).toBe(false);
+      }
+    );
+  });
+
   test("follows a redirect to the final artifact", async () => {
     const payload = Buffer.from("redirected payload bytes");
     await withServer(
@@ -261,10 +287,14 @@ describe("LocalAiRuntimeDownloadService", () => {
   });
 
   test("enforces redirect limit", async () => {
+    // Fixed loopback path (not req.url) to avoid CodeQL
+    // js/server-side-unvalidated-url-redirection (CWE-601): the mock must
+    // not echo unvalidated user input into a redirect target.
+    const LOOP_PATH = "/loop";
     await withServer(
-      (req, res) => {
+      (_req, res) => {
         res.statusCode = 302;
-        res.setHeader("Location", req.url ?? "/"); // infinite self-redirect
+        res.setHeader("Location", LOOP_PATH); // deterministic self-redirect
         res.end();
       },
       async (base) => {

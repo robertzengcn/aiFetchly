@@ -7,6 +7,7 @@ import { browserManager } from "@/modules/browserManager";
 import { UrlGuard } from "@/service/UrlGuard";
 import { applySsrfNavigationGuard } from "@/service/PuppeteerSsrfGuard";
 import { extractContactInfoWithWorkerAi } from "./ContactExtractionAiClient";
+import { navigateForContactExtraction } from "./ContactNavigation";
 
 /**
  * Contact Discovery - 4-Stage Pipeline
@@ -322,7 +323,7 @@ export async function discoverAndExtractContactInfo(
 
     // Navigate to URL with bot detection handling
     try {
-      await page.goto(url, { waitUntil: "networkidle0", timeout: 30000 });
+      await navigateForContactExtraction(page, url);
     } catch (navError) {
       // Check if it's a bot detection page
       const pageContent = await page.content();
@@ -337,7 +338,7 @@ export async function discoverAndExtractContactInfo(
         );
 
         // Retry with stealth (already enabled via puppeteer-extra-plugin-stealth)
-        await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
+        await navigateForContactExtraction(page, url);
       } else {
         throw navError;
       }
@@ -397,10 +398,7 @@ export async function discoverAndExtractContactInfo(
           console.log(
             `ContactDiscovery: Stage 2 found contact page: ${contactPageUrl}`
           );
-          await page.goto(contactPageUrl, {
-            waitUntil: "networkidle0",
-            timeout: 30000,
-          });
+          await navigateForContactExtraction(page, contactPageUrl);
 
           // F7 follow-up (defense in depth) — revalidate after navigating to
           // the DOM-derived contact page URL.
@@ -446,10 +444,7 @@ export async function discoverAndExtractContactInfo(
           console.log(`ContactDiscovery: Stage 3 trying ${fallbackUrl}`);
 
           try {
-            await page.goto(fallbackUrl, {
-              waitUntil: "networkidle0",
-              timeout: 30000,
-            });
+            await navigateForContactExtraction(page, fallbackUrl);
 
             // F7 follow-up (defense in depth) — revalidate the fallback URL.
             await assertPageUrlSafe(page);
@@ -495,7 +490,7 @@ export async function discoverAndExtractContactInfo(
     // Navigate back to homepage if we navigated away during earlier stages, or if AI was skipped
     const currentUrl = page.url();
     if (currentUrl !== url) {
-      await page.goto(url, { waitUntil: "networkidle0", timeout: 30000 });
+      await navigateForContactExtraction(page, url);
     }
     const stage4Result = await scanHomepageForContactInfo(page);
 

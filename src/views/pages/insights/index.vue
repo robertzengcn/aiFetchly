@@ -81,14 +81,6 @@ const insightItems = computed<InsightItem[]>(() => [
     path: "/emailmarketing/emailreply/audit/list",
   },
   {
-    title: t("route.map_scraper") || "Local Business Finder",
-    description:
-      t("insights.maps_description") ||
-      "Find local businesses from map providers.",
-    icon: "mdi-map-marker-multiple",
-    path: "/map-scraper",
-  },
-  {
     title: t("route.proxy") || "Proxy",
     description:
       t("insights.proxy_description") ||

@@ -1,6 +1,6 @@
 <template>
   <v-dialog
-    :modelValue="showDialog"
+    :model-value="showDialog"
     max-width="600"
     persistent
     @keydown.esc="closeDialog"
@@ -152,6 +152,7 @@ async function loadSavedBusinessInfo(): Promise<void> {
 /**
  * Save business information to system settings
  */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 async function saveBusinessInfo(): Promise<void> {
   if (!saveForFuture.value) {
     return;

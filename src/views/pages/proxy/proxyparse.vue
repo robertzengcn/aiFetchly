@@ -191,6 +191,7 @@ const items = ref<Array<ProxyParseItem>>([]);
 // const show = ref(false);
 const loading = ref(false);
 const message = ref("");
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const itemsPerPage = ref(10);
 const alert = ref(false);
 const alerttext = ref("");
@@ -199,6 +200,7 @@ const search= ref("");
 const alerttype = ref<"success" | "error" | "warning" | "info" | undefined>("success");
 const showHelp = ref(false);
 const checkTimeout = ref(10); // Default timeout in seconds
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const headers: Array<any> = [
   {
     title: t('proxy.host'),
@@ -415,6 +417,7 @@ const outPutcsv = () => {
   // window.open(encodedUri);
   window.location.href = encodedUri;
 };
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const showload=()=>{
   loading.value=true;
   message.value = t('proxy.loading_data');

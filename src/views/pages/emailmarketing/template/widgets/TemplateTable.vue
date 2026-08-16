@@ -3,18 +3,20 @@
   <div class="search_bar mt-4 d-flex jsb">
     <div class="d-flex jsb search_tool">
       <div class="search_wrap mr-4">
-        <v-text-field rounded class="elevation-0" density="compact" variant="solo" label="Search"
+        <v-text-field
+rounded class="elevation-0" density="compact" variant="solo" label="Search"
           append-inner-icon="mdi-magnify" single-line hide-details v-model="search"></v-text-field>
       </div>
       <!-- <v-btn class="btn" variant="flat" prepend-icon="mdi-filter-variant"><span> More</span></v-btn> -->
-      <v-btn class="btn ml-3" variant="flat" prepend-icon="mdi-plus" color="#5865f2" @click="createTemplate()" >
+      <v-btn class="btn ml-3" variant="flat" prepend-icon="mdi-plus" color="#5865f2" @click="createTemplate()">
         {{ CapitalizeFirstLetter(t('emailmarketing.create_template')) }}
       </v-btn>
     </div>
     <div>
     </div>
   </div>
-  <v-data-table-server v-model="selected" :items-per-page="itemsPerPage" :search="search" :headers="computedHeaders"
+  <v-data-table-server
+v-model="selected" :items-per-page="itemsPerPage" :search="search" :headers="computedHeaders"
     :items-length="totalItems" :items="serverItems" :loading="loading" item-key="TplId"   item-value="TplId" @update:options="loadItems" 
     class="custom-data-table mt-4" :show-select="isSelectedtable" return-object>
     <template v-slot:[`item.actions`]="{ item }" v-if="isSelectedtable!=true">
@@ -31,7 +33,8 @@
 
   <!-- Delete Confirmation Modal -->
   <v-dialog v-model="showDeleteModal" width="auto">
-    <v-card max-width="400" prepend-icon="mdi-update" :text="t('emailmarketing.email_template_deleted')"
+    <v-card
+max-width="400" prepend-icon="mdi-update" :text="t('emailmarketing.email_template_deleted')"
       :title="t('emailmarketing.confirm_delete_email_template')">
       <template v-slot:actions>
         <v-btn class="ms-auto" text="Ok" color="secondary" @click="confirmrmItem">
@@ -41,7 +44,8 @@
       </template>
     </v-card>
   </v-dialog>
-  <v-alert v-model="alert" border="start" variant="tonal" closable close-label="Close Alert" title="Information"
+  <v-alert
+v-model="alert" border="start" variant="tonal" closable close-label="Close Alert" title="Information"
     :color="alertcolor">
     {{ alertContent }}
   </v-alert>

@@ -2,7 +2,8 @@ campaign:list<template>
     <div class="search_bar mt-4 d-flex jsb">
         <div class="d-flex jsb search_tool">
             <div class="search_wrap mr-4">
-                <v-text-field rounded class="elevation-0" density="compact" variant="solo" label="Search sample"
+                <v-text-field
+rounded class="elevation-0" density="compact" variant="solo" label="Search sample"
                     append-inner-icon="mdi-magnify" single-line hide-details></v-text-field>
             </div>
             <!-- <v-btn class="btn" variant="flat" prepend-icon="mdi-filter-variant"><span> More</span></v-btn> -->
@@ -16,7 +17,8 @@ campaign:list<template>
            
         </div>
     </div>
-    <v-data-table-server v-model:items-per-page="itemsPerPage" :search="search" :headers="headers"
+    <v-data-table-server
+v-model:items-per-page="itemsPerPage" :search="search" :headers="headers"
         :items-length="totalItems" :items="serverItems" :loading="loading" item-value="name" @update:options="loadItems">
         <template v-slot:[`item.actions`]="{ item }">
             <v-icon
@@ -85,6 +87,7 @@ const FakeAPI = {
 }
 
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const headers: Array<any> = [
     {
         title: 'Id',

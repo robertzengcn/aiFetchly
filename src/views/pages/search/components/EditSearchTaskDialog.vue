@@ -200,7 +200,7 @@
 import { ref, reactive, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { getSearchTaskDetails, updateSearchTask, receiveSearchTaskUpdateEvent } from '@/views/api/search'
-import { SearchTaskDetails, UpdateSearchTaskData } from '@/views/api/types'
+import { UpdateSearchTaskData } from '@/views/api/types'
 
 const { t: $t } = useI18n()
 

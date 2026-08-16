@@ -12,6 +12,7 @@ const i18n = createI18n({
       workspace: {
         badgeLabel: "Workspace",
         notSet: "No workspace set",
+        changeFolder: "Change folder",
       },
     },
   },
@@ -29,11 +30,27 @@ function mountBadge(workspace: WorkspaceSummary | null) {
   });
 }
 
+const approvedWorkspace: WorkspaceSummary = {
+  id: 1,
+  conversationId: "conv-1",
+  rootPath: "/home/user/project",
+  label: null,
+  approvalState: "approved",
+};
+
 describe("WorkspaceBadge", () => {
   it("requests workspace setup when the unset badge is clicked", async () => {
     const wrapper = mountBadge(null);
 
     await wrapper.find(".workspace-badge--unset").trigger("click");
+
+    expect(wrapper.emitted("request-set-workspace")).toHaveLength(1);
+  });
+
+  it("requests workspace change when the change button is clicked with a workspace set", async () => {
+    const wrapper = mountBadge(approvedWorkspace);
+
+    await wrapper.find(".workspace-badge__change").trigger("click");
 
     expect(wrapper.emitted("request-set-workspace")).toHaveLength(1);
   });

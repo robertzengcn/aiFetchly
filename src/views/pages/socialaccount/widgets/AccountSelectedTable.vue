@@ -76,33 +76,34 @@ const FakeAPI = {
 }
 
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const headers: Array<any> = [
     {
-        title: computed(_ => t("account.accountId")),
+        title: computed(() => t("account.accountId")),
         align: 'start',
         sortable: false,
         key: 'id',
     },
     {
-        title: computed(_ => t("account.type")),
+        title: computed(() => t("account.type")),
         align: 'start',
         sortable: false,
         key: 'social_type',
     },
     {
-        title: computed(_ => t("account.usename")),
+        title: computed(() => t("account.usename")),
         align: 'start',
         sortable: false,
         key: 'user',
     },
     {
-        title: computed(_ => t("account.cookies_exist")),
+        title: computed(() => t("account.cookies_exist")),
         align: 'start',
         sortable: false,
         key: 'cookies',
     },
     {
-        title: computed(_ => t("account.useproxy")),
+        title: computed(() => t("account.useproxy")),
         align: 'start',
         sortable: false,
         key: 'use_proxy',

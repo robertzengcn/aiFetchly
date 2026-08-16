@@ -7,6 +7,7 @@
 // import router from '@/views/router';
 import { ref, onMounted } from 'vue';
 import SocialtaskresultlistTable from '@/views/pages/socialtask/widgets/SocialtaskresultlistTable.vue'
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const dialog = ref(false);
 // const list = ref([
 //     {

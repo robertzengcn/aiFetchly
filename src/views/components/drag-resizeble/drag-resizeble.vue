@@ -16,14 +16,14 @@
         @contextmenu="onContextMenu"
     >
         <div
-            v-for="handle in actualHandles"
-            :key="handle"
-            :class="[classNameHandle, classNameHandle + '-' + handle]"
-            :style="handleStyle(handle)"
-            @mousedown.stop.prevent="handleDown(handle, $event)"
-            @touchstart.stop.prevent="handleTouchDown(handle, $event)"
+            v-for="handleName in actualHandles"
+            :key="handleName"
+            :class="[classNameHandle, classNameHandle + '-' + handleName]"
+            :style="handleStyle(handleName)"
+            @mousedown.stop.prevent="handleDown(handleName, $event)"
+            @touchstart.stop.prevent="handleTouchDown(handleName, $event)"
         >
-            <slot :name="handle"></slot>
+            <slot :name="handleName"></slot>
         </div>
         <slot></slot>
     </div>
@@ -259,6 +259,17 @@ export default defineComponent({
             },
         },
     },
+    emits: [
+        'activated',
+        'deactivated',
+        'update:active',
+        'contextmenu',
+        'dragging',
+        'dragstop',
+        'resizing',
+        'resizestop',
+        'refLineParams',
+    ],
 
     data() {
         return {
@@ -875,13 +886,13 @@ export default defineComponent({
             this.$emit('dragging', this.left, this.top);
         },
         moveHorizontally(val) {
-            const [deltaX, _] = snapToGrid(this.grid, val, this.top, this.scale);
+            const [deltaX] = snapToGrid(this.grid, val, this.top, this.scale);
             const left = restrictToBounds(deltaX, this.bounds.minLeft, this.bounds.maxLeft);
             this.left = left;
             this.right = this.parentWidth - this.width - left;
         },
         moveVertically(val) {
-            const [_, deltaY] = snapToGrid(this.grid, this.left, val, this.scale);
+            const [, deltaY] = snapToGrid(this.grid, this.left, val, this.scale);
             const top = restrictToBounds(deltaY, this.bounds.minTop, this.bounds.maxTop);
             this.top = top;
             this.bottom = this.parentHeight - this.height - top;
@@ -894,7 +905,6 @@ export default defineComponent({
             let bottom = this.bottom;
 
             const mouseClickPosition = this.mouseClickPosition;
-            const lockAspectRatio = this.lockAspectRatio;
             const aspectFactor = this.aspectFactor;
 
             const tmpDeltaX =
@@ -964,7 +974,7 @@ export default defineComponent({
             this.$emit('resizing', this.left, this.top, this.width, this.height);
         },
         changeWidth(val) {
-            const [newWidth, _] = snapToGrid(this.grid, val, 0, this.scale);
+            const [newWidth] = snapToGrid(this.grid, val, 0, this.scale);
             const right = restrictToBounds(
                 this.parentWidth - newWidth - this.left,
                 this.bounds.minRight,
@@ -982,7 +992,7 @@ export default defineComponent({
             this.height = height;
         },
         changeHeight(val) {
-            const [_, newHeight] = snapToGrid(this.grid, 0, val, this.scale);
+            const [, newHeight] = snapToGrid(this.grid, 0, val, this.scale);
             const bottom = restrictToBounds(
                 this.parentHeight - newHeight - this.top,
                 this.bounds.minBottom,
@@ -1000,7 +1010,7 @@ export default defineComponent({
             this.height = height;
         },
         // 从控制柄松开
-        async handleUp(e) {
+        async handleUp() {
             this.handle = null;
 
             // 初始化辅助线数据

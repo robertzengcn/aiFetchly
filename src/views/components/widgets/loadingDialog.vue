@@ -1,6 +1,6 @@
 <template>
     <v-dialog
-    :modelValue="loadDialogshow"
+    :model-value="loadDialogshow"
     max-width="320"
     persistent
   >
@@ -36,7 +36,7 @@
 <script setup lang="ts">
 
 
-const props = defineProps({
+defineProps({
     loadDialogshow: {
       type: Boolean,
       required: true

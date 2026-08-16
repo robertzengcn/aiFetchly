@@ -19,8 +19,8 @@
       class="v2-model-selector__select"
       @update:model-value="onChange"
     >
-      <template #item="{ item, props }">
-        <v-list-item v-bind="props">
+      <template #item="{ item, props: itemProps }">
+        <v-list-item v-bind="itemProps">
           <template #append>
             <v-chip
               v-if="item.raw.isFree"

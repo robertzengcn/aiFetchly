@@ -34,6 +34,14 @@ const TRANSIENT_ERROR_PATTERN =
 export function isTransientRetryableError(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
   if (err.name === "AbortError") return false;
+  if (isAIChatRecoverableError(err)) {
+    return (
+      err.reason === "server_error" ||
+      err.reason === "overload" ||
+      err.reason === "rate_limit" ||
+      err.reason === "timeout"
+    );
+  }
   return TRANSIENT_ERROR_PATTERN.test(err.message || "");
 }
 

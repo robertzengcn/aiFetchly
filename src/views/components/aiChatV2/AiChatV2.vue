@@ -1,5 +1,5 @@
 <template>
-  <div class="v2-shell">
+  <div class="v2-shell" data-testid="ai-chat-root">
     <!-- Header with icon actions like old AiChatBox -->
     <div class="v2-shell__header">
       <div class="v2-shell__header-left">
@@ -209,6 +209,7 @@
         />
         <AiChatV2QuestionCard
           v-if="pendingQuestion"
+          ref="questionCardRef"
           :question="pendingQuestion"
           @answered="handleQuestionAnswered"
         />
@@ -300,6 +301,16 @@
           :conversation-id="activeConversationId"
           @approved="onWorkspaceApproved"
           @cancel="showWorkspaceRequired = false"
+        />
+        <!-- Phase 14 (Plan 14-04): inline trust card (D-03). Renders only
+             when an approved workspace with .aifetchly instructions is
+             active and not yet dismissed this session. NOT a modal/banner. -->
+        <WorkspaceTrustCard
+          v-if="showWorkspaceTrustCard && activeWorkspaceWatchId && activeConversationId"
+          :workspace-id="activeWorkspaceWatchId"
+          :conversation-id="activeConversationId"
+          @trusted="onWorkspaceTrustAccepted"
+          @dismissed="onWorkspaceTrustDismissed"
         />
       </div>
 
@@ -434,10 +445,10 @@
             @update:model-value="onToolApprovalModeChange"
           />
           <v-tooltip location="bottom">
-            <template #activator="{ props }">
+            <template #activator="{ props: activatorProps }">
               <v-chip
                 v-if="providerLabel"
-                v-bind="props"
+                v-bind="activatorProps"
                 size="x-small"
                 :color="providerChipColor"
                 variant="tonal"
@@ -744,7 +755,11 @@ import {
   getAIProviderSettings,
 } from "@/views/api/aiProvider";
 import type { AIProviderSettingsView } from "@/entityTypes/aiProviderTypes";
-import { dispatchSlashCommand } from "@/views/api/slashCommands";
+import {
+  dispatchSlashCommand,
+  listSlashCommands,
+  onAifetchlyConfigChanged,
+} from "@/views/api/slashCommands";
 import AiChatV2Messages from "./AiChatV2Messages.vue";
 import AiChatV2Composer from "./AiChatV2Composer.vue";
 import AiChatV2ModeSelector from "./AiChatV2ModeSelector.vue";
@@ -762,7 +777,13 @@ import ScheduledLoopToolApprovalDialog from "./ScheduledLoopToolApprovalDialog.v
 import WorkspaceBadge from "./WorkspaceBadge.vue";
 import WorkspaceRequiredCard from "./WorkspaceRequiredCard.vue";
 import WorkspaceMemoryPanel from "./WorkspaceMemoryPanel.vue";
+import WorkspaceTrustCard from "./WorkspaceTrustCard.vue";
 import { getWorkspace } from "@/views/api/workspace";
+import {
+  acquireWorkspaceWatch,
+  releaseWorkspaceWatch,
+  previewWorkspaceAgents,
+} from "@/views/api/workspaceWatch";
 import {
   createGoal,
   getActiveGoal,
@@ -791,7 +812,9 @@ import type {
   ChatV2ScheduledStreamEvent,
 } from "@/entityTypes/aiChatScheduledLoopTypes";
 import { workspaceMemoryApi } from "@/views/api/aiWorkspaceMemory";
+import type { WorkspaceTrustScope } from "@/entityTypes/aiChatV2Types";
 import type { WorkspaceSummary } from "@/entityTypes/workspaceTypes";
+import type { SlashCommandView } from "@/entityTypes/slashCommandTypes";
 import type { FileOperationRecord } from "@/entityTypes/fileOperationTypes";
 import { extractArtifactMetadata, ensureArtifactMetadata } from "./artifactMetadata";
 import {
@@ -1306,7 +1329,9 @@ function ensureWorkspaceConversationId(): string {
 }
 
 function handleWorkspaceSetupRequest(): void {
-  if (activeWorkspace.value) return;
+  // Allow re-picking even when a workspace is already set, so the user can
+  // change folders. Re-picking creates a new pending workspace that supersedes
+  // the previous one once approved (see WorkspaceModule.setWorkspace).
   ensureWorkspaceConversationId();
   showWorkspaceRequired.value = true;
 }
@@ -1649,6 +1674,203 @@ watch(activeConversationId, (id, previousId) => {
     void refreshScheduledLoopStatus();
   }
 });
+
+// ---------------------------------------------------------------------------
+// Slash command cache + config-changed subscription
+// (Phase 13 — Plan 04 CMD-04/05; Phase 14 — Plan 14-04 D-04 workspace filter)
+// ---------------------------------------------------------------------------
+// Local cache of the renderer-safe command views. Refreshed on mount and on
+// AIFETCHLY_CONFIG_CHANGED events. The composer fetches its own dropdown
+// contents via listSlashCommands; this cache lets future status badges /
+// tooltips reflect the current command count without re-fetching on every
+// render.
+const slashCommandCache = ref<readonly SlashCommandView[]>([]);
+// Unsubscribe function for the AIFETCHLY_CONFIG_CHANGED subscription.
+// Null when no subscription is active (before mount / after unmount).
+let slashConfigUnsub: (() => void) | null = null;
+
+async function refreshSlashCommandCount(): Promise<void> {
+  try {
+    const resp = await listSlashCommands({});
+    slashCommandCache.value = [...resp.commands];
+  } catch {
+    // Non-fatal: leave the cache at its previous value. The user can still
+    // type slash commands; the dropdown will fetch fresh on '/'.
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Phase 14 (Plan 14-04) — Workspace watcher lifecycle + trust card
+// ---------------------------------------------------------------------------
+// activeWorkspaceWatchId holds the workspaceId token returned by acquire.
+// Null before acquire resolves, after release, or when no approved workspace
+// exists. Drives BOTH the subscriber filter (compare against event.workspaceId
+// — D-04) and the trust-card mount condition.
+const activeWorkspaceWatchId = ref<string | null>(null);
+// True when the active workspace's preview carried AGENTS.md content (i.e.
+// the workspace contains .aifetchly). Used as the trust-card mount gate so
+// the card does NOT render for approved workspaces without .aifetchly.
+const activeWorkspaceHasAgents = ref(false);
+// Per-session dismissal set. The trust card does not reappear for a
+// workspace the user dismissed this session. Persistence across app
+// restarts is deferred to Phase 17 (AIFetchlyWorkspaceTrust entity) —
+// Plan 14-04 reuses in-session state per the plan's "do NOT create a new
+// persistence layer" rule.
+const dismissedTrustWorkspaces = ref<ReadonlySet<string>>(new Set());
+
+/**
+ * Inline trust card mounts when ALL of:
+ *   - active workspace is approved (existing approval state),
+ *   - acquireWorkspaceWatch returned a watch token (worker is watching),
+ *   - previewWorkspaceAgents returned non-empty content (workspace has
+ *     AGENTS.md / .aifetchly instructions — TRS-07 preview path),
+ *   - the user has not dismissed the card for this workspace this session.
+ *
+ * The card is rendered INLINE near the existing WorkspaceRequiredCard — NOT
+ * a modal/banner (D-03).
+ */
+const showWorkspaceTrustCard = computed(() => {
+  const wid = activeWorkspaceWatchId.value;
+  if (!wid) return false;
+  if (!activeWorkspace.value) return false;
+  if (activeWorkspace.value.approvalState !== "approved") return false;
+  if (!activeWorkspaceHasAgents.value) return false;
+  if (dismissedTrustWorkspaces.value.has(wid)) return false;
+  return true;
+});
+
+/**
+ * Acquire a workspace watch for the supplied conversation. Idempotent —
+ * releasing the previous watch (if any) before acquiring the new one
+ * covers the workspace-switch path. Non-fatal on IPC failure: chat still
+ * works without live-update; the user can /reload-config to retry.
+ *
+ * After a successful acquire, probes previewWorkspaceAgents to learn
+ * whether the workspace contains .aifetchly content. That probe is the
+ * sole source of the hasAgents flag (TRS-07 — the renderer NEVER touches
+ * the filesystem).
+ */
+async function acquireActiveWorkspaceWatch(
+  conversationId: string
+): Promise<void> {
+  // Release any previous watch first (covers switch).
+  await releaseActiveWorkspaceWatch();
+  // Reset hasAgents — the new workspace's probe repopulates it.
+  activeWorkspaceHasAgents.value = false;
+  try {
+    const result = await acquireWorkspaceWatch({ conversationId });
+    if (!result) {
+      // No approved workspace / resolver miss — fail-closed, no watch.
+      activeWorkspaceWatchId.value = null;
+      return;
+    }
+    activeWorkspaceWatchId.value = result.workspaceId;
+    // Probe for AGENTS.md content via the TRS-07 preview channel.
+    try {
+      const content = await previewWorkspaceAgents(result.workspaceId);
+      activeWorkspaceHasAgents.value = content.length > 0;
+    } catch {
+      // Preview failure is non-fatal — treat as "no agents content" so the
+      // card stays hidden. The user can still chat; the watcher is active.
+      activeWorkspaceHasAgents.value = false;
+    }
+  } catch (err) {
+    // Non-fatal: log and leave watchId null. Chat still works.
+    console.error(
+      "[AiChatV2] acquireWorkspaceWatch failed (non-fatal):",
+      err
+    );
+    activeWorkspaceWatchId.value = null;
+  }
+}
+
+/**
+ * Release the active workspace watch, if any. Idempotent — safe to call on
+ * unmount, on switch, or when no watch is active.
+ */
+async function releaseActiveWorkspaceWatch(): Promise<void> {
+  const wid = activeWorkspaceWatchId.value;
+  const convId = activeConversationId.value;
+  if (!wid || !convId) {
+    activeWorkspaceWatchId.value = null;
+    return;
+  }
+  try {
+    await releaseWorkspaceWatch({ conversationId: convId, workspaceId: wid });
+  } catch (err) {
+    // Non-fatal: worst case is a transient consumer leak; main will GC the
+    // consumer when the worker sees no other consumers for this workspace.
+    console.error(
+      "[AiChatV2] releaseWorkspaceWatch failed (non-fatal):",
+      err
+    );
+  } finally {
+    activeWorkspaceWatchId.value = null;
+  }
+}
+
+/**
+ * Watch the active workspace to drive acquire/release. Fires whenever the
+ * resolved active workspace changes (conversation switch, pick-folder flow,
+ * approval). The watcher is additive to the existing activeConversationId
+ * watcher — that one refreshes the badge; this one manages the watcher
+ * lifecycle.
+ */
+watch(
+  activeWorkspace,
+  (next, prev) => {
+    // Only re-acquire when something material changed. approvalState flips
+    // from pending→approved after the WorkspaceRequiredCard flow, so we
+    // DO want to fire on that transition.
+    const prevKey = prev ? `${prev.id}:${prev.approvalState}` : "null";
+    const nextKey = next ? `${next.id}:${next.approvalState}` : "null";
+    if (prevKey === nextKey) return;
+    if (!next || next.approvalState !== "approved") {
+      // Not eligible — release any stale watch and bail.
+      void releaseActiveWorkspaceWatch();
+      return;
+    }
+    const convId = activeConversationId.value;
+    if (!convId) return;
+    void acquireActiveWorkspaceWatch(convId);
+  }
+);
+
+/**
+ * Trust-card 'trusted' handler. The IPC was already called inside the card
+ * (setWorkspaceTrust). Hide the card by adding the workspace to the
+ * dismissed set — Phase 14 binary gate reuses the approval state, so trust
+ * equals the existing approval (already set by the card's setTrust call).
+ */
+function onWorkspaceTrustAccepted(scope: WorkspaceTrustScope): void {
+  const wid = activeWorkspaceWatchId.value;
+  if (wid) {
+    dismissedTrustWorkspaces.value = new Set([
+      ...dismissedTrustWorkspaces.value,
+      wid,
+    ]);
+  }
+  // The trust-set IPC triggers a manager.rescan → AIFETCHLY_CONFIG_CHANGED
+  // event with the matching workspaceId. The subscriber filter refreshes
+  // the command cache from that event.
+  void scope; // Phase 17 branches on scope for per-capability trust.
+}
+
+/**
+ * Trust-card 'dismissed' handler (Keep disabled). Persist the dismissal
+ * in-session so the card does not reappear on the next chat open for this
+ * workspace. The user keeps chatting with the workspace config untrusted
+ * (Phase 14: untrusted means the watcher still runs but applyWorkspaceSnapshot
+ * drops instructions/commands at the trust-filter boundary — TRS-01).
+ */
+function onWorkspaceTrustDismissed(): void {
+  const wid = activeWorkspaceWatchId.value;
+  if (!wid) return;
+  dismissedTrustWorkspaces.value = new Set([
+    ...dismissedTrustWorkspaces.value,
+    wid,
+  ]);
+}
 
 // Conversation search state
 const conversationSearch = ref("");
@@ -2203,6 +2425,9 @@ const scheduledLoopDescriptor = computed(() => {
   }
 });
 const pendingQuestion = ref<AIChatPlanQuestionView | null>(null);
+// Template handle on the pinned question card so we can un-lock it if the
+// answer IPC rejects (see handleQuestionAnswered's catch path).
+const questionCardRef = ref<{ resetSubmitted: () => void } | null>(null);
 // While a plan is awaiting the user's decision, its approval card is pinned
 // at the bottom of the chat (alongside the question card). Once the user
 // approves/rejects/requests changes, it is moved into the message flow and
@@ -2891,7 +3116,6 @@ const upsertToolResultMessage = (
 
 const handleSkillPermissionGrant = async (
   message: ChatV2MessageView,
-  _persistent?: boolean
 ): Promise<void> => {
   const toolId = resolveToolIdForPermissionMessage(message);
   if (!toolId) {
@@ -2944,10 +3168,10 @@ const handleSkillPermissionGrant = async (
   }
 };
 
-const handlePinnedPermissionGrant = (payload: { persistent: boolean }): void => {
+const handlePinnedPermissionGrant = (): void => {
   const message = pinnedPermissionPrompt.value;
   if (!message) return;
-  void handleSkillPermissionGrant(message, payload.persistent);
+  void handleSkillPermissionGrant(message);
 };
 
 const handleSkillPermissionDeny = (message: ChatV2MessageView): void => {
@@ -3110,6 +3334,8 @@ const handleQuestionAnswered = async (
   answers: AskUserQuestionAnswer[]
 ): Promise<void> => {
   if (!activeConversationId.value) return;
+  // Clear any previous error so a retry isn't pre-emptively flagged.
+  streamError.value = null;
   try {
     await answerChatV2Question(activeConversationId.value, questionId, answers);
     pendingQuestion.value = null;
@@ -3117,6 +3343,9 @@ const handleQuestionAnswered = async (
     applyPlanState(await getChatV2PlanState(activeConversationId.value));
   } catch (err) {
     streamError.value = err instanceof Error ? err.message : String(err);
+    // Un-lock the card so the user can correct and resubmit instead of being
+    // stuck with a frozen UI until reload (their in-progress draft is kept).
+    questionCardRef.value?.resetSubmitted();
   }
 };
 
@@ -3488,6 +3717,7 @@ const onSend = async (
     assistantAdded = true;
   };
   const showAssistantError = (message: string): void => {
+    assistant.timestamp = new Date().toISOString();
     ensureAssistantAdded();
     assistant.content = message;
     assistant.metadata = {
@@ -3501,6 +3731,7 @@ const onSend = async (
       nextMessages[idx] = {
         ...nextMessages[idx],
         content: assistant.content,
+        timestamp: assistant.timestamp,
         metadata: assistant.metadata,
       };
       streamMessageListController.set(nextMessages);
@@ -4510,6 +4741,30 @@ onMounted(() => {
   subscribeConversationUpdated(handleConversationUpdated);
   // Live scheduled-turn token stream (strict routing renderer-side).
   subscribeScheduledStream(handleScheduledStream);
+  // Phase 13 (Plan 04) + Phase 14 (Plan 14-04): subscribe to AiFetchly
+  // config-changed events so the local command cache refreshes whenever
+  // the main process reloads the global config OR a workspace-config
+  // change is forwarded with the active workspace's id (design §16.3,
+  // §18.2, D-04).
+  //
+  // D-04 filter: refresh only when the event is global (source === "user")
+  // OR the event's workspaceId matches the active workspace's watch token.
+  // Non-matching workspace events are intended for a different conversation
+  // and would cause a stale refresh here. The subscriber returns an
+  // unsubscribe function that we invoke on unmount to avoid leaking
+  // listeners across AiChatV2 instance re-mounts.
+  slashConfigUnsub = onAifetchlyConfigChanged((event) => {
+    const isGlobal = event.source === "user";
+    const isForActiveWorkspace =
+      event.workspaceId !== undefined &&
+      event.workspaceId === activeWorkspaceWatchId.value;
+    if (!isGlobal && !isForActiveWorkspace) return;
+    // Refresh the local command count cache so any badge / status indicator
+    // reflects the latest config. Non-fatal on failure — the cache stays
+    // stale until the next event, which is acceptable (the user can also
+    // run /reload-config to force a refresh).
+    void refreshSlashCommandCount();
+  });
 });
 
 onBeforeUnmount(() => {
@@ -4544,6 +4799,14 @@ onBeforeUnmount(() => {
     clearTimeout(searchDebounceTimer);
     searchDebounceTimer = null;
   }
+  if (slashConfigUnsub) {
+    slashConfigUnsub();
+    slashConfigUnsub = null;
+  }
+  // Phase 14 (Plan 14-04): release the active workspace watch so the worker
+  // can GC consumers. Non-fatal on failure; main will eventually drop the
+  // consumer when no other consumers reference the workspace.
+  void releaseActiveWorkspaceWatch();
 });
 </script>
 

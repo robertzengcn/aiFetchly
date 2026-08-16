@@ -113,6 +113,7 @@ const showDialog = ref<boolean>(false);
 const alertext = ref<string>("")
 const marketTypeOption = ref<marketType[]>([]);
 const rules = {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   required: (value: any) => !!value || 'Required.',
 };
 import { CommonDialogMsg } from "@/entityTypes/commonType";
@@ -207,7 +208,7 @@ const backStep = (n: number) => {
 const initialize = () => {
   marketTypeOption.value = []
   const marketTypeList = Object.entries(EmailMarketingType)
-    .filter(([key, value]) => isNaN(Number(key))) // Filter out numeric keys
+    .filter(([key]) => isNaN(Number(key))) // Filter out numeric keys
     .map(([key, value]) => ({
       key: value as number,
       name: key,
@@ -222,6 +223,7 @@ const initialize = () => {
 }
 
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const form = ref<HTMLFormElement>();
 const useemailsource = ref<marketType>();
 const handleEmailsourceChanged = (newValue: Array<EmailsearchTaskEntityDisplay>|undefined) => {

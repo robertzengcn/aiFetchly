@@ -35,8 +35,19 @@ const path = require("node:path");
 // `package`, whether or not a postPackage hook is configured.
 const COMPLETION_MARKER = /Running\s+postPackage\s+hook/i;
 const GRACE_PERIOD_MS = Number(process.env.PACKAGE_GUARD_GRACE_MS ?? 8000);
+// If the child never reaches the postPackage marker within this hard timeout,
+// treat it as a genuine hang: dump diagnostics and fail with a clear reason.
+//
+// IMPORTANT: this must stay well BELOW the `timeout-minutes` on the CI step
+// (currently 30). When it is, the guard — not GitHub — terminates the run,
+// so the failure carries a precise reason + disk/mem diagnostics instead of
+// GitHub's opaque "Error: The operation was canceled." (GitHub kills the
+// whole step tree, orphaning the electron-forge child and producing that
+// uninformative message). 20 min left only ~33% headroom; 15 min guarantees
+// the guard fires first and still leaves ample time for a legitimate (if
+// slow) package to reach the postPackage marker.
 const HARD_TIMEOUT_MS = Number(
-  process.env.PACKAGE_GUARD_HARD_TIMEOUT_MS ?? 20 * 60 * 1000
+  process.env.PACKAGE_GUARD_HARD_TIMEOUT_MS ?? 15 * 60 * 1000
 );
 // If the child emits no output for this long, it is probably stuck; dump
 // diagnostics so the CI log shows where (disk full, rebuild wedged, etc.).
@@ -136,11 +147,47 @@ function main() {
     if (child.exitCode !== null || child.signalCode !== null) {
       return;
     }
+    const pid = child.pid;
+    if (pid === undefined || pid === null) {
+      return;
+    }
     try {
       if (process.platform === "win32") {
         child.kill();
       } else {
-        process.kill(-child.pid, "SIGTERM");
+        // The child is detached (its own process group leader), so signalling
+        // the negative pid reaches every descendant it spawned (node-gyp,
+        // python, make, ...). Some native-rebuild descendants ignore SIGTERM
+        // (stuck fs.realpath walks, wedged subprocesses), so escalate: send
+        // SIGTERM to the whole group, then SIGKILL shortly after if the group
+        // is still alive. Without this escalation a wedged descendant kept the
+        // detached child process alive, which in turn kept the guard's stdio
+        // pipes open and prevented `process.exit` from terminating the guard —
+        // the step then ran until GitHub's own step timeout canceled it with
+        // "The operation was canceled" instead of the guard's clear reason.
+        try {
+          process.kill(-pid, "SIGTERM");
+        } catch (termErr) {
+          console.warn(
+            `[package-guard] SIGTERM failed, escalating to SIGKILL: ${
+              termErr instanceof Error ? termErr.message : String(termErr)
+            }`
+          );
+          try {
+            process.kill(-pid, "SIGKILL");
+          } catch {
+            /* group already gone */
+          }
+          return;
+        }
+        setTimeout(() => {
+          if (child.exitCode !== null || child.signalCode !== null) return;
+          try {
+            process.kill(-pid, "SIGKILL");
+          } catch {
+            /* group already gone */
+          }
+        }, 3000);
       }
     } catch (err) {
       console.warn(
@@ -163,7 +210,10 @@ function main() {
       `\n[package-guard] finishing (reason: ${reason}, exitCode: ${exitCode})`
     );
     killProcessTree();
-    setTimeout(() => process.exit(exitCode), 500);
+    // Flush any buffered diagnostics, then force-exit. Unref the timer so it
+    // never keeps the event loop alive on its own; the process must exit.
+    const exitTimer = setTimeout(() => process.exit(exitCode), 500);
+    exitTimer.unref();
   }
 
   child.on("exit", (code, signal) => {

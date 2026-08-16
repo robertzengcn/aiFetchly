@@ -2,6 +2,13 @@ name: CI
 
 on:
   push:
+  # PRD F-12: required E2E status check for pull requests targeting the
+  # protected integration branches. The repo's default is master; dev and test
+  # are the integration branches named in the PRD. Add the `electron-e2e` job
+  # (and lint-and-test) as required status checks under branch protection for
+  # these branches (a GitHub repo setting, not a workflow file one).
+  pull_request:
+    branches: [dev, test, master]
   workflow_dispatch:
 
 permissions:
@@ -65,6 +72,10 @@ jobs:
       - name: Run module unit tests
         run: yarn test
 
+      # Vue component test suite (happy-dom, @vue/test-utils). Hard gate.
+      - name: Run Vue component unit tests
+        run: yarn test:components
+
       - name: Run main process unit tests
         run: yarn testmain
 
@@ -100,11 +111,19 @@ jobs:
       FORGE_DISABLE_ASAR: "1"
       # Skip electron-forge's packaging-time native rebuild in CI. rebuild-native
       # (run by package:ci) already builds better-sqlite3 for Electron before
-      # packaging copies node_modules, so re-rebuilding during "Preparing native
-      # dependencies" is redundant work that has been observed to stall the
-      # smoke build. Post-package verify checks workers + renderer HTML layout.
+      # packaging copies node_modules, and the forked remote-rebuild worker is
+      # patched to no-op under this flag (scripts/patch-remote-rebuild.js), so
+      # "Preparing native dependencies" skips @electron/rebuild's full tree walk
+      # too. Post-package verify checks workers + renderer HTML layout, not
+      # runtime native loading.
       FORGE_SKIP_NATIVE_REBUILD: "1"
-      NODE_OPTIONS: --max-old-space-size=8192
+      # ubuntu-latest has ~7 GB RAM. An 8 GB heap (the previous value) exceeds
+      # physical RAM and causes the kernel to OOM-kill electron-packager's
+      # finalize/prune phase silently — the runner then "loses communication"
+      # mid-"Finalizing package" with no error. 4096 matches build.yml/release.yml
+      # and stays safely under RAM. Pair with the swap setup step below so
+      # transient allocation spikes during galactus prune don't get us killed.
+      NODE_OPTIONS: --max-old-space-size=4096
       ELECTRON_FORGE_VITE_CONCURRENT: "1"
       VITE_CONFIG_NATIVE_IGNORE_WARNING: "true"
 
@@ -166,6 +185,21 @@ jobs:
           sudo docker image prune --all --force || true
           echo "Disk after cleanup:"; df -h /
 
+      # electron-packager's finalize/prune phase (galactus building an in-memory
+      # map of the whole dependency tree) produces transient memory spikes that
+      # can OOM-kill the process on a ~7 GB runner, surfacing as "lost
+      # communication with the server" mid-"Finalizing package". A 4 GB swap
+      # file absorbs those spikes. This was introduced by 7e1e14eb and
+      # accidentally dropped when the job was reworked; restored here.
+      - name: Add swap to absorb finalize memory spikes
+        run: |
+          echo "Memory/swap before:"; free -h
+          sudo fallocate -l 4G /swapfile || true
+          sudo chmod 600 /swapfile || true
+          sudo mkswap /swapfile >/dev/null || true
+          sudo swapon /swapfile || true
+          echo "Memory/swap after:"; free -h
+
       - name: Guard forge asar unpack before packaging
         run: yarn verify-forge-asar-unpack
 
@@ -184,3 +218,81 @@ jobs:
         # Fails if .vite/renderer was asar-unpacked (Windows ERR_FAILED -2 startup)
         # or if main_window/index.html is missing from the package.
         run: yarn verify-packaged-app
+
+      - name: Packaged application smoke (T-13)
+        # Launch the packaged executable with an isolated user-data dir and verify
+        # the first window, renderer HTML, and preload bridge (design §17.2).
+        run: |
+          xvfb-run --auto-servernum --server-args="-screen 0 1280x960x24" yarn packaged-smoke
+
+  electron-e2e:
+    name: Electron E2E (Playwright)
+    needs: lint-and-test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CI: "true"
+      # Suppress the vite render-config native-loader __dirname warning.
+      VITE_CONFIG_NATIVE_IGNORE_WARNING: "true"
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
+          cache: yarn
+
+      - name: Set up Python for node-gyp
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Configure node-gyp Python
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHON_BIN="$(python -c 'import sys; print(sys.executable)')"
+          echo "PYTHON=${PYTHON_BIN}" >> "$GITHUB_ENV"
+          echo "npm_config_python=${PYTHON_BIN}" >> "$GITHUB_ENV"
+          echo "NODE_GYP_FORCE_PYTHON=${PYTHON_BIN}" >> "$GITHUB_ENV"
+
+      - name: Install Linux dependencies (native modules + xvfb)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsecret-1-dev xvfb
+
+      - name: Use HTTPS for GitHub dependencies
+        run: |
+          git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
+          git config --global url."https://github.com/".insteadOf "git@github.com:"
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Rebuild better-sqlite3 for the Electron runtime
+        run: yarn rebuild-better-sqlite
+
+      - name: Build E2E Electron artifacts (main + preload)
+        run: yarn build:e2e
+
+      - name: Run Electron E2E under xvfb
+        # Playwright drives the project's installed Electron binary (no Chromium
+        # download). The renderer is served by the Vite dev server via the
+        # playwright.config.ts webServer.
+        run: |
+          xvfb-run --auto-servernum --server-args="-screen 0 1280x960x24" yarn playwright test
+
+      - name: Upload E2E diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: electron-e2e-${{ github.run_id }}
+          path: |
+            playwright-report
+            test-results/playwright
+          if-no-files-found: warn
+          retention-days: 7
+

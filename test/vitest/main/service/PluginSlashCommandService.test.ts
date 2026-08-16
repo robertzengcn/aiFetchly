@@ -7,7 +7,7 @@ import type { PluginMarketplaceSummary } from "@/entityTypes/pluginMarketplaceTy
 import type { PluginSourceRequest } from "@/service/pluginSources/pluginSourceTypes";
 
 const mocks = vi.hoisted(() => ({
-  isAiEnabled: vi.fn<[], boolean>(),
+  isAiEnabled: vi.fn<() => boolean>(),
   addMarketplace: vi.fn(),
   installMarketplacePlugin: vi.fn(),
   installFromSource: vi.fn(),

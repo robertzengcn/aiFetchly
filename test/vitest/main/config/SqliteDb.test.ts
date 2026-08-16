@@ -13,7 +13,9 @@ describe("SqliteDb", () => {
     };
     const previousInstance = sqliteDbClass.instance;
     const previousCurrentDbPath = sqliteDbClass.currentDbPath;
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const warnSpy = vi
+      .spyOn(console, "warn")
+      .mockImplementation(() => undefined);
 
     sqliteDbClass.instance = existingInstance;
     sqliteDbClass.currentDbPath = "/tmp/existing-db";
@@ -31,7 +33,7 @@ describe("SqliteDb", () => {
   });
 
   test("destroyInstance clears an existing singleton and initialized connection", async () => {
-    const destroy = vi.fn<[], Promise<void>>(async () => undefined);
+    const destroy = vi.fn<() => Promise<void>>(async () => undefined);
     const existingInstance = {
       connection: {
         isInitialized: true,

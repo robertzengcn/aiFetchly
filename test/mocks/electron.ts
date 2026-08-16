@@ -102,6 +102,11 @@ export const app = {
     };
     return paths[name] || "/tmp/test";
   },
+  // E2E bootstrap (src/main-process/e2e/E2EMain.ts) redirects userData into the
+  // per-test root via app.setPath. No-op in tests.
+  setPath(_name: string, _target: string): void {
+    // mock
+  },
 };
 
 /**
