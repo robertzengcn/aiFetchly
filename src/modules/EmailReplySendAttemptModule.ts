@@ -12,6 +12,18 @@ export class EmailReplySendAttemptModule extends BaseModule {
     this.attemptModel = new EmailReplySendAttemptModel(this.dbpath);
   }
 
+  async create(
+    entity: EmailReplySendAttemptEntity
+  ): Promise<EmailReplySendAttemptEntity> {
+    try {
+      await this.ensureConnection();
+      return await this.attemptModel.create(entity);
+    } catch (error) {
+      console.error("Error creating reply send attempt:", error);
+      throw error;
+    }
+  }
+
   async read(id: number): Promise<EmailReplySendAttemptEntity | null> {
     try {
       await this.ensureConnection();
