@@ -7,9 +7,9 @@ export type HttpClientOptions = {
 //import { AuthInterceptor } from '@/modules/lib/authInterceptor';
 import type FormDataLib from "form-data";
 import { TOKENNAME, REFRESHTOKEN } from "@/config/usersetting";
-import type { Token } from "@/modules/token";
 import { RefreshTokenInvalidError } from "@/modules/tokenRefresh";
 import { resolveViteLoginBase } from "@/config/viteLoginUrl";
+import { assertFirstPartyHubUrl } from "@/config/pluginHubUrl";
 import { userSecretKeyService } from "@/modules/fieldCipher";
 
 /**
@@ -118,7 +118,8 @@ export class HttpClient {
   private async _refreshTokenAndRetry(
     endpoint: string,
     options: RequestInit,
-    isRetry = false
+    isRetry = false,
+    absolute = false
   ): Promise<unknown> {
     // Worker processes cannot refresh tokens (no access to Electron APIs)
     if (this._isWorker) {
@@ -157,7 +158,7 @@ export class HttpClient {
         // Retry the original request with new token. Mark isRetry=true so a
         // second 401/403 is treated as "refresh didn't help" rather than
         // looping forever (B4 fix).
-        return this._fetchJSON(endpoint, options, true);
+        return this._fetchJSON(endpoint, options, true, absolute);
       } else {
         throw new Error("Token refresh failed");
       }
@@ -181,10 +182,15 @@ export class HttpClient {
   public async _fetchJSON(
     endpoint: string,
     options: RequestInit,
-    isRetry = false
+    isRetry = false,
+    absolute = false
   ): Promise<unknown> {
     // await this.setheaderToken()
-    const res = await fetch(this.baseUrl + endpoint, {
+    // `absolute` = first-party full URL (Plugin Hub): used as-is instead of
+    // baseUrl + endpoint. Only reachable via getFirstParty(), which enforces
+    // the hub-origin allowlist, so the Bearer token never leaves first-party.
+    const target = absolute ? endpoint : this.baseUrl + endpoint;
+    const res = await fetch(target, {
       ...options,
       headers: this._headers,
     });
@@ -228,7 +234,7 @@ export class HttpClient {
 
       if (refreshToken && refreshToken.trim().length > 0) {
         // Try to refresh token and retry request
-        return this._refreshTokenAndRetry(endpoint, options, isRetry);
+        return this._refreshTokenAndRetry(endpoint, options, isRetry, absolute);
       } else {
         // No refresh token available. Fail this request but keep local auth
         // state so local features remain usable.
@@ -279,6 +285,31 @@ export class HttpClient {
       ...options,
       method: "GET",
     })) as T;
+  }
+
+  /**
+   * GET an absolute first-party URL (AiFetchly Plugin Hub) with the same
+   * auth-header attach + 401-refresh-retry semantics as relative endpoints.
+   *
+   * The URL's origin must match the configured hub base — enforced by
+   * assertFirstPartyHubUrl (src/config/pluginHubUrl.ts) so the marketing JWT
+   * can never be attached to a third-party URL. Community Plugin Page PRD §6.
+   */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  public async getFirstParty<T = any>(
+    absoluteUrl: string,
+    options: RequestInit = {}
+  ): Promise<T> {
+    assertFirstPartyHubUrl(absoluteUrl);
+    return (await this._fetchJSON(
+      absoluteUrl,
+      {
+        ...options,
+        method: "GET",
+      },
+      false,
+      true
+    )) as T;
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
