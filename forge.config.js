@@ -519,7 +519,7 @@ module.exports = {
         ? {
             osxSign: {
               identity: requireProductionEnv("MAC_STORE_SIGNING_IDENTITY"),
-              type: "development",
+              type: "distribution",
               provisioningProfile: resolveMacStoreProvisioningProfile(),
               optionsForFile: (filePath) => ({
                 entitlements: isMainApplicationBundle(filePath)

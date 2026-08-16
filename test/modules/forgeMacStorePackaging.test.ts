@@ -110,12 +110,12 @@ describe("Mac App Store packaging", (): void => {
     fs.rmSync(tempDirectory, { recursive: true, force: true });
   });
 
-  it("configures a development-signed MAS app without notarization", (): void => {
+  it("configures a distribution-signed MAS app without notarization", (): void => {
     const result = projectForgeConfig({
       NODE_ENV: "production",
       MAC_DISTRIBUTION: "store",
       MAC_STORE_SIGNING_IDENTITY:
-        "Apple Development: Test Developer (TESTTEAM)",
+        "Apple Distribution: Test Developer (TESTTEAM)",
       MAC_STORE_PROVISIONING_PROFILE: provisioningProfilePath,
       APPLE_ID: undefined,
       APPLE_APP_SPECIFIC_PASSWORD: undefined,
@@ -126,8 +126,8 @@ describe("Mac App Store packaging", (): void => {
     expect(result.projection).to.deep.equal({
       appBundleId: "com.aifetchly.desktop",
       osxNotarizeConfigured: false,
-      identity: "Apple Development: Test Developer (TESTTEAM)",
-      type: "development",
+      identity: "Apple Distribution: Test Developer (TESTTEAM)",
+      type: "distribution",
       provisioningProfile: provisioningProfilePath,
       mainEntitlements: mainEntitlementsPath,
       childEntitlements: childEntitlementsPath,
@@ -152,7 +152,7 @@ describe("Mac App Store packaging", (): void => {
     });
   });
 
-  it("rejects a store build without a development signing identity", (): void => {
+  it("rejects a store build without a distribution signing identity", (): void => {
     const result = projectForgeConfig({
       NODE_ENV: "production",
       MAC_DISTRIBUTION: "store",
@@ -172,7 +172,7 @@ describe("Mac App Store packaging", (): void => {
       NODE_ENV: "production",
       MAC_DISTRIBUTION: "store",
       MAC_STORE_SIGNING_IDENTITY:
-        "Apple Development: Test Developer (TESTTEAM)",
+        "Apple Distribution: Test Developer (TESTTEAM)",
       MAC_STORE_PROVISIONING_PROFILE: undefined,
       APPLE_ID: undefined,
       APPLE_APP_SPECIFIC_PASSWORD: undefined,
@@ -189,7 +189,7 @@ describe("Mac App Store packaging", (): void => {
       NODE_ENV: "production",
       MAC_DISTRIBUTION: "store",
       MAC_STORE_SIGNING_IDENTITY:
-        "Apple Development: Test Developer (TESTTEAM)",
+        "Apple Distribution: Test Developer (TESTTEAM)",
       MAC_STORE_PROVISIONING_PROFILE: missingPath,
       APPLE_ID: undefined,
       APPLE_APP_SPECIFIC_PASSWORD: undefined,
