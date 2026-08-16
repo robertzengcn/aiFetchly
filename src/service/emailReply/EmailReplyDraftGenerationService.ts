@@ -28,6 +28,10 @@ import { EmailServiceModule } from "@/modules/emailServiceModule";
 import { materializeRevision1 } from "@/service/emailReply/EmailReplyRevisionMaterializer";
 import { EmailReplyPolicyOrchestrator } from "@/service/emailReply/EmailReplyPolicyOrchestrator";
 import { correlationIdForMessage } from "@/service/emailReply/EmailReplyCorrelation";
+import {
+  incrementReplyMetric,
+  timedReplyStage,
+} from "@/service/emailReply/EmailReplyMetrics";
 import { EmailConversationContextService } from "@/service/emailReply/EmailConversationContextService";
 import { renderConversationContext } from "@/service/emailReply/EmailThreadContextBuilder";
 import {
@@ -137,9 +141,16 @@ export class EmailReplyDraftGenerationService {
     //     unsubscribe, automated sender, blocked sender/domain) yields no draft
     //     and no model call. Audit the decision (best-effort) and surface a
     //     structured code so the UI can map it to a translated reason.
-    const policyDecision = await new EmailReplyPolicyOrchestrator().evaluate({
+    const policyDecision = await timedReplyStage("policy", () =>
+      new EmailReplyPolicyOrchestrator().evaluate({
+        stage: "pre_draft",
+        messageId: message.id,
+      })
+    );
+    incrementReplyMetric("policy_decision", {
       stage: "pre_draft",
-      messageId: message.id,
+      code: policyDecision.code,
+      allowed: policyDecision.allowed,
     });
     if (!policyDecision.allowed) {
       try {

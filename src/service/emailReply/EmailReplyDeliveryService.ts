@@ -15,6 +15,10 @@ import {
 import { validateSendBinding } from "@/service/emailReply/EmailReplySendBinding";
 import { buildOutboundHeaders } from "@/service/emailReply/EmailReplyHeaderBuilder";
 import {
+  incrementReplyMetric,
+  observeReplyDurationMs,
+} from "@/service/emailReply/EmailReplyMetrics";
+import {
   REPLY_POLICY_VERSION,
   REPLY_VALIDATOR_VERSION,
 } from "@/service/emailReply/replyReliabilityVersions";
@@ -182,6 +186,11 @@ export class EmailReplyDeliveryService {
       draftId: draft.id,
       revisionId: revision.id,
     });
+    incrementReplyMetric("policy_decision", {
+      stage: "pre_send",
+      code: decision.code,
+      allowed: decision.allowed,
+    });
     if (!decision.allowed) {
       throw new Error(`Send rejected by policy: ${decision.reason}`);
     }
@@ -217,12 +226,15 @@ export class EmailReplyDeliveryService {
       policyVersion: REPLY_POLICY_VERSION,
     });
     if (claim.status === "already_processed") {
+      incrementReplyMetric("send_claim", { outcome: "already_processed" });
       return { status: "already_processed", attemptId: claim.attempt.id };
     }
     if (claim.status === "precondition_failed") {
+      incrementReplyMetric("send_claim", { outcome: "precondition_failed" });
       throw new Error(`Send rejected: ${claim.reason}`);
     }
     const attemptId = claim.attemptId;
+    incrementReplyMetric("send_claim", { outcome: "claimed" });
 
     // 7. Mark the attempt `submitted` at the SMTP handoff boundary (P0.6) so a
     //    crash here is recoverable to delivery_unknown rather than left claimed.
@@ -272,7 +284,10 @@ export class EmailReplyDeliveryService {
       sanitizedError = error instanceof Error ? error.message : String(error);
     }
 
+    const smtpStart = Date.now();
     const outcome = certaintyToOutcome(certainty);
+    observeReplyDurationMs("smtp", Date.now() - smtpStart, { outcome });
+    incrementReplyMetric("send_outcome", { outcome });
     // Finalize attempt + draft + approval + audit + received-message status in
     // ONE transaction (P0.6). delivery_unknown leaves the message status as-is.
     const messageReplyStatus: EmailReplyStatus | undefined =

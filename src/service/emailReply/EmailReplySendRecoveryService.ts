@@ -1,6 +1,7 @@
 import { EmailReplySendAttemptModule } from "@/modules/EmailReplySendAttemptModule";
 import { EmailReplyDraftModule } from "@/modules/EmailReplyDraftModule";
 import { REPLY_SEND_RECOVERY_THRESHOLD_MS } from "@/service/emailReply/replyReliabilityVersions";
+import { incrementReplyMetric } from "@/service/emailReply/EmailReplyMetrics";
 
 /**
  * Recovers stale in-flight send attempts (technical design §15.6, §16, FR-019).
@@ -55,6 +56,9 @@ export class EmailReplySendRecoveryService {
       }
     }
 
+    incrementReplyMetric("recovery_outcome", {
+      outcome: recovered > 0 ? "recovered_unknown" : "none_stale",
+    });
     // Each delivery_unknown is a high-visibility operational event (§15.5).
     return { recovered, needsAttention: recovered > 0 };
   }

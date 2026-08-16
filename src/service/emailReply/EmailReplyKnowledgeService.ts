@@ -4,6 +4,7 @@ import {
   decideKnowledgeRelevance,
   type KnowledgeRelevanceDecision,
 } from "@/service/emailReply/EmailReplyKnowledgeRelevance";
+import { incrementReplyMetric } from "@/service/emailReply/EmailReplyMetrics";
 import type {
   EmailReplyKnowledgeSource,
   EmailReplyKnowledgeSourceAudit,
@@ -163,6 +164,7 @@ export async function retrieveReplyKnowledge(
       score: r.score,
     }));
 
+    incrementReplyMetric("retrieval_outcome", { outcome: decision.outcome });
     const abstained =
       decision.outcome === "low_relevance" || decision.outcome === "conflicting";
     const warning =
