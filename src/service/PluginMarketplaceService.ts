@@ -4,7 +4,18 @@ import { PluginMarketplaceModule } from "@/modules/PluginMarketplaceModule";
 import { PluginManagementModule } from "@/modules/PluginManagementModule";
 import { PluginInstallService } from "@/service/PluginInstallService";
 import { redactMessage } from "@/service/pluginSources/pluginSourceRedact";
+import {
+  HUB_MARKETPLACE_DISPLAY_NAME,
+  HUB_MARKETPLACE_NAME,
+  resolvePluginHubBase,
+} from "@/config/pluginHubUrl";
 import type { PluginSummary } from "@/entityTypes/pluginTypes";
+import type {
+  HubManifestPluginEntry,
+  PluginCommunityDetail,
+  PluginCommunityEntry,
+  PluginCommunityFilter,
+} from "@/entityTypes/communityPluginTypes";
 import type {
   AddPluginMarketplaceRequest,
   InstallMarketplacePluginRequest,
@@ -32,6 +43,15 @@ import { resolveMarketplaceEntrySource } from "@/service/pluginMarketplaces/reso
 import { parsePluginIdentifier } from "@/service/pluginMarketplaces/parsePluginIdentifier";
 import { getPluginMarketplaceCacheRoot } from "@/service/pluginMarketplaces/pluginMarketplacePaths";
 
+/** Installed-plugin row fields used for marketplace cross-referencing. */
+export interface InstalledPluginRowRef {
+  version?: string;
+  sourceMetaJson?: string | null;
+}
+
+/** Community catalog cache TTL — mirrors the hub's own introspection cache. */
+const HUB_CACHE_TTL_MS = 10 * 60 * 1000;
+
 /**
  * Orchestrates marketplace add/list/get/refresh/remove/discover/install.
  * All DB access goes through PluginMarketplaceModule. All installs delegate
@@ -41,7 +61,11 @@ export class PluginMarketplaceService {
   constructor(
     private readonly marketplaceModule: PluginMarketplaceModule = new PluginMarketplaceModule(),
     private readonly installService: PluginInstallService = new PluginInstallService(),
-    private readonly fetcher: PluginMarketplaceFetcher = createDefaultFetcherForService()
+    private readonly fetcher: PluginMarketplaceFetcher = createDefaultFetcherForService(),
+    private readonly managementModule: Pick<
+      PluginManagementModule,
+      "listInstalledPlugins"
+    > = new PluginManagementModule()
   ) {}
 
   // --- marketplace lifecycle ---
@@ -164,7 +188,11 @@ export class PluginMarketplaceService {
 
   async listMarketplaces(): Promise<PluginMarketplaceSummary[]> {
     const rows = await this.marketplaceModule.listMarketplaces();
-    return rows.map(toSummary);
+    // The built-in Plugin Hub marketplace is managed by the Community
+    // Plugins page, not the Plugin Manager (PRD §13.2: implicit/hidden).
+    return rows
+      .filter((row) => row.name !== HUB_MARKETPLACE_NAME)
+      .map(toSummary);
   }
 
   async getMarketplace(name: string): Promise<PluginMarketplaceDetail | null> {
@@ -219,6 +247,11 @@ export class PluginMarketplaceService {
   }
 
   async removeMarketplace(name: string): Promise<void> {
+    if (name === HUB_MARKETPLACE_NAME) {
+      throw new Error(
+        "The built-in AiFetchly Plugin Hub marketplace cannot be removed."
+      );
+    }
     const existing = await this.marketplaceModule.getMarketplaceByName(name);
     if (!existing) return;
     await this.marketplaceModule.removeMarketplace(name);
@@ -238,27 +271,10 @@ export class PluginMarketplaceService {
   async listAvailablePlugins(
     filter: PluginMarketplacePluginFilter = {}
   ): Promise<PluginMarketplacePluginSummary[]> {
-    const marketplaces = await this.marketplaceModule.listEnabledMarketplaces();
-    const installedRows =
-      await new PluginManagementModule().listInstalledPlugins();
-    const installedByEntry = new Map<string, { version?: string }>();
-    for (const row of installedRows) {
-      try {
-        const meta = JSON.parse(row.sourceMetaJson || "{}") as {
-          marketplace?: { marketplaceName?: string; entryName?: string };
-        };
-        if (meta.marketplace?.marketplaceName && meta.marketplace?.entryName) {
-          installedByEntry.set(
-            `${meta.marketplace.entryName}@${meta.marketplace.marketplaceName}`,
-            {
-              version: row.version,
-            }
-          );
-        }
-      } catch {
-        /* ignore */
-      }
-    }
+    const marketplaces = (
+      await this.marketplaceModule.listEnabledMarketplaces()
+    ).filter((mp) => mp.name !== HUB_MARKETPLACE_NAME);
+    const installedByEntry = await this.installedMarketplaceEntries();
 
     const out: PluginMarketplacePluginSummary[] = [];
     for (const mp of marketplaces) {
@@ -428,11 +444,276 @@ export class PluginMarketplaceService {
     }
     return result.plugin;
   }
+
+  // --- community catalog (built-in Plugin Hub marketplace) ---
+
+  /**
+   * Idempotently ensures the built-in Plugin Hub marketplace row exists.
+   * Reserved-name convention marks it built-in (no entity schema change,
+   * tech design §18.1); the user cannot add, edit, or remove it.
+   */
+  async ensureBuiltinHubMarketplace(): Promise<void> {
+    const existing = await this.marketplaceModule.getMarketplaceByName(
+      HUB_MARKETPLACE_NAME
+    );
+    if (existing) return;
+    try {
+      await this.marketplaceModule.createMarketplace({
+        name: HUB_MARKETPLACE_NAME,
+        displayName: HUB_MARKETPLACE_DISPLAY_NAME,
+        ownerName: "AiFetchly",
+        description: "AiFetchly community plugin catalog (built-in)",
+        sourceKind: "aifetch-hub",
+        // Informational only — the hub fetcher reads resolvePluginHubBase(),
+        // never this column.
+        sourceUri: resolvePluginHubBase().value,
+        enabled: 1,
+        autoUpdate: 0,
+        health: "healthy",
+        manifestJson: "{}",
+        pluginCount: 0,
+        sourceMetaJson: JSON.stringify({ builtIn: true }),
+      });
+    } catch (e: unknown) {
+      // Concurrent first-list race on the unique name index — row now exists.
+      if (!(e instanceof Error && /UNIQUE constraint/i.test(e.message))) {
+        throw e;
+      }
+    }
+  }
+
+  /**
+   * Lists the community catalog. Fetches from the hub when the cache is
+   * missing/stale (10 min TTL, mirroring the hub's introspection cache) or
+   * when forceRefresh is set (Refresh button / user_info_updated). Fail-safe:
+   * a fetch failure throws so the page shows the error state — a stale list
+   * is never presented as fresh (PRD §9).
+   */
+  async listCommunityPlugins(
+    filter: PluginCommunityFilter = {}
+  ): Promise<PluginCommunityEntry[]> {
+    await this.ensureBuiltinHubMarketplace();
+    const row = await this.requireHubRow();
+    const cacheIsFresh =
+      row.manifestJson !== "{}" && hubCacheIsFresh(row.lastFetchedAt);
+    if (filter.forceRefresh || !cacheIsFresh) {
+      await this.refreshHubMarketplace();
+    }
+    const entries = await this.readHubEntries();
+    const installedByEntry = await this.installedMarketplaceEntries();
+    const mapped = entries.map((entry) =>
+      toCommunityEntry(entry, (key: string) =>
+        installedByEntry.has(`${key}@${HUB_MARKETPLACE_NAME}`)
+      )
+    );
+    return applyCommunityFilter(mapped, filter);
+  }
+
+  /** Stage 1 detail = the cached catalog row (no extra hub round-trip). */
+  async getCommunityPluginDetail(
+    slug: string
+  ): Promise<PluginCommunityDetail | null> {
+    await this.ensureBuiltinHubMarketplace();
+    const row = await this.requireHubRow();
+    if (row.manifestJson === "{}") return null;
+    const entries = await this.readHubEntries();
+    const entry = entries.find((e) => e.slug === slug);
+    if (!entry) return null;
+    const installedByEntry = await this.installedMarketplaceEntries();
+    return {
+      ...toCommunityEntry(entry, (key: string) =>
+        installedByEntry.has(`${key}@${HUB_MARKETPLACE_NAME}`)
+      ),
+      ...(entry.version ? { version: entry.version } : {}),
+      ...(entry.homepage ? { homepage: entry.homepage } : {}),
+      ...(entry.repository ? { repository: entry.repository } : {}),
+      ...(entry.license ? { license: entry.license } : {}),
+    };
+  }
+
+  /**
+   * Installs a community plugin through the existing marketplace install
+   * pipeline. Stage 1 supports `installMode: "direct"` entries only — locked
+   * (`ticket`) plugins are display-only with an Upgrade CTA (PRD §5.1).
+   */
+  async installCommunityPlugin(slug: string): Promise<PluginSummary> {
+    await this.ensureBuiltinHubMarketplace();
+    const row = await this.requireHubRow();
+    const entries = await this.readHubEntries();
+    const entry = entries.find((e) => e.slug === slug);
+    if (!entry) {
+      throw new Error(
+        `Plugin "${slug}" not found in the community catalog. Refresh the list and try again.`
+      );
+    }
+    if (entry.access.installMode !== "direct") {
+      throw new Error(
+        "This plugin is not installable in this release (subscription required)."
+      );
+    }
+    if (!entry.source || typeof entry.source === "string") {
+      // Hub entries carry object sources (github/url/npm); a hub row without
+      // one is not installable via the marketplace pipeline.
+      throw new Error(
+        `Plugin "${slug}" has no installable source in this release.`
+      );
+    }
+
+    const resolution = resolveMarketplaceEntrySource(entry, {
+      marketplaceName: HUB_MARKETPLACE_NAME,
+      marketplaceRoot: row.installPath ?? "",
+      marketplaceSource: {
+        kind: "aifetch-hub",
+        uri: row.sourceUri,
+      },
+    });
+    if (!resolution.success) {
+      throw new Error(resolution.errors.map((e) => e.message).join("; "));
+    }
+
+    const result = await this.installService.installFromSource({
+      ...resolution.resolved.request,
+      source: "marketplace",
+      sourceMeta: { marketplace: resolution.resolved.meta },
+    });
+    if (!result.success) {
+      throw new Error(result.errors.map((e) => e.message).join("; "));
+    }
+    return result.plugin;
+  }
+
+  private async requireHubRow(): Promise<{
+    manifestJson: string;
+    installPath?: string | null;
+    sourceUri: string;
+    lastFetchedAt?: Date | null;
+  }> {
+    const row = await this.marketplaceModule.getMarketplaceByName(
+      HUB_MARKETPLACE_NAME
+    );
+    if (!row) {
+      throw new Error("Failed to initialize the Plugin Hub marketplace.");
+    }
+    return row;
+  }
+
+  /** Fetches the hub catalog and persists the manifest (cache = the row). */
+  private async refreshHubMarketplace(): Promise<void> {
+    const fetched = await this.fetcher.fetch({
+      source: { kind: "aifetch-hub", uri: resolvePluginHubBase().value },
+    });
+    if (!fetched.success) {
+      // Keep previous good cache; surface the failure to the caller/page.
+      await this.marketplaceModule.setMarketplaceErrors(
+        HUB_MARKETPLACE_NAME,
+        fetched.errors
+      );
+      throw new Error(fetched.errors.map((e) => e.message).join("; "));
+    }
+    let pluginCount = 0;
+    try {
+      const parsed = JSON.parse(fetched.marketplace.manifestJson) as {
+        plugins?: unknown[];
+      };
+      pluginCount = Array.isArray(parsed.plugins) ? parsed.plugins.length : 0;
+    } catch {
+      /* count stays 0 */
+    }
+    await fetched.marketplace.cleanup();
+    await this.marketplaceModule.updateMarketplaceState({
+      name: HUB_MARKETPLACE_NAME,
+      manifestJson: fetched.marketplace.manifestJson,
+      pluginCount,
+      health: "healthy",
+      lastErrorJson: "[]",
+      lastFetchedAt: new Date(),
+    });
+  }
+
+  private async readHubEntries(): Promise<HubManifestPluginEntry[]> {
+    const row = await this.requireHubRow();
+    let manifest: { plugins?: HubManifestPluginEntry[] };
+    try {
+      manifest = JSON.parse(row.manifestJson);
+    } catch {
+      throw new Error("Community catalog cache is corrupt. Refresh the list.");
+    }
+    return Array.isArray(manifest.plugins) ? manifest.plugins : [];
+  }
+
+  /** Installed plugins keyed by `${entryName}@${marketplaceName}`. */
+  private async installedMarketplaceEntries(): Promise<
+    Map<string, { version?: string }>
+  > {
+    const installedRows: readonly InstalledPluginRowRef[] =
+      await this.managementModule.listInstalledPlugins();
+    const installedByEntry = new Map<string, { version?: string }>();
+    for (const row of installedRows) {
+      try {
+        const meta = JSON.parse(row.sourceMetaJson || "{}") as {
+          marketplace?: { marketplaceName?: string; entryName?: string };
+        };
+        if (meta.marketplace?.marketplaceName && meta.marketplace?.entryName) {
+          installedByEntry.set(
+            `${meta.marketplace.entryName}@${meta.marketplace.marketplaceName}`,
+            {
+              version: row.version,
+            }
+          );
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+    return installedByEntry;
+  }
 }
 
 // --- helpers ---
 
 type PluginMarketplaceEntitySourceKind = PluginMarketplaceSourceKind;
+
+function hubCacheIsFresh(lastFetchedAt?: Date | null): boolean {
+  if (!lastFetchedAt) return false;
+  return Date.now() - new Date(lastFetchedAt).getTime() < HUB_CACHE_TTL_MS;
+}
+
+function toCommunityEntry(
+  entry: HubManifestPluginEntry,
+  isInstalled: (slug: string) => boolean
+): PluginCommunityEntry {
+  return {
+    slug: entry.slug,
+    name: entry.name,
+    displayName: entry.displayName ?? entry.name,
+    description: entry.description ?? "",
+    ...(entry.owner ? { owner: entry.owner } : {}),
+    ...(entry.category ? { category: entry.category } : {}),
+    ...(entry.tags ? { tags: [...entry.tags] } : {}),
+    access: entry.access,
+    installed: isInstalled(entry.slug),
+  };
+}
+
+function applyCommunityFilter(
+  entries: readonly PluginCommunityEntry[],
+  filter: PluginCommunityFilter
+): PluginCommunityEntry[] {
+  let out = entries.slice();
+  if (filter.category) {
+    out = out.filter((p) => p.category === filter.category);
+  }
+  if (filter.search) {
+    const q = filter.search.toLowerCase();
+    out = out.filter((p) =>
+      [p.displayName, p.description, p.owner ?? "", ...(p.tags ?? [])]
+        .join(" ")
+        .toLowerCase()
+        .includes(q)
+    );
+  }
+  return out;
+}
 
 function createDefaultFetcherForService(): PluginMarketplaceFetcher {
   // Wrap the registry: pick the fetcher matching the parsed source kind at call time.
