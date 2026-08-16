@@ -94,8 +94,26 @@ const CONTEXTUAL_EMAIL_INBOX_TOOL_NAMES: ReadonlySet<string> = new Set([
 const SHELL_INTENT_RE =
   /\b(shell|terminal|bash|powershell|cmd|command|execute|run|rm|unlink)\b|(?:\b(delete|remove)\b.*(?:\b(file|folder|directory|path)\b|[./~]|\.[A-Za-z0-9]{1,8}\b))/i;
 
+/**
+ * Intent for the workspace file *write* tool.
+ *
+ * The original alternation only matched create/write/save/generate verbs next
+ * to "file(s)/document(s)" or a path-looking token, so it missed very common
+ * "export / download / convert ... to a csv/spreadsheet/file" phrasings — e.g.
+ * "export those data to a csv file" leaves `file_write` deferred, the model only
+ * sees the always-loaded file_read/glob_files, and falls back to shell_execute
+ * `echo >>` to build the CSV row by row (which then trips shell approval and
+ * devolves into dozens of failed tool calls).
+ *
+ * Add a third branch: an export/download/convert/save/put/dump verb within ~40
+ * chars of a *data-format* noun (csv|excel|spreadsheet|xlsx?|tsv|json|xml|pdf|
+ * txt) OR the generic file/document nouns. The proximity cap and requiring a
+ * concrete output noun stops matches like "export our brand guidelines as a
+ * style guide", "save me a seat", or bare "convert between csv and json
+ * formats" (which ask about formats, not to produce a file).
+ */
 const FILE_WRITE_INTENT_RE =
-  /\b(create|write|save|overwrite|generate|make)\b.*(?:\b(files?|documents?)\b|[./~]|\.[A-Za-z0-9]{1,8}\b)|(?:\b(files?|documents?)\b.*\b(create|write|save|overwrite|generate|make)\b)|\b(update|replace|change)\b.*\bfile\b.*\bcontent\b/i;
+  /\b(?:export|download|convert|save|dump|output|store|put|write|make|create|generate|overwrite)\b[^.!?\n]{0,20}?\b(?:as|to|into|in(?:to)?)\b[^.!?\n]{0,15}?\b(?:csv|excel|spreadsheet|xlsx?|tsv|json|xml|pdf|txt|file|files|document|documents)\b|(?:\b(?:create|write|save|overwrite|generate|make)\b.*(?:\b(files?|documents?)\b|[./~]|\.[A-Za-z0-9]{1,8}\b))|(?:\b(files?|documents?)\b.*\b(create|write|save|overwrite|generate|make)\b)|\b(update|replace|change)\b.*\bfile\b.*\bcontent\b/i;
 
 const FILE_EDIT_INTENT_RE =
   /\b(edit|modify|replace|patch|update|change|fix)\b.*(?:\b(file|document|path)\b|[./~]|\.[A-Za-z0-9]{1,8}\b)/i;

@@ -234,6 +234,47 @@ describe("ToolLoadPolicyService.classify", () => {
     ).toBe("deferred");
   });
 
+  it("promotes file_write for 'export/download/convert ... to csv/file' phrasings", () => {
+    const phrases = [
+      "export those data to a csv file",
+      "export the data to a csv",
+      "export to csv",
+      "export to an excel file",
+      "export the contacts to a csv file",
+      "download these as a csv",
+      "download the report as csv",
+      "convert these to csv",
+      "convert to a json file",
+      "save the table as a csv",
+      "save the table as xlsx",
+      "dump the results to a file",
+      "put this data into a spreadsheet",
+    ];
+    for (const currentUserMessage of phrases) {
+      expect(classify("file_write", "builtin", { currentUserMessage })).toBe(
+        "contextual"
+      );
+    }
+  });
+
+  it("does NOT promote file_write when 'export/download/convert/save' has no file/data-format target", () => {
+    const phrases = [
+      "what is a csv file",
+      "explain how csv escaping works",
+      "how do I parse csv in python",
+      "export our brand guidelines as a style guide",
+      "tell me about downloadable resources on your site",
+      "put the meeting notes in the chat",
+      "save me a seat",
+      "tell me how to convert between csv and json formats",
+    ];
+    for (const currentUserMessage of phrases) {
+      expect(classify("file_write", "builtin", { currentUserMessage })).toBe(
+        "deferred"
+      );
+    }
+  });
+
   it("promotes knowledge-library management tools for knowledge-library intent", () => {
     expect(
       classify("knowledge_library_list_documents", "builtin", {
