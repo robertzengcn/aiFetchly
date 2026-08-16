@@ -56,6 +56,17 @@ describe("buildBuiltInToolCapabilitiesSection", () => {
     expect(s.toLowerCase()).toContain("not");
   });
 
+  it("routes data-export requests to file_write and forbids shell_echo fallback", () => {
+    const s = buildBuiltInToolCapabilitiesSection();
+    // The file-write row must cover export/download/convert-to-csv/xlsx phrasings.
+    expect(s).toContain("export/download/convert");
+    expect(s).toContain("csv");
+    // It must explicitly forbid the shell-echo antipattern that caused the
+    // 'export those data to a csv file' bug (row-by-row echo >>).
+    expect(s.toLowerCase()).toContain("not a shell echo");
+    expect(s.toLowerCase()).toContain("row-by-row");
+  });
+
   it("explicitly flags the email-reply tools as not auto-promoted", () => {
     const s = buildBuiltInToolCapabilitiesSection();
     // Reply tools are deferred-by-default (no intent regex) — the table must
