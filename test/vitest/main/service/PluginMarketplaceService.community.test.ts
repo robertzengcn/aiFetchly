@@ -4,6 +4,7 @@ import { HUB_MARKETPLACE_NAME } from "@/config/pluginHubUrl";
 import type { HubManifestPluginEntry } from "@/entityTypes/communityPluginTypes";
 import {
   PluginMarketplaceService,
+  __resetHubRefreshStateForTests,
   type InstalledPluginRowRef,
 } from "@/service/PluginMarketplaceService";
 import type { PluginMarketplaceFetcher } from "@/service/pluginMarketplaces/marketplaceFetcherTypes";
@@ -164,6 +165,9 @@ describe("PluginMarketplaceService community catalog", () => {
 
   beforeEach(() => {
     installedRows = [];
+    // The single-flight state is process-wide; reset per test so the
+    // coalescing window never suppresses a later test's fetch.
+    __resetHubRefreshStateForTests();
   });
 
   test("creates the built-in hub row and returns mapped entries on first list", async () => {
@@ -211,6 +215,9 @@ describe("PluginMarketplaceService community catalog", () => {
     const a = makeService([hubEntry("pdf-tools")], stale);
     await a.service.listCommunityPlugins();
     expect(a.fetcher).toHaveBeenCalledTimes(1);
+    // Phase b runs within the coalescing window of phase a's fetch — reset
+    // the process-wide state so the forced refresh actually fetches.
+    __resetHubRefreshStateForTests();
 
     const fresh = { lastFetchedAt: new Date(Date.now() - 30_000) };
     const b = makeService([hubEntry("pdf-tools")], fresh);
@@ -426,6 +433,55 @@ describe("PluginMarketplaceService community catalog", () => {
     );
     expect(row?.health).toBe("healthy");
     expect(row?.pluginCount).toBe(2);
+  });
+
+  test("concurrent forced refreshes share one hub fetch (single-flight)", async () => {
+    marketplaceModule = new StubMarketplaceModule();
+    const pendingFetches: Array<(value: unknown) => void> = [];
+    const fetchFn = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          pendingFetches.push(resolve);
+        })
+    );
+    const fetcher = { kind: "aifetch-hub" as const, fetch: fetchFn };
+    const service = new PluginMarketplaceService(
+      marketplaceModule as never,
+      { installFromSource } as never,
+      fetcher as never,
+      { listInstalledPlugins: async () => installedRows } as never
+    );
+
+    const first = service.listCommunityPlugins({ forceRefresh: true });
+    const second = service.listCommunityPlugins({ forceRefresh: true });
+    // Wait until the single shared fetch is actually in flight, then settle it.
+    await vi.waitFor(() => expect(pendingFetches.length).toBe(1));
+    pendingFetches[0]({
+      success: true,
+      marketplace: {
+        marketplaceRoot: "",
+        manifestPath: "",
+        manifestJson: hubManifestJson([hubEntry("pdf-tools")]),
+        cleanup: async () => undefined,
+      },
+    });
+    const [a, b] = await Promise.all([first, second]);
+
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+    expect(a).toHaveLength(1);
+    expect(b).toHaveLength(1);
+  });
+
+  test("forceRefresh within the coalescing window reuses the just-fetched cache", async () => {
+    const { service, fetcher } = makeService([hubEntry("pdf-tools")], {
+      lastFetchedAt: new Date(Date.now() - 11 * 60_000),
+    });
+    await service.listCommunityPlugins({ forceRefresh: true });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+
+    const entries = await service.listCommunityPlugins({ forceRefresh: true });
+    expect(fetcher).toHaveBeenCalledTimes(1); // no second fetch within 2s
+    expect(entries).toHaveLength(1);
   });
 
   test("throws the corrupt-cache error when the persisted manifest is not JSON", async () => {

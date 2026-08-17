@@ -57,6 +57,41 @@ const HUB_CACHE_TTL_MS = 10 * 60 * 1000;
 /** Sentinel manifestJson marking a hub row that has not been fetched yet. */
 const EMPTY_MANIFEST_JSON = "{}";
 
+/**
+ * Forced refreshes within this window of a completed fetch reuse the cache
+ * (coalesces Refresh button + websocket plan-change + renderer retries).
+ */
+const HUB_FORCE_REFRESH_COALESCE_MS = 2_000;
+
+/**
+ * Process-wide single-flight for hub refreshes. PluginMarketplaceService is
+ * constructed per IPC call, so instance state cannot dedupe — concurrent
+ * callers (list/refresh) share one in-flight fetch and all awaiters see the
+ * same outcome.
+ */
+let sharedHubRefresh: Promise<void> | null = null;
+let lastHubRefreshCompletedAt = 0;
+
+function runSharedHubRefresh(doRefresh: () => Promise<void>): Promise<void> {
+  if (sharedHubRefresh) return sharedHubRefresh;
+  const run = (async () => {
+    try {
+      await doRefresh();
+      lastHubRefreshCompletedAt = Date.now();
+    } finally {
+      sharedHubRefresh = null;
+    }
+  })();
+  sharedHubRefresh = run;
+  return run;
+}
+
+/** Test-only: reset process-wide hub refresh single-flight state. */
+export function __resetHubRefreshStateForTests(): void {
+  sharedHubRefresh = null;
+  lastHubRefreshCompletedAt = 0;
+}
+
 function hubCacheIsEmpty(manifestJson: string): boolean {
   return manifestJson === EMPTY_MANIFEST_JSON;
 }
@@ -227,7 +262,9 @@ export class PluginMarketplaceService {
       // the cache (no filesystem marketplace swap), and the synthesized hub
       // manifest must not run through the user-marketplace validation flow.
       await this.ensureBuiltinHubMarketplace();
-      await this.refreshHubMarketplace();
+      // Single-flight (concurrent refreshers share one fetch); an explicit
+      // refresh always fetches — it does not apply the coalescing window.
+      await runSharedHubRefresh(() => this.refreshHubMarketplace());
       const row = await this.marketplaceModule.getMarketplaceByName(name);
       if (!row) throw new Error(`Marketplace "${name}" not found.`);
       return toSummary(row);
@@ -527,7 +564,13 @@ export class PluginMarketplaceService {
     const cacheIsFresh =
       !hubCacheIsEmpty(row.manifestJson) && hubCacheIsFresh(row.lastFetchedAt);
     if (filter.forceRefresh || !cacheIsFresh) {
-      await this.refreshHubMarketplace();
+      // Single-flight across concurrent callers; forced refreshes inside the
+      // coalescing window reuse the just-fetched cache.
+      const completedRecently =
+        Date.now() - lastHubRefreshCompletedAt < HUB_FORCE_REFRESH_COALESCE_MS;
+      if (!completedRecently) {
+        await runSharedHubRefresh(() => this.refreshHubMarketplace());
+      }
     }
     const entries = await this.readHubEntries();
     const installedByEntry = await this.installedMarketplaceEntries();
