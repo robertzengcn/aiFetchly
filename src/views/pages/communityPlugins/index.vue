@@ -9,6 +9,11 @@ import {
 import { getLoginUrl } from "@/views/api/users";
 import { windowReceive, windowRemoveListener } from "@/views/utils/apirequest";
 import { WEBSOCKET_EVENT } from "@/config/channellist";
+import {
+  ctaFor,
+  entryUnavailable,
+  isSessionExpiredMessage,
+} from "@/views/utils/communityPluginCta";
 import type { PluginCommunityEntry } from "@/entityTypes/communityPluginTypes";
 
 /**
@@ -28,15 +33,9 @@ const installError = ref<string | null>(null);
 const installBusySlug = ref<string | null>(null);
 
 /** Auth-shaped failures get a dedicated "Sign in again" affordance. */
-const sessionExpired = computed(() => {
-  const msg = (errorMessage.value ?? "").toLowerCase();
-  return (
-    msg.includes("authentication failed") ||
-    msg.includes("token refresh") ||
-    msg.includes("refresh token") ||
-    msg.includes("http 401")
-  );
-});
+const sessionExpired = computed(() =>
+  isSessionExpiredMessage(errorMessage.value)
+);
 
 async function load(force = false): Promise<void> {
   loading.value = true;
@@ -89,35 +88,6 @@ async function onSignIn(): Promise<void> {
     installError.value =
       e instanceof Error ? e.message : String(e || "Could not open login.");
   }
-}
-
-type CardCta =
-  | "install"
-  | "installed"
-  | "preview"
-  | "upgrade"
-  | "signin"
-  | "none";
-
-/** CTA matrix — driven entirely by the Hub's access decision (PRD §7.7). */
-function ctaFor(entry: PluginCommunityEntry): CardCta {
-  switch (entry.access.status) {
-    case "allowed":
-      if (entry.access.installMode === "direct") {
-        return entry.installed ? "installed" : "install";
-      }
-      return "preview"; // allowed + ticket: preview-only in Stage 1
-    case "subscription_required":
-      return "upgrade";
-    case "login_required":
-      return "signin";
-    default:
-      return "none"; // forbidden / unavailable — greyed out
-  }
-}
-
-function entryUnavailable(entry: PluginCommunityEntry): boolean {
-  return entry.access.status === "forbidden" || entry.access.status === "unavailable";
 }
 
 /**
