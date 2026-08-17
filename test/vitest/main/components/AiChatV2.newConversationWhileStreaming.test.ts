@@ -8,6 +8,8 @@ import { streamChatV2Message } from "@/views/api/aiChatV2";
 vi.mock("@/views/api/aiChatV2", () => ({
   clearChatV2StreamListeners: vi.fn(),
   clearChatV2Conversation: vi.fn().mockResolvedValue({ deleted: 1 }),
+  subscribeAutoCompacted: vi.fn(),
+  unsubscribeAutoCompacted: vi.fn(),
   getChatV2Conversations: vi.fn().mockResolvedValue([]),
   getChatV2History: vi.fn().mockResolvedValue({
     messages: [],
@@ -261,9 +263,7 @@ describe("AiChatV2 new conversation while streaming", () => {
     await flushPromises();
 
     expect(streamChatV2Message).toHaveBeenCalledTimes(2);
-    expect(wrapper.find('[data-testid="second-accepted"]').text()).toBe(
-      "true"
-    );
+    expect(wrapper.find('[data-testid="second-accepted"]').text()).toBe("true");
     expect(wrapper.find('[data-testid="messages"]').text()).toContain(
       "second message in new chat"
     );

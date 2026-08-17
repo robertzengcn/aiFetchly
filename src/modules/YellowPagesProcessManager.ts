@@ -6,6 +6,7 @@ import {
 } from "@/model/YellowPagesTask.model";
 import { YellowPagesResultModel } from "@/model/YellowPagesResult.model";
 import { PlatformRegistry } from "@/modules/PlatformRegistry";
+import { findPlatformByReference } from "@/modules/platforms/platformMatcher";
 import { PlatformAdapterFactory as WorkerPlatformAdapterFactory } from "@/modules/platforms/PlatformAdapterFactory";
 import { AccountCookiesModule } from "@/modules/accountCookiesModule";
 import { AccountSessionService } from "@/modules/AccountSessionService";
@@ -15,25 +16,11 @@ import { ScrapingProgress } from "@/modules/interface/IPCMessage";
 import {
   BackgroundProcessMessage,
   StartTaskMessage,
-  ProgressMessage,
-  CompletedMessage,
-  ErrorMessage,
-  ScrapingStartedMessage,
-  ScrapingPageCompleteMessage,
-  ScrapingResultFoundMessage,
-  ScrapingRateLimitedMessage,
-  ScrapingCaptchaDetectedMessage,
-  ScrapingCloudflareDetectedMessage,
-  ScrapingPausedCloudflareMessage,
-  ScrapingRobotVerificationDetectedMessage,
   PauseTaskMessage,
   ResumeTaskMessage,
   TaskPausedMessage,
-  TaskResumedMessage,
   ExitTaskMessage,
   AiSupportRequestMessage,
-  AiSupportResponseMessage,
-  isStartTaskMessage,
   isProgressMessage,
   isCompletedMessage,
   isErrorMessage,
@@ -48,7 +35,6 @@ import {
   WriteLog,
   getApplogspath,
   getRandomValues,
-  getRecorddatetime,
   sendSystemMessage,
 } from "@/modules/lib/function";
 import { USERLOGPATH, USEREMAIL } from "@/config/usersetting";
@@ -160,14 +146,12 @@ export class YellowPagesProcessManager extends BaseModule {
       }
 
       // Get platform details from registry
-      const platform = this.platformRegistry
-        .getAllPlatforms()
-        .find(
-          (p) =>
-            p.id === task.platform ||
-            p.name === task.platform ||
-            p.display_name === task.platform
-        );
+      // Tolerant matching so references like "yellowpages.com" resolve
+      // to the canonical platform id "yellowpages-com"
+      const platform = findPlatformByReference(
+        this.platformRegistry.getAllPlatforms(),
+        task.platform
+      );
       if (!platform) {
         throw new Error(`Platform ${task.platform} not found`);
       }
@@ -389,7 +373,7 @@ export class YellowPagesProcessManager extends BaseModule {
       }
 
       // Create message channel for IPC communication
-      const { port1, port2 } = new MessageChannelMain();
+      const { port1 } = new MessageChannelMain();
 
       // Fork the child process using Electron utilityProcess
       const childProcess = utilityProcess.fork(childPath, [], {
@@ -804,7 +788,7 @@ export class YellowPagesProcessManager extends BaseModule {
     });
 
     // Handle process exit - this ensures task status is properly updated in the database
-    childProcess.on("exit", (code: number | null, signal: string | null) => {
+    childProcess.on("exit", (code: number | null) => {
       console.log(`Process exited for task ${taskId}: code=${code}`);
 
       // Get process info for logging
@@ -892,7 +876,7 @@ export class YellowPagesProcessManager extends BaseModule {
    */
   private async handleCompletionMessage(
     taskId: number,
-    results: any[]
+    results: Parameters<YellowPagesResultModel["saveMultipleResults"]>[0]
   ): Promise<void> {
     console.log(
       `Task ${taskId} completed successfully with ${results.length} results`

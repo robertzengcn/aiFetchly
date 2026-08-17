@@ -363,6 +363,9 @@ export const AI_CHAT_V2_CONVERSATION_UPDATED =
   "ai-chat-v2:conversation-updated";
 /** Main->renderer live scheduled-turn token stream (technical-design §13.2). */
 export const AI_CHAT_V2_SCHEDULED_STREAM = "ai-chat-v2:scheduled-stream";
+/** Main->renderer broadcast after an automatic full compact so the renderer
+ * drops the context badge immediately (mirrors the manual compact flow). */
+export const AI_CHAT_V2_AUTO_COMPACTED = "ai-chat-v2:auto-compacted";
 
 // ==================== AiChatV2 Local Voice Channels ====================
 // Local sherpa-onnx STT/TTS for AiChatV2. See

@@ -391,6 +391,10 @@ function resolveMacStoreProvisioningProfile() {
   return profilePath;
 }
 
+function resolveMacStoreSigningType() {
+  return process.env.MAC_STORE_SIGNING_TYPE || "development";
+}
+
 function isMainApplicationBundle(filePath) {
   return filePath.endsWith(".app") && !filePath.includes(".app/Contents/");
 }
@@ -519,7 +523,7 @@ module.exports = {
         ? {
             osxSign: {
               identity: requireProductionEnv("MAC_STORE_SIGNING_IDENTITY"),
-              type: "development",
+              type: resolveMacStoreSigningType(),
               provisioningProfile: resolveMacStoreProvisioningProfile(),
               optionsForFile: (filePath) => ({
                 entitlements: isMainApplicationBundle(filePath)

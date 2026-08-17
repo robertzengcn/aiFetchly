@@ -86,12 +86,13 @@ async function findContactPageHeuristic(page: Page): Promise<string | null> {
       return anchors
         .map((a) => ({
           href: (a as HTMLAnchorElement).href,
-          text: a.innerText.toLowerCase().trim(),
+          text: (a.innerText || "").toLowerCase().trim(),
           aria: a.getAttribute("aria-label") || "",
           visible: a.offsetWidth > 0 && a.offsetHeight > 0,
         }))
         .filter(
-          (link: any) => link.href && !link.href.startsWith("javascript")
+          (link: { href: string }) =>
+            link.href && !link.href.startsWith("javascript")
         );
     });
 
@@ -144,7 +145,7 @@ async function findContactPageHeuristic(page: Page): Promise<string | null> {
  * Stage 3: Fallback Standard Routes
  * Checks common contact page URLs
  */
-async function checkStandardRoutes(_baseUrl: string): Promise<string | null> {
+async function checkStandardRoutes(): Promise<string | null> {
   const commonPaths = [
     "/contact",
     "/contact-us",
@@ -179,6 +180,7 @@ async function captureScreenshot(page: Page): Promise<string | undefined> {
     return undefined;
   }
 }
+void captureScreenshot;
 
 /**
  * AI-Assisted Extraction (Primary Method)
@@ -196,7 +198,7 @@ async function extractWithAI(
       document
         .querySelectorAll("script, style, img, svg, nav, footer")
         .forEach((e) => e.remove());
-      return document.body.innerText.substring(0, 15000); // Limit to 15k chars
+      return (document.body?.innerText || "").substring(0, 15000); // Limit to 15k chars
     });
 
     // Derive entity name from page title or URL
@@ -431,7 +433,7 @@ export async function discoverAndExtractContactInfo(
       console.log(
         "ContactDiscovery: Stage 3 - Fallback standard routes + AI extraction"
       );
-      const fallbackPath = await checkStandardRoutes(url);
+      const fallbackPath = await checkStandardRoutes();
 
       if (fallbackPath) {
         const fallbackUrl = new URL(fallbackPath, url).toString();

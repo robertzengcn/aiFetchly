@@ -12,6 +12,8 @@ import { AIChatQueryLoop } from "@/service/AIChatQueryLoop";
 import type { AIChatQueryLoopDeps } from "@/service/AIChatQueryLoop";
 import { AIChatQueryEngine } from "@/service/AIChatQueryEngine";
 import { AIChatCompactAgentService } from "@/service/AIChatCompactAgentService";
+import { AIChatModelCatalogService } from "@/service/AIChatModelCatalogService";
+import { AIChatConversationUpdateBroadcaster } from "@/service/AIChatConversationUpdateBroadcaster";
 import { AIChatModelFallbackService } from "@/service/AIChatModelFallbackService";
 import {
   getSharedAutoDreamService,
@@ -85,6 +87,10 @@ type IpcEventLike = {
 
 let queryEngine: AIChatQueryEngine | null = null;
 let compactAgent: AIChatCompactAgentService | null = null;
+/** Shared model catalog for auto-compact context-window lookups. The catalog
+ * caches the /api/ai/v1/models response in-process, so the lookup is free
+ * after the first fetch. Provider-level state — not DB-bound. */
+let compactModelCatalog: AIChatModelCatalogService | null = null;
 let queryEngineDbPath: string | null = null;
 let compactAgentDbPath: string | null = null;
 
@@ -154,6 +160,9 @@ export function resetAiChatV2RuntimeForDatabaseSwitch(): void {
   compactAgent = null;
   queryEngineDbPath = null;
   compactAgentDbPath = null;
+  // The catalog is provider-level state; a user/DB switch may change the
+  // active provider, so drop the cached model windows.
+  compactModelCatalog = null;
   resetSharedAutoDreamService();
   resetSharedWorkspaceAutoDreamService();
 }
@@ -168,11 +177,30 @@ function getCompactAgent(): AIChatCompactAgentService {
   }
   if (!compactAgent) {
     const tokenService = new Token();
+    if (!compactModelCatalog) {
+      compactModelCatalog = new AIChatModelCatalogService();
+    }
     compactAgent = new AIChatCompactAgentService(tokenService, {
       completeChat: (request) => new AiChatApi().openAIChatCompletion(request),
       // Compact follows the chat availability resolver so local-provider users
       // can compact conversations without a hosted subscription.
       isEnabled: () => canUseChat().ok,
+      // Real per-model context window so the auto-compact threshold matches
+      // the renderer badge denominator (hard-coded 128k would never trip for
+      // models with smaller windows).
+      getContextWindow: (model) =>
+        compactModelCatalog!.getContextWindow(model),
+      // Broadcast to the renderer so the context badge drops right away.
+      onAutoCompacted: (summary) => {
+        AIChatConversationUpdateBroadcaster.getInstance().emitAutoCompacted({
+          conversationId: summary.conversationId,
+          outputTokenEstimate:
+            summary.outputTokenEstimate ??
+            Math.ceil(summary.summary.length / 4),
+          model: summary.model,
+          occurredAt: new Date().toISOString(),
+        });
+      },
     });
     compactAgentDbPath = dbPath;
   }

@@ -25,6 +25,8 @@ vi.mock("@/views/api/aiChatV2", () => ({
   requestChatV2PlanChanges: vi.fn(),
   getOpenAIChatModels: getOpenAIChatModelsMock,
   clearChatV2Conversation: vi.fn().mockResolvedValue({ deleted: 0 }),
+  subscribeAutoCompacted: vi.fn(),
+  unsubscribeAutoCompacted: vi.fn(),
 }));
 
 vi.mock("@/views/api/workspace", () => ({

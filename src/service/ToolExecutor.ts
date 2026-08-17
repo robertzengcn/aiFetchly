@@ -841,7 +841,10 @@ export class ToolExecutor {
     }
 
     // Format platforms for LLM consumption
+    // `id` is the canonical identifier — pass it verbatim as `platform` to
+    // search_yellow_pages (names like "YellowPages.com" also resolve).
     const formattedPlatforms = platforms.map((platform) => ({
+      id: platform.id,
       name: platform.name,
       display_name: platform.display_name,
       country: platform.country,
@@ -865,7 +868,9 @@ export class ToolExecutor {
           }):\n\n${platforms
             .map(
               (p, idx) =>
-                `${idx + 1}. **${p.display_name}** (${p.name})\n   Country: ${
+                `${idx + 1}. **${p.display_name}** — use id \`${
+                  p.id
+                }\` for search_yellow_pages\n   Country: ${
                   p.country
                 }, Language: ${p.language}\n   ${
                   p.is_active ? "✅ Active" : "❌ Inactive"

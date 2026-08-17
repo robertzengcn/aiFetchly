@@ -234,6 +234,47 @@ describe("ToolLoadPolicyService.classify", () => {
     ).toBe("deferred");
   });
 
+  it("promotes file_write for 'export/download/convert ... to csv/file' phrasings", () => {
+    const phrases = [
+      "export those data to a csv file",
+      "export the data to a csv",
+      "export to csv",
+      "export to an excel file",
+      "export the contacts to a csv file",
+      "download these as a csv",
+      "download the report as csv",
+      "convert these to csv",
+      "convert to a json file",
+      "save the table as a csv",
+      "save the table as xlsx",
+      "dump the results to a file",
+      "put this data into a spreadsheet",
+    ];
+    for (const currentUserMessage of phrases) {
+      expect(classify("file_write", "builtin", { currentUserMessage })).toBe(
+        "contextual"
+      );
+    }
+  });
+
+  it("does NOT promote file_write when 'export/download/convert/save' has no file/data-format target", () => {
+    const phrases = [
+      "what is a csv file",
+      "explain how csv escaping works",
+      "how do I parse csv in python",
+      "export our brand guidelines as a style guide",
+      "tell me about downloadable resources on your site",
+      "put the meeting notes in the chat",
+      "save me a seat",
+      "tell me how to convert between csv and json formats",
+    ];
+    for (const currentUserMessage of phrases) {
+      expect(classify("file_write", "builtin", { currentUserMessage })).toBe(
+        "deferred"
+      );
+    }
+  });
+
   it("promotes knowledge-library management tools for knowledge-library intent", () => {
     expect(
       classify("knowledge_library_list_documents", "builtin", {
@@ -289,6 +330,42 @@ describe("ToolLoadPolicyService.classify", () => {
         currentUserMessage: "show this as an interactive dashboard",
       })
     ).toBe("contextual");
+  });
+
+  it("promotes create_html_artifact for 'show/render/display ... in html' phrasings", () => {
+    const phrases = [
+      "show result in html",
+      "show data in html",
+      "show data in html file",
+      "show the results as html",
+      "display the results as html",
+      "render the table in html",
+      "make an html report",
+      "generate an html page for the contacts",
+      "put this into an html page",
+      "output the report as html",
+    ];
+    for (const currentUserMessage of phrases) {
+      expect(
+        classify("create_html_artifact", "builtin", { currentUserMessage })
+      ).toBe("contextual");
+    }
+  });
+
+  it("does NOT promote create_html_artifact for generic HTML knowledge questions", () => {
+    const phrases = [
+      "what is HTML?",
+      "how do I center a div in html",
+      "why is my html broken",
+      "explain how HTML works",
+      "write a short product tagline",
+      "what is the weather today",
+    ];
+    for (const currentUserMessage of phrases) {
+      expect(
+        classify("create_html_artifact", "builtin", { currentUserMessage })
+      ).toBe("deferred");
+    }
   });
 
   it("keeps email inbox tools deferred by default and for outbound email phrasing", () => {
