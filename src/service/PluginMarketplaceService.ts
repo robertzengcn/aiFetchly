@@ -34,6 +34,7 @@ import type {
   PluginMarketplaceSummary,
 } from "@/entityTypes/pluginMarketplaceTypes";
 import { parseMarketplaceSource } from "@/service/pluginMarketplaces/parseMarketplaceSource";
+import { persistedHubManifestSchema } from "@/service/pluginMarketplaces/AiFetchHubMarketplaceFetcher";
 import { validateMarketplaceManifest } from "@/service/pluginMarketplaces/pluginMarketplaceValidation";
 import {
   createDefaultMarketplaceFetcherRegistry,
@@ -678,13 +679,20 @@ export class PluginMarketplaceService {
 
   private async readHubEntries(): Promise<HubManifestPluginEntry[]> {
     const row = await this.requireHubRow();
-    let manifest: { plugins?: HubManifestPluginEntry[] };
+    let parsedJson: unknown;
     try {
-      manifest = JSON.parse(row.manifestJson);
+      parsedJson = JSON.parse(row.manifestJson);
     } catch {
       throw new Error("Community catalog cache is corrupt. Refresh the list.");
     }
-    return Array.isArray(manifest.plugins) ? manifest.plugins : [];
+    // Re-validate on read: a corrupted row or schema drift between app
+    // versions must fail loudly instead of flowing unvalidated into the
+    // install pipeline (never trust persisted JSON without the schema).
+    const parsed = persistedHubManifestSchema.safeParse(parsedJson);
+    if (!parsed.success) {
+      throw new Error("Community catalog cache is corrupt. Refresh the list.");
+    }
+    return parsed.data.plugins as HubManifestPluginEntry[];
   }
 
   /** Installed plugins keyed by `${entryName}@${marketplaceName}`. */

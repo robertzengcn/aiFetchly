@@ -100,6 +100,41 @@ const hubCatalogSchema = z
 type HubEntry = z.infer<typeof hubEntrySchema>;
 type HubEntrySource = z.infer<typeof entrySourceSchema>;
 
+/**
+ * Shape of the manifest this fetcher persists into the built-in marketplace
+ * row (after normalization). The service re-validates cached rows against
+ * this schema on read so a corrupted row or a schema drift between app
+ * versions fails loudly instead of flowing unvalidated into install.
+ */
+export const persistedHubManifestSchema = z
+  .object({
+    name: z.string().min(1).max(256),
+    owner: z.object({ name: z.string().min(1).max(256) }).passthrough(),
+    description: z.string().max(2048).optional(),
+    plugins: z
+      .array(
+        z
+          .object({
+            name: z.string().min(1).max(256),
+            slug: z.string().min(1).max(256),
+            displayName: z.string().max(256).optional(),
+            description: z.string().max(2048).optional(),
+            version: z.string().max(128).optional(),
+            category: z.string().max(128).optional(),
+            tags: z.array(z.string().max(64)).max(64).optional(),
+            homepage: z.string().max(2048).optional(),
+            repository: z.string().max(2048).optional(),
+            license: z.string().max(128).optional(),
+            owner: z.string().max(256).optional(),
+            access: accessSchema,
+            source: entrySourceSchema.optional(),
+          })
+          .passthrough()
+      )
+      .max(MAX_PLUGINS),
+  })
+  .passthrough();
+
 /** Marketplace-shaped output of normalizeEntrySource (object variants only). */
 type NormalizedEntrySource = Extract<
   PluginMarketplaceEntrySource,

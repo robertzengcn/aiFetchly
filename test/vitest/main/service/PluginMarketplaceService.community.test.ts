@@ -428,6 +428,41 @@ describe("PluginMarketplaceService community catalog", () => {
     expect(row?.pluginCount).toBe(2);
   });
 
+  test("throws the corrupt-cache error when the persisted manifest is not JSON", async () => {
+    const { service } = makeService([hubEntry("pdf-tools")], {
+      lastFetchedAt: new Date(),
+    });
+    const row = await marketplaceModule.getMarketplaceByName(
+      HUB_MARKETPLACE_NAME
+    );
+    row!.manifestJson = "{not-json";
+    await expect(service.listCommunityPlugins()).rejects.toThrow(/corrupt/i);
+    await expect(service.getCommunityPluginDetail("pdf-tools")).rejects.toThrow(
+      /corrupt/i
+    );
+  });
+
+  test("throws the corrupt-cache error when the persisted manifest fails schema validation", async () => {
+    const { service } = makeService([hubEntry("pdf-tools")], {
+      lastFetchedAt: new Date(),
+    });
+    const row = await marketplaceModule.getMarketplaceByName(
+      HUB_MARKETPLACE_NAME
+    );
+    // Entry missing the required access decision — must not flow into list
+    // or install just because the JSON parses.
+    row!.manifestJson = JSON.stringify({
+      name: HUB_MARKETPLACE_NAME,
+      owner: { name: "AiFetchly Plugin Hub" },
+      plugins: [{ name: "no-access-field", slug: "no-access-field" }],
+    });
+    await expect(service.listCommunityPlugins()).rejects.toThrow(/corrupt/i);
+    await expect(
+      service.installCommunityPlugin("no-access-field")
+    ).rejects.toThrow(/corrupt/i);
+    expect(installFromSource).not.toHaveBeenCalled();
+  });
+
   test("install enforces the hub's access.status decision, not just installMode", async () => {
     const { service } = makeService(
       [
