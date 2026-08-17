@@ -31,7 +31,10 @@ const installBusySlug = ref<string | null>(null);
 const sessionExpired = computed(() => {
   const msg = (errorMessage.value ?? "").toLowerCase();
   return (
-    msg.includes("authentication failed") || msg.includes("refresh token")
+    msg.includes("authentication failed") ||
+    msg.includes("token refresh") ||
+    msg.includes("refresh token") ||
+    msg.includes("http 401")
   );
 });
 
@@ -144,7 +147,7 @@ onUnmounted(() => {
   <v-container fluid class="community-plugins-page">
     <v-row class="align-center mb-4" no-gutters>
       <v-col cols="12" sm="auto">
-        <h1 class="text-h5">
+        <h1 class="text-h4 font-weight-bold">
           {{ t("communityPlugins.title") || "Community Plugins" }}
         </h1>
       </v-col>
@@ -206,7 +209,12 @@ onUnmounted(() => {
       {{ installError }}
     </v-alert>
 
-    <v-row v-if="loading" data-testid="community-plugins-loading">
+    <v-row
+      v-if="loading"
+      role="status"
+      :aria-label="t('communityPlugins.loading') || 'Loading plugins'"
+      data-testid="community-plugins-loading"
+    >
       <v-col v-for="i in 6" :key="i" cols="12" sm="6" md="4">
         <v-skeleton-loader type="article" />
       </v-col>
@@ -323,7 +331,12 @@ onUnmounted(() => {
             </v-btn>
 
             <!-- forbidden / unavailable: greyed out, no action -->
-            <v-btn v-else disabled variant="text">&nbsp;</v-btn>
+            <span
+              class="text-caption text-medium-emphasis"
+              aria-hidden="true"
+            >
+              —
+            </span>
           </v-card-actions>
         </v-card>
       </v-col>

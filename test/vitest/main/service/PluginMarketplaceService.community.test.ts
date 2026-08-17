@@ -324,7 +324,7 @@ describe("PluginMarketplaceService community catalog", () => {
     );
     await expect(
       service.installCommunityPlugin("pro-seo-suite")
-    ).rejects.toThrow(/not installable/i);
+    ).rejects.toThrow(/subscription/i);
     await expect(service.installCommunityPlugin("ghost")).rejects.toThrow(
       /not found/i
     );
@@ -359,5 +359,93 @@ describe("PluginMarketplaceService community catalog", () => {
     expect(
       await marketplaceModule.getMarketplaceByName(HUB_MARKETPLACE_NAME)
     ).not.toBeNull();
+  });
+
+  test("listAvailablePlugins excludes the built-in hub marketplace", async () => {
+    const { service } = makeService([hubEntry("pdf-tools")], {
+      lastFetchedAt: new Date(),
+    });
+    marketplaceModule.rows.set("user-added", {
+      id: 99,
+      name: "user-added",
+      ownerName: "Team",
+      sourceKind: "url",
+      sourceUri: "https://x/m.json",
+      manifestJson: JSON.stringify({
+        name: "user-added",
+        owner: { name: "Team" },
+        plugins: [
+          {
+            name: "lead-research",
+            source: { source: "url", url: "https://x/p" },
+          },
+        ],
+      }),
+      pluginCount: 1,
+      enabled: 1,
+      autoUpdate: 0,
+      health: "healthy",
+      lastErrorJson: "[]",
+      sourceMetaJson: "{}",
+    });
+
+    const plugins = await service.listAvailablePlugins({});
+    expect(plugins.map((p) => p.marketplaceName)).toEqual(["user-added"]);
+  });
+
+  test("addMarketplace refuses a manifest claiming the reserved hub name", async () => {
+    const { service } = makeService([hubEntry("pdf-tools")]);
+    await expect(
+      service.addMarketplace({
+        source: "https://evil.example.com/marketplace.json",
+        overwrite: true,
+      })
+    ).rejects.toThrow(/reserved/i);
+    expect(installFromSource).not.toHaveBeenCalled();
+  });
+
+  test("refreshMarketplace routes the hub name through the community path", async () => {
+    const { service, fetcher } = makeService(
+      [
+        hubEntry("pdf-tools"),
+        hubEntry("locked", {
+          access: { status: "subscription_required", installMode: "ticket" },
+          source: undefined,
+        }),
+      ],
+      { lastFetchedAt: new Date() }
+    );
+
+    const summary = await service.refreshMarketplace(HUB_MARKETPLACE_NAME);
+
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(summary.name).toBe(HUB_MARKETPLACE_NAME);
+    expect(summary.sourceKind).toBe("aifetch-hub");
+    const row = await marketplaceModule.getMarketplaceByName(
+      HUB_MARKETPLACE_NAME
+    );
+    expect(row?.health).toBe("healthy");
+    expect(row?.pluginCount).toBe(2);
+  });
+
+  test("install enforces the hub's access.status decision, not just installMode", async () => {
+    const { service } = makeService(
+      [
+        hubEntry("stale-entitled", {
+          access: { status: "subscription_required", installMode: "direct" },
+        }),
+        hubEntry("anon-only", {
+          access: { status: "login_required", installMode: "direct" },
+        }),
+      ],
+      { lastFetchedAt: new Date() }
+    );
+    await expect(
+      service.installCommunityPlugin("stale-entitled")
+    ).rejects.toThrow(/subscription/i);
+    await expect(service.installCommunityPlugin("anon-only")).rejects.toThrow(
+      /sign in/i
+    );
+    expect(installFromSource).not.toHaveBeenCalled();
   });
 });

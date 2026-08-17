@@ -164,6 +164,9 @@ describe("community-plugin-ipc", () => {
     openExternal.mockRejectedValueOnce(new Error("no default browser"));
     const fn = handlers.get(PLUGIN_COMMUNITY_OPEN_PLANS)!;
     const result = await fn({}, undefined);
-    expect(result).toMatchObject({ status: false, msg: "OPEN_PLANS_FAILED" });
+    expect(result).toMatchObject({
+      status: false,
+      msg: "Could not open the plans page.",
+    });
   });
 });

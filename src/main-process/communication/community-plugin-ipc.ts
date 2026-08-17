@@ -50,9 +50,7 @@ export function registerCommunityPluginIpcHandlers(): void {
     pluginCommunitySlugInputSchema,
     async (input) => {
       const installed =
-        await new PluginMarketplaceService().installCommunityPlugin(
-          input.slug
-        );
+        await new PluginMarketplaceService().installCommunityPlugin(input.slug);
       // Plugin set changed — refresh any open slash suggestions (mirrors
       // plugin-marketplace-ipc.ts install handling).
       broadcastAifetchlyConfigChanged({ source: "plugin" });
@@ -70,11 +68,12 @@ export function registerCommunityPluginIpcHandlers(): void {
         return null;
       } catch (err) {
         log.error(
-          `[${PLUGIN_COMMUNITY_OPEN_PLANS}] shell.openExternal failed: ${
+          `[${PLUGIN_COMMUNITY_OPEN_PLANS}] OPEN_PLANS_FAILED: ${
             err instanceof Error ? err.message : String(err)
           }`
         );
-        throw new Error("OPEN_PLANS_FAILED");
+        // Human-readable: the renderer surfaces this message verbatim.
+        throw new Error("Could not open the plans page.");
       }
     }
   );

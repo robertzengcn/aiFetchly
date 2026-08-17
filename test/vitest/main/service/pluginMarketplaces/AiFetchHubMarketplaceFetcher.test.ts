@@ -63,7 +63,7 @@ describe("AiFetchHubMarketplaceFetcher", () => {
     expect(getFirstParty).toHaveBeenCalledTimes(1);
     const [url, options] = getFirstParty.mock.calls[0] as [
       string,
-      RequestInit?,
+      RequestInit?
     ];
     expect(url).toBe("https://plugins.example.com/api/v1/plugins/catalog");
     expect(options?.signal).toBeInstanceOf(AbortSignal);
@@ -155,5 +155,63 @@ describe("AiFetchHubMarketplaceFetcher", () => {
     if (result.success) throw new Error("unreachable");
     expect(result.errors[0].code).toBe("marketplace-fetch-failed");
     expect(result.errors[0].message).toContain("HTTP 503");
+  });
+
+  test("marketplace-shaped sources are rebuilt from validated fields only", async () => {
+    // Undeclared passthrough keys must be dropped, not smuggled into the
+    // install pipeline (registry/sha reach CLI args downstream).
+    getFirstParty.mockResolvedValueOnce({
+      plugins: [
+        {
+          slug: "gh",
+          displayName: "GH",
+          access: { status: "allowed", installMode: "direct" },
+          source: {
+            source: "github",
+            repo: "aifetchly/gh",
+            ref: "v1",
+            sneaky: "drop-me",
+          },
+        },
+      ],
+    });
+    const result = await makeFetcher().fetch({
+      source: { kind: "aifetch-hub", uri: "" },
+    });
+    expect(result.success).toBe(true);
+    if (!result.success) throw new Error("unreachable");
+    const manifest = JSON.parse(result.marketplace.manifestJson);
+    expect(manifest.plugins[0].source).toEqual({
+      source: "github",
+      repo: "aifetchly/gh",
+      ref: "v1",
+    });
+  });
+
+  test("emits homepage/repository/license detail fields when the hub provides them", async () => {
+    getFirstParty.mockResolvedValueOnce({
+      plugins: [
+        {
+          slug: "rich",
+          displayName: "Rich",
+          access: { status: "allowed", installMode: "direct" },
+          source: { source: "npm", package: "rich-pkg" },
+          homepage: "https://example.com",
+          repository: "https://github.com/aifetchly/rich",
+          license: "MIT",
+        },
+      ],
+    });
+    const result = await makeFetcher().fetch({
+      source: { kind: "aifetch-hub", uri: "" },
+    });
+    expect(result.success).toBe(true);
+    if (!result.success) throw new Error("unreachable");
+    const manifest = JSON.parse(result.marketplace.manifestJson);
+    expect(manifest.plugins[0].homepage).toBe("https://example.com");
+    expect(manifest.plugins[0].repository).toBe(
+      "https://github.com/aifetchly/rich"
+    );
+    expect(manifest.plugins[0].license).toBe("MIT");
   });
 });

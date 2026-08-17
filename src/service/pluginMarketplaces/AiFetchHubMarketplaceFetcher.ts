@@ -82,6 +82,9 @@ const hubEntrySchema = z
     owner: z.string().max(256).optional(),
     category: z.string().max(128).optional(),
     tags: z.array(z.string().max(64)).max(64).optional(),
+    homepage: z.string().max(2048).optional(),
+    repository: z.string().max(2048).optional(),
+    license: z.string().max(128).optional(),
     access: accessSchema,
     source: entrySourceSchema.optional(),
   })
@@ -110,8 +113,40 @@ function normalizeEntrySource(
   // Passthrough unions narrow poorly under `in`; probe by runtime field type.
   const r = raw as Record<string, unknown>;
   if (typeof r.source === "string") {
-    // Already marketplace-shaped; passthrough extras are structurally fine.
-    return raw as NormalizedEntrySource;
+    // Rebuild from validated fields only — do NOT return the passthrough
+    // object, whose undeclared keys would smuggle unvalidated values
+    // (e.g. registry/sha) into the install pipeline's CLI arguments.
+    const ref = typeof r.ref === "string" ? r.ref : undefined;
+    const sha = typeof r.sha === "string" ? r.sha : undefined;
+    const pinned = sha ?? ref;
+    if (
+      r.source === "github" &&
+      typeof r.repo === "string" &&
+      r.repo.length > 0
+    ) {
+      return {
+        source: "github",
+        repo: r.repo,
+        ...(pinned ? { ref: pinned } : {}),
+      };
+    }
+    if (r.source === "url" && typeof r.url === "string" && r.url.length > 0) {
+      return { source: "url", url: r.url, ...(pinned ? { ref: pinned } : {}) };
+    }
+    if (
+      r.source === "npm" &&
+      typeof r.package === "string" &&
+      r.package.length > 0
+    ) {
+      return {
+        source: "npm",
+        package: r.package,
+        ...(typeof r.version === "string" && r.version.length > 0
+          ? { version: r.version }
+          : {}),
+      };
+    }
+    return undefined;
   }
   const uri = typeof r.uri === "string" ? r.uri : "";
   const ref = typeof r.ref === "string" ? r.ref : undefined;
@@ -230,6 +265,9 @@ function toManifestEntry(entry: HubEntry): Record<string, unknown> {
     ...(entry.version ? { version: entry.version } : {}),
     ...(entry.category ? { category: entry.category } : {}),
     ...(entry.tags ? { tags: entry.tags } : {}),
+    ...(entry.homepage ? { homepage: entry.homepage } : {}),
+    ...(entry.repository ? { repository: entry.repository } : {}),
+    ...(entry.license ? { license: entry.license } : {}),
     ...(source ? { source } : {}),
     // Hub passthrough extras consumed by the community page/service.
     slug: entry.slug,

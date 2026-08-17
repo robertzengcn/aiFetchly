@@ -1,4 +1,7 @@
-import type { PluginMarketplaceEntry } from "@/entityTypes/pluginMarketplaceTypes";
+import type {
+  PluginMarketplaceEntry,
+  PluginMarketplaceEntrySource,
+} from "@/entityTypes/pluginMarketplaceTypes";
 
 /**
  * Community Plugins types (Community Plugin Page PRD §7.5 / tech design §8).
@@ -38,7 +41,7 @@ export interface PluginCommunityEntry {
   readonly tags?: readonly string[];
   readonly access: PluginCommunityAccess;
   /** Populated by cross-referencing installed plugins (service layer). */
-  readonly installed?: boolean;
+  readonly installed: boolean;
 }
 
 /** Stage 1 detail = the list row; reserved for extra fields in later stages. */
@@ -59,16 +62,13 @@ export interface PluginCommunityFilter {
  * Plugin entry as stored inside the built-in hub marketplace's cached
  * manifest: a marketplace-shaped entry (so `resolveMarketplaceEntrySource`
  * can install `direct` entries through the existing pipeline) carrying the
- * hub-only `slug`/`access`/`owner` fields as passthrough extras.
+ * hub-only `slug`/`access`/`owner` fields as passthrough extras. `source`
+ * is optional: locked (`ticket`) rows deliberately carry none.
  */
-export interface HubManifestPluginEntry extends PluginMarketplaceEntry {
+export interface HubManifestPluginEntry
+  extends Omit<PluginMarketplaceEntry, "source"> {
+  readonly source?: PluginMarketplaceEntrySource;
   readonly slug: string;
   readonly access: PluginCommunityAccess;
   readonly owner?: string;
-}
-
-/** Top-level hub catalog response (GET /api/v1/plugins/catalog). */
-export interface HubCatalogResponse {
-  readonly plugins: readonly HubManifestPluginEntry[];
-  readonly segment?: string;
 }

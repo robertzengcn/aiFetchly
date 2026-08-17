@@ -301,6 +301,13 @@ export class HttpClient {
     options: RequestInit = {}
   ): Promise<T> {
     assertFirstPartyHubUrl(absoluteUrl);
+    // Attach the token deterministically: the constructor's setheaderToken()
+    // is fire-and-forget behind a dynamic import(), and callers (e.g. the
+    // hub fetcher) construct + call in the same synchronous block — without
+    // this await, the first request races ahead of the Authorization header.
+    if (!this._isWorker) {
+      await this.setheaderToken();
+    }
     return (await this._fetchJSON(
       absoluteUrl,
       {

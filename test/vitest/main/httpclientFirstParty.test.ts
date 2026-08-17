@@ -102,6 +102,18 @@ describe("HttpClient.getFirstParty", () => {
     expect(headers["Authorization"]).toBe("Bearer current-access");
   });
 
+  it("attaches the Bearer token even when constructed and called in the same tick", async () => {
+    // Regression: the constructor fire-and-forgets setheaderToken() behind a
+    // dynamic import; the hub fetcher constructs + calls synchronously, so
+    // the first request previously raced ahead of the Authorization header.
+    fetchSpy.mockResolvedValueOnce(jsonResponse({ ok: true }));
+    const sameTickClient = new HttpClient();
+    await sameTickClient.getFirstParty(HUB_URL);
+    const headers = (fetchSpy.mock.calls[0][1] as RequestInit)
+      .headers as Record<string, string>;
+    expect(headers["Authorization"]).toBe("Bearer current-access");
+  });
+
   it("refuses a URL outside the configured hub origin (no fetch, no token)", async () => {
     await expect(
       client.getFirstParty("https://attacker.example.com/catalog")

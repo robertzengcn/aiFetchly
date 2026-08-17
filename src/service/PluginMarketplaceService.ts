@@ -22,6 +22,7 @@ import type {
   MarketplaceInstallMeta,
   PluginMarketplaceCapabilitySummary,
   PluginMarketplaceDetail,
+  PluginMarketplaceEntry,
   PluginMarketplaceError,
   PluginMarketplaceHealth,
   PluginMarketplaceManifest,
@@ -51,6 +52,13 @@ export interface InstalledPluginRowRef {
 
 /** Community catalog cache TTL — mirrors the hub's own introspection cache. */
 const HUB_CACHE_TTL_MS = 10 * 60 * 1000;
+
+/** Sentinel manifestJson marking a hub row that has not been fetched yet. */
+const EMPTY_MANIFEST_JSON = "{}";
+
+function hubCacheIsEmpty(manifestJson: string): boolean {
+  return manifestJson === EMPTY_MANIFEST_JSON;
+}
 
 /**
  * Orchestrates marketplace add/list/get/refresh/remove/discover/install.
@@ -90,6 +98,17 @@ export class PluginMarketplaceService {
       throw new Error(validation.errors.map((e) => e.message).join("; "));
     }
     const manifest = validation.manifest;
+
+    // The built-in hub row is service-managed: a user-added manifest (even
+    // with overwrite) must never claim the reserved name, or community
+    // list/install would read attacker-controlled entries under first-party
+    // branding.
+    if (manifest.name === HUB_MARKETPLACE_NAME) {
+      await fetched.marketplace.cleanup();
+      throw new Error(
+        `"${HUB_MARKETPLACE_NAME}" is reserved for the built-in AiFetchly Plugin Hub marketplace.`
+      );
+    }
 
     const existing = await this.marketplaceModule.getMarketplaceByName(
       manifest.name
@@ -202,6 +221,16 @@ export class PluginMarketplaceService {
   }
 
   async refreshMarketplace(name: string): Promise<PluginMarketplaceSummary> {
+    if (name === HUB_MARKETPLACE_NAME) {
+      // Built-in hub row: refresh through the community path — the row IS
+      // the cache (no filesystem marketplace swap), and the synthesized hub
+      // manifest must not run through the user-marketplace validation flow.
+      await this.ensureBuiltinHubMarketplace();
+      await this.refreshHubMarketplace();
+      const row = await this.marketplaceModule.getMarketplaceByName(name);
+      if (!row) throw new Error(`Marketplace "${name}" not found.`);
+      return toSummary(row);
+    }
     const existing = await this.marketplaceModule.getMarketplaceByName(name);
     if (!existing) throw new Error(`Marketplace "${name}" not found.`);
     // Re-fetch using the stored source.
@@ -470,7 +499,7 @@ export class PluginMarketplaceService {
         enabled: 1,
         autoUpdate: 0,
         health: "healthy",
-        manifestJson: "{}",
+        manifestJson: EMPTY_MANIFEST_JSON,
         pluginCount: 0,
         sourceMetaJson: JSON.stringify({ builtIn: true }),
       });
@@ -495,7 +524,7 @@ export class PluginMarketplaceService {
     await this.ensureBuiltinHubMarketplace();
     const row = await this.requireHubRow();
     const cacheIsFresh =
-      row.manifestJson !== "{}" && hubCacheIsFresh(row.lastFetchedAt);
+      !hubCacheIsEmpty(row.manifestJson) && hubCacheIsFresh(row.lastFetchedAt);
     if (filter.forceRefresh || !cacheIsFresh) {
       await this.refreshHubMarketplace();
     }
@@ -515,7 +544,7 @@ export class PluginMarketplaceService {
   ): Promise<PluginCommunityDetail | null> {
     await this.ensureBuiltinHubMarketplace();
     const row = await this.requireHubRow();
-    if (row.manifestJson === "{}") return null;
+    if (hubCacheIsEmpty(row.manifestJson)) return null;
     const entries = await this.readHubEntries();
     const entry = entries.find((e) => e.slug === slug);
     if (!entry) return null;
@@ -546,6 +575,18 @@ export class PluginMarketplaceService {
         `Plugin "${slug}" not found in the community catalog. Refresh the list and try again.`
       );
     }
+    // Enforce the hub's per-viewer access decision at the service boundary,
+    // not just in the page's CTA matrix (defense-in-depth: the renderer is
+    // not the policy authority).
+    if (entry.access.status !== "allowed") {
+      throw new Error(
+        entry.access.status === "subscription_required"
+          ? "This plugin requires a subscription. Use the Upgrade button to see plans."
+          : entry.access.status === "login_required"
+          ? "Sign in to install this plugin."
+          : "This plugin is not available for install."
+      );
+    }
     if (entry.access.installMode !== "direct") {
       throw new Error(
         "This plugin is not installable in this release (subscription required)."
@@ -559,14 +600,19 @@ export class PluginMarketplaceService {
       );
     }
 
-    const resolution = resolveMarketplaceEntrySource(entry, {
-      marketplaceName: HUB_MARKETPLACE_NAME,
-      marketplaceRoot: row.installPath ?? "",
-      marketplaceSource: {
-        kind: "aifetch-hub",
-        uri: row.sourceUri,
-      },
-    });
+    // Type-only narrowing cast: the guards above established `source` is a
+    // non-string object; the entry itself was zod-validated at fetch time.
+    const resolution = resolveMarketplaceEntrySource(
+      entry as PluginMarketplaceEntry,
+      {
+        marketplaceName: HUB_MARKETPLACE_NAME,
+        marketplaceRoot: row.installPath ?? "",
+        marketplaceSource: {
+          kind: "aifetch-hub",
+          uri: row.sourceUri,
+        },
+      }
+    );
     if (!resolution.success) {
       throw new Error(resolution.errors.map((e) => e.message).join("; "));
     }
