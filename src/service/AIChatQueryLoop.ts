@@ -60,6 +60,7 @@ import {
   countImageContentParts,
   countImageDataUrlChars,
   stripConsumedImageHandoffs,
+  stripConsumedUserImages,
 } from "@/service/AIChatImageHandoff";
 import { getDefaultToolJobRegistry } from "@/service/ToolJobRegistry";
 import { extractToolResultImages } from "@/service/toolResultImageHarvest";
@@ -1898,6 +1899,19 @@ export class AIChatQueryLoop {
             `[ai-chat-v2] tool ${call.name} result pushed → round ${round} will continue`
           );
         }
+      }
+
+      // All tool calls for this round have executed and their results are
+      // pushed. Now strip user-uploaded image data URLs from the original
+      // user message — the model has already seen the image in a prior API
+      // call, and the tool context has already counted it. Re-sending a
+      // ~500k-token image data URL on every subsequent round wastes huge
+      // context budget. This is idempotent (no-op when already stripped).
+      const strippedUserImages = stripConsumedUserImages(messages);
+      if (strippedUserImages > 0) {
+        console.log(
+          `[ai-chat-v2] stripped ${strippedUserImages} user image part(s) after tool round`
+        );
       }
 
       if (input.abortController.signal.aborted) {
