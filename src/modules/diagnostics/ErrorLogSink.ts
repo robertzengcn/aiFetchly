@@ -6,6 +6,7 @@ import {
   serializeJsonlLine,
 } from "./DiagnosticSerializer";
 import { redactString, redactMetadata } from "./DiagnosticRedactor";
+import { getCrashReporterFromGlobal } from "./CrashReporterGlobal";
 import type { ErrorRecord } from "./DiagnosticSchemas";
 
 /** Lazily-created append stream for the error log. */
@@ -50,7 +51,10 @@ export const ErrorLogSink = {
   /**
    * Append a single {@link ErrorRecord} to `error.jsonl` as one JSONL line.
    * The record is first redacted (free-text fields + metadata), then
-   * length-truncated, then serialised. Never throws — logging failures are
+   * length-truncated, then serialised. After the disk write succeeds, the
+   * redacted+truncated record is also mirrored into the in-memory error ring
+   * buffer (via the global crash reporter) so renderer errors appear in the
+   * next crash upload's `recentErrors`. Never throws — logging failures are
    * swallowed to avoid masking the original error being logged.
    */
   async write(rec: ErrorRecord): Promise<void> {
@@ -63,6 +67,13 @@ export const ErrorLogSink = {
         // Use the write callback so we only resolve once the data is flushed.
         s.write(line, "utf8", () => resolve());
       });
+      // Mirror into the in-memory error ring buffer. The reporter is resolved
+      // at write time (not module load) — it may not exist yet. Best-effort.
+      try {
+        getCrashReporterFromGlobal()?.pushError(truncated);
+      } catch {
+        // best-effort — disk write already succeeded
+      }
     } catch {
       // Never throw from the logging path.
     }
