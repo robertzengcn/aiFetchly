@@ -31,6 +31,26 @@ const TRANSIENT_ERROR_PATTERN =
  * loop's auto-retry — use {@link isContentLevelTransientError} instead, so
  * transport-layer conditions (502/429/timeout) are not retried at two layers.
  */
+/**
+ * True when the error indicates the conversation exceeded the model's
+ * context window. This is NOT a transient error — retrying with the same
+ * oversized input will always fail. Used to:
+ *   - exclude it from {@link isTransientRetryableError}
+ *   - trigger an emergency auto-compact on failed turns so the next turn
+ *     has a smaller context.
+ */
+export function isContextWindowExceededError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const lowerMsg = (err.message || "").toLowerCase();
+  return (
+    lowerMsg.includes("context_window_exceeded") ||
+    lowerMsg.includes("context window") ||
+    lowerMsg.includes("context length") ||
+    lowerMsg.includes("contextwindowexceeded") ||
+    lowerMsg.includes("longer than the model")
+  );
+}
+
 export function isTransientRetryableError(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
   if (err.name === "AbortError") return false;
@@ -38,14 +58,7 @@ export function isTransientRetryableError(err: unknown): boolean {
   // oversized input will always fail. Exclude it before the pattern check
   // so the user gets the actionable "conversation too long" message instead
   // of "service is busy, try again".
-  const lowerMsg = (err.message || "").toLowerCase();
-  if (
-    lowerMsg.includes("context_window_exceeded") ||
-    lowerMsg.includes("context window") ||
-    lowerMsg.includes("context length") ||
-    lowerMsg.includes("contextwindowexceeded") ||
-    lowerMsg.includes("longer than the model")
-  ) {
+  if (isContextWindowExceededError(err)) {
     return false;
   }
   if (isAIChatRecoverableError(err)) {

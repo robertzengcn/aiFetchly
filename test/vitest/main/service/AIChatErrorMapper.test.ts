@@ -6,6 +6,7 @@ import {
   describeErrorDetail,
   isAuthExpiredError,
   isContentLevelTransientError,
+  isContextWindowExceededError,
   isTransientRetryableError,
   userSafeError,
 } from "@/service/AIChatErrorMapper";
@@ -308,5 +309,28 @@ describe("AIChatErrorMapper - context window exceeded", () => {
       "AI server returned finish_reason=error (code=context_window_exceeded): input too long"
     );
     expect(isTransientRetryableError(err)).toBe(false);
+  });
+
+  it("isContextWindowExceededError detects various phrasings", () => {
+    expect(
+      isContextWindowExceededError(
+        new Error("context_window_exceeded: input too long")
+      )
+    ).toBe(true);
+    expect(
+      isContextWindowExceededError(
+        new Error("The input is longer than the model's context length.")
+      )
+    ).toBe(true);
+    expect(
+      isContextWindowExceededError(
+        new Error("maximum context window exceeded")
+      )
+    ).toBe(true);
+    expect(
+      isContextWindowExceededError(new Error("generic error"))
+    ).toBe(false);
+    expect(isContextWindowExceededError(null)).toBe(false);
+    expect(isContextWindowExceededError("context window")).toBe(false);
   });
 });
