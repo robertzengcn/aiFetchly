@@ -1,6 +1,10 @@
 import * as path from "path";
 import * as os from "os";
 import fs from "fs";
+import { randomUUID } from "crypto";
+import { getCrashReporterFromGlobal } from "@/modules/diagnostics/CrashReporterGlobal";
+import { redactString } from "@/modules/diagnostics/DiagnosticRedactor";
+import type { ErrorRecord } from "@/modules/diagnostics/DiagnosticSchemas";
 
 /** True when running in a worker/child process that has process.send (e.g. contact-extraction worker). */
 const isWorker =
@@ -354,6 +358,60 @@ let logger: {
   stopLogCleanup: () => void;
 };
 
+/** Render a log argument as a string without ever throwing. */
+function argToString(a: unknown): string {
+  if (typeof a === "string") return a;
+  if (a instanceof Error) return a.stack ?? a.message;
+  try {
+    return JSON.stringify(a) ?? String(a);
+  } catch {
+    return String(a);
+  }
+}
+
+/**
+ * Wrap a log method so each call also feeds the diagnostics buffers: one
+ * breadcrumb (category "log") and one ErrorRecord in the recent-errors ring.
+ * Best-effort — failures are swallowed so diagnostics can never break
+ * logging. No-ops while the crash reporter is not yet initialised (very
+ * early startup) and is entirely inactive in worker processes.
+ */
+function bridgeLogLevel(
+  original: (...args: unknown[]) => void,
+  level: "warn" | "error"
+): (...args: unknown[]) => void {
+  return (...args: unknown[]) => {
+    original(...args);
+    try {
+      const reporter = getCrashReporterFromGlobal();
+      if (!reporter) return;
+      const message = redactString(args.map(argToString).join(" "));
+      if (!message) return;
+      const timestamp = new Date().toISOString();
+      reporter.addBreadcrumb({
+        timestamp,
+        category: "log",
+        // Breadcrumb message cap (wire contract caps at 1024).
+        message: message.slice(0, 1024),
+        level,
+      });
+      const rec: ErrorRecord = {
+        schemaVersion: 1,
+        timestamp,
+        errorId: randomUUID(),
+        sessionId: reporter.sessionId,
+        level,
+        processType: "main",
+        // ErrorRecord message cap (schema max 8 KB).
+        message: message.slice(0, 8 * 1024),
+      };
+      reporter.pushError(rec);
+    } catch {
+      // never throw from diagnostics
+    }
+  };
+}
+
 if (isWorker) {
   const workerLog = createWorkerLogProxy();
   log = workerLog;
@@ -362,11 +420,17 @@ if (isWorker) {
   // eslint-disable-next-line @typescript-eslint/no-var-requires
   const electronLogModule = require("electron-log/main");
   // Ensure electron-log has the required methods, fall back to console if not
+  let resolved: {
+    info: (...args: unknown[]) => void;
+    error: (...args: unknown[]) => void;
+    warn: (...args: unknown[]) => void;
+    debug: (...args: unknown[]) => void;
+  };
   if (electronLogModule && typeof electronLogModule.info === "function") {
-    log = electronLogModule;
+    resolved = electronLogModule;
   } else {
     // Fallback to console if electron-log is not available
-    log = {
+    resolved = {
       info: console.log.bind(console),
       error: console.error.bind(console),
       warn: console.warn.bind(console),
@@ -374,6 +438,16 @@ if (isWorker) {
     };
   }
   logger = Logger.getInstance();
+  // Diagnostics bridge: every warn/error log also feeds the crash reporter's
+  // breadcrumb + recent-error buffers so crash uploads carry pre-crash
+  // context. Methods are wrapped explicitly (not spread) because electron-log
+  // method enumerability is not guaranteed. info/debug stay unbridged.
+  log = {
+    info: (...args: unknown[]) => resolved.info(...args),
+    debug: (...args: unknown[]) => resolved.debug(...args),
+    error: bridgeLogLevel(resolved.error, "error"),
+    warn: bridgeLogLevel(resolved.warn, "warn"),
+  };
 }
 
 export { log, logger };
