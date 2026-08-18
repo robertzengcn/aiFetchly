@@ -754,14 +754,23 @@ function initialize() {
       //}
     }
 
-    // Add event listener for window destruction
+    // Add event listener for window destruction. Capture the window this
+    // handler belongs to — the "closed" event fires asynchronously, so a
+    // replacement window may already have been assigned to `win` by the time
+    // it runs (crash recovery / second-instance recreation).
+    const windowBeingClosed = win;
     (win as any).on("closed", () => {
       console.log("Window closed event triggered");
       // INIT-02: Clear tracker webContents reference when window closes
       FileOperationTracker.clear();
       setMainWindow(null);
-      win = null;
-      rendererHtmlLoaded = false;
+      // Only clear the shared reference if it still points at THIS window —
+      // otherwise we'd null the live window's reference and every later
+      // lookup (login flow, IPC providers) would wrongly see "no window".
+      if (win === windowBeingClosed) {
+        win = null;
+        rendererHtmlLoaded = false;
+      }
     });
     // In this example, only windows with the `about:blank` url will be created.
     // All other urls will be blocked.
