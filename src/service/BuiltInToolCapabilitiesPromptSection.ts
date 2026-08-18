@@ -46,7 +46,7 @@ load them. When a request matches one of the capabilities below:
 |---|---|---|
 | Show/render/display data as HTML, a page, a report, a dashboard, a chart, a visual summary; "show result in html" | \`create_html_artifact\` | \`html page report display\` |
 | Create/overwrite/edit a workspace file; **export/download/convert/save data to a csv/xlsx/spreadsheet/json/file** — use \`file_write\` with the full content (NOT a shell echo, NOT row-by-row appends), \`file_edit\` for exact string replace | \`file_write\`, \`file_edit\` | \`file create write export csv\` |
-| Edit/analyze/compare/change background of LOCAL workspace images — NOT via shell/Pillow | \`attach_local_images\` (1-3 images), \`process_artifact_batch\` (same edit to many) | \`image edit attach\` |
+| Edit/analyze/compare LOCAL workspace images (any edit: background change/removal, contrast/brightness/color adjustment, crop/resize/rotate, add/remove objects, product photo retouch, visual Q&A) — NOT via shell/Pillow | \`attach_local_images\` (1-3 images), \`process_artifact_batch\` (same edit to many) | \`image edit attach\` |
 | Edit a previously AI-generated image from this chat (shown earlier as \`<generated_images>\`) | \`export_generated_artifacts\` (copy the \`aifetchly-generated-image://\` URL into the workspace), then \`attach_local_images\` with the workspace path | \`export generated image\` |
 | Check email inbox / unread / new / received mail, read an inbound message | \`list_email_inboxes\`, \`fetch_unread_emails\`, \`get_email_message\`, \`mark_email_processed\` | \`email inbox unread\` |
 | Draft or send an INBOUND email REPLY (these are NOT auto-promoted — always load via search) | \`create_email_reply_draft\`, \`send_email_reply\` | \`email reply send draft\` |

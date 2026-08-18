@@ -83,4 +83,18 @@ describe("buildBuiltInToolCapabilitiesSection", () => {
     expect(s).toContain("aifetchly-generated-image://");
     expect(s).toContain("attach_local_images");
   });
+
+  it("describes the full range of image editing operations, not just background", () => {
+    const s = buildBuiltInToolCapabilitiesSection();
+    // The image-edit row must cover general edits, not be narrowly scoped
+    // to background changes. Users may adjust contrast, crop, resize, add
+    // or remove objects, retouch product photos, etc.
+    expect(s).toContain("contrast");
+    expect(s).toContain("crop");
+    expect(s).toContain("resize");
+    expect(s).toContain("add/remove");
+    expect(s).toContain("product photo");
+    // Background operations are still mentioned but not the only focus.
+    expect(s).toContain("background");
+  });
 });
