@@ -40,8 +40,9 @@ const mockToolApprovalState = vi.hoisted(() => ({
   modes: new Map<string, string>(),
 }));
 const mockGetToolApprovalMode = vi.hoisted(() =>
-  vi.fn((conversationId: string) =>
-    mockToolApprovalState.modes.get(conversationId) ?? "ask_for_approval"
+  vi.fn(
+    (conversationId: string) =>
+      mockToolApprovalState.modes.get(conversationId) ?? "ask_for_approval"
   )
 );
 const mockSetToolApprovalMode = vi.hoisted(() =>
@@ -64,11 +65,13 @@ vi.mock("@/modules/token", () => {
       deleteValue: vi.fn().mockImplementation((key: string) => {
         mockState.tokenStore.delete(key);
       }),
-      hasValue: vi.fn().mockImplementation(
-        (key: string) =>
-          mockState.tokenStore.has(key) &&
-          (mockState.tokenStore.get(key)?.length ?? 0) > 0
-      ),
+      hasValue: vi
+        .fn()
+        .mockImplementation(
+          (key: string) =>
+            mockState.tokenStore.has(key) &&
+            (mockState.tokenStore.get(key)?.length ?? 0) > 0
+        ),
     })),
   };
 });
@@ -114,11 +117,31 @@ vi.mock("@/modules/AIChatV2Module", () => ({
 // Mock AiChatApi — openAIChatCompletionStream is controllable per-test.
 const mockOpenAIChatCompletionStream = vi.fn().mockResolvedValue(undefined);
 const mockListOpenAIModels = vi.fn().mockResolvedValue({ data: [] });
-vi.mock("@/api/aiChatApi", () => ({
-  AiChatApi: vi.fn().mockImplementation(() => ({
-    openAIChatCompletionStream: mockOpenAIChatCompletionStream,
-    listOpenAIModels: mockListOpenAIModels,
+const mockUserSignout = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+vi.mock("@/modules/user", () => ({
+  User: vi.fn().mockImplementation(() => ({
+    Signout: mockUserSignout,
+    removeToken: vi.fn().mockResolvedValue(undefined),
   })),
+}));
+
+vi.mock("@/api/aiChatApi", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/api/aiChatApi")>();
+  return {
+    ...actual,
+    AiChatApi: vi.fn().mockImplementation(() => ({
+      openAIChatCompletionStream: mockOpenAIChatCompletionStream,
+      listOpenAIModels: mockListOpenAIModels,
+    })),
+  };
+});
+
+vi.mock("@/service/DesktopNotifyService", () => ({
+  DesktopNotifyService: {
+    getInstance: () => ({
+      show: vi.fn().mockResolvedValue(false),
+    }),
+  },
 }));
 
 vi.mock("@/config/skillsRegistry", () => ({
@@ -183,6 +206,37 @@ vi.mock("@/modules/AgentDefinitionModule", () => ({
     listActiveForRuntime: vi.fn().mockResolvedValue([]),
   })),
 }));
+vi.mock("@/modules/SystemSettingModule", () => ({
+  SystemSettingModule: vi.fn().mockImplementation(() => ({
+    getSettingValue: vi.fn().mockResolvedValue(null),
+  })),
+}));
+vi.mock("@/service/WorkspaceResolver", () => ({
+  WorkspaceResolver: vi.fn().mockImplementation(() => ({
+    resolve: vi.fn().mockResolvedValue(null),
+  })),
+}));
+vi.mock("@/service/AIUserMemoryRetrievalService", () => ({
+  AIUserMemoryRetrievalService: vi.fn().mockImplementation(() => ({
+    retrieve: vi.fn().mockResolvedValue({ contextBlock: "", memories: [] }),
+  })),
+}));
+vi.mock("@/service/AIWorkspaceMemoryRetrievalService", () => ({
+  AIWorkspaceMemoryRetrievalService: vi.fn().mockImplementation(() => ({
+    retrieve: vi.fn().mockResolvedValue({ contextBlock: "", memories: [] }),
+  })),
+}));
+vi.mock("@/service/aifetchlyConfig/AIFetchlyContextLoader", () => ({
+  AIFetchlyContextLoader: class {
+    static formatInstructionBlock(): string {
+      return "";
+    }
+
+    async getInstructionBlocks(): Promise<[]> {
+      return [];
+    }
+  },
+}));
 
 const mockResetSharedAutoDreamService = vi.hoisted(() => vi.fn());
 const mockResetSharedWorkspaceAutoDreamService = vi.hoisted(() => vi.fn());
@@ -200,7 +254,8 @@ vi.mock("@/service/AIAutoDreamFactory", () => ({
   getSharedWorkspaceAutoDreamService: vi.fn(
     () => mockSharedWorkspaceAutoDreamService
   ),
-  resetSharedWorkspaceAutoDreamService: mockResetSharedWorkspaceAutoDreamService,
+  resetSharedWorkspaceAutoDreamService:
+    mockResetSharedWorkspaceAutoDreamService,
 }));
 
 import {
@@ -279,6 +334,49 @@ describe("AI Chat V2 IPC handlers", () => {
     const result = await mockIpcMain.callHandler(AI_CHAT_V2_CONVERSATIONS);
     expect(mockGetConversations).toHaveBeenCalled();
     expect(result).toMatchObject({ status: true });
+  });
+
+  it("loads assistant history content and reasoning from renderer object payloads", async () => {
+    mockGetConversationMessages.mockResolvedValueOnce([
+      {
+        messageId: "assistant-history-1",
+        conversationId: "v2-1",
+        role: "assistant",
+        content: "Historical answer",
+        timestamp: "2026-08-02T08:00:00.000Z",
+        messageType: "message",
+        model: "gpt-test",
+        tokensUsed: 42,
+        metadata: JSON.stringify({
+          reasoning: {
+            content: "Historical reasoning",
+            format: "plain_text",
+            source: "server",
+            truncated: false,
+          },
+        }),
+      },
+    ]);
+
+    const result = await mockIpcMain.callHandler(
+      AI_CHAT_V2_HISTORY,
+      {},
+      { conversationId: "v2-1" }
+    );
+
+    expect(result).toMatchObject({ status: true });
+    const data = (result as { data: { messages: unknown[] } }).data;
+    expect(data.messages).toHaveLength(1);
+    expect(data.messages[0]).toMatchObject({
+      content: "Historical answer",
+      timestamp: "2026-08-02T08:00:00.000Z",
+      metadata: {
+        source: "chat-v2",
+        reasoning: {
+          content: "Historical reasoning",
+        },
+      },
+    });
   });
 
   it("clears a conversation through the module", async () => {
@@ -574,7 +672,60 @@ describe("AI Chat V2 — stream lifecycle", () => {
     );
   });
 
-  it("maps 401 errors to a sign-in prompt", async () => {
+  it("targeted stream-stop cancels only the named conversation", async () => {
+    mockOpenAIChatCompletionStream.mockImplementation(
+      async (
+        _req,
+        onChunk: (c: unknown) => void,
+        opts: { signal: AbortSignal }
+      ) => {
+        onChunk({ choices: [{ delta: { content: "partial" } }] });
+        return new Promise((_resolve, reject) => {
+          if (opts.signal.aborted) {
+            reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
+            return;
+          }
+          opts.signal.addEventListener("abort", () => {
+            reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
+          });
+        });
+      }
+    );
+
+    const senderSend = vi.fn();
+    const event = { sender: { send: senderSend } };
+
+    const streamPromise = mockIpcMain.callHandler(
+      AI_CHAT_V2_STREAM,
+      event,
+      JSON.stringify({ message: "hi" })
+    );
+    // Allow the chunk callback to fire before stopping.
+    await new Promise((r) => setTimeout(r, 30));
+
+    // A stop for a DIFFERENT conversation must not touch this stream.
+    await mockIpcMain.callHandler(
+      AI_CHAT_V2_STREAM_STOP,
+      event,
+      JSON.stringify({ conversationId: "v2-other" })
+    );
+    await new Promise((r) => setTimeout(r, 30));
+    expect(findCompletePayload(senderSend)).toBeUndefined();
+
+    // A stop naming THIS conversation (v2-test-conv) cancels it.
+    await mockIpcMain.callHandler(
+      AI_CHAT_V2_STREAM_STOP,
+      event,
+      JSON.stringify({ conversationId: "v2-test-conv" })
+    );
+    await streamPromise;
+
+    const payload = findCompletePayload(senderSend);
+    expect(payload?.eventType).toBe("cancelled");
+  });
+
+  it("maps 401/403 errors to AUTH_EXPIRED and signs the user out", async () => {
+    mockUserSignout.mockClear();
     mockOpenAIChatCompletionStream.mockRejectedValue(
       new Error("Server returned 401: Unauthorized")
     );
@@ -588,7 +739,11 @@ describe("AI Chat V2 — stream lifecycle", () => {
 
     const payload = findCompletePayload(senderSend);
     expect(payload?.eventType).toBe("error");
-    expect(payload?.errorMessage).toBe("Please sign in again.");
+    expect(payload?.errorMessage).toBe("AUTH_EXPIRED");
+    // Signout is fire-and-forget; give the microtask a tick.
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(mockUserSignout).toHaveBeenCalled();
   });
 
   it("maps unmapped errors to a generic message (no raw leak)", async () => {
@@ -1014,5 +1169,139 @@ describe("AI Chat V2 — conversationId type validation", () => {
     );
     expect(result).toMatchObject({ status: false });
     expect((result as { msg: string }).msg).toContain("string");
+  });
+});
+
+describe("AI Chat V2 — reasoning streaming + persistence", () => {
+  beforeEach(() => {
+    setupElectronMocks();
+    vi.clearAllMocks();
+    mockOpenAIChatCompletionStream.mockResolvedValue(undefined);
+    registerAiChatV2IpcHandlers();
+  });
+  afterEach(() => {
+    resetElectronMocks();
+  });
+
+  it("emits a reasoning_delta chunk separate from token and persists metadata.reasoning", async () => {
+    mockOpenAIChatCompletionStream.mockImplementation(
+      async (_req, onChunk: (c: unknown) => void) => {
+        // Reasoning arrives before the answer.
+        onChunk({ choices: [{ delta: { reasoning_content: "Thinking..." } }] });
+        onChunk({ choices: [{ delta: { content: "Answer" } }] });
+        onChunk({
+          choices: [{ delta: { content: "" }, finish_reason: "stop" }],
+        });
+      }
+    );
+
+    const senderSend = vi.fn();
+    await mockIpcMain.callHandler(
+      AI_CHAT_V2_STREAM,
+      { sender: { send: senderSend } },
+      JSON.stringify({ message: "hi", showReasoning: true })
+    );
+
+    // 1. A reasoning_delta chunk was sent on the chunk channel.
+    const reasoningChunk = senderSend.mock.calls
+      .filter(([ch]) => ch === AI_CHAT_V2_STREAM_CHUNK)
+      .map(([, p]) => JSON.parse(p as string))
+      .find((c) => c.eventType === "reasoning_delta");
+    expect(reasoningChunk).toMatchObject({
+      reasoningDelta: "Thinking...",
+    });
+
+    // 2. The answer token chunk was sent too, and stays separate.
+    const tokenChunks = senderSend.mock.calls
+      .filter(([ch]) => ch === AI_CHAT_V2_STREAM_CHUNK)
+      .map(([, p]) => JSON.parse(p as string))
+      .filter((c) => c.eventType === "token");
+    expect(tokenChunks).toHaveLength(1);
+    expect(tokenChunks[0].contentDelta).toBe("Answer");
+
+    // 3. Reasoning was persisted on the assistant message, separate from content.
+    expect(mockSaveAssistantMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: "Answer",
+        metadata: expect.objectContaining({
+          reasoning: expect.objectContaining({
+            content: "Thinking...",
+            format: "plain_text",
+            source: "server",
+            truncated: false,
+          }),
+        }),
+      })
+    );
+  });
+
+  it("does not persist reasoning when the model emits none", async () => {
+    mockOpenAIChatCompletionStream.mockImplementation(
+      async (_req, onChunk: (c: unknown) => void) => {
+        onChunk({ choices: [{ delta: { content: "No reasoning here" } }] });
+        onChunk({
+          choices: [{ delta: { content: "" }, finish_reason: "stop" }],
+        });
+      }
+    );
+
+    const senderSend = vi.fn();
+    await mockIpcMain.callHandler(
+      AI_CHAT_V2_STREAM,
+      { sender: { send: senderSend } },
+      JSON.stringify({ message: "hi", showReasoning: true })
+    );
+
+    const reasoningChunk = senderSend.mock.calls
+      .filter(([ch]) => ch === AI_CHAT_V2_STREAM_CHUNK)
+      .map(([, p]) => JSON.parse(p as string))
+      .find((c) => c.eventType === "reasoning_delta");
+    expect(reasoningChunk).toBeUndefined();
+
+    const saved = mockSaveAssistantMessage.mock.calls[0]?.[0] as
+      | { metadata?: { reasoning?: unknown } }
+      | undefined;
+    expect(saved?.metadata?.reasoning).toBeUndefined();
+  });
+
+  it("rejects malformed reasoning option before streaming", async () => {
+    const senderSend = vi.fn();
+    await mockIpcMain.callHandler(
+      AI_CHAT_V2_STREAM,
+      { sender: { send: senderSend } },
+      JSON.stringify({ message: "hi", reasoning: { enabled: "yes" } })
+    );
+    const payload = findCompletePayload(senderSend);
+    expect(payload?.eventType).toBe("error");
+    expect(payload?.errorMessage).toContain("reasoning");
+    expect(mockOpenAIChatCompletionStream).not.toHaveBeenCalled();
+  });
+
+  it("rejects out-of-enum reasoning.effort and array reasoning payloads", async () => {
+    const senderSend = vi.fn();
+    await mockIpcMain.callHandler(
+      AI_CHAT_V2_STREAM,
+      { sender: { send: senderSend } },
+      JSON.stringify({
+        message: "hi",
+        reasoning: { enabled: true, effort: "DROP TABLE" },
+      })
+    );
+    let payload = findCompletePayload(senderSend);
+    expect(payload?.eventType).toBe("error");
+    expect(payload?.errorMessage).toContain("effort");
+
+    // Array with a boolean `enabled` would pass a naive typeof-object check.
+    await mockIpcMain.callHandler(
+      AI_CHAT_V2_STREAM,
+      { sender: { send: senderSend } },
+      JSON.stringify({
+        message: "hi",
+        reasoning: [{ enabled: true }],
+      })
+    );
+    payload = findCompletePayload(senderSend);
+    expect(payload?.eventType).toBe("error");
+    expect(mockOpenAIChatCompletionStream).not.toHaveBeenCalled();
   });
 });

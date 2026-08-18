@@ -20,6 +20,11 @@ export interface DefaultModelProvider {
   } | null>;
 }
 
+export interface EmbeddingModelCatalogOptions {
+  /** Whether the catalog may contact the remote AI server. */
+  includeRemote?: boolean;
+}
+
 /**
  * Merges remote embedding models (from the AI server) with built-in local
  * embedding models into a single model list used by the UI and IPC validation.
@@ -50,24 +55,28 @@ export class EmbeddingModelCatalogService {
    * returns a local-only catalog instead so the UI can always offer the free
    * local model.
    */
-  async listModels(): Promise<AvailableModelsResponse> {
+  async listModels(
+    options: EmbeddingModelCatalogOptions = {}
+  ): Promise<AvailableModelsResponse> {
     let remoteModels: Record<string, ModelInfo> = {};
     let remoteDefault: string | undefined;
     let configuredCount = 0;
 
-    try {
-      const response = await this.ragConfigApi.getAvailableEmbeddingModels();
-      if (response.status && response.data) {
-        remoteModels = this.normalizeRemoteModels(response.data.models);
-        remoteDefault = response.data.default_model;
-        configuredCount =
-          response.data.configured_models ?? Object.keys(remoteModels).length;
+    if (options.includeRemote !== false) {
+      try {
+        const response = await this.ragConfigApi.getAvailableEmbeddingModels();
+        if (response.status && response.data) {
+          remoteModels = this.normalizeRemoteModels(response.data.models);
+          remoteDefault = response.data.default_model;
+          configuredCount =
+            response.data.configured_models ?? Object.keys(remoteModels).length;
+        }
+      } catch (error) {
+        log.warn(
+          "[EmbeddingModelCatalog] Remote model list unavailable; returning local-only catalog:",
+          error instanceof Error ? error.message : error
+        );
       }
-    } catch (error) {
-      log.warn(
-        "[EmbeddingModelCatalog] Remote model list unavailable; returning local-only catalog:",
-        error instanceof Error ? error.message : error
-      );
     }
 
     const merged: Record<string, ModelInfo> = { ...remoteModels };

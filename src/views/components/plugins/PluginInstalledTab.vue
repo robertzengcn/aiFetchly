@@ -32,6 +32,7 @@
             <th>{{ t("plugins.column_source_path") }}</th>
             <th>{{ t("plugins.column_sub_agent") }}</th>
             <th>{{ t("plugins.column_skills") }}</th>
+            <th>{{ t("plugins.column_hooks") }}</th>
             <th>{{ t("plugins.column_mcp_servers") }}</th>
             <th>{{ t("plugins.column_status") }}</th>
             <th>{{ t("plugins.column_actions") }}</th>
@@ -55,6 +56,7 @@
             </td>
             <td>{{ p.agentCount }}</td>
             <td>{{ p.skillCount }}</td>
+            <td>{{ p.hookCount }}</td>
             <td>{{ p.mcpServerCount }}</td>
             <td><v-chip :color="healthColor(p)" size="small">{{ healthLabel(p) }}</v-chip></td>
             <td>

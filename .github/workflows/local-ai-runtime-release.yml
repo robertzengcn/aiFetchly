@@ -1,0 +1,218 @@
+name: Manual Local AI Runtime Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: GitHub Release tag that will host the runtime assets
+        required: true
+        default: local-ai-runtime-v1.0.0
+        type: string
+      runtime_version:
+        description: Version embedded into runtime archive names and metadata
+        required: true
+        default: 1.0.0
+        type: string
+      min_app_version:
+        description: Minimum app version allowed to install these runtimes
+        required: true
+        default: 1.0.0
+        type: string
+      publish_github_release:
+        description: Create/update the GitHub Release and upload assets
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  build-local-ai-runtimes:
+    name: Build ${{ matrix.platform }} ${{ matrix.arch }} runtimes
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    env:
+      RUNTIME_VERSION: ${{ inputs.runtime_version }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: win32
+            arch: x64
+            runner: windows-2022
+          - platform: darwin
+            arch: x64
+            runner: macos-15-intel
+          - platform: darwin
+            arch: arm64
+            runner: macos-15
+          - platform: linux
+            arch: x64
+            runner: ubuntu-22.04
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set reproducible build timestamp
+        shell: bash
+        run: echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)" >> "$GITHUB_ENV"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
+          cache: yarn
+
+      - name: Set up Python for node-gyp
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Configure node-gyp Python
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHON_BIN="$(python -c 'import sys; print(sys.executable)')"
+          echo "Using Python for node-gyp: ${PYTHON_BIN}"
+          python --version
+          echo "PYTHON=${PYTHON_BIN}" >> "$GITHUB_ENV"
+          echo "npm_config_python=${PYTHON_BIN}" >> "$GITHUB_ENV"
+          echo "NODE_GYP_FORCE_PYTHON=${PYTHON_BIN}" >> "$GITHUB_ENV"
+
+      - name: Install Linux system dependencies for native modules
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsecret-1-dev
+
+      - name: Install dependencies from lockfile
+        run: yarn install --frozen-lockfile
+
+      - name: Resolve Electron build metadata
+        shell: bash
+        run: node scripts/resolve-electron-build-metadata.mjs --github-env "$GITHUB_ENV"
+
+      - name: Build embedding worker
+        shell: bash
+        run: node node_modules/vite/bin/vite.js build --config vite.localEmbeddingWorker.config.mjs
+
+      - name: Build embedding and voice runtimes
+        shell: bash
+        run: |
+          set -euo pipefail
+          for rt in embedding-xenova voice-sherpa; do
+            node scripts/build-local-ai-runtime.mjs \
+              --runtime "$rt" --runtime-version "$RUNTIME_VERSION" \
+              --platform "${{ matrix.platform }}" --arch "${{ matrix.arch }}" \
+              --electron-version "$ELECTRON_VERSION" --node-module-abi "$ELECTRON_MODULE_ABI" \
+              --output out/local-ai-runtimes \
+              --worker-output dist/childprocess \
+              --commit "${{ github.sha }}" --workflow-run-id "${{ github.run_id }}"
+          done
+
+      - name: Verify runtime archives
+        shell: bash
+        run: |
+          set -euo pipefail
+          for f in out/local-ai-runtimes/*.zip; do
+            base="$(basename "$f" .zip)"
+            plat="$(echo "$base" | awk -F- '{print $3}')"
+            arch="$(echo "$base" | awk -F- '{print $4}')"
+            node scripts/verify-local-ai-runtime.mjs \
+              --archive "$f" --platform "$plat" --arch "$arch" \
+              --electron-version "$ELECTRON_VERSION" --node-module-abi "$ELECTRON_MODULE_ABI"
+          done
+
+      - name: Upload runtime archives
+        uses: actions/upload-artifact@v7
+        with:
+          name: local-ai-runtimes-${{ matrix.platform }}-${{ matrix.arch }}
+          path: |
+            out/local-ai-runtimes/*.zip
+            out/local-ai-runtimes/*.metadata.json
+          if-no-files-found: error
+
+  generate-runtime-catalog:
+    name: Generate runtime catalog
+    needs: build-local-ai-runtimes
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      RUNTIME_VERSION: ${{ inputs.runtime_version }}
+      MIN_APP_VERSION: ${{ inputs.min_app_version }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set reproducible catalog timestamp
+        shell: bash
+        run: echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)" >> "$GITHUB_ENV"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
+
+      - name: Download runtime archives
+        uses: actions/download-artifact@v8
+        with:
+          pattern: local-ai-runtimes-*
+          path: runtime-assets
+          merge-multiple: true
+
+      - name: Generate runtime catalog
+        shell: bash
+        run: |
+          node scripts/generate-local-ai-runtime-catalog.mjs \
+            --input runtime-assets \
+            --release-tag "${{ inputs.release_tag }}" \
+            --repository "${{ github.repository }}" \
+            --runtime-version "$RUNTIME_VERSION" \
+            --min-app-version "$MIN_APP_VERSION" \
+            --output runtime-assets/local-ai-runtimes.json
+
+      - name: Upload release assets
+        uses: actions/upload-artifact@v7
+        with:
+          name: local-ai-runtime-release-assets
+          path: runtime-assets
+          if-no-files-found: error
+
+  publish-runtime-release:
+    name: Publish runtime GitHub Release
+    if: ${{ inputs.publish_github_release }}
+    needs: generate-runtime-catalog
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download release assets
+        uses: actions/download-artifact@v8
+        with:
+          name: local-ai-runtime-release-assets
+          path: runtime-assets
+
+      - name: Create or update GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          RELEASE_TARGET: ${{ github.sha }}
+          RUNTIME_VERSION: ${{ inputs.runtime_version }}
+          MIN_APP_VERSION: ${{ inputs.min_app_version }}
+        run: |
+          set -euo pipefail
+          release_title="Local AI Runtime ${RUNTIME_VERSION}"
+          release_notes="Local AI runtime assets for runtime version ${RUNTIME_VERSION}. Minimum app version: ${MIN_APP_VERSION}."
+
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release edit "$RELEASE_TAG" --title "$release_title" --notes "$release_notes"
+          else
+            gh release create "$RELEASE_TAG" --target "$RELEASE_TARGET" --title "$release_title" --notes "$release_notes"
+          fi
+
+          gh release upload "$RELEASE_TAG" runtime-assets/* --clobber

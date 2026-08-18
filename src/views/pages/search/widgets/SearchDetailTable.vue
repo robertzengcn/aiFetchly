@@ -605,23 +605,24 @@ const FakeAPI = {
     }
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const headers=ref<Array<any>>([])
 headers.value = [
     {
-        title: computed(_ => CapitalizeFirstLetter(t("searchresult.id"))),
+        title: computed(() => CapitalizeFirstLetter(t("searchresult.id"))),
         align: 'start',
         sortable: false,
         key: 'index',
     },
     {
-        title: computed(_ => CapitalizeFirstLetter(t("searchresult.title"))),
+        title: computed(() => CapitalizeFirstLetter(t("searchresult.title"))),
         align: 'start',
         sortable: false,
         key: 'title',
         width: '20px'
     },
     {
-        title: computed(_ => CapitalizeFirstLetter(t("searchresult.link"))),
+        title: computed(() => CapitalizeFirstLetter(t("searchresult.link"))),
         align: 'start',
         sortable: false,
         key: 'link',
@@ -631,19 +632,19 @@ headers.value = [
         // value: computed(value => value.join(', '))
     },
     {
-        title: computed(_ => CapitalizeFirstLetter(t("searchresult.keyword"))),
+        title: computed(() => CapitalizeFirstLetter(t("searchresult.keyword"))),
         align: 'start',
         sortable: false,
         key: 'keyword',
     },
     {
-        title: computed(_ => CapitalizeFirstLetter(t("searchresult.record_time"))),
+        title: computed(() => CapitalizeFirstLetter(t("searchresult.record_time"))),
         align: 'start',
         sortable: false,
         key: 'record_time',
     },
     {
-        title: computed(_ => CapitalizeFirstLetter(t("websiteAnalysis.customer_industry") || 'Customer Industry')),
+        title: computed(() => CapitalizeFirstLetter(t("websiteAnalysis.customer_industry") || 'Customer Industry')),
         align: 'start',
         sortable: false,
         key: 'ai_industry',
@@ -651,7 +652,7 @@ headers.value = [
         minWidth: '150px',
     },
     {
-        title: computed(_ => CapitalizeFirstLetter(t("websiteAnalysis.probability") || 'Probability of Potential Customers')),
+        title: computed(() => CapitalizeFirstLetter(t("websiteAnalysis.probability") || 'Probability of Potential Customers')),
         align: 'start',
         sortable: false,
         key: 'ai_match_score',
@@ -659,7 +660,7 @@ headers.value = [
         minWidth: '150px',
     },
     {
-        title: computed(_ => CapitalizeFirstLetter(t("websiteAnalysis.status") || 'Analysis Status')),
+        title: computed(() => CapitalizeFirstLetter(t("websiteAnalysis.status") || 'Analysis Status')),
         align: 'start',
         sortable: false,
         key: 'ai_analysis_status',
@@ -667,7 +668,7 @@ headers.value = [
         minWidth: '120px',
     },
     {
-        title: computed(_ => CapitalizeFirstLetter(t("contactExtraction.contact_extraction_status") || 'Profile Insights')),
+        title: computed(() => CapitalizeFirstLetter(t("contactExtraction.contact_extraction_status") || 'Profile Insights')),
         align: 'start',
         sortable: false,
         key: 'extraction_status',
@@ -675,7 +676,7 @@ headers.value = [
         minWidth: '120px',
     },
     {
-        title: computed(_ => CapitalizeFirstLetter(t("contactExtraction.email") || 'Email')),
+        title: computed(() => CapitalizeFirstLetter(t("contactExtraction.email") || 'Email')),
         align: 'start',
         sortable: false,
         key: 'contact_email',
@@ -683,7 +684,7 @@ headers.value = [
         minWidth: '150px',
     },
     {
-        title: computed(_ => CapitalizeFirstLetter(t("contactExtraction.phone") || 'Phone')),
+        title: computed(() => CapitalizeFirstLetter(t("contactExtraction.phone") || 'Phone')),
         align: 'start',
         sortable: false,
         key: 'contact_phone',
@@ -691,7 +692,7 @@ headers.value = [
         minWidth: '120px',
     },
     {
-        title: computed(_ => CapitalizeFirstLetter(t("contactExtraction.address") || 'Address')),
+        title: computed(() => CapitalizeFirstLetter(t("contactExtraction.address") || 'Address')),
         align: 'start',
         sortable: false,
         key: 'contact_address',
@@ -699,7 +700,7 @@ headers.value = [
         minWidth: '150px',
     },
     {
-        title: computed(_ => CapitalizeFirstLetter(t("common.actions") || 'Actions')),
+        title: computed(() => CapitalizeFirstLetter(t("common.actions") || 'Actions')),
         align: 'center',
         sortable: false,
         key: 'actions',
@@ -723,6 +724,7 @@ const currentPage = ref(1);
 const analysisProgress = ref({ current: 0, total: 0 });
 
 // Contact extraction state
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const contactInfoMap = ref<Map<number, any>>(new Map());
 
 // Snackbar notice when contact extraction is started (backend processing)
@@ -993,6 +995,7 @@ async function handleExport() {
 async function exportContactInfoToCSV() {
     try {
         // Get all contact info
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const contactInfoData: any[] = [];
 
         // Map server items with their contact info
@@ -1156,6 +1159,7 @@ function isExtractionInProgress(resultId: number): boolean {
 /**
  * Get contact info for an item
  */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function getContactInfo(resultId: number): any {
     return contactInfoMap.value.get(resultId);
 }
@@ -1412,6 +1416,7 @@ async function handleAnalyzeConfirm(data: { businessInfo: string; saveForFuture:
     }
 
     let currentBatchId: string | null = null;
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars, @typescript-eslint/no-explicit-any
     const resultsMap = new Map<number, { success: boolean; data?: any; error?: string }>();
 
     try {
@@ -1491,6 +1496,10 @@ async function handleAnalyzeConfirm(data: { businessInfo: string; saveForFuture:
         // Close dialog
         showAnalysisDialog.value = false;
         
+        // Keep analyzing flag true until we detect completion via progress updates
+        // The progress handler will update the table as items complete and clear the flag when done
+        // Set a timeout to clear analyzing flag as a fallback (in case progress updates fail)
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
         const fallbackTimeout = setTimeout(() => {
             if (analyzing.value) {
                 analyzing.value = false;

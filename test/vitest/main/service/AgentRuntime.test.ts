@@ -144,6 +144,20 @@ let mockLoopResult: {
   fullContent: string;
   partialContent?: string;
   error?: unknown;
+  /** Present only for type: "paused_for_permission" results. */
+  pending?: {
+    conversationId: string;
+    assistantMessageId: string;
+    conversationMessages: unknown[];
+    abortController: AbortController;
+    request: Record<string, unknown>;
+    openAITools: unknown[];
+    nextRound: number;
+    toolCallId: string;
+    toolName: string;
+    toolArguments: Record<string, unknown>;
+    eventSink: { emit: () => void };
+  };
 } = {
   type: "completed",
   fullContent: JSON.stringify({
@@ -157,8 +171,13 @@ let lastLoopInput:
   | {
       request: { model?: string };
       openAITools: Array<{ function: { name: string } }>;
+      abortController: AbortController;
+      transientRetryConfig?: { maxAttempts?: number; baseDelayMs?: number };
     }
   | undefined;
+// Results the mocked loop received from the runtime's policy-checked
+// executeTool wrapper — lets tests assert how AgentRuntime rewrote them.
+let executeToolResults: Array<Record<string, unknown>> = [];
 
 vi.mock("@/service/AIChatQueryLoop", () => ({
   AIChatQueryLoop: class {
@@ -174,14 +193,16 @@ vi.mock("@/service/AIChatQueryLoop", () => ({
     async run(input: {
       request: { model?: string };
       openAITools: Array<{ function: { name: string } }>;
+      abortController: AbortController;
     }) {
       lastLoopInput = input;
       for (let i = 0; i < mockLoopCallCount; i++) {
-        await this.deps.executeTool(
+        const res = await this.deps.executeTool(
           "lookup",
           { q: `call-${i}` },
           { toolCallId: `call-${i}` }
         );
+        executeToolResults.push(res as Record<string, unknown>);
       }
       return mockLoopResult;
     }
@@ -224,6 +245,7 @@ describe("AgentRuntime", () => {
       }),
     };
     lastLoopInput = undefined;
+    executeToolResults = [];
   });
 
   it("fails when an agent exceeds its max tool calls", async () => {
@@ -247,6 +269,17 @@ describe("AgentRuntime", () => {
 
     expect(result.status).toBe("failed");
     expect(result.errorMessage).toContain("exceeded max tool calls");
+  });
+
+  // Regression: subagents run under a tight maxRuntimeMs deadline, so they
+  // must retry transient AI-server failures INSTANTLY (baseDelayMs: 0) rather
+  // than burning their runtime budget on exponential backoff sleeps. The
+  // actual retry mechanics are covered by AIChatQueryLoop's transient-retry
+  // suite; here we verify AgentRuntime wires the instant-retry contract.
+  it("passes instant-retry config (baseDelayMs: 0) to the agent's query loop", async () => {
+    const runtime = new AgentRuntime();
+    await runtime.runSync(makeRequest());
+    expect(lastLoopInput?.transientRetryConfig).toEqual({ baseDelayMs: 0 });
   });
 
   // Regression: when the inner agent emits prose instead of JSON, the runtime
@@ -383,6 +416,108 @@ describe("AgentRuntime", () => {
     expect(toolNames).toContain("glob_files");
     expect(toolNames).not.toContain("Bash");
     expect(toolNames).not.toContain("haiku");
+  });
+
+  it("propagates an already-aborted parent signal into the agent loop", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const runtime = new AgentRuntime();
+
+    await runtime.runSync(makeRequest(), { signal: controller.signal });
+
+    expect(lastLoopInput?.abortController.signal.aborted).toBe(true);
+  });
+
+  // Regression: headless agent tasks cannot show SkillExecutor's interactive
+  // permission prompt. Previously the prompt result flowed through untouched,
+  // AIChatQueryLoop returned paused_for_permission, and the whole task failed
+  // with "Agent task paused for permission (not supported in v1 runtime)"
+  // (e.g. agent-batch-worker calling file_read with no stored grant). The
+  // runtime must rewrite the prompt into an explicit denied result so the
+  // loop feeds the failure back to the agent model and the task continues.
+  it("rewrites permission-prompt results as denied tool results instead of pausing", async () => {
+    mockLoopCallCount = 1;
+    const runtime = new AgentRuntime();
+    const result = await runtime.runSync(makeRequest(), {
+      executeTool: vi.fn(async (name, _args, ctx) => ({
+        tool_call_id: ctx.toolCallId,
+        tool_name: name,
+        success: false,
+        result: {
+          error: "Permission required",
+          needsPermissionPrompt: true,
+          permissionCategory: "filesystem",
+        },
+        execution_time_ms: 1,
+      })),
+    });
+
+    // The task itself completes — the permission denial is a per-tool
+    // failure the agent model can adapt to, not a task-killing pause.
+    expect(result.status).toBe("completed");
+    expect(result.errorMessage).toBeUndefined();
+
+    // What the loop received must be a plain denied result: no
+    // needsPermissionPrompt flag (so the loop never enters its
+    // paused_for_permission branch) plus an actionable message.
+    expect(executeToolResults).toHaveLength(1);
+    const rewritten = executeToolResults[0] as {
+      success: boolean;
+      result: Record<string, unknown>;
+    };
+    expect(rewritten.success).toBe(false);
+    expect(rewritten.result.needsPermissionPrompt).toBeUndefined();
+    expect(rewritten.result.agentPermissionDenied).toBe(true);
+    expect(rewritten.result.error).toMatch(/has not been granted/);
+    expect(rewritten.result.error).toMatch(/category: filesystem/);
+  });
+
+  // Regression: if a permission pause ever slips past policyCheckedExecute
+  // (e.g. a future code path bypasses the wrapper), the fallback branch must
+  // fail with an ACTIONABLE message naming the tool and how to grant the
+  // permission — not the old opaque "not supported in v1 runtime".
+  it("fails with an actionable message when a permission pause slips through to the loop-result fallback", async () => {
+    mockLoopResult = {
+      type: "paused_for_permission",
+      fullContent: "",
+      pending: {
+        conversationId: "agent-v2-x",
+        assistantMessageId: "agent-assistant-x",
+        conversationMessages: [],
+        abortController: new AbortController(),
+        request: { message: "x", conversationId: "agent-v2-x", mode: "chat" },
+        openAITools: [],
+        nextRound: 1,
+        toolCallId: "call-1",
+        toolName: "scrape_urls_from_search_engine",
+        toolArguments: { search_engine: "bing", query: "dentists" },
+        eventSink: { emit: () => {} },
+      },
+    };
+
+    const runtime = new AgentRuntime();
+    const result = await runtime.runSync(makeRequest());
+
+    expect(result.status).toBe("failed");
+    expect(result.errorMessage).toContain("scrape_urls_from_search_engine");
+    expect(result.errorMessage).toMatch(
+      /cannot show permission prompts|Grant the tool permission/
+    );
+  });
+
+  // The plan-question pause shares the same fallback branch; keep its
+  // message contract stable too.
+  it("fails with a clear message when the loop pauses for a plan question", async () => {
+    mockLoopResult = {
+      type: "paused_for_plan_question",
+      fullContent: "",
+    };
+
+    const runtime = new AgentRuntime();
+    const result = await runtime.runSync(makeRequest());
+
+    expect(result.status).toBe("failed");
+    expect(result.errorMessage).toMatch(/plan question/);
   });
 
   it("rejects override-mismatched JSON with a parseWarning (lenient fallback)", async () => {

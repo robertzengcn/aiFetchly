@@ -18,7 +18,7 @@ class="my-4 layout_navigation" :rail="navState.rail" expand-on-hover rail-width=
             </v-list>
             <v-divider></v-divider>
 
-            <v-list nav class="mx-2">
+            <v-list nav class="mx-2 navigation_routes">
                 <v-list-subheader>{{ t('route.dashboard') }}</v-list-subheader>
                 <template v-for="(item, key) in navState.routes" :key="key">
                     <v-list-item
@@ -39,11 +39,48 @@ v-if="item.meta?.visible && (!item.children || visibleRouteChildren(item).length
                     </v-list-group>
                     <v-list-subheader v-if="item.name === 'Miscellaneous'">Other</v-list-subheader>
                 </template>
-                <v-list-item prepend-icon="mdi-text-box" class="mx-1">
+                    <v-list-item prepend-icon="mdi-text-box" class="mx-1">
                     <v-list-item-title><a
-target="_blank" href="https://vuetifyjs.com/"
+target="_blank" href="https://docs.aifetchly.com"
                             class="link">Document</a></v-list-item-title>
                 </v-list-item>
+            </v-list>
+            <v-list nav class="mx-2 navigation_account">
+                <v-menu :location="location">
+                    <template v-slot:activator="{ props }">
+                        <v-list-item
+                            v-bind="props"
+                            class="mx-1 account_item"
+                            :title="showAccountText ? accountEmail : undefined"
+                        >
+                            <template v-slot:prepend>
+                                <v-avatar class="account_icon" size="32">
+                                    <v-icon icon="mdi-account-circle" size="20" />
+                                </v-avatar>
+                            </template>
+                            <template v-if="showAccountText" v-slot:append>
+                                <v-icon icon="mdi-chevron-up" size="small" />
+                            </template>
+                        </v-list-item>
+                    </template>
+                    <v-list nav class="h_a_menu">
+                        <v-list-item
+                            v-if="accountPlanLabel"
+                            :title="accountPlanLabel"
+                            :prepend-icon="accountPlanIcon"
+                            class="plan_menu_item"
+                        />
+                        <v-list-item
+                            v-if="showUpgradePlan"
+                            :title="t('layout.upgrade_plan') || 'Upgrade'"
+                            prepend-icon="mdi-rocket-launch"
+                            class="upgrade_menu_item"
+                            @click="openPricingPlan"
+                        />
+                        <v-list-item :title="t('layout.system_setting')" prepend-icon="mdi-cog" @click="gotoSystemsetting" />
+                        <v-list-item :title="t('layout.login_out')" prepend-icon="mdi-login" @click="Usersignout" />
+                    </v-list>
+                </v-menu>
             </v-list>
         </v-navigation-drawer>
         <main class="app_main">
@@ -80,19 +117,8 @@ v-if="mainStore.isMobile" variant="text" icon="mdi-menu"
                             </v-list-item>
                         </v-list>
                     </v-menu>
-                    <v-btn variant="text" icon="mdi-chat" @click="toggleChat">
+                    <v-btn variant="text" icon="mdi-chat" data-testid="ai-chat-toggle" @click="toggleChat">
                         <v-icon size="small"></v-icon>
-                    </v-btn>
-                    <v-btn variant="text" append-icon="mdi-chevron-down" class="mr-2">
-                        <span v-if="!mainStore.isMobile">{{ userName }}</span>
-                        <v-icon v-if="!mainStore.isMobile && isPlusPlan" icon="mdi-plus-circle" size="small" class="ml-1" color="primary" />
-                        <v-chip v-if="!mainStore.isMobile && userPlan && !isPlusPlan" size="x-small" color="primary" variant="tonal" class="ml-1">{{ userPlan }}</v-chip>
-                        <v-menu activator="parent">
-                            <v-list nav class="h_a_menu">
-                                <v-list-item :title="t('layout.system_setting')" prepend-icon="mdi-cog" @click="gotoSystemsetting" />
-                                <v-list-item :title="t('layout.login_out')" prepend-icon="mdi-login" @click="Usersignout" />
-                            </v-list>
-                        </v-menu>
                     </v-btn>
                 </div>
                 <div style="position: fixed; right: 20px; bottom: 100px; z-index: 99999">
@@ -123,6 +149,7 @@ v-if="mainStore.isMobile" variant="text" icon="mdi-menu"
                     <AiChatV2
                         v-show="v2ChatPanelOpen"
                         :prompt-request="pendingAiPromptRequest"
+                        :open-conversation-request="pendingOpenConversationRequest"
                         @open-artifact="openAiArtifact"
                         @copy-artifact-html="copyArtifactHtml"
                     />
@@ -183,7 +210,6 @@ v-if="mainStore.isMobile" variant="text" icon="mdi-menu"
 </template>
 <script setup lang="ts">
 import logo from '@/assets/images/icon.png';
-import wxtx from '@/assets/wx.png';
 import { RouterView, type RouteRecordRaw, useRouter } from 'vue-router';
 import Breadcrumbs from '@/views/components/breadcrumbs/breadcrumbs.vue';
 import { reactive, computed, watch } from 'vue';
@@ -201,12 +227,14 @@ import AiArtifactWorkspace from '@/views/components/aiArtifacts/AiArtifactWorksp
 import { getAIArtifact } from '@/views/api/aiArtifacts';
 import type { AIArtifactRecord } from '@/entityTypes/aiArtifactTypes';
 import {GetloginUserInfo} from '@/views/api/users'
+import type { UserPlanType } from '@/entityTypes/userType'
 import { getAppName } from '@/views/api/app'
 import { packageAppName } from '@/config/appPackage'
-import { updateLanguagePreference, getLanguagePreference } from '@/views/api/language'
+import { getLanguagePreference } from '@/views/api/language'
 import { initializeLanguageDetection } from '@/views/utils/browserLanguageDetection'
-import { initializeLanguageMigration } from '@/views/utils/languageMigration'
 import { initializeLanguageSynchronization, syncLanguageChange } from '@/views/utils/languageSynchronization'
+import { getIpcTransport } from '@/views/utils/ipcTransport'
+import { AI_CHAT_V2_OPEN_FROM_NOTIFY } from '@/config/channellist'
 
 
 // import {ref, watchEffect} from "vue";
@@ -228,11 +256,19 @@ interface AiPromptRequest {
   text: string;
 }
 
+interface AiOpenConversationRequest {
+  id: number;
+  conversationId: string;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const dialogStatus=ref(false)
 const noticeMessage=ref('')
 const noticeType=ref<NoticeType>('info')
 const userName=ref('')
+const userEmail=ref('')
 const userPlan=ref('')
+const currentPlans=ref<Array<UserPlanType>>([])
 const isPlusPlan=ref(false)
 const appName=ref(packageAppName)
 const snaptimeout=ref<number>(10000)
@@ -247,6 +283,8 @@ const artifactError = ref<string | null>(null);
 const chatPanelWidth = ref(600);
 const pendingAiPromptRequest = ref<AiPromptRequest | null>(null);
 let aiPromptRequestId = 0;
+const pendingOpenConversationRequest = ref<AiOpenConversationRequest | null>(null);
+let openConversationRequestId = 0;
 const CHAT_PANEL_MIN_WIDTH = 400;
 const CHAT_PANEL_MAX_WIDTH = 1200;
 const mainStore = useMainStore();
@@ -267,6 +305,53 @@ const singleVisibleChild = (route: RouteRecordRaw): RouteRecordRaw | undefined =
 const permanent = computed(() => {
     return !mainStore.isMobile;
 });
+const showAccountText = computed(() => {
+    return !navState.isMini || mainStore.isMobile;
+});
+const accountEmail = computed(() => {
+    return userEmail.value || userName.value;
+});
+const accountPlanLabel = computed(() => {
+    return userPlan.value;
+});
+const accountPlanIcon = computed(() => {
+    if (isPlusPlan.value) {
+        return 'mdi-plus-circle';
+    }
+    if (userPlan.value) {
+        return 'mdi-star-circle';
+    }
+    return 'mdi-account-circle';
+});
+const showUpgradePlan = computed(() => {
+    return currentPlans.value.length > 0 && currentPlans.value.every(isFreeSubscriptionPlan);
+});
+const pricingPlanUrl = computed(() => {
+    const baseUrl = normalizeLoginBaseUrl(import.meta.env.VITE_LOGIN_URL);
+    return baseUrl ? `${baseUrl}/pricing-plan` : '';
+});
+const normalizePlanName = (planName: string): string => {
+    return planName.toLowerCase().replace(/[^a-z0-9]/g, '');
+};
+const normalizeLoginBaseUrl = (raw: unknown): string => {
+    if (typeof raw !== 'string') return '';
+    return raw.trim().replace(/^["']|["']$/g, '').replace(/\/+$/g, '');
+};
+const getDisplayPlans = (plans: Array<UserPlanType>): Array<UserPlanType> => {
+    const namedPlans = plans.filter(plan => Boolean(plan.planName?.trim()));
+    const activePlans = namedPlans.filter(plan => plan.status?.toLowerCase() === 'active');
+    return activePlans.length > 0 ? activePlans : namedPlans;
+};
+const isPlusSubscriptionPlan = (plan: UserPlanType): boolean => {
+    const planName = normalizePlanName(plan.planName || '');
+    const planId = (plan.planId || '').toUpperCase();
+    return planName.includes('aifetchplus') || planId === 'PLUS';
+};
+const isFreeSubscriptionPlan = (plan: UserPlanType): boolean => {
+    const planName = normalizePlanName(plan.planName || '');
+    const planId = (plan.planId || '').toUpperCase();
+    return planName.includes('community') || planName.includes('free') || planId === 'FREE';
+};
 const showNotice = ref(false);
 const {t,locale} = useI18n();
 const location="end"
@@ -302,6 +387,13 @@ const gotoSystemsetting=()=>{
 }
 const gotodashborad=()=>{
     router.push('/dashboard/home')
+}
+const openPricingPlan = (): void => {
+    if (!pricingPlanUrl.value) {
+        showErrorMessage(t('layout.pricing_url_missing') || 'Pricing page URL is not configured')
+        return
+    }
+    window.open(pricingPlanUrl.value, '_blank')
 }
 
 watch(permanent, () => {
@@ -362,6 +454,27 @@ const openAiChatFromDashboard = (event: Event): void => {
     v2ChatPanelOpen.value = true;
     chatPanelOpen.value = false;
 }
+
+const handleOpenFromNotify = (raw: unknown): void => {
+    const payload =
+        raw && typeof raw === "object"
+            ? (raw as { conversationId?: string | null })
+            : null;
+    const conversationId =
+        typeof payload?.conversationId === "string"
+            ? payload.conversationId.trim()
+            : "";
+
+    // v2 is the sole chat (v1 retired R6.2) — always route to the v2 panel.
+    v2ChatPanelOpen.value = true;
+    chatPanelOpen.value = false;
+    if (conversationId.length > 0) {
+        pendingOpenConversationRequest.value = {
+            id: ++openConversationRequestId,
+            conversationId,
+        };
+    }
+};
 
 const startResize = (e: MouseEvent) => {
     e.preventDefault();
@@ -475,25 +588,48 @@ const copyActiveArtifactHtml = (): void => {
     void copyArtifactHtml(activeArtifact.value.id);
   }
 };
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const showWarningMessage = (content: string) => addMessage('warning', content);
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const showInfoMessage = (content: string) => addMessage('info', content);
 
-onMounted(async () => {
-    await GetloginUserInfo().then(res=>{
-        console.log(res)
-        userName.value=res.name
-        if (res.plans && res.plans.length > 0) {
-            isPlusPlan.value = res.plans.some(
-                plan => plan.planName && plan.planName.toLowerCase().includes('aifetch-plus')
-            )
-            const aifetchlyPlans = res.plans.filter(
-                plan => plan.planName && plan.planName.toLowerCase().includes('aifetchly')
-            )
-            if (aifetchlyPlans.length > 0 && !isPlusPlan.value) {
-                userPlan.value = aifetchlyPlans.map(plan => plan.planName).join(', ')
-            }
+const initializeSavedLanguage = async (): Promise<void> => {
+    try {
+        const systemLanguage = await getLanguagePreference()
+        if (systemLanguage) {
+            console.log('Loading language preference from system settings:', systemLanguage)
+            locale.value = systemLanguage
+            setLanguage(systemLanguage)
         }
+    } catch (error) {
+        console.warn('Failed to load language preference from system settings, using current locale:', error)
+    }
+}
+
+onMounted(async () => {
+    await initializeSavedLanguage()
+
+    initializeLanguageDetection(async (selectedLanguage): Promise<void> => {
+        console.log('User selected language:', selectedLanguage)
+        await switchLanguage(selectedLanguage)
     })
+
+    await initializeLanguageSynchronization()
+
+    try {
+        const res = await GetloginUserInfo()
+        console.log(res)
+        userName.value = res.name
+        userEmail.value = res.email
+        if (res.plans && res.plans.length > 0) {
+            const displayPlans = getDisplayPlans(res.plans)
+            currentPlans.value = displayPlans
+            isPlusPlan.value = displayPlans.some(isPlusSubscriptionPlan)
+            userPlan.value = displayPlans.map(plan => plan.planName).join(', ')
+        }
+    } catch (error) {
+        console.error('Failed to load login user info:', error)
+    }
 
     try {
         const name = await getAppName()
@@ -502,28 +638,12 @@ onMounted(async () => {
         console.error('Failed to load app name:', error)
     }
 
-    await initializeLanguageMigration()
-
-    try {
-        const systemLanguage = await getLanguagePreference()
-        if (systemLanguage && systemLanguage !== locale.value) {
-            console.log('Loading language preference from system settings:', systemLanguage)
-            locale.value = systemLanguage
-            setLanguage(systemLanguage)
-        }
-    } catch (error) {
-        console.warn('Failed to load language preference from system settings, using current locale:', error)
-    }
-
-    initializeLanguageDetection(async (selectedLanguage) => {
-        console.log('User selected language:', selectedLanguage)
-        await switchLanguage(selectedLanguage)
-    })
-
-    await initializeLanguageSynchronization()
-
     window.addEventListener('keydown', handleKeyboardShortcut)
     window.addEventListener('aifetchly:open-ai-chat', openAiChatFromDashboard)
+    getIpcTransport().receive(
+        AI_CHAT_V2_OPEN_FROM_NOTIFY,
+        handleOpenFromNotify as (value: unknown) => void
+    )
 
     receiveSystemMessage((res:CommonDialogMsg)=>{
        console.log(res)
@@ -538,6 +658,10 @@ onMounted(async () => {
 onUnmounted(() => {
     window.removeEventListener('keydown', handleKeyboardShortcut)
     window.removeEventListener('aifetchly:open-ai-chat', openAiChatFromDashboard)
+    getIpcTransport().removeListener(
+        AI_CHAT_V2_OPEN_FROM_NOTIFY,
+        handleOpenFromNotify as (value: unknown) => void
+    )
 })
 
 const showDialog=(status:boolean, content:string)=>{

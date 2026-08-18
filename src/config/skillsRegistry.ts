@@ -65,6 +65,7 @@ import {
 import {
   listKnowledgeLibraryDocumentsForAi,
   importKnowledgeLibraryAttachmentForAi,
+  importKnowledgeLibraryWebsiteForAi,
   deleteKnowledgeLibraryDocumentForAi,
 } from "@/service/KnowledgeLibraryAiTools";
 
@@ -84,7 +85,32 @@ const registry: Map<string, SkillDefinition> =
 // Built-in skill definitions (statically imported)
 // ---------------------------------------------------------------------------
 import { RUN_SUBAGENT_TOOL } from "@/service/agentTools/runSubagentTool";
+import { PROCESS_ARTIFACT_BATCH_TOOL } from "@/service/agentTools/processArtifactBatchTool";
+import { EXPORT_GENERATED_ARTIFACTS_TOOL } from "@/service/agentTools/exportGeneratedArtifactsTool";
 import { AIAppNavigationToolService } from "@/service/AIAppNavigationToolService";
+import {
+  AIImageAttachmentToolService,
+  createDefaultAIImageAttachmentToolDeps,
+  buildAttachLocalImagesPermissionPreview,
+} from "@/service/AIImageAttachmentToolService";
+
+/**
+ * Best-effort, credential-free label of the configured AI server destination,
+ * shown in the attach_local_images permission preview. Re-read per call so a
+ * runtime config change is reflected.
+ */
+function getAttachLocalImagesDestinationLabel(): string {
+  const remote = process.env.VITE_REMOTEADD;
+  if (typeof remote === "string" && remote.length > 0) {
+    try {
+      const url = new URL(remote);
+      if (url.host) return url.host;
+    } catch {
+      return remote;
+    }
+  }
+  return "the configured AI server";
+}
 
 const BUILT_IN_SKILLS: SkillDefinition[] = [
   {
@@ -126,9 +152,72 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     },
   },
   {
+    name: "attach_local_images",
+    description:
+      "REQUIRED for analyzing or editing local workspace images (change background color, " +
+      "make background white, remove background, product photo edits, compare images, visual Q&A). " +
+      "After glob_files finds image paths, call this tool with exact paths — do NOT use " +
+      "shell_execute, Python, Pillow/PIL, ImageMagick, or file_read for image editing. " +
+      "HARD LIMIT: at most 3 images per call and per AI request. " +
+      "For image EDITING, use this directly with exactly 1 image. A provider may accept 3 inputs but return only 1 output, so multiple editable images must not share one request. " +
+      "WHEN 2 OR MORE files need the same edit, call process_artifact_batch once with all exact paths and the shared instruction. It runs one isolated provider operation per input with bounded concurrency and returns every output with its input mapping. " +
+      "The 3-image form remains available for analysis/comparison requests that intentionally consume several images together. " +
+      "NEVER pass more than 3 paths in one call. " +
+      "NEVER issue multiple attach_local_images calls in the same assistant turn/tool round — " +
+      "one batch per round only. " +
+      "Only PNG, JPEG, WebP, and GIF are supported. Transfers prepared image content to the " +
+      "configured AI server after the user grants permission.",
+    parameters: {
+      type: "object",
+      properties: {
+        paths: {
+          type: "array",
+          description:
+            "Exactly 1 to 3 image paths for THIS batch only (never more). " +
+            "Relative to the approved workspace root, or absolute paths inside it. " +
+            "If many files need work, take the next 3 remaining paths and leave the rest " +
+            "for a later call after this batch completes. " +
+            "Glob patterns, directories, and URLs are not accepted.",
+          items: { type: "string", minLength: 1 },
+          minItems: 1,
+          maxItems: 3,
+          uniqueItems: true,
+        },
+        detail: {
+          type: "string",
+          description:
+            "Vision detail level forwarded to the model: auto (default), low, or high.",
+          enum: ["auto", "low", "high"],
+          default: "auto",
+        },
+      },
+      required: ["paths"],
+      additionalProperties: false,
+    },
+    tier: "main",
+    requiresConfirmation: true,
+    permissionCategory: "filesystem",
+    source: "built-in",
+    timeoutClass: "fast",
+    execute: async (args, context) => {
+      const service = new AIImageAttachmentToolService(
+        createDefaultAIImageAttachmentToolDeps({
+          destinationLabel: getAttachLocalImagesDestinationLabel(),
+        })
+      );
+      return service.execute(args, context);
+    },
+    buildPermissionPreview: (args) =>
+      buildAttachLocalImagesPermissionPreview(
+        args,
+        getAttachLocalImagesDestinationLabel()
+      ),
+  },
+  {
     name: "scrape_urls_from_search_engine",
     description:
       "Scrape search result URLs from a supported engine (Google, Bing, or Yandex) using a query string. Returns titles, snippets, and URLs. This tool is for collecting URLs from a SERP, not for answering questions from page text.\n\n" +
+      "This tool always runs ASYNCHRONOUSLY via a background job (same pattern as heavy search_maps_businesses calls): the query loop registers a ToolJobRegistry job with no synchronous 90s ceiling, emits progress while the SERP scrape runs, and returns the final result when the worker finishes (up to ~30 minutes). Do not retry while a job for the same call is still running; use cancel_tool_job(job_id) if the user wants to stop early.\n\n" +
       "MANDATORY WORKFLOW for google or yandex (these engines require login cookies):\n" +
       '  1. FIRST call `list_social_accounts` with platform="google" (or platform="yandex") to obtain a valid tool account ID. Only tool accounts with `cookies: true` and a successful `status` are usable.\n' +
       "  2. THEN call this tool with that tool account ID in the `account` field.\n" +
@@ -139,8 +228,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       properties: {
         search_engine: {
           type: "string",
-          description:
-            "Which search engine to scrape: google, bing, or yandex",
+          description: "Which search engine to scrape: google, bing, or yandex",
           enum: ["google", "bing", "yandex"],
         },
         query: {
@@ -180,7 +268,17 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     requiresConfirmation: false,
     permissionCategory: "network",
     source: "built-in",
-    timeoutClass: "network",
+    // Always async: SERP scraping launches a Puppeteer worker, may wait on
+    // login cookies / anti-bot, and polls up to 10 minutes inside
+    // ToolExecutor.executeSearchEngineTool. The previous static
+    // timeoutClass: "network" (90s) caused frequent
+    // `timedOut after 90000ms` failures even when the worker would have
+    // succeeded. Route every call through ToolJobRegistry like heavy
+    // search_maps_businesses / run_subagent so there is no synchronous
+    // Promise.race ceiling; the query loop polls until completion.
+    async: true,
+    resolveTimeoutClass: () => "async",
+    resolveAsync: () => true,
     supportsPartialResult: true,
     execute: async (args, context) => {
       const engineRaw =
@@ -206,14 +304,15 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
             },
           };
         }
-        // Verify the account has cookies stored; if not, ask the user to add them.
+        // Verify the account has a usable cookie snapshot; if not, ask the user
+        // to add them. Presence is read from non-secret session metadata.
         try {
-          const { AccountCookiesModule } = await import(
-            "@/modules/accountCookiesModule"
+          const { AccountSessionService } = await import(
+            "@/modules/AccountSessionService"
           );
-          const cookiesModule = new AccountCookiesModule();
-          const cookies = await cookiesModule.getAccountCookies(accountId);
-          if (!cookies || !cookies.cookies) {
+          const sessionService = new AccountSessionService();
+          const meta = await sessionService.getMetadata(accountId);
+          if (!meta.hasCookies || meta.cookieCount === 0) {
             return {
               success: false,
               result: {
@@ -241,6 +340,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
         context.conversationId,
         {
           toolCallId: context.toolCallId,
+          skipPermissionCheck: context.skipPermissionCheck,
           emitProgress: context.emitProgress,
           signal: context.signal,
         }
@@ -282,7 +382,13 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       const result = await ToolExecutor.execute(
         "extract_emails_from_urls",
         args,
-        context.conversationId
+        context.conversationId,
+        {
+          toolCallId: context.toolCallId,
+          skipPermissionCheck: context.skipPermissionCheck,
+          emitProgress: context.emitProgress,
+          signal: context.signal,
+        }
       );
       return { success: true, result };
     },
@@ -331,7 +437,13 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       const result = await ToolExecutor.execute(
         "search_yellow_pages",
         args,
-        context.conversationId
+        context.conversationId,
+        {
+          toolCallId: context.toolCallId,
+          skipPermissionCheck: context.skipPermissionCheck,
+          emitProgress: context.emitProgress,
+          signal: context.signal,
+        }
       );
       return { success: true, result };
     },
@@ -416,6 +528,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
         context.conversationId,
         {
           toolCallId: context.toolCallId,
+          skipPermissionCheck: context.skipPermissionCheck,
           emitProgress: context.emitProgress,
           signal: context.signal,
         }
@@ -445,7 +558,13 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       const result = await ToolExecutor.execute(
         "get_available_yellow_pages_platforms",
         args,
-        context.conversationId
+        context.conversationId,
+        {
+          toolCallId: context.toolCallId,
+          skipPermissionCheck: context.skipPermissionCheck,
+          emitProgress: context.emitProgress,
+          signal: context.signal,
+        }
       );
       return { success: true, result };
     },
@@ -488,7 +607,13 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       const result = await ToolExecutor.execute(
         "analyze_website",
         args,
-        context.conversationId
+        context.conversationId,
+        {
+          toolCallId: context.toolCallId,
+          skipPermissionCheck: context.skipPermissionCheck,
+          emitProgress: context.emitProgress,
+          signal: context.signal,
+        }
       );
       return { success: true, result };
     },
@@ -531,7 +656,13 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       const result = await ToolExecutor.execute(
         "analyze_website_batch",
         args,
-        context.conversationId
+        context.conversationId,
+        {
+          toolCallId: context.toolCallId,
+          skipPermissionCheck: context.skipPermissionCheck,
+          emitProgress: context.emitProgress,
+          signal: context.signal,
+        }
       );
       return { success: true, result };
     },
@@ -574,7 +705,13 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       const result = await ToolExecutor.execute(
         "analyze_websites",
         args,
-        context.conversationId
+        context.conversationId,
+        {
+          toolCallId: context.toolCallId,
+          skipPermissionCheck: context.skipPermissionCheck,
+          emitProgress: context.emitProgress,
+          signal: context.signal,
+        }
       );
       return { success: true, result };
     },
@@ -607,7 +744,13 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       const result = await ToolExecutor.execute(
         "read_url_content",
         args,
-        context.conversationId
+        context.conversationId,
+        {
+          toolCallId: context.toolCallId,
+          skipPermissionCheck: context.skipPermissionCheck,
+          emitProgress: context.emitProgress,
+          signal: context.signal,
+        }
       );
       return { success: true, result };
     },
@@ -641,7 +784,13 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       const result = await ToolExecutor.execute(
         "read_attachment_content",
         args,
-        context.conversationId
+        context.conversationId,
+        {
+          toolCallId: context.toolCallId,
+          skipPermissionCheck: context.skipPermissionCheck,
+          emitProgress: context.emitProgress,
+          signal: context.signal,
+        }
       );
       return { success: true, result };
     },
@@ -682,7 +831,13 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       const result = await ToolExecutor.execute(
         "generate_keywords",
         args,
-        context.conversationId
+        context.conversationId,
+        {
+          toolCallId: context.toolCallId,
+          skipPermissionCheck: context.skipPermissionCheck,
+          emitProgress: context.emitProgress,
+          signal: context.signal,
+        }
       );
       return { success: true, result };
     },
@@ -748,6 +903,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
         context.conversationId,
         {
           toolCallId: context.toolCallId,
+          skipPermissionCheck: context.skipPermissionCheck,
           emitProgress: context.emitProgress,
           signal: context.signal,
         }
@@ -797,7 +953,13 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       const result = await ToolExecutor.execute(
         "file_read",
         args,
-        context.conversationId
+        context.conversationId,
+        {
+          toolCallId: context.toolCallId,
+          skipPermissionCheck: context.skipPermissionCheck,
+          emitProgress: context.emitProgress,
+          signal: context.signal,
+        }
       );
       return { success: true, result };
     },
@@ -844,7 +1006,13 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       const result = await ToolExecutor.execute(
         "glob_files",
         args,
-        context.conversationId
+        context.conversationId,
+        {
+          toolCallId: context.toolCallId,
+          skipPermissionCheck: context.skipPermissionCheck,
+          emitProgress: context.emitProgress,
+          signal: context.signal,
+        }
       );
       return { success: true, result };
     },
@@ -918,7 +1086,13 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       const result = await ToolExecutor.execute(
         "grep_files",
         args,
-        context.conversationId
+        context.conversationId,
+        {
+          toolCallId: context.toolCallId,
+          skipPermissionCheck: context.skipPermissionCheck,
+          emitProgress: context.emitProgress,
+          signal: context.signal,
+        }
       );
       return { success: true, result };
     },
@@ -965,7 +1139,13 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       const result = await ToolExecutor.execute(
         "file_edit",
         args,
-        context.conversationId
+        context.conversationId,
+        {
+          toolCallId: context.toolCallId,
+          skipPermissionCheck: context.skipPermissionCheck,
+          emitProgress: context.emitProgress,
+          signal: context.signal,
+        }
       );
       return { success: true, result };
     },
@@ -1007,7 +1187,13 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       const result = await ToolExecutor.execute(
         "file_write",
         args,
-        context.conversationId
+        context.conversationId,
+        {
+          toolCallId: context.toolCallId,
+          skipPermissionCheck: context.skipPermissionCheck,
+          emitProgress: context.emitProgress,
+          signal: context.signal,
+        }
       );
       return { success: true, result };
     },
@@ -1388,9 +1574,9 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     },
   },
   {
-    name: "start_bulk_email_send_task",
+    name: "start_email_send_task",
     description:
-      "Create and start a bulk email send task. Requires confirmation because it sends email. Provide either template_ids or email_subject and email_html_content, not both empty.",
+      "Create and start an email send task. Requires confirmation because it sends email. Provide either template_ids or email_subject and email_html_content, not both empty.",
     parameters: {
       type: "object",
       properties: {
@@ -1984,6 +2170,84 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     source: "built-in",
     execute: async (args, context) => {
       const result = await importKnowledgeLibraryAttachmentForAi(
+        args as Record<string, unknown>,
+        context
+      );
+      return {
+        success: result.success,
+        result: result as unknown as Record<string, unknown>,
+      };
+    },
+  },
+  {
+    name: "knowledge_library_import_website",
+    description:
+      "Import public webpage content into the local knowledge library by URL. Supports one page (single_page), an explicit list of pages (url_list), or a bounded same-origin crawl (site_crawl). Converts pages to markdown and indexes each as a separate searchable document through the existing RAG pipeline. Requires user confirmation. Do NOT use for private, authenticated, localhost, internal network, or non-http(s) URLs.",
+    parameters: {
+      type: "object",
+      properties: {
+        mode: {
+          type: "string",
+          enum: ["single_page", "url_list", "site_crawl"],
+          default: "single_page",
+          description:
+            "Import mode. single_page requires url; url_list requires urls; site_crawl starts from url and follows same-origin links.",
+        },
+        url: {
+          type: "string",
+          description: "Public http(s) URL for single_page or site_crawl mode.",
+        },
+        urls: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Explicit public http(s) URLs for url_list mode. Each becomes one document (up to 50).",
+        },
+        maxPages: {
+          type: "number",
+          default: 20,
+          description:
+            "Maximum pages to import for url_list or site_crawl (hard max 100).",
+        },
+        maxDepth: {
+          type: "number",
+          default: 2,
+          description: "Maximum crawl depth for site_crawl mode (hard max 4).",
+        },
+        title: {
+          type: "string",
+          description: "Optional title override (single_page only).",
+        },
+        description: {
+          type: "string",
+          description: "Optional document or collection description.",
+        },
+        tags: {
+          type: "array",
+          items: { type: "string" },
+          description: "Optional tags applied to every imported page.",
+        },
+        author: {
+          type: "string",
+          description: "Optional author. Defaults to Website.",
+        },
+        duplicatePolicy: {
+          type: "string",
+          enum: ["fail", "allow", "replace"],
+          default: "fail",
+          description:
+            'How to handle duplicate pages. "fail" (default) skips duplicates, "allow" imports anyway, "replace" is not supported yet.',
+        },
+      },
+      required: [],
+    },
+    tier: "main",
+    requiresConfirmation: true,
+    permissionCategory: "automation",
+    timeoutClass: "network",
+    source: "built-in",
+    execute: async (args, context) => {
+      const result = await importKnowledgeLibraryWebsiteForAi(
         args as Record<string, unknown>,
         context
       );
@@ -2591,6 +2855,8 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       };
     },
   },
+  PROCESS_ARTIFACT_BATCH_TOOL,
+  EXPORT_GENERATED_ARTIFACTS_TOOL,
   RUN_SUBAGENT_TOOL,
   {
     name: "proxy_list",
@@ -2980,32 +3246,11 @@ for (const skill of BUILT_IN_SKILLS) {
  * (Design §8.3)
  */
 async function getAllToolFunctions(): Promise<ToolFunction[]> {
-  // Resolve enabled plugin names once per catalog build.
-  let enabledPluginNames: Set<string> | null = null;
-  try {
-    const { PluginManagementModule } = await import(
-      "@/modules/PluginManagementModule"
-    );
-    const mod = new PluginManagementModule();
-    const enabledPlugins = await mod.listEnabledPlugins();
-    enabledPluginNames = new Set(enabledPlugins.map((p) => p.name));
-  } catch (e) {
-    log.warn(
-      `[SkillRegistry] listEnabledPlugins failed, suppressing all plugin-owned skills:`,
-      e
-    );
-    enabledPluginNames = new Set();
-  }
+  const enablement = await loadSkillRuntimeEnablement();
 
   const builtInTools: ToolFunction[] = [];
   for (const skill of registry.values()) {
-    if (
-      skill.pluginOwner &&
-      enabledPluginNames &&
-      !enabledPluginNames.has(skill.pluginOwner)
-    ) {
-      continue; // owning plugin is disabled — hide from catalog
-    }
+    if (!isSkillRuntimeEnabled(skill, enablement)) continue;
     builtInTools.push(skillDefinitionToToolFunction(skill));
   }
 
@@ -3027,6 +3272,89 @@ async function getAllToolFunctions(): Promise<ToolFunction[]> {
  */
 function getSkill(name: string): SkillDefinition | null {
   return registry.get(name) ?? null;
+}
+
+interface InstalledSkillRuntimeState {
+  readonly enabled: number;
+  readonly pluginName?: string | null;
+}
+
+interface SkillRuntimeEnablement {
+  readonly installedSkillsByName: ReadonlyMap<
+    string,
+    InstalledSkillRuntimeState
+  > | null;
+  readonly enabledPluginNames: ReadonlySet<string>;
+}
+
+async function loadSkillRuntimeEnablement(): Promise<SkillRuntimeEnablement> {
+  let enabledPluginNames: ReadonlySet<string>;
+  try {
+    const { PluginManagementModule } = await import(
+      "@/modules/PluginManagementModule"
+    );
+    const mod = new PluginManagementModule();
+    const enabledPlugins = await mod.listEnabledPlugins();
+    enabledPluginNames = new Set(enabledPlugins.map((p) => p.name));
+  } catch (e) {
+    console.warn(
+      "[SkillRegistry] listEnabledPlugins failed, suppressing all plugin-owned skills:",
+      e
+    );
+    enabledPluginNames = new Set();
+  }
+
+  let installedSkillsByName: ReadonlyMap<
+    string,
+    InstalledSkillRuntimeState
+  > | null;
+  try {
+    const mod = new SkillManagementModule();
+    const installedSkills = await mod.listInstalledSkills();
+    installedSkillsByName = new Map(
+      installedSkills.map((skill) => [
+        skill.name,
+        {
+          enabled: skill.enabled,
+          pluginName: skill.pluginName ?? null,
+        },
+      ])
+    );
+  } catch (e) {
+    console.warn(
+      "[SkillRegistry] listInstalledSkills failed, preserving registered standalone skills:",
+      e
+    );
+    installedSkillsByName = null;
+  }
+
+  return {
+    installedSkillsByName,
+    enabledPluginNames,
+  };
+}
+
+function isSkillRuntimeEnabled(
+  skill: SkillDefinition,
+  enablement: SkillRuntimeEnablement
+): boolean {
+  if (skill.source === "built-in") return true;
+
+  const installed = enablement.installedSkillsByName?.get(skill.name);
+  if (installed && installed.enabled !== 1) return false;
+
+  const pluginOwner = skill.pluginOwner ?? installed?.pluginName ?? undefined;
+  if (pluginOwner && !enablement.enabledPluginNames.has(pluginOwner)) {
+    return false;
+  }
+
+  return true;
+}
+
+async function isSkillEnabledForRuntime(name: string): Promise<boolean> {
+  const skill = registry.get(name);
+  if (!skill) return false;
+  return isSkillRuntimeEnabled(skill, await loadSkillRuntimeEnablement());
 }
 
 /**
@@ -3083,20 +3411,7 @@ async function findSkillForFileExtension(
   ext: string
 ): Promise<SkillDefinition | null> {
   const normalized = ext.toLowerCase();
-
-  // Resolve enabled plugin names once per lookup so plugin-owned skills
-  // whose owner is disabled/uninstalled are hidden from attachment routing.
-  let enabledPluginNames: Set<string> | null = null;
-  try {
-    const { PluginManagementModule } = await import(
-      "@/modules/PluginManagementModule"
-    );
-    const mod = new PluginManagementModule();
-    const enabledPlugins = await mod.listEnabledPlugins();
-    enabledPluginNames = new Set(enabledPlugins.map((p) => p.name));
-  } catch {
-    enabledPluginNames = new Set();
-  }
+  const enablement = await loadSkillRuntimeEnablement();
 
   for (const skill of registry.values()) {
     if (
@@ -3104,13 +3419,7 @@ async function findSkillForFileExtension(
       skill.supportedFileTypes &&
       skill.supportedFileTypes.includes(normalized)
     ) {
-      if (
-        skill.pluginOwner &&
-        enabledPluginNames &&
-        !enabledPluginNames.has(skill.pluginOwner)
-      ) {
-        continue; // owning plugin is disabled/uninstalled — skip
-      }
+      if (!isSkillRuntimeEnabled(skill, enablement)) continue;
       return skill;
     }
   }
@@ -3133,6 +3442,7 @@ function listBuiltInSkillDefinitions(): SkillDefinition[] {
 export const SkillRegistry = {
   getAllToolFunctions,
   getSkill,
+  isSkillEnabledForRuntime,
   isRegistered,
   registerSkill,
   unregisterSkill,

@@ -1,3 +1,4 @@
+
 import { searchEngineImpl } from "@/modules/interface/searchEngineImpl";
 import {
   Page,
@@ -33,7 +34,7 @@ import type { ObserveExecuteRoundResult } from "@/childprocess/utils/ObserveExec
 import { executePuppeteerAction } from "@/childprocess/utils/ObserveExecuteExecutor";
 import type { AiSupportRequestMessage } from "@/modules/interface/BackgroundProcessMessages";
 import type { AiObserveExecuteResponseData } from "@/modules/interface/BackgroundProcessMessages";
-import { v4 as uuidv4 } from "uuid";
+import { v4 as uuidv4 } from "uuid";import sanitizeHtml from "sanitize-html";
 
 // const logger = debug('SearchScrape');
 
@@ -436,6 +437,7 @@ export class SearchScrape implements searchEngineImpl {
       accountId: this.accountId,
     };
   }
+
 
   async exposeFunction() {
     const _text = async (el: { $eval: (selector: string) => Promise<{ innerText: string } | null> }, s: string) => {

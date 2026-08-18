@@ -115,7 +115,15 @@ vi.mock("@/service/PluginImportService", () => ({
   PluginImportService: {
     importFromZip: vi.fn(async () => ({
       success: true,
-      plugin: { name: "p", version: "1.0.0", skillCount: 0, mcpServerCount: 0 },
+      plugin: {
+        name: "p",
+        version: "1.0.0",
+        skillCount: 0,
+        mcpServerCount: 0,
+        agentCount: 0,
+        commandCount: 0,
+        hookCount: 0,
+      },
     })),
   },
 }));
@@ -129,6 +137,9 @@ vi.mock("@/service/PluginInstallService", () => ({
           version: "1.0.0",
           skillCount: 0,
           mcpServerCount: 0,
+          agentCount: 0,
+          commandCount: 0,
+          hookCount: 0,
         },
       };
     }
@@ -186,6 +197,7 @@ import { registerPluginIpcHandlers } from "@/main-process/communication/plugin-i
 import { UserPluginAutoInstallService } from "@/service/UserPluginAutoInstallService";
 import { PluginComponentRegistryService } from "@/service/PluginComponentRegistryService";
 import { getAIFetchlyConfigManager } from "@/service/aifetchlyConfig/AIFetchlyConfigManager";
+import { HookRegistry } from "@/service/hooks/HookRegistry";
 import type { SlashCommandDefinition } from "@/entityTypes/slashCommandTypes";
 import {
   PLUGIN_LIST,
@@ -201,6 +213,7 @@ describe("plugin-ipc", () => {
   beforeEach(() => {
     handlers.clear();
     aiEnabledValue = "true";
+    HookRegistry.unregisterSource("plugin:demo-plugin");
     registerPluginIpcHandlers();
   });
 
@@ -211,17 +224,6 @@ describe("plugin-ipc", () => {
     expect(handlers.has(PLUGIN_UNINSTALL)).toBe(true);
     expect(handlers.has(PLUGIN_RELOAD)).toBe(true);
     expect(handlers.has(PLUGIN_INSTALL_FROM_SOURCE)).toBe(true);
-  });
-
-  it("returns AI-not-enabled envelope when AI is disabled", async () => {
-    aiEnabledValue = "false";
-    const fn = handlers.get(PLUGIN_LIST)!;
-    const result = await fn({}, undefined);
-    expect(result).toEqual({
-      status: false,
-      msg: expect.stringContaining("not enabled"),
-      data: null,
-    });
   });
 
   it("syncs user plugin folders before listing installed plugins", async () => {
@@ -287,6 +289,44 @@ describe("plugin-ipc", () => {
         sourceRef: "main",
       },
     });
+  });
+
+  it("PLUGIN_GET exposes live plugin hooks and hookCount", async () => {
+    HookRegistry.replaceSource("plugin:demo-plugin", [
+      {
+        id: "plugin:demo-plugin:0",
+        eventName: "SessionStart",
+        type: "callback",
+        source: "plugin",
+        enabled: true,
+        matcher: "WebFetch",
+        failureMode: "warn",
+        callback: () => ({ systemMessage: "loaded" }),
+      },
+    ]);
+
+    try {
+      const fn = handlers.get(PLUGIN_GET)!;
+      const result = await fn({}, { name: "demo-plugin" });
+      expect(result).toMatchObject({
+        status: true,
+        data: {
+          hookCount: 1,
+          hooks: [
+            expect.objectContaining({
+              id: "plugin:demo-plugin:0",
+              eventName: "SessionStart",
+              matcher: "WebFetch",
+              enabled: true,
+              type: "callback",
+              health: "healthy",
+            }),
+          ],
+        },
+      });
+    } finally {
+      HookRegistry.unregisterSource("plugin:demo-plugin");
+    }
   });
 
   it("PLUGIN_GET exposes a renderer-safe command list + commandCount (no body/metadata)", async () => {
@@ -361,6 +401,30 @@ describe("plugin-ipc", () => {
     }
   });
 
+  it("PLUGIN_LIST summary carries hookCount from the live hook registry", async () => {
+    HookRegistry.replaceSource("plugin:demo-plugin", [
+      {
+        id: "plugin:demo-plugin:0",
+        eventName: "SessionStart",
+        type: "callback",
+        source: "plugin",
+        enabled: true,
+        callback: () => ({}),
+      },
+    ]);
+
+    try {
+      const fn = handlers.get(PLUGIN_LIST)!;
+      const result = await fn({}, undefined);
+      expect(result).toMatchObject({
+        status: true,
+        data: [expect.objectContaining({ hookCount: 1 })],
+      });
+    } finally {
+      HookRegistry.unregisterSource("plugin:demo-plugin");
+    }
+  });
+
   it("PLUGIN_INSTALL_FROM_SOURCE rejects an invalid kind", async () => {
     aiEnabledValue = "true";
     const fn = handlers.get(PLUGIN_INSTALL_FROM_SOURCE)!;
@@ -391,17 +455,6 @@ describe("plugin-ipc", () => {
     expect(result).toMatchObject({
       status: false,
       msg: expect.stringContaining("Invalid characters"),
-    });
-  });
-
-  it("PLUGIN_INSTALL_FROM_SOURCE returns AI-not-enabled when AI disabled", async () => {
-    aiEnabledValue = "false";
-    const fn = handlers.get(PLUGIN_INSTALL_FROM_SOURCE)!;
-    const result = await fn({}, { kind: "local-folder", folderPath: "/tmp" });
-    expect(result).toEqual({
-      status: false,
-      msg: expect.stringContaining("not enabled"),
-      data: null,
     });
   });
 

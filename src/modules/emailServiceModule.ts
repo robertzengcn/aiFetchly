@@ -59,6 +59,21 @@ export class EmailServiceModule
 
   async deleteEmailService(id: number): Promise<void> {
     try {
+      // Retention consistency (P4.4): purge ALL reply-reliability data for this
+      // mailbox BEFORE deleting the service row, so nothing is orphaned. Runs
+      // in one transaction; a failure aborts the mailbox deletion.
+      const { EmailReplyRetentionService } = await import(
+        "@/service/emailReply/EmailReplyRetentionService"
+      );
+      const purged = await new EmailReplyRetentionService().purgeMailboxData(
+        id
+      );
+      console.log(
+        `[reply-retention] mailbox ${id} deleted: purged ${purged.drafts} drafts, ` +
+          `${purged.revisions} revisions, ${purged.approvals} approvals, ` +
+          `${purged.attempts} attempts, ${purged.messages} messages, ` +
+          `${purged.conversations} conversations, ${purged.auditRows} audit rows`
+      );
       await this.emailServiceModel.delete(id);
     } catch (error) {
       log.error("Error deleting email service:", error);
@@ -137,8 +152,9 @@ export class EmailServiceModule
         0,
         1000
       );
-      const decryptedServices =
-        await this.decryptServiceCredentialsList(allServices);
+      const decryptedServices = await this.decryptServiceCredentialsList(
+        allServices
+      );
       return decryptedServices.filter((service) => service.status === 1);
     } catch (error) {
       log.error("Error getting active email services:", error);

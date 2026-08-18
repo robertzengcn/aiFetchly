@@ -221,7 +221,7 @@ import { useI18n } from 'vue-i18n'
 import CronExpressionBuilder from './CronExpressionBuilder.vue'
 import { validateCronExpression as validateCron, calculateNextRunTime as calculateNextRunTimeAPI } from '@/views/api/schedule'
 import { ScheduleCreateRequest, ScheduleUpdateRequest } from '@/entityTypes/schedule-type'
-import { TaskType, ScheduleStatus, TriggerType, DependencyCondition } from '@/entity/ScheduleTask.entity'
+import { TaskType, TriggerType, DependencyCondition } from '@/entity/ScheduleTask.entity'
 import {SearchtaskItem } from "@/entityTypes/searchControlType"
 import EmailresultTable from '@/views/pages/emailextraction/widgets/EmailResultTable.vue'
 import SearchResultSelectTable from "@/views/pages/search/widgets/SearchResultSelectTable.vue";
@@ -236,6 +236,7 @@ const { t } = useI18n()
 
 // Props
 interface Props {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   schedule?: any
   isEdit?: boolean
   loading?: boolean
@@ -270,7 +271,7 @@ const form = ref<HTMLFormElement>()
 const formData = ref<ScheduleCreateRequest>({
   name: '',
   description: '',
-  task_type: TaskType.SEARCH,
+  task_type: TaskType.AI_MESSAGE,
   task_id: 0,
   cron_expression: '',
   is_active: true,
@@ -286,10 +287,12 @@ const nextRunTime = ref('')
 const aiMessageFormState = ref<AiMessageTaskFormState | undefined>(undefined)
 
 // Available parent schedules for dependency
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const availableParentSchedules = ref<any[]>([])
 
 // Validation rules
 const rules = {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   required: (value: any) => !!value || t('schedule.this_field_required'),
   positive: (value: number) => value > 0 || t('schedule.must_be_positive'),
   nonNegative: (value: number) => value >= 0 || t('schedule.must_be_non_negative'),
@@ -299,8 +302,8 @@ const rules = {
   }
 }
 
-// Options for selects
-const taskTypeOptions = [
+// Options for selects — create page only offers AI Message Task
+const allTaskTypeOptions = [
   { title: t('schedule.search_task'), value: TaskType.SEARCH },
   { title: t('schedule.email_extract'), value: TaskType.EMAIL_EXTRACT },
   { title: t('schedule.bulk_email'), value: TaskType.BUCK_EMAIL },
@@ -308,6 +311,13 @@ const taskTypeOptions = [
   { title: t('schedule.yandex_maps'), value: TaskType.YANDEX_MAPS },
   { title: t('schedule.ai_message_task') || 'AI Message Task', value: TaskType.AI_MESSAGE },
 ]
+
+const taskTypeOptions = computed(() => {
+  if (props.isEdit) {
+    return allTaskTypeOptions
+  }
+  return allTaskTypeOptions.filter((option) => option.value === TaskType.AI_MESSAGE)
+})
 
 const triggerTypeOptions = [
   { title: t('schedule.cron_schedule'), value: TriggerType.CRON },

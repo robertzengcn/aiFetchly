@@ -5,12 +5,24 @@ import {
   getUnderlyingLocalModel,
   isLocalXenovaModel,
   makeVectorModelKey,
+  normalizeEmbeddingModelId,
   parseStoredEmbeddingModel,
   toPathSafeModelKey,
 } from "@/service/embedding/EmbeddingModelId";
 import { LOCAL_XENOVA_ALL_MINILM_MODEL_ID } from "@/service/embedding/LocalEmbeddingModels";
 
 describe("EmbeddingModelId", () => {
+  describe("normalizeEmbeddingModelId", () => {
+    it("upgrades legacy local model names to the canonical ID", () => {
+      expect(normalizeEmbeddingModelId("Xenova/all-MiniLM-L6-v2")).toBe(
+        LOCAL_XENOVA_ALL_MINILM_MODEL_ID
+      );
+      expect(normalizeEmbeddingModelId("Xenova/all-MiniLM-L6-v2 (free)")).toBe(
+        LOCAL_XENOVA_ALL_MINILM_MODEL_ID
+      );
+    });
+  });
+
   describe("getEmbeddingProvider", () => {
     it("resolves a local-xenova model ID to the local provider", () => {
       expect(getEmbeddingProvider(LOCAL_XENOVA_ALL_MINILM_MODEL_ID)).toBe(

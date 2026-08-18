@@ -13,12 +13,14 @@ import {
 import {
   YellowPagesTaskModel,
   YellowPagesTaskStatus,
+  YellowPagesTaskUpdateFields,
 } from "@/model/YellowPagesTask.model";
 import { YellowPagesResultModel } from "@/model/YellowPagesResult.model";
 import { YellowPagesProcessManager } from "@/modules/YellowPagesProcessManager";
 import { BrowserManager } from "@/modules/browserManager";
 import { AccountCookiesModule } from "@/modules/accountCookiesModule";
 import { PlatformRegistry } from "@/modules/PlatformRegistry";
+import { findPlatformByReference } from "@/modules/platforms/platformMatcher";
 
 /**
  * Main Yellow Pages Module that implements ITaskManager interface
@@ -64,14 +66,10 @@ export class YellowPagesModule extends BaseModule implements ITaskManager {
       this.validateTaskData(taskData);
 
       // Validate platform exists and is active (using TS registry)
-      const platform = this.platformRegistry
-        .getAllPlatforms()
-        .find(
-          (p) =>
-            p.id === taskData.platform ||
-            p.name === taskData.platform ||
-            p.display_name === taskData.platform
-        );
+      const platform = findPlatformByReference(
+        this.platformRegistry.getAllPlatforms(),
+        taskData.platform
+      );
       if (!platform)
         throw new Error(`Platform '${taskData.platform}' not found`);
       if (!platform.is_active)
@@ -388,12 +386,14 @@ export class YellowPagesModule extends BaseModule implements ITaskManager {
     try {
       log.info(`Updating Yellow Pages task ${taskId}:`, updates);
 
-      const updateData: any = {
+      // Heterogeneous update payload: fields stay typed where possible, JSON
+      // columns (keywords/proxy_config) are stringified before persistence.
+      const updateData: Record<string, unknown> = {
         ...updates,
         updated_at: new Date(),
       };
 
-      // Convert arrays to JSON strings if needed
+      // Convert arrays/objects to JSON strings if needed
       if (updates.keywords) {
         updateData.keywords = JSON.stringify(updates.keywords);
       }
@@ -401,7 +401,10 @@ export class YellowPagesModule extends BaseModule implements ITaskManager {
         updateData.proxy_config = JSON.stringify(updates.proxy_config);
       }
 
-      await this.taskModel.updateTask(taskId, updateData);
+      await this.taskModel.updateTask(
+        taskId,
+        updateData as unknown as YellowPagesTaskUpdateFields
+      );
 
       log.info(`Successfully updated Yellow Pages task ${taskId}`);
     } catch (error) {
@@ -470,7 +473,9 @@ export class YellowPagesModule extends BaseModule implements ITaskManager {
     activeTasks: number;
     completedTasks: number;
     failedTasks: number;
-    processHealth: any;
+    processHealth: Awaited<
+      ReturnType<YellowPagesProcessManager["healthCheck"]>
+    >;
   }> {
     try {
       const allTasks = await this.listTasks();

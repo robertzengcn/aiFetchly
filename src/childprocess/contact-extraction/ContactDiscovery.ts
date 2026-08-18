@@ -1,6 +1,5 @@
 import { Page } from "puppeteer";
 import { log } from "@/modules/Logger";
-import { AiChatApi } from "@/api/aiChatApi";
 import {
   ContactInfo,
   ExtractionResult,
@@ -12,6 +11,8 @@ import {
   registerActiveBrowser,
   unregisterActiveBrowser,
 } from "./activeBrowserRegistry";
+import { extractContactInfoWithWorkerAi } from "./ContactExtractionAiClient";
+import { navigateForContactExtraction } from "./ContactNavigation";
 
 /**
  * Contact Discovery - 4-Stage Pipeline
@@ -90,12 +91,13 @@ async function findContactPageHeuristic(page: Page): Promise<string | null> {
       return anchors
         .map((a) => ({
           href: (a as HTMLAnchorElement).href,
-          text: a.innerText.toLowerCase().trim(),
+          text: (a.innerText || "").toLowerCase().trim(),
           aria: a.getAttribute("aria-label") || "",
           visible: a.offsetWidth > 0 && a.offsetHeight > 0,
         }))
         .filter(
-          (link: any) => link.href && !link.href.startsWith("javascript")
+          (link: { href: string }) =>
+            link.href && !link.href.startsWith("javascript")
         );
     });
 
@@ -148,7 +150,7 @@ async function findContactPageHeuristic(page: Page): Promise<string | null> {
  * Stage 3: Fallback Standard Routes
  * Checks common contact page URLs
  */
-async function checkStandardRoutes(_baseUrl: string): Promise<string | null> {
+async function checkStandardRoutes(): Promise<string | null> {
   const commonPaths = [
     "/contact",
     "/contact-us",
@@ -183,6 +185,7 @@ async function captureScreenshot(page: Page): Promise<string | undefined> {
     return undefined;
   }
 }
+void captureScreenshot;
 
 /**
  * AI-Assisted Extraction (Primary Method)
@@ -200,7 +203,7 @@ async function extractWithAI(
       document
         .querySelectorAll("script, style, img, svg, nav, footer")
         .forEach((e) => e.remove());
-      return document.body.innerText.substring(0, 15000); // Limit to 15k chars
+      return (document.body?.innerText || "").substring(0, 15000); // Limit to 15k chars
     });
 
     // Derive entity name from page title or URL
@@ -212,14 +215,14 @@ async function extractWithAI(
       ? await captureScreenshotForAI(page)
       : undefined;
 
-    // Call AI service with screenshot
-    const aiChatApi = new AiChatApi();
-    const response = await aiChatApi.extractContactInfo(
-      cleanedContent,
+    // Call the worker-safe AI client with screenshot. The worker must not
+    // import the main-process AiChatApi/electron-store dependency graph.
+    const response = await extractContactInfoWithWorkerAi({
+      page_content: cleanedContent,
       url,
-      entityName,
-      screenshot
-    );
+      entity_name: entityName,
+      ...(screenshot ? { screenshot } : {}),
+    });
 
     if (response.status && response.data) {
       const aiData = response.data;
@@ -330,7 +333,7 @@ export async function discoverAndExtractContactInfo(
 
     // Navigate to URL with bot detection handling
     try {
-      await page.goto(url, { waitUntil: "networkidle0", timeout: 30000 });
+      await navigateForContactExtraction(page, url);
     } catch (navError) {
       // Check if it's a bot detection page
       const pageContent = await page.content();
@@ -345,7 +348,7 @@ export async function discoverAndExtractContactInfo(
         );
 
         // Retry with stealth (already enabled via puppeteer-extra-plugin-stealth)
-        await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
+        await navigateForContactExtraction(page, url);
       } else {
         throw navError;
       }
@@ -405,10 +408,7 @@ export async function discoverAndExtractContactInfo(
           log.info(
             `ContactDiscovery: Stage 2 found contact page: ${contactPageUrl}`
           );
-          await page.goto(contactPageUrl, {
-            waitUntil: "networkidle0",
-            timeout: 30000,
-          });
+          await navigateForContactExtraction(page, contactPageUrl);
 
           // F7 follow-up (defense in depth) — revalidate after navigating to
           // the DOM-derived contact page URL.
@@ -441,7 +441,7 @@ export async function discoverAndExtractContactInfo(
       log.info(
         "ContactDiscovery: Stage 3 - Fallback standard routes + AI extraction"
       );
-      const fallbackPath = await checkStandardRoutes(url);
+      const fallbackPath = await checkStandardRoutes();
 
       if (fallbackPath) {
         const fallbackUrl = new URL(fallbackPath, url).toString();
@@ -454,10 +454,7 @@ export async function discoverAndExtractContactInfo(
           log.info(`ContactDiscovery: Stage 3 trying ${fallbackUrl}`);
 
           try {
-            await page.goto(fallbackUrl, {
-              waitUntil: "networkidle0",
-              timeout: 30000,
-            });
+            await navigateForContactExtraction(page, fallbackUrl);
 
             // F7 follow-up (defense in depth) — revalidate the fallback URL.
             await assertPageUrlSafe(page);
@@ -503,7 +500,7 @@ export async function discoverAndExtractContactInfo(
     // Navigate back to homepage if we navigated away during earlier stages, or if AI was skipped
     const currentUrl = page.url();
     if (currentUrl !== url) {
-      await page.goto(url, { waitUntil: "networkidle0", timeout: 30000 });
+      await navigateForContactExtraction(page, url);
     }
     const stage4Result = await scanHomepageForContactInfo(page);
 

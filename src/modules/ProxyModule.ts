@@ -233,6 +233,30 @@ export class ProxyModule extends BaseModule implements IProxyApi {
   }
 
   /**
+   * Return proxies matching any of the provided numeric ids in one query.
+   * Used by AI tools to batch-build redacted summaries (proxy_check results,
+   * remove-failed candidates) instead of one getProxyDetail round-trip per id.
+   */
+  async getProxiesByIds(ids: readonly number[]): Promise<ProxyEntityType[]> {
+    try {
+      const proxies = await this.proxyModel.findByIds(ids);
+      return proxies.map((proxy) => ({
+        id: proxy.id,
+        host: proxy.host,
+        port: proxy.port,
+        user: proxy.user,
+        pass: proxy.pass,
+        protocol: proxy.protocol,
+        country_code: proxy.country_code,
+        addtime: proxy.addtime,
+      }));
+    } catch (error) {
+      console.error("Failed to fetch proxies by ids:", error);
+      return [];
+    }
+  }
+
+  /**
    * Get the total count of proxies
    */
   async getProxycount(): Promise<number> {

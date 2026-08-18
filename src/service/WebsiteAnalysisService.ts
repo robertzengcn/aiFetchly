@@ -2,11 +2,9 @@ import { WebsiteAnalysisQueue } from "@/modules/WebsiteAnalysisQueue";
 import { log } from "@/modules/Logger";
 import { SearchResultModule } from "@/modules/SearchResultModule";
 import { AiChatApi, WebsiteAnalysisRequest } from "@/api/aiChatApi";
-import { utilityProcess } from "electron";
-import * as path from "path";
-import * as fs from "fs";
 import { v4 as uuidv4 } from "uuid";
 import { UrlGuard } from "@/service/UrlGuard";
+import { WebsiteContentScrapeService } from "@/service/WebsiteContentScrapeService";
 
 /**
  * Configuration constants for website analysis
@@ -240,143 +238,16 @@ export class WebsiteAnalysisService {
   }
 
   /**
-   * Scrape website content using child process
+   * Scrape website content using the shared websiteContentScraper child process.
+   * Delegates to WebsiteContentScrapeService, which owns the fork + IPC handshake
+   * so website analysis and knowledge-library import share one scrape path.
    * @param url Website URL to scrape
    * @returns Markdown content of the website
    */
   private static async scrapeWebsite(url: string): Promise<string> {
-    const childProcessPath = this.getChildProcessPath();
-    if (!childProcessPath) {
-      throw new Error("Child process file not found");
-    }
-
-    return new Promise((resolve, reject) => {
-      const childProcess = utilityProcess.fork(childProcessPath, [], {
-        stdio: "pipe",
-        execArgv: ["puppeteer-cluster:*"],
-        env: {
-          ...process.env,
-          NODE_OPTIONS: "",
-        },
-      });
-
-      const requestId = `analyze-${uuidv4()}-${Date.now()}`;
-      const timeout = setTimeout(() => {
-        childProcess.kill();
-        reject(new Error("Website scraping timeout"));
-      }, ANALYSIS_CONFIG.SCRAPING_TIMEOUT);
-
-      interface ScrapeWebsiteMessage {
-        type: "SCRAPE_WEBSITE";
-        url: string;
-        requestId: string;
-      }
-
-      interface ScrapeWebsiteResponse {
-        type: "SCRAPE_SUCCESS" | "SCRAPE_ERROR";
-        requestId: string;
-        markdown?: string;
-        error?: string;
-      }
-
-      const messageHandler = (rawMessage: unknown) => {
-        let message: ScrapeWebsiteResponse;
-        try {
-          if (typeof rawMessage === "string") {
-            message = JSON.parse(rawMessage);
-          } else {
-            message = rawMessage as ScrapeWebsiteResponse;
-          }
-        } catch (error) {
-          clearTimeout(timeout);
-          childProcess.removeListener("message", messageHandler);
-          childProcess.kill();
-          reject(new Error("Error parsing child process message"));
-          return;
-        }
-
-        if (message.requestId !== requestId) {
-          return; // Ignore messages for other requests
-        }
-
-        clearTimeout(timeout);
-        childProcess.removeListener("message", messageHandler);
-        childProcess.kill();
-
-        if (message.type === "SCRAPE_ERROR") {
-          reject(new Error(message.error || "Failed to scrape website"));
-          return;
-        }
-
-        if (!message.markdown) {
-          reject(new Error("No content extracted from website"));
-          return;
-        }
-
-        resolve(message.markdown);
-      };
-
-      childProcess.on("message", messageHandler);
-
-      childProcess.on("error", (error: unknown) => {
-        clearTimeout(timeout);
-        childProcess.removeListener("message", messageHandler);
-        const errorMessage =
-          error instanceof Error ? error.message : String(error);
-        reject(new Error(`Child process error: ${errorMessage}`));
-      });
-
-      childProcess.on("exit", (code) => {
-        if (code !== 0 && code !== null) {
-          clearTimeout(timeout);
-          childProcess.removeListener("message", messageHandler);
-          reject(new Error(`Child process exited with code ${code}`));
-        }
-      });
-
-      childProcess.on("spawn", () => {
-        const scrapeMessage: ScrapeWebsiteMessage = {
-          type: "SCRAPE_WEBSITE",
-          url: url,
-          requestId: requestId,
-        };
-        childProcess.postMessage(JSON.stringify(scrapeMessage));
-      });
-    });
-  }
-
-  /**
-   * Get child process path for website scraping
-   */
-  private static getChildProcessPath(): string | null {
-    // Try the same path pattern as WebsiteAnalysisQueue
-    const childPath = path.join(
-      __dirname,
-      "./childprocess/websiteContentScraper.js"
-    );
-    if (!fs.existsSync(childPath)) {
-      // Try relative path from service directory
-      const altPath1 = path.join(
-        __dirname,
-        "../childprocess/websiteContentScraper.js"
-      );
-      if (fs.existsSync(altPath1)) {
-        return altPath1;
-      }
-      // Try dist directory
-      const altPath2 = path.join(
-        process.cwd(),
-        "dist/childprocess/websiteContentScraper.js"
-      );
-      if (fs.existsSync(altPath2)) {
-        return altPath2;
-      }
-      log.warn(
-        `Child process file not found. Tried: ${childPath}, ${altPath1}, ${altPath2}`
-      );
-      return null;
-    }
-    return childPath;
+    const service = new WebsiteContentScrapeService();
+    const result = await service.scrapePage(url);
+    return result.markdown;
   }
 
   /**

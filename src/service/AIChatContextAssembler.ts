@@ -16,6 +16,7 @@ import {
 import { WorkspaceResolver } from "@/service/WorkspaceResolver";
 import { AIFetchlyContextLoader } from "@/service/aifetchlyConfig/AIFetchlyContextLoader";
 import { buildAvailableAgentsBlock } from "@/service/aifetchlyConfig/availableAgentsBlock";
+import { buildBuiltInToolCapabilitiesSection } from "@/service/BuiltInToolCapabilitiesPromptSection";
 import path from "node:path";
 import os from "node:os";
 import type {
@@ -42,7 +43,9 @@ export interface AIChatContextAssembleInput {
   readonly maxTokens?: number;
   readonly planState?: AIChatPlanStateView | null;
   readonly recentMessageWindow?: number;
-  readonly currentUserContentParts?: Array<OpenAITextContentPart | OpenAIImageUrlContentPart>;
+  readonly currentUserContentParts?: Array<
+    OpenAITextContentPart | OpenAIImageUrlContentPart
+  >;
 }
 
 export interface AIChatContextAssembleResult {
@@ -213,6 +216,26 @@ export class AIChatContextAssembler {
       );
     }
 
+    // Built-in tool capabilities guidance (HTML-artifacts design §15,
+    // generalized to every contextual/deferred built-in family). A static,
+    // main-process-safe "capability → tool → search query" table that tells
+    // the model which specialized tool to reach for (or to load via
+    // tool_catalog_search when it is not exposed) so it does not fall back to
+    // file_read/glob_files or paste rendered output into chat. One compact
+    // block (~350 tokens) keeps the always-injected budget close to the
+    // category-level approach preferred by tool-list-management design §20.
+    try {
+      messages.push({
+        role: "system",
+        content: buildBuiltInToolCapabilitiesSection(),
+      });
+    } catch (err) {
+      console.error(
+        "[ai-chat-context] built-in tool capabilities injection failed:",
+        err
+      );
+    }
+
     // Durable user memory injection. Reads the user-controllable toggle from
     // the system_setting table (default-on when absent). Placed before compact
     // context so recent conversation history wins when they conflict.
@@ -341,15 +364,16 @@ export class AIChatContextAssembler {
     let appVersion = "unknown";
     try {
       const { app } = await import("electron");
-      const fn = (
-        app as unknown as { getVersion?: () => string }
-      ).getVersion;
+      const fn = (app as unknown as { getVersion?: () => string }).getVersion;
       appVersion = typeof fn === "function" ? fn.call(app) : "unknown";
     } catch {
       // Not running inside Electron (e.g. test runner) — leave as "unknown".
     }
 
-    const now = new Date().toISOString().replace("T", " ").replace(/\.\d+Z$/, " UTC");
+    const now = new Date()
+      .toISOString()
+      .replace("T", " ")
+      .replace(/\.\d+Z$/, " UTC");
 
     return [
       "# Environment & System Context",

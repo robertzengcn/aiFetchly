@@ -424,9 +424,9 @@ describe("AIChatContextAssembler — custom context directive", () => {
           message.content.includes("Environment & System Context")
       )
     ).toBe(true);
-    expect(
-      result.messages.some((message) => message.content === "")
-    ).toBe(false);
+    expect(result.messages.some((message) => message.content === "")).toBe(
+      false
+    );
     expect(result.messages[result.messages.length - 1]).toEqual({
       role: "user",
       content: "hello",
@@ -504,5 +504,69 @@ describe("AIChatContextAssembler — custom context directive", () => {
       role: "user",
       content: "hello",
     });
+  });
+});
+
+describe("AIChatContextAssembler — built-in tool capabilities", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockDurableRetrieve.mockResolvedValue({
+      memories: [],
+      tokenEstimate: 0,
+      contextBlock: "",
+    });
+    mockWorkspaceRetrieve.mockResolvedValue({
+      memories: [],
+      tokenEstimate: 0,
+      contextBlock: "",
+    });
+    mockGetByConversation.mockResolvedValue(null);
+    mockGetActiveSummary.mockResolvedValue(null);
+    mockGetConversationMessages.mockResolvedValue([]);
+    mockGetSettingValue.mockResolvedValue(null);
+    mockListActiveForRuntime.mockResolvedValue([]);
+  });
+
+  it("injects the built-in tool capabilities table as a system message", async () => {
+    const assembler = new AIChatContextAssembler();
+    const result = await assembler.assemble({
+      conversationId: "conv-caps",
+      currentUserMessage: "show result in html",
+      baseSystemPrompt: "you are helpful",
+      mode: "chat",
+    });
+
+    const guidance = result.messages.find(
+      (m) =>
+        m.role === "system" &&
+        typeof m.content === "string" &&
+        m.content.includes("Built-in Tool Capabilities")
+    );
+    expect(guidance).toBeTruthy();
+    // The table covers the HTML artifact capability plus the discovery
+    // fallback, and steers the model away from substituting file_read.
+    expect(guidance!.content).toContain("create_html_artifact");
+    expect(guidance!.content).toContain("file_read");
+    expect(guidance!.content).toContain("tool_catalog_search");
+  });
+
+  it("injects the capabilities table even for a plain conversational message", async () => {
+    const assembler = new AIChatContextAssembler();
+    const result = await assembler.assemble({
+      conversationId: "conv-caps",
+      currentUserMessage: "what is the weather today",
+      baseSystemPrompt: "you are helpful",
+      mode: "chat",
+    });
+
+    const guidance = result.messages.find(
+      (m) =>
+        m.role === "system" &&
+        typeof m.content === "string" &&
+        m.content.includes("Built-in Tool Capabilities")
+    );
+    // Guidance is always injected (cheap, static) so the model knows the
+    // intent to reach for the artifact tool before it is promoted.
+    expect(guidance).toBeTruthy();
   });
 });

@@ -1079,6 +1079,85 @@ describe("AiChatApi - OpenAI compatibility fallback", () => {
     expect(chunks).toEqual([{ content: "AI response", finishReason: "stop" }]);
   });
 
+  it("preserves images from non-streaming message choices returned from the OpenAI stream route", async () => {
+    const encoder = new TextEncoder();
+    const imageUrl = "https://example.com/generated.png";
+    const response = new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(
+            encoder.encode(
+              [
+                `data: ${JSON.stringify({
+                  id: "resp-image-1",
+                  object: "chat.completion",
+                  created: 1,
+                  model: "gpt-test",
+                  choices: [
+                    {
+                      index: 0,
+                      message: {
+                        role: "assistant",
+                        content: "Image ready",
+                        images: [
+                          {
+                            type: "image",
+                            delivery: "provider_url",
+                            url: imageUrl,
+                            mime_type: "image/png",
+                            download_required: true,
+                          },
+                        ],
+                      },
+                      finish_reason: "stop",
+                    },
+                  ],
+                })}`,
+                "",
+                "data: [DONE]",
+                "",
+              ].join("\n")
+            )
+          );
+          controller.close();
+        },
+      }),
+      {
+        status: 200,
+        headers: { "Content-Type": "text/event-stream" },
+      }
+    );
+
+    mockPostStreamShared.mockResolvedValueOnce(response);
+
+    const chunks: Array<{
+      content?: string | null;
+      imageUrl?: string;
+      finishReason?: string | null;
+    }> = [];
+    await api.openAIChatCompletionStream(
+      {
+        model: "gpt-test",
+        messages: [{ role: "user", content: "Generate an image" }],
+      },
+      (chunk) => {
+        chunks.push({
+          content: chunk.choices[0]?.delta?.content,
+          imageUrl: chunk.choices[0]?.delta?.images?.[0]?.url,
+          finishReason: chunk.choices[0]?.finish_reason,
+        });
+      }
+    );
+
+    expect(chunks).toEqual([
+      {
+        content: "Image ready",
+        imageUrl,
+        finishReason: "stop",
+      },
+    ]);
+  });
+
   it("recovers a non-SSE JSON body with finish_reason=error when server bypasses SSE framing", async () => {
     // Real-world failure: under load the AI server sometimes returns a plain
     // JSON body (no "data:" prefix) using the non-streaming "message" shape.
@@ -1371,6 +1450,50 @@ describe("AiChatApi - Recovery-driven streaming retry", () => {
       await p;
 
       expect(layers).toEqual(["overload_retry"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps retrying a transient HTTP 520 until the tenth foreground attempt succeeds", async () => {
+    vi.useFakeTimers();
+    try {
+      for (let attempt = 1; attempt < 10; attempt += 1) {
+        mockPostStreamShared.mockResolvedValueOnce(
+          makeResponse("temporary upstream failure", 520)
+        );
+      }
+      mockPostStreamShared.mockResolvedValueOnce(successStream());
+
+      const api = new AiChatApi();
+      const chunks: string[] = [];
+      const retries: Array<{ attempt: number; maxAttempts: number }> = [];
+      const p = api.openAIChatCompletionStream(
+        {
+          model: "m",
+          messages: [{ role: "user", content: "hi" }],
+          max_tokens: 16,
+        },
+        (chunk) => {
+          const content = chunk.choices[0]?.delta?.content;
+          if (content) chunks.push(content);
+        },
+        {
+          retryProfile: "foreground",
+          onRetry: (info) =>
+            retries.push({
+              attempt: info.attempt,
+              maxAttempts: info.maxAttempts,
+            }),
+        }
+      );
+
+      await vi.runAllTimersAsync();
+      await p;
+
+      expect(chunks.join("")).toBe("ok");
+      expect(mockPostStreamShared).toHaveBeenCalledTimes(10);
+      expect(retries.at(-1)).toEqual({ attempt: 10, maxAttempts: 10 });
     } finally {
       vi.useRealTimers();
     }

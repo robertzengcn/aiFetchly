@@ -65,6 +65,7 @@ describe("UserPluginAutoInstallService", () => {
             mcpServerCount: 0,
             agentCount: 1,
             commandCount: 0,
+            hookCount: 0,
             permissions: [],
             lastUpdated: new Date("2026-07-15T00:00:00.000Z").toISOString(),
           },

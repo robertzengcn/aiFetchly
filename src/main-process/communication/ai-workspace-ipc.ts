@@ -1,6 +1,9 @@
-import { BrowserWindow, dialog } from "electron";
+import { BrowserWindow } from "electron";
 import { z } from "zod";
 import { lazySchema } from "@/utils/lazySchema";
+import { Token } from "@/modules/token";
+import { USER_AI_ENABLED } from "@/config/usersetting";
+import { getNativeDialogService } from "@/service/dialogs/NativeDialogServiceProvider";
 import {
   AI_WORKSPACE_SET,
   AI_WORKSPACE_GET,
@@ -70,7 +73,8 @@ export function registerAIWorkspaceIpcHandlers(_win: BrowserWindow): void {
 
   // Folder picker dialog. Gated on AI enablement per CLAUDE.md.
   registerAiValidatedHandler(DIALOG_PICK_FOLDER, noInputSchema, async () => {
-    const result = await dialog.showOpenDialog(_win, {
+    const dialogService = await getNativeDialogService();
+    const result = await dialogService.showOpenDialog({
       properties: ["openDirectory"],
     });
     if (result.canceled || result.filePaths.length === 0) {

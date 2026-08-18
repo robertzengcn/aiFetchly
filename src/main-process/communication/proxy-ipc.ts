@@ -66,7 +66,11 @@ export function registeProxyIpcHandlers() {
     proxyByIdInputSchema,
     async (input) => {
       const proxyModule: IProxyApi = new ProxyModule();
-      return proxyModule.getProxyDetail(input.id);
+      const response = await proxyModule.getProxyDetail(input.id);
+      if (!response.status || !response.data) {
+        throw new Error(response.msg || "Failed to get proxy details");
+      }
+      return response.data;
     },
   );
 

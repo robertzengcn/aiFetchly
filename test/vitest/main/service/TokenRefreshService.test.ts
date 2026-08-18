@@ -98,6 +98,27 @@ function resetStaticState(): void {
   staticState._consecutiveFailures = 0;
 }
 
+/**
+ * Mark auto-refresh as running without firing the immediate check.
+ * Prefer this over startAutoRefresh() when the test will call
+ * performAutoRefreshCheck() itself — otherwise the fire-and-forget initial
+ * check races the awaited one and flakes under load.
+ */
+function markAutoRefreshRunning(): void {
+  const staticState = TokenRefreshService as unknown as {
+    _isAutoRefreshRunning: boolean;
+    _autoRefreshTimer: ReturnType<typeof setInterval> | null;
+    _consecutiveFailures: number;
+  };
+  staticState._consecutiveFailures = 0;
+  staticState._isAutoRefreshRunning = true;
+  // Use a no-op interval so isAutoRefreshRunning stays meaningful and
+  // stopAutoRefresh() can clearInterval safely.
+  staticState._autoRefreshTimer = setInterval(() => {
+    /* test stub — real checks are driven explicitly */
+  }, 60_000);
+}
+
 describe("isTransientBackendError", () => {
   test("TypeError 'fetch failed' is transient (backend unreachable)", () => {
     expect(isTransientBackendError(new TypeError("fetch failed"))).toBe(true);
@@ -121,7 +142,9 @@ describe("isTransientBackendError", () => {
 
   test("HTTP 5xx is transient (backend up but erroring)", () => {
     expect(
-      isTransientBackendError(new Error("HTTP error: 500 Internal Server Error"))
+      isTransientBackendError(
+        new Error("HTTP error: 500 Internal Server Error")
+      )
     ).toBe(true);
     expect(
       isTransientBackendError(new Error("HTTP error: 503 Service Unavailable"))
@@ -131,7 +154,7 @@ describe("isTransientBackendError", () => {
     ).toBe(true);
   });
 
-  test("RefreshTokenInvalidError is NOT transient", () => {
+  test("RefreshTokenInvalidError is auth-shaped, not transient", () => {
     expect(
       isTransientBackendError(new RefreshTokenInvalidError("expired"))
     ).toBe(false);
@@ -189,7 +212,11 @@ describe("refreshOnce — process-wide serialization", () => {
 
   test("runs only one network refresh for two concurrent callers", async () => {
     // Make fetch resolve slowly so both callers are definitely in flight.
-    let resolveFetch!: (value: Response) => void;
+    // IMPORTANT: _performRefreshNetwork awaits dynamic imports before calling
+    // fetch, so resolveFetch is assigned only after mockFetch runs. Wait for
+    // that before resolving — otherwise resolveFetch is still undefined and
+    // the hanging in-flight promise pollutes later tests.
+    let resolveFetch: ((value: Response) => void) | undefined;
     mockFetch.mockImplementation(
       () =>
         new Promise<Response>((resolve) => {
@@ -214,7 +241,11 @@ describe("refreshOnce — process-wide serialization", () => {
     // While in flight, the static slot must be populated.
     expect(TokenRefreshService.isRefreshInFlight()).toBe(true);
 
-    resolveFetch(fakeResponse(payload));
+    await vi.waitFor(() => {
+      expect(mockFetch).toHaveBeenCalled();
+      expect(resolveFetch).toBeTypeOf("function");
+    });
+    resolveFetch!(fakeResponse(payload));
 
     const [r1, r2] = await Promise.all([p1, p2]);
 
@@ -276,7 +307,7 @@ describe("refreshOnce — process-wide serialization", () => {
 
 describe("case-insensitive refresh-token-invalid handling", () => {
   // The background refresh path stops the auto-refresh timer when the refresh
-  // token is invalid. With the merged typed-error design, a body-level code 401
+  // endpoint rejects the token. With the merged typed-error design, a body-level code 401
   // throws RefreshTokenInvalidError regardless of message casing, so the
   // lowercase backend message that previously slipped past a capital-I match
   // is now handled. This test guards that behavior end-to-end.
@@ -308,7 +339,7 @@ describe("case-insensitive refresh-token-invalid handling", () => {
     vi.unstubAllGlobals();
   });
 
-  test("stops auto-refresh on lowercase 'invalid or expired refresh token'", async () => {
+  test("stops auto-refresh without signout on lowercase 'invalid or expired refresh token'", async () => {
     mockFetch.mockResolvedValue(
       fakeResponse({
         status: false,
@@ -329,6 +360,8 @@ describe("case-insensitive refresh-token-invalid handling", () => {
     await vi.waitFor(() => {
       expect(stopSpy).toHaveBeenCalled();
     });
+    expect(mockSignout).not.toHaveBeenCalled();
+    expect(mockRemoveToken).not.toHaveBeenCalled();
 
     stopSpy.mockRestore();
     TokenRefreshService.stopAutoRefresh();
@@ -370,9 +403,8 @@ describe("TokenRefreshService.performAutoRefreshCheck", () => {
   test("network error (fetch failed) does NOT sign out and keeps auto-refresh running", async () => {
     mockFetch.mockRejectedValue(new TypeError("fetch failed"));
 
-    TokenRefreshService.startAutoRefresh();
-    // Drive a deterministic check (also lets startAutoRefresh's immediate
-    // fire-and-forget check settle, since both consume the same sync mock).
+    // Avoid startAutoRefresh()'s fire-and-forget check racing this awaited one.
+    markAutoRefreshRunning();
     await TokenRefreshService.performAutoRefreshCheck();
 
     expect(mockFetch).toHaveBeenCalled();
@@ -391,7 +423,7 @@ describe("TokenRefreshService.performAutoRefreshCheck", () => {
       })
     );
 
-    TokenRefreshService.startAutoRefresh();
+    markAutoRefreshRunning();
     await TokenRefreshService.performAutoRefreshCheck();
 
     expect(mockFetch).toHaveBeenCalled();
@@ -415,14 +447,18 @@ describe("TokenRefreshService.performAutoRefreshCheck", () => {
     // throws a plain Error (not RefreshTokenInvalidError, not transient) → Case C.
     mockFetch.mockResolvedValue(
       fakeResponse(
-        { status: false, code: 500, msg: "unexpected backend error", data: null },
+        {
+          status: false,
+          code: 500,
+          msg: "unexpected backend error",
+          data: null,
+        },
         { ok: true, status: 200 }
       )
     );
 
-    TokenRefreshService.startAutoRefresh();
-    // MAX_CONSECUTIVE_FAILURES === 3; the startAutoRefresh immediate check plus
-    // these calls push the counter past the threshold.
+    markAutoRefreshRunning();
+    // MAX_CONSECUTIVE_FAILURES === 3; drive exactly three explicit checks.
     for (let i = 0; i < 3; i++) {
       await TokenRefreshService.performAutoRefreshCheck();
     }
@@ -433,7 +469,7 @@ describe("TokenRefreshService.performAutoRefreshCheck", () => {
     expect(TokenRefreshService.isAutoRefreshRunning()).toBe(false);
   });
 
-  test("refresh token genuinely invalid (API code 401) DOES sign out and stops auto-refresh", async () => {
+  test("refresh endpoint auth failure stops auto-refresh but does NOT sign out", async () => {
     mockFetch.mockResolvedValue(
       fakeResponse(
         {
@@ -446,17 +482,18 @@ describe("TokenRefreshService.performAutoRefreshCheck", () => {
       )
     );
 
-    TokenRefreshService.startAutoRefresh();
+    markAutoRefreshRunning();
     await TokenRefreshService.performAutoRefreshCheck();
 
-    expect(mockSignout).toHaveBeenCalled();
+    expect(mockSignout).not.toHaveBeenCalled();
+    expect(mockRemoveToken).not.toHaveBeenCalled();
     expect(TokenRefreshService.isAutoRefreshRunning()).toBe(false);
   });
 
   test("expired refresh token DOES sign out (detected before hitting the network)", async () => {
     tokenState.values[REFRESHTOKENEXPIRY] = String(Date.now() - 1_000); // refresh token expired
 
-    TokenRefreshService.startAutoRefresh();
+    markAutoRefreshRunning();
     await TokenRefreshService.performAutoRefreshCheck();
 
     expect(mockFetch).not.toHaveBeenCalled();
@@ -495,10 +532,9 @@ describe("TokenRefreshService.performAutoRefreshCheck", () => {
 });
 
 describe("TokenRefreshService.refreshAccessToken throw-type contract", () => {
-  // The linchpin of the transient-vs-auth design: every genuine auth failure
-  // MUST throw RefreshTokenInvalidError so performAutoRefreshCheck signs the
-  // user out (and HttpClient callers handle it). A regression to a plain Error
-  // would silently keep rejected sessions alive.
+  // The linchpin of the transient-vs-auth design: every auth-shaped refresh
+  // failure MUST throw RefreshTokenInvalidError so performAutoRefreshCheck can
+  // stop background refresh without clearing the local session.
 
   beforeEach(() => {
     vi.stubGlobal("fetch", mockFetch);

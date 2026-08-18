@@ -43,7 +43,18 @@ if (!result.success) {
 const js = await result.outputs[0].text();
 
 // Escape inline-script terminators (see header note).
-const inlineJs = js.replaceAll("</scri", "<\\/scri");
+let inlineJs = js.replaceAll("</scri", "<\\/scri");
+
+// Neutralize the Firebase API key baked into @excalidraw/excalidraw's bundled
+// env config. Excalidraw ships VITE_APP_FIREBASE_CONFIG for its optional
+// real-time collaboration; this build uses the package only for local SVG /
+// export utilities and never connects to Firebase, so the key is inert here.
+// Strip it so secret scanners don't flag a third-party public key (eng-review
+// D2 integrity: deterministic string replace, drift tests stay green).
+inlineJs = inlineJs.replace(
+  /(VITE_APP_FIREBASE_CONFIG:'\{"apiKey":")[^"]*(")/,
+  `$1REDACTED$2`
+);
 
 const head = `<!doctype html>
 <html>
@@ -75,6 +86,18 @@ const tail = `
 `;
 
 const html = head + inlineJs + tail;
+
+// Guard: fail the build if any Google API key pattern survives the strip
+// above. Catches a future @excalidraw/excalidraw bump that re-introduces a
+// key under a different property name rather than silently shipping it.
+const leakedKey = html.match(/AIza[0-9A-Za-z_-]{35}/);
+if (leakedKey) {
+  console.error(
+    `build abort: leaked Google API key in bundle: ${leakedKey[0]}`
+  );
+  process.exit(1);
+}
+
 await Bun.write(DIST_HTML, html);
 
 const sha256 = createHash("sha256").update(html).digest("hex");
@@ -95,5 +118,11 @@ const info = {
 };
 await Bun.write(BUILD_INFO, JSON.stringify(info, null, 2) + "\n");
 
-console.log(`built ${path.relative(process.cwd(), DIST_HTML)} (${(info.bytes / 1024 / 1024).toFixed(2)} MB)`);
+console.log(
+  `built ${path.relative(process.cwd(), DIST_HTML)} (${(
+    info.bytes /
+    1024 /
+    1024
+  ).toFixed(2)} MB)`
+);
 console.log(`sha256 ${sha256}`);

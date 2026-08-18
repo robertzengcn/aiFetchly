@@ -66,7 +66,7 @@ import notificationManager from '@/views/services/notificationManager'
 const { t } = useI18n()
 const router = useRouter()
 
-const props = withDefaults(defineProps<{
+withDefaults(defineProps<{
   timeout?: number
 }>(), {
   timeout: 10000

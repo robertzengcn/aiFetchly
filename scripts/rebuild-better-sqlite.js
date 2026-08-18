@@ -60,6 +60,70 @@ function electronCliPath() {
   return path.join(PROJECT_ROOT, "node_modules", ".bin", name);
 }
 
+function runElectronProbe(probeSrc, timeout = 45000) {
+  const electronBin = electronCliPath();
+  if (!fs.existsSync(electronBin)) return null;
+
+  // Electron's CLI does not reliably accept `-e`, so write the probe to a temp
+  // file and point Electron at it.
+  const probeFile = path.join(
+    os.tmpdir(),
+    `aifetchly-electron-probe-${process.pid}-${Date.now()}.js`
+  );
+  try {
+    fs.writeFileSync(probeFile, probeSrc);
+  } catch {
+    return null;
+  }
+
+  try {
+    return spawnSync(
+      electronBin,
+      ["--no-sandbox", "--headless", "--disable-gpu", probeFile],
+      { cwd: PROJECT_ROOT, encoding: "utf-8", timeout }
+    );
+  } catch {
+    return null;
+  } finally {
+    try {
+      fs.unlinkSync(probeFile);
+    } catch {
+      /* best-effort */
+    }
+  }
+}
+
+function getElectronRuntimeModuleVersion() {
+  const result = runElectronProbe(
+    "process.stdout.write('ELECTRON_MODULE_VERSION:' + process.versions.modules); process.exit(0);",
+    15000
+  );
+  const match = (result?.stdout || "").match(/ELECTRON_MODULE_VERSION:(\d+)/);
+  return match ? Number(match[1]) : null;
+}
+
+function getCompiledModuleVersion() {
+  const modulePath = betterSqliteNodePath();
+  if (!fs.existsSync(modulePath)) return null;
+  const script = [
+    "try {",
+    `  require(${JSON.stringify(modulePath)});`,
+    "  process.stdout.write('MODULE_VERSION:' + process.versions.modules);",
+    "} catch (e) {",
+    "  const msg = String((e && e.message) || e);",
+    "  const match = msg.match(/NODE_MODULE_VERSION\\s+(\\d+)/);",
+    "  if (match) process.stdout.write('MODULE_VERSION:' + match[1]);",
+    "}",
+  ].join("\n");
+  const result = spawnSync(process.execPath, ["-e", script], {
+    cwd: PROJECT_ROOT,
+    encoding: "utf-8",
+    timeout: 10000,
+  });
+  const match = (result.stdout || "").match(/MODULE_VERSION:(\d+)/);
+  return match ? Number(match[1]) : null;
+}
+
 /**
  * Probe whether the current better-sqlite3 binary loads in Electron.
  *   "ok"      — Electron spawned AND better-sqlite3 loaded successfully.
@@ -69,8 +133,6 @@ function electronCliPath() {
  *               missing, timeout, etc.). Caller should trust the rebuild.
  */
 function probeElectronLoad() {
-  const electronBin = electronCliPath();
-  if (!fs.existsSync(electronBin)) return "unknown";
   if (!fs.existsSync(betterSqliteNodePath())) return "fail";
 
   // Require by absolute path so module resolution does not depend on where the
@@ -80,8 +142,6 @@ function probeElectronLoad() {
     "node_modules",
     "better-sqlite3"
   );
-  // Electron's CLI does not reliably accept `-e`, so write the probe to a temp
-  // file and point Electron at it.
   const probeSrc = [
     "const { app } = require('electron');",
     "app.whenReady().then(() => {",
@@ -97,29 +157,8 @@ function probeElectronLoad() {
     "});",
     "setTimeout(() => { try { app.quit(); } catch (_) {} process.exit(3); }, 30000).unref();",
   ].join("\n");
-  const probeFile = path.join(os.tmpdir(), "aifetchly-bsql-probe.js");
-  try {
-    fs.writeFileSync(probeFile, probeSrc);
-  } catch (writeError) {
-    return "unknown";
-  }
-
-  let result;
-  try {
-    result = spawnSync(
-      electronBin,
-      ["--no-sandbox", "--headless", "--disable-gpu", probeFile],
-      { cwd: PROJECT_ROOT, encoding: "utf-8", timeout: 45000 }
-    );
-  } catch (spawnError) {
-    return "unknown";
-  } finally {
-    try {
-      fs.unlinkSync(probeFile);
-    } catch (cleanupError) {
-      /* best-effort */
-    }
-  }
+  const result = runElectronProbe(probeSrc);
+  if (!result) return "unknown";
 
   if (/BSQL_OK/.test(result.stdout || "")) return "ok";
   if (/BSQL_FAIL/.test(result.stdout || "")) {
@@ -135,26 +174,74 @@ function probeElectronLoad() {
 }
 
 /**
- * Recompile better-sqlite3 from source against Electron's headers. Uses CLI
- * flags (not npm_config_* env vars): they propagate reliably through
- * better-sqlite3's build, where the env-var form silently left a Node build.
+ * Recompile better-sqlite3 from source against Electron's headers using the
+ * same @electron/rebuild implementation that Forge uses for startup.
  */
 function rebuildForElectron(electronVersion) {
-  const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
+  const rebuildCommand =
+    process.platform === "win32" ? "electron-rebuild.cmd" : "electron-rebuild";
+  const rebuildPath = path.join(
+    PROJECT_ROOT,
+    "node_modules",
+    ".bin",
+    rebuildCommand
+  );
   const args = [
-    "rebuild",
-    "better-sqlite3",
-    "--build-from-source",
-    "--runtime=electron",
-    `--target=${electronVersion}`,
-    "--disturl=https://electronjs.org/headers",
+    "--force",
+    "--only=better-sqlite3",
+    `--version=${electronVersion}`,
     `--arch=${process.arch}`,
+    "--build-from-source",
   ];
   console.log(
     `Rebuilding better-sqlite3 for Electron ${electronVersion} (${process.platform}/${process.arch})...`
   );
-  const result = spawnSync(npmCommand, args, {
+  const result = spawnSync(rebuildPath, args, {
     cwd: PROJECT_ROOT,
+    shell: process.platform === "win32",
+    stdio: "inherit",
+  });
+  if (result.error) {
+    console.error(result.error);
+    return false;
+  }
+  return result.status === 0;
+}
+
+function rebuildForElectronWithNodeGyp(electronVersion) {
+  let nodeGypPath;
+  try {
+    nodeGypPath = require.resolve("node-gyp/bin/node-gyp.js", {
+      paths: [PROJECT_ROOT],
+    });
+  } catch {
+    console.error("Could not find node-gyp for direct better-sqlite3 rebuild.");
+    return false;
+  }
+
+  const moduleDir = path.join(PROJECT_ROOT, "node_modules", "better-sqlite3");
+  const args = [
+    nodeGypPath,
+    "rebuild",
+    "--release",
+    "--runtime=electron",
+    `--target=${electronVersion}`,
+    "--dist-url=https://electronjs.org/headers",
+    `--arch=${process.arch}`,
+    "--force_build=1",
+  ];
+  console.log(
+    `Retrying better-sqlite3 rebuild with direct node-gyp for Electron ${electronVersion} (${process.platform}/${process.arch})...`
+  );
+  const result = spawnSync(process.execPath, args, {
+    cwd: moduleDir,
+    env: {
+      ...process.env,
+      npm_config_runtime: "electron",
+      npm_config_target: electronVersion,
+      npm_config_disturl: "https://electronjs.org/headers",
+      npm_config_arch: process.arch,
+    },
     stdio: "inherit",
   });
   if (result.error) {
@@ -191,7 +278,21 @@ function run() {
 
   // Never silently leave a Node-built binary — that is exactly the churn this
   // script prevents. Fail loudly on a definitive mismatch.
-  const after = probeElectronLoad();
+  let after = probeElectronLoad();
+  if (after === "fail") {
+    const electronModuleVersion = getElectronRuntimeModuleVersion();
+    const compiledModuleVersion = getCompiledModuleVersion();
+    console.warn(
+      `better-sqlite3 module version after npm rebuild: ${
+        compiledModuleVersion ?? "unknown"
+      }; Electron expects: ${electronModuleVersion ?? "unknown"}.`
+    );
+    if (!rebuildForElectronWithNodeGyp(electronVersion)) {
+      console.error("better-sqlite3 direct node-gyp rebuild failed.");
+      return 1;
+    }
+    after = probeElectronLoad();
+  }
   if (after === "fail") {
     console.error(
       "better-sqlite3 was rebuilt but still fails to load under Electron. Refusing to leave the app in a broken state."
@@ -221,5 +322,7 @@ if (require.main === module) {
 
 module.exports = {
   getElectronTargetVersion,
+  getElectronRuntimeModuleVersion,
+  getCompiledModuleVersion,
   probeElectronLoad,
 };

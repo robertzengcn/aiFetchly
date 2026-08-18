@@ -94,6 +94,7 @@ This constitution establishes the fundamental principles, values, and guidelines
   3. Ensure code follows project structure
   4. Update rules if new patterns emerged (per [self_improve.mdc](mdc:.cursor/rules/self_improve.mdc))
   5. Document any architectural decisions
+  6. **Commit immediately** after each bug fix or completed task (per [auto-commit.mdc](mdc:.cursor/rules/auto-commit.mdc)) — do not wait for the user to ask
 
 ## Rule Hierarchy
 
@@ -109,6 +110,7 @@ Rules are applied in the following order of precedence:
 
 - **Type Safety Violations**: Must be fixed immediately - no exceptions
 - **Security Issues**: Critical priority - must be addressed before merge
+- **Uncommitted completed work**: Must not happen — every bug fix and finished task requires a git commit per [auto-commit.mdc](mdc:.cursor/rules/auto-commit.mdc)
 - **Code Quality**: Should be addressed in code review
 - **Rule Updates**: Should be proposed when patterns emerge
 
@@ -132,6 +134,7 @@ Amendments must:
 - [Electron Rules](mdc:.cursor/rules/electron-rules.mdc) - Framework guidelines
 - [Cursor Rules](mdc:.cursor/rules/cursor_rules.mdc) - Rule formatting standards
 - [Self-Improvement Rules](mdc:.cursor/rules/self_improve.mdc) - Rule evolution process
+- [Auto-Commit Rules](mdc:.cursor/rules/auto-commit.mdc) - Commit after bug fixes and completed tasks
 
 ---
 

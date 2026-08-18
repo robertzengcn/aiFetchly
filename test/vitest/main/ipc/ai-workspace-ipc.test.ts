@@ -17,6 +17,12 @@ vi.mock("electron", () => ({
   },
 }));
 
+vi.mock("@/service/dialogs/NativeDialogServiceProvider", () => ({
+  getNativeDialogService: async () => ({
+    showOpenDialog: mockShowOpenDialog,
+  }),
+}));
+
 vi.mock("@/modules/token", () => ({
   Token: vi.fn().mockImplementation(() => ({
     getValue: vi.fn().mockImplementation(() => mockState.aiEnabled),
@@ -73,7 +79,7 @@ describe("AI workspace IPC folder picker", () => {
       DIALOG_PICK_FOLDER
     )) as CommonMessage<string | null>;
 
-    expect(mockShowOpenDialog).toHaveBeenCalledWith(win, {
+    expect(mockShowOpenDialog).toHaveBeenCalledWith({
       properties: ["openDirectory"],
     });
     expect(result).toMatchObject({

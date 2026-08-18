@@ -21,6 +21,11 @@ import { registerSessionRecordingIpcHandlers } from "@/main-process/communicatio
 import { registerLanguagePreferenceIpcHandlers } from "@/main-process/communication/language-ipc";
 import { registerRagIpcHandlers } from "@/main-process/communication/rag-ipc";
 import { registerAiChatV2IpcHandlers } from "@/main-process/communication/ai-chat-v2-ipc";
+import { registerAiFileOpenIpcHandlers } from "@/main-process/communication/ai-file-open-ipc";
+import { registerAiChatAtMentionIpcHandlers } from "@/main-process/communication/ai-chat-at-mention-ipc";
+import { registerAiChatGoalIpcHandlers } from "@/main-process/communication/ai-chat-goal-ipc";
+import { registerAiChatScheduledLoopIpcHandlers } from "@/main-process/communication/ai-chat-scheduled-loop-ipc";
+import { AIChatConversationUpdateBroadcaster } from "@/service/AIChatConversationUpdateBroadcaster";
 import { registerAIEmailTemplateHandlers } from "@/main-process/communication/ai-email-template-ipc";
 import { registerDashboardIpcHandlers } from "@/main-process/communication/dashboard-ipc";
 import { registerMCPToolIpcHandlers } from "@/main-process/communication/mcp-tool-ipc";
@@ -38,7 +43,9 @@ import { registerPluginIpcHandlers } from "@/main-process/communication/plugin-i
 import { registerPluginMarketplaceIpcHandlers } from "@/main-process/communication/plugin-marketplace-ipc";
 import { registerAIUserMemoryIpcHandlers } from "@/main-process/communication/ai-user-memory-ipc";
 import { registerAIWorkspaceIpcHandlers } from "@/main-process/communication/ai-workspace-ipc";
+import { registerLocalAiRuntimeIpcHandlers } from "@/main-process/communication/local-ai-runtime-ipc";
 import { registerAIProviderIpcHandlers } from "@/main-process/communication/ai-provider-ipc";
+import { registerAiChatVoiceIpcHandlers } from "@/main-process/communication/ai-chat-v2-voice-ipc";
 import { registerAIArtifactIpcHandlers } from "@/main-process/communication/ai-artifact-ipc";
 import { registerAIWorkspaceMemoryIpcHandlers } from "@/main-process/communication/ai-workspace-memory-ipc";
 import { registerEmailReceiveIpcHandlers } from "@/main-process/communication/emailReceive-ipc";
@@ -47,12 +54,16 @@ import { registerHooksIpcHandlers } from "@/main-process/communication/hooks-ipc
 import { registerSlashCommandHandlers } from "@/main-process/communication/slash-command-ipc";
 import { registerWorkspaceWatchHandlers } from "@/main-process/communication/workspace-watch-ipc";
 import { initWorkspaceWatchManager } from "@/service/workspaceWatch/WorkspaceWatchManagerSingleton";
+import { registerAboutIpcHandlers } from "@/main-process/communication/about-ipc";
 
 type GlobalIpcState = typeof globalThis & {
   __aifetchlyIpcHandlersRegistered?: boolean;
 };
 
-export function registerCommunicationIpcHandlers(win: BrowserWindow) {
+export function registerCommunicationIpcHandlers(
+  win: BrowserWindow,
+  getWin: () => BrowserWindow | null
+) {
   const globalState = globalThis as GlobalIpcState;
   if (globalState.__aifetchlyIpcHandlersRegistered) {
     log.warn("[IPC] Skipping duplicate handler registration (HMR guard)");
@@ -61,6 +72,9 @@ export function registerCommunicationIpcHandlers(win: BrowserWindow) {
   globalState.__aifetchlyIpcHandlersRegistered = true;
   try {
     SyncMsg(win);
+    // Register the window so scheduled-loop turn completions can broadcast a
+    // narrow conversation-update refresh hint to the renderer (FR-11).
+    AIChatConversationUpdateBroadcaster.getInstance().register(win);
     registerExtraModulesIpcHandlers();
     registerScheduleIpcHandlers();
     registerYellowPagesIpcHandlers();
@@ -78,6 +92,10 @@ export function registerCommunicationIpcHandlers(win: BrowserWindow) {
     registerLanguagePreferenceIpcHandlers();
     registerRagIpcHandlers();
     registerAiChatV2IpcHandlers();
+    registerAiFileOpenIpcHandlers();
+    registerAiChatAtMentionIpcHandlers();
+    registerAiChatGoalIpcHandlers();
+    registerAiChatScheduledLoopIpcHandlers();
     registerAIEmailTemplateHandlers();
     registerDashboardIpcHandlers();
     registerMCPToolIpcHandlers();
@@ -95,15 +113,24 @@ export function registerCommunicationIpcHandlers(win: BrowserWindow) {
     registerPluginMarketplaceIpcHandlers();
     registerAIUserMemoryIpcHandlers();
     registerAIWorkspaceIpcHandlers(win);
+    registerLocalAiRuntimeIpcHandlers(() => win);
     registerAIProviderIpcHandlers();
+    registerAiChatVoiceIpcHandlers();
     registerAIArtifactIpcHandlers();
     registerAIWorkspaceMemoryIpcHandlers();
     registerEmailReceiveIpcHandlers();
+    // Best-effort reply-reliability startup: lift legacy drafts onto immutable
+    // revisions and sweep stale in-flight send attempts to delivery_unknown.
+    // Fire-and-forget; never blocks app startup.
+    new (require("@/service/emailReply/EmailReplyReliabilityStartup").EmailReplyReliabilityStartup)()
+      .start()
+      .catch((e: unknown) => log.error("[reply-reliability] startup failed:", e));
     registerDiagnosticsIpcHandlers();
     registerHooksIpcHandlers();
     registerSlashCommandHandlers(win);
     const workspaceWatchManager = initWorkspaceWatchManager(win);
     registerWorkspaceWatchHandlers(win, workspaceWatchManager);
+    registerAboutIpcHandlers(getWin);
     AsyncMsg();
   } catch (e) {
     log.info("registerCommunicationIpcHandlers error:");

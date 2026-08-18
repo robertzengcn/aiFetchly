@@ -46,6 +46,7 @@ export interface PluginSummary {
   mcpServerCount: number;
   agentCount: number;
   commandCount: number;
+  hookCount: number;
   permissions: string[];
   lastUpdated: string;
   sourceKind?: PluginSourceKind;
@@ -100,6 +101,15 @@ export interface PluginCommandView {
   sourceId: string;
 }
 
+export interface PluginHookComponent {
+  id: string;
+  eventName: string;
+  matcher?: string;
+  enabled: boolean;
+  type: string;
+  health: string;
+}
+
 export interface PluginDetail extends PluginSummary {
   description: string;
   author?: string;
@@ -107,6 +117,7 @@ export interface PluginDetail extends PluginSummary {
   mcpServers: PluginMcpServerComponent[];
   agents: PluginAgentComponent[];
   commands: PluginCommandView[];
+  hooks: PluginHookComponent[];
   errors: Array<{ code: string; message: string; recoverable: boolean }>;
   manifest: Record<string, unknown>;
   marketplaceName?: string;

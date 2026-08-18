@@ -54,7 +54,8 @@ export class UserSearch {
             num_pages: data.num_pages,
             proxies: proxyStrList,
             debug_log_path:data.debug_log_path,
-            save_html:true
+            // Do not dump SERP HTML into the log folder on scrape/error.
+            save_html: false,
 
         }
         const keywords = data.keywords

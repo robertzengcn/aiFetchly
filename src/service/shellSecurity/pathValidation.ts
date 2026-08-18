@@ -185,10 +185,21 @@ const RESOLVED_CRITICAL_PATHS: readonly string[] = SHELL_CRITICAL_PATHS.map(
 // Redirection validation
 // ---------------------------------------------------------------------------
 
+/** Matches fd-duplication / fd-close operators (e.g. `>&2`, `2>&1`, `1>&2`,
+ *  `>&-`, `2>&-`, `<&0`). These duplicate or close file descriptors — they
+ *  open no filesystem path, so filesystem validation does not apply. */
+const FD_REDIRECT_PATTERN = /[<>]&[0-9-]/;
+
 function validateRedirect(
   redirect: Redirection,
   guard: FilePathGuard
 ): PermissionVerdict | null {
+  // FD duplication/close (e.g. `>&2`, `2>&1`, `>&-`) does not open a file —
+  // skip filesystem validation so normal stderr-redirection idioms aren't
+  // mis-flagged as non-literal filesystem targets.
+  if (FD_REDIRECT_PATTERN.test(redirect.operator)) {
+    return null;
+  }
   // Reject non-literal redirect targets — final path unknowable at runtime
   if (redirect.nonLiteral) {
     return ask(

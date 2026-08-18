@@ -133,16 +133,6 @@
                   hide-details
                 />
               </v-col>
-              <v-col cols="12" md="2" class="d-flex align-center">
-                <v-switch
-                  v-model="showBrowser"
-                  :label="t('mapScraper.show_browser') || 'Show Browser'"
-                  color="warning"
-                  :disabled="searchState === 'running'"
-                  density="compact"
-                  hide-details
-                />
-              </v-col>
             </v-row>
 
             <v-row v-if="provider === 'yandex'" class="mt-2">

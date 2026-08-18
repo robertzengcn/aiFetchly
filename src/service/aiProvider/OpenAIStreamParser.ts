@@ -1,4 +1,5 @@
 import type { OpenAIChatCompletionChunk } from "@/api/aiChatApi";
+import { describeErrorDetail } from "@/service/AIChatErrorMapper";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object";
@@ -38,6 +39,7 @@ export class OpenAIStreamParser {
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
+    let readBytes = 0;
 
     try {
       let streamActive = true;
@@ -54,6 +56,11 @@ export class OpenAIStreamParser {
           ) {
             throw readError;
           }
+          console.error(
+            `[ai-chat-v2] openai-stream read failed mid-stream (bytes=${readBytes}): ${describeErrorDetail(
+              readError
+            )}`
+          );
           throw readError;
         }
         const { done, value } = result;
@@ -61,6 +68,7 @@ export class OpenAIStreamParser {
           streamActive = false;
           break;
         }
+        readBytes += value.byteLength;
         buffer += decoder.decode(value, { stream: true });
 
         const lines = buffer.split("\n");

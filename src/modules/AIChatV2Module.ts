@@ -15,7 +15,8 @@ import type {
 } from "@/entityTypes/aiChatV2Types";
 
 const V2_CONVERSATION_PREFIX = "v2-";
-const V2_DEFAULT_SYSTEM_PROMPT = "You are aiFetchly's built-in helpful assistant.";
+const V2_DEFAULT_SYSTEM_PROMPT =
+  "You are aiFetchly's built-in helpful assistant.";
 
 function uuid(): string {
   // Crypto.randomUUID is available in Electron (Node 16+ / Chromium).
@@ -61,7 +62,36 @@ export class AIChatV2Module extends BaseModule {
       role: "user",
       content: params.content,
       timestamp: params.timestamp,
-      metadata: { source: "chat-v2", ...(params.metadata ?? {}) } as ChatV2MessageMetadata,
+      metadata: {
+        source: "chat-v2",
+        ...(params.metadata ?? {}),
+      } as ChatV2MessageMetadata,
+      messageType: MessageType.MESSAGE,
+    });
+  }
+
+  /**
+   * Idempotent user-message insert for scheduled-loop turns. Requires an
+   * explicit messageId (the stable scheduled id); reuses an existing row
+   * without mutation on retry (technical-design §14.2).
+   */
+  async saveUserMessageIfAbsent(params: {
+    conversationId: string;
+    content: string;
+    messageId: string;
+    timestamp?: Date;
+    metadata?: ChatV2MessageMetadata;
+  }): Promise<AIChatMessageEntity> {
+    return this.chatModule.saveMessageIfAbsent({
+      messageId: params.messageId,
+      conversationId: params.conversationId,
+      role: "user",
+      content: params.content,
+      timestamp: params.timestamp,
+      metadata: {
+        source: "chat-v2",
+        ...(params.metadata ?? {}),
+      } as ChatV2MessageMetadata,
       messageType: MessageType.MESSAGE,
     });
   }

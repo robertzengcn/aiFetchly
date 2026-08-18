@@ -11,10 +11,10 @@
 //
 // SECURITY (TRS-06): this file MUST NOT import any process-spawning
 // module, MUST NOT call eval-like or dynamic-function constructors, and
-// MUST NOT spawn anything. The dispatch path is pure logic + registry +
-// manager calls + a pure string-only argument-token substitution
-// (expandPrompt). Verified by a grep gate in the plan acceptance criteria
-// (the forbidden literals do not appear anywhere in this file).
+// MUST NOT spawn anything. Prompt expansion remains pure string-only via
+// expandPrompt. Side-effectful plugin management is delegated lazily to
+// PluginSlashCommandService, which keeps install/fetch dependencies out of
+// the normal slash-command dispatch path.
 //
 // Phase-15 boundary (TRS-06 / CMD-06): argument-token substitution NOW
 // lives in the DISPATCHER for prompt-type commands (Plan 15-01, SC2).
@@ -41,6 +41,18 @@ import type {
   AIFetchlyConfigStatus,
 } from "@/service/aifetchlyConfig/AIFetchlyConfigManager";
 import type { AgentDefinitionView } from "@/entityTypes/agentTypes";
+import {
+  GOAL_LOOP_MAX_ITERATIONS,
+  GOAL_LOOP_MIN_ITERATIONS,
+} from "@/config/aiChatGoalConfig";
+
+export interface PluginSlashCommandExecutor {
+  execute(rawArgs: string | undefined): Promise<string>;
+}
+
+export interface SkillsSlashCommandProvider {
+  render(): Promise<string>;
+}
 
 /**
  * SlashCommandDispatcher — resolves raw composer text into the
@@ -53,7 +65,9 @@ import type { AgentDefinitionView } from "@/entityTypes/agentTypes";
 export class SlashCommandDispatcher {
   constructor(
     private readonly registry: CommandRegistry,
-    private readonly manager: AIFetchlyConfigManager
+    private readonly manager: AIFetchlyConfigManager,
+    private readonly pluginCommands?: PluginSlashCommandExecutor,
+    private readonly skillsProvider?: SkillsSlashCommandProvider
   ) {}
 
   /**
@@ -114,7 +128,7 @@ export class SlashCommandDispatcher {
     // Step 5: switch on functional type.
     switch (cmd.type) {
       case "local":
-        return this.dispatchLocal(cmd.id, parsed.name, scope);
+        return this.dispatchLocal(cmd.id, parsed.name, scope, parsed.args);
 
       case "prompt": {
         // Phase-15 (Plan 15-01, SC2 + CMD-04): prompt-type commands now
@@ -167,7 +181,8 @@ export class SlashCommandDispatcher {
   private async dispatchLocal(
     commandId: string,
     name: string,
-    scope: CommandRegistryScope
+    scope: CommandRegistryScope,
+    rawArgs: string | undefined
   ): Promise<SlashCommandDispatchResponse> {
     switch (commandId) {
       case "built-in:command:help":
@@ -197,6 +212,34 @@ export class SlashCommandDispatcher {
         };
       }
 
+      case "built-in:command:skills": {
+        const provider =
+          this.skillsProvider ?? (await createSkillsCommandProvider());
+        return {
+          status: true,
+          action: "show_result",
+          commandId,
+          content: await provider.render(),
+        };
+      }
+
+      case "built-in:command:goal":
+        return {
+          status: true,
+          action: "show_result",
+          commandId,
+          content:
+            "Create or replace the active AI Chat goal. Usage: /goal <objective>",
+        };
+
+      case "built-in:command:loop":
+        return {
+          status: true,
+          action: "show_result",
+          commandId,
+          content: `Continue the active AI Chat goal. Usage: /loop <maxIterations> where maxIterations is ${GOAL_LOOP_MIN_ITERATIONS}-${GOAL_LOOP_MAX_ITERATIONS}.`,
+        };
+
       case "built-in:command:agents": {
         // Phase 16 / Plan 03 (D-AgentsList) — list built-in + dynamic agents
         // sourced from agentRegistry.list() (already sorted by D-Precedence:
@@ -220,6 +263,17 @@ export class SlashCommandDispatcher {
           action: "show_result",
           commandId,
           content: renderReload(summary),
+        };
+      }
+
+      case "built-in:command:plugin": {
+        const service = this.pluginCommands ?? (await createPluginCommands());
+        const content = await service.execute(rawArgs);
+        return {
+          status: true,
+          action: "show_result",
+          commandId,
+          content,
         };
       }
 
@@ -251,6 +305,33 @@ export class SlashCommandDispatcher {
     );
     return "Available commands:\n" + lines.join("\n");
   }
+}
+
+async function createPluginCommands(): Promise<PluginSlashCommandExecutor> {
+  const { PluginSlashCommandService } = await import(
+    "./PluginSlashCommandService"
+  );
+  return new PluginSlashCommandService();
+}
+
+async function createSkillsCommandProvider(): Promise<SkillsSlashCommandProvider> {
+  const [
+    { SkillRegistry },
+    { formatSkillsAsChatMarkdown },
+    { formatToolCatalogBreakdown },
+  ] = await Promise.all([
+    import("@/config/skillsRegistry"),
+    import("@/api/aiChatApi"),
+    import("@/service/ToolCatalogDiagnostics"),
+  ]);
+  return {
+    async render(): Promise<string> {
+      const allTools = await SkillRegistry.getAllToolFunctions();
+      const listing = formatSkillsAsChatMarkdown(allTools);
+      const breakdown = formatToolCatalogBreakdown(allTools);
+      return `${listing}\n\n${breakdown}`;
+    },
+  };
 }
 
 /**

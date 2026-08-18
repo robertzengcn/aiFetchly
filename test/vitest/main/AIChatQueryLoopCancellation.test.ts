@@ -52,6 +52,7 @@ vi.mock("@/config/usersetting", () => ({
     }
   },
   USER_AI_ENABLED: "true",
+  TOKENNAME: "user-social-market-token",
 }));
 
 vi.mock("@/modules/token", () => ({
@@ -67,9 +68,12 @@ import { AIChatQueryLoop } from "@/service/AIChatQueryLoop";
 
 /** Type-erased accessor so we can call the private method from tests. */
 interface LoopWithInternals {
-  executeToolWithTimeout: (
+  executeForegroundToolWithTimeout: (
     input: Record<string, unknown>,
-    call: { id: string; name: string; arguments?: Record<string, unknown> }
+    call: { id: string; name: string; arguments?: Record<string, unknown> },
+    skill: unknown,
+    timeoutMs: number,
+    startedAt: number
   ) => Promise<Record<string, unknown>>;
 }
 
@@ -83,13 +87,15 @@ function makeEventSinkStub(): { emit: (e: unknown) => void } {
   };
 }
 
-/** Build the loop input shape expected by executeToolWithTimeout. */
+/** Build the loop input shape expected by executeForegroundToolWithTimeout. */
 function makeLoopInput(): Record<string, unknown> {
   return {
     conversationId: "c1",
     assistantMessageId: "m1",
     eventSink: makeEventSinkStub(),
+    messages: [],
     skillRegistry: undefined,
+    request: { model: "test-model" },
   };
 }
 
@@ -126,9 +132,14 @@ describe("AIChatQueryLoop cancellation", () => {
       fakeDeps as unknown as ConstructorParameters<typeof AIChatQueryLoop>[0]
     );
 
-    const result = await (loop as unknown as LoopWithInternals).executeToolWithTimeout(
+    const result = await (
+      loop as unknown as LoopWithInternals
+    ).executeForegroundToolWithTimeout(
       makeLoopInput(),
-      { id: "t1", name: "file_read", arguments: {} }
+      { id: "t1", name: "file_read", arguments: {} },
+      undefined,
+      50,
+      Date.now()
     );
 
     // The result should be a timeout failure
@@ -167,9 +178,14 @@ describe("AIChatQueryLoop cancellation", () => {
       fakeDeps as unknown as ConstructorParameters<typeof AIChatQueryLoop>[0]
     );
 
-    const result = await (loop as unknown as LoopWithInternals).executeToolWithTimeout(
+    const result = await (
+      loop as unknown as LoopWithInternals
+    ).executeForegroundToolWithTimeout(
       makeLoopInput(),
-      { id: "t2", name: "file_read", arguments: {} }
+      { id: "t2", name: "file_read", arguments: {} },
+      undefined,
+      50,
+      Date.now()
     );
 
     expect(result.success).toBe(true);
@@ -205,9 +221,14 @@ describe("AIChatQueryLoop cancellation", () => {
       fakeDeps as unknown as ConstructorParameters<typeof AIChatQueryLoop>[0]
     );
 
-    const result = await (loop as unknown as LoopWithInternals).executeToolWithTimeout(
+    const result = await (
+      loop as unknown as LoopWithInternals
+    ).executeForegroundToolWithTimeout(
       makeLoopInput(),
-      { id: "t3", name: "file_read", arguments: {} }
+      { id: "t3", name: "file_read", arguments: {} },
+      undefined,
+      50,
+      Date.now()
     );
 
     expect(result.success).toBe(false);

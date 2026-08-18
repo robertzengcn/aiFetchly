@@ -3,6 +3,7 @@ import {
   windowSend,
   windowReceive,
   windowRemoveListener,
+  windowRemoveAllListeners,
 } from "@/views/utils/apirequest";
 import type {
   ChatV2StreamRequest,
@@ -10,6 +11,7 @@ import type {
   ChatV2HistoryResponse,
   ChatV2ConversationSummary,
   ChatToolApprovalMode,
+  ChatV2AutoCompactedEvent,
 } from "@/entityTypes/aiChatV2Types";
 import type { AIChatCompactSummaryView } from "@/entityTypes/aiChatCompactTypes";
 import type {
@@ -37,30 +39,72 @@ import {
   AI_CHAT_V2_PLAN_VERSIONS,
   AI_CHAT_V2_GET_TOOL_APPROVAL_MODE,
   AI_CHAT_V2_SET_TOOL_APPROVAL_MODE,
+  AI_CHAT_V2_READ_PASTE_CACHE,
+  AI_CHAT_V2_AUTO_COMPACTED,
 } from "@/config/channellist";
 
-let activeChunkHandler: ((raw: unknown) => void) | null = null;
-let activeCompleteHandler: ((raw: unknown) => void) | null = null;
-let activeDetachedResolve: (() => void) | null = null;
+/**
+ * Per-conversation stream listeners, keyed by conversationId. Each entry holds
+ * the exact `windowReceive` return values (required by `windowRemoveListener`)
+ * so a stream owns its own listener lifecycle on the shared IPC channel.
+ *
+ * ipcRenderer.on registers additively, and every chunk handler filters by
+ * conversationId (isChunkForRequest), so multiple concurrent conversations can
+ * listen at once — starting a stream in B no longer detaches A's listeners.
+ */
+interface ChatV2StreamListeners {
+  chunkListener: (raw: unknown) => void;
+  completeListener: (raw: unknown) => void;
+  detachedResolve: () => void;
+}
+const streamListenersByConversation = new Map<string, ChatV2StreamListeners>();
 
-const detachChatV2StreamListeners = (resolvePending: boolean): void => {
-  if (activeChunkHandler) {
-    windowRemoveListener(AI_CHAT_V2_STREAM_CHUNK, activeChunkHandler);
-  }
-  if (activeCompleteHandler) {
-    windowRemoveListener(AI_CHAT_V2_STREAM_COMPLETE, activeCompleteHandler);
-  }
-  const resolve = activeDetachedResolve;
-  activeChunkHandler = null;
-  activeCompleteHandler = null;
-  activeDetachedResolve = null;
+/**
+ * Registry key used when a stream request omits a conversation id. V2 always
+ * sets one in production, but the API still supports the legacy no-id path;
+ * this sentinel keeps those listeners tracked so cleanup can detach them
+ * instead of leaking (windowReceive registered them, but without a key the
+ * registry had no handle to remove them with).
+ */
+const GLOBAL_STREAM_CONVERSATION_KEY = "__aiChatV2_global_stream__";
+
+const detachConversationStreamListeners = (
+  conversationId: string,
+  resolvePending: boolean
+): void => {
+  const listeners = streamListenersByConversation.get(conversationId);
+  if (!listeners) return;
+  windowRemoveListener(AI_CHAT_V2_STREAM_CHUNK, listeners.chunkListener);
+  windowRemoveListener(AI_CHAT_V2_STREAM_COMPLETE, listeners.completeListener);
+  streamListenersByConversation.delete(conversationId);
   if (resolvePending) {
-    resolve?.();
+    listeners.detachedResolve();
   }
 };
 
+/**
+ * Detach ALL conversation stream listeners and resolve their pending stream
+ * promises. Used only on teardown (component unmount / DB switch); normal
+ * stream completion detaches only the owning conversation's listeners.
+ */
 export function clearChatV2StreamListeners(): void {
-  detachChatV2StreamListeners(true);
+  for (const conversationId of [...streamListenersByConversation.keys()]) {
+    detachConversationStreamListeners(conversationId, true);
+  }
+}
+
+/**
+ * Detach listeners for a single conversation without touching other
+ * conversations' background streams. Pass `resolvePending: true` to also
+ * resolve that conversation's pending streamChatV2Message promise — required
+ * when stopping the stream from the renderer side (Stop button / permission
+ * deny) so the awaited stream call in onSend unblocks instead of hanging.
+ */
+export function detachChatV2ConversationStreamListeners(
+  conversationId: string,
+  resolvePending = false
+): void {
+  detachConversationStreamListeners(conversationId, resolvePending);
 }
 
 /**
@@ -99,6 +143,19 @@ export async function getChatV2History(
 }
 
 /**
+ * Read cached expanded pasted-text body for history preview dialogs.
+ * Returns null when the cache entry is missing.
+ */
+export async function readPasteCache(
+  contentHash: string
+): Promise<string | null> {
+  const resp = await windowInvoke(AI_CHAT_V2_READ_PASTE_CACHE, {
+    contentHash,
+  });
+  return (resp as string | null) ?? null;
+}
+
+/**
  * Stream a chat message over IPC.
  *
  * Registers listeners for chunk and complete events, then sends the stream
@@ -123,6 +180,11 @@ export async function streamChatV2Message(
       request.conversationId.length > 0
         ? request.conversationId
         : undefined;
+    // Registry key always resolves to a string so listeners are tracked even
+    // on the legacy no-conversationId path (otherwise they could never be
+    // detached, leaking windowReceive registrations).
+    const conversationKey =
+      expectedConversationId ?? GLOBAL_STREAM_CONVERSATION_KEY;
     const isChunkForRequest = (chunk: ChatV2StreamChunk): boolean => {
       if (!expectedConversationId) return true;
       if (chunk.conversationId === expectedConversationId) return true;
@@ -131,7 +193,7 @@ export async function streamChatV2Message(
       return !chunk.conversationId && chunk.eventType === "error";
     };
     const cleanup = (): void => {
-      detachChatV2StreamListeners(false);
+      detachConversationStreamListeners(conversationKey, false);
     };
 
     const chunkHandler = (raw: unknown): void => {
@@ -216,13 +278,24 @@ export async function streamChatV2Message(
     };
 
     try {
-      clearChatV2StreamListeners();
-      activeDetachedResolve = resolve;
-      activeChunkHandler = windowReceive(AI_CHAT_V2_STREAM_CHUNK, chunkHandler);
-      activeCompleteHandler = windowReceive(
+      // Replace any prior listener for THIS conversation only (a same-
+      // conversation re-send supersedes the in-flight stream). Other
+      // conversations' listeners are intentionally left registered so their
+      // background streams keep receiving their own chunks.
+      detachConversationStreamListeners(conversationKey, false);
+      const chunkListener = windowReceive(
+        AI_CHAT_V2_STREAM_CHUNK,
+        chunkHandler
+      );
+      const completeListener = windowReceive(
         AI_CHAT_V2_STREAM_COMPLETE,
         completeHandler
       );
+      streamListenersByConversation.set(conversationKey, {
+        chunkListener,
+        completeListener,
+        detachedResolve: resolve,
+      });
       void windowSend(AI_CHAT_V2_STREAM, request).catch((err: unknown) => {
         cleanup();
         const error =
@@ -245,11 +318,15 @@ export async function streamChatV2Message(
 }
 
 /**
- * Request the main process to abort the active v2 chat stream.
- * Fire-and-forget; the stream completion handler will fire with a cancelled payload.
+ * Request the main process to abort a v2 chat stream. Fire-and-forget; the
+ * stream completion handler will fire with a cancelled payload.
+ *
+ * Pass `conversationId` to stop ONLY that conversation's turn (other
+ * conversations' background streams are unaffected). Omit it to stop every
+ * active turn (DB switch / sign-out).
  */
-export function stopChatV2Stream(): void {
-  windowSend(AI_CHAT_V2_STREAM_STOP, {});
+export function stopChatV2Stream(conversationId?: string): void {
+  windowSend(AI_CHAT_V2_STREAM_STOP, conversationId ? { conversationId } : {});
 }
 
 /**
@@ -287,6 +364,26 @@ export async function compactChatV2Conversation(
     model,
   });
   return (resp as AIChatCompactSummaryView | null) ?? null;
+}
+
+/**
+ * Subscribe to the auto full-compact broadcast. The main process emits this
+ * after it automatically compacts a conversation whose context reached the
+ * threshold fraction of the model's window. Handlers must filter by
+ * conversationId (only the active conversation's badge should reset).
+ * Call unsubscribeAutoCompacted in onBeforeUnmount.
+ */
+export function subscribeAutoCompacted(
+  handler: (event: ChatV2AutoCompactedEvent) => void
+): void {
+  windowReceive(AI_CHAT_V2_AUTO_COMPACTED, (event) => {
+    handler(event as ChatV2AutoCompactedEvent);
+  });
+}
+
+/** Remove all auto-compacted listeners (call in onBeforeUnmount). */
+export function unsubscribeAutoCompacted(): void {
+  windowRemoveAllListeners(AI_CHAT_V2_AUTO_COMPACTED);
 }
 
 // ---------------------------------------------------------------------------

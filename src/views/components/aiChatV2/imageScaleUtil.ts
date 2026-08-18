@@ -18,40 +18,14 @@ export const IMAGE_MAX_LONG_EDGE = 1568;
 /** JPEG quality used when re-encoding non-PNG images. */
 export const IMAGE_JPEG_QUALITY = 0.82;
 
-/**
- * Compute the canvas dimensions for an image, preserving aspect ratio and
- * capping the long edge at `maxLongEdge`. Images already within the cap are
- * returned unchanged (never upscaled). Dimensions never fall below 1px.
- */
-export function computeScaledDimensions(
-  width: number,
-  height: number,
-  maxLongEdge: number
-): { width: number; height: number } {
-  if (width <= 0 || height <= 0) {
-    return { width: 1, height: 1 };
-  }
-  const longEdge = Math.max(width, height);
-  if (longEdge <= maxLongEdge) {
-    return { width, height };
-  }
-  const scale = maxLongEdge / longEdge;
-  return {
-    width: Math.max(1, Math.round(width * scale)),
-    height: Math.max(1, Math.round(height * scale)),
-  };
-}
-
-/**
- * Choose the output MIME type for re-encoding. PNG is preserved so
- * transparency is not lost; all other formats are re-encoded as JPEG,
- * which is dramatically smaller for photographic content.
- */
-export function pickImageOutputMimeType(
-  originalMime: string
-): "image/png" | "image/jpeg" {
-  return originalMime === "image/png" ? "image/png" : "image/jpeg";
-}
+// Dimension math and output-MIME policy are shared with the main-process
+// `attach_local_images` tool via the runtime-neutral module below, so the
+// user-selected and LLM-selected paths apply identical normalization.
+import {
+  computeScaledDimensions,
+  pickImageOutputMimeType,
+} from "@/utils/imageScaling";
+export { computeScaledDimensions, pickImageOutputMimeType };
 
 /**
  * Resolve a best-effort image MIME type for a file, falling back to the

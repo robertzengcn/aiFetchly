@@ -65,9 +65,82 @@ export class EmailReceivedMessageModule extends BaseModule {
   ): Promise<void> {
     try {
       await this.ensureConnection();
-      await this.messageModel.updateClassification(id, classification, confidence);
+      await this.messageModel.updateClassification(
+        id,
+        classification,
+        confidence
+      );
     } catch (error) {
       log.error("Error updating classification:", error);
+      throw error;
+    }
+  }
+
+  async updateClassificationProvenance(
+    id: number,
+    source: string,
+    version: string
+  ): Promise<void> {
+    try {
+      await this.ensureConnection();
+      await this.messageModel.updateClassificationProvenance(
+        id,
+        source,
+        version
+      );
+    } catch (error) {
+      console.error("Error updating classification provenance:", error);
+      throw error;
+    }
+  }
+
+  async setConversation(
+    messageId: number,
+    conversationId: number
+  ): Promise<void> {
+    try {
+      await this.ensureConnection();
+      await this.messageModel.setConversation(messageId, conversationId);
+    } catch (error) {
+      console.error("Error setting message conversation:", error);
+      throw error;
+    }
+  }
+
+  async listWithoutConversation(
+    emailServiceId?: number
+  ): Promise<EmailReceivedMessageEntity[]> {
+    try {
+      await this.ensureConnection();
+      return await this.messageModel.listWithoutConversation(emailServiceId);
+    } catch (error) {
+      console.error("Error listing messages without conversation:", error);
+      throw error;
+    }
+  }
+
+  async updateNormalization(
+    messageId: number,
+    fields: {
+      normalizedMessageId?: string | null;
+      normalizedInReplyTo?: string | null;
+      normalizedReferencesJson?: string | null;
+      normalizedBodyText?: string | null;
+      newContentText?: string | null;
+      autoSubmittedHeader?: string | null;
+      precedenceHeader?: string | null;
+      listIdHeader?: string | null;
+      listUnsubscribeHeader?: string | null;
+      hasAttachments?: number;
+      attachmentMetadataJson?: string | null;
+      conversationId?: number | null;
+    }
+  ): Promise<void> {
+    try {
+      await this.ensureConnection();
+      await this.messageModel.updateNormalization(messageId, fields);
+    } catch (error) {
+      console.error("Error updating message normalization:", error);
       throw error;
     }
   }

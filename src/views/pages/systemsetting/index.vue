@@ -34,6 +34,16 @@
               color="primary"
               variant="outlined"
               block
+              @click="navigateToAIMemory"
+              class="mb-2"
+            >
+              <v-icon left>mdi-brain</v-icon>
+              {{ t('system_settings.manage_ai_memories') }}
+            </v-btn>
+            <v-btn
+              color="primary"
+              variant="outlined"
+              block
               @click="navigateToAIProvider"
               class="mb-2"
             >
@@ -59,6 +69,16 @@
             >
               <v-icon left>mdi-robot-outline</v-icon>
               {{ t('system_settings.manage_subagents') || 'Manage Subagents' }}
+            </v-btn>
+            <v-btn
+              color="primary"
+              variant="outlined"
+              block
+              @click="navigateToAbout"
+              class="mb-2"
+            >
+              <v-icon left>mdi-information-outline</v-icon>
+              {{ t('about.title') || 'About aiFetchly' }}
             </v-btn>
           </v-card-text>
         </v-card>
@@ -193,6 +213,7 @@ v-for="(opt, idx) in setting.options || []" :key="idx" :label="opt.optionLabel"
             </v-alert>
           </v-card-text>
         </v-card>
+
       </v-col>
     </v-row>
 
@@ -205,10 +226,11 @@ v-for="(opt, idx) in setting.options || []" :key="idx" :label="opt.optionLabel"
 import { ref, computed, onMounted, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useRouter } from 'vue-router';
-import { SystemSettingDisplay, SystemSettingGroupDisplay, OptionSettingDisplay } from "@/entityTypes/systemsettingType";
+import { SystemSettingDisplay, SystemSettingGroupDisplay } from "@/entityTypes/systemsettingType";
 import { getSystemSettinglist, updateSystemSetting, updateSystemSettingWithValidation } from "@/views/api/systemsetting";
 import { updateLanguagePreference } from '@/views/api/language';
 import { language_preference } from '@/config/settinggroupInit';
+import { setLanguage } from '@/views/utils/cookies';
 // i18n setup
 const { t, locale } = useI18n();
 const router = useRouter();
@@ -411,6 +433,7 @@ async function handleLanguageChange(newLanguage: string) {
   try {
     // Update the i18n locale immediately for real-time switching
     locale.value = newLanguage;
+    setLanguage(newLanguage);
     
     // Also update the language preference via the API for consistency
     const success = await updateLanguagePreference(newLanguage);
@@ -447,6 +470,10 @@ function navigateToSkills() {
   router.push({ name: 'system_setting_skills' });
 }
 
+function navigateToAIMemory() {
+  router.push({ name: 'system_setting_ai_memory' });
+}
+
 function navigateToAIProvider() {
   router.push({ name: 'system_setting_ai_provider' });
 }
@@ -457,6 +484,10 @@ function navigateToHooks() {
 
 function navigateToSubagents() {
   router.push({ name: 'system_setting_subagents' });
+}
+
+function navigateToAbout() {
+  router.push({ name: 'system_setting_about' });
 }
 
 onMounted(() => {

@@ -201,10 +201,10 @@ interface Props {
   loading: boolean
 }
 
-const props = defineProps<Props>()
+defineProps<Props>()
 
 // Emits
-const emit = defineEmits<{
+defineEmits<{
   'view-details': [result: YellowPagesResult]
 }>()
 
@@ -258,6 +258,7 @@ const headers = computed(() => [
 ])
 
 // Methods
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const parseCategories = (categories: string): string[] => {
   try {
     const parsed = JSON.parse(categories)
@@ -283,6 +284,7 @@ const formatDate = (date: string | Date): string => {
   return new Date(date).toLocaleDateString()
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const openWebsite = (url: string) => {
   if (url) {
     window.open(url, '_blank')

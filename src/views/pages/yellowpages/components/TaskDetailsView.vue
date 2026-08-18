@@ -249,19 +249,27 @@ const { t } = useI18n();
 
 // Props
 interface Props {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   task: any
 }
 
-const props = defineProps<Props>()
+defineProps<Props>()
 
 // Emits
-const emit = defineEmits<{
+defineEmits<{
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   start: [task: any]
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   stop: [task: any]
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   pause: [task: any]
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   resume: [task: any]
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   'view-results': [task: any]
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   edit: [task: any]
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   delete: [task: any]
   close: []
 }>()

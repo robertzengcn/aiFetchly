@@ -487,6 +487,24 @@ async function execute(
     return result;
   }
 
+  if (!(await SkillRegistry.isSkillEnabledForRuntime(skillName))) {
+    const result: ToolExecutionResult = {
+      tool_call_id: toolCallId,
+      tool_name: name,
+      success: false,
+      result: { error: `Tool is disabled: ${name}` },
+      execution_time_ms: Date.now() - startTime,
+    };
+    auditLog(
+      name,
+      resolvedArgs,
+      false,
+      result.execution_time_ms,
+      "Tool disabled"
+    );
+    return result;
+  }
+
   // 2. Sanitize input (FR-003)
   const validation = validateArgs(resolvedArgs);
   if (!validation.valid) {
@@ -542,6 +560,16 @@ async function execute(
                     timeout_ms: (resolvedArgs.timeout_ms as number) ?? 60000,
                   },
                 }
+              : {}),
+            // Skills that declare buildPermissionPreview (e.g. attach_local_images)
+            // attach a metadata-only preview so the UI can describe the call
+            // beyond the generic category prompt. Items are display-only and
+            // re-validated by the skill after approval.
+            ...(skill.buildPermissionPreview
+              ? (() => {
+                  const preview = skill.buildPermissionPreview(resolvedArgs);
+                  return preview ? { permissionPreview: preview } : {};
+                })()
               : {}),
           },
           execution_time_ms: Date.now() - startTime,
@@ -619,14 +647,22 @@ async function execute(
       result: {
         error: preAggregate.blockReason ?? "Blocked by hook",
         blocked: true,
-        ...(preSystemMessages.length > 0 || preContexts.length > 0 ? {
-          hookMessages: [...preSystemMessages],
-          hookContexts: [...preContexts],
-        } : {}),
+        ...(preSystemMessages.length > 0 || preContexts.length > 0
+          ? {
+              hookMessages: [...preSystemMessages],
+              hookContexts: [...preContexts],
+            }
+          : {}),
       },
       execution_time_ms: Date.now() - startTime,
     };
-    auditLog(name, resolvedArgs, false, result.execution_time_ms, "Blocked by hook");
+    auditLog(
+      name,
+      resolvedArgs,
+      false,
+      result.execution_time_ms,
+      "Blocked by hook"
+    );
     return result;
   }
   const hookFinalArgs = preAggregate.updatedInput ?? resolvedArgs;
@@ -640,6 +676,13 @@ async function execute(
       success: execResult.success,
       result: execResult.result,
       execution_time_ms: Date.now() - startTime,
+      // Thread transient model artifacts (e.g. prepared images) as a SIBLING of
+      // `result`. Post-tool hooks below receive `result.result` only, so they
+      // never see this payload. The query loop reads it off the returned
+      // ToolExecutionResult to build a model-only handoff message.
+      ...(execResult.modelArtifacts
+        ? { modelArtifacts: execResult.modelArtifacts }
+        : {}),
     };
 
     // 7. PostToolUse / PostToolUseFailure hooks
@@ -655,10 +698,18 @@ async function execute(
         context
       );
       if (postAggregate.updatedToolOutput) {
-        result.result = { ...result.result, ...postAggregate.updatedToolOutput };
+        result.result = {
+          ...result.result,
+          ...postAggregate.updatedToolOutput,
+        };
       }
-      const hasPreHookContext = preSystemMessages.length > 0 || preContexts.length > 0;
-      if (hasPreHookContext || postAggregate.systemMessages.length > 0 || postAggregate.additionalContexts.length > 0) {
+      const hasPreHookContext =
+        preSystemMessages.length > 0 || preContexts.length > 0;
+      if (
+        hasPreHookContext ||
+        postAggregate.systemMessages.length > 0 ||
+        postAggregate.additionalContexts.length > 0
+      ) {
         result.result = {
           ...result.result,
           hookMessages: [...preSystemMessages, ...postAggregate.systemMessages],
@@ -702,7 +753,13 @@ async function execute(
       context
     );
 
-    auditLog(name, hookFinalArgs, false, result.execution_time_ms, errorMessage);
+    auditLog(
+      name,
+      hookFinalArgs,
+      false,
+      result.execution_time_ms,
+      errorMessage
+    );
     return result;
   } finally {
     if (skill.permissionCategory === "shell") {
@@ -740,14 +797,22 @@ async function executeViaToolExecutor(
       result: {
         error: preAggregate.blockReason ?? "Blocked by hook",
         blocked: true,
-        ...(preSystemMessages.length > 0 || preContexts.length > 0 ? {
-          hookMessages: [...preSystemMessages],
-          hookContexts: [...preContexts],
-        } : {}),
+        ...(preSystemMessages.length > 0 || preContexts.length > 0
+          ? {
+              hookMessages: [...preSystemMessages],
+              hookContexts: [...preContexts],
+            }
+          : {}),
       },
       execution_time_ms: Date.now() - startTime,
     };
-    auditLog(name, args, false, execResult.execution_time_ms, "Blocked by hook");
+    auditLog(
+      name,
+      args,
+      false,
+      execResult.execution_time_ms,
+      "Blocked by hook"
+    );
     return execResult;
   }
   const hookFinalArgs = preAggregate.updatedInput ?? args;
@@ -759,6 +824,7 @@ async function executeViaToolExecutor(
       context.conversationId,
       {
         toolCallId: context.toolCallId,
+        skipPermissionCheck: context.skipPermissionCheck,
         emitProgress: context.emitProgress,
         signal: context.signal,
       }
@@ -783,10 +849,18 @@ async function executeViaToolExecutor(
       context
     );
     if (postAggregate.updatedToolOutput) {
-      execResult.result = { ...execResult.result, ...postAggregate.updatedToolOutput };
+      execResult.result = {
+        ...execResult.result,
+        ...postAggregate.updatedToolOutput,
+      };
     }
-    const hasPreHookContext = preSystemMessages.length > 0 || preContexts.length > 0;
-    if (hasPreHookContext || postAggregate.systemMessages.length > 0 || postAggregate.additionalContexts.length > 0) {
+    const hasPreHookContext =
+      preSystemMessages.length > 0 || preContexts.length > 0;
+    if (
+      hasPreHookContext ||
+      postAggregate.systemMessages.length > 0 ||
+      postAggregate.additionalContexts.length > 0
+    ) {
       execResult.result = {
         ...execResult.result,
         hookMessages: [...preSystemMessages, ...postAggregate.systemMessages],
@@ -818,7 +892,13 @@ async function executeViaToolExecutor(
       context
     );
 
-    auditLog(name, hookFinalArgs, false, execResult.execution_time_ms, errorMessage);
+    auditLog(
+      name,
+      hookFinalArgs,
+      false,
+      execResult.execution_time_ms,
+      errorMessage
+    );
     return execResult;
   }
 }

@@ -174,9 +174,12 @@ export class RAGDocumentModel extends BaseDb {
     }
 
     if (filters?.name) {
-      queryBuilder.andWhere("document.name LIKE :name", {
-        name: `%${filters.name}%`,
-      });
+      queryBuilder.andWhere(
+        "(document.name LIKE :documentName OR document.title LIKE :documentName)",
+        {
+          documentName: `%${filters.name}%`,
+        }
+      );
     }
 
     if (filters?.tags && filters.tags.length > 0) {
@@ -273,5 +276,110 @@ export class RAGDocumentModel extends BaseDb {
       id: row.id,
       vectorIndexPath: row.vectorIndexPath,
     }));
+  }
+
+  // -------------------------------------------------------------------------
+  // Website import provenance lookups (URL/hash-based duplicate detection)
+  // -------------------------------------------------------------------------
+
+  /**
+   * First successfully indexed (completed) non-deleted document whose
+   * canonical URL hash matches. Failed/pending prior imports must not block
+   * re-import under duplicatePolicy=fail.
+   */
+  async findActiveByCanonicalUrlSha256(
+    canonicalUrlSha256: string
+  ): Promise<RAGDocumentEntity | undefined> {
+    const doc = await this.repository
+      .createQueryBuilder("document")
+      .where("document.canonicalUrlSha256 = :canonicalUrlSha256", {
+        canonicalUrlSha256,
+      })
+      .andWhere("document.status != :deleted", { deleted: "deleted" })
+      .andWhere("document.processingStatus = :completed", {
+        completed: "completed",
+      })
+      .getOne();
+    return doc ?? undefined;
+  }
+
+  /**
+   * First successfully indexed (completed) non-deleted document whose source
+   * URL hash matches.
+   */
+  async findActiveBySourceUrlSha256(
+    sourceUrlSha256: string
+  ): Promise<RAGDocumentEntity | undefined> {
+    const doc = await this.repository
+      .createQueryBuilder("document")
+      .where("document.sourceUrlSha256 = :sourceUrlSha256", {
+        sourceUrlSha256,
+      })
+      .andWhere("document.status != :deleted", { deleted: "deleted" })
+      .andWhere("document.processingStatus = :completed", {
+        completed: "completed",
+      })
+      .getOne();
+    return doc ?? undefined;
+  }
+
+  /**
+   * First non-deleted, non-completed document for a website URL hash.
+   * Used to clean up failed/pending stubs before a re-import.
+   */
+  async findIncompleteByCanonicalUrlSha256(
+    canonicalUrlSha256: string
+  ): Promise<RAGDocumentEntity | undefined> {
+    const doc = await this.repository
+      .createQueryBuilder("document")
+      .where("document.canonicalUrlSha256 = :canonicalUrlSha256", {
+        canonicalUrlSha256,
+      })
+      .andWhere("document.status != :deleted", { deleted: "deleted" })
+      .andWhere("document.processingStatus != :completed", {
+        completed: "completed",
+      })
+      .getOne();
+    return doc ?? undefined;
+  }
+
+  /** First non-deleted, non-completed document for a source URL hash. */
+  async findIncompleteBySourceUrlSha256(
+    sourceUrlSha256: string
+  ): Promise<RAGDocumentEntity | undefined> {
+    const doc = await this.repository
+      .createQueryBuilder("document")
+      .where("document.sourceUrlSha256 = :sourceUrlSha256", {
+        sourceUrlSha256,
+      })
+      .andWhere("document.status != :deleted", { deleted: "deleted" })
+      .andWhere("document.processingStatus != :completed", {
+        completed: "completed",
+      })
+      .getOne();
+    return doc ?? undefined;
+  }
+
+  /** All non-deleted documents sharing a content body hash. */
+  async findActiveByContentSha256(
+    contentSha256: string
+  ): Promise<RAGDocumentEntity[]> {
+    return await this.repository
+      .createQueryBuilder("document")
+      .where("document.contentSha256 = :contentSha256", { contentSha256 })
+      .andWhere("document.status != :deleted", { deleted: "deleted" })
+      .getMany();
+  }
+
+  /** All non-deleted documents belonging to one website import group. */
+  async getDocumentsByImportGroup(
+    importGroupId: string
+  ): Promise<RAGDocumentEntity[]> {
+    return await this.repository
+      .createQueryBuilder("document")
+      .where("document.importGroupId = :importGroupId", { importGroupId })
+      .andWhere("document.status != :deleted", { deleted: "deleted" })
+      .orderBy("document.uploadedAt", "ASC")
+      .getMany();
   }
 }

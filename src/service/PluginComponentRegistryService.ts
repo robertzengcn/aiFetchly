@@ -56,6 +56,9 @@ export class PluginComponentRegistryService {
     // is idempotent per hook id, so calling this on every apply is safe.
     const loaded = await PluginLoaderService.loadAllPlugins();
     PluginHookRegistrar.registerFromLoadedPlugins(loaded.enabled);
+    for (const plugin of loaded.disabled) {
+      PluginHookRegistrar.unregisterPlugin(plugin.name);
+    }
     const manager = getAIFetchlyConfigManager();
     await PluginComponentRegistryService.promotePluginCommandsAndAgents(
       manager.getCommandRegistry(),
@@ -75,6 +78,7 @@ export class PluginComponentRegistryService {
     const manager = getAIFetchlyConfigManager();
     manager.getCommandRegistry().replaceSource(sourceId, []);
     manager.getAgentRegistry().replaceSource(sourceId, []);
+    PluginHookRegistrar.unregisterPlugin(pluginName);
     PluginCommandDiagnosticsStore.clear(pluginName);
   }
 

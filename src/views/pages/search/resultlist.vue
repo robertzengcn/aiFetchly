@@ -4,7 +4,8 @@
         <div class="search_bar mt-4 d-flex jsb">
             <div class="d-flex jsb search_tool">
                 <div class="search_wrap mr-4">
-                    <v-text-field rounded class="elevation-0" density="compact" variant="solo" :label="t('home.search_tasks')"
+                    <v-text-field
+rounded class="elevation-0" density="compact" variant="solo" :label="t('home.search_tasks')"
                         append-inner-icon="mdi-magnify" single-line hide-details v-model="searchText"
                         @keyup.enter="handleSearch" @click:append-inner="handleSearch"></v-text-field>
                 </div>

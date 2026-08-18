@@ -1,6 +1,6 @@
 import { ipcMain } from "electron";
 import type { IpcMainInvokeEvent } from "electron";
-import type { ZodType } from "zod";
+import type { ZodType, ZodTypeDef } from "zod";
 import { log } from "@/modules/Logger";
 import { isAiEnabled } from "@/service/AiFeatureGate";
 import { formatZodValidationError } from "@/utils/zodErrors";
@@ -17,7 +17,7 @@ import type { CommonMessage } from "@/entityTypes/commonType";
  */
 export function registerValidatedHandler<TInput, TOutput>(
   channel: string,
-  schema: () => ZodType<TInput>,
+  schema: () => ZodType<TInput, ZodTypeDef, unknown>,
   handler: (input: TInput, event: IpcMainInvokeEvent) => Promise<TOutput>
 ): void {
   ipcMain.handle(channel, async (event, raw) => {
@@ -56,7 +56,7 @@ export function registerValidatedHandler<TInput, TOutput>(
  */
 export function registerAiValidatedHandler<TInput, TOutput>(
   channel: string,
-  schema: () => ZodType<TInput>,
+  schema: () => ZodType<TInput, ZodTypeDef, unknown>,
   handler: (input: TInput, event: IpcMainInvokeEvent) => Promise<TOutput>
 ): void {
   ipcMain.handle(channel, async (event, raw) => {

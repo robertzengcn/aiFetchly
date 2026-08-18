@@ -33,7 +33,13 @@
  */
 
 import { utilityProcess } from "electron";
+import * as fs from "fs";
 import * as path from "path";
+import {
+  resolvePackagedWorkerPath,
+  buildPackagedWorkerEnv,
+  type PackagedWorkerPathRuntime,
+} from "@/utils/packagedWorkerPath";
 import type {
   AIFetchlyConfigDiagnostic,
   AIFetchlyConfigSnapshot,
@@ -187,15 +193,39 @@ function defaultLogger(
 }
 
 function defaultWorkerEntry(): string {
-  // Mirror ContactExtractionWorker's resolution: the compiled manager sits
-  // under .vite/build/main/; the worker bundle sits under
-  // .vite/build/childprocess/aifetchly-config/.
-  return path.join(
-    __dirname,
-    "..",
-    "childprocess",
-    "aifetchly-config",
-    "WorkspaceConfigWatchWorker"
+  const electronProcess = process as NodeJS.Process & {
+    resourcesPath?: string;
+  };
+  const runtime: PackagedWorkerPathRuntime = {
+    dirname: __dirname,
+    cwd: process.cwd(),
+    resourcesPath: electronProcess.resourcesPath,
+    existsSync: fs.existsSync,
+  };
+
+  return (
+    resolvePackagedWorkerPath(runtime, {
+      dirnameRelativePaths: [
+        "WorkspaceConfigWatchWorker.js",
+        path.join(
+          "..",
+          "childprocess",
+          "aifetchly-config",
+          "WorkspaceConfigWatchWorker.js"
+        ),
+      ],
+      cwdRelativePaths: [
+        path.join(".vite", "build", "WorkspaceConfigWatchWorker.js"),
+        path.join("dist", "WorkspaceConfigWatchWorker.js"),
+        path.join(
+          ".vite",
+          "build",
+          "childprocess",
+          "aifetchly-config",
+          "WorkspaceConfigWatchWorker.js"
+        ),
+      ],
+    }) ?? path.join(__dirname, "WorkspaceConfigWatchWorker.js")
   );
 }
 
@@ -402,7 +432,9 @@ export class WorkspaceWatchManager {
 
   private spawnWorker(): void {
     const worker = this.forkFn(this.workerEntry, [], {
-      env: { ...process.env, WORKER_TYPE: WORKER_TYPE_MARKER },
+      env: buildPackagedWorkerEnv({
+        extraEnv: { WORKER_TYPE: WORKER_TYPE_MARKER },
+      }),
     });
     this.worker = worker;
     this.workerState = "running";

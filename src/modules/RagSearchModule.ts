@@ -28,6 +28,7 @@ import {
   LOCAL_XENOVA_ALL_MINILM_DIMENSIONS,
 } from "@/service/embedding/LocalEmbeddingModels";
 import { isLocalXenovaModel } from "@/service/embedding/EmbeddingModelId";
+import { EmbeddingModelCatalogService } from "@/service/embedding/EmbeddingModelCatalogService";
 import { LOCAL_EMBEDDING_MAX_BATCH_SIZE } from "@/childprocess/embedding/LocalEmbeddingWorkerTypes";
 import { SystemSettingModule } from "@/modules/SystemSettingModule";
 import { SystemSettingGroupModule } from "@/modules/SystemSettingGroupModule";
@@ -111,6 +112,7 @@ export class RagSearchModule extends BaseModule {
   private ragConfigApi: RagConfigApi;
   private systemSettingModule: SystemSettingModule;
   private systemSettingGroupModule: SystemSettingGroupModule;
+  private ragChunkModule: RAGChunkModule;
 
   /**
    * WS-5 R5.1 — collaborators are constructor-injected so unit tests can
@@ -127,6 +129,7 @@ export class RagSearchModule extends BaseModule {
     this.documentService = deps?.documentService ?? new DocumentService();
     this.chunkingService = deps?.chunkingService ?? new ChunkingService();
     this.ragConfigApi = deps?.ragConfigApi ?? new RagConfigApi();
+    this.ragChunkModule = new RAGChunkModule();
     this.systemSettingModule =
       deps?.systemSettingModule ?? new SystemSettingModule();
     this.systemSettingGroupModule =
@@ -365,12 +368,6 @@ export class RagSearchModule extends BaseModule {
           dimensions: provider.dimensions,
         };
       } catch (remoteError) {
-        // Billing/quota denials must surface to the UI as a typed error so the
-        // user sees a clear, translated message. Do NOT silently fall back to
-        // the local model — the user needs to know their plan limit was hit.
-        if (isEmbeddingBillingError(remoteError)) {
-          throw remoteError;
-        }
         return await this.fallbackToLocalEmbedding(
           chunks,
           documentId,
@@ -411,8 +408,6 @@ export class RagSearchModule extends BaseModule {
    * free model. If the local provider also fails, the error propagates so the
    * caller marks the document as errored.
    *
-   * Note: billing-denied errors are NOT routed here — they surface directly so
-   * the UI can present a clear, translated message (see generateChunkEmbeddings).
    */
   private async fallbackToLocalEmbedding(
     chunks: RAGChunkEntity[],
@@ -690,9 +685,13 @@ export class RagSearchModule extends BaseModule {
   async getDocuments(filters?: {
     status?: string;
     processingStatus?: string;
+    fileType?: string;
+    name?: string;
     author?: string;
     tags?: string[];
     dateRange?: { start: Date; end: Date };
+    limit?: number;
+    offset?: number;
   }): Promise<RAGDocumentEntity[]> {
     try {
       return await this.documentService.getDocuments(filters);
@@ -923,6 +922,34 @@ export class RagSearchModule extends BaseModule {
   }
 
   /**
+   * Clear the existing chunk/vector state before a manual regeneration run.
+   * The Knowledge Library reload action is a rebuild, not an incremental fill.
+   */
+  async resetDocumentIndex(document: RAGDocumentEntity): Promise<void> {
+    const existingChunks = await this.ragChunkModule.getDocumentChunks(
+      document.id
+    );
+
+    if (
+      existingChunks.length > 0 &&
+      document.modelName &&
+      document.vectorDimensions
+    ) {
+      await this.searchService.vectorStoreService.deleteDocumentIndexByPath(
+        document.id,
+        {
+          name: document.modelName,
+          dimensions: document.vectorDimensions,
+        }
+      );
+    }
+
+    if (existingChunks.length > 0) {
+      await this.ragChunkModule.deleteDocumentChunks(document.id);
+    }
+  }
+
+  /**
    * Generate embeddings for document chunks
    * @param documentId - Document ID to generate embeddings for
    * @returns Embedding generation result
@@ -1059,8 +1086,10 @@ export class RagSearchModule extends BaseModule {
         `Default embedding model saved to settings: ${modelName}:${dimension}`
       );
     } catch (error) {
-      log.error("Error saving default embedding model to settings:", error);
-      // Do not throw to avoid breaking model update flow.
+      console.error("Error saving default embedding model to settings:", error);
+      // Do not report success when the selection was not persisted. Otherwise
+      // the next upload continues using the previous (possibly remote) model.
+      throw error;
     }
   }
 
@@ -1111,13 +1140,20 @@ export class RagSearchModule extends BaseModule {
           "Default embedding model not found in system settings, fetching from API..."
         );
 
-        const modelsResponse =
-          await this.ragConfigApi.getAvailableEmbeddingModels();
+        const catalog = new EmbeddingModelCatalogService(
+          this.ragConfigApi,
+          this.systemSettingModule
+        );
+        const modelsResponse = await catalog.listModels();
 
-        if (modelsResponse.status && modelsResponse.data) {
-          const resolved = resolveDefaultEmbeddingFromAvailableModels(
-            modelsResponse.data
-          );
+        if (modelsResponse.default_model && modelsResponse.models) {
+          const resolvedModel = modelsResponse.models[modelsResponse.default_model];
+          const resolved = resolvedModel
+            ? {
+                modelName: modelsResponse.default_model,
+                dimension: resolvedModel.dimensions,
+              }
+            : resolveDefaultEmbeddingFromAvailableModels(modelsResponse);
           if (!resolved) {
             log.warn(
               "Could not resolve default embedding model and dimension from API response"

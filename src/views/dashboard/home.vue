@@ -43,7 +43,7 @@ const prompt = ref("");
 const translations = computed(() => ({
   dashboard: t("home.dashboard") || "Dashboard",
   agentHeadline:
-    t("home.agent_headline") || "Let AI help you grow your business.",
+    t("home.agent_headline") || "Your AI agent for business operations",
   agentPlaceholder:
     t("home.agent_placeholder") ||
     "Ask AI to find leads, write outreach, analyze campaigns...",

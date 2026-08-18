@@ -38,6 +38,22 @@ import {
   splitTelemetryMessage,
 } from "@/service/ShortErrorStack";
 
+/** Human-readable label for SearchTaskStatus numeric values (1–4). */
+function searchTaskStatusLabel(status: SearchTaskStatus | null): string {
+  switch (status) {
+    case SearchTaskStatus.Processing:
+      return "Processing";
+    case SearchTaskStatus.Complete:
+      return "Complete";
+    case SearchTaskStatus.Error:
+      return "Error";
+    case SearchTaskStatus.NotStart:
+      return "NotStart";
+    default:
+      return "unknown";
+  }
+}
+
 /**
  * Rate limiting configuration for tool execution
  */
@@ -536,19 +552,34 @@ export class ToolExecutor {
     const maxWaitTime = 600000; // 10 minutes
     const pollInterval = 1000; // 1 second
     const partialSnapshotInterval = 5; // every ~5s
+    // Do not abort the instant status flips to Error — Chrome/Puppeteer
+    // stderr used to mark Error while the worker kept scraping and later
+    // exited 0 → Complete. Give that race time to resolve.
+    const errorGraceMs = 120000; // 2 minutes
     const startTime = Date.now();
     let pollIter = 0;
+    let errorObservedAt: number | null = null;
 
     while (Date.now() - startTime < maxWaitTime) {
       taskStatus = await searchModule.getTaskStatus(taskId);
       if (taskStatus === null) {
         throw new Error(`Task ${taskId} not found`);
       }
-      if (
-        taskStatus === SearchTaskStatus.Complete ||
-        taskStatus === SearchTaskStatus.Error
-      ) {
+      if (taskStatus === SearchTaskStatus.Complete) {
         break;
+      }
+      if (taskStatus === SearchTaskStatus.Error) {
+        if (errorObservedAt === null) {
+          errorObservedAt = Date.now();
+          console.warn(
+            `[ToolExecutor] Search task ${taskId} reported Error; ` +
+              `waiting up to ${errorGraceMs}ms for Complete/results before failing`
+          );
+        } else if (Date.now() - errorObservedAt >= errorGraceMs) {
+          break;
+        }
+      } else {
+        errorObservedAt = null;
       }
       if (
         context?.toolCallId &&
@@ -567,15 +598,36 @@ export class ToolExecutor {
       await new Promise((resolve) => setTimeout(resolve, pollInterval));
     }
 
-    // Check if task completed successfully
-    if (taskStatus !== SearchTaskStatus.Complete) {
-      throw new Error(
-        `Search task ${taskId} did not complete successfully. Status: ${taskStatus}`
-      );
-    }
-
-    // Get search results
+    // Get search results even when status is not Complete. On Windows,
+    // Chrome/Puppeteer stderr used to flip the task to Error while the
+    // scraper still saved URLs — recover those results for the model.
     const results = await searchModule.listSearchResult(taskId, 1, numResults);
+
+    if (taskStatus !== SearchTaskStatus.Complete) {
+      if (results.length > 0) {
+        console.warn(
+          `[ToolExecutor] Search task ${taskId} ended with status=${taskStatus} ` +
+            `(${searchTaskStatusLabel(taskStatus)}) but ${
+              results.length
+            } result(s) ` +
+            `were saved; returning them as success. query=${JSON.stringify(
+              query
+            )} engine=${engineName}`
+        );
+      } else {
+        console.error(
+          `[ToolExecutor] Search task ${taskId} failed with status=${taskStatus} ` +
+            `(${searchTaskStatusLabel(
+              taskStatus
+            )}), no results. query=${JSON.stringify(query)} ` +
+            `engine=${engineName} pollMs=${Date.now() - startTime}`
+        );
+        throw new Error(
+          `Search task ${taskId} did not complete successfully. Status: ${taskStatus} ` +
+            `(${searchTaskStatusLabel(taskStatus)})`
+        );
+      }
+    }
 
     // Extract clean results using service
     const cleanResults = ToolExecutionService.extractCleanResults(results);
@@ -790,7 +842,10 @@ export class ToolExecutor {
     }
 
     // Format platforms for LLM consumption
+    // `id` is the canonical identifier — pass it verbatim as `platform` to
+    // search_yellow_pages (names like "YellowPages.com" also resolve).
     const formattedPlatforms = platforms.map((platform) => ({
+      id: platform.id,
       name: platform.name,
       display_name: platform.display_name,
       country: platform.country,
@@ -814,7 +869,9 @@ export class ToolExecutor {
           }):\n\n${platforms
             .map(
               (p, idx) =>
-                `${idx + 1}. **${p.display_name}** (${p.name})\n   Country: ${
+                `${idx + 1}. **${p.display_name}** — use id \`${
+                  p.id
+                }\` for search_yellow_pages\n   Country: ${
                   p.country
                 }, Language: ${p.language}\n   ${
                   p.is_active ? "✅ Active" : "❌ Inactive"

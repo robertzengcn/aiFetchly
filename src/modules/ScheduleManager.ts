@@ -12,7 +12,7 @@ import { CronJob } from 'cron';
 import {ScheduleExecutionLogInterface} from "@/modules/interface/ScheduleExecutionLogInterface"
 import { ScheduleExecutionLogModule } from "./ScheduleExecutionLogModule";
 import { ScheduleDependencyModule } from "./ScheduleDependencyModule";
-import { ScheduleDependencyInterface } from "./interface/ScheduleDependencyInterface";
+import { ScheduleDependencyInterface, DependencyStatistics } from "./interface/ScheduleDependencyInterface";
 import { SchedulerStatusModel } from "@/model/SchedulerStatus.model";
 import { Token } from "@/modules/token";
 import { USERSDBPATH } from '@/config/usersetting';
@@ -146,7 +146,10 @@ export class ScheduleManager {
         this.removeSchedule(schedule.id);
 
         try {
-            // Create cron job
+            // Create cron job (cron_expression is nullable for interval schedules)
+            if (!schedule.cron_expression) {
+                throw new Error(`Schedule ${schedule.id} has no cron expression`);
+            }
             const cronJob = new CronJob(schedule.cron_expression, async () => {
                 await this.executeSchedule(schedule.id);
             }, null, false, 'UTC');
@@ -239,8 +242,10 @@ export class ScheduleManager {
                 await this.scheduleTaskModule.updateLastRunTime(scheduleId, new Date());
 
                 // Calculate and update next run time
-                const nextRunTime = this.calculateNextRunTime(schedule.cron_expression);
-                await this.scheduleTaskModule.updateNextRunTime(scheduleId, nextRunTime);
+                if (schedule.cron_expression) {
+                    const nextRunTime = this.calculateNextRunTime(schedule.cron_expression);
+                    await this.scheduleTaskModule.updateNextRunTime(scheduleId, nextRunTime);
+                }
 
                 log.info(`Schedule ${scheduleId} executed successfully in ${duration}ms`);
 
@@ -365,6 +370,14 @@ export class ScheduleManager {
     async removeDependency(parentId: number, childId: number): Promise<void> {
         await this.scheduleDependencyModule.deleteDependencyByParentChild(parentId, childId);
         log.info(`Removed dependency: ${parentId} -> ${childId}`);
+    }
+
+    async cleanupInactiveDependencies(): Promise<number> {
+        return this.scheduleDependencyModule.cleanupInactiveDependencies();
+    }
+
+    async getDependencyStatistics(): Promise<DependencyStatistics> {
+        return this.scheduleDependencyModule.getDependencyStatistics();
     }
 
     /**

@@ -484,6 +484,22 @@ alert(t('contactExtraction.select_items_hint') || 'Please select at least one it
 
 **FAILURE TO UPDATE ALL LANGUAGE FILES WILL RESULT IN INCOMPLETE INTERNATIONALIZATION AND USER EXPERIENCE ISSUES.**
 
+### UI Changes Require UI Tests - MANDATORY RULE
+**CRITICAL: When adding or updating any UI, you MUST also add or update the corresponding UI test cases in the same change. A UI change without its tests is incomplete work.**
+
+#### Scope
+This applies to any renderer-facing change:
+- New Vue components, pages, or dialogs
+- Modified components: new/changed props, emits, conditional rendering, user interactions, loading/error/disabled states
+- UI behavior driven by IPC results that is visible to users
+
+#### Required Workflow
+1. **New component/page/dialog** → create `test/vitest/main/components/<ComponentName>.test.ts` covering rendering and the main interactions.
+2. **Existing component changed** → extend its test in `test/vitest/main/components/` (create the file if none exists). Update assertions to match the new behavior — do not just delete failing tests.
+3. **Verify locally**: `yarn test:components` must pass. This suite is a hard CI gate.
+4. **Critical user flows** (multi-step, cross-component, streaming) → also add/extend a Playwright E2E spec in `test/e2e/specs/` (run: `yarn test:e2e`).
+5. **Commit the UI change and its tests together** as one logical unit.
+
 ### Testing Strategy
 
 #### Test Organization
@@ -506,6 +522,8 @@ test/
 #### Test Frameworks
 - **Mocha**: Used for module tests (CommonJS style) - `test/modules/*.test.ts`
 - **Vitest**: Used for main process and utility code tests - `test/vitest/*/*.test.ts`
+- **Vitest + @vue/test-utils**: Vue component (UI) tests - `test/vitest/main/components/*.test.ts` (see "UI Changes Require UI Tests" above)
+- **Playwright**: Electron end-to-end tests - `test/e2e/specs/*.test.ts`
 - All test files use `.test.ts` extension
 
 #### Test Placement Guidelines
@@ -516,11 +534,13 @@ test/
 - **IPC handler tests**: `test/vitest/main/`
 - **Utility function tests**: `test/vitest/utilitycode/`
 - **Task code tests**: `test/vitest/taskCode/`
+- **Vue component tests**: `test/vitest/main/components/` (mirrors `src/views/components/`)
 
 #### Running Tests
 - Run all Mocha tests: `yarn test`
 - Run specific test: `yarn test <test-file-path>`
 - Run main process tests: `yarn testmain`
+- Run Vue component tests: `yarn test:components`
 - Run utility code tests: `yarn vitest-puppeteer`
 - Use DEBUG flags for detailed logging: `DEBUG='module:*' yarn test`
 
@@ -547,6 +567,7 @@ Current branch (`sqlite-vec-merge`) is integrating sqlite-vec for vector similar
 4. Implement scrapers following existing patterns
 5. Add frontend components in `src/views/pages/`
 6. Update IPC handlers to use Module methods (never database directly)
+7. Add/update component tests in `test/vitest/main/components/` for the new UI (see "UI Changes Require UI Tests")
 
 ### Adding New Tasks
 1. Define task schema in entity types
@@ -555,6 +576,7 @@ Current branch (`sqlite-vec-merge`) is integrating sqlite-vec for vector similar
 4. Create controller in `src/controller/` (if needed for coordination)
 5. Add frontend UI components
 6. Register IPC handlers that call Module/Controller methods (never database directly)
+7. Add/update component tests in `test/vitest/main/components/` for the new UI (see "UI Changes Require UI Tests")
 
 ### Database Changes
 1. Update TypeORM entities in `src/entity/`
@@ -569,7 +591,8 @@ Current branch (`sqlite-vec-merge`) is integrating sqlite-vec for vector similar
 ## Environment Configuration
 
 ### Required Environment Variables
-- `UPDATESERVER` - Update server URL for auto-updater
+
+> Auto-updates use `update-electron-app` against the GitHub Releases feed (`AIFETCHLY_UPDATE_REPO` in `src/config/appInfo.ts`); no `UPDATESERVER` environment variable is required.
 
 ### Development Setup
 1. Install dependencies with `yarn`

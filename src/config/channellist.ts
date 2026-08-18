@@ -84,6 +84,15 @@ export const EMAIL_REPLY_DRAFT_CREATE = "email:reply:draft:create";
 export const EMAIL_REPLY_DRAFT_DETAIL = "email:reply:draft:detail";
 export const EMAIL_REPLY_DRAFT_UPDATE = "email:reply:draft:update";
 export const EMAIL_REPLY_SEND = "email:reply:send";
+// Thread-aware reply reliability (Milestone 1): approval + send-safety.
+export const EMAIL_REPLY_DRAFT_APPROVE = "email:reply:draft:approve";
+export const EMAIL_REPLY_SEND_ATTEMPT_DETAIL =
+  "email:reply:send:attempt:detail";
+export const EMAIL_REPLY_DELIVERY_RECONCILE = "email:reply:delivery:reconcile";
+export const EMAIL_REPLY_KNOWLEDGE_SCOPE_GET =
+  "email:reply:knowledge:scope:get";
+export const EMAIL_REPLY_KNOWLEDGE_SCOPE_UPDATE =
+  "email:reply:knowledge:scope:update";
 export const EMAIL_AUTO_REPLY_AUDIT_LIST = "email:autoreply:audit:list";
 export const EMAIL_AUTO_REPLY_AUDIT_DETAIL = "email:autoreply:audit:detail";
 export const SOCIALACCOUNTlIST = "socialaccount:list";
@@ -97,6 +106,18 @@ export const SOCIAL_ACCOUNT_LOGIN_UPLOADCOOKIES =
 export const SOCIAL_ACCOUNT_CLEAN_COOKIES = "socialaccount:clean:cookies";
 export const SOCIAL_ACCOUNT_SHOW_PLATFORMPAGE =
   "socialaccount:show:platformpage";
+// Secure session metadata (renderer-safe: no cookie values).
+export const SOCIAL_ACCOUNT_SESSION_METADATA = "socialaccount:session:metadata";
+// Browser-profile import (feature-flagged; see src/config/featureFlags.ts).
+export const SOCIAL_ACCOUNT_BROWSER_IMPORT_AVAILABILITY =
+  "socialaccount:browser-import:availability";
+export const SOCIAL_ACCOUNT_BROWSER_IMPORT_START =
+  "socialaccount:browser-import:start-pairing";
+export const SOCIAL_ACCOUNT_BROWSER_IMPORT_CANCEL =
+  "socialaccount:browser-import:cancel";
+// Main -> renderer import events (progress + terminal result).
+export const SOCIAL_ACCOUNT_BROWSER_IMPORT_EVENT =
+  "socialaccount:browser-import:event";
 export const VIDEODOWNLOADTASK_RETRY = "video:downloadtask:retry";
 export const VIDEODOWNLOADITEM_RETRY = "video:downloaditem:retry";
 export const VIDEODOWNLOADITEM_EXPLORER = "video:downloaditem:explorer";
@@ -184,6 +205,18 @@ export const USER_SIGNOUT = "user:signout";
 // App Information Channels
 export const GET_APP_INFO = "app:info";
 
+// About / App Update Channels (About aiFetchly page)
+/** Renderer→Main: open the allowlisted official website via shell.openExternal. */
+export const APP_OPEN_WEBSITE = "app:open:website";
+/** Renderer→Main: fetch a snapshot of the current update status. */
+export const APP_GET_UPDATE_STATUS = "app:update:status";
+/** Renderer→Main: trigger a manual GitHub update check (cooldown + concurrency guarded). */
+export const APP_CHECK_FOR_UPDATES = "app:check-for-updates";
+/** Renderer→Main: quit and install a downloaded update (only when ready-to-restart). */
+export const APP_INSTALL_UPDATE = "app:install-update";
+/** Main→Renderer: pushed on every update status state transition. */
+export const APP_UPDATE_STATUS_EVENT = "app:update:status:event";
+
 // Platform Management Channels
 export const PLATFORM_LIST = "platform:list";
 export const PLATFORM_DETAIL = "platform:detail";
@@ -248,6 +281,8 @@ export const RAG_CHUNK_AND_EMBED_DOCUMENT = "rag:chunk-and-embed-document";
 export const RAG_DOWNLOAD_DOCUMENT = "rag:download-document";
 export const RAG_GET_DOCUMENT_ERROR_LOG = "rag:get-document-error-log";
 export const RAG_CHECK_DOCUMENT_DUPLICATE = "rag:check-document-duplicate";
+export const RAG_IMPORT_WEBSITE = "rag:import-website";
+export const RAG_IMPORT_WEBSITE_PROGRESS = "rag:import-website:progress";
 
 // File Dialog Channels
 export const SHOW_OPEN_DIALOG = "show-open-dialog";
@@ -282,6 +317,8 @@ export const AI_CHAT_V2_STREAM = "ai-chat-v2:stream";
 export const AI_CHAT_V2_STREAM_STOP = "ai-chat-v2:stream-stop";
 export const AI_CHAT_V2_STREAM_CHUNK = "ai-chat-v2:stream-chunk";
 export const AI_CHAT_V2_STREAM_COMPLETE = "ai-chat-v2:stream-complete";
+/** Main→Renderer: open AI Chat V2 and select a conversation (desktop notify click). */
+export const AI_CHAT_V2_OPEN_FROM_NOTIFY = "ai-chat-v2:open-from-notify";
 export const AI_CHAT_V2_CLEAR_CONVERSATION = "ai-chat-v2:clear-conversation";
 export const AI_CHAT_V2_CLEAR_ALL = "ai-chat-v2:clear-all";
 /** Resume a V2 skill/tool call after the user granted permission in the chat UI. */
@@ -301,6 +338,59 @@ export const AI_CHAT_V2_GET_TOOL_APPROVAL_MODE =
   "ai-chat-v2:get-tool-approval-mode";
 export const AI_CHAT_V2_SET_TOOL_APPROVAL_MODE =
   "ai-chat-v2:set-tool-approval-mode";
+/** Main->renderer: read cached expanded pasted-text bodies for previews. */
+export const AI_CHAT_V2_READ_PASTE_CACHE = "ai-chat-v2:read-paste-cache";
+export const AI_CHAT_V2_AT_MENTION_SUGGEST = "ai-chat-v2:at-mention-suggest";
+export const AI_CHAT_V2_GOAL_CREATE = "ai-chat-v2:goal-create";
+export const AI_CHAT_V2_GOAL_GET = "ai-chat-v2:goal-get";
+export const AI_CHAT_V2_GOAL_LOOP_START = "ai-chat-v2:goal-loop-start";
+export const AI_CHAT_V2_GOAL_LOOP_STOP = "ai-chat-v2:goal-loop-stop";
+export const AI_CHAT_V2_GOAL_EVENT = "ai-chat-v2:goal-event";
+// AI Chat V2 Scheduled Loop channels (renderer->main invoke + main->renderer broadcast).
+// Handlers check USER_AI_ENABLED before parsing payloads (FR-17, technical-design §12.2).
+export const AI_CHAT_V2_SCHEDULED_LOOP_CREATE =
+  "ai-chat-v2:scheduled-loop-create";
+export const AI_CHAT_V2_SCHEDULED_LOOP_GET = "ai-chat-v2:scheduled-loop-get";
+export const AI_CHAT_V2_SCHEDULED_LOOP_PAUSE =
+  "ai-chat-v2:scheduled-loop-pause";
+export const AI_CHAT_V2_SCHEDULED_LOOP_RESUME =
+  "ai-chat-v2:scheduled-loop-resume";
+export const AI_CHAT_V2_SCHEDULED_LOOP_STOP = "ai-chat-v2:scheduled-loop-stop";
+export const AI_CHAT_V2_SCHEDULED_LOOP_STOP_RUN =
+  "ai-chat-v2:scheduled-loop-stop-run";
+/** Main->renderer refresh hint after a scheduled turn persists (FR-11). */
+export const AI_CHAT_V2_CONVERSATION_UPDATED =
+  "ai-chat-v2:conversation-updated";
+/** Main->renderer live scheduled-turn token stream (technical-design §13.2). */
+export const AI_CHAT_V2_SCHEDULED_STREAM = "ai-chat-v2:scheduled-stream";
+/** Main->renderer broadcast after an automatic full compact so the renderer
+ * drops the context badge immediately (mirrors the manual compact flow). */
+export const AI_CHAT_V2_AUTO_COMPACTED = "ai-chat-v2:auto-compacted";
+
+// ==================== AiChatV2 Local Voice Channels ====================
+// Local sherpa-onnx STT/TTS for AiChatV2. See
+// docs/prd/local-sherpa-onnx-voice-chat-technical-design.md §6.
+// Handlers validate payloads (mime/size/text-length) before any worker call.
+/** Renderer->Main: read voice runtime + model availability. */
+export const AI_CHAT_V2_VOICE_STATUS = "ai-chat-v2:voice-status";
+/** Renderer->Main: transcribe a recorded audio payload (push-to-talk STT). */
+export const AI_CHAT_V2_VOICE_TRANSCRIBE = "ai-chat-v2:voice-transcribe";
+/** Renderer->Main: synthesize speech (TTS) from sanitized assistant text. */
+export const AI_CHAT_V2_VOICE_TTS = "ai-chat-v2:voice-tts";
+/** Renderer->Main: best-effort cancel of active STT/TTS work. */
+export const AI_CHAT_V2_VOICE_CANCEL = "ai-chat-v2:voice-cancel";
+/** Renderer->Main: read voice settings view. */
+export const AI_CHAT_V2_VOICE_GET_SETTINGS = "ai-chat-v2:voice-get-settings";
+/** Renderer->Main: validate + persist voice settings view. */
+export const AI_CHAT_V2_VOICE_SET_SETTINGS = "ai-chat-v2:voice-set-settings";
+// Phase 5: model download channels
+export const AI_CHAT_V2_VOICE_MODEL_LIST = "ai-chat-v2:voice-model-list";
+export const AI_CHAT_V2_VOICE_MODEL_DOWNLOAD =
+  "ai-chat-v2:voice-model-download";
+export const AI_CHAT_V2_VOICE_MODEL_DOWNLOAD_PROGRESS =
+  "ai-chat-v2:voice-model-download-progress";
+export const AI_CHAT_V2_VOICE_MODEL_CANCEL_DOWNLOAD =
+  "ai-chat-v2:voice-model-cancel-download";
 
 // AI Provider (Local/Custom) Settings Channels
 export const AI_PROVIDER_SETTINGS_GET = "ai-provider:settings:get";
@@ -540,6 +630,21 @@ export const AI_WORKSPACE_MEMORY_AUTO_DREAM_STATUS =
 
 // Dialog Channels
 export const DIALOG_PICK_FOLDER = "dialog:pick-folder";
+
+// Local AI Runtime (downloadable first-party runtimes). These are local
+// component-management channels (not hosted AI), so handlers use
+// registerValidatedHandler, not the AI-enabled gate.
+export const LOCAL_AI_RUNTIME_LIST = "local-ai-runtime:list";
+export const LOCAL_AI_RUNTIME_STATUS = "local-ai-runtime:status";
+export const LOCAL_AI_RUNTIME_PREPARE_INSTALL =
+  "local-ai-runtime:prepare-install";
+export const LOCAL_AI_RUNTIME_INSTALL = "local-ai-runtime:install";
+export const LOCAL_AI_RUNTIME_CANCEL_INSTALL =
+  "local-ai-runtime:cancel-install";
+export const LOCAL_AI_RUNTIME_CHECK_UPDATE = "local-ai-runtime:check-update";
+export const LOCAL_AI_RUNTIME_REPAIR = "local-ai-runtime:repair";
+export const LOCAL_AI_RUNTIME_REMOVE = "local-ai-runtime:remove";
+export const LOCAL_AI_RUNTIME_PROGRESS = "local-ai-runtime:progress";
 
 // Hooks system — Phase 4 management UI channels.
 export const HOOKS_LIST = "hooks:list";

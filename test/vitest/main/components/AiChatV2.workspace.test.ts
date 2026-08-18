@@ -20,6 +20,8 @@ vi.mock("@/views/api/aiChatV2", () => ({
     default_model: undefined,
   }),
   clearChatV2Conversation: vi.fn().mockResolvedValue({ deleted: 0 }),
+  subscribeAutoCompacted: vi.fn(),
+  unsubscribeAutoCompacted: vi.fn(),
 }));
 
 vi.mock("@/views/api/workspace", () => ({
@@ -79,7 +81,9 @@ function mountChat() {
         AiChatV2QuestionCard: true,
         AiChatV2PlanApprovalCard: true,
         AiChatV2Composer: {
-          template: '<div><slot name="prepend" /></div>',
+          emits: ["request-workspace"],
+          template:
+            '<div><button data-testid="composer-request-workspace" @click="$emit(\'request-workspace\')">Choose workspace</button><slot name="prepend" /></div>',
         },
         AiChatV2ModeSelector: true,
         AiChatV2ModelSelector: true,
@@ -120,6 +124,20 @@ describe("AiChatV2 workspace picker", () => {
     await flushPromises();
 
     await wrapper.find(".workspace-badge--unset").trigger("click");
+    await flushPromises();
+
+    const card = wrapper.find("[data-testid='workspace-required']");
+    expect(card.exists()).toBe(true);
+    expect(card.attributes("data-conversation-id")).toMatch(/^v2-/);
+  });
+
+  it("opens the workspace picker card when the @-mention dropdown requests a workspace", async () => {
+    const wrapper = mountChat();
+    await flushPromises();
+
+    await wrapper
+      .find('[data-testid="composer-request-workspace"]')
+      .trigger("click");
     await flushPromises();
 
     const card = wrapper.find("[data-testid='workspace-required']");

@@ -5,7 +5,6 @@ import {
   ChatApiResponse,
   LLMImageAttachmentPayload,
 } from "@/entityTypes/commonType";
-import { Token } from "@/modules/token";
 import { USER_AI_ENABLED } from "@/config/usersetting";
 import type { AIEmailTemplateRequest } from "@/entityTypes/emailmarketingType";
 import type { AIRecoveryRequest } from "@/entityTypes/processMessage-type";
@@ -13,9 +12,10 @@ import {
   batchKeywordGenerationResponseSchema,
   chatApiResponseSchema,
 } from "@/schemas/api/aiChat";
-import { AIProviderResolver } from "@/service/aiProvider/AIProviderResolver";
+import type { AIProviderResolver } from "@/service/aiProvider/AIProviderResolver";
 import { OpenAICompatibleProviderClient } from "@/service/aiProvider/OpenAICompatibleProviderClient";
 import type { LocalAIProviderConfig } from "@/entityTypes/aiProviderTypes";
+import type { ModelArtifact } from "@/entityTypes/aiImageAttachmentToolTypes";
 import {
   AIChatRecoverableError,
   type AIChatRecoveryReason,
@@ -27,6 +27,7 @@ import {
   type AIChatRecoveryProfile,
   type AIChatRetryProfile,
 } from "@/service/AIChatRetryPolicy";
+import { describeErrorDetail } from "@/service/AIChatErrorMapper";
 
 /**
  * Chat request interface
@@ -118,6 +119,15 @@ export interface ToolExecutionResult {
   readonly expectedCount?: number;
   /** Timeout ceiling that fired, in ms, when partial === true. */
   readonly timedOutAfterMs?: number;
+  /**
+   * Transient model artifacts (e.g. prepared images) for the next AI request
+   * round. A SIBLING of `result`, so metadata-only serializers that spread
+   * only `result` (normalizeToolResult, hooks, persistence, renderer events)
+   * naturally exclude it. The query loop consumes this to append a model-only
+   * multimodal handoff message. Never persisted, logged, or emitted to the
+   * renderer.
+   */
+  readonly modelArtifacts?: readonly ModelArtifact[];
 }
 
 /**
@@ -426,6 +436,23 @@ export interface OpenAIToolCall {
   function: OpenAIToolCallFunction;
 }
 
+/** Non-standard image payload returned by aiFetchly's OpenAI-compatible chat endpoint. */
+export interface OpenAIChatImage {
+  type: "image";
+  delivery?: "provider_url" | "base64" | string;
+  url?: string;
+  original_url?: string;
+  local_path?: string;
+  file_name?: string;
+  b64_json?: string;
+  expires_at?: string;
+  download_required?: boolean;
+  mime_type?: string;
+  width?: number | null;
+  height?: number | null;
+  metadata?: Record<string, unknown>;
+}
+
 /** OpenAI-compatible streaming tool call delta */
 export interface OpenAIStreamToolCallDelta {
   index: number;
@@ -463,6 +490,7 @@ export interface OpenAIChatMessage {
   content: OpenAIMessageContent | null;
   tool_calls?: OpenAIToolCall[];
   tool_call_id?: string;
+  images?: OpenAIChatImage[];
 }
 
 /** Safely convert OpenAIMessageContent to a display string. */
@@ -486,6 +514,16 @@ export type OpenAIToolChoice =
   | "none"
   | { type: "function"; function: { name: string } };
 
+/** Reasoning effort/summary request option for reasoning-capable models. */
+export type OpenAIReasoningEffort = "low" | "medium" | "high";
+export type OpenAIReasoningSummary = "auto" | "concise" | "detailed";
+
+export interface OpenAIReasoningOptions {
+  enabled: boolean;
+  effort?: OpenAIReasoningEffort;
+  summary?: OpenAIReasoningSummary;
+}
+
 /** OpenAI-compatible chat completion request */
 export interface OpenAIChatCompletionRequest {
   messages: OpenAIChatMessage[];
@@ -494,6 +532,7 @@ export interface OpenAIChatCompletionRequest {
   max_tokens?: number;
   stream?: boolean;
   stream_options?: { include_usage?: boolean };
+  reasoning?: OpenAIReasoningOptions;
   tools?: OpenAITool[];
   tool_choice?: OpenAIToolChoice;
   stop?: string | string[];
@@ -565,7 +604,11 @@ export interface OpenAIChatCompletionResponse {
 export interface OpenAIStreamDelta {
   role?: string;
   content?: string | null;
+  reasoning_content?: string | null;
+  reasoning_summary?: string | null;
+  reasoning_delta?: string | null;
   tool_calls?: OpenAIStreamToolCallDelta[];
+  images?: OpenAIChatImage[];
 }
 
 /** OpenAI-compatible streaming chunk choice */
@@ -753,8 +796,11 @@ export class AiChatApi {
    * AiChatApi (e.g. in worker processes) does not touch encrypted storage
    * until a chat call actually happens.
    */
-  private getProviderResolver(): AIProviderResolver {
+  private async getProviderResolver(): Promise<AIProviderResolver> {
     if (!this._providerResolver) {
+      const { AIProviderResolver } = await import(
+        "@/service/aiProvider/AIProviderResolver"
+      );
       this._providerResolver = new AIProviderResolver();
     }
     return this._providerResolver;
@@ -833,7 +879,7 @@ export class AiChatApi {
    *
    * @throws {Error} When AI features are not enabled for the user
    */
-  private ensureAIEnabled(): void {
+  private async ensureAIEnabled(): Promise<void> {
     // Worker processes cannot access ElectronStoreService/Token,
     // so use env var passed from main process instead.
     if (process.env.WORKER_TYPE) {
@@ -846,6 +892,7 @@ export class AiChatApi {
       return;
     }
 
+    const { Token } = await import("@/modules/token");
     const tokenService = new Token();
     const aiEnabled = tokenService.getValue(USER_AI_ENABLED);
     if (aiEnabled !== "true") {
@@ -948,7 +995,7 @@ export class AiChatApi {
   async sendMessage(
     request: ChatRequest
   ): Promise<CommonApiresp<ChatApiResponse>> {
-    this.ensureAIEnabled();
+    await this.ensureAIEnabled();
     const data: ChatApiRequestData = {
       message: request.message,
       conversation_id: request.conversationId,
@@ -1020,7 +1067,7 @@ export class AiChatApi {
     onEvent: (event: StreamEvent) => void,
     options?: { signal?: AbortSignal }
   ): Promise<void> {
-    this.ensureAIEnabled();
+    await this.ensureAIEnabled();
     const data: ChatApiRequestData = {
       message: request.message,
       conversation_id: request.conversationId,
@@ -1076,7 +1123,7 @@ export class AiChatApi {
     onEvent: (event: StreamEvent) => void,
     options?: { messageOverride?: string }
   ): Promise<void> {
-    this.ensureAIEnabled();
+    await this.ensureAIEnabled();
     const body = {
       prompt: request.prompt,
       tone: request.tone,
@@ -1235,7 +1282,7 @@ export class AiChatApi {
   async getAvailableModels(): Promise<
     CommonApiresp<AvailableChatModelsResponse>
   > {
-    this.ensureAIEnabled();
+    await this.ensureAIEnabled();
     return this._httpClient.get("/api/ai/chat/models");
   }
 
@@ -1295,7 +1342,7 @@ export class AiChatApi {
   async batchGenerateKeywords(
     requests: BatchKeywordGenerationRequestItem[]
   ): Promise<CommonApiresp<BatchKeywordGenerationResponse>> {
-    this.ensureAIEnabled();
+    await this.ensureAIEnabled();
     this._debugLogRequest("/api/ai/keywords/generate/batch", requests);
     const raw = await this._httpClient.postJson<
       CommonApiresp<BatchKeywordGenerationResponse>
@@ -1351,7 +1398,7 @@ export class AiChatApi {
   async analyzeWebsite(
     request: WebsiteAnalysisRequest
   ): Promise<CommonApiresp<WebsiteAnalysisResponse>> {
-    this.ensureAIEnabled();
+    await this.ensureAIEnabled();
     const data: WebsiteAnalysisRequest = {
       website_content: request.website_content,
       client_business: request.client_business,
@@ -1387,7 +1434,7 @@ export class AiChatApi {
     threadId?: string,
     options?: { signal?: AbortSignal }
   ): Promise<void> {
-    this.ensureAIEnabled();
+    await this.ensureAIEnabled();
     const data: ContinueRequestData = {
       conversation_id: conversationId,
       tool_results: toolResults,
@@ -1579,7 +1626,7 @@ export class AiChatApi {
     entityName?: string,
     screenshot?: string
   ): Promise<CommonApiresp<ContactExtractionResponse>> {
-    this.ensureAIEnabled();
+    await this.ensureAIEnabled();
 
     // Validate page content size
     this.validatePageSize(pageContent);
@@ -1635,7 +1682,7 @@ export class AiChatApi {
     screenshot: string,
     ttlSeconds?: number
   ): Promise<CommonApiresp<ScreenshotUploadResponse>> {
-    this.ensureAIEnabled();
+    await this.ensureAIEnabled();
     if (screenshot) {
       this.validateScreenshot(screenshot);
     }
@@ -1666,7 +1713,7 @@ export class AiChatApi {
     platformName: string;
     selectorsTried: Record<string, string>;
   }): Promise<CommonApiresp<ScrapeAssistResponse>> {
-    this.ensureAIEnabled();
+    await this.ensureAIEnabled();
 
     // Validate page content size
     this.validatePageSize(params.pageContent);
@@ -1741,7 +1788,7 @@ export class AiChatApi {
     stepContext?: string;
     errorInfo?: string;
   }): Promise<CommonApiresp<ObserveResponse>> {
-    this.ensureAIEnabled();
+    await this.ensureAIEnabled();
     this.validatePageSize(params.pageContent);
     if (params.screenshot && !params.screenshotId) {
       this.validateScreenshot(params.screenshot);
@@ -1810,7 +1857,7 @@ export class AiChatApi {
     sessionId: string,
     success = true
   ): Promise<CommonApiresp<unknown>> {
-    this.ensureAIEnabled();
+    await this.ensureAIEnabled();
     const payload = { session_id: sessionId, success };
     this._debugLogRequest("/api/ai/scrape/complete", payload);
     return this._httpClient.postJson("/api/ai/scrape/complete", payload);
@@ -1823,7 +1870,7 @@ export class AiChatApi {
   async sendPuppeteerRecovery(
     request: AIRecoveryRequest
   ): Promise<CommonApiresp<PuppeteerRecoveryResponseData>> {
-    this.ensureAIEnabled();
+    await this.ensureAIEnabled();
 
     const data: Record<string, unknown> = {
       request_id: request.requestId,
@@ -1873,7 +1920,7 @@ export class AiChatApi {
    */
   async listOpenAIModels(): Promise<OpenAIModelsResponse> {
     if (!process.env.WORKER_TYPE) {
-      const resolved = this.getProviderResolver().resolveForChat();
+      const resolved = (await this.getProviderResolver()).resolveForChat();
       if (!resolved.canUse) {
         throw new Error(resolved.message);
       }
@@ -1883,7 +1930,7 @@ export class AiChatApi {
       return this.listOpenAIModelsHosted();
     }
     // Worker processes have no provider settings; keep the hosted-only gate.
-    this.ensureAIEnabled();
+    await this.ensureAIEnabled();
     return this.listOpenAIModelsHosted();
   }
 
@@ -2043,7 +2090,7 @@ export class AiChatApi {
     request: OpenAIChatCompletionRequest
   ): Promise<OpenAIChatCompletionResponse> {
     if (!process.env.WORKER_TYPE) {
-      const resolved = this.getProviderResolver().resolveForChat();
+      const resolved = (await this.getProviderResolver()).resolveForChat();
       if (!resolved.canUse) {
         throw new Error(resolved.message);
       }
@@ -2054,7 +2101,7 @@ export class AiChatApi {
       }
       return this.openAIChatCompletionHosted(request);
     }
-    this.ensureAIEnabled();
+    await this.ensureAIEnabled();
     return this.openAIChatCompletionHosted(request);
   }
 
@@ -2119,7 +2166,7 @@ export class AiChatApi {
     }
   ): Promise<void> {
     if (!process.env.WORKER_TYPE) {
-      const resolved = this.getProviderResolver().resolveForChat();
+      const resolved = (await this.getProviderResolver()).resolveForChat();
       if (!resolved.canUse) {
         throw new Error(resolved.message);
       }
@@ -2135,7 +2182,7 @@ export class AiChatApi {
       return;
     }
     // Worker processes have no provider settings; keep the hosted-only gate.
-    this.ensureAIEnabled();
+    await this.ensureAIEnabled();
     await this.openAIChatCompletionStreamHosted(request, onChunk, options);
   }
 
@@ -2254,14 +2301,14 @@ export class AiChatApi {
           layer,
           reason: classified.reason,
           attempt: decision.attempt,
-          maxAttempts: profile.maxAttempts,
+          maxAttempts: profile.maxAttempts + 1,
           delayMs: decision.delayMs,
           consecutiveOverloadCount: consecutiveOverload,
           message: classified.message,
         });
         options?.onRetry?.({
           attempt: decision.attempt,
-          maxAttempts: profile.maxAttempts,
+          maxAttempts: profile.maxAttempts + 1,
           delayMs: decision.delayMs,
           error: classified.message,
         });
@@ -2309,14 +2356,14 @@ export class AiChatApi {
           layer,
           reason: classified.reason,
           attempt: decision.attempt,
-          maxAttempts: profile.maxAttempts,
+          maxAttempts: profile.maxAttempts + 1,
           delayMs: decision.delayMs,
           consecutiveOverloadCount: consecutiveOverload,
           message: classified.message,
         });
         options?.onRetry?.({
           attempt: decision.attempt,
-          maxAttempts: profile.maxAttempts,
+          maxAttempts: profile.maxAttempts + 1,
           delayMs: decision.delayMs,
           error: `HTTP ${res.status}`,
         });
@@ -2588,6 +2635,7 @@ export class AiChatApi {
     content?: string | null;
     finishReason?: string | null;
     usage?: OpenAIUsage;
+    images?: OpenAIChatImage[];
   }): OpenAIChatCompletionChunk {
     const chunk: OpenAIChatCompletionChunk = {
       id: params.id ?? `normalized-${Date.now()}`,
@@ -2598,7 +2646,14 @@ export class AiChatApi {
         {
           index: 0,
           delta:
-            params.content !== undefined ? { content: params.content } : {},
+            params.content !== undefined || params.images
+              ? {
+                  ...(params.content !== undefined
+                    ? { content: params.content }
+                    : {}),
+                  ...(params.images ? { images: params.images } : {}),
+                }
+              : {},
           finish_reason: params.finishReason ?? null,
         },
       ],
@@ -2680,11 +2735,19 @@ export class AiChatApi {
           const message = choice.message;
           if (this.isRecord(message)) {
             const content = message.content;
+            const images = this.normalizeOpenAIChatImages(message.images);
             return {
               index: choiceIndex,
               delta:
-                typeof content === "string" || content === null
-                  ? { content }
+                typeof content === "string" ||
+                content === null ||
+                images.length > 0
+                  ? {
+                      ...(typeof content === "string" || content === null
+                        ? { content }
+                        : {}),
+                      ...(images.length > 0 ? { images } : {}),
+                    }
                   : {},
               finish_reason: finishReason,
             };
@@ -2730,6 +2793,7 @@ export class AiChatApi {
         model,
         content: directContent,
         finishReason: this.isTerminalStreamEvent(eventType) ? "stop" : null,
+        images: this.normalizeOpenAIChatImages(payload.images),
       });
     }
 
@@ -2743,11 +2807,55 @@ export class AiChatApi {
           model,
           content: nestedContent,
           finishReason: this.isTerminalStreamEvent(eventType) ? "stop" : null,
+          images: this.normalizeOpenAIChatImages(nestedData.images),
         });
       }
     }
 
     return null;
+  }
+
+  private normalizeOpenAIChatImages(input: unknown): OpenAIChatImage[] {
+    if (!Array.isArray(input)) {
+      return [];
+    }
+    const images: OpenAIChatImage[] = [];
+    for (const item of input) {
+      if (!this.isRecord(item)) {
+        continue;
+      }
+      const type = this.getStringField(item, "type");
+      const url = this.getStringField(item, "url");
+      const b64Json = this.getStringField(item, "b64_json");
+      if (type !== "image" || (!url && !b64Json)) {
+        continue;
+      }
+      images.push({
+        type: "image",
+        delivery: this.getStringField(item, "delivery"),
+        url,
+        original_url: this.getStringField(item, "original_url"),
+        local_path: this.getStringField(item, "local_path"),
+        file_name: this.getStringField(item, "file_name"),
+        b64_json: b64Json,
+        expires_at: this.getStringField(item, "expires_at"),
+        download_required:
+          typeof item.download_required === "boolean"
+            ? item.download_required
+            : undefined,
+        mime_type: this.getStringField(item, "mime_type"),
+        width:
+          typeof item.width === "number" || item.width === null
+            ? item.width
+            : undefined,
+        height:
+          typeof item.height === "number" || item.height === null
+            ? item.height
+            : undefined,
+        metadata: this.isRecord(item.metadata) ? item.metadata : undefined,
+      });
+    }
+    return images;
   }
 
   private buildApiEnvelopeError(payload: unknown): Error | null {
@@ -2920,6 +3028,13 @@ export class AiChatApi {
             streamActive = false;
             throw readError;
           }
+          console.error(
+            `[ai-chat-v2] openai-stream read failed mid-stream (bytes=${
+              rawBody.length
+            }, payloads=${emittedPayloadCount}): ${describeErrorDetail(
+              readError
+            )}`
+          );
           throw readError;
         }
 
@@ -3040,7 +3155,7 @@ export class AiChatApi {
    * @returns Ranked results with relevance scores
    */
   async rerank(request: RerankRequest): Promise<RerankResponse> {
-    this.ensureAIEnabled();
+    await this.ensureAIEnabled();
     const data: RerankRequest = {
       query: request.query,
       documents: request.documents,

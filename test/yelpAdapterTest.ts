@@ -6,6 +6,10 @@
 import { PlatformAdapterFactory } from "@/modules/PlatformAdapterFactory";
 // import { YelpComAdapter } from '@/modules/platforms/YelpComAdapter';
 import { PlatformConfig } from "@/modules/interface/IPlatformConfig";
+import {
+  isSameRegistrableHost,
+  ALLOWED_HOSTS,
+} from "@/modules/lib/urlHostAllowlist";
 
 export class YelpAdapterTest {
   private factory: PlatformAdapterFactory;
@@ -81,8 +85,9 @@ export class YelpAdapterTest {
       ];
       for (const method of requiredMethods) {
         if (
-          typeof (adapter as unknown as Record<string, unknown>)[method] !== "function"
-        ) {
+        typeof (adapter as unknown as Record<string, unknown>)[method] !==
+        "function"
+      ) {
           throw new Error(`Required method missing: ${method}`);
         }
       }
@@ -162,8 +167,10 @@ export class YelpAdapterTest {
       );
       console.log("✅ Search URL built:", searchUrl);
 
-      if (!searchUrl.includes("yelp.com")) {
-        throw new Error("Search URL does not contain yelp.com domain");
+      if (
+        !isSameRegistrableHost(new URL(searchUrl).hostname, ALLOWED_HOSTS.yelp)
+      ) {
+        throw new Error("Search URL is not on the yelp.com registrable domain");
       }
 
       if (!searchUrl.includes("restaurant")) {

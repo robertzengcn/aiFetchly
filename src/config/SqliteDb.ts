@@ -400,9 +400,6 @@ export class SqliteDb {
             // The error will be logged for debugging
           }
         },
-        // driver: {
-        //     sqlite3: sqlite3
-        // }
       });
       this.initializeConnection = this.connection.initialize.bind(
         this.connection

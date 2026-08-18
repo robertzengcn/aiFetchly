@@ -588,6 +588,23 @@ describe("ProxyAiTools.checkProxies", () => {
           } as CommonApiresp<ProxyEntity>)
         : { status: false, code: 404, msg: "no" };
     });
+    const getProxiesByIds = vi.fn(async (ids: readonly number[]) => {
+      const entities: ProxyEntity[] = [];
+      for (const id of ids) {
+        const data = opts.detail
+          ? opts.detail(id)
+          : ({
+              id,
+              host: `h-${id}`,
+              port: "8080",
+              protocol: "http",
+            } as ProxyEntity);
+        if (data) {
+          entities.push(data);
+        }
+      }
+      return entities;
+    });
     const results = opts.batch ?? [];
     const checkProxyBatch = vi.fn(async () => ({
       total: results.length,
@@ -595,9 +612,10 @@ describe("ProxyAiTools.checkProxies", () => {
       results,
     }));
     return {
-      proxyModule: { getProxycount, getProxyDetail },
+      proxyModule: { getProxycount, getProxyDetail, getProxiesByIds },
       proxyController: { checkProxyBatch },
       checkProxyBatch,
+      getProxiesByIds,
     };
   }
 
@@ -666,6 +684,8 @@ describe("ProxyAiTools.checkProxies", () => {
     expect(deps.checkProxyBatch).toHaveBeenCalledWith(
       expect.objectContaining({ mode: "both", proxyIds: [10, 11] })
     );
+    // Summaries are loaded via ONE batch lookup, not one getProxyDetail per result.
+    expect(deps.getProxiesByIds).toHaveBeenCalledTimes(1);
   });
 
   it("emits progress events via context", async () => {
@@ -713,11 +733,29 @@ describe("ProxyAiTools.removeFailedProxies", () => {
           } as CommonApiresp<ProxyEntity>)
         : { status: false, code: 404, msg: "no" };
     });
+    const getProxiesByIds = vi.fn(async (ids: readonly number[]) => {
+      const entities: ProxyEntity[] = [];
+      for (const id of ids) {
+        const data = opts.detail
+          ? opts.detail(id)
+          : ({
+              id,
+              host: `h-${id}`,
+              port: "8080",
+              protocol: "http",
+            } as ProxyEntity);
+        if (data) {
+          entities.push(data);
+        }
+      }
+      return entities;
+    });
     return {
-      proxyModule: { getProxyDetail },
+      proxyModule: { getProxyDetail, getProxiesByIds },
       proxyController: { getFailedProxyCandidateIds, deleteProxyWithCheck },
       deleteProxyWithCheck,
       getFailedProxyCandidateIds,
+      getProxiesByIds,
     };
   }
 
@@ -753,5 +791,7 @@ describe("ProxyAiTools.removeFailedProxies", () => {
     expect(result.candidateCount).toBe(3);
     expect(result.deletedCount).toBe(2);
     expect(deps.deleteProxyWithCheck).toHaveBeenCalledTimes(2);
+    // Candidates are loaded via ONE batch lookup, not one getProxyDetail per id.
+    expect(deps.getProxiesByIds).toHaveBeenCalledTimes(1);
   });
 });

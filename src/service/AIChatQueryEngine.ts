@@ -1,6 +1,5 @@
 // src/service/AIChatQueryEngine.ts
 import { AIChatV2Module } from "@/modules/AIChatV2Module";
-import { log } from "@/modules/Logger";
 import { AIChatPlanModule } from "@/modules/AIChatPlanModule";
 import { AIChatAttachmentModule } from "@/modules/AIChatAttachmentModule";
 import { AIChatToolApprovalModule } from "@/modules/AIChatToolApprovalModule";
@@ -9,17 +8,22 @@ import {
   StagedAttachmentReference,
 } from "@/service/DocumentService";
 import type {
+  OpenAIChatImage,
   OpenAIChatMessage,
   OpenAITool,
   ToolFunction,
 } from "@/api/aiChatApi";
+import { AIChatGeneratedImageStorageService } from "@/service/AIChatGeneratedImageStorageService";
 import { SkillRegistry } from "@/config/skillsRegistry";
 import { SkillExecutor } from "@/service/SkillExecutor";
 import { HookDispatcher } from "@/service/hooks/HookDispatcher";
 import { AIChatContextAssembler } from "@/service/AIChatContextAssembler";
+import { AtMentionResolutionService } from "@/service/aiChatAtMentions/AtMentionResolutionService";
+import { PastedTextResolutionService } from "@/service/pastedText/PastedTextResolutionService";
 import type { AIChatCompactAgentService } from "@/service/AIChatCompactAgentService";
 import type { AIAutoDreamService } from "@/service/AIAutoDreamService";
 import type { AIWorkspaceAutoDreamService } from "@/service/AIWorkspaceAutoDreamService";
+import { DesktopNotifyService } from "@/service/DesktopNotifyService";
 import { PlanModeToolRegistry } from "@/service/PlanModeToolRegistry";
 import type { AIChatQueryLoop } from "@/service/AIChatQueryLoop";
 import {
@@ -27,10 +31,24 @@ import {
   normalizeToolResult,
   isPermissionPromptResult,
 } from "@/service/AIChatQueryLoop";
+import {
+  buildImageArtifactHandoffMessage,
+  countImageContentParts,
+  countImageDataUrlChars,
+} from "@/service/AIChatImageHandoff";
+import { redirectToLoginOnAuthExpired } from "@/service/AIChatAuthExpiredHandler";
 import { userSafeError } from "@/service/AIChatErrorMapper";
 import { Token } from "@/modules/token";
 import { USER_AI_AUTO_PLAN, USER_AI_ENABLED } from "@/config/usersetting";
 import { ENTER_PLAN_MODE_TOOL } from "@/service/EnterPlanModeTool";
+import {
+  resolveToolCatalogMode,
+  resolvePositiveIntEnv,
+  TOOL_CATALOG_ENV,
+} from "@/config/toolCatalogConfig";
+import { ToolCatalogService } from "@/service/ToolCatalogService";
+import { ConversationToolStateService } from "@/service/ConversationToolStateService";
+import { ToolPromptBudgetService } from "@/service/ToolPromptBudgetService";
 import type {
   AIChatQueryEventSink,
   AIChatQueryLoopInput,
@@ -43,17 +61,26 @@ import type {
   ResumeTurnResult,
 } from "@/service/AIChatQueryEvents";
 import type {
+  ChatV2ReasoningMetadata,
   ChatV2StreamRequest,
   ChatV2UploadedAttachment,
-  ChatV2AttachmentKind,
   ChatV2AttachmentMetadata,
+  ChatV2MessageMetadata,
+  ChatV2RuntimeStatus,
 } from "@/entityTypes/aiChatV2Types";
+import type { AIChatScheduledTurnContext } from "@/entityTypes/aiChatScheduledLoopTypes";
 import type {
   OpenAITextContentPart,
   OpenAIImageUrlContentPart,
-  OpenAIMessageContent,
 } from "@/api/aiChatApi";
+import { openAIContentToString } from "@/api/aiChatApi";
 import type { AIChatPlanStateView } from "@/entityTypes/aiChatPlanTypes";
+import type {
+  ToolCatalog,
+  ToolCatalogModeDecision,
+  ToolCatalogRuntimeContext,
+} from "@/entityTypes/toolCatalogTypes";
+import { log } from "@/modules/Logger";
 
 function isActivePlanState(plan?: AIChatPlanStateView | null): boolean {
   if (!plan) return false;
@@ -62,6 +89,57 @@ function isActivePlanState(plan?: AIChatPlanStateView | null): boolean {
     plan.status !== "cancelled" &&
     plan.status !== "rejected"
   );
+}
+
+/**
+ * Collect recent user message texts from an assembled transcript so contextual
+ * tool promotion can inherit intent across short follow-ups like "continue".
+ * Excludes synthetic image-handoff markers. Newest messages last; capped.
+ */
+function collectRecentUserMessages(
+  messages: readonly OpenAIChatMessage[],
+  limit = 6
+): string[] {
+  const collected: string[] = [];
+  for (let i = messages.length - 1; i >= 0 && collected.length < limit; i--) {
+    const message = messages[i];
+    if (message.role !== "user") continue;
+    const text = openAIContentToString(message.content).trim();
+    if (!text) continue;
+    if (text.includes("[AIFETCHLY_IMAGE_HANDOFF_V1]")) continue;
+    collected.push(text);
+  }
+  return collected.reverse();
+}
+
+/** Maximum persisted reasoning characters per assistant message (32 KB). */
+const CHAT_V2_REASONING_MAX_CHARS = 32 * 1024;
+
+/**
+ * Build persisted reasoning metadata from the loop's final reasoning string.
+ * Returns undefined when there is nothing to persist. Truncates above the cap
+ * and flags truncated=true so history stays bounded while live streaming stays
+ * unbounded.
+ */
+function buildReasoningMetadata(
+  reasoningContent: string | undefined,
+  model: string | undefined
+): { reasoning: ChatV2ReasoningMetadata } | undefined {
+  if (!reasoningContent || reasoningContent.length === 0) {
+    return undefined;
+  }
+  const over = reasoningContent.length > CHAT_V2_REASONING_MAX_CHARS;
+  return {
+    reasoning: {
+      content: over
+        ? reasoningContent.slice(0, CHAT_V2_REASONING_MAX_CHARS)
+        : reasoningContent,
+      format: "plain_text",
+      source: "server",
+      model,
+      truncated: over ? true : false,
+    },
+  };
 }
 
 function isTypedPlanApproval(message: string): boolean {
@@ -129,6 +207,14 @@ interface AttachmentPrepResult {
 export interface AIChatQuerySubmitInput {
   eventSink: AIChatQueryEventSink;
   request: ChatV2StreamRequest;
+  /**
+   * Trusted scheduled-turn context. Supplied only by main-process code (the
+   * scheduled runner); when present the engine uses the stable message IDs,
+   * tags the rows with scheduled-loop metadata, and requires an existing v2-*
+   * conversation (it does not create one). Renderer input cannot forge this
+   * object (technical-design §14.1).
+   */
+  scheduledContext?: AIChatScheduledTurnContext;
 }
 
 export interface AIChatQueryEngineDeps {
@@ -144,6 +230,20 @@ export interface AIChatQueryEngineDeps {
    * consolidation after each completed assistant turn. Runs independently of
    * the user-memory auto-dream service. Failures are logged and swallowed. */
   workspaceAutoDreamService?: AIWorkspaceAutoDreamService;
+  /** Optional. Stores generated images locally before assistant messages are
+   * persisted/emitted so provider URL expiry does not break chat history. */
+  generatedImageStorage?: {
+    storeImages(input: {
+      conversationId: string;
+      messageId: string;
+      images: OpenAIChatImage[];
+    }): Promise<OpenAIChatImage[]>;
+  };
+  /** Optional filter scoping which built-in tool schemas the engine advertises
+   * to the model. Scheduled (unattended) profiles use this to expose only
+   * task-policy-approved tools (FR-16), narrowing the prompt-injection surface
+   * beyond the executeTool guard. */
+  toolFilter?: (toolName: string) => boolean;
 }
 
 /**
@@ -151,16 +251,33 @@ export interface AIChatQueryEngineDeps {
  * and stop. The engine delegates the inner model/tool round loop to
  * AIChatQueryLoop and handles the result.
  */
+interface ActiveTurnState {
+  abortController: AbortController;
+  assistantMessageId: string;
+  eventSink: AIChatQueryEventSink;
+}
+
 export class AIChatQueryEngine {
-  private currentAbortController: AbortController | null = null;
-  private currentConversationId: string | null = null;
-  private currentAssistantMessageId: string | null = null;
-  private pendingPermission: PendingPermissionTurn | null = null;
-  private pendingPlanQuestion: PendingPlanQuestionTurn | null = null;
+  /**
+   * Per-conversation active turns. Replaces the singleton trio
+   * (currentAbortController/currentConversationId/currentAssistantMessageId).
+   * Keyed by conversationId so concurrent background turns do not collide.
+   * Invariant: for any conversationId, at most one entry exists here OR in
+   * pendingPermissions/pendingPlanQuestions — the three maps are disjoint.
+   */
+  private activeTurns = new Map<string, ActiveTurnState>();
+  private pendingPermissions = new Map<string, PendingPermissionTurn>();
+  private pendingPlanQuestions = new Map<string, PendingPlanQuestionTurn>();
   private readonly contextAssembler: AIChatContextAssembler;
   private readonly compactAgent?: AIChatCompactAgentService;
   private readonly autoDreamService?: AIAutoDreamService;
   private readonly workspaceAutoDreamService?: AIWorkspaceAutoDreamService;
+  private readonly generatedImageStorage?: AIChatQueryEngineDeps["generatedImageStorage"];
+  /** Optional filter that scopes which tool schemas the engine advertises to
+   * the model. Used by the scheduled (unattended) profile to expose only
+   * task-policy-approved tools (FR-16), narrowing the prompt-injection
+   * surface beyond the executeToken guard. */
+  private readonly toolFilter?: (toolName: string) => boolean;
   private readonly pendingEventSaves = new WeakMap<
     AIChatQueryEventSink,
     Promise<unknown>[]
@@ -177,6 +294,22 @@ export class AIChatQueryEngine {
     this.compactAgent = deps?.compactAgent;
     this.autoDreamService = deps?.autoDreamService;
     this.workspaceAutoDreamService = deps?.workspaceAutoDreamService;
+    this.generatedImageStorage = deps?.generatedImageStorage;
+    this.toolFilter = deps?.toolFilter;
+  }
+
+  /** Return main-process truth for a conversation's current turn. */
+  getConversationRuntimeStatus(conversationId: string): ChatV2RuntimeStatus {
+    if (this.pendingPermissions.has(conversationId)) {
+      return "awaiting_permission";
+    }
+    if (this.pendingPlanQuestions.has(conversationId)) {
+      return "awaiting_user";
+    }
+    if (this.activeTurns.has(conversationId)) {
+      return "running";
+    }
+    return "idle";
   }
 
   /**
@@ -216,6 +349,11 @@ export class AIChatQueryEngine {
           sizeBytes: file.sizeBytes,
           kind: "image",
           processingMode: "image_url",
+          // Persist the inline preview so the user's own message bubble can
+          // re-render the attached image after a history reload, not just
+          // during the live turn. Reuses the downscaled bytes sent to the
+          // model — no extra storage cost beyond the existing request body.
+          previewDataUrl: dataUrl,
         });
       } else if (stagedFileNames.has(file.fileName)) {
         // Only include documents that were successfully staged
@@ -331,13 +469,87 @@ export class AIChatQueryEngine {
     );
   }
 
+  private readonly catalogService = new ToolCatalogService();
+  private readonly budgetService = new ToolPromptBudgetService();
+  private readonly conversationToolStateService =
+    new ConversationToolStateService();
+
+  /**
+   * Build the deferred tool catalog + mode decision for a turn (FR-8, design
+   * §15.1). Returns undefined when the feature flag is off or catalog building
+   * fails, so the loop falls back to standard full-tool behavior.
+   */
+  private buildToolCatalogForTurn(input: {
+    readonly tools: readonly OpenAITool[];
+    readonly conversationId: string;
+    readonly isPlanMode: boolean;
+    readonly autoPlanEnabled: boolean;
+    readonly userMessage: string;
+    readonly recentUserMessages?: readonly string[];
+    readonly model?: string;
+    readonly contextWindowTokens?: number;
+    readonly initialState?: ToolCatalogRuntimeContext;
+  }): {
+    toolCatalog?: ToolCatalog;
+    toolCatalogModeDecision?: ToolCatalogModeDecision;
+  } {
+    const mode = resolveToolCatalogMode(process.env[TOOL_CATALOG_ENV.mode]);
+    if (mode.mode === "off") {
+      // Still emit the decision so the loop can log the reason, but no catalog.
+      return {};
+    }
+
+    const context: ToolCatalogRuntimeContext = {
+      conversationId: input.conversationId,
+      model: input.model,
+      isPlanMode: input.isPlanMode,
+      autoPlanEnabled: input.autoPlanEnabled,
+      currentUserMessage: input.userMessage,
+      recentUserMessages: input.recentUserMessages,
+      uploadedFileTypes: [],
+      contextWindowTokens: input.contextWindowTokens,
+      ...(input.initialState ?? {}),
+    };
+
+    let catalog: ToolCatalog;
+    try {
+      catalog = this.catalogService.buildFromOpenAITools({
+        tools: input.tools,
+        context,
+      });
+    } catch (err) {
+      log.warn(
+        `[tool-catalog] catalog build failed, using standard mode:`,
+        err
+      );
+      return {};
+    }
+
+    const thresholdPercent = resolvePositiveIntEnv(
+      process.env[TOOL_CATALOG_ENV.thresholdPercent]
+    );
+    const decision = this.budgetService.resolveMode({
+      configuredMode: mode.mode,
+      deferredEstimatedTokens: catalog.deferredEstimatedTokens,
+      contextWindowTokens: input.contextWindowTokens,
+      thresholdPercent,
+    });
+
+    // Auto mode with effectively no deferred payload stays standard.
+    if (decision.mode === "standard") {
+      return {};
+    }
+
+    return { toolCatalog: catalog, toolCatalogModeDecision: decision };
+  }
+
   /**
    * Full conversation lifecycle for one user message:
    * resolve plan, create conversation, save user message, build transcript,
    * assemble tools, run the loop, and handle the result.
    */
   async submitMessage(input: AIChatQuerySubmitInput): Promise<void> {
-    const { eventSink, request } = input;
+    const { eventSink, request, scheduledContext } = input;
     const module = new AIChatV2Module();
     const planModule = new AIChatPlanModule();
 
@@ -366,7 +578,6 @@ export class AIChatQueryEngine {
       conversationId = module.createConversationIfNeeded(
         request.conversationId
       );
-      this.currentConversationId = conversationId;
       if (request.toolApprovalMode) {
         new AIChatToolApprovalModule().setMode(
           conversationId,
@@ -437,14 +648,75 @@ export class AIChatQueryEngine {
         }
       }
 
-      // Save user message with enriched text + attachment metadata.
-      const savedUser = await module.saveUserMessage({
-        conversationId,
-        content: messageToSave,
-        metadata: attachmentMetadata
-          ? { source: "chat-v2", attachments: attachmentMetadata }
-          : undefined,
-      });
+      // Resolve pasted-text placeholders on the (attachment-enriched)
+      // message BEFORE resolving @-mentions. This ensures mention tokens
+      // inside pasted content get expanded correctly.
+      const pastedTextResolution =
+        await new PastedTextResolutionService().resolveMessage(
+          messageToSave,
+          request.pastedContents
+        );
+
+      // Resolve @-mentions on the pasted-expanded (model-facing) message:
+      // append a model-facing context block while keeping it out of the
+      // saved display.
+      const atMentionResolution =
+        await new AtMentionResolutionService().resolveMessage(
+          conversationId,
+          pastedTextResolution.modelMessage
+        );
+      const modelUserMessage = atMentionResolution.modelMessage;
+      if (currentUserContentParts && currentUserContentParts.length > 0) {
+        // Fold the @-mention context into the multimodal text part.
+        currentUserContentParts = [
+          { type: "text", text: modelUserMessage },
+          ...currentUserContentParts.slice(1),
+        ];
+      }
+
+      // Build user-message metadata (source + attachments + @-mentions).
+      const userMetadata: ChatV2MessageMetadata = {
+        source: scheduledContext ? "scheduled-loop" : "chat-v2",
+      };
+      if (scheduledContext) {
+        userMetadata.scheduledLoop = {
+          scheduleId: scheduledContext.scheduleId,
+          taskId: scheduledContext.taskId,
+          runId: scheduledContext.runId,
+          occurrence: scheduledContext.occurrence,
+          scheduledFor: scheduledContext.scheduledFor,
+          catchUp: scheduledContext.catchUp,
+        };
+      }
+      if (attachmentMetadata) userMetadata.attachments = attachmentMetadata;
+      if (atMentionResolution.metadata.length > 0) {
+        userMetadata.atMentions = atMentionResolution.metadata;
+      }
+      if (pastedTextResolution.pastedBlocks.length > 0) {
+        userMetadata.pastedBlocks = pastedTextResolution.pastedBlocks;
+      }
+      const hasUserMetadataBeyondSource =
+        !!attachmentMetadata ||
+        atMentionResolution.metadata.length > 0 ||
+        pastedTextResolution.pastedBlocks.length > 0 ||
+        !!scheduledContext;
+
+      // Save user message (display text = attachment-enriched message; the
+      // @-mention context block lives only in modelUserMessage for the model).
+      // Scheduled turns use a stable message id + insert-if-absent so a
+      // crash-retry does not duplicate the transcript row (technical-design §14.2).
+      const savedUser = scheduledContext
+        ? await module.saveUserMessageIfAbsent({
+            conversationId,
+            content: messageToSave,
+            messageId: scheduledContext.userMessageId,
+            metadata: userMetadata,
+          })
+        : await module.saveUserMessage({
+            conversationId,
+            content: messageToSave,
+            metadata: hasUserMetadataBeyondSource ? userMetadata : undefined,
+          });
 
       // Persist attachment bytes to DB (original file bytes, not the staged markdown).
       if (hasFiles) {
@@ -460,7 +732,7 @@ export class AIChatQueryEngine {
         request.systemPrompt ?? module.getDefaultSystemPrompt();
       const assembled = await this.contextAssembler.assemble({
         conversationId,
-        currentUserMessage: messageToSave,
+        currentUserMessage: modelUserMessage,
         currentUserMessageId: savedUser.messageId,
         baseSystemPrompt: basePrompt,
         mode: isPlanMode ? "plan" : "chat",
@@ -470,14 +742,14 @@ export class AIChatQueryEngine {
         currentUserContentParts,
       });
 
-      assistantMessageId = `assistant-${Date.now()}-${Math.random()
-        .toString(36)
-        .slice(2, 8)}`;
-      this.currentAssistantMessageId = assistantMessageId;
+      assistantMessageId = scheduledContext
+        ? scheduledContext.assistantMessageId
+        : `assistant-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       messages = [...assembled.messages];
     } catch (err) {
       log.error("[ai-chat-v2] pre-stream error:", err);
-      this.clearActiveTurnState();
+      this.clearActiveTurnState(request.conversationId ?? "");
+      void redirectToLoginOnAuthExpired(err);
       eventSink.emit({
         type: "error",
         conversationId: request.conversationId ?? "",
@@ -491,25 +763,39 @@ export class AIChatQueryEngine {
     // ------------------------------------------------------------------
     if (!this.startedConversations.has(conversationId)) {
       this.startedConversations.add(conversationId);
-      HookDispatcher.executeHooks({
-        eventName: "SessionStart",
-        input: {
+      try {
+        const aggregate = await HookDispatcher.executeHooks({
           eventName: "SessionStart",
-          hookRunId: `hookrun-session-${conversationId}`,
-          source: "ai-chat-v2",
-          conversationId,
-          timestamp: new Date().toISOString(),
-          mode: isPlanMode ? "plan" : "chat",
-        },
-      }).catch(() => {
+          input: {
+            eventName: "SessionStart",
+            hookRunId: `hookrun-session-${conversationId}`,
+            source: "ai-chat-v2",
+            conversationId,
+            timestamp: new Date().toISOString(),
+            mode: isPlanMode ? "plan" : "chat",
+          },
+        });
+        for (const content of [
+          ...aggregate.systemMessages,
+          ...aggregate.additionalContexts,
+        ]) {
+          messages.push({ role: "system", content });
+        }
+      } catch {
         // Hook errors are non-fatal
-      });
+      }
     }
 
     // ------------------------------------------------------------------
     // 4. Resolve tools (skills + plan mode tools)
     // ------------------------------------------------------------------
-    const toolFunctions = await SkillRegistry.getAllToolFunctions();
+    const allToolFunctions = await SkillRegistry.getAllToolFunctions();
+    // Scheduled (unattended) profiles scope the advertised catalog to
+    // task-policy-approved tools so the model only sees tools it may call
+    // (FR-16); the executeTool guard remains the safety backstop.
+    const toolFunctions = this.toolFilter
+      ? allToolFunctions.filter((t) => this.toolFilter!(t.name))
+      : allToolFunctions;
     const openAITools = toOpenAITools(toolFunctions);
 
     // Resolve auto-plan config. Only active in plain chat mode (not when the
@@ -528,16 +814,42 @@ export class AIChatQueryEngine {
       ? [...openAITools, ENTER_PLAN_MODE_TOOL]
       : openAITools;
 
+    // Build the deferred tool catalog (no-op when AI_TOOL_SEARCH is off or the
+    // auto-mode threshold is not crossed). Fresh turn starts with no discovered
+    // tools; the loop accumulates discovery state in memory.
+    const toolCatalogContext = this.buildToolCatalogForTurn({
+      tools: allOpenAITools,
+      conversationId,
+      isPlanMode,
+      autoPlanEnabled,
+      userMessage: request.message,
+      recentUserMessages: collectRecentUserMessages(messages),
+      model: request.model,
+    });
+
+    // Load persisted discovered-tool state so tools discovered in earlier turns
+    // (before an app restart / conversation reload) remain exposed (FR-5/AC-8).
+    const persistedToolCatalogState = toolCatalogContext.toolCatalog
+      ? await this.conversationToolStateService.loadSnapshot(conversationId)
+      : undefined;
+
     // ------------------------------------------------------------------
-    // 4. Abort any prior active turn, create new abort controller
+    // 4. Abort any prior active turn FOR THIS CONVERSATION ONLY, then register
+    //    the new turn. Cross-conversation turns are left alone so background
+    //    streaming can continue (concurrent-turns support).
     // ------------------------------------------------------------------
-    const abortController = new AbortController();
-    if (this.currentAbortController) {
-      this.currentAbortController.abort();
+    const prior = this.activeTurns.get(conversationId);
+    if (prior) {
+      prior.abortController.abort();
     }
-    this.currentAbortController = abortController;
-    this.pendingPermission = null;
-    this.pendingPlanQuestion = null;
+    const abortController = new AbortController();
+    this.activeTurns.set(conversationId, {
+      abortController,
+      assistantMessageId,
+      eventSink,
+    });
+    this.pendingPermissions.delete(conversationId);
+    this.pendingPlanQuestions.delete(conversationId);
 
     // ------------------------------------------------------------------
     // 5. Emit start event
@@ -613,9 +925,13 @@ export class AIChatQueryEngine {
           }
         : undefined,
       startRound: 0,
-      isActiveTurn: () =>
-        this.currentAssistantMessageId === assistantMessageId &&
-        this.currentConversationId === conversationId,
+      isActiveTurn: () => {
+        const entry = this.activeTurns.get(conversationId);
+        return !!entry && entry.assistantMessageId === assistantMessageId;
+      },
+      toolCatalog: toolCatalogContext.toolCatalog,
+      toolCatalogModeDecision: toolCatalogContext.toolCatalogModeDecision,
+      toolCatalogState: persistedToolCatalogState,
     };
 
     try {
@@ -624,14 +940,16 @@ export class AIChatQueryEngine {
     } catch (err) {
       this.handleFailure(err, conversationId, assistantMessageId, eventSink);
     } finally {
-      // Clear active turn unless paused for permission or plan question.
-      if (
-        this.currentConversationId === conversationId &&
-        !this.pendingPermission &&
-        !this.pendingPlanQuestion
-      ) {
-        this.currentAbortController = null;
-        this.currentConversationId = null;
+      // Clear this turn's map entry unless it was paused (permission/plan
+      // question handlers move the entry into the pending maps themselves).
+      // Only delete when the current entry still points at THIS turn AND
+      // the conversation has not been paused.
+      const entry = this.activeTurns.get(conversationId);
+      const paused =
+        this.pendingPermissions.has(conversationId) ||
+        this.pendingPlanQuestions.has(conversationId);
+      if (entry && entry.assistantMessageId === assistantMessageId && !paused) {
+        this.activeTurns.delete(conversationId);
       }
     }
   }
@@ -656,43 +974,71 @@ export class AIChatQueryEngine {
   }
 
   /**
-   * Stop the active turn: abort streaming, cancel pending permission/plan
-   * question turns, and emit cancelled events through the stored event sinks.
+   * Stop the active turn(s).
+   *
+   * - With `conversationId`: stops ONLY that conversation — aborts its active
+   *   controller, cancels any pending permission/plan-question for it, and
+   *   emits `cancelled` on the pending sink. Does NOT touch other
+   *   conversations' background turns. The active-loop's own `cancelled` path
+   *   handles emit/persist for running turns (so we do not emit here for
+   *   active streaming turns — only for pending-permission/plan-question turns
+   *   which have no running loop to resolve).
+   * - Without `conversationId`: stops ALL active + pending turns across every
+   *   conversation (used by DB switch / unmount).
    */
-  stopActiveTurn(): void {
-    this.dispatchStop(this.currentConversationId ?? undefined, "user_stopped");
-    if (this.pendingPermission) {
-      const pending = this.pendingPermission;
-      this.pendingPermission = null;
-      this.currentAbortController = null;
-      this.currentConversationId = null;
-      this.currentAssistantMessageId = null;
-      pending.eventSink.emit({
+  stopActiveTurn(conversationId?: string): void {
+    if (conversationId) {
+      this.stopConversation(conversationId);
+      return;
+    }
+    // Stop-all: iterate over snapshots so deletion during iteration is safe.
+    for (const id of [...this.activeTurns.keys()]) {
+      this.stopConversation(id);
+    }
+    for (const id of [...this.pendingPermissions.keys()]) {
+      this.stopConversation(id);
+    }
+    for (const id of [...this.pendingPlanQuestions.keys()]) {
+      this.stopConversation(id);
+    }
+  }
+
+  /**
+   * Stop a single conversation's active or pending turn. Only emits `cancelled`
+   * for pending-permission / pending-plan-question turns — running streaming
+   * turns are aborted and their loop resolves `cancelled`, which emits + persists.
+   */
+  private stopConversation(conversationId: string): void {
+    this.dispatchStop(conversationId, "user_stopped");
+    const pendingPermission = this.pendingPermissions.get(conversationId);
+    if (pendingPermission) {
+      this.pendingPermissions.delete(conversationId);
+      pendingPermission.abortController.abort();
+      pendingPermission.eventSink.emit({
         type: "cancelled",
-        conversationId: pending.conversationId,
-        messageId: pending.assistantMessageId,
+        conversationId: pendingPermission.conversationId,
+        messageId: pendingPermission.assistantMessageId,
         fullContent: "",
       });
     }
-    if (this.pendingPlanQuestion) {
-      const pending = this.pendingPlanQuestion;
-      this.pendingPlanQuestion = null;
-      this.currentAbortController = null;
-      this.currentConversationId = null;
-      this.currentAssistantMessageId = null;
-      pending.eventSink.emit({
+    const pendingPlanQuestion = this.pendingPlanQuestions.get(conversationId);
+    if (pendingPlanQuestion) {
+      this.pendingPlanQuestions.delete(conversationId);
+      pendingPlanQuestion.abortController.abort();
+      pendingPlanQuestion.eventSink.emit({
         type: "cancelled",
-        conversationId: pending.conversationId,
-        messageId: pending.assistantMessageId,
+        conversationId: pendingPlanQuestion.conversationId,
+        messageId: pendingPlanQuestion.assistantMessageId,
         fullContent: "",
       });
     }
-    if (this.currentAbortController) {
-      this.currentAbortController.abort();
-      this.currentAbortController = null;
+    const active = this.activeTurns.get(conversationId);
+    if (active) {
+      // Abort the controller; do NOT delete the entry — the loop's own
+      // `cancelled` resolution path calls handleLoopResult which clears it.
+      // Pre-deleting would make isActiveTurn return false inside the loop.
+      active.abortController.abort();
     }
-    this.currentConversationId = null;
-    this.currentAssistantMessageId = null;
   }
 
   // -------------------------------------------------------------------------
@@ -706,8 +1052,17 @@ export class AIChatQueryEngine {
   async resumeToolAfterPermission(
     request: ResumeToolAfterPermissionRequest
   ): Promise<ResumeTurnResult> {
-    const pending = this.pendingPermission;
-    if (!pending || pending.toolCallId !== request.toolId) {
+    const convId = request.conversationId;
+    // When the renderer provides conversationId, key by it directly; otherwise
+    // fall back to the single-entry assumption (only meaningful when exactly
+    // one permission is pending).
+    const lookupKey = convId ?? undefined;
+    const pending = lookupKey
+      ? this.pendingPermissions.get(lookupKey)
+      : this.firstEntry(this.pendingPermissions);
+    const matchedByToolId =
+      pending && pending.toolCallId === request.toolId ? pending : undefined;
+    if (!matchedByToolId) {
       return {
         ok: false,
         error: "No active permission-gated tool call to continue.",
@@ -715,7 +1070,7 @@ export class AIChatQueryEngine {
     }
     if (
       request.conversationId &&
-      request.conversationId !== pending.conversationId
+      request.conversationId !== matchedByToolId.conversationId
     ) {
       return {
         ok: false,
@@ -723,22 +1078,38 @@ export class AIChatQueryEngine {
       };
     }
 
-    this.pendingPermission = null;
-    this.currentAbortController = pending.abortController;
-    this.currentConversationId = pending.conversationId;
-    this.currentAssistantMessageId = pending.assistantMessageId;
+    const conversationId = matchedByToolId.conversationId;
+    this.pendingPermissions.delete(conversationId);
+    this.activeTurns.set(conversationId, {
+      abortController: matchedByToolId.abortController,
+      assistantMessageId: matchedByToolId.assistantMessageId,
+      eventSink: matchedByToolId.eventSink,
+    });
     const module = new AIChatV2Module();
-    const eventSink = this.createPersistingEventSink(module, pending.eventSink);
+    const eventSink = this.createPersistingEventSink(
+      module,
+      matchedByToolId.eventSink
+    );
 
     try {
       const toolResult = await SkillExecutor.execute(
-        pending.toolName,
-        pending.toolArguments,
+        matchedByToolId.toolName,
+        matchedByToolId.toolArguments,
         {
-          conversationId: pending.conversationId,
-          toolCallId: pending.toolCallId,
-          args: pending.toolArguments,
+          conversationId: matchedByToolId.conversationId,
+          toolCallId: matchedByToolId.toolCallId,
+          args: matchedByToolId.toolArguments,
           skipPermissionCheck: true,
+          // Mirror the loop's foreground context: combined request image
+          // capacity + cumulative data-URL budget (enforced by the tool), and
+          // the abort signal so the user can still cancel after approval.
+          currentRequestImageCount: countImageContentParts(
+            matchedByToolId.conversationMessages
+          ),
+          currentRequestImageDataUrlChars: countImageDataUrlChars(
+            matchedByToolId.conversationMessages
+          ),
+          signal: matchedByToolId.abortController.signal,
         }
       );
 
@@ -747,44 +1118,88 @@ export class AIChatQueryEngine {
 
       eventSink.emit({
         type: "tool_result",
-        conversationId: pending.conversationId,
-        messageId: pending.assistantMessageId,
-        toolCallId: pending.toolCallId,
-        toolName: pending.toolName,
+        conversationId: matchedByToolId.conversationId,
+        messageId: matchedByToolId.assistantMessageId,
+        toolCallId: matchedByToolId.toolCallId,
+        toolName: matchedByToolId.toolName,
         fullContent: toolContent,
         toolResult: toolPayload,
-        replacesPermissionPromptForToolId: pending.toolCallId,
+        replacesPermissionPromptForToolId: matchedByToolId.toolCallId,
       });
 
       if (isPermissionPromptResult(toolResult)) {
         await this.flushEventSaves(eventSink);
-        this.pendingPermission = pending;
+        // Permission still required — move back to the pending map. The
+        // activeTurns entry we just created must be removed so the disjoint
+        // invariant holds.
+        this.activeTurns.delete(conversationId);
+        this.pendingPermissions.set(conversationId, matchedByToolId);
         return {
           ok: false,
           error: "Permission is still required for this tool.",
         };
       }
 
-      pending.conversationMessages.push({
+      matchedByToolId.conversationMessages.push({
         role: "tool",
-        tool_call_id: pending.toolCallId,
+        tool_call_id: matchedByToolId.toolCallId,
         content: toolContent,
       });
 
+      // Transient image handoff (attach_local_images): if the tool returned
+      // prepared images, append the model-only multimodal message so the next
+      // loop round sees them — mirroring AIChatQueryLoop's foreground path.
+      // Without this, the first call in a session (which always takes the
+      // permission-resume path) would deliver metadata but no image parts.
+      if (
+        toolResult.success &&
+        toolResult.modelArtifacts &&
+        toolResult.modelArtifacts.length > 0
+      ) {
+        matchedByToolId.conversationMessages.push(
+          buildImageArtifactHandoffMessage({
+            artifacts: toolResult.modelArtifacts,
+            originalUserRequest: matchedByToolId.request.message,
+            toolCallId: matchedByToolId.toolCallId,
+          })
+        );
+      }
+
+      // Rebuild the deferred catalog for the resumed turn and carry forward the
+      // discovered-tool snapshot so discovered tools remain exposed (AC-8).
+      const resumeCatalogContext = this.buildToolCatalogForTurn({
+        tools: matchedByToolId.openAITools,
+        conversationId: matchedByToolId.conversationId,
+        isPlanMode: Boolean(matchedByToolId.planContext),
+        autoPlanEnabled: false,
+        userMessage: matchedByToolId.request.message,
+        recentUserMessages: collectRecentUserMessages(
+          matchedByToolId.conversationMessages
+        ),
+        model: matchedByToolId.request.model,
+      });
+
       const loopInput: AIChatQueryLoopInput = {
-        conversationId: pending.conversationId,
-        assistantMessageId: pending.assistantMessageId,
-        messages: pending.conversationMessages,
-        request: pending.request,
-        openAITools: pending.openAITools,
-        abortController: pending.abortController,
+        conversationId: matchedByToolId.conversationId,
+        assistantMessageId: matchedByToolId.assistantMessageId,
+        messages: matchedByToolId.conversationMessages,
+        request: matchedByToolId.request,
+        openAITools: matchedByToolId.openAITools,
+        abortController: matchedByToolId.abortController,
         eventSink,
         skillRegistry: SkillRegistry,
-        planContext: pending.planContext,
-        startRound: pending.nextRound,
-        isActiveTurn: () =>
-          this.currentAssistantMessageId === pending.assistantMessageId &&
-          this.currentConversationId === pending.conversationId,
+        planContext: matchedByToolId.planContext,
+        startRound: matchedByToolId.nextRound,
+        isActiveTurn: () => {
+          const entry = this.activeTurns.get(matchedByToolId.conversationId);
+          return (
+            !!entry &&
+            entry.assistantMessageId === matchedByToolId.assistantMessageId
+          );
+        },
+        toolCatalog: resumeCatalogContext.toolCatalog,
+        toolCatalogModeDecision: resumeCatalogContext.toolCatalogModeDecision,
+        toolCatalogState: matchedByToolId.toolCatalogState,
       };
 
       void this.loop
@@ -794,24 +1209,27 @@ export class AIChatQueryEngine {
         })
         .catch((err) => {
           log.error("[ai-chat-v2] resume loop failed:", err);
-          pending.eventSink.emit({
+          void redirectToLoginOnAuthExpired(err);
+          matchedByToolId.eventSink.emit({
             type: "error",
-            conversationId: pending.conversationId,
-            messageId: pending.assistantMessageId,
+            conversationId: matchedByToolId.conversationId,
+            messageId: matchedByToolId.assistantMessageId,
             errorMessage: userSafeError(err),
           });
-          this.clearActiveTurnState();
-          this.pendingPermission = null;
-          this.pendingPlanQuestion = null;
+          this.clearConversationTurnState(matchedByToolId.conversationId);
         });
 
       return { ok: true };
     } catch (err) {
-      this.currentAbortController = null;
-      this.currentConversationId = null;
-      this.currentAssistantMessageId = null;
+      this.clearActiveTurnState(conversationId);
       return { ok: false, error: userSafeError(err) };
     }
+  }
+
+  /** Helper: return the first value from a Map, or undefined. */
+  private firstEntry<V>(map: Map<string, V>): V | undefined {
+    for (const v of map.values()) return v;
+    return undefined;
   }
 
   /**
@@ -836,7 +1254,7 @@ export class AIChatQueryEngine {
       return { ok: false, error: userSafeError(err) };
     }
 
-    const pending = this.pendingPlanQuestion;
+    const pending = this.pendingPlanQuestions.get(request.conversationId);
     if (
       !pending ||
       pending.questionId !== request.questionId ||
@@ -845,7 +1263,12 @@ export class AIChatQueryEngine {
       return { ok: true };
     }
 
-    this.pendingPlanQuestion = null;
+    this.pendingPlanQuestions.delete(request.conversationId);
+    this.activeTurns.set(request.conversationId, {
+      abortController: pending.abortController,
+      assistantMessageId: pending.assistantMessageId,
+      eventSink: pending.eventSink,
+    });
 
     const answerContent = serializeToolResultContent({
       success: true,
@@ -871,10 +1294,6 @@ export class AIChatQueryEngine {
       });
     }
 
-    this.currentAbortController = pending.abortController;
-    this.currentConversationId = pending.conversationId;
-    this.currentAssistantMessageId = pending.assistantMessageId;
-
     const planState = await planModule.getPlanStateByPlanId(pending.planId);
     const toolFunctions = await SkillRegistry.getAllToolFunctions();
     const allOpenAITools = [
@@ -896,6 +1315,20 @@ export class AIChatQueryEngine {
         }
       : undefined;
 
+    // Rebuild the deferred catalog for the resumed plan turn and carry forward
+    // the discovered-tool snapshot (AC-8).
+    const resumePlanCatalogContext = this.buildToolCatalogForTurn({
+      tools: allOpenAITools,
+      conversationId: pending.conversationId,
+      isPlanMode: Boolean(planContext),
+      autoPlanEnabled: false,
+      userMessage: pending.request.message,
+      recentUserMessages: collectRecentUserMessages(
+        pending.conversationMessages
+      ),
+      model: pending.request.model,
+    });
+
     const loopInput: AIChatQueryLoopInput = {
       conversationId: pending.conversationId,
       assistantMessageId: pending.assistantMessageId,
@@ -907,9 +1340,15 @@ export class AIChatQueryEngine {
       skillRegistry: SkillRegistry,
       planContext,
       startRound: pending.nextRound,
-      isActiveTurn: () =>
-        this.currentAssistantMessageId === pending.assistantMessageId &&
-        this.currentConversationId === pending.conversationId,
+      isActiveTurn: () => {
+        const entry = this.activeTurns.get(pending.conversationId);
+        return (
+          !!entry && entry.assistantMessageId === pending.assistantMessageId
+        );
+      },
+      toolCatalog: resumePlanCatalogContext.toolCatalog,
+      toolCatalogModeDecision: resumePlanCatalogContext.toolCatalogModeDecision,
+      toolCatalogState: pending.toolCatalogState,
     };
 
     const module = new AIChatV2Module();
@@ -922,15 +1361,14 @@ export class AIChatQueryEngine {
       })
       .catch((err) => {
         log.error("[ai-chat-v2] answer-question loop failed:", err);
+        void redirectToLoginOnAuthExpired(err);
         pending.eventSink.emit({
           type: "error",
           conversationId: pending.conversationId,
           messageId: pending.assistantMessageId,
           errorMessage: userSafeError(err),
         });
-        this.clearActiveTurnState();
-        this.pendingPermission = null;
-        this.pendingPlanQuestion = null;
+        this.clearConversationTurnState(pending.conversationId);
       });
 
     return { ok: true };
@@ -950,10 +1388,24 @@ export class AIChatQueryEngine {
     eventSink: AIChatQueryEventSink
   ): Promise<void> {
     await this.flushEventSaves(eventSink);
+    // Persist deferred-catalog discovered state on terminal results so it
+    // survives app restart / conversation reload (FR-5/AC-8). Pause variants
+    // carry the snapshot on `pending` and persist via the resumed turn.
+    if ("toolCatalogState" in result && result.toolCatalogState) {
+      await this.conversationToolStateService.saveSnapshot({
+        conversationId: result.conversationId,
+        snapshot: result.toolCatalogState,
+      });
+    }
     switch (result.type) {
       case "completed": {
         const { conversationId, assistantMessageId } = result;
-        if (result.fullContent.length > 0) {
+        const generatedImages = await this.storeGeneratedImages({
+          conversationId,
+          assistantMessageId,
+          images: result.images,
+        });
+        if (result.fullContent.length > 0 || generatedImages) {
           await module.saveAssistantMessage({
             conversationId,
             content: result.fullContent,
@@ -964,6 +1416,8 @@ export class AIChatQueryEngine {
               source: "chat-v2",
               openaiResponseId: result.responseId,
               finishReason: result.finishReason,
+              ...buildReasoningMetadata(result.reasoningContent, result.model),
+              generatedImages,
               recovery: result.recoveryMetadata,
             },
           });
@@ -973,23 +1427,34 @@ export class AIChatQueryEngine {
           conversationId,
           messageId: assistantMessageId,
           fullContent: result.fullContent,
+          images: generatedImages,
           model: result.model,
           finishReason: result.finishReason,
           totalTokens: result.totalTokens,
           promptTokens: result.promptTokens,
           completionTokens: result.completionTokens,
         });
-        if (this.compactAgent) {
-          this.compactAgent
-            .enqueueSessionMemoryUpdate({
-              conversationId,
-              reason: "assistant_turn_completed",
-              promptTokens: result.promptTokens,
-              model: result.model,
-            })
+        const compactAgent = this.compactAgent;
+        if (compactAgent) {
+          const compactInput = {
+            conversationId,
+            reason: "assistant_turn_completed",
+            promptTokens: result.promptTokens,
+            model: result.model,
+          };
+          // Auto full-compact takes priority when the turn pushed the context
+          // near the model's window: it actually shrinks the next assembled
+          // prompt. Fall back to the advisory session-memory update otherwise.
+          // Optional call guards test fakes that only stub one method.
+          Promise.resolve(compactAgent.enqueueAutoCompact?.(compactInput) ?? false)
+            .then((compacted) =>
+              compacted
+                ? undefined
+                : compactAgent.enqueueSessionMemoryUpdate(compactInput)
+            )
             .catch((err) =>
               log.error(
-                "[ai-chat-compact] session memory update failed:",
+                "[ai-chat-compact] post-turn compaction failed:",
                 err
               )
             );
@@ -1014,8 +1479,18 @@ export class AIChatQueryEngine {
               log.error("[workspace-auto-dream] chat trigger failed:", err)
             );
         }
+        DesktopNotifyService.getInstance()
+          .show({
+            type: "turn_complete",
+            title: "AI reply ready",
+            body: "Your AI chat response is ready.",
+            conversationId,
+          })
+          .catch((err: unknown) =>
+            log.error("[desktop-notify] turn_complete failed:", err)
+          );
         this.dispatchStop(conversationId, "completed");
-        this.clearActiveTurnState();
+        this.clearActiveTurnState(conversationId, assistantMessageId);
         break;
       }
       case "cancelled": {
@@ -1031,6 +1506,7 @@ export class AIChatQueryEngine {
               openaiResponseId: result.responseId,
               finishReason: "cancelled",
               cancelled: true,
+              ...buildReasoningMetadata(result.reasoningContent, result.model),
             },
           });
         }
@@ -1042,11 +1518,12 @@ export class AIChatQueryEngine {
           fullContent: result.partialContent,
         });
         this.dispatchStop(conversationId, "user_stopped");
-        this.clearActiveTurnState();
+        this.clearActiveTurnState(conversationId, assistantMessageId);
         break;
       }
       case "failed": {
         const { conversationId, assistantMessageId } = result;
+        void redirectToLoginOnAuthExpired(result.error);
         if (result.partialContent.length > 0) {
           await module.saveAssistantMessage({
             conversationId,
@@ -1058,6 +1535,7 @@ export class AIChatQueryEngine {
               openaiResponseId: result.responseId,
               finishReason: "error",
               error: userSafeError(result.error),
+              ...buildReasoningMetadata(result.reasoningContent, result.model),
             },
           });
         }
@@ -1069,20 +1547,29 @@ export class AIChatQueryEngine {
           errorMessage: userSafeError(result.error),
         });
         this.dispatchStop(conversationId, "error");
-        this.clearActiveTurnState();
-        this.pendingPermission = null;
-        this.pendingPlanQuestion = null;
+        this.clearConversationTurnState(conversationId, assistantMessageId);
         break;
       }
       case "paused_for_permission": {
-        this.pendingPermission = result.pending;
+        // Move the turn from activeTurns into pendingPermissions so the three
+        // maps stay disjoint (a conversation is in exactly one of them). The
+        // activeTurns entry is dropped; resuming re-adds it.
+        this.activeTurns.delete(result.pending.conversationId);
+        this.pendingPermissions.set(
+          result.pending.conversationId,
+          result.pending
+        );
         log.info(
           `[ai-chat-v2] tool ${result.pending.toolName} needs permission — paused (nextRound=${result.pending.nextRound})`
         );
         break;
       }
       case "paused_for_plan_question": {
-        this.pendingPlanQuestion = result.pending;
+        this.activeTurns.delete(result.pending.conversationId);
+        this.pendingPlanQuestions.set(
+          result.pending.conversationId,
+          result.pending
+        );
         log.info(
           `[ai-chat-v2] AskUserQuestion paused (questionId=${result.pending.questionId}, nextRound=${result.pending.nextRound})`
         );
@@ -1092,13 +1579,46 @@ export class AIChatQueryEngine {
   }
 
   /**
-   * Clear active-turn singleton state. Called after terminal results
-   * (completed/cancelled/failed) and on unexpected failures.
+   * Remove the active-turn entry for ONE conversation only. Called after
+   * terminal results (completed/cancelled/failed) and on unexpected failures.
+   * Scoped by conversationId so a terminal result for conversation A never
+   * touches conversation B's entry — this is the fix for the cross-conversation
+   * clobber bug (a cancelled result for A used to wipe B's singleton state).
+   *
+   * When `assistantMessageId` is supplied, the entry is deleted ONLY if it
+   * still belongs to that turn. A same-conversation re-send replaces the entry
+   * with a newer turn; the stale turn's late terminal result must not delete
+   * the newer turn's entry.
    */
-  private clearActiveTurnState(): void {
-    this.currentAbortController = null;
-    this.currentConversationId = null;
-    this.currentAssistantMessageId = null;
+  private clearActiveTurnState(
+    conversationId: string,
+    assistantMessageId?: string
+  ): void {
+    const entry = this.activeTurns.get(conversationId);
+    if (!entry) return;
+    if (
+      assistantMessageId !== undefined &&
+      entry.assistantMessageId !== assistantMessageId
+    ) {
+      return;
+    }
+    this.activeTurns.delete(conversationId);
+  }
+
+  /**
+   * Defensively clear ALL turn state for one conversation — the active entry
+   * plus any pending permission / plan-question entries. Used on
+   * failure / catch paths where state may be inconsistent. Terminal success
+   * paths (completed/cancelled) do NOT use this: a streaming turn lives only
+   * in activeTurns, so they call clearActiveTurnState directly.
+   */
+  private clearConversationTurnState(
+    conversationId: string,
+    assistantMessageId?: string
+  ): void {
+    this.clearActiveTurnState(conversationId, assistantMessageId);
+    this.pendingPermissions.delete(conversationId);
+    this.pendingPlanQuestions.delete(conversationId);
   }
 
   private createPersistingEventSink(
@@ -1186,6 +1706,32 @@ export class AIChatQueryEngine {
     await this.flushPendingEventSaves(saves);
   }
 
+  private async storeGeneratedImages(input: {
+    conversationId: string;
+    assistantMessageId: string;
+    images?: OpenAIChatImage[];
+  }): Promise<OpenAIChatImage[] | undefined> {
+    if (!input.images || input.images.length === 0) {
+      return undefined;
+    }
+    const storage =
+      this.generatedImageStorage ?? new AIChatGeneratedImageStorageService();
+    try {
+      const stored = await storage.storeImages({
+        conversationId: input.conversationId,
+        messageId: input.assistantMessageId,
+        images: input.images,
+      });
+      return stored.length > 0 ? stored : undefined;
+    } catch (err) {
+      log.warn(
+        `[ai-chat-v2] failed to store generated images locally for conversation ${input.conversationId}:`,
+        err
+      );
+      return input.images;
+    }
+  }
+
   /**
    * Handle an unexpected failure during the loop run.
    */
@@ -1197,14 +1743,13 @@ export class AIChatQueryEngine {
   ): void {
     this.dispatchStop(conversationId, "error");
     log.error("[ai-chat-v2] engine failure:", err);
+    void redirectToLoginOnAuthExpired(err);
     eventSink.emit({
       type: "error",
       conversationId,
       messageId: assistantMessageId,
       errorMessage: userSafeError(err),
     });
-    this.clearActiveTurnState();
-    this.pendingPermission = null;
-    this.pendingPlanQuestion = null;
+    this.clearConversationTurnState(conversationId, assistantMessageId);
   }
 }

@@ -39,6 +39,11 @@ import { IProxyApi } from "@/modules/interface/IProxyApi";
 import { ProxyModule } from "@/modules/ProxyModule";
 import { utilityProcess } from "electron";
 import * as path from "path";
+import {
+  getPackagedWorkerPathCandidates,
+  resolvePackagedWorkerPath,
+  buildPackagedWorkerEnv,
+} from "@/utils/packagedWorkerPath";
 export class ProxyController {
   //import proxy from csv file
   // public async importProxyfile(filename: string) {
@@ -265,36 +270,36 @@ export class ProxyController {
     timeout = 15000
   ): Promise<boolean> {
     return new Promise((resolve, reject) => {
-      // Resolve child process path with fallback options (similar to WebsiteAnalysisService)
-      let childPath = path.join(
-        __dirname,
-        "../childprocess/googleProxyCheck.js"
-      );
-
-      // Try multiple path locations
-      if (!fs.existsSync(childPath)) {
-        // Try relative path from controller directory
-        const altPath1 = path.join(
-          __dirname,
-          "./childprocess/googleProxyCheck.js"
-        );
-        if (fs.existsSync(altPath1)) {
-          childPath = altPath1;
-        } else {
-          // Try dist directory from project root
-          const altPath2 = path.join(
-            process.cwd(),
-            "dist/childprocess/googleProxyCheck.js"
-          );
-          if (fs.existsSync(altPath2)) {
-            childPath = altPath2;
-          } else {
-            const errorMsg = `Google proxy check child process not found. Tried: ${childPath}, ${altPath1}, ${altPath2}. Please rebuild the application.`;
-            log.error(errorMsg);
-            reject(new Error(errorMsg));
-            return;
-          }
-        }
+      const electronProcess = process as NodeJS.Process & {
+        resourcesPath?: string;
+      };
+      const runtime = {
+        dirname: __dirname,
+        cwd: process.cwd(),
+        resourcesPath: electronProcess.resourcesPath,
+        existsSync: fs.existsSync,
+      };
+      const options = {
+        dirnameRelativePaths: [
+          "googleProxyCheck.js",
+          path.join("childprocess", "googleProxyCheck.js"),
+          path.join("..", "childprocess", "googleProxyCheck.js"),
+        ],
+        cwdRelativePaths: [
+          path.join("dist", "childprocess", "googleProxyCheck.js"),
+          path.join(".vite", "build", "googleProxyCheck.js"),
+          path.join(".vite", "build", "childprocess", "googleProxyCheck.js"),
+        ],
+      };
+      const childPath = resolvePackagedWorkerPath(runtime, options);
+      if (!childPath) {
+        const candidates = getPackagedWorkerPathCandidates(runtime, options);
+        const errorMsg = `Google proxy check child process not found. Tried: ${candidates.join(
+          ", "
+        )}. Please rebuild the application.`;
+        log.error(errorMsg);
+        reject(new Error(errorMsg));
+        return;
       }
 
       const requestId = `google-check-${Date.now()}-${Math.random()
@@ -304,7 +309,7 @@ export class ProxyController {
       const child = utilityProcess.fork(childPath, [], {
         stdio: "pipe",
         execArgv: [],
-        env: { ...process.env, NODE_OPTIONS: "" },
+        env: buildPackagedWorkerEnv(),
       });
 
       // Set timeout to kill child process if it hangs
@@ -563,32 +568,29 @@ export class ProxyController {
     }
     const detailed: DetailedTarget[] = [];
     const setupErrors: ProxyCheckItemInternal[] = [];
+    // Batch-load all target proxies in one query instead of one getProxyDetail
+    // round-trip per id. Missing/unloadable ids become per-item setup errors.
+    const loadedProxies = await this.proxyapi.getProxiesByIds(targetIds);
+    const proxyById = new Map<number, ProxyParseItem>();
+    for (const proxy of loadedProxies) {
+      if (proxy.id !== undefined) {
+        proxyById.set(proxy.id, {
+          host: proxy.host,
+          port: proxy.port,
+          protocol: proxy.protocol,
+          user: proxy.user,
+          pass: proxy.pass,
+        });
+      }
+    }
     for (const id of targetIds) {
-      try {
-        const proxyDetail = await this.proxyapi.getProxyDetail(id);
-        const proxy = proxyDetail.status ? proxyDetail.data : undefined;
-        if (proxy && proxy.host && proxy.port && proxy.protocol) {
-          detailed.push({
-            id,
-            proxy: {
-              host: proxy.host,
-              port: proxy.port,
-              protocol: proxy.protocol,
-              user: proxy.user,
-              pass: proxy.pass,
-            },
-          });
-        } else {
-          setupErrors.push({
-            proxyId: id,
-            error: "proxy not found or missing host/port/protocol",
-          });
-        }
-      } catch (error) {
+      const proxy = proxyById.get(id);
+      if (proxy && proxy.host && proxy.port && proxy.protocol) {
+        detailed.push({ id, proxy });
+      } else {
         setupErrors.push({
           proxyId: id,
-          error:
-            error instanceof Error ? error.message : "failed to load proxy",
+          error: "proxy not found or missing host/port/protocol",
         });
       }
     }
@@ -775,26 +777,32 @@ export class ProxyController {
     if (!res.status) {
       throw new Error(res.msg ?? "Failed to get proxy list");
     }
-    if (res.data && res.data.records) {
-      for (let i = 0; i < res.data.records.length; i++) {
-        if (res.data.records[i].id != undefined) {
-          const checkInfo = await checkDb.getProxyCheck(
-            res.data.records[i].id!
-          );
-          if (checkInfo) {
-            res.data.records[i].status = checkInfo.status;
-            res.data.records[i].checktime = checkInfo.check_time;
-            res.data.records[i].googlePass = checkInfo.google_pass ?? undefined;
+    if (res.data && res.data.records && res.data.records.length > 0) {
+      // Batch-load check status for the whole page in one query instead of
+      // one getProxyCheck round-trip per record.
+      const ids = res.data.records
+        .map((r) => r.id)
+        .filter((id): id is number => id != null);
+      const checkMap = await checkDb.getProxyChecksByIds(ids);
+      for (const record of res.data.records) {
+        if (record.id == null) {
+          continue;
+        }
+        const checkInfo = checkMap.get(record.id);
+        if (!checkInfo) {
+          continue;
+        }
+        record.status = checkInfo.status;
+        record.checktime = checkInfo.check_time;
+        record.googlePass = checkInfo.google_pass ?? undefined;
 
-            // Map to display name
-            if (checkInfo.google_pass === googlePassStatus.Pass) {
-              res.data.records[i].googlePassName = "Pass";
-            } else if (checkInfo.google_pass === googlePassStatus.Fail) {
-              res.data.records[i].googlePassName = "Fail";
-            } else {
-              res.data.records[i].googlePassName = "Not Checked";
-            }
-          }
+        // Map to display name
+        if (checkInfo.google_pass === googlePassStatus.Pass) {
+          record.googlePassName = "Pass";
+        } else if (checkInfo.google_pass === googlePassStatus.Fail) {
+          record.googlePassName = "Fail";
+        } else {
+          record.googlePassName = "Not Checked";
         }
       }
     }

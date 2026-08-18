@@ -161,6 +161,18 @@ export const constantRoutes: RouteRecordRaw[] = [
         children: [],
       },
       {
+        path: "ai-memory",
+        name: "system_setting_ai_memory",
+        meta: {
+          title: "route.ai_memory_management",
+          icon: "mdi-brain",
+          keepAlive: false,
+          visible: false,
+        },
+        component: () => import("@/views/pages/systemsetting/aiMemory.vue"),
+        children: [],
+      },
+      {
         path: "subagents",
         name: "system_setting_subagents",
         meta: {
@@ -174,6 +186,21 @@ export const constantRoutes: RouteRecordRaw[] = [
             "Manage built-in, plugin-installed, and manual subagents",
         },
         component: () => import("@/views/pages/systemsetting/subagents.vue"),
+        children: [],
+      },
+      {
+        path: "about",
+        name: "system_setting_about",
+        meta: {
+          title: "about.title",
+          icon: "mdi-information-outline",
+          keepAlive: false,
+          visible: false,
+          aiNavigable: true,
+          aiAliases: ["about", "app version", "check for updates"],
+          aiDescription: "View the app version and check for updates",
+        },
+        component: () => import("@/views/pages/systemsetting/about.vue"),
         children: [],
       },
     ],
@@ -934,6 +961,7 @@ export const constantRoutes: RouteRecordRaw[] = [
   {
     path: "/socialaccount",
     name: "Socialaccount",
+    redirect: "/socialaccount/list",
     meta: {
       visible: true,
       title: "route.tool_account",
@@ -949,7 +977,7 @@ export const constantRoutes: RouteRecordRaw[] = [
           ),
         name: "SocialAccount",
         meta: {
-          visible: true,
+          visible: false,
           title: "route.tool_account_list",
           icon: "mdi-account-details",
         },

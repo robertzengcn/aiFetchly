@@ -782,6 +782,7 @@ const taskForm = reactive({
   aiSupportEnabled: false,
   localBrowser: '' as string,
   account_id: undefined as number | undefined,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   proxy_config: undefined as any,
   scheduled_at: undefined as Date | undefined
 })
@@ -880,6 +881,7 @@ const platformOptions = computed(() => {
 })
 
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const removeKeyword = (keyword: string) => {
   taskForm.keywords = taskForm.keywords.filter(k => k !== keyword)
   // Update the input field
@@ -1144,6 +1146,7 @@ const createTask = async () => {
     if (useLocalBrowser.value) {
       taskData.localBrowser = taskForm.localBrowser
     } else {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (taskData as any).localBrowser = undefined
     }
 
@@ -1353,6 +1356,7 @@ const loadPlatforms = async () => {
   }
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const loadAccounts = async () => {
   // Deprecated: Using AccountSelectedTable to load accounts directly
 }
@@ -1452,7 +1456,7 @@ const calculateNextRunTime = async () => {
     const nextRun = new Date(now)
     
     const parts = cronExpression.value.split(' ')
-    const [minute, hour, day, month, weekday] = parts
+    const [minute, hour] = parts
     
     // Basic calculation - this is a simplified version
     // In production, you'd want to use a proper cron library
@@ -1487,6 +1491,7 @@ const calculateNextRunTime = async () => {
 }
 
 // Create schedule for the yellow pages task
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const createScheduleForTask = async (taskId: number, taskData: any) => {
   try {
     if (scheduleType.value === 'one-time' && scheduledTime.value) {
@@ -1530,6 +1535,7 @@ const goToTaskDetail = () => {
   router.push(`/yellowpages/detail/${successDialog.taskId}`)
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const editTask = () => {
   router.push(`/yellowpages/edit/${taskId.value}`)
 }

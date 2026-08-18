@@ -120,7 +120,7 @@ describe("USonarYellowPageAdapter", () => {
       "https://yellowpage.usonar.co.jp/search"
     );
     expect(adapter.config.settings!.searchUrlPattern).toContain("{keywords}");
-    expect(adapter.config.settings!.searchUrlPattern).toContain("{area}");
+    expect(adapter.config.settings!.searchUrlPattern).toContain("{location}");
   });
 
   test("should have result URL pattern configured", () => {
@@ -130,16 +130,14 @@ describe("USonarYellowPageAdapter", () => {
     expect(adapter.config.settings!.resultUrlPattern).toContain("{path}");
   });
 
-  // QUARANTINED (WS-2): internally contradictory (comment says keyword/area,
-  // assertion checks input[name="q"]). Needs live-site verification. See WS-2.
-  test.skip("should use specific selectors for uSonar platform", () => {
-    // uSonar uses 'keyword' and 'area' parameters
+  test("should use specific selectors for uSonar platform", () => {
+    // uSonar uses 'keyword' and 'area' URL parameters; selectors mirror that.
     expect(adapter.config.selectors!.searchForm).toBeTruthy();
     const searchForm = adapter.config.selectors!.searchForm as {
       keywordInput?: string;
       locationInput?: string;
     };
-    expect(searchForm.keywordInput).toContain('input[name="q"]');
+    expect(searchForm.keywordInput).toContain('input[name="keyword"]');
     expect(searchForm.locationInput).toContain('input[name="area"]');
   });
 });

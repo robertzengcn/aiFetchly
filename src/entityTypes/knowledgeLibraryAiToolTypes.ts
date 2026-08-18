@@ -74,6 +74,80 @@ export const deleteKnowledgeDocumentInputSchema = z.object({
   expected_name: z.string().trim().min(1).max(300).optional(),
 });
 
+/**
+ * Shared website-import limits. Single source of truth so the zod schema
+ * (server-side validation) and the Knowledge Library UI (sliders/caps) cannot
+ * drift. Add new fields here and reference them from both places.
+ */
+export const WEBSITE_IMPORT_LIMITS = {
+  maxPages: { min: 1, max: 100, default: 20 },
+  maxDepth: { min: 0, max: 4, default: 2 },
+  maxUrls: 50,
+} as const;
+
+/**
+ * Input schema for `knowledge_library_import_website`.
+ *
+ * Three import modes share one schema:
+ *   - `single_page` requires `url`
+ *   - `url_list`    requires `urls` (1..WEBSITE_IMPORT_LIMITS.maxUrls)
+ *   - `site_crawl`  requires `url` and honors `maxPages`/`maxDepth`
+ *
+ * `url`/`urls` are constrained to absolute URLs and a 2048-char max. Final
+ * scheme/SSRF enforcement is delegated to `UrlGuard` in the service layer
+ * (zod only validates structure here). `replace` is parsed but rejected by the
+ * tool (returns INVALID_INPUT) until a transactional replace flow exists.
+ */
+export const importKnowledgeWebsiteInputSchema = z
+  .object({
+    mode: z
+      .enum(["single_page", "url_list", "site_crawl"])
+      .default("single_page"),
+    url: z.string().trim().url().max(2048).optional(),
+    urls: z
+      .array(z.string().trim().url().max(2048))
+      .min(1)
+      .max(WEBSITE_IMPORT_LIMITS.maxUrls)
+      .optional(),
+    maxPages: z
+      .number()
+      .int()
+      .min(WEBSITE_IMPORT_LIMITS.maxPages.min)
+      .max(WEBSITE_IMPORT_LIMITS.maxPages.max)
+      .default(WEBSITE_IMPORT_LIMITS.maxPages.default),
+    maxDepth: z
+      .number()
+      .int()
+      .min(WEBSITE_IMPORT_LIMITS.maxDepth.min)
+      .max(WEBSITE_IMPORT_LIMITS.maxDepth.max)
+      .default(WEBSITE_IMPORT_LIMITS.maxDepth.default),
+    title: z.string().trim().min(1).max(300).optional(),
+    description: z.string().trim().max(2000).optional(),
+    tags: z.array(tagSchema).max(20).optional(),
+    author: z.string().trim().min(1).max(200).optional(),
+    duplicatePolicy: z.enum(["fail", "allow", "replace"]).default("fail"),
+  })
+  .superRefine((value, ctx) => {
+    if (value.mode === "url_list") {
+      if (!value.urls || value.urls.length === 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["urls"],
+          message: "urls is required for url_list mode",
+        });
+      }
+      return;
+    }
+
+    if (!value.url) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["url"],
+        message: "url is required for single_page and site_crawl modes",
+      });
+    }
+  });
+
 /** Parsed input types (after zod applies defaults/transforms). */
 export type ListKnowledgeDocumentsParsed = z.infer<
   typeof listKnowledgeDocumentsInputSchema
@@ -84,6 +158,15 @@ export type ImportKnowledgeAttachmentParsed = z.infer<
 export type DeleteKnowledgeDocumentParsed = z.infer<
   typeof deleteKnowledgeDocumentInputSchema
 >;
+export type ImportKnowledgeWebsiteParsed = z.infer<
+  typeof importKnowledgeWebsiteInputSchema
+>;
+
+/** Import mode discriminator for `knowledge_library_import_website`. */
+export type KnowledgeWebsiteImportMode =
+  | "single_page"
+  | "url_list"
+  | "site_crawl";
 
 // ---------------------------------------------------------------------------
 // Result / error types
@@ -101,9 +184,13 @@ export type KnowledgeLibraryToolErrorCode =
   | "DUPLICATE_DOCUMENT"
   | "DOCUMENT_NOT_FOUND"
   | "EXPECTED_NAME_MISMATCH"
+  | "URL_BLOCKED"
+  | "SCRAPE_FAILED"
+  | "EMPTY_CONTENT"
   | "IMPORT_FAILED"
   | "DELETE_FAILED"
-  | "LIST_FAILED";
+  | "LIST_FAILED"
+  | "LOCAL_EMBEDDING_RUNTIME_MISSING";
 
 /**
  * Failure payload shared by every knowledge library tool.
@@ -228,3 +315,91 @@ export type KnowledgeLibraryImportOutcome =
 export type KnowledgeLibraryDeleteOutcome =
   | DeleteKnowledgeDocumentResult
   | KnowledgeLibraryToolError;
+
+// ---------------------------------------------------------------------------
+// import_website
+// ---------------------------------------------------------------------------
+
+/**
+ * Why a single webpage was skipped during a multi-page import. Each code maps
+ * to a tool error code so the model can explain the result to the user.
+ */
+export type SkippedWebsiteImportCode =
+  | "DUPLICATE_DOCUMENT"
+  | "URL_BLOCKED"
+  | "SCRAPE_FAILED"
+  | "EMPTY_CONTENT"
+  | "UNSUPPORTED_FILE_TYPE"
+  | "FILE_TOO_LARGE"
+  | "IMPORT_FAILED";
+
+/**
+ * Summary of one webpage that was successfully staged, uploaded, chunked, and
+ * embedded. Extends the base document summary with website source metadata and
+ * processing telemetry. Never exposes `filePath`, vector paths, or content.
+ */
+export interface ImportedWebsiteDocumentSummary
+  extends KnowledgeLibraryDocumentSummary {
+  readonly sourceUrl: string;
+  readonly finalUrl?: string;
+  readonly chunksCreated: number;
+  readonly processingTimeMs: number;
+}
+
+/** Summary of one webpage that could not be imported. */
+export interface SkippedWebsiteImportSummary {
+  readonly url: string;
+  readonly reason: string;
+  readonly code: SkippedWebsiteImportCode;
+  readonly existingDocuments?: readonly KnowledgeLibraryDocumentSummary[];
+}
+
+/**
+ * Successful multi-page import result. `success` is `true` whenever at least
+ * one page imported; per-page failures are reported in `skipped`.
+ */
+export interface ImportKnowledgeWebsiteResult {
+  readonly success: true;
+  readonly mode: KnowledgeWebsiteImportMode;
+  readonly imported: readonly ImportedWebsiteDocumentSummary[];
+  readonly skipped: readonly SkippedWebsiteImportSummary[];
+  readonly importedCount: number;
+  readonly skippedCount: number;
+  readonly requestedCount: number;
+  /** Present for `site_crawl` — total same-origin links discovered. */
+  readonly discoveredCount?: number;
+  readonly summary: string;
+}
+
+/** Convenience union for the website import tool method return value. */
+export type KnowledgeLibraryWebsiteImportOutcome =
+  | ImportKnowledgeWebsiteResult
+  | KnowledgeLibraryToolError;
+
+export type KnowledgeLibraryWebsiteImportProgressPhase =
+  | "starting"
+  | "scraping"
+  | "importing"
+  | "imported"
+  | "skipped"
+  | "completed";
+
+/**
+ * Main-process progress event for the manual Knowledge Library website import
+ * UI. It deliberately excludes local file paths and page content.
+ */
+export interface KnowledgeLibraryWebsiteImportProgressEvent {
+  readonly phase: KnowledgeLibraryWebsiteImportProgressPhase;
+  readonly mode: KnowledgeWebsiteImportMode;
+  readonly url?: string;
+  readonly title?: string;
+  readonly importedCount: number;
+  readonly skippedCount: number;
+  readonly processedPages?: number;
+  readonly requestedCount?: number;
+  readonly discoveredCount?: number;
+  readonly maxPages?: number;
+  readonly code?: SkippedWebsiteImportCode;
+  readonly reason?: string;
+  readonly summary?: string;
+}

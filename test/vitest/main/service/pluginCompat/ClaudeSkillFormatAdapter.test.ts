@@ -24,7 +24,7 @@ Instructions here.`;
     expect(result.body).toContain("# Lead Research");
   });
 
-  it("derives the name from the parent directory when name is omitted", () => {
+  it("derives name from the parent directory when name is missing", () => {
     const md = `---
 description: some description
 ---
@@ -34,6 +34,7 @@ body`;
     const result = ClaudeSkillFormatAdapter.adapt(md, "skills/foo/SKILL.md");
     expect(result.ok).toBe(true);
     if (!result.ok) return;
+    // "skills/foo/SKILL.md" → parent dir "foo" → sanitized name "foo".
     expect(result.manifest.name).toBe("foo");
   });
 

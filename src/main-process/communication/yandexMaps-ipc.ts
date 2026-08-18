@@ -12,7 +12,8 @@ import {
   YandexMapsModule,
   type YandexMapsExecuteOptions,
 } from "@/modules/YandexMapsModule";
-import { AccountCookiesModule } from "@/modules/accountCookiesModule";
+import { AccountSessionService } from "@/modules/AccountSessionService";
+import { normalizedToCookiesType } from "@/modules/accountSession/cookieNormalize";
 import { ProxyModel } from "@/model/Proxy.model";
 import type { YellowPagesTaskProxyConfig } from "@/entityTypes/yellowPagesTaskProxyType";
 import {
@@ -48,7 +49,7 @@ export function registerYandexMapsHandlers(): void {
     async (input, event) => {
       if (activeModules.size >= MAX_CONCURRENT_SEARCHES) {
         throw new Error(
-          "Too many concurrent searches. Please wait for one to finish.",
+          "Too many concurrent searches. Please wait for one to finish."
         );
       }
 
@@ -59,24 +60,26 @@ export function registerYandexMapsHandlers(): void {
       // Cap max_results to YANDEX_MAPS_HARD_CAP
       const maxResults = Math.min(
         Math.max(1, input.max_results ?? 20),
-        YANDEX_MAPS_HARD_CAP,
+        YANDEX_MAPS_HARD_CAP
       );
 
-      // Resolve cookies if account_id is provided
+      // Resolve cookies if account_id is provided (decrypted via the session
+      // service; never parsed directly from the ciphertext column).
       let cookies: unknown[] | undefined;
       if (input.account_id) {
         try {
-          const cookiesModule = new AccountCookiesModule();
-          const cookieRecord = await cookiesModule.getAccountCookies(input.account_id);
-          if (cookieRecord?.cookies) {
-            const parsed = JSON.parse(cookieRecord.cookies);
-            cookies = Array.isArray(parsed) ? parsed : undefined;
+          const sessionService = new AccountSessionService();
+          const snapshot = await sessionService.getDecryptedSnapshot(
+            input.account_id
+          );
+          if (snapshot.cookies.length > 0) {
+            cookies = normalizedToCookiesType(snapshot.cookies);
           }
         } catch (err) {
           log.warn(
             "[YandexMaps] Failed to load cookies for account",
             input.account_id,
-            err,
+            err
           );
         }
       }
@@ -137,11 +140,14 @@ export function registerYandexMapsHandlers(): void {
             language: input.language,
             region: input.region,
           },
-          executeOptions,
+          executeOptions
         )
         .then((result: YandexMapsSearchResult) => {
           if (!senderWebContents.isDestroyed()) {
-            senderWebContents.send(YANDEX_MAPS_SEARCH_RESULT, { requestId, result });
+            senderWebContents.send(YANDEX_MAPS_SEARCH_RESULT, {
+              requestId,
+              result,
+            });
           }
           activeModules.delete(requestId);
         })
@@ -165,7 +171,7 @@ export function registerYandexMapsHandlers(): void {
         });
 
       return { requestId };
-    },
+    }
   );
 
   // ── Cancel a search ─────────────────────────────────────────────────
@@ -180,7 +186,7 @@ export function registerYandexMapsHandlers(): void {
       await activeModule.cancelSearch(input.requestId);
       activeModules.delete(input.requestId);
       return null;
-    },
+    }
   );
 
   // ── History list ────────────────────────────────────────────────────
@@ -193,7 +199,7 @@ export function registerYandexMapsHandlers(): void {
       const module = new YandexMapsModule();
       const [records, total] = await module.getSearchHistory(limit, offset);
       return { records, total };
-    },
+    }
   );
 
   // ── History detail ──────────────────────────────────────────────────
@@ -207,7 +213,7 @@ export function registerYandexMapsHandlers(): void {
         throw new Error("Record not found");
       }
       return record;
-    },
+    }
   );
 
   // ── History delete ──────────────────────────────────────────────────
@@ -221,6 +227,6 @@ export function registerYandexMapsHandlers(): void {
         throw new Error("Record not found");
       }
       return null;
-    },
+    }
   );
 }

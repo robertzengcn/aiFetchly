@@ -8,6 +8,12 @@ import type { AIChatQueryLoopDeps } from "@/service/AIChatQueryLoop";
 import type { AIChatQueryEventSink } from "@/service/AIChatQueryEvents";
 import type { OpenAITool } from "@/api/aiChatApi";
 import { AiChatApi } from "@/api/aiChatApi";
+import type { OpenAIChatImage } from "@/api/aiChatApi";
+import { AIChatGeneratedImageStorageService } from "@/service/AIChatGeneratedImageStorageService";
+import {
+  persistAgentImages,
+  type AgentImageStorage,
+} from "@/service/persistAgentImages";
 import { AgentDefinitionModule } from "@/modules/AgentDefinitionModule";
 import { AgentTaskModule } from "@/modules/AgentTaskModule";
 import { AgentPromptBuilder } from "@/service/AgentPromptBuilder";
@@ -18,6 +24,18 @@ import {
   isClaudeModelAlias,
   normalizeClaudeAgentToolName,
 } from "@/service/pluginCompat/ClaudeAgentFormatAdapter";
+import {
+  resolveToolCatalogMode,
+  resolvePositiveIntEnv,
+  TOOL_CATALOG_ENV,
+} from "@/config/toolCatalogConfig";
+import { ToolCatalogService } from "@/service/ToolCatalogService";
+import { ToolPromptBudgetService } from "@/service/ToolPromptBudgetService";
+import type {
+  ToolCatalog,
+  ToolCatalogModeDecision,
+  ToolCatalogRuntimeContext,
+} from "@/entityTypes/toolCatalogTypes";
 import type { AIAutoDreamService } from "@/service/AIAutoDreamService";
 import type { AIWorkspaceAutoDreamService } from "@/service/AIWorkspaceAutoDreamService";
 import type {
@@ -80,6 +98,14 @@ export interface AgentRuntimeDeps {
    * consolidation after a completed task. Runs independently of the user-memory
    * service. Failures are logged and swallowed. */
   workspaceAutoDreamService?: AIWorkspaceAutoDreamService;
+  /** Optional. Persists generated images (e.g. a batch worker's edited
+   * outputs) to disk so their file paths can be returned without carrying
+   * bytes. Defaults to AIChatGeneratedImageStorageService when images are
+   * present. */
+  generatedImageStorage?: AgentImageStorage;
+  /** Optional parent cancellation signal. Batch coordinators use this to
+   * cancel every in-flight item when the user stops the outer tool job. */
+  signal?: AbortSignal;
 }
 
 /**
@@ -92,6 +118,8 @@ export class AgentRuntime {
   private readonly policy = new AgentToolPolicyService();
   private readonly promptBuilder = new AgentPromptBuilder();
   private readonly outputParser = new AgentOutputParser();
+  private readonly agentCatalogService = new ToolCatalogService();
+  private readonly agentBudgetService = new ToolPromptBudgetService();
   private readonly defModule = new AgentDefinitionModule();
   private readonly taskModule = new AgentTaskModule();
   private readonly api = new AiChatApi();
@@ -100,7 +128,9 @@ export class AgentRuntime {
     request: RunAgentRequest,
     deps?: AgentRuntimeDeps
   ): Promise<AgentResult> {
-    const storedDefinition = await this.defModule.getActiveById(request.agentId);
+    const storedDefinition = await this.defModule.getActiveById(
+      request.agentId
+    );
     if (!storedDefinition) {
       return this.fail(
         request,
@@ -162,6 +192,21 @@ export class AgentRuntime {
       });
     });
 
+    // Build a deferred tool catalog scoped to the agent's allowlist. The
+    // catalog is constructed from the already-allowlisted exposedTools and the
+    // runtime context carries allowedToolNames/blockedToolNames, so discovery
+    // can never surface a blocked or non-allowlisted tool (AC-4). Agent tasks
+    // are ephemeral, so discovered state is per-task (in-memory) — no
+    // persistence. Small allowlists stay standard under auto mode (design §16).
+    const agentToolCatalogContext = this.buildAgentToolCatalog({
+      tools: exposedTools,
+      conversationId: agentConversationId,
+      userMessage: request.prompt,
+      model: request.model ?? definition.defaultModel,
+      allowedToolNames: new Set(exposedNames),
+      blockedToolNames: new Set(constraints.blockedTools ?? []),
+    });
+
     // 3. Injected executeTool enforces the agent allowlist at runtime.
     const baseExecute =
       deps?.executeTool ??
@@ -219,6 +264,49 @@ export class AgentRuntime {
       }
       executedToolCalls += 1;
       const res = await baseExecute(name, args, ctx);
+
+      // Headless agents have no UI to surface SkillExecutor's interactive
+      // permission prompt, and the v1 runtime has no pause/resume path for
+      // them — letting the prompt result through makes AIChatQueryLoop return
+      // paused_for_permission, which fails the whole task (see the loop result
+      // handling below). Rewrite the prompt into an explicit denied result so
+      // the loop feeds the failure back to the agent's model, which can adapt
+      // (switch tools or report the permission gap) instead of dying. This is
+      // the headless semantics AgentToolPolicyService.checkToolCall documents:
+      // "the runtime surfaces [the permission prompt] as a blocked tool result
+      // in headless mode". Agents stay limited to tools the user has already
+      // granted (persistent Token grants or session grants) — we never bypass
+      // the permission system itself.
+      const rawResult = res.result as Record<string, unknown> | undefined;
+      if (rawResult?.needsPermissionPrompt === true) {
+        const category =
+          typeof rawResult.permissionCategory === "string"
+            ? rawResult.permissionCategory
+            : "unknown";
+        const message =
+          `Permission for tool "${name}" (category: ${category}) has not been ` +
+          "granted, and headless agent tasks cannot show a permission prompt. " +
+          "Do not retry this tool call within this task. The user can grant " +
+          "the permission by calling the tool once in the main chat and " +
+          "approving the prompt, then re-run the task.";
+        await transcript.recordToolCall({
+          agentTaskId,
+          toolCallId: ctx.toolCallId,
+          toolName: name,
+          argumentsSummary: args,
+          status: "blocked",
+          errorMessage: message,
+          durationMs: Date.now() - startedAt,
+        });
+        return {
+          tool_call_id: ctx.toolCallId,
+          tool_name: name,
+          success: false,
+          result: { agentPermissionDenied: true, error: message },
+          execution_time_ms: Date.now() - startedAt,
+        };
+      }
+
       const summary = res.result.summary;
       await transcript.recordToolCall({
         agentTaskId,
@@ -251,11 +339,18 @@ export class AgentRuntime {
 
     // 5. Run with abort controller + runtime timeout.
     const abortController = new AbortController();
+    const abortFromParent = (): void => abortController.abort();
+    if (deps?.signal?.aborted) {
+      abortController.abort();
+    } else {
+      deps?.signal?.addEventListener("abort", abortFromParent, { once: true });
+    }
     const timer = setTimeout(() => {
       abortController.abort();
     }, definition.maxRuntimeMs);
 
     let finalText = "";
+    let capturedImages: OpenAIChatImage[] | undefined;
     const sink: AIChatQueryEventSink = deps?.eventSink ?? {
       emit: () => {
         // no-op sink for headless runs
@@ -278,11 +373,20 @@ export class AgentRuntime {
         eventSink: sink,
         startRound: 0,
         isActiveTurn: () => true,
+        // Retry transient content failures instantly. Agents run under a tight
+        // maxRuntimeMs deadline (the abort timer above); spending that budget
+        // on exponential backoff sleeps can starve actual work. The agent's
+        // own abort signal still bounds total runtime regardless.
+        transientRetryConfig: { baseDelayMs: 0 },
+        toolCatalog: agentToolCatalogContext.toolCatalog,
+        toolCatalogModeDecision:
+          agentToolCatalogContext.toolCatalogModeDecision,
       };
       const result = await loop.run(loopInput);
 
       if (result.type === "completed") {
         finalText = result.fullContent;
+        capturedImages = result.images;
       } else if (result.type === "cancelled") {
         finalText = result.partialContent;
         await this.taskModule.setStatus(agentTaskId, "cancelled", {
@@ -308,12 +412,15 @@ export class AgentRuntime {
           String(result.error)
         );
       } else {
-        // paused_for_permission / paused_for_plan_question: not wired for v1
-        // foreground specialist runs. Treat as failed with a clear message.
+        // paused_for_permission / paused_for_plan_question fallback. The
+        // permission case is normally intercepted in policyCheckedExecute
+        // above (rewritten as a denied tool result so the loop continues);
+        // reaching this branch means a prompt slipped through another path —
+        // surface an actionable message instead of an opaque v1 note.
         const msg =
           result.type === "paused_for_permission"
-            ? "Agent task paused for permission (not supported in v1 runtime)."
-            : "Agent task paused for plan question (not supported in v1 runtime).";
+            ? `Agent task paused for permission on tool "${result.pending.toolName}" — headless agent tasks cannot show permission prompts. Grant the tool permission in the main chat (run it once and approve) or in settings, then re-run this task.`
+            : "Agent task paused for plan question (not supported in headless agent runtime).";
         await this.taskModule.setStatus(agentTaskId, "failed", {
           finishedAt: new Date(),
           errorMessage: msg,
@@ -341,6 +448,7 @@ export class AgentRuntime {
       );
     } finally {
       clearTimeout(timer);
+      deps?.signal?.removeEventListener("abort", abortFromParent);
     }
 
     // 6. Parse output.
@@ -415,6 +523,33 @@ export class AgentRuntime {
       confidence = extractConfidence(outputObj) ?? 0;
     }
 
+    // Persist any edited/generated images the sub-agent's loop produced
+    // (e.g. a batch worker's attach_local_images edits) to local storage and
+    // derive their on-disk paths + descriptors. Bytes are never carried on
+    // AgentResult (PRD non-goal 8). Failure is swallowed by persistAgentImages
+    // so a storage hiccup never fails an otherwise-successful task.
+    //
+    // The default AIChatGeneratedImageStorageService reads Electron's
+    // app.getPath("userData") at construction, so it is constructed LAZILY —
+    // only when there are images to persist. This keeps image-less runs (incl.
+    // tests without an Electron `app`) from touching Electron at all.
+    let outputFilePaths: string[] | undefined;
+    let outputImages: OpenAIChatImage[] | undefined;
+    let storageWarning: string | undefined;
+    if (capturedImages && capturedImages.length > 0) {
+      const persisted = await persistAgentImages({
+        images: capturedImages,
+        conversationId: agentConversationId,
+        messageId: `agent-assistant-${agentTaskId}`,
+        storage:
+          deps?.generatedImageStorage ??
+          new AIChatGeneratedImageStorageService(),
+      });
+      outputFilePaths = persisted.outputFilePaths;
+      outputImages = persisted.outputImages;
+      storageWarning = persisted.storageWarning;
+    }
+
     const result: AgentResult = {
       agentTaskId,
       agentId: definition.id,
@@ -426,6 +561,9 @@ export class AgentRuntime {
       sourceUrls,
       confidence,
       ...(parseWarning ? { parseWarning } : {}),
+      ...(outputFilePaths ? { outputFilePaths } : {}),
+      ...(outputImages ? { outputImages } : {}),
+      ...(storageWarning ? { storageWarning } : {}),
     };
     await this.taskModule.saveResult(agentTaskId, result);
     await this.taskModule.setStatus(agentTaskId, "completed", {
@@ -458,6 +596,66 @@ export class AgentRuntime {
 
   async getTask(agentTaskId: string): Promise<AgentTaskSnapshot | null> {
     return this.taskModule.getSnapshot(agentTaskId);
+  }
+
+  /**
+   * Build a deferred tool catalog scoped to the agent's allowlist (AC-4).
+   * The catalog is constructed from the already-allowlisted tool set, and the
+   * runtime context carries allowedToolNames/blockedToolNames as defense in
+   * depth so discovery can never surface a blocked tool. Returns empty when
+   * the flag is off, the catalog build throws, or auto mode stays standard
+   * (small allowlists).
+   */
+  private buildAgentToolCatalog(input: {
+    readonly tools: readonly OpenAITool[];
+    readonly conversationId: string;
+    readonly userMessage: string;
+    readonly model?: string;
+    readonly allowedToolNames: ReadonlySet<string>;
+    readonly blockedToolNames: ReadonlySet<string>;
+  }): {
+    toolCatalog?: ToolCatalog;
+    toolCatalogModeDecision?: ToolCatalogModeDecision;
+  } {
+    const mode = resolveToolCatalogMode(process.env[TOOL_CATALOG_ENV.mode]);
+    if (mode.mode === "off") return {};
+
+    const context: ToolCatalogRuntimeContext = {
+      conversationId: input.conversationId,
+      model: input.model,
+      isPlanMode: false,
+      autoPlanEnabled: false,
+      currentUserMessage: input.userMessage,
+      uploadedFileTypes: [],
+      allowedToolNames: input.allowedToolNames,
+      blockedToolNames: input.blockedToolNames,
+    };
+
+    let catalog: ToolCatalog;
+    try {
+      catalog = this.agentCatalogService.buildFromOpenAITools({
+        tools: input.tools,
+        context,
+      });
+    } catch (err) {
+      console.warn(
+        `[agent-runtime] catalog build failed, using standard mode:`,
+        err
+      );
+      return {};
+    }
+
+    const thresholdPercent = resolvePositiveIntEnv(
+      process.env[TOOL_CATALOG_ENV.thresholdPercent]
+    );
+    const decision = this.agentBudgetService.resolveMode({
+      configuredMode: mode.mode,
+      deferredEstimatedTokens: catalog.deferredEstimatedTokens,
+      thresholdPercent,
+    });
+    if (decision.mode === "standard") return {};
+
+    return { toolCatalog: catalog, toolCatalogModeDecision: decision };
   }
 
   private async fail(

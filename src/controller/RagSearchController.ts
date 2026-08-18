@@ -10,7 +10,7 @@ import {
 } from "@/modules/RAGDocumentModule";
 import { RAGDocumentEntity } from "@/entity/RAGDocument.entity";
 import { log } from "@/modules/Logger";
-import { RagConfigApi, ChunkingConfig } from "@/api/ragConfigApi";
+import { RagConfigApi, ChunkingConfig, DEFAULT_CHUNKING_CONFIG } from "@/api/ragConfigApi";
 import { RAGChunkModule } from "@/modules/RAGChunkModule";
 
 export class RagSearchController {
@@ -171,9 +171,13 @@ export class RagSearchController {
   async getDocuments(filters?: {
     status?: string;
     processingStatus?: string;
+    fileType?: string;
+    name?: string;
     author?: string;
     tags?: string[];
     dateRange?: { start: Date; end: Date };
+    limit?: number;
+    offset?: number;
   }): Promise<RAGDocumentEntity[]> {
     return await this.ragSearchModule.getDocuments(filters);
   }
@@ -337,23 +341,24 @@ export class RagSearchController {
     const steps = { chunking: false, embedding: false };
 
     try {
-      // Step 1: Get chunking configuration from remote server
-      let chunkingOptions: ChunkingConfig | undefined;
-      try {
-        const configResponse = await this.ragConfigApi.getChunkingConfig();
-        if (configResponse.status && configResponse.data) {
-          chunkingOptions = configResponse.data.default_config;
-          log.info("Using remote chunking configuration:", chunkingOptions);
-        } else {
-          log.warn("Failed to get remote chunking config, using defaults");
-        }
-      } catch (configError) {
-        log.warn(
-          "Error fetching chunking config from remote server:",
-          configError
-        );
-        log.info("Using default chunking configuration");
+      // Step 1: Get chunking configuration (local default)
+      const chunkingOptions: ChunkingConfig = DEFAULT_CHUNKING_CONFIG;
+      log.info("Using local chunking configuration:", chunkingOptions);
+
+      const document = await this.getDocument(documentId);
+      if (!document) {
+        return {
+          documentId,
+          chunksCreated: 0,
+          embeddingsGenerated: 0,
+          processingTime: Date.now() - startTime,
+          success: false,
+          message: "Document not found",
+          steps,
+        };
       }
+
+      await this.ragSearchModule.resetDocumentIndex(document);
 
       // Step 2: Chunk the document
       const chunkResult = await this.chunkDocument(documentId, chunkingOptions);

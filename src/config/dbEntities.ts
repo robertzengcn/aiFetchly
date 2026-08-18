@@ -66,6 +66,9 @@ import { HookAuditEntryEntity } from "@/entity/HookAuditEntry.entity";
 import { AIChatPlanEntity } from "@/entity/AIChatPlan.entity";
 import { AIChatPlanVersionEntity } from "@/entity/AIChatPlanVersion.entity";
 import { AIChatPlanQuestionEntity } from "@/entity/AIChatPlanQuestion.entity";
+import { AIChatGoalEntity } from "@/entity/AIChatGoal.entity";
+import { AIChatGoalRunEntity } from "@/entity/AIChatGoalRun.entity";
+import { AIChatGoalEvidenceEntity } from "@/entity/AIChatGoalEvidence.entity";
 import { AIChatPlanApprovalEntity } from "@/entity/AIChatPlanApproval.entity";
 import { AIChatSessionMemoryEntity } from "@/entity/AIChatSessionMemory.entity";
 import { AIChatCompactSummaryEntity } from "@/entity/AIChatCompactSummary.entity";
@@ -84,12 +87,18 @@ import { GoogleMapsSearchRecordEntity } from "@/entity/GoogleMapsSearchRecord.en
 import { YandexMapsSearchRecordEntity } from "@/entity/YandexMapsSearchRecord.entity";
 import { AiMessageTaskEntity } from "@/entity/AiMessageTask.entity";
 import { AiMessageTaskRunEntity } from "@/entity/AiMessageTaskRun.entity";
+import { ConversationToolStateEntity } from "@/entity/ConversationToolState.entity";
 import { EmailReceivedMessageEntity } from "@/entity/EmailReceivedMessage.entity";
 import { EmailReplyDraftEntity } from "@/entity/EmailReplyDraft.entity";
 import { EmailReplyIdentityProfileEntity } from "@/entity/EmailReplyIdentityProfile.entity";
 import { EmailAutoReplyRuleEntity } from "@/entity/EmailAutoReplyRule.entity";
 import { EmailReplyAuditLogEntity } from "@/entity/EmailReplyAuditLog.entity";
 import { EmailAutoReplyAuditLogEntity } from "@/entity/EmailAutoReplyAuditLog.entity";
+import { EmailReplyDraftRevisionEntity } from "@/entity/EmailReplyDraftRevision.entity";
+import { EmailReplyApprovalEntity } from "@/entity/EmailReplyApproval.entity";
+import { EmailReplySendAttemptEntity } from "@/entity/EmailReplySendAttempt.entity";
+import { EmailConversationEntity } from "@/entity/EmailConversation.entity";
+import { EmailReplyKnowledgeScopeEntity } from "@/entity/EmailReplyKnowledgeScope.entity";
 
 export const DB_ENTITIES = [
   AccountCookiesEntity,
@@ -149,15 +158,24 @@ export const DB_ENTITIES = [
   YandexMapsSearchRecordEntity,
   AiMessageTaskEntity,
   AiMessageTaskRunEntity,
+  ConversationToolStateEntity,
   EmailReceivedMessageEntity,
   EmailReplyDraftEntity,
   EmailReplyIdentityProfileEntity,
   EmailAutoReplyRuleEntity,
   EmailReplyAuditLogEntity,
   EmailAutoReplyAuditLogEntity,
+  EmailReplyDraftRevisionEntity,
+  EmailReplyApprovalEntity,
+  EmailReplySendAttemptEntity,
+  EmailConversationEntity,
+  EmailReplyKnowledgeScopeEntity,
   AIChatPlanEntity,
   AIChatPlanVersionEntity,
   AIChatPlanQuestionEntity,
+  AIChatGoalEntity,
+  AIChatGoalRunEntity,
+  AIChatGoalEvidenceEntity,
   AIChatPlanApprovalEntity,
   AIChatSessionMemoryEntity,
   AIChatCompactSummaryEntity,

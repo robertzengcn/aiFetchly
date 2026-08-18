@@ -1,15 +1,90 @@
 const path = require("path");
 const dotenv = require("dotenv");
 const { spawnSync } = require("node:child_process");
-const { readdirSync, rmdirSync, statSync } = require("node:fs");
+const {
+  cpSync,
+  existsSync,
+  readFileSync,
+  readdirSync,
+  rmdirSync,
+  statSync,
+} = require("node:fs");
+const { builtinModules } = require("node:module");
 const { join, normalize } = require("node:path");
 const { Walker, DepType } = require("flora-colossus");
 let nativeModuleDependenciesToPackage = [];
+/** @type {Set<string>} */
+let allowedPackagedModules = new Set();
+/** @type {Set<string>} */
+let allowedScopedDirectories = new Set();
+const PACKAGED_RENDERER_HTML_RELATIVE = join(
+  ".vite",
+  "renderer",
+  "main_window",
+  "index.html"
+);
+
+function rebuildPackagerAllowLists(moduleNames) {
+  allowedPackagedModules = new Set(moduleNames);
+  allowedScopedDirectories = new Set();
+  for (const dep of allowedPackagedModules) {
+    if (dep.startsWith("@")) {
+      allowedScopedDirectories.add(dep.split("/")[0]);
+    }
+  }
+}
+
+/**
+ * O(1) keep/ignore decision for electron-packager's ignore filter.
+ * The previous implementation scanned the full dependency list for every file
+ * under node_modules (100k+ calls × hundreds of deps), which hung CI packaging.
+ */
+function shouldKeepPackagedPath(filePath) {
+  if (filePath === "") return true;
+  if (filePath === "/package.json") return true;
+  if (filePath === "/node_modules") return true;
+  if (filePath === "/.vite" || filePath.startsWith("/.vite/")) return true;
+  if (filePath === "/dist") return true;
+  if (
+    filePath === "/dist/childprocess" ||
+    filePath.startsWith("/dist/childprocess/")
+  ) {
+    return true;
+  }
+
+  if (!filePath.startsWith("/node_modules/")) return false;
+
+  const relPath = filePath.slice("/node_modules/".length).replace(/\/$/, "");
+  if (relPath === "") return true;
+
+  const segments = relPath.split("/").filter(Boolean);
+  if (segments[0].startsWith("@")) {
+    if (segments.length === 1) {
+      return allowedScopedDirectories.has(segments[0]);
+    }
+    return allowedPackagedModules.has(`${segments[0]}/${segments[1]}`);
+  }
+  return allowedPackagedModules.has(segments[0]);
+}
+
+function createPackagerIgnoreFilter() {
+  const logKeeps = process.env.FORGE_PACKAGER_LOG_KEEPS === "1";
+  return (file) => {
+    const keep = shouldKeepPackagedPath(file.toLowerCase());
+    if (keep && logKeeps) {
+      console.log("Keeping:", file);
+    }
+    return !keep;
+  };
+}
 const EXTERNAL_DEPENDENCIES = [
+  "electron-store",
   "realm",
   "electron-squirrel-startup",
+  "update-electron-app",
   "better-sqlite3",
   "sqlite-vec",
+  "chokidar",
   "puppeteer-cluster",
   "lodash",
   "winston",
@@ -31,17 +106,223 @@ const EXTERNAL_DEPENDENCIES = [
   "openai",
   "typeorm",
   "cheerio",
+  "sanitize-html",
+  "html-to-text",
   "sqlite-vec",
   "canvas",
   "@napi-rs/canvas",
   "reflect-metadata",
   "@mixmark-io/domino",
   "electron-log",
-  "@xenova/transformers",
-  "onnxruntime-node",
-  "onnxruntime-common",
-  "sharp",
+  // Phase 9 slim installer: local-AI inference packages are excluded from the
+  // base app — they ship as downloadable runtimes (PRD FR-16, design §26.7).
+  // "@xenova/transformers", "onnxruntime-node", "onnxruntime-common",
+  // "sharp", "sherpa-onnx-node"
+  // Runtime deps required by the packaged ContactExtractionWorker bundle
+  // (vite.contactExtractionWorker.config.mjs keeps node_modules external).
+  // The worker is spawned with Electron's RUN_AS_NODE runtime, so these must
+  // be present in app.asar/node_modules. Keep in sync with the bundle's
+  // runtime requires (verified by verifyGeneratedRuntimeRequires).
+  "uuid",
+  "adm-zip",
+  "chardet",
+  "cron",
+  "cron-validator",
+  "debug",
+  "diff",
+  "dotenv",
+  "fast-glob",
+  "form-data",
+  "iconv-lite",
+  "imapflow",
+  "isbinaryfile",
+  "mailparser",
+  "mammoth",
+  "node-fetch",
+  "node-machine-id",
+  "papaparse",
+  "pdf-lib",
+  "pdf2md-ts",
+  "picomatch",
+  "turndown",
+  "write-file-atomic",
+  "ws",
+  "xlsx",
+  "zod",
+  "@puppeteer/browsers",
+  // Runtime dependencies emitted by the main and copied Windows bundles.
+  "ajv",
+  "ajv-formats",
+  "puppeteer-core",
+  "winreg",
+  "ejs",
+  "plist",
+  "isolated-vm",
 ];
+// Generated bundles may emit runtime `require(...)` calls for external packages.
+// packageAfterPrune discovers every generated JavaScript bundle instead of relying
+// on a hand-maintained worker allow-list.
+function getGeneratedRuntimeRequireBundles(buildPath) {
+  const bundleRoots = [
+    join(buildPath, ".vite", "build"),
+    join(buildPath, "dist", "childprocess"),
+  ];
+  const bundles = [];
+
+  function collectBundles(directoryPath) {
+    if (!existsSync(directoryPath)) {
+      return;
+    }
+
+    for (const fileName of readdirSync(directoryPath)) {
+      const filePath = join(directoryPath, fileName);
+      if (statSync(filePath).isDirectory()) {
+        collectBundles(filePath);
+      } else if (fileName.endsWith(".js")) {
+        bundles.push(filePath);
+      }
+    }
+  }
+
+  for (const bundleRoot of bundleRoots) {
+    collectBundles(bundleRoot);
+  }
+
+  return bundles;
+}
+const NODE_BUILTINS = new Set([
+  ...builtinModules,
+  ...builtinModules.map((moduleName) => `node:${moduleName}`),
+]);
+
+function getPackageRootName(packageName) {
+  if (packageName.startsWith("@")) {
+    const [scope, name] = packageName.split("/");
+    return name ? `${scope}/${name}` : packageName;
+  }
+  return packageName.split("/")[0];
+}
+
+function removeEmptyDirectories(rootDir) {
+  if (!existsSync(rootDir)) {
+    return;
+  }
+
+  const removeIfEmpty = (dirPath) => {
+    let entries;
+    try {
+      entries = readdirSync(dirPath);
+    } catch {
+      return false;
+    }
+
+    let isEmpty = true;
+    for (const entry of entries) {
+      const entryPath = join(dirPath, entry);
+      let entryStats;
+      try {
+        entryStats = statSync(entryPath);
+      } catch {
+        isEmpty = false;
+        continue;
+      }
+
+      if (entryStats.isDirectory()) {
+        if (!removeIfEmpty(entryPath)) {
+          isEmpty = false;
+        }
+      } else {
+        isEmpty = false;
+      }
+    }
+
+    if (isEmpty && normalize(dirPath) !== normalize(rootDir)) {
+      try {
+        rmdirSync(dirPath);
+        return true;
+      } catch {
+        return false;
+      }
+    }
+
+    return false;
+  };
+
+  removeIfEmpty(rootDir);
+}
+
+function getRuntimePackageName(importId) {
+  if (
+    importId.startsWith(".") ||
+    importId.startsWith("/") ||
+    importId === "electron" ||
+    importId.startsWith("@/") ||
+    NODE_BUILTINS.has(importId)
+  ) {
+    return null;
+  }
+  return getPackageRootName(importId);
+}
+
+function extractRuntimePackageRequires(filePath) {
+  const source = readFileSync(filePath, "utf-8");
+  // Ignore require(...) text embedded in template literals (ajv codegen).
+  const requirePattern = /(?<![`\\])\brequire\(\s*["']([^"']+)["']\s*\)/g;
+  const packageNames = new Set();
+  let match = requirePattern.exec(source);
+  while (match !== null) {
+    const packageName = getRuntimePackageName(match[1]);
+    if (packageName) {
+      packageNames.add(packageName);
+    }
+    match = requirePattern.exec(source);
+  }
+  return packageNames;
+}
+
+function hasPackagedNodeModule(buildPath, packageName) {
+  return existsSync(
+    join(buildPath, "node_modules", ...packageName.split("/"), "package.json")
+  );
+}
+
+function verifyGeneratedRuntimeRequires(buildPath) {
+  const missing = [];
+
+  for (const bundlePath of getGeneratedRuntimeRequireBundles(buildPath)) {
+    const bundleFile = path.basename(bundlePath);
+    for (const packageName of extractRuntimePackageRequires(bundlePath)) {
+      if (!hasPackagedNodeModule(buildPath, packageName)) {
+        missing.push(`${bundleFile}: ${packageName}`);
+      }
+    }
+  }
+
+  if (missing.length > 0) {
+    throw new Error(
+      `Packaged app is missing runtime dependencies required by generated bundles: ${missing.join(
+        ", "
+      )}. Add the package root to EXTERNAL_DEPENDENCIES in forge.config.js.`
+    );
+  }
+}
+
+function verifyStagedRendererHtml(buildPath) {
+  const rendererHtmlPath = join(buildPath, PACKAGED_RENDERER_HTML_RELATIVE);
+  if (!existsSync(rendererHtmlPath)) {
+    throw new Error(
+      `Packaged app is missing renderer HTML: ${rendererHtmlPath}. ` +
+        "The Windows app will fail at startup with BrowserWindow.loadFile ERR_FAILED (-2)."
+    );
+  }
+  if (readFileSync(rendererHtmlPath, "utf-8").trim().length === 0) {
+    throw new Error(
+      `Packaged app has empty renderer HTML: ${rendererHtmlPath}. ` +
+        "The Windows app will fail at startup with BrowserWindow.loadFile ERR_FAILED (-2)."
+    );
+  }
+}
+
 //import { ForgeConfig } from '@electron-forge/shared-types';
 // import { AutoUnpackNativesPlugin } from "@electron-forge/plugin-auto-unpack-natives";
 // Base .env (CI writes this), then mode-specific overrides e.g. .env.test for NODE_ENV=test.
@@ -49,6 +330,83 @@ const EXTERNAL_DEPENDENCIES = [
 dotenv.config({ path: path.resolve(__dirname, ".env") });
 const env = process.env.NODE_ENV || "development";
 dotenv.config({ path: path.resolve(__dirname, `.env.${env}`) });
+
+const isProductionBuild = env === "production";
+const isWindowsStoreBuild = process.env.WINDOWS_DISTRIBUTION === "store";
+const isMacStoreBuild = process.env.MAC_DISTRIBUTION === "store";
+const shouldBuildMacDmg = process.env.MAKE_MAC_DMG !== "false";
+const macStoreEntitlementsPath = path.resolve(
+  __dirname,
+  "build/entitlements.mas.plist"
+);
+const macStoreChildEntitlementsPath = path.resolve(
+  __dirname,
+  "build/entitlements.mas.inherit.plist"
+);
+
+function resolveProductionAsarConfig() {
+  return {
+    // .vite/build holds vec0.* + worker bundles — must be real disk (spawn/dlopen).
+    // Do NOT unpack .vite/renderer: Chromium loadFile fails with ERR_FAILED (-2) when
+    // index.html is only on the app.asar.unpacked mirror but loaded via the app.asar
+    // virtual path (Windows packaged startup crash). Keep the renderer inside asar.
+    // Phase 9 slim installer: only the database natives (better-sqlite3, sqlite-vec)
+    // are unpacked besides .vite/build workers. AI inference natives ship as
+    // downloadable runtimes (PRD FR-16, design §26.7).
+    //
+    // IMPORTANT: @electron/asar matches unpackDir against the *directory* of each file
+    // (path.dirname), not the file path. Patterns like "**/dist/childprocess/**" do NOT
+    // match the directory "dist/childprocess" itself, so workers that live directly in
+    // that folder stay packed. Include both the directory and its descendants.
+    unpackDir:
+      "{**/.vite/build,**/.vite/build/**,**/dist/childprocess,**/dist/childprocess/**,**/node_modules/better-sqlite3,**/node_modules/better-sqlite3/**,**/node_modules/sqlite-vec,**/node_modules/sqlite-vec/**}",
+    unpack: "**/vec0.*",
+  };
+}
+
+/** CI smoke packaging: unpacked resources/app layout avoids ASAR finalize OOM on GHA. */
+function usesUnpackedCiPackageLayout() {
+  return process.env.FORGE_DISABLE_ASAR === "1";
+}
+const windowsCertificatePath = path.resolve(__dirname, "cert.pfx");
+
+function requireProductionEnv(name) {
+  const value = process.env[name];
+  if (!value) {
+    throw new Error(
+      `Production packaging requires the ${name} environment variable.`
+    );
+  }
+  return value;
+}
+
+function resolveMacStoreProvisioningProfile() {
+  const configuredPath = requireProductionEnv("MAC_STORE_PROVISIONING_PROFILE");
+  const profilePath = path.resolve(__dirname, configuredPath);
+  if (!existsSync(profilePath)) {
+    throw new Error(
+      `Mac App Store packaging requires an existing provisioning profile: ${profilePath}`
+    );
+  }
+  return profilePath;
+}
+
+function resolveMacStoreSigningType() {
+  return process.env.MAC_STORE_SIGNING_TYPE || "development";
+}
+
+function isMainApplicationBundle(filePath) {
+  return filePath.endsWith(".app") && !filePath.includes(".app/Contents/");
+}
+
+if (isProductionBuild && process.platform === "win32" && !isWindowsStoreBuild) {
+  if (!existsSync(windowsCertificatePath)) {
+    throw new Error(
+      "Production Windows packaging requires cert.pfx. Restore it from a CI secret before running Electron Forge."
+    );
+  }
+  requireProductionEnv("CERTIFICATE_PASSWORD");
+}
 
 function ensureBetterSqliteElectronBinary() {
   const scriptPath = join(__dirname, "scripts", "rebuild-better-sqlite.js");
@@ -67,64 +425,141 @@ function ensureBetterSqliteElectronBinary() {
   }
 }
 
+/**
+ * Patches node-abi's abi_registry.json with missing Electron ABI entries
+ * (41-44) so @electron/rebuild can resolve Electron 43.x. See
+ * scripts/patch-node-abi.js for the full rationale. Runs as a safety net in
+ * the prePackage hook for cases where electron-forge is launched directly
+ * (e.g. from VS Code/Cursor), bypassing the npm `prepackage` script.
+ */
+function ensureNodeAbiPatched() {
+  const scriptPath = join(__dirname, "scripts", "patch-node-abi.js");
+  const result = spawnSync(process.execPath, [scriptPath], {
+    cwd: __dirname,
+    stdio: "inherit",
+  });
+
+  if (result.error) {
+    throw result.error;
+  }
+  if (result.status !== 0) {
+    throw new Error(`node-abi patch failed with exit code ${result.status}`);
+  }
+}
+
+/**
+ * Patches @electron-forge/core-utils' forked `remote-rebuild.js` to no-op when
+ * FORGE_SKIP_NATIVE_REBUILD=1 is set, so the packaging-time "Preparing native
+ * dependencies" step does not perform @electron/rebuild's full dependency-graph
+ * walk (which stalls the CI smoke runner even though the empty onlyModules
+ * list compiles nothing). See scripts/patch-remote-rebuild.js for the full rationale. Runs as
+ * a safety net in the prePackage hook for direct electron-forge invocations.
+ */
+function ensureRemoteRebuildPatched() {
+  const scriptPath = join(__dirname, "scripts", "patch-remote-rebuild.js");
+  const result = spawnSync(process.execPath, [scriptPath], {
+    cwd: __dirname,
+    stdio: "inherit",
+  });
+
+  if (result.error) {
+    throw result.error;
+  }
+  if (result.status !== 0) {
+    throw new Error(
+      `remote-rebuild patch failed with exit code ${result.status}`
+    );
+  }
+}
+
+function fixInteropNamespaceDefault(viteBuildDir) {
+  const fs = require("fs");
+
+  if (!existsSync(viteBuildDir)) {
+    return;
+  }
+
+  const files = fs.readdirSync(viteBuildDir);
+  for (const file of files) {
+    if (file.startsWith("background") && file.endsWith(".js")) {
+      const filePath = join(viteBuildDir, file);
+      let content = fs.readFileSync(filePath, "utf-8");
+
+      // Fix: d.get ? d : -> d && d.get ? d : (handles undefined property descriptors)
+      const originalContent = content;
+      content = content.replace(
+        /Object\.defineProperty\((\w),(\w),(\w)\.get\?(\w):/g,
+        "Object.defineProperty($1,$2,$3&&$3.get?$4:"
+      );
+
+      if (content !== originalContent) {
+        fs.writeFileSync(filePath, content);
+        console.log("Fixed _interopNamespaceDefault in:", filePath);
+      }
+    }
+  }
+}
+
+function copyBuiltChildProcesses(buildPath) {
+  const sourcePath = join(__dirname, "dist", "childprocess");
+  if (!existsSync(sourcePath)) {
+    console.warn(
+      `No built childprocess directory found at ${sourcePath}; skipping package copy.`
+    );
+    return;
+  }
+
+  const targetPath = join(buildPath, "dist", "childprocess");
+  cpSync(sourcePath, targetPath, { recursive: true });
+  console.log(`Copied built childprocess files into package: ${targetPath}`);
+}
+
 module.exports = {
   packagerConfig: {
+    appBundleId: "com.aifetchly.desktop",
     icon: "./src/assets/images/icon",
-    // asar: {
-    //   // This ensures native modules are unpacked
-    //   unpack: "**/node_modules/better-sqlite3/**",
-
-    // },
-    asar: {
-      // .vite/build holds vec0.* copied by Vite; node_modules holds native deps — both must be real disk.
-      // @xenova/transformers + onnxruntime-* + sharp ship native/WASM/.so artifacts that cannot load
-      // from inside app.asar, so they must be unpacked alongside better-sqlite3/sqlite-vec.
-      unpackDir:
-        "**/{.vite,node_modules/better-sqlite3,node_modules/sqlite-vec,node_modules/@xenova/transformers,node_modules/onnxruntime-node,node_modules/onnxruntime-common,node_modules/sharp}/**",
-      unpack: "**/vec0.*",
-    },
-    ignore: (file) => {
-      const filePath = file.toLowerCase();
-      const KEEP_FILE = {
-        keep: false,
-        log: true,
-      };
-      // NOTE: must return false for empty string or nothing will be packaged
-      if (filePath === "") KEEP_FILE.keep = true;
-      if (!KEEP_FILE.keep && filePath === "/package.json")
-        KEEP_FILE.keep = true;
-      if (!KEEP_FILE.keep && filePath === "/node_modules")
-        KEEP_FILE.keep = true;
-      if (!KEEP_FILE.keep && filePath === "/.vite") KEEP_FILE.keep = true;
-      if (!KEEP_FILE.keep && filePath.startsWith("/.vite/"))
-        KEEP_FILE.keep = true;
-      if (!KEEP_FILE.keep && filePath.startsWith("/node_modules/")) {
-        // check if matches any of the external dependencies
-        for (const dep of nativeModuleDependenciesToPackage) {
-          if (
-            filePath === `/node_modules/${dep}/` ||
-            filePath === `/node_modules/${dep}`
-          ) {
-            KEEP_FILE.keep = true;
-            break;
+    ...(isProductionBuild && process.platform === "darwin"
+      ? isMacStoreBuild
+        ? {
+            osxSign: {
+              identity: requireProductionEnv("MAC_STORE_SIGNING_IDENTITY"),
+              type: resolveMacStoreSigningType(),
+              provisioningProfile: resolveMacStoreProvisioningProfile(),
+              optionsForFile: (filePath) => ({
+                entitlements: isMainApplicationBundle(filePath)
+                  ? macStoreEntitlementsPath
+                  : macStoreChildEntitlementsPath,
+              }),
+            },
           }
-          if (filePath === `/node_modules/${dep}/package.json`) {
-            KEEP_FILE.keep = true;
-            break;
+        : {
+            osxSign: {},
+            osxNotarize: {
+              appleId: requireProductionEnv("APPLE_ID"),
+              appleIdPassword: requireProductionEnv(
+                "APPLE_APP_SPECIFIC_PASSWORD"
+              ),
+              teamId: requireProductionEnv("APPLE_TEAM_ID"),
+            },
           }
-          if (filePath.startsWith(`/node_modules/${dep}/`)) {
-            KEEP_FILE.keep = true;
-            KEEP_FILE.log = false;
-            break;
-          }
+      : {}),
+    ...(isProductionBuild &&
+    process.platform === "win32" &&
+    !isWindowsStoreBuild
+      ? {
+          windowsSign: {
+            certificateFile: windowsCertificatePath,
+            certificatePassword: requireProductionEnv("CERTIFICATE_PASSWORD"),
+          },
         }
-      }
-      if (KEEP_FILE.keep) {
-        if (KEEP_FILE.log) console.log("Keeping:", file);
+      : {}),
+    get asar() {
+      if (usesUnpackedCiPackageLayout()) {
         return false;
       }
-      return true;
+      return resolveProductionAsarConfig();
     },
+    ignore: createPackagerIgnoreFilter(),
     // ignore: [
     //   /node_modules\/(?!(better-sqlite3|bindings|file-uri-to-path)\/)/,
     // ],
@@ -135,81 +570,83 @@ module.exports = {
     // isolated-vm@6.1.2 fails to compile against Electron 35 V8 13.5 headers
     // (known upstream issue: laverdet/isolated-vm#528). Exclude it from rebuild
     // so Forge startup is not blocked; the pre-built Node.js binary is used instead.
-    onlyModules: ["better-sqlite3", "bufferutil", "utf-8-validate", "keytar"],
+    //
+    // FORGE_SKIP_NATIVE_REBUILD=1 (set by the CI package-smoke job) skips the
+    // packaging-time rebuild entirely. That job runs rebuild-native first, so
+    // better-sqlite3 is already built for Electron before node_modules is
+    // copied; re-rebuilding during "Preparing native dependencies" is redundant
+    // and has been observed to stall the smoke build. The smoke test only
+    // verifies packaged worker files, not native module loading at runtime.
+    //
+    // NOTE: an empty onlyModules array alone is NOT enough to skip the work —
+    // it is truthy in @electron/rebuild's ModuleWalker, so it still walks the
+    // entire dependency graph and scans every nested node_modules (only the
+    // final compile is skipped). That walk is what stalled the CI runner. The
+    // true skip is delivered by scripts/patch-remote-rebuild.js (wired via
+    // postinstall + prePackage), which makes the forked remote-rebuild worker
+    // exit immediately when this env var is set. The empty array here is kept
+    // as a secondary guard so nothing compiles even if the patch is absent.
+    onlyModules:
+      process.env.FORGE_SKIP_NATIVE_REBUILD === "1"
+        ? []
+        : ["better-sqlite3", "bufferutil", "utf-8-validate", "keytar"],
   },
   makers: [
-    {
-      name: "@electron-forge/maker-squirrel",
-      config: {
-        name: process.env.APP_NAME || "aiFetchly",
-        certificateFile: "./cert.pfx",
-        certificatePassword: process.env.CERTIFICATE_PASSWORD,
-        // iconUrl should be a valid HTTP/HTTPS URL, not a local path
-        // iconUrl: './src/assets/images/icon.png',
-        setupIcon: "./src/assets/images/icon.ico",
-        // Custom installer options
-        // loadingGif should be a valid HTTP/HTTPS URL, not a local path
-        // loadingGif: './src/assets/images/installer-loading.gif', // Optional: Add a loading gif
-        setupExe: "aiFetchlySetup.exe",
-        // Allow users to choose installation directory
-        allowDirectorySelection: true,
-        // Create desktop shortcut
-        createDesktopIcon: true,
-        // Create start menu shortcut
-        createStartMenuShortcut: true,
-        // Install for all users (requires admin)
-        installForAllUsers: false,
-        // Custom installation directory
-        defaultInstallLocation: "%LOCALAPPDATA%\\aiFetchly",
-        // Additional options
-        noMsi: true,
-        // Custom installer text
-        title: "aiFetchly Installer",
-        description: "Install aiFetchly application",
-        authors: "Robert Zeng",
-        // Registry entries for uninstall
-        registry: {
-          key: "Software\\aiFetchly",
-          name: "InstallLocation",
-        },
-        // Uninstall configuration
-        uninstallIcon: "./src/assets/images/icon.ico",
-        // Custom uninstall script
-        uninstallScript: "./installer-scripts/uninstall-windows.js",
-        // Include uninstaller in the installer
-        extraFiles: [
+    // Microsoft Store submissions are unsigned MSIX packages. Partner Center
+    // re-signs the package after certification, so no PFX belongs in this path.
+    ...(isWindowsStoreBuild
+      ? [
           {
-            src: "./installer-scripts/uninstall.exe",
-            dest: "uninstall.exe",
+            name: "@electron-forge/maker-msix",
+            platforms: ["win32"],
+            config: {
+              sign: false,
+              // Build with the current Windows SDK while retaining compatibility
+              // with the oldest Windows release accepted by Partner Center.
+              windowsKitVersion: "10.0.26100.0",
+              manifestVariables: {
+                packageIdentity: requireProductionEnv(
+                  "WINDOWS_STORE_PACKAGE_IDENTITY"
+                ),
+                publisher: requireProductionEnv("WINDOWS_STORE_PUBLISHER"),
+                publisherDisplayName: requireProductionEnv(
+                  "WINDOWS_STORE_PUBLISHER_DISPLAY_NAME"
+                ),
+                packageVersion: `${require("./package.json").version}.0`,
+                packageDisplayName: "AiFetchly",
+                appDisplayName: "AiFetchly",
+                packageMinOSVersion: "10.0.17763.0",
+                packageMaxOSVersionTested: "10.0.26100.0",
+              },
+            },
           },
-        ],
-        // Post-installation script to copy uninstaller
-        postInstallScript: "./installer-scripts/copy-uninstaller.js",
-        // Create uninstaller registry entry
-        uninstallDisplayName: "aiFetchly",
-        uninstallString: "%LOCALAPPDATA%\\aiFetchly\\uninstall.exe",
-      },
-    },
+        ]
+      : []),
+    // Direct Windows distribution: WiX MSI, signed only for production.
     {
       name: "@electron-forge/maker-zip",
       platforms: ["darwin"],
     },
-    {
-      name: "@electron-forge/maker-dmg",
-      config: {
-        format: "ULFO",
-        icon: "./src/assets/images/icon.icns",
-        // Note: background image removed to prevent build failures
-        // If needed, create src/assets/images/dmg-background.png and uncomment below
-        // background: "./src/assets/images/dmg-background.png",
-        // contents array removed - using electron-forge defaults
-        // Defaults will place the app and a link to /Applications automatically
-        window: {
-          width: 540,
-          height: 380,
-        },
-      },
-    },
+    ...(shouldBuildMacDmg
+      ? [
+          {
+            name: "@electron-forge/maker-dmg",
+            config: {
+              format: "ULFO",
+              icon: "./src/assets/images/icon.icns",
+              // Note: background image removed to prevent build failures
+              // If needed, create src/assets/images/dmg-background.png and uncomment below
+              // background: "./src/assets/images/dmg-background.png",
+              // contents array removed - using electron-forge defaults
+              // Defaults will place the app and a link to /Applications automatically
+              window: {
+                width: 540,
+                height: 380,
+              },
+            },
+          },
+        ]
+      : []),
     {
       name: "@electron-forge/maker-deb",
       config: {
@@ -301,6 +738,14 @@ module.exports = {
     {
       name: "@electron-forge/maker-wix",
       config: {
+        ...(isProductionBuild &&
+        process.platform === "win32" &&
+        !isWindowsStoreBuild
+          ? {
+              certificateFile: windowsCertificatePath,
+              certificatePassword: requireProductionEnv("CERTIFICATE_PASSWORD"),
+            }
+          : {}),
         language: 1033,
         manufacturer: "Robert Zeng",
         icon: "./src/assets/images/icon.ico",
@@ -320,11 +765,6 @@ module.exports = {
         createStartMenuShortcut: true,
         // Install for all users
         //perMachine: false,
-        // Custom images for installer
-        images: {
-          background: "./src/assets/images/installer-background-493x312.bmp",
-          banner: "./src/assets/images/installer-banner-493x58.bmp",
-        },
         // Additional features
         features: {
           // Main application feature
@@ -349,14 +789,52 @@ module.exports = {
       },
     },
   ],
-  plugins: [
+  // GitHub Releases publisher for Forge-native publishing (`yarn publish` /
+  // `electron-forge publish`). NOTE: CI does NOT use this — it builds with
+  // `electron-forge make` and publishes via the publish-github-release job in
+  // .github/workflows/release.yml for explicit artifact validation. This block
+  // enables local/forge-native publishing to the same repo. `draft: true` keeps
+  // new releases invisible to update.electronjs.org until manually published.
+  publishers: [
     {
-      name: "@electron-forge/plugin-auto-unpack-natives",
-      config: {},
+      name: "@electron-forge/publisher-github",
+      config: {
+        repository: {
+          owner: "robertzengcn",
+          name: "aiFetchly",
+        },
+        draft: true,
+        prerelease: false,
+      },
     },
+  ],
+  plugins: [
+    ...(usesUnpackedCiPackageLayout()
+      ? []
+      : [
+          {
+            name: "@electron-forge/plugin-auto-unpack-natives",
+            config: {},
+          },
+        ]),
     {
       name: "@electron-forge/plugin-vite",
       config: {
+        // By default plugin-vite runs every build target concurrently
+        // (see @electron-forge/plugin-vite VitePlugin.js: `concurrent ?? true`).
+        // On resource-constrained CI runners (2 vCPU / 7 GB) running 17 Vite
+        // bundles in parallel exhausts memory, leaving the heaviest targets
+        // (main, renderer, taskCode, and the puppeteer-bundling worker builds)
+        // stuck — `yarn package` then hangs until the runner is shut down
+        // (this started once the YellowPagesScraperProcess target was added,
+        // pushing the concurrent count past what the runner can sustain).
+        // Limit parallelism on CI; keep full concurrency for local dev where
+        // host resources are typically ample. concurrent=4 still OOMs
+        // ubuntu-latest (7 GB) during yarn package — runner shutdown mid-build.
+        // Override with ELECTRON_FORGE_VITE_CONCURRENT when needed.
+        concurrent: process.env.CI
+          ? Number(process.env.ELECTRON_FORGE_VITE_CONCURRENT ?? 2)
+          : true,
         // `build` can specify multiple entry builds, which can be
         // Main process, Preload scripts, Worker process, etc.
         build: [
@@ -381,6 +859,10 @@ module.exports = {
           {
             entry: "src/childprocess/YellowPagesScraper.ts",
             config: "vite.yellowPages.config.mjs",
+          },
+          {
+            entry: "src/childprocess/YellowPagesScraperProcess.ts",
+            config: "vite.yellowPagesScraperProcess.config.mjs",
           },
           {
             entry: "src/childprocess/websiteContentScraper.ts",
@@ -428,6 +910,14 @@ module.exports = {
             entry: "src/childprocess/embedding/LocalEmbeddingWorker.ts",
             config: "vite.localEmbeddingWorker.config.mjs",
           },
+          {
+            entry: "src/childprocess/ai-chat-voice/AiChatVoiceWorker.ts",
+            config: "vite.aiChatVoiceWorker.config.mjs",
+          },
+          {
+            entry: "src/childprocess/local-ai-runtime/RuntimeProbeWorker.ts",
+            config: "vite.runtimeProbeWorker.config.mjs",
+          },
         ],
         renderer: [
           {
@@ -443,57 +933,14 @@ module.exports = {
     preStart: async () => {
       ensureBetterSqliteElectronBinary();
     },
-    postPackage: async (forgeConfig, options) => {
-      // Copy uninstaller to the packaged application
-      const {
-        postInstallHook,
-      } = require("./installer-scripts/post-install-hook.js");
-
-      console.log("Running post-package hook...");
-      console.log("Output directory:", options.outputPaths[0]);
-
-      // Set the installation directory to the output directory
-      process.env.INSTALLDIR = options.outputPaths[0];
-
-      const success = postInstallHook();
-      if (success) {
-        console.log("✅ Uninstaller copied to packaged application");
-      } else {
-        console.log("❌ Failed to copy uninstaller to packaged application");
-      }
-    },
     prePackage: async () => {
+      // Patch node-abi before @electron/rebuild runs so it can resolve
+      // Electron 43.x. Safety net for direct electron-forge invocations.
+      ensureNodeAbiPatched();
+      ensureRemoteRebuildPatched();
+
       const projectRoot = normalize(__dirname);
 
-      // Fix _interopNamespaceDefault function to handle undefined property descriptors
-      // This fixes the "Cannot read properties of undefined (reading 'get')" error
-      const viteBuildDir = join(projectRoot, ".vite", "build");
-      const fs = require("fs");
-      const path = require("path");
-
-      try {
-        const files = fs.readdirSync(viteBuildDir);
-        for (const file of files) {
-          if (file.startsWith("background") && file.endsWith(".js")) {
-            const filePath = path.join(viteBuildDir, file);
-            let content = fs.readFileSync(filePath, "utf-8");
-
-            // Fix: d.get ? d : -> d && d.get ? d : (handles undefined property descriptors)
-            const originalContent = content;
-            content = content.replace(
-              /Object\.defineProperty\((\w),(\w),(\w)\.get\?(\w):/g,
-              "Object.defineProperty($1,$2,$3&&$3.get?$4:"
-            );
-
-            if (content !== originalContent) {
-              fs.writeFileSync(filePath, content);
-              console.log("✅ Fixed _interopNamespaceDefault in:", file);
-            }
-          }
-        }
-      } catch (err) {
-        console.error("Failed to fix interop namespace:", err);
-      }
       const getExternalNestedDependencies = async (
         nodeModuleNames,
         includeNestedDeps = true
@@ -514,17 +961,39 @@ module.exports = {
             await walker.walkDependenciesForModule(moduleRoot, DepType.PROD);
             walker.modules
               .filter((dep) => dep.nativeModuleType === DepType.PROD)
-              // for a package like '@realm/fetch', need to split the path and just take the first part
-              .map((dep) => dep.name.split("/")[0])
+              .map((dep) => getPackageRootName(dep.name))
               .forEach((name) => foundModules.add(name));
           }
         }
         return foundModules;
       };
-      const nativeModuleDependencies = await getExternalNestedDependencies(
-        EXTERNAL_DEPENDENCIES
-      );
-      nativeModuleDependenciesToPackage = Array.from(nativeModuleDependencies);
+      // FORGE_SKIP_NATIVE_REBUILD=1 (set by the CI package-smoke job) also skips
+      // this prePackage dependency-graph walk. The walk uses @electron-forge
+      // core-utils' Walker to recursively realpath-scan every EXTERNAL_DEPENDENCIES
+      // subtree (puppeteer, typeorm, canvas, ...) to discover nested native
+      // deps and add them to the packager keep-list. On the constrained CI
+      // runner this same full-graph walk (mirroring the @electron/rebuild walk
+      // scripts/patch-remote-rebuild.js already no-ops) can stall packaging
+      // before it reaches "Copying files". The smoke test only verifies packaged
+      // worker files + renderer HTML layout — it never loads native binaries at
+      // runtime — so the static EXTERNAL_DEPENDENCIES allow-list (which already
+      // lists every direct native dep) is sufficient. Mirrors the
+      // FORGE_SKIP_NATIVE_REBUILD skip rationale in scripts/patch-remote-rebuild.js.
+      if (process.env.FORGE_SKIP_NATIVE_REBUILD === "1") {
+        nativeModuleDependenciesToPackage = Array.from(EXTERNAL_DEPENDENCIES);
+      } else {
+        const nativeModuleDependencies = await getExternalNestedDependencies(
+          EXTERNAL_DEPENDENCIES
+        );
+        nativeModuleDependenciesToPackage = Array.from(
+          nativeModuleDependencies
+        );
+      }
+      rebuildPackagerAllowLists(nativeModuleDependenciesToPackage);
+    },
+    packageAfterCopy: async (_forgeConfig, buildPath) => {
+      fixInteropNamespaceDefault(join(buildPath, ".vite", "build"));
+      copyBuiltChildProcesses(buildPath);
     },
     //   packageAfterPrune: async (_config, buildPath) => {
     //     const gypPath = path.join(
@@ -546,58 +1015,9 @@ module.exports = {
 
     //  }
     packageAfterPrune: async (_forgeConfig, buildPath) => {
-      function getItemsFromFolder(path, totalCollection = []) {
-        try {
-          const normalizedPath = normalize(path);
-          const childItems = readdirSync(normalizedPath);
-          const getItemStats = statSync(normalizedPath);
-          if (getItemStats.isDirectory()) {
-            totalCollection.push({
-              path: normalizedPath,
-              type: "directory",
-              empty: childItems.length === 0,
-            });
-          }
-          childItems.forEach((childItem) => {
-            const childItemNormalizedPath = join(normalizedPath, childItem);
-            const childItemStats = statSync(childItemNormalizedPath);
-            if (childItemStats.isDirectory()) {
-              getItemsFromFolder(childItemNormalizedPath, totalCollection);
-            } else {
-              totalCollection.push({
-                path: childItemNormalizedPath,
-                type: "file",
-                empty: false,
-              });
-            }
-          });
-        } catch {
-          return;
-        }
-        return totalCollection;
-      }
-
-      const getItems = getItemsFromFolder(buildPath) ?? [];
-      for (const item of getItems) {
-        const DELETE_EMPTY_DIRECTORIES = true;
-        if (item.empty === true) {
-          if (DELETE_EMPTY_DIRECTORIES) {
-            const pathToDelete = normalize(item.path);
-            // one last check to make sure it is a directory and is empty
-            const stats = statSync(pathToDelete);
-            if (!stats.isDirectory()) {
-              // SKIPPING DELETION: pathToDelete is not a directory
-              return;
-            }
-            const childItems = readdirSync(pathToDelete);
-            if (childItems.length !== 0) {
-              // SKIPPING DELETION: pathToDelete is not empty
-              return;
-            }
-            rmdirSync(pathToDelete);
-          }
-        }
-      }
+      removeEmptyDirectories(buildPath);
+      verifyStagedRendererHtml(buildPath);
+      verifyGeneratedRuntimeRequires(buildPath);
     },
   },
 };

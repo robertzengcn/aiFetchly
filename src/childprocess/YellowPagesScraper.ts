@@ -19,6 +19,7 @@
 import { Page, Browser, ElementHandle, Frame } from "puppeteer";
 import { log } from "@/modules/Logger";
 import type { LaunchOptions } from "puppeteer";
+import sanitizeHtml from "sanitize-html";
 import type { YellowPagesTaskProxyConfig } from "@/entityTypes/yellowPagesTaskProxyType";
 import { buildPuppeteerProxyLaunchPieces } from "@/utils/yellowPagesProxyLaunch";
 import { yellowPagesScraperInboundSchema } from "@/schemas/worker/yellowPagesScraper";
@@ -372,28 +373,40 @@ export class YellowPagesScraper {
   ): string {
     if (html.length <= maxBytes) return html;
 
-    let out = html
-      .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "")
-      .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, "")
-      .replace(/<noscript\b[^>]*>[\s\S]*?<\/noscript>/gi, "")
-      .replace(/<svg\b[^>]*>[\s\S]*?<\/svg>/gi, "")
-      .replace(/<iframe\b[^>]*>[\s\S]*?<\/iframe>/gi, "")
-      .replace(/<!--[\s\S]*?-->/g, "");
+    // Use sanitize-html to safely strip dangerous tags and attributes in one pass
+    let out = sanitizeHtml(html, {
+      allowedTags: [
+        "h1", "h2", "h3", "h4", "h5", "h6", "p", "br", "hr",
+        "ul", "ol", "li", "dl", "dt", "dd",
+        "table", "thead", "tbody", "tfoot", "tr", "td", "th", "caption", "colgroup", "col",
+        "div", "span", "section", "article", "aside", "header", "footer", "nav", "main",
+        "pre", "code", "blockquote", "cite", "em", "strong", "b", "i", "u", "s", "small", "sub", "sup",
+        "a", "img", "figure", "figcaption",
+        "abbr", "address", "bdi", "bdo", "del", "dfn", "ins", "kbd", "mark", "q", "rp", "rt", "ruby", "s", "samp", "time", "var", "wbr",
+        "details", "summary",
+        "input", "select", "option", "textarea", "label", "fieldset", "legend",
+        "audio", "video", "source", "picture",
+        "map", "area",
+      ],
+      allowedAttributes: {
+        "*": ["class", "id", "title", "role", "aria-label", "tabindex"],
+        "a": ["href", "target", "rel"],
+        "img": ["src", "alt", "width", "height", "loading"],
+        "td": ["colspan", "rowspan"],
+        "th": ["colspan", "rowspan", "scope"],
+        "input": ["type", "name", "value", "placeholder", "checked", "disabled"],
+        "select": ["name", "disabled"],
+        "option": ["value", "selected", "disabled"],
+        "textarea": ["name", "rows", "cols", "disabled"],
+      },
+    });
 
-    // Remove elements with display:none (hidden menus, modals, etc.)
-    out = out.replace(
-      /<(\w+)\b[^>]*style\s*=\s*["'][^"']*display\s*:\s*none[^"']*["'][^>]*>[\s\S]*?<\/\1>/gi,
-      ""
-    );
-
-    // Remove data-* attributes (data-bind, data-menu-id, etc.)
-    out = out.replace(/\s+data-[\w-]+=["'][^"']*["']/gi, "");
-    out = out.replace(/\s+data-[\w-]+=\S+/gi, "");
-    // Remove inline event handlers
-    out = out.replace(/\s+on\w+=["'][^"']*["']/gi, "");
-    out = out.replace(/\s+on\w+=\S+/gi, "");
-    // Remove style attributes
-    out = out.replace(/\s+style=["'][^"']*["']/gi, "");
+    // Remove HTML comments (loop to handle nested/overlapping cases)
+    let prevComments: string;
+    do {
+      prevComments = out;
+      out = out.replace(/<!--[\s\S]*?-->/g, "");
+    } while (out !== prevComments);
 
     // Collapse whitespace
     out = out
@@ -1451,8 +1464,10 @@ export class YellowPagesScraper {
 
   /**
    * Pause the scraping process
+   * @param options.suppressUiNotify Skip the frontend system-message toast
+   *   (used for captcha/Cloudflare auto-pauses).
    */
-  async pause(): Promise<void> {
+  async pause(options?: { suppressUiNotify?: boolean }): Promise<void> {
     if (this.isPaused) return;
 
     log.info(`Pausing Yellow Pages scraping for task ${this.taskData.taskId}`);
@@ -1469,6 +1484,7 @@ export class YellowPagesScraper {
         type: "TASK_PAUSED",
         taskId: this.taskData.taskId,
         content: "Task has been paused successfully",
+        suppressUiNotify: options?.suppressUiNotify === true,
       };
       parentPortLocal.postMessage(pauseMessage);
     }
@@ -2231,7 +2247,7 @@ export class YellowPagesScraper {
         }
         // Check if robot verification was detected and paused the task
         // if (!this.isRunning) {
-        //     console.log(`Task ${this.taskData.taskId} stopped due to robot verification challenge`);
+        //     log.info(`Task ${this.taskData.taskId} stopped due to robot verification challenge`);
         //     break;
         // }
 
@@ -6505,12 +6521,14 @@ The initial deterministic filling did not succeed for ${
           parentPortLocal3.postMessage(robotVerificationMessage);
         }
 
-        // Pause the scraping process
-        log.info("⏸️ Pausing scraping due to robot verification challenge...");
-        this.pause();
+        // Pause without UI toast — captcha/robot blocks should stay silent in UI
+        log.info(
+          "⏸️ Pausing scraping due to robot verification challenge..."
+        );
+        this.pause({ suppressUiNotify: true });
 
         log.info(
-          "✅ Robot verification detection notification sent to parent process"
+          "✅ Robot verification pause signaled to parent process (no UI notify)"
         );
       }
     } catch (error) {
@@ -6609,13 +6627,13 @@ The initial deterministic filling did not succeed for ${
         log.info("     - Reduce scraping frequency");
         log.info("     - Check if manual access works in browser");
 
-        // Pause the scraping process due to Cloudflare protection
+        // Pause without UI toast — Cloudflare blocks should stay silent in UI
         if (this.isRunning) {
           log.info(
             "⏸️ Pausing scraping process due to Cloudflare protection..."
           );
           try {
-            await this.pause();
+            await this.pause({ suppressUiNotify: true });
             log.info(
               "✅ Scraping paused successfully due to Cloudflare protection"
             );

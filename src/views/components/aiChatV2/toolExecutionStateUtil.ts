@@ -1,5 +1,8 @@
 import { MessageType } from "@/entityTypes/commonType";
-import type { ChatV2MessageView } from "@/entityTypes/aiChatV2Types";
+import type {
+  ChatV2MessageMetadata,
+  ChatV2MessageView,
+} from "@/entityTypes/aiChatV2Types";
 import { isPlanToolName } from "@/service/PlanModeToolPolicy";
 import { isEnterPlanModeToolName } from "@/service/EnterPlanModeTool";
 
@@ -41,4 +44,71 @@ export const hasPendingToolExecution = (
   }
 
   return pendingToolCallIds.size > 0 || anonymousToolCalls > 0;
+};
+
+export const clearToolProgressForToolResult = (
+  messages: ChatV2MessageView[],
+  toolCallId: string | undefined
+): ChatV2MessageView[] => {
+  if (!toolCallId) return messages;
+
+  let cleared = false;
+  const nextMessages = messages.map((message) => {
+    if (
+      message.messageType !== MessageType.TOOL_CALL ||
+      message.metadata?.toolCallId !== toolCallId ||
+      !message.metadata.toolProgress
+    ) {
+      return message;
+    }
+
+    const metadata: ChatV2MessageMetadata = { ...message.metadata };
+    delete metadata.toolProgress;
+    cleared = true;
+
+    return {
+      ...message,
+      metadata,
+    };
+  });
+
+  return cleared ? nextMessages : messages;
+};
+
+/**
+ * Replace an approved permission card with a non-interactive running state.
+ * Long-running tools can take minutes after approval; keeping the approval
+ * button spinning for that whole interval incorrectly implies that the click
+ * itself is stuck. The final streamed tool result replaces this local state.
+ */
+export const markPermissionPromptExecuting = (
+  messages: ChatV2MessageView[],
+  messageId: string
+): ChatV2MessageView[] => {
+  let changed = false;
+  const nextMessages = messages.map((message) => {
+    if (
+      message.id !== messageId ||
+      message.messageType !== MessageType.TOOL_RESULT ||
+      message.metadata?.toolResult?.needsPermissionPrompt !== true
+    ) {
+      return message;
+    }
+
+    changed = true;
+    return {
+      ...message,
+      content: "",
+      metadata: {
+        ...message.metadata,
+        toolResult: {
+          ...message.metadata.toolResult,
+          needsPermissionPrompt: false,
+          executionPending: true,
+        },
+      },
+    };
+  });
+
+  return changed ? nextMessages : messages;
 };

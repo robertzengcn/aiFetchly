@@ -7,6 +7,12 @@ import { v4 as uuidv4 } from "uuid";
 import type { SkillExecutionContext } from "@/entityTypes/skillTypes";
 import type { SandboxedResult } from "@/service/SandboxedSkillExecutor";
 import type { HookInput, HookOutput } from "@/entityTypes/hookTypes";
+import {
+  getPackagedWorkerPathCandidates,
+  resolvePackagedWorkerPath,
+  type PackagedWorkerPathRuntime,
+  buildPackagedWorkerEnv,
+} from "@/utils/packagedWorkerPath";
 
 interface ExecuteSkillMessage {
   type: "EXECUTE_SKILL";
@@ -257,10 +263,7 @@ export class SkillWorkerClient {
 
     const worker = utilityProcess.fork(resolvedPath, [], {
       stdio: "pipe",
-      env: {
-        ...process.env,
-        NODE_OPTIONS: "",
-      },
+      env: buildPackagedWorkerEnv(),
     });
 
     // Attach lifecycle handlers before exposing the worker to callers.
@@ -404,20 +407,34 @@ export class SkillWorkerClient {
       return this.cachedWorkerPath;
     }
 
-    const candidates = [
-      path.join(__dirname, "childprocess", "SkillWorker.js"),
-      path.join(__dirname, "../childprocess/SkillWorker.js"),
-      path.join(process.cwd(), "dist/childprocess/SkillWorker.js"),
-      path.join(process.cwd(), ".vite/build/childprocess/SkillWorker.js"),
-    ];
-
-    for (const candidate of candidates) {
-      if (fs.existsSync(candidate)) {
-        this.cachedWorkerPath = candidate;
-        return candidate;
-      }
+    const electronProcess = process as NodeJS.Process & {
+      resourcesPath?: string;
+    };
+    const runtime: PackagedWorkerPathRuntime = {
+      dirname: __dirname,
+      cwd: process.cwd(),
+      resourcesPath: electronProcess.resourcesPath,
+      existsSync: fs.existsSync,
+    };
+    const options = {
+      dirnameRelativePaths: [
+        "SkillWorker.js",
+        path.join("childprocess", "SkillWorker.js"),
+        path.join("..", "childprocess", "SkillWorker.js"),
+      ],
+      cwdRelativePaths: [
+        path.join("dist", "childprocess", "SkillWorker.js"),
+        path.join(".vite", "build", "SkillWorker.js"),
+        path.join(".vite", "build", "childprocess", "SkillWorker.js"),
+      ],
+    };
+    const resolvedPath = resolvePackagedWorkerPath(runtime, options);
+    if (resolvedPath) {
+      this.cachedWorkerPath = resolvedPath;
+      return resolvedPath;
     }
 
+    const candidates = getPackagedWorkerPathCandidates(runtime, options);
     throw new Error(
       `Skill worker file not found. Tried: ${candidates.join(", ")}`
     );

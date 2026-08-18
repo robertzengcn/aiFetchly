@@ -7,7 +7,7 @@ import {
 import type { AiMessageTaskToolPolicy } from "@/entityTypes/aiMessageTaskTypes";
 
 function policy(
-  overrides: Partial<AiMessageTaskToolPolicy> = {},
+  overrides: Partial<AiMessageTaskToolPolicy> = {}
 ): AiMessageTaskToolPolicy {
   return {
     autoApproveTools: false,
@@ -90,11 +90,26 @@ describe("proxy AI tools scheduled policy", () => {
     expect(blocked.allowed).toBe(false);
   });
 
-  it("allows proxy_list in scheduled mode once auto-approve is on (pure, no allowlist needed)", () => {
+  it("auto-approves proxy_list when auto-approve is on without per-tool selection", () => {
+    // Read-only tools auto-approve whenever autoApproveTools is on — no
+    // per-tool allowlist entry required (matches ScheduledLoopToolApprovalDialog).
     const skill = SkillRegistry.getSkill("proxy_list")!;
     const decision = canAutoApproveScheduledTool({
       skill,
-      taskPolicy: policy({ autoApproveTools: true }),
+      taskPolicy: policy({ autoApproveTools: true, allowedTools: [] }),
+      toolName: "proxy_list",
+    });
+    expect(decision.allowed).toBe(true);
+  });
+
+  it("allows proxy_list in scheduled mode once auto-approve is on AND it is allowlisted", () => {
+    const skill = SkillRegistry.getSkill("proxy_list")!;
+    const decision = canAutoApproveScheduledTool({
+      skill,
+      taskPolicy: policy({
+        autoApproveTools: true,
+        allowedTools: ["proxy_list"],
+      }),
       toolName: "proxy_list",
     });
     expect(decision.allowed).toBe(true);

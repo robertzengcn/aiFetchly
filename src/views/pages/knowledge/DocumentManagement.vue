@@ -263,11 +263,20 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, computed } from 'vue';
+import { ref, onMounted, onUnmounted } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { getDocuments, type DocumentInfo, chunkAndEmbedDocument, getRAGStats, downloadDocument, deleteDocument as deleteDocumentAPI, uploadDocument as uploadDocumentAPI, getDocumentErrorLog } from '@/views/api/rag';
 import { Header } from "@/entityTypes/commonType"
 import { isDocumentFailure, isDocumentProcessing } from "@/views/pages/knowledge/documentStatus";
+
+const props = defineProps<{
+  /**
+   * Parent-provided gate for local embedding runtime readiness.
+   * Return false to abort upload/re-embed (parent shows install UI).
+   */
+  ensureEmbeddingReady?: () => Promise<boolean>;
+}>();
+
 const headers = ref<Array<Header>>([])
 // i18n setup
 const { t } = useI18n();
@@ -305,6 +314,7 @@ const { t } = useI18n();
     const isTabVisible = ref(true);
 
     // Refresh interval options (in milliseconds)
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const refreshIntervalOptions = ref([
       { text: t('knowledge.refresh_10_seconds'), value: 10000 },
       { text: t('knowledge.refresh_30_seconds'), value: 30000 },
@@ -384,6 +394,7 @@ const { t } = useI18n();
       loadDocuments();
     };
 
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const refreshDocuments = () => {
       loadDocuments();
     };
@@ -435,6 +446,7 @@ const { t } = useI18n();
       }
     };
 
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const toggleAutoRefresh = () => {
       if (autoRefreshEnabled.value) {
         startAutoRefresh();
@@ -443,6 +455,7 @@ const { t } = useI18n();
       }
     };
 
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const updateRefreshInterval = () => {
       if (autoRefreshEnabled.value) {
         startAutoRefresh(); // Restart with new interval
@@ -482,6 +495,13 @@ const { t } = useI18n();
 
     const uploadDocument = async () => {
       if (!uploadFile.value || Array.isArray(uploadFile.value)) return;
+
+      if (props.ensureEmbeddingReady) {
+        const ready = await props.ensureEmbeddingReady();
+        if (!ready) {
+          return;
+        }
+      }
       
       uploading.value = true;
       try {
@@ -490,6 +510,7 @@ const { t } = useI18n();
         console.log('Upload data:', uploadData.value);
         
         // In Electron, the file object should have a path property
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const filePath = (file as any).path || file.name;
         
         // Call the upload API
@@ -611,12 +632,20 @@ const { t } = useI18n();
     const reembedDocument = async (doc: DocumentInfo) => {
       if (confirm(t('knowledge.confirm_reembed_document', { name: doc.name }))) {
         try {
+          if (props.ensureEmbeddingReady) {
+            const ready = await props.ensureEmbeddingReady();
+            if (!ready) {
+              return;
+            }
+          }
+
           // Add document ID to reembedding list to show loading state
           reembeddingDocIds.value.push(doc.id);
           
           console.log('Re-embedding document:', doc);
           
           // Get default embedding model from stats
+          // eslint-disable-next-line @typescript-eslint/no-unused-vars
           const stats = await getRAGStats();
           // const modelName = stats.data?.defaultEmbeddingModel || 'Qwen/Qwen3-Embedding-4B';
           

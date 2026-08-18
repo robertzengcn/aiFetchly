@@ -11,6 +11,7 @@ import { PluginDiagnosticsService } from "@/service/PluginDiagnosticsService";
 import { UserPluginAutoInstallService } from "@/service/UserPluginAutoInstallService";
 import { getPluginInstallRoot } from "@/service/pluginPaths";
 import { getAIFetchlyConfigManager } from "@/service/aifetchlyConfig/AIFetchlyConfigManager";
+import { HookRegistry } from "@/service/hooks/HookRegistry";
 import { broadcastAifetchlyConfigChanged } from "@/main-process/communication/aifetchlyConfigEvents";
 import type { SlashCommandView } from "@/entityTypes/slashCommandTypes";
 import type {
@@ -36,7 +37,6 @@ import {
   PLUGIN_GET_MCP_OPTIONS,
   PLUGIN_SET_MCP_OPTION,
 } from "@/config/channellist";
-import { registerAiValidatedHandler } from "@/main-process/communication/_shared/registerValidatedHandler";
 import { registerValidatedHandler } from "@/main-process/communication/_shared/registerValidatedHandler";
 import type { MCPToolEntity } from "@/entity/MCPTool.entity";
 import {
@@ -55,7 +55,8 @@ import {
 } from "@/schemas/ipc/plugin";
 
 /**
- * Plugin Management IPC handlers — all 13 migrated to registerAiValidatedHandler.
+ * Plugin Management IPC handlers — all migrated to registerValidatedHandler
+ * (plugin management is NOT an AI feature).
  *
  * Original code called checkAiEnabled() at the top of every handler; now
  * centralized in the wrapper. Bespoke extractData/validateString helpers
@@ -70,7 +71,8 @@ function toSummary(
   skillCount: number,
   mcpServerCount: number,
   agentCount: number,
-  commandCount: number
+  commandCount: number,
+  hookCount: number
 ): PluginSummary {
   let permissions: string[] = [];
   try {
@@ -94,6 +96,7 @@ function toSummary(
     mcpServerCount,
     agentCount,
     commandCount,
+    hookCount,
     permissions,
     lastUpdated: p.updatedAt
       ? new Date(p.updatedAt).toISOString()
@@ -217,10 +220,40 @@ function pluginCommandViews(pluginName: string): {
   };
 }
 
+interface PluginHookViewEntry {
+  readonly id: string;
+  readonly eventName: string;
+  readonly matcher?: string;
+  readonly enabled: boolean;
+  readonly type: string;
+  readonly health: "healthy" | "disabled";
+}
+
+function pluginHookViews(pluginName: string): {
+  readonly views: readonly PluginHookViewEntry[];
+  readonly count: number;
+} {
+  const prefix = `plugin:${pluginName}:`;
+  const hooks = HookRegistry.listAll({ source: "plugin" }).filter((hook) =>
+    hook.id.startsWith(prefix)
+  );
+  return {
+    views: hooks.map((hook) => ({
+      id: hook.id,
+      eventName: hook.eventName,
+      ...(hook.matcher !== undefined ? { matcher: hook.matcher } : {}),
+      enabled: hook.enabled,
+      type: hook.type,
+      health: hook.enabled ? "healthy" : "disabled",
+    })),
+    count: hooks.length,
+  };
+}
+
 export function registerPluginIpcHandlers(): void {
   log.info("Plugin IPC handlers registered");
 
-  registerAiValidatedHandler(PLUGIN_LIST, pluginNoInputSchema, async () => {
+  registerValidatedHandler(PLUGIN_LIST, pluginNoInputSchema, async () => {
     await syncUserPluginFoldersForList();
     const module = new PluginManagementModule();
     const skillModule = new SkillManagementModule();
@@ -233,20 +266,22 @@ export function registerPluginIpcHandlers(): void {
       const mcpServers = await mcpModule.findMcpByPluginName(p.name);
       const agents = await agentModule.findAgentsByPluginName(p.name);
       const commandCount = pluginCommandViews(p.name).count;
+      const hookCount = pluginHookViews(p.name).count;
       summaries.push(
         toSummary(
           p,
           skills.length,
           mcpServers.length,
           agents.length,
-          commandCount
+          commandCount,
+          hookCount
         )
       );
     }
     return summaries;
   });
 
-  registerAiValidatedHandler(
+  registerValidatedHandler(
     PLUGIN_GET,
     pluginByNameInputSchema,
     async (input) => {
@@ -262,12 +297,14 @@ export function registerPluginIpcHandlers(): void {
       const mcpServers = await mcpModule.findMcpByPluginName(input.name);
       const agents = await agentModule.findAgentsByPluginName(input.name);
       const commandInfo = pluginCommandViews(input.name);
+      const hookInfo = pluginHookViews(input.name);
       const summary = toSummary(
         plugin,
         skills.length,
         mcpServers.length,
         agents.length,
-        commandInfo.count
+        commandInfo.count,
+        hookInfo.count
       );
       let manifest = {};
       try {
@@ -299,12 +336,13 @@ export function registerPluginIpcHandlers(): void {
         })),
         // Renderer-safe command list — body/metadata stripped (PRD §11.1/AC-9).
         commands: commandInfo.views,
+        hooks: hookInfo.views,
         manifest,
       };
     }
   );
 
-  registerAiValidatedHandler(
+  registerValidatedHandler(
     PLUGIN_IMPORT,
     pluginImportInputSchema,
     async (input) => {
@@ -340,8 +378,8 @@ export function registerPluginIpcHandlers(): void {
   );
 
   // Install from various sources (zip, folder, git, github, npm, url)
-  // Merged from dev branch. Uses registerAiValidatedHandler + passthrough schema.
-  registerAiValidatedHandler(
+  // Merged from dev branch. Uses registerValidatedHandler + passthrough schema.
+  registerValidatedHandler(
     PLUGIN_INSTALL_FROM_SOURCE,
     pluginInstallFromSourceInputSchema,
     async (input) => {
@@ -427,7 +465,7 @@ export function registerPluginIpcHandlers(): void {
     }
   );
 
-  registerAiValidatedHandler(
+  registerValidatedHandler(
     PLUGIN_VALIDATE_PACKAGE,
     pluginValidatePackageInputSchema,
     async (input) => {
@@ -461,7 +499,7 @@ export function registerPluginIpcHandlers(): void {
     }
   );
 
-  registerAiValidatedHandler(
+  registerValidatedHandler(
     PLUGIN_TOGGLE,
     pluginToggleInputSchema,
     async (input) => {
@@ -477,7 +515,7 @@ export function registerPluginIpcHandlers(): void {
     }
   );
 
-  registerAiValidatedHandler(
+  registerValidatedHandler(
     PLUGIN_UNINSTALL,
     pluginByNameInputSchema,
     async (input) => {
@@ -503,7 +541,7 @@ export function registerPluginIpcHandlers(): void {
     }
   );
 
-  registerAiValidatedHandler(PLUGIN_RELOAD, pluginNoInputSchema, async () => {
+  registerValidatedHandler(PLUGIN_RELOAD, pluginNoInputSchema, async () => {
     const result = await PluginComponentRegistryService.reload();
     // Reload re-ran command promotion — refresh any open slash suggestions.
     broadcastAifetchlyConfigChanged({ source: "plugin" });
@@ -514,7 +552,7 @@ export function registerPluginIpcHandlers(): void {
     };
   });
 
-  registerAiValidatedHandler(
+  registerValidatedHandler(
     PLUGIN_EXPORT_DIAGNOSTICS,
     pluginByNameInputSchema,
     async (input) => {
@@ -526,7 +564,7 @@ export function registerPluginIpcHandlers(): void {
     }
   );
 
-  registerAiValidatedHandler(
+  registerValidatedHandler(
     PLUGIN_TOGGLE_SKILL,
     pluginToggleSkillInputSchema,
     async (input) => {
@@ -542,7 +580,7 @@ export function registerPluginIpcHandlers(): void {
     }
   );
 
-  registerAiValidatedHandler(
+  registerValidatedHandler(
     PLUGIN_TOGGLE_MCP_SERVER,
     pluginToggleMcpServerInputSchema,
     async (input) => {
@@ -553,7 +591,7 @@ export function registerPluginIpcHandlers(): void {
     }
   );
 
-  registerAiValidatedHandler(
+  registerValidatedHandler(
     PLUGIN_TOGGLE_MCP_TOOL,
     pluginToggleMcpToolInputSchema,
     async (input) => {
@@ -567,7 +605,7 @@ export function registerPluginIpcHandlers(): void {
     }
   );
 
-  registerAiValidatedHandler(
+  registerValidatedHandler(
     PLUGIN_TEST_MCP_CONNECTION,
     pluginByServerIdInputSchema,
     async (input) => {
@@ -576,7 +614,7 @@ export function registerPluginIpcHandlers(): void {
     }
   );
 
-  registerAiValidatedHandler(
+  registerValidatedHandler(
     PLUGIN_DISCOVER_MCP_TOOLS,
     pluginByServerIdInputSchema,
     async (input) => {

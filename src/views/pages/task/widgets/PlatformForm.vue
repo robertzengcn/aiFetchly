@@ -137,6 +137,7 @@ import { ref, computed, onMounted } from 'vue'
 
 // Props
 interface Props {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   platform?: any
   isEdit?: boolean
   loading?: boolean
@@ -150,6 +151,7 @@ const props = withDefaults(defineProps<Props>(), {
 
 // Emits
 const emit = defineEmits<{
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   submit: [data: any]
   cancel: []
 }>()
@@ -189,6 +191,7 @@ const availableTags = ref([
 
 // Validation rules
 const rules = {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   required: (value: any) => !!value || 'This field is required',
   validId: (value: string) => /^[a-z0-9-]+$/.test(value) || 'ID must contain only lowercase letters, numbers, and hyphens',
   url: (value: string) => {

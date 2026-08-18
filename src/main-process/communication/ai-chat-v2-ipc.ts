@@ -29,6 +29,8 @@ import { AIChatQueryLoop } from "@/service/AIChatQueryLoop";
 import type { AIChatQueryLoopDeps } from "@/service/AIChatQueryLoop";
 import { AIChatQueryEngine } from "@/service/AIChatQueryEngine";
 import { AIChatCompactAgentService } from "@/service/AIChatCompactAgentService";
+import { AIChatModelCatalogService } from "@/service/AIChatModelCatalogService";
+import { AIChatConversationUpdateBroadcaster } from "@/service/AIChatConversationUpdateBroadcaster";
 import { AIChatModelFallbackService } from "@/service/AIChatModelFallbackService";
 import {
   getSharedAutoDreamService,
@@ -38,6 +40,7 @@ import {
 } from "@/service/AIAutoDreamFactory";
 import { AIChatToolApprovalModule } from "@/modules/AIChatToolApprovalModule";
 import { evaluateToolApproval } from "@/service/AIChatToolApprovalPolicyService";
+import { redirectToLoginOnAuthExpired } from "@/service/AIChatAuthExpiredHandler";
 import { userSafeError } from "@/service/AIChatErrorMapper";
 import type {
   AIChatQueryEvent,
@@ -63,6 +66,7 @@ import {
   AI_CHAT_V2_COMPACT_CONVERSATION,
   AI_CHAT_V2_GET_TOOL_APPROVAL_MODE,
   AI_CHAT_V2_SET_TOOL_APPROVAL_MODE,
+  AI_CHAT_V2_READ_PASTE_CACHE,
 } from "@/config/channellist";
 import type {
   AIChatPlanStateView,
@@ -70,6 +74,7 @@ import type {
   AskUserQuestionAnswer,
 } from "@/entityTypes/aiChatPlanTypes";
 import type { CommonMessage } from "@/entityTypes/commonType";
+import { AnswerPlanQuestionAnswersSchema } from "@/main-process/communication/aiChatV2PlanAnswerSchema";
 import type { AIChatCompactSummaryView } from "@/entityTypes/aiChatCompactTypes";
 import type {
   ChatV2StreamRequest,
@@ -82,6 +87,8 @@ import type {
   ChatV2AttachmentKind,
   ChatToolApprovalMode,
 } from "@/entityTypes/aiChatV2Types";
+import { aiChatV2PastedContentsSchema } from "@/schemas/aiChatV2PastedText";
+import { PasteStoreService } from "@/service/pastedText/PasteStoreService";
 
 /**
  * Minimal structural type for the IPC event object.
@@ -97,6 +104,10 @@ type IpcEventLike = {
 
 let queryEngine: AIChatQueryEngine | null = null;
 let compactAgent: AIChatCompactAgentService | null = null;
+/** Shared model catalog for auto-compact context-window lookups. The catalog
+ * caches the /api/ai/v1/models response in-process, so the lookup is free
+ * after the first fetch. Provider-level state — not DB-bound. */
+let compactModelCatalog: AIChatModelCatalogService | null = null;
 let queryEngineDbPath: string | null = null;
 let compactAgentDbPath: string | null = null;
 
@@ -166,6 +177,9 @@ export function resetAiChatV2RuntimeForDatabaseSwitch(): void {
   compactAgent = null;
   queryEngineDbPath = null;
   compactAgentDbPath = null;
+  // The catalog is provider-level state; a user/DB switch may change the
+  // active provider, so drop the cached model windows.
+  compactModelCatalog = null;
   resetSharedAutoDreamService();
   resetSharedWorkspaceAutoDreamService();
 }
@@ -180,11 +194,30 @@ function getCompactAgent(): AIChatCompactAgentService {
   }
   if (!compactAgent) {
     const tokenService = new Token();
+    if (!compactModelCatalog) {
+      compactModelCatalog = new AIChatModelCatalogService();
+    }
     compactAgent = new AIChatCompactAgentService(tokenService, {
       completeChat: (request) => new AiChatApi().openAIChatCompletion(request),
       // Compact follows the chat availability resolver so local-provider users
       // can compact conversations without a hosted subscription.
       isEnabled: () => canUseChat().ok,
+      // Real per-model context window so the auto-compact threshold matches
+      // the renderer badge denominator (hard-coded 128k would never trip for
+      // models with smaller windows).
+      getContextWindow: (model) =>
+        compactModelCatalog!.getContextWindow(model),
+      // Broadcast to the renderer so the context badge drops right away.
+      onAutoCompacted: (summary) => {
+        AIChatConversationUpdateBroadcaster.getInstance().emitAutoCompacted({
+          conversationId: summary.conversationId,
+          outputTokenEstimate:
+            summary.outputTokenEstimate ??
+            Math.ceil(summary.summary.length / 4),
+          model: summary.model,
+          occurredAt: new Date().toISOString(),
+        });
+      },
     });
     compactAgentDbPath = dbPath;
   }
@@ -324,6 +357,19 @@ function createEventSink(event: IpcEventLike): AIChatQueryEventSink {
             model: e.model,
           });
           break;
+        case "reasoning_delta":
+          // Log length only — never the reasoning text itself (SSR-3 / §14).
+          console.debug(
+            `[ai-chat-v2] reasoning_delta conv=${e.conversationId} message=${e.messageId} deltaLen=${e.reasoningDelta.length}`
+          );
+          sendChunk(event, {
+            eventType: "reasoning_delta",
+            conversationId: e.conversationId,
+            messageId: e.messageId,
+            reasoningDelta: e.reasoningDelta,
+            model: e.model,
+          });
+          break;
         case "retry_connect":
           sendChunk(event, {
             eventType: "retry_connect",
@@ -449,6 +495,7 @@ function createEventSink(event: IpcEventLike): AIChatQueryEventSink {
             conversationId: e.conversationId,
             messageId: e.messageId,
             fullContent: e.fullContent,
+            images: e.images,
             model: e.model,
             finishReason: e.finishReason,
             promptTokens: e.promptTokens,
@@ -525,10 +572,66 @@ function validateStreamRequest(
   ) {
     return "toolApprovalMode must be a valid approval mode";
   }
+  if (
+    req.showReasoning !== undefined &&
+    typeof req.showReasoning !== "boolean"
+  ) {
+    return "showReasoning must be a boolean";
+  }
+  if (req.reasoning !== undefined) {
+    const reasoning = req.reasoning as {
+      enabled?: unknown;
+      effort?: unknown;
+      summary?: unknown;
+    };
+    if (
+      !reasoning ||
+      typeof reasoning !== "object" ||
+      Array.isArray(reasoning) ||
+      typeof reasoning.enabled !== "boolean"
+    ) {
+      return "reasoning must be an object with a boolean 'enabled' field";
+    }
+    if (
+      reasoning.effort !== undefined &&
+      (typeof reasoning.effort !== "string" ||
+        !["low", "medium", "high"].includes(reasoning.effort))
+    ) {
+      return "reasoning.effort must be one of low, medium, high";
+    }
+    if (
+      reasoning.summary !== undefined &&
+      (typeof reasoning.summary !== "string" ||
+        !["auto", "concise", "detailed"].includes(reasoning.summary))
+    ) {
+      return "reasoning.summary must be one of auto, concise, detailed";
+    }
+  }
+
+  if (req.pastedContents !== undefined) {
+    const parsed = aiChatV2PastedContentsSchema.safeParse(req.pastedContents);
+    if (!parsed.success) {
+      return parsed.error.issues[0]?.message ?? "invalid pastedContents";
+    }
+  }
   return null;
 }
 const MAX_UPLOAD_FILE_BYTES = 5 * 1024 * 1024;
 const MAX_TOTAL_IMAGE_BASE64_BYTES = 10 * 1024 * 1024;
+/**
+ * MIME types accepted for `kind === "image"` attachments. The persisted
+ * `previewDataUrl` is a `data:${mimeType};base64,...` URL rendered in the
+ * renderer DOM, so the MIME must be a real image type — a crafted payload
+ * (filename `.png` + `mimeType:"text/html"`) could otherwise persist a
+ * non-image `data:` URL that a future viewer might execute. Aligns with the
+ * image extensions the composer accepts (png/jpg/jpeg/webp/gif).
+ */
+const ALLOWED_IMAGE_MIME_TYPES = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/webp",
+  "image/gif",
+]);
 
 function classifyAttachment(
   fileName: string,
@@ -611,6 +714,16 @@ function normalizeChatV2UploadedFiles(
 
     // Validate total image payload size
     if (kind === "image") {
+      // Reject non-image MIME types (and any CR/LF/whitespace that could
+      // break the `data:` URL format) so only real image previews reach the
+      // persisted metadata the renderer trusts.
+      const normalizedMime = mimeType.toLowerCase();
+      if (
+        !ALLOWED_IMAGE_MIME_TYPES.has(normalizedMime) ||
+        /[\s\r\n]/.test(mimeType)
+      ) {
+        continue;
+      }
       totalImageBase64Bytes += contentBase64.length;
       if (totalImageBase64Bytes > MAX_TOTAL_IMAGE_BASE64_BYTES) continue;
     }
@@ -675,8 +788,28 @@ async function handleStream(event: IpcEventLike, data: string): Promise<void> {
   await engine.submitMessage({ request: processedReq, eventSink });
 }
 
-function handleStop(): void {
-  getQueryEngine().stopActiveTurn();
+/**
+ * Stop active chat turn(s). Accepts an optional `{ conversationId }` payload so
+ * the renderer can stop ONE conversation's turn (the Stop button / permission
+ * deny) without aborting other conversations' background turns. When no
+ * conversationId is supplied, every active + pending turn is stopped (used by
+ * DB switch / sign-out via resetAiChatV2RuntimeForDatabaseSwitch).
+ */
+function handleStop(data?: unknown): void {
+  let conversationId: string | undefined;
+  let raw: unknown = data;
+  if (typeof raw === "string" && raw.length > 0) {
+    try {
+      raw = JSON.parse(raw);
+    } catch {
+      raw = undefined;
+    }
+  }
+  if (raw && typeof raw === "object") {
+    const value = (raw as { conversationId?: unknown }).conversationId;
+    conversationId = typeof value === "string" ? value : undefined;
+  }
+  getQueryEngine().stopActiveTurn(conversationId);
 }
 
 // -------------------------------------------------------------------------
@@ -750,7 +883,16 @@ async function handleConversations(
     const searchQuery =
       typeof req.searchQuery === "string" ? req.searchQuery : undefined;
     const module = new AIChatV2Module();
-    return ok(await module.getConversations(searchQuery));
+    const summaries = await module.getConversations(searchQuery);
+    const engine = getQueryEngine();
+    return ok(
+      summaries.map((summary) => ({
+        ...summary,
+        runtimeStatus: engine.getConversationRuntimeStatus(
+          summary.conversationId
+        ),
+      }))
+    );
   } catch (err) {
     return denied(userSafeError(err));
   }
@@ -758,14 +900,14 @@ async function handleConversations(
 
 async function handleHistory(
   _e: IpcEventLike,
-  data: string
+  data: unknown
 ): Promise<CommonMessage<ChatV2HistoryResponse | null>> {
   const chatAccess = canUseChat();
   if (!chatAccess.ok) {
     return denied(chatAccess.message);
   }
   try {
-    const req = JSON.parse(data ?? "{}");
+    const req = parseObjectPayload(data);
     if (typeof req.conversationId !== "string") {
       return denied("conversationId must be a string");
     }
@@ -780,7 +922,7 @@ async function handleHistory(
       conversationId: r.conversationId,
       role: (r.role as ChatV2MessageView["role"]) ?? "user",
       content: r.content,
-      timestamp: r.timestamp.toISOString(),
+      timestamp: serializeHistoryTimestamp(r.timestamp),
       messageType: r.messageType,
       model: r.model,
       tokensUsed: r.tokensUsed,
@@ -790,6 +932,8 @@ async function handleHistory(
       conversationId,
       messages: views,
       totalMessages: views.length,
+      runtimeStatus:
+        getQueryEngine().getConversationRuntimeStatus(conversationId),
     });
   } catch (err) {
     return denied(userSafeError(err));
@@ -888,15 +1032,20 @@ async function handleAnswerQuestion(
   if (!parsed.conversationId || typeof parsed.conversationId !== "string") {
     return denied("conversationId is required");
   }
-  if (!Array.isArray(parsed.answers)) {
-    return denied("answers must be an array");
+  // Validate the cross-process payload (Zod-at-IPC rule) before forwarding to
+  // the engine. Rejects malformed shapes and bounds free-text length.
+  const answersResult = AnswerPlanQuestionAnswersSchema.safeParse(
+    parsed.answers
+  );
+  if (!answersResult.success) {
+    return denied("answers payload is invalid");
   }
 
   const engine = getQueryEngine();
   const result = await engine.answerPlanQuestion({
     questionId: parsed.questionId,
     conversationId: parsed.conversationId,
-    answers: parsed.answers,
+    answers: answersResult.data,
   });
   return ok(result);
 }
@@ -1140,19 +1289,94 @@ async function handleSetToolApprovalMode(
   }
 }
 
+function parseObjectPayload(data: unknown): Record<string, unknown> {
+  if (!data) {
+    return {};
+  }
+  if (typeof data === "string") {
+    return (data ? JSON.parse(data) : {}) as Record<string, unknown>;
+  }
+  if (typeof data === "object") {
+    return data as Record<string, unknown>;
+  }
+  return {};
+}
+
+function serializeHistoryTimestamp(timestamp: unknown): string {
+  if (timestamp instanceof Date) {
+    return timestamp.toISOString();
+  }
+  if (typeof timestamp === "string") {
+    const date = new Date(timestamp);
+    return Number.isNaN(date.getTime()) ? timestamp : date.toISOString();
+  }
+  if (typeof timestamp === "number") {
+    const date = new Date(timestamp);
+    return Number.isNaN(date.getTime())
+      ? new Date(0).toISOString()
+      : date.toISOString();
+  }
+  return new Date(0).toISOString();
+}
+
 function parseMetadata(raw?: string | null): ChatV2MessageMetadata | undefined {
   if (!raw) {
     return undefined;
   }
   try {
     const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed === "object" && parsed.source === "chat-v2") {
-      return parsed as ChatV2MessageMetadata;
+    if (parsed && typeof parsed === "object") {
+      const metadata = parsed as Partial<ChatV2MessageMetadata>;
+      if (metadata.source === "chat-v2") {
+        return metadata as ChatV2MessageMetadata;
+      }
+      if (metadata.reasoning) {
+        return {
+          ...metadata,
+          source: "chat-v2",
+        } as ChatV2MessageMetadata;
+      }
     }
   } catch {
     // ignore
   }
   return undefined;
+}
+
+async function handleReadPasteCache(
+  data: unknown
+): Promise<CommonMessage<string | null>> {
+  const chatAccess = canUseChat();
+  if (!chatAccess.ok) {
+    return denied(chatAccess.message);
+  }
+
+  const candidate: unknown =
+    typeof data === "string"
+      ? data
+      : (() => {
+          const req = parseObjectPayload(data);
+          return (
+            req.contentHash ?? req.hash ?? req.pasteCacheHash ?? req.pasteHash
+          );
+        })();
+
+  if (typeof candidate !== "string") {
+    return denied("hash must be a string");
+  }
+
+  const hash = candidate.trim().toLowerCase();
+  if (!/^[a-f0-9]{16}$/.test(hash)) {
+    return denied("invalid paste cache hash");
+  }
+
+  try {
+    const store = new PasteStoreService();
+    const content = await store.read(hash);
+    return ok(content);
+  } catch (err) {
+    return denied(userSafeError(err));
+  }
 }
 
 export function registerAiChatV2IpcHandlers(): void {
@@ -1239,12 +1463,16 @@ export function registerAiChatV2IpcHandlers(): void {
     async (input) =>
       unwrap(handleSetToolApprovalMode(JSON.stringify(input ?? "{}")))
   );
+  ipcMain.handle(AI_CHAT_V2_READ_PASTE_CACHE, async (_e, data: unknown) =>
+    handleReadPasteCache(data)
+  );
   // Stream handler send message to the AI engine and receive chunks back
   ipcMain.on(AI_CHAT_V2_STREAM, async (event, data: unknown) => {
     try {
       await handleStream(event as IpcEventLike, data as string);
     } catch (err) {
       log.error("[ai-chat-v2] unhandled stream error:", err);
+      void redirectToLoginOnAuthExpired(err);
       const evt = event as IpcEventLike;
       sendComplete(evt, {
         eventType: "error",
@@ -1253,5 +1481,5 @@ export function registerAiChatV2IpcHandlers(): void {
       });
     }
   });
-  ipcMain.on(AI_CHAT_V2_STREAM_STOP, () => handleStop());
+  ipcMain.on(AI_CHAT_V2_STREAM_STOP, (_e, data?: unknown) => handleStop(data));
 }

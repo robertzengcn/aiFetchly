@@ -314,7 +314,7 @@ const setAlert = (
 };
 
 // Watch for Yandex selection and show tip if local browser is not used
-watch([enginer, useLocalBrowser], ([newEngine, newUseLocalBrowser], [oldEngine, oldUseLocalBrowser]) => {
+watch([enginer, useLocalBrowser], ([newEngine, newUseLocalBrowser], [oldEngine]) => {
   const isYandex = newEngine && newEngine.toLowerCase() === 'yandex';
   const wasYandex = oldEngine && oldEngine.toLowerCase() === 'yandex';
   
@@ -345,7 +345,7 @@ watch([enginer, useLocalBrowser], ([newEngine, newUseLocalBrowser], [oldEngine, 
 }, { immediate: false });
 
 // Watch for Google selection and show tip if account is not used
-watch([enginer, useAccount], ([newEngine, newUseAccount], [oldEngine, oldUseAccount]) => {
+watch([enginer, useAccount], ([newEngine, newUseAccount], [oldEngine]) => {
   const isGoogle = newEngine && newEngine.toLowerCase() === 'google';
   const wasGoogle = oldEngine && oldEngine.toLowerCase() === 'google';
   

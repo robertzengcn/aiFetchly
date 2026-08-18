@@ -1,13 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   AIChatQueryLoop,
+  parseTextToolCalls,
   resolveToolChoiceForRound,
+  type AIChatQueryLoopDeps,
 } from "@/service/AIChatQueryLoop";
 import type { AIChatQueryLoopInput } from "@/service/AIChatQueryEvents";
 import type {
   OpenAIChatCompletionChunk,
   OpenAIChatCompletionRequest,
   OpenAIChatMessage,
+  OpenAITool,
 } from "@/api/aiChatApi";
 import { HookRegistry } from "@/service/hooks/HookRegistry";
 import { setHookAuditLoggerForTests } from "@/service/hooks/HookAuditService";
@@ -60,6 +63,17 @@ function makeToolCallChunk(
   };
 }
 
+function tool(name: string): OpenAITool {
+  return {
+    type: "function",
+    function: {
+      name,
+      description: "test tool",
+      parameters: { type: "object", properties: {} },
+    },
+  };
+}
+
 async function waitForCondition(
   predicate: () => boolean,
   timeoutMs = 1000
@@ -94,6 +108,49 @@ describe("AIChatQueryLoop", () => {
         type: "function",
         function: { name: "SubmitPlanForApproval" },
       });
+    });
+
+    it("forces shell_execute for direct file removal requests when exposed", () => {
+      expect(
+        resolveToolChoiceForRound({
+          message: "rm the file manual-delete-test.txt",
+          hasTools: true,
+          isPlanMode: false,
+          round: 0,
+          startRound: 0,
+          exposedToolNames: ["file_read", "shell_execute"],
+        })
+      ).toEqual({
+        type: "function",
+        function: { name: "shell_execute" },
+      });
+
+      expect(
+        resolveToolChoiceForRound({
+          message: "delete the file manual-delete-test.txt",
+          hasTools: true,
+          isPlanMode: false,
+          round: 0,
+          startRound: 0,
+          exposedToolNames: ["file_read", "shell_execute"],
+        })
+      ).toEqual({
+        type: "function",
+        function: { name: "shell_execute" },
+      });
+    });
+
+    it("does not force shell_execute when the shell tool is not exposed", () => {
+      expect(
+        resolveToolChoiceForRound({
+          message: "rm the file manual-delete-test.txt",
+          hasTools: true,
+          isPlanMode: false,
+          round: 0,
+          startRound: 0,
+          exposedToolNames: ["file_read"],
+        })
+      ).toBe("auto");
     });
   });
 
@@ -141,6 +198,42 @@ describe("AIChatQueryLoop", () => {
   });
 
   describe("tool calls", () => {
+    it("parses a textual run_subagent call with a structured batch packet", () => {
+      const calls = parseTextToolCalls(
+        "<tool_call>\n" +
+          "<function=run_subagent>\n" +
+          "<parameter=agentId>agent-batch-worker</parameter>\n" +
+          "<parameter=prompt>Make every background white</parameter>\n" +
+          '<parameter=taskPacket>{"files":["a.png","b.png"],"instruction":"make the background white"}</parameter>\n' +
+          "</function>\n" +
+          "</tool_call>"
+      );
+
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toMatchObject({
+        name: "run_subagent",
+        ok: true,
+        arguments: {
+          agentId: "agent-batch-worker",
+          prompt: "Make every background white",
+          taskPacket: {
+            files: ["a.png", "b.png"],
+            instruction: "make the background white",
+          },
+        },
+      });
+    });
+
+    it("does not parse textual tool-call tags mixed with assistant prose", () => {
+      const calls = parseTextToolCalls(
+        "For example, <tool_call><function=file_read>" +
+          "<parameter=path>README.md</parameter>" +
+          "</function></tool_call> is a tool-call format."
+      );
+
+      expect(calls).toEqual([]);
+    });
+
     it("submits an immediate approval plan when explicit submit-now plan mode gets an empty model response", async () => {
       const fakeStream = vi.fn(
         async (
@@ -262,6 +355,196 @@ describe("AIChatQueryLoop", () => {
         { q: "test" },
         expect.objectContaining({ toolCallId: "call-1" })
       );
+    });
+
+    it("retries when provider emits a tool-call marker as plain text", async () => {
+      const events: Array<{ type: string; message?: string }> = [];
+      let callCount = 0;
+      const fakeStream = vi.fn(
+        async (
+          _req: unknown,
+          onChunk: (c: OpenAIChatCompletionChunk) => void
+        ) => {
+          if (callCount === 0) {
+            callCount += 1;
+            onChunk(makeChunk("user:tool_call::def_tool_call:0", "stop"));
+            return;
+          }
+          if (callCount === 1) {
+            callCount += 1;
+            onChunk(
+              makeToolCallChunk(
+                "call-1",
+                "file_edit",
+                JSON.stringify({
+                  path: "manual-tool-test.txt",
+                  old_string: "manual test",
+                  new_string: "manual test 20260723",
+                })
+              )
+            );
+            return;
+          }
+          onChunk(makeChunk("Done", "stop"));
+        }
+      );
+      const fakeExecute = vi.fn().mockResolvedValue({
+        tool_call_id: "call-1",
+        tool_name: "file_edit",
+        success: true,
+        result: { path: "manual-tool-test.txt" },
+        execution_time_ms: 10,
+      });
+      const loop = new AIChatQueryLoop({
+        streamChatCompletion: fakeStream,
+        executeTool: fakeExecute,
+        getSkillDefinition: vi.fn().mockReturnValue(undefined),
+      });
+      const input: AIChatQueryLoopInput = {
+        conversationId: "v2-test",
+        assistantMessageId: "a-1",
+        messages: [],
+        request: {
+          message: 'update file content with "manual test 20260723"',
+        },
+        openAITools: [tool("file_edit")],
+        abortController: new AbortController(),
+        eventSink: {
+          emit: (e) => {
+            if (e.type === "recovery_status") {
+              events.push({ type: e.type, message: e.message });
+            }
+          },
+        },
+        startRound: 0,
+        isActiveTurn: () => true,
+      };
+
+      const result = await loop.run(input);
+
+      expect(result.type).toBe("completed");
+      if (result.type === "completed") {
+        expect(result.fullContent).toBe("Done");
+      }
+      expect(fakeStream).toHaveBeenCalledTimes(3);
+      expect(fakeExecute).toHaveBeenCalledWith(
+        "file_edit",
+        {
+          path: "manual-tool-test.txt",
+          old_string: "manual test",
+          new_string: "manual test 20260723",
+        },
+        expect.objectContaining({ toolCallId: "call-1" })
+      );
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "recovery_status",
+          message: "Retrying malformed tool-call marker response",
+        })
+      );
+    });
+
+    it("executes Agnes XML-style textual tool calls instead of persisting them as assistant text", async () => {
+      const textualToolCalls =
+        "¶¶<tool_call>¶<function=tool_catalog_search>¶<parameter=category>¶filesystem¶</parameter>¶</function>¶</tool_call>" +
+        "¶<tool_call>¶<function=tool_catalog_search>¶<parameter=category>¶image¶</parameter>¶</function>¶</tool_call>";
+      let callCount = 0;
+      const fakeStream = vi.fn(
+        async (
+          _req: unknown,
+          onChunk: (c: OpenAIChatCompletionChunk) => void
+        ) => {
+          if (callCount === 0) {
+            callCount += 1;
+            onChunk(makeChunk(textualToolCalls, "stop"));
+            return;
+          }
+          onChunk(makeChunk("Done", "stop"));
+        }
+      );
+      const fakeExecute = vi.fn().mockImplementation(
+        async (toolName: string, args: Record<string, unknown>) => ({
+          tool_call_id: `text-call-${String(args.query)}`,
+          tool_name: toolName,
+          success: true,
+          result: { selected: args.query },
+          execution_time_ms: 1,
+        })
+      );
+      const loop = new AIChatQueryLoop({
+        streamChatCompletion: fakeStream,
+        executeTool: fakeExecute,
+        getSkillDefinition: vi.fn().mockReturnValue(undefined),
+      });
+
+      const result = await loop.run({
+        conversationId: "v2-agnes-text-tools",
+        assistantMessageId: "a-agnes-text-tools",
+        messages: [],
+        request: {
+          message:
+            "please convert those backgroud color of image in workspace to white",
+        },
+        openAITools: [tool("tool_catalog_search")],
+        abortController: new AbortController(),
+        eventSink: { emit: vi.fn() },
+        startRound: 0,
+        isActiveTurn: () => true,
+      });
+
+      expect(result.type).toBe("completed");
+      if (result.type === "completed") {
+        expect(result.fullContent).toBe("Done");
+      }
+      expect(fakeStream).toHaveBeenCalledTimes(2);
+      expect(fakeExecute).toHaveBeenNthCalledWith(
+        1,
+        "tool_catalog_search",
+        { query: "filesystem" },
+        expect.objectContaining({ toolCallId: expect.any(String) })
+      );
+      expect(fakeExecute).toHaveBeenNthCalledWith(
+        2,
+        "tool_catalog_search",
+        { query: "image" },
+        expect.objectContaining({ toolCallId: expect.any(String) })
+      );
+    });
+
+    it("sends forced shell_execute tool_choice for first-round file deletion", async () => {
+      const captured: OpenAIChatCompletionRequest[] = [];
+      const fakeStream = vi.fn(
+        async (
+          req: OpenAIChatCompletionRequest,
+          onChunk: (c: OpenAIChatCompletionChunk) => void
+        ) => {
+          captured.push(req);
+          onChunk(makeChunk("Done", "stop"));
+        }
+      );
+      const loop = new AIChatQueryLoop({
+        streamChatCompletion: fakeStream,
+        executeTool: vi.fn(),
+        getSkillDefinition: vi.fn().mockReturnValue(undefined),
+      });
+      const input: AIChatQueryLoopInput = {
+        conversationId: "v2-test",
+        assistantMessageId: "a-1",
+        messages: [],
+        request: { message: "rm the file manual-delete-test.txt" },
+        openAITools: [tool("file_read"), tool("shell_execute")],
+        abortController: new AbortController(),
+        eventSink: { emit: vi.fn() },
+        startRound: 0,
+        isActiveTurn: () => true,
+      };
+
+      await loop.run(input);
+
+      expect(captured[0].tool_choice).toEqual({
+        type: "function",
+        function: { name: "shell_execute" },
+      });
     });
 
     it("waits for tool-call persistence to flush before executing the tool", async () => {
@@ -1004,6 +1287,12 @@ describe("AIChatQueryLoop", () => {
         eventSink: { emit: vi.fn() },
         startRound: 0,
         isActiveTurn: () => true,
+        // This test exercises the error-TAGGING path in isolation (the loop
+        // surfacing a recognizable failed error), not the retry behavior — so
+        // disable the transient-failure auto-retry that would otherwise kick
+        // in for finish_reason=error. Retry coverage lives in the
+        // "transient failure auto-retry" suite below.
+        transientRetryConfig: { maxAttempts: 0 },
       };
 
       const result = await loop.run(input);
@@ -1112,6 +1401,227 @@ describe("AIChatQueryLoop", () => {
         expect(result.fullContent).toContain("gamma");
         expect(result.fullContent).toBe("alphabetagamma");
       }
+    });
+  });
+
+  describe("transient failure auto-retry", () => {
+    function buildLoop(
+      fakeStream: AIChatQueryLoopDeps["streamChatCompletion"]
+    ): AIChatQueryLoop {
+      return new AIChatQueryLoop({
+        streamChatCompletion: fakeStream,
+        executeTool: vi.fn(),
+        getSkillDefinition: vi.fn().mockReturnValue(undefined),
+      });
+    }
+
+    function buildInput(
+      opts: {
+        tokens?: string[];
+        events?: { type: string; retryAttempt?: number }[];
+        transientRetryConfig?: { maxAttempts?: number; baseDelayMs?: number };
+        isActiveTurn?: () => boolean;
+        abortController?: AbortController;
+      } = {}
+    ): AIChatQueryLoopInput {
+      return {
+        conversationId: "v2-test",
+        assistantMessageId: "assistant-1",
+        messages: [{ role: "user", content: "hi" }],
+        request: { message: "hi" },
+        openAITools: [],
+        abortController: opts.abortController ?? new AbortController(),
+        eventSink: {
+          emit: (e) => {
+            if (e.type === "token" && opts.tokens) {
+              opts.tokens.push(e.contentDelta);
+            }
+            if (opts.events) {
+              opts.events.push({
+                type: e.type,
+                retryAttempt:
+                  e.type === "retry_connect" ? e.retryAttempt : undefined,
+              });
+            }
+          },
+        },
+        startRound: 0,
+        isActiveTurn: opts.isActiveTurn ?? (() => true),
+        // Instant retries so the suite never waits on real backoff.
+        transientRetryConfig: opts.transientRetryConfig ?? {
+          maxAttempts: 3,
+          baseDelayMs: 0,
+        },
+      };
+    }
+
+    const TRANSIENT_FINISH_ERROR =
+      "AI server returned finish_reason=error (transient server-side failure).";
+
+    it("retries a content-level transient failure (finish_reason=error) and succeeds", async () => {
+      const events: { type: string; retryAttempt?: number }[] = [];
+      let call = 0;
+      const fakeStream = vi.fn(
+        async (
+          _req: unknown,
+          onChunk: (c: OpenAIChatCompletionChunk) => void
+        ) => {
+          call += 1;
+          if (call === 1) {
+            throw new Error(TRANSIENT_FINISH_ERROR);
+          }
+          onChunk(makeChunk("Hello!", "stop"));
+        }
+      );
+      const loopInstance = buildLoop(fakeStream);
+      const result = await loopInstance.run(buildInput({ events }));
+      expect(result.type).toBe("completed");
+      if (result.type === "completed") {
+        expect(result.fullContent).toBe("Hello!");
+      }
+      expect(fakeStream).toHaveBeenCalledTimes(2);
+      // A retry_connect event must be emitted between the two attempts.
+      const retries = events.filter((e) => e.type === "retry_connect");
+      expect(retries).toHaveLength(1);
+      expect(retries[0].retryAttempt).toBe(1);
+    });
+
+    it("retries an empty-response transient failure (no finish reason)", async () => {
+      let call = 0;
+      const fakeStream = vi.fn(
+        async (
+          _req: unknown,
+          onChunk: (c: OpenAIChatCompletionChunk) => void
+        ) => {
+          call += 1;
+          if (call === 1) {
+            throw new Error(
+              "AI server returned an empty response with no finish reason."
+            );
+          }
+          onChunk(makeChunk("ok", "stop"));
+        }
+      );
+      const result = await buildLoop(fakeStream).run(buildInput());
+      expect(result.type).toBe("completed");
+      expect(fakeStream).toHaveBeenCalledTimes(2);
+    });
+
+    it("does NOT retry a non-transient error (surfaces immediately)", async () => {
+      const fakeStream = vi.fn(async () => {
+        throw new Error("Selected model is not available.");
+      });
+      const result = await buildLoop(fakeStream).run(buildInput());
+      expect(result.type).toBe("failed");
+      expect(fakeStream).toHaveBeenCalledTimes(1);
+    });
+
+    it("does NOT retry transport-layer conditions the HTTP client already retries (anti-stacking)", async () => {
+      for (const msg of [
+        "upstream returned 502 Bad Gateway",
+        "rate limit exceeded",
+        "Request timeout",
+        "AI server error code=503",
+        "transient server error",
+      ]) {
+        const fakeStream = vi.fn(async () => {
+          throw new Error(msg);
+        });
+        const result = await buildLoop(fakeStream).run(buildInput());
+        expect(result.type).toBe("failed");
+        expect(fakeStream).toHaveBeenCalledTimes(1);
+      }
+    });
+
+    it("does NOT retry after content has been delivered to the UI (anti-duplication)", async () => {
+      const tokens: string[] = [];
+      const fakeStream = vi.fn(
+        async (
+          _req: unknown,
+          onChunk: (c: OpenAIChatCompletionChunk) => void
+        ) => {
+          // Content is delivered BEFORE the transient failure.
+          onChunk(makeChunk("partial-answer"));
+          throw new Error(TRANSIENT_FINISH_ERROR);
+        }
+      );
+      const result = await buildLoop(fakeStream).run(buildInput({ tokens }));
+      // Because content reached the UI, retrying would duplicate it — so the
+      // failure is surfaced instead of retried.
+      expect(result.type).toBe("failed");
+      expect(fakeStream).toHaveBeenCalledTimes(1);
+      expect(tokens).toEqual(["partial-answer"]);
+    });
+
+    it("gives up after maxAttempts and returns the failed result", async () => {
+      const fakeStream = vi.fn(async () => {
+        throw new Error(TRANSIENT_FINISH_ERROR);
+      });
+      const result = await buildLoop(fakeStream).run(
+        buildInput({
+          transientRetryConfig: { maxAttempts: 2, baseDelayMs: 0 },
+        })
+      );
+      expect(result.type).toBe("failed");
+      // 1 initial attempt + 2 retries.
+      expect(fakeStream).toHaveBeenCalledTimes(3);
+    });
+
+    it("stops retrying when the turn is no longer active (conversation switch)", async () => {
+      let active = true;
+      const fakeStream = vi.fn(async () => {
+        // After the first attempt the user switches conversation.
+        active = false;
+        throw new Error(TRANSIENT_FINISH_ERROR);
+      });
+      const result = await buildLoop(fakeStream).run(
+        buildInput({ isActiveTurn: () => active })
+      );
+      expect(result.type).toBe("failed");
+      expect(fakeStream).toHaveBeenCalledTimes(1);
+    });
+
+    it("stops retrying when the turn is aborted mid-attempt", async () => {
+      const ac = new AbortController();
+      const fakeStream = vi.fn(async () => {
+        // User hits Stop during the first attempt.
+        ac.abort();
+        throw new Error(TRANSIENT_FINISH_ERROR);
+      });
+      const result = await buildLoop(fakeStream).run(
+        buildInput({ abortController: ac })
+      );
+      expect(result.type).toBe("failed");
+      expect(fakeStream).toHaveBeenCalledTimes(1);
+    });
+
+    it("retries from a pristine transcript snapshot (failed-attempt mutations do not leak)", async () => {
+      const seenCounts: number[] = [];
+      let call = 0;
+      const fakeStream = vi.fn(
+        async (
+          _req: unknown,
+          onChunk: (c: OpenAIChatCompletionChunk) => void
+        ) => {
+          const req = _req as { messages: OpenAIChatMessage[] };
+          seenCounts.push(req.messages.length);
+          call += 1;
+          if (call === 1) {
+            // Simulate an in-progress transcript mutation during the failed
+            // attempt (the loop pushes continuation/tool rows mid-round)
+            // before the transient failure surfaces.
+            req.messages.push({ role: "user", content: "LEAK-SENTINEL" });
+            throw new Error(TRANSIENT_FINISH_ERROR);
+          }
+          onChunk(makeChunk("recovered", "stop"));
+        }
+      );
+      const result = await buildLoop(fakeStream).run(buildInput());
+      expect(result.type).toBe("completed");
+      // First attempt saw the original 1 message; the retry must start from a
+      // fresh snapshot of the original transcript (1 message), NOT the
+      // mutated 2-message array the failed attempt left behind.
+      expect(seenCounts).toEqual([1, 1]);
     });
   });
 });

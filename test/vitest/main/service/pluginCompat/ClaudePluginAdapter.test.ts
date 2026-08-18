@@ -112,7 +112,7 @@ describe("ClaudePluginAdapter", () => {
     expect(r.adapted.hooksPath).toBe("hooks/hooks.json");
   });
 
-  it("carries commands/agents/outputStyles as opaque", () => {
+  it("carries commands/outputStyles as opaque and agents as a first-class field", () => {
     const raw = {
       name: "p",
       version: "1.0.0",
@@ -127,7 +127,9 @@ describe("ClaudePluginAdapter", () => {
     expect(r.adapted.opaque.commands).toEqual({
       foo: { source: "commands/foo.md" },
     });
-    expect(r.adapted.opaque.agents).toEqual(["agents/bar.md"]);
+    // `agents` was promoted to a first-class manifest field; it is normalized
+    // there (not carried in the opaque bag like commands/outputStyles).
+    expect(r.adapted.manifest.agents).toEqual(["agents/bar.md"]);
     expect(r.adapted.opaque.outputStyles).toEqual(["styles/x.json"]);
   });
 

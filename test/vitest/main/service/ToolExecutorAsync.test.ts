@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { SkillRegistry } from "@/config/skillsRegistry";
 import { getDefaultToolJobRegistry } from "@/service/ToolJobRegistry";
 import {
   resolveTimeoutMs,
@@ -55,5 +56,12 @@ describe("async dispatch contract", () => {
     expect(resolveTimeoutMs(resolver({ max_results: 50 }) as never)).to.equal(
       null
     );
+  });
+
+  it("scrape_urls_from_search_engine always resolves to async (no 90s ceiling)", () => {
+    const skill = SkillRegistry.getSkill("scrape_urls_from_search_engine");
+    expect(skill).to.not.equal(null);
+    expect(skill?.resolveTimeoutClass!({})).to.equal("async");
+    expect(resolveTimeoutMs(skill!.resolveTimeoutClass!({}))).to.equal(null);
   });
 });

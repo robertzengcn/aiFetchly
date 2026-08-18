@@ -6,21 +6,17 @@ export type HttpClientOptions = {
 // }
 //import { AuthInterceptor } from '@/modules/lib/authInterceptor';
 import type FormDataLib from "form-data";
-import { log } from "@/modules/Logger";
-import { Token } from "@/modules/token";
 import { TOKENNAME, REFRESHTOKEN } from "@/config/usersetting";
-import { User } from "@/modules/user";
-import {
-  RefreshTokenInvalidError,
-  TokenRefreshService,
-} from "@/modules/tokenRefresh";
+import type { Token } from "@/modules/token";
+import { RefreshTokenInvalidError } from "@/modules/tokenRefresh";
 import { resolveViteLoginBase } from "@/config/viteLoginUrl";
 import { userSecretKeyService } from "@/modules/fieldCipher";
+import { log } from "@/modules/Logger";
 
 /**
- * Decide whether a refresh failure means the refresh token itself is invalid
- * (and therefore the user must sign in again) versus a transient/network
- * failure that should NOT sign the user out.
+ * Decide whether a refresh failure is auth-shaped versus a transient/network
+ * failure. Both paths keep local auth state; auth-shaped failures only stop
+ * the current remote request so local app features remain available.
  *
  * Matches case-insensitively because the backend returns lowercase messages
  * (e.g. "invalid or expired refresh token") and the prior capital-I match let
@@ -82,7 +78,7 @@ export class HttpClient {
         this.setHeader("Authorization", "Bearer " + workerToken);
       }
     } else {
-      this.setheaderToken();
+      void this.setheaderToken();
     }
     // const tokenModel=new Token()
     // const tokenval=tokenModel.getValue("social-market-token")
@@ -92,10 +88,11 @@ export class HttpClient {
     // }
   }
 
-  public setheaderToken() {
+  public async setheaderToken(): Promise<void> {
+    const { Token } = await import("@/modules/token");
     const tokenModel = new Token();
     const tokenval = tokenModel.getValue(TOKENNAME);
-    //console.log("prepare to set token:"+tokenval)
+    //log.info("prepare to set token:"+tokenval)
     if (tokenval) {
       //config.headers.Authorization = 'Bearer ' + tokenval
       this.setHeader("Authorization", "Bearer " + tokenval);
@@ -111,10 +108,9 @@ export class HttpClient {
    * in-flight refresh promise, so the backend's refresh-token rotation never
    * races.
    *
-   * Sign-out policy: the user is signed out ONLY when the failure is
-   * confirmed to mean the refresh token itself is invalid/expired/revoked.
-   * Transient/network/5xx failures do NOT sign the user out — the original
-   * error is rethrown and the next request will naturally retry.
+   * Sign-out policy: refresh failures never clear local auth state. The current
+   * remote request fails, and later requests can retry refresh when the backend
+   * or network recovers.
    *
    * Prevents infinite refresh loops by checking the isRetry flag.
    */
@@ -131,18 +127,12 @@ export class HttpClient {
     }
 
     // Prevent infinite refresh loops: if we already retried once and the
-    // retried request still hit 401/403, refresh did not help — sign out.
+    // retried request still hit 401/403, refresh did not help. Fail this
+    // request but keep local auth state for offline/local features.
     if (isRetry) {
-      log.warn("Token refresh failed after retry, signing out user");
-      try {
-        const userModel = new User();
-        await userModel.removeToken();
-      } catch (error) {
-        log.error("Error during signout:", error);
-      }
-      delete this._headers["Authorization"];
+      log.warn("Token refresh retry still failed; keeping local session");
       throw new Error(
-        "Authentication failed: Token expired. Please login again."
+        "Authentication failed after token refresh retry (HTTP 401/403)."
       );
     }
 
@@ -150,6 +140,7 @@ export class HttpClient {
       // refreshOnce() is the process-wide entrypoint. If another caller
       // (background timer or another HttpClient) is already refreshing,
       // this returns the same promise — no concurrent rotation race.
+      const { TokenRefreshService } = await import("@/modules/tokenRefresh");
       const refreshResult = await TokenRefreshService.refreshOnce();
 
       if (refreshResult.status && refreshResult.data) {
@@ -172,20 +163,11 @@ export class HttpClient {
     } catch (error) {
       log.error("Token refresh error:", error);
 
-      // Only sign out when the refresh token itself is confirmed invalid/
-      // expired/revoked. Transient network/5xx/unknown failures must NOT
-      // sign the user out (B3 fix).
+      // Do not sign out on refresh failure. Auth-shaped failures can be caused
+      // by backend/proxy instability; keep local session state and fail only
+      // this remote request.
       if (isRefreshTokenInvalidError(error)) {
-        try {
-          const userModel = new User();
-          await userModel.removeToken();
-        } catch (signoutError) {
-          log.error("Error during signout:", signoutError);
-        }
-        delete this._headers["Authorization"];
-        throw new Error(
-          "Authentication failed: Token expired. Please login again."
-        );
+        throw error;
       }
 
       // Transient failure: surface the original error so callers can react.
@@ -213,6 +195,7 @@ export class HttpClient {
     // forces a re-login instead of a transparent refresh (B5 fix).
     if (res.status === 401 || res.status === 403) {
       log.warn(`Received ${res.status} - Attempting token refresh`);
+      const { Token } = await import("@/modules/token");
       const tokenModel = new Token();
       const refreshToken = tokenModel.getValue(REFRESHTOKEN);
 
@@ -246,18 +229,13 @@ export class HttpClient {
         // Try to refresh token and retry request
         return this._refreshTokenAndRetry(endpoint, options, isRetry);
       } else {
-        // No refresh token available, sign out user
-        log.warn("[HttpClient] No refresh token available, signing out user");
-        try {
-          const userModel = new User();
-          await userModel.removeToken();
-        } catch (error) {
-          log.error("Error during signout:", error);
-        }
-
-        delete this._headers["Authorization"];
+        // No refresh token available. Fail this request but keep local auth
+        // state so local features remain usable.
+        log.warn(
+          "[HttpClient] No refresh token available; keeping local session"
+        );
         throw new Error(
-          "Authentication failed: Token expired. Please login again."
+          `Authentication failed: refresh token unavailable (HTTP ${res.status}).`
         );
       }
     }
@@ -267,7 +245,7 @@ export class HttpClient {
     //   if (options.parseResponse !== false && res.status !== 204)
     //     return res.json();
     const data = await res.json();
-    //console.log(data)
+    //log.info(data)
     return data;
   }
 
@@ -425,28 +403,26 @@ export class HttpClient {
         );
       }
 
-      // Prevent infinite refresh loops: already retried once -> sign out.
+      // Prevent infinite refresh loops: already retried once. Fail this request
+      // but keep local auth state.
       if (isRetry) {
-        log.warn("Token refresh failed after retry, signing out user");
-        try {
-          const userModel = new User();
-          await userModel.removeToken();
-        } catch (error) {
-          log.error("Error during signout:", error);
-        }
-        delete this._headers["Authorization"];
+        log.warn("Token refresh retry still failed; keeping local session");
         throw new Error(
-          "Authentication failed: Token expired. Please login again."
+          `Authentication failed after token refresh retry (HTTP ${res.status}).`
         );
       }
 
       // Check if refresh token exists
+      const { Token } = await import("@/modules/token");
       const tokenModel = new Token();
       const refreshToken = tokenModel.getValue(REFRESHTOKEN);
 
       if (refreshToken && refreshToken.trim().length > 0) {
         try {
           // Process-wide refresh mutex: see _refreshTokenAndRetry.
+          const { TokenRefreshService } = await import(
+            "@/modules/tokenRefresh"
+          );
           const refreshResult = await TokenRefreshService.refreshOnce();
 
           if (refreshResult.status && refreshResult.data) {
@@ -467,42 +443,26 @@ export class HttpClient {
         } catch (error) {
           log.error("Token refresh error:", error);
 
-          // Only sign out when the refresh token itself is confirmed invalid/
-          // expired/revoked. Transient failures do NOT sign the user out (B3).
+          // Do not sign out on refresh failure. Keep local session state and
+          // fail only this stream request.
           if (isRefreshTokenInvalidError(error)) {
-            try {
-              const userModel = new User();
-              await userModel.removeToken();
-            } catch (signoutError) {
-              log.error("Error during signout:", signoutError);
-            }
-            delete this._headers["Authorization"];
-            throw new Error(
-              "Authentication failed: Token expired. Please login again."
-            );
+            throw error;
           }
 
           // Transient failure: surface the original error.
           throw error;
         }
       } else {
-        // No refresh token available, sign out user
-        log.warn("No refresh token available, signing out user");
-        try {
-          const userModel = new User();
-          await userModel.removeToken();
-        } catch (error) {
-          log.error("Error during signout:", error);
-        }
-
-        delete this._headers["Authorization"];
+        // No refresh token available. Fail this request but keep local auth
+        // state so local features remain usable.
+        log.warn("No refresh token available; keeping local session");
         throw new Error(
-          "Authentication failed: Token expired. Please login again."
+          `Authentication failed: refresh token unavailable (HTTP ${res.status}).`
         );
       }
     }
 
-    if (!res.ok) throw new Error(res.statusText);
+    if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
     return res;
   }
 }

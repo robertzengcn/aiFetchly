@@ -45,20 +45,34 @@ function restoreBetterSqliteForElectron() {
 
 function runMocha() {
   const testFiles =
-    process.argv.length > 2 ? process.argv.slice(2) : ["test/modules/**/*.test.ts"];
+    process.argv.length > 2
+      ? process.argv.slice(2)
+      : ["test/modules/**/*.test.ts"];
+  // Loader setup:
+  //  - `tsconfig-paths/register` resolves the `@/` path alias for synchronous
+  //    `require()` calls.
+  //  - `--import tsx` (injected via NODE_OPTIONS) registers tsx's full loader,
+  //    which transpiles `.ts` for `require()` AND — crucially — resolves the
+  //    `@/` alias for native ESM dynamic `import()`.
+  //
+  // The previous `--require tsx/cjs` only patched CommonJS, so dynamic
+  // `import("@/...")` (used lazily in src/modules/lib/httpclient.ts and
+  // tokenRefresh.ts to keep Electron-backed deps out of worker bundles) fell
+  // through to Node's native ESM resolver, which does not honor the alias and
+  // crashed with ERR_MODULE_NOT_FOUND. `--import tsx` is the unified entry and
+  // also handles the `.ts` transpilation that `tsx/cjs` used to provide, so it
+  // is dropped here.
+  const nodeOptions = [process.env.NODE_OPTIONS, "--import tsx"]
+    .filter(Boolean)
+    .join(" ");
   return run(
     mochaCommand(),
-    [
-      "--require",
-      "tsconfig-paths/register",
-      "--require",
-      "tsx/cjs",
-      ...testFiles,
-    ],
+    ["--require", "tsconfig-paths/register", ...testFiles],
     {
       env: {
         ...process.env,
         TS_NODE_PROJECT: "tsconfig.json",
+        NODE_OPTIONS: nodeOptions,
       },
     }
   );

@@ -1,60 +1,70 @@
-'use strict';
-import { SearchScrape } from "@/childprocess/searchScraper"
-import { ScrapeOptions, SearchData, SearchResult } from "@/entityTypes/scrapeType"
-import { CustomError } from "@/modules/customError"
-import { TimeoutError, InterceptResolutionAction } from 'puppeteer';
-import { log } from "@/modules/Logger";
+"use strict";
+import { SearchScrape } from "@/childprocess/searchScraper";
+import {
+  ScrapeOptions,
+  SearchData,
+  SearchResult,
+} from "@/entityTypes/scrapeType";
+import { CustomError } from "@/modules/customError";
+import { TimeoutError, InterceptResolutionAction } from "puppeteer";
 //import { delay } from "@/modules/lib/function";
-import useProxy from "@lem0-packages/puppeteer-page-proxy"
-import { convertProxyServertourl } from "@/modules/lib/function"
-
-const BING_REDIRECT_HOST = 'www.bing.com';
+import useProxy from "@lem0-packages/puppeteer-page-proxy";
+import { convertProxyServertourl } from "@/modules/lib/function";
+import {
+  isSameRegistrableHost,
+  ALLOWED_HOSTS,
+} from "@/modules/lib/urlHostAllowlist";
+import { log } from "@/modules/Logger";
 
 /**
  * Try to resolve the final URL from a Bing redirect URL (e.g. /ck/a?...&u=...).
  * Bing often encodes the destination in the `u` query param (base64). Returns null if not a bing redirect or parsing fails.
  */
 function resolveBingRedirectUrl(bingUrl: string): string | null {
-    try {
-        const parsed = new URL(bingUrl);
-        if (!parsed.hostname?.toLowerCase().includes('bing.com')) {
-            return null;
-        }
-        const uParam = parsed.searchParams.get('u');
-        if (!uParam) {
-            return null;
-        }
-        // Try base64 decode (Bing often encodes the destination URL)
-        try {
-            // Common format: "a1" + base64(realUrl) — decode the part after the 2-char prefix
-            if (uParam.length > 2) {
-                const afterPrefix = uParam.slice(2);
-                const decodedFromPrefix = Buffer.from(afterPrefix, 'base64').toString('utf-8');
-                if (decodedFromPrefix.startsWith('http://') || decodedFromPrefix.startsWith('https://')) {
-                    return decodedFromPrefix;
-                }
-            }
-            // Alternative: whole param is base64(realUrl)
-            const decoded = Buffer.from(uParam, 'base64').toString('utf-8');
-            if (decoded.startsWith('http://') || decoded.startsWith('https://')) {
-                return decoded;
-            }
-        } catch {
-            // not valid base64, ignore
-        }
-        // u might be the raw URL (percent-encoded)
-        if (uParam.startsWith('http%3A') || uParam.startsWith('https%3A')) {
-            return decodeURIComponent(uParam);
-        }
-        if (uParam.startsWith('http://') || uParam.startsWith('https://')) {
-            return uParam;
-        }
-        return null;
-    } catch {
-        return null;
+  try {
+    const parsed = new URL(bingUrl);
+    if (!isSameRegistrableHost(parsed.hostname, ALLOWED_HOSTS.bing)) {
+      return null;
     }
+    const uParam = parsed.searchParams.get("u");
+    if (!uParam) {
+      return null;
+    }
+    // Try base64 decode (Bing often encodes the destination URL)
+    try {
+      // Common format: "a1" + base64(realUrl) — decode the part after the 2-char prefix
+      if (uParam.length > 2) {
+        const afterPrefix = uParam.slice(2);
+        const decodedFromPrefix = Buffer.from(afterPrefix, "base64").toString(
+          "utf-8"
+        );
+        if (
+          decodedFromPrefix.startsWith("http://") ||
+          decodedFromPrefix.startsWith("https://")
+        ) {
+          return decodedFromPrefix;
+        }
+      }
+      // Alternative: whole param is base64(realUrl)
+      const decoded = Buffer.from(uParam, "base64").toString("utf-8");
+      if (decoded.startsWith("http://") || decoded.startsWith("https://")) {
+        return decoded;
+      }
+    } catch {
+      // not valid base64, ignore
+    }
+    // u might be the raw URL (percent-encoded)
+    if (uParam.startsWith("http%3A") || uParam.startsWith("https%3A")) {
+      return decodeURIComponent(uParam);
+    }
+    if (uParam.startsWith("http://") || uParam.startsWith("https://")) {
+      return uParam;
+    }
+    return null;
+  } catch {
+    return null;
+  }
 }
-
 
 // export type googlePlaces = {
 //     heading: string;
@@ -64,407 +74,485 @@ function resolveBingRedirectUrl(bingUrl: string): string | null {
 // }
 
 export class BingScraper extends SearchScrape {
-    search_engine_name = "bing"
-    constructor(options: ScrapeOptions) {
-        super(options);
-    }
-    // async searchData(data: ClusterSearchData): Promise<void> {
-    //     // logger("search data in google")
-    //     if(data.page){
-    //         this.page=data.page
-    //     }
-    //     await this.load_start_page()
-    //     await this.search_keyword(data.keywords)
-    // }
+  search_engine_name = "bing";
+  constructor(options: ScrapeOptions) {
+    super(options);
+  }
+  // async searchData(data: ClusterSearchData): Promise<void> {
+  //     // logger("search data in google")
+  //     if(data.page){
+  //         this.page=data.page
+  //     }
+  //     await this.load_start_page()
+  //     await this.search_keyword(data.keywords)
+  // }
 
+  async parse_async(): Promise<SearchData> {
+    //     // check if no results
 
-    async parse_async(): Promise<SearchData> {
+    // results.time = (new Date()).toUTCString();
+    const result: SearchData = {
+      num_results: "",
+      no_results: false,
+      effective_query: "",
+      right_info: {},
+      results: [],
+      top_products: [],
+      right_products: [],
+      top_ads: [],
+      bottom_ads: [],
+      // places: [],
+    };
+    const searchRes = await this.page.$$eval("#b_results .b_algo", (elements) =>
+      elements.map((el) => {
+        const link = el.querySelector(".b_tpcn a")?.getAttribute("href");
 
-        //     // check if no results
+        let title = el.querySelector("h2 a")?.textContent;
+        if (!title) {
+          title = el.querySelector(".b_topTitle")?.textContent;
+        }
+        let visible_link = el.querySelector(".tptt")?.textContent;
+        if (!visible_link) {
+          visible_link = el.querySelector(".tptxt cite")?.textContent;
+        }
+        // if(link?.indexOf('www.bing.com')==-1){
+        //     // const response = await fetch(link, { method: 'GET' });
+        //     // if(response.status==200){
+        //     //     link=response.url
+        //     // }
+        //     const browser = await this.page.browser();
+        //     const newPage = await browser.newPage();
+        //     const response = await newPage.goto(link, { waitUntil: 'domcontentloaded' });
+        //     if (response && response.status() === 200) {
+        //         link = response.url();
+        //     }
+        //     await newPage.close();
+        // }
 
-        // results.time = (new Date()).toUTCString();
-        const result: SearchData = {
-            num_results: '',
-            no_results: false,
-            effective_query: '',
-            right_info: {},
-            results: [],
-            top_products: [],
-            right_products: [],
-            top_ads: [],
-            bottom_ads: [],
-            // places: [],
+        const serp_obj: SearchResult = {
+          // link: await (window as any)._attr(el, '.yuRUbf a', 'href'),
+          //link: el.getAttribute('href'),
+          link: link ? link : "",
+          // title: await (window as any)._text(el, '.yuRUbf a h3'),
+          title: title,
+          //snippet: await (window as any)._text(el, '.VwiC3b span'),
+          snippet: el.querySelector(".b_caption p")?.textContent,
+          //visible_link: await (window as any)._text(el, '.yuRUbf cite'),
+          visible_link: visible_link,
+
+          // date: _text(el, 'span.f'),
         };
-        const searchRes = await this.page.$$eval('#b_results .b_algo', elements =>
-            elements.map(el => {
-                const link = el.querySelector('.b_tpcn a')?.getAttribute('href')
+        return serp_obj;
+      })
+    );
+    for (const seval of searchRes) {
+      const sevalLink = seval.link;
+      const sevalHost = sevalLink ? new URL(sevalLink).hostname : "";
+      if (sevalLink && isSameRegistrableHost(sevalHost, ALLOWED_HOSTS.bing)) {
+        // Prefer resolving from URL params (no extra page load)
+        const resolvedFromUrl = resolveBingRedirectUrl(sevalLink);
+        if (resolvedFromUrl) {
+          seval.link = resolvedFromUrl;
+          result.results.push(seval);
+          continue;
+        }
 
-                let title = el.querySelector('h2 a')?.textContent
-                if (!title) {
-                    title = el.querySelector('.b_topTitle')?.textContent
-                }
-                let visible_link = el.querySelector('.tptt')?.textContent
-                if (!visible_link) {
-                    visible_link = el.querySelector('.tptxt cite')?.textContent
-                }
-                // if(link?.indexOf('www.bing.com')==-1){
-                //     // const response = await fetch(link, { method: 'GET' });
-                //     // if(response.status==200){
-                //     //     link=response.url
-                //     // }
-                //     const browser = await this.page.browser();
-                //     const newPage = await browser.newPage();
-                //     const response = await newPage.goto(link, { waitUntil: 'domcontentloaded' });
-                //     if (response && response.status() === 200) {
-                //         link = response.url();
-                //     }
-                //     await newPage.close();
+        // Fallback: follow redirect by navigating
+        const browser = await this.page.browser();
+        try {
+          const newPage = await browser.newPage();
+          try {
+            if (this.proxyServer) {
+              await newPage.setRequestInterception(true);
+              newPage.on("request", async (interceptedRequest) => {
+                if (
+                  interceptedRequest.interceptResolutionState().action ===
+                  InterceptResolutionAction.AlreadyHandled
+                )
+                  return;
+                // if (interceptedRequest.resourceType() === "image") {
+                //     interceptedRequest.abort();
+                // } else {
+                await useProxy(
+                  interceptedRequest,
+                  convertProxyServertourl(this.proxyServer!)
+                );
+                if (
+                  interceptedRequest.interceptResolutionState().action ===
+                  InterceptResolutionAction.AlreadyHandled
+                )
+                  return;
+                interceptedRequest.continue();
                 // }
-
-                const serp_obj: SearchResult = {
-                    // link: await (window as any)._attr(el, '.yuRUbf a', 'href'),
-                    //link: el.getAttribute('href'),
-                    link: link ? link : '',
-                    // title: await (window as any)._text(el, '.yuRUbf a h3'),
-                    title: title,
-                    //snippet: await (window as any)._text(el, '.VwiC3b span'),
-                    snippet: el.querySelector('.b_caption p')?.textContent,
-                    //visible_link: await (window as any)._text(el, '.yuRUbf cite'),
-                    visible_link: visible_link,
-
-                    // date: _text(el, 'span.f'),
-                }
-                return serp_obj
+              });
             }
-            ))
-        for (const seval of searchRes) {
-            if (seval.link?.includes(BING_REDIRECT_HOST)) {
-                // Prefer resolving from URL params (no extra page load)
-                const resolvedFromUrl = resolveBingRedirectUrl(seval.link);
-                if (resolvedFromUrl) {
-                    seval.link = resolvedFromUrl;
-                    result.results.push(seval);
-                    continue;
-                }
 
-                // Fallback: follow redirect by navigating
-                const browser = await this.page.browser();
-                try {
-                    const newPage = await browser.newPage();
-                    try {
-
-                        if (this.proxyServer) {
-                            await newPage.setRequestInterception(true);
-                            newPage.on("request", async (interceptedRequest) => {
-                                if (interceptedRequest.interceptResolutionState().action === InterceptResolutionAction.AlreadyHandled) return;
-                                // if (interceptedRequest.resourceType() === "image") {
-                                //     interceptedRequest.abort();
-                                // } else {
-                                await useProxy(interceptedRequest, convertProxyServertourl(this.proxyServer!));
-                                if (interceptedRequest.interceptResolutionState().action === InterceptResolutionAction.AlreadyHandled) return;
-                                interceptedRequest.continue();
-                                // }
-                            });
-                        }
-
-                        const response = await newPage.goto(seval.link, {
-                            waitUntil: "networkidle2",
-                            timeout: 60000
-                        });
-                        if (response && response.status() === 200) {
-                            seval.link = response.url();
-                        }
-                        //await newPage.close();
-                    } catch (error) {
-                        //catch time out error
-                        if (error instanceof TimeoutError) {
-                            // Do something if this is a timeout.
-                            log.info('Navigation timed out:', error);
-                        }
-                    } finally {
-                        if (!newPage.isClosed()) {
-                            await newPage.close();
-                        }
-                    }
-                } catch (error) {
-                    log.error('Error creating new page:', error);
-                }
-            }
-            result.results.push(seval);
-        }
-
-        // const topad=await this.page.$$eval('#tvcap .uEierd', elements =>elements.map(
-        //     el => async () =>{
-        //         const ad_obj: SearchResult = {
-        //             // visible_link: _text(el, '.ads-visurl cite'),
-        //             // tracking_link: _attr(el, 'a:first-child', 'href'),
-        //             // link: await (window as any)._attr(el, 'a', 'href'),
-        //             link: el.querySelector('a')?.getAttribute('href'),
-        //             //title: await (window as any)._text(el, 'span:nth-child(2)'),
-        //             title: el.querySelector('span:nth-child(2)')?.textContent,
-        //             //snippet: await (window as any)._text(el, '.Va3FIb span'),
-        //             snippet: el.querySelector('.Va3FIb span')?.textContent,
-        //             // links: [],
-        //         };
-
-        //         return ad_obj
-        //     }
-        // ))
-        // for( const tValue of topad){
-        //     const atValue = await tValue();
-        //     result.results.push(atValue)
-        // }
-        // const bottomAd=await this.page.$$eval('#tadsb .uEierd', elements =>elements.map(
-        //     el => async () =>{
-        //         const ad_obj: SearchResult = {
-        //             // visible_link: _text(el, '.ads-visurl cite'),
-        //             // tracking_link: _attr(el, 'a:first-child', 'href'),
-        //             //link: await (window as any)._attr(el, 'a', 'href'),
-        //             link: el.querySelector('a')?.getAttribute('href'),
-        //             title:el.querySelector('span:nth-child(2)')?.textContent,
-        //             //snippet: await (window as any)._text(el, '.Va3FIb span'),
-        //             snippet: el.querySelector('.Va3FIb span')?.textContent,
-        //             // links: [],
-        //         };
-
-        //         return ad_obj
-        //     }
-        // ))
-        // for( const tValue of bottomAd){
-        //     const atValue= await tValue();
-        //     result.results.push(atValue)
-        // }
-        // const num=await this.page.$eval('#resultStats', el => el.textContent);
-        // if(num){
-        //     result.num_results = num;
-        // }
-        return result;
-    }
-
-    async load_start_page(): Promise<boolean | void> {
-        const startUrl = 'https://www.bing.com';//ncr means no country redirect
-
-        this.logger.info('Using startUrl: ' + startUrl);
-
-        try {
-            this.last_response = await this.page.goto(startUrl, {
-                waitUntil: "networkidle2",
-                timeout: this.STANDARD_TIMEOUT
+            const response = await newPage.goto(sevalLink, {
+              waitUntil: "networkidle2",
+              timeout: 60000,
             });
-        } catch (error) {
-            // Check if page is actually ready despite timeout error
-            // This handles cases where networkidle2 never completes due to continuous background requests
-            // but the page is actually loaded and functional
+            if (response && response.status() === 200) {
+              seval.link = response.url();
+            }
+            //await newPage.close();
+          } catch (error) {
+            //catch time out error
             if (error instanceof TimeoutError) {
-                try {
-                    const pageReadyState = await this.page.evaluate(() => document.readyState);
-                    const searchBoxElement = await this.page.$('textarea[name="q"]');
-                    const searchBoxExists = searchBoxElement !== null;
-                    
-                    // If page is actually ready and functional, continue despite the timeout
-                    if (pageReadyState === 'complete' && searchBoxExists) {
-                        this.logger.warn('Navigation timeout occurred but page appears to be loaded and functional');
-                    } else {
-                        const recovery = await this.attemptAIRecovery('load_start_page', (error as Error).message, ['textarea[name="q"]']);
-                        if (recovery.success) {
-                            return this.load_start_page();
-                        }
-                        throw error;
-                    }
-                } catch (checkError) {
-                    const recovery = await this.attemptAIRecovery('load_start_page', (error as Error).message, ['textarea[name="q"]']);
-                    if (recovery.success) {
-                        return this.load_start_page();
-                    }
-                    throw error;
-                }
-            } else {
-                const recovery = await this.attemptAIRecovery('load_start_page', (error as Error).message, []);
-                if (recovery.success) {
-                    return this.load_start_page();
-                }
-                throw error;
+              // Do something if this is a timeout.
+              log.info("Navigation timed out:", error);
             }
-        }
-        
-        // Wait for page to be fully loaded
-        try {
-            await this.page.waitForFunction(() => {
-                return document.readyState === 'complete';
-            }, { timeout: this.STANDARD_TIMEOUT });
-        } catch (waitError) {
-            // If readyState is already complete, continue anyway
-            const currentReadyState = await this.page.evaluate(() => document.readyState);
-            if (currentReadyState !== 'complete') {
-                throw waitError;
+          } finally {
+            if (!newPage.isClosed()) {
+              await newPage.close();
             }
-        }
-
-        // Check for and click cookie consent button if present
-        try {
-            const cookieButton = await this.page.$('#bnp_btn_accept');
-            if (cookieButton) {
-                this.logger.info('Found cookie consent button, clicking it');
-                await cookieButton.click();
-                // Wait a bit for the cookie banner to disappear
-                await new Promise(resolve => setTimeout(resolve, 500));
-            }
+          }
         } catch (error) {
-            // Cookie button not found or already dismissed - this is fine
-            this.logger.debug('Cookie consent button not found or already dismissed');
+          log.error("Error creating new page:", error);
         }
-
-        // await this.page.waitForSelector('textarea[name="q"]', { timeout: this.STANDARD_TIMEOUT });
-
-        return true;
+      }
+      result.results.push(seval);
     }
 
-    async search_keyword(keyword: string): Promise<void> {
-        //wait for full page loading
-        // await delay(5000)
-        await this.page.waitForFunction(() => {
-            return (
-                document.querySelector('textarea[name="q"]') !== null ||
-                document.querySelector('input[name="q"]') !== null
+    // const topad=await this.page.$$eval('#tvcap .uEierd', elements =>elements.map(
+    //     el => async () =>{
+    //         const ad_obj: SearchResult = {
+    //             // visible_link: _text(el, '.ads-visurl cite'),
+    //             // tracking_link: _attr(el, 'a:first-child', 'href'),
+    //             // link: await (window as any)._attr(el, 'a', 'href'),
+    //             link: el.querySelector('a')?.getAttribute('href'),
+    //             //title: await (window as any)._text(el, 'span:nth-child(2)'),
+    //             title: el.querySelector('span:nth-child(2)')?.textContent,
+    //             //snippet: await (window as any)._text(el, '.Va3FIb span'),
+    //             snippet: el.querySelector('.Va3FIb span')?.textContent,
+    //             // links: [],
+    //         };
+
+    //         return ad_obj
+    //     }
+    // ))
+    // for( const tValue of topad){
+    //     const atValue = await tValue();
+    //     result.results.push(atValue)
+    // }
+    // const bottomAd=await this.page.$$eval('#tadsb .uEierd', elements =>elements.map(
+    //     el => async () =>{
+    //         const ad_obj: SearchResult = {
+    //             // visible_link: _text(el, '.ads-visurl cite'),
+    //             // tracking_link: _attr(el, 'a:first-child', 'href'),
+    //             //link: await (window as any)._attr(el, 'a', 'href'),
+    //             link: el.querySelector('a')?.getAttribute('href'),
+    //             title:el.querySelector('span:nth-child(2)')?.textContent,
+    //             //snippet: await (window as any)._text(el, '.Va3FIb span'),
+    //             snippet: el.querySelector('.Va3FIb span')?.textContent,
+    //             // links: [],
+    //         };
+
+    //         return ad_obj
+    //     }
+    // ))
+    // for( const tValue of bottomAd){
+    //     const atValue= await tValue();
+    //     result.results.push(atValue)
+    // }
+    // const num=await this.page.$eval('#resultStats', el => el.textContent);
+    // if(num){
+    //     result.num_results = num;
+    // }
+    return result;
+  }
+
+  async load_start_page(): Promise<boolean | void> {
+    const startUrl = "https://www.bing.com"; //ncr means no country redirect
+
+    this.logger.info("Using startUrl: " + startUrl);
+
+    try {
+      this.last_response = await this.page.goto(startUrl, {
+        waitUntil: "networkidle2",
+        timeout: this.STANDARD_TIMEOUT,
+      });
+    } catch (error) {
+      // Check if page is actually ready despite timeout error
+      // This handles cases where networkidle2 never completes due to continuous background requests
+      // but the page is actually loaded and functional
+      if (error instanceof TimeoutError) {
+        try {
+          const pageReadyState = await this.page.evaluate(
+            () => document.readyState
+          );
+          const searchBoxElement = await this.page.$('textarea[name="q"]');
+          const searchBoxExists = searchBoxElement !== null;
+
+          // If page is actually ready and functional, continue despite the timeout
+          if (pageReadyState === "complete" && searchBoxExists) {
+            this.logger.warn(
+              "Navigation timeout occurred but page appears to be loaded and functional"
             );
-        }, { timeout: this.STANDARD_TIMEOUT });
-        await this.page.waitForFunction(() => {
-            return document.readyState === 'complete';
-        }, { timeout: this.STANDARD_TIMEOUT });
-        const textareaSearch = await this.page.$('textarea[name="q"]');
-        const inputSearch = textareaSearch ? null : await this.page.$('input[name="q"]');
-        const searchControl = textareaSearch ?? inputSearch;
-
-        if (!searchControl) {
-            const recovery = await this.attemptAIRecovery('search_input', 'Bing search input not found', ['textarea[name="q"]', 'input[name="q"]'], { keyword });
+          } else {
+            const recovery = await this.attemptAIRecovery(
+              "load_start_page",
+              (error as Error).message,
+              ['textarea[name="q"]']
+            );
             if (recovery.success) {
-                return this.search_keyword(keyword);
+              return this.load_start_page();
             }
-            throw new CustomError("input keyword button not found", 202408191127280);
+            throw error;
+          }
+        } catch (checkError) {
+          const recovery = await this.attemptAIRecovery(
+            "load_start_page",
+            (error as Error).message,
+            ['textarea[name="q"]']
+          );
+          if (recovery.success) {
+            return this.load_start_page();
+          }
+          throw error;
         }
-
-        const rect = await searchControl.boundingBox();
-        await searchControl.focus();
-        if (rect) {
-            await this.page.mouse.move(rect.x + rect.width / 2, rect.y + rect.height / 2);
-            await this.page.mouse.click(rect.x + rect.width / 2, rect.y + rect.height / 2);
-            await this.page.keyboard.type(keyword, { delay: Math.random() * 100 + 250 });
-            await this.page.keyboard.press('Enter');
-
-            try {
-                await this.page.waitForNavigation({ timeout: 5000 });
-            } catch {
-                await this.page.evaluate(() => {
-                    const form = document.querySelector('form[action="/search"]') as HTMLFormElement;
-                    if (form) {
-                        log.info("form found and submit");
-                        form.submit();
-                    }
-                });
-            }
-        } else {
-            await this.page.evaluate((element, value) => {
-                (element as HTMLInputElement | HTMLTextAreaElement).value = value;
-            }, searchControl, keyword);
-            await this.page.evaluate(async () => {
-                await new Promise(function (resolve) {
-                    setTimeout(resolve, 3000)
-                });
-            });
-
-            await searchControl.focus();
-            await this.page.keyboard.press("Enter");
+      } else {
+        const recovery = await this.attemptAIRecovery(
+          "load_start_page",
+          (error as Error).message,
+          []
+        );
+        if (recovery.success) {
+          return this.load_start_page();
         }
+        throw error;
+      }
     }
-    //click next page
-    async next_page(): Promise<boolean | void> {
-        this.logger.info('Attempting to navigate to next page');
-        
-        // Scroll to bottom of page first to ensure pagination controls are loaded
+
+    // Wait for page to be fully loaded
+    try {
+      await this.page.waitForFunction(
+        () => {
+          return document.readyState === "complete";
+        },
+        { timeout: this.STANDARD_TIMEOUT }
+      );
+    } catch (waitError) {
+      // If readyState is already complete, continue anyway
+      const currentReadyState = await this.page.evaluate(
+        () => document.readyState
+      );
+      if (currentReadyState !== "complete") {
+        throw waitError;
+      }
+    }
+
+    // Check for and click cookie consent button if present
+    try {
+      const cookieButton = await this.page.$("#bnp_btn_accept");
+      if (cookieButton) {
+        this.logger.info("Found cookie consent button, clicking it");
+        await cookieButton.click();
+        // Wait a bit for the cookie banner to disappear
+        await new Promise((resolve) => setTimeout(resolve, 500));
+      }
+    } catch (error) {
+      // Cookie button not found or already dismissed - this is fine
+      this.logger.debug("Cookie consent button not found or already dismissed");
+    }
+
+    // await this.page.waitForSelector('textarea[name="q"]', { timeout: this.STANDARD_TIMEOUT });
+
+    return true;
+  }
+
+  async search_keyword(keyword: string): Promise<void> {
+    //wait for full page loading
+    // await delay(5000)
+    await this.page.waitForFunction(
+      () => {
+        return (
+          document.querySelector('textarea[name="q"]') !== null ||
+          document.querySelector('input[name="q"]') !== null
+        );
+      },
+      { timeout: this.STANDARD_TIMEOUT }
+    );
+    await this.page.waitForFunction(
+      () => {
+        return document.readyState === "complete";
+      },
+      { timeout: this.STANDARD_TIMEOUT }
+    );
+    const textareaSearch = await this.page.$('textarea[name="q"]');
+    const inputSearch = textareaSearch
+      ? null
+      : await this.page.$('input[name="q"]');
+    const searchControl = textareaSearch ?? inputSearch;
+
+    if (!searchControl) {
+      const recovery = await this.attemptAIRecovery(
+        "search_input",
+        "Bing search input not found",
+        ['textarea[name="q"]', 'input[name="q"]'],
+        { keyword }
+      );
+      if (recovery.success) {
+        return this.search_keyword(keyword);
+      }
+      throw new CustomError("input keyword button not found", 202408191127280);
+    }
+
+    const rect = await searchControl.boundingBox();
+    await searchControl.focus();
+    if (rect) {
+      await this.page.mouse.move(
+        rect.x + rect.width / 2,
+        rect.y + rect.height / 2
+      );
+      await this.page.mouse.click(
+        rect.x + rect.width / 2,
+        rect.y + rect.height / 2
+      );
+      await this.page.keyboard.type(keyword, {
+        delay: Math.random() * 100 + 250,
+      });
+      await this.page.keyboard.press("Enter");
+
+      try {
+        await this.page.waitForNavigation({ timeout: 5000 });
+      } catch {
         await this.page.evaluate(() => {
-            window.scrollTo(0, document.body.scrollHeight);
+          const form = document.querySelector(
+            'form[action="/search"]'
+          ) as HTMLFormElement;
+          if (form) {
+            log.info("form found and submit");
+            form.submit();
+          }
         });
-        
-        // Wait a bit for any lazy-loaded content to appear
-        await new Promise(resolve => setTimeout(resolve, 500));
-        
-        // List of possible selectors for the next page button
-        const nextPageSelectors = [
-            '.sb_pagN',
-            '[aria-label="Next page"]',
-            '[title="Next page"]',
-            '.pgn_next',
-            'a[aria-label="Next page"]',
-            'button[aria-label="Next page"]',
-            '.b_pag a[href*="page"]:last-child',
-            '#b_content .b_pag a:last-child'
-        ];
-        
-        // Try each selector until we find a valid next page button
-        for (const selector of nextPageSelectors) {
-            try {
-                const nextPageElement = await this.page.$(selector);
-                if (nextPageElement) {
-                    // Check if the element is visible and enabled
-                    const elementInfo = await this.page.evaluate((el) => {
-                        const htmlEl = el as HTMLElement;
-                        const rect = htmlEl.getBoundingClientRect();
-                        const style = window.getComputedStyle(htmlEl);
-                        return {
-                            isVisible: rect.width > 0 && rect.height > 0 && 
-                                      style.display !== 'none' && 
-                                      style.visibility !== 'hidden' &&
-                                      style.opacity !== '0',
-                            isEnabled: !htmlEl.hasAttribute('disabled') && 
-                                      !htmlEl.classList.contains('disabled') &&
-                                      htmlEl.offsetParent !== null,
-                            hasHref: htmlEl.tagName === 'A' ? (htmlEl as HTMLAnchorElement).href !== '' : true
-                        };
-                    }, nextPageElement);
-                    
-                    if (elementInfo.isVisible && elementInfo.isEnabled && elementInfo.hasHref) {
-                        this.logger.info(`Found next page button with selector: ${selector}`);
-                        await nextPageElement.scrollIntoView();
-                        await new Promise(resolve => setTimeout(resolve, 200));
-                        await nextPageElement.click();
-                        return true;
-                    }
-                }
-            } catch (error) {
-                // Continue to next selector if current one fails
-                this.logger.debug(`Selector ${selector} not found or not clickable, trying next`);
-                continue;
-            }
+      }
+    } else {
+      await this.page.evaluate(
+        (element, value) => {
+          (element as HTMLInputElement | HTMLTextAreaElement).value = value;
+        },
+        searchControl,
+        keyword
+      );
+      await this.page.evaluate(async () => {
+        await new Promise(function (resolve) {
+          setTimeout(resolve, 3000);
+        });
+      });
+
+      await searchControl.focus();
+      await this.page.keyboard.press("Enter");
+    }
+  }
+  //click next page
+  async next_page(): Promise<boolean | void> {
+    this.logger.info("Attempting to navigate to next page");
+
+    // Scroll to bottom of page first to ensure pagination controls are loaded
+    await this.page.evaluate(() => {
+      window.scrollTo(0, document.body.scrollHeight);
+    });
+
+    // Wait a bit for any lazy-loaded content to appear
+    await new Promise((resolve) => setTimeout(resolve, 500));
+
+    // List of possible selectors for the next page button
+    const nextPageSelectors = [
+      ".sb_pagN",
+      '[aria-label="Next page"]',
+      '[title="Next page"]',
+      ".pgn_next",
+      'a[aria-label="Next page"]',
+      'button[aria-label="Next page"]',
+      '.b_pag a[href*="page"]:last-child',
+      "#b_content .b_pag a:last-child",
+    ];
+
+    // Try each selector until we find a valid next page button
+    for (const selector of nextPageSelectors) {
+      try {
+        const nextPageElement = await this.page.$(selector);
+        if (nextPageElement) {
+          // Check if the element is visible and enabled
+          const elementInfo = await this.page.evaluate((el) => {
+            const htmlEl = el as HTMLElement;
+            const rect = htmlEl.getBoundingClientRect();
+            const style = window.getComputedStyle(htmlEl);
+            return {
+              isVisible:
+                rect.width > 0 &&
+                rect.height > 0 &&
+                style.display !== "none" &&
+                style.visibility !== "hidden" &&
+                style.opacity !== "0",
+              isEnabled:
+                !htmlEl.hasAttribute("disabled") &&
+                !htmlEl.classList.contains("disabled") &&
+                htmlEl.offsetParent !== null,
+              hasHref:
+                htmlEl.tagName === "A"
+                  ? (htmlEl as HTMLAnchorElement).href !== ""
+                  : true,
+            };
+          }, nextPageElement);
+
+          if (
+            elementInfo.isVisible &&
+            elementInfo.isEnabled &&
+            elementInfo.hasHref
+          ) {
+            this.logger.info(
+              `Found next page button with selector: ${selector}`
+            );
+            await nextPageElement.scrollIntoView();
+            await new Promise((resolve) => setTimeout(resolve, 200));
+            await nextPageElement.click();
+            return true;
+          }
         }
-        
-        this.logger.warn('Next page button not found with any of the known selectors');
-        return false;
+      } catch (error) {
+        // Continue to next selector if current one fails
+        this.logger.debug(
+          `Selector ${selector} not found or not clickable, trying next`
+        );
+        continue;
+      }
     }
 
-    async wait_for_results() {
-        const selectors = [
-            '#b_tween',
-            '#b_results',
-            '.b_results',
-            '#main',
-            '#b_mcw',
-        ];
+    this.logger.warn(
+      "Next page button not found with any of the known selectors"
+    );
+    return false;
+  }
 
-        for (const selector of selectors) {
-            try {
-                await this.page.waitForSelector(selector, { timeout: this.STANDARD_TIMEOUT });
-                return; // Exit if any selector is found
-            } catch (error) {
-                continue; // Try next selector if current one times out
-            }
-        }
-        //await this.page.waitForSelector('#b_tween', { timeout: this.STANDARD_TIMEOUT });
+  async wait_for_results() {
+    const selectors = [
+      "#b_tween",
+      "#b_results",
+      ".b_results",
+      "#main",
+      "#b_mcw",
+    ];
+
+    for (const selector of selectors) {
+      try {
+        await this.page.waitForSelector(selector, {
+          timeout: this.STANDARD_TIMEOUT,
+        });
+        return; // Exit if any selector is found
+      } catch (error) {
+        continue; // Try next selector if current one times out
+      }
     }
+    //await this.page.waitForSelector('#b_tween', { timeout: this.STANDARD_TIMEOUT });
+  }
 
-    async detected() {
-        const title = await this.page.title();
-        const html = await this.page.content();
-        return html.indexOf('detected unusual traffic') !== -1 || title.indexOf('/sorry/') !== -1;
-    }
-
+  async detected() {
+    const title = await this.page.title();
+    const html = await this.page.content();
+    return (
+      html.indexOf("detected unusual traffic") !== -1 ||
+      title.indexOf("/sorry/") !== -1
+    );
+  }
 }

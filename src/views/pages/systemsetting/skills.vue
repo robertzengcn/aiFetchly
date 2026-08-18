@@ -165,14 +165,23 @@ const {
 );
 
 async function handleToggle(skill: SkillEntry): Promise<void> {
+  const requestedEnabled = skill.enabled;
+  const previousEnabled = !requestedEnabled;
   try {
-    await windowInvoke("skill:toggle", {
+    const response = await windowInvoke("skill:toggle", {
       skillName: skill.name,
-      enabled: skill.enabled,
+      enabled: requestedEnabled,
     });
-    await fetchSkills();
+    if (response.status) {
+      await fetchSkills();
+    } else {
+      skill.enabled = previousEnabled;
+      alert(response.msg || t("skills.toggle_error") || "Failed to update skill status");
+    }
   } catch (error) {
+    skill.enabled = previousEnabled;
     console.error("Toggle error:", error);
+    alert(t("skills.toggle_error") || "Failed to update skill status");
   }
 }
 

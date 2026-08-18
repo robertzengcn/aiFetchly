@@ -1,5 +1,5 @@
 // src/service/slashCommands/builtinSlashCommands.ts
-// CMD-03 — register the four phase-13 built-in slash commands.
+// CMD-03 — register the built-in slash commands.
 //
 // Built-ins are always-on (requiresTrust=false, enabled=true), source
 // "built-in", type "local" (no AI call — main process returns text).
@@ -13,7 +13,7 @@ import type { SlashCommandDefinition } from "@/entityTypes/slashCommandTypes";
 import { CommandRegistry } from "./CommandRegistry";
 
 /**
- * The four phase-13 built-in slash commands (design §7.2, §11.4).
+ * Built-in slash commands (design §7.2, §11.4).
  *
  * `local` type means the dispatcher handles them in-process and returns
  * a `show_result` discriminated-union variant — no AI call, no AI-enable
@@ -63,6 +63,46 @@ const BUILT_IN_COMMANDS: readonly SlashCommandDefinition[] = Object.freeze([
     enabled: true,
   },
   {
+    id: "built-in:command:skills",
+    name: "skills",
+    description: "List currently available AI skills/tools in this system.",
+    aliases: [],
+    type: "local",
+    source: "built-in",
+    sourceId: "built-in",
+    sourceLabel: "Built-in",
+    requiresTrust: false,
+    enabled: true,
+  },
+  {
+    id: "built-in:command:goal",
+    name: "goal",
+    description:
+      "Create or replace the active AI Chat goal and enter Plan Mode.",
+    aliases: [],
+    type: "local",
+    source: "built-in",
+    sourceId: "built-in",
+    sourceLabel: "Built-in",
+    argumentHint: "<objective>",
+    requiresTrust: false,
+    enabled: true,
+  },
+  {
+    id: "built-in:command:loop",
+    name: "loop",
+    description:
+      "Continue the active AI Chat goal for a bounded number of iterations.",
+    aliases: [],
+    type: "local",
+    source: "built-in",
+    sourceId: "built-in",
+    sourceLabel: "Built-in",
+    argumentHint: "<maxIterations>",
+    requiresTrust: false,
+    enabled: true,
+  },
+  {
     id: "built-in:command:reload-config",
     name: "reload-config",
     description: "Rescan ~/.aifetchly and reload configuration.",
@@ -92,10 +132,25 @@ const BUILT_IN_COMMANDS: readonly SlashCommandDefinition[] = Object.freeze([
     requiresTrust: false,
     enabled: true,
   },
+  {
+    id: "built-in:command:plugin",
+    name: "plugin",
+    description:
+      "Manage plugin marketplaces and install plugins from chat.",
+    aliases: [],
+    type: "local",
+    source: "built-in",
+    sourceId: "built-in",
+    sourceLabel: "Built-in",
+    argumentHint:
+      "marketplace add <source> | install <plugin@marketplace|source>",
+    requiresTrust: false,
+    enabled: true,
+  },
 ]);
 
 /**
- * Register the four phase-13 built-in slash commands on the given
+ * Register the built-in slash commands on the given
  * registry. Idempotent — the registry's id-based replace semantics mean
  * re-registering the same ids does not duplicate entries.
  *

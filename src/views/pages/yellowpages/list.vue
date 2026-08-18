@@ -368,7 +368,7 @@ import YellowPagesTaskTable from './components/YellowPagesTaskTable.vue'
 import TaskDetailsView from './components/TaskDetailsView.vue'
 import NoticeSnackbar from '@/views/components/widgets/noticeSnackbar.vue'
 import { getYellowPagesTaskList, getYellowPagesPlatforms, deleteYellowPagesTask, killProcessByPID, startYellowPagesTask, pauseYellowPagesTask, resumeYellowPagesTask } from '@/views/api/yellowpages'
-import { TaskStatus, TaskSummary } from '@/modules/interface/ITaskManager'
+import { TaskStatus, TaskSummary, TaskFilters } from '@/modules/interface/ITaskManager'
 import { PlatformSummary } from '@/modules/interface/IPlatformConfig'
 
 // Router and i18n
@@ -443,12 +443,12 @@ const confirmDialog = reactive({
   show: false,
   title: '',
   message: '',
-  action: null as any
+  action: null as (() => void) | null
 })
 
 const taskDetailsDialog = reactive({
   show: false,
-  task: null as any
+  task: null as TaskSummary | null
 })
 
 // Cloudflare protection alert state
@@ -459,6 +459,7 @@ const cloudflareAlert = reactive({
 })
 
 // Cloudflare protection alert methods
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const showCloudflareAlert = (message: string, recommendation: string) => {
   cloudflareAlert.message = message
   cloudflareAlert.recommendation = recommendation
@@ -586,7 +587,7 @@ const applyFiltersAndSearch = () => {
   loading.value = true
   
   // Create filter object for API call
-  const filters: any = {
+  const filters: TaskFilters = {
     offset: currentPage.value * pageSize.value,
     limit: pageSize.value
   }
@@ -605,7 +606,7 @@ const applyFiltersAndSearch = () => {
   loadTasksWithFilters(filters)
 }
 
-const loadTasksWithFilters = async (filters: any) => {
+const loadTasksWithFilters = async (filters: TaskFilters) => {
   try {
     const response = await getYellowPagesTaskList(filters)
     
@@ -688,6 +689,7 @@ const removeFilter = (filterType: 'search' | 'status' | 'platform' | 'priority')
   applyFiltersAndSearch()
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const handlePageChange = (page: number) => {
   currentPage.value = page
   // Check if we have active filters or search
@@ -704,11 +706,11 @@ const createNewTask = () => {
   router.push('/yellowpages/create')
 }
 
-const editTask = (task: any) => {
+const editTask = (task: TaskSummary) => {
   router.push(`/yellowpages/edit/${task.id}`)
 }
 
-const deleteTask = (task: any) => {
+const deleteTask = (task: TaskSummary) => {
   confirmDialog.title = t('home.delete_task')
   confirmDialog.message = t('home.delete_task_confirm', { name: task.name })
   confirmDialog.action = () => performDeleteTask(task.id)
@@ -726,7 +728,7 @@ const performDeleteTask = async (taskId: number) => {
   }
 }
 
-const startTask = async (task: any) => {
+const startTask = async (task: TaskSummary) => {
   try {
     // TODO: Replace with actual API call
     await startYellowPagesTask(task.id)
@@ -748,7 +750,7 @@ const startTask = async (task: any) => {
   }
 }
 
-const stopTask = async (task: any) => {
+const stopTask = async (task: TaskSummary) => {
   try {
     // Check if task has a PID (is currently running)
     if (!task.pid) {
@@ -814,7 +816,7 @@ const stopTask = async (task: any) => {
   }
 }
 
-const pauseTask = async (task: any) => {
+const pauseTask = async (task: TaskSummary) => {
   try {
     // TODO: Replace with actual API call
     await pauseYellowPagesTask(task.id)
@@ -827,7 +829,7 @@ const pauseTask = async (task: any) => {
   }
 }
 
-const resumeTask = async (task: any) => {
+const resumeTask = async (task: TaskSummary) => {
   try {
     // TODO: Replace with actual API call
     await resumeYellowPagesTask(task.id)
@@ -840,7 +842,7 @@ const resumeTask = async (task: any) => {
   }
 }
 
-const viewTaskResults = (task: any) => {
+const viewTaskResults = (task: TaskSummary) => {
   // Check if task has results
   if (!task.results_count || task.results_count === 0) {
     const message = task.status === TaskStatus.InProgress
@@ -855,16 +857,18 @@ const viewTaskResults = (task: any) => {
   }
 }
 
-const viewTaskDetails = (task: any) => {
+const viewTaskDetails = (task: TaskSummary) => {
   taskDetailsDialog.task = task
   taskDetailsDialog.show = true
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const importTasks = () => {
   // TODO: Implement import functionality
   console.log('Import tasks')
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const exportTasks = () => {
   // TODO: Implement export functionality
   console.log('Export tasks')

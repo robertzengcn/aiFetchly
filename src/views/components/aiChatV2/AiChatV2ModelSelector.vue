@@ -19,8 +19,8 @@
       class="v2-model-selector__select"
       @update:model-value="onChange"
     >
-      <template #item="{ item, props }">
-        <v-list-item v-bind="props">
+      <template #item="{ item, props: itemProps }">
+        <v-list-item v-bind="itemProps">
           <template #append>
             <v-chip
               v-if="item.raw.isFree"
@@ -79,12 +79,18 @@ interface ModelSelectItem {
 /** Sentinel matching the parent's AUTO_MODEL_VALUE. */
 const AUTO_MODEL_VALUE = "auto";
 
+/** Show the provider-independent model name without changing its submitted id. */
+const getDisplayModelName = (modelId: string): string => {
+  const separatorIndex = modelId.lastIndexOf("/");
+  return separatorIndex >= 0 ? modelId.slice(separatorIndex + 1) : modelId;
+};
+
 const selectItems = computed<ModelSelectItem[]>(() => {
   const modelItems = (props.items ?? [])
     .filter((m) => m && typeof m.id === "string" && m.id.length > 0)
     .map((m) => ({
       value: m.id,
-      title: m.id,
+      title: getDisplayModelName(m.id),
       contextSize: m.context_size,
       isFree: m.is_free === true,
     }));
@@ -94,7 +100,7 @@ const selectItems = computed<ModelSelectItem[]>(() => {
     ? (props.items ?? []).find((m) => m.id === props.defaultModel)
     : undefined;
   const autoSubtitle = props.defaultModel
-    ? `${t("aiChatV2.model_auto_default") || "Default"}: ${props.defaultModel}`
+    ? `${t("aiChatV2.model_auto_default") || "Default"}: ${getDisplayModelName(props.defaultModel)}`
     : t("aiChatV2.model_auto") || "Auto";
   return [
     {

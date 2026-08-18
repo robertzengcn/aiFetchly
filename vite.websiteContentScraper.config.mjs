@@ -1,10 +1,12 @@
 import { defineConfig, loadEnv } from 'vite';
 import alias from "@rollup/plugin-alias";
 import * as path from 'path';
+import { builtinModules } from 'node:module';
 
 import ClosePlugin from './vite-plugin-close.js'
 import checker from 'vite-plugin-checker'
 import { optionalChecker } from './vite-checker-toggle.mjs';
+import { TURNDOWN_SSR_NO_EXTERNAL, SANITIZE_HTML_SSR_NO_EXTERNAL } from './vite.workerSsrNoExternal.mjs';
 import { nodeResolve } from '@rollup/plugin-node-resolve';
 import sourcemaps from 'rollup-plugin-sourcemaps';
 
@@ -37,6 +39,11 @@ function emptyModulesPlugin() {
     };
 }
 
+const nodeBuiltins = builtinModules.flatMap((moduleName) => [
+    moduleName,
+    `node:${moduleName}`,
+]);
+
 export default ({ mode }) => {
     process.env = { ...process.env, ...loadEnv(mode, process.cwd()) };
     return defineConfig({
@@ -57,6 +64,12 @@ export default ({ mode }) => {
         optimizeDeps: {
             include: ['winston-transport', 'bufferutil', 'utf-8-validate']
         },
+        ssr: {
+            // HtmlConversionService imports both turndown and sanitize-html;
+            // bundle both pure-JS graphs so the unpacked worker doesn't emit
+            // bare runtime requires for packages that only live in app.asar.
+            noExternal: [...TURNDOWN_SSR_NO_EXTERNAL, ...SANITIZE_HTML_SSR_NO_EXTERNAL],
+        },
         build: {
             rollupOptions: {
                 input: {
@@ -68,6 +81,8 @@ export default ({ mode }) => {
                     format: 'cjs'
                 },
                 external: [
+                    ...nodeBuiltins,
+                    'electron',
                     'sqlite3',
                     'better-sqlite3',
                     'bindings',
@@ -82,4 +97,3 @@ export default ({ mode }) => {
         },
     })
 }
-

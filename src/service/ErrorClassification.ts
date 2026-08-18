@@ -113,8 +113,8 @@ export class ErrorClassifier {
         originalError: error,
         category: ErrorCategory.RESOURCE,
         severity: ErrorSeverity.HIGH,
-        recoveryStrategy: RecoveryStrategy.FALLBACK,
-        isRecoverable: true,
+        recoveryStrategy: RecoveryStrategy.ABORT,
+        isRecoverable: false,
         context,
       };
     }
@@ -137,7 +137,7 @@ export class ErrorClassifier {
       category: ErrorCategory.UNKNOWN,
       severity: ErrorSeverity.MEDIUM,
       recoveryStrategy: RecoveryStrategy.CONTINUE,
-      isRecoverable: true,
+      isRecoverable: false,
       context,
     };
   }

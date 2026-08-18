@@ -12,6 +12,7 @@ import {
 } from "@/entityTypes/commonType";
 import { DocumentInfo } from "@/views/api/rag";
 import { EmbeddingModelCatalogService } from "@/service/embedding/EmbeddingModelCatalogService";
+import { isLocalXenovaModel } from "@/service/embedding/EmbeddingModelId";
 import {
   getUploadGrantService,
   isPathUnderDir,
@@ -46,12 +47,15 @@ import {
   SAVE_TEMP_FILE_COMPLETE,
   RAG_GET_DOCUMENT_ERROR_LOG,
   RAG_CHECK_DOCUMENT_DUPLICATE,
+  RAG_IMPORT_WEBSITE,
+  RAG_IMPORT_WEBSITE_PROGRESS,
 } from "@/config/channellist";
 import {
   registerValidatedHandler,
   registerAiValidatedHandler,
 } from "@/main-process/communication/_shared/registerValidatedHandler";
 import { isAiEnabled } from "@/service/AiFeatureGate";
+import { handleRagImportWebsite } from "@/main-process/communication/handleRagImportWebsite";
 import {
   ragShowOpenDialogInputSchema,
   ragFileStatsInputSchema,
@@ -69,6 +73,7 @@ import {
   ragDownloadDocumentInputSchema,
   ragDocumentErrorLogInputSchema,
   ragCheckDuplicateInputSchema,
+  ragImportWebsiteInputSchema,
 } from "@/schemas/ipc/rag";
 
 /**
@@ -91,25 +96,9 @@ export function registerRagIpcHandlers(): void {
 
   // ── Out-of-scope: streaming on handler ───────────────────────────────
   ipcMain.on(SAVE_TEMP_FILE, async (event, data): Promise<void> => {
-    // F6 follow-up — the streaming upload path also triggers chunking +
-    // remote embedding work. It cannot use registerAiValidatedHandler
-    // (it pushes progress over event.sender.send), so check the AI gate
-    // explicitly and fail-closed before parsing metadata or writing.
-    if (!isAiEnabled()) {
-      const disabled: CommonMessage<SaveTempFileResponse> = {
-        status: false,
-        msg: "AI feature is not enabled",
-        data: {
-          tempFilePath: "",
-          databaseSaved: false,
-          databaseError: "AI feature is not enabled",
-        },
-      };
-      (
-        event as { sender: { send: (c: string, m: string) => void } }
-      ).sender.send(SAVE_TEMP_FILE_COMPLETE, JSON.stringify(disabled));
-      return;
-    }
+    // File upload is NOT an AI feature — it just saves a file to disk and
+    // database. The AI-related chunking/embedding is handled separately by
+    // RAG_CHUNK_AND_EMBED_DOCUMENT (which uses registerAiValidatedHandler).
 
     let documentInfo: UploadedDocument | null = null;
     let databaseSaved = false;
@@ -635,17 +624,21 @@ export function registerRagIpcHandlers(): void {
     }
   );
 
-  // F6 follow-up — embedding-model update may issue a remote model-list call
-  // before persisting; gate on the AI flag.
-  registerAiValidatedHandler(
+  // Local embedding-model selection must remain available without remote AI
+  // entitlement. Remote model selection is still gated after schema validation.
+  registerValidatedHandler(
     RAG_UPDATE_EMBEDDING_MODEL,
     ragUpdateEmbeddingModelInputSchema,
     async (input) => {
+      const includeRemote = isAiEnabled();
+      if (!includeRemote && !isLocalXenovaModel(input.model)) {
+        throw new Error("AI feature is not enabled");
+      }
       // Validate against the merged catalog (remote + local). listModels()
       // tolerates remote failure, so selecting the local free model still
       // validates when the remote AI server is offline.
       const catalog = new EmbeddingModelCatalogService();
-      const list = await catalog.listModels();
+      const list = await catalog.listModels({ includeRemote });
       const modelInfo = list.models[input.model];
       if (!modelInfo) {
         const names = Object.keys(list.models).join(", ");
@@ -660,16 +653,15 @@ export function registerRagIpcHandlers(): void {
     }
   );
 
-  // F6 follow-up — the model catalog merges remote + local model lists and
-  // may call the remote AI server; gate on the AI flag.
-  registerAiValidatedHandler(
+  // Model discovery is also needed by free users to select the built-in local
+  // Xenova model. Only include remote models when the AI entitlement is active;
+  // this keeps free-user settings completely local and avoids a remote call.
+  registerValidatedHandler(
     RAG_GET_AVAILABLE_MODELS,
     ragNoInputSchema,
     async () => {
-      // The catalog merges remote + local models and never throws on remote
-      // failure — the local free model is always offered to the UI.
       const catalog = new EmbeddingModelCatalogService();
-      return await catalog.listModels();
+      return await catalog.listModels({ includeRemote: isAiEnabled() });
     }
   );
 
@@ -750,4 +742,17 @@ export function registerRagIpcHandlers(): void {
     // Cleanup is automatic (controllers are request-scoped); kept for compat.
     return null;
   });
+
+  // Website/URL import for the Knowledge Library UI. Delegates to the AI tool
+  // layer (handleRagImportWebsite) so the manual UI and the AI assistant share
+  // one import implementation. Boundary validation reuses the tool's schema;
+  // the AI gate + replace-policy + per-page result mapping live in the tool.
+  registerValidatedHandler(
+    RAG_IMPORT_WEBSITE,
+    ragImportWebsiteInputSchema,
+    async (input, event) =>
+      handleRagImportWebsite(input, (progress) => {
+        event.sender.send(RAG_IMPORT_WEBSITE_PROGRESS, progress);
+      })
+  );
 }

@@ -11,7 +11,8 @@ import { type IpcMainInvokeEvent } from "electron";
 import { log } from "@/modules/Logger";
 import { v4 as uuidv4 } from "uuid";
 import { GoogleMapsModule } from "@/modules/GoogleMapsModule";
-import { AccountCookiesModule } from "@/modules/accountCookiesModule";
+import { AccountSessionService } from "@/modules/AccountSessionService";
+import { normalizedToCookiesType } from "@/modules/accountSession/cookieNormalize";
 import { ProxyModel } from "@/model/Proxy.model";
 import type { YellowPagesTaskProxyConfig } from "@/entityTypes/yellowPagesTaskProxyType";
 import {
@@ -46,7 +47,7 @@ export function registerGoogleMapsHandlers(): void {
       // Enforce concurrent search limit (business rule, not a schema concern).
       if (activeModules.size >= MAX_CONCURRENT_SEARCHES) {
         throw new Error(
-          "Too many concurrent searches. Please wait for one to finish.",
+          "Too many concurrent searches. Please wait for one to finish."
         );
       }
 
@@ -54,21 +55,23 @@ export function registerGoogleMapsHandlers(): void {
       const module = new GoogleMapsModule();
       activeModules.set(requestId, module);
 
-      // Resolve cookies if account_id is provided
+      // Resolve cookies if account_id is provided (decrypted via the session
+      // service; never parsed directly from the ciphertext column).
       let cookies: unknown[] | undefined;
       if (input.account_id) {
         try {
-          const cookiesModule = new AccountCookiesModule();
-          const cookieRecord = await cookiesModule.getAccountCookies(input.account_id);
-          if (cookieRecord?.cookies) {
-            const parsed = JSON.parse(cookieRecord.cookies);
-            cookies = Array.isArray(parsed) ? parsed : undefined;
+          const sessionService = new AccountSessionService();
+          const snapshot = await sessionService.getDecryptedSnapshot(
+            input.account_id
+          );
+          if (snapshot.cookies.length > 0) {
+            cookies = normalizedToCookiesType(snapshot.cookies);
           }
         } catch (err) {
           log.warn(
             "[GoogleMaps] Failed to load cookies for account",
             input.account_id,
-            err,
+            err
           );
         }
       }
@@ -116,11 +119,14 @@ export function registerGoogleMapsHandlers(): void {
           },
           cookies,
           proxies,
-          requestId,
+          requestId
         )
         .then((result: GoogleMapsSearchResult) => {
           if (!senderWebContents.isDestroyed()) {
-            senderWebContents.send(GOOGLE_MAPS_SEARCH_RESULT, { requestId, result });
+            senderWebContents.send(GOOGLE_MAPS_SEARCH_RESULT, {
+              requestId,
+              result,
+            });
           }
           activeModules.delete(requestId);
         })
@@ -144,7 +150,7 @@ export function registerGoogleMapsHandlers(): void {
         });
 
       return { requestId };
-    },
+    }
   );
 
   // ── Cancel a search ─────────────────────────────────────────────────
@@ -159,7 +165,7 @@ export function registerGoogleMapsHandlers(): void {
       await activeModule.cancelSearch(input.requestId);
       activeModules.delete(input.requestId);
       return null;
-    },
+    }
   );
 
   // ── History list ────────────────────────────────────────────────────
@@ -172,7 +178,7 @@ export function registerGoogleMapsHandlers(): void {
       const module = new GoogleMapsModule();
       const [records, total] = await module.getSearchHistory(limit, offset);
       return { records, total };
-    },
+    }
   );
 
   // ── History detail ──────────────────────────────────────────────────
@@ -186,7 +192,7 @@ export function registerGoogleMapsHandlers(): void {
         throw new Error("Record not found");
       }
       return record;
-    },
+    }
   );
 
   // ── History delete ──────────────────────────────────────────────────
@@ -200,6 +206,6 @@ export function registerGoogleMapsHandlers(): void {
         throw new Error("Record not found");
       }
       return null;
-    },
+    }
   );
 }

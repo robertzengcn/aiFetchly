@@ -9,18 +9,40 @@ import {
 } from "@/api/aiChatApi";
 import { Token } from "@/modules/token";
 import { log } from "@/modules/Logger";
-import { USER_AI_ENABLED } from "@/config/usersetting";
+import { USER_AI_ENABLED, USERSDBPATH } from "@/config/usersetting";
 import { SkillRegistry } from "@/config/skillsRegistry";
 import { SkillExecutor } from "@/service/SkillExecutor";
 import { AiMessageTaskModule } from "@/modules/AiMessageTaskModule";
 import { AiMessageTaskRunModule } from "@/modules/AiMessageTaskRunModule";
 import { AiMessageTaskEntity } from "@/entity/AiMessageTask.entity";
-import { canAutoApproveScheduledTool } from "@/service/ScheduledAiToolPolicy";
+import {
+  canAutoApproveScheduledTool,
+  SCHEDULED_LOOP_READ_ONLY_TOOLS,
+} from "@/service/ScheduledAiToolPolicy";
 import { skillDefinitionToToolFunction } from "@/entityTypes/skillTypes";
 import type {
   AiMessageTaskToolPolicy,
   BlockedToolCallRecord,
 } from "@/entityTypes/aiMessageTaskTypes";
+import { ScheduleTaskModel } from "@/model/ScheduleTask.model";
+import { AIChatQueryEngineFactory } from "@/service/AIChatQueryEngineFactory";
+import {
+  ScheduledLoopEventSink,
+  type ScheduledTurnOutcome,
+} from "@/service/ScheduledLoopEventSink";
+import {
+  AIChatConversationTurnCoordinator,
+  type ConversationTurnLease,
+} from "@/service/AIChatConversationTurnCoordinator";
+import { ScheduledLoopRunRegistry } from "@/service/ScheduledLoopRunRegistry";
+import { AIChatConversationUpdateBroadcaster } from "@/service/AIChatConversationUpdateBroadcaster";
+import {
+  SCHEDULED_LOOP_CONVERSATION_LOCK_WAIT_MS,
+  SCHEDULED_LOOP_MAX_CONSECUTIVE_FAILURES,
+  SCHEDULED_LOOP_RUN_TIMEOUT_MS,
+  nextFutureOccurrence,
+} from "@/config/aiChatScheduledLoopConfig";
+import type { ChatV2ConversationUpdatedEvent } from "@/entityTypes/aiChatScheduledLoopTypes";
 
 /** Safety limits for a scheduled AI message run. */
 interface RunLimits {
@@ -60,11 +82,25 @@ export class ScheduledAiMessageRunner {
   private readonly aiChatApi: AiChatApi;
   private readonly taskModule: AiMessageTaskModule;
   private readonly runModule: AiMessageTaskRunModule;
+  // Lazy-initialized deps for the chat-bound path (kept out of the legacy
+  // constructor so standalone runs pay nothing for them).
+  private scheduleModelLazy: ScheduleTaskModel | null = null;
+  private readonly runRegistry = ScheduledLoopRunRegistry.getInstance();
+  private readonly broadcaster =
+    AIChatConversationUpdateBroadcaster.getInstance();
 
   constructor() {
     this.aiChatApi = new AiChatApi();
     this.taskModule = new AiMessageTaskModule();
     this.runModule = new AiMessageTaskRunModule();
+  }
+
+  private get scheduleModel(): ScheduleTaskModel {
+    if (!this.scheduleModelLazy) {
+      const dbPath = new Token().getValue(USERSDBPATH);
+      this.scheduleModelLazy = new ScheduleTaskModel(dbPath);
+    }
+    return this.scheduleModelLazy;
   }
 
   /**
@@ -140,6 +176,378 @@ export class ScheduledAiMessageRunner {
         errorMessage: errorMsg,
       };
     }
+  }
+
+  /**
+   * Run a chat-bound scheduled-loop occurrence through AIChatQueryEngine so the
+   * scheduled user/assistant turns persist in the originating v2-* conversation
+   * (FR-4/FR-5, technical-design §17). The run row was already created by the
+   * scheduler's atomic claim, so this method executes and finalizes it.
+   */
+  async runChatScheduledLoop(input: {
+    readonly taskId: number;
+    readonly scheduleId: number;
+    readonly runId: number;
+    readonly occurrence: number;
+    readonly catchUp: boolean;
+    readonly scheduledFor: Date;
+  }): Promise<ScheduledAiMessageRunResult> {
+    const { taskId, scheduleId, runId, occurrence, catchUp, scheduledFor } =
+      input;
+    const startedAt = new Date();
+    const token = new Token();
+
+    // 1. AI gate at execution time.
+    if (token.getValue(USER_AI_ENABLED) !== "true") {
+      return this.finalizeChatRun({
+        runId,
+        taskId,
+        scheduleId,
+        startedAt,
+        outcome: { kind: "failed", errorMessage: "AI_DISABLED" },
+        errorCode: "AI_DISABLED",
+      });
+    }
+
+    // 2. Load task + schedule.
+    const task = await this.taskModule.getTask(taskId);
+    if (!task || task.source_type !== "chat_scheduled_loop") {
+      return this.finalizeChatRun({
+        runId,
+        taskId,
+        scheduleId,
+        startedAt,
+        outcome: { kind: "failed", errorMessage: "TASK_NOT_FOUND" },
+        errorCode: "TASK_NOT_FOUND",
+      });
+    }
+    const schedule = await this.scheduleModel.getScheduleById(scheduleId);
+    if (!schedule) {
+      return this.finalizeChatRun({
+        runId,
+        taskId,
+        scheduleId,
+        startedAt,
+        outcome: { kind: "failed", errorMessage: "SCHEDULE_NOT_FOUND" },
+        errorCode: "SCHEDULE_EXPIRED",
+      });
+    }
+
+    // 3. Same-conversation invariant (FR-4).
+    const conversationId = schedule.source_conversation_id;
+    if (!conversationId || task.conversation_id !== conversationId) {
+      await this.scheduleModel.pauseWithReason(
+        scheduleId,
+        "CONVERSATION_MISMATCH"
+      );
+      return this.finalizeChatRun({
+        runId,
+        taskId,
+        scheduleId,
+        startedAt,
+        outcome: { kind: "failed", errorMessage: "CONVERSATION_MISMATCH" },
+        errorCode: "CONVERSATION_MISMATCH",
+        pauseSchedule: true,
+      });
+    }
+
+    // 4. Schedule must still be active.
+    if (!schedule.is_active) {
+      return this.finalizeChatRun({
+        runId,
+        taskId,
+        scheduleId,
+        startedAt,
+        outcome: { kind: "cancelled", content: "" },
+        errorCode: schedule.terminal_reason ?? "SCHEDULE_EXPIRED",
+      });
+    }
+
+    await this.runModule.updateRunStatus(runId, "running", {
+      started_at: startedAt,
+    });
+
+    // 5. Acquire the conversation turn lease (FR-7) + register the abort handle.
+    const coordinator = AIChatConversationTurnCoordinator.getInstance();
+    const abortController = new AbortController();
+    const timeoutHandle = setTimeout(
+      () => abortController.abort(),
+      SCHEDULED_LOOP_RUN_TIMEOUT_MS
+    );
+    this.runRegistry.register(runId, abortController);
+    let lease: ConversationTurnLease | null = null;
+
+    let outcome: ScheduledTurnOutcome;
+    try {
+      try {
+        lease = await coordinator.acquire({
+          conversationId,
+          owner: "scheduled",
+          ownerId: `run-${runId}`,
+          waitMs: SCHEDULED_LOOP_CONVERSATION_LOCK_WAIT_MS,
+          signal: abortController.signal,
+        });
+      } catch {
+        // Busy or aborted → defer to the next occurrence (coalesced).
+        await this.runModule.updateRunStatus(
+          runId,
+          "waiting_for_conversation",
+          {
+            error_code: "CONVERSATION_BUSY",
+          }
+        );
+        return {
+          runId,
+          status: "blocked_by_policy",
+          assistantFinalMessage: "",
+          toolCallsCount: 0,
+          blockedToolCalls: [],
+          errorMessage: "CONVERSATION_BUSY",
+        };
+      }
+
+      // 6-9. Execute through the query engine; the engine persists user +
+      // assistant messages in the originating conversation. Tool execution is
+      // task-scoped (FR-16): only allowlisted policy-approved tools run. The
+      // scheduled context supplies stable message IDs + trusted metadata that
+      // the renderer cannot forge, and makes the user/assistant rows idempotent
+      // across crash-retries (technical-design §14).
+      const engine = new AIChatQueryEngineFactory().createScheduled(
+        this.parseTaskPolicy(task)
+      );
+      const assistantMessageId = `scheduled-assistant-${scheduleId}-${occurrence}`;
+      const sink = new ScheduledLoopEventSink((event) => {
+        // Forward token/done/error chunks for live streaming to a renderer
+        // viewing this conversation (technical-design §13.2). Strict routing
+        // is enforced renderer-side; forwarding failures are non-fatal.
+        if (event.type === "token") {
+          this.broadcaster.emitScheduledStream({
+            conversationId,
+            runId,
+            messageId: assistantMessageId,
+            kind: "token",
+            contentDelta: event.contentDelta,
+          });
+        } else if (event.type === "complete" || event.type === "error") {
+          this.broadcaster.emitScheduledStream({
+            conversationId,
+            runId,
+            messageId: assistantMessageId,
+            kind: event.type === "error" ? "error" : "done",
+            errorMessage:
+              event.type === "error" ? event.errorMessage : undefined,
+          });
+        }
+      });
+      await engine.submitMessage({
+        eventSink: sink,
+        request: {
+          conversationId,
+          message: task.message,
+          model: task.model && task.model !== "auto" ? task.model : undefined,
+        },
+        scheduledContext: {
+          source: "scheduled_loop",
+          taskId,
+          scheduleId,
+          runId,
+          occurrence,
+          scheduledFor: scheduledFor.toISOString(),
+          catchUp,
+          userMessageId: `scheduled-user-${scheduleId}-${occurrence}`,
+          assistantMessageId: `scheduled-assistant-${scheduleId}-${occurrence}`,
+        },
+      });
+      outcome = sink.getOutcome() ?? {
+        kind: "failed",
+        errorMessage: "NO_TERMINAL_EVENT",
+      };
+    } finally {
+      clearTimeout(timeoutHandle);
+      this.runRegistry.unregister(runId);
+      if (lease) lease.release();
+    }
+
+    return this.finalizeChatRun({
+      runId,
+      taskId,
+      scheduleId,
+      startedAt,
+      outcome,
+      conversationId,
+    });
+  }
+
+  /**
+   * Finalize a chat-bound occurrence: map the engine outcome to a run status,
+   * persist the run + schedule counters, and broadcast a refresh hint (FR-11,
+   * FR-12, FR-15). Status mapping per technical-design §17.3.
+   */
+  private async finalizeChatRun(input: {
+    runId: number;
+    taskId: number;
+    scheduleId: number;
+    startedAt: Date;
+    outcome: ScheduledTurnOutcome;
+    conversationId?: string;
+    errorCode?: string;
+    pauseSchedule?: boolean;
+  }): Promise<ScheduledAiMessageRunResult> {
+    const {
+      runId,
+      taskId,
+      scheduleId,
+      startedAt,
+      outcome,
+      conversationId,
+      errorCode,
+      pauseSchedule,
+    } = input;
+    const finishedAt = new Date();
+    const durationMs = finishedAt.getTime() - startedAt.getTime();
+
+    let status: ScheduledAiMessageRunResult["status"] = "failed";
+    let assistantMessageId: string | undefined;
+    let contentSummary = "";
+    let scheduleTerminal: "failed" | undefined;
+    let scheduleSuccess = false;
+    let schedulePause = !!pauseSchedule;
+    let resultErrorCode = errorCode;
+
+    switch (outcome.kind) {
+      case "completed":
+        status = "completed";
+        assistantMessageId = outcome.assistantMessageId;
+        contentSummary = outcome.content;
+        scheduleSuccess = true;
+        break;
+      case "cancelled":
+        status = "failed";
+        assistantMessageId = outcome.assistantMessageId;
+        contentSummary = outcome.content;
+        resultErrorCode = resultErrorCode ?? "RUN_INTERRUPTED";
+        break;
+      case "failed":
+        status = "failed";
+        assistantMessageId = outcome.assistantMessageId;
+        resultErrorCode = resultErrorCode ?? "REMOTE_AI_ERROR";
+        break;
+      case "blocked":
+        status = "blocked_by_policy";
+        schedulePause = true;
+        resultErrorCode = resultErrorCode ?? "BLOCKED_BY_POLICY";
+        break;
+    }
+
+    // Persist the run row (idempotent across retries via stable occurrence key).
+    try {
+      if (status === "completed") {
+        await this.runModule.completeRun(runId, {
+          assistantFinalMessage: contentSummary,
+          toolCallsCount: 0,
+          blockedToolCalls: [],
+          metadata: {
+            elapsedMs: durationMs,
+            assistantMessageId,
+            errorCode: resultErrorCode,
+          },
+        });
+      } else {
+        await this.runModule.failRun(
+          runId,
+          contentSummary || resultErrorCode || "failed",
+          {
+            toolCallsCount: 0,
+            blockedToolCalls: [],
+            metadata: { elapsedMs: durationMs, assistantMessageId },
+          }
+        );
+      }
+      // Persist the precise terminal status + link the chat message row +
+      // delivery state. This honors the §17.3 status mapping (failed vs
+      // blocked_by_policy vs cancelled) and runs regardless of whether an
+      // assistant row was produced.
+      await this.runModule.updateRunStatus(runId, status, {
+        assistant_message_id: assistantMessageId ?? null,
+        error_code: resultErrorCode ?? null,
+        delivery_state: "persisted",
+        finished_at: finishedAt,
+        duration_ms: durationMs,
+      } as never);
+    } catch {
+      // Persistence failures are logged by the module; the run is best-effort.
+    }
+
+    // Update schedule counters + terminal state (FR-15).
+    try {
+      const schedule = await this.scheduleModel.getScheduleById(scheduleId);
+      const nowMs = Date.now();
+      const nextRunAt =
+        schedule && schedule.interval_ms && schedule.interval_anchor_at
+          ? new Date(
+              nextFutureOccurrence(
+                schedule.interval_anchor_at.getTime(),
+                schedule.interval_ms,
+                nowMs
+              ).timeMs
+            )
+          : new Date(nowMs);
+
+      if (schedulePause) {
+        await this.scheduleModel.pauseWithReason(
+          scheduleId,
+          resultErrorCode ?? "BLOCKED_BY_POLICY"
+        );
+      } else {
+        const consecutive =
+          (schedule?.consecutive_failure_count ?? 0) +
+          (scheduleSuccess ? 0 : 1);
+        const terminal =
+          !scheduleSuccess &&
+          consecutive >= SCHEDULED_LOOP_MAX_CONSECUTIVE_FAILURES
+            ? ("failed" as const)
+            : undefined;
+        await this.scheduleModel.updateIntervalAfterResult({
+          scheduleId,
+          success: scheduleSuccess,
+          nextRunAt,
+          terminalStatus: terminal,
+          terminalReason: terminal ? "REPEATED_RUN_FAILURE" : undefined,
+        });
+      }
+    } catch {
+      // non-fatal
+    }
+
+    // Broadcast a narrow refresh hint to any open renderer (FR-11).
+    if (conversationId) {
+      const event: ChatV2ConversationUpdatedEvent = {
+        conversationId,
+        reason:
+          status === "completed"
+            ? "scheduled_turn_completed"
+            : "scheduled_turn_failed",
+        scheduleId,
+        runId,
+        assistantMessageId,
+        occurredAt: new Date().toISOString(),
+      };
+      try {
+        this.broadcaster.emit(event);
+      } catch {
+        // Renderer delivery failure does not fail the run (FR-12).
+      }
+    }
+
+    void taskId;
+    return {
+      runId,
+      status,
+      assistantFinalMessage: contentSummary,
+      toolCallsCount: 0,
+      blockedToolCalls: [],
+      errorMessage: status === "completed" ? undefined : resultErrorCode,
+    };
   }
 
   /**
@@ -297,6 +705,9 @@ export class ScheduledAiMessageRunner {
     return {
       allowedTools,
       autoApproveTools: task.auto_approve_tools,
+      allowSkills: task.allow_skills === true,
+      allowMcp: task.allow_mcp === true,
+      allowSubagents: task.allow_subagents === true,
       maxToolCalls: task.max_tool_calls,
       maxRuntimeMs: task.max_runtime_ms,
       maxContinueCalls: task.max_continue_calls,
@@ -319,17 +730,23 @@ export class ScheduledAiMessageRunner {
 
   /**
    * Build filtered client_tools list to send to the AI server.
-   * Only includes tools that are allowed by the task policy.
+   * When auto-approve is on, advertise every curated read-only tool plus any
+   * explicitly allowlisted high-impact / automation tools (FR-16).
    */
   private buildFilteredClientTools(
     policy: AiMessageTaskToolPolicy
   ): ToolFunction[] {
-    if (!policy.autoApproveTools || policy.allowedTools.length === 0) {
+    if (!policy.autoApproveTools) {
       return [];
     }
 
+    const candidateNames = new Set<string>([
+      ...SCHEDULED_LOOP_READ_ONLY_TOOLS,
+      ...policy.allowedTools,
+    ]);
+
     const tools: ToolFunction[] = [];
-    for (const toolName of policy.allowedTools) {
+    for (const toolName of candidateNames) {
       const skill = SkillRegistry.getSkill(toolName);
       if (skill && skill.source === "built-in") {
         const decision = canAutoApproveScheduledTool({

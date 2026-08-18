@@ -2,6 +2,7 @@ import "reflect-metadata";
 import { Entity, Column, ManyToOne, JoinColumn, Index, PrimaryGeneratedColumn } from 'typeorm';
 import AuditableEntity from './Auditable.entity';
 import { Order } from './order.decorator';
+import { RAGDocumentEntity } from './RAGDocument.entity';
 
 @Entity('rag_chunks')
 @Index(['documentId'])
@@ -54,7 +55,9 @@ export class RAGChunkEntity extends AuditableEntity {
     pageNumber?: number;
 
     // Relationships
-    @ManyToOne('RAGDocumentEntity', 'chunks', { onDelete: 'CASCADE' })
+    @ManyToOne(() => RAGDocumentEntity, (document) => document.chunks, {
+        onDelete: 'CASCADE',
+    })
     @JoinColumn({ name: 'documentId' })
-    document?: any;
+    document!: RAGDocumentEntity;
 }

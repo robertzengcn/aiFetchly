@@ -49,44 +49,57 @@ export class UserSecretKeyService {
    * @throws SecretKeyUnavailableError if the key cannot be obtained.
    */
   async getKey(): Promise<Buffer> {
+    return await this.getKeyWithSessionRetry(1);
+  }
+
+  private async getKeyWithSessionRetry(
+    retriesRemaining: number
+  ): Promise<Buffer> {
     if (this.cachedKey) {
       return this.cachedKey;
     }
     if (!this.inflight) {
-      // Capture the generation at fetch start so the .then() callback can detect
-      // if invalidate() fired while the HTTP request was in flight. If it did,
-      // the returned key is stale (or belongs to a different session) and must
-      // NOT be cached.
-      const fetchGeneration = this.generation;
-      this.inflight = this.fetchKey()
-        .then((key) => {
-          if (fetchGeneration !== this.generation) {
-            // Stale result — invalidate() bumped the generation while we were
-            // in flight. Zero and discard the key.
-            key.fill(0);
-            this.inflight = null;
-            throw new SecretKeyUnavailableError(
-              "Secret-key response discarded: session changed during fetch"
-            );
-          }
-          this.cachedKey = key;
-          // Clear the in-flight handle on success so the next call sees the
-          // cache (not a stale resolved promise).
+      const request = this.fetchAndCacheKey(retriesRemaining).finally(() => {
+        // invalidate() may already have allowed a new-generation request to
+        // start. An older request must never clear that newer in-flight handle.
+        if (this.inflight === request) {
           this.inflight = null;
-          return key;
-        })
-        .catch((err) => {
-          // Clear the in-flight promise so the next call can retry.
-          this.inflight = null;
-          throw err instanceof SecretKeyUnavailableError
-            ? err
-            : new SecretKeyUnavailableError(
-                "Failed to load secret key from backend",
-                err
-              );
-        });
+        }
+      });
+      this.inflight = request;
     }
     return this.inflight;
+  }
+
+  private async fetchAndCacheKey(retriesRemaining: number): Promise<Buffer> {
+    const fetchGeneration = this.generation;
+    let key: Buffer;
+    try {
+      key = await this.fetchKey();
+    } catch (err) {
+      throw err instanceof SecretKeyUnavailableError
+        ? err
+        : new SecretKeyUnavailableError(
+            "Failed to load secret key from backend",
+            err
+          );
+    }
+
+    if (fetchGeneration !== this.generation) {
+      // The response may belong to the previous session. Zero it, then fetch
+      // once more with the current session instead of making the user's save
+      // fail after an otherwise successful automatic token refresh.
+      key.fill(0);
+      if (retriesRemaining > 0) {
+        return await this.getKeyWithSessionRetry(retriesRemaining - 1);
+      }
+      throw new SecretKeyUnavailableError(
+        "Secret-key response discarded: session changed during fetch"
+      );
+    }
+
+    this.cachedKey = key;
+    return key;
   }
 
   /**

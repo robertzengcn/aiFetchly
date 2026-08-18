@@ -160,6 +160,12 @@ export interface FileToolSizeLimits {
   readonly maxWriteBytes: number;
   readonly maxGrepOutputBytes: number;
   readonly defaultHeadLimit: number;
+  /**
+   * Hard ceiling on filesystem entries visited during glob/grep discovery.
+   * Prevents home-directory / huge-tree scans from freezing the Electron
+   * main process after the user grants filesystem permission.
+   */
+  readonly maxGlobScanEntries: number;
 }
 
 export interface FileToolRateLimitConfig {

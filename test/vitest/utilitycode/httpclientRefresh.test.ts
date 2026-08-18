@@ -4,9 +4,11 @@ import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 // --- Mocks ----------------------------------------------------------------
 
 const mockTokenGetValue = vi.hoisted(() =>
-  vi.fn<[string], string>().mockReturnValue("")
+  vi.fn<(key: string) => string>().mockReturnValue("")
 );
-const mockTokenSetValue = vi.hoisted(() => vi.fn<[string, string], void>());
+const mockTokenSetValue = vi.hoisted(() =>
+  vi.fn<(key: string, value: string) => void>()
+);
 
 vi.mock("@/modules/token", () => ({
   Token: vi.fn().mockImplementation(() => ({
@@ -15,7 +17,7 @@ vi.mock("@/modules/token", () => ({
   })),
 }));
 
-const mockRemoveToken = vi.hoisted(() => vi.fn<[], void>());
+const mockRemoveToken = vi.hoisted(() => vi.fn<() => void>());
 
 vi.mock("@/modules/user", () => ({
   User: vi.fn().mockImplementation(() => ({
@@ -25,7 +27,7 @@ vi.mock("@/modules/user", () => ({
 
 // Mock TokenRefreshService so we can control refresh outcomes without going
 // through real network code in these HttpClient-level tests.
-const mockRefreshOnce = vi.hoisted(() => vi.fn<[], Promise<unknown>>());
+const mockRefreshOnce = vi.hoisted(() => vi.fn<() => Promise<unknown>>());
 
 vi.mock("@/modules/tokenRefresh", () => {
   class RefreshTokenInvalidError extends Error {
@@ -158,25 +160,26 @@ describe("HttpClient token-refresh behavior", () => {
     expect(mockRefreshOnce).toHaveBeenCalledTimes(1);
   });
 
-  it("signs out when refresh returns code 401 (invalid/expired refresh token)", async () => {
+  it("does NOT sign out when refresh returns an auth-shaped failure", async () => {
     fetchSpy.mockResolvedValueOnce(
       jsonResponse(null, { status: 401, statusText: "Unauthorized" })
     );
 
     // TokenRefreshService throws a message that signals the refresh token
-    // itself is invalid. This is the case where signing out IS correct.
+    // itself was rejected. The client must keep local auth state because
+    // backend/proxy/network instability can produce auth-shaped failures.
     mockRefreshOnce.mockRejectedValue(
       new Error("invalid or expired refresh token")
     );
 
     await expect(
       client._fetchJSON("/api/test", { method: "GET" })
-    ).rejects.toThrow(/Authentication failed: Token expired/);
+    ).rejects.toThrow(/invalid or expired refresh token/);
 
-    expect(mockRemoveToken).toHaveBeenCalledTimes(1);
+    expect(mockRemoveToken).not.toHaveBeenCalled();
   });
 
-  it("signs out when refresh endpoint rejects the refresh token with typed error", async () => {
+  it("does NOT sign out when refresh endpoint rejects the refresh token with typed error", async () => {
     fetchSpy.mockResolvedValueOnce(
       jsonResponse(null, { status: 403, statusText: "Forbidden" })
     );
@@ -187,13 +190,14 @@ describe("HttpClient token-refresh behavior", () => {
 
     await expect(
       client._fetchJSON("/api/test", { method: "GET" })
-    ).rejects.toThrow(/Authentication failed: Token expired/);
+    ).rejects.toThrow(/Refresh token rejected/);
 
-    expect(mockRemoveToken).toHaveBeenCalledTimes(1);
+    expect(mockRemoveToken).not.toHaveBeenCalled();
   });
 
   it("does not loop infinitely when the retried request still 401s", async () => {
-    // Initial 401, retry also 401. Should refresh once, retry once, then sign out.
+    // Initial 401, retry also 401. Should refresh once, retry once, then fail
+    // this request without clearing local auth state.
     fetchSpy
       .mockResolvedValueOnce(
         jsonResponse(null, { status: 401, statusText: "Unauthorized" })
@@ -215,13 +219,31 @@ describe("HttpClient token-refresh behavior", () => {
 
     await expect(
       client._fetchJSON("/api/test", { method: "GET" })
-    ).rejects.toThrow(/Authentication failed: Token expired/);
+    ).rejects.toThrow(/Authentication failed after token refresh retry/);
 
     // Refresh attempted exactly once (no infinite loop).
     expect(mockRefreshOnce).toHaveBeenCalledTimes(1);
-    // Fetch called exactly twice (initial + one retry), then sign-out.
+    // Fetch called exactly twice (initial + one retry), then request failure.
     expect(fetchSpy).toHaveBeenCalledTimes(2);
-    // Signed out because the retried request still failed.
-    expect(mockRemoveToken).toHaveBeenCalledTimes(1);
+    expect(mockRemoveToken).not.toHaveBeenCalled();
+  });
+
+  it("does NOT sign out when no refresh token is available", async () => {
+    mockTokenGetValue.mockImplementation((key: string) => {
+      if (key === "user-social-market-token") return "current-access";
+      return "";
+    });
+    client = new HttpClient();
+
+    fetchSpy.mockResolvedValueOnce(
+      jsonResponse(null, { status: 401, statusText: "Unauthorized" })
+    );
+
+    await expect(
+      client._fetchJSON("/api/test", { method: "GET" })
+    ).rejects.toThrow(/refresh token unavailable/);
+
+    expect(mockRefreshOnce).not.toHaveBeenCalled();
+    expect(mockRemoveToken).not.toHaveBeenCalled();
   });
 });

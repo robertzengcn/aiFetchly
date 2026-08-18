@@ -48,17 +48,17 @@ export class AgentPromptBuilder {
       role: "system",
       content: input.definition.systemPrompt + schemaReinforcement,
     };
-    // The packet is the entire context the agent sees — no parent chat history.
+    // Forward the FULL task packet so any agent family — lead-researcher
+    // ({lead,userGoal,constraints,...}) or batch-worker ({files,instruction})
+    // — receives its packet verbatim. The packet is the entire context the
+    // agent sees (no parent chat history). JSON.stringify drops undefined-
+    // valued keys, so the message stays clean. The resolved output schema is
+    // attached explicitly so the model always sees the output contract
+    // regardless of whether the packet carried requiredOutputSchema.
     const userMessage: AgentPromptMessage = {
       role: "user",
       content: JSON.stringify(
-        {
-          lead: input.packet.lead,
-          userGoal: input.packet.userGoal,
-          constraints: input.packet.constraints,
-          priorFindings: input.packet.priorFindings,
-          requiredOutputSchema: schema,
-        },
+        { ...input.packet, requiredOutputSchema: schema },
         null,
         2
       ),

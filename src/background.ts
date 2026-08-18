@@ -1,9 +1,15 @@
 "use strict";
 import "reflect-metadata";
 // import {ipcMain as ipc} from 'electron-better-ipc';
-import { app, BrowserWindow, Menu, dialog, shell } from "electron";
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const autoUpdater = require("electron").autoUpdater;
+import {
+  app,
+  BrowserWindow,
+  Menu,
+  dialog,
+  shell,
+  protocol,
+  net,
+} from "electron";
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const globalShortcut = require("electron").globalShortcut;
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -12,7 +18,10 @@ const session = require("electron").session;
 const crashReporter = require("electron").crashReporter;
 // import { createProtocol } from 'vue-cli-plugin-electron-builder/lib'
 import installExtension, { VUEJS3_DEVTOOLS } from "electron-devtools-installer";
+import { patchSessionExtensionsApi } from "@/main-process/devtools/patchSessionExtensionsApi";
 import { registerCommunicationIpcHandlers } from "./main-process/communication/";
+import { setMainWindow } from "@/main-process/mainWindowRegistry";
+import { initializeAppUpdates } from "@/main-process/updater/AppUpdateService";
 import { SkillImportService } from "@/service/SkillImportService";
 import { getAIFetchlyConfigManager } from "@/service/aifetchlyConfig/AIFetchlyConfigManager";
 import { getWorkspaceWatchManager } from "@/service/workspaceWatch/WorkspaceWatchManagerSingleton";
@@ -20,7 +29,10 @@ import { PluginComponentRegistryService } from "@/service/PluginComponentRegistr
 import { FileOperationTracker } from "@/service/FileOperationTracker";
 import { registerBuiltinHooks } from "@/service/hooks/builtinHooks";
 import { isAppTrustedOrigin } from "@/service/OriginTrust";
+import { buildAppContentSecurityPolicy } from "@/service/AppContentSecurityPolicy";
+import { PasteStoreService } from "@/service/pastedText/PasteStoreService";
 import * as path from "path";
+import { pathToFileURL } from "url";
 import { Token } from "@/modules/token";
 import { MenuManager } from "@/main-process/menu/MenuManager";
 import {
@@ -43,11 +55,17 @@ import {
   getOrCreateInstallId,
 } from "@/modules/diagnostics/DiagnosticIdentity";
 import { DiagnosticRetentionService } from "@/modules/diagnostics/DiagnosticRetentionService";
+import {
+  getLastPromptedCrashId,
+  setLastPromptedCrashId,
+  shouldShowUncleanShutdownPrompt,
+} from "@/modules/diagnostics/CrashPromptState";
 import fs from "fs";
 import ProtocolRegistry from "protocol-registry";
 //import { RemoteSource } from '@/modules/remotesource'
 import { LOGIN_STATUS } from "@/config/channellist";
 import { ScheduleManager } from "@/modules/ScheduleManager";
+import { BackgroundScheduler } from "@/modules/BackgroundScheduler";
 import { runafterbootup } from "@/modules/bootuprun";
 import { YellowPagesController } from "./controller/YellowPagesController";
 import {
@@ -67,15 +85,66 @@ import {
   isValidDeepLinkOrigin as deepLinkIsValidDeepLinkOrigin,
 } from "@/modules/deepLinkSecurity";
 import { createNavigationGuardHandler } from "@/main-process/security/navigationGuard";
+import {
+  AI_CHAT_GENERATED_IMAGE_PROTOCOL,
+  resolveGeneratedImageProtocolPath,
+} from "@/service/AIChatGeneratedImageProtocol";
+import { acquireSingleInstanceLock } from "@/main-process/singleInstanceGuard";
+import type { SingleInstanceApp } from "@/main-process/singleInstanceGuard";
+import {
+  getPackagedRendererHtmlCandidates,
+  resolvePackagedRendererHtmlPath,
+} from "@/utils/packagedRendererPath";
+import {
+  HtmlFileLoader,
+  HtmlFileLoadError,
+  loadHtmlFileWithUrlFallback,
+} from "@/utils/loadHtmlFileWithUrlFallback";
+import { resolveSecondInstanceWindowAction } from "@/utils/mainWindowSecondInstance";
+import { resolveAppStartupPolicy } from "@/main-process/startup/AppStartupPolicy";
+
+let chatScheduledBackgroundScheduler: BackgroundScheduler | null = null;
 // import { RAGIpcHandlers } from '@/main-process/ragIpcHandlers';
 // import { createProtocol } from 'electron';
 const isDevelopment = process.env.NODE_ENV !== "production";
 declare const MAIN_WINDOW_VITE_DEV_SERVER_URL: string;
 declare const MAIN_WINDOW_VITE_NAME: string;
+
+// Startup side-effect policy (design §7). E2E mode (AIFETCHLY_E2E=1) disables
+// external side effects (protocol registration, single-instance lock, updater,
+// DevTools, schedulers, orphaned-task inspection, marketing WebSocket, token
+// refresh, dev browser bridge, global config scan). Production and normal dev
+// behavior is unchanged (every flag true).
+const startupPolicy = resolveAppStartupPolicy(
+  process.env,
+  Boolean((app as { isPackaged?: boolean }).isPackaged)
+);
 // import { safeStorage } from 'electron';
+
+if (!app.isReady()) {
+  protocol.registerSchemesAsPrivileged([
+    {
+      scheme: AI_CHAT_GENERATED_IMAGE_PROTOCOL,
+      privileges: {
+        standard: true,
+        secure: true,
+        supportFetchAPI: true,
+        corsEnabled: true,
+      },
+    },
+  ]);
+}
 
 // const { ipcRenderer: ipc } = require('electron-better-ipc');
 // const { ipcMain } = require("electron");
+
+// Handle Windows Squirrel install/update/uninstall/obsolete events first.
+// These launch the app with special args; quit immediately so installer
+// events don't run normal startup code or open extra windows.
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+if (require("electron-squirrel-startup")) {
+  (app as unknown as { quit: () => void }).quit();
+}
 
 // Get app name for protocol
 const appName = app.getName();
@@ -123,6 +192,8 @@ __diagnosticsRetention.schedule();
 // dev kill as a real unclean shutdown. `app.isPackaged` is the reliable signal
 // here (NODE_ENV is not auto-set to "production" in packaged Electron builds).
 const __startupMarker = getStartupMarkerPath();
+/** Set only when THIS launch found a leftover startup marker. */
+let __uncleanShutdownCrashIdThisLaunch: string | null = null;
 if ((app as any).isPackaged) {
   let __previousSessionId: string | undefined;
   if (fs.existsSync(__startupMarker)) {
@@ -131,9 +202,11 @@ if ((app as any).isPackaged) {
         sessionId?: string;
       };
       __previousSessionId = prev.sessionId;
-      __crashReporter.recordUncleanShutdown(__previousSessionId);
+      __uncleanShutdownCrashIdThisLaunch =
+        __crashReporter.recordUncleanShutdown(__previousSessionId);
     } catch {
-      __crashReporter.recordUncleanShutdown();
+      __uncleanShutdownCrashIdThisLaunch =
+        __crashReporter.recordUncleanShutdown();
     }
   }
   fs.writeFileSync(
@@ -149,7 +222,48 @@ if ((app as any).isPackaged) {
   }
 }
 
+function clearStartupMarker(): void {
+  try {
+    const marker = getStartupMarkerPath();
+    if (fs.existsSync(marker)) fs.rmSync(marker, { force: true });
+  } catch {
+    /* ignore */
+  }
+}
+
 log.info("Application starting...");
+
+// Puppeteer registers process "exit" listeners per launched browser, and
+// electron-store historically stacked ipcMain "electron-store-get-data"
+// listeners when multiple Store copies were constructed. Raise the default
+// limit early so legitimate multi-browser / store usage does not spam
+// MaxListenersExceededWarning (store instances are also singleton-cached).
+process.setMaxListeners(50);
+try {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { ipcMain } = require("electron") as {
+    ipcMain?: { setMaxListeners?: (n: number) => void };
+  };
+  ipcMain?.setMaxListeners?.(50);
+} catch {
+  // electron ipcMain unavailable in non-Electron test hosts
+}
+
+if (
+  isDevelopment &&
+  process.platform === "linux" &&
+  process.env.LIBGL_ALWAYS_INDIRECT === "1"
+) {
+  log.info("[dev] Disabling GPU acceleration for indirect GL session");
+  const appWithGpuControls = app as typeof app & {
+    disableHardwareAcceleration: () => void;
+    commandLine: {
+      appendSwitch: (switchName: string) => void;
+    };
+  };
+  appWithGpuControls.disableHardwareAcceleration();
+  appWithGpuControls.commandLine.appendSwitch("disable-gpu");
+}
 
 // Handle uncaught exceptions — user-facing dialog only.
 // Crash record persistence is handled by __crashReporter (registered above,
@@ -164,6 +278,32 @@ process.on("uncaughtException", (error) => {
 });
 
 let win: BrowserWindow | null;
+/** True only after the packaged/dev renderer document successfully loaded. */
+let rendererHtmlLoaded = false;
+/**
+ * Set from initialize() after createWindow exists. second-instance fires later,
+ * so a late-bound callback avoids circular ordering issues.
+ */
+let onSecondInstanceActivate: (() => void) | null = null;
+
+/**
+ * If quit hangs after a fatal renderer load (dialog / AV / locked asar), force
+ * exit so the single-instance lock is released and the next launch can recover
+ * without a reboot.
+ */
+function scheduleForcedAppExit(reason: string): void {
+  log.error(`[startup] scheduling forced exit: ${reason}`);
+  setTimeout(() => {
+    // app.exit() skips before-quit; clear the marker first so the next launch
+    // does not treat this recovery exit as an unexpected crash.
+    clearStartupMarker();
+    try {
+      (app as unknown as { exit: (code?: number) => void }).exit(1);
+    } catch {
+      process.exit(1);
+    }
+  }, 2500);
+}
 
 /**
  * Dev browser bridge instance (dev-only). Null in production or when the
@@ -172,6 +312,32 @@ let win: BrowserWindow | null;
  * (NFR-1: keep bridge code out of production startup paths via dynamic import).
  */
 let devBrowserBridge: { stop(): Promise<void> } | null = null;
+let generatedImageProtocolHandlerRegistered = false;
+
+function isGeneratedImageProtocolUrl(url: string): boolean {
+  try {
+    return new URL(url).protocol === `${AI_CHAT_GENERATED_IMAGE_PROTOCOL}:`;
+  } catch {
+    return false;
+  }
+}
+
+function registerGeneratedImageProtocolHandler(): void {
+  if (generatedImageProtocolHandlerRegistered) {
+    return;
+  }
+  protocol.handle(AI_CHAT_GENERATED_IMAGE_PROTOCOL, async (request) => {
+    const filePath = resolveGeneratedImageProtocolPath(
+      request.url,
+      app.getPath("userData")
+    );
+    if (!filePath) {
+      return new Response("Generated image not found.", { status: 404 });
+    }
+    return net.fetch(pathToFileURL(filePath).toString());
+  });
+  generatedImageProtocolHandlerRegistered = true;
+}
 
 function registerMenuBarShortcuts(mainWindow: BrowserWindow): void {
   if (process.platform === "darwin") {
@@ -206,6 +372,74 @@ function registerMenuBarShortcuts(mainWindow: BrowserWindow): void {
   });
 }
 
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function isConnectionRefusedError(error: unknown): boolean {
+  if (
+    error instanceof Error &&
+    error.message.includes("ERR_CONNECTION_REFUSED")
+  ) {
+    return true;
+  }
+
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+
+  const maybeElectronError = error as { code?: unknown; errno?: unknown };
+  return (
+    maybeElectronError.code === "ERR_CONNECTION_REFUSED" ||
+    maybeElectronError.errno === -102
+  );
+}
+
+function isBrowserWindowDestroyed(mainWindow: BrowserWindow): boolean {
+  const destroyableWindow = mainWindow as BrowserWindow & {
+    isDestroyed?: () => boolean;
+  };
+
+  return (
+    typeof destroyableWindow.isDestroyed === "function" &&
+    destroyableWindow.isDestroyed()
+  );
+}
+
+async function loadDevServerUrl(
+  mainWindow: BrowserWindow,
+  devServerUrl: string
+): Promise<void> {
+  const maxAttempts = 20;
+  const retryDelayMs = 250;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      if (isBrowserWindowDestroyed(mainWindow)) {
+        return;
+      }
+
+      await mainWindow.loadURL(devServerUrl);
+      return;
+    } catch (error) {
+      const shouldRetry =
+        attempt < maxAttempts && isConnectionRefusedError(error);
+
+      if (!shouldRetry) {
+        throw error;
+      }
+
+      console.warn(
+        `Vite dev server is not ready at ${devServerUrl}; retrying ` +
+          `${attempt}/${maxAttempts}`
+      );
+      await delay(retryDelayMs);
+    }
+  }
+}
+
 function initialize() {
   // HMR guard: prevent re-initialization on Vite hot reload
   if ((globalThis as any).__aifetchlyAppInitialized) {
@@ -218,33 +452,51 @@ function initialize() {
   //   { scheme: appName, privileges: { secure: true,
   //     standard: true } }
   // ])
-  if ((app as any).isPackaged) {
-    if (!(app as any).isDefaultProtocolClient(protocolScheme)) {
-      const registres = (app as any).setAsDefaultProtocolClient(protocolScheme);
-      //console.log('registres:', registres)
-    }
-  } else {
-    console.log("protocolScheme:", protocolScheme);
-    console.log("process.execPath:", process.execPath);
-    console.log(
-      "path.resolve(process.argv[1]):",
-      path.resolve(process.argv[1])
-    );
-    console.log("path:", path.resolve(process.argv[1]));
-    ProtocolRegistry.register(
-      protocolScheme,
-      `"${process.execPath}" "${path.resolve(process.argv[1])}" "$_URL_"`,
-      {
-        override: true,
-        appName: appName,
-        terminal: true,
+  if (startupPolicy.registerProtocol) {
+    if ((app as any).isPackaged) {
+      if (!(app as any).isDefaultProtocolClient(protocolScheme)) {
+        const registres = (app as any).setAsDefaultProtocolClient(
+          protocolScheme
+        );
+        //console.log('registres:', registres)
       }
-    )
-      .then(() => console.log("Successfully registered"))
-      .catch((e) => console.error(e));
-    // app.setAsDefaultProtocolClient(protocolScheme);
+    } else {
+      console.log("protocolScheme:", protocolScheme);
+      console.log("process.execPath:", process.execPath);
+      console.log(
+        "path.resolve(process.argv[1]):",
+        path.resolve(process.argv[1])
+      );
+      console.log("path:", path.resolve(process.argv[1]));
+      ProtocolRegistry.register(
+        protocolScheme,
+        `"${process.execPath}" "${path.resolve(process.argv[1])}" "$_URL_"`,
+        {
+          override: true,
+          appName: appName,
+          terminal: true,
+        }
+      )
+        .then(() => console.log("Successfully registered"))
+        .catch((e) => console.error(e));
+      // app.setAsDefaultProtocolClient(protocolScheme);
+    }
   }
-  makeSingleInstance();
+  if (startupPolicy.acquireSingleInstanceLock) {
+    makeSingleInstance();
+  }
+
+  function createHtmlFileLoader(targetWindow: BrowserWindow): HtmlFileLoader {
+    const windowWithLoadFile = targetWindow as BrowserWindow & {
+      loadFile(filePath: string): Promise<void>;
+    };
+    return {
+      loadFile: (filePath: string): Promise<void> =>
+        windowWithLoadFile.loadFile(filePath),
+      loadURL: (url: string): Promise<void> => targetWindow.loadURL(url),
+      isDestroyed: (): boolean => targetWindow.isDestroyed(),
+    };
+  }
 
   // Helper function to try alternative HTML file paths with detailed error handling
   async function tryAlternativePaths(
@@ -253,26 +505,15 @@ function initialize() {
     log: any,
     dialog: any
   ): Promise<void> {
-    const alternativePaths = [
-      path.join(__dirname, "../.vite/renderer/main_window/index.html"),
-      path.join(__dirname, "../renderer/main_window/index.html"),
-      path.join(__dirname, "./index.html"),
-      path.join(
-        (process as NodeJS.Process & { resourcesPath: string }).resourcesPath,
-        "app.asar",
-        ".vite",
-        "renderer",
-        "main_window",
-        "index.html"
-      ),
-      path.join(
-        (process as NodeJS.Process & { resourcesPath: string }).resourcesPath,
-        ".vite",
-        "renderer",
-        "main_window",
-        "index.html"
-      ),
-    ];
+    const alternativePaths = getPackagedRendererHtmlCandidates(
+      {
+        dirname: __dirname,
+        resourcesPath: (process as NodeJS.Process & { resourcesPath?: string })
+          .resourcesPath,
+        existsSync: fs.existsSync,
+      },
+      MAIN_WINDOW_VITE_NAME
+    ).filter((candidate) => candidate !== path.normalize(originalPath));
 
     //console.log('Trying alternative paths for HTML file...');
     // log.info('Trying alternative paths for HTML file. Original path was:', originalPath);
@@ -295,12 +536,17 @@ function initialize() {
             //console.log('Alternative path exists, attempting to load...');
             // log.info('Alternative path exists, attempting to load:', altPath);
 
-            await (win as any).loadFile(altPath);
-            console.log(
-              "Successfully loaded HTML file from alternative path:",
+            const loadResult = await loadHtmlFileWithUrlFallback(
+              createHtmlFileLoader(win),
               altPath
             );
+            console.log(
+              "Successfully loaded HTML file from alternative path:",
+              altPath,
+              loadResult.method === "loadURL" ? `via ${loadResult.fileUrl}` : ""
+            );
             // log.info('Successfully loaded HTML file from alternative path:', altPath);
+            rendererHtmlLoaded = true;
             loaded = true;
             break;
           } else {
@@ -348,37 +594,70 @@ function initialize() {
 
       dialog.showErrorBox(
         "Application Error",
-        "Could not load the application interface. This may be due to a corrupted installation.\n\nPlease try:\n1. Reinstalling the application\n2. Running as administrator\n3. Checking antivirus software\n\nError details have been logged."
+        "Could not load the application interface. This may be due to a temporary file lock (antivirus) or a previous stuck instance.\n\nPlease try:\n1. Closing all aiFetchly processes in Task Manager\n2. Waiting a few seconds and relaunching\n3. Reinstalling if it keeps failing\n\nError details have been logged."
       );
+      rendererHtmlLoaded = false;
       (app as any).quit();
+      scheduleForcedAppExit("renderer HTML load failed on all paths");
     }
   }
 
   /** Prevents concurrent createWindow() races (e.g. whenReady + activate) that double-register ipcMain handlers. */
   let createWindowInFlight: Promise<void> | null = null;
 
+  async function destroyUnhealthyMainWindows(): Promise<void> {
+    const windows = BrowserWindow.getAllWindows() as BrowserWindow[];
+    for (const existing of windows) {
+      if (!existing.isDestroyed()) {
+        try {
+          existing.destroy();
+        } catch (err: unknown) {
+          log.warn(
+            "[window] failed to destroy unhealthy main window",
+            err instanceof Error ? err.message : String(err)
+          );
+        }
+      }
+    }
+    win = null;
+    rendererHtmlLoaded = false;
+  }
+
   async function createWindow(): Promise<void> {
-    const existingWindows = BrowserWindow.getAllWindows() as any[];
+    const existingWindows = BrowserWindow.getAllWindows() as BrowserWindow[];
     if (existingWindows.length > 0) {
       const existing = existingWindows[0];
       if (!existing.isDestroyed()) {
-        console.log("Window already exists and is valid, focusing...");
-        if (!win) win = existing;
-        existing.focus();
-        return;
+        const action = resolveSecondInstanceWindowAction({
+          hasLiveWindow: true,
+          rendererHtmlLoaded,
+        });
+        if (action === "focus") {
+          console.log("Window already exists and is valid, focusing...");
+          if (!win) win = existing;
+          existing.focus();
+          return;
+        }
+        log.warn(
+          "[window] existing main window has no loaded renderer; recreating"
+        );
+        await destroyUnhealthyMainWindows();
       }
     }
     if (createWindowInFlight) {
       await createWindowInFlight;
-      const existingWindows2 = BrowserWindow.getAllWindows() as any[];
+      const existingWindows2 = BrowserWindow.getAllWindows() as BrowserWindow[];
       if (existingWindows2.length > 0) {
         const existing = existingWindows2[0];
-        if (!existing.isDestroyed()) {
+        if (!existing.isDestroyed() && rendererHtmlLoaded) {
           if (!win) win = existing;
           existing.focus();
+          return;
         }
       }
-      return;
+      if (rendererHtmlLoaded) {
+        return;
+      }
     }
     createWindowInFlight = createWindowBody();
     try {
@@ -389,6 +668,7 @@ function initialize() {
   }
 
   async function createWindowBody(): Promise<void> {
+    rendererHtmlLoaded = false;
     // Create the browser window.
     win = new BrowserWindow({
       // Hide by default on Windows/Linux. (macOS uses the system menu bar.)
@@ -396,6 +676,7 @@ function initialize() {
       icon: path.join(__dirname, "/icon.png"),
       width: 800,
       height: 600,
+      show: false,
       webPreferences: {
         // Use pluginOptions.nodeIntegration, leave this alone
         // See nklayman.github.io/vue-cli-plugin-electron-builder/guide/security.html#node-integration for more info
@@ -409,6 +690,10 @@ function initialize() {
         preload: path.join(__dirname + "/preload.js"),
       },
     });
+
+    win.maximize();
+    win.show();
+    setMainWindow(win);
 
     if (win) {
       // Ensure menu bar is hidden by default + register shortcuts to show/toggle.
@@ -465,17 +750,19 @@ function initialize() {
         }
       }
       //if (userdataPath){//register communication ipc handlers
-      registerCommunicationIpcHandlers(win);
+      registerCommunicationIpcHandlers(win, () => win);
 
       // INIT-01: Wire FileOperationTracker to the window's webContents
       FileOperationTracker.setWebContents(win.webContents);
 
       // Start the dev browser bridge (dev-only; no-op in production or when
       // disabled). Fire-and-forget so a bridge failure never blocks app startup.
-      void startDevBrowserBridge(win).catch((err: unknown) => {
-        const msg = err instanceof Error ? err.message : String(err);
-        log.error(`[dev-browser] failed to start bridge: ${msg}`);
-      });
+      if (startupPolicy.startDevBrowserBridge) {
+        void startDevBrowserBridge(win).catch((err: unknown) => {
+          const msg = err instanceof Error ? err.message : String(err);
+          log.error(`[dev-browser] failed to start bridge: ${msg}`);
+        });
+      }
 
       // Load persisted skills into runtime registry
       SkillImportService.loadPersistedSkills().catch((err: unknown) => {
@@ -503,9 +790,11 @@ function initialize() {
       if (phase14WatcherManager) {
         phase14ConfigManager.setWorkspaceWatchManager(phase14WatcherManager);
       }
-      phase14ConfigManager.initialize().catch((err: unknown) => {
-        console.warn("[Startup] AIFetchly config scan failed:", err);
-      });
+      if (startupPolicy.scanGlobalExtensions) {
+        phase14ConfigManager.initialize().catch((err: unknown) => {
+          console.warn("[Startup] AIFetchly config scan failed:", err);
+        });
+      }
       //}
     }
 
@@ -514,7 +803,9 @@ function initialize() {
       console.log("Window closed event triggered");
       // INIT-02: Clear tracker webContents reference when window closes
       FileOperationTracker.clear();
+      setMainWindow(null);
       win = null;
+      rendererHtmlLoaded = false;
     });
     // In this example, only windows with the `about:blank` url will be created.
     // All other urls will be blocked.
@@ -534,6 +825,9 @@ function initialize() {
       const isTrustedOrigin = isAppTrustedOrigin(url);
 
       if (!isTrustedOrigin) {
+        if (isGeneratedImageProtocolUrl(url)) {
+          return { action: "deny" };
+        }
         // Open externally WITHOUT preload. Never expose the IPC bridge to
         // arbitrary web content.
         // F9 fix (bypass) — validate scheme before handing the URL to the
@@ -578,63 +872,62 @@ function initialize() {
       // Load the url of the dev server if in development mode
       try {
         if (win && !(win as any).isDestroyed()) {
-          await (win as any).loadURL(MAIN_WINDOW_VITE_DEV_SERVER_URL as string);
+          await loadDevServerUrl(win, MAIN_WINDOW_VITE_DEV_SERVER_URL);
+          rendererHtmlLoaded = true;
           if (!process.env.IS_TEST) (win as any).webContents.openDevTools();
         }
       } catch (error) {
         console.error("Failed to load URL:", error);
       }
     } else {
-      //check update
-      const server = import.meta.env.UPDATESERVER as string;
-      if (server) {
-        const url = `${server}/update/${process.platform}/${(
-          app as any
-        ).getVersion()}`;
-        autoUpdater.setFeedURL({ url });
-        autoUpdater.checkForUpdates();
+      // Initialize GitHub Releases auto-updater for packaged desktop builds.
+      // The service self-gates on packaging state, platform, and Microsoft
+      // Store channel, and is idempotent across repeated window creation.
+      if (startupPolicy.initializeUpdates) {
+        initializeAppUpdates();
       }
       // console.log('app://./index.html')
       // createProtocol('app')
-      // Load the index.html when not in development
-      // In production, the renderer files are in .vite/renderer/main_window/
-      const htmlPath = path.join(
-        __dirname,
-        `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`
-      );
+      // Load the index.html when not in development.
+      // Prefer app.asar.unpacked when the renderer was unpacked — Chromium
+      // loadFile fails with ERR_FAILED (-2) on the virtual app.asar path for
+      // unpacked files even though Node fs.existsSync still returns true.
+      const htmlPath =
+        resolvePackagedRendererHtmlPath(
+          {
+            dirname: __dirname,
+            resourcesPath: (
+              process as NodeJS.Process & { resourcesPath?: string }
+            ).resourcesPath,
+            existsSync: fs.existsSync,
+          },
+          MAIN_WINDOW_VITE_NAME
+        ) ??
+        path.join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`);
 
-      // console.log('=== HTML File Loading Debug Info ===');
-      // console.log('App is packaged:', app.isPackaged);
-      // console.log('MAIN_WINDOW_VITE_NAME:', MAIN_WINDOW_VITE_NAME);
-      // console.log('__dirname:', __dirname);
-      // console.log('process.resourcesPath:', process.resourcesPath);
-      // console.log('Loading HTML from:', htmlPath);
-      // log.info('=== HTML File Loading Debug Info ===');
-      // log.info('App is packaged:', app.isPackaged);
-      // log.info('MAIN_WINDOW_VITE_NAME:', MAIN_WINDOW_VITE_NAME);
-      // log.info('__dirname:', __dirname);
-      // log.info('process.resourcesPath:', process.resourcesPath);
-      // log.info('Loading HTML from:', htmlPath);
-
-      // Check if file exists before loading
       if (fs.existsSync(htmlPath)) {
-        //console.log('HTML file exists, loading...');
         log.info("Attempting to load HTML file from:", htmlPath);
 
         try {
-          // Check if window is still valid before attempting to load
           if (win && !(win as any).isDestroyed()) {
-            await (win as any).loadFile(htmlPath);
-            console.log("Successfully loaded HTML file from:", htmlPath);
-            //log.info('Successfully loaded HTML file from:', htmlPath);
+            const loadResult = await loadHtmlFileWithUrlFallback(
+              createHtmlFileLoader(win),
+              htmlPath
+            );
+            console.log(
+              "Successfully loaded HTML file from:",
+              htmlPath,
+              loadResult.method === "loadURL" ? `via ${loadResult.fileUrl}` : ""
+            );
+            rendererHtmlLoaded = true;
           } else {
             console.error("Window has been destroyed, cannot load file");
-            //log.error('Window has been destroyed, cannot load file');
             dialog.showErrorBox(
               "Application Error",
               "The application window was destroyed before it could load. Please restart the application."
             );
             (app as any).quit();
+            scheduleForcedAppExit("main window destroyed before HTML load");
             return;
           }
         } catch (error) {
@@ -643,36 +936,56 @@ function initialize() {
             htmlPath
           );
           console.error("Error details:", error);
-          // log.error('Failed to load HTML file from primary path:', htmlPath);
-          // log.error('Error details:', error);
+          if (error instanceof HtmlFileLoadError) {
+            console.error(
+              "Renderer load failed for both strategies. file URL:",
+              error.fileUrl,
+              "| loadURL error:",
+              error.loadUrlError,
+              "| loadFile error:",
+              error.loadFileError
+            );
+          }
 
-          // Check if the error is due to window destruction
           if (
             error instanceof Error &&
             error.message.includes("Object has been destroyed")
           ) {
             console.error("Window was destroyed during loading");
-            //log.error('Window was destroyed during loading');
             dialog.showErrorBox(
               "Application Error",
               "The application window was destroyed during loading. Please restart the application."
             );
             (app as any).quit();
+            scheduleForcedAppExit("main window destroyed during HTML load");
             return;
           }
 
-          // Try alternative paths with detailed error handling
-          //await tryAlternativePaths(win, htmlPath, log, dialog);
+          await tryAlternativePaths(win, htmlPath, log, dialog);
         }
       } else {
         console.error("HTML file not found at:", htmlPath);
-        //log.error('HTML file not found at:', htmlPath);
-
-        // Try alternative paths with detailed error handling
         await tryAlternativePaths(win, htmlPath, log, dialog);
       }
     }
   }
+
+  onSecondInstanceActivate = () => {
+    const hasLiveWindow = !!(win && !(win as any).isDestroyed());
+    const action = resolveSecondInstanceWindowAction({
+      hasLiveWindow,
+      rendererHtmlLoaded,
+    });
+    if (action === "focus" && win && !(win as any).isDestroyed()) {
+      if ((win as any).isMinimized()) (win as any).restore();
+      (win as any).focus();
+      return;
+    }
+    log.warn(
+      "[second-instance] recreating main window (missing or unloaded renderer)"
+    );
+    void createWindow();
+  };
 
   // Quit when all windows are closed.
   (app as any).on("window-all-closed", () => {
@@ -687,12 +1000,7 @@ function initialize() {
   (app as any).on("before-quit", async () => {
     // Remove startup marker on clean shutdown so the next launch does not
     // mistake a graceful exit for a crash.
-    try {
-      const __startupMarker = getStartupMarkerPath();
-      if (fs.existsSync(__startupMarker)) fs.rmSync(__startupMarker);
-    } catch {
-      /* ignore */
-    }
+    clearStartupMarker();
 
     // Stop the dev browser bridge (no-op if it never started).
     try {
@@ -735,7 +1043,11 @@ function initialize() {
       if (userdataPath && userdataPath.length > 0) {
         const scheduleManager = ScheduleManager.getInstance();
         await scheduleManager.handleAppShutdown();
-        log.info("ScheduleManager shutdown completed");
+        if (chatScheduledBackgroundScheduler) {
+          await chatScheduledBackgroundScheduler.stop();
+          chatScheduledBackgroundScheduler = null;
+        }
+        log.info("Schedulers shutdown completed");
       }
     } catch (error) {
       log.error("Failed to shutdown ScheduleManager:", error);
@@ -798,6 +1110,8 @@ function initialize() {
   // initialization and is ready to create browser windows.
   // Some APIs can only be used after this event occurs.
   (app as any).whenReady().then(async () => {
+    registerGeneratedImageProtocolHandler();
+
     // Configure Content Security Policy (must be called after app is ready)
     configureContentSecurityPolicy();
 
@@ -864,6 +1178,18 @@ function initialize() {
         await SqliteDb.ensureInitialized();
       }
 
+      // Best-effort cache cleanup so stale paste expansions do not grow
+      // without bound. Fire-and-forget so it never blocks startup.
+      try {
+        const pasteCacheRoot = path.join(userdataPath, "paste-cache");
+        void new PasteStoreService(pasteCacheRoot).cleanupOldPastes();
+      } catch (err) {
+        log.warn(
+          "[paste-cache] cleanupOldPastes init failed:",
+          err instanceof Error ? err.message : String(err)
+        );
+      }
+
       // Seed built-in agent definitions (marketing subagent system).
       try {
         const { AgentDefinitionModule } = await import(
@@ -907,44 +1233,52 @@ function initialize() {
       //   log.error('Failed to initialize RAG IPC handlers:', error);
       // }
 
-      // Initialize ScheduleManager with auto-start functionality
-      try {
-        await runafterbootup();
-        const scheduleManager = ScheduleManager.getInstance();
-        await scheduleManager.initializeWithDatabaseStatus();
-        log.info("ScheduleManager initialized with auto-start functionality");
-      } catch (error) {
-        log.error("Failed to initialize ScheduleManager:", error);
+      // Initialize the legacy scheduler and the interval-based Chat V2 scheduler.
+      if (startupPolicy.startSchedulers) {
+        try {
+          await runafterbootup();
+          const scheduleManager = ScheduleManager.getInstance();
+          await scheduleManager.initializeWithDatabaseStatus();
+          chatScheduledBackgroundScheduler = new BackgroundScheduler(
+            userdataPath
+          );
+          await chatScheduledBackgroundScheduler.start();
+          log.info("Schedulers initialized with auto-start functionality");
+        } catch (error) {
+          log.error("Failed to initialize schedulers:", error);
+        }
       }
 
       // Check for orphaned Yellow Pages processes on startup
-      try {
-        const yellowPagesCtrl = YellowPagesController.getInstance();
+      if (startupPolicy.inspectOrphanedTasks) {
+        try {
+          const yellowPagesCtrl = YellowPagesController.getInstance();
 
-        // Handle tasks from previous session first
-        const previousSessionCount =
-          await yellowPagesCtrl.handleTasksFromPreviousSession();
-        log.info(
-          `Yellow Pages previous session tasks handled: ${previousSessionCount} tasks marked as failed`
-        );
+          // Handle tasks from previous session first
+          const previousSessionCount =
+            await yellowPagesCtrl.handleTasksFromPreviousSession();
+          log.info(
+            `Yellow Pages previous session tasks handled: ${previousSessionCount} tasks marked as failed`
+          );
 
-        // Then check for orphaned processes
-        const orphanedCheckResult =
-          await yellowPagesCtrl.checkForOrphanedProcesses();
-        log.info(
-          "Yellow Pages orphaned process check completed:",
-          orphanedCheckResult
-        );
-      } catch (error) {
-        log.error(
-          "Failed to check for orphaned Yellow Pages processes:",
-          error
-        );
+          // Then check for orphaned processes
+          const orphanedCheckResult =
+            await yellowPagesCtrl.checkForOrphanedProcesses();
+          log.info(
+            "Yellow Pages orphaned process check completed:",
+            orphanedCheckResult
+          );
+        } catch (error) {
+          log.error(
+            "Failed to check for orphaned Yellow Pages processes:",
+            error
+          );
+        }
       }
 
       // Initialize WebSocket connection to marketing server
       // This enables real-time notifications and updates
-      if (win) {
+      if (startupPolicy.connectMarketingWebSocket && win) {
         try {
           await initializeWebSocketConnection(win);
           log.info("WebSocket connection to marketing server initialized");
@@ -954,14 +1288,22 @@ function initialize() {
       }
 
       // Start background token auto-refresh for already-logged-in user (only if not already running)
-      if (!TokenRefreshService.isAutoRefreshRunning()) {
+      if (
+        startupPolicy.startTokenRefresh &&
+        !TokenRefreshService.isAutoRefreshRunning()
+      ) {
         TokenRefreshService.startAutoRefresh();
       }
     }
 
-    if (isDevelopment && !process.env.IS_TEST) {
-      // Install Vue Devtools
+    if (
+      isDevelopment &&
+      !process.env.IS_TEST &&
+      startupPolicy.installDevTools
+    ) {
+      // Install Vue Devtools (route Session.* through session.extensions)
       try {
+        patchSessionExtensionsApi(session.defaultSession);
         await installExtension(VUEJS3_DEVTOOLS);
       } catch (e) {
         if (e instanceof Error) {
@@ -972,6 +1314,7 @@ function initialize() {
   });
 
   (app as any).on("will-quit", () => {
+    clearStartupMarker();
     globalShortcut.unregisterAll();
   });
 
@@ -998,36 +1341,38 @@ function initialize() {
 function configureContentSecurityPolicy() {
   const defaultSession = session.defaultSession;
 
-  // Set CSP based on environment
-  // In development, we need 'unsafe-eval' for Vite's HMR
-  // In production, we can be more restrictive
-  const cspDirectives = isDevelopment
-    ? [
-        "default-src 'self'",
-        "script-src 'self' 'unsafe-eval' 'unsafe-inline' http://localhost:* https://localhost:*",
-        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-        "img-src 'self' data: https: http:",
-        "font-src 'self' data: https://fonts.googleapis.com https://fonts.gstatic.com",
-        "connect-src 'self' http://localhost:* https://localhost:* https: http: https://fonts.googleapis.com https://fonts.gstatic.com",
-        "frame-src 'self'",
-        "object-src 'none'",
-        "base-uri 'self'",
-        "form-action 'self'",
-        "frame-ancestors 'none'",
-      ].join("; ")
-    : [
-        "default-src 'self'",
-        "script-src 'self'",
-        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-        "img-src 'self' data: https:",
-        "font-src 'self' data: https://fonts.googleapis.com https://fonts.gstatic.com",
-        "connect-src 'self' https: https://fonts.googleapis.com https://fonts.gstatic.com",
-        "frame-src 'self'",
-        "object-src 'none'",
-        "base-uri 'self'",
-        "form-action 'self'",
-        "frame-ancestors 'none'",
-      ].join("; ");
+  // Voice feature (PRD §16): allow microphone (audio) capture; deny camera
+  // (video). Other permissions use a minimal allowlist instead of blanket-
+  // approving, so unexpected requests (geolocation, midi, etc.) are denied.
+  const ALLOWED_PERMISSIONS = new Set([
+    "clipboard-sanitized",
+    "clipboard-read",
+    "fullscreen",
+    "window-management",
+    "openExternal",
+  ]);
+  defaultSession.setPermissionRequestHandler(
+    (
+      _wc: unknown,
+      permission: string,
+      callback: (permissionGranted: boolean) => void,
+      details: { mediaTypes?: string[] } | undefined
+    ) => {
+      if (permission === "media") {
+        const wantsVideo =
+          (
+            details as { mediaTypes?: string[] } | undefined
+          )?.mediaTypes?.includes("video") ?? false;
+        callback(!wantsVideo);
+        return;
+      }
+      callback(ALLOWED_PERMISSIONS.has(permission));
+    }
+  );
+
+  // Set CSP based on environment. In development, Vite HMR needs a looser
+  // script/connect policy; production keeps those restrictive.
+  const cspDirectives = buildAppContentSecurityPolicy(isDevelopment);
 
   defaultSession.webRequest.onHeadersReceived((details: { responseHeaders?: Record<string, string[]> }, callback: (response: { responseHeaders: Record<string, string[]> }) => void) => {
     callback({
@@ -1045,19 +1390,30 @@ function configureContentSecurityPolicy() {
   );
 }
 
-function makeSingleInstance() {
+function makeSingleInstance(): void {
   if ((process as NodeJS.Process & { mas: boolean }).mas) return;
 
-  const gotThelock = (app as any).requestSingleInstanceLock();
+  const gotThelock = acquireSingleInstanceLock(
+    app as unknown as SingleInstanceApp
+  );
   if (!gotThelock) {
-    (app as any).quit();
+    return;
   } else {
     // console.log('gotThelock:', gotThelock)
 
     (app as any).on("second-instance", (event: unknown, argv: string[], workingDirectory: string) => {
-      if (win) {
-        if ((win as any).isMinimized()) (win as any).restore();
-        (win as any).focus();
+      try {
+        if (onSecondInstanceActivate) {
+          onSecondInstanceActivate();
+        } else if (win && !(win as any).isDestroyed()) {
+          if ((win as any).isMinimized()) (win as any).restore();
+          (win as any).focus();
+        }
+      } catch (err: unknown) {
+        log.error(
+          "[second-instance] activate failed",
+          err instanceof Error ? err.message : String(err)
+        );
       }
 
       // console.log("second-instance call")
@@ -1269,26 +1625,29 @@ function sendLoginError(message: string): void {
 }
 
 /**
- * Show the "report crash" prompt if the previous session ended in an
- * unclean shutdown. No-op when there is no `unclean-shutdown` record on
- * disk (e.g. first launch or after a clean exit). The function is wrapped
- * in a try/catch so a failure in the diagnostics layer can never block
- * app startup — `maybeShowCrashPrompt` is invoked fire-and-forget via
- * `void` from `app.whenReady`.
- *
- * v1 note: this is not throttled by `lastPromptedCrashId`. The prompt
- * shows at most once per session that has an unread unclean-shutdown
- * record. Throttling is a P2 follow-up.
+ * Show the "report crash" prompt only when THIS launch detected a leftover
+ * startup marker (true unclean previous exit). Historical crash.jsonl rows
+ * alone must not re-open the dialog after a normal quit. After any user
+ * choice (including Dismiss), persist the crashId so the same event cannot
+ * prompt again.
  */
 async function maybeShowCrashPrompt(): Promise<void> {
   // Production only (see startup-marker logic above). Dev builds are killed
   // repeatedly without graceful shutdown, so prompting would be noise.
   if (!(app as any).isPackaged) return;
   try {
-    const { CrashLogSink } = await import("@/modules/diagnostics/CrashLogSink");
-    const records = CrashLogSink.readAll();
-    const latest = records.find((r) => r.crashType === "unclean-shutdown");
-    if (!latest) return;
+    const crashId = __uncleanShutdownCrashIdThisLaunch;
+    if (
+      !shouldShowUncleanShutdownPrompt({
+        detectedThisLaunch: crashId !== null,
+        crashId,
+        lastPromptedCrashId: getLastPromptedCrashId(),
+      })
+    ) {
+      return;
+    }
+    if (!crashId) return;
+
     const choice = await dialog.showMessageBox({
       type: "question",
       title: "AiFetchly",
@@ -1299,16 +1658,20 @@ async function maybeShowCrashPrompt(): Promise<void> {
       defaultId: 0,
       cancelId: 2,
     });
+    // Always mark prompted after the dialog — including Dismiss — so a single
+    // historical unclean-shutdown cannot reappear on every normal launch.
+    setLastPromptedCrashId(crashId);
+
     if (choice.response === 0) {
       const { uploadLatestUncleanShutdown } = await import(
         "@/main-process/communication/diagnostics-ipc"
       );
-      await uploadLatestUncleanShutdown(latest.crashId);
+      await uploadLatestUncleanShutdown(crashId);
     } else if (choice.response === 1) {
       const { exportLatestReport } = await import(
         "@/main-process/communication/diagnostics-ipc"
       );
-      await exportLatestReport(latest.crashId);
+      await exportLatestReport(crashId);
     }
   } catch (e) {
     log.warn("[crash-prompt] failed", e);

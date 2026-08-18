@@ -137,6 +137,24 @@ describe("EmbeddingModelCatalogService", () => {
     expect(Object.keys(list.models)).toEqual([LOCAL_XENOVA_ALL_MINILM_MODEL_ID]);
   });
 
+  it("does not contact the remote API when remote models are disabled", async () => {
+    const getAvailableEmbeddingModels = vi.fn(async () =>
+      makeRemoteModelsResponse()
+    );
+    const api = makeRagConfigApiStub(getAvailableEmbeddingModels);
+    const catalog = new EmbeddingModelCatalogService(
+      api,
+      makeDefaultProvider(async () => null)
+    );
+
+    const list = await catalog.listModels({ includeRemote: false });
+
+    expect(getAvailableEmbeddingModels).not.toHaveBeenCalled();
+    expect(Object.keys(list.models)).toEqual([LOCAL_XENOVA_ALL_MINILM_MODEL_ID]);
+    expect(list.default_model).toBe(LOCAL_XENOVA_ALL_MINILM_MODEL_ID);
+    expect(list.models[LOCAL_XENOVA_ALL_MINILM_MODEL_ID]?.dimensions).toBe(384);
+  });
+
   it("prefers the persisted default when it exists in the merged list", async () => {
     const api = makeRagConfigApiStub(async () => makeRemoteModelsResponse());
     const catalog = new EmbeddingModelCatalogService(

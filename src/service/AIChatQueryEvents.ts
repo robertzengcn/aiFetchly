@@ -1,5 +1,9 @@
 // src/service/AIChatQueryEvents.ts
-import type { OpenAIChatMessage, OpenAITool } from "@/api/aiChatApi";
+import type {
+  OpenAIChatImage,
+  OpenAIChatMessage,
+  OpenAITool,
+} from "@/api/aiChatApi";
 import type { ChatV2StreamRequest } from "@/entityTypes/aiChatV2Types";
 import type {
   AIChatPlanQuestionView,
@@ -9,6 +13,11 @@ import type {
   SubmitPlanForApprovalPayload,
 } from "@/entityTypes/aiChatPlanTypes";
 import type { SkillDefinition } from "@/entityTypes/skillTypes";
+import type {
+  ToolCatalog,
+  ToolCatalogModeDecision,
+  ToolCatalogStateSnapshot,
+} from "@/entityTypes/toolCatalogTypes";
 import type {
   AIChatRecoveryLayer,
   AIChatRecoveryReason,
@@ -40,6 +49,14 @@ export interface AIChatQueryTokenEvent {
   conversationId: string;
   messageId: string;
   contentDelta: string;
+  model?: string;
+}
+
+export interface AIChatQueryReasoningDeltaEvent {
+  type: "reasoning_delta";
+  conversationId: string;
+  messageId: string;
+  reasoningDelta: string;
   model?: string;
 }
 
@@ -144,6 +161,7 @@ export interface AIChatQueryCompleteEvent {
   conversationId: string;
   messageId: string;
   fullContent: string;
+  images?: OpenAIChatImage[];
   model?: string;
   finishReason?: string | null;
   totalTokens?: number;
@@ -209,6 +227,7 @@ export interface AIChatQueryRecoveryStatusEvent {
 export type AIChatQueryEvent =
   | AIChatQueryStartEvent
   | AIChatQueryTokenEvent
+  | AIChatQueryReasoningDeltaEvent
   | AIChatQueryRetryEvent
   | AIChatQueryRecoveryStatusEvent
   | AIChatQueryToolCallEvent
@@ -234,6 +253,7 @@ export type AIChatQueryLoopResult =
       assistantMessageId: string;
       fullContent: string;
       finishReason: string;
+      images?: OpenAIChatImage[];
       model?: string;
       responseId?: string;
       /** Server-reported token usage from the final model round, if the
@@ -243,6 +263,11 @@ export type AIChatQueryLoopResult =
       totalTokens?: number;
       promptTokens?: number;
       completionTokens?: number;
+      /** Final safe-to-show reasoning text accumulated across rounds, if any. */
+      reasoningContent?: string;
+      /** Final deferred-catalog discovered-tool snapshot, when deferred mode
+       * was active, so the engine can persist it across restart (FR-5/AC-8). */
+      toolCatalogState?: ToolCatalogStateSnapshot;
       /** Recovery metadata accumulated during the turn, if any recovery
        * layers were activated. Persisted on the assistant row metadata. */
       recoveryMetadata?: ChatV2RecoveryMetadata;
@@ -257,6 +282,9 @@ export type AIChatQueryLoopResult =
       totalTokens?: number;
       promptTokens?: number;
       completionTokens?: number;
+      /** Partial reasoning captured before the cancel, if any. */
+      reasoningContent?: string;
+      toolCatalogState?: ToolCatalogStateSnapshot;
       /** Recovery metadata for the cancelled turn, if any. */
       recoveryMetadata?: ChatV2RecoveryMetadata;
     }
@@ -276,6 +304,9 @@ export type AIChatQueryLoopResult =
       partialContent: string;
       model?: string;
       responseId?: string;
+      /** Partial reasoning captured before the failure, if any. */
+      reasoningContent?: string;
+      toolCatalogState?: ToolCatalogStateSnapshot;
       /** Recovery metadata accumulated before the failure, if any. */
       recoveryMetadata?: ChatV2RecoveryMetadata;
     };
@@ -294,6 +325,11 @@ export interface PendingPermissionTurn {
   toolArguments: Record<string, unknown>;
   planContext?: AIChatPlanLoopContext;
   eventSink: AIChatQueryEventSink;
+  /**
+   * Deferred tool catalog snapshot so discovered tools remain exposed after
+   * the user grants permission (AC-8). Present only when deferred mode active.
+   */
+  toolCatalogState?: ToolCatalogStateSnapshot;
 }
 
 /** State stored when plan mode asks the user a question. */
@@ -309,6 +345,12 @@ export interface PendingPlanQuestionTurn {
   questionId: string;
   planId: string;
   eventSink: AIChatQueryEventSink;
+  /**
+   * Deferred tool catalog snapshot so discovered tools remain exposed after
+   * the user answers the plan question (AC-8). Present only when deferred
+   * mode active.
+   */
+  toolCatalogState?: ToolCatalogStateSnapshot;
 }
 
 /** Plan context carried through the loop. */
@@ -403,6 +445,28 @@ export interface AIChatQueryLoopInput {
    * but before the abort signal propagates through the underlying fetch.
    */
   isActiveTurn: () => boolean;
+  /**
+   * Optional override for the transient-failure auto-retry policy. When
+   * omitted the loop uses its module-level defaults (3 attempts, exponential
+   * backoff from 800ms). Mainly used by tests to make retries instantaneous
+   * and by AgentRuntime (which sets baseDelayMs to 0 so subagents don't spend
+   * their tight maxRuntimeMs budget on backoff sleeps).
+   */
+  transientRetryConfig?: {
+    /** Number of retry attempts after the initial failure. */
+    maxAttempts?: number;
+    /** Base delay (ms) for exponential backoff between retries. */
+    baseDelayMs?: number;
+  };
+  /**
+   * Deferred tool catalog. When present and `toolCatalogModeDecision.mode`
+   * is "deferred", the loop filters the exposed tool set per round, adds the
+   * `tool_catalog_search` tool, and intercepts discovery calls locally.
+   * Omit (or keep mode "standard") to preserve current full-tool behavior.
+   */
+  toolCatalog?: ToolCatalog;
+  toolCatalogState?: ToolCatalogStateSnapshot;
+  toolCatalogModeDecision?: ToolCatalogModeDecision;
 }
 
 /** Request payload for resumeToolAfterPermission. */

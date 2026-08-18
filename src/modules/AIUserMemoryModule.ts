@@ -9,6 +9,7 @@ import type {
   AIUserMemoryCreateInput,
   AIUserMemoryUpdateInput,
   AIUserMemorySearchInput,
+  AIUserMemoryStatus,
   AIUserMemoryView,
 } from "@/entityTypes/aiUserMemoryTypes";
 import {
@@ -115,9 +116,10 @@ export class AIUserMemoryModule extends BaseModule {
   async listMemories(
     input: AIUserMemorySearchInput
   ): Promise<AIUserMemoryView[]> {
+    const status = resolveListStatus(input.status);
     const rows = await this.memoryModel.list({
       ...input,
-      status: input.status ?? "active",
+      status,
     });
     return rows.map((e) => this.toView(e));
   }
@@ -192,4 +194,15 @@ function validateCreate(input: AIUserMemoryCreateInput): void {
 function clampConfidence(v: number): number {
   if (!Number.isFinite(v)) return 100;
   return Math.max(0, Math.min(100, Math.round(v)));
+}
+
+function resolveListStatus(
+  status: AIUserMemorySearchInput["status"]
+): AIUserMemoryStatus | undefined {
+  if (status === "all") return undefined;
+  if (status === undefined) return "active";
+  if (!isAIUserMemoryStatus(status)) {
+    throw new Error("Invalid memory status");
+  }
+  return status;
 }

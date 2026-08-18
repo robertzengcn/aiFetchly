@@ -86,7 +86,7 @@ export class SpreadsheetConversionService {
     const body = rows.slice(1);
 
     const escapeCell = (value: string): string =>
-      String(value).replace(/\|/g, "\\|");
+      String(value).replace(/\\/g, "\\\\").replace(/\|/g, "\\|");
 
     const headerLine = `| ${header.map(escapeCell).join(" | ")} |`;
     const dividerLine = `| ${header.map(() => "---").join(" | ")} |`;

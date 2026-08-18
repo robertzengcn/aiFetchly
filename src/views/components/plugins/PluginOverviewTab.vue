@@ -14,6 +14,9 @@
     <p>
       <strong>{{ t("plugins.command_count", { count: detail.commandCount }) }}</strong>
     </p>
+    <p>
+      <strong>{{ t("plugins.hook_count", { count: detail.hookCount }) }}</strong>
+    </p>
     <p v-if="detail.author"><strong>Author:</strong> {{ detail.author }}</p>
     <p v-if="detail.sourceKind">
       <strong>

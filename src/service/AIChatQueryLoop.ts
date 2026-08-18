@@ -2,6 +2,7 @@
 import type {
   OpenAIChatCompletionChunk,
   OpenAIChatCompletionRequest,
+  OpenAIChatImage,
   OpenAIChatMessage,
   OpenAITool,
   OpenAIToolCall,
@@ -25,8 +26,10 @@ import type {
   AIChatQueryLoopInput,
   AIChatQueryLoopResult,
 } from "@/service/AIChatQueryEvents";
-import { OpenAIStreamAccumulator } from "@/service/OpenAIStreamAccumulator";
-import { log } from "@/modules/Logger";
+import {
+  OpenAIStreamAccumulator,
+  type ParsedToolCallResult,
+} from "@/service/OpenAIStreamAccumulator";
 import { ToolExecutor } from "@/service/ToolExecutor";
 import {
   AIChatRecoverableError,
@@ -35,6 +38,7 @@ import {
   isAIChatRecoverableError,
   type AIChatRecoveryReason,
 } from "@/service/AIChatRecoveryTypes";
+import { isContentLevelTransientError } from "@/service/AIChatErrorMapper";
 import { AIChatRecoveryClassifier } from "@/service/AIChatRecoveryClassifier";
 import { AIChatRecoveryCoordinator } from "@/service/AIChatRecoveryCoordinator";
 import {
@@ -55,9 +59,29 @@ import {
   type ToolTimeoutClass,
 } from "@/service/ToolTimeoutPolicy";
 import { CancellationToken } from "@/service/CancellationToken";
+import {
+  buildImageArtifactHandoffMessage,
+  countImageContentParts,
+  countImageDataUrlChars,
+  stripConsumedImageHandoffs,
+} from "@/service/AIChatImageHandoff";
 import { getDefaultToolJobRegistry } from "@/service/ToolJobRegistry";
+import { extractToolResultImages } from "@/service/toolResultImageHarvest";
 import { USER_AI_ENABLED } from "@/config/usersetting";
 import { Token } from "@/modules/token";
+import { TOOL_CATALOG_SEARCH_TOOL_NAME } from "@/config/toolCatalogConfig";
+import { ToolCatalogService } from "@/service/ToolCatalogService";
+import { ToolCatalogSearchService } from "@/service/ToolCatalogSearchService";
+import { hasBatchImageEditIntent } from "@/service/ToolLoadPolicyService";
+import { logToolCatalogFilter } from "@/service/ToolCatalogMetricsService";
+import { toolCatalogCounters } from "@/service/ToolCatalogCounters";
+import { buildDeferredAnnouncement } from "@/service/ConversationToolStateService";
+import type {
+  ToolCatalog,
+  ToolCatalogSearchArgs,
+  ToolCatalogSearchResult,
+  ToolCatalogStateSnapshot,
+} from "@/entityTypes/toolCatalogTypes";
 import { HookDispatcher } from "@/service/hooks/HookDispatcher";
 import { SkillPermissionService } from "@/service/SkillPermissionService";
 import {
@@ -65,6 +89,7 @@ import {
   type AggregatedHookResult,
   type HookToolDescriptor,
 } from "@/entityTypes/hookTypes";
+import { log } from "@/modules/Logger";
 
 /**
  * Max model→tool→model rounds per user turn. Must be high enough to
@@ -98,6 +123,146 @@ const ASYNC_POLL_MAX_MS = 30 * 60_000;
  * particular tool schema.
  */
 const MAX_MALFORMED_ARGUMENT_RETRIES = 3;
+
+/**
+ * Number of times to retry a round that failed with a transient AI-server
+ * CONTENT error (empty response, finish_reason=error) AFTER the initial
+ * attempt. These failures recover on a fresh request, so auto-retry hides
+ * them from the user instead of surfacing "The AI service is busy". Retries
+ * are only attempted when nothing has been delivered to the UI yet (no
+ * tokens streamed, no tool calls shown) so we never duplicate visible
+ * content. Only content-level transients are retried here — transport-layer
+ * conditions (502/429/timeout) are already retried by the streaming HTTP
+ * client and must not be retried at this layer too (anti-stacking).
+ */
+const DEFAULT_TRANSIENT_RETRY_MAX_ATTEMPTS = 3;
+
+/**
+ * Base delay for exponential backoff between transient-failure retries.
+ * Actual delay for attempt N (0-indexed) is base * 2^N, so the sequence is
+ * 800ms, 1.6s, 3.2s — enough for most transient overload conditions to
+ * clear without making the user wait too long. AgentRuntime overrides this
+ * to 0 because subagents run under a tight maxRuntimeMs deadline.
+ */
+const DEFAULT_TRANSIENT_RETRY_BASE_DELAY_MS = 800;
+
+/**
+ * Tracks whether any content (streamed tokens/reasoning or tool calls) has
+ * been delivered to the UI during the current turn. Shared across retry
+ * attempts so that a failure AFTER content has been shown is never retried
+ * (which would duplicate the visible output and orphan persisted rows).
+ */
+interface RoundContentTracker {
+  delivered: boolean;
+}
+
+/**
+ * Resolve after `ms`, unless `signal` aborts first (in which case resolve
+ * immediately so the caller can observe the abort on its next iteration).
+ * Used for backoff between transient-failure retries.
+ */
+function abortableDelay(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise<void>((resolve) => {
+    if (ms <= 0 || signal.aborted) {
+      resolve();
+      return;
+    }
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+const MAX_TEXT_TOOL_CALL_MARKER_RETRIES = 1;
+
+const TEXT_TOOL_CALL_MARKER_RE =
+  /^(?:(?:assistant|user|system):)?tool_call::def_tool_call:\d+\s*$/i;
+
+const TEXT_TOOL_CALL_BLOCK_RE =
+  /<tool_call>[\s¶]*<function=([A-Za-z0-9_.:-]+)>([\s\S]*?)<\/function>[\s¶]*<\/tool_call>/gi;
+
+const TEXT_TOOL_CALL_PARAMETER_RE =
+  /<parameter=([A-Za-z0-9_.:-]+)>([\s\S]*?)<\/parameter>/gi;
+
+const TEXT_TOOL_CALL_MARKER_RETRY_PROMPT =
+  "Your previous response was a malformed tool-call marker instead of a valid assistant response. Retry now. If you need a tool, emit a real OpenAI tool call with the function name and JSON arguments. Do not write tool_call::def_tool_call markers as text.";
+
+const SHELL_EXECUTE_TOOL_NAME = "shell_execute";
+const ATTACH_LOCAL_IMAGES_TOOL_NAME = "attach_local_images";
+const PROCESS_ARTIFACT_BATCH_TOOL_NAME = "process_artifact_batch";
+
+const SHELL_ACTION_INTENT_RE =
+  /\b(rm|unlink)\b|(?:\b(delete|remove)\b.*(?:\b(file|folder|directory|path)\b|[./~]|\.[A-Za-z0-9]{1,8}\b))|(?:\b(run|execute)\b.*\b(shell|terminal|bash|powershell|cmd|command)\b)/i;
+
+const IMAGE_SHELL_WORKAROUND_RE =
+  /\b(pil|pillow|imagemagick|magick|convert)\b|\bfrom\s+PIL\b|\bimport\s+Image\b|\b(opencv|cv2)\b/i;
+
+const GENERATED_ARTIFACT_SHELL_TRANSFER_RE =
+  /\b(cp|mv|copy|move|copy-item|move-item)\b/i;
+
+const GENERATED_ARTIFACT_PATH_RE =
+  /aifetchly-generated-image:|[\\/]\.config[\\/]aiFetchly[\\/]ai-chat-generated-images[\\/]/i;
+
+/**
+ * Detect shell/Python image-editing workarounds so we can steer the model to
+ * attach_local_images instead of auto-loading shell_execute for that path.
+ */
+function looksLikeImageShellWorkaround(rawArgs: unknown): boolean {
+  if (rawArgs == null) return true;
+  let text = "";
+  if (typeof rawArgs === "string") {
+    text = rawArgs;
+  } else if (typeof rawArgs === "object") {
+    const record = rawArgs as Record<string, unknown>;
+    const command = record.command;
+    const description = record.description;
+    text = [
+      typeof command === "string" ? command : "",
+      typeof description === "string" ? description : "",
+    ].join(" ");
+  }
+  if (!text.trim()) return true;
+  return IMAGE_SHELL_WORKAROUND_RE.test(text);
+}
+
+function looksLikeGeneratedArtifactShellTransfer(rawArgs: unknown): boolean {
+  const text =
+    typeof rawArgs === "string"
+      ? rawArgs
+      : rawArgs && typeof rawArgs === "object"
+      ? JSON.stringify(rawArgs)
+      : "";
+  return (
+    GENERATED_ARTIFACT_SHELL_TRANSFER_RE.test(text) &&
+    GENERATED_ARTIFACT_PATH_RE.test(text)
+  );
+}
+
+function shouldRouteImageAttachmentToBatch(input: {
+  rawArgs: unknown;
+  userMessage: string;
+}): boolean {
+  const args =
+    input.rawArgs && typeof input.rawArgs === "object"
+      ? (input.rawArgs as Record<string, unknown>)
+      : {};
+  const paths = Array.isArray(args.paths)
+    ? args.paths.filter((value): value is string => typeof value === "string")
+    : [];
+  const carriesEditInstruction =
+    typeof args.instruction === "string" && args.instruction.trim().length > 0;
+  return (
+    hasBatchImageEditIntent(input.userMessage) ||
+    (paths.length > 1 && carriesEditInstruction)
+  );
+}
 
 /**
  * Legacy global timeout ceiling for foreground tool calls.
@@ -201,12 +366,97 @@ export function shouldForceSubmitPlanForApproval(message: string): boolean {
   return asksForSubmit && asksForNoQuestions;
 }
 
+function isTextToolCallMarker(content: string): boolean {
+  return TEXT_TOOL_CALL_MARKER_RE.test(content.trim());
+}
+
+function parseTextToolCallValue(raw: string): unknown {
+  const value = raw.replace(/^[\s¶]+|[\s¶]+$/g, "");
+  if (!value) return "";
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return value;
+  }
+}
+
+/**
+ * Parse the XML-style text tool protocol emitted by some OpenAI-compatible
+ * providers (notably Agnes). We accept it only when the entire assistant
+ * response consists of tool-call blocks plus whitespace/pilcrow separators,
+ * so ordinary prose or code samples containing these tags are never executed.
+ * Parsed calls still pass through the normal tool policy and permission gates.
+ */
+export function parseTextToolCalls(
+  content: string,
+  idPrefix = "text_tool_call"
+): ParsedToolCallResult[] {
+  const blocks = [...content.matchAll(TEXT_TOOL_CALL_BLOCK_RE)];
+  if (blocks.length === 0) return [];
+
+  const residual = content
+    .replace(TEXT_TOOL_CALL_BLOCK_RE, "")
+    .replace(/[\s¶]+/g, "");
+  if (residual.length > 0) return [];
+
+  const calls: ParsedToolCallResult[] = [];
+  for (const [index, block] of blocks.entries()) {
+    const name = block[1];
+    const body = block[2] ?? "";
+    const parameters = [...body.matchAll(TEXT_TOOL_CALL_PARAMETER_RE)];
+    const bodyResidual = body
+      .replace(TEXT_TOOL_CALL_PARAMETER_RE, "")
+      .replace(/[\s¶]+/g, "");
+    if (bodyResidual.length > 0) return [];
+
+    const args: Record<string, unknown> = {};
+    for (const parameter of parameters) {
+      args[parameter[1]] = parseTextToolCallValue(parameter[2] ?? "");
+    }
+    // Agnes sometimes uses the catalog result's `category` vocabulary as an
+    // input even though the actual search schema calls this field `query`.
+    if (
+      name === TOOL_CATALOG_SEARCH_TOOL_NAME &&
+      args.query === undefined &&
+      typeof args.category === "string"
+    ) {
+      args.query = args.category;
+      delete args.category;
+    }
+
+    calls.push({
+      index,
+      id: `${idPrefix}_${index}`,
+      name,
+      ok: true,
+      arguments: args,
+      rawArgumentsJson: JSON.stringify(args),
+    });
+  }
+  return calls;
+}
+
+function shouldForceShellExecute(input: {
+  message: string;
+  round: number;
+  startRound: number;
+  exposedToolNames: readonly string[];
+}): boolean {
+  return (
+    input.round === 0 &&
+    input.startRound === 0 &&
+    input.exposedToolNames.includes(SHELL_EXECUTE_TOOL_NAME) &&
+    SHELL_ACTION_INTENT_RE.test(input.message)
+  );
+}
+
 export function resolveToolChoiceForRound(input: {
   message: string;
   hasTools: boolean;
   isPlanMode: boolean;
   round: number;
   startRound: number;
+  exposedToolNames?: readonly string[];
 }): OpenAIToolChoice | undefined {
   if (!input.hasTools) return undefined;
   if (
@@ -217,6 +467,19 @@ export function resolveToolChoiceForRound(input: {
     return {
       type: "function",
       function: { name: "SubmitPlanForApproval" },
+    };
+  }
+  if (
+    shouldForceShellExecute({
+      message: input.message,
+      round: input.round,
+      startRound: input.startRound,
+      exposedToolNames: input.exposedToolNames ?? [],
+    })
+  ) {
+    return {
+      type: "function",
+      function: { name: SHELL_EXECUTE_TOOL_NAME },
     };
   }
   return "auto";
@@ -336,6 +599,27 @@ export function isPermissionPromptResult(result: ToolExecutionResult): boolean {
   return result.result.needsPermissionPrompt === true;
 }
 
+/**
+ * True when `value` is a full ToolExecutionResult rather than a bare data
+ * payload. Async tool jobs resolve with the entire SkillExecutor
+ * ToolExecutionResult; without unwrapping, fields like needsPermissionPrompt
+ * end up nested under `result.result`, breaking permission-prompt detection.
+ */
+function isToolExecutionResultLike(
+  value: unknown
+): value is ToolExecutionResult {
+  if (typeof value !== "object" || value === null) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    typeof record.success === "boolean" &&
+    typeof record.tool_call_id === "string" &&
+    typeof record.tool_name === "string" &&
+    typeof record.result === "object" &&
+    record.result !== null &&
+    typeof record.execution_time_ms === "number"
+  );
+}
+
 export function buildAssistantToolCallMessage(
   parsedCalls: Array<{
     index: number;
@@ -360,10 +644,181 @@ export function buildAssistantToolCallMessage(
   };
 }
 
+/** Snapshot the mutable discovered-tool set for pending-turn carry-forward. */
+function snapshotToolCatalogState(
+  discovered: Set<string>,
+  announced: Set<string>
+): ToolCatalogStateSnapshot {
+  return {
+    discoveredToolNames: [...discovered].sort(),
+    announcedDeferredNames: [...announced].sort(),
+  };
+}
+
 export class AIChatQueryLoop {
   constructor(private readonly deps: AIChatQueryLoopDeps) {}
 
+  private readonly catalogService = new ToolCatalogService();
+  private readonly catalogSearchService = new ToolCatalogSearchService();
+
+  /**
+   * Run the deferred-catalog discovery search with a safe failure payload so a
+   * search error never crashes the whole turn (design §22.2).
+   */
+  private runCatalogSearch(input: {
+    readonly args: ToolCatalogSearchArgs;
+    readonly catalog: ToolCatalog;
+    readonly discoveredToolNames: Set<string>;
+    readonly conversationId: string;
+    readonly isPlanMode: boolean;
+    readonly autoPlanEnabled: boolean;
+    readonly currentUserMessage: string;
+  }): ToolCatalogSearchResult {
+    try {
+      const hasQuery =
+        typeof input.args.query === "string" &&
+        input.args.query.trim().length > 0;
+      const hasSelection =
+        Array.isArray(input.args.select) && input.args.select.length > 0;
+      const effectiveArgs: ToolCatalogSearchArgs =
+        !hasQuery &&
+        !hasSelection &&
+        hasBatchImageEditIntent(input.currentUserMessage) &&
+        input.catalog.byName.has(PROCESS_ARTIFACT_BATCH_TOOL_NAME)
+          ? { select: [PROCESS_ARTIFACT_BATCH_TOOL_NAME] }
+          : input.args;
+      return this.catalogSearchService.search({
+        args: effectiveArgs,
+        catalog: input.catalog,
+        state: {
+          discoveredToolNames: input.discoveredToolNames,
+          announcedDeferredNames: new Set(),
+        },
+        context: {
+          conversationId: input.conversationId,
+          isPlanMode: input.isPlanMode,
+          autoPlanEnabled: input.autoPlanEnabled,
+          currentUserMessage: input.currentUserMessage,
+          uploadedFileTypes: [],
+        },
+      });
+    } catch (err) {
+      return {
+        success: false,
+        query: typeof input.args.query === "string" ? input.args.query : "",
+        matches: [],
+        selectedToolNames: [],
+        missingToolNames: [],
+        message:
+          "Tool catalog search failed. The system will continue with currently exposed tools.",
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+  }
+
+  /**
+   * Inject the deferred-tool announcement as a system message once per turn
+   * (FR-6). Updates `announcedDeferredNames` in place to the current deferred
+   * set so the next turn emits only a delta. The message is inserted right
+   * after the leading system prompt(s).
+   */
+  private maybeInjectDeferredAnnouncement(
+    messages: OpenAIChatMessage[],
+    catalog: ToolCatalog,
+    announcedDeferredNames: Set<string>
+  ): void {
+    const announcement = buildDeferredAnnouncement({
+      previousAnnounced: [...announcedDeferredNames],
+      catalog,
+    });
+    announcedDeferredNames.clear();
+    for (const entry of catalog.deferred)
+      announcedDeferredNames.add(entry.name);
+    if (!announcement) return;
+    let insertAt = 0;
+    while (insertAt < messages.length && messages[insertAt].role === "system") {
+      insertAt += 1;
+    }
+    messages.splice(insertAt, 0, { role: "system", content: announcement });
+  }
+
+  /**
+   * Public entry point. Runs the turn, auto-retrying if a content-level
+   * transient AI-server failure (empty response, finish_reason=error) ends
+   * the turn BEFORE any content has been delivered to the UI. See
+   * {@link runOnce} for the per-attempt logic.
+   *
+   * Retry safety invariants:
+   *  - Only CONTENT-level transients are retried ({@link
+   *    isContentLevelTransientError}); transport conditions (502/429/timeout)
+   *    are already retried by the streaming HTTP client, so retrying them
+   *    here too would stack the layers into a burst of ~16 requests.
+   *  - Retry only while no content has been delivered (`tracker.delivered`),
+   *    so a failure after the UI has seen tokens/tool calls is surfaced
+   *    rather than re-run (which would duplicate visible output).
+   *  - Each retry starts from a pristine snapshot of the original transcript,
+   *    because runOnce mutates its messages array in place as the round
+   *    advances.
+   *  - Honors the abort signal, the turn-active flag, and a bounded count.
+   */
   async run(input: AIChatQueryLoopInput): Promise<AIChatQueryLoopResult> {
+    const maxAttempts =
+      input.transientRetryConfig?.maxAttempts ??
+      DEFAULT_TRANSIENT_RETRY_MAX_ATTEMPTS;
+    const baseDelayMs =
+      input.transientRetryConfig?.baseDelayMs ??
+      DEFAULT_TRANSIENT_RETRY_BASE_DELAY_MS;
+    // Snapshot the original transcript up front. runOnce mutates the messages
+    // array it receives (pushing assistant tool-call / tool-result rows as the
+    // round advances), so a retry must start from this pristine copy — not the
+    // (possibly mutated) input.messages reference.
+    const initialMessages = [...input.messages];
+    // Shared across attempts: once the UI has seen any content for this turn,
+    // a later failure must not be retried (it would duplicate visible output).
+    const tracker: RoundContentTracker = { delivered: false };
+
+    for (let attempt = 0; attempt <= maxAttempts; attempt += 1) {
+      const attemptInput: AIChatQueryLoopInput =
+        attempt === 0 ? input : { ...input, messages: [...initialMessages] };
+
+      const result = await this.runOnce(attemptInput, tracker);
+
+      if (result.type !== "failed") {
+        return result;
+      }
+
+      const canRetry =
+        attempt < maxAttempts &&
+        !input.abortController.signal.aborted &&
+        input.isActiveTurn() &&
+        !tracker.delivered &&
+        isContentLevelTransientError(result.error);
+
+      if (!canRetry) {
+        return result;
+      }
+
+      const delayMs = baseDelayMs * 2 ** attempt;
+      input.eventSink.emit({
+        type: "retry_connect",
+        conversationId: input.conversationId,
+        messageId: input.assistantMessageId,
+        retryAttempt: attempt + 1,
+        retryMaxAttempts: maxAttempts,
+        retryDelayMs: delayMs,
+      });
+      await abortableDelay(delayMs, input.abortController.signal);
+    }
+
+    // Unreachable: the loop always returns on the final attempt. Returned
+    // purely to satisfy the type checker.
+    throw new Error("AIChatQueryLoop.run exited its retry loop unexpectedly");
+  }
+
+  async runOnce(
+    input: AIChatQueryLoopInput,
+    tracker: RoundContentTracker
+  ): Promise<AIChatQueryLoopResult> {
     const { eventSink } = input;
     let activeAccumulator: OpenAIStreamAccumulator | null = null;
     let finalAccumulator: OpenAIStreamAccumulator | null = null;
@@ -380,6 +835,21 @@ export class AIChatQueryLoop {
     // Local mutable copies so EnterPlanMode can swap them mid-run.
     let planContext = input.planContext;
     const currentTools = [...input.openAITools];
+    // Deferred tool catalog state. `catalogActive` gates every catalog code
+    // path so the loop is a no-op when the feature flag is off or standard.
+    const catalog = input.toolCatalog;
+    const catalogModeDecision = input.toolCatalogModeDecision;
+    const catalogActive =
+      Boolean(catalog) && catalogModeDecision?.mode === "deferred";
+    const discoveredToolNames = new Set<string>(
+      input.toolCatalogState?.discoveredToolNames ?? []
+    );
+    // Deferred-tool announcement tracking (FR-6): names already announced to
+    // the model in prior turns, so we only emit a compact delta when the
+    // deferred set changes.
+    const announcedDeferredNames = new Set<string>(
+      input.toolCatalogState?.announcedDeferredNames ?? []
+    );
     // Track whether the model auto-entered plan mode this run AND whether it
     // followed through with plan-tool usage. Used at turn end to cancel orphan
     // drafts (see completed-return path).
@@ -389,6 +859,7 @@ export class AIChatQueryLoop {
     // Reset to 0 whenever a round has no malformed calls. When this exceeds
     // MAX_MALFORMED_ARGUMENT_RETRIES, the turn fails with a user-facing error.
     let consecutiveMalformedRounds = 0;
+    let textToolCallMarkerRetryCount = 0;
     // Ensure a generous token budget so large tool-call arguments (e.g.
     // run_subagent with a full taskPacket) are not truncated mid-JSON.
     // The frontend may or may not send maxTokens; default to 16384.
@@ -400,19 +871,79 @@ export class AIChatQueryLoop {
     let recoveryState = createRecoveryAttemptState(input.request.model);
 
     try {
+      // Inject the deferred-tool announcement once at the start of the turn
+      // (FR-6). First turn gets a compact category-level note; later turns get
+      // a token-budgeted delta only when the deferred set changed. Mutates
+      // announcedDeferredNames so the snapshot persisted for the next turn
+      // suppresses repeats.
+      if (catalogActive && catalog && input.startRound === 0) {
+        this.maybeInjectDeferredAnnouncement(
+          messages,
+          catalog,
+          announcedDeferredNames
+        );
+      }
+
+      // FR-4: images contributed by tool results this turn (e.g. a
+      // run_subagent batch worker's edited outputs). Folded into the
+      // completed result.images so the engine persists + renders them like
+      // any other generated image.
+      const collectedToolImages: OpenAIChatImage[] = [];
+
       for (
         let round = input.startRound;
         round < CHAT_V2_MAX_TOOL_ROUNDS;
         round += 1
       ) {
+        // Free capacity from handoffs the model already saw in an earlier
+        // round (or before a permission/plan resume). Idempotent.
+        stripConsumedImageHandoffs(messages);
+
         const accumulator = new OpenAIStreamAccumulator();
         activeAccumulator = accumulator;
+
+        // Compute the tools actually sent to the model for this round. In
+        // deferred catalog mode this filters out undiscovered deferred tools
+        // and adds tool_catalog_search; any filter error falls back to the
+        // full currentTools set (TR-5, AC-10). currentTools remains the full
+        // local executable set regardless.
+        let exposedTools: OpenAITool[] = currentTools;
+        if (catalogActive && catalog && catalogModeDecision) {
+          try {
+            const filterResult = this.catalogService.filterForRound({
+              catalog,
+              liveTools: currentTools,
+              state: {
+                discoveredToolNames,
+                announcedDeferredNames: new Set(
+                  input.toolCatalogState?.announcedDeferredNames ?? []
+                ),
+              },
+              modeDecision: catalogModeDecision,
+            });
+            exposedTools = [...filterResult.exposedTools];
+            logToolCatalogFilter({
+              conversationId: input.conversationId,
+              result: filterResult,
+            });
+          } catch (filterError) {
+            log.warn(
+              `[tool-catalog] filter failed, falling back to full tools:`,
+              filterError
+            );
+            toolCatalogCounters.increment("fallback_count");
+            exposedTools = currentTools;
+          }
+        }
+        const hasExposedTools = exposedTools.length > 0;
 
         log.info(
           `[ai-chat-v2] round ${round} → POST /chat/completions msgs=${
             messages.length
           } roles=[${messages.map((m) => m.role).join(",")}] tools=${
-            currentTools.length
+            catalogActive
+              ? `${exposedTools.length}/${currentTools.length}`
+              : currentTools.length
           }`
         );
 
@@ -423,25 +954,48 @@ export class AIChatQueryLoop {
             temperature: input.request.temperature,
             max_tokens: currentMaxTokens,
             stream: true,
-            tools: currentTools.length > 0 ? currentTools : undefined,
+            tools: hasExposedTools ? exposedTools : undefined,
             tool_choice: resolveToolChoiceForRound({
               message: input.request.message,
-              hasTools: currentTools.length > 0,
+              hasTools: hasExposedTools,
               isPlanMode: Boolean(planContext),
               round,
               startRound: input.startRound,
+              exposedToolNames: exposedTools.map((t) => t.function.name),
             }),
+            // MVP: the `reasoning` server option is intentionally NOT forwarded.
+            // Reasoning is parsed passively from provider-emitted fields (see
+            // OpenAIStreamAccumulator). Forwarding would 400 on strict servers
+            // for non-reasoning models until per-model capability detection
+            // lands (PRD Phase 5). showReasoning is a renderer display pref.
           },
           (rawChunk) => {
             if (input.abortController.signal.aborted) return;
             if (!input.isActiveTurn()) return;
-            const delta = accumulator.ingest(rawChunk);
-            if (delta) {
+            const { contentDelta, reasoningDelta } =
+              accumulator.ingest(rawChunk);
+            if (reasoningDelta) {
+              // Reasoning is visible UI content for this turn; from here on a
+              // later failure must not be retried (it would duplicate it).
+              tracker.delivered = true;
+              eventSink.emit({
+                type: "reasoning_delta",
+                conversationId: input.conversationId,
+                messageId: input.assistantMessageId,
+                reasoningDelta,
+                model: accumulator.state.model,
+              });
+            }
+            if (contentDelta) {
+              // Mark that the UI has now seen streamed content for this turn.
+              // The retry wrapper uses this to avoid re-running a turn whose
+              // output is already visible (which would duplicate it).
+              tracker.delivered = true;
               eventSink.emit({
                 type: "token",
                 conversationId: input.conversationId,
                 messageId: input.assistantMessageId,
-                contentDelta: delta,
+                contentDelta,
                 model: accumulator.state.model,
               });
             }
@@ -507,9 +1061,18 @@ export class AIChatQueryLoop {
           totalTokens: resolvedUsage.totalTokens,
         });
 
-        const parsedCalls = accumulator
+        const nativeParsedCalls = accumulator
           .tryParseToolCallArguments()
           .filter((call) => call.name && call.id);
+        const textualParsedCalls =
+          nativeParsedCalls.length === 0 && !accumulator.state.sawToolCallDelta
+            ? parseTextToolCalls(
+                accumulator.state.fullContent,
+                `text_tool_call_${round}`
+              )
+            : [];
+        const parsedCalls =
+          nativeParsedCalls.length > 0 ? nativeParsedCalls : textualParsedCalls;
 
         // Some OpenAI-compatible servers emit finish_reason="stop" (or omit
         // it entirely) even when tool-call deltas were streamed. The
@@ -661,6 +1224,32 @@ export class AIChatQueryLoop {
         }
 
         if (!willContinue) {
+          if (isTextToolCallMarker(accumulator.state.fullContent)) {
+            if (
+              textToolCallMarkerRetryCount >= MAX_TEXT_TOOL_CALL_MARKER_RETRIES
+            ) {
+              throw new Error(
+                "AI server returned a malformed tool-call marker as text. Please retry the message."
+              );
+            }
+            textToolCallMarkerRetryCount += 1;
+            messages.push({
+              role: "user",
+              content: TEXT_TOOL_CALL_MARKER_RETRY_PROMPT,
+            });
+            eventSink.emit({
+              type: "recovery_status",
+              conversationId: input.conversationId,
+              messageId: input.assistantMessageId,
+              layer: "output_token_recovery",
+              reason: "server_error",
+              attempt: textToolCallMarkerRetryCount,
+              maxAttempts: MAX_TEXT_TOOL_CALL_MARKER_RETRIES,
+              message: "Retrying malformed tool-call marker response",
+            });
+            continue;
+          }
+
           // If the turn was aborted, the accumulator likely ingested nothing
           // (the onChunk callback early-returns on abort). Return "cancelled"
           // here rather than falling through to the empty-response guard
@@ -674,6 +1263,13 @@ export class AIChatQueryLoop {
               partialContent: accumulator.state.fullContent ?? "",
               model: accumulator.state.model,
               responseId: accumulator.state.responseId,
+              reasoningContent: accumulator.state.reasoningContent || undefined,
+              toolCatalogState: catalogActive
+                ? snapshotToolCatalogState(
+                    discoveredToolNames,
+                    announcedDeferredNames
+                  )
+                : undefined,
             };
           }
 
@@ -739,12 +1335,28 @@ export class AIChatQueryLoop {
           consecutiveMalformedRounds = 0;
         }
 
+        // The round has committed to tool calls: the loops below will emit
+        // tool_result events for malformed calls and tool_call events for
+        // valid ones — all visible UI content. Mark the turn as having
+        // delivered content so a later transient failure is not retried
+        // (which would duplicate those events and orphan the persisted rows).
+        tracker.delivered = true;
         messages.push(
           buildAssistantToolCallMessage(
             parsedCalls,
-            accumulator.state.fullContent
+            textualParsedCalls.length > 0 ? "" : accumulator.state.fullContent
           )
         );
+
+        // Previous attach_local_images handoffs were included in the request
+        // that just completed. Drop their image bytes now so the next batch
+        // can use the 3-image budget and we do not resend large data URLs.
+        const stripped = stripConsumedImageHandoffs(messages);
+        if (stripped > 0) {
+          log.info(
+            `[ai-chat-v2] stripped ${stripped} consumed image handoff part(s) after model round`
+          );
+        }
 
         // Push error tool results for malformed calls so the model can
         // self-correct in the next round. The assistant message above
@@ -813,6 +1425,201 @@ export class AIChatQueryLoop {
             });
             await eventSink.flush?.();
           };
+
+          // Deferred catalog: intercept the discovery tool locally (FR-3, FR-9).
+          if (
+            catalogActive &&
+            catalog &&
+            call.name === TOOL_CATALOG_SEARCH_TOOL_NAME
+          ) {
+            const searchPayload = this.runCatalogSearch({
+              args: (call.arguments ?? {}) as ToolCatalogSearchArgs,
+              catalog,
+              discoveredToolNames,
+              conversationId: input.conversationId,
+              isPlanMode: Boolean(planContext),
+              autoPlanEnabled: Boolean(input.autoPlan),
+              currentUserMessage: input.request.message,
+            });
+            toolCatalogCounters.increment("search_calls");
+            if (
+              searchPayload.matches.length === 0 &&
+              searchPayload.selectedToolNames.length === 0
+            ) {
+              toolCatalogCounters.increment("search_no_match");
+            }
+            toolCatalogCounters.increment(
+              "search_selected_count",
+              searchPayload.selectedToolNames.length
+            );
+            for (const name of searchPayload.selectedToolNames) {
+              discoveredToolNames.add(name);
+            }
+            const searchContent = serializeToolResultContent(
+              searchPayload as unknown as Record<string, unknown>
+            );
+            eventSink.emit({
+              type: "tool_result",
+              conversationId: input.conversationId,
+              messageId: input.assistantMessageId,
+              toolCallId: call.id,
+              toolName: call.name,
+              fullContent: searchContent,
+              toolResult: searchPayload as unknown as Record<string, unknown>,
+            });
+            messages.push({
+              role: "tool",
+              tool_call_id: call.id,
+              content: searchContent,
+            });
+            continue;
+          }
+
+          // Generated artifacts are app-managed capabilities, not arbitrary
+          // filesystem paths. Never let the model route their export through
+          // shell_execute: that crosses the ~/.config critical-path boundary
+          // and loses the artifact ownership/workspace checks provided by the
+          // dedicated export tool.
+          if (
+            call.name === SHELL_EXECUTE_TOOL_NAME &&
+            collectedToolImages.length > 0 &&
+            looksLikeGeneratedArtifactShellTransfer(call.arguments)
+          ) {
+            if (catalog?.byName.has("export_generated_artifacts")) {
+              discoveredToolNames.add("export_generated_artifacts");
+            }
+            const steerContent = serializeToolResultContent({
+              success: false,
+              error:
+                "Do not copy or move AiFetchly-generated artifacts with shell_execute. " +
+                "They are already rendered in chat. If the user requested persistent workspace files, " +
+                "call export_generated_artifacts with the returned artifact URLs and workspace-relative destinations.",
+            });
+            eventSink.emit({
+              type: "tool_result",
+              conversationId: input.conversationId,
+              messageId: input.assistantMessageId,
+              toolCallId: call.id,
+              toolName: call.name,
+              fullContent: steerContent,
+              toolResult: {
+                success: false,
+                error: "use export_generated_artifacts instead",
+              },
+            });
+            messages.push({
+              role: "tool",
+              tool_call_id: call.id,
+              content: steerContent,
+            });
+            continue;
+          }
+
+          // `attach_local_images` is valid for one image edit or multi-image
+          // analysis, but it cannot guarantee one edited output per input.
+          // Enforce the batch route in application code because provider
+          // models may ignore tool descriptions and attach several edit inputs.
+          if (
+            call.name === ATTACH_LOCAL_IMAGES_TOOL_NAME &&
+            shouldRouteImageAttachmentToBatch({
+              rawArgs: call.arguments,
+              userMessage: input.request.message,
+            })
+          ) {
+            if (catalog?.byName.has(PROCESS_ARTIFACT_BATCH_TOOL_NAME)) {
+              discoveredToolNames.add(PROCESS_ARTIFACT_BATCH_TOOL_NAME);
+            }
+            const steerContent = serializeToolResultContent({
+              success: false,
+              error:
+                "Do not attach multiple images for independent edits. Call process_artifact_batch once with every exact workspace path and the shared edit instruction. It runs one provider request per input with bounded concurrency.",
+            });
+            eventSink.emit({
+              type: "tool_result",
+              conversationId: input.conversationId,
+              messageId: input.assistantMessageId,
+              toolCallId: call.id,
+              toolName: call.name,
+              fullContent: steerContent,
+              toolResult: {
+                success: false,
+                error: "use process_artifact_batch instead",
+              },
+            });
+            messages.push({
+              role: "tool",
+              tool_call_id: call.id,
+              content: steerContent,
+            });
+            continue;
+          }
+
+          // Unknown-deferred-tool recovery (design §14.4): if the model calls a
+          // deferred tool that is not yet exposed, load it and ask the model to
+          // retry instead of failing the turn.
+          if (catalogActive && catalog) {
+            const entry = catalog.byName.get(call.name);
+            if (
+              entry &&
+              entry.loadPolicy === "deferred" &&
+              !discoveredToolNames.has(call.name)
+            ) {
+              // Image-edit workflows must use attach_local_images, not shell/Pillow.
+              // Refuse to auto-load shell for that purpose and steer the model.
+              if (
+                call.name === SHELL_EXECUTE_TOOL_NAME &&
+                catalog.byName.has("attach_local_images") &&
+                looksLikeImageShellWorkaround(call.arguments)
+              ) {
+                const steerContent = serializeToolResultContent({
+                  success: false,
+                  error:
+                    `Do not use shell_execute / Python / Pillow for local image editing. ` +
+                    `Use attach_local_images with exactly one workspace image, or process_artifact_batch ` +
+                    `for multiple images (discover paths with glob_files first).`,
+                });
+                eventSink.emit({
+                  type: "tool_result",
+                  conversationId: input.conversationId,
+                  messageId: input.assistantMessageId,
+                  toolCallId: call.id,
+                  toolName: call.name,
+                  fullContent: steerContent,
+                  toolResult: {
+                    success: false,
+                    error: "use attach_local_images instead",
+                  },
+                });
+                messages.push({
+                  role: "tool",
+                  tool_call_id: call.id,
+                  content: steerContent,
+                });
+                continue;
+              }
+
+              discoveredToolNames.add(call.name);
+              const retryContent = serializeToolResultContent({
+                success: false,
+                error: `Tool "${call.name}" was deferred and has now been loaded. Retry the call with valid arguments.`,
+              });
+              eventSink.emit({
+                type: "tool_result",
+                conversationId: input.conversationId,
+                messageId: input.assistantMessageId,
+                toolCallId: call.id,
+                toolName: call.name,
+                fullContent: retryContent,
+                toolResult: { success: false, error: "deferred tool loaded" },
+              });
+              messages.push({
+                role: "tool",
+                tool_call_id: call.id,
+                content: retryContent,
+              });
+              continue;
+            }
+          }
 
           // Model-initiated Plan Mode entry (chat mode only).
           if (
@@ -895,6 +1702,15 @@ export class AIChatQueryLoop {
                 eventSink
               );
               if (paused) {
+                if (
+                  catalogActive &&
+                  paused.type === "paused_for_plan_question"
+                ) {
+                  paused.pending.toolCatalogState = snapshotToolCatalogState(
+                    discoveredToolNames,
+                    announcedDeferredNames
+                  );
+                }
                 return paused;
               }
               continue;
@@ -963,6 +1779,13 @@ export class AIChatQueryLoop {
             preparedCall.blockedResult ??
             (await this.executePreparedToolWithTimeout(input, preparedCall));
 
+          // FR-4: a tool (e.g. run_subagent batch worker) may contribute
+          // generated/edited image descriptors on result.outputImages. Fold
+          // them into the turn's image set; non-batch tools contribute nothing.
+          for (const outImg of extractToolResultImages(toolResult)) {
+            collectedToolImages.push(outImg);
+          }
+
           // If the abort fired during the tool (e.g. user clicked Stop during
           // async polling), skip the tool_result emit — the outer abort handler
           // will return { type: "cancelled" } for the whole turn. Emitting a
@@ -979,6 +1802,14 @@ export class AIChatQueryLoop {
               totalTokens: lastReportedUsage?.totalTokens,
               promptTokens: lastReportedUsage?.promptTokens,
               completionTokens: lastReportedUsage?.completionTokens,
+              reasoningContent:
+                finalAccumulator?.state.reasoningContent || undefined,
+              toolCatalogState: catalogActive
+                ? snapshotToolCatalogState(
+                    discoveredToolNames,
+                    announcedDeferredNames
+                  )
+                : undefined,
             };
           }
 
@@ -1024,6 +1855,12 @@ export class AIChatQueryLoop {
                 toolArguments: effectiveArguments,
                 planContext,
                 eventSink: eventSink,
+                toolCatalogState: catalogActive
+                  ? snapshotToolCatalogState(
+                      discoveredToolNames,
+                      announcedDeferredNames
+                    )
+                  : undefined,
               },
             };
           }
@@ -1033,6 +1870,27 @@ export class AIChatQueryLoop {
             tool_call_id: call.id,
             content: toolContent,
           });
+          // Transient image handoff: if the tool returned prepared images
+          // (attach_local_images), append a model-only role:user multimodal
+          // message carrying them as image_url parts. This is NOT persisted as
+          // ordinary conversation text and is not rendered as a user bubble; it
+          // only gives the next chat-completion round the image input. The
+          // metadata-only tool result above already holds the safe summary.
+          // No handoff for failed / permission-deferred / cancelled / empty
+          // results (those either returned earlier or carry no artifacts).
+          if (
+            toolResult.success &&
+            toolResult.modelArtifacts &&
+            toolResult.modelArtifacts.length > 0
+          ) {
+            messages.push(
+              buildImageArtifactHandoffMessage({
+                artifacts: toolResult.modelArtifacts,
+                originalUserRequest: input.request.message,
+                toolCallId: call.id,
+              })
+            );
+          }
           log.info(
             `[ai-chat-v2] tool ${call.name} result pushed → round ${round} will continue`
           );
@@ -1050,6 +1908,14 @@ export class AIChatQueryLoop {
           totalTokens: lastReportedUsage?.totalTokens,
           promptTokens: lastReportedUsage?.promptTokens,
           completionTokens: lastReportedUsage?.completionTokens,
+          reasoningContent:
+            finalAccumulator?.state.reasoningContent || undefined,
+          toolCatalogState: catalogActive
+            ? snapshotToolCatalogState(
+                discoveredToolNames,
+                announcedDeferredNames
+              )
+            : undefined,
         };
       }
 
@@ -1109,11 +1975,22 @@ export class AIChatQueryLoop {
         assistantMessageId: input.assistantMessageId,
         fullContent,
         finishReason,
+        images: [
+          ...(finalAccumulator?.state.images ?? []),
+          ...collectedToolImages,
+        ],
         model: finalAccumulator?.state.model,
         responseId: finalAccumulator?.state.responseId,
         totalTokens: lastReportedUsage?.totalTokens,
         promptTokens: lastReportedUsage?.promptTokens,
         completionTokens: lastReportedUsage?.completionTokens,
+        reasoningContent: finalAccumulator?.state.reasoningContent || undefined,
+        toolCatalogState: catalogActive
+          ? snapshotToolCatalogState(
+              discoveredToolNames,
+              announcedDeferredNames
+            )
+          : undefined,
         recoveryMetadata: buildRecoveryMetadata(recoveryState),
       };
     } catch (err) {
@@ -1125,6 +2002,14 @@ export class AIChatQueryLoop {
           partialContent: activeAccumulator?.state.fullContent ?? "",
           model: activeAccumulator?.state.model,
           responseId: activeAccumulator?.state.responseId,
+          reasoningContent:
+            activeAccumulator?.state.reasoningContent || undefined,
+          toolCatalogState: catalogActive
+            ? snapshotToolCatalogState(
+                discoveredToolNames,
+                announcedDeferredNames
+              )
+            : undefined,
           recoveryMetadata: buildRecoveryMetadata(recoveryState),
         };
       }
@@ -1190,6 +2075,14 @@ export class AIChatQueryLoop {
         partialContent: activeAccumulator?.state.fullContent ?? "",
         model: activeAccumulator?.state.model,
         responseId: activeAccumulator?.state.responseId,
+        reasoningContent:
+          activeAccumulator?.state.reasoningContent || undefined,
+        toolCatalogState: catalogActive
+          ? snapshotToolCatalogState(
+              discoveredToolNames,
+              announcedDeferredNames
+            )
+          : undefined,
         recoveryMetadata: buildRecoveryMetadata(recoveryState),
       };
     }
@@ -1486,6 +2379,19 @@ export class AIChatQueryLoop {
       }
 
       if (snap.status === "completed") {
+        if (isToolExecutionResultLike(snap.result)) {
+          // The job resolved with a full ToolExecutionResult (e.g. a
+          // permission prompt from SkillExecutor). Propagate it unwrapped so
+          // downstream permission detection (isPermissionPromptResult) and
+          // hook handling see the true shape instead of result.result.
+          return {
+            tool_call_id: snap.result.tool_call_id,
+            tool_name: snap.result.tool_name,
+            success: snap.result.success,
+            result: snap.result.result,
+            execution_time_ms: Date.now() - startedAt,
+          };
+        }
         return {
           tool_call_id: call.id,
           tool_name: call.name,
@@ -1660,6 +2566,12 @@ export class AIChatQueryLoop {
         args: call.arguments,
         model: input.request.model,
         signal: token.signal,
+        // Combined per-request image capacity: tell image-attaching tools how
+        // many image_url parts and how many data-URL chars the outgoing
+        // transcript already contains, so they can enforce the shared cap and
+        // cumulative budget against user-selected AND tool-selected images.
+        currentRequestImageCount: countImageContentParts(input.messages),
+        currentRequestImageDataUrlChars: countImageDataUrlChars(input.messages),
         emitProgress: (event) => {
           if (token.signal.aborted) return; // drop progress after abort
           input.eventSink.emit({
