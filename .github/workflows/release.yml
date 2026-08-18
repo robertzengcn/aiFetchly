@@ -137,24 +137,8 @@ jobs:
             fi
           done
 
-      - name: Restore Windows signing certificate
-        if: ${{ env.BUILD_MODE == 'production' }}
-        shell: bash
-        env:
-          WINDOWS_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
-          CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
-        run: |
-          set -euo pipefail
-          if [ -z "$WINDOWS_CERTIFICATE_BASE64" ] || [ -z "$CERTIFICATE_PASSWORD" ]; then
-            echo "::error::Production builds require WINDOWS_CERTIFICATE_BASE64 and WINDOWS_CERTIFICATE_PASSWORD."
-            exit 1
-          fi
-          printf '%s' "$WINDOWS_CERTIFICATE_BASE64" | base64 --decode > cert.pfx
-
       - name: Build application
         shell: bash
-        env:
-          CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
         run: |
           set -euo pipefail
           export NODE_OPTIONS="--max-old-space-size=4096"
@@ -818,13 +802,14 @@ jobs:
           if-no-files-found: error
 
   # ===========================================================================
-  # Publish a draft GitHub Release with all auto-update assets (PRD FR-9.5).
+  # Publish a GitHub Release with all auto-update assets (PRD FR-9.5).
   # This is the publish step referenced by the build-local-ai-runtimes comment
   # above. It validates the Windows Squirrel assets (RELEASES / *-full.nupkg /
   # *.exe) and the macOS signed ZIP, then attaches every distributable — app
-  # installers + local-AI-runtime catalog — to a DRAFT release tagged v<version>.
-  # Drafts stay invisible to update.electronjs.org until a release engineer
-  # publishes them manually. Runs only for production builds.
+  # installers + local-AI-runtime catalog — to a release tagged v<version> and
+  # PUBLISHES it. The human gate is the workflow_dispatch production trigger
+  # itself: once that build succeeds, the release goes live immediately and
+  # update.electronjs.org serves it. Runs only for production builds.
   # ===========================================================================
   publish-github-release:
     needs: [build-windows, build-macos, generate-runtime-catalog]
@@ -889,7 +874,7 @@ jobs:
           echo "Collected release assets:"
           ls -la release-assets
 
-      - name: Create or update draft GitHub Release
+      - name: Create and publish GitHub Release
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -901,13 +886,13 @@ jobs:
               echo "::error::Release $TAG already exists and is PUBLISHED. Refusing to clobber a live release."
               exit 1
             fi
-            echo "Release $TAG exists as a draft; uploading assets (--clobber)."
+            echo "Release $TAG exists as a draft; uploading assets (--clobber), then publishing."
             gh release upload "$TAG" release-assets/* -R "$GITHUB_REPOSITORY" --clobber
+            gh release edit "$TAG" --draft=false -R "$GITHUB_REPOSITORY"
           else
             gh release create "$TAG" release-assets/* \
               -R "$GITHUB_REPOSITORY" \
-              --draft \
               --title "AiFetchly $VERSION" \
               --generate-notes
           fi
-          echo "Draft release $TAG ready. Publish it manually after inspection — drafts are invisible to update.electronjs.org."
+          echo "Release $TAG is PUBLISHED and live for update.electronjs.org."
