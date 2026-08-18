@@ -88,8 +88,7 @@
     "rebuild-native": "yarn patch-node-abi && yarn patch-remote-rebuild && yarn rebuild-better-sqlite",
     "patch-node-abi": "node scripts/patch-node-abi.js",
     "patch-remote-rebuild": "node scripts/patch-remote-rebuild.js",
-    "postinstall":
-      "node scripts/patch-node-abi.js && node scripts/patch-remote-rebuild.js && node scripts/rebuild-better-sqlite.js",
+    "postinstall": "node scripts/patch-node-abi.js && node scripts/patch-remote-rebuild.js && node scripts/rebuild-better-sqlite.js",
     "vue-check": "vue-tsc --noEmit --watch",
     "vue-typecheck": "vue-tsc --noEmit",
     "test-installer": "node installer-scripts/test-installer.js",
@@ -276,6 +275,7 @@
     "lint-staged": "^16.2.7",
     "mocha": "^10.2.0",
     "nock": "^14.0.1",
+    "playwright": "^1.62.1",
     "prettier": "^2.8.4",
     "rollup-plugin-copy": "^3.5.0",
     "rollup-plugin-sourcemaps": "^0.6.3",
