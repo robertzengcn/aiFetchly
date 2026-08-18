@@ -279,3 +279,34 @@ describe("AIChatErrorMapper - isContentLevelTransientError", () => {
     expect(isContentLevelTransientError(null)).toBe(false);
   });
 });
+
+describe("AIChatErrorMapper - context window exceeded", () => {
+  it("surfaces an actionable message for context_window_exceeded error code", () => {
+    const err = new Error(
+      'AI server returned finish_reason=error (code=context_window_exceeded): Upstream LLM error: ContextWindowExceededError: The input (566014 tokens) is longer than the model\'s context length (524288 tokens).'
+    );
+    const result = userSafeError(err);
+    expect(result).toContain("too long");
+    expect(result).toContain("new conversation");
+    // Must NOT be the transient "service is busy" message.
+    expect(result).not.toContain("busy");
+    expect(result).not.toContain("transient");
+  });
+
+  it("surfaces an actionable message for raw context length text", () => {
+    const err = new Error(
+      "The input (566014 tokens) is longer than the model's context length (524288 tokens)."
+    );
+    const result = userSafeError(err);
+    expect(result).toContain("too long");
+    expect(result).toContain("new conversation");
+    expect(result).not.toContain("busy");
+  });
+
+  it("does NOT classify context window exceeded as transient/retryable", () => {
+    const err = new Error(
+      "AI server returned finish_reason=error (code=context_window_exceeded): input too long"
+    );
+    expect(isTransientRetryableError(err)).toBe(false);
+  });
+});

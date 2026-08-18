@@ -34,6 +34,20 @@ const TRANSIENT_ERROR_PATTERN =
 export function isTransientRetryableError(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
   if (err.name === "AbortError") return false;
+  // Context window exceeded is NOT transient — retrying with the same
+  // oversized input will always fail. Exclude it before the pattern check
+  // so the user gets the actionable "conversation too long" message instead
+  // of "service is busy, try again".
+  const lowerMsg = (err.message || "").toLowerCase();
+  if (
+    lowerMsg.includes("context_window_exceeded") ||
+    lowerMsg.includes("context window") ||
+    lowerMsg.includes("context length") ||
+    lowerMsg.includes("contextwindowexceeded") ||
+    lowerMsg.includes("longer than the model")
+  ) {
+    return false;
+  }
   if (isAIChatRecoverableError(err)) {
     return (
       err.reason === "server_error" ||
@@ -183,6 +197,18 @@ export function userSafeError(err: unknown): string {
     // if a tight server limit or a large non-image payload still trips it.
     if (/413|Request Entity Too Large|Payload Too Large/i.test(msg)) {
       return "The attachment is too large for the AI server. Please try a smaller image or file.";
+    }
+    // Context window exceeded: the conversation history (including tool
+    // call/result pairs) grew beyond the model's context length. This is
+    // NOT a transient error — retrying with the same input will always
+    // fail. Surface a clear, actionable message so the user knows to start
+    // a new conversation or clear history instead of retrying blindly.
+    if (
+      /context_window_exceeded|context window|context length|contextwindowexceeded|longer than the model/i.test(
+        msg
+      )
+    ) {
+      return "The conversation is too long for the model's context window. Please start a new conversation or clear some history.";
     }
     if (/Failed to fetch|NetworkError|ECONNREFUSED|fetch failed/i.test(msg)) {
       return "Could not connect to the AI server.";

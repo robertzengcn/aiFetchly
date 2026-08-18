@@ -32,7 +32,6 @@ import {
 } from "@/service/OpenAIStreamAccumulator";
 import { ToolExecutor } from "@/service/ToolExecutor";
 import {
-  AIChatRecoverableError,
   buildRecoveryMetadata,
   createRecoveryAttemptState,
   isAIChatRecoverableError,
@@ -41,10 +40,7 @@ import {
 import { isContentLevelTransientError } from "@/service/AIChatErrorMapper";
 import { AIChatRecoveryClassifier } from "@/service/AIChatRecoveryClassifier";
 import { AIChatRecoveryCoordinator } from "@/service/AIChatRecoveryCoordinator";
-import {
-  AI_CHAT_RECOVERY_DEFAULTS,
-  AIChatRetryPolicy,
-} from "@/service/AIChatRetryPolicy";
+import { AI_CHAT_RECOVERY_DEFAULTS } from "@/service/AIChatRetryPolicy";
 import {
   checkPlanModeToolPolicy,
   isPlanToolName,
@@ -1207,9 +1203,10 @@ export class AIChatQueryLoop {
         // Detect explicit server-side errors: OpenAI-compatible servers can
         // signal a failure by returning finish_reason="error" (often with
         // empty content). This is typically a transient issue (overload,
-        // rate limit, upstream timeout). Surface it as a recognizable,
-        // retryable-tagged error so the user-facing mapper can translate it
-        // into an actionable message instead of a generic "unexpected error".
+        // rate limit, upstream timeout), but can also be a permanent error
+        // like context_window_exceeded. Surface the server's error code and
+        // message so the user-facing mapper can distinguish the two and give
+        // an actionable message instead of "service is busy, try again".
         // We do not auto-retry inside the stream consumer because content
         // may have already been delivered to onChunk before the error
         // finish_reason arrives; the user can re-send the turn manually.
@@ -1217,9 +1214,16 @@ export class AIChatQueryLoop {
           accumulator.state.finishReason === "error" &&
           accumulator.state.fullContent.trim().length === 0
         ) {
-          throw new Error(
-            "AI server returned finish_reason=error (transient server-side failure, e.g. overload, rate limit, or timeout). Please try sending your message again."
-          );
+          const streamError = accumulator.state.streamError;
+          const errorCode = streamError?.code ?? "";
+          const errorMsg = streamError?.message ?? "";
+          // Include the error code in the thrown message so AIChatErrorMapper
+          // can match specific codes (context_window_exceeded, payload_too_large)
+          // before falling back to the generic transient pattern.
+          const detail = errorCode
+            ? `AI server returned finish_reason=error (code=${errorCode}): ${errorMsg}`
+            : "AI server returned finish_reason=error (transient server-side failure, e.g. overload, rate limit, or timeout). Please try sending your message again.";
+          throw new Error(detail);
         }
 
         if (!willContinue) {

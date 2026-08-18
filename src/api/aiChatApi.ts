@@ -16,10 +16,7 @@ import type { AIProviderResolver } from "@/service/aiProvider/AIProviderResolver
 import { OpenAICompatibleProviderClient } from "@/service/aiProvider/OpenAICompatibleProviderClient";
 import type { LocalAIProviderConfig } from "@/entityTypes/aiProviderTypes";
 import type { ModelArtifact } from "@/entityTypes/aiImageAttachmentToolTypes";
-import {
-  AIChatRecoverableError,
-  type AIChatRecoveryReason,
-} from "@/service/AIChatRecoveryTypes";
+import { type AIChatRecoveryReason } from "@/service/AIChatRecoveryTypes";
 import { AIChatRecoveryClassifier } from "@/service/AIChatRecoveryClassifier";
 import {
   AI_CHAT_RECOVERY_DEFAULTS,
@@ -627,6 +624,12 @@ export interface OpenAIChatCompletionChunk {
   choices: OpenAIStreamChoice[];
   /** Present on the final chunk when stream_options.include_usage is true. */
   usage?: OpenAIUsage;
+  /** Present when the server signals a stream-level error (finish_reason="error"). */
+  error?: {
+    message: string;
+    type?: string;
+    code?: string;
+  };
 }
 
 // ==================== Rerank API Types ====================
@@ -764,8 +767,6 @@ export interface StreamRecoveryInfo {
  * Maximum number of retry attempts for a streaming connection failure
  * (so up to maxAttempts + 1 total tries including the initial attempt).
  */
-const STREAM_RETRY_MAX_ATTEMPTS = 3;
-
 /**
  * Base delay in milliseconds for the first retry. Subsequent delays use
  * exponential backoff: base * 2^attempt (1s, 2s, 4s).
@@ -1102,7 +1103,7 @@ export class AiChatApi {
       throw new Error("Response body is null");
     }
 
-    await this._consumeStreamResponse(response, onEvent, options?.signal);
+    await this._consumeStreamResponse(response, onEvent);
   }
 
   /**
@@ -1148,12 +1149,12 @@ export class AiChatApi {
   /**
    * Consume an SSE stream response and invoke onEvent for each parsed event.
    * Shared by streamMessage and streamEmailTemplateGeneration.
-   * When signal is aborted, reader.read() rejects with AbortError; we exit cleanly and rethrow.
+   * When the response body's reader is aborted, reader.read() rejects with
+   * AbortError; we exit cleanly and rethrow.
    */
   private async _consumeStreamResponse(
     response: Response,
-    onEvent: (event: StreamEvent) => void,
-    signal?: AbortSignal
+    onEvent: (event: StreamEvent) => void
   ): Promise<void> {
     if (!response.body) {
       throw new Error("Response body is null");
@@ -2473,7 +2474,6 @@ export class AiChatApi {
     }
 
     let chunkIndex = 0;
-    const signal = fetchOptions.signal ?? undefined;
     await this._consumeStreamResponse(
       response,
       (event) => {
@@ -2530,8 +2530,7 @@ export class AiChatApi {
               : "Unknown error");
           throw new Error(errorMessage);
         }
-      },
-      signal
+      }
     );
   }
 
@@ -2769,6 +2768,22 @@ export class AiChatApi {
       };
       if (usage) {
         chunk.usage = usage;
+      }
+      // Capture the top-level error field (present when finish_reason="error")
+      // so downstream code can distinguish context_window_exceeded, payload_too_large,
+      // etc. from generic transient errors.
+      const rawError = payload.error;
+      if (this.isRecord(rawError)) {
+        const errMsg = this.getStringField(rawError, "message");
+        const errType = this.getStringField(rawError, "type");
+        const errCode = this.getStringField(rawError, "code");
+        if (errMsg || errCode) {
+          chunk.error = {
+            message: errMsg ?? "",
+            ...(errType ? { type: errType } : {}),
+            ...(errCode ? { code: errCode } : {}),
+          };
+        }
       }
       return chunk;
     }
