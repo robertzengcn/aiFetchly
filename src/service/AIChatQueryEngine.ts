@@ -111,6 +111,24 @@ function collectRecentUserMessages(
   return collected.reverse();
 }
 
+/**
+ * Detect whether the assembled transcript contains any AI-generated image
+ * references (the `<generated_images>` marker injected by
+ * {@link augmentContentWithGeneratedImages}). Used to auto-promote
+ * image-editing tools when the user's follow-up message lacks
+ * image-specific keywords but clearly references a prior generated image.
+ */
+function messagesHaveGeneratedImages(
+  messages: readonly OpenAIChatMessage[]
+): boolean {
+  for (const m of messages) {
+    if (m.role !== "assistant") continue;
+    const text = openAIContentToString(m.content);
+    if (text.includes("<generated_images>")) return true;
+  }
+  return false;
+}
+
 /** Maximum persisted reasoning characters per assistant message (32 KB). */
 const CHAT_V2_REASONING_MAX_CHARS = 32 * 1024;
 
@@ -487,6 +505,7 @@ export class AIChatQueryEngine {
     readonly recentUserMessages?: readonly string[];
     readonly model?: string;
     readonly contextWindowTokens?: number;
+    readonly hasRecentGeneratedImages?: boolean;
     readonly initialState?: ToolCatalogRuntimeContext;
   }): {
     toolCatalog?: ToolCatalog;
@@ -507,6 +526,7 @@ export class AIChatQueryEngine {
       recentUserMessages: input.recentUserMessages,
       uploadedFileTypes: [],
       contextWindowTokens: input.contextWindowTokens,
+      hasRecentGeneratedImages: input.hasRecentGeneratedImages,
       ...(input.initialState ?? {}),
     };
 
@@ -824,6 +844,7 @@ export class AIChatQueryEngine {
       userMessage: request.message,
       recentUserMessages: collectRecentUserMessages(messages),
       model: request.model,
+      hasRecentGeneratedImages: messagesHaveGeneratedImages(messages),
     });
 
     // Load persisted discovered-tool state so tools discovered in earlier turns
@@ -1176,6 +1197,9 @@ export class AIChatQueryEngine {
           matchedByToolId.conversationMessages
         ),
         model: matchedByToolId.request.model,
+        hasRecentGeneratedImages: messagesHaveGeneratedImages(
+          matchedByToolId.conversationMessages
+        ),
       });
 
       const loopInput: AIChatQueryLoopInput = {
@@ -1326,6 +1350,9 @@ export class AIChatQueryEngine {
         pending.conversationMessages
       ),
       model: pending.request.model,
+      hasRecentGeneratedImages: messagesHaveGeneratedImages(
+        pending.conversationMessages
+      ),
     });
 
     const loopInput: AIChatQueryLoopInput = {

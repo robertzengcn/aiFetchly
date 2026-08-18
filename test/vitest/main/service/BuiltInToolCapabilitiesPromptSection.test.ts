@@ -26,6 +26,7 @@ describe("buildBuiltInToolCapabilitiesSection", () => {
       "file_edit",
       "attach_local_images",
       "process_artifact_batch",
+      "export_generated_artifacts",
       "list_email_inboxes",
       "fetch_unread_emails",
       "create_email_reply_draft",
@@ -72,5 +73,14 @@ describe("buildBuiltInToolCapabilitiesSection", () => {
     // Reply tools are deferred-by-default (no intent regex) — the table must
     // call this out so the model loads them via search rather than failing.
     expect(s.toLowerCase()).toContain("not auto-promoted");
+  });
+
+  it("teaches the model how to edit a previously generated image", () => {
+    const s = buildBuiltInToolCapabilitiesSection();
+    // The model must know the two-step workflow: export the generated image
+    // to the workspace, then use attach_local_images to edit it.
+    expect(s).toContain("export_generated_artifacts");
+    expect(s).toContain("aifetchly-generated-image://");
+    expect(s).toContain("attach_local_images");
   });
 });

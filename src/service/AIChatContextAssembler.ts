@@ -16,6 +16,7 @@ import { WorkspaceResolver } from "@/service/WorkspaceResolver";
 import { AIFetchlyContextLoader } from "@/service/aifetchlyConfig/AIFetchlyContextLoader";
 import { buildAvailableAgentsBlock } from "@/service/aifetchlyConfig/availableAgentsBlock";
 import { buildBuiltInToolCapabilitiesSection } from "@/service/BuiltInToolCapabilitiesPromptSection";
+import { augmentContentWithGeneratedImages } from "@/service/AIChatGeneratedImageContextService";
 import path from "node:path";
 import os from "node:os";
 import type {
@@ -331,7 +332,14 @@ export class AIChatContextAssembler {
     }
 
     for (const r of trimmedRecent) {
-      messages.push({ role: roleOf(r.role), content: r.content });
+      messages.push({
+        role: roleOf(r.role),
+        content: augmentContentWithGeneratedImages(
+          r.content,
+          r.role,
+          r.metadata
+        ),
+      });
     }
 
     messages.push({
