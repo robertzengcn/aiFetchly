@@ -322,7 +322,21 @@ export const ipcRenderer = {
   send: (_channel: string, ..._args: unknown[]) => {
     // Mock implementation
   },
-  sendSync: (_channel: string, ..._args: unknown[]) => {
+  // electron-store v8's constructor (renderer branch) calls
+  // `ipcRenderer.sendSync('electron-store-get-data')` and throws
+  // "You need to call `.initRenderer()`" when it returns a falsy value.
+  // Under the tsx test loader this mock IS the electron module (see
+  // tsconfig.json `paths`), and module tests construct Token/Store in the
+  // main-process role, so answer as a real main process's
+  // `initDataListener()` would: { defaultCwd, appVersion }. This keeps the
+  // real electron-store usable from tests without `.initRenderer()`.
+  sendSync: (channel: string, ..._args: unknown[]) => {
+    if (channel === "electron-store-get-data") {
+      return {
+        defaultCwd: app.getPath("userData"),
+        appVersion: app.getVersion(),
+      };
+    }
     return undefined;
   },
   on: (_channel: string, _handler: (...args: unknown[]) => unknown) => {
