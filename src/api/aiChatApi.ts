@@ -1282,7 +1282,6 @@ export class AiChatApi {
   async getAvailableModels(): Promise<
     CommonApiresp<AvailableChatModelsResponse>
   > {
-    await this.ensureAIEnabled();
     return this._httpClient.get("/api/ai/chat/models");
   }
 
@@ -1921,16 +1920,11 @@ export class AiChatApi {
   async listOpenAIModels(): Promise<OpenAIModelsResponse> {
     if (!process.env.WORKER_TYPE) {
       const resolved = (await this.getProviderResolver()).resolveForChat();
-      if (!resolved.canUse) {
-        throw new Error(resolved.message);
-      }
       if (resolved.kind === "local") {
         return this.localClient(resolved.config, resolved.apiKey).listModels();
       }
       return this.listOpenAIModelsHosted();
     }
-    // Worker processes have no provider settings; keep the hosted-only gate.
-    await this.ensureAIEnabled();
     return this.listOpenAIModelsHosted();
   }
 
