@@ -106,8 +106,19 @@ function cap(s: string | undefined, max: number): string | undefined {
  *
  * The backend decodes with DisallowUnknownFields, so uploading the field
  * before `marketing/services/crashreport/schema.go` models `MainLogTail`
- * would 400 the whole report. Default OFF; flip to ON by setting
- * AIFETCHLY_SEND_MAIN_LOG_TAIL=true once the backend ships the field.
+ * (shipped in backend commit d3f98f0) is 400'd. Default OFF.
+ *
+ * Where to define AIFETCHLY_SEND_MAIN_LOG_TAIL:
+ *  - dev: shell env before `yarn dev` (`AIFETCHLY_SEND_MAIN_LOG_TAIL=true yarn dev`).
+ *    Note: a plain `.env` entry does NOT reach the main process at runtime —
+ *    dotenv is only loaded at build time (forge.config.js).
+ *  - production builds: baked at build time by the `define` block in
+ *    vite.main.config.mjs from the build environment (CI env var or `.env`,
+ *    which forge.config.js loads via dotenv before vite runs).
+ *  - tests: live process.env (the define is skipped for mode 'test').
+ *
+ * Once the backend field is deployed, flip the default to ON here (or set the
+ * build env var) per PRD open question 1.
  */
 function shouldSendMainLogTail(): boolean {
   return process.env.AIFETCHLY_SEND_MAIN_LOG_TAIL === "true";
