@@ -6,6 +6,8 @@ import type { WorkspaceApprovalState } from "@/entityTypes/workspaceTypes";
 
 @Entity("workspace")
 @Index("idx_workspace_conversation", ["conversationId"])
+@Index("idx_workspace_key_conversation", ["workspaceKey", "conversationId"])
+@Index("idx_workspace_key_approval", ["workspaceKey", "approvalState"])
 export class WorkspaceEntity extends AuditableEntity {
   @PrimaryGeneratedColumn()
   id: number;
@@ -33,4 +35,14 @@ export class WorkspaceEntity extends AuditableEntity {
   @Order(6)
   @Column("datetime", { nullable: true })
   revokedAt: Date | null;
+
+  /** Stable grouping key derived by WorkspaceKeyService (redesign §8.2). */
+  @Order(7)
+  @Column("varchar", { length: 255, nullable: true })
+  workspaceKey: string | null;
+
+  /** Canonical real path backing the workspace key. Null when unresolved. */
+  @Order(8)
+  @Column("varchar", { length: 1024, nullable: true })
+  canonicalRootPath: string | null;
 }

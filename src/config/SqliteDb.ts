@@ -46,6 +46,8 @@ import { RAGDocumentEntity } from "@/entity/RAGDocument.entity";
 import { RAGChunkEntity } from "@/entity/RAGChunk.entity";
 // import { RAGModelEntity } from "@/entity/RAGModel.entity";
 import { AIChatMessageEntity } from "@/entity/AIChatMessage.entity";
+import { AIChatConversationEntity } from "@/entity/AIChatConversation.entity";
+import { AIChatRunEntity } from "@/entity/AIChatRun.entity";
 import { AgentDefinitionEntity } from "@/entity/AgentDefinition.entity";
 import { AgentTaskEntity } from "@/entity/AgentTask.entity";
 import { AgentTaskMessageEntity } from "@/entity/AgentTaskMessage.entity";
@@ -486,6 +488,8 @@ export class SqliteDb {
           // RAGModelEntity,
           AIChatMessageEntity,
           AIChatAttachmentEntity,
+          AIChatConversationEntity,
+          AIChatRunEntity,
           AIArtifactEntity,
           VectorEntity,
           VectorMetadataEntity,
