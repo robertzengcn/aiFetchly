@@ -1,4 +1,5 @@
 import { Token } from "@/modules/token";
+import { log } from "@/modules/Logger";
 import { USER_AI_ENABLED } from "@/config/usersetting";
 import { SystemSettingModule } from "@/modules/SystemSettingModule";
 import {
@@ -31,7 +32,7 @@ export function getSharedAutoDreamService(): AIAutoDreamService {
           );
           return v !== "false";
         } catch (err) {
-          console.error(
+          log.error(
             "[ai-auto-dream] failed to read system_setting toggle:",
             err
           );
@@ -73,7 +74,7 @@ export function getSharedWorkspaceAutoDreamService(): AIWorkspaceAutoDreamServic
           );
           return v !== "false";
         } catch (err) {
-          console.error(
+          log.error(
             "[workspace-auto-dream] failed to read system_setting toggle:",
             err
           );

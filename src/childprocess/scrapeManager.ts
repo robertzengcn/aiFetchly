@@ -10,6 +10,7 @@ import {
   RunResult,
 } from "@/entityTypes/scrapeType";
 import defaults from "lodash/defaults";
+import { log } from "@/modules/Logger";
 import { Page, Browser } from "puppeteer";
 import { createLogger, format, transports } from "winston";
 import winston from "winston";
@@ -54,18 +55,18 @@ function isUtilityProcessWorker(): boolean {
   );
 }
 export class ScrapeManager {
-  cluster: Cluster<ClusterSearchData>;
-  pluggable: pluggableType;
+  cluster!: Cluster<ClusterSearchData>;
+  pluggable!: pluggableType;
   // scraper: SocialScraper;
   context: object;
   config: SMconfig;
   logger: winston.Logger;
   // logger: { info: Function };
-  browser: Browser;
-  page: Page;
-  numClusters: number;
-  tmppath: string;
-  proxiesArr: Array<ProxyServer | null>;
+  browser!: Browser;
+  page!: Page;
+  numClusters!: number;
+  tmppath!: string;
+  proxiesArr!: Array<ProxyServer | null>;
   debug_log_path?: string;
   // runLogin: Function;
   // taskid?: number;
@@ -298,7 +299,7 @@ export class ScrapeManager {
 
     this.logger.info(`Using ${this.numClusters} clusters.`);
 
-    console.log(this.numClusters);
+    log.info(this.numClusters);
     //avoid to waste resource
     if (param.keywords.length < this.numClusters) {
       this.numClusters = param.keywords.length;
@@ -370,7 +371,7 @@ export class ScrapeManager {
     //}
     //}
     this.cluster.on("taskerror", (err, data) => {
-      console.log(`Error crawling ${data}: ${err.message}`);
+      log.info(`Error crawling ${data}: ${err.message}`);
     });
     //}
     //}
@@ -534,7 +535,7 @@ export class ScrapeManager {
         cookies: cookiesArray,
         accountId: selectedAccountId,
       };
-      console.log("cludata=%O", cludata);
+      log.info("cludata=%O", cludata);
       if (this.proxiesArr && this.proxiesArr.length > 0) {
         const randomIndex = pickRandomIndex(this.proxiesArr.length);
         cludata.proxyServer = this.proxiesArr[randomIndex];
@@ -583,7 +584,7 @@ export class ScrapeManager {
           //   // Add more headers if needed
           // });
           // await page.setViewport({ width: 1920, height: 1080 });
-          console.log(`scraper content: ${content}`);
+          log.info(`scraper content: ${content}`);
           return {
             results: content,
             metadata: {},
@@ -608,8 +609,8 @@ export class ScrapeManager {
 
       // Merge results and metadata per keyword
       for (const promiseReturn of promiseReturns) {
-        console.log(`promiseReturn: ${promiseReturn}`);
-        console.log(`promiseReturn.results: ${promiseReturn.results}`);
+        log.info(`promiseReturn: ${promiseReturn}`);
+        log.info(`promiseReturn.results: ${promiseReturn.results}`);
         results.push(...promiseReturn.results.results);
         //Object.assign(results, promiseReturn.results);
         Object.assign(metadata, promiseReturn.metadata);
@@ -622,7 +623,7 @@ export class ScrapeManager {
           runResult.accountId &&
           cookiesCallback
         ) {
-          console.log(
+          log.info(
             `Sending updated cookies for account ${runResult.accountId}`
           );
           cookiesCallback(runResult.accountId, runResult.updatedCookies);
@@ -658,7 +659,7 @@ export class ScrapeManager {
       this.logger.info(`Writing results to ${this.config.output_file}`);
       writeResults(this.config.output_file, JSON.stringify(results, null, 4));
     }
-    console.log(`results: ${results}`);
+    log.info(`results: ${results}`);
     return results;
     // return {
     //   //results: results,

@@ -1146,12 +1146,6 @@ export const constantRoutes: RouteRecordRaw[] = [
 //     checkVersion();
 // });
 
-/**
- * asyncRoutes
- * the routes that need to be dynamically loaded based on user roles
- */
-export const asyncRoutes: RouteRecordRaw[] = [];
-
 const router = createRouter({
   history: createWebHashHistory(),
   scrollBehavior() {

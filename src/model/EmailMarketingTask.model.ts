@@ -1,7 +1,7 @@
 import { BaseDb } from "@/model/Basedb";
 import { Repository } from "typeorm";
 import { EmailMarketingTaskEntity } from "@/entity/EmailMarketingTask.entity";
-import { EmailMarketingTaskdbEntity, EmailMarketingTaskStatus } from "./emailMarketingTaskdb";
+import { EmailMarketingTaskdbEntity, EmailMarketingTaskStatus } from "@/entityTypes/emailMarketingTask-type";
 import { getRecorddatetime } from "@/modules/lib/function";
 import { TaskStatus } from "@/entityTypes/commonType";
 export class EmailMarketingTaskModel extends BaseDb {

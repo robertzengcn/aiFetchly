@@ -10,6 +10,7 @@ import {
   EngineMetric
 } from '@/entityTypes/dashboardType';
 import { SearchResultModule } from '@/modules/SearchResultModule';
+import { log } from "@/modules/Logger";
 import { EmailSearchTaskModule } from '@/modules/EmailSearchTaskModule';
 import { YellowPagesResultModule } from '@/modules/YellowPagesResultModule';
 import { EmailMarketingSendLogModule } from '@/modules/emailMarketingSendLogModule';
@@ -119,7 +120,7 @@ export class DashboardController {
 
       return { engines };
     } catch (error) {
-      console.error('Error fetching search engine breakdown:', error);
+      log.error('Error fetching search engine breakdown:', error);
       return { engines: [] };
     }
   }
@@ -144,7 +145,7 @@ export class DashboardController {
 
       return breakdown;
     } catch (error) {
-      console.error('Error fetching email status breakdown:', error);
+      log.error('Error fetching email status breakdown:', error);
       return { successful: 0, failed: 0, pending: 0 };
     }
   }
@@ -247,7 +248,7 @@ export class DashboardController {
     try {
       return await this.searchResultModule.aggregateByDateRange(startDate, endDate, granularity);
     } catch (error) {
-      console.error('Error fetching search results trend:', error);
+      log.error('Error fetching search results trend:', error);
       return [];
     }
   }
@@ -256,7 +257,7 @@ export class DashboardController {
     try {
       return await this.emailSearchTaskModule.aggregateResultsByDateRange(startDate, endDate, granularity);
     } catch (error) {
-      console.error('Error fetching emails extracted trend:', error);
+      log.error('Error fetching emails extracted trend:', error);
       return [];
     }
   }
@@ -265,7 +266,7 @@ export class DashboardController {
     try {
       return await this.yellowPagesResultModule.aggregateResultsByDateRange(startDate, endDate, granularity);
     } catch (error) {
-      console.error('Error fetching yellow pages trend:', error);
+      log.error('Error fetching yellow pages trend:', error);
       return [];
     }
   }
@@ -274,7 +275,7 @@ export class DashboardController {
     try {
       return await this.emailMarketingSendLogModule.aggregateByDateRange(startDate, endDate, granularity);
     } catch (error) {
-      console.error('Error fetching emails sent trend:', error);
+      log.error('Error fetching emails sent trend:', error);
       return [];
     }
   }

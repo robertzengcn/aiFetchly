@@ -3,6 +3,7 @@ import { SearchScrape } from "@/childprocess/searchScraper"
 import { ScrapeOptions, SearchData, SearchResult } from "@/entityTypes/scrapeType"
 import { CustomError } from "@/modules/customError"
 import * as fs from "fs";
+import { log } from "@/modules/Logger";
 import * as path from "path";
 // import debug from 'debug';
 // import { e } from "vitest/dist/reporters-1evA5lom";
@@ -240,14 +241,14 @@ export class GoogleScraper extends SearchScrape {
                 findelement=true
                 this.logger.info(`Found results with alternative selector: ${selector}`);
                 this.page.on('console', msg => {
-                    console.log(`Browser console: ${msg.text()}`);
+                    log.info(`Browser console: ${msg.text()}`);
                 });
                 // Found results with alternative selector
                 const searchRes = await this.parseSearchResults(selector);
                 this.page.removeAllListeners('console');
                 this.logger.info(`Found ${searchRes.length} results with alternative selector: ${selector}`);
                 for (const resValue of searchRes) {
-                    console.log(`resValue: ${resValue}`);
+                    log.info(`resValue: ${resValue}`);
                     result.results.push(resValue);
                 }
                 break; // Exit loop once we find results
@@ -368,7 +369,7 @@ export class GoogleScraper extends SearchScrape {
         // if(num){
         //     result.num_results = num;
         // }
-        console.log(`result: ${result}`);
+        log.info(`result: ${result}`);
         return result;
     }
 
@@ -481,7 +482,7 @@ export class GoogleScraper extends SearchScrape {
                             await input.evaluate((el) => {
                                 const form = el.closest('form') as HTMLFormElement;
                                 if (form) {
-                                    console.log("Form found and submitting");
+                                    log.info("Form found and submitting");
                                     form.submit();
                                 }
                             });
@@ -901,7 +902,7 @@ export class GoogleScraper extends SearchScrape {
         return value.replace(/\+/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
     }
 
-    async wait_for_results() {
+    async wait_for_results(): Promise<void> {
         try {
             // Wait for the page to be stable
             // await this.page.waitForFunction(() => {

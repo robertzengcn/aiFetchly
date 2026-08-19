@@ -71,7 +71,8 @@ jspm_packages/
 .yarn-integrity
 
 # dotenv environment variables file
-.env
+.env*
+!.env.example
 
 # Windows code-signing certificate (decoded from secret in CI; never commit)
 cert.pfx
@@ -94,10 +95,8 @@ yt-auth/*
 #Electron-builder output
 /dist_electron
 dist
-.env.development
 .vite/*
-vite.main.config.mjs.timestamp-*.mjs
-vite.utilityCode.config.mjs.*.mjs
+*.timestamp-*.mjs
 build/
 
 dev-debug.log
@@ -158,3 +157,7 @@ hyperframes-*
 .test-userData/plugins/installed/my-plugin/agents/optimizer.md
 .test-userData/plugins/installed/my-plugin/agents/reviewer.md
 .test-userData/*
+# Playwright E2E artifacts (HTML/JSON report, traces, screenshots, videos)
+playwright-report/
+test-results/
+test-results/playwright/

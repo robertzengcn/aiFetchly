@@ -4,26 +4,26 @@ import AuditableEntity from "@/entity/Auditable.entity";
 @Entity("installed_skills")
 export class InstalledSkillEntity extends AuditableEntity {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
 
   @Index({ unique: true })
   @Column("text")
-  name: string;
+  name!: string;
 
   @Column("text")
-  version: string;
+  version!: string;
 
   @Column("text")
-  source: string;
+  source!: string;
 
   @Column("text")
-  manifest_json: string;
+  manifest_json!: string;
 
   @Column("text", { default: "[]" })
-  permissions_json: string;
+  permissions_json!: string;
 
   @Column("integer", { default: 1 })
-  enabled: number;
+  enabled!: number;
 
   /** Owner plugin name. null = standalone skill. (Design §5.2) */
   @Index()

@@ -5,19 +5,19 @@ import {SystemSettingOptionEntity} from "@/entity/SystemSettingOption.entity"
 @Entity("system_setting")
 export class SystemSettingEntity extends AuditableEntity{
     @PrimaryGeneratedColumn()
-    id: number;
+    id!: number;
     @Index({ unique: true })
     @Column('text')
-    key: string;
+    key!: string;
     @Column("text")
-    value: string;
+    value!: string;
     @Column("text")
-    description: string;
+    description!: string;
     @Column("text")
-    type: string;
+    type!: string;
     @ManyToOne(() => SystemSettingGroupEntity, (systemSettingGroupEntity) => systemSettingGroupEntity.settings)
-    group: SystemSettingGroupEntity;
+    group!: SystemSettingGroupEntity;
     @OneToMany(() => SystemSettingOptionEntity, (systemSettingOptionEntity) => systemSettingOptionEntity.systemSetting)
-    options:SystemSettingOptionEntity[];
+    options!:SystemSettingOptionEntity[];
 
 }

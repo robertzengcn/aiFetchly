@@ -470,9 +470,6 @@ const taskid = parseInt($route.params.id.toString());
 
 const initialize = async () => {
 console.log($route.params.id)
-//   if ($route.params.id) {
-//     taskid.value = parseInt($route.params.id.toString());
-//   }
 }
 /**
  * Start auto-refresh timer
@@ -742,9 +739,6 @@ const extractionNotice = reactive({
 const showDetailDialog = ref(false);
 const selectedResult = ref<SearchResEntityDisplay | null>(null);
 
-// Column visibility state
-// Default hidden columns: ai_analysis_status, extraction_status, contact_email, contact_phone, contact_address
-// Default hidden: ai_industry (Customer Industry), ai_match_score (Probability of Potential Customers)
 const visibleColumns = ref<Set<string>>(new Set(['index', 'title', 'link', 'keyword', 'record_time', 'actions']));
 
 // Auto-refresh functionality
@@ -1524,13 +1518,7 @@ async function handleAnalyzeConfirm(data: { businessInfo: string; saveForFuture:
         analysisProgress.value = { current: 0, total: 0 };
     }
 }
-// },
-// }
-// const editItem = (item) => {
  
-// };
-// const openfolder=(item)=>{
-//     // console.log(item)
     
 // }
 

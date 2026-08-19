@@ -10,7 +10,13 @@
  */
 
 import { launch, type Browser, type Page } from "puppeteer";
+import { log } from "@/modules/Logger";
 import useProxy from "@lem0-packages/puppeteer-page-proxy";
+import {
+  googleMapsWorkerInboundSchema,
+  type GoogleMapsWorkerInbound,
+} from "@/schemas/worker/googleMaps";
+import { parseWorkerMessage } from "@/schemas/worker/_shared";
 import type {
   GoogleMapsSearchResult,
   GoogleMapsBusinessResult,
@@ -85,7 +91,7 @@ function describeError(error: unknown): string {
 
 function logWorkerEvent(message: string, error?: unknown): void {
   const suffix = error === undefined ? "" : `\n${describeError(error)}`;
-  console.error(
+  log.error(
     `[GoogleMapsWorker] pid=${process.pid} started=${workerStartedAt} ${message}${suffix}`
   );
 }
@@ -160,10 +166,10 @@ async function applyCookies(page: Page, cookies: unknown[]): Promise<void> {
       };
       await page.setCookie(cookieData);
     } catch (err) {
-      console.error(`Failed to set cookie:`, err);
+      log.error(`Failed to set cookie:`, err);
     }
   }
-  console.log(`Applied ${cookies.length} cookies`);
+  log.info(`Applied ${cookies.length} cookies`);
 }
 
 // ---------------------------------------------------------------------------
@@ -299,7 +305,7 @@ async function scrapeGoogleMaps(msg: StartMessage): Promise<void> {
           }
         });
       });
-      console.log(
+      log.info(
         `[DEBUG] Proxy rotation enabled with ${proxies.length} proxy(ies). Initial: ${proxies[0].host}:${proxies[0].port}`
       );
     }
@@ -312,7 +318,7 @@ async function scrapeGoogleMaps(msg: StartMessage): Promise<void> {
     const searchUrl = `https://www.google.com/maps/search/${encodeURIComponent(
       query
     )}+${encodeURIComponent(location)}`;
-    console.log(`[DEBUG] Navigating to ${searchUrl}`);
+    log.info(`[DEBUG] Navigating to ${searchUrl}`);
     await safeGoto(page, searchUrl, {
       timeout: 30000,
       waitUntil: "domcontentloaded",
@@ -321,7 +327,7 @@ async function scrapeGoogleMaps(msg: StartMessage): Promise<void> {
     // Wait for scrapable results UI (consent dismiss + feed/cards/place)
     sendProgress(requestId, "loading", 0, maxResults, "Waiting for results...");
     const initialDiag = await collectMapsPageDiagnostics(page);
-    console.log(
+    log.info(
       `[DEBUG] Post-navigation diagnostics: ${formatMapsPageDiagnostics(
         initialDiag
       )}`
@@ -331,22 +337,22 @@ async function scrapeGoogleMaps(msg: StartMessage): Promise<void> {
     try {
       readyState = await waitForMapsResultsReady(page, {
         timeoutMs: 45_000,
-        log: (m) => console.log(`[DEBUG] ${m}`),
+        log: (m) => log.info(`[DEBUG] ${m}`),
       });
     } catch (readyErr) {
       const failDiag = await collectMapsPageDiagnostics(page);
-      console.error(
+      log.error(
         `[DEBUG] Maps readiness failed: ${formatMapsPageDiagnostics(failDiag)}`
       );
       throw readyErr;
     }
-    console.log(`[DEBUG] Maps ready state=${readyState}`);
+    log.info(`[DEBUG] Maps ready state=${readyState}`);
 
     const collectedCards: GoogleMapsBusinessResult[] = [];
 
     // Single-place landing: extract the open detail panel and finish.
     if (readyState === "place") {
-      console.log(
+      log.info(
         `[DEBUG] Single-place landing detected — extracting detail panel`
       );
       sendProgress(
@@ -358,7 +364,7 @@ async function scrapeGoogleMaps(msg: StartMessage): Promise<void> {
       );
       await randomDelay(500, 1000);
       const business = await extractBusinessData(page);
-      console.log(
+      log.info(
         `[DEBUG] Place extract: name="${business.name}", phone="${
           business.phone ?? "N/A"
         }", website="${business.website ?? "N/A"}"`
@@ -407,7 +413,7 @@ async function scrapeGoogleMaps(msg: StartMessage): Promise<void> {
     const scrollStartTime = Date.now();
     const maxScrollTimeMs = 60_000; // Hard timeout: 60s max for scrolling
 
-    console.log(
+    log.info(
       `[DEBUG] Starting scroll loop — maxResults=${maxResults}, maxNoNewCards=${maxNoNewCards}, maxScrollTime=${maxScrollTimeMs}ms`
     );
 
@@ -436,7 +442,7 @@ async function scrapeGoogleMaps(msg: StartMessage): Promise<void> {
       const cardCount = await countMapsResultCards(page);
 
       const elapsed = Date.now() - scrollStartTime;
-      console.log(
+      log.info(
         `[DEBUG] Scroll loop — cardCount=${cardCount}, previousCardCount=${previousCardCount}, noNewCardsCount=${noNewCardsCount}, elapsed=${elapsed}ms`
       );
 
@@ -445,9 +451,7 @@ async function scrapeGoogleMaps(msg: StartMessage): Promise<void> {
         previousCardCount = cardCount;
       } else {
         noNewCardsCount++;
-        console.log(
-          `[DEBUG] No new cards (${noNewCardsCount}/${maxNoNewCards})`
-        );
+        log.info(`[DEBUG] No new cards (${noNewCardsCount}/${maxNoNewCards})`);
       }
 
       await scrollMapsResultsList(page);
@@ -460,14 +464,14 @@ async function scrapeGoogleMaps(msg: StartMessage): Promise<void> {
         : noNewCardsCount >= maxNoNewCards
         ? `no new cards after ${maxNoNewCards} scrolls`
         : `scroll timeout (${Date.now() - scrollStartTime}ms)`;
-    console.log(
+    log.info(
       `[DEBUG] Scroll loop ended — reason: ${scrollExitReason}, total cards on page: ${previousCardCount}`
     );
 
     // Get all card elements — capture fresh handles after scrolling is done
     const cardHandles = await queryMapsResultCards(page);
     const limit = Math.min(cardHandles.length, maxResults);
-    console.log(
+    log.info(
       `[DEBUG] cardHandles.length=${cardHandles.length}, limit=${limit}`
     );
 
@@ -506,13 +510,13 @@ async function scrapeGoogleMaps(msg: StartMessage): Promise<void> {
         `Extracting business ${i + 1} of ${limit}...`
       );
 
-      console.log(`[DEBUG] === Extracting card ${i + 1}/${limit} ===`);
+      log.info(`[DEBUG] === Extracting card ${i + 1}/${limit} ===`);
 
       // Rotate proxy for this card (round-robin)
       if (proxies && proxies.length > 0 && i > 0) {
         const rotated = proxies[i % proxies.length];
         currentProxyUrl = proxyToUrl(rotated);
-        console.log(
+        log.info(
           `[DEBUG] Rotated to proxy ${i % proxies.length}: ${rotated.host}:${
             rotated.port
           }`
@@ -522,10 +526,10 @@ async function scrapeGoogleMaps(msg: StartMessage): Promise<void> {
       try {
         // Re-query fresh card handles each iteration (DOM changes after goBack)
         const freshCards = await queryMapsResultCards(page);
-        console.log(`[DEBUG] Fresh card handles on page: ${freshCards.length}`);
+        log.info(`[DEBUG] Fresh card handles on page: ${freshCards.length}`);
 
         if (i >= freshCards.length) {
-          console.log(
+          log.info(
             `[DEBUG] Card index ${i} out of range (only ${freshCards.length} cards). Re-navigating to search URL.`
           );
           await safeGoto(page, searchUrl, {
@@ -534,9 +538,9 @@ async function scrapeGoogleMaps(msg: StartMessage): Promise<void> {
           });
           await waitForMapsResultsReady(page, {
             timeoutMs: 20_000,
-            log: (m) => console.log(`[DEBUG] ${m}`),
+            log: (m) => log.info(`[DEBUG] ${m}`),
           }).catch(() => {
-            console.log(`[DEBUG] Results UI not ready after re-navigate`);
+            log.info(`[DEBUG] Results UI not ready after re-navigate`);
           });
           // Scroll down to where we were
           for (let s = 0; s < Math.ceil((i + 1) / 10); s++) {
@@ -544,11 +548,11 @@ async function scrapeGoogleMaps(msg: StartMessage): Promise<void> {
             await sleep(1000);
           }
           const retryCards = await queryMapsResultCards(page);
-          console.log(
+          log.info(
             `[DEBUG] After re-navigate and scroll: ${retryCards.length} cards`
           );
           if (i >= retryCards.length) {
-            console.log(`[DEBUG] Still can't find card ${i}. Skipping.`);
+            log.info(`[DEBUG] Still can't find card ${i}. Skipping.`);
             continue;
           }
           await retryCards[i].click();
@@ -556,9 +560,7 @@ async function scrapeGoogleMaps(msg: StartMessage): Promise<void> {
           await freshCards[i].click();
         }
 
-        console.log(
-          `[DEBUG] Clicked card ${i + 1}, waiting for detail panel...`
-        );
+        log.info(`[DEBUG] Clicked card ${i + 1}, waiting for detail panel...`);
         await randomDelay(1000, 2000);
 
         // Wait for detail panel
@@ -566,21 +568,19 @@ async function scrapeGoogleMaps(msg: StartMessage): Promise<void> {
           await page.waitForSelector('h1[class*="fontHeadline"]', {
             timeout: 10000,
           });
-          console.log(`[DEBUG] Detail panel h1.fontHeadline found`);
+          log.info(`[DEBUG] Detail panel h1.fontHeadline found`);
         } catch {
           // Fallback: wait for any h1
-          console.log(
-            `[DEBUG] h1.fontHeadline not found, trying fallback h1...`
-          );
+          log.info(`[DEBUG] h1.fontHeadline not found, trying fallback h1...`);
           await page.waitForSelector("h1", { timeout: 5000 });
-          console.log(`[DEBUG] Fallback h1 found`);
+          log.info(`[DEBUG] Fallback h1 found`);
         }
 
         await randomDelay(500, 1000);
 
         // Extract business data
         const business = await extractBusinessData(page);
-        console.log(
+        log.info(
           `[DEBUG] Extracted: name="${business.name}", phone="${
             business.phone ?? "N/A"
           }", website="${business.website ?? "N/A"}"`
@@ -590,12 +590,12 @@ async function scrapeGoogleMaps(msg: StartMessage): Promise<void> {
         }
 
         // Go back to results list
-        console.log(`[DEBUG] Navigating back to results list...`);
+        log.info(`[DEBUG] Navigating back to results list...`);
         await page
           .goBack({ waitUntil: "domcontentloaded", timeout: 10000 })
           .catch(async () => {
             // If goBack fails, re-navigate
-            console.log(`[DEBUG] goBack failed, re-navigating to searchUrl`);
+            log.info(`[DEBUG] goBack failed, re-navigating to searchUrl`);
             await safeGoto(page, searchUrl, {
               timeout: 30000,
               waitUntil: "domcontentloaded",
@@ -606,15 +606,15 @@ async function scrapeGoogleMaps(msg: StartMessage): Promise<void> {
         // Wait for results list again (feed or cards)
         await waitForMapsResultsReady(page, {
           timeoutMs: 15_000,
-          log: (m) => console.log(`[DEBUG] ${m}`),
+          log: (m) => log.info(`[DEBUG] ${m}`),
         }).catch(() => {
-          console.log(`[DEBUG] Results UI did not re-appear after goBack`);
+          log.info(`[DEBUG] Results UI did not re-appear after goBack`);
         });
-        console.log(
+        log.info(
           `[DEBUG] Back on results page, collectedCards so far: ${collectedCards.length}`
         );
       } catch (err) {
-        console.error(
+        log.error(
           `[DEBUG] Error extracting card ${i + 1}:`,
           err instanceof Error ? err.message : err
         );
@@ -629,7 +629,7 @@ async function scrapeGoogleMaps(msg: StartMessage): Promise<void> {
       }
     }
 
-    console.log(
+    log.info(
       `[DEBUG] Extraction complete. collectedCards=${collectedCards.length}, deduplicating...`
     );
 
@@ -816,8 +816,16 @@ function buildSummary(
 // Message handler
 // ---------------------------------------------------------------------------
 
-process.on("message", (msg: WorkerMessage) => {
-  logWorkerEvent(`message type=${msg.type} requestId=${msg.requestId}`);
+process.on("message", (raw: unknown) => {
+  const validation = parseWorkerMessage<GoogleMapsWorkerInbound>(
+    raw,
+    googleMapsWorkerInboundSchema()
+  );
+  if (!validation.success) {
+    log.warn("[GoogleMapsWorker] dropped malformed message:", validation.error);
+    return;
+  }
+  const msg = validation.data as unknown as WorkerMessage;
   if (msg.type === "start") {
     scrapeGoogleMaps(msg).catch((err) => {
       logWorkerEvent(`scrape failed requestId=${msg.requestId}`, err);
@@ -838,7 +846,7 @@ process.on("message", (msg: WorkerMessage) => {
       browser
         .close()
         .catch((err: unknown) => {
-          console.error(
+          log.error(
             "[GoogleMapsWorker] Error closing browser during cancel:",
             err
           );

@@ -1,4 +1,5 @@
 import { ipcMain } from "electron";
+import { log } from "@/modules/Logger";
 import { Token } from "@/modules/token";
 import { USER_AI_ENABLED } from "@/config/usersetting";
 import { AIWorkspaceMemoryService } from "@/service/AIWorkspaceMemoryService";
@@ -56,7 +57,7 @@ async function isManualMemoryEnabled(): Promise<boolean> {
     );
     return v !== "false";
   } catch (err) {
-    console.error(
+    log.error(
       "[workspace-memory] failed to read manual-memory toggle:",
       err
     );

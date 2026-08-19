@@ -17,7 +17,7 @@ import {
   BuckemailTaskStartInput,
   mapBuckemailTaskStartInputToEntity,
 } from "@/entityTypes/emailmarketingType";
-import { BuckEmailType } from "@/model/buckEmailTaskdb";
+import { BuckEmailType } from "@/entityTypes/buckEmail-type";
 import { ItemSearchparam } from "@/entityTypes/commonType";
 import { CommonResponse } from "@/entityTypes/commonType";
 import {
@@ -25,7 +25,7 @@ import {
   BuckEmailTasklogQueryType,
   EmailMarketingSendLogListDisplay,
 } from "@/entityTypes/buckemailType";
-import { EmailMarketingSendLogEntity } from "@/model/emailMarketingSendLogdb";
+import { EmailMarketingSendLogEntity } from "@/entityTypes/emailMarketingSendLog-type";
 import { registerValidatedHandler } from "@/main-process/communication/_shared/registerValidatedHandler";
 import {
   buckEmailTaskListInputSchema,

@@ -1,4 +1,5 @@
 import { BaseModule } from "@/modules/baseModule";
+import { log } from "@/modules/Logger";
 import {
   AIUserMemoryModel,
   AIUserMemoryCreateFields,
@@ -130,7 +131,7 @@ export class AIUserMemoryModule extends BaseModule {
     try {
       await this.memoryModel.markUsed(memoryIds, usedAt);
     } catch (err) {
-      console.error("[ai-memory] markMemoriesUsed failed:", err);
+      log.error("[ai-memory] markMemoriesUsed failed:", err);
     }
   }
 

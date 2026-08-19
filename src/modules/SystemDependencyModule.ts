@@ -6,6 +6,7 @@
  */
 
 import { BaseModule } from "./baseModule";
+import { log } from "@/modules/Logger";
 import { SystemDependencyResolver } from "@/service/SystemDependencyResolver";
 import {
   SystemDependencyCatalog,
@@ -83,7 +84,7 @@ export class SystemDependencyModule extends BaseModule {
           stderr: null,
         })
         .catch((err: unknown) => {
-          console.error("Failed to write resolve audit log:", err);
+          log.error("Failed to write resolve audit log:", err);
         });
     }
 

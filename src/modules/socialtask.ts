@@ -14,7 +14,8 @@ import {
   SocialTaskRunEntity,
 } from "@/entityTypes/socialtask-type";
 import { utilityProcess, MessageChannelMain, app } from "electron";
-import * as path from "path";
+import { log } from "@/modules/Logger";
+import * as path from 'path';
 // import { spawn } from 'node:child_process';
 import * as fs from "fs";
 import { HttpClient } from "@/modules/lib/httpclient";

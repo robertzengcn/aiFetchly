@@ -199,7 +199,7 @@ export class UnitAndIntegrationTestSuite {
         
         // Test service methods
         const methods = Object.getOwnPropertyNames(Object.getPrototypeOf(this.taskExecutorService))
-            .filter(name => typeof this.taskExecutorService[name] === 'function' && name !== 'constructor');
+            .filter(name => typeof (this.taskExecutorService as unknown as Record<string, unknown>)[name] === 'function' && name !== 'constructor');
 
         return {
             isInitialized,

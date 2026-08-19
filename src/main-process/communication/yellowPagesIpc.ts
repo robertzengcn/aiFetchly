@@ -1,3 +1,4 @@
+import { log } from "@/modules/Logger";
 import {
   YELLOW_PAGES_CREATE,
   YELLOW_PAGES_UPDATE,
@@ -47,7 +48,7 @@ import {
  * status + data.
  */
 export function registerYellowPagesIpcHandlers(): void {
-  console.log("Yellow Pages IPC handlers registered");
+  log.info("Yellow Pages IPC handlers registered");
   const ctrl = (): YellowPagesController => YellowPagesController.getInstance();
 
   // ── Task CRUD ────────────────────────────────────────────────────────

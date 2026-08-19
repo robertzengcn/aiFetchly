@@ -1,6 +1,9 @@
-import { ipcMain, BrowserWindow, dialog } from "electron";
+import { BrowserWindow } from "electron";
+import { z } from "zod";
+import { lazySchema } from "@/utils/lazySchema";
 import { Token } from "@/modules/token";
 import { USER_AI_ENABLED } from "@/config/usersetting";
+import { getNativeDialogService } from "@/service/dialogs/NativeDialogServiceProvider";
 import {
   AI_WORKSPACE_SET,
   AI_WORKSPACE_GET,
@@ -10,28 +13,20 @@ import {
   DIALOG_PICK_FOLDER,
 } from "@/config/channellist";
 import { WorkspaceModule } from "@/modules/WorkspaceModule";
-import type { CommonMessage } from "@/entityTypes/commonType";
+import { registerAiValidatedHandler } from "@/main-process/communication/_shared/registerValidatedHandler";
+import { byIdInputSchema, noInputSchema } from "@/schemas/ipc/_shared/common";
 
-function ok<T>(data: T): CommonMessage<T> {
-  return { status: true, msg: "", data };
-}
-
-function denied<T>(msg: string): CommonMessage<T> {
-  return { status: false, msg, data: undefined };
-}
-
-function isAIEnabled(): boolean {
-  return new Token().getValue(USER_AI_ENABLED) === "true";
-}
-
-function safeParse<T = unknown>(data: unknown): T | null {
-  if (typeof data !== "string" || data.length === 0) return null;
-  try {
-    return JSON.parse(data) as T;
-  } catch {
-    return null;
-  }
-}
+// WS-1 R1.5: input schemas (replacing the manual safeParse + typeof checks).
+const workspaceSetSchema = lazySchema(() =>
+  z.strictObject({
+    conversationId: z.string(),
+    rootPath: z.string(),
+    label: z.string().optional(),
+  })
+);
+const conversationIdSchema = lazySchema(() =>
+  z.strictObject({ conversationId: z.string() })
+);
 
 /**
  * Test-only: reset module cache so the next handler call builds a fresh
@@ -42,157 +37,49 @@ export function _resetAIWorkspaceSingletonsForTesting(): void {
 }
 
 export function registerAIWorkspaceIpcHandlers(_win: BrowserWindow): void {
-  ipcMain.handle(
-    AI_WORKSPACE_SET,
-    async (_e, data: unknown): Promise<CommonMessage<unknown>> => {
-      if (!isAIEnabled()) {
-        return denied("AI functionality is only available to subscribers.");
-      }
-      try {
-        const payload = safeParse<Record<string, unknown>>(data);
-        if (!payload) {
-          return denied("Invalid workspace payload.");
-        }
-        if (
-          typeof payload.conversationId !== "string" ||
-          typeof payload.rootPath !== "string"
-        ) {
-          return denied("conversationId and rootPath are required strings.");
-        }
-        const module = new WorkspaceModule();
-        const record = await module.setWorkspace({
-          conversationId: payload.conversationId,
-          rootPath: payload.rootPath,
-          label: typeof payload.label === "string" ? payload.label : null,
-        });
-        return ok(record);
-      } catch (err) {
-        return denied(
-          err instanceof Error ? err.message : "Failed to set workspace."
-        );
-      }
-    }
-  );
+  // All handlers are AI-gated + Zod-validated via registerAiValidatedHandler,
+  // which also emits the {status,msg,data} envelope and converts thrown errors
+  // to {status:false,msg}. The renderer reads result.status / result.data —
+  // unchanged from the previous ok()/denied() shape.
 
-  ipcMain.handle(
-    AI_WORKSPACE_GET,
-    async (_e, data: unknown): Promise<CommonMessage<unknown>> => {
-      if (!isAIEnabled()) {
-        return denied("AI functionality is only available to subscribers.");
-      }
-      try {
-        const payload = safeParse<{ conversationId?: unknown }>(data);
-        if (!payload || typeof payload.conversationId !== "string") {
-          return denied("conversationId must be a string.");
-        }
-        const module = new WorkspaceModule();
-        const record = await module.getActiveWorkspace(payload.conversationId);
-        return ok(record);
-      } catch (err) {
-        return denied(
-          err instanceof Error ? err.message : "Failed to get workspace."
-        );
-      }
-    }
-  );
+  registerAiValidatedHandler(AI_WORKSPACE_SET, workspaceSetSchema, async (payload) => {
+    const module = new WorkspaceModule();
+    return await module.setWorkspace({
+      conversationId: payload.conversationId,
+      rootPath: payload.rootPath,
+      label: payload.label ?? null,
+    });
+  });
 
-  ipcMain.handle(
-    AI_WORKSPACE_APPROVE,
-    async (_e, data: unknown): Promise<CommonMessage<unknown>> => {
-      if (!isAIEnabled()) {
-        return denied("AI functionality is only available to subscribers.");
-      }
-      try {
-        const payload = safeParse<{ id?: unknown }>(data);
-        if (
-          !payload ||
-          typeof payload.id !== "number" ||
-          !Number.isFinite(payload.id)
-        ) {
-          return denied("workspace id must be a number.");
-        }
-        const module = new WorkspaceModule();
-        const record = await module.approveWorkspace(payload.id);
-        return ok(record);
-      } catch (err) {
-        return denied(
-          err instanceof Error ? err.message : "Failed to approve workspace."
-        );
-      }
-    }
-  );
+  registerAiValidatedHandler(AI_WORKSPACE_GET, conversationIdSchema, async (payload) => {
+    const module = new WorkspaceModule();
+    return await module.getActiveWorkspace(payload.conversationId);
+  });
 
-  ipcMain.handle(
-    AI_WORKSPACE_REVOKE,
-    async (_e, data: unknown): Promise<CommonMessage<unknown>> => {
-      if (!isAIEnabled()) {
-        return denied("AI functionality is only available to subscribers.");
-      }
-      try {
-        const payload = safeParse<{ id?: unknown }>(data);
-        if (
-          !payload ||
-          typeof payload.id !== "number" ||
-          !Number.isFinite(payload.id)
-        ) {
-          return denied("workspace id must be a number.");
-        }
-        const module = new WorkspaceModule();
-        const record = await module.revokeWorkspace(payload.id);
-        return ok(record);
-      } catch (err) {
-        return denied(
-          err instanceof Error ? err.message : "Failed to revoke workspace."
-        );
-      }
-    }
-  );
+  registerAiValidatedHandler(AI_WORKSPACE_APPROVE, byIdInputSchema, async (payload) => {
+    const module = new WorkspaceModule();
+    return await module.approveWorkspace(payload.id);
+  });
 
-  ipcMain.handle(
-    AI_WORKSPACE_LIST,
-    async (_e, data: unknown): Promise<CommonMessage<unknown>> => {
-      if (!isAIEnabled()) {
-        return denied("AI functionality is only available to subscribers.");
-      }
-      try {
-        const payload = safeParse<{ conversationId?: unknown }>(data);
-        if (!payload || typeof payload.conversationId !== "string") {
-          return denied("conversationId must be a string.");
-        }
-        const module = new WorkspaceModule();
-        const list = await module.listWorkspaces(payload.conversationId);
-        return ok(list);
-      } catch (err) {
-        return denied(
-          err instanceof Error ? err.message : "Failed to list workspaces."
-        );
-      }
-    }
-  );
+  registerAiValidatedHandler(AI_WORKSPACE_REVOKE, byIdInputSchema, async (payload) => {
+    const module = new WorkspaceModule();
+    return await module.revokeWorkspace(payload.id);
+  });
 
-  // Folder picker dialog - returns selected folder path or null if cancelled.
-  // Gated on AI enablement per CLAUDE.md mandate for AI-serving IPC handlers.
-  ipcMain.handle(
-    DIALOG_PICK_FOLDER,
-    async (): Promise<CommonMessage<string | null>> => {
-      if (!isAIEnabled()) {
-        return denied("AI functionality is only available to subscribers.");
-      }
-      try {
-        const result = await dialog.showOpenDialog(_win, {
-          properties: ["openDirectory"],
-        });
-        if (result.canceled || result.filePaths.length === 0) {
-          return ok(null);
-        }
-        return ok(result.filePaths[0]);
-      } catch (err) {
-        return denied(
-          err instanceof Error
-            ? err.message
-            : "Failed to pick workspace folder."
-        );
-      }
+  registerAiValidatedHandler(AI_WORKSPACE_LIST, conversationIdSchema, async (payload) => {
+    const module = new WorkspaceModule();
+    return await module.listWorkspaces(payload.conversationId);
+  });
+
+  // Folder picker dialog. Gated on AI enablement per CLAUDE.md.
+  registerAiValidatedHandler(DIALOG_PICK_FOLDER, noInputSchema, async () => {
+    const dialogService = await getNativeDialogService();
+    const result = await dialogService.showOpenDialog({
+      properties: ["openDirectory"],
+    });
+    if (result.canceled || result.filePaths.length === 0) {
+      return null;
     }
-  );
+    return result.filePaths[0];
+  });
 }

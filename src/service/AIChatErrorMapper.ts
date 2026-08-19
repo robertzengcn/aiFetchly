@@ -1,3 +1,4 @@
+import { log } from "@/modules/Logger";
 // src/service/AIChatErrorMapper.ts
 
 import { AIProviderError } from "./aiProvider/AIProviderError";
@@ -194,7 +195,7 @@ export function userSafeError(err: unknown): string {
     if (isTransientRetryableError(err)) {
       return "The AI service is busy or had a transient issue. Please try again in a moment.";
     }
-    console.error(
+    log.error(
       `[ai-chat-v2] unmapped error: ${msg} — ${describeErrorDetail(err)}`
     );
     return "An unexpected error occurred. Please try again.";

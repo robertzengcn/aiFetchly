@@ -82,6 +82,8 @@ vi.mock("@/views/api/aiChatV2", () => ({
   getChatV2ToolApprovalMode: vi.fn().mockResolvedValue("ask_for_approval"),
   setChatV2ToolApprovalMode: vi.fn(),
   clearChatV2Conversation: vi.fn(),
+  subscribeAutoCompacted: vi.fn(),
+  unsubscribeAutoCompacted: vi.fn(),
 }));
 
 vi.mock("@/views/api/aiChat", () => ({

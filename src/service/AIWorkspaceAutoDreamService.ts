@@ -1,4 +1,5 @@
 import { AIWorkspaceMemoryModule } from "@/modules/AIWorkspaceMemoryModule";
+import { log } from "@/modules/Logger";
 import type { WorkspaceMemoryScope } from "@/modules/AIWorkspaceMemoryModule";
 import { AIWorkspaceMemoryConsolidationRunModule } from "@/modules/AIWorkspaceMemoryConsolidationRunModule";
 import {
@@ -70,7 +71,7 @@ export class AIWorkspaceAutoDreamService {
     try {
       await this.maybeRun({ reason: input.reason });
     } catch (err) {
-      console.error("[workspace-auto-dream] chat trigger failed:", err);
+      log.error("[workspace-auto-dream] chat trigger failed:", err);
     }
   }
 
@@ -81,7 +82,7 @@ export class AIWorkspaceAutoDreamService {
     try {
       await this.maybeRun({ reason: input.reason });
     } catch (err) {
-      console.error("[workspace-auto-dream] agent trigger failed:", err);
+      log.error("[workspace-auto-dream] agent trigger failed:", err);
     }
   }
 
@@ -303,7 +304,7 @@ export class AIWorkspaceAutoDreamService {
       return await this.runModule.getByRunId(runView.runId);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      console.error("[workspace-auto-dream] consolidation failed:", err);
+      log.error("[workspace-auto-dream] consolidation failed:", err);
       try {
         await this.runModule.failRun(runView.runId, message);
       } catch {

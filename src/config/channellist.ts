@@ -84,6 +84,15 @@ export const EMAIL_REPLY_DRAFT_CREATE = "email:reply:draft:create";
 export const EMAIL_REPLY_DRAFT_DETAIL = "email:reply:draft:detail";
 export const EMAIL_REPLY_DRAFT_UPDATE = "email:reply:draft:update";
 export const EMAIL_REPLY_SEND = "email:reply:send";
+// Thread-aware reply reliability (Milestone 1): approval + send-safety.
+export const EMAIL_REPLY_DRAFT_APPROVE = "email:reply:draft:approve";
+export const EMAIL_REPLY_SEND_ATTEMPT_DETAIL =
+  "email:reply:send:attempt:detail";
+export const EMAIL_REPLY_DELIVERY_RECONCILE = "email:reply:delivery:reconcile";
+export const EMAIL_REPLY_KNOWLEDGE_SCOPE_GET =
+  "email:reply:knowledge:scope:get";
+export const EMAIL_REPLY_KNOWLEDGE_SCOPE_UPDATE =
+  "email:reply:knowledge:scope:update";
 export const EMAIL_AUTO_REPLY_AUDIT_LIST = "email:autoreply:audit:list";
 export const EMAIL_AUTO_REPLY_AUDIT_DETAIL = "email:autoreply:audit:detail";
 export const SOCIALACCOUNTlIST = "socialaccount:list";
@@ -354,6 +363,9 @@ export const AI_CHAT_V2_CONVERSATION_UPDATED =
   "ai-chat-v2:conversation-updated";
 /** Main->renderer live scheduled-turn token stream (technical-design §13.2). */
 export const AI_CHAT_V2_SCHEDULED_STREAM = "ai-chat-v2:scheduled-stream";
+/** Main->renderer broadcast after an automatic full compact so the renderer
+ * drops the context badge immediately (mirrors the manual compact flow). */
+export const AI_CHAT_V2_AUTO_COMPACTED = "ai-chat-v2:auto-compacted";
 
 // ==================== AiChatV2 Local Voice Channels ====================
 // Local sherpa-onnx STT/TTS for AiChatV2. See

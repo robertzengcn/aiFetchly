@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import minimatch from "minimatch";
+import { minimatch } from "minimatch";
 import { describe, expect, it } from "vitest";
 
 interface ForgeConfigForTest {

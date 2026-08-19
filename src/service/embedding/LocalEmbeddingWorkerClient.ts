@@ -1,5 +1,6 @@
 "use strict";
 import { utilityProcess } from "electron";
+import { log } from "@/modules/Logger";
 import * as fs from "fs";
 import * as path from "path";
 import { v4 as uuidv4 } from "uuid";
@@ -249,7 +250,7 @@ export class LocalEmbeddingWorkerClient {
         this.workerProcess.kill();
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        console.warn(
+        log.warn(
           `[LocalEmbeddingWorkerClient] Failed to kill worker: ${message}`
         );
       }

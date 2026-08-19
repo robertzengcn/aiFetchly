@@ -24,6 +24,8 @@ interface VerifierModule {
   ) => VerificationResult;
 }
 
+// The verifier is a CommonJS script executed directly by Node during packaging.
+// eslint-disable-next-line @typescript-eslint/no-var-requires
 const verifier = require("../../scripts/verify-mac-store-app.js") as VerifierModule;
 
 const MAIN_ENTITLEMENTS = {
@@ -79,11 +81,9 @@ function createDependencies(options?: {
       }
       if (command === "codesign") {
         const targetPath = args.at(-1) ?? "";
-        return plist.build(
-          targetPath.includes(" Helper.app")
-            ? childEntitlements
-            : mainEntitlements
-        );
+        const entitlements: Record<string, unknown> =
+          targetPath.includes(" Helper.app") ? childEntitlements : mainEntitlements;
+        return plist.build(entitlements as Parameters<typeof plist.build>[0]);
       }
       throw new Error(`Unexpected command: ${command}`);
     },

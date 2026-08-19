@@ -1,4 +1,5 @@
 import { utilityProcess } from "electron";
+import { log } from "@/modules/Logger";
 import type { UtilityProcess } from "electron";
 import * as fs from "fs";
 import * as path from "path";
@@ -70,7 +71,7 @@ export class PythonRuntimeWorkerClient {
         this.workerProcess.kill();
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        console.warn(
+        log.warn(
           `[PythonRuntimeWorkerClient] Failed to kill worker: ${message}`
         );
       }
@@ -91,7 +92,7 @@ export class PythonRuntimeWorkerClient {
 
     const requestId = `py-runtime-${uuidv4()}-${Date.now()}`;
     const scriptLabel = path.basename(scriptPath);
-    console.log(
+    log.info(
       `[PythonRuntimeWorkerClient] Dispatching request ${requestId} to utility process for script=${scriptLabel}`
     );
 
@@ -163,7 +164,7 @@ export class PythonRuntimeWorkerClient {
 
   private async startWorker(): Promise<UtilityProcess> {
     const resolvedPath = this.resolveWorkerPath();
-    console.log(
+    log.info(
       `[PythonRuntimeWorkerClient] Starting utility process worker from ${resolvedPath}`
     );
     const worker = utilityProcess.fork(resolvedPath, [], {
@@ -175,7 +176,7 @@ export class PythonRuntimeWorkerClient {
     this.startupPromise = null;
     const pidInfo =
       typeof worker.pid === "number" ? String(worker.pid) : "unknown";
-    console.log(
+    log.info(
       `[PythonRuntimeWorkerClient] Utility process worker started (pid=${pidInfo})`
     );
     worker.on("message", (rawMessage: unknown) => {
@@ -239,14 +240,14 @@ export class PythonRuntimeWorkerClient {
     this.pendingRequests.delete(message.requestId);
 
     if (message.type === "PYTHON_RESULT") {
-      console.log(
+      log.info(
         `[PythonRuntimeWorkerClient] Request ${message.requestId} completed by utility process`
       );
       pending.resolve(message);
       return;
     }
     if (message.type === "PYTHON_ERROR") {
-      console.warn(
+      log.warn(
         `[PythonRuntimeWorkerClient] Request ${message.requestId} failed in utility process: ${message.error}`
       );
       pending.reject(new Error(message.error));

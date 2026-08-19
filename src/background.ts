@@ -72,6 +72,7 @@ import {
   initializeWebSocketConnection,
   cleanupWebSocketConnection,
 } from "@/main-process/communication/websocket-ipc";
+import { cleanupContactExtractionWorker } from "@/main-process/communication/contactExtraction-ipc";
 import { TokenRefreshService } from "@/modules/tokenRefresh";
 import { getDefaultToolJobRegistry } from "@/service/ToolJobRegistry";
 import {
@@ -83,6 +84,7 @@ import {
   urlContainsTokenParams as deepLinkUrlContainsTokenParams,
   isValidDeepLinkOrigin as deepLinkIsValidDeepLinkOrigin,
 } from "@/modules/deepLinkSecurity";
+import { createNavigationGuardHandler } from "@/main-process/security/navigationGuard";
 import {
   AI_CHAT_GENERATED_IMAGE_PROTOCOL,
   resolveGeneratedImageProtocolPath,
@@ -99,6 +101,7 @@ import {
   loadHtmlFileWithUrlFallback,
 } from "@/utils/loadHtmlFileWithUrlFallback";
 import { resolveSecondInstanceWindowAction } from "@/utils/mainWindowSecondInstance";
+import { resolveAppStartupPolicy } from "@/main-process/startup/AppStartupPolicy";
 
 let chatScheduledBackgroundScheduler: BackgroundScheduler | null = null;
 // import { RAGIpcHandlers } from '@/main-process/ragIpcHandlers';
@@ -106,6 +109,16 @@ let chatScheduledBackgroundScheduler: BackgroundScheduler | null = null;
 const isDevelopment = process.env.NODE_ENV !== "production";
 declare const MAIN_WINDOW_VITE_DEV_SERVER_URL: string;
 declare const MAIN_WINDOW_VITE_NAME: string;
+
+// Startup side-effect policy (design §7). E2E mode (AIFETCHLY_E2E=1) disables
+// external side effects (protocol registration, single-instance lock, updater,
+// DevTools, schedulers, orphaned-task inspection, marketing WebSocket, token
+// refresh, dev browser bridge, global config scan). Production and normal dev
+// behavior is unchanged (every flag true).
+const startupPolicy = resolveAppStartupPolicy(
+  process.env,
+  Boolean((app as { isPackaged?: boolean }).isPackaged)
+);
 // import { safeStorage } from 'electron';
 
 if (!app.isReady()) {
@@ -439,33 +452,39 @@ function initialize() {
   //   { scheme: appName, privileges: { secure: true,
   //     standard: true } }
   // ])
-  if ((app as any).isPackaged) {
-    if (!(app as any).isDefaultProtocolClient(protocolScheme)) {
-      const registres = (app as any).setAsDefaultProtocolClient(protocolScheme);
-      //console.log('registres:', registres)
-    }
-  } else {
-    console.log("protocolScheme:", protocolScheme);
-    console.log("process.execPath:", process.execPath);
-    console.log(
-      "path.resolve(process.argv[1]):",
-      path.resolve(process.argv[1])
-    );
-    console.log("path:", path.resolve(process.argv[1]));
-    ProtocolRegistry.register(
-      protocolScheme,
-      `"${process.execPath}" "${path.resolve(process.argv[1])}" "$_URL_"`,
-      {
-        override: true,
-        appName: appName,
-        terminal: true,
+  if (startupPolicy.registerProtocol) {
+    if ((app as any).isPackaged) {
+      if (!(app as any).isDefaultProtocolClient(protocolScheme)) {
+        const registres = (app as any).setAsDefaultProtocolClient(
+          protocolScheme
+        );
+        //console.log('registres:', registres)
       }
-    )
-      .then(() => console.log("Successfully registered"))
-      .catch((e) => console.error(e));
-    // app.setAsDefaultProtocolClient(protocolScheme);
+    } else {
+      console.log("protocolScheme:", protocolScheme);
+      console.log("process.execPath:", process.execPath);
+      console.log(
+        "path.resolve(process.argv[1]):",
+        path.resolve(process.argv[1])
+      );
+      console.log("path:", path.resolve(process.argv[1]));
+      ProtocolRegistry.register(
+        protocolScheme,
+        `"${process.execPath}" "${path.resolve(process.argv[1])}" "$_URL_"`,
+        {
+          override: true,
+          appName: appName,
+          terminal: true,
+        }
+      )
+        .then(() => console.log("Successfully registered"))
+        .catch((e) => console.error(e));
+      // app.setAsDefaultProtocolClient(protocolScheme);
+    }
   }
-  makeSingleInstance();
+  if (startupPolicy.acquireSingleInstanceLock) {
+    makeSingleInstance();
+  }
 
   function createHtmlFileLoader(targetWindow: BrowserWindow): HtmlFileLoader {
     const windowWithLoadFile = targetWindow as BrowserWindow & {
@@ -680,6 +699,27 @@ function initialize() {
       // Ensure menu bar is hidden by default + register shortcuts to show/toggle.
       registerMenuBarShortcuts(win);
 
+      // Security: block renderer navigation/redirects to untrusted (external)
+      // origins so the privileged preload is never re-injected on an attacker page.
+      const navGuardTrustedOrigins: string[] = [];
+      if (MAIN_WINDOW_VITE_DEV_SERVER_URL) {
+        try {
+          navGuardTrustedOrigins.push(
+            new URL(MAIN_WINDOW_VITE_DEV_SERVER_URL).origin
+          );
+        } catch {
+          /* malformed dev-server URL — leave untrusted */
+        }
+      }
+      const onWillNavigate = createNavigationGuardHandler({
+        trustedOrigins: navGuardTrustedOrigins,
+        trustedProtocols: ["aifetchly:"],
+      });
+      // `as any` matches the file's pattern — the electron tsconfig mock (aliased
+      // in tsconfig.paths) does not type the EventEmitter `.on`. See WS-7 R7.2.
+      (win as any).webContents.on("will-navigate", onWillNavigate);
+      (win as any).webContents.on("will-redirect", onWillNavigate);
+
       console.log(
         "Window exist, prepare to register communication ipc handlers"
       );
@@ -717,10 +757,12 @@ function initialize() {
 
       // Start the dev browser bridge (dev-only; no-op in production or when
       // disabled). Fire-and-forget so a bridge failure never blocks app startup.
-      void startDevBrowserBridge(win).catch((err: unknown) => {
-        const msg = err instanceof Error ? err.message : String(err);
-        log.error(`[dev-browser] failed to start bridge: ${msg}`);
-      });
+      if (startupPolicy.startDevBrowserBridge) {
+        void startDevBrowserBridge(win).catch((err: unknown) => {
+          const msg = err instanceof Error ? err.message : String(err);
+          log.error(`[dev-browser] failed to start bridge: ${msg}`);
+        });
+      }
 
       // Load persisted skills into runtime registry
       SkillImportService.loadPersistedSkills().catch((err: unknown) => {
@@ -748,9 +790,11 @@ function initialize() {
       if (phase14WatcherManager) {
         phase14ConfigManager.setWorkspaceWatchManager(phase14WatcherManager);
       }
-      phase14ConfigManager.initialize().catch((err: unknown) => {
-        console.warn("[Startup] AIFetchly config scan failed:", err);
-      });
+      if (startupPolicy.scanGlobalExtensions) {
+        phase14ConfigManager.initialize().catch((err: unknown) => {
+          console.warn("[Startup] AIFetchly config scan failed:", err);
+        });
+      }
       //}
     }
 
@@ -765,7 +809,7 @@ function initialize() {
     });
     // In this example, only windows with the `about:blank` url will be created.
     // All other urls will be blocked.
-    (win as any).webContents.setWindowOpenHandler(({ url }) => {
+    (win as any).webContents.setWindowOpenHandler(({ url }: { url: string }) => {
       // F9 fix — only attach the privileged preload bridge to trusted app
       // origins. Untrusted child windows (any external URL, including
       // attacker-controlled pages opened via window.open from a compromised
@@ -812,10 +856,12 @@ function initialize() {
         overrideBrowserWindowOptions: {
           backgroundColor: "black",
           webPreferences: {
-            preload: path.join(__dirname + "/preload.js"),
+            // Harden child windows explicitly (defaults are safe; be explicit
+            // so a future Electron default change cannot regress us).
             contextIsolation: true,
             nodeIntegration: false,
             sandbox: true,
+            preload: path.join(__dirname + "/preload.js"),
           },
         },
       };
@@ -837,7 +883,9 @@ function initialize() {
       // Initialize GitHub Releases auto-updater for packaged desktop builds.
       // The service self-gates on packaging state, platform, and Microsoft
       // Store channel, and is idempotent across repeated window creation.
-      initializeAppUpdates();
+      if (startupPolicy.initializeUpdates) {
+        initializeAppUpdates();
+      }
       // console.log('app://./index.html')
       // createProtocol('app')
       // Load the index.html when not in development.
@@ -972,6 +1020,13 @@ function initialize() {
       console.error("[shutdown] ToolJobRegistry shutdown failed", err);
     }
 
+    // WS-4 R4.5: clean up the contact-extraction worker on app quit
+    try {
+      cleanupContactExtractionWorker();
+    } catch (err) {
+      log.warn("[shutdown] contactExtractionWorker cleanup failed", err);
+    }
+
     // Clear any in-flight desktop auth handoff so the PKCE verifier does
     // not outlive the session.
     try {
@@ -1031,7 +1086,7 @@ function initialize() {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
 
-  (app as any).on("open-url", (event, url) => {
+  (app as any).on("open-url", (event: { preventDefault: () => void }, url: string) => {
     event.preventDefault();
     // Log only that a deep link arrived — never the URL itself, which now
     // carries the authorization code.
@@ -1179,47 +1234,51 @@ function initialize() {
       // }
 
       // Initialize the legacy scheduler and the interval-based Chat V2 scheduler.
-      try {
-        await runafterbootup();
-        const scheduleManager = ScheduleManager.getInstance();
-        await scheduleManager.initializeWithDatabaseStatus();
-        chatScheduledBackgroundScheduler = new BackgroundScheduler(
-          userdataPath
-        );
-        await chatScheduledBackgroundScheduler.start();
-        log.info("Schedulers initialized with auto-start functionality");
-      } catch (error) {
-        log.error("Failed to initialize schedulers:", error);
+      if (startupPolicy.startSchedulers) {
+        try {
+          await runafterbootup();
+          const scheduleManager = ScheduleManager.getInstance();
+          await scheduleManager.initializeWithDatabaseStatus();
+          chatScheduledBackgroundScheduler = new BackgroundScheduler(
+            userdataPath
+          );
+          await chatScheduledBackgroundScheduler.start();
+          log.info("Schedulers initialized with auto-start functionality");
+        } catch (error) {
+          log.error("Failed to initialize schedulers:", error);
+        }
       }
 
       // Check for orphaned Yellow Pages processes on startup
-      try {
-        const yellowPagesCtrl = YellowPagesController.getInstance();
+      if (startupPolicy.inspectOrphanedTasks) {
+        try {
+          const yellowPagesCtrl = YellowPagesController.getInstance();
 
-        // Handle tasks from previous session first
-        const previousSessionCount =
-          await yellowPagesCtrl.handleTasksFromPreviousSession();
-        log.info(
-          `Yellow Pages previous session tasks handled: ${previousSessionCount} tasks marked as failed`
-        );
+          // Handle tasks from previous session first
+          const previousSessionCount =
+            await yellowPagesCtrl.handleTasksFromPreviousSession();
+          log.info(
+            `Yellow Pages previous session tasks handled: ${previousSessionCount} tasks marked as failed`
+          );
 
-        // Then check for orphaned processes
-        const orphanedCheckResult =
-          await yellowPagesCtrl.checkForOrphanedProcesses();
-        log.info(
-          "Yellow Pages orphaned process check completed:",
-          orphanedCheckResult
-        );
-      } catch (error) {
-        log.error(
-          "Failed to check for orphaned Yellow Pages processes:",
-          error
-        );
+          // Then check for orphaned processes
+          const orphanedCheckResult =
+            await yellowPagesCtrl.checkForOrphanedProcesses();
+          log.info(
+            "Yellow Pages orphaned process check completed:",
+            orphanedCheckResult
+          );
+        } catch (error) {
+          log.error(
+            "Failed to check for orphaned Yellow Pages processes:",
+            error
+          );
+        }
       }
 
       // Initialize WebSocket connection to marketing server
       // This enables real-time notifications and updates
-      if (win) {
+      if (startupPolicy.connectMarketingWebSocket && win) {
         try {
           await initializeWebSocketConnection(win);
           log.info("WebSocket connection to marketing server initialized");
@@ -1229,12 +1288,19 @@ function initialize() {
       }
 
       // Start background token auto-refresh for already-logged-in user (only if not already running)
-      if (!TokenRefreshService.isAutoRefreshRunning()) {
+      if (
+        startupPolicy.startTokenRefresh &&
+        !TokenRefreshService.isAutoRefreshRunning()
+      ) {
         TokenRefreshService.startAutoRefresh();
       }
     }
 
-    if (isDevelopment && !process.env.IS_TEST) {
+    if (
+      isDevelopment &&
+      !process.env.IS_TEST &&
+      startupPolicy.installDevTools
+    ) {
       // Install Vue Devtools (route Session.* through session.extensions)
       try {
         patchSessionExtensionsApi(session.defaultSession);
@@ -1286,7 +1352,12 @@ function configureContentSecurityPolicy() {
     "openExternal",
   ]);
   defaultSession.setPermissionRequestHandler(
-    (_wc, permission, callback, details) => {
+    (
+      _wc: unknown,
+      permission: string,
+      callback: (permissionGranted: boolean) => void,
+      details: { mediaTypes?: string[] } | undefined
+    ) => {
       if (permission === "media") {
         const wantsVideo =
           (
@@ -1303,7 +1374,7 @@ function configureContentSecurityPolicy() {
   // script/connect policy; production keeps those restrictive.
   const cspDirectives = buildAppContentSecurityPolicy(isDevelopment);
 
-  defaultSession.webRequest.onHeadersReceived((details, callback) => {
+  defaultSession.webRequest.onHeadersReceived((details: { responseHeaders?: Record<string, string[]> }, callback: (response: { responseHeaders: Record<string, string[]> }) => void) => {
     callback({
       responseHeaders: {
         ...details.responseHeaders,
@@ -1330,7 +1401,7 @@ function makeSingleInstance(): void {
   } else {
     // console.log('gotThelock:', gotThelock)
 
-    (app as any).on("second-instance", (event, argv, workingDirectory) => {
+    (app as any).on("second-instance", (event: unknown, argv: string[], workingDirectory: string) => {
       try {
         if (onSecondInstanceActivate) {
           onSecondInstanceActivate();

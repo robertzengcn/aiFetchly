@@ -11,6 +11,7 @@ import { RefreshTokenInvalidError } from "@/modules/tokenRefresh";
 import { resolveViteLoginBase } from "@/config/viteLoginUrl";
 import { assertFirstPartyHubUrl } from "@/config/pluginHubUrl";
 import { userSecretKeyService } from "@/modules/fieldCipher";
+import { log } from "@/modules/Logger";
 
 /**
  * Decide whether a refresh failure is auth-shaped versus a transient/network
@@ -45,7 +46,7 @@ function isRefreshTokenInvalidError(error: unknown): boolean {
 //   data?: any,
 // }
 export class HttpClient {
-  private _headers: HeadersInit = {};
+  private _headers: Record<string, string> = {};
   private baseUrl: string;
   private _isWorker = false;
   constructor() {
@@ -61,9 +62,7 @@ export class HttpClient {
     try {
       new URL(loginUrl);
     } catch (error) {
-      console.warn(
-        `Invalid VITE_LOGIN_URL: ${loginUrl}, falling back to default`
-      );
+      log.warn(`Invalid VITE_LOGIN_URL: ${loginUrl}, falling back to default`);
       loginUrl = "http://localhost:3000";
     }
 
@@ -93,7 +92,7 @@ export class HttpClient {
     const { Token } = await import("@/modules/token");
     const tokenModel = new Token();
     const tokenval = tokenModel.getValue(TOKENNAME);
-    //console.log("prepare to set token:"+tokenval)
+    //log.info("prepare to set token:"+tokenval)
     if (tokenval) {
       //config.headers.Authorization = 'Bearer ' + tokenval
       this.setHeader("Authorization", "Bearer " + tokenval);
@@ -132,7 +131,7 @@ export class HttpClient {
     // retried request still hit 401/403, refresh did not help. Fail this
     // request but keep local auth state for offline/local features.
     if (isRetry) {
-      console.warn("Token refresh retry still failed; keeping local session");
+      log.warn("Token refresh retry still failed; keeping local session");
       throw new Error(
         "Authentication failed after token refresh retry (HTTP 401/403)."
       );
@@ -163,7 +162,7 @@ export class HttpClient {
         throw new Error("Token refresh failed");
       }
     } catch (error) {
-      console.error("Token refresh error:", error);
+      log.error("Token refresh error:", error);
 
       // Do not sign out on refresh failure. Auth-shaped failures can be caused
       // by backend/proxy instability; keep local session state and fail only
@@ -201,7 +200,7 @@ export class HttpClient {
     // 401 the same as 403 here — otherwise a genuinely expired access token
     // forces a re-login instead of a transparent refresh (B5 fix).
     if (res.status === 401 || res.status === 403) {
-      console.warn(`Received ${res.status} - Attempting token refresh`);
+      log.warn(`Received ${res.status} - Attempting token refresh`);
       const { Token } = await import("@/modules/token");
       const tokenModel = new Token();
       const refreshToken = tokenModel.getValue(REFRESHTOKEN);
@@ -225,7 +224,7 @@ export class HttpClient {
 
       // Check if refresh token exists
       // (tokenModel/refreshToken loaded for debug logging above)
-      console.log(
+      log.info(
         "[HttpClient] Refresh token check:",
         refreshToken ? `found (length=${refreshToken.length})` : "missing",
         "| endpoint:",
@@ -238,7 +237,7 @@ export class HttpClient {
       } else {
         // No refresh token available. Fail this request but keep local auth
         // state so local features remain usable.
-        console.warn(
+        log.warn(
           "[HttpClient] No refresh token available; keeping local session"
         );
         throw new Error(
@@ -252,25 +251,25 @@ export class HttpClient {
     //   if (options.parseResponse !== false && res.status !== 204)
     //     return res.json();
     const data = await res.json();
-    //console.log(data)
+    //log.info(data)
     return data;
   }
 
-  setHeader(key, value) {
+  setHeader(key: string, value: string) {
     this._headers[key] = value;
     return this;
   }
 
-  getHeader(key) {
+  getHeader(key: string): string | undefined {
     return this._headers[key];
   }
 
-  setBasicAuth(username, password) {
+  setBasicAuth(username: string, password: string) {
     this._headers["Authorization"] = `Basic ${btoa(`${username}:${password}`)}`;
     return this;
   }
 
-  setBearerAuth(token) {
+  setBearerAuth(token: string) {
     this._headers["Authorization"] = `Bearer ${token}`;
     return this;
   }
@@ -346,8 +345,8 @@ export class HttpClient {
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  public async put<T = any>(endpoint: string, data): Promise<T> {
-    console.log(JSON.stringify(data));
+  public async put<T = any>(endpoint: string, data: unknown): Promise<T> {
+    log.info(JSON.stringify(data));
     return (await this._fetchJSON(endpoint, {
       // headers: this._headers,
       body: data ? JSON.stringify(data) : undefined,
@@ -362,7 +361,7 @@ export class HttpClient {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   public async patch<T = any>(
     endpoint: string,
-    operations,
+    operations: unknown,
     options = {}
   ): Promise<T> {
     return (await this._fetchJSON(endpoint, {
@@ -385,7 +384,7 @@ export class HttpClient {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   public async postJson<T = any>(
     endpoint: string,
-    data,
+    data: unknown,
     options = {}
   ): Promise<T> {
     // this.setHeader('Accept', 'application/json')
@@ -405,7 +404,7 @@ export class HttpClient {
   /** Post JSON and return stream response. Callers may pass options.signal (AbortSignal) to abort the request. */
   public async postStream(
     endpoint: string,
-    data,
+    data: unknown,
     options: RequestInit = {},
     isRetry = false
   ): Promise<Response> {
@@ -424,7 +423,7 @@ export class HttpClient {
     // See _fetchJSON: backend returns 401 for invalid/expired tokens, so we
     // must refresh on both (B5 fix).
     if (res.status === 401 || res.status === 403) {
-      console.warn(`Received ${res.status} - Attempting token refresh`);
+      log.warn(`Received ${res.status} - Attempting token refresh`);
 
       // Prevent refresh recursion during signout.
       // postStream isn't used by removeRemoteToken today, but keep behavior consistent.
@@ -445,7 +444,7 @@ export class HttpClient {
       // Prevent infinite refresh loops: already retried once. Fail this request
       // but keep local auth state.
       if (isRetry) {
-        console.warn("Token refresh retry still failed; keeping local session");
+        log.warn("Token refresh retry still failed; keeping local session");
         throw new Error(
           `Authentication failed after token refresh retry (HTTP ${res.status}).`
         );
@@ -480,7 +479,7 @@ export class HttpClient {
             throw new Error("Token refresh failed");
           }
         } catch (error) {
-          console.error("Token refresh error:", error);
+          log.error("Token refresh error:", error);
 
           // Do not sign out on refresh failure. Keep local session state and
           // fail only this stream request.
@@ -494,7 +493,7 @@ export class HttpClient {
       } else {
         // No refresh token available. Fail this request but keep local auth
         // state so local features remain usable.
-        console.warn("No refresh token available; keeping local session");
+        log.warn("No refresh token available; keeping local session");
         throw new Error(
           `Authentication failed: refresh token unavailable (HTTP ${res.status}).`
         );

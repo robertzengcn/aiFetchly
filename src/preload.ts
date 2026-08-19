@@ -59,6 +59,11 @@ import {
   EMAIL_REPLY_DRAFT_DETAIL,
   EMAIL_REPLY_DRAFT_UPDATE,
   EMAIL_REPLY_SEND,
+  EMAIL_REPLY_DRAFT_APPROVE,
+  EMAIL_REPLY_SEND_ATTEMPT_DETAIL,
+  EMAIL_REPLY_DELIVERY_RECONCILE,
+  EMAIL_REPLY_KNOWLEDGE_SCOPE_GET,
+  EMAIL_REPLY_KNOWLEDGE_SCOPE_UPDATE,
   EMAIL_AUTO_REPLY_AUDIT_LIST,
   EMAIL_AUTO_REPLY_AUDIT_DETAIL,
   SOCIALACCOUNTlIST,
@@ -253,6 +258,7 @@ import {
   AI_CHAT_V2_SCHEDULED_LOOP_STOP_RUN,
   AI_CHAT_V2_CONVERSATION_UPDATED,
   AI_CHAT_V2_SCHEDULED_STREAM,
+  AI_CHAT_V2_AUTO_COMPACTED,
   // AI Provider (Local/Custom) Settings Channels
   AI_PROVIDER_SETTINGS_GET,
   AI_PROVIDER_SETTINGS_SAVE,
@@ -463,9 +469,12 @@ import {
 // contextBridge.exposeInMainWorld('electronAPI', {
 //     userLogin: (data) => ipcRenderer.invoke('user:login', data)
 // })
+// IPC payloads must not be logged in production (they may carry tokens/PII).
+const isDev = process.env.NODE_ENV !== "production";
+
 contextBridge.exposeInMainWorld("api", {
   getPathForFile: (file: File) => webUtils.getPathForFile(file),
-  send: (channel, data) => {
+  send: (channel: string, data?: unknown) => {
     // whitelist channels
     const validChannels = [
       "user:Login",
@@ -508,22 +517,22 @@ contextBridge.exposeInMainWorld("api", {
       AI_EMAIL_TEMPLATE_GENERATE_STREAM,
       AI_EMAIL_TEMPLATE_STOP,
     ];
-    console.log("send", channel, data);
+    if (isDev) console.log("send", channel, data);
     if (validChannels.includes(channel)) {
-      console.log("send2", channel, data);
+      if (isDev) console.log("send2", channel, data);
       ipcRenderer.send(channel, data);
     }
   },
-  sendBinary: (channel, data) => {
+  sendBinary: (channel: string, data?: unknown) => {
     // whitelist channels for binary data
     const validChannels = [SAVE_TEMP_FILE];
-    console.log("sendBinary", channel, data);
+    if (isDev) console.log("sendBinary", channel, data);
     if (validChannels.includes(channel)) {
-      console.log("sendBinary2", channel, data);
+      if (isDev) console.log("sendBinary2", channel, data);
       ipcRenderer.send(channel, data);
     }
   },
-  receive: (channel, func) => {
+  receive: (channel: string, func: (...args: unknown[]) => void) => {
     const validChannels = [
       "user:Login",
       "socialtask:start",
@@ -583,6 +592,8 @@ contextBridge.exposeInMainWorld("api", {
       AI_CHAT_V2_CONVERSATION_UPDATED,
       // Live scheduled-turn token stream
       AI_CHAT_V2_SCHEDULED_STREAM,
+      // Auto full-compact broadcast (context badge reset)
+      AI_CHAT_V2_AUTO_COMPACTED,
       // Local AI Runtime install/update progress (main -> renderer)
       LOCAL_AI_RUNTIME_PROGRESS,
     ];
@@ -597,7 +608,7 @@ contextBridge.exposeInMainWorld("api", {
       ipcRenderer.on(channel, wrapped);
     }
   },
-  removeListener: (channel, func) => {
+  removeListener: (channel: string, func: (...args: unknown[]) => void) => {
     // Use same whitelist as receive
     const validChannels = [
       "user:Login",
@@ -658,6 +669,8 @@ contextBridge.exposeInMainWorld("api", {
       AI_CHAT_V2_CONVERSATION_UPDATED,
       // Live scheduled-turn token stream
       AI_CHAT_V2_SCHEDULED_STREAM,
+      // Auto full-compact broadcast (context badge reset)
+      AI_CHAT_V2_AUTO_COMPACTED,
       // Local AI Runtime install/update progress (main -> renderer)
       LOCAL_AI_RUNTIME_PROGRESS,
     ];
@@ -671,7 +684,7 @@ contextBridge.exposeInMainWorld("api", {
       }
     }
   },
-  removeAllListeners: (channel) => {
+  removeAllListeners: (channel: string) => {
     const validChannels = [
       AI_CHAT_STREAM_CHUNK,
       AI_CHAT_STREAM_COMPLETE,
@@ -695,6 +708,8 @@ contextBridge.exposeInMainWorld("api", {
       AI_CHAT_V2_CONVERSATION_UPDATED,
       // Live scheduled-turn token stream
       AI_CHAT_V2_SCHEDULED_STREAM,
+      // Auto full-compact broadcast (context badge reset)
+      AI_CHAT_V2_AUTO_COMPACTED,
       // Local AI Runtime install/update progress (main -> renderer)
       LOCAL_AI_RUNTIME_PROGRESS,
     ];
@@ -702,7 +717,7 @@ contextBridge.exposeInMainWorld("api", {
       ipcRenderer.removeAllListeners(channel);
     }
   },
-  invoke: (channel, data) => {
+  invoke: (channel: string, data?: unknown) => {
     // whitelist channels
     const validChannels = [
       "user:Login",
@@ -777,6 +792,11 @@ contextBridge.exposeInMainWorld("api", {
       EMAIL_REPLY_DRAFT_DETAIL,
       EMAIL_REPLY_DRAFT_UPDATE,
       EMAIL_REPLY_SEND,
+      EMAIL_REPLY_DRAFT_APPROVE,
+      EMAIL_REPLY_SEND_ATTEMPT_DETAIL,
+      EMAIL_REPLY_DELIVERY_RECONCILE,
+      EMAIL_REPLY_KNOWLEDGE_SCOPE_GET,
+      EMAIL_REPLY_KNOWLEDGE_SCOPE_UPDATE,
       EMAIL_AUTO_REPLY_AUDIT_LIST,
       EMAIL_AUTO_REPLY_AUDIT_DETAIL,
       VIDEODOWNLOAD_LIST,
@@ -785,6 +805,13 @@ contextBridge.exposeInMainWorld("api", {
       VIDEODOWNLOAD_DETAIL_QUERY,
       SYSTEM_SETTING_LIST,
       SYSTEM_SETTING_UPDATE,
+      // Session Recording Channels
+      "session-recording:toggle",
+      "session-recording:get-status",
+      "session-recording:get-sessions",
+      "session-recording:export",
+      "session-recording:clear",
+      "session-recording:get-directory",
       QUERY_USER_INFO,
       EMAILSEARCHTASK_ERROR_LOG_DOWNLOAD,
       RETRYSEARCHTASK,

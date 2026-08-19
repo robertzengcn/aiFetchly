@@ -7,6 +7,11 @@ import {
   EMAIL_REPLY_DRAFT_DETAIL,
   EMAIL_REPLY_DRAFT_UPDATE,
   EMAIL_REPLY_SEND,
+  EMAIL_REPLY_DRAFT_APPROVE,
+  EMAIL_REPLY_SEND_ATTEMPT_DETAIL,
+  EMAIL_REPLY_DELIVERY_RECONCILE,
+  EMAIL_REPLY_KNOWLEDGE_SCOPE_GET,
+  EMAIL_REPLY_KNOWLEDGE_SCOPE_UPDATE,
   EMAIL_AUTO_REPLY_AUDIT_LIST,
   EMAIL_AUTO_REPLY_AUDIT_DETAIL,
 } from "@/config/channellist";
@@ -67,7 +72,9 @@ export interface ReplyDraftDetail {
   createdAt: string;
 }
 
-export async function getEmailReplyDraft(id: number): Promise<ReplyDraftDetail> {
+export async function getEmailReplyDraft(
+  id: number
+): Promise<ReplyDraftDetail> {
   return await windowInvoke(EMAIL_REPLY_DRAFT_DETAIL, { id });
 }
 
@@ -83,8 +90,83 @@ export async function updateEmailReplyDraft(input: {
 export async function sendEmailReply(input: {
   draftId: number;
   emailServiceId?: number;
-}): Promise<{ success: boolean; draft_id: number; message_id: number; sent_at: string }> {
+  approvalToken?: string;
+}): Promise<{
+  success: boolean;
+  draft_id: number;
+  message_id: number;
+  sent_at: string;
+}> {
   return await windowInvoke(EMAIL_REPLY_SEND, input);
+}
+
+// ---- Reliability v2: approval + idempotent delivery ----
+
+/** One-time approval token for a draft's current revision. Returned ONCE. */
+export async function approveEmailReplyDraft(draftId: number): Promise<{
+  approvalId: number;
+  token: string;
+  revisionId: number;
+  contentHash: string;
+}> {
+  return await windowInvoke(EMAIL_REPLY_DRAFT_APPROVE, { draftId });
+}
+
+/** Send attempts for a draft (audit / recovery UI). No secrets. */
+export interface ReplySendAttemptDto {
+  id: number;
+  status: string;
+  claimedAt: string | null;
+  completedAt: string | null;
+  providerMessageId: string | null;
+  failureCode: string | null;
+  sanitizedError: string | null;
+}
+
+export async function listEmailReplySendAttempts(
+  draftId: number
+): Promise<{ records: ReplySendAttemptDto[] }> {
+  return await windowInvoke(EMAIL_REPLY_SEND_ATTEMPT_DETAIL, { draftId });
+}
+
+/** Manually sweep stale in-flight attempts to delivery_unknown. */
+export async function reconcileEmailReplyDelivery(
+  ageMs?: number
+): Promise<{ recovered: number; needsAttention: boolean }> {
+  return await windowInvoke(EMAIL_REPLY_DELIVERY_RECONCILE, { ageMs });
+}
+
+// ---- Knowledge scope settings (FR-008) ----
+
+export interface ReplyKnowledgeScopeDto {
+  emailServiceId: number;
+  version: number;
+  documentIds: number[];
+  tags: string[];
+  allowAllDocuments: boolean;
+  excludeInactiveDocuments: boolean;
+}
+
+export async function getReplyKnowledgeScope(
+  emailServiceId: number
+): Promise<ReplyKnowledgeScopeDto> {
+  return await windowInvoke(EMAIL_REPLY_KNOWLEDGE_SCOPE_GET, {
+    emailServiceId,
+  });
+}
+
+/**
+ * Update the mailbox knowledge scope. Changing the scope invalidates every
+ * not-yet-sent draft for the mailbox (they must be re-reviewed/re-approved).
+ */
+export async function updateReplyKnowledgeScope(input: {
+  emailServiceId: number;
+  documentIds: number[];
+  tags: string[];
+  allowAllDocuments: boolean;
+  excludeInactiveDocuments: boolean;
+}): Promise<{ version: number; invalidatedDrafts: number }> {
+  return await windowInvoke(EMAIL_REPLY_KNOWLEDGE_SCOPE_UPDATE, input);
 }
 
 // ---- AI auto-reply audit ----
@@ -109,6 +191,8 @@ export async function listAutoReplyAuditLogs(
   return { data: resp.records, total: resp.num };
 }
 
-export async function getAutoReplyAuditLog(id: number): Promise<AutoReplyAuditDto> {
+export async function getAutoReplyAuditLog(
+  id: number
+): Promise<AutoReplyAuditDto> {
   return await windowInvoke(EMAIL_AUTO_REPLY_AUDIT_DETAIL, { id });
 }

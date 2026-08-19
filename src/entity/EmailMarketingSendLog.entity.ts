@@ -1,27 +1,29 @@
-import { Entity, Column,PrimaryGeneratedColumn } from "typeorm";
+import { Entity, Column,PrimaryGeneratedColumn, Index } from "typeorm";
 import AuditableEntity from "@/entity/Auditable.entity";
 
 @Entity("emailmarketing_send_log")
 export class EmailMarketingSendLogEntity extends AuditableEntity {
     @PrimaryGeneratedColumn()
-      id: number;
+      id!: number;
     @Column("integer")
-    task_id: number;
+    @Index()
+    task_id!: number;
     
     @Column("integer")
-    status: number;
+    @Index()
+    status!: number;
     
     @Column("text", { nullable: true })
-    receiver: string;
+    receiver!: string;
     
     @Column("text", { nullable: true })
-    title: string;
+    title!: string;
     
     @Column("text", { nullable: true })
-    content: string;
+    content!: string;
     @Column("text", { nullable: true })
-    log: string;
+    log!: string;
     
     @Column("text", { nullable: true })
-    record_time: string;
+    record_time!: string;
 }

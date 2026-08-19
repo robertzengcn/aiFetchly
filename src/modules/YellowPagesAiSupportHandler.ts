@@ -1,4 +1,5 @@
 import type { UtilityProcess } from "electron";
+import { log } from "@/modules/Logger";
 import { AiChatApi } from "@/api/aiChatApi";
 import { Token } from "@/modules/token";
 import { USER_AI_ENABLED } from "@/config/usersetting";
@@ -772,7 +773,7 @@ export class YellowPagesAiSupportHandler {
    * Log info message
    */
   private logInfo(message: string): void {
-    console.log(`[AI Support Handler] ${message}`);
+    log.info(`[AI Support Handler] ${message}`);
     if (this.logFile) {
       WriteLog(this.logFile, `[INFO] ${message}`);
     }
@@ -782,7 +783,7 @@ export class YellowPagesAiSupportHandler {
    * Log warning message
    */
   private logWarn(message: string): void {
-    console.warn(`[AI Support Handler] ${message}`);
+    log.warn(`[AI Support Handler] ${message}`);
     if (this.logFile) {
       WriteLog(this.logFile, `[WARN] ${message}`);
     }
@@ -792,7 +793,7 @@ export class YellowPagesAiSupportHandler {
    * Log error message
    */
   private logError(message: string): void {
-    console.error(`[AI Support Handler] ${message}`);
+    log.error(`[AI Support Handler] ${message}`);
     if (this.logFile) {
       WriteLog(this.logFile, `[ERROR] ${message}`);
     }

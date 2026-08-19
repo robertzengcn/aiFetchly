@@ -64,7 +64,6 @@ import type {
   ChatV2ReasoningMetadata,
   ChatV2StreamRequest,
   ChatV2UploadedAttachment,
-  ChatV2AttachmentKind,
   ChatV2AttachmentMetadata,
   ChatV2MessageMetadata,
   ChatV2RuntimeStatus,
@@ -73,7 +72,6 @@ import type { AIChatScheduledTurnContext } from "@/entityTypes/aiChatScheduledLo
 import type {
   OpenAITextContentPart,
   OpenAIImageUrlContentPart,
-  OpenAIMessageContent,
 } from "@/api/aiChatApi";
 import { openAIContentToString } from "@/api/aiChatApi";
 import type { AIChatPlanStateView } from "@/entityTypes/aiChatPlanTypes";
@@ -82,6 +80,7 @@ import type {
   ToolCatalogModeDecision,
   ToolCatalogRuntimeContext,
 } from "@/entityTypes/toolCatalogTypes";
+import { log } from "@/modules/Logger";
 
 function isActivePlanState(plan?: AIChatPlanStateView | null): boolean {
   if (!plan) return false;
@@ -368,7 +367,7 @@ export class AIChatQueryEngine {
         });
       } else {
         // Document was too large or staging failed — skip enrichment
-        console.log(
+        log.info(
           `[ai-chat-v2] document ${file.fileName} not staged — skipping enrichment`
         );
       }
@@ -421,7 +420,7 @@ export class AIChatQueryEngine {
 
     for (const file of files) {
       if (file.sizeBytes > SMALL_DOC_THRESHOLD) {
-        console.log(
+        log.info(
           `[ai-chat-v2] large document ${file.fileName} (${file.sizeBytes}b) — staging skipped`
         );
         continue;
@@ -440,7 +439,7 @@ export class AIChatQueryEngine {
         );
         staged.push(ref);
       } catch (err) {
-        console.error(
+        log.error(
           `[ai-chat-v2] failed to stage document ${file.fileName}:`,
           err
         );
@@ -519,7 +518,7 @@ export class AIChatQueryEngine {
         context,
       });
     } catch (err) {
-      console.warn(
+      log.warn(
         `[tool-catalog] catalog build failed, using standard mode:`,
         err
       );
@@ -748,7 +747,7 @@ export class AIChatQueryEngine {
         : `assistant-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       messages = [...assembled.messages];
     } catch (err) {
-      console.error("[ai-chat-v2] pre-stream error:", err);
+      log.error("[ai-chat-v2] pre-stream error:", err);
       this.clearActiveTurnState(request.conversationId ?? "");
       void redirectToLoginOnAuthExpired(err);
       eventSink.emit({
@@ -1209,7 +1208,7 @@ export class AIChatQueryEngine {
           await this.handleLoopResult(result, module, eventSink);
         })
         .catch((err) => {
-          console.error("[ai-chat-v2] resume loop failed:", err);
+          log.error("[ai-chat-v2] resume loop failed:", err);
           void redirectToLoginOnAuthExpired(err);
           matchedByToolId.eventSink.emit({
             type: "error",
@@ -1361,7 +1360,7 @@ export class AIChatQueryEngine {
         await this.handleLoopResult(result, module, eventSink);
       })
       .catch((err) => {
-        console.error("[ai-chat-v2] answer-question loop failed:", err);
+        log.error("[ai-chat-v2] answer-question loop failed:", err);
         void redirectToLoginOnAuthExpired(err);
         pending.eventSink.emit({
           type: "error",
@@ -1435,17 +1434,27 @@ export class AIChatQueryEngine {
           promptTokens: result.promptTokens,
           completionTokens: result.completionTokens,
         });
-        if (this.compactAgent) {
-          this.compactAgent
-            .enqueueSessionMemoryUpdate({
-              conversationId,
-              reason: "assistant_turn_completed",
-              promptTokens: result.promptTokens,
-              model: result.model,
-            })
+        const compactAgent = this.compactAgent;
+        if (compactAgent) {
+          const compactInput = {
+            conversationId,
+            reason: "assistant_turn_completed",
+            promptTokens: result.promptTokens,
+            model: result.model,
+          };
+          // Auto full-compact takes priority when the turn pushed the context
+          // near the model's window: it actually shrinks the next assembled
+          // prompt. Fall back to the advisory session-memory update otherwise.
+          // Optional call guards test fakes that only stub one method.
+          Promise.resolve(compactAgent.enqueueAutoCompact?.(compactInput) ?? false)
+            .then((compacted) =>
+              compacted
+                ? undefined
+                : compactAgent.enqueueSessionMemoryUpdate(compactInput)
+            )
             .catch((err) =>
-              console.error(
-                "[ai-chat-compact] session memory update failed:",
+              log.error(
+                "[ai-chat-compact] post-turn compaction failed:",
                 err
               )
             );
@@ -1457,7 +1466,7 @@ export class AIChatQueryEngine {
               reason: "assistant_turn_completed",
             })
             .catch((err) =>
-              console.error("[ai-auto-dream] chat trigger failed:", err)
+              log.error("[ai-auto-dream] chat trigger failed:", err)
             );
         }
         if (this.workspaceAutoDreamService) {
@@ -1467,7 +1476,7 @@ export class AIChatQueryEngine {
               reason: "assistant_turn_completed",
             })
             .catch((err) =>
-              console.error("[workspace-auto-dream] chat trigger failed:", err)
+              log.error("[workspace-auto-dream] chat trigger failed:", err)
             );
         }
         DesktopNotifyService.getInstance()
@@ -1478,7 +1487,7 @@ export class AIChatQueryEngine {
             conversationId,
           })
           .catch((err: unknown) =>
-            console.error("[desktop-notify] turn_complete failed:", err)
+            log.error("[desktop-notify] turn_complete failed:", err)
           );
         this.dispatchStop(conversationId, "completed");
         this.clearActiveTurnState(conversationId, assistantMessageId);
@@ -1550,7 +1559,7 @@ export class AIChatQueryEngine {
           result.pending.conversationId,
           result.pending
         );
-        console.log(
+        log.info(
           `[ai-chat-v2] tool ${result.pending.toolName} needs permission — paused (nextRound=${result.pending.nextRound})`
         );
         break;
@@ -1561,7 +1570,7 @@ export class AIChatQueryEngine {
           result.pending.conversationId,
           result.pending
         );
-        console.log(
+        log.info(
           `[ai-chat-v2] AskUserQuestion paused (questionId=${result.pending.questionId}, nextRound=${result.pending.nextRound})`
         );
         break;
@@ -1646,7 +1655,7 @@ export class AIChatQueryEngine {
                 tokensUsed: latestUsage?.totalTokens,
               })
               .catch((err: unknown) => {
-                console.error("[ai-chat-v2] save tool call failed:", err);
+                log.error("[ai-chat-v2] save tool call failed:", err);
               })
           );
         }
@@ -1664,7 +1673,7 @@ export class AIChatQueryEngine {
                   event.replacesPermissionPromptForToolId,
               })
               .catch((err: unknown) => {
-                console.error("[ai-chat-v2] save tool result failed:", err);
+                log.error("[ai-chat-v2] save tool result failed:", err);
               })
           );
         }
@@ -1715,7 +1724,7 @@ export class AIChatQueryEngine {
       });
       return stored.length > 0 ? stored : undefined;
     } catch (err) {
-      console.warn(
+      log.warn(
         `[ai-chat-v2] failed to store generated images locally for conversation ${input.conversationId}:`,
         err
       );
@@ -1733,7 +1742,7 @@ export class AIChatQueryEngine {
     eventSink: AIChatQueryEventSink
   ): void {
     this.dispatchStop(conversationId, "error");
-    console.error("[ai-chat-v2] engine failure:", err);
+    log.error("[ai-chat-v2] engine failure:", err);
     void redirectToLoginOnAuthExpired(err);
     eventSink.emit({
       type: "error",

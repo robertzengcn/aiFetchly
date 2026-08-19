@@ -21,63 +21,63 @@ import type {
 @Index(["draftId"])
 export class EmailAutoReplyAuditLogEntity extends AuditableEntity {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
 
   @Column("integer")
-  emailServiceId: number;
+  emailServiceId!: number;
 
   @Column("integer")
-  messageId: number;
+  messageId!: number;
 
   @Column("integer", { nullable: true })
-  draftId: number | null;
+  draftId!: number | null;
 
   @Column("integer", { nullable: true })
-  ruleId: number | null;
+  ruleId!: number | null;
 
   @Column("varchar", { length: 50 })
-  action: EmailAutoReplyAuditAction;
+  action!: EmailAutoReplyAuditAction;
 
   @Column("varchar", { length: 50 })
-  decisionStatus: EmailAutoReplyDecisionStatus;
+  decisionStatus!: EmailAutoReplyDecisionStatus;
 
   @Column("varchar", { length: 50, nullable: true })
-  classification: EmailMessageClassification | null;
+  classification!: EmailMessageClassification | null;
 
   @Column("real", { nullable: true })
-  confidence: number | null;
+  confidence!: number | null;
 
   @Column("text", { nullable: true })
-  reason: string | null;
+  reason!: string | null;
 
   @Column("text", { nullable: true })
-  knowledgeQuery: string | null;
+  knowledgeQuery!: string | null;
 
   /** Serialized {@code EmailReplyKnowledgeSourceAudit[]} (no full body content). */
   @Column("text", { nullable: true })
-  knowledgeSourcesJson: string | null;
+  knowledgeSourcesJson!: string | null;
 
   @Column("varchar", { length: 998, nullable: true })
-  generatedSubject: string | null;
+  generatedSubject!: string | null;
 
   @Column("text", { nullable: true })
-  generatedBodyPreview: string | null;
+  generatedBodyPreview!: string | null;
 
   @Column("varchar", { length: 998, nullable: true })
-  sentSubject: string | null;
+  sentSubject!: string | null;
 
   @Column("text", { nullable: true })
-  sentBodyPreview: string | null;
+  sentBodyPreview!: string | null;
 
   @Column("integer", { default: 1 })
-  requiresUserApproval: number;
+  requiresUserApproval!: number;
 
   @Column("integer", { default: 0 })
-  approvedByUser: number;
+  approvedByUser!: number;
 
   @Column("text", { nullable: true })
-  errorMessage: string | null;
+  errorMessage!: string | null;
 
   @Column("text", { nullable: true })
-  metadataJson: string | null;
+  metadataJson!: string | null;
 }

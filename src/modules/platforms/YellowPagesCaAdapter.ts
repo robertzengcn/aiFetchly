@@ -1,4 +1,5 @@
 import { Page } from 'puppeteer';
+import { log } from "@/modules/Logger";
 import { BasePlatformAdapter } from '@/modules/BasePlatformAdapter';
 import { PlatformConfig } from '@/modules/interface/IPlatformConfig';
 import { SearchResult } from '@/modules/interface/IBasePlatformAdapter';
@@ -23,7 +24,7 @@ export class YellowPagesCaAdapter extends BasePlatformAdapter {
      */
     async searchBusinesses(page: Page, keywords: string[], location: string): Promise<SearchResult[]> {
         const searchUrl = this.buildSearchUrl(keywords, location, 1);
-        console.log(`Searching YellowPages.ca: ${searchUrl}`);
+        log.info(`Searching YellowPages.ca: ${searchUrl}`);
         return [];
     }
 
@@ -31,7 +32,7 @@ export class YellowPagesCaAdapter extends BasePlatformAdapter {
      * Custom business data extraction for YellowPages.ca
      */
     async extractBusinessData(page: Page): Promise<BusinessData> {
-        console.log('Extracting business data from YellowPages.ca');
+        log.info('Extracting business data from YellowPages.ca');
 
         // Wait for results to load - YellowPages.ca may have different selectors
         await page.waitForSelector('div#main-content div.search-results.organic div.result, .listing-item, .business-listing', { timeout: 10000 });
@@ -125,14 +126,14 @@ export class YellowPagesCaAdapter extends BasePlatformAdapter {
         const currentPage = await this.getCurrentPage(page);
         
         if (currentPage >= maxPages) {
-            console.log(`Reached maximum pages (${maxPages})`);
+            log.info(`Reached maximum pages (${maxPages})`);
             return;
         }
 
         // Check if next page button exists and is clickable - may have different selectors
         const nextButton = await page.$('a.next, .pagination .next, .next-page, .pagination-next');
         if (!nextButton) {
-            console.log('No next page button found');
+            log.info('No next page button found');
             return;
         }
 
@@ -145,7 +146,7 @@ export class YellowPagesCaAdapter extends BasePlatformAdapter {
         // Wait for new results to load
         await page.waitForSelector('div.result, .listing-item, .business-listing', { timeout: 10000 });
         
-        console.log(`Navigated to page ${currentPage + 1}`);
+        log.info(`Navigated to page ${currentPage + 1}`);
     }
 
     /**
@@ -195,7 +196,7 @@ export class YellowPagesCaAdapter extends BasePlatformAdapter {
 
             return details;
         } catch (error) {
-            console.error(`Error extracting detailed info from ${businessUrl}:`, error);
+            log.error(`Error extracting detailed info from ${businessUrl}:`, error);
             return {};
         }
     }
@@ -307,7 +308,7 @@ export class YellowPagesCaAdapter extends BasePlatformAdapter {
      */
     async applyCookies(page: Page, cookies: any): Promise<void> {
         if (!cookies || !Array.isArray(cookies)) {
-            console.log('No cookies to apply for YellowPages.ca');
+            log.info('No cookies to apply for YellowPages.ca');
             return;
         }
 
@@ -319,10 +320,10 @@ export class YellowPagesCaAdapter extends BasePlatformAdapter {
 
             if (yellowPagesCookies.length > 0) {
                 await page.setCookie(...yellowPagesCookies);
-                console.log(`Applied ${yellowPagesCookies.length} cookies for YellowPages.ca`);
+                log.info(`Applied ${yellowPagesCookies.length} cookies for YellowPages.ca`);
             }
         } catch (error) {
-            console.error('Error applying cookies for YellowPages.ca:', error);
+            log.error('Error applying cookies for YellowPages.ca:', error);
         }
     }
 
@@ -341,7 +342,7 @@ export class YellowPagesCaAdapter extends BasePlatformAdapter {
                 const acceptButton = await page.$('.cookie-banner .accept, .gdpr-banner .accept, #cookieConsentBanner .accept, .privacy-notice .accept');
                 if (acceptButton) {
                     await acceptButton.click();
-                    console.log('Accepted cookie banner on YellowPages.ca');
+                    log.info('Accepted cookie banner on YellowPages.ca');
                 }
             }
 
@@ -351,7 +352,7 @@ export class YellowPagesCaAdapter extends BasePlatformAdapter {
                 const closeButton = await page.$('.modal .close, .popup .close, .overlay .close');
                 if (closeButton) {
                     await closeButton.click();
-                    console.log('Closed popup on YellowPages.ca');
+                    log.info('Closed popup on YellowPages.ca');
                 }
             }
 
@@ -361,12 +362,12 @@ export class YellowPagesCaAdapter extends BasePlatformAdapter {
                 const englishOption = await page.$('.language-selector .en, .lang-switch .en, .language-toggle .en');
                 if (englishOption) {
                     await englishOption.click();
-                    console.log('Selected English language on YellowPages.ca');
+                    log.info('Selected English language on YellowPages.ca');
                 }
             }
 
         } catch (error) {
-            console.log('No site-specific features to handle on YellowPages.ca');
+            log.info('No site-specific features to handle on YellowPages.ca');
         }
     }
 

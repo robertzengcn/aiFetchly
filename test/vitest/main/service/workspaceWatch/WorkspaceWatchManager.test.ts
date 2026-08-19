@@ -42,10 +42,9 @@ import { WorkspaceWatchRestarter } from "@/service/workspaceWatch/WorkspaceWatch
 // --- Fake worker ------------------------------------------------------------
 
 interface FakeWorker extends EventEmitter {
-  connected: boolean;
   pid: number;
-  send: (cmd: WorkspaceWatchCommand) => void;
-  kill: (signal?: string) => void;
+  postMessage: (cmd: WorkspaceWatchCommand) => void;
+  kill: () => void;
   sendCalls: WorkspaceWatchCommand[];
   killCalls: string[];
 }
@@ -54,20 +53,18 @@ function createFakeWorker(): FakeWorker {
   const sendCalls: WorkspaceWatchCommand[] = [];
   const killCalls: string[] = [];
   const w = new EventEmitter() as FakeWorker;
-  w.connected = true;
   w.pid = Math.floor(Math.random() * 1_000_000);
   w.sendCalls = sendCalls;
   w.killCalls = killCalls;
-  w.send = (cmd: WorkspaceWatchCommand) => {
+  w.postMessage = (cmd: WorkspaceWatchCommand) => {
     sendCalls.push(cmd);
   };
-  w.kill = (signal?: string) => {
-    killCalls.push(signal ?? "SIGTERM");
-    w.connected = false;
+  w.kill = () => {
+    killCalls.push("kill");
     // Real child_process kill() triggers an async 'exit' event. The fake
     // emits it synchronously so tests can assert post-exit state without
     // awaiting. Tests that need to delay the exit can re-emit later.
-    w.emit("exit", null, signal ?? "SIGTERM");
+    w.emit("exit", 0);
   };
   return w;
 }
@@ -347,7 +344,6 @@ describe("WorkspaceWatchManager — ref-counted lifecycle + crash restart", () =
     s.nextWorker(w2);
 
     // Simulate unexpected crash: emit 'exit' WITHOUT kill (real crash).
-    w1.connected = false;
     w1.emit("exit", 1, "SIGSEGV");
 
     // Manager re-forked once.
@@ -381,7 +377,6 @@ describe("WorkspaceWatchManager — ref-counted lifecycle + crash restart", () =
     });
 
     // Crash — this will be the 4th restart in the window (over cap).
-    w1.connected = false;
     w1.emit("exit", 1, "SIGSEGV");
 
     // No re-fork.
@@ -401,12 +396,10 @@ describe("WorkspaceWatchManager — ref-counted lifecycle + crash restart", () =
     // Override kill so the first call (SIGTERM/SIGINT from shutdown path
     // if any) does not emit exit; we want to observe the SIGKILL.
     const killSignals: string[] = [];
-    w.kill = (signal?: string) => {
-      killSignals.push(signal ?? "SIGTERM");
-      if (signal === "SIGKILL") {
-        w.connected = false;
-        w.emit("exit", null, "SIGKILL");
-      }
+    w.kill = () => {
+      killSignals.push("kill");
+      // utilityProcess kill() is unconditional — emit exit immediately.
+      w.emit("exit", 1);
     };
 
     s.nextWorker(w);
@@ -421,7 +414,7 @@ describe("WorkspaceWatchManager — ref-counted lifecycle + crash restart", () =
     // shutdown command was sent.
     expect(w.sendCalls.filter((c) => c.type === "shutdown")).toHaveLength(1);
     // SIGKILL was eventually issued.
-    expect(killSignals).toContain("SIGKILL");
+    expect(killSignals).toContain("kill");
     // disposed → no auto-restart from the SIGKILL exit.
     expect(s.forkStub).toHaveBeenCalledTimes(1);
   });

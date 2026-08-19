@@ -102,6 +102,8 @@ export class ValidationUtils {
       return { isValid: true, validItems };
     }
 
+    // No item validator: every element is valid, so return them all. Keeps the
+    // success shape consistent (callers read `validItems` unconditionally).
     return { isValid: true, validItems: value as T[] };
   }
 

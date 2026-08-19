@@ -11,6 +11,7 @@ import {
 } from "@/service/AIChatErrorMapper";
 import { AIChatRecoverableError } from "@/service/AIChatRecoveryTypes";
 import { AIProviderError } from "@/service/aiProvider/AIProviderError";
+import { log } from "@/modules/Logger";
 
 describe("AIChatErrorMapper - userSafeError", () => {
   it("returns the quota sentinel on 402 / insufficient_quota", () => {
@@ -166,7 +167,7 @@ describe("AIChatErrorMapper - userSafeError", () => {
   });
 
   it("logs the full error detail for unmapped errors so the source is traceable", () => {
-    const spy = vi.spyOn(console, "error").mockImplementation(vi.fn());
+    const spy = vi.spyOn(log, "error").mockImplementation(vi.fn());
     try {
       const cause = new Error("ECONNRESET");
       (cause as { code?: string }).code = "ECONNRESET";

@@ -1,4 +1,5 @@
 import { WorkerInstance } from 'puppeteer-cluster/dist/concurrency/ConcurrencyImplementation';
+import { log } from "@/modules/Logger";
 import * as puppeteer from 'puppeteer';
 import { timeoutExecute } from 'puppeteer-cluster/dist/util';
 import {Browser} from 'puppeteer-cluster/dist/concurrency/builtInConcurrency';
@@ -26,7 +27,7 @@ export class CustomConcurrency extends Browser {
         
         // Use browser manager to get executable path and create launch options
         const launchOptions = await browserManager.createLaunchOptions(options);
-        console.log('launchOptions', launchOptions);
+        log.info('launchOptions', launchOptions);
         const puppeteers = addExtra(vanillaPuppeteer);
         puppeteers.use(StealthPlugin());
         // puppeteers.use(AdblockerPlugin({
@@ -64,7 +65,7 @@ export class CustomConcurrency extends Browser {
         
         let chrome = await puppeteers.launch(launchOptions) as puppeteer.Browser;
         let page: puppeteer.Page;
-        let context;
+        let context: puppeteer.BrowserContext;
 
         return {
             jobInstance: async () => {
@@ -73,7 +74,7 @@ export class CustomConcurrency extends Browser {
                         context = await chrome.createBrowserContext();
                         page = await context.newPage();
                     } catch (error) {
-                        console.error('Failed to create browser context or page:', error);
+                        log.error('Failed to create browser context or page:', error);
                         throw error; // Re-throw to let the timeout handler deal with it
                     }
                     
@@ -219,12 +220,12 @@ export class CustomConcurrency extends Browser {
                         try {
                             await timeoutExecute(BROWSER_TIMEOUT, context.close());
                         } catch (error) {
-                            console.error('Failed to close browser context:', error);
+                            log.error('Failed to close browser context:', error);
                             // Force close if timeout occurs
                             try {
                                 await context.close();
                             } catch (forceCloseError) {
-                                console.error('Failed to force close browser context:', forceCloseError);
+                                log.error('Failed to force close browser context:', forceCloseError);
                             }
                         }
                     },
@@ -235,12 +236,12 @@ export class CustomConcurrency extends Browser {
                 try {
                     await timeoutExecute(BROWSER_TIMEOUT, chrome.close());
                 } catch (error) {
-                    console.error('Failed to close browser:', error);
+                    log.error('Failed to close browser:', error);
                     // Force close if timeout occurs
                     try {
                         await chrome.close();
                     } catch (forceCloseError) {
-                        console.error('Failed to force close browser:', forceCloseError);
+                        log.error('Failed to force close browser:', forceCloseError);
                     }
                 }
             },

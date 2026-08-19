@@ -1,4 +1,5 @@
 import { Page } from 'puppeteer';
+import { log } from "@/modules/Logger";
 import { BasePlatformAdapter } from '@/modules/BasePlatformAdapter';
 import { PlatformConfig } from '@/modules/interface/IPlatformConfig';
 import { SearchResult } from '@/modules/interface/IBasePlatformAdapter';
@@ -21,7 +22,7 @@ export class YellowPagesComSgAdapter extends BasePlatformAdapter {
    */
   async searchBusinesses(page: Page, keywords: string[], location: string): Promise<SearchResult[]> {
     const searchUrl = this.buildSearchUrl(keywords, location, 1);
-    console.log(`Searching YellowPages.com.sg: ${searchUrl}`);
+    log.info(`Searching YellowPages.com.sg: ${searchUrl}`);
     return [];
   }
 
@@ -29,7 +30,7 @@ export class YellowPagesComSgAdapter extends BasePlatformAdapter {
    * Custom business data extraction for YellowPages.com.sg
    */
   async extractBusinessData(page: Page): Promise<BusinessData> {
-    console.log('Extracting business data from YellowPages.com.sg');
+    log.info('Extracting business data from YellowPages.com.sg');
 
     // Wait for dynamic content to load
     await this.waitForContent(page);
@@ -39,7 +40,7 @@ export class YellowPagesComSgAdapter extends BasePlatformAdapter {
 
     // Get business list elements
     if (!selectors || !selectors.businessList) {
-      console.log('No selectors configured');
+      log.info('No selectors configured');
       return {
         business_name: '',
         raw_data: { businesses: [], totalCount: 0 }
@@ -53,7 +54,7 @@ export class YellowPagesComSgAdapter extends BasePlatformAdapter {
         const elements = await page.$$(selector);
         if (elements.length > 0) {
           businessElements = elements;
-          console.log(`Found ${elements.length} business items using selector: ${selector}`);
+          log.info(`Found ${elements.length} business items using selector: ${selector}`);
           break;
         }
       } catch (error) {
@@ -63,7 +64,7 @@ export class YellowPagesComSgAdapter extends BasePlatformAdapter {
     }
 
     if (businessElements.length === 0) {
-      console.log('No business listings found');
+      log.info('No business listings found');
       return {
         business_name: '',
         raw_data: { businesses: [], totalCount: 0 }
@@ -101,7 +102,7 @@ export class YellowPagesComSgAdapter extends BasePlatformAdapter {
     try {
       // Wait for any of the possible business list selectors
       if (!this.config.selectors?.businessList) {
-        console.log('No businessList selector configured, waiting default time');
+        log.info('No businessList selector configured, waiting default time');
         await new Promise(resolve => setTimeout(resolve, 5000));
         return;
       }
@@ -115,9 +116,9 @@ export class YellowPagesComSgAdapter extends BasePlatformAdapter {
         new Promise(resolve => setTimeout(resolve, 5000))
       ]);
 
-      console.log('Content loaded or timeout reached');
+      log.info('Content loaded or timeout reached');
     } catch (error) {
-      console.log('Waiting for content timed out, proceeding with extraction');
+      log.info('Waiting for content timed out, proceeding with extraction');
     }
   }
 
@@ -172,7 +173,7 @@ export class YellowPagesComSgAdapter extends BasePlatformAdapter {
           results.push(business);
         }
       } catch (error) {
-        console.error('Error extracting business data:', error);
+        log.error('Error extracting business data:', error);
       }
     }
 
@@ -186,7 +187,7 @@ export class YellowPagesComSgAdapter extends BasePlatformAdapter {
     const currentPage = await this.getCurrentPage(page);
 
     if (currentPage >= maxPages) {
-      console.log(`Reached maximum pages (${maxPages})`);
+      log.info(`Reached maximum pages (${maxPages})`);
       return;
     }
 
@@ -210,7 +211,7 @@ export class YellowPagesComSgAdapter extends BasePlatformAdapter {
           // Wait for new results to load
           await this.waitForContent(page);
 
-          console.log(`Navigated to page ${currentPage + 1}`);
+          log.info(`Navigated to page ${currentPage + 1}`);
           return;
         }
       } catch (error) {
@@ -219,7 +220,7 @@ export class YellowPagesComSgAdapter extends BasePlatformAdapter {
       }
     }
 
-    console.log('No next page button found');
+    log.info('No next page button found');
   }
 
   /**
@@ -285,7 +286,7 @@ export class YellowPagesComSgAdapter extends BasePlatformAdapter {
 
       return details;
     } catch (error) {
-      console.error(`Error extracting detailed info from ${businessUrl}:`, error);
+      log.error(`Error extracting detailed info from ${businessUrl}:`, error);
       return {};
     }
   }
@@ -362,7 +363,7 @@ export class YellowPagesComSgAdapter extends BasePlatformAdapter {
    */
   async applyCookies(page: Page, cookies: any): Promise<void> {
     if (!cookies || !Array.isArray(cookies)) {
-      console.log('No cookies to apply for YellowPages.com.sg');
+      log.info('No cookies to apply for YellowPages.com.sg');
       return;
     }
 
@@ -373,10 +374,10 @@ export class YellowPagesComSgAdapter extends BasePlatformAdapter {
 
       if (yellowPagesCookies.length > 0) {
         await page.setCookie(...yellowPagesCookies);
-        console.log(`Applied ${yellowPagesCookies.length} cookies for YellowPages.com.sg`);
+        log.info(`Applied ${yellowPagesCookies.length} cookies for YellowPages.com.sg`);
       }
     } catch (error) {
-      console.error('Error applying cookies for YellowPages.com.sg:', error);
+      log.error('Error applying cookies for YellowPages.com.sg:', error);
     }
   }
 
@@ -411,7 +412,7 @@ export class YellowPagesComSgAdapter extends BasePlatformAdapter {
             const button = await banner.$(btnSelector);
             if (button) {
               await button.click();
-              console.log(`Accepted cookie banner using selector: ${btnSelector}`);
+              log.info(`Accepted cookie banner using selector: ${btnSelector}`);
               return;
             }
           }
@@ -434,7 +435,7 @@ export class YellowPagesComSgAdapter extends BasePlatformAdapter {
             const button = await popup.$(btnSelector);
             if (button) {
               await button.click();
-              console.log(`Closed popup using selector: ${btnSelector}`);
+              log.info(`Closed popup using selector: ${btnSelector}`);
               return;
             }
           }
@@ -442,7 +443,7 @@ export class YellowPagesComSgAdapter extends BasePlatformAdapter {
       }
 
     } catch (error) {
-      console.log('No site-specific features to handle on YellowPages.com.sg');
+      log.info('No site-specific features to handle on YellowPages.com.sg');
     }
   }
 }

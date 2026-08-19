@@ -29,6 +29,8 @@ Instructions here.`;
 description: some description
 ---
 body`;
+    // `name` is optional: when omitted it is derived from the SKILL.md parent
+    // directory (only `description` is required). See ClaudeSkillFormatAdapter.
     const result = ClaudeSkillFormatAdapter.adapt(md, "skills/foo/SKILL.md");
     expect(result.ok).toBe(true);
     if (!result.ok) return;

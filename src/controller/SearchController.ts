@@ -12,8 +12,10 @@ import {
 // import {SearchResultdb} from "@/model/searchResultdb"
 //import { utilityProcess, MessageChannelMain} from "electron";
 import * as path from "path";
+import { log } from "@/modules/Logger";
 import * as fs from "fs";
-import { exec } from "child_process";
+import { killPidViaOs } from "@/controller/searchProcessKill";
+import * as process from "process";
 import { SearchModule } from "@/modules/SearchModule";
 import { Token } from "@/modules/token";
 // import {USERSDBPATH} from '@/config/usersetting';
@@ -564,7 +566,7 @@ export class SearchController {
 
     // Check if task is editable
     const isEditable = await this.searchModel.isTaskEditable(taskId);
-    console.log("isEditable", isEditable);
+    log.info("isEditable", isEditable);
     if (!isEditable) {
       throw new Error("search.task_cannot_be_edited");
     }
@@ -779,23 +781,15 @@ export class SearchController {
     message: string;
   }> {
     try {
-      console.log(`Killing search process with PID ${pid}`);
+      log.info(`Killing search process with PID ${pid}`);
 
       // Find task by PID
       const taskId = await this.getTaskIdByPID(pid);
 
       if (!taskId) {
-        // Try to kill process directly using system kill command
+        // Try to kill the process directly via the OS (argv, no shell).
         try {
-          const isWindows = process.platform === "win32";
-          exec(
-            isWindows ? `taskkill /PID ${pid} /F` : `kill -9 ${pid}`,
-            (error: unknown) => {
-              if (error) {
-                console.error(`Failed to kill process ${pid}:`, error);
-              }
-            }
-          );
+          killPidViaOs(pid);
           return {
             success: true,
             message: `Process ${pid} killed successfully (task not found in memory)`,
@@ -815,15 +809,14 @@ export class SearchController {
         try {
           // Kill the process
           utilityProcess.kill();
-          console.log(`Successfully killed process ${pid} for task ${taskId}`);
+          log.info(`Successfully killed process ${pid} for task ${taskId}`);
         } catch (error) {
-          console.error(`Error killing process ${pid}:`, error);
+          log.error(`Error killing process ${pid}:`, error);
           // Try system kill as fallback
           try {
-            const isWindows = process.platform === "win32";
-            exec(isWindows ? `taskkill /PID ${pid} /F` : `kill -9 ${pid}`);
+            killPidViaOs(pid);
           } catch (killError) {
-            console.error(
+            log.error(
               `Failed to kill process ${pid} using system command:`,
               killError
             );
@@ -832,10 +825,9 @@ export class SearchController {
       } else {
         // Process not in map, try system kill
         try {
-          const isWindows = process.platform === "win32";
-          exec(isWindows ? `taskkill /PID ${pid} /F` : `kill -9 ${pid}`);
+          killPidViaOs(pid);
         } catch (error) {
-          console.error(`Failed to kill process ${pid}:`, error);
+          log.error(`Failed to kill process ${pid}:`, error);
         }
       }
 
@@ -847,11 +839,11 @@ export class SearchController {
             SearchTaskStatus.Error
           );
           await this.searchModel.updateTaskPID(taskId, null);
-          console.log(
+          log.info(
             `Updated task ${taskId} status to Error after killing process`
           );
         } catch (statusUpdateError) {
-          console.warn(
+          log.warn(
             `Failed to update task ${taskId} status:`,
             statusUpdateError
           );
@@ -869,7 +861,7 @@ export class SearchController {
         message: `Process ${pid} killed successfully and task status updated`,
       };
     } catch (error) {
-      console.error(`Failed to kill process ${pid}:`, error);
+      log.error(`Failed to kill process ${pid}:`, error);
       throw error;
     }
   }
@@ -885,7 +877,7 @@ export class SearchController {
     message: string;
   }> {
     try {
-      console.log(`Killing process for task ${taskId}`);
+      log.info(`Killing process for task ${taskId}`);
 
       // Get process from map
       const utilityProcess = this.processMap.get(taskId);
@@ -907,16 +899,15 @@ export class SearchController {
       try {
         // Kill the process
         utilityProcess.kill();
-        console.log(`Successfully killed process ${pid} for task ${taskId}`);
+        log.info(`Successfully killed process ${pid} for task ${taskId}`);
       } catch (error) {
-        console.error(`Error killing process for task ${taskId}:`, error);
+        log.error(`Error killing process for task ${taskId}:`, error);
         // Try system kill as fallback
         if (pid) {
           try {
-            const isWindows = process.platform === "win32";
-            exec(isWindows ? `taskkill /PID ${pid} /F` : `kill -9 ${pid}`);
+            killPidViaOs(pid);
           } catch (killError) {
-            console.error(
+            log.error(
               `Failed to kill process ${pid} using system command:`,
               killError
             );
@@ -928,11 +919,11 @@ export class SearchController {
       try {
         await this.searchModel.updateTaskStatus(taskId, SearchTaskStatus.Error);
         await this.searchModel.updateTaskPID(taskId, null);
-        console.log(
+        log.info(
           `Updated task ${taskId} status to Error after killing process`
         );
       } catch (statusUpdateError) {
-        console.warn(
+        log.warn(
           `Failed to update task ${taskId} status:`,
           statusUpdateError
         );
@@ -947,7 +938,7 @@ export class SearchController {
         message: `Process ${pid} killed successfully for task ${taskId}`,
       };
     } catch (error) {
-      console.error(`Failed to kill process for task ${taskId}:`, error);
+      log.error(`Failed to kill process for task ${taskId}:`, error);
       throw error;
     }
   }

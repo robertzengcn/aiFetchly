@@ -9,19 +9,19 @@ import { Order } from "./order.decorator";
 @Index("idx_compact_summaries_through", ["throughTimestamp"])
 export class AIChatCompactSummaryEntity extends AuditableEntity {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
 
   @Order(1)
   @Column("varchar", { length: 100, nullable: false, unique: true })
-  compactId: string;
+  compactId!: string;
 
   @Order(2)
   @Column("varchar", { length: 100, nullable: false })
-  conversationId: string;
+  conversationId!: string;
 
   @Order(3)
   @Column("text", { nullable: false })
-  summary: string;
+  summary!: string;
 
   @Order(4)
   @Column("varchar", { length: 100, nullable: true })
@@ -29,15 +29,15 @@ export class AIChatCompactSummaryEntity extends AuditableEntity {
 
   @Order(5)
   @Column("varchar", { length: 100, nullable: false })
-  throughMessageId: string;
+  throughMessageId!: string;
 
   @Order(6)
   @Column("datetime", { nullable: false })
-  throughTimestamp: Date;
+  throughTimestamp!: Date;
 
   @Order(7)
   @Column("int", { nullable: false, default: 0 })
-  sourceMessageCount: number;
+  sourceMessageCount!: number;
 
   @Order(8)
   @Column("int", { nullable: true })
@@ -53,5 +53,5 @@ export class AIChatCompactSummaryEntity extends AuditableEntity {
 
   @Order(11)
   @Column("varchar", { length: 30, nullable: false, default: "active" })
-  status: string; // 'active' | 'superseded' | 'failed'
+  status!: string; // 'active' | 'superseded' | 'failed'
 }
