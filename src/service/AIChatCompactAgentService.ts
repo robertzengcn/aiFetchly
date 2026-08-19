@@ -1,5 +1,4 @@
 import { AIChatSessionMemoryModule } from "@/modules/AIChatSessionMemoryModule";
-import { log } from "@/modules/Logger";
 import { AIChatV2Module } from "@/modules/AIChatV2Module";
 import { AIChatCompactModule } from "@/modules/AIChatCompactModule";
 import { AIChatTokenEstimator } from "@/service/AIChatTokenEstimator";
@@ -21,19 +20,23 @@ import type {
 } from "@/api/aiChatApi";
 import { MessageType } from "@/entityTypes/commonType";
 import type { AIChatCompactSummaryView } from "@/entityTypes/aiChatCompactTypes";
+import { log } from "@/modules/Logger";
 
 const V2_PREFIX = "v2-";
 const MIN_DELTA_MESSAGES = 2;
 const FAILURE_CIRCUIT_THRESHOLD = 3;
 const CIRCUIT_BREAKER_COOLDOWN_MS = 10 * 60 * 1000;
 /** Trigger session-memory compaction when prompt tokens reach this fraction
- * of the configured context window. Mirrors Claude Code's autocompact layer. */
-const SESSION_MEMORY_TOKEN_THRESHOLD_FRACTION = 0.8;
+ * of the configured context window. Mirrors Claude Code's autocompact layer.
+ * Kept at 70% to leave headroom for intra-turn tool growth. */
+const SESSION_MEMORY_TOKEN_THRESHOLD_FRACTION = 0.7;
 /** Trigger an automatic FULL compact (which actually shrinks the assembled
  * context) when prompt tokens reach this fraction of the model's real context
- * window. Kept in sync with the renderer badge threshold (compact button at
- * 80%) so the badge and the backend agree on when compaction should happen. */
-const AUTO_COMPACT_THRESHOLD_FRACTION = 0.8;
+ * window. Kept at 70% to leave headroom for intra-turn tool-call/result growth
+ * (a single turn with multiple tool rounds can easily add 100k+ tokens of tool
+ * results). The renderer badge threshold stays at 80% so the user sees the
+ * badge slightly before the backend triggers. */
+const AUTO_COMPACT_THRESHOLD_FRACTION = 0.7;
 /** Fallback context-window size when the model limit is unknown. */
 const DEFAULT_CONTEXT_WINDOW_TOKENS = 128_000;
 /** Trigger session-memory compaction when more than this long has passed
@@ -177,7 +180,7 @@ export class AIChatCompactAgentService {
     this.lastPromptTokens.set(input.conversationId, input.promptTokens);
     const existing = this.inFlight.get(input.conversationId);
     if (existing) {
-      console.log(
+      log.info(
         `[ai-chat-compact] auto compact skipped (already running) conv=${input.conversationId}`
       );
       return false;
@@ -187,14 +190,14 @@ export class AIChatCompactAgentService {
       AUTO_COMPACT_THRESHOLD_FRACTION * contextWindow
     );
     if (input.promptTokens < threshold) {
-      console.log(
+      log.info(
         `[ai-chat-compact] auto compact skipped (below threshold) conv=${
           input.conversationId
         } promptTokens=${input.promptTokens} threshold=${threshold}`
       );
       return false;
     }
-    console.log(
+    log.info(
       `[ai-chat-compact] auto compact triggered conv=${
         input.conversationId
       } promptTokens=${input.promptTokens} threshold=${threshold} window=${contextWindow}`
@@ -232,7 +235,7 @@ export class AIChatCompactAgentService {
           (r) => isMessageRow(r) && r.timestamp.getTime() > boundaryTime
         );
         if (!hasNewMessages) {
-          console.log(
+          log.info(
             `[ai-chat-compact] auto compact skipped (boundary covers all messages) conv=${input.conversationId}`
           );
           return false;
@@ -246,7 +249,7 @@ export class AIChatCompactAgentService {
         try {
           this.deps.onAutoCompacted(summary);
         } catch (err) {
-          console.error(
+          log.error(
             "[ai-chat-compact] auto-compact notification failed:",
             err
           );
@@ -254,7 +257,7 @@ export class AIChatCompactAgentService {
       }
       return true;
     } catch (err) {
-      console.error(
+      log.error(
         `[ai-chat-compact] auto compact failed conv=${input.conversationId}:`,
         err
       );
