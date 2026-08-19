@@ -672,11 +672,10 @@ export class BackgroundScheduler extends BaseDb {
           throw new Error("Schedule not found");
         }
 
-        const taskOutputId =
-          await this.taskExecutorService.executeScheduledTask(
-            schedule,
-            executionId
-          );
+        await this.taskExecutorService.executeScheduledTask(
+          schedule,
+          executionId
+        );
 
         // Calculate duration
         const duration = Date.now() - startTime;
@@ -924,7 +923,7 @@ export class BackgroundScheduler extends BaseDb {
       const schedulerStatus = this.getSchedulerStatus();
 
       // Get task type statistics
-      const taskTypeStats: Record<string, any> = {};
+      const taskTypeStats: DetailedStats["taskTypeStats"] = {};
       const taskTypes = Object.values(TaskType);
 
       for (const taskType of taskTypes) {
