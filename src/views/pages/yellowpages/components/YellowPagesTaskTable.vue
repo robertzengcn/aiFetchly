@@ -243,7 +243,7 @@ const headers = computed(() => [
 // Methods
 const getPlatformColor = (platform?: string) => {
   if (!platform) return 'grey'
-  const colors = {
+  const colors: Record<string, string> = {
     'yellowpages.com': 'blue',
     'yelp.com': 'red',
     'yellowpages.ca': 'green'
@@ -253,7 +253,7 @@ const getPlatformColor = (platform?: string) => {
 
 const getPlatformIcon = (platform?: string) => {
   if (!platform) return 'mdi-web'
-  const icons = {
+  const icons: Record<string, string> = {
     'yellowpages.com': 'mdi-phone-book',
     'yelp.com': 'mdi-star',
     'yellowpages.ca': 'mdi-maple-leaf'
