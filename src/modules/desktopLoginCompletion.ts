@@ -43,6 +43,7 @@ import { NATIVATECOMMAND } from "@/config/channellist";
 import { NativateDatatype } from "@/entityTypes/commonType";
 import { log } from "@/modules/Logger";
 import { dialog } from "electron";
+import { refreshChatSchedulerForUserPath } from "@/main-process/chatSchedulerLifecycleRegistry";
 
 /** Token data required to complete login. Mirrors ExchangeSuccessResponse. */
 export type LoginTokens = {
@@ -221,6 +222,24 @@ export async function completeDesktopLogin(
       WebSocketClient.resetInstance();
       await VectorDatabasePool.clearAllInstances();
       log.info("Controller singletons reset after SqliteDb path change");
+
+      // Refresh the Chat V2 interval scheduler against the new user path. Its
+      // cached ScheduleTaskModel/AiMessageTaskRunModel repositories point at
+      // the connection just destroyed; the registry hook drops and rebuilds
+      // them and restarts the scheduler if it was running. Without this, the
+      // 30s interval poll keeps querying the closed connection and throws
+      // "The database connection is not open" after login. Invoked through the
+      // lifecycle registry so this module never imports Electron-only
+      // `background.ts` (which would break the pure-Node vitest suites).
+      try {
+        await refreshChatSchedulerForUserPath();
+        log.info("Chat scheduled background scheduler refreshed after login");
+      } catch (schedError) {
+        log.error(
+          "Failed to refresh chat scheduled background scheduler after login:",
+          schedError
+        );
+      }
 
       if (!newDbInstance.connection.isInitialized) {
         let retries = 3;
