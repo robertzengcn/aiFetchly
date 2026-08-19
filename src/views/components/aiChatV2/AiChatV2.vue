@@ -688,7 +688,6 @@ import type {
   ChatV2StreamRequest,
   ChatV2MessageMetadata,
   ChatV2UploadedAttachment,
-  ChatV2AttachmentKind,
   ChatV2AttachmentMetadata,
   ChatToolApprovalMode,
   ChatV2RuntimeStatus,
@@ -841,10 +840,6 @@ import {
   markPermissionPromptExecuting,
 } from "./toolExecutionStateUtil";
 import { isPlanStateActive } from "./planStateUtil";
-import {
-  downscaleImageAttachment,
-  arrayBufferToBase64,
-} from "./imageScaleUtil";
 import {
   AI_CHAT_REASONING_VISIBILITY_CHANGED_EVENT,
   readAiChatReasoningVisible,
@@ -1157,13 +1152,11 @@ const attachmentError = ref<string | null>(null);
 
 // Pure utility functions extracted to aiChatV2Utils.ts (R5.6/R6.3 split)
 import {
-  classifyAttachment,
   defaultPromptForAttachments,
-  resolveMimeType,
   truncateText,
   formatTimestamp,
 } from "./aiChatV2Utils";
-import { buildUploadedAttachments, MAX_UPLOAD_FILE_BYTES } from "./aiChatV2Attachment";
+import { buildUploadedAttachments } from "./aiChatV2Attachment";
 
 // ---------------------------------------------------------------------------
 // Tool approval mode
