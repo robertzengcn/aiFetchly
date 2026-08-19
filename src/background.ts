@@ -21,6 +21,7 @@ import installExtension, { VUEJS3_DEVTOOLS } from "electron-devtools-installer";
 import { patchSessionExtensionsApi } from "@/main-process/devtools/patchSessionExtensionsApi";
 import { registerCommunicationIpcHandlers } from "./main-process/communication/";
 import { setMainWindow } from "@/main-process/mainWindowRegistry";
+import { registerChatSchedulerLifecycle } from "@/main-process/chatSchedulerLifecycleRegistry";
 import { initializeAppUpdates } from "@/main-process/updater/AppUpdateService";
 import { SkillImportService } from "@/service/SkillImportService";
 import { getAIFetchlyConfigManager } from "@/service/aifetchlyConfig/AIFetchlyConfigManager";
@@ -104,6 +105,23 @@ let chatScheduledBackgroundScheduler: BackgroundScheduler | null = null;
 // import { RAGIpcHandlers } from '@/main-process/ragIpcHandlers';
 // import { createProtocol } from 'electron';
 const isDevelopment = process.env.NODE_ENV !== "production";
+
+/**
+ * Stop the Chat V2 interval scheduler and clear the singleton. Used by the
+ * app-shutdown path. Login/logout reach the scheduler through the neutral
+ * `chatSchedulerLifecycleRegistry` instead of importing this module (which
+ * pulls Electron-only deps that break pure-Node test suites).
+ */
+async function stopChatScheduledBackgroundScheduler(): Promise<void> {
+  if (chatScheduledBackgroundScheduler) {
+    try {
+      await chatScheduledBackgroundScheduler.stop();
+    } catch (error) {
+      log.error("Failed to stop chat scheduled background scheduler:", error);
+    }
+    chatScheduledBackgroundScheduler = null;
+  }
+}
 declare const MAIN_WINDOW_VITE_DEV_SERVER_URL: string;
 declare const MAIN_WINDOW_VITE_NAME: string;
 // import { safeStorage } from 'electron';
@@ -997,10 +1015,7 @@ function initialize() {
       if (userdataPath && userdataPath.length > 0) {
         const scheduleManager = ScheduleManager.getInstance();
         await scheduleManager.handleAppShutdown();
-        if (chatScheduledBackgroundScheduler) {
-          await chatScheduledBackgroundScheduler.stop();
-          chatScheduledBackgroundScheduler = null;
-        }
+        await stopChatScheduledBackgroundScheduler();
         log.info("Schedulers shutdown completed");
       }
     } catch (error) {
@@ -1196,6 +1211,19 @@ function initialize() {
           userdataPath
         );
         await chatScheduledBackgroundScheduler.start();
+        // Expose lifecycle hooks to login/logout through the neutral registry.
+        // Those flows must not import this module (Electron-only deps break
+        // pure-Node test suites); the registry lets them refresh/stop the
+        // scheduler in lockstep with the SqliteDb path reset.
+        registerChatSchedulerLifecycle({
+          refreshAndStart: async () => {
+            if (chatScheduledBackgroundScheduler) {
+              await chatScheduledBackgroundScheduler.refreshDatabaseForUserPath();
+              await chatScheduledBackgroundScheduler.start();
+            }
+          },
+          stop: stopChatScheduledBackgroundScheduler,
+        });
         log.info("Schedulers initialized with auto-start functionality");
       } catch (error) {
         log.error("Failed to initialize schedulers:", error);

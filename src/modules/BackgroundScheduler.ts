@@ -222,6 +222,13 @@ export class BackgroundScheduler extends BaseDb {
     this.scheduleExecutionLogModel = new ScheduleExecutionLogModel(latestPath);
     this.scheduleTaskModel = new ScheduleTaskModule();
     this.taskExecutorService = new TaskExecutorService();
+    // Reset the lazy interval-trigger models so they re-create against the new
+    // SqliteDb instance on next use. Their repositories are captured in the
+    // model constructors; without this reset they would keep pointing at the
+    // destroyed connection and throw "The database connection is not open" on
+    // the next interval poll.
+    this.intervalScheduleModel = null;
+    this.intervalRunModel = null;
     this.currentDbPath = latestPath;
     this.isInitialized = false;
 
