@@ -198,7 +198,7 @@
     "vite-plugin-commonjs": "^0.10.1",
     "vue": "^3.3.4",
     "vue-i18n": "9",
-    "vue-router": "^4.2.5",
+    "vue-router": "^4.6.4",
     "vue3-apexcharts": "^1.4.4",
     "vuetify": "3.5.15",
     "webfontloader": "^1.0.0",
