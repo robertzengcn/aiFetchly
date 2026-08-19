@@ -1,5 +1,4 @@
 import { AIChatSessionMemoryModule } from "@/modules/AIChatSessionMemoryModule";
-import { log } from "@/modules/Logger";
 import { AIChatCompactModule } from "@/modules/AIChatCompactModule";
 import { AIChatV2Module } from "@/modules/AIChatV2Module";
 import { AIChatTokenEstimator } from "@/service/AIChatTokenEstimator";
@@ -17,6 +16,7 @@ import { WorkspaceResolver } from "@/service/WorkspaceResolver";
 import { AIFetchlyContextLoader } from "@/service/aifetchlyConfig/AIFetchlyContextLoader";
 import { buildAvailableAgentsBlock } from "@/service/aifetchlyConfig/availableAgentsBlock";
 import { buildBuiltInToolCapabilitiesSection } from "@/service/BuiltInToolCapabilitiesPromptSection";
+import { augmentContentWithGeneratedImages } from "@/service/AIChatGeneratedImageContextService";
 import path from "node:path";
 import os from "node:os";
 import type {
@@ -27,6 +27,7 @@ import type {
 } from "@/api/aiChatApi";
 import { MessageType } from "@/entityTypes/commonType";
 import type { AIChatPlanStateView } from "@/entityTypes/aiChatPlanTypes";
+import { log } from "@/modules/Logger";
 
 const DEFAULT_RECENT_MESSAGE_WINDOW = 30;
 
@@ -230,7 +231,7 @@ export class AIChatContextAssembler {
         content: buildBuiltInToolCapabilitiesSection(),
       });
     } catch (err) {
-      console.error(
+      log.error(
         "[ai-chat-context] built-in tool capabilities injection failed:",
         err
       );
@@ -332,7 +333,14 @@ export class AIChatContextAssembler {
     }
 
     for (const r of trimmedRecent) {
-      messages.push({ role: roleOf(r.role), content: r.content });
+      messages.push({
+        role: roleOf(r.role),
+        content: augmentContentWithGeneratedImages(
+          r.content,
+          r.role,
+          r.metadata
+        ),
+      });
     }
 
     messages.push({

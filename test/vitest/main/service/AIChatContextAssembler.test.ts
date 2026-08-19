@@ -67,6 +67,7 @@ function row(opts: Partial<AIChatMessageEntity>): AIChatMessageEntity {
     content: opts.content ?? "",
     timestamp: opts.timestamp ?? new Date(0),
     messageType: opts.messageType ?? MessageType.MESSAGE,
+    metadata: opts.metadata,
   } as AIChatMessageEntity;
 }
 
@@ -334,6 +335,59 @@ describe("AIChatContextAssembler", () => {
     });
     expect(mockDurableRetrieve).not.toHaveBeenCalled();
     expect(r.usedDurableMemory).toBe(false);
+  });
+
+  it("augments assistant messages with generated image references for the model", async () => {
+    mockGetByConversation.mockResolvedValue(null);
+    mockGetActiveSummary.mockResolvedValue(null);
+    const generatedMeta = JSON.stringify({
+      source: "chat-v2",
+      generatedImages: [
+        {
+          type: "image",
+          url: "aifetchly-generated-image://local/user@example.com/conv1/msg1/image-1.png",
+          file_name: "image-1.png",
+          local_path: "/home/user/.config/aiFetchly/ai-chat-generated-images/user@example.com/conv1/msg1/image-1.png",
+        },
+      ],
+    });
+    mockGetConversationMessages.mockResolvedValue([
+      row({
+        messageId: "u1",
+        role: "user",
+        content: "please generate a image with a house in it",
+        timestamp: new Date(1),
+      }),
+      row({
+        messageId: "a1",
+        role: "assistant",
+        content: "Here's your generated image of a house!",
+        timestamp: new Date(2),
+        metadata: generatedMeta,
+      }),
+    ]);
+    const asm = new AIChatContextAssembler();
+    const r = await asm.assemble({
+      conversationId: "v2-x",
+      currentUserMessage: "please add tree in front of the house",
+      baseSystemPrompt: "sysp",
+      mode: "chat",
+    });
+
+    // Find the assistant message in the assembled messages.
+    const assistantMsg = r.messages.find(
+      (m) =>
+        m.role === "assistant" &&
+        typeof m.content === "string" &&
+        m.content.includes("Here's your generated image")
+    );
+    expect(assistantMsg).toBeTruthy();
+    // The content must include the generated_images annotation so the model
+    // can reference the prior image in the next turn.
+    expect(assistantMsg!.content).toContain("<generated_images>");
+    expect(assistantMsg!.content).toContain(
+      "aifetchly-generated-image://local/user@example.com/conv1/msg1/image-1.png"
+    );
   });
 });
 

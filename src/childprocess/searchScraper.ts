@@ -34,7 +34,8 @@ import type { ObserveExecuteRoundResult } from "@/childprocess/utils/ObserveExec
 import { executePuppeteerAction } from "@/childprocess/utils/ObserveExecuteExecutor";
 import type { AiSupportRequestMessage } from "@/modules/interface/BackgroundProcessMessages";
 import type { AiObserveExecuteResponseData } from "@/modules/interface/BackgroundProcessMessages";
-import { v4 as uuidv4 } from "uuid";import sanitizeHtml from "sanitize-html";
+import { v4 as uuidv4 } from "uuid";
+import sanitizeHtml from "sanitize-html";
 
 // const logger = debug('SearchScrape');
 
@@ -209,13 +210,25 @@ export class SearchScrape implements searchEngineImpl {
     try {
       const pageUrl = await this.page.url();
       let pageContent = await this.page.content();
-      pageContent = pageContent
-        .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, "")
-        .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, "")
-        .replace(/<!--[\s\S]*?-->/g, "")
-        .replace(/\s+/g, " ")
-        .trim()
-        .substring(0, 10000);
+      pageContent = sanitizeHtml(pageContent, {
+        allowedTags: [
+          "h1", "h2", "h3", "h4", "h5", "h6", "p", "br", "hr",
+          "ul", "ol", "li", "dl", "dt", "dd",
+          "table", "thead", "tbody", "tfoot", "tr", "td", "th", "caption",
+          "div", "span", "section", "article", "aside", "header", "footer", "nav", "main",
+          "pre", "code", "blockquote", "em", "strong", "b", "i", "u", "s", "small", "sub", "sup",
+          "a", "img", "figure", "figcaption",
+          "abbr", "address", "del", "ins", "mark", "q", "time", "var",
+          "details", "summary",
+        ],
+        allowedAttributes: {
+          "*": ["class", "id", "title", "role", "aria-label"],
+          "a": ["href", "target", "rel"],
+          "img": ["src", "alt", "width", "height"],
+          "td": ["colspan", "rowspan"],
+          "th": ["colspan", "rowspan", "scope"],
+        },
+      }).replace(/\s+/g, " ").trim().substring(0, 10000);
       let screenshot: string | undefined;
       try {
         screenshot = (await this.page.screenshot({
@@ -320,17 +333,17 @@ export class SearchScrape implements searchEngineImpl {
             httpOnly: cookie.httpOnly ?? true,
             expires: cookie.expirationDate ?? 0,
           };
-          log.info("prepare to set cookies of", mappedCookie);
-          //console.log("Setting cookie in browser context:", mappedCookie);
+          // Never log cookie values — stdout is captured into the
+          // search runtime log and would leak session credentials.
           await this.page.setCookie(mappedCookie);
-          // Set cookie in browser context
-          //await browserContext.setCookie(mappedCookie);
-
-          // Also set cookie in page context
-          log.info("Setting cookie in page context:", mappedCookie);
-          //await pageContext.browser().setCookie(mappedCookie);
         }
       }
+
+      const appliedCount = data.data.cookies.length;
+      log.info(
+        `Applied ${appliedCount} account cookie(s)` +
+          (this.accountId ? ` for account ${this.accountId}` : "")
+      );
 
       // Verify cookies were set in both contexts
       //const browserCookies = await browserContext.cookies();
