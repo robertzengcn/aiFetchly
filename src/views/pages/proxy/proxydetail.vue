@@ -115,7 +115,7 @@ const isEdit = ref(false);
 const protollist=ref(["http","https","socket5"]);
 
 const rules = {
-  required: (value) => !!value || t('common.fill_require_field'),
+  required: (value: unknown) => !!value || t('common.fill_require_field'),
 };
 
 const initialize = async () => {

@@ -1,3 +1,4 @@
+import { log } from "@/modules/Logger";
 import {
   SCHEDULE_CREATE,
   SCHEDULE_UPDATE,
@@ -67,7 +68,7 @@ import {
  * - those are lost, standardized to 'ok'. Frontend should rely on status + data.
  */
 export function registerScheduleIpcHandlers(): void {
-  console.log("Schedule IPC handlers registered");
+  log.info("Schedule IPC handlers registered");
   const ctrl = (): ScheduleController => new ScheduleController();
 
   // ── Schedule CRUD ────────────────────────────────────────────────────

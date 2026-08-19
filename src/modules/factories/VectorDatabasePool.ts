@@ -1,4 +1,5 @@
 import { IVectorDatabase } from '@/modules/interface/IVectorDatabase';
+import { log } from "@/modules/Logger";
 import { VectorDatabaseFactory, VectorDatabaseFactoryConfig, VectorDatabaseType } from './VectorDatabaseFactory';
 import { EmbeddingModelConfig } from '@/service/VectorStoreService';
 
@@ -40,12 +41,12 @@ export class VectorDatabasePool {
             if (!poolableInstance.reset) {
                 poolableInstance.reset = () => {
                     // Reset instance state if needed
-                    console.log(`Resetting vector database instance: ${key}`);
+                    log.info(`Resetting vector database instance: ${key}`);
                 };
             }
 
             this.instances.set(key, poolableInstance);
-            console.log(`Created new vector database instance with key: ${key} (Pool size: ${this.instances.size})`);
+            log.info(`Created new vector database instance with key: ${key} (Pool size: ${this.instances.size})`);
         }
         return this.instances.get(key)!;
     }
@@ -60,10 +61,10 @@ export class VectorDatabasePool {
             try {
                 await instance.cleanup();
             } catch (error) {
-                console.warn(`Error cleaning up instance ${key}:`, error);
+                log.warn(`Error cleaning up instance ${key}:`, error);
             }
             this.instances.delete(key);
-            console.log(`Cleaned up vector database instance with key: ${key} (Pool size: ${this.instances.size})`);
+            log.info(`Cleaned up vector database instance with key: ${key} (Pool size: ${this.instances.size})`);
         }
     }
 
@@ -75,7 +76,7 @@ export class VectorDatabasePool {
         if (instance) {
             // Don't await cleanup in sync method
             instance.cleanup().catch(error => 
-                console.warn(`Error cleaning up instance ${key}:`, error)
+                log.warn(`Error cleaning up instance ${key}:`, error)
             );
             this.instances.delete(key);
         }
@@ -88,15 +89,15 @@ export class VectorDatabasePool {
         const cleanupPromises = Array.from(this.instances.entries()).map(async ([key, instance]) => {
             try {
                 await instance.cleanup();
-                console.log(`Cleaned up instance: ${key}`);
+                log.info(`Cleaned up instance: ${key}`);
             } catch (error) {
-                console.warn(`Error cleaning up instance ${key}:`, error);
+                log.warn(`Error cleaning up instance ${key}:`, error);
             }
         });
         
         await Promise.all(cleanupPromises);
         this.instances.clear();
-        console.log('Cleared all vector database instances');
+        log.info('Cleared all vector database instances');
     }
 
     /**
@@ -128,7 +129,7 @@ export class VectorDatabasePool {
         const instance = this.instances.get(key);
         if (instance && instance.reset) {
             instance.reset();
-            console.log(`Reset vector database instance: ${key}`);
+            log.info(`Reset vector database instance: ${key}`);
         }
     }
 }
@@ -237,8 +238,8 @@ export class VectorDatabasePoolStats {
      */
     static logStats(): void {
         const stats = this.getStats();
-        console.log('Vector Database Pool Statistics:');
-        console.log(`  Total Instances: ${stats.totalInstances}/${stats.maxPoolSize}`);
-        console.log(`  Instance Keys: ${stats.instanceKeys.join(', ')}`);
+        log.info('Vector Database Pool Statistics:');
+        log.info(`  Total Instances: ${stats.totalInstances}/${stats.maxPoolSize}`);
+        log.info(`  Instance Keys: ${stats.instanceKeys.join(', ')}`);
     }
 }

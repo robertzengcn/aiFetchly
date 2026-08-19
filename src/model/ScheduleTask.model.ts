@@ -1,4 +1,5 @@
 import { BaseDb } from "@/model/Basedb";
+import { log } from "@/modules/Logger";
 import { In, Repository } from "typeorm";
 import {
   ScheduleTaskEntity,
@@ -50,7 +51,7 @@ export class ScheduleTaskModel extends BaseDb {
       const nextDate = cronJob.nextDate();
       return nextDate.toJSDate();
     } catch (error) {
-      console.error("Failed to calculate next run time:", error);
+      log.error("Failed to calculate next run time:", error);
       return null;
     }
   }

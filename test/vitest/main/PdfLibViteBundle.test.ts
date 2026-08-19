@@ -24,7 +24,12 @@ const forgeConfigPath = path.resolve(process.cwd(), "forge.config.js");
  */
 describe("pdf-lib Vite bundle packaging regression", () => {
   it("keeps pdf-lib external in vite.main and forge EXTERNAL_DEPENDENCIES", () => {
-    const viteMain = fs.readFileSync(viteMainConfigPath, "utf-8");
+    const viteMain =
+      fs.readFileSync(viteMainConfigPath, "utf-8") +
+      fs.readFileSync(
+        path.resolve(process.cwd(), "vite.main.shared.mjs"),
+        "utf-8"
+      );
     const forge = fs.readFileSync(forgeConfigPath, "utf-8");
 
     expect(viteMain).toMatch(

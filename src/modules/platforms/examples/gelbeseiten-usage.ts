@@ -1,4 +1,5 @@
 import { AdapterGelbeseiten } from '../GelbeseitenAdapter';
+import { log } from "@/modules/Logger";
 import { PlatformConfig } from '@/modules/interface/IPlatformConfig';
 import { PlatformAdapterFactory } from '../PlatformAdapterFactory';
 
@@ -158,7 +159,7 @@ export function createGelbeseitenAdapterWithValidation(): AdapterGelbeseiten | n
 
         return new AdapterGelbeseiten(config);
     } catch (error) {
-        console.error('Failed to create Gelbeseiten adapter:', error);
+        log.error('Failed to create Gelbeseiten adapter:', error);
         return null;
     }
 }
@@ -189,14 +190,14 @@ export async function createGelbeseitenAdapterWithRetry(
             };
 
             const adapter = new AdapterGelbeseiten(config);
-            console.log(`Gelbeseiten adapter created successfully on attempt ${attempt}`);
+            log.info(`Gelbeseiten adapter created successfully on attempt ${attempt}`);
             return adapter;
         } catch (error) {
             lastError = error as Error;
-            console.warn(`Attempt ${attempt} failed:`, error);
+            log.warn(`Attempt ${attempt} failed:`, error);
             
             if (attempt < maxRetries) {
-                console.log(`Retrying in ${retryDelay}ms...`);
+                log.info(`Retrying in ${retryDelay}ms...`);
                 await new Promise(resolve => setTimeout(resolve, retryDelay));
             }
         }

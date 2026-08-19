@@ -1,4 +1,5 @@
 import { BaseModule } from "@/modules/baseModule";
+import { log } from "@/modules/Logger";
 import { YellowPagesTaskModel } from "@/model/YellowPagesTask.model";
 import { SortBy } from "@/entityTypes/commonType";
 import { YellowPagesTaskEntity } from "@/entity/YellowPagesTask.entity";
@@ -49,7 +50,7 @@ export class YellowPagesTaskModule extends BaseModule {
           modelTaskData
         );
       } catch (error) {
-        console.error("Error creating task:", error);
+        log.error("Error creating task:", error);
         throw new Error(
           `Failed to create task: ${
             error instanceof Error ? error.message : "Unknown error"
@@ -70,7 +71,7 @@ export class YellowPagesTaskModule extends BaseModule {
         const task = await this.yellowPagesTaskModel.getTaskById(id);
         return task || undefined;
       } catch (error) {
-        console.error("Error getting task by ID:", error);
+        log.error("Error getting task by ID:", error);
         throw new Error(
           `Failed to get task by ID: ${
             error instanceof Error ? error.message : "Unknown error"
@@ -154,7 +155,7 @@ export class YellowPagesTaskModule extends BaseModule {
           throw new Error("Failed to update task");
         }
       } catch (error) {
-        console.error("Error updating task:", error);
+        log.error("Error updating task:", error);
         throw new Error(
           `Failed to update task: ${
             error instanceof Error ? error.message : "Unknown error"
@@ -176,7 +177,7 @@ export class YellowPagesTaskModule extends BaseModule {
           throw new Error("Failed to delete task");
         }
       } catch (error) {
-        console.error("Error deleting task:", error);
+        log.error("Error deleting task:", error);
         throw new Error(
           `Failed to delete task: ${
             error instanceof Error ? error.message : "Unknown error"
@@ -224,7 +225,7 @@ export class YellowPagesTaskModule extends BaseModule {
 
         return taskSummaries;
       } catch (error) {
-        console.error("Error listing tasks:", error);
+        log.error("Error listing tasks:", error);
         throw new Error(
           `Failed to list tasks: ${
             error instanceof Error ? error.message : "Unknown error"
@@ -243,7 +244,7 @@ export class YellowPagesTaskModule extends BaseModule {
       try {
         return await this.yellowPagesTaskModel.getTaskTotal();
       } catch (error) {
-        console.error("Error counting tasks:", error);
+        log.error("Error counting tasks:", error);
         throw new Error(
           `Failed to count tasks: ${
             error instanceof Error ? error.message : "Unknown error"
@@ -265,7 +266,7 @@ export class YellowPagesTaskModule extends BaseModule {
         const modelStatus = status as unknown as YellowPagesTaskStatus;
         return await this.yellowPagesTaskModel.getTasksByStatus(modelStatus);
       } catch (error) {
-        console.error("Error getting tasks by status:", error);
+        log.error("Error getting tasks by status:", error);
         throw new Error(
           `Failed to get tasks by status: ${
             error instanceof Error ? error.message : "Unknown error"
@@ -287,7 +288,7 @@ export class YellowPagesTaskModule extends BaseModule {
         const allTasks = await this.yellowPagesTaskModel.listTasks(1, 1000);
         return allTasks.filter((task) => task.platform === platform);
       } catch (error) {
-        console.error("Error getting tasks by platform:", error);
+        log.error("Error getting tasks by platform:", error);
         throw new Error(
           `Failed to get tasks by platform: ${
             error instanceof Error ? error.message : "Unknown error"
@@ -326,7 +327,7 @@ export class YellowPagesTaskModule extends BaseModule {
           return nameMatch || keywordMatch;
         });
       } catch (error) {
-        console.error("Error searching tasks:", error);
+        log.error("Error searching tasks:", error);
         throw new Error(
           `Failed to search tasks: ${
             error instanceof Error ? error.message : "Unknown error"
@@ -351,7 +352,7 @@ export class YellowPagesTaskModule extends BaseModule {
         const modelStatus = status as unknown as YellowPagesTaskStatus;
         await this.yellowPagesTaskModel.updateTaskStatus(id, modelStatus);
       } catch (error) {
-        console.error("Error updating task status:", error);
+        log.error("Error updating task status:", error);
         throw new Error(
           `Failed to update task status: ${
             error instanceof Error ? error.message : "Unknown error"
@@ -392,7 +393,7 @@ export class YellowPagesTaskModule extends BaseModule {
         const allTasks = await this.yellowPagesTaskModel.listTasks(1, 1000); // Get a large number to cover all tasks
         return allTasks.filter((task) => task.account_id === accountId);
       } catch (error) {
-        console.error("Error getting tasks by account ID:", error);
+        log.error("Error getting tasks by account ID:", error);
         throw new Error(
           `Failed to get tasks by account ID: ${
             error instanceof Error ? error.message : "Unknown error"
@@ -492,7 +493,7 @@ export class YellowPagesTaskModule extends BaseModule {
         );
         return recentTasks;
       } catch (error) {
-        console.error("Error getting recent tasks:", error);
+        log.error("Error getting recent tasks:", error);
         throw new Error(
           `Failed to get recent tasks: ${
             error instanceof Error ? error.message : "Unknown error"
@@ -534,7 +535,7 @@ export class YellowPagesTaskModule extends BaseModule {
 
         return deletedCount;
       } catch (error) {
-        console.error("Error cleaning up old tasks:", error);
+        log.error("Error cleaning up old tasks:", error);
         throw new Error(
           `Failed to cleanup old tasks: ${
             error instanceof Error ? error.message : "Unknown error"
@@ -553,7 +554,7 @@ export class YellowPagesTaskModule extends BaseModule {
   async handleTasksFromPreviousSession(): Promise<number> {
     return this.withConnection(async () => {
       try {
-        console.log("Checking for tasks from previous application session...");
+        log.info("Checking for tasks from previous application session...");
 
         // Get all tasks with status "InProgress" that have PIDs
         const runningTasks = await this.getTasksByStatus(TaskStatus.InProgress);
@@ -561,7 +562,7 @@ export class YellowPagesTaskModule extends BaseModule {
           (task) => task.pid && task.pid > 0
         );
 
-        console.log(
+        log.info(
           `Found ${tasksWithPID.length} tasks with PIDs from previous session`
         );
 
@@ -583,23 +584,23 @@ export class YellowPagesTaskModule extends BaseModule {
             );
 
             failedCount++;
-            console.log(
+            log.info(
               `Marked task ${task.id} (${task.name}) as failed due to application restart`
             );
           } catch (error) {
-            console.error(
+            log.error(
               `Failed to handle task ${task.id} from previous session:`,
               error
             );
           }
         }
 
-        console.log(
+        log.info(
           `Successfully handled ${failedCount} tasks from previous session`
         );
         return failedCount;
       } catch (error) {
-        console.error("Failed to handle tasks from previous session:", error);
+        log.error("Failed to handle tasks from previous session:", error);
         throw new Error(
           `Failed to handle tasks from previous session: ${
             error instanceof Error ? error.message : "Unknown error"
@@ -624,7 +625,7 @@ export class YellowPagesTaskModule extends BaseModule {
         entity.id
       );
     } catch (error) {
-      console.warn(`Failed to get results count for task ${entity.id}:`, error);
+      log.warn(`Failed to get results count for task ${entity.id}:`, error);
       // Fallback to 0 if we can't get the count
     }
 

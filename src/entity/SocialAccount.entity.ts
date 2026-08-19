@@ -11,34 +11,34 @@ import { ProxyEntity } from "@/entity/Proxy.entity";
 @Entity("social_accounts")
 export class SocialAccountEntity extends AuditableEntity {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
 
   // @Column({ type: 'varchar', length: 100,nullable: true })
   // social_type: string;
 
   @Column({ type: "integer" })
-  social_type_id: number;
+  social_type_id!: number;
 
   // @Column({ type: 'varchar', length: 255, nullable: true })
   // social_type_url: string;
 
   @Column({ type: "varchar", length: 255 })
-  user: string;
+  user!: string;
 
   @Column({ type: "varchar", length: 255, nullable: true })
-  pass: string | null;
+  pass!: string | null;
 
   @Column({ type: "integer", default: 1 })
-  status: number;
+  status!: number;
 
   @Column({ type: "varchar", length: 255 })
-  name: string;
+  name!: string;
 
   @Column({ type: "varchar", length: 50, nullable: true })
-  phone: string;
+  phone!: string;
 
   @Column({ type: "varchar", length: 255, nullable: true })
-  email: string;
+  email!: string;
 
   @ManyToMany(() => ProxyEntity)
   @JoinTable({
@@ -52,5 +52,5 @@ export class SocialAccountEntity extends AuditableEntity {
       referencedColumnName: "id",
     },
   })
-  proxy: ProxyEntity[];
+  proxy!: ProxyEntity[];
 }

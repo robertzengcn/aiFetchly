@@ -1,4 +1,5 @@
 import { YellowPagesProcessManager } from "@/modules/YellowPagesProcessManager";
+import { log } from "@/modules/Logger";
 import { YellowPagesTaskModel } from "@/model/YellowPagesTask.model";
 import { BaseModule } from "@/modules/baseModule";
 
@@ -27,7 +28,7 @@ export class YellowPagesHealthCheck extends BaseModule {
             ipcStatus: string;
         };
     }> {
-        console.log('Running Yellow Pages system health check...');
+        log.info('Running Yellow Pages system health check...');
 
         const results = {
             database: false,
@@ -60,11 +61,11 @@ export class YellowPagesHealthCheck extends BaseModule {
             // Overall health
             results.overallHealth = results.database && results.processIsolation && results.ipcCommunication;
 
-            console.log('Health check completed:', results);
+            log.info('Health check completed:', results);
             return results;
 
         } catch (error) {
-            console.error('Health check failed:', error);
+            log.error('Health check failed:', error);
             return results;
         }
     }
@@ -76,10 +77,10 @@ export class YellowPagesHealthCheck extends BaseModule {
         try {
             // Try to get task count
             const taskCount = await this.taskModel.getTaskTotal();
-            console.log(`Database connection test passed. Total tasks: ${taskCount}`);
+            log.info(`Database connection test passed. Total tasks: ${taskCount}`);
             return true;
         } catch (error) {
-            console.error('Database connection test failed:', error);
+            log.error('Database connection test failed:', error);
             return false;
         }
     }
@@ -99,7 +100,7 @@ export class YellowPagesHealthCheck extends BaseModule {
                 concurrency: 1
             });
 
-            console.log(`Created test task ${testTaskId} for IPC test`);
+            log.info(`Created test task ${testTaskId} for IPC test`);
 
             // Try to spawn a process (it will fail because the task doesn't exist in the database)
             // but we can test the IPC setup
@@ -110,18 +111,18 @@ export class YellowPagesHealthCheck extends BaseModule {
                 return true;
             } catch (error) {
                 // Expected error due to missing task, but IPC is working
-                console.log('IPC test completed (expected error):', error instanceof Error ? error.message : String(error));
+                log.info('IPC test completed (expected error):', error instanceof Error ? error.message : String(error));
                 return true;
             } finally {
                 // Clean up test task
                 try {
                     await this.taskModel.deleteTask(testTaskId);
                 } catch (cleanupError) {
-                    console.log('Cleanup error (expected):', cleanupError instanceof Error ? cleanupError.message : String(cleanupError));
+                    log.info('Cleanup error (expected):', cleanupError instanceof Error ? cleanupError.message : String(cleanupError));
                 }
             }
         } catch (error) {
-            console.error('IPC communication test failed:', error);
+            log.error('IPC communication test failed:', error);
             return false;
         }
     }
@@ -136,7 +137,7 @@ export class YellowPagesHealthCheck extends BaseModule {
         isolationMaintained: boolean;
     }> {
         try {
-            console.log('Testing process isolation...');
+            log.info('Testing process isolation...');
 
             // Create test tasks
             const testTasks: number[] = [];
@@ -159,7 +160,7 @@ export class YellowPagesHealthCheck extends BaseModule {
                     const process = await this.processManager.spawnScraperProcess(taskId);
                     processes.push({ taskId, process });
                 } catch (error) {
-                    console.log(`Expected error for task ${taskId}:`, error instanceof Error ? error.message : String(error));
+                    log.info(`Expected error for task ${taskId}:`, error instanceof Error ? error.message : String(error));
                 }
             }
 
@@ -175,14 +176,14 @@ export class YellowPagesHealthCheck extends BaseModule {
                 isolationMaintained: uniquePids.size === pids.length
             };
 
-            console.log('Process isolation test result:', result);
+            log.info('Process isolation test result:', result);
 
             // Clean up
             for (const { taskId } of processes) {
                 try {
                     await this.processManager.terminateProcess(taskId);
                 } catch (error) {
-                    console.log(`Cleanup error for task ${taskId}:`, error instanceof Error ? error.message : String(error));
+                    log.info(`Cleanup error for task ${taskId}:`, error instanceof Error ? error.message : String(error));
                 }
             }
 
@@ -191,14 +192,14 @@ export class YellowPagesHealthCheck extends BaseModule {
                 try {
                     await this.taskModel.deleteTask(taskId);
                 } catch (error) {
-                    console.log(`Task cleanup error for ${taskId}:`, error instanceof Error ? error.message : String(error));
+                    log.info(`Task cleanup error for ${taskId}:`, error instanceof Error ? error.message : String(error));
                 }
             }
 
             return result;
 
         } catch (error) {
-            console.error('Process isolation test failed:', error);
+            log.error('Process isolation test failed:', error);
             return {
                 success: false,
                 processCount: 0,
@@ -230,7 +231,7 @@ export class YellowPagesHealthCheck extends BaseModule {
                 systemHealthy
             };
         } catch (error) {
-            console.error('Failed to get system status:', error);
+            log.error('Failed to get system status:', error);
             return {
                 databaseConnected: false,
                 activeProcesses: 0,

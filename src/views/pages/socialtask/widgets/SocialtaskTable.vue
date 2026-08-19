@@ -132,13 +132,13 @@ console.log(campaignId)
 //     },
 // },
 // methods: {
-function loadItems({ page, itemsPerPage, sortBy }) {
+function loadItems({ page, itemsPerPage, sortBy }: { page: number; itemsPerPage: number; sortBy: { key: string; order: string }[] }) {
     loading.value = true
     const fetchitem: Fetchparam = {
         id:parseInt(campaignId),
         page: page,
         itemsPerPage: itemsPerPage,
-        sortBy: sortBy,
+        sortBy: sortBy?.[0]?.key ?? '',
         search: search.value
     }
     FakeAPI.fetch(fetchitem).then(
@@ -167,14 +167,14 @@ function loadItems({ page, itemsPerPage, sortBy }) {
 //     //     path: '/graphics/oasis-engine',
 //     // });
 // };
-const runtask=(item)=>{
+const runtask=(item: SocialTaskEntity)=>{
     console.log("run task")
     console.log("item id is "+item.id)
     const routeData = router.resolve({name: 'Runtask', params: {id: item.id}});
     console.log(routeData.href)
     window.open(routeData.href, '_blank')
 }
-const edittask=(item)=>{
+const edittask=(item: SocialTaskEntity)=>{
     // router.push({
     //     path: '/graphics/oasis-engine',
     // });
@@ -188,7 +188,7 @@ const createTask=(campaignId:string)=>{
         });
 }
 //open task run list page
-const checkLog=(item)=>{
+const checkLog=(item: SocialTaskEntity)=>{
     const routeData = router.resolve({name: 'Task-run-list', params: {id: item.id}});
     window.open(routeData.href, '_blank')
 }

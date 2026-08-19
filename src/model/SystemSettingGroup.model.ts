@@ -1,4 +1,5 @@
 import { BaseDb } from "@/model/Basedb";
+import { log } from "@/modules/Logger";
 import { Repository } from "typeorm"
 import { SystemSettingGroupEntity } from "@/entity/SystemSettingGroup.entity"
 import {SystemSettingModel} from "@/model/SystemSetting.model"
@@ -26,12 +27,12 @@ export class SystemSettingGroupModel extends BaseDb {
             if (!this.sqliteDb.connection.isInitialized) {
                 try {
                     await SqliteDb.ensureInitialized();
-                    console.log('Database connection initialized in SystemSettingGroupModel');
+                    log.info('Database connection initialized in SystemSettingGroupModel');
                 } catch (error) {
                     // Check if error is about already being initialized
                     const errorMessage = error instanceof Error ? error.message : String(error);
                     if (!errorMessage.includes('already initialized') && !errorMessage.includes('already been initialized')) {
-                        console.error('Failed to initialize database connection:', error);
+                        log.error('Failed to initialize database connection:', error);
                         throw new Error(`Failed to initialize database connection: ${errorMessage}`);
                     }
                     // If already initialized, that's fine - continue
@@ -46,7 +47,7 @@ export class SystemSettingGroupModel extends BaseDb {
             try {
                 this._repository = this.sqliteDb.connection.getRepository(SystemSettingGroupEntity);
             } catch (error) {
-                console.error('Failed to get repository for SystemSettingGroupEntity:', error);
+                log.error('Failed to get repository for SystemSettingGroupEntity:', error);
                 throw new Error(`Failed to get repository: ${error instanceof Error ? error.message : 'Unknown error'}`);
             }
         }
@@ -69,7 +70,7 @@ export class SystemSettingGroupModel extends BaseDb {
                     await this.systemSettingModel.removeById(s.id);
                 }
                 await repository.remove(deprecatedGroup);
-                console.log(`[system-setting] removed deprecated group: ${name}`);
+                log.info(`[system-setting] removed deprecated group: ${name}`);
             }
         }
 
@@ -86,7 +87,7 @@ export class SystemSettingGroupModel extends BaseDb {
                 }
                 // Ensure settargroup is not null before using it
                 if (!settargroup) {
-                    console.error(`Failed to create or find setting group: ${sgelement.name}`);
+                    log.error(`Failed to create or find setting group: ${sgelement.name}`);
                     continue; // Skip this group if we can't create/find it
                 }
                 for(const settingelement of sgelement.items){

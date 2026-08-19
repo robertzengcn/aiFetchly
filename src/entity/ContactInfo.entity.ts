@@ -13,42 +13,42 @@ import { SearchResultEntity } from './SearchResult.entity';
 @Index(['resultId']) // For faster lookups
 export class ContactInfoEntity {
     @PrimaryGeneratedColumn()
-    id: number;
+    id!: number;
 
     @Column({ name: 'result_id', type: 'integer' })
-    resultId: number; // Foreign key to SearchResult
+    resultId!: number; // Foreign key to SearchResult
 
     @OneToOne(() => SearchResultEntity, { onDelete: 'CASCADE' })
     @JoinColumn({ name: 'result_id' })
-    searchResult: SearchResultEntity;
+    searchResult!: SearchResultEntity;
 
     @Column({ name: 'email', nullable: true, type: 'text' })
-    email: string | null;
+    email!: string | null;
 
     @Column({ name: 'phone', nullable: true, type: 'text' })
-    phone: string | null;
+    phone!: string | null;
 
     @Column({ name: 'address', nullable: true, type: 'text' })
-    address: string | null;
+    address!: string | null;
 
     @Column({ name: 'social_links', nullable: true, type: 'json' })
-    socialLinks: string[] | null; // Array of social media URLs
+    socialLinks!: string[] | null; // Array of social media URLs
 
     @Column({
         name: 'extraction_status',
         type: 'text',
         default: 'pending'
     })
-    extractionStatus: string; // 'pending' | 'analyzing' | 'completed' | 'failed'
+    extractionStatus!: string; // 'pending' | 'analyzing' | 'completed' | 'failed'
 
     @Column({ name: 'extraction_error', nullable: true, type: 'text' })
-    extractionError: string | null;
+    extractionError!: string | null;
 
     @CreateDateColumn({ name: 'extraction_date' })
-    extractionDate: Date;
+    extractionDate!: Date;
 
     @Column({ name: 'extraction_metadata', nullable: true, type: 'json' })
-    extractionMetadata: {
+    extractionMetadata!: {
         discoveredPageUrl?: string;
         discoveryMethod?: string; // 'stage1_homepage', 'stage2_heuristic', 'stage3_fallback', 'stage4_ai'
         aiServiceVersion?: string;

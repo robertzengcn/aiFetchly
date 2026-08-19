@@ -1,6 +1,5 @@
-import { ipcMain } from "electron";
-import { Token } from "@/modules/token";
-import { USER_AI_ENABLED } from "@/config/usersetting";
+import { z } from "zod";
+import { lazySchema } from "@/utils/lazySchema";
 import { AIUserMemoryService } from "@/service/AIUserMemoryService";
 import { getSharedAutoDreamService } from "@/service/AIAutoDreamFactory";
 import {
@@ -12,20 +11,34 @@ import {
   AI_USER_MEMORY_RUN_AUTO_DREAM,
   AI_USER_MEMORY_AUTO_DREAM_STATUS,
 } from "@/config/channellist";
-import type { CommonMessage } from "@/entityTypes/commonType";
 import type {
   AIUserMemoryCreateInput,
   AIUserMemoryUpdateInput,
   AIUserMemorySearchInput,
 } from "@/entityTypes/aiUserMemoryTypes";
+import { registerValidatedHandler } from "@/main-process/communication/_shared/registerValidatedHandler";
+import { registerAiValidatedHandler } from "@/main-process/communication/_shared/registerValidatedHandler";
+import { noInputSchema } from "@/schemas/ipc/_shared/common";
 
-function ok<T>(data: T): CommonMessage<T> {
-  return { status: true, msg: "", data };
-}
-
-function denied<T>(msg: string): CommonMessage<T> {
-  return { status: false, msg, data: undefined };
-}
+// WS-1 R1.5: input schemas (replacing manual safeParse + field-presence checks).
+// `type` is validated as a non-empty string; the service enforces enum membership.
+const listSchema = lazySchema(() => z.object({}).passthrough());
+const createSchema = lazySchema(() =>
+  z
+    .object({
+      title: z.string().min(1),
+      content: z.string().min(1),
+      type: z.string().min(1),
+    })
+    .passthrough()
+);
+const updateSchema = lazySchema(() =>
+  z.object({ memoryId: z.string().min(1) }).passthrough()
+);
+const memoryIdSchema = lazySchema(() => z.string().min(1));
+const runAutoDreamSchema = lazySchema(() =>
+  z.object({ force: z.boolean().optional() }).passthrough()
+);
 
 let memoryService: AIUserMemoryService | null = null;
 
@@ -34,19 +47,6 @@ function getMemoryService(): AIUserMemoryService {
     memoryService = new AIUserMemoryService();
   }
   return memoryService;
-}
-
-function isAIEnabled(): boolean {
-  return new Token().getValue(USER_AI_ENABLED) === "true";
-}
-
-function safeParse<T = unknown>(data: unknown): T | null {
-  if (typeof data !== "string" || data.length === 0) return null;
-  try {
-    return JSON.parse(data) as T;
-  } catch {
-    return null;
-  }
 }
 
 /**
@@ -58,89 +58,60 @@ export function _resetAIUserMemorySingletonsForTesting(): void {
 }
 
 export function registerAIUserMemoryIpcHandlers(): void {
-  ipcMain.handle(AI_USER_MEMORY_LIST, async (_e, data: unknown) => {
-    try {
-      const input = (safeParse<AIUserMemorySearchInput>(data) ??
-        {}) as AIUserMemorySearchInput;
-      const result = await getMemoryService().list(input);
-      return ok(result);
-    } catch (err) {
-      return denied(err instanceof Error ? err.message : "list failed");
-    }
+  // CRUD handlers are Zod-validated + envelope-wrapped (not AI-gated — memory
+  // management vs AI generation). Required-field checks moved into the schemas;
+  // thrown errors become {status:false,msg} via the wrapper.
+
+  registerValidatedHandler(AI_USER_MEMORY_LIST, listSchema, async (input) => {
+    const result = await getMemoryService().list(
+      input as unknown as AIUserMemorySearchInput
+    );
+    return result;
   });
 
-  ipcMain.handle(AI_USER_MEMORY_CREATE, async (_e, data: unknown) => {
-    try {
-      const input = safeParse<AIUserMemoryCreateInput>(data);
-      if (!input || !input.title || !input.content || !input.type) {
-        return denied("title, content, and type are required");
-      }
-      const result = await getMemoryService().createManualMemory(input);
-      return ok(result);
-    } catch (err) {
-      return denied(err instanceof Error ? err.message : "create failed");
-    }
+  registerValidatedHandler(AI_USER_MEMORY_CREATE, createSchema, async (input) => {
+    const result = await getMemoryService().createManualMemory(
+      input as unknown as AIUserMemoryCreateInput
+    );
+    return result;
   });
 
-  ipcMain.handle(AI_USER_MEMORY_UPDATE, async (_e, data: unknown) => {
-    try {
-      const input = safeParse<AIUserMemoryUpdateInput>(data);
-      if (!input || !input.memoryId) {
-        return denied("memoryId is required");
-      }
-      const result = await getMemoryService().update(input);
-      return ok(result);
-    } catch (err) {
-      return denied(err instanceof Error ? err.message : "update failed");
-    }
+  registerValidatedHandler(AI_USER_MEMORY_UPDATE, updateSchema, async (input) => {
+    const result = await getMemoryService().update(
+      input as unknown as AIUserMemoryUpdateInput
+    );
+    return result;
   });
 
-  ipcMain.handle(AI_USER_MEMORY_ARCHIVE, async (_e, data: unknown) => {
-    try {
-      const memoryId = safeParse<string>(data);
-      if (!memoryId) return denied("memoryId is required");
-      await getMemoryService().archive(memoryId);
-      return ok(null);
-    } catch (err) {
-      return denied(err instanceof Error ? err.message : "archive failed");
-    }
+  registerValidatedHandler(AI_USER_MEMORY_ARCHIVE, memoryIdSchema, async (memoryId) => {
+    await getMemoryService().archive(memoryId);
+    return null;
   });
 
-  ipcMain.handle(AI_USER_MEMORY_DELETE, async (_e, data: unknown) => {
-    try {
-      const memoryId = safeParse<string>(data);
-      if (!memoryId) return denied("memoryId is required");
-      const n = await getMemoryService().delete(memoryId);
-      return ok(n);
-    } catch (err) {
-      return denied(err instanceof Error ? err.message : "delete failed");
-    }
+  registerValidatedHandler(AI_USER_MEMORY_DELETE, memoryIdSchema, async (memoryId) => {
+    const n = await getMemoryService().delete(memoryId);
+    return n;
   });
 
-  ipcMain.handle(AI_USER_MEMORY_RUN_AUTO_DREAM, async (_e, data: unknown) => {
-    if (!isAIEnabled()) {
-      return denied("AI functionality is only available to subscribers.");
-    }
-    try {
-      const req = (safeParse<{ force?: boolean }>(data) ?? {}) as {
-        force?: boolean;
-      };
+  // RUN_AUTO_DREAM is AI-gated (it invokes the AI auto-dream service).
+  registerAiValidatedHandler(
+    AI_USER_MEMORY_RUN_AUTO_DREAM,
+    runAutoDreamSchema,
+    async (input) => {
       const result = await getSharedAutoDreamService().runNow({
-        force: req.force === true,
+        force: input.force === true,
         reason: "manual_ipc",
       });
-      return ok(result);
-    } catch (err) {
-      return denied(err instanceof Error ? err.message : "auto-dream failed");
+      return result;
     }
-  });
+  );
 
-  ipcMain.handle(AI_USER_MEMORY_AUTO_DREAM_STATUS, async () => {
-    try {
+  registerValidatedHandler(
+    AI_USER_MEMORY_AUTO_DREAM_STATUS,
+    noInputSchema,
+    async () => {
       const result = await getSharedAutoDreamService().getStatus();
-      return ok(result);
-    } catch (err) {
-      return denied(err instanceof Error ? err.message : "status failed");
+      return result;
     }
-  });
+  );
 }

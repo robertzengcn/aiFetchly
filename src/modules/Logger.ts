@@ -2,6 +2,7 @@ import * as path from "path";
 import * as os from "os";
 import fs from "fs";
 import { randomUUID } from "crypto";
+import { createRequire as nodeCreateRequire } from "node:module";
 import { getCrashReporterFromGlobal } from "@/modules/diagnostics/CrashReporterGlobal";
 import { redactString } from "@/modules/diagnostics/DiagnosticRedactor";
 import type { ErrorRecord } from "@/modules/diagnostics/DiagnosticSchemas";
@@ -14,6 +15,28 @@ const isWorker =
 
 /** True outside production builds. Used to gate dev-only behavior like console mirroring. */
 const isDevelopment = process.env.NODE_ENV !== "production";
+
+/**
+ * A `require` that works in every runtime this module can load from:
+ *   - Electron main process (CJS bundle) — global `require` exists.
+ *   - ESM contexts (ts-node ESM loader, plain `node --input-type=module`,
+ *     vitest native ESM) — global `require` is undefined, so synthesize one
+ *     from `node:module`'s `createRequire` relative to this file.
+ *
+ * Without this, `require("electron-log/main")` at module scope throws
+ * `ReferenceError: require is not defined` when Logger.ts is loaded as ESM
+ * (the bundled CJS output is unaffected because rolldown rewrites these to
+ * its own `require_*` interop). `createRequire(__filename)` is the Node
+ * blessed bridge and mirrors the pattern in LocalTransformersLoader /
+ * SherpaOnnxNative / LocalAiRuntimeHealthService.
+ */
+const safeRequire: NodeRequire =
+  typeof require === "function"
+    ? require
+    : nodeCreateRequire(
+        // In ESM, `__filename` is undefined; use the URL of this module.
+        typeof __filename === "string" ? __filename : import.meta.url
+      );
 
 /**
  * Returns true when verbose "debug-level" file logging should be active.
@@ -30,11 +53,11 @@ function isDebugLoggingEnabled(): boolean {
   if (process.env.AIFETCHLY_DEBUG_LOGS === "true") return true;
   try {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const electron = require("electron") as typeof import("electron");
+    const electron = safeRequire("electron") as typeof import("electron");
     const app = electron?.app;
     if (!app) return false;
     // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const debugPath = require("path").join(
+    const debugPath = safeRequire("path").join(
       app.getPath("userData"),
       "diagnostics",
       ".debug-enabled"
@@ -106,7 +129,7 @@ function createWorkerLoggerStub(
 function getLogDirectory(): string {
   try {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const electron = require("electron") as typeof import("electron");
+    const electron = safeRequire("electron") as typeof import("electron");
     const app = electron?.app;
     if (app && typeof app.getPath === "function") {
       return path.join(app.getPath("userData"), "logs");
@@ -134,7 +157,7 @@ export class Logger {
 
   private constructor() {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const electronLogModule = require("electron-log/main");
+    const electronLogModule = safeRequire("electron-log/main");
     // Ensure electron-log has the required methods, fall back to console if not
     if (electronLogModule && typeof electronLogModule.info === "function") {
       this.electronLog = electronLogModule;
@@ -418,7 +441,7 @@ if (isWorker) {
   logger = createWorkerLoggerStub(workerLog);
 } else {
   // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const electronLogModule = require("electron-log/main");
+  const electronLogModule = safeRequire("electron-log/main");
   // Ensure electron-log has the required methods, fall back to console if not
   let resolved: {
     info: (...args: unknown[]) => void;

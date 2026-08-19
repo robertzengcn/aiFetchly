@@ -79,6 +79,7 @@
       hide-details
       density="comfortable"
       :disabled="isStreaming || isProcessing"
+      data-testid="ai-chat-composer"
       :aria-label="t('aiChatV2.input_placeholder') || 'Send a message'"
       @keydown="onKeydown"
       @input="onTextareaInput"
@@ -227,6 +228,7 @@
           :disabled="(draft.trim().length === 0 && selectedFiles.length === 0) || isProcessing"
           :loading="isProcessing"
           :aria-label="t('aiChatV2.send') || 'Send'"
+          data-testid="ai-chat-send"
           @click="onSend"
         />
         <v-btn
@@ -235,6 +237,7 @@
           icon="mdi-stop"
           size="small"
           :aria-label="t('aiChatV2.stop') || 'Stop'"
+          data-testid="ai-chat-stop"
           @click="$emit('stop')"
         />
       </div>
@@ -1086,7 +1089,14 @@ watch(
   () => props.conversationId,
   () => {
     closeAtMention();
-    closeSlash();
+    // If the user is mid-slash-command, keep the dropdown open and let the
+    // earlier conversation-switch watcher (above) refresh it for the new
+    // conversation. Calling closeSlash() here would clearTimeout the debounced
+    // refresh it just scheduled, silently breaking the FR-1 refetch; the
+    // slashGeneration guard already drops any stale result from the old chat.
+    if (!draft.value.startsWith("/")) {
+      closeSlash();
+    }
     resetPastedState();
   }
 );

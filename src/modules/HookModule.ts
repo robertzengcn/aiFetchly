@@ -1,4 +1,5 @@
 import { BaseModule } from "./baseModule";
+import { log } from "@/modules/Logger";
 import { HookModel, NewHookRow, HookPatch } from "@/model/Hook.model";
 import { HookConfigEntity } from "@/entity/HookConfig.entity";
 import { HookRegistry } from "@/service/hooks/HookRegistry";
@@ -146,7 +147,7 @@ export class HookModule extends BaseModule {
     try {
       map = JSON.parse(raw);
     } catch {
-      console.warn("[HookModule] malformed builtin overrides JSON, ignoring");
+      log.warn("[HookModule] malformed builtin overrides JSON, ignoring");
       return;
     }
 
@@ -204,14 +205,14 @@ export class HookModule extends BaseModule {
     try {
       const parsed: unknown = JSON.parse(raw);
       if (!Array.isArray(parsed)) {
-        console.warn(
+        log.warn(
           `[HookModule] envAllowlist is not an array, ignoring: ${raw}`
         );
         return undefined;
       }
       return parsed.filter((v): v is string => typeof v === "string");
     } catch (err) {
-      console.warn(
+      log.warn(
         `[HookModule] failed to parse envAllowlist JSON, ignoring: ${raw}`,
         err
       );

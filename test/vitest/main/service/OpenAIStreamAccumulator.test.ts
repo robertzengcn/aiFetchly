@@ -333,4 +333,38 @@ describe("OpenAIStreamAccumulator", () => {
       total_tokens: 105,
     });
   });
+
+  it("captures the stream-level error field (finish_reason=error)", () => {
+    const acc = new OpenAIStreamAccumulator();
+    acc.ingest(
+      chunk({
+        choices: [
+          { index: 0, delta: {}, finish_reason: "error" },
+        ],
+        error: {
+          message:
+            "Upstream LLM error: ContextWindowExceededError: input too long",
+          type: "upstream_llm_error",
+          code: "context_window_exceeded",
+        },
+      })
+    );
+    expect(acc.state.finishReason).toBe("error");
+    expect(acc.state.streamError).toBeDefined();
+    expect(acc.state.streamError?.code).toBe("context_window_exceeded");
+    expect(acc.state.streamError?.message).toContain("ContextWindowExceeded");
+    expect(acc.state.streamError?.type).toBe("upstream_llm_error");
+  });
+
+  it("leaves streamError undefined when no error field is present", () => {
+    const acc = new OpenAIStreamAccumulator();
+    acc.ingest(
+      chunk({
+        choices: [
+          { index: 0, delta: { content: "hi" }, finish_reason: "stop" },
+        ],
+      })
+    );
+    expect(acc.state.streamError).toBeUndefined();
+  });
 });

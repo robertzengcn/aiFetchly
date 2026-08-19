@@ -251,11 +251,11 @@ watch(loadDialogshow, (newValue) => {
 });
 
 const rules = {
-  required: (value) => {
+  required: (value: unknown) => {
     if (!value) return "The field is required";
     return true;
   },
-  email: (value) => {
+  email: (value: string) => {
     if (!value) return "E-mail is required";
     if (!/.+@.+\..+/.test(value)) return "E-mail must be valid.";
     return true;

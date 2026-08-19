@@ -9,15 +9,15 @@ import { Order } from "./order.decorator";
 @Index("idx_session_memories_updated", ["updatedAt"])
 export class AIChatSessionMemoryEntity extends AuditableEntity {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
 
   @Order(1)
   @Column("varchar", { length: 100, nullable: false })
-  conversationId: string;
+  conversationId!: string;
 
   @Order(2)
   @Column("text", { nullable: false })
-  summary: string;
+  summary!: string;
 
   @Order(3)
   @Column("varchar", { length: 100, nullable: true })
@@ -29,7 +29,7 @@ export class AIChatSessionMemoryEntity extends AuditableEntity {
 
   @Order(5)
   @Column("int", { nullable: false, default: 0 })
-  sourceMessageCount: number;
+  sourceMessageCount!: number;
 
   @Order(6)
   @Column("int", { nullable: true })
@@ -41,7 +41,7 @@ export class AIChatSessionMemoryEntity extends AuditableEntity {
 
   @Order(8)
   @Column("int", { nullable: false, default: 0 })
-  failureCount: number;
+  failureCount!: number;
 
   @Order(9)
   @Column("text", { nullable: true })
@@ -49,5 +49,5 @@ export class AIChatSessionMemoryEntity extends AuditableEntity {
 
   @Order(10)
   @Column("varchar", { length: 30, nullable: false, default: "active" })
-  status: string; // 'active' | 'updating' | 'failed' | 'disabled'
+  status!: string; // 'active' | 'updating' | 'failed' | 'disabled'
 }
