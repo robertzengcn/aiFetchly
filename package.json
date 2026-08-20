@@ -81,8 +81,7 @@
     "rebuild-native": "yarn patch-node-abi && yarn patch-remote-rebuild && yarn rebuild-better-sqlite",
     "patch-node-abi": "node scripts/patch-node-abi.js",
     "patch-remote-rebuild": "node scripts/patch-remote-rebuild.js",
-    "postinstall":
-      "node scripts/patch-node-abi.js && node scripts/patch-remote-rebuild.js && node scripts/rebuild-better-sqlite.js",
+    "postinstall": "node scripts/patch-node-abi.js && node scripts/patch-remote-rebuild.js && node scripts/rebuild-better-sqlite.js",
     "vue-check": "vue-tsc --noEmit --watch",
     "vue-typecheck": "vue-tsc --noEmit",
     "test-installer": "node installer-scripts/test-installer.js",
@@ -133,7 +132,7 @@
     "filenamify": "^4.3.0",
     "global": "^4.4.0",
     "got": "^14.4.7",
-    "html-to-text": "^10.0.0",
+    "html-to-text": "^10.0.1",
     "http-proxy-agent": "^7.0.2",
     "https-proxy-agent": "^7.0.4",
     "iconv-lite": "^0.7.2",
