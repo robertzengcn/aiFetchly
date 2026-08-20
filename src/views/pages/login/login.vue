@@ -53,11 +53,12 @@
       </v-dialog>
 </template>
 <script setup lang="ts">
-import {openPage, getLoginUrl} from "@/views/api/users"
+import {openPage, getLoginUrl, checkLoginSucceeded} from "@/views/api/users"
 import { onMounted, onUnmounted, ref } from "vue";
 import {NATIVATECOMMAND, LOGIN_STATUS} from "@/config/channellist"
 import { getIpcTransport } from "@/views/utils/ipcTransport"
 import { useI18n } from 'vue-i18n'
+import router from '@/views/router'
 import type { LoginStatusType, NativateDatatype } from "@/entityTypes/commonType"
 
 const { t } = useI18n()
@@ -119,14 +120,32 @@ const redirectToLogin = async () => {
                 window.open(url, "_blank");
             }
         }
-        setTimeout(() => {
+        setTimeout(async () => {
             if (isLoading.value) {
+                // The navigation IPC may have been lost even though login
+                // actually completed (e.g. the main-process window reference
+                // went stale mid-login). Probe the main process before
+                // showing a false "timeout": if a user email is persisted,
+                // treat this as success and navigate to the Dashboard.
+                try {
+                    const loginDone = await checkLoginSucceeded();
+                    if (loginDone) {
+                        isLoading.value = false;
+                        showLoginUrl.value = false;
+                        router.push({ name: 'Dashboard' }).catch((err) => {
+                            console.warn('Navigation to Dashboard failed:', err);
+                        });
+                        return;
+                    }
+                } catch (probeError) {
+                    console.warn('Login state probe failed:', probeError);
+                }
                 isLoading.value = false;
-                
+
                 alertContent.value = t('layout.login_timeout');
                 dialog.value = true;
             }
-        }, 20000); 
+        }, 20000);
         
         // Open the browser to the login page
         if (transport.source !== "dev-browser-bridge") {

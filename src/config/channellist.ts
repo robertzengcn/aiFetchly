@@ -147,6 +147,7 @@ export const CANCEL_DESKTOP_LOGIN = "user:cancel_desktop_login";
 export const USER_LOGIN = "user:Login";
 export const NATIVATECOMMAND = "navigate:command";
 export const LOGIN_STATUS = "login:status";
+export const CHECK_LOGIN_SUCCEEDED = "user:check_login_succeeded";
 export const VIDEO_PUBLISH = "video:publish";
 export const VIDEO_PUBLISH_RECORD_MESSAGE = "video:publish:record:message";
 export const VIDEO_PUBLISH_RECORD_DELETE = "video:publish:record:delete";

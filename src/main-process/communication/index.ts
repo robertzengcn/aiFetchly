@@ -11,6 +11,7 @@ import { registerSearchIpcHandlers } from "@/main-process/communication/search-i
 import { registeProxyIpcHandlers } from "@/main-process/communication/proxy-ipc";
 import { registerEmailextractionIpcHandlers } from "@/main-process/communication/emailextraction-ipc";
 import { registerEmailMarketingIpcHandlers } from "@/main-process/communication/emailMarketingIpc";
+import { EmailReplyReliabilityStartup } from "@/service/emailReply/EmailReplyReliabilityStartup";
 import { registerBuckEmailIpcHandlers } from "@/main-process/communication/buckEmail-ipc";
 import { registerEmailTemplateIpcHandlers } from "@/main-process/communication/emailTemplate-ipc";
 import { registerSocialAccountIpcHandlers } from "@/main-process/communication/socialaccount-ipc";
@@ -86,7 +87,13 @@ export function registerCommunicationIpcHandlers(
     registerEmailTemplateIpcHandlers();
     registerSocialAccountIpcHandlers(win);
     registerSystemSettingIpcHandlers();
-    registerUserIpcHandlers(() => win);
+    // Use the lazy getWin provider, NOT the captured `win` argument. The
+    // HMR guard above means this closure lives for the whole app lifetime;
+    // capturing `win` here would pin the FIRST window forever, so after a
+    // window recreation (crash recovery, second-instance) every login-flow
+    // lookup would return the destroyed window and post-login IPC would
+    // never reach the live renderer.
+    registerUserIpcHandlers(getWin);
     registerPlatformIpcHandlers();
     registerSessionRecordingIpcHandlers();
     registerLanguagePreferenceIpcHandlers();
@@ -122,9 +129,11 @@ export function registerCommunicationIpcHandlers(
     // Best-effort reply-reliability startup: lift legacy drafts onto immutable
     // revisions and sweep stale in-flight send attempts to delivery_unknown.
     // Fire-and-forget; never blocks app startup.
-    new (require("@/service/emailReply/EmailReplyReliabilityStartup").EmailReplyReliabilityStartup)()
+    new EmailReplyReliabilityStartup()
       .start()
-      .catch((e: unknown) => log.error("[reply-reliability] startup failed:", e));
+      .catch((e: unknown) =>
+        log.error("[reply-reliability] startup failed:", e)
+      );
     registerDiagnosticsIpcHandlers();
     registerHooksIpcHandlers();
     registerSlashCommandHandlers(win);

@@ -3,6 +3,7 @@
  * This file is loaded by tests (and via tsconfig paths) to mock Electron APIs.
  * Keep surface area aligned with production imports so `tsc --noEmit` stays green.
  */
+/* eslint-disable @typescript-eslint/no-unused-vars -- mock stubs intentionally ignore params */
 
 export interface Rectangle {
   x: number;
@@ -93,6 +94,7 @@ export const app = {
   getName: () => "aiFetchly",
   getVersion: () => "1.0.0",
   isPackaged: false,
+  userAgentFallback: "",
   getPath: (name: string) => {
     const paths: Record<string, string> = {
       home: "/tmp/test/home",
@@ -106,6 +108,38 @@ export const app = {
   // per-test root via app.setPath. No-op in tests.
   setPath(_name: string, _target: string): void {
     // mock
+  },
+  quit(): void {
+    // Mock implementation
+  },
+  exit(_code?: number): void {
+    // Mock implementation
+  },
+  on(_event: string, _listener: (...args: unknown[]) => void): void {
+    // Mock implementation (Electron's App.on returns App for chaining; tests don't chain)
+  },
+  off(_event: string, _listener: (...args: unknown[]) => void): void {
+    // Mock implementation
+  },
+  once(_event: string, _listener: (...args: unknown[]) => void): void {
+    // Mock implementation
+  },
+  whenReady(): Promise<void> {
+    return Promise.resolve();
+  },
+  isDefaultProtocolClient(_protocol: string): boolean {
+    return false;
+  },
+  setAsDefaultProtocolClient(_protocol: string): boolean {
+    return true;
+  },
+  disableHardwareAcceleration(): void {
+    // Mock implementation
+  },
+  commandLine: {
+    appendSwitch(_switchName: string): void {
+      // Mock implementation
+    },
   },
 };
 
@@ -176,6 +210,13 @@ export interface WebContents {
   send(_channel: string, ..._args: unknown[]): void;
   isDestroyed(): boolean;
   on(event: string, listener: WebContentsListener): void;
+  setWindowOpenHandler(
+    _handler: (details: { url: string }) => {
+      action: "deny" | "allow";
+      overrideBrowserWindowOptions?: Record<string, unknown>;
+    }
+  ): void;
+  openDevTools(): void;
 }
 
 export class BrowserWindow {
@@ -187,6 +228,12 @@ export class BrowserWindow {
       return false;
     },
     on(_event: string, _listener: WebContentsListener): void {
+      // Mock implementation
+    },
+    setWindowOpenHandler(_handler: (details: { url: string }) => void): void {
+      // Mock implementation
+    },
+    openDevTools(): void {
       // Mock implementation
     },
   };
@@ -262,6 +309,18 @@ export class BrowserWindow {
 
   isVisible(): boolean {
     return true;
+  }
+
+  setAutoHideMenuBar(_hide: boolean): void {
+    // Mock implementation
+  }
+
+  setMenuBarVisibility(_visible: boolean): void {
+    // Mock implementation
+  }
+
+  isMenuBarVisible(): boolean {
+    return false;
   }
 
   getBounds(): Rectangle {

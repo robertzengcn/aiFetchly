@@ -12,6 +12,7 @@ import {
   GET_LOGIN_URL,
   USER_SIGNOUT,
   USER_LOGIN,
+  CHECK_LOGIN_SUCCEEDED,
 } from "@/config/channellist";
 import { UserInfoType } from "@/entityTypes/userType";
 import { OPENLOGINPAGE } from "@/config/channellist";
@@ -85,4 +86,13 @@ export async function getLoginUrl(): Promise<string> {
   // } else {
   //   throw new Error(response.msg || 'Failed to get login URL')
   // }
+}
+
+// Ask the main process whether the desktop login handoff already completed
+// (user email is persisted). Used by the login page watchdog to avoid
+// showing a false "timeout" when login succeeded but the navigation IPC was
+// lost (e.g. window reference went stale mid-login).
+export async function checkLoginSucceeded(): Promise<boolean> {
+  const result = await windowInvoke(CHECK_LOGIN_SUCCEEDED);
+  return result === true;
 }
