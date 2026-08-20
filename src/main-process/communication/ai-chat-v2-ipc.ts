@@ -858,10 +858,6 @@ async function handleResumeToolAfterPermission(
 // -------------------------------------------------------------------------
 
 async function handleModels(): Promise<CommonMessage<unknown>> {
-  const chatAccess = canUseChat();
-  if (!chatAccess.ok) {
-    return denied(chatAccess.message);
-  }
   try {
     const api = new AiChatApi();
     const models = await api.listOpenAIModels();

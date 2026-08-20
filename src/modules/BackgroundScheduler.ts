@@ -223,6 +223,13 @@ export class BackgroundScheduler extends BaseDb {
     this.scheduleExecutionLogModel = new ScheduleExecutionLogModel(latestPath);
     this.scheduleTaskModel = new ScheduleTaskModule();
     this.taskExecutorService = new TaskExecutorService();
+    // Reset the lazy interval-trigger models so they re-create against the new
+    // SqliteDb instance on next use. Their repositories are captured in the
+    // model constructors; without this reset they would keep pointing at the
+    // destroyed connection and throw "The database connection is not open" on
+    // the next interval poll.
+    this.intervalScheduleModel = null;
+    this.intervalRunModel = null;
     this.currentDbPath = latestPath;
     this.isInitialized = false;
 
@@ -666,11 +673,10 @@ export class BackgroundScheduler extends BaseDb {
           throw new Error("Schedule not found");
         }
 
-        const taskOutputId =
-          await this.taskExecutorService.executeScheduledTask(
-            schedule,
-            executionId
-          );
+        await this.taskExecutorService.executeScheduledTask(
+          schedule,
+          executionId
+        );
 
         // Calculate duration
         const duration = Date.now() - startTime;
@@ -921,7 +927,7 @@ export class BackgroundScheduler extends BaseDb {
       const schedulerStatus = this.getSchedulerStatus();
 
       // Get task type statistics
-      const taskTypeStats: Record<string, any> = {};
+      const taskTypeStats: DetailedStats["taskTypeStats"] = {};
       const taskTypes = Object.values(TaskType);
 
       for (const taskType of taskTypes) {

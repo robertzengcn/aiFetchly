@@ -558,7 +558,23 @@ module.exports = {
             },
           }
         : {
-            osxSign: {},
+            // Pass the CI-created keychain explicitly so @electron/osx-sign
+            // searches it for the Developer ID Application certificate.
+            // Relying on the keychain search list is flaky on macOS CI
+            // runners; without this, findIdentities() may miss the cert,
+            // signing silently no-ops (see continueOnError below), and the
+            // app ships adhoc-signed — which then fails notarization's
+            // pre-flight codesign check with a confusing "adhoc" dump.
+            osxSign: {
+              ...(process.env.MACOS_KEYCHAIN_PATH
+                ? { keychain: process.env.MACOS_KEYCHAIN_PATH }
+                : {}),
+              // @electron/packager defaults continueOnError to true, which
+              // swallows signing failures as warnings and leaves the app
+              // unsigned. Fail hard instead so the real cause surfaces at
+              // the signing step rather than later at notarization.
+              continueOnError: false,
+            },
             osxNotarize: {
               appleId: requireProductionEnv("APPLE_ID"),
               appleIdPassword: requireProductionEnv(

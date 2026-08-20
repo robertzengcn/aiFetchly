@@ -91,8 +91,12 @@ describe("Windows Store packaging", (): void => {
     expect(workflow).to.include("WINDOWS_STORE_PACKAGE_IDENTITY");
     expect(workflow).to.include("yarn make-win:store");
     expect(workflow).to.include("out/make/**/*.msix");
-    expect(workflow).to.include(
-      "- name: Restore Windows signing certificate\n        if: ${{ env.BUILD_MODE == 'production' }}"
+    // Windows signing is optional (forge.config.js resolveWindowsSignConfig()
+    // signs only when cert.pfx + CERTIFICATE_PASSWORD are present). Master
+    // pushes produce an unsigned MSIX that Partner Center re-signs, so the
+    // workflow must NOT hard-require a certificate-restore step.
+    expect(workflow).to.not.include(
+      "name: Restore Windows signing certificate"
     );
     expect(workflow).to.include(
       "if: ${{ github.event_name == 'workflow_dispatch' && inputs.build_mode == 'production' }}"

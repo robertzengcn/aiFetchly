@@ -1104,7 +1104,7 @@ export class AiChatApi {
       throw new Error("Response body is null");
     }
 
-    await this._consumeStreamResponse(response, onEvent);
+    await this._consumeStreamResponse(response, onEvent, options?.signal);
   }
 
   /**
@@ -1155,7 +1155,8 @@ export class AiChatApi {
    */
   private async _consumeStreamResponse(
     response: Response,
-    onEvent: (event: StreamEvent) => void
+    onEvent: (event: StreamEvent) => void,
+    signal?: AbortSignal
   ): Promise<void> {
     if (!response.body) {
       throw new Error("Response body is null");
@@ -1168,6 +1169,11 @@ export class AiChatApi {
     try {
       let streamActive = true;
       while (streamActive) {
+        // Honor an abort between reads so cancellation is responsive even
+        // when the underlying read hasn't rejected yet.
+        if (signal?.aborted) {
+          break;
+        }
         let result: ReadableStreamReadResult<Uint8Array>;
         try {
           result = await reader.read();
@@ -1284,7 +1290,6 @@ export class AiChatApi {
   async getAvailableModels(): Promise<
     CommonApiresp<AvailableChatModelsResponse>
   > {
-    await this.ensureAIEnabled();
     return this._httpClient.get("/api/ai/chat/models");
   }
 
@@ -1537,12 +1542,7 @@ export class AiChatApi {
             try {
               currentEvent.data = JSON.parse(dataStr);
             } catch (error) {
-              log.error(
-                "Error parsing event data:",
-                error,
-                "Data:",
-                dataStr
-              );
+              log.error("Error parsing event data:", error, "Data:", dataStr);
               try {
                 const jsonStr =
                   dataStr.startsWith("{") && dataStr.includes("'")
@@ -1550,12 +1550,7 @@ export class AiChatApi {
                     : dataStr;
                 currentEvent.data = JSON.parse(jsonStr);
               } catch (err) {
-                log.error(
-                  "Error parsing event data:",
-                  err,
-                  "Data:",
-                  dataStr
-                );
+                log.error("Error parsing event data:", err, "Data:", dataStr);
               }
             }
           }
@@ -1931,8 +1926,6 @@ export class AiChatApi {
       }
       return this.listOpenAIModelsHosted();
     }
-    // Worker processes have no provider settings; keep the hosted-only gate.
-    await this.ensureAIEnabled();
     return this.listOpenAIModelsHosted();
   }
 
@@ -2475,64 +2468,61 @@ export class AiChatApi {
     }
 
     let chunkIndex = 0;
-    await this._consumeStreamResponse(
-      response,
-      (event) => {
-        const eventType = String(event.event ?? "");
-        const content =
-          typeof event.data?.content === "string" ? event.data.content : "";
+    await this._consumeStreamResponse(response, (event) => {
+      const eventType = String(event.event ?? "");
+      const content =
+        typeof event.data?.content === "string" ? event.data.content : "";
 
-        if (eventType === StreamEventType.TOKEN && content) {
-          onChunk({
-            id: `legacy-${Date.now()}-${chunkIndex}`,
-            object: "chat.completion.chunk",
-            created: Date.now(),
-            model: request.model ?? "",
-            choices: [
-              {
-                index: chunkIndex++,
-                delta: { content },
-                finish_reason: null,
-              },
-            ],
-          });
-          return;
-        }
-
-        if (
-          eventType === StreamEventType.DONE ||
-          eventType === StreamEventType.COMPLETE ||
-          eventType === StreamEventType.CONVERSATION_END
-        ) {
-          onChunk({
-            id: `legacy-${Date.now()}-${chunkIndex}`,
-            object: "chat.completion.chunk",
-            created: Date.now(),
-            model: request.model ?? "",
-            choices: [
-              {
-                index: chunkIndex++,
-                delta: {},
-                finish_reason: "stop",
-              },
-            ],
-          });
-          return;
-        }
-
-        if (eventType === StreamEventType.ERROR) {
-          const errorMessage =
-            content ||
-            (typeof event.data === "object" &&
-            event.data &&
-            "errorMessage" in event.data &&
-            typeof event.data.errorMessage === "string"
-              ? event.data.errorMessage
-              : "Unknown error");
-          throw new Error(errorMessage);
-        }
+      if (eventType === StreamEventType.TOKEN && content) {
+        onChunk({
+          id: `legacy-${Date.now()}-${chunkIndex}`,
+          object: "chat.completion.chunk",
+          created: Date.now(),
+          model: request.model ?? "",
+          choices: [
+            {
+              index: chunkIndex++,
+              delta: { content },
+              finish_reason: null,
+            },
+          ],
+        });
+        return;
       }
-    );
+
+      if (
+        eventType === StreamEventType.DONE ||
+        eventType === StreamEventType.COMPLETE ||
+        eventType === StreamEventType.CONVERSATION_END
+      ) {
+        onChunk({
+          id: `legacy-${Date.now()}-${chunkIndex}`,
+          object: "chat.completion.chunk",
+          created: Date.now(),
+          model: request.model ?? "",
+          choices: [
+            {
+              index: chunkIndex++,
+              delta: {},
+              finish_reason: "stop",
+            },
+          ],
+        });
+        return;
+      }
+
+      if (eventType === StreamEventType.ERROR) {
+        const errorMessage =
+          content ||
+          (typeof event.data === "object" &&
+          event.data &&
+          "errorMessage" in event.data &&
+          typeof event.data.errorMessage === "string"
+            ? event.data.errorMessage
+            : "Unknown error");
+        throw new Error(errorMessage);
+      }
+    });
   }
 
   private buildLegacyChatRequestFromOpenAI(

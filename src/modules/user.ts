@@ -1,72 +1,87 @@
-import { Token } from "@/modules/token"
-import { RemoteSource } from "@/modules/remotesource"
-import { USERSDBPATH, TOKENNAME, USERLOGPATH, USEREMAIL, USERNAME, REFRESHTOKEN, TOKENEXPIRY, REFRESHTOKENEXPIRY } from '@/config/usersetting';
+import { Token } from "@/modules/token";
+import { RemoteSource } from "@/modules/remotesource";
+import {
+  USERSDBPATH,
+  TOKENNAME,
+  USERLOGPATH,
+  USEREMAIL,
+  USERNAME,
+  REFRESHTOKEN,
+  TOKENEXPIRY,
+  REFRESHTOKENEXPIRY,
+} from "@/config/usersetting";
 import { log } from "@/modules/Logger";
-import { BrowserWindow } from 'electron';
-import { NATIVATECOMMAND } from '@/config/channellist';
-import type { NativateDatatype } from '@/entityTypes/commonType';
-import { TokenRefreshService } from '@/modules/tokenRefresh';
-import { SqliteDb } from '@/config/SqliteDb';
-import { ScheduleManager } from '@/modules/ScheduleManager';
-import { SearchController } from '@/controller/SearchController';
-import { YellowPagesController } from '@/controller/YellowPagesController';
-import { YellowPagesProcessManager } from '@/modules/YellowPagesProcessManager';
-import { WebSocketClient } from '@/modules/WebSocketClient';
-import { VectorDatabasePool } from '@/modules/factories/VectorDatabasePool';
+import { BrowserWindow } from "electron";
+import { NATIVATECOMMAND } from "@/config/channellist";
+import type { NativateDatatype } from "@/entityTypes/commonType";
+import { TokenRefreshService } from "@/modules/tokenRefresh";
+import { SqliteDb } from "@/config/SqliteDb";
+import { ScheduleManager } from "@/modules/ScheduleManager";
+import { SearchController } from "@/controller/SearchController";
+import { YellowPagesController } from "@/controller/YellowPagesController";
+import { YellowPagesProcessManager } from "@/modules/YellowPagesProcessManager";
+import { WebSocketClient } from "@/modules/WebSocketClient";
+import { VectorDatabasePool } from "@/modules/factories/VectorDatabasePool";
+import { stopChatScheduler } from "@/main-process/chatSchedulerLifecycleRegistry";
 
 export class User {
-    public async removeToken(): Promise<void> {
-        // Stop background auto-refresh before clearing tokens
-        TokenRefreshService.stopAutoRefresh();
+  public async removeToken(): Promise<void> {
+    // Stop background auto-refresh before clearing tokens
+    TokenRefreshService.stopAutoRefresh();
 
-        WebSocketClient.resetInstance();
-        await ScheduleManager.destroyInstance();
-        SearchController.resetInstance();
-        YellowPagesController.resetInstance();
-        YellowPagesProcessManager.resetInstance();
-        await VectorDatabasePool.clearAllInstances();
-        await SqliteDb.destroyInstance();
+    // Stop the Chat V2 interval scheduler BEFORE destroying the DB
+    // connection. Its 30s poll holds cached repositories that point at the
+    // shared DataSource; if it fires after destroyInstance() it throws
+    // "The database connection is not open".
+    await stopChatScheduler();
 
-        // Clear all user tokens and data
-        const token = new Token();
-        token.setValue(TOKENNAME, "");
-        token.setValue(REFRESHTOKEN, "");
-        token.setValue(TOKENEXPIRY, "");
-        token.setValue(REFRESHTOKENEXPIRY, "");
-        token.setValue(USERSDBPATH, "");
-        token.setValue(USERLOGPATH, "");
-        token.setValue(USEREMAIL, "");
-        token.setValue(USERNAME, "");
+    WebSocketClient.resetInstance();
+    await ScheduleManager.destroyInstance();
+    SearchController.resetInstance();
+    YellowPagesController.resetInstance();
+    YellowPagesProcessManager.resetInstance();
+    await VectorDatabasePool.clearAllInstances();
+    await SqliteDb.destroyInstance();
 
-        // Navigate to login page via IPC
-        try {
-            const allWindows = BrowserWindow.getAllWindows();
-            if (allWindows.length > 0) {
-                const mainWindow = allWindows[0] as BrowserWindow;
-                if (mainWindow) {
-                    const bw = mainWindow as BrowserWindow;
-                    if (bw && !(bw as any).isDestroyed?.() && (bw as any).webContents) {
-                        log.info("Sending navigation command to renderer");
-                        (bw as any).webContents.send(NATIVATECOMMAND, {
-                            path: 'login'
-                        } as NativateDatatype);
-                    }
-                }
-            }
-        } catch (ipcError) {
-            log.error('Failed to send navigation command to renderer:', ipcError);
+    // Clear all user tokens and data
+    const token = new Token();
+    token.setValue(TOKENNAME, "");
+    token.setValue(REFRESHTOKEN, "");
+    token.setValue(TOKENEXPIRY, "");
+    token.setValue(REFRESHTOKENEXPIRY, "");
+    token.setValue(USERSDBPATH, "");
+    token.setValue(USERLOGPATH, "");
+    token.setValue(USEREMAIL, "");
+    token.setValue(USERNAME, "");
+
+    // Navigate to login page via IPC
+    try {
+      const allWindows = BrowserWindow.getAllWindows();
+      if (allWindows.length > 0) {
+        // Electron's `getAllWindows()` overloads resolve the element to
+        // `unknown` in this module context; cast to the documented
+        // `BrowserWindow` type before accessing window-only members.
+        const mainWindow = allWindows[0] as BrowserWindow | undefined;
+        if (mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents) {
+          log.info("Sending navigation command to renderer");
+          mainWindow.webContents.send(NATIVATECOMMAND, {
+            path: "login",
+          } as NativateDatatype);
         }
+      }
+    } catch (ipcError) {
+      log.error("Failed to send navigation command to renderer:", ipcError);
     }
-    //private tokenname= "social-market-token";
-    public async Signout() {
-        try {
-            const remoteModel = new RemoteSource()
-            await remoteModel.removeRemoteToken()
-        } catch (error) {
-            log.error("Error removing remote token:", error);
-            // Continue with local cleanup even if remote token removal fails
-        }
-        await this.removeToken()
-
+  }
+  //private tokenname= "social-market-token";
+  public async Signout() {
+    try {
+      const remoteModel = new RemoteSource();
+      await remoteModel.removeRemoteToken();
+    } catch (error) {
+      log.error("Error removing remote token:", error);
+      // Continue with local cleanup even if remote token removal fails
     }
+    await this.removeToken();
+  }
 }
