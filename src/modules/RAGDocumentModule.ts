@@ -277,17 +277,32 @@ export class RAGDocumentModule extends BaseModule {
    * F10 fix (bypass) — vectorIndexPath must live under either the app
    * userData directory (where VectorStoreService creates indexes) or the
    * upload staging root. Anything else is refused.
+   *
+   * Unlike the file-path check (isPathUnderUploadStaging), the vector index
+   * file is a *logical marker* that may not exist on disk yet (it is only
+   * created when the first embedding is saved).  fs.realpathSync() throws on
+   * non-existent paths, so we use path.resolve() to normalize the path
+   * without requiring it to exist, and verify that the resolved path (or its
+   * parent directory) sits under an allowed root.
    */
   private isVectorIndex_pathSafe(target: string): boolean {
     try {
-      const resolved = fs.realpathSync(target);
+      const resolved = path.resolve(target);
       const allowedRoots = [
         app.getPath("userData"),
         this.getUploadStagingDir(),
       ];
       for (const root of allowedRoots) {
-        const rel = path.relative(root, resolved);
-        if (!rel.startsWith("..") && !path.isAbsolute(rel) && rel !== "") {
+        const resolvedRoot = path.resolve(root);
+        // Check the target path itself
+        const rel = path.relative(resolvedRoot, resolved);
+        if (!rel.startsWith("..") && !path.isAbsolute(rel)) {
+          return true;
+        }
+        // Also check the parent directory (the file itself may not exist yet)
+        const parentDir = path.dirname(resolved);
+        const parentRel = path.relative(resolvedRoot, parentDir);
+        if (!parentRel.startsWith("..") && !path.isAbsolute(parentRel)) {
           return true;
         }
       }
