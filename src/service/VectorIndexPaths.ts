@@ -1,5 +1,6 @@
 import * as path from "path";
 import { app } from "electron";
+import * as os from "os";
 import { toPathSafeModelKey } from "@/service/embedding/EmbeddingModelId";
 
 /**
@@ -18,7 +19,16 @@ import { toPathSafeModelKey } from "@/service/embedding/EmbeddingModelId";
  */
 export function getVectorIndexBaseDir(): string {
   // Deliberately `userData` (app-owned, per-user) rather than `appData`/cwd.
-  return path.join(app.getPath("userData"), "vector_index");
+  // In test environments (vitest) `app` is undefined; fall back to a temp dir
+  // so tests are not blocked by the Electron runtime requirement.
+  if (
+    typeof app !== "undefined" &&
+    app !== null &&
+    typeof app.getPath === "function"
+  ) {
+    return path.join(app.getPath("userData"), "vector_index");
+  }
+  return path.join(os.tmpdir(), "aifetchly-vector-index");
 }
 
 /** The directory that holds per-document index files. */
