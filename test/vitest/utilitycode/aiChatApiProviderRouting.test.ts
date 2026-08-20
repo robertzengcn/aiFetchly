@@ -203,10 +203,12 @@ describe("AiChatApi provider routing", () => {
     }
   });
 
-  it("throws a resolver denial message when neither path is available", async () => {
-    // No hosted entitlement and no local config.
-    await expect(api.listOpenAIModels()).rejects.toThrow(
-      /subscription|local AI provider/i
-    );
+  it("falls back to the hosted model list when the resolver denies", async () => {
+    // 821509d8 deliberately removed the AI-enable gate from model listing:
+    // a denial (no hosted entitlement AND no local config) now falls back to
+    // the hosted list instead of throwing; execution gates live elsewhere.
+    const models = await api.listOpenAIModels();
+    expect(models.object).toBe("list");
+    expect(Array.isArray(models.data)).toBe(true);
   });
 });
