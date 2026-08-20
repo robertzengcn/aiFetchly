@@ -15,7 +15,7 @@ import { GlobalWorkerOptions } from "pdfjs-dist";
 import pdf2md from "pdf2md-ts";
 import * as mammoth from "mammoth";
 import WordExtractor from "word-extractor";
-import AdmZip from "adm-zip";
+import { PptxTextExtractor } from "@/service/PptxTextExtractor";
 import { HtmlConversionService } from "@/service/HtmlConversionService";
 import {
   SpreadsheetConversionService,
@@ -579,42 +579,10 @@ export class DocumentService {
   }
 
   private async convertPptxFileToMarkdown(filePath: string): Promise<string> {
-    const zip = new AdmZip(filePath);
-    const entries = zip.getEntries();
-
-    const slideEntries = entries
-      .filter(
-        (e) =>
-          e.entryName.startsWith("ppt/slides/slide") &&
-          e.entryName.endsWith(".xml")
-      )
-      .sort((a, b) => {
-        const aNum = parseInt(a.entryName.match(/slide(\d+)/)?.[1] || "0", 10);
-        const bNum = parseInt(b.entryName.match(/slide(\d+)/)?.[1] || "0", 10);
-        return aNum - bNum;
-      });
-
-    const slideTexts: string[] = [];
-    for (const slideEntry of slideEntries) {
-      const slideNum = slideEntry.entryName.match(/slide(\d+)/)?.[1] || "?";
-      const xmlContent = slideEntry.getData().toString("utf-8");
-      const textElements: string[] = [];
-      const aTRegex = /<a:t[^>]*>([^<]*)<\/a:t>/g;
-      let match: RegExpExecArray | null;
-      while ((match = aTRegex.exec(xmlContent)) !== null) {
-        const text = match[1].trim();
-        if (text) {
-          textElements.push(text);
-        }
-      }
-      if (textElements.length > 0) {
-        slideTexts.push(
-          `--- Slide ${slideNum} ---\n${textElements.join("\n")}`
-        );
-      }
-    }
-
-    return slideTexts.join("\n\n").trim();
+    // Delegate to the shared PptxTextExtractor so chat attachments and the
+    // RAG chunking pipeline produce identical extraction (slide ordering,
+    // run joining, entity decoding, and graceful error handling).
+    return PptxTextExtractor.extractFile(filePath)?.content ?? "";
   }
 
   private sanitizePathSegment(value: string): string {

@@ -17,7 +17,7 @@ import { GlobalWorkerOptions } from "pdfjs-dist";
 import pdf2md from "pdf2md-ts";
 import * as mammoth from "mammoth";
 import WordExtractor from "word-extractor";
-import AdmZip from "adm-zip";
+import { PptxTextExtractor } from "@/service/PptxTextExtractor";
 
 export interface ChunkingOptions {
   chunkSize: number;
@@ -248,88 +248,13 @@ export class ChunkingService {
   }
 
   /**
-   * Extract PPTX content using adm-zip to unzip and parse slide XML.
-   * .pptx files are ZIP archives containing XML files. Slide text is
-   * stored in <a:t> elements within ppt/slides/slide*.xml.
+   * Extract PPTX content. Delegates to the shared PptxTextExtractor so both
+   * the RAG chunking pipeline and the chat attachment path produce identical
+   * results (slide ordering, run joining, and entity decoding handled once).
    */
   private async extractPptxContent(filePath: string): Promise<string | null> {
-    try {
-      if (!fs.existsSync(filePath)) {
-        console.error(`PPTX file not found: ${filePath}`);
-        return null;
-      }
-
-      console.log(`Processing PPTX file: ${path.basename(filePath)}`);
-
-      const zip = new AdmZip(filePath);
-      const entries = zip.getEntries();
-
-      // Collect slide entries sorted by slide index
-      const slideEntries = entries
-        .filter(
-          (e) =>
-            e.entryName.startsWith("ppt/slides/slide") &&
-            e.entryName.endsWith(".xml")
-        )
-        .sort((a, b) => {
-          const aNum = parseInt(
-            a.entryName.match(/slide(\d+)/)?.[1] || "0",
-            10
-          );
-          const bNum = parseInt(
-            b.entryName.match(/slide(\d+)/)?.[1] || "0",
-            10
-          );
-          return aNum - bNum;
-        });
-
-      if (slideEntries.length === 0) {
-        console.warn(`No slides found in PPTX: ${path.basename(filePath)}`);
-        return null;
-      }
-
-      console.log(`Found ${slideEntries.length} slides in PPTX`);
-
-      const slideTexts: string[] = [];
-
-      for (const slideEntry of slideEntries) {
-        const slideNum = slideEntry.entryName.match(/slide(\d+)/)?.[1] || "?";
-        const xmlContent = slideEntry.getData().toString("utf-8");
-
-        // Extract text from <a:t> elements (PowerPoint text elements)
-        const textElements: string[] = [];
-        const aTRegex = /<a:t[^>]*>([^<]*)<\/a:t>/g;
-        let match: RegExpExecArray | null;
-        while ((match = aTRegex.exec(xmlContent)) !== null) {
-          const text = match[1].trim();
-          if (text) {
-            textElements.push(text);
-          }
-        }
-
-        if (textElements.length > 0) {
-          slideTexts.push(
-            `--- Slide ${slideNum} ---\n${textElements.join("\n")}`
-          );
-        }
-      }
-
-      if (slideTexts.length === 0) {
-        console.warn(
-          `No text content extracted from PPTX: ${path.basename(filePath)}`
-        );
-        return null;
-      }
-
-      const fullContent = slideTexts.join("\n\n").trim();
-      console.log(
-        `Successfully extracted PPTX content: ${fullContent.length} characters from ${slideTexts.length}/${slideEntries.length} slides`
-      );
-      return fullContent;
-    } catch (error) {
-      console.error(`Error extracting PPTX content from ${filePath}:`, error);
-      return null;
-    }
+    console.log(`Processing PPTX file: ${path.basename(filePath)}`);
+    return PptxTextExtractor.extractFile(filePath)?.content ?? null;
   }
 
   /**
@@ -947,9 +872,10 @@ export class ChunkingService {
       const isHeading = /^#{1,6}\s/.test(line);
       const isListStart = /^[-*+]\s/.test(line) || /^\d+\.\s/.test(line);
       const isCodeBlock = /^```/.test(line);
-      // Match both simple horizontal rules (---) and page separators (--- Page X ---)
+      // Match simple horizontal rules (---) and content separators emitted by
+      // the extractors: PDFs emit "--- Page N ---", PPTX emits "--- Slide N ---".
       const isHorizontalRule =
-        /^---+$/.test(line) || /^---\s+Page\s+\d+\s+---/.test(line);
+        /^---+$/.test(line) || /^---\s+(?:Page|Slide)\s+\d+\s+---/.test(line);
       const isTableRow = /^\|.*\|$/.test(line);
 
       // Check if next line continues the current structure
