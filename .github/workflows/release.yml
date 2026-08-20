@@ -190,6 +190,11 @@ jobs:
           if-no-files-found: error
 
   build-macos:
+    # CI mac builds historically run ~5h on the 4-vCPU macos-latest runner, with a
+    # ~3h silent tail after the makers report done. timeout-minutes caps a stalled
+    # build so a future hang wastes 90min instead of 5h; the observability below
+    # logs the exact phase that owns the time.
+    timeout-minutes: 90
     if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.build_mode != 'store') }}
     runs-on: macos-latest
     outputs:
@@ -365,15 +370,24 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        # Phase timing wrapper: mac builds historically stall ~3h after the makers
+        # report done. Echo an ISO timestamp before/after each phase so a stalled
+        # run's last log line names the owning phase (difficulty: maker phases log
+        # their own progress, but the silent tail between "Making distributables"
+        # and "verify-packaged-app" is otherwise invisible).
         run: |
           set -euo pipefail
           export NODE_OPTIONS="--max-old-space-size=4096"
+          echo "[$(date -u +%FT%TZ)] phase: yarn make-mac (electron-forge make --platform=darwin) start"
           if [ "$BUILD_MODE" = "production" ]; then
             yarn make-mac:prod
           else
             yarn make-mac:test
           fi
+          echo "[$(date -u +%FT%TZ)] phase: yarn make-mac end"
+          echo "[$(date -u +%FT%TZ)] phase: verify-packaged-app (asar + childprocess + renderer) start"
           yarn verify-packaged-app
+          echo "[$(date -u +%FT%TZ)] phase: verify-packaged-app end"
 
       - name: Upload macOS installers
         uses: actions/upload-artifact@v7
