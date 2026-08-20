@@ -2,6 +2,7 @@
 import { Database } from "better-sqlite3";
 import { log } from "@/modules/Logger";
 import { SqliteDb } from "@/config/SqliteDb";
+import { resolveTestDbPath } from "@/config/testDbPath";
 export abstract class BaseDb {
   protected db!: Database;
   // protected connectionString: string;
@@ -9,14 +10,13 @@ export abstract class BaseDb {
   constructor(filepath: string) {
     this.assertNotWorker();
     if (!filepath) {
-      // For testing environments, use a temp directory
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const os = require("os") as typeof import("os");
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const path = require("path") as typeof import("path");
+      // For testing environments, use a temp directory. resolveTestDbPath()
+      // namespaces the dir per vitest worker (VITEST_POOL_ID) so concurrent
+      // test workers don't share one SQLite file — which caused
+      // SQLITE_BUSY_SNAPSHOT on `DataSource.synchronize` DDL across workers.
       // eslint-disable-next-line @typescript-eslint/no-var-requires
       const fs = require("fs") as typeof import("fs");
-      const tmpDir = path.join(os.tmpdir(), "aifetchly-test");
+      const tmpDir = resolveTestDbPath();
       if (!fs.existsSync(tmpDir)) {
         fs.mkdirSync(tmpDir, { recursive: true });
       }
