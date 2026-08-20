@@ -188,17 +188,40 @@ jobs:
       # electron-packager's finalize/prune phase (galactus building an in-memory
       # map of the whole dependency tree) produces transient memory spikes that
       # can OOM-kill the process on a ~7 GB runner, surfacing as "lost
-      # communication with the server" mid-"Finalizing package". A 4 GB swap
-      # file absorbs those spikes. This was introduced by 7e1e14eb and
+      # communication with the server" mid-"Finalizing package" and killing the
+      # step as an opaque exit 143 with NO [package-guard] diagnostics. A 4 GB
+      # swap file absorbs those spikes. This was introduced by 7e1e14eb and
       # accidentally dropped when the job was reworked; restored here.
+      #
+      # Harden the step: the previous version masked every command with `|| true`,
+      # so a silently-failed swap (fallocate/swapon error, or swap already
+      # present) left the finalize phase UNPROTECTED — and the next run OOM'd
+      # into the exact exit-143 the hang-guard now also catches. Instead, fail
+      # THIS step loudly (with a clear "swap setup failed" message) if swap is
+      # not actually active after the attempt, so we never ship a packaging run
+      # whose OOM protection was silently absent. A leftover /swapfile from a
+      # prior run (swapon: file already in use) is treated as success.
       - name: Add swap to absorb finalize memory spikes
         run: |
+          set -euo pipefail
           echo "Memory/swap before:"; free -h
-          sudo fallocate -l 4G /swapfile || true
-          sudo chmod 600 /swapfile || true
-          sudo mkswap /swapfile >/dev/null || true
-          sudo swapon /swapfile || true
+          if swapon --show 2>/dev/null | grep -q swapfile; then
+            echo "/swapfile already active — skipping creation."
+          else
+            sudo fallocate -l 4G /swapfile
+            sudo chmod 600 /swapfile
+            sudo mkswap /swapfile >/dev/null
+            sudo swapon /swapfile
+          fi
           echo "Memory/swap after:"; free -h
+          # Verify swap is actually active; fail loudly if not so the run
+          # never reaches the OOM-prone finalize phase unprotected.
+          ACTIVE_KB=$(free -k | awk '/^Swap:/ {print $2}')
+          if [ -z "${ACTIVE_KB}" ] || [ "${ACTIVE_KB}" -eq 0 ]; then
+            echo "::error::Swap is not active after setup (got ${ACTIVE_KB:-0} KB). Aborting so packaging doesn't OOM into an opaque exit 143."
+            exit 1
+          fi
+          echo "Swap active: ${ACTIVE_KB} KB"
 
       - name: Guard forge asar unpack before packaging
         run: yarn verify-forge-asar-unpack

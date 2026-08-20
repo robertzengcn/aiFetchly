@@ -350,10 +350,12 @@ describe("AIChatCompactAgentService", () => {
         onAutoCompacted,
       });
 
+      // AUTO_COMPACT_THRESHOLD_FRACTION is 0.7: floor(0.7 * 8192) = 5734,
+      // so 5000 stays below the gate and must skip.
       const ran = await agent.enqueueAutoCompact({
         conversationId: "v2-auto-low",
         reason: "assistant_turn_completed",
-        promptTokens: 6000,
+        promptTokens: 5000,
       });
 
       expect(ran).toBe(false);
@@ -365,11 +367,11 @@ describe("AIChatCompactAgentService", () => {
     it("falls back to the 128k default window when no resolver is wired", async () => {
       const agent = makeAgent({});
 
-      // 100_000 < 0.8 * 128_000 = 102_400 -> skipped without a resolver.
+      // 80_000 < floor(0.7 * 128_000) = 89_600 -> skipped without a resolver.
       const ran = await agent.enqueueAutoCompact({
         conversationId: "v2-auto-default",
         reason: "assistant_turn_completed",
-        promptTokens: 100_000,
+        promptTokens: 80_000,
       });
 
       expect(ran).toBe(false);

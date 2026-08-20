@@ -1,4 +1,8 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import os from "node:os";
+import path from "node:path";
+import fs from "node:fs";
+import { SqliteDb } from "@/config/SqliteDb";
 import { EmailReplyDraftModule } from "@/modules/EmailReplyDraftModule";
 import { EmailReplyApprovalService } from "@/service/emailReply/EmailReplyApprovalService";
 import { materializeRevision1 } from "@/service/emailReply/EmailReplyRevisionMaterializer";
@@ -8,10 +12,44 @@ import { EmailReplyDraftEntity } from "@/entity/EmailReplyDraft.entity";
  * P0.4: a revision whose content trips a block/review finding must not reach
  * `approved`. The approval service recomputes validation from the trusted
  * revision body and throws before writing an approval or transitioning state.
+ *
+ * DB isolation: this file stands up its own temp DB (unique dir + resetInstance)
+ * rather than sharing `os.tmpdir()/aifetchly-test`. Under vitest's default
+ * thread pool many test files init the shared DataSource concurrently, and the
+ * schema-sync `DROP INDEX` raced with a sibling writer → `SQLITE_BUSY_SNAPSHOT`.
+ * Mirrors the EmailReplyRevisionMaterializer.test.ts beforeAll/afterAll shape.
  */
 describe("P0.4 — approval blocked by validation findings", () => {
-  const draftModule = new EmailReplyDraftModule();
-  const approvalService = new EmailReplyApprovalService();
+  let dbpath: string;
+  let draftModule: EmailReplyDraftModule;
+  let approvalService: EmailReplyApprovalService;
+
+  beforeAll(async () => {
+    dbpath = path.join(
+      os.tmpdir(),
+      `aifetchly-approval-validation-${Date.now()}`
+    );
+    fs.mkdirSync(dbpath, { recursive: true });
+    await SqliteDb.resetInstance(dbpath);
+    await SqliteDb.ensureInitialized();
+    // Construct modules AFTER resetInstance so their eager repository capture
+    // (BaseDb resolves this.sqliteDb.connection.getRepository(...) in the
+    // constructor) binds to the isolated DataSource, not the stale pre-reset
+    // singleton. EmailReplyDraftModule (extends BaseModule) reads USERSDBPATH
+    // from Token (empty in tests); getInstance returns the authoritative
+    // singleton (our dbpath) regardless of the path arg.
+    draftModule = new EmailReplyDraftModule();
+    approvalService = new EmailReplyApprovalService();
+  });
+
+  afterAll(async () => {
+    await SqliteDb.destroyInstance();
+    try {
+      fs.rmSync(dbpath, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
+  });
 
   async function seedDraftWithBody(bodyText: string): Promise<number> {
     const draft = new EmailReplyDraftEntity();

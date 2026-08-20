@@ -404,8 +404,8 @@
             </v-btn>
             <v-btn
               color="primary"
-              :disabled="!runtimeInstallOffer"
-              :loading="preparingRuntime"
+              :disabled="preparingRuntime || runtimeDownloading"
+              :loading="preparingRuntime || runtimeDownloading"
               @click="onDownloadRuntime"
             >
               {{ t('knowledge.local_runtime_download') }}
@@ -818,20 +818,28 @@ async function ensureLocalEmbeddingRuntime(
 }
 
 async function onDownloadRuntime() {
-  if (!runtimeInstallOffer.value || runtimeDownloading.value) return;
+  if (runtimeDownloading.value) return;
   runtimeDownloading.value = true;
   runtimeDownloadError.value = '';
   try {
+    // Issue a fresh consent grant on every attempt so a prior failed install
+    // (or stale dialog state) cannot reuse a consumed offer token.
+    const offer = await prepareLocalAiRuntimeInstall(LOCAL_EMBEDDING_RUNTIME_ID);
+    runtimeInstallOffer.value = offer;
     await installLocalAiRuntime({
-      operationId: runtimeInstallOffer.value.operationId,
-      runtimeId: runtimeInstallOffer.value.runtimeId,
-      expectedRuntimeVersion: runtimeInstallOffer.value.runtimeVersion,
-      consentToken: runtimeInstallOffer.value.consentToken,
+      operationId: offer.operationId,
+      runtimeId: offer.runtimeId,
+      expectedRuntimeVersion: offer.runtimeVersion,
+      consentToken: offer.consentToken,
     });
-    runtimeInstallOffer.value = null;
     const runtimeStatus = await getLocalAiRuntimeStatus(LOCAL_EMBEDDING_RUNTIME_ID);
     if (runtimeStatus.state === 'ready') {
       showRuntimeDownloadDialog.value = false;
+      // Clear the consumed offer token so a later attempt must obtain a fresh
+      // consent grant (matches the "fresh consent grant on every attempt"
+      // contract above), then dispatch the deferred action that triggered the
+      // install.
+      runtimeInstallOffer.value = null;
       const action = pendingRuntimeAction.value;
       pendingRuntimeAction.value = null;
       if (action === 'update-model') {

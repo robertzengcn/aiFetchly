@@ -51,6 +51,20 @@ export default ({ mode }) => {
             'process.env.VITE_PLUGIN_HUB_URL': JSON.stringify(
                 process.env.VITE_PLUGIN_HUB_URL || ''
             ),
+            // Bake the crash-upload mainLogTail rollout flag for PRODUCTION
+            // builds only: packaged apps launched from Finder/Start Menu have
+            // no shell env, so the value must come from the build environment
+            // (CI env, or .env — forge.config.js loads it via dotenv with no
+            // prefix filter before vite runs). Dev and test keep a live
+            // process.env read so the flag stays runtime-controllable
+            // (tests toggle it per-case; dev uses the shell env).
+            ...(mode === 'production'
+                ? {
+                      'process.env.AIFETCHLY_SEND_MAIN_LOG_TAIL': JSON.stringify(
+                          process.env.AIFETCHLY_SEND_MAIN_LOG_TAIL || ''
+                      ),
+                  }
+                : {}),
         },
         build: {
             rollupOptions: {

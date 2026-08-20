@@ -1,4 +1,8 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import os from "node:os";
+import path from "node:path";
+import fs from "node:fs";
+import { SqliteDb } from "@/config/SqliteDb";
 import { EmailReceivedMessageModule } from "@/modules/EmailReceivedMessageModule";
 import { EmailReplyDraftModule } from "@/modules/EmailReplyDraftModule";
 import { EmailReplyApprovalService } from "@/service/emailReply/EmailReplyApprovalService";
@@ -29,7 +33,10 @@ const FAKE_MAILBOX = {
   ssl: 1,
 };
 
-async function seedValidApproval(): Promise<{ draftId: number; token: string }> {
+async function seedValidApproval(): Promise<{
+  draftId: number;
+  token: string;
+}> {
   const messageModule = new EmailReceivedMessageModule();
   const draftModule = new EmailReplyDraftModule();
 
@@ -119,6 +126,30 @@ function buildDelivery(behavior: Behavior): EmailReplyDeliveryService {
 }
 
 describe("P0.6 — delivery state machine via fake SMTP", () => {
+  // Isolated temp DB so this file doesn't race the shared aifetchly-test
+  // singleton under vitest's thread pool (SQLITE_BUSY_SNAPSHOT during
+  // DataSource.synchronize). All inline module/service constructions in this
+  // file resolve SqliteDb.getInstance, which returns the authoritative
+  // singleton established here.
+  let dbpath: string;
+  beforeAll(async () => {
+    dbpath = path.join(
+      os.tmpdir(),
+      `aifetchly-delivery-fakesmtp-${Date.now()}`
+    );
+    fs.mkdirSync(dbpath, { recursive: true });
+    await SqliteDb.resetInstance(dbpath);
+    await SqliteDb.ensureInitialized();
+  });
+  afterAll(async () => {
+    await SqliteDb.destroyInstance();
+    try {
+      fs.rmSync(dbpath, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
+  });
+
   it("accepted -> sent (with provider message id)", async () => {
     const { draftId, token } = await seedValidApproval();
     const outcome = await buildDelivery("accept").sendApprovedReply({
@@ -175,7 +206,9 @@ describe("P0.6 — delivery state machine via fake SMTP", () => {
       delivery.sendApprovedReply({ draftId, approvalToken: token }),
     ]);
     const sent = [a, b].filter((o) => o.status === "sent").length;
-    const already = [a, b].filter((o) => o.status === "already_processed").length;
+    const already = [a, b].filter(
+      (o) => o.status === "already_processed"
+    ).length;
     expect(sent + already).toBe(2);
     expect(calls).toBeLessThanOrEqual(1);
   });

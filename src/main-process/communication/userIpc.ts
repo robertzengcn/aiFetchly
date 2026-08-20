@@ -6,6 +6,7 @@ import {
   CANCEL_DESKTOP_LOGIN,
   USER_SIGNOUT,
   LOGIN_STATUS,
+  CHECK_LOGIN_SUCCEEDED,
 } from "@/config/channellist";
 import { UserController } from "@/controller/UserController";
 import { User } from "@/modules/user";
@@ -19,6 +20,7 @@ import {
   REFRESHTOKEN,
   TOKENEXPIRY,
   REFRESHTOKENEXPIRY,
+  USEREMAIL,
 } from "@/config/usersetting";
 import { TokenRefreshService } from "@/modules/tokenRefresh";
 
@@ -169,13 +171,40 @@ export function registerUserIpcHandlers(
   // controller does not import the IPC layer (avoids circular deps).
   UserController.setMainWindowProvider(winProvider);
 
-  ipcMain.handle(QUERY_USER_INFO, async (event, data) => {
+  ipcMain.handle(QUERY_USER_INFO, async (_event, _data) => {
     const userControll = new UserController();
     const res = userControll.getUserInfo();
     const result: CommonMessage<UserInfoType> = {
       status: true,
       msg: "",
       data: res,
+    };
+    return result;
+  });
+
+  /**
+   * Lightweight login-state probe used by the renderer when its login
+   * watchdog fires. USEREMAIL is only set by a successful login cascade
+   * (updateUserInfo) and is cleared on signout, so its presence means the
+   * desktop handoff DID complete — the renderer should navigate instead of
+   * showing a false "timeout" error.
+   */
+  ipcMain.handle(CHECK_LOGIN_SUCCEEDED, async (_event, _data) => {
+    let loginSucceeded = false;
+    let email = "";
+    try {
+      const tokenService = new Token();
+      email = tokenService.getValue(USEREMAIL);
+      loginSucceeded = email.trim().length > 0;
+    } catch (err) {
+      log.error("[CHECK_LOGIN_SUCCEEDED] failed to read login state", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+    const result: CommonMessage<boolean> = {
+      status: true,
+      msg: "",
+      data: loginSucceeded,
     };
     return result;
   });
@@ -195,7 +224,7 @@ export function registerUserIpcHandlers(
    * is already opened here); calling prepareDesktopLogin() twice would
    * invalidate the first handoff.
    */
-  ipcMain.handle(GET_LOGIN_URL, async (event, data) => {
+  ipcMain.handle(GET_LOGIN_URL, async (_event, _data) => {
     try {
       // Abort any previous handoff BEFORE creating the new one. The old
       // cancel() closes the old loopback server and clears old pending
@@ -271,7 +300,7 @@ export function registerUserIpcHandlers(
    * Aborts the currently-active desktop login handoff (closes the loopback
    * server, clears pending state). Safe to call when no handoff is active.
    */
-  ipcMain.handle(CANCEL_DESKTOP_LOGIN, async (event, data) => {
+  ipcMain.handle(CANCEL_DESKTOP_LOGIN, async (_event, _data) => {
     if (activeDesktopLoginCancel) {
       try {
         activeDesktopLoginCancel();
@@ -289,7 +318,7 @@ export function registerUserIpcHandlers(
     return { status: true, msg: "Desktop login cancelled", data: null };
   });
 
-  ipcMain.handle(USER_SIGNOUT, async (event, data) => {
+  ipcMain.handle(USER_SIGNOUT, async (_event, _data) => {
     const userModel = new User();
 
     const res = await userModel

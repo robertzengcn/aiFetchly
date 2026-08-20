@@ -399,14 +399,39 @@ function isMainApplicationBundle(filePath) {
   return filePath.endsWith(".app") && !filePath.includes(".app/Contents/");
 }
 
-if (isProductionBuild && process.platform === "win32" && !isWindowsStoreBuild) {
-  if (!existsSync(windowsCertificatePath)) {
-    throw new Error(
-      "Production Windows packaging requires cert.pfx. Restore it from a CI secret before running Electron Forge."
-    );
+/**
+ * Windows direct-distribution signing is optional. Sign only when BOTH
+ * cert.pfx (restored from a CI secret or placed locally) and
+ * CERTIFICATE_PASSWORD are present; otherwise warn and build unsigned so the
+ * pipeline does not hard-fail without a certificate. Windows will show a
+ * SmartScreen warning on unsigned installers. Store (MSIX) builds are always
+ * unsigned — Partner Center re-signs after certification — and are excluded.
+ */
+function resolveWindowsSignConfig() {
+  if (
+    !isProductionBuild ||
+    process.platform !== "win32" ||
+    isWindowsStoreBuild
+  ) {
+    return null;
   }
-  requireProductionEnv("CERTIFICATE_PASSWORD");
+  if (
+    !existsSync(windowsCertificatePath) ||
+    !process.env.CERTIFICATE_PASSWORD
+  ) {
+    console.warn(
+      "WARNING: Windows signing certificate not found (cert.pfx and/or CERTIFICATE_PASSWORD). " +
+        "Building an UNSIGNED production installer; Windows SmartScreen will warn end users."
+    );
+    return null;
+  }
+  return {
+    certificateFile: windowsCertificatePath,
+    certificatePassword: process.env.CERTIFICATE_PASSWORD,
+  };
 }
+
+const windowsSignConfig = resolveWindowsSignConfig();
 
 function ensureBetterSqliteElectronBinary() {
   const scriptPath = join(__dirname, "scripts", "rebuild-better-sqlite.js");
@@ -533,7 +558,23 @@ module.exports = {
             },
           }
         : {
-            osxSign: {},
+            // Pass the CI-created keychain explicitly so @electron/osx-sign
+            // searches it for the Developer ID Application certificate.
+            // Relying on the keychain search list is flaky on macOS CI
+            // runners; without this, findIdentities() may miss the cert,
+            // signing silently no-ops (see continueOnError below), and the
+            // app ships adhoc-signed — which then fails notarization's
+            // pre-flight codesign check with a confusing "adhoc" dump.
+            osxSign: {
+              ...(process.env.MACOS_KEYCHAIN_PATH
+                ? { keychain: process.env.MACOS_KEYCHAIN_PATH }
+                : {}),
+              // @electron/packager defaults continueOnError to true, which
+              // swallows signing failures as warnings and leaves the app
+              // unsigned. Fail hard instead so the real cause surfaces at
+              // the signing step rather than later at notarization.
+              continueOnError: false,
+            },
             osxNotarize: {
               appleId: requireProductionEnv("APPLE_ID"),
               appleIdPassword: requireProductionEnv(
@@ -543,16 +584,7 @@ module.exports = {
             },
           }
       : {}),
-    ...(isProductionBuild &&
-    process.platform === "win32" &&
-    !isWindowsStoreBuild
-      ? {
-          windowsSign: {
-            certificateFile: windowsCertificatePath,
-            certificatePassword: requireProductionEnv("CERTIFICATE_PASSWORD"),
-          },
-        }
-      : {}),
+    ...(windowsSignConfig ? { windowsSign: windowsSignConfig } : {}),
     get asar() {
       if (usesUnpackedCiPackageLayout()) {
         return false;
@@ -738,12 +770,10 @@ module.exports = {
     {
       name: "@electron-forge/maker-wix",
       config: {
-        ...(isProductionBuild &&
-        process.platform === "win32" &&
-        !isWindowsStoreBuild
+        ...(windowsSignConfig
           ? {
-              certificateFile: windowsCertificatePath,
-              certificatePassword: requireProductionEnv("CERTIFICATE_PASSWORD"),
+              certificateFile: windowsSignConfig.certificateFile,
+              certificatePassword: windowsSignConfig.certificatePassword,
             }
           : {}),
         language: 1033,

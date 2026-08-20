@@ -191,6 +191,13 @@ CRUD + rules), which use **Models** for data access over **Entities** → DB.
    - Add entity `DependencyInstallAudit` → stage and commit
    - Fix TypeScript error in `PluginManager.vue` → stage and commit
 
+7. **NEVER bypass git hooks with `--no-verify`** - MANDATORY RULE:
+   - Do NOT pass `--no-verify` (or `-n`) to `git commit`. The pre-commit hooks (husky / lint-staged running eslint, plus the vitest `tsc` type-check gate) exist to catch defects before they land.
+   - If a commit is blocked by a hook, the hook is surfacing a real problem — **fix the reported errors, never bypass them**:
+     - **Lint errors**: fix every error the hook reports on the staged files — remove `any` (use proper types), remove unused variables/imports, fix formatting, etc. This includes pre-existing lint debt in files you touched: if lint-staged re-lints a staged file and reports errors on lines you did not change, fix those too in the same commit or a preceding `chore:`/`refactor:` cleanup commit. Do not defer them and do not use `--no-verify` to skip past them.
+     - **Type-check (`tsc --noEmit`) failures**: fix every type error the hook reports. Run `yarn tsc` / `npx tsc --noEmit` locally to see the full list and resolve each one (correct types, fix signatures, remove `as any` casts, etc.). Do not commit until `tsc` passes clean.
+   - The auto-commit mandate above never overrides this: a blocked commit is not a "completed function" until the hook passes. A commit blocked by lint/type errors means the work is not done — go fix the errors and commit again without `--no-verify`. Only if an error genuinely requires human-only input (e.g. ambiguous product decision with no safe default) should you stop and report; never silently bypass.
+
 ### AI Feature IPC Handlers - MANDATORY RULE
 **When adding or modifying IPC handlers that serve AI functions (e.g. AI chat, keyword generation, AI tools):**
 - **Check AI enable first** at the start of the handler, before parsing request data or calling AI APIs.

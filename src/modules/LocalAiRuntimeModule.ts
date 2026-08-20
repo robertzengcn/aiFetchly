@@ -173,7 +173,7 @@ export class LocalAiRuntimeModule {
   async install(
     input: LocalAiRuntimeInstallRequest
   ): Promise<LocalAiRuntimeInstallResult> {
-    const grant = this.consumeGrant(input);
+    const grant = this.validateGrant(input);
     const lease = this.deps.coordinator.acquire(
       grant.runtimeId,
       grant.operationId
@@ -195,6 +195,7 @@ export class LocalAiRuntimeModule {
         );
       }
       await this.runPipeline(entry, grant.operationId, lease);
+      this.grants.delete(grant.operationId);
       return {
         operationId: grant.operationId,
         runtimeId: grant.runtimeId,
@@ -268,7 +269,10 @@ export class LocalAiRuntimeModule {
   async remove(input: LocalAiRuntimeRemoveRequest): Promise<void> {
     const { runtimeId, removeModels } = input;
     const operationId = randomUUID();
-    const lease = this.deps.coordinator.acquire(runtimeId, operationId);
+    // Acquire serializes this remove against concurrent install/health-check
+    // ops on the same runtime; the returned lease isn't needed here because
+    // release is keyed by operationId in the finally block below.
+    const _lease = this.deps.coordinator.acquire(runtimeId, operationId);
     try {
       const diagnosis = await this.deps.resolver.diagnose(runtimeId);
       if (diagnosis.state === "not_installed") return;
@@ -308,7 +312,7 @@ export class LocalAiRuntimeModule {
 
   // ---- internals ----
 
-  private consumeGrant(input: LocalAiRuntimeInstallRequest): ConsentGrant {
+  private validateGrant(input: LocalAiRuntimeInstallRequest): ConsentGrant {
     const grant = this.grants.get(input.operationId);
     if (!grant) {
       throw new LocalAiRuntimeError(
@@ -316,8 +320,8 @@ export class LocalAiRuntimeModule {
         "Unknown or expired install offer."
       );
     }
-    this.grants.delete(input.operationId);
     if (Date.now() > grant.expiresAt) {
+      this.grants.delete(input.operationId);
       throw new LocalAiRuntimeError(
         "runtime_download_denied",
         "Install offer expired."
@@ -356,6 +360,7 @@ export class LocalAiRuntimeModule {
     operationId: string,
     lease: { controller: AbortController }
   ): Promise<void> {
+    await this.deps.paths.ensureOperationDirectories();
     const { archivePath, stagingRoot } =
       this.deps.paths.createOperationPaths(operationId);
     const onProgress = (progress: LocalAiRuntimeDownloadProgress): void => {

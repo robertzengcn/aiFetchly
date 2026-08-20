@@ -26,8 +26,15 @@ vi.mock("@/modules/ScheduleManager", () => ({
       handleAppShutdown: vi.fn(async () => undefined),
       getSchedulerStatus: () => ({ activeSchedules: 0, totalSchedules: 0 }),
       cleanupInactiveDependencies: mockCleanupInactiveDependencies,
-      resetInstance: vi.fn(async () => ({})),
     }),
+    resetInstance: vi.fn(async () => ({
+      initializeSchedules: vi.fn(async () => undefined),
+      start: vi.fn(async () => undefined),
+      stop: vi.fn(async () => undefined),
+      handleAppShutdown: vi.fn(async () => undefined),
+      getSchedulerStatus: () => ({ activeSchedules: 0, totalSchedules: 0 }),
+      cleanupInactiveDependencies: mockCleanupInactiveDependencies,
+    })),
   },
 }));
 vi.mock("@/modules/ScheduleTaskModule", () => ({
@@ -64,6 +71,13 @@ vi.mock("@/service/ScheduledAiMessageRunner", () => ({
   })),
 }));
 
+// Token.getValue(USERSDBPATH) drives refreshDatabaseForUserPath(). Hoist the
+// resolver so each test can pin the "current" user path.
+const mockGetValue = vi.hoisted(() => vi.fn());
+vi.mock("@/modules/token", () => ({
+  Token: vi.fn().mockImplementation(() => ({ getValue: mockGetValue })),
+}));
+
 import { BackgroundScheduler } from "@/modules/BackgroundScheduler";
 
 const SCHED = {
@@ -77,9 +91,15 @@ const SCHED = {
 
 type PrivateScheduler = {
   isRunning: boolean;
+  isInitialized: boolean;
+  currentDbPath: string;
+  intervalScheduleModel: { modelTag: string } | null;
+  intervalRunModel: { modelTag: string } | null;
   processIntervalTasks(): Promise<void>;
   recoverIntervalRuns(): Promise<void>;
   performCleanup(): Promise<void>;
+  refreshDatabaseForUserPath(): Promise<void>;
+  start(): Promise<void>;
 };
 
 beforeEach(() => {
@@ -97,6 +117,9 @@ beforeEach(() => {
     toolCallsCount: 0,
     blockedToolCalls: [],
   });
+  // Default: Token reports the same path the scheduler was built with, so
+  // refreshDatabaseForUserPath() short-circuits unless a test overrides this.
+  mockGetValue.mockReturnValue("/tmp/sched-test");
 });
 
 describe("BackgroundScheduler.performCleanup", () => {
@@ -197,5 +220,62 @@ describe("BackgroundScheduler.recoverIntervalRuns", () => {
     expect(mockPauseWithReason).not.toHaveBeenCalledWith(8, expect.anything());
     // Inactive orphan is not touched (is_active false → skipped).
     expect(mockPauseWithReason).not.toHaveBeenCalledWith(9, expect.anything());
+  });
+});
+
+describe("BackgroundScheduler.refreshDatabaseForUserPath", () => {
+  it("drops cached interval-trigger models so they re-create against the new connection", async () => {
+    // Construct with the old path, then force the lazy interval models to be
+    // instantiated (simulating at least one interval poll having run).
+    const scheduler = new BackgroundScheduler(
+      "/tmp/sched-old"
+    ) as unknown as PrivateScheduler;
+    scheduler.intervalScheduleModel = { modelTag: "stale-schedule" };
+    scheduler.intervalRunModel = { modelTag: "stale-run" };
+
+    // Token now reports a new user path → refresh must run the reset branch.
+    mockGetValue.mockReturnValue("/tmp/sched-new");
+
+    await scheduler.refreshDatabaseForUserPath();
+
+    // The lazy interval models are reset to null so the next poll rebuilds
+    // them against the new SqliteDb instance instead of the destroyed one.
+    expect(scheduler.intervalScheduleModel).toBeNull();
+    expect(scheduler.intervalRunModel).toBeNull();
+    expect(scheduler.currentDbPath).toBe("/tmp/sched-new");
+    // Initialization state is cleared so start() re-initializes cleanly.
+    expect(scheduler.isInitialized).toBe(false);
+  });
+});
+
+describe("chatSchedulerLifecycleRegistry", () => {
+  it("refresh/stop are no-ops until background.ts registers concrete hooks", async () => {
+    // Dynamic import keeps the registry's module state isolated per test run.
+    const {
+      registerChatSchedulerLifecycle,
+      refreshChatSchedulerForUserPath,
+      stopChatScheduler,
+    } = await import("@/main-process/chatSchedulerLifecycleRegistry");
+
+    // With no registration, both helpers resolve silently (best-effort).
+    await expect(refreshChatSchedulerForUserPath()).resolves.toBeUndefined();
+    await expect(stopChatScheduler()).resolves.toBeUndefined();
+
+    // Register concrete hooks and assert they are invoked.
+    const refreshAndStart = vi.fn(async () => undefined);
+    const stop = vi.fn(async () => undefined);
+    registerChatSchedulerLifecycle({ refreshAndStart, stop });
+
+    await refreshChatSchedulerForUserPath();
+    await stopChatScheduler();
+    expect(refreshAndStart).toHaveBeenCalledTimes(1);
+    expect(stop).toHaveBeenCalledTimes(1);
+
+    // Clearing the registration makes the helpers no-ops again.
+    registerChatSchedulerLifecycle(null);
+    await expect(refreshChatSchedulerForUserPath()).resolves.toBeUndefined();
+    await expect(stopChatScheduler()).resolves.toBeUndefined();
+    expect(refreshAndStart).toHaveBeenCalledTimes(1);
+    expect(stop).toHaveBeenCalledTimes(1);
   });
 });

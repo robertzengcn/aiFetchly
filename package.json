@@ -287,6 +287,7 @@
     "minimatch": "^9.0.0",
     "mocha": "^10.2.0",
     "nock": "^14.0.1",
+    "playwright": "^1.62.1",
     "prettier": "^2.8.4",
     "rollup-plugin-copy": "^3.5.0",
     "rollup-plugin-sourcemaps": "^0.6.3",

@@ -1,6 +1,7 @@
 import { Token } from "@/modules/token";
 import { USERSDBPATH } from "@/config/usersetting";
 import { SqliteDb } from "@/config/SqliteDb";
+import { resolveTestDbPath } from "@/config/testDbPath";
 
 /**
  * WS-5 R5.2: The constructor resolves the DB path (a lightweight Token read)
@@ -37,14 +38,13 @@ export abstract class BaseModule {
     if (!this.dbInitialized) {
       if (!this.dbpath) {
         // Deferred from the constructor: create a temp directory for test/dev
-        // environments where USERSDBPATH is not set.
-        // eslint-disable-next-line @typescript-eslint/no-var-requires
-        const os = require("os") as typeof import("os");
-        // eslint-disable-next-line @typescript-eslint/no-var-requires
-        const path = require("path") as typeof import("path");
+        // environments where USERSDBPATH is not set. resolveTestDbPath()
+        // namespaces the dir per vitest worker (VITEST_POOL_ID) so concurrent
+        // test workers don't share one SQLite file — which caused
+        // SQLITE_BUSY_SNAPSHOT on `DataSource.synchronize` DDL across workers.
         // eslint-disable-next-line @typescript-eslint/no-var-requires
         const fs = require("fs") as typeof import("fs");
-        const tmpDir = path.join(os.tmpdir(), "aifetchly-test");
+        const tmpDir = resolveTestDbPath();
         if (!fs.existsSync(tmpDir)) {
           fs.mkdirSync(tmpDir, { recursive: true });
         }

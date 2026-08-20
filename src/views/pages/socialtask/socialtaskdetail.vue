@@ -70,7 +70,7 @@ const alertcolor = ref("");
 const isEdit = ref(false);
 const socialtaskId=ref(0);
 const rules = {
-    required: (value) => !!value || "Field is required",
+    required: (value: unknown) => !!value || "Field is required",
 };
 
 const initialize = async () => {

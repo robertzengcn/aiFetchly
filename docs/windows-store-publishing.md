@@ -6,8 +6,10 @@ package after Store certification, so this path does not use a PFX certificate
 or certificate password.
 
 The existing signed MSI path remains available for direct downloads. Microsoft
-does not sign MSI or EXE installers, so a direct-download production build still
-requires `WINDOWS_CERTIFICATE_BASE64` and `WINDOWS_CERTIFICATE_PASSWORD`.
+does not sign MSI or EXE installers; Windows code signing in this repository is
+currently optional (no certificate configured — see `docs/RELEASE_WORKFLOW.md`),
+so direct-download production builds produce unsigned installers until
+`WINDOWS_CERTIFICATE_BASE64` / `WINDOWS_CERTIFICATE_PASSWORD` secrets are added.
 
 ## One-time Partner Center setup
 

@@ -276,7 +276,7 @@ defineEmits<{
 
 // Methods
 const getPlatformColor = (platform: string) => {
-  const colors = {
+  const colors: Record<string, string> = {
     'yellowpages.com': 'blue',
     'yelp.com': 'red',
     'yellowpages.ca': 'green'
@@ -285,7 +285,7 @@ const getPlatformColor = (platform: string) => {
 }
 
 const getPlatformIcon = (platform: string) => {
-  const icons = {
+  const icons: Record<string, string> = {
     'yellowpages.com': 'mdi-phone-book',
     'yelp.com': 'mdi-star',
     'yellowpages.ca': 'mdi-maple-leaf'
@@ -294,7 +294,7 @@ const getPlatformIcon = (platform: string) => {
 }
 
 const getStatusColor = (status: string) => {
-  const colors = {
+  const colors: Record<string, string> = {
     pending: 'warning',
     running: 'info',
     completed: 'success',
@@ -305,7 +305,7 @@ const getStatusColor = (status: string) => {
 }
 
 const getStatusIcon = (status: string) => {
-  const icons = {
+  const icons: Record<string, string> = {
     pending: 'mdi-clock-outline',
     running: 'mdi-play-circle',
     completed: 'mdi-check-circle',
@@ -334,7 +334,7 @@ const getProgressColor = (status: string) => {
 }
 
 const getPriorityColor = (priority: string) => {
-  const colors = {
+  const colors: Record<string, string> = {
     high: 'error',
     medium: 'warning',
     low: 'success'

@@ -1,4 +1,8 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import os from "node:os";
+import path from "node:path";
+import fs from "node:fs";
+import { SqliteDb } from "@/config/SqliteDb";
 import { EmailReceivedMessageModule } from "@/modules/EmailReceivedMessageModule";
 import { EmailReplyPolicyOrchestrator } from "@/service/emailReply/EmailReplyPolicyOrchestrator";
 import { EmailReceivedMessageEntity } from "@/entity/EmailReceivedMessage.entity";
@@ -10,12 +14,41 @@ import { EmailReceivedMessageEntity } from "@/entity/EmailReceivedMessage.entity
  * row, so we prove it against a real seeded message (the same row createDraft
  * loads). Modules resolve the same Token-fallback DB, so seed + read are
  * consistent.
+ *
+ * DB isolation: an isolated temp DB (resetInstance) avoids the
+ * SQLITE_BUSY_SNAPSHOT race that occurs when sibling test files share the
+ * fallback aifetchly-test singleton under vitest's thread pool. Modules are
+ * constructed AFTER resetInstance so their eager repository capture (BaseDb
+ * constructor) binds to the isolated DataSource.
  */
 describe("P0.3 — pre-draft policy gate (FR-005)", () => {
-  const messageModule = new EmailReceivedMessageModule();
-  const orchestrator = new EmailReplyPolicyOrchestrator();
+  let dbpath: string;
+  let messageModule: EmailReceivedMessageModule;
+  let orchestrator: EmailReplyPolicyOrchestrator;
 
-  async function seedMessage(over: Partial<EmailReceivedMessageEntity>): Promise<number> {
+  beforeAll(async () => {
+    dbpath = path.join(os.tmpdir(), `aifetchly-predraft-policy-${Date.now()}`);
+    fs.mkdirSync(dbpath, { recursive: true });
+    await SqliteDb.resetInstance(dbpath);
+    await SqliteDb.ensureInitialized();
+    // Construct after resetInstance: EmailReplyPolicyOrchestrator eagerly
+    // builds 5 modules whose BaseDb constructors capture the singleton.
+    messageModule = new EmailReceivedMessageModule();
+    orchestrator = new EmailReplyPolicyOrchestrator();
+  });
+
+  afterAll(async () => {
+    await SqliteDb.destroyInstance();
+    try {
+      fs.rmSync(dbpath, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
+  });
+
+  async function seedMessage(
+    over: Partial<EmailReceivedMessageEntity>
+  ): Promise<number> {
     const msg = new EmailReceivedMessageEntity();
     msg.emailServiceId = over.emailServiceId ?? 4242;
     msg.providerUid = `p-${Math.random()}`;
@@ -69,7 +102,9 @@ describe("P0.3 — pre-draft policy gate (FR-005)", () => {
   });
 
   it("blocks an automated/no-reply sender at pre_draft even without classification", async () => {
-    const id = await seedMessage({ fromAddress: "no-reply@mailer.example.com" });
+    const id = await seedMessage({
+      fromAddress: "no-reply@mailer.example.com",
+    });
     const decision = await orchestrator.evaluate({
       stage: "pre_draft",
       messageId: id,
@@ -90,11 +125,12 @@ describe("P0.3 — pre-draft policy gate (FR-005)", () => {
   it("createDraft wires the gate before retrieval/LLM (structural guard)", () => {
     // Ensures the pre_draft evaluate call appears BEFORE retrieveReplyKnowledge
     // in the source, so a blocked message never reaches knowledge/LLM.
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const fs = require("node:fs") as typeof import("node:fs");
-    const path = require("node:path") as typeof import("node:path");
+    // fs/path are imported at the top of this file.
     const src = fs.readFileSync(
-      path.resolve(__dirname, "../../../../src/service/emailReply/EmailReplyDraftGenerationService.ts"),
+      path.resolve(
+        __dirname,
+        "../../../../src/service/emailReply/EmailReplyDraftGenerationService.ts"
+      ),
       "utf8"
     );
     const gateIdx = src.indexOf('stage: "pre_draft"');

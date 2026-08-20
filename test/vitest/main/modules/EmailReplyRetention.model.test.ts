@@ -29,15 +29,35 @@ describe("EmailReplyRetentionService (P4.4)", () => {
   let attemptModel: EmailReplySendAttemptModel;
   let messageModel: EmailReceivedMessageModel;
   let conversationModel: EmailConversationModel;
+  let dbpath: string;
 
   beforeAll(async () => {
-    // Models share the Token-fallback singleton the service resolves.
-    draftModel = new EmailReplyDraftModel("");
-    revisionModel = new EmailReplyDraftRevisionModel("");
-    approvalModel = new EmailReplyApprovalModel("");
-    attemptModel = new EmailReplySendAttemptModel("");
-    messageModel = new EmailReceivedMessageModel("");
-    conversationModel = new EmailConversationModel("");
+    // Stand up an isolated temp DB (not the shared os.tmpdir()/aifetchly-test)
+    // before constructing models. Under vitest's thread pool, files sharing
+    // the fallback singleton race during DataSource.synchronize and throw
+    // SQLITE_BUSY_SNAPSHOT. resetInstance makes `dbpath` authoritative, so the
+    // retention service (which resolves Token USERSDBPATH -> getInstance)
+    // lands on this same isolated connection.
+    dbpath = path.join(os.tmpdir(), `aifetchly-retention-test-${Date.now()}`);
+    fs.mkdirSync(dbpath, { recursive: true });
+    await SqliteDb.resetInstance(dbpath);
+    await SqliteDb.ensureInitialized();
+    // Models pass dbpath directly to BaseDb (an authoritative singleton now).
+    draftModel = new EmailReplyDraftModel(dbpath);
+    revisionModel = new EmailReplyDraftRevisionModel(dbpath);
+    approvalModel = new EmailReplyApprovalModel(dbpath);
+    attemptModel = new EmailReplySendAttemptModel(dbpath);
+    messageModel = new EmailReceivedMessageModel(dbpath);
+    conversationModel = new EmailConversationModel(dbpath);
+  });
+
+  afterAll(async () => {
+    await SqliteDb.destroyInstance();
+    try {
+      fs.rmSync(dbpath, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
   });
 
   async function seedMailbox(emailServiceId: number): Promise<number> {

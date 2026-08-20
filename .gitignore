@@ -161,3 +161,6 @@ hyperframes-*
 playwright-report/
 test-results/
 test-results/playwright/
+.yarn/install-state.gz
+debug/*
+

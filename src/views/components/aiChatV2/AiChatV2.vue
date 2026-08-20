@@ -737,6 +737,7 @@ import {
   setVoiceSettings,
 } from "@/views/api/aiChatV2Voice";
 import {
+  getLocalAiRuntimeStatus,
   installLocalAiRuntime,
   onLocalAiRuntimeProgress,
   prepareLocalAiRuntimeInstall,
@@ -750,7 +751,9 @@ import type {
 import type {
   LocalAiRuntimeDownloadProgress,
   LocalAiRuntimeInstallOffer,
+  LocalAiRuntimeStatus,
 } from "@/entityTypes/localAiRuntimeTypes";
+import { isLocalAiRuntimeUsable } from "@/views/utils/localAiRuntimeUi";
 import { SpeechResponseController } from "./voice/SpeechResponseController";
 import {
   AI_PROVIDER_SETTINGS_CHANGED_EVENT,
@@ -4303,6 +4306,8 @@ const unsubscribeSpeaking = speechController.subscribe((speaking) => {
 const voiceAutoSend = ref(false);
 const voiceMaxRecordingMs = ref<number>(60_000);
 const voiceStatus = ref<AiChatVoiceRuntimeStatus | null>(null);
+const voiceLocalRuntimeStatus = ref<LocalAiRuntimeStatus | null>(null);
+const VOICE_SHERPA_RUNTIME_ID = "voice-sherpa" as const;
 const voiceSettings = ref<AiChatVoiceSettingsView | null>(null);
 const voiceTtsMode = ref<AiChatVoiceTtsMode>("disabled");
 const voiceSettingsSaving = ref(false);
@@ -4336,9 +4341,15 @@ const voiceMissingModel = computed(
     (voiceStatus.value?.sttState === "missing_model" ||
       voiceStatus.value?.sttState === "unavailable"),
 );
-const voiceRuntimeUnavailable = computed(
-  () => voiceInputEnabled.value && voiceStatus.value?.sttState === "unavailable",
-);
+const voiceRuntimeUnavailable = computed(() => {
+  if (!voiceInputEnabled.value) return false;
+  // PRD §10.4: prompt for the downloadable voice-sherpa runtime when absent,
+  // even if a legacy bundled sherpa addon still satisfies sttState.
+  if (!isLocalAiRuntimeUsable(voiceLocalRuntimeStatus.value?.state)) {
+    return true;
+  }
+  return voiceStatus.value?.sttState === "unavailable";
+});
 /**
  * Whether the chat can accept a voice auto-send right now. The renderer has no
  * synchronous AI-entitlement flag, so model availability is the proxy: if no
@@ -4437,12 +4448,14 @@ function applyVoiceSettings(settings: AiChatVoiceSettingsView): void {
 
 async function loadVoiceSettings(): Promise<void> {
   try {
-    const [settings, status] = await Promise.all([
+    const [settings, status, localRuntimeStatus] = await Promise.all([
       getVoiceSettings(),
       getVoiceStatus(),
+      getLocalAiRuntimeStatus(VOICE_SHERPA_RUNTIME_ID).catch(() => null),
     ]);
     applyVoiceSettings(settings);
     voiceStatus.value = status;
+    voiceLocalRuntimeStatus.value = localRuntimeStatus;
     if (
       status.sttState !== "missing_model" &&
       status.sttState !== "unavailable"
@@ -4457,6 +4470,7 @@ async function loadVoiceSettings(): Promise<void> {
     voiceTtsMode.value = "disabled";
     speechController.updateOptions({ ttsMode: "disabled" });
     voiceStatus.value = null;
+    voiceLocalRuntimeStatus.value = null;
   }
 }
 
@@ -4577,9 +4591,7 @@ async function confirmInstallVoiceRuntime(): Promise<void> {
   voiceRuntimeInstallProgress.value = null;
   voiceRuntimeModelProgress.value = null;
   try {
-    const offer =
-      voiceRuntimeInstallOffer.value ??
-      (await prepareLocalAiRuntimeInstall("voice-sherpa"));
+    const offer = await prepareLocalAiRuntimeInstall("voice-sherpa");
     voiceRuntimeInstallOffer.value = offer;
     await installLocalAiRuntime({
       operationId: offer.operationId,
@@ -4658,8 +4670,15 @@ onMounted(() => {
     handleReasoningVisibilityChanged
   );
   unsubscribeVoiceRuntimeProgress = onLocalAiRuntimeProgress((progress) => {
-    if (progress.runtimeId !== "voice-sherpa") return;
+    if (progress.runtimeId !== VOICE_SHERPA_RUNTIME_ID) return;
     voiceRuntimeInstallProgress.value = progress;
+    if (progress.phase === "done") {
+      void getLocalAiRuntimeStatus(VOICE_SHERPA_RUNTIME_ID)
+        .then((status) => {
+          voiceLocalRuntimeStatus.value = status;
+        })
+        .catch(() => undefined);
+    }
   });
   unsubscribeVoiceModelProgress = onVoiceModelDownloadProgress((progress) => {
     if (progress.modelId !== DEFAULT_VOICE_STT_MODEL_ID) return;

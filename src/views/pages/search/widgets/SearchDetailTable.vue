@@ -485,7 +485,7 @@ function startAutoRefresh(): void {
                 loadItems({ 
                     page: currentPage.value, 
                     itemsPerPage: itemsPerPage.value, 
-                    sortBy: '' 
+                    sortBy: []
                 }, true); // Pass isAutoRefresh flag
             }
         }, autoRefreshIntervalMs.value);
@@ -561,7 +561,7 @@ onMounted(() => {
           loadItems({
               page: currentPage.value,
               itemsPerPage: itemsPerPage.value,
-              sortBy: ''
+              sortBy: []
           }, true);
       }
   });
@@ -892,13 +892,13 @@ watch(search, () => {
             loadItems({ 
                 page: 1, 
                 itemsPerPage: itemsPerPage.value, 
-                sortBy: '' 
+                sortBy: []
             });
         }
     }, 500); // 500ms debounce
 });
 
-function loadItems({ page, itemsPerPage, sortBy }, isAutoRefresh = false) {
+function loadItems({ page, itemsPerPage, sortBy }: { page: number; itemsPerPage: number; sortBy: { key: string; order: string }[] }, isAutoRefresh = false) {
     // Skip auto-refresh if page is not visible or currently analyzing
     if (isAutoRefresh && (!isPageVisible.value || analyzing.value)) {
         return;
@@ -912,7 +912,7 @@ function loadItems({ page, itemsPerPage, sortBy }, isAutoRefresh = false) {
         return
     }
     // Vuetify 3 passes sortBy as array [{key, order}]; convert to string for backend
-    const sortByStr: string = Array.isArray(sortBy) ? (sortBy[0]?.key ?? '') : (sortBy ?? '');
+    const sortByStr: string = sortBy?.[0]?.key ?? '';
     const fetchitem: Fetchparam = {
         page: page,
         itemsPerPage: itemsPerPage,
@@ -958,7 +958,7 @@ function handleSearch() {
         loadItems({ 
             page: 1, 
             itemsPerPage: itemsPerPage.value, 
-            sortBy: '' 
+            sortBy: []
         });
     }
 }
@@ -1433,7 +1433,7 @@ async function handleAnalyzeConfirm(data: { businessInfo: string; saveForFuture:
                     loadItems({ 
                         page: currentPage.value, 
                         itemsPerPage: itemsPerPage.value, 
-                        sortBy: '' 
+                        sortBy: []
                     }, true);
                 }
                 
@@ -1449,7 +1449,7 @@ async function handleAnalyzeConfirm(data: { businessInfo: string; saveForFuture:
                             loadItems({ 
                                 page: currentPage.value, 
                                 itemsPerPage: itemsPerPage.value, 
-                                sortBy: '' 
+                                sortBy: []
                             }, true);
                         }
                     }, 1000);
