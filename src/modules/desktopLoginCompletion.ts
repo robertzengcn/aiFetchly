@@ -29,6 +29,7 @@ import { UserController } from "@/controller/UserController";
 import { DeviceFingerprintService } from "@/modules/deviceFingerprint";
 import { DeviceApi } from "@/api/deviceApi";
 import { SqliteDb } from "@/config/SqliteDb";
+import { getMainWindow } from "@/main-process/mainWindowRegistry";
 import { ScheduleManager } from "@/modules/ScheduleManager";
 import { SearchController } from "@/controller/SearchController";
 import { YellowPagesController } from "@/controller/YellowPagesController";
@@ -42,6 +43,7 @@ import { NATIVATECOMMAND } from "@/config/channellist";
 import { NativateDatatype } from "@/entityTypes/commonType";
 import { log } from "@/modules/Logger";
 import { dialog } from "electron";
+import { refreshChatSchedulerForUserPath } from "@/main-process/chatSchedulerLifecycleRegistry";
 
 /** Token data required to complete login. Mirrors ExchangeSuccessResponse. */
 export type LoginTokens = {
@@ -62,6 +64,18 @@ function isWindowAlive(win: BrowserWindow | null): win is BrowserWindow {
   return (
     (win as unknown as { isDestroyed?: () => boolean }).isDestroyed?.() !== true
   );
+}
+
+/**
+ * Resolve a usable window for post-login IPC. The caller may pass a stale
+ * reference (window was recreated mid-login — e.g. crash recovery), so if
+ * it is dead fall back to the main-window registry, which tracks the live
+ * window. Returns null only when no live window exists at all.
+ */
+function resolveTargetWindow(win: BrowserWindow | null): BrowserWindow | null {
+  if (isWindowAlive(win)) return win;
+  const liveFromRegistry = getMainWindow();
+  return isWindowAlive(liveFromRegistry) ? liveFromRegistry : null;
 }
 
 /** Typed result so callers can branch without touching error internals. */
@@ -209,6 +223,24 @@ export async function completeDesktopLogin(
       await VectorDatabasePool.clearAllInstances();
       log.info("Controller singletons reset after SqliteDb path change");
 
+      // Refresh the Chat V2 interval scheduler against the new user path. Its
+      // cached ScheduleTaskModel/AiMessageTaskRunModel repositories point at
+      // the connection just destroyed; the registry hook drops and rebuilds
+      // them and restarts the scheduler if it was running. Without this, the
+      // 30s interval poll keeps querying the closed connection and throws
+      // "The database connection is not open" after login. Invoked through the
+      // lifecycle registry so this module never imports Electron-only
+      // `background.ts` (which would break the pure-Node vitest suites).
+      try {
+        await refreshChatSchedulerForUserPath();
+        log.info("Chat scheduled background scheduler refreshed after login");
+      } catch (schedError) {
+        log.error(
+          "Failed to refresh chat scheduled background scheduler after login:",
+          schedError
+        );
+      }
+
       if (!newDbInstance.connection.isInitialized) {
         let retries = 3;
         let lastError: unknown = null;
@@ -257,9 +289,10 @@ export async function completeDesktopLogin(
   }
 
   // --- 5. Initialize WebSocket (non-blocking) -------------------------
-  if (isWindowAlive(win)) {
+  const targetWin = resolveTargetWindow(win);
+  if (targetWin) {
     try {
-      await initializeWebSocketConnection(win);
+      await initializeWebSocketConnection(targetWin);
       log.info("WebSocket connection initialized after login");
     } catch (wsError) {
       log.error(
@@ -275,12 +308,17 @@ export async function completeDesktopLogin(
   }
 
   // --- 7. Navigate to Dashboard --------------------------------------
-  if (isWindowAlive(win)) {
-    win.webContents.send(NATIVATECOMMAND, {
+  // Resolve lazily (not the step-5 capture) in case the window changed
+  // while the WebSocket init above was awaited.
+  const navWin = resolveTargetWindow(win);
+  if (navWin) {
+    navWin.webContents.send(NATIVATECOMMAND, {
       path: "Dashboard",
     } as NativateDatatype);
   } else {
-    log.error("Window has been destroyed, cannot send navigation command");
+    log.error(
+      "No live window available, cannot send navigation command after login"
+    );
   }
 
   return { ok: true };

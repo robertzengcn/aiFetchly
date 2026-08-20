@@ -6,6 +6,7 @@ import {
   CANCEL_DESKTOP_LOGIN,
   USER_SIGNOUT,
   LOGIN_STATUS,
+  CHECK_LOGIN_SUCCEEDED,
 } from "@/config/channellist";
 import { UserController } from "@/controller/UserController";
 import { User } from "@/modules/user";
@@ -19,6 +20,7 @@ import {
   REFRESHTOKEN,
   TOKENEXPIRY,
   REFRESHTOKENEXPIRY,
+  USEREMAIL,
 } from "@/config/usersetting";
 import { TokenRefreshService } from "@/modules/tokenRefresh";
 
@@ -176,6 +178,33 @@ export function registerUserIpcHandlers(
       status: true,
       msg: "",
       data: res,
+    };
+    return result;
+  });
+
+  /**
+   * Lightweight login-state probe used by the renderer when its login
+   * watchdog fires. USEREMAIL is only set by a successful login cascade
+   * (updateUserInfo) and is cleared on signout, so its presence means the
+   * desktop handoff DID complete — the renderer should navigate instead of
+   * showing a false "timeout" error.
+   */
+  ipcMain.handle(CHECK_LOGIN_SUCCEEDED, async (_event, _data) => {
+    let loginSucceeded = false;
+    let email = "";
+    try {
+      const tokenService = new Token();
+      email = tokenService.getValue(USEREMAIL);
+      loginSucceeded = email.trim().length > 0;
+    } catch (err) {
+      log.error("[CHECK_LOGIN_SUCCEEDED] failed to read login state", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+    const result: CommonMessage<boolean> = {
+      status: true,
+      msg: "",
+      data: loginSucceeded,
     };
     return result;
   });

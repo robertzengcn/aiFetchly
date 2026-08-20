@@ -16,10 +16,7 @@ import type { AIProviderResolver } from "@/service/aiProvider/AIProviderResolver
 import { OpenAICompatibleProviderClient } from "@/service/aiProvider/OpenAICompatibleProviderClient";
 import type { LocalAIProviderConfig } from "@/entityTypes/aiProviderTypes";
 import type { ModelArtifact } from "@/entityTypes/aiImageAttachmentToolTypes";
-import {
-  AIChatRecoverableError,
-  type AIChatRecoveryReason,
-} from "@/service/AIChatRecoveryTypes";
+import { type AIChatRecoveryReason } from "@/service/AIChatRecoveryTypes";
 import { AIChatRecoveryClassifier } from "@/service/AIChatRecoveryClassifier";
 import {
   AI_CHAT_RECOVERY_DEFAULTS,
@@ -761,12 +758,6 @@ export interface StreamRecoveryInfo {
 }
 
 /**
- * Maximum number of retry attempts for a streaming connection failure
- * (so up to maxAttempts + 1 total tries including the initial attempt).
- */
-const STREAM_RETRY_MAX_ATTEMPTS = 3;
-
-/**
  * Base delay in milliseconds for the first retry. Subsequent delays use
  * exponential backoff: base * 2^attempt (1s, 2s, 4s).
  */
@@ -1166,6 +1157,11 @@ export class AiChatApi {
     try {
       let streamActive = true;
       while (streamActive) {
+        // Honor an abort between reads so cancellation is responsive even
+        // when the underlying read hasn't rejected yet.
+        if (signal?.aborted) {
+          break;
+        }
         let result: ReadableStreamReadResult<Uint8Array>;
         try {
           result = await reader.read();
@@ -1282,7 +1278,6 @@ export class AiChatApi {
   async getAvailableModels(): Promise<
     CommonApiresp<AvailableChatModelsResponse>
   > {
-    await this.ensureAIEnabled();
     return this._httpClient.get("/api/ai/chat/models");
   }
 
@@ -1929,8 +1924,6 @@ export class AiChatApi {
       }
       return this.listOpenAIModelsHosted();
     }
-    // Worker processes have no provider settings; keep the hosted-only gate.
-    await this.ensureAIEnabled();
     return this.listOpenAIModelsHosted();
   }
 

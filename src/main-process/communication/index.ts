@@ -85,7 +85,13 @@ export function registerCommunicationIpcHandlers(
     registerEmailTemplateIpcHandlers();
     registerSocialAccountIpcHandlers(win);
     registerSystemSettingIpcHandlers();
-    registerUserIpcHandlers(() => win);
+    // Use the lazy getWin provider, NOT the captured `win` argument. The
+    // HMR guard above means this closure lives for the whole app lifetime;
+    // capturing `win` here would pin the FIRST window forever, so after a
+    // window recreation (crash recovery, second-instance) every login-flow
+    // lookup would return the destroyed window and post-login IPC would
+    // never reach the live renderer.
+    registerUserIpcHandlers(getWin);
     registerPlatformIpcHandlers();
     registerSessionRecordingIpcHandlers();
     registerLanguagePreferenceIpcHandlers();
