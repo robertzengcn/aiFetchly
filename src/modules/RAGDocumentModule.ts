@@ -4,11 +4,15 @@ import { RAGDocumentEntity } from "@/entity/RAGDocument.entity";
 import * as fs from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
-import { WriteLog, getLogPath } from "@/modules/lib/function";
+import { WriteLog } from "@/modules/lib/function";
 import { app } from "electron";
 import { VectorStoreService } from "@/service/VectorStoreService";
 import { VectorDatabaseType } from "@/modules/factories/VectorDatabaseFactory";
 import { RAGChunkModule } from "@/modules/RAGChunkModule";
+import {
+  getVectorIndexBaseDir,
+  getDocumentVectorIndexPath,
+} from "@/service/VectorIndexPaths";
 
 /** F2 helper — unique stamp used to build staged-upload filenames. */
 function validationStamp(): string {
@@ -476,9 +480,13 @@ export class RAGDocumentModule extends BaseModule {
             `Found ${chunkIds.length} chunks for document ${id}, deleting associated vectors...`
           );
 
-          // Create VectorStoreService instance
+          // Create VectorStoreService against the shared app-owned base so
+          // loadIndex/deleteVectorsByChunkIds touch the same tables and files
+          // the indexing flow used (see VectorIndexPaths.ts). Passing the
+          // stored file path as a *base* directory was the source of the
+          // "outside allowed roots" refusal.
           const vectorStoreService = new VectorStoreService(
-            document.vectorIndexPath,
+            getVectorIndexBaseDir(),
             VectorDatabaseType.SQLITE_VEC
           );
 
@@ -489,7 +497,6 @@ export class RAGDocumentModule extends BaseModule {
           await vectorStoreService.loadIndex({
             name: document.modelName,
             dimensions: document.vectorDimensions,
-            documentIndexPath: document.vectorIndexPath,
           });
 
           // Delete vectors by chunk IDs using VectorStoreService
@@ -515,31 +522,50 @@ export class RAGDocumentModule extends BaseModule {
         // Don't return false - continue with file and database deletion even if vector deletion fails
       }
 
-      // Delete vector index file if path exists (legacy cleanup)
-      // F10 fix (bypass) — apply the same containment check used for
-      // document.filePath. A tampered/legacy DB row could otherwise let a
-      // renderer delete arbitrary local files via vectorIndexPath.
-      if (
-        document.vectorIndexPath &&
-        this.isVectorIndex_pathSafe(document.vectorIndexPath)
-      ) {
+      // Delete vector index file(s). Two candidates:
+      //  1. The canonical path derived from the document's model/dimension,
+      //     which is where the current app creates indexes.
+      //  2. The legacy stored vectorIndexPath (older rows / tampered DB).
+      // F10 fix (bypass) — apply the containment check to every candidate. A
+      // tampered/legacy DB row could otherwise let a renderer delete arbitrary
+      // local files via vectorIndexPath.
+      const vectorIndexPathCandidates: string[] = [];
+      if (document.modelName && document.vectorDimensions) {
+        vectorIndexPathCandidates.push(
+          getDocumentVectorIndexPath(
+            document.id,
+            document.modelName,
+            document.vectorDimensions
+          )
+        );
+      }
+      if (document.vectorIndexPath) {
+        vectorIndexPathCandidates.push(document.vectorIndexPath);
+      }
+
+      const seenPaths = new Set<string>();
+      for (const candidate of vectorIndexPathCandidates) {
+        if (seenPaths.has(candidate)) {
+          continue;
+        }
+        seenPaths.add(candidate);
+        if (!this.isVectorIndex_pathSafe(candidate)) {
+          console.warn(
+            `Refusing to delete vector index path outside allowed roots: ${candidate}`
+          );
+          continue;
+        }
         try {
-          if (fs.existsSync(document.vectorIndexPath)) {
-            fs.unlinkSync(document.vectorIndexPath);
-            console.log(
-              `Deleted vector index file: ${document.vectorIndexPath}`
-            );
+          if (fs.existsSync(candidate)) {
+            fs.unlinkSync(candidate);
+            console.log(`Deleted vector index file: ${candidate}`);
           }
         } catch (error) {
           console.warn(
-            `Failed to delete vector index file: ${document.vectorIndexPath}`,
+            `Failed to delete vector index file: ${candidate}`,
             error
           );
         }
-      } else if (document.vectorIndexPath) {
-        console.warn(
-          `Refusing to delete vector index path outside allowed roots: ${document.vectorIndexPath}`
-        );
       }
     }
 

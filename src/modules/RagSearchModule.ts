@@ -4,7 +4,10 @@ import {
   SearchResult,
   SearchOptions,
 } from "@/service/VectorSearchService";
-import { VectorStoreService } from "@/service/VectorStoreService";
+import {
+  VectorStoreService,
+  EmbeddingModelConfig,
+} from "@/service/VectorStoreService";
 import {
   ConfigurationService,
   ConfigurationServiceImpl,
@@ -31,8 +34,7 @@ import { EmbeddingModelCatalogService } from "@/service/embedding/EmbeddingModel
 import { LOCAL_EMBEDDING_MAX_BATCH_SIZE } from "@/childprocess/embedding/LocalEmbeddingWorkerTypes";
 import { SystemSettingModule } from "@/modules/SystemSettingModule";
 import { SystemSettingGroupModule } from "@/modules/SystemSettingGroupModule";
-import { app } from "electron";
-import { getUserdbpath } from "@/modules/lib/electronfunction";
+import { getVectorIndexBaseDir } from "@/service/VectorIndexPaths";
 import {
   KnowledgeSearchRequest,
   KnowledgeSearchToolResult,
@@ -45,11 +47,7 @@ import {
 } from "@/service/RagSearchTypes";
 import { RagRerankService } from "@/service/RagRerankService";
 import { RAGChunkModule } from "@/modules/RAGChunkModule";
-import {
-  EmbeddingBillingError,
-  isBillingDeniedMessage,
-  isEmbeddingBillingError,
-} from "@/modules/rag/embeddingErrors";
+import { EmbeddingBillingError } from "@/modules/rag/embeddingErrors";
 // import { Token } from "./token";
 // import { USERSDBPATH } from "@/config/usersetting";
 export interface SearchRequest {
@@ -106,9 +104,9 @@ export class RagSearchModule extends BaseModule {
     // const userdataPath = tokenService.getValue(USERSDBPATH)
     // Initialize services with database
     // const dbPath = getUserdbpath();
-    //get app data path
-    const appDataPath = app.getPath("appData");
-    const vectorStoreService = new VectorStoreService(appDataPath);
+    // Use the shared app-owned vector index base so every component resolves
+    // the same per-document index files (see VectorIndexPaths.ts).
+    const vectorStoreService = new VectorStoreService(getVectorIndexBaseDir());
     this.searchService = new VectorSearchService(vectorStoreService);
     this.configurationService = new ConfigurationServiceImpl();
     this.documentService = new DocumentService();
@@ -569,7 +567,19 @@ export class RagSearchModule extends BaseModule {
    * Get search analytics
    * @returns Search analytics
    */
-  async getAnalytics(): Promise<any> {
+  async getAnalytics(): Promise<{
+    totalChunks: number;
+    totalDocuments: number;
+    averageChunkSize: number;
+    indexStats: {
+      totalVectors: number;
+      dimension: number;
+      indexType: string;
+      isInitialized: boolean;
+      currentModel: EmbeddingModelConfig | null;
+      databaseType: string;
+    };
+  }> {
     try {
       return await this.searchService.getSearchAnalytics();
     } catch (error) {
@@ -582,7 +592,11 @@ export class RagSearchModule extends BaseModule {
    * Get performance metrics
    * @returns Performance metrics
    */
-  getPerformanceMetrics(): any {
+  getPerformanceMetrics(): {
+    averageSearchTime: number;
+    cacheHitRate: number;
+    totalSearches: number;
+  } {
     return this.searchService.getPerformanceMetrics();
   }
 
@@ -1136,7 +1150,8 @@ export class RagSearchModule extends BaseModule {
         const modelsResponse = await catalog.listModels();
 
         if (modelsResponse.default_model && modelsResponse.models) {
-          const resolvedModel = modelsResponse.models[modelsResponse.default_model];
+          const resolvedModel =
+            modelsResponse.models[modelsResponse.default_model];
           const resolved = resolvedModel
             ? {
                 modelName: modelsResponse.default_model,

@@ -8,7 +8,6 @@ import { IVectorDatabase } from "@/modules/interface/IVectorDatabase";
 import {
   VectorDatabaseFactory,
   VectorDatabaseType,
-  VectorDatabaseFactoryConfig,
 } from "@/modules/factories/VectorDatabaseFactory";
 import {
   VectorDatabasePool,
@@ -16,6 +15,10 @@ import {
 } from "@/modules/factories/VectorDatabasePool";
 import { VectorDatabaseConfig } from "@/modules/interface/IVectorDatabase";
 import { toPathSafeModelKey } from "@/service/embedding/EmbeddingModelId";
+import {
+  getVectorIndexBaseDir,
+  getDocumentVectorIndexDir,
+} from "@/service/VectorIndexPaths";
 
 /**
  * Embedding model configuration interface
@@ -26,6 +29,18 @@ export interface EmbeddingModelConfig {
   name: string;
   description?: string;
   documentIndexPath?: string;
+}
+
+/**
+ * Optional method implemented by vector database backends that support
+ * rebuilding the chunk-id map (FAISS-style stores).
+ */
+interface RebuildableVectorDatabase extends IVectorDatabase {
+  rebuildChunkIdMapping(
+    ragChunkModule: unknown,
+    documentId: number
+  ): Promise<void>;
+  deleteVectorsByChunkIds(chunkIds: number[]): Promise<void>;
 }
 
 /**
@@ -40,14 +55,25 @@ export class VectorStoreService {
   private ragChunkModule: RAGChunkModule;
   private databaseType: VectorDatabaseType;
 
+  /**
+   * Return the vector database cast to the extended interface for backends
+   * that implement the optional chunk-id-rebuild / delete methods. No-op for
+   * backends that do not support them (method presence is checked by callers).
+   */
+  private getExtendedDatabase(): RebuildableVectorDatabase {
+    return this.vectorDatabase as unknown as RebuildableVectorDatabase;
+  }
+
   constructor(
     // db: SqliteDb,
     indexPath?: string,
     databaseType: VectorDatabaseType = VectorDatabaseType.SQLITE_VEC
   ) {
     // this.db = db;
-    this.indexPath =
-      indexPath || path.join(process.cwd(), "data", "vector_index");
+    // Fall back to the app-owned vector index directory so index files are
+    // always created inside userData and deletes pass the F10 containment
+    // check (see VectorIndexPaths.ts).
+    this.indexPath = indexPath || getVectorIndexBaseDir();
     this.databaseType = databaseType;
     this.ragChunkModule = new RAGChunkModule();
 
@@ -159,7 +185,7 @@ export class VectorStoreService {
         "rebuildChunkIdMapping" in this.vectorDatabase &&
         vectorDbConfig.documentId
       ) {
-        await (this.vectorDatabase as any).rebuildChunkIdMapping(
+        await this.getExtendedDatabase().rebuildChunkIdMapping(
           this.ragChunkModule,
           vectorDbConfig.documentId
         );
@@ -212,7 +238,7 @@ export class VectorStoreService {
     documentId: number;
     content: string;
     embedding: number[];
-    metadata?: any;
+    metadata?: Record<string, unknown>;
     model?: string;
     dimensions?: number;
     vectorIndexPath?: string;
@@ -236,10 +262,7 @@ export class VectorStoreService {
           embeddingData.vectorIndexPath
         );
       } else {
-        indexExists = this.documentIndexExists(
-          embeddingData.documentId,
-          modelConfig
-        );
+        indexExists = this.documentIndexExists(embeddingData.documentId);
       }
 
       // Get pooled instance for this document and model
@@ -507,23 +530,11 @@ export class VectorStoreService {
    * @returns True if index file exists for the model
    */
   indexExistsForModel(modelConfig: EmbeddingModelConfig): boolean {
-    // Create a temporary vector database config to check existence
-    const vectorDbConfig: VectorDatabaseConfig = {
-      indexPath: this.indexPath,
-      modelName: modelConfig.name,
-      dimensions: modelConfig.dimensions,
-    };
-
-    // Create a temporary database instance to check if index exists
-    const tempDb = VectorDatabaseFactory.createDatabase({
-      type: this.databaseType,
-      baseIndexPath: this.indexPath,
-    });
-
-    // Generate the expected path for this model
-    const baseDir = path.dirname(this.indexPath);
-    const fileName = `index_${modelConfig.name}_${
-      modelConfig.name
+    // Generate the expected path for this model under the shared base.
+    const baseDir = getVectorIndexBaseDir();
+    const safeModelKey = toPathSafeModelKey(modelConfig.name);
+    const fileName = `index_${safeModelKey}_${
+      modelConfig.dimensions
     }.${this.getFileExtension()}`;
     const modelSpecificPath = path.join(baseDir, "models", fileName);
 
@@ -623,8 +634,13 @@ export class VectorStoreService {
       await this.saveIndex();
     }
 
-    // Load or create index for the new model
-    await this.loadIndex(modelConfig);
+    // Load the index for the new model, honoring the requested index type
+    // (createIndex accepts indexType; loadIndex uses the persisted type).
+    if (this.vectorDatabase.indexExists()) {
+      await this.loadIndex(modelConfig);
+    } else {
+      await this.createIndex(modelConfig, indexType);
+    }
   }
 
   /**
@@ -829,7 +845,7 @@ export class VectorStoreService {
         this.databaseType === VectorDatabaseType.FAISS &&
         "rebuildChunkIdMapping" in this.vectorDatabase
       ) {
-        await (this.vectorDatabase as any).rebuildChunkIdMapping(
+        await this.getExtendedDatabase().rebuildChunkIdMapping(
           this.ragChunkModule,
           documentId
         );
@@ -904,11 +920,9 @@ export class VectorStoreService {
 
     try {
       // Check if the vector database supports deleteVectorsByChunkIds
-      if (
-        typeof (this.vectorDatabase as any).deleteVectorsByChunkIds ===
-        "function"
-      ) {
-        await (this.vectorDatabase as any).deleteVectorsByChunkIds(chunkIds);
+      const extendedDb = this.getExtendedDatabase();
+      if (typeof extendedDb.deleteVectorsByChunkIds === "function") {
+        await extendedDb.deleteVectorsByChunkIds(chunkIds);
         console.log(`Deleted ${chunkIds.length} vectors by chunk IDs`);
       } else {
         throw new Error(
@@ -931,10 +945,7 @@ export class VectorStoreService {
    * @param modelConfig - Embedding model configuration
    * @returns True if document-specific index exists
    */
-  documentIndexExists(
-    documentId: number,
-    modelConfig: EmbeddingModelConfig
-  ): boolean {
+  documentIndexExists(documentId: number): boolean {
     return this.vectorDatabase.documentIndexExists(documentId);
   }
 
@@ -972,7 +983,12 @@ export class VectorStoreService {
    * Get pool statistics
    * @returns Pool statistics
    */
-  getPoolStats(): any {
+  getPoolStats(): {
+    poolSize: number;
+    instanceKeys: string[];
+    currentModel: EmbeddingModelConfig | null;
+    databaseType: string;
+  } {
     return {
       poolSize: VectorDatabasePool.getPoolSize(),
       instanceKeys: VectorDatabasePool.getInstanceKeys(),
@@ -999,7 +1015,12 @@ export class VectorStoreService {
     documentId: number,
     modelConfig: EmbeddingModelConfig
   ): string {
-    const baseDir = path.dirname(this.indexPath);
+    // Always write per-document indexes under the shared app-owned documents
+    // directory. Previously this derived the base from `path.dirname(indexPath)`,
+    // which produced different paths depending on how each VectorStoreService
+    // was constructed (process.cwd(), appData, ...) and orphaned files that the
+    // deletion containment check then refused to remove.
+    const baseDir = getDocumentVectorIndexDir();
     // Model IDs (e.g. "local-xenova:Xenova/all-MiniLM-L6-v2" or HF names like
     // "Qwen/Qwen3-Embedding-4B") contain "/" and ":" which are unsafe in
     // filenames. Sanitize before embedding in the index filename. The original
@@ -1008,7 +1029,7 @@ export class VectorStoreService {
     const fileName = `index_doc_${documentId}_${safeModelKey}_${
       modelConfig.dimensions
     }.${this.getFileExtension()}`;
-    return path.join(baseDir, "documents", fileName);
+    return path.join(baseDir, fileName);
   }
 
   /**
