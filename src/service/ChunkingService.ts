@@ -17,6 +17,7 @@ import { GlobalWorkerOptions } from "pdfjs-dist";
 import pdf2md from "pdf2md-ts";
 import * as mammoth from "mammoth";
 import WordExtractor from "word-extractor";
+import AdmZip from "adm-zip";
 
 export interface ChunkingOptions {
   chunkSize: number;
@@ -242,6 +243,91 @@ export class ChunkingService {
       return body.trim();
     } catch (error) {
       console.error(`Error extracting DOC content from ${filePath}:`, error);
+      return null;
+    }
+  }
+
+  /**
+   * Extract PPTX content using adm-zip to unzip and parse slide XML.
+   * .pptx files are ZIP archives containing XML files. Slide text is
+   * stored in <a:t> elements within ppt/slides/slide*.xml.
+   */
+  private async extractPptxContent(filePath: string): Promise<string | null> {
+    try {
+      if (!fs.existsSync(filePath)) {
+        console.error(`PPTX file not found: ${filePath}`);
+        return null;
+      }
+
+      console.log(`Processing PPTX file: ${path.basename(filePath)}`);
+
+      const zip = new AdmZip(filePath);
+      const entries = zip.getEntries();
+
+      // Collect slide entries sorted by slide index
+      const slideEntries = entries
+        .filter(
+          (e) =>
+            e.entryName.startsWith("ppt/slides/slide") &&
+            e.entryName.endsWith(".xml")
+        )
+        .sort((a, b) => {
+          const aNum = parseInt(
+            a.entryName.match(/slide(\d+)/)?.[1] || "0",
+            10
+          );
+          const bNum = parseInt(
+            b.entryName.match(/slide(\d+)/)?.[1] || "0",
+            10
+          );
+          return aNum - bNum;
+        });
+
+      if (slideEntries.length === 0) {
+        console.warn(`No slides found in PPTX: ${path.basename(filePath)}`);
+        return null;
+      }
+
+      console.log(`Found ${slideEntries.length} slides in PPTX`);
+
+      const slideTexts: string[] = [];
+
+      for (const slideEntry of slideEntries) {
+        const slideNum = slideEntry.entryName.match(/slide(\d+)/)?.[1] || "?";
+        const xmlContent = slideEntry.getData().toString("utf-8");
+
+        // Extract text from <a:t> elements (PowerPoint text elements)
+        const textElements: string[] = [];
+        const aTRegex = /<a:t[^>]*>([^<]*)<\/a:t>/g;
+        let match: RegExpExecArray | null;
+        while ((match = aTRegex.exec(xmlContent)) !== null) {
+          const text = match[1].trim();
+          if (text) {
+            textElements.push(text);
+          }
+        }
+
+        if (textElements.length > 0) {
+          slideTexts.push(
+            `--- Slide ${slideNum} ---\n${textElements.join("\n")}`
+          );
+        }
+      }
+
+      if (slideTexts.length === 0) {
+        console.warn(
+          `No text content extracted from PPTX: ${path.basename(filePath)}`
+        );
+        return null;
+      }
+
+      const fullContent = slideTexts.join("\n\n").trim();
+      console.log(
+        `Successfully extracted PPTX content: ${fullContent.length} characters from ${slideTexts.length}/${slideEntries.length} slides`
+      );
+      return fullContent;
+    } catch (error) {
+      console.error(`Error extracting PPTX content from ${filePath}:`, error);
       return null;
     }
   }
@@ -484,6 +570,22 @@ export class ChunkingService {
             metadata: {
               characterCount: docContent.length,
               wordCount: docContent
+                .split(/\s+/)
+                .filter((word) => word.length > 0).length,
+            },
+          };
+        }
+
+        case ".pptx": {
+          const pptxContent = await this.extractPptxContent(document.filePath);
+          if (!pptxContent) return null;
+          return {
+            content: pptxContent,
+            contentType: "markdown",
+            originalFormat: "pptx",
+            metadata: {
+              characterCount: pptxContent.length,
+              wordCount: pptxContent
                 .split(/\s+/)
                 .filter((word) => word.length > 0).length,
             },

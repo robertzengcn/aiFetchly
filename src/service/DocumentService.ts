@@ -15,6 +15,7 @@ import { GlobalWorkerOptions } from "pdfjs-dist";
 import pdf2md from "pdf2md-ts";
 import * as mammoth from "mammoth";
 import WordExtractor from "word-extractor";
+import AdmZip from "adm-zip";
 import { HtmlConversionService } from "@/service/HtmlConversionService";
 import {
   SpreadsheetConversionService,
@@ -223,7 +224,7 @@ export class DocumentService {
 
   /**
    * Convert uploaded attachment content to markdown text.
-   * Supported: PDF, CSV, DOCX, DOC, XLSX.
+   * Supported: PDF, CSV, DOCX, DOC, PPTX, XLSX.
    */
   async convertUploadedAttachmentToMarkdown(
     fileName: string,
@@ -246,7 +247,7 @@ export class DocumentService {
         normalizeColumns: true,
       });
     } else {
-      // PDF and DOCX/DOC still require a temp file on disk
+      // PDF, DOCX, DOC, PPTX still require a temp file on disk
       const sourcePath = path.join(
         os.tmpdir(),
         `aifetchly-attachment-${Date.now()}-${crypto.randomUUID()}${ext}`
@@ -259,6 +260,8 @@ export class DocumentService {
           markdown = await this.convertDocxFileToMarkdown(sourcePath);
         } else if (ext === ".doc") {
           markdown = await this.convertDocFileToMarkdown(sourcePath);
+        } else if (ext === ".pptx") {
+          markdown = await this.convertPptxFileToMarkdown(sourcePath);
         }
       } finally {
         if (fs.existsSync(sourcePath)) {
@@ -473,7 +476,7 @@ export class DocumentService {
   private resolveSupportedExtension(
     fileName: string,
     mimeType: string
-  ): ".pdf" | ".csv" | ".doc" | ".docx" | ".xlsx" {
+  ): ".pdf" | ".csv" | ".doc" | ".docx" | ".pptx" | ".xlsx" {
     const lowerName = fileName.toLowerCase();
     const lowerMime = mimeType.toLowerCase();
 
@@ -496,6 +499,13 @@ export class DocumentService {
     }
     if (lowerName.endsWith(".doc") || lowerMime === "application/msword") {
       return ".doc";
+    }
+    if (
+      lowerName.endsWith(".pptx") ||
+      lowerMime ===
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+    ) {
+      return ".pptx";
     }
     if (
       lowerName.endsWith(".xlsx") ||
@@ -566,6 +576,45 @@ export class DocumentService {
     const extractor = new WordExtractor();
     const doc = await extractor.extract(filePath);
     return (doc.getBody() || "").trim();
+  }
+
+  private async convertPptxFileToMarkdown(filePath: string): Promise<string> {
+    const zip = new AdmZip(filePath);
+    const entries = zip.getEntries();
+
+    const slideEntries = entries
+      .filter(
+        (e) =>
+          e.entryName.startsWith("ppt/slides/slide") &&
+          e.entryName.endsWith(".xml")
+      )
+      .sort((a, b) => {
+        const aNum = parseInt(a.entryName.match(/slide(\d+)/)?.[1] || "0", 10);
+        const bNum = parseInt(b.entryName.match(/slide(\d+)/)?.[1] || "0", 10);
+        return aNum - bNum;
+      });
+
+    const slideTexts: string[] = [];
+    for (const slideEntry of slideEntries) {
+      const slideNum = slideEntry.entryName.match(/slide(\d+)/)?.[1] || "?";
+      const xmlContent = slideEntry.getData().toString("utf-8");
+      const textElements: string[] = [];
+      const aTRegex = /<a:t[^>]*>([^<]*)<\/a:t>/g;
+      let match: RegExpExecArray | null;
+      while ((match = aTRegex.exec(xmlContent)) !== null) {
+        const text = match[1].trim();
+        if (text) {
+          textElements.push(text);
+        }
+      }
+      if (textElements.length > 0) {
+        slideTexts.push(
+          `--- Slide ${slideNum} ---\n${textElements.join("\n")}`
+        );
+      }
+    }
+
+    return slideTexts.join("\n\n").trim();
   }
 
   private sanitizePathSegment(value: string): string {
