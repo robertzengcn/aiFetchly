@@ -895,3 +895,79 @@ jobs:
               --draft
           fi
           echo "Release $TAG is a DRAFT. Please review and publish manually on GitHub."
+
+  # ===========================================================================
+  # Draft GitHub Release on every push to master (PRD FR-9.5 variant).
+  # The build jobs above run on push too: build-macos produces a signed
+  # ZIP/DMG and build-windows produces Store-mode MSIX + an MSI. This job
+  # attaches those to a DRAFT GitHub Release tagged v<version>. Drafts never
+  # reach update.electronjs.org, so this is purely for manual review before an
+  # official release is published. The automatic production release path stays
+  # with the manual workflow_dispatch build above; runtime archives are
+  # dispatch-only and are NOT attached here.
+  # ===========================================================================
+  draft-release-on-push:
+    if: ${{ github.event_name == 'push' }}
+    needs: [build-windows, build-macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.build-windows.outputs.version }}
+      TAG: v${{ needs.build-windows.outputs.version }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download Windows build
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ needs.build-windows.outputs.artifact_name }}
+          path: windows-assets
+
+      - name: Download macOS build
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ needs.build-macos.outputs.artifact_name }}
+          path: macos-assets
+
+      - name: Collect release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets
+          # Windows push builds are Store-mode MSIX plus an MSI for local
+          # testing (no Squirrel RELEASES/nupkg, so the Squirrel validation
+          # from the production publish job is intentionally skipped here).
+          find windows-assets -type f \( -name '*.msix' -o -name '*.msi' \) -exec cp {} release-assets/ \;
+          # macOS push builds produce the signed auto-update ZIP and a DMG.
+          find macos-assets -type f \( -name '*.zip' -o -name '*.dmg' \) -exec cp {} release-assets/ \;
+          if [ -z "$(ls -A release-assets)" ]; then
+            echo "::error::No release assets were collected from the push builds."
+            exit 1
+          fi
+          echo "Collected release assets:"
+          ls -la release-assets
+
+      - name: Create draft GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            is_draft="$(gh release view "$TAG" --json isDraft -q .isDraft -R "$GITHUB_REPOSITORY")"
+            if [[ "$is_draft" != "true" ]]; then
+              echo "::error::Release $TAG already exists and is PUBLISHED. Refusing to clobber a live release."
+              exit 1
+            fi
+            echo "Release $TAG exists as a draft; uploading assets (--clobber)."
+            gh release upload "$TAG" release-assets/* -R "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$TAG" release-assets/* \
+              -R "$GITHUB_REPOSITORY" \
+              --title "AiFetchly $VERSION" \
+              --notes "Draft release built from a push to master. Review and publish manually on GitHub." \
+              --draft
+          fi
+          echo "Release $TAG is a DRAFT. Please review and publish manually on GitHub."
