@@ -1,5 +1,8 @@
-import { describe, it, expect } from "vitest";
-
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import os from "node:os";
+import path from "node:path";
+import fs from "node:fs";
+import { SqliteDb } from "@/config/SqliteDb";
 import { EmailReplySendRecoveryService } from "@/service/emailReply/EmailReplySendRecoveryService";
 import { EmailReplySendAttemptModule } from "@/modules/EmailReplySendAttemptModule";
 import { EmailReplySendAttemptEntity } from "@/entity/EmailReplySendAttempt.entity";
@@ -9,11 +12,33 @@ import { EmailReplySendAttemptEntity } from "@/entity/EmailReplySendAttempt.enti
  * (`claimed`/`submitted` older than the threshold) as `delivery_unknown` —
  * NEVER failed — and leaves fresh in-flight + finalized attempts untouched.
  * It never re-submits SMTP.
+ *
+ * DB isolation: an isolated temp DB (resetInstance) avoids the
+ * SQLITE_BUSY_SNAPSHOT race against sibling test files sharing the fallback
+ * aifetchly-test singleton under vitest's thread pool. The recovery service
+ * resolves Token USERSDBPATH -> getInstance, which returns the authoritative
+ * singleton established in beforeAll.
  */
 describe("EmailReplySendRecoveryService sweep", () => {
-  // The recovery service reads through Token-fallback Modules; seed through
-  // the same fallback DB so both sides see one connection.
-  const attemptModule = new EmailReplySendAttemptModule();
+  let dbpath: string;
+  let attemptModule: EmailReplySendAttemptModule;
+
+  beforeAll(async () => {
+    dbpath = path.join(os.tmpdir(), `aifetchly-recovery-test-${Date.now()}`);
+    fs.mkdirSync(dbpath, { recursive: true });
+    await SqliteDb.resetInstance(dbpath);
+    await SqliteDb.ensureInitialized();
+    attemptModule = new EmailReplySendAttemptModule();
+  });
+
+  afterAll(async () => {
+    await SqliteDb.destroyInstance();
+    try {
+      fs.rmSync(dbpath, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
+  });
 
   async function seedAttempt(
     status: "claimed" | "submitted" | "sent" | "failed",
@@ -43,9 +68,10 @@ describe("EmailReplySendRecoveryService sweep", () => {
     const freshClaimed = await seedAttempt("claimed", fresh);
     const sentAttempt = await seedAttempt("sent", old);
 
-    const result = await new EmailReplySendRecoveryService().recoverStaleAttempts(
-      5 * 60 * 1000
-    );
+    const result =
+      await new EmailReplySendRecoveryService().recoverStaleAttempts(
+        5 * 60 * 1000
+      );
 
     expect(result.recovered).toBe(2);
     expect(result.needsAttention).toBe(true);
@@ -62,9 +88,10 @@ describe("EmailReplySendRecoveryService sweep", () => {
   });
 
   it("reports zero when nothing is stale", async () => {
-    const result = await new EmailReplySendRecoveryService().recoverStaleAttempts(
-      60 * 60 * 1000
-    );
+    const result =
+      await new EmailReplySendRecoveryService().recoverStaleAttempts(
+        60 * 60 * 1000
+      );
     expect(result.recovered).toBe(0);
     expect(result.needsAttention).toBe(false);
   });
