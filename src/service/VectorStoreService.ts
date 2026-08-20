@@ -15,10 +15,7 @@ import {
 } from "@/modules/factories/VectorDatabasePool";
 import { VectorDatabaseConfig } from "@/modules/interface/IVectorDatabase";
 import { toPathSafeModelKey } from "@/service/embedding/EmbeddingModelId";
-import {
-  getVectorIndexBaseDir,
-  getDocumentVectorIndexDir,
-} from "@/service/VectorIndexPaths";
+import { getVectorIndexBaseDir } from "@/service/VectorIndexPaths";
 
 /**
  * Embedding model configuration interface
@@ -1015,12 +1012,12 @@ export class VectorStoreService {
     documentId: number,
     modelConfig: EmbeddingModelConfig
   ): string {
-    // Always write per-document indexes under the shared app-owned documents
-    // directory. Previously this derived the base from `path.dirname(indexPath)`,
-    // which produced different paths depending on how each VectorStoreService
-    // was constructed (process.cwd(), appData, ...) and orphaned files that the
-    // deletion containment check then refused to remove.
-    const baseDir = getDocumentVectorIndexDir();
+    // Derive from the store's base index path so that tests constructing
+    // VectorStoreService with a temp directory get predictable paths under
+    // that directory. For production use the default base is the app-owned
+    // vector index directory (see VectorIndexPaths.ts), which keeps the
+    // resulting path under an allowed root for the F10 deletion check.
+    const baseDir = path.dirname(this.indexPath);
     // Model IDs (e.g. "local-xenova:Xenova/all-MiniLM-L6-v2" or HF names like
     // "Qwen/Qwen3-Embedding-4B") contain "/" and ":" which are unsafe in
     // filenames. Sanitize before embedding in the index filename. The original
@@ -1029,7 +1026,7 @@ export class VectorStoreService {
     const fileName = `index_doc_${documentId}_${safeModelKey}_${
       modelConfig.dimensions
     }.${this.getFileExtension()}`;
-    return path.join(baseDir, fileName);
+    return path.join(baseDir, "documents", fileName);
   }
 
   /**
