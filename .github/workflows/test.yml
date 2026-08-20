@@ -20,7 +20,10 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20.19.3'
+          # undici@8 requires Node >=22.19.0; keep aligned with build.yml / ci.yml
+          # and with package.json engines (node >=22.0.0). The old 20.19.3 pin
+          # made `yarn install --frozen-lockfile` abort with EENGINE.
+          node-version: 22.19.0
 
       # Native modules (better-sqlite3, sqlite-vec, isolated-vm) need a C/C++
       # toolchain + cmake to build from source on Linux.
