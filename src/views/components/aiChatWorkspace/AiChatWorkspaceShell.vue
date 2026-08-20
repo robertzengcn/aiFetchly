@@ -84,6 +84,27 @@
         </button>
       </div>
 
+      <!-- Decision dock (PRD §12.4/§12.6): the latest unresolved plan
+           decision stays visible even with the inspector closed (FR-058). -->
+      <AiChatPlanQuestionFlow
+        v-if="pinnedQuestion && conversationId"
+        :question="pinnedQuestion"
+        @submit="onAnswerQuestion"
+      />
+      <AiChatPlanDecisionCard
+        v-else-if="pinnedApproval"
+        :plan="pinnedApproval"
+        @approve="onLegacyPlanAction('approve-plan')"
+        @request-changes="onRequestPlanChanges"
+        @review-full-plan="workspaceStore.openInspector('activity')"
+      />
+      <!-- Resolved plan transitions collapse to durable receipts (FR-052). -->
+      <AiChatPlanReceipt
+        v-else-if="planReceipt"
+        :plan="planReceipt"
+        @open-activity="workspaceStore.openInspector('activity')"
+      />
+
       <AiChatV2Composer
         :is-streaming="selectedStore.isBusy"
         :conversation-id="conversationId"
@@ -114,6 +135,7 @@ import {
   approveChatV2Plan,
   rejectChatV2Plan,
   requestChatV2PlanChanges,
+  answerChatV2Question,
   clearChatV2Conversation,
   compactChatV2Conversation,
 } from "@/views/api/aiChatV2";
@@ -127,6 +149,14 @@ import {
 } from "@/views/api/aiChatWorkspace";
 import { MessageType } from "@/entityTypes/commonType";
 import type { ChatV2MessageView } from "@/entityTypes/aiChatV2Types";
+import AiChatPlanQuestionFlow from "./AiChatPlanQuestionFlow.vue";
+import AiChatPlanDecisionCard from "./AiChatPlanDecisionCard.vue";
+import AiChatPlanReceipt from "./AiChatPlanReceipt.vue";
+import {
+  selectPlanPresentation,
+  isReceiptSurface,
+} from "./planPresentationProjection";
+import type { AskUserQuestionAnswer } from "@/entityTypes/aiChatPlanTypes";
 import AiChatWorkspaceSidebar from "./AiChatWorkspaceSidebar.vue";
 import AiChatConversationHeader from "./AiChatConversationHeader.vue";
 import AiChatRunStrip from "./AiChatRunStrip.vue";
@@ -180,6 +210,26 @@ const latestPlanState = computed(() => {
   return null;
 });
 
+/** Lifecycle-specific plan surface (FR-051): exactly one pinned decision. */
+const planPresentation = computed(() =>
+  selectPlanPresentation(selectedStore.messages)
+);
+const pinnedQuestion = computed(() =>
+  planPresentation.value?.surface === "question"
+    ? planPresentation.value?.pendingQuestion ?? null
+    : null
+);
+const pinnedApproval = computed(() =>
+  planPresentation.value?.surface === "approval"
+    ? planPresentation.value
+    : null
+);
+const planReceipt = computed(() =>
+  planPresentation.value && isReceiptSurface(planPresentation.value.surface)
+    ? planPresentation.value
+    : null
+);
+
 async function onSelectConversation(id: string): Promise<void> {
   await selectedStore.loadSelection(id);
 }
@@ -210,6 +260,36 @@ async function onComposerSend(
     return;
   }
   await selectedStore.sendMessage(text);
+}
+
+/** Submitted answers persist through the existing durable contract. */
+async function onAnswerQuestion(
+  answers: AskUserQuestionAnswer[]
+): Promise<void> {
+  if (!conversationId.value || !pinnedQuestion.value) return;
+  try {
+    const result = await answerChatV2Question(
+      conversationId.value,
+      pinnedQuestion.value.questionId,
+      answers
+    );
+    if (!result.ok) {
+      // Flow keeps its draft; the error is retryable.
+      console.warn("[ai-chat-workspace] answer submission failed:", result.error);
+    }
+  } catch {
+    // Retain answers for retry (design §31).
+  }
+}
+
+/** Request-changes opens one focused feedback field (PRD §12.8.8). */
+function onRequestPlanChanges(): void {
+  const feedback = window.prompt(
+    t("workspaceChat.plan.changeFeedbackPrompt") ||
+      "What should change in this plan?"
+  );
+  if (feedback === null) return;
+  void onLegacyPlanAction("request-plan-changes", feedback || "");
 }
 
 async function onRename(): Promise<void> {

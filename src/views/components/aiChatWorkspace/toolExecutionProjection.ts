@@ -267,26 +267,25 @@ export function buildToolExecutionGroups(
 
   entries.sort((a, b) => a.order - b.order);
 
-  // Group by owning assistant message (one group per response).
-  const groups: ToolExecutionGroupView[] = [];
-  const groupIndex = new Map<string, ToolExecutionGroupView>();
+  // Group by owning assistant message (one group per response). Buckets
+  // accumulate first; immutable group views are built once at the end.
+  const buckets = new Map<
+    string,
+    { assistantMessageId: string | null; views: ToolExecutionView[] }
+  >();
   for (const entry of entries) {
     const ownerKey = entry.view.assistantMessageId ?? "__legacy__";
-    let group = groupIndex.get(ownerKey);
-    if (!group) {
-      group = {
-        key: `group-${ownerKey}`,
-        assistantMessageId: entry.view.assistantMessageId,
-        executions: [],
-        completedCount: 0,
-        totalCount: 0,
-        hasUnresolvedAttention: false,
-        defaultExpanded: true,
-      };
-      groupIndex.set(ownerKey, group);
-      groups.push(group);
-    }
-    const executions = [...group.executions, entry.view];
+    const bucket = buckets.get(ownerKey) ?? {
+      assistantMessageId: entry.view.assistantMessageId,
+      views: [],
+    };
+    bucket.views.push(entry.view);
+    buckets.set(ownerKey, bucket);
+  }
+
+  const groups: ToolExecutionGroupView[] = [];
+  for (const [ownerKey, bucket] of buckets) {
+    const executions = bucket.views;
     const completed = executions.filter(
       (e) => e.status === "completed" || e.status === "failed"
     ).length;
@@ -299,8 +298,9 @@ export function buildToolExecutionGroups(
         e.status === "running"
     );
     const allCompleted = executions.every((e) => e.status === "completed");
-    groupIndex.set(ownerKey, {
-      ...group,
+    groups.push({
+      key: `group-${ownerKey}`,
+      assistantMessageId: bucket.assistantMessageId,
       executions,
       completedCount: completed,
       totalCount: executions.length,
