@@ -59,6 +59,7 @@ export class RAGDocumentModule extends BaseModule {
     ".txt",
     ".md",
     ".pdf",
+    ".doc",
     ".docx",
     ".html",
     ".htm",

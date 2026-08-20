@@ -16,6 +16,7 @@ import { PDFDocument } from "pdf-lib";
 import { GlobalWorkerOptions } from "pdfjs-dist";
 import pdf2md from "pdf2md-ts";
 import * as mammoth from "mammoth";
+import WordExtractor from "word-extractor";
 
 export interface ChunkingOptions {
   chunkSize: number;
@@ -208,6 +209,39 @@ export class ChunkingService {
       }
     } catch (error) {
       console.error(`Error extracting DOCX content from ${filePath}:`, error);
+      return null;
+    }
+  }
+
+  /**
+   * Extract DOC content using word-extractor (supports both .doc and .docx)
+   */
+  private async extractDocContent(filePath: string): Promise<string | null> {
+    try {
+      if (!fs.existsSync(filePath)) {
+        console.error(`DOC file not found: ${filePath}`);
+        return null;
+      }
+
+      console.log(`Processing DOC file: ${path.basename(filePath)}`);
+
+      const extractor = new WordExtractor();
+      const doc = await extractor.extract(filePath);
+      const body = doc.getBody() || "";
+
+      if (!body.trim()) {
+        console.warn(
+          `No content extracted from DOC: ${path.basename(filePath)}`
+        );
+        return null;
+      }
+
+      console.log(
+        `Successfully extracted DOC content: ${body.length} characters`
+      );
+      return body.trim();
+    } catch (error) {
+      console.error(`Error extracting DOC content from ${filePath}:`, error);
       return null;
     }
   }
@@ -433,16 +467,23 @@ export class ChunkingService {
           };
         }
 
-        case ".docx": {
-          const docxContent = await this.extractDocxContent(document.filePath);
-          if (!docxContent) return null;
+        case ".docx":
+        case ".doc": {
+          // .docx uses mammoth, .doc uses word-extractor
+          let docContent: string | null;
+          if (fileExt === ".docx") {
+            docContent = await this.extractDocxContent(document.filePath);
+          } else {
+            docContent = await this.extractDocContent(document.filePath);
+          }
+          if (!docContent) return null;
           return {
-            content: docxContent,
+            content: docContent,
             contentType: "markdown",
             originalFormat: "docx",
             metadata: {
-              characterCount: docxContent.length,
-              wordCount: docxContent
+              characterCount: docContent.length,
+              wordCount: docContent
                 .split(/\s+/)
                 .filter((word) => word.length > 0).length,
             },
@@ -489,11 +530,6 @@ export class ChunkingService {
             },
           };
         }
-
-        // case '.doc':
-        //     // TODO: Implement DOC text extraction (older format)
-        //     console.warn('DOC text extraction not yet implemented');
-        //     return null;
 
         // case '.rtf':
         //     // TODO: Implement RTF text extraction

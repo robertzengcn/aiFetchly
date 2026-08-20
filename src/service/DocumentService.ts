@@ -14,6 +14,7 @@ import { PDFDocument } from "pdf-lib";
 import { GlobalWorkerOptions } from "pdfjs-dist";
 import pdf2md from "pdf2md-ts";
 import * as mammoth from "mammoth";
+import WordExtractor from "word-extractor";
 import { HtmlConversionService } from "@/service/HtmlConversionService";
 import {
   SpreadsheetConversionService,
@@ -222,7 +223,7 @@ export class DocumentService {
 
   /**
    * Convert uploaded attachment content to markdown text.
-   * Supported: PDF, CSV, DOCX, XLSX.
+   * Supported: PDF, CSV, DOCX, DOC, XLSX.
    */
   async convertUploadedAttachmentToMarkdown(
     fileName: string,
@@ -245,7 +246,7 @@ export class DocumentService {
         normalizeColumns: true,
       });
     } else {
-      // PDF and DOCX still require a temp file on disk
+      // PDF and DOCX/DOC still require a temp file on disk
       const sourcePath = path.join(
         os.tmpdir(),
         `aifetchly-attachment-${Date.now()}-${crypto.randomUUID()}${ext}`
@@ -256,6 +257,8 @@ export class DocumentService {
           markdown = await this.convertPdfFileToMarkdown(sourcePath);
         } else if (ext === ".docx") {
           markdown = await this.convertDocxFileToMarkdown(sourcePath);
+        } else if (ext === ".doc") {
+          markdown = await this.convertDocFileToMarkdown(sourcePath);
         }
       } finally {
         if (fs.existsSync(sourcePath)) {
@@ -470,7 +473,7 @@ export class DocumentService {
   private resolveSupportedExtension(
     fileName: string,
     mimeType: string
-  ): ".pdf" | ".csv" | ".docx" | ".xlsx" {
+  ): ".pdf" | ".csv" | ".doc" | ".docx" | ".xlsx" {
     const lowerName = fileName.toLowerCase();
     const lowerMime = mimeType.toLowerCase();
 
@@ -490,6 +493,9 @@ export class DocumentService {
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     ) {
       return ".docx";
+    }
+    if (lowerName.endsWith(".doc") || lowerMime === "application/msword") {
+      return ".doc";
     }
     if (
       lowerName.endsWith(".xlsx") ||
@@ -554,6 +560,12 @@ export class DocumentService {
       return "";
     }
     return this.htmlConversionService.convertHtmlToMarkdown(htmlContent).trim();
+  }
+
+  private async convertDocFileToMarkdown(filePath: string): Promise<string> {
+    const extractor = new WordExtractor();
+    const doc = await extractor.extract(filePath);
+    return (doc.getBody() || "").trim();
   }
 
   private sanitizePathSegment(value: string): string {
