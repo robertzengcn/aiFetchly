@@ -21,6 +21,7 @@ import { registerLanguagePreferenceIpcHandlers } from "@/main-process/communicat
 import { registerRagIpcHandlers } from "@/main-process/communication/rag-ipc";
 import { registerAiChatIpcHandlers } from "@/main-process/communication/ai-chat-ipc";
 import { registerAiChatV2IpcHandlers } from "@/main-process/communication/ai-chat-v2-ipc";
+import { registerAiChatWorkspaceIpcHandlers } from "@/main-process/communication/ai-chat-workspace-ipc";
 import { registerAiChatAtMentionIpcHandlers } from "@/main-process/communication/ai-chat-at-mention-ipc";
 import { registerAiChatGoalIpcHandlers } from "@/main-process/communication/ai-chat-goal-ipc";
 import { registerAiChatScheduledLoopIpcHandlers } from "@/main-process/communication/ai-chat-scheduled-loop-ipc";
@@ -98,6 +99,7 @@ export function registerCommunicationIpcHandlers(
     registerRagIpcHandlers();
     registerAiChatIpcHandlers();
     registerAiChatV2IpcHandlers();
+    registerAiChatWorkspaceIpcHandlers();
     registerAiChatAtMentionIpcHandlers();
     registerAiChatGoalIpcHandlers();
     registerAiChatScheduledLoopIpcHandlers();

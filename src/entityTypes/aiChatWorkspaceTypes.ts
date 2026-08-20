@@ -7,7 +7,6 @@
  * renderer-safe: no Electron objects, no database entities, no secrets.
  */
 import type { ChatV2MessageView } from "@/entityTypes/aiChatV2Types";
-import type { ChatV2RuntimeStatus } from "@/entityTypes/aiChatV2Types";
 
 // ---------------------------------------------------------------------------
 // Run lifecycle (PRD §16.1 / design §8.3)
@@ -197,7 +196,8 @@ export interface SelectConversationResponse {
   readonly messages: readonly ChatV2MessageView[];
   readonly nextBefore: HistoryCursor | null;
   readonly hasOlder: boolean;
-  readonly runtimeStatus: ChatV2RuntimeStatus;
+  /** Live run status when known; the engine status as fallback. */
+  readonly runtimeStatus: ConversationRuntimeStatus;
   readonly activeRunId: string | null;
   readonly title: string | null;
 }

@@ -26,7 +26,6 @@ import { evaluateToolApproval } from "@/service/AIChatToolApprovalPolicyService"
 import { redirectToLoginOnAuthExpired } from "@/service/AIChatAuthExpiredHandler";
 import { userSafeError } from "@/service/AIChatErrorMapper";
 import type {
-  AIChatQueryEvent,
   AIChatQueryEventSink,
 } from "@/service/AIChatQueryEvents";
 import {
@@ -71,6 +70,7 @@ import type {
 } from "@/entityTypes/aiChatV2Types";
 import { aiChatV2PastedContentsSchema } from "@/schemas/aiChatV2PastedText";
 import { PasteStoreService } from "@/service/pastedText/PasteStoreService";
+import { createChatV2StreamSink } from "@/service/aiChatV2StreamSink";
 
 /**
  * Minimal structural type for the IPC event object.
@@ -206,7 +206,8 @@ function getCompactAgent(): AIChatCompactAgentService {
   return compactAgent;
 }
 
-function getQueryEngine(): AIChatQueryEngine {
+/** Shared engine singleton — also used by the workspace coordinator. */
+export function getQueryEngine(): AIChatQueryEngine {
   const dbPath = getCurrentUserDbPath();
   if (queryEngine && queryEngineDbPath !== dbPath) {
     resetAiChatV2RuntimeForDatabaseSwitch();
@@ -243,7 +244,8 @@ function getChatResolver(): AIProviderResolver {
   return chatResolver;
 }
 
-function canUseChat(): { ok: true } | { ok: false; message: string } {
+/** Chat availability gate shared with the workspace coordinator. */
+export function canUseChat(): { ok: true } | { ok: false; message: string } {
   const provider = getChatResolver().resolveForChat();
   if (provider.canUse) {
     return { ok: true };
@@ -313,204 +315,18 @@ function sendComplete(event: IpcEventLike, chunk: ChatV2StreamChunk): void {
  * (start, complete, cancelled, error) since the engine emits these.
  */
 function createEventSink(event: IpcEventLike): AIChatQueryEventSink {
-  let tokenLogCount = 0;
-  return {
-    emit: (e: AIChatQueryEvent) => {
-      switch (e.type) {
-        case "start":
-          sendChunk(event, {
-            eventType: "start",
-            conversationId: e.conversationId,
-            messageId: e.messageId,
-          });
-          break;
-        case "token":
-          if (tokenLogCount < 5 || tokenLogCount % 25 === 0) {
-            console.log(
-              `[ai-chat-v2] IPC token conv=${e.conversationId} message=${e.messageId} deltaLen=${e.contentDelta.length} tokenIndex=${tokenLogCount}`
-            );
-          }
-          tokenLogCount += 1;
-          sendChunk(event, {
-            eventType: "token",
-            conversationId: e.conversationId,
-            messageId: e.messageId,
-            contentDelta: e.contentDelta,
-            model: e.model,
-          });
-          break;
-        case "reasoning_delta":
-          // Log length only — never the reasoning text itself (SSR-3 / §14).
-          console.debug(
-            `[ai-chat-v2] reasoning_delta conv=${e.conversationId} message=${e.messageId} deltaLen=${e.reasoningDelta.length}`
-          );
-          sendChunk(event, {
-            eventType: "reasoning_delta",
-            conversationId: e.conversationId,
-            messageId: e.messageId,
-            reasoningDelta: e.reasoningDelta,
-            model: e.model,
-          });
-          break;
-        case "retry_connect":
-          sendChunk(event, {
-            eventType: "retry_connect",
-            conversationId: e.conversationId,
-            messageId: e.messageId,
-            retryAttempt: e.retryAttempt,
-            retryMaxAttempts: e.retryMaxAttempts,
-            retryDelayMs: e.retryDelayMs,
-          });
-          break;
-        case "recovery_status":
-          sendChunk(event, {
-            eventType: "recovery_status",
-            conversationId: e.conversationId,
-            messageId: e.messageId,
-            recoveryLayer: e.layer,
-            recoveryReason: e.reason,
-            recoveryAttempt: e.attempt,
-            recoveryMaxAttempts: e.maxAttempts,
-            recoveryDelayMs: e.delayMs,
-            recoveryElapsedMs: e.elapsedMs,
-            recoveryOriginalModel: e.originalModel,
-            recoveryCurrentModel: e.currentModel,
-            recoveryFallbackModel: e.fallbackModel,
-            recoveryMessage: e.message,
-          });
-          break;
-        case "tool_progress":
-          sendChunk(event, {
-            eventType: "tool_progress",
-            conversationId: e.conversationId,
-            messageId: e.messageId,
-            toolCallId: e.toolCallId,
-            toolName: e.toolName,
-            phase: e.phase,
-            progressMessage: e.message,
-            progressFraction:
-              typeof e.progress === "number" ? e.progress : undefined,
-            partialCount: e.partialCount ?? undefined,
-            expectedCount: e.expectedCount ?? undefined,
-            progressTimestamp: e.timestamp,
-          });
-          break;
-        case "tool_call":
-          sendChunk(event, {
-            eventType: "tool_call",
-            conversationId: e.conversationId,
-            messageId: e.messageId,
-            toolCallId: e.toolCallId,
-            toolName: e.toolName,
-            toolArguments: e.toolArguments,
-          });
-          break;
-        case "tool_result":
-          sendChunk(event, {
-            eventType: "tool_result",
-            conversationId: e.conversationId,
-            messageId: e.messageId,
-            toolCallId: e.toolCallId,
-            toolName: e.toolName,
-            fullContent: e.fullContent,
-            toolResult: e.toolResult,
-            replacesPermissionPromptForToolId:
-              e.replacesPermissionPromptForToolId,
-          });
-          break;
-        case "plan_blocked_tool":
-          sendChunk(event, {
-            eventType: "plan_blocked_tool" as never,
-            conversationId: e.conversationId,
-            messageId: e.messageId,
-            toolCallId: e.toolCallId,
-            toolName: e.toolName,
-            fullContent: e.fullContent,
-            planBlockedToolName: e.planBlockedToolName,
-            planBlockedReason: e.planBlockedReason,
-          } as ChatV2StreamChunk);
-          break;
-        case "ask_user_question":
-          sendChunk(event, {
-            eventType: "ask_user_question" as never,
-            conversationId: e.conversationId,
-            messageId: e.messageId,
-            toolCallId: e.toolCallId,
-            toolName: e.toolName,
-            question: e.question,
-            planState: e.planState,
-          } as ChatV2StreamChunk);
-          break;
-        case "plan_submitted":
-          sendChunk(event, {
-            eventType: "plan_submitted" as never,
-            conversationId: e.conversationId,
-            messageId: e.messageId,
-            toolCallId: e.toolCallId,
-            toolName: e.toolName,
-            planState: e.planState,
-          } as ChatV2StreamChunk);
-          break;
-        case "plan_state":
-          sendChunk(event, {
-            eventType: "plan_state" as never,
-            conversationId: e.conversationId,
-            messageId: e.messageId,
-            planState: e.planState,
-            autoEntered: e.autoEntered,
-          } as ChatV2StreamChunk);
-          break;
-        case "usage_update":
-          sendChunk(event, {
-            eventType: "usage_update",
-            conversationId: e.conversationId,
-            messageId: e.messageId,
-            model: e.model,
-            promptTokens: e.promptTokens,
-            completionTokens: e.completionTokens,
-            totalTokens: e.totalTokens,
-          });
-          break;
-        case "complete":
-          sendComplete(event, {
-            eventType: "complete",
-            conversationId: e.conversationId,
-            messageId: e.messageId,
-            fullContent: e.fullContent,
-            images: e.images,
-            model: e.model,
-            finishReason: e.finishReason,
-            promptTokens: e.promptTokens,
-            completionTokens: e.completionTokens,
-            totalTokens: e.totalTokens,
-          });
-          break;
-        case "cancelled":
-          sendComplete(event, {
-            eventType: "cancelled",
-            conversationId: e.conversationId,
-            messageId: e.messageId,
-            fullContent: e.fullContent,
-          });
-          break;
-        case "error":
-          sendComplete(event, {
-            eventType: "error",
-            conversationId: e.conversationId,
-            messageId: e.messageId,
-            errorMessage: e.errorMessage,
-          });
-          break;
-      }
-    },
-  };
+  return createChatV2StreamSink({
+    sendChunk: (chunk) => sendChunk(event, chunk),
+    sendComplete: (chunk) => sendComplete(event, chunk),
+  });
 }
 
 // -------------------------------------------------------------------------
 // Stream handler (thin — delegates to engine)
 // -------------------------------------------------------------------------
 
-function validateStreamRequest(
+/** Stream request validation shared with the workspace coordinator. */
+export function validateStreamRequest(
   req: Partial<ChatV2StreamRequest>
 ): string | null {
   const hasFiles =
@@ -646,7 +462,8 @@ function classifyAttachment(
   return null;
 }
 
-function normalizeChatV2UploadedFiles(
+/** Attachment normalization shared with the workspace coordinator. */
+export function normalizeChatV2UploadedFiles(
   input: unknown
 ): ChatV2UploadedAttachment[] {
   if (!Array.isArray(input)) return [];
@@ -1275,7 +1092,7 @@ function parseObjectPayload(data: unknown): Record<string, unknown> {
   return {};
 }
 
-function serializeHistoryTimestamp(timestamp: unknown): string {
+export function serializeHistoryTimestamp(timestamp: unknown): string {
   if (timestamp instanceof Date) {
     return timestamp.toISOString();
   }
@@ -1292,7 +1109,7 @@ function serializeHistoryTimestamp(timestamp: unknown): string {
   return new Date(0).toISOString();
 }
 
-function parseMetadata(raw?: string | null): ChatV2MessageMetadata | undefined {
+export function parseMetadata(raw?: string | null): ChatV2MessageMetadata | undefined {
   if (!raw) {
     return undefined;
   }
