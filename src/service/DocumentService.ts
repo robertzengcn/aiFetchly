@@ -9,7 +9,9 @@ import * as os from "os";
 import * as path from "path";
 import * as crypto from "crypto";
 import { app } from "electron";
+import { pathToFileURL } from "url";
 import { PDFDocument } from "pdf-lib";
+import { GlobalWorkerOptions } from "pdfjs-dist";
 import pdf2md from "pdf2md-ts";
 import * as mammoth from "mammoth";
 import { HtmlConversionService } from "@/service/HtmlConversionService";
@@ -503,6 +505,23 @@ export class DocumentService {
   }
 
   private async convertPdfFileToMarkdown(filePath: string): Promise<string> {
+    // Ensure the pdfjs worker path is set (same logic as ChunkingService).
+    try {
+      const workerPath = path.join(__dirname, "pdf.worker.mjs");
+      if (fs.existsSync(workerPath)) {
+        GlobalWorkerOptions.workerSrc = pathToFileURL(workerPath).href;
+      } else {
+        const pkgDir = path.dirname(require.resolve("pdfjs-dist/package.json"));
+        GlobalWorkerOptions.workerSrc = pathToFileURL(
+          path.join(pkgDir, "legacy", "build", "pdf.worker.mjs")
+        ).href;
+      }
+    } catch {
+      console.warn(
+        "Could not resolve pdf.worker.mjs — PDF extraction may fail with fake-worker error"
+      );
+    }
+
     const pdfBytes = fs.readFileSync(filePath);
     const pdfDoc = await PDFDocument.load(pdfBytes);
     const pageCount = pdfDoc.getPageCount();

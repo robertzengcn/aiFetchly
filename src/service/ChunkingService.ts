@@ -11,6 +11,7 @@ import {
 import * as crypto from "crypto";
 import * as fs from "fs";
 import * as path from "path";
+import { pathToFileURL } from "url";
 import { PDFDocument } from "pdf-lib";
 import { GlobalWorkerOptions } from "pdfjs-dist";
 import pdf2md from "pdf2md-ts";
@@ -252,21 +253,21 @@ export class ChunkingService {
       // fails to resolve in Node.js. The Vite build copies pdf.worker.mjs to
       // the .vite/build/ directory (unpacked from asar), so reference it via
       // __dirname. Fall back to a node_modules lookup for development.
+      //
+      // On Windows the bare path (e.g. "E:\...") must be converted to a
+      // file:// URL because the ESM loader rejects Windows drive-letter paths.
       try {
         const workerPath = path.join(__dirname, "pdf.worker.mjs");
         if (fs.existsSync(workerPath)) {
-          GlobalWorkerOptions.workerSrc = workerPath;
+          GlobalWorkerOptions.workerSrc = pathToFileURL(workerPath).href;
         } else {
           // Development / CI — resolve from the installed package.
           const pkgDir = path.dirname(
             require.resolve("pdfjs-dist/package.json")
           );
-          GlobalWorkerOptions.workerSrc = path.join(
-            pkgDir,
-            "legacy",
-            "build",
-            "pdf.worker.mjs"
-          );
+          GlobalWorkerOptions.workerSrc = pathToFileURL(
+            path.join(pkgDir, "legacy", "build", "pdf.worker.mjs")
+          ).href;
         }
       } catch {
         console.warn(
