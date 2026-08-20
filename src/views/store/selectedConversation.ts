@@ -2,7 +2,10 @@ import { computed, markRaw, ref } from "vue";
 import { defineStore } from "pinia";
 import { MessageType } from "@/entityTypes/commonType";
 import type { ChatV2MessageView } from "@/entityTypes/aiChatV2Types";
-import type { ChatRunDetailEvent } from "@/entityTypes/aiChatWorkspaceTypes";
+import type {
+  ChatRunDetailEvent,
+  ConversationRuntimeStatus,
+} from "@/entityTypes/aiChatWorkspaceTypes";
 import {
   createWorkspaceStreamPresenter,
   type StreamPresenterOptions,
@@ -55,7 +58,7 @@ export const useSelectedConversationStore = defineStore(
     const activeAssistantMessageId = ref<string | null>(null);
     const streamStatus = ref<WorkspaceStreamStatus>("idle");
     const errorMessage = ref<string | null>(null);
-    const runtimeStatus = ref("idle");
+    const runtimeStatus = ref<ConversationRuntimeStatus>("idle");
     const activeRunId = ref<string | null>(null);
     const loading = ref(false);
     const loadError = ref<string | null>(null);
