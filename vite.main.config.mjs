@@ -3,7 +3,6 @@ import { defineConfig, loadEnv } from 'vite';
 import alias from "@rollup/plugin-alias";
 import * as path from 'path';
 import { builtinModules } from 'node:module';
-import copy from 'rollup-plugin-copy'
 import fs from 'fs';
 // import { viteStaticCopy } from 'vite-plugin-static-copy'
 import ClosePlugin from './vite-plugin-close'
@@ -57,7 +56,7 @@ function emptyModulesPlugin() {
 function fixInteropNamespacePlugin() {
     return {
         name: 'fix-interop-namespace',
-        renderChunk(code, chunk, options) {
+        renderChunk(code) {
             let fixedCode = code;
             
             fixedCode = fixedCode.replace(
@@ -184,7 +183,26 @@ function platformCopyPlugin() {
                 console.error('Failed to copy sqlite-vec extension:', error);
                 // Don't fail the build if extension copy fails
             }
-            
+
+            // Copy pdfjs-dist worker so pdf2md-ts's _setupFakeWorkerGlobal
+            // dynamic import resolves in the bundled output. The worker is
+            // a standalone module that pdfjs loads via import(workerSrc).
+            // pdf2md-ts sets workerSrc to a bare specifier without .mjs;
+            // we fix the path in ChunkingService.ts but the file must also
+            // be findable at runtime.
+            try {
+                const pdfWorkerSrc = path.join('node_modules', 'pdfjs-dist', 'legacy', 'build', 'pdf.worker.mjs');
+                const pdfWorkerDst = path.join(iconDestDir, 'pdf.worker.mjs');
+                if (fs.existsSync(pdfWorkerSrc)) {
+                    fs.copyFileSync(pdfWorkerSrc, pdfWorkerDst);
+                    console.log('Copied pdf.worker.mjs to build directory');
+                } else {
+                    console.warn('pdf.worker.mjs not found at:', pdfWorkerSrc);
+                }
+            } catch (error) {
+                console.error('Failed to copy pdf.worker.mjs:', error);
+            }
+
             // Copy platform-specific icons
             if (process.platform === 'win32') {
                 // Copy Windows icon (.ico)

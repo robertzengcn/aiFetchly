@@ -12,6 +12,7 @@ import * as crypto from "crypto";
 import * as fs from "fs";
 import * as path from "path";
 import { PDFDocument } from "pdf-lib";
+import { GlobalWorkerOptions } from "pdfjs-dist";
 import pdf2md from "pdf2md-ts";
 import * as mammoth from "mammoth";
 
@@ -243,6 +244,35 @@ export class ChunkingService {
       console.log(
         `Processing PDF with ${pageCount} pages: ${path.basename(filePath)}`
       );
+
+      // pdf2md-ts sets GlobalWorkerOptions.workerSrc to a bare module specifier
+      // ("pdfjs-dist/legacy/build/pdf.worker") at module load time. pdfjs-dist
+      // 4.x's _setupFakeWorkerGlobal getter does import(workerSrc) when the
+      // real Worker cannot be created, and a bare specifier without extension
+      // fails to resolve in Node.js. The Vite build copies pdf.worker.mjs to
+      // the .vite/build/ directory (unpacked from asar), so reference it via
+      // __dirname. Fall back to a node_modules lookup for development.
+      try {
+        const workerPath = path.join(__dirname, "pdf.worker.mjs");
+        if (fs.existsSync(workerPath)) {
+          GlobalWorkerOptions.workerSrc = workerPath;
+        } else {
+          // Development / CI — resolve from the installed package.
+          const pkgDir = path.dirname(
+            require.resolve("pdfjs-dist/package.json")
+          );
+          GlobalWorkerOptions.workerSrc = path.join(
+            pkgDir,
+            "legacy",
+            "build",
+            "pdf.worker.mjs"
+          );
+        }
+      } catch {
+        console.warn(
+          "Could not resolve pdf.worker.mjs — PDF extraction may fail with fake-worker error"
+        );
+      }
 
       let fullContent = "";
       let processedPages = 0;
@@ -562,7 +592,6 @@ export class ChunkingService {
     const chunks: ChunkResult[] = [];
     let currentChunk = "";
     let startPosition = 0;
-    let chunkIndex = 0;
 
     for (let i = 0; i < sentences.length; i++) {
       const sentence = sentences[i];
@@ -592,7 +621,6 @@ export class ChunkingService {
           currentChunk.length -
           overlapText.length -
           sentence.length;
-        chunkIndex++;
       } else {
         currentChunk = potentialChunk;
       }
