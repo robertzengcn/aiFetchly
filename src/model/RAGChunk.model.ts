@@ -1,5 +1,6 @@
 import { BaseDb } from "@/model/Basedb";
 import { Repository } from "typeorm";
+import type { Database } from "better-sqlite3";
 import { RAGChunkEntity } from "@/entity/RAGChunk.entity";
 
 export interface KeywordSearchHit {
@@ -66,9 +67,13 @@ export class RAGChunkModel extends BaseDb {
    */
   getDocumentChunkIds(documentId: number): number[] {
     try {
-      // Access underlying better-sqlite3 database through TypeORM driver
-      const driver = this.sqliteDb.connection.driver as any;
-      const database = driver.database;
+      // Access underlying better-sqlite3 database through TypeORM driver.
+      // NOTE: driver.database is the database *path string* in TypeORM 0.3;
+      // the real better-sqlite3 handle lives at driver.databaseConnection.
+      const driver = this.sqliteDb.connection.driver as unknown as {
+        databaseConnection?: Database;
+      };
+      const database = driver.databaseConnection;
 
       if (!database) {
         console.warn(
