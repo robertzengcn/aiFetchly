@@ -180,6 +180,11 @@
         :conversation-id="conversationId"
         @send="onComposerSend"
         @stop="selectedStore.stopActiveRun()"
+        @install-voice-model="openVoiceSettings"
+        @install-voice-runtime="openVoiceSettings"
+        @voice-recording-start="onStopSpeaking"
+        @stop-speaking="onStopSpeaking"
+        @open-voice-settings="openVoiceSettings"
       />
     </main>
 
@@ -218,6 +223,7 @@ import {
   setChatV2ToolApprovalMode,
 } from "@/views/api/aiChatV2";
 import { stopGoalLoop } from "@/views/api/aiChatGoal";
+import { cancelVoiceJob } from "@/views/api/aiChatV2Voice";
 import { controlScheduledLoop } from "@/views/api/aiChatScheduledLoop";
 import type {
   ChatV2Mode,
@@ -532,6 +538,23 @@ function onRequestPlanChanges(): void {
   );
   if (feedback === null) return;
   void onLegacyPlanAction("request-plan-changes", feedback || "");
+}
+
+/**
+ * Voice settings (installs, consent-gated downloads, spoken-response
+ * defaults) live on the AI provider settings page (PRD §15.7 matrix).
+ */
+function openVoiceSettings(): void {
+  void router.push({ name: "system_setting_ai_provider" });
+}
+
+/** Stop-speaking: halt any running TTS synthesis job for this renderer. */
+async function onStopSpeaking(): Promise<void> {
+  try {
+    await cancelVoiceJob();
+  } catch {
+    // No active job — nothing to stop.
+  }
 }
 
 async function onRename(): Promise<void> {

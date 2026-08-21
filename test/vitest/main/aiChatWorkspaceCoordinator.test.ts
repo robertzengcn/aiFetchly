@@ -408,6 +408,83 @@ describe("AIChatCoordinator", () => {
   });
 });
 
+describe("summary event privacy (FR-022)", () => {
+  it("broadcasts status metadata only — never prompt, tool, or artifact bodies", async () => {
+    const { coordinator, router, fake } = buildCoordinator();
+    const win = fakeWindow(9);
+    win.register(router);
+    await SqliteDb.ensureInitialized();
+    // No window selects this conversation — the summary still broadcasts.
+    const secretPrompt = "SECRET-PROMPT-BODY";
+    const accepted = await coordinator.startRun({
+      conversationId: "v2-privacy-1",
+      clientRequestId: "client-req-privacy-1",
+      message: secretPrompt,
+    });
+    expect(accepted.ok).toBe(true);
+    await waitFor(() => fake.turns.length === 1);
+
+    // Engine events full of content bodies flow through the DETAIL path.
+    emit(fake.turns[0].input.eventSink, {
+      type: "token",
+      conversationId: "v2-privacy-1",
+      messageId: "a1",
+      contentDelta: "SECRET-ASSISTANT-BODY",
+      model: "m",
+    });
+    emit(fake.turns[0].input.eventSink, {
+      type: "tool_result",
+      conversationId: "v2-privacy-1",
+      messageId: "a1",
+      toolCallId: "tc-1",
+      toolName: "create_html_artifact",
+      fullContent: "SECRET-TOOL-RESULT",
+      toolResult: { html: "<script>SECRET-ARTIFACT</script>" },
+    });
+    emit(fake.turns[0].input.eventSink, {
+      type: "complete",
+      conversationId: "v2-privacy-1",
+      messageId: "a1",
+      fullContent: "SECRET-FINAL-ANSWER",
+      finishReason: "stop",
+    });
+    fake.turns[0].resolve();
+    await waitFor(() =>
+      win.summaries.some((s) => s.reason === "run_completed")
+    );
+
+    // FR-022: every summary event is field-bounded and body-free.
+    const ALLOWED_KEYS = new Set([
+      "conversationId",
+      "workspaceKey",
+      "runtimeStatus",
+      "attention",
+      "unread",
+      "lastActivityAt",
+      "runId",
+      "title",
+      "reason",
+    ]);
+    for (const summary of win.summaries) {
+      for (const key of Object.keys(summary)) {
+        expect(ALLOWED_KEYS.has(key)).toBe(true);
+      }
+    }
+    const serialized = JSON.stringify(win.summaries);
+    for (const secret of [
+      "SECRET-PROMPT-BODY",
+      "SECRET-ASSISTANT-BODY",
+      "SECRET-TOOL-RESULT",
+      "SECRET-ARTIFACT",
+      "SECRET-FINAL-ANSWER",
+    ]) {
+      expect(serialized).not.toContain(secret);
+    }
+    // Detail events were NOT delivered (no window selected the conversation).
+    expect(win.details).toHaveLength(0);
+  });
+});
+
 describe("AIChatRunEventAdapter", () => {
   it("assigns monotonic sequences and status hints", async () => {
     const { AIChatRunEventAdapter: Adapter } = await import(
