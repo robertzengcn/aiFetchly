@@ -47,7 +47,13 @@
     </div>
 
     <!-- Zone 2: independently scrollable workspace hierarchy (PRD §10.2) -->
-    <nav class="sidebar-tree" data-testid="workspace-tree">
+    <nav
+      class="sidebar-tree"
+      role="tree"
+      :aria-label="t('workspaceChat.sidebar.region') || 'Chat workspaces'"
+      data-testid="workspace-tree"
+      @keydown="onTreeKeydown"
+    >
       <p v-if="bootstrapError" class="sidebar-message error" role="alert">
         {{ t('workspaceChat.sidebar.loadError') || 'Failed to load workspaces' }}
         <button type="button" class="inline-action" @click="emit('retry')">
@@ -69,6 +75,9 @@
         <button
           type="button"
           class="group-header"
+          role="treeitem"
+          data-nav-row="group"
+          :data-workspace-key="group.workspaceKey"
           :aria-expanded="!group.collapsed"
           :aria-label="groupDisplayName(group)"
           @click="workspaceStore.toggleWorkspaceCollapsed(group.workspaceKey)"
@@ -100,6 +109,10 @@
               class="conversation-row"
               :class="{ selected: isSelected(conversation) }"
               :data-testid="`workspace-conversation-${conversation.conversationId}`"
+              data-nav-row="conversation"
+              role="treeitem"
+              :aria-level="2"
+              :aria-selected="isSelected(conversation)"
               :aria-current="isSelected(conversation) ? 'true' : undefined"
               @click="emit('select', conversation.conversationId)"
             >
@@ -139,6 +152,10 @@
             <button
               type="button"
               class="conversation-row"
+              data-nav-row="conversation"
+              role="treeitem"
+              :aria-level="1"
+              :aria-selected="isSelected(conversation)"
               :class="{ selected: isSelected(conversation) }"
               @click="emit('select', conversation.conversationId)"
             >
@@ -269,6 +286,57 @@ function groupAttentionCount(group: {
 
 function goTo(path: string): void {
   void router.push(path);
+}
+
+/**
+ * Roving keyboard model (FR-038, design §22.1): ArrowUp/Down move between
+ * rows, ArrowLeft/Right collapse/expand groups (Left on a conversation
+ * returns focus to its group header), Enter selects (native button).
+ */
+function onTreeKeydown(event: KeyboardEvent): void {
+  if (!["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(event.key)) {
+    return;
+  }
+  const tree = event.currentTarget as HTMLElement;
+  const rows = Array.from(
+    tree.querySelectorAll<HTMLElement>("button[data-nav-row]")
+  );
+  const active = document.activeElement as HTMLElement | null;
+  const index = active ? rows.indexOf(active) : -1;
+  if (index === -1 && rows.length > 0 && event.key !== "ArrowLeft") {
+    event.preventDefault();
+    rows[0].focus();
+    return;
+  }
+  const row = rows[index];
+  if (!row) return;
+
+  if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+    event.preventDefault();
+    const next = index + (event.key === "ArrowDown" ? 1 : -1);
+    if (next >= 0 && next < rows.length) {
+      rows[next].focus();
+    }
+    return;
+  }
+  const workspaceKey = row.dataset.workspaceKey;
+  if (row.dataset.navRow === "group" && workspaceKey) {
+    if (event.key === "ArrowRight") {
+      event.preventDefault();
+      workspaceStore.toggleWorkspaceCollapsed(workspaceKey);
+    }
+    return;
+  }
+  if (event.key === "ArrowLeft" && row.dataset.navRow === "conversation") {
+    event.preventDefault();
+    // Focus the nearest preceding group header.
+    for (let i = index - 1; i >= 0; i -= 1) {
+      if (rows[i].dataset.navRow === "group") {
+        rows[i].focus();
+        return;
+      }
+    }
+  }
 }
 
 defineExpose({ relativeTimeLabel });
