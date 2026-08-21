@@ -7,7 +7,23 @@
     data-testid="workspace-run-strip"
   >
     <WorkspaceStatusIndicator :visual="visual" />
-    <span class="run-strip-label">{{ label }}</span>
+    <span class="run-strip-label">
+      {{ label }}
+      <span
+        v-if="goalObjective"
+        class="strip-detail"
+        data-testid="workspace-run-strip-goal"
+      >
+        {{ t('workspaceChat.runStrip.goal', { objective: goalObjective }) || `Goal: ${goalObjective}` }}
+      </span>
+      <span
+        v-if="loopLabel"
+        class="strip-detail"
+        data-testid="workspace-run-strip-loop"
+      >
+        {{ loopLabel }}
+      </span>
+    </span>
     <div class="run-strip-actions">
       <button
         v-if="cancellable"
@@ -43,6 +59,10 @@ import {
 const props = defineProps<{
   runtimeStatus: ConversationRuntimeStatus;
   recovering: boolean;
+  /** Active goal objective (PRD §13.3 run-strip states). */
+  goalObjective?: string | null;
+  /** Active/paused scheduled-loop status, when one exists. */
+  loopStatus?: string | null;
 }>();
 
 const emit = defineEmits<{
@@ -61,8 +81,20 @@ const visible = computed(
     props.runtimeStatus === "awaiting_user" ||
     props.runtimeStatus === "failed" ||
     props.runtimeStatus === "interrupted" ||
-    props.recovering
+    props.recovering ||
+    Boolean(props.goalObjective) ||
+    Boolean(props.loopStatus)
 );
+
+const loopLabel = computed(() => {
+  if (!props.loopStatus) return "";
+  const map: Record<string, { key: string; fallback: string }> = {
+    running: { key: "workspaceChat.runStrip.loopRunning", fallback: "Scheduled loop running" },
+    paused: { key: "workspaceChat.runStrip.loopPaused", fallback: "Scheduled loop paused" },
+  };
+  const entry = map[props.loopStatus];
+  return entry ? t(entry.key) || entry.fallback : props.loopStatus;
+});
 
 const cancellable = computed(
   () => props.runtimeStatus === "running" || props.runtimeStatus === "queued"
@@ -119,6 +151,16 @@ const label = computed(() => {
 
 .run-strip-label {
   flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.strip-detail {
+  font-size: 11.5px;
+  color: rgba(var(--v-theme-on-surface), 0.65);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

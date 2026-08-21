@@ -33,6 +33,14 @@ export interface RecoveryInfo {
   readonly message?: string;
 }
 
+/** Live goal-loop state tracked from goal_* detail events (PRD §13.3). */
+export interface GoalRunInfo {
+  readonly goalId: string;
+  readonly objective: string;
+  readonly status: string;
+  readonly iterationCount?: number;
+}
+
 export interface WorkspaceStreamState {
   readonly messages: ChatV2MessageView[];
   readonly activeAssistantMessageId: string | null;
@@ -41,6 +49,7 @@ export interface WorkspaceStreamState {
   readonly activeRunId: string | null;
   readonly runtimeStatus: ConversationRuntimeStatus;
   readonly recovery: RecoveryInfo | null;
+  readonly goal: GoalRunInfo | null;
   readonly unflushedDeltaCount: number;
 }
 
@@ -113,6 +122,7 @@ export function createWorkspaceStreamPresenter(
   let activeRunId: string | null = null;
   let runtimeStatus: ConversationRuntimeStatus = "idle";
   let recovery: RecoveryInfo | null = null;
+  let goal: GoalRunInfo | null = null;
 
   let conversationId: string | null = null;
   const highestSequence = new Map<string, number>();
@@ -140,6 +150,9 @@ export function createWorkspaceStreamPresenter(
     },
     get recovery() {
       return recovery;
+    },
+    get goal() {
+      return goal;
     },
     get unflushedDeltaCount() {
       return buffer.length;
@@ -400,6 +413,29 @@ export function createWorkspaceStreamPresenter(
         }
         break;
       }
+      case "goal_state": {
+        const goalState = chunk.goalState as
+          | { goalId?: string; objective?: string; status?: string; iterationCount?: number }
+          | undefined;
+        if (goalState?.goalId) {
+          goal = {
+            goalId: goalState.goalId,
+            objective: goalState.objective ?? goal?.objective ?? "",
+            status: goalState.status ?? "running",
+            iterationCount: goalState.iterationCount,
+          };
+        }
+        break;
+      }
+      case "goal_iteration": {
+        const iteration = chunk.goalIteration as
+          | { iteration?: number; status?: string }
+          | undefined;
+        if (goal && typeof iteration?.iteration === "number") {
+          goal = { ...goal, iterationCount: iteration.iteration };
+        }
+        break;
+      }
       case "attention_cleared": {
         runtimeStatus = "running";
         break;
@@ -558,6 +594,7 @@ export function createWorkspaceStreamPresenter(
       errorMessage = null;
       runtimeStatus = "idle";
       recovery = null;
+      goal = null;
     },
   };
 }

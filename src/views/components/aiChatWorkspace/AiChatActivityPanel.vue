@@ -27,6 +27,66 @@
       />
     </section>
 
+    <!-- Goal state (PRD §14.3): objective, iteration, status. -->
+    <section v-if="goal" class="activity-section">
+      <h3 class="section-title">{{ t('workspaceChat.activity.goal') || 'Goal' }}</h3>
+      <div class="detail-row" :data-testid="`workspace-activity-goal-${goal.status}`">
+        <WorkspaceStatusIndicator :visual="goalVisual" />
+        <span class="run-main">
+          <span class="run-title">{{ goal.objective || goal.goalId }}</span>
+          <span class="run-meta">
+            {{ goal.status }}
+            <template v-if="goal.iterationCount !== undefined">
+              · {{ t('workspaceChat.activity.iterations') || 'iterations' }}: {{ goal.iterationCount }}
+            </template>
+          </span>
+        </span>
+      </div>
+    </section>
+
+    <!-- Scheduled loop (PRD §14.3): state + pause/resume/stop controls. -->
+    <section v-if="conversationId && loopView" class="activity-section">
+      <h3 class="section-title">
+        {{ t('workspaceChat.activity.scheduledLoop') || 'Scheduled loop' }}
+      </h3>
+      <div class="detail-row" :data-testid="`workspace-activity-loop-${loopView.status}`">
+        <span class="run-main">
+          <span class="run-title">{{ loopLabel }}</span>
+          <span class="run-meta">
+            {{ loopNextRun }}
+          </span>
+        </span>
+      </div>
+      <div v-if="loopControlsEnabled" class="loop-actions">
+        <button
+          v-if="loopView.status === 'running'"
+          type="button"
+          class="loop-button"
+          data-testid="workspace-activity-loop-pause"
+          @click="loopControl('pause')"
+        >
+          {{ t('workspaceChat.activity.pause') || 'Pause' }}
+        </button>
+        <button
+          v-if="loopView.status === 'paused'"
+          type="button"
+          class="loop-button"
+          data-testid="workspace-activity-loop-resume"
+          @click="loopControl('resume')"
+        >
+          {{ t('workspaceChat.activity.resume') || 'Resume' }}
+        </button>
+        <button
+          type="button"
+          class="loop-button danger"
+          data-testid="workspace-activity-loop-stop"
+          @click="loopControl('stop')"
+        >
+          {{ t('workspaceChat.activity.stopLoop') || 'Stop loop' }}
+        </button>
+      </div>
+    </section>
+
     <section class="activity-section">
       <h3 class="section-title">
         {{ t('workspaceChat.activity.runs') || 'Runs' }}
@@ -69,6 +129,13 @@ import {
   loadWorkspaceActivity,
   type WorkspaceActivityRun,
 } from "@/views/api/aiChatWorkspace";
+import {
+  getScheduledLoopStatus,
+  controlScheduledLoop,
+} from "@/views/api/aiChatScheduledLoop";
+import type { ScheduledLoopView } from "@/entityTypes/aiChatScheduledLoopTypes";
+import { getActiveGoal } from "@/views/api/aiChatGoal";
+import type { AIChatGoalView } from "@/entityTypes/aiChatGoalTypes";
 import WorkspaceStatusIndicator from "./WorkspaceStatusIndicator.vue";
 import AiChatExecutionGroup from "./AiChatExecutionGroup.vue";
 import {
@@ -85,6 +152,75 @@ const { t } = useI18n();
 
 const runs = ref<readonly WorkspaceActivityRun[]>([]);
 const loading = ref(false);
+const loopView = ref<ScheduledLoopView | null>(null);
+
+/** Active goal from the durable goal tables (authoritative after reload). */
+const goal = ref<AIChatGoalView | null>(null);
+
+async function loadGoal(): Promise<void> {
+  if (!props.conversationId) {
+    goal.value = null;
+    return;
+  }
+  try {
+    goal.value = await getActiveGoal(props.conversationId);
+  } catch {
+    goal.value = null;
+  }
+}
+
+const goalVisual = computed<ConversationStatusVisual>(() => ({
+  icon: "mdi-flag-outline",
+  spinning: goal.value?.status === "running",
+  labelKey: "workspaceChat.activity.goal",
+  fallback: "Goal",
+}));
+
+const loopControlsEnabled = computed(
+  () => loopView.value?.status === "running" || loopView.value?.status === "paused"
+);
+
+const loopLabel = computed(() => {
+  const status = loopView.value?.status ?? "";
+  const map: Record<string, { key: string; fallback: string }> = {
+    running: { key: "workspaceChat.runStrip.loopRunning", fallback: "Scheduled loop running" },
+    paused: { key: "workspaceChat.runStrip.loopPaused", fallback: "Scheduled loop paused" },
+    stopped: { key: "workspaceChat.activity.stopped", fallback: "Stopped" },
+  };
+  const entry = map[status];
+  return entry ? t(entry.key) || entry.fallback : status;
+});
+
+const loopNextRun = computed(() => {
+  const next = loopView.value?.nextRunAt;
+  if (!next) return "";
+  const parsed = Date.parse(next);
+  if (Number.isNaN(parsed)) return "";
+  return `${t("workspaceChat.activity.nextRun") || "Next run"}: ${new Date(parsed).toLocaleString()}`;
+});
+
+async function loadLoop(): Promise<void> {
+  if (!props.conversationId) {
+    loopView.value = null;
+    return;
+  }
+  try {
+    loopView.value = await getScheduledLoopStatus(props.conversationId);
+  } catch {
+    loopView.value = null;
+  }
+}
+
+async function loopControl(
+  operation: "pause" | "resume" | "stop"
+): Promise<void> {
+  if (!props.conversationId) return;
+  try {
+    loopView.value = await controlScheduledLoop(props.conversationId, operation);
+  } catch {
+    // Controls remain actionable on failure.
+  }
+}
 
 async function loadActivity(): Promise<void> {
   if (!props.conversationId) {
@@ -135,12 +271,16 @@ function formatTime(iso: string): string {
 
 onMounted(() => {
   void loadActivity();
+  void loadLoop();
+  void loadGoal();
 });
 
 watch(
   () => props.conversationId,
   () => {
     void loadActivity();
+    void loadLoop();
+    void loadGoal();
   }
 );
 </script>
@@ -191,6 +331,44 @@ watch(
 .panel-empty {
   font-size: 12.5px;
   color: rgba(var(--v-theme-on-surface), 0.6);
+}
+
+.detail-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+}
+
+.detail-row:hover {
+  background: rgba(var(--v-theme-on-surface), 0.05);
+}
+
+.loop-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.loop-button {
+  border: 1px solid rgba(var(--v-border-color, 0, 0, 0), 0.25);
+  border-radius: 6px;
+  background: transparent;
+  font-size: 11.5px;
+  padding: 3px 12px;
+  cursor: pointer;
+  color: rgba(var(--v-theme-on-surface), 0.85);
+}
+
+.loop-button.danger {
+  color: rgb(var(--v-theme-error));
+  border-color: rgba(var(--v-theme-error), 0.4);
+}
+
+.loop-button:focus-visible {
+  outline: 2px solid rgb(var(--v-theme-primary));
+  outline-offset: 1px;
 }
 
 .run-list {

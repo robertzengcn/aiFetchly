@@ -29,7 +29,9 @@
       <AiChatRunStrip
         :runtime-status="selectedStore.runtimeStatus"
         :recovering="recovering"
-        @stop="selectedStore.stopActiveRun()"
+        :goal-objective="activeGoalObjective"
+        :loop-status="activeLoopStatus"
+        @stop="onStopFromStrip"
         @open-details="workspaceStore.openInspector('activity')"
       />
 
@@ -180,6 +182,8 @@ import {
   getChatV2ToolApprovalMode,
   setChatV2ToolApprovalMode,
 } from "@/views/api/aiChatV2";
+import { stopGoalLoop } from "@/views/api/aiChatGoal";
+import { controlScheduledLoop } from "@/views/api/aiChatScheduledLoop";
 import type {
   ChatV2Mode,
   ChatToolApprovalMode,
@@ -262,8 +266,44 @@ const activeToolCount = computed(() => {
   return count;
 });
 
-// Recovery metadata wiring lands with Stage 6; the strip already renders it.
-const recovering = computed((): boolean => false);
+/** Seven-layer recovery is live when recovery_status events arrive. */
+const recovering = computed(() => selectedStore.recovery !== null);
+
+/** Goal objective while a goal loop is active (PRD §13.3). */
+const activeGoalObjective = computed(() => {
+  const goal = selectedStore.goal;
+  if (!goal) return null;
+  const activeStatuses = ["running", "active", "pending"];
+  return activeStatuses.includes(goal.status) ? goal.objective || goal.goalId : null;
+});
+
+/** Scheduled-loop status for the strip (message metadata authority). */
+const activeLoopStatus = computed(() => {
+  const loop = selectedStore.scheduledLoop;
+  return loop?.status ?? null;
+});
+
+/** One primary stop action (PRD §13.3): goal → loop → active run. */
+async function onStopFromStrip(): Promise<void> {
+  if (!conversationId.value) return;
+  if (activeGoalObjective.value) {
+    try {
+      await stopGoalLoop(conversationId.value);
+      return;
+    } catch {
+      // fall through to the run stop
+    }
+  }
+  if (activeLoopStatus.value === "running") {
+    try {
+      await controlScheduledLoop(conversationId.value, "stop");
+      return;
+    } catch {
+      // fall through to the run stop
+    }
+  }
+  await selectedStore.stopActiveRun();
+}
 
 /** Newest plan state carried by message metadata (durable authority). */
 const latestPlanState = computed(() => {

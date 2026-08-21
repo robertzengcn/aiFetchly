@@ -10,6 +10,8 @@ import {
   createWorkspaceStreamPresenter,
   type StreamPresenterOptions,
   type WorkspaceStreamStatus,
+  type GoalRunInfo,
+  type RecoveryInfo,
 } from "@/views/utils/workspaceStreamPresenter";
 import {
   cancelChatRun,
@@ -55,6 +57,8 @@ export const useSelectedConversationStore = defineStore(
     }
 
     const messages = ref<readonly ChatV2MessageView[]>([]);
+    const recovery = ref<RecoveryInfo | null>(null);
+    const goal = ref<GoalRunInfo | null>(null);
     const activeAssistantMessageId = ref<string | null>(null);
     const streamStatus = ref<WorkspaceStreamStatus>("idle");
     const errorMessage = ref<string | null>(null);
@@ -79,6 +83,8 @@ export const useSelectedConversationStore = defineStore(
       errorMessage.value = state.errorMessage;
       runtimeStatus.value = state.runtimeStatus;
       activeRunId.value = state.activeRunId;
+      recovery.value = state.recovery;
+      goal.value = state.goal;
     }
 
     /** Ensure exactly one detail subscription exists for this renderer. */
@@ -271,8 +277,20 @@ export const useSelectedConversationStore = defineStore(
         streamStatus.value === "streaming"
     );
 
+    /** Latest scheduled-loop row state derived from message metadata. */
+    const scheduledLoop = computed(() => {
+      for (let i = messages.value.length - 1; i >= 0; i -= 1) {
+        const loop = messages.value[i].metadata?.scheduledLoop;
+        if (loop) return loop;
+      }
+      return null;
+    });
+
     return {
       messages,
+      recovery,
+      goal,
+      scheduledLoop,
       activeAssistantMessageId,
       streamStatus,
       errorMessage,
