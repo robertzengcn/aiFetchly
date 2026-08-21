@@ -91,7 +91,7 @@ const PLACEHOLDER_DOMAINS: ReadonlySet<string> = new Set([
 /** Suspicious local-part patterns (risky, not invalid). */
 const SUSPICIOUS_LOCAL_PART_PATTERNS: readonly RegExp[] = [
   /^(.)\1{4,}$/i, // 5+ of the same char (aaaaaa)
-  /^[A-Za-z0-9]{1,3}$/i, // too short to be real (abc)
+  /^[A-Za-z0-9]{1,2}$/i, // too short to be real (a, ab) — 3+ chars are plausibly real
   /^\d+$/i, // all digits
 ];
 
