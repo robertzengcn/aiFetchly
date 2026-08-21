@@ -109,6 +109,46 @@ strip, inspector, execution labels, plan lifecycle, empty/error states).
 `yarn tsc` (one-shot), `yarn vue-check` (one-shot), vitest
 main/utilityCode/components suites; fix all regressions.
 
+## Gap-closure pass (2026-08-21) — FR coverage completed
+
+After the initial slice, a PRD audit found 14 partial and 5 missing FRs; all
+functional gaps are now closed (commits c83b640f..57ca507e):
+
+- **FR-036**: bootstrap reconciles non-terminal runs to `interrupted` before
+  reporting runtime state (design §19.4); tested.
+- **PRD §33 flag**: `USER_AI_CHAT_WORKSPACE_REDESIGN` (default off) with
+  get/set IPC; the classic dock stays the default, the workspace footer
+  carries a durable mode toggle with rollback, and layout reroutes chat /
+  dashboard-ask entries to `/aiworkspace` when enabled.
+- **FR-010**: overflow is complete — rename, export (JSON transcript
+  download), duplicate (durable copy + select), compact, clear, and confirmed
+  destructive delete (messages + artifacts + memory + binding + projection).
+- **FR-012**: composer controls — mode/model/tool-approval selectors with the
+  context-usage badge that opens Context; selections forwarded on send.
+- **FR-013/FR-061**: goal state from `goal_*` events, scheduled-loop
+  running/paused from durable state, and recovery — all rendered in the run
+  strip (single stop: goal → loop → run) and Activity (loop
+  pause/resume/stop controls).
+- **FR-026/FR-030**: `openImmediately` artifacts preserve metadata and
+  auto-open the Artifacts inspector for the selected conversation; artifact
+  cards reopen persisted artifacts.
+- **FR-005/FR-006**: pointer-drag + keyboard inspector resize on wide
+  screens; measured wide/medium/narrow modes render the inspector as an
+  overlay and the sidebar as a separate overlay surface with backdrop.
+- **FR-038**: tree/treeitem roving keyboard model (arrows navigate and
+  expand/collapse; Enter selects).
+- **FR-046/FR-054/FR-059**: Activity execution rows expose expandable safe
+  Details; the plan view renders every persisted version with selector,
+  per-version change reason/author, submitted clarification answers, and the
+  decision timeline.
+- **FR-022 + §32 voice**: composer voice events route to the AI-provider
+  voice settings page with TTS stop; an explicit payload-privacy test proves
+  summary events are field-bounded and body-free.
+
+Verification: `yarn testmain` 425 files / 3772 tests (one unrelated
+HookDispatcher timing flake that passes in isolation), workspace test set
+61/61, tsc + vue-tsc clean on every commit.
+
 ## Explicitly deferred (per PRD phased rollout)
 
 - Full E2E suite + performance fixtures (PRD §34.4–34.5) — validation phase.
