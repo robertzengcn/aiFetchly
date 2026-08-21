@@ -2,6 +2,7 @@
 
 ## Product Requirements
 
+- [PRD: Contact Verification AI Tool](./prd/contact-verification-ai-tool-prd.md)
 - [PRD: Yellow Pages Scraper Plugin for AI Chat](./prd/yellow-pages-scraper-plugin-prd.md)
 - [PRD: AI Email Receive and Auto-Reply](./prd/ai-email-receive-auto-reply-prd.md)
 - [PRD: Thread-Aware AI Email Reply Reliability](./prd/ai-email-thread-aware-reply-reliability-prd.md)
