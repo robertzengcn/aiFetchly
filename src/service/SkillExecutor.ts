@@ -139,6 +139,18 @@ function sanitizeValue(key: string, value: unknown): unknown {
     if (SENSITIVE_KEY_RE.test(key)) {
       return "[REDACTED]";
     }
+    // Strip query/fragment from source URLs before logging — contact values
+    // (e.g. ?email=alice@x.com) can leak through the query string (PRD §17.2).
+    if (/^source_?url$/i.test(key)) {
+      try {
+        const u = new URL(value);
+        u.search = "";
+        u.hash = "";
+        return u.toString();
+      } catch {
+        // not a valid URL — fall through to truncation
+      }
+    }
     return value.length > 100
       ? `${value.substring(0, 50)}...[truncated, ${value.length} chars]`
       : value;

@@ -226,6 +226,11 @@ export class DnsMailRouteResolver {
       return { kind: "error", error, code: extractCode(error) };
     } finally {
       if (timer) clearTimeout(timer);
+      // Attach a no-op rejection handler to the losing native DNS promise so
+      // a late rejection (after the timeout won the race) cannot become an
+      // unhandled rejection (design §9.8). Node's dns.promises does not
+      // consistently support cancellation; this swallows the late error.
+      promise.catch(() => {});
     }
   }
 }
