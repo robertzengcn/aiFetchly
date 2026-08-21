@@ -72,11 +72,13 @@ export interface ContactVerificationContext {
   readonly countryEvidence: readonly CountryEvidence[];
 }
 
-/** A group of contacts sharing the same source URL and contact-block context. */
+/** A group of contacts sharing the same source URL and contact-block context.
+ * `emails` and `phones` are optional; the service defaults missing arrays to
+ * `[]` so callers (and the AI adapter) can omit empty sides. */
 export interface ContactVerificationGroup {
   readonly sourceUrl?: string;
-  readonly emails: readonly string[];
-  readonly phones: readonly string[];
+  readonly emails?: readonly string[];
+  readonly phones?: readonly string[];
   readonly context?: ContactVerificationContext;
 }
 
@@ -254,6 +256,15 @@ export interface ContactVerificationProgress {
   readonly progress?: number | null;
   readonly partialCount?: number | null;
   readonly expectedCount?: number | null;
+}
+
+/** Optional runtime controls for a verification call (design §12.1). */
+export interface ContactVerificationOptions {
+  /** Checked between steps; aborted calls yield partial uncertain results. */
+  readonly signal?: AbortSignal;
+  /** Progress sink (mapped onto SkillExecutionContext.emitProgress by the
+   * AI adapter). */
+  readonly emitProgress?: (event: ContactVerificationProgress) => void;
 }
 
 // ---------------------------------------------------------------------------
