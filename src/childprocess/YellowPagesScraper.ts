@@ -16,7 +16,7 @@
  * - Adapter methods take precedence over configuration-based selectors
  */
 
-import { Page, Browser, ElementHandle, Frame } from "puppeteer";
+import { Page, Browser, ElementHandle } from "puppeteer";
 import { log } from "@/modules/Logger";
 import type { LaunchOptions } from "puppeteer";
 import sanitizeHtml from "sanitize-html";
@@ -29,9 +29,7 @@ import { runObserveExecuteLoop } from "@/childprocess/utils/ObserveExecuteLoop";
 import { BrowserManager } from "@/modules/browserManager";
 import { ChildProcessAdapterFactory } from "@/modules/ChildProcessAdapterFactory";
 import { BasePlatformAdapter } from "@/modules/BasePlatformAdapter";
-import { ProcessMessage } from "@/entityTypes/processMessage-type";
 import {
-  StartTaskMessage,
   ProgressMessage,
   CompletedMessage,
   ErrorMessage,
@@ -376,28 +374,101 @@ export class YellowPagesScraper {
     // Use sanitize-html to safely strip dangerous tags and attributes in one pass
     let out = sanitizeHtml(html, {
       allowedTags: [
-        "h1", "h2", "h3", "h4", "h5", "h6", "p", "br", "hr",
-        "ul", "ol", "li", "dl", "dt", "dd",
-        "table", "thead", "tbody", "tfoot", "tr", "td", "th", "caption", "colgroup", "col",
-        "div", "span", "section", "article", "aside", "header", "footer", "nav", "main",
-        "pre", "code", "blockquote", "cite", "em", "strong", "b", "i", "u", "s", "small", "sub", "sup",
-        "a", "img", "figure", "figcaption",
-        "abbr", "address", "bdi", "bdo", "del", "dfn", "ins", "kbd", "mark", "q", "rp", "rt", "ruby", "s", "samp", "time", "var", "wbr",
-        "details", "summary",
-        "input", "select", "option", "textarea", "label", "fieldset", "legend",
-        "audio", "video", "source", "picture",
-        "map", "area",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        "p",
+        "br",
+        "hr",
+        "ul",
+        "ol",
+        "li",
+        "dl",
+        "dt",
+        "dd",
+        "table",
+        "thead",
+        "tbody",
+        "tfoot",
+        "tr",
+        "td",
+        "th",
+        "caption",
+        "colgroup",
+        "col",
+        "div",
+        "span",
+        "section",
+        "article",
+        "aside",
+        "header",
+        "footer",
+        "nav",
+        "main",
+        "pre",
+        "code",
+        "blockquote",
+        "cite",
+        "em",
+        "strong",
+        "b",
+        "i",
+        "u",
+        "s",
+        "small",
+        "sub",
+        "sup",
+        "a",
+        "img",
+        "figure",
+        "figcaption",
+        "abbr",
+        "address",
+        "bdi",
+        "bdo",
+        "del",
+        "dfn",
+        "ins",
+        "kbd",
+        "mark",
+        "q",
+        "rp",
+        "rt",
+        "ruby",
+        "s",
+        "samp",
+        "time",
+        "var",
+        "wbr",
+        "details",
+        "summary",
+        "input",
+        "select",
+        "option",
+        "textarea",
+        "label",
+        "fieldset",
+        "legend",
+        "audio",
+        "video",
+        "source",
+        "picture",
+        "map",
+        "area",
       ],
       allowedAttributes: {
         "*": ["class", "id", "title", "role", "aria-label", "tabindex"],
-        "a": ["href", "target", "rel"],
-        "img": ["src", "alt", "width", "height", "loading"],
-        "td": ["colspan", "rowspan"],
-        "th": ["colspan", "rowspan", "scope"],
-        "input": ["type", "name", "value", "placeholder", "checked", "disabled"],
-        "select": ["name", "disabled"],
-        "option": ["value", "selected", "disabled"],
-        "textarea": ["name", "rows", "cols", "disabled"],
+        a: ["href", "target", "rel"],
+        img: ["src", "alt", "width", "height", "loading"],
+        td: ["colspan", "rowspan"],
+        th: ["colspan", "rowspan", "scope"],
+        input: ["type", "name", "value", "placeholder", "checked", "disabled"],
+        select: ["name", "disabled"],
+        option: ["value", "selected", "disabled"],
+        textarea: ["name", "rows", "cols", "disabled"],
       },
     });
 
@@ -593,7 +664,7 @@ export class YellowPagesScraper {
         const element = await this.page.$(sel);
         if (element) {
           log.info(`✅ Typing into element with selector: ${sel}`);
-          await element.click({ clickCount: 3 }); // Focus and select all
+          await element.click({ count: 3 }); // Focus and select all
           await element.type(text, { delay: 100 });
           return true;
         }
@@ -1085,7 +1156,7 @@ export class YellowPagesScraper {
 
       this.pendingAiRequests.set(requestId, {
         resolve,
-        reject: (reason?: unknown) => {
+        reject: (_reason?: unknown) => {
           // Silently handle timeout rejections to avoid unhandled rejection warnings
           log.debug(`AI request ${requestId} timed out`);
         },
@@ -2459,12 +2530,12 @@ export class YellowPagesScraper {
                   const el = await this.page.$(selector);
                   if (el) {
                     if (field === "keywordInput") {
-                      await el.click({ clickCount: 3 });
+                      await el.click({ count: 3 });
                       await el.type(keyword, {
                         delay: 50 + Math.random() * 80,
                       });
                     } else if (field === "locationInput" && location) {
-                      await el.click({ clickCount: 3 });
+                      await el.click({ count: 3 });
                       await el.type(location, {
                         delay: 50 + Math.random() * 80,
                       });
@@ -2622,7 +2693,6 @@ export class YellowPagesScraper {
     let aiRecoveryAttempted = false;
 
     try {
-      const frame = this.page.mainFrame();
       const searchForm = this.platformInfo.selectors.searchForm;
 
       // Fill keyword field if selector exists (main frame to avoid detached iframe)
@@ -2762,7 +2832,6 @@ The initial deterministic filling did not succeed for ${
     if (!this.page || !this.platformInfo.selectors.searchForm) return;
 
     try {
-      const frame = this.page.mainFrame();
       const searchForm = this.platformInfo.selectors.searchForm;
 
       if (searchForm.searchButton) {
@@ -3888,7 +3957,7 @@ The initial deterministic filling did not succeed for ${
    */
   private async handleEnhancedPagination(
     currentPage: number,
-    maxPages: number
+    _maxPages: number
   ): Promise<boolean> {
     if (!this.page) return false;
 
@@ -6522,9 +6591,7 @@ The initial deterministic filling did not succeed for ${
         }
 
         // Pause without UI toast — captcha/robot blocks should stay silent in UI
-        log.info(
-          "⏸️ Pausing scraping due to robot verification challenge..."
-        );
+        log.info("⏸️ Pausing scraping due to robot verification challenge...");
         this.pause({ suppressUiNotify: true });
 
         log.info(
@@ -6749,7 +6816,7 @@ The initial deterministic filling did not succeed for ${
       // Click with natural pressure
       await page.mouse.click(clickX, clickY, {
         button: "left",
-        clickCount: 1,
+        count: 1,
         delay: Math.random() * 50 + 25, // 25-75ms delay between mousedown and mouseup
       });
 
@@ -6781,7 +6848,7 @@ The initial deterministic filling did not succeed for ${
       await this.sleep(Math.random() * 200 + 100); // 100-300ms pause
 
       // Clear the field first
-      await element.click({ clickCount: 3 }); // Select all text
+      await element.click({ count: 3 }); // Select all text
       await element.press("Backspace");
       await this.sleep(Math.random() * 100 + 50);
 

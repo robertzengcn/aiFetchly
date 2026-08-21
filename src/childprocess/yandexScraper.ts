@@ -1,11 +1,7 @@
 "use strict";
 import { SearchScrape } from "@/childprocess/searchScraper";
 import { log } from "@/modules/Logger";
-import {
-  ScrapeOptions,
-  SearchData,
-  SearchResult,
-} from "@/entityTypes/scrapeType";
+import { ScrapeOptions, SearchData } from "@/entityTypes/scrapeType";
 import { CustomError } from "@/modules/customError";
 import { TimeoutError, InterceptResolutionAction } from "puppeteer";
 import useProxy from "@lem0-packages/puppeteer-page-proxy";
@@ -491,7 +487,7 @@ export class YandexScraper extends SearchScrape {
             );
 
             // Clear any existing text
-            await input.click({ clickCount: 3 });
+            await input.click({ count: 3 });
             await this.page.keyboard.press("Backspace");
 
             // Type keyword with random delays
