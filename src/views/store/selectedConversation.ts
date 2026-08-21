@@ -102,6 +102,14 @@ export const useSelectedConversationStore = defineStore(
       const consumed = presenter.applyEvent(event);
       if (!consumed) return;
       syncFromPresenter();
+      // FR-026: an openImmediately artifact opens the inspector preview for
+      // the SELECTED conversation only (events arrive selected-only).
+      if (event.eventType === "tool_result") {
+        const pending = presenter.consumePendingArtifactOpen();
+        if (pending) {
+          workspaceStore.requestArtifactPreview(pending.artifactId);
+        }
+      }
       // A terminal event for the selected conversation means durable state
       // changed — the view is authoritative enough (the presenter applied
       // the full content) but clear unread locally.

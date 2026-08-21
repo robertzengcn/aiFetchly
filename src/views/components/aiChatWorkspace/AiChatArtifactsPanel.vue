@@ -73,12 +73,14 @@ import type {
   AIArtifactSummary,
 } from "@/entityTypes/aiArtifactTypes";
 import AiArtifactWorkspace from "@/views/components/aiArtifacts/AiArtifactWorkspace.vue";
+import { useChatWorkspaceStore } from "@/views/store/chatWorkspace";
 
 const props = defineProps<{
   conversationId: string | null;
 }>();
 
 const { t } = useI18n();
+const workspaceStore = useChatWorkspaceStore();
 
 const artifacts = ref<readonly AIArtifactSummary[]>([]);
 const loading = ref(false);
@@ -134,6 +136,18 @@ function formatTime(iso: string): string {
 onMounted(() => {
   void loadArtifacts();
 });
+
+// FR-026/FR-030: auto-open a requested artifact (openImmediately or an
+// artifact card click) and consume the request once handled.
+watch(
+  () => workspaceStore.requestedArtifactId,
+  (artifactId) => {
+    if (!artifactId) return;
+    workspaceStore.requestedArtifactId = null;
+    void openPreview(artifactId);
+  },
+  { immediate: true }
+);
 
 watch(
   () => props.conversationId,

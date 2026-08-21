@@ -204,6 +204,14 @@ export const useChatWorkspaceStore = defineStore("chatWorkspace", () => {
     rebuildConversationIndex();
   }
 
+  /** Artifact the inspector should preview (FR-026/FR-030 auto-open). */
+  const requestedArtifactId = ref<string | null>(null);
+
+  function requestArtifactPreview(artifactId: string): void {
+    requestedArtifactId.value = artifactId;
+    openInspector("artifacts");
+  }
+
   function markConversationReadLocally(conversationId: string): void {
     const existing = conversationsById.value.get(conversationId);
     if (!existing || !existing.unread) return;
@@ -340,6 +348,8 @@ export const useChatWorkspaceStore = defineStore("chatWorkspace", () => {
     applySummaryEvent,
     upsertLocalConversation,
     markConversationReadLocally,
+    requestedArtifactId,
+    requestArtifactPreview,
     selectedConversationId,
     selectedConversation,
     selectionGeneration,

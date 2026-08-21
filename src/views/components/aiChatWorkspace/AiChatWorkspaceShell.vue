@@ -640,9 +640,8 @@ async function onLegacyPlanAction(
 }
 
 function onOpenArtifact(artifactId: string): void {
-  // FR-026: artifact output opens the right inspector.
-  workspaceStore.openInspector("artifacts");
-  void artifactId;
+  // FR-026/FR-030: artifact cards reopen persisted artifacts in the inspector.
+  workspaceStore.requestArtifactPreview(artifactId);
 }
 
 async function onCopyArtifactHtml(artifactId: string): Promise<void> {

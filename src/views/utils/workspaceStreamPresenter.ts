@@ -50,6 +50,7 @@ export interface WorkspaceStreamState {
   readonly runtimeStatus: ConversationRuntimeStatus;
   readonly recovery: RecoveryInfo | null;
   readonly goal: GoalRunInfo | null;
+  readonly pendingArtifactOpen: { artifactId: string } | null;
   readonly unflushedDeltaCount: number;
 }
 
@@ -86,6 +87,11 @@ function str(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
+/** Fresh base metadata so `source` stays concrete for the type checker. */
+function m0Metadata(): { source: "chat-v2" } {
+  return { source: "chat-v2" };
+}
+
 /**
  * Presenter instance — construct one per selected conversation subscription.
  * `dispose()` clears buffers without touching main-process run state.
@@ -103,6 +109,8 @@ export function createWorkspaceStreamPresenter(
   prependHistory(messages: ChatV2MessageView[]): void;
   /** Optimistic user message shown while the run request is in flight. */
   appendLocalUserMessage(view: ChatV2MessageView): void;
+  /** Consume a pending openImmediately artifact auto-open request. */
+  consumePendingArtifactOpen(): { artifactId: string } | null;
   /** Evict oldest rows beyond a bounded window without resetting streaming. */
   trimToWindow(maxRows: number): void;
   /** Immediately flush buffered deltas (terminal path / selection change). */
@@ -123,6 +131,7 @@ export function createWorkspaceStreamPresenter(
   let runtimeStatus: ConversationRuntimeStatus = "idle";
   let recovery: RecoveryInfo | null = null;
   let goal: GoalRunInfo | null = null;
+  let pendingArtifactOpen: { artifactId: string } | null = null;
 
   let conversationId: string | null = null;
   const highestSequence = new Map<string, number>();
@@ -153,6 +162,9 @@ export function createWorkspaceStreamPresenter(
     },
     get goal() {
       return goal;
+    },
+    get pendingArtifactOpen() {
+      return pendingArtifactOpen;
     },
     get unflushedDeltaCount() {
       return buffer.length;
@@ -321,6 +333,9 @@ export function createWorkspaceStreamPresenter(
       case "tool_result": {
         flushNow();
         const toolCallId = str(chunk.toolCallId) ?? "";
+        const artifact = chunk.artifact as
+          | ChatV2MessageMetadata["artifact"]
+          | undefined;
         appendMessage({
           id: `tool-result-${toolCallId}`,
           conversationId: conversationId ?? "",
@@ -329,14 +344,19 @@ export function createWorkspaceStreamPresenter(
           timestamp: new Date().toISOString(),
           messageType: MessageType.TOOL_RESULT,
           metadata: {
-            source: "chat-v2",
+            ...(m0Metadata()),
             toolCallId,
             toolName: str(chunk.toolName),
             toolResult:
               (chunk.toolResult as Record<string, unknown> | undefined) ??
               undefined,
+            ...(artifact ? { artifact } : {}),
           },
         });
+        // FR-026: openImmediately artifacts auto-open the inspector preview.
+        if (artifact?.openImmediately === true) {
+          pendingArtifactOpen = { artifactId: artifact.id };
+        }
         break;
       }
       case "ask_user_question":
@@ -578,6 +598,12 @@ export function createWorkspaceStreamPresenter(
     flush(): void {
       flushNow();
     },
+    /** Consume a pending auto-open request (FR-026). */
+    consumePendingArtifactOpen(): { artifactId: string } | null {
+      const pending = pendingArtifactOpen;
+      pendingArtifactOpen = null;
+      return pending;
+    },
     dispose(): void {
       if (cancelFlush) {
         cancelFlush();
@@ -595,6 +621,7 @@ export function createWorkspaceStreamPresenter(
       runtimeStatus = "idle";
       recovery = null;
       goal = null;
+      pendingArtifactOpen = null;
     },
   };
 }
