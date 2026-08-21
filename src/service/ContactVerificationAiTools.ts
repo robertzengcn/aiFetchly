@@ -128,10 +128,24 @@ function makeProgressEmitter(
 // Result mapping (internal camelCase -> snake_case PRD contract, §8)
 // ---------------------------------------------------------------------------
 
-/** Internal result type alias for the mapping helpers. */
-type InternalResult = Awaited<ReturnType<ContactVerificationService["verify"]>>;
+/** Internal result type alias for the mapping helpers. Exported so the
+ * ToolExecutor extraction-composition path can reuse the serializer. */
+export type ContactVerificationInternalResult = Awaited<
+  ReturnType<ContactVerificationService["verify"]>
+>;
 
-function mapResultToSnakeCase(result: InternalResult): Record<string, unknown> {
+/** Serialize an internal camelCase verification result to the PRD snake_case
+ * JSON contract (FR-12). Shared by the AI tool boundary and the extraction
+ * composition path (design §14.4 — one serializer so output cannot diverge). */
+export function serializeContactVerificationResult(
+  result: ContactVerificationInternalResult
+): Record<string, unknown> {
+  return mapResultToSnakeCase(result);
+}
+
+function mapResultToSnakeCase(
+  result: ContactVerificationInternalResult
+): Record<string, unknown> {
   return {
     success: result.success,
     verification_depth: result.verificationDepth,
@@ -162,7 +176,7 @@ function mapResultToSnakeCase(result: InternalResult): Record<string, unknown> {
 }
 
 function mapEmailResult(
-  e: InternalResult["contacts"][number]["emails"][number]
+  e: ContactVerificationInternalResult["contacts"][number]["emails"][number]
 ): Record<string, unknown> {
   const out: Record<string, unknown> = {
     original: e.original,
@@ -185,7 +199,7 @@ function mapEmailResult(
 }
 
 function mapPhoneResult(
-  p: InternalResult["contacts"][number]["phones"][number]
+  p: ContactVerificationInternalResult["contacts"][number]["phones"][number]
 ): Record<string, unknown> {
   const out: Record<string, unknown> = {
     original: p.original,
@@ -247,7 +261,10 @@ export async function verifyContactInfoForAi(
       emitProgress: makeProgressEmitter(context) as never,
     });
     // 5. Convert to snake_case PRD contract.
-    return { success: true, result: mapResultToSnakeCase(internal) };
+    return {
+      success: true,
+      result: serializeContactVerificationResult(internal),
+    };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     // Strip absolute filesystem paths / raw contact values before surfacing.
