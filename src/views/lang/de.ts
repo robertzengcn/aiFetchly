@@ -3234,6 +3234,12 @@ export default {
       structuredResult: "Strukturiertes Ergebnis — Details in Aktivität",
     },
     plan: {
+      version: "Version",
+      current: "aktuell",
+      changeReason: "Änderungsgrund",
+      clarificationAnswers: "Klärungsantworten",
+      decisions: "Entscheidungen",
+      submitted: "Plan eingereicht",
       readyForReview: "Plan bereit zur Prüfung",
       steps: "{count} Schritte",
       changedSince: "Geändert seit v{version}",

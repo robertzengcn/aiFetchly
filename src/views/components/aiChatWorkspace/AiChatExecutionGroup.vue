@@ -28,7 +28,7 @@
     </button>
     <ul v-if="expanded" class="execution-rows">
       <li v-for="execution in group.executions" :key="execution.key">
-        <AiChatExecutionRow :execution="execution" />
+        <AiChatExecutionRow :execution="execution" :with-details="withDetails" />
       </li>
     </ul>
   </div>
@@ -42,6 +42,8 @@ import AiChatExecutionRow from "./AiChatExecutionRow.vue";
 
 const props = defineProps<{
   group: ToolExecutionGroupView;
+  /** Activity shows the expandable Details disclosure per row (FR-046). */
+  withDetails?: boolean;
 }>();
 
 const { t } = useI18n();

@@ -3083,6 +3083,12 @@ export default {
       structuredResult: "结构化结果 — 详情见“活动”",
     },
     plan: {
+      version: "版本",
+      current: "当前",
+      changeReason: "变更原因",
+      clarificationAnswers: "澄清回答",
+      decisions: "决策记录",
+      submitted: "方案已提交",
       readyForReview: "方案待审阅",
       steps: "{count} 个步骤",
       changedSince: "自 v{version} 以来的变更",

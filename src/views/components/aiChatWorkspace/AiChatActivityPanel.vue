@@ -24,8 +24,16 @@
         v-for="group in executionGroups"
         :key="group.key"
         :group="group"
+        with-details
       />
     </section>
+
+    <!-- Complete versioned plan document (FR-054/FR-059). -->
+    <AiChatPlanActivityView
+      v-if="planPresentation"
+      :plan="planPresentation"
+      :messages="props.messages"
+    />
 
     <!-- Goal state (PRD §14.3): objective, iteration, status. -->
     <section v-if="goal" class="activity-section">
@@ -138,6 +146,8 @@ import { getActiveGoal } from "@/views/api/aiChatGoal";
 import type { AIChatGoalView } from "@/entityTypes/aiChatGoalTypes";
 import WorkspaceStatusIndicator from "./WorkspaceStatusIndicator.vue";
 import AiChatExecutionGroup from "./AiChatExecutionGroup.vue";
+import AiChatPlanActivityView from "./AiChatPlanActivityView.vue";
+import { selectPlanPresentation } from "./planPresentationProjection";
 import {
   buildToolExecutionGroups,
 } from "./toolExecutionProjection";
@@ -240,6 +250,11 @@ async function loadActivity(): Promise<void> {
 /** Pure projection over persisted tool rows (FR-042..050, Stage 6). */
 const executionGroups = computed(() =>
   buildToolExecutionGroups(props.messages)
+);
+
+/** Newest plan presentation for the full Activity document (FR-054). */
+const planPresentation = computed(() =>
+  selectPlanPresentation(props.messages)
 );
 
 function runVisual(status: string): ConversationStatusVisual {

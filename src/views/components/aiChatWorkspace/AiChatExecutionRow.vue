@@ -25,6 +25,8 @@
         {{ (execution.durationMs / 1000).toFixed(1) }}s
       </span>
     </span>
+    <!-- Activity holds the safe technical detail (FR-046). -->
+    <AiChatExecutionDetail v-if="withDetails" :execution="execution" />
   </div>
 </template>
 
@@ -35,10 +37,13 @@ import type { ToolExecutionStatus, ToolExecutionView } from "./toolExecutionProj
 import { actionLabelFor, UNKNOWN_TOOL_LABEL_KEY } from "./toolExecutionProjection";
 import WorkspaceStatusIndicator from "./WorkspaceStatusIndicator.vue";
 import SemanticToolResult from "./SemanticToolResult.vue";
+import AiChatExecutionDetail from "./AiChatExecutionDetail.vue";
 import { conversationStatusVisual, type ConversationStatusVisual } from "./workspaceStatusUtil";
 
 const props = defineProps<{
   execution: ToolExecutionView;
+  /** Render the expandable Details disclosure (Activity context). */
+  withDetails?: boolean;
 }>();
 
 const { t } = useI18n();
@@ -128,6 +133,7 @@ const rowVisual = computed<ConversationStatusVisual>(() => {
 <style scoped>
 .execution-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-start;
   gap: 8px;
   padding: 4px 2px;

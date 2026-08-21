@@ -3237,6 +3237,12 @@ export default {
       structuredResult: "Resultado estructurado — detalles en Actividad",
     },
     plan: {
+      version: "Versión",
+      current: "actual",
+      changeReason: "Motivo del cambio",
+      clarificationAnswers: "Respuestas de aclaración",
+      decisions: "Decisiones",
+      submitted: "Plan enviado",
       readyForReview: "Plan listo para revisión",
       steps: "{count} pasos",
       changedSince: "Cambios desde v{version}",

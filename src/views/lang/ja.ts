@@ -3174,6 +3174,12 @@ export default {
       structuredResult: "構造化された結果 — 詳細はアクティビティ",
     },
     plan: {
+      version: "バージョン",
+      current: "現在",
+      changeReason: "変更理由",
+      clarificationAnswers: "確認への回答",
+      decisions: "決定履歴",
+      submitted: "プランを提出",
       readyForReview: "プランがレビュー待ちです",
       steps: "{count} ステップ",
       changedSince: "v{version} からの変更点",
