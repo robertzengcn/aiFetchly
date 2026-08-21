@@ -120,6 +120,18 @@ export type MailRoutingStatus =
   | "resolver_failure"
   | "not_checked";
 
+/**
+ * Mail-routing outcome for a domain. `domainResolves: null` means the DNS
+ * check did not produce a stable answer (temporary/resolver failure) and
+ * must NOT be coerced to `false`. `retryable` flags whether a re-verification
+ * should re-attempt the lookup.
+ */
+export interface DnsMailRouteResult {
+  readonly status: MailRoutingStatus;
+  readonly domainResolves: boolean | null;
+  readonly retryable: boolean;
+}
+
 // ---------------------------------------------------------------------------
 // Result types (design §8.2, §8.3, §8.4)
 // ---------------------------------------------------------------------------
