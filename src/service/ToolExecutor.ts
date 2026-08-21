@@ -14,6 +14,7 @@ import { WebsiteAnalysisService } from "@/service/WebsiteAnalysisService";
 import { RateLimiter, RateLimitConfig } from "./RateLimiter";
 import { AiChatApi, BatchKeywordGenerationRequestItem } from "@/api/aiChatApi";
 import { extractContactFromUrls } from "@/main-process/communication/contactExtraction-ipc";
+import { verifyContactInfoForAi } from "@/service/ContactVerificationAiTools";
 import { DocumentService } from "@/service/DocumentService";
 import { FileToolService } from "@/service/FileToolService";
 import { WorkspaceResolver } from "@/service/WorkspaceResolver";
@@ -72,6 +73,11 @@ const RATE_LIMIT_CONFIG = {
     maxConcurrent: 2,
     cooldownMs: 1000,
   },
+  contactVerification: {
+    maxPerMinute: 20,
+    maxConcurrent: 5,
+    cooldownMs: 500,
+  },
   yellowPages: {
     maxPerMinute: 15,
     maxConcurrent: 3,
@@ -115,6 +121,8 @@ class RateLimiterManager {
       return RATE_LIMIT_CONFIG.websiteAnalysis;
     } else if (toolName === "extract_contact_info") {
       return RATE_LIMIT_CONFIG.contactExtraction;
+    } else if (toolName === "verify_contact_info") {
+      return RATE_LIMIT_CONFIG.contactVerification;
     } else if (toolName.includes("email") || toolName.includes("extract")) {
       return RATE_LIMIT_CONFIG.emailExtraction;
     } else if (
@@ -325,6 +333,9 @@ export class ToolExecutor {
 
       case "extract_contact_info":
         return await this.executeContactExtraction(toolParams, context);
+
+      case "verify_contact_info":
+        return await this.executeContactVerification(toolParams, context);
 
       case "search_maps_businesses":
         return await this.executeMapsSearch(toolParams, context);
@@ -1434,6 +1445,26 @@ export class ToolExecutor {
     } catch (error) {
       return ToolExecutor.toErrorResult(error, "Failed to generate keywords");
     }
+  }
+
+  /**
+   * Execute verify_contact_info: validate/normalize email + phone contacts via
+   * the shared AI tool boundary. Delegates to the same `verifyContactInfoForAi`
+   * the SkillRegistry uses (design §14.4 — one shared function so behavior
+   * cannot diverge). The AI gate runs inside the shared function.
+   */
+  private static async executeContactVerification(
+    toolParams: Record<string, unknown>,
+    context?: ModuleExecutionContext
+  ): Promise<Record<string, unknown>> {
+    const result = await verifyContactInfoForAi(toolParams, context);
+    if (result.success && result.result) {
+      return result.result;
+    }
+    return {
+      success: false,
+      error: result.error ?? "Contact verification failed",
+    };
   }
 
   /**

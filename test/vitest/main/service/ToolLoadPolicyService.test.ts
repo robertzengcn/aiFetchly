@@ -476,4 +476,46 @@ describe("ToolLoadPolicyService.classify", () => {
     });
     expect(policy).toBe("always");
   });
+
+  // ---- Contact verification (verify_contact_info) ----
+  it("keeps verify_contact_info deferred by default", () => {
+    expect(classify("verify_contact_info", "builtin")).toBe("deferred");
+  });
+
+  it("promotes verify_contact_info for 'verify these emails'", () => {
+    expect(
+      classify("verify_contact_info", "builtin", {
+        currentUserMessage: "verify these emails for me",
+      })
+    ).toBe("contextual");
+  });
+
+  it("promotes verify_contact_info for 'normalize these phone numbers'", () => {
+    expect(
+      classify("verify_contact_info", "builtin", {
+        currentUserMessage: "normalize these phone numbers",
+      })
+    ).toBe("contextual");
+  });
+
+  it("promotes verify_contact_info for 'clean these contacts'", () => {
+    expect(
+      classify("verify_contact_info", "builtin", {
+        currentUserMessage: "clean these contacts and remove invalid ones",
+      })
+    ).toBe("contextual");
+  });
+
+  it("does NOT promote verify_contact_info for generic email questions", () => {
+    expect(
+      classify("verify_contact_info", "builtin", {
+        currentUserMessage: "how does email work?",
+      })
+    ).toBe("deferred");
+    expect(
+      classify("verify_contact_info", "builtin", {
+        currentUserMessage: "what is phone verification?",
+      })
+    ).toBe("deferred");
+  });
 });

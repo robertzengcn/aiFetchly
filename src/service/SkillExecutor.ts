@@ -112,7 +112,29 @@ function validateArgs(
 const SENSITIVE_KEY_RE =
   /^(pass|password|passwd|pwd|secret|token|api[_-]?key|access[_-]?token|refresh[_-]?token|authorization|private[_-]?key|client[_-]?secret)$/i;
 
+/**
+ * Contact-sensitive keys (verify_contact_info + extract_contact_info). Their
+ * values are redacted to COUNTS, never logged raw — phone numbers and email
+ * addresses are low-entropy PII vulnerable to guessing (design §17.1). Matched
+ * case-insensitively, ignoring separators (_, -) so `nearby_text` ==
+ * `nearbytext`.
+ */
+const CONTACT_KEY_RE =
+  /^(email|emails|phone|phones|nearbytext|nearby_text|address|countryevidence|country_evidence|evidencetext|evidence_text|contacts)$/i;
+
 function sanitizeValue(key: string, value: unknown): unknown {
+  // Contact-sensitive keys: redact to counts, never log raw values.
+  if (CONTACT_KEY_RE.test(key)) {
+    if (Array.isArray(value)) {
+      return `[REDACTED_CONTACTS count=${value.length}]`;
+    }
+    if (value !== null && typeof value === "object") {
+      // A contact group / evidence object — count enumerable keys.
+      const entries = Object.keys(value as Record<string, unknown>);
+      return `[REDACTED_CONTACT_GROUPS count=${entries.length}]`;
+    }
+    return "[REDACTED_CONTACT]";
+  }
   if (typeof value === "string") {
     if (SENSITIVE_KEY_RE.test(key)) {
       return "[REDACTED]";
