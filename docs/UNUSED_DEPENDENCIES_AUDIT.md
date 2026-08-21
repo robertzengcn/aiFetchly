@@ -30,11 +30,7 @@ Zero occurrences in code, configs, or build files. References exist only in
 | 8 | `progress-stream` | dependencies | 0 hits. |
 | 9 | `socks5-http-client` | dependencies | 0 hits. Project uses `fetch-socks` for SOCKS. |
 | 10 | `whatwg-fetch` | dependencies | 0 hits. Electron ships native `fetch`. |
-| 11 | `word-extractor` | dependencies | 0 hits. |
-| 12 | `@types/word-extractor` | devDependencies | 0 hits; pairs with the dead `word-extractor` runtime dep. |
-| 13 | `vuex` | dependencies | 0 code imports. The Pinia migration is **complete**: no `store/index.ts`; the only store files (`appMain.ts`, `userStore.ts`) use Pinia `defineStore`. Every `vuex` reference in source is a comment. `docs/architecture-optimization-review.md` claiming it is "load-bearing" is stale. |
-| 14 | `vuex-module-decorators` | dependencies | 0 code imports. Same as `vuex` — only comment references remain. |
-| 15 | `vite-plugin-commonjs` | dependencies | Only appears in **commented-out** import lines (`vite.utilityCode.config.mjs:5`, `vite.buckEmail.config.mjs:5`). |
+| 11 | `vite-plugin-commonjs` | dependencies | Only appears in **commented-out** import lines (`vite.utilityCode.config.mjs:5`, `vite.buckEmail.config.mjs:5`). |
 
 ### Removal commands (Batch 1)
 
@@ -42,38 +38,39 @@ Zero occurrences in code, configs, or build files. References exist only in
 # Production deps
 yarn remove argparse core-js fetch-intercept filenamify http-proxy-agent \
   jshint pg-hstore progress-stream socks5-http-client whatwg-fetch \
-  word-extractor vuex vuex-module-decorators vite-plugin-commonjs
-
-# Dev dep (no matching runtime dep)
-yarn remove @types/word-extractor --dev
+  vite-plugin-commonjs
 ```
 
-After removal, also drop the now-orphaned `resolutions` entry if desired:
-`"jshint/minimatch": "^3.1.4"` (harmless to leave; it only pins a transitive).
+After removal, also drop the now-orphaned `resolutions` entry:
+`"jshint/minimatch": "^3.1.4"`.
 
 ---
 
-## Batch 2 — Referenced only by unbuilt PRDs (planned features, not yet implemented)
+## Batch 2 — Planned-feature dependencies already absent or orphaned
 
-These appear **only** in design docs under `docs/prd/` (the contact-verification
-AI tool and email-thread-aware-reply-reliability features — currently PRDs/design
-docs, not shipped code). Removing them is safe for now; **re-add when the feature
-is actually built** — the PRDs document the dependency intent.
+These packages are referenced only by design documents under `docs/prd/` for
+features that are not currently implemented. The runtime packages are already
+absent from `package.json`; only the orphaned type package still needs removal.
+Re-add the runtime packages and types when the corresponding feature is built.
 
-| # | Package | Section(s) | Note |
-|---|---------|-----------|------|
-| 1 | `libphonenumber-js` | dependencies | 0 code imports. Phone validation today uses a custom digit-count regex (`src/modules/platforms/YelpComAdapter.ts:487`, `YellowPagesScraper.ts:5605`). PRD `contact-verification-ai-tool-*.md` plans to use `libphonenumber-js/max`. |
-| 2 | `validator` | dependencies | 0 code imports. PRD plans `validator.isEmail()`. |
-| 3 | `@types/validator` | devDependencies | Orphaned type pkg for the dead `validator` runtime dep. |
-| 4 | `ejs` | dependencies **and** devDependencies | 0 code imports. Also remove the stale line `"ejs"` from the `forge.config.js:158` runtime-require allow-list in the same change. |
+| # | Package | Current state | Note |
+|---|---------|---------------|------|
+| 1 | `libphonenumber-js` | Already absent | Phone validation currently uses a custom digit-count regex (`src/modules/platforms/YelpComAdapter.ts:487`, `YellowPagesScraper.ts:5605`). PRD `contact-verification-ai-tool-*.md` plans to use `libphonenumber-js/max`. |
+| 2 | `validator` | Already absent | No code imports. A PRD plans to use `validator.isEmail()`. |
+| 3 | `@types/validator` | Orphaned devDependency | No code imports, and its matching `validator` runtime package is absent. Safe to remove. |
 
 ### Removal commands (Batch 2)
 
 ```bash
-yarn remove libphonenumber-js validator ejs
-yarn remove @types/validator --dev
-# Then edit forge.config.js to delete the "ejs", line (~158).
+yarn remove @types/validator
 ```
+
+## Already removed — no action required
+
+| Package | Evidence |
+|---|---|
+| `vuex` | Not declared in the current `package.json`. The Pinia migration is complete; the only source reference is a historical comment in `userStore.ts`. |
+| `vuex-module-decorators` | Not declared in the current `package.json`; its only source reference is the same historical comment. |
 
 ---
 
@@ -92,6 +89,9 @@ Recorded here so the next audit does not re-investigate these.
 | `ajv-formats` | `forge.config.js:155`, `vite.taskCode.config.mjs:129`, test bundle list. |
 | `bufferutil` / `utf-8-validate` | Optional `ws` peers; externalized in 17 worker vite configs + `forge.config.js:624`. |
 | `winreg` | `forge.config.js:157`. |
+| `word-extractor` | Imported and executed by `ChunkingService.ts` and `DocumentService.ts` for legacy `.doc` extraction. |
+| `@types/word-extractor` | Required because `word-extractor@1.0.4` does not ship TypeScript declarations. |
+| `ejs` | Runtime dependency of `protocol-registry`, which is imported by `src/background.ts`. The copied platform implementation calls `require("ejs")`; keep the `forge.config.js:158` packaging allow-list entry. |
 | `@types/better-sqlite3`, `@types/papaparse`, `@types/turndown`, `@types/ws` | Consumed by `tsc` (runtime deps imported in 6/2/1/5 files respectively). |
 
 ---
