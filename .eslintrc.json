@@ -16,6 +16,14 @@
         "sourceType": "module"
     },
     "rules": {
+        "@typescript-eslint/no-unused-vars": [
+            "error",
+            {
+                "argsIgnorePattern": "^_",
+                "varsIgnorePattern": "^_",
+                "caughtErrorsIgnorePattern": "^_"
+            }
+        ],
         "vue/multi-word-component-names": 0,
         "indent": "off",
         "vue/html-indent": "off",

@@ -10236,6 +10236,11 @@ libmime@5.4.1:
     libbase64 "1.3.0"
     libqp "2.1.1"
 
+libphonenumber-js@^1.13.11:
+  version "1.13.11"
+  resolved "https://registry.npmmirror.com/libphonenumber-js/-/libphonenumber-js-1.13.11.tgz#72d066a69bc6149b36288c54115a926a8d2d3ce1"
+  integrity sha512-ETER2kMaIFTI/Nh1a8Gk03dUF/SL0VZqtI+CcVHZxp5WIHYwNS7S+uiYZDYCvLy3lOR4/DAD5jf0h5WkePPpqg==
+
 libqp@2.1.1:
   version "2.1.1"
   resolved "https://registry.npmmirror.com/libqp/-/libqp-2.1.1.tgz#f1be767a58f966f500597997cab72cfc1e17abfa"
@@ -15248,6 +15253,11 @@ validate-npm-package-license@^3.0.1:
   dependencies:
     spdx-correct "^3.0.0"
     spdx-expression-parse "^3.0.0"
+
+validator@^13.15.35:
+  version "13.15.35"
+  resolved "https://registry.npmmirror.com/validator/-/validator-13.15.35.tgz#81cf455c51f15b69d8d340be5914f3fab00dbf7f"
+  integrity sha512-TQ5pAGhd5whStmqWvYF4OjQROlmv9SMFVt37qoCBdqRffuuklWYQlCNnEs2ZaIBD1kZRNnikiZOS1eqgkar0iw==
 
 vary@~1.1.2:
   version "1.1.2"

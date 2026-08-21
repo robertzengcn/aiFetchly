@@ -16,7 +16,7 @@
  * - Adapter methods take precedence over configuration-based selectors
  */
 
-import { Page, Browser, ElementHandle, Frame } from "puppeteer";
+import { Page, Browser, ElementHandle } from "puppeteer";
 import type { LaunchOptions } from "puppeteer";
 import sanitizeHtml from "sanitize-html";
 import type { YellowPagesTaskProxyConfig } from "@/entityTypes/yellowPagesTaskProxyType";
@@ -26,9 +26,10 @@ import { runObserveExecuteLoop } from "@/childprocess/utils/ObserveExecuteLoop";
 import { BrowserManager } from "@/modules/browserManager";
 import { ChildProcessAdapterFactory } from "@/modules/ChildProcessAdapterFactory";
 import { BasePlatformAdapter } from "@/modules/BasePlatformAdapter";
-import { ProcessMessage } from "@/entityTypes/processMessage-type";
+import type { PlatformConfig } from "@/modules/interface/IPlatformConfig";
+import type { BusinessData } from "@/modules/interface/IDataExtractor";
+import type { CookiesType } from "@/entityTypes/cookiesType";
 import {
-  StartTaskMessage,
   ProgressMessage,
   CompletedMessage,
   ErrorMessage,
@@ -87,7 +88,7 @@ interface TaskData {
   max_pages: number;
   delay_between_requests: number;
   account_id?: number;
-  cookies?: unknown[];
+  cookies?: CookiesType[];
   headless?: boolean;
   aiSupportEnabled?: boolean;
   localBrowser?: string;
@@ -373,28 +374,101 @@ export class YellowPagesScraper {
     // Use sanitize-html to safely strip dangerous tags and attributes in one pass
     let out = sanitizeHtml(html, {
       allowedTags: [
-        "h1", "h2", "h3", "h4", "h5", "h6", "p", "br", "hr",
-        "ul", "ol", "li", "dl", "dt", "dd",
-        "table", "thead", "tbody", "tfoot", "tr", "td", "th", "caption", "colgroup", "col",
-        "div", "span", "section", "article", "aside", "header", "footer", "nav", "main",
-        "pre", "code", "blockquote", "cite", "em", "strong", "b", "i", "u", "s", "small", "sub", "sup",
-        "a", "img", "figure", "figcaption",
-        "abbr", "address", "bdi", "bdo", "del", "dfn", "ins", "kbd", "mark", "q", "rp", "rt", "ruby", "s", "samp", "time", "var", "wbr",
-        "details", "summary",
-        "input", "select", "option", "textarea", "label", "fieldset", "legend",
-        "audio", "video", "source", "picture",
-        "map", "area",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        "p",
+        "br",
+        "hr",
+        "ul",
+        "ol",
+        "li",
+        "dl",
+        "dt",
+        "dd",
+        "table",
+        "thead",
+        "tbody",
+        "tfoot",
+        "tr",
+        "td",
+        "th",
+        "caption",
+        "colgroup",
+        "col",
+        "div",
+        "span",
+        "section",
+        "article",
+        "aside",
+        "header",
+        "footer",
+        "nav",
+        "main",
+        "pre",
+        "code",
+        "blockquote",
+        "cite",
+        "em",
+        "strong",
+        "b",
+        "i",
+        "u",
+        "s",
+        "small",
+        "sub",
+        "sup",
+        "a",
+        "img",
+        "figure",
+        "figcaption",
+        "abbr",
+        "address",
+        "bdi",
+        "bdo",
+        "del",
+        "dfn",
+        "ins",
+        "kbd",
+        "mark",
+        "q",
+        "rp",
+        "rt",
+        "ruby",
+        "s",
+        "samp",
+        "time",
+        "var",
+        "wbr",
+        "details",
+        "summary",
+        "input",
+        "select",
+        "option",
+        "textarea",
+        "label",
+        "fieldset",
+        "legend",
+        "audio",
+        "video",
+        "source",
+        "picture",
+        "map",
+        "area",
       ],
       allowedAttributes: {
         "*": ["class", "id", "title", "role", "aria-label", "tabindex"],
-        "a": ["href", "target", "rel"],
-        "img": ["src", "alt", "width", "height", "loading"],
-        "td": ["colspan", "rowspan"],
-        "th": ["colspan", "rowspan", "scope"],
-        "input": ["type", "name", "value", "placeholder", "checked", "disabled"],
-        "select": ["name", "disabled"],
-        "option": ["value", "selected", "disabled"],
-        "textarea": ["name", "rows", "cols", "disabled"],
+        a: ["href", "target", "rel"],
+        img: ["src", "alt", "width", "height", "loading"],
+        td: ["colspan", "rowspan"],
+        th: ["colspan", "rowspan", "scope"],
+        input: ["type", "name", "value", "placeholder", "checked", "disabled"],
+        select: ["name", "disabled"],
+        option: ["value", "selected", "disabled"],
+        textarea: ["name", "rows", "cols", "disabled"],
       },
     });
 
@@ -592,7 +666,7 @@ export class YellowPagesScraper {
         const element = await this.page.$(sel);
         if (element) {
           console.log(`✅ Typing into element with selector: ${sel}`);
-          await element.click({ clickCount: 3 }); // Focus and select all
+          await element.click({ count: 3 }); // Focus and select all
           await element.type(text, { delay: 100 });
           return true;
         }
@@ -780,9 +854,9 @@ export class YellowPagesScraper {
    * @returns First matching element or null
    */
   private async tryFindElementInElement(
-    element: any,
+    element: ElementHandle<Element>,
     selector: string
-  ): Promise<any | null> {
+  ): Promise<ElementHandle<Element> | null> {
     if (!element) return null;
 
     const selectors = this.splitSelectors(selector);
@@ -814,9 +888,9 @@ export class YellowPagesScraper {
    * @returns Array of matching elements from the first successful selector
    */
   private async tryFindElementsInElement(
-    element: any,
+    element: ElementHandle<Element>,
     selector: string
-  ): Promise<any[]> {
+  ): Promise<ElementHandle<Element>[]> {
     if (!element) return [];
 
     const selectors = this.splitSelectors(selector);
@@ -851,7 +925,9 @@ export class YellowPagesScraper {
    * @param selector - Selector string that may contain comma-separated selectors
    * @returns Array of ElementHandle from the first successful selector
    */
-  private async tryFindElementHandles(selector: string): Promise<any[]> {
+  private async tryFindElementHandles(
+    selector: string
+  ): Promise<ElementHandle<Element>[]> {
     if (!this.page) return [];
 
     const selectors = this.splitSelectors(selector);
@@ -1088,7 +1164,7 @@ export class YellowPagesScraper {
 
       this.pendingAiRequests.set(requestId, {
         resolve,
-        reject: (reason?: unknown) => {
+        reject: (_reason?: unknown) => {
           // Silently handle timeout rejections to avoid unhandled rejection warnings
           console.debug(`AI request ${requestId} timed out`);
         },
@@ -1267,7 +1343,7 @@ export class YellowPagesScraper {
         );
         this.adapter = await ChildProcessAdapterFactory.createAdapter(
           this.platformInfo.adapterClass,
-          this.platformInfo as any // Cast to PlatformConfig for compatibility
+          this.platformInfo as unknown as PlatformConfig // Cast to PlatformConfig for compatibility
         );
         console.log(
           `✅ Adapter initialized successfully: ${this.platformInfo.adapterClass.className}`
@@ -1634,7 +1710,9 @@ export class YellowPagesScraper {
   /**
    * Apply cookies to the browser page
    */
-  private async applyCookies(cookies: any[]): Promise<void> {
+  private async applyCookies(
+    cookies: ReadonlyArray<CookiesType>
+  ): Promise<void> {
     try {
       if (!this.page) {
         throw new Error("Page is not initialized");
@@ -1660,7 +1738,7 @@ export class YellowPagesScraper {
               ? cookie.expirationDate * 1000
               : undefined,
             httpOnly: cookie.httpOnly || false,
-            secure: cookie.secure || false,
+            secure: cookie.secure,
             sameSite: cookie.sameSite as "Strict" | "Lax" | "None" | undefined,
           };
 
@@ -2481,12 +2559,12 @@ export class YellowPagesScraper {
                   const el = await this.page.$(selector);
                   if (el) {
                     if (field === "keywordInput") {
-                      await el.click({ clickCount: 3 });
+                      await el.click({ count: 3 });
                       await el.type(keyword, {
                         delay: 50 + Math.random() * 80,
                       });
                     } else if (field === "locationInput" && location) {
-                      await el.click({ clickCount: 3 });
+                      await el.click({ count: 3 });
                       await el.type(location, {
                         delay: 50 + Math.random() * 80,
                       });
@@ -2589,7 +2667,7 @@ export class YellowPagesScraper {
       ];
 
       // Fill keyword field with human-like behavior
-      let keywordField: any = null;
+      let keywordField: ElementHandle<Element> | null = null;
       for (const selector of keywordSelectors) {
         keywordField = await this.page.$(selector);
         if (keywordField) {
@@ -2609,7 +2687,7 @@ export class YellowPagesScraper {
       await this.sleep(Math.random() * 300 + 200);
 
       // Fill location field if found
-      let locationField: any = null;
+      let locationField: ElementHandle<Element> | null = null;
       for (const selector of locationSelectors) {
         locationField = await this.page.$(selector);
         if (locationField) {
@@ -2646,7 +2724,8 @@ export class YellowPagesScraper {
     let aiRecoveryAttempted = false;
 
     try {
-      const frame = this.page.mainFrame();
+      const _frame = this.page.mainFrame();
+      void _frame;
       const searchForm = this.platformInfo.selectors.searchForm;
 
       // Fill keyword field if selector exists (main frame to avoid detached iframe)
@@ -2789,7 +2868,8 @@ The initial deterministic filling did not succeed for ${
     if (!this.page || !this.platformInfo.selectors.searchForm) return;
 
     try {
-      const frame = this.page.mainFrame();
+      const _frame = this.page.mainFrame();
+      void _frame;
       const searchForm = this.platformInfo.selectors.searchForm;
 
       if (searchForm.searchButton) {
@@ -3086,7 +3166,7 @@ The initial deterministic filling did not succeed for ${
         `a:contains("${pageNum}")`,
       ];
 
-      let pageLink: any = null;
+      let pageLink: ElementHandle<Element> | null = null;
       for (const selector of paginationSelectors) {
         pageLink = await this.page.$(selector);
         if (pageLink) {
@@ -3406,7 +3486,10 @@ The initial deterministic filling did not succeed for ${
                   );
                 }
               } catch (aiErr: unknown) {
-                console.warn("🤖 AI fallback (no data extracted) failed:", aiErr);
+                console.warn(
+                  "🤖 AI fallback (no data extracted) failed:",
+                  aiErr
+                );
               }
             }
           }
@@ -3421,9 +3504,11 @@ The initial deterministic filling did not succeed for ${
           // so the run can continue with partial results.
           if (this.aiSupportEnabled && this.page) {
             try {
-              const errMsg = error instanceof Error ? error.message : String(error);
-              const currentElement =
-                businessElements[i] as ElementHandle<Element> | undefined;
+              const errMsg =
+                error instanceof Error ? error.message : String(error);
+              const currentElement = businessElements[i] as
+                | ElementHandle<Element>
+                | undefined;
               const pageContent = currentElement
                 ? await this.buildBusinessItemContextForAi(
                     currentElement,
@@ -3446,7 +3531,9 @@ The initial deterministic filling did not succeed for ${
                 pageUrl: this.page.url(),
                 businessName: "Unknown",
                 stepContext: "extract_business_item_error",
-                errorInfo: `Error extracting business info for item ${i + 1}: ${errMsg}. Extract business name and any contact fields from current page HTML.`,
+                errorInfo: `Error extracting business info for item ${
+                  i + 1
+                }: ${errMsg}. Extract business name and any contact fields from current page HTML.`,
                 selectorsAvailable: {
                   businessList: selectors.businessList,
                   businessItem: selectors.businessItem,
@@ -3466,7 +3553,9 @@ The initial deterministic filling did not succeed for ${
                 );
                 results.push(aiResult);
                 console.log(
-                  `🤖 AI recovered extraction for item ${i + 1}: ${aiResult.business_name}`
+                  `🤖 AI recovered extraction for item ${i + 1}: ${
+                    aiResult.business_name
+                  }`
                 );
               }
             } catch (aiErr: unknown) {
@@ -3564,33 +3653,30 @@ The initial deterministic filling did not succeed for ${
       typeof v === "string" ? v.trim() : "";
 
     try {
-      const itemContext = await element.evaluate(
-        (el, sel) => {
-          const pickText = (selector?: string): string => {
-            if (!selector) return "";
-            const target = el.querySelector(selector);
-            return target?.textContent?.trim() || "";
-          };
-          const pickHref = (selector?: string): string => {
-            if (!selector) return "";
-            const target = el.querySelector(selector) as HTMLAnchorElement | null;
-            return target?.href || "";
-          };
+      const itemContext = await element.evaluate((el, sel) => {
+        const pickText = (selector?: string): string => {
+          if (!selector) return "";
+          const target = el.querySelector(selector);
+          return target?.textContent?.trim() || "";
+        };
+        const pickHref = (selector?: string): string => {
+          if (!selector) return "";
+          const target = el.querySelector(selector) as HTMLAnchorElement | null;
+          return target?.href || "";
+        };
 
-          return {
-            outerHTML: (el as HTMLElement).outerHTML || "",
-            innerText: (el as HTMLElement).innerText || "",
-            extracted: {
-              businessName: pickText(sel.businessName),
-              phone: pickText(sel.phone),
-              email: pickText(sel.email),
-              website: pickHref(sel.website),
-              address: pickText(sel.address),
-            },
-          };
-        },
-        selectors
-      );
+        return {
+          outerHTML: (el as HTMLElement).outerHTML || "",
+          innerText: (el as HTMLElement).innerText || "",
+          extracted: {
+            businessName: pickText(sel.businessName),
+            phone: pickText(sel.phone),
+            email: pickText(sel.email),
+            website: pickHref(sel.website),
+            address: pickText(sel.address),
+          },
+        };
+      }, selectors);
 
       const trimmedOuter = safeText(itemContext.outerHTML).slice(0, 10000);
       const trimmedText = safeText(itemContext.innerText).slice(0, 3000);
@@ -3623,8 +3709,8 @@ The initial deterministic filling did not succeed for ${
    * Uses business name, phone, and address to create a reliable identifier
    */
   private async generateBusinessIdentifier(
-    element: any,
-    selectors: any
+    element: ElementHandle<Element>,
+    selectors: PlatformInfo["selectors"]
   ): Promise<string> {
     try {
       const identifierParts: string[] = [];
@@ -3913,7 +3999,7 @@ The initial deterministic filling did not succeed for ${
    */
   private async handleEnhancedPagination(
     currentPage: number,
-    maxPages: number
+    _maxPages: number
   ): Promise<boolean> {
     if (!this.page) return false;
 
@@ -4156,7 +4242,7 @@ The initial deterministic filling did not succeed for ${
    * Navigate to detail page and extract enhanced data
    */
   private async navigateToDetailPageAndExtract(
-    element: any,
+    element: ElementHandle<Element>,
     selectors: PlatformInfo["selectors"],
     basicResult: ScrapingResult
   ): Promise<ScrapingResult | null> {
@@ -4176,15 +4262,16 @@ The initial deterministic filling did not succeed for ${
 
       // Check if the element is clickable (visible and enabled)
       const isClickable = await detailLink.evaluate((el) => {
-        const rect = el.getBoundingClientRect();
-        const style = window.getComputedStyle(el);
+        const node = el as HTMLElement & { disabled?: boolean };
+        const rect = node.getBoundingClientRect();
+        const style = window.getComputedStyle(node);
         return (
           rect.width > 0 &&
           rect.height > 0 &&
           style.display !== "none" &&
           style.visibility !== "hidden" &&
-          !el.disabled &&
-          el.offsetParent !== null
+          !node.disabled &&
+          node.offsetParent !== null
         );
       });
 
@@ -4321,7 +4408,9 @@ The initial deterministic filling did not succeed for ${
   /**
    * Handle detail link click with automatic detection of new tab vs same-tab navigation
    */
-  private async handleDetailLinkClick(detailLink: any): Promise<void> {
+  private async handleDetailLinkClick(
+    detailLink: ElementHandle<Element>
+  ): Promise<void> {
     if (!this.page) return;
 
     try {
@@ -4344,7 +4433,7 @@ The initial deterministic filling did not succeed for ${
       // This promise waits for a new browser tab (page) to be opened after clicking the detail link.
       // It uses Puppeteer's waitForTarget to detect when a new 'page' target appears.
       // We'll wait for any new page target, then validate if it's different from current page.
-      const newPagePromise = new Promise<any>((resolve) => {
+      const newPagePromise = new Promise<Page | null>((resolve) => {
         const browser = this.page?.browser();
         if (!browser) {
           resolve(null);
@@ -4401,10 +4490,14 @@ The initial deterministic filling did not succeed for ${
       );
 
       // Determine the navigation type based on results
+      const settledNewPage =
+        newPageResult.status === "fulfilled" ? newPageResult.value : null;
       let newTabOpened =
-        finalPageCount > initialPageCount &&
-        newPageResult.status === "fulfilled" &&
-        newPageResult.value !== null;
+        finalPageCount > initialPageCount && settledNewPage !== null;
+      // Tracks a new page discovered via the manual fallback below, when the
+      // event-based detection missed it. Used instead of mutating the settled
+      // PromiseSettledResult (which is not type-safe).
+      let manualNewPage: Page | null = null;
       const sameTabNavigated =
         navigationResult.status === "fulfilled" &&
         navigationResult.value !== null;
@@ -4431,17 +4524,14 @@ The initial deterministic filling did not succeed for ${
         if (newPage) {
           console.log("🆕 Found new page manually:", newPage.url());
           newTabOpened = true;
-          // Update the result for the following logic
-          (newPageResult as any).value = newPage;
-          (newPageResult as any).status = "fulfilled";
+          manualNewPage = newPage;
         }
       }
 
       if (newTabOpened) {
         // New tab was opened
         console.log("🆕 New tab detected, switching to it");
-        const newPageInstance = (newPageResult as PromiseFulfilledResult<any>)
-          .value;
+        const newPageInstance = manualNewPage ?? settledNewPage;
 
         // Mark that we're in a new tab scenario (for return navigation)
         this.isInNewTab = true;
@@ -4569,7 +4659,7 @@ The initial deterministic filling did not succeed for ${
    * Find the search results page among open browser pages
    * Uses multiple criteria to identify the correct search results page and avoid error pages
    */
-  private async findSearchResultsPage(pages: any[]): Promise<any | null> {
+  private async findSearchResultsPage(pages: Page[]): Promise<Page | null> {
     if (!pages || pages.length === 0) return null;
 
     console.log("🔍 Searching for search results page among open tabs...");
@@ -5339,7 +5429,7 @@ The initial deterministic filling did not succeed for ${
           ".specialties",
         ];
 
-        const structureInfo: Record<string, any> = {};
+        const structureInfo: Record<string, unknown> = {};
         selectors.forEach((selector) => {
           const info = getElementInfo(selector);
           if (info) {
@@ -5597,7 +5687,7 @@ The initial deterministic filling did not succeed for ${
    * Extract business data from a single element
    */
   private async extractBusinessFromElement(
-    element: any,
+    element: ElementHandle<Element>,
     selectors: PlatformInfo["selectors"]
   ): Promise<ScrapingResult | null> {
     try {
@@ -5708,7 +5798,7 @@ The initial deterministic filling did not succeed for ${
    * Extract text from element - handles page re-rendering and comma-separated selectors
    */
   private async extractText(
-    element: any,
+    element: ElementHandle<Element>,
     selector: string
   ): Promise<string | undefined> {
     if (!selector) return undefined;
@@ -5773,7 +5863,7 @@ The initial deterministic filling did not succeed for ${
    * Extract attribute from element - handles page re-rendering and comma-separated selectors
    */
   private async extractAttribute(
-    element: any,
+    element: ElementHandle<Element>,
     selector: string,
     attribute: string
   ): Promise<string | undefined> {
@@ -5839,7 +5929,7 @@ The initial deterministic filling did not succeed for ${
    * Extract array from element - handles page re-rendering and comma-separated selectors
    */
   private async extractArray(
-    element: any,
+    element: ElementHandle<Element>,
     selector: string
   ): Promise<string[] | undefined> {
     if (!selector) return undefined;
@@ -5914,7 +6004,7 @@ The initial deterministic filling did not succeed for ${
    * Extract number from element
    */
   private async extractNumber(
-    element: any,
+    element: ElementHandle<Element>,
     selector: string
   ): Promise<number | undefined> {
     if (!selector) return undefined;
@@ -5934,7 +6024,7 @@ The initial deterministic filling did not succeed for ${
    * Extract object from element
    */
   private async extractObject(
-    element: any,
+    element: ElementHandle<Element>,
     selector: string
   ): Promise<object | undefined> {
     if (!selector) return undefined;
@@ -5952,10 +6042,12 @@ The initial deterministic filling did not succeed for ${
   /**
    * Extract raw data from element
    */
-  private async extractRawData(element: any): Promise<object | undefined> {
+  private async extractRawData(
+    element: ElementHandle<Element>
+  ): Promise<object | undefined> {
     try {
       return await element.evaluate((el) => {
-        const data: any = {};
+        const data: Record<string, unknown> = {};
         data.innerHTML = el.innerHTML;
         data.textContent = el.textContent;
         data.className = el.className;
@@ -6106,14 +6198,16 @@ The initial deterministic filling did not succeed for ${
         const response = await this.page!.evaluate(() => {
           // This might not work in all contexts, but worth trying
           return (
-            (window as any).performance?.getEntriesByType?.("resource") || []
+            (
+              globalThis as unknown as { performance?: Performance }
+            ).performance?.getEntriesByType?.("resource") || []
           );
         });
 
         // Look for Cloudflare resources in performance entries
         const hasCloudflareResources = response.some(
-          (entry: any) =>
-            entry.name &&
+          (entry: { name?: string }) =>
+            !!entry.name &&
             (entry.name.includes("cloudflare") ||
               entry.name.includes("cf-") ||
               entry.name.includes("challenge"))
@@ -6165,7 +6259,9 @@ The initial deterministic filling did not succeed for ${
    * @param element - The element to check
    * @returns true if the element is visible, false otherwise
    */
-  private async isElementVisible(element: any): Promise<boolean> {
+  private async isElementVisible(
+    element: ElementHandle<Element>
+  ): Promise<boolean> {
     try {
       return await element.evaluate((el: Element) => {
         const style = window.getComputedStyle(el);
@@ -6776,7 +6872,7 @@ The initial deterministic filling did not succeed for ${
       // Click with natural pressure
       await page.mouse.click(clickX, clickY, {
         button: "left",
-        clickCount: 1,
+        count: 1,
         delay: Math.random() * 50 + 25, // 25-75ms delay between mousedown and mouseup
       });
 
@@ -6808,7 +6904,7 @@ The initial deterministic filling did not succeed for ${
       await this.sleep(Math.random() * 200 + 100); // 100-300ms pause
 
       // Clear the field first
-      await element.click({ clickCount: 3 }); // Select all text
+      await element.click({ count: 3 }); // Select all text
       await element.press("Backspace");
       await this.sleep(Math.random() * 100 + 50);
 
@@ -6894,7 +6990,7 @@ The initial deterministic filling did not succeed for ${
         '[data-testid*="submit"]',
       ];
 
-      let submitButton: any = null;
+      let submitButton: ElementHandle<Element> | null = null;
       for (const selector of submitSelectors) {
         submitButton = await this.page.$(selector);
         if (submitButton) {
@@ -7332,7 +7428,7 @@ The initial deterministic filling did not succeed for ${
    * Convert BusinessData to ScrapingResult
    */
   private convertBusinessDataToScrapingResult(
-    businessData: any
+    businessData: BusinessData
   ): ScrapingResult {
     const result: ScrapingResult = {
       business_name: businessData.business_name || "",
@@ -7350,11 +7446,8 @@ The initial deterministic filling did not succeed for ${
       categories: businessData.categories || undefined,
       business_hours: businessData.business_hours || undefined,
       description: businessData.description || undefined,
-      rating: businessData.rating?.score || businessData.rating || undefined,
-      review_count:
-        businessData.rating?.review_count ||
-        businessData.review_count ||
-        undefined,
+      rating: businessData.rating?.score,
+      review_count: businessData.rating?.review_count,
       fax_number: businessData.fax_number || undefined,
       contact_person: businessData.contact_person || undefined,
       year_established: businessData.year_established || undefined,

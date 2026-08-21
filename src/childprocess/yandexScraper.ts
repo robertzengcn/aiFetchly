@@ -1,12 +1,12 @@
 "use strict";
 import { SearchScrape } from "@/childprocess/searchScraper";
-import {
-  ScrapeOptions,
-  SearchData,
-  SearchResult,
-} from "@/entityTypes/scrapeType";
+import { ScrapeOptions, SearchData } from "@/entityTypes/scrapeType";
 import { CustomError } from "@/modules/customError";
-import { TimeoutError, InterceptResolutionAction } from "puppeteer";
+import {
+  TimeoutError,
+  InterceptResolutionAction,
+  HTTPResponse,
+} from "puppeteer";
 import useProxy from "@lem0-packages/puppeteer-page-proxy";
 import { convertProxyServertourl } from "@/modules/lib/function";
 import { hostMatchesAny, ALLOWED_HOSTS } from "@/modules/lib/urlHostAllowlist";
@@ -373,7 +373,7 @@ export class YandexScraper extends SearchScrape {
       }
 
       if (this.last_response) {
-        const status = (this.last_response as any).status();
+        const status = (this.last_response as HTTPResponse).status();
         this.logger.info(`Page loaded with status: ${status}`);
         if (status !== 200) {
           this.logger.warn(
@@ -490,7 +490,7 @@ export class YandexScraper extends SearchScrape {
             );
 
             // Clear any existing text
-            await input.click({ clickCount: 3 });
+            await input.click({ count: 3 });
             await this.page.keyboard.press("Backspace");
 
             // Type keyword with random delays

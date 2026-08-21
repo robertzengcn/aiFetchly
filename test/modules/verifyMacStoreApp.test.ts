@@ -2,7 +2,8 @@ import { expect } from "chai";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import plist from "plist";
+import { createRequire } from "node:module";
+import plist, { type PlistValue } from "plist";
 
 type RunCommand = (command: string, args: readonly string[]) => string;
 
@@ -24,7 +25,9 @@ interface VerifierModule {
   ) => VerificationResult;
 }
 
-const verifier = require("../../scripts/verify-mac-store-app.js") as VerifierModule;
+const require = createRequire(import.meta.url);
+const verifier =
+  require("../../scripts/verify-mac-store-app.js") as VerifierModule;
 
 const MAIN_ENTITLEMENTS = {
   "com.apple.security.app-sandbox": true,
@@ -63,11 +66,10 @@ function createApplicationFixture(root: string, includeHelper = true): string {
 
 function createDependencies(options?: {
   bundleIdentifier?: string;
-  mainEntitlements?: Record<string, unknown>;
-  childEntitlements?: Record<string, unknown>;
+  mainEntitlements?: PlistValue;
+  childEntitlements?: PlistValue;
 }): VerificationDependencies {
-  const bundleIdentifier =
-    options?.bundleIdentifier ?? "com.aifetchly.desktop";
+  const bundleIdentifier = options?.bundleIdentifier ?? "com.aifetchly.desktop";
   const mainEntitlements = options?.mainEntitlements ?? MAIN_ENTITLEMENTS;
   const childEntitlements = options?.childEntitlements ?? CHILD_ENTITLEMENTS;
 
@@ -106,10 +108,7 @@ describe("Mac App Store application verifier", (): void => {
   it("accepts the expected bundle ID and sandboxed Electron helpers", (): void => {
     const appPath = createApplicationFixture(tempDirectory);
 
-    const result = verifier.verifyMacStoreApp(
-      appPath,
-      createDependencies()
-    );
+    const result = verifier.verifyMacStoreApp(appPath, createDependencies());
 
     expect(result).to.deep.equal({
       appPath,
@@ -133,7 +132,7 @@ describe("Mac App Store application verifier", (): void => {
 
   it("rejects a main application without App Sandbox", (): void => {
     const appPath = createApplicationFixture(tempDirectory);
-    const mainEntitlements: Record<string, unknown> = {
+    const mainEntitlements: Record<string, boolean> = {
       ...MAIN_ENTITLEMENTS,
     };
     delete mainEntitlements["com.apple.security.app-sandbox"];
@@ -148,7 +147,7 @@ describe("Mac App Store application verifier", (): void => {
 
   it("rejects a main application without outgoing network access", (): void => {
     const appPath = createApplicationFixture(tempDirectory);
-    const mainEntitlements: Record<string, unknown> = {
+    const mainEntitlements: Record<string, boolean> = {
       ...MAIN_ENTITLEMENTS,
     };
     delete mainEntitlements["com.apple.security.network.client"];
