@@ -88,6 +88,37 @@
         </button>
       </div>
 
+      <!-- Composer-scoped controls (PRD §13.1, FR-012): everything that
+           affects the NEXT message lives at the composer; the context
+           indicator opens the Context inspector (PRD §13.2). -->
+      <div class="composer-controls" data-testid="workspace-composer-controls">
+        <AiChatV2ModeSelector v-model="mode" :disabled="selectedStore.isBusy" />
+        <AiChatV2ModelSelector
+          v-model="selectedModel"
+          :items="availableModels"
+          :default-model="defaultModelId"
+          :disabled="selectedStore.isBusy"
+          :loading="availableModels.length === 0"
+        />
+        <AiChatV2ToolApprovalModeSelector
+          v-model="toolApprovalMode"
+          :disabled="selectedStore.isBusy"
+          @update:model-value="onToolApprovalModeChange"
+        />
+        <button
+          type="button"
+          class="context-indicator"
+          data-testid="workspace-context-indicator"
+          :aria-label="t('workspaceChat.inspector.context') || 'Context'"
+          @click="workspaceStore.openInspector('context')"
+        >
+          <AiChatV2ContextBadge
+            :percent="contextPercent"
+            :used-tokens="contextUsedTokens"
+          />
+        </button>
+      </div>
+
       <!-- Decision dock (PRD §12.4/§12.6): the latest unresolved plan
            decision stays visible even with the inspector closed (FR-058). -->
       <AiChatPlanQuestionFlow
@@ -135,6 +166,24 @@ import { computed, onMounted, onUnmounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import AiChatV2Messages from "@/views/components/aiChatV2/AiChatV2Messages.vue";
 import AiChatV2Composer from "@/views/components/aiChatV2/AiChatV2Composer.vue";
+import AiChatV2ModeSelector from "@/views/components/aiChatV2/AiChatV2ModeSelector.vue";
+import AiChatV2ModelSelector from "@/views/components/aiChatV2/AiChatV2ModelSelector.vue";
+import AiChatV2ToolApprovalModeSelector from "@/views/components/aiChatV2/AiChatV2ToolApprovalModeSelector.vue";
+import AiChatV2ContextBadge from "@/views/components/aiChatV2/AiChatV2ContextBadge.vue";
+import {
+  computeContextPercent,
+  DEFAULT_CONTEXT_WINDOW,
+} from "@/views/components/aiChatV2/contextUsageUtil";
+import type { OpenAIModel } from "@/api/aiChatApi";
+import {
+  getOpenAIChatModels,
+  getChatV2ToolApprovalMode,
+  setChatV2ToolApprovalMode,
+} from "@/views/api/aiChatV2";
+import type {
+  ChatV2Mode,
+  ChatToolApprovalMode,
+} from "@/entityTypes/aiChatV2Types";
 import {
   approveChatV2Plan,
   rejectChatV2Plan,
@@ -225,6 +274,88 @@ const latestPlanState = computed(() => {
   return null;
 });
 
+// ---------------------------------------------------------------------------
+// Composer-scoped controls (PRD §13.1): mode, model, tool approval, context.
+// ---------------------------------------------------------------------------
+const LAST_MODEL_STORAGE_KEY = "ai-chat-v2-last-model";
+const mode = ref<ChatV2Mode>("chat");
+const selectedModel = ref<string | undefined>(undefined);
+const availableModels = ref<OpenAIModel[]>([]);
+const defaultModelId = ref<string | undefined>(undefined);
+const modelContextWindows = ref<Map<string, number>>(new Map());
+const toolApprovalMode = ref<ChatToolApprovalMode>("ask_for_approval");
+
+async function loadModels(): Promise<void> {
+  try {
+    const resp = await getOpenAIChatModels();
+    const data = resp?.data;
+    if (!Array.isArray(data)) return;
+    const validModels = data.filter(
+      (m) => m && typeof m.id === "string" && m.id.length > 0
+    );
+    availableModels.value = validModels;
+    defaultModelId.value = resp?.default_model;
+    const map = new Map<string, number>();
+    for (const model of validModels) {
+      const window =
+        model.context_size ??
+        model.context_window ??
+        model.context_length ??
+        DEFAULT_CONTEXT_WINDOW;
+      if (typeof window === "number" && window > 0) {
+        map.set(model.id, window);
+      }
+    }
+    modelContextWindows.value = map;
+    const saved = localStorage.getItem(LAST_MODEL_STORAGE_KEY) ?? undefined;
+    const usable =
+      saved && validModels.some((m) => m.id === saved)
+        ? saved
+        : defaultModelId.value ?? validModels[0]?.id;
+    selectedModel.value = usable;
+  } catch {
+    // Model list unavailable — "Auto" fallback; sending still works.
+  }
+}
+
+async function loadApprovalMode(conversationId: string): Promise<void> {
+  try {
+    const saved = await getChatV2ToolApprovalMode(conversationId);
+    if (saved) toolApprovalMode.value = saved;
+  } catch {
+    // Default stays ask_for_approval.
+  }
+}
+
+async function onToolApprovalModeChange(
+  next: ChatToolApprovalMode
+): Promise<void> {
+  if (!conversationId.value) return;
+  try {
+    await setChatV2ToolApprovalMode(conversationId.value, next);
+  } catch {
+    // Preference persists on the next change.
+  }
+}
+
+/** Newest server-reported token total for the selected conversation. */
+const contextUsedTokens = computed(() => {
+  for (let i = selectedStore.messages.length - 1; i >= 0; i -= 1) {
+    const tokens = selectedStore.messages[i].tokensUsed;
+    if (typeof tokens === "number" && tokens > 0) return tokens;
+  }
+  return undefined;
+});
+
+const contextPercent = computed(() =>
+  computeContextPercent({
+    modelContextWindows: modelContextWindows.value,
+    lastTotalTokens: contextUsedTokens.value,
+    streamingEstimatedTokens: 0,
+    model: selectedModel.value ?? defaultModelId.value,
+  })
+);
+
 /** Lifecycle-specific plan surface (FR-051): exactly one pinned decision. */
 const planPresentation = computed(() =>
   selectPlanPresentation(selectedStore.messages)
@@ -247,6 +378,7 @@ const planReceipt = computed(() =>
 
 async function onSelectConversation(id: string): Promise<void> {
   await selectedStore.loadSelection(id);
+  void loadApprovalMode(id);
 }
 
 async function onNewChat(): Promise<void> {
@@ -274,7 +406,18 @@ async function onComposerSend(
     // workspace runs take text-only sends until attachment staging moves.
     return;
   }
-  await selectedStore.sendMessage(text);
+  if (selectedModel.value) {
+    try {
+      localStorage.setItem(LAST_MODEL_STORAGE_KEY, selectedModel.value);
+    } catch {
+      // Storage unavailable — session-only preference.
+    }
+  }
+  await selectedStore.sendMessage(text, {
+    model: selectedModel.value,
+    mode: mode.value,
+    toolApprovalMode: toolApprovalMode.value,
+  });
 }
 
 /** Submitted answers persist through the existing durable contract. */
@@ -482,6 +625,7 @@ async function onToggleMode(): Promise<void> {
 
 onMounted(() => {
   void workspaceStore.bootstrap();
+  void loadModels();
   void isWorkspaceRedesignEnabled().then((enabled) => {
     redesignDefault.value = enabled;
     // Dashboard "ask AI" entry (layout passes ?prompt=): seed a fresh chat.
@@ -521,6 +665,29 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   padding-top: 6px;
+}
+
+.composer-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 12px 0;
+  flex-wrap: wrap;
+  flex-shrink: 0;
+}
+
+.context-indicator {
+  border: none;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+  margin-left: auto;
+}
+
+.context-indicator:focus-visible {
+  outline: 2px solid rgb(var(--v-theme-primary));
+  outline-offset: 2px;
+  border-radius: 999px;
 }
 
 .center-state {
