@@ -75,7 +75,10 @@ export function buildLocalEmbeddingWorkerNodePathExtras(
   const delimiter = options.pathDelimiter ?? path.delimiter;
   const parts: string[] = [];
 
-  const runtimeNodeModules = path.join(path.dirname(workerPath), "node_modules");
+  const runtimeNodeModules = path.join(
+    path.dirname(workerPath),
+    "node_modules"
+  );
   if (existsSync(runtimeNodeModules)) {
     parts.push(runtimeNodeModules);
   }
@@ -181,15 +184,15 @@ export class LocalEmbeddingWorkerClient {
 
   /**
    * True when the downloadable embedding-xenova runtime worker path resolves.
-   * When no resolver is wired (tests / unusual setups), returns true so the
-   * bundled fallback path can still be attempted.
+   * When no resolver is wired (tests / unusual setups), returns false (the
+   * bundled fallback path cannot resolve @xenova/transformers).
    */
   public async hasInstalledRuntimeWorker(): Promise<boolean> {
     if (this.workerPathOverride) {
       return true;
     }
     if (!this.workerPathResolver) {
-      return true;
+      return false;
     }
     try {
       const runtimeWorkerPath = await this.workerPathResolver();
