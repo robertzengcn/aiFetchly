@@ -14,6 +14,8 @@ import {
   AI_CHAT_WORKSPACE_MARK_READ,
   AI_CHAT_WORKSPACE_RENAME,
   AI_CHAT_WORKSPACE_ACTIVITY,
+  AI_CHAT_WORKSPACE_GET_FLAG,
+  AI_CHAT_WORKSPACE_SET_FLAG,
   AI_CHAT_WORKSPACE_SUMMARY_EVENT,
   AI_CHAT_WORKSPACE_DETAIL_EVENT,
 } from "@/config/channellist";
@@ -187,4 +189,20 @@ export function subscribeDetailEvents(
   return () => {
     windowRemoveListener(AI_CHAT_WORKSPACE_DETAIL_EVENT, listener);
   };
+}
+
+// ---------------------------------------------------------------------------
+// Rollout flag (PRD §33): default-off redesign with a validated rollback.
+// ---------------------------------------------------------------------------
+
+export async function isWorkspaceRedesignEnabled(): Promise<boolean> {
+  const result = await windowInvoke(AI_CHAT_WORKSPACE_GET_FLAG, {});
+  return (result as { enabled?: boolean } | null)?.enabled === true;
+}
+
+export async function setWorkspaceRedesignEnabled(
+  enabled: boolean
+): Promise<boolean> {
+  const result = await windowInvoke(AI_CHAT_WORKSPACE_SET_FLAG, { enabled });
+  return (result as { enabled?: boolean } | null)?.enabled === enabled;
 }

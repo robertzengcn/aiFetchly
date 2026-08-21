@@ -1,9 +1,11 @@
 <template>
   <div class="workspace-shell" data-testid="workspace-shell">
     <AiChatWorkspaceSidebar
+      :redesign-default="redesignDefault"
       @select="onSelectConversation"
       @new-chat="onNewChat"
       @retry="workspaceStore.bootstrap()"
+      @toggle-mode="onToggleMode"
     />
 
     <main class="workspace-center">
@@ -127,7 +129,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted } from "vue";
+import { computed, onMounted, onUnmounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import AiChatV2Messages from "@/views/components/aiChatV2/AiChatV2Messages.vue";
 import AiChatV2Composer from "@/views/components/aiChatV2/AiChatV2Composer.vue";
@@ -146,7 +148,10 @@ import { useSelectedConversationStore } from "@/views/store/selectedConversation
 import {
   createWorkspaceConversationId,
   renameConversation,
+  isWorkspaceRedesignEnabled,
+  setWorkspaceRedesignEnabled,
 } from "@/views/api/aiChatWorkspace";
+import { useRoute, useRouter } from "vue-router";
 import { MessageType } from "@/entityTypes/commonType";
 import type { ChatV2MessageView } from "@/entityTypes/aiChatV2Types";
 import AiChatPlanQuestionFlow from "./AiChatPlanQuestionFlow.vue";
@@ -163,8 +168,13 @@ import AiChatRunStrip from "./AiChatRunStrip.vue";
 import AiChatInspector from "./AiChatInspector.vue";
 
 const { t } = useI18n();
+const route = useRoute();
+const router = useRouter();
 const workspaceStore = useChatWorkspaceStore();
 const selectedStore = useSelectedConversationStore();
+
+/** Rollout flag state (PRD §33) — drives the footer mode toggle. */
+const redesignDefault = ref(false);
 
 const conversationId = computed(() => workspaceStore.selectedConversationId);
 
@@ -403,8 +413,30 @@ async function onCopyArtifactHtml(artifactId: string): Promise<void> {
   void artifactId;
 }
 
+/** Rollback path: switching to classic re-shows the dock after navigation. */
+async function onToggleMode(): Promise<void> {
+  const next = !redesignDefault.value;
+  try {
+    await setWorkspaceRedesignEnabled(next);
+    redesignDefault.value = next;
+  } catch {
+    // Flag write failed — mode stays unchanged.
+  }
+  if (!next) {
+    void router.push("/dashboard/home");
+  }
+}
+
 onMounted(() => {
   void workspaceStore.bootstrap();
+  void isWorkspaceRedesignEnabled().then((enabled) => {
+    redesignDefault.value = enabled;
+    // Dashboard "ask AI" entry (layout passes ?prompt=): seed a fresh chat.
+    const prompt = route.query.prompt;
+    if (enabled && typeof prompt === "string" && prompt.trim()) {
+      void onNewChat();
+    }
+  });
 });
 
 onUnmounted(() => {

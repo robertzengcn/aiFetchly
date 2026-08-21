@@ -138,6 +138,7 @@ v-if="mainStore.isMobile" variant="text" icon="mdi-menu"
                     <RouterView v-else />
                 </div>
                 <div
+                    v-if="!workspaceRedesignEnabled"
                     class="ai-chat-dock"
                     :class="{ 'dock-open': v2ChatPanelOpen }"
                 >
@@ -227,6 +228,7 @@ import {CommonDialogMsg} from "@/entityTypes/commonType"
 import NoticeSnackbar from '@/views/components/widgets/noticeSnackbar.vue';
 import AiChatBox from '@/views/components/aiChat/AiChatBox.vue';
 import AiChatV2 from '@/views/components/aiChatV2/AiChatV2.vue';
+import { isWorkspaceRedesignEnabled } from '@/views/api/aiChatWorkspace';
 import AiArtifactWorkspace from '@/views/components/aiArtifacts/AiArtifactWorkspace.vue';
 import { getAIArtifact } from '@/views/api/aiArtifacts';
 import type { AIArtifactRecord } from '@/entityTypes/aiArtifactTypes';
@@ -279,6 +281,8 @@ const snaptimeout=ref<number>(10000)
 const messages = ref<MessageItem[]>([]);
 const chatPanelOpen = ref(false);
 const v2ChatPanelOpen = ref(false);
+/** Workspace redesign rollout flag (PRD §33): hides the dock when enabled. */
+const workspaceRedesignEnabled = ref(false);
 // AI artifact workspace — layout-owned temporary preview state. When set,
 // it replaces the route view; closing restores the prior route.
 const activeArtifact = ref<AIArtifactRecord | null>(null);
@@ -443,8 +447,16 @@ const toggleV2ChatPanel = () => {
     }
 }
 
-/** Unified chat toggle: opens V2 when the feature flag is on, legacy chat otherwise. */
+/**
+ * Unified chat toggle. When the workspace redesign flag is on (PRD §33), the
+ * chat experience lives on the /aiworkspace route and the legacy dock stays
+ * unmounted; otherwise the dock behaves exactly as before.
+ */
 const toggleChat = () => {
+    if (workspaceRedesignEnabled.value) {
+        void router.push('/aiworkspace');
+        return;
+    }
     if (aiChatV2Enabled.value) {
         toggleV2ChatPanel();
     } else {
@@ -456,6 +468,11 @@ const openAiChatFromDashboard = (event: Event): void => {
     const detail = (event as CustomEvent<AiChatOpenEventDetail>).detail;
     const text = detail?.prompt?.trim();
     if (!text) return;
+
+    if (workspaceRedesignEnabled.value) {
+        void router.push({ path: '/aiworkspace', query: { prompt: text } });
+        return;
+    }
 
     if (aiChatV2Enabled.value) {
         pendingAiPromptRequest.value = {
@@ -628,6 +645,14 @@ const initializeSavedLanguage = async (): Promise<void> => {
 }
 
 onMounted(async () => {
+    // Rollout flag (PRD §33): read once per Layout mount; the workspace's
+    // mode toggle re-navigates, so a fresh mount picks up any change.
+    try {
+        workspaceRedesignEnabled.value = await isWorkspaceRedesignEnabled();
+    } catch {
+        workspaceRedesignEnabled.value = false;
+    }
+
     await initializeSavedLanguage()
 
     initializeLanguageDetection(async (selectedLanguage): Promise<void> => {

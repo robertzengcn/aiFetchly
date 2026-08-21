@@ -3105,6 +3105,10 @@ export default {
       "Kürzlich geprüft. Bitte warten Sie eine Minute, bevor Sie es erneut versuchen.",
   },
   workspaceChat: {
+    mode: {
+      classic: "Klassischen Chat verwenden",
+      makeDefault: "Zu meinem Standard-Chat machen",
+    },
     newChat: "Neuer Chat",
     automations: "Automatisierungen",
     customize: "Anpassen",

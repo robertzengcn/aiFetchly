@@ -402,6 +402,9 @@ export const AI_CHAT_WORKSPACE_SUMMARY_EVENT =
   "ai-chat-workspace:summary-event";
 /** Main→Renderer: selected-conversation detailed run events. */
 export const AI_CHAT_WORKSPACE_DETAIL_EVENT = "ai-chat-workspace:detail-event";
+/** Rollout flag read/write (PRD §33): redesign on/off with rollback. */
+export const AI_CHAT_WORKSPACE_GET_FLAG = "ai-chat-workspace:get-flag";
+export const AI_CHAT_WORKSPACE_SET_FLAG = "ai-chat-workspace:set-flag";
 
 // AI Provider (Local/Custom) Settings Channels
 export const AI_PROVIDER_SETTINGS_GET = "ai-provider:settings:get";

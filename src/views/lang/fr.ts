@@ -3092,6 +3092,10 @@ export default {
       "Vérifié récemment. Attendez une minute avant de réessayer.",
   },
   workspaceChat: {
+    mode: {
+      classic: "Utiliser le chat classique",
+      makeDefault: "En faire mon chat par défaut",
+    },
     newChat: "Nouvelle discussion",
     automations: "Automatisations",
     customize: "Personnaliser",

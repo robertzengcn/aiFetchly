@@ -3077,6 +3077,10 @@ export default {
       "Checked recently. Please wait a minute before trying again.",
   },
   workspaceChat: {
+    mode: {
+      classic: "Use classic chat",
+      makeDefault: "Make this my default chat",
+    },
     newChat: "New chat",
     automations: "Automations",
     customize: "Customize",

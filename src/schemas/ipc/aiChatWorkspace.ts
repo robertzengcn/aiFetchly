@@ -145,3 +145,15 @@ export type RenameConversationRequestPayload = z.infer<
 export type WorkspaceActivityRequestPayload = z.infer<
   typeof workspaceActivityRequestSchema
 >;
+
+export const workspaceFlagGetRequestSchema = z.object({}).strict();
+
+export const workspaceFlagSetRequestSchema = z
+  .object({
+    enabled: z.boolean(),
+  })
+  .strict();
+
+export type WorkspaceFlagSetRequestPayload = z.infer<
+  typeof workspaceFlagSetRequestSchema
+>;

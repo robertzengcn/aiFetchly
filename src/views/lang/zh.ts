@@ -2954,6 +2954,10 @@ export default {
     cooldown_active: "刚刚已检查，请稍候一分钟后再试。",
   },
   workspaceChat: {
+    mode: {
+      classic: "使用经典聊天",
+      makeDefault: "设为我的默认聊天",
+    },
     newChat: "新聊天",
     automations: "自动化任务",
     customize: "自定义",

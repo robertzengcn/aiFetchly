@@ -14,6 +14,9 @@ export const USERID = "user_id";
 export const USERPLANS = "user_plans";
 export const USER_AI_ENABLED = "user_ai_enabled";
 export const USER_AI_AUTO_PLAN = "user_ai_auto_plan";
+/** Redesigned chat workspace flag (PRD §33 rollout). Default "false" —
+ * classic dock stays the default until Phase-8 acceptance passes. */
+export const USER_AI_CHAT_WORKSPACE_REDESIGN = "user_ai_chat_workspace_redesign";
 /**
  * Desktop float notice when the main AI agent finishes a turn or a plan is
  * ready for approval. Stored in system_setting (AI Preferences toggle).

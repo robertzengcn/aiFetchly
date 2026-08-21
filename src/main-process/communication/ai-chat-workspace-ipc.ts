@@ -1,6 +1,8 @@
 import { ipcMain } from "electron";
 import {
   AI_CHAT_WORKSPACE_BOOTSTRAP,
+  AI_CHAT_WORKSPACE_GET_FLAG,
+  AI_CHAT_WORKSPACE_SET_FLAG,
   AI_CHAT_WORKSPACE_SELECT,
   AI_CHAT_WORKSPACE_UNSUBSCRIBE_DETAIL,
   AI_CHAT_WORKSPACE_START_RUN,
@@ -12,6 +14,8 @@ import {
 } from "@/config/channellist";
 import {
   workspaceBootstrapRequestSchema,
+  workspaceFlagGetRequestSchema,
+  workspaceFlagSetRequestSchema,
   selectConversationRequestSchema,
   unsubscribeDetailRequestSchema,
   startChatRunRequestSchema,
@@ -36,7 +40,10 @@ import {
 } from "@/main-process/communication/ai-chat-v2-ipc";
 import { userSafeError } from "@/service/AIChatErrorMapper";
 import { Token } from "@/modules/token";
-import { USERSDBPATH } from "@/config/usersetting";
+import {
+  USERSDBPATH,
+  USER_AI_CHAT_WORKSPACE_REDESIGN,
+} from "@/config/usersetting";
 import type { CommonMessage } from "@/entityTypes/commonType";
 import type {
   ChatHistoryPageResponse,
@@ -178,6 +185,24 @@ export function registerAiChatWorkspaceIpcHandlers(): void {
       // rows and workspace keys for legacy conversations.
       if (!backfillStarted) {
         backfillStarted = true;
+        // Reconcile abandoned non-terminal runs to `interrupted` BEFORE
+        // bootstrap reports runtime state (design §19.4 / FR-036).
+        try {
+          const reconciled = await new AIChatRunModule().reconcileInterruptedRuns(
+            "Application restarted before the run finished"
+          );
+          if (reconciled > 0) {
+            console.info(
+              `[ai-chat-workspace] reconciled ${reconciled} interrupted run(s)`
+            );
+          }
+        } catch (err) {
+          console.warn(
+            "[ai-chat-workspace] startup run reconciliation failed:",
+            err
+          );
+        }
+        // Backfill missing projection rows and workspace keys (idempotent).
         try {
           await conversationModule.backfillProjections();
           await conversationModule.backfillWorkspaceKeys();
@@ -403,7 +428,34 @@ export function registerAiChatWorkspaceIpcHandlers(): void {
       return denied(userSafeError(err));
     }
   });
+
+  // -------------------------------------------------------------------------
+  // rollout flag (PRD §33): default-off redesign with rollback
+  // -------------------------------------------------------------------------
+  ipcMain.handle(AI_CHAT_WORKSPACE_GET_FLAG, async (_e, data: unknown) => {
+    const parsed = workspaceFlagGetRequestSchema.safeParse(parsePayload(data));
+    if (!parsed.success) {
+      return denied("Invalid flag request");
+    }
+    const enabled =
+      new Token().getValue(USER_AI_CHAT_WORKSPACE_REDESIGN) === "true";
+    return ok({ enabled });
+  });
+
+  ipcMain.handle(AI_CHAT_WORKSPACE_SET_FLAG, async (_e, data: unknown) => {
+    const parsed = workspaceFlagSetRequestSchema.safeParse(parsePayload(data));
+    if (!parsed.success) {
+      return denied("Invalid flag request");
+    }
+    const token = new Token();
+    token.setValue(
+      USER_AI_CHAT_WORKSPACE_REDESIGN,
+      parsed.data.enabled ? "true" : "false"
+    );
+    return ok({ enabled: parsed.data.enabled });
+  });
 }
+
 
 function parsePayload(data: unknown): unknown {
   if (typeof data === "string" && data.length > 0) {

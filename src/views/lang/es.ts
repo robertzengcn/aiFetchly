@@ -3108,6 +3108,10 @@ export default {
       "Comprobado hace poco. Espera un minuto antes de intentarlo de nuevo.",
   },
   workspaceChat: {
+    mode: {
+      classic: "Usar chat clásico",
+      makeDefault: "Hacer este mi chat predeterminado",
+    },
     newChat: "Nuevo chat",
     automations: "Automatizaciones",
     customize: "Personalizar",

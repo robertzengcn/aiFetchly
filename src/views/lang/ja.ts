@@ -3045,6 +3045,10 @@ export default {
       "最近確認しました。しばらく待ってからもう一度お試しください。",
   },
   workspaceChat: {
+    mode: {
+      classic: "クラシックチャットを使う",
+      makeDefault: "既定のチャットにする",
+    },
     newChat: "新しいチャット",
     automations: "オートメーション",
     customize: "カスタマイズ",

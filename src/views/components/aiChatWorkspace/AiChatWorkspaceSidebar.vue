@@ -161,6 +161,29 @@
 
     <!-- Zone 3: fixed account/settings zone (PRD §10.1) -->
     <div class="sidebar-footer">
+      <!-- Rollout mode toggle (PRD §33): switch between the workspace and the
+           classic dock, with a durable rollback path. -->
+      <button
+        type="button"
+        class="global-nav-button"
+        :data-testid="
+          redesignDefault
+            ? 'workspace-mode-classic'
+            : 'workspace-mode-default'
+        "
+        @click="emit('toggle-mode')"
+      >
+        <v-icon
+          :icon="redesignDefault ? 'mdi-chat-outline' : 'mdi-chat-processing-outline'"
+          size="18"
+          aria-hidden="true"
+        />
+        <span>{{
+          redesignDefault
+            ? (t('workspaceChat.mode.classic') || 'Use classic chat')
+            : (t('workspaceChat.mode.makeDefault') || 'Make this my default chat')
+        }}</span>
+      </button>
       <button
         type="button"
         class="global-nav-button"
@@ -183,15 +206,23 @@ import type { WorkspaceConversationSummary } from "@/entityTypes/aiChatWorkspace
 import WorkspaceStatusIndicator from "./WorkspaceStatusIndicator.vue";
 import { conversationStatusVisual, relativeTimeLabel } from "./workspaceStatusUtil";
 
+const props = defineProps<{
+  /** Whether the workspace is the user's durable default chat (flag on). */
+  redesignDefault?: boolean;
+}>();
+
 const emit = defineEmits<{
   (e: "select", conversationId: string): void;
   (e: "new-chat"): void;
   (e: "retry"): void;
+  (e: "toggle-mode"): void;
 }>();
 
 const { t, te } = useI18n();
 const router = useRouter();
 const workspaceStore = useChatWorkspaceStore();
+
+const redesignDefault = computed(() => props.redesignDefault === true);
 
 const searchModel = computed({
   get: () => workspaceStore.searchQuery,
