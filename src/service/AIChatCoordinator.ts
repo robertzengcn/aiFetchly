@@ -8,6 +8,8 @@ import type { AIChatQueryEventSink } from "@/service/AIChatQueryEvents";
 import { AIChatRunModule } from "@/modules/AIChatRunModule";
 import { AIChatConversationModule } from "@/modules/AIChatConversationModule";
 import type { StartChatRunRequestPayload } from "@/schemas/ipc/aiChatWorkspace";
+import { normalizeChatV2UploadedFiles } from "@/main-process/communication/ai-chat-v2-ipc";
+import type { ChatV2UploadedAttachment } from "@/entityTypes/aiChatV2Types";
 import type {
   ChatRunStatus,
   ConversationRuntimeStatus,
@@ -100,6 +102,13 @@ export class AIChatCoordinator {
       resourceClass: request.resourceClass ?? "general",
     });
 
+    // Attachment normalization is shared with the legacy stream path so both
+    // surfaces enforce identical bounds (mime allowlist, image byte caps).
+    const uploadedFiles: ChatV2UploadedAttachment[] | undefined = request
+      .uploadedFiles
+      ? normalizeChatV2UploadedFiles(request.uploadedFiles)
+      : undefined;
+
     const context = await this.resolveConversationContext(
       request.conversationId
     );
@@ -112,7 +121,11 @@ export class AIChatCoordinator {
       terminalChunk: null,
     });
     this.runIndex.set(run.runId, request.conversationId);
-    this.startRequests.set(run.runId, request);
+    this.startRequests.set(run.runId, {
+      ...request,
+      uploadedFiles:
+        uploadedFiles && uploadedFiles.length > 0 ? uploadedFiles : undefined,
+    });
     this.liveUnread.set(request.conversationId, context.unread);
 
     // User-message projection update (preview + generated title once).
@@ -375,6 +388,7 @@ export class AIChatCoordinator {
       showReasoning: request.showReasoning,
       reasoning: request.reasoning,
       toolApprovalMode: request.toolApprovalMode,
+      uploadedFiles: request.uploadedFiles,
     };
   }
 

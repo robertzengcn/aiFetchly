@@ -67,6 +67,13 @@ export interface StartWorkspaceRunRequest {
     | "ask_for_approval"
     | "approve_for_me"
     | "full_access";
+  readonly uploadedFiles?: readonly {
+    fileName: string;
+    mimeType: string;
+    sizeBytes: number;
+    contentBase64: string;
+    kind: "document" | "image";
+  }[];
   readonly resourceClass?: "general";
 }
 

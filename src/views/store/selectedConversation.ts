@@ -36,6 +36,14 @@ export interface SendOptions {
     | "approve_for_me"
     | "full_access";
   readonly showReasoning?: boolean;
+  /** Encoded attachments forwarded through the workspace start-run IPC. */
+  readonly attachments?: readonly {
+    fileName: string;
+    mimeType: string;
+    sizeBytes: number;
+    contentBase64: string;
+    kind: "document" | "image";
+  }[];
 }
 
 /**
@@ -245,6 +253,7 @@ export const useSelectedConversationStore = defineStore(
           mode: options?.mode,
           toolApprovalMode: options?.toolApprovalMode,
           showReasoning: options?.showReasoning,
+          uploadedFiles: options?.attachments,
         });
         activeRunId.value = response.runId;
         runtimeStatus.value = response.status;

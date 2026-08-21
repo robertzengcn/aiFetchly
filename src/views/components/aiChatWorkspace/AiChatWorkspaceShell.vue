@@ -487,15 +487,41 @@ async function onNewChat(): Promise<void> {
   await selectedStore.loadSelection(id);
 }
 
+/** Encode a renderer File into the IPC attachment contract. */
+async function encodeFile(file: File): Promise<{
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+  contentBase64: string;
+  kind: "document" | "image";
+} | null> {
+  const buffer = await file.arrayBuffer();
+  let binary = "";
+  const bytes = new Uint8Array(buffer);
+  const CHUNK = 0x8000;
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+  }
+  return {
+    fileName: file.name,
+    mimeType: file.type || "application/octet-stream",
+    sizeBytes: file.size,
+    contentBase64: btoa(binary),
+    kind: file.type.startsWith("image/") ? "image" : "document",
+  };
+}
+
 async function onComposerSend(
   text: string,
   files: File[]
 ): Promise<void> {
-  if (files.length > 0) {
-    // Attachments still flow through the legacy stream path in this phase;
-    // workspace runs take text-only sends until attachment staging moves.
-    return;
-  }
+  const uploadedFiles =
+    files.length > 0
+      ? (await Promise.all(files.map(encodeFile))).filter(
+          (item): item is NonNullable<Awaited<ReturnType<typeof encodeFile>>> =>
+            item !== null
+        )
+      : undefined;
   if (selectedModel.value) {
     try {
       localStorage.setItem(LAST_MODEL_STORAGE_KEY, selectedModel.value);
@@ -507,6 +533,7 @@ async function onComposerSend(
     model: selectedModel.value,
     mode: mode.value,
     toolApprovalMode: toolApprovalMode.value,
+    attachments: uploadedFiles,
   });
 }
 

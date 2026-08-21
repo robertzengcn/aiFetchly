@@ -85,6 +85,20 @@ export const startChatRunRequestSchema = z
     toolApprovalMode: z
       .enum(["ask_for_approval", "approve_for_me", "full_access"])
       .optional(),
+    uploadedFiles: z
+      .array(
+        z
+          .object({
+            fileName: z.string().min(1).max(255),
+            mimeType: z.string().min(3).max(100),
+            sizeBytes: z.number().int().min(1).max(25_000_000),
+            contentBase64: z.string().min(1).max(34_000_000),
+            kind: z.enum(["document", "image"]),
+          })
+          .strict()
+      )
+      .max(20)
+      .optional(),
     resourceClass: z.literal("general").optional(),
   })
   .strict();
