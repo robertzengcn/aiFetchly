@@ -154,7 +154,7 @@
             ref="fileInput"
             type="file"
             multiple
-            accept=".pdf,.txt,.doc,.docx,.md,.html,.htm,.csv,.xlsx,.xls"
+            accept=".pdf,.txt,.doc,.docx,.md,.html,.htm,.csv,.xlsx,.xls,.pptx,.ppt"
             style="display: none"
             @change="onFileSelect"
           />

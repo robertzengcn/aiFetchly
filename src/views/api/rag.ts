@@ -1,7 +1,5 @@
 import {
   windowInvoke,
-  windowInvokeBinary,
-  windowSend,
   windowSendBinary,
   windowReceive,
   windowRemoveListener,
@@ -11,7 +9,6 @@ import {
   LlmCongfig,
   SaveTempFileResponse,
   ChunkAndEmbedResponse,
-  CommonMessage,
 } from "@/entityTypes/commonType";
 import { ModelInfo } from "@/api/ragConfigApi";
 import {
@@ -568,6 +565,8 @@ export async function selectFilesNative(): Promise<
             "csv",
             "xlsx",
             "xls",
+            "pptx",
+            "ppt",
           ],
         },
         { name: "All Files", extensions: ["*"] },

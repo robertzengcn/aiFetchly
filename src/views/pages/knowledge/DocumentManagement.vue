@@ -194,7 +194,7 @@
           <v-file-input
             v-model="uploadFile"
             :label="t('knowledge.select_file')"
-            accept=".pdf,.txt,.doc,.docx,.html,.md"
+            accept=".pdf,.txt,.doc,.docx,.html,.md,.pptx,.ppt"
             show-size
             @change="onFileSelected"
           />
@@ -345,7 +345,9 @@ const { t } = useI18n();
       { key: 'txt', name: t('knowledge.file_type_text') },
       { key: 'doc', name: t('knowledge.file_type_word') },
       { key: 'html', name: 'HTML' },
-      { key: 'md', name: t('knowledge.file_type_markdown') }
+      { key: 'md', name: t('knowledge.file_type_markdown') },
+      { key: 'pptx', name: 'PPT' },
+      { key: 'ppt', name: 'PPT' }
     ]);
 
     const loadDocuments = async (isAutoRefresh = false) => {
@@ -768,7 +770,9 @@ const { t } = useI18n();
         doc: 'mdi-file-word',
         docx: 'mdi-file-word',
         html: 'mdi-file-code',
-        md: 'mdi-file-markdown'
+        md: 'mdi-file-markdown',
+        pptx: 'mdi-file-powerpoint',
+        ppt: 'mdi-file-powerpoint'
       };
       return icons[fileType] || 'mdi-file';
     };
@@ -781,7 +785,9 @@ const { t } = useI18n();
         doc: 'blue',
         docx: 'blue',
         html: 'orange',
-        md: 'green'
+        md: 'green',
+        pptx: 'deep-orange',
+        ppt: 'deep-orange'
       };
       return colors[fileType] || 'grey';
     };
