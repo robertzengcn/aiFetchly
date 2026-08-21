@@ -1,5 +1,10 @@
 # Documentation Index
 
+## Architecture and Security
+
+- [MCP and Skill OAuth Integration Guidance](./mcp-oauth-integration-guidance.md)
+- [Secure Desktop Auth Handoff Technical Design](./custom-protocol-auth-handoff-security-fix.md)
+
 ## Product Requirements
 
 - [PRD: Contact Verification AI Tool](./prd/contact-verification-ai-tool-prd.md)
