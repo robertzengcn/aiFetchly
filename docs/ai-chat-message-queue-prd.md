@@ -1036,7 +1036,7 @@ None of these questions changes the core product contract: queue by default, ste
 
 ## 23. Recommended Next Artifact
 
-Create `docs/ai-chat-message-queue-technical-design.md` after this PRD is approved. It should specify:
+Implementation details are specified in [AI Chat Message Queue and Steering - Technical Design](./ai-chat-message-queue-technical-design.md), including:
 
 - TypeORM entity and migration shape.
 - Module/Model state-transition queries.
