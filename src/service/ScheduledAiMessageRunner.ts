@@ -5,12 +5,12 @@ import {
   type StreamEvent,
   StreamEventType,
   type ToolFunction,
-  type ToolExecutionResult,
 } from "@/api/aiChatApi";
+import { createOwnerAdapterSink } from "@/service/AIChatRunOwnerAdapter";
+import { sharedSummaryBroadcaster } from "@/service/aiChatWorkspaceRuntime";
 import { Token } from "@/modules/token";
 import { USER_AI_ENABLED, USERSDBPATH } from "@/config/usersetting";
 import { SkillRegistry } from "@/config/skillsRegistry";
-import { SkillExecutor } from "@/service/SkillExecutor";
 import { AiMessageTaskModule } from "@/modules/AiMessageTaskModule";
 import { AiMessageTaskRunModule } from "@/modules/AiMessageTaskRunModule";
 import { AiMessageTaskEntity } from "@/entity/AiMessageTask.entity";
@@ -315,7 +315,7 @@ export class ScheduledAiMessageRunner {
         this.parseTaskPolicy(task)
       );
       const assistantMessageId = `scheduled-assistant-${scheduleId}-${occurrence}`;
-      const sink = new ScheduledLoopEventSink((event) => {
+      const ownerSink = new ScheduledLoopEventSink((event) => {
         // Forward token/done/error chunks for live streaming to a renderer
         // viewing this conversation (technical-design §13.2). Strict routing
         // is enforced renderer-side; forwarding failures are non-fatal.
@@ -338,6 +338,16 @@ export class ScheduledAiMessageRunner {
           });
         }
       });
+      // Workspace owner adapter (design §8.3): keep the shared run envelope
+      // durable and broadcast redacted summaries so background scheduled
+      // work is visible in the redesigned sidebar while the loop's own sink
+      // keeps its renderer streaming contract unchanged.
+      const sink = await createOwnerAdapterSink(ownerSink, {
+        conversationId,
+        owner: "scheduled",
+        sourceId: String(scheduleId),
+        broadcaster: sharedSummaryBroadcaster,
+      });
       await engine.submitMessage({
         eventSink: sink,
         request: {
@@ -357,7 +367,7 @@ export class ScheduledAiMessageRunner {
           assistantMessageId: `scheduled-assistant-${scheduleId}-${occurrence}`,
         },
       });
-      outcome = sink.getOutcome() ?? {
+      outcome = ownerSink.getOutcome() ?? {
         kind: "failed",
         errorMessage: "NO_TERMINAL_EVENT",
       };
@@ -408,7 +418,6 @@ export class ScheduledAiMessageRunner {
     let status: ScheduledAiMessageRunResult["status"] = "failed";
     let assistantMessageId: string | undefined;
     let contentSummary = "";
-    let scheduleTerminal: "failed" | undefined;
     let scheduleSuccess = false;
     let schedulePause = !!pauseSchedule;
     let resultErrorCode = errorCode;
@@ -561,8 +570,6 @@ export class ScheduledAiMessageRunner {
     const startTime = Date.now();
     let assistantMessage = "";
     let toolCallsCount = 0;
-    const continueCalls = 0;
-    const consecutiveToolFailures = 0;
     const blockedToolCalls: BlockedToolCallRecord[] = [];
 
     // Get filtered tool definitions for the AI server
@@ -768,7 +775,7 @@ export class ScheduledAiMessageRunner {
     taskId: number,
     scheduleId: number | undefined,
     errorMessage: string,
-    _errorCode: string
+    errorCode: string
   ): Promise<ScheduledAiMessageRunResult> {
     try {
       const runId = await this.runModule.createRun({
@@ -777,6 +784,9 @@ export class ScheduledAiMessageRunner {
       });
       await this.runModule.failRun(runId, errorMessage);
       await this.taskModule.updateLastRunResult(taskId, null, errorMessage);
+      console.warn(
+        `[scheduled-runner] fail-fast task=${taskId} code=${errorCode}: ${errorMessage}`
+      );
       return {
         runId,
         status: "failed",

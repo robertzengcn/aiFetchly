@@ -32,7 +32,8 @@ import {
   workspaceActivityRequestSchema,
 } from "@/schemas/ipc/aiChatWorkspace";
 import { AIChatCoordinator } from "@/service/AIChatCoordinator";
-import { AIChatEventRouter } from "@/service/AIChatEventRouter";
+import { sharedWorkspaceEventRouter } from "@/service/aiChatWorkspaceRuntime";
+import type { AIChatEventRouter } from "@/service/AIChatEventRouter";
 import { AIChatExecutionScheduler } from "@/service/AIChatExecutionScheduler";
 import { AIChatConversationTurnCoordinator } from "@/service/AIChatConversationTurnCoordinator";
 import { AIChatRunModule } from "@/modules/AIChatRunModule";
@@ -70,7 +71,7 @@ function ok<T>(data: T): CommonMessage<T> {
 // Singletons shared by every workspace handler.
 // ---------------------------------------------------------------------------
 
-const eventRouter = new AIChatEventRouter();
+const eventRouter = sharedWorkspaceEventRouter;
 const scheduler = new AIChatExecutionScheduler();
 
 let coordinatorInstance: AIChatCoordinator | null = null;
