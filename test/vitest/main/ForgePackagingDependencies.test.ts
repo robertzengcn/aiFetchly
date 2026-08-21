@@ -2,8 +2,17 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { minimatch } from "minimatch";
+// minimatch v9's .d.ts declares a namespace (no callable default export) but
+// the runtime default IS the callable function. Import the namespace and pull
+// `.default`; tsc is satisfied by the cast, runtime by the real function.
+import * as minimatchNs from "minimatch";
 import { describe, expect, it } from "vitest";
+
+const minimatch = (
+  minimatchNs as unknown as {
+    default: (p: string, pattern: string, options?: unknown) => boolean;
+  }
+).default;
 
 interface ForgeConfigForTest {
   readonly packagerConfig: {
