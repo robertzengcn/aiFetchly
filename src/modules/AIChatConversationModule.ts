@@ -3,6 +3,8 @@ import { AIChatConversationModel } from "@/model/AIChatConversation.model";
 import { AIChatRunModel, RUN_ACTIVE_STATUSES } from "@/model/AIChatRun.model";
 import { WorkspaceModel } from "@/model/Workspace.model";
 import { AIChatMessageModel } from "@/model/AIChatMessage.model";
+import { AIChatMessageEntity } from "@/entity/AIChatMessage.entity";
+import { AIChatV2Module } from "@/modules/AIChatV2Module";
 import { WorkspaceEntity } from "@/entity/Workspace.entity";
 import { WorkspaceKeyService } from "@/service/WorkspaceKeyService";
 import type {
@@ -259,6 +261,88 @@ export class AIChatConversationModule extends BaseModule {
   async deleteProjection(conversationId: string): Promise<void> {
     await this.ensureConnection();
     await this.convModel().deleteByConversationId(conversationId);
+  }
+
+  /**
+   * Confirmed destructive deletion (PRD §11.5): cascades messages, compact
+   * summaries, session memory, and artifacts via the V2 module, then removes
+   * the workspace binding and the sidebar projection row.
+   */
+  async deleteConversation(conversationId: string): Promise<void> {
+    await this.ensureConnection();
+    const v2 = new AIChatV2Module();
+    await v2.clearConversation(conversationId);
+    await this.workspaceModel().repository.delete({ conversationId });
+    await this.convModel().deleteByConversationId(conversationId);
+  }
+
+  /**
+   * Duplicate a conversation from allowed durable content (design §11.2):
+   * message rows are copied under a fresh conversation id with new message
+   * ids; artifacts stay owned by the original conversation.
+   */
+  async duplicateConversation(conversationId: string): Promise<string | null> {
+    await this.ensureConnection();
+    const messageModel = this.messageModel();
+    const rows = await messageModel.getMessagesByConversation(conversationId);
+    if (rows.length === 0) return null;
+
+    const newConversationId = `v2-${
+      typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+        ? crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+    }`;
+    for (const row of rows) {
+      const copy = new AIChatMessageEntity();
+      copy.messageId = `dup-${row.messageId}-${
+        typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+          ? crypto.randomUUID()
+          : Date.now()
+      }`;
+      copy.conversationId = newConversationId;
+      copy.role = row.role;
+      copy.content = row.content;
+      copy.timestamp = row.timestamp;
+      copy.model = row.model;
+      copy.tokensUsed = row.tokensUsed;
+      copy.metadata = row.metadata;
+      copy.messageType = row.messageType;
+      await messageModel.saveMessage(copy);
+    }
+
+    const source = await this.convModel().getByConversationId(conversationId);
+    const binding = await this.workspaceModel().findByConversation(conversationId);
+    await this.convModel().createProjection({
+      conversationId: newConversationId,
+      workspaceKey: binding?.rootPath ? source?.workspaceKey ?? null : source?.workspaceKey ?? null,
+      title: source?.title ?? null,
+      preview: source?.preview ?? "",
+      createdAt: new Date(),
+    });
+    return newConversationId;
+  }
+
+  /** Full transcript for export (bounded views; renderer triggers download). */
+  async exportConversation(conversationId: string): Promise<
+    Array<{
+      id: string;
+      role: string;
+      content: string;
+      timestamp: string;
+      messageType: string;
+      model?: string | null;
+    }>
+  > {
+    await this.ensureConnection();
+    const rows = await this.messageModel().getMessagesByConversation(conversationId);
+    return rows.map((row) => ({
+      id: row.messageId,
+      role: row.role,
+      content: row.content,
+      timestamp: row.timestamp.toISOString(),
+      messageType: row.messageType,
+      model: row.model,
+    }));
   }
 
   /**

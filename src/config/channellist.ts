@@ -396,6 +396,9 @@ export const AI_CHAT_WORKSPACE_CANCEL_RUN = "ai-chat-workspace:cancel-run";
 export const AI_CHAT_WORKSPACE_HISTORY_PAGE = "ai-chat-workspace:history-page";
 export const AI_CHAT_WORKSPACE_MARK_READ = "ai-chat-workspace:mark-read";
 export const AI_CHAT_WORKSPACE_RENAME = "ai-chat-workspace:rename";
+export const AI_CHAT_WORKSPACE_DELETE = "ai-chat-workspace:delete";
+export const AI_CHAT_WORKSPACE_DUPLICATE = "ai-chat-workspace:duplicate";
+export const AI_CHAT_WORKSPACE_EXPORT = "ai-chat-workspace:export";
 export const AI_CHAT_WORKSPACE_ACTIVITY = "ai-chat-workspace:activity";
 /** Main→Renderer: redacted sidebar projection updates (no content bodies). */
 export const AI_CHAT_WORKSPACE_SUMMARY_EVENT =

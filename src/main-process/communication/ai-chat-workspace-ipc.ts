@@ -10,6 +10,9 @@ import {
   AI_CHAT_WORKSPACE_HISTORY_PAGE,
   AI_CHAT_WORKSPACE_MARK_READ,
   AI_CHAT_WORKSPACE_RENAME,
+  AI_CHAT_WORKSPACE_DELETE,
+  AI_CHAT_WORKSPACE_DUPLICATE,
+  AI_CHAT_WORKSPACE_EXPORT,
   AI_CHAT_WORKSPACE_ACTIVITY,
 } from "@/config/channellist";
 import {
@@ -23,6 +26,9 @@ import {
   historyPageRequestSchema,
   markConversationReadRequestSchema,
   renameConversationRequestSchema,
+  deleteConversationRequestSchema,
+  duplicateConversationRequestSchema,
+  exportConversationRequestSchema,
   workspaceActivityRequestSchema,
 } from "@/schemas/ipc/aiChatWorkspace";
 import { AIChatCoordinator } from "@/service/AIChatCoordinator";
@@ -389,6 +395,64 @@ export function registerAiChatWorkspaceIpcHandlers(): void {
         parsed.data.title
       );
       return ok({ renamed });
+    } catch (err) {
+      return denied(userSafeError(err));
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  // delete / duplicate / export (PRD §11.5 overflow actions)
+  // -------------------------------------------------------------------------
+  ipcMain.handle(AI_CHAT_WORKSPACE_DELETE, async (_e, data: unknown) => {
+    try {
+      const parsed = deleteConversationRequestSchema.safeParse(
+        parsePayload(data)
+      );
+      if (!parsed.success) {
+        return denied("Invalid delete request");
+      }
+      await new AIChatConversationModule().deleteConversation(
+        parsed.data.conversationId
+      );
+      return ok({ deleted: true });
+    } catch (err) {
+      return denied(userSafeError(err));
+    }
+  });
+
+  ipcMain.handle(AI_CHAT_WORKSPACE_DUPLICATE, async (_e, data: unknown) => {
+    try {
+      const parsed = duplicateConversationRequestSchema.safeParse(
+        parsePayload(data)
+      );
+      if (!parsed.success) {
+        return denied("Invalid duplicate request");
+      }
+      const conversationModule = new AIChatConversationModule();
+      const newConversationId = await conversationModule.duplicateConversation(
+        parsed.data.conversationId
+      );
+      if (!newConversationId) {
+        return denied("Conversation has no content to duplicate");
+      }
+      return ok({ conversationId: newConversationId });
+    } catch (err) {
+      return denied(userSafeError(err));
+    }
+  });
+
+  ipcMain.handle(AI_CHAT_WORKSPACE_EXPORT, async (_e, data: unknown) => {
+    try {
+      const parsed = exportConversationRequestSchema.safeParse(
+        parsePayload(data)
+      );
+      if (!parsed.success) {
+        return denied("Invalid export request");
+      }
+      const messages = await new AIChatConversationModule().exportConversation(
+        parsed.data.conversationId
+      );
+      return ok({ conversationId: parsed.data.conversationId, messages });
     } catch (err) {
       return denied(userSafeError(err));
     }

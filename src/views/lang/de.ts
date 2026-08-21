@@ -3157,6 +3157,9 @@ export default {
       compact: "Unterhaltung komprimieren",
       clear: "Nachrichten löschen",
       clearConfirm: "Alle Nachrichten dieser Unterhaltung löschen?",
+      export: "Unterhaltung exportieren",
+      duplicate: "Unterhaltung duplizieren",
+      deleteConfirm: "Diese Unterhaltung löschen? Alle Nachrichten und generierten Artefakte werden entfernt. Dies kann nicht rückgängig gemacht werden.",
       delete: "Chat löschen",
     },
     runStrip: {

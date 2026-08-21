@@ -114,6 +114,26 @@ export const renameConversationRequestSchema = z
   })
   .strict();
 
+/** Confirmed destructive deletion (PRD §11.5) — renderer confirms first. */
+export const deleteConversationRequestSchema = z
+  .object({
+    conversationId: conversationIdSchema,
+    confirm: z.literal(true),
+  })
+  .strict();
+
+export const duplicateConversationRequestSchema = z
+  .object({
+    conversationId: conversationIdSchema,
+  })
+  .strict();
+
+export const exportConversationRequestSchema = z
+  .object({
+    conversationId: conversationIdSchema,
+  })
+  .strict();
+
 export const workspaceActivityRequestSchema = z
   .object({
     conversationId: conversationIdSchema,

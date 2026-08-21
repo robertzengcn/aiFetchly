@@ -63,6 +63,20 @@
           />
           <v-list-item
             role="menuitem"
+            :title="t('workspaceChat.header.export') || 'Export conversation'"
+            prepend-icon="mdi-download-outline"
+            data-testid="workspace-overflow-export"
+            @click="emit('export')"
+          />
+          <v-list-item
+            role="menuitem"
+            :title="t('workspaceChat.header.duplicate') || 'Duplicate conversation'"
+            prepend-icon="mdi-content-copy"
+            data-testid="workspace-overflow-duplicate"
+            @click="emit('duplicate')"
+          />
+          <v-list-item
+            role="menuitem"
             :title="t('workspaceChat.header.compact') || 'Compact conversation'"
             prepend-icon="mdi-collapse-all-outline"
             data-testid="workspace-overflow-compact"
@@ -116,6 +130,8 @@ const emit = defineEmits<{
   (e: "open-status"): void;
   (e: "rename"): void;
   (e: "compact"): void;
+  (e: "export"): void;
+  (e: "duplicate"): void;
   (e: "clear"): void;
   (e: "delete"): void;
 }>();

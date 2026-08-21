@@ -3160,6 +3160,9 @@ export default {
       compact: "Compactar conversación",
       clear: "Borrar mensajes",
       clearConfirm: "¿Borrar todos los mensajes de esta conversación?",
+      export: "Exportar conversación",
+      duplicate: "Duplicar conversación",
+      deleteConfirm: "¿Eliminar esta conversación? Se quitarán todos los mensajes y artefactos generados. No se puede deshacer.",
       delete: "Eliminar chat",
     },
     runStrip: {

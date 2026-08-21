@@ -13,6 +13,9 @@ import {
   AI_CHAT_WORKSPACE_HISTORY_PAGE,
   AI_CHAT_WORKSPACE_MARK_READ,
   AI_CHAT_WORKSPACE_RENAME,
+  AI_CHAT_WORKSPACE_DELETE,
+  AI_CHAT_WORKSPACE_DUPLICATE,
+  AI_CHAT_WORKSPACE_EXPORT,
   AI_CHAT_WORKSPACE_ACTIVITY,
   AI_CHAT_WORKSPACE_GET_FLAG,
   AI_CHAT_WORKSPACE_SET_FLAG,
@@ -205,4 +208,35 @@ export async function setWorkspaceRedesignEnabled(
 ): Promise<boolean> {
   const result = await windowInvoke(AI_CHAT_WORKSPACE_SET_FLAG, { enabled });
   return (result as { enabled?: boolean } | null)?.enabled === enabled;
+}
+
+export interface ExportedConversationMessage {
+  readonly id: string;
+  readonly role: string;
+  readonly content: string;
+  readonly timestamp: string;
+  readonly messageType: string;
+  readonly model?: string | null;
+}
+
+/** Confirmed destructive deletion — the renderer asks the user first. */
+export async function deleteConversation(
+  conversationId: string
+): Promise<{ deleted: boolean }> {
+  return windowInvoke(AI_CHAT_WORKSPACE_DELETE, {
+    conversationId,
+    confirm: true,
+  });
+}
+
+export async function duplicateConversation(
+  conversationId: string
+): Promise<{ conversationId: string }> {
+  return windowInvoke(AI_CHAT_WORKSPACE_DUPLICATE, { conversationId });
+}
+
+export async function exportConversation(
+  conversationId: string
+): Promise<{ conversationId: string; messages: ExportedConversationMessage[] }> {
+  return windowInvoke(AI_CHAT_WORKSPACE_EXPORT, { conversationId });
 }

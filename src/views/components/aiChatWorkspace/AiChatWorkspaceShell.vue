@@ -20,8 +20,10 @@
         @open-status="workspaceStore.openInspector('activity')"
         @rename="onRename"
         @compact="onCompact"
+        @export="onExport"
+        @duplicate="onDuplicate"
         @clear="onClear"
-        @delete="onClear"
+        @delete="onDelete"
       />
 
       <AiChatRunStrip
@@ -148,6 +150,9 @@ import { useSelectedConversationStore } from "@/views/store/selectedConversation
 import {
   createWorkspaceConversationId,
   renameConversation,
+  deleteConversation,
+  duplicateConversation,
+  exportConversation,
   isWorkspaceRedesignEnabled,
   setWorkspaceRedesignEnabled,
 } from "@/views/api/aiChatWorkspace";
@@ -326,6 +331,54 @@ async function onCompact(): Promise<void> {
     await compactChatV2Conversation(conversationId.value);
   } catch {
     // Non-fatal — the run strip still shows progress.
+  }
+}
+
+/** Export downloads the full transcript as JSON (PRD §11.5). */
+async function onExport(): Promise<void> {
+  if (!conversationId.value) return;
+  try {
+    const transcript = await exportConversation(conversationId.value);
+    const blob = new Blob([JSON.stringify(transcript, null, 2)], {
+      type: "application/json",
+    });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `conversation-${conversationId.value}.json`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  } catch {
+    // Non-fatal — export can be retried.
+  }
+}
+
+/** Duplicate copies durable content into a fresh conversation. */
+async function onDuplicate(): Promise<void> {
+  if (!conversationId.value) return;
+  try {
+    const result = await duplicateConversation(conversationId.value);
+    await workspaceStore.bootstrap();
+    await selectedStore.loadSelection(result.conversationId);
+  } catch {
+    // Non-fatal — duplication can be retried.
+  }
+}
+
+/** Confirmed destructive deletion cascades messages, artifacts, and the row. */
+async function onDelete(): Promise<void> {
+  if (!conversationId.value) return;
+  const confirmed = window.confirm(
+    t("workspaceChat.header.deleteConfirm") ||
+      "Delete this conversation? All messages and generated artifacts will be removed. This cannot be undone."
+  );
+  if (!confirmed) return;
+  try {
+    await deleteConversation(conversationId.value);
+    await workspaceStore.bootstrap();
+    await selectedStore.loadSelection(null);
+  } catch {
+    // Non-fatal — deletion can be retried.
   }
 }
 
