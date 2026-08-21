@@ -1,14 +1,47 @@
 <template>
-  <div class="workspace-shell" data-testid="workspace-shell">
+  <div
+    class="workspace-shell"
+    :data-viewport="viewport"
+    data-testid="workspace-shell"
+  >
+    <!-- Narrow (FR-006): the sidebar is a separate overlay surface with a
+         backdrop; selection or Back returns to the conversation. -->
+    <div
+      v-if="viewport === 'narrow' && sidebarOpen"
+      class="sidebar-backdrop"
+      data-testid="workspace-sidebar-backdrop"
+      @click="sidebarOpen = false"
+    />
     <AiChatWorkspaceSidebar
+      v-if="viewport !== 'narrow' || sidebarOpen"
       :redesign-default="redesignDefault"
-      @select="onSelectConversation"
-      @new-chat="onNewChat"
+      @select="
+        (id) => {
+          sidebarOpen = false;
+          void onSelectConversation(id);
+        }
+      "
+      @new-chat="
+        () => {
+          sidebarOpen = false;
+          void onNewChat();
+        }
+      "
       @retry="workspaceStore.bootstrap()"
       @toggle-mode="onToggleMode"
     />
 
     <main class="workspace-center">
+      <button
+        v-if="viewport === 'narrow'"
+        type="button"
+        class="sidebar-toggle"
+        :aria-label="t('workspaceChat.sidebar.region') || 'Chat workspaces'"
+        data-testid="workspace-sidebar-toggle"
+        @click="sidebarOpen = !sidebarOpen"
+      >
+        <v-icon icon="mdi-menu" size="20" aria-hidden="true" />
+      </button>
       <AiChatConversationHeader
         :title="headerTitle"
         :runtime-status="selectedStore.runtimeStatus"
@@ -154,11 +187,13 @@
       v-if="workspaceStore.inspectorOpen"
       :active-tab="workspaceStore.inspectorTab"
       :width="workspaceStore.inspectorWidth"
+      :overlay="viewport !== 'wide'"
       :conversation-id="conversationId"
       :messages="[...selectedStore.messages]"
       @update:tab="workspaceStore.setInspectorTab"
       @update:width="workspaceStore.setInspectorWidth"
       @compact="onCompact"
+      @close="workspaceStore.toggleInspector()"
     />
   </div>
 </template>
@@ -233,6 +268,15 @@ const selectedStore = useSelectedConversationStore();
 
 /** Rollout flag state (PRD §33) — drives the footer mode toggle. */
 const redesignDefault = ref(false);
+
+/** Narrow/medium/wide layout mode from measured width (design §15.8). */
+const viewport = ref<"wide" | "medium" | "narrow">("wide");
+const sidebarOpen = ref(false);
+
+function updateViewport(): void {
+  const width = window.innerWidth;
+  viewport.value = width < 900 ? "narrow" : width < 1280 ? "medium" : "wide";
+}
 
 const conversationId = computed(() => workspaceStore.selectedConversationId);
 
@@ -663,6 +707,8 @@ async function onToggleMode(): Promise<void> {
 }
 
 onMounted(() => {
+  updateViewport();
+  window.addEventListener("resize", updateViewport);
   void workspaceStore.bootstrap();
   void loadModels();
   void isWorkspaceRedesignEnabled().then((enabled) => {
@@ -676,6 +722,7 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
+  window.removeEventListener("resize", updateViewport);
   selectedStore.teardown();
   workspaceStore.teardown();
 });
@@ -691,6 +738,50 @@ onUnmounted(() => {
   color: rgba(var(--v-theme-on-surface), 0.9);
 }
 
+/* FR-006: narrow — sidebar + inspector are separate overlay surfaces. */
+.workspace-shell[data-viewport="narrow"] .workspace-sidebar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  max-width: 86vw;
+  z-index: 40;
+  box-shadow: 6px 0 24px rgba(0, 0, 0, 0.2);
+}
+
+.sidebar-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.32);
+  z-index: 35;
+}
+
+.sidebar-toggle {
+  position: absolute;
+  top: 7px;
+  left: 8px;
+  z-index: 10;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: rgba(var(--v-theme-on-surface), 0.75);
+  cursor: pointer;
+}
+
+.sidebar-toggle:focus-visible {
+  outline: 2px solid rgb(var(--v-theme-primary));
+}
+
+/* Medium: the shell positions the inspector overlay relative to the shell. */
+.workspace-shell {
+  position: relative;
+}
+
 .workspace-center {
   flex: 1;
   min-width: 0;
@@ -704,6 +795,10 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   padding-top: 6px;
+}
+
+.workspace-shell[data-viewport="narrow"] .conversation-header {
+  padding-left: 48px;
 }
 
 .composer-controls {
