@@ -1,6 +1,12 @@
 import { SandboxedSkillExecutor } from "@/service/SandboxedSkillExecutor";
+import { log } from "@/modules/Logger";
 import type { SkillExecutionContext } from "@/entityTypes/skillTypes";
 import type { HookInput, HookOutput } from "@/entityTypes/hookTypes";
+import {
+  skillWorkerInboundSchema,
+  type SkillWorkerInbound,
+} from "@/schemas/worker/skillWorker";
+import { parseWorkerMessage } from "@/schemas/worker/_shared";
 
 interface ExecuteSkillMessage {
   type: "EXECUTE_SKILL";
@@ -65,7 +71,7 @@ function postMessageSafe(
   } catch (postError) {
     const errorMessage =
       postError instanceof Error ? postError.message : String(postError);
-    console.error(`[SkillWorker] Failed to post message: ${errorMessage}`);
+    log.error(`[SkillWorker] Failed to post message: ${errorMessage}`);
   }
 }
 
@@ -78,22 +84,6 @@ function sendFatalErrorToActiveRequests(error: unknown): void {
       error: errorMessage,
     });
   }
-}
-
-function validateExecuteSkillMessage(parsed: unknown): ExecuteSkillMessage {
-  const message = parsed as Partial<ExecuteSkillMessage>;
-  if (
-    message.type !== "EXECUTE_SKILL" ||
-    typeof message.requestId !== "string" ||
-    typeof message.code !== "string" ||
-    typeof message.args !== "object" ||
-    message.args === null ||
-    typeof message.context !== "object" ||
-    message.context === null
-  ) {
-    throw new Error("Invalid EXECUTE_SKILL message payload");
-  }
-  return message as ExecuteSkillMessage;
 }
 
 function validateExecuteHookMessage(parsed: unknown): ExecuteHookMessage {
@@ -137,19 +127,37 @@ if (parentPort) {
       if (
         typeof parsed === "object" &&
         parsed !== null &&
-        "requestId" in parsed &&
         typeof (parsed as { requestId?: unknown }).requestId === "string"
       ) {
         requestId = (parsed as { requestId: string }).requestId;
       }
-      const message = validateExecuteSkillMessage(parsed);
+      // WS-4 R4.6: validate the inbound message via Zod safeParse (replaces the
+      // hand-written validateExecuteSkillMessage type-guard). Malformed → drop
+      // with a SKILL_ERROR reply, never crash.
+      const validation = parseWorkerMessage<SkillWorkerInbound>(
+        parsed,
+        skillWorkerInboundSchema()
+      );
+      if (!validation.success) {
+        log.warn(
+          "[SkillWorker] dropped malformed EXECUTE_SKILL:",
+          validation.error
+        );
+        postMessageSafe({
+          type: "SKILL_ERROR",
+          requestId,
+          error: "Invalid EXECUTE_SKILL message payload",
+        });
+        return;
+      }
+      const message = validation.data;
       requestId = message.requestId;
       activeRequestIds.add(requestId);
 
       const result = await SandboxedSkillExecutor.execute(
         message.code,
         message.args,
-        message.context
+        message.context as unknown as SkillExecutionContext
       );
 
       postMessageSafe({
@@ -172,13 +180,13 @@ if (parentPort) {
 }
 
 process.on("uncaughtException", (error: unknown) => {
-  console.error("[SkillWorker] Uncaught exception:", error);
+  log.error("[SkillWorker] Uncaught exception:", error);
   sendFatalErrorToActiveRequests(error);
   process.exit(1);
 });
 
 process.on("unhandledRejection", (reason: unknown) => {
-  console.error("[SkillWorker] Unhandled rejection:", reason);
+  log.error("[SkillWorker] Unhandled rejection:", reason);
   sendFatalErrorToActiveRequests(reason);
   process.exit(1);
 });

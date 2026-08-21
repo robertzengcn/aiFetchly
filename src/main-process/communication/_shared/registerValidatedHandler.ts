@@ -24,7 +24,8 @@ export function registerValidatedHandler<TInput, TOutput>(
     // windowInvoke in apirequest.ts sends JSON.stringify(data) through IPC,
     // resulting in a string on this side. Parse it if needed so the zod
     // schema receives an object instead of a string.
-    const input = typeof raw === "string" ? JSON.parse(raw) : raw;
+    const input =
+      typeof raw === "string" && raw.length > 0 ? JSON.parse(raw) : raw;
     const parsed = schema().safeParse(input);
     if (!parsed.success) {
       const msg = formatZodValidationError(channel, parsed.error);
@@ -74,7 +75,8 @@ export function registerAiValidatedHandler<TInput, TOutput>(
 
     // 2. schema 校验
     // (same JSON.parse handling as above — apirequest.ts sends stringified data)
-    const input = typeof raw === "string" ? JSON.parse(raw) : raw;
+    const input =
+      typeof raw === "string" && raw.length > 0 ? JSON.parse(raw) : raw;
     const parsed = schema().safeParse(input);
     if (!parsed.success) {
       const msg = formatZodValidationError(channel, parsed.error);

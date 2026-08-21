@@ -16,6 +16,7 @@ import { WorkspaceResolver } from "@/service/WorkspaceResolver";
 import { AIFetchlyContextLoader } from "@/service/aifetchlyConfig/AIFetchlyContextLoader";
 import { buildAvailableAgentsBlock } from "@/service/aifetchlyConfig/availableAgentsBlock";
 import { buildBuiltInToolCapabilitiesSection } from "@/service/BuiltInToolCapabilitiesPromptSection";
+import { augmentContentWithGeneratedImages } from "@/service/AIChatGeneratedImageContextService";
 import path from "node:path";
 import os from "node:os";
 import type {
@@ -26,6 +27,7 @@ import type {
 } from "@/api/aiChatApi";
 import { MessageType } from "@/entityTypes/commonType";
 import type { AIChatPlanStateView } from "@/entityTypes/aiChatPlanTypes";
+import { log } from "@/modules/Logger";
 
 const DEFAULT_RECENT_MESSAGE_WINDOW = 30;
 
@@ -140,7 +142,7 @@ export class AIChatContextAssembler {
         messages.push({ role: "system", content: customDirective });
       }
     } catch (err) {
-      console.error(
+      log.error(
         "[ai-chat-context] failed to read custom context directive:",
         err
       );
@@ -160,7 +162,7 @@ export class AIChatContextAssembler {
         });
       }
     } catch (err) {
-      console.error(
+      log.error(
         "[ai-chat-context] failed to resolve active workspace:",
         err
       );
@@ -173,7 +175,7 @@ export class AIChatContextAssembler {
       const envBlock = await this.buildEnvironmentContext();
       messages.push({ role: "system", content: envBlock });
     } catch (err) {
-      console.error(
+      log.error(
         "[ai-chat-context] failed to build environment context:",
         err
       );
@@ -193,7 +195,7 @@ export class AIChatContextAssembler {
         });
       }
     } catch (err) {
-      console.error(
+      log.error(
         "[ai-chat-context] aifetchly instructions injection failed:",
         err
       );
@@ -209,7 +211,7 @@ export class AIChatContextAssembler {
         messages.push({ role: "system", content: agentsBlock });
       }
     } catch (err) {
-      console.error(
+      log.error(
         "[ai-chat-context] available agents injection failed:",
         err
       );
@@ -229,7 +231,7 @@ export class AIChatContextAssembler {
         content: buildBuiltInToolCapabilitiesSection(),
       });
     } catch (err) {
-      console.error(
+      log.error(
         "[ai-chat-context] built-in tool capabilities injection failed:",
         err
       );
@@ -254,7 +256,7 @@ export class AIChatContextAssembler {
       );
       workspaceInjectionEnabled = wv !== "false";
     } catch (err) {
-      console.error(
+      log.error(
         "[ai-chat-context] failed to read workspace memory injection toggle:",
         err
       );
@@ -273,7 +275,7 @@ export class AIChatContextAssembler {
         workspaceContextBlock = workspaceMem.contextBlock;
         workspaceMemoryCount = workspaceMem.memories.length;
       } catch (err) {
-        console.error(
+        log.error(
           "[ai-chat-context] workspace memory retrieval failed:",
           err
         );
@@ -289,7 +291,7 @@ export class AIChatContextAssembler {
       );
       injectionEnabled = v !== "false";
     } catch (err) {
-      console.error(
+      log.error(
         "[ai-chat-context] failed to read memory injection toggle:",
         err
       );
@@ -308,7 +310,7 @@ export class AIChatContextAssembler {
         durableContextBlock = durable.contextBlock;
         durableMemoryCount = durable.memories.length;
       } catch (err) {
-        console.error(
+        log.error(
           "[ai-chat-context] durable memory retrieval failed:",
           err
         );
@@ -331,7 +333,14 @@ export class AIChatContextAssembler {
     }
 
     for (const r of trimmedRecent) {
-      messages.push({ role: roleOf(r.role), content: r.content });
+      messages.push({
+        role: roleOf(r.role),
+        content: augmentContentWithGeneratedImages(
+          r.content,
+          r.role,
+          r.metadata
+        ),
+      });
     }
 
     messages.push({

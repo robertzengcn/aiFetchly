@@ -1,12 +1,12 @@
-'use strict';
-import { CrashLogSink } from './CrashLogSink';
-import { redactMetadata } from './DiagnosticRedactor';
+"use strict";
+import { CrashLogSink } from "./CrashLogSink";
+import { redactMetadata } from "./DiagnosticRedactor";
+import { readMainLogTail } from "./MainLogTailReader";
 import type {
-  CrashRecord,
   ErrorRecord,
   DiagnosticBreadcrumb,
   DiagnosticReportPackage,
-} from './DiagnosticSchemas';
+} from "./DiagnosticSchemas";
 
 const DEFAULT_MAX_BYTES = 200 * 1024;
 const EXTENDED_MAX_BYTES = 1024 * 1024;
@@ -44,7 +44,17 @@ export class DiagnosticReportBuilder {
       breadcrumbs: this.cfg.breadcrumbs.slice(-200),
     };
 
-    // Trim until under budget. Drop breadcrumbs/errors first, then truncate crash fields.
+    // Attach the bounded, redacted main.log tail before the trim loop so the
+    // size budget accounts for it (FR-3.1). Omitted when unavailable.
+    const mainLogTail = readMainLogTail();
+    if (mainLogTail !== undefined) {
+      pkg = { ...pkg, mainLogTail };
+    }
+
+    // Trim until under budget. Drop breadcrumbs/errors first, then the log
+    // tail, then truncate crash fields. Halving goes all the way to empty —
+    // a floor of 1 would stall the loop (1 -> 1 forever) and let an
+    // oversized package slip through the budget.
     let iterations = 0;
     while (Buffer.byteLength(JSON.stringify(pkg)) > max && iterations < 20) {
       iterations++;
@@ -53,7 +63,7 @@ export class DiagnosticReportBuilder {
           ...pkg,
           breadcrumbs: pkg.breadcrumbs.slice(
             0,
-            Math.max(1, Math.floor(pkg.breadcrumbs.length / 2))
+            Math.floor(pkg.breadcrumbs.length / 2)
           ),
         };
         continue;
@@ -63,9 +73,15 @@ export class DiagnosticReportBuilder {
           ...pkg,
           recentErrors: pkg.recentErrors.slice(
             0,
-            Math.max(1, Math.floor(pkg.recentErrors.length / 2))
+            Math.floor(pkg.recentErrors.length / 2)
           ),
         };
+        continue;
+      }
+      // Prefer keeping the crash message over the (already size-bounded) log
+      // tail when both cannot fit.
+      if (pkg.mainLogTail !== undefined) {
+        pkg = { ...pkg, mainLogTail: undefined };
         continue;
       }
       const trimmed = pkg.crash.message.slice(
@@ -81,7 +97,7 @@ export class DiagnosticReportBuilder {
       recentErrors: pkg.recentErrors.map((e) => ({
         ...e,
         metadata: e.metadata
-          ? (redactMetadata(e.metadata) as ErrorRecord['metadata'])
+          ? (redactMetadata(e.metadata) as ErrorRecord["metadata"])
           : undefined,
       })),
     };

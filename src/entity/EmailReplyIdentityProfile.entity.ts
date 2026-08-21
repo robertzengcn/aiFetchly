@@ -12,34 +12,34 @@ import AuditableEntity from "@/entity/Auditable.entity";
 @Index(["emailServiceId"], { unique: true })
 export class EmailReplyIdentityProfileEntity extends AuditableEntity {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
 
   @Column("integer")
-  emailServiceId: number;
+  emailServiceId!: number;
 
   @Column("varchar", { length: 255 })
-  ownerName: string;
+  ownerName!: string;
 
   @Column("varchar", { length: 255, nullable: true })
-  ownerRole: string | null;
+  ownerRole!: string | null;
 
   @Column("varchar", { length: 255, nullable: true })
-  companyName: string | null;
+  companyName!: string | null;
 
   @Column("varchar", { length: 100, nullable: true })
-  preferredTone: string | null;
+  preferredTone!: string | null;
 
   @Column("text", { nullable: true })
-  signature: string | null;
+  signature!: string | null;
 
   @Column("text", { nullable: true })
-  styleNotes: string | null;
+  styleNotes!: string | null;
 
   /** Serialized string[] of phrases the reply must never contain. */
   @Column("text", { nullable: true })
-  forbiddenPhrasesJson: string | null;
+  forbiddenPhrasesJson!: string | null;
 
   /** 0 = never disclose automation (default), 1 = disclose per configured policy. */
   @Column("integer", { default: 0 })
-  discloseAutomation: number;
+  discloseAutomation!: number;
 }

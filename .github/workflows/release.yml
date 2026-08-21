@@ -191,10 +191,11 @@ jobs:
 
   build-macos:
     # CI mac builds historically run ~5h on the 4-vCPU macos-latest runner, with a
-    # ~3h silent tail after the makers report done. timeout-minutes caps a stalled
-    # build so a future hang wastes 90min instead of 5h; the observability below
-    # logs the exact phase that owns the time.
-    timeout-minutes: 90
+    # ~3h silent tail after the makers report done. timeout-minutes is set above
+    # the normal duration (360 = 6h) so it only kills a truly stalled/deadlocked
+    # build, not a normal slow one. The observability below logs the exact phase
+    # that owns the time.
+    timeout-minutes: 360
     if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.build_mode != 'store') }}
     runs-on: macos-latest
     outputs:
@@ -409,6 +410,9 @@ jobs:
   build-macos-store:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.build_mode == 'store' }}
     runs-on: macos-latest
+    # Store builds take ~5h40m on the 4-vCPU arm64 runner. Set well above normal
+    # so a genuine stall is caught without killing a normal slow build.
+    timeout-minutes: 420
     outputs:
       version: ${{ steps.calculate_version.outputs.version }}
       artifact_name: ${{ steps.calculate_version.outputs.artifact_name }}
@@ -618,11 +622,17 @@ jobs:
         env:
           MAC_STORE_SIGNING_IDENTITY: ${{ secrets.MAC_STORE_SIGNING_IDENTITY }}
           MAC_STORE_SIGNING_TYPE: distribution
+        # Phase timing wrapper: the packager has a ~2h15m "Finalizing package" phase
+        # followed by a ~3h18m silent tail with no output. ISO timestamps before
+        # each sub-phase let a stalled run's last log line name the owner.
         run: |
           set -euo pipefail
           export NODE_OPTIONS="--max-old-space-size=4096"
+          echo "[$(date -u +%FT%TZ)] phase: yarn package-mac:store (electron-forge package --platform=mas) start"
           yarn package-mac:store
+          echo "[$(date -u +%FT%TZ)] phase: yarn package-mac:store end"
 
+          echo "[$(date -u +%FT%TZ)] phase: find .app + verify-mac:store start"
           app_paths_file="$RUNNER_TEMP/aifetchly-mas-app-paths.txt"
           find out -type d -name '*.app' -prune -print > "$app_paths_file"
           app_count="$(wc -l < "$app_paths_file" | tr -d ' ')"
@@ -633,6 +643,7 @@ jobs:
           fi
           app_path="$(sed -n '1p' "$app_paths_file")"
           yarn verify-mac:store "$app_path"
+          echo "[$(date -u +%FT%TZ)] phase: find .app + verify-mac:store end"
           echo "MAC_STORE_APP_PATH=$app_path" >> "$GITHUB_ENV"
 
       - name: Create signed Mac App Store installer

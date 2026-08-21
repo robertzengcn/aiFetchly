@@ -25,7 +25,7 @@ const PRELOAD_SRC = readFileSync("src/preload.ts", "utf8");
  * EOF is exactly its `validChannels` whitelist.
  */
 function preloadInvokeWhitelistSource(): string {
-  const marker = "invoke: (channel, data) =>";
+  const marker = "invoke: (channel: string, data?: unknown) =>";
   const idx = PRELOAD_SRC.indexOf(marker);
   expect(idx).toBeGreaterThan(-1); // sanity: the invoke marker still exists
   return PRELOAD_SRC.slice(idx);

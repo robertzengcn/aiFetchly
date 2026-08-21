@@ -171,7 +171,7 @@ export function registerUserIpcHandlers(
   // controller does not import the IPC layer (avoids circular deps).
   UserController.setMainWindowProvider(winProvider);
 
-  ipcMain.handle(QUERY_USER_INFO, async (event, data) => {
+  ipcMain.handle(QUERY_USER_INFO, async (_event, _data) => {
     const userControll = new UserController();
     const res = userControll.getUserInfo();
     const result: CommonMessage<UserInfoType> = {
@@ -224,7 +224,7 @@ export function registerUserIpcHandlers(
    * is already opened here); calling prepareDesktopLogin() twice would
    * invalidate the first handoff.
    */
-  ipcMain.handle(GET_LOGIN_URL, async (event, data) => {
+  ipcMain.handle(GET_LOGIN_URL, async (_event, _data) => {
     try {
       // Abort any previous handoff BEFORE creating the new one. The old
       // cancel() closes the old loopback server and clears old pending
@@ -300,7 +300,7 @@ export function registerUserIpcHandlers(
    * Aborts the currently-active desktop login handoff (closes the loopback
    * server, clears pending state). Safe to call when no handoff is active.
    */
-  ipcMain.handle(CANCEL_DESKTOP_LOGIN, async (event, data) => {
+  ipcMain.handle(CANCEL_DESKTOP_LOGIN, async (_event, _data) => {
     if (activeDesktopLoginCancel) {
       try {
         activeDesktopLoginCancel();
@@ -318,7 +318,7 @@ export function registerUserIpcHandlers(
     return { status: true, msg: "Desktop login cancelled", data: null };
   });
 
-  ipcMain.handle(USER_SIGNOUT, async (event, data) => {
+  ipcMain.handle(USER_SIGNOUT, async (_event, _data) => {
     const userModel = new User();
 
     const res = await userModel

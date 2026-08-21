@@ -1,4 +1,21 @@
-import { ipcMain } from "electron";
+import { registerValidatedHandler } from "@/main-process/communication/_shared/registerValidatedHandler";
+import { noInputSchema } from "@/schemas/ipc/_shared/common";
+import { z } from "zod";
+import { lazySchema } from "@/utils/lazySchema";
+
+const unknownInputSchema = lazySchema(() => z.unknown());
+
+/** Unwrap a handleX CommonMessage return: throw on status:false, return data on success. */
+async function unwrap<T>(
+  p: Promise<{ status: boolean; msg?: string; data?: T }>
+): Promise<T> {
+  const res = await p;
+  if (!res.status) throw new Error(res.msg || "Unknown error");
+  return res.data as T;
+}
+
+import { ipcMain as ipcMain } from "electron";
+import { log } from "@/modules/Logger";
 import { Token } from "@/modules/token";
 import { AIProviderResolver } from "@/service/aiProvider/AIProviderResolver";
 import type { OpenAIChatCompletionRequest } from "@/api/aiChatApi";
@@ -57,6 +74,7 @@ import type {
   AskUserQuestionAnswer,
 } from "@/entityTypes/aiChatPlanTypes";
 import type { CommonMessage } from "@/entityTypes/commonType";
+import { AnswerPlanQuestionAnswersSchema } from "@/main-process/communication/aiChatV2PlanAnswerSchema";
 import type { AIChatCompactSummaryView } from "@/entityTypes/aiChatCompactTypes";
 import type {
   ChatV2StreamRequest,
@@ -120,14 +138,14 @@ function createQueryLoop(): AIChatQueryLoop {
             });
             if (decision.autoApprove) {
               context = { ...context, skipPermissionCheck: true };
-              console.log(
+              log.info(
                 `[ai-chat-v2] auto-approved tool "${name}" for conversation ${context.conversationId}: ${decision.reason}`
               );
             }
           }
         } catch (err) {
           // Non-fatal: fall back to normal permission flow
-          console.warn(
+          log.warn(
             "[ai-chat-v2] failed to evaluate tool approval mode, falling back to default:",
             err
           );
@@ -295,7 +313,7 @@ function sendChunk(
 }
 
 function sendComplete(event: IpcEventLike, chunk: ChatV2StreamChunk): void {
-  console.log(
+  log.info(
     `[ai-chat-v2] IPC complete event=${chunk.eventType} conv=${
       chunk.conversationId || "(none)"
     } message=${chunk.messageId || "(none)"} fullContentLen=${
@@ -326,7 +344,7 @@ function createEventSink(event: IpcEventLike): AIChatQueryEventSink {
           break;
         case "token":
           if (tokenLogCount < 5 || tokenLogCount % 25 === 0) {
-            console.log(
+            log.info(
               `[ai-chat-v2] IPC token conv=${e.conversationId} message=${e.messageId} deltaLen=${e.contentDelta.length} tokenIndex=${tokenLogCount}`
             );
           }
@@ -942,7 +960,7 @@ async function handleClearConversation(
       const planModule = new AIChatPlanModule();
       await planModule.clearConversationPlanState(conversationId);
     } catch (err) {
-      console.error("[ai-chat-v2] clearConversationPlanState failed:", err);
+      log.error("[ai-chat-v2] clearConversationPlanState failed:", err);
     }
     return ok({ deleted });
   } catch (err) {
@@ -1010,15 +1028,20 @@ async function handleAnswerQuestion(
   if (!parsed.conversationId || typeof parsed.conversationId !== "string") {
     return denied("conversationId is required");
   }
-  if (!Array.isArray(parsed.answers)) {
-    return denied("answers must be an array");
+  // Validate the cross-process payload (Zod-at-IPC rule) before forwarding to
+  // the engine. Rejects malformed shapes and bounds free-text length.
+  const answersResult = AnswerPlanQuestionAnswersSchema.safeParse(
+    parsed.answers
+  );
+  if (!answersResult.success) {
+    return denied("answers payload is invalid");
   }
 
   const engine = getQueryEngine();
   const result = await engine.answerPlanQuestion({
     questionId: parsed.questionId,
     conversationId: parsed.conversationId,
-    answers: parsed.answers,
+    answers: answersResult.data,
   });
   return ok(result);
 }
@@ -1353,47 +1376,88 @@ async function handleReadPasteCache(
 }
 
 export function registerAiChatV2IpcHandlers(): void {
-  ipcMain.handle(
+  registerValidatedHandler(
     AI_CHAT_V2_RESUME_TOOL_AFTER_PERMISSION,
-    async (_e, data: unknown) => handleResumeToolAfterPermission(data ?? "")
+    unknownInputSchema,
+    async (input) =>
+      unwrap(handleResumeToolAfterPermission(JSON.stringify(input ?? "{}")))
   );
-  ipcMain.handle(AI_CHAT_V2_MODELS, async () => handleModels());
-  ipcMain.handle(AI_CHAT_V2_CONVERSATIONS, async (_e, data: unknown) =>
-    handleConversations(data as string)
+  registerValidatedHandler(AI_CHAT_V2_MODELS, noInputSchema, async () =>
+    unwrap(handleModels())
   );
-  ipcMain.handle(AI_CHAT_V2_HISTORY, async (_e, data: unknown) =>
-    handleHistory(_e as IpcEventLike, data)
+  registerValidatedHandler(
+    AI_CHAT_V2_CONVERSATIONS,
+    unknownInputSchema,
+    async (input) => unwrap(handleConversations(JSON.stringify(input ?? {})))
   );
-  ipcMain.handle(AI_CHAT_V2_CLEAR_CONVERSATION, async (_e, data: unknown) =>
-    handleClearConversation(_e as IpcEventLike, data as string)
+  registerValidatedHandler(
+    AI_CHAT_V2_HISTORY,
+    unknownInputSchema,
+    async (input, event) =>
+      unwrap(handleHistory(event as IpcEventLike, JSON.stringify(input ?? {})))
   );
-  ipcMain.handle(AI_CHAT_V2_CLEAR_ALL, async () => handleClearAll());
-  ipcMain.handle(AI_CHAT_V2_PLAN_STATE, async (_e, data: unknown) =>
-    handlePlanState((data as string) ?? "")
+  registerValidatedHandler(
+    AI_CHAT_V2_CLEAR_CONVERSATION,
+    unknownInputSchema,
+    async (input, event) =>
+      unwrap(
+        handleClearConversation(
+          event as IpcEventLike,
+          JSON.stringify(input ?? {})
+        )
+      )
   );
-  ipcMain.handle(AI_CHAT_V2_ANSWER_QUESTION, async (_e, data: unknown) =>
-    handleAnswerQuestion((data as string) ?? "")
+  registerValidatedHandler(AI_CHAT_V2_CLEAR_ALL, noInputSchema, async () =>
+    unwrap(handleClearAll())
   );
-  ipcMain.handle(AI_CHAT_V2_APPROVE_PLAN, async (_e, data: unknown) =>
-    handleApprovePlan((data as string) ?? "")
+  registerValidatedHandler(
+    AI_CHAT_V2_PLAN_STATE,
+    unknownInputSchema,
+    async (input) => unwrap(handlePlanState(JSON.stringify(input ?? "{}")))
   );
-  ipcMain.handle(AI_CHAT_V2_REJECT_PLAN, async (_e, data: unknown) =>
-    handleRejectPlan((data as string) ?? "")
+  registerValidatedHandler(
+    AI_CHAT_V2_ANSWER_QUESTION,
+    unknownInputSchema,
+    async (input) => unwrap(handleAnswerQuestion(JSON.stringify(input ?? "{}")))
   );
-  ipcMain.handle(AI_CHAT_V2_REQUEST_PLAN_CHANGES, async (_e, data: unknown) =>
-    handleRequestPlanChanges((data as string) ?? "")
+  registerValidatedHandler(
+    AI_CHAT_V2_APPROVE_PLAN,
+    unknownInputSchema,
+    async (input) => unwrap(handleApprovePlan(JSON.stringify(input ?? "{}")))
   );
-  ipcMain.handle(AI_CHAT_V2_PLAN_VERSIONS, async (_e, data: unknown) =>
-    handlePlanVersions((data as string) ?? "")
+  registerValidatedHandler(
+    AI_CHAT_V2_REJECT_PLAN,
+    unknownInputSchema,
+    async (input) => unwrap(handleRejectPlan(JSON.stringify(input ?? "{}")))
   );
-  ipcMain.handle(AI_CHAT_V2_COMPACT_CONVERSATION, async (_e, data: unknown) =>
-    handleCompactConversation((data as string) ?? "")
+  registerValidatedHandler(
+    AI_CHAT_V2_REQUEST_PLAN_CHANGES,
+    unknownInputSchema,
+    async (input) =>
+      unwrap(handleRequestPlanChanges(JSON.stringify(input ?? "{}")))
   );
-  ipcMain.handle(AI_CHAT_V2_GET_TOOL_APPROVAL_MODE, async (_e, data: unknown) =>
-    handleGetToolApprovalMode((data as string) ?? "")
+  registerValidatedHandler(
+    AI_CHAT_V2_PLAN_VERSIONS,
+    unknownInputSchema,
+    async (input) => unwrap(handlePlanVersions(JSON.stringify(input ?? "{}")))
   );
-  ipcMain.handle(AI_CHAT_V2_SET_TOOL_APPROVAL_MODE, async (_e, data: unknown) =>
-    handleSetToolApprovalMode((data as string) ?? "")
+  registerValidatedHandler(
+    AI_CHAT_V2_COMPACT_CONVERSATION,
+    unknownInputSchema,
+    async (input) =>
+      unwrap(handleCompactConversation(JSON.stringify(input ?? "{}")))
+  );
+  registerValidatedHandler(
+    AI_CHAT_V2_GET_TOOL_APPROVAL_MODE,
+    unknownInputSchema,
+    async (input) =>
+      unwrap(handleGetToolApprovalMode(JSON.stringify(input ?? "{}")))
+  );
+  registerValidatedHandler(
+    AI_CHAT_V2_SET_TOOL_APPROVAL_MODE,
+    unknownInputSchema,
+    async (input) =>
+      unwrap(handleSetToolApprovalMode(JSON.stringify(input ?? "{}")))
   );
   ipcMain.handle(AI_CHAT_V2_READ_PASTE_CACHE, async (_e, data: unknown) =>
     handleReadPasteCache(data)
@@ -1403,7 +1467,7 @@ export function registerAiChatV2IpcHandlers(): void {
     try {
       await handleStream(event as IpcEventLike, data as string);
     } catch (err) {
-      console.error("[ai-chat-v2] unhandled stream error:", err);
+      log.error("[ai-chat-v2] unhandled stream error:", err);
       void redirectToLoginOnAuthExpired(err);
       const evt = event as IpcEventLike;
       sendComplete(evt, {

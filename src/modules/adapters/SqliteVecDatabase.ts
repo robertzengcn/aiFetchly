@@ -3,6 +3,7 @@ import type Database from "better-sqlite3";
 import * as fs from "fs";
 import * as path from "path";
 // import * as sqliteVec from 'sqlite-vec';
+import { log } from "@/modules/Logger";
 import { AbstractVectorDatabase } from "@/modules/interface/AbstractVectorDatabase";
 import {
   VectorDatabaseConfig,
@@ -52,7 +53,7 @@ export class SqliteVecDatabase extends AbstractVectorDatabase {
       };
       return driver.databaseConnection ?? null;
     } catch (error) {
-      console.warn("Failed to access raw database handle:", error);
+      log.warn("Failed to access raw database handle:", error);
       return null;
     }
   }
@@ -63,11 +64,11 @@ export class SqliteVecDatabase extends AbstractVectorDatabase {
   async initialize(): Promise<void> {
     try {
       this.initialized = true;
-      console.log(
+      log.info(
         "SQLite-vec initialized successfully (extension will be loaded when DataSource is created)"
       );
     } catch (error) {
-      console.error("Failed to initialize sqlite-vec:", error);
+      log.error("Failed to initialize sqlite-vec:", error);
       throw new Error(
         "Failed to initialize sqlite-vec. Please ensure sqlite-vec extension is available."
       );
@@ -97,11 +98,11 @@ export class SqliteVecDatabase extends AbstractVectorDatabase {
   //             // Load sqlite-vec extension into the connection (same as SqliteDb.ts)
   //             try {
   //                 sqliteVec.load(db);
-  //                 console.log('sqlite-vec extension loaded successfully via TypeORM prepareDatabase');
+  //                 log.info('sqlite-vec extension loaded successfully via TypeORM prepareDatabase');
   //             } catch (err) {
   //                 const errorMessage = err instanceof Error ? err.message : String(err);
-  //                 console.error(`Failed to load sqlite-vec extension: ${errorMessage}`);
-  //                 console.error('Please ensure the platform-specific sqlite-vec package is installed (e.g., sqlite-vec-linux-x64, sqlite-vec-darwin-x64, etc.)');
+  //                 log.error(`Failed to load sqlite-vec extension: ${errorMessage}`);
+  //                 log.error('Please ensure the platform-specific sqlite-vec package is installed (e.g., sqlite-vec-linux-x64, sqlite-vec-darwin-x64, etc.)');
   //                 // Don't throw - allow database creation, but operations will fail later
   //             }
 
@@ -113,7 +114,7 @@ export class SqliteVecDatabase extends AbstractVectorDatabase {
   //     // Initialize DataSource
   //     if (!dataSource.isInitialized) {
   //         await dataSource.initialize();
-  //         console.log(`TypeORM DataSource initialized for vector database: ${databasePath}`);
+  //         log.info(`TypeORM DataSource initialized for vector database: ${databasePath}`);
   //     }
 
   //     return dataSource;
@@ -161,15 +162,15 @@ export class SqliteVecDatabase extends AbstractVectorDatabase {
       // Set the current virtual table name
       this.currentVirtualTableName = metadata.virtual_table_name;
 
-      console.log(
+      log.info(
         `Created ${indexType} SQLite-vec index with dimension ${config.dimensions} for model '${config.modelName}'`
       );
-      console.log(`Virtual table name: ${metadata.virtual_table_name}`);
+      log.info(`Virtual table name: ${metadata.virtual_table_name}`);
 
       // Return the virtual table name instead of static string
       return metadata.virtual_table_name;
     } catch (error) {
-      console.error("Failed to create SQLite-vec index:", error);
+      log.error("Failed to create SQLite-vec index:", error);
       throw new Error(
         `Failed to create SQLite-vec index: ${
           error instanceof Error ? error.message : "Unknown error"
@@ -211,21 +212,21 @@ export class SqliteVecDatabase extends AbstractVectorDatabase {
         this.currentVirtualTableName = metadata.virtual_table_name;
         this.dimension = metadata.dimension;
 
-        console.log(
+        log.info(
           `Loaded existing SQLite-vec index for model '${metadata.model_name}' with dimension ${metadata.dimension}`
         );
-        console.log(`Virtual table name: ${this.currentVirtualTableName}`);
-        console.log(`Total vectors: ${metadata.total_vectors}`);
+        log.info(`Virtual table name: ${this.currentVirtualTableName}`);
+        log.info(`Total vectors: ${metadata.total_vectors}`);
       } else {
         // If metadata doesn't exist, create a new index
-        console.log(
+        log.info(
           `No existing metadata found for model '${config.modelName}' with dimension ${config.dimensions}, creating new index`
         );
         const virtualTableName = await this.createIndex(config);
         this.currentVirtualTableName = virtualTableName;
       }
     } catch (error) {
-      console.error("Failed to load SQLite-vec index:", error);
+      log.error("Failed to load SQLite-vec index:", error);
       throw new Error(
         `Failed to load SQLite-vec index: ${
           error instanceof Error ? error.message : "Unknown error"
@@ -241,9 +242,9 @@ export class SqliteVecDatabase extends AbstractVectorDatabase {
     // try {
     //     // SQLite auto-saves, but we can checkpoint WAL using raw query
     //     await this.vectorModule.sqliteDb.connection.query('PRAGMA wal_checkpoint(TRUNCATE)');
-    //     console.log(`SQLite-vec index checkpointed at ${this.indexPath}`);
+    //     log.info(`SQLite-vec index checkpointed at ${this.indexPath}`);
     // } catch (error) {
-    //     console.error('Failed to checkpoint SQLite-vec index:', error);
+    //     log.error('Failed to checkpoint SQLite-vec index:', error);
     // }
   }
 
@@ -294,9 +295,9 @@ export class SqliteVecDatabase extends AbstractVectorDatabase {
         }
       }
 
-      console.log(`Added vector to SQLite-vec index (chunk_id: ${chunkIds})`);
+      log.info(`Added vector to SQLite-vec index (chunk_id: ${chunkIds})`);
     } catch (error) {
-      console.error("Failed to add vectors to SQLite-vec index:", error);
+      log.error("Failed to add vectors to SQLite-vec index:", error);
       throw new Error(
         `Failed to add vectors to SQLite-vec index: ${
           error instanceof Error ? error.message : "Unknown error"
@@ -340,7 +341,7 @@ export class SqliteVecDatabase extends AbstractVectorDatabase {
         distance
       );
     } catch (error) {
-      console.error("Failed to search vectors in SqliteVecDatabase:", error);
+      log.error("Failed to search vectors in SqliteVecDatabase:", error);
       throw new Error(
         `Failed to perform vector search: ${
           error instanceof Error ? error.message : "Unknown error"
@@ -383,7 +384,7 @@ export class SqliteVecDatabase extends AbstractVectorDatabase {
         modelName: this.config?.modelName || "",
       };
     } catch (error) {
-      console.error("Failed to get index stats:", error);
+      log.error("Failed to get index stats:", error);
       return {
         totalVectors: 0,
         dimension: this.dimension || 0,
@@ -426,7 +427,7 @@ export class SqliteVecDatabase extends AbstractVectorDatabase {
 
       return result?.total_vectors || 0;
     } catch (error) {
-      console.error(
+      log.error(
         `Failed to get total vectors from metadata for model '${modelName}' with dimension ${dimension}:`,
         error
       );
@@ -478,7 +479,7 @@ export class SqliteVecDatabase extends AbstractVectorDatabase {
       await queryRunner.query(`DELETE FROM ${this.currentVirtualTableName}`);
       await queryRunner.release();
 
-      console.log(
+      log.info(
         `Deleted all vectors from virtual table '${this.currentVirtualTableName}'`
       );
 
@@ -496,9 +497,9 @@ export class SqliteVecDatabase extends AbstractVectorDatabase {
         }
       }
 
-      console.log("SQLite-vec index reset successfully");
+      log.info("SQLite-vec index reset successfully");
     } catch (error) {
-      console.error("Failed to reset SQLite-vec index:", error);
+      log.error("Failed to reset SQLite-vec index:", error);
       throw new Error(
         `Failed to reset SQLite-vec index: ${
           error instanceof Error ? error.message : "Unknown error"
@@ -522,9 +523,9 @@ export class SqliteVecDatabase extends AbstractVectorDatabase {
     //         // Run ANALYZE to update statistics
     //         await queryRunner.query('ANALYZE');
     //         await queryRunner.release();
-    //         console.log('SQLite-vec index optimization completed');
+    //         log.info('SQLite-vec index optimization completed');
     //     } catch (error) {
-    //         console.error('Failed to optimize SQLite-vec index:', error);
+    //         log.error('Failed to optimize SQLite-vec index:', error);
     //         throw new Error('Failed to optimize SQLite-vec index');
     //     }
   }
@@ -550,12 +551,12 @@ export class SqliteVecDatabase extends AbstractVectorDatabase {
       // Use file copy for backup (simpler and reliable)
       if (fs.existsSync(this.indexPath)) {
         fs.copyFileSync(this.indexPath, backupPath);
-        console.log(`SQLite-vec index backed up to ${backupPath}`);
+        log.info(`SQLite-vec index backed up to ${backupPath}`);
       } else {
         throw new Error(`Database file not found: ${this.indexPath}`);
       }
     } catch (error) {
-      console.error("Failed to backup SQLite-vec index:", error);
+      log.error("Failed to backup SQLite-vec index:", error);
       throw new Error(
         `Failed to backup SQLite-vec index: ${
           error instanceof Error ? error.message : "Unknown error"
@@ -584,7 +585,7 @@ export class SqliteVecDatabase extends AbstractVectorDatabase {
     } else {
       throw new Error("No configuration available to restore index");
     }
-    console.log(`SQLite-vec index restored from ${backupPath}`);
+    log.info(`SQLite-vec index restored from ${backupPath}`);
     // if (!this.initialized) {
     //     await this.initialize();
     // }
@@ -627,12 +628,12 @@ export class SqliteVecDatabase extends AbstractVectorDatabase {
     //         if (metadata) {
     //             this.dimension = metadata.dimension;
     //         }
-    //         console.log(`SQLite-vec index restored from ${backupPath}`);
+    //         log.info(`SQLite-vec index restored from ${backupPath}`);
     //     } else {
     //         throw new Error('No configuration available to restore index');
     //     }
     // } catch (error) {
-    //     console.error('Failed to restore SQLite-vec index:', error);
+    //     log.error('Failed to restore SQLite-vec index:', error);
     //     throw new Error('Failed to restore SQLite-vec index');
     // }
   }
@@ -659,7 +660,7 @@ export class SqliteVecDatabase extends AbstractVectorDatabase {
       const chunks = await ragChunkModule.getDocumentChunks(documentId);
 
       if (chunks.length === 0) {
-        console.log(
+        log.info(
           `No chunks found for document ${documentId}, nothing to delete`
         );
         return;
@@ -668,7 +669,7 @@ export class SqliteVecDatabase extends AbstractVectorDatabase {
       // Extract chunk IDs from the chunks
       const chunkIds = chunks.map((chunk) => chunk.id);
 
-      console.log(
+      log.info(
         `Found ${chunkIds.length} chunks for document ${documentId}, deleting associated vectors...`
       );
 
@@ -694,11 +695,11 @@ export class SqliteVecDatabase extends AbstractVectorDatabase {
         }
       }
 
-      console.log(
+      log.info(
         `Deleted vectors for document ${documentId} (${chunkIds.length} chunks)`
       );
     } catch (error) {
-      console.error(
+      log.error(
         `Failed to delete document index for document ${documentId}:`,
         error
       );
@@ -718,7 +719,7 @@ export class SqliteVecDatabase extends AbstractVectorDatabase {
    */
   async deleteVectorsByChunkIds(chunkIds: number[]): Promise<void> {
     if (chunkIds.length === 0) {
-      console.log("No chunk IDs provided, nothing to delete");
+      log.info("No chunk IDs provided, nothing to delete");
       return;
     }
 
@@ -753,7 +754,7 @@ export class SqliteVecDatabase extends AbstractVectorDatabase {
       }
     }
 
-    console.log(
+    log.info(
       `Deleted ${chunkIds.length} vectors by chunk IDs from virtual table '${this.currentVirtualTableName}'`
     );
   }
@@ -781,7 +782,7 @@ export class SqliteVecDatabase extends AbstractVectorDatabase {
       // Check if vectors exist for those chunk IDs in the virtual table (synchronous)
       return this.hasVectorsInVirtualTableSync(chunkIds);
     } catch (error) {
-      console.error(
+      log.error(
         `Failed to check if document index exists for document ${documentId}:`,
         error
       );
@@ -825,7 +826,7 @@ export class SqliteVecDatabase extends AbstractVectorDatabase {
 
       return (result?.count || 0) > 0;
     } catch (error) {
-      console.error(
+      log.error(
         "Failed to check if vectors exist in virtual table:",
         error
       );
@@ -841,9 +842,9 @@ export class SqliteVecDatabase extends AbstractVectorDatabase {
     //     try {
     //         await this.saveIndex();
     //         await this.dataSource.destroy();
-    //         console.log('SQLite-vec TypeORM DataSource closed');
+    //         log.info('SQLite-vec TypeORM DataSource closed');
     //     } catch (error) {
-    //         console.error('Error closing database connection:', error);
+    //         log.error('Error closing database connection:', error);
     //     }
     // }
     // this.dataSource = null;
@@ -890,7 +891,7 @@ export class SqliteVecDatabase extends AbstractVectorDatabase {
 
       return false;
     } catch (error) {
-      console.error("Failed to check if index exists:", error);
+      log.error("Failed to check if index exists:", error);
       return false;
     }
   }
@@ -924,7 +925,7 @@ export class SqliteVecDatabase extends AbstractVectorDatabase {
 
       return result !== undefined && result !== null;
     } catch (error) {
-      console.error(
+      log.error(
         `Failed to check if virtual table '${virtualTableName}' exists:`,
         error
       );
@@ -964,7 +965,7 @@ export class SqliteVecDatabase extends AbstractVectorDatabase {
 
       return result?.virtual_table_name || null;
     } catch (error) {
-      console.error(
+      log.error(
         `Failed to find virtual table name for model '${modelName}' with dimension ${dimension}:`,
         error
       );

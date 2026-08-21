@@ -11,6 +11,7 @@
  */
 
 import type { ToolFunction } from "@/api/aiChatApi";
+import { log } from "@/modules/Logger";
 import type { SkillDefinition, SkillManifest } from "@/entityTypes/skillTypes";
 import { skillDefinitionToToolFunction } from "@/entityTypes/skillTypes";
 import * as fs from "fs";
@@ -3287,7 +3288,7 @@ async function getAllToolFunctions(): Promise<ToolFunction[]> {
     const uniqueMcp = mcpTools.filter((t) => !seen.has(t.name));
     return [...builtInTools, ...uniqueMcp];
   } catch (error) {
-    console.error("Failed to load MCP tools:", error);
+    log.error("Failed to load MCP tools:", error);
     return builtInTools;
   }
 }
@@ -3395,7 +3396,7 @@ function isRegistered(name: string): boolean {
  */
 function registerSkill(skill: SkillDefinition): void {
   if (registry.has(skill.name)) {
-    console.warn(
+    log.warn(
       `[SkillRegistry] registerSkill FAILED: "${skill.name}" already registered`
     );
     throw new Error(`Skill already registered: ${skill.name}`);

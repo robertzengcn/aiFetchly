@@ -34,6 +34,8 @@ type StreamCompleteHandler = StreamChatArgs[2];
 vi.mock("@/views/api/aiChatV2", () => ({
   clearChatV2StreamListeners: vi.fn(),
   clearChatV2Conversation: vi.fn().mockResolvedValue({ deleted: 0 }),
+  subscribeAutoCompacted: vi.fn(),
+  unsubscribeAutoCompacted: vi.fn(),
   getChatV2Conversations: vi.fn().mockResolvedValue([]),
   getChatV2History: vi.fn().mockResolvedValue({ messages: [] }),
   streamChatV2Message: vi.fn(),
@@ -88,6 +90,18 @@ vi.mock("@/views/api/localAiRuntime", () => ({
     expiresAt: "2099-01-01T00:00:00Z",
   }),
   installLocalAiRuntime: vi.fn().mockResolvedValue(undefined),
+  // AiChatV2.loadVoiceSettings calls getLocalAiRuntimeStatus(voice-sherpa) in
+  // its onMounted Promise.all; leaving it unmocked makes that Promise.all
+  // throw (undefined is not a function) and fall into the catch, which nulls
+  // voiceSettings and breaks every spoken-response assertion. Return a ready
+  // runtime so isLocalAiRuntimeUsable(state) is true and the voice path is
+  // not spuriously blocked.
+  getLocalAiRuntimeStatus: vi.fn().mockResolvedValue({
+    runtimeId: "voice-sherpa",
+    state: "ready",
+    platform: process.platform,
+    arch: process.arch,
+  }),
   onLocalAiRuntimeProgress: vi.fn().mockReturnValue(() => undefined),
 }));
 

@@ -1,4 +1,5 @@
 import { ZodError } from "zod";
+import { log } from "@/modules/Logger";
 
 import { ScheduleTaskModule } from "@/modules/ScheduleTaskModule";
 import { ScheduleManager } from "@/modules/ScheduleManager";
@@ -647,7 +648,7 @@ export async function deleteScheduleForAi(
   } catch (removeError: unknown) {
     const message =
       removeError instanceof Error ? removeError.message : String(removeError);
-    console.error(
+    log.error(
       `Failed to remove schedule ${schedule_id} from runtime: ${message}`
     );
   }
@@ -665,7 +666,7 @@ export async function deleteScheduleForAi(
         try {
           await getScheduleManager().addSchedule(schedule);
         } catch (reAddError: unknown) {
-          console.error(
+          log.error(
             `Failed to re-add schedule ${schedule_id} to runtime after failed delete:`,
             reAddError
           );

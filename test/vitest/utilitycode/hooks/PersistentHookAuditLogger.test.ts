@@ -6,6 +6,7 @@ import {
   setHookAuditLogger,
   setHookAuditLoggerForTests,
 } from "@/service/hooks/HookAuditService";
+import { log } from "@/modules/Logger";
 import type { HookAuditEntry } from "@/entityTypes/hookTypes";
 
 function makeEntry(overrides: Partial<HookAuditEntry> = {}): HookAuditEntry {
@@ -57,9 +58,10 @@ describe("PersistentHookAuditLogger", () => {
   });
 
   it("swallows errors from recordEntry (fire-and-forget)", async () => {
-    const errorSpy = vi
-      .spyOn(console, "error")
-      .mockImplementation(() => undefined);
+    // After the ws-7 console→Logger codemod (82c46078) the production code
+    // calls `log.error` (electron-log), which bypasses `console.error` — so
+    // spy on the `log` export, not console.
+    const errorSpy = vi.spyOn(log, "error").mockImplementation(() => undefined);
     const recordEntry = vi.fn().mockRejectedValue(new Error("db down"));
     const fakeModule = {
       recordEntry,

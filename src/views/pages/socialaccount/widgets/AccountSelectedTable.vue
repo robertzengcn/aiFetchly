@@ -117,13 +117,13 @@ const totalItems = ref(0);
 const search = ref('');
 const selected=ref<SocialAccountListData[]>([]);
 
-function loadItems({ page, itemsPerPage, sortBy }) {
+function loadItems({ page, itemsPerPage, sortBy }: { page: number; itemsPerPage: number; sortBy: { key: string; order: string }[] }) {
     loading.value = true
     const fetchitem: Fetchparam = {
         // id:parseInt(campaignId),
         page: page,
         itemsPerPage: itemsPerPage,
-        sortBy: sortBy,
+        sortBy: sortBy?.[0] ?? { key: '', order: '' },
         search: search.value,
         where:props.accountSource
     }

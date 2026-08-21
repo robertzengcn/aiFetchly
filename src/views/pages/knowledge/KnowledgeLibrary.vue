@@ -154,7 +154,7 @@
             ref="fileInput"
             type="file"
             multiple
-            accept=".pdf,.txt,.doc,.docx,.md,.html,.htm,.csv,.xlsx,.xls"
+            accept=".pdf,.txt,.doc,.docx,.md,.html,.htm,.csv,.xlsx,.xls,.pptx,.ppt"
             style="display: none"
             @change="onFileSelect"
           />
@@ -404,8 +404,8 @@
             </v-btn>
             <v-btn
               color="primary"
-              :disabled="!runtimeInstallOffer"
-              :loading="preparingRuntime"
+              :disabled="preparingRuntime || runtimeDownloading"
+              :loading="preparingRuntime || runtimeDownloading"
               @click="onDownloadRuntime"
             >
               {{ t('knowledge.local_runtime_download') }}
@@ -571,27 +571,6 @@ async function initializeRAGSystem() {
   }
 }
 
-// async function initializeWithDefaultConfig() {
-//   const embeddingConfig = {
-//     provider: 'openai',
-//     model: 'text-embedding-ada-002',
-//     apiKey: process.env.OPENAI_API_KEY || '',
-//   };
-
-//   const llmConfig = {
-//     model: 'gpt-3.5-turbo',
-//     apiKey: process.env.OPENAI_API_KEY || '',
-//   };
-
-//   const response = await initializeRAG({
-//     embedding: embeddingConfig,
-//     llm: llmConfig,
-//   });
-
-//   if (!response.success) {
-//     throw new Error(response.message);
-//   }
-// }
 
 function showStatus(message: string, type: 'success' | 'error' | 'warning' | 'info' = 'info') {
   statusMessage.value = message;
@@ -662,47 +641,6 @@ async function handleUploadSuccess(document: UploadedDocument) {
   
   console.log('📄 Document processed:', document);
   
-  // Automatically start chunking and embedding process
-  // if (document.id) {
-  //   try {
-  //     setLoading(true, t('knowledge.processing_document'), t('knowledge.chunking_and_embedding_document'));
-      
-  //     const chunkEmbedResult = await chunkAndEmbedDocument(document.id);
-      
-  //     if (chunkEmbedResult.success && chunkEmbedResult.data) {
-  //       const { chunksCreated, embeddingsGenerated, processingTime } = chunkEmbedResult.data;
-  //       showStatus(
-  //         t('knowledge.document_processed_successfully', { 
-  //           name: document.name, 
-  //           chunks: chunksCreated, 
-  //           embeddings: embeddingsGenerated 
-  //         }), 
-  //         'success'
-  //       );
-  //       console.log(`✅ Document ${document.name} processed: ${chunksCreated} chunks, ${embeddingsGenerated} embeddings in ${processingTime}ms`);
-  //     } else {
-  //       showStatus(
-  //         t('knowledge.document_processing_failed', { 
-  //           name: document.name, 
-  //           error: chunkEmbedResult.message 
-  //         }), 
-  //         'warning'
-  //       );
-  //       console.warn(`⚠️ Document ${document.name} processing failed:`, chunkEmbedResult.message);
-  //     }
-  //   } catch (error) {
-  //     console.error(`❌ Error processing document ${document.name}:`, error);
-  //     showStatus(
-  //       t('knowledge.document_processing_error', { 
-  //         name: document.name, 
-  //         error: error instanceof Error ? error.message : 'Unknown error' 
-  //       }), 
-  //       'error'
-  //     );
-  //   } finally {
-  //     setLoading(false);
-  //   }
-  // }
   
   // Refresh document management if available
   if (documentManagement.value) {
@@ -880,20 +818,28 @@ async function ensureLocalEmbeddingRuntime(
 }
 
 async function onDownloadRuntime() {
-  if (!runtimeInstallOffer.value || runtimeDownloading.value) return;
+  if (runtimeDownloading.value) return;
   runtimeDownloading.value = true;
   runtimeDownloadError.value = '';
   try {
+    // Issue a fresh consent grant on every attempt so a prior failed install
+    // (or stale dialog state) cannot reuse a consumed offer token.
+    const offer = await prepareLocalAiRuntimeInstall(LOCAL_EMBEDDING_RUNTIME_ID);
+    runtimeInstallOffer.value = offer;
     await installLocalAiRuntime({
-      operationId: runtimeInstallOffer.value.operationId,
-      runtimeId: runtimeInstallOffer.value.runtimeId,
-      expectedRuntimeVersion: runtimeInstallOffer.value.runtimeVersion,
-      consentToken: runtimeInstallOffer.value.consentToken,
+      operationId: offer.operationId,
+      runtimeId: offer.runtimeId,
+      expectedRuntimeVersion: offer.runtimeVersion,
+      consentToken: offer.consentToken,
     });
-    runtimeInstallOffer.value = null;
     const runtimeStatus = await getLocalAiRuntimeStatus(LOCAL_EMBEDDING_RUNTIME_ID);
     if (runtimeStatus.state === 'ready') {
       showRuntimeDownloadDialog.value = false;
+      // Clear the consumed offer token so a later attempt must obtain a fresh
+      // consent grant (matches the "fresh consent grant on every attempt"
+      // contract above), then dispatch the deferred action that triggered the
+      // install.
+      runtimeInstallOffer.value = null;
       const action = pendingRuntimeAction.value;
       pendingRuntimeAction.value = null;
       if (action === 'update-model') {

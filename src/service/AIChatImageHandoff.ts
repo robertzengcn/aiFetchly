@@ -139,6 +139,78 @@ export function stripConsumedImageHandoffs(
 }
 
 /**
+ * After the model has already seen a user message's images in a prior
+ * completion round (there is a later assistant message), drop its
+ * `image_url` parts and keep only the text content.
+ *
+ * User-uploaded images can be large (up to 1.5MB → ~2M base64 chars →
+ * ~500k tokens each). During a multi-round turn (where the model makes
+ * tool calls), the user's original image data URL is re-sent on EVERY
+ * round. Stripping it after the first assistant response prevents a
+ * 5-round turn from re-sending the same 500k-token image 5 times.
+ *
+ * This mirrors {@link stripConsumedImageHandoffs} but targets the
+ * user's ORIGINAL message instead of synthetic handoff messages.
+ * The model has already "seen" the image and can reference it from
+ * its prior turn context — the raw bytes are no longer needed.
+ *
+ * Mutates `messages` in place.
+ *
+ * @returns number of image_url parts removed
+ */
+export function stripConsumedUserImages(
+  messages: OpenAIChatMessage[]
+): number {
+  let removed = 0;
+  for (let i = 0; i < messages.length; i++) {
+    const message = messages[i];
+    if (message.role !== "user") continue;
+    // Skip synthetic handoff messages — those are handled by
+    // stripConsumedImageHandoffs.
+    if (isImageHandoffMessage(message)) continue;
+
+    const content = message.content as OpenAIMessageContent | null;
+    if (!Array.isArray(content)) continue;
+
+    const imageParts = imageUrlParts(message);
+    if (imageParts.length === 0) continue;
+
+    // Only strip if a later assistant message exists — i.e. the model
+    // has already responded to (and thus "seen") this user message.
+    const consumedByLaterAssistant = messages
+      .slice(i + 1)
+      .some((later) => later.role === "assistant");
+    if (!consumedByLaterAssistant) continue;
+
+    // Keep only the text parts. If there are no text parts, create a
+    // minimal placeholder so the user message is not empty.
+    const textParts = content.filter(
+      (part): part is OpenAITextContentPart =>
+        typeof part === "object" &&
+        part !== null &&
+        (part as { type?: unknown }).type === "text"
+    );
+
+    const replacementContent: OpenAITextContentPart[] =
+      textParts.length > 0
+        ? textParts
+        : [
+            {
+              type: "text",
+              text: `[${imageParts.length} image(s) previously attached — bytes released after the model processed them.]`,
+            },
+          ];
+
+    messages[i] = {
+      ...message,
+      content: replacementContent,
+    };
+    removed += imageParts.length;
+  }
+  return removed;
+}
+
+/**
  * Build the synthetic model-only `role: "user"` multimodal handoff message
  * that delivers prepared tool images to the next chat-completion round.
  *

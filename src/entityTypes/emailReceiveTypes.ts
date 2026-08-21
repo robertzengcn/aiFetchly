@@ -119,13 +119,28 @@ export type EmailReplyStatus =
   | "blocked"
   | "failed";
 
-/** Status of a reply draft through its lifecycle. */
+/**
+ * Status of a reply draft through its lifecycle.
+ *
+ * Reliability extension (Milestone 1): `sending` is the atomic-claim in-flight
+ * state; `delivery_unknown` is a terminal ambiguous outcome that is never
+ * automatically retried. Enforced state machine:
+ *
+ *   draft -> approved -> sending -> sent
+ *     |          |          |
+ *     |          |          +-> failed
+ *     |          |          +-> delivery_unknown
+ *     |          +-> draft (approval invalidated by an edit)
+ *     +-> discarded
+ */
 export type EmailReplyDraftStatus =
   | "draft"
   | "approved"
+  | "sending"
   | "sent"
   | "discarded"
-  | "failed";
+  | "failed"
+  | "delivery_unknown";
 
 /** Whether a draft was AI-generated or manually written. */
 export type EmailReplyGenerationSource = "ai" | "manual";
@@ -141,7 +156,9 @@ export type EmailReplyAuditAction =
   | "reply_sent"
   | "reply_skipped"
   | "auto_reply_blocked"
-  | "send_failed";
+  | "send_failed"
+  | "send_claimed"
+  | "delivery_unknown";
 
 /** Who triggered an audit action. */
 export type EmailReplyAuditActor = "user" | "ai" | "system";

@@ -14,6 +14,7 @@
  */
 
 import type { ToolExecutionResult } from "@/api/aiChatApi";
+import { log } from "@/modules/Logger";
 import type { SkillExecutionContext } from "@/entityTypes/skillTypes";
 import { SkillRegistry } from "@/config/skillsRegistry";
 import { ToolExecutor } from "@/service/ToolExecutor";
@@ -195,7 +196,7 @@ function auditLog(
     ...(error ? { error } : {}),
     timestamp: new Date().toISOString(),
   };
-  console.log(`[SkillAudit] ${JSON.stringify(logEntry)}`);
+  log.info(`[SkillAudit] ${JSON.stringify(logEntry)}`);
 }
 
 // ---------------------------------------------------------------------------

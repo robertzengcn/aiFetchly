@@ -518,4 +518,56 @@ describe("ToolLoadPolicyService.classify", () => {
       })
     ).toBe("deferred");
   });
+
+  describe("hasRecentGeneratedImages promotion", () => {
+    it("promotes export_generated_artifacts when user asks to edit a prior generated image", () => {
+      expect(
+        classify("export_generated_artifacts", "builtin", {
+          currentUserMessage: "please add tree in front of the house",
+          hasRecentGeneratedImages: true,
+        })
+      ).toBe("contextual");
+    });
+
+    it("promotes attach_local_images when user asks to edit a prior generated image", () => {
+      expect(
+        classify("attach_local_images", "builtin", {
+          currentUserMessage: "please add tree in front of the house",
+          hasRecentGeneratedImages: true,
+        })
+      ).toBe("contextual");
+    });
+
+    it("does NOT promote when hasRecentGeneratedImages is false/undefined", () => {
+      expect(
+        classify("export_generated_artifacts", "builtin", {
+          currentUserMessage: "please add tree in front of the house",
+          hasRecentGeneratedImages: false,
+        })
+      ).toBe("deferred");
+      expect(
+        classify("attach_local_images", "builtin", {
+          currentUserMessage: "please add tree in front of the house",
+        })
+      ).toBe("deferred");
+    });
+
+    it("does NOT promote when the message has no edit-like verb", () => {
+      expect(
+        classify("export_generated_artifacts", "builtin", {
+          currentUserMessage: "what is the capital of France",
+          hasRecentGeneratedImages: true,
+        })
+      ).toBe("deferred");
+    });
+
+    it("does NOT promote non-image tools even with hasRecentGeneratedImages", () => {
+      expect(
+        classify("create_html_artifact", "builtin", {
+          currentUserMessage: "please add tree in front of the house",
+          hasRecentGeneratedImages: true,
+        })
+      ).toBe("deferred");
+    });
+  });
 });

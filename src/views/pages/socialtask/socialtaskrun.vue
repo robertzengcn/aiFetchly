@@ -40,7 +40,6 @@ import { SocialTaskEntity } from "@/entityTypes/socialtask-type";
 import {
     getSocialtaskinfo, startSocialTask,receiveSocialTaskLog
 } from "@/views/api/socialtask";
-// import {ipcRenderer} from 'electron'
 const task_name = ref('')
 const $route = useRoute();
 const socialtaskId = ref()
@@ -87,9 +86,6 @@ const initialize = async () => {
 }
 onMounted(() => {
     initialize();
-    // ipcRenderer.on('socialtask:start', (event, arg) => {
-    //         console.log(arg)
-    // })
 });
 // $vuetify.display
 // const cols = computed(() => {

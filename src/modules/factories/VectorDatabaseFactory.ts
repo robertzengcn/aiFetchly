@@ -1,4 +1,5 @@
 import { IVectorDatabase } from '@/modules/interface/IVectorDatabase';
+import { log } from "@/modules/Logger";
 // import { FaissVectorDatabase } from '@/modules/adapters/FaissVectorDatabase';
 import { SqliteVecDatabase } from '@/modules/adapters/SqliteVecDatabase';
 
@@ -123,7 +124,7 @@ export class VectorDatabaseFactory {
         const baseIndexPath = process.env.VECTOR_DB_PATH;
 
         if (!this.isSupported(dbType)) {
-            console.warn(`Unsupported vector database type: ${dbType}, falling back to sqlite-vec`);
+            log.warn(`Unsupported vector database type: ${dbType}, falling back to sqlite-vec`);
             return this.createSqliteVecDatabase();
         }
 

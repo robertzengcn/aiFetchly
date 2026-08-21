@@ -188,6 +188,17 @@ export function hasBatchImageEditIntent(message: string): boolean {
 }
 
 /**
+ * Broad edit-action verb regex for follow-up edits on a previously
+ * AI-generated image. Only used when {@link ToolCatalogRuntimeContext.hasRecentGeneratedImages}
+ * is true, so the broad verb list is safe — it never fires in conversations
+ * without recent generated images. Catches natural-language edit
+ * instructions like "add a tree in front of the house" that lack
+ * image-specific keywords.
+ */
+const GENERATED_IMAGE_EDIT_FOLLOWUP_RE =
+  /\b(add|remove|change|update|modify|make|put|replace|delete|move|resize|crop|rotate|flip|invert|adjust|enhance|fix|edit|draw|paint|color|colour|erase|clear|insert|place|swap|switch|turn|convert|transform|regenerate|redo|rework)\b/i;
+
+/**
  * Natural-language inbound mailbox check intent.
  * Surfaces list/fetch/read inbox tools so "check my email / inbox / mailbox"
  * does not leave those tools deferred. Tolerates common typos such as
@@ -346,6 +357,24 @@ export class ToolLoadPolicyService {
       CONTEXTUAL_VERIFICATION_TOOL_NAMES.has(name) &&
       this.messageMatchesIntent(input.context, (msg) =>
         this.hasVerifyContactIntent(msg)
+      )
+    ) {
+      return "contextual";
+    }
+
+    // 9b. Contextual promotion: when the conversation has recent AI-generated
+    // images and the user's message contains an edit-like verb, auto-promote
+    // the generated-image export + local image attach tools so the model can
+    // edit the prior image without falling back to glob_files/shell_execute.
+    // The broad verb regex is safe because it is gated by
+    // hasRecentGeneratedImages — it only fires in conversations that actually
+    // have generated images in recent history.
+    if (
+      input.context.hasRecentGeneratedImages &&
+      (name === "export_generated_artifacts" ||
+        name === "attach_local_images") &&
+      this.messageMatchesIntent(input.context, (msg) =>
+        GENERATED_IMAGE_EDIT_FOLLOWUP_RE.test(msg)
       )
     ) {
       return "contextual";

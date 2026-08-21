@@ -13,7 +13,13 @@
  */
 
 import { Browser, Page } from "puppeteer";
+import { log } from "@/modules/Logger";
 import { BrowserManager } from "@/modules/browserManager";
+import {
+  websiteContentScraperInboundSchema,
+  type WebsiteContentScraperInbound,
+} from "@/schemas/worker/websiteContentScraper";
+import { parseWorkerMessage } from "@/schemas/worker/_shared";
 import { HtmlConversionService } from "@/service/HtmlConversionService";
 import { UrlGuard } from "@/service/UrlGuard";
 import { applySsrfNavigationGuard } from "@/service/PuppeteerSsrfGuard";
@@ -230,7 +236,7 @@ async function scrapeWebsite(url: string): Promise<ScrapeWebsiteResult> {
       await page.close();
     }
   } catch (error) {
-    console.error("Error scraping website:", error);
+    log.error("Error scraping website:", error);
     throw error;
   }
 }
@@ -243,7 +249,7 @@ async function cleanupBrowser(): Promise<void> {
     try {
       await browser.close();
     } catch (error) {
-      console.error("Error closing browser:", error);
+      log.error("Error closing browser:", error);
     }
     browser = null;
   }
@@ -263,7 +269,7 @@ const parentPort = (
 ).parentPort;
 
 if (!parentPort) {
-  console.error(
+  log.error(
     "[websiteContentScraper] Missing Electron utilityProcess parentPort; worker cannot receive scrape requests."
   );
 }
@@ -271,10 +277,22 @@ if (!parentPort) {
 if (parentPort) {
   parentPort.on("message", async (e: { data: string }) => {
     try {
-      const message: ScrapeWebsiteMessage = JSON.parse(e.data);
+      const raw = JSON.parse(e.data) as unknown;
+      const validation = parseWorkerMessage<WebsiteContentScraperInbound>(
+        raw,
+        websiteContentScraperInboundSchema()
+      );
+      if (!validation.success) {
+        log.warn(
+          "[websiteContentScraper] dropped malformed SCRAPE_WEBSITE:",
+          validation.error
+        );
+        return;
+      }
+      const message = validation.data;
 
       if (message.type === "SCRAPE_WEBSITE" && message.url) {
-        console.log(
+        log.info(
           `[websiteContentScraper] Starting scrape requestId=${message.requestId} url=${message.url}`
         );
 
@@ -294,7 +312,7 @@ if (parentPort) {
           if (parentPort) {
             parentPort.postMessage(JSON.stringify(response));
           }
-          console.log(
+          log.info(
             `[websiteContentScraper] Finished scrape requestId=${message.requestId} finalUrl=${
               result.finalUrl ?? message.url
             } markdownLength=${result.markdown.length}`
@@ -302,11 +320,11 @@ if (parentPort) {
         } catch (error) {
           const errorMessage = getErrorMessage(error);
           const stack = getErrorStack(error);
-          console.error(
+          log.error(
             `[websiteContentScraper] Scraping error requestId=${message.requestId}: ${errorMessage}`
           );
           if (stack) {
-            console.error(stack);
+            log.error(stack);
           }
 
           const response: ScrapeWebsiteResponse = {
@@ -321,10 +339,10 @@ if (parentPort) {
           }
         }
       } else {
-        console.warn("[websiteContentScraper] Unknown message type:", message);
+        log.warn("[websiteContentScraper] Unknown message type:", message);
       }
     } catch (error) {
-      console.error("[websiteContentScraper] Error processing message:", error);
+      log.error("[websiteContentScraper] Error processing message:", error);
       const errorResponse: ScrapeWebsiteResponse = {
         type: "SCRAPE_ERROR",
         requestId: "unknown",
@@ -339,24 +357,24 @@ if (parentPort) {
 }
 
 process.on("uncaughtException", (error: Error) => {
-  console.error("[websiteContentScraper] Uncaught exception:", error);
+  log.error("[websiteContentScraper] Uncaught exception:", error);
   process.exit(1);
 });
 
 process.on("unhandledRejection", (reason: unknown) => {
-  console.error("[websiteContentScraper] Unhandled rejection:", reason);
+  log.error("[websiteContentScraper] Unhandled rejection:", reason);
   process.exit(1);
 });
 
 // Handle process termination
 process.on("SIGTERM", async () => {
-  console.log("[websiteContentScraper] Received SIGTERM, cleaning up...");
+  log.info("[websiteContentScraper] Received SIGTERM, cleaning up...");
   await cleanupBrowser();
   process.exit(0);
 });
 
 process.on("SIGINT", async () => {
-  console.log("[websiteContentScraper] Received SIGINT, cleaning up...");
+  log.info("[websiteContentScraper] Received SIGINT, cleaning up...");
   await cleanupBrowser();
   process.exit(0);
 });

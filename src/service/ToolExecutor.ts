@@ -1,10 +1,11 @@
 import { SearchModule } from "@/modules/SearchModule";
+import { log } from "@/modules/Logger";
 import { SearchTaskStatus } from "@/model/SearchTask.model";
 import { YellowPagesController } from "@/controller/YellowPagesController";
 import { TaskStatus as YellowPagesTaskStatus } from "@/modules/interface/ITaskManager";
 import { TaskStatus } from "@/entityTypes/commonType";
 import { ToolExecutionService } from "@/service/ToolExecutionService";
-import { formatYellowPagesResultsForLLM } from "@/main-process/communication/ai-chat-ipc";
+import { formatYellowPagesResultsForLLM } from "@/service/yellowPagesResultFormatter";
 import { MCPToolService } from "@/service/MCPToolService";
 import { parseMcpToolName } from "@/service/pluginCompat/McpToolNaming";
 import { MCPToolModule } from "@/modules/MCPToolModule";
@@ -271,7 +272,7 @@ export class ToolExecutor {
 
       // Check rate limit status before execution
       const status = rateLimiter.getStatus();
-      console.log(`Executing tool '${toolName}' - Rate limit status:`, status);
+      log.info(`Executing tool '${toolName}' - Rate limit status:`, status);
 
       return await this.executeInternal(
         toolName,
@@ -444,7 +445,7 @@ export class ToolExecutor {
         result,
       };
     } catch (error) {
-      console.error("MCP tool execution error:", error);
+      log.error("MCP tool execution error:", error);
       return ToolExecutor.toErrorResult(
         error,
         "Unknown error executing MCP tool"
@@ -721,7 +722,7 @@ export class ToolExecutor {
         expectedCount: numResults,
       });
     } catch (err) {
-      console.warn(
+      log.warn(
         `[ToolExecutor] partial snapshot for search task ${taskId} failed:`,
         err
       );
@@ -1952,7 +1953,7 @@ export class ToolExecutor {
       workspaceRoot = undefined;
     }
     if (!workspaceRoot) {
-      console.warn(
+      log.warn(
         `executeFileTool: no approved workspace for conversation ${conversationId}; ` +
           "falling back to legacy default-roots service."
       );

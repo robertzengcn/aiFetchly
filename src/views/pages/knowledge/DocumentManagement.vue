@@ -194,7 +194,7 @@
           <v-file-input
             v-model="uploadFile"
             :label="t('knowledge.select_file')"
-            accept=".pdf,.txt,.doc,.docx,.html,.md"
+            accept=".pdf,.txt,.doc,.docx,.html,.md,.pptx,.ppt"
             show-size
             @change="onFileSelected"
           />
@@ -345,7 +345,9 @@ const { t } = useI18n();
       { key: 'txt', name: t('knowledge.file_type_text') },
       { key: 'doc', name: t('knowledge.file_type_word') },
       { key: 'html', name: 'HTML' },
-      { key: 'md', name: t('knowledge.file_type_markdown') }
+      { key: 'md', name: t('knowledge.file_type_markdown') },
+      { key: 'pptx', name: 'PPT' },
+      { key: 'ppt', name: 'PPT' }
     ]);
 
     const loadDocuments = async (isAutoRefresh = false) => {
@@ -760,32 +762,38 @@ const { t } = useI18n();
       }
     };
 
-    const getFileTypeIcon = (fileType) => {
-      const icons = {
+    const getFileTypeIcon = (fileType?: string) => {
+      if (!fileType) return 'mdi-file';
+      const icons: Record<string, string> = {
         pdf: 'mdi-file-pdf',
         txt: 'mdi-file-document',
         doc: 'mdi-file-word',
         docx: 'mdi-file-word',
         html: 'mdi-file-code',
-        md: 'mdi-file-markdown'
+        md: 'mdi-file-markdown',
+        pptx: 'mdi-file-powerpoint',
+        ppt: 'mdi-file-powerpoint'
       };
       return icons[fileType] || 'mdi-file';
     };
 
-    const getFileTypeColor = (fileType) => {
-      const colors = {
+    const getFileTypeColor = (fileType?: string) => {
+      if (!fileType) return 'grey';
+      const colors: Record<string, string> = {
         pdf: 'red',
         txt: 'blue',
         doc: 'blue',
         docx: 'blue',
         html: 'orange',
-        md: 'green'
+        md: 'green',
+        pptx: 'deep-orange',
+        ppt: 'deep-orange'
       };
       return colors[fileType] || 'grey';
     };
 
-    const getStatusColor = (status) => {
-      const colors = {
+    const getStatusColor = (status: string) => {
+      const colors: Record<string, string> = {
         active: 'green',
         archived: 'grey',
         processing: 'orange'
@@ -793,8 +801,9 @@ const { t } = useI18n();
       return colors[status] || 'grey';
     };
 
-    const getProcessingStatusColor = (status) => {
-      const colors = {
+    const getProcessingStatusColor = (status?: string) => {
+      if (!status) return 'grey';
+      const colors: Record<string, string> = {
         completed: 'green',
         processing: 'orange',
         failed: 'red',
@@ -804,7 +813,7 @@ const { t } = useI18n();
       return colors[status] || 'grey';
     };
 
-    const formatFileSize = (bytes) => {
+    const formatFileSize = (bytes: number) => {
       if (bytes === 0) return '0 Bytes';
       const k = 1024;
       const sizes = ['Bytes', 'KB', 'MB', 'GB'];
@@ -812,7 +821,7 @@ const { t } = useI18n();
       return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
     };
 
-    const formatDate = (date) => {
+    const formatDate = (date: string) => {
       return new Date(date).toLocaleDateString();
     };
 

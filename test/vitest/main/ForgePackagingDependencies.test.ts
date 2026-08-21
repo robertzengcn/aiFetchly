@@ -3,16 +3,25 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 // minimatch v9's .d.ts declares a namespace (no callable default export) but
-// the runtime default IS the callable function. Import the namespace and pull
-// `.default`; tsc is satisfied by the cast, runtime by the real function.
+// the runtime default IS the callable function. The catch: under plain Node
+// ESM the named export is absent and .default is the function; under vitest's
+// esbuild interop the reverse is true (.default is undefined, the named
+// `.minimatch` is the function). Resolve both by importing the namespace and
+// picking whichever callable the runtime exposes.
 import * as minimatchNs from "minimatch";
 import { describe, expect, it } from "vitest";
 
-const minimatch = (
+const minimatch = ((
   minimatchNs as unknown as {
-    default: (p: string, pattern: string, options?: unknown) => boolean;
+    default?: (p: string, pattern: string, options?: unknown) => boolean;
+    minimatch?: (p: string, pattern: string, options?: unknown) => boolean;
   }
-).default;
+).default ??
+  (
+    minimatchNs as unknown as {
+      minimatch: (p: string, pattern: string, options?: unknown) => boolean;
+    }
+  ).minimatch) as (p: string, pattern: string, options?: unknown) => boolean;
 
 interface ForgeConfigForTest {
   readonly packagerConfig: {

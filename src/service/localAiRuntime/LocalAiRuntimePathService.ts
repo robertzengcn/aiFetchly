@@ -7,6 +7,7 @@
  * escape the application-owned directory.
  */
 import path from "node:path";
+import { promises as fs } from "node:fs";
 import semver from "semver";
 import {
   LOCAL_AI_RUNTIME_IDS,
@@ -110,6 +111,15 @@ export class LocalAiRuntimePathService {
 
   get stagingRoot(): string {
     return path.join(this.runtimeRoot, STAGING_DIR);
+  }
+
+  /**
+   * Create the runtime root and sibling hidden dirs used for downloads and
+   * extraction staging. Safe to call before every install/repair pipeline.
+   */
+  async ensureOperationDirectories(): Promise<void> {
+    await fs.mkdir(this.downloadsRoot, { recursive: true });
+    await fs.mkdir(this.stagingRoot, { recursive: true });
   }
 
   /** Directory holding all versions of one runtime id. */

@@ -62,7 +62,7 @@ const TextareaStub = defineComponent({
   },
   emits: ["update:modelValue", "keydown"],
   template:
-    '<textarea data-testid="composer-input" :value="modelValue" @input="$emit(\'update:modelValue\', $event.target.value)" @keydown="$emit(\'keydown\', $event)" />',
+    '<textarea data-testid="ai-chat-composer" :value="modelValue" @input="$emit(\'update:modelValue\', $event.target.value)" @keydown="$emit(\'keydown\', $event)" />',
 });
 
 const ButtonStub = defineComponent({
@@ -118,7 +118,7 @@ describe("AiChatV2Composer conversation-scoped slash suggestions", () => {
 
   it("forwards the active conversationId to listSlashCommands", async () => {
     const wrapper = mountComposer("conv-A");
-    await wrapper.find('[data-testid="composer-input"]').setValue("/");
+    await wrapper.find('[data-testid="ai-chat-composer"]').setValue("/");
     await vi.advanceTimersByTimeAsync(130);
     await flushPromises();
 
@@ -130,7 +130,7 @@ describe("AiChatV2Composer conversation-scoped slash suggestions", () => {
 
   it("passes conversationId undefined when the prop is null (new chat)", async () => {
     const wrapper = mountComposer(null);
-    await wrapper.find('[data-testid="composer-input"]').setValue("/");
+    await wrapper.find('[data-testid="ai-chat-composer"]').setValue("/");
     await vi.advanceTimersByTimeAsync(130);
     await flushPromises();
 
@@ -142,7 +142,7 @@ describe("AiChatV2Composer conversation-scoped slash suggestions", () => {
 
   it("re-fetches scoped suggestions when the conversation changes mid-typing", async () => {
     const wrapper = mountComposer("conv-A");
-    await wrapper.find('[data-testid="composer-input"]').setValue("/");
+    await wrapper.find('[data-testid="ai-chat-composer"]').setValue("/");
     await vi.advanceTimersByTimeAsync(130);
     await flushPromises();
     expect(listSlashCommands).toHaveBeenLastCalledWith(
@@ -164,7 +164,7 @@ describe("AiChatV2Composer conversation-scoped slash suggestions", () => {
   it("does NOT open suggestions when the conversation changes if the draft is not a slash command", async () => {
     const wrapper = mountComposer("conv-A");
     // Draft is plain text (no leading "/").
-    await wrapper.find('[data-testid="composer-input"]').setValue("hello");
+    await wrapper.find('[data-testid="ai-chat-composer"]').setValue("hello");
     await vi.advanceTimersByTimeAsync(130);
     await flushPromises();
     vi.mocked(listSlashCommands).mockClear();
@@ -195,7 +195,7 @@ describe("AiChatV2Composer conversation-scoped slash suggestions", () => {
     });
 
     const wrapper = mountComposer("conv-A");
-    await wrapper.find('[data-testid="composer-input"]').setValue("/");
+    await wrapper.find('[data-testid="ai-chat-composer"]').setValue("/");
     await vi.advanceTimersByTimeAsync(130);
     await flushPromises();
     // conv-A IPC is now in-flight (held); dropdown not yet populated.
@@ -225,7 +225,7 @@ describe("AiChatV2Composer conversation-scoped slash suggestions", () => {
 
   it("live-refreshes open slash suggestions when a config/plugin change arrives (PRD Problem 2)", async () => {
     const wrapper = mountComposer("conv-A");
-    await wrapper.find('[data-testid="composer-input"]').setValue("/");
+    await wrapper.find('[data-testid="ai-chat-composer"]').setValue("/");
     await vi.advanceTimersByTimeAsync(130);
     await flushPromises();
     expect(listSlashCommands).toHaveBeenCalledTimes(1);
@@ -248,7 +248,7 @@ describe("AiChatV2Composer conversation-scoped slash suggestions", () => {
   it("does NOT refresh on a config change when the draft is not a slash command (PRD Problem 2)", async () => {
     const wrapper = mountComposer("conv-A");
     // Plain-text draft — suggestions are closed.
-    await wrapper.find('[data-testid="composer-input"]').setValue("hello");
+    await wrapper.find('[data-testid="ai-chat-composer"]').setValue("hello");
     await vi.advanceTimersByTimeAsync(130);
     await flushPromises();
     vi.mocked(listSlashCommands).mockClear();

@@ -44,7 +44,7 @@ export class ExtraModuleController {
   ): Promise<ListData<ExtraModule>> {
     const extraModuelfold = await this.getExtramoduleinfolder();
     //    const extramodules=this.getExtraModulesConfig()
-    console.log(this.extramodules);
+    log.info(this.extramodules);
     //loop extra modules check if modules installed
     //
     // this.extramodules.forEach(async (module) => {
@@ -53,10 +53,10 @@ export class ExtraModuleController {
       if (module.ispip) {
         //check pip package installed
         const mores = await this.isPipModuleInstalled(module.packagename);
-        console.log("result:");
-        console.log(mores);
+        log.info("result:");
+        log.info(mores);
         if (mores) {
-          console.log(module.name + " is been set to installed");
+          log.info(module.name + " is been set to installed");
           module.installed = true;
         }
       }
@@ -85,7 +85,7 @@ export class ExtraModuleController {
       }
     }
 
-    console.log(this.extramodules);
+    log.info(this.extramodules);
     return {
       records: this.extramodules.slice(offerset, length),
       num: this.extramodules.length,
@@ -363,11 +363,11 @@ export class ExtraModuleController {
     try {
       // Try to execute the 'python --version' command
       const output = execSync("python --version", { stdio: "pipe" }).toString();
-      console.log(`Python version: ${output.trim()}`);
+      log.info(`Python version: ${output.trim()}`);
       return true;
     } catch (error) {
       if (error instanceof Error) {
-        console.error("Python is not installed:", error.message);
+        log.error("Python is not installed:", error.message);
       }
       return false;
     }
@@ -497,11 +497,11 @@ export class ExtraModuleController {
     try {
       // Try to execute the 'ffmpeg -version' command
       const output = execSync("ffmpeg -version", { stdio: "pipe" }).toString();
-      console.log(`ffmpeg version: ${output.trim()}`);
+      log.info(`ffmpeg version: ${output.trim()}`);
       return true;
     } catch (error) {
       if (error instanceof Error) {
-        console.error("ffmpeg is not installed:", error.message);
+        log.error("ffmpeg is not installed:", error.message);
       }
       return false;
     }

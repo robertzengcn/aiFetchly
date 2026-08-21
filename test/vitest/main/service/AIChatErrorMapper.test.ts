@@ -6,11 +6,13 @@ import {
   describeErrorDetail,
   isAuthExpiredError,
   isContentLevelTransientError,
+  isContextWindowExceededError,
   isTransientRetryableError,
   userSafeError,
 } from "@/service/AIChatErrorMapper";
 import { AIChatRecoverableError } from "@/service/AIChatRecoveryTypes";
 import { AIProviderError } from "@/service/aiProvider/AIProviderError";
+import { log } from "@/modules/Logger";
 
 describe("AIChatErrorMapper - userSafeError", () => {
   it("returns the quota sentinel on 402 / insufficient_quota", () => {
@@ -166,7 +168,7 @@ describe("AIChatErrorMapper - userSafeError", () => {
   });
 
   it("logs the full error detail for unmapped errors so the source is traceable", () => {
-    const spy = vi.spyOn(console, "error").mockImplementation(vi.fn());
+    const spy = vi.spyOn(log, "error").mockImplementation(vi.fn());
     try {
       const cause = new Error("ECONNRESET");
       (cause as { code?: string }).code = "ECONNRESET";
@@ -277,5 +279,59 @@ describe("AIChatErrorMapper - isContentLevelTransientError", () => {
     expect(isContentLevelTransientError(abort)).toBe(false);
     expect(isContentLevelTransientError("finish_reason=error")).toBe(false);
     expect(isContentLevelTransientError(null)).toBe(false);
+  });
+});
+
+describe("AIChatErrorMapper - context window exceeded", () => {
+  it("surfaces an actionable message for context_window_exceeded error code", () => {
+    const err = new Error(
+      'AI server returned finish_reason=error (code=context_window_exceeded): Upstream LLM error: ContextWindowExceededError: The input (566014 tokens) is longer than the model\'s context length (524288 tokens).'
+    );
+    const result = userSafeError(err);
+    expect(result).toContain("too long");
+    expect(result).toContain("new conversation");
+    // Must NOT be the transient "service is busy" message.
+    expect(result).not.toContain("busy");
+    expect(result).not.toContain("transient");
+  });
+
+  it("surfaces an actionable message for raw context length text", () => {
+    const err = new Error(
+      "The input (566014 tokens) is longer than the model's context length (524288 tokens)."
+    );
+    const result = userSafeError(err);
+    expect(result).toContain("too long");
+    expect(result).toContain("new conversation");
+    expect(result).not.toContain("busy");
+  });
+
+  it("does NOT classify context window exceeded as transient/retryable", () => {
+    const err = new Error(
+      "AI server returned finish_reason=error (code=context_window_exceeded): input too long"
+    );
+    expect(isTransientRetryableError(err)).toBe(false);
+  });
+
+  it("isContextWindowExceededError detects various phrasings", () => {
+    expect(
+      isContextWindowExceededError(
+        new Error("context_window_exceeded: input too long")
+      )
+    ).toBe(true);
+    expect(
+      isContextWindowExceededError(
+        new Error("The input is longer than the model's context length.")
+      )
+    ).toBe(true);
+    expect(
+      isContextWindowExceededError(
+        new Error("maximum context window exceeded")
+      )
+    ).toBe(true);
+    expect(
+      isContextWindowExceededError(new Error("generic error"))
+    ).toBe(false);
+    expect(isContextWindowExceededError(null)).toBe(false);
+    expect(isContextWindowExceededError("context window")).toBe(false);
   });
 });

@@ -175,7 +175,7 @@ const alerttype = ref<"success" | "error" | "warning" | "info" | undefined>(
 const form = ref<HTMLFormElement>();
 const loading = ref(false);
 const rules = {
-  required: (value) => !!value || "Field is required",
+  required: (value: unknown) => !!value || "Field is required",
 };
 const processTimeout = ref<number>(60);
 const maxPageNumber = ref<number>(100);

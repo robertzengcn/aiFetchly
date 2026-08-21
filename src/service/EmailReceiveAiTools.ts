@@ -1,4 +1,5 @@
 import { ZodError } from "zod";
+import { log } from "@/modules/Logger";
 import { EmailServiceModule } from "@/modules/emailServiceModule";
 import { EmailReceivedMessageModule } from "@/modules/EmailReceivedMessageModule";
 import { EmailReplyDraftModule } from "@/modules/EmailReplyDraftModule";
@@ -8,9 +9,11 @@ import { EmailReplyAuditLogEntity } from "@/entity/EmailReplyAuditLog.entity";
 import { EmailAutoReplyAuditLogEntity } from "@/entity/EmailAutoReplyAuditLog.entity";
 import { EmailReceiveSyncService } from "@/service/emailReceive/EmailReceiveSyncService";
 import { EmailReplyDraftGenerationService } from "@/service/emailReply/EmailReplyDraftGenerationService";
-import { ReplyEmailService } from "@/modules/lib/replyEmailService";
 import { decodeAddresses } from "@/service/emailReceive/EmailMessageParser";
 import { isAutomatedSender } from "@/service/emailReceive/EmailMessageParser";
+import { isEmailReplyKillSwitchOn } from "@/config/featureFlags";
+import { EmailReplyApprovalService } from "@/service/emailReply/EmailReplyApprovalService";
+import { EmailReplyDeliveryService } from "@/service/emailReply/EmailReplyDeliveryService";
 import {
   listEmailInboxesSchema,
   fetchUnreadEmailsSchema,
@@ -266,153 +269,67 @@ export async function sendEmailReply(args: unknown): Promise<
   try {
     const input = sendEmailReplySchema.parse(args);
 
+    // Emergency kill switch (P0.1): refuse new send claims. Viewing, audit,
+    // and recovery stay available through their own IPC handlers.
+    if (isEmailReplyKillSwitchOn()) {
+      return {
+        success: false,
+        error: "Reply sending is temporarily disabled by the kill switch",
+      };
+    }
+
+    // The reliable send path is authoritative (P0.1): there is no legacy SMTP
+    // branch and no mailbox override. The tool's `requiresConfirmation` gate is
+    // the user gesture, so confirmed execution mints a one-time
+    // tool_confirmation approval inline and delivers through the atomic-claim
+    // path. The LLM never sees the token.
     const draftModule = new EmailReplyDraftModule();
     await draftModule.ensureConnection();
     const draft = await draftModule.read(input.draft_id);
     if (!draft) {
       return { success: false, error: "Draft not found" };
     }
-    if (draft.status === "sent") {
-      return { success: false, error: "Draft was already sent" };
-    }
-    if (draft.status === "discarded") {
-      return { success: false, error: "Draft was discarded" };
-    }
-
-    const messageModule = new EmailReceivedMessageModule();
-    const message = await messageModule.read(draft.messageId);
-    if (!message) {
-      return { success: false, error: "Original received message not found" };
-    }
-
-    const emailServiceId =
-      input.email_service_id ?? draft.emailServiceId ?? message.emailServiceId;
-    const serviceModule = new EmailServiceModule();
-    const service = await serviceModule.getEmailService(emailServiceId);
-    if (!service) {
-      return { success: false, error: "Outbound email service not found" };
-    }
-    if (service.status !== 1) {
-      return { success: false, error: "Outbound email service is not active" };
-    }
-
-    const receiver = (message.replyToAddress || message.fromAddress).trim();
-    if (!receiver) {
-      return { success: false, error: "No reply recipient could be resolved" };
-    }
-
-    const sender = new ReplyEmailService({
-      id: service.id,
-      from: service.from,
-      password: service.password,
-      host: service.host,
-      port: service.port,
-      name: service.name,
-      ssl: service.ssl,
-    });
-    const result = await sender.sendReplyEmail({
-      receiver,
-      subject: draft.subject,
-      text: draft.bodyText,
-      html: draft.bodyHtml,
-      inReplyTo: message.messageId,
-      references: message.referencesHeader,
-    });
-
-    if (!result.status) {
-      // Failure: keep draft/message unsent, record sanitized error.
-      await draftModule.updateStatus(draft.id, "failed", sanitize(result.info));
-      await messageModule.updateReplyStatus(message.id, "failed", new Date());
-      await writeSendAudit({
-        emailServiceId,
-        messageId: message.id,
-        draftId: draft.id,
-        ok: false,
-        error: sanitize(result.info),
-        subject: draft.subject,
-        bodyPreview: draft.bodyText.slice(0, 400),
-      });
+    if (draft.status !== "draft") {
       return {
         success: false,
-        error: sanitize(result.info) || "Reply send failed",
+        error: `Cannot send a draft in state '${draft.status}'; only an unapproved 'draft' may be sent (the AI tool approves on confirmed execution)`,
       };
     }
-
-    // Success.
-    const sentAt = new Date();
-    await draftModule.markSent(draft.id, sentAt);
-    await messageModule.updateReplyStatus(message.id, "sent", sentAt);
-    await writeSendAudit({
-      emailServiceId,
-      messageId: message.id,
+    const approval = await new EmailReplyApprovalService().approveDraft({
       draftId: draft.id,
-      ok: true,
-      error: null,
-      subject: draft.subject,
-      bodyPreview: draft.bodyText.slice(0, 400),
+      approvedByType: "tool_confirmation",
+      approvedById: "ai_tool",
     });
-
+    const outcome = await new EmailReplyDeliveryService().sendApprovedReply({
+      draftId: draft.id,
+      approvalToken: approval.token,
+    });
+    if (outcome.status === "sent") {
+      return {
+        success: true,
+        draft_id: draft.id,
+        message_id: draft.messageId,
+        sent_at: outcome.sentAt,
+      };
+    }
+    if (outcome.status === "already_processed") {
+      return {
+        success: false,
+        error: "A send was already submitted for this approved revision",
+      };
+    }
     return {
-      success: true,
-      draft_id: draft.id,
-      message_id: message.id,
-      sent_at: sentAt.toISOString(),
+      success: false,
+      error:
+        outcome.status === "delivery_unknown"
+          ? "Delivery unknown: verify the Sent folder manually"
+          : outcome.error,
     };
   } catch (error) {
     return error instanceof ZodError
       ? validationFailure(error)
       : failure(error);
   }
-}
-
-/** Write the reply_sent / send_failed rows to both audit logs. */
-async function writeSendAudit(args: {
-  emailServiceId: number;
-  messageId: number;
-  draftId: number;
-  ok: boolean;
-  error: string | null;
-  subject: string;
-  bodyPreview: string;
-}): Promise<void> {
-  try {
-    const replyAudit = new EmailReplyAuditLogEntity();
-    replyAudit.emailServiceId = args.emailServiceId;
-    replyAudit.messageId = args.messageId;
-    replyAudit.draftId = args.draftId;
-    replyAudit.action = args.ok ? "reply_sent" : "send_failed";
-    replyAudit.actor = "user";
-    replyAudit.reason = args.ok
-      ? "Reply sent after user confirmation"
-      : args.error;
-    await new EmailReplyAuditLogModule().create(replyAudit);
-  } catch (e) {
-    console.error("Failed to write reply send audit:", e);
-  }
-  try {
-    const autoAudit = new EmailAutoReplyAuditLogEntity();
-    autoAudit.emailServiceId = args.emailServiceId;
-    autoAudit.messageId = args.messageId;
-    autoAudit.draftId = args.draftId;
-    autoAudit.action = args.ok ? "auto_reply_sent" : "auto_reply_failed";
-    autoAudit.decisionStatus = args.ok ? "auto_sent" : "failed";
-    autoAudit.sentSubject = args.subject;
-    autoAudit.sentBodyPreview = args.bodyPreview;
-    autoAudit.requiresUserApproval = 1;
-    autoAudit.approvedByUser = args.ok ? 1 : 0;
-    autoAudit.errorMessage = args.error;
-    autoAudit.reason = args.ok
-      ? "Sent after explicit user confirmation (Phase 1)"
-      : "Send failed after user confirmation";
-    await new EmailAutoReplyAuditLogModule().create(autoAudit);
-  } catch (e) {
-    console.error("Failed to write auto-reply send audit:", e);
-  }
-}
-
-function sanitize(value: string | undefined | null): string {
-  if (!value) return "";
-  return value.length > 240 ? value.slice(0, 240) + "…" : value;
 }
 
 // ---- DTO mappers ----
@@ -491,6 +408,6 @@ async function writeReadAudit(
     await auditModule.create(log);
   } catch (e) {
     // Audit failure must not break the tool call.
-    console.error("Failed to write AI read audit log:", e);
+    log.error("Failed to write AI read audit log:", e);
   }
 }

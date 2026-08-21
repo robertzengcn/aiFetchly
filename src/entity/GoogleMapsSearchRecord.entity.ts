@@ -4,23 +4,23 @@ import AuditableEntity from "@/entity/Auditable.entity";
 @Entity("google_maps_search_records")
 export class GoogleMapsSearchRecordEntity extends AuditableEntity {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
 
   @Column("varchar", { length: 255, nullable: false })
-  query: string;
+  query!: string;
 
   @Column("varchar", { length: 255, nullable: false })
-  location: string;
+  location!: string;
 
   @Column("varchar", { length: 20, nullable: false, default: "completed" })
-  status: string; // "completed" | "cancelled" | "failed"
+  status!: string; // "completed" | "cancelled" | "failed"
 
   @Column("int", { nullable: false, default: 0 })
-  totalResults: number;
+  totalResults!: number;
 
   @Column("text", { nullable: true })
-  summary: string;
+  summary!: string;
 
   @Column("text", { nullable: false })
-  results: string; // JSON stringified GoogleMapsBusinessResult[]
+  results!: string; // JSON stringified GoogleMapsBusinessResult[]
 }

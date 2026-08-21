@@ -5,13 +5,13 @@ import {SystemSettingEntity} from "@/entity/SystemSetting.entity"
 @Entity("system_setting_option")
 export class SystemSettingOptionEntity extends AuditableEntity{
     @PrimaryGeneratedColumn()
-    id: number;
+    id!: number;
     @Column('text')
-    label: string;
+    label!: string;
     @Column('text')
-    value: string;
+    value!: string;
     @Column('text')
-    description: string;
+    description!: string;
     @ManyToOne(() => SystemSettingEntity, (systemSettingEntity) => systemSettingEntity.options)
-    systemSetting: SystemSettingEntity;
+    systemSetting!: SystemSettingEntity;
 }

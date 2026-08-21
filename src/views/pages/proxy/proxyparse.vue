@@ -252,12 +252,13 @@ const handleFileUpload = async () => {
     const csv = Papa.parse(reader.result as string, { header: true });
 
     // Check if CSV has wrong format (single column with colon-separated values)
+    const firstRow = csv.data[0] as Record<string, unknown> | undefined;
     const hasColonSeparatedFormat =
       csv.meta?.fields?.length === 1 &&
       csv.meta.fields[0] === "host:port:protocols:user:pass" &&
       csv.data.length > 0 &&
-      csv.data[0] &&
-      typeof csv.data[0]["host:port:protocols:user:pass"] === "string";
+      firstRow &&
+      typeof firstRow["host:port:protocols:user:pass"] === "string";
 
     const invalidRowNumbers: number[] = [];
 
