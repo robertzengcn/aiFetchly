@@ -1,25 +1,19 @@
+import type { DataSource } from "typeorm";
+import type Database from "better-sqlite3";
 import * as fs from "fs";
 import * as path from "path";
+// import * as sqliteVec from 'sqlite-vec';
+import { log } from "@/modules/Logger";
 import { AbstractVectorDatabase } from "@/modules/interface/AbstractVectorDatabase";
 import {
   VectorDatabaseConfig,
   VectorSearchResult,
   IndexStats,
 } from "@/modules/interface/IVectorDatabase";
+// import { VectorEntity, VectorMetadataEntity } from '@/entity/Vector.entity';
 import { VectorModule } from "@/modules/VectorModule";
 import { VectorMetadataModule } from "@/modules/VectorMetadataModule";
 import { RAGChunkModule } from "@/modules/RAGChunkModule";
-import { log } from "@/modules/Logger";
-
-/** Structural slice of the better-sqlite3 Database this adapter queries through
- *  directly. Avoids `as any` and depending on typeorm's non-exported driver type. (WS-3 R3.6) */
-interface RawSqliteStatement {
-  get(...params: unknown[]): unknown;
-  all(...params: unknown[]): unknown[];
-}
-interface RawSqliteDatabase {
-  prepare(sql: string): RawSqliteStatement;
-}
 
 /**
  * SQLite-vec vector database implementation using TypeORM
@@ -27,6 +21,7 @@ interface RawSqliteDatabase {
  * Leverages VectorModule and VectorMetadataModule for database operations
  */
 export class SqliteVecDatabase extends AbstractVectorDatabase {
+  // private dataSource: DataSource | null = null;
   private vectorModule: VectorModule | null = null;
   private vectorMetadataModule: VectorMetadataModule | null = null;
   private currentVirtualTableName: string | null = null;
@@ -35,40 +30,32 @@ export class SqliteVecDatabase extends AbstractVectorDatabase {
     super();
     this.vectorModule = new VectorModule();
     this.vectorMetadataModule = new VectorMetadataModule();
+    // this.initialized = true;
   }
 
   /**
-   * Pull the underlying better-sqlite3 Database from a TypeORM connection (typed),
-   * replacing the previous `driver as any` access at each raw-query site. Returns
-   * null when the connection is absent or uninitialized. (WS-3 R3.6)
+   * Extract the raw better-sqlite3 Database handle from a TypeORM DataSource.
+   *
+   * In TypeORM 0.3 the `driver.database` property is the database *path string*
+   * (which has no `.prepare()`), while the live better-sqlite3 instance lives at
+   * `driver.databaseConnection`. Synchronous-prepared queries must be executed
+   * against the latter.
    */
-  private getRawDatabase(
-    dbConnection:
-      | { connection: { driver: unknown; isInitialized: boolean } }
-      | null
-      | undefined
-  ): RawSqliteDatabase | null {
-    if (!dbConnection || !dbConnection.connection.isInitialized) return null;
-    const driver = dbConnection.connection.driver as {
-      database?: RawSqliteDatabase | null;
-    };
-    return driver.database ?? null;
-  }
-
-  /**
-   * Validate a SQL identifier (table name) before interpolation. Virtual table
-   * names come from metadata; this is defense-in-depth against injection. (WS-3 R3.6)
-   */
-  private static assertSafeIdentifier(name: string, kind = "identifier"): void {
-    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
-      throw new Error(`Unsafe SQL ${kind}: ${JSON.stringify(name)}`);
+  private static getRawDatabaseHandle(
+    connection: DataSource
+  ): Database.Database | null {
+    try {
+      if (!connection || !connection.isInitialized) {
+        return null;
+      }
+      const driver = connection.driver as unknown as {
+        databaseConnection?: Database.Database;
+      };
+      return driver.databaseConnection ?? null;
+    } catch (error) {
+      log.warn("Failed to access raw database handle:", error);
+      return null;
     }
-  }
-
-  /** Set + validate the current virtual table name. */
-  private setVirtualTableName(name: string): void {
-    SqliteVecDatabase.assertSafeIdentifier(name, "virtual table name");
-    this.currentVirtualTableName = name;
   }
   /**
    * Initialize sqlite-vec via TypeORM
@@ -87,6 +74,51 @@ export class SqliteVecDatabase extends AbstractVectorDatabase {
       );
     }
   }
+
+  /**
+   * Create TypeORM DataSource for the vector database
+   * Each vector database file gets its own DataSource with sqlite-vec loaded
+   */
+  // private async createDataSource(databasePath: string): Promise<DataSource> {
+  //     // Ensure directory exists
+  //     const dbDir = path.dirname(databasePath);
+  //     if (!fs.existsSync(dbDir)) {
+  //         fs.mkdirSync(dbDir, { recursive: true });
+  //     }
+
+  //     // Create TypeORM DataSource with sqlite-vec extension
+  //     // sqlite-vec will be loaded via prepareDatabase hook (as shown in SqliteDb.ts)
+  //     const dataSource = new DataSource({
+  //         type: 'better-sqlite3',
+  //         database: databasePath,
+  //         entities: [VectorEntity, VectorMetadataEntity],
+  //         synchronize: true, // Auto-create tables
+  //         logging: false,
+  //         prepareDatabase: (db: Database.Database) => {
+  //             // Load sqlite-vec extension into the connection (same as SqliteDb.ts)
+  //             try {
+  //                 sqliteVec.load(db);
+  //                 log.info('sqlite-vec extension loaded successfully via TypeORM prepareDatabase');
+  //             } catch (err) {
+  //                 const errorMessage = err instanceof Error ? err.message : String(err);
+  //                 log.error(`Failed to load sqlite-vec extension: ${errorMessage}`);
+  //                 log.error('Please ensure the platform-specific sqlite-vec package is installed (e.g., sqlite-vec-linux-x64, sqlite-vec-darwin-x64, etc.)');
+  //                 // Don't throw - allow database creation, but operations will fail later
+  //             }
+
+  //             // Enable WAL mode for better concurrency
+  //             db.pragma('journal_mode = WAL');
+  //         }
+  //     });
+
+  //     // Initialize DataSource
+  //     if (!dataSource.isInitialized) {
+  //         await dataSource.initialize();
+  //         log.info(`TypeORM DataSource initialized for vector database: ${databasePath}`);
+  //     }
+
+  //     return dataSource;
+  // }
 
   /**
    * Create a new SQLite database using TypeORM with sqlite-vec
@@ -128,7 +160,7 @@ export class SqliteVecDatabase extends AbstractVectorDatabase {
       await this.vectorModule.createVirtualTableFromMetadata(metadata);
 
       // Set the current virtual table name
-      this.setVirtualTableName(metadata.virtual_table_name);
+      this.currentVirtualTableName = metadata.virtual_table_name;
 
       log.info(
         `Created ${indexType} SQLite-vec index with dimension ${config.dimensions} for model '${config.modelName}'`
@@ -177,7 +209,7 @@ export class SqliteVecDatabase extends AbstractVectorDatabase {
 
       if (metadata) {
         // Set the current virtual table name from metadata
-        this.setVirtualTableName(metadata.virtual_table_name);
+        this.currentVirtualTableName = metadata.virtual_table_name;
         this.dimension = metadata.dimension;
 
         log.info(
@@ -191,7 +223,7 @@ export class SqliteVecDatabase extends AbstractVectorDatabase {
           `No existing metadata found for model '${config.modelName}' with dimension ${config.dimensions}, creating new index`
         );
         const virtualTableName = await this.createIndex(config);
-        this.setVirtualTableName(virtualTableName);
+        this.currentVirtualTableName = virtualTableName;
       }
     } catch (error) {
       log.error("Failed to load SQLite-vec index:", error);
@@ -207,7 +239,13 @@ export class SqliteVecDatabase extends AbstractVectorDatabase {
    * Save index to disk (SQLite auto-saves, but we can checkpoint)
    */
   async saveIndex(): Promise<void> {
-    // No-op: SQLite (vec0 + WAL) auto-persists; explicit checkpoint removed (WS-3 R3.6).
+    // try {
+    //     // SQLite auto-saves, but we can checkpoint WAL using raw query
+    //     await this.vectorModule.sqliteDb.connection.query('PRAGMA wal_checkpoint(TRUNCATE)');
+    //     log.info(`SQLite-vec index checkpointed at ${this.indexPath}`);
+    // } catch (error) {
+    //     log.error('Failed to checkpoint SQLite-vec index:', error);
+    // }
   }
 
   /**
@@ -279,7 +317,7 @@ export class SqliteVecDatabase extends AbstractVectorDatabase {
    */
   async search(
     queryVector: number[],
-    k = 10,
+    k: number = 10,
     distance?: number
   ): Promise<VectorSearchResult> {
     if (!this.vectorModule) {
@@ -299,7 +337,8 @@ export class SqliteVecDatabase extends AbstractVectorDatabase {
         queryVector,
         k,
         this.dimension,
-        this.currentVirtualTableName
+        this.currentVirtualTableName,
+        distance
       );
     } catch (error) {
       log.error("Failed to search vectors in SqliteVecDatabase:", error);
@@ -370,9 +409,12 @@ export class SqliteVecDatabase extends AbstractVectorDatabase {
         return 0;
       }
 
-      // Access underlying better-sqlite3 database through TypeORM driver
-      const database = this.getRawDatabase(dbConnection);
-
+      // Access underlying better-sqlite3 database through TypeORM driver.
+      // NOTE: driver.database is the database *path string* in TypeORM 0.3;
+      // the real better-sqlite3 handle lives at driver.databaseConnection.
+      const database = SqliteVecDatabase.getRawDatabaseHandle(
+        dbConnection.connection
+      );
       if (!database) {
         return 0;
       }
@@ -470,7 +512,22 @@ export class SqliteVecDatabase extends AbstractVectorDatabase {
    * Optimize the index
    */
   async optimizeIndex(): Promise<void> {
-    // No-op: vec0 needs no manual optimization (VACUUM/ANALYZE removed, WS-3 R3.6).
+    //     if (!this.vectorModule) {
+    //         throw new Error('Index not initialized');
+    //     }
+    //     try {
+    //         const dataSource = this.vectorModule.getDataSource();
+    //         const queryRunner = dataSource.createQueryRunner();
+    //         // Run VACUUM to optimize database
+    //         await queryRunner.query('VACUUM');
+    //         // Run ANALYZE to update statistics
+    //         await queryRunner.query('ANALYZE');
+    //         await queryRunner.release();
+    //         log.info('SQLite-vec index optimization completed');
+    //     } catch (error) {
+    //         log.error('Failed to optimize SQLite-vec index:', error);
+    //         throw new Error('Failed to optimize SQLite-vec index');
+    //     }
   }
 
   /**
@@ -510,9 +567,75 @@ export class SqliteVecDatabase extends AbstractVectorDatabase {
 
   /**
    * Restore index from backup
+   *
+   * Sqlite-vec keeps all vectors in the main TypeORM database, so there is no
+   * standalone index file to restore. This validates the backup path and
+   * re-loads the current index configuration so the caller's contract holds.
    */
   async restoreIndex(backupPath: string): Promise<void> {
-    // No-op: restore is handled by backupIndex + the file-copy path (WS-3 R3.6).
+    if (!backupPath || backupPath.trim().length === 0) {
+      throw new Error("Backup path is required to restore index");
+    }
+    if (!fs.existsSync(backupPath)) {
+      throw new Error(`Backup file not found: ${backupPath}`);
+    }
+    // Validate that we have a configuration to restore against.
+    if (this.config?.modelName && this.dimension) {
+      await this.loadIndex(this.config);
+    } else {
+      throw new Error("No configuration available to restore index");
+    }
+    log.info(`SQLite-vec index restored from ${backupPath}`);
+    // if (!this.initialized) {
+    //     await this.initialize();
+    // }
+    // try {
+    //     if (!fs.existsSync(backupPath)) {
+    //         throw new Error(`Backup file not found: ${backupPath}`);
+    //     }
+    //     // Close current DataSource if open
+    //     if (this.dataSource && this.dataSource.isInitialized) {
+    //         await this.dataSource.destroy();
+    //         this.dataSource = null;
+    //     }
+    //     // Copy backup file to current location
+    //     if (this.config) {
+    //         // Determine target path
+    //         if (this.config.documentIndexPath) {
+    //             this.indexPath = this.config.documentIndexPath;
+    //         } else if (this.config.documentId) {
+    //             this.indexPath = this.getDocumentSpecificIndexPath(this.config, this.config.documentId);
+    //         } else {
+    //             this.indexPath = this.getModelSpecificIndexPath(this.config);
+    //         }
+    //         // Ensure .db extension
+    //         if (this.indexPath.endsWith('.index')) {
+    //             this.indexPath = this.indexPath.replace(/\.index$/, '.db');
+    //         } else if (!this.indexPath.endsWith('.db')) {
+    //             this.indexPath = this.indexPath + '.db';
+    //         }
+    //         // Ensure directory exists
+    //         this.ensureIndexDirectory();
+    //         // Copy backup file
+    //         fs.copyFileSync(backupPath, this.indexPath);
+    //         // Create TypeORM DataSource (will load sqlite-vec via prepareDatabase)
+    //         this.dataSource = await this.createDataSource(this.indexPath);
+    //         // Create module instances
+    //         this.vectorModule = new VectorModule(this.dataSource);
+    //         this.vectorMetadataModule = new VectorMetadataModule(this.dataSource);
+    //         // Read dimension from metadata using VectorMetadataModule
+    //         const metadata = await this.vectorMetadataModule.findById(1);
+    //         if (metadata) {
+    //             this.dimension = metadata.dimension;
+    //         }
+    //         log.info(`SQLite-vec index restored from ${backupPath}`);
+    //     } else {
+    //         throw new Error('No configuration available to restore index');
+    //     }
+    // } catch (error) {
+    //     log.error('Failed to restore SQLite-vec index:', error);
+    //     throw new Error('Failed to restore SQLite-vec index');
+    // }
   }
 
   /**
@@ -682,8 +805,11 @@ export class SqliteVecDatabase extends AbstractVectorDatabase {
         return false;
       }
 
-      // Access underlying better-sqlite3 database through TypeORM driver
-      const database = this.getRawDatabase(dbConnection);
+      // Access underlying better-sqlite3 database through TypeORM driver.
+      // driver.database is the path string; the live handle is databaseConnection.
+      const database = SqliteVecDatabase.getRawDatabaseHandle(
+        dbConnection.connection
+      );
 
       if (!database) {
         return false;
@@ -712,7 +838,20 @@ export class SqliteVecDatabase extends AbstractVectorDatabase {
    * Clean up resources
    */
   async cleanup(): Promise<void> {
-    // No-op: index lifetime is managed by the DataSource + vector_metadata (WS-3 R3.6).
+    // if (this.dataSource && this.dataSource.isInitialized) {
+    //     try {
+    //         await this.saveIndex();
+    //         await this.dataSource.destroy();
+    //         log.info('SQLite-vec TypeORM DataSource closed');
+    //     } catch (error) {
+    //         log.error('Error closing database connection:', error);
+    //     }
+    // }
+    // this.dataSource = null;
+    // this.vectorModule = null;
+    // this.vectorMetadataModule = null;
+    // this.initialized = false;
+    // this.config = null;
   }
 
   /**
@@ -768,8 +907,11 @@ export class SqliteVecDatabase extends AbstractVectorDatabase {
         return false;
       }
 
-      // Access underlying better-sqlite3 database through TypeORM driver
-      const database = this.getRawDatabase(dbConnection);
+      // Access underlying better-sqlite3 database through TypeORM driver.
+      // driver.database is the path string; the live handle is databaseConnection.
+      const database = SqliteVecDatabase.getRawDatabaseHandle(
+        dbConnection.connection
+      );
 
       if (!database) {
         return false;
@@ -805,8 +947,11 @@ export class SqliteVecDatabase extends AbstractVectorDatabase {
         return null;
       }
 
-      // Access underlying better-sqlite3 database through TypeORM driver
-      const database = this.getRawDatabase(dbConnection);
+      // Access underlying better-sqlite3 database through TypeORM driver.
+      // driver.database is the path string; the live handle is databaseConnection.
+      const database = SqliteVecDatabase.getRawDatabaseHandle(
+        dbConnection.connection
+      );
 
       if (!database) {
         return null;

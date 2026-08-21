@@ -5,11 +5,15 @@ import { RAGDocumentEntity } from "@/entity/RAGDocument.entity";
 import * as fs from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
-import { WriteLog, getLogPath } from "@/modules/lib/function";
+import { WriteLog } from "@/modules/lib/function";
 import { app } from "electron";
 import { VectorStoreService } from "@/service/VectorStoreService";
 import { VectorDatabaseType } from "@/modules/factories/VectorDatabaseFactory";
 import { RAGChunkModule } from "@/modules/RAGChunkModule";
+import {
+  getVectorIndexBaseDir,
+  getDocumentVectorIndexPath,
+} from "@/service/VectorIndexPaths";
 
 /** F2 helper — unique stamp used to build staged-upload filenames. */
 function validationStamp(): string {
@@ -58,7 +62,7 @@ export class RAGDocumentModule extends BaseModule {
     ".pdf",
     ".doc",
     ".docx",
-    ".rtf",
+    ".pptx",
     ".html",
     ".htm",
     ".xml",
@@ -276,17 +280,32 @@ export class RAGDocumentModule extends BaseModule {
    * F10 fix (bypass) — vectorIndexPath must live under either the app
    * userData directory (where VectorStoreService creates indexes) or the
    * upload staging root. Anything else is refused.
+   *
+   * Unlike the file-path check (isPathUnderUploadStaging), the vector index
+   * file is a *logical marker* that may not exist on disk yet (it is only
+   * created when the first embedding is saved).  fs.realpathSync() throws on
+   * non-existent paths, so we use path.resolve() to normalize the path
+   * without requiring it to exist, and verify that the resolved path (or its
+   * parent directory) sits under an allowed root.
    */
   private isVectorIndex_pathSafe(target: string): boolean {
     try {
-      const resolved = fs.realpathSync(target);
+      const resolved = path.resolve(target);
       const allowedRoots = [
         app.getPath("userData"),
         this.getUploadStagingDir(),
       ];
       for (const root of allowedRoots) {
-        const rel = path.relative(root, resolved);
-        if (!rel.startsWith("..") && !path.isAbsolute(rel) && rel !== "") {
+        const resolvedRoot = path.resolve(root);
+        // Check the target path itself
+        const rel = path.relative(resolvedRoot, resolved);
+        if (!rel.startsWith("..") && !path.isAbsolute(rel)) {
+          return true;
+        }
+        // Also check the parent directory (the file itself may not exist yet)
+        const parentDir = path.dirname(resolved);
+        const parentRel = path.relative(resolvedRoot, parentDir);
+        if (!parentRel.startsWith("..") && !path.isAbsolute(parentRel)) {
           return true;
         }
       }
@@ -477,9 +496,13 @@ export class RAGDocumentModule extends BaseModule {
             `Found ${chunkIds.length} chunks for document ${id}, deleting associated vectors...`
           );
 
-          // Create VectorStoreService instance
+          // Create VectorStoreService against the shared app-owned base so
+          // loadIndex/deleteVectorsByChunkIds touch the same tables and files
+          // the indexing flow used (see VectorIndexPaths.ts). Passing the
+          // stored file path as a *base* directory was the source of the
+          // "outside allowed roots" refusal.
           const vectorStoreService = new VectorStoreService(
-            document.vectorIndexPath,
+            getVectorIndexBaseDir(),
             VectorDatabaseType.SQLITE_VEC
           );
 
@@ -490,7 +513,6 @@ export class RAGDocumentModule extends BaseModule {
           await vectorStoreService.loadIndex({
             name: document.modelName,
             dimensions: document.vectorDimensions,
-            documentIndexPath: document.vectorIndexPath,
           });
 
           // Delete vectors by chunk IDs using VectorStoreService
@@ -516,31 +538,47 @@ export class RAGDocumentModule extends BaseModule {
         // Don't return false - continue with file and database deletion even if vector deletion fails
       }
 
-      // Delete vector index file if path exists (legacy cleanup)
-      // F10 fix (bypass) — apply the same containment check used for
-      // document.filePath. A tampered/legacy DB row could otherwise let a
-      // renderer delete arbitrary local files via vectorIndexPath.
-      if (
-        document.vectorIndexPath &&
-        this.isVectorIndex_pathSafe(document.vectorIndexPath)
-      ) {
+      // Delete vector index file(s). Two candidates:
+      //  1. The canonical path derived from the document's model/dimension,
+      //     which is where the current app creates indexes.
+      //  2. The legacy stored vectorIndexPath (older rows / tampered DB).
+      // F10 fix (bypass) — apply the containment check to every candidate. A
+      // tampered/legacy DB row could otherwise let a renderer delete arbitrary
+      // local files via vectorIndexPath.
+      const vectorIndexPathCandidates: string[] = [];
+      if (document.modelName && document.vectorDimensions) {
+        vectorIndexPathCandidates.push(
+          getDocumentVectorIndexPath(
+            document.id,
+            document.modelName,
+            document.vectorDimensions
+          )
+        );
+      }
+      if (document.vectorIndexPath) {
+        vectorIndexPathCandidates.push(document.vectorIndexPath);
+      }
+
+      const seenPaths = new Set<string>();
+      for (const candidate of vectorIndexPathCandidates) {
+        if (seenPaths.has(candidate)) {
+          continue;
+        }
+        seenPaths.add(candidate);
+        if (!this.isVectorIndex_pathSafe(candidate)) {
+          console.warn(
+            `Refusing to delete vector index path outside allowed roots: ${candidate}`
+          );
+          continue;
+        }
         try {
-          if (fs.existsSync(document.vectorIndexPath)) {
-            fs.unlinkSync(document.vectorIndexPath);
-            log.info(
-              `Deleted vector index file: ${document.vectorIndexPath}`
-            );
+          if (fs.existsSync(candidate)) {
+            fs.unlinkSync(candidate);
+            log.info(`Deleted vector index file: ${candidate}`);
           }
         } catch (error) {
-          log.warn(
-            `Failed to delete vector index file: ${document.vectorIndexPath}`,
-            error
-          );
+          log.warn(`Failed to delete vector index file: ${candidate}`, error);
         }
-      } else if (document.vectorIndexPath) {
-        log.warn(
-          `Refusing to delete vector index path outside allowed roots: ${document.vectorIndexPath}`
-        );
       }
     }
 
@@ -673,9 +711,7 @@ export class RAGDocumentModule extends BaseModule {
         errorLogPath
       );
 
-      log.info(
-        `Error log saved for document ${documentId}: ${errorLogPath}`
-      );
+      log.info(`Error log saved for document ${documentId}: ${errorLogPath}`);
       return errorLogPath;
     } catch (logError) {
       log.error(
@@ -781,10 +817,7 @@ export class RAGDocumentModule extends BaseModule {
       const logContent = fs.readFileSync(resolvedLog, "utf-8");
       return logContent;
     } catch (error) {
-      log.error(
-        `Failed to read error log for document ${documentId}:`,
-        error
-      );
+      log.error(`Failed to read error log for document ${documentId}:`, error);
       return null;
     }
   }

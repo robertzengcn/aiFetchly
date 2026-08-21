@@ -9,9 +9,13 @@ import * as os from "os";
 import * as path from "path";
 import * as crypto from "crypto";
 import { app } from "electron";
+import { pathToFileURL } from "url";
 import { PDFDocument } from "pdf-lib";
+import { GlobalWorkerOptions } from "pdfjs-dist";
 import pdf2md from "pdf2md-ts";
 import * as mammoth from "mammoth";
+import WordExtractor from "word-extractor";
+import { PptxTextExtractor } from "@/service/PptxTextExtractor";
 import { HtmlConversionService } from "@/service/HtmlConversionService";
 import {
   SpreadsheetConversionService,
@@ -220,7 +224,7 @@ export class DocumentService {
 
   /**
    * Convert uploaded attachment content to markdown text.
-   * Supported: PDF, CSV, DOCX, XLSX.
+   * Supported: PDF, CSV, DOCX, DOC, PPTX, XLSX.
    */
   async convertUploadedAttachmentToMarkdown(
     fileName: string,
@@ -243,7 +247,7 @@ export class DocumentService {
         normalizeColumns: true,
       });
     } else {
-      // PDF and DOCX still require a temp file on disk
+      // PDF, DOCX, DOC, PPTX still require a temp file on disk
       const sourcePath = path.join(
         os.tmpdir(),
         `aifetchly-attachment-${Date.now()}-${crypto.randomUUID()}${ext}`
@@ -254,6 +258,10 @@ export class DocumentService {
           markdown = await this.convertPdfFileToMarkdown(sourcePath);
         } else if (ext === ".docx") {
           markdown = await this.convertDocxFileToMarkdown(sourcePath);
+        } else if (ext === ".doc") {
+          markdown = await this.convertDocFileToMarkdown(sourcePath);
+        } else if (ext === ".pptx") {
+          markdown = await this.convertPptxFileToMarkdown(sourcePath);
         }
       } finally {
         if (fs.existsSync(sourcePath)) {
@@ -468,7 +476,7 @@ export class DocumentService {
   private resolveSupportedExtension(
     fileName: string,
     mimeType: string
-  ): ".pdf" | ".csv" | ".docx" | ".xlsx" {
+  ): ".pdf" | ".csv" | ".doc" | ".docx" | ".pptx" | ".xlsx" {
     const lowerName = fileName.toLowerCase();
     const lowerMime = mimeType.toLowerCase();
 
@@ -489,6 +497,16 @@ export class DocumentService {
     ) {
       return ".docx";
     }
+    if (lowerName.endsWith(".doc") || lowerMime === "application/msword") {
+      return ".doc";
+    }
+    if (
+      lowerName.endsWith(".pptx") ||
+      lowerMime ===
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+    ) {
+      return ".pptx";
+    }
     if (
       lowerName.endsWith(".xlsx") ||
       lowerName.endsWith(".xls") ||
@@ -503,6 +521,23 @@ export class DocumentService {
   }
 
   private async convertPdfFileToMarkdown(filePath: string): Promise<string> {
+    // Ensure the pdfjs worker path is set (same logic as ChunkingService).
+    try {
+      const workerPath = path.join(__dirname, "pdf.worker.mjs");
+      if (fs.existsSync(workerPath)) {
+        GlobalWorkerOptions.workerSrc = pathToFileURL(workerPath).href;
+      } else {
+        const pkgDir = path.dirname(require.resolve("pdfjs-dist/package.json"));
+        GlobalWorkerOptions.workerSrc = pathToFileURL(
+          path.join(pkgDir, "legacy", "build", "pdf.worker.mjs")
+        ).href;
+      }
+    } catch {
+      console.warn(
+        "Could not resolve pdf.worker.mjs — PDF extraction may fail with fake-worker error"
+      );
+    }
+
     const pdfBytes = fs.readFileSync(filePath);
     const pdfDoc = await PDFDocument.load(pdfBytes);
     const pageCount = pdfDoc.getPageCount();
@@ -535,6 +570,19 @@ export class DocumentService {
       return "";
     }
     return this.htmlConversionService.convertHtmlToMarkdown(htmlContent).trim();
+  }
+
+  private async convertDocFileToMarkdown(filePath: string): Promise<string> {
+    const extractor = new WordExtractor();
+    const doc = await extractor.extract(filePath);
+    return (doc.getBody() || "").trim();
+  }
+
+  private async convertPptxFileToMarkdown(filePath: string): Promise<string> {
+    // Delegate to the shared PptxTextExtractor so chat attachments and the
+    // RAG chunking pipeline produce identical extraction (slide ordering,
+    // run joining, entity decoding, and graceful error handling).
+    return PptxTextExtractor.extractFile(filePath)?.content ?? "";
   }
 
   private sanitizePathSegment(value: string): string {

@@ -12,9 +12,13 @@ import {
 import * as crypto from "crypto";
 import * as fs from "fs";
 import * as path from "path";
+import { pathToFileURL } from "url";
 import { PDFDocument } from "pdf-lib";
+import { GlobalWorkerOptions } from "pdfjs-dist";
 import pdf2md from "pdf2md-ts";
 import * as mammoth from "mammoth";
+import WordExtractor from "word-extractor";
+import { PptxTextExtractor } from "@/service/PptxTextExtractor";
 
 export interface ChunkingOptions {
   chunkSize: number;
@@ -212,6 +216,49 @@ export class ChunkingService {
   }
 
   /**
+   * Extract DOC content using word-extractor (supports both .doc and .docx)
+   */
+  private async extractDocContent(filePath: string): Promise<string | null> {
+    try {
+      if (!fs.existsSync(filePath)) {
+        console.error(`DOC file not found: ${filePath}`);
+        return null;
+      }
+
+      console.log(`Processing DOC file: ${path.basename(filePath)}`);
+
+      const extractor = new WordExtractor();
+      const doc = await extractor.extract(filePath);
+      const body = doc.getBody() || "";
+
+      if (!body.trim()) {
+        console.warn(
+          `No content extracted from DOC: ${path.basename(filePath)}`
+        );
+        return null;
+      }
+
+      console.log(
+        `Successfully extracted DOC content: ${body.length} characters`
+      );
+      return body.trim();
+    } catch (error) {
+      console.error(`Error extracting DOC content from ${filePath}:`, error);
+      return null;
+    }
+  }
+
+  /**
+   * Extract PPTX content. Delegates to the shared PptxTextExtractor so both
+   * the RAG chunking pipeline and the chat attachment path produce identical
+   * results (slide ordering, run joining, and entity decoding handled once).
+   */
+  private async extractPptxContent(filePath: string): Promise<string | null> {
+    console.log(`Processing PPTX file: ${path.basename(filePath)}`);
+    return PptxTextExtractor.extractFile(filePath)?.content ?? null;
+  }
+
+  /**
    * Extract PDF content using pdf-lib and pdf2md-ts
    */
   private async extractPdfContent(
@@ -244,6 +291,35 @@ export class ChunkingService {
       log.info(
         `Processing PDF with ${pageCount} pages: ${path.basename(filePath)}`
       );
+
+      // pdf2md-ts sets GlobalWorkerOptions.workerSrc to a bare module specifier
+      // ("pdfjs-dist/legacy/build/pdf.worker") at module load time. pdfjs-dist
+      // 4.x's _setupFakeWorkerGlobal getter does import(workerSrc) when the
+      // real Worker cannot be created, and a bare specifier without extension
+      // fails to resolve in Node.js. The Vite build copies pdf.worker.mjs to
+      // the .vite/build/ directory (unpacked from asar), so reference it via
+      // __dirname. Fall back to a node_modules lookup for development.
+      //
+      // On Windows the bare path (e.g. "E:\...") must be converted to a
+      // file:// URL because the ESM loader rejects Windows drive-letter paths.
+      try {
+        const workerPath = path.join(__dirname, "pdf.worker.mjs");
+        if (fs.existsSync(workerPath)) {
+          GlobalWorkerOptions.workerSrc = pathToFileURL(workerPath).href;
+        } else {
+          // Development / CI — resolve from the installed package.
+          const pkgDir = path.dirname(
+            require.resolve("pdfjs-dist/package.json")
+          );
+          GlobalWorkerOptions.workerSrc = pathToFileURL(
+            path.join(pkgDir, "legacy", "build", "pdf.worker.mjs")
+          ).href;
+        }
+      } catch {
+        console.warn(
+          "Could not resolve pdf.worker.mjs — PDF extraction may fail with fake-worker error"
+        );
+      }
 
       let fullContent = "";
       let processedPages = 0;
@@ -403,16 +479,39 @@ export class ChunkingService {
           };
         }
 
-        case ".docx": {
-          const docxContent = await this.extractDocxContent(document.filePath);
-          if (!docxContent) return null;
+        case ".docx":
+        case ".doc": {
+          // .docx uses mammoth, .doc uses word-extractor
+          let docContent: string | null;
+          if (fileExt === ".docx") {
+            docContent = await this.extractDocxContent(document.filePath);
+          } else {
+            docContent = await this.extractDocContent(document.filePath);
+          }
+          if (!docContent) return null;
           return {
-            content: docxContent,
+            content: docContent,
             contentType: "markdown",
             originalFormat: "docx",
             metadata: {
-              characterCount: docxContent.length,
-              wordCount: docxContent
+              characterCount: docContent.length,
+              wordCount: docContent
+                .split(/\s+/)
+                .filter((word) => word.length > 0).length,
+            },
+          };
+        }
+
+        case ".pptx": {
+          const pptxContent = await this.extractPptxContent(document.filePath);
+          if (!pptxContent) return null;
+          return {
+            content: pptxContent,
+            contentType: "markdown",
+            originalFormat: "pptx",
+            metadata: {
+              characterCount: pptxContent.length,
+              wordCount: pptxContent
                 .split(/\s+/)
                 .filter((word) => word.length > 0).length,
             },
@@ -459,11 +558,6 @@ export class ChunkingService {
             },
           };
         }
-
-        // case '.doc':
-        //     // TODO: Implement DOC text extraction (older format)
-        //     console.warn('DOC text extraction not yet implemented');
-        //     return null;
 
         // case '.rtf':
         //     // TODO: Implement RTF text extraction
@@ -563,7 +657,6 @@ export class ChunkingService {
     const chunks: ChunkResult[] = [];
     let currentChunk = "";
     let startPosition = 0;
-    let chunkIndex = 0;
 
     for (let i = 0; i < sentences.length; i++) {
       const sentence = sentences[i];
@@ -593,7 +686,6 @@ export class ChunkingService {
           currentChunk.length -
           overlapText.length -
           sentence.length;
-        chunkIndex++;
       } else {
         currentChunk = potentialChunk;
       }
@@ -781,9 +873,10 @@ export class ChunkingService {
       const isHeading = /^#{1,6}\s/.test(line);
       const isListStart = /^[-*+]\s/.test(line) || /^\d+\.\s/.test(line);
       const isCodeBlock = /^```/.test(line);
-      // Match both simple horizontal rules (---) and page separators (--- Page X ---)
+      // Match simple horizontal rules (---) and content separators emitted by
+      // the extractors: PDFs emit "--- Page N ---", PPTX emits "--- Slide N ---".
       const isHorizontalRule =
-        /^---+$/.test(line) || /^---\s+Page\s+\d+\s+---/.test(line);
+        /^---+$/.test(line) || /^---\s+(?:Page|Slide)\s+\d+\s+---/.test(line);
       const isTableRow = /^\|.*\|$/.test(line);
 
       // Check if next line continues the current structure

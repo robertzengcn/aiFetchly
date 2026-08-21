@@ -19,6 +19,15 @@ Only final installer formats are uploaded (plus the Squirrel auto-update assets 
 
 The workflow never uploads the entire `out/make` directory. Production builds publish a **draft** GitHub Release automatically (see [GitHub Auto-Update](#github-auto-update)); test builds never publish a release.
 
+### Draft release on push to master
+
+Every push to `master` also builds installers and creates a **draft** GitHub Release (tagged `v<version>` using the run number) through a separate `draft-release-on-push` job. It attaches what the push build produces:
+
+- Windows: Store-mode `*.msix` and the optional local-testing `*.msi`
+- macOS: the signed `*.zip` and `*.dmg`
+
+Push builds do **not** produce Windows Squirrel auto-update assets (`RELEASES` / `*-full.nupkg`) — those only come from a manual `production` dispatch — so the draft release is NOT usable by `update.electronjs.org` until you replace it with a release that has the auto-update assets. Drafts are invisible to the updater, so this is purely for reviewing the installers before an official release. To promote it, publish the draft for the same tag after attaching the production auto-update assets, or delete it and run a manual `production` build which publishes directly.
+
 ## Required GitHub Actions secrets
 
 Test builds require:

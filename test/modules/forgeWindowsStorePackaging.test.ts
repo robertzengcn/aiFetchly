@@ -1,5 +1,5 @@
 import { expect } from "chai";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { load } from "js-yaml";
 
@@ -7,6 +7,7 @@ interface ForgeMaker {
   name: string;
   config?: {
     sign?: boolean;
+    packageAssets?: string;
     windowsKitVersion?: string;
     manifestVariables?: Record<string, string>;
   };
@@ -45,6 +46,30 @@ const releaseWorkflowPath = path.resolve(
   __dirname,
   "../../.github/workflows/release.yml"
 );
+const windowsStoreAssetsPath = path.resolve(
+  __dirname,
+  "../../src/assets/windows-store/package"
+);
+
+const requiredWindowsStoreAssets = new Map<string, readonly [number, number]>([
+  ["LockScreenLogo.scale-200.png", [48, 48]],
+  ["SplashScreen.scale-200.png", [1240, 600]],
+  ["Square150x150Logo.png", [150, 150]],
+  ["Square150x150Logo.scale-200.png", [300, 300]],
+  ["Square44x44Logo.png", [44, 44]],
+  ["Square44x44Logo.scale-200.png", [88, 88]],
+  ["Square44x44Logo.targetsize-24_altform-unplated.png", [24, 24]],
+  ["Wide310x150Logo.scale-200.png", [620, 300]],
+  ["icon.png", [50, 50]],
+]);
+
+const transparentWindowsStoreAssets = new Set<string>([
+  "LockScreenLogo.scale-200.png",
+  "Square44x44Logo.png",
+  "Square44x44Logo.scale-200.png",
+  "Square44x44Logo.targetsize-24_altform-unplated.png",
+  "icon.png",
+]);
 
 describe("Windows Store packaging", (): void => {
   const originalEnvironment = { ...process.env };
@@ -74,6 +99,7 @@ describe("Windows Store packaging", (): void => {
 
     expect(maker).to.not.equal(undefined);
     expect(maker?.config?.sign).to.equal(false);
+    expect(maker?.config?.packageAssets).to.equal(windowsStoreAssetsPath);
     expect(maker?.config?.windowsKitVersion).to.equal("10.0.26100.0");
     expect(maker?.config?.manifestVariables).to.include({
       packageIdentity: "12345RobertZeng.AiFetchly",
@@ -82,6 +108,45 @@ describe("Windows Store packaging", (): void => {
       packageMinOSVersion: "10.0.17763.0",
       packageMaxOSVersionTested: "10.0.26100.0",
     });
+  });
+
+  it("ships the complete branded Windows Store asset set", (): void => {
+    expect(existsSync(windowsStoreAssetsPath)).to.equal(true);
+
+    const assetNames = readdirSync(windowsStoreAssetsPath)
+      .filter((fileName: string): boolean => fileName.endsWith(".png"))
+      .sort();
+    expect(assetNames).to.deep.equal(
+      Array.from(requiredWindowsStoreAssets.keys()).sort()
+    );
+
+    for (const [assetName, [expectedWidth, expectedHeight]] of
+      requiredWindowsStoreAssets) {
+      const asset = readFileSync(path.join(windowsStoreAssetsPath, assetName));
+      expect(asset.subarray(1, 4).toString("ascii"), assetName).to.equal("PNG");
+      expect(asset.readUInt32BE(16), `${assetName} width`).to.equal(
+        expectedWidth
+      );
+      expect(asset.readUInt32BE(20), `${assetName} height`).to.equal(
+        expectedHeight
+      );
+
+      if (transparentWindowsStoreAssets.has(assetName)) {
+        expect([4, 6], `${assetName} PNG color type`).to.include(asset[25]);
+      }
+
+      const defaultAssetPath = path.resolve(
+        __dirname,
+        "../../node_modules/electron-windows-msix/static/assets",
+        assetName
+      );
+      if (existsSync(defaultAssetPath)) {
+        expect(
+          asset.equals(readFileSync(defaultAssetPath)),
+          `${assetName} must not use the electron-windows-msix placeholder`
+        ).to.equal(false);
+      }
+    }
   });
 
   it("routes master builds through the Store package path", (): void => {

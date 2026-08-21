@@ -633,6 +633,10 @@ module.exports = {
             platforms: ["win32"],
             config: {
               sign: false,
+              packageAssets: path.resolve(
+                __dirname,
+                "src/assets/windows-store/package"
+              ),
               // Build with the current Windows SDK while retaining compatibility
               // with the oldest Windows release accepted by Partner Center.
               windowsKitVersion: "10.0.26100.0",
