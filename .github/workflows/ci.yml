@@ -26,7 +26,7 @@ jobs:
 
       # Python 3.12+ can break older node-gyp dependency chains used by native modules.
       - name: Set up Python for node-gyp
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: "3.11"
 
@@ -127,7 +127,7 @@ jobs:
           cache: yarn
 
       - name: Set up Python for node-gyp
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: "3.11"
 
