@@ -23,6 +23,7 @@ import {
   runtimeRemoveInputSchema,
 } from "@/schemas/ipc/localAiRuntime";
 import { LocalAiRuntimeModule } from "@/modules/LocalAiRuntimeModule";
+import type { LocalAiRuntimeId } from "@/entityTypes/localAiRuntimeTypes";
 import { LocalAiRuntimePathService } from "@/service/localAiRuntime/LocalAiRuntimePathService";
 import { LocalAiRuntimeStateStore } from "@/service/localAiRuntime/LocalAiRuntimeStateStore";
 import { LocalAiRuntimeCatalogService } from "@/service/localAiRuntime/LocalAiRuntimeCatalogService";
@@ -38,6 +39,24 @@ import { LocalEmbeddingWorkerClient } from "@/service/embedding/LocalEmbeddingWo
 import type { LocalAiRuntimeModule as ModuleType } from "@/modules/LocalAiRuntimeModule";
 
 const noInputSchema = lazySchema(() => z.unknown());
+
+/**
+ * Dispose the idle worker client for a runtime whose version just changed
+ * (design §22.2). Shipping a new runtime version (install/upgrade/repair)
+ * must not leave a running worker pinned to the old version root; the next
+ * fork re-resolves through LocalAiRuntimeResolver and picks up the new path.
+ * Extracted so it can be unit-tested without constructing the full module.
+ */
+export function disposeIdleWorkersForRuntime(
+  runtimeId: LocalAiRuntimeId
+): Promise<void> {
+  if (runtimeId === "embedding-xenova") {
+    LocalEmbeddingWorkerClient.getInstance().dispose();
+  } else if (runtimeId === "voice-sherpa") {
+    SherpaVoiceWorkerClient.getInstance().dispose();
+  }
+  return Promise.resolve();
+}
 
 /**
  * Resolve the runtime catalog source (design §11.1 / FR-5):
@@ -141,14 +160,7 @@ export function createLocalAiRuntimeModule(
     },
     // Dispose idle embedding/voice workers so the next fork picks up the new
     // runtime version after install/upgrade (design §22.2).
-    disposeIdleWorker: (runtimeId) => {
-      if (runtimeId === "embedding-xenova") {
-        LocalEmbeddingWorkerClient.getInstance().dispose();
-      } else if (runtimeId === "voice-sherpa") {
-        SherpaVoiceWorkerClient.getInstance().dispose();
-      }
-      return Promise.resolve();
-    },
+    disposeIdleWorker: disposeIdleWorkersForRuntime,
   });
 
   // Composition (design §13.1): wire downloaded-runtime resolution into the

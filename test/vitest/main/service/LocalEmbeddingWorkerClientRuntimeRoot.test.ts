@@ -60,6 +60,19 @@ afterEach(() => {
 });
 
 /**
+ * Fork implementation for hasInstalledRuntimeWorker tests: the method never
+ * forks, so the return value is never exercised. Returns a minimal no-op
+ * UtilityProcessLike to satisfy the signature.
+ */
+function neverFork(): UtilityProcessLike {
+  return {
+    on: () => undefined,
+    postMessage: () => undefined,
+    kill: () => undefined,
+  };
+}
+
+/**
  * Minimal fake worker that auto-responds to initialize/embed-batch so the
  * handshake completes. Records the workerPath the fork was invoked with.
  */
@@ -113,6 +126,80 @@ class RecordingFakeWorker {
     return undefined;
   }
 }
+
+describe("LocalEmbeddingWorkerClient.hasInstalledRuntimeWorker (regression: bundled fallback cannot resolve @xenova/transformers)", () => {
+  it("returns false when no workerPathResolver is set", async () => {
+    const client = LocalEmbeddingWorkerClient.createWithFork(
+      neverFork,
+      2000,
+      null
+    );
+    // No setWorkerPathResolver call — resolver is null.
+    expect(await client.hasInstalledRuntimeWorker()).toBe(false);
+    client.dispose();
+  });
+
+  it("returns true when the resolver returns an existing file path", async () => {
+    const fakeWorkerPath = path.join(tmpRoot, "worker.js");
+    fs.writeFileSync(fakeWorkerPath, "// fake");
+    const client = LocalEmbeddingWorkerClient.createWithFork(
+      neverFork,
+      2000,
+      null
+    );
+    client.setWorkerPathResolver(async () => fakeWorkerPath);
+    expect(await client.hasInstalledRuntimeWorker()).toBe(true);
+    client.dispose();
+  });
+
+  it("returns false when the resolver returns null", async () => {
+    const client = LocalEmbeddingWorkerClient.createWithFork(
+      neverFork,
+      2000,
+      null
+    );
+    client.setWorkerPathResolver(async () => null);
+    expect(await client.hasInstalledRuntimeWorker()).toBe(false);
+    client.dispose();
+  });
+
+  it("returns false when the resolver returns a non-existent path", async () => {
+    const client = LocalEmbeddingWorkerClient.createWithFork(
+      neverFork,
+      2000,
+      null
+    );
+    client.setWorkerPathResolver(async () =>
+      path.join(tmpRoot, "does-not-exist.js")
+    );
+    expect(await client.hasInstalledRuntimeWorker()).toBe(false);
+    client.dispose();
+  });
+
+  it("returns true when workerPathOverride is set (test-only)", async () => {
+    const client = LocalEmbeddingWorkerClient.createWithFork(
+      neverFork,
+      2000,
+      "/fake/worker.js"
+    );
+    // No resolver wired, but override wins.
+    expect(await client.hasInstalledRuntimeWorker()).toBe(true);
+    client.dispose();
+  });
+
+  it("returns false when the resolver throws", async () => {
+    const client = LocalEmbeddingWorkerClient.createWithFork(
+      neverFork,
+      2000,
+      null
+    );
+    client.setWorkerPathResolver(async () => {
+      throw new Error("resolver error");
+    });
+    expect(await client.hasInstalledRuntimeWorker()).toBe(false);
+    client.dispose();
+  });
+});
 
 describe("LocalEmbeddingWorkerClient runtime worker resolution (Phase 8 §17.2)", () => {
   it("forks the downloaded runtime worker path when the resolver returns one", async () => {

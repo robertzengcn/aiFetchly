@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // Capture registered handlers per channel.
 const handlers = new Map<
@@ -28,6 +28,8 @@ vi.mock("@/modules/token", () => ({
 import {
   registerLocalAiRuntimeIpcHandlers,
   resolveCatalogSource,
+  createLocalAiRuntimeModule,
+  disposeIdleWorkersForRuntime,
 } from "@/main-process/communication/local-ai-runtime-ipc";
 import {
   LOCAL_AI_RUNTIME_STATUS,
@@ -38,6 +40,8 @@ import {
   LOCAL_AI_RUNTIME_REPAIR,
   LOCAL_AI_RUNTIME_REMOVE,
 } from "@/config/channellist";
+import { LocalEmbeddingWorkerClient } from "@/service/embedding/LocalEmbeddingWorkerClient";
+import { SherpaVoiceWorkerClient } from "@/service/aiChatVoice/SherpaVoiceWorkerClient";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyModule = any;
@@ -191,5 +195,69 @@ describe("local-ai-runtime IPC registration", () => {
       runtimeId: "voice-sherpa",
       removeModels: false,
     });
+  });
+
+  it("calls the module factory eagerly at registration time (not lazily on first IPC call)", () => {
+    handlers.clear();
+    const factory = vi.fn(() => makeStubModule());
+    registerLocalAiRuntimeIpcHandlers(() => null, factory);
+    // Regression: the factory must be called immediately so
+    // installWorkerRuntimeResolvers wires workerPathResolver before
+    // any document upload IPC handler runs.
+    expect(factory).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("createLocalAiRuntimeModule disposeIdleWorker wiring", () => {
+  afterEach(() => {
+    LocalEmbeddingWorkerClient.resetInstance();
+    SherpaVoiceWorkerClient.resetInstance();
+    vi.restoreAllMocks();
+  });
+
+  it("disposeIdleWorkersForRuntime disposes embedding-xenova worker client", async () => {
+    const disposeSpy = vi.spyOn(
+      LocalEmbeddingWorkerClient.getInstance(),
+      "dispose"
+    );
+    await disposeIdleWorkersForRuntime("embedding-xenova");
+    expect(disposeSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("disposeIdleWorkersForRuntime disposes voice-sherpa worker client", async () => {
+    const disposeSpy = vi.spyOn(
+      SherpaVoiceWorkerClient.getInstance(),
+      "dispose"
+    );
+    await disposeIdleWorkersForRuntime("voice-sherpa");
+    expect(disposeSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("disposeIdleWorkersForRuntime is a no-op for unknown runtime ids", async () => {
+    const disposeEmbedding = vi.spyOn(
+      LocalEmbeddingWorkerClient.getInstance(),
+      "dispose"
+    );
+    const disposeVoice = vi.spyOn(
+      SherpaVoiceWorkerClient.getInstance(),
+      "dispose"
+    );
+    await disposeIdleWorkersForRuntime(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      "unknown-runtime" as any
+    );
+    expect(disposeEmbedding).not.toHaveBeenCalled();
+    expect(disposeVoice).not.toHaveBeenCalled();
+  });
+
+  it("createLocalAiRuntimeModule wires disposeIdleWorkersForRuntime without disposing at construction", async () => {
+    LocalEmbeddingWorkerClient.resetInstance();
+    const disposeSpy = vi.spyOn(
+      LocalEmbeddingWorkerClient.getInstance(),
+      "dispose"
+    );
+    const module = createLocalAiRuntimeModule(() => null);
+    expect(module).toBeDefined();
+    expect(disposeSpy).not.toHaveBeenCalled();
   });
 });
