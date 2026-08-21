@@ -215,9 +215,15 @@ describe("macOS production signing contract", (): void => {
       expect(step.env?.APPLE_TEAM_ID).to.equal("${{ secrets.APPLE_TEAM_ID }}");
     });
 
-    it("runs make-mac:prod for production builds", (): void => {
+    it("guards macOS packaging and creates installers without packaging twice", (): void => {
       const step = findStep(readBuildMacosJob(), "Build application");
-      expect(step.run).to.include("yarn make-mac:prod");
+      expect(step.run).to.include(
+        "node scripts/run-packaging-with-hang-guard.js --platform=darwin"
+      );
+      expect(step.run).to.include(
+        "yarn electron-forge make --skip-package --platform=darwin"
+      );
+      expect(step.run).to.not.include("yarn make-mac:prod");
     });
 
     it("always removes the temporary keychain", (): void => {

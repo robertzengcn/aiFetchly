@@ -105,8 +105,13 @@ describe("Mac App Store release workflow", (): void => {
       MAC_STORE_SIGNING_IDENTITY:
         "${{ secrets.MAC_STORE_SIGNING_IDENTITY }}",
       MAC_STORE_SIGNING_TYPE: "distribution",
+      PACKAGE_GUARD_HARD_TIMEOUT_MS: "14400000",
+      PACKAGE_GUARD_STALL_MS: "900000",
     });
-    expect(buildStep.run).to.include("yarn package-mac:store");
+    expect(buildStep.run).to.include(
+      "node scripts/run-packaging-with-hang-guard.js --platform=mas"
+    );
+    expect(buildStep.run).to.not.include("yarn package-mac:store");
     expect(buildStep.run).to.include('yarn verify-mac:store "$app_path"');
     expect(packageStep.run).to.include(
       'productbuild --component "$app_path" /Applications'

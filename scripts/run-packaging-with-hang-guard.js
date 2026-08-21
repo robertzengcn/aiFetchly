@@ -31,15 +31,23 @@
 const { spawn, spawnSync } = require("node:child_process");
 const path = require("node:path");
 
-// electron-forge always prints this line as the last lifecycle step of
-// `package`, whether or not a postPackage hook is configured.
-const COMPLETION_MARKER = /Running\s+postPackage\s+hook/i;
+// electron-forge always prints this completed-task line as the last lifecycle
+// step of `package`, whether or not a postPackage hook is configured. Match the
+// check mark as well as the text so the grace timer does not start on the
+// earlier in-progress (❯) line.
+const COMPLETION_MARKER = /(?:✔|✓)\s+Running\s+postPackage\s+hook/i;
+const ANSI_ESCAPE_SEQUENCE = new RegExp(
+  `${String.fromCharCode(27)}\\[[0-?]*[ -/]*[@-~]`,
+  "g"
+);
 const GRACE_PERIOD_MS = Number(process.env.PACKAGE_GUARD_GRACE_MS ?? 8000);
 // If the child never reaches the postPackage marker within this hard timeout,
 // treat it as a genuine hang: dump diagnostics and fail with a clear reason.
 //
-// IMPORTANT: this must stay well BELOW the `timeout-minutes` on the CI step
-// (currently 30). When it is, the guard — not GitHub — terminates the run,
+// IMPORTANT: this must stay well BELOW the `timeout-minutes` on its workflow
+// step. The Linux smoke test uses this 15-minute default; release.yml overrides
+// it for signed macOS packaging. When it is lower, the guard — not GitHub —
+// terminates the run,
 // so the failure carries a precise reason + disk/mem diagnostics instead of
 // GitHub's opaque "Error: The operation was canceled." (GitHub kills the
 // whole step tree, orphaning the electron-forge child and producing that
@@ -64,6 +72,10 @@ function resolveElectronForgeBin() {
     ".bin",
     process.platform === "win32" ? "electron-forge.cmd" : "electron-forge"
   );
+}
+
+function hasCompletedPostPackageHook(output) {
+  return COMPLETION_MARKER.test(output.replace(ANSI_ESCAPE_SEQUENCE, ""));
 }
 
 function runDiagnosticCommand(label, command, args) {
@@ -120,6 +132,7 @@ function main() {
   let hardTimer = null;
   let stallTimer = null;
   let settled = false;
+  let completionOutputTail = "";
 
   function forwardChunk(outStream, chunk) {
     outStream.write(chunk);
@@ -128,7 +141,10 @@ function main() {
     if (sawCompletionMarker) {
       return;
     }
-    if (COMPLETION_MARKER.test(chunk.toString("utf-8"))) {
+    completionOutputTail = `${completionOutputTail}${chunk.toString("utf-8")}`.slice(
+      -1024
+    );
+    if (hasCompletedPostPackageHook(completionOutputTail)) {
       sawCompletionMarker = true;
       console.log(
         `\n[package-guard] detected postPackage hook completion; will force-finish in ${GRACE_PERIOD_MS}ms if the process has not exited naturally by then.`
@@ -262,4 +278,8 @@ function main() {
   }, HARD_TIMEOUT_MS);
 }
 
-main();
+if (require.main === module) {
+  main();
+}
+
+module.exports = { hasCompletedPostPackageHook };
