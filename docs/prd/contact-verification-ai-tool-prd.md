@@ -7,6 +7,7 @@
 - **Created**: 2026-08-21
 - **Owner**: aiFetchly Desktop
 - **Primary area**: AI Chat V2, contact extraction, built-in tools
+- **Technical design**: [`contact-verification-ai-tool-technical-design.md`](./contact-verification-ai-tool-technical-design.md)
 - **Related features**:
   - `extract_contact_info`
   - Contact Profile Insights
