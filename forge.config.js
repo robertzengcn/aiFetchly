@@ -550,10 +550,26 @@ module.exports = {
               identity: requireProductionEnv("MAC_STORE_SIGNING_IDENTITY"),
               type: resolveMacStoreSigningType(),
               provisioningProfile: resolveMacStoreProvisioningProfile(),
+              // Fail hard on signing errors instead of the default
+              // continueOnError:true, which silently swallows osx-sign
+              // failures and leaves the app unsigned.
+              continueOnError: false,
+              // Our entitlements plist files already contain all required
+              // entitlements (com.apple.security.app-sandbox, network.client,
+              // files.user-selected.read-write, bookmarks.app-scope), so the
+              // preAutoEntitlements automation is not needed. Disabling it
+              // avoids a potential failure path where osx-sign cannot parse
+              // the team ID from the signing identity name.
+              preAutoEntitlements: false,
               optionsForFile: (filePath) => ({
                 entitlements: isMainApplicationBundle(filePath)
                   ? macStoreEntitlementsPath
                   : macStoreChildEntitlementsPath,
+                // Mac App Store builds use the sandbox security model, not
+                // hardened runtime. Disable it to avoid passing the
+                // --options runtime flag to codesign, which is unnecessary
+                // for MAS distribution.
+                hardenedRuntime: false,
               }),
             },
           }
