@@ -12,7 +12,10 @@ import {
   addressListToStrings,
   firstAddress,
 } from "@/service/emailReceive/EmailReceiveClient";
-import { sanitizeEmailHtml, htmlToPlainText } from "@/service/emailReceive/EmailHtmlSanitizer";
+import {
+  sanitizeEmailHtml,
+  htmlToPlainText,
+} from "@/service/emailReceive/EmailHtmlSanitizer";
 import {
   buildSnippet,
   extractThreadKey,
@@ -111,7 +114,9 @@ export class ImapEmailReceiveClient implements EmailReceiveClient {
     if (options.unreadOnly) searchCriteria.seen = false;
     if (options.since) searchCriteria.since = options.since;
 
-    const uids = (await client.search(searchCriteria, { uid: true })) as number[];
+    const uids = (await client.search(searchCriteria, {
+      uid: true,
+    })) as number[];
     if (!Array.isArray(uids) || uids.length === 0) return [];
 
     // Take the most recent `limit` UIDs.
@@ -164,12 +169,25 @@ export class ImapEmailReceiveClient implements EmailReceiveClient {
     const isUnread = !normalizedFlags.has("\\seen");
     const isAnswered = normalizedFlags.has("\\answered");
 
-    const toAddresses = addressListToStrings(parsed.to?.value as EmailMessage[] | undefined);
-    const ccAddresses = addressListToStrings(parsed.cc?.value as EmailMessage[] | undefined);
+    const toAddresses = addressListToStrings(
+      parsed.to?.value as EmailMessage[] | undefined
+    );
+    const ccAddresses = addressListToStrings(
+      parsed.cc?.value as EmailMessage[] | undefined
+    );
     const replyTo = firstAddress(parsed.replyTo?.value?.[0] ?? null);
 
     const autoSubmittedHeader = parsed.headers?.get("auto-submitted");
     const precedenceHeader = parsed.headers?.get("precedence");
+    const listIdHeader = parsed.headers?.get("list-id");
+    const listUnsubscribeHeader = parsed.headers?.get("list-unsubscribe");
+
+    // Attachment METADATA only — content is never opened or persisted (FR-021).
+    const attachments = (parsed.attachments ?? []).map((a: { filename?: string | null; contentType?: string | null; size?: number }) => ({
+      filename: a.filename ?? null,
+      contentType: a.contentType ?? null,
+      size: typeof a.size === "number" ? a.size : 0,
+    }));
 
     return {
       providerUid: String(uid),
@@ -191,6 +209,11 @@ export class ImapEmailReceiveClient implements EmailReceiveClient {
       isAnswered,
       autoSubmitted: autoSubmittedHeader ? String(autoSubmittedHeader) : null,
       precedence: precedenceHeader ? String(precedenceHeader) : null,
+      listIdHeader: listIdHeader ? String(listIdHeader) : null,
+      listUnsubscribeHeader: listUnsubscribeHeader
+        ? String(listUnsubscribeHeader)
+        : null,
+      attachments,
     };
   }
 }
@@ -235,5 +258,7 @@ export function shouldRetryWithImplicitTls(
   }
 
   const maybeCode = (error as Error & { code?: unknown }).code;
-  return maybeCode === "GREETING_TIMEOUT" || maybeCode === "ClosedAfterConnectText";
+  return (
+    maybeCode === "GREETING_TIMEOUT" || maybeCode === "ClosedAfterConnectText"
+  );
 }

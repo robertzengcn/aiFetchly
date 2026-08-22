@@ -1,4 +1,5 @@
 import { utilityProcess } from "electron";
+import { log } from "@/modules/Logger";
 import { AiChatApi, WebsiteAnalysisRequest } from "@/api/aiChatApi";
 import { SearchResultModule } from "@/modules/SearchResultModule";
 import * as path from "path";
@@ -112,7 +113,7 @@ export class WebsiteAnalysisQueue {
     });
 
     if (!childPath) {
-      console.warn("Child process file not found: websiteContentScraper.js");
+      log.warn("Child process file not found: websiteContentScraper.js");
       return;
     }
     this.childProcessPath = childPath;
@@ -257,7 +258,7 @@ export class WebsiteAnalysisQueue {
         const searchResultModule = new SearchResultModule();
         await searchResultModule.updateAiAnalysisStatus(job.resultId, "failed");
       } catch (error) {
-        console.error("Failed to update status to failed:", error);
+        log.error("Failed to update status to failed:", error);
       }
       this.updateProgress(batchId);
       return;
@@ -350,7 +351,7 @@ export class WebsiteAnalysisQueue {
         const searchResultModule = new SearchResultModule();
         await searchResultModule.updateAiAnalysisStatus(job.resultId, "failed");
       } catch (statusError) {
-        console.error("Failed to update status to failed:", statusError);
+        log.error("Failed to update status to failed:", statusError);
       }
       this.updateProgress(batchId);
     }
@@ -485,7 +486,7 @@ export class WebsiteAnalysisQueue {
       try {
         callback(progress);
       } catch (error) {
-        console.error("Error in progress callback:", error);
+        log.error("Error in progress callback:", error);
       }
     });
 
@@ -542,7 +543,7 @@ export class WebsiteAnalysisQueue {
         try {
           onComplete(batchResults);
         } catch (error) {
-          console.error("Error in complete callback:", error);
+          log.error("Error in complete callback:", error);
         }
         this.completeCallbacks.delete(batchId);
       }

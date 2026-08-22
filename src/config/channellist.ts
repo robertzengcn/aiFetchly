@@ -84,6 +84,15 @@ export const EMAIL_REPLY_DRAFT_CREATE = "email:reply:draft:create";
 export const EMAIL_REPLY_DRAFT_DETAIL = "email:reply:draft:detail";
 export const EMAIL_REPLY_DRAFT_UPDATE = "email:reply:draft:update";
 export const EMAIL_REPLY_SEND = "email:reply:send";
+// Thread-aware reply reliability (Milestone 1): approval + send-safety.
+export const EMAIL_REPLY_DRAFT_APPROVE = "email:reply:draft:approve";
+export const EMAIL_REPLY_SEND_ATTEMPT_DETAIL =
+  "email:reply:send:attempt:detail";
+export const EMAIL_REPLY_DELIVERY_RECONCILE = "email:reply:delivery:reconcile";
+export const EMAIL_REPLY_KNOWLEDGE_SCOPE_GET =
+  "email:reply:knowledge:scope:get";
+export const EMAIL_REPLY_KNOWLEDGE_SCOPE_UPDATE =
+  "email:reply:knowledge:scope:update";
 export const EMAIL_AUTO_REPLY_AUDIT_LIST = "email:autoreply:audit:list";
 export const EMAIL_AUTO_REPLY_AUDIT_DETAIL = "email:autoreply:audit:detail";
 export const SOCIALACCOUNTlIST = "socialaccount:list";
@@ -588,6 +597,15 @@ export const PLUGIN_MARKETPLACE_AVAILABLE_PLUGINS =
 export const PLUGIN_MARKETPLACE_GET_PLUGIN = "plugin:marketplace:get-plugin";
 export const PLUGIN_MARKETPLACE_INSTALL_PLUGIN =
   "plugin:marketplace:install-plugin";
+
+// ==================== Community Plugins Channels (Community Plugin Page PRD §7.3) ====================
+// NON-AI-gated: Free (Community) users must be able to browse the catalog
+// (precedent: plugin-ipc.ts — "plugin management is NOT an AI feature").
+export const PLUGIN_COMMUNITY_LIST = "plugin:community:list";
+export const PLUGIN_COMMUNITY_DETAIL = "plugin:community:detail";
+export const PLUGIN_COMMUNITY_INSTALL = "plugin:community:install";
+/** Renderer→Main: open the marketing plans page (Upgrade CTA) via shell.openExternal. */
+export const PLUGIN_COMMUNITY_OPEN_PLANS = "plugin:community:open-plans";
 
 // AI user memory (durable cross-session memory)
 export const AI_USER_MEMORY_LIST = "ai:user-memory:list";

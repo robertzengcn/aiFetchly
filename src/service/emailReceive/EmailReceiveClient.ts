@@ -28,6 +28,15 @@ export interface ParsedInboundEmail {
   readonly isAnswered: boolean;
   readonly autoSubmitted: string | null;
   readonly precedence: string | null;
+  /** List headers parsed at receive time (FR-020, P2). */
+  readonly listIdHeader: string | null;
+  readonly listUnsubscribeHeader: string | null;
+  /** Attachment metadata only (name/type/size) — content is never opened (FR-021). */
+  readonly attachments: ReadonlyArray<{
+    filename: string | null;
+    contentType: string | null;
+    size: number;
+  }>;
 }
 
 /**

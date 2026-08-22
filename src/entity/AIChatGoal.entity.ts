@@ -13,24 +13,24 @@ import type { AIChatGoalStatus } from "@/entityTypes/aiChatGoalTypes";
 @Index(["conversationId", "status"])
 export class AIChatGoalEntity extends AuditableEntity {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
 
   @Order(1)
   @Column("varchar", { length: 100, nullable: false, unique: true })
-  goalId: string;
+  goalId!: string;
 
   @Order(2)
   @Column("varchar", { length: 100, nullable: false })
-  conversationId: string;
+  conversationId!: string;
 
   @Order(3)
   @Column("text", { nullable: false })
-  objective: string;
+  objective!: string;
 
   /** Serialized AIChatGoalCriterion[]. */
   @Order(4)
   @Column("text", { nullable: false })
-  criteria: string;
+  criteria!: string;
 
   @Order(5)
   @Column("varchar", { length: 100, nullable: true })
@@ -38,7 +38,7 @@ export class AIChatGoalEntity extends AuditableEntity {
 
   @Order(6)
   @Column("varchar", { length: 32, nullable: false })
-  status: AIChatGoalStatus;
+  status!: AIChatGoalStatus;
 
   /** Serialized AIChatGoalLoopLimits (default bounds for /loop runs). */
   @Order(7)
@@ -47,7 +47,7 @@ export class AIChatGoalEntity extends AuditableEntity {
 
   @Order(8)
   @Column("int", { nullable: false, default: 0 })
-  iterationCount: number;
+  iterationCount!: number;
 
   /** Deterministic fingerprint of goal-relevant source state. */
   @Order(9)

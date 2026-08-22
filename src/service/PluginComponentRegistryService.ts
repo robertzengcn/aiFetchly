@@ -1,5 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
+import { log } from "@/modules/Logger";
 import {
   PluginLoaderService,
   type LoadedPlugin,
@@ -96,7 +97,7 @@ export class PluginComponentRegistryService {
   private static async syncUserPluginFolders(): Promise<void> {
     const result = await UserPluginAutoInstallService.syncDefaultUserPlugins();
     if (result.errors.length > 0) {
-      console.warn(
+      log.warn(
         `[PluginComponentRegistryService] Failed to auto-install ${result.errors.length} user plugin folder(s).`,
         result.errors
       );

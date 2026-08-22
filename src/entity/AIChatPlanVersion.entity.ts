@@ -8,19 +8,19 @@ import type { AIChatPlanVersionAuthor } from "@/entityTypes/aiChatPlanTypes";
 @Index(["planId", "version"], { unique: true })
 export class AIChatPlanVersionEntity extends AuditableEntity {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
 
   @Order(1)
   @Column("varchar", { length: 100, nullable: false })
-  planId: string;
+  planId!: string;
 
   @Order(2)
   @Column("int", { nullable: false })
-  version: number;
+  version!: number;
 
   @Order(3)
   @Column("text", { nullable: false })
-  planMarkdown: string;
+  planMarkdown!: string;
 
   @Order(4)
   @Column("text", { nullable: true })
@@ -32,5 +32,5 @@ export class AIChatPlanVersionEntity extends AuditableEntity {
 
   @Order(6)
   @Column("varchar", { length: 20, nullable: false })
-  createdBy: AIChatPlanVersionAuthor;
+  createdBy!: AIChatPlanVersionAuthor;
 }

@@ -1,10 +1,11 @@
 import { SearchModule } from "@/modules/SearchModule";
+import { log } from "@/modules/Logger";
 import { SearchTaskStatus } from "@/model/SearchTask.model";
 import { YellowPagesController } from "@/controller/YellowPagesController";
 import { TaskStatus as YellowPagesTaskStatus } from "@/modules/interface/ITaskManager";
 import { TaskStatus } from "@/entityTypes/commonType";
 import { ToolExecutionService } from "@/service/ToolExecutionService";
-import { formatYellowPagesResultsForLLM } from "@/main-process/communication/ai-chat-ipc";
+import { formatYellowPagesResultsForLLM } from "@/service/yellowPagesResultFormatter";
 import { MCPToolService } from "@/service/MCPToolService";
 import { parseMcpToolName } from "@/service/pluginCompat/McpToolNaming";
 import { MCPToolModule } from "@/modules/MCPToolModule";
@@ -14,6 +15,11 @@ import { WebsiteAnalysisService } from "@/service/WebsiteAnalysisService";
 import { RateLimiter, RateLimitConfig } from "./RateLimiter";
 import { AiChatApi, BatchKeywordGenerationRequestItem } from "@/api/aiChatApi";
 import { extractContactFromUrls } from "@/main-process/communication/contactExtraction-ipc";
+import {
+  verifyContactInfoForAi,
+  serializeContactVerificationResult,
+} from "@/service/ContactVerificationAiTools";
+import { ContactVerificationService } from "@/service/contact-verification/ContactVerificationService";
 import { DocumentService } from "@/service/DocumentService";
 import { FileToolService } from "@/service/FileToolService";
 import { WorkspaceResolver } from "@/service/WorkspaceResolver";
@@ -72,6 +78,11 @@ const RATE_LIMIT_CONFIG = {
     maxConcurrent: 2,
     cooldownMs: 1000,
   },
+  contactVerification: {
+    maxPerMinute: 20,
+    maxConcurrent: 5,
+    cooldownMs: 500,
+  },
   yellowPages: {
     maxPerMinute: 15,
     maxConcurrent: 3,
@@ -115,6 +126,8 @@ class RateLimiterManager {
       return RATE_LIMIT_CONFIG.websiteAnalysis;
     } else if (toolName === "extract_contact_info") {
       return RATE_LIMIT_CONFIG.contactExtraction;
+    } else if (toolName === "verify_contact_info") {
+      return RATE_LIMIT_CONFIG.contactVerification;
     } else if (toolName.includes("email") || toolName.includes("extract")) {
       return RATE_LIMIT_CONFIG.emailExtraction;
     } else if (
@@ -259,7 +272,7 @@ export class ToolExecutor {
 
       // Check rate limit status before execution
       const status = rateLimiter.getStatus();
-      console.log(`Executing tool '${toolName}' - Rate limit status:`, status);
+      log.info(`Executing tool '${toolName}' - Rate limit status:`, status);
 
       return await this.executeInternal(
         toolName,
@@ -325,6 +338,9 @@ export class ToolExecutor {
 
       case "extract_contact_info":
         return await this.executeContactExtraction(toolParams, context);
+
+      case "verify_contact_info":
+        return await this.executeContactVerification(toolParams, context);
 
       case "search_maps_businesses":
         return await this.executeMapsSearch(toolParams, context);
@@ -429,7 +445,7 @@ export class ToolExecutor {
         result,
       };
     } catch (error) {
-      console.error("MCP tool execution error:", error);
+      log.error("MCP tool execution error:", error);
       return ToolExecutor.toErrorResult(
         error,
         "Unknown error executing MCP tool"
@@ -706,7 +722,7 @@ export class ToolExecutor {
         expectedCount: numResults,
       });
     } catch (err) {
-      console.warn(
+      log.warn(
         `[ToolExecutor] partial snapshot for search task ${taskId} failed:`,
         err
       );
@@ -1437,6 +1453,26 @@ export class ToolExecutor {
   }
 
   /**
+   * Execute verify_contact_info: validate/normalize email + phone contacts via
+   * the shared AI tool boundary. Delegates to the same `verifyContactInfoForAi`
+   * the SkillRegistry uses (design §14.4 — one shared function so behavior
+   * cannot diverge). The AI gate runs inside the shared function.
+   */
+  private static async executeContactVerification(
+    toolParams: Record<string, unknown>,
+    context?: ModuleExecutionContext
+  ): Promise<Record<string, unknown>> {
+    const result = await verifyContactInfoForAi(toolParams, context);
+    if (result.success && result.result) {
+      return result.result;
+    }
+    return {
+      success: false,
+      error: result.error ?? "Contact verification failed",
+    };
+  }
+
+  /**
    * Execute extract_contact_info: extract contact info (emails, phones, address, social links) from URLs.
    */
   private static async executeContactExtraction(
@@ -1516,15 +1552,140 @@ export class ToolExecutor {
       successful: successful.length,
       failed: failed.length,
       summary: formattedSummary + partialNote,
-      results: results.map((r) => ({
-        url: r.url,
-        success: r.success,
-        emails: r.data?.emails,
-        phones: r.data?.phones,
-        address: r.data?.address,
-        socialLinks: r.data?.socialLinks,
-        error: r.error,
-      })),
+      // Compose Standard verification for every successful URL result that
+      // contains emails or phones BEFORE returning to the model (PRD FR-13,
+      // design §8.5/§15.4). The worker may already attach a verification
+      // block; when absent, the main process runs the shared verifier as a
+      // compatibility fallback. A result with no email/phone is marked
+      // verification_required: false so the workflow does not call the
+      // verifier with an empty input (PRD FR-14).
+      verification_required: false,
+      verification_performed: true,
+      results: await Promise.all(
+        results.map(async (r) => {
+          const emails = r.data?.emails;
+          const phones = r.data?.phones;
+          const hasContacts =
+            r.success &&
+            ((emails && emails.length > 0) || (phones && phones.length > 0));
+          const verification = hasContacts
+            ? await ToolExecutor.verifyExtractionContacts(r.url, emails, phones)
+            : undefined;
+          return {
+            url: r.url,
+            success: r.success,
+            emails,
+            phones,
+            address: r.data?.address,
+            socialLinks: r.data?.socialLinks,
+            verification,
+            error: r.error,
+          };
+        })
+      ),
+    };
+  }
+
+  /**
+   * Run the shared verifier on a single URL's extracted emails/phones and
+   * return the snake_case verification block (design §15.4 compatibility
+   * fallback). Never throws — on unexpected failure, synthesize `unknown`
+   * results and mark partial (§15.2). Does NOT use the legacy page-level
+   * `address` as strong country evidence (national phones stay ambiguous
+   * without per-block evidence).
+   */
+  private static async verifyExtractionContacts(
+    url: string,
+    emails: readonly string[] | undefined,
+    phones: readonly string[] | undefined
+  ): Promise<Record<string, unknown>> {
+    const service = new ContactVerificationService();
+    try {
+      const internal = await service.verify({
+        contacts: [
+          {
+            sourceUrl: url,
+            emails: emails ?? [],
+            phones: phones ?? [],
+            // Intentionally no countryEvidence here — the worker is not
+            // capturing per-block evidence in this release, so national
+            // phones correctly classify as ambiguous_region (the safe
+            // default per design §15.4).
+          },
+        ],
+      });
+      return serializeContactVerificationResult(internal);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      // Synthesize unknown/partial-ambiguous results without raw contacts.
+      return ToolExecutor.synthesizePartialVerification(
+        message,
+        emails,
+        phones
+      );
+    }
+  }
+
+  /**
+   * Build a partial verification block when the verifier threw unexpectedly
+   * (design §15.2). Every email becomes `unknown`, every phone becomes
+   * `ambiguous_region`; `partial: true`; the extraction stays `success: true`.
+   * The limitation message carries no raw contact values or stack paths.
+   */
+  private static synthesizePartialVerification(
+    _message: string,
+    emails: readonly string[] | undefined,
+    phones: readonly string[] | undefined
+  ): Record<string, unknown> {
+    const emailResults = (emails ?? []).map(() => ({
+      original: "",
+      status: "unknown",
+      checks: {
+        syntax_valid: false,
+        placeholder: false,
+        disposable_domain: false,
+        suspicious_local_part: false,
+        role_based: false,
+        domain_resolves: null,
+        mail_routing: "not_checked",
+      },
+      reasons: ["Standard verification could not complete for this contact"],
+      checked_at: new Date(0).toISOString(),
+      rules_version: "unknown",
+    }));
+    const phoneResults = (phones ?? []).map(() => ({
+      original: "",
+      status: "ambiguous_region",
+      reasons: ["Standard verification could not complete for this contact"],
+      checked_at: new Date(0).toISOString(),
+      rules_version: "unknown",
+    }));
+    return {
+      success: true,
+      verification_depth: "standard",
+      verification_performed: true,
+      partial: true,
+      limitations: [
+        "Standard verification could not complete; contacts were marked uncertain. Mailbox existence and phone line activity were not checked.",
+      ],
+      summary: {
+        input_emails: emails?.length ?? 0,
+        input_phones: phones?.length ?? 0,
+        unique_emails: emails?.length ?? 0,
+        unique_phones: phones?.length ?? 0,
+        likely_valid: 0,
+        needs_review: (phones?.length ?? 0) + (emails?.length ?? 0),
+        invalid: 0,
+        unknown: emails?.length ?? 0,
+      },
+      contacts: [
+        { source_url: undefined, emails: emailResults, phones: phoneResults },
+      ],
+      data_versions: {
+        rules: "unknown",
+        disposable_domains: "unknown",
+        phone_metadata: "unknown",
+      },
     };
   }
 
@@ -1792,7 +1953,7 @@ export class ToolExecutor {
       workspaceRoot = undefined;
     }
     if (!workspaceRoot) {
-      console.warn(
+      log.warn(
         `executeFileTool: no approved workspace for conversation ${conversationId}; ` +
           "falling back to legacy default-roots service."
       );

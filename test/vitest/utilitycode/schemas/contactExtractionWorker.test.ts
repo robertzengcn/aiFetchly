@@ -77,6 +77,71 @@ describe("contactExtractionWorkerOutboundSchema", () => {
     expect(failed.success).toBe(true);
   });
 
+  it("accepts extract-contact-url-result with verification + contactEvidence", () => {
+    const r = contactExtractionWorkerOutboundSchema().safeParse({
+      type: "extract-contact-url-result",
+      requestId: "req-1",
+      url: "https://example.com",
+      success: true,
+      data: {
+        emails: ["a@b.com"],
+        phones: ["+1 415 555 2671"],
+        contactEvidence: [
+          { kind: "email", value: "a@b.com" },
+          { kind: "phone", value: "+1 415 555 2671" },
+        ],
+        verification: {
+          success: true,
+          verificationDepth: "standard",
+          verificationPerformed: true,
+          partial: false,
+        },
+      },
+    });
+    expect(r.success).toBe(true);
+  });
+
+  it("rejects extract-contact-url-result with a malformed verification block", () => {
+    // verification must at least carry the stable top-level markers.
+    const r = contactExtractionWorkerOutboundSchema().safeParse({
+      type: "extract-contact-url-result",
+      requestId: "req-1",
+      url: "https://example.com",
+      success: true,
+      data: {
+        emails: ["a@b.com"],
+        verification: { foo: "bar" },
+      },
+    });
+    expect(r.success).toBe(false);
+  });
+
+  it("rejects contactEvidence with an unknown kind", () => {
+    const r = contactExtractionWorkerOutboundSchema().safeParse({
+      type: "extract-contact-url-result",
+      requestId: "req-1",
+      url: "https://example.com",
+      success: true,
+      data: {
+        contactEvidence: [{ kind: "fax", value: "x" }],
+      },
+    });
+    expect(r.success).toBe(false);
+  });
+
+  it("accepts extract-contact-url-result with raw compatibility shape (no verification)", () => {
+    // Old-worker / migration compatibility: a result with no verification
+    // field is still valid (the main process composes verification).
+    const r = contactExtractionWorkerOutboundSchema().safeParse({
+      type: "extract-contact-url-result",
+      requestId: "req-1",
+      url: "https://example.com",
+      success: true,
+      data: { emails: ["a@b.com"], phones: [] },
+    });
+    expect(r.success).toBe(true);
+  });
+
   it("rejects extract-contact-url-result with array 'results' (wrong wire shape)", () => {
     // Documents the deliberate wire-format choice: arrays are NOT accepted,
     // because the worker emits one message per URL. If a future batch-mode

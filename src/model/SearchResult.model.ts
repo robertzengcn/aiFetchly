@@ -1,4 +1,5 @@
 import { BaseDb } from "@/model/Basedb";
+import { log } from "@/modules/Logger";
 import { Repository, In } from "typeorm";
 import { SearchResultEntity } from "@/entity/SearchResult.entity";
 import { SearchTaskEntity } from "@/entity/SearchTask.entity";
@@ -362,7 +363,7 @@ export class SearchResultModel extends BaseDb {
       await this.repository.save(result);
       return true;
     } catch (error) {
-      console.error("Error updating AI analysis:", error);
+      log.error("Error updating AI analysis:", error);
       throw error;
     }
   }
@@ -390,7 +391,7 @@ export class SearchResultModel extends BaseDb {
       await this.repository.save(result);
       return true;
     } catch (error) {
-      console.error("Error updating AI analysis status:", error);
+      log.error("Error updating AI analysis status:", error);
       throw error;
     }
   }
@@ -419,7 +420,7 @@ export class SearchResultModel extends BaseDb {
 
       return updateResult.affected || 0;
     } catch (error) {
-      console.error("Error updating AI analysis status batch:", error);
+      log.error("Error updating AI analysis status batch:", error);
       throw error;
     }
   }

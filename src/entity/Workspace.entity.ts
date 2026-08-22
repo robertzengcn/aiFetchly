@@ -8,29 +8,29 @@ import type { WorkspaceApprovalState } from "@/entityTypes/workspaceTypes";
 @Index("idx_workspace_conversation", ["conversationId"])
 export class WorkspaceEntity extends AuditableEntity {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
 
   @Order(1)
   @Column("varchar", { length: 64, nullable: false })
-  conversationId: string;
+  conversationId!: string;
 
   @Order(2)
   @Column("varchar", { length: 1024, nullable: false })
-  rootPath: string;
+  rootPath!: string;
 
   @Order(3)
   @Column("varchar", { length: 255, nullable: true })
-  label: string | null;
+  label!: string | null;
 
   @Order(4)
   @Column("varchar", { length: 16, nullable: false })
-  approvalState: WorkspaceApprovalState;
+  approvalState!: WorkspaceApprovalState;
 
   @Order(5)
   @Column("datetime", { nullable: true })
-  approvedAt: Date | null;
+  approvedAt!: Date | null;
 
   @Order(6)
   @Column("datetime", { nullable: true })
-  revokedAt: Date | null;
+  revokedAt!: Date | null;
 }

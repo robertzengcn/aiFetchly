@@ -31,23 +31,15 @@
 const { spawn, spawnSync } = require("node:child_process");
 const path = require("node:path");
 
-// electron-forge always prints this completed-task line as the last lifecycle
-// step of `package`, whether or not a postPackage hook is configured. Match the
-// check mark as well as the text so the grace timer does not start on the
-// earlier in-progress (❯) line.
-const COMPLETION_MARKER = /(?:✔|✓)\s+Running\s+postPackage\s+hook/i;
-const ANSI_ESCAPE_SEQUENCE = new RegExp(
-  `${String.fromCharCode(27)}\\[[0-?]*[ -/]*[@-~]`,
-  "g"
-);
+// electron-forge always prints this line as the last lifecycle step of
+// `package`, whether or not a postPackage hook is configured.
+const COMPLETION_MARKER = /Running\s+postPackage\s+hook/i;
 const GRACE_PERIOD_MS = Number(process.env.PACKAGE_GUARD_GRACE_MS ?? 8000);
 // If the child never reaches the postPackage marker within this hard timeout,
 // treat it as a genuine hang: dump diagnostics and fail with a clear reason.
 //
-// IMPORTANT: this must stay well BELOW the `timeout-minutes` on its workflow
-// step. The Linux smoke test uses this 15-minute default; release.yml overrides
-// it for signed macOS packaging. When it is lower, the guard — not GitHub —
-// terminates the run,
+// IMPORTANT: this must stay well BELOW the `timeout-minutes` on the CI step
+// (currently 30). When it is, the guard — not GitHub — terminates the run,
 // so the failure carries a precise reason + disk/mem diagnostics instead of
 // GitHub's opaque "Error: The operation was canceled." (GitHub kills the
 // whole step tree, orphaning the electron-forge child and producing that
@@ -72,10 +64,6 @@ function resolveElectronForgeBin() {
     ".bin",
     process.platform === "win32" ? "electron-forge.cmd" : "electron-forge"
   );
-}
-
-function hasCompletedPostPackageHook(output) {
-  return COMPLETION_MARKER.test(output.replace(ANSI_ESCAPE_SEQUENCE, ""));
 }
 
 function runDiagnosticCommand(label, command, args) {
@@ -110,6 +98,44 @@ function dumpDiagnostics(reason) {
   ]);
 }
 
+/**
+ * Register SIGTERM/SIGINT handlers so that an externally-cancelled packaging
+ * run (GitHub SIGTERMs the step's process tree on job cancel / runner OOM /
+ * step timeout) is reported with a precise reason + diagnostics instead of
+ * dying as an opaque exit 143.
+ *
+ * On signal: dump disk/mem/process diagnostics (so the CI log shows whether
+ * it was disk full, OOM, or a wedged subprocess), then finish(1, reason).
+ * `finish` is expected to kill the child tree and force-exit the guard.
+ *
+ * Exported (and accepts injectable callbacks) so tests can verify the contract
+ * without spawning a real electron-forge child.
+ *
+ * Returns a teardown function that removes the listeners.
+ */
+function installSignalHandlers({ finish, dumpDiagnostics: dump }) {
+  const onTerm = () => {
+    console.error(
+      "\n[package-guard] received SIGTERM (GitHub canceled the step / runner lost heartbeat); dumping diagnostics and finishing."
+    );
+    dump("received SIGTERM");
+    finish(1, "received SIGTERM");
+  };
+  const onInt = () => {
+    console.error(
+      "\n[package-guard] received SIGINT; dumping diagnostics and finishing."
+    );
+    dump("received SIGINT");
+    finish(1, "received SIGINT");
+  };
+  process.on("SIGTERM", onTerm);
+  process.on("SIGINT", onInt);
+  return function teardown() {
+    process.removeListener("SIGTERM", onTerm);
+    process.removeListener("SIGINT", onInt);
+  };
+}
+
 function main() {
   const forgeBin = resolveElectronForgeBin();
   const args = ["package", ...process.argv.slice(2)];
@@ -132,7 +158,10 @@ function main() {
   let hardTimer = null;
   let stallTimer = null;
   let settled = false;
-  let completionOutputTail = "";
+  // Holds the teardown returned by installSignalHandlers(), set once finish()
+  // exists. Cleared on finish() so the signal listeners are removed before the
+  // guard force-exits (avoids a re-entrant signal re-triggering finish()).
+  let removeSignalHandlers = null;
 
   function forwardChunk(outStream, chunk) {
     outStream.write(chunk);
@@ -141,10 +170,7 @@ function main() {
     if (sawCompletionMarker) {
       return;
     }
-    completionOutputTail = `${completionOutputTail}${chunk.toString("utf-8")}`.slice(
-      -1024
-    );
-    if (hasCompletedPostPackageHook(completionOutputTail)) {
+    if (COMPLETION_MARKER.test(chunk.toString("utf-8"))) {
       sawCompletionMarker = true;
       console.log(
         `\n[package-guard] detected postPackage hook completion; will force-finish in ${GRACE_PERIOD_MS}ms if the process has not exited naturally by then.`
@@ -222,6 +248,12 @@ function main() {
     clearTimeout(graceTimer);
     clearTimeout(hardTimer);
     clearInterval(stallTimer);
+    // Remove our own signal listeners before force-exiting so a re-entrant
+    // SIGTERM during the 500ms exit window can't call finish() again.
+    if (removeSignalHandlers) {
+      removeSignalHandlers();
+      removeSignalHandlers = null;
+    }
     console.log(
       `\n[package-guard] finishing (reason: ${reason}, exitCode: ${exitCode})`
     );
@@ -245,6 +277,17 @@ function main() {
       `[package-guard] failed to spawn electron-forge: ${err.message}`
     );
     finish(1, "spawn error");
+  });
+
+  // Install SIGTERM/SIGINT handlers LAST, once finish() exists. GitHub cancels
+  // a stalled/oomed job by SIGTERMing the step's process tree; without these
+  // handlers Node's default SIGTERM behavior killed the guard silently (exit
+  // 143) with NO reason and NO diagnostics — exactly the opaque failure the
+  // guard exists to prevent. Now any cancellation dumps disk/mem/process
+  // diagnostics and force-finishes with a precise reason (exit 1, not 143).
+  removeSignalHandlers = installSignalHandlers({
+    finish,
+    dumpDiagnostics,
   });
 
   stallTimer = setInterval(() => {
@@ -278,8 +321,10 @@ function main() {
   }, HARD_TIMEOUT_MS);
 }
 
+// Exported for tests. `main()` runs only when this file is the entry point
+// (require.main === module), not when it is required by a test.
+module.exports = { installSignalHandlers };
+
 if (require.main === module) {
   main();
 }
-
-module.exports = { hasCompletedPostPackageHook };

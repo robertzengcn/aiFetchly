@@ -102,10 +102,9 @@ describe("ElectronStoreService store singleton cache", () => {
   });
 
   it("keeps electron-store external in vite.main.config.mjs", () => {
-    const viteMain = fs.readFileSync(
-      path.resolve(process.cwd(), "vite.main.config.mjs"),
-      "utf-8"
-    );
+    const viteMain =
+      fs.readFileSync(path.resolve(process.cwd(), "vite.main.config.mjs"), "utf-8") +
+      fs.readFileSync(path.resolve(process.cwd(), "vite.main.shared.mjs"), "utf-8");
     expect(viteMain).toMatch(
       /const MAIN_PROCESS_EXTERNALS[\s\S]*['"]electron-store['"]/
     );

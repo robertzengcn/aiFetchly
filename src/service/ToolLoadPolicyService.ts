@@ -91,6 +91,15 @@ const CONTEXTUAL_EMAIL_INBOX_TOOL_NAMES: ReadonlySet<string> = new Set([
   "mark_email_processed",
 ]);
 
+/**
+ * Contact verification tool. Promoted when the user asks to verify, validate,
+ * normalize, clean, check, or classify email/phone contacts (design §16.1).
+ * Generic email questions ("how does email work?") must NOT promote it.
+ */
+const CONTEXTUAL_VERIFICATION_TOOL_NAMES: ReadonlySet<string> = new Set([
+  "verify_contact_info",
+]);
+
 const SHELL_INTENT_RE =
   /\b(shell|terminal|bash|powershell|cmd|command|execute|run|rm|unlink)\b|(?:\b(delete|remove)\b.*(?:\b(file|folder|directory|path)\b|[./~]|\.[A-Za-z0-9]{1,8}\b))/i;
 
@@ -179,6 +188,17 @@ export function hasBatchImageEditIntent(message: string): boolean {
 }
 
 /**
+ * Broad edit-action verb regex for follow-up edits on a previously
+ * AI-generated image. Only used when {@link ToolCatalogRuntimeContext.hasRecentGeneratedImages}
+ * is true, so the broad verb list is safe — it never fires in conversations
+ * without recent generated images. Catches natural-language edit
+ * instructions like "add a tree in front of the house" that lack
+ * image-specific keywords.
+ */
+const GENERATED_IMAGE_EDIT_FOLLOWUP_RE =
+  /\b(add|remove|change|update|modify|make|put|replace|delete|move|resize|crop|rotate|flip|invert|adjust|enhance|fix|edit|draw|paint|color|colour|erase|clear|insert|place|swap|switch|turn|convert|transform|regenerate|redo|rework)\b/i;
+
+/**
  * Natural-language inbound mailbox check intent.
  * Surfaces list/fetch/read inbox tools so "check my email / inbox / mailbox"
  * does not leave those tools deferred. Tolerates common typos such as
@@ -186,6 +206,16 @@ export function hasBatchImageEditIntent(message: string): boolean {
  */
 const EMAIL_INBOX_INTENT_RE =
   /\b(inbox|inboxes|mailbox|mailboxes|emaibox)\b|\b(unread|new|received|inbound)\s+emails?\b|\bcheck(?:ing)?\b[^.]{0,60}?\b(emails?|mails?|inbox|mailbox|emaibox)\b|\b(emails?|mails?)\b[^.]{0,60}?\b(inbox|mailbox|emaibox|unread)\b/i;
+
+/**
+ * Contact verification intent (design §16.1). Requires a verification action
+ * verb (verify|validate|check|clean|normalize|classify) within ~40 chars of a
+ * contact noun (email|mail address|phone|telephone|mobile|contact). Generic
+ * questions like "how does email work?" or "what is phone verification?" must
+ * NOT match — they lack the action verb near the noun.
+ */
+const VERIFY_CONTACT_INTENT_RE =
+  /\b(?:verify|validate|check|clean|normalize|normalise|classify)\b[^.!?\n]{0,40}?\b(?:emails?|e-mails?|mail address|phones?|telephone|mobile|contacts?)\b|\b(?:emails?|e-mails?|mail address|phones?|telephone|mobile|contacts?)\b[^.!?\n]{0,40}?\b(?:verify|validate|check|clean|normalize|normalise|classify)\b/i;
 
 /**
  * Short follow-ups that should inherit intent from recent prior user messages
@@ -323,6 +353,32 @@ export class ToolLoadPolicyService {
     ) {
       return "contextual";
     }
+    if (
+      CONTEXTUAL_VERIFICATION_TOOL_NAMES.has(name) &&
+      this.messageMatchesIntent(input.context, (msg) =>
+        this.hasVerifyContactIntent(msg)
+      )
+    ) {
+      return "contextual";
+    }
+
+    // 9b. Contextual promotion: when the conversation has recent AI-generated
+    // images and the user's message contains an edit-like verb, auto-promote
+    // the generated-image export + local image attach tools so the model can
+    // edit the prior image without falling back to glob_files/shell_execute.
+    // The broad verb regex is safe because it is gated by
+    // hasRecentGeneratedImages — it only fires in conversations that actually
+    // have generated images in recent history.
+    if (
+      input.context.hasRecentGeneratedImages &&
+      (name === "export_generated_artifacts" ||
+        name === "attach_local_images") &&
+      this.messageMatchesIntent(input.context, (msg) =>
+        GENERATED_IMAGE_EDIT_FOLLOWUP_RE.test(msg)
+      )
+    ) {
+      return "contextual";
+    }
 
     // 10. Built-in default: specialized tools are deferred and discoverable.
     return "deferred";
@@ -389,5 +445,9 @@ export class ToolLoadPolicyService {
 
   private hasEmailInboxIntent(message: string): boolean {
     return EMAIL_INBOX_INTENT_RE.test(message);
+  }
+
+  private hasVerifyContactIntent(message: string): boolean {
+    return VERIFY_CONTACT_INTENT_RE.test(message);
   }
 }

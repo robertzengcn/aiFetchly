@@ -1,4 +1,5 @@
 import { JapaneseYellowPagesAdapter } from "@/modules/platforms/JapaneseYellowPagesAdapter";
+import { log } from "@/modules/Logger";
 import { PlatformConfig } from "@/modules/interface/IPlatformConfig";
 import { Dialog, Page } from "puppeteer";
 
@@ -34,7 +35,7 @@ export class ITownPageAdapter extends JapaneseYellowPagesAdapter {
           await dialog.accept();
         } catch (error: unknown) {
           const className = this.constructor.name;
-          console.warn(
+          log.warn(
             `${className}.dialog.accept warning:`,
             error instanceof Error ? error.message : error
           );
@@ -54,7 +55,7 @@ export class ITownPageAdapter extends JapaneseYellowPagesAdapter {
     } catch (error: unknown) {
       // Best-effort: consent UI may not exist or may be non-clickable.
       const className = this.constructor.name;
-      console.warn(
+      log.warn(
         `${className}.clickItpNoticeConsentAgreeIfPresent warning:`,
         error instanceof Error ? error.message : error
       );

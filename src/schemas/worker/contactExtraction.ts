@@ -15,6 +15,27 @@ import { lazySchema } from "@/utils/lazySchema";
 
 // ─── Worker → Main (outbound) ────────────────────────────────────────────────
 
+/**
+ * Verification result carried alongside extracted contacts (design §8.5).
+ * Typed loosely (the worker produces the full snake_case contract via the
+ * service); we validate the stable top-level shape and pass the rest
+ * through. `verificationPerformed: true` is the postcondition marker the
+ * ToolExecutor checks to decide whether a result needs the main-process
+ * compatibility fallback.
+ */
+const verificationResultSchema = z.object({
+  success: z.boolean(),
+  verificationDepth: z.literal("standard"),
+  verificationPerformed: z.boolean(),
+  partial: z.boolean().optional(),
+});
+
+/** Per-value DOM evidence captured before the page closes (design §11.4). */
+const contactEvidenceItemSchema = z.object({
+  kind: z.enum(["email", "phone"]),
+  value: z.string(),
+});
+
 const contactExtractionUrlResultSchema = z.object({
   url: z.string(),
   success: z.boolean(),
@@ -24,6 +45,8 @@ const contactExtractionUrlResultSchema = z.object({
       phones: z.array(z.string()).optional(),
       address: z.string().nullable().optional(),
       socialLinks: z.array(z.string()).nullable().optional(),
+      contactEvidence: z.array(contactEvidenceItemSchema).optional(),
+      verification: verificationResultSchema.optional(),
     })
     .optional(),
   error: z.string().optional(),

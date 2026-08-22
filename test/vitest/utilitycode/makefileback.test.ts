@@ -33,7 +33,7 @@ await findOriginalPosition(absolutePath,1185, 43343);
 },500000)
 
 
-async function findOriginalPosition(minifiedFile, line, column) {
+async function findOriginalPosition(minifiedFile: string, line: number, column: number) {
   const rawSourceMap = JSON.parse(fs.readFileSync(`${minifiedFile}.map`, 'utf8'));
   const consumer = await new sourceMap.SourceMapConsumer(rawSourceMap);
   console.log(consumer.sourcesContent)

@@ -496,7 +496,7 @@ const uploadAlertType = ref<'success' | 'error' | 'warning' | 'info'>('success')
 
 const startAutoRefresh = () => {
     refreshInterval = setInterval(function(){
-        loadItems({ page: options.page, itemsPerPage: options.itemsPerPage, sortBy: "" });
+        loadItems({ page: options.page, itemsPerPage: options.itemsPerPage, sortBy: [] });
     }, 10000); // Refresh every 10s while checks run
 }
 const stopAutoRefresh = () => {
@@ -507,14 +507,12 @@ const stopAutoRefresh = () => {
 };
 
 
-function loadItems({ page, itemsPerPage, sortBy }) {
+function loadItems({ page, itemsPerPage, sortBy }: { page: number; itemsPerPage: number; sortBy: { key: string; order: string }[] }) {
     options.page = page;
     loading.value = true
     options.page = page;
   options.itemsPerPage = itemsPerPage;
-    const sortValue = Array.isArray(sortBy)
-        ? (sortBy[0] ?? undefined)
-        : (sortBy || undefined);
+    const sortValue = sortBy?.[0] ?? undefined;
     const fetchitem: Fetchparam = {
         // id:parseInt(campaignId),
         page: page,
@@ -566,14 +564,14 @@ function loadItems({ page, itemsPerPage, sortBy }) {
         })
 }
 
-const editProxy=(item)=>{
+const editProxy=(item: ProxyListEntity)=>{
     router.push({
-            name: 'editProxy',params: { id: item.id } 
+            name: 'editProxy',params: { id: item.id }
         });
 }
-const deleteProxybtn=(item)=>{
+const deleteProxybtn=(item: ProxyListEntity)=>{
     showDeleteModal.value = true;
-    deleteId.value=item.id;
+    deleteId.value=item.id ?? 0;
 }
 // const cancelDelete=()=> {
 //       showDeleteModal.value = false;
@@ -585,12 +583,12 @@ const confirmrmProxy=()=>{
         () => {
             // console.log(res)
             showDeleteModal.value = false;
-            loadItems({ page: 1, itemsPerPage: itemsPerPage.value, sortBy: '' })
+            loadItems({ page: 1, itemsPerPage: itemsPerPage.value, sortBy: [] })
         }).catch(function (error) {
             console.error(error);
             alertext.value=error.message;
         })
-        // loadItems({ page: 1, itemsPerPage: itemsPerPage.value, sortBy: '' })
+        // loadItems({ page: 1, itemsPerPage: itemsPerPage.value, sortBy: [] })
 }
 const createProxy=()=>{
     router.push({
@@ -654,7 +652,7 @@ onMounted(() => {
        console.log(res)
        const rest=JSON.parse(res) as CommonMessage<null>
        if(rest&&rest.status){
-        loadItems({ page: 1, itemsPerPage: itemsPerPage.value, sortBy: '' })
+        loadItems({ page: 1, itemsPerPage: itemsPerPage.value, sortBy: [] })
        }
        removeFailureLoading.value = false
     })
@@ -829,11 +827,12 @@ const handleFileUpload = () => {
         const csv = Papa.parse(text, { header: true });
 
         // Detect format
+        const firstRow = csv.data[0] as Record<string, unknown> | undefined;
         const hasColonSeparatedFormat = Boolean(
             csv.meta?.fields?.length === 1 &&
             csv.data.length > 0 &&
-            csv.data[0] &&
-            typeof csv.data[0]['host:port:protocols:user:pass'] === 'string'
+            firstRow &&
+            typeof firstRow['host:port:protocols:user:pass'] === 'string'
         );
 
         parseCsvData(csv.data, hasColonSeparatedFormat);
@@ -1047,7 +1046,7 @@ const importParsedProxies = async () => {
             );
 
             // Refresh proxy list
-            loadItems({ page: options.page, itemsPerPage: options.itemsPerPage, sortBy: '' });
+            loadItems({ page: options.page, itemsPerPage: options.itemsPerPage, sortBy: [] });
 
             // Clear parsed proxies after successful import
             setTimeout(() => {
@@ -1061,7 +1060,7 @@ const importParsedProxies = async () => {
             );
 
             // Refresh proxy list
-            loadItems({ page: options.page, itemsPerPage: options.itemsPerPage, sortBy: '' });
+            loadItems({ page: options.page, itemsPerPage: options.itemsPerPage, sortBy: [] });
         }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } catch (error: any) {

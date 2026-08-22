@@ -1,4 +1,5 @@
 import { BaseDb } from "@/model/Basedb";
+import { log } from "@/modules/Logger";
 import { Repository } from "typeorm";
 import { SchedulerStatusEntity } from "@/entity/SchedulerStatus.entity";
 
@@ -21,7 +22,7 @@ export class SchedulerStatusModel extends BaseDb {
             });
             return status;
         } catch (error) {
-            console.error('Failed to get scheduler status:', error);
+            log.error('Failed to get scheduler status:', error);
             return null;
         }
     }
@@ -38,7 +39,7 @@ export class SchedulerStatusModel extends BaseDb {
                 await this.repository.save(status);
             }
         } catch (error) {
-            console.error('Failed to update scheduler status:', error);
+            log.error('Failed to update scheduler status:', error);
             throw error;
         }
     }
@@ -55,10 +56,10 @@ export class SchedulerStatusModel extends BaseDb {
                 initialStatus.active_schedules = 0;
                 initialStatus.total_schedules = 0;
                 await this.repository.save(initialStatus);
-                console.log('Scheduler status initialized');
+                log.info('Scheduler status initialized');
             }
         } catch (error) {
-            console.error('Failed to initialize scheduler status:', error);
+            log.error('Failed to initialize scheduler status:', error);
             throw error;
         }
     }
@@ -84,7 +85,7 @@ export class SchedulerStatusModel extends BaseDb {
                 await this.initializeStatus();
             }
         } catch (error) {
-            console.error('Failed to reset scheduler status:', error);
+            log.error('Failed to reset scheduler status:', error);
             throw error;
         }
     }
@@ -97,7 +98,7 @@ export class SchedulerStatusModel extends BaseDb {
             const status = await this.getStatus();
             return status?.is_running || false;
         } catch (error) {
-            console.error('Failed to check auto-start status:', error);
+            log.error('Failed to check auto-start status:', error);
             return false;
         }
     }

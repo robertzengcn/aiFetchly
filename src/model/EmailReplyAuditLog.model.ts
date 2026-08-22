@@ -1,4 +1,5 @@
 import { BaseDb } from "@/model/Basedb";
+import { log } from "@/modules/Logger";
 import { Repository } from "typeorm";
 import { EmailReplyAuditLogEntity } from "@/entity/EmailReplyAuditLog.entity";
 import { SortBy } from "@/entityTypes/commonType";
@@ -37,7 +38,7 @@ export class EmailReplyAuditLogModel extends BaseDb {
         delayMs: 250,
         onRetry: (nextAttempt, maxAttempts, delayMs, error) => {
           const message = error instanceof Error ? error.message : String(error);
-          console.warn(
+          log.warn(
             `Reply audit log write hit a SQLite lock; retrying attempt ${nextAttempt}/${maxAttempts} in ${delayMs}ms: ${message}`
           );
         },

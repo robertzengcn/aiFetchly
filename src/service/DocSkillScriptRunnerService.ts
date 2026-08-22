@@ -18,6 +18,7 @@
  */
 
 import * as child_process from "child_process";
+import { log } from "@/modules/Logger";
 import * as crypto from "crypto";
 import * as fs from "fs";
 import * as path from "path";
@@ -184,7 +185,7 @@ async function tryInstallMissingPackage(
     return false;
   }
 
-  console.log(
+  log.info(
     `[DocSkillScriptRunner] Auto-installing "${pipPackage}" into sandbox venv…`
   );
 

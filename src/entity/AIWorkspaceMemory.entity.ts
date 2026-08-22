@@ -26,7 +26,7 @@ import { Order } from "./order.decorator";
 @Index("idx_ai_workspace_memories_updated", ["updatedAt"])
 export class AIWorkspaceMemoryEntity extends AuditableEntity {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
 
   /**
    * Internal memory scope that owns this row (design D-01). Nullable only
@@ -40,35 +40,35 @@ export class AIWorkspaceMemoryEntity extends AuditableEntity {
 
   @Order(1)
   @Column("varchar", { length: 100, nullable: false })
-  memoryId: string;
+  memoryId!: string;
 
   @Order(2)
   @Column("varchar", { length: 100, nullable: false })
-  workspaceKey: string;
+  workspaceKey!: string;
 
   @Order(3)
   @Column("varchar", { length: 1024, nullable: false })
-  workspaceRoot: string;
+  workspaceRoot!: string;
 
   @Order(4)
   @Column("varchar", { length: 30, nullable: false })
-  type: string;
+  type!: string;
 
   @Order(5)
   @Column("varchar", { length: 200, nullable: false })
-  title: string;
+  title!: string;
 
   @Order(6)
   @Column("text", { nullable: false })
-  content: string;
+  content!: string;
 
   @Order(7)
   @Column("varchar", { length: 30, nullable: false, default: "active" })
-  status: string;
+  status!: string;
 
   @Order(8)
   @Column("int", { nullable: false, default: 100 })
-  confidence: number;
+  confidence!: number;
 
   @Order(9)
   @Column("varchar", { length: 30, nullable: true })

@@ -6,7 +6,7 @@ import { sortBySchema } from "@/schemas/ipc/_shared/pagination";
 export const emailReplyIdentityGetInputSchema = lazySchema(() =>
   z.strictObject({
     emailServiceId: z.number().int().positive("Email service id is required"),
-  }),
+  })
 );
 
 /** Reply identity profile upsert. */
@@ -21,14 +21,14 @@ export const emailReplyIdentityUpdateInputSchema = lazySchema(() =>
     styleNotes: z.string().nullable().optional(),
     forbiddenPhrases: z.array(z.string()).optional(),
     discloseAutomation: z.number().int().min(0).max(1).optional(),
-  }),
+  })
 );
 
 /** Reply draft detail. */
 export const emailReplyDraftDetailInputSchema = lazySchema(() =>
   z.strictObject({
     id: z.number().int().positive("Draft id is required"),
-  }),
+  })
 );
 
 /** Reply draft body edit (user edits an AI-generated draft). */
@@ -38,7 +38,7 @@ export const emailReplyDraftUpdateInputSchema = lazySchema(() =>
     subject: z.string().min(1).max(998),
     bodyText: z.string().min(1),
     bodyHtml: z.string().nullable().optional(),
-  }),
+  })
 );
 
 /** AI draft generation. AI-gated at the handler boundary. */
@@ -49,15 +49,69 @@ export const emailReplyDraftCreateInputSchema = lazySchema(() =>
     goal: z.string().max(1000).optional(),
     extraInstructions: z.string().max(2000).optional(),
     useKnowledgeLibrary: z.boolean().optional(),
-  }),
+  })
 );
 
-/** Confirmed reply send (UI Send button). */
+/**
+ * Confirmed reply send (UI Send button). Accepts BOTH:
+ *  - legacy payload { draftId, emailServiceId? } when the v2 flag is off, and
+ *  - v2 payload { draftId, approvalToken } when the v2 flag is on.
+ * The handler routes based on the flag; v2 ignores emailServiceId entirely
+ * (mailbox binding is enforced server-side — FR-017).
+ */
 export const emailReplySendInputSchema = lazySchema(() =>
-  z.strictObject({
+  z.object({
     draftId: z.number().int().positive("Draft id is required"),
     emailServiceId: z.number().int().positive().optional(),
-  }),
+    approvalToken: z.string().min(1).optional(),
+  })
+);
+
+/** Approve the current revision of a draft for sending (reliability v2). */
+export const emailReplyDraftApproveInputSchema = lazySchema(() =>
+  z.strictObject({
+    draftId: z.number().int().positive("Draft id is required"),
+  })
+);
+
+/** Read send attempts for a draft (reliability v2 audit / recovery UI). */
+export const emailReplySendAttemptDetailInputSchema = lazySchema(() =>
+  z.strictObject({
+    draftId: z.number().int().positive("Draft id is required"),
+  })
+);
+
+/** Manually trigger recovery of stale in-flight send attempts. */
+export const emailReplyDeliveryReconcileInputSchema = lazySchema(() =>
+  z.object({
+    ageMs: z.number().int().positive().optional(),
+    // Manual per-attempt reconciliation (FR-019, P0.6). When attemptId + action
+    // are present, reconcile that one attempt; otherwise run the auto sweep.
+    attemptId: z.number().int().positive().optional(),
+    action: z
+      .enum(["confirm_sent", "confirm_not_sent", "leave_unresolved"])
+      .optional(),
+    evidence: z.string().max(500).optional(),
+    providerMessageId: z.string().max(998).optional(),
+  })
+);
+
+/** Read the knowledge scope for one mailbox (FR-008, P3.1). */
+export const emailReplyKnowledgeScopeGetInputSchema = lazySchema(() =>
+  z.strictObject({
+    emailServiceId: z.number().int().positive(),
+  })
+);
+
+/** Upsert the knowledge scope for one mailbox (FR-008, P3.1). */
+export const emailReplyKnowledgeScopeUpdateInputSchema = lazySchema(() =>
+  z.strictObject({
+    emailServiceId: z.number().int().positive(),
+    documentIds: z.array(z.number().int().positive()).max(2000),
+    tags: z.array(z.string().min(1).max(100)).max(100),
+    allowAllDocuments: z.boolean(),
+    excludeInactiveDocuments: z.boolean(),
+  })
 );
 
 /** AI auto-reply audit list. */
@@ -73,12 +127,12 @@ export const emailAutoReplyAuditListInputSchema = lazySchema(() =>
     page: z.number().int().nonnegative().optional(),
     size: z.number().int().positive().optional(),
     sortby: sortBySchema().optional(),
-  }),
+  })
 );
 
 /** AI auto-reply audit detail. */
 export const emailAutoReplyAuditDetailInputSchema = lazySchema(() =>
   z.strictObject({
     id: z.number().int().positive("Audit log id is required"),
-  }),
+  })
 );

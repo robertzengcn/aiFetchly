@@ -19,10 +19,13 @@
 // Trust is decided in main BEFORE the execute-hook IPC is sent (HookDispatcher
 // gates on HookCommandTrustService.isTrusted); this client never re-gates.
 
-import { fork, type ChildProcess, type ForkOptions } from "child_process";
+import { utilityProcess } from "electron";
 import * as fs from "fs";
 import * as path from "path";
-import { resolvePackagedWorkerPath } from "@/utils/packagedWorkerPath";
+import {
+  resolvePackagedWorkerPath,
+  buildPackagedWorkerEnv,
+} from "@/utils/packagedWorkerPath";
 import type {
   CommandHookDefinition,
   HookExecutionError,
@@ -50,12 +53,31 @@ export interface HookExecutionClientExecuteInput {
   readonly abortSignal?: AbortSignal;
 }
 
-/** fork function signature (matches child_process.fork). */
+/** Structural handle for the worker process (R4.6: utilityProcess transport). */
+interface WorkerHandle {
+  postMessage(msg: unknown): void;
+  on(event: "message", cb: (msg: unknown) => void): void;
+  on(event: "exit", cb: (code: number) => void): void;
+  kill(): void;
+  readonly pid?: number;
+}
+
+/** Default fork: utilityProcess.fork (R4.6 transport unification). */
+const defaultUtilityFork = (
+  modulePath: string,
+  args: readonly string[],
+  opts: { env?: NodeJS.ProcessEnv }
+): WorkerHandle => {
+  const child = utilityProcess.fork(modulePath, [...args], { env: opts.env });
+  return child as unknown as WorkerHandle;
+};
+
+/** fork function signature (R4.6: utilityProcess, not child_process). */
 export type ForkFn = (
   modulePath: string,
   args: readonly string[],
-  opts: ForkOptions
-) => ChildProcess;
+  opts: { env?: NodeJS.ProcessEnv }
+) => WorkerHandle;
 
 export interface HookExecutionClientOptions {
   /** Defaults to child_process.fork. Tests inject a stub. */
@@ -165,7 +187,12 @@ function buildResult(
       stdout,
       stderr,
       durationMs,
-      result: failureResult(hook, error.message, durationMs, error.timedOut === true),
+      result: failureResult(
+        hook,
+        error.message,
+        durationMs,
+        error.timedOut === true
+      ),
     };
   }
   let parsed: unknown;
@@ -189,7 +216,11 @@ function buildResult(
       stdout,
       stderr,
       durationMs,
-      result: failureResult(hook, `Command hook output invalid: ${validation.error}`, durationMs),
+      result: failureResult(
+        hook,
+        `Command hook output invalid: ${validation.error}`,
+        durationMs
+      ),
     };
   }
   return {
@@ -203,25 +234,25 @@ function buildResult(
 export class HookExecutionClient {
   private readonly forkFn: ForkFn;
   private readonly workerEntry: string;
-  private worker: ChildProcess | null = null;
+  private worker: WorkerHandle | null = null;
   /** Number of times the worker was forked — exposed for the lazy-singleton test. */
   forkCount = 0;
   private readonly pending = new Map<string, PendingRequest>();
 
   constructor(options: HookExecutionClientOptions = {}) {
-    this.forkFn = options.fork ?? fork;
+    this.forkFn = options.fork ?? defaultUtilityFork;
     this.workerEntry = options.workerEntry ?? defaultHookWorkerEntry();
   }
 
-  private ensureWorker(): ChildProcess {
+  private ensureWorker(): WorkerHandle {
     if (this.worker) return this.worker;
     const worker = this.forkFn(this.workerEntry, [], {
-      stdio: ["inherit", "inherit", "inherit", "ipc"],
-      env: { ...process.env, WORKER_TYPE: WORKER_TYPE_MARKER },
+      env: buildPackagedWorkerEnv({
+        extraEnv: { WORKER_TYPE: WORKER_TYPE_MARKER },
+      }),
     });
     this.forkCount += 1;
     worker.on("message", (raw: unknown) => this.handleMessage(raw));
-    worker.on("error", () => this.failAll("hook-execution worker error"));
     worker.on("exit", () => {
       this.failAll("hook-execution worker exited");
       this.worker = null;
@@ -322,10 +353,16 @@ export class HookExecutionClient {
 
       abortSignal?.addEventListener("abort", onAbort, { once: true });
 
-      this.pending.set(hookRunId, { hook, resolve, timer, onAbort, abortSignal });
+      this.pending.set(hookRunId, {
+        hook,
+        resolve,
+        timer,
+        onAbort,
+        abortSignal,
+      });
 
       try {
-        worker.send(command);
+        worker.postMessage(command);
       } catch (err) {
         if (this.pending.has(hookRunId)) {
           this.pending.delete(hookRunId);
@@ -367,13 +404,13 @@ export class HookExecutionClient {
     const worker = this.worker;
     if (!worker) return;
     try {
-      worker.send({ type: "shutdown" } as HookExecutionCommand);
+      worker.postMessage({ type: "shutdown" } as HookExecutionCommand);
     } catch {
       // ignore — we force-kill below.
     }
     setTimeout(() => {
       try {
-        worker.kill("SIGKILL");
+        worker.kill();
       } catch {
         // ignore
       }

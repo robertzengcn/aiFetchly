@@ -104,8 +104,10 @@ export const app = {
     };
     return paths[name] || "/tmp/test";
   },
-  setPath(_name: string, _path: string): void {
-    // Mock implementation
+  // E2E bootstrap (src/main-process/e2e/E2EMain.ts) redirects userData into the
+  // per-test root via app.setPath. No-op in tests.
+  setPath(_name: string, _target: string): void {
+    // mock
   },
   quit(): void {
     // Mock implementation
@@ -113,17 +115,17 @@ export const app = {
   exit(_code?: number): void {
     // Mock implementation
   },
-  on(_event: string, _listener: (...args: unknown[]) => void): typeof app {
-    return app;
+  on(_event: string, _listener: (...args: unknown[]) => void): void {
+    // Mock implementation (Electron's App.on returns App for chaining; tests don't chain)
   },
-  off(_event: string, _listener: (...args: unknown[]) => void): typeof app {
-    return app;
+  off(_event: string, _listener: (...args: unknown[]) => void): void {
+    // Mock implementation
   },
-  once(_event: string, _listener: (...args: unknown[]) => void): typeof app {
-    return app;
+  once(_event: string, _listener: (...args: unknown[]) => void): void {
+    // Mock implementation
   },
-  whenReady(): Promise<typeof app> {
-    return Promise.resolve(app);
+  whenReady(): Promise<void> {
+    return Promise.resolve();
   },
   isDefaultProtocolClient(_protocol: string): boolean {
     return false;
@@ -379,7 +381,21 @@ export const ipcRenderer = {
   send: (_channel: string, ..._args: unknown[]) => {
     // Mock implementation
   },
-  sendSync: (_channel: string, ..._args: unknown[]) => {
+  // electron-store v8's constructor (renderer branch) calls
+  // `ipcRenderer.sendSync('electron-store-get-data')` and throws
+  // "You need to call `.initRenderer()`" when it returns a falsy value.
+  // Under the tsx test loader this mock IS the electron module (see
+  // tsconfig.json `paths`), and module tests construct Token/Store in the
+  // main-process role, so answer as a real main process's
+  // `initDataListener()` would: { defaultCwd, appVersion }. This keeps the
+  // real electron-store usable from tests without `.initRenderer()`.
+  sendSync: (channel: string, ..._args: unknown[]) => {
+    if (channel === "electron-store-get-data") {
+      return {
+        defaultCwd: app.getPath("userData"),
+        appVersion: app.getVersion(),
+      };
+    }
     return undefined;
   },
   on: (_channel: string, _handler: (...args: unknown[]) => unknown) => {
@@ -406,6 +422,19 @@ export const webUtils = {
   },
 };
 
+/** Matches Electron `safeStorage` (OS keychain / DPAPI / libsecret). */
+export const safeStorage = {
+  isEncryptionAvailable(): boolean {
+    return false;
+  },
+  encryptString(_plainText: string): Buffer {
+    return Buffer.alloc(0);
+  },
+  decryptString(_encrypted: Buffer): string {
+    return "";
+  },
+};
+
 export default {
   app,
   autoUpdater,
@@ -416,4 +445,5 @@ export default {
   net,
   screen,
   webUtils,
+  safeStorage,
 };

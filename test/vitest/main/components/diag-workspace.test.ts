@@ -15,38 +15,84 @@ vi.mock("@/views/api/aiChatV2", () => ({
   approveChatV2Plan: vi.fn(),
   rejectChatV2Plan: vi.fn(),
   requestChatV2PlanChanges: vi.fn(),
-  getOpenAIChatModels: vi.fn().mockResolvedValue({ data: [], default_model: undefined }),
+  getOpenAIChatModels: vi
+    .fn()
+    .mockResolvedValue({ data: [], default_model: undefined }),
   clearChatV2Conversation: vi.fn().mockResolvedValue({ deleted: 0 }),
+  subscribeAutoCompacted: vi.fn(),
+  unsubscribeAutoCompacted: vi.fn(),
   getChatV2ToolApprovalMode: vi.fn().mockResolvedValue("ask_for_approval"),
   setChatV2ToolApprovalMode: vi.fn(),
 }));
-vi.mock("@/views/api/workspace", () => ({ getWorkspace: vi.fn().mockResolvedValue(null) }));
-vi.mock("@/views/api/aiChat", () => ({ subscribeToFileOperations: vi.fn(), unsubscribeFromFileOperations: vi.fn() }));
+vi.mock("@/views/api/workspace", () => ({
+  getWorkspace: vi.fn().mockResolvedValue(null),
+}));
+vi.mock("@/views/api/aiChat", () => ({
+  subscribeToFileOperations: vi.fn(),
+  unsubscribeFromFileOperations: vi.fn(),
+}));
 vi.mock("@/views/api/slashCommands", () => ({
-  listSlashCommands: vi.fn().mockResolvedValue({ status: true, commands: [], diagnostics: [], msg: "" }),
+  listSlashCommands: vi.fn().mockResolvedValue({
+    status: true,
+    commands: [],
+    diagnostics: [],
+    msg: "",
+  }),
   dispatchSlashCommand: vi.fn(),
   reloadAifetchlyConfig: vi.fn(),
   getAifetchlyConfigStatus: vi.fn(),
   onAifetchlyConfigChanged: vi.fn().mockReturnValue(() => undefined),
 }));
 
-const i18n = createI18n({ legacy: false, locale: "en", messages: { en: { aiChatV2: { title: "AI Assistant" }, workspace: { badgeLabel: "Workspace", notSet: "No workspace set" } } } });
+const i18n = createI18n({
+  legacy: false,
+  locale: "en",
+  messages: {
+    en: {
+      aiChatV2: { title: "AI Assistant" },
+      workspace: { badgeLabel: "Workspace", notSet: "No workspace set" },
+    },
+  },
+});
 
 function mountChat() {
   return mount(AiChatV2, {
     global: {
       plugins: [i18n],
       stubs: {
-        AiChatV2Messages: true, AiChatV2QuestionCard: true, AiChatV2PlanApprovalCard: true,
+        AiChatV2Messages: true,
+        AiChatV2QuestionCard: true,
+        AiChatV2PlanApprovalCard: true,
         AiChatV2Composer: { template: '<div><slot name="prepend" /></div>' },
-        AiChatV2ModeSelector: true, AiChatV2ModelSelector: true, AiChatV2PlanStatusBadge: true,
-        AiChatV2ContextBadge: true, FileOperationBadge: true, MCPToolManager: true,
+        AiChatV2ModeSelector: true,
+        AiChatV2ModelSelector: true,
+        AiChatV2PlanStatusBadge: true,
+        AiChatV2ContextBadge: true,
+        FileOperationBadge: true,
+        MCPToolManager: true,
         AgentTaskListDialog: true,
-        WorkspaceRequiredCard: { props: ["conversationId"], template: '<div data-testid="workspace-required" :data-conversation-id="conversationId" />' },
-        VBtn: true, VCard: true, VCardText: true, VCardTitle: true, VChip: true, VDialog: true,
-        VDivider: true, VIcon: true, VList: true, VListItem: true, VListItemSubtitle: true,
-        VListItemTitle: true, VProgressCircular: true, VProgressLinear: true, VSnackbar: true,
-        VSpacer: true, VTextField: true,
+        WorkspaceRequiredCard: {
+          props: ["conversationId"],
+          template:
+            '<div data-testid="workspace-required" :data-conversation-id="conversationId" />',
+        },
+        VBtn: true,
+        VCard: true,
+        VCardText: true,
+        VCardTitle: true,
+        VChip: true,
+        VDialog: true,
+        VDivider: true,
+        VIcon: true,
+        VList: true,
+        VListItem: true,
+        VListItemSubtitle: true,
+        VListItemTitle: true,
+        VProgressCircular: true,
+        VProgressLinear: true,
+        VSnackbar: true,
+        VSpacer: true,
+        VTextField: true,
       },
     },
   });
@@ -57,12 +103,16 @@ describe("diag-emit", () => {
     const wrapper = mountChat();
     await flushPromises();
     const badgeComp = wrapper.find(".workspace-badge--unset");
-    console.log("BEFORE click: html has workspace-required?", wrapper.html().includes("workspace-required"));
+    console.log(
+      "BEFORE click: html has workspace-required?",
+      wrapper.html().includes("workspace-required")
+    );
     await badgeComp.trigger("click");
     await flushPromises();
-    console.log("AFTER click: html has workspace-required?", wrapper.html().includes("workspace-required"));
-    // Look for the parent's v-on listener registration
-    const vnode = wrapper.vm.$ as unknown as { vnode?: { props?: Record<string, unknown> } };
+    console.log(
+      "AFTER click: html has workspace-required?",
+      wrapper.html().includes("workspace-required")
+    );
     // Inspect the WorkspaceBadge component instance to see what listeners it has
     const wb = wrapper.findComponent({ name: "WorkspaceBadge" });
     console.log("WorkspaceBadge vm exists:", wb.exists());

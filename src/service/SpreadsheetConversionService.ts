@@ -1,4 +1,5 @@
 import * as chardet from "chardet";
+import { log } from "@/modules/Logger";
 import * as iconv from "iconv-lite";
 import Papa from "papaparse";
 import * as XLSX from "xlsx";
@@ -68,7 +69,7 @@ export class SpreadsheetConversionService {
         throw new Error(`CSV parse error: ${messages}`);
       }
       // Recoverable errors — log warnings but continue
-      console.warn(
+      log.warn(
         "CSV parse warnings:",
         result.errors.map((e) => e.message).join("; ")
       );
@@ -173,7 +174,7 @@ export class SpreadsheetConversionService {
     }
 
     // Unknown encoding — fall back to UTF-8
-    console.warn(
+    log.warn(
       `Unsupported encoding detected (${detected}), falling back to UTF-8`
     );
     return buffer.toString("utf-8");

@@ -470,9 +470,6 @@ const taskid = parseInt($route.params.id.toString());
 
 const initialize = async () => {
 console.log($route.params.id)
-//   if ($route.params.id) {
-//     taskid.value = parseInt($route.params.id.toString());
-//   }
 }
 /**
  * Start auto-refresh timer
@@ -488,7 +485,7 @@ function startAutoRefresh(): void {
                 loadItems({ 
                     page: currentPage.value, 
                     itemsPerPage: itemsPerPage.value, 
-                    sortBy: '' 
+                    sortBy: []
                 }, true); // Pass isAutoRefresh flag
             }
         }, autoRefreshIntervalMs.value);
@@ -564,7 +561,7 @@ onMounted(() => {
           loadItems({
               page: currentPage.value,
               itemsPerPage: itemsPerPage.value,
-              sortBy: ''
+              sortBy: []
           }, true);
       }
   });
@@ -742,9 +739,6 @@ const extractionNotice = reactive({
 const showDetailDialog = ref(false);
 const selectedResult = ref<SearchResEntityDisplay | null>(null);
 
-// Column visibility state
-// Default hidden columns: ai_analysis_status, extraction_status, contact_email, contact_phone, contact_address
-// Default hidden: ai_industry (Customer Industry), ai_match_score (Probability of Potential Customers)
 const visibleColumns = ref<Set<string>>(new Set(['index', 'title', 'link', 'keyword', 'record_time', 'actions']));
 
 // Auto-refresh functionality
@@ -898,13 +892,13 @@ watch(search, () => {
             loadItems({ 
                 page: 1, 
                 itemsPerPage: itemsPerPage.value, 
-                sortBy: '' 
+                sortBy: []
             });
         }
     }, 500); // 500ms debounce
 });
 
-function loadItems({ page, itemsPerPage, sortBy }, isAutoRefresh = false) {
+function loadItems({ page, itemsPerPage, sortBy }: { page: number; itemsPerPage: number; sortBy: { key: string; order: string }[] }, isAutoRefresh = false) {
     // Skip auto-refresh if page is not visible or currently analyzing
     if (isAutoRefresh && (!isPageVisible.value || analyzing.value)) {
         return;
@@ -918,7 +912,7 @@ function loadItems({ page, itemsPerPage, sortBy }, isAutoRefresh = false) {
         return
     }
     // Vuetify 3 passes sortBy as array [{key, order}]; convert to string for backend
-    const sortByStr: string = Array.isArray(sortBy) ? (sortBy[0]?.key ?? '') : (sortBy ?? '');
+    const sortByStr: string = sortBy?.[0]?.key ?? '';
     const fetchitem: Fetchparam = {
         page: page,
         itemsPerPage: itemsPerPage,
@@ -964,7 +958,7 @@ function handleSearch() {
         loadItems({ 
             page: 1, 
             itemsPerPage: itemsPerPage.value, 
-            sortBy: '' 
+            sortBy: []
         });
     }
 }
@@ -1439,7 +1433,7 @@ async function handleAnalyzeConfirm(data: { businessInfo: string; saveForFuture:
                     loadItems({ 
                         page: currentPage.value, 
                         itemsPerPage: itemsPerPage.value, 
-                        sortBy: '' 
+                        sortBy: []
                     }, true);
                 }
                 
@@ -1455,7 +1449,7 @@ async function handleAnalyzeConfirm(data: { businessInfo: string; saveForFuture:
                             loadItems({ 
                                 page: currentPage.value, 
                                 itemsPerPage: itemsPerPage.value, 
-                                sortBy: '' 
+                                sortBy: []
                             }, true);
                         }
                     }, 1000);
@@ -1524,13 +1518,7 @@ async function handleAnalyzeConfirm(data: { businessInfo: string; saveForFuture:
         analysisProgress.value = { current: 0, total: 0 };
     }
 }
-// },
-// }
-// const editItem = (item) => {
  
-// };
-// const openfolder=(item)=>{
-//     // console.log(item)
     
 // }
 

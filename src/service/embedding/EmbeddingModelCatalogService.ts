@@ -1,5 +1,6 @@
 "use strict";
 import { RagConfigApi } from "@/api/ragConfigApi";
+import { log } from "@/modules/Logger";
 import type {
   AvailableModelsResponse,
   ModelInfo,
@@ -71,7 +72,7 @@ export class EmbeddingModelCatalogService {
             response.data.configured_models ?? Object.keys(remoteModels).length;
         }
       } catch (error) {
-        console.warn(
+        log.warn(
           "[EmbeddingModelCatalog] Remote model list unavailable; returning local-only catalog:",
           error instanceof Error ? error.message : error
         );
@@ -182,7 +183,7 @@ export class EmbeddingModelCatalogService {
         return persisted.modelName;
       }
     } catch (error) {
-      console.warn(
+      log.warn(
         "[EmbeddingModelCatalog] Failed to read persisted default embedding model:",
         error instanceof Error ? error.message : error
       );

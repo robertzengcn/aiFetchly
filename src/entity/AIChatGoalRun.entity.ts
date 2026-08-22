@@ -14,47 +14,47 @@ import type { AIChatGoalStatus } from "@/entityTypes/aiChatGoalTypes";
 @Index(["status"])
 export class AIChatGoalRunEntity extends AuditableEntity {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
 
   @Order(1)
   @Column("varchar", { length: 100, nullable: false, unique: true })
-  runId: string;
+  runId!: string;
 
   @Order(2)
   @Column("varchar", { length: 100, nullable: false })
-  goalId: string;
+  goalId!: string;
 
   @Order(3)
   @Column("varchar", { length: 100, nullable: false })
-  conversationId: string;
+  conversationId!: string;
 
   @Order(4)
   @Column("varchar", { length: 32, nullable: false })
-  status: AIChatGoalStatus;
+  status!: AIChatGoalStatus;
 
   @Order(5)
   @Column("int", { nullable: false })
-  maxIterations: number;
+  maxIterations!: number;
 
   @Order(6)
   @Column("int", { nullable: false })
-  maxRuntimeMs: number;
+  maxRuntimeMs!: number;
 
   @Order(7)
   @Column("int", { nullable: false })
-  repeatedFailureThreshold: number;
+  repeatedFailureThreshold!: number;
 
   @Order(8)
   @Column("int", { nullable: false, default: 0 })
-  iterationCount: number;
+  iterationCount!: number;
 
   @Order(9)
   @Column("boolean", { nullable: false, default: false })
-  cancelled: boolean;
+  cancelled!: boolean;
 
   @Order(10)
   @Column("datetime", { nullable: false })
-  startedAt: Date;
+  startedAt!: Date;
 
   @Order(11)
   @Column("datetime", { nullable: true })

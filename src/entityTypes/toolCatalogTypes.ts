@@ -82,6 +82,14 @@ export interface ToolCatalogRuntimeContext {
    * ToolPromptBudgetService for the auto-mode threshold.
    */
   readonly contextWindowTokens?: number;
+  /**
+   * True when the recent conversation history contains AI-generated images
+   * (the `<generated_images>` marker). Used to auto-promote image-editing
+   * tools when the user's message looks like a follow-up edit request
+   * (e.g. "add a tree in front of the house") even though it lacks
+   * image-specific keywords.
+   */
+  readonly hasRecentGeneratedImages?: boolean;
 }
 
 /**

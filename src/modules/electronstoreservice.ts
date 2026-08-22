@@ -2,6 +2,7 @@
 // import keytar from 'keytar'
 
 import Store from "electron-store";
+import { SecureStore, isSecureStoreEnabled } from "@/modules/SecureStore";
 
 type GlobalElectronStoreState = typeof globalThis & {
   __aifetchlyElectronStores?: Map<string, Store>;
@@ -113,33 +114,88 @@ function getOrCreateStore(serviceName: string): Store {
   return store;
 }
 
-export class ElectronStoreService {
+/**
+ * Internal store interface — abstracts over plain Store and SecureStore so
+ * ElectronStoreService callers are unchanged regardless of encryption mode.
+ */
+interface IStore {
+  setValue(key: string, value: string): void;
+  getValue(key: string): unknown;
+  deleteValue(key: string): void;
+  clearStore(): void;
+}
+
+/** Plain store adapter — wraps electron-store's set/get/delete/clear. */
+class PlainStoreAdapter implements IStore {
   private store: Store;
-  // private service:string;
-  constructor(service: string) {
-    const appName = getAppName();
-    const serviceName = `${appName}_${service}`;
-    this.store = getOrCreateStore(serviceName);
-    // console.log('Store Path:', this.store.path);
+  constructor(options: unknown) {
+    // Reuse one electron-store instance per service name (see getOrCreateStore)
+    // so repeated construction cannot stack IPC listeners.
+    const opts = options as { name?: unknown };
+    const serviceName = typeof opts.name === "string" ? opts.name : "";
+    this.store = serviceName
+      ? getOrCreateStore(serviceName)
+      : new Store(options as never);
   }
-  public setValue(key: string, value: string): void {
+  setValue(key: string, value: string): void {
     this.store.set(key, value);
   }
-  //get password
-  public getValue(key: string): unknown {
+  getValue(key: string): unknown {
     return this.store.get(key);
   }
-
-  public deleteValue(key: string): void {
+  deleteValue(key: string): void {
     this.store.delete(key);
   }
-
-  public clearStore(): void {
+  clearStore(): void {
     this.store.clear();
   }
 
-  /** Test helper: expose whether two services share one Store instance. */
-  public getStoreForTests(): Store {
+  /** Expose the underlying shared Store (test helper). */
+  getStore(): Store {
     return this.store;
+  }
+}
+
+export class ElectronStoreService {
+  private backend: IStore;
+
+  constructor(service: string) {
+    const appName = getAppName();
+    const serviceName = `${appName}_${service}`;
+    const options = getStoreOptions(serviceName);
+
+    // WS-1 R1.1: when AIFETCHLY_ENCRYPT_STORE=1, use SecureStore (safeStorage)
+    // to encrypt sensitive keys at rest. Default off — see ADR-0001.
+    if (isSecureStoreEnabled()) {
+      this.backend = new SecureStore(options);
+    } else {
+      this.backend = new PlainStoreAdapter(options);
+    }
+  }
+
+  public setValue(key: string, value: string): void {
+    this.backend.setValue(key, value);
+  }
+
+  public getValue(key: string): unknown {
+    return this.backend.getValue(key);
+  }
+
+  public deleteValue(key: string): void {
+    this.backend.deleteValue(key);
+  }
+
+  public clearStore(): void {
+    this.backend.clearStore();
+  }
+
+  /** Test helper: expose the shared Store instance (plain mode only). */
+  public getStoreForTests(): Store {
+    if (this.backend instanceof PlainStoreAdapter) {
+      return this.backend.getStore();
+    }
+    throw new Error(
+      "getStoreForTests is only supported in plain (non-encrypted) store mode"
+    );
   }
 }

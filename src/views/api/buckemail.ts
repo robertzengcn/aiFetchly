@@ -6,7 +6,7 @@ import {BUCKEMAILSEND,BUCKEMAILTASKLIST,BUCKEMAILTASKSENDLOG} from '@/config/cha
 import {SearchResult} from '@/views/api/types'
 import {ItemSearchparam} from "@/entityTypes/commonType"
 import {BuckEmailListType,BuckEmailTasklogQueryType,EmailMarketingSendLogListDisplay} from "@/entityTypes/buckemailType"
-import { EmailMarketingSendLogEntity} from "@/model/emailMarketingSendLogdb"
+import { EmailMarketingSendLogEntity} from "@/entityTypes/emailMarketingSendLog-type"
 
 export async function buckEmailsend(data: EmailMarketingsubdata) {
     
