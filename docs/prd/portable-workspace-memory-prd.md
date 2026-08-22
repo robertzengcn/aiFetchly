@@ -1,16 +1,17 @@
 # Portable Workspace Memory - Product Requirements Document
 
-| Field                    | Value                                           |
-| ------------------------ | ----------------------------------------------- |
-| Document version         | v1.0                                            |
-| Created                  | 2026-08-22                                      |
-| Status                   | Draft                                           |
-| Owner                    | AiFetchly AI Chat                               |
-| Target release           | To be planned                                   |
-| Parent feature           | Workspace Memory                                |
-| Related PRD              | `docs/prd/workspace-memory-prd.md`              |
-| Related technical design | `docs/prd/workspace-memory-technical-design.md` |
-| Related platform PRD     | `docs/prd/aifetchly-local-extensibility-prd.md` |
+| Field                | Value                                                    |
+| -------------------- | -------------------------------------------------------- |
+| Document version     | v1.0                                                     |
+| Created              | 2026-08-22                                               |
+| Status               | Draft                                                    |
+| Owner                | AiFetchly AI Chat                                        |
+| Target release       | To be planned                                            |
+| Parent feature       | Workspace Memory                                         |
+| Related PRD          | `docs/prd/workspace-memory-prd.md`                       |
+| Technical design     | `docs/prd/portable-workspace-memory-technical-design.md` |
+| Base memory design   | `docs/prd/workspace-memory-technical-design.md`          |
+| Related platform PRD | `docs/prd/aifetchly-local-extensibility-prd.md`          |
 
 ## 1. Executive Summary
 
