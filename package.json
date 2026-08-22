@@ -294,7 +294,7 @@
     "vue-cli-plugin-vuetify": "~2.5.8",
     "vue-loader": "^15.11.1",
     "vue-template-compiler": "^2.7.14",
-    "vue-tsc": "^2.0.28"
+    "vue-tsc": "^3.3.10"
   },
   "overrides": {
     "canvas": "npm:@napi-rs/canvas"
