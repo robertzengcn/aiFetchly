@@ -140,7 +140,7 @@
     "global": "^4.4.0",
     "got": "^14.4.7",
     "html-to-text": "^10.0.1",
-    "https-proxy-agent": "^7.0.4",
+    "https-proxy-agent": "^9.1.0",
     "iconv-lite": "^0.7.2",
     "imapflow": "^1.4.3",
     "isbinaryfile": "^5.0.4",
