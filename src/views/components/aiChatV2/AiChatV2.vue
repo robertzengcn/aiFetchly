@@ -851,7 +851,7 @@ import {
 import {
   AUTH_EXPIRED_SENTINEL,
   QUOTA_EXHAUSTED_SENTINEL,
-} from "@/service/AIChatErrorMapper";
+} from "@/service/AIChatErrorSentinels";
 
 /**
  * Rough chars→tokens ratio used to drive a live-updating estimate while

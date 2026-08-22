@@ -3,14 +3,29 @@
 import { AIProviderError } from "./aiProvider/AIProviderError";
 import { isAIChatRecoverableError } from "./AIChatRecoveryTypes";
 import { log } from "@/modules/Logger";
+// Import the renderer-safe sentinel constants into local scope for use in the
+// functions below, and re-export them so existing main-process importers keep
+// working unchanged. The constants live in the pure, Node-free
+// AIChatErrorSentinels module so the renderer can import them without pulling
+// `@/modules/Logger` (and thus `node:module.createRequire`) into the browser
+// bundle. See AIChatErrorSentinels.ts for the rationale.
+import {
+  QUOTA_EXHAUSTED_SENTINEL,
+  AUTH_EXPIRED_SENTINEL,
+} from "./AIChatErrorSentinels";
+export {
+  QUOTA_EXHAUSTED_SENTINEL,
+  AUTH_EXPIRED_SENTINEL,
+} from "./AIChatErrorSentinels";
 
 /**
  * Sentinel returned by {@link userSafeError} when the AI server reports
  * HTTP 402 / "Payment Required" — i.e. the user's subscription token quota
  * is exhausted. The renderer detects this and shows a translated, actionable
  * recharge prompt instead of the raw sentinel.
+ *
+ * Re-exported from {@link ./AIChatErrorSentinels} — see that module.
  */
-export const QUOTA_EXHAUSTED_SENTINEL = "QUOTA_EXHAUSTED";
 
 /**
  * Broad pattern for transient, retryable server-side failures: empty
@@ -106,8 +121,9 @@ export function isContentLevelTransientError(err: unknown): boolean {
  * HTTP 401/403 (session/access token expired or rejected). The main process
  * signs the user out and navigates to login; the renderer maps this sentinel
  * to a short translated message if the UI is still visible briefly.
+ *
+ * Re-exported from {@link ./AIChatErrorSentinels} — see that module.
  */
-export const AUTH_EXPIRED_SENTINEL = "AUTH_EXPIRED";
 
 const AUTH_EXPIRED_MESSAGE_PATTERN =
   /401|403|Authentication failed|Please login again|RefreshTokenInvalidError|refresh token rejected|invalid or expired refresh token|refresh token not found|refresh token has expired|refresh token is invalid|Forbidden/i;
