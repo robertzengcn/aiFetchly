@@ -4,6 +4,8 @@ import { Repository } from "typeorm";
 
 export interface AIWorkspaceMemoryCreateFields {
   memoryId: string;
+  /** Internal memory scope owning the row (portable-memory Phase A). */
+  scopeId?: string | null;
   workspaceKey: string;
   workspaceRoot: string;
   type: string;
@@ -21,6 +23,16 @@ export interface AIWorkspaceMemoryCreateFields {
 
 export interface AIWorkspaceMemoryListInput {
   readonly workspaceKey: string;
+  readonly query?: string;
+  readonly type?: string;
+  readonly status?: string;
+  readonly sourceKind?: string;
+  readonly limit?: number;
+  readonly offset?: number;
+}
+
+export interface AIWorkspaceMemoryScopeListInput {
+  readonly scopeId: string;
   readonly query?: string;
   readonly type?: string;
   readonly status?: string;
@@ -50,8 +62,9 @@ export class AIWorkspaceMemoryModel extends BaseDb {
           "Worker should send data to main process via IPC."
       );
     }
-    this.repository =
-      this.sqliteDb.connection.getRepository(AIWorkspaceMemoryEntity);
+    this.repository = this.sqliteDb.connection.getRepository(
+      AIWorkspaceMemoryEntity
+    );
   }
 
   async create(
@@ -59,6 +72,7 @@ export class AIWorkspaceMemoryModel extends BaseDb {
   ): Promise<AIWorkspaceMemoryEntity> {
     const e = new AIWorkspaceMemoryEntity();
     e.memoryId = input.memoryId;
+    if (input.scopeId !== undefined) e.scopeId = input.scopeId;
     e.workspaceKey = input.workspaceKey;
     e.workspaceRoot = input.workspaceRoot;
     e.type = input.type;
@@ -85,7 +99,9 @@ export class AIWorkspaceMemoryModel extends BaseDb {
     return this.repository.findOne({ where: { workspaceKey, memoryId } });
   }
 
-  async list(input: AIWorkspaceMemoryListInput): Promise<AIWorkspaceMemoryEntity[]> {
+  async list(
+    input: AIWorkspaceMemoryListInput
+  ): Promise<AIWorkspaceMemoryEntity[]> {
     const qb = this.repository
       .createQueryBuilder("m")
       .where("m.workspaceKey = :wk", { wk: input.workspaceKey });
@@ -162,6 +178,120 @@ export class AIWorkspaceMemoryModel extends BaseDb {
       .where("workspaceKey = :wk", { wk: workspaceKey })
       .andWhere("memoryId IN (:...ids)", { ids: memoryIds })
       .execute();
+  }
+
+  // --- Scope-based access (portable-memory Phase A, design §10.3) ------------
+  // Every method puts scopeId in the WHERE clause. No unscoped
+  // getByMemoryId() exists by design.
+
+  async getByScopeAndMemoryId(
+    scopeId: string,
+    memoryId: string
+  ): Promise<AIWorkspaceMemoryEntity | null> {
+    return this.repository.findOne({ where: { scopeId, memoryId } });
+  }
+
+  async listByScope(
+    input: AIWorkspaceMemoryScopeListInput
+  ): Promise<AIWorkspaceMemoryEntity[]> {
+    const qb = this.repository
+      .createQueryBuilder("m")
+      .where("m.scopeId = :sid", { sid: input.scopeId });
+    if (input.status)
+      qb.andWhere("m.status = :status", { status: input.status });
+    if (input.type) qb.andWhere("m.type = :type", { type: input.type });
+    if (input.sourceKind)
+      qb.andWhere("m.sourceKind = :sk", { sk: input.sourceKind });
+    if (input.query) {
+      const like = `%${escapeLike(input.query)}%`;
+      qb.andWhere(
+        "(m.title LIKE :q ESCAPE '\\' OR m.content LIKE :q ESCAPE '\\')",
+        { q: like }
+      );
+    }
+    const limit = clampLimit(input.limit, 50, 200);
+    const offset = Math.max(0, input.offset ?? 0);
+    qb.orderBy("m.updatedAt", "DESC").take(limit).skip(offset);
+    return qb.getMany();
+  }
+
+  async listActiveForScopeRetrieval(
+    scopeId: string,
+    limit: number
+  ): Promise<AIWorkspaceMemoryEntity[]> {
+    return this.repository.find({
+      where: { scopeId, status: "active" },
+      order: { updatedAt: "DESC" },
+      take: Math.max(1, Math.min(limit, 200)),
+    });
+  }
+
+  async updateByScopeAndMemoryId(
+    scopeId: string,
+    memoryId: string,
+    updates: Partial<AIWorkspaceMemoryEntity>
+  ): Promise<AIWorkspaceMemoryEntity> {
+    await this.repository.update(
+      { scopeId, memoryId },
+      updates as unknown as never
+    );
+    const next = await this.getByScopeAndMemoryId(scopeId, memoryId);
+    if (!next) throw new Error(`Workspace memory not found: ${memoryId}`);
+    return next;
+  }
+
+  async deleteByScopeAndMemoryId(
+    scopeId: string,
+    memoryId: string
+  ): Promise<number> {
+    const r = await this.repository.delete({ scopeId, memoryId });
+    return r.affected ?? 0;
+  }
+
+  async markUsedByScope(
+    scopeId: string,
+    memoryIds: readonly string[],
+    usedAt: Date
+  ): Promise<void> {
+    if (memoryIds.length === 0) return;
+    await this.repository
+      .createQueryBuilder()
+      .update()
+      .set({ lastUsedAt: usedAt })
+      .where("scopeId = :sid", { sid: scopeId })
+      .andWhere("memoryId IN (:...ids)", { ids: memoryIds })
+      .execute();
+  }
+
+  /**
+   * Converge legacy rows (scopeId IS NULL) for a workspace key onto their
+   * legacy scope. Runs on every scope resolution so development databases
+   * created before the portable-memory schema converge without a formal
+   * migration (design §9.2 step 8 runtime equivalent).
+   */
+  async backfillScopeIdForWorkspaceKey(
+    workspaceKey: string,
+    scopeId: string
+  ): Promise<number> {
+    const r = await this.repository
+      .createQueryBuilder()
+      .update()
+      .set({ scopeId })
+      .where("workspaceKey = :wk", { wk: workspaceKey })
+      .andWhere("scopeId IS NULL")
+      .execute();
+    return r.affected ?? 0;
+  }
+
+  /** Move every memory row from one scope to another (scope merge step 3). */
+  async reassignScope(fromScopeId: string, toScopeId: string): Promise<number> {
+    const r = await this.repository
+      .createQueryBuilder()
+      .update()
+      .set({ scopeId: toScopeId })
+      .where("scopeId = :from", { from: fromScopeId })
+      .execute();
+    return r.affected ?? 0;
   }
 }
 

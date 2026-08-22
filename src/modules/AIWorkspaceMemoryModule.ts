@@ -27,12 +27,18 @@ const MAX_SOURCE_MESSAGE_IDS = 100;
  * Trusted, main-process-resolved workspace scope.
  *
  * The module never resolves a conversation into a workspace itself — it accepts
- * a scope that the service layer (WorkspaceMemoryContextResolver) has already
- * authenticated against an approved workspace.
+ * a scope that the service layer (WorkspaceMemoryScopeResolver /
+ * WorkspaceMemoryContextResolver) has already authenticated against an
+ * approved workspace.
+ *
+ * `scopeId` (portable-memory Phase A) is the internal retrieval boundary.
+ * When present every operation dispatches to the scope-based model methods;
+ * the legacy `workspaceKey` path remains for pre-portable callers.
  */
 export interface WorkspaceMemoryScope {
   readonly workspaceKey: string;
   readonly workspaceRoot: string;
+  readonly scopeId?: string;
 }
 
 export class AIWorkspaceMemoryModule extends BaseModule {
@@ -54,6 +60,7 @@ export class AIWorkspaceMemoryModule extends BaseModule {
       memoryId: `wmem-${randomUUID()}`,
       workspaceKey: scope.workspaceKey,
       workspaceRoot: scope.workspaceRoot,
+      ...(scope.scopeId ? { scopeId: scope.scopeId } : {}),
       type: input.type,
       title: input.title.trim(),
       content: input.content.trim(),
@@ -118,11 +125,17 @@ export class AIWorkspaceMemoryModule extends BaseModule {
     }
     if (input.metadata !== undefined) patch.metadata = input.metadata;
 
-    const e = await this.memoryModel.updateByWorkspaceAndMemoryId(
-      scope.workspaceKey,
-      input.memoryId,
-      patch
-    );
+    const e = scope.scopeId
+      ? await this.memoryModel.updateByScopeAndMemoryId(
+          scope.scopeId,
+          input.memoryId,
+          patch
+        )
+      : await this.memoryModel.updateByWorkspaceAndMemoryId(
+          scope.workspaceKey,
+          input.memoryId,
+          patch
+        );
     return this.toView(e);
   }
 
@@ -130,6 +143,12 @@ export class AIWorkspaceMemoryModule extends BaseModule {
     scope: WorkspaceMemoryScope,
     memoryId: string
   ): Promise<void> {
+    if (scope.scopeId) {
+      await this.memoryModel.updateByScopeAndMemoryId(scope.scopeId, memoryId, {
+        status: "archived",
+      });
+      return;
+    }
     await this.memoryModel.archive(scope.workspaceKey, memoryId);
   }
 
@@ -137,6 +156,9 @@ export class AIWorkspaceMemoryModule extends BaseModule {
     scope: WorkspaceMemoryScope,
     memoryId: string
   ): Promise<number> {
+    if (scope.scopeId) {
+      return this.memoryModel.deleteByScopeAndMemoryId(scope.scopeId, memoryId);
+    }
     return this.memoryModel.deleteByWorkspaceAndMemoryId(
       scope.workspaceKey,
       memoryId
@@ -147,10 +169,12 @@ export class AIWorkspaceMemoryModule extends BaseModule {
     scope: WorkspaceMemoryScope,
     memoryId: string
   ): Promise<AIWorkspaceMemoryView | null> {
-    const e = await this.memoryModel.getByWorkspaceAndMemoryId(
-      scope.workspaceKey,
-      memoryId
-    );
+    const e = scope.scopeId
+      ? await this.memoryModel.getByScopeAndMemoryId(scope.scopeId, memoryId)
+      : await this.memoryModel.getByWorkspaceAndMemoryId(
+          scope.workspaceKey,
+          memoryId
+        );
     return e ? this.toView(e) : null;
   }
 
@@ -159,15 +183,25 @@ export class AIWorkspaceMemoryModule extends BaseModule {
     input: Omit<AIWorkspaceMemorySearchInput, "conversationId">
   ): Promise<AIWorkspaceMemoryView[]> {
     const status = resolveListStatus(input.status);
-    const rows = await this.memoryModel.list({
-      workspaceKey: scope.workspaceKey,
-      query: input.query,
-      type: input.type,
-      status,
-      sourceKind: input.sourceKind,
-      limit: input.limit,
-      offset: input.offset,
-    });
+    const rows = scope.scopeId
+      ? await this.memoryModel.listByScope({
+          scopeId: scope.scopeId,
+          query: input.query,
+          type: input.type,
+          status,
+          sourceKind: input.sourceKind,
+          limit: input.limit,
+          offset: input.offset,
+        })
+      : await this.memoryModel.list({
+          workspaceKey: scope.workspaceKey,
+          query: input.query,
+          type: input.type,
+          status,
+          sourceKind: input.sourceKind,
+          limit: input.limit,
+          offset: input.offset,
+        });
     return rows.map((e) => this.toView(e));
   }
 
@@ -175,10 +209,12 @@ export class AIWorkspaceMemoryModule extends BaseModule {
     scope: WorkspaceMemoryScope,
     limit = 50
   ): Promise<AIWorkspaceMemoryView[]> {
-    const rows = await this.memoryModel.listActiveForRetrieval(
-      scope.workspaceKey,
-      limit
-    );
+    const rows = scope.scopeId
+      ? await this.memoryModel.listActiveForScopeRetrieval(scope.scopeId, limit)
+      : await this.memoryModel.listActiveForRetrieval(
+          scope.workspaceKey,
+          limit
+        );
     return rows.map((e) => this.toView(e));
   }
 
@@ -188,11 +224,15 @@ export class AIWorkspaceMemoryModule extends BaseModule {
     usedAt: Date = new Date()
   ): Promise<void> {
     try {
-      await this.memoryModel.markUsed(
-        scope.workspaceKey,
-        memoryIds,
-        usedAt
-      );
+      if (scope.scopeId) {
+        await this.memoryModel.markUsedByScope(
+          scope.scopeId,
+          memoryIds,
+          usedAt
+        );
+      } else {
+        await this.memoryModel.markUsed(scope.workspaceKey, memoryIds, usedAt);
+      }
     } catch (err) {
       console.error("[workspace-memory] markMemoriesUsed failed:", err);
     }
@@ -227,7 +267,8 @@ export class AIWorkspaceMemoryModule extends BaseModule {
       content: e.content,
       status: e.status as AIWorkspaceMemoryView["status"],
       confidence: e.confidence,
-      sourceKind: (e.sourceKind ?? undefined) as AIWorkspaceMemoryView["sourceKind"],
+      sourceKind: (e.sourceKind ??
+        undefined) as AIWorkspaceMemoryView["sourceKind"],
       sourceConversationId: e.sourceConversationId ?? undefined,
       sourceAgentTaskId: e.sourceAgentTaskId ?? undefined,
       sourceMessageIds: e.sourceMessageIds ?? undefined,

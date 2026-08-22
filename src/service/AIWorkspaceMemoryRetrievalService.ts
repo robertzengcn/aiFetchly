@@ -61,16 +61,22 @@ export class AIWorkspaceMemoryRetrievalService {
   async retrieve(
     input: AIWorkspaceMemoryRetrievalInput
   ): Promise<AIWorkspaceMemoryInjectionResult> {
-    const ctx = await this.resolver.resolveForConversation(input.conversationId);
+    const ctx = await this.resolver.resolveForConversation(
+      input.conversationId
+    );
     if (!ctx) {
       return { memories: [], tokenEstimate: 0, contextBlock: "" };
     }
     const scope: WorkspaceMemoryScope = {
       workspaceKey: ctx.workspaceKey,
       workspaceRoot: ctx.workspaceRoot,
+      ...(ctx.scopeId ? { scopeId: ctx.scopeId } : {}),
     };
 
-    const pool = await this.memory.listActiveForRetrieval(scope, CANDIDATE_LIMIT);
+    const pool = await this.memory.listActiveForRetrieval(
+      scope,
+      CANDIDATE_LIMIT
+    );
     if (pool.length === 0) {
       return { memories: [], tokenEstimate: 0, contextBlock: "" };
     }
