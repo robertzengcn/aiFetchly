@@ -620,6 +620,42 @@ export const AI_USER_MEMORY_RUN_AUTO_DREAM = "ai:user-memory:auto-dream:run";
 export const AI_USER_MEMORY_AUTO_DREAM_STATUS =
   "ai:user-memory:auto-dream:status";
 
+// Portable workspace memory (Markdown files under .aifetchly/memory/)
+// Non-AI operations — available without an AI subscription (design §20.4).
+export const AI_PORTABLE_WORKSPACE_MEMORY_STATUS =
+  "ai:portable-workspace-memory:status";
+export const AI_PORTABLE_WORKSPACE_MEMORY_ENABLE_PREVIEW =
+  "ai:portable-workspace-memory:enable:preview";
+export const AI_PORTABLE_WORKSPACE_MEMORY_ENABLE =
+  "ai:portable-workspace-memory:enable";
+export const AI_PORTABLE_WORKSPACE_MEMORY_EXPORT_PREVIEW =
+  "ai:portable-workspace-memory:export:preview";
+export const AI_PORTABLE_WORKSPACE_MEMORY_EXPORT =
+  "ai:portable-workspace-memory:export";
+export const AI_PORTABLE_WORKSPACE_MEMORY_RESCAN =
+  "ai:portable-workspace-memory:rescan";
+export const AI_PORTABLE_WORKSPACE_MEMORY_DIAGNOSTICS_LIST =
+  "ai:portable-workspace-memory:diagnostics:list";
+export const AI_PORTABLE_WORKSPACE_MEMORY_CONFLICTS_LIST =
+  "ai:portable-workspace-memory:conflicts:list";
+export const AI_PORTABLE_WORKSPACE_MEMORY_CONFLICT_RESOLVE =
+  "ai:portable-workspace-memory:conflict:resolve";
+export const AI_PORTABLE_WORKSPACE_MEMORY_POLICY_UPDATE =
+  "ai:portable-workspace-memory:policy:update";
+export const AI_PORTABLE_WORKSPACE_MEMORY_PROMOTE =
+  "ai:portable-workspace-memory:promote";
+export const AI_PORTABLE_WORKSPACE_MEMORY_PRIVATIZE =
+  "ai:portable-workspace-memory:privatize";
+export const AI_PORTABLE_WORKSPACE_MEMORY_REVIEW_APPROVE =
+  "ai:portable-workspace-memory:review:approve";
+export const AI_PORTABLE_WORKSPACE_MEMORY_REVIEW_REJECT =
+  "ai:portable-workspace-memory:review:reject";
+export const AI_PORTABLE_WORKSPACE_MEMORY_GIT_STATUS =
+  "ai:portable-workspace-memory:git-status";
+// Renderer push event (main → renderer): one summary per reconciliation.
+export const AI_PORTABLE_WORKSPACE_MEMORY_CHANGED =
+  "ai:portable-workspace-memory:changed";
+
 // Workspace Management Channels
 export const AI_WORKSPACE_SET = "ai-workspace:set";
 export const AI_WORKSPACE_GET = "ai-workspace:get";

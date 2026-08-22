@@ -37,8 +37,41 @@ import { getAIFetchlyConfigManager } from "@/service/aifetchlyConfig/AIFetchlyCo
 import { AIFetchlyWorkspaceTrustModule } from "@/modules/AIFetchlyWorkspaceTrustModule";
 import { computeWorkspaceRootHash } from "@/model/AIFetchlyWorkspaceTrust.model";
 import type { AIFetchlySourceTrust } from "@/entityTypes/aifetchlyConfigTypes";
+import { PortableWorkspaceMemorySyncCoordinator } from "@/service/PortableWorkspaceMemorySyncCoordinator";
+import { AI_PORTABLE_WORKSPACE_MEMORY_CHANGED } from "@/config/channellist";
+import type { PortableMemorySyncSummary } from "@/entityTypes/portableWorkspaceMemoryTypes";
 
 let singleton: WorkspaceWatchManager | null = null;
+
+/**
+ * ONE shared portable-memory sync coordinator for the whole app (design
+ * §13.3). Constructed lazily beside the manager; never per event. Its
+ * renderer summaries ride the dedicated ai:portable-workspace-memory:changed
+ * channel (main → renderer).
+ */
+let sharedPortableCoordinator: PortableWorkspaceMemorySyncCoordinator | null =
+  null;
+
+export function getSharedPortableMemorySyncCoordinator(): PortableWorkspaceMemorySyncCoordinator {
+  if (!sharedPortableCoordinator) {
+    sharedPortableCoordinator = new PortableWorkspaceMemorySyncCoordinator({
+      emitter: (summary: PortableMemorySyncSummary) => {
+        forwardPortableMemorySummary(summary);
+      },
+    });
+  }
+  return sharedPortableCoordinator;
+}
+
+/** Best-effort renderer forward — never throws into synchronization. */
+function forwardPortableMemorySummary(summary: PortableMemorySyncSummary): void {
+  void summary;
+  // Wired lazily by initWorkspaceWatchManager (window reference); see below.
+  portableSummarySink?.(summary);
+}
+
+let portableSummarySink: ((summary: PortableMemorySyncSummary) => void) | null =
+  null;
 
 /** All five capabilities trusted (D-TrustUX block-write value). */
 const ALL_TRUE: AIFetchlySourceTrust = Object.freeze({
@@ -110,10 +143,37 @@ export function initWorkspaceWatchManager(
   if (singleton) return singleton;
   const configManager = getAIFetchlyConfigManager();
   const registrySync = configManager.getRegistrySync();
+  portableSummarySink = (summary) => {
+    try {
+      win.webContents.send(AI_PORTABLE_WORKSPACE_MEMORY_CHANGED, {
+        scopeId: summary.scopeId,
+        complete: summary.complete,
+        imported: summary.imported,
+        unchanged: summary.unchanged,
+        rejected: summary.rejected,
+        conflicted: summary.conflicted,
+        pendingReview: summary.pendingReview,
+        deleted: summary.deleted,
+      });
+    } catch {
+      // Window may be closing — summaries are advisory.
+    }
+  };
   singleton = new WorkspaceWatchManager({
     applySnapshotCallback: (snapshot, trust) =>
       registrySync.applyWorkspaceSnapshot(snapshot, trust),
     configChangedEmitter: (event) => forwardManagerEvent(win, event),
+    // Portable memory (design §13.1): fire-and-forget enqueue through the
+    // shared coordinator. The manager never awaits synchronization here.
+    portableMemorySnapshotCallback: (input) => {
+      if (!input.snapshot) return;
+      void getSharedPortableMemorySyncCoordinator().enqueueSnapshot({
+        workspaceId: input.workspaceId,
+        workspaceRoot: input.workspaceRoot,
+        approved: input.approved,
+        snapshot: input.snapshot,
+      });
+    },
     // Pitfall 5: synchronous read from the entity-backed cache. The manager
     // signature requires (workspaceId) => boolean; derivePhase14Trust then
     // propagates the boolean to every capability flag (D-TrustUX), so an
