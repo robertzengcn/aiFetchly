@@ -220,7 +220,7 @@
     "@electron-forge/publisher-github": "^7.11.2",
     "@electron/rebuild": "^4.2.0",
     "@rollup/plugin-commonjs": "^26.0.1",
-    "@rollup/plugin-node-resolve": "^15.2.3",
+    "@rollup/plugin-node-resolve": "^16.0.3",
     "@types/chai": "^4.3.5",
     "@types/chardet": "^1.0.0",
     "@types/diff": "^8.0.0",
