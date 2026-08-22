@@ -3262,4 +3262,53 @@ export default {
       },
     },
   },
+  ui: {
+    inspector: {
+      region: "Inspecteur",
+      close: "Fermer l'inspecteur",
+      scheduleTitle: "Détails de la planification",
+    },
+    state: {
+      loading: "Chargement…",
+      emptyTitle: "Rien ici pour le moment",
+      emptyBody: "Commencez par créer votre premier enregistrement.",
+      noResultsTitle: "Aucun enregistrement correspondant",
+      noResultsBody: "Des enregistrements peuvent être masqués par les filtres actuels.",
+      clearFilters: "Effacer les filtres",
+      errorTitle: "Une erreur est survenue",
+      errorBody: "L'opération a échoué. Réessayez.",
+      errorLoad: "Échec du chargement de l'enregistrement.",
+      missingRecord: "Cet enregistrement n'est plus disponible.",
+      forbiddenTitle: "Capacité indisponible",
+      forbiddenBody: "Cette capacité n'est pas activée pour votre offre.",
+    },
+    actions: {
+      retry: "Réessayer",
+      cancel: "Annuler",
+      copy: "Copier",
+      dismiss: "Fermer",
+    },
+    detail: {
+      status: "Statut",
+      schedule: "Planification",
+      updated: "Mis à jour",
+    },
+    task: {
+      active: "Active",
+      paused: "En pause",
+      viewActivity: "Voir l'activité",
+    },
+    settings: {
+      categories: "Catégories de paramètres",
+      saving: "Enregistrement…",
+      saved: "Enregistré",
+      saveFailed: "Échec de l'enregistrement",
+    },
+    landing: {
+      continue: "Poursuivez votre travail",
+      attention: "Nécessite votre attention",
+      recentOutcomes: "Résultats récents",
+      suggested: "Actions suggérées",
+    },
+  },
 };

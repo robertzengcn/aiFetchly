@@ -3123,4 +3123,53 @@ export default {
       },
     },
   },
+  ui: {
+    inspector: {
+      region: "检查器",
+      close: "关闭检查器",
+      scheduleTitle: "定时任务详情",
+    },
+    state: {
+      loading: "加载中…",
+      emptyTitle: "这里还没有内容",
+      emptyBody: "创建第一条记录即可开始。",
+      noResultsTitle: "没有匹配的记录",
+      noResultsBody: "记录可能被当前筛选条件隐藏了。",
+      clearFilters: "清除筛选",
+      errorTitle: "出错了",
+      errorBody: "操作失败，请重试。",
+      errorLoad: "记录加载失败。",
+      missingRecord: "该记录已不可用。",
+      forbiddenTitle: "功能不可用",
+      forbiddenBody: "当前方案未启用此功能。",
+    },
+    actions: {
+      retry: "重试",
+      cancel: "取消",
+      copy: "复制",
+      dismiss: "关闭",
+    },
+    detail: {
+      status: "状态",
+      schedule: "定时",
+      updated: "更新于",
+    },
+    task: {
+      active: "启用",
+      paused: "已暂停",
+      viewActivity: "查看活动",
+    },
+    settings: {
+      categories: "设置分类",
+      saving: "保存中…",
+      saved: "已保存",
+      saveFailed: "保存失败",
+    },
+    landing: {
+      continue: "继续你的工作",
+      attention: "需要关注",
+      recentOutcomes: "近期结果",
+      suggested: "建议操作",
+    },
+  },
 };

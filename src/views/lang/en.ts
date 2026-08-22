@@ -3246,4 +3246,53 @@ export default {
       },
     },
   },
+  ui: {
+    inspector: {
+      region: "Inspector",
+      close: "Close inspector",
+      scheduleTitle: "Schedule details",
+    },
+    state: {
+      loading: "Loading…",
+      emptyTitle: "Nothing here yet",
+      emptyBody: "Get started by creating your first record.",
+      noResultsTitle: "No matching records",
+      noResultsBody: "Records may be hidden by the current filters.",
+      clearFilters: "Clear filters",
+      errorTitle: "Something went wrong",
+      errorBody: "The operation failed. Try again.",
+      errorLoad: "Failed to load the record.",
+      missingRecord: "This record is no longer available.",
+      forbiddenTitle: "Capability unavailable",
+      forbiddenBody: "This capability is not enabled for your plan.",
+    },
+    actions: {
+      retry: "Retry",
+      cancel: "Cancel",
+      copy: "Copy",
+      dismiss: "Dismiss",
+    },
+    detail: {
+      status: "Status",
+      schedule: "Schedule",
+      updated: "Updated",
+    },
+    task: {
+      active: "Active",
+      paused: "Paused",
+      viewActivity: "View activity",
+    },
+    settings: {
+      categories: "Settings categories",
+      saving: "Saving…",
+      saved: "Saved",
+      saveFailed: "Save failed",
+    },
+    landing: {
+      continue: "Continue your work",
+      attention: "Needs attention",
+      recentOutcomes: "Recent outcomes",
+      suggested: "Suggested actions",
+    },
+  },
 };

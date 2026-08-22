@@ -3214,4 +3214,53 @@ export default {
       },
     },
   },
+  ui: {
+    inspector: {
+      region: "インスペクター",
+      close: "インスペクターを閉じる",
+      scheduleTitle: "スケジュールの詳細",
+    },
+    state: {
+      loading: "読み込み中…",
+      emptyTitle: "まだ何もありません",
+      emptyBody: "最初のレコードを作成して始めましょう。",
+      noResultsTitle: "一致するレコードがありません",
+      noResultsBody: "現在のフィルターでレコードが隠れている可能性があります。",
+      clearFilters: "フィルターを解除",
+      errorTitle: "問題が発生しました",
+      errorBody: "操作に失敗しました。もう一度お試しください。",
+      errorLoad: "レコードを読み込めませんでした。",
+      missingRecord: "このレコードは利用できなくなりました。",
+      forbiddenTitle: "機能を利用できません",
+      forbiddenBody: "現在のプランではこの機能が有効になっていません。",
+    },
+    actions: {
+      retry: "再試行",
+      cancel: "キャンセル",
+      copy: "コピー",
+      dismiss: "閉じる",
+    },
+    detail: {
+      status: "状態",
+      schedule: "スケジュール",
+      updated: "更新日時",
+    },
+    task: {
+      active: "有効",
+      paused: "一時停止中",
+      viewActivity: "アクティビティを表示",
+    },
+    settings: {
+      categories: "設定カテゴリ",
+      saving: "保存中…",
+      saved: "保存しました",
+      saveFailed: "保存に失敗しました",
+    },
+    landing: {
+      continue: "作業を続ける",
+      attention: "要注意",
+      recentOutcomes: "最近の結果",
+      suggested: "おすすめの操作",
+    },
+  },
 };

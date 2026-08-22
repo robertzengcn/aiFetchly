@@ -3274,4 +3274,53 @@ export default {
       },
     },
   },
+  ui: {
+    inspector: {
+      region: "Inspektor",
+      close: "Inspektor schließen",
+      scheduleTitle: "Zeitplan-Details",
+    },
+    state: {
+      loading: "Wird geladen…",
+      emptyTitle: "Noch nichts hier",
+      emptyBody: "Lege deinen ersten Eintrag an, um zu starten.",
+      noResultsTitle: "Keine passenden Einträge",
+      noResultsBody: "Einträge sind möglicherweise durch die aktuellen Filter ausgeblendet.",
+      clearFilters: "Filter zurücksetzen",
+      errorTitle: "Etwas ist schiefgelaufen",
+      errorBody: "Der Vorgang ist fehlgeschlagen. Versuche es erneut.",
+      errorLoad: "Eintrag konnte nicht geladen werden.",
+      missingRecord: "Dieser Eintrag ist nicht mehr verfügbar.",
+      forbiddenTitle: "Funktion nicht verfügbar",
+      forbiddenBody: "Diese Funktion ist für deinen Tarif nicht aktiviert.",
+    },
+    actions: {
+      retry: "Erneut versuchen",
+      cancel: "Abbrechen",
+      copy: "Kopieren",
+      dismiss: "Schließen",
+    },
+    detail: {
+      status: "Status",
+      schedule: "Zeitplan",
+      updated: "Aktualisiert",
+    },
+    task: {
+      active: "Aktiv",
+      paused: "Pausiert",
+      viewActivity: "Aktivität anzeigen",
+    },
+    settings: {
+      categories: "Einstellungskategorien",
+      saving: "Speichern…",
+      saved: "Gespeichert",
+      saveFailed: "Speichern fehlgeschlagen",
+    },
+    landing: {
+      continue: "Arbeit fortsetzen",
+      attention: "Erfordert Aufmerksamkeit",
+      recentOutcomes: "Letzte Ergebnisse",
+      suggested: "Vorgeschlagene Aktionen",
+    },
+  },
 };

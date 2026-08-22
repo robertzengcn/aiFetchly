@@ -3277,4 +3277,53 @@ export default {
       },
     },
   },
+  ui: {
+    inspector: {
+      region: "Inspector",
+      close: "Cerrar inspector",
+      scheduleTitle: "Detalles de la programación",
+    },
+    state: {
+      loading: "Cargando…",
+      emptyTitle: "Aún no hay nada aquí",
+      emptyBody: "Comienza creando tu primer registro.",
+      noResultsTitle: "No hay registros coincidentes",
+      noResultsBody: "Los registros pueden estar ocultos por los filtros actuales.",
+      clearFilters: "Borrar filtros",
+      errorTitle: "Algo salió mal",
+      errorBody: "La operación falló. Inténtalo de nuevo.",
+      errorLoad: "No se pudo cargar el registro.",
+      missingRecord: "Este registro ya no está disponible.",
+      forbiddenTitle: "Capacidad no disponible",
+      forbiddenBody: "Esta capacidad no está habilitada para tu plan.",
+    },
+    actions: {
+      retry: "Reintentar",
+      cancel: "Cancelar",
+      copy: "Copiar",
+      dismiss: "Descartar",
+    },
+    detail: {
+      status: "Estado",
+      schedule: "Programación",
+      updated: "Actualizado",
+    },
+    task: {
+      active: "Activa",
+      paused: "En pausa",
+      viewActivity: "Ver actividad",
+    },
+    settings: {
+      categories: "Categorías de ajustes",
+      saving: "Guardando…",
+      saved: "Guardado",
+      saveFailed: "Error al guardar",
+    },
+    landing: {
+      continue: "Continúa tu trabajo",
+      attention: "Requiere atención",
+      recentOutcomes: "Resultados recientes",
+      suggested: "Acciones sugeridas",
+    },
+  },
 };
