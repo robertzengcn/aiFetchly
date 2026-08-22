@@ -33,10 +33,13 @@ export function useUnsavedChangesGuard(options: {
     }
   };
 
-  window.addEventListener("beforeunload", beforeUnload);
-  onBeforeUnmount(() => {
-    window.removeEventListener("beforeunload", beforeUnload);
-  });
+  // Test/SSR-safe: node environments have no window.
+  if (typeof window !== "undefined") {
+    window.addEventListener("beforeunload", beforeUnload);
+    onBeforeUnmount(() => {
+      window.removeEventListener("beforeunload", beforeUnload);
+    });
+  }
 
   // Route-leave guard (IPR-024). Outside a component setup context this is a
   // no-op warning in Vue; unit tests exercise isDirty/resetBaseline directly.

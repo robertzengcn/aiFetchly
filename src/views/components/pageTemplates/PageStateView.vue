@@ -1,8 +1,4 @@
 <template>
-  <!--
-    Shared loading/first-use/no-results/error/forbidden states (design §12,
-    IPR-043). Raw exceptions never enter props — messageKey only.
-  -->
   <div
     class="page-state-view"
     :class="`state-${loadState.state}`"
@@ -77,6 +73,10 @@
 </template>
 
 <script setup lang="ts">
+/**
+ * Shared loading/first-use/no-results/error/forbidden states (design §12,
+ * IPR-043). Raw exceptions never enter props — messageKey only.
+ */
 import { useI18n } from "vue-i18n";
 import type { PageLoadState } from "@/views/types/uiConvergenceTypes";
 

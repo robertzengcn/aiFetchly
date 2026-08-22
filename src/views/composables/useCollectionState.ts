@@ -46,6 +46,19 @@ export function useCollectionState<
 
   let searchTimer: number | null = null;
 
+  /** Test/SSR-safe timer access (no window in the node environment). */
+  const timerApi: {
+    setTimeout(fn: () => void, ms: number): number;
+    clearTimeout(id: number): void;
+  } =
+    typeof window !== "undefined"
+      ? window
+      : {
+          setTimeout: (fn: () => void, ms: number) =>
+            Number(setTimeout(fn, ms)),
+          clearTimeout: (id: number) => clearTimeout(id),
+        };
+
   function bump(): void {
     requestGeneration.value += 1;
   }
@@ -73,13 +86,13 @@ export function useCollectionState<
   /** Debounced search; clear resets the page immediately. */
   function setSearch(value: string): void {
     searchTerm.value = value;
-    if (searchTimer !== null) window.clearTimeout(searchTimer);
+    if (searchTimer !== null) timerApi.clearTimeout(searchTimer);
     if (value === "") {
       query.value = { ...query.value, search: "", page: 0 };
       bump();
       return;
     }
-    searchTimer = window.setTimeout(() => {
+    searchTimer = timerApi.setTimeout(() => {
       query.value = { ...query.value, search: searchTerm.value, page: 0 };
       bump();
     }, debounceMs);
