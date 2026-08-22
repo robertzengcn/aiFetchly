@@ -142,6 +142,49 @@ describe("AIProviderResolver.resolveForChat", () => {
   });
 });
 
+describe("AIProviderResolver.resolveForModelList", () => {
+  let ctx: ReturnType<typeof makeServices>;
+  beforeEach(() => {
+    ctx = makeServices();
+  });
+
+  it("allows hosted mode even without a subscription", () => {
+    // No hosted entitlement set.
+    const r = ctx.resolver.resolveForModelList();
+    expect(r.canUse).toBe(true);
+    if (r.canUse) {
+      expect(r.kind).toBe("hosted");
+    }
+  });
+
+  it("allows hosted mode with a subscription", () => {
+    ctx.token.setValue(USER_AI_ENABLED, "true");
+    const r = ctx.resolver.resolveForModelList();
+    expect(r.canUse).toBe(true);
+    if (r.canUse) {
+      expect(r.kind).toBe("hosted");
+    }
+  });
+
+  it("allows a valid local provider without a hosted subscription", () => {
+    ctx.settings.setMode("local");
+    ctx.settings.saveLocalProvider(validProvider);
+    const r = ctx.resolver.resolveForModelList();
+    expect(r.canUse).toBe(true);
+    if (r.canUse && r.kind === "local") {
+      expect(r.config.defaultModel).toBe("llama3.1");
+    }
+  });
+
+  it("denies local mode when local provider is disabled", () => {
+    ctx.settings.setMode("local");
+    // USER_LOCAL_AI_ENABLED stays unset (false).
+    const r = ctx.resolver.resolveForModelList();
+    expect(r.canUse).toBe(false);
+    if (!r.canUse) expect(r.reason).toBe("local_provider_disabled");
+  });
+});
+
 describe("AIProviderSettingsService secret redaction", () => {
   let ctx: ReturnType<typeof makeServices>;
   beforeEach(() => {

@@ -203,10 +203,14 @@ describe("AiChatApi provider routing", () => {
     }
   });
 
-  it("throws a resolver denial message when neither path is available", async () => {
-    // No hosted entitlement and no local config.
-    await expect(api.listOpenAIModels()).rejects.toThrow(
-      /subscription|local AI provider/i
-    );
+  it("listOpenAIModels returns hosted models even without AI entitlement", async () => {
+    // No hosted entitlement and no local config — model listing is ungated.
+    mockGet.mockResolvedValue({
+      object: "list",
+      data: [{ id: "gpt-4", object: "model" }],
+    });
+    const res = await api.listOpenAIModels();
+    expect(res.data).toHaveLength(1);
+    expect(res.data[0].id).toBe("gpt-4");
   });
 });

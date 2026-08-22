@@ -1915,7 +1915,7 @@ export class AiChatApi {
    */
   async listOpenAIModels(): Promise<OpenAIModelsResponse> {
     if (!process.env.WORKER_TYPE) {
-      const resolved = (await this.getProviderResolver()).resolveForChat();
+      const resolved = (await this.getProviderResolver()).resolveForModelList();
       if (!resolved.canUse) {
         throw new Error(resolved.message);
       }
