@@ -1,42 +1,29 @@
 <template>
-  <v-container fluid>
-    <!-- Header -->
-    <v-row class="mb-4">
-      <v-col cols="12">
-        <div class="d-flex align-center">
-          <v-btn
-            icon="mdi-arrow-left"
-            variant="text"
-            @click="goBack"
-            class="mr-4"
-          />
-          <div>
-            <h2 class="text-h4 font-weight-bold">
-              <v-icon class="mr-2">mdi-plus-circle</v-icon>
-              {{ t('schedule.create_new_schedule') }}
-            </h2>
-            <p class="text-subtitle-1 text-medium-emphasis">
-              {{ t('schedule.create_description') }}
-            </p>
-          </div>
-        </div>
-      </v-col>
-    </v-row>
-
-    <!-- Form -->
-    <v-row>
-      <v-col cols="12">
-        <v-card>
-          <v-card-text>
-            <ScheduleForm
-              :loading="loading"
-              @submit="handleSubmit"
-              @cancel="goBack"
-            />
-          </v-card-text>
-        </v-card>
-      </v-col>
-    </v-row>
+  <AppPageShell
+    page-id="schedule-create"
+    title-key="schedule.create_new_schedule"
+    description-key="schedule.create_description"
+    content-width="form"
+    :busy="loading"
+  >
+    <!-- Objective title + context (IPR-019); the ScheduleForm itself owns
+         sections, sticky actions, and field-owned validation. -->
+    <template #context>
+      <button
+        type="button"
+        class="back-link"
+        data-testid="schedule-create-back"
+        @click="goBack"
+      >
+        <v-icon icon="mdi-arrow-left" size="14" aria-hidden="true" />
+        {{ t('schedule.schedules') }}
+      </button>
+    </template>
+    <ScheduleForm
+      :loading="loading"
+      @submit="handleSubmit"
+      @cancel="goBack"
+    />
 
     <!-- Alert Dialog -->
     <v-dialog v-model="alertDialog.show" max-width="400">
@@ -59,7 +46,7 @@
         </v-card-actions>
       </v-card>
     </v-dialog>
-  </v-container>
+  </AppPageShell>
 </template>
 
 <script setup lang="ts">
@@ -67,6 +54,7 @@ import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import ScheduleForm from './widgets/ScheduleForm.vue'
+import AppPageShell from '@/views/components/pageTemplates/AppPageShell.vue'
 import { createSchedule } from '@/views/api/schedule'
 import { ScheduleCreateRequest, ScheduleUpdateRequest } from '@/entityTypes/schedule-type'
 

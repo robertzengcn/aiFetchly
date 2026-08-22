@@ -1616,6 +1616,9 @@ export default {
     status_installation_failed: "Échec de l'installation",
   },
   schedule: {
+    edit_schedule: "Modifier la planification",
+    empty_title: "Aucune planification",
+    empty_body: "Automatisez le travail récurrent en créant votre première planification.",
     create_description:
       "Set up automated task scheduling with cron expressions or dependencies",
     schedule_created_success:

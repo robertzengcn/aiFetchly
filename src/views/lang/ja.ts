@@ -1595,6 +1595,8 @@ export default {
     status_installation_failed: "インストールに失敗しました",
   },
   schedule: {
+    empty_title: "スケジュールはまだありません",
+    empty_body: "最初のスケジュールを作成して定期的な作業を自動化しましょう。",
     create_description:
       "Cron式または依存関係で自動タスクスケジューリングを設定",
     schedule_created_success:

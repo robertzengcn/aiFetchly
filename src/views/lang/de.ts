@@ -1621,6 +1621,8 @@ export default {
     status_installation_failed: "Installation fehlgeschlagen",
   },
   schedule: {
+    empty_title: "Noch keine Zeitpläne",
+    empty_body: "Automatisiere wiederkehrende Aufgaben, indem du deinen ersten Zeitplan erstellst.",
     create_description:
       "Automatisierte Aufgabenplanung mit Cron-Ausdrücken oder Abhängigkeiten einrichten",
     schedule_created_success:

@@ -1552,6 +1552,8 @@ export default {
     status_installation_failed: "安装失败",
   },
   schedule: {
+    empty_title: "还没有定时任务",
+    empty_body: "创建第一个定时任务来自动执行周期性工作。",
     create_description: "使用cron表达式或依赖关系设置自动化任务调度",
     schedule_created_success: '计划 "{name}" 创建成功，ID: {id}',
     create_schedule_failed: "创建计划失败: {error}",

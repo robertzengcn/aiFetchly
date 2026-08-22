@@ -1628,6 +1628,8 @@ export default {
     status_installation_failed: "Error en la instalación",
   },
   schedule: {
+    empty_title: "Aún no hay programaciones",
+    empty_body: "Automatiza el trabajo recurrente creando tu primera programación.",
     create_description:
       "Configure la programación automatizada de tareas con expresiones cron o dependencias",
     schedule_created_success:

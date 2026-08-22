@@ -1622,6 +1622,8 @@ export default {
     status_installation_failed: "Installation failed",
   },
   schedule: {
+    empty_title: "No schedules yet",
+    empty_body: "Automate recurring work by creating your first schedule.",
     create_new_schedule: "Create New Schedule",
     create_description:
       "Set up automated task scheduling with cron expressions or dependencies",
