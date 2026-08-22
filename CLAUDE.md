@@ -657,6 +657,14 @@ Vitest's default esbuild mode strips types without checking them, so type errors
 - **Behavior**: If `tsc` reports any error, the whole vitest run aborts before tests execute.
 - **To bypass** (only for tight inner loops when you know types are clean): `AIFETCHLY_SKIP_TSC=1 yarn testmain`. Do not commit code that needs this.
 
+##### Renderer Node-Leak Guard (Vite render build)
+`vite-plugin-renderer-node-guard.ts` is wired into `vite.render.config.mjs` and fails the render build (dev + `yarn build` + CI) **loudly** if a project-authored `src/` module that uses a Node-only / main-process-only API (`node:module`, `node:fs`, `electron`, `electron-log`, `@/modules/Logger`, …) would enter the **renderer** module graph. This prevents the recurring launch crash where such a module was silently externalized for the browser, the chunk threw at runtime (`Cannot access "node:module.createRequire"`), and the page aborted with `ERR_ABORTED (-3) loading http://localhost:5173/`.
+
+- **Behavior**: `generateBundle` walks the emitted chunk graph; for every denied module whose importer chain reaches a renderer root (`src/views/**`, `src/api/**`, `src/preload.ts`, or a `build.lib` entry), it throws with the full `import chain:` so the offending import is obvious. Third-party `node_modules/` (Vuetify, typeorm/browser, …) and `__vite-browser-external:` stubs are intentionally **not** flagged — Vite's browser-compat proxy + the `src/shims/*.empty.ts` aliases handle those.
+- **When it fires**: fix by moving the renderer-needed value into a pure, Node-free module (see `src/service/AIChatErrorSentinels.ts` for the pattern) or making the renderer import `import type`-only. Never silence by bypassing.
+- **To bypass** (tight inner loops only — committed code MUST pass clean, mirroring `AIFETCHLY_SKIP_TSC`): `AIFETCHLY_DISABLE_RENDERER_NODE_GUARD=1`.
+- **Test**: `test/vitest/main/rendererNodeLeakGuard.test.ts` (runs in `yarn testmain`). Extend the denylist in `vite-plugin-renderer-node-guard.ts` (`RENDERER_NODE_GUARD_DENYLIST`) when a new Node-only internal module is identified.
+
 #### Electron E2E (Playwright)
 The E2E suite launches the source-built Electron app via Playwright's `_electron.launch()` (NOT electron-forge) and drives the real renderer → preload → IPC → module → SQLite path. See `docs/prd/playwright_for_uitest.md` + `docs/prd/playwright-ui-testing-technical-design.md`.
 
