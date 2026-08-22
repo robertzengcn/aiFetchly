@@ -5,7 +5,9 @@ class="layout-shell"
         isMini: navState.isMini,
         isMobile: mainStore.isMobile,
         chatDockOpen: v2ChatPanelOpen,
+        [`shell-mode-${appShell.mode}`]: innerShell.shellEnabled.value,
     }"
+        :data-shell-mode="innerShell.shellEnabled.value ? appShell.mode : undefined"
 :style="{ '--ai-chat-dock-width': chatPanelWidth + 'px' }">
         <v-navigation-drawer
 class="my-4 layout_navigation" :rail="navState.rail" expand-on-hover rail-width="77"
@@ -83,8 +85,8 @@ target="_blank" href="https://docs.aifetchly.com"
                 </v-menu>
             </v-list>
         </v-navigation-drawer>
-        <main class="app_main">
-            <header class="header">
+        <main ref="mainElement" class="app_main">
+            <header v-if="!innerShell.shellEnabled.value" class="header">
                 <Breadcrumbs v-if="!mainStore.isMobile" />
                 <div v-if="!mainStore.isMobile" class="mt-3 ml-9 gamepad" @click="changeRail">
                     <v-icon v-if="navState.rail" icon="mdi-sort-variant-lock-open" />
@@ -126,7 +128,10 @@ v-if="mainStore.isMobile" variant="text" icon="mdi-menu"
                 </div>
             </header>
             <div class="app_main__body">
-                <div class="router">
+                <div v-if="innerShell.shellEnabled.value" class="router">
+                    <AppCenterRouteHost />
+                </div>
+                <div v-else class="router">
                     <AiArtifactWorkspace
                         v-if="activeArtifact"
                         :artifact="activeArtifact"
@@ -157,6 +162,7 @@ v-if="mainStore.isMobile" variant="text" icon="mdi-menu"
                 </div>
             </div>
         </main>
+        <AppNoticeHost v-if="innerShell.shellEnabled.value" />
 
           <!-- Multiple Messages Display -->
           <div class="messages-container">
@@ -229,6 +235,11 @@ import NoticeSnackbar from '@/views/components/widgets/noticeSnackbar.vue';
 import AiChatBox from '@/views/components/aiChat/AiChatBox.vue';
 import AiChatV2 from '@/views/components/aiChatV2/AiChatV2.vue';
 import { isWorkspaceRedesignEnabled } from '@/views/api/aiChatWorkspace';
+import { useInnerPageShellFlag } from '@/views/composables/useInnerPageShellFlag';
+import { useAppShellStore } from '@/views/store/appShell';
+import { useResponsiveShell } from '@/views/composables/useResponsiveShell';
+import AppCenterRouteHost from '@/views/components/appShell/AppCenterRouteHost.vue';
+import AppNoticeHost from '@/views/components/appShell/AppNoticeHost.vue';
 import AiArtifactWorkspace from '@/views/components/aiArtifacts/AiArtifactWorkspace.vue';
 import { getAIArtifact } from '@/views/api/aiArtifacts';
 import type { AIArtifactRecord } from '@/entityTypes/aiArtifactTypes';
@@ -283,6 +294,15 @@ const chatPanelOpen = ref(false);
 const v2ChatPanelOpen = ref(false);
 /** Workspace redesign rollout flag (PRD §33): hides the dock when enabled. */
 const workspaceRedesignEnabled = ref(false);
+/**
+ * Inner-page convergence shell flag (design §26.2): ON replaces the old fixed
+ * global header with route-owned headers and hosts routes through the center
+ * route host + shared inspector. OFF keeps this layout byte-identical.
+ */
+const innerShell = useInnerPageShellFlag();
+const appShell = useAppShellStore();
+const mainElement = ref<HTMLElement | null>(null);
+useResponsiveShell(() => mainElement.value);
 // AI artifact workspace — layout-owned temporary preview state. When set,
 // it replaces the route view; closing restores the prior route.
 const activeArtifact = ref<AIArtifactRecord | null>(null);
