@@ -264,6 +264,24 @@ export class AIWorkspaceMemoryModel extends BaseDb {
   }
 
   /**
+   * Re-issue a memory id inside a scope (scope-merge duplicate handling).
+   * Separate from updateByScopeAndMemoryId because that method refetches by
+   * the (scopeId, memoryId) criteria — impossible when memoryId itself is
+   * changing.
+   */
+  async renameMemoryIdByScope(
+    scopeId: string,
+    oldMemoryId: string,
+    newMemoryId: string
+  ): Promise<number> {
+    const r = await this.repository.update(
+      { scopeId, memoryId: oldMemoryId },
+      { memoryId: newMemoryId }
+    );
+    return r.affected ?? 0;
+  }
+
+  /**
    * Converge legacy rows (scopeId IS NULL) for a workspace key onto their
    * legacy scope. Runs on every scope resolution so development databases
    * created before the portable-memory schema converge without a formal

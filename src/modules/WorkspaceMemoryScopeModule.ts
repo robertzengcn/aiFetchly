@@ -179,22 +179,16 @@ export class WorkspaceMemoryScopeModule extends BaseModule {
       if (clash) {
         // Keep both records: the incoming one gets a fresh local id.
         const freshId = `wmem-${randomUUID()}`;
-        await this.memoryModel.updateByScopeAndMemoryId(
+        await this.memoryModel.renameMemoryIdByScope(
           from.scopeId,
           m.memoryId,
-          { memoryId: freshId }
+          freshId
         );
-        await this.portableStateModel
-          .getByScopeAndMemoryId(from.scopeId, m.memoryId)
-          .then((ps) =>
-            ps
-              ? this.portableStateModel.updateByScopeAndMemoryId(
-                  from.scopeId,
-                  m.memoryId,
-                  { memoryId: freshId }
-                )
-              : null
-          );
+        await this.portableStateModel.renameMemoryIdByScope(
+          from.scopeId,
+          m.memoryId,
+          freshId
+        );
         await this.auditModel.append({
           scopeId: into.scopeId,
           memoryId: freshId,

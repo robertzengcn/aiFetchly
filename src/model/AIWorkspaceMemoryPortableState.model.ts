@@ -114,6 +114,19 @@ export class AIWorkspaceMemoryPortableStateModel extends BaseDb {
     return next;
   }
 
+  /** Re-issue the memory id on a portable-state row (scope-merge duplicates). */
+  async renameMemoryIdByScope(
+    scopeId: string,
+    oldMemoryId: string,
+    newMemoryId: string
+  ): Promise<number> {
+    const r = await this.repository.update(
+      { scopeId, memoryId: oldMemoryId },
+      { memoryId: newMemoryId }
+    );
+    return r.affected ?? 0;
+  }
+
   async deleteByScopeAndMemoryId(
     scopeId: string,
     memoryId: string
