@@ -81,8 +81,7 @@
     "rebuild-native": "yarn patch-node-abi && yarn patch-remote-rebuild && yarn rebuild-better-sqlite",
     "patch-node-abi": "node scripts/patch-node-abi.js",
     "patch-remote-rebuild": "node scripts/patch-remote-rebuild.js",
-    "postinstall":
-      "node scripts/patch-node-abi.js && node scripts/patch-remote-rebuild.js && node scripts/rebuild-better-sqlite.js",
+    "postinstall": "node scripts/patch-node-abi.js && node scripts/patch-remote-rebuild.js && node scripts/rebuild-better-sqlite.js",
     "vue-check": "vue-tsc --noEmit --watch",
     "vue-typecheck": "vue-tsc --noEmit",
     "test-installer": "node installer-scripts/test-installer.js",
@@ -91,7 +90,8 @@
     "uninstall-linux": "./installer-scripts/uninstall-linux.sh",
     "generate-platform": "ts-node src/scripts/generate-platform.ts",
     "test-platform": "ts-node src/scripts/test-platform.ts",
-    "prepare": "husky"
+    "prepare": "husky",
+    "e2e:workspace": "playwright test --config playwright.config.ts"
   },
   "dependencies": {
     "@lem0-packages/puppeteer-page-proxy": "^1.4.1",
@@ -219,6 +219,7 @@
     "@electron-forge/plugin-vite": "^7.11.2",
     "@electron-forge/publisher-github": "^7.11.2",
     "@electron/rebuild": "^4.2.0",
+    "@playwright/test": "^1.62.1",
     "@rollup/plugin-commonjs": "^26.0.1",
     "@rollup/plugin-node-resolve": "^15.2.3",
     "@types/chai": "^4.3.5",
