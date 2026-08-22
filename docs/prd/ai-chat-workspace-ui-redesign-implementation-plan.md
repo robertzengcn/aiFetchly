@@ -149,6 +149,32 @@ Verification: `yarn testmain` 425 files / 3772 tests (one unrelated
 HookDispatcher timing flake that passes in isolation), workspace test set
 61/61, tsc + vue-tsc clean on every commit.
 
+## Completion pass (2026-08-22) — remaining engineering items closed
+
+- **Attachment sends**: the workspace start-run path accepts bounded
+  uploaded files (count/mime/size Zod caps) normalized with the exact legacy
+  bounds; the shell encodes renderer `File` objects and forwards them.
+- **Owner adapters (design §8.3)**: `AIChatRunOwnerAdapter` wraps an owner
+  subsystem's sink unchanged while keeping the shared run envelope durable
+  (persist-before-broadcast); the scheduled runner routes through it with
+  `owner=scheduled` + schedule sourceId so background loops appear in the
+  sidebar. Goal runs already surface via `goal_*` events + durable goal
+  tables; no production MakerTurnExecutor binding exists to wrap yet.
+  Six pre-existing dead-code lint errors in the runner were removed.
+- **Performance fixtures (§34.5)**: runnable guards with regression
+  ceilings — 10k-token batching, 5k-tool-pair grouping, 1,000-run scheduler
+  churn, anti-starvation aging at 500-queue scale, 100-workspace/
+  1,000-conversation sidebar projection, and a 1,000-message cursor walk
+  with no gap/overlap/drift under concurrent inserts.
+- **E2E (§34.4)**: `test/e2e/workspace-shell.spec.ts` + Playwright config +
+  `yarn e2e:workspace` covering the runnable subset (three regions, header
+  rules, exact overflow contents, new chat, inspector tabs, §33 toggle,
+  narrow-viewport overlay) with live-AI scenarios guarded behind
+  `AIFETCHLY_E2E_LIVE_AI=1`.
+
+Verification: `yarn testmain` 427 files / 3,777 tests all passing; workspace
+utilityCode set 57/57; tsc + vue-tsc clean on every commit (23 commits).
+
 ## Explicitly deferred (per PRD phased rollout)
 
 - Full E2E suite + performance fixtures (PRD §34.4–34.5) — validation phase.
