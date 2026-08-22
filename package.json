@@ -198,7 +198,7 @@
     "winreg": "^1.2.5",
     "winston": "^3.2.1",
     "word-extractor": "^1.0.4",
-    "write-file-atomic": "^5.0.1",
+    "write-file-atomic": "^8.0.0",
     "ws": "^8.21.0",
     "xlsx": "^0.18.5",
     "zod": "^3.24.0",
