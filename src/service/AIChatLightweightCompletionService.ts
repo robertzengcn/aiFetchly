@@ -66,6 +66,42 @@ const MAX_RETRY_SLEEP_MS = 10_000;
 const GENERIC_5XX_BACKOFF_MS = 2_000;
 
 /**
+ * Terminal outcome of a single lightweight attempt-state-machine run. Carried
+ * out of {@link runStateMachine} alongside the {@link LightweightAttemptMetrics}
+ * so the caller can emit an accurate event without a side-effecting callback.
+ */
+type LightweightAttemptOutcome =
+  | {
+      kind: "success";
+      response: OpenAIChatCompletionResponse;
+      route: AIChatLightweightRoute;
+      providerKind: AIChatLightweightProviderKind;
+      resolvedModel: string;
+    }
+  | { kind: "cooldown_skip" }
+  | { kind: "failed"; failure: AIChatLightweightFailure };
+
+/**
+ * Per-attempt metrics threaded out of the state machine: attempt count and
+ * whether a retry / repair / fallback happened. Empty for paths that did not
+ * reach a network attempt (cooldown skip, pre-request cancellation).
+ */
+interface LightweightAttemptMetrics {
+  readonly attemptCount: number;
+  readonly repairAttempted: boolean;
+  readonly fallbackAttempted: boolean;
+  readonly retryReason?: AIChatLightweightFailureReason;
+  readonly fallbackReason?: AIChatLightweightFailureReason;
+}
+
+/** Zero-metrics baseline; specific paths spread into it to set their fields. */
+const EMPTY_METRICS: LightweightAttemptMetrics = {
+  attemptCount: 0,
+  repairAttempted: false,
+  fallbackAttempted: false,
+};
+
+/**
  * Provider resolution result the service consumes. Injected so tests can drive
  * hosted vs local without the real resolver.
  */
@@ -139,28 +175,8 @@ export class AIChatLightweightCompletionService {
   ): Promise<AIChatLightweightCompletionResult> {
     const profile = getLightweightProfile(input.workload);
     const startedAt = Date.now();
-    let attemptCount = 0;
-    let repairAttempted = false;
-    let fallbackAttempted = false;
-    let fallbackReason: AIChatLightweightFailureReason | undefined;
-    let retryReason: AIChatLightweightFailureReason | undefined;
 
-    const outcome = (await this.runStateMachine(input, profile, (metrics) => {
-      attemptCount = Math.max(attemptCount, metrics.attemptCount);
-      repairAttempted = repairAttempted || metrics.repairAttempted;
-      fallbackAttempted = fallbackAttempted || metrics.fallbackAttempted;
-      fallbackReason = fallbackReason ?? metrics.fallbackReason;
-      retryReason = retryReason ?? metrics.retryReason;
-    })) as
-      | {
-          kind: "success";
-          response: OpenAIChatCompletionResponse;
-          route: AIChatLightweightRoute;
-          providerKind: AIChatLightweightProviderKind;
-          resolvedModel: string;
-        }
-      | { kind: "cooldown_skip" }
-      | { kind: "failed"; failure: AIChatLightweightFailure };
+    const { outcome, metrics } = await this.runStateMachine(input, profile);
 
     if (outcome.kind === "cooldown_skip") {
       this.emitEvent(
@@ -168,9 +184,8 @@ export class AIChatLightweightCompletionService {
         "cooldown_skip",
         undefined,
         undefined,
-        0,
         startedAt,
-        { repairAttempted, fallbackAttempted, retryReason, fallbackReason }
+        metrics
       );
       throw new AIChatLightweightFailure({
         reason: "small_model_unavailable",
@@ -179,20 +194,10 @@ export class AIChatLightweightCompletionService {
       });
     }
     if (outcome.kind === "failed") {
-      this.emitEvent(
-        input,
-        "failed",
-        undefined,
-        undefined,
-        attemptCount,
-        startedAt,
-        {
-          repairAttempted,
-          fallbackAttempted,
-          retryReason,
-          fallbackReason: outcome.failure.reason,
-        }
-      );
+      this.emitEvent(input, "failed", undefined, undefined, startedAt, {
+        ...metrics,
+        fallbackReason: outcome.failure.reason,
+      });
       throw outcome.failure;
     }
 
@@ -201,73 +206,64 @@ export class AIChatLightweightCompletionService {
       "success",
       outcome.response,
       outcome.route,
-      attemptCount,
       startedAt,
-      { repairAttempted, fallbackAttempted, retryReason, fallbackReason }
+      metrics
     );
     return {
       response: outcome.response,
       route: outcome.route,
       resolvedModel: outcome.resolvedModel,
       providerKind: outcome.providerKind,
-      attemptCount,
-      repairAttempted,
-      fallbackAttempted,
-      fallbackReason,
-      retryReason,
+      attemptCount: metrics.attemptCount,
+      repairAttempted: metrics.repairAttempted,
+      fallbackAttempted: metrics.fallbackAttempted,
+      fallbackReason: metrics.fallbackReason,
+      retryReason: metrics.retryReason,
     };
   }
 
   /**
-   * Core attempt state machine. The callback reports attempt/repair/fallback
-   * counters as they happen so the final event is accurate.
+   * Core attempt state machine. Returns the terminal outcome plus the
+   * accumulated attempt/repair/fallback metrics for that path. The metrics
+   * are returned (not threaded via a side-effecting callback) so the data
+   * flow is explicit and the compiler guarantees every path reports.
    */
   private async runStateMachine(
     input: AIChatLightweightCompletionInput,
-    profile: ReturnType<typeof getLightweightProfile>,
-    reportMetrics: (metrics: {
-      attemptCount: number;
-      repairAttempted: boolean;
-      fallbackAttempted: boolean;
-      fallbackReason?: AIChatLightweightFailureReason;
-      retryReason?: AIChatLightweightFailureReason;
-    }) => void
-  ): Promise<
-    | {
-        kind: "success";
-        response: OpenAIChatCompletionResponse;
-        route: AIChatLightweightRoute;
-        providerKind: AIChatLightweightProviderKind;
-        resolvedModel: string;
-      }
-    | { kind: "cooldown_skip" }
-    | { kind: "failed"; failure: AIChatLightweightFailure }
-  > {
+    profile: ReturnType<typeof getLightweightProfile>
+  ): Promise<{
+    outcome: LightweightAttemptOutcome;
+    metrics: LightweightAttemptMetrics;
+  }> {
     const resolution = await this.deps.resolveProvider();
 
     // Cooldown applies to background (non-manual) executions only.
     if (!input.manual && this.isInCooldown(input.workload)) {
-      return { kind: "cooldown_skip" };
+      return {
+        outcome: { kind: "cooldown_skip" },
+        metrics: EMPTY_METRICS,
+      };
     }
 
     // Kill switch off, or local/custom provider: provider-normal path, no
     // small-specific retry/cooldown/fallback. This is NOT a fallback.
     if (!this.enabled || resolution.kind !== "hosted") {
       const result = await this.runNormalRoute(input, profile, resolution);
-      reportMetrics({
-        attemptCount: 1,
-        repairAttempted: false,
-        fallbackAttempted: false,
-      });
       if ("failure" in result) {
-        return { kind: "failed", failure: result.failure };
+        return {
+          outcome: { kind: "failed", failure: result.failure },
+          metrics: { ...EMPTY_METRICS, attemptCount: 1 },
+        };
       }
       return {
-        kind: "success",
-        response: result.response,
-        route: "provider_normal",
-        providerKind: resolution.providerKind,
-        resolvedModel: result.resolvedModel,
+        outcome: {
+          kind: "success",
+          response: result.response,
+          route: "provider_normal",
+          providerKind: resolution.providerKind,
+          resolvedModel: result.resolvedModel,
+        },
+        metrics: { ...EMPTY_METRICS, attemptCount: 1 },
       };
     }
 
@@ -275,17 +271,15 @@ export class AIChatLightweightCompletionService {
     try {
       const response = await this.attemptSmall(input, profile);
       this.clearCooldown(input.workload);
-      reportMetrics({
-        attemptCount: 1,
-        repairAttempted: false,
-        fallbackAttempted: false,
-      });
       return {
-        kind: "success",
-        response,
-        route: "hosted_small",
-        providerKind: resolution.providerKind,
-        resolvedModel: this.extractModel(response),
+        outcome: {
+          kind: "success",
+          response,
+          route: "hosted_small",
+          providerKind: resolution.providerKind,
+          resolvedModel: this.extractModel(response),
+        },
+        metrics: { ...EMPTY_METRICS, attemptCount: 1 },
       };
     } catch (error) {
       const classified = classifyLightweightFailure(error, input.signal);
@@ -296,40 +290,36 @@ export class AIChatLightweightCompletionService {
         } catch (sleepErr) {
           const cancelled = classifyLightweightFailure(sleepErr, input.signal);
           return {
-            kind: "failed",
-            failure: this.toFailure(cancelled),
+            outcome: { kind: "failed", failure: this.toFailure(cancelled) },
+            metrics: EMPTY_METRICS,
           };
         }
         try {
           const response = await this.attemptSmall(input, profile);
           this.clearCooldown(input.workload);
-          reportMetrics({
-            attemptCount: 2,
-            repairAttempted: false,
-            fallbackAttempted: false,
-            retryReason: classified.reason,
-          });
           return {
-            kind: "success",
-            response,
-            route: "hosted_small",
-            providerKind: resolution.providerKind,
-            resolvedModel: this.extractModel(response),
+            outcome: {
+              kind: "success",
+              response,
+              route: "hosted_small",
+              providerKind: resolution.providerKind,
+              resolvedModel: this.extractModel(response),
+            },
+            metrics: {
+              ...EMPTY_METRICS,
+              attemptCount: 2,
+              retryReason: classified.reason,
+            },
           };
         } catch (retryError) {
           const retryClassified = classifyLightweightFailure(
             retryError,
             input.signal
           );
-          return this.handleSmallFailure(
-            input,
-            profile,
-            retryClassified,
-            reportMetrics
-          );
+          return this.handleSmallFailure(input, profile, retryClassified);
         }
       }
-      return this.handleSmallFailure(input, profile, classified, reportMetrics);
+      return this.handleSmallFailure(input, profile, classified);
     }
   }
 
@@ -340,24 +330,11 @@ export class AIChatLightweightCompletionService {
   private async handleSmallFailure(
     input: AIChatLightweightCompletionInput,
     profile: ReturnType<typeof getLightweightProfile>,
-    classified: ReturnType<typeof classifyLightweightFailure>,
-    reportMetrics: (m: {
-      attemptCount: number;
-      repairAttempted: boolean;
-      fallbackAttempted: boolean;
-      fallbackReason?: AIChatLightweightFailureReason;
-      retryReason?: AIChatLightweightFailureReason;
-    }) => void
-  ): Promise<
-    | {
-        kind: "success";
-        response: OpenAIChatCompletionResponse;
-        route: AIChatLightweightRoute;
-        providerKind: AIChatLightweightProviderKind;
-        resolvedModel: string;
-      }
-    | { kind: "failed"; failure: AIChatLightweightFailure }
-  > {
+    classified: ReturnType<typeof classifyLightweightFailure>
+  ): Promise<{
+    outcome: LightweightAttemptOutcome;
+    metrics: LightweightAttemptMetrics;
+  }> {
     // Cooldown bookkeeping.
     if (classified.reason === "small_model_unavailable") {
       this.openConfigCooldown(input.workload, classified.reason);
@@ -367,7 +344,10 @@ export class AIChatLightweightCompletionService {
 
     // Ambiguous failures are terminal: no retry, no fallback.
     if (!classified.definitive) {
-      return { kind: "failed", failure: this.toFailure(classified) };
+      return {
+        outcome: { kind: "failed", failure: this.toFailure(classified) },
+        metrics: EMPTY_METRICS,
+      };
     }
 
     // Normal-model fallback: compact only, and only for allowed reasons.
@@ -377,30 +357,40 @@ export class AIChatLightweightCompletionService {
     ) {
       const resolution = await this.deps.resolveProvider();
       const result = await this.runNormalRoute(input, profile, resolution);
-      reportMetrics({
-        attemptCount: 1,
-        repairAttempted: false,
-        fallbackAttempted: true,
-        fallbackReason: classified.reason,
-      });
       if ("failure" in result) {
         // Fallback itself failed — return the original reason so attribution
         // stays clear, but the fallback's failure is what the user sees.
         return {
-          kind: "failed",
-          failure: this.toFailure(classified),
+          outcome: { kind: "failed", failure: this.toFailure(classified) },
+          metrics: {
+            ...EMPTY_METRICS,
+            attemptCount: 1,
+            fallbackAttempted: true,
+            fallbackReason: classified.reason,
+          },
         };
       }
       return {
-        kind: "success",
-        response: result.response,
-        route: "normal_fallback",
-        providerKind: resolution.providerKind,
-        resolvedModel: result.resolvedModel,
+        outcome: {
+          kind: "success",
+          response: result.response,
+          route: "normal_fallback",
+          providerKind: resolution.providerKind,
+          resolvedModel: result.resolvedModel,
+        },
+        metrics: {
+          ...EMPTY_METRICS,
+          attemptCount: 1,
+          fallbackAttempted: true,
+          fallbackReason: classified.reason,
+        },
       };
     }
 
-    return { kind: "failed", failure: this.toFailure(classified) };
+    return {
+      outcome: { kind: "failed", failure: this.toFailure(classified) },
+      metrics: EMPTY_METRICS,
+    };
   }
 
   /** Build and send the hosted small-alias request. */
@@ -582,9 +572,9 @@ export class AIChatLightweightCompletionService {
     outcome: AIChatLightweightOutcome,
     response: OpenAIChatCompletionResponse | undefined,
     route: AIChatLightweightRoute | undefined,
-    attemptCount: number,
     startedAt: number,
     metrics: {
+      attemptCount: number;
       repairAttempted: boolean;
       fallbackAttempted: boolean;
       retryReason?: AIChatLightweightFailureReason;
@@ -598,7 +588,7 @@ export class AIChatLightweightCompletionService {
         workload: input.workload,
         route,
         resolvedModel: response?.model,
-        attemptCount,
+        attemptCount: metrics.attemptCount,
         repairAttempted: metrics.repairAttempted,
         fallbackAttempted: metrics.fallbackAttempted,
         retryReason: metrics.retryReason,
