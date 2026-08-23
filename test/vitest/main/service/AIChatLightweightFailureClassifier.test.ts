@@ -159,6 +159,10 @@ describe("retry / fallback predicates", () => {
     expect(isSameRouteRetryable("small_model_unavailable")).toBe(false);
     expect(isSameRouteRetryable("timeout_ambiguous")).toBe(false);
     expect(isSameRouteRetryable("authentication")).toBe(false);
+    // New definitive small-route reasons must NOT trigger a same-route retry.
+    expect(isSameRouteRetryable("context_overflow")).toBe(false);
+    expect(isSameRouteRetryable("model_specific_overload")).toBe(false);
+    expect(isSameRouteRetryable("invalid_output")).toBe(false);
   });
 
   it("allowsNormalFallback covers the definitive small-route reasons compact may fall back from", () => {

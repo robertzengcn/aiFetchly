@@ -201,6 +201,46 @@ describe("AiChatApi provider routing", () => {
     }
   });
 
+  it("links caller abort to the fetch signal on a local non-stream completion", async () => {
+    enableLocalProvider();
+    // A fetch that never resolves on its own — the caller's abort must
+    // propagate to the internal controller's signal (listener linkage).
+    const fetchMock = vi.fn().mockReturnValue(
+      new Promise(() => {
+        /* never resolves */
+      })
+    ) as unknown as typeof fetch;
+    const original = globalThis.fetch;
+    globalThis.fetch = fetchMock;
+    try {
+      const controller = new AbortController();
+      // Don't await — the call hangs and then rejects on abort. Swallow the
+      // expected rejection; we only care that abort propagates to fetch's signal.
+      void api
+        .openAIChatCompletion(
+          { messages: [{ role: "user", content: "ping" }] },
+          controller.signal
+        )
+        .catch(() => {
+          /* expected: abort surfaces as a network error */
+        });
+      // Wait until the client has actually issued the fetch call (the
+      // resolver + client construction add a few async hops).
+      await vi.waitFor(() => {
+        expect(fetchMock).toHaveBeenCalled();
+      });
+      const init = (fetchMock as unknown as { mock: { calls: unknown[][] } })
+        .mock.calls[0]![1] as RequestInit;
+      const fetchSignal = init.signal as AbortSignal;
+      expect(fetchSignal.aborted).toBe(false);
+      controller.abort();
+      // The internal controller aborts synchronously via the listener.
+      expect(fetchSignal.aborted).toBe(true);
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+
   it("forwards the caller AbortSignal to postJson on a hosted non-stream completion", async () => {
     enableHosted();
     mockPostJson.mockResolvedValueOnce({

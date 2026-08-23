@@ -42,7 +42,6 @@ interface DepOverrides {
     | "vllm"
     | "localai"
     | "custom";
-  hostedAIEnabled?: boolean;
 }
 
 function buildDeps(
@@ -50,21 +49,23 @@ function buildDeps(
 ): AIChatLightweightCompletionDeps & {
   completeHosted: ReturnType<typeof vi.fn>;
   completeLocal: ReturnType<typeof vi.fn>;
+  resolveProvider: ReturnType<typeof vi.fn>;
 } {
   const completeHosted = vi.fn();
   const completeLocal = vi.fn();
   const kind = overrides.providerKind ?? "hosted";
+  const resolveProvider = vi.fn(async () => ({
+    kind,
+    providerKind: overrides.providerKindEnum ?? "hosted",
+  }));
   return {
     completeHosted,
     completeLocal,
-    resolveProvider: async () => ({
-      kind,
-      providerKind: overrides.providerKindEnum ?? "hosted",
-    }),
-    isHostedAIEnabled: () => overrides.hostedAIEnabled ?? true,
+    resolveProvider,
   } as AIChatLightweightCompletionDeps & {
     completeHosted: ReturnType<typeof vi.fn>;
     completeLocal: ReturnType<typeof vi.fn>;
+    resolveProvider: ReturnType<typeof vi.fn>;
   };
 }
 
@@ -346,6 +347,78 @@ describe("AIChatLightweightCompletionService", () => {
       expect(result.fallbackReason).toBe("small_model_unavailable");
       expect(result.resolvedModel).toBe("normal-compact-model");
       // One small attempt + one normal fallback = 2 total.
+      expect(deps.completeHosted).toHaveBeenCalledTimes(2);
+      // The provider is resolved exactly once per logical completion — the
+      // fallback reuses it rather than re-resolving (no mid-flight switch).
+      expect(deps.resolveProvider).toHaveBeenCalledTimes(1);
+    });
+
+    it("conversation_compact falls back on context_overflow (HTTP 413)", async () => {
+      const deps = buildDeps();
+      deps.completeHosted
+        .mockRejectedValueOnce(new HttpResponseError("too big", 413, ""))
+        .mockResolvedValueOnce(okResponse("normal-compact-model"));
+      const svc = createLightweightCompletionService(deps);
+
+      const result = await svc.complete({
+        workload: "conversation_compact",
+        messages: [{ role: "user", content: "x" }],
+        normalModel: "normal-compact-model",
+        manual: false,
+      });
+
+      expect(result.route).toBe("normal_fallback");
+      expect(result.fallbackAttempted).toBe(true);
+      expect(result.fallbackReason).toBe("context_overflow");
+      expect(deps.completeHosted).toHaveBeenCalledTimes(2);
+      expect(deps.completeLocal).not.toHaveBeenCalled();
+    });
+
+    it("conversation_compact falls back on model_specific_overload (server code)", async () => {
+      const deps = buildDeps();
+      deps.completeHosted
+        .mockRejectedValueOnce(
+          new HttpResponseError(
+            "overloaded",
+            503,
+            '{"error":{"code":"small_model_overloaded"}}',
+            undefined,
+            "small_model_overloaded"
+          )
+        )
+        .mockResolvedValueOnce(okResponse("normal-compact-model"));
+      const svc = createLightweightCompletionService(deps);
+
+      const result = await svc.complete({
+        workload: "conversation_compact",
+        messages: [{ role: "user", content: "x" }],
+        normalModel: "normal-compact-model",
+        manual: false,
+      });
+
+      expect(result.route).toBe("normal_fallback");
+      expect(result.fallbackAttempted).toBe(true);
+      expect(result.fallbackReason).toBe("model_specific_overload");
+      expect(deps.completeHosted).toHaveBeenCalledTimes(2);
+    });
+
+    it("conversation_compact preserves the ORIGINAL reason when the fallback itself fails", async () => {
+      const deps = buildDeps();
+      // Small attempt: 404. Fallback attempt: also fails (server_error 500).
+      deps.completeHosted
+        .mockRejectedValueOnce(new HttpResponseError("nf", 404, "{}"))
+        .mockRejectedValueOnce(new HttpResponseError("boom", 500, ""));
+      const svc = createLightweightCompletionService(deps);
+
+      await expect(
+        svc.complete({
+          workload: "conversation_compact",
+          messages: [{ role: "user", content: "x" }],
+          normalModel: "normal-compact-model",
+          manual: false,
+        })
+      ).rejects.toMatchObject({ reason: "small_model_unavailable" });
+      // One small attempt + one (failed) normal fallback = 2 total.
       expect(deps.completeHosted).toHaveBeenCalledTimes(2);
     });
 

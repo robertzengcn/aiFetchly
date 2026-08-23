@@ -3,6 +3,7 @@ import {
   chunkGroupsByBudget,
   computeLightweightBudget,
   groupMessagesAtomically,
+  maxPacketUpdatedAt,
   CONSERVATIVE_SMALL_CONTEXT_FALLBACK,
 } from "@/service/AIChatPromptBudget";
 import type { OpenAIChatMessage } from "@/api/aiChatApi";
@@ -65,7 +66,11 @@ describe("groupMessagesAtomically", () => {
       msg("user", "hi"),
       msg("assistant", "calling", {
         tool_calls: [
-          { id: "call_1", type: "function", function: { name: "f", arguments: "{}" } },
+          {
+            id: "call_1",
+            type: "function",
+            function: { name: "f", arguments: "{}" },
+          },
         ],
       }),
       msg("tool", "result1", { tool_call_id: "call_1" }),
@@ -82,7 +87,13 @@ describe("groupMessagesAtomically", () => {
   it("does not orphan a tool result whose id does not match the call", () => {
     const messages: OpenAIChatMessage[] = [
       msg("assistant", "calling", {
-        tool_calls: [{ id: "call_1", type: "function", function: { name: "f", arguments: "{}" } }],
+        tool_calls: [
+          {
+            id: "call_1",
+            type: "function",
+            function: { name: "f", arguments: "{}" },
+          },
+        ],
       }),
       msg("tool", "unrelated", { tool_call_id: "call_2" }),
     ];
@@ -98,8 +109,16 @@ describe("groupMessagesAtomically", () => {
     const messages: OpenAIChatMessage[] = [
       msg("assistant", "calling", {
         tool_calls: [
-          { id: "a", type: "function", function: { name: "f", arguments: "{}" } },
-          { id: "b", type: "function", function: { name: "g", arguments: "{}" } },
+          {
+            id: "a",
+            type: "function",
+            function: { name: "f", arguments: "{}" },
+          },
+          {
+            id: "b",
+            type: "function",
+            function: { name: "g", arguments: "{}" },
+          },
         ],
       }),
       msg("tool", "ra", { tool_call_id: "a" }),
@@ -144,10 +163,59 @@ describe("chunkGroupsByBudget", () => {
     const groups = groupMessagesAtomically(msgs);
     const a = chunkGroupsByBudget(groups, 15);
     const b = chunkGroupsByBudget(groups, 15);
-    expect(a.map((c) => c.groups.length)).toEqual(b.map((c) => c.groups.length));
+    expect(a.map((c) => c.groups.length)).toEqual(
+      b.map((c) => c.groups.length)
+    );
   });
 
   it("returns an empty array for no groups", () => {
     expect(chunkGroupsByBudget([], 100)).toEqual([]);
+  });
+});
+
+describe("maxPacketUpdatedAt", () => {
+  it("returns new Date() for an empty array (defensive fallback)", () => {
+    const before = Date.now();
+    const result = maxPacketUpdatedAt([]);
+    expect(result).toBeInstanceOf(Date);
+    expect(result.getTime()).toBeGreaterThanOrEqual(before);
+  });
+
+  it("returns the greatest updatedAt from ISO string packets", () => {
+    const result = maxPacketUpdatedAt([
+      { updatedAt: "2026-01-03T00:00:00.000Z" },
+      { updatedAt: "2026-01-01T00:00:00.000Z" },
+      { updatedAt: "2026-01-02T00:00:00.000Z" },
+    ]);
+    expect(result.toISOString()).toBe("2026-01-03T00:00:00.000Z");
+  });
+
+  it("accepts Date objects too (forward-compat)", () => {
+    const result = maxPacketUpdatedAt([
+      { updatedAt: new Date("2026-01-01T00:00:00.000Z") },
+      { updatedAt: new Date("2026-01-05T00:00:00.000Z") },
+    ]);
+    expect(result.toISOString()).toBe("2026-01-05T00:00:00.000Z");
+  });
+
+  it("ignores packets with null/undefined/invalid timestamps and falls back for all-null", () => {
+    const result = maxPacketUpdatedAt([
+      { updatedAt: null },
+      { updatedAt: undefined },
+      { updatedAt: "not-a-date" },
+    ]);
+    expect(result).toBeInstanceOf(Date);
+    // Falls back to now — a real timestamp, not NaN.
+    expect(Number.isNaN(result.getTime())).toBe(false);
+  });
+
+  it("picks the max among mixed valid and invalid timestamps", () => {
+    const result = maxPacketUpdatedAt([
+      { updatedAt: "not-a-date" },
+      { updatedAt: "2026-06-01T00:00:00.000Z" },
+      { updatedAt: undefined },
+      { updatedAt: "2026-03-01T00:00:00.000Z" },
+    ]);
+    expect(result.toISOString()).toBe("2026-06-01T00:00:00.000Z");
   });
 });
