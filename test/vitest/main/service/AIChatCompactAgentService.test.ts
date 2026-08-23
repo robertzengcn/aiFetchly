@@ -75,6 +75,9 @@ function makeAgent(opts: {
   aiEnabled?: boolean;
   completeChat?: (req: unknown) => Promise<OpenAIChatCompletionResponse>;
   getContextWindow?: (model?: string) => Promise<number>;
+  getSmallModelCapability?: () => Promise<
+    import("@/api/aiChatApi").OpenAISmallModelCapability | null
+  >;
   onAutoCompacted?: (summary: AIChatCompactSummaryView) => void;
 }) {
   const tokenService = new Token();
@@ -107,6 +110,9 @@ function makeAgent(opts: {
     isEnabled: () => opts.aiEnabled ?? true,
     ...(opts.getContextWindow
       ? { getContextWindow: opts.getContextWindow }
+      : {}),
+    ...(opts.getSmallModelCapability
+      ? { getSmallModelCapability: opts.getSmallModelCapability }
       : {}),
     ...(opts.onAutoCompacted ? { onAutoCompacted: opts.onAutoCompacted } : {}),
   };
@@ -767,6 +773,101 @@ describe("AIChatCompactAgentService", () => {
       ).resolves.toBeUndefined();
       // A failure is recorded so the breaker can react to repeated aborts.
       expect(mockRecordFailure).toHaveBeenCalled();
+    });
+  });
+
+  describe("hierarchical full compact (conversation_compact)", () => {
+    function bigRows(convId: string, n: number) {
+      return Array.from({ length: n }, (_, i) => ({
+        messageId: `m${i}`,
+        conversationId: convId,
+        role: i % 2 === 0 ? "user" : "assistant",
+        content: "x".repeat(2000),
+        timestamp: new Date(i + 1),
+        messageType: "message",
+      }));
+    }
+
+    beforeEach(() => {
+      mockGetActiveSummary.mockResolvedValue(null);
+      mockSaveFullCompact.mockClear();
+      mockSaveFullCompact.mockResolvedValue(compactView("v2-hier"));
+    });
+
+    it("summarizes an oversized conversation in multiple bounded chunks and saves one final compact", async () => {
+      // 30 messages x 2000 chars ~ a lot of tokens; a tiny context window
+      // forces multiple chunks.
+      mockGetConversationMessages.mockResolvedValue(bigRows("v2-hier", 30));
+      const completeChat = vi
+        .fn()
+        .mockResolvedValue(makeCompletion("# Compact\n## Summary\nchunk"));
+      const agent = makeAgent({
+        completeChat,
+        getContextWindow: vi.fn().mockResolvedValue(2000),
+      });
+
+      const view = await agent.runFullCompact({
+        conversationId: "v2-hier",
+      });
+
+      expect(view.conversationId).toBe("v2-hier");
+      // More than one lightweight call (multiple chunks + possibly a merge).
+      expect(completeChat.mock.calls.length).toBeGreaterThanOrEqual(2);
+      // Exactly one compact record activated.
+      expect(mockSaveFullCompact).toHaveBeenCalledTimes(1);
+    });
+
+    it("a small conversation that fits one chunk makes exactly one completion call", async () => {
+      mockGetConversationMessages.mockResolvedValue(messageRows("v2-hier"));
+      const completeChat = vi
+        .fn()
+        .mockResolvedValue(makeCompletion("# Compact\n## Summary\none"));
+      const agent = makeAgent({
+        completeChat,
+        getContextWindow: vi.fn().mockResolvedValue(128_000),
+      });
+
+      await agent.runFullCompact({ conversationId: "v2-hier" });
+
+      expect(completeChat).toHaveBeenCalledTimes(1);
+      expect(mockSaveFullCompact).toHaveBeenCalledTimes(1);
+    });
+
+    it("capability absence falls back to the normal context window (does not block compact)", async () => {
+      mockGetConversationMessages.mockResolvedValue(messageRows("v2-hier"));
+      const completeChat = vi
+        .fn()
+        .mockResolvedValue(makeCompletion("# Compact\n## Summary\nx"));
+      const agent = makeAgent({
+        completeChat,
+        getContextWindow: vi.fn().mockResolvedValue(128_000),
+        getSmallModelCapability: vi.fn().mockResolvedValue(null),
+      });
+
+      const view = await agent.runFullCompact({ conversationId: "v2-hier" });
+      expect(view.conversationId).toBe("v2-hier");
+      expect(mockSaveFullCompact).toHaveBeenCalledTimes(1);
+    });
+
+    it("an intermediate chunk failure leaves the previous active compact untouched", async () => {
+      mockGetConversationMessages.mockResolvedValue(bigRows("v2-hier", 30));
+      // First chunk succeeds, second chunk returns empty -> throws.
+      const completeChat = vi
+        .fn()
+        .mockResolvedValueOnce(makeCompletion("# Compact\n## Summary\nok"))
+        .mockResolvedValueOnce(
+          makeCompletion("") // empty -> normalizeFullCompactSummary returns ok=false
+        );
+      const agent = makeAgent({
+        completeChat,
+        getContextWindow: vi.fn().mockResolvedValue(2000),
+      });
+
+      await expect(
+        agent.runFullCompact({ conversationId: "v2-hier" })
+      ).rejects.toThrow(/empty summary for a chunk/);
+      // No compact record activated on partial failure.
+      expect(mockSaveFullCompact).not.toHaveBeenCalled();
     });
   });
 });

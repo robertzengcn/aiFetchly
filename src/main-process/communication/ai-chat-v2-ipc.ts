@@ -217,6 +217,11 @@ function getCompactAgent(): AIChatCompactAgentService {
       // the renderer badge denominator (hard-coded 128k would never trip for
       // models with smaller windows).
       getContextWindow: (model) => compactModelCatalog!.getContextWindow(model),
+      // Capability gate for full compact: absent metadata means the small
+      // route is not eligible and compact goes to the normal model
+      // (tech-design §16.1).
+      getSmallModelCapability: () =>
+        compactModelCatalog!.getSmallModelCapability(),
       // Broadcast to the renderer so the context badge drops right away.
       onAutoCompacted: (summary) => {
         AIChatConversationUpdateBroadcaster.getInstance().emitAutoCompacted({
