@@ -38,6 +38,10 @@ import {
   getSharedWorkspaceAutoDreamService,
   resetSharedWorkspaceAutoDreamService,
 } from "@/service/AIAutoDreamFactory";
+import {
+  getSharedLightweightCompletionService,
+  resetLightweightRuntime,
+} from "@/service/AIChatLightweightCompletionFactory";
 import { AIChatToolApprovalModule } from "@/modules/AIChatToolApprovalModule";
 import { evaluateToolApproval } from "@/service/AIChatToolApprovalPolicyService";
 import { redirectToLoginOnAuthExpired } from "@/service/AIChatAuthExpiredHandler";
@@ -182,6 +186,9 @@ export function resetAiChatV2RuntimeForDatabaseSwitch(): void {
   compactModelCatalog = null;
   resetSharedAutoDreamService();
   resetSharedWorkspaceAutoDreamService();
+  // Clear the shared lightweight route cooldowns so one account/provider
+  // cannot suppress another (tech-design §12).
+  resetLightweightRuntime();
 }
 
 function getCompactAgent(): AIChatCompactAgentService {
@@ -198,15 +205,18 @@ function getCompactAgent(): AIChatCompactAgentService {
       compactModelCatalog = new AIChatModelCatalogService();
     }
     compactAgent = new AIChatCompactAgentService(tokenService, {
-      completeChat: (request) => new AiChatApi().openAIChatCompletion(request),
+      // Route session-memory and full-compact workloads through the shared
+      // lightweight completion service so the hosted provider (when the kill
+      // switch is enabled) sends model: "small" (tech-design §5.2).
+      completeLightweight: (input) =>
+        getSharedLightweightCompletionService().complete(input),
       // Compact follows the chat availability resolver so local-provider users
       // can compact conversations without a hosted subscription.
       isEnabled: () => canUseChat().ok,
       // Real per-model context window so the auto-compact threshold matches
       // the renderer badge denominator (hard-coded 128k would never trip for
       // models with smaller windows).
-      getContextWindow: (model) =>
-        compactModelCatalog!.getContextWindow(model),
+      getContextWindow: (model) => compactModelCatalog!.getContextWindow(model),
       // Broadcast to the renderer so the context badge drops right away.
       onAutoCompacted: (summary) => {
         AIChatConversationUpdateBroadcaster.getInstance().emitAutoCompacted({

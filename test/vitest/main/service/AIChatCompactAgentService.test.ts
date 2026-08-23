@@ -1,8 +1,8 @@
 import { describe, expect, it, beforeEach, vi } from "vitest";
 import { AIChatCompactAgentService } from "@/service/AIChatCompactAgentService";
-import type {
-  OpenAIChatCompletionResponse,
-} from "@/api/aiChatApi";
+import type { AIChatCompactAgentDeps } from "@/service/AIChatCompactAgentService";
+import type { OpenAIChatCompletionResponse } from "@/api/aiChatApi";
+import type { AIChatLightweightCompletionResult } from "@/service/AIChatLightweightTypes";
 import type { AIChatCompactSummaryView } from "@/entityTypes/aiChatCompactTypes";
 
 // --- Mocks --------------------------------------------------------------
@@ -78,16 +78,36 @@ function makeAgent(opts: {
   onAutoCompacted?: (summary: AIChatCompactSummaryView) => void;
 }) {
   const tokenService = new Token();
+  // Wrap a raw-response mock into the lightweight result shape the service
+  // now consumes. Returns the spy so existing `completeChat` call assertions
+  // keep working (callers pass `completeChat`; the spy records those calls).
+  const wrap = (
+    fn: (req: unknown) => Promise<OpenAIChatCompletionResponse>
+  ): AIChatCompactAgentDeps["completeLightweight"] => {
+    const spy = vi.fn(async (input: unknown) => {
+      const response = await fn(input);
+      return {
+        response,
+        route: "provider_normal",
+        resolvedModel: response.model ?? "test-model",
+        providerKind: "hosted",
+        attemptCount: 1,
+        repairAttempted: false,
+        fallbackAttempted: false,
+      } as AIChatLightweightCompletionResult;
+    });
+    return spy as unknown as AIChatCompactAgentDeps["completeLightweight"];
+  };
+  const defaultFn = vi
+    .fn()
+    .mockResolvedValue(makeCompletion("# Session Memory\n## Current Goal\nx"));
+  const completeLightweight = wrap(opts.completeChat ?? defaultFn);
   const deps = {
-    completeChat:
-      opts.completeChat ??
-      vi
-        .fn()
-        .mockResolvedValue(
-          makeCompletion("# Session Memory\n## Current Goal\nx")
-        ),
+    completeLightweight,
     isEnabled: () => opts.aiEnabled ?? true,
-    ...(opts.getContextWindow ? { getContextWindow: opts.getContextWindow } : {}),
+    ...(opts.getContextWindow
+      ? { getContextWindow: opts.getContextWindow }
+      : {}),
     ...(opts.onAutoCompacted ? { onAutoCompacted: opts.onAutoCompacted } : {}),
   };
   return new AIChatCompactAgentService(tokenService, deps);
@@ -382,7 +402,9 @@ describe("AIChatCompactAgentService", () => {
       mockGetActiveSummary.mockResolvedValue({
         throughTimestamp: new Date(100).toISOString(),
       });
-      mockGetConversationMessages.mockResolvedValue(messageRows("v2-auto-bound"));
+      mockGetConversationMessages.mockResolvedValue(
+        messageRows("v2-auto-bound")
+      );
       const onAutoCompacted = vi.fn();
       const agent = makeAgent({
         getContextWindow: vi.fn().mockResolvedValue(8192),
@@ -542,7 +564,9 @@ describe("AIChatCompactAgentService", () => {
 
     it("uses the real context window as the gate denominator when provided", async () => {
       mockGetByConversation.mockResolvedValue(null);
-      mockGetConversationMessages.mockResolvedValue(messageRows("v2-gate-real"));
+      mockGetConversationMessages.mockResolvedValue(
+        messageRows("v2-gate-real")
+      );
       mockUpsertMemory.mockResolvedValue({ failureCount: 0 });
       const completeChat = vi
         .fn()
@@ -663,6 +687,86 @@ describe("AIChatCompactAgentService", () => {
         promptTokens: 1000,
       });
       expect(completeChat).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("small-model routing (session_memory_summary)", () => {
+    beforeEach(() => {
+      mockGetByConversation.mockResolvedValue(null);
+      mockGetConversationMessages.mockResolvedValue([
+        {
+          messageId: "m1",
+          conversationId: "v2-sm",
+          role: "user",
+          content: "x",
+          timestamp: new Date(1),
+          messageType: "message",
+        },
+        {
+          messageId: "m2",
+          conversationId: "v2-sm",
+          role: "assistant",
+          content: "y",
+          timestamp: new Date(2),
+          messageType: "message",
+        },
+      ]);
+      mockUpsertMemory.mockResolvedValue({});
+      mockResetFailures.mockResolvedValue(undefined);
+      mockMarkUpdating.mockResolvedValue(undefined);
+    });
+
+    it("routes session-memory updates through the session_memory_summary workload", async () => {
+      const completeChat = vi
+        .fn()
+        .mockResolvedValue(
+          makeCompletion("# Session Memory\n## Current Goal\nx")
+        );
+      const agent = makeAgent({ completeChat });
+      await agent.enqueueSessionMemoryUpdate({
+        conversationId: "v2-sm",
+        reason: "test",
+        promptTokens: 103_000,
+      });
+      expect(completeChat).toHaveBeenCalledTimes(1);
+      // The raw mock received the lightweight input carrying the workload id.
+      const lwInput = completeChat.mock.calls[0]![0] as {
+        workload: string;
+      };
+      expect(lwInput.workload).toBe("session_memory_summary");
+    });
+
+    it("first-failure persists circuit-breaker state even when no prior row exists", async () => {
+      // No prior session-memory row (first run). recordFailure must still
+      // create one so the breaker can trip (tech-design §15.3).
+      const completeChat = vi.fn().mockRejectedValue(new Error("boom"));
+      const agent = makeAgent({ completeChat });
+      await agent.enqueueSessionMemoryUpdate({
+        conversationId: "v2-sm",
+        reason: "test",
+        promptTokens: 103_000,
+      });
+      expect(mockRecordFailure).toHaveBeenCalledWith(
+        "v2-sm",
+        expect.any(String)
+      );
+    });
+
+    it("cancelled signal aborts the session-memory update without surfacing", async () => {
+      const completeChat = vi
+        .fn()
+        .mockRejectedValue(new DOMException("aborted", "AbortError"));
+      const agent = makeAgent({ completeChat });
+      // Should not throw past enqueueSessionMemoryUpdate.
+      await expect(
+        agent.enqueueSessionMemoryUpdate({
+          conversationId: "v2-sm",
+          reason: "test",
+          promptTokens: 103_000,
+        })
+      ).resolves.toBeUndefined();
+      // A failure is recorded so the breaker can react to repeated aborts.
+      expect(mockRecordFailure).toHaveBeenCalled();
     });
   });
 });

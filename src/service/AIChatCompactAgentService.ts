@@ -13,11 +13,11 @@ import {
 import type { Token } from "@/modules/token";
 import type { USER_AI_ENABLED } from "@/config/usersetting";
 import { openAIContentToString } from "@/api/aiChatApi";
+import type { OpenAIChatMessage } from "@/api/aiChatApi";
 import type {
-  OpenAIChatCompletionRequest,
-  OpenAIChatCompletionResponse,
-  OpenAIChatMessage,
-} from "@/api/aiChatApi";
+  AIChatLightweightCompletionInput,
+  AIChatLightweightCompletionResult,
+} from "@/service/AIChatLightweightTypes";
 import { MessageType } from "@/entityTypes/commonType";
 import type { AIChatCompactSummaryView } from "@/entityTypes/aiChatCompactTypes";
 import { log } from "@/modules/Logger";
@@ -48,9 +48,16 @@ function isMessageRow(row: { messageType?: MessageType }): boolean {
 }
 
 export interface AIChatCompactAgentDeps {
-  completeChat(
-    request: OpenAIChatCompletionRequest
-  ): Promise<OpenAIChatCompletionResponse>;
+  /**
+   * Lightweight completion route. Session-memory summaries use the
+   * `session_memory_summary` profile (hosted + kill-switch-on sends
+   * `model: "small"`); full compact uses `conversation_compact` with its
+   * controlled fallback. Optional background workloads never fall back to
+   * the normal model (tech-design §8.1, §9.2).
+   */
+  completeLightweight(
+    input: AIChatLightweightCompletionInput
+  ): Promise<AIChatLightweightCompletionResult>;
   /** Returns true when the user has AI enabled (USER_AI_ENABLED === 'true'). */
   isEnabled(): boolean;
   /** Resolves the real context window (tokens) for a model. Optional; the
@@ -191,16 +198,12 @@ export class AIChatCompactAgentService {
     );
     if (input.promptTokens < threshold) {
       log.info(
-        `[ai-chat-compact] auto compact skipped (below threshold) conv=${
-          input.conversationId
-        } promptTokens=${input.promptTokens} threshold=${threshold}`
+        `[ai-chat-compact] auto compact skipped (below threshold) conv=${input.conversationId} promptTokens=${input.promptTokens} threshold=${threshold}`
       );
       return false;
     }
     log.info(
-      `[ai-chat-compact] auto compact triggered conv=${
-        input.conversationId
-      } promptTokens=${input.promptTokens} threshold=${threshold} window=${contextWindow}`
+      `[ai-chat-compact] auto compact triggered conv=${input.conversationId} promptTokens=${input.promptTokens} threshold=${threshold} window=${contextWindow}`
     );
     let compacted = false;
     const p = this.runAutoCompact(input)
@@ -249,10 +252,7 @@ export class AIChatCompactAgentService {
         try {
           this.deps.onAutoCompacted(summary);
         } catch (err) {
-          log.error(
-            "[ai-chat-compact] auto-compact notification failed:",
-            err
-          );
+          log.error("[ai-chat-compact] auto-compact notification failed:", err);
         }
       }
       return true;
@@ -364,21 +364,27 @@ export class AIChatCompactAgentService {
         role: r.role as OpenAIChatMessage["role"],
         content: r.content,
       }));
-      const req: OpenAIChatCompletionRequest = {
-        model: input.model,
-        messages: [
-          { role: "system", content: buildSessionMemorySystemPrompt() },
-          {
-            role: "user",
-            content: buildSessionMemoryUserPrompt(
-              existing?.summary ?? null,
-              newMessages
-            ),
-          },
-        ],
-      };
+      const messages: OpenAIChatMessage[] = [
+        { role: "system", content: buildSessionMemorySystemPrompt() },
+        {
+          role: "user",
+          content: buildSessionMemoryUserPrompt(
+            existing?.summary ?? null,
+            newMessages
+          ),
+        },
+      ];
       const startedAt = Date.now();
-      const resp = await this.deps.completeChat(req);
+      // Route through the lightweight service (session_memory_summary profile).
+      // Hosted + kill-switch-on sends `model: "small"`; optional background
+      // workloads never fall back to the normal model (tech-design §15.2).
+      const result = await this.deps.completeLightweight({
+        workload: "session_memory_summary",
+        messages,
+        normalModel: input.model,
+        manual: false,
+      });
+      const resp = result.response;
       const raw = openAIContentToString(resp.choices?.[0]?.message?.content);
       const { summary, ok } = normalizeSessionMemorySummary(raw);
       if (!ok) {
@@ -454,7 +460,13 @@ export class AIChatCompactAgentService {
     log.info(
       `[ai-chat-compact] full compact started conv=${input.conversationId} msgs=${messages.length} tokens=${inputTokenEstimate}`
     );
-    const resp = await this.deps.completeChat({
+    // Route through the lightweight service (conversation_compact profile).
+    // Hosted + kill-switch-on sends `model: "small"`; this profile is the
+    // one workload permitted a single normal-model fallback on a definitive
+    // small-route failure (tech-design §9.5, §16.3). Hierarchical chunking
+    // and capability gating land in the full-compact commit.
+    const result = await this.deps.completeLightweight({
+      workload: "conversation_compact",
       messages: [
         { role: "system", content: buildFullCompactSystemPrompt() },
         {
@@ -462,8 +474,10 @@ export class AIChatCompactAgentService {
           content: buildFullCompactUserPrompt(messages),
         },
       ],
-      ...(input.model ? { model: input.model } : {}),
+      normalModel: input.model,
+      manual: true,
     });
+    const resp = result.response;
     const raw = openAIContentToString(resp.choices?.[0]?.message?.content);
     const { summary, ok } = normalizeFullCompactSummary(raw);
     if (!ok) {
