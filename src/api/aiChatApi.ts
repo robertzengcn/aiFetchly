@@ -2165,10 +2165,14 @@ export class AiChatApi {
    * POST /v1/chat/completions (stream: false or omitted)
    *
    * @param request - Chat completion request with messages and optional parameters
+   * @param signal - Optional AbortSignal; forwarded to the underlying fetch so an
+   *   in-flight request can be cancelled (lightweight background workloads use
+   *   this so cancellation reaches mid-fetch, not just the decision boundaries).
    * @returns Promise resolving to chat completion response
    */
   async openAIChatCompletion(
-    request: OpenAIChatCompletionRequest
+    request: OpenAIChatCompletionRequest,
+    signal?: AbortSignal
   ): Promise<OpenAIChatCompletionResponse> {
     if (!process.env.WORKER_TYPE) {
       const resolved = (await this.getProviderResolver()).resolveForChat();
@@ -2177,18 +2181,20 @@ export class AiChatApi {
       }
       if (resolved.kind === "local") {
         return this.localClient(resolved.config, resolved.apiKey).complete(
-          request
+          request,
+          signal
         );
       }
-      return this.openAIChatCompletionHosted(request);
+      return this.openAIChatCompletionHosted(request, signal);
     }
     await this.ensureAIEnabled();
-    return this.openAIChatCompletionHosted(request);
+    return this.openAIChatCompletionHosted(request, signal);
   }
 
   /** Hosted aiFetchly non-streaming completion (existing behavior, unchanged). */
   private async openAIChatCompletionHosted(
-    request: OpenAIChatCompletionRequest
+    request: OpenAIChatCompletionRequest,
+    signal?: AbortSignal
   ): Promise<OpenAIChatCompletionResponse> {
     const data: OpenAIChatCompletionRequest = {
       messages: request.messages,
@@ -2216,7 +2222,11 @@ export class AiChatApi {
       data.user = request.user;
     }
     this._debugLogRequest("/api/ai/v1/chat/completions", data);
-    return this._httpClient.postJson("/api/ai/v1/chat/completions", data);
+    return this._httpClient.postJson(
+      "/api/ai/v1/chat/completions",
+      data,
+      signal ? { signal } : {}
+    );
   }
 
   /**

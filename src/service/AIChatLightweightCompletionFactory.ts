@@ -68,19 +68,12 @@ function buildProductionDeps(): AIChatLightweightCompletionDeps {
     },
     isHostedAIEnabled: () => resolver.isHostedAIEnabled(),
     completeHosted: async (request, signal) => {
-      // AiChatApi.openAIChatCompletion does not yet accept a signal; the
-      // hosted HttpClient path already forwards a signal in options to fetch
-      // when one is provided. We rely on the caller's cancellation reaching
-      // fetch via the existing plumbing until openAIChatCompletion grows a
-      // signal parameter (see commit that wires AbortSignal).
-      void signal;
       const api = await getApi();
-      return api.openAIChatCompletion(request);
+      return api.openAIChatCompletion(request, signal);
     },
     completeLocal: async (request, signal) => {
-      void signal;
       const api = await getApi();
-      return api.openAIChatCompletion(request);
+      return api.openAIChatCompletion(request, signal);
     },
   };
 }

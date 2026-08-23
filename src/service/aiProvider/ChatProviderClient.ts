@@ -23,7 +23,8 @@ export interface OpenAIChatCompletionStreamOptions {
 export interface ChatProviderClient {
   listModels(): Promise<OpenAIModelsResponse>;
   complete(
-    request: OpenAIChatCompletionRequest
+    request: OpenAIChatCompletionRequest,
+    signal?: AbortSignal
   ): Promise<OpenAIChatCompletionResponse>;
   stream(
     request: OpenAIChatCompletionRequest,
