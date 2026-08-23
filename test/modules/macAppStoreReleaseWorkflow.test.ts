@@ -91,6 +91,15 @@ describe("Mac App Store release workflow", (): void => {
     expect(step.run).to.include(
       'echo "MAC_STORE_KEYCHAIN_PATH=$keychain_path" >> "$GITHUB_ENV"'
     );
+    expect(step.run).to.include(
+      'Mac App Store provisioning profile does not include the Apple Distribution signing certificate.'
+    );
+    expect(step.run).to.include(
+      'plutil -extract "DeveloperCertificates.$certificate_index" raw'
+    );
+    expect(step.run).to.include(
+      'security find-certificate -c "$MAC_STORE_SIGNING_IDENTITY" -p "$keychain_path"'
+    );
   });
 
   it("builds and verifies the MAS app before creating a signed installer", (): void => {

@@ -603,6 +603,47 @@ jobs:
             exit 1
           fi
 
+          profile_plist_path="$RUNNER_TEMP/AiFetchly-AppStore.plist"
+          security cms -D -i "$provisioning_profile_path" > "$profile_plist_path"
+          expected_application_identifier="$APPLE_TEAM_ID.com.aifetchly.desktop"
+          profile_application_identifier="$(
+            plutil -extract Entitlements.application-identifier raw -o - "$profile_plist_path"
+          )"
+          if [ "$profile_application_identifier" != "$expected_application_identifier" ]; then
+            echo "::error::Mac App Store provisioning profile is for $profile_application_identifier; expected $expected_application_identifier."
+            exit 1
+          fi
+
+          signing_certificate_fingerprint="$(
+            security find-certificate -c "$MAC_STORE_SIGNING_IDENTITY" -p "$keychain_path" |
+              openssl x509 -noout -fingerprint -sha256 |
+              cut -d= -f2 |
+              tr -d ':'
+          )"
+          profile_certificate_matches=false
+          certificate_index=0
+          while plutil -extract "DeveloperCertificates.$certificate_index" raw \
+            -o "$RUNNER_TEMP/profile-developer-certificate-$certificate_index.cer" \
+            "$profile_plist_path" 2>/dev/null; do
+            profile_certificate_fingerprint="$(
+              openssl x509 -inform DER \
+                -in "$RUNNER_TEMP/profile-developer-certificate-$certificate_index.cer" \
+                -noout -fingerprint -sha256 |
+                cut -d= -f2 |
+                tr -d ':'
+            )"
+            if [ "$profile_certificate_fingerprint" = "$signing_certificate_fingerprint" ]; then
+              profile_certificate_matches=true
+              break
+            fi
+            certificate_index=$((certificate_index + 1))
+          done
+          if [ "$profile_certificate_matches" != true ]; then
+            echo "::error::Mac App Store provisioning profile does not include the Apple Distribution signing certificate."
+            echo "::error::Create a new Mac App Store distribution profile for com.aifetchly.desktop, select the same Apple Distribution certificate exported to APPLE_DISTRIBUTION_CERTIFICATE_BASE64, then replace MAC_STORE_PROVISIONING_PROFILE_BASE64."
+            exit 1
+          fi
+
           installer_identity="$(
             security find-identity -v -p basic "$keychain_path" |
               awk -v team="$APPLE_TEAM_ID" '
