@@ -17,9 +17,10 @@ import type {
   AIWorkspaceAutoDreamStatusView,
 } from "@/entityTypes/aiWorkspaceMemoryTypes";
 import type {
-  OpenAIChatCompletionRequest,
-  OpenAIChatCompletionResponse,
-} from "@/api/aiChatApi";
+  AIChatLightweightCompletionInput,
+  AIChatLightweightCompletionResult,
+} from "@/service/AIChatLightweightTypes";
+import type { OpenAIChatMessage } from "@/api/aiChatApi";
 import { openAIContentToString } from "@/api/aiChatApi";
 
 const MIN_HOURS_BETWEEN_RUNS = 24;
@@ -28,9 +29,14 @@ const MIN_CHANGED_MESSAGES_PER_WORKSPACE = 6;
 const RUNNING_STALE_MS = 60 * 60 * 1000;
 
 export interface AIWorkspaceAutoDreamServiceDeps {
-  completeChat(
-    request: OpenAIChatCompletionRequest
-  ): Promise<OpenAIChatCompletionResponse>;
+  /**
+   * Lightweight completion route for the `workspace_auto_dream` workload.
+   * Hosted + kill-switch-on sends `model: "small"`; optional background
+   * workloads never fall back to the normal model.
+   */
+  completeLightweight(
+    input: AIChatLightweightCompletionInput
+  ): Promise<AIChatLightweightCompletionResult>;
   isAIEnabled(): boolean;
   /** Reads the workspace auto-dream toggle; defaults to enabled when absent. */
   isAutoDreamEnabled(): Promise<boolean>;
@@ -237,27 +243,68 @@ export class AIWorkspaceAutoDreamService {
       );
 
       const validWorkspaceKeys = new Set([group.workspaceKey]);
-      const req: OpenAIChatCompletionRequest = {
-        messages: [
-          { role: "system", content: buildWorkspaceAutoDreamSystemPrompt() },
-          {
-            role: "user",
-            content: buildWorkspaceAutoDreamUserPrompt({
-              workspaceKey: group.workspaceKey,
-              workspaceRoot: group.workspaceRoot,
-              activeMemories,
-              packets: group.packets,
-            }),
-          },
-        ],
-      };
-      const resp = await this.deps.completeChat(req);
+      const messages: OpenAIChatMessage[] = [
+        { role: "system", content: buildWorkspaceAutoDreamSystemPrompt() },
+        {
+          role: "user",
+          content: buildWorkspaceAutoDreamUserPrompt({
+            workspaceKey: group.workspaceKey,
+            workspaceRoot: group.workspaceRoot,
+            activeMemories,
+            packets: group.packets,
+          }),
+        },
+      ];
+      // Route through the lightweight service (workspace_auto_dream profile).
+      // Hosted + kill-switch-on sends `model: "small"`; optional background
+      // workloads never fall back to the normal model (tech-design §8.1, §9.2).
+      const isManual = force;
+      const result = await this.deps.completeLightweight({
+        workload: "workspace_auto_dream",
+        messages,
+        manual: isManual,
+      });
+      const resp = result.response;
       const raw = openAIContentToString(resp.choices?.[0]?.message?.content);
-      const parsed = parseWorkspaceAutoDreamModelOutput(
+      let parsed = parseWorkspaceAutoDreamModelOutput(
         raw,
         validWorkspaceKeys,
         activeMemories
       );
+
+      // JSON repair: one same-route repair request on invalid non-empty
+      // output. Never falls back to the normal model (tech-design §9.4).
+      if (!parsed.ok && raw.trim().length > 0) {
+        const repairMessages: OpenAIChatMessage[] = [
+          {
+            role: "system",
+            content:
+              "Return ONLY valid JSON matching the workspace consolidation " +
+              "schema. Fix the syntax errors in the provided output.",
+          },
+          {
+            role: "user",
+            content: `Invalid output to repair:\n${raw.slice(0, 4000)}`,
+          },
+        ];
+        const repairResult = await this.deps.completeLightweight({
+          workload: "workspace_auto_dream",
+          messages: repairMessages,
+          manual: isManual,
+        });
+        const repairRaw = openAIContentToString(
+          repairResult.response.choices?.[0]?.message?.content
+        );
+        const repaired = parseWorkspaceAutoDreamModelOutput(
+          repairRaw,
+          validWorkspaceKeys,
+          activeMemories
+        );
+        if (repaired.ok) {
+          parsed = repaired;
+        }
+      }
+
       if (!parsed.ok) {
         await this.runModule.failRun(
           runView.runId,
@@ -266,47 +313,19 @@ export class AIWorkspaceAutoDreamService {
         return await this.runModule.getByRunId(runView.runId);
       }
 
-      // Apply archives first to clear contradictions, then updates, then creates.
-      for (const a of parsed.archive) {
-        await this.memoryModule.archiveMemory(scope, a.memoryId);
-      }
-      for (const u of parsed.update) {
-        await this.memoryModule.updateMemory(scope, {
-          memoryId: u.memoryId,
-          ...(u.title !== undefined ? { title: u.title } : {}),
-          ...(u.content !== undefined ? { content: u.content } : {}),
-          ...(u.confidence !== undefined ? { confidence: u.confidence } : {}),
-        });
-      }
-      for (const c of parsed.create) {
-        await this.memoryModule.createMemory(scope, {
-          type: c.type,
-          title: c.title,
-          content: c.content,
-          confidence: c.confidence,
-          sourceKind: "auto_dream",
-          sourceConversationId:
-            c.sourceKind === "chat_v2" ? c.sourceId : undefined,
-          sourceAgentTaskId:
-            c.sourceKind === "agent_task" ? c.sourceId : undefined,
-          sourceMessageIds: c.sourceMessageIds,
-        });
-      }
-
-      await this.runModule.completeRun({
+      // Atomic apply: memory plan + run completion in one transaction
+      // (tech-design §14.4).
+      await this.memoryModule.applyPlanAndCompleteRun({
+        scope,
         runId: runView.runId,
+        plan: parsed,
         chatConversationsReviewed: group.packets.filter(
           (p) => p.sourceKind === "chat_v2"
         ).length,
         agentTasksReviewed: group.packets.filter(
           (p) => p.sourceKind === "agent_task"
         ).length,
-        memoriesCreated: parsed.create.length,
-        memoriesUpdated: parsed.update.length,
-        memoriesArchived: parsed.archive.length,
         model: resp.model,
-        // Commit the source-derived cursor with the successful result so the
-        // watermark advances only through packets this workspace run processed.
         reviewedThrough: groupReviewedThrough,
       });
 

@@ -4,6 +4,9 @@ import {
   AIWorkspaceMemoryModel,
   AIWorkspaceMemoryCreateFields,
 } from "@/model/AIWorkspaceMemory.model";
+import { AIWorkspaceMemoryEntity } from "@/entity/AIWorkspaceMemory.entity";
+import { AIWorkspaceMemoryConsolidationRunEntity } from "@/entity/AIWorkspaceMemoryConsolidationRun.entity";
+import type { WorkspaceAutoDreamParseResult } from "@/service/AIWorkspaceAutoDreamPromptBuilder";
 import { randomUUID } from "node:crypto";
 import { looksSecretlike } from "@/service/MemorySecretFilter";
 import type {
@@ -189,14 +192,91 @@ export class AIWorkspaceMemoryModule extends BaseModule {
     usedAt: Date = new Date()
   ): Promise<void> {
     try {
-      await this.memoryModel.markUsed(
-        scope.workspaceKey,
-        memoryIds,
-        usedAt
-      );
+      await this.memoryModel.markUsed(scope.workspaceKey, memoryIds, usedAt);
     } catch (err) {
       log.error("[workspace-memory] markMemoriesUsed failed:", err);
     }
+  }
+
+  /**
+   * Apply a parsed workspace consolidation plan AND mark the run completed in
+   * ONE TypeORM transaction. Archive/update/create run through transaction-
+   * bound repositories scoped to the workspace; the run is marked completed
+   * with counts, resolved model, and source-derived reviewedThrough in the
+   * same transaction. Returns counts only AFTER commit. A failure rolls back
+   * all mutations (tech-design §14.4, §14.5).
+   */
+  async applyPlanAndCompleteRun(input: {
+    scope: WorkspaceMemoryScope;
+    runId: string;
+    plan: WorkspaceAutoDreamParseResult;
+    chatConversationsReviewed: number;
+    agentTasksReviewed: number;
+    model?: string;
+    reviewedThrough?: Date | null;
+  }): Promise<void> {
+    await this.ensureConnection();
+    await this.sqliteDb.connection.transaction(async (manager) => {
+      const memoryRepo = manager.getRepository(AIWorkspaceMemoryEntity);
+      const runRepo = manager.getRepository(
+        AIWorkspaceMemoryConsolidationRunEntity
+      );
+      const { workspaceKey, workspaceRoot } = input.scope;
+
+      for (const a of input.plan.archive) {
+        await memoryRepo.update(
+          { workspaceKey, memoryId: a.memoryId },
+          { status: "archived" }
+        );
+      }
+      for (const u of input.plan.update) {
+        const patch: Record<string, unknown> = {};
+        if (u.title !== undefined) patch.title = u.title;
+        if (u.content !== undefined) patch.content = u.content;
+        if (u.confidence !== undefined)
+          patch.confidence = clampConfidence(u.confidence);
+        if (Object.keys(patch).length > 0) {
+          await memoryRepo.update(
+            { workspaceKey, memoryId: u.memoryId },
+            patch
+          );
+        }
+      }
+      for (const c of input.plan.create) {
+        const e = new AIWorkspaceMemoryEntity();
+        e.memoryId = `wmem-${randomUUID()}`;
+        e.workspaceKey = workspaceKey;
+        e.workspaceRoot = workspaceRoot;
+        e.type = c.type;
+        e.title = c.title;
+        e.content = c.content;
+        e.status = "active";
+        e.confidence = clampConfidence(c.confidence ?? 100);
+        e.sourceKind = "auto_dream";
+        e.sourceConversationId = c.sourceKind === "chat_v2" ? c.sourceId : null;
+        e.sourceAgentTaskId = c.sourceKind === "agent_task" ? c.sourceId : null;
+        e.sourceMessageIds = c.sourceMessageIds ?? null;
+        await memoryRepo.save(e);
+      }
+
+      await runRepo.update(
+        { runId: input.runId },
+        {
+          status: "completed",
+          finishedAt: new Date(),
+          chatConversationsReviewed: input.chatConversationsReviewed,
+          agentTasksReviewed: input.agentTasksReviewed,
+          memoriesCreated: input.plan.create.length,
+          memoriesUpdated: input.plan.update.length,
+          memoriesArchived: input.plan.archive.length,
+          model: input.model ?? null,
+          errorMessage: null,
+          ...(input.reviewedThrough !== undefined
+            ? { reviewedThrough: input.reviewedThrough }
+            : {}),
+        }
+      );
+    });
   }
 
   private toView(e: {
@@ -228,7 +308,8 @@ export class AIWorkspaceMemoryModule extends BaseModule {
       content: e.content,
       status: e.status as AIWorkspaceMemoryView["status"],
       confidence: e.confidence,
-      sourceKind: (e.sourceKind ?? undefined) as AIWorkspaceMemoryView["sourceKind"],
+      sourceKind: (e.sourceKind ??
+        undefined) as AIWorkspaceMemoryView["sourceKind"],
       sourceConversationId: e.sourceConversationId ?? undefined,
       sourceAgentTaskId: e.sourceAgentTaskId ?? undefined,
       sourceMessageIds: e.sourceMessageIds ?? undefined,

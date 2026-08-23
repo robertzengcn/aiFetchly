@@ -8,7 +8,7 @@ import {
 } from "@/config/settinggroupInit";
 import { AIAutoDreamService } from "@/service/AIAutoDreamService";
 import { AIWorkspaceAutoDreamService } from "@/service/AIWorkspaceAutoDreamService";
-import { AiChatApi } from "@/api/aiChatApi";
+import { getSharedLightweightCompletionService } from "@/service/AIChatLightweightCompletionFactory";
 
 /**
  * Shared singleton factory for AIAutoDreamService. Both the chat-v2 IPC
@@ -23,7 +23,11 @@ export function getSharedAutoDreamService(): AIAutoDreamService {
   if (!sharedAutoDreamService) {
     const tokenService = new Token();
     sharedAutoDreamService = new AIAutoDreamService({
-      completeChat: (request) => new AiChatApi().openAIChatCompletion(request),
+      // Route through the shared lightweight completion service so the
+      // user_auto_dream workload uses `model: "small"` on the hosted provider
+      // when the kill switch is enabled (tech-design §5.2, §8.1).
+      completeLightweight: (input) =>
+        getSharedLightweightCompletionService().complete(input),
       isAIEnabled: () => tokenService.getValue(USER_AI_ENABLED) === "true",
       isAutoDreamEnabled: async () => {
         try {
@@ -65,7 +69,11 @@ export function getSharedWorkspaceAutoDreamService(): AIWorkspaceAutoDreamServic
   if (!sharedWorkspaceAutoDreamService) {
     const tokenService = new Token();
     sharedWorkspaceAutoDreamService = new AIWorkspaceAutoDreamService({
-      completeChat: (request) => new AiChatApi().openAIChatCompletion(request),
+      // Route through the shared lightweight completion service so the
+      // workspace_auto_dream workload uses `model: "small"` on the hosted
+      // provider when the kill switch is enabled.
+      completeLightweight: (input) =>
+        getSharedLightweightCompletionService().complete(input),
       isAIEnabled: () => tokenService.getValue(USER_AI_ENABLED) === "true",
       isAutoDreamEnabled: async () => {
         try {
