@@ -652,6 +652,14 @@ export const AI_PORTABLE_WORKSPACE_MEMORY_REVIEW_REJECT =
   "ai:portable-workspace-memory:review:reject";
 export const AI_PORTABLE_WORKSPACE_MEMORY_GIT_STATUS =
   "ai:portable-workspace-memory:git-status";
+export const AI_PORTABLE_WORKSPACE_MEMORY_BRIDGE_PREVIEW =
+  "ai:portable-workspace-memory:bridge:preview";
+export const AI_PORTABLE_WORKSPACE_MEMORY_BRIDGE_APPLY =
+  "ai:portable-workspace-memory:bridge:apply";
+export const AI_PORTABLE_WORKSPACE_MEMORY_BRIDGE_REMOVE =
+  "ai:portable-workspace-memory:bridge:remove";
+export const AI_PORTABLE_WORKSPACE_MEMORY_IDENTITY_REGENERATE =
+  "ai:portable-workspace-memory:identity:regenerate";
 // Renderer push event (main → renderer): one summary per reconciliation.
 export const AI_PORTABLE_WORKSPACE_MEMORY_CHANGED =
   "ai:portable-workspace-memory:changed";
