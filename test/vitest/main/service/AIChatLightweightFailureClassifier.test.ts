@@ -56,9 +56,7 @@ describe("classifyLightweightFailure", () => {
   it("classifies 500/502/503/504 as server_error", () => {
     for (const s of [500, 502, 503, 504]) {
       expect(
-        classifyLightweightFailure(
-          new HttpResponseError("se", s, "")
-        ).reason
+        classifyLightweightFailure(new HttpResponseError("se", s, "")).reason
       ).toBe("server_error");
     }
   });
@@ -70,6 +68,30 @@ describe("classifyLightweightFailure", () => {
     expect(
       classifyLightweightFailure(new HttpResponseError("u", 422, "")).reason
     ).toBe("invalid_request");
+  });
+
+  it("classifies HTTP 413 as context_overflow (definitive)", () => {
+    const c = classifyLightweightFailure(
+      new HttpResponseError("too big", 413, "")
+    );
+    expect(c.reason).toBe("context_overflow");
+    expect(c.definitive).toBe(true);
+    expect(c.status).toBe(413);
+  });
+
+  it("classifies a model_specific_overload server code as model_specific_overload", () => {
+    const c = classifyLightweightFailure(
+      new HttpResponseError(
+        "overloaded",
+        503,
+        '{"error":{"code":"small_model_overloaded"}}',
+        undefined,
+        "small_model_overloaded"
+      )
+    );
+    expect(c.reason).toBe("model_specific_overload");
+    expect(c.definitive).toBe(true);
+    expect(c.serverCode).toBe("small_model_overloaded");
   });
 
   it("classifies caller-abort as cancelled when the caller signal aborted", () => {
@@ -110,7 +132,9 @@ describe("classifyLightweightFailure", () => {
   });
 
   it("classifies AIProviderError network -> network_ambiguous", () => {
-    const c = classifyLightweightFailure(new AIProviderError("down", "network"));
+    const c = classifyLightweightFailure(
+      new AIProviderError("down", "network")
+    );
     expect(c.reason).toBe("network_ambiguous");
     expect(c.definitive).toBe(false);
   });

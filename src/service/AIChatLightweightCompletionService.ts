@@ -77,16 +77,16 @@ export interface LightweightProviderResolution {
 /**
  * Boundary dependencies injected by the factory. `completeHosted` and
  * `completeLocal` are thin wrappers over AiChatApi's hosted/local completion
- * paths; `resolveProvider` over AIProviderResolver; `isHostedAIEnabled` over
- * the Token gate. Keeping them injectable makes the policy unit-testable and
- * lets worker processes route hosted completion through the existing
- * authenticated path.
+ * paths; `resolveProvider` over AIProviderResolver. Hosted AI entitlement
+ * (Token/USER_AI_ENABLED) is NOT re-checked here — it is enforced downstream
+ * by AiChatApi.openAIChatCompletion -> resolveForChat(), which throws a
+ * hosted-subscription denial before any network call. Keeping these injectable
+ * makes the policy unit-testable and lets worker processes route hosted
+ * completion through the existing authenticated path.
  */
 export interface AIChatLightweightCompletionDeps {
   /** Resolve the active provider kind (hosted vs local/custom). */
   resolveProvider(): Promise<LightweightProviderResolution>;
-  /** True when hosted AI is entitled (Token/USER_AI_ENABLED gate). */
-  isHostedAIEnabled(): boolean;
   /** Hosted non-streaming completion (HttpClient path). Forwards signal. */
   completeHosted(
     request: OpenAIChatCompletionRequest,

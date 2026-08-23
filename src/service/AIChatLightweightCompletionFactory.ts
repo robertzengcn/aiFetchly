@@ -66,7 +66,6 @@ function buildProductionDeps(): AIChatLightweightCompletionDeps {
       }
       return { kind: "hosted" as const, providerKind: "hosted" as const };
     },
-    isHostedAIEnabled: () => resolver.isHostedAIEnabled(),
     completeHosted: async (request, signal) => {
       const api = await getApi();
       return api.openAIChatCompletion(request, signal);

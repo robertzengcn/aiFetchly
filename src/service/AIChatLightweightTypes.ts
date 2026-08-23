@@ -143,14 +143,15 @@ export interface AIChatLightweightCompletionResult {
 
 /**
  * Terminal outcome for a lightweight execution, for observability. Cooldown
- * skips are recorded without a server call.
+ * skips are recorded without a server call. (Capability-absent compact is
+ * handled in the compact service, which routes directly to the normal model
+ * with route `provider_normal` — not a distinct outcome here.)
  */
 export type AIChatLightweightOutcome =
   | "success"
   | "failed"
   | "cancelled"
-  | "cooldown_skip"
-  | "capability_missing";
+  | "cooldown_skip";
 
 /** Structured completion event emitted without prompt or output content. */
 export interface AIChatLightweightCompletionEvent {

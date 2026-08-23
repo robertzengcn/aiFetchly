@@ -41,11 +41,22 @@ const SMALL_MODEL_UNAVAILABLE_CODES: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Heuristic: status codes whose response text indicates a context-length
- * rejection. The server is authoritative, but a typed code is preferred; this
- * only applies when no stable server code is present.
+ * Status codes whose response indicates the request input exceeded the
+ * model's context window. HTTP 413 (Payload Too Large) is the most common
+ * signal; a typed `context_overflow` server code is preferred when present
+ * (checked first via SMALL_MODEL_UNAVAILABLE_CODES-style matching).
  */
-const CONTEXT_OVERFLOW_STATUS_CODES: ReadonlySet<number> = new Set([]);
+const CONTEXT_OVERFLOW_STATUS_CODES: ReadonlySet<number> = new Set([413]);
+
+/**
+ * Known server error codes that identify the small route as overloaded
+ * (distinct from generic 5xx, which does not prove a normal model will work).
+ * A compact normal fallback after overload is allowed only for these.
+ */
+const MODEL_SPECIFIC_OVERLOAD_CODES: ReadonlySet<string> = new Set([
+  "small_model_overloaded",
+  "model_specific_overload",
+]);
 
 /**
  * Classify a thrown value from the lightweight completion path into a typed
@@ -142,6 +153,20 @@ function classifyHttpResponseError(
   ) {
     return {
       reason: "small_model_unavailable",
+      definitive: true,
+      status,
+      serverCode,
+      message: error.message,
+    };
+  }
+  // A model-specific overload code identifies the small route as overloaded
+  // (distinct from generic 5xx). Compact may fall back once for this reason.
+  if (
+    typeof serverCode === "string" &&
+    MODEL_SPECIFIC_OVERLOAD_CODES.has(serverCode.toLowerCase())
+  ) {
+    return {
+      reason: "model_specific_overload",
       definitive: true,
       status,
       serverCode,
