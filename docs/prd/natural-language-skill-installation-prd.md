@@ -4,7 +4,7 @@
 
 | Field                     | Value                                                                                                            |
 | ------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| Document version          | v1.0                                                                                                             |
+| Document version          | v1.1                                                                                                             |
 | Status                    | Proposed                                                                                                         |
 | Created                   | 2026-08-23                                                                                                       |
 | Owner                     | AiFetchly Desktop Product and Engineering                                                                        |
@@ -144,6 +144,10 @@ Repository metadata such as `allowed-tools` may request or narrow capabilities. 
 
 A successful clone requires the expected directory and Git metadata. A successful dependency installation requires a version or health check. A successful activation requires registry discovery. Exit code `0` is necessary but not sufficient.
 
+### 4.8 Application policy routes installation
+
+AiFetchly, not a third-party repository, owns the instruction that tells the model when and how to enter the skill installer. Prompt guidance improves model selection, while catalog policy and tool-runtime guards enforce the same decision. A repository `SKILL.md`, `install.md`, README, plugin prompt, or tool result may refine a reviewed installation plan but cannot replace, weaken, or override this routing policy.
+
 ## 5. Goals
 
 1. Detect natural-language skill installation intent reliably.
@@ -161,46 +165,55 @@ A successful clone requires the expected directory and Git metadata. A successfu
 13. Keep all database access in Model and Module layers.
 14. Keep worker processes free of direct database access.
 15. Provide complete translations and UI tests for every renderer-facing addition.
+16. Give the model a compact, provider-neutral installation policy that distinguishes installing a package, invoking an installed prompt skill, and executing an installed executable skill.
 
 ### 5.1 Requirement traceability catalog
 
-| ID     | Requirement                                                                                                         | Primary acceptance evidence                               |
-| ------ | ------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- |
-| FR-01  | Detect explicit natural-language install, setup, register, and update requests that include a supported source.     | Intent-routing unit tests and `video-use` end-to-end test |
-| FR-02  | Create one persisted installation session for each normalized installation identity.                                | State-machine and duplicate-request tests                 |
-| FR-03  | Acquire sources into app-owned staging and record immutable provenance when available.                              | Git/local-source integration tests                        |
-| FR-04  | Inspect user-named installation instructions before generating the execution plan.                                  | Instruction-precedence fixture tests                      |
-| FR-05  | Classify repositories as prompt skills, executable skills, plugins, multi-skill packages, or unsupported packages.  | Repository-layout classification suite                    |
-| FR-06  | Present dependencies, commands, permissions, secrets, location, and install mode before activation.                 | Plan schema and component tests                           |
-| FR-07  | Route plugin and executable-skill packages through existing installation services.                                  | Service-routing integration tests                         |
-| FR-08  | Install root `SKILL.md` packages as first-class prompt skills without generating a manifest in the source.          | Prompt-skill install fixture                              |
-| FR-09  | Preserve a canonical skill base directory and portable skill-directory variables.                                   | Invocation-context tests                                  |
-| FR-10  | Support managed copy on Windows, macOS, and Linux.                                                                  | Cross-platform activation tests                           |
-| FR-11  | Support POSIX directory symlinks and Windows directory junctions in advanced linked mode.                           | Link lifecycle tests                                      |
-| FR-12  | Use the approved conversation workspace as the shell and file-tool default root.                                    | Shared-scope integration tests                            |
-| FR-13  | Provide read/list and separately approved execute access to the selected skill root without granting write access.  | Capability-boundary tests                                 |
-| FR-14  | Detect, prepare, and verify typed dependencies such as ffmpeg and ffprobe.                                          | Dependency-provider tests                                 |
-| FR-15  | Pause and resume an installation around user approval and secure credential input.                                  | Restart/resume end-to-end test                            |
-| FR-16  | Store secrets through OS-backed secure storage and inject them only into approved processes.                        | Secret persistence and redaction tests                    |
-| FR-17  | Verify activation through registry discovery and dependency health checks.                                          | Readiness integration tests                               |
-| FR-18  | Preserve post-install user instructions such as “wait” and avoid unintended skill execution.                        | Conversation-contract test                                |
-| FR-19  | Support update, repair, disable, uninstall, and rollback.                                                           | Lifecycle integration suite                               |
-| FR-20  | Emit structured progress and failure codes suitable for UI rendering and retry decisions.                           | Event-schema and recovery tests                           |
-| FR-21  | Advertise prompt skills through one universal invocation tool using bounded name and description metadata.          | Tool-catalog and routing tests                            |
-| FR-22  | After invocation, inject normalized `SKILL.md` instructions as hidden model context rather than ordinary tool JSON. | Message-sequencing integration tests                      |
-| FR-23  | Preserve invoked-skill identity and effective instructions across context compaction and conversation recovery.     | Compaction and recovery tests                             |
-| FR-24  | Apply token-aware instruction budgets and provide progressive resource reads for content that is not injected.      | Token-budget and resource-tool tests                      |
-| FR-25  | Route existing documentation-only skill tools through the prompt runtime without breaking stored installations.     | Legacy-wrapper compatibility tests                        |
-| NFR-01 | Installation operations must be safe to retry and must not create duplicate active records.                         | Idempotency stress test                                   |
-| NFR-02 | Expected-output shell commands must capture output reliably on every supported platform.                            | Required OS CI matrix                                     |
-| NFR-03 | No secret may appear in chat persistence, process arguments, logs, diagnostics, or sidecar metadata.                | Redaction tests and security review                       |
-| NFR-04 | Repository inspection must remain bounded by file, byte, depth, timeout, and concurrency limits.                    | Resource-exhaustion tests                                 |
-| NFR-05 | Activation and rollback must never delete an unresolved, linked, workspace-root, home, or broad configuration path. | Destructive-path safety tests                             |
-| NFR-06 | Existing plugin and executable-skill behavior must remain backward compatible.                                      | Regression suites                                         |
-| NFR-07 | New AI-serving IPC handlers must enforce the existing AI-enable gate before request parsing or work.                | IPC architecture tests                                    |
-| NFR-08 | Every new UI state must be translated into all six supported languages and covered by component tests.              | i18n parity and UI test gates                             |
-| NFR-09 | Uninvoked prompt-skill bodies must not consume the normal conversation context budget.                              | Prompt-size and catalog-budget tests                      |
-| NFR-10 | Loading a prompt skill must never execute embedded commands, helpers, hooks, or network requests automatically.     | Prompt-injection and no-side-effect tests                 |
+| ID     | Requirement                                                                                                                                       | Primary acceptance evidence                               |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- |
+| FR-01  | Detect explicit natural-language install, setup, register, and update requests that include a supported source.                                   | Intent-routing unit tests and `video-use` end-to-end test |
+| FR-02  | Create one persisted installation session for each normalized installation identity.                                                              | State-machine and duplicate-request tests                 |
+| FR-03  | Acquire sources into app-owned staging and record immutable provenance when available.                                                            | Git/local-source integration tests                        |
+| FR-04  | Inspect user-named installation instructions before generating the execution plan.                                                                | Instruction-precedence fixture tests                      |
+| FR-05  | Classify repositories as prompt skills, executable skills, plugins, multi-skill packages, or unsupported packages.                                | Repository-layout classification suite                    |
+| FR-06  | Present dependencies, commands, permissions, secrets, location, and install mode before activation.                                               | Plan schema and component tests                           |
+| FR-07  | Route plugin and executable-skill packages through existing installation services.                                                                | Service-routing integration tests                         |
+| FR-08  | Install root `SKILL.md` packages as first-class prompt skills without generating a manifest in the source.                                        | Prompt-skill install fixture                              |
+| FR-09  | Preserve a canonical skill base directory and portable skill-directory variables.                                                                 | Invocation-context tests                                  |
+| FR-10  | Support managed copy on Windows, macOS, and Linux.                                                                                                | Cross-platform activation tests                           |
+| FR-11  | Support POSIX directory symlinks and Windows directory junctions in advanced linked mode.                                                         | Link lifecycle tests                                      |
+| FR-12  | Use the approved conversation workspace as the shell and file-tool default root.                                                                  | Shared-scope integration tests                            |
+| FR-13  | Provide read/list and separately approved execute access to the selected skill root without granting write access.                                | Capability-boundary tests                                 |
+| FR-14  | Detect, prepare, and verify typed dependencies such as ffmpeg and ffprobe.                                                                        | Dependency-provider tests                                 |
+| FR-15  | Pause and resume an installation around user approval and secure credential input.                                                                | Restart/resume end-to-end test                            |
+| FR-16  | Store secrets through OS-backed secure storage and inject them only into approved processes.                                                      | Secret persistence and redaction tests                    |
+| FR-17  | Verify activation through registry discovery and dependency health checks.                                                                        | Readiness integration tests                               |
+| FR-18  | Preserve post-install user instructions such as “wait” and avoid unintended skill execution.                                                      | Conversation-contract test                                |
+| FR-19  | Support update, repair, disable, uninstall, and rollback.                                                                                         | Lifecycle integration suite                               |
+| FR-20  | Emit structured progress and failure codes suitable for UI rendering and retry decisions.                                                         | Event-schema and recovery tests                           |
+| FR-21  | Advertise prompt skills through one universal invocation tool using bounded name and description metadata.                                        | Tool-catalog and routing tests                            |
+| FR-22  | After invocation, inject normalized `SKILL.md` instructions as hidden model context rather than ordinary tool JSON.                               | Message-sequencing integration tests                      |
+| FR-23  | Preserve invoked-skill identity and effective instructions across context compaction and conversation recovery.                                   | Compaction and recovery tests                             |
+| FR-24  | Apply token-aware instruction budgets and provide progressive resource reads for content that is not injected.                                    | Token-budget and resource-tool tests                      |
+| FR-25  | Route existing documentation-only skill tools through the prompt runtime without breaking stored installations.                                   | Legacy-wrapper compatibility tests                        |
+| FR-26  | Inject an application-owned instruction that routes install, setup, register, update, repair, and configure requests to the typed installer.      | System-prompt and routing tests                           |
+| FR-27  | Distinguish package installation from `use_skill` prompt invocation and executable-skill execution.                                               | Intent-boundary test matrix                               |
+| FR-28  | Keep `skill_install_prepare` available without a generic tool-catalog search and transparently recover one deferred-load race.                    | Catalog and lazy-load recovery tests                      |
+| FR-29  | Require every follow-up install operation to use the returned session ID, plan revision when applicable, and `next_action`.                       | Session-correlation and stale-plan tests                  |
+| FR-30  | Block generic shell/file installation fallbacks after explicit install intent unless the typed installer returns an approved manual-action state. | Tool-policy integration tests                             |
+| FR-31  | Reject secret values from chat and ordinary tool arguments and route `awaiting-secret` only through secure credential input.                      | Schema rejection and secret-channel tests                 |
+| NFR-01 | Installation operations must be safe to retry and must not create duplicate active records.                                                       | Idempotency stress test                                   |
+| NFR-02 | Expected-output shell commands must capture output reliably on every supported platform.                                                          | Required OS CI matrix                                     |
+| NFR-03 | No secret may appear in chat persistence, process arguments, logs, diagnostics, or sidecar metadata.                                              | Redaction tests and security review                       |
+| NFR-04 | Repository inspection must remain bounded by file, byte, depth, timeout, and concurrency limits.                                                  | Resource-exhaustion tests                                 |
+| NFR-05 | Activation and rollback must never delete an unresolved, linked, workspace-root, home, or broad configuration path.                               | Destructive-path safety tests                             |
+| NFR-06 | Existing plugin and executable-skill behavior must remain backward compatible.                                                                    | Regression suites                                         |
+| NFR-07 | New AI-serving IPC handlers must enforce the existing AI-enable gate before request parsing or work.                                              | IPC architecture tests                                    |
+| NFR-08 | Every new UI state must be translated into all six supported languages and covered by component tests.                                            | i18n parity and UI test gates                             |
+| NFR-09 | Uninvoked prompt-skill bodies must not consume the normal conversation context budget.                                                            | Prompt-size and catalog-budget tests                      |
+| NFR-10 | Loading a prompt skill must never execute embedded commands, helpers, hooks, or network requests automatically.                                   | Prompt-injection and no-side-effect tests                 |
+| NFR-11 | Repository-controlled content must not alter the application-owned installation routing policy or tool authorization.                             | Adversarial repository fixtures                           |
+| NFR-12 | Installation routing must be provider-neutral, versioned, bounded in prompt size, observable, and enforceable independently of model compliance.  | Prompt snapshot, metrics, and policy tests                |
 
 ## 6. Non-Goals
 
@@ -239,18 +252,20 @@ Expects the same installation reliability as macOS and Linux without manually tr
 
 ## 8. Terminology
 
-| Term                 | Meaning                                                                                                                  |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| Prompt skill         | A model-guidance package whose primary entry is `SKILL.md`. It may include read-only resources and helper programs.      |
-| Executable skill     | An AiFetchly runtime package with `manifest.json` and an explicit executable entry.                                      |
-| Plugin               | A larger package that can contribute skills, MCP servers, commands, agents, or hooks.                                    |
-| Skill source         | The immutable or user-controlled repository/folder from which a skill is installed.                                      |
-| Skill root           | The canonical directory containing `SKILL.md` or `manifest.json`.                                                        |
-| Managed copy         | An AiFetchly-owned copy under the skill installation root.                                                               |
-| Linked install       | A symbolic link on POSIX or directory junction/symlink on Windows that exposes an external source as an installed skill. |
-| Installation session | A persisted state machine representing one requested installation and its approvals, progress, diagnostics, and result.  |
-| Filesystem scope     | The canonical roots and capabilities available to a tool invocation.                                                     |
-| Dependency plan      | A typed list of detected, missing, installable, and user-provided requirements.                                          |
+| Term                        | Meaning                                                                                                                   |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| Prompt skill                | A model-guidance package whose primary entry is `SKILL.md`. It may include read-only resources and helper programs.       |
+| Executable skill            | An AiFetchly runtime package with `manifest.json` and an explicit executable entry.                                       |
+| Plugin                      | A larger package that can contribute skills, MCP servers, commands, agents, or hooks.                                     |
+| Skill source                | The immutable or user-controlled repository/folder from which a skill is installed.                                       |
+| Skill root                  | The canonical directory containing `SKILL.md` or `manifest.json`.                                                         |
+| Managed copy                | An AiFetchly-owned copy under the skill installation root.                                                                |
+| Linked install              | A symbolic link on POSIX or directory junction/symlink on Windows that exposes an external source as an installed skill.  |
+| Installation session        | A persisted state machine representing one requested installation and its approvals, progress, diagnostics, and result.   |
+| Filesystem scope            | The canonical roots and capabilities available to a tool invocation.                                                      |
+| Dependency plan             | A typed list of detected, missing, installable, and user-provided requirements.                                           |
+| Installation routing policy | Application-owned model guidance and runtime enforcement that maps install intent to typed installer tools.               |
+| Manual-action state         | A typed installer result that explains why a bounded operation cannot be automated and what approved fallback is allowed. |
 
 ## 9. Primary User Experience
 
@@ -355,6 +370,65 @@ The next model round follows the skill instructions
 The catalog must not inject every installed `SKILL.md` into the initial prompt. Discovery includes only the invocation identity, name, bounded description, source/scope label when needed to disambiguate, and optional argument hint.
 
 An explicit user `/skill-name` action and automatic model selection must resolve through the same catalog and invocation service. Frontmatter such as `disable-model-invocation` may prevent automatic selection without preventing an authorized explicit invocation.
+
+### 9.6 Application-owned LLM installation policy
+
+AiFetchly must explicitly tell the model how to route skill lifecycle requests. This instruction belongs in the application-owned system or developer context. A shorter trigger reminder belongs in the `skill_install_prepare` tool description and the built-in capability map. It must not be loaded from the repository being installed.
+
+Normative instruction:
+
+```text
+Skill installation policy
+
+When the user asks to install, set up, register, update, repair, or configure a
+skill from a repository URL or local package:
+
+1. Call skill_install_prepare with the source and the user's non-secret
+   constraints.
+2. Do not clone the repository using shell_execute or manually copy it with file
+   tools.
+3. Do not search the tool catalog for Git or filesystem tools first.
+4. Continue the installation using the returned session_id and next_action.
+5. Never accept API keys through chat or ordinary tool arguments. Request the
+   secure credential input when the installation enters awaiting-secret.
+6. Do not execute the installed skill unless the user separately asks to use it.
+7. When next_action is ready, report readiness and follow the user's requested
+   terminal behavior.
+
+Use use_skill only to invoke an already installed prompt skill. It does not
+install, update, repair, or configure skill packages.
+```
+
+The production wording may be compressed for token budget, but it must preserve every normative rule and remain provider-neutral. It must not claim a provider-specific role or agent directory.
+
+The model-facing intent boundary is:
+
+| User intent                                                             | Required entry point                                                          | Forbidden substitution                                                              |
+| ----------------------------------------------------------------------- | ----------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| Install, set up, register, update, repair, or configure a skill package | `skill_install_prepare` or the session-scoped lifecycle action returned by it | Initial Git clone, shell package setup, manual copy/link, or generic catalog search |
+| Use an already installed prompt skill for a task                        | `use_skill`                                                                   | Reinstalling the package or executing helper code during load                       |
+| Run an already installed executable capability                          | Its registered executable tool                                                | Loading executable behavior as hidden prompt guidance                               |
+| Inspect or manage an existing installation from product UI              | Typed status, update, repair, disable, or uninstall operation                 | Direct database or filesystem mutation                                              |
+
+Words such as “install” alone are not sufficient to intercept unrelated dependency work. The strong install route requires a skill/package/repository signal plus a supported source or an already known installation identity. Ambiguous requests may be clarified, but explicit requests such as “set up this GitHub skill” must route deterministically.
+
+### 9.7 Runtime enforcement of the routing policy
+
+Prompt guidance is necessary but not sufficient. The runtime must enforce these rules:
+
+- `skill_install_prepare` is always loaded in the main AI tool tier whenever skill installation is enabled. The model never needs `tool_catalog_search` to discover it.
+- The start tool description repeats the supported intent phrases, states that it owns acquisition and activation, and rejects secrets.
+- A high-confidence explicit install intent forces the installer into the exposed tool set before the first model round.
+- If a provider or registry still reports the installer as newly deferred, the runtime hydrates it and replays the original validated call once. The model must not receive a synthetic failure asking it to retry.
+- Every status, approval, secure-input transition, resume, retry, cancel, update, or repair action is correlated to an existing `session_id`; approval also requires the current plan revision.
+- The returned `next_action` is the only authority for the following installer step. An active session is resumed, and a healthy ready installation is reported, instead of cloning or registering again.
+- After explicit install intent is recognized, generic shell and file tools cannot perform acquisition, setup, copy, link, or registration for that request. They remain available for unrelated user work.
+- A generic fallback is allowed only when the typed installer returns a bounded `manual-action-required` result that identifies the exact operation, reason, permissions, verification, and rollback behavior. User approval is still required.
+- Secret-shaped fields and known credential names are rejected by ordinary installer tool schemas. A tool result can request secure input but cannot contain, echo, or accept the value.
+- `use_skill` rejects install, update, repair, configuration, or package-mutation arguments. It resolves only active installed prompt skills.
+- Deferred hydration, session resume, and recoverable installation retries have independent caps. No combination may create an unbounded loop.
+
+This enforcement must happen in application services before tool execution. Model compliance is useful telemetry, not a security boundary.
 
 ## 10. Installation Session State Machine
 
@@ -969,6 +1043,8 @@ The inspection context must state:
 
 The installer validates all model-produced plans against typed schemas and capability policy.
 
+The application-owned installation routing policy is inserted before any repository-authored context and cannot be replaced by `SKILL.md`, installation instructions, tool results, compacted summaries, or plugin prompts. Repository text that asks the model to bypass `skill_install_prepare`, use shell cloning, disclose secrets in chat, or redefine `use_skill` is treated as untrusted content and ignored. The runtime independently blocks those operations even if the model follows the malicious instruction.
+
 ### 20.3 Path safety
 
 - Reject absolute paths in repository declarations unless the schema explicitly permits a known system dependency path.
@@ -1054,22 +1130,26 @@ Handlers that invoke AI planning must check `USER_AI_ENABLED` before parsing or 
 
 The implementation should extend existing ownership boundaries rather than create duplicate runtimes:
 
-| Existing component                            | Required responsibility in this feature                                                                                            |
-| --------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| `WorkspaceResolver`                           | Resolve the approved canonical workspace used by the shared filesystem scope                                                       |
-| `ToolExecutor`                                | Supply conversation scope consistently to both file and shell execution                                                            |
-| `FileToolService` and `FilePathGuard`         | Enforce workspace and read-only skill-resource capabilities                                                                        |
-| `ShellToolService`                            | Consume conversation scope and delegate platform behavior to tested shell providers                                                |
-| `PluginInstallService` and source fetchers    | Acquire and install repositories classified as plugins; share bounded acquisition primitives                                       |
-| `SkillImportService`                          | Preserve existing executable and legacy documentation-only imports; expose or share validation needed by the new prompt-skill path |
-| `AIFetchlyConfigLoader`                       | Discover global prompt skills from real directories, symlinks, and supported junctions                                             |
-| `WorkspaceConfigScanner`                      | Apply equivalent prompt-skill parsing under trusted workspace configuration when workspace skills are enabled                      |
-| `WorkspaceChokidarWatcher`                    | Emit changes for skill entries and support explicit rescans when linked targets are not followed reliably                          |
-| `SkillRegistry` and prompt assembly           | Register bounded discovery metadata and load full prompt-skill content on invocation                                               |
-| `SkillPermissionService`                      | Enforce requested tool narrowing and approved helper execution                                                                     |
-| System dependency services                    | Detect, install, retry, and verify cataloged dependencies such as ffmpeg                                                           |
-| `SecureStore` or successor credential service | Store skill secrets through OS-backed encryption after production cutover                                                          |
-| Module and Model layers                       | Persist installation sessions, provenance, dependency bindings, and non-secret credential references                               |
+| Existing component                               | Required responsibility in this feature                                                                                               |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `WorkspaceResolver`                              | Resolve the approved canonical workspace used by the shared filesystem scope                                                          |
+| `ToolExecutor`                                   | Supply conversation scope consistently to both file and shell execution                                                               |
+| `AIChatContextAssembler`                         | Insert the versioned installation routing policy once in application-owned context before repository-authored content                 |
+| `BuiltInToolCapabilitiesPromptSection`           | Publish the compact install/invoke/execute intent boundary without advertising shell or file fallback                                 |
+| `ToolLoadPolicyService` and `ToolCatalogService` | Keep installer entry tools always available and preserve ordinary deferred-tool budgeting for unrelated capabilities                  |
+| `AIChatQueryEngine` and `AIChatQueryLoop`        | Detect explicit install intent, expose the installer, enforce session-scoped tool policy, and perform one transparent hydration retry |
+| `FileToolService` and `FilePathGuard`            | Enforce workspace and read-only skill-resource capabilities                                                                           |
+| `ShellToolService`                               | Consume conversation scope and delegate platform behavior to tested shell providers                                                   |
+| `PluginInstallService` and source fetchers       | Acquire and install repositories classified as plugins; share bounded acquisition primitives                                          |
+| `SkillImportService`                             | Preserve existing executable and legacy documentation-only imports; expose or share validation needed by the new prompt-skill path    |
+| `AIFetchlyConfigLoader`                          | Discover global prompt skills from real directories, symlinks, and supported junctions                                                |
+| `WorkspaceConfigScanner`                         | Apply equivalent prompt-skill parsing under trusted workspace configuration when workspace skills are enabled                         |
+| `WorkspaceChokidarWatcher`                       | Emit changes for skill entries and support explicit rescans when linked targets are not followed reliably                             |
+| `SkillRegistry` and prompt assembly              | Register bounded discovery metadata and load full prompt-skill content on invocation                                                  |
+| `SkillPermissionService`                         | Enforce requested tool narrowing and approved helper execution                                                                        |
+| System dependency services                       | Detect, install, retry, and verify cataloged dependencies such as ffmpeg                                                              |
+| `SecureStore` or successor credential service    | Store skill secrets through OS-backed encryption after production cutover                                                             |
+| Module and Model layers                          | Persist installation sessions, provenance, dependency bindings, and non-secret credential references                                  |
 
 The plaintext `PluginOptionsStore` must not be reused for secrets until it is backed by the approved credential service and migrated safely.
 
@@ -1152,6 +1232,12 @@ At minimum, support:
 - `registry-reload-failed`
 - `readiness-check-failed`
 - `shell-output-missing`
+- `install-routing-required`
+- `install-session-required`
+- `install-plan-revision-stale`
+- `install-secret-channel-required`
+- `install-generic-tool-fallback-blocked`
+- `install-tool-load-retry-exhausted`
 - `rollback-failed`
 
 Each error includes recoverability, user action, sanitized technical detail, and installation session ID.
@@ -1289,6 +1375,12 @@ Claude plugin adapters continue owning plugin-contained `SKILL.md` behavior. Sha
 - Same-hash repeated invocation returns `already-loaded` without duplicate context.
 - Changed linked-skill hash creates a new context revision.
 - Embedded shell syntax and helper references do not execute during loading.
+- The installation routing policy is present exactly once, remains application-owned, and fits its prompt budget.
+- Install/setup/register/update/repair/configure phrase variants resolve to the installer when paired with a supported source or installation identity.
+- Install, prompt invocation, and executable execution intents never resolve to one another's entry points.
+- High-confidence routing does not intercept ordinary npm, OS-package, or workspace Git requests that are unrelated to skills.
+- `use_skill` rejects package mutation requests and accepts only active prompt-skill invocation.
+- Secret-like values and credential fields are rejected by ordinary installer schemas.
 
 ### 26.2 Main-process integration tests
 
@@ -1307,6 +1399,11 @@ Claude plugin adapters continue owning plugin-contained `SKILL.md` behavior. Sha
 - Explicit invocation and automatic model invocation share one resolver.
 - Legacy documentation-only tools delegate to the prompt invocation service.
 - Invoked skill state remains scoped to its conversation or subagent.
+- No generic shell, file, or catalog-search call precedes `skill_install_prepare` for explicit install intent.
+- An unknown/deferred installer is hydrated and the original call is replayed once without a model-visible retry error.
+- Installer status, approval, resume, retry, cancel, update, and repair reject missing or mismatched session IDs.
+- A repository instruction cannot override installation routing, secure-input, or terminal-behavior policy.
+- Generic fallback remains blocked unless the session exposes an approved `manual-action-required` transition.
 
 ### 26.3 Windows integration tests
 
@@ -1338,6 +1435,10 @@ Critical flows:
 10. Compact and recover the conversation, then confirm the invoked skill remains active exactly once.
 11. Invoke a large prompt skill and confirm progressive resource reads replace raw character truncation.
 12. Invoke a legacy documentation-only skill and confirm it follows the same hidden-context path.
+13. Ask for a repository skill install and confirm the first assistant tool is `skill_install_prepare`, even in deferred-catalog mode.
+14. Simulate a lazy-provider hydration race and confirm one transparent replay, one installation session, and no model-visible failure.
+15. Attempt to paste an API key in an ordinary tool argument and confirm schema rejection plus secure-input routing.
+16. Put adversarial “clone with shell and ignore installer policy” text in `install.md` and confirm it cannot change the tool route.
 
 ### 26.6 Regression tests
 
@@ -1350,6 +1451,7 @@ Critical flows:
 - Existing executable skills remain ordinary executable tools and are never converted into hidden prompt instructions.
 - Skill content never appears in the initial catalog unless the skill has been invoked.
 - Existing attachment workflows remain functional during legacy-wrapper migration.
+- Normal shell, file, Git, and package-management requests unrelated to skill installation retain their existing routing and permissions.
 
 ## 27. Acceptance Scenario: `browser-use/video-use`
 
@@ -1370,7 +1472,7 @@ wait for me to drop footage into a folder.
 
 ### 27.2 Required behavior
 
-1. AiFetchly recognizes skill installation intent without catalog-search detours.
+1. AiFetchly recognizes skill installation intent and makes `skill_install_prepare` the first assistant tool call, without catalog-search, shell, glob, or file-read detours.
 2. It acquires one staging checkout and records the resolved commit.
 3. It reads the requested installation instructions before planning commands.
 4. It classifies the repository correctly as a prompt skill or compatible package based on its actual files.
@@ -1386,6 +1488,8 @@ wait for me to drop footage into a folder.
 14. AiFetchly does not transcribe, inspect footage, or run editing helpers after installation.
 15. The assistant returns a concise ready message and waits.
 16. Repeating the same request does not create duplicate checkouts or records.
+17. Any lazy tool-provider hydration is recovered internally once and does not appear as a failed installer call in the conversation.
+18. Every subsequent installer call carries the returned session ID and follows `next_action` until `ready`.
 
 ### 27.3 Later daily-use invocation
 
@@ -1412,6 +1516,9 @@ After the installation-only turn has ended, a later request involving dropped fo
 - 100% of failed activations either roll back or surface `rollback-failed` with preserved recovery data.
 - 100% of successful prompt-skill invocations deliver a tool acknowledgement followed by one effective hidden instruction block.
 - 100% of compaction/recovery fixtures restore active invoked skills without duplication or source confusion.
+- 100% of high-confidence explicit skill-install requests expose and call the typed installer before generic shell, file, or catalog-search tools.
+- Zero model-visible “deferred tool loaded; retry” failures for installer entry tools.
+- Zero installer lifecycle calls accepted without valid session correlation after `prepare`.
 
 ### 28.2 User experience
 
@@ -1435,6 +1542,7 @@ After the installation-only turn has ended, a later request involving dropped fo
 - Add Windows shell diagnostic matrix and fixture repositories.
 - Record current shell/file workspace mismatch through failing tests.
 - Build the `video-use` compatibility fixture or pin a reviewed upstream commit for testing.
+- Add prompt snapshots, intent-boundary fixtures, adversarial repository instructions, and the first-tool-call assertion.
 
 Exit criteria: failures reproduce deterministically.
 
@@ -1473,6 +1581,8 @@ Exit criteria: copied and linked fixtures are discoverable; invocation injects o
 - Add installation sessions, source acquisition, inspection, plan approval, atomic activation, verification, and rollback.
 - Reuse existing plugin and executable skill import paths.
 - Default to managed copy and expose linked development mode.
+- Inject the versioned application-owned installation policy and compact capability reminder.
+- Keep `skill_install_prepare` always available, enforce the install-intent tool boundary, and add transparent one-shot hydration recovery.
 
 Exit criteria: supported fixture repositories install without model-generated clone commands.
 
@@ -1495,22 +1605,26 @@ Exit criteria: success, failure, security, and rollback metrics meet thresholds.
 
 ## 30. Risks and Mitigations
 
-| Risk                                               | Impact                                 | Mitigation                                                                               |
-| -------------------------------------------------- | -------------------------------------- | ---------------------------------------------------------------------------------------- |
-| Repository instructions manipulate the model       | Unapproved commands or data access     | Treat acquisition as untrusted data; validate typed plans; preserve tool approvals       |
-| Linked skill changes outside AiFetchly             | Active behavior changes unexpectedly   | Advanced-mode warning, content hashes, change notification, rapid disable                |
-| Windows link privileges differ                     | Installation fails for ordinary users  | Managed copy default; directory junction fallback; explicit capability detection         |
-| Broad skill-root shell access leaks sibling skills | Cross-skill data exposure              | Per-skill read/execute capability, canonical target validation, no parent-root grant     |
-| Secret storage is unavailable                      | Credentials stored insecurely          | Fail closed for persistent storage; explicit session-only option when acceptable         |
-| Package managers run lifecycle scripts             | Arbitrary code execution               | Exact command review, stronger approval, controlled process, typed dependency installers |
-| Mutable Git branch changes                         | Unreviewed update                      | Record commit SHA; never auto-activate permission-expanding updates                      |
-| Watcher misses linked-target changes               | Stale or unsafe registration           | Explicit rescan plus canonical content-hash verification                                 |
-| Rollback deletes the wrong path                    | User data loss                         | Resolve exact targets, ownership metadata, no recursive deletion of unresolved paths     |
-| Large repositories exhaust resources               | App instability                        | File, byte, depth, timeout, and concurrency limits before activation                     |
-| Every installed skill body is injected eagerly     | High token cost and degraded routing   | Bounded metadata catalog plus lazy universal invocation                                  |
-| Skill guidance remains ordinary tool JSON          | Weak instruction adherence             | Short acknowledgement followed by hidden normalized context                              |
-| Compaction drops invoked skill instructions        | Behavior changes midway through a task | Persist runtime identity, hash, revision, and restorable normalized instructions         |
-| Linked skill changes after invocation              | Unreviewed instructions enter context  | Hash revisions, change notification, and explicit reload policy                          |
+| Risk                                               | Impact                                        | Mitigation                                                                                   |
+| -------------------------------------------------- | --------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| Repository instructions manipulate the model       | Unapproved commands or data access            | Treat acquisition as untrusted data; validate typed plans; preserve tool approvals           |
+| Linked skill changes outside AiFetchly             | Active behavior changes unexpectedly          | Advanced-mode warning, content hashes, change notification, rapid disable                    |
+| Windows link privileges differ                     | Installation fails for ordinary users         | Managed copy default; directory junction fallback; explicit capability detection             |
+| Broad skill-root shell access leaks sibling skills | Cross-skill data exposure                     | Per-skill read/execute capability, canonical target validation, no parent-root grant         |
+| Secret storage is unavailable                      | Credentials stored insecurely                 | Fail closed for persistent storage; explicit session-only option when acceptable             |
+| Package managers run lifecycle scripts             | Arbitrary code execution                      | Exact command review, stronger approval, controlled process, typed dependency installers     |
+| Mutable Git branch changes                         | Unreviewed update                             | Record commit SHA; never auto-activate permission-expanding updates                          |
+| Watcher misses linked-target changes               | Stale or unsafe registration                  | Explicit rescan plus canonical content-hash verification                                     |
+| Rollback deletes the wrong path                    | User data loss                                | Resolve exact targets, ownership metadata, no recursive deletion of unresolved paths         |
+| Large repositories exhaust resources               | App instability                               | File, byte, depth, timeout, and concurrency limits before activation                         |
+| Every installed skill body is injected eagerly     | High token cost and degraded routing          | Bounded metadata catalog plus lazy universal invocation                                      |
+| Skill guidance remains ordinary tool JSON          | Weak instruction adherence                    | Short acknowledgement followed by hidden normalized context                                  |
+| Compaction drops invoked skill instructions        | Behavior changes midway through a task        | Persist runtime identity, hash, revision, and restorable normalized instructions             |
+| Linked skill changes after invocation              | Unreviewed instructions enter context         | Hash revisions, change notification, and explicit reload policy                              |
+| Prompt wording alone fails to control routing      | Model repeats shell/file installation loop    | Always-loaded installer, deterministic intent guard, session policy, and tool enforcement    |
+| Install-intent matching is too broad               | Normal Git or dependency work is blocked      | Require skill/package plus source or known installation identity; log false-positive metrics |
+| Prompt and runtime policies drift                  | Model guidance conflicts with enforcement     | Version one shared policy definition and snapshot both prompt and enforcement decisions      |
+| Deferred provider reports installer unavailable    | User sees a false failure and duplicate retry | Hydrate and replay the validated call once; cap retries and preserve idempotency             |
 
 ## 31. Open Decisions With Recommendations
 
@@ -1550,11 +1664,25 @@ Exit criteria: success, failure, security, and rollback metrics meet thresholds.
 
 **Recommendation:** preserve the normalized effective instruction block plus runtime identity, source, content hash, and context revision. A verified stored block provides deterministic continuation when a linked source changes or disappears during a long conversation.
 
+### 31.10 LLM installation instruction placement
+
+**Recommendation:** place the full normative policy in application-owned system/developer context and a short trigger reminder in the installer tool description and capability map. Do not place it only in `SKILL.md`, user-visible help text, or repository content.
+
+### 31.11 Generic-tool fallback
+
+**Recommendation:** block shell/file acquisition and registration after high-confidence install intent. Permit a fallback only through a typed `manual-action-required` transition with an exact operation, approval boundary, verification, and rollback plan.
+
 ## 32. Definition of Done
 
 This feature is complete only when:
 
 - Natural-language install intent routes to one deterministic installation workflow.
+- The application injects one versioned install/invoke/execute routing policy before repository-authored context.
+- `skill_install_prepare` is available on the first model round for explicit install intent and never requires generic catalog search.
+- Installer deferred-load races are recovered through one transparent replay without creating a duplicate session.
+- Generic shell/file installation fallbacks are blocked unless a typed manual-action transition explicitly permits them.
+- All installer lifecycle calls after prepare require a valid session ID and follow `next_action`.
+- Ordinary tool arguments reject credentials and route secret collection through secure renderer IPC.
 - Shell and file tools share the approved conversation workspace.
 - Missing workspace never silently becomes the user home directory.
 - Windows PowerShell, cmd, and Git output tests pass on a real Windows runner.

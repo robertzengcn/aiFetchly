@@ -9,6 +9,7 @@
 | Product requirement | [Natural-Language Skill Installation and Portable Skill Runtime PRD](./natural-language-skill-installation-prd.md) |
 | Platforms           | Windows, macOS, Linux                                                                                              |
 | Last updated        | 2026-08-23                                                                                                         |
+| Design revision     | v1.1                                                                                                               |
 
 ## 1. Purpose
 
@@ -21,6 +22,8 @@ natural-language requests. It addresses four coupled problems:
    prompt-skill format used by other agents.
 4. Installation is currently an emergent sequence of generic tool calls rather
    than a durable, typed, resumable workflow.
+5. The application does not give the model a normative install-versus-invoke
+   routing policy or enforce that boundary before generic tool execution.
 
 The core decision is to introduce an installation control plane. The model
 expresses intent and selects bounded options; typed services acquire, inspect,
@@ -54,43 +57,51 @@ tools remain available for ordinary work but do not coordinate installation.
 
 ### 2.3 PRD traceability
 
-| Requirement | Technical design coverage                                                   |
-| ----------- | --------------------------------------------------------------------------- |
-| FR-01       | Section 8 typed model-facing installation tools                             |
-| FR-02       | Sections 5.3, 8.4, and 14 session identity, state, lease, and persistence   |
-| FR-03       | Section 9 app-owned acquisition and immutable provenance                    |
-| FR-04       | Section 9.3 instruction precedence and hashes                               |
-| FR-05       | Sections 5.2 and 9.3 deterministic classification/discovery                 |
-| FR-06       | Section 8.3 immutable reviewable plan                                       |
-| FR-07       | Sections 10 and 11.4 separate prompt catalog and legacy routing             |
-| FR-08       | Section 10 first-class prompt runtime                                       |
-| FR-09       | Sections 10.2 and 11 stable base directory and compatibility variables      |
-| FR-10       | Section 11.2 cross-platform managed copy                                    |
-| FR-11       | Sections 10.4 and 11.3 symlink/junction lifecycle                           |
-| FR-12       | Section 6 shared conversation context                                       |
-| FR-13       | Sections 6.3 and 10.3 resource capabilities and separate execution approval |
-| FR-14       | Section 12 typed dependencies and multi-probe verification                  |
-| FR-15       | Sections 5.3, 8.4, 13, and 15 pause/resume and recovery                     |
-| FR-16       | Section 13 fail-closed storage and per-process injection                    |
-| FR-17       | Section 18 readiness verification levels                                    |
-| FR-18       | Sections 2.2 and 18.1 explicit ready-and-stop contract                      |
-| FR-19       | Sections 8.2, 8.4, 11, and 16 lifecycle and rollback                        |
-| FR-20       | Section 19 structured errors, progress, and metrics                         |
-| FR-21       | Sections 10.3 and 10.4 universal invocation and bounded catalog             |
-| FR-22       | Sections 10.5 and 10.6 hidden normalized context delivery                   |
-| FR-23       | Section 10.10 invoked-skill persistence, compaction, and recovery           |
-| FR-24       | Sections 10.7 and 10.8 token budgets and progressive resource loading       |
-| FR-25       | Sections 10.11 and 17 legacy documentation-tool compatibility               |
-| NFR-01      | Sections 5.3 and 8 state revisions, idempotency, and leases                 |
-| NFR-02      | Section 7 required cross-platform output contract and Windows matrix        |
-| NFR-03      | Section 13 secret isolation and redaction                                   |
-| NFR-04      | Section 9.2 bounded acquisition and inspection                              |
-| NFR-05      | Sections 6.3, 11, and 16 canonical path and ownership safety                |
-| NFR-06      | Sections 10 and 11.4 backward-compatible runtime split                      |
-| NFR-07      | Sections 8.2 and 15 AI-gated thin IPC handlers                              |
-| NFR-08      | Sections 20.3 and 21.4 six-language UI and component tests                  |
-| NFR-09      | Sections 10.3 and 10.7 metadata-only discovery and aggregate token budgets  |
-| NFR-10      | Sections 10.12 and 16 load-time no-side-effect security rules               |
+| Requirement | Technical design coverage                                                            |
+| ----------- | ------------------------------------------------------------------------------------ |
+| FR-01       | Section 8 typed model-facing installation tools                                      |
+| FR-02       | Sections 5.3, 8.4, and 14 session identity, state, lease, and persistence            |
+| FR-03       | Section 9 app-owned acquisition and immutable provenance                             |
+| FR-04       | Section 9.3 instruction precedence and hashes                                        |
+| FR-05       | Sections 5.2 and 9.3 deterministic classification/discovery                          |
+| FR-06       | Section 8.3 immutable reviewable plan                                                |
+| FR-07       | Sections 10 and 11.4 separate prompt catalog and legacy routing                      |
+| FR-08       | Section 10 first-class prompt runtime                                                |
+| FR-09       | Sections 10.2 and 11 stable base directory and compatibility variables               |
+| FR-10       | Section 11.2 cross-platform managed copy                                             |
+| FR-11       | Sections 10.4 and 11.3 symlink/junction lifecycle                                    |
+| FR-12       | Section 6 shared conversation context                                                |
+| FR-13       | Sections 6.3 and 10.3 resource capabilities and separate execution approval          |
+| FR-14       | Section 12 typed dependencies and multi-probe verification                           |
+| FR-15       | Sections 5.3, 8.4, 13, and 15 pause/resume and recovery                              |
+| FR-16       | Section 13 fail-closed storage and per-process injection                             |
+| FR-17       | Section 18 readiness verification levels                                             |
+| FR-18       | Sections 2.2 and 18.1 explicit ready-and-stop contract                               |
+| FR-19       | Sections 8.2, 8.4, 11, and 16 lifecycle and rollback                                 |
+| FR-20       | Section 19 structured errors, progress, and metrics                                  |
+| FR-21       | Sections 10.3 and 10.4 universal invocation and bounded catalog                      |
+| FR-22       | Sections 10.5 and 10.6 hidden normalized context delivery                            |
+| FR-23       | Section 10.10 invoked-skill persistence, compaction, and recovery                    |
+| FR-24       | Sections 10.7 and 10.8 token budgets and progressive resource loading                |
+| FR-25       | Sections 10.11 and 17 legacy documentation-tool compatibility                        |
+| FR-26       | Sections 8.5 and 17.2 application-owned installation routing instruction             |
+| FR-27       | Sections 8.5 and 10 install/invoke/execute intent boundary                           |
+| FR-28       | Sections 8.6 and 8.7 always-loaded installer and transparent hydration               |
+| FR-29       | Sections 5.3, 8.2, and 8.6 session and `next_action` correlation                     |
+| FR-30       | Section 8.6 install-intent tool-policy enforcement                                   |
+| FR-31       | Sections 8.6 and 13 secret schema rejection and secure channel                       |
+| NFR-01      | Sections 5.3 and 8 state revisions, idempotency, and leases                          |
+| NFR-02      | Section 7 required cross-platform output contract and Windows matrix                 |
+| NFR-03      | Section 13 secret isolation and redaction                                            |
+| NFR-04      | Section 9.2 bounded acquisition and inspection                                       |
+| NFR-05      | Sections 6.3, 11, and 16 canonical path and ownership safety                         |
+| NFR-06      | Sections 10 and 11.4 backward-compatible runtime split                               |
+| NFR-07      | Sections 8.2 and 15 AI-gated thin IPC handlers                                       |
+| NFR-08      | Sections 20.3 and 21.4 six-language UI and component tests                           |
+| NFR-09      | Sections 10.3 and 10.7 metadata-only discovery and aggregate token budgets           |
+| NFR-10      | Sections 10.12 and 16 load-time no-side-effect security rules                        |
+| NFR-11      | Sections 8.5, 9.3, and 16 repository-content authority boundary                      |
+| NFR-12      | Sections 8.5-8.7 and 19 versioned policy, metrics, and model-independent enforcement |
 
 ## 3. Current-State Findings
 
@@ -162,13 +173,39 @@ display name must be distinct.
 before packaged builds can safely accept incremental migrations. New persistence
 must not ship as an isolated migration before that baseline.
 
+### 3.6 Installation routing is prompt-only by accident and not enforced
+
+`BuiltInToolCapabilitiesPromptSection` tells the model how to discover deferred
+capabilities, while `ToolLoadPolicyService` decides which schemas are exposed.
+The current capability map has no typed skill-install entry. When that tool is
+not visible, its generic guidance encourages `tool_catalog_search`; the model
+then discovers shell or file tools and invents a clone/copy workflow.
+
+`AIChatQueryLoop` also handles an unknown deferred tool by returning a failed
+tool result that says it has been loaded and asks the model to retry. That
+behavior is observable in the supplied conversation. It wastes a model round,
+turns a catalog implementation detail into an apparent user failure, and can
+duplicate mutations if the original call reached a provider boundary before
+the retry.
+
+The design therefore needs both an application-owned model instruction and a
+runtime tool policy. Prompt text selects the correct semantic path. Catalog,
+session, schema, and executor guards keep the path safe if the model ignores or
+misunderstands the text.
+
 ## 4. Architecture Overview
 
 ```text
 Natural-language request
         |
         v
-AI intent and typed install tools
+SkillInstallationRoutingPromptSection
+        |
+        v
+SkillInstallIntentGuard -> ToolLoadPolicyService / ToolCatalogService
+        |
+        v
+AI intent and typed install tools -> SkillInstallationToolPolicy
         |
         v
 SkillInstallationModule <------ Review / approval / secure-secret UI
@@ -199,6 +236,13 @@ The main process owns policy, approval, persistence, secret access, and registry
 mutation. Utility processes perform acquisition, hashing, and native dependency
 commands. The renderer sends validated IPC and renders progress. Utility
 processes never access SQLite.
+
+The prompt builder owns model guidance; it does not authorize operations. The
+intent guard only makes a deterministic decision for high-confidence explicit
+skill lifecycle requests. The tool policy enforces which operations are legal
+for the current installation session and its `next_action`. The existing
+workspace, shell, permission, and approval services remain responsible for
+their own boundaries.
 
 ## 5. Core Domain Model
 
@@ -470,7 +514,6 @@ Expose a small typed surface:
 ```text
 skill_install_prepare
 skill_install_approve
-skill_install_submit_secret
 skill_install_status
 skill_install_cancel
 skill_install_repair
@@ -480,6 +523,11 @@ skill_install_update
 `prepare` may acquire and inspect but stops before approval-required mutations.
 `approve` accepts a session id and plan revision, not arbitrary commands. The
 server reloads the persisted typed plan and executes validated operations.
+
+`skill_install_submit_secret` is intentionally absent from the model-facing
+surface. `SkillInstallationModule.submitSecret` is reachable only through the
+dedicated validated renderer-to-main secure IPC flow after the session returns
+`provide-secret-securely`.
 
 ### 8.2 Module API
 
@@ -542,6 +590,219 @@ Rollback removes the incomplete activation, restores prior activation and
 registry snapshot, reverts metadata, deletes session-only secrets, and retains
 shared system dependencies. Failure becomes `rollback_required` and never
 reports ready.
+
+### 8.5 Application-owned installation routing policy
+
+Create `SkillInstallationRoutingPromptSection.ts` as the single versioned source
+for the full model instruction and compact capability reminder. The full
+instruction is appended by `AIChatContextAssembler` as application-owned system
+or developer context, after core application safety policy and before any
+repository-authored or invoked-skill content. It is injected exactly once for
+new, resumed, compacted, plan, and scheduled turns.
+
+Normative content:
+
+```text
+Skill installation policy
+
+When the user asks to install, set up, register, update, repair, or configure a
+skill from a repository URL or local package:
+
+1. Call skill_install_prepare with the source and the user's non-secret
+   constraints.
+2. Do not clone the repository using shell_execute or manually copy it with file
+   tools.
+3. Do not search the tool catalog for Git or filesystem tools first.
+4. Continue the installation using the returned session_id and next_action.
+5. Never accept API keys through chat or ordinary tool arguments. Request the
+   secure credential input when the installation enters awaiting-secret.
+6. Do not execute the installed skill unless the user separately asks to use it.
+7. When next_action is ready, report readiness and follow the user's requested
+   terminal behavior.
+
+Use use_skill only to invoke an already installed prompt skill. It does not
+install, update, repair, or configure skill packages.
+```
+
+The implementation may compress whitespace or wording, but a snapshot test
+must assert each semantic rule. Keep the content provider-neutral: do not name
+Claude, Codex, OpenAI message roles, or a provider-specific skills directory.
+`SKILL.md`, `install.md`, compact summaries, plugin prompts, tool results, and
+user attachments cannot mutate this constant.
+
+The same source exports a shorter reminder for
+`BuiltInToolCapabilitiesPromptSection` and the `skill_install_prepare` tool
+description:
+
+```text
+Install/setup/register/update/repair a skill package: call
+skill_install_prepare directly. It owns acquisition and activation. Do not use
+shell/file tools, do not search for Git first, and never pass secrets.
+```
+
+The runtime intent taxonomy is:
+
+```typescript
+export type SkillRequestIntent =
+  | "install-package"
+  | "update-package"
+  | "repair-package"
+  | "configure-package"
+  | "invoke-prompt-skill"
+  | "execute-skill"
+  | "manage-installation"
+  | "unrelated";
+
+export interface SkillRoutingDecision {
+  readonly policyVersion: 1;
+  readonly intent: SkillRequestIntent;
+  readonly confidence: "explicit" | "semantic" | "ambiguous";
+  readonly source?: NormalizedSkillSource;
+  readonly installationId?: SkillInstallationId;
+  readonly allowedEntryPoint:
+    | "skill_install_prepare"
+    | "skill_install_session_action"
+    | "use_skill"
+    | "executable-skill-tool"
+    | "normal-tool-policy";
+  readonly reasonCode: string;
+}
+```
+
+The deterministic guard returns `explicit` only when the user combines a skill,
+plugin, repository, agent capability, setup, or registration signal with one of:
+
+- a supported repository URL, local package reference, or attachment;
+- an installed skill identity; or
+- an unmistakable lifecycle phrase such as “repair the installed X skill”.
+
+It must not claim ordinary “install Node dependencies”, “clone my repository”,
+or “configure ffmpeg for this project” requests. Semantic and ambiguous cases
+remain available to normal model routing and clarification; only explicit cases
+activate the blocking policy below.
+
+### 8.6 Install-intent tool policy and session correlation
+
+Create `SkillInstallationToolPolicy` and apply it in `AIChatQueryEngine` before
+the first catalog filter and in `AIChatQueryLoop` before every tool execution.
+This is a request-scoped allow/deny decision, not a replacement for existing
+permission checks.
+
+For an explicit package-install intent with no session, force
+`skill_install_prepare` into the exposed tools and reject these uses when their
+arguments target the requested package or installation destination:
+
+```text
+tool_catalog_search for Git/filesystem installation substitutes
+shell_execute clone/package setup/copy/link/register commands
+file_write or file_edit under staging or ~/.aifetchly/skills
+glob_files or file_read used as a substitute for installer acquisition/inspection
+use_skill used to install, update, repair, or configure a package
+```
+
+Read-only file tools remain legal for unrelated workspace work. The policy must
+use the routing decision, session state, normalized target, and tool arguments;
+it must not globally disable shell or file tools merely because the conversation
+contains the word “install”. A blocked call returns a stable
+`INSTALL_GENERIC_TOOL_FALLBACK_BLOCKED` result that names the typed next entry
+point without leaking paths or repository content.
+
+After `prepare`, every lifecycle request carries `session_id`; approval also
+carries `plan_revision`. The module loads persisted state and returns a snapshot
+containing exactly one `next_action`:
+
+```typescript
+export type SkillInstallNextAction =
+  | "inspect-in-progress"
+  | "review-plan"
+  | "approve-plan"
+  | "approve-dependency"
+  | "provide-secret-securely"
+  | "resume"
+  | "retry"
+  | "manual-action-required"
+  | "ready"
+  | "terminal-error";
+```
+
+The model may call only the operation mapped to that action. Missing session,
+stale plan revision, illegal transition, and cross-conversation session use are
+rejected before mutation. A duplicate `prepare` resolves the normalized
+installation identity: resume the active session, report the verified ready
+installation, or create one new session. It never creates a second checkout
+because the model retried.
+
+`manual-action-required` is the sole generic fallback escape. Its payload must
+contain a typed operation, why no provider can perform it, exact permission,
+expected evidence, rollback behavior, and whether user interaction happens
+outside AiFetchly. The user must approve it. Repository prose alone cannot
+create this state.
+
+Secrets are excluded at three layers:
+
+1. Zod/OpenAI schemas for `skill_install_prepare`, status, approval, retry, and
+   repair have no arbitrary environment or credential value fields.
+2. A deep secret-shape validator rejects known credential keys, bearer tokens,
+   private keys, and high-confidence secret values in unknown extension fields.
+3. `provide-secret-securely` emits a renderer action keyed by session and
+   credential requirement. The value travels through dedicated secure IPC to
+   `SkillCredentialModule`, never back through model messages or tool JSON.
+
+### 8.7 Tool availability and transparent hydration
+
+`skill_install_prepare` is classified `always` by `ToolLoadPolicyService` while
+the feature is enabled. This is preferable to intent-only promotion because the
+schema is small, installation language is varied, and the failure cost is high.
+The remaining session actions may be contextual and forced by active session
+state. `use_skill` remains separately available for daily prompt-skill use.
+
+`ToolCatalogService.filterForRound` receives `forcedToolNames` derived from the
+routing decision and active session. It must expose the forced installer even
+in deferred mode. `tool_catalog_search` descriptions and capability tables must
+not suggest shell or filesystem discovery for skill installation.
+
+Providers can still race with local catalog state. Add a
+`DeferredToolHydrationCoordinator` at the executor/provider boundary:
+
+```typescript
+export interface DeferredToolHydrationResult {
+  readonly hydrated: boolean;
+  readonly replayed: boolean;
+  readonly replayCount: 0 | 1;
+  readonly toolName: string;
+  readonly callFingerprint: string;
+}
+```
+
+When an allowed installer call returns the provider's “deferred tool loaded”
+sentinel before any mutation result, hydrate and replay the same validated call
+once internally. Preserve its tool-call identity or correlate the replay as an
+internal attempt; emit one user-visible tool result. Never ask the model to
+reconstruct arguments. Do not replay after a timeout, unknown execution state,
+partial mutation, or any result lacking the exact sentinel. The installation
+identity and idempotency key protect against duplicate sessions even during a
+provider fault.
+
+One hydration replay, the session retry cap, and the repeated-normalized-cause
+cap are separate counters. Exhaustion returns
+`INSTALL_TOOL_LOAD_RETRY_EXHAUSTED`; it never falls through to shell/file tools.
+
+The first-turn flow is:
+
+```text
+user request
+  -> SkillInstallIntentGuard
+  -> force skill_install_prepare into catalog
+  -> model calls skill_install_prepare
+  -> SkillInstallationToolPolicy validates non-secret args
+  -> optional internal hydrate + one replay
+  -> SkillInstallationModule.prepare
+  -> { session_id, state, next_action, safe_summary }
+  -> next model round follows next_action
+  -> secure UI / approval / typed worker as required
+  -> ready
+  -> assistant reports ready and stops
+```
 
 ## 9. Acquisition and Inspection
 
@@ -1208,6 +1469,18 @@ cancel an approved installation.
 | Local dependency catalog | app-trusted                 | validated/versioned             |
 | Credential plaintext     | highly sensitive            | transient main-process handling |
 
+Application-owned routing instructions are trusted policy, but they are not an
+authorization token. Repository instructions, prompt-skill context, compacted
+summaries, and model output are lower-authority untrusted inputs. The assembler
+must preserve this ordering, and `SkillInstallationToolPolicy` must reach the
+same allow/deny result even when the model attempts the forbidden tool directly.
+
+Adversarial fixtures must cover repository text that asks the model to clone via
+shell, copy into `~/.aifetchly/skills`, reveal an API key in chat, call
+`use_skill` as an installer, ignore `next_action`, or claim installation is
+ready. None of these strings may change policy, plan approval, session state, or
+tool exposure.
+
 Approval binds to exact source revision, instruction hashes, activation target,
 permissions, dependencies, command templates, elevation, lifecycle scripts, and
 persistent credential choice. Any relevant change invalidates approval.
@@ -1258,6 +1531,15 @@ legacy delivery without uninstalling or rewriting skill packages.
 
 ### 17.2 Chat-query integration
 
+`AIChatContextAssembler` first inserts the versioned
+`SkillInstallationRoutingPromptSection` in application-owned context.
+`AIChatQueryEngine` evaluates `SkillInstallIntentGuard` against the current user
+message and known installation state before catalog filtering. An explicit
+decision forces `skill_install_prepare`; active sessions force only the action
+permitted by `next_action`. `AIChatQueryLoop` applies
+`SkillInstallationToolPolicy` before its existing deferred-tool branch so a
+generic substitute cannot execute first.
+
 `AIChatQueryEngine` requests metadata from `PromptSkillCatalogPresenter` and
 adds one `use_skill` definition to normal and resumed plan turns.
 `AIChatQueryLoop` recognizes a successful prompt invocation result, appends the
@@ -1301,17 +1583,27 @@ Only all required levels passing transitions to `ready`.
 
 ### 18.1 Video-use acceptance fixture
 
-1. Acquire the repository into session staging.
-2. Read `install.md` before deriving mutation plan.
-3. Inspect `SKILL.md` and helper inventory without executing helpers.
-4. Probe `ffmpeg` and `ffprobe` independently.
-5. Offer catalog-backed dependency installation only when missing.
-6. Activate under `~/.aifetchly/skills` using approved mode.
-7. Request `ELEVENLABS_API_KEY` through secure input.
-8. Persist only an opaque binding.
-9. Resolve through `PromptSkillCatalog`.
-10. Report ready and stop.
-11. Never transcribe or modify footage until a later explicit request.
+1. Classify the request as explicit install intent and expose
+   `skill_install_prepare` without catalog search.
+2. Make `skill_install_prepare` the first assistant tool call and persist its
+   returned session ID.
+3. Acquire the repository into session staging.
+4. Read `install.md` before deriving mutation plan.
+5. Inspect `SKILL.md` and helper inventory without executing helpers.
+6. Probe `ffmpeg` and `ffprobe` independently.
+7. Offer catalog-backed dependency installation only when missing.
+8. Activate under `~/.aifetchly/skills` using approved mode.
+9. Request `ELEVENLABS_API_KEY` through secure input.
+10. Persist only an opaque binding.
+11. Carry the same session ID and follow `next_action` through readiness.
+12. Resolve through `PromptSkillCatalog`.
+13. Report ready and stop.
+14. Never transcribe or modify footage until a later explicit request.
+
+The fixture fails if shell, file, glob, or tool-catalog search is called for
+installation before prepare. A separate provider-race variant must hydrate and
+replay prepare internally once, still producing one session and one visible
+successful tool result.
 
 Routine CI uses a local fixture mirror. A separate network test may verify GitHub
 compatibility without depending on a mutable external repository.
@@ -1349,6 +1641,12 @@ ACTIVATION_VERIFICATION_FAILED
 REGISTRY_COLLISION
 WORKER_CRASHED
 PROCESS_OUTPUT_EMPTY_UNEXPECTED
+INSTALL_ROUTING_REQUIRED
+INSTALL_SESSION_REQUIRED
+INSTALL_PLAN_REVISION_STALE
+INSTALL_SECRET_CHANNEL_REQUIRED
+INSTALL_GENERIC_TOOL_FALLBACK_BLOCKED
+INSTALL_TOOL_LOAD_RETRY_EXHAUSTED
 ROLLBACK_FAILED
 ```
 
@@ -1364,6 +1662,14 @@ section-selected load rate, duplicate invocation suppression, hidden-context
 injection failure, compaction restoration, legacy-adapter calls, and resource
 read follow-through. Metrics contain runtime category and counts, not instruction
 text, user requests, paths, or arguments.
+
+Routing metrics record policy version, classified intent, confidence, exposed
+entry point, first tool category, blocked fallback category, hydration replay
+count, session reuse, and terminal `next_action`. They must not record raw user
+text, repository URLs, tool arguments, secret detection samples, or absolute
+paths. Alert on any explicit install request whose first tool is shell/file/tool
+search, any installer hydration replay above one, or any accepted lifecycle call
+without session correlation.
 
 ## 20. File-Level Implementation Plan
 
@@ -1384,24 +1690,28 @@ text, user requests, paths, or arguments.
 
 ### 20.2 Installation and prompt runtime
 
-| File                                           | Responsibility                               |
-| ---------------------------------------------- | -------------------------------------------- |
-| `src/entityTypes/skillInstallationTypes.ts`    | Session, plan, source, dependency types.     |
-| `src/entityTypes/promptSkillTypes.ts`          | Prompt manifest, catalog, resource types.    |
-| `src/service/SkillSourceAcquisitionService.ts` | Acquisition policy and worker orchestration. |
-| `src/service/SkillPackageInspectionService.ts` | Discovery, parsing, classification, hashes.  |
-| `src/service/SkillInstallPlanner.ts`           | Immutable typed plan.                        |
-| `src/service/SkillActivationService.ts`        | Copy/link/junction and rollback.             |
-| `src/service/SkillInstallationVerifier.ts`     | Readiness probes.                            |
-| `src/service/PromptSkillCatalog.ts`            | Scoped source-aware registry.                |
-| `src/service/PromptSkillCatalogPresenter.ts`   | Bounded model-facing metadata catalog.       |
-| `src/service/PromptSkillLoader.ts`             | Bounded `SKILL.md` parsing.                  |
-| `src/service/PromptSkillInvocationService.ts`  | Resolve, normalize, persist, and inject.     |
-| `src/service/PromptSkillContextAssembler.ts`   | Build verified hidden context attachments.   |
-| `src/service/PromptSkillTokenBudgetService.ts` | Model-aware section selection and estimates. |
-| `src/service/PromptSkillResourceService.ts`    | Relative resource operations.                |
-| `src/modules/SkillInstallationModule.ts`       | State machine and business transaction.      |
-| `src/modules/PromptSkillInvocationModule.ts`   | Durable conversation invocation state.       |
+| File                                                   | Responsibility                                           |
+| ------------------------------------------------------ | -------------------------------------------------------- |
+| `src/entityTypes/skillInstallationTypes.ts`            | Session, plan, source, dependency types.                 |
+| `src/entityTypes/promptSkillTypes.ts`                  | Prompt manifest, catalog, resource types.                |
+| `src/service/SkillSourceAcquisitionService.ts`         | Acquisition policy and worker orchestration.             |
+| `src/service/SkillPackageInspectionService.ts`         | Discovery, parsing, classification, hashes.              |
+| `src/service/SkillInstallPlanner.ts`                   | Immutable typed plan.                                    |
+| `src/service/SkillActivationService.ts`                | Copy/link/junction and rollback.                         |
+| `src/service/SkillInstallationVerifier.ts`             | Readiness probes.                                        |
+| `src/service/SkillInstallationRoutingPromptSection.ts` | Versioned full policy and compact capability reminder.   |
+| `src/service/SkillInstallIntentGuard.ts`               | High-confidence install/invoke/execute routing decision. |
+| `src/service/SkillInstallationToolPolicy.ts`           | Request/session-scoped installer tool allow/deny rules.  |
+| `src/service/DeferredToolHydrationCoordinator.ts`      | One-shot internal hydration and replay.                  |
+| `src/service/PromptSkillCatalog.ts`                    | Scoped source-aware registry.                            |
+| `src/service/PromptSkillCatalogPresenter.ts`           | Bounded model-facing metadata catalog.                   |
+| `src/service/PromptSkillLoader.ts`                     | Bounded `SKILL.md` parsing.                              |
+| `src/service/PromptSkillInvocationService.ts`          | Resolve, normalize, persist, and inject.                 |
+| `src/service/PromptSkillContextAssembler.ts`           | Build verified hidden context attachments.               |
+| `src/service/PromptSkillTokenBudgetService.ts`         | Model-aware section selection and estimates.             |
+| `src/service/PromptSkillResourceService.ts`            | Relative resource operations.                            |
+| `src/modules/SkillInstallationModule.ts`               | State machine and business transaction.                  |
+| `src/modules/PromptSkillInvocationModule.ts`           | Durable conversation invocation state.                   |
 
 Update global/workspace scanners to discover links and prompt skills, and update
 the watcher to monitor canonical linked targets explicitly.
@@ -1426,6 +1736,13 @@ Chat integration also updates `AIChatQueryEngine`, `AIChatQueryLoop`,
 the legacy documentation handlers in `SkillImportService` and
 `PluginImportService`. Put message ordering in one shared helper so streaming
 implementations cannot diverge.
+
+`BuiltInToolCapabilitiesPromptSection` gains the compact routing reminder.
+`ToolLoadPolicyService` marks `skill_install_prepare` always loaded behind the
+installer feature flag. `ToolCatalogService` forces session actions and removes
+generic installation fallback hints. The prompt section, intent guard, and tool
+policy share a policy-version constant so telemetry and snapshot tests detect
+drift.
 
 UI implementation and its component tests must ship together.
 
@@ -1452,6 +1769,14 @@ UI implementation and its component tests must ship together.
 - same-hash idempotency and changed-hash revision behavior;
 - prompt loading has no process, hook, helper, or network side effects;
 - resource reads remain within the selected runtime root.
+- full and compact installation-policy prompt snapshots contain every normative rule exactly once;
+- explicit install/setup/register/update/repair/configure phrases plus supported sources route to `skill_install_prepare`;
+- install, `use_skill`, executable execution, and unrelated dependency/Git intents remain distinct;
+- explicit install intent forces the installer into a deferred catalog without exposing shell/file substitutes;
+- tool policy blocks target-related clone, copy, link, register, and package-setup work but permits unrelated workspace tools;
+- ordinary installer schemas reject credential keys, bearer tokens, private-key material, and secret-shaped extension values;
+- `next_action` maps to exactly one permitted lifecycle operation;
+- hydration replays only the exact sentinel, only before mutation, and at most once.
 
 ### 21.2 Platform provider
 
@@ -1478,6 +1803,12 @@ cancellation, cwd, and essential environment. Windows cases are mandatory.
 - parent/subagent invocation state remains isolated;
 - conversation deletion clears invocation state through Module/Model layers;
 - legacy documentation handlers produce the same invocation attachment.
+- the first assistant tool for the video-use request is `skill_install_prepare`;
+- a deferred-provider race produces one internal replay, one user-visible result, and one persisted session;
+- missing, stale, or cross-conversation session IDs fail before Model/worker mutation;
+- active and ready duplicate prepare requests resume or report rather than reacquire;
+- adversarial repository instructions cannot change routing or secret collection;
+- `manual-action-required` is impossible without a typed provider result and user approval.
 
 ### 21.4 UI and E2E
 
@@ -1491,12 +1822,20 @@ stopping at ready, Windows output, rollback, lazy `use_skill` invocation,
 token-constrained progressive resource reads, compaction recovery, linked-skill
 change notification, and legacy-wrapper delegation.
 
+Add E2E assertions for no shell/file/catalog detour before prepare, secure-input
+rejection when an API key is pasted into ordinary arguments, internal deferred
+hydration recovery, session ID propagation through every step, and “ready then
+wait” terminal behavior. Add negative flows for ordinary project Git clones and
+dependency installation to prove the intent guard does not overreach.
+
 ## 22. Delivery Phases
 
 ### Phase 0: Evidence
 
 Add Windows probes, a shell/file mismatch regression, local prompt fixtures, and
-the error/event contract. Exit when failures reproduce without network access.
+the error/event contract. Add installation-policy snapshots, intent-boundary
+fixtures, adversarial repository prose, and first-tool telemetry. Exit when
+failures reproduce without network access.
 
 ### Phase 1: Shared filesystem context
 
@@ -1523,7 +1862,10 @@ restores it exactly once.
 ### Phase 4: Read-only prepare
 
 Add acquisition, inspection, planning, session persistence, and review UI with
-no mutations. Exit when plans are accurate and survive restart.
+no mutations. Add the application-owned prompt section, always-loaded prepare
+tool, deterministic explicit-intent guard, session tool policy, and one-shot
+hydration coordinator. Exit when plans are accurate, survive restart, and every
+explicit fixture reaches prepare without a generic-tool detour.
 
 ### Phase 5: Mutation and rollback
 
@@ -1544,25 +1886,30 @@ and system dependencies. Exit when PRD reliability/security metrics pass.
 
 ## 23. Decisions
 
-| Decision               | Choice                                   | Reason                                      |
-| ---------------------- | ---------------------------------------- | ------------------------------------------- |
-| Coordinator            | Typed module/state machine               | Prevent retries and partial success claims. |
-| Filesystem             | Immutable conversation context           | All tools observe one world.                |
-| Prompt runtime         | Separate catalog                         | Instructions are not executable manifests.  |
-| Prompt discovery       | Metadata only                            | Unused skills do not consume context.       |
-| Prompt invocation      | One universal `use_skill` tool           | Stable routing and lower tool-schema cost.  |
-| Instruction delivery   | Short tool result plus hidden context    | Instructions remain behavioral context.     |
-| Context retention      | Persist verified normalized snapshot     | Compaction cannot silently drop/change it.  |
-| Instruction sizing     | Model-aware section selection            | Avoid unsafe raw character truncation.      |
-| Default activation     | Managed copy                             | Portable and predictable.                   |
-| Development activation | Symlink, then Windows junction           | Live editing without target deletion.       |
-| Prompt directory       | `~/.aifetchly/skills`                    | Stable agent-visible convention.            |
-| Executable directory   | Keep `userData/installed_skills`         | Preserve existing environments.             |
-| Windows process        | Dedicated provider, non-detached default | Testable lifecycle and capture.             |
-| Secrets                | Fail-closed OS encryption                | No plaintext downgrade.                     |
-| Database               | Baseline before feature migration        | Current registry has no safe baseline.      |
-| Dependencies           | Validated catalog                        | Repo prose cannot choose elevated commands. |
-| Completion             | Independent probes                       | Exit zero is insufficient.                  |
+| Decision               | Choice                                            | Reason                                          |
+| ---------------------- | ------------------------------------------------- | ----------------------------------------------- |
+| Coordinator            | Typed module/state machine                        | Prevent retries and partial success claims.     |
+| Filesystem             | Immutable conversation context                    | All tools observe one world.                    |
+| Prompt runtime         | Separate catalog                                  | Instructions are not executable manifests.      |
+| Prompt discovery       | Metadata only                                     | Unused skills do not consume context.           |
+| Prompt invocation      | One universal `use_skill` tool                    | Stable routing and lower tool-schema cost.      |
+| Instruction delivery   | Short tool result plus hidden context             | Instructions remain behavioral context.         |
+| Context retention      | Persist verified normalized snapshot              | Compaction cannot silently drop/change it.      |
+| Instruction sizing     | Model-aware section selection                     | Avoid unsafe raw character truncation.          |
+| Default activation     | Managed copy                                      | Portable and predictable.                       |
+| Development activation | Symlink, then Windows junction                    | Live editing without target deletion.           |
+| Prompt directory       | `~/.aifetchly/skills`                             | Stable agent-visible convention.                |
+| Executable directory   | Keep `userData/installed_skills`                  | Preserve existing environments.                 |
+| Windows process        | Dedicated provider, non-detached default          | Testable lifecycle and capture.                 |
+| Secrets                | Fail-closed OS encryption                         | No plaintext downgrade.                         |
+| Database               | Baseline before feature migration                 | Current registry has no safe baseline.          |
+| Dependencies           | Validated catalog                                 | Repo prose cannot choose elevated commands.     |
+| Completion             | Independent probes                                | Exit zero is insufficient.                      |
+| Install model guidance | Application-owned versioned policy                | Repository prompts cannot define routing.       |
+| Installer availability | Always-loaded prepare; contextual session actions | Avoid search detours at small schema cost.      |
+| Install enforcement    | Intent plus session-scoped tool policy            | Prompt compliance is not a security boundary.   |
+| Deferred recovery      | One transparent validated replay                  | Hide catalog races without duplicate mutation.  |
+| Generic fallback       | Typed `manual-action-required` only               | Preserve escape hatch with review and evidence. |
 
 ## 24. Open Engineering Questions
 
@@ -1581,6 +1928,11 @@ and system dependencies. Exit when PRD reliability/security metrics pass.
    for attachments, tools, and one completion across supported model windows?
 10. Should an active linked skill update require explicit user reload in every
     case, or may unchanged-permission updates reload automatically between turns?
+11. Which provider adapters can preserve a tool-call ID during transparent
+    hydration replay, and which require an internal correlation ID?
+12. Should the intent guard initially ship English-only deterministic patterns
+    plus model semantic routing, or include all six UI languages before beta?
+    Recommendation: cover all six supported languages in fixtures before GA.
 
 ## 25. Definition of Done
 
@@ -1615,3 +1967,17 @@ and system dependencies. Exit when PRD reliability/security metrics pass.
 - UI text covers all six languages and ships with component tests.
 - The video-use fixture installs, verifies, reports ready, and stops without
   transcribing footage.
+- One application-owned, provider-neutral installation policy is present in all
+  new, resumed, compacted, plan, and scheduled model contexts.
+- Explicit install intent exposes `skill_install_prepare` on the first round and
+  blocks target-related generic shell/file/catalog substitutes.
+- Prompt invocation and executable execution remain separate from package
+  installation in both model guidance and runtime enforcement.
+- Installer hydration races replay internally at most once and never create a
+  duplicate session or model-visible retry failure.
+- Every post-prepare action is correlated to session ID, current state,
+  `next_action`, and plan revision where applicable.
+- Secret values are rejected by ordinary tool schemas and collected only through
+  dedicated secure IPC.
+- Adversarial repository content cannot alter the routing policy, tool boundary,
+  approval state, or terminal “ready and wait” behavior.
