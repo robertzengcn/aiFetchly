@@ -572,6 +572,31 @@ export interface OpenAIModelsResponse {
    * the frontend uses it to seed the model selector on first use.
    */
   default_model?: string;
+  /**
+   * Hosted AiFetchly small-model route capability, when reported by the
+   * server's `/api/ai/v1/models` endpoint. The `small`/`haiku` alias is a
+   * virtual route resolved server-side to the best healthy small setting;
+   * this metadata lets AiFetchly budget lightweight background workloads
+   * against the resolved model's real context window before sending.
+   * Absent on older servers and on local/custom providers.
+   */
+  small_model?: OpenAISmallModelCapability;
+}
+
+/**
+ * Capability metadata for the hosted virtual `small` model route. All fields
+ * are optional except `available`; malformed values are ignored by
+ * `normalizeModelsResponse` rather than rejecting the whole model list.
+ */
+export interface OpenAISmallModelCapability {
+  /** Whether a small model is configured and healthy in the current environment. */
+  readonly available: boolean;
+  /** The real model id that the `small` alias currently resolves to. */
+  readonly resolved_model?: string;
+  /** Usable input-plus-output context window for the resolved model. */
+  readonly context_size?: number;
+  /** Maximum supported output tokens for the resolved model. */
+  readonly max_tokens?: number;
 }
 
 /** OpenAI-compatible chat completion choice (non-streaming) */
@@ -2029,13 +2054,24 @@ export class AiChatApi {
     if (!this.isRecord(response)) {
       return { object: "list", data: [] };
     }
-    // Pass-through when already OpenAI-shaped.
+    // Pass-through when already OpenAI-shaped. Preserve top-level
+    // `default_model` and `small_model` metadata (previously this branch
+    // returned { object, data } only, dropping both).
     if (Array.isArray((response as { data?: unknown }).data)) {
       const obj = response as { object?: unknown; data: unknown[] };
-      return {
+      const result: OpenAIModelsResponse = {
         object: typeof obj.object === "string" ? obj.object : "list",
         data: obj.data as OpenAIModel[],
       };
+      const defaultModel = this.getStringField(response, "default_model");
+      if (defaultModel) {
+        result.default_model = defaultModel;
+      }
+      const smallModel = this.extractSmallModelCapability(response);
+      if (smallModel) {
+        result.small_model = smallModel;
+      }
+      return result;
     }
     const modelsRaw = (response as { models?: unknown }).models;
     if (!Array.isArray(modelsRaw)) {
@@ -2071,7 +2107,57 @@ export class AiChatApi {
     if (defaultModel) {
       result.default_model = defaultModel;
     }
+    const smallModel = this.extractSmallModelCapability(response);
+    if (smallModel) {
+      result.small_model = smallModel;
+    }
     return result;
+  }
+
+  /**
+   * Validate and extract the hosted `small_model` capability metadata from a
+   * `/api/ai/v1/models` response. Malformed optional fields are dropped
+   * silently — the model list must never be rejected because a capability
+   * field had the wrong shape. Returns the capability only when `available`
+   * is a boolean (the one required field); otherwise returns undefined so
+   * callers treat the small route as not-reported.
+   */
+  private extractSmallModelCapability(
+    response: unknown
+  ): OpenAISmallModelCapability | undefined {
+    if (!this.isRecord(response)) return undefined;
+    const raw = (response as { small_model?: unknown }).small_model;
+    if (!this.isRecord(raw)) return undefined;
+    const available = (raw as { available?: unknown }).available;
+    if (typeof available !== "boolean") return undefined;
+    const resolvedModel = this.getStringField(raw, "resolved_model");
+    const contextSize = this.getPositiveNumberField(raw, "context_size");
+    const maxTokens = this.getPositiveNumberField(raw, "max_tokens");
+    // Build immutably — the capability interface fields are readonly.
+    const capability: OpenAISmallModelCapability = {
+      available,
+      ...(resolvedModel ? { resolved_model: resolvedModel } : {}),
+      ...(contextSize !== undefined ? { context_size: contextSize } : {}),
+      ...(maxTokens !== undefined ? { max_tokens: maxTokens } : {}),
+    };
+    return capability;
+  }
+
+  /**
+   * Like {@link getNumberField} but requires a positive (> 0) value and
+   * returns undefined otherwise. Used for capability token fields where a
+   * non-positive or non-numeric value must be ignored, not surfaced.
+   */
+  private getPositiveNumberField(
+    obj: unknown,
+    field: string
+  ): number | undefined {
+    if (!this.isRecord(obj)) return undefined;
+    const value = (obj as Record<string, unknown>)[field];
+    if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+      return undefined;
+    }
+    return value;
   }
 
   /**
