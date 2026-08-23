@@ -1,6 +1,9 @@
 import { AIWorkspaceMemoryModule } from "@/modules/AIWorkspaceMemoryModule";
 import { log } from "@/modules/Logger";
 import type { WorkspaceMemoryScope } from "@/modules/AIWorkspaceMemoryModule";
+import { WorkspaceMemoryScopeModule } from "@/modules/WorkspaceMemoryScopeModule";
+import { PortableWorkspaceMemoryModule } from "@/modules/PortableWorkspaceMemoryModule";
+import type { WorkspaceMemoryScopeContext } from "@/entityTypes/portableWorkspaceMemoryTypes";
 import { AIWorkspaceMemoryConsolidationRunModule } from "@/modules/AIWorkspaceMemoryConsolidationRunModule";
 import {
   AIAutoDreamSourceCollector,
@@ -54,6 +57,8 @@ interface WorkspacePacketGroup {
 export class AIWorkspaceAutoDreamService {
   private readonly memoryModule = new AIWorkspaceMemoryModule();
   private readonly runModule = new AIWorkspaceMemoryConsolidationRunModule();
+  private readonly scopeModule = new WorkspaceMemoryScopeModule();
+  private readonly portableModule = new PortableWorkspaceMemoryModule();
   private readonly sourceCollector = new AIAutoDreamSourceCollector();
   private readonly deps: AIWorkspaceAutoDreamServiceDeps;
   private inFlight: Promise<
@@ -190,10 +195,28 @@ export class AIWorkspaceAutoDreamService {
     reviewedSince: Date | null,
     force: boolean
   ): Promise<AIWorkspaceMemoryConsolidationRunView | null> {
-    const scope: WorkspaceMemoryScope = {
+    let scope: WorkspaceMemoryScope = {
       workspaceKey: group.workspaceKey,
       workspaceRoot: group.workspaceRoot,
     };
+    // Portable-memory Phase A/F (design §19.5): resolve the internal scope so
+    // writes land in the scope-keyed rows and legacy rows converge. Best
+    // effort — a scope-table failure falls back to the legacy key path.
+    try {
+      const resolved: WorkspaceMemoryScopeContext =
+        await this.scopeModule.resolveLegacyScope({
+          workspaceKey: group.workspaceKey,
+          workspaceRoot: group.workspaceRoot,
+          displayName: group.displayName,
+        });
+      scope = {
+        workspaceKey: resolved.workspaceKey,
+        workspaceRoot: resolved.workspaceRoot,
+        scopeId: resolved.scopeId,
+      };
+    } catch {
+      // Legacy path unchanged.
+    }
 
     if (!force) {
       // Per-workspace cooldown.
@@ -260,17 +283,54 @@ export class AIWorkspaceAutoDreamService {
         return await this.runModule.getByRunId(runView.runId);
       }
 
-      // Apply archives first to clear contradictions, then updates, then creates.
+      // Apply archives first to clear contradictions, then updates, then
+      // creates. Portable records are SKIPPED (design D-09 / §19.5): their
+      // files are authoritative, so a SQLite-only archive/update would be
+      // reverted by the next file scan. Auto-dream manages private records
+      // only; never hard-deletes anything.
+      let skippedPortable = 0;
+      const isPortable = async (memoryId: string): Promise<boolean> => {
+        if (!scope.scopeId) return false;
+        try {
+          const state = await this.portableModule.getPortableState(
+            {
+              scopeId: scope.scopeId,
+              workspaceKey: scope.workspaceKey,
+              workspaceRoot: scope.workspaceRoot,
+              displayName: group.displayName,
+              portableEnabled: false,
+              importPolicy: "review-new",
+            },
+            memoryId
+          );
+          return state !== null;
+        } catch {
+          return false;
+        }
+      };
       for (const a of parsed.archive) {
+        if (await isPortable(a.memoryId)) {
+          skippedPortable += 1;
+          continue;
+        }
         await this.memoryModule.archiveMemory(scope, a.memoryId);
       }
       for (const u of parsed.update) {
+        if (await isPortable(u.memoryId)) {
+          skippedPortable += 1;
+          continue;
+        }
         await this.memoryModule.updateMemory(scope, {
           memoryId: u.memoryId,
           ...(u.title !== undefined ? { title: u.title } : {}),
           ...(u.content !== undefined ? { content: u.content } : {}),
           ...(u.confidence !== undefined ? { confidence: u.confidence } : {}),
         });
+      }
+      if (skippedPortable > 0) {
+        log.info(
+          `[workspace-auto-dream] skipped ${skippedPortable} portable record edits (files are authoritative)`
+        );
       }
       for (const c of parsed.create) {
         await this.memoryModule.createMemory(scope, {
