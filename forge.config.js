@@ -570,6 +570,10 @@ module.exports = {
                 // --options runtime flag to codesign, which is unnecessary
                 // for MAS distribution.
                 hardenedRuntime: false,
+                // Mac App Store signing does not require a secure timestamp.
+                // Avoid making every file signature depend on Apple's remote
+                // timestamp service, which can be temporarily unavailable.
+                timestamp: "none",
               }),
             },
           }
