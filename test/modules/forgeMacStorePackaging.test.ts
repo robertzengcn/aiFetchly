@@ -13,6 +13,8 @@ interface MacConfigProjection {
   provisioningProfile?: string;
   mainEntitlements?: string;
   childEntitlements?: string;
+  mainTimestamp?: string;
+  childTimestamp?: string;
 }
 
 interface ProjectedConfigResult {
@@ -51,6 +53,12 @@ process.stdout.write(JSON.stringify({
     : undefined,
   childEntitlements: sign && sign.optionsForFile
     ? sign.optionsForFile(childPath).entitlements
+    : undefined,
+  mainTimestamp: sign && sign.optionsForFile
+    ? sign.optionsForFile(mainPath).timestamp
+    : undefined,
+  childTimestamp: sign && sign.optionsForFile
+    ? sign.optionsForFile(childPath).timestamp
     : undefined,
 }));
 `;
@@ -132,6 +140,8 @@ describe("Mac App Store packaging", (): void => {
       provisioningProfile: provisioningProfilePath,
       mainEntitlements: mainEntitlementsPath,
       childEntitlements: childEntitlementsPath,
+      mainTimestamp: "none",
+      childTimestamp: "none",
     });
   });
 
@@ -153,6 +163,24 @@ describe("Mac App Store packaging", (): void => {
       "Apple Development: Test Developer (TESTTEAM)"
     );
     expect(result.projection?.type).to.equal("development");
+  });
+
+  it("does not depend on Apple's timestamp service for MAS signing", (): void => {
+    const result = projectForgeConfig({
+      NODE_ENV: "production",
+      MAC_DISTRIBUTION: "store",
+      MAC_STORE_SIGNING_TYPE: "distribution",
+      MAC_STORE_SIGNING_IDENTITY:
+        "Apple Distribution: Test Developer (TESTTEAM)",
+      MAC_STORE_PROVISIONING_PROFILE: provisioningProfilePath,
+      APPLE_ID: undefined,
+      APPLE_APP_SPECIFIC_PASSWORD: undefined,
+      APPLE_TEAM_ID: undefined,
+    });
+
+    expect(result.status, result.output).to.equal(0);
+    expect(result.projection?.mainTimestamp).to.equal("none");
+    expect(result.projection?.childTimestamp).to.equal("none");
   });
 
   it("preserves notarization for direct production distribution", (): void => {

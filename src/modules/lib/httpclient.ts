@@ -7,8 +7,6 @@ export type HttpClientOptions = {
 //import { AuthInterceptor } from '@/modules/lib/authInterceptor';
 import type FormDataLib from "form-data";
 import { TOKENNAME, REFRESHTOKEN } from "@/config/usersetting";
-import type { Token } from "@/modules/token";
-import { RefreshTokenInvalidError } from "@/modules/tokenRefresh";
 import { resolveViteLoginBase } from "@/config/viteLoginUrl";
 import { userSecretKeyService } from "@/modules/fieldCipher";
 
@@ -21,10 +19,7 @@ import { userSecretKeyService } from "@/modules/fieldCipher";
  * (e.g. "invalid or expired refresh token") and the prior capital-I match let
  * this branch silently never fire.
  */
-function isRefreshTokenInvalidError(error: unknown): boolean {
-  if (error instanceof RefreshTokenInvalidError) {
-    return true;
-  }
+export function isRefreshTokenInvalidError(error: unknown): boolean {
   const msg = (
     error instanceof Error ? error.message : String(error)
   ).toLowerCase();
