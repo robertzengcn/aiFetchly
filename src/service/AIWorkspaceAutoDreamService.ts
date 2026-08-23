@@ -13,6 +13,7 @@ import {
   buildWorkspaceAutoDreamUserPrompt,
   parseWorkspaceAutoDreamModelOutput,
 } from "@/service/AIWorkspaceAutoDreamPromptBuilder";
+import { attemptAutoDreamJsonRepair } from "@/service/AIAutoDreamJsonRepair";
 import type {
   AIWorkspaceMemoryConsolidationRunView,
   AIWorkspaceAutoDreamStatusView,
@@ -276,34 +277,19 @@ export class AIWorkspaceAutoDreamService {
       // JSON repair: one same-route repair request on invalid non-empty
       // output. Never falls back to the normal model (tech-design §9.4).
       if (!parsed.ok && raw.trim().length > 0) {
-        const repairMessages: OpenAIChatMessage[] = [
-          {
-            role: "system",
-            content:
-              "Return ONLY valid JSON matching the workspace consolidation " +
-              "schema. Fix the syntax errors in the provided output.",
-          },
-          {
-            role: "user",
-            content: `Invalid output to repair:\n${raw.slice(0, 4000)}`,
-          },
-        ];
-        const repairResult = await this.deps.completeLightweight({
+        parsed = await attemptAutoDreamJsonRepair({
           workload: "workspace_auto_dream",
-          messages: repairMessages,
+          invalidRaw: raw,
+          parsed,
           manual: isManual,
+          completeLightweight: (input) => this.deps.completeLightweight(input),
+          parse: (r) =>
+            parseWorkspaceAutoDreamModelOutput(
+              r,
+              validWorkspaceKeys,
+              activeMemories
+            ),
         });
-        const repairRaw = openAIContentToString(
-          repairResult.response.choices?.[0]?.message?.content
-        );
-        const repaired = parseWorkspaceAutoDreamModelOutput(
-          repairRaw,
-          validWorkspaceKeys,
-          activeMemories
-        );
-        if (repaired.ok) {
-          parsed = repaired;
-        }
       }
 
       if (!parsed.ok) {

@@ -7,6 +7,7 @@ import {
   buildAutoDreamUserPrompt,
   parseAutoDreamModelOutput,
 } from "@/service/AIAutoDreamPromptBuilder";
+import { attemptAutoDreamJsonRepair } from "@/service/AIAutoDreamJsonRepair";
 import type {
   AIChatLightweightCompletionInput,
   AIChatLightweightCompletionResult,
@@ -195,34 +196,15 @@ export class AIAutoDreamService {
       // (tech-design §9.4). Secret/semantic validation failure is NOT
       // repairable.
       if (!parsed.ok && raw.trim().length > 0) {
-        const repairMessages: OpenAIChatMessage[] = [
-          {
-            role: "system",
-            content:
-              "Return ONLY valid JSON matching the consolidation schema. " +
-              "Fix the syntax errors in the provided output.",
-          },
-          {
-            role: "user",
-            content: `Invalid output to repair:\n${raw.slice(0, 4000)}`,
-          },
-        ];
-        const repairResult = await this.deps.completeLightweight({
+        parsed = await attemptAutoDreamJsonRepair({
           workload: "user_auto_dream",
-          messages: repairMessages,
+          invalidRaw: raw,
+          parsed,
           manual: isManual,
+          completeLightweight: (input) => this.deps.completeLightweight(input),
+          parse: (r) =>
+            parseAutoDreamModelOutput(r, collected.packets, activeMemories),
         });
-        const repairRaw = openAIContentToString(
-          repairResult.response.choices?.[0]?.message?.content
-        );
-        const repaired = parseAutoDreamModelOutput(
-          repairRaw,
-          collected.packets,
-          activeMemories
-        );
-        if (repaired.ok) {
-          parsed = repaired;
-        }
       }
 
       if (!parsed.ok) {
