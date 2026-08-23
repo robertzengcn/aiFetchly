@@ -10,6 +10,8 @@
 
 **Server dependency:** sibling repository document `aifetchserver/doc/API_Endpoints_Documentation.md`, section "Small Model Alias (`haiku` / `small`)"
 
+**Technical design:** [Small-Model Routing for Background AI Workloads](small-model-background-workloads-technical-design.md)
+
 **Builds on:**
 
 - [Agent Memory and Conversation Compact](../superpowers/specs/2026-06-15-agent-memory-compact-prd.md)
@@ -249,7 +251,7 @@ Auto-dream already limits source counts, message counts, and source message leng
 The new behavior shall:
 
 1. Add active memories and source packets only while they fit within the usable budget.
-2. Prefer the newest changed packets.
+2. Process changed packets oldest-first with deterministic tie-breaking so a bounded batch can advance one timestamp watermark without skipping older eligible sources.
 3. Preserve enough active-memory identity and content to detect duplicates and contradictions.
 4. Process overflow packets in later bounded batches rather than discarding them.
 5. Advance `reviewedThrough` only through source material that was actually included in a successful batch.
