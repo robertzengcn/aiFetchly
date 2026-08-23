@@ -6,6 +6,7 @@ import {
 } from "@/model/AIWorkspaceMemory.model";
 import { AIWorkspaceMemoryEntity } from "@/entity/AIWorkspaceMemory.entity";
 import { AIWorkspaceMemoryConsolidationRunEntity } from "@/entity/AIWorkspaceMemoryConsolidationRun.entity";
+import { applyConsolidationPlanInTransaction } from "@/modules/lib/consolidationPlanApply";
 import type { WorkspaceAutoDreamParseResult } from "@/service/AIWorkspaceAutoDreamPromptBuilder";
 import { randomUUID } from "node:crypto";
 import { looksSecretlike } from "@/service/MemorySecretFilter";
@@ -216,78 +217,41 @@ export class AIWorkspaceMemoryModule extends BaseModule {
     reviewedThrough?: Date | null;
   }): Promise<void> {
     await this.ensureConnection();
+    const { workspaceKey, workspaceRoot } = input.scope;
     await this.sqliteDb.connection.transaction(async (manager) => {
-      const memoryRepo = manager.getRepository(AIWorkspaceMemoryEntity);
-      const runRepo = manager.getRepository(
-        AIWorkspaceMemoryConsolidationRunEntity
-      );
-      const { workspaceKey, workspaceRoot } = input.scope;
-
-      for (const a of input.plan.archive) {
-        await memoryRepo.update(
-          { workspaceKey, memoryId: a.memoryId },
-          { status: "archived" }
-        );
-      }
-      for (const u of input.plan.update) {
-        const patch: Record<string, unknown> = {};
-        if (u.title !== undefined) patch.title = u.title;
-        if (u.content !== undefined) patch.content = u.content;
-        if (u.confidence !== undefined)
-          patch.confidence = clampConfidence(u.confidence);
-        // Defense-in-depth: re-check update title/content for secret-like
-        // values before writing (throws -> rollback).
-        if (u.title !== undefined || u.content !== undefined) {
-          rejectSecretLike(
-            u.title !== undefined ? u.title : null,
-            u.content !== undefined ? u.content : null
-          );
-        }
-        if (Object.keys(patch).length > 0) {
-          await memoryRepo.update(
-            { workspaceKey, memoryId: u.memoryId },
-            patch
-          );
-        }
-      }
-      for (const c of input.plan.create) {
-        // Defense-in-depth: re-run the secret filter inside the transaction
-        // so a plan that slipped past the parser cannot persist secret-like
-        // content. Throws -> rollback.
-        rejectSecretLike(c.title, c.content);
-        const e = new AIWorkspaceMemoryEntity();
-        e.memoryId = `wmem-${randomUUID()}`;
-        e.workspaceKey = workspaceKey;
-        e.workspaceRoot = workspaceRoot;
-        e.type = c.type;
-        e.title = c.title;
-        e.content = c.content;
-        e.status = "active";
-        e.confidence = clampConfidence(c.confidence ?? 100);
-        e.sourceKind = "auto_dream";
-        e.sourceConversationId = c.sourceKind === "chat_v2" ? c.sourceId : null;
-        e.sourceAgentTaskId = c.sourceKind === "agent_task" ? c.sourceId : null;
-        e.sourceMessageIds = c.sourceMessageIds ?? null;
-        await memoryRepo.save(e);
-      }
-
-      await runRepo.update(
-        { runId: input.runId },
-        {
-          status: "completed",
-          finishedAt: new Date(),
+      await applyConsolidationPlanInTransaction({
+        manager,
+        memoryEntity: AIWorkspaceMemoryEntity,
+        runEntity: AIWorkspaceMemoryConsolidationRunEntity,
+        plan: input.plan,
+        runId: input.runId,
+        completion: {
           chatConversationsReviewed: input.chatConversationsReviewed,
           agentTasksReviewed: input.agentTasksReviewed,
-          memoriesCreated: input.plan.create.length,
-          memoriesUpdated: input.plan.update.length,
-          memoriesArchived: input.plan.archive.length,
-          model: input.model ?? null,
-          errorMessage: null,
-          ...(input.reviewedThrough !== undefined
-            ? { reviewedThrough: input.reviewedThrough }
-            : {}),
-        }
-      );
+          model: input.model,
+          reviewedThrough: input.reviewedThrough,
+        },
+        buildCreateEntity: (c) => {
+          const e = new AIWorkspaceMemoryEntity();
+          e.memoryId = `wmem-${randomUUID()}`;
+          e.workspaceKey = workspaceKey;
+          e.workspaceRoot = workspaceRoot;
+          e.type = c.type;
+          e.title = c.title;
+          e.content = c.content;
+          e.status = "active";
+          e.confidence = clampConfidence(c.confidence ?? 100);
+          e.sourceKind = "auto_dream";
+          e.sourceConversationId =
+            c.sourceKind === "chat_v2" ? c.sourceId ?? null : null;
+          e.sourceAgentTaskId =
+            c.sourceKind === "agent_task" ? c.sourceId ?? null : null;
+          e.sourceMessageIds = (c.sourceMessageIds as string[] | null) ?? null;
+          return e;
+        },
+        archiveWhere: (memoryId) => ({ workspaceKey, memoryId }),
+        updateWhere: (memoryId) => ({ workspaceKey, memoryId }),
+      });
     });
   }
 
