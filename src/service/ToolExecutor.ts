@@ -22,7 +22,7 @@ import {
 import { ContactVerificationService } from "@/service/contact-verification/ContactVerificationService";
 import { DocumentService } from "@/service/DocumentService";
 import { FileToolService } from "@/service/FileToolService";
-import { WorkspaceResolver } from "@/service/WorkspaceResolver";
+import { getDefaultFilesystemContextService } from "@/service/ConversationFilesystemContextService";
 import { FILE_TOOL_RATE_LIMITS } from "@/config/fileToolConfig";
 import {
   GOOGLE_MAPS_DEFAULT_MAX_RESULTS,
@@ -1891,31 +1891,17 @@ export class ToolExecutor {
   }
 
   /**
-   * Per-workspace FileToolService cache, keyed by workspace root path.
-   * Replaces the previous single global singleton so that each
-   * approved workspace gets its own strict-mode service instance.
+   * Per-workspace FileToolService cache, keyed by canonical workspace root
+   * path. Each approved workspace gets its own strict-mode service instance,
+   * resolved through the shared ConversationFilesystemContextService so file
+   * and shell tools can never observe different roots.
    */
   private static fileToolServices: Map<string, FileToolService> = new Map();
 
   /**
-   * Legacy fallback service used when no workspace has been resolved
-   * (e.g. conversations without an approved workspace). Runs in
-   * default-roots soft mode so existing skills keep working.
+   * Returns a FileToolService scoped to the given canonical workspace root.
    */
-  private static fallbackFileToolService: FileToolService | null = null;
-
-  /**
-   * Returns a FileToolService scoped to the given workspace root.
-   * When no root is provided, returns the legacy default-roots
-   * service so non-workspace callers keep working.
-   */
-  private static getFileToolService(workspaceRoot?: string): FileToolService {
-    if (!workspaceRoot) {
-      if (!ToolExecutor.fallbackFileToolService) {
-        ToolExecutor.fallbackFileToolService = new FileToolService();
-      }
-      return ToolExecutor.fallbackFileToolService;
-    }
+  private static getFileToolService(workspaceRoot: string): FileToolService {
     const key = workspaceRoot;
     let service = ToolExecutor.fileToolServices.get(key);
     if (!service) {
@@ -1936,28 +1922,25 @@ export class ToolExecutor {
     toolParams: Record<string, unknown>,
     conversationId: string
   ): Promise<Record<string, unknown>> {
-    // Resolve the active workspace (if any) for this conversation so
-    // the FileToolService runs in strict mode when a workspace is set.
-    // Falls back to the legacy default-roots service otherwise.
-    let workspaceRoot: string | undefined;
-    try {
-      const resolver = new WorkspaceResolver();
-      const resolved = await resolver.resolve(conversationId);
-      if (resolved) {
-        workspaceRoot = resolved.rootPath;
-      }
-    } catch {
-      // Resolver failures must not block tool execution; fall back to
-      // the default-roots service. A later hardening task can decide
-      // whether to refuse outright.
-      workspaceRoot = undefined;
-    }
-    if (!workspaceRoot) {
+    // Resolve the SAME shared conversation filesystem scope the shell tool
+    // uses (natural-language-skill-installation design §6.2, PRD §15).
+    // Missing/unresolvable workspace fails closed — the home directory is
+    // never a silent substitute root.
+    const resolution = await getDefaultFilesystemContextService().resolve(
+      conversationId
+    );
+    if (!resolution.ok) {
       log.warn(
-        `executeFileTool: no approved workspace for conversation ${conversationId}; ` +
-          "falling back to legacy default-roots service."
+        `executeFileTool: refusing ${toolName} for conversation ${conversationId}: ` +
+          `${resolution.code}`
       );
+      return {
+        success: false,
+        error: resolution.message,
+        error_code: resolution.code,
+      };
     }
+    const workspaceRoot = resolution.context.canonicalWorkspaceRoot;
 
     const service = ToolExecutor.getFileToolService(workspaceRoot);
 

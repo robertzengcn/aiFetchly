@@ -14,12 +14,9 @@
  */
 
 import { spawn } from "child_process";
-import * as path from "path";
-import * as os from "os";
 import { FilePathGuard } from "@/service/FilePathGuard";
-import { getDefaultWorkspaceRoots } from "@/config/fileToolConfig";
+import { getDefaultFilesystemContextService } from "@/service/ConversationFilesystemContextService";
 import {
-  SHELL_DEFAULT_TIMEOUT_MS,
   SHELL_MAX_TIMEOUT_MS,
   SHELL_MIN_TIMEOUT_MS,
   SHELL_STDOUT_MAX_CHARS,
@@ -38,6 +35,40 @@ import { checkShellPermission } from "@/service/shellSecurity/bashPermissions";
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
+
+/**
+ * The conversation filesystem scope a shell command runs under. Resolved
+ * once through ConversationFilesystemContextService so shell and file tools
+ * observe the SAME canonical workspace (natural-language-skill-installation
+ * design §6.2 — `ShellToolService` stops resolving roots independently).
+ */
+export interface ShellExecutionScope {
+  /** Canonical workspace root — the default cwd. */
+  readonly defaultCwd: string;
+  /** Roots an explicit `cwd` argument may target. */
+  readonly allowedRoots: readonly string[];
+}
+
+/**
+ * Resolve the shell execution scope for a conversation. Fail closed with a
+ * structured message when no workspace is approved — the home directory is
+ * never a silent substitute (PRD §15.2, FR-12).
+ */
+export async function resolveShellExecutionScope(
+  conversationId: string
+): Promise<ShellExecutionScope | { readonly error: string }> {
+  const resolution = await getDefaultFilesystemContextService().resolve(
+    conversationId
+  );
+  if (!resolution.ok) {
+    return { error: resolution.message };
+  }
+  const ctx = resolution.context;
+  return {
+    defaultCwd: ctx.defaultCwd,
+    allowedRoots: ctx.roots.map((r) => r.canonicalPath),
+  };
+}
 
 /**
  * Execute a local shell command with full safety controls.
@@ -59,8 +90,13 @@ export async function executeShellCommand(
   }
   const request = parsed.data;
 
-  // 2. Resolve and validate cwd FIRST — the permission layer needs the guard
-  const cwdResult = resolveCwd(request.cwd);
+  // 2. Resolve the shared conversation scope (fail closed without one) and
+  //    validate cwd against it — the permission layer needs the same guard.
+  const scope = await resolveShellExecutionScope(conversationId);
+  if ("error" in scope) {
+    return makeErrorResult(scope.error, startTime);
+  }
+  const cwdResult = resolveCwd(request.cwd, scope);
   if (!cwdResult.valid) {
     return makeErrorResult(
       cwdResult.error ?? "Invalid working directory",
@@ -72,7 +108,7 @@ export async function executeShellCommand(
   //    This subsumes the legacy regex denylist — the same SHELL_DENYLIST_PATTERNS
   //    are now applied inside checkShellPermission via tieredRegexRules, so
   //    running them again here would be pure duplication.
-  const guard = new FilePathGuard(getDefaultWorkspaceRoots(), []);
+  const guard = new FilePathGuard(scope.allowedRoots, []);
   const verdict = checkShellPermission(request.command, guard);
   if (verdict.tier !== "allow") {
     return {
@@ -132,15 +168,16 @@ interface CwdResult {
   readonly error?: string;
 }
 
-function resolveCwd(cwd?: string): CwdResult {
-  const roots = getDefaultWorkspaceRoots();
-  const guard = new FilePathGuard(roots, []);
-
+function resolveCwd(
+  cwd: string | undefined,
+  scope: ShellExecutionScope
+): CwdResult {
   if (!cwd) {
-    // Default to first workspace root
-    return { valid: true, path: roots[0] };
+    // Default to the canonical conversation workspace (shared with file tools)
+    return { valid: true, path: scope.defaultCwd };
   }
 
+  const guard = new FilePathGuard(scope.allowedRoots, []);
   const validation = guard.validate(cwd);
   if (!validation.safe) {
     return {

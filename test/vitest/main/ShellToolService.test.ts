@@ -8,17 +8,46 @@
  * - Timeout behavior (command killed, timed_out=true, partial output)
  * - Shell interpreter selection (auto/platform detection, explicit override)
  */
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import * as path from "path";
-import * as os from "os";
-import * as fs from "fs";
+import { describe, it, expect, vi } from "vitest";
 import { executeShellCommand } from "@/service/ShellToolService";
 
 // ---------------------------------------------------------------------------
-// Helpers
+// Workspace scope
+//
+// Shell tools now resolve the SAME shared conversation filesystem scope as
+// the file tools (natural-language-skill-installation design §6). A missing
+// workspace fails closed, so these tests give every conversation an approved
+// workspace rooted at a temp directory.
 // ---------------------------------------------------------------------------
 
 const CONVERSATION_ID = "test-conv-001";
+const WORKSPACE_ROOT = vi.hoisted(() => {
+  // Hoisted: the vi.mock factory below runs before module initialization.
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const fs = require("node:fs") as typeof import("node:fs");
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const os = require("node:os") as typeof import("node:os");
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const path = require("node:path") as typeof import("node:path");
+  return fs.mkdtempSync(path.join(os.tmpdir(), "shell-ws-"));
+});
+
+// The real resolution path goes WorkspaceResolver →
+// WorkspaceModule.getActiveWorkspace; mock that method with an approved
+// workspace record so the shared scope resolves to WORKSPACE_ROOT.
+vi.mock("@/modules/WorkspaceModule", () => {
+  const getActiveWorkspace = vi.fn().mockResolvedValue({
+    id: 42,
+    conversationId: "test-conv-001",
+    rootPath: WORKSPACE_ROOT,
+    approvalState: "approved",
+  });
+  return {
+    WorkspaceModule: vi.fn().mockImplementation(() => ({
+      getActiveWorkspace,
+    })),
+  };
+});
 
 // ---------------------------------------------------------------------------
 // T008: Success path
