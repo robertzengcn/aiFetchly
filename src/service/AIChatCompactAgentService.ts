@@ -482,109 +482,25 @@ export class AIChatCompactAgentService {
       `[ai-chat-compact] full compact started conv=${input.conversationId} msgs=${messages.length} tokens=${inputTokenEstimate}`
     );
 
-    // Capability-aware budget: full compact requires a known small-model
-    // context window before it will send large input to the small route.
-    // When capability metadata is absent/invalid, the lightweight service's
-    // kill-switch/provider-normal path handles it (compact goes directly to
-    // the normal model; this is NOT counted as the one failure fallback)
-    // (tech-design §8.4, §16.1).
-    const capability = this.deps.getSmallModelCapability
-      ? await this.deps.getSmallModelCapability()
-      : null;
-    const contextWindow =
-      capability?.context_size ??
-      (await this.resolveContextWindow(input.model));
-    // The profile is the single source of truth for the conversation_compact
-    // output budget — never hardcode its numeric value here.
-    const profileMaxOutput = getLightweightProfile(
-      "conversation_compact"
-    ).maxOutputTokens;
-    const fixedPromptTokens = this.estimator.estimateText(
-      buildFullCompactSystemPrompt()
-    );
-    const budget = computeLightweightBudget({
-      contextWindow,
-      maxOutputTokens: profileMaxOutput,
-      discoveredMaxOutputTokens: capability?.max_tokens,
-      fixedPromptTokens,
-    });
+    const budget = await this.computeCompactBudget(input.model);
 
     // Map/reduce hierarchical summarization.
     const groups = groupMessagesAtomically(messages);
     const chunks = chunkGroupsByBudget(groups, budget.usablePayloadTokens);
-    const chunkSummaries: string[] = [];
-    let singleChunkResponseModel: string | undefined;
-    for (const chunk of chunks) {
-      const chunkMessages = chunk.groups.flatMap(
-        (g) => g.messages as OpenAIChatMessage[]
-      );
-      const result = await this.deps.completeLightweight({
-        workload: "conversation_compact",
-        messages: [
-          { role: "system", content: buildFullCompactSystemPrompt() },
-          {
-            role: "user",
-            content: buildFullCompactUserPrompt(chunkMessages),
-          },
-        ],
-        normalModel: input.model,
-        manual: true,
-      });
-      const raw = openAIContentToString(
-        result.response.choices?.[0]?.message?.content
-      );
-      const { summary, ok } = normalizeFullCompactSummary(raw);
-      if (!ok) {
-        // A failed intermediate chunk leaves the previous active compact
-        // untouched (no saveFullCompact call). Surface the error.
-        throw new Error("Compact model returned empty summary for a chunk");
-      }
-      chunkSummaries.push(summary);
-      // Capture the resolved model from the single chunk for attribution
-      // when no merge pass runs.
-      if (chunks.length === 1) {
-        singleChunkResponseModel = result.response.model;
-      }
-    }
+    const { chunkSummaries, singleChunkResponseModel } =
+      await this.summarizeChunks(chunks, input.model);
 
     // Reduce: merge chunk summaries into one final summary. If there is only
     // one chunk, its summary IS the final summary (no extra request).
-    let summary: string;
-    let resolvedModel: string;
-    if (chunkSummaries.length === 1) {
-      summary = chunkSummaries[0]!;
-      // Single-chunk: the chunk's own completion produced the summary, so
-      // attribute the resolved model from that response (not the input model).
-      resolvedModel = singleChunkResponseModel ?? input.model ?? "compact";
-    } else {
-      const mergeMessages: OpenAIChatMessage[] = [
-        { role: "system", content: buildFullCompactSystemPrompt() },
-        {
-          role: "user",
-          content: buildFullCompactUserPrompt(
-            chunkSummaries.map((s) => ({
-              role: "assistant" as const,
-              content: s,
-            }))
-          ),
-        },
-      ];
-      const mergeResult = await this.deps.completeLightweight({
-        workload: "conversation_compact",
-        messages: mergeMessages,
-        normalModel: input.model,
-        manual: true,
-      });
-      const mergeRaw = openAIContentToString(
-        mergeResult.response.choices?.[0]?.message?.content
-      );
-      const merged = normalizeFullCompactSummary(mergeRaw);
-      if (!merged.ok) {
-        throw new Error("Compact model returned empty merged summary");
-      }
-      summary = merged.summary;
-      resolvedModel = mergeResult.response.model ?? input.model ?? "compact";
-    }
+    const { summary, resolvedModel } =
+      chunkSummaries.length === 1
+        ? {
+            summary: chunkSummaries[0]!,
+            // Single-chunk: the chunk's own completion produced the summary, so
+            // attribute the resolved model from that response (not the input model).
+            resolvedModel: singleChunkResponseModel ?? input.model ?? "compact",
+          }
+        : await this.mergeChunkSummaries(chunkSummaries, input.model);
 
     const last = sorted[sorted.length - 1];
     const first = sorted[0];
@@ -609,6 +525,124 @@ export class AIChatCompactAgentService {
       } chunks=${chunkSummaries.length} elapsed=${Date.now() - startedAt}ms`
     );
     return view;
+  }
+
+  /**
+   * Capability-aware budget for full compact. Full compact requires a known
+   * small-model context window before it will send large input to the small
+   * route. When capability metadata is absent/invalid, the lightweight
+   * service's kill-switch/provider-normal path handles it (compact goes
+   * directly to the normal model; this is NOT counted as the one failure
+   * fallback) (tech-design §8.4, §16.1).
+   */
+  private async computeCompactBudget(
+    model: string | undefined
+  ): Promise<ReturnType<typeof computeLightweightBudget>> {
+    const capability = this.deps.getSmallModelCapability
+      ? await this.deps.getSmallModelCapability()
+      : null;
+    const contextWindow =
+      capability?.context_size ?? (await this.resolveContextWindow(model));
+    const profileMaxOutput = getLightweightProfile(
+      "conversation_compact"
+    ).maxOutputTokens;
+    const fixedPromptTokens = this.estimator.estimateText(
+      buildFullCompactSystemPrompt()
+    );
+    return computeLightweightBudget({
+      contextWindow,
+      maxOutputTokens: profileMaxOutput,
+      discoveredMaxOutputTokens: capability?.max_tokens,
+      fixedPromptTokens,
+    });
+  }
+
+  /**
+   * Map phase: summarize each budgeted chunk through the conversation_compact
+   * lightweight route. A failed intermediate chunk throws before any
+   * saveFullCompact call, so the previous active compact is untouched.
+   */
+  private async summarizeChunks(
+    chunks: ReadonlyArray<{
+      readonly groups: ReadonlyArray<{
+        readonly messages: readonly OpenAIChatMessage[];
+      }>;
+    }>,
+    model: string | undefined
+  ): Promise<{
+    chunkSummaries: string[];
+    singleChunkResponseModel: string | undefined;
+  }> {
+    const chunkSummaries: string[] = [];
+    let singleChunkResponseModel: string | undefined;
+    for (const chunk of chunks) {
+      const chunkMessages = chunk.groups.flatMap(
+        (g) => g.messages as OpenAIChatMessage[]
+      );
+      const result = await this.deps.completeLightweight({
+        workload: "conversation_compact",
+        messages: [
+          { role: "system", content: buildFullCompactSystemPrompt() },
+          {
+            role: "user",
+            content: buildFullCompactUserPrompt(chunkMessages),
+          },
+        ],
+        normalModel: model,
+        manual: true,
+      });
+      const raw = openAIContentToString(
+        result.response.choices?.[0]?.message?.content
+      );
+      const { summary, ok } = normalizeFullCompactSummary(raw);
+      if (!ok) {
+        throw new Error("Compact model returned empty summary for a chunk");
+      }
+      chunkSummaries.push(summary);
+      if (chunks.length === 1) {
+        singleChunkResponseModel = result.response.model;
+      }
+    }
+    return { chunkSummaries, singleChunkResponseModel };
+  }
+
+  /**
+   * Reduce phase: merge chunk summaries into one final validated summary via
+   * one more conversation_compact completion. Throws on an empty merge result.
+   */
+  private async mergeChunkSummaries(
+    chunkSummaries: readonly string[],
+    model: string | undefined
+  ): Promise<{ summary: string; resolvedModel: string }> {
+    const mergeMessages: OpenAIChatMessage[] = [
+      { role: "system", content: buildFullCompactSystemPrompt() },
+      {
+        role: "user",
+        content: buildFullCompactUserPrompt(
+          chunkSummaries.map((s) => ({
+            role: "assistant" as const,
+            content: s,
+          }))
+        ),
+      },
+    ];
+    const mergeResult = await this.deps.completeLightweight({
+      workload: "conversation_compact",
+      messages: mergeMessages,
+      normalModel: model,
+      manual: true,
+    });
+    const mergeRaw = openAIContentToString(
+      mergeResult.response.choices?.[0]?.message?.content
+    );
+    const merged = normalizeFullCompactSummary(mergeRaw);
+    if (!merged.ok) {
+      throw new Error("Compact model returned empty merged summary");
+    }
+    return {
+      summary: merged.summary,
+      resolvedModel: mergeResult.response.model ?? model ?? "compact",
+    };
   }
 }
 

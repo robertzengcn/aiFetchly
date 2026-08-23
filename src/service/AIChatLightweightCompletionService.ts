@@ -359,12 +359,7 @@ export class AIChatLightweightCompletionService {
     outcome: LightweightAttemptOutcome;
     metrics: LightweightAttemptMetrics;
   }> {
-    // Cooldown bookkeeping.
-    if (classified.reason === "small_model_unavailable") {
-      this.openConfigCooldown(input.workload, classified.reason);
-    } else if (this.isTransient(classified.reason)) {
-      this.recordTransient(input.workload, classified.reason);
-    }
+    this.applyCooldownBookkeeping(input, classified.reason);
 
     // Ambiguous failures are terminal: no retry, no fallback.
     if (!classified.definitive) {
@@ -379,43 +374,70 @@ export class AIChatLightweightCompletionService {
       profile.fallback === "normal_once" &&
       allowsNormalFallback(classified.reason)
     ) {
-      // Reuse the resolution from the top of this logical completion rather
-      // than re-resolving (a mid-flight provider switch must not change the
-      // fallback target).
-      const result = await this.runNormalRoute(input, profile, resolution);
-      if ("failure" in result) {
-        // Fallback itself failed — return the original reason so attribution
-        // stays clear, but the fallback's failure is what the user sees.
-        return {
-          outcome: { kind: "failed", failure: this.toFailure(classified) },
-          metrics: {
-            ...EMPTY_METRICS,
-            attemptCount: 1,
-            fallbackAttempted: true,
-            fallbackReason: classified.reason,
-          },
-        };
-      }
-      return {
-        outcome: {
-          kind: "success",
-          response: result.response,
-          route: "normal_fallback",
-          providerKind: resolution.providerKind,
-          resolvedModel: result.resolvedModel,
-        },
-        metrics: {
-          ...EMPTY_METRICS,
-          attemptCount: 1,
-          fallbackAttempted: true,
-          fallbackReason: classified.reason,
-        },
-      };
+      return this.attemptNormalFallback(input, profile, resolution, classified);
     }
 
     return {
       outcome: { kind: "failed", failure: this.toFailure(classified) },
       metrics: EMPTY_METRICS,
+    };
+  }
+
+  /**
+   * Cooldown bookkeeping for a classified small-route failure. A missing/invalid
+   * small-model configuration opens a six-hour cooldown; three consecutive
+   * transient failures open a one-hour cooldown. Authentication, quota,
+   * cancellation, invalid-output, and persistence failures do not increment
+   * the transient counter (tech-design §12).
+   */
+  private applyCooldownBookkeeping(
+    input: AIChatLightweightCompletionInput,
+    reason: AIChatLightweightFailureReason
+  ): void {
+    if (reason === "small_model_unavailable") {
+      this.openConfigCooldown(input.workload, reason);
+    } else if (this.isTransient(reason)) {
+      this.recordTransient(input.workload, reason);
+    }
+  }
+
+  /**
+   * The one allowed normal-model fallback for conversation_compact. Reuses the
+   * resolution from the top of this logical completion (a mid-flight provider
+   * switch must not change the fallback target). Returns the original reason
+   * on fallback failure so attribution stays clear.
+   */
+  private async attemptNormalFallback(
+    input: AIChatLightweightCompletionInput,
+    profile: ReturnType<typeof getLightweightProfile>,
+    resolution: LightweightProviderResolution,
+    classified: ReturnType<typeof classifyLightweightFailure>
+  ): Promise<{
+    outcome: LightweightAttemptOutcome;
+    metrics: LightweightAttemptMetrics;
+  }> {
+    const result = await this.runNormalRoute(input, profile, resolution);
+    const fallbackMetrics: LightweightAttemptMetrics = {
+      ...EMPTY_METRICS,
+      attemptCount: 1,
+      fallbackAttempted: true,
+      fallbackReason: classified.reason,
+    };
+    if ("failure" in result) {
+      return {
+        outcome: { kind: "failed", failure: this.toFailure(classified) },
+        metrics: fallbackMetrics,
+      };
+    }
+    return {
+      outcome: {
+        kind: "success",
+        response: result.response,
+        route: "normal_fallback",
+        providerKind: resolution.providerKind,
+        resolvedModel: result.resolvedModel,
+      },
+      metrics: fallbackMetrics,
     };
   }
 
