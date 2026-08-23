@@ -20,7 +20,6 @@ export interface ChatV2StreamSinkTarget {
 export function createChatV2StreamSink(
   sinkTarget: ChatV2StreamSinkTarget
 ): AIChatQueryEventSink {
-let tokenLogCount = 0;
   return {
     emit: (e: AIChatQueryEvent) => {
       switch (e.type) {
@@ -32,12 +31,6 @@ let tokenLogCount = 0;
           });
           break;
         case "token":
-          if (tokenLogCount < 5 || tokenLogCount % 25 === 0) {
-            console.log(
-              `[ai-chat-v2] IPC token conv=${e.conversationId} message=${e.messageId} deltaLen=${e.contentDelta.length} tokenIndex=${tokenLogCount}`
-            );
-          }
-          tokenLogCount += 1;
           sinkTarget.sendChunk({
             eventType: "token",
             conversationId: e.conversationId,
@@ -47,10 +40,6 @@ let tokenLogCount = 0;
           });
           break;
         case "reasoning_delta":
-          // Log length only — never the reasoning text itself (SSR-3 / §14).
-          console.debug(
-            `[ai-chat-v2] reasoning_delta conv=${e.conversationId} message=${e.messageId} deltaLen=${e.reasoningDelta.length}`
-          );
           sinkTarget.sendChunk({
             eventType: "reasoning_delta",
             conversationId: e.conversationId,

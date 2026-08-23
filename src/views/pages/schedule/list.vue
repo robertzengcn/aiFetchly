@@ -214,7 +214,6 @@ import { useI18n } from 'vue-i18n'
 import ScheduleTable from './widgets/ScheduleTable.vue'
 import AppPageShell from '@/views/components/pageTemplates/AppPageShell.vue'
 import PageStateView from '@/views/components/pageTemplates/PageStateView.vue'
-import { useAsyncPageState } from '@/views/composables/useAsyncPageState'
 import { useAppInspectorStore } from '@/views/store/appInspector'
 import { useAppShellStore } from '@/views/store/appShell'
 import type { PageLoadState } from '@/views/types/uiConvergenceTypes'
@@ -244,8 +243,6 @@ const router = useRouter()
 const schedules = ref<any[]>([])
 
 // Convergence state: shared load projection + typed inspector (design §13.5).
-const asyncPage = useAsyncPageState();
-void asyncPage; // load-error path is owned by loadSchedules; kept for future shared-state adoption
 const pageLoad = computed<PageLoadState>(() => {
   if (loading.value) return { state: 'loading' };
   if (loadError.value) return { state: 'error', messageKey: 'ui.state.errorBody', recoverable: true };
@@ -343,8 +340,8 @@ const loadSchedules = async () => {
     
     schedules.value = response.schedules
     total.value = response.total
-    loadError.value = true
   } catch (error) {
+    loadError.value = true
     showAlert(t('common.error'), `${t('schedule.failed_to_load_schedules')}: ${error}`, 'error')
   } finally {
     loading.value = false

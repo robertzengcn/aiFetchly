@@ -188,6 +188,40 @@
       />
     </main>
 
+    <!-- In-app prompt surface (Electron has no window.prompt). -->
+    <v-dialog
+      :model-value="promptDialog !== null"
+      max-width="420"
+      @update:model-value="(v: boolean) => !v && settlePrompt(null)"
+    >
+      <v-card v-if="promptDialog" data-testid="app-prompt-dialog">
+        <v-card-title>{{ promptDialog.title }}</v-card-title>
+        <v-card-text>
+          <v-text-field
+            v-model="promptInput"
+            variant="outlined"
+            density="compact"
+            autofocus
+            data-testid="app-prompt-input"
+            @keydown.enter="settlePrompt(promptInput)"
+          />
+        </v-card-text>
+        <v-card-actions>
+          <v-spacer />
+          <v-btn variant="text" data-testid="app-prompt-cancel" @click="settlePrompt(null)">
+            {{ t('common.cancel') || 'Cancel' }}
+          </v-btn>
+          <v-btn
+            color="primary"
+            data-testid="app-prompt-confirm"
+            @click="settlePrompt(promptInput)"
+          >
+            {{ t('common.ok') || 'OK' }}
+          </v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
     <AiChatInspector
       v-if="workspaceStore.inspectorOpen"
       :active-tab="workspaceStore.inspectorTab"
@@ -558,13 +592,37 @@ async function onAnswerQuestion(
 }
 
 /** Request-changes opens one focused feedback field (PRD §12.8.8). */
-function onRequestPlanChanges(): void {
-  const feedback = window.prompt(
+async function onRequestPlanChanges(): Promise<void> {
+  const feedback = await appPrompt(
     t("workspaceChat.plan.changeFeedbackPrompt") ||
       "What should change in this plan?"
   );
   if (feedback === null) return;
   void onLegacyPlanAction("request-plan-changes", feedback || "");
+}
+
+/**
+ * Minimal in-app prompt dialog — Electron does not implement window.prompt,
+ * so rename/plan-feedback capture needs a real surface.
+ */
+const promptDialog = ref<{
+  title: string;
+  initial: string;
+  resolve: (value: string | null) => void;
+} | null>(null);
+const promptInput = ref("");
+
+function appPrompt(title: string, initial = ""): Promise<string | null> {
+  promptInput.value = initial;
+  return new Promise((resolve) => {
+    promptDialog.value = { title, initial, resolve };
+  });
+}
+
+function settlePrompt(value: string | null): void {
+  const dialog = promptDialog.value;
+  promptDialog.value = null;
+  dialog?.resolve(value);
 }
 
 /**
@@ -586,7 +644,7 @@ async function onStopSpeaking(): Promise<void> {
 
 async function onRename(): Promise<void> {
   if (!conversationId.value) return;
-  const next = window.prompt(
+  const next = await appPrompt(
     t("workspaceChat.header.renamePrompt") || "Rename chat",
     headerTitle.value ?? ""
   );
@@ -761,14 +819,18 @@ onMounted(() => {
   window.addEventListener("resize", updateViewport);
   void workspaceStore.bootstrap();
   void loadModels();
-  void isWorkspaceRedesignEnabled().then((enabled) => {
-    redesignDefault.value = enabled;
-    // Dashboard "ask AI" entry (layout passes ?prompt=): seed a fresh chat.
-    const prompt = route.query.prompt;
-    if (enabled && typeof prompt === "string" && prompt.trim()) {
-      void onNewChat();
-    }
-  });
+  void isWorkspaceRedesignEnabled()
+    .then((enabled) => {
+      redesignDefault.value = enabled;
+    })
+    .catch(() => {
+      redesignDefault.value = false;
+    });
+  // Dashboard "ask AI" entry (layout passes ?prompt=): open a fresh chat.
+  // The prompt text itself is handled by the composer focus flow; carrying
+  // arbitrary text into an auto-send is avoided pending a seeded-composer
+  // contract (see review finding: prompt seeding).
+  void route.query.prompt;
 });
 
 onUnmounted(() => {

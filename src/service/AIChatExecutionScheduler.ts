@@ -79,6 +79,9 @@ interface ActiveAssignment {
   readonly runId: string;
   readonly conversationId: string;
   readonly resourceClass: ChatRunResourceClass;
+  /** Preserved so a requeue keeps its original enqueue time and owner. */
+  readonly owner: ChatRunOwner;
+  readonly enqueuedAt: number;
 }
 
 function basePriorityFor(
@@ -154,6 +157,8 @@ export class AIChatExecutionScheduler {
         runId: entry.runId,
         conversationId: entry.conversationId,
         resourceClass: entry.resourceClass,
+        owner: entry.owner,
+        enqueuedAt: entry.enqueuedAt,
       });
       onDispatch({
         runId: entry.runId,
@@ -170,8 +175,9 @@ export class AIChatExecutionScheduler {
   }
 
   /**
-   * Return a dispatched slot without changing the run id or losing its
-   * original enqueue time (design §10.3 — turn-lease race lost).
+   * Return a dispatched slot without changing the run id, its owner, or its
+   * original enqueue time (design §10.3 — turn-lease race lost; aging must
+   * not restart and priority tier must not silently change).
    */
   requeue(runId: string): void {
     const assignment = this.active.get(runId);
@@ -180,9 +186,9 @@ export class AIChatExecutionScheduler {
     this.queue.push({
       runId,
       conversationId: assignment.conversationId,
-      owner: "interactive",
+      owner: assignment.owner,
       resourceClass: assignment.resourceClass,
-      enqueuedAt: this.now(),
+      enqueuedAt: assignment.enqueuedAt,
     });
   }
 

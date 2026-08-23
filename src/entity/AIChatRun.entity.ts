@@ -13,6 +13,7 @@ import { Order } from "./order.decorator";
  * compare-and-set on `revision`; terminal states are immutable.
  */
 @Entity("ai_chat_runs")
+@Index("idx_aichatrun_runid", ["runId"], { unique: true })
 @Index("idx_aichatrun_conv_created", ["conversationId", "createdAt"])
 @Index("idx_aichatrun_status_updated", ["status", "updatedAt"])
 export class AIChatRunEntity extends AuditableEntity {

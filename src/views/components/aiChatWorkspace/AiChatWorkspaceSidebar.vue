@@ -221,7 +221,7 @@ import { useRouter } from "vue-router";
 import { useChatWorkspaceStore } from "@/views/store/chatWorkspace";
 import type { WorkspaceConversationSummary } from "@/entityTypes/aiChatWorkspaceTypes";
 import WorkspaceStatusIndicator from "./WorkspaceStatusIndicator.vue";
-import { conversationStatusVisual, relativeTimeLabel } from "./workspaceStatusUtil";
+import { conversationStatusVisual } from "./workspaceStatusUtil";
 
 const props = defineProps<{
   /** Whether the workspace is the user's durable default chat (flag on). */
@@ -339,7 +339,6 @@ function onTreeKeydown(event: KeyboardEvent): void {
   }
 }
 
-defineExpose({ relativeTimeLabel });
 </script>
 
 <style scoped>

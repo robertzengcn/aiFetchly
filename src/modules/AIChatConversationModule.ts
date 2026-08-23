@@ -1,6 +1,6 @@
 import { BaseModule } from "@/modules/baseModule";
 import { AIChatConversationModel } from "@/model/AIChatConversation.model";
-import { AIChatRunModel, RUN_ACTIVE_STATUSES } from "@/model/AIChatRun.model";
+import { AIChatRunModel } from "@/model/AIChatRun.model";
 import { WorkspaceModel } from "@/model/Workspace.model";
 import { AIChatMessageModel } from "@/model/AIChatMessage.model";
 import { AIChatMessageEntity } from "@/entity/AIChatMessage.entity";
@@ -8,7 +8,6 @@ import { AIChatV2Module } from "@/modules/AIChatV2Module";
 import { WorkspaceEntity } from "@/entity/Workspace.entity";
 import { WorkspaceKeyService } from "@/service/WorkspaceKeyService";
 import type {
-  ChatRunStatus,
   ConversationAttention,
   ConversationRuntimeStatus,
   WorkspaceConversationSummary,
@@ -217,6 +216,20 @@ export class AIChatConversationModule extends BaseModule {
     return { workspaces, unassigned, selectedConversationId };
   }
 
+  /** Point lookup for the conversation projection row (send hot path). */
+  async getConversationProjection(conversationId: string) {
+    await this.ensureConnection();
+    return this.convModel().getByConversationId(conversationId);
+  }
+
+  /** Persisted stable workspace key for a conversation, or null. */
+  async getWorkspaceKeyForConversation(
+    conversationId: string
+  ): Promise<string | null> {
+    await this.ensureConnection();
+    return this.workspaceModel().findWorkspaceKeyForConversation(conversationId);
+  }
+
   /** Advance the durable read marker monotonically (design §8.5). */
   async markRead(
     conversationId: string,
@@ -311,10 +324,9 @@ export class AIChatConversationModule extends BaseModule {
     }
 
     const source = await this.convModel().getByConversationId(conversationId);
-    const binding = await this.workspaceModel().findByConversation(conversationId);
     await this.convModel().createProjection({
       conversationId: newConversationId,
-      workspaceKey: binding?.rootPath ? source?.workspaceKey ?? null : source?.workspaceKey ?? null,
+      workspaceKey: source?.workspaceKey ?? null,
       title: source?.title ?? null,
       preview: source?.preview ?? "",
       createdAt: new Date(),
@@ -434,12 +446,4 @@ export class AIChatConversationModule extends BaseModule {
     return updated;
   }
 
-  /** Whether any durable non-terminal run exists (debug/diagnostics aid). */
-  async hasActiveRuns(conversationId: string): Promise<boolean> {
-    await this.ensureConnection();
-    const runs = await this.runModel().listByConversation(conversationId, 10);
-    return runs.some((r) =>
-      RUN_ACTIVE_STATUSES.includes(r.status as ChatRunStatus)
-    );
-  }
 }

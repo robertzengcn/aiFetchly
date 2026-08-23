@@ -498,26 +498,38 @@ export function registerAiChatWorkspaceIpcHandlers(): void {
   // rollout flag (PRD §33): default-off redesign with rollback
   // -------------------------------------------------------------------------
   ipcMain.handle(AI_CHAT_WORKSPACE_GET_FLAG, async (_e, data: unknown) => {
-    const parsed = workspaceFlagGetRequestSchema.safeParse(parsePayload(data));
-    if (!parsed.success) {
-      return denied("Invalid flag request");
+    try {
+      const parsed = workspaceFlagGetRequestSchema.safeParse(
+        parsePayload(data)
+      );
+      if (!parsed.success) {
+        return denied("Invalid flag request");
+      }
+      const enabled =
+        new Token().getValue(USER_AI_CHAT_WORKSPACE_REDESIGN) === "true";
+      return ok({ enabled });
+    } catch (err) {
+      return denied(userSafeError(err));
     }
-    const enabled =
-      new Token().getValue(USER_AI_CHAT_WORKSPACE_REDESIGN) === "true";
-    return ok({ enabled });
   });
 
   ipcMain.handle(AI_CHAT_WORKSPACE_SET_FLAG, async (_e, data: unknown) => {
-    const parsed = workspaceFlagSetRequestSchema.safeParse(parsePayload(data));
-    if (!parsed.success) {
-      return denied("Invalid flag request");
+    try {
+      const parsed = workspaceFlagSetRequestSchema.safeParse(
+        parsePayload(data)
+      );
+      if (!parsed.success) {
+        return denied("Invalid flag request");
+      }
+      const token = new Token();
+      token.setValue(
+        USER_AI_CHAT_WORKSPACE_REDESIGN,
+        parsed.data.enabled ? "true" : "false"
+      );
+      return ok({ enabled: parsed.data.enabled });
+    } catch (err) {
+      return denied(userSafeError(err));
     }
-    const token = new Token();
-    token.setValue(
-      USER_AI_CHAT_WORKSPACE_REDESIGN,
-      parsed.data.enabled ? "true" : "false"
-    );
-    return ok({ enabled: parsed.data.enabled });
   });
 }
 

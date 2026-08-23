@@ -13,6 +13,7 @@ import { Order } from "./order.decorator";
  * persistence where practical; an idempotent backfill repairs legacy rows.
  */
 @Entity("ai_chat_conversations")
+@Index("idx_aichatconv_conversation", ["conversationId"], { unique: true })
 @Index("idx_aichatconv_workspace_last", ["workspaceKey", "lastMessageAt"])
 @Index("idx_aichatconv_last_message", ["lastMessageAt"])
 export class AIChatConversationEntity extends AuditableEntity {

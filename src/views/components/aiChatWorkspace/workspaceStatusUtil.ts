@@ -183,17 +183,3 @@ export function headerStatusFor(input: {
   return null;
 }
 
-/** Relative time label for sidebar rows (bounded, localized by the caller). */
-export function relativeTimeLabel(iso: string, now = Date.now()): string {
-  const then = Date.parse(iso);
-  if (Number.isNaN(then)) return "";
-  const diffMs = now - then;
-  const minutes = Math.round(diffMs / 60_000);
-  if (minutes < 1) return "now";
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.round(minutes / 60);
-  if (hours < 24) return `${hours}h`;
-  const days = Math.round(hours / 24);
-  if (days < 7) return `${days}d`;
-  return new Date(then).toLocaleDateString();
-}

@@ -7,6 +7,7 @@ import type { AIChatQuerySubmitInput } from "@/service/AIChatQueryEngine";
 import type { AIChatQueryEventSink } from "@/service/AIChatQueryEvents";
 import { AIChatRunModule } from "@/modules/AIChatRunModule";
 import { AIChatConversationModule } from "@/modules/AIChatConversationModule";
+import { AIChatConversationModel } from "@/model/AIChatConversation.model";
 import type { StartChatRunRequestPayload } from "@/schemas/ipc/aiChatWorkspace";
 import { normalizeChatV2UploadedFiles } from "@/main-process/communication/ai-chat-v2-ipc";
 import type { ChatV2UploadedAttachment } from "@/entityTypes/aiChatV2Types";
@@ -246,6 +247,8 @@ export class AIChatCoordinator {
     const live = this.liveRuns.get(conversationId);
     if (!live || live.runId !== runId) {
       // Stale dispatch target (e.g. cancelled between pump and execute).
+      this.startRequests.delete(runId);
+      this.runIndex.delete(runId);
       this.deps.scheduler.complete(runId);
       return;
     }
@@ -257,7 +260,11 @@ export class AIChatCoordinator {
       ownerId: runId,
     });
     if (!lease) {
+      // Lease lost: the slot returns with its original enqueue time; a pump
+      // lets a now-eligible run take the freed capacity instead of waiting
+      // for the next unrelated dispatch.
       this.deps.scheduler.requeue(runId);
+      this.pump();
       return;
     }
 
@@ -395,19 +402,23 @@ export class AIChatCoordinator {
   private async resolveConversationContext(
     conversationId: string
   ): Promise<{ workspaceKey: string | null; unread: boolean }> {
+    // Two point lookups — building the entire sidebar per send would cost
+    // O(all conversations + all runs) on every message.
     try {
-      const sidebar = await this.deps.conversationModule.getWorkspaceSidebar(
-        () => null,
-        conversationId
-      );
-      const all = [
-        ...sidebar.unassigned,
-        ...sidebar.workspaces.flatMap((w) => w.conversations),
-      ];
-      const row = all.find((c) => c.conversationId === conversationId);
+      const projection =
+        await this.deps.conversationModule.getConversationProjection(
+          conversationId
+        );
+      if (!projection) {
+        return { workspaceKey: null, unread: false };
+      }
+      const workspaceKey =
+        await this.deps.conversationModule.getWorkspaceKeyForConversation(
+          conversationId
+        );
       return {
-        workspaceKey: row?.workspaceKey ?? null,
-        unread: row?.unread ?? false,
+        workspaceKey: workspaceKey ?? projection.workspaceKey ?? null,
+        unread: AIChatConversationModel.isUnread(projection),
       };
     } catch {
       return { workspaceKey: null, unread: false };
@@ -435,6 +446,7 @@ export class AIChatCoordinator {
     }
     if (live) {
       this.startRequests.delete(live.runId);
+      this.runIndex.delete(live.runId); // bounded lifetime maps
     }
     // Remove the live entry BEFORE broadcasting so the terminal summary
     // reports `idle` (+ unread on completion) instead of a stuck running

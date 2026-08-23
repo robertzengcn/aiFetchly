@@ -107,24 +107,24 @@ export class AIChatRunModel extends BaseDb {
   ): Promise<AIChatRunEntity[]> {
     this.assertMainProcess();
     if (conversationIds.length === 0) return [];
-    const rows = await this.repository.find({
-      where: { conversationId: In(conversationIds) },
+    // Status predicate stays in SQL so the (status, updatedAt) index serves
+    // the query and terminal history is never scanned.
+    return this.repository.find({
+      where: {
+        conversationId: In(conversationIds),
+        status: In(RUN_ACTIVE_STATUSES as string[]),
+      },
       order: { createdAt: "DESC" },
     });
-    return rows.filter((r) =>
-      RUN_ACTIVE_STATUSES.includes(r.status as ChatRunStatus)
-    );
   }
 
   /** Every non-terminal envelope — startup reconciliation input (§19.4). */
   async listAllActive(): Promise<AIChatRunEntity[]> {
     this.assertMainProcess();
-    const rows = await this.repository.find({
+    return this.repository.find({
+      where: { status: In(RUN_ACTIVE_STATUSES as string[]) },
       order: { updatedAt: "DESC" },
     });
-    return rows.filter((r) =>
-      RUN_ACTIVE_STATUSES.includes(r.status as ChatRunStatus)
-    );
   }
 
   /**

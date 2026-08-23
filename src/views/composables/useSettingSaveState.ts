@@ -4,11 +4,10 @@ import type { SettingSaveState } from "@/views/types/uiConvergenceTypes";
 /**
  * Per-setting auto-save sequencing (design §17.3, IPR-034): saves carry a
  * revision; out-of-order responses cannot report an older value as saved.
- * Overlapping updates serialize when the API cannot accept them.
+ * Callers whose API cannot accept overlapping updates must serialize
+ * edits themselves before calling beginSave.
  */
-export function useSettingSaveState(options?: {
-  serialize?: boolean;
-}): {
+export function useSettingSaveState(): {
   state: Ref<SettingSaveState>;
   beginSave(): number;
   /** Returns true when the completion may update presentation. */
@@ -17,8 +16,6 @@ export function useSettingSaveState(options?: {
 } {
   const state = ref<SettingSaveState>("idle");
   let revision = 0;
-  const inFlight = false;
-  const queue: Array<{ revision: number; run: () => Promise<void> }> = [];
 
   function beginSave(): number {
     revision += 1;
@@ -37,10 +34,6 @@ export function useSettingSaveState(options?: {
   function idle(): void {
     state.value = "idle";
   }
-
-  void options;
-  void inFlight;
-  void queue;
 
   return { state, beginSave, completeSave, idle };
 }
