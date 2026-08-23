@@ -66,16 +66,21 @@ export class AIAutoDreamSourceCollector {
   async collect(input: {
     reviewedSince: Date | null;
   }): Promise<CollectSourcesResult> {
-    const reviewedThrough = new Date();
     const packets: WorkspaceAwareAutoDreamSourcePacket[] = [];
 
     const conversations = await this.chatModule.getConversations();
+    // 1. Filter by reviewedSince BEFORE applying limits (tech-design §14.1).
+    // 2. Sort oldest-first (ascending) so a bounded batch advances the cursor
+    //    through the oldest eligible sources first — never skipping any.
     const filteredChat = conversations
       .filter((c) => {
         const ts = new Date(c.lastMessageTimestamp).getTime();
         if (!Number.isFinite(ts)) return true;
         return input.reviewedSince ? ts >= input.reviewedSince.getTime() : true;
       })
+      .sort((a, b) =>
+        compareAscending(a.lastMessageTimestamp, b.lastMessageTimestamp)
+      )
       .slice(0, MAX_CHAT_CONVERSATIONS);
 
     for (const c of filteredChat) {
@@ -113,7 +118,7 @@ export class AIAutoDreamSourceCollector {
       packets.push({
         sourceKind: "chat_v2",
         sourceId: convId,
-        updatedAt: c.lastMessageTimestamp ?? reviewedThrough.toISOString(),
+        updatedAt: c.lastMessageTimestamp ?? toIsoNow(),
         title: c.title ?? convId,
         messages,
         ...(workspace ? { workspace } : {}),
@@ -150,16 +155,18 @@ export class AIAutoDreamSourceCollector {
       packets.push({
         sourceKind: "agent_task",
         sourceId: id,
-        updatedAt:
-          toIso(t.finishedAt) ??
-          toIso(t.updatedAt) ??
-          reviewedThrough.toISOString(),
+        updatedAt: toIso(t.finishedAt) ?? toIso(t.updatedAt) ?? toIsoNow(),
         title: (t.prompt ?? id).slice(0, 120),
         messages,
         toolCalls,
       });
     }
 
+    // Source-derived cursor: the greatest updatedAt among INCLUDED packets.
+    // Never use new Date() as a success cursor — advancing the watermark
+    // past unprocessed material would skip eligible sources forever
+    // (tech-design §14.1, §2.5).
+    const reviewedThrough = maxIncludedUpdatedAt(packets);
     return {
       packets,
       chatConversationCount: filteredChat.length,
@@ -202,4 +209,58 @@ function toIso(v: Date | string | undefined | null): string | undefined {
   if (v instanceof Date) return v.toISOString();
   const t = new Date(v as string).getTime();
   return Number.isFinite(t) ? new Date(t).toISOString() : undefined;
+}
+
+/**
+ * Compare two timestamp values ascending (oldest first). Non-finite or missing
+ * timestamps sort last so they are never accidentally skipped. Used to order
+ * candidates oldest-first so a bounded batch advances the cursor without gaps.
+ */
+function compareAscending(
+  a: string | Date | undefined | null,
+  b: string | Date | undefined | null
+): number {
+  const ta = toMillis(a);
+  const tb = toMillis(b);
+  if (ta === tb) return 0;
+  if (!Number.isFinite(ta)) return 1;
+  if (!Number.isFinite(tb)) return -1;
+  return ta - tb;
+}
+
+function toMillis(v: string | Date | undefined | null): number {
+  if (!v) return NaN;
+  if (v instanceof Date) return v.getTime();
+  const t = new Date(v as string).getTime();
+  return Number.isFinite(t) ? t : NaN;
+}
+
+/** Current time as an ISO string. Used only for fallback packet timestamps,
+ * never as the success cursor (which is source-derived). */
+function toIsoNow(): string {
+  return new Date().toISOString();
+}
+
+/**
+ * Derive the reviewedThrough cursor from the greatest `updatedAt` among
+ * INCLUDED packets. Returns the wall-clock now only when no packets were
+ * collected (a no-source run returns early before reaching this, so this
+ * fallback is defensive). This is the source-derived cursor the service
+ * commits with a successful run — advancing it past unprocessed material
+ * would skip eligible sources forever.
+ */
+function maxIncludedUpdatedAt(
+  packets: readonly WorkspaceAwareAutoDreamSourcePacket[]
+): Date {
+  let maxMs = NaN;
+  for (const p of packets) {
+    const ms = toMillis(p.updatedAt);
+    if (Number.isFinite(ms) && (Number.isNaN(maxMs) || ms > maxMs)) {
+      maxMs = ms;
+    }
+  }
+  if (!Number.isNaN(maxMs)) {
+    return new Date(maxMs);
+  }
+  return new Date();
 }

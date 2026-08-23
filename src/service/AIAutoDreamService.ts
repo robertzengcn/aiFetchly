@@ -11,9 +11,7 @@ import type {
   AIMemoryConsolidationRunView,
   AIAutoDreamStatusView,
 } from "@/entityTypes/aiUserMemoryTypes";
-import {
-  openAIContentToString,
-} from "@/api/aiChatApi";
+import { openAIContentToString } from "@/api/aiChatApi";
 import type {
   OpenAIChatCompletionRequest,
   OpenAIChatCompletionResponse,
@@ -215,6 +213,11 @@ export class AIAutoDreamService {
         memoriesUpdated: parsed.update.length,
         memoriesArchived: parsed.archive.length,
         model: resp.model,
+        // Commit the source-derived cursor with the successful result so the
+        // watermark advances only through packets this run actually processed
+        // (tech-design §2.6, §14.4). A failed run never reaches here, so its
+        // cursor is not advanced.
+        reviewedThrough: collected.reviewedThrough,
       });
 
       return await this.runModule.getByRunId(runView.runId);

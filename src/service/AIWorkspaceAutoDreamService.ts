@@ -218,10 +218,16 @@ export class AIWorkspaceAutoDreamService {
       }
     }
 
+    // Source-derived cursor: the greatest updatedAt among this workspace
+    // group's packets. Never use new Date() as a success cursor — advancing
+    // the watermark past unprocessed material would skip eligible sources
+    // (tech-design §14.1, §14.5).
+    const groupReviewedThrough = maxGroupUpdatedAt(group.packets);
+
     const runView = await this.runModule.startRun({
       workspaceKey: group.workspaceKey,
       reviewedSince: reviewedSince ?? null,
-      reviewedThrough: new Date(),
+      reviewedThrough: groupReviewedThrough,
     });
 
     try {
@@ -299,6 +305,9 @@ export class AIWorkspaceAutoDreamService {
         memoriesUpdated: parsed.update.length,
         memoriesArchived: parsed.archive.length,
         model: resp.model,
+        // Commit the source-derived cursor with the successful result so the
+        // watermark advances only through packets this workspace run processed.
+        reviewedThrough: groupReviewedThrough,
       });
 
       return await this.runModule.getByRunId(runView.runId);
@@ -324,4 +333,23 @@ function hasEnoughChangedContent(group: WorkspacePacketGroup): boolean {
     0
   );
   return messageCount >= MIN_CHANGED_MESSAGES_PER_WORKSPACE;
+}
+
+/**
+ * Derive the reviewedThrough cursor for a workspace group from the greatest
+ * `updatedAt` among its packets. Source-derived so the watermark advances only
+ * through processed material; falls back to now when no packet has a usable
+ * timestamp (defensive — a no-source group returns earlier).
+ */
+function maxGroupUpdatedAt(
+  packets: readonly WorkspaceAwareAutoDreamSourcePacket[]
+): Date {
+  let maxMs = NaN;
+  for (const p of packets) {
+    const ms = p.updatedAt ? new Date(p.updatedAt).getTime() : NaN;
+    if (Number.isFinite(ms) && (Number.isNaN(maxMs) || ms > maxMs)) {
+      maxMs = ms;
+    }
+  }
+  return Number.isNaN(maxMs) ? new Date() : new Date(maxMs);
 }
