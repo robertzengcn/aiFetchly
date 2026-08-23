@@ -470,6 +470,15 @@ private getRepository(): Repository<SomeEntity> {
 
 **Remember**: Worker processes are for CPU-intensive tasks only. All CRUD operations (Create, Read, Update, Delete) MUST be handled by the main process through Modules and Models.
 
+### Small-Model Routing for Background Workloads
+AiFetchly routes four bounded, text-only background AI workloads (`user_auto_dream`, `workspace_auto_dream`, `session_memory_summary`, `conversation_compact`) through the hosted AI server's virtual `small` model alias when the user is on the hosted provider and the kill switch is enabled. The central router is `src/service/AIChatLightweightCompletionService.ts` (process singleton via `AIChatLightweightCompletionFactory`); profiles, budget helpers, and the typed failure classifier live alongside it. Normal interactive chat, tools, plan execution, agents, and image inputs are **not** routed through the small model, and `small` never appears in the user model selector.
+
+- **Kill switch:** env var `AIFETCHLY_SMALL_MODEL_ROUTING_ENABLED` (absent → **disabled**; `true`/`1` enables; invalid → disabled + logged). Read at service construction; changing it requires an app restart. When disabled, every lightweight workload uses the provider-normal path and all small-specific retry/cooldown/fallback is bypassed.
+- **Hard invariants:** optional background workloads never fall back to the normal model; `conversation_compact` may fall back at most once; ambiguous timeout/network failures are never resubmitted; persistence failure never invokes a model again; the general chat recovery chain is never entered.
+- **Auto-dream cursors** are source-derived (greatest `updatedAt` among included packets), committed with the successful result in a transactional `applyPlanAndCompleteRun`, so the watermark never advances past unprocessed material.
+- **Full compact** is hierarchical (map/reduce chunking via `AIChatPromptBudget`) and capability-gated (`AIChatModelCatalogService.getSmallModelCapability()`); absent metadata means compact goes directly to the normal model (not counted as the one failure fallback).
+- Operations, rollout phases, observability fields, and rollback: `docs/small-model-routing-operations.md`. PRD: `docs/prd/small-model-background-workloads-prd.md`. Technical design: `docs/prd/small-model-background-workloads-technical-design.md`.
+
 ### Security Best Practices
 - Context isolation enabled, Node.js integration disabled in renderer
 - All IPC communication through contextBridge
