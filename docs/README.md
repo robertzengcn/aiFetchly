@@ -8,6 +8,7 @@
 ## Product Requirements
 
 - [PRD: Natural-Language Skill Installation and Portable Skill Runtime](./prd/natural-language-skill-installation-prd.md)
+- [Technical Design: Natural-Language Skill Installation and Portable Skill Runtime](./prd/natural-language-skill-installation-technical-design.md)
 - [PRD: Contact Verification AI Tool](./prd/contact-verification-ai-tool-prd.md)
 - [Technical Design: Contact Verification AI Tool](./prd/contact-verification-ai-tool-technical-design.md)
 - [PRD: Yellow Pages Scraper Plugin for AI Chat](./prd/yellow-pages-scraper-plugin-prd.md)

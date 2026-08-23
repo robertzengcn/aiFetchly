@@ -13,6 +13,7 @@
 
 ### Related documents
 
+- [Natural-Language Skill Installation Technical Design](./natural-language-skill-installation-technical-design.md)
 - [AiFetchly Local Extensibility PRD](./aifetchly-local-extensibility-prd.md)
 - [Claude Code Plugin Compatibility PRD](./claude-code-plugin-compatibility-prd.md)
 - [Claude Code Plugin Compatibility Technical Design](./claude-code-plugin-compatibility-tech-design.md)
