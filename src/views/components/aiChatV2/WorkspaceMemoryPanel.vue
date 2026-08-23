@@ -40,6 +40,59 @@
     </div>
 
     <template v-else>
+      <!-- Portable storage status banner (PRD §16.1/§16.2) -->
+      <div class="wm-portable">
+        <template v-if="portableStatus?.enabled">
+          <v-chip size="x-small" color="teal" variant="tonal" class="mr-2">
+            <v-icon size="12" start>mdi-file-document-multiple-outline</v-icon>
+            {{ portableText }}
+          </v-chip>
+          <span class="wm-portable__meta">
+            {{ portableCountText }} · {{ gitStateText }}:
+            {{ portableStatus.gitTrackingState }}
+          </span>
+          <v-chip
+            v-if="portableStatus.pendingReviewCount > 0"
+            size="x-small"
+            color="warning"
+            variant="tonal"
+            class="mx-1"
+          >
+            {{ pendingReviewText }}: {{ portableStatus.pendingReviewCount }}
+          </v-chip>
+          <v-chip
+            v-if="portableStatus.rejectedCount > 0"
+            size="x-small"
+            color="error"
+            variant="tonal"
+            class="mx-1"
+          >
+            {{ rejectedText }}: {{ portableStatus.rejectedCount }}
+          </v-chip>
+          <v-chip
+            v-if="portableStatus.conflictCount > 0"
+            size="x-small"
+            color="deep-orange"
+            variant="tonal"
+            class="mx-1"
+          >
+            {{ conflictedText }}: {{ portableStatus.conflictCount }}
+          </v-chip>
+          <v-spacer />
+          <v-btn size="x-small" variant="text" @click="onRescan">{{
+            rescanText
+          }}</v-btn>
+        </template>
+        <template v-else>
+          <span class="wm-portable__meta">{{ portableDisabledHint }}</span>
+          <v-spacer />
+          <v-btn size="x-small" variant="tonal" @click="enableOpen = true">
+            <v-icon size="12" start>mdi-file-document-plus-outline</v-icon>
+            {{ enablePortableText }}
+          </v-btn>
+        </template>
+      </div>
+
       <div class="wm-panel__toolbar">
         <v-text-field
           v-model="search"
@@ -119,6 +172,13 @@
       </v-list>
     </template>
 
+    <PortableMemoryEnableDialog
+      :open="enableOpen"
+      :conversation-id="conversationId"
+      @cancel="enableOpen = false"
+      @enabled="onPortableEnabled"
+    />
+
     <WorkspaceMemoryEditorDialog
       v-model="editorOpen"
       :memory="editing"
@@ -149,7 +209,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import type { WorkspaceSummary } from "@/entityTypes/workspaceTypes";
 import type {
@@ -158,8 +218,11 @@ import type {
   AIWorkspaceMemoryStatus,
 } from "@/entityTypes/aiWorkspaceMemoryTypes";
 import { workspaceMemoryApi } from "@/views/api/aiWorkspaceMemory";
+import { portableWorkspaceMemoryApi } from "@/views/api/portableWorkspaceMemory";
+import type { PortableWorkspaceStatusView } from "@/entityTypes/portableWorkspaceMemoryTypes";
 import WorkspaceMemoryEditorDialog from "./WorkspaceMemoryEditorDialog.vue";
 import WorkspaceMemoryStatusBadge from "./WorkspaceMemoryStatusBadge.vue";
+import PortableMemoryEnableDialog from "./PortableMemoryEnableDialog.vue";
 
 const props = defineProps<{
   conversationId: string;
@@ -171,6 +234,12 @@ const emit = defineEmits<{
 }>();
 
 const { t } = useI18n();
+
+/** t() with a working fallback: vue-i18n returns the raw key when missing. */
+function tr(key: string, fallback: string): string {
+  const v = t(key);
+  return v === key ? fallback : v;
+}
 
 const memories = ref<AIWorkspaceMemoryView[]>([]);
 const loading = ref(false);
@@ -192,6 +261,11 @@ const snackbarColor = ref<"success" | "error">("success");
 const autoDreamRunning = ref(false);
 const autoDreamFailed = ref(false);
 const autoDreamLastRun = ref<string | undefined>(undefined);
+
+// Portable storage status (drives the portable banner + enable dialog).
+const portableStatus = ref<PortableWorkspaceStatusView | null>(null);
+const enableOpen = ref(false);
+let unsubscribePortable: (() => void) | null = null;
 
 const hasWorkspace = computed(
   () => !!props.workspace && props.workspace.approvalState === "approved"
@@ -264,6 +338,63 @@ async function refreshAutoDreamStatus(): Promise<void> {
   }
 }
 
+async function refreshPortableStatus(): Promise<void> {
+  if (!hasWorkspace.value || !props.conversationId) {
+    portableStatus.value = null;
+    return;
+  }
+  try {
+    const resp = await portableWorkspaceMemoryApi.status(props.conversationId);
+    portableStatus.value = resp.status ? (resp.data ?? null) : null;
+  } catch {
+    portableStatus.value = null; // advisory only
+  }
+}
+
+async function onRescan(): Promise<void> {
+  if (!props.conversationId) return;
+  try {
+    await portableWorkspaceMemoryApi.rescan(props.conversationId);
+  } catch {
+    // rescan is best-effort; watcher events refresh the UI
+  }
+}
+
+function onPortableEnabled(): void {
+  enableOpen.value = false;
+  void refreshPortableStatus();
+  emit("change");
+}
+
+const portableText = computed(
+  () => tr("portableMemory.banner", "Portable memory")
+);
+const portableCountText = computed(() => {
+  const s = portableStatus.value;
+  if (!s) return "";
+  return `${s.portableCount} / ${s.portableCount + s.privateCount}`;
+});
+const gitStateText = computed(
+  () => tr("portableMemory.gitState", "Git")
+);
+const pendingReviewText = computed(
+  () => tr("portableMemory.pendingReview", "Pending review")
+);
+const rejectedText = computed(
+  () => tr("portableMemory.rejected", "Rejected")
+);
+const conflictedText = computed(
+  () => tr("portableMemory.conflicted", "Conflicted")
+);
+const rescanText = computed(() => tr("portableMemory.rescan", "Rescan"));
+const portableDisabledHint = computed(
+  () =>
+    tr("portableMemory.disabledHint", "Memories are stored privately in AiFetchly. Enable portable memory to share project context with other agents.")
+);
+const enablePortableText = computed(
+  () => tr("portableMemory.enable", "Enable portable memory")
+);
+
 async function onRunAutoDream(): Promise<void> {
   if (!props.conversationId || autoDreamRunning.value) return;
   autoDreamRunning.value = true;
@@ -297,9 +428,28 @@ watch(
   () => {
     void refresh();
     void refreshAutoDreamStatus();
+    void refreshPortableStatus();
   },
   { immediate: true }
 );
+
+// Live sync summaries (design §21.5): debounced refresh; event data is never
+// treated as the record list.
+let portableRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+onMounted(() => {
+  unsubscribePortable = portableWorkspaceMemoryApi.onChanged(() => {
+    if (portableRefreshTimer) clearTimeout(portableRefreshTimer);
+    portableRefreshTimer = setTimeout(() => {
+      void refreshPortableStatus();
+      void refresh();
+    }, 250);
+  });
+});
+onUnmounted(() => {
+  unsubscribePortable?.();
+  unsubscribePortable = null;
+  if (portableRefreshTimer) clearTimeout(portableRefreshTimer);
+});
 
 function openCreate(): void {
   editing.value = null;
@@ -507,6 +657,21 @@ const confidenceText = computed(() => t("workspaceMemory.confidence") || "Confid
   opacity: 0.6;
   align-self: center;
 }
+.wm-portable {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 4px 12px;
+  border-bottom: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+  background: rgba(var(--v-theme-surface-variant), 0.15);
+  min-height: 32px;
+}
+.wm-portable__meta {
+  font-size: 12px;
+  opacity: 0.8;
+}
+
 .wm-panel__toolbar {
   display: flex;
   align-items: center;
