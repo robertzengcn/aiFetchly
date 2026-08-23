@@ -12,6 +12,11 @@ import { resolveViteLoginBase } from "@/config/viteLoginUrl";
 import { assertFirstPartyHubUrl } from "@/config/pluginHubUrl";
 import { userSecretKeyService } from "@/modules/fieldCipher";
 import { log } from "@/modules/Logger";
+import {
+  HttpResponseError,
+  MAX_RESPONSE_BODY_BYTES,
+  MAX_RETRY_AFTER_MS,
+} from "@/modules/lib/httpResponseError";
 
 /**
  * Decide whether a refresh failure is auth-shaped versus a transient/network
@@ -246,13 +251,83 @@ export class HttpClient {
       }
     }
 
-    if (!res.ok) throw new Error(res.statusText);
+    if (!res.ok) throw await this._buildHttpResponseError(res);
 
     //   if (options.parseResponse !== false && res.status !== 204)
     //     return res.json();
     const data = await res.json();
     //log.info(data)
     return data;
+  }
+
+  /**
+   * Build a typed {@link HttpResponseError} from a non-success `fetch`
+   * response. Reads at most {@link MAX_RESPONSE_BODY_BYTES} of the body,
+   * parses `error.code` only when the body is valid JSON, and parses
+   * `Retry-After` with an upper bound. The body is retained on the error for
+   * callers that need it but is **never logged here** — provider messages can
+   * contain request fragments or sensitive data. Authentication (401/403) is
+   * handled separately by the refresh path before this is reached.
+   */
+  private async _buildHttpResponseError(
+    res: Response
+  ): Promise<HttpResponseError> {
+    const status = res.status;
+    const statusText = res.statusText ?? "";
+
+    // Read at most MAX_RESPONSE_BODY_BYTES of the body as text. `fetch`
+    // Response bodies are stream-backed; clone first so any downstream
+    // consumer (and the success path) is unaffected. Use text() then bound.
+    let bodyText = "";
+    try {
+      const raw = await res.text();
+      bodyText =
+        typeof raw === "string"
+          ? raw.length > MAX_RESPONSE_BODY_BYTES
+            ? raw.slice(0, MAX_RESPONSE_BODY_BYTES)
+            : raw
+          : "";
+    } catch {
+      // Body could not be read (e.g. already consumed, stream error). Do not
+      // throw — the original failure must still surface as a typed error.
+      bodyText = "";
+    }
+
+    // Parse a machine-readable server code only when the body is valid JSON
+    // and exposes `error.code` as a string. Malformed JSON or a missing field
+    // is ignored; the status code alone still classifies the failure.
+    let serverCode: string | undefined;
+    if (bodyText.length > 0) {
+      try {
+        const parsed = JSON.parse(bodyText) as { error?: unknown };
+        const code = (parsed as { error?: { code?: unknown } }).error?.code;
+        if (typeof code === "string" && code.length > 0) {
+          serverCode = code;
+        }
+      } catch {
+        // Not JSON — serverCode remains undefined.
+      }
+    }
+
+    // Parse Retry-After (seconds or HTTP-date) into ms, capped at the upper
+    // bound. Only the delta-seconds form is supported deterministically; an
+    // HTTP-date form is ignored (serverClock skew makes it unreliable).
+    let retryAfterMs: number | undefined;
+    const retryAfterRaw = res.headers?.get?.("retry-after") ?? null;
+    if (retryAfterRaw) {
+      const seconds = Number(retryAfterRaw);
+      if (Number.isFinite(seconds) && seconds >= 0) {
+        retryAfterMs = Math.min(seconds * 1000, MAX_RETRY_AFTER_MS);
+      }
+    }
+
+    return new HttpResponseError(
+      statusText || `HTTP ${status}`,
+      status,
+      bodyText,
+      retryAfterMs,
+      serverCode
+    );
   }
 
   setHeader(key: string, value: string) {
