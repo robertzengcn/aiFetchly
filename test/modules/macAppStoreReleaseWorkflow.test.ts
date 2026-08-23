@@ -98,6 +98,12 @@ describe("Mac App Store release workflow", (): void => {
       'plutil -extract "DeveloperCertificates.$certificate_index" raw'
     );
     expect(step.run).to.include(
+      "/usr/libexec/PlistBuddy -c 'Print :Entitlements:com.apple.application-identifier'"
+    );
+    expect(step.run).to.include(
+      'base64 --decode > "$RUNNER_TEMP/profile-developer-certificate-$certificate_index.der"'
+    );
+    expect(step.run).to.include(
       'security find-certificate -c "$MAC_STORE_SIGNING_IDENTITY" -p "$keychain_path"'
     );
   });

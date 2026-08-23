@@ -607,7 +607,7 @@ jobs:
           security cms -D -i "$provisioning_profile_path" > "$profile_plist_path"
           expected_application_identifier="$APPLE_TEAM_ID.com.aifetchly.desktop"
           profile_application_identifier="$(
-            plutil -extract Entitlements.application-identifier raw -o - "$profile_plist_path"
+            /usr/libexec/PlistBuddy -c 'Print :Entitlements:com.apple.application-identifier' "$profile_plist_path"
           )"
           if [ "$profile_application_identifier" != "$expected_application_identifier" ]; then
             echo "::error::Mac App Store provisioning profile is for $profile_application_identifier; expected $expected_application_identifier."
@@ -623,11 +623,11 @@ jobs:
           profile_certificate_matches=false
           certificate_index=0
           while plutil -extract "DeveloperCertificates.$certificate_index" raw \
-            -o "$RUNNER_TEMP/profile-developer-certificate-$certificate_index.cer" \
-            "$profile_plist_path" 2>/dev/null; do
+            -o - "$profile_plist_path" 2>/dev/null | \
+            base64 --decode > "$RUNNER_TEMP/profile-developer-certificate-$certificate_index.der"; do
             profile_certificate_fingerprint="$(
               openssl x509 -inform DER \
-                -in "$RUNNER_TEMP/profile-developer-certificate-$certificate_index.cer" \
+                -in "$RUNNER_TEMP/profile-developer-certificate-$certificate_index.der" \
                 -noout -fingerprint -sha256 |
                 cut -d= -f2 |
                 tr -d ':'
