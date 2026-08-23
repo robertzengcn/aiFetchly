@@ -412,6 +412,13 @@ export function registerAiChatWorkspaceIpcHandlers(): void {
       if (!parsed.success) {
         return denied("Invalid delete request");
       }
+      // Never delete under a live run: the engine would keep executing and
+      // re-persist its result, silently resurrecting the conversation.
+      if (getAiChatWorkspaceCoordinator().getLiveRuntime(parsed.data.conversationId)) {
+        return denied(
+          "This conversation is running a task. Stop it before deleting."
+        );
+      }
       await new AIChatConversationModule().deleteConversation(
         parsed.data.conversationId
       );

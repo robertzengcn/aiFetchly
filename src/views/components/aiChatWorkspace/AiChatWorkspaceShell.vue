@@ -719,6 +719,11 @@ async function onDelete(): Promise<void> {
 
 async function onClear(): Promise<void> {
   if (!conversationId.value) return;
+  if (selectedStore.isBusy) {
+    // Clearing under an active run would let the engine re-persist its
+    // result after the wipe — stop the run first.
+    return;
+  }
   const confirmed = window.confirm(
     t("workspaceChat.header.clearConfirm") ||
       "Clear all messages in this conversation?"

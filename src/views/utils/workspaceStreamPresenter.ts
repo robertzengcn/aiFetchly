@@ -68,6 +68,12 @@ export interface StreamPresenterOptions {
   readonly maxBufferedChars?: number;
   /** Injected scheduler (tests). Defaults to a 50 ms timer. */
   readonly scheduleFlush?: (fn: () => void, ms: number) => () => void;
+  /**
+   * Invoked ONLY when visible state actually mutates (flush, tool/plan/goal
+   * events, terminal, seed, dispose) — never per buffered token. Lets the
+   * store sync one reactive update per flush window (design §13).
+   */
+  readonly onMutate?: () => void;
 }
 
 const DEFAULT_BATCH_MS = 50;
@@ -122,6 +128,7 @@ export function createWorkspaceStreamPresenter(
   const maxBufferedChars =
     options?.maxBufferedChars ?? DEFAULT_MAX_BUFFERED_CHARS;
   const scheduleFlush = options?.scheduleFlush ?? defaultScheduleFlush;
+  const notifyMutate = options?.onMutate;
 
   let messages: ChatV2MessageView[] = [];
   let activeAssistantMessageId: string | null = null;
@@ -176,12 +183,14 @@ export function createWorkspaceStreamPresenter(
     updater: (view: ChatV2MessageView) => ChatV2MessageView
   ): void {
     messages = messages.map((m) => (m.id === messageId ? updater(m) : m));
+    notifyMutate?.();
   }
 
   function appendMessage(view: ChatV2MessageView): void {
     // Idempotent append keyed by message id (duplicate terminal events).
     if (messages.some((m) => m.id === view.id)) return;
     messages = [...messages, view];
+    notifyMutate?.();
   }
 
   function scheduleBufferedFlush(): void {
@@ -242,8 +251,10 @@ export function createWorkspaceStreamPresenter(
   function applyChunk(runId: string, chunk: Record<string, unknown>): void {
     const eventType = str(chunk.eventType);
     const messageId = str(chunk.messageId);
+    let bufferedOnly = true; // token/reasoning deltas mutate state at flush
     switch (eventType) {
       case "start": {
+        bufferedOnly = false;
         streamStatus = "streaming";
         runtimeStatus = "running";
         errorMessage = null;
@@ -405,6 +416,7 @@ export function createWorkspaceStreamPresenter(
         break;
       }
       case "recovery_status": {
+        bufferedOnly = false;
         recovery = {
           layer: str(chunk.recoveryLayer) ?? "",
           reason: str(chunk.recoveryReason) ?? "",
@@ -434,6 +446,7 @@ export function createWorkspaceStreamPresenter(
         break;
       }
       case "goal_state": {
+        bufferedOnly = false;
         const goalState = chunk.goalState as
           | { goalId?: string; objective?: string; status?: string; iterationCount?: number }
           | undefined;
@@ -448,6 +461,7 @@ export function createWorkspaceStreamPresenter(
         break;
       }
       case "goal_iteration": {
+        bufferedOnly = false;
         const iteration = chunk.goalIteration as
           | { iteration?: number; status?: string }
           | undefined;
@@ -457,10 +471,12 @@ export function createWorkspaceStreamPresenter(
         break;
       }
       case "attention_cleared": {
+        bufferedOnly = false;
         runtimeStatus = "running";
         break;
       }
       case "complete": {
+        bufferedOnly = false;
         flushNow();
         const fullContent = str(chunk.fullContent);
         if (messageId) {
@@ -481,6 +497,7 @@ export function createWorkspaceStreamPresenter(
         break;
       }
       case "error": {
+        bufferedOnly = false;
         flushNow();
         streamStatus = "error";
         runtimeStatus = "idle";
@@ -488,6 +505,7 @@ export function createWorkspaceStreamPresenter(
         break;
       }
       case "cancelled": {
+        bufferedOnly = false;
         flushNow();
         streamStatus = "cancelled";
         runtimeStatus = "idle";
@@ -497,6 +515,11 @@ export function createWorkspaceStreamPresenter(
         // Unknown event types are ignored deterministically.
         break;
     }
+    // Every case except a pure token/reasoning buffer append mutated
+    // visible state (status fields, rows, or projections).
+    if (!bufferedOnly) {
+      notifyMutate?.();
+    }
   }
 
   function flushNow(): void {
@@ -505,6 +528,7 @@ export function createWorkspaceStreamPresenter(
       cancelFlush = null;
     }
     if (buffer.length === 0) return;
+    notifyMutate?.(); // one reactive update per flush window (design §13)
     const pending = buffer.splice(0, buffer.length);
     // One reactive update per message per flush.
     const byMessage = new Map<string, { content: string; reasoning: string }>();
@@ -609,6 +633,7 @@ export function createWorkspaceStreamPresenter(
         cancelFlush();
         cancelFlush = null;
       }
+      notifyMutate?.();
       buffer.length = 0;
       highestSequence.clear();
       // Old-conversation rows must never render for the next selection.

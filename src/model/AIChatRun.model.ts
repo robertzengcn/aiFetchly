@@ -128,7 +128,11 @@ export class AIChatRunModel extends BaseDb {
   }
 
   /**
-   * Compare-and-set transition using `revision` (design §9.1).
+   * Atomic compare-and-set transition (design §9.1).
+   *
+   * The status guard runs in the UPDATE's WHERE clause, so interleaved
+   * writers cannot both pass their checks and last-write-wins (e.g.
+   * overwriting `completed` with `awaiting_user`).
    *
    * - Terminal states are immutable: a transition out of a terminal status
    *   always fails with {@link RunTransitionConflictError}.
@@ -146,48 +150,58 @@ export class AIChatRunModel extends BaseDb {
     }
   ): Promise<AIChatRunEntity> {
     this.assertMainProcess();
-    const current = await this.getByRunId(runId);
-    if (!current) {
-      throw new RunTransitionConflictError(runId, expected, "(missing)");
-    }
-    const currentStatus = current.status as ChatRunStatus;
-    if (isChatRunTerminal(currentStatus)) {
-      if (currentStatus === next) return current; // duplicate terminal event
-      throw new RunTransitionConflictError(runId, expected, currentStatus);
-    }
-    if (currentStatus === next) return current; // duplicate non-terminal
-    if (!expected.includes(currentStatus)) {
-      throw new RunTransitionConflictError(runId, expected, currentStatus);
-    }
     const now = new Date();
-    const entity = { ...current };
-    entity.status = next;
-    entity.revision = current.revision + 1;
-    entity.updatedAt = now;
-    if (next === "running" && !entity.startedAt) {
-      entity.startedAt = now;
-    }
-    if (
-      next === "awaiting_permission" ||
-      next === "awaiting_user"
-    ) {
-      entity.waitingAt = now;
+    const updates: Partial<AIChatRunEntity> = {
+      status: next,
+      updatedAt: now,
+    };
+    if (next === "running") updates.startedAt = now;
+    if (next === "awaiting_permission" || next === "awaiting_user") {
+      updates.waitingAt = now;
     }
     if (isChatRunTerminal(next)) {
-      entity.finishedAt = now;
+      updates.finishedAt = now;
     }
     if (patch?.assistantMessageId !== undefined) {
-      entity.assistantMessageId = patch.assistantMessageId;
+      updates.assistantMessageId = patch.assistantMessageId;
     }
     if (patch?.errorCode !== undefined) {
-      entity.errorCode = patch.errorCode;
+      updates.errorCode = patch.errorCode;
     }
     if (patch?.errorSummary !== undefined) {
-      entity.errorSummary = patch.errorSummary
+      updates.errorSummary = patch.errorSummary
         ? patch.errorSummary.slice(0, 500)
         : null;
     }
-    return this.repository.save(entity);
+
+    // Atomic: only rows still in an expected status are touched, and the
+    // revision bump happens inside the same statement. startedAt keeps its
+    // original value on resume (CASE), matching the pre-atomic behavior.
+    // The interpolated value is a self-generated ISO timestamp, never user
+    // input — no injection surface.
+    await this.repository.update(
+      { runId, status: In(expected as string[]) },
+      {
+        ...updates,
+        revision: () => "revision + 1",
+        ...(next === "running"
+          ? {
+              startedAt: () =>
+                `CASE WHEN "startedAt" IS NULL THEN '${now.toISOString()}' ELSE "startedAt" END`,
+            }
+          : {}),
+      } as never
+    );
+
+    const row = await this.getByRunId(runId);
+    if (!row) {
+      throw new RunTransitionConflictError(runId, expected, "(missing)");
+    }
+    const currentStatus = row.status as ChatRunStatus;
+    if (currentStatus === next) {
+      return row; // CAS won, or idempotent duplicate of the current status
+    }
+    throw new RunTransitionConflictError(runId, expected, currentStatus);
   }
 
   /** Mark abandoned non-terminal runs interrupted at startup (§19.4). */

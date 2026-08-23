@@ -97,6 +97,17 @@ export class AIChatCoordinator {
       return { ok: true, response: cached }; // send-button retry safety
     }
 
+    // One live run per conversation (PRD §19.4 / turn-coordinator
+    // semantics): a second send before the first resolves would overwrite
+    // the live slot and strand run B as permanently queued.
+    if (this.liveRuns.has(request.conversationId)) {
+      return {
+        ok: false,
+        message:
+          "A run is already active for this conversation. Wait for it to finish or stop it first.",
+      };
+    }
+
     const run = await this.deps.runModule.createRun({
       conversationId: request.conversationId,
       owner: "interactive",

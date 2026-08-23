@@ -73,14 +73,24 @@ export class AIChatRunModule extends BaseModule {
   /**
    * Startup reconciliation (§19.4): every non-terminal run without an
    * explicitly supported durable resume protocol is marked `interrupted`.
-   * Returns the number of runs reconciled.
+   *
+   * Runs queued after this process started are SKIPPED — they may be live
+   * in-process work (e.g. a scheduled loop mid-execution whose owner adapter
+   * holds a non-terminal envelope); marking them interrupted would block
+   * their real terminal transition via terminal-immutability and permanently
+   * misreport the outcome.
    */
   async reconcileInterruptedRuns(reason: string): Promise<number> {
     await this.ensureConnection();
     const model = this.getModel();
     const active = await model.listAllActive();
+    // process.uptime() is seconds since process start.
+    const processStartMs = Date.now() - process.uptime() * 1000;
     let count = 0;
     for (const run of active) {
+      if (run.queuedAt && run.queuedAt.getTime() > processStartMs) {
+        continue; // live in this process — not abandoned
+      }
       const updated = await model.markInterrupted(run.runId, reason);
       if (updated && updated.status === "interrupted") count += 1;
     }

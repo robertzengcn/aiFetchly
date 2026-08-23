@@ -57,7 +57,14 @@ export const useSelectedConversationStore = defineStore(
   () => {
     const workspaceStore = useChatWorkspaceStore();
 
-    const presenter = markRaw(createWorkspaceStreamPresenter());
+    // Flush-time sync (design §13): onMutate fires on real state mutations
+    // — never per buffered token — so one reactive update lands per flush
+    // window, terminal, or seed instead of per stream chunk.
+    const presenter = markRaw(
+      createWorkspaceStreamPresenter({
+        onMutate: () => syncFromPresenter(),
+      })
+    );
     // Re-create presenter with options indirection for tests.
     function resetPresenter(options?: StreamPresenterOptions): void {
       const next = createWorkspaceStreamPresenter(options);
@@ -109,7 +116,8 @@ export const useSelectedConversationStore = defineStore(
     function applyDetailEvent(event: ChatRunDetailEvent): void {
       const consumed = presenter.applyEvent(event);
       if (!consumed) return;
-      syncFromPresenter();
+      // Reactive sync happens through the presenter's onMutate hook — one
+      // update per flush window, not one per token chunk.
       // FR-026: an openImmediately artifact opens the inspector preview for
       // the SELECTED conversation only (events arrive selected-only).
       if (event.eventType === "tool_result") {
