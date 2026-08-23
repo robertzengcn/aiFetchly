@@ -19,7 +19,7 @@ import { userSecretKeyService } from "@/modules/fieldCipher";
  * (e.g. "invalid or expired refresh token") and the prior capital-I match let
  * this branch silently never fire.
  */
-function isRefreshTokenInvalidError(error: unknown): boolean {
+export function isRefreshTokenInvalidError(error: unknown): boolean {
   const msg = (
     error instanceof Error ? error.message : String(error)
   ).toLowerCase();
