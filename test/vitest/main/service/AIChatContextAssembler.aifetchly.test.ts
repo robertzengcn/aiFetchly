@@ -19,6 +19,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AIFetchlyInstructionBlock } from "@/entityTypes/aifetchlyConfigTypes";
 import type { AgentDefinitionView } from "@/entityTypes/agentTypes";
 import { ai_custom_context_directive } from "@/config/settinggroupInit";
+import { log } from "@/modules/Logger";
 
 // --- shared mocks (mirror AIChatContextAssembler.test.ts) -------------------
 
@@ -446,7 +447,7 @@ describe("AIChatContextAssembler — Available agents block (D-Discovery, Plan 1
   });
 
   it("D-Discovery: runtime catalog access throwing degrades to no-injection and does not break assemble() (graceful)", async () => {
-    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const spy = vi.spyOn(log, "error").mockImplementation(() => undefined);
     mockListActiveForRuntime.mockRejectedValue(new Error("catalog boom"));
 
     const asm = new AIChatContextAssembler();

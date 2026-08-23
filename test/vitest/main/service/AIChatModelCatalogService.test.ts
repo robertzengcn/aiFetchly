@@ -177,4 +177,60 @@ describe("AIChatModelCatalogService", () => {
     expect(entries).toHaveLength(1);
     expect(entries[0].id).toBe("m1");
   });
+
+  it("exposes the cached small_model capability when reported", async () => {
+    const { service } = buildApiMock({
+      object: "list",
+      data: [],
+      small_model: {
+        available: true,
+        resolved_model: "claude-haiku",
+        context_size: 200_000,
+        max_tokens: 4096,
+      },
+    });
+    await service.refresh();
+    const cap = await service.getSmallModelCapability();
+    expect(cap).toEqual({
+      available: true,
+      resolved_model: "claude-haiku",
+      context_size: 200_000,
+      max_tokens: 4096,
+    });
+  });
+
+  it("returns null small-model capability when the server reports none", async () => {
+    const { service } = buildApiMock({
+      object: "list",
+      data: [],
+    });
+    await service.refresh();
+    expect(await service.getSmallModelCapability()).toBeNull();
+  });
+
+  it("returns null small-model capability before the first load", async () => {
+    const { service } = buildApiMock({
+      object: "list",
+      data: [],
+    });
+    // No refresh() call yet.
+    expect(await service.getSmallModelCapability()).toBeNull();
+  });
+
+  it("re-reads small-model capability after a refresh following a provider switch", async () => {
+    const { api, service } = buildApiMock({
+      object: "list",
+      data: [],
+      small_model: { available: true, resolved_model: "haiku-a" },
+    });
+    await service.refresh();
+    expect((await service.getSmallModelCapability())?.resolved_model).toBe(
+      "haiku-a"
+    );
+
+    // Provider switch: the new environment has no small model configured.
+    api.listOpenAIModels.mockResolvedValueOnce({ object: "list", data: [] });
+    await service.refresh();
+    expect(await service.getSmallModelCapability()).toBeNull();
+  });
 });

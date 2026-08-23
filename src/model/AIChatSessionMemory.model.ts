@@ -77,11 +77,24 @@ export class AIChatSessionMemoryModel extends BaseDb {
     errorMessage: string
   ): Promise<AIChatSessionMemoryEntity | null> {
     const existing = await this.getByConversation(conversationId);
-    if (!existing) return null;
+    if (!existing) {
+      // First-run failure: persist a minimal row so the per-conversation
+      // circuit breaker survives a failure before any successful summary
+      // exists (tech-design §15.3). Without this the first failure would be
+      // silently lost and the breaker could not trip.
+      const entity = new AIChatSessionMemoryEntity();
+      entity.conversationId = conversationId;
+      entity.summary = "";
+      entity.sourceMessageCount = 0;
+      entity.status = "failed";
+      entity.failureCount = 1;
+      entity.lastError = errorMessage;
+      return this.repository.save(entity);
+    }
     const next = existing.failureCount + 1;
     await this.repository.update(
       { id: existing.id },
-      { failureCount: next, lastError: errorMessage }
+      { failureCount: next, lastError: errorMessage, status: "failed" }
     );
     return this.repository.findOne({ where: { id: existing.id } });
   }

@@ -476,4 +476,98 @@ describe("ToolLoadPolicyService.classify", () => {
     });
     expect(policy).toBe("always");
   });
+
+  // ---- Contact verification (verify_contact_info) ----
+  it("keeps verify_contact_info deferred by default", () => {
+    expect(classify("verify_contact_info", "builtin")).toBe("deferred");
+  });
+
+  it("promotes verify_contact_info for 'verify these emails'", () => {
+    expect(
+      classify("verify_contact_info", "builtin", {
+        currentUserMessage: "verify these emails for me",
+      })
+    ).toBe("contextual");
+  });
+
+  it("promotes verify_contact_info for 'normalize these phone numbers'", () => {
+    expect(
+      classify("verify_contact_info", "builtin", {
+        currentUserMessage: "normalize these phone numbers",
+      })
+    ).toBe("contextual");
+  });
+
+  it("promotes verify_contact_info for 'clean these contacts'", () => {
+    expect(
+      classify("verify_contact_info", "builtin", {
+        currentUserMessage: "clean these contacts and remove invalid ones",
+      })
+    ).toBe("contextual");
+  });
+
+  it("does NOT promote verify_contact_info for generic email questions", () => {
+    expect(
+      classify("verify_contact_info", "builtin", {
+        currentUserMessage: "how does email work?",
+      })
+    ).toBe("deferred");
+    expect(
+      classify("verify_contact_info", "builtin", {
+        currentUserMessage: "what is phone verification?",
+      })
+    ).toBe("deferred");
+  });
+
+  describe("hasRecentGeneratedImages promotion", () => {
+    it("promotes export_generated_artifacts when user asks to edit a prior generated image", () => {
+      expect(
+        classify("export_generated_artifacts", "builtin", {
+          currentUserMessage: "please add tree in front of the house",
+          hasRecentGeneratedImages: true,
+        })
+      ).toBe("contextual");
+    });
+
+    it("promotes attach_local_images when user asks to edit a prior generated image", () => {
+      expect(
+        classify("attach_local_images", "builtin", {
+          currentUserMessage: "please add tree in front of the house",
+          hasRecentGeneratedImages: true,
+        })
+      ).toBe("contextual");
+    });
+
+    it("does NOT promote when hasRecentGeneratedImages is false/undefined", () => {
+      expect(
+        classify("export_generated_artifacts", "builtin", {
+          currentUserMessage: "please add tree in front of the house",
+          hasRecentGeneratedImages: false,
+        })
+      ).toBe("deferred");
+      expect(
+        classify("attach_local_images", "builtin", {
+          currentUserMessage: "please add tree in front of the house",
+        })
+      ).toBe("deferred");
+    });
+
+    it("does NOT promote when the message has no edit-like verb", () => {
+      expect(
+        classify("export_generated_artifacts", "builtin", {
+          currentUserMessage: "what is the capital of France",
+          hasRecentGeneratedImages: true,
+        })
+      ).toBe("deferred");
+    });
+
+    it("does NOT promote non-image tools even with hasRecentGeneratedImages", () => {
+      expect(
+        classify("create_html_artifact", "builtin", {
+          currentUserMessage: "please add tree in front of the house",
+          hasRecentGeneratedImages: true,
+        })
+      ).toBe("deferred");
+    });
+  });
 });

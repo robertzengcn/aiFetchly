@@ -1,4 +1,5 @@
 import {SocialTask} from "@/modules/socialtask";
+import { log } from "@/modules/Logger";
 import {SocialTaskResponse,SocialTaskInfoResponse,SocialTaskTypeResponse,TagResponse,SaveSocialTaskResponse,SocialTaskEntity,SocialTaskRunEntity} from "@/entityTypes/socialtask-type"
 export class SocialTaskController {
     public async getSocialTasklist(id: number,page:number,size:number): Promise<SocialTaskResponse> {
@@ -73,7 +74,7 @@ export class SocialTaskController {
             return res;
         })
         .catch(function (error) {
-            console.log(error)
+            log.info(error)
                 //debug(error);
                 //throw new Error(error.message);
             return {status:false,msg:error.message}
@@ -98,7 +99,7 @@ export class SocialTaskController {
                 return res;
             })
             .catch(function (error) {
-                console.log(error)
+                log.info(error)
                     //debug(error);
                     //throw new Error(error.message);
                 return null

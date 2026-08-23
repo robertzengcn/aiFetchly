@@ -9,6 +9,7 @@
  */
 
 import { ipcMain } from "electron";
+import { log } from "@/modules/Logger";
 
 // IpcMainEvent type is not exported from electron, so we define it locally
 type IpcMainEvent = {
@@ -118,7 +119,7 @@ export function normalizeEmailTemplateStreamChunk(raw: string): string {
  * Uses AiChatApi.streamEmailTemplateGeneration (dedicated email API in aiChatApi.ts), not generic chat.
  */
 export function registerAIEmailTemplateHandlers(): void {
-  console.log("AI Email Template IPC handlers registered");
+  log.info("AI Email Template IPC handlers registered");
 
   // Streaming generation handler
   ipcMain.on(AI_EMAIL_TEMPLATE_GENERATE_STREAM, async (...args: unknown[]) => {
@@ -171,12 +172,12 @@ export function registerAIEmailTemplateHandlers(): void {
               })
               .join("\n\n");
             enhancedPrompt = `Based on:\n${ragContext}\n\n---\n\n${requestData.prompt}`;
-            console.log(
+            log.info(
               `RAG search found ${searchResponse.results.length} relevant documents`
             );
           }
         } catch (ragError) {
-          console.error(
+          log.error(
             "RAG search failed, proceeding without RAG context:",
             ragError
           );
@@ -192,7 +193,7 @@ export function registerAIEmailTemplateHandlers(): void {
       // Stop handler - using on with a flag for single execution
       const stopHandler = (): void => {
         isStopped = true;
-        console.log("AI email template generation stopped by user");
+        log.info("AI email template generation stopped by user");
       };
 
       // Register stop handler for this generation
@@ -284,7 +285,7 @@ export function registerAIEmailTemplateHandlers(): void {
         throw streamError;
       }
     } catch (error) {
-      console.error("AI email template generation error:", error);
+      log.error("AI email template generation error:", error);
       event.sender.send(AI_EMAIL_TEMPLATE_ERROR, {
         type: "error",
         status: false,

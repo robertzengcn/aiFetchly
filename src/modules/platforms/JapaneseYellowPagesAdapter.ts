@@ -1,4 +1,5 @@
 import { Page } from "puppeteer";
+import { log } from "@/modules/Logger";
 import { BasePlatformAdapter } from "@/modules/BasePlatformAdapter";
 import { PlatformConfig } from "@/modules/interface/IPlatformConfig";
 
@@ -40,7 +41,7 @@ export abstract class JapaneseYellowPagesAdapter extends BasePlatformAdapter {
       await this.waitForPageLoad(page);
     } catch (error: unknown) {
       const className = this.constructor.name;
-      console.warn(
+      log.warn(
         `${className}.onPageLoad warning:`,
         error instanceof Error ? error.message : error
       );

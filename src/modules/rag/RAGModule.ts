@@ -1,4 +1,5 @@
 import { BaseModule } from '@/modules/baseModule';
+import { log } from "@/modules/Logger";
 import { QueryProcessor, ProcessedQuery, QueryProcessingOptions } from '@/service/QueryProcessor';
 import { RagSearchController } from '@/controller/RagSearchController';
 import { ResponseGenerator, GeneratedResponse, ResponseGenerationOptions } from '@/service/ResponseGenerator';
@@ -108,9 +109,9 @@ export class RAGModule extends BaseModule {
             await this.updateStats();
 
             this.isInitialized = true;
-            console.log('RAG module initialized successfully');
+            log.info('RAG module initialized successfully');
         } catch (error) {
-            console.error('Failed to initialize RAG module:', error);
+            log.error('Failed to initialize RAG module:', error);
             throw new Error('Failed to initialize RAG module');
         }
     }
@@ -169,7 +170,7 @@ export class RAGModule extends BaseModule {
 
             return ragResponse;
         } catch (error) {
-            console.error('Error processing RAG query:', error);
+            log.error('Error processing RAG query:', error);
             throw new Error(`RAG query processing failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
         }
     }
@@ -228,7 +229,7 @@ export class RAGModule extends BaseModule {
                 message: 'Document uploaded successfully'
             };
         } catch (error) {
-            console.error('Error uploading document:', error);
+            log.error('Error uploading document:', error);
             return {
                 documentId: 0,
                 processingTime: Date.now() - startTime,
@@ -306,7 +307,7 @@ export class RAGModule extends BaseModule {
                 message: `Document chunked successfully into ${chunks.length} chunks`
             };
         } catch (error) {
-            console.error('Error chunking document:', error);
+            log.error('Error chunking document:', error);
             
             // Update processing status to error
             try {
@@ -316,7 +317,7 @@ export class RAGModule extends BaseModule {
                     'error'
                 );
             } catch (updateError) {
-                console.error('Failed to update document status to error:', updateError);
+                log.error('Failed to update document status to error:', updateError);
             }
 
             return {
@@ -500,7 +501,7 @@ export class RAGModule extends BaseModule {
                 message: embedResult.message
             };
         } catch (error) {
-            console.error('Error generating document embeddings:', error);
+            log.error('Error generating document embeddings:', error);
             return {
                 documentId,
                 chunksProcessed: 0,
@@ -571,7 +572,7 @@ export class RAGModule extends BaseModule {
                 results
             };
         } catch (error) {
-            console.error('Error generating all missing embeddings:', error);
+            log.error('Error generating all missing embeddings:', error);
             return {
                 totalDocuments: 0,
                 documentsProcessed: 0,
@@ -654,7 +655,7 @@ export class RAGModule extends BaseModule {
             this.stats.totalChunks = chunkStats.totalChunks;
             this.stats.indexSize = 0; // Default value since getSearchStats doesn't exist
         } catch (error) {
-            console.error('Error updating stats:', error);
+            log.error('Error updating stats:', error);
         }
     }
 
@@ -676,7 +677,7 @@ export class RAGModule extends BaseModule {
         try {
             return this.queryProcessor.getQuerySuggestions(partialQuery, limit);
         } catch (error) {
-            console.error('Error getting query suggestions:', error);
+            log.error('Error getting query suggestions:', error);
             return [];
         }
     }
@@ -716,7 +717,7 @@ export class RAGModule extends BaseModule {
                 await this.queryProcessor.processQuery('test query');
                 components.queryProcessor = true;
             } catch (error) {
-                console.error('Query processor test failed:', error);
+                log.error('Query processor test failed:', error);
             }
 
             // Test search controller
@@ -724,7 +725,7 @@ export class RAGModule extends BaseModule {
                 // Simple test - check if search controller is initialized
                 components.searchController = true;
             } catch (error) {
-                console.error('Search controller test failed:', error);
+                log.error('Search controller test failed:', error);
             }
 
             // Test response generator
@@ -732,7 +733,7 @@ export class RAGModule extends BaseModule {
                 await this.responseGenerator.testLlmConnection();
                 components.responseGenerator = true;
             } catch (error) {
-                console.error('Response generator test failed:', error);
+                log.error('Response generator test failed:', error);
             }
 
             // Test document service
@@ -740,7 +741,7 @@ export class RAGModule extends BaseModule {
                 await this.documentService.getDocumentStats();
                 components.documentService = true;
             } catch (error) {
-                console.error('Document service test failed:', error);
+                log.error('Document service test failed:', error);
             }
 
             const allComponentsWorking = Object.values(components).every(Boolean);
@@ -767,9 +768,9 @@ export class RAGModule extends BaseModule {
     async cleanup(): Promise<void> {
         try {
             this.clearCaches();
-            console.log('RAG module cleaned up');
+            log.info('RAG module cleaned up');
         } catch (error) {
-            console.error('Error during cleanup:', error);
+            log.error('Error during cleanup:', error);
         }
     }
 }

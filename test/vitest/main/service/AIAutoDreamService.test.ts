@@ -1,7 +1,27 @@
 import { describe, expect, it, beforeEach, vi } from "vitest";
 import { AIAutoDreamService } from "@/service/AIAutoDreamService";
+import type { AIChatLightweightCompletionResult } from "@/service/AIChatLightweightTypes";
+import type { AIAutoDreamServiceDeps } from "@/service/AIAutoDreamService";
 
 const mockCompleteChat = vi.fn();
+// The lightweight dep returns a result wrapping the completion response.
+// Typed as a vi.fn spy so call assertions work, matching the dep signature.
+const mockCompleteLightweight = vi.fn<
+  AIAutoDreamServiceDeps["completeLightweight"]
+>((input) =>
+  Promise.resolve(mockCompleteChat(input)).then(
+    (response) =>
+      ({
+        response,
+        route: "provider_normal",
+        resolvedModel: (response as { model?: string })?.model ?? "m",
+        providerKind: "hosted",
+        attemptCount: 1,
+        repairAttempted: false,
+        fallbackAttempted: false,
+      } as AIChatLightweightCompletionResult)
+  )
+);
 const mockCollect = vi.fn();
 const mockStartRun = vi.fn();
 const mockCompleteRun = vi.fn();
@@ -14,6 +34,7 @@ const mockCreateMemory = vi.fn();
 const mockUpdateMemory = vi.fn();
 const mockArchiveMemory = vi.fn();
 const mockListMemories = vi.fn();
+const mockApplyPlanAndCompleteRun = vi.fn();
 
 vi.mock("@/modules/AIUserMemoryModule", () => ({
   AIUserMemoryModule: vi.fn().mockImplementation(() => ({
@@ -21,6 +42,7 @@ vi.mock("@/modules/AIUserMemoryModule", () => ({
     updateMemory: mockUpdateMemory,
     archiveMemory: mockArchiveMemory,
     listMemories: mockListMemories,
+    applyPlanAndCompleteRun: mockApplyPlanAndCompleteRun,
   })),
 }));
 
@@ -51,7 +73,7 @@ function makeService(opts: {
   autoDreamEnabled: boolean;
 }): AIAutoDreamService {
   return new AIAutoDreamService({
-    completeChat: mockCompleteChat,
+    completeLightweight: mockCompleteLightweight,
     isAIEnabled: () => opts.aiEnabled,
     isAutoDreamEnabled: async () => opts.autoDreamEnabled,
   });
@@ -85,6 +107,7 @@ describe("AIAutoDreamService", () => {
     mockListMemories.mockResolvedValue([]);
     mockStartRun.mockResolvedValue(runView);
     mockGetByRunId.mockResolvedValue(null);
+    mockApplyPlanAndCompleteRun.mockResolvedValue(undefined);
   });
 
   it("skips when AI is disabled (evaluateAfterChatTurn)", async () => {
@@ -197,24 +220,24 @@ describe("AIAutoDreamService", () => {
       ],
       model: "test-model",
     });
-    mockCreateMemory.mockImplementation(async (i: { title: string }) => ({
-      memoryId: "mem-new",
-      type: "preference",
-      title: i.title,
-      content: "x",
-      status: "active",
-      confidence: 90,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    }));
     const completed = { ...runView, status: "completed" };
     mockGetByRunId.mockResolvedValue(completed);
     const r = await svc.runNow({ force: true });
     expect(r.status).toBe("completed");
-    expect(mockCreateMemory).toHaveBeenCalled();
-    expect(mockUpdateMemory).toHaveBeenCalledWith(
-      expect.objectContaining({ memoryId: "mem-old" })
+    // The parsed plan is applied AND the run completed atomically via
+    // applyPlanAndCompleteRun (tech-design §14.4).
+    expect(mockApplyPlanAndCompleteRun).toHaveBeenCalledTimes(1);
+    expect(mockApplyPlanAndCompleteRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: runView.runId,
+        model: "test-model",
+      })
     );
+    const callArg = mockApplyPlanAndCompleteRun.mock.calls[0]![0] as {
+      plan: { create: unknown[]; update: unknown[]; archive: unknown[] };
+    };
+    expect(callArg.plan.create).toHaveLength(1);
+    expect(callArg.plan.update).toHaveLength(1);
   });
 
   it("records failed run on model error", async () => {
@@ -250,5 +273,95 @@ describe("AIAutoDreamService", () => {
         reason: "agent_task_completed",
       })
     ).resolves.toBeUndefined();
+  });
+
+  it("passes the user_auto_dream workload to the lightweight dep", async () => {
+    const svc = makeService({ aiEnabled: true, autoDreamEnabled: true });
+    mockCompleteChat.mockResolvedValue({
+      choices: [
+        {
+          message: {
+            content: JSON.stringify({ create: [], update: [], archive: [] }),
+          },
+        },
+      ],
+      model: "small-resolved",
+    });
+    mockGetByRunId.mockResolvedValue({ ...runView, status: "completed" });
+    await svc.runNow({ force: true });
+    expect(mockCompleteLightweight).toHaveBeenCalledWith(
+      expect.objectContaining({ workload: "user_auto_dream" })
+    );
+  });
+
+  it("repair succeeds when the first response is invalid JSON", async () => {
+    const svc = makeService({ aiEnabled: true, autoDreamEnabled: true });
+    // First call: invalid JSON. Repair call: valid JSON.
+    mockCompleteChat
+      .mockResolvedValueOnce({
+        choices: [{ message: { content: "not valid json {" } }],
+        model: "small-resolved",
+      })
+      .mockResolvedValueOnce({
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({ create: [], update: [], archive: [] }),
+            },
+          },
+        ],
+        model: "small-resolved",
+      });
+    mockGetByRunId.mockResolvedValue({ ...runView, status: "completed" });
+    const r = await svc.runNow({ force: true });
+    expect(r.status).toBe("completed");
+    // Two lightweight calls: initial + one repair.
+    expect(mockCompleteLightweight).toHaveBeenCalledTimes(2);
+    // The plan was applied (no failRun).
+    expect(mockApplyPlanAndCompleteRun).toHaveBeenCalled();
+    expect(mockFailRun).not.toHaveBeenCalled();
+  });
+
+  it("repair failure does not apply any memory mutations", async () => {
+    const svc = makeService({ aiEnabled: true, autoDreamEnabled: true });
+    // Both calls return invalid JSON; repair fails too.
+    mockCompleteChat.mockResolvedValue({
+      choices: [{ message: { content: "still not json {" } }],
+      model: "small-resolved",
+    });
+    mockGetByRunId.mockResolvedValue({ ...runView, status: "failed" });
+    const r = await svc.runNow({ force: true });
+    expect(r.status).toBe("failed");
+    expect(mockFailRun).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.stringMatching(/parse_error/)
+    );
+    // No memory plan applied on parse failure.
+    expect(mockApplyPlanAndCompleteRun).not.toHaveBeenCalled();
+  });
+
+  it("database failure after valid model output does not call the model again", async () => {
+    const svc = makeService({ aiEnabled: true, autoDreamEnabled: true });
+    mockCompleteChat.mockResolvedValue({
+      choices: [
+        {
+          message: {
+            content: JSON.stringify({ create: [], update: [], archive: [] }),
+          },
+        },
+      ],
+      model: "small-resolved",
+    });
+    // The transactional apply throws (simulated DB failure).
+    mockApplyPlanAndCompleteRun.mockRejectedValueOnce(
+      new Error("db write failed")
+    );
+    mockGetByRunId.mockResolvedValue({ ...runView, status: "failed" });
+    const r = await svc.runNow({ force: true });
+    expect(r.status).toBe("failed");
+    // Exactly one lightweight call — no second model request after a
+    // persistence failure (tech-design §9.2, §11 invariant 5).
+    expect(mockCompleteLightweight).toHaveBeenCalledTimes(1);
+    expect(mockFailRun).toHaveBeenCalled();
   });
 });

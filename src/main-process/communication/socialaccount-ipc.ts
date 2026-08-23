@@ -1,4 +1,5 @@
 import { ipcMain, BrowserWindow, dialog } from "electron";
+import { log } from "@/modules/Logger";
 import {
   SOCIALPLATFORM_LIST,
   SOCIALACCOUNTlIST,
@@ -16,7 +17,6 @@ import { SocialAccount } from "@/modules/socialaccount";
 import { SocialPlatform } from "@/modules/social_platform";
 import { SocialAccountController } from "@/controller/socialaccount-controller";
 import { AccountSessionService } from "@/modules/AccountSessionService";
-import { log } from "@/modules/Logger";
 import { CommonDialogMsg } from "@/entityTypes/commonType";
 import fs from "fs";
 import { SocialAccountDetailData } from "@/entityTypes/socialaccount-type";
@@ -244,7 +244,7 @@ export function registerSocialAccountIpcHandlers(mainWindow: BrowserWindow) {
         .catch(function (err) {
           if (err instanceof Error) {
             //console log error line
-            console.error(err.stack);
+            log.error(err.stack);
             //console.log(error.message)
             const comMsgs: CommonDialogMsg = {
               status: false,
@@ -301,7 +301,7 @@ export function registerSocialAccountIpcHandlers(mainWindow: BrowserWindow) {
       });
     } catch (error) {
       if (error instanceof Error) {
-        console.error(error.stack);
+        log.error(error.stack);
         //console.log(error.message)
         const comMsgs: CommonDialogMsg = {
           status: false,
@@ -373,7 +373,7 @@ export function registerSocialAccountIpcHandlers(mainWindow: BrowserWindow) {
       ).sender.send(SOCIAL_ACCOUNT_LOGIN_MESSSAGE, JSON.stringify(cmsg));
     } else {
       if (filePaths) {
-        console.log(filePaths[0]);
+        log.info(filePaths[0]);
         fs.access(filePaths[0], fs.constants.R_OK, async (e) => {
           if (e) {
             if (e instanceof Error) {

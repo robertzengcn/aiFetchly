@@ -1,4 +1,5 @@
 import { Page, ElementHandle } from 'puppeteer';
+import { log } from "@/modules/Logger";
 import { BasePlatformAdapter } from '@/modules/BasePlatformAdapter';
 import { PlatformConfig } from '@/modules/interface/IPlatformConfig';
 import { SearchResult } from '@/modules/interface/IBasePlatformAdapter';
@@ -23,7 +24,7 @@ export class PagesJaunesAdapter extends BasePlatformAdapter {
      */
     async extractPhoneNumberWithReveal(page: Page, businessElement: any): Promise<string | undefined> {
         try {
-            console.log('🔍 Attempting to extract phone number with reveal method for PagesJaunes.fr');
+            log.info('🔍 Attempting to extract phone number with reveal method for PagesJaunes.fr');
 
             // Look for the phone reveal button within the business element
             const phoneRevealSelectors = [
@@ -60,7 +61,7 @@ export class PagesJaunesAdapter extends BasePlatformAdapter {
                             if (isClickable) {
                                 phoneRevealButton = button;
                                 usedSelector = selector;
-                                console.log(`📞 Found clickable phone reveal button with selector: ${selector} (${phoneRevealButtons.length} total found)`);
+                                log.info(`📞 Found clickable phone reveal button with selector: ${selector} (${phoneRevealButtons.length} total found)`);
                                 break;
                             }
                         }
@@ -72,7 +73,7 @@ export class PagesJaunesAdapter extends BasePlatformAdapter {
             }
 
             if (!phoneRevealButton) {
-                console.log('📞 No clickable phone reveal button found, trying direct phone extraction');
+                log.info('📞 No clickable phone reveal button found, trying direct phone extraction');
                 return await this.extractDirectPhoneNumber(businessElement);
             }
 
@@ -84,13 +85,13 @@ export class PagesJaunesAdapter extends BasePlatformAdapter {
             // Wait a moment for scroll to complete
             await this.sleep(500);
 
-            console.log('📞 Clicking phone reveal button...');
+            log.info('📞 Clicking phone reveal button...');
             
             // Click the phone reveal button
             await phoneRevealButton.click();
 
             // Wait for the phone number to appear (PagesJaunes typically takes 2-5 seconds)
-            console.log('⏳ Waiting for phone number to be revealed...');
+            log.info('⏳ Waiting for phone number to be revealed...');
             await this.sleep(3000);
 
             // Try to extract the revealed phone number
@@ -116,7 +117,7 @@ export class PagesJaunesAdapter extends BasePlatformAdapter {
                         const phoneText = await phoneElement.evaluate((el: Element) => el.textContent?.trim());
                         if (phoneText && this.isValidPhoneNumber(phoneText)) {
                             phoneNumber = phoneText;
-                            console.log(`📞 Successfully extracted revealed phone: ${phoneNumber} using selector: ${selector}`);
+                            log.info(`📞 Successfully extracted revealed phone: ${phoneNumber} using selector: ${selector}`);
                             break;
                         }
                     }
@@ -127,7 +128,7 @@ export class PagesJaunesAdapter extends BasePlatformAdapter {
 
             // If not found within business element, try page-wide search
             if (!phoneNumber) {
-                console.log('📞 Phone not found in business element, searching page-wide...');
+                log.info('📞 Phone not found in business element, searching page-wide...');
                 for (const selector of revealedPhoneSelectors) {
                     try {
                         const phoneElement = await page.$(selector);
@@ -135,7 +136,7 @@ export class PagesJaunesAdapter extends BasePlatformAdapter {
                             const phoneText = await phoneElement.evaluate((el: Element) => el.textContent?.trim());
                             if (phoneText && this.isValidPhoneNumber(phoneText)) {
                                 phoneNumber = phoneText;
-                                console.log(`📞 Successfully extracted revealed phone (page-wide): ${phoneNumber} using selector: ${selector}`);
+                                log.info(`📞 Successfully extracted revealed phone (page-wide): ${phoneNumber} using selector: ${selector}`);
                                 break;
                             }
                         }
@@ -147,7 +148,7 @@ export class PagesJaunesAdapter extends BasePlatformAdapter {
 
             // Wait a bit more and try again if still not found
             if (!phoneNumber) {
-                console.log('📞 Phone number not revealed yet, waiting longer...');
+                log.info('📞 Phone number not revealed yet, waiting longer...');
                 await this.sleep(2000);
                 
                 // Try one more time with a broader search
@@ -158,7 +159,7 @@ export class PagesJaunesAdapter extends BasePlatformAdapter {
                             const phoneText = await phoneElement.evaluate((el: Element) => el.textContent?.trim());
                             if (phoneText && this.isValidPhoneNumber(phoneText)) {
                                 phoneNumber = phoneText;
-                                console.log(`📞 Successfully extracted revealed phone (retry): ${phoneNumber}`);
+                                log.info(`📞 Successfully extracted revealed phone (retry): ${phoneNumber}`);
                                 break;
                             }
                         }
@@ -170,14 +171,14 @@ export class PagesJaunesAdapter extends BasePlatformAdapter {
             }
 
             if (!phoneNumber) {
-                console.log('📞 Failed to extract revealed phone number, falling back to direct extraction');
+                log.info('📞 Failed to extract revealed phone number, falling back to direct extraction');
                 return await this.extractDirectPhoneNumber(businessElement);
             }
 
             return phoneNumber;
 
         } catch (error) {
-            console.error('📞 Error in phone number reveal extraction:', error);
+            log.error('📞 Error in phone number reveal extraction:', error);
             // Fallback to direct extraction
             return await this.extractDirectPhoneNumber(businessElement);
         }
@@ -215,7 +216,7 @@ export class PagesJaunesAdapter extends BasePlatformAdapter {
                         });
                         
                         if (phoneText && this.isValidPhoneNumber(phoneText)) {
-                            console.log(`📞 Extracted direct phone number: ${phoneText}`);
+                            log.info(`📞 Extracted direct phone number: ${phoneText}`);
                             return phoneText;
                         }
                     }
@@ -224,10 +225,10 @@ export class PagesJaunesAdapter extends BasePlatformAdapter {
                 }
             }
 
-            console.log('📞 No direct phone number found');
+            log.info('📞 No direct phone number found');
             return undefined;
         } catch (error) {
-            console.error('📞 Error in direct phone extraction:', error);
+            log.error('📞 Error in direct phone extraction:', error);
             return undefined;
         }
     }
@@ -279,7 +280,7 @@ export class PagesJaunesAdapter extends BasePlatformAdapter {
                 return text || null;
             }
         } catch (error) {
-            console.warn(`Error extracting text with selector ${selector}:`, error);
+            log.warn(`Error extracting text with selector ${selector}:`, error);
         }
         
         return null;
@@ -295,11 +296,11 @@ export class PagesJaunesAdapter extends BasePlatformAdapter {
      */
     private async handlePageLoad(page: Page): Promise<void> {
         try {
-            console.log('🔧 Handling page load for PagesJaunes.fr');
+            log.info('🔧 Handling page load for PagesJaunes.fr');
             
             // Wait for page to fully load
             await page.waitForNetworkIdle({ timeout: 10000 }).catch(() => {
-                console.log('⏰ Page load timeout reached, continuing...');
+                log.info('⏰ Page load timeout reached, continuing...');
             });
 
             // Handle cookie consent if present
@@ -309,7 +310,7 @@ export class PagesJaunesAdapter extends BasePlatformAdapter {
             await this.handlePopups(page);
 
         } catch (error) {
-            console.warn('⚠️ Error during page load handling:', error);
+            log.warn('⚠️ Error during page load handling:', error);
         }
     }
 
@@ -330,7 +331,7 @@ export class PagesJaunesAdapter extends BasePlatformAdapter {
                 try {
                     await page.waitForSelector(selector, { timeout: 3000 });
                     await page.click(selector);
-                    console.log(`🍪 Accepted cookie consent using selector: ${selector}`);
+                    log.info(`🍪 Accepted cookie consent using selector: ${selector}`);
                     await this.sleep(1000);
                     return;
                 } catch (error) {
@@ -338,9 +339,9 @@ export class PagesJaunesAdapter extends BasePlatformAdapter {
                 }
             }
 
-            console.log('🍪 No cookie consent dialog found or already accepted');
+            log.info('🍪 No cookie consent dialog found or already accepted');
         } catch (error) {
-            console.log('🍪 No cookie consent handling needed');
+            log.info('🍪 No cookie consent handling needed');
         }
     }
 
@@ -366,7 +367,7 @@ export class PagesJaunesAdapter extends BasePlatformAdapter {
                         const isVisible = await closeButton.isVisible();
                         if (isVisible) {
                             await closeButton.click();
-                            console.log(`❌ Closed popup using selector: ${selector}`);
+                            log.info(`❌ Closed popup using selector: ${selector}`);
                             await this.sleep(500);
                         }
                     }
@@ -375,7 +376,7 @@ export class PagesJaunesAdapter extends BasePlatformAdapter {
                 }
             }
         } catch (error) {
-            console.log('📱 No popups to close');
+            log.info('📱 No popups to close');
         }
     }
 
@@ -385,7 +386,7 @@ export class PagesJaunesAdapter extends BasePlatformAdapter {
      */
     async extractWebsiteWithReveal(page: Page, businessElement: any): Promise<string | undefined> {
         try {
-            console.log('🌐 Attempting to extract website URL with reveal method for PagesJaunes.fr');
+            log.info('🌐 Attempting to extract website URL with reveal method for PagesJaunes.fr');
 
             // Look for website reveal elements with encoded data attributes
             const websiteRevealSelectors = [
@@ -409,7 +410,7 @@ export class PagesJaunesAdapter extends BasePlatformAdapter {
                     websiteRevealElement = await page.$(selector);
                     if (websiteRevealElement) {
                         usedSelector = selector;
-                        console.log(`🌐 Found website reveal element with selector: ${selector}`);
+                        log.info(`🌐 Found website reveal element with selector: ${selector}`);
                         break;
                     }
                 } catch (error) {
@@ -418,7 +419,7 @@ export class PagesJaunesAdapter extends BasePlatformAdapter {
             }
 
             if (!websiteRevealElement) {
-                console.log('🌐 No website reveal element found, trying direct website extraction');
+                log.info('🌐 No website reveal element found, trying direct website extraction');
                 return await this.extractDirectWebsite(page);
             }
 
@@ -430,7 +431,7 @@ export class PagesJaunesAdapter extends BasePlatformAdapter {
                         const decoded = JSON.parse(pjlbAttr);
                         return decoded.url;
                     } catch (error) {
-                        console.warn('Failed to parse data-pjlb JSON:', error);
+                        log.warn('Failed to parse data-pjlb JSON:', error);
                         return null;
                     }
                 }
@@ -438,7 +439,7 @@ export class PagesJaunesAdapter extends BasePlatformAdapter {
             });
 
             if (!encodedData) {
-                console.log('🌐 No encoded URL data found, trying direct extraction');
+                log.info('🌐 No encoded URL data found, trying direct extraction');
                 return await this.extractDirectWebsite(page);
             }
 
@@ -446,23 +447,23 @@ export class PagesJaunesAdapter extends BasePlatformAdapter {
             let websiteUrl: string | undefined = undefined;
             try {
                 websiteUrl = Buffer.from(encodedData, 'base64').toString('utf-8');
-                console.log(`🌐 Successfully decoded website URL: ${websiteUrl}`);
+                log.info(`🌐 Successfully decoded website URL: ${websiteUrl}`);
             } catch (error) {
-                console.warn('🌐 Failed to decode base64 URL:', error);
+                log.warn('🌐 Failed to decode base64 URL:', error);
                 return await this.extractDirectWebsite(page);
             }
 
             // Validate the URL
             if (websiteUrl && this.isValidWebsiteUrl(websiteUrl)) {
-                console.log(`🌐 Successfully extracted website URL: ${websiteUrl}`);
+                log.info(`🌐 Successfully extracted website URL: ${websiteUrl}`);
                 return websiteUrl;
             } else {
-                console.log('🌐 Invalid website URL format, trying direct extraction');
+                log.info('🌐 Invalid website URL format, trying direct extraction');
                 return await this.extractDirectWebsite(page);
             }
 
         } catch (error) {
-            console.error('🌐 Error in website URL reveal extraction:', error);
+            log.error('🌐 Error in website URL reveal extraction:', error);
             // Fallback to direct extraction
             return await this.extractDirectWebsite(page);
         }
@@ -500,7 +501,7 @@ export class PagesJaunesAdapter extends BasePlatformAdapter {
                         });
                         
                         if (websiteUrl) {
-                            console.log(`🌐 Extracted website URL from span.value: ${websiteUrl}`);
+                            log.info(`🌐 Extracted website URL from span.value: ${websiteUrl}`);
                             return websiteUrl;
                         }
                     }
@@ -535,7 +536,7 @@ export class PagesJaunesAdapter extends BasePlatformAdapter {
                         });
                         
                         if (websiteUrl && this.isValidWebsiteUrl(websiteUrl)) {
-                            console.log(`🌐 Extracted direct website URL from href: ${websiteUrl}`);
+                            log.info(`🌐 Extracted direct website URL from href: ${websiteUrl}`);
                             return websiteUrl;
                         }
                     }
@@ -544,10 +545,10 @@ export class PagesJaunesAdapter extends BasePlatformAdapter {
                 }
             }
 
-            console.log('🌐 No direct website URL found');
+            log.info('🌐 No direct website URL found');
             return undefined;
         } catch (error) {
-            console.error('🌐 Error in direct website extraction:', error);
+            log.error('🌐 Error in direct website extraction:', error);
             return undefined;
         }
     }
@@ -565,7 +566,7 @@ export class PagesJaunesAdapter extends BasePlatformAdapter {
             
             return urlWithProtocol.test(url) || urlWithoutProtocol.test(url);
         } catch (error) {
-            console.error('🌐 Error in website URL validation:', error);
+            log.error('🌐 Error in website URL validation:', error);
             return false;
         }
     }

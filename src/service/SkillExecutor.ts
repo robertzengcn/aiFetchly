@@ -14,6 +14,7 @@
  */
 
 import type { ToolExecutionResult } from "@/api/aiChatApi";
+import { log } from "@/modules/Logger";
 import type { SkillExecutionContext } from "@/entityTypes/skillTypes";
 import { SkillRegistry } from "@/config/skillsRegistry";
 import { ToolExecutor } from "@/service/ToolExecutor";
@@ -112,10 +113,44 @@ function validateArgs(
 const SENSITIVE_KEY_RE =
   /^(pass|password|passwd|pwd|secret|token|api[_-]?key|access[_-]?token|refresh[_-]?token|authorization|private[_-]?key|client[_-]?secret)$/i;
 
+/**
+ * Contact-sensitive keys (verify_contact_info + extract_contact_info). Their
+ * values are redacted to COUNTS, never logged raw — phone numbers and email
+ * addresses are low-entropy PII vulnerable to guessing (design §17.1). Matched
+ * case-insensitively, ignoring separators (_, -) so `nearby_text` ==
+ * `nearbytext`.
+ */
+const CONTACT_KEY_RE =
+  /^(email|emails|phone|phones|nearbytext|nearby_text|address|countryevidence|country_evidence|evidencetext|evidence_text|contacts)$/i;
+
 function sanitizeValue(key: string, value: unknown): unknown {
+  // Contact-sensitive keys: redact to counts, never log raw values.
+  if (CONTACT_KEY_RE.test(key)) {
+    if (Array.isArray(value)) {
+      return `[REDACTED_CONTACTS count=${value.length}]`;
+    }
+    if (value !== null && typeof value === "object") {
+      // A contact group / evidence object — count enumerable keys.
+      const entries = Object.keys(value as Record<string, unknown>);
+      return `[REDACTED_CONTACT_GROUPS count=${entries.length}]`;
+    }
+    return "[REDACTED_CONTACT]";
+  }
   if (typeof value === "string") {
     if (SENSITIVE_KEY_RE.test(key)) {
       return "[REDACTED]";
+    }
+    // Strip query/fragment from source URLs before logging — contact values
+    // (e.g. ?email=alice@x.com) can leak through the query string (PRD §17.2).
+    if (/^source_?url$/i.test(key)) {
+      try {
+        const u = new URL(value);
+        u.search = "";
+        u.hash = "";
+        return u.toString();
+      } catch {
+        // not a valid URL — fall through to truncation
+      }
     }
     return value.length > 100
       ? `${value.substring(0, 50)}...[truncated, ${value.length} chars]`
@@ -161,7 +196,7 @@ function auditLog(
     ...(error ? { error } : {}),
     timestamp: new Date().toISOString(),
   };
-  console.log(`[SkillAudit] ${JSON.stringify(logEntry)}`);
+  log.info(`[SkillAudit] ${JSON.stringify(logEntry)}`);
 }
 
 // ---------------------------------------------------------------------------

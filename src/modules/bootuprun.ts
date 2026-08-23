@@ -1,3 +1,4 @@
+import { log } from "@/modules/Logger";
 import {SystemSettingGroupModule} from "@/modules/SystemSettingGroupModule"
 import {YellowPagesInitModule} from "@/modules/YellowPagesInitModule"
 
@@ -11,8 +12,8 @@ export async function runafterbootup(){
     try {
         const yellowPagesInitModule = new YellowPagesInitModule()
         await yellowPagesInitModule.initializeYellowPagesSystem()
-        console.log("Yellow Pages system initialized successfully")
+        log.info("Yellow Pages system initialized successfully")
     } catch (error) {
-        console.error("Failed to initialize Yellow Pages system:", error)
+        log.error("Failed to initialize Yellow Pages system:", error)
     }
 }

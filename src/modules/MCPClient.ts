@@ -1,4 +1,5 @@
 import { spawn, ChildProcess } from "child_process";
+import { log } from "@/modules/Logger";
 import { MCP_CONNECT_TIMEOUT_MS } from "@/config/mcpConfig";
 import type { EventEmitter } from "events";
 import type { WebSocket as WSWebSocket } from "ws";
@@ -265,14 +266,14 @@ export class MCPClient {
               const message = JSON.parse(line);
               this.handleMessage(message);
             } catch (e) {
-              console.warn("Failed to parse MCP message:", e);
+              log.warn("Failed to parse MCP message:", e);
             }
           }
         }
       });
 
       child.stderr?.on("data", (data: Buffer) => {
-        console.error("MCP stderr:", data.toString());
+        log.error("MCP stderr:", data.toString());
       });
 
       child.on("error", (error) => {
@@ -282,7 +283,7 @@ export class MCPClient {
       child.on("exit", (code) => {
         this.connected = false;
         if (code !== 0 && code !== null) {
-          console.error(`MCP process exited with code ${code}`);
+          log.error(`MCP process exited with code ${code}`);
         }
       });
 
@@ -354,7 +355,7 @@ export class MCPClient {
           const message = JSON.parse(dataStr);
           this.handleMessage(message);
         } catch (e) {
-          console.warn("Failed to parse WebSocket message:", e);
+          log.warn("Failed to parse WebSocket message:", e);
         }
       });
 

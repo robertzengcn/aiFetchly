@@ -136,6 +136,20 @@ const TOOL_SEARCH_HINTS: ReadonlyMap<string, readonly string[]> = new Map([
       "workspace output",
     ],
   ],
+  [
+    "verify_contact_info",
+    [
+      "verify email",
+      "validate email",
+      "check phone",
+      "normalize phone",
+      "clean contacts",
+      "contact quality",
+      "invalid contacts",
+      "disposable email",
+      "phone region",
+    ],
+  ],
 ]);
 
 export class ToolCatalogService {

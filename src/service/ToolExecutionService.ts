@@ -1,4 +1,5 @@
 import { MessageType } from '@/entityTypes/commonType';
+import { log } from "@/modules/Logger";
 import { AIChatModule } from '@/modules/AIChatModule';
 
 /**
@@ -106,7 +107,7 @@ export class ToolExecutionService {
             });
         } catch (saveError) {
             const errorMessage = saveError instanceof Error ? saveError.message : 'Unknown error';
-            console.error('Failed to save tool call to database:', saveError);
+            log.error('Failed to save tool call to database:', saveError);
 
             // Retry once with a different message ID if duplicate key error
             if (errorMessage.includes('UNIQUE constraint failed') || errorMessage.includes('Duplicate entry')) {
@@ -130,10 +131,10 @@ export class ToolExecutionService {
                             retryId: true
                         }
                     });
-                    console.log('Tool call save retry successful');
+                    log.info('Tool call save retry successful');
                     return;
                 } catch (retryError) {
-                    console.error('Tool call save retry failed:', retryError);
+                    log.error('Tool call save retry failed:', retryError);
                 }
             }
 
@@ -165,7 +166,7 @@ export class ToolExecutionService {
             });
         } catch (saveError) {
             const errorMessage = saveError instanceof Error ? saveError.message : 'Unknown error';
-            console.error('Failed to save tool result to database:', saveError);
+            log.error('Failed to save tool result to database:', saveError);
 
             // Retry once with a different message ID if duplicate key error
             if (errorMessage.includes('UNIQUE constraint failed') || errorMessage.includes('Duplicate entry')) {
@@ -183,10 +184,10 @@ export class ToolExecutionService {
                             retryId: true
                         }
                     });
-                    console.log('Tool result save retry successful');
+                    log.info('Tool result save retry successful');
                     return;
                 } catch (retryError) {
-                    console.error('Tool result save retry failed:', retryError);
+                    log.error('Tool result save retry failed:', retryError);
                 }
             }
 

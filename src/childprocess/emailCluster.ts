@@ -3,6 +3,7 @@ import {
   EmailDatascraper,
 } from "@/entityTypes/emailextraction-type";
 import { SMconfig, SMstruct } from "@/entityTypes/scrapeType";
+import { log } from "@/modules/Logger";
 import { Cluster } from "puppeteer-cluster";
 //import { pluggableType } from "@/entityTypes/scrapeType"
 import { Page, Browser } from "puppeteer";
@@ -25,17 +26,17 @@ import { CustomConcurrency } from "@/modules/concurrency-implementation";
 import { ProxyServer } from "@/entityTypes/proxyType";
 
 export class EmailCluster {
-  cluster: Cluster<EmailClusterdata>;
+  cluster!: Cluster<EmailClusterdata>;
   context: object;
   config: SMconfig;
   logger: winston.Logger;
   // logger: { info: Function };
-  browser: Browser;
-  page: Page;
-  numClusters: number;
-  tmppath: string;
-  proxiesArr: Array<ProxyServer | null>;
-  maxPageNumber: number;
+  browser!: Browser;
+  page!: Page;
+  numClusters!: number;
+  tmppath!: string;
+  proxiesArr!: Array<ProxyServer | null>;
+  maxPageNumber!: number;
   // runLogin: Function;
   // taskid?: number;
   // taskrunId?: number;
@@ -245,7 +246,7 @@ export class EmailCluster {
           // });
           //userAgent = randomUseragent.getRandom();
           const userAgent = new UserAgent({ deviceCategory: "desktop" });
-          console.log("user agent is " + userAgent.toString());
+          log.info("user agent is " + userAgent.toString());
           userAgents = userAgent.toString();
         } else {
           userAgents = this.config.user_agent;
@@ -261,7 +262,7 @@ export class EmailCluster {
       }
     );
     this.logger.info(perBrowserOptions);
-    console.log("cluster number is " + this.numClusters);
+    log.info("cluster number is " + this.numClusters);
     this.cluster = await Cluster.launch({
       // puppeteer,
       monitor: this.config.puppeteer_cluster_config.monitor,
@@ -285,7 +286,7 @@ export class EmailCluster {
 
     // Listen for cluster-level errors (e.g., browser crashes)
     this.cluster.on("taskerror", (err: Error, data: EmailClusterdata) => {
-      console.error(
+      log.error(
         `[EmailCluster] Task error for ${data?.url || "unknown URL"}: ${
           err.message
         }`
@@ -295,7 +296,7 @@ export class EmailCluster {
     param.urls.forEach((value) => {
       const domain = getDomain(value);
       if (!domain) {
-        console.warn(
+        log.warn(
           `[EmailCluster] Skipping invalid URL (no domain): ${value}`
         );
         return;
@@ -323,7 +324,7 @@ export class EmailCluster {
       // Add a timeout so cluster.idle() doesn't hang forever if browser crashes
       const idleTimeout =
         this.config.puppeteer_cluster_config.timeout || 30 * 60 * 1000;
-      console.log(
+      log.info(
         `[EmailCluster] Waiting for cluster idle (timeout: ${
           idleTimeout / 1000
         }s)...`
@@ -337,16 +338,16 @@ export class EmailCluster {
           )
         ),
       ]);
-      console.log("[EmailCluster] Cluster idle, closing...");
+      log.info("[EmailCluster] Cluster idle, closing...");
       await this.cluster.close();
-      console.log("[EmailCluster] Cluster closed successfully");
+      log.info("[EmailCluster] Cluster closed successfully");
     } catch (error) {
       const errMsg = error instanceof Error ? error.message : String(error);
-      console.error(`[EmailCluster] Error during quit: ${errMsg}`);
+      log.error(`[EmailCluster] Error during quit: ${errMsg}`);
       try {
         await this.cluster.close();
       } catch (closeErr) {
-        console.error("[EmailCluster] Failed to close cluster:", closeErr);
+        log.error("[EmailCluster] Failed to close cluster:", closeErr);
       }
     }
   }

@@ -2,6 +2,7 @@ import { BaseModule } from "@/modules/baseModule";
 import { PlatformRegistry } from "@/modules/PlatformRegistry";
 import { PlatformConfig } from "@/modules/interface/IPlatformConfig";
 import { findPlatformByReference } from "@/modules/platforms/platformMatcher";
+import { log } from "@/modules/Logger";
 
 export class YellowPagesPlatformModule extends BaseModule {
   private registry: PlatformRegistry;
@@ -19,7 +20,7 @@ export class YellowPagesPlatformModule extends BaseModule {
     try {
       return this.registry.getAllPlatforms();
     } catch (error) {
-      console.error(`Error getting all platforms: ${error}`);
+      log.error(`Error getting all platforms: ${error}`);
       throw new Error(`Failed to retrieve platforms: ${error}`);
     }
   }
@@ -35,7 +36,7 @@ export class YellowPagesPlatformModule extends BaseModule {
       const match = findPlatformByReference(platforms, name);
       return match || null;
     } catch (error) {
-      console.error(`Error getting platform by name '${name}': ${error}`);
+      log.error(`Error getting platform by name '${name}': ${error}`);
       throw new Error(`Failed to retrieve platform by name: ${error}`);
     }
   }
@@ -50,7 +51,7 @@ export class YellowPagesPlatformModule extends BaseModule {
       const p = this.registry.getPlatformConfig(id);
       return p;
     } catch (error) {
-      console.error(`Error getting platform by ID ${id}: ${error}`);
+      log.error(`Error getting platform by ID ${id}: ${error}`);
       throw new Error(`Failed to retrieve platform by ID: ${error}`);
     }
   }
@@ -63,7 +64,7 @@ export class YellowPagesPlatformModule extends BaseModule {
     try {
       return this.registry.getActivePlatforms();
     } catch (error) {
-      console.error(`Error getting active platforms: ${error}`);
+      log.error(`Error getting active platforms: ${error}`);
       throw new Error(`Failed to retrieve active platforms: ${error}`);
     }
   }
@@ -77,7 +78,7 @@ export class YellowPagesPlatformModule extends BaseModule {
     try {
       return this.registry.getPlatformsByCountry(country);
     } catch (error) {
-      console.error(
+      log.error(
         `Error getting platforms by country '${country}': ${error}`
       );
       throw new Error(`Failed to retrieve platforms by country: ${error}`);
@@ -94,7 +95,7 @@ export class YellowPagesPlatformModule extends BaseModule {
       const all = this.registry.getAllPlatforms();
       return all.filter((platform) => platform.language === language);
     } catch (error) {
-      console.error(
+      log.error(
         `Error getting platforms by language '${language}': ${error}`
       );
       throw new Error(`Failed to retrieve platforms by language: ${error}`);
@@ -111,7 +112,7 @@ export class YellowPagesPlatformModule extends BaseModule {
         "Creating platforms is not supported in read-only TS config mode. Edit files in src/config/platforms."
       );
     } catch (error) {
-      console.error(`Error creating platform: ${error}`);
+      log.error(`Error creating platform: ${error}`);
       throw new Error(`Failed to create platform: ${error}`);
     }
   }
@@ -144,7 +145,7 @@ export class YellowPagesPlatformModule extends BaseModule {
         "Deleting platforms is not supported in read-only TS config mode. Remove the TS file instead."
       );
     } catch (error) {
-      console.error(`Error deleting platform with ID ${id}: ${error}`);
+      log.error(`Error deleting platform with ID ${id}: ${error}`);
       throw new Error(`Failed to delete platform: ${error}`);
     }
   }
@@ -203,7 +204,7 @@ export class YellowPagesPlatformModule extends BaseModule {
         byLanguage,
       };
     } catch (error) {
-      console.error(`Error getting platform statistics: ${error}`);
+      log.error(`Error getting platform statistics: ${error}`);
       throw new Error(`Failed to retrieve platform statistics: ${error}`);
     }
   }

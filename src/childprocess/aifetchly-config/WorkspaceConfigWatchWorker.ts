@@ -47,6 +47,16 @@ import {
   createWorkspaceWatcher,
   type WorkspaceWatcherHandle,
 } from "./WorkspaceChokidarWatcher";
+
+/** parentPort — the utilityProcess transport (R4.6: process.send → parentPort). */
+const parentPort = (
+  process as unknown as {
+    parentPort?: {
+      on: (event: "message", cb: (e: { data: unknown }) => void) => void;
+      postMessage: (msg: unknown) => void;
+    };
+  }
+).parentPort;
 import { scanWorkspace } from "./workerScanner";
 
 /**
@@ -62,15 +72,19 @@ interface WatchedEntry {
 
 const watched = new Map<string, WatchedEntry>();
 
-/** Send a typed event to the parent process. No-op if the IPC channel closed. */
+/** Send a typed event to the parent process via parentPort. */
 function emit(event: WorkspaceWatchEvent): void {
-  if (process.send) {
-    process.send(event);
+  if (parentPort) {
+    parentPort.postMessage(event);
   }
 }
 
 /** Emit a worker→main error event. Message length capped per §14.4 (2000 chars). */
-function emitError(workspaceId: string, message: string, recoverable: boolean): void {
+function emitError(
+  workspaceId: string,
+  message: string,
+  recoverable: boolean
+): void {
   const trimmed = message.length > 2000 ? message.slice(0, 2000) : message;
   emit({ type: "error", workspaceId, message: trimmed, recoverable });
 }
@@ -195,7 +209,8 @@ async function handleCommand(cmd: WorkspaceWatchCommand): Promise<void> {
  * zero watched workspaces.
  */
 function initializeWorker(): void {
-  process.on("message", (raw: unknown) => {
+  parentPort?.on("message", (e: { data: unknown }) => {
+    const raw = e.data;
     // Defense-in-depth: main is trusted, but the worker guards anyway. A
     // malformed message is logged and dropped (no crash — main will retry).
     const parsed = workerCommandSchema.safeParse(raw);
@@ -204,7 +219,10 @@ function initializeWorker(): void {
       // and drop. Main is buggy if this happens; restart is unnecessary.
       const placeholder = "dropped malformed inbound message";
       // eslint-disable-next-line no-console
-      console.warn(`[WorkspaceConfigWatchWorker] ${placeholder}:`, parsed.error.message);
+      console.warn(
+        `[WorkspaceConfigWatchWorker] ${placeholder}:`,
+        parsed.error.message
+      );
       return;
     }
     void handleCommand(parsed.data).catch((err: unknown) => {
@@ -233,10 +251,7 @@ function initializeWorker(): void {
 
 // Worker bootstrap — matches the ContactExtractionWorker pattern. The
 // WORKER_TYPE env marker is set by the main process when forking.
-if (
-  require.main === module ||
-  process.env.WORKER_TYPE === "aifetchly-config"
-) {
+if (require.main === module || process.env.WORKER_TYPE === "aifetchly-config") {
   initializeWorker();
 }
 

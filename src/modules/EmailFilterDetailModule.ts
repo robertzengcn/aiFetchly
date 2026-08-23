@@ -1,4 +1,5 @@
 import { BaseModule } from "@/modules/baseModule";
+import { log } from "@/modules/Logger";
 import { EmailFilterDetailModel } from "@/model/EmailFilterDetail.model";
 import { EmailFilterDetailEntity } from "@/entity/EmailFilterDetail.entity";
 import { EmailFilterDetailModuleInterface } from "@/modules/interface/EmailFilterDetailModuleInterface";
@@ -23,7 +24,7 @@ export class EmailFilterDetailModule
     try {
       return await this.emailFilterDetailModel.create(detail);
     } catch (error) {
-      console.error("Error creating email filter detail:", error);
+      log.error("Error creating email filter detail:", error);
       throw error;
     }
   }
@@ -37,7 +38,7 @@ export class EmailFilterDetailModule
     try {
       return await this.emailFilterDetailModel.read(id);
     } catch (error) {
-      console.error("Error getting email filter detail:", error);
+      log.error("Error getting email filter detail:", error);
       throw error;
     }
   }
@@ -51,7 +52,7 @@ export class EmailFilterDetailModule
     try {
       await this.emailFilterDetailModel.update(id, detail);
     } catch (error) {
-      console.error("Error updating email filter detail:", error);
+      log.error("Error updating email filter detail:", error);
       throw error;
     }
   }
@@ -64,7 +65,7 @@ export class EmailFilterDetailModule
     try {
       await this.emailFilterDetailModel.delete(id);
     } catch (error) {
-      console.error("Error deleting email filter detail:", error);
+      log.error("Error deleting email filter detail:", error);
       throw error;
     }
   }
@@ -82,7 +83,7 @@ export class EmailFilterDetailModule
         filterId
       );
     } catch (error) {
-      console.error("Error getting email filter details by filter ID:", error);
+      log.error("Error getting email filter details by filter ID:", error);
       throw error;
     }
   }
@@ -102,7 +103,7 @@ export class EmailFilterDetailModule
         details
       );
     } catch (error) {
-      console.error("Error updating email filter details by filter ID:", error);
+      log.error("Error updating email filter details by filter ID:", error);
       throw error;
     }
   }
@@ -117,7 +118,7 @@ export class EmailFilterDetailModule
         filterId
       );
     } catch (error) {
-      console.error("Error deleting email filter details by filter ID:", error);
+      log.error("Error deleting email filter details by filter ID:", error);
       throw error;
     }
   }
@@ -135,7 +136,7 @@ export class EmailFilterDetailModule
         filterIds
       );
     } catch (error) {
-      console.error("Error getting email filter details by filter IDs:", error);
+      log.error("Error getting email filter details by filter IDs:", error);
       throw error;
     }
   }

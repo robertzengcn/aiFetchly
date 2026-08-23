@@ -20,6 +20,7 @@
  * when the runtime is not installed.
  */
 import * as fs from "node:fs";
+import { log } from "@/modules/Logger";
 import { LOCAL_XENOVA_ALL_MINILM_DIMENSIONS } from "@/service/embedding/LocalEmbeddingModels";
 import {
   type LocalEmbeddingBatchMessage,
@@ -105,7 +106,7 @@ function postMessageSafe(message: LocalEmbeddingOutboundMessage): void {
   } catch (postError) {
     const errorMessage =
       postError instanceof Error ? postError.message : String(postError);
-    console.error(
+    log.error(
       `[LocalEmbeddingWorker] Failed to post message: ${errorMessage}`
     );
   }
@@ -176,7 +177,7 @@ async function createExtractorWithFallback(
       lastError = error;
       const message = error instanceof Error ? error.message : String(error);
       if (remoteHost && remoteHost !== remoteHosts[remoteHosts.length - 1]) {
-        console.warn(
+        log.warn(
           `[LocalEmbeddingWorker] Failed to load ${underlyingModel} from ${remoteHost}: ${message}. Trying next configured host.`
         );
       }
@@ -284,7 +285,7 @@ if (parentPort) {
     } catch (parseError) {
       const errorMessage =
         parseError instanceof Error ? parseError.message : String(parseError);
-      console.error(`[LocalEmbeddingWorker] Non-JSON inbound: ${errorMessage}`);
+      log.error(`[LocalEmbeddingWorker] Non-JSON inbound: ${errorMessage}`);
       sendError("unknown", "Inbound message is not valid JSON");
       return;
     }
@@ -293,13 +294,13 @@ if (parentPort) {
 }
 
 process.on("uncaughtException", (error: unknown) => {
-  console.error("[LocalEmbeddingWorker] Uncaught exception:", error);
+  log.error("[LocalEmbeddingWorker] Uncaught exception:", error);
   sendFatalErrorToActiveRequests(error);
   process.exit(1);
 });
 
 process.on("unhandledRejection", (reason: unknown) => {
-  console.error("[LocalEmbeddingWorker] Unhandled rejection:", reason);
+  log.error("[LocalEmbeddingWorker] Unhandled rejection:", reason);
   sendFatalErrorToActiveRequests(reason);
   process.exit(1);
 });

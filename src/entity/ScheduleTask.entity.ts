@@ -45,23 +45,23 @@ export enum DependencyCondition {
 @Index(["source_conversation_id", "task_type", "is_active"])
 export class ScheduleTaskEntity extends AuditableEntity {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
 
   @Column("varchar", { length: 255 })
-  name: string;
+  name!: string;
 
   @Column("text", { nullable: true })
-  description: string;
+  description!: string;
 
   @Column("varchar", {
     length: 50,
     comment:
       "Type of task to be executed: search, email_extract, buck_email, yellow_pages, google_maps, yandex_maps, ai_message",
   })
-  task_type: string;
+  task_type!: string;
 
   @Column("integer", { comment: "Foreign key to the actual task table" })
-  task_id: number;
+  task_id!: number;
 
   @Column("varchar", {
     length: 100,
@@ -69,151 +69,151 @@ export class ScheduleTaskEntity extends AuditableEntity {
     comment:
       "Cron expression for scheduling; nullable for interval/manual triggers",
   })
-  cron_expression: string;
+  cron_expression!: string | null;
 
   @Column("boolean", {
     default: true,
     comment: "Whether the schedule is active",
   })
-  is_active: boolean;
+  is_active!: boolean;
 
   @Column("datetime", {
     nullable: true,
     comment: "Last time the task was executed",
   })
-  last_run_time: Date;
+  last_run_time!: Date;
 
   @Column("datetime", {
     nullable: true,
     comment: "Next scheduled execution time",
   })
-  next_run_time: Date;
+  next_run_time!: Date;
 
   @Column("varchar", {
     length: 20,
     default: ScheduleStatus.ACTIVE,
     comment: "Current status of the schedule: active, inactive, paused",
   })
-  status: string;
+  status!: string;
 
   @Column("varchar", {
     length: 20,
     default: TriggerType.CRON,
     comment: "How the job is triggered: cron, dependency, manual",
   })
-  trigger_type: string;
+  trigger_type!: string;
 
   @Column("integer", {
     nullable: true,
     comment: "Foreign key to parent schedule (for dependency triggers)",
   })
-  parent_schedule_id: number | null;
+  parent_schedule_id!: number | null;
 
   @Column("varchar", {
     length: 20,
     nullable: true,
     comment: "Dependency condition: on_success, on_completion, on_failure",
   })
-  dependency_condition: string | null;
+  dependency_condition!: string | null;
 
   @Column("integer", {
     default: 0,
     comment: "Delay in minutes after parent job completes",
   })
-  delay_minutes: number;
+  delay_minutes!: number;
 
   @Column("integer", {
     default: 0,
     comment: "Number of times the task has been executed",
   })
-  execution_count: number;
+  execution_count!: number;
 
   @Column("integer", { default: 0, comment: "Number of failed executions" })
-  failure_count: number;
+  failure_count!: number;
 
   @Column("text", { nullable: true, comment: "Last error message if any" })
-  last_error_message: string;
+  last_error_message!: string;
 
   @Column("datetime", {
     nullable: true,
     comment: "When the schedule was last modified",
   })
-  last_modified: Date;
+  last_modified!: Date;
 
   // ----- AI Chat V2 scheduled-loop fields (technical-design §9.2) -----
   // All nullable/defaulted so existing cron/dependency/manual rows remain valid.
 
   @Column("integer", { nullable: true, comment: "Fixed elapsed cadence in ms" })
-  interval_ms: number | null;
+  interval_ms!: number | null;
 
   @Column("datetime", {
     nullable: true,
     comment:
       "Stable cadence origin (anchor); first run is due at anchor + interval",
   })
-  interval_anchor_at: Date | null;
+  interval_anchor_at!: Date | null;
 
   @Column("integer", {
     nullable: true,
     comment: "Maximum claimed occurrences for this schedule",
   })
-  max_execution_count: number | null;
+  max_execution_count!: number | null;
 
   @Column("datetime", {
     nullable: true,
     comment: "Absolute schedule lifetime bound",
   })
-  expires_at: Date | null;
+  expires_at!: Date | null;
 
   @Column("varchar", {
     length: 20,
     nullable: true,
     comment: "Misfire policy: skip or run_once",
   })
-  misfire_policy: string | null;
+  misfire_policy!: string | null;
 
   @Column("varchar", {
     length: 20,
     nullable: true,
     comment: "Overlap policy: coalesce",
   })
-  overlap_policy: string | null;
+  overlap_policy!: string | null;
 
   @Column("varchar", {
     length: 100,
     nullable: true,
     comment: "Originating v2-* conversation for chat-created scheduled loops",
   })
-  source_conversation_id: string | null;
+  source_conversation_id!: string | null;
 
   @Column("integer", {
     default: 0,
     comment: "Claimed occurrences including failures",
   })
-  claimed_execution_count: number;
+  claimed_execution_count!: number;
 
   @Column("integer", {
     default: 0,
     comment: "Consecutive failures; automatic pause/fail threshold",
   })
-  consecutive_failure_count: number;
+  consecutive_failure_count!: number;
 
   @Column("integer", {
     default: 0,
     comment: "Monotonic last-claimed occurrence number",
   })
-  last_claimed_occurrence: number;
+  last_claimed_occurrence!: number;
 
   @Column("integer", {
     default: 0,
     comment: "Missed/overlapped occurrence diagnostic count",
   })
-  coalesced_occurrence_count: number;
+  coalesced_occurrence_count!: number;
 
   @Column("varchar", {
     length: 64,
     nullable: true,
     comment: "Stable stop/expiry/failure reason code",
   })
-  terminal_reason: string | null;
+  terminal_reason!: string | null;
 }

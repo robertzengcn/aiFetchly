@@ -20,7 +20,8 @@ export async function startContactExtraction(resultIds: number[]): Promise<{
     message?: string;
 }> {
     const result = await window.api.invoke(START_CONTACT_EXTRACTION, JSON.stringify({ resultIds }));
-    return result as {
+    if (!result.status) { return { success: false, message: result.msg }; }
+    return result.data as {
         success: boolean;
         batchId?: string;
         message?: string;
@@ -36,7 +37,8 @@ export async function getContactInfo(resultIds: number[]): Promise<{
     message?: string;
 }> {
     const result = await window.api.invoke(GET_CONTACT_INFO, JSON.stringify({ resultIds }));
-    return result as {
+    if (!result.status) { return { success: false, message: result.msg }; }
+    return result.data as {
         success: boolean;
         data?: ContactInfoDisplay[];
         message?: string;
@@ -52,7 +54,8 @@ export async function retryContactExtraction(resultIds: number[]): Promise<{
     message?: string;
 }> {
     const result = await window.api.invoke(RETRY_CONTACT_EXTRACTION, JSON.stringify({ resultIds }));
-    return result as {
+    if (!result.status) { return { success: false, message: result.msg }; }
+    return result.data as {
         success: boolean;
         batchId?: string;
         message?: string;

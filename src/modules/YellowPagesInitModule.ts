@@ -1,4 +1,5 @@
 import { BaseModule } from "@/modules/baseModule";
+import { log } from "@/modules/Logger";
 import { PlatformRegistry } from "@/modules/PlatformRegistry";
 
 export class YellowPagesInitModule extends BaseModule {
@@ -14,14 +15,14 @@ export class YellowPagesInitModule extends BaseModule {
      */
     async initializeYellowPagesSystem(): Promise<void> {
         try {
-            console.log('Initializing Yellow Pages system...');
+            log.info('Initializing Yellow Pages system...');
             
             // Initialize default platforms
             await this.initializeDefaultPlatforms();
             
-            console.log('Yellow Pages system initialization completed');
+            log.info('Yellow Pages system initialization completed');
         } catch (error) {
-            console.error('Failed to initialize Yellow Pages system:', error);
+            log.error('Failed to initialize Yellow Pages system:', error);
             throw error;
         }
     }
@@ -41,7 +42,7 @@ export class YellowPagesInitModule extends BaseModule {
         try {
             return this.platformRegistry.getActivePlatforms().length > 0;
         } catch (error) {
-            console.error('Failed to check system initialization:', error);
+            log.error('Failed to check system initialization:', error);
             return false;
         }
     }
@@ -64,7 +65,7 @@ export class YellowPagesInitModule extends BaseModule {
                 totalPlatforms
             };
         } catch (error) {
-            console.error('Failed to get system status:', error);
+            log.error('Failed to get system status:', error);
             return {
                 initialized: false,
                 activePlatforms: 0,

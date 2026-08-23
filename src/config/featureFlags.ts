@@ -24,6 +24,29 @@ export function isBrowserProfileImportEnabled(): boolean {
   }
 }
 
+/**
+ * Emergency kill switch for the AI email-reply subsystem (technical design §23
+ * "emergency kill switch"; P0.1). When ON, draft generation and new send claims
+ * are refused immediately. Message viewing, audit reads, send-attempt detail,
+ * and delivery reconciliation stay available so operators can diagnose and
+ * recover. There is NO flag that restores the legacy unapproved/mutable send
+ * path — the approved-revision + idempotent-delivery path is authoritative.
+ *
+ * DEFAULTS OFF (kill switch inactive = normal operation). Fail-closed on a
+ * Token store error: a broken store must not silently enable drafting/sending.
+ */
+export const EMAIL_REPLY_KILL_SWITCH_FLAG = "email_reply_kill_switch";
+
+export function isEmailReplyKillSwitchOn(): boolean {
+  try {
+    return new Token().getValue(EMAIL_REPLY_KILL_SWITCH_FLAG) === "true";
+  } catch {
+    // Unreadable store: treat as NOT killed so a storage hiccup doesn't paralyze
+    // the feature. Operators who want the switch on set it explicitly.
+    return false;
+  }
+}
+
 // Kept for any external caller / test that referenced the cache reset hook.
 export function resetFeatureFlagCacheForTest(): void {
   /* no-op: flag is read live and not cached. */

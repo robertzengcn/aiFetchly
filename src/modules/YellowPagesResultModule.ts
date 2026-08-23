@@ -1,4 +1,5 @@
 import { BaseModule } from "@/modules/baseModule";
+import { log } from "@/modules/Logger";
 import { YellowPagesResultModel } from "@/model/YellowPagesResult.model";
 import { SortBy } from "@/entityTypes/commonType";
 import { YellowPagesResultEntity } from "@/entity/YellowPagesResult.entity";
@@ -49,7 +50,7 @@ export class YellowPagesResultModule extends BaseModule {
             
             return saveResult.id;
         } catch (error) {
-            console.error('Error creating result:', error);
+            log.error('Error creating result:', error);
             throw new Error(`Failed to create result: ${error instanceof Error ? error.message : 'Unknown error'}`);
         }
     }
@@ -65,7 +66,7 @@ export class YellowPagesResultModule extends BaseModule {
             const result = await this.yellowPagesResultModel.getResultById(id);
             return result || undefined;
         } catch (error) {
-            console.error('Error getting result by ID:', error);
+            log.error('Error getting result by ID:', error);
             throw new Error(`Failed to get result by ID: ${error instanceof Error ? error.message : 'Unknown error'}`);
         }
     }
@@ -87,7 +88,7 @@ export class YellowPagesResultModule extends BaseModule {
             // TODO: Implement update method in YellowPagesResultModel
             throw new Error("update method not implemented in YellowPagesResultModel");
         } catch (error) {
-            console.error('Error updating result:', error);
+            log.error('Error updating result:', error);
             throw new Error(`Failed to update result ${id}: ${error instanceof Error ? error.message : 'Unknown error'}`);
         }
     }
@@ -104,7 +105,7 @@ export class YellowPagesResultModule extends BaseModule {
                 throw new Error('Failed to delete result');
             }
         } catch (error) {
-            console.error('Error deleting result:', error);
+            log.error('Error deleting result:', error);
             throw new Error(`Failed to delete result ${id}: ${error instanceof Error ? error.message : 'Unknown error'}`);
         }
     }
@@ -123,7 +124,7 @@ export class YellowPagesResultModule extends BaseModule {
             const resultEntities = await this.yellowPagesResultModel.getResultsByTaskId(taskId, page, size);
             return resultEntities.map(entity => this.convertEntityToResult(entity));
         } catch (error) {
-            console.error('Error getting results by task ID:', error);
+            log.error('Error getting results by task ID:', error);
             throw new Error(`Failed to get results for task ${taskId}: ${error instanceof Error ? error.message : 'Unknown error'}`);
         }
     }
@@ -140,7 +141,7 @@ export class YellowPagesResultModule extends BaseModule {
             const resultEntities = await this.yellowPagesResultModel.getResultsByPlatform(platform, page, size);
             return resultEntities.map(entity => this.convertEntityToResult(entity));
         } catch (error) {
-            console.error('Error getting results by platform:', error);
+            log.error('Error getting results by platform:', error);
             throw new Error(`Failed to get results for platform ${platform}: ${error instanceof Error ? error.message : 'Unknown error'}`);
         }
     }
@@ -157,7 +158,7 @@ export class YellowPagesResultModule extends BaseModule {
             const resultEntities = await this.yellowPagesResultModel.searchByBusinessName(searchTerm, page, size);
             return resultEntities.map(entity => this.convertEntityToResult(entity));
         } catch (error) {
-            console.error('Error searching results:', error);
+            log.error('Error searching results:', error);
             throw new Error(`Failed to search results for term "${searchTerm}": ${error instanceof Error ? error.message : 'Unknown error'}`);
         }
     }
@@ -172,7 +173,7 @@ export class YellowPagesResultModule extends BaseModule {
         try {
             return await this.yellowPagesResultModel.getResultCountByTaskId(taskId);
         } catch (error) {
-            console.error('Error getting results count by task ID:', error);
+            log.error('Error getting results count by task ID:', error);
             throw new Error(`Failed to get results count for task ${taskId}: ${error instanceof Error ? error.message : 'Unknown error'}`);
         }
         });
@@ -186,7 +187,7 @@ export class YellowPagesResultModule extends BaseModule {
         try {
             return await this.yellowPagesResultModel.getResultTotal();
         } catch (error) {
-            console.error('Error counting results:', error);
+            log.error('Error counting results:', error);
             throw new Error(`Failed to count results: ${error instanceof Error ? error.message : 'Unknown error'}`);
         }
     }
@@ -195,7 +196,7 @@ export class YellowPagesResultModule extends BaseModule {
     try {
       return await this.yellowPagesResultModel.countByDateRange(startDate, endDate);
     } catch (error) {
-      console.error('Error counting results by date range:', error);
+      log.error('Error counting results by date range:', error);
       throw new Error(`Failed to count results by date range: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
@@ -205,7 +206,7 @@ export class YellowPagesResultModule extends BaseModule {
       const rows = await this.yellowPagesResultModel.aggregateByDateRange(startDate, endDate, granularity);
       return rows.map(row => ({ date: row.date, count: row.count }));
     } catch (error) {
-      console.error('Error aggregating results by date range:', error);
+      log.error('Error aggregating results by date range:', error);
       throw new Error(`Failed to aggregate results by date range: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
@@ -222,7 +223,7 @@ export class YellowPagesResultModule extends BaseModule {
             // The model now expects 0-based pagination, so pass page directly
             return await this.yellowPagesResultModel.listResults(page, size, sort);
         } catch (error) {
-            console.error('Error listing results:', error);
+            log.error('Error listing results:', error);
             throw new Error(`Failed to list results: ${error instanceof Error ? error.message : 'Unknown error'}`);
         }
     }
@@ -243,7 +244,7 @@ export class YellowPagesResultModule extends BaseModule {
             });
             return resultsByDateRange.map(entity => this.convertEntityToResult(entity));
         } catch (error) {
-            console.error('Error getting results by date range:', error);
+            log.error('Error getting results by date range:', error);
             throw new Error(`Failed to get results by date range: ${error instanceof Error ? error.message : 'Unknown error'}`);
         }
     }
@@ -270,7 +271,7 @@ export class YellowPagesResultModule extends BaseModule {
             });
             return resultsByCategory.map(entity => this.convertEntityToResult(entity));
         } catch (error) {
-            console.error('Error getting results by category:', error);
+            log.error('Error getting results by category:', error);
             throw new Error(`Failed to get results for category "${category}": ${error instanceof Error ? error.message : 'Unknown error'}`);
         }
     }
@@ -298,7 +299,7 @@ export class YellowPagesResultModule extends BaseModule {
             });
             return resultsByLocation.map(entity => this.convertEntityToResult(entity));
         } catch (error) {
-            console.error('Error getting results by location:', error);
+            log.error('Error getting results by location:', error);
             throw new Error(`Failed to get results for location "${location}": ${error instanceof Error ? error.message : 'Unknown error'}`);
         }
     }
@@ -314,7 +315,7 @@ export class YellowPagesResultModule extends BaseModule {
             const resultsWithEmails = allResults.filter(result => result.email && result.email.trim() !== '');
             return resultsWithEmails.map(entity => this.convertEntityToResult(entity));
         } catch (error) {
-            console.error('Error getting results with emails:', error);
+            log.error('Error getting results with emails:', error);
             throw new Error(`Failed to get results with emails: ${error instanceof Error ? error.message : 'Unknown error'}`);
         }
     }
@@ -330,7 +331,7 @@ export class YellowPagesResultModule extends BaseModule {
             const resultsWithPhones = allResults.filter(result => result.phone && result.phone.trim() !== '');
             return resultsWithPhones.map(entity => this.convertEntityToResult(entity));
         } catch (error) {
-            console.error('Error getting results with phones:', error);
+            log.error('Error getting results with phones:', error);
             throw new Error(`Failed to get results with phones: ${error instanceof Error ? error.message : 'Unknown error'}`);
         }
     }
@@ -346,7 +347,7 @@ export class YellowPagesResultModule extends BaseModule {
             const resultsWithWebsites = allResults.filter(result => result.website && result.website.trim() !== '');
             return resultsWithWebsites.map(entity => this.convertEntityToResult(entity));
         } catch (error) {
-            console.error('Error getting results with websites:', error);
+            log.error('Error getting results with websites:', error);
             throw new Error(`Failed to get results with websites: ${error instanceof Error ? error.message : 'Unknown error'}`);
         }
     }
@@ -401,7 +402,7 @@ export class YellowPagesResultModule extends BaseModule {
                 }
             });
         } catch (error) {
-            console.warn('Error calculating detailed statistics:', error);
+            log.warn('Error calculating detailed statistics:', error);
             // Continue with empty statistics if there's an error
         }
 
@@ -435,7 +436,7 @@ export class YellowPagesResultModule extends BaseModule {
                 throw new Error('Failed to delete results');
             }
         } catch (error) {
-            console.error('Error deleting results by task ID:', error);
+            log.error('Error deleting results by task ID:', error);
             throw new Error(`Failed to delete results for task ${taskId}: ${error instanceof Error ? error.message : 'Unknown error'}`);
         }
     }
@@ -465,7 +466,7 @@ export class YellowPagesResultModule extends BaseModule {
             
             return deletedCount;
         } catch (error) {
-            console.error('Error cleaning up old results:', error);
+            log.error('Error cleaning up old results:', error);
             throw new Error(`Failed to cleanup old results: ${error instanceof Error ? error.message : 'Unknown error'}`);
         }
     }

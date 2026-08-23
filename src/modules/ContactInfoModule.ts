@@ -157,16 +157,35 @@ export class ContactInfoModule extends BaseModule {
    * Batch update extraction status
    * @param resultIds Array of result IDs
    * @param status The new status
+   * @param error Optional error message applied to every row (e.g. a crash reason)
    */
   async batchUpdateExtractionStatus(
     resultIds: number[],
-    status: string
+    status: string,
+    error?: string
   ): Promise<void> {
     await this.ensureConnection();
 
     for (const resultId of resultIds) {
-      await contactInfoRepository.updateStatus(resultId, status as any);
+      await contactInfoRepository.updateStatus(resultId, status as any, error);
     }
+  }
+
+  /**
+   * WS-4 R4.4: resultIds whose extraction never reached a terminal status
+   * ('completed'/'failed') — i.e. rows still 'pending' or 'analyzing'. These
+   * are the jobs a worker crash would strand; the main process re-queues them
+   * on worker restart. A resultId has exactly one status, so the two sets are
+   * disjoint (no dedupe needed).
+   */
+  async getInFlightResultIds(): Promise<number[]> {
+    await this.ensureConnection();
+
+    const [pending, analyzing] = await Promise.all([
+      contactInfoRepository.findByStatus("pending"),
+      contactInfoRepository.findByStatus("analyzing"),
+    ]);
+    return [...pending, ...analyzing].map((c) => c.resultId);
   }
 
   /**

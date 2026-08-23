@@ -1,5 +1,5 @@
 import { EmailsearchTaskEntityDisplay } from "@/entityTypes/emailextraction-type";
-import { BuckEmailType } from "@/model/buckEmailTaskdb";
+import { BuckEmailType } from "@/entityTypes/buckEmail-type";
 import { EmailTemplateVariable } from "@/config/emailTemplateVariables";
 import { BuckemailTaskEntity } from "@/entity/BuckemailTask.entity";
 import { EmailReceiveProtocol } from "@/entityTypes/emailReceiveTypes";

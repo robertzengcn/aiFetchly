@@ -11,6 +11,7 @@
  */
 
 import type { ToolFunction } from "@/api/aiChatApi";
+import { log } from "@/modules/Logger";
 import type { SkillDefinition, SkillManifest } from "@/entityTypes/skillTypes";
 import { skillDefinitionToToolFunction } from "@/entityTypes/skillTypes";
 import * as fs from "fs";
@@ -67,18 +68,23 @@ import {
   importKnowledgeLibraryWebsiteForAi,
   deleteKnowledgeLibraryDocumentForAi,
 } from "@/service/KnowledgeLibraryAiTools";
+import { verifyContactInfoForAi } from "@/service/ContactVerificationAiTools";
+import {
+  CONTACT_VERIFICATION_TOOL_DESCRIPTION,
+  CONTACT_VERIFICATION_TOOL_PARAMETERS,
+} from "@/schemas/contactVerification";
 
 // ---------------------------------------------------------------------------
 // Internal state
 // ---------------------------------------------------------------------------
 
 /** Map of skill name → full definition. Stored in globalThis to survive HMR. */
+const globalRegistry = globalThis as unknown as {
+  __aifetchlySkillRegistry?: Map<string, SkillDefinition>;
+};
 const registry: Map<string, SkillDefinition> =
-  ((globalThis as any).__aifetchlySkillRegistry as Map<
-    string,
-    SkillDefinition
-  >) ?? new Map();
-(globalThis as any).__aifetchlySkillRegistry = registry;
+  globalRegistry.__aifetchlySkillRegistry ?? new Map();
+globalRegistry.__aifetchlySkillRegistry = registry;
 
 // ---------------------------------------------------------------------------
 // Built-in skill definitions (statically imported)
@@ -848,7 +854,8 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       "IMPORTANT: To avoid timeouts and get fast synchronous results, call this tool in SMALL BATCHES of about 5 URLs or fewer per call. For a larger URL list, make multiple sequential calls (around 5 URLs each) instead of one large call. " +
       "When the urls array contains 8 or more entries, this tool runs ASYNCHRONOUSLY: it returns { async: true, job_id } within ~2 seconds and continues working in the background. " +
       "Poll the result with check_tool_job_status(job_id) every 15-30 seconds until status is 'completed' or 'failed'. Do not retry the call while a job is running. " +
-      "If a batch hits the extraction timeout, any contacts already collected are returned with partial: true plus a note listing the URLs that were NOT processed — retry those remaining URLs in a smaller batch.",
+      "If a batch hits the extraction timeout, any contacts already collected are returned with partial: true plus a note listing the URLs that were NOT processed — retry those remaining URLs in a smaller batch. " +
+      "POSTCONDITION: If extraction succeeds and returns at least one email address or phone number, every returned contact already includes a Standard verification result (verification_performed: true) — present, export, save, or use those verified classifications rather than re-running verification. Do not call verify_contact_info again for results marked verification_performed: true unless the user explicitly requests re-verification.",
     parameters: {
       type: "object",
       properties: {
@@ -908,6 +915,26 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
         }
       );
       return { success: true, result };
+    },
+  },
+  {
+    name: "verify_contact_info",
+    description: CONTACT_VERIFICATION_TOOL_DESCRIPTION,
+    parameters: CONTACT_VERIFICATION_TOOL_PARAMETERS,
+    tier: "main",
+    requiresConfirmation: false,
+    permissionCategory: "pure",
+    source: "built-in",
+    timeoutClass: "network",
+    execute: async (args, context) => {
+      const result = await verifyContactInfoForAi(args, context);
+      return {
+        success: result.success,
+        result: (result.result as Record<string, unknown>) ?? {
+          success: false,
+          error: result.error,
+        },
+      };
     },
   },
   {
@@ -3261,7 +3288,7 @@ async function getAllToolFunctions(): Promise<ToolFunction[]> {
     const uniqueMcp = mcpTools.filter((t) => !seen.has(t.name));
     return [...builtInTools, ...uniqueMcp];
   } catch (error) {
-    console.error("Failed to load MCP tools:", error);
+    log.error("Failed to load MCP tools:", error);
     return builtInTools;
   }
 }
@@ -3369,7 +3396,7 @@ function isRegistered(name: string): boolean {
  */
 function registerSkill(skill: SkillDefinition): void {
   if (registry.has(skill.name)) {
-    console.warn(
+    log.warn(
       `[SkillRegistry] registerSkill FAILED: "${skill.name}" already registered`
     );
     throw new Error(`Skill already registered: ${skill.name}`);

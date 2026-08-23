@@ -1,4 +1,5 @@
 import { ipcMain } from 'electron';
+import { log } from "@/modules/Logger";
 import { LANGUAGE_PREFERENCE_GET, LANGUAGE_PREFERENCE_UPDATE } from '@/config/channellist';
 import { SystemSettingController } from '@/controller/SystemSettingController';
 import { CommonMessage } from '@/entityTypes/commonType';
@@ -33,7 +34,7 @@ export function registerLanguagePreferenceIpcHandlers() {
 
             return result;
         } catch (error) {
-            console.error('Error getting language preference:', error);
+            log.error('Error getting language preference:', error);
 
             const result: CommonMessage<string> = {
                 status: false,
@@ -64,5 +65,5 @@ export function registerLanguagePreferenceIpcHandlers() {
         },
     );
 
-    console.log('Language preference IPC handlers registered successfully');
+    log.info('Language preference IPC handlers registered successfully');
 }

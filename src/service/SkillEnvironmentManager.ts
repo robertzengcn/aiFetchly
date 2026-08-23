@@ -4,6 +4,7 @@
  */
 
 import { spawn, spawnSync } from "child_process";
+import { log } from "@/modules/Logger";
 import * as crypto from "crypto";
 import * as fs from "fs";
 import * as path from "path";
@@ -112,7 +113,7 @@ function meetsPythonVersionConstraint(
   const trimmed = constraint.trim();
   const ge = /^>=([0-9]+)\.([0-9]+)(?:\.([0-9]+))?$/.exec(trimmed);
   if (!ge) {
-    console.warn(
+    log.warn(
       `[SkillEnvironmentManager] Unsupported Python version constraint "${trimmed}"; skipping version check. Only >=M.m[.p] is supported.`
     );
     return true;

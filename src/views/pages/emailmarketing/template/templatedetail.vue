@@ -324,7 +324,7 @@ const aiEnabled = ref<boolean>(true);
 // const selectedProxy = ref<ProxyListEntity>();
 
 const rules = {
-  required: (value) => !!value || "Field is required",
+  required: (value: unknown) => !!value || "Field is required",
 };
 
 

@@ -10,7 +10,13 @@
  */
 
 import { type Browser, type Page } from "puppeteer";
+import { log } from "@/modules/Logger";
 import useProxy from "@lem0-packages/puppeteer-page-proxy";
+import {
+  yandexMapsWorkerInboundSchema,
+  type YandexMapsWorkerInbound,
+} from "@/schemas/worker/yandexMaps";
+import { parseWorkerMessage } from "@/schemas/worker/_shared";
 import { BrowserManager } from "@/modules/browserManager";
 import type {
   YandexMapsSearchResult,
@@ -129,10 +135,10 @@ async function applyCookies(page: Page, cookies: unknown[]): Promise<void> {
       };
       await page.setCookie(cookieData);
     } catch (err) {
-      console.error("[YandexMapsWorker] Failed to set cookie:", err);
+      log.error("[YandexMapsWorker] Failed to set cookie:", err);
     }
   }
-  console.log(`[YandexMapsWorker] Applied ${cookies.length} cookies`);
+  log.info(`[YandexMapsWorker] Applied ${cookies.length} cookies`);
 }
 
 // ---------------------------------------------------------------------------
@@ -519,7 +525,7 @@ async function scrapeYandexMaps(msg: StartMessage): Promise<void> {
           }
         });
       });
-      console.log(
+      log.info(
         `[YandexMapsWorker] Proxy rotation enabled with ${proxies.length} proxy(ies). Initial: ${proxies[0].host}:${proxies[0].port}`
       );
     }
@@ -961,7 +967,7 @@ async function scrapeYandexMaps(msg: StartMessage): Promise<void> {
           consecutiveSkips++;
         }
       } catch (err) {
-        console.error(
+        log.error(
           "[YandexMapsWorker] Error extracting card:",
           err instanceof Error ? err.message : err
         );
@@ -1301,7 +1307,16 @@ function buildSummary(
 // Message handler
 // ---------------------------------------------------------------------------
 
-process.on("message", (msg: WorkerMessage) => {
+process.on("message", (raw: unknown) => {
+  const validation = parseWorkerMessage<YandexMapsWorkerInbound>(
+    raw,
+    yandexMapsWorkerInboundSchema()
+  );
+  if (!validation.success) {
+    log.warn("[YandexMapsWorker] dropped malformed message:", validation.error);
+    return;
+  }
+  const msg = validation.data as unknown as WorkerMessage;
   if (msg.type === "start") {
     scrapeYandexMaps(msg).catch((err: unknown) => {
       send({
@@ -1321,7 +1336,7 @@ process.on("message", (msg: WorkerMessage) => {
       browser
         .close()
         .catch((err: unknown) => {
-          console.error(
+          log.error(
             "[YandexMapsWorker] Error closing browser during cancel:",
             err
           );
