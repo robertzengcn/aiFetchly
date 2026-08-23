@@ -31,6 +31,7 @@ import {
 import { getLightweightProfile } from "@/service/AIChatLightweightProfiles";
 import {
   AIChatLightweightFailure,
+  type AIChatLightweightCompletionEvent,
   type AIChatLightweightCompletionInput,
   type AIChatLightweightCompletionResult,
   type AIChatLightweightFailureReason,
@@ -176,17 +177,16 @@ export class AIChatLightweightCompletionService {
     const profile = getLightweightProfile(input.workload);
     const startedAt = Date.now();
 
-    const { outcome, metrics } = await this.runStateMachine(input, profile);
+    const { outcome, metrics, providerKind } = await this.runStateMachine(
+      input,
+      profile
+    );
 
     if (outcome.kind === "cooldown_skip") {
-      this.emitEvent(
-        input,
-        "cooldown_skip",
-        undefined,
-        undefined,
-        startedAt,
-        metrics
-      );
+      this.emitEvent(input, providerKind, undefined, undefined, startedAt, {
+        ...metrics,
+        outcome: "cooldown_skip",
+      });
       throw new AIChatLightweightFailure({
         reason: "small_model_unavailable",
         message: `Lightweight workload ${input.workload} skipped (cooldown).`,
@@ -194,8 +194,9 @@ export class AIChatLightweightCompletionService {
       });
     }
     if (outcome.kind === "failed") {
-      this.emitEvent(input, "failed", undefined, undefined, startedAt, {
+      this.emitEvent(input, providerKind, undefined, undefined, startedAt, {
         ...metrics,
+        outcome: "failed",
         fallbackReason: outcome.failure.reason,
       });
       throw outcome.failure;
@@ -203,11 +204,11 @@ export class AIChatLightweightCompletionService {
 
     this.emitEvent(
       input,
-      "success",
+      providerKind,
       outcome.response,
       outcome.route,
       startedAt,
-      metrics
+      { ...metrics, outcome: "success" }
     );
     return {
       response: outcome.response,
@@ -234,9 +235,26 @@ export class AIChatLightweightCompletionService {
   ): Promise<{
     outcome: LightweightAttemptOutcome;
     metrics: LightweightAttemptMetrics;
+    providerKind: AIChatLightweightProviderKind;
   }> {
     const resolution = await this.deps.resolveProvider();
+    const r = await this.runStateMachineResolved(input, profile, resolution);
+    return { ...r, providerKind: resolution.providerKind };
+  }
 
+  /**
+   * The state machine proper, run against an already-resolved provider so the
+   * provider is resolved exactly once per logical completion (re-resolving in
+   * the fallback path could observe a mid-flight provider switch).
+   */
+  private async runStateMachineResolved(
+    input: AIChatLightweightCompletionInput,
+    profile: ReturnType<typeof getLightweightProfile>,
+    resolution: LightweightProviderResolution
+  ): Promise<{
+    outcome: LightweightAttemptOutcome;
+    metrics: LightweightAttemptMetrics;
+  }> {
     // Cooldown applies to background (non-manual) executions only.
     if (!input.manual && this.isInCooldown(input.workload)) {
       return {
@@ -316,10 +334,15 @@ export class AIChatLightweightCompletionService {
             retryError,
             input.signal
           );
-          return this.handleSmallFailure(input, profile, retryClassified);
+          return this.handleSmallFailure(
+            input,
+            profile,
+            resolution,
+            retryClassified
+          );
         }
       }
-      return this.handleSmallFailure(input, profile, classified);
+      return this.handleSmallFailure(input, profile, resolution, classified);
     }
   }
 
@@ -330,6 +353,7 @@ export class AIChatLightweightCompletionService {
   private async handleSmallFailure(
     input: AIChatLightweightCompletionInput,
     profile: ReturnType<typeof getLightweightProfile>,
+    resolution: LightweightProviderResolution,
     classified: ReturnType<typeof classifyLightweightFailure>
   ): Promise<{
     outcome: LightweightAttemptOutcome;
@@ -355,7 +379,9 @@ export class AIChatLightweightCompletionService {
       profile.fallback === "normal_once" &&
       allowsNormalFallback(classified.reason)
     ) {
-      const resolution = await this.deps.resolveProvider();
+      // Reuse the resolution from the top of this logical completion rather
+      // than re-resolving (a mid-flight provider switch must not change the
+      // fallback target).
       const result = await this.runNormalRoute(input, profile, resolution);
       if ("failure" in result) {
         // Fallback itself failed — return the original reason so attribution
@@ -569,34 +595,36 @@ export class AIChatLightweightCompletionService {
 
   private emitEvent(
     input: AIChatLightweightCompletionInput,
-    outcome: AIChatLightweightOutcome,
+    providerKind: AIChatLightweightProviderKind,
     response: OpenAIChatCompletionResponse | undefined,
     route: AIChatLightweightRoute | undefined,
     startedAt: number,
-    metrics: {
-      attemptCount: number;
-      repairAttempted: boolean;
-      fallbackAttempted: boolean;
-      retryReason?: AIChatLightweightFailureReason;
-      fallbackReason?: AIChatLightweightFailureReason;
+    fields: LightweightAttemptMetrics & {
+      outcome: AIChatLightweightOutcome;
     }
   ): void {
-    // No prompt or output content is logged.
-    log.info(
-      "[ai-lightweight]",
-      JSON.stringify({
-        workload: input.workload,
-        route,
-        resolvedModel: response?.model,
-        attemptCount: metrics.attemptCount,
-        repairAttempted: metrics.repairAttempted,
-        fallbackAttempted: metrics.fallbackAttempted,
-        retryReason: metrics.retryReason,
-        fallbackReason: metrics.fallbackReason,
-        durationMs: Date.now() - startedAt,
-        outcome,
-      })
-    );
+    // Construct the typed event so the interface is the single source of
+    // truth for the log shape. No prompt or output content is logged.
+    const event: AIChatLightweightCompletionEvent = {
+      workload: input.workload,
+      providerKind,
+      ...(route ? { route } : {}),
+      requestedAlias: route === "hosted_small" ? "small" : null,
+      ...(response?.model ? { resolvedModel: response.model } : {}),
+      ...(response?.usage?.completion_tokens !== undefined
+        ? { outputTokens: response.usage.completion_tokens }
+        : {}),
+      attemptCount: fields.attemptCount,
+      repairAttempted: fields.repairAttempted,
+      fallbackAttempted: fields.fallbackAttempted,
+      ...(fields.retryReason ? { retryReason: fields.retryReason } : {}),
+      ...(fields.fallbackReason
+        ? { fallbackReason: fields.fallbackReason }
+        : {}),
+      durationMs: Date.now() - startedAt,
+      outcome: fields.outcome,
+    };
+    log.info("[ai-lightweight]", JSON.stringify(event));
   }
 
   /** Exposed for the factory: reset all cooldowns on provider/DB switch. */

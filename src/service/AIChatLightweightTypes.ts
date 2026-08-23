@@ -157,7 +157,8 @@ export type AIChatLightweightOutcome =
 export interface AIChatLightweightCompletionEvent {
   readonly workload: AIChatLightweightWorkload;
   readonly providerKind: AIChatLightweightProviderKind;
-  readonly route: AIChatLightweightRoute;
+  /** The selected route; absent on failed paths where no route completed. */
+  readonly route?: AIChatLightweightRoute;
   readonly requestedAlias: "small" | null;
   readonly resolvedModel?: string;
   readonly contextWindow?: number;

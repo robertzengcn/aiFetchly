@@ -18,6 +18,7 @@ import type {
   AIChatLightweightCompletionInput,
   AIChatLightweightCompletionResult,
 } from "@/service/AIChatLightweightTypes";
+import { getLightweightProfile } from "@/service/AIChatLightweightProfiles";
 import {
   computeLightweightBudget,
   groupMessagesAtomically,
@@ -493,7 +494,11 @@ export class AIChatCompactAgentService {
     const contextWindow =
       capability?.context_size ??
       (await this.resolveContextWindow(input.model));
-    const profileMaxOutput = 4000; // conversation_compact profile maxOutputTokens
+    // The profile is the single source of truth for the conversation_compact
+    // output budget — never hardcode its numeric value here.
+    const profileMaxOutput = getLightweightProfile(
+      "conversation_compact"
+    ).maxOutputTokens;
     const fixedPromptTokens = this.estimator.estimateText(
       buildFullCompactSystemPrompt()
     );
