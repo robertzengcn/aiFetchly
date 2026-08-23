@@ -508,6 +508,7 @@ export class AIChatCompactAgentService {
     const groups = groupMessagesAtomically(messages);
     const chunks = chunkGroupsByBudget(groups, budget.usablePayloadTokens);
     const chunkSummaries: string[] = [];
+    let singleChunkResponseModel: string | undefined;
     for (const chunk of chunks) {
       const chunkMessages = chunk.groups.flatMap(
         (g) => g.messages as OpenAIChatMessage[]
@@ -534,6 +535,11 @@ export class AIChatCompactAgentService {
         throw new Error("Compact model returned empty summary for a chunk");
       }
       chunkSummaries.push(summary);
+      // Capture the resolved model from the single chunk for attribution
+      // when no merge pass runs.
+      if (chunks.length === 1) {
+        singleChunkResponseModel = result.response.model;
+      }
     }
 
     // Reduce: merge chunk summaries into one final summary. If there is only
@@ -542,9 +548,9 @@ export class AIChatCompactAgentService {
     let resolvedModel: string;
     if (chunkSummaries.length === 1) {
       summary = chunkSummaries[0]!;
-      // Re-resolve via a tiny merge pass so we still exercise the lightweight
-      // route attribution for the final summary when multiple chunks merged.
-      resolvedModel = input.model ?? "compact";
+      // Single-chunk: the chunk's own completion produced the summary, so
+      // attribute the resolved model from that response (not the input model).
+      resolvedModel = singleChunkResponseModel ?? input.model ?? "compact";
     } else {
       const mergeMessages: OpenAIChatMessage[] = [
         { role: "system", content: buildFullCompactSystemPrompt() },

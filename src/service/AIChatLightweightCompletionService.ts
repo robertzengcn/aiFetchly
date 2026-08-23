@@ -47,7 +47,10 @@ import {
 /** The canonical hosted small-model alias. Server matching is case-insensitive. */
 export const SMALL_MODEL_ALIAS = "small";
 
-/** Conservative 32k context assumed for bounded workloads when metadata is absent. */
+/** Conservative 32k context assumed for bounded workloads when metadata is
+ *  absent. The budget helper (AIChatPromptBudget) owns the canonical value; this
+ *  service does not use it directly. Kept here only for the export below until
+ *  callers migrate to the budget helper's constant. */
 const CONSERVATIVE_FALLBACK_CONTEXT = 32_000;
 
 /** One background cooldown threshold: three consecutive transient failures. */
@@ -59,6 +62,8 @@ const TRANSIENT_COOLDOWN_MS = 60 * 60 * 1000;
 
 /** Maximum delay actually slept before a safe same-route retry. */
 const MAX_RETRY_SLEEP_MS = 10_000;
+/** Generic 5xx backoff (no authoritative Retry-After). Capped by MAX_RETRY_SLEEP_MS. */
+const GENERIC_5XX_BACKOFF_MS = 2_000;
 
 /**
  * Provider resolution result the service consumes. Injected so tests can drive
@@ -158,12 +163,15 @@ export class AIChatLightweightCompletionService {
       | { kind: "failed"; failure: AIChatLightweightFailure };
 
     if (outcome.kind === "cooldown_skip") {
-      this.emitEvent(input, "cooldown_skip", undefined, 0, startedAt, 0, {
-        repairAttempted,
-        fallbackAttempted,
-        retryReason,
-        fallbackReason,
-      });
+      this.emitEvent(
+        input,
+        "cooldown_skip",
+        undefined,
+        undefined,
+        0,
+        startedAt,
+        { repairAttempted, fallbackAttempted, retryReason, fallbackReason }
+      );
       throw new AIChatLightweightFailure({
         reason: "small_model_unavailable",
         message: `Lightweight workload ${input.workload} skipped (cooldown).`,
@@ -171,12 +179,20 @@ export class AIChatLightweightCompletionService {
       });
     }
     if (outcome.kind === "failed") {
-      this.emitEvent(input, "failed", undefined, attemptCount, startedAt, 0, {
-        repairAttempted,
-        fallbackAttempted,
-        retryReason,
-        fallbackReason: outcome.failure.reason,
-      });
+      this.emitEvent(
+        input,
+        "failed",
+        undefined,
+        undefined,
+        attemptCount,
+        startedAt,
+        {
+          repairAttempted,
+          fallbackAttempted,
+          retryReason,
+          fallbackReason: outcome.failure.reason,
+        }
+      );
       throw outcome.failure;
     }
 
@@ -184,9 +200,9 @@ export class AIChatLightweightCompletionService {
       input,
       "success",
       outcome.response,
+      outcome.route,
       attemptCount,
       startedAt,
-      0,
       { repairAttempted, fallbackAttempted, retryReason, fallbackReason }
     );
     return {
@@ -536,8 +552,10 @@ export class AIChatLightweightCompletionService {
     if (classified.retryAfterMs && classified.retryAfterMs > 0) {
       return Math.min(classified.retryAfterMs, MAX_RETRY_SLEEP_MS);
     }
-    // Bounded jitter retry for generic 5xx.
-    return Math.min(2_000, MAX_RETRY_SLEEP_MS);
+    // Generic 5xx backoff (no authoritative Retry-After). Capped by
+    // MAX_RETRY_SLEEP_MS so a misbehaving server can't stall a background
+    // job for minutes.
+    return Math.min(GENERIC_5XX_BACKOFF_MS, MAX_RETRY_SLEEP_MS);
   }
 
   private async sleepWithAbort(
@@ -563,9 +581,9 @@ export class AIChatLightweightCompletionService {
     input: AIChatLightweightCompletionInput,
     outcome: AIChatLightweightOutcome,
     response: OpenAIChatCompletionResponse | undefined,
+    route: AIChatLightweightRoute | undefined,
     attemptCount: number,
     startedAt: number,
-    _inputTokenEstimate: number,
     metrics: {
       repairAttempted: boolean;
       fallbackAttempted: boolean;
@@ -578,7 +596,7 @@ export class AIChatLightweightCompletionService {
       "[ai-lightweight]",
       JSON.stringify({
         workload: input.workload,
-        route: outcome === "success" ? "hosted_small" : undefined,
+        route,
         resolvedModel: response?.model,
         attemptCount,
         repairAttempted: metrics.repairAttempted,

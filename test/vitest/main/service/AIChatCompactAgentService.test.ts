@@ -831,6 +831,12 @@ describe("AIChatCompactAgentService", () => {
 
       expect(completeChat).toHaveBeenCalledTimes(1);
       expect(mockSaveFullCompact).toHaveBeenCalledTimes(1);
+      // The single-chunk response's resolved model is attributed to the saved
+      // compact, NOT the input conversation model (PRD §11.3.1 / §17).
+      const savedArg = mockSaveFullCompact.mock.calls[0]![0] as {
+        model: string;
+      };
+      expect(savedArg.model).toBe("test-model");
     });
 
     it("capability absence falls back to the normal context window (does not block compact)", async () => {
