@@ -91,6 +91,21 @@ describe("Mac App Store release workflow", (): void => {
     expect(step.run).to.include(
       'echo "MAC_STORE_KEYCHAIN_PATH=$keychain_path" >> "$GITHUB_ENV"'
     );
+    expect(step.run).to.include(
+      'Mac App Store provisioning profile does not include the Apple Distribution signing certificate.'
+    );
+    expect(step.run).to.include(
+      'plutil -extract "DeveloperCertificates.$certificate_index" raw'
+    );
+    expect(step.run).to.include(
+      "/usr/libexec/PlistBuddy -c 'Print :Entitlements:com.apple.application-identifier'"
+    );
+    expect(step.run).to.include(
+      'base64 --decode > "$RUNNER_TEMP/profile-developer-certificate-$certificate_index.der"'
+    );
+    expect(step.run).to.include(
+      'security find-certificate -c "$MAC_STORE_SIGNING_IDENTITY" -p "$keychain_path"'
+    );
   });
 
   it("builds and verifies the MAS app before creating a signed installer", (): void => {
@@ -105,8 +120,13 @@ describe("Mac App Store release workflow", (): void => {
       MAC_STORE_SIGNING_IDENTITY:
         "${{ secrets.MAC_STORE_SIGNING_IDENTITY }}",
       MAC_STORE_SIGNING_TYPE: "distribution",
+      PACKAGE_GUARD_HARD_TIMEOUT_MS: "14400000",
+      PACKAGE_GUARD_STALL_MS: "900000",
     });
-    expect(buildStep.run).to.include("yarn package-mac:store");
+    expect(buildStep.run).to.include(
+      "node scripts/run-packaging-with-hang-guard.js --platform=mas"
+    );
+    expect(buildStep.run).to.not.include("yarn package-mac:store");
     expect(buildStep.run).to.include('yarn verify-mac:store "$app_path"');
     expect(packageStep.run).to.include(
       'productbuild --component "$app_path" /Applications'

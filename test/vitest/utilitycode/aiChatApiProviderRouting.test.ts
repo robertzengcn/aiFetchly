@@ -313,10 +313,56 @@ describe("AiChatApi provider routing", () => {
     }
   });
 
-  it("throws a resolver denial message when neither path is available", async () => {
-    // No hosted entitlement and no local config.
-    await expect(api.listOpenAIModels()).rejects.toThrow(
-      /subscription|local AI provider/i
-    );
+  it("listOpenAIModels returns hosted models even without AI entitlement", async () => {
+    // No hosted entitlement and no local config — model listing is ungated.
+    mockGet.mockResolvedValue({
+      object: "list",
+      data: [{ id: "gpt-4", object: "model" }],
+    });
+    const res = await api.listOpenAIModels();
+    expect(res.data).toHaveLength(1);
+    expect(res.data[0].id).toBe("gpt-4");
+  });
+
+  it("openAIChatCompletion throws when hosted AI is disabled and no local provider", async () => {
+    // No hosted entitlement and no local config — chat is gated.
+    await expect(
+      api.openAIChatCompletion({
+        messages: [{ role: "user", content: "hi" }],
+      })
+    ).rejects.toThrow(/subscription|local AI provider/i);
+  });
+
+  it("openAIChatCompletionStream throws when hosted AI is disabled and no local provider", async () => {
+    // No hosted entitlement and no local config — streaming chat is gated.
+    const onChunk = vi.fn();
+    await expect(
+      api.openAIChatCompletionStream(
+        { messages: [{ role: "user", content: "hi" }] },
+        onChunk
+      )
+    ).rejects.toThrow(/subscription|local AI provider/i);
+  });
+
+  it("openAIChatCompletion succeeds when hosted AI is enabled", async () => {
+    enableHosted();
+    mockPostJson.mockResolvedValue({
+      id: "x",
+      object: "chat.completion",
+      created: 0,
+      model: "gpt-x",
+      choices: [
+        {
+          index: 0,
+          message: { role: "assistant", content: "hello" },
+          finish_reason: "stop",
+        },
+      ],
+      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+    });
+    const res = await api.openAIChatCompletion({
+      messages: [{ role: "user", content: "hi" }],
+    });
+    expect(res.choices[0].message.content).toBe("hello");
   });
 });

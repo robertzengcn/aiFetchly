@@ -32,18 +32,25 @@
       </div>
     </div>
 
-    <!-- Status Bar -->
-    <v-alert
-      v-if="statusMessage"
-      :type="statusType"
-      class="mb-2"
+    <!-- Status Snackbar (floating, non-intrusive) -->
+    <v-snackbar
+      v-model="showSnackbar"
+      :color="statusType"
+      :timeout="3000"
+      location="top"
+      variant="tonal"
       density="compact"
-      dismissible
-      closable
-      @input="statusMessage = ''"
+      class="status-snackbar"
     >
-      {{ statusMessage }}
-    </v-alert>
+      <div class="d-flex align-center">
+        <v-icon
+          :icon="statusIcon"
+          size="small"
+          class="mr-2"
+        />
+        <span class="text-body-2">{{ statusMessage }}</span>
+      </div>
+    </v-snackbar>
 
     <!-- Main Content -->
     <v-card class="knowledge-content">
@@ -449,7 +456,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue';
+import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { useI18n } from 'vue-i18n';
 
 // Expose t function to template
@@ -485,6 +492,17 @@ const showWebsiteImportDialog = ref(false);
 const showSettingsDialog = ref(false);
 const statusMessage = ref('');
 const statusType = ref<'success' | 'error' | 'warning' | 'info'>('info');
+const showSnackbar = ref(false);
+
+const statusIcon = computed(() => {
+  const icons: Record<string, string> = {
+    success: 'mdi-check-circle',
+    error: 'mdi-alert-circle',
+    warning: 'mdi-alert',
+    info: 'mdi-information',
+  };
+  return icons[statusType.value] || 'mdi-information';
+});
 
 // Settings related variables
 const availableModels = ref<ModelInfo[]>([]);
@@ -575,13 +593,7 @@ async function initializeRAGSystem() {
 function showStatus(message: string, type: 'success' | 'error' | 'warning' | 'info' = 'info') {
   statusMessage.value = message;
   statusType.value = type;
-  
-  // Auto-hide success messages after 3 seconds
-  //if (type === 'success') {
-    setTimeout(() => {
-      statusMessage.value = '';
-    }, 3000);
-  //}
+  showSnackbar.value = true;
 }
 
 // Event handlers
@@ -1311,32 +1323,19 @@ defineExpose({
   }
 }
 
-/* Status alert styles */
-.v-alert {
-  margin: 16px;
-  border-radius: 8px;
+/* Status snackbar styles */
+.status-snackbar {
+  margin-top: 64px;
 }
 
-.status-alert-compact {
-  max-width: 600px;
-  margin-left: auto !important;
-  margin-right: auto !important;
-  font-size: 13px;
-  padding: 8px 16px !important;
-  min-height: auto !important;
-  line-height: 1.3;
+.status-snackbar .v-snackbar__wrapper {
+  min-height: 40px !important;
+  padding: 6px 16px !important;
+  border-radius: 8px !important;
 }
 
-.status-alert-compact :deep(.v-alert__content) {
+.status-snackbar :deep(.v-snackbar__content) {
   padding: 0 !important;
-}
-
-.status-alert-compact :deep(.v-alert__prepend) {
-  margin-right: 8px !important;
-}
-
-.status-alert-compact :deep(.v-alert__close) {
-  margin-left: 8px !important;
 }
 
 /* Tab content styles */

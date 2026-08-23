@@ -97,6 +97,21 @@ export class AIProviderResolver {
     };
   }
 
+  /**
+   * Resolve the provider for model listing only. Unlike resolveForChat(), this
+   * does NOT gate on hosted AI entitlement — users need to see available models
+   * even without a subscription (e.g. to evaluate what's available, or to
+   * configure a local provider). Local provider resolution remains the same.
+   */
+  resolveForModelList(): ChatProviderResolution {
+    const mode = this.settings.getMode();
+    if (mode === "local") {
+      return this.resolveLocal();
+    }
+    // Hosted mode — model list is available without subscription.
+    return { kind: "hosted", canUse: true };
+  }
+
   private resolveLocal(): ChatProviderResolution {
     if (!this.settings.isLocalAIEnabled()) {
       return {

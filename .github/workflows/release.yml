@@ -190,11 +190,9 @@ jobs:
           if-no-files-found: error
 
   build-macos:
-    # CI mac builds historically run ~5h on the 4-vCPU macos-latest runner, with a
-    # ~3h silent tail after the makers report done. timeout-minutes is set above
-    # the normal duration (360 = 6h) so it only kills a truly stalled/deadlocked
-    # build, not a normal slow one. The observability below logs the exact phase
-    # that owns the time.
+    # The guarded package step removes Forge's observed ~3h dead tail after
+    # postPackage. Keep this job timeout as a final backstop for packaging,
+    # signing/notarization, and maker execution.
     timeout-minutes: 360
     if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.build_mode != 'store') }}
     runs-on: macos-latest
@@ -371,24 +369,30 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        # Phase timing wrapper: mac builds historically stall ~3h after the makers
-        # report done. Echo an ISO timestamp before/after each phase so a stalled
-        # run's last log line names the owning phase (difficulty: maker phases log
-        # their own progress, but the silent tail between "Making distributables"
-        # and "verify-packaged-app" is otherwise invisible).
+          # Run #39 proved that Forge can keep the Node process alive for 3h18m
+          # after postPackage completes. The guard terminates that dead tail.
+          PACKAGE_GUARD_HARD_TIMEOUT_MS: "14400000"
+          PACKAGE_GUARD_STALL_MS: "900000"
         run: |
           set -euo pipefail
           export NODE_OPTIONS="--max-old-space-size=4096"
-          echo "[$(date -u +%FT%TZ)] phase: yarn make-mac (electron-forge make --platform=darwin) start"
+          echo "[$(date -u +%FT%TZ)] phase: guarded electron-forge package start"
           if [ "$BUILD_MODE" = "production" ]; then
-            yarn make-mac:prod
+            NODE_ENV=production node scripts/run-packaging-with-hang-guard.js --platform=darwin
           else
-            yarn make-mac:test
+            NODE_ENV=test node scripts/run-packaging-with-hang-guard.js --platform=darwin
           fi
-          echo "[$(date -u +%FT%TZ)] phase: yarn make-mac end"
+          echo "[$(date -u +%FT%TZ)] phase: guarded electron-forge package end"
           echo "[$(date -u +%FT%TZ)] phase: verify-packaged-app (asar + childprocess + renderer) start"
           yarn verify-packaged-app
           echo "[$(date -u +%FT%TZ)] phase: verify-packaged-app end"
+          echo "[$(date -u +%FT%TZ)] phase: electron-forge make --skip-package start"
+          if [ "$BUILD_MODE" = "production" ]; then
+            NODE_ENV=production yarn electron-forge make --skip-package --platform=darwin
+          else
+            NODE_ENV=test yarn electron-forge make --skip-package --platform=darwin
+          fi
+          echo "[$(date -u +%FT%TZ)] phase: electron-forge make --skip-package end"
 
       - name: Upload macOS installers
         uses: actions/upload-artifact@v7
@@ -410,8 +414,9 @@ jobs:
   build-macos-store:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.build_mode == 'store' }}
     runs-on: macos-latest
-    # Store builds take ~5h40m on the 4-vCPU arm64 runner. Set well above normal
-    # so a genuine stall is caught without killing a normal slow build.
+    # Run #39 spent ~2h15m doing real packaging and another ~3h18m waiting for
+    # Forge's process to exit. The package guard removes the dead tail; this job
+    # timeout remains a final backstop.
     timeout-minutes: 420
     outputs:
       version: ${{ steps.calculate_version.outputs.version }}
@@ -598,6 +603,47 @@ jobs:
             exit 1
           fi
 
+          profile_plist_path="$RUNNER_TEMP/AiFetchly-AppStore.plist"
+          security cms -D -i "$provisioning_profile_path" > "$profile_plist_path"
+          expected_application_identifier="$APPLE_TEAM_ID.com.aifetchly.desktop"
+          profile_application_identifier="$(
+            /usr/libexec/PlistBuddy -c 'Print :Entitlements:com.apple.application-identifier' "$profile_plist_path"
+          )"
+          if [ "$profile_application_identifier" != "$expected_application_identifier" ]; then
+            echo "::error::Mac App Store provisioning profile is for $profile_application_identifier; expected $expected_application_identifier."
+            exit 1
+          fi
+
+          signing_certificate_fingerprint="$(
+            security find-certificate -c "$MAC_STORE_SIGNING_IDENTITY" -p "$keychain_path" |
+              openssl x509 -noout -fingerprint -sha256 |
+              cut -d= -f2 |
+              tr -d ':'
+          )"
+          profile_certificate_matches=false
+          certificate_index=0
+          while plutil -extract "DeveloperCertificates.$certificate_index" raw \
+            -o - "$profile_plist_path" 2>/dev/null | \
+            base64 --decode > "$RUNNER_TEMP/profile-developer-certificate-$certificate_index.der"; do
+            profile_certificate_fingerprint="$(
+              openssl x509 -inform DER \
+                -in "$RUNNER_TEMP/profile-developer-certificate-$certificate_index.der" \
+                -noout -fingerprint -sha256 |
+                cut -d= -f2 |
+                tr -d ':'
+            )"
+            if [ "$profile_certificate_fingerprint" = "$signing_certificate_fingerprint" ]; then
+              profile_certificate_matches=true
+              break
+            fi
+            certificate_index=$((certificate_index + 1))
+          done
+          if [ "$profile_certificate_matches" != true ]; then
+            echo "::error::Mac App Store provisioning profile does not include the Apple Distribution signing certificate."
+            echo "::error::Create a new Mac App Store distribution profile for com.aifetchly.desktop, select the same Apple Distribution certificate exported to APPLE_DISTRIBUTION_CERTIFICATE_BASE64, then replace MAC_STORE_PROVISIONING_PROFILE_BASE64."
+            exit 1
+          fi
+
           installer_identity="$(
             security find-identity -v -p basic "$keychain_path" |
               awk -v team="$APPLE_TEAM_ID" '
@@ -622,15 +668,16 @@ jobs:
         env:
           MAC_STORE_SIGNING_IDENTITY: ${{ secrets.MAC_STORE_SIGNING_IDENTITY }}
           MAC_STORE_SIGNING_TYPE: distribution
-        # Phase timing wrapper: the packager has a ~2h15m "Finalizing package" phase
-        # followed by a ~3h18m silent tail with no output. ISO timestamps before
-        # each sub-phase let a stalled run's last log line name the owner.
+          # Keep the hard timeout above run #39's 2h15m real package duration but
+          # below the job timeout. The guard exits after completed postPackage.
+          PACKAGE_GUARD_HARD_TIMEOUT_MS: "14400000"
+          PACKAGE_GUARD_STALL_MS: "900000"
         run: |
           set -euo pipefail
           export NODE_OPTIONS="--max-old-space-size=4096"
-          echo "[$(date -u +%FT%TZ)] phase: yarn package-mac:store (electron-forge package --platform=mas) start"
-          yarn package-mac:store
-          echo "[$(date -u +%FT%TZ)] phase: yarn package-mac:store end"
+          echo "[$(date -u +%FT%TZ)] phase: guarded electron-forge package --platform=mas start"
+          NODE_ENV=production MAC_DISTRIBUTION=store node scripts/run-packaging-with-hang-guard.js --platform=mas
+          echo "[$(date -u +%FT%TZ)] phase: guarded electron-forge package --platform=mas end"
 
           echo "[$(date -u +%FT%TZ)] phase: find .app + verify-mac:store start"
           app_paths_file="$RUNNER_TEMP/aifetchly-mas-app-paths.txt"

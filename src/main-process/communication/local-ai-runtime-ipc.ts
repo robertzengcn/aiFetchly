@@ -23,6 +23,7 @@ import {
   runtimeRemoveInputSchema,
 } from "@/schemas/ipc/localAiRuntime";
 import { LocalAiRuntimeModule } from "@/modules/LocalAiRuntimeModule";
+import type { LocalAiRuntimeId } from "@/entityTypes/localAiRuntimeTypes";
 import { LocalAiRuntimePathService } from "@/service/localAiRuntime/LocalAiRuntimePathService";
 import { LocalAiRuntimeStateStore } from "@/service/localAiRuntime/LocalAiRuntimeStateStore";
 import { LocalAiRuntimeCatalogService } from "@/service/localAiRuntime/LocalAiRuntimeCatalogService";
@@ -38,6 +39,24 @@ import { LocalEmbeddingWorkerClient } from "@/service/embedding/LocalEmbeddingWo
 import type { LocalAiRuntimeModule as ModuleType } from "@/modules/LocalAiRuntimeModule";
 
 const noInputSchema = lazySchema(() => z.unknown());
+
+/**
+ * Dispose the idle worker client for a runtime whose version just changed
+ * (design §22.2). Shipping a new runtime version (install/upgrade/repair)
+ * must not leave a running worker pinned to the old version root; the next
+ * fork re-resolves through LocalAiRuntimeResolver and picks up the new path.
+ * Extracted so it can be unit-tested without constructing the full module.
+ */
+export function disposeIdleWorkersForRuntime(
+  runtimeId: LocalAiRuntimeId
+): Promise<void> {
+  if (runtimeId === "embedding-xenova") {
+    LocalEmbeddingWorkerClient.getInstance().dispose();
+  } else if (runtimeId === "voice-sherpa") {
+    SherpaVoiceWorkerClient.getInstance().dispose();
+  }
+  return Promise.resolve();
+}
 
 /**
  * Resolve the runtime catalog source (design §11.1 / FR-5):
@@ -139,6 +158,9 @@ export function createLocalAiRuntimeModule(
         safeWin.webContents.send(LOCAL_AI_RUNTIME_PROGRESS, progress);
       }
     },
+    // Dispose idle embedding/voice workers so the next fork picks up the new
+    // runtime version after install/upgrade (design §22.2).
+    disposeIdleWorker: disposeIdleWorkersForRuntime,
   });
 
   // Composition (design §13.1): wire downloaded-runtime resolution into the
@@ -195,39 +217,33 @@ export function registerLocalAiRuntimeIpcHandlers(
   getWindow: () => BrowserWindow | null,
   moduleFactory?: (getWindow: () => BrowserWindow | null) => ModuleType
 ): void {
-  let moduleCache: ModuleType | null = null;
-  const getModule = (): ModuleType => {
-    if (!moduleCache) {
-      moduleCache = moduleFactory
-        ? moduleFactory(getWindow)
-        : createLocalAiRuntimeModule(getWindow);
-    }
-    return moduleCache;
-  };
+  const module = moduleFactory
+    ? moduleFactory(getWindow)
+    : createLocalAiRuntimeModule(getWindow);
 
   registerValidatedHandler(LOCAL_AI_RUNTIME_LIST, noInputSchema, async () => {
-    return getModule().listStatuses();
+    return module.listStatuses();
   });
 
   registerValidatedHandler(
     LOCAL_AI_RUNTIME_STATUS,
     runtimeStatusInputSchema,
     async (input) => {
-      return getModule().getStatus(input.runtimeId);
+      return module.getStatus(input.runtimeId);
     }
   );
 
   registerValidatedHandler(
     LOCAL_AI_RUNTIME_PREPARE_INSTALL,
     runtimePrepareInstallInputSchema,
-    async (input) => getModule().prepareInstall(input.runtimeId)
+    async (input) => module.prepareInstall(input.runtimeId)
   );
 
   registerValidatedHandler(
     LOCAL_AI_RUNTIME_INSTALL,
     runtimeInstallInputSchema,
     async (input) => {
-      return getModule().install(input);
+      return module.install(input);
     }
   );
 
@@ -235,7 +251,7 @@ export function registerLocalAiRuntimeIpcHandlers(
     LOCAL_AI_RUNTIME_CANCEL_INSTALL,
     runtimeCancelInputSchema,
     async (input) => {
-      return { cancelled: getModule().cancelInstall(input.operationId) };
+      return { cancelled: module.cancelInstall(input.operationId) };
     }
   );
 
@@ -243,7 +259,7 @@ export function registerLocalAiRuntimeIpcHandlers(
     LOCAL_AI_RUNTIME_CHECK_UPDATE,
     runtimeCheckUpdateInputSchema,
     async (input) => {
-      return getModule().checkForUpdate(input.runtimeId);
+      return module.checkForUpdate(input.runtimeId);
     }
   );
 
@@ -251,7 +267,7 @@ export function registerLocalAiRuntimeIpcHandlers(
     LOCAL_AI_RUNTIME_REPAIR,
     runtimeStatusInputSchema,
     async (input) => {
-      return getModule().repair(input.runtimeId);
+      return module.repair(input.runtimeId);
     }
   );
 
@@ -259,7 +275,7 @@ export function registerLocalAiRuntimeIpcHandlers(
     LOCAL_AI_RUNTIME_REMOVE,
     runtimeRemoveInputSchema,
     async (input) => {
-      await getModule().remove({
+      await module.remove({
         runtimeId: input.runtimeId,
         removeModels: input.removeModels ?? false,
       });
