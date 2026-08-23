@@ -258,6 +258,88 @@ export class ChunkingService {
   }
 
   /**
+   * Extract text from legacy binary .ppt (PowerPoint 97-2003) files.
+   *
+   * .ppt is an OLE2 compound document format — completely different from the
+   * ZIP-based .pptx format. We try `catppt` (from the catdoc package, available
+   * via `brew install catdoc` / `apt install catdoc` / `choco install catdoc`),
+   * and fall back to a simple printable-string extraction from the binary blob.
+   */
+  private async extractPptContent(filePath: string): Promise<string | null> {
+    console.log(`Processing PPT file: ${path.basename(filePath)}`);
+    try {
+      // Try catppt CLI tool first (brew install catdoc, apt install catdoc, etc.)
+      const { execFile } = await import("child_process");
+      const { promisify } = await import("util");
+      const execFileAsync = promisify(execFile);
+      const { stdout } = await execFileAsync("catppt", [filePath], {
+        timeout: 10_000,
+      });
+      const text = stdout.trim();
+      if (text.length > 20) {
+        console.log(
+          `Successfully extracted PPT content via catppt: ${text.length} characters`
+        );
+        return text;
+      }
+    } catch (error) {
+      console.warn(
+        `catppt not available for ${path.basename(
+          filePath
+        )}, falling back to binary extraction:`,
+        (error as Error).message
+      );
+    }
+
+    // Fallback: extract printable text from the binary file.
+    // Many .ppt files store text as UTF-16LE or ASCII sequences in the binary
+    // stream — this pass extracts long-ish printable runs.
+    try {
+      const buffer = fs.readFileSync(filePath);
+      // Scan for printable text runs of length >= 4
+      const lines: string[] = [];
+      let current = "";
+      for (let i = 0; i < buffer.length; i++) {
+        const byte = buffer[i];
+        // Printable ASCII, common extended Latin, newline, tab
+        if (
+          (byte >= 0x20 && byte <= 0x7e) ||
+          byte === 0x0a ||
+          byte === 0x0d ||
+          byte === 0x09
+        ) {
+          current += String.fromCharCode(byte);
+        } else {
+          if (current.length >= 4) {
+            lines.push(current.trim());
+          }
+          current = "";
+        }
+      }
+      if (current.length >= 4) {
+        lines.push(current.trim());
+      }
+
+      const text = lines.filter((l) => l.length > 0).join("\n");
+      if (text.length > 50) {
+        console.log(
+          `Successfully extracted PPT content via binary scan: ${text.length} characters`
+        );
+        return text;
+      }
+      console.warn(
+        `No meaningful text extracted from binary PPT: ${path.basename(
+          filePath
+        )}`
+      );
+      return null;
+    } catch (error) {
+      console.error(`Error extracting text from PPT ${filePath}:`, error);
+      return null;
+    }
+  }
+
+  /**
    * Extract PDF content using pdf-lib and pdf2md-ts
    */
   private async extractPdfContent(
@@ -511,6 +593,22 @@ export class ChunkingService {
             metadata: {
               characterCount: pptxContent.length,
               wordCount: pptxContent
+                .split(/\s+/)
+                .filter((word) => word.length > 0).length,
+            },
+          };
+        }
+
+        case ".ppt": {
+          const pptContent = await this.extractPptContent(document.filePath);
+          if (!pptContent) return null;
+          return {
+            content: pptContent,
+            contentType: "markdown",
+            originalFormat: "ppt",
+            metadata: {
+              characterCount: pptContent.length,
+              wordCount: pptContent
                 .split(/\s+/)
                 .filter((word) => word.length > 0).length,
             },
