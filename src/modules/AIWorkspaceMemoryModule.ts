@@ -235,6 +235,14 @@ export class AIWorkspaceMemoryModule extends BaseModule {
         if (u.content !== undefined) patch.content = u.content;
         if (u.confidence !== undefined)
           patch.confidence = clampConfidence(u.confidence);
+        // Defense-in-depth: re-check update title/content for secret-like
+        // values before writing (throws -> rollback).
+        if (u.title !== undefined || u.content !== undefined) {
+          rejectSecretLike(
+            u.title !== undefined ? u.title : null,
+            u.content !== undefined ? u.content : null
+          );
+        }
         if (Object.keys(patch).length > 0) {
           await memoryRepo.update(
             { workspaceKey, memoryId: u.memoryId },
@@ -243,6 +251,10 @@ export class AIWorkspaceMemoryModule extends BaseModule {
         }
       }
       for (const c of input.plan.create) {
+        // Defense-in-depth: re-run the secret filter inside the transaction
+        // so a plan that slipped past the parser cannot persist secret-like
+        // content. Throws -> rollback.
+        rejectSecretLike(c.title, c.content);
         const e = new AIWorkspaceMemoryEntity();
         e.memoryId = `wmem-${randomUUID()}`;
         e.workspaceKey = workspaceKey;

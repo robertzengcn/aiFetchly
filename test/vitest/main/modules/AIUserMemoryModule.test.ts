@@ -18,7 +18,8 @@ beforeEach(() => {
     }
   }
   (SqliteDb as unknown as { instance: unknown }).instance = null;
-  (SqliteDb as unknown as { currentDbPath: string | null }).currentDbPath = null;
+  (SqliteDb as unknown as { currentDbPath: string | null }).currentDbPath =
+    null;
   (SqliteDb as unknown as { initPromise: unknown }).initPromise = null;
   process.env.AIFETCHLY_TEST_DBPATH = tmpDir;
 });
@@ -162,5 +163,88 @@ describe("AIUserMemoryModule", () => {
     await mod.markMemoriesUsed([v.memoryId], at);
     const fetched = await mod.getMemory(v.memoryId);
     expect(fetched?.lastUsedAt).toBe(at.toISOString());
+  });
+
+  it("applyPlanAndCompleteRun rejects secret-like create content and rolls back", async () => {
+    const mod = new AIUserMemoryModule();
+    await SqliteDb.ensureInitialized();
+    // First seed a legitimate memory the run could otherwise archive/update.
+    const existing = await mod.createMemory({
+      type: "fact",
+      title: "legit",
+      content: "a real preference",
+    });
+    const before = await mod.listMemories({});
+    const beforeCount = before.length;
+
+    await expect(
+      mod.applyPlanAndCompleteRun({
+        runId: "run-secret-test",
+        plan: {
+          ok: true,
+          create: [
+            {
+              type: "preference",
+              title: "my api key",
+              content: "sk-1234567890abcdef1234567890abcdef",
+              confidence: 80,
+              sourceKind: "chat_v2",
+              sourceId: "v2-1",
+              reason: "r",
+            },
+          ],
+          update: [],
+          archive: [],
+        },
+        chatConversationsReviewed: 1,
+        agentTasksReviewed: 0,
+        model: "small",
+      })
+    ).rejects.toThrow(/secret filter/);
+
+    // Nothing was created or mutated — the transaction rolled back.
+    const after = await mod.listMemories({});
+    expect(after.length).toBe(beforeCount);
+    // The pre-existing memory is untouched.
+    expect(await mod.getMemory(existing.memoryId)).toMatchObject({
+      title: "legit",
+    });
+  });
+
+  it("applyPlanAndCompleteRun rejects secret-like update content and rolls back", async () => {
+    const mod = new AIUserMemoryModule();
+    await SqliteDb.ensureInitialized();
+    const existing = await mod.createMemory({
+      type: "fact",
+      title: "legit",
+      content: "a real preference",
+    });
+
+    await expect(
+      mod.applyPlanAndCompleteRun({
+        runId: "run-secret-update",
+        plan: {
+          ok: true,
+          create: [],
+          update: [
+            {
+              memoryId: existing.memoryId,
+              content:
+                "Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c",
+              reason: "r",
+            },
+          ],
+          archive: [],
+        },
+        chatConversationsReviewed: 0,
+        agentTasksReviewed: 0,
+        model: "small",
+      })
+    ).rejects.toThrow(/secret filter/);
+
+    // The update did not apply.
+    expect(await mod.getMemory(existing.memoryId)).toMatchObject({
+      content: "a real preference",
+    });
   });
 });
