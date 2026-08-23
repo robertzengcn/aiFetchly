@@ -8,6 +8,7 @@ import type {
 } from "@/entityTypes/agentTypes";
 import type { AgentTaskEntity } from "@/entity/AgentTask.entity";
 import { WorkspaceResolver } from "@/service/WorkspaceResolver";
+import { maxPacketUpdatedAt } from "@/service/AIChatPromptBudget";
 
 const MAX_CHAT_CONVERSATIONS = 5;
 const MAX_AGENT_TASKS = 5;
@@ -166,7 +167,7 @@ export class AIAutoDreamSourceCollector {
     // Never use new Date() as a success cursor — advancing the watermark
     // past unprocessed material would skip eligible sources forever
     // (tech-design §14.1, §2.5).
-    const reviewedThrough = maxIncludedUpdatedAt(packets);
+    const reviewedThrough = maxPacketUpdatedAt(packets);
     return {
       packets,
       chatConversationCount: filteredChat.length,
@@ -239,28 +240,4 @@ function toMillis(v: string | Date | undefined | null): number {
  * never as the success cursor (which is source-derived). */
 function toIsoNow(): string {
   return new Date().toISOString();
-}
-
-/**
- * Derive the reviewedThrough cursor from the greatest `updatedAt` among
- * INCLUDED packets. Returns the wall-clock now only when no packets were
- * collected (a no-source run returns early before reaching this, so this
- * fallback is defensive). This is the source-derived cursor the service
- * commits with a successful run — advancing it past unprocessed material
- * would skip eligible sources forever.
- */
-function maxIncludedUpdatedAt(
-  packets: readonly WorkspaceAwareAutoDreamSourcePacket[]
-): Date {
-  let maxMs = NaN;
-  for (const p of packets) {
-    const ms = toMillis(p.updatedAt);
-    if (Number.isFinite(ms) && (Number.isNaN(maxMs) || ms > maxMs)) {
-      maxMs = ms;
-    }
-  }
-  if (!Number.isNaN(maxMs)) {
-    return new Date(maxMs);
-  }
-  return new Date();
 }

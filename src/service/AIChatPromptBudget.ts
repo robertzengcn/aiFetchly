@@ -44,6 +44,38 @@ const SAFETY_MARGIN_RATIO = 0.1;
 export const CONSERVATIVE_SMALL_CONTEXT_FALLBACK = 32_000;
 
 /**
+ * Derive the reviewedThrough cursor from the greatest `updatedAt` among the
+ * given packets. Source-derived so the watermark advances only through
+ * processed material — never `new Date()` (tech-design §14.1, §2.5). Falls
+ * back to `new Date()` only when no packet has a usable timestamp (a
+ * no-source run returns earlier than reaching this, so the fallback is
+ * defensive).
+ *
+ * Shared by the user/workspace auto-dream services so both compute the
+ * cursor identically.
+ */
+export function maxPacketUpdatedAt<
+  T extends { updatedAt?: string | Date | null }
+>(packets: readonly T[]): Date {
+  let maxMs = NaN;
+  for (const p of packets) {
+    const v = p.updatedAt;
+    let ms: number;
+    if (!v) {
+      ms = NaN;
+    } else if (v instanceof Date) {
+      ms = v.getTime();
+    } else {
+      ms = new Date(v).getTime();
+    }
+    if (Number.isFinite(ms) && (Number.isNaN(maxMs) || ms > maxMs)) {
+      maxMs = ms;
+    }
+  }
+  return Number.isNaN(maxMs) ? new Date() : new Date(maxMs);
+}
+
+/**
  * Compute the usable input-payload token budget for a lightweight request.
  *
  * ```text
@@ -69,7 +101,9 @@ export function computeLightweightBudget(input: {
     input.maxOutputTokens,
     input.discoveredMaxOutputTokens ?? input.maxOutputTokens
   );
-  const softContextLimit = Math.floor(contextWindow * (1 - SAFETY_MARGIN_RATIO));
+  const softContextLimit = Math.floor(
+    contextWindow * (1 - SAFETY_MARGIN_RATIO)
+  );
   const usablePayloadTokens = Math.max(
     0,
     softContextLimit - effectiveOutputTokens - input.fixedPromptTokens
