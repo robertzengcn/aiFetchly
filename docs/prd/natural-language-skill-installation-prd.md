@@ -186,6 +186,11 @@ A successful clone requires the expected directory and Git metadata. A successfu
 | FR-18  | Preserve post-install user instructions such as “wait” and avoid unintended skill execution.                        | Conversation-contract test                                |
 | FR-19  | Support update, repair, disable, uninstall, and rollback.                                                           | Lifecycle integration suite                               |
 | FR-20  | Emit structured progress and failure codes suitable for UI rendering and retry decisions.                           | Event-schema and recovery tests                           |
+| FR-21  | Advertise prompt skills through one universal invocation tool using bounded name and description metadata.          | Tool-catalog and routing tests                            |
+| FR-22  | After invocation, inject normalized `SKILL.md` instructions as hidden model context rather than ordinary tool JSON. | Message-sequencing integration tests                      |
+| FR-23  | Preserve invoked-skill identity and effective instructions across context compaction and conversation recovery.     | Compaction and recovery tests                             |
+| FR-24  | Apply token-aware instruction budgets and provide progressive resource reads for content that is not injected.      | Token-budget and resource-tool tests                      |
+| FR-25  | Route existing documentation-only skill tools through the prompt runtime without breaking stored installations.     | Legacy-wrapper compatibility tests                        |
 | NFR-01 | Installation operations must be safe to retry and must not create duplicate active records.                         | Idempotency stress test                                   |
 | NFR-02 | Expected-output shell commands must capture output reliably on every supported platform.                            | Required OS CI matrix                                     |
 | NFR-03 | No secret may appear in chat persistence, process arguments, logs, diagnostics, or sidecar metadata.                | Redaction tests and security review                       |
@@ -194,6 +199,8 @@ A successful clone requires the expected directory and Git metadata. A successfu
 | NFR-06 | Existing plugin and executable-skill behavior must remain backward compatible.                                      | Regression suites                                         |
 | NFR-07 | New AI-serving IPC handlers must enforce the existing AI-enable gate before request parsing or work.                | IPC architecture tests                                    |
 | NFR-08 | Every new UI state must be translated into all six supported languages and covered by component tests.              | i18n parity and UI test gates                             |
+| NFR-09 | Uninvoked prompt-skill bodies must not consume the normal conversation context budget.                              | Prompt-size and catalog-budget tests                      |
+| NFR-10 | Loading a prompt skill must never execute embedded commands, helpers, hooks, or network requests automatically.     | Prompt-injection and no-side-effect tests                 |
 
 ## 6. Non-Goals
 
@@ -326,6 +333,28 @@ terminal-error
 ```
 
 This keeps the model from guessing whether it should clone again, switch paths, or continue after an incomplete step.
+
+### 9.5 Model-facing prompt-skill invocation
+
+Daily prompt-skill use must be separate from installation and from executable skill tools. The model receives one stable invocation capability, referred to in this document as `use_skill`, plus a bounded list of available skill metadata.
+
+```text
+User asks for work
+        ↓
+Model sees matching skill name and description
+        ↓
+Model calls use_skill with the scoped skill identity
+        ↓
+AiFetchly returns a short tool acknowledgement
+        ↓
+AiFetchly injects normalized SKILL.md as hidden model context
+        ↓
+The next model round follows the skill instructions
+```
+
+The catalog must not inject every installed `SKILL.md` into the initial prompt. Discovery includes only the invocation identity, name, bounded description, source/scope label when needed to disambiguate, and optional argument hint.
+
+An explicit user `/skill-name` action and automatic model selection must resolve through the same catalog and invocation service. Frontmatter such as `disable-model-invocation` may prevent automatic selection without preventing an authorized explicit invocation.
 
 ## 10. Installation Session State Machine
 
@@ -495,6 +524,7 @@ The loader must:
 - Store the exact skill body or its content hash without modifying the source file.
 - Retain the canonical `skillRoot`.
 - Register the skill as a prompt capability, not an executable tool wrapper.
+- Expose it through the universal prompt-skill invocation tool rather than registering one documentation tool per skill.
 - Load full skill content only when invoked; discovery context uses bounded metadata.
 - Clearly label the source as user, workspace, plugin, linked, or managed copy.
 
@@ -546,7 +576,7 @@ Common prompt-skill frontmatter should be handled as follows:
 
 ## 14. Prompt-Skill Invocation Contract
 
-On invocation, the model receives a bounded instruction block equivalent to:
+Prompt skills use a two-stage lazy-loading contract. Before invocation, the model sees only bounded catalog metadata. After `use_skill` succeeds, the model receives a hidden instruction message equivalent to:
 
 ```text
 Skill: <name>
@@ -557,7 +587,26 @@ Writable workspace: <canonical conversation workspace>
 <SKILL.md body>
 ```
 
-### 14.1 Skill directory variables
+The instruction block must not be embedded inside a JSON result object as its long-term delivery mechanism. The invocation tool result should be a short acknowledgement containing the resolved runtime identity, content hash, context revision, and status. The chat orchestrator then appends the hidden instruction message after the required tool-result message and before the next model completion.
+
+### 14.1 Message sequencing
+
+The logical sequence is:
+
+```text
+assistant: tool call use_skill(runtime_id, optional arguments)
+tool:      { status: "loaded", runtime_id, context_revision }
+hidden:    normalized skill instruction block
+assistant: continues the user's task under those instructions
+```
+
+The hidden message is model-visible but must not render as a user-authored chat bubble. It must be distinguishable from trusted application policy: repository-authored `SKILL.md` remains untrusted instructions constrained by system policy, tool permissions, filesystem capabilities, and user approvals.
+
+Backends that support a dedicated developer or application-context role should use that role. Backends without it may use an internal meta-user message, provided the UI, persistence, and compaction layers preserve its origin and never present it as human text.
+
+The orchestrator must not append the hidden message when resolution fails, the skill is disabled, the content hash cannot be verified, the content violates size/encoding rules, or invocation policy rejects the request.
+
+### 14.2 Skill directory variables
 
 AiFetchly must support:
 
@@ -566,7 +615,21 @@ AiFetchly must support:
 
 On Windows, injected command paths must use a representation appropriate for the selected shell. A PowerShell path must not be escaped as though it were Bash.
 
-### 14.2 Resource capabilities
+### 14.3 Token-aware instruction loading
+
+The current fixed character cap must be replaced with a model-aware token budget. The budget policy must account for:
+
+- Current model context window and reserved completion tokens.
+- Existing conversation, system policy, active plan, attachments, and tool catalog.
+- Already invoked skills and their effective content hashes.
+- A per-skill maximum and an aggregate invoked-skill maximum.
+- Required space for at least one model response and one tool round.
+
+When the complete normalized `SKILL.md` fits, AiFetchly injects it in full. When it does not fit, AiFetchly injects a deterministic essential block containing the skill identity, base directory, declared workflow, safety constraints, and a truncation notice. The model then uses `skill_resource_read` for omitted named sections or referenced files.
+
+Truncation must be section-aware rather than a raw character slice whenever Markdown headings can be parsed safely. Frontmatter is parsed into metadata and is not repeated verbatim in the instruction body.
+
+### 14.4 Resource capabilities
 
 Prompt skills receive two distinct path capabilities:
 
@@ -579,7 +642,7 @@ Prompt skills receive two distinct path capabilities:
 
 An installed skill must not gain read access to arbitrary sibling skills merely because they share `~/.aifetchly/skills`.
 
-### 14.3 Allowed tools
+### 14.5 Allowed tools
 
 Frontmatter `allowed-tools` may reduce the tools presented or permitted during invocation. It cannot:
 
@@ -588,6 +651,36 @@ Frontmatter `allowed-tools` may reduce the tools presented or permitted during i
 - Escape filesystem scope.
 - Access secrets directly.
 - Grant network access when application policy denies it.
+
+### 14.6 Invoked-skill lifecycle
+
+AiFetchly must track invoked skills as conversation runtime state. Each record includes:
+
+- Conversation and optional agent/subagent identity.
+- Scoped runtime identity and source scope.
+- Canonical `SKILL.md` path.
+- Effective content hash and context revision.
+- Normalized instruction content or a recoverable reference to the verified content.
+- Invocation arguments after secret redaction.
+- Invocation timestamp and whether selection was explicit or automatic.
+
+Repeated invocation of the same runtime identity and content hash is idempotent: it returns `already-loaded` and does not duplicate the hidden instruction block. If a linked skill changes, a new content hash creates a new context revision and the user/model receives a visible change notice before the new instructions take effect.
+
+Context compaction and conversation recovery must reattach all still-active invoked skills in deterministic invocation order. The restored message states that these skills were previously invoked and remain applicable. Disabled, uninstalled, missing, or hash-invalid skills are not silently restored; the conversation receives a structured diagnostic.
+
+Skills invoked inside an isolated subagent do not automatically become active in the parent conversation. Propagation requires an explicit runtime policy because subagent instructions may be task-specific.
+
+### 14.7 No automatic execution
+
+Loading a skill is a read-and-context operation only. It must not:
+
+- Execute inline shell syntax embedded in Markdown.
+- Run scripts, hooks, installers, or helper files.
+- Expand variables by evaluating shell expressions.
+- Perform network requests.
+- Read the user's workspace beyond content already present in the request.
+
+Subsequent helper execution uses ordinary approved tools or `skill_resource_execute` with independent validation and permission checks.
 
 ## 15. Unified Filesystem Scope
 
@@ -1146,6 +1239,10 @@ Keep legacy wrapper | Convert to prompt skill
 
 Migration must preserve the original package backup until the prompt skill passes discovery checks.
 
+During the compatibility period, an existing documentation-only tool name must delegate internally to `use_skill` using the installation's scoped runtime identity. The compatibility result may include a deprecation marker for diagnostics, but the model must receive the same hidden instruction context as a natively registered prompt skill. AiFetchly must not maintain two different instruction-delivery semantics indefinitely.
+
+The adapter must preserve existing attachment routing and `run_skill_script` affordances until equivalent prompt-resource flows are verified. Executable sidecars remain permission-controlled operations and are not triggered by loading the prompt.
+
 ### 25.3 Existing local-extensibility skills
 
 The loader expands from:
@@ -1185,6 +1282,13 @@ Claude plugin adapters continue owning plugin-contained `SKILL.md` behavior. Sha
 - Platform environment construction.
 - Secret binding without secret persistence.
 - Retry cap and resume behavior.
+- Universal `use_skill` resolution by scoped runtime identity.
+- Catalog metadata excludes full `SKILL.md` bodies.
+- Frontmatter stripping and deterministic base-directory header generation.
+- Token-aware full, section-aware truncated, and resource-fallback instruction loading.
+- Same-hash repeated invocation returns `already-loaded` without duplicate context.
+- Changed linked-skill hash creates a new context revision.
+- Embedded shell syntax and helper references do not execute during loading.
 
 ### 26.2 Main-process integration tests
 
@@ -1197,6 +1301,12 @@ Claude plugin adapters continue owning plugin-contained `SKILL.md` behavior. Sha
 - Rollback after partial activation.
 - Existing-skill update with permission expansion.
 - Secure-storage unavailable behavior.
+- Tool acknowledgement precedes hidden skill context in the model message sequence.
+- Hidden skill context is model-visible but absent from user-authored chat bubbles.
+- Disabled or hash-invalid skills are rejected before instruction injection.
+- Explicit invocation and automatic model invocation share one resolver.
+- Legacy documentation-only tools delegate to the prompt invocation service.
+- Invoked skill state remains scoped to its conversation or subagent.
 
 ### 26.3 Windows integration tests
 
@@ -1224,6 +1334,10 @@ Critical flows:
 6. Install through a link/junction and uninstall without deleting the source.
 7. Restart while awaiting a secret and resume.
 8. Confirm “install and wait” does not invoke the skill.
+9. Invoke an installed prompt skill and confirm its complete instructions influence the next model round.
+10. Compact and recover the conversation, then confirm the invoked skill remains active exactly once.
+11. Invoke a large prompt skill and confirm progressive resource reads replace raw character truncation.
+12. Invoke a legacy documentation-only skill and confirm it follows the same hidden-context path.
 
 ### 26.6 Regression tests
 
@@ -1233,6 +1347,9 @@ Critical flows:
 - Shell deny and ask policies remain enforced.
 - Workers still cannot access the database.
 - Renderer still cannot read arbitrary filesystem paths.
+- Existing executable skills remain ordinary executable tools and are never converted into hidden prompt instructions.
+- Skill content never appears in the initial catalog unless the skill has been invoked.
+- Existing attachment workflows remain functional during legacy-wrapper migration.
 
 ## 27. Acceptance Scenario: `browser-use/video-use`
 
@@ -1270,6 +1387,20 @@ wait for me to drop footage into a folder.
 15. The assistant returns a concise ready message and waits.
 16. Repeating the same request does not create duplicate checkouts or records.
 
+### 27.3 Later daily-use invocation
+
+After the installation-only turn has ended, a later request involving dropped footage must demonstrate the optimized prompt-skill runtime:
+
+1. The initial model context contains video-use metadata, not the entire `SKILL.md`.
+2. The model invokes video-use through `use_skill` before acting on skill-specific instructions.
+3. AiFetchly resolves the exact installed runtime identity and verified content hash.
+4. The tool returns a short loaded acknowledgement.
+5. AiFetchly injects a hidden instruction message containing the normalized `SKILL.md`, base directory, and approved workspace.
+6. Relevant helper files are listed or read progressively according to the skill instructions; the entire helper tree is not injected.
+7. Helper execution remains separately permission controlled.
+8. A repeated invocation in the same context does not duplicate the instructions.
+9. After compaction, the invoked skill remains active once with the same effective hash.
+
 ## 28. Success Metrics
 
 ### 28.1 Reliability
@@ -1279,12 +1410,15 @@ wait for me to drop footage into a folder.
 - Zero shell/file workspace-root mismatches in automated tests and production diagnostics.
 - Zero duplicate active installation records for identical installation identities.
 - 100% of failed activations either roll back or surface `rollback-failed` with preserved recovery data.
+- 100% of successful prompt-skill invocations deliver a tool acknowledgement followed by one effective hidden instruction block.
+- 100% of compaction/recovery fixtures restore active invoked skills without duplication or source confusion.
 
 ### 28.2 User experience
 
 - Median public prompt-skill install requires no more than one plan approval plus required credential prompts.
 - The conversation shows one installation card instead of repeated clone/list/read attempts.
 - Users can identify source, commit, mode, permissions, dependencies, and secret status from skill details.
+- Uninvoked skills consume only bounded catalog metadata, keeping ordinary conversations responsive as the installed catalog grows.
 
 ### 28.3 Security
 
@@ -1292,6 +1426,7 @@ wait for me to drop footage into a folder.
 - Zero uninstall operations deleting linked source directories.
 - Zero unapproved writes outside app staging, the exact activation target, temporary run root, or approved workspace.
 - Permission-expanding updates always require renewed approval.
+- Zero skill-load operations execute embedded commands, helper scripts, hooks, or network calls.
 
 ## 29. Rollout Plan
 
@@ -1323,11 +1458,15 @@ Exit criteria: the full Windows verification matrix passes repeatedly.
 ### Phase 3: Prompt-skill runtime
 
 - Add `SKILL.md` discovery alongside native manifests.
+- Add the universal `use_skill` tool and bounded metadata catalog.
+- Inject invoked instructions through hidden model context rather than long JSON tool results.
+- Add token-aware instruction loading and progressive resource reads.
+- Persist invoked-skill state across compaction and recovery.
 - Preserve skill root and directory variables.
 - Support directory, symlink, and junction candidates.
 - Add real-path deduplication and watcher/rescan behavior.
 
-Exit criteria: manually copied and linked prompt-skill fixtures are discoverable and invokable.
+Exit criteria: copied and linked fixtures are discoverable; invocation injects one verified hidden instruction block; large skills use progressive resource reads; compaction restores active skills exactly once.
 
 ### Phase 4: Deterministic installer
 
@@ -1356,18 +1495,22 @@ Exit criteria: success, failure, security, and rollback metrics meet thresholds.
 
 ## 30. Risks and Mitigations
 
-| Risk                                               | Impact                                | Mitigation                                                                               |
-| -------------------------------------------------- | ------------------------------------- | ---------------------------------------------------------------------------------------- |
-| Repository instructions manipulate the model       | Unapproved commands or data access    | Treat acquisition as untrusted data; validate typed plans; preserve tool approvals       |
-| Linked skill changes outside AiFetchly             | Active behavior changes unexpectedly  | Advanced-mode warning, content hashes, change notification, rapid disable                |
-| Windows link privileges differ                     | Installation fails for ordinary users | Managed copy default; directory junction fallback; explicit capability detection         |
-| Broad skill-root shell access leaks sibling skills | Cross-skill data exposure             | Per-skill read/execute capability, canonical target validation, no parent-root grant     |
-| Secret storage is unavailable                      | Credentials stored insecurely         | Fail closed for persistent storage; explicit session-only option when acceptable         |
-| Package managers run lifecycle scripts             | Arbitrary code execution              | Exact command review, stronger approval, controlled process, typed dependency installers |
-| Mutable Git branch changes                         | Unreviewed update                     | Record commit SHA; never auto-activate permission-expanding updates                      |
-| Watcher misses linked-target changes               | Stale or unsafe registration          | Explicit rescan plus canonical content-hash verification                                 |
-| Rollback deletes the wrong path                    | User data loss                        | Resolve exact targets, ownership metadata, no recursive deletion of unresolved paths     |
-| Large repositories exhaust resources               | App instability                       | File, byte, depth, timeout, and concurrency limits before activation                     |
+| Risk                                               | Impact                                 | Mitigation                                                                               |
+| -------------------------------------------------- | -------------------------------------- | ---------------------------------------------------------------------------------------- |
+| Repository instructions manipulate the model       | Unapproved commands or data access     | Treat acquisition as untrusted data; validate typed plans; preserve tool approvals       |
+| Linked skill changes outside AiFetchly             | Active behavior changes unexpectedly   | Advanced-mode warning, content hashes, change notification, rapid disable                |
+| Windows link privileges differ                     | Installation fails for ordinary users  | Managed copy default; directory junction fallback; explicit capability detection         |
+| Broad skill-root shell access leaks sibling skills | Cross-skill data exposure              | Per-skill read/execute capability, canonical target validation, no parent-root grant     |
+| Secret storage is unavailable                      | Credentials stored insecurely          | Fail closed for persistent storage; explicit session-only option when acceptable         |
+| Package managers run lifecycle scripts             | Arbitrary code execution               | Exact command review, stronger approval, controlled process, typed dependency installers |
+| Mutable Git branch changes                         | Unreviewed update                      | Record commit SHA; never auto-activate permission-expanding updates                      |
+| Watcher misses linked-target changes               | Stale or unsafe registration           | Explicit rescan plus canonical content-hash verification                                 |
+| Rollback deletes the wrong path                    | User data loss                         | Resolve exact targets, ownership metadata, no recursive deletion of unresolved paths     |
+| Large repositories exhaust resources               | App instability                        | File, byte, depth, timeout, and concurrency limits before activation                     |
+| Every installed skill body is injected eagerly     | High token cost and degraded routing   | Bounded metadata catalog plus lazy universal invocation                                  |
+| Skill guidance remains ordinary tool JSON          | Weak instruction adherence             | Short acknowledgement followed by hidden normalized context                              |
+| Compaction drops invoked skill instructions        | Behavior changes midway through a task | Persist runtime identity, hash, revision, and restorable normalized instructions         |
+| Linked skill changes after invocation              | Unreviewed instructions enter context  | Hash revisions, change notification, and explicit reload policy                          |
 
 ## 31. Open Decisions With Recommendations
 
@@ -1395,6 +1538,18 @@ Exit criteria: success, failure, security, and rollback metrics meet thresholds.
 
 **Recommendation:** fail closed for persistent credentials when OS-backed encryption is unavailable. A session-only secret may be offered when the skill can operate without persistence and the user accepts the limitation.
 
+### 31.7 Prompt-skill context role
+
+**Recommendation:** use a backend-supported developer/application-context role after the required tool result. When unavailable, use an internal meta-user message whose origin is preserved and hidden from the visible transcript. Never mislabel repository-authored instructions as trusted system policy.
+
+### 31.8 Prompt-skill loading strategy
+
+**Recommendation:** expose bounded metadata eagerly and load instructions lazily through one `use_skill` tool. Do not register every prompt skill as an independent documentation tool, and do not inject all installed skill bodies at conversation start.
+
+### 31.9 Compaction persistence
+
+**Recommendation:** preserve the normalized effective instruction block plus runtime identity, source, content hash, and context revision. A verified stored block provides deterministic continuation when a linked source changes or disappears during a long conversation.
+
 ## 32. Definition of Done
 
 This feature is complete only when:
@@ -1404,6 +1559,14 @@ This feature is complete only when:
 - Missing workspace never silently becomes the user home directory.
 - Windows PowerShell, cmd, and Git output tests pass on a real Windows runner.
 - Both prompt and executable skill formats are supported without semantic conversion.
+- Prompt skills are advertised through one universal invocation tool using metadata-only discovery.
+- Successful invocation produces a short tool acknowledgement followed by one hidden, verified instruction block.
+- Prompt instructions include a canonical base directory and safe compatibility variables.
+- Repeated same-version invocation does not duplicate context.
+- Token-aware loading and progressive resource reads replace the fixed 8,000-character guidance cap.
+- Invoked prompt skills survive compaction and conversation recovery with their identity and content hash intact.
+- Loading a prompt skill performs no command, helper, hook, or network execution.
+- Legacy documentation-only tools delegate to the same prompt invocation path during migration.
 - Managed copy works on all supported platforms.
 - POSIX symlink and Windows junction installation, discovery, change detection, and uninstall safety are tested.
 - Installation is atomic, resumable, repeatable, cancellable, and reversible.

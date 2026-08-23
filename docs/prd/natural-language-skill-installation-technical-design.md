@@ -76,6 +76,11 @@ tools remain available for ordinary work but do not coordinate installation.
 | FR-18       | Sections 2.2 and 18.1 explicit ready-and-stop contract                      |
 | FR-19       | Sections 8.2, 8.4, 11, and 16 lifecycle and rollback                        |
 | FR-20       | Section 19 structured errors, progress, and metrics                         |
+| FR-21       | Sections 10.3 and 10.4 universal invocation and bounded catalog             |
+| FR-22       | Sections 10.5 and 10.6 hidden normalized context delivery                   |
+| FR-23       | Section 10.10 invoked-skill persistence, compaction, and recovery           |
+| FR-24       | Sections 10.7 and 10.8 token budgets and progressive resource loading       |
+| FR-25       | Sections 10.11 and 17 legacy documentation-tool compatibility               |
 | NFR-01      | Sections 5.3 and 8 state revisions, idempotency, and leases                 |
 | NFR-02      | Section 7 required cross-platform output contract and Windows matrix        |
 | NFR-03      | Section 13 secret isolation and redaction                                   |
@@ -84,6 +89,8 @@ tools remain available for ordinary work but do not coordinate installation.
 | NFR-06      | Sections 10 and 11.4 backward-compatible runtime split                      |
 | NFR-07      | Sections 8.2 and 15 AI-gated thin IPC handlers                              |
 | NFR-08      | Sections 20.3 and 21.4 six-language UI and component tests                  |
+| NFR-09      | Sections 10.3 and 10.7 metadata-only discovery and aggregate token budgets  |
+| NFR-10      | Sections 10.12 and 16 load-time no-side-effect security rules               |
 
 ## 3. Current-State Findings
 
@@ -121,7 +128,29 @@ references, templates, and a stable base directory.
 Global and workspace scanners require `manifest.json` and accept only directory
 entries, so symbolic links and junctions can be skipped before target inspection.
 
-### 3.4 Identity and persistence are too narrow
+### 3.4 Current prompt-skill context delivery
+
+AiFetchly currently advertises every registered documentation skill as a normal
+client tool containing name, description, and parameters. When the model calls
+that tool, the execute handler reads `SKILL.md`, truncates it to 8,000
+characters, embeds it in a JSON `skillGuidance` field, and appends the serialized
+result as a `role: "tool"` message for the next completion.
+
+This is lazy loading, but it is not a first-class prompt-skill contract:
+
+- each prompt skill consumes a separate tool definition;
+- instruction text is shaped as tool data rather than hidden behavioral context;
+- raw character truncation can cut required sections or examples;
+- no canonical base-directory header is guaranteed;
+- no prompt-skill-specific invoked state is restored after full conversation
+  compaction;
+- legacy wrapper behavior and native prompt-skill behavior can diverge.
+
+The optimized runtime keeps lazy loading but replaces per-skill documentation
+tools with a universal invocation tool, normalized hidden context, token-aware
+loading, and explicit recovery state.
+
+### 3.5 Identity and persistence are too narrow
 
 The registry and `InstalledSkillEntity` use globally unique names. Auto-discovered
 sources unregister and re-register names with best-effort database writes. This
@@ -641,7 +670,177 @@ Support `${CLAUDE_SKILL_DIR}` as a compatibility alias and
 `${AIFETCHLY_SKILL_DIR}` as native. Resolve them through resource capabilities,
 not blind substitution into shell text.
 
-### 10.3 Resource tools
+### 10.3 Metadata-only discovery catalog
+
+`PromptSkillCatalog` produces a bounded model-facing view; it never returns
+instruction bodies during ordinary discovery:
+
+```typescript
+export interface AvailablePromptSkill {
+  readonly runtimeId: SkillRuntimeId;
+  readonly name: string;
+  readonly description: string;
+  readonly sourceLabel?: string;
+  readonly argumentHint?: string;
+  readonly userInvocable: boolean;
+  readonly modelInvocable: boolean;
+}
+```
+
+`PromptSkillCatalogPresenter` applies a total catalog token budget. When every
+description fits, it renders name, description, and disambiguating source. When
+the catalog exceeds budget, it shortens descriptions deterministically and may
+group undisplayed skills behind the existing deferred-tool search mechanism.
+It never solves this pressure by injecting `SKILL.md` bodies eagerly.
+
+The catalog is attached as an application-authored context section such as:
+
+```text
+Available prompt skills (invoke with use_skill):
+- prompt:user:… — video-use: Edit and produce videos using repository helpers.
+- prompt:workspace:42:… — release-check: Validate this workspace before release.
+```
+
+### 10.4 Universal `use_skill` tool
+
+Register one always-discoverable built-in tool instead of one documentation tool
+per prompt skill:
+
+```typescript
+export interface UsePromptSkillInput {
+  readonly skill: string;
+  readonly arguments?: string;
+  readonly invocationReason?: string;
+}
+
+export interface UsePromptSkillResult {
+  readonly status: "loaded" | "already-loaded";
+  readonly runtimeId: SkillRuntimeId;
+  readonly name: string;
+  readonly contentHash: string;
+  readonly contextRevision: number;
+}
+```
+
+`skill` accepts a runtime ID or an unambiguous visible name. The service resolves
+names against the current conversation workspace, source precedence, enablement,
+and invocation policy. Ambiguity returns candidates and performs no injection.
+The optional reason is diagnostic metadata, not authority.
+
+Explicit `/skill-name` actions and automatic model tool calls enter the same
+`PromptSkillInvocationService`. Frontmatter `disable-model-invocation` blocks
+automatic selection but not an allowed explicit request. `user-invocable`
+controls UI/slash-command visibility without expanding model authority.
+
+### 10.5 Model-message sequencing
+
+The message sequence must remain valid for tool-calling APIs while separating
+acknowledgement from instructions:
+
+```text
+assistant  tool_call: use_skill({ skill: "prompt:user:…" })
+tool       { status: "loaded", runtimeId, contentHash, contextRevision }
+hidden     normalized PromptSkillContextAttachment
+assistant  next completion follows the invoked instructions
+```
+
+The tool result is deliberately small. `AIChatQueryLoop` appends it first to
+satisfy the assistant-tool-call pairing. It then appends the hidden context
+message before requesting the next completion.
+
+Use a backend developer/application-context role when supported. Otherwise use
+an internal meta-user message with explicit origin metadata. It must be visible
+to the model, omitted from normal user chat bubbles, retained in model context,
+and distinguishable from a human-authored message. Repository instructions are
+never represented as trusted system policy.
+
+```typescript
+export interface PromptSkillContextAttachment {
+  readonly type: "invoked_prompt_skill";
+  readonly conversationId: string;
+  readonly agentId?: string;
+  readonly runtimeId: SkillRuntimeId;
+  readonly name: string;
+  readonly sourceLabel: string;
+  readonly canonicalRoot: string;
+  readonly contentHash: string;
+  readonly contextRevision: number;
+  readonly normalizedInstructions: string;
+  readonly tokenEstimate: number;
+  readonly invokedAt: string;
+}
+```
+
+The renderer may show a compact “Skill loaded” tool card using the
+acknowledgement, but does not render `normalizedInstructions` as a user message.
+
+### 10.6 Context assembly and normalization
+
+`PromptSkillContextAssembler` builds the effective block in this order:
+
+```text
+<invoked_prompt_skill runtime_id="…" content_hash="…">
+Skill: <name>
+Source: <safe source label>
+Base directory for this skill: <canonical root>
+Writable workspace: <canonical conversation workspace>
+
+<normalized SKILL.md body>
+</invoked_prompt_skill>
+```
+
+Assembly performs these pure transformations:
+
+1. Verify the current file matches the catalog content hash or load the approved
+   retained snapshot.
+2. Parse and remove YAML frontmatter from the instruction body.
+3. Normalize line endings and reject invalid text encoding.
+4. Substitute `${AIFETCHLY_SKILL_DIR}` and the compatibility alias
+   `${CLAUDE_SKILL_DIR}` with a display-safe canonical skill directory.
+5. Substitute supported non-secret invocation arguments without evaluating
+   shell expressions.
+6. Apply token-aware selection.
+7. Add source, base-directory, workspace, and truncation metadata.
+
+Variable substitution produces text for model understanding. Actual resource
+or process operations resolve runtime ID through capabilities again; they never
+trust a path copied back from the model.
+
+### 10.7 Token-budget policy
+
+Create `PromptSkillTokenBudgetService`, using the model context window from
+`AIChatModelCatalogService` and the existing `AIChatPromptBudget` conventions.
+The service receives current assembled token estimate, reserved completion/tool
+budget, active skill estimates, and normalized Markdown sections.
+
+```typescript
+export interface PromptSkillBudgetDecision {
+  readonly mode: "full" | "section-selected" | "metadata-only";
+  readonly availableTokens: number;
+  readonly selectedSections: readonly string[];
+  readonly omittedSections: readonly string[];
+  readonly estimatedTokens: number;
+  readonly resourceReadRequired: boolean;
+}
+```
+
+Policy order:
+
+1. Full body when it fits the per-skill and aggregate active-skill budgets.
+2. Deterministic section selection when the body is too large: always keep the
+   opening contract, workflow, safety/constraint sections, and sections matching
+   the invocation arguments or current request.
+3. Metadata-only refusal when even the essential block cannot fit; ask the model
+   to compact or the user to start a fresh context instead of silently dropping
+   policy.
+
+Section selection parses headings and preserves whole fenced blocks. It never
+raw-slices in the middle of a command, JSON example, or safety rule. The injected
+block lists omitted headings and instructs the model to use
+`skill_resource_read`. Initial defaults should be measured in tokens, not the
+current 8,000-character cap, and remain configurable per model family.
+
+### 10.8 Resource tools
 
 ```text
 skill_resource_list
@@ -649,15 +848,19 @@ skill_resource_read
 skill_resource_execute
 ```
 
-Paths are relative to runtime ID and reject traversal. Execute is not enabled
-because a helper exists; it requires a supported type, explicit permission,
-argument validation, conversation context for workspace I/O, process-provider
-execution, and audit.
+`list` and `read` are bounded read-only operations relative to runtime ID. They
+reject absolute paths, traversal, escaping links, binaries, and over-limit text.
+Read results include canonical relative path, content hash, truncation metadata,
+and the text needed for the current model round.
+
+`execute` is not enabled because a helper exists. It requires a supported file
+type, explicit permission, argument validation, conversation context for
+workspace I/O, platform-provider execution, and audit.
 
 “Always read helpers” means inventory helpers at invocation and progressively
 load relevant instructions. It never means execute every helper during setup.
 
-### 10.4 Links and watchers
+### 10.9 Links and watchers
 
 Scanners accept directories or symbolic links, resolve targets, verify directory
 type, canonicalize, and deduplicate by real `SKILL.md` path. Broken or escaping
@@ -665,7 +868,73 @@ links create diagnostics. Windows junctions follow the same rules.
 
 Watch canonical targets explicitly rather than relying on platform-dependent
 recursive link following. A disappeared target deactivates its source without
-deleting it.
+deleting it. A content change creates a new hash but does not mutate an already
+active conversation invisibly.
+
+### 10.10 Invoked-skill persistence and compaction
+
+`PromptSkillInvocationModule` persists active invocation state through a Model;
+`AIChatQueryLoop` and `AIChatContextAssembler` consume module views. Add:
+
+```typescript
+export interface PromptSkillInvocationRecord {
+  readonly id: string;
+  readonly conversationId: string;
+  readonly agentId?: string;
+  readonly runtimeId: SkillRuntimeId;
+  readonly contentHash: string;
+  readonly contextRevision: number;
+  readonly normalizedInstructions: string;
+  readonly tokenEstimate: number;
+  readonly invocationArgumentsJson: string;
+  readonly invocationSource: "explicit" | "model" | "legacy-adapter";
+  readonly active: boolean;
+  readonly invokedAt: string;
+}
+```
+
+Persistence occurs before the next model completion. A unique constraint on
+conversation, agent scope, runtime ID, and content hash makes repeated invocation
+idempotent. Same-hash invocation returns `already-loaded`; a verified new hash
+increments `contextRevision` and emits `SKILL_CONTENT_CHANGED` before replacing
+the effective instructions.
+
+Full compaction summarizes ordinary conversation history but does not summarize
+away active skill contracts. After `AIChatCompactSummary` is loaded,
+`AIChatContextAssembler` reattaches active prompt-skill contexts in deterministic
+invocation order. Recovery uses the stored normalized snapshot so a linked file
+that changed or disappeared cannot rewrite past context silently.
+
+Conversation clear/deletion deactivates or removes its invocation rows through
+`PromptSkillInvocationModule`. Parent and subagent scopes remain separate unless
+an explicit propagation policy copies a verified invocation.
+
+### 10.11 Legacy documentation-skill adapter
+
+During migration, existing documentation-only registry entries remain callable.
+Their execute handler stops returning long `skillGuidance` JSON and delegates to
+`PromptSkillInvocationService` with `invocationSource: "legacy-adapter"`.
+
+The adapter returns the same short acknowledgement and schedules the same hidden
+context attachment. It preserves attachment routing and separately approved
+`run_skill_script` behavior until resource-tool parity is verified. Existing
+executable skills never use this adapter.
+
+A runtime feature flag allows rollback to the legacy result path during staged
+deployment. New prompt-skill installations never create
+`__skill_md_wrapper__.js` once the universal runtime is enabled.
+
+### 10.12 Load-time safety
+
+Invocation is a bounded file-read and context-assembly operation only. The
+loader must not execute inline Markdown shell syntax, code fences, hooks,
+helpers, imports, network references, or variable expressions. `allowed-tools`
+may narrow later tool access but cannot authorize loading side effects.
+
+The loader treats `SKILL.md` as untrusted repository content and wraps it with
+application-owned boundary markers. Tool permissions, path capabilities,
+network policy, secret isolation, and user approval remain authoritative when
+the model follows the loaded instructions.
 
 ## 11. Activation and Paths
 
@@ -828,6 +1097,22 @@ secure reference, and status—never the secret.
 `SkillInstallationEventEntity` is append-only and ordered for transitions,
 approvals, dependencies, activation, verification, rollback, and cancellation.
 
+`PromptSkillInvocationEntity` stores conversation id, optional agent id, runtime
+id, content hash, context revision, normalized instruction snapshot, token
+estimate, redacted invocation arguments, invocation source, active flag, and
+timestamps. The normalized snapshot is required for deterministic compaction
+recovery when a linked source changes or disappears. It contains no credential
+values and is local conversation state, not installation metadata.
+
+Unique active identity:
+
+```text
+conversationId + agentId + runtimeId + contentHash
+```
+
+A later hash creates a new revision and deactivates the prior effective record
+inside one Model transaction.
+
 ### 14.2 Models and modules
 
 ```text
@@ -836,9 +1121,11 @@ src/model/SkillInstallationSession.model.ts
 src/model/SkillDependencyBinding.model.ts
 src/model/SkillCredentialBinding.model.ts
 src/model/SkillInstallationEvent.model.ts
+src/model/PromptSkillInvocation.model.ts
 
 src/modules/SkillInstallationModule.ts
 src/modules/SkillCredentialModule.ts
+src/modules/PromptSkillInvocationModule.ts
 ```
 
 Models own repositories, queries, compare-and-set updates, and transactions.
@@ -860,6 +1147,11 @@ Existing `InstalledSkillEntity` remains authority for legacy executable/plugin
 skills during transition. Backfill `legacy-installed` records while retaining
 old rows and use a compatibility adapter. Rescan local prompt sources whose
 canonical path cannot be proven instead of guessing ownership.
+
+The feature migration also creates prompt invocation state. No historical
+documentation-tool result is backfilled as an active invocation because a JSON
+tool result does not prove that its instructions remained applicable. New
+invocations begin using the optimized path after rollout.
 
 ## 15. IPC and Worker Protocol
 
@@ -946,6 +1238,51 @@ from bare `SKILL_PERMISSION_<name>` to scoped runtime IDs. Legacy tokens may be
 read through compatibility but new grants cannot authorize another same-named
 source.
 
+### 17.1 Runtime migration stages
+
+1. **Shadow catalog:** build `PromptSkillCatalog` alongside existing
+   documentation tools and compare resolution/diagnostics without changing model
+   messages.
+2. **Universal invocation opt-in:** advertise `use_skill`; new prompt installs
+   use hidden context while legacy tools remain available.
+3. **Legacy delegation:** existing documentation tools call
+   `PromptSkillInvocationService` and stop returning long guidance JSON.
+4. **Catalog cleanup:** remove per-prompt-skill tool definitions after telemetry
+   shows no unresolved clients or scheduled tasks depend on them.
+5. **Wrapper retirement:** stop generating `__skill_md_wrapper__.js`; retain a
+   read-only loader for packages installed by older versions.
+
+Use separate feature flags for universal catalog advertisement, hidden context
+injection, legacy delegation, and compaction recovery. A rollback can return to
+legacy delivery without uninstalling or rewriting skill packages.
+
+### 17.2 Chat-query integration
+
+`AIChatQueryEngine` requests metadata from `PromptSkillCatalogPresenter` and
+adds one `use_skill` definition to normal and resumed plan turns.
+`AIChatQueryLoop` recognizes a successful prompt invocation result, appends the
+tool acknowledgement, then asks `PromptSkillInvocationModule` for the verified
+context attachment and appends its hidden model message.
+
+`AIChatContextAssembler` loads active invocations after the compact summary and
+before recent conversation messages. This ordering gives persistent skill
+contracts a stable position while allowing more recent explicit user messages
+to refine the task. Application system policy remains earlier and higher
+authority.
+
+The older `StreamEventProcessor` continuation path must use the same shared
+context-injection helper or remain behind the legacy feature flag. Maintaining
+two message-sequencing implementations would recreate the current behavioral
+split.
+
+### 17.3 Deletion and lifecycle integration
+
+Conversation deletion calls `PromptSkillInvocationModule.deleteByConversation`.
+Skill disable or uninstall marks matching active invocations unavailable for new
+rounds and emits a safe diagnostic. Historical conversation records may retain
+their instruction snapshot for audit/recovery policy, but cannot authorize
+resource access after the installation is disabled.
+
 ## 18. Verification and Readiness
 
 Required verification levels:
@@ -992,6 +1329,12 @@ SOURCE_LIMIT_EXCEEDED
 SOURCE_REVISION_CHANGED
 SKILL_NOT_FOUND
 SKILL_AMBIGUOUS
+SKILL_DISABLED
+SKILL_CONTEXT_HASH_MISMATCH
+SKILL_CONTEXT_BUDGET_EXCEEDED
+SKILL_CONTEXT_INJECTION_FAILED
+SKILL_RESOURCE_READ_REQUIRED
+SKILL_CONTENT_CHANGED
 INSTRUCTION_LIMIT_EXCEEDED
 PLAN_REVISION_MISMATCH
 APPROVAL_REQUIRED
@@ -1015,7 +1358,12 @@ environment dumps, output, or unnecessary absolute paths.
 
 Measure prepare-to-ready time, failures by state/platform, Windows empty-output
 frequency, link fallback, rollback success, dependency probe accuracy, restart
-recovery, and repeated generic-tool calls during installation.
+recovery, and repeated generic-tool calls during installation. Prompt-runtime
+metrics include catalog tokens, invoked instruction tokens, full versus
+section-selected load rate, duplicate invocation suppression, hidden-context
+injection failure, compaction restoration, legacy-adapter calls, and resource
+read follow-through. Metrics contain runtime category and counts, not instruction
+text, user requests, paths, or arguments.
 
 ## 20. File-Level Implementation Plan
 
@@ -1046,27 +1394,38 @@ recovery, and repeated generic-tool calls during installation.
 | `src/service/SkillActivationService.ts`        | Copy/link/junction and rollback.             |
 | `src/service/SkillInstallationVerifier.ts`     | Readiness probes.                            |
 | `src/service/PromptSkillCatalog.ts`            | Scoped source-aware registry.                |
+| `src/service/PromptSkillCatalogPresenter.ts`   | Bounded model-facing metadata catalog.       |
 | `src/service/PromptSkillLoader.ts`             | Bounded `SKILL.md` parsing.                  |
+| `src/service/PromptSkillInvocationService.ts`  | Resolve, normalize, persist, and inject.     |
+| `src/service/PromptSkillContextAssembler.ts`   | Build verified hidden context attachments.   |
+| `src/service/PromptSkillTokenBudgetService.ts` | Model-aware section selection and estimates. |
 | `src/service/PromptSkillResourceService.ts`    | Relative resource operations.                |
 | `src/modules/SkillInstallationModule.ts`       | State machine and business transaction.      |
+| `src/modules/PromptSkillInvocationModule.ts`   | Durable conversation invocation state.       |
 
 Update global/workspace scanners to discover links and prompt skills, and update
 the watcher to monitor canonical linked targets explicitly.
 
 ### 20.3 Persistence, IPC, worker, and UI
 
-| Area        | Files/change                                                                 |
-| ----------- | ---------------------------------------------------------------------------- |
-| Entities    | `SkillInstallation`, session, dependency binding, credential binding, event. |
-| Models      | Corresponding `src/model/*.model.ts` transaction/query classes.              |
-| Credentials | `SkillCredentialService` and `SkillCredentialModule`.                        |
-| Database    | Baseline first, then feature migration and entity registration.              |
-| Schemas     | `src/schemas/ipc/skillInstallation.ts`.                                      |
-| IPC         | Thin AI-gated `skill-installation-ipc.ts` and channel constants.             |
-| Worker      | `src/childprocess/skill-installation/*` and Forge/Vite entry.                |
-| Preload/API | Narrow typed renderer bridge and subscriptions.                              |
-| UI          | Review, approval, secure secret, progress, repair, uninstall.                |
-| i18n        | English, Chinese, Spanish, French, German, Japanese.                         |
+| Area        | Files/change                                                                   |
+| ----------- | ------------------------------------------------------------------------------ |
+| Entities    | Installation/session/dependency/credential/event plus `PromptSkillInvocation`. |
+| Models      | Corresponding `src/model/*.model.ts` transaction/query classes.                |
+| Credentials | `SkillCredentialService` and `SkillCredentialModule`.                          |
+| Database    | Baseline first, then feature migration and entity registration.                |
+| Schemas     | `src/schemas/ipc/skillInstallation.ts`.                                        |
+| IPC         | Thin AI-gated `skill-installation-ipc.ts` and channel constants.               |
+| Worker      | `src/childprocess/skill-installation/*` and Forge/Vite entry.                  |
+| Preload/API | Narrow typed renderer bridge and subscriptions.                                |
+| UI          | Review, approval, secure secret, progress, repair, uninstall.                  |
+| i18n        | English, Chinese, Spanish, French, German, Japanese.                           |
+
+Chat integration also updates `AIChatQueryEngine`, `AIChatQueryLoop`,
+`AIChatContextAssembler`, the compact/recovery flow, conversation deletion, and
+the legacy documentation handlers in `SkillImportService` and
+`PluginImportService`. Put message ordering in one shared helper so streaming
+implementations cannot diverge.
 
 UI implementation and its component tests must ship together.
 
@@ -1085,6 +1444,14 @@ UI implementation and its component tests must ship together.
 - dependency mapping and multi-probe verification;
 - same-name prompt skill precedence;
 - uninstall never deletes linked target.
+- metadata presenter never includes instruction bodies;
+- universal invocation resolution, ambiguity, disablement, and model-invocation policy;
+- frontmatter removal, base-directory headers, and safe variable substitution;
+- full, section-selected, and budget-exceeded context decisions;
+- Markdown selection never cuts fenced blocks or required safety sections;
+- same-hash idempotency and changed-hash revision behavior;
+- prompt loading has no process, hook, helper, or network side effects;
+- resource reads remain within the selected runtime root.
 
 ### 21.2 Platform provider
 
@@ -1103,6 +1470,14 @@ cancellation, cwd, and essential environment. Windows cases are mandatory.
 - clean schema and populated-baseline upgrade;
 - source-scoped duplicates and append-only events;
 - legacy executable backfill.
+- valid assistant-tool/short-tool-result/hidden-context ordering;
+- hidden context is absent after failed resolution or hash verification;
+- active invocation persistence precedes the next model completion;
+- full compact reattaches active skills once in deterministic order;
+- recovery uses the stored snapshot when a linked source changed or vanished;
+- parent/subagent invocation state remains isolated;
+- conversation deletion clears invocation state through Module/Model layers;
+- legacy documentation handlers produce the same invocation attachment.
 
 ### 21.4 UI and E2E
 
@@ -1112,7 +1487,9 @@ accessible announcements.
 
 E2E fixtures cover managed copy, linked reload, GitHub archive fallback,
 dependency approval, secret pause/resume, restart, same-name scopes, video-use
-stopping at ready, Windows output, and rollback.
+stopping at ready, Windows output, rollback, lazy `use_skill` invocation,
+token-constrained progressive resource reads, compaction recovery, linked-skill
+change notification, and legacy-wrapper delegation.
 
 ## 22. Delivery Phases
 
@@ -1135,9 +1512,13 @@ cross-platform CI including Windows.
 
 ### Phase 3: Prompt runtime
 
-Add catalog, loader, resources, directory/link/junction scanning, activation,
-and AI prompt selection. Exit when manually copied/linked `SKILL.md` works without
-an executable manifest.
+Add the separate catalog, metadata presenter, universal `use_skill` tool,
+normalized hidden context, token-budget service, invocation persistence,
+compaction recovery, resources, directory/link/junction scanning, activation,
+and legacy adapter. Exit when copied/linked `SKILL.md` works without an
+executable manifest, instruction bodies remain absent before invocation, the
+next model round receives exactly one verified context block, and compaction
+restores it exactly once.
 
 ### Phase 4: Read-only prepare
 
@@ -1168,6 +1549,11 @@ and system dependencies. Exit when PRD reliability/security metrics pass.
 | Coordinator            | Typed module/state machine               | Prevent retries and partial success claims. |
 | Filesystem             | Immutable conversation context           | All tools observe one world.                |
 | Prompt runtime         | Separate catalog                         | Instructions are not executable manifests.  |
+| Prompt discovery       | Metadata only                            | Unused skills do not consume context.       |
+| Prompt invocation      | One universal `use_skill` tool           | Stable routing and lower tool-schema cost.  |
+| Instruction delivery   | Short tool result plus hidden context    | Instructions remain behavioral context.     |
+| Context retention      | Persist verified normalized snapshot     | Compaction cannot silently drop/change it.  |
+| Instruction sizing     | Model-aware section selection            | Avoid unsafe raw character truncation.      |
 | Default activation     | Managed copy                             | Portable and predictable.                   |
 | Development activation | Symlink, then Windows junction           | Live editing without target deletion.       |
 | Prompt directory       | `~/.aifetchly/skills`                    | Stable agent-visible convention.            |
@@ -1189,6 +1575,12 @@ and system dependencies. Exit when PRD reliability/security metrics pass.
 5. How is the dependency catalog signed and updated?
 6. Which provider credential probes are safe and optional?
 7. When is the database baseline scheduled relative to persistence work?
+8. Which backend role is available for hidden application context on every
+   supported AI provider, and where is the meta-user fallback required?
+9. What initial per-skill and aggregate token fractions preserve enough space
+   for attachments, tools, and one completion across supported model windows?
+10. Should an active linked skill update require explicit user reload in every
+    case, or may unchanged-permission updates reload automatically between turns?
 
 ## 25. Definition of Done
 
@@ -1196,6 +1588,22 @@ and system dependencies. Exit when PRD reliability/security metrics pass.
 - Windows output passes non-skipped CI.
 - Prompt skills load from directories, links, and junctions with canonical
   deduplication.
+- Initial model context contains bounded prompt-skill metadata, never every
+  installed instruction body.
+- One universal invocation tool resolves explicit and automatic selection.
+- A successful invocation appends a short tool acknowledgement followed by one
+  hidden normalized context attachment.
+- Instruction context includes verified runtime identity, content hash, base
+  directory, and approved workspace.
+- Token-aware section selection and resource reads replace the 8,000-character
+  guidance slice.
+- Same-hash repeat invocation is context-idempotent; changed content creates a
+  visible revision.
+- Active prompt skills survive compaction/recovery exactly once using a stored
+  verified snapshot.
+- Legacy documentation-only tools delegate to the same invocation service.
+- Loading instructions executes no Markdown command, helper, hook, or network
+  reference.
 - Copy/link activation under `~/.aifetchly/skills` is atomic and safely removed.
 - Installation is durable, typed, idempotent, and recoverable.
 - Repository instructions cannot grant themselves capabilities.
