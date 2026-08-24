@@ -100,6 +100,15 @@
           >
             {{ diagnosticsText }}
           </v-btn>
+          <v-btn
+            v-if="portableStatus?.enabled && portableStatus.portableWorkspaceId"
+            size="x-small"
+            variant="text"
+            color="warning"
+            @click="regenerateIdentityOpen = true"
+          >
+            {{ regenerateIdentityText }}
+          </v-btn>
           <v-btn size="x-small" variant="text" @click="onRescan">{{
             rescanText
           }}</v-btn>
@@ -232,6 +241,38 @@
       @rescanned="onDiagnosticsRescanned"
     />
 
+    <v-dialog v-model="regenerateIdentityOpen" max-width="480">
+      <v-card>
+        <v-card-title>{{ regenerateIdentityText }}</v-card-title>
+        <v-card-text>
+          {{ regenerateIdentityWarningText }}
+        </v-card-text>
+        <v-alert
+          v-if="portableStatus?.gitTrackingState === 'tracked'"
+          type="warning"
+          variant="tonal"
+          density="compact"
+          class="mx-4"
+        >
+          {{ regenerateGitWarningText }}
+        </v-alert>
+        <v-card-actions>
+          <v-spacer />
+          <v-btn variant="text" @click="regenerateIdentityOpen = false">{{
+            cancelText
+          }}</v-btn>
+          <v-btn
+            color="warning"
+            variant="flat"
+            :loading="regenerating"
+            @click="onRegenerateIdentity"
+          >
+            {{ regenerateConfirmText }}
+          </v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
     <WorkspaceMemoryEditorDialog
       v-model="editorOpen"
       :memory="editing"
@@ -340,6 +381,8 @@ const enableOpen = ref(false);
 const conflictOpen = ref(false);
 const conflictMemoryId = ref<string | null>(null);
 const diagnosticsOpen = ref(false);
+const regenerateIdentityOpen = ref(false);
+const regenerating = ref(false);
 let unsubscribePortable: (() => void) | null = null;
 
 const hasWorkspace = computed(
@@ -484,6 +527,28 @@ async function onDiagnosticsRescanned(): Promise<void> {
   emit("change");
 }
 
+async function onRegenerateIdentity(): Promise<void> {
+  if (!props.conversationId) return;
+  regenerating.value = true;
+  try {
+    const resp = await portableWorkspaceMemoryApi.regenerateIdentity(
+      props.conversationId
+    );
+    if (resp.status) {
+      regenerateIdentityOpen.value = false;
+      void refreshPortableStatus();
+      await refresh();
+      emit("change");
+    } else {
+      notify(resp.msg || "Error", "error");
+    }
+  } catch (err) {
+    notify(err instanceof Error ? err.message : "Error", "error");
+  } finally {
+    regenerating.value = false;
+  }
+}
+
 function onPortableEnabled(): void {
   enableOpen.value = false;
   void refreshPortableStatus();
@@ -516,6 +581,24 @@ const resolveConflictsText = computed(() =>
 );
 const diagnosticsText = computed(() =>
   tr("portableMemory.diagnosticsTitle", "Diagnostics")
+);
+const regenerateIdentityText = computed(() =>
+  tr("portableMemory.regenerateIdentity", "Regenerate identity")
+);
+const regenerateIdentityWarningText = computed(() =>
+  tr(
+    "portableMemory.regenerateIdentityWarning",
+    "Regenerating the workspace identity creates a new portable UUID for an intentional fork. Record IDs are retained under scoped uniqueness. The original and fork will coexist without shared mutation."
+  )
+);
+const regenerateGitWarningText = computed(() =>
+  tr(
+    "portableMemory.regenerateGitWarning",
+    "The current identity is tracked by Git. Regenerating changes the committed identity for all clones; coordinate with your team."
+  )
+);
+const regenerateConfirmText = computed(() =>
+  tr("portableMemory.regenerateConfirm", "Regenerate")
 );
 const portableDisabledHint = computed(
   () =>

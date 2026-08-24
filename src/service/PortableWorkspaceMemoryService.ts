@@ -439,9 +439,10 @@ export class PortableWorkspaceMemoryService {
       });
       exported += 1;
     }
-    if (written.length > 0) {
-      await store.writeIndex(this.indexService.buildIndex(written));
-    }
+    // Rebuild INDEX from the COMPLETE eligible record set (FR-031/FR-043),
+    // not just the current export batch — active synced records only,
+    // excluding archived/contradicted/rejected/conflicted/pending/missing.
+    await this.refreshIndex(ctx, scopeCtx);
     await this.portableModule.recordAudit({
       scopeId: scopeCtx.scopeId,
       action: "export",

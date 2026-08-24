@@ -170,14 +170,113 @@ export class WorkspaceMemoryScopeModule extends BaseModule {
       scopeId: from.scopeId,
       limit: 200,
     });
-    // Detect duplicate memory ids that exist in BOTH scopes.
+    const beforeCount = memories.length;
+
+    // Detect duplicate memory ids that exist in BOTH scopes and resolve per
+    // the transactional merge rules (design §9.4 / FR-067/FR-068/AC-013):
+    //   - canonical portable fields + hashes match → keep ONE projection
+    //     (drop the duplicate, do not re-ID).
+    //   - one portable, one private → keep the portable projection, re-ID the
+    //     private copy with an audit event.
+    //   - both portable but fields/hashes differ → mark a scope-merge
+    //     conflict (do NOT blindly re-ID; quarantine for user resolution).
     for (const m of memories) {
       const clash = await this.memoryModel.getByScopeAndMemoryId(
         into.scopeId,
         m.memoryId
       );
-      if (clash) {
-        // Keep both records: the incoming one gets a fresh local id.
+      if (!clash) continue;
+
+      const fromState = await this.portableStateModel.getByScopeAndMemoryId(
+        from.scopeId,
+        m.memoryId
+      );
+      const intoState = await this.portableStateModel.getByScopeAndMemoryId(
+        into.scopeId,
+        m.memoryId
+      );
+
+      // Case 1: both portable with matching canonical fields + lastValidHash →
+      // keep one (drop the incoming duplicate).
+      if (
+        fromState &&
+        intoState &&
+        fromState.lastValidHash &&
+        fromState.lastValidHash === intoState.lastValidHash &&
+        fromState.visibility === intoState.visibility
+      ) {
+        await this.memoryModel.deleteByScopeAndMemoryId(
+          from.scopeId,
+          m.memoryId
+        );
+        await this.portableStateModel.deleteByScopeAndMemoryId(
+          from.scopeId,
+          m.memoryId
+        );
+        await this.auditModel.append({
+          scopeId: into.scopeId,
+          memoryId: m.memoryId,
+          action: "import",
+          actor: "system",
+          outcome: "skipped",
+          diagnosticCode: "memory-id-duplicate",
+          message: "duplicate memory id deduplicated (matching hash)",
+        });
+        continue;
+      }
+
+      // Case 2: one portable, one private → keep portable, re-ID private.
+      if (!!fromState !== !!intoState) {
+        const privateScopeId = fromState ? into.scopeId : from.scopeId;
+        const freshId = `wmem-${randomUUID()}`;
+        await this.memoryModel.renameMemoryIdByScope(
+          privateScopeId,
+          m.memoryId,
+          freshId
+        );
+        await this.portableStateModel.renameMemoryIdByScope(
+          privateScopeId,
+          m.memoryId,
+          freshId
+        );
+        await this.auditModel.append({
+          scopeId: into.scopeId,
+          memoryId: freshId,
+          action: "import",
+          actor: "system",
+          outcome: "completed",
+          diagnosticCode: "memory-id-duplicate",
+          message:
+            "private copy re-issued during scope merge (portable preserved)",
+        });
+        continue;
+      }
+
+      // Case 3: both portable but differ → scope-merge conflict (quarantine).
+      if (fromState && intoState) {
+        await this.portableStateModel.updateByScopeAndMemoryId(
+          from.scopeId,
+          m.memoryId,
+          {
+            syncState: "conflicted",
+            diagnosticCode: "memory-conflict",
+            diagnosticMessage:
+              "scope-merge conflict: differing portable records share an id",
+          }
+        );
+        await this.auditModel.append({
+          scopeId: into.scopeId,
+          memoryId: m.memoryId,
+          action: "conflict",
+          actor: "system",
+          outcome: "conflicted",
+          diagnosticCode: "memory-conflict",
+          message: "scope-merge conflict: differing portable records",
+        });
+        // Re-ID so the reassign below doesn't violate the unique constraint.
+        // Also update relativePath to match the new id (the (scopeId,
+        // relativePath) unique index would otherwise collide with the
+        // surviving scope's record for the same file path).
         const freshId = `wmem-${randomUUID()}`;
         await this.memoryModel.renameMemoryIdByScope(
           from.scopeId,
@@ -189,23 +288,67 @@ export class WorkspaceMemoryScopeModule extends BaseModule {
           m.memoryId,
           freshId
         );
-        await this.auditModel.append({
-          scopeId: into.scopeId,
-          memoryId: freshId,
-          action: "import",
-          actor: "system",
-          outcome: "completed",
-          diagnosticCode: "memory-id-duplicate",
-          message: "duplicate memory id re-issued during scope merge",
-        });
+        await this.portableStateModel.updateByScopeAndMemoryId(
+          from.scopeId,
+          freshId,
+          {
+            relativePath: `.aifetchly/memory/${freshId}.md`,
+          }
+        );
+        continue;
       }
+
+      // Case 4: both private (no portable state) → re-ID the incoming copy.
+      const freshId = `wmem-${randomUUID()}`;
+      await this.memoryModel.renameMemoryIdByScope(
+        from.scopeId,
+        m.memoryId,
+        freshId
+      );
+      await this.portableStateModel.renameMemoryIdByScope(
+        from.scopeId,
+        m.memoryId,
+        freshId
+      );
+      await this.auditModel.append({
+        scopeId: into.scopeId,
+        memoryId: freshId,
+        action: "import",
+        actor: "system",
+        outcome: "completed",
+        diagnosticCode: "memory-id-duplicate",
+        message: "duplicate private memory id re-issued during scope merge",
+      });
     }
+
+    // Move non-conflicting memories/states/paths/audits to the surviving scope.
     await this.memoryModel.reassignScope(from.scopeId, into.scopeId);
     await this.portableStateModel.reassignScope(from.scopeId, into.scopeId);
     await this.scopePathModel.reassignScope(from.scopeId, into.scopeId);
     await this.auditModel.reassignScope(from.scopeId, into.scopeId);
+
+    // Count-verify before deleting the losing scope (design §9.4 step 5).
+    const remaining = await this.memoryModel.listByScope({
+      scopeId: from.scopeId,
+      limit: 200,
+    });
+    if (remaining.length > 0) {
+      // Reassign should have moved every row; if not, abort the merge (do NOT
+      // delete the losing scope — data integrity over silent loss).
+      await this.auditModel.append({
+        scopeId: into.scopeId,
+        action: "import",
+        actor: "system",
+        outcome: "failed",
+        message: `scope merge aborted: ${remaining.length} rows remain on the losing scope`,
+      });
+      throw new Error(
+        "scope merge failed: count mismatch; losing scope retained for safety"
+      );
+    }
     const deleted = await this.scopeModel.deleteByScopeId(from.scopeId);
     void deleted;
+    void beforeCount;
     const merged = await this.requireScope(into.scopeId);
     await this.auditModel.append({
       scopeId: into.scopeId,
