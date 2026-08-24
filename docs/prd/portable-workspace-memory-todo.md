@@ -161,13 +161,13 @@ Each implementation task must include its required unit, component, integration,
   - Verify English, Chinese, Spanish, French, German, and Japanese contain identical portable-memory key sets.
   - Add an automated locale-key parity test.
 
-- [ ] **Complete accessibility coverage** (PRD section 16.7)
+- [x] **Complete accessibility coverage** (PRD section 16.7)
   - Ensure diagnostics and conflict controls work by keyboard.
   - Do not communicate state by color alone.
   - Make confirmations identify the exact record and action.
   - Test long titles/paths and accessible full-value labels.
 
-- [ ] **Complete privacy and logging review** (`FR-057`, `FR-060`, technical design section 28)
+- [x] **Complete privacy and logging review** (`FR-057`, `FR-060`, technical design section 28)
   - Prove exports omit local IDs, absolute roots, source conversation/task/message IDs, retrieval telemetry, embeddings, hashes, and consolidation metadata.
   - Prove logs, diagnostics, renderer events, and optional telemetry omit titles, bodies, workspace identifiers/paths, memory filenames/IDs, branches, and commit hashes where prohibited.
   - Record the completed privacy review in the launch checklist.
