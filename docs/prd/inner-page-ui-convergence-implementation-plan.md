@@ -87,6 +87,18 @@ LegacyPageFrame and migrate per-family per the design's registry-driven recipe
 ### Stage I — Verification
 - Full suites + tsc/vue-tsc; plan-doc gap record.
 
+## Full-surface completion (2026-08-25)
+
+After the foundations + Schedule slice, the remaining 46 surfaces migrated in
+three phases (commits f99a688b..5fb548a3): Phase 3 high-exposure (insights
+landing with hex→token conversion, 9 settings pages, knowledge, proxy×3,
+social accounts×2), Phase 4 automation (campaign×2, social tasks×4, search×3,
+email extraction×3, yellow pages×3, map scraper), Phase 5 email marketing
+(14 surfaces across 13 distinct files). Every page carries the AppPageShell
+identity (objective title-key, content-width contract) inside the persistent
+shell; the registry marks all 50 converged; coverage tests hold. Handlers,
+APIs, and route names untouched throughout (IPR-051/052).
+
 ## Completion record (2026-08-22)
 
 Stages A–G landed (commits 004c2435..58e72f2a plus this test commit):
