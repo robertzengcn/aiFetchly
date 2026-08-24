@@ -47,6 +47,11 @@ function buildProductionDeps(): AIChatLightweightCompletionDeps {
     }
     return apiPromise;
   };
+  // Capability resolver shares the lazy-import discipline: the catalog is
+  // main-process state, constructed on first capability-gated completion.
+  let catalog:
+    | import("@/service/AIChatModelCatalogService").AIChatModelCatalogService
+    | null = null;
   return {
     resolveProvider: async () => {
       const resolved = resolver.resolveForChat();
@@ -73,6 +78,15 @@ function buildProductionDeps(): AIChatLightweightCompletionDeps {
     completeLocal: async (request, signal) => {
       const api = await getApi();
       return api.openAIChatCompletion(request, signal);
+    },
+    getSmallModelCapability: async () => {
+      const { AIChatModelCatalogService: CatalogService } = await import(
+        "@/service/AIChatModelCatalogService"
+      );
+      if (!catalog) {
+        catalog = new CatalogService();
+      }
+      return catalog.getSmallModelCapability();
     },
   };
 }

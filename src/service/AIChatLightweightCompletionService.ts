@@ -22,6 +22,7 @@
 import type {
   OpenAIChatCompletionRequest,
   OpenAIChatCompletionResponse,
+  OpenAISmallModelCapability,
 } from "@/api/aiChatApi";
 import { log } from "@/modules/Logger";
 import {
@@ -38,6 +39,7 @@ import {
   type AIChatLightweightOutcome,
   type AIChatLightweightProviderKind,
   type AIChatLightweightRoute,
+  type AIChatLightweightRouteReason,
 } from "@/service/AIChatLightweightTypes";
 import {
   allowsNormalFallback,
@@ -67,6 +69,27 @@ const MAX_RETRY_SLEEP_MS = 10_000;
 const GENERIC_5XX_BACKOFF_MS = 2_000;
 
 /**
+ * A small-model capability is usable only when the server reports the route
+ * available with a valid positive-integer context window. Anything else
+ * (absent metadata, `available: false`, malformed `context_size`) makes the
+ * small route ineligible for workloads that require discovered context
+ * (tech-design §8.4, §16.1).
+ */
+function isUsableSmallCapability(
+  capability: OpenAISmallModelCapability | null | undefined
+): capability is OpenAISmallModelCapability {
+  if (!capability || capability.available !== true) {
+    return false;
+  }
+  const contextSize = capability.context_size;
+  return (
+    typeof contextSize === "number" &&
+    Number.isInteger(contextSize) &&
+    contextSize > 0
+  );
+}
+
+/**
  * Terminal outcome of a single lightweight attempt-state-machine run. Carried
  * out of {@link runStateMachine} alongside the {@link LightweightAttemptMetrics}
  * so the caller can emit an accurate event without a side-effecting callback.
@@ -78,6 +101,8 @@ type LightweightAttemptOutcome =
       route: AIChatLightweightRoute;
       providerKind: AIChatLightweightProviderKind;
       resolvedModel: string;
+      /** Structural route decision (e.g. capability_missing), never a fallback. */
+      routeReason?: AIChatLightweightRouteReason;
     }
   | { kind: "cooldown_skip" }
   | { kind: "failed"; failure: AIChatLightweightFailure };
@@ -134,6 +159,16 @@ export interface AIChatLightweightCompletionDeps {
     request: OpenAIChatCompletionRequest,
     signal?: AbortSignal
   ): Promise<OpenAIChatCompletionResponse>;
+  /**
+   * Resolve the hosted small-model capability metadata (`GET /v1/models`).
+   * Consulted ONLY for workloads whose profile requires discovered small
+   * context (full compact): absent/invalid/unavailable metadata routes the
+   * request directly to the provider-normal path with route reason
+   * `capability_missing` — no small request, not a fallback
+   * (tech-design §8.4, §16.1). Optional so tests and providers without a
+   * catalog can omit it; an omitted resolver counts as missing capability.
+   */
+  getSmallModelCapability?(): Promise<OpenAISmallModelCapability | null>;
 }
 
 /** Process-local cooldown state keyed by workload. */
@@ -208,7 +243,11 @@ export class AIChatLightweightCompletionService {
       outcome.response,
       outcome.route,
       startedAt,
-      { ...metrics, outcome: "success" }
+      {
+        ...metrics,
+        outcome: "success",
+        ...(outcome.routeReason ? { routeReason: outcome.routeReason } : {}),
+      }
     );
     return {
       response: outcome.response,
@@ -220,6 +259,7 @@ export class AIChatLightweightCompletionService {
       fallbackAttempted: metrics.fallbackAttempted,
       fallbackReason: metrics.fallbackReason,
       retryReason: metrics.retryReason,
+      ...(outcome.routeReason ? { routeReason: outcome.routeReason } : {}),
     };
   }
 
@@ -285,9 +325,40 @@ export class AIChatLightweightCompletionService {
       };
     }
 
+    // Hosted + enabled: for workloads that require discovered small-model
+    // capability metadata (full compact), gate the small route on a valid,
+    // available capability. Absent/malformed/unavailable metadata routes
+    // DIRECTLY to the provider-normal path with route reason
+    // `capability_missing` — no small request is made, nothing failed, so
+    // this is not a fallback and opens no cooldown (tech-design §8.4, §16.1).
+    let capability: OpenAISmallModelCapability | null = null;
+    if (profile.requiresDiscoveredSmallContext) {
+      capability = await this.resolveCapabilitySafely();
+      if (!isUsableSmallCapability(capability)) {
+        const result = await this.runNormalRoute(input, profile, resolution);
+        if ("failure" in result) {
+          return {
+            outcome: { kind: "failed", failure: result.failure },
+            metrics: { ...EMPTY_METRICS, attemptCount: 1 },
+          };
+        }
+        return {
+          outcome: {
+            kind: "success",
+            response: result.response,
+            route: "provider_normal",
+            providerKind: resolution.providerKind,
+            resolvedModel: result.resolvedModel,
+            routeReason: "capability_missing",
+          },
+          metrics: { ...EMPTY_METRICS, attemptCount: 1 },
+        };
+      }
+    }
+
     // Hosted + enabled: attempt the small route.
     try {
-      const response = await this.attemptSmall(input, profile);
+      const response = await this.attemptSmall(input, profile, capability);
       this.clearCooldown(input.workload);
       return {
         outcome: {
@@ -309,11 +380,11 @@ export class AIChatLightweightCompletionService {
           const cancelled = classifyLightweightFailure(sleepErr, input.signal);
           return {
             outcome: { kind: "failed", failure: this.toFailure(cancelled) },
-            metrics: EMPTY_METRICS,
+            metrics: { ...EMPTY_METRICS, attemptCount: 1 },
           };
         }
         try {
-          const response = await this.attemptSmall(input, profile);
+          const response = await this.attemptSmall(input, profile, capability);
           this.clearCooldown(input.workload);
           return {
             outcome: {
@@ -338,23 +409,28 @@ export class AIChatLightweightCompletionService {
             input,
             profile,
             resolution,
-            retryClassified
+            retryClassified,
+            2
           );
         }
       }
-      return this.handleSmallFailure(input, profile, resolution, classified);
+      return this.handleSmallFailure(input, profile, resolution, classified, 1);
     }
   }
 
   /**
    * Handle a small-route failure: cooldown bookkeeping and (for compact only)
-   * the one allowed normal-model fallback.
+   * the one allowed normal-model fallback. `priorAttempts` is the number of
+   * network attempts already made in this logical completion (1 after the
+   * initial small request, 2 after a same-route retry) so the emitted attempt
+   * count never reports zero after a network request (SMBW-012).
    */
   private async handleSmallFailure(
     input: AIChatLightweightCompletionInput,
     profile: ReturnType<typeof getLightweightProfile>,
     resolution: LightweightProviderResolution,
-    classified: ReturnType<typeof classifyLightweightFailure>
+    classified: ReturnType<typeof classifyLightweightFailure>,
+    priorAttempts: number
   ): Promise<{
     outcome: LightweightAttemptOutcome;
     metrics: LightweightAttemptMetrics;
@@ -365,7 +441,7 @@ export class AIChatLightweightCompletionService {
     if (!classified.definitive) {
       return {
         outcome: { kind: "failed", failure: this.toFailure(classified) },
-        metrics: EMPTY_METRICS,
+        metrics: { ...EMPTY_METRICS, attemptCount: priorAttempts },
       };
     }
 
@@ -374,12 +450,18 @@ export class AIChatLightweightCompletionService {
       profile.fallback === "normal_once" &&
       allowsNormalFallback(classified.reason)
     ) {
-      return this.attemptNormalFallback(input, profile, resolution, classified);
+      return this.attemptNormalFallback(
+        input,
+        profile,
+        resolution,
+        classified,
+        priorAttempts
+      );
     }
 
     return {
       outcome: { kind: "failed", failure: this.toFailure(classified) },
-      metrics: EMPTY_METRICS,
+      metrics: { ...EMPTY_METRICS, attemptCount: priorAttempts },
     };
   }
 
@@ -405,13 +487,15 @@ export class AIChatLightweightCompletionService {
    * The one allowed normal-model fallback for conversation_compact. Reuses the
    * resolution from the top of this logical completion (a mid-flight provider
    * switch must not change the fallback target). Returns the original reason
-   * on fallback failure so attribution stays clear.
+   * on fallback failure so attribution stays clear. The total attempt count
+   * includes the small attempts that preceded the fallback (SMBW-012).
    */
   private async attemptNormalFallback(
     input: AIChatLightweightCompletionInput,
     profile: ReturnType<typeof getLightweightProfile>,
     resolution: LightweightProviderResolution,
-    classified: ReturnType<typeof classifyLightweightFailure>
+    classified: ReturnType<typeof classifyLightweightFailure>,
+    priorAttempts: number
   ): Promise<{
     outcome: LightweightAttemptOutcome;
     metrics: LightweightAttemptMetrics;
@@ -419,7 +503,7 @@ export class AIChatLightweightCompletionService {
     const result = await this.runNormalRoute(input, profile, resolution);
     const fallbackMetrics: LightweightAttemptMetrics = {
       ...EMPTY_METRICS,
-      attemptCount: 1,
+      attemptCount: priorAttempts + 1,
       fallbackAttempted: true,
       fallbackReason: classified.reason,
     };
@@ -441,20 +525,55 @@ export class AIChatLightweightCompletionService {
     };
   }
 
+  /**
+   * Resolve the hosted small-model capability without ever throwing: a
+   * resolver failure (catalog fetch error, injection absent) is equivalent to
+   * missing metadata — route normal, never crash a background workload.
+   */
+  private async resolveCapabilitySafely(): Promise<OpenAISmallModelCapability | null> {
+    if (!this.deps.getSmallModelCapability) return null;
+    try {
+      return await this.deps.getSmallModelCapability();
+    } catch {
+      return null;
+    }
+  }
+
   /** Build and send the hosted small-alias request. */
   private async attemptSmall(
     input: AIChatLightweightCompletionInput,
-    profile: ReturnType<typeof getLightweightProfile>
+    profile: ReturnType<typeof getLightweightProfile>,
+    capability?: OpenAISmallModelCapability | null
   ): Promise<OpenAIChatCompletionResponse> {
     input.signal?.throwIfAborted();
     const request: OpenAIChatCompletionRequest = {
       messages: [...input.messages],
       model: SMALL_MODEL_ALIAS,
       temperature: profile.temperature,
-      max_tokens: profile.maxOutputTokens,
+      max_tokens: this.smallMaxOutputTokens(profile, capability),
       stream: false,
     };
     return this.deps.completeHosted(request, input.signal);
+  }
+
+  /**
+   * Effective output cap for the small route: the profile's default bounded by
+   * the discovered small-model maximum output when one is reported
+   * (SMBW-001: a valid capability's reported limits are honored).
+   */
+  private smallMaxOutputTokens(
+    profile: ReturnType<typeof getLightweightProfile>,
+    capability?: OpenAISmallModelCapability | null
+  ): number {
+    const discovered = capability?.max_tokens;
+    if (
+      typeof discovered === "number" &&
+      Number.isInteger(discovered) &&
+      discovered > 0
+    ) {
+      return Math.min(profile.maxOutputTokens, discovered);
+    }
+    return profile.maxOutputTokens;
   }
 
   /**
@@ -623,6 +742,7 @@ export class AIChatLightweightCompletionService {
     startedAt: number,
     fields: LightweightAttemptMetrics & {
       outcome: AIChatLightweightOutcome;
+      routeReason?: AIChatLightweightRouteReason;
     }
   ): void {
     // Construct the typed event so the interface is the single source of
@@ -631,7 +751,11 @@ export class AIChatLightweightCompletionService {
       workload: input.workload,
       providerKind,
       ...(route ? { route } : {}),
-      requestedAlias: route === "hosted_small" ? "small" : null,
+      ...(fields.routeReason ? { routeReason: fields.routeReason } : {}),
+      requestedAlias:
+        route === "hosted_small" || route === "normal_fallback"
+          ? "small"
+          : null,
       ...(response?.model ? { resolvedModel: response.model } : {}),
       ...(response?.usage?.completion_tokens !== undefined
         ? { outputTokens: response.usage.completion_tokens }

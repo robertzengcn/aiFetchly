@@ -111,6 +111,16 @@ export type AIChatLightweightRoute =
   | "provider_normal"
   | "normal_fallback";
 
+/**
+ * Why a completion was routed away from the small alias without a small
+ * attempt having failed. `capability_missing`: the workload requires
+ * discovered small-model capability metadata (valid `available: true` plus a
+ * positive-integer `context_size`) and the server did not provide it, so the
+ * request went directly to the provider-normal route (tech-design §8.4,
+ * §16.1). This is NOT a fallback and is not counted as one.
+ */
+export type AIChatLightweightRouteReason = "capability_missing";
+
 /** Input to the lightweight completion operation. Text-only, no tools. */
 export interface AIChatLightweightCompletionInput {
   readonly workload: AIChatLightweightWorkload;
@@ -139,6 +149,9 @@ export interface AIChatLightweightCompletionResult {
   readonly fallbackAttempted: boolean;
   readonly fallbackReason?: AIChatLightweightFailureReason;
   readonly retryReason?: AIChatLightweightFailureReason;
+  /** Set when the route was chosen without a small attempt for a structural
+   * reason (e.g. capability metadata missing) — never a fallback. */
+  readonly routeReason?: AIChatLightweightRouteReason;
 }
 
 /**
@@ -159,6 +172,8 @@ export interface AIChatLightweightCompletionEvent {
   readonly providerKind: AIChatLightweightProviderKind;
   /** The selected route; absent on failed paths where no route completed. */
   readonly route?: AIChatLightweightRoute;
+  /** Structural route decision (e.g. `capability_missing`) — never a fallback. */
+  readonly routeReason?: AIChatLightweightRouteReason;
   readonly requestedAlias: "small" | null;
   readonly resolvedModel?: string;
   readonly contextWindow?: number;
