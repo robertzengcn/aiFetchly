@@ -54,20 +54,36 @@ let sharedPortableCoordinator: PortableWorkspaceMemorySyncCoordinator | null =
 
 export function getSharedPortableMemorySyncCoordinator(): PortableWorkspaceMemorySyncCoordinator {
   if (!sharedPortableCoordinator) {
-    sharedPortableCoordinator = new PortableWorkspaceMemorySyncCoordinator({
-      emitter: (summary: PortableMemorySyncSummary) => {
-        forwardPortableMemorySummary(summary);
-      },
-    });
+    // Constructed WITHOUT an emitter; the BrowserWindow sink is attached
+    // later by initWorkspaceWatchManager via attachPortableMemorySummarySink
+    // (AC-002). setEmitter is honored on every emit, so summaries emitted
+    // before the sink is attached are dropped (advisory) rather than
+    // permanently lost behind a stale closure.
+    sharedPortableCoordinator = new PortableWorkspaceMemorySyncCoordinator({});
   }
   return sharedPortableCoordinator;
 }
 
-/** Best-effort renderer forward — never throws into synchronization. */
-function forwardPortableMemorySummary(summary: PortableMemorySyncSummary): void {
-  void summary;
-  // Wired lazily by initWorkspaceWatchManager (window reference); see below.
-  portableSummarySink?.(summary);
+/**
+ * Attach the renderer summary sink (the (channel, payload) → webContents.send
+ * adapter) to the shared coordinator. Called by initWorkspaceWatchManager
+ * once the BrowserWindow is available, and by tests.
+ */
+export function attachPortableMemorySummarySink(
+  sink: ((summary: PortableMemorySyncSummary) => void) | null
+): void {
+  portableSummarySink = sink;
+  if (sharedPortableCoordinator) {
+    sharedPortableCoordinator.setEmitter(
+      sink ? (summary) => portableSummarySink?.(summary) : null
+    );
+  }
+}
+
+/** Test-only: clear the sink so the next construction starts clean. */
+export function resetPortableSummarySinkForTests(): void {
+  portableSummarySink = null;
+  sharedPortableCoordinator = null;
 }
 
 let portableSummarySink: ((summary: PortableMemorySyncSummary) => void) | null =
@@ -143,7 +159,7 @@ export function initWorkspaceWatchManager(
   if (singleton) return singleton;
   const configManager = getAIFetchlyConfigManager();
   const registrySync = configManager.getRegistrySync();
-  portableSummarySink = (summary) => {
+  attachPortableMemorySummarySink((summary) => {
     try {
       win.webContents.send(AI_PORTABLE_WORKSPACE_MEMORY_CHANGED, {
         scopeId: summary.scopeId,
@@ -158,7 +174,7 @@ export function initWorkspaceWatchManager(
     } catch {
       // Window may be closing — summaries are advisory.
     }
-  };
+  });
   singleton = new WorkspaceWatchManager({
     applySnapshotCallback: (snapshot, trust) =>
       registrySync.applyWorkspaceSnapshot(snapshot, trust),

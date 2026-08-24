@@ -87,7 +87,7 @@ export class PortableWorkspaceMemorySyncCoordinator {
   private readonly identityService: PortableWorkspaceIdentityService;
   private readonly memoryModel: AIWorkspaceMemoryModel;
   private readonly stateModel: AIWorkspaceMemoryPortableStateModel;
-  private readonly emitter: SyncSummaryEmitter | null;
+  private emitter: SyncSummaryEmitter | null;
   private readonly logger: PortableSyncLogger;
 
   constructor(options: {
@@ -112,6 +112,35 @@ export class PortableWorkspaceMemorySyncCoordinator {
     this.identityService = new PortableWorkspaceIdentityService();
     this.emitter = options.emitter ?? null;
     this.logger = options.logger ?? defaultLogger;
+  }
+
+  /**
+   * Attach (or replace) the renderer summary emitter AFTER construction.
+   * The shared coordinator is constructed before
+   * initWorkspaceWatchManager captures the BrowserWindow; the sink is wired
+   * later via this method so summaries are never permanently dropped (AC-002).
+   */
+  setEmitter(emitter: SyncSummaryEmitter | null): void {
+    this.emitter = emitter;
+  }
+
+  /** Test-only: drive a summary through the emitter to assert wiring. */
+  async emitSummaryForTest(summary: PortableMemorySyncSummary): Promise<void> {
+    this.emitSummary(summary);
+  }
+
+  private emitSummary(summary: PortableMemorySyncSummary): void {
+    if (this.emitter) {
+      try {
+        this.emitter(summary);
+      } catch (err) {
+        this.logger(
+          "error",
+          "summary emitter threw",
+          err instanceof Error ? err.message : String(err)
+        );
+      }
+    }
   }
 
   // --- Queue plumbing (§14.1) -----------------------------------------------
@@ -141,12 +170,13 @@ export class PortableWorkspaceMemorySyncCoordinator {
    * between `pendingSnapshot = null` and the flag clear.
    */
   private async drainSnapshots(key: string): Promise<void> {
+    let pendingArrived = false;
     try {
       for (;;) {
         const queued = this.queues.get(key);
         const pending = queued?.pendingSnapshot;
         if (queued) queued.pendingSnapshot = null;
-        if (!pending) return;
+        if (!pending) break;
         await this.enqueueOperation(key, async () => {
           try {
             await this.applySnapshot(pending);
@@ -161,13 +191,15 @@ export class PortableWorkspaceMemorySyncCoordinator {
       }
     } finally {
       const q = this.queues.get(key);
-      if (!q) return;
-      if (q.pendingSnapshot) {
+      if (q?.pendingSnapshot) {
         // Arrived between the loop's last check and now — keep draining.
-        void this.drainSnapshots(key);
-      } else {
+        pendingArrived = true;
+      } else if (q) {
         q.snapshotScheduled = false;
       }
+    }
+    if (pendingArrived) {
+      void this.drainSnapshots(key);
     }
   }
 
