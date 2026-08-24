@@ -1979,6 +1979,154 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     },
   },
   {
+    name: "use_skill",
+    description:
+      "Invoke an installed prompt skill and load its instructions for the current task. " +
+      "Accepts the skill's visible name or its prompt: runtime id from the available-skills list. " +
+      "Returns a short acknowledgement; the verified instructions follow as hidden context. " +
+      "This tool only INVOKES already-installed skills — it never installs, updates, repairs, " +
+      "or configures skill packages (use skill_install_prepare for that).",
+    parameters: {
+      type: "object",
+      properties: {
+        skill: {
+          type: "string",
+          description:
+            "Skill name or prompt: runtime id, e.g. 'video-use' or 'prompt:user:<id>'.",
+        },
+        arguments: {
+          type: "string",
+          description:
+            "Optional task context for the invocation (plain text, never secrets).",
+        },
+        invocationReason: {
+          type: "string",
+          description: "Optional short reason for diagnostics.",
+        },
+      },
+      required: ["skill"],
+    },
+    tier: "main",
+    requiresConfirmation: false,
+    permissionCategory: "pure",
+    source: "built-in",
+    execute: async (args, context) => {
+      const { getDefaultPromptSkillInvocationService } = await import(
+        "@/service/PromptSkillInvocationService"
+      );
+      const { getDefaultFilesystemContextService } = await import(
+        "@/service/ConversationFilesystemContextService"
+      );
+      const scope = await getDefaultFilesystemContextService()
+        .resolve(context.conversationId)
+        .then((r) => (r.ok ? r.context : null))
+        .catch(() => null);
+      const outcome = await getDefaultPromptSkillInvocationService().invoke(
+        {
+          skill: String(args.skill ?? ""),
+          ...(args.arguments !== undefined
+            ? { arguments: String(args.arguments) }
+            : {}),
+          ...(args.invocationReason !== undefined
+            ? { invocationReason: String(args.invocationReason) }
+            : {}),
+        },
+        {
+          conversationId: context.conversationId,
+          conversationWorkspaceRoot: scope?.canonicalWorkspaceRoot ?? "",
+          ...(scope?.workspaceId !== undefined && scope.workspaceId >= 0
+            ? { workspaceId: scope.workspaceId }
+            : {}),
+          invocationSource: "model",
+        }
+      );
+      if (!outcome.ok) {
+        return { success: false, result: { ...outcome.result } };
+      }
+      return {
+        success: true,
+        result: { ...outcome.result },
+        // Transient sibling: the query loop turns this into the hidden
+        // instruction message; it is never persisted or emitted.
+        ...(outcome.attachment
+          ? { promptSkillContext: outcome.attachment }
+          : {}),
+      };
+    },
+  },
+  {
+    name: "skill_resource_list",
+    description:
+      "List files inside an invoked prompt skill's root (bounded, read-only). " +
+      "Use after use_skill when the skill instructions reference helper files " +
+      "(e.g. helpers/) and you need their names/sizes before reading.",
+    parameters: {
+      type: "object",
+      properties: {
+        runtime_id: {
+          type: "string",
+          description: "The prompt: runtime id returned by use_skill.",
+        },
+        subpath: {
+          type: "string",
+          description:
+            "Optional relative subdirectory inside the skill root (e.g. 'helpers').",
+        },
+      },
+      required: ["runtime_id"],
+    },
+    tier: "main",
+    requiresConfirmation: false,
+    permissionCategory: "pure",
+    source: "built-in",
+    execute: async (args) => {
+      const { listSkillResources } = await import(
+        "@/service/PromptSkillResourceService"
+      );
+      const outcome = await listSkillResources(
+        String(args.runtime_id ?? ""),
+        args.subpath === undefined ? undefined : String(args.subpath)
+      );
+      return outcome;
+    },
+  },
+  {
+    name: "skill_resource_read",
+    description:
+      "Read one text file from an invoked prompt skill's root (read-only, bounded). " +
+      "Use for omitted SKILL.md sections or referenced helper files after use_skill. " +
+      "Rejects absolute paths, traversal, binaries, and oversized files.",
+    parameters: {
+      type: "object",
+      properties: {
+        runtime_id: {
+          type: "string",
+          description: "The prompt: runtime id returned by use_skill.",
+        },
+        path: {
+          type: "string",
+          description:
+            "Relative path inside the skill root (e.g. 'helpers/cut.py').",
+        },
+      },
+      required: ["runtime_id", "path"],
+    },
+    tier: "main",
+    requiresConfirmation: false,
+    permissionCategory: "pure",
+    source: "built-in",
+    execute: async (args) => {
+      const { readSkillResource } = await import(
+        "@/service/PromptSkillResourceService"
+      );
+      const outcome = await readSkillResource(
+        String(args.runtime_id ?? ""),
+        String(args.path ?? "")
+      );
+      return outcome;
+    },
+  },
+  {
     name: "check_shell_status",
     description:
       "Poll the status of a shell command that was auto-backgrounded due to timeout. " +

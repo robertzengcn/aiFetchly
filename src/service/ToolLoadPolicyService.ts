@@ -36,6 +36,12 @@ const ALWAYS_LOADED_TOOL_NAMES: ReadonlySet<string> = new Set([
   "read_attachment_content",
   "knowledge_library_search",
   "run_subagent",
+  // Universal prompt-skill invocation (design §10.4): one stable tool instead
+  // of one documentation tool per skill; the schema is tiny and the model
+  // must be able to invoke installed skills without a catalog search.
+  "use_skill",
+  "skill_resource_list",
+  "skill_resource_read",
 ]);
 
 const CONTEXTUAL_SHELL_TOOL_NAMES: ReadonlySet<string> = new Set([

@@ -37,8 +37,12 @@ import {
   countImageContentParts,
   countImageDataUrlChars,
 } from "@/service/AIChatImageHandoff";
+import { buildPromptSkillHandoffMessage } from "@/service/PromptSkillHandoff";
 import { redirectToLoginOnAuthExpired } from "@/service/AIChatAuthExpiredHandler";
-import { userSafeError, isContextWindowExceededError } from "@/service/AIChatErrorMapper";
+import {
+  userSafeError,
+  isContextWindowExceededError,
+} from "@/service/AIChatErrorMapper";
 import { Token } from "@/modules/token";
 import { USER_AI_AUTO_PLAN, USER_AI_ENABLED } from "@/config/usersetting";
 import { ENTER_PLAN_MODE_TOOL } from "@/service/EnterPlanModeTool";
@@ -347,9 +351,7 @@ export class AIChatQueryEngine {
    * the model catalog's default (128k) when the model is unknown. Never
    * throws. Used by the pre-turn proactive compact gate.
    */
-  private async resolveContextWindowForModel(
-    model?: string
-  ): Promise<number> {
+  private async resolveContextWindowForModel(model?: string): Promise<number> {
     try {
       return await this.modelCatalog.getContextWindow(model);
     } catch {
@@ -1267,6 +1269,15 @@ export class AIChatQueryEngine {
         );
       }
 
+      // Prompt-skill hidden context (design §10.5/§17.2): the SAME shared
+      // builder as AIChatQueryLoop so both streaming paths deliver one
+      // short acknowledgement followed by one model-only instruction block.
+      if (toolResult.success && toolResult.promptSkillContext) {
+        matchedByToolId.conversationMessages.push(
+          buildPromptSkillHandoffMessage(toolResult.promptSkillContext)
+        );
+      }
+
       // Rebuild the deferred catalog for the resumed turn and carry forward the
       // discovered-tool snapshot so discovered tools remain exposed (AC-8).
       const resumeCatalogContext = this.buildToolCatalogForTurn({
@@ -1554,17 +1565,16 @@ export class AIChatQueryEngine {
           // near the model's window: it actually shrinks the next assembled
           // prompt. Fall back to the advisory session-memory update otherwise.
           // Optional call guards test fakes that only stub one method.
-          Promise.resolve(compactAgent.enqueueAutoCompact?.(compactInput) ?? false)
+          Promise.resolve(
+            compactAgent.enqueueAutoCompact?.(compactInput) ?? false
+          )
             .then((compacted) =>
               compacted
                 ? undefined
                 : compactAgent.enqueueSessionMemoryUpdate(compactInput)
             )
             .catch((err) =>
-              log.error(
-                "[ai-chat-compact] post-turn compaction failed:",
-                err
-              )
+              log.error("[ai-chat-compact] post-turn compaction failed:", err)
             );
         }
         if (this.autoDreamService) {

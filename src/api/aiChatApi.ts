@@ -126,6 +126,13 @@ export interface ToolExecutionResult {
    * renderer.
    */
   readonly modelArtifacts?: readonly ModelArtifact[];
+  /**
+   * Transient prompt-skill instruction block (natural-language-skill-
+   * installation design §10.5). Same non-persistence contract as
+   * modelArtifacts: the query loop consumes it to append a model-only
+   * handoff message with the verified skill instructions.
+   */
+  readonly promptSkillContext?: import("../entityTypes/promptSkillTypes").PromptSkillContextAttachment;
 }
 
 /**

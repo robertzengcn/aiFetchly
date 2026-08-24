@@ -57,6 +57,11 @@ import {
   buildLocalSkillDraft,
   type LocalSkillDraft,
 } from "@/service/aifetchlyConfig/buildLocalSkillDraft";
+import {
+  canonicalizeSkillRoot,
+  loadSkillMarkdownFile,
+  SKILL_MD_FILE,
+} from "@/service/PromptSkillLoader";
 import { lazySchema } from "@/utils/lazySchema";
 import {
   AIFETCHLY_CONFIG_DIR_NAME,
@@ -80,6 +85,22 @@ const HOOKS_JSON = "hooks.json";
 // Phase 18 (SKL-01): skills are DIRECTORIES under skills/<name>/manifest.json.
 const SKILLS_DIR = "skills";
 const SKILL_MANIFEST = "manifest.json";
+
+/**
+ * A portable prompt skill discovered under skills/ (SKILL.md, no manifest).
+ * Consumed by the prompt-skill catalog registration path — NOT the
+ * executable SkillRegistry (design §10.1: separate catalog).
+ */
+export interface LocalPromptSkillDraft {
+  /** Stable id `<sourceId>:prompt-skill:<name>` — used by snapshot diffs. */
+  readonly id: string;
+  readonly name: string;
+  readonly manifest: import("@/entityTypes/promptSkillTypes").PromptSkillManifest;
+  /** Canonical (realpath) skill directory — symlinks/junctions resolved. */
+  readonly canonicalRoot: string;
+  readonly skillMarkdownPath: string;
+  readonly contentHash: string;
+}
 
 const settingsSchema = lazySchema(() =>
   z
@@ -167,6 +188,7 @@ export class AIFetchlyConfigLoader {
           agents,
           hooks,
           skills,
+          [],
           diagnostics
         );
       }
@@ -181,6 +203,7 @@ export class AIFetchlyConfigLoader {
         agents,
         hooks,
         skills,
+        [],
         diagnostics
       );
     }
@@ -272,6 +295,12 @@ export class AIFetchlyConfigLoader {
     // hooks path but for a directory of manifests instead of one JSON file.
     await this.tryReadSkillFiles(files, skills, diagnostics);
 
+    // Natural-language-skill-installation (design §10.9): scan skills/ for
+    // portable SKILL.md prompt skills — directories, symlinks, and Windows
+    // junctions — collected separately from manifest-based executable skills.
+    const promptSkills: LocalPromptSkillDraft[] = [];
+    await this.tryReadPromptSkillFiles(files, promptSkills, diagnostics);
+
     return this.buildSnapshot(
       source,
       sourceId,
@@ -281,6 +310,7 @@ export class AIFetchlyConfigLoader {
       agents,
       hooks,
       skills,
+      promptSkills,
       diagnostics
     );
   }
@@ -950,6 +980,7 @@ export class AIFetchlyConfigLoader {
     agents: readonly AgentDefinitionView[],
     hooks: readonly CommandHookDefinition[],
     skills: readonly LocalSkillDraft[],
+    promptSkills: readonly LocalPromptSkillDraft[],
     diagnostics: readonly AIFetchlyConfigDiagnostic[]
   ): AIFetchlyConfigSnapshot {
     return {
@@ -963,7 +994,119 @@ export class AIFetchlyConfigLoader {
       agents,
       hooks,
       skills,
+      promptSkills,
       diagnostics,
     };
+  }
+
+  /**
+   * Natural-language-skill-installation (design §10.9, PRD §13.1): scan
+   * `skills/<name>/` for portable prompt skills — a `SKILL.md` file and NO
+   * manifest.json. Unlike the manifest scan above this accepts symbolic
+   * links and Windows junctions (realpath-resolved), because linked installs
+   * are a supported development activation mode. Manifest-based executable
+   * skills keep precedence: a directory with manifest.json is skipped here.
+   */
+  private async tryReadPromptSkillFiles(
+    files: AIFetchlyConfigFileSnapshot[],
+    promptSkills: LocalPromptSkillDraft[],
+    diagnostics: AIFetchlyConfigDiagnostic[]
+  ): Promise<void> {
+    const source = "user" as const;
+    const sourceId = "user";
+    const skillsDir = path.join(this.rootPath, SKILLS_DIR);
+
+    let entries: readonly fs.Dirent[];
+    try {
+      entries = await fs.promises.readdir(skillsDir, { withFileTypes: true });
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") return;
+      diagnostics.push(this.ioError(`${SKILLS_DIR}/`, err));
+      return;
+    }
+
+    for (const entry of entries) {
+      // Directories, symlinks, and Windows junctions are all candidates.
+      // A symlink to a directory reports isSymbolicLink(); a junction on
+      // Windows may report either way depending on Node version, so accept
+      // both and let realpath + stat decide.
+      if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
+
+      if (promptSkills.length >= AIFETCHLY_CONFIG_LIMITS.maxSkillsPerSource) {
+        diagnostics.push({
+          severity: "warning",
+          source,
+          sourceId,
+          filePath: `${SKILLS_DIR}/${entry.name}`,
+          code: "count-cap",
+          message: `prompt skill count reached the ${AIFETCHLY_CONFIG_LIMITS.maxSkillsPerSource}-per-source cap; skipping remaining entries`,
+          recoverable: true,
+        });
+        break;
+      }
+
+      const relativePath = `${SKILLS_DIR}/${entry.name}/${SKILL_MD_FILE}`;
+      const candidateDir = path.join(skillsDir, entry.name);
+
+      // Manifest-based executable skills keep their own path (§13.4).
+      try {
+        await fs.promises.access(
+          path.join(candidateDir, SKILL_MANIFEST),
+          fs.constants.F_OK
+        );
+        continue;
+      } catch {
+        /* no manifest — continue as a prompt-skill candidate */
+      }
+
+      // Resolve links/junctions to their canonical directory target.
+      const canonicalRoot = canonicalizeSkillRoot(candidateDir);
+      if (!canonicalRoot) {
+        diagnostics.push({
+          severity: "warning",
+          source,
+          sourceId,
+          filePath: `${SKILLS_DIR}/${entry.name}`,
+          code: "link-target-missing",
+          message: `skills/${entry.name} does not resolve to a directory (broken or escaping link); skipped`,
+          recoverable: true,
+        });
+        continue;
+      }
+
+      const loaded = loadSkillMarkdownFile(canonicalRoot);
+      if (!loaded.ok) {
+        diagnostics.push({
+          severity: "warning",
+          source,
+          sourceId,
+          filePath: relativePath,
+          code: "skill-md-invalid",
+          message: `skills/${entry.name}: ${loaded.message}`,
+          recoverable: true,
+        });
+        continue;
+      }
+
+      const stat = await fs.promises.stat(
+        path.join(canonicalRoot, SKILL_MD_FILE)
+      );
+      files.push({
+        relativePath,
+        kind: "skill",
+        mtimeMs: stat.mtimeMs,
+        sizeBytes: loaded.file.sizeBytes,
+        contentHash: loaded.file.contentHash,
+      });
+
+      promptSkills.push({
+        id: `${sourceId}:prompt-skill:${loaded.file.manifest.name}`,
+        name: loaded.file.manifest.name,
+        manifest: loaded.file.manifest,
+        canonicalRoot,
+        skillMarkdownPath: path.join(canonicalRoot, SKILL_MD_FILE),
+        contentHash: loaded.file.contentHash,
+      });
+    }
   }
 }

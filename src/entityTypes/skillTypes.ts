@@ -31,6 +31,14 @@ export interface SkillExecutionResult {
    * renderer, or passed to hooks.
    */
   readonly modelArtifacts?: readonly ModelArtifact[];
+  /**
+   * Transient prompt-skill instruction block (natural-language-skill-
+   * installation design §10.5). A SIBLING of `result` with the same
+   * non-persistence contract as modelArtifacts: the query loop reads it to
+   * append a model-only handoff message; serializers that spread only
+   * `result` never see it.
+   */
+  readonly promptSkillContext?: import("./promptSkillTypes").PromptSkillContextAttachment;
 }
 
 // ---------------------------------------------------------------------------

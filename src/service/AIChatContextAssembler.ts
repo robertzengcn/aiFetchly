@@ -16,6 +16,7 @@ import { WorkspaceResolver } from "@/service/WorkspaceResolver";
 import { AIFetchlyContextLoader } from "@/service/aifetchlyConfig/AIFetchlyContextLoader";
 import { buildAvailableAgentsBlock } from "@/service/aifetchlyConfig/availableAgentsBlock";
 import { buildBuiltInToolCapabilitiesSection } from "@/service/BuiltInToolCapabilitiesPromptSection";
+import { PromptSkillInvocationModule } from "@/modules/PromptSkillInvocationModule";
 import { augmentContentWithGeneratedImages } from "@/service/AIChatGeneratedImageContextService";
 import path from "node:path";
 import os from "node:os";
@@ -162,10 +163,7 @@ export class AIChatContextAssembler {
         });
       }
     } catch (err) {
-      log.error(
-        "[ai-chat-context] failed to resolve active workspace:",
-        err
-      );
+      log.error("[ai-chat-context] failed to resolve active workspace:", err);
     }
 
     // Environment & system context. Informs the model of the OS, app
@@ -175,10 +173,7 @@ export class AIChatContextAssembler {
       const envBlock = await this.buildEnvironmentContext();
       messages.push({ role: "system", content: envBlock });
     } catch (err) {
-      log.error(
-        "[ai-chat-context] failed to build environment context:",
-        err
-      );
+      log.error("[ai-chat-context] failed to build environment context:", err);
     }
 
     // AiFetchly global AGENTS.md injection. Reads from the in-memory cache
@@ -211,10 +206,7 @@ export class AIChatContextAssembler {
         messages.push({ role: "system", content: agentsBlock });
       }
     } catch (err) {
-      log.error(
-        "[ai-chat-context] available agents injection failed:",
-        err
-      );
+      log.error("[ai-chat-context] available agents injection failed:", err);
     }
 
     // Built-in tool capabilities guidance (HTML-artifacts design §15,
@@ -275,10 +267,7 @@ export class AIChatContextAssembler {
         workspaceContextBlock = workspaceMem.contextBlock;
         workspaceMemoryCount = workspaceMem.memories.length;
       } catch (err) {
-        log.error(
-          "[ai-chat-context] workspace memory retrieval failed:",
-          err
-        );
+        log.error("[ai-chat-context] workspace memory retrieval failed:", err);
       }
     }
     if (workspaceContextBlock.length > 0) {
@@ -310,10 +299,7 @@ export class AIChatContextAssembler {
         durableContextBlock = durable.contextBlock;
         durableMemoryCount = durable.memories.length;
       } catch (err) {
-        log.error(
-          "[ai-chat-context] durable memory retrieval failed:",
-          err
-        );
+        log.error("[ai-chat-context] durable memory retrieval failed:", err);
       }
     }
     if (durableContextBlock.length > 0) {
@@ -330,6 +316,32 @@ export class AIChatContextAssembler {
         role: "system",
         content: COMPACT_PREAMBLE + sessionMemory.summary,
       });
+    }
+
+    // Invoked prompt-skill reattachment (design §10.10/§17.2): full
+    // compaction must not summarize away active skill contracts. Reattach
+    // the STORED verified snapshots in deterministic invocation order AFTER
+    // the compact summary and BEFORE recent messages, so recent explicit
+    // user instructions can still refine the task. Recovery never mutates
+    // the stored block — a linked source that changed or vanished cannot
+    // rewrite past context.
+    try {
+      const invocationModule = new PromptSkillInvocationModule();
+      const active = await invocationModule.listActive(input.conversationId);
+      for (const invocation of active) {
+        messages.push({
+          role: "user",
+          content:
+            `[application:invoked-prompt-skill-reattached]\n` +
+            `The following skill was invoked earlier in this conversation and ` +
+            `remains applicable:\n${invocation.normalizedInstructions}`,
+        });
+      }
+    } catch (err) {
+      log.error(
+        "[ai-chat-context] invoked prompt-skill reattachment failed:",
+        err
+      );
     }
 
     for (const r of trimmedRecent) {

@@ -99,6 +99,12 @@ export interface AIFetchlyConfigSnapshot {
   readonly agents: readonly unknown[];
   readonly hooks: readonly unknown[];
   readonly skills: readonly unknown[];
+  /**
+   * Portable prompt skills discovered under skills/ as SKILL.md directories
+   * (including symlinks/junctions) — natural-language-skill-installation
+   * design §10.9. Manifest-based executable skills stay in `skills`.
+   */
+  readonly promptSkills?: readonly unknown[];
   readonly diagnostics: readonly AIFetchlyConfigDiagnostic[];
 }
 

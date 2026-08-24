@@ -40,6 +40,9 @@ import { buildWorkspaceSkillDefinitions } from "@/service/workspaceWatch/buildWo
 import type { LocalSkillDraft } from "@/service/aifetchlyConfig/buildLocalSkillDraft";
 import type { WorkspaceSkillDraft } from "@/entityTypes/aifetchlyConfigTypes";
 import { LocalSkillSourceAdapter } from "@/service/LocalSkillSourceAdapter";
+import { getDefaultPromptSkillCatalog } from "@/service/PromptSkillCatalog";
+import type { LocalPromptSkillDraft } from "@/service/aifetchlyConfig/AIFetchlyConfigLoader";
+import type { PromptSkillDefinition } from "@/entityTypes/promptSkillTypes";
 import type { AIFetchlyContextStore } from "./AIFetchlyContextStore";
 
 /** Outcome of applying a snapshot — surfaced to callers and getStatus(). */
@@ -179,6 +182,14 @@ export class AIFetchlyRuntimeRegistrySync {
       skills
     );
 
+    // Natural-language-skill-installation (design §10.1): portable prompt
+    // skills from SKILL.md directories go to the SEPARATE PromptSkillCatalog
+    // — never the executable SkillRegistry.
+    const promptSkillDiagnostics = applyPromptSkillsFromSnapshot(
+      snapshot.sourceId,
+      snapshot.promptSkills
+    );
+
     this.contextStore.replaceInstructions(
       snapshot.sourceId,
       snapshot.instructions
@@ -190,7 +201,9 @@ export class AIFetchlyRuntimeRegistrySync {
       instructionsChanged: snapshot.instructions.length > 0,
       skillsChanged: skills.length > 0,
       diagnosticCount:
-        countDiagnostics(snapshot.diagnostics) + skillDiagnostics.length,
+        countDiagnostics(snapshot.diagnostics) +
+        skillDiagnostics.length +
+        promptSkillDiagnostics.length,
     };
   }
 
@@ -255,8 +268,68 @@ export class AIFetchlyRuntimeRegistrySync {
     // Phase 18 (SKL-01): clear the source's skills via the adapter (reconcile
     // to an empty set — unregister every tracked name for this sourceId).
     this.skillAdapter.replaceSource(sourceId, []);
+    // Prompt-skill catalog uses the same native replaceSource semantics.
+    getDefaultPromptSkillCatalog().replaceSource(sourceId, []);
     this.contextStore.removeSource(sourceId);
   }
+}
+
+/**
+ * Register a snapshot's portable prompt skills in the PromptSkillCatalog.
+ * Loader-discovered skills have no installer record yet, so a stable
+ * installation id is derived from source + name (deterministic across
+ * rescans). Returns catalog diagnostics for the apply result count.
+ */
+function applyPromptSkillsFromSnapshot(
+  sourceId: string,
+  drafts: readonly unknown[] | undefined
+): readonly AIFetchlyConfigDiagnostic[] {
+  const catalog = getDefaultPromptSkillCatalog();
+  const typed = (drafts ?? []) as readonly LocalPromptSkillDraft[];
+  const definitions: PromptSkillDefinition[] = typed.map((draft) => {
+    const installationId = stablePromptInstallationId(sourceId, draft.name);
+    const isWorkspace = sourceId.startsWith("workspace:");
+    const workspaceId = isWorkspace
+      ? Number(sourceId.replace(/^workspace:/, "")) || 0
+      : undefined;
+    const scope = isWorkspace ? "workspace" : "user";
+    const runtimeId = isWorkspace
+      ? `prompt:workspace:${workspaceId}:${installationId}`
+      : `prompt:user:${installationId}`;
+    return {
+      runtimeId,
+      installationId,
+      sourceId,
+      scope,
+      name: draft.name,
+      description: draft.manifest.description,
+      canonicalRoot: draft.canonicalRoot,
+      skillMarkdownPath: draft.skillMarkdownPath,
+      contentHash: draft.contentHash,
+      manifest: draft.manifest,
+      enabled: true,
+    };
+  });
+  const { diagnostics } = catalog.replaceSource(sourceId, definitions);
+  return diagnostics.map((d) => ({
+    severity: "warning" as const,
+    source: "user" as const,
+    sourceId,
+    filePath: "",
+    code: d.code,
+    message: d.message,
+    recoverable: true,
+  }));
+}
+
+import * as crypto from "crypto";
+
+function stablePromptInstallationId(sourceId: string, name: string): string {
+  return crypto
+    .createHash("sha256")
+    .update(`${sourceId}:${name}`)
+    .digest("hex")
+    .slice(0, 12);
 }
 
 function countDiagnostics(

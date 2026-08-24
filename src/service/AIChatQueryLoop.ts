@@ -62,6 +62,7 @@ import {
   stripConsumedImageHandoffs,
   stripConsumedUserImages,
 } from "@/service/AIChatImageHandoff";
+import { buildPromptSkillHandoffMessage } from "@/service/PromptSkillHandoff";
 import { getDefaultToolJobRegistry } from "@/service/ToolJobRegistry";
 import { extractToolResultImages } from "@/service/toolResultImageHarvest";
 import { USER_AI_ENABLED } from "@/config/usersetting";
@@ -1875,6 +1876,15 @@ export class AIChatQueryLoop {
             tool_call_id: call.id,
             content: toolContent,
           });
+          // Prompt-skill hidden context (design §10.5): after the SHORT tool
+          // acknowledgement, append the verified instruction block as a
+          // model-only message. Not persisted, not a user bubble, and marked
+          // as untrusted repository guidance inside the block itself.
+          if (toolResult.success && toolResult.promptSkillContext) {
+            messages.push(
+              buildPromptSkillHandoffMessage(toolResult.promptSkillContext)
+            );
+          }
           // Transient image handoff: if the tool returned prepared images
           // (attach_local_images), append a model-only role:user multimodal
           // message carrying them as image_url parts. This is NOT persisted as
