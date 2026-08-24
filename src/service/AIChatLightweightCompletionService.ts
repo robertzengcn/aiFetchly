@@ -303,9 +303,14 @@ export class AIChatLightweightCompletionService {
       };
     }
 
-    // Kill switch off, or local/custom provider: provider-normal path, no
+    // Kill switch off, local/custom provider, OR caller-forced normal route
+    // (full compact's one-time fallback restart): provider-normal path, no
     // small-specific retry/cooldown/fallback. This is NOT a fallback.
-    if (!this.enabled || resolution.kind !== "hosted") {
+    if (
+      !this.enabled ||
+      resolution.kind !== "hosted" ||
+      input.forceNormalRoute === true
+    ) {
       const result = await this.runNormalRoute(input, profile, resolution);
       if ("failure" in result) {
         return {
@@ -445,9 +450,14 @@ export class AIChatLightweightCompletionService {
       };
     }
 
-    // Normal-model fallback: compact only, and only for allowed reasons.
+    // Normal-model fallback: compact only, only for allowed reasons, and only
+    // when the caller has not suppressed it for this sub-request. A caller
+    // that issues multiple completions per logical unit (full compact's
+    // map+merge) suppresses per-chunk fallback and owns the single allowed
+    // fallback at its orchestration boundary (SMBW-004, tech-design §16.3).
     if (
       profile.fallback === "normal_once" &&
+      input.allowNormalFallback !== false &&
       allowsNormalFallback(classified.reason)
     ) {
       return this.attemptNormalFallback(

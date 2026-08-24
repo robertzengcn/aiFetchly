@@ -18,6 +18,8 @@ import type {
   AIChatLightweightCompletionInput,
   AIChatLightweightCompletionResult,
 } from "@/service/AIChatLightweightTypes";
+import { AIChatLightweightFailure } from "@/service/AIChatLightweightTypes";
+import { allowsNormalFallback } from "@/service/AIChatLightweightFailureClassifier";
 import { getLightweightProfile } from "@/service/AIChatLightweightProfiles";
 import {
   computeLightweightBudget,
@@ -526,35 +528,126 @@ export class AIChatCompactAgentService {
 
     const budget = await this.computeCompactBudget(input.model);
 
-    // Map/reduce hierarchical summarization.
+    // Map/reduce hierarchical summarization. The pipeline runs with the
+    // router-level fallback SUPPRESSED on every sub-request — the compact
+    // orchestration owns the single allowed normal-model fallback at this
+    // boundary so a multi-chunk compact never makes more than one
+    // normal-model request (SMBW-004, tech-design §16.3). On a definitive
+    // small-route failure that warrants a fallback, the pipeline throws an
+    // AIChatLightweightFailure and the wrapper below restarts the whole
+    // compact once on the normal route (forceNormalRoute), discarding all
+    // transient small intermediates. The restart never touches the small
+    // route again, so the whole logical compact performs at most one
+    // normal-model sequence.
+    try {
+      const pipeline = await this.runCompactPipeline(
+        chunkSourceMessages,
+        priorSummary,
+        budget,
+        input.model,
+        /* forceNormalRoute */ false
+      );
+      return await this.activateCompact(
+        input.conversationId,
+        pipeline.summary,
+        pipeline.resolvedModel,
+        deltaRows,
+        reusedBoundary,
+        active,
+        inputTokenEstimate,
+        startedAt,
+        pipeline.chunkCount
+      );
+    } catch (error) {
+      if (this.isFallbackEligibleFailure(error)) {
+        log.info(
+          `[ai-chat-compact] small-route failed (${this.failureReason(
+            error
+          )}); restarting compact once on the normal route conv=${
+            input.conversationId
+          }`
+        );
+        const pipeline = await this.runCompactPipeline(
+          chunkSourceMessages,
+          priorSummary,
+          budget,
+          input.model,
+          /* forceNormalRoute */ true
+        );
+        return await this.activateCompact(
+          input.conversationId,
+          pipeline.summary,
+          pipeline.resolvedModel,
+          deltaRows,
+          reusedBoundary,
+          active,
+          inputTokenEstimate,
+          startedAt,
+          pipeline.chunkCount
+        );
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Run the map+reduce pipeline. On the small route (`forceNormalRoute=false`)
+   * every sub-request suppresses the router-level fallback so the
+   * orchestration owns the single allowed fallback. On the restart
+   * (`forceNormalRoute=true`) every sub-request is sent through the
+   * provider-normal path with no small attempt and no fallback — the whole
+   * logical compact performs at most one normal-model sequence (SMBW-004).
+   */
+  private async runCompactPipeline(
+    chunkSourceMessages: readonly OpenAIChatMessage[],
+    priorSummary: string | null,
+    budget: ReturnType<typeof computeLightweightBudget>,
+    model: string | undefined,
+    forceNormalRoute: boolean
+  ): Promise<{ summary: string; resolvedModel: string; chunkCount: number }> {
     const groups = groupMessagesAtomically(chunkSourceMessages);
     const chunks = chunkGroupsByBudget(groups, budget.usablePayloadTokens);
     const { chunkSummaries, singleChunkResponseModel } =
-      await this.summarizeChunks(chunks, input.model);
+      await this.summarizeChunks(chunks, model, forceNormalRoute);
 
-    // Reduce: merge chunk summaries into one final summary. If there is only
-    // one chunk, its summary IS the final summary (no extra request). The
-    // merge phase folds the prior summary in alongside the chunk summaries so
-    // the final compact carries covered history forward.
     const { summary, resolvedModel } =
       chunkSummaries.length === 1
         ? {
             summary: chunkSummaries[0]!,
             // Single-chunk: the chunk's own completion produced the summary, so
             // attribute the resolved model from that response (not the input model).
-            resolvedModel: singleChunkResponseModel ?? input.model ?? "compact",
+            resolvedModel: singleChunkResponseModel ?? model ?? "compact",
           }
         : await this.mergeChunkSummaries(
             chunkSummaries,
             priorSummary,
-            input.model
+            model,
+            forceNormalRoute
           );
+    return {
+      summary,
+      resolvedModel,
+      chunkCount: chunkSummaries.length,
+    };
+  }
 
-    // Boundaries represent the actual input the replacement compact covers.
-    // When reusing, preserve the original start id and accumulate the source
-    // count so the watermark never advances past unprocessed material. When
-    // not reusing (no active compact or fail-safe), the boundary is the
-    // actual processed range (SMBW-002).
+  /**
+   * Persist the final summary as the active compact. Boundaries represent the
+   * actual input the replacement compact covers: when reusing, preserve the
+   * original start id and accumulate the source count so the watermark never
+   * advances past unprocessed material (SMBW-002).
+   */
+  private async activateCompact(
+    conversationId: string,
+    summary: string,
+    resolvedModel: string,
+    deltaRows: readonly AIChatMessageEntity[],
+    reusedBoundary: boolean,
+    active: AIChatCompactSummaryView | null,
+    inputTokenEstimate: number,
+    startedAt: number,
+    chunkCount: number
+  ): Promise<AIChatCompactSummaryView> {
     const last = deltaRows[deltaRows.length - 1]!;
     const fromMessageId =
       reusedBoundary && active?.fromMessageId
@@ -568,7 +661,7 @@ export class AIChatCompactAgentService {
       compactId: `compact-${Date.now()}-${Math.random()
         .toString(36)
         .slice(2, 8)}`,
-      conversationId: input.conversationId,
+      conversationId,
       summary,
       fromMessageId,
       throughMessageId: last.messageId,
@@ -580,11 +673,31 @@ export class AIChatCompactAgentService {
       status: "active",
     });
     log.info(
-      `[ai-chat-compact] full compact completed conv=${
-        input.conversationId
-      } chunks=${chunkSummaries.length} elapsed=${Date.now() - startedAt}ms`
+      `[ai-chat-compact] full compact completed conv=${conversationId} chunks=${chunkCount} elapsed=${
+        Date.now() - startedAt
+      }ms`
     );
     return view;
+  }
+
+  /**
+   * True when a thrown failure from the small route is a definitive reason
+   * that permits the one allowed normal-model fallback for the logical
+   * compact (SMBW-004, tech-design §16.3). Ambiguous / auth / quota /
+   * invalid-request failures are NOT eligible and propagate unchanged.
+   */
+  private isFallbackEligibleFailure(error: unknown): boolean {
+    if (error instanceof AIChatLightweightFailure) {
+      return allowsNormalFallback(error.reason);
+    }
+    return false;
+  }
+
+  private failureReason(error: unknown): string {
+    if (error instanceof AIChatLightweightFailure) {
+      return error.reason;
+    }
+    return error instanceof Error ? error.message : String(error);
   }
 
   /**
@@ -678,7 +791,8 @@ export class AIChatCompactAgentService {
         readonly messages: readonly OpenAIChatMessage[];
       }>;
     }>,
-    model: string | undefined
+    model: string | undefined,
+    forceNormalRoute: boolean
   ): Promise<{
     chunkSummaries: string[];
     singleChunkResponseModel: string | undefined;
@@ -700,6 +814,11 @@ export class AIChatCompactAgentService {
         ],
         normalModel: model,
         manual: true,
+        // Small route: suppress per-chunk router fallback (the orchestration
+        // owns the one fallback). Normal restart: skip the small attempt.
+        ...(forceNormalRoute
+          ? { forceNormalRoute: true }
+          : { allowNormalFallback: false }),
       });
       const raw = openAIContentToString(
         result.response.choices?.[0]?.message?.content
@@ -731,7 +850,8 @@ export class AIChatCompactAgentService {
   private async mergeChunkSummaries(
     chunkSummaries: readonly string[],
     priorSummary: string | null,
-    model: string | undefined
+    model: string | undefined,
+    forceNormalRoute: boolean
   ): Promise<{ summary: string; resolvedModel: string }> {
     const budget = await this.computeCompactBudget(model);
     const fixedPromptTokens = this.estimator.estimateText(
@@ -753,7 +873,12 @@ export class AIChatCompactAgentService {
     for (const s of chunkSummaries) {
       inputs.push(s);
     }
-    return this.recursiveMerge(inputs, mergeUsablePayload, model);
+    return this.recursiveMerge(
+      inputs,
+      mergeUsablePayload,
+      model,
+      forceNormalRoute
+    );
   }
 
   /**
@@ -774,7 +899,8 @@ export class AIChatCompactAgentService {
   private async recursiveMerge(
     summaries: readonly string[],
     usablePayloadTokens: number,
-    model: string | undefined
+    model: string | undefined,
+    forceNormalRoute: boolean
   ): Promise<{ summary: string; resolvedModel: string }> {
     // Single summary left — it is the final result (clamped if oversized).
     if (summaries.length === 1) {
@@ -793,7 +919,8 @@ export class AIChatCompactAgentService {
       // All summaries fit a single merge request.
       const merged = await this.requestMerge(
         batches[0]?.summaries ?? summaries,
-        model
+        model,
+        forceNormalRoute
       );
       return {
         summary: merged.summary,
@@ -801,20 +928,34 @@ export class AIChatCompactAgentService {
       };
     }
     if (!batchingMakesProgress) {
-      return this.pairwiseReduce(summaries, usablePayloadTokens, model);
+      return this.pairwiseReduce(
+        summaries,
+        usablePayloadTokens,
+        model,
+        forceNormalRoute
+      );
     }
     // Multiple batches that reduce the count: merge each into an intermediate,
     // then recurse.
     const intermediates: string[] = [];
     let resolvedModel: string | undefined;
     for (const batch of batches) {
-      const merged = await this.requestMerge(batch.summaries, model);
+      const merged = await this.requestMerge(
+        batch.summaries,
+        model,
+        forceNormalRoute
+      );
       intermediates.push(merged.summary);
       if (!resolvedModel) {
         resolvedModel = merged.resolvedModel;
       }
     }
-    return this.recursiveMerge(intermediates, usablePayloadTokens, model);
+    return this.recursiveMerge(
+      intermediates,
+      usablePayloadTokens,
+      model,
+      forceNormalRoute
+    );
   }
 
   /**
@@ -827,7 +968,8 @@ export class AIChatCompactAgentService {
   private async pairwiseReduce(
     summaries: readonly string[],
     usablePayloadTokens: number,
-    model: string | undefined
+    model: string | undefined,
+    forceNormalRoute: boolean
   ): Promise<{ summary: string; resolvedModel: string }> {
     const intermediates: string[] = [];
     let resolvedModel: string | undefined;
@@ -839,7 +981,7 @@ export class AIChatCompactAgentService {
         intermediates.push(this.clampForMerge(a, usablePayloadTokens));
         continue;
       }
-      const merged = await this.requestMerge([a, b], model);
+      const merged = await this.requestMerge([a, b], model, forceNormalRoute);
       intermediates.push(merged.summary);
       if (!resolvedModel) {
         resolvedModel = merged.resolvedModel;
@@ -851,13 +993,19 @@ export class AIChatCompactAgentService {
         resolvedModel: resolvedModel ?? model ?? "compact",
       };
     }
-    return this.recursiveMerge(intermediates, usablePayloadTokens, model);
+    return this.recursiveMerge(
+      intermediates,
+      usablePayloadTokens,
+      model,
+      forceNormalRoute
+    );
   }
 
   /** One merge completion request over a bounded list of summaries. */
   private async requestMerge(
     summaries: readonly string[],
-    model: string | undefined
+    model: string | undefined,
+    forceNormalRoute: boolean
   ): Promise<{ summary: string; resolvedModel: string }> {
     const inputs: { role: "assistant"; content: string }[] = summaries.map(
       (s) => ({ role: "assistant" as const, content: s })
@@ -874,6 +1022,9 @@ export class AIChatCompactAgentService {
       messages: mergeMessages,
       normalModel: model,
       manual: true,
+      ...(forceNormalRoute
+        ? { forceNormalRoute: true }
+        : { allowNormalFallback: false }),
     });
     const mergeRaw = openAIContentToString(
       mergeResult.response.choices?.[0]?.message?.content

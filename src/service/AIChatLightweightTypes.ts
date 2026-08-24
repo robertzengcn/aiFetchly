@@ -135,6 +135,26 @@ export interface AIChatLightweightCompletionInput {
   readonly manual: boolean;
   /** Caller cancellation signal, propagated to fetch. */
   readonly signal?: AbortSignal;
+  /**
+   * Whether the router may exercise the profile's `normal_once` fallback for
+   * this single completion. Defaults to true (the router enforces at most one
+   * fallback per `complete()` call). A caller that issues MULTIPLE
+   * completions for one logical unit of work (e.g. full compact's map+merge)
+   * sets this `false` on the sub-requests and instead owns the single allowed
+   * fallback at its own orchestration boundary, so the whole logical unit
+   * performs at most one normal-model request (SMBW-004, tech-design §16.3).
+   */
+  readonly allowNormalFallback?: boolean;
+  /**
+   * Force the provider-normal route and skip the small attempt entirely.
+   * Used by full compact's one-time normal fallback restart: after a
+   * definitive small-route failure the whole compact is re-run with this
+   * flag so no further small request is made and no per-chunk fallback can
+   * fire — the logical compact performs at most one normal-model sequence
+   * (SMBW-004, tech-design §16.3). When true, `allowNormalFallback` is
+   * irrelevant because no small attempt occurs.
+   */
+  readonly forceNormalRoute?: boolean;
 }
 
 /** Result of a lightweight completion operation. */

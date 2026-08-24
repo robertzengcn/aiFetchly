@@ -3,6 +3,7 @@ import { AIChatCompactAgentService } from "@/service/AIChatCompactAgentService";
 import type { AIChatCompactAgentDeps } from "@/service/AIChatCompactAgentService";
 import type { OpenAIChatCompletionResponse } from "@/api/aiChatApi";
 import type { AIChatLightweightCompletionResult } from "@/service/AIChatLightweightTypes";
+import { AIChatLightweightFailure } from "@/service/AIChatLightweightTypes";
 import type { AIChatCompactSummaryView } from "@/entityTypes/aiChatCompactTypes";
 
 // --- Mocks --------------------------------------------------------------
@@ -968,6 +969,142 @@ describe("AIChatCompactAgentService", () => {
       const a = await run();
       const b = await run();
       expect(a).toBe(b);
+    });
+  });
+
+  describe("one fallback per logical compact (SMBW-004)", () => {
+    /** Rows that force multiple chunks in a small window. */
+    function bigRows(convId: string, n: number) {
+      return Array.from({ length: n }, (_, i) => ({
+        messageId: `m${i}`,
+        conversationId: convId,
+        role: i % 2 === 0 ? "user" : "assistant",
+        content: "x".repeat(2000),
+        timestamp: new Date(i + 1),
+        messageType: "message",
+      }));
+    }
+
+    beforeEach(() => {
+      mockGetActiveSummary.mockResolvedValue(null);
+      mockSaveFullCompact.mockClear();
+      mockSaveFullCompact.mockImplementation(
+        async (input: { conversationId: string }) => ({
+          ...compactView(input.conversationId),
+          conversationId: input.conversationId,
+        })
+      );
+    });
+
+    it("sub-requests suppress router-level fallback (allowNormalFallback:false on small route)", async () => {
+      mockGetConversationMessages.mockResolvedValue(bigRows("v2-fb", 30));
+      const completeChat = vi
+        .fn()
+        .mockResolvedValue(makeCompletion("# Compact\n## Summary\npart"));
+      const agent = makeAgent({
+        completeChat,
+        getContextWindow: vi.fn().mockResolvedValue(2000),
+      });
+
+      await agent.runFullCompact({ conversationId: "v2-fb" });
+
+      // Every lightweight sub-request on the small route must suppress the
+      // router-level fallback so the orchestration owns the single fallback.
+      for (const call of completeChat.mock.calls) {
+        const lwInput = call[0] as { allowNormalFallback?: boolean };
+        expect(lwInput.allowNormalFallback).toBe(false);
+      }
+    });
+
+    it("a definitive small failure restarts the whole compact once on the normal route", async () => {
+      mockGetConversationMessages.mockResolvedValue(bigRows("v2-restart", 30));
+      // First (small) route: 404 -> definitive small_model_unavailable.
+      // Then the restart forces normal route; those calls succeed.
+      const ok = makeCompletion("# Compact\n## Summary\nrebuilt");
+      let firstCall = true;
+      const completeChat = vi.fn(async (input: unknown) => {
+        if (firstCall) {
+          firstCall = false;
+          throw new AIChatLightweightFailure({
+            reason: "small_model_unavailable",
+            message: "small unavailable",
+            definitive: true,
+          });
+        }
+        return ok;
+      });
+      // Provide a small-model capability so the small route is eligible.
+      const agent = makeAgent({
+        completeChat,
+        getContextWindow: vi.fn().mockResolvedValue(2000),
+        getSmallModelCapability: vi
+          .fn()
+          .mockResolvedValue({ available: true, context_size: 200_000 }),
+      });
+
+      const view = await agent.runFullCompact({ conversationId: "v2-restart" });
+
+      // A final compact activated despite the small failure.
+      expect(view.conversationId).toBe("v2-restart");
+      expect(mockSaveFullCompact).toHaveBeenCalledTimes(1);
+      // The restart sub-requests force the normal route (no small attempt).
+      const restartCalls = completeChat.mock.calls
+        .slice(1)
+        .map((c) => c[0] as { forceNormalRoute?: boolean });
+      expect(restartCalls.length).toBeGreaterThan(0);
+      for (const lwInput of restartCalls) {
+        expect(lwInput.forceNormalRoute).toBe(true);
+      }
+    });
+
+    it("an ambiguous small failure does NOT trigger a fallback restart", async () => {
+      mockGetConversationMessages.mockResolvedValue(bigRows("v2-amb", 30));
+      const completeChat = vi.fn(async (input: unknown) => {
+        throw new AIChatLightweightFailure({
+          reason: "timeout_ambiguous",
+          message: "aborted",
+          definitive: false,
+        });
+      });
+      const agent = makeAgent({
+        completeChat,
+        getContextWindow: vi.fn().mockResolvedValue(2000),
+        getSmallModelCapability: vi
+          .fn()
+          .mockResolvedValue({ available: true, context_size: 200_000 }),
+      });
+
+      await expect(
+        agent.runFullCompact({ conversationId: "v2-amb" })
+      ).rejects.toThrow();
+      // No compact activated.
+      expect(mockSaveFullCompact).not.toHaveBeenCalled();
+      // Only the first (failed) small request — no restart, no second request.
+      expect(completeChat).toHaveBeenCalledTimes(1);
+    });
+
+    it("authentication failure does NOT trigger a fallback restart", async () => {
+      mockGetConversationMessages.mockResolvedValue(bigRows("v2-auth", 30));
+      const completeChat = vi.fn(async (input: unknown) => {
+        throw new AIChatLightweightFailure({
+          reason: "authentication",
+          message: "unauth",
+          definitive: true,
+        });
+      });
+      const agent = makeAgent({
+        completeChat,
+        getContextWindow: vi.fn().mockResolvedValue(2000),
+        getSmallModelCapability: vi
+          .fn()
+          .mockResolvedValue({ available: true, context_size: 200_000 }),
+      });
+
+      await expect(
+        agent.runFullCompact({ conversationId: "v2-auth" })
+      ).rejects.toThrow();
+      expect(mockSaveFullCompact).not.toHaveBeenCalled();
+      expect(completeChat).toHaveBeenCalledTimes(1);
     });
   });
 
