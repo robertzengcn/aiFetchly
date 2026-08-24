@@ -120,9 +120,10 @@ async function openChat(app: LaunchedApp): Promise<void> {
  * the REAL history IPC (same bridge usage as persistence.test.ts).
  */
 async function readLatestAssistantTurn(
-  app: LaunchedApp
+  app: LaunchedApp,
+  marker: string
 ): Promise<{ conversationId: string; assistantMessageId: string }> {
-  const result = await app.mainWindow.evaluate(async () => {
+  const result = await app.mainWindow.evaluate(async (titleMarker: string) => {
     const api = (
       window as unknown as {
         api: {
@@ -139,13 +140,17 @@ async function readLatestAssistantTurn(
     );
     const convs = (convResp?.data ?? []) as Array<{
       conversationId: string;
+      title: string;
     }>;
-    if (convs.length === 0) {
+    // Target the conversation created by THIS test via its unique marker
+    // title — never assume a positional index.
+    const target = convs.find((c) => c.title.includes(titleMarker));
+    if (!target) {
       return null;
     }
     const histResp = await api.invoke(
       "ai-chat-v2:history",
-      JSON.stringify({ conversationId: convs[0].conversationId })
+      JSON.stringify({ conversationId: target.conversationId })
     );
     const histData = (histResp?.data ?? {}) as {
       messages?: HistoryMessageView[];
@@ -162,10 +167,10 @@ async function readLatestAssistantTurn(
       return null;
     }
     return {
-      conversationId: convs[0].conversationId,
+      conversationId: target.conversationId,
       assistantMessageId: last.id,
     };
-  });
+  }, marker);
   if (!result) {
     throw new Error(
       "No persisted chat-v2 assistant message found after streamed turn"
@@ -186,10 +191,12 @@ async function readLatestAssistantTurn(
  */
 async function seedGeneratedImagesOnLastTurn(
   app: LaunchedApp,
-  testRoot: E2ETestRoot
+  testRoot: E2ETestRoot,
+  marker: string
 ): Promise<SeededGeneratedImageTurn> {
   const { conversationId, assistantMessageId } = await readLatestAssistantTurn(
-    app
+    app,
+    marker
   );
 
   const messageDir = path.join(
@@ -271,9 +278,12 @@ async function seedGeneratedImagesOnLastTurn(
       };
       const db = new Database(sqlPayload.dbPath, { timeout: 10_000 });
       try {
+        // Column names are camelCase per TypeORM's DefaultNamingStrategy
+        // (no namingStrategy override in SqliteDb) — see
+        // src/entity/AIChatMessage.entity.ts (messageId / conversationId).
         const runResult = db
           .prepare(
-            "UPDATE ai_chat_messages SET metadata = ? WHERE message_id = ? AND conversation_id = ?"
+            "UPDATE ai_chat_messages SET metadata = ? WHERE messageId = ? AND conversationId = ?"
           )
           .run(
             sqlPayload.metadataJson,
@@ -359,7 +369,7 @@ test.describe("Workspace-less generated-image editing (Electron integration)", (
     const marker = `e2e-genimg-order-${Date.now()}`;
     await createConversationWithStreamedTurn(aiApp, marker);
 
-    await seedGeneratedImagesOnLastTurn(aiApp, testRoot);
+    await seedGeneratedImagesOnLastTurn(aiApp, testRoot, marker);
 
     // Leave and re-enter the conversation so history reloads through the real
     // history IPC and the renderer maps metadata.generatedImages to tiles.
@@ -437,7 +447,7 @@ test.describe("Workspace-less generated-image editing (Electron integration)", (
     await fakeAi.setScenario("stream-text");
     const marker = `e2e-genimg-edit-${Date.now()}`;
     await createConversationWithStreamedTurn(aiApp, marker);
-    await seedGeneratedImagesOnLastTurn(aiApp, testRoot);
+    await seedGeneratedImagesOnLastTurn(aiApp, testRoot, marker);
 
     await startNewConversation(aiApp);
     await switchToConversationByMarker(aiApp, marker);
