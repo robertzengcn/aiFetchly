@@ -554,13 +554,11 @@ module.exports = {
               // continueOnError:true, which silently swallows osx-sign
               // failures and leaves the app unsigned.
               continueOnError: false,
-              // Our entitlements plist files already contain all required
-              // entitlements (com.apple.security.app-sandbox, network.client,
-              // files.user-selected.read-write, bookmarks.app-scope), so the
-              // preAutoEntitlements automation is not needed. Disabling it
-              // avoids a potential failure path where osx-sign cannot parse
-              // the team ID from the signing identity name.
-              preAutoEntitlements: false,
+              // Derive com.apple.application-identifier and
+              // com.apple.developer.team-identifier from the provisioning
+              // profile. App Store Connect requires these values in the
+              // signed app whenever the embedded profile contains them.
+              preAutoEntitlements: true,
               optionsForFile: (filePath) => ({
                 entitlements: isMainApplicationBundle(filePath)
                   ? macStoreEntitlementsPath
