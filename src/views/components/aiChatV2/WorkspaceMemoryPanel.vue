@@ -79,6 +79,15 @@
             {{ conflictedText }}: {{ portableStatus.conflictCount }}
           </v-chip>
           <v-spacer />
+          <v-btn
+            v-if="portableStatus.conflictCount > 0"
+            size="x-small"
+            color="deep-orange"
+            variant="tonal"
+            @click="onOpenConflictResolver"
+          >
+            {{ resolveConflictsText }}
+          </v-btn>
           <v-btn size="x-small" variant="text" @click="onRescan">{{
             rescanText
           }}</v-btn>
@@ -179,6 +188,14 @@
       @enabled="onPortableEnabled"
     />
 
+    <PortableMemoryConflictDialog
+      :open="conflictOpen"
+      :conversation-id="conversationId"
+      :memory-id="conflictMemoryId"
+      @cancel="conflictOpen = false"
+      @resolved="onConflictResolved"
+    />
+
     <WorkspaceMemoryEditorDialog
       v-model="editorOpen"
       :memory="editing"
@@ -223,6 +240,7 @@ import type { PortableWorkspaceStatusView } from "@/entityTypes/portableWorkspac
 import WorkspaceMemoryEditorDialog from "./WorkspaceMemoryEditorDialog.vue";
 import WorkspaceMemoryStatusBadge from "./WorkspaceMemoryStatusBadge.vue";
 import PortableMemoryEnableDialog from "./PortableMemoryEnableDialog.vue";
+import PortableMemoryConflictDialog from "./PortableMemoryConflictDialog.vue";
 
 const props = defineProps<{
   conversationId: string;
@@ -265,6 +283,8 @@ const autoDreamLastRun = ref<string | undefined>(undefined);
 // Portable storage status (drives the portable banner + enable dialog).
 const portableStatus = ref<PortableWorkspaceStatusView | null>(null);
 const enableOpen = ref(false);
+const conflictOpen = ref(false);
+const conflictMemoryId = ref<string | null>(null);
 let unsubscribePortable: (() => void) | null = null;
 
 const hasWorkspace = computed(
@@ -360,6 +380,21 @@ async function onRescan(): Promise<void> {
   }
 }
 
+function onOpenConflictResolver(): void {
+  // Open the resolver on the first conflicted record (the dialog fetches the
+  // full list itself and lets the user step through them).
+  conflictMemoryId.value = null;
+  conflictOpen.value = true;
+}
+
+async function onConflictResolved(): Promise<void> {
+  conflictOpen.value = false;
+  conflictMemoryId.value = null;
+  void refreshPortableStatus();
+  await refresh();
+  emit("change");
+}
+
 function onPortableEnabled(): void {
   enableOpen.value = false;
   void refreshPortableStatus();
@@ -387,6 +422,9 @@ const conflictedText = computed(
   () => tr("portableMemory.conflicted", "Conflicted")
 );
 const rescanText = computed(() => tr("portableMemory.rescan", "Rescan"));
+const resolveConflictsText = computed(() =>
+  tr("portableMemory.resolve", "Resolve")
+);
 const portableDisabledHint = computed(
   () =>
     tr("portableMemory.disabledHint", "Memories are stored privately in AiFetchly. Enable portable memory to share project context with other agents.")

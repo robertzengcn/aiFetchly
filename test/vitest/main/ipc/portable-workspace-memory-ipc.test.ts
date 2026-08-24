@@ -10,6 +10,8 @@ const spies = vi.hoisted(() => ({
   mockListDiagnostics: vi.fn(),
   mockUpdatePolicy: vi.fn(),
   mockApplyBridge: vi.fn(),
+  mockListConflicts: vi.fn(),
+  mockResolveConflict: vi.fn(),
 }));
 
 vi.mock("@/service/PortableWorkspaceMemoryService", () => ({
@@ -23,6 +25,8 @@ vi.mock("@/service/PortableWorkspaceMemoryService", () => ({
     listDiagnostics: spies.mockListDiagnostics,
     updatePolicy: spies.mockUpdatePolicy,
     applyBridge: spies.mockApplyBridge,
+    listConflicts: spies.mockListConflicts,
+    resolveConflict: spies.mockResolveConflict,
   })),
 }));
 
@@ -49,6 +53,8 @@ import {
   AI_PORTABLE_WORKSPACE_MEMORY_EXPORT,
   AI_PORTABLE_WORKSPACE_MEMORY_PROMOTE,
   AI_PORTABLE_WORKSPACE_MEMORY_BRIDGE_APPLY,
+  AI_PORTABLE_WORKSPACE_MEMORY_CONFLICTS_LIST,
+  AI_PORTABLE_WORKSPACE_MEMORY_CONFLICT_RESOLVE,
 } from "@/config/channellist";
 
 beforeEach(() => {
@@ -76,7 +82,10 @@ describe("portable workspace memory IPC", () => {
 
   it("requires a conversationId", async () => {
     const r = resp(
-      await handlers[AI_PORTABLE_WORKSPACE_MEMORY_STATUS](null, JSON.stringify({}))
+      await handlers[AI_PORTABLE_WORKSPACE_MEMORY_STATUS](
+        null,
+        JSON.stringify({})
+      )
     );
     expect(r.status).toBe(false);
     expect(r.msg).toContain("conversationId");
@@ -216,5 +225,72 @@ describe("portable workspace memory IPC", () => {
     );
     expect(r.status).toBe(false);
     expect(spies.mockApplyBridge).not.toHaveBeenCalled();
+  });
+
+  it("lists conflicts through the conflicts-list channel", async () => {
+    spies.mockListConflicts.mockResolvedValue([
+      {
+        memoryId: "wmem-x",
+        relativePath: ".aifetchly/memory/wmem-x.md",
+        message: "concurrent edit",
+        currentFileParseable: true,
+      },
+    ]);
+    const r = resp(
+      await handlers[AI_PORTABLE_WORKSPACE_MEMORY_CONFLICTS_LIST](
+        null,
+        JSON.stringify({ conversationId: "conv-1" })
+      )
+    );
+    expect(r.status).toBe(true);
+    expect(spies.mockListConflicts).toHaveBeenCalledWith("conv-1");
+  });
+
+  it("rejects unknown conflict actions", async () => {
+    const r = resp(
+      await handlers[AI_PORTABLE_WORKSPACE_MEMORY_CONFLICT_RESOLVE](
+        null,
+        JSON.stringify({
+          conversationId: "conv-1",
+          memoryId: "wmem-x",
+          action: "delete-everything",
+        })
+      )
+    );
+    expect(r.status).toBe(false);
+    expect(spies.mockResolveConflict).not.toHaveBeenCalled();
+  });
+
+  it("forwards a valid use-file resolution", async () => {
+    spies.mockResolveConflict.mockResolvedValue(undefined);
+    const r = resp(
+      await handlers[AI_PORTABLE_WORKSPACE_MEMORY_CONFLICT_RESOLVE](
+        null,
+        JSON.stringify({
+          conversationId: "conv-1",
+          memoryId: "wmem-x",
+          action: "use-file",
+        })
+      )
+    );
+    expect(r.status).toBe(true);
+    expect(spies.mockResolveConflict).toHaveBeenCalledWith(
+      expect.objectContaining({ action: "use-file" })
+    );
+  });
+
+  it("rejects use-app without a mergedDocument", async () => {
+    const r = resp(
+      await handlers[AI_PORTABLE_WORKSPACE_MEMORY_CONFLICT_RESOLVE](
+        null,
+        JSON.stringify({
+          conversationId: "conv-1",
+          memoryId: "wmem-x",
+          action: "use-app",
+        })
+      )
+    );
+    expect(r.status).toBe(false);
+    expect(spies.mockResolveConflict).not.toHaveBeenCalled();
   });
 });

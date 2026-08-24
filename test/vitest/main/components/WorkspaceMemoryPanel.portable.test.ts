@@ -4,9 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import WorkspaceMemoryPanel from "@/views/components/aiChatV2/WorkspaceMemoryPanel.vue";
 import type { WorkspaceSummary } from "@/entityTypes/workspaceTypes";
 import { workspaceMemoryApi } from "@/views/api/aiWorkspaceMemory";
-import {
-  portableWorkspaceMemoryApi,
-} from "@/views/api/portableWorkspaceMemory";
+import { portableWorkspaceMemoryApi } from "@/views/api/portableWorkspaceMemory";
 
 vi.mock("@/views/api/aiWorkspaceMemory", () => ({
   workspaceMemoryApi: {
@@ -64,6 +62,7 @@ function mountPanel(props: {
         WorkspaceMemoryStatusBadge: true,
         WorkspaceMemoryEditorDialog: true,
         PortableMemoryEnableDialog: true,
+        PortableMemoryConflictDialog: true,
         RouterLink: true,
       },
     },
@@ -186,15 +185,37 @@ describe("WorkspaceMemoryPanel — portable memory banner", () => {
     expect(portableWorkspaceMemoryApi.rescan).toHaveBeenCalledWith("conv-1");
   });
 
+  it("shows a Resolve button and opens the conflict dialog when conflicts exist", async () => {
+    vi.mocked(portableWorkspaceMemoryApi.status).mockResolvedValue({
+      status: true,
+      msg: "",
+      data: statusData({
+        enabled: true,
+        portableCount: 2,
+        conflictCount: 1,
+      }),
+    } as never);
+    const wrapper = mountPanel({});
+    await flushPromises();
+    const resolveBtn = wrapper
+      .findAll("button")
+      .find((b) => b.text() === "Resolve");
+    expect(resolveBtn).toBeDefined();
+    await resolveBtn?.trigger("click");
+    expect(
+      wrapper.findComponent({ name: "PortableMemoryConflictDialog" }).exists()
+    ).toBe(true);
+  });
+
   it("subscribes to sync summaries and refreshes debounced", async () => {
     vi.useFakeTimers();
     let sink: ((s: unknown) => void) | null = null;
-    vi.mocked(portableWorkspaceMemoryApi.onChanged).mockImplementation(
-      ((cb: (s: unknown) => void) => {
-        sink = cb;
-        return () => undefined;
-      }) as unknown as typeof portableWorkspaceMemoryApi.onChanged
-    );
+    vi.mocked(portableWorkspaceMemoryApi.onChanged).mockImplementation(((
+      cb: (s: unknown) => void
+    ) => {
+      sink = cb;
+      return () => undefined;
+    }) as unknown as typeof portableWorkspaceMemoryApi.onChanged);
     const wrapper = mountPanel({});
     await flushPromises();
     expect(sink).toBeTypeOf("function");

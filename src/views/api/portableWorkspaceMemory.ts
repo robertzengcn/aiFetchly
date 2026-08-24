@@ -58,6 +58,8 @@ const CH = {
   EXPORT: "ai:portable-workspace-memory:export",
   RESCAN: "ai:portable-workspace-memory:rescan",
   DIAGNOSTICS: "ai:portable-workspace-memory:diagnostics:list",
+  CONFLICTS: "ai:portable-workspace-memory:conflicts:list",
+  CONFLICT_RESOLVE: "ai:portable-workspace-memory:conflict:resolve",
   POLICY: "ai:portable-workspace-memory:policy:update",
   PROMOTE: "ai:portable-workspace-memory:promote",
   PRIVATIZE: "ai:portable-workspace-memory:privatize",
@@ -101,6 +103,16 @@ export interface PortableMemoryExportResultView {
   skippedCount: number;
 }
 
+export interface PortableMemoryConflictView {
+  memoryId: string;
+  relativePath: string;
+  lastValidHash?: string | null;
+  observedHash?: string | null;
+  message: string;
+  currentFileContent?: string;
+  currentFileParseable: boolean;
+}
+
 export const portableWorkspaceMemoryApi = {
   status: (conversationId: string) =>
     call<PortableWorkspaceStatusView>(CH.STATUS, { conversationId }),
@@ -133,6 +145,24 @@ export const portableWorkspaceMemoryApi = {
     call<PortableMemorySyncSummary | null>(CH.RESCAN, { conversationId }),
   diagnostics: (conversationId: string) =>
     call<PortableMemoryDiagnosticView[]>(CH.DIAGNOSTICS, { conversationId }),
+  conflictsList: (conversationId: string) =>
+    call<PortableMemoryConflictView[]>(
+      CH.CONFLICTS,
+      { conversationId }
+    ),
+  resolveConflict: (input: {
+    conversationId: string;
+    memoryId: string;
+    action: "use-file" | "use-app" | "merge";
+    mergedDocument?: {
+      title: string;
+      content: string;
+      type: "project" | "decision" | "workflow" | "convention" | "reference" | "warning";
+      status: "active" | "archived" | "contradicted";
+      confidence: number;
+      visibility: "local" | "team";
+    };
+  }) => call<null>(CH.CONFLICT_RESOLVE, input),
   updatePolicy: (input: {
     conversationId: string;
     portableEnabled?: boolean;

@@ -1,8 +1,6 @@
 import { ipcMain } from "electron";
 import { z } from "zod";
-import {
-  PortableWorkspaceMemoryService,
-} from "@/service/PortableWorkspaceMemoryService";
+import { PortableWorkspaceMemoryService } from "@/service/PortableWorkspaceMemoryService";
 import {
   AI_PORTABLE_WORKSPACE_MEMORY_STATUS,
   AI_PORTABLE_WORKSPACE_MEMORY_ENABLE_PREVIEW,
@@ -11,6 +9,8 @@ import {
   AI_PORTABLE_WORKSPACE_MEMORY_EXPORT,
   AI_PORTABLE_WORKSPACE_MEMORY_RESCAN,
   AI_PORTABLE_WORKSPACE_MEMORY_DIAGNOSTICS_LIST,
+  AI_PORTABLE_WORKSPACE_MEMORY_CONFLICTS_LIST,
+  AI_PORTABLE_WORKSPACE_MEMORY_CONFLICT_RESOLVE,
   AI_PORTABLE_WORKSPACE_MEMORY_POLICY_UPDATE,
   AI_PORTABLE_WORKSPACE_MEMORY_PROMOTE,
   AI_PORTABLE_WORKSPACE_MEMORY_PRIVATIZE,
@@ -59,9 +59,12 @@ function safeParse<T = unknown>(data: unknown): T | null {
  * `workspaceRoot`, `workspaceKey`, `scopeId`, and absolute paths — are
  * rejected outright so a forged scope can never ride a request (FR-055).
  */
-const conversationSchema = z.object({
-  conversationId: z.string().min(1).max(200),
-}, { description: "conversation request" });
+const conversationSchema = z.object(
+  {
+    conversationId: z.string().min(1).max(200),
+  },
+  { description: "conversation request" }
+);
 
 const strictConversation = conversationSchema.strict();
 
@@ -94,7 +97,12 @@ const policySchema = z
     conversationId: z.string().min(1).max(200),
     portableEnabled: z.boolean().optional(),
     defaultStorageMode: z
-      .enum(["private-only", "portable-local", "portable-team", "ask-each-time"])
+      .enum([
+        "private-only",
+        "portable-local",
+        "portable-team",
+        "ask-each-time",
+      ])
       .optional(),
     importPolicy: z.enum(["automatic", "review-new", "review-all"]).optional(),
   })
@@ -110,6 +118,46 @@ const memoryOpSchema = z
 const promoteSchema = memoryOpSchema.extend({
   visibility: z.enum(["local", "team"]),
 });
+const mergedDocumentSchema = z.object({
+  title: z.string().min(1).max(200),
+  content: z.string().min(1).max(8000),
+  type: z.enum([
+    "project",
+    "decision",
+    "workflow",
+    "convention",
+    "reference",
+    "warning",
+  ]),
+  status: z.enum(["active", "archived", "contradicted"]),
+  confidence: z.number().int().min(0).max(100),
+  visibility: z.enum(["local", "team"]),
+});
+
+const conflictResolveSchema = memoryOpSchema
+  .extend({
+    action: z.enum(["use-file", "use-app", "merge"]),
+    // mergedDocument is REQUIRED for use-app/merge (PRD §14.7: the caller
+    // supplies the chosen/merged bytes), optional for use-file.
+    mergedDocument: z
+      .union([
+        z.literal("use-file").transform(() => undefined),
+        mergedDocumentSchema,
+      ])
+      .optional(),
+  })
+  .strict()
+  .superRefine((val, ctx) => {
+    if (
+      (val.action === "use-app" || val.action === "merge") &&
+      !val.mergedDocument
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `${val.action} requires a mergedDocument`,
+      });
+    }
+  });
 
 const bridgeSchema = z
   .object({
@@ -215,10 +263,44 @@ export function registerPortableWorkspaceMemoryIpcHandlers(): void {
       try {
         const input = strictConversation.safeParse(safeParse(data) ?? {});
         if (!input.success) return denied("conversationId is required");
-        return ok(await getService().listDiagnostics(input.data.conversationId));
+        return ok(
+          await getService().listDiagnostics(input.data.conversationId)
+        );
       } catch (err) {
         return denied(
           err instanceof Error ? err.message : "diagnostics failed"
+        );
+      }
+    }
+  );
+  ipcMain.handle(
+    AI_PORTABLE_WORKSPACE_MEMORY_CONFLICTS_LIST,
+    async (_e, data: unknown) => {
+      try {
+        const input = strictConversation.safeParse(safeParse(data) ?? {});
+        if (!input.success) return denied("conversationId is required");
+        return ok(await getService().listConflicts(input.data.conversationId));
+      } catch (err) {
+        return denied(
+          err instanceof Error ? err.message : "conflicts list failed"
+        );
+      }
+    }
+  );
+
+  ipcMain.handle(
+    AI_PORTABLE_WORKSPACE_MEMORY_CONFLICT_RESOLVE,
+    async (_e, data: unknown) => {
+      try {
+        const input = conflictResolveSchema.safeParse(safeParse(data));
+        if (!input.success) {
+          return denied("invalid conflict resolution payload");
+        }
+        await getService().resolveConflict(input.data);
+        return ok(null);
+      } catch (err) {
+        return denied(
+          err instanceof Error ? err.message : "conflict resolve failed"
         );
       }
     }
@@ -260,9 +342,7 @@ export function registerPortableWorkspaceMemoryIpcHandlers(): void {
         await getService().privatize(input.data);
         return ok(null);
       } catch (err) {
-        return denied(
-          err instanceof Error ? err.message : "privatize failed"
-        );
+        return denied(err instanceof Error ? err.message : "privatize failed");
       }
     }
   );
@@ -303,9 +383,7 @@ export function registerPortableWorkspaceMemoryIpcHandlers(): void {
         if (!input.success) return denied("conversationId is required");
         return ok(await getService().getGitStatus(input.data.conversationId));
       } catch (err) {
-        return denied(
-          err instanceof Error ? err.message : "git status failed"
-        );
+        return denied(err instanceof Error ? err.message : "git status failed");
       }
     }
   );
