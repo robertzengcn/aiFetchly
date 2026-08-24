@@ -1,5 +1,10 @@
 <template>
-  <v-sheet class="mx-auto px-6" rounded>
+  <AppPageShell
+    page-id="search-form"
+    title-key="route.search_scraper"
+    content-width="form"
+  >
+    <v-sheet class="mx-auto px-6" rounded>
     <v-form ref="form" @submit.prevent="onSubmit">
       <h3>{{ isEditMode ? t('search.edit_task') : t('search.use_hint') }}</h3>
       <v-textarea
@@ -128,8 +133,9 @@ v-model="localBrowser" :items="LocalBrowerList" :label="t('search.choose_local_b
       </v-card>
     </v-dialog>
   </div>
-</template>
+</apppageshell></template>
 <script setup lang="ts">
+import AppPageShell from "@/views/components/pageTemplates/AppPageShell.vue";
 import { useRoute, useRouter } from "vue-router";
 import AccountSelectedTable from "@/views/pages/socialaccount/widgets/AccountSelectedTable.vue";
 

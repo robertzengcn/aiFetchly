@@ -1,5 +1,9 @@
 <template>
-  <v-container fluid>
+  <AppPageShell
+    page-id="yellowpages-results"
+    title-key="route.yellow_pages_results"
+    content-width="full"
+  >
     <!-- Header with back button and task info -->
     <v-row class="mb-4">
       <v-col cols="12">
@@ -229,10 +233,11 @@
         </v-card-text>
       </v-card>
     </v-dialog>
-  </v-container>
+  </AppPageShell>
 </template>
 
 <script setup lang="ts">
+import AppPageShell from "@/views/components/pageTemplates/AppPageShell.vue";
 import { ref, reactive, onMounted, computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'

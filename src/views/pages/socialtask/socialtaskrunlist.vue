@@ -1,9 +1,15 @@
 <template>
-    <div class="tables_page"> 
+    <AppPageShell
+      page-id="socialtask-runs"
+      title-key="route.task_run_list"
+      content-width="full"
+    > 
 <SocialtaskrunlistTable />
-    </div>
+    </AppPageShell>
 </template>
+
 <script setup lang="ts">
+import AppPageShell from "@/views/components/pageTemplates/AppPageShell.vue";
 // import router from '@/views/router';
 import { ref, onMounted } from 'vue';
 import SocialtaskrunlistTable from '@/views/pages/socialtask/widgets/SocialtaskrunlistTable.vue'
