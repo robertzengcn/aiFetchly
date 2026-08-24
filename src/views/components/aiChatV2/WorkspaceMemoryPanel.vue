@@ -620,8 +620,35 @@ async function onEditorSave(value: {
   storageMode?: "private" | "portable-local" | "portable-team";
 }): Promise<void> {
   if (!props.conversationId) return;
+  // Route by storage mode (FR-037/FR-039): portable writes go file-first
+  // through the portable service; private writes stay on the SQLite path.
+  const isPortableCreate =
+    !editing.value &&
+    portableStatus.value?.enabled &&
+    (value.storageMode === "portable-local" ||
+      value.storageMode === "portable-team");
+  const isPortableEdit =
+    editing.value &&
+    portableStatus.value?.enabled &&
+    portableRowMap.value.get(editing.value.memoryId) !== undefined;
   try {
-    if (editing.value) {
+    if (editing.value && isPortableEdit) {
+      const resp = await portableWorkspaceMemoryApi.updatePortable({
+        conversationId: props.conversationId,
+        memoryId: editing.value.memoryId,
+        type: value.type,
+        title: value.title,
+        content: value.content,
+        confidence: value.confidence,
+        status: value.status ?? "active",
+        visibility: value.visibility ?? "local",
+        expectedHash: value.expectedHash,
+      });
+      if (!resp.status) {
+        notify(resp.msg || (t("workspaceMemory.createError") || "Error"), "error");
+        return;
+      }
+    } else if (editing.value) {
       const resp = await workspaceMemoryApi.update({
         conversationId: props.conversationId,
         memoryId: editing.value.memoryId,
@@ -629,6 +656,20 @@ async function onEditorSave(value: {
         title: value.title,
         content: value.content,
         confidence: value.confidence,
+        status: value.status,
+      });
+      if (!resp.status) {
+        notify(resp.msg || (t("workspaceMemory.createError") || "Error"), "error");
+        return;
+      }
+    } else if (isPortableCreate) {
+      const resp = await portableWorkspaceMemoryApi.createPortable({
+        conversationId: props.conversationId,
+        type: value.type,
+        title: value.title,
+        content: value.content,
+        confidence: value.confidence,
+        visibility: value.visibility ?? "local",
         status: value.status,
       });
       if (!resp.status) {
@@ -652,13 +693,35 @@ async function onEditorSave(value: {
     editing.value = null;
     await refresh();
     emit("change");
-  } catch {
-    notify(t("workspaceMemory.createError") || "Error", "error");
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Error";
+    notify(msg, "error");
   }
 }
 
 async function onArchive(m: AIWorkspaceMemoryView): Promise<void> {
   if (!props.conversationId) return;
+  // Portable records: archive through the file-first portable service.
+  if (
+    portableStatus.value?.enabled &&
+    portableRowMap.value.get(m.memoryId) !== undefined
+  ) {
+    try {
+      const resp = await portableWorkspaceMemoryApi.archivePortable({
+        conversationId: props.conversationId,
+        memoryId: m.memoryId,
+      });
+      if (resp.status) {
+        await refresh();
+        emit("change");
+      } else {
+        notify(resp.msg || "Error", "error");
+      }
+    } catch (err) {
+      notify(err instanceof Error ? err.message : "Error", "error");
+    }
+    return;
+  }
   const resp = await workspaceMemoryApi.archive({
     conversationId: props.conversationId,
     memoryId: m.memoryId,
@@ -678,9 +741,35 @@ function onDelete(m: AIWorkspaceMemoryView): void {
 
 async function confirmDelete(): Promise<void> {
   if (!pendingDelete.value || !props.conversationId) return;
+  const m = pendingDelete.value;
+  // Portable records: delete the file first through the portable service.
+  if (
+    portableStatus.value?.enabled &&
+    portableRowMap.value.get(m.memoryId) !== undefined
+  ) {
+    try {
+      const resp = await portableWorkspaceMemoryApi.deletePortable({
+        conversationId: props.conversationId,
+        memoryId: m.memoryId,
+      });
+      confirmOpen.value = false;
+      pendingDelete.value = null;
+      if (resp.status) {
+        await refresh();
+        emit("change");
+      } else {
+        notify(resp.msg || "Error", "error");
+      }
+    } catch (err) {
+      confirmOpen.value = false;
+      pendingDelete.value = null;
+      notify(err instanceof Error ? err.message : "Error", "error");
+    }
+    return;
+  }
   const resp = await workspaceMemoryApi.delete({
     conversationId: props.conversationId,
-    memoryId: pendingDelete.value.memoryId,
+    memoryId: m.memoryId,
   });
   confirmOpen.value = false;
   pendingDelete.value = null;

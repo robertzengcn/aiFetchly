@@ -54,6 +54,10 @@ async function call<T>(channel: string, input?: unknown): Promise<CommonMessage<
 const CH = {
   STATUS: "ai:portable-workspace-memory:status",
   LIST: "ai:portable-workspace-memory:list",
+  CREATE: "ai:portable-workspace-memory:create",
+  UPDATE: "ai:portable-workspace-memory:update",
+  ARCHIVE_PORTABLE: "ai:portable-workspace-memory:archive-portable",
+  DELETE_PORTABLE: "ai:portable-workspace-memory:delete-portable",
   ENABLE_PREVIEW: "ai:portable-workspace-memory:enable:preview",
   ENABLE: "ai:portable-workspace-memory:enable",
   EXPORT_PREVIEW: "ai:portable-workspace-memory:export:preview",
@@ -121,6 +125,30 @@ export const portableWorkspaceMemoryApi = {
     call<PortableWorkspaceStatusView>(CH.STATUS, { conversationId }),
   list: (conversationId: string) =>
     call<PortableMemoryRowView[]>(CH.LIST, { conversationId }),
+  createPortable: (input: {
+    conversationId: string;
+    type: "project" | "decision" | "workflow" | "convention" | "reference" | "warning";
+    title: string;
+    content: string;
+    confidence: number;
+    visibility: "local" | "team";
+    status?: "active" | "archived" | "contradicted";
+  }) => call<PortableMemoryRowView>(CH.CREATE, input),
+  updatePortable: (input: {
+    conversationId: string;
+    memoryId: string;
+    type: "project" | "decision" | "workflow" | "convention" | "reference" | "warning";
+    title: string;
+    content: string;
+    confidence: number;
+    status: "active" | "archived" | "contradicted";
+    visibility: "local" | "team";
+    expectedHash?: string;
+  }) => call<PortableMemoryRowView>(CH.UPDATE, input),
+  archivePortable: (input: { conversationId: string; memoryId: string }) =>
+    call<null>(CH.ARCHIVE_PORTABLE, input),
+  deletePortable: (input: { conversationId: string; memoryId: string }) =>
+    call<null>(CH.DELETE_PORTABLE, input),
   enablePreview: (conversationId: string) =>
     call<PortableMemoryEnablePreviewView>(CH.ENABLE_PREVIEW, {
       conversationId,

@@ -626,6 +626,14 @@ export const AI_PORTABLE_WORKSPACE_MEMORY_STATUS =
   "ai:portable-workspace-memory:status";
 export const AI_PORTABLE_WORKSPACE_MEMORY_LIST =
   "ai:portable-workspace-memory:list";
+export const AI_PORTABLE_WORKSPACE_MEMORY_CREATE =
+  "ai:portable-workspace-memory:create";
+export const AI_PORTABLE_WORKSPACE_MEMORY_UPDATE =
+  "ai:portable-workspace-memory:update";
+export const AI_PORTABLE_WORKSPACE_MEMORY_ARCHIVE_PORTABLE =
+  "ai:portable-workspace-memory:archive-portable";
+export const AI_PORTABLE_WORKSPACE_MEMORY_DELETE_PORTABLE =
+  "ai:portable-workspace-memory:delete-portable";
 export const AI_PORTABLE_WORKSPACE_MEMORY_ENABLE_PREVIEW =
   "ai:portable-workspace-memory:enable:preview";
 export const AI_PORTABLE_WORKSPACE_MEMORY_ENABLE =

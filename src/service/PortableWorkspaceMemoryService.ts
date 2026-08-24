@@ -21,6 +21,7 @@ import type {
 } from "@/service/PortableWorkspaceMemoryBridgeService";
 import { PortableWorkspaceMemoryBridgeService } from "@/service/PortableWorkspaceMemoryBridgeService";
 import { PortableWorkspaceMemoryFileStore } from "@/service/PortableWorkspaceMemoryFileStore";
+import { PortableWorkspaceMemorySyncCoordinator } from "@/service/PortableWorkspaceMemorySyncCoordinator";
 import { PortableWorkspaceIdentityService } from "@/service/PortableWorkspaceIdentityService";
 import { PortableWorkspaceMemoryIndexService } from "@/service/PortableWorkspaceMemoryIndexService";
 import { PortableWorkspaceMemoryFormat } from "@/service/PortableWorkspaceMemoryFormat";
@@ -116,6 +117,7 @@ export class PortableWorkspaceMemoryService {
   private readonly format: PortableWorkspaceMemoryFormat;
   private readonly bridgeService: PortableWorkspaceMemoryBridgeService;
   private readonly gitStatusService: PortableWorkspaceMemoryGitStatusService;
+  private readonly coordinator: PortableWorkspaceMemorySyncCoordinator;
   private readonly memoryModel: AIWorkspaceMemoryModel;
   private readonly stateModel: AIWorkspaceMemoryPortableStateModel;
 
@@ -132,6 +134,7 @@ export class PortableWorkspaceMemoryService {
     this.format = new PortableWorkspaceMemoryFormat();
     this.bridgeService = new PortableWorkspaceMemoryBridgeService();
     this.gitStatusService = new PortableWorkspaceMemoryGitStatusService();
+    this.coordinator = new PortableWorkspaceMemorySyncCoordinator({});
     this.memoryModel = new AIWorkspaceMemoryModel("");
     this.stateModel = new AIWorkspaceMemoryPortableStateModel("");
   }
@@ -630,6 +633,251 @@ export class PortableWorkspaceMemoryService {
       target: input.target,
       expectedBeforeHash: input.expectedBeforeHash,
     });
+  }
+
+  // --- Portable CRUD (file-first through the coordinator queue) ---------------
+
+  /**
+   * Create a new portable record (FR-037). The file is written atomically
+   * BEFORE the SQLite projection is created (D-06); the written bytes are
+   * re-parsed through the shared validator before projection. Serialized per
+   * scope through the coordinator queue.
+   */
+  async createPortable(input: {
+    readonly conversationId: string;
+    readonly type: PortableDocumentType;
+    readonly title: string;
+    readonly content: string;
+    readonly confidence: number;
+    readonly visibility: "local" | "team";
+    readonly status?: PortableDocumentStatus;
+  }): Promise<PortableMemoryRowView> {
+    const ctx = await this.requireContext(input.conversationId);
+    const scope = await this.requireScope(ctx);
+    const memoryId = `wmem-${randomUUID()}`;
+    const now = new Date();
+    const document = this.format.buildDocument({
+      id: memoryId,
+      type: input.type,
+      status: input.status ?? "active",
+      confidence: input.confidence,
+      visibility: input.visibility,
+      createdAt: now,
+      updatedAt: now,
+      createdBy: "user",
+      title: input.title,
+      content: input.content,
+    });
+    await this.runQueued(scope, () =>
+      this.coordinator.applyAppWrite(scope, document)
+    );
+    await this.refreshIndex(ctx, scope);
+    const row = await this.memoryModel.getByScopeAndMemoryId(
+      scope.scopeId,
+      memoryId
+    );
+    return this.toRowView(scope, row!);
+  }
+
+  /**
+   * Update a portable record file-first (FR-039, FR-029). The caller's
+   * `expectedHash` is compared to the current on-disk hash inside
+   * `applyAppWrite`; a mismatch marks the record conflicted without
+   * overwriting external bytes (AC-007).
+   */
+  async updatePortable(input: {
+    readonly conversationId: string;
+    readonly memoryId: string;
+    readonly type: PortableDocumentType;
+    readonly title: string;
+    readonly content: string;
+    readonly confidence: number;
+    readonly status: PortableDocumentStatus;
+    readonly visibility: "local" | "team";
+    readonly expectedHash?: string | null;
+  }): Promise<PortableMemoryRowView> {
+    const ctx = await this.requireContext(input.conversationId);
+    const scope = await this.requireScope(ctx);
+    const existing = await this.memoryModel.getByScopeAndMemoryId(
+      scope.scopeId,
+      input.memoryId
+    );
+    if (!existing) throw new Error("Workspace memory not found");
+    const document = this.format.buildDocument({
+      id: input.memoryId,
+      type: input.type,
+      status: input.status,
+      confidence: input.confidence,
+      visibility: input.visibility,
+      createdAt: existing.createdAt ?? new Date(),
+      updatedAt: new Date(),
+      createdBy: "user",
+      title: input.title,
+      content: input.content,
+    });
+    const result = await this.runQueued(scope, () =>
+      this.coordinator.applyAppWrite(scope, document, {
+        expectedHash: input.expectedHash ?? null,
+      })
+    );
+    if (result.conflicted) {
+      throw new Error(
+        "concurrent external edit detected; use the conflict resolver to choose a version"
+      );
+    }
+    await this.refreshIndex(ctx, scope);
+    const row = await this.memoryModel.getByScopeAndMemoryId(
+      scope.scopeId,
+      input.memoryId
+    );
+    return this.toRowView(scope, row!);
+  }
+
+  /**
+   * Archive a portable record: update `status` in the file first (FR-039),
+   * re-import, remove from INDEX. File-first through the coordinator queue.
+   */
+  async archivePortable(input: {
+    readonly conversationId: string;
+    readonly memoryId: string;
+  }): Promise<void> {
+    const ctx = await this.requireContext(input.conversationId);
+    const scope = await this.requireScope(ctx);
+    const existing = await this.memoryModel.getByScopeAndMemoryId(
+      scope.scopeId,
+      input.memoryId
+    );
+    if (!existing) throw new Error("Workspace memory not found");
+    const state = await this.stateModel.getByScopeAndMemoryId(
+      scope.scopeId,
+      input.memoryId
+    );
+    const document = this.format.buildDocument({
+      id: input.memoryId,
+      type: existing.type as PortableDocumentType,
+      status: "archived",
+      confidence: existing.confidence,
+      visibility: (state?.visibility === "team" ? "team" : "local") as
+        | "local"
+        | "team",
+      createdAt: existing.createdAt ?? new Date(),
+      updatedAt: new Date(),
+      createdBy: (state?.createdBy ?? "user") as PortableMemoryDocumentV1["frontmatter"]["createdBy"],
+      title: existing.title,
+      content: existing.content,
+    });
+    await this.runQueued(scope, () =>
+      this.coordinator.applyAppWrite(scope, document, {
+        expectedHash: state?.lastValidHash ?? null,
+      })
+    );
+    await this.refreshIndex(ctx, scope);
+    await this.portableModule.recordAudit({
+      scopeId: scope.scopeId,
+      memoryId: input.memoryId,
+      relativePath: PortableWorkspaceMemoryFileStore.relativePathForMemoryId(
+        input.memoryId
+      ),
+      action: "archive",
+      actor: "user",
+      outcome: "completed",
+    });
+  }
+
+  /**
+   * Hard-delete a portable record (FR-039). Requires explicit confirmation
+   * (caller-supplied). Deletes the FILE first; only on successful removal
+   * does it delete the projection + portable state. A failed file deletion
+   * leaves no silent detached projection (AC-006).
+   */
+  async deletePortable(input: {
+    readonly conversationId: string;
+    readonly memoryId: string;
+  }): Promise<void> {
+    const ctx = await this.requireContext(input.conversationId);
+    const scope = await this.requireScope(ctx);
+    const state = await this.stateModel.getByScopeAndMemoryId(
+      scope.scopeId,
+      input.memoryId
+    );
+    if (!state) {
+      // Private record — fall back to the SQLite-only delete.
+      await this.memoryModel.deleteByScopeAndMemoryId(
+        scope.scopeId,
+        input.memoryId
+      );
+      return;
+    }
+    const store = new PortableWorkspaceMemoryFileStore(ctx.workspaceRoot);
+    await this.runQueued(scope, async () => {
+      // Delete the file first; a failure here MUST NOT touch the projection.
+      const deleted = await store.deleteRecord(input.memoryId);
+      if (!deleted) {
+        throw new Error(
+          "portable memory file could not be deleted; projection retained"
+        );
+      }
+      await this.portableModule.recordAudit({
+        scopeId: scope.scopeId,
+        memoryId: input.memoryId,
+        relativePath: state.relativePath,
+        action: "delete",
+        actor: "user",
+        outcome: "completed",
+        message: "portable record hard-deleted",
+      });
+      await this.stateModel.deleteByScopeAndMemoryId(
+        scope.scopeId,
+        input.memoryId
+      );
+      await this.memoryModel.deleteByScopeAndMemoryId(
+        scope.scopeId,
+        input.memoryId
+      );
+    });
+    await this.refreshIndex(ctx, scope);
+  }
+
+  /** Build a PortableMemoryRowView from a memory entity + its portable state. */
+  private async toRowView(
+    scope: ScopedMemoryContext,
+    row: import("@/entity/AIWorkspaceMemory.entity").AIWorkspaceMemoryEntity
+  ): Promise<PortableMemoryRowView> {
+    const state = await this.stateModel.getByScopeAndMemoryId(
+      scope.scopeId,
+      row.memoryId
+    );
+    const storageMode: "private" | "portable-local" | "portable-team" = state
+      ? state.visibility === "team"
+        ? "portable-team"
+        : "portable-local"
+      : "private";
+    return {
+      memoryId: row.memoryId,
+      type: row.type as PortableMemoryRowView["type"],
+      title: row.title,
+      content: row.content,
+      status: row.status as PortableMemoryRowView["status"],
+      confidence: row.confidence,
+      updatedAt: row.updatedAt?.toISOString() ?? "",
+      storageMode,
+      ...(state
+        ? {
+            syncState: state.syncState as PortableMemoryRowView["syncState"],
+            relativePath: state.relativePath,
+            visibility: state.visibility as PortableMemoryRowView["visibility"],
+            portableUpdatedAt: state.portableUpdatedAt.toISOString(),
+          }
+        : {}),
+    };
+  }
+
+  /** Run an operation through the per-scope coordinator queue (D-05). */
+  private async runQueued<T>(
+    scope: ScopedMemoryContext,
+    operation: () => Promise<T>
+  ): Promise<T> {
+    return this.coordinator.enqueueOperation(scope.scopeId, operation);
   }
 
   async getGitStatus(conversationId: string): Promise<string> {

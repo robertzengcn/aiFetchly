@@ -4,6 +4,10 @@ import { PortableWorkspaceMemoryService } from "@/service/PortableWorkspaceMemor
 import {
   AI_PORTABLE_WORKSPACE_MEMORY_STATUS,
   AI_PORTABLE_WORKSPACE_MEMORY_LIST,
+  AI_PORTABLE_WORKSPACE_MEMORY_CREATE,
+  AI_PORTABLE_WORKSPACE_MEMORY_UPDATE,
+  AI_PORTABLE_WORKSPACE_MEMORY_ARCHIVE_PORTABLE,
+  AI_PORTABLE_WORKSPACE_MEMORY_DELETE_PORTABLE,
   AI_PORTABLE_WORKSPACE_MEMORY_ENABLE_PREVIEW,
   AI_PORTABLE_WORKSPACE_MEMORY_ENABLE,
   AI_PORTABLE_WORKSPACE_MEMORY_EXPORT_PREVIEW,
@@ -136,6 +140,44 @@ const mergedDocumentSchema = z.object({
   visibility: z.enum(["local", "team"]),
 });
 
+const portableCreateSchema = z
+  .object({
+    conversationId: z.string().min(1).max(200),
+    type: z.enum([
+      "project",
+      "decision",
+      "workflow",
+      "convention",
+      "reference",
+      "warning",
+    ]),
+    title: z.string().min(1).max(200),
+    content: z.string().min(1).max(8000),
+    confidence: z.number().int().min(0).max(100),
+    visibility: z.enum(["local", "team"]),
+    status: z.enum(["active", "archived", "contradicted"]).optional(),
+  })
+  .strict();
+
+const portableUpdateSchema = memoryOpSchema
+  .extend({
+    type: z.enum([
+      "project",
+      "decision",
+      "workflow",
+      "convention",
+      "reference",
+      "warning",
+    ]),
+    title: z.string().min(1).max(200),
+    content: z.string().min(1).max(8000),
+    confidence: z.number().int().min(0).max(100),
+    status: z.enum(["active", "archived", "contradicted"]),
+    visibility: z.enum(["local", "team"]),
+    expectedHash: z.string().max(64).optional(),
+  })
+  .strict();
+
 const conflictResolveSchema = memoryOpSchema
   .extend({
     action: z.enum(["use-file", "use-app", "merge"]),
@@ -194,9 +236,65 @@ export function registerPortableWorkspaceMemoryIpcHandlers(): void {
       try {
         const input = strictConversation.safeParse(safeParse(data) ?? {});
         if (!input.success) return denied("conversationId is required");
-        return ok(await getService().listWithPortableState(input.data.conversationId));
+        return ok(
+          await getService().listWithPortableState(input.data.conversationId)
+        );
       } catch (err) {
         return denied(err instanceof Error ? err.message : "list failed");
+      }
+    }
+  );
+
+  ipcMain.handle(
+    AI_PORTABLE_WORKSPACE_MEMORY_CREATE,
+    async (_e, data: unknown) => {
+      try {
+        const input = portableCreateSchema.safeParse(safeParse(data));
+        if (!input.success) return denied("invalid create payload");
+        return ok(await getService().createPortable(input.data));
+      } catch (err) {
+        return denied(err instanceof Error ? err.message : "create failed");
+      }
+    }
+  );
+
+  ipcMain.handle(
+    AI_PORTABLE_WORKSPACE_MEMORY_UPDATE,
+    async (_e, data: unknown) => {
+      try {
+        const input = portableUpdateSchema.safeParse(safeParse(data));
+        if (!input.success) return denied("invalid update payload");
+        return ok(await getService().updatePortable(input.data));
+      } catch (err) {
+        return denied(err instanceof Error ? err.message : "update failed");
+      }
+    }
+  );
+
+  ipcMain.handle(
+    AI_PORTABLE_WORKSPACE_MEMORY_ARCHIVE_PORTABLE,
+    async (_e, data: unknown) => {
+      try {
+        const input = memoryOpSchema.safeParse(safeParse(data));
+        if (!input.success) return denied("invalid archive payload");
+        await getService().archivePortable(input.data);
+        return ok(null);
+      } catch (err) {
+        return denied(err instanceof Error ? err.message : "archive failed");
+      }
+    }
+  );
+
+  ipcMain.handle(
+    AI_PORTABLE_WORKSPACE_MEMORY_DELETE_PORTABLE,
+    async (_e, data: unknown) => {
+      try {
+        const input = memoryOpSchema.safeParse(safeParse(data));
+        if (!input.success) return denied("invalid delete payload");
+        await getService().deletePortable(input.data);
+        return ok(null);
+      } catch (err) {
+        return denied(err instanceof Error ? err.message : "delete failed");
       }
     }
   );
@@ -417,9 +515,7 @@ export function registerPortableWorkspaceMemoryIpcHandlers(): void {
           )
         );
       } catch (err) {
-        return denied(
-          err instanceof Error ? err.message : "get-state failed"
-        );
+        return denied(err instanceof Error ? err.message : "get-state failed");
       }
     }
   );
