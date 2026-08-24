@@ -28,15 +28,13 @@ import { WorkspaceMemoryScopeModule } from "@/modules/WorkspaceMemoryScopeModule
 import { PortableWorkspaceMemoryModule } from "@/modules/PortableWorkspaceMemoryModule";
 import { WorkspaceMemoryScopeResolver } from "@/service/WorkspaceMemoryScopeResolver";
 import { PortableWorkspaceMemoryFormat } from "@/service/PortableWorkspaceMemoryFormat";
+import { PortableWorkspaceMemoryFileStore } from "@/service/PortableWorkspaceMemoryFileStore";
+import { PortableWorkspaceMemoryIndexService } from "@/service/PortableWorkspaceMemoryIndexService";
+import { PortableWorkspaceIdentityService } from "@/service/PortableWorkspaceIdentityService";
 import {
-  PortableWorkspaceMemoryFileStore,
-} from "@/service/PortableWorkspaceMemoryFileStore";
-import {
-  PortableWorkspaceMemoryIndexService,
-} from "@/service/PortableWorkspaceMemoryIndexService";
-import {
-  PortableWorkspaceIdentityService,
-} from "@/service/PortableWorkspaceIdentityService";
+  parseYamlFrontmatter,
+  stripFrontmatterBlock,
+} from "@/service/portableMemoryFrontmatter";
 import { AIWorkspaceMemoryModel } from "@/model/AIWorkspaceMemory.model";
 import { AIWorkspaceMemoryPortableStateModel } from "@/model/AIWorkspaceMemoryPortableState.model";
 
@@ -90,15 +88,17 @@ export class PortableWorkspaceMemorySyncCoordinator {
   private emitter: SyncSummaryEmitter | null;
   private readonly logger: PortableSyncLogger;
 
-  constructor(options: {
-    readonly scopeModule?: WorkspaceMemoryScopeModule;
-    readonly portableModule?: PortableWorkspaceMemoryModule;
-    readonly scopeResolver?: WorkspaceMemoryScopeResolver;
-    readonly memoryModel?: AIWorkspaceMemoryModel;
-    readonly stateModel?: AIWorkspaceMemoryPortableStateModel;
-    readonly emitter?: SyncSummaryEmitter | null;
-    readonly logger?: PortableSyncLogger;
-  } = {}) {
+  constructor(
+    options: {
+      readonly scopeModule?: WorkspaceMemoryScopeModule;
+      readonly portableModule?: PortableWorkspaceMemoryModule;
+      readonly scopeResolver?: WorkspaceMemoryScopeResolver;
+      readonly memoryModel?: AIWorkspaceMemoryModel;
+      readonly stateModel?: AIWorkspaceMemoryPortableStateModel;
+      readonly emitter?: SyncSummaryEmitter | null;
+      readonly logger?: PortableSyncLogger;
+    } = {}
+  ) {
     this.scopeModule = options.scopeModule ?? new WorkspaceMemoryScopeModule();
     this.portableModule =
       options.portableModule ?? new PortableWorkspaceMemoryModule();
@@ -229,7 +229,11 @@ export class PortableWorkspaceMemorySyncCoordinator {
   private stateFor(key: string): QueueState {
     let state = this.queues.get(key);
     if (!state) {
-      state = { tail: Promise.resolve(), pendingSnapshot: null, snapshotScheduled: false };
+      state = {
+        tail: Promise.resolve(),
+        pendingSnapshot: null,
+        snapshotScheduled: false,
+      };
       this.queues.set(key, state);
     }
     return state;
@@ -237,7 +241,9 @@ export class PortableWorkspaceMemorySyncCoordinator {
 
   // --- Reconciliation (§14.2) -------------------------------------------------
 
-  private async applySnapshot(input: TrustedPortableSnapshotInput): Promise<void> {
+  private async applySnapshot(
+    input: TrustedPortableSnapshotInput
+  ): Promise<void> {
     if (!input.approved) {
       // Trust filter (§13.2): unapproved → no import, no identity binding.
       this.logger(
@@ -275,10 +281,20 @@ export class PortableWorkspaceMemorySyncCoordinator {
         ...scope,
         ...bound,
       };
-      await this.applySnapshotToScope(composedScope, scope.workspaceRoot, input.snapshot, input.workspaceId);
+      await this.applySnapshotToScope(
+        composedScope,
+        scope.workspaceRoot,
+        input.snapshot,
+        input.workspaceId
+      );
       return;
     }
-    await this.applySnapshotToScope(scope, scope.workspaceRoot, input.snapshot, input.workspaceId);
+    await this.applySnapshotToScope(
+      scope,
+      scope.workspaceRoot,
+      input.snapshot,
+      input.workspaceId
+    );
 
     void store; // store used by index step inside applySnapshotToScope
   }
@@ -296,8 +312,20 @@ export class PortableWorkspaceMemorySyncCoordinator {
     const conflicted: PortableMemoryDiagnosticView[] = [];
     const pendingReview: string[] = [];
 
+    // Surface records already in the conflicted state (a prior applyAppWrite
+    // detected a concurrent edit) so the summary reflects reality (FR-029).
+    const preConflicts = await this.portableModule.listConflicts(scope);
+    for (const c of preConflicts) {
+      conflicted.push({
+        code: "memory-conflict",
+        relativePath: c.relativePath,
+        message: c.message,
+        recoverable: true,
+      });
+    }
+
     // Duplicate detection before persistence (§14.2.8).
-    const draftsById = new Map<string, typeof snapshot.records[number]>();
+    const draftsById = new Map<string, (typeof snapshot.records)[number]>();
     const seenPaths = new Set<string>();
     for (const draft of snapshot.records) {
       if (seenPaths.has(draft.relativePath)) continue;
@@ -321,7 +349,10 @@ export class PortableWorkspaceMemorySyncCoordinator {
     for (const draft of snapshot.records) {
       const parsed = this.format.parseDraft(draft);
       if (!parsed.ok) {
-        rejected.push({ ...parsed.diagnostic, relativePath: draft.relativePath });
+        rejected.push({
+          ...parsed.diagnostic,
+          relativePath: draft.relativePath,
+        });
         await this.portableModule.markRejectedFile(scope, {
           relativePath: draft.relativePath,
           memoryId:
@@ -330,7 +361,10 @@ export class PortableWorkspaceMemorySyncCoordinator {
               ? ((draft.rawFrontmatter as { id?: unknown }).id as string)
               : undefined,
           observedHash: draft.contentHash,
-          diagnostic: { ...parsed.diagnostic, relativePath: draft.relativePath },
+          diagnostic: {
+            ...parsed.diagnostic,
+            relativePath: draft.relativePath,
+          },
           scanId: snapshot.complete ? "scan" : undefined,
         });
         continue;
@@ -441,12 +475,14 @@ export class PortableWorkspaceMemorySyncCoordinator {
           schema: "aifetchly.memory/v1",
           id: state.memoryId,
           type: row.type as PortableMemoryDocumentV1["frontmatter"]["type"],
-          status: row.status as PortableMemoryDocumentV1["frontmatter"]["status"],
+          status:
+            row.status as PortableMemoryDocumentV1["frontmatter"]["status"],
           confidence: row.confidence,
           visibility: state.visibility === "team" ? "team" : "local",
           createdAt: state.portableCreatedAt.toISOString(),
           updatedAt: state.portableUpdatedAt.toISOString(),
-          createdBy: state.createdBy as PortableMemoryDocumentV1["frontmatter"]["createdBy"],
+          createdBy:
+            state.createdBy as PortableMemoryDocumentV1["frontmatter"]["createdBy"],
         },
         title: row.title,
         content: row.content,
@@ -469,18 +505,61 @@ export class PortableWorkspaceMemorySyncCoordinator {
    */
   async applyAppWrite(
     scope: WorkspaceMemoryScopeContext,
-    document: PortableMemoryDocumentV1
-  ): Promise<void> {
+    document: PortableMemoryDocumentV1,
+    options: { readonly expectedHash?: string | null } = {}
+  ): Promise<{ readonly conflicted: boolean }> {
     const store = new PortableWorkspaceMemoryFileStore(scope.workspaceRoot);
+    const relativePath =
+      PortableWorkspaceMemoryFileStore.relativePathForMemoryId(
+        document.frontmatter.id
+      );
+
+    // CONFLICT DETECTION (design §14.6 / FR-029 / AC-007): compare the caller's
+    // expected on-disk hash (the last-known lastValidHash) to the CURRENT on-disk
+    // hash. A divergence means an external editor wrote between our read and
+    // write — STOP, mark conflicted, preserve the external bytes untouched.
+    if (options.expectedHash !== undefined && options.expectedHash !== null) {
+      const currentHash = await store.hashRecord(document.frontmatter.id);
+      if (currentHash !== null && currentHash !== options.expectedHash) {
+        await this.portableModule.markConflict(scope, {
+          memoryId: document.frontmatter.id,
+          relativePath,
+          message:
+            "external edit detected between read and write; use the conflict resolver to choose a version",
+        });
+        this.emitSummary({
+          scopeId: scope.scopeId,
+          complete: true,
+          imported: 0,
+          unchanged: 0,
+          rejected: 0,
+          conflicted: 1,
+          pendingReview: 0,
+          deleted: 0,
+          diagnostics: [
+            {
+              code: "memory-conflict",
+              relativePath,
+              message: "concurrent edit detected",
+              recoverable: true,
+            },
+          ],
+        });
+        return { conflicted: true };
+      }
+    }
+
     const serialized = this.format.serialize(document);
-    const written = await store.writeRecord(document.frontmatter.id, serialized);
+    const written = await store.writeRecord(
+      document.frontmatter.id,
+      serialized
+    );
     // Re-import through the shared parser (§11.1): parse the written bytes.
     const readBack = await store.readRecord(document.frontmatter.id);
-    if (!readBack) throw new Error("portable record write could not be verified");
+    if (!readBack)
+      throw new Error("portable record write could not be verified");
     const parsed = this.format.parseDraft({
-      relativePath: PortableWorkspaceMemoryFileStore.relativePathForMemoryId(
-        document.frontmatter.id
-      ),
+      relativePath,
       fileName: `${document.frontmatter.id}.md`,
       contentHash: written.contentHash,
       sizeBytes: written.sizeBytes,
@@ -498,6 +577,7 @@ export class PortableWorkspaceMemorySyncCoordinator {
       actor: "aifetchly",
       pendingReview: false,
     });
+    return { conflicted: false };
   }
 
   /** Legacy path-derived key for a root — mirrors WorkspaceKeyService. */
@@ -513,26 +593,6 @@ export class PortableWorkspaceMemorySyncCoordinator {
       .slice(0, 32);
     return `ws_${digest}`;
   }
-}
-
-function parseYamlFrontmatter(content: string): unknown {
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const yaml = require("js-yaml") as typeof import("js-yaml");
-  if (!content.startsWith("---\n")) return null;
-  const end = content.indexOf("\n---\n", 4);
-  if (end < 0) return null;
-  try {
-    return yaml.load(content.slice(4, end));
-  } catch {
-    return null;
-  }
-}
-
-function stripFrontmatterBlock(content: string): string {
-  if (!content.startsWith("---\n")) return content;
-  const end = content.indexOf("\n---\n", 4);
-  if (end < 0) return content;
-  return content.slice(end + 5);
 }
 
 async function hashString(s: string): Promise<string> {

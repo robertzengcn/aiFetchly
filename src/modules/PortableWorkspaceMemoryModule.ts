@@ -190,15 +190,41 @@ export class PortableWorkspaceMemoryModule extends BaseModule {
     scope: WorkspaceMemoryScopeContext,
     input: PortableConflictInput
   ): Promise<void> {
-    await this.portableStateModel.updateByScopeAndMemoryId(
+    // Upsert rather than update: a conflict can be detected on a first write
+    // to a scope that has no prior portable-state row yet (the caller read
+    // the file directly). Fall back to creating a row with the conflict.
+    const existing = await this.portableStateModel.getByScopeAndMemoryId(
       scope.scopeId,
-      input.memoryId,
-      {
+      input.memoryId
+    );
+    if (existing) {
+      await this.portableStateModel.updateByScopeAndMemoryId(
+        scope.scopeId,
+        input.memoryId,
+        {
+          syncState: "conflicted",
+          diagnosticCode: "memory-conflict",
+          diagnosticMessage: sanitize(input.message),
+        }
+      );
+    } else {
+      await this.portableStateModel.upsert({
+        scopeId: scope.scopeId,
+        memoryId: input.memoryId,
+        relativePath: input.relativePath,
+        visibility: "local",
+        createdBy: "external",
+        portableCreatedAt: new Date(),
+        portableUpdatedAt: new Date(),
+        lastValidHash: null,
+        observedHash: null,
         syncState: "conflicted",
         diagnosticCode: "memory-conflict",
         diagnosticMessage: sanitize(input.message),
-      }
-    );
+        lastImportedAt: new Date(),
+        lastScanId: null,
+      });
+    }
     await this.auditModel.append({
       scopeId: scope.scopeId,
       memoryId: input.memoryId,
@@ -368,6 +394,38 @@ export class PortableWorkspaceMemoryModule extends BaseModule {
     });
   }
 
+  /**
+   * Clear a conflict after the user chose a version (design §14.7). The caller
+   * (service) has already written the chosen bytes and validated them; this
+   * method updates the portable state to `synced` with the new lastValidHash
+   * and records a sanitized audit row. Never touches files.
+   */
+  async resolveConflictClear(
+    scope: WorkspaceMemoryScopeContext,
+    memoryId: string,
+    nextHash: string
+  ): Promise<void> {
+    await this.portableStateModel.updateByScopeAndMemoryId(
+      scope.scopeId,
+      memoryId,
+      {
+        syncState: "synced",
+        diagnosticCode: null,
+        diagnosticMessage: null,
+        lastValidHash: nextHash,
+        observedHash: nextHash,
+      }
+    );
+    await this.auditModel.append({
+      scopeId: scope.scopeId,
+      memoryId,
+      action: "resolve",
+      actor: "user",
+      outcome: "completed",
+      nextHash,
+    });
+  }
+
   /** Per-file diagnostics for the UI (rejected / conflicted / missing). */
   async listDiagnostics(
     scope: WorkspaceMemoryScopeContext
@@ -405,6 +463,36 @@ export class PortableWorkspaceMemoryModule extends BaseModule {
         )
         .map((s) => s.memoryId)
     );
+  }
+
+  /**
+   * Records currently in the conflicted state (FR-041 / §14.7): the file was
+   * edited externally between AiFetchly's read and write, so neither version
+   * is safe to apply. Surfaces the memoryId, relativePath, last valid hash,
+   * and observed hash for the conflict-resolution UI.
+   */
+  async listConflicts(
+    scope: WorkspaceMemoryScopeContext
+  ): Promise<
+    readonly {
+      readonly memoryId: string;
+      readonly relativePath: string;
+      readonly lastValidHash?: string | null;
+      readonly observedHash?: string | null;
+      readonly message: string;
+    }[]
+  > {
+    const states = await this.portableStateModel.listByScope(
+      scope.scopeId,
+      "conflicted"
+    );
+    return states.map((s) => ({
+      memoryId: s.memoryId,
+      relativePath: s.relativePath,
+      lastValidHash: s.lastValidHash,
+      observedHash: s.observedHash,
+      message: s.diagnosticMessage ?? "concurrent edit detected",
+    }));
   }
 
   async getPortableState(

@@ -31,6 +31,10 @@ import {
 } from "@/service/PortableWorkspaceMemoryIndexService";
 import { PortableWorkspaceMemoryFormat } from "@/service/PortableWorkspaceMemoryFormat";
 import {
+  parseYamlFrontmatter,
+  stripFrontmatterBlock,
+} from "@/service/portableMemoryFrontmatter";
+import {
   PortableWorkspaceMemoryGitStatusService,
 } from "@/service/PortableWorkspaceMemoryGitStatusService";
 import { WorkspaceMemoryContextResolver } from "@/service/WorkspaceMemoryContextResolver";
@@ -572,6 +576,148 @@ export class PortableWorkspaceMemoryService {
   async getGitStatus(conversationId: string): Promise<string> {
     const ctx = await this.requireContext(conversationId);
     return this.gitStatusService.getTrackingState(ctx.workspaceRoot);
+  }
+
+  // --- Conflicts (FR-041 / §14.7) -----------------------------------------------
+
+  /**
+   * List records in the conflicted state, with the last-valid projection and
+   * the current on-disk file (parsed on demand) so the UI can render both
+   * versions + a Markdown diff. Never persists rejected external content
+   * merely to render a diff (§14.6).
+   */
+  async listConflicts(conversationId: string): Promise<
+    readonly {
+      readonly memoryId: string;
+      readonly relativePath: string;
+      readonly lastValidHash?: string | null;
+      readonly observedHash?: string | null;
+      readonly message: string;
+      readonly currentFileContent?: string;
+      readonly currentFileParseable: boolean;
+    }[]
+  > {
+    const ctx = await this.requireContext(conversationId);
+    const scope = await this.requireScope(ctx);
+    const conflicts = await this.portableModule.listConflicts(scope);
+    const store = new PortableWorkspaceMemoryFileStore(ctx.workspaceRoot);
+    return Promise.all(
+      conflicts.map(async (c) => {
+        let currentFileContent: string | undefined;
+        let currentFileParseable = false;
+        try {
+          const read = await store.readRecord(c.memoryId);
+          if (read) {
+            currentFileContent = read.content;
+            currentFileParseable = true;
+          }
+        } catch {
+          // Read failure → file absent or unreadable; treat as unparseable.
+        }
+        return {
+          memoryId: c.memoryId,
+          relativePath: c.relativePath,
+          lastValidHash: c.lastValidHash,
+          observedHash: c.observedHash,
+          message: c.message,
+          currentFileContent,
+          currentFileParseable,
+        };
+      })
+    );
+  }
+
+  /**
+   * Resolve a conflict per PRD §14.7. The caller chooses the authority:
+   *   - "use-file":    validate the current file, update projection+hash.
+   *   - "use-app":     require a second confirmation (caller-supplied); write
+   *                    the app draft atomically, then import.
+   *   - "merge":       the caller supplies a merged document; write+import.
+   * Every action writes a sanitized audit row (FR-060).
+   */
+  async resolveConflict(input: {
+    readonly conversationId: string;
+    readonly memoryId: string;
+    readonly action: "use-file" | "use-app" | "merge";
+    readonly mergedDocument?: {
+      readonly title: string;
+      readonly content: string;
+      readonly type: import("@/entityTypes/aiWorkspaceMemoryTypes").AIWorkspaceMemoryType;
+      readonly status: import("@/entityTypes/aiWorkspaceMemoryTypes").AIWorkspaceMemoryStatus;
+      readonly confidence: number;
+      readonly visibility: "local" | "team";
+    };
+  }): Promise<void> {
+    const ctx = await this.requireContext(input.conversationId);
+    const scope = await this.requireScope(ctx);
+    const store = new PortableWorkspaceMemoryFileStore(ctx.workspaceRoot);
+    const read = await store.readRecord(input.memoryId);
+    if (!read) {
+      throw new Error("portable memory file is absent; cannot resolve conflict");
+    }
+
+    let nextHash: string;
+    if (input.action === "use-file") {
+      // Validate the current file through the parser; import if it parses.
+      const parsed = this.format.parseDraft({
+        relativePath:
+          PortableWorkspaceMemoryFileStore.relativePathForMemoryId(
+            input.memoryId
+          ),
+        fileName: `${input.memoryId}.md`,
+        contentHash: read.contentHash,
+        sizeBytes: read.sizeBytes,
+        mtimeMs: read.mtimeMs,
+        rawFrontmatter: parseYamlFrontmatter(read.content),
+        markdownBody: stripFrontmatterBlock(read.content),
+        isSymbolicLink: false,
+      });
+      if (!parsed.ok) {
+        throw new Error(
+          `current file is invalid: ${parsed.diagnostic.message}`
+        );
+      }
+      await this.portableModule.upsertValidatedDocument(scope, parsed.document, {
+        actor: "user",
+        pendingReview: false,
+      });
+      nextHash = read.contentHash;
+    } else if (input.action === "use-app" || input.action === "merge") {
+      if (!input.mergedDocument) {
+        throw new Error(
+          "use-app/merge requires a mergedDocument with title/content/type/status/confidence/visibility"
+        );
+      }
+      const existing = await this.memoryModel.getByScopeAndMemoryId(
+        scope.scopeId,
+        input.memoryId
+      );
+      const createdAt = existing?.createdAt ?? new Date();
+      const document = this.format.buildDocument({
+        id: input.memoryId,
+        type: input.mergedDocument.type,
+        status: input.mergedDocument.status,
+        confidence: input.mergedDocument.confidence,
+        visibility: input.mergedDocument.visibility,
+        createdAt,
+        updatedAt: new Date(),
+        createdBy: "user",
+        title: input.mergedDocument.title,
+        content: input.mergedDocument.content,
+      });
+      const serialized = this.format.serialize(document);
+      const written = await store.writeRecord(input.memoryId, serialized);
+      nextHash = written.contentHash;
+    } else {
+      throw new Error(`unknown conflict action: ${input.action}`);
+    }
+
+    await this.portableModule.resolveConflictClear(
+      scope,
+      input.memoryId,
+      nextHash
+    );
+    await this.refreshIndex(ctx, scope);
   }
 
   // --- Rescan ----------------------------------------------------------------------
