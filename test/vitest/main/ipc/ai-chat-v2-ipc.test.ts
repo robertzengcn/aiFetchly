@@ -1,4 +1,5 @@
 import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
+import type { MockInstance } from "vitest";
 import {
   setupElectronMocks,
   resetElectronMocks,
@@ -83,6 +84,26 @@ vi.mock("@/config/usersetting", async (importOriginal) => {
     USERSDBPATH: "USERSDBPATH",
   };
 });
+
+// Spy wrapper over the shared generated-image reference normalizer so tests
+// can assert whether reference parsing ran (delegates to the real impl).
+const mockNormalizeGeneratedImageReferences = vi.hoisted(() => vi.fn());
+vi.mock(
+  "@/service/generatedImageReferenceNormalize",
+  async (importOriginal) => {
+    const actual = await importOriginal<
+      typeof import("@/service/generatedImageReferenceNormalize")
+    >();
+    mockNormalizeGeneratedImageReferences.mockImplementation(
+      actual.normalizeGeneratedImageReferences
+    );
+    return {
+      ...actual,
+      normalizeGeneratedImageReferences:
+        mockNormalizeGeneratedImageReferences,
+    };
+  }
+);
 
 // Mock the v2 module.
 const mockClearConversation = vi.fn().mockResolvedValue(5);
@@ -262,6 +283,7 @@ import {
   registerAiChatV2IpcHandlers,
   resetAiChatV2RuntimeForDatabaseSwitch,
 } from "@/main-process/communication/ai-chat-v2-ipc";
+import { AIChatQueryEngine } from "@/service/AIChatQueryEngine";
 import {
   AI_CHAT_V2_RESUME_TOOL_AFTER_PERMISSION,
   AI_CHAT_V2_CONVERSATIONS,
@@ -1303,5 +1325,183 @@ describe("AI Chat V2 — reasoning streaming + persistence", () => {
     payload = findCompletePayload(senderSend);
     expect(payload?.eventType).toBe("error");
     expect(mockOpenAIChatCompletionStream).not.toHaveBeenCalled();
+  });
+});
+
+/** Helper: extract ALL STREAM_COMPLETE payloads from sender.send mock calls. */
+function collectCompletePayloads(
+  senderSend: ReturnType<typeof vi.fn>
+): Record<string, unknown>[] {
+  return senderSend.mock.calls
+    .filter(([ch]) => ch === AI_CHAT_V2_STREAM_COMPLETE)
+    .map(([, p]) => JSON.parse(p as string) as Record<string, unknown>);
+}
+
+/** Helper: a minimal valid image attachment accepted by upload normalization. */
+function imageUploadAttachment(fileName: string): Record<string, unknown> {
+  const contentBase64 = Buffer.from("hello").toString("base64");
+  return {
+    fileName,
+    mimeType: "image/png",
+    sizeBytes: Buffer.from("hello").length,
+    contentBase64,
+    kind: "image",
+  };
+}
+
+describe("AI Chat V2 — generated-image reference boundary", () => {
+  let submitSpy: MockInstance | undefined;
+
+  beforeEach(() => {
+    setupElectronMocks();
+    vi.clearAllMocks();
+    mockToolApprovalState.modes.clear();
+    mockGetSkill.mockReturnValue(undefined);
+    mockIsRegistered.mockReturnValue(false);
+    registerAiChatV2IpcHandlers();
+  });
+  afterEach(() => {
+    submitSpy?.mockRestore();
+    submitSpy = undefined;
+    resetElectronMocks();
+  });
+
+  function spyEngineSubmit(): MockInstance {
+    submitSpy = vi
+      .spyOn(AIChatQueryEngine.prototype, "submitMessage")
+      .mockResolvedValue(undefined);
+    return submitSpy;
+  }
+
+  it("runs the availability gate before generated-image reference parsing", async () => {
+    mockState.aiEnabled = "false";
+    const senderSend = vi.fn();
+    await mockIpcMain.callHandler(
+      AI_CHAT_V2_STREAM,
+      { sender: { send: senderSend } },
+      JSON.stringify({
+        message: "",
+        generatedImageReferences: [{ messageId: "m1", imageIndex: 0 }],
+      })
+    );
+
+    const payloads = collectCompletePayloads(senderSend);
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]).toMatchObject({ eventType: "error" });
+    expect(mockNormalizeGeneratedImageReferences).not.toHaveBeenCalled();
+  });
+
+  it("emits one terminal error chunk with errorCode for a malformed reference item", async () => {
+    enableLocalAiChat();
+    const senderSend = vi.fn();
+    await mockIpcMain.callHandler(
+      AI_CHAT_V2_STREAM,
+      { sender: { send: senderSend } },
+      JSON.stringify({
+        message: "make it pop",
+        generatedImageReferences: [
+          { messageId: "m1", imageIndex: 0 },
+          { messageId: "m2", imageIndex: 99 },
+        ],
+      })
+    );
+
+    const payloads = collectCompletePayloads(senderSend);
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]).toMatchObject({
+      eventType: "error",
+      errorCode: "generated_image_reference_invalid",
+    });
+    expect(mockOpenAIChatCompletionStream).not.toHaveBeenCalled();
+  });
+
+  it("dedupes references first-wins preserving order onto the engine request", async () => {
+    const spy = spyEngineSubmit();
+    const senderSend = vi.fn();
+    await mockIpcMain.callHandler(
+      AI_CHAT_V2_STREAM,
+      { sender: { send: senderSend } },
+      JSON.stringify({
+        message: "combine these",
+        generatedImageReferences: [
+          { messageId: "msg-a", imageIndex: 0 },
+          { messageId: "msg-b", imageIndex: 1 },
+          { messageId: "msg-a", imageIndex: 0 },
+          { messageId: "msg-c", imageIndex: 2 },
+          { messageId: "msg-b", imageIndex: 1 },
+        ],
+      })
+    );
+
+    expect(spy).toHaveBeenCalledTimes(1);
+    const input = spy.mock.calls[0][0] as {
+      request: { generatedImageReferences?: unknown[] };
+    };
+    expect(input.request.generatedImageReferences).toEqual([
+      { messageId: "msg-a", imageIndex: 0 },
+      { messageId: "msg-b", imageIndex: 1 },
+      { messageId: "msg-c", imageIndex: 2 },
+    ]);
+  });
+
+  it("rejects 2 uploaded images + 2 references with generated_image_reference_limit", async () => {
+    const spy = spyEngineSubmit();
+    const senderSend = vi.fn();
+    await mockIpcMain.callHandler(
+      AI_CHAT_V2_STREAM,
+      { sender: { send: senderSend } },
+      JSON.stringify({
+        message: "too many images",
+        uploadedFiles: [
+          imageUploadAttachment("one.png"),
+          imageUploadAttachment("two.png"),
+        ],
+        generatedImageReferences: [
+          { messageId: "m1", imageIndex: 0 },
+          { messageId: "m2", imageIndex: 1 },
+        ],
+      })
+    );
+
+    const payloads = collectCompletePayloads(senderSend);
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]).toMatchObject({
+      eventType: "error",
+      errorCode: "generated_image_reference_limit",
+    });
+    expect(spy).not.toHaveBeenCalled();
+    expect(mockOpenAIChatCompletionStream).not.toHaveBeenCalled();
+  });
+
+  it("forwards normalized references (trimmed, extras stripped) even with blank text", async () => {
+    const spy = spyEngineSubmit();
+    const senderSend = vi.fn();
+    await mockIpcMain.callHandler(
+      AI_CHAT_V2_STREAM,
+      { sender: { send: senderSend } },
+      JSON.stringify({
+        message: "   ",
+        generatedImageReferences: [
+          {
+            messageId: "  msg-1  ",
+            imageIndex: 3,
+            url: "generated-image://attacker",
+            localPath: "/etc/passwd",
+            conversationId: "conv-x",
+            userEmail: "attacker@example.com",
+          },
+          { messageId: "msg-2", imageIndex: 0 },
+        ],
+      })
+    );
+
+    expect(spy).toHaveBeenCalledTimes(1);
+    const input = spy.mock.calls[0][0] as {
+      request: { generatedImageReferences?: unknown[] };
+    };
+    expect(input.request.generatedImageReferences).toEqual([
+      { messageId: "msg-1", imageIndex: 3 },
+      { messageId: "msg-2", imageIndex: 0 },
+    ]);
   });
 });
