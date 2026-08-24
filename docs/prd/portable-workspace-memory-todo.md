@@ -205,16 +205,16 @@ Each implementation task must include its required unit, component, integration,
 
 ## P1: Verify non-functional requirements
 
-- [ ] **Add performance benchmarks** (PRD section 18.1 and success criteria `SC-001`, `SC-004`)
+- [x] **Add performance benchmarks** (PRD section 18.1 and success criteria `SC-001`, `SC-004`)
   - Reconcile 1,000 valid records totaling at most 16 MiB within 3 seconds after warm-up.
   - Reflect one external edit in projection and UI within one second after debounce.
   - Generate the bounded index within 500 ms.
   - Prove unchanged reconciliation avoids parser, database, and index writes where safe.
 
-- [ ] **Add cross-platform path and watcher verification** (PRD sections 18.2 and 18.3)
+- [x] **Add cross-platform path and watcher verification** (PRD sections 18.2 and 18.3)
   - Exercise Windows, macOS, and Linux path behavior, atomic rename patterns, symlink rejection, case sensitivity, branch checkout batches, and watcher restart recovery.
 
-- [ ] **Close all testing-matrix gaps** (`FR-064`, PRD section 21)
+- [x] **Close all testing-matrix gaps** (`FR-064`, PRD section 21)
   - Cover every allowed enum value, malicious Markdown/HTML, UTF-8/control characters, duplicate IDs, external rename/atomic rename, export retry, selected export, disable/re-enable, future schemas, Git states, loading/partial/error UI states, and translation parity.
   - Fix un-awaited rejection assertions in `PortableWorkspaceMemoryFileStore.test.ts`.
 
