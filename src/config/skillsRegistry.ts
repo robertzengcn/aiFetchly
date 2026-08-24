@@ -166,7 +166,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       "shell_execute, Python, Pillow/PIL, ImageMagick, or file_read for image editing. " +
       "HARD LIMIT: at most 3 images per call and per AI request. " +
       "For image EDITING, use this directly with exactly 1 image. A provider may accept 3 inputs but return only 1 output, so multiple editable images must not share one request. " +
-      "WHEN 2 OR MORE files need the same edit, call process_artifact_batch once with all exact paths and the shared instruction. It runs one isolated provider operation per input with bounded concurrency and returns every output with its input mapping. " +
+      "WHEN 2 OR MORE images need the same edit, call process_artifact_batch once with all exact paths and the shared instruction. It accepts either workspace files or this conversation's AI-generated images (generatedImageReferences — no workspace needed), runs one isolated provider operation per input with bounded concurrency, and returns every output with its input mapping. " +
       "The 3-image form remains available for analysis/comparison requests that intentionally consume several images together. " +
       "NEVER pass more than 3 paths in one call. " +
       "NEVER issue multiple attach_local_images calls in the same assistant turn/tool round — " +

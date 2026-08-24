@@ -13,6 +13,7 @@ import {
   GeneratedImageReferenceError,
   type AuthorizedGeneratedImageSource,
   type GeneratedImageReferenceErrorCode,
+  type PreparedGeneratedImageArtifact,
 } from "@/entityTypes/generatedImageReferenceTypes";
 import {
   AIImageAttachmentToolService,
@@ -40,16 +41,26 @@ export type ArtifactBatchInputIdentity =
       readonly reference: ChatV2GeneratedImageReference;
     };
 
+export type ArtifactBatchWorkerSource =
+  | {
+      readonly kind: "workspace_file";
+      readonly file: string;
+      /** Eagerly resolved in execute(); unchanged legacy workspace flow. */
+      readonly workspaceRoot: string;
+    }
+  | {
+      readonly kind: "generated_image";
+      readonly authorized: AuthorizedGeneratedImageSource;
+      readonly artifact: PreparedGeneratedImageArtifact;
+    };
+
 export interface ArtifactBatchWorkerInput {
-  file: string;
+  source: ArtifactBatchWorkerSource;
   instruction: string;
   model?: string;
   parentConversationId: string;
-  workspaceRoot: string;
   detail: ImageDetail;
   signal?: AbortSignal;
-  /** Present only for generated-image items; `file`/`workspaceRoot` are unused then. */
-  generatedImage?: ChatV2GeneratedImageReference;
 }
 
 interface ParsedBatchArgs {
@@ -94,6 +105,11 @@ export interface ArtifactBatchProcessingDeps {
     conversationId: string,
     references: readonly ChatV2GeneratedImageReference[]
   ) => Promise<readonly AuthorizedGeneratedImageSource[]>;
+  prepareReferences?: (
+    sources: readonly AuthorizedGeneratedImageSource[],
+    detail: "auto" | "low" | "high",
+    signal?: AbortSignal
+  ) => Promise<PreparedGeneratedImageArtifact[]>;
 }
 
 interface ScheduledItem {
@@ -291,17 +307,28 @@ function createDefaultAuthorizeReferences(): NonNullable<
   };
 }
 
+function createDefaultPrepareReferences(): NonNullable<
+  ArtifactBatchProcessingDeps["prepareReferences"]
+> {
+  return async (sources, detail, signal) => {
+    const { GeneratedImageReferenceService } = await import(
+      "@/service/GeneratedImageReferenceService"
+    );
+    return new GeneratedImageReferenceService().prepareAuthorized(
+      sources,
+      detail,
+      signal
+    );
+  };
+}
+
 function createDefaultDeps(): ArtifactBatchProcessingDeps {
   const resolver = new WorkspaceResolver();
   return {
     resolveWorkspace: (conversationId) => resolver.resolve(conversationId),
     authorizeReferences: createDefaultAuthorizeReferences(),
+    prepareReferences: createDefaultPrepareReferences(),
     runAgent: async (input) => {
-      if (input.generatedImage) {
-        throw new Error(
-          "Generated-image sources are authorized but the default worker cannot process them yet."
-        );
-      }
       // Lazy imports break the registry cycle:
       // skillsRegistry -> this tool -> AgentRuntime -> skillsRegistry.
       const [{ AgentRuntimeRegistry }, { SkillExecutor }] = await Promise.all([
@@ -309,19 +336,44 @@ function createDefaultDeps(): ArtifactBatchProcessingDeps {
         import("@/service/SkillExecutor"),
       ]);
       const runtime = AgentRuntimeRegistry.getRuntime();
+      if (input.source.kind === "generated_image") {
+        const { authorized, artifact } = input.source;
+        return runtime.runSync(
+          {
+            agentId: "agent-generated-image-editor",
+            prompt: `Process exactly one supplied image according to this instruction: ${input.instruction}`,
+            taskPacket: { files: [], instruction: input.instruction },
+            initialImageArtifacts: [
+              {
+                sourceId: `${authorized.reference.messageId}:${authorized.reference.imageIndex}`,
+                fileName: artifact.fileName,
+                mimeType: artifact.mimeType,
+                dataUrl: artifact.dataUrl,
+                detail: artifact.detail,
+              },
+            ],
+            parentConversationId: input.parentConversationId,
+            model: input.model,
+            executionMode: "foreground",
+          },
+          { signal: input.signal }
+        );
+      }
+      const file = input.source.file;
+      const workspaceRoot = input.source.workspaceRoot;
       const imageDeps = createDefaultAIImageAttachmentToolDeps({
         destinationLabel: destinationLabel(),
       });
       const attachmentService = new AIImageAttachmentToolService({
         ...imageDeps,
-        resolveWorkspace: async () => ({ rootPath: input.workspaceRoot }),
+        resolveWorkspace: async () => ({ rootPath: workspaceRoot }),
       });
       return runtime.runSync(
         {
           agentId: "agent-batch-worker",
           prompt: `Process exactly one image. Apply this instruction: ${input.instruction}`,
           taskPacket: {
-            files: [input.file],
+            files: [file],
             instruction: input.instruction,
           },
           parentConversationId: input.parentConversationId,
@@ -334,7 +386,7 @@ function createDefaultDeps(): ArtifactBatchProcessingDeps {
             if (name === "attach_local_images") {
               const startedAt = Date.now();
               const result = await attachmentService.execute(
-                { paths: [input.file], detail: input.detail },
+                { paths: [file], detail: input.detail },
                 context
               );
               return wrapSkillResult({
@@ -393,6 +445,10 @@ function summarize(
   };
 }
 
+function referenceKey(reference: ChatV2GeneratedImageReference): string {
+  return `${reference.messageId}:${reference.imageIndex}`;
+}
+
 function failedReferenceItems(
   references: readonly ChatV2GeneratedImageReference[],
   error: string,
@@ -442,11 +498,14 @@ export class ArtifactBatchProcessingService {
       identity: { kind: "workspace_file", path: file },
       launch: () =>
         this.deps.runAgent({
-          file,
+          source: {
+            kind: "workspace_file",
+            file,
+            workspaceRoot: workspace.rootPath,
+          },
           instruction: batch.instruction,
           model: context.model,
           parentConversationId: context.conversationId,
-          workspaceRoot: workspace.rootPath,
           detail: batch.detail,
           signal: context.signal,
         }),
@@ -474,12 +533,13 @@ export class ArtifactBatchProcessingService {
         batch.concurrency
       );
     }
+    let authorizedSources: readonly AuthorizedGeneratedImageSource[];
     try {
-      await authorize(context.conversationId, references);
+      authorizedSources = await authorize(context.conversationId, references);
     } catch (error: unknown) {
       // authorizeOnly is all-or-nothing, so a rejection here fails every
       // requested reference in input order. Valid-sibling continuation is
-      // added by the per-item prepare stage in a follow-up task.
+      // handled per-item by the JIT prepare stage below.
       const code: GeneratedImageReferenceErrorCode =
         error instanceof GeneratedImageReferenceError
           ? error.code
@@ -491,19 +551,37 @@ export class ArtifactBatchProcessingService {
         batch.concurrency
       );
     }
+    const prepare =
+      this.deps.prepareReferences ?? createDefaultPrepareReferences();
+    const authorizedByKey = new Map(
+      authorizedSources.map((source) => [referenceKey(source.reference), source])
+    );
     const items: ScheduledItem[] = references.map((reference) => ({
       identity: { kind: "generated_image", reference },
-      launch: () =>
-        this.deps.runAgent({
-          file: "",
+      launch: async () => {
+        const authorized = authorizedByKey.get(referenceKey(reference));
+        if (!authorized) {
+          throw new GeneratedImageReferenceError(
+            "generated_image_reference_invalid"
+          );
+        }
+        // JIT preparation inside the bounded slot: one artifact at a time,
+        // scoped to this iteration so it is collectible once runSync resolves.
+        const [artifact] = await prepare([authorized], batch.detail, context.signal);
+        if (!artifact) {
+          throw new GeneratedImageReferenceError(
+            "generated_image_reference_invalid"
+          );
+        }
+        return this.deps.runAgent({
+          source: { kind: "generated_image", authorized, artifact },
           instruction: batch.instruction,
           model: context.model,
           parentConversationId: context.conversationId,
-          workspaceRoot: "",
           detail: batch.detail,
           signal: context.signal,
-          generatedImage: reference,
-        }),
+        });
+      },
     }));
     return this.processItems(items, batch.processor, batch.concurrency, context);
   }
@@ -528,6 +606,9 @@ export class ArtifactBatchProcessingService {
             outputFilePaths: [],
             outputImages: [],
             error: "Batch processing was cancelled.",
+            ...(item.identity.kind === "generated_image"
+              ? { errorCode: "generated_image_batch_cancelled" }
+              : {}),
             durationMs: 0,
           };
           continue;
@@ -563,12 +644,16 @@ export class ArtifactBatchProcessingService {
             durationMs: Date.now() - startedAt,
           };
         } catch (error) {
+          const cancelled = context.signal?.aborted === true;
           results[index] = {
             input: item.identity,
-            status: context.signal?.aborted ? "cancelled" : "failed",
+            status: cancelled ? "cancelled" : "failed",
             outputFilePaths: [],
             outputImages: [],
             error: error instanceof Error ? error.message : String(error),
+            ...(!cancelled && error instanceof GeneratedImageReferenceError
+              ? { errorCode: error.code }
+              : {}),
             durationMs: Date.now() - startedAt,
           };
         }

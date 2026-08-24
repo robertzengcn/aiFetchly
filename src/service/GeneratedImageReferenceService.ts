@@ -160,6 +160,15 @@ function normalizeIoError(
   return new GeneratedImageReferenceError(code);
 }
 
+function enforceCombinedBudget(totalDataUrlChars: number): void {
+  if (totalDataUrlChars > CHAT_IMAGE_LIMITS.targetTotalDataUrlChars) {
+    throw new GeneratedImageReferenceError(
+      "generated_image_too_large",
+      "combined generated-image payload exceeds request budget"
+    );
+  }
+}
+
 export class GeneratedImageReferenceService {
   private readonly deps: GeneratedImageReferenceServiceDeps;
 
@@ -205,38 +214,16 @@ export class GeneratedImageReferenceService {
     for (const reference of dedupeReferences(input.references)) {
       ensureNotAborted(input.signal);
       const authorized = await this.authorizeOne(input.conversationId, reference);
-      const pinned = await this.readViaPinnedDescriptor(authorized.realResolved);
-      const detected = detectImageSignature(pinned.buffer);
-      if (!detected) {
-        throw new GeneratedImageReferenceError("generated_image_unsupported_type");
-      }
-      const expected = expectedMimeTypeFromFileName(authorized.identity.fileName);
-      if (expected !== null && expected !== detected.mimeType) {
-        throw new GeneratedImageReferenceError("generated_image_unsupported_type");
-      }
-      let prepared: PreparedModelImage;
-      try {
-        prepared = await this.deps.prepareImage(
-          pinned.buffer,
-          detected.mimeType,
-          input.detail,
-          input.signal
-        );
-      } catch (err: unknown) {
-        throw new GeneratedImageReferenceError(
-          GeneratedImagePreparationService.errorCodeForNormalizationError(err)
-        );
-      }
-      artifacts.push({
-        reference,
-        fileName: authorized.fileName,
-        mimeType: prepared.mimeType,
-        width: prepared.width,
-        height: prepared.height,
-        preparedSizeBytes: prepared.preparedSizeBytes,
-        dataUrl: prepared.dataUrl,
-        detail: input.detail,
-      });
+      const prepared = await this.prepareAuthorizedOne(
+        {
+          reference,
+          absolutePath: authorized.realResolved,
+          fileName: authorized.fileName,
+        },
+        input.detail,
+        input.signal
+      );
+      artifacts.push(prepared);
       metadata.push({
         messageId: reference.messageId,
         imageIndex: reference.imageIndex,
@@ -246,13 +233,77 @@ export class GeneratedImageReferenceService {
       totalPreparedBytes += prepared.preparedSizeBytes;
       totalDataUrlChars += prepared.dataUrl.length;
     }
-    if (totalDataUrlChars > CHAT_IMAGE_LIMITS.targetTotalDataUrlChars) {
-      throw new GeneratedImageReferenceError(
-        "generated_image_too_large",
-        "combined generated-image payload exceeds request budget"
+    enforceCombinedBudget(totalDataUrlChars);
+    return { artifacts, metadata, totalPreparedBytes, totalDataUrlChars };
+  }
+
+  /** Read + prepare already-authorized sources without re-running ownership
+   * checks. Same pinned-fd read, signature detection, and preparation flow as
+   * {@link resolveGeneratedImages}. */
+  async prepareAuthorized(
+    sources: readonly AuthorizedGeneratedImageSource[],
+    detail: "auto" | "low" | "high",
+    signal?: AbortSignal
+  ): Promise<PreparedGeneratedImageArtifact[]> {
+    const artifacts: PreparedGeneratedImageArtifact[] = [];
+    for (const source of sources) {
+      ensureNotAborted(signal);
+      artifacts.push(
+        await this.prepareAuthorizedOne(
+          {
+            reference: source.reference,
+            absolutePath: source.absolutePath,
+            fileName: source.fileName,
+          },
+          detail,
+          signal
+        )
       );
     }
-    return { artifacts, metadata, totalPreparedBytes, totalDataUrlChars };
+    return artifacts;
+  }
+
+  private async prepareAuthorizedOne(
+    input: {
+      readonly reference: ChatV2GeneratedImageReference;
+      readonly absolutePath: string;
+      readonly fileName: string;
+    },
+    detail: ImageDetail,
+    signal?: AbortSignal
+  ): Promise<PreparedGeneratedImageArtifact> {
+    const pinned = await this.readViaPinnedDescriptor(input.absolutePath);
+    const detected = detectImageSignature(pinned.buffer);
+    if (!detected) {
+      throw new GeneratedImageReferenceError("generated_image_unsupported_type");
+    }
+    const expected = expectedMimeTypeFromFileName(input.fileName);
+    if (expected !== null && expected !== detected.mimeType) {
+      throw new GeneratedImageReferenceError("generated_image_unsupported_type");
+    }
+    let prepared: PreparedModelImage;
+    try {
+      prepared = await this.deps.prepareImage(
+        pinned.buffer,
+        detected.mimeType,
+        detail,
+        signal
+      );
+    } catch (err: unknown) {
+      throw new GeneratedImageReferenceError(
+        GeneratedImagePreparationService.errorCodeForNormalizationError(err)
+      );
+    }
+    return {
+      reference: input.reference,
+      fileName: input.fileName,
+      mimeType: prepared.mimeType,
+      width: prepared.width,
+      height: prepared.height,
+      preparedSizeBytes: prepared.preparedSizeBytes,
+      dataUrl: prepared.dataUrl,
+      detail,
+    };
   }
 
   async authorizeOnly(input: {
