@@ -125,9 +125,10 @@ function collectRecentUserMessages(
 /**
  * Detect whether the assembled transcript contains any AI-generated image
  * references (the `<generated_images>` marker injected by
- * {@link augmentContentWithGeneratedImages}). Used to auto-promote
- * image-editing tools when the user's follow-up message lacks
- * image-specific keywords but clearly references a prior generated image.
+ * {@link augmentContentWithGeneratedImages}). Informational context flag for
+ * tool-catalog awareness only: the tool-load policy no longer auto-promotes
+ * export/attach tools for follow-up edits, because a selected generated image
+ * arrives attached to the current user turn and is edited directly.
  */
 function messagesHaveGeneratedImages(
   messages: readonly OpenAIChatMessage[]
