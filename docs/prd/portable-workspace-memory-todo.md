@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| Status | Gaps found |
+| Status | Passed |
 | Created | 2026-08-24 |
 | Source PRD | `docs/prd/portable-workspace-memory-prd.md` |
 | Technical design | `docs/prd/portable-workspace-memory-technical-design.md` |
@@ -220,10 +220,10 @@ Each implementation task must include its required unit, component, integration,
 
 ## Final launch gate
 
-- [ ] Resolve and record every open product decision in PRD section 27.
-- [ ] Resolve and record every open engineering decision in technical-design section 30.
-- [ ] Map each `FR-001` through `FR-068` to implementation and passing test evidence.
-- [ ] Map each `AC-001` through `AC-013` to a passing integration or end-to-end test.
-- [ ] Run and pass `yarn test`, `yarn testmain`, `yarn test:components`, `yarn test:e2e`, `yarn typecheck`, and `yarn vue-typecheck`.
-- [ ] Complete every item in the PRD launch checklist.
-- [ ] Re-run the PRD/technical-design completion audit and obtain a `passed` result.
+- [x] Resolve and record every open product decision in PRD section 27.
+- [x] Resolve and record every open engineering decision in technical-design section 30.
+- [x] Map each `FR-001` through `FR-068` to implementation and passing test evidence.
+- [x] Map each `AC-001` through `AC-013` to a passing integration or end-to-end test.
+- [x] Run and pass `yarn test`, `yarn testmain`, `yarn test:components`, `yarn test:e2e`, `yarn typecheck`, and `yarn vue-typecheck`.
+- [x] Complete every item in the PRD launch checklist.
+- [x] Re-run the PRD/technical-design completion audit and obtain a `passed` result.
