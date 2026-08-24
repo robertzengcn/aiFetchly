@@ -9,6 +9,7 @@
 - **Product**: AiFetchly Electron desktop application
 - **Primary areas**: AI Chat V2, generated-image storage, multimodal requests, image editing, batch subagents
 - **Related desktop documents**:
+  - [`ai-chat-generated-image-editing-technical-design.md`](./ai-chat-generated-image-editing-technical-design.md)
   - [`ai-chat-llm-image-attachment-tool-prd.md`](./ai-chat-llm-image-attachment-tool-prd.md)
   - [`ai-chat-batch-worker-subagent-prd.md`](./ai-chat-batch-worker-subagent-prd.md)
   - [`ai-chat-v2-attachment-upload-prd.md`](../ai-chat-v2-attachment-upload-prd.md)
