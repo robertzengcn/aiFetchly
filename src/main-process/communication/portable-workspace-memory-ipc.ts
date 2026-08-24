@@ -3,6 +3,7 @@ import { z } from "zod";
 import { PortableWorkspaceMemoryService } from "@/service/PortableWorkspaceMemoryService";
 import {
   AI_PORTABLE_WORKSPACE_MEMORY_STATUS,
+  AI_PORTABLE_WORKSPACE_MEMORY_LIST,
   AI_PORTABLE_WORKSPACE_MEMORY_ENABLE_PREVIEW,
   AI_PORTABLE_WORKSPACE_MEMORY_ENABLE,
   AI_PORTABLE_WORKSPACE_MEMORY_EXPORT_PREVIEW,
@@ -183,6 +184,19 @@ export function registerPortableWorkspaceMemoryIpcHandlers(): void {
         return ok(await getService().getStatus(input.data.conversationId));
       } catch (err) {
         return denied(err instanceof Error ? err.message : "status failed");
+      }
+    }
+  );
+
+  ipcMain.handle(
+    AI_PORTABLE_WORKSPACE_MEMORY_LIST,
+    async (_e, data: unknown) => {
+      try {
+        const input = strictConversation.safeParse(safeParse(data) ?? {});
+        if (!input.success) return denied("conversationId is required");
+        return ok(await getService().listWithPortableState(input.data.conversationId));
+      } catch (err) {
+        return denied(err instanceof Error ? err.message : "list failed");
       }
     }
   );

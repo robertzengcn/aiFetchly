@@ -159,6 +159,23 @@
                 variant="outlined"
                 >{{ statusLabel(m.status) }}</v-chip
               >
+              <!-- Per-memory portable storage/sync badges (FR-061) -->
+              <v-chip
+                v-if="portableStatus?.enabled && portableRowMap.get(m.memoryId)"
+                size="x-small"
+                :color="storageBadgeColor(portableRowMap.get(m.memoryId)!)"
+                variant="tonal"
+              >
+                {{ storageBadgeLabel(portableRowMap.get(m.memoryId)!) }}
+              </v-chip>
+              <v-chip
+                v-if="portableStatus?.enabled && portableRowMap.get(m.memoryId)?.syncState"
+                size="x-small"
+                :color="syncBadgeColor(portableRowMap.get(m.memoryId)!.syncState!)"
+                variant="outlined"
+              >
+                {{ syncBadgeLabel(portableRowMap.get(m.memoryId)!.syncState!) }}
+              </v-chip>
               <v-spacer />
               <span class="wm-item__meta">{{ formatSource(m) }}</span>
             </div>
@@ -282,6 +299,19 @@ function tr(key: string, fallback: string): string {
 }
 
 const memories = ref<AIWorkspaceMemoryView[]>([]);
+/** Per-memory portable badges (FR-061): keyed by memoryId. */
+const portableRowMap = ref<
+  Map<
+    string,
+    {
+      storageMode: string;
+      syncState?: string;
+      visibility?: string;
+      relativePath?: string;
+      portableUpdatedAt?: string;
+    }
+  >
+>(new Map());
 const loading = ref(false);
 const search = ref("");
 const showArchived = ref(false);
@@ -340,6 +370,7 @@ function notify(text: string, color: "success" | "error" = "success"): void {
 async function refresh(): Promise<void> {
   if (!hasWorkspace.value || !props.conversationId) {
     memories.value = [];
+    portableRowMap.value = new Map();
     return;
   }
   loading.value = true;
@@ -354,6 +385,33 @@ async function refresh(): Promise<void> {
     } else {
       memories.value = [];
       notify(t("workspaceMemory.loadError") || "Failed to load.", "error");
+    }
+    // Fetch per-memory portable badges (FR-061) when portable is enabled.
+    if (portableStatus.value?.enabled) {
+      try {
+        const portableResp = await portableWorkspaceMemoryApi.list(
+          props.conversationId
+        );
+        if (portableResp.status && portableResp.data) {
+          const map = new Map();
+          for (const row of portableResp.data) {
+            map.set(row.memoryId, {
+              storageMode: row.storageMode,
+              syncState: row.syncState,
+              visibility: row.visibility,
+              relativePath: row.relativePath,
+              portableUpdatedAt: row.portableUpdatedAt,
+            });
+          }
+          portableRowMap.value = map;
+        } else {
+          portableRowMap.value = new Map();
+        }
+      } catch {
+        portableRowMap.value = new Map();
+      }
+    } else {
+      portableRowMap.value = new Map();
     }
   } catch {
     memories.value = [];
@@ -497,10 +555,12 @@ async function onRunAutoDream(): Promise<void> {
 
 watch(
   () => [props.conversationId, hasWorkspace.value, showArchived.value] as const,
-  () => {
+  async () => {
+    // Refresh portable status FIRST so refresh() knows whether to fetch the
+    // per-memory portable badges (FR-061).
+    await refreshPortableStatus();
     void refresh();
     void refreshAutoDreamStatus();
-    void refreshPortableStatus();
   },
   { immediate: true }
 );
@@ -656,6 +716,58 @@ function typeColor(type: AIWorkspaceMemoryType): string {
     case "convention":
       return "info";
     case "reference":
+      return "secondary";
+    default:
+      return "default";
+  }
+}
+
+/** Per-row portable storage badge (FR-061). */
+function storageBadgeLabel(row: {
+  storageMode: string;
+  visibility?: string;
+}): string {
+  if (row.storageMode === "private") return tr("portableMemory.storagePrivate", "Private");
+  if (row.storageMode === "portable-team")
+    return tr("portableMemory.visibilityTeam", "Team");
+  return tr("portableMemory.visibilityLocal", "Local");
+}
+
+function storageBadgeColor(row: { storageMode: string }): string {
+  if (row.storageMode === "private") return "default";
+  if (row.storageMode === "portable-team") return "teal";
+  return "cyan";
+}
+
+function syncBadgeLabel(syncState: string): string {
+  const fallbacks: Record<string, string> = {
+    synced: "Synced",
+    "pending-review": "Pending review",
+    rejected: "Rejected",
+    conflicted: "Conflicted",
+    missing: "Missing",
+    detached: "Detached",
+    private: "Private",
+  };
+  return tr(
+    `portableMemory.sync.${syncState}`,
+    fallbacks[syncState] ?? syncState
+  );
+}
+
+function syncBadgeColor(syncState: string): string {
+  switch (syncState) {
+    case "synced":
+      return "success";
+    case "pending-review":
+      return "warning";
+    case "rejected":
+      return "error";
+    case "conflicted":
+      return "deep-orange";
+    case "missing":
+      return "error";
+    case "detached":
       return "secondary";
     default:
       return "default";

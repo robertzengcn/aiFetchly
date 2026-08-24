@@ -624,6 +624,8 @@ export const AI_USER_MEMORY_AUTO_DREAM_STATUS =
 // Non-AI operations — available without an AI subscription (design §20.4).
 export const AI_PORTABLE_WORKSPACE_MEMORY_STATUS =
   "ai:portable-workspace-memory:status";
+export const AI_PORTABLE_WORKSPACE_MEMORY_LIST =
+  "ai:portable-workspace-memory:list";
 export const AI_PORTABLE_WORKSPACE_MEMORY_ENABLE_PREVIEW =
   "ai:portable-workspace-memory:enable:preview";
 export const AI_PORTABLE_WORKSPACE_MEMORY_ENABLE =

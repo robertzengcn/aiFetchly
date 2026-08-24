@@ -244,9 +244,12 @@ export function isPortableMemoryDefaultStorageMode(
 ): v is PortableMemoryDefaultStorageMode {
   return (
     typeof v === "string" &&
-    ["private-only", "portable-local", "portable-team", "ask-each-time"].includes(
-      v
-    )
+    [
+      "private-only",
+      "portable-local",
+      "portable-team",
+      "ask-each-time",
+    ].includes(v)
   );
 }
 
@@ -258,6 +261,26 @@ export interface PortableWorkspaceMemoryView extends AIWorkspaceMemoryView {
   readonly visibility?: PortableMemoryVisibility;
   readonly syncState: PortableMemorySyncState;
   readonly relativePath?: string;
+  readonly portableUpdatedAt?: string;
+  readonly diagnostic?: PortableMemoryDiagnosticView;
+}
+
+/**
+ * Per-row memory view for the portable-aware list (FR-061): a compact row
+ * carrying the portable storage/sync badges the UI renders per memory.
+ */
+export interface PortableMemoryRowView {
+  readonly memoryId: string;
+  readonly type: AIWorkspaceMemoryType;
+  readonly title: string;
+  readonly content: string;
+  readonly status: AIWorkspaceMemoryStatus;
+  readonly confidence: number;
+  readonly updatedAt: string;
+  readonly storageMode: PortableMemoryStorageMode;
+  readonly syncState?: PortableMemorySyncState;
+  readonly relativePath?: string;
+  readonly visibility?: PortableMemoryVisibility;
   readonly portableUpdatedAt?: string;
   readonly diagnostic?: PortableMemoryDiagnosticView;
 }

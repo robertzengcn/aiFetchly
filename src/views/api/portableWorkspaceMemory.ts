@@ -1,6 +1,7 @@
 import type { CommonMessage } from "@/entityTypes/commonType";
 import type {
   PortableMemoryDiagnosticView,
+  PortableMemoryRowView,
   PortableMemorySyncSummary,
   PortableWorkspaceStatusView,
 } from "@/entityTypes/portableWorkspaceMemoryTypes";
@@ -52,6 +53,7 @@ async function call<T>(channel: string, input?: unknown): Promise<CommonMessage<
 // renderer import graph to the main-process channellist module.
 const CH = {
   STATUS: "ai:portable-workspace-memory:status",
+  LIST: "ai:portable-workspace-memory:list",
   ENABLE_PREVIEW: "ai:portable-workspace-memory:enable:preview",
   ENABLE: "ai:portable-workspace-memory:enable",
   EXPORT_PREVIEW: "ai:portable-workspace-memory:export:preview",
@@ -117,6 +119,8 @@ export interface PortableMemoryConflictView {
 export const portableWorkspaceMemoryApi = {
   status: (conversationId: string) =>
     call<PortableWorkspaceStatusView>(CH.STATUS, { conversationId }),
+  list: (conversationId: string) =>
+    call<PortableMemoryRowView[]>(CH.LIST, { conversationId }),
   enablePreview: (conversationId: string) =>
     call<PortableMemoryEnablePreviewView>(CH.ENABLE_PREVIEW, {
       conversationId,

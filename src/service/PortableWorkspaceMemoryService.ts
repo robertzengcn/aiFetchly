@@ -20,23 +20,15 @@ import type {
   BridgeTarget,
 } from "@/service/PortableWorkspaceMemoryBridgeService";
 import { PortableWorkspaceMemoryBridgeService } from "@/service/PortableWorkspaceMemoryBridgeService";
-import {
-  PortableWorkspaceMemoryFileStore,
-} from "@/service/PortableWorkspaceMemoryFileStore";
-import {
-  PortableWorkspaceIdentityService,
-} from "@/service/PortableWorkspaceIdentityService";
-import {
-  PortableWorkspaceMemoryIndexService,
-} from "@/service/PortableWorkspaceMemoryIndexService";
+import { PortableWorkspaceMemoryFileStore } from "@/service/PortableWorkspaceMemoryFileStore";
+import { PortableWorkspaceIdentityService } from "@/service/PortableWorkspaceIdentityService";
+import { PortableWorkspaceMemoryIndexService } from "@/service/PortableWorkspaceMemoryIndexService";
 import { PortableWorkspaceMemoryFormat } from "@/service/PortableWorkspaceMemoryFormat";
 import {
   parseYamlFrontmatter,
   stripFrontmatterBlock,
 } from "@/service/portableMemoryFrontmatter";
-import {
-  PortableWorkspaceMemoryGitStatusService,
-} from "@/service/PortableWorkspaceMemoryGitStatusService";
+import { PortableWorkspaceMemoryGitStatusService } from "@/service/PortableWorkspaceMemoryGitStatusService";
 import { WorkspaceMemoryContextResolver } from "@/service/WorkspaceMemoryContextResolver";
 import { WorkspaceMemoryScopeModule } from "@/modules/WorkspaceMemoryScopeModule";
 import { PortableWorkspaceMemoryModule } from "@/modules/PortableWorkspaceMemoryModule";
@@ -46,11 +38,15 @@ import type {
   PortableMemoryDefaultStorageMode,
   PortableMemoryDiagnosticView,
   PortableMemoryImportPolicy,
+  PortableMemoryRowView,
   PortableMemorySyncSummary,
   PortableWorkspaceStatusView,
 } from "@/entityTypes/portableWorkspaceMemoryTypes";
 import type { WorkspaceMemoryContext } from "@/service/WorkspaceMemoryContextResolver";
-import type { AIWorkspaceMemoryStatus, AIWorkspaceMemoryType } from "@/entityTypes/aiWorkspaceMemoryTypes";
+import type {
+  AIWorkspaceMemoryStatus,
+  AIWorkspaceMemoryType,
+} from "@/entityTypes/aiWorkspaceMemoryTypes";
 import type { PortableMemoryDocumentV1 } from "@/entityTypes/portableWorkspaceMemoryTypes";
 
 type PortableDocumentType = Parameters<
@@ -94,7 +90,10 @@ export interface PortableMemoryEnableInput {
 
 export interface PortableMemoryExportPreview {
   readonly exportableCount: number;
-  readonly skipped: readonly { readonly memoryId: string; readonly reason: string }[];
+  readonly skipped: readonly {
+    readonly memoryId: string;
+    readonly reason: string;
+  }[];
 }
 
 export interface PortableMemoryExportResult {
@@ -139,7 +138,9 @@ export class PortableWorkspaceMemoryService {
 
   // --- Status -------------------------------------------------------------------
 
-  async getStatus(conversationId: string): Promise<PortableWorkspaceStatusView> {
+  async getStatus(
+    conversationId: string
+  ): Promise<PortableWorkspaceStatusView> {
     const ctx = await this.requireContext(conversationId);
     const scope = await this.requireScope(ctx);
     const states = await this.stateModel.listByScope(scope.scopeId);
@@ -175,6 +176,62 @@ export class PortableWorkspaceMemoryService {
     };
   }
 
+  /**
+   * List memories enriched with per-record portable storage/sync state
+   * (FR-061). Each row carries storageMode, visibility, syncState,
+   * relativePath, and portableUpdatedAt so the UI can badge every memory.
+   */
+  async listWithPortableState(
+    conversationId: string
+  ): Promise<readonly PortableMemoryRowView[]> {
+    const ctx = await this.requireContext(conversationId);
+    const scope = await this.requireScope(ctx);
+    const rows = await this.memoryModel.listByScope({
+      scopeId: scope.scopeId,
+      limit: 200,
+      status: undefined,
+    });
+    const states = await this.stateModel.listByScope(scope.scopeId);
+    const stateByMemoryId = new Map(states.map((s) => [s.memoryId, s]));
+    return rows.map((row) => {
+      const state = stateByMemoryId.get(row.memoryId);
+      const storageMode: "private" | "portable-local" | "portable-team" = state
+        ? state.visibility === "team"
+          ? "portable-team"
+          : "portable-local"
+        : "private";
+      return {
+        memoryId: row.memoryId,
+        type: row.type as PortableMemoryRowView["type"],
+        title: row.title,
+        content: row.content,
+        status: row.status as PortableMemoryRowView["status"],
+        confidence: row.confidence,
+        updatedAt: row.updatedAt?.toISOString() ?? "",
+        storageMode,
+        ...(state
+          ? {
+              syncState: state.syncState as PortableMemoryRowView["syncState"],
+              relativePath: state.relativePath,
+              visibility:
+                state.visibility as PortableMemoryRowView["visibility"],
+              portableUpdatedAt: state.portableUpdatedAt.toISOString(),
+              ...(state.diagnosticCode
+                ? {
+                    diagnostic: {
+                      code: state.diagnosticCode as PortableMemoryDiagnosticView["code"],
+                      relativePath: state.relativePath,
+                      message: state.diagnosticMessage ?? state.diagnosticCode,
+                      recoverable: state.syncState !== "rejected",
+                    },
+                  }
+                : {}),
+            }
+          : {}),
+      };
+    });
+  }
+
   // --- Enable flow ----------------------------------------------------------------
 
   async previewEnable(
@@ -207,7 +264,9 @@ export class PortableWorkspaceMemoryService {
     };
   }
 
-  async enable(input: PortableMemoryEnableInput): Promise<PortableWorkspaceStatusView> {
+  async enable(
+    input: PortableMemoryEnableInput
+  ): Promise<PortableWorkspaceStatusView> {
     const ctx = await this.requireContext(input.conversationId);
     const store = new PortableWorkspaceMemoryFileStore(ctx.workspaceRoot);
 
@@ -595,10 +654,7 @@ export class PortableWorkspaceMemoryService {
   }> {
     const ctx = await this.requireContext(conversationId);
     const scope = await this.requireScope(ctx);
-    const state = await this.portableModule.getPortableState(
-      scope,
-      memoryId
-    );
+    const state = await this.portableModule.getPortableState(scope, memoryId);
     if (!state) return { portable: false };
     return {
       portable: true,
@@ -684,17 +740,18 @@ export class PortableWorkspaceMemoryService {
     const store = new PortableWorkspaceMemoryFileStore(ctx.workspaceRoot);
     const read = await store.readRecord(input.memoryId);
     if (!read) {
-      throw new Error("portable memory file is absent; cannot resolve conflict");
+      throw new Error(
+        "portable memory file is absent; cannot resolve conflict"
+      );
     }
 
     let nextHash: string;
     if (input.action === "use-file") {
       // Validate the current file through the parser; import if it parses.
       const parsed = this.format.parseDraft({
-        relativePath:
-          PortableWorkspaceMemoryFileStore.relativePathForMemoryId(
-            input.memoryId
-          ),
+        relativePath: PortableWorkspaceMemoryFileStore.relativePathForMemoryId(
+          input.memoryId
+        ),
         fileName: `${input.memoryId}.md`,
         contentHash: read.contentHash,
         sizeBytes: read.sizeBytes,
@@ -708,10 +765,14 @@ export class PortableWorkspaceMemoryService {
           `current file is invalid: ${parsed.diagnostic.message}`
         );
       }
-      await this.portableModule.upsertValidatedDocument(scope, parsed.document, {
-        actor: "user",
-        pendingReview: false,
-      });
+      await this.portableModule.upsertValidatedDocument(
+        scope,
+        parsed.document,
+        {
+          actor: "user",
+          pendingReview: false,
+        }
+      );
       nextHash = read.contentHash;
     } else if (input.action === "use-app" || input.action === "merge") {
       if (!input.mergedDocument) {
@@ -757,7 +818,9 @@ export class PortableWorkspaceMemoryService {
    * Trigger a watcher rescan through the shared manager (best-effort — the
    * coordinator reconciles the resulting snapshot).
    */
-  async rescan(conversationId: string): Promise<PortableMemorySyncSummary | null> {
+  async rescan(
+    conversationId: string
+  ): Promise<PortableMemorySyncSummary | null> {
     const ctx = await this.requireContext(conversationId);
     const manager = await this.getWatchManager();
     if (manager) {
@@ -771,7 +834,9 @@ export class PortableWorkspaceMemoryService {
     rescan: (workspaceId: string) => void;
   } | null> {
     try {
-      const mod = await import("@/service/workspaceWatch/WorkspaceWatchManagerSingleton");
+      const mod = await import(
+        "@/service/workspaceWatch/WorkspaceWatchManagerSingleton"
+      );
       return mod.getWorkspaceWatchManager();
     } catch {
       return null;
@@ -786,7 +851,9 @@ export class PortableWorkspaceMemoryService {
     if (!conversationId || typeof conversationId !== "string") {
       throw new Error("conversationId is required");
     }
-    const ctx = await this.contextResolver.resolveForConversation(conversationId);
+    const ctx = await this.contextResolver.resolveForConversation(
+      conversationId
+    );
     if (!ctx) throw new Error(NO_WORKSPACE_MESSAGE);
     return ctx;
   }
@@ -840,7 +907,8 @@ export class PortableWorkspaceMemoryService {
           visibility: state.visibility === "team" ? "team" : "local",
           createdAt: state.portableCreatedAt.toISOString(),
           updatedAt: state.portableUpdatedAt.toISOString(),
-          createdBy: state.createdBy as PortableMemoryDocumentV1["frontmatter"]["createdBy"],
+          createdBy:
+            state.createdBy as PortableMemoryDocumentV1["frontmatter"]["createdBy"],
         },
         title: row.title,
         content: row.content,
@@ -855,9 +923,7 @@ export class PortableWorkspaceMemoryService {
   }
 }
 
-function isStorageMode(
-  v: string
-): v is PortableMemoryDefaultStorageMode {
+function isStorageMode(v: string): v is PortableMemoryDefaultStorageMode {
   return [
     "private-only",
     "portable-local",

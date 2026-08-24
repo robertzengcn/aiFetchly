@@ -17,6 +17,7 @@ vi.mock("@/views/api/aiWorkspaceMemory", () => ({
 vi.mock("@/views/api/portableWorkspaceMemory", () => ({
   portableWorkspaceMemoryApi: {
     status: vi.fn(),
+    list: vi.fn(),
     enablePreview: vi.fn(),
     enable: vi.fn(),
     rescan: vi.fn(),
@@ -209,6 +210,58 @@ describe("WorkspaceMemoryPanel — portable memory banner", () => {
     expect(
       wrapper.findComponent({ name: "PortableMemoryConflictDialog" }).exists()
     ).toBe(true);
+  });
+
+  it("renders per-memory storage + sync badges when portable is enabled (FR-061)", async () => {
+    vi.mocked(portableWorkspaceMemoryApi.status).mockResolvedValue({
+      status: true,
+      msg: "",
+      data: statusData({ enabled: true, portableCount: 1 }),
+    } as never);
+    vi.mocked(workspaceMemoryApi.list).mockResolvedValue({
+      status: true,
+      msg: "",
+      data: [
+        {
+          id: 1,
+          memoryId: "wmem-x",
+          workspaceKey: "ws_a",
+          workspaceRoot: "/r",
+          type: "decision",
+          title: "Badge me",
+          content: "c",
+          status: "active",
+          confidence: 90,
+          createdAt: "2026-08-01T00:00:00.000Z",
+          updatedAt: "2026-08-01T00:00:00.000Z",
+        },
+      ],
+    } as never);
+    vi.mocked(portableWorkspaceMemoryApi.list).mockResolvedValue({
+      status: true,
+      msg: "",
+      data: [
+        {
+          memoryId: "wmem-x",
+          type: "decision",
+          title: "Badge me",
+          content: "c",
+          status: "active",
+          confidence: 90,
+          updatedAt: "2026-08-01T00:00:00.000Z",
+          storageMode: "portable-team",
+          syncState: "synced",
+          visibility: "team",
+        },
+      ],
+    } as never);
+    const wrapper = mountPanel({});
+    await flushPromises();
+    await flushPromises();
+    const text = wrapper.text();
+    // Storage badge (team) + sync badge (synced) appear per row.
+    expect(text).toContain("Team");
+    expect(text).toContain("Synced");
   });
 
   it("subscribes to sync summaries and refreshes debounced", async () => {
