@@ -25,6 +25,7 @@ import {
   GeneratedImageReferenceError,
   type AuthorizedGeneratedImageSource,
   type GeneratedImageProtocolIdentity,
+  type GeneratedImageReferenceErrorCode,
   type PreparedGeneratedImageArtifact,
   type ResolveGeneratedImagesInput,
   type ResolveGeneratedImagesResult,
@@ -150,15 +151,24 @@ function isContained(parentRoot: string, candidate: string): boolean {
   return !relative.startsWith("..") && !path.isAbsolute(relative);
 }
 
+function normalizeIoError(
+  err: unknown,
+  code: GeneratedImageReferenceErrorCode
+): Error {
+  if (err instanceof GeneratedImageReferenceError) return err;
+  if (err instanceof Error && err.name === "AbortError") return err;
+  return new GeneratedImageReferenceError(code);
+}
+
 export class GeneratedImageReferenceService {
   private readonly deps: GeneratedImageReferenceServiceDeps;
 
   constructor(deps?: Partial<GeneratedImageReferenceServiceDeps>) {
     this.deps = {
       getSourceMessage:
-        deps?.getSourceMessage ?? this.defaultGetSourceMessage,
+        deps?.getSourceMessage ?? this.defaultGetSourceMessage.bind(this),
       getCurrentUserEmail:
-        deps?.getCurrentUserEmail ?? this.defaultGetCurrentUserEmail,
+        deps?.getCurrentUserEmail ?? this.defaultGetCurrentUserEmail.bind(this),
       getUserDataPath: deps?.getUserDataPath ?? defaultGetUserDataPath,
       realpath: deps?.realpath ?? fs.promises.realpath,
       openForRead:
@@ -343,9 +353,13 @@ export class GeneratedImageReferenceService {
   private async readViaPinnedDescriptor(
     absolutePath: string
   ): Promise<{ buffer: Buffer }> {
-    let opened: OpenedReadFile | undefined;
+    let opened: OpenedReadFile;
     try {
       opened = await this.deps.openForRead(absolutePath);
+    } catch (err: unknown) {
+      throw normalizeIoError(err, "generated_image_missing");
+    }
+    try {
       if (!opened.stats.isFile() || opened.stats.isSymbolicLink()) {
         throw new GeneratedImageReferenceError("generated_image_symlink_rejected");
       }
@@ -353,13 +367,13 @@ export class GeneratedImageReferenceService {
         throw new GeneratedImageReferenceError("generated_image_too_large");
       }
       return { buffer: await opened.read() };
+    } catch (err: unknown) {
+      throw normalizeIoError(err, "generated_image_unsupported_type");
     } finally {
-      if (opened) {
-        try {
-          await opened.close();
-        } catch {
-          // close failures are non-fatal
-        }
+      try {
+        await opened.close();
+      } catch {
+        // close failures are non-fatal
       }
     }
   }

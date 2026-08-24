@@ -572,6 +572,80 @@ describe("GeneratedImageReferenceService.resolveGeneratedImages", () => {
     assertNoSensitiveLeak(caught, fixture);
   });
 
+  it("converts raw openForRead rejection into code-only generated_image_missing without leaking paths", async () => {
+    const fixture = await makeFixture();
+    const entity = makeEntity(
+      fixture,
+      descriptorMetadata(fixture.email, fixture.conversationId, fixture.messageId, "image-1.png")
+    );
+    const failingOpenForRead = async (): Promise<OpenedReadFile> => {
+      throw new Error("EACCES: permission denied, open /secret/path/to/image-1.png");
+    };
+    const harness = makeService(fixture, entity, { openForRead: failingOpenForRead });
+    let caught: unknown;
+    try {
+      await harness.service.resolveGeneratedImages(VALID_INPUT(fixture));
+    } catch (err) {
+      caught = err;
+    }
+    expectReferenceError(caught, "generated_image_missing");
+    const text = `${String((caught as Error).message)} ${String((caught as Error).stack ?? "")}`;
+    expect(text).not.toContain("/secret/path");
+    expect(text).not.toContain(".png");
+  });
+
+  it("converts raw read-phase rejection into code-only generated_image_unsupported_type without leaking paths and still closes", async () => {
+    const fixture = await makeFixture();
+    const entity = makeEntity(
+      fixture,
+      descriptorMetadata(fixture.email, fixture.conversationId, fixture.messageId, "image-1.png")
+    );
+    let closeCalled = false;
+    const readFailureOpenForRead = async (): Promise<OpenedReadFile> => ({
+      stats: makeFakeStats({}),
+      read: async () => {
+        throw new Error("EIO: i/o error, read /secret/path/to/image-1.png");
+      },
+      close: async () => {
+        closeCalled = true;
+      },
+    });
+    const harness = makeService(fixture, entity, { openForRead: readFailureOpenForRead });
+    let caught: unknown;
+    try {
+      await harness.service.resolveGeneratedImages(VALID_INPUT(fixture));
+    } catch (err) {
+      caught = err;
+    }
+    expectReferenceError(caught, "generated_image_unsupported_type");
+    expect(closeCalled).toBe(true);
+    const text = `${String((caught as Error).message)} ${String((caught as Error).stack ?? "")}`;
+    expect(text).not.toContain("/secret/path");
+    expect(text).not.toContain(".png");
+  });
+
+  it("propagates abort-named io errors unchanged", async () => {
+    const fixture = await makeFixture();
+    const entity = makeEntity(
+      fixture,
+      descriptorMetadata(fixture.email, fixture.conversationId, fixture.messageId, "image-1.png")
+    );
+    const abortingOpenForRead = async (): Promise<OpenedReadFile> => {
+      const err = new Error("The operation was aborted");
+      err.name = "AbortError";
+      throw err;
+    };
+    const harness = makeService(fixture, entity, { openForRead: abortingOpenForRead });
+    let caught: unknown;
+    try {
+      await harness.service.resolveGeneratedImages(VALID_INPUT(fixture));
+    } catch (err) {
+      caught = err;
+    }
+    expect((caught as Error).name).toBe("AbortError");
+    expect(caught).not.toBeInstanceOf(GeneratedImageReferenceError);
+  });
+
   it("throws an abort-named error for a pre-aborted signal", async () => {
     const fixture = await makeFixture();
     const entity = makeEntity(
