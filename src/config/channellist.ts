@@ -652,6 +652,8 @@ export const AI_PORTABLE_WORKSPACE_MEMORY_REVIEW_REJECT =
   "ai:portable-workspace-memory:review:reject";
 export const AI_PORTABLE_WORKSPACE_MEMORY_GIT_STATUS =
   "ai:portable-workspace-memory:git-status";
+export const AI_PORTABLE_WORKSPACE_MEMORY_GET_STATE =
+  "ai:portable-workspace-memory:get-state";
 export const AI_PORTABLE_WORKSPACE_MEMORY_BRIDGE_PREVIEW =
   "ai:portable-workspace-memory:bridge:preview";
 export const AI_PORTABLE_WORKSPACE_MEMORY_BRIDGE_APPLY =

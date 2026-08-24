@@ -160,8 +160,12 @@ describe("WorkspaceMemoryPanel — portable memory banner", () => {
   it("hides the banner entirely without an approved workspace", async () => {
     const wrapper = mountPanel({ workspace: { approvalState: "pending" } });
     await flushPromises();
+    // The portable banner section (wm-portable) is only rendered inside the
+    // v-else (approved-workspace) template; the empty-workspace state shows
+    // the no-workspace message instead. The diagnostics/conflict dialogs are
+    // always mounted (open=false) so they don't count as banner visibility.
     expect(wrapper.text()).not.toContain("Enable portable memory");
-    expect(wrapper.text()).not.toContain("Portable memory");
+    expect(wrapper.find(".wm-portable").exists()).toBe(false);
   });
 
   it("requests a rescan through the portable API", async () => {

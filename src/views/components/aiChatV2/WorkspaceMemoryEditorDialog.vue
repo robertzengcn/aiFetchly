@@ -52,6 +52,27 @@
           density="compact"
           class="mt-3"
         />
+        <template v-if="allowStorageChoice">
+          <v-select
+            v-model="form.storageMode"
+            :items="storageModeOptions"
+            :label="storageModeLabel"
+            item-title="label"
+            item-value="value"
+            density="compact"
+            class="mt-3"
+          />
+          <v-radio-group
+            v-if="form.storageMode !== 'private'"
+            v-model="form.visibility"
+            density="compact"
+            hide-details
+            class="mt-2"
+          >
+            <v-radio :value="'local'" :label="visibilityLocalLabel" />
+            <v-radio :value="'team'" :label="visibilityTeamLabel" />
+          </v-radio-group>
+        </template>
       </v-card-text>
       <v-card-actions>
         <v-spacer />
@@ -77,6 +98,11 @@ type EditorResult = {
   content: string;
   confidence: number;
   status?: AIWorkspaceMemoryStatus;
+  /** Concurrency token for portable records (FR-038): the last-known on-disk
+   *  hash; the main process compares it to the current file before writing. */
+  expectedHash?: string;
+  visibility?: "local" | "team";
+  storageMode?: "private" | "portable-local" | "portable-team";
 };
 
 const props = defineProps<{
@@ -84,6 +110,14 @@ const props = defineProps<{
   /** When provided, the dialog edits this memory; otherwise it creates a new one. */
   memory?: AIWorkspaceMemoryView | null;
   defaultType?: AIWorkspaceMemoryType;
+  /**
+   * Portable-memory concurrency token (FR-038). When the memory is portable,
+   * the panel passes the last-known on-disk hash; the editor forwards it on
+   * save so the main process can detect a concurrent external edit.
+   */
+  expectedHash?: string | null;
+  /** When true, show storage/visibility controls for portable memory. */
+  allowStorageChoice?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -100,6 +134,8 @@ interface FormState {
   content: string;
   confidence: number;
   status: AIWorkspaceMemoryStatus;
+  visibility: "local" | "team";
+  storageMode: "private" | "portable-local" | "portable-team";
 }
 
 const form = reactive<FormState>({
@@ -108,6 +144,8 @@ const form = reactive<FormState>({
   content: "",
   confidence: 90,
   status: "active",
+  visibility: "local",
+  storageMode: "private",
 });
 
 const isEdit = computed(() => !!props.memory);
@@ -126,6 +164,8 @@ function resetFromMemory(): void {
     form.content = "";
     form.confidence = 90;
     form.status = "active";
+    form.visibility = "local";
+    form.storageMode = "private";
   }
 }
 
@@ -151,6 +191,27 @@ const statusOptions = computed(() => [
   { label: t("workspaceMemory.statusArchived") || "Archived", value: "archived" },
   { label: t("workspaceMemory.statusContradicted") || "Contradicted", value: "contradicted" },
 ]);
+
+const storageModeOptions = computed(() => [
+  { label: t("portableMemory.storagePrivate") || "Private (SQLite only)", value: "private" },
+  {
+    label: t("portableMemory.storagePortableLocal") || "Portable — local",
+    value: "portable-local",
+  },
+  {
+    label: t("portableMemory.storagePortableTeam") || "Portable — team",
+    value: "portable-team",
+  },
+]);
+const storageModeLabel = computed(
+  () => t("portableMemory.storageMode") || "Storage mode"
+);
+const visibilityLocalLabel = computed(
+  () => t("portableMemory.visibilityLocal") || "Local only"
+);
+const visibilityTeamLabel = computed(
+  () => t("portableMemory.visibilityTeam") || "Team shareable"
+);
 
 const editTitle = computed(() => t("workspaceMemory.edit") || "Edit memory");
 const createTitle = computed(() => t("workspaceMemory.create") || "Create memory");
@@ -179,6 +240,15 @@ function onSave(): void {
     confidence: form.confidence,
   };
   if (isEdit.value) result.status = form.status;
+  // Portable memory (FR-038): forward the concurrency token + storage intent
+  // so the main process can guard against concurrent external edits.
+  if (props.allowStorageChoice) {
+    result.visibility = form.visibility;
+    result.storageMode = form.storageMode;
+  }
+  if (isEdit.value && props.expectedHash) {
+    result.expectedHash = props.expectedHash;
+  }
   emit("save", result);
 }
 </script>

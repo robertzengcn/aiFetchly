@@ -578,6 +578,37 @@ export class PortableWorkspaceMemoryService {
     return this.gitStatusService.getTrackingState(ctx.workspaceRoot);
   }
 
+  /**
+   * Fetch portable state for a single memory (FR-038): the editor uses the
+   * returned lastValidHash as a concurrency token on update so the main
+   * process can detect a concurrent external edit before writing.
+   */
+  async getPortableMemoryState(
+    conversationId: string,
+    memoryId: string
+  ): Promise<{
+    readonly portable: boolean;
+    readonly syncState?: string;
+    readonly lastValidHash?: string | null;
+    readonly relativePath?: string;
+    readonly visibility?: string;
+  }> {
+    const ctx = await this.requireContext(conversationId);
+    const scope = await this.requireScope(ctx);
+    const state = await this.portableModule.getPortableState(
+      scope,
+      memoryId
+    );
+    if (!state) return { portable: false };
+    return {
+      portable: true,
+      syncState: state.syncState,
+      lastValidHash: state.lastValidHash,
+      relativePath: state.relativePath,
+      visibility: state.visibility,
+    };
+  }
+
   // --- Conflicts (FR-041 / §14.7) -----------------------------------------------
 
   /**

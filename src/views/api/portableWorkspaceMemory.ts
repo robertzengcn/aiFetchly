@@ -66,6 +66,7 @@ const CH = {
   REVIEW_APPROVE: "ai:portable-workspace-memory:review:approve",
   REVIEW_REJECT: "ai:portable-workspace-memory:review:reject",
   GIT_STATUS: "ai:portable-workspace-memory:git-status",
+  GET_STATE: "ai:portable-workspace-memory:get-state",
   BRIDGE_PREVIEW: "ai:portable-workspace-memory:bridge:preview",
   BRIDGE_APPLY: "ai:portable-workspace-memory:bridge:apply",
   BRIDGE_REMOVE: "ai:portable-workspace-memory:bridge:remove",
@@ -184,6 +185,14 @@ export const portableWorkspaceMemoryApi = {
     call<null>(CH.REVIEW_REJECT, input),
   gitStatus: (conversationId: string) =>
     call<string>(CH.GIT_STATUS, { conversationId }),
+  getPortableState: (input: { conversationId: string; memoryId: string }) =>
+    call<{
+      portable: boolean;
+      syncState?: string;
+      lastValidHash?: string | null;
+      relativePath?: string;
+      visibility?: string;
+    }>(CH.GET_STATE, input),
   bridgePreview: (input: {
     conversationId: string;
     target: "AGENTS.md" | "CLAUDE.md";

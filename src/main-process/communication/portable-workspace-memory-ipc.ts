@@ -17,6 +17,7 @@ import {
   AI_PORTABLE_WORKSPACE_MEMORY_REVIEW_APPROVE,
   AI_PORTABLE_WORKSPACE_MEMORY_REVIEW_REJECT,
   AI_PORTABLE_WORKSPACE_MEMORY_GIT_STATUS,
+  AI_PORTABLE_WORKSPACE_MEMORY_GET_STATE,
   AI_PORTABLE_WORKSPACE_MEMORY_BRIDGE_PREVIEW,
   AI_PORTABLE_WORKSPACE_MEMORY_BRIDGE_APPLY,
   AI_PORTABLE_WORKSPACE_MEMORY_BRIDGE_REMOVE,
@@ -384,6 +385,27 @@ export function registerPortableWorkspaceMemoryIpcHandlers(): void {
         return ok(await getService().getGitStatus(input.data.conversationId));
       } catch (err) {
         return denied(err instanceof Error ? err.message : "git status failed");
+      }
+    }
+  );
+
+  ipcMain.handle(
+    AI_PORTABLE_WORKSPACE_MEMORY_GET_STATE,
+    async (_e, data: unknown) => {
+      try {
+        const input = memoryOpSchema.safeParse(safeParse(data));
+        if (!input.success)
+          return denied("conversationId and memoryId are required");
+        return ok(
+          await getService().getPortableMemoryState(
+            input.data.conversationId,
+            input.data.memoryId
+          )
+        );
+      } catch (err) {
+        return denied(
+          err instanceof Error ? err.message : "get-state failed"
+        );
       }
     }
   );

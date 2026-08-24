@@ -88,6 +88,18 @@
           >
             {{ resolveConflictsText }}
           </v-btn>
+          <v-btn
+            v-if="
+              portableStatus.rejectedCount > 0 ||
+              portableStatus.conflictCount > 0 ||
+              portableStatus.pendingReviewCount > 0
+            "
+            size="x-small"
+            variant="text"
+            @click="diagnosticsOpen = true"
+          >
+            {{ diagnosticsText }}
+          </v-btn>
           <v-btn size="x-small" variant="text" @click="onRescan">{{
             rescanText
           }}</v-btn>
@@ -196,10 +208,19 @@
       @resolved="onConflictResolved"
     />
 
+    <PortableMemoryDiagnosticsDialog
+      :open="diagnosticsOpen"
+      :conversation-id="conversationId"
+      @cancel="diagnosticsOpen = false"
+      @rescanned="onDiagnosticsRescanned"
+    />
+
     <WorkspaceMemoryEditorDialog
       v-model="editorOpen"
       :memory="editing"
       :default-type="createType"
+      :allow-storage-choice="portableStatus?.enabled === true"
+      :expected-hash="editingExpectedHash"
       @save="onEditorSave"
       @cancel="editorOpen = false"
     />
@@ -241,6 +262,7 @@ import WorkspaceMemoryEditorDialog from "./WorkspaceMemoryEditorDialog.vue";
 import WorkspaceMemoryStatusBadge from "./WorkspaceMemoryStatusBadge.vue";
 import PortableMemoryEnableDialog from "./PortableMemoryEnableDialog.vue";
 import PortableMemoryConflictDialog from "./PortableMemoryConflictDialog.vue";
+import PortableMemoryDiagnosticsDialog from "./PortableMemoryDiagnosticsDialog.vue";
 
 const props = defineProps<{
   conversationId: string;
@@ -266,6 +288,8 @@ const showArchived = ref(false);
 
 const editorOpen = ref(false);
 const editing = ref<AIWorkspaceMemoryView | null>(null);
+/** Portable concurrency token (FR-038) for the record being edited. */
+const editingExpectedHash = ref<string | null>(null);
 const createType = ref<AIWorkspaceMemoryType>("decision");
 
 const confirmOpen = ref(false);
@@ -285,6 +309,7 @@ const portableStatus = ref<PortableWorkspaceStatusView | null>(null);
 const enableOpen = ref(false);
 const conflictOpen = ref(false);
 const conflictMemoryId = ref<string | null>(null);
+const diagnosticsOpen = ref(false);
 let unsubscribePortable: (() => void) | null = null;
 
 const hasWorkspace = computed(
@@ -395,6 +420,12 @@ async function onConflictResolved(): Promise<void> {
   emit("change");
 }
 
+async function onDiagnosticsRescanned(): Promise<void> {
+  void refreshPortableStatus();
+  await refresh();
+  emit("change");
+}
+
 function onPortableEnabled(): void {
   enableOpen.value = false;
   void refreshPortableStatus();
@@ -424,6 +455,9 @@ const conflictedText = computed(
 const rescanText = computed(() => tr("portableMemory.rescan", "Rescan"));
 const resolveConflictsText = computed(() =>
   tr("portableMemory.resolve", "Resolve")
+);
+const diagnosticsText = computed(() =>
+  tr("portableMemory.diagnosticsTitle", "Diagnostics")
 );
 const portableDisabledHint = computed(
   () =>
@@ -494,8 +528,24 @@ function openCreate(): void {
   editorOpen.value = true;
 }
 
-function openEdit(m: AIWorkspaceMemoryView): void {
+async function openEdit(m: AIWorkspaceMemoryView): Promise<void> {
   editing.value = m;
+  editingExpectedHash.value = null;
+  // Fetch the portable concurrency token (FR-038) so the editor can guard
+  // against concurrent external edits on save.
+  if (portableStatus.value?.enabled && props.conversationId) {
+    try {
+      const resp = await portableWorkspaceMemoryApi.getPortableState({
+        conversationId: props.conversationId,
+        memoryId: m.memoryId,
+      });
+      if (resp.status && resp.data?.portable) {
+        editingExpectedHash.value = resp.data.lastValidHash ?? null;
+      }
+    } catch {
+      // advisory; the editor still opens (unguarded)
+    }
+  }
   editorOpen.value = true;
 }
 
@@ -505,6 +555,9 @@ async function onEditorSave(value: {
   content: string;
   confidence: number;
   status?: AIWorkspaceMemoryStatus;
+  expectedHash?: string;
+  visibility?: "local" | "team";
+  storageMode?: "private" | "portable-local" | "portable-team";
 }): Promise<void> {
   if (!props.conversationId) return;
   try {
