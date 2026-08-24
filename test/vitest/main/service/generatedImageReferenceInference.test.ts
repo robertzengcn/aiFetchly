@@ -230,6 +230,44 @@ describe("generatedImageReferenceInference - no match", () => {
   });
 });
 
+describe("generatedImageReferenceInference - malformed metadata and group selection", () => {
+  it("returns none without throwing when generatedImages is null", () => {
+    const messages: MessageFixture[] = [
+      {
+        id: "assistant-null",
+        role: "assistant",
+        metadata: {
+          source: "chat-v2",
+          generatedImages: null,
+        } as unknown as MessageFixture["metadata"],
+      },
+    ];
+    const result = inferGeneratedImageReferences({
+      text: "edit this image",
+      messages,
+      explicitSelection: [],
+    });
+    expect(result).toEqual({ kind: "none" });
+  });
+
+  it("resolves against the newest generation group when history holds several", () => {
+    const messages: MessageFixture[] = [
+      assistantWithImages("older-gen", [makeImage(), makeImage()]),
+      userMessage("u1"),
+      assistantWithImages("newest-gen", [makeImage("latest.png")]),
+    ];
+    const result = inferGeneratedImageReferences({
+      text: "sharpen this photo",
+      messages,
+      explicitSelection: [],
+    });
+    expect(result).toEqual({
+      kind: "resolved",
+      references: [{ messageId: "newest-gen", imageIndex: 0 }],
+    });
+  });
+});
+
 const SINGULAR_FIXTURES: Record<InferenceLanguageCode, string> = {
   en: "refine this picture",
   zh: "把这张图换成夜景",

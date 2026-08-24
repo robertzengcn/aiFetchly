@@ -143,7 +143,7 @@ function findLatestGenerationGroup(
     const message = messages[index];
     if (message.role !== "assistant") continue;
     const images = message.metadata?.generatedImages;
-    if (images !== undefined && images.length > 0) {
+    if (Array.isArray(images) && images.length > 0) {
       return { messageId: message.id, images };
     }
   }
