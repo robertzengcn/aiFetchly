@@ -8,19 +8,52 @@ import type {
   SkillExecutionContext,
 } from "@/entityTypes/skillTypes";
 import type { AgentResult } from "@/entityTypes/agentTypes";
+import type { ChatV2GeneratedImageReference } from "@/entityTypes/aiChatV2Types";
+import {
+  GeneratedImageReferenceError,
+  type AuthorizedGeneratedImageSource,
+  type GeneratedImageReferenceErrorCode,
+} from "@/entityTypes/generatedImageReferenceTypes";
 import {
   AIImageAttachmentToolService,
   createDefaultAIImageAttachmentToolDeps,
 } from "@/service/AIImageAttachmentToolService";
 import { WorkspaceResolver } from "@/service/WorkspaceResolver";
+import { normalizeGeneratedImageReferences } from "@/service/generatedImageReferenceNormalize";
 
 const PROCESSOR_IMAGE_EDIT = "image_edit";
 const DEFAULT_CONCURRENCY = 3;
 const MAX_CONCURRENCY = 3;
 const MAX_BATCH_ITEMS = 50;
 
+export type ArtifactBatchSource =
+  | { readonly kind: "workspace_files"; readonly files: readonly string[] }
+  | {
+      readonly kind: "generated_images";
+      readonly references: readonly ChatV2GeneratedImageReference[];
+    };
+
+export type ArtifactBatchInputIdentity =
+  | { readonly kind: "workspace_file"; readonly path: string }
+  | {
+      readonly kind: "generated_image";
+      readonly reference: ChatV2GeneratedImageReference;
+    };
+
+export interface ArtifactBatchWorkerInput {
+  file: string;
+  instruction: string;
+  model?: string;
+  parentConversationId: string;
+  workspaceRoot: string;
+  detail: ImageDetail;
+  signal?: AbortSignal;
+  /** Present only for generated-image items; `file`/`workspaceRoot` are unused then. */
+  generatedImage?: ChatV2GeneratedImageReference;
+}
+
 interface ParsedBatchArgs {
-  files: string[];
+  source: ArtifactBatchSource;
   instruction: string;
   processor: typeof PROCESSOR_IMAGE_EDIT;
   concurrency: number;
@@ -28,12 +61,13 @@ interface ParsedBatchArgs {
 }
 
 interface ArtifactBatchItemResult {
-  input: string;
+  input: ArtifactBatchInputIdentity;
   status: "completed" | "failed" | "cancelled";
   agentTaskId?: string;
   outputFilePaths: string[];
   outputImages: OpenAIChatImage[];
   error?: string;
+  errorCode?: GeneratedImageReferenceErrorCode;
   storageWarning?: string;
   durationMs: number;
 }
@@ -55,36 +89,73 @@ export interface ArtifactBatchProcessingDeps {
   resolveWorkspace: (
     conversationId: string
   ) => Promise<{ rootPath: string } | null>;
-  runAgent: (input: {
-    file: string;
-    instruction: string;
-    model?: string;
-    parentConversationId: string;
-    workspaceRoot: string;
-    detail: ImageDetail;
-    signal?: AbortSignal;
-  }) => Promise<AgentResult>;
+  runAgent: (input: ArtifactBatchWorkerInput) => Promise<AgentResult>;
+  authorizeReferences?: (
+    conversationId: string,
+    references: readonly ChatV2GeneratedImageReference[]
+  ) => Promise<readonly AuthorizedGeneratedImageSource[]>;
+}
+
+interface ScheduledItem {
+  readonly identity: ArtifactBatchInputIdentity;
+  launch: () => Promise<AgentResult>;
 }
 
 function parseArgs(
   args: Record<string, unknown>
 ): { ok: true; value: ParsedBatchArgs } | { ok: false; error: string } {
-  if (!Array.isArray(args.files)) {
-    return { ok: false, error: "`files` must be an array." };
-  }
-  const files: string[] = [];
-  for (const file of args.files) {
-    if (typeof file !== "string" || file.trim().length === 0) {
-      return { ok: false, error: "Every `files` entry must be a path string." };
-    }
-    if (!files.includes(file)) files.push(file);
-  }
-  if (files.length === 0 || files.length > MAX_BATCH_ITEMS) {
+  const hasFiles = args.files !== undefined;
+  const hasReferences = args.generatedImageReferences !== undefined;
+  if (hasFiles && hasReferences) {
     return {
       ok: false,
-      error: `Provide between 1 and ${MAX_BATCH_ITEMS} unique files.`,
+      error:
+        "Pass either `files` or `generatedImageReferences`, not both — the sources are mutually exclusive.",
     };
   }
+  if (!hasFiles && !hasReferences) {
+    return {
+      ok: false,
+      error: "Provide either `files` or `generatedImageReferences`.",
+    };
+  }
+
+  let source: ArtifactBatchSource;
+  if (hasReferences) {
+    const normalized = normalizeGeneratedImageReferences(
+      args.generatedImageReferences,
+      MAX_BATCH_ITEMS
+    );
+    if (!normalized.ok) {
+      return { ok: false, error: `${normalized.reason}.` };
+    }
+    if (normalized.references.length === 0) {
+      return {
+        ok: false,
+        error: `Provide between 1 and ${MAX_BATCH_ITEMS} unique generated image references.`,
+      };
+    }
+    source = { kind: "generated_images", references: normalized.references };
+  } else {
+    if (!Array.isArray(args.files)) {
+      return { ok: false, error: "`files` must be an array." };
+    }
+    const files: string[] = [];
+    for (const file of args.files) {
+      if (typeof file !== "string" || file.trim().length === 0) {
+        return { ok: false, error: "Every `files` entry must be a path string." };
+      }
+      if (!files.includes(file)) files.push(file);
+    }
+    if (files.length === 0 || files.length > MAX_BATCH_ITEMS) {
+      return {
+        ok: false,
+        error: `Provide between 1 and ${MAX_BATCH_ITEMS} unique files.`,
+      };
+    }
+    source = { kind: "workspace_files", files };
+  }
+
   if (
     typeof args.instruction !== "string" ||
     args.instruction.trim().length === 0
@@ -117,7 +188,7 @@ function parseArgs(
   return {
     ok: true,
     value: {
-      files,
+      source,
       instruction: args.instruction.trim(),
       processor,
       concurrency: rawConcurrency,
@@ -138,15 +209,46 @@ function destinationLabel(): string {
   }
 }
 
+function isReferenceLike(
+  value: unknown
+): value is ChatV2GeneratedImageReference {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
+  return (
+    typeof record.messageId === "string" &&
+    record.messageId.length > 0 &&
+    typeof record.imageIndex === "number"
+  );
+}
+
 function buildPermissionPreview(
   args: Record<string, unknown>
 ): PermissionPreview | undefined {
-  if (!Array.isArray(args.files)) return undefined;
-  const items = args.files
-    .filter(
-      (file): file is string => typeof file === "string" && file.length > 0
-    )
-    .slice(0, MAX_BATCH_ITEMS);
+  if (Array.isArray(args.files)) {
+    const items = args.files
+      .filter(
+        (file): file is string => typeof file === "string" && file.length > 0
+      )
+      .slice(0, MAX_BATCH_ITEMS);
+    if (items.length === 0) return undefined;
+    return {
+      kind: "file_transfer",
+      titleKey: "aiChatV2.imageTool.permissionTitle",
+      descriptionKey: "aiChatV2.imageTool.permissionDescription",
+      items,
+      destinationLabel: destinationLabel(),
+    };
+  }
+  if (!Array.isArray(args.generatedImageReferences)) return undefined;
+  const items = args.generatedImageReferences
+    .filter(isReferenceLike)
+    .slice(0, MAX_BATCH_ITEMS)
+    .map(
+      (reference) =>
+        `message=${reference.messageId} image=${reference.imageIndex}`
+    );
   if (items.length === 0) return undefined;
   return {
     kind: "file_transfer",
@@ -175,11 +277,31 @@ function wrapSkillResult(input: {
   };
 }
 
+function createDefaultAuthorizeReferences(): NonNullable<
+  ArtifactBatchProcessingDeps["authorizeReferences"]
+> {
+  return async (conversationId, references) => {
+    const { GeneratedImageReferenceService } = await import(
+      "@/service/GeneratedImageReferenceService"
+    );
+    return new GeneratedImageReferenceService().authorizeOnly({
+      conversationId,
+      references,
+    });
+  };
+}
+
 function createDefaultDeps(): ArtifactBatchProcessingDeps {
   const resolver = new WorkspaceResolver();
   return {
     resolveWorkspace: (conversationId) => resolver.resolve(conversationId),
+    authorizeReferences: createDefaultAuthorizeReferences(),
     runAgent: async (input) => {
+      if (input.generatedImage) {
+        throw new Error(
+          "Generated-image sources are authorized but the default worker cannot process them yet."
+        );
+      }
       // Lazy imports break the registry cycle:
       // skillsRegistry -> this tool -> AgentRuntime -> skillsRegistry.
       const [{ AgentRuntimeRegistry }, { SkillExecutor }] = await Promise.all([
@@ -230,6 +352,63 @@ function createDefaultDeps(): ArtifactBatchProcessingDeps {
   };
 }
 
+function summarize(
+  results: readonly ArtifactBatchItemResult[],
+  processor: typeof PROCESSOR_IMAGE_EDIT,
+  concurrency: number
+): { success: boolean; result: ArtifactBatchResult } {
+  const completedCount = results.filter(
+    (item) => item.status === "completed"
+  ).length;
+  const failedCount = results.filter(
+    (item) => item.status === "failed"
+  ).length;
+  const cancelledCount = results.filter(
+    (item) => item.status === "cancelled"
+  ).length;
+  const outputImages = results.flatMap((item) => item.outputImages);
+  const outputFilePaths = results.flatMap((item) => item.outputFilePaths);
+  const status: ArtifactBatchResult["status"] =
+    cancelledCount === results.length
+      ? "cancelled"
+      : completedCount === results.length
+      ? "completed"
+      : completedCount > 0
+      ? "partial"
+      : "failed";
+  return {
+    success: completedCount > 0,
+    result: {
+      status,
+      processor,
+      requestedCount: results.length,
+      completedCount,
+      failedCount,
+      cancelledCount,
+      concurrency,
+      items: [...results],
+      ...(outputFilePaths.length > 0 ? { outputFilePaths } : {}),
+      ...(outputImages.length > 0 ? { outputImages } : {}),
+    },
+  };
+}
+
+function failedReferenceItems(
+  references: readonly ChatV2GeneratedImageReference[],
+  error: string,
+  errorCode: GeneratedImageReferenceErrorCode
+): ArtifactBatchItemResult[] {
+  return references.map((reference) => ({
+    input: { kind: "generated_image", reference },
+    status: "failed",
+    outputFilePaths: [],
+    outputImages: [],
+    error,
+    errorCode,
+    durationMs: 0,
+  }));
+}
+
 export class ArtifactBatchProcessingService {
   constructor(
     private readonly deps: ArtifactBatchProcessingDeps = createDefaultDeps()
@@ -245,6 +424,10 @@ export class ArtifactBatchProcessingService {
     const parsed = parseArgs(args);
     if (!parsed.ok) return { success: false, result: { error: parsed.error } };
     const batch = parsed.value;
+    if (batch.source.kind === "generated_images") {
+      return this.executeGeneratedSources(batch.source.references, batch, context);
+    }
+
     const workspace = await this.deps.resolveWorkspace(context.conversationId);
     if (!workspace) {
       return {
@@ -255,17 +438,92 @@ export class ArtifactBatchProcessingService {
         },
       };
     }
+    const items: ScheduledItem[] = batch.source.files.map((file) => ({
+      identity: { kind: "workspace_file", path: file },
+      launch: () =>
+        this.deps.runAgent({
+          file,
+          instruction: batch.instruction,
+          model: context.model,
+          parentConversationId: context.conversationId,
+          workspaceRoot: workspace.rootPath,
+          detail: batch.detail,
+          signal: context.signal,
+        }),
+    }));
+    return this.processItems(items, batch.processor, batch.concurrency, context);
+  }
 
-    const results: ArtifactBatchItemResult[] = new Array(batch.files.length);
+  private async executeGeneratedSources(
+    references: readonly ChatV2GeneratedImageReference[],
+    batch: ParsedBatchArgs,
+    context: SkillExecutionContext
+  ): Promise<{
+    success: boolean;
+    result: ArtifactBatchResult | { error: string };
+  }> {
+    const authorize = this.deps.authorizeReferences;
+    if (!authorize) {
+      return summarize(
+        failedReferenceItems(
+          references,
+          "Authorization for generated image references is unavailable.",
+          "generated_image_reference_invalid"
+        ),
+        batch.processor,
+        batch.concurrency
+      );
+    }
+    try {
+      await authorize(context.conversationId, references);
+    } catch (error: unknown) {
+      // authorizeOnly is all-or-nothing, so a rejection here fails every
+      // requested reference in input order. Valid-sibling continuation is
+      // added by the per-item prepare stage in a follow-up task.
+      const code: GeneratedImageReferenceErrorCode =
+        error instanceof GeneratedImageReferenceError
+          ? error.code
+          : "generated_image_reference_invalid";
+      const message = error instanceof Error ? error.message : String(error);
+      return summarize(
+        failedReferenceItems(references, message, code),
+        batch.processor,
+        batch.concurrency
+      );
+    }
+    const items: ScheduledItem[] = references.map((reference) => ({
+      identity: { kind: "generated_image", reference },
+      launch: () =>
+        this.deps.runAgent({
+          file: "",
+          instruction: batch.instruction,
+          model: context.model,
+          parentConversationId: context.conversationId,
+          workspaceRoot: "",
+          detail: batch.detail,
+          signal: context.signal,
+          generatedImage: reference,
+        }),
+    }));
+    return this.processItems(items, batch.processor, batch.concurrency, context);
+  }
+
+  private async processItems(
+    items: readonly ScheduledItem[],
+    processor: typeof PROCESSOR_IMAGE_EDIT,
+    concurrency: number,
+    context: SkillExecutionContext
+  ): Promise<{ success: boolean; result: ArtifactBatchResult }> {
+    const results: ArtifactBatchItemResult[] = new Array(items.length);
     let nextIndex = 0;
     const runNext = async (): Promise<void> => {
-      while (nextIndex < batch.files.length) {
+      while (nextIndex < items.length) {
         const index = nextIndex;
         nextIndex += 1;
-        const file = batch.files[index];
+        const item = items[index];
         if (context.signal?.aborted) {
           results[index] = {
-            input: file,
+            input: item.identity,
             status: "cancelled",
             outputFilePaths: [],
             outputImages: [],
@@ -276,21 +534,13 @@ export class ArtifactBatchProcessingService {
         }
         const startedAt = Date.now();
         try {
-          const agent = await this.deps.runAgent({
-            file,
-            instruction: batch.instruction,
-            model: context.model,
-            parentConversationId: context.conversationId,
-            workspaceRoot: workspace.rootPath,
-            detail: batch.detail,
-            signal: context.signal,
-          });
+          const agent = await item.launch();
           const outputImages = agent.outputImages ?? [];
           const outputFilePaths = agent.outputFilePaths ?? [];
           const completed =
             agent.status === "completed" && outputImages.length > 0;
           results[index] = {
-            input: file,
+            input: item.identity,
             status: completed
               ? "completed"
               : context.signal?.aborted
@@ -314,7 +564,7 @@ export class ArtifactBatchProcessingService {
           };
         } catch (error) {
           results[index] = {
-            input: file,
+            input: item.identity,
             status: context.signal?.aborted ? "cancelled" : "failed",
             outputFilePaths: [],
             outputImages: [],
@@ -327,53 +577,23 @@ export class ArtifactBatchProcessingService {
 
     await Promise.all(
       Array.from(
-        { length: Math.min(batch.concurrency, batch.files.length) },
+        { length: Math.min(concurrency, items.length) },
         () => runNext()
       )
     );
-    const completedCount = results.filter(
-      (item) => item.status === "completed"
-    ).length;
-    const failedCount = results.filter(
-      (item) => item.status === "failed"
-    ).length;
-    const cancelledCount = results.filter(
-      (item) => item.status === "cancelled"
-    ).length;
-    const outputImages = results.flatMap((item) => item.outputImages);
-    const outputFilePaths = results.flatMap((item) => item.outputFilePaths);
-    const status: ArtifactBatchResult["status"] =
-      cancelledCount === results.length
-        ? "cancelled"
-        : completedCount === results.length
-        ? "completed"
-        : completedCount > 0
-        ? "partial"
-        : "failed";
-    return {
-      success: completedCount > 0,
-      result: {
-        status,
-        processor: batch.processor,
-        requestedCount: results.length,
-        completedCount,
-        failedCount,
-        cancelledCount,
-        concurrency: batch.concurrency,
-        items: results,
-        ...(outputFilePaths.length > 0 ? { outputFilePaths } : {}),
-        ...(outputImages.length > 0 ? { outputImages } : {}),
-      },
-    };
+    return summarize(results, processor, concurrency);
   }
 }
 
 export const PROCESS_ARTIFACT_BATCH_TOOL: SkillDefinition = {
   name: "process_artifact_batch",
   description:
-    "Process many workspace artifacts with one instruction using bounded concurrent, isolated provider operations. " +
-    "Use this for editing 2 or more local images; do not attach several editable images in one request and do not spawn one run_subagent call per file. " +
-    "The tool preserves an input-to-output mapping, reports per-item failures, and returns generated artifacts for automatic chat rendering. " +
+    "Process many images with one instruction using bounded concurrent, isolated provider operations. " +
+    "Two mutually exclusive sources: pass `files` with exact workspace file paths, or pass `generatedImageReferences` identifying AI-generated images already produced in this conversation (no workspace required). " +
+    "Pass exactly one source, never both. " +
+    "Use this for editing 2 or more images; do not attach several editable images in one request and do not spawn one run_subagent call per image. " +
+    "The tool preserves an input-to-output mapping, reports per-item results carrying the original identities, and returns generated artifacts for automatic chat rendering. " +
+    "If some items fail or are cancelled, call the tool again passing only those failed/cancelled items to retry them. " +
     "If the user requested persistent workspace files, pass the returned artifact URLs to export_generated_artifacts; never copy app-managed paths with shell_execute. " +
     "Currently processor='image_edit' is supported. The operation is asynchronous and the runtime waits for the batch job result.",
   parameters: {
@@ -382,8 +602,25 @@ export const PROCESS_ARTIFACT_BATCH_TOOL: SkillDefinition = {
       files: {
         type: "array",
         description:
-          "Exact workspace file paths to process, from 1 to 50 unique items.",
+          "Exact workspace file paths to process, from 1 to 50 unique items. Mutually exclusive with generatedImageReferences.",
         items: { type: "string", minLength: 1 },
+        minItems: 1,
+        maxItems: MAX_BATCH_ITEMS,
+        uniqueItems: true,
+      },
+      generatedImageReferences: {
+        type: "array",
+        description:
+          "Opaque references to AI-generated images from this conversation, from 1 to 50 unique items. Each entry needs the assistant messageId and the zero-based imageIndex within that message. Requires no workspace. Mutually exclusive with files.",
+        items: {
+          type: "object",
+          properties: {
+            messageId: { type: "string", minLength: 1 },
+            imageIndex: { type: "integer", minimum: 0, maximum: 49 },
+          },
+          required: ["messageId", "imageIndex"],
+          additionalProperties: false,
+        },
         minItems: 1,
         maxItems: MAX_BATCH_ITEMS,
         uniqueItems: true,
@@ -391,7 +628,7 @@ export const PROCESS_ARTIFACT_BATCH_TOOL: SkillDefinition = {
       instruction: {
         type: "string",
         description:
-          "The same operation to apply independently to every artifact.",
+          "The same operation to apply independently to every selected image.",
         minLength: 1,
       },
       processor: {
@@ -413,7 +650,7 @@ export const PROCESS_ARTIFACT_BATCH_TOOL: SkillDefinition = {
         default: "auto",
       },
     },
-    required: ["files", "instruction"],
+    required: ["instruction"],
     additionalProperties: false,
   },
   tier: "main",
