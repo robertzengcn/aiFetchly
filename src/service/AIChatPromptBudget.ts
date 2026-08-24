@@ -216,3 +216,51 @@ export function chunkGroupsByBudget(
   flush();
   return chunks;
 }
+
+/**
+ * Split a list of summary strings (intermediate compact summaries, or any
+ * pre-summarized text blocks) into bounded merge batches using the same
+ * greedy budgeting as {@link chunkGroupsByBudget}. Each summary is one
+ * indivisible unit for the merge phase — an oversized summary goes alone so
+ * the caller can reject or deterministically reduce it rather than silently
+ * merging it with neighbors. Used by the recursive hierarchical merge so a
+ * reduce request never knowingly exceeds the usable payload budget
+ * (tech-design §13.1, §16.2; SMBW-003).
+ */
+export function chunkSummariesByBudget(
+  summaries: readonly string[],
+  usablePayloadTokens: number,
+  estimator: AIChatTokenEstimator = new AIChatTokenEstimator()
+): ReadonlyArray<{
+  readonly summaries: readonly string[];
+  readonly tokens: number;
+}> {
+  if (summaries.length === 0) return [];
+  const capacity = usablePayloadTokens > 0 ? usablePayloadTokens : 1;
+  const chunks: {
+    summaries: string[];
+    tokens: number;
+  }[] = [];
+  let current: string[] = [];
+  let currentTokens = 0;
+  const flush = (): void => {
+    if (current.length > 0) {
+      chunks.push({ summaries: current, tokens: currentTokens });
+      current = [];
+      currentTokens = 0;
+    }
+  };
+  for (const s of summaries) {
+    const tokens = estimator.estimateText(s);
+    if (current.length > 0 && currentTokens + tokens > capacity) {
+      flush();
+    }
+    current.push(s);
+    currentTokens += tokens;
+    if (tokens >= capacity) {
+      flush();
+    }
+  }
+  flush();
+  return chunks;
+}

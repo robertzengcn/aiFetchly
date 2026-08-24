@@ -23,6 +23,7 @@ import {
   computeLightweightBudget,
   groupMessagesAtomically,
   chunkGroupsByBudget,
+  chunkSummariesByBudget,
 } from "@/service/AIChatPromptBudget";
 import type { OpenAISmallModelCapability } from "@/api/aiChatApi";
 import { MessageType } from "@/entityTypes/commonType";
@@ -716,24 +717,151 @@ export class AIChatCompactAgentService {
   }
 
   /**
-   * Reduce phase: merge chunk summaries into one final validated summary via
-   * one more conversation_compact completion. When a prior active compact
-   * summary exists (boundary reuse), it is folded in as the first input so
-   * the final compact carries covered history forward (SMBW-002). Throws on
-   * an empty merge result.
+   * Reduce phase: recursively merge chunk summaries into one final validated
+   * summary. Each merge request is budgeted: when the summaries (plus the
+   * prior active summary) fit one batch, a single merge request produces the
+   * final summary; when they do not, the summaries are split into bounded
+   * batches, each batch is merged into an intermediate summary, and the
+   * intermediates are recursively merged until exactly one final summary
+   * remains (SMBW-003). A single summary that cannot fit by itself is
+   * deterministically reduced (clamped to the usable budget) before the
+   * merge request rather than submitting a knowingly oversized request.
+   * Throws on an empty merge result.
    */
   private async mergeChunkSummaries(
     chunkSummaries: readonly string[],
     priorSummary: string | null,
     model: string | undefined
   ): Promise<{ summary: string; resolvedModel: string }> {
-    const inputs: { role: "assistant"; content: string }[] = [];
+    const budget = await this.computeCompactBudget(model);
+    const fixedPromptTokens = this.estimator.estimateText(
+      buildFullCompactSystemPrompt()
+    );
+    // The merge budget excludes the fixed system prompt already counted by the
+    // chunk-completion budget; the user-prompt scaffolding overhead is
+    // bounded by the estimator so the usable merge payload is conservative.
+    const mergeUsablePayload = Math.max(
+      0,
+      budget.usablePayloadTokens - fixedPromptTokens
+    );
+    // Seed the merge inputs with the prior active summary (covered history)
+    // when present so the final compact carries it forward (SMBW-002).
+    const inputs: string[] = [];
     if (priorSummary && priorSummary.trim().length > 0) {
-      inputs.push({ role: "assistant", content: priorSummary });
+      inputs.push(priorSummary);
     }
     for (const s of chunkSummaries) {
-      inputs.push({ role: "assistant", content: s });
+      inputs.push(s);
     }
+    return this.recursiveMerge(inputs, mergeUsablePayload, model);
+  }
+
+  /**
+   * Recursive merge: reduce a list of summary strings to one final summary,
+   * budgeting each completion request. Bounded groups of summaries are merged
+   * into intermediates; intermediates are recursively merged until one
+   * remains. Determinism: identical inputs and budget produce identical batch
+   * boundaries (SMBW-003).
+   *
+   * Termination guarantee: each recursion level strictly reduces the summary
+   * count. When the budget is large enough to batch multiple summaries, the
+   * batch merge reduces N→ceil(N/batchSize). When the budget is too small for
+   * any two summaries to share a batch, the function falls back to a pairwise
+   * reduce (merge adjacent pairs) so the count still halves every level — it
+   * never re-merges a single summary into a new single summary, which would
+   * loop forever (SMBW-003).
+   */
+  private async recursiveMerge(
+    summaries: readonly string[],
+    usablePayloadTokens: number,
+    model: string | undefined
+  ): Promise<{ summary: string; resolvedModel: string }> {
+    // Single summary left — it is the final result (clamped if oversized).
+    if (summaries.length === 1) {
+      return {
+        summary: this.clampForMerge(summaries[0]!, usablePayloadTokens),
+        resolvedModel: model ?? "compact",
+      };
+    }
+    const batches = chunkSummariesByBudget(summaries, usablePayloadTokens);
+    // Progress check: if every summary is alone in its own batch, batching
+    // would not reduce the count (N batches → N intermediates → same N).
+    // Fall back to a pairwise reduce so the count strictly decreases.
+    const batchingMakesProgress =
+      batches.length > 0 && batches.length < summaries.length;
+    if (batches.length <= 1) {
+      // All summaries fit a single merge request.
+      const merged = await this.requestMerge(
+        batches[0]?.summaries ?? summaries,
+        model
+      );
+      return {
+        summary: merged.summary,
+        resolvedModel: merged.resolvedModel,
+      };
+    }
+    if (!batchingMakesProgress) {
+      return this.pairwiseReduce(summaries, usablePayloadTokens, model);
+    }
+    // Multiple batches that reduce the count: merge each into an intermediate,
+    // then recurse.
+    const intermediates: string[] = [];
+    let resolvedModel: string | undefined;
+    for (const batch of batches) {
+      const merged = await this.requestMerge(batch.summaries, model);
+      intermediates.push(merged.summary);
+      if (!resolvedModel) {
+        resolvedModel = merged.resolvedModel;
+      }
+    }
+    return this.recursiveMerge(intermediates, usablePayloadTokens, model);
+  }
+
+  /**
+   * Pairwise reduce: merge adjacent pairs of summaries. Halves the count each
+   * level so recursion always terminates even when the budget is too small to
+   * batch. The final odd summary carries forward unchanged into the next
+   * level. Used as the termination fallback when batching cannot reduce the
+   * count (SMBW-003).
+   */
+  private async pairwiseReduce(
+    summaries: readonly string[],
+    usablePayloadTokens: number,
+    model: string | undefined
+  ): Promise<{ summary: string; resolvedModel: string }> {
+    const intermediates: string[] = [];
+    let resolvedModel: string | undefined;
+    for (let i = 0; i < summaries.length; i += 2) {
+      const a = summaries[i]!;
+      const b = summaries[i + 1];
+      if (b === undefined) {
+        // Odd one out — carry forward (clamped to budget).
+        intermediates.push(this.clampForMerge(a, usablePayloadTokens));
+        continue;
+      }
+      const merged = await this.requestMerge([a, b], model);
+      intermediates.push(merged.summary);
+      if (!resolvedModel) {
+        resolvedModel = merged.resolvedModel;
+      }
+    }
+    if (intermediates.length === 1) {
+      return {
+        summary: intermediates[0]!,
+        resolvedModel: resolvedModel ?? model ?? "compact",
+      };
+    }
+    return this.recursiveMerge(intermediates, usablePayloadTokens, model);
+  }
+
+  /** One merge completion request over a bounded list of summaries. */
+  private async requestMerge(
+    summaries: readonly string[],
+    model: string | undefined
+  ): Promise<{ summary: string; resolvedModel: string }> {
+    const inputs: { role: "assistant"; content: string }[] = summaries.map(
+      (s) => ({ role: "assistant" as const, content: s })
+    );
     const mergeMessages: OpenAIChatMessage[] = [
       { role: "system", content: buildFullCompactSystemPrompt() },
       {
@@ -758,6 +886,27 @@ export class AIChatCompactAgentService {
       summary: merged.summary,
       resolvedModel: mergeResult.response.model ?? model ?? "compact",
     };
+  }
+
+  /**
+   * Deterministically reduce a single summary that cannot fit the merge
+   * budget by itself. Reduction keeps the headings (structure) and the most
+   * recent content, dropping trailing text past the token limit — never
+   * silently submitting an oversized request (SMBW-003). A summary that
+   * already fits is returned unchanged.
+   */
+  private clampForMerge(summary: string, usablePayloadTokens: number): string {
+    const tokens = this.estimator.estimateText(summary);
+    if (tokens <= usablePayloadTokens || usablePayloadTokens <= 0) {
+      return summary;
+    }
+    // Character-based clamp approximating the token budget (the estimator uses
+    // length/4 + overhead, so 4 chars per token is a conservative inverse).
+    const charBudget = Math.max(0, usablePayloadTokens) * 4;
+    if (summary.length <= charBudget) {
+      return summary;
+    }
+    return `${summary.slice(0, charBudget)}…`;
   }
 }
 

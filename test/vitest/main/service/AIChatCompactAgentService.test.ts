@@ -877,6 +877,100 @@ describe("AIChatCompactAgentService", () => {
     });
   });
 
+  describe("recursive budgeted merge (SMBW-003)", () => {
+    /** Many large rows forcing multiple chunks AND a multi-level merge. */
+    function hugeRows(convId: string, n: number) {
+      return Array.from({ length: n }, (_, i) => ({
+        messageId: `m${i}`,
+        conversationId: convId,
+        role: i % 2 === 0 ? "user" : "assistant",
+        content: "x".repeat(4000),
+        timestamp: new Date(i + 1),
+        messageType: "message",
+      }));
+    }
+
+    beforeEach(() => {
+      mockGetActiveSummary.mockResolvedValue(null);
+      mockSaveFullCompact.mockClear();
+      mockSaveFullCompact.mockImplementation(
+        async (input: { conversationId: string }) => ({
+          ...compactView(input.conversationId),
+          conversationId: input.conversationId,
+        })
+      );
+    });
+
+    it("a transcript requiring >1 merge level completes and activates one final compact", async () => {
+      mockGetConversationMessages.mockResolvedValue(hugeRows("v2-merge", 60));
+      const completeChat = vi
+        .fn()
+        .mockResolvedValue(makeCompletion("# Compact\n## Summary\npart"));
+      const agent = makeAgent({
+        completeChat,
+        // Tiny window forces many chunks; summaries then require a
+        // multi-level recursive reduce to reach one final summary.
+        getContextWindow: vi.fn().mockResolvedValue(1500),
+      });
+
+      const view = await agent.runFullCompact({ conversationId: "v2-merge" });
+
+      expect(view.conversationId).toBe("v2-merge");
+      // Many map calls + at least one merge call; the last call is a merge.
+      expect(completeChat.mock.calls.length).toBeGreaterThan(1);
+      // Exactly one compact record activated (the final summary only).
+      expect(mockSaveFullCompact).toHaveBeenCalledTimes(1);
+    });
+
+    it("single oversized summary is clamped rather than submitted oversized", async () => {
+      // One row → one chunk → one summary. With a tiny merge budget the
+      // single-summary branch clamps it instead of erroring.
+      mockGetConversationMessages.mockResolvedValue([
+        {
+          messageId: "m0",
+          conversationId: "v2-clamp",
+          role: "user",
+          content: "x".repeat(200),
+          timestamp: new Date(1),
+          messageType: "message",
+        },
+      ]);
+      const completeChat = vi
+        .fn()
+        .mockResolvedValue(
+          makeCompletion("# Compact\n## Summary\n" + "y".repeat(8000))
+        );
+      const agent = makeAgent({
+        completeChat,
+        getContextWindow: vi.fn().mockResolvedValue(500),
+      });
+
+      // Must not throw — the oversized single summary is clamped, not
+      // rejected, so a final compact still activates.
+      const view = await agent.runFullCompact({ conversationId: "v2-clamp" });
+      expect(view.conversationId).toBe("v2-clamp");
+      expect(mockSaveFullCompact).toHaveBeenCalledTimes(1);
+    });
+
+    it("determinism — identical input + budget produce identical chunk counts", async () => {
+      mockGetConversationMessages.mockResolvedValue(hugeRows("v2-det", 40));
+      const mk = () =>
+        vi.fn().mockResolvedValue(makeCompletion("# Compact\n## Summary\np"));
+      const run = async () => {
+        const completeChat = mk();
+        const agent = makeAgent({
+          completeChat,
+          getContextWindow: vi.fn().mockResolvedValue(1500),
+        });
+        await agent.runFullCompact({ conversationId: "v2-det" });
+        return completeChat.mock.calls.length;
+      };
+      const a = await run();
+      const b = await run();
+      expect(a).toBe(b);
+    });
+  });
+
   describe("active compact boundary reuse (SMBW-002)", () => {
     /** Five rows: m1..m5 with strictly increasing timestamps. */
     function fiveRows(convId: string) {
@@ -1056,12 +1150,17 @@ describe("AIChatCompactAgentService", () => {
 
       await agent.runFullCompact({ conversationId: "v2-reuse" });
 
-      // The final merge request must include the prior active summary as an
-      // input alongside the chunk summaries.
-      const mergeCall = completeChat.mock.calls[
-        completeChat.mock.calls.length - 1
-      ]![0] as { messages: { role: string; content: string }[] };
-      expect(mergeCall.messages[1]!.content).toContain("old coverage");
+      // The prior active summary ("old coverage") is folded into the FIRST
+      // merge request alongside the chunk summaries (SMBW-002). With a
+      // recursive merge the final request contains only intermediates, so
+      // assert against the first merge call, not the last.
+      const mergeCalls = completeChat.mock.calls
+        .map(
+          (c) =>
+            (c[0] as { messages: { content: string }[] }).messages[1]!.content
+        )
+        .filter((content) => content.includes("old coverage"));
+      expect(mergeCalls.length).toBeGreaterThan(0);
     });
   });
 });

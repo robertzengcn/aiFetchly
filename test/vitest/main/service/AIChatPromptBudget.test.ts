@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   chunkGroupsByBudget,
+  chunkSummariesByBudget,
   computeLightweightBudget,
   groupMessagesAtomically,
   maxPacketUpdatedAt,
@@ -170,6 +171,40 @@ describe("chunkGroupsByBudget", () => {
 
   it("returns an empty array for no groups", () => {
     expect(chunkGroupsByBudget([], 100)).toEqual([]);
+  });
+});
+
+describe("chunkSummariesByBudget", () => {
+  it("packs summaries greedily into bounded batches", () => {
+    const summaries = ["one two three", "four five six", "seven eight nine"];
+    // Each summary ~4 tokens (length/4 + overhead). Cap at 9 -> first two
+    // together (~8) fit, the third starts a new batch.
+    const batches = chunkSummariesByBudget(summaries, 9);
+    expect(batches.length).toBeGreaterThanOrEqual(2);
+    // Every summary appears exactly once across batches.
+    const total = batches.reduce((n, b) => n + b.summaries.length, 0);
+    expect(total).toBe(summaries.length);
+  });
+
+  it("puts an oversized summary alone in its own batch", () => {
+    const big = "x".repeat(2000);
+    const small = "y";
+    const batches = chunkSummariesByBudget([big, small], 10);
+    expect(batches.length).toBeGreaterThanOrEqual(2);
+    expect(batches[0]!.summaries).toEqual([big]);
+  });
+
+  it("is deterministic — identical input yields identical boundaries", () => {
+    const summaries = Array.from({ length: 10 }, (_, i) => `summary ${i}`);
+    const a = chunkSummariesByBudget(summaries, 15);
+    const b = chunkSummariesByBudget(summaries, 15);
+    expect(a.map((c) => c.summaries.length)).toEqual(
+      b.map((c) => c.summaries.length)
+    );
+  });
+
+  it("returns an empty array for no summaries", () => {
+    expect(chunkSummariesByBudget([], 100)).toEqual([]);
   });
 });
 
