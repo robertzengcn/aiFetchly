@@ -545,6 +545,59 @@ describe("ArtifactBatchProcessingService generated-image sources", () => {
     );
   });
 
+  it("emits evolving progress events with counts and no path-like strings", async () => {
+    const harness = generatedDeps();
+    harness.prepareReferences.mockImplementation(
+      async (sources: readonly AuthorizedGeneratedImageSource[], detail: ImageDetail) => {
+        const failing = sources.find(
+          (source) => source.reference.messageId === "message-1"
+        );
+        if (failing) {
+          throw new GeneratedImageReferenceError(
+            "generated_image_unsupported_type"
+          );
+        }
+        return sources.map((source) => artifactFor(source, detail));
+      }
+    );
+    const emitProgress = vi.fn();
+    const service = new ArtifactBatchProcessingService(harness.deps);
+
+    const response = await service.execute(
+      {
+        generatedImageReferences: refs(4),
+        instruction: "edit",
+        concurrency: 2,
+      },
+      { ...context(), emitProgress }
+    );
+
+    expect(response.success).toBe(true);
+    expect(emitProgress.mock.calls.length).toBeGreaterThanOrEqual(3);
+    const events = emitProgress.mock.calls.map(
+      (call) => call[0] as {
+        phase: string;
+        message: string;
+        expectedCount: number;
+        completedCount: number;
+        failedCount: number;
+        cancelledCount: number;
+        runningCount: number;
+      }
+    );
+    const last = events[events.length - 1];
+    expect(last.expectedCount).toBe(4);
+    expect(last.completedCount).toBeGreaterThanOrEqual(1);
+    expect(last.failedCount).toBeGreaterThanOrEqual(1);
+    expect(last.runningCount).toBe(0);
+    expect(events.some((event) => event.phase === "finalizing")).toBe(true);
+    for (const event of events) {
+      const serialized = JSON.stringify(event);
+      expect(serialized.includes("/")).toBe(false);
+      expect(serialized.includes("message-")).toBe(false);
+    }
+  });
+
   it("fails every requested reference in order when authorization rejects the set", async () => {
     const runAgent = vi.fn();
     const service = new ArtifactBatchProcessingService({

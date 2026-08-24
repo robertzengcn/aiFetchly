@@ -117,6 +117,27 @@ interface ScheduledItem {
   launch: () => Promise<AgentResult>;
 }
 
+type ArtifactBatchPhase = "authorizing" | "processing" | "finalizing";
+
+interface ArtifactBatchProgressSnapshot {
+  readonly expectedCount: number;
+  readonly completedCount: number;
+  readonly failedCount: number;
+  readonly cancelledCount: number;
+  readonly runningCount: number;
+}
+
+/** Batch progress event: the standard ToolProgressEvent fields plus batch
+ * counters as extra properties. The query-loop sink forwards the standard
+ * five verbatim; counters stay readable by direct consumers and tests.
+ * Deliberately numbers + strings only — no paths, no references. */
+interface ArtifactBatchProgressEvent extends ArtifactBatchProgressSnapshot {
+  readonly phase: "queued" | "running" | "fetching" | "extracting" | "finalizing";
+  readonly message: string;
+  readonly progress: number;
+  readonly partialCount: number;
+}
+
 function parseArgs(
   args: Record<string, unknown>
 ): { ok: true; value: ParsedBatchArgs } | { ok: false; error: string } {
@@ -592,6 +613,42 @@ export class ArtifactBatchProcessingService {
     concurrency: number,
     context: SkillExecutionContext
   ): Promise<{ success: boolean; result: ArtifactBatchResult }> {
+    const snapshot = {
+      expectedCount: items.length,
+      completedCount: 0,
+      failedCount: 0,
+      cancelledCount: 0,
+      runningCount: 0,
+    };
+    const emitProgressEvent = (phase: ArtifactBatchPhase): void => {
+      if (!context.emitProgress) return;
+      const settled =
+        snapshot.completedCount +
+        snapshot.failedCount +
+        snapshot.cancelledCount;
+      const event: ArtifactBatchProgressEvent = {
+        phase: phase === "finalizing" ? "finalizing" : "running",
+        message:
+          `${phase} completed=${snapshot.completedCount}` +
+          ` failed=${snapshot.failedCount}` +
+          ` cancelled=${snapshot.cancelledCount}` +
+          ` running=${snapshot.runningCount}`,
+        progress: Math.round((settled / Math.max(1, snapshot.expectedCount)) * 100) / 100,
+        partialCount: snapshot.completedCount,
+        expectedCount: snapshot.expectedCount,
+        completedCount: snapshot.completedCount,
+        failedCount: snapshot.failedCount,
+        cancelledCount: snapshot.cancelledCount,
+        runningCount: snapshot.runningCount,
+      };
+      try {
+        context.emitProgress?.(event);
+      } catch {
+        // progress is best-effort; never fail the batch over a dead sink
+      }
+    };
+
+    emitProgressEvent("authorizing");
     const results: ArtifactBatchItemResult[] = new Array(items.length);
     let nextIndex = 0;
     const runNext = async (): Promise<void> => {
@@ -600,6 +657,8 @@ export class ArtifactBatchProcessingService {
         nextIndex += 1;
         const item = items[index];
         if (context.signal?.aborted) {
+          snapshot.cancelledCount += 1;
+          emitProgressEvent("processing");
           results[index] = {
             input: item.identity,
             status: "cancelled",
@@ -614,19 +673,27 @@ export class ArtifactBatchProcessingService {
           continue;
         }
         const startedAt = Date.now();
+        snapshot.runningCount += 1;
+        emitProgressEvent("processing");
         try {
           const agent = await item.launch();
           const outputImages = agent.outputImages ?? [];
           const outputFilePaths = agent.outputFilePaths ?? [];
           const completed =
             agent.status === "completed" && outputImages.length > 0;
+          const status: ArtifactBatchItemResult["status"] = completed
+            ? "completed"
+            : context.signal?.aborted
+            ? "cancelled"
+            : "failed";
+          snapshot.runningCount -= 1;
+          if (status === "completed") snapshot.completedCount += 1;
+          else if (status === "cancelled") snapshot.cancelledCount += 1;
+          else snapshot.failedCount += 1;
+          emitProgressEvent("processing");
           results[index] = {
             input: item.identity,
-            status: completed
-              ? "completed"
-              : context.signal?.aborted
-              ? "cancelled"
-              : "failed",
+            status,
             agentTaskId: agent.agentTaskId,
             outputFilePaths,
             outputImages,
@@ -645,6 +712,10 @@ export class ArtifactBatchProcessingService {
           };
         } catch (error) {
           const cancelled = context.signal?.aborted === true;
+          snapshot.runningCount -= 1;
+          if (cancelled) snapshot.cancelledCount += 1;
+          else snapshot.failedCount += 1;
+          emitProgressEvent("processing");
           results[index] = {
             input: item.identity,
             status: cancelled ? "cancelled" : "failed",
@@ -666,6 +737,7 @@ export class ArtifactBatchProcessingService {
         () => runNext()
       )
     );
+    emitProgressEvent("finalizing");
     return summarize(results, processor, concurrency);
   }
 }
