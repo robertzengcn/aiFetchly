@@ -1,4 +1,4 @@
-import { ipcMain } from "electron";
+import { ipcMain, shell } from "electron";
 import { z } from "zod";
 import { PortableWorkspaceMemoryService } from "@/service/PortableWorkspaceMemoryService";
 import {
@@ -21,6 +21,10 @@ import {
   AI_PORTABLE_WORKSPACE_MEMORY_PRIVATIZE,
   AI_PORTABLE_WORKSPACE_MEMORY_REVIEW_APPROVE,
   AI_PORTABLE_WORKSPACE_MEMORY_REVIEW_REJECT,
+  AI_PORTABLE_WORKSPACE_MEMORY_REVIEW_LIST,
+  AI_PORTABLE_WORKSPACE_MEMORY_REVIEW_APPROVE_DELETION,
+  AI_PORTABLE_WORKSPACE_MEMORY_REVIEW_REJECT_DELETION,
+  AI_PORTABLE_WORKSPACE_MEMORY_REVEAL_FILE,
   AI_PORTABLE_WORKSPACE_MEMORY_GIT_STATUS,
   AI_PORTABLE_WORKSPACE_MEMORY_GET_STATE,
   AI_PORTABLE_WORKSPACE_MEMORY_BRIDGE_PREVIEW,
@@ -32,6 +36,29 @@ import type { CommonMessage } from "@/entityTypes/commonType";
 
 function ok<T>(data: T): CommonMessage<T> {
   return { status: true, msg: "", data };
+
+  ipcMain.handle(
+    AI_PORTABLE_WORKSPACE_MEMORY_REVEAL_FILE,
+    async (_e, data: unknown) => {
+      try {
+        const input = memoryOpSchema.safeParse(safeParse(data));
+        if (!input.success)
+          return denied("conversationId and memoryId are required");
+        // Resolve the trusted canonical root + memory id internally; the
+        // renderer never supplies a filesystem path (FR-055).
+        const ctx = await getService().resolveRevealPath(
+          input.data.conversationId,
+          input.data.memoryId
+        );
+        if (shell.showItemInFolder(ctx)) {
+          return ok(null);
+        }
+        return denied("file not found");
+      } catch (err) {
+        return denied(err instanceof Error ? err.message : "reveal failed");
+      }
+    }
+  );
 }
 
 function denied<T>(msg: string): CommonMessage<T> {
@@ -484,6 +511,47 @@ export function registerPortableWorkspaceMemoryIpcHandlers(): void {
         return ok(null);
       } catch (err) {
         return denied(err instanceof Error ? err.message : "review failed");
+      }
+    }
+  );
+
+  ipcMain.handle(
+    AI_PORTABLE_WORKSPACE_MEMORY_REVIEW_LIST,
+    async (_e, data: unknown) => {
+      try {
+        const input = strictConversation.safeParse(safeParse(data) ?? {});
+        if (!input.success) return denied("conversationId is required");
+        return ok(await getService().listPendingReview(input.data.conversationId));
+      } catch (err) {
+        return denied(err instanceof Error ? err.message : "review list failed");
+      }
+    }
+  );
+
+  ipcMain.handle(
+    AI_PORTABLE_WORKSPACE_MEMORY_REVIEW_APPROVE_DELETION,
+    async (_e, data: unknown) => {
+      try {
+        const input = memoryOpSchema.safeParse(safeParse(data));
+        if (!input.success) return denied("invalid review request payload");
+        await getService().approveDeletion(input.data);
+        return ok(null);
+      } catch (err) {
+        return denied(err instanceof Error ? err.message : "approve deletion failed");
+      }
+    }
+  );
+
+  ipcMain.handle(
+    AI_PORTABLE_WORKSPACE_MEMORY_REVIEW_REJECT_DELETION,
+    async (_e, data: unknown) => {
+      try {
+        const input = memoryOpSchema.safeParse(safeParse(data));
+        if (!input.success) return denied("invalid review request payload");
+        await getService().rejectDeletion(input.data);
+        return ok(null);
+      } catch (err) {
+        return denied(err instanceof Error ? err.message : "reject deletion failed");
       }
     }
   );

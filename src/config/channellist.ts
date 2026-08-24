@@ -660,6 +660,14 @@ export const AI_PORTABLE_WORKSPACE_MEMORY_REVIEW_APPROVE =
   "ai:portable-workspace-memory:review:approve";
 export const AI_PORTABLE_WORKSPACE_MEMORY_REVIEW_REJECT =
   "ai:portable-workspace-memory:review:reject";
+export const AI_PORTABLE_WORKSPACE_MEMORY_REVIEW_LIST =
+  "ai:portable-workspace-memory:review:list";
+export const AI_PORTABLE_WORKSPACE_MEMORY_REVIEW_APPROVE_DELETION =
+  "ai:portable-workspace-memory:review:approve-deletion";
+export const AI_PORTABLE_WORKSPACE_MEMORY_REVIEW_REJECT_DELETION =
+  "ai:portable-workspace-memory:review:reject-deletion";
+export const AI_PORTABLE_WORKSPACE_MEMORY_REVEAL_FILE =
+  "ai:portable-workspace-memory:reveal-file";
 export const AI_PORTABLE_WORKSPACE_MEMORY_GIT_STATUS =
   "ai:portable-workspace-memory:git-status";
 export const AI_PORTABLE_WORKSPACE_MEMORY_GET_STATE =

@@ -112,27 +112,27 @@ Each implementation task must include its required unit, component, integration,
 
 ## P1: Complete product controls and review workflows
 
-- [ ] **Add the complete portable-memory settings surface** (`FR-054`, `FR-062`)
+- [x] **Add the complete portable-memory settings surface** (`FR-054`, `FR-062`)
   - Provide post-enablement controls for export, import policy, rescan, disable/rollback, bridge management, default storage mode, and identity regeneration.
   - Disabling must stop import/watch behavior without deleting files or private SQLite memories.
   - Let users explicitly choose how detached portable projections are handled.
 
-- [ ] **Implement import review UI** (`FR-042`, `FR-062`, `FR-063`)
+- [x] **Implement import review UI** (`FR-042`, `FR-062`, `FR-063`)
   - List pending new records, pending edits, and pending deletions separately.
   - Show bounded, safely rendered previews and relative paths.
   - Wire approve/reject actions and refresh status, retrieval eligibility, projection, index, and audit state.
 
-- [ ] **Show exact instruction-bridge diffs and management actions** (`FR-034` through `FR-036`, `AC-010`)
+- [x] **Show exact instruction-bridge diffs and management actions** (`FR-034` through `FR-036`, `AC-010`)
   - Render the exact unified diff returned by preview before confirmation.
   - Add bridge install/update/remove controls after initial enablement.
   - Preserve unrelated `AGENTS.md` and `CLAUDE.md` bytes and block duplicate/overlapping managed markers.
 
-- [ ] **Add reveal-file and full per-memory metadata actions** (PRD section 16.2)
+- [x] **Add reveal-file and full per-memory metadata actions** (PRD section 16.2)
   - Reveal only the main-process-resolved portable file.
   - Show storage mode, visibility intent, sync state, last portable update, last local use, and sanitized source class.
   - Provide an accessible full-value affordance for truncated paths and titles.
 
-- [ ] **Improve enable/import preview fidelity** (PRD sections 16.1 and 19.3)
+- [x] **Improve enable/import preview fidelity** (PRD sections 16.1 and 19.3)
   - Scan existing files before enablement and show valid, invalid, conflicting, active, archived, local, and team counts.
   - Show export count, destination, skipped records with reasons, and secret-filter warnings.
   - Do not create or mutate files until the final confirmation.

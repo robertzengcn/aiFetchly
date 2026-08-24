@@ -96,6 +96,18 @@
             "
             size="x-small"
             variant="text"
+            @click="onOpenReview"
+          >
+            {{ reviewText }}
+          </v-btn>
+          <v-btn
+            v-if="
+              portableStatus?.enabled &&
+              (portableStatus.rejectedCount > 0 ||
+                portableStatus.conflictCount > 0)
+            "
+            size="x-small"
+            variant="text"
             @click="diagnosticsOpen = true"
           >
             {{ diagnosticsText }}
@@ -200,6 +212,14 @@
                 >· {{ confidenceText }}: {{ m.confidence }}</span
               >
               <v-spacer />
+              <v-btn
+                v-if="portableStatus?.enabled && portableRowMap.get(m.memoryId)"
+                size="x-small"
+                variant="text"
+                @click="onRevealFile(m)"
+              >
+                {{ revealFileText }}
+              </v-btn>
               <v-btn size="x-small" variant="text" @click="openEdit(m)">{{
                 editText
               }}</v-btn>
@@ -239,6 +259,13 @@
       :conversation-id="conversationId"
       @cancel="diagnosticsOpen = false"
       @rescanned="onDiagnosticsRescanned"
+    />
+
+    <PortableMemoryReviewDialog
+      :open="reviewOpen"
+      :conversation-id="conversationId"
+      @cancel="reviewOpen = false"
+      @resolved="onReviewResolved"
     />
 
     <v-dialog v-model="regenerateIdentityOpen" max-width="480">
@@ -321,6 +348,7 @@ import WorkspaceMemoryStatusBadge from "./WorkspaceMemoryStatusBadge.vue";
 import PortableMemoryEnableDialog from "./PortableMemoryEnableDialog.vue";
 import PortableMemoryConflictDialog from "./PortableMemoryConflictDialog.vue";
 import PortableMemoryDiagnosticsDialog from "./PortableMemoryDiagnosticsDialog.vue";
+import PortableMemoryReviewDialog from "./PortableMemoryReviewDialog.vue";
 
 const props = defineProps<{
   conversationId: string;
@@ -383,6 +411,7 @@ const conflictMemoryId = ref<string | null>(null);
 const diagnosticsOpen = ref(false);
 const regenerateIdentityOpen = ref(false);
 const regenerating = ref(false);
+const reviewOpen = ref(false);
 let unsubscribePortable: (() => void) | null = null;
 
 const hasWorkspace = computed(
@@ -513,6 +542,28 @@ function onOpenConflictResolver(): void {
   conflictOpen.value = true;
 }
 
+function onOpenReview(): void {
+  reviewOpen.value = true;
+}
+
+async function onReviewResolved(): Promise<void> {
+  void refreshPortableStatus();
+  await refresh();
+  emit("change");
+}
+
+async function onRevealFile(m: AIWorkspaceMemoryView): Promise<void> {
+  if (!props.conversationId) return;
+  try {
+    await portableWorkspaceMemoryApi.revealFile({
+      conversationId: props.conversationId,
+      memoryId: m.memoryId,
+    });
+  } catch {
+    // advisory; the file may be missing or the OS call may fail
+  }
+}
+
 async function onConflictResolved(): Promise<void> {
   conflictOpen.value = false;
   conflictMemoryId.value = null;
@@ -581,6 +632,12 @@ const resolveConflictsText = computed(() =>
 );
 const diagnosticsText = computed(() =>
   tr("portableMemory.diagnosticsTitle", "Diagnostics")
+);
+const reviewText = computed(() =>
+  tr("portableMemory.review", "Review")
+);
+const revealFileText = computed(() =>
+  tr("portableMemory.revealFile", "Reveal file")
 );
 const regenerateIdentityText = computed(() =>
   tr("portableMemory.regenerateIdentity", "Regenerate identity")

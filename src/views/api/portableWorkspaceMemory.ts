@@ -1,6 +1,7 @@
 import type { CommonMessage } from "@/entityTypes/commonType";
 import type {
   PortableMemoryDiagnosticView,
+  PortableMemoryReviewEntry,
   PortableMemoryRowView,
   PortableMemorySyncSummary,
   PortableWorkspaceStatusView,
@@ -71,6 +72,10 @@ const CH = {
   PRIVATIZE: "ai:portable-workspace-memory:privatize",
   REVIEW_APPROVE: "ai:portable-workspace-memory:review:approve",
   REVIEW_REJECT: "ai:portable-workspace-memory:review:reject",
+  REVIEW_LIST: "ai:portable-workspace-memory:review:list",
+  REVIEW_APPROVE_DELETION: "ai:portable-workspace-memory:review:approve-deletion",
+  REVIEW_REJECT_DELETION: "ai:portable-workspace-memory:review:reject-deletion",
+  REVEAL_FILE: "ai:portable-workspace-memory:reveal-file",
   GIT_STATUS: "ai:portable-workspace-memory:git-status",
   GET_STATE: "ai:portable-workspace-memory:get-state",
   BRIDGE_PREVIEW: "ai:portable-workspace-memory:bridge:preview",
@@ -215,6 +220,18 @@ export const portableWorkspaceMemoryApi = {
   }) => call<null>(CH.REVIEW_APPROVE, input),
   rejectReview: (input: { conversationId: string; memoryId: string }) =>
     call<null>(CH.REVIEW_REJECT, input),
+  listPendingReview: (conversationId: string) =>
+    call<{
+      newRecords: PortableMemoryReviewEntry[];
+      edits: PortableMemoryReviewEntry[];
+      deletions: PortableMemoryReviewEntry[];
+    }>(CH.REVIEW_LIST, { conversationId }),
+  approveDeletion: (input: { conversationId: string; memoryId: string }) =>
+    call<null>(CH.REVIEW_APPROVE_DELETION, input),
+  rejectDeletion: (input: { conversationId: string; memoryId: string }) =>
+    call<null>(CH.REVIEW_REJECT_DELETION, input),
+  revealFile: (input: { conversationId: string; memoryId: string }) =>
+    call<null>(CH.REVEAL_FILE, input),
   gitStatus: (conversationId: string) =>
     call<string>(CH.GIT_STATUS, { conversationId }),
   getPortableState: (input: { conversationId: string; memoryId: string }) =>

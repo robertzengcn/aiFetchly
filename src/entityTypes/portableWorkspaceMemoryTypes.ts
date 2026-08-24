@@ -285,6 +285,21 @@ export interface PortableMemoryRowView {
   readonly diagnostic?: PortableMemoryDiagnosticView;
 }
 
+/**
+ * A pending external record awaiting user review (FR-042/FR-063). The UI
+ * groups these by kind (new / edit / deletion) and shows a bounded preview.
+ */
+export interface PortableMemoryReviewEntry {
+  readonly memoryId: string;
+  readonly relativePath: string;
+  readonly syncState: string;
+  readonly message: string;
+  readonly title?: string;
+  /** Bounded preview of the file content (first 500 chars), if readable. */
+  readonly preview?: string;
+  readonly parseable: boolean;
+}
+
 // ---------------------------------------------------------------------------
 // Diagnostics (design §6.5)
 // ---------------------------------------------------------------------------

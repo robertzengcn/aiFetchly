@@ -14,6 +14,7 @@
  */
 
 import { randomUUID } from "crypto";
+import path from "node:path";
 import type {
   PortableMemoryBridgePreview,
   PortableMemoryBridgeResult,
@@ -39,6 +40,7 @@ import type {
   PortableMemoryDefaultStorageMode,
   PortableMemoryDiagnosticView,
   PortableMemoryImportPolicy,
+  PortableMemoryReviewEntry,
   PortableMemoryRowView,
   PortableMemorySyncSummary,
   PortableWorkspaceStatusView,
@@ -530,6 +532,90 @@ export class PortableWorkspaceMemoryService {
     return this.portableModule.listDiagnostics(scope);
   }
 
+  /**
+   * List records pending review, split by import kind (FR-042/FR-063):
+   *   - `new`: external creates the user has not yet approved.
+   *   - `edit`: known records whose external edit is pending review.
+   *   - `deletion`: records marked missing (external deletes awaiting review).
+   * Each entry carries a safely-rendered preview + relative path.
+   */
+  async listPendingReview(conversationId: string): Promise<{
+    readonly newRecords: readonly PortableMemoryReviewEntry[];
+    readonly edits: readonly PortableMemoryReviewEntry[];
+    readonly deletions: readonly PortableMemoryReviewEntry[];
+  }> {
+    const ctx = await this.requireContext(conversationId);
+    const scope = await this.requireScope(ctx);
+    const states = await this.stateModel.listByScope(
+      scope.scopeId,
+      "pending-review"
+    );
+    const missing = await this.stateModel.listByScope(scope.scopeId, "missing");
+    const store = new PortableWorkspaceMemoryFileStore(ctx.workspaceRoot);
+    const buildEntry = async (
+      memoryId: string,
+      relativePath: string,
+      syncState: string,
+      message: string
+    ): Promise<PortableMemoryReviewEntry> => {
+      const row = await this.memoryModel.getByScopeAndMemoryId(
+        scope.scopeId,
+        memoryId
+      );
+      let preview: string | undefined;
+      let parseable = false;
+      try {
+        const read = await store.readRecord(memoryId);
+        if (read) {
+          preview = read.content.slice(0, 500);
+          parseable = true;
+        }
+      } catch {
+        // unreadable — no preview
+      }
+      return {
+        memoryId,
+        relativePath,
+        syncState,
+        message,
+        title: row?.title,
+        preview,
+        parseable,
+      };
+    };
+
+    const newRecords: PortableMemoryReviewEntry[] = [];
+    const edits: PortableMemoryReviewEntry[] = [];
+    for (const state of states) {
+      const known =
+        (await this.memoryModel.getByScopeAndMemoryId(
+          scope.scopeId,
+          state.memoryId
+        )) !== null;
+      const entry = await buildEntry(
+        state.memoryId,
+        state.relativePath,
+        state.syncState,
+        state.diagnosticMessage ?? "pending review"
+      );
+      if (known) edits.push(entry);
+      else newRecords.push(entry);
+    }
+    const deletions: PortableMemoryReviewEntry[] = [];
+    for (const state of missing) {
+      deletions.push(
+        await buildEntry(
+          state.memoryId,
+          state.relativePath,
+          state.syncState,
+          state.diagnosticMessage ?? "file absent; awaiting deletion review"
+        )
+      );
+    }
+    return { newRecords, edits, deletions };
+  }
+
+  /** Approve a pending external create/edit (import into synced). */
   async approveReview(input: {
     readonly conversationId: string;
     readonly memoryId: string;
@@ -551,6 +637,61 @@ export class PortableWorkspaceMemoryService {
       input.memoryId,
       { status: "archived" }
     );
+    await this.portableModule.approvePendingReview(scope, input.memoryId);
+  }
+
+  /**
+   * Approve a pending external DELETION (FR-042): the user confirmed the file
+   * should be gone. Deletes the projection + portable state after an audit.
+   */
+  async approveDeletion(input: {
+    readonly conversationId: string;
+    readonly memoryId: string;
+  }): Promise<void> {
+    const ctx = await this.requireContext(input.conversationId);
+    const scope = await this.requireScope(ctx);
+    const state = await this.stateModel.getByScopeAndMemoryId(
+      scope.scopeId,
+      input.memoryId
+    );
+    await this.portableModule.recordAudit({
+      scopeId: scope.scopeId,
+      memoryId: input.memoryId,
+      relativePath: state?.relativePath,
+      action: "delete",
+      actor: "user",
+      outcome: "completed",
+      message: "external deletion approved by user",
+    });
+    await this.stateModel.deleteByScopeAndMemoryId(
+      scope.scopeId,
+      input.memoryId
+    );
+    await this.memoryModel.deleteByScopeAndMemoryId(
+      scope.scopeId,
+      input.memoryId
+    );
+    await this.refreshIndex(ctx, scope);
+  }
+
+  /**
+   * Reject a pending external deletion: keep the projection (the user wants
+   * the record to survive even though the file is gone). Restores to synced.
+   */
+  async rejectDeletion(input: {
+    readonly conversationId: string;
+    readonly memoryId: string;
+  }): Promise<void> {
+    const ctx = await this.requireContext(input.conversationId);
+    const scope = await this.requireScope(ctx);
+    await this.portableModule.recordAudit({
+      scopeId: scope.scopeId,
+      memoryId: input.memoryId,
+      action: "resolve",
+      actor: "user",
+      outcome: "completed",
+      message: "external deletion rejected; projection retained",
+    });
     await this.portableModule.approvePendingReview(scope, input.memoryId);
   }
 
@@ -897,6 +1038,21 @@ export class PortableWorkspaceMemoryService {
   async getGitStatus(conversationId: string): Promise<string> {
     const ctx = await this.requireContext(conversationId);
     return this.gitStatusService.getTrackingState(ctx.workspaceRoot);
+  }
+
+  /**
+   * Resolve the trusted absolute path of a portable record file for the OS
+   * reveal action (PRD §16.2). The renderer supplies only conversationId +
+   * memoryId; the main process resolves the trusted canonical root + memory id
+   * internally and returns the native path. Never accepts a renderer path.
+   */
+  async resolveRevealPath(
+    conversationId: string,
+    memoryId: string
+  ): Promise<string> {
+    const ctx = await this.requireContext(conversationId);
+    const store = new PortableWorkspaceMemoryFileStore(ctx.workspaceRoot);
+    return path.join(store.memoryDir(), `${memoryId}.md`);
   }
 
   /**
