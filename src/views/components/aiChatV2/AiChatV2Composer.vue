@@ -146,6 +146,7 @@
 
     <v-textarea
       v-model="draft"
+      ref="textareaField"
       :placeholder="t('aiChatV2.input_placeholder') || 'Send a message…'"
       variant="outlined"
       auto-grow
@@ -422,6 +423,11 @@ const props = defineProps<{
   selectedGeneratedImages?: readonly GeneratedImageReferenceView[];
   /** Maximum generated-image references accepted by a direct request. */
   generatedImageReferenceLimit?: number;
+  /**
+   * Monotonic counter the parent bumps when an action (e.g. "edit this
+   * generated image") should move focus back into the composer textarea.
+   */
+  generatedImageFocusSignal?: number;
 }>();
 const emit = defineEmits<{
   (
@@ -476,6 +482,20 @@ function onMoveGeneratedImage(fromIndex: number, direction: -1 | 1): void {
   references.splice(toIndex, 0, moved);
   emit("reorder-generated-images", references);
 }
+
+interface FocusableTextarea {
+  focus: () => void;
+}
+
+const textareaField = ref<FocusableTextarea | null>(null);
+
+watch(
+  () => props.generatedImageFocusSignal,
+  (signal: number | undefined) => {
+    if (!signal || signal <= 0) return;
+    void nextTick(() => textareaField.value?.focus());
+  }
+);
 
 const draft = ref("");
 const selectedFiles = ref<File[]>([]);
