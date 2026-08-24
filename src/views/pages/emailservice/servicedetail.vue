@@ -1,5 +1,10 @@
 <template>
-  <v-sheet class="mx-auto" rounded>
+  <AppPageShell
+    page-id="email-service-editor"
+    title-key="route.email_service_create"
+    content-width="form"
+  >
+    <v-sheet class="mx-auto" rounded>
 
     <v-form ref="form" v-model="validForm" @submit.prevent="onSubmit" class="ml-2 mr-2">
       <v-alert
@@ -221,8 +226,9 @@ v-model="testemailTitle" :label="t('emailservice.test_email_title')" type="input
 :show-dialog="showDialog" :alertext="alertdiatext" :alertitle="alertdiatitle"
     @dialogclose="showDialog = false" />
   <LoadingDialog :load-dialogshow="loadDialogshow" :loadingtitle="CapitalizeFirstLetter(t('common.loading'))" />
-</template>
+</apppageshell></template>
 <script setup lang="ts">
+import AppPageShell from "@/views/components/pageTemplates/AppPageShell.vue";
 import { ref, onMounted, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";

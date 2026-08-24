@@ -1,5 +1,10 @@
 <template>
-  <v-sheet class="mx-auto" rounded>
+  <AppPageShell
+    page-id="email-template-editor"
+    title-key="route.email_template_detail"
+    content-width="form"
+  >
+    <v-sheet class="mx-auto" rounded>
 
     <v-form ref="form" @submit.prevent="onSubmit">
       <v-row>
@@ -265,8 +270,9 @@ v-model="EmailContentpreview" :label="t('emailmarketing.content')" readonly rows
       </v-card-actions>
     </v-card>
   </v-dialog>
-</template>
+</apppageshell></template>
 <script setup lang="ts">
+import AppPageShell from "@/views/components/pageTemplates/AppPageShell.vue";
 // import router from '@/views/router';
 import { ref, onMounted, watch,onBeforeUnmount } from "vue";
 import { useRoute, useRouter } from "vue-router";

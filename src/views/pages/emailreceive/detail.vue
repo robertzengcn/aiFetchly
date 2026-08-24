@@ -1,5 +1,10 @@
 <template>
-  <v-sheet class="mx-auto pa-4" rounded>
+  <AppPageShell
+    page-id="email-receive-detail"
+    title-key="route.email_receive_detail"
+    content-width="wide"
+  >
+    <v-sheet class="mx-auto pa-4" rounded>
     <div class="d-flex align-center mb-4">
       <v-btn color="error" variant="text" @click="goBack">
         <v-icon start>mdi-arrow-left</v-icon>{{ t("common.return") }}
@@ -29,10 +34,12 @@
         <pre style="white-space: pre-wrap">{{ message.bodyText }}</pre>
       </v-card>
     </div>
-  </v-sheet>
+    </v-sheet>
+  </AppPageShell>
 </template>
 
 <script setup lang="ts">
+import AppPageShell from "@/views/components/pageTemplates/AppPageShell.vue";
 import { ref, computed, onMounted } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
