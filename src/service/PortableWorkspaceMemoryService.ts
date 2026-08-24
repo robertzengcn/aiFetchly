@@ -462,7 +462,6 @@ export class PortableWorkspaceMemoryService {
       input.memoryId
     );
     if (!row) throw new Error("Workspace memory not found");
-    const store = new PortableWorkspaceMemoryFileStore(ctx.workspaceRoot);
     const document = this.format.buildDocument({
       id: row.memoryId,
       type: row.type as PortableDocumentType,
@@ -475,13 +474,18 @@ export class PortableWorkspaceMemoryService {
       title: row.title,
       content: row.content,
     });
-    const serialized = this.format.serialize(document);
-    const written = await store.writeRecord(row.memoryId, serialized);
+    // File-first through the per-scope queue (D-05/D-06): write, re-parse,
+    // then promote the SQLite projection.
+    await this.runQueued(scope, () =>
+      this.coordinator.applyAppWrite(scope, document)
+    );
+    const store = new PortableWorkspaceMemoryFileStore(ctx.workspaceRoot);
+    const written = await store.readRecord(row.memoryId);
     await this.portableModule.promotePrivateMemory(
       scope,
       row.memoryId,
       document,
-      written.contentHash
+      written!.contentHash
     );
     await this.refreshIndex(ctx, scope);
   }
@@ -498,12 +502,20 @@ export class PortableWorkspaceMemoryService {
     );
     if (!state) throw new Error("Memory is not portable");
     const store = new PortableWorkspaceMemoryFileStore(ctx.workspaceRoot);
-    await this.portableModule.privatizeMemory(
-      scope,
-      input.memoryId,
-      state.relativePath
-    );
-    await store.deleteRecord(input.memoryId);
+    await this.runQueued(scope, async () => {
+      // Delete the file first; only on success remove portable state.
+      const deleted = await store.deleteRecord(input.memoryId);
+      if (!deleted) {
+        throw new Error(
+          "portable memory file could not be deleted; portable state retained"
+        );
+      }
+      await this.portableModule.privatizeMemory(
+        scope,
+        input.memoryId,
+        state.relativePath
+      );
+    });
     await this.refreshIndex(ctx, scope);
   }
 
@@ -762,7 +774,8 @@ export class PortableWorkspaceMemoryService {
         | "team",
       createdAt: existing.createdAt ?? new Date(),
       updatedAt: new Date(),
-      createdBy: (state?.createdBy ?? "user") as PortableMemoryDocumentV1["frontmatter"]["createdBy"],
+      createdBy: (state?.createdBy ??
+        "user") as PortableMemoryDocumentV1["frontmatter"]["createdBy"],
       title: existing.title,
       content: existing.content,
     });
@@ -982,82 +995,143 @@ export class PortableWorkspaceMemoryService {
       readonly confidence: number;
       readonly visibility: "local" | "team";
     };
+    /** The on-disk hash the user saw when choosing; re-compared before write. */
+    readonly expectedObservedHash?: string | null;
   }): Promise<void> {
     const ctx = await this.requireContext(input.conversationId);
     const scope = await this.requireScope(ctx);
     const store = new PortableWorkspaceMemoryFileStore(ctx.workspaceRoot);
-    const read = await store.readRecord(input.memoryId);
-    if (!read) {
-      throw new Error(
-        "portable memory file is absent; cannot resolve conflict"
-      );
-    }
 
-    let nextHash: string;
-    if (input.action === "use-file") {
-      // Validate the current file through the parser; import if it parses.
-      const parsed = this.format.parseDraft({
-        relativePath: PortableWorkspaceMemoryFileStore.relativePathForMemoryId(
-          input.memoryId
-        ),
-        fileName: `${input.memoryId}.md`,
-        contentHash: read.contentHash,
-        sizeBytes: read.sizeBytes,
-        mtimeMs: read.mtimeMs,
-        rawFrontmatter: parseYamlFrontmatter(read.content),
-        markdownBody: stripFrontmatterBlock(read.content),
-        isSymbolicLink: false,
-      });
-      if (!parsed.ok) {
+    // Route the entire resolution through the per-scope queue so it cannot
+    // race a watcher snapshot or another mutation (D-05, FR-041).
+    await this.runQueued(scope, async () => {
+      // Re-read the file INSIDE the queue (race-safe, §14.7).
+      const read = await store.readRecord(input.memoryId);
+      if (!read) {
         throw new Error(
-          `current file is invalid: ${parsed.diagnostic.message}`
+          "portable memory file is absent; cannot resolve conflict"
         );
       }
-      await this.portableModule.upsertValidatedDocument(
-        scope,
-        parsed.document,
-        {
-          actor: "user",
-          pendingReview: false,
+      // Race-safe check: if the file changed since the user chose, re-conflict.
+      if (
+        input.expectedObservedHash &&
+        input.expectedObservedHash !== read.contentHash
+      ) {
+        await this.portableModule.markConflict(scope, {
+          memoryId: input.memoryId,
+          relativePath:
+            PortableWorkspaceMemoryFileStore.relativePathForMemoryId(
+              input.memoryId
+            ),
+          message:
+            "file changed again before resolution could apply; please re-review",
+        });
+        throw new Error(
+          "file changed again before resolution could apply; please re-review"
+        );
+      }
+
+      let nextHash: string;
+      if (input.action === "use-file") {
+        // Validate the current file through the parser; import if it parses.
+        const parsed = this.format.parseDraft({
+          relativePath:
+            PortableWorkspaceMemoryFileStore.relativePathForMemoryId(
+              input.memoryId
+            ),
+          fileName: `${input.memoryId}.md`,
+          contentHash: read.contentHash,
+          sizeBytes: read.sizeBytes,
+          mtimeMs: read.mtimeMs,
+          rawFrontmatter: parseYamlFrontmatter(read.content),
+          markdownBody: stripFrontmatterBlock(read.content),
+          isSymbolicLink: false,
+        });
+        if (!parsed.ok) {
+          throw new Error(
+            `current file is invalid: ${parsed.diagnostic.message}`
+          );
         }
-      );
-      nextHash = read.contentHash;
-    } else if (input.action === "use-app" || input.action === "merge") {
-      if (!input.mergedDocument) {
-        throw new Error(
-          "use-app/merge requires a mergedDocument with title/content/type/status/confidence/visibility"
+        await this.portableModule.upsertValidatedDocument(
+          scope,
+          parsed.document,
+          {
+            actor: "user",
+            pendingReview: false,
+          }
         );
+        nextHash = read.contentHash;
+      } else if (input.action === "use-app" || input.action === "merge") {
+        if (!input.mergedDocument) {
+          throw new Error(
+            "use-app/merge requires a mergedDocument with title/content/type/status/confidence/visibility"
+          );
+        }
+        const existing = await this.memoryModel.getByScopeAndMemoryId(
+          scope.scopeId,
+          input.memoryId
+        );
+        const createdAt = existing?.createdAt ?? new Date();
+        const document = this.format.buildDocument({
+          id: input.memoryId,
+          type: input.mergedDocument.type,
+          status: input.mergedDocument.status,
+          confidence: input.mergedDocument.confidence,
+          visibility: input.mergedDocument.visibility,
+          createdAt,
+          updatedAt: new Date(),
+          createdBy: "user",
+          title: input.mergedDocument.title,
+          content: input.mergedDocument.content,
+        });
+        // Write atomically, then RE-PARSE the written bytes (the shared
+        // validator + secret filter run on the canonical output, not just
+        // the caller's draft — §19/P0 "make app writes use the shared
+        // validator").
+        const serialized = this.format.serialize(document);
+        const written = await store.writeRecord(input.memoryId, serialized);
+        const readBack = await store.readRecord(input.memoryId);
+        if (!readBack) {
+          throw new Error("portable record write could not be verified");
+        }
+        const reparsed = this.format.parseDraft({
+          relativePath:
+            PortableWorkspaceMemoryFileStore.relativePathForMemoryId(
+              input.memoryId
+            ),
+          fileName: `${input.memoryId}.md`,
+          contentHash: written.contentHash,
+          sizeBytes: written.sizeBytes,
+          mtimeMs: readBack.mtimeMs,
+          rawFrontmatter: parseYamlFrontmatter(readBack.content),
+          markdownBody: stripFrontmatterBlock(readBack.content),
+          isSymbolicLink: false,
+        });
+        if (!reparsed.ok) {
+          throw new Error(
+            `merged document failed validation after write: ${reparsed.diagnostic.message}`
+          );
+        }
+        await this.portableModule.upsertValidatedDocument(
+          scope,
+          reparsed.document,
+          {
+            actor: "user",
+            pendingReview: false,
+          }
+        );
+        nextHash = written.contentHash;
+      } else {
+        throw new Error(`unknown conflict action: ${input.action}`);
       }
-      const existing = await this.memoryModel.getByScopeAndMemoryId(
-        scope.scopeId,
-        input.memoryId
-      );
-      const createdAt = existing?.createdAt ?? new Date();
-      const document = this.format.buildDocument({
-        id: input.memoryId,
-        type: input.mergedDocument.type,
-        status: input.mergedDocument.status,
-        confidence: input.mergedDocument.confidence,
-        visibility: input.mergedDocument.visibility,
-        createdAt,
-        updatedAt: new Date(),
-        createdBy: "user",
-        title: input.mergedDocument.title,
-        content: input.mergedDocument.content,
-      });
-      const serialized = this.format.serialize(document);
-      const written = await store.writeRecord(input.memoryId, serialized);
-      nextHash = written.contentHash;
-    } else {
-      throw new Error(`unknown conflict action: ${input.action}`);
-    }
 
-    await this.portableModule.resolveConflictClear(
-      scope,
-      input.memoryId,
-      nextHash
-    );
-    await this.refreshIndex(ctx, scope);
+      await this.portableModule.resolveConflictClear(
+        scope,
+        input.memoryId,
+        nextHash
+      );
+      await this.refreshIndex(ctx, scope);
+    });
   }
 
   // --- Rescan ----------------------------------------------------------------------

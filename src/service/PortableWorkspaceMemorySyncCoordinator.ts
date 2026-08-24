@@ -324,29 +324,41 @@ export class PortableWorkspaceMemorySyncCoordinator {
       });
     }
 
-    // Duplicate detection before persistence (§14.2.8).
+    // Duplicate detection before persistence (§14.2.8 / P0): a duplicate ID
+    // is AMBIGUOUS — neither copy is imported. The last-valid projection is
+    // retained (excluded from retrieval) until the user resolves it.
     const draftsById = new Map<string, (typeof snapshot.records)[number]>();
+    const duplicateIds = new Set<string>();
     const seenPaths = new Set<string>();
     for (const draft of snapshot.records) {
       if (seenPaths.has(draft.relativePath)) continue;
       seenPaths.add(draft.relativePath);
       const rawId = (draft.rawFrontmatter as { id?: unknown } | null)?.id;
       if (typeof rawId === "string") {
-        const existing = draftsById.get(rawId);
-        if (existing) {
+        if (draftsById.has(rawId)) {
+          // Mark the ID as ambiguous; remove the first occurrence too so
+          // neither is imported (FR-009/FR-014/FR-028).
+          duplicateIds.add(rawId);
+          draftsById.delete(rawId);
           rejected.push({
             code: "memory-id-duplicate",
             relativePath: draft.relativePath,
-            message: "duplicate memory id in scanned files",
+            message: "duplicate memory id in scanned files; neither imported",
             recoverable: true,
           });
           continue;
         }
-        draftsById.set(rawId, draft);
+        if (!duplicateIds.has(rawId)) {
+          draftsById.set(rawId, draft);
+        }
       }
     }
 
-    for (const draft of snapshot.records) {
+    // Iterate over the deduplicated drafts (FR-009/FR-014/FR-028): a duplicate
+    // ID must NOT be imported — neither the first nor the ambiguous copy. The
+    // last-valid projection stays excluded until the user resolves the
+    // ambiguity.
+    for (const draft of draftsById.values()) {
       const parsed = this.format.parseDraft(draft);
       if (!parsed.ok) {
         rejected.push({
@@ -402,6 +414,19 @@ export class PortableWorkspaceMemorySyncCoordinator {
         pendingReview: pendingReviewForRecord,
         scanId: snapshot.complete ? "scan" : undefined,
       });
+      // Persist unknown-field warnings as diagnostics (FR-011/FR-030): the
+      // fields are still ignored (not copied into metadata), but the warning
+      // is visible to the user via the diagnostics view.
+      if (parsed.warnings && parsed.warnings.length > 0) {
+        for (const w of parsed.warnings) {
+          rejected.push({
+            code: "memory-field-invalid",
+            relativePath: doc.relativePath,
+            message: w.message,
+            recoverable: true,
+          });
+        }
+      }
       if (pendingReviewForRecord) pendingReview.push(doc.frontmatter.id);
       else imported.push(doc.frontmatter.id);
     }
