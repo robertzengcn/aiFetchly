@@ -142,7 +142,15 @@
           <div class="v2-message__reasoning-content">{{ reasoningText }}</div>
         </details>
         <div v-if="generatedImages.length > 0" class="v2-message__images">
-          <template v-for="image in generatedImages" :key="image.key">
+          <div
+            v-for="image in generatedImages"
+            :key="image.key"
+            class="v2-message__generated-image"
+          >
+            <span
+              class="v2-message__generated-image-index"
+              aria-hidden="true"
+            >{{ image.imageIndex + 1 }}</span>
             <a
               v-if="image.externalHref"
               :href="image.externalHref"
@@ -173,7 +181,25 @@
                 loading="lazy"
               />
             </button>
-          </template>
+            <div class="v2-message__image-actions">
+              <button
+                type="button"
+                class="v2-message__use-reference-btn"
+                :aria-label="t('aiChatV2.generatedImageRefs.useAsReference') || 'Use as reference'"
+                @click="emitUseGeneratedImage(image)"
+              >
+                {{ t("aiChatV2.generatedImageRefs.useAsReference") || "Use as reference" }}
+              </button>
+              <button
+                type="button"
+                class="v2-message__edit-image-btn"
+                :aria-label="t('aiChatV2.generatedImageRefs.edit') || 'Edit'"
+                @click="emitEditGeneratedImage(image)"
+              >
+                {{ t("aiChatV2.generatedImageRefs.edit") || "Edit" }}
+              </button>
+            </div>
+          </div>
         </div>
         <!-- User-sent attachments: render inline so the user sees what they
              attached, scrolling with the message history. -->
@@ -296,6 +322,7 @@ import { useI18n } from "vue-i18n";
 import type {
   ChatV2AttachmentMetadata,
   ChatV2GeneratedImage,
+  ChatV2GeneratedImageReference,
   ChatV2MessageView,
 } from "@/entityTypes/aiChatV2Types";
 import type { ChatV2AtMentionMetadata } from "@/entityTypes/aiChatAtMentionTypes";
@@ -340,6 +367,14 @@ const emit = defineEmits<{
   (e: "request-plan-changes", feedback: string): void;
   (e: "open-artifact", artifactId: string): void;
   (e: "copy-artifact-html", artifactId: string): void;
+  (
+    e: "use-generated-image",
+    reference: ChatV2GeneratedImageReference
+  ): void;
+  (
+    e: "edit-generated-image",
+    reference: ChatV2GeneratedImageReference
+  ): void;
 }>();
 const { t, te } = useI18n();
 
@@ -367,6 +402,10 @@ const messageTime = computed(() => {
 interface RenderableGeneratedImage {
   key: string;
   src: string;
+  /** Position in `metadata.generatedImages` — the opaque reference index. */
+  imageIndex: number;
+  /** Always `props.message.id` — the opaque reference message id. */
+  messageId: string;
   externalHref?: string;
   localPath?: string;
 }
@@ -379,6 +418,8 @@ const generatedImages = computed<RenderableGeneratedImage[]>(() => {
         ? {
             key: `${src}-${index}`,
             src,
+            imageIndex: index,
+            messageId: props.message.id,
             ...(isExternalImageUrl(src) ? { externalHref: src } : {}),
             ...(image.local_path ? { localPath: image.local_path } : {}),
           }
@@ -386,6 +427,20 @@ const generatedImages = computed<RenderableGeneratedImage[]>(() => {
     })
     .filter((image): image is RenderableGeneratedImage => image !== null);
 });
+
+function emitUseGeneratedImage(image: RenderableGeneratedImage): void {
+  emit("use-generated-image", {
+    messageId: image.messageId,
+    imageIndex: image.imageIndex,
+  });
+}
+
+function emitEditGeneratedImage(image: RenderableGeneratedImage): void {
+  emit("edit-generated-image", {
+    messageId: image.messageId,
+    imageIndex: image.imageIndex,
+  });
+}
 
 interface RenderableAttachment {
   key: string;
@@ -927,6 +982,40 @@ const pastedChips = computed<PastedChip[]>(() => {
   height: auto;
   max-height: 360px;
   object-fit: contain;
+}
+.v2-message__generated-image {
+  position: relative;
+}
+.v2-message__generated-image-index {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  z-index: 1;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  font-size: 11px;
+  line-height: 18px;
+  text-align: center;
+}
+.v2-message__image-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 4px;
+}
+.v2-message__use-reference-btn,
+.v2-message__edit-image-btn {
+  flex: 1 1 auto;
+  padding: 3px 8px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.85);
+  color: inherit;
+  font-size: 12px;
+  cursor: pointer;
 }
 /* User-sent attachment previews. Images use a smaller max-height than
    AI-generated images so multi-attachment user bubbles stay compact. */

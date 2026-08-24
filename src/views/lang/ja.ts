@@ -2575,6 +2575,50 @@ export default {
       document_failed: "ドキュメント処理に失敗しました",
       image_alt: "添付画像：{name}",
     },
+    generatedImageRefs: {
+      useAsReference: "参照として使用",
+      edit: "編集",
+      remove: "削除",
+      clearAll: "すべてクリア",
+      moveUp: "上へ移動",
+      moveDown: "下へ移動",
+      referenceTrayTitle: "参照画像",
+      limitReached: "1回のリクエストで参照できる画像は最大3枚です。",
+      batchOffer:
+        "3枚を超える画像が選択されました。独立した編集のバッチとして処理しますか？",
+      batchConfirmTitle: "バッチで処理しますか？",
+      batchConfirmBody:
+        "選択した各画像はバックグラウンドのバッチで個別に編集されます。時間がかかる場合があります。",
+      send: "送信",
+      errors: {
+        generated_image_reference_invalid:
+          "この画像参照は無効になりました。画像を再度選択してください。",
+        generated_image_not_owned:
+          "参照できるのはこの会話で生成された画像のみです。",
+        generated_image_missing:
+          "元の画像は利用できなくなりました。再生成するか、別の参照を選択してください。",
+        generated_image_outside_store:
+          "画像のソースが信頼された保存領域の外にあるため使用できません。",
+        generated_image_symlink_rejected:
+          "このファイルは通常の保存画像ではありません。他の生成画像を選択してください。",
+        generated_image_unsupported_type:
+          "サポートされていない画像形式です。PNG・JPEG・WebP画像を選択してください。",
+        generated_image_too_large:
+          "この画像はサイズ上限を超えています。枚数を減らすか、より小さい画像をお試しください。",
+        generated_image_dimension_limit:
+          "この画像は寸法上限を超えています。サイズを変更するか、より小さいサイズで再生成してください。",
+        generated_image_reference_limit:
+          "1回のリクエストに参照画像が多すぎます。個別編集にはバッチ処理をご利用ください。",
+        generated_image_ambiguous:
+          "複数の画像がリクエストに一致する可能性があります。対象の画像を選択してください。",
+        generated_image_fusion_limit:
+          "画像の組み合わせは同時に3枚までです。残りは個別またはバッチで編集してください。",
+        generated_image_batch_partial:
+          "一部のバッチ項目が失敗しました。成功分は保持され、失敗分は再試行できます。",
+        generated_image_batch_cancelled:
+          "バッチを停止しました。完了した結果は保持され、残りの項目は再開できます。",
+      },
+    },
   },
   aifetchlyConfig: {
     title: "AiFetchly 設定",
