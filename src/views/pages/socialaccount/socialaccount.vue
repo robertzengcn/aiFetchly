@@ -1,11 +1,19 @@
 <template>
+  <AppPageShell
+    page-id="socialaccount-list"
+    title-key="route.tool_account_list"
+    content-width="full"
+  >
+    <!-- Table (with its search + create toolbar) stays domain-owned (design §13.2). -->
     <div class="tables_page">
-<SocialaccountTable />
+      <SocialaccountTable />
     </div>
+  </AppPageShell>
 </template>
 <script setup lang="ts">
 // import router from '@/views/router';
 import { ref, onMounted } from 'vue';
+import AppPageShell from '@/views/components/pageTemplates/AppPageShell.vue';
 import SocialaccountTable from '@/views/pages/socialaccount/widgets/SocialaccountTable.vue'
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 const dialog = ref(false);
@@ -33,8 +41,8 @@ onMounted(() => {
         .tj_label {
             padding: 4px 8px;
             border-radius: 15px;
-            background: rgba(244, 67, 54, 0.2);
-            color: #f44336;
+            background: var(--app-danger-soft);
+            color: var(--app-danger);
         }
         .v-chip {
             margin-inline-end: 0 !important;
