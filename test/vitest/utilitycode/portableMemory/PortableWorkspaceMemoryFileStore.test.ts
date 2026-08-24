@@ -41,12 +41,12 @@ describe("PortableWorkspaceMemoryFileStore", () => {
     expect(await store.deleteRecord(VALID_ID)).toBe(false);
   });
 
-  it("rejects invalid memory ids (traversal / separators / null bytes)", () => {
+  it("rejects invalid memory ids (traversal / separators / null bytes)", async () => {
     const store = makeStore();
-    expect(() => store.writeRecord("../../evil", "x")).rejects.toThrow(
+    await expect(store.writeRecord("../../evil", "x")).rejects.toThrow(
       /invalid portable memory id/i
     );
-    expect(() => store.writeRecord("wmem-not-a-uuid", "x")).rejects.toThrow(
+    await expect(store.writeRecord("wmem-not-a-uuid", "x")).rejects.toThrow(
       /invalid portable memory id/i
     );
   });
