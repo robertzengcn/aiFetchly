@@ -5,6 +5,7 @@ import { MessageType } from "@/entityTypes/commonType";
 import { SqliteDb } from "@/config/SqliteDb";
 import path from "node:path";
 import os from "node:os";
+import fs from "node:fs";
 
 const tmpDir = path.join(os.tmpdir(), "aifetchly-chat-message-model");
 
@@ -27,8 +28,20 @@ function makeEntity(params: {
 }
 
 beforeEach(async () => {
-  // Fresh sqlite file per test so rows never leak across cases.
+  // Close the shared connection (destroyInstance does NOT remove the file),
+  // then delete leftover sqlite files so each case starts from an empty db
+  // and rows never leak across tests or consecutive runs.
   await SqliteDb.destroyInstance();
+  if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
+  for (const f of fs.readdirSync(tmpDir)) {
+    if (f.startsWith("scraper.db")) {
+      try {
+        fs.unlinkSync(path.join(tmpDir, f));
+      } catch {
+        // ignore
+      }
+    }
+  }
 });
 
 describe("AIChatMessageModel.getMessageByConversationAndMessageId", () => {
