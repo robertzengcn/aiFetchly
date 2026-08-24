@@ -170,9 +170,12 @@ const HTML_ARTIFACT_INTENT_RE =
  * Surfaces `attach_local_images` so the model does not fall back to
  * shell/Pillow for workspace image edits (PRD UC1).
  * `backgroun\w*` tolerates common typos such as "backgroud".
+ * The last branch covers extension-named files ("edit the logo.png") which
+ * the earlier noun branches miss: their `[^.]` gap cannot cross the dot of
+ * the file extension.
  */
 const IMAGE_ATTACH_INTENT_RE =
-  /\b(attach|analyze|compare|edit|modify|update|change|fix|replace|remove)\b[^.]{0,100}?\b(images?|photos?|pictures?|jpe?g|png|webp|gif|background)\b|\b(images?|photos?|pictures?)\b[^.]{0,100}?\b(attach|analyze|compare|edit|background|white|transparent)\b|\b(make|change|set|update)\b[^.]{0,60}?\bbackgroun\w*\b/i;
+  /\b(attach|analyze|compare|edit|modify|update|change|fix|replace|remove)\b[^.]{0,100}?\b(images?|photos?|pictures?|jpe?g|png|webp|gif|background)\b|\b(images?|photos?|pictures?)\b[^.]{0,100}?\b(attach|analyze|compare|edit|background|white|transparent)\b|\b(make|change|set|update)\b[^.]{0,60}?\bbackgroun\w*\b|\b(attach|analyze|compare|edit|modify|update|change|fix|replace|remove)\b[^.!?\n]{0,60}?\.(?:png|jpe?g|jfif|webp|gif|bmp|tiff?)\b/i;
 
 const IMAGE_EDIT_ACTION_RE =
   /\b(edit|modify|update|change|fix|replace|remove|make|set|convert|transform)\b|\bbackgroun\w*\b[^.]{0,60}?\b(white|transparent|color|colour)\b/i;
@@ -186,17 +189,6 @@ export function hasBatchImageEditIntent(message: string): boolean {
     IMAGE_EDIT_ACTION_RE.test(message) && IMAGE_BATCH_SCOPE_RE.test(message)
   );
 }
-
-/**
- * Broad edit-action verb regex for follow-up edits on a previously
- * AI-generated image. Only used when {@link ToolCatalogRuntimeContext.hasRecentGeneratedImages}
- * is true, so the broad verb list is safe — it never fires in conversations
- * without recent generated images. Catches natural-language edit
- * instructions like "add a tree in front of the house" that lack
- * image-specific keywords.
- */
-const GENERATED_IMAGE_EDIT_FOLLOWUP_RE =
-  /\b(add|remove|change|update|modify|make|put|replace|delete|move|resize|crop|rotate|flip|invert|adjust|enhance|fix|edit|draw|paint|color|colour|erase|clear|insert|place|swap|switch|turn|convert|transform|regenerate|redo|rework)\b/i;
 
 /**
  * Natural-language inbound mailbox check intent.
@@ -362,25 +354,12 @@ export class ToolLoadPolicyService {
       return "contextual";
     }
 
-    // 9b. Contextual promotion: when the conversation has recent AI-generated
-    // images and the user's message contains an edit-like verb, auto-promote
-    // the generated-image export + local image attach tools so the model can
-    // edit the prior image without falling back to glob_files/shell_execute.
-    // The broad verb regex is safe because it is gated by
-    // hasRecentGeneratedImages — it only fires in conversations that actually
-    // have generated images in recent history.
-    if (
-      input.context.hasRecentGeneratedImages &&
-      (name === "export_generated_artifacts" ||
-        name === "attach_local_images") &&
-      this.messageMatchesIntent(input.context, (msg) =>
-        GENERATED_IMAGE_EDIT_FOLLOWUP_RE.test(msg)
-      )
-    ) {
-      return "contextual";
-    }
-
     // 10. Built-in default: specialized tools are deferred and discoverable.
+    // Note: follow-up edits on AI-generated images are intentionally NOT
+    // force-promoted here — selected generated images arrive attached to the
+    // current user turn, so no export/attach tool is needed for them. The
+    // workspace-file IMAGE_ATTACH_INTENT_RE path above still promotes
+    // attach_local_images for real workspace image files.
     return "deferred";
   }
 

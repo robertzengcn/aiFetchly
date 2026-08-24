@@ -159,8 +159,9 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
   {
     name: "attach_local_images",
     description:
-      "REQUIRED for analyzing or editing local workspace images (change background color, " +
+      "Workspace files only. REQUIRED for analyzing or editing image FILES in the approved workspace (change background color, " +
       "make background white, remove background, product photo edits, compare images, visual Q&A). " +
+      "It cannot attach AI-generated chat images — a selected generated image is already attached to the current user turn and must be edited directly. " +
       "After glob_files finds image paths, call this tool with exact paths — do NOT use " +
       "shell_execute, Python, Pillow/PIL, ImageMagick, or file_read for image editing. " +
       "HARD LIMIT: at most 3 images per call and per AI request. " +
