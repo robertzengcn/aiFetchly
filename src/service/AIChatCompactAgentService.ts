@@ -27,6 +27,7 @@ import {
 import type { OpenAISmallModelCapability } from "@/api/aiChatApi";
 import { MessageType } from "@/entityTypes/commonType";
 import type { AIChatCompactSummaryView } from "@/entityTypes/aiChatCompactTypes";
+import type { AIChatMessageEntity } from "@/entity/AIChatMessage.entity";
 import { log } from "@/modules/Logger";
 
 const V2_PREFIX = "v2-";
@@ -446,14 +447,23 @@ export class AIChatCompactAgentService {
    * Run a full compact on demand. Returns the new active summary view.
    * Throws on failure — callers (IPC) are responsible for surfacing errors.
    *
-   * Hierarchical compact (tech-design §16.2): instead of sending every raw
-   * message in one request, messages are converted to chronological atomic
-   * groups, split into budgeted chunks, and summarized map/reduce-style.
-   * A conversation that fits one request is summarized once; an oversized
-   * conversation is summarized chunk-by-chunk and the chunk summaries are
-   * merged into a final validated compact. Intermediate summaries are
-   * transient; only the final summary is activated atomically via
-   * saveFullCompact. A failure leaves the previous active compact untouched.
+   * Active-boundary reuse (SMBW-002): the active compact summary is loaded
+   * BEFORE selecting source rows. When one exists, it is the representation
+   * of covered history — only messages strictly after its boundary are sent
+   * to the model, and the prior summary is fed in as context. The replacement
+   * compact preserves the original `fromMessageId` and accumulates the source
+   * count so the boundary never advances past a row excluded from the
+   * successful final compact. Missing/stale boundaries fail safely (process
+   * the full conversation) instead of silently dropping messages.
+   *
+   * Hierarchical compact (tech-design §16.2): delta messages are converted to
+   * chronological atomic groups, split into budgeted chunks, and summarized
+   * map/reduce-style. A conversation that fits one request is summarized
+   * once; an oversized conversation is summarized chunk-by-chunk and the
+   * chunk summaries are merged into a final validated compact. Intermediate
+   * summaries are transient; only the final summary is activated atomically
+   * via saveFullCompact. A failure leaves the previous active compact
+   * untouched.
    */
   async runFullCompact(
     input: FullCompactInput
@@ -464,34 +474,67 @@ export class AIChatCompactAgentService {
     if (!this.deps.isEnabled()) {
       throw new Error("AI is not enabled");
     }
-    const rows = await this.v2.getConversationMessages(input.conversationId);
-    const sorted = [...rows].filter(isMessageRow).sort((a, b) => {
+    // Load the active compact BEFORE selecting source rows so covered history
+    // is reused rather than re-sent (SMBW-002).
+    const [active, allRows] = await Promise.all([
+      this.compact.getActiveSummary(input.conversationId),
+      this.v2.getConversationMessages(input.conversationId),
+    ]);
+    const sorted = [...allRows].filter(isMessageRow).sort((a, b) => {
       const t = a.timestamp.getTime() - b.timestamp.getTime();
       return t !== 0 ? t : a.id - b.id;
     });
     if (sorted.length === 0) {
+      if (active) {
+        // No message rows at all, but an active compact exists — return it
+        // unchanged rather than throwing (nothing new to compact).
+        return active;
+      }
       throw new Error("No messages to compact");
     }
-    const messages: OpenAIChatMessage[] = sorted.map((r) => ({
+
+    // Select only the rows strictly after the active boundary. When the
+    // boundary is valid, covered raw rows are not resent and the prior
+    // summary stands in for them. A missing/stale boundary fails safely:
+    // the full conversation is processed so no message is silently dropped.
+    const { deltaRows, reusedBoundary } = this.selectDeltaRows(sorted, active);
+
+    if (deltaRows.length === 0) {
+      // The active compact already covers every message row — no new
+      // material to compact. Return the existing view without a model call.
+      return active ?? this.compactEmptyFallback(input.conversationId);
+    }
+
+    const priorSummary = reusedBoundary ? active?.summary ?? null : null;
+    const deltaMessages: OpenAIChatMessage[] = deltaRows.map((r) => ({
       role: r.role as OpenAIChatMessage["role"],
       content: r.content,
     }));
-    const inputTokenEstimate = this.estimator.estimateMessages(messages);
+    // The prior summary is the representation of covered history; prepend it
+    // to the chunking input so (a) its tokens count toward the budget and
+    // (b) the first chunk's summary carries the covered context forward.
+    const chunkSourceMessages: OpenAIChatMessage[] = priorSummary
+      ? [{ role: "assistant", content: priorSummary }, ...deltaMessages]
+      : deltaMessages;
+    const inputTokenEstimate =
+      this.estimator.estimateMessages(chunkSourceMessages);
     const startedAt = Date.now();
     log.info(
-      `[ai-chat-compact] full compact started conv=${input.conversationId} msgs=${messages.length} tokens=${inputTokenEstimate}`
+      `[ai-chat-compact] full compact started conv=${input.conversationId} msgs=${deltaMessages.length} reused=${reusedBoundary} tokens=${inputTokenEstimate}`
     );
 
     const budget = await this.computeCompactBudget(input.model);
 
     // Map/reduce hierarchical summarization.
-    const groups = groupMessagesAtomically(messages);
+    const groups = groupMessagesAtomically(chunkSourceMessages);
     const chunks = chunkGroupsByBudget(groups, budget.usablePayloadTokens);
     const { chunkSummaries, singleChunkResponseModel } =
       await this.summarizeChunks(chunks, input.model);
 
     // Reduce: merge chunk summaries into one final summary. If there is only
-    // one chunk, its summary IS the final summary (no extra request).
+    // one chunk, its summary IS the final summary (no extra request). The
+    // merge phase folds the prior summary in alongside the chunk summaries so
+    // the final compact carries covered history forward.
     const { summary, resolvedModel } =
       chunkSummaries.length === 1
         ? {
@@ -500,20 +543,36 @@ export class AIChatCompactAgentService {
             // attribute the resolved model from that response (not the input model).
             resolvedModel: singleChunkResponseModel ?? input.model ?? "compact",
           }
-        : await this.mergeChunkSummaries(chunkSummaries, input.model);
+        : await this.mergeChunkSummaries(
+            chunkSummaries,
+            priorSummary,
+            input.model
+          );
 
-    const last = sorted[sorted.length - 1];
-    const first = sorted[0];
+    // Boundaries represent the actual input the replacement compact covers.
+    // When reusing, preserve the original start id and accumulate the source
+    // count so the watermark never advances past unprocessed material. When
+    // not reusing (no active compact or fail-safe), the boundary is the
+    // actual processed range (SMBW-002).
+    const last = deltaRows[deltaRows.length - 1]!;
+    const fromMessageId =
+      reusedBoundary && active?.fromMessageId
+        ? active.fromMessageId
+        : deltaRows[0]!.messageId;
+    const sourceMessageCount =
+      reusedBoundary && active
+        ? (active.sourceMessageCount ?? 0) + deltaRows.length
+        : deltaRows.length;
     const view = await this.compact.saveFullCompact({
       compactId: `compact-${Date.now()}-${Math.random()
         .toString(36)
         .slice(2, 8)}`,
       conversationId: input.conversationId,
       summary,
-      fromMessageId: first.messageId,
+      fromMessageId,
       throughMessageId: last.messageId,
       throughTimestamp: last.timestamp,
-      sourceMessageCount: sorted.length,
+      sourceMessageCount,
       inputTokenEstimate,
       outputTokenEstimate: this.estimator.estimateText(summary),
       model: resolvedModel,
@@ -525,6 +584,56 @@ export class AIChatCompactAgentService {
       } chunks=${chunkSummaries.length} elapsed=${Date.now() - startedAt}ms`
     );
     return view;
+  }
+
+  /**
+   * Select the rows strictly after the active compact's boundary. Returns the
+   * delta rows and whether the boundary was successfully reused.
+   *
+   * Selection order: (1) exact `throughMessageId` row match → slice after it;
+   * (2) valid `throughTimestamp` → rows strictly after that time; (3) both
+   * missing/invalid → fail safe by processing the full conversation
+   * (`reusedBoundary=false`), never silently dropping messages. All rows at
+   * the boundary timestamp are treated as eligible (`>`) so timestamp-only
+   * cursors cannot skip ties (tech-design §14.1).
+   */
+  private selectDeltaRows(
+    sorted: readonly AIChatMessageEntity[],
+    active: AIChatCompactSummaryView | null
+  ): { deltaRows: AIChatMessageEntity[]; reusedBoundary: boolean } {
+    if (!active) {
+      return { deltaRows: [...sorted], reusedBoundary: false };
+    }
+    const throughId = active.throughMessageId;
+    if (throughId) {
+      const idx = sorted.findIndex((r) => r.messageId === throughId);
+      if (idx >= 0) {
+        return { deltaRows: sorted.slice(idx + 1), reusedBoundary: true };
+      }
+    }
+    const throughTs = active.throughTimestamp;
+    const boundaryMs = throughTs ? new Date(throughTs).getTime() : NaN;
+    if (Number.isFinite(boundaryMs)) {
+      return {
+        deltaRows: sorted.filter((r) => r.timestamp.getTime() > boundaryMs),
+        reusedBoundary: true,
+      };
+    }
+    // Both boundary fields missing/stale: fail safe — process the full
+    // conversation rather than drop messages. The prior summary is not fed
+    // in because its exact coverage is unknown.
+    return { deltaRows: [...sorted], reusedBoundary: false };
+  }
+
+  /**
+   * Defensive fallback when there is no active compact and no delta rows —
+   * should be unreachable because the empty-sorted case throws earlier, but
+   * keeps the no-delta return type total.
+   */
+  private async compactEmptyFallback(
+    conversationId: string
+  ): Promise<AIChatCompactSummaryView> {
+    throw new Error(`No messages to compact for ${conversationId}`);
   }
 
   /**
@@ -608,22 +717,28 @@ export class AIChatCompactAgentService {
 
   /**
    * Reduce phase: merge chunk summaries into one final validated summary via
-   * one more conversation_compact completion. Throws on an empty merge result.
+   * one more conversation_compact completion. When a prior active compact
+   * summary exists (boundary reuse), it is folded in as the first input so
+   * the final compact carries covered history forward (SMBW-002). Throws on
+   * an empty merge result.
    */
   private async mergeChunkSummaries(
     chunkSummaries: readonly string[],
+    priorSummary: string | null,
     model: string | undefined
   ): Promise<{ summary: string; resolvedModel: string }> {
+    const inputs: { role: "assistant"; content: string }[] = [];
+    if (priorSummary && priorSummary.trim().length > 0) {
+      inputs.push({ role: "assistant", content: priorSummary });
+    }
+    for (const s of chunkSummaries) {
+      inputs.push({ role: "assistant", content: s });
+    }
     const mergeMessages: OpenAIChatMessage[] = [
       { role: "system", content: buildFullCompactSystemPrompt() },
       {
         role: "user",
-        content: buildFullCompactUserPrompt(
-          chunkSummaries.map((s) => ({
-            role: "assistant" as const,
-            content: s,
-          }))
-        ),
+        content: buildFullCompactUserPrompt(inputs),
       },
     ];
     const mergeResult = await this.deps.completeLightweight({

@@ -876,4 +876,192 @@ describe("AIChatCompactAgentService", () => {
       expect(mockSaveFullCompact).not.toHaveBeenCalled();
     });
   });
+
+  describe("active compact boundary reuse (SMBW-002)", () => {
+    /** Five rows: m1..m5 with strictly increasing timestamps. */
+    function fiveRows(convId: string) {
+      return Array.from({ length: 5 }, (_, i) => ({
+        messageId: `m${i + 1}`,
+        conversationId: convId,
+        role: i % 2 === 0 ? "user" : "assistant",
+        content: `msg-${i + 1}`,
+        timestamp: new Date(i + 1),
+        messageType: "message",
+      }));
+    }
+
+    const activeView = {
+      compactId: "compact-old",
+      conversationId: "v2-reuse",
+      summary: "# Compact Summary\n## Primary Request\nold coverage",
+      fromMessageId: "m0",
+      throughMessageId: "m2",
+      throughTimestamp: new Date(2).toISOString(),
+      sourceMessageCount: 2,
+      outputTokenEstimate: 60,
+      model: "test-model",
+      status: "active",
+    } as AIChatCompactSummaryView;
+
+    beforeEach(() => {
+      mockGetConversationMessages.mockResolvedValue(fiveRows("v2-reuse"));
+      mockSaveFullCompact.mockResolvedValue(compactView("v2-reuse"));
+    });
+
+    it("does not resend previously covered raw rows", async () => {
+      mockGetActiveSummary.mockResolvedValue(activeView);
+      const completeChat = vi
+        .fn()
+        .mockResolvedValue(makeCompletion("# Compact\n## Summary\nnew"));
+      const agent = makeAgent({
+        completeChat,
+        getContextWindow: vi.fn().mockResolvedValue(128_000),
+      });
+
+      await agent.runFullCompact({ conversationId: "v2-reuse" });
+
+      // One chunk covers m3..m5 (fits easily in 128k).
+      expect(completeChat).toHaveBeenCalledTimes(1);
+      const userContent = (
+        completeChat.mock.calls[0]![0] as {
+          messages: { role: string; content: string }[];
+        }
+      ).messages[1]!.content as string;
+      expect(userContent).toContain("msg-3");
+      expect(userContent).toContain("msg-5");
+      expect(userContent).not.toContain("msg-1");
+      expect(userContent).not.toContain("msg-2");
+    });
+
+    it("feeds the prior compact summary in and preserves the original fromMessageId", async () => {
+      mockGetActiveSummary.mockResolvedValue(activeView);
+      const completeChat = vi
+        .fn()
+        .mockResolvedValue(makeCompletion("# Compact\n## Summary\nnew"));
+      const agent = makeAgent({
+        completeChat,
+        getContextWindow: vi.fn().mockResolvedValue(128_000),
+      });
+
+      await agent.runFullCompact({ conversationId: "v2-reuse" });
+
+      const userContent = (
+        completeChat.mock.calls[0]![0] as {
+          messages: { role: string; content: string }[];
+        }
+      ).messages[1]!.content as string;
+      // The prior summary is the representation of covered history.
+      expect(userContent).toContain("old coverage");
+
+      const savedArg = mockSaveFullCompact.mock.calls[0]![0] as {
+        fromMessageId: string;
+        throughMessageId: string;
+        throughTimestamp: Date;
+        sourceMessageCount: number;
+      };
+      // The replacement represents the FULL history chain: original start,
+      // new end boundary, cumulative count.
+      expect(savedArg.fromMessageId).toBe("m0");
+      expect(savedArg.throughMessageId).toBe("m5");
+      expect(savedArg.throughTimestamp).toEqual(new Date(5));
+      expect(savedArg.sourceMessageCount).toBe(2 + 3);
+    });
+
+    it("returns the active view without a model call when nothing is new", async () => {
+      mockGetActiveSummary.mockResolvedValue(activeView);
+      mockGetConversationMessages.mockResolvedValue(
+        fiveRows("v2-reuse").slice(0, 2) // only covered rows exist
+      );
+      const completeChat = vi.fn();
+      const agent = makeAgent({ completeChat });
+
+      const view = await agent.runFullCompact({ conversationId: "v2-reuse" });
+
+      expect(completeChat).not.toHaveBeenCalled();
+      expect(mockSaveFullCompact).not.toHaveBeenCalled();
+      expect(view.compactId).toBe("compact-old");
+    });
+
+    it("stale throughMessageId falls back to throughTimestamp selection", async () => {
+      mockGetActiveSummary.mockResolvedValue({
+        ...activeView,
+        throughMessageId: "deleted-row",
+      });
+      const completeChat = vi
+        .fn()
+        .mockResolvedValue(makeCompletion("# Compact\n## Summary\nnew"));
+      const agent = makeAgent({
+        completeChat,
+        getContextWindow: vi.fn().mockResolvedValue(128_000),
+      });
+
+      await agent.runFullCompact({ conversationId: "v2-reuse" });
+
+      const userContent = (
+        completeChat.mock.calls[0]![0] as {
+          messages: { role: string; content: string }[];
+        }
+      ).messages[1]!.content as string;
+      // m1/m2 sit AT or before t=2; strictly-after selects m3..m5.
+      expect(userContent).toContain("msg-3");
+      expect(userContent).not.toContain("msg-2");
+    });
+
+    it("invalid boundary fields fail safe: the full conversation is processed", async () => {
+      mockGetActiveSummary.mockResolvedValue({
+        ...activeView,
+        throughMessageId: "deleted-row",
+        throughTimestamp: "not-a-date",
+      });
+      const completeChat = vi
+        .fn()
+        .mockResolvedValue(makeCompletion("# Compact\n## Summary\nall"));
+      const agent = makeAgent({
+        completeChat,
+        getContextWindow: vi.fn().mockResolvedValue(128_000),
+      });
+
+      await agent.runFullCompact({ conversationId: "v2-reuse" });
+
+      const userContent = (
+        completeChat.mock.calls[0]![0] as {
+          messages: { role: string; content: string }[];
+        }
+      ).messages[1]!.content as string;
+      // Fail-safe direction: include everything rather than drop messages.
+      expect(userContent).toContain("msg-1");
+      expect(userContent).toContain("msg-5");
+    });
+
+    it("multi-chunk deltas merge the prior summary with the chunk summaries", async () => {
+      mockGetActiveSummary.mockResolvedValue(activeView);
+      // 30 large rows after the boundary force multiple chunks in a 2k window.
+      mockGetConversationMessages.mockResolvedValue(
+        Array.from({ length: 30 }, (_, i) => ({
+          messageId: `m${i + 1}`,
+          conversationId: "v2-reuse",
+          role: i % 2 === 0 ? "user" : "assistant",
+          content: "x".repeat(2000),
+          timestamp: new Date(i + 1),
+          messageType: "message",
+        }))
+      );
+      const completeChat = vi
+        .fn()
+        .mockResolvedValue(makeCompletion("# Compact\n## Summary\npart"));
+      const agent = makeAgent({
+        completeChat,
+        getContextWindow: vi.fn().mockResolvedValue(2000),
+      });
+
+      await agent.runFullCompact({ conversationId: "v2-reuse" });
+
+      // The final merge request must include the prior active summary as an
+      // input alongside the chunk summaries.
+      const mergeCall = completeChat.mock.calls[
+        completeChat.mock.calls.length - 1
+      ]![0] as { messages: { role: string; content: string }[] };
+      expect(mergeCall.messages[1]!.content).toContain("old coverage");
+    });
+  });
 });
