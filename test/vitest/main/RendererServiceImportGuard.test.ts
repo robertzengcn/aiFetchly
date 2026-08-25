@@ -1,7 +1,7 @@
 /**
  * RendererServiceImportGuard — prevent Vite client bundle breakage.
  *
- * Regression (2026-08): AIChatErrorMapper imported `@/modules/user` (Electron
+ * Regression (2026-08): AIChatErrorMapper (since replaced by the pure AIChatErrorSentinels sentinel) imported `@/modules/user` (Electron
  * BrowserWindow / Yellow Pages / platform adapters). AiChatV2.vue imports the
  * mapper for AUTH_EXPIRED / QUOTA_EXHAUSTED sentinels, so the renderer pulled
  * the main-process graph and failed to load (Vite dynamic-import warnings
@@ -231,9 +231,9 @@ describe("RendererServiceImportGuard", () => {
     ).toBeGreaterThan(0);
     expect(
       entries.some(
-        (abs) => toPosixRel(abs) === "src/service/AIChatErrorMapper.ts"
+        (abs) => toPosixRel(abs) === "src/service/AIChatErrorSentinels.ts"
       ),
-      "AiChatV2 must keep value-importing AIChatErrorMapper (sentinel contract)"
+      "AiChatV2 must keep value-importing AIChatErrorSentinels (sentinel contract: pure error sentinels must stay value-importable from the renderer)"
     ).toBe(true);
   });
 
