@@ -68,7 +68,8 @@ v-model="useemailsource" :items="marketTypeOption" item-title="tranme" item-valu
     </div>
   </v-stepper>
   <ErrorDialog :show-dialog="showDialog" :alertext="alertext" :alertitle="t('common.error')" @dialogclose="showDialog=false" />
-</apppageshell></template>
+</AppPageShell>
+</template>
 <script setup lang="ts">
 import AppPageShell from "@/views/components/pageTemplates/AppPageShell.vue";
 import { ref, computed, onMounted } from "vue";

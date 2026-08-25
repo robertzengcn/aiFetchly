@@ -226,7 +226,8 @@ v-model="testemailTitle" :label="t('emailservice.test_email_title')" type="input
 :show-dialog="showDialog" :alertext="alertdiatext" :alertitle="alertdiatitle"
     @dialogclose="showDialog = false" />
   <LoadingDialog :load-dialogshow="loadDialogshow" :loadingtitle="CapitalizeFirstLetter(t('common.loading'))" />
-</apppageshell></template>
+</AppPageShell>
+</template>
 <script setup lang="ts">
 import AppPageShell from "@/views/components/pageTemplates/AppPageShell.vue";
 import { ref, onMounted, watch } from "vue";

@@ -133,7 +133,8 @@ v-model="localBrowser" :items="LocalBrowerList" :label="t('search.choose_local_b
       </v-card>
     </v-dialog>
   </div>
-</apppageshell></template>
+</AppPageShell>
+</template>
 <script setup lang="ts">
 import AppPageShell from "@/views/components/pageTemplates/AppPageShell.vue";
 import { useRoute, useRouter } from "vue-router";

@@ -114,7 +114,8 @@ v-model="proxyValue" :items="proxyValue" label="Select proxy" item-title="host" 
       </v-card>
     </v-dialog>
   </div>
-</apppageshell></template>
+</AppPageShell>
+</template>
 <script setup lang="ts">
 import AppPageShell from "@/views/components/pageTemplates/AppPageShell.vue";
 

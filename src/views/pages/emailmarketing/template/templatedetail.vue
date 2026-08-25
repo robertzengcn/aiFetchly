@@ -270,7 +270,8 @@ v-model="EmailContentpreview" :label="t('emailmarketing.content')" readonly rows
       </v-card-actions>
     </v-card>
   </v-dialog>
-</apppageshell></template>
+</AppPageShell>
+</template>
 <script setup lang="ts">
 import AppPageShell from "@/views/components/pageTemplates/AppPageShell.vue";
 // import router from '@/views/router';
