@@ -8,6 +8,7 @@ import {
   AI_CHAT_GENERATED_IMAGE_PROTOCOL,
   buildGeneratedImageProtocolUrl,
   getGeneratedImageUserRoot,
+  parseGeneratedImageProtocolIdentity,
   sanitizeGeneratedImagePathPart,
 } from "@/service/AIChatGeneratedImageProtocol";
 
@@ -27,6 +28,12 @@ export interface StoreGeneratedImagesInput {
   conversationId: string;
   messageId: string;
   images: OpenAIChatImage[];
+}
+
+export interface RehomeImagesInput {
+  images: OpenAIChatImage[];
+  targetConversationId: string;
+  targetMessageId: string;
 }
 
 /**
@@ -60,6 +67,107 @@ export class AIChatGeneratedImageStorageService {
       }
     }
     return storedImages;
+  }
+
+  /**
+   * Re-homes descriptors persisted under a foreign identity (e.g. a sub-agent
+   * conversation `agent-v2-*` / message `agent-assistant-*`) into the target
+   * (parent) conversation + assistant-message identity so parent-conversation
+   * authorization can resolve them later.
+   *
+   * Per descriptor:
+   *  - non-protocol URLs pass through untouched;
+   *  - protocol URLs already matching the target identity pass through
+   *    untouched (idempotent for direct completions);
+   *  - otherwise the source file is COPIED (never moved) into the target
+   *    directory using storeImage's `image-<n>` naming and the descriptor is
+   *    rewritten with the new protocol URL + local_path.
+   *
+   * Never throws: a missing/unreadable source returns the original descriptor.
+   */
+  async rehomeImages(input: RehomeImagesInput): Promise<OpenAIChatImage[]> {
+    if (input.images.length === 0) {
+      return [];
+    }
+    const targetConversation = sanitizeGeneratedImagePathPart(
+      input.targetConversationId
+    );
+    const targetMessage = sanitizeGeneratedImagePathPart(
+      input.targetMessageId
+    );
+    const directory = path.join(
+      getGeneratedImageUserRoot(this.userDataPath, this.currentUserEmail),
+      targetConversation,
+      targetMessage
+    );
+    const rehomedImages: OpenAIChatImage[] = [];
+    for (let index = 0; index < input.images.length; index += 1) {
+      rehomedImages.push(
+        await this.rehomeImage(input.images[index], index, {
+          directory,
+          conversationPathPart: targetConversation,
+          messagePathPart: targetMessage,
+        })
+      );
+    }
+    return rehomedImages;
+  }
+
+  private async rehomeImage(
+    image: OpenAIChatImage,
+    index: number,
+    target: {
+      directory: string;
+      conversationPathPart: string;
+      messagePathPart: string;
+    }
+  ): Promise<OpenAIChatImage> {
+    if (!image.url) {
+      return image;
+    }
+    const identity = parseGeneratedImageProtocolIdentity(
+      image.url,
+      this.userDataPath
+    );
+    if (!identity) {
+      return image;
+    }
+    if (
+      identity.conversationPathPart === target.conversationPathPart &&
+      identity.messagePathPart === target.messagePathPart
+    ) {
+      return image;
+    }
+    try {
+      await fs.mkdir(target.directory, { recursive: true });
+      const extension = path.extname(identity.fileName) || ".png";
+      const fileName = `image-${index + 1}${extension}`;
+      const filePath = path.join(target.directory, fileName);
+      // Copy (not move): the agent-owned original stays intact for its own
+      // transcript; overwriting an existing destination keeps repeat calls
+      // idempotent.
+      await fs.copyFile(identity.candidatePath, filePath);
+      return {
+        ...image,
+        delivery: "local_file",
+        url: buildGeneratedImageProtocolUrl({
+          userEmail: this.currentUserEmail,
+          conversationId: target.conversationPathPart,
+          messageId: target.messagePathPart,
+          fileName,
+        }),
+        local_path: filePath,
+        file_name: fileName,
+        download_required: false,
+        b64_json: undefined,
+      };
+    } catch (err) {
+      console.warn(
+        `[ai-chat-v2] failed to re-home generated image into conversation ${target.conversationPathPart}:`,
+        err
+      );
+      return image;
+    }
   }
 
   private async storeImage(

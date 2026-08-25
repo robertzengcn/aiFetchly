@@ -17,6 +17,7 @@ import {
   AI_CHAT_GENERATED_IMAGE_PROTOCOL,
   buildGeneratedImageProtocolUrl,
   getGeneratedImageUserRoot,
+  parseGeneratedImageProtocolIdentity,
   sanitizeGeneratedImagePathPart,
 } from "@/service/AIChatGeneratedImageProtocol";
 import type {
@@ -796,5 +797,86 @@ describe("GeneratedImageReferenceService.authorizeOnly", () => {
     }
     expectReferenceError(caught, "generated_image_symlink_rejected");
     assertNoSensitiveLeak(caught, fixture);
+  });
+
+  it("authorizes a re-homed output using only the parent conversation identity", async () => {
+    // Post-rehome state: the batch output was COPIED out of its agent-owned
+    // location into the parent conversation/message directory and the saved
+    // metadata.generatedImages descriptor was rewritten to parent segments.
+    const fixture = await makeFixture();
+    const parentConversationId = "v2-parent";
+    const parentMessageId = "assistant-parent";
+    const rehomedDir = path.join(
+      getGeneratedImageUserRoot(fixture.userDataPath, fixture.email),
+      sanitizeGeneratedImagePathPart(parentConversationId),
+      sanitizeGeneratedImagePathPart(parentMessageId)
+    );
+    await fsPromises.mkdir(rehomedDir, { recursive: true });
+    const rehomedPath = path.join(rehomedDir, "image-2.png");
+    await fsPromises.copyFile(fixture.filePath, rehomedPath);
+
+    const rehomedUrl = buildGeneratedImageProtocolUrl({
+      userEmail: fixture.email,
+      conversationId: parentConversationId,
+      messageId: parentMessageId,
+      fileName: "image-2.png",
+    });
+    const entity = makeEntity(
+      fixture,
+      JSON.stringify({
+        source: "chat-v2",
+        generatedImages: [
+          { type: "image", url: rehomedUrl, file_name: "image-2.png" },
+        ],
+      })
+    );
+    entity.conversationId = parentConversationId;
+    entity.messageId = parentMessageId;
+
+    const deps: GeneratedImageReferenceServiceDeps = {
+      getSourceMessage: async (conversationId, messageId) =>
+        conversationId === parentConversationId &&
+        messageId === parentMessageId
+          ? entity
+          : null,
+      getCurrentUserEmail: () => fixture.email,
+      getUserDataPath: () => fixture.userDataPath,
+      realpath: fsPromises.realpath,
+      openForRead: fdPinnedOpenForRead(),
+      prepareImage: async () => cannedPrepared(),
+    };
+    const service = new GeneratedImageReferenceService(deps);
+
+    const sources = await service.authorizeOnly({
+      conversationId: parentConversationId,
+      references: [ref(parentMessageId, 0)],
+    });
+    expect(sources).toHaveLength(1);
+    expect(sources[0].conversationId).toBe(parentConversationId);
+    expect(sources[0].sourceMessageId).toBe(parentMessageId);
+    expect(sources[0].fileName).toBe("image-2.png");
+    expect(sources[0].absolutePath).toBe(await fsPromises.realpath(rehomedPath));
+    const identity = parseGeneratedImageProtocolIdentity(
+      sources[0].protocolUrl,
+      fixture.userDataPath
+    );
+    if (!identity) {
+      throw new Error("expected authorized protocol URL to parse");
+    }
+    expect(identity.conversationPathPart).toBe(parentConversationId);
+    expect(identity.messagePathPart).toBe(parentMessageId);
+
+    // The pre-rehome agent-owned identity is no longer reachable: nothing is
+    // stored under it in the parent conversation's message history.
+    let caught: unknown;
+    try {
+      await service.authorizeOnly({
+        conversationId: parentConversationId,
+        references: [ref("agent-assistant-y", 0)],
+      });
+    } catch (err) {
+      caught = err;
+    }
+    expectReferenceError(caught, "generated_image_missing");
   });
 });

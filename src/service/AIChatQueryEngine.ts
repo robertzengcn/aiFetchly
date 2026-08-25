@@ -310,6 +310,16 @@ export interface AIChatQueryEngineDeps {
       messageId: string;
       images: OpenAIChatImage[];
     }): Promise<OpenAIChatImage[]>;
+    /** Optional. Copies descriptors persisted under a foreign identity
+     * (e.g. a sub-agent's `agent-v2-*` conversation) into the final parent
+     * conversation + assistant-message identity before persistence, so the
+     * parent conversation can re-reference its own outputs later. When
+     * omitted, descriptors pass through un-rehomed. */
+    rehomeImages?(input: {
+      images: OpenAIChatImage[];
+      targetConversationId: string;
+      targetMessageId: string;
+    }): Promise<OpenAIChatImage[]>;
   };
   /** Optional. Resolves renderer-supplied generated-image references into
    * transient edit-input artifacts before the user message is persisted.
@@ -2008,7 +2018,20 @@ export class AIChatQueryEngine {
         messageId: input.assistantMessageId,
         images: input.images,
       });
-      return stored.length > 0 ? stored : undefined;
+      // Re-home descriptors persisted under foreign identities (e.g. a batch
+      // sub-agent's `agent-v2-*` conversation) into THIS parent conversation
+      // + assistant-message identity before metadata.generatedImages is
+      // written, so the parent conversation can re-reference its outputs in
+      // later turns. Direct completions are already stored under the final
+      // identity, so this is a no-op pass-through for them (idempotent).
+      const rehomed = storage.rehomeImages
+        ? await storage.rehomeImages({
+            images: stored,
+            targetConversationId: input.conversationId,
+            targetMessageId: input.assistantMessageId,
+          })
+        : stored;
+      return rehomed.length > 0 ? rehomed : undefined;
     } catch (err) {
       log.warn(
         `[ai-chat-v2] failed to store generated images locally for conversation ${input.conversationId}:`,

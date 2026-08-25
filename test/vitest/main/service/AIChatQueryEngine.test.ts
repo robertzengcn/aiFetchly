@@ -1,5 +1,8 @@
 // test/vitest/main/service/AIChatQueryEngine.test.ts
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { AIChatQueryEngine } from "@/service/AIChatQueryEngine";
 import type { AIChatQueryLoop } from "@/service/AIChatQueryLoop";
 import type { OpenAIChatImage, OpenAIChatMessage } from "@/api/aiChatApi";
@@ -15,6 +18,11 @@ import type { AIChatPlanStateView } from "@/entityTypes/aiChatPlanTypes";
 import { HookRegistry } from "@/service/hooks/HookRegistry";
 import { SkillExecutor } from "@/service/SkillExecutor";
 import { GeneratedImageReferenceError } from "@/entityTypes/generatedImageReferenceTypes";
+import {
+  buildGeneratedImageProtocolUrl,
+  parseGeneratedImageProtocolIdentity,
+  sanitizeGeneratedImagePathPart,
+} from "@/service/AIChatGeneratedImageProtocol";
 import type {
   PreparedGeneratedImageArtifact,
   ResolveGeneratedImagesResult,
@@ -1364,5 +1372,207 @@ describe("AIChatQueryEngine generated-image references", () => {
     expect(savedArg.metadata?.generatedImageReferences).toBeUndefined();
     expect(events.some((e) => e.type === "error")).toBe(false);
     expect(fakeRun).toHaveBeenCalledOnce();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Generated-image re-homing (batch sub-agent outputs -> parent identity)
+// ---------------------------------------------------------------------------
+
+describe("AIChatQueryEngine generated-image rehoming", () => {
+  const EMAIL = "user@example.com";
+  const PARENT_CONV = "v2-test-conv";
+  const PARENT_MSG = "assistant-test";
+  const AGENT_CONV = "agent-v2-x";
+  const AGENT_MSG = "agent-assistant-y";
+
+  const tempDirs: string[] = [];
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetPlanState.mockResolvedValue(null);
+    mockEnsurePlanForConversation.mockResolvedValue(null);
+    mockApprovePlan.mockReset();
+  });
+  async function makeTempDir(): Promise<string> {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "ai-chat-rehome-"));
+    tempDirs.push(dir);
+    return dir;
+  }
+  afterEach(async () => {
+    await Promise.all(
+      tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true }))
+    );
+  });
+
+  function userRoot(root: string): string {
+    return path.join(root, "ai-chat-generated-images", EMAIL);
+  }
+
+  async function seedImage(
+    root: string,
+    conversationId: string,
+    messageId: string,
+    bytes: Buffer
+  ): Promise<string> {
+    const dir = path.join(
+      userRoot(root),
+      sanitizeGeneratedImagePathPart(conversationId),
+      sanitizeGeneratedImagePathPart(messageId)
+    );
+    await fs.mkdir(dir, { recursive: true });
+    const filePath = path.join(dir, "image-1.png");
+    await fs.writeFile(filePath, bytes);
+    return filePath;
+  }
+
+  /**
+   * A generatedImageStorage fake whose rehomeImages performs REAL copies on
+   * disk (mirroring the production service contract) so the engine test
+   * exercises actual file movement, not just mock plumbing.
+   */
+  function makeRealCopyStorage(userDataRoot: string): {
+    storeImages(input: {
+      images: OpenAIChatImage[];
+    }): Promise<OpenAIChatImage[]>;
+    rehomeImages(input: {
+      images: OpenAIChatImage[];
+      targetConversationId: string;
+      targetMessageId: string;
+    }): Promise<OpenAIChatImage[]>;
+  } {
+    return {
+      storeImages: async (input) => input.images,
+      rehomeImages: async (input) => {
+        const targetConv = sanitizeGeneratedImagePathPart(
+          input.targetConversationId
+        );
+        const targetMsg = sanitizeGeneratedImagePathPart(
+          input.targetMessageId
+        );
+        const out: OpenAIChatImage[] = [];
+        for (let index = 0; index < input.images.length; index += 1) {
+          const image = input.images[index];
+          const identity = image.url
+            ? parseGeneratedImageProtocolIdentity(image.url, userDataRoot)
+            : null;
+          if (
+            !identity ||
+            (identity.conversationPathPart === targetConv &&
+              identity.messagePathPart === targetMsg)
+          ) {
+            out.push(image);
+            continue;
+          }
+          const dir = path.join(userRoot(userDataRoot), targetConv, targetMsg);
+          await fs.mkdir(dir, { recursive: true });
+          const fileName = `image-${index + 1}.png`;
+          const destPath = path.join(dir, fileName);
+          await fs.copyFile(identity.candidatePath, destPath);
+          out.push({
+            ...image,
+            delivery: "local_file",
+            url: buildGeneratedImageProtocolUrl({
+              userEmail: EMAIL,
+              conversationId: targetConv,
+              messageId: targetMsg,
+              fileName,
+            }),
+            local_path: destPath,
+            file_name: fileName,
+          });
+        }
+        return out;
+      },
+    };
+  }
+
+  it("persists mixed parent-native + agent-owned images ALL under the parent identity, order preserved", async () => {
+    const root = await makeTempDir();
+    const nativeBytes = Buffer.from([1, 1, 1, 1]);
+    const agentBytes = Buffer.from([2, 2, 2, 2]);
+    const nativePath = await seedImage(root, PARENT_CONV, PARENT_MSG, nativeBytes);
+    const agentPath = await seedImage(root, AGENT_CONV, AGENT_MSG, agentBytes);
+
+    const nativeDescriptor: OpenAIChatImage = {
+      type: "image",
+      delivery: "local_file",
+      url: buildGeneratedImageProtocolUrl({
+        userEmail: EMAIL,
+        conversationId: PARENT_CONV,
+        messageId: PARENT_MSG,
+        fileName: "image-1.png",
+      }),
+      local_path: nativePath,
+      file_name: "image-1.png",
+      mime_type: "image/png",
+    };
+    const agentDescriptor: OpenAIChatImage = {
+      type: "image",
+      delivery: "local_file",
+      url: buildGeneratedImageProtocolUrl({
+        userEmail: EMAIL,
+        conversationId: AGENT_CONV,
+        messageId: AGENT_MSG,
+        fileName: "image-1.png",
+      }),
+      local_path: agentPath,
+      file_name: "image-1.png",
+      mime_type: "image/png",
+    };
+
+    const fakeRun = vi.fn().mockResolvedValue({
+      type: "completed" as const,
+      conversationId: PARENT_CONV,
+      assistantMessageId: PARENT_MSG,
+      fullContent: "batch done",
+      finishReason: "stop",
+      model: "gpt-image",
+      images: [nativeDescriptor, agentDescriptor],
+    });
+    const engine = createEngineWithFakeLoop(fakeRun, {
+      generatedImageStorage: makeRealCopyStorage(root),
+    });
+    const { sink, events } = makeEventCollector();
+
+    await engine.submitMessage({
+      request: { message: "run the batch" },
+      eventSink: sink,
+    });
+
+    // Both saved descriptors carry parent segments.
+    expect(mockSaveAssistantMessage).toHaveBeenCalledTimes(1);
+    const savedArg = mockSaveAssistantMessage.mock.calls[0][0] as {
+      metadata?: { generatedImages?: OpenAIChatImage[] };
+    };
+    const savedImages = savedArg.metadata?.generatedImages ?? [];
+    expect(savedImages).toHaveLength(2);
+
+    for (const image of savedImages) {
+      const identity = parseGeneratedImageProtocolIdentity(image.url ?? "", root);
+      if (!identity) {
+        throw new Error(`expected parseable protocol URL: ${String(image.url)}`);
+      }
+      expect(identity.conversationPathPart).toBe(PARENT_CONV);
+      expect(identity.messagePathPart).toBe(PARENT_MSG);
+    }
+
+    // Order preserved: [0] is the untouched parent-native descriptor...
+    expect(savedImages[0].local_path).toBe(nativePath);
+    expect(savedImages[0].file_name).toBe("image-1.png");
+    // ...and [1] is the re-homed agent output backed by a real copied file.
+    expect(savedImages[1].local_path).toBe(
+      path.join(userRoot(root), PARENT_CONV, PARENT_MSG, "image-2.png")
+    );
+    await expect(fs.readFile(savedImages[1].local_path ?? "")).resolves.toEqual(
+      agentBytes
+    );
+
+    // The complete event carries the same re-homed descriptors.
+    const completeEvent = events.find((e) => e.type === "complete");
+    if (completeEvent?.type === "complete") {
+      expect(completeEvent.images).toEqual(savedImages);
+    } else {
+      throw new Error("expected a complete event");
+    }
   });
 });
