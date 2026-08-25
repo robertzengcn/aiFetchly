@@ -229,11 +229,15 @@ describe("RendererServiceImportGuard", () => {
       entries.length,
       "expected at least one src/views value-import of @/service/*"
     ).toBeGreaterThan(0);
+    // Sentinel contract: AiChatV2 keeps VALUE-importing a @/service module so
+    // the scanner always has real coverage. The sentinel moved from
+    // AIChatErrorMapper (node-carrying) to the node-free
+    // AIChatErrorSentinels module in 2cc6d5b7 — assert the current module.
     expect(
       entries.some(
-        (abs) => toPosixRel(abs) === "src/service/AIChatErrorMapper.ts"
+        (abs) => toPosixRel(abs) === "src/service/AIChatErrorSentinels.ts"
       ),
-      "AiChatV2 must keep value-importing AIChatErrorMapper (sentinel contract)"
+      "AiChatV2 must keep value-importing AIChatErrorSentinels (sentinel contract)"
     ).toBe(true);
   });
 
