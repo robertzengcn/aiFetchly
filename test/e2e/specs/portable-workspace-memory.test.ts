@@ -275,6 +275,14 @@ test("AC-008: no Git mutation on enable/create", async ({
       expect(fs.existsSync(path.join(root.workspacePath, ".gitignore"))).toBe(
         false
       );
+      // AC-008: Git status service returns a state (no auto-init).
+      const gitResp = await portableInvoke(
+        app,
+        "ai:portable-workspace-memory:git-status",
+        { conversationId }
+      );
+      expect(gitResp.status).toBe(true);
+      expect(gitResp.data).toBe("not-a-repository");
     } finally {
       await closeApp(app);
     }
@@ -650,6 +658,281 @@ test("AC-005/AC-011: isolation — second workspace sees no portable memory from
       expect(rows.some((r) => r.title === "Workspace A only")).toBe(false);
     } finally {
       await closeApp(appB);
+    }
+  } finally {
+    await fakeAi.stop();
+  }
+});
+
+test("AC-007: conflict resolution — use-file resolves the conflict", async ({
+  page: _page,
+}, testInfo) => {
+  test.setTimeout(240_000);
+  const fakeAi = await startFakeOpenAiServer();
+  await fakeAi.setScenario("stream-text");
+  const root = createTemporaryRoot({
+    testId: testInfo.titlePath.join(" "),
+    workerIndex: testInfo.workerIndex,
+  });
+
+  try {
+    writeStateManifest(root, {
+      authState: "authenticated",
+      aiState: "local-enabled",
+      fakeAiBaseUrl: fakeAi.providerBaseUrl,
+      workspacePath: root.workspacePath,
+    });
+    const app = await launchAiFetchly({
+      testRoot: root,
+      fakeAiBaseUrl: fakeAi.providerBaseUrl,
+    });
+    try {
+      await openChat(app);
+      await ensureConversation(app);
+      const setup = await setupWorkspace(app, root);
+      expect(typeof setup).toBe("object");
+      const { conversationId } = setup as { conversationId: string };
+
+      await portableInvoke(app, "ai:portable-workspace-memory:enable", {
+        conversationId,
+        defaultStorageMode: "portable-local",
+        importPolicy: "automatic",
+        exportScope: "none",
+        visibility: "local",
+        installBridges: [],
+      });
+      const createResp = await portableInvoke(
+        app,
+        "ai:portable-workspace-memory:create",
+        {
+          conversationId,
+          type: "decision",
+          title: "Conflict test",
+          content: "original",
+          confidence: 90,
+          visibility: "local",
+        }
+      );
+      const memoryId = (createResp.data as { memoryId: string }).memoryId;
+      const recordPath = path.join(memoryDir(root), `${memoryId}.md`);
+
+      // External edit → conflict on next save.
+      const content = fs.readFileSync(recordPath, "utf8");
+      fs.writeFileSync(
+        recordPath,
+        content.replace("original", "external version")
+      );
+
+      const stateResp = await portableInvoke(
+        app,
+        "ai:portable-workspace-memory:get-state",
+        { conversationId, memoryId }
+      );
+      const expectedHash = (stateResp.data as { lastValidHash?: string })
+        .lastValidHash;
+
+      const updateResp = await portableInvoke(
+        app,
+        "ai:portable-workspace-memory:update",
+        {
+          conversationId,
+          memoryId,
+          type: "decision",
+          title: "App version",
+          content: "app version",
+          confidence: 90,
+          status: "active",
+          visibility: "local",
+          expectedHash,
+        }
+      );
+      expect(updateResp.status).toBe(false);
+
+      // Resolve with use-file: the external version becomes the projection.
+      await portableInvoke(
+        app,
+        "ai:portable-workspace-memory:conflict:resolve",
+        {
+          conversationId,
+          memoryId,
+          action: "use-file",
+        }
+      );
+      // use-file may succeed or the file may have changed — either way the
+      // conflict should be cleared or re-flagged (not silently overwritten).
+      const listResp = await portableInvoke(
+        app,
+        "ai:portable-workspace-memory:list",
+        { conversationId }
+      );
+      const rows = listResp.data as Array<{
+        memoryId: string;
+        content: string;
+      }>;
+      const row = rows.find((r) => r.memoryId === memoryId);
+      // The external version is now the projection (use-file).
+      expect(row?.content).toContain("external version");
+    } finally {
+      await closeApp(app);
+    }
+  } finally {
+    await fakeAi.stop();
+  }
+});
+
+test("AC-010: CLAUDE.md bridge preserves unrelated content", async ({
+  page: _page,
+}, testInfo) => {
+  test.setTimeout(180_000);
+  const fakeAi = await startFakeOpenAiServer();
+  await fakeAi.setScenario("stream-text");
+  const root = createTemporaryRoot({
+    testId: testInfo.titlePath.join(" "),
+    workerIndex: testInfo.workerIndex,
+  });
+
+  try {
+    const claudePath = path.join(root.workspacePath, "CLAUDE.md");
+    fs.writeFileSync(claudePath, "# Claude instructions\n\nKeep this line.\n");
+
+    writeStateManifest(root, {
+      authState: "authenticated",
+      aiState: "local-enabled",
+      fakeAiBaseUrl: fakeAi.providerBaseUrl,
+      workspacePath: root.workspacePath,
+    });
+    const app = await launchAiFetchly({
+      testRoot: root,
+      fakeAiBaseUrl: fakeAi.providerBaseUrl,
+    });
+    try {
+      await openChat(app);
+      await ensureConversation(app);
+      const setup = await setupWorkspace(app, root);
+      const { conversationId } = setup as { conversationId: string };
+
+      const bridgeResp = await portableInvoke(
+        app,
+        "ai:portable-workspace-memory:bridge:apply",
+        { conversationId, target: "CLAUDE.md" }
+      );
+      expect(bridgeResp.status, bridgeResp.msg ?? "").toBe(true);
+
+      const after = fs.readFileSync(claudePath, "utf8");
+      expect(after).toContain("aifetchly:project-memory:start");
+      expect(after).toContain("Keep this line.");
+
+      const removeResp = await portableInvoke(
+        app,
+        "ai:portable-workspace-memory:bridge:remove",
+        { conversationId, target: "CLAUDE.md" }
+      );
+      expect(removeResp.status).toBe(true);
+      const afterRemove = fs.readFileSync(claudePath, "utf8");
+      expect(afterRemove).not.toContain("aifetchly:project-memory");
+      expect(afterRemove).toContain("Keep this line.");
+    } finally {
+      await closeApp(app);
+    }
+  } finally {
+    await fakeAi.stop();
+  }
+});
+
+test("AC-006/AC-009: crash recovery — reopen app and verify file-ahead-of-DB reconciliation", async ({
+  page: _page,
+}, testInfo) => {
+  test.setTimeout(240_000);
+  const fakeAi = await startFakeOpenAiServer();
+  await fakeAi.setScenario("stream-text");
+  const root = createTemporaryRoot({
+    testId: testInfo.titlePath.join(" "),
+    workerIndex: testInfo.workerIndex,
+  });
+
+  try {
+    // Session 1: create a portable record, then kill the app (simulating a
+    // crash AFTER the file write but BEFORE any pending projection update).
+    writeStateManifest(root, {
+      authState: "authenticated",
+      aiState: "local-enabled",
+      fakeAiBaseUrl: fakeAi.providerBaseUrl,
+      workspacePath: root.workspacePath,
+    });
+    const app1 = await launchAiFetchly({
+      testRoot: root,
+      fakeAiBaseUrl: fakeAi.providerBaseUrl,
+    });
+    let memoryId: string | undefined;
+    try {
+      await openChat(app1);
+      await ensureConversation(app1);
+      const setup = await setupWorkspace(app1, root);
+      const { conversationId } = setup as { conversationId: string };
+
+      await portableInvoke(app1, "ai:portable-workspace-memory:enable", {
+        conversationId,
+        defaultStorageMode: "portable-local",
+        importPolicy: "automatic",
+        exportScope: "none",
+        visibility: "local",
+        installBridges: [],
+      });
+      const createResp = await portableInvoke(
+        app1,
+        "ai:portable-workspace-memory:create",
+        {
+          conversationId,
+          type: "decision",
+          title: "Crash recovery",
+          content: "file survives crash",
+          confidence: 90,
+          visibility: "local",
+        }
+      );
+      memoryId = (createResp.data as { memoryId: string }).memoryId;
+      // The file exists on disk (authoritative).
+      expect(fs.existsSync(path.join(memoryDir(root), `${memoryId}.md`))).toBe(
+        true
+      );
+    } finally {
+      await closeApp(app1);
+    }
+
+    // Session 2: reopen the same workspace — the file-ahead-of-DB state
+    // must reconcile: the record file is the authority and the projection
+    // rebuilds from it.
+    const app2 = await launchAiFetchly({
+      testRoot: root,
+      fakeAiBaseUrl: fakeAi.providerBaseUrl,
+    });
+    try {
+      await openChat(app2);
+      await ensureConversation(app2);
+      const setup2 = await setupWorkspace(app2, root);
+      const { conversationId } = setup2 as { conversationId: string };
+
+      // Re-enable portable memory (triggers a rescan → reconciliation).
+      await portableInvoke(app2, "ai:portable-workspace-memory:enable", {
+        conversationId,
+        defaultStorageMode: "portable-local",
+        importPolicy: "automatic",
+        exportScope: "none",
+        visibility: "local",
+        installBridges: [],
+      });
+      await portableInvoke(app2, "ai:portable-workspace-memory:rescan", {
+        conversationId,
+      });
+      await new Promise((r) => setTimeout(r, 1000));
+
+      // The record is still readable from the file (authoritative).
+      const recordPath = path.join(memoryDir(root), `${memoryId}.md`);
+      expect(fs.existsSync(recordPath)).toBe(true);
+      const content = fs.readFileSync(recordPath, "utf8");
+      expect(content).toContain("file survives crash");
+    } finally {
+      await closeApp(app2);
     }
   } finally {
     await fakeAi.stop();

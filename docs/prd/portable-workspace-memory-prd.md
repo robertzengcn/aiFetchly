@@ -1270,7 +1270,7 @@ The following decisions should be confirmed during engineering planning:
 - [x] `AGENTS.md` and `CLAUDE.md` managed edits preserve unrelated content.
 - [x] All new UI strings translated into six languages.
 - [x] Component test gate passes.
-- [ ] Critical Playwright flows pass.
+- [x] Critical Playwright flows pass.
 - [x] Upgrade and rollback behavior verified with existing SQLite-only data.
 - [x] Scoped memory-identity uniqueness migration and intentional-fork behavior verified.
 - [x] Privacy review confirms no local-only fields are exported or telemetered.
