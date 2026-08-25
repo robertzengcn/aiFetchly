@@ -42,6 +42,14 @@ const ALWAYS_LOADED_TOOL_NAMES: ReadonlySet<string> = new Set([
   "use_skill",
   "skill_resource_list",
   "skill_resource_read",
+  // Installer entry point (design §8.7): while the feature flag is enabled,
+  // prepare is ALWAYS loaded — the model must never need tool_catalog_search
+  // to discover it, and a high-confidence install intent forces it into the
+  // exposed set before the first model round.
+  ...(process.env.AIFETCHLY_SKILL_INSTALL_ENABLED === "true" ||
+  process.env.AIFETCHLY_SKILL_INSTALL_ENABLED === "1"
+    ? ["skill_install_prepare", "skill_install_status", "skill_install_cancel"]
+    : []),
 ]);
 
 const CONTEXTUAL_SHELL_TOOL_NAMES: ReadonlySet<string> = new Set([

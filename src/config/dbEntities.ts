@@ -73,6 +73,9 @@ import { AIChatPlanApprovalEntity } from "@/entity/AIChatPlanApproval.entity";
 import { AIChatSessionMemoryEntity } from "@/entity/AIChatSessionMemory.entity";
 import { AIChatCompactSummaryEntity } from "@/entity/AIChatCompactSummary.entity";
 import { PromptSkillInvocationEntity } from "@/entity/PromptSkillInvocation.entity";
+import { SkillInstallationEntity } from "@/entity/SkillInstallation.entity";
+import { SkillInstallationSessionEntity } from "@/entity/SkillInstallationSession.entity";
+import { SkillInstallationEventEntity } from "@/entity/SkillInstallationEvent.entity";
 import { AIChatAttachmentEntity } from "@/entity/AIChatAttachment.entity";
 import { AIArtifactEntity } from "@/entity/AIArtifact.entity";
 import { VectorEntity, VectorMetadataEntity } from "@/entity/Vector.entity";
@@ -181,6 +184,9 @@ export const DB_ENTITIES = [
   AIChatSessionMemoryEntity,
   AIChatCompactSummaryEntity,
   PromptSkillInvocationEntity,
+  SkillInstallationEntity,
+  SkillInstallationSessionEntity,
+  SkillInstallationEventEntity,
   AgentDefinitionEntity,
   AgentTaskEntity,
   AgentTaskMessageEntity,

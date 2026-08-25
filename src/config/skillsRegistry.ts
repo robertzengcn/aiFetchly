@@ -1979,6 +1979,237 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     },
   },
   {
+    name: "skill_install_prepare",
+    description:
+      "Start or resume a typed skill installation. Call this DIRECTLY when the user " +
+      "asks to install, set up, register, update, repair, or configure a skill from a " +
+      "repository URL or local package — it owns acquisition, inspection, planning, and " +
+      "activation. Do NOT clone with shell tools, copy with file tools, or search the " +
+      "catalog for Git first. Never pass API keys or secrets here; the installer " +
+      "requests them through a secure input when needed. Continue the installation " +
+      "with the returned session_id and next_action.",
+    parameters: {
+      type: "object",
+      properties: {
+        source: {
+          type: "string",
+          description:
+            "Repository URL (GitHub/Git) or local folder/zip path to install from.",
+        },
+        ref: {
+          type: "string",
+          description: "Optional branch, tag, or commit to pin.",
+        },
+        subdirectory: {
+          type: "string",
+          description:
+            "Optional subdirectory when the skill is not at the repo root.",
+        },
+        mode: {
+          type: "string",
+          enum: ["managed-copy", "linked"],
+          description:
+            "Activation mode. managed-copy (default) works everywhere; linked exposes " +
+            "an external directory via symlink/junction for development.",
+        },
+        constraints: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Non-secret user constraints, e.g. 'read install.md first', " +
+            "'wire up ffmpeg', 'wait for footage after install'.",
+        },
+        sessionId: {
+          type: "string",
+          description: "Existing session id when resuming an installation.",
+        },
+      },
+      required: ["source"],
+    },
+    tier: "main",
+    requiresConfirmation: true,
+    permissionCategory: "filesystem",
+    source: "built-in",
+    execute: async (args, context) => {
+      const { SkillInstallPrepareArgsSchema } = await import(
+        "@/entityTypes/skillInstallationTypes"
+      );
+      const { SkillInstallationModule, isSkillInstallerEnabled } = await import(
+        "@/modules/SkillInstallationModule"
+      );
+      if (!isSkillInstallerEnabled()) {
+        return {
+          success: false,
+          result: {
+            error:
+              "The skill installer is disabled on this installation " +
+              "(AIFETCHLY_SKILL_INSTALL_ENABLED).",
+          },
+        };
+      }
+      const parsed = SkillInstallPrepareArgsSchema.safeParse(args);
+      if (!parsed.success) {
+        return {
+          success: false,
+          result: {
+            error: parsed.error.issues.map((i) => i.message).join("; "),
+          },
+        };
+      }
+      const module = new SkillInstallationModule();
+      const snapshot = await module.prepare({
+        conversationId: context.conversationId,
+        source: parsed.data.source,
+        ...(parsed.data.ref !== undefined ? { ref: parsed.data.ref } : {}),
+        ...(parsed.data.subdirectory !== undefined
+          ? { subdirectory: parsed.data.subdirectory }
+          : {}),
+        ...(parsed.data.mode !== undefined ? { mode: parsed.data.mode } : {}),
+        ...(parsed.data.constraints !== undefined
+          ? { constraints: parsed.data.constraints }
+          : {}),
+        ...(parsed.data.sessionId !== undefined
+          ? { sessionId: parsed.data.sessionId }
+          : {}),
+      });
+      return { success: snapshot.state !== "failed", result: { ...snapshot } };
+    },
+  },
+  {
+    name: "skill_install_approve",
+    description:
+      "Approve or reject a reviewed installation plan. Requires the session_id and " +
+      "the CURRENT plan_revision — a changed plan invalidates prior approval.",
+    parameters: {
+      type: "object",
+      properties: {
+        sessionId: { type: "string", description: "Session id from prepare." },
+        planRevision: {
+          type: "string",
+          description: "The plan revision shown to the user.",
+        },
+        approve: {
+          type: "boolean",
+          description: "true to proceed, false to cancel.",
+        },
+        selectedSkillIds: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Which discovered skills to activate (multi-skill packages).",
+        },
+      },
+      required: ["sessionId", "planRevision", "approve"],
+    },
+    tier: "main",
+    requiresConfirmation: true,
+    permissionCategory: "filesystem",
+    source: "built-in",
+    execute: async (args) => {
+      const { SkillInstallApproveArgsSchema } = await import(
+        "@/entityTypes/skillInstallationTypes"
+      );
+      const { SkillInstallationModule, isSkillInstallerEnabled } = await import(
+        "@/modules/SkillInstallationModule"
+      );
+      if (!isSkillInstallerEnabled()) {
+        return { success: false, result: { error: "Installer disabled." } };
+      }
+      const parsed = SkillInstallApproveArgsSchema.safeParse(args);
+      if (!parsed.success) {
+        return {
+          success: false,
+          result: {
+            error: parsed.error.issues.map((i) => i.message).join("; "),
+          },
+        };
+      }
+      const module = new SkillInstallationModule();
+      const snapshot = await module.approve({
+        sessionId: parsed.data.sessionId,
+        planRevision: parsed.data.planRevision,
+        approve: parsed.data.approve,
+        ...(parsed.data.selectedSkillIds !== undefined
+          ? { selectedSkillIds: parsed.data.selectedSkillIds }
+          : {}),
+      });
+      return { success: snapshot.state !== "failed", result: { ...snapshot } };
+    },
+  },
+  {
+    name: "skill_install_status",
+    description:
+      "Get the current state, progress summary, and next required action for an " +
+      "installation session. Every lifecycle step is correlated by session_id.",
+    parameters: {
+      type: "object",
+      properties: {
+        sessionId: { type: "string", description: "Session id from prepare." },
+      },
+      required: ["sessionId"],
+    },
+    tier: "main",
+    requiresConfirmation: false,
+    permissionCategory: "pure",
+    source: "built-in",
+    execute: async (args) => {
+      const { SkillInstallStatusArgsSchema } = await import(
+        "@/entityTypes/skillInstallationTypes"
+      );
+      const { SkillInstallationModule } = await import(
+        "@/modules/SkillInstallationModule"
+      );
+      const parsed = SkillInstallStatusArgsSchema.safeParse(args);
+      if (!parsed.success) {
+        return {
+          success: false,
+          result: { error: "sessionId is required." },
+        };
+      }
+      const module = new SkillInstallationModule();
+      const snapshot = await module.getStatus(parsed.data.sessionId);
+      return { success: true, result: { ...snapshot } };
+    },
+  },
+  {
+    name: "skill_install_cancel",
+    description:
+      "Cancel an in-progress installation. Cancels before activation remove staging " +
+      "data; cancels after activation begins trigger rollback.",
+    parameters: {
+      type: "object",
+      properties: {
+        sessionId: { type: "string", description: "Session id from prepare." },
+      },
+      required: ["sessionId"],
+    },
+    tier: "main",
+    requiresConfirmation: false,
+    permissionCategory: "filesystem",
+    source: "built-in",
+    execute: async (args) => {
+      const { SkillInstallCancelArgsSchema } = await import(
+        "@/entityTypes/skillInstallationTypes"
+      );
+      const { SkillInstallationModule } = await import(
+        "@/modules/SkillInstallationModule"
+      );
+      const parsed = SkillInstallCancelArgsSchema.safeParse(args);
+      if (!parsed.success) {
+        return {
+          success: false,
+          result: { error: "sessionId is required." },
+        };
+      }
+      const module = new SkillInstallationModule();
+      const snapshot = await module.cancel(parsed.data.sessionId);
+      return {
+        success: snapshot.state === "cancelled",
+        result: { ...snapshot },
+      };
+    },
+  },
+  {
     name: "use_skill",
     description:
       "Invoke an installed prompt skill and load its instructions for the current task. " +

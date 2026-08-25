@@ -229,6 +229,31 @@ export class AIChatContextAssembler {
       );
     }
 
+    // Application-owned skill installation routing policy (design §8.5,
+    // FR-26): injected exactly once per turn as system context, after core
+    // capability guidance and BEFORE any repository-authored or invoked-skill
+    // content. Only while the installer feature flag is enabled; repository
+    // content can never replace or weaken this section.
+    try {
+      const { isSkillInstallerEnabled } = await import(
+        "@/modules/SkillInstallationModule"
+      );
+      if (isSkillInstallerEnabled()) {
+        const { buildSkillInstallationRoutingSection } = await import(
+          "@/service/SkillInstallationRoutingPromptSection"
+        );
+        messages.push({
+          role: "system",
+          content: buildSkillInstallationRoutingSection(),
+        });
+      }
+    } catch (err) {
+      log.error(
+        "[ai-chat-context] skill installation routing policy injection failed:",
+        err
+      );
+    }
+
     // Durable user memory injection. Reads the user-controllable toggle from
     // the system_setting table (default-on when absent). Placed before compact
     // context so recent conversation history wins when they conflict.

@@ -64,6 +64,11 @@ import {
 } from "@/service/AIChatImageHandoff";
 import { buildPromptSkillHandoffMessage } from "@/service/PromptSkillHandoff";
 import { getDefaultToolJobRegistry } from "@/service/ToolJobRegistry";
+import { classifySkillRequestIntent } from "@/service/SkillInstallIntentGuard";
+import {
+  evaluateSkillInstallationToolPolicy,
+  INSTALLER_TOOL_NAMES,
+} from "@/service/SkillInstallationToolPolicy";
 import { extractToolResultImages } from "@/service/toolResultImageHarvest";
 import { USER_AI_ENABLED } from "@/config/usersetting";
 import { Token } from "@/modules/token";
@@ -1774,6 +1779,48 @@ export class AIChatQueryLoop {
             name: call.name,
             arguments: call.arguments,
           };
+
+          // Skill-installation tool policy (design §8.6, FR-30): after an
+          // explicit install intent, generic shell/file/catalog tools cannot
+          // substitute for the typed installer on the recognized target.
+          // Unrelated workspace work stays legal; only a typed
+          // manual-action-required transition opens a generic fallback.
+          const skillInstallRouting = classifySkillRequestIntent(
+            input.request.message
+          );
+          if (
+            skillInstallRouting.confidence === "explicit" &&
+            !INSTALLER_TOOL_NAMES.has(call.name)
+          ) {
+            const verdict = evaluateSkillInstallationToolPolicy({
+              routing: skillInstallRouting,
+              toolName: call.name,
+              toolArguments: call.arguments ?? {},
+            });
+            if (!verdict.allowed) {
+              await emitToolCall(call.arguments ?? {});
+              const blockedInstallContent = serializeToolResultContent({
+                success: false,
+                error: verdict.message,
+                error_code: verdict.code,
+              });
+              eventSink.emit({
+                type: "tool_result",
+                conversationId: input.conversationId,
+                messageId: input.assistantMessageId,
+                toolCallId: call.id,
+                toolName: call.name,
+                fullContent: blockedInstallContent,
+                toolResult: { success: false, error: verdict.message },
+              });
+              messages.push({
+                role: "tool",
+                tool_call_id: call.id,
+                content: blockedInstallContent,
+              });
+              continue;
+            }
+          }
           const preparedCall = await this.prepareToolCall(
             input,
             executableCall
