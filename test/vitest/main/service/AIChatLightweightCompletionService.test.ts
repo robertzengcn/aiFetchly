@@ -943,5 +943,103 @@ describe("AIChatLightweightCompletionService", () => {
       svc.resetCooldowns();
       expect(svc.getCooldownState("user_auto_dream")).toBeNull();
     });
+
+    it("a transient cooldown expires after one hour (fake timers)", async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+      try {
+        const deps = buildDeps();
+        // timeout_ambiguous is transient but NOT same-route-retryable, so
+        // each call makes exactly one request with no retry backoff sleep
+        // (a 500 would sleep 2s under fake timers and hang the test).
+        deps.completeHosted.mockRejectedValue(
+          new DOMException("aborted", "AbortError")
+        );
+        const svc = createLightweightCompletionService(deps);
+        // Three consecutive transient failures open the one-hour cooldown.
+        for (let i = 0; i < 3; i++) {
+          await expect(
+            svc.complete({
+              workload: "user_auto_dream",
+              messages: [{ role: "user", content: "x" }],
+              manual: false,
+            })
+          ).rejects.toMatchObject({ reason: "timeout_ambiguous" });
+        }
+        const state = svc.getCooldownState("user_auto_dream");
+        expect(state?.cooldownUntil).toBeGreaterThan(Date.now());
+
+        // Still inside the window: the next background call is skipped.
+        deps.completeHosted.mockClear();
+        await expect(
+          svc.complete({
+            workload: "user_auto_dream",
+            messages: [{ role: "user", content: "y" }],
+            manual: false,
+          })
+        ).rejects.toBeInstanceOf(AIChatLightweightFailure);
+        expect(deps.completeHosted).not.toHaveBeenCalled();
+
+        // After one hour the cooldown expires and a probe may run.
+        vi.setSystemTime(new Date("2026-01-01T01:00:01Z"));
+        deps.completeHosted.mockResolvedValueOnce(okResponse());
+        const result = await svc.complete({
+          workload: "user_auto_dream",
+          messages: [{ role: "user", content: "z" }],
+          manual: false,
+        });
+        expect(result.route).toBe("hosted_small");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("a success clears the transient failure count and cooldown (SMBW-017)", async () => {
+      const deps = buildDeps();
+      // timeout_ambiguous: transient (counts) but not retryable (no 2s sleep
+      // per failure, which would blow the test timeout).
+      deps.completeHosted.mockRejectedValue(
+        new DOMException("aborted", "AbortError")
+      );
+      const svc = createLightweightCompletionService(deps);
+      // Two transient failures (below the threshold of three).
+      for (let i = 0; i < 2; i++) {
+        await expect(
+          svc.complete({
+            workload: "user_auto_dream",
+            messages: [{ role: "user", content: "x" }],
+            manual: false,
+          })
+        ).rejects.toMatchObject({ reason: "timeout_ambiguous" });
+      }
+      expect(
+        svc.getCooldownState("user_auto_dream")?.consecutiveTransientFailures
+      ).toBe(2);
+
+      // A success resets the counter.
+      deps.completeHosted.mockResolvedValueOnce(okResponse());
+      await svc.complete({
+        workload: "user_auto_dream",
+        messages: [{ role: "user", content: "y" }],
+        manual: false,
+      });
+      const state = svc.getCooldownState("user_auto_dream");
+      expect(state).toBeNull();
+
+      // Two MORE failures after the reset do not open a cooldown (count
+      // restarted from zero — threshold is three).
+      for (let i = 0; i < 2; i++) {
+        await expect(
+          svc.complete({
+            workload: "user_auto_dream",
+            messages: [{ role: "user", content: "x" }],
+            manual: false,
+          })
+        ).rejects.toMatchObject({ reason: "timeout_ambiguous" });
+      }
+      expect(
+        svc.getCooldownState("user_auto_dream")?.cooldownUntil
+      ).toBeUndefined();
+    });
   });
 });
