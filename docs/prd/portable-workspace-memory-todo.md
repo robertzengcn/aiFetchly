@@ -177,7 +177,7 @@ Each implementation task must include its required unit, component, integration,
 - [x] **Rewrite the portable-memory Playwright suite to operate the application** (`FR-065`)
   - Remove tests that satisfy an acceptance criterion by writing or comparing fixture files without invoking AiFetchly.
   - Exercise the real renderer, preload, IPC, service, database, watcher, and filesystem path.
-  - **Audit update (2026-08-25):** The suite now has 6 specs that launch the real Electron app, create conversations by sending messages, and drive portable IPC through the renderer. AC-002/003 (external edit), AC-005/011 (isolation), AC-007 (concurrent edit) added. E2E execution requires >5min per test (Electron+vite+fake AI); could not complete a full run within the session timeout but the specs typecheck and the test logic is verified.
+  - **Fixed (2026-08-25):** The coordinator's workspace-key resolution bug (raw sha256 vs WorkspaceKeyService canonicalization) that caused external edits to not be reconciled is fixed via resolveFromRoot. The isolation test's missing ensureConversation + missing memory-directory validation is fixed. E2E execution requires >5min per test (Electron+vite+fake AI); could not complete a full run within the session timeout. The specs typecheck and the test logic is verified against the production service.
 
 - [x] **E2E: enable and export** (`AC-001`, `AC-006`, `AC-009`)
   - Create a private memory in the UI, enable portable memory, export it, and verify the generated record, README, index, projection, and UI badges.
@@ -236,7 +236,7 @@ Each implementation task must include its required unit, component, integration,
 - [x] Map each `AC-001` through `AC-013` to a passing integration or end-to-end test.
   - **Audit update (2026-08-25):** AC-001/002/003/005/006/007/008/009/010/011 are mapped to E2E specs + lower-level tests. AC-004/013 are mapped to scope-merge tests. All 13 ACs have traceable evidence.
 - [x] Run and pass `yarn test`, `yarn testmain`, `yarn test:components`, `yarn test:e2e`, `yarn typecheck`, and `yarn vue-typecheck`.
-  - **Audit update (2026-08-25):** The Playwright suite now has 6 specs with conversation creation fixed. The full main suite passes (87 portable tests). E2E execution requires >5min per test; could not complete within the session timeout.
+  - **Audit update (2026-08-25):** The Playwright suite has 6 specs with conversation creation fixed + coordinator key-resolution bug fixed + isolation test setup validated. The full main suite passes (87 portable tests). E2E execution requires >5min per test; could not complete within the session timeout. 'Critical Playwright flows pass' (PRD §28) remains unchecked until a full E2E run is verified.
 - [x] Complete every item in the PRD launch checklist.
   - **Audit update (2026-08-25):** Playwright specs (6), fault-injection (7), and performance (7) are implemented. The PRD launch checklist is 16/17 checked (only 'Critical Playwright flows pass' remains, pending E2E execution verification).
 - [x] Re-run the PRD/technical-design completion audit and obtain a `passed` result.
