@@ -155,6 +155,22 @@ export interface AIChatLightweightCompletionInput {
    * irrelevant because no small attempt occurs.
    */
   readonly forceNormalRoute?: boolean;
+  /**
+   * Whether the router may perform the safe same-route retry (rate_limit /
+   * server_error) for this completion. Defaults to true. A caller that will
+   * issue a domain-level JSON-repair request after a non-empty invalid
+   * response sets this `false` on the FIRST completion so the logical run
+   * (first completion + repair) never exceeds two model requests — the
+   * router does not retry the first request and then allow a third repair
+   * (SMBW-009, tech-design §9.4).
+   */
+  readonly allowSameRouteRetry?: boolean;
+  /**
+   * Set to true on a JSON-repair completion so the structured event records
+   * `repairAttempted: true` for the logical run (SMBW-009). The router itself
+   * does not perform domain repair — the caller marks the repair request.
+   */
+  readonly repairAttempted?: boolean;
 }
 
 /** Result of a lightweight completion operation. */

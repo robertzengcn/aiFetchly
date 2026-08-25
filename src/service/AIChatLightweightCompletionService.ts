@@ -295,11 +295,17 @@ export class AIChatLightweightCompletionService {
     outcome: LightweightAttemptOutcome;
     metrics: LightweightAttemptMetrics;
   }> {
+    // Base metrics seeded with the caller's repair flag so a domain-level
+    // repair request is recorded as `repairAttempted: true` (SMBW-009).
+    const base: LightweightAttemptMetrics = {
+      ...EMPTY_METRICS,
+      repairAttempted: input.repairAttempted === true,
+    };
     // Cooldown applies to background (non-manual) executions only.
     if (!input.manual && this.isInCooldown(input.workload)) {
       return {
         outcome: { kind: "cooldown_skip" },
-        metrics: EMPTY_METRICS,
+        metrics: base,
       };
     }
 
@@ -315,7 +321,7 @@ export class AIChatLightweightCompletionService {
       if ("failure" in result) {
         return {
           outcome: { kind: "failed", failure: result.failure },
-          metrics: { ...EMPTY_METRICS, attemptCount: 1 },
+          metrics: { ...base, attemptCount: 1 },
         };
       }
       return {
@@ -326,7 +332,7 @@ export class AIChatLightweightCompletionService {
           providerKind: resolution.providerKind,
           resolvedModel: result.resolvedModel,
         },
-        metrics: { ...EMPTY_METRICS, attemptCount: 1 },
+        metrics: { ...base, attemptCount: 1 },
       };
     }
 
@@ -344,7 +350,7 @@ export class AIChatLightweightCompletionService {
         if ("failure" in result) {
           return {
             outcome: { kind: "failed", failure: result.failure },
-            metrics: { ...EMPTY_METRICS, attemptCount: 1 },
+            metrics: { ...base, attemptCount: 1 },
           };
         }
         return {
@@ -356,7 +362,7 @@ export class AIChatLightweightCompletionService {
             resolvedModel: result.resolvedModel,
             routeReason: "capability_missing",
           },
-          metrics: { ...EMPTY_METRICS, attemptCount: 1 },
+          metrics: { ...base, attemptCount: 1 },
         };
       }
     }
@@ -373,19 +379,25 @@ export class AIChatLightweightCompletionService {
           providerKind: resolution.providerKind,
           resolvedModel: this.extractModel(response),
         },
-        metrics: { ...EMPTY_METRICS, attemptCount: 1 },
+        metrics: { ...base, attemptCount: 1 },
       };
     } catch (error) {
       const classified = classifyLightweightFailure(error, input.signal);
-      // Optional: one same-route retry for rate_limit / server_error.
-      if (isSameRouteRetryable(classified.reason)) {
+      // Optional: one same-route retry for rate_limit / server_error, UNLESS
+      // the caller suppressed it to leave budget for a domain-level JSON
+      // repair so the logical run (first completion + repair) stays ≤2
+      // requests (SMBW-009, tech-design §9.4).
+      if (
+        input.allowSameRouteRetry !== false &&
+        isSameRouteRetryable(classified.reason)
+      ) {
         try {
           await this.sleepWithAbort(this.retryDelay(classified), input.signal);
         } catch (sleepErr) {
           const cancelled = classifyLightweightFailure(sleepErr, input.signal);
           return {
             outcome: { kind: "failed", failure: this.toFailure(cancelled) },
-            metrics: { ...EMPTY_METRICS, attemptCount: 1 },
+            metrics: { ...base, attemptCount: 1 },
           };
         }
         try {
@@ -400,7 +412,7 @@ export class AIChatLightweightCompletionService {
               resolvedModel: this.extractModel(response),
             },
             metrics: {
-              ...EMPTY_METRICS,
+              ...base,
               attemptCount: 2,
               retryReason: classified.reason,
             },
@@ -442,11 +454,16 @@ export class AIChatLightweightCompletionService {
   }> {
     this.applyCooldownBookkeeping(input, classified.reason);
 
+    const failMetrics: LightweightAttemptMetrics = {
+      ...EMPTY_METRICS,
+      attemptCount: priorAttempts,
+      repairAttempted: input.repairAttempted === true,
+    };
     // Ambiguous failures are terminal: no retry, no fallback.
     if (!classified.definitive) {
       return {
         outcome: { kind: "failed", failure: this.toFailure(classified) },
-        metrics: { ...EMPTY_METRICS, attemptCount: priorAttempts },
+        metrics: failMetrics,
       };
     }
 
@@ -471,7 +488,7 @@ export class AIChatLightweightCompletionService {
 
     return {
       outcome: { kind: "failed", failure: this.toFailure(classified) },
-      metrics: { ...EMPTY_METRICS, attemptCount: priorAttempts },
+      metrics: failMetrics,
     };
   }
 
@@ -514,6 +531,7 @@ export class AIChatLightweightCompletionService {
     const fallbackMetrics: LightweightAttemptMetrics = {
       ...EMPTY_METRICS,
       attemptCount: priorAttempts + 1,
+      repairAttempted: input.repairAttempted === true,
       fallbackAttempted: true,
       fallbackReason: classified.reason,
     };

@@ -185,10 +185,16 @@ export async function runBatchedAutoDreamConsolidation<
         }),
       },
     ];
+    // SMBW-009: suppress the same-route retry on the first completion so the
+    // logical run (first completion + one repair) never exceeds two model
+    // requests — the router does not retry the first request and then allow a
+    // third repair. The repair (if any) is a separate completion marked
+    // repairAttempted so the event records it.
     const result = await input.completeLightweight({
       workload: input.profile.workload,
       messages,
       manual: input.isManual,
+      allowSameRouteRetry: false,
     });
     const resp = result.response;
     if (resp.model) resolvedModel = resp.model;
@@ -201,7 +207,11 @@ export async function runBatchedAutoDreamConsolidation<
         invalidRaw: raw,
         parsed,
         manual: input.isManual,
-        completeLightweight: (lwInput) => input.completeLightweight(lwInput),
+        completeLightweight: (lwInput) =>
+          input.completeLightweight({
+            ...lwInput,
+            repairAttempted: true,
+          }),
         parse: (r) => input.prompt.parse(r, batch.packets, activeMemories),
       });
     }

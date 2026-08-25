@@ -354,6 +354,17 @@ describe("AIAutoDreamService", () => {
     expect(r.status).toBe("completed");
     // Two lightweight calls: initial + one repair.
     expect(mockCompleteLightweight).toHaveBeenCalledTimes(2);
+    // SMBW-009: the first completion suppresses the same-route retry so the
+    // logical run (first + repair) stays at two requests.
+    const firstInput = mockCompleteLightweight.mock.calls[0]![0] as {
+      allowSameRouteRetry?: boolean;
+    };
+    expect(firstInput.allowSameRouteRetry).toBe(false);
+    // The repair request is marked repairAttempted.
+    const repairInput = mockCompleteLightweight.mock.calls[1]![0] as {
+      repairAttempted?: boolean;
+    };
+    expect(repairInput.repairAttempted).toBe(true);
     // The plan was applied (no failRun).
     expect(mockApplyPlanAndCompleteRun).toHaveBeenCalled();
     expect(mockFailRun).not.toHaveBeenCalled();

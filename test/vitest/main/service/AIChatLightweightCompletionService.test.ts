@@ -545,6 +545,63 @@ describe("AIChatLightweightCompletionService", () => {
     });
   });
 
+  describe("JSON repair bounding (SMBW-009)", () => {
+    it("allowSameRouteRetry=false suppresses the same-route retry on a 429", async () => {
+      const deps = buildDeps({
+        smallModelCapability: { available: true, context_size: 200_000 },
+      });
+      deps.completeHosted.mockRejectedValueOnce(
+        new HttpResponseError("rl", 429, "", 1)
+      );
+      const svc = createLightweightCompletionService(deps);
+
+      await expect(
+        svc.complete({
+          workload: "user_auto_dream",
+          messages: [{ role: "user", content: "x" }],
+          manual: false,
+          allowSameRouteRetry: false,
+        })
+      ).rejects.toMatchObject({ reason: "rate_limit" });
+      // No retry — exactly one request, leaving budget for a domain repair.
+      expect(deps.completeHosted).toHaveBeenCalledTimes(1);
+    });
+
+    it("allowSameRouteRetry=true (default) still retries a 429 once", async () => {
+      const deps = buildDeps({
+        smallModelCapability: { available: true, context_size: 200_000 },
+      });
+      deps.completeHosted
+        .mockRejectedValueOnce(new HttpResponseError("rl", 429, "", 1))
+        .mockResolvedValueOnce(okResponse());
+      const svc = createLightweightCompletionService(deps);
+
+      const result = await svc.complete({
+        workload: "user_auto_dream",
+        messages: [{ role: "user", content: "x" }],
+        manual: false,
+      });
+      expect(result.attemptCount).toBe(2);
+      expect(deps.completeHosted).toHaveBeenCalledTimes(2);
+    });
+
+    it("repairAttempted=true is propagated to the result and event", async () => {
+      const deps = buildDeps({
+        smallModelCapability: { available: true, context_size: 200_000 },
+      });
+      deps.completeHosted.mockResolvedValueOnce(okResponse("resolved"));
+      const svc = createLightweightCompletionService(deps);
+
+      const result = await svc.complete({
+        workload: "user_auto_dream",
+        messages: [{ role: "user", content: "x" }],
+        manual: false,
+        repairAttempted: true,
+      });
+      expect(result.repairAttempted).toBe(true);
+    });
+  });
+
   describe("compact controlled fallback", () => {
     // Router-level fallback tests: provide a valid capability so the small
     // route is eligible (SMBW-001 gate) and the fallback path can fire.
