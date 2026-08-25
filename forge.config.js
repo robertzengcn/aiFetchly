@@ -676,7 +676,9 @@ module.exports = {
           },
         ]
       : []),
-    // Direct Windows distribution: WiX MSI, signed only for production.
+    // Direct Windows distribution: Squirrel EXE + WiX MSI.
+    // Store builds still include these makers so master can produce
+    // local-testing installers with --skip-package --targets after MSIX.
     {
       name: "@electron-forge/maker-zip",
       platforms: ["darwin"],
@@ -787,6 +789,27 @@ module.exports = {
             "alsa-lib",
           ],
         },
+      },
+    },
+    {
+      name: "@electron-forge/maker-squirrel",
+      platforms: ["win32"],
+      config: {
+        name: "aifetchly",
+        authors: "Robert Zeng",
+        description: "AI-powered marketing automation",
+        setupIcon: "./src/assets/images/icon.ico",
+        loadingGif: "./src/assets/images/installer-loading.gif",
+        setupExe: "AiFetchlySetup.exe",
+        // WiX already produces the MSI used for local testing and Store-adjacent
+        // direct downloads. Keep Squirrel focused on Setup.exe + nupkg/RELEASES.
+        noMsi: true,
+        ...(windowsSignConfig
+          ? {
+              certificateFile: windowsSignConfig.certificateFile,
+              certificatePassword: windowsSignConfig.certificatePassword,
+            }
+          : {}),
       },
     },
     {
