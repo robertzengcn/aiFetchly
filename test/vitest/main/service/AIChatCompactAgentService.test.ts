@@ -1259,6 +1259,42 @@ describe("AIChatCompactAgentService", () => {
       }
     });
 
+    it("context overflow retries the small route once with a reduced budget before any fallback (SMBW-004)", async () => {
+      mockGetConversationMessages.mockResolvedValue(bigRows("v2-overflow", 30));
+      let calls = 0;
+      const completeChat = vi.fn(async (input: unknown) => {
+        calls += 1;
+        if (calls === 1) {
+          // First small attempt overflows.
+          throw new AIChatLightweightFailure({
+            reason: "context_overflow",
+            message: "too big",
+            definitive: true,
+          });
+        }
+        // Reduced-budget retry succeeds on the small route.
+        return makeCompletion("# Compact\n## Summary\nreduced-ok");
+      });
+      const agent = makeAgent({
+        completeChat,
+        getContextWindow: vi.fn().mockResolvedValue(2000),
+        getSmallModelCapability: vi
+          .fn()
+          .mockResolvedValue({ available: true, context_size: 200_000 }),
+      });
+
+      const view = await agent.runFullCompact({
+        conversationId: "v2-overflow",
+      });
+      expect(view.conversationId).toBe("v2-overflow");
+      expect(mockSaveFullCompact).toHaveBeenCalledTimes(1);
+      // All sub-requests stayed on the small route — no normal fallback.
+      for (const call of completeChat.mock.calls) {
+        const lwInput = call[0] as { forceNormalRoute?: boolean };
+        expect(lwInput.forceNormalRoute).toBeFalsy();
+      }
+    });
+
     it("an ambiguous small failure does NOT trigger a fallback restart", async () => {
       mockGetConversationMessages.mockResolvedValue(bigRows("v2-amb", 30));
       const completeChat = vi.fn(async (input: unknown) => {

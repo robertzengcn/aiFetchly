@@ -1,6 +1,6 @@
 # Small-Model Routing — Operations & Rollout
 
-**Status:** Implemented (commits `da9740ea` … `fd0cc08c`). Kill switch **default OFF**.
+**Status:** Desktop implemented (commits `da9740ea` … `fd0cc08c`) **plus the SMBW-001…014 remediation** (capability gate, boundary reuse, recursive budgeted merge, one-fallback-per-compact, total-budgeted batches, merged source queue, bounded repair, rolling session chunks, cancellation, accounting/observability, resolved-model authority). Kill switch **default OFF**. Server contract (`small_model` capability metadata + `small_model_unavailable` error code) implemented in the `aifetchserver` repo. **Open items:** the quality corpus, deployed-server readiness checks, and rollout metrics (SMBW-020/021/022) require production access — tracked as deferred in the [TODO](prd/small-model-background-workloads-todo.md). **Do not enable hosted routing in production until those gates pass.**
 **PRD:** `docs/prd/small-model-background-workloads-prd.md`
 **Technical design:** `docs/prd/small-model-background-workloads-technical-design.md`
 **Implementation plan:** `docs/prd/small-model-background-workloads-implementation-plan.md`

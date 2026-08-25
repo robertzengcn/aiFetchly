@@ -692,6 +692,50 @@ export class AIChatCompactAgentService {
     } catch (error) {
       // SMBW-011: cancellation is not a fallback-eligible failure; propagate.
       if (input.signal?.aborted) throw error;
+      // SMBW-004: after a small-route context overflow, reduce the input once
+      // (halve the usable payload budget — deterministic smaller chunks) and
+      // retry the SMALL route before spending the one allowed normal fallback.
+      if (
+        this.isFallbackEligibleFailure(error) &&
+        this.failureReason(error) === "context_overflow"
+      ) {
+        log.info(
+          `[ai-chat-compact] context overflow on the small route; retrying once with a reduced budget conv=${input.conversationId}`
+        );
+        try {
+          const reducedBudget: ReturnType<typeof computeLightweightBudget> = {
+            ...budget,
+            usablePayloadTokens: Math.max(
+              1,
+              Math.floor(budget.usablePayloadTokens / 2)
+            ),
+          };
+          const pipeline = await this.runCompactPipeline(
+            chunkSourceMessages,
+            priorSummary,
+            reducedBudget,
+            input.model,
+            /* forceNormalRoute */ false,
+            input.signal
+          );
+          return await this.activateCompact(
+            input.conversationId,
+            pipeline.summary,
+            pipeline.resolvedModel,
+            deltaRows,
+            reusedBoundary,
+            active,
+            inputTokenEstimate,
+            startedAt,
+            pipeline.chunkCount
+          );
+        } catch (retryError) {
+          if (input.signal?.aborted) throw retryError;
+          if (!this.isFallbackEligibleFailure(retryError)) throw retryError;
+          // Fall through to the one normal-model fallback below.
+          error = retryError;
+        }
+      }
       if (this.isFallbackEligibleFailure(error)) {
         log.info(
           `[ai-chat-compact] small-route failed (${this.failureReason(

@@ -80,7 +80,7 @@ No database migration is needed. The run models do need to accept `reviewedThrou
 | Capability absence          | Keep full compact on normal route        | An unknown context window is unsafe for large input.           |
 | Auto-dream cursor order     | Oldest unreviewed first                  | A single timestamp cursor can then advance without gaps.       |
 | Cooldown storage            | Process-local in phase 1                 | Meets the PRD and avoids schema work; resets are explicit.     |
-| Kill switch                 | Environment override, default enabled    | Release-operator control with no schema or settings UI change. |
+| Kill switch                 | Environment override, default disabled (§8.3 amendment) | Release-operator control with no schema or settings UI change. |
 | Tools and media             | Reject at router boundary                | The workload route is text-only and cannot execute tools.      |
 
 ## 4. Target Architecture
@@ -279,7 +279,9 @@ export const AI_SMALL_MODEL_ROUTING_ENV =
   "AIFETCHLY_SMALL_MODEL_ROUTING_ENABLED";
 ```
 
-The value is enabled when absent. Accept only explicit case-insensitive `true`/`1` and `false`/`0`; an invalid value is logged once and resolves to disabled so an operator typo cannot unexpectedly enable new routing. The value is read when the shared lightweight service is constructed, so changing it requires an app restart.
+**Default: DISABLED when absent.** *(Amended 2026-08-25, resolving the SMBW-015 conflict with the earlier "default enabled" wording. The implementation plan, operations guide, code, and tests all ship default-disabled — the safer direction this design's own §22 Phase 1 sanctions while server readiness is incomplete. Revisit only after the Phase 0 server contract and the quality gates in the TODO pass.)*
+
+Accept only explicit case-insensitive `true`/`1` and `false`/`0`; an invalid value is logged once and resolves to disabled so an operator typo cannot unexpectedly enable new routing. The value is read when the shared lightweight service is constructed, so changing it requires an app restart. To enable after server verification, an operator sets `AIFETCHLY_SMALL_MODEL_ROUTING_ENABLED=true` in the environment and restarts the app (production enablement procedure: `docs/small-model-routing-operations.md` §2).
 
 When disabled, every workload uses the provider-normal path and all small-specific retry, cooldown, and fallback behavior is bypassed. Auto-dream's own enablement settings remain unchanged.
 
