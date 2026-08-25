@@ -9,6 +9,7 @@ import {
   buildFullCompactUserPrompt,
   normalizeSessionMemorySummary,
   normalizeFullCompactSummary,
+  SESSION_MEMORY_HEADINGS,
 } from "@/service/AIChatCompactPromptBuilder";
 import type { Token } from "@/modules/token";
 import type { USER_AI_ENABLED } from "@/config/usersetting";
@@ -26,6 +27,7 @@ import {
   groupMessagesAtomically,
   chunkGroupsByBudget,
   chunkSummariesByBudget,
+  CONSERVATIVE_SMALL_CONTEXT_FALLBACK,
 } from "@/service/AIChatPromptBudget";
 import type { OpenAISmallModelCapability } from "@/api/aiChatApi";
 import { MessageType } from "@/entityTypes/commonType";
@@ -56,6 +58,17 @@ const SESSION_MEMORY_MAX_AGE_MS = 60 * 60 * 1000;
 
 function isMessageRow(row: { messageType?: MessageType }): boolean {
   return row.messageType === MessageType.MESSAGE;
+}
+
+/**
+ * True when the raw session-memory output contains at least one required
+ * heading. Non-empty output missing every heading is a formatting failure
+ * that warrants one same-small repair (SMBW-010).
+ */
+function hasAnySessionMemoryHeading(raw: string): boolean {
+  const trimmed = (raw ?? "").trim();
+  if (trimmed.length === 0) return false;
+  return SESSION_MEMORY_HEADINGS.some((h) => trimmed.includes(h));
 }
 
 export interface AIChatCompactAgentDeps {
@@ -376,61 +389,153 @@ export class AIChatCompactAgentService {
 
       await this.memory.markUpdating(input.conversationId);
 
-      const newMessages: OpenAIChatMessage[] = newRows.map((r) => ({
+      // Rolling chronological chunks (SMBW-010, tech-design §15.2): convert
+      // the delta into atomic groups, compute a session-memory budget, and
+      // process the groups chunk-by-chunk. Each chunk includes the CURRENT
+      // persisted summary (or an empty-summary marker) plus the next set of
+      // complete message groups; the replacement summary + boundary persist
+      // ONLY after that chunk validates, so partial progress is durable and a
+      // later chunk failure resumes at the first unprocessed group without
+      // replaying billable work. One same-small formatting repair is allowed
+      // when the first response was definitively received but invalid.
+      const deltaMessages: OpenAIChatMessage[] = newRows.map((r) => ({
         role: r.role as OpenAIChatMessage["role"],
         content: r.content,
       }));
-      const messages: OpenAIChatMessage[] = [
-        { role: "system", content: buildSessionMemorySystemPrompt() },
-        {
-          role: "user",
-          content: buildSessionMemoryUserPrompt(
-            existing?.summary ?? null,
-            newMessages
-          ),
-        },
-      ];
+      const budget = await this.computeSessionMemoryBudget();
+      const groups = groupMessagesAtomically(deltaMessages);
+      const chunks = chunkGroupsByBudget(groups, budget.usablePayloadTokens);
+
+      let currentSummary: string | null = existing?.summary ?? null;
+      let coveredThroughMessageId: string | undefined =
+        existing?.coveredThroughMessageId;
+      let coveredThroughTimestamp: Date | undefined =
+        existing?.coveredThroughTimestamp
+          ? new Date(existing.coveredThroughTimestamp)
+          : undefined;
+      let sourceMessageCount = existing?.sourceMessageCount ?? 0;
+      let resolvedModel = input.model ?? "session-memory";
+      let processedGroups = 0;
       const startedAt = Date.now();
-      // Route through the lightweight service (session_memory_summary profile).
-      // Hosted + kill-switch-on sends `model: "small"`; optional background
-      // workloads never fall back to the normal model (tech-design §15.2).
-      const result = await this.deps.completeLightweight({
-        workload: "session_memory_summary",
-        messages,
-        normalModel: input.model,
-        manual: false,
-      });
-      const resp = result.response;
-      const raw = openAIContentToString(resp.choices?.[0]?.message?.content);
-      const { summary, ok } = normalizeSessionMemorySummary(raw);
-      if (!ok) {
-        await this.memory.recordFailure(
-          input.conversationId,
-          "Compact model returned empty summary"
+
+      for (const chunk of chunks) {
+        const chunkMessages = chunk.groups.flatMap(
+          (g) => g.messages as OpenAIChatMessage[]
         );
-        return;
+        if (chunkMessages.length === 0) continue;
+        const chunkUserMessages = chunkMessages.map((m) => ({
+          role: m.role,
+          content:
+            typeof m.content === "string" ? m.content : String(m.content ?? ""),
+        }));
+        const messages: OpenAIChatMessage[] = [
+          { role: "system", content: buildSessionMemorySystemPrompt() },
+          {
+            role: "user",
+            content: buildSessionMemoryUserPrompt(
+              currentSummary,
+              chunkUserMessages
+            ),
+          },
+        ];
+        // SMBW-009: suppress the same-route retry on the first completion so
+        // the logical run (first + repair) stays ≤2 requests.
+        const result = await this.deps.completeLightweight({
+          workload: "session_memory_summary",
+          messages,
+          normalModel: input.model,
+          manual: false,
+          allowSameRouteRetry: false,
+        });
+        const resp = result.response;
+        if (resp.model) resolvedModel = resp.model;
+        const raw = openAIContentToString(resp.choices?.[0]?.message?.content);
+        let normalized = normalizeSessionMemorySummary(raw);
+        // One same-small formatting repair when output was definitively
+        // received but invalid: empty (ok:false) OR non-empty but missing
+        // every required heading (a real formatting failure). Never a
+        // normal-model fallback (SMBW-010, tech-design §15.2).
+        const needsRepair =
+          (!normalized.ok || !hasAnySessionMemoryHeading(raw)) &&
+          raw.trim().length > 0;
+        if (needsRepair) {
+          const repairResult = await this.deps.completeLightweight({
+            workload: "session_memory_summary",
+            messages: [
+              { role: "system", content: buildSessionMemorySystemPrompt() },
+              {
+                role: "user",
+                content: buildSessionMemoryUserPrompt(currentSummary, []),
+              },
+              {
+                role: "assistant",
+                content: raw,
+              },
+              {
+                role: "user",
+                content:
+                  "The previous output was invalid. Return ONLY the updated session memory with the required headings.",
+              },
+            ],
+            normalModel: input.model,
+            manual: false,
+            repairAttempted: true,
+            allowSameRouteRetry: false,
+          });
+          const repairRaw = openAIContentToString(
+            repairResult.response.choices?.[0]?.message?.content
+          );
+          if (repairResult.response.model) {
+            resolvedModel = repairResult.response.model;
+          }
+          normalized = normalizeSessionMemorySummary(repairRaw);
+        }
+        if (!normalized.ok) {
+          await this.memory.recordFailure(
+            input.conversationId,
+            "Compact model returned empty summary"
+          );
+          // Partial progress: the chunks processed so far are already
+          // persisted; the next run resumes at this unprocessed group.
+          log.info(
+            `[ai-chat-compact] session update chunk failed conv=${input.conversationId} processedGroups=${processedGroups}/${groups.length}`
+          );
+          return;
+        }
+        // Advance the boundary to the LAST message of this chunk's groups.
+        const chunkGroups = chunk.groups;
+        const lastGroup = chunkGroups[chunkGroups.length - 1]!;
+        const lastMsg = lastGroup.messages[lastGroup.messages.length - 1]!;
+        const lastRow = newRows[processedGroups + chunkGroups.length - 1];
+        currentSummary = normalized.summary;
+        coveredThroughMessageId = lastRow?.messageId ?? lastMsg.role;
+        coveredThroughTimestamp = lastRow?.timestamp ?? new Date();
+        sourceMessageCount += chunkGroups.reduce(
+          (n, g) => n + g.messages.length,
+          0
+        );
+        processedGroups += chunkGroups.length;
+        const tokenEstimate = this.estimator.estimateText(currentSummary);
+        await this.memory.upsertMemory({
+          conversationId: input.conversationId,
+          summary: currentSummary,
+          coveredThroughMessageId,
+          coveredThroughTimestamp,
+          sourceMessageCount,
+          tokenEstimate,
+          model: resolvedModel,
+          status: "active",
+        });
       }
-      const last = newRows[newRows.length - 1];
-      const tokenEstimate = this.estimator.estimateText(summary);
-      const priorCount = existing?.sourceMessageCount ?? 0;
-      await this.memory.upsertMemory({
-        conversationId: input.conversationId,
-        summary,
-        coveredThroughMessageId: last.messageId,
-        coveredThroughTimestamp: last.timestamp,
-        sourceMessageCount: priorCount + newRows.length,
-        tokenEstimate,
-        model: resp.model,
-        status: "active",
-      });
+
       await this.memory.resetFailures(input.conversationId);
       this.lastSessionMemoryAt.set(input.conversationId, Date.now());
       log.info(
         `[ai-chat-compact] session update completed conv=${
           input.conversationId
-        } msgs=${newRows.length} tokens=${tokenEstimate} elapsed=${
-          Date.now() - startedAt
-        }ms`
+        } msgs=${newRows.length} chunks=${chunks.length} tokens=${
+          currentSummary ? this.estimator.estimateText(currentSummary) : 0
+        } elapsed=${Date.now() - startedAt}ms`
       );
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -775,6 +880,35 @@ export class AIChatCompactAgentService {
     return computeLightweightBudget({
       contextWindow,
       maxOutputTokens: profileMaxOutput,
+      discoveredMaxOutputTokens: capability?.max_tokens,
+      fixedPromptTokens,
+    });
+  }
+
+  /**
+   * Capability-aware budget for incremental session-memory summaries. Uses
+   * the conservative context window when small-model metadata is absent
+   * (session summary does NOT require a discovered context window,
+   * tech-design §8.4). Sized so each rolling chunk fits one bounded request
+   * (SMBW-010, §15.2).
+   */
+  private async computeSessionMemoryBudget(): Promise<
+    ReturnType<typeof computeLightweightBudget>
+  > {
+    const capability = this.deps.getSmallModelCapability
+      ? await this.deps.getSmallModelCapability()
+      : null;
+    const contextWindow =
+      capability?.context_size ??
+      (await this.resolveContextWindow()) ??
+      CONSERVATIVE_SMALL_CONTEXT_FALLBACK;
+    const profile = getLightweightProfile("session_memory_summary");
+    const fixedPromptTokens = this.estimator.estimateText(
+      buildSessionMemorySystemPrompt()
+    );
+    return computeLightweightBudget({
+      contextWindow,
+      maxOutputTokens: profile.maxOutputTokens,
       discoveredMaxOutputTokens: capability?.max_tokens,
       fixedPromptTokens,
     });

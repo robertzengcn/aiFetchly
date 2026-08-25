@@ -777,6 +777,135 @@ describe("AIChatCompactAgentService", () => {
     });
   });
 
+  describe("rolling session-memory chunks (SMBW-010)", () => {
+    function bigRows(convId: string, n: number) {
+      return Array.from({ length: n }, (_, i) => ({
+        messageId: `m${i}`,
+        conversationId: convId,
+        role: i % 2 === 0 ? "user" : "assistant",
+        content: "x".repeat(2000),
+        timestamp: new Date(i + 1),
+        messageType: "message",
+      }));
+    }
+
+    beforeEach(() => {
+      mockGetByConversation.mockResolvedValue(null);
+      mockGetConversationMessages.mockResolvedValue(bigRows("v2-roll", 30));
+      mockUpsertMemory.mockResolvedValue({});
+      mockResetFailures.mockResolvedValue(undefined);
+      mockMarkUpdating.mockResolvedValue(undefined);
+    });
+
+    it("oversized deltas cause multiple bounded chunk requests", async () => {
+      const completeChat = vi
+        .fn()
+        .mockResolvedValue(
+          makeCompletion("# Session Memory\n## Current Goal\nx")
+        );
+      const agent = makeAgent({
+        completeChat,
+        // Tiny window forces many chunks.
+        getContextWindow: vi.fn().mockResolvedValue(2000),
+      });
+      await agent.enqueueSessionMemoryUpdate({
+        conversationId: "v2-roll",
+        reason: "test",
+        promptTokens: 103_000,
+      });
+      // Multiple lightweight calls ⇒ rolling chunks.
+      expect(completeChat.mock.calls.length).toBeGreaterThan(1);
+      // Each chunk persists the replacement summary + boundary as it validates.
+      expect(mockUpsertMemory.mock.calls.length).toBeGreaterThanOrEqual(2);
+    });
+
+    it("successful early chunks remain committed after a later chunk fails", async () => {
+      const completeChat = vi
+        .fn()
+        .mockResolvedValueOnce(
+          makeCompletion("# Session Memory\n## Current Goal\nok")
+        )
+        .mockResolvedValueOnce(
+          makeCompletion("# Session Memory\n## Current Goal\nok")
+        )
+        .mockResolvedValueOnce(makeCompletion("")); // empty -> invalid
+      const agent = makeAgent({
+        completeChat,
+        getContextWindow: vi.fn().mockResolvedValue(2000),
+      });
+      await agent.enqueueSessionMemoryUpdate({
+        conversationId: "v2-roll",
+        reason: "test",
+        promptTokens: 103_000,
+      });
+      // First two chunks persisted their summaries before the third failed.
+      expect(mockUpsertMemory.mock.calls.length).toBeGreaterThanOrEqual(2);
+      // A failure was recorded for the failed chunk.
+      expect(mockRecordFailure).toHaveBeenCalled();
+    });
+
+    it("the persisted summary of chunk N is fed into chunk N+1", async () => {
+      const completeChat = vi.fn(async (lwInput: unknown) => {
+        // The second+ chunk's user prompt includes the prior summary text.
+        void lwInput;
+        return makeCompletion("# Session Memory\n## Current Goal\nnext");
+      });
+      const agent = makeAgent({
+        completeChat,
+        getContextWindow: vi.fn().mockResolvedValue(2000),
+      });
+      await agent.enqueueSessionMemoryUpdate({
+        conversationId: "v2-roll",
+        reason: "test",
+        promptTokens: 103_000,
+      });
+      // The second chunk's input contains the first chunk's persisted summary.
+      const secondCall = completeChat.mock.calls[1]![0] as {
+        messages: { content: string }[];
+      };
+      expect(secondCall.messages[1]!.content).toContain("Current Goal");
+    });
+
+    it("one same-small formatting repair is attempted on invalid non-empty output", async () => {
+      const completeChat = vi
+        .fn()
+        .mockResolvedValueOnce(makeCompletion("not valid headings"))
+        .mockResolvedValueOnce(
+          makeCompletion("# Session Memory\n## Current Goal\nrepaired")
+        );
+      const agent = makeAgent({
+        completeChat,
+        getContextWindow: vi.fn().mockResolvedValue(128_000),
+      });
+      mockGetConversationMessages.mockResolvedValue([
+        {
+          messageId: "m1",
+          conversationId: "v2-repair",
+          role: "user",
+          content: "x",
+          timestamp: new Date(1),
+          messageType: "message",
+        },
+        {
+          messageId: "m2",
+          conversationId: "v2-repair",
+          role: "assistant",
+          content: "y",
+          timestamp: new Date(2),
+          messageType: "message",
+        },
+      ]);
+      await agent.enqueueSessionMemoryUpdate({
+        conversationId: "v2-repair",
+        reason: "test",
+        promptTokens: 103_000,
+      });
+      // First call (invalid) + one repair call.
+      expect(completeChat).toHaveBeenCalledTimes(2);
+      expect(mockUpsertMemory).toHaveBeenCalled();
+    });
+  });
+
   describe("hierarchical full compact (conversation_compact)", () => {
     function bigRows(convId: string, n: number) {
       return Array.from({ length: n }, (_, i) => ({
