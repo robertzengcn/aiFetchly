@@ -20,6 +20,7 @@ import {
   serializeContactVerificationResult,
 } from "@/service/ContactVerificationAiTools";
 import { ContactVerificationService } from "@/service/contact-verification/ContactVerificationService";
+import { EXTRACT_CONTACT_VERIFY_NEXT_STEP } from "@/schemas/contactVerification";
 import { DocumentService } from "@/service/DocumentService";
 import { FileToolService } from "@/service/FileToolService";
 import { WorkspaceResolver } from "@/service/WorkspaceResolver";
@@ -42,6 +43,63 @@ import {
   shortErrorStack,
   splitTelemetryMessage,
 } from "@/service/ShortErrorStack";
+
+/**
+ * Format nested Standard verification as compact preview lines for the
+ * extract_contact_info summary. Statuses are a preview; the model must still
+ * call verify_contact_info before presenting or exporting.
+ */
+function formatContactVerificationPreview(
+  verification: Record<string, unknown> | undefined
+): string {
+  if (!verification) {
+    return "";
+  }
+  const groups = verification.contacts;
+  if (!Array.isArray(groups) || groups.length === 0) {
+    return "";
+  }
+  const lines: string[] = [];
+  for (const group of groups) {
+    if (!group || typeof group !== "object") {
+      continue;
+    }
+    const rec = group as Record<string, unknown>;
+    const emails = Array.isArray(rec.emails) ? rec.emails : [];
+    const phones = Array.isArray(rec.phones) ? rec.phones : [];
+    for (const item of emails) {
+      const line = formatVerifiedValueLine("Email", item);
+      if (line) {
+        lines.push(line);
+      }
+    }
+    for (const item of phones) {
+      const line = formatVerifiedValueLine("Phone", item);
+      if (line) {
+        lines.push(line);
+      }
+    }
+  }
+  if (lines.length === 0) {
+    return "";
+  }
+  return `   Verification preview:\n${lines.join("\n")}\n`;
+}
+
+function formatVerifiedValueLine(kind: string, item: unknown): string | null {
+  if (!item || typeof item !== "object") {
+    return null;
+  }
+  const rec = item as Record<string, unknown>;
+  const original = typeof rec.original === "string" ? rec.original : "";
+  const status = typeof rec.status === "string" ? rec.status : "";
+  if (!original) {
+    return null;
+  }
+  return status
+    ? `   ${kind} ${original}: ${status}`
+    : `   ${kind} ${original}`;
+}
 
 /** Human-readable label for SearchTaskStatus numeric values (1–4). */
 function searchTaskStatusLabel(status: SearchTaskStatus | null): string {
@@ -1498,6 +1556,40 @@ export class ToolExecutor {
     const successful = results.filter((r) => r.success);
     const failed = results.filter((r) => !r.success);
 
+    // Compose Standard verification for every successful URL result that
+    // contains emails or phones BEFORE returning to the model (PRD FR-13,
+    // design §8.5/§15.4). Nested verification is a preview; the model must
+    // still call verify_contact_info on the compiled list before presenting
+    // or exporting (see EXTRACT_CONTACT_VERIFY_NEXT_STEP).
+    const formattedResults = await Promise.all(
+      results.map(async (r) => {
+        const emails = r.data?.emails;
+        const phones = r.data?.phones;
+        const hasContacts =
+          r.success &&
+          ((emails && emails.length > 0) || (phones && phones.length > 0));
+        const verification = hasContacts
+          ? await ToolExecutor.verifyExtractionContacts(r.url, emails, phones)
+          : undefined;
+        return {
+          url: r.url,
+          success: r.success,
+          emails,
+          phones,
+          address: r.data?.address,
+          socialLinks: r.data?.socialLinks,
+          verification,
+          error: r.error,
+        };
+      })
+    );
+
+    const anyContacts = formattedResults.some(
+      (r) =>
+        r.success &&
+        ((r.emails && r.emails.length > 0) || (r.phones && r.phones.length > 0))
+    );
+
     const formattedSummary =
       results.length > 0
         ? `Contact Extraction Results:\n\n` +
@@ -1506,21 +1598,27 @@ export class ToolExecutor {
           `Successful: ${successful.length}\n` +
           `Failed: ${failed.length}\n\n` +
           (successful.length > 0
-            ? `Extracted:\n${successful
-                .map(
-                  (r, idx) =>
+            ? `Extracted:\n${formattedResults
+                .filter((r) => r.success)
+                .map((r, idx) => {
+                  const preview = formatContactVerificationPreview(
+                    r.verification
+                  );
+                  return (
                     `${idx + 1}. ${r.url}\n` +
-                    (r.data?.emails?.length
-                      ? `   Emails: ${r.data.emails.join(", ")}\n`
+                    (r.emails?.length
+                      ? `   Emails: ${r.emails.join(", ")}\n`
                       : "") +
-                    (r.data?.phones?.length
-                      ? `   Phones: ${r.data.phones.join(", ")}\n`
+                    (r.phones?.length
+                      ? `   Phones: ${r.phones.join(", ")}\n`
                       : "") +
-                    (r.data?.address ? `   Address: ${r.data.address}\n` : "") +
-                    (r.data?.socialLinks?.length
-                      ? `   Social: ${r.data.socialLinks.join(", ")}`
-                      : "")
-                )
+                    (r.address ? `   Address: ${r.address}\n` : "") +
+                    (r.socialLinks?.length
+                      ? `   Social: ${r.socialLinks.join(", ")}\n`
+                      : "") +
+                    preview
+                  );
+                })
                 .join("\n")}\n\n`
             : "") +
           (failed.length > 0
@@ -1544,6 +1642,10 @@ export class ToolExecutor {
         } URL(s) were not processed; retry extract_contact_info for the remaining URLs if needed.`
       : "";
 
+    const verifyNextStep = anyContacts
+      ? `\n\n${EXTRACT_CONTACT_VERIFY_NEXT_STEP}`
+      : "";
+
     return {
       success: true,
       ...(outcome.timedOut && { partial: true, timedOut: true }),
@@ -1551,38 +1653,14 @@ export class ToolExecutor {
       processedUrls: results.length,
       successful: successful.length,
       failed: failed.length,
-      summary: formattedSummary + partialNote,
-      // Compose Standard verification for every successful URL result that
-      // contains emails or phones BEFORE returning to the model (PRD FR-13,
-      // design §8.5/§15.4). The worker may already attach a verification
-      // block; when absent, the main process runs the shared verifier as a
-      // compatibility fallback. A result with no email/phone is marked
-      // verification_required: false so the workflow does not call the
-      // verifier with an empty input (PRD FR-14).
-      verification_required: false,
-      verification_performed: true,
-      results: await Promise.all(
-        results.map(async (r) => {
-          const emails = r.data?.emails;
-          const phones = r.data?.phones;
-          const hasContacts =
-            r.success &&
-            ((emails && emails.length > 0) || (phones && phones.length > 0));
-          const verification = hasContacts
-            ? await ToolExecutor.verifyExtractionContacts(r.url, emails, phones)
-            : undefined;
-          return {
-            url: r.url,
-            success: r.success,
-            emails,
-            phones,
-            address: r.data?.address,
-            socialLinks: r.data?.socialLinks,
-            verification,
-            error: r.error,
-          };
-        })
-      ),
+      summary: formattedSummary + partialNote + verifyNextStep,
+      ...(anyContacts
+        ? {
+            verification_required: true,
+            verification_tool: "verify_contact_info",
+          }
+        : { verification_required: false }),
+      results: formattedResults,
     };
   }
 

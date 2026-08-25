@@ -148,6 +148,10 @@ const TOOL_SEARCH_HINTS: ReadonlyMap<string, readonly string[]> = new Map([
       "invalid contacts",
       "disposable email",
       "phone region",
+      "get contact",
+      "contact method",
+      "extract email",
+      "extract phone",
     ],
   ],
 ]);
