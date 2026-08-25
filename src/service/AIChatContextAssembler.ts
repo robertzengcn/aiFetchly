@@ -17,6 +17,7 @@ import { AIFetchlyContextLoader } from "@/service/aifetchlyConfig/AIFetchlyConte
 import { buildAvailableAgentsBlock } from "@/service/aifetchlyConfig/availableAgentsBlock";
 import { buildBuiltInToolCapabilitiesSection } from "@/service/BuiltInToolCapabilitiesPromptSection";
 import { PromptSkillInvocationModule } from "@/modules/PromptSkillInvocationModule";
+import { buildPromptSkillCatalogBlock } from "@/service/PromptSkillCatalogPresenter";
 import { augmentContentWithGeneratedImages } from "@/service/AIChatGeneratedImageContextService";
 import path from "node:path";
 import os from "node:os";
@@ -250,6 +251,26 @@ export class AIChatContextAssembler {
     } catch (err) {
       log.error(
         "[ai-chat-context] skill installation routing policy injection failed:",
+        err
+      );
+    }
+
+    // Available prompt skills catalog (design §10.3, NFR-09): metadata-only
+    // discovery so the model knows what use_skill can invoke. Instruction
+    // bodies are NEVER injected here — they load lazily after invocation.
+    try {
+      const workspaceResolved = await new WorkspaceResolver().resolve(
+        input.conversationId
+      );
+      const catalogBlock = buildPromptSkillCatalogBlock(
+        workspaceResolved ? { workspaceId: workspaceResolved.workspaceId } : {}
+      );
+      if (catalogBlock.length > 0) {
+        messages.push({ role: "system", content: catalogBlock });
+      }
+    } catch (err) {
+      log.error(
+        "[ai-chat-context] prompt skill catalog injection failed:",
         err
       );
     }
