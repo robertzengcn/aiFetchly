@@ -639,6 +639,56 @@ describe("AiChatV2 generated-image editing wiring", () => {
     ]);
   });
 
+  it("discards a pending chooser send when the active conversation switches", async () => {
+    await mockHistoryWithImages(2);
+
+    const wrapper = mountChat();
+    await flushPromises();
+    await wrapper.setProps({
+      openConversationRequest: { id: 1, conversationId: "conv-A" },
+    });
+    await flushPromises();
+
+    // Open the chooser: ambiguous singular wording over multiple images.
+    await wrapper
+      .find('[data-testid="composer-send-singular"]')
+      .trigger("click");
+    await flushPromises();
+    expect(streamChatV2Message).not.toHaveBeenCalled();
+    expect(
+      wrapper.find('[data-testid="ai-chat-generated-chooser"]').exists()
+    ).toBe(true);
+
+    // Switch to conv-B while the chooser is still up.
+    await wrapper.setProps({
+      openConversationRequest: { id: 2, conversationId: "conv-B" },
+    });
+    await flushPromises();
+
+    // The chooser closed with the switch and conv-B's tray stayed empty.
+    expect(
+      wrapper.find('[data-testid="ai-chat-generated-chooser"]').exists()
+    ).toBe(false);
+    expect(wrapper.find('[data-testid="tray-count"]').text()).toBe("0");
+    expect(streamChatV2Message).not.toHaveBeenCalled();
+
+    // Defense in depth: even a late click on a stale candidate must not
+    // replay conv-A's send into the newly active conversation.
+    const chatVm = wrapper.vm as unknown as {
+      chooseAmbiguityCandidate?: (
+        view: GeneratedImageReferenceView
+      ) => void;
+    };
+    expect(typeof chatVm.chooseAmbiguityCandidate).toBe("function");
+    chatVm.chooseAmbiguityCandidate?.({
+      reference: { messageId: "m1", imageIndex: 1 },
+      fileName: "image-2.png",
+    });
+    await flushPromises();
+    expect(streamChatV2Message).not.toHaveBeenCalled();
+    expect(wrapper.find('[data-testid="tray-count"]').text()).toBe("0");
+  });
+
   it("cancel keeps the selection untouched and does not stream", async () => {
     await mockHistoryWithImages(2);
 

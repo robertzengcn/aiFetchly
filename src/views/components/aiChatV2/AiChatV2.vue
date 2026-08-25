@@ -488,10 +488,12 @@
     />
 
     <!-- Ambiguity chooser: several generated images could match the request;
-         the user picks one to proceed as the sole reference. -->
+         the user picks one to proceed as the sole reference. Persistent so an
+         outside click cannot dismiss it and strand a stale pending send. -->
     <v-dialog
       v-model="showGeneratedImageChooser"
       max-width="420"
+      persistent
       data-testid="ai-chat-generated-chooser"
     >
       <v-card>
@@ -1291,6 +1293,8 @@ function onReorderGeneratedImages(
 
 // Ambiguity chooser / batch confirmation / error toast state.
 interface PendingGeneratedImageSend {
+  /** Draft key of the conversation that created this pending send. */
+  readonly conversationId: string;
   readonly text: string;
   readonly files: File[];
   readonly options?: {
@@ -1319,10 +1323,18 @@ function chooseAmbiguityCandidate(view: GeneratedImageReferenceView): void {
   pendingGeneratedImageSend.value = null;
   ambiguityCandidates.value = [];
   showGeneratedImageChooser.value = false;
+  if (
+    !pending ||
+    pending.conversationId !== draftKeyFor(activeConversationId.value)
+  ) {
+    // The pending send belongs to a different conversation (stale chooser
+    // state); discard it instead of replaying it into the active one.
+    return;
+  }
   setGeneratedImageDraft(draftKeyFor(activeConversationId.value), [
     view.reference,
   ]);
-  if (pending) void onSend(pending.text, pending.files, pending.options);
+  void onSend(pending.text, pending.files, pending.options);
 }
 
 function cancelAmbiguityChooser(): void {
@@ -1918,6 +1930,9 @@ function onWorkspaceApproved(
 watch(activeConversationId, (id, previousId) => {
   if (id !== previousId) {
     resetScheduledLoopViewState();
+    // Drop any stale ambiguity-chooser / pending send from the previous
+    // conversation so it can never replay into the newly active one.
+    cancelAmbiguityChooser();
   }
   void refreshWorkspace(id);
   void refreshActiveGoal();
@@ -3763,7 +3778,12 @@ function runGeneratedImagePreflight(
       explicitSelection: [],
     });
     if (result.kind === "ambiguous") {
-      pendingGeneratedImageSend.value = { text, files, options };
+      pendingGeneratedImageSend.value = {
+        conversationId: draftKeyFor(activeConversationId.value),
+        text,
+        files,
+        options,
+      };
       ambiguityCandidates.value = result.candidates.map((candidate) => ({
         reference: candidate.reference,
         fileName: candidate.fileName,
@@ -3786,7 +3806,12 @@ function runGeneratedImagePreflight(
       return null;
     }
     if (result.kind === "batch_confirmation") {
-      pendingGeneratedImageSend.value = { text, files, options };
+      pendingGeneratedImageSend.value = {
+        conversationId: draftKeyFor(activeConversationId.value),
+        text,
+        files,
+        options,
+      };
       batchConfirmReferences.value = [...result.references];
       showBatchConfirmDialog.value = true;
       return null;
