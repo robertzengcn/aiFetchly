@@ -254,12 +254,14 @@ export class PortableWorkspaceMemorySyncCoordinator {
     }
 
     // Step 1–3: resolve the trusted canonical root + legacy scope in the
-    // MAIN process (never trust the worker's root beyond lookup).
-    const scope = await this.scopeResolver.resolveForWorkspace({
-      workspaceKey: this.legacyKeyForRoot(input.workspaceRoot),
-      canonicalRootPath: input.workspaceRoot,
-      displayName: "",
-    });
+    // MAIN process (never trust the worker's root beyond lookup). Use
+    // resolveFromRoot so the workspace key is derived through
+    // WorkspaceKeyService (realpath + git root detection) — matching the key
+    // the service produced when enabling portable memory. The previous
+    // approach (raw sha256 of the root) produced a different key when
+    // realpath canonicalization applied, so the coordinator resolved a
+    // different scope (portableEnabled=false) and skipped the import.
+    const scope = await this.scopeResolver.resolveFromRoot(input.workspaceRoot);
     if (!scope.portableEnabled) {
       // Portable memory disabled: no import. Diagnostics-only pass (§14.2.6)
       // is deferred to the enable flow's initial scan.
@@ -603,20 +605,6 @@ export class PortableWorkspaceMemorySyncCoordinator {
       pendingReview: false,
     });
     return { conflicted: false };
-  }
-
-  /** Legacy path-derived key for a root — mirrors WorkspaceKeyService. */
-  private legacyKeyForRoot(workspaceRoot: string): string {
-    // The watch manager's root is already canonical (resolved at acquire).
-    // Reuse the shared hashing via a throwaway import-free computation.
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const crypto = require("crypto") as typeof import("crypto");
-    const digest = crypto
-      .createHash("sha256")
-      .update(workspaceRoot)
-      .digest("hex")
-      .slice(0, 32);
-    return `ws_${digest}`;
   }
 }
 

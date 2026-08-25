@@ -73,6 +73,7 @@ function makeContextResolver(): WorkspaceMemoryContextResolver {
 function makeScopeResolver(): WorkspaceMemoryScopeResolver {
   return {
     resolveForWorkspace: vi.fn().mockResolvedValue(SCOPE),
+    resolveFromRoot: vi.fn().mockResolvedValue(SCOPE),
   } as unknown as WorkspaceMemoryScopeResolver;
 }
 

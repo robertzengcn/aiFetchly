@@ -30,7 +30,9 @@ export class WorkspaceMemoryScopeResolver {
     conversationId: string
   ): Promise<WorkspaceMemoryScopeContext | null> {
     if (!conversationId) return null;
-    const resolved = await this.workspaceResolver.resolveWithKey(conversationId);
+    const resolved = await this.workspaceResolver.resolveWithKey(
+      conversationId
+    );
     if (!resolved) return null;
     return this.resolveForWorkspace(resolved);
   }
@@ -55,9 +57,35 @@ export class WorkspaceMemoryScopeResolver {
     return ctx;
   }
 
+  /**
+   * Resolve the scope from a trusted workspace ROOT PATH only (used by the
+   * sync coordinator for watcher snapshots). The key is derived through
+   * WorkspaceKeyService (realpath + git root detection), matching the key
+   * produced by WorkspaceResolver.resolveWithKey — so the coordinator and the
+   * service share the same scope. The previous approach (raw sha256 of the
+   * root path) produced a different key than WorkspaceKeyService when realpath
+   * or git-root canonicalization applied.
+   */
+  async resolveFromRoot(
+    workspaceRoot: string,
+    displayName?: string
+  ): Promise<WorkspaceMemoryScopeContext> {
+    const keyResolution = await this.workspaceResolver.resolveKeyPublic(
+      workspaceRoot
+    );
+    return this.resolveForWorkspace({
+      workspaceKey: keyResolution.workspaceKey,
+      canonicalRootPath: keyResolution.canonicalRootPath,
+      displayName: displayName ?? keyResolution.displayName,
+    });
+  }
+
   /** Re-read scope policy after an enable/disable/policy update. */
   async refreshContext(
-    ctx: Pick<WorkspaceMemoryScopeContext, "workspaceKey" | "workspaceRoot" | "displayName">
+    ctx: Pick<
+      WorkspaceMemoryScopeContext,
+      "workspaceKey" | "workspaceRoot" | "displayName"
+    >
   ): Promise<WorkspaceMemoryScopeContext | null> {
     return this.resolveForWorkspace({
       workspaceKey: ctx.workspaceKey,

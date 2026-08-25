@@ -615,16 +615,31 @@ test("AC-005/AC-011: isolation — second workspace sees no portable memory from
     });
     try {
       await openChat(appB);
+      await ensureConversation(appB);
       const setupB = await setupWorkspace(appB, rootB);
+      // Validate setup succeeded before casting.
+      expect(typeof setupB).toBe("object");
+      expect(setupB).not.toEqual(expect.any(String));
       const convB = (setupB as { conversationId: string }).conversationId;
-      await portableInvoke(appB, "ai:portable-workspace-memory:enable", {
-        conversationId: convB,
-        defaultStorageMode: "portable-local",
-        importPolicy: "automatic",
-        exportScope: "none",
-        visibility: "local",
-        installBridges: [],
-      });
+
+      // Create the memory directory in workspace B (enable does this, but
+      // verify it exists to prove B has its own independent portable surface).
+      const enableResp = await portableInvoke(
+        appB,
+        "ai:portable-workspace-memory:enable",
+        {
+          conversationId: convB,
+          defaultStorageMode: "portable-local",
+          importPolicy: "automatic",
+          exportScope: "none",
+          visibility: "local",
+          installBridges: [],
+        }
+      );
+      expect(enableResp.status, enableResp.msg ?? "").toBe(true);
+      // Verify B has its own memory directory (independent from A).
+      expect(fs.existsSync(memoryDir(rootB))).toBe(true);
+
       const listResp = await portableInvoke(
         appB,
         "ai:portable-workspace-memory:list",
