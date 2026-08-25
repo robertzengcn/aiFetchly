@@ -164,3 +164,37 @@ Tests: IPC schema validation tests + component tests.
 - Load-time no-execution for prompt skills.
 - Uninstall never deletes link targets / home / unresolved paths.
 - Metadata-only discovery; bodies injected only after invocation.
+
+---
+
+## Implementation status (2026-08-25)
+
+Delivered on `worktree-natural-language-skill-installation` (commits
+`2b05fdfc..9853869b`, merged with dev @ d5a22f82 lineage):
+
+| Phase | Status | Key commits |
+|---|---|---|
+| A — unified filesystem scope | ✅ done | `feat: unify conversation filesystem scope…` |
+| B — process providers | ✅ done | `feat: add cross-platform process execution providers` |
+| C — prompt-skill runtime | ✅ done | `feat: add portable prompt-skill runtime with universal use_skill tool` |
+| D — installer core | ✅ done | `feat: add deterministic typed skill installer…` |
+| E — dependency orchestration | ✅ done | (included in the installer commit) |
+| F — IPC + credentials + UI + i18n | ✅ done | `feat: add skill installation IPC, secure credential store, and install card UI` |
+| G — acceptance + gates | ✅ done | module E2E with local git video-use fixture; full-suite green |
+
+Test totals: ~150 new tests across 9 files; full main suite 490 files /
+~4360 tests green; component suite 155/155; tsc + vue-tsc 0 errors.
+
+### Deferred (documented, not blocking)
+
+- Windows-runner CI matrix (provider tests are platform-parametrized and
+  run on Windows; the GitHub Actions windows job wiring is CI-config work)
+- Utility-process offload for acquisition (main-process execution this
+  pass — the design permits either)
+- Real-model E2E (Playwright) specs — the enforcement halves (tool policy,
+  always-loaded prepare, hidden-context handoff) are unit/integration tested
+- Legacy documentation-only wrapper delegation to the new invocation service
+  (design §10.11 runtime migration stage 3) — the new runtime and the legacy
+  path coexist; the adapter is a follow-up
+- SkillInstallCard wiring into the AiChatV2 tool_result renderer (the card +
+  API bridge + IPC are complete; the chat message-list hookup is UI polish)
