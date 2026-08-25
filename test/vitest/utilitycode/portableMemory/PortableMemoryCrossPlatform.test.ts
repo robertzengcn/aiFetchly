@@ -183,3 +183,86 @@ describe("Testing matrix gaps (PRD §21 / FR-064)", () => {
     expect(serialized).toContain("alert");
   });
 });
+
+describe("Testing matrix: external rename and atomic rename (PRD §21.2)", () => {
+  it("handles an externally renamed record file (old path gone, new path present)", async () => {
+    const store = new PortableWorkspaceMemoryFileStore(root);
+    const format = new PortableWorkspaceMemoryFormat();
+    const doc = format.buildDocument({
+      id: VALID_ID,
+      type: "decision",
+      status: "active",
+      confidence: 90,
+      visibility: "local",
+      createdAt: new Date("2026-08-22T08:00:00.000Z"),
+      updatedAt: new Date("2026-08-22T08:00:00.000Z"),
+      createdBy: "user",
+      title: "Renamed",
+      content: "was renamed externally",
+    });
+    await store.writeRecord(VALID_ID, format.serialize(doc));
+
+    // External rename: old file → new name (different id).
+    const oldPath = path.join(store.memoryDir(), `${VALID_ID}.md`);
+    const newId = "wmem-018f2f94-83c7-7a2e-9fc1-849880ba10c0";
+    const newPath = path.join(store.memoryDir(), `${newId}.md`);
+    const content = fs.readFileSync(oldPath, "utf8");
+    const renamed = content.replace(VALID_ID, newId);
+    fs.writeFileSync(newPath, renamed);
+    fs.unlinkSync(oldPath);
+
+    // The store can read the new file; the old path is gone.
+    expect(await store.readRecord(VALID_ID)).toBeNull();
+    const read = await store.readRecord(newId);
+    expect(read?.content).toContain("was renamed externally");
+  });
+
+  it("handles atomic rename (temp → final) without race", async () => {
+    const store = new PortableWorkspaceMemoryFileStore(root);
+    const format = new PortableWorkspaceMemoryFormat();
+    const doc = format.buildDocument({
+      id: VALID_ID,
+      type: "decision",
+      status: "active",
+      confidence: 90,
+      visibility: "local",
+      createdAt: new Date("2026-08-22T08:00:00.000Z"),
+      updatedAt: new Date("2026-08-22T08:00:00.000Z"),
+      createdBy: "user",
+      title: "Atomic",
+      content: "written atomically",
+    });
+    // write-file-atomic does temp+rename internally.
+    const result = await store.writeRecord(VALID_ID, format.serialize(doc));
+    expect(result.contentHash).toMatch(/^[0-9a-f]{64}$/);
+    const read = await store.readRecord(VALID_ID);
+    expect(read?.content).toContain("written atomically");
+  });
+});
+
+describe("Testing matrix: export retry without duplicates (PRD §19.2)", () => {
+  it("export then re-export does not create duplicate files", async () => {
+    const store = new PortableWorkspaceMemoryFileStore(root);
+    const format = new PortableWorkspaceMemoryFormat();
+    const doc = format.buildDocument({
+      id: VALID_ID,
+      type: "decision",
+      status: "active",
+      confidence: 90,
+      visibility: "local",
+      createdAt: new Date("2026-08-22T08:00:00.000Z"),
+      updatedAt: new Date("2026-08-22T08:00:00.000Z"),
+      createdBy: "user",
+      title: "Export retry",
+      content: "exported twice",
+    });
+    // First export.
+    await store.writeRecord(VALID_ID, format.serialize(doc));
+    // Second export (same id, same content — should overwrite, not duplicate).
+    await store.writeRecord(VALID_ID, format.serialize(doc));
+
+    // Only one file exists.
+    const files = fs.readdirSync(store.memoryDir()).filter((f) => f.endsWith(".md"));
+    expect(files.filter((f) => f === `${VALID_ID}.md`)).toHaveLength(1);
+  });
+});

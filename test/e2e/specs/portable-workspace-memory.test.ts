@@ -318,3 +318,281 @@ test("AC-010: AGENTS.md bridge preserves unrelated user content", async ({ page:
     await fakeAi.stop();
   }
 });
+
+test("AC-002/AC-003: external edit is imported; invalid edit retains last valid", async ({ page: _page }, testInfo) => {
+  test.setTimeout(240_000);
+  const fakeAi = await startFakeOpenAiServer();
+  await fakeAi.setScenario("stream-text");
+  const root = createTemporaryRoot({
+    testId: testInfo.titlePath.join(" "),
+    workerIndex: testInfo.workerIndex,
+  });
+
+  try {
+    writeStateManifest(root, {
+      authState: "authenticated",
+      aiState: "local-enabled",
+      fakeAiBaseUrl: fakeAi.providerBaseUrl,
+      workspacePath: root.workspacePath,
+    });
+    const app = await launchAiFetchly({
+      testRoot: root,
+      fakeAiBaseUrl: fakeAi.providerBaseUrl,
+    });
+    try {
+      await openChat(app);
+      const setup = await setupWorkspace(app, root);
+      const { conversationId } = setup as { conversationId: string };
+
+      await portableInvoke(app, "ai:portable-workspace-memory:enable", {
+        conversationId,
+        defaultStorageMode: "portable-local",
+        importPolicy: "automatic",
+        exportScope: "none",
+        visibility: "local",
+        installBridges: [],
+      });
+      const createResp = await portableInvoke(
+        app,
+        "ai:portable-workspace-memory:create",
+        {
+          conversationId,
+          type: "decision",
+          title: "External edit target",
+          content: "original content",
+          confidence: 90,
+          visibility: "local",
+        }
+      );
+      const memoryId = (createResp.data as { memoryId: string }).memoryId;
+      const recordPath = path.join(memoryDir(root), `${memoryId}.md`);
+
+      // AC-002: external edit — modify the file externally.
+      const content = fs.readFileSync(recordPath, "utf8");
+      const edited = content.replace("original content", "externally edited content");
+      fs.writeFileSync(recordPath, edited);
+
+      // Trigger a rescan so AiFetchly picks up the external edit.
+      await portableInvoke(app, "ai:portable-workspace-memory:rescan", {
+        conversationId,
+      });
+      // Give the coordinator a moment to process.
+      await new Promise((r) => setTimeout(r, 1000));
+
+      // Verify the projection reflects the external edit.
+      const listResp = await portableInvoke(
+        app,
+        "ai:portable-workspace-memory:list",
+        { conversationId }
+      );
+      const rows = listResp.data as Array<{ memoryId: string; content: string }>;
+      const row = rows.find((r) => r.memoryId === memoryId);
+      expect(row?.content).toContain("externally edited content");
+
+      // AC-003: make the file invalid (secret-like).
+      const invalidContent = content.replace(
+        "original content",
+        "sk-abcdefghijklmnopsecretkey"
+      );
+      fs.writeFileSync(recordPath, invalidContent);
+      await portableInvoke(app, "ai:portable-workspace-memory:rescan", {
+        conversationId,
+      });
+      await new Promise((r) => setTimeout(r, 1000));
+
+      // The invalid version must NOT enter retrieval; the last valid projection
+      // is retained. Check diagnostics.
+      const diagsResp = await portableInvoke(
+        app,
+        "ai:portable-workspace-memory:diagnostics:list",
+        { conversationId }
+      );
+      const diags = diagsResp.data as Array<{ code: string; relativePath: string }>;
+      expect(diags.some((d) => d.code === "memory-secret-rejected")).toBe(true);
+    } finally {
+      await closeApp(app);
+    }
+  } finally {
+    await fakeAi.stop();
+  }
+});
+
+test("AC-007: concurrent edit protection — save does not overwrite external bytes", async ({ page: _page }, testInfo) => {
+  test.setTimeout(240_000);
+  const fakeAi = await startFakeOpenAiServer();
+  await fakeAi.setScenario("stream-text");
+  const root = createTemporaryRoot({
+    testId: testInfo.titlePath.join(" "),
+    workerIndex: testInfo.workerIndex,
+  });
+
+  try {
+    writeStateManifest(root, {
+      authState: "authenticated",
+      aiState: "local-enabled",
+      fakeAiBaseUrl: fakeAi.providerBaseUrl,
+      workspacePath: root.workspacePath,
+    });
+    const app = await launchAiFetchly({
+      testRoot: root,
+      fakeAiBaseUrl: fakeAi.providerBaseUrl,
+    });
+    try {
+      await openChat(app);
+      const setup = await setupWorkspace(app, root);
+      const { conversationId } = setup as { conversationId: string };
+
+      await portableInvoke(app, "ai:portable-workspace-memory:enable", {
+        conversationId,
+        defaultStorageMode: "portable-local",
+        importPolicy: "automatic",
+        exportScope: "none",
+        visibility: "local",
+        installBridges: [],
+      });
+      const createResp = await portableInvoke(
+        app,
+        "ai:portable-workspace-memory:create",
+        {
+          conversationId,
+          type: "decision",
+          title: "Concurrent edit test",
+          content: "original",
+          confidence: 90,
+          visibility: "local",
+        }
+      );
+      const memoryId = (createResp.data as { memoryId: string }).memoryId;
+      const recordPath = path.join(memoryDir(root), `${memoryId}.md`);
+
+      // Get the expected hash (the file's current hash).
+      const stateResp = await portableInvoke(
+        app,
+        "ai:portable-workspace-memory:get-state",
+        { conversationId, memoryId }
+      );
+      const expectedHash = (stateResp.data as { lastValidHash?: string })
+        .lastValidHash;
+
+      // External edit between read and write.
+      const content = fs.readFileSync(recordPath, "utf8");
+      fs.writeFileSync(recordPath, content.replace("original", "external racing edit"));
+
+      // AiFetchly tries to save with the stale expectedHash → conflict.
+      const updateResp = await portableInvoke(
+        app,
+        "ai:portable-workspace-memory:update",
+        {
+          conversationId,
+          memoryId,
+          type: "decision",
+          title: "App version",
+          content: "app version",
+          confidence: 90,
+          status: "active",
+          visibility: "local",
+          expectedHash,
+        }
+      );
+      expect(updateResp.status).toBe(false);
+
+      // AC-007: external bytes are preserved (not overwritten).
+      const after = fs.readFileSync(recordPath, "utf8");
+      expect(after).toContain("external racing edit");
+      expect(after).not.toContain("app version");
+    } finally {
+      await closeApp(app);
+    }
+  } finally {
+    await fakeAi.stop();
+  }
+});
+
+test("AC-005/AC-011: isolation — second workspace sees no portable memory from the first", async ({ page: _page }, testInfo) => {
+  test.setTimeout(240_000);
+  const fakeAi = await startFakeOpenAiServer();
+  await fakeAi.setScenario("stream-text");
+  const rootA = createTemporaryRoot({
+    testId: `${testInfo.titlePath.join(" ")}-A`,
+    workerIndex: testInfo.workerIndex,
+  });
+  const rootB = createTemporaryRoot({
+    testId: `${testInfo.titlePath.join(" ")}-B`,
+    workerIndex: testInfo.workerIndex,
+  });
+
+  try {
+    // Session 1: workspace A with a portable record.
+    writeStateManifest(rootA, {
+      authState: "authenticated",
+      aiState: "local-enabled",
+      fakeAiBaseUrl: fakeAi.providerBaseUrl,
+      workspacePath: rootA.workspacePath,
+    });
+    const appA = await launchAiFetchly({
+      testRoot: rootA,
+      fakeAiBaseUrl: fakeAi.providerBaseUrl,
+    });
+    try {
+      await openChat(appA);
+      const setupA = await setupWorkspace(appA, rootA);
+      const convA = (setupA as { conversationId: string }).conversationId;
+      await portableInvoke(appA, "ai:portable-workspace-memory:enable", {
+        conversationId: convA,
+        defaultStorageMode: "portable-local",
+        importPolicy: "automatic",
+        exportScope: "none",
+        visibility: "local",
+        installBridges: [],
+      });
+      await portableInvoke(appA, "ai:portable-workspace-memory:create", {
+        conversationId: convA,
+        type: "decision",
+        title: "Workspace A only",
+        content: "belongs to A",
+        confidence: 90,
+        visibility: "local",
+      });
+      expect(fs.existsSync(memoryDir(rootA))).toBe(true);
+    } finally {
+      await closeApp(appA);
+    }
+
+    // Session 2: workspace B — must NOT see A's portable records.
+    writeStateManifest(rootB, {
+      authState: "authenticated",
+      aiState: "local-enabled",
+      fakeAiBaseUrl: fakeAi.providerBaseUrl,
+      workspacePath: rootB.workspacePath,
+    });
+    const appB = await launchAiFetchly({
+      testRoot: rootB,
+      fakeAiBaseUrl: fakeAi.providerBaseUrl,
+    });
+    try {
+      await openChat(appB);
+      const setupB = await setupWorkspace(appB, rootB);
+      const convB = (setupB as { conversationId: string }).conversationId;
+      await portableInvoke(appB, "ai:portable-workspace-memory:enable", {
+        conversationId: convB,
+        defaultStorageMode: "portable-local",
+        importPolicy: "automatic",
+        exportScope: "none",
+        visibility: "local",
+        installBridges: [],
+      });
+      const listResp = await portableInvoke(
+        appB,
+        "ai:portable-workspace-memory:list",
+        { conversationId: convB }
+      );
+      const rows = listResp.data as Array<{ title: string }>;
+      // AC-005: no memory from workspace A appears in workspace B.
+      expect(rows.some((r) => r.title === "Workspace A only")).toBe(false);
+    } finally {
+      await closeApp(appB);
+    }
+  } finally {
+    await fakeAi.stop();
+  }
+});

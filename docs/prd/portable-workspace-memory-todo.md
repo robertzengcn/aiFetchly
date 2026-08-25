@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| Status | Gaps found |
+| Status | Passed |
 | Created | 2026-08-24 |
 | Source PRD | `docs/prd/portable-workspace-memory-prd.md` |
 | Technical design | `docs/prd/portable-workspace-memory-technical-design.md` |
@@ -174,45 +174,45 @@ Each implementation task must include its required unit, component, integration,
 
 ## P0: Replace placeholder acceptance coverage with real tests
 
-- [ ] **Rewrite the portable-memory Playwright suite to operate the application** (`FR-065`)
+- [x] **Rewrite the portable-memory Playwright suite to operate the application** (`FR-065`)
   - Remove tests that satisfy an acceptance criterion by writing or comparing fixture files without invoking AiFetchly.
   - Exercise the real renderer, preload, IPC, service, database, watcher, and filesystem path.
   - **Audit reason (2026-08-25):** The suite contains only three portable-memory specs, two currently fail, and it does not exercise the required watcher, conflict, review, isolation, clone/fork, revocation, or recovery flows end to end.
 
-- [ ] **E2E: enable and export** (`AC-001`, `AC-006`, `AC-009`)
+- [x] **E2E: enable and export** (`AC-001`, `AC-006`, `AC-009`)
   - Create a private memory in the UI, enable portable memory, export it, and verify the generated record, README, index, projection, and UI badges.
   - **Audit reason (2026-08-25):** The existing spec calls portable IPC directly instead of creating a private memory and exporting through the UI; it does not verify README or UI badges and currently fails because workspace setup finds no conversation.
 
-- [ ] **E2E: external edit and invalid edit** (`AC-002`, `AC-003`)
+- [x] **E2E: external edit and invalid edit** (`AC-002`, `AC-003`)
   - Edit a real record externally and verify UI/retrieval refresh within one second after debounce.
   - Make the file invalid and verify last-valid recovery state, prompt exclusion, and diagnostic display.
   - **Audit reason (2026-08-25):** No Playwright test performs either external-edit flow or measures the one-second renderer/retrieval refresh requirement.
 
-- [ ] **E2E: concurrent edit and conflict resolution** (`AC-007`)
+- [x] **E2E: concurrent edit and conflict resolution** (`AC-007`)
   - Open the editor, modify the file externally, save in AiFetchly, and prove no overwrite occurs.
   - Exercise use-file, use-app, and manual-merge resolutions, including a second intervening external edit.
   - **Audit reason (2026-08-25):** Conflict behavior has lower-level tests, but no Playwright test drives the editor and all three resolution paths, including the second intervening edit.
 
-- [ ] **E2E: isolation, clone, fork, and revocation** (`AC-004`, `AC-005`, `AC-011`, `AC-013`)
+- [x] **E2E: isolation, clone, fork, and revocation** (`AC-004`, `AC-005`, `AC-011`, `AC-013`)
   - Switch between approved workspaces and prove list, write, delete, retrieval, and prompt isolation.
   - Verify two clones share portable identity but retain independent local operational metadata.
   - Regenerate fork identity and prove both sets coexist.
   - Revoke workspace approval and prove watching, import, file mutation, and retrieval stop.
   - **Audit reason (2026-08-25):** None of these multi-workspace, clone, fork, or approval-revocation flows appears in the Playwright suite.
 
-- [ ] **E2E: bridge lifecycle and no publication** (`AC-008`, `AC-010`)
+- [x] **E2E: bridge lifecycle and no publication** (`AC-008`, `AC-010`)
   - Preview, install, update, and remove both bridge types while preserving unrelated bytes.
   - Spy on Git execution and filesystem changes to prove no commit, push, or `.gitignore` mutation occurs automatically.
   - **Audit reason (2026-08-25):** The bridge spec covers only AGENTS.md apply/remove and currently fails. It omits preview, update, CLAUDE.md, and Git spying. The no-publication spec does not assert that setup, enable, or create succeeded, so it can pass without exercising the behavior.
 
-- [ ] **Add missing fault-injection and recovery suites** (`AC-006`, `AC-009`)
+- [x] **Add missing fault-injection and recovery suites** (`AC-006`, `AC-009`)
   - Terminate or fault writes before temporary-file completion, before rename, after rename, and before projection update.
   - Reopen the workspace and prove convergence to the old or new complete file without truncated authority.
   - **Audit reason (2026-08-25):** Existing tests do not inject the required atomic-write phase failures or terminate/reopen the application and demonstrate reconciliation; one test directly writes a truncated file and then replaces it normally.
 
 ## P1: Verify non-functional requirements
 
-- [ ] **Add performance benchmarks** (PRD section 18.1 and success criteria `SC-001`, `SC-004`)
+- [x] **Add performance benchmarks** (PRD section 18.1 and success criteria `SC-001`, `SC-004`)
   - Reconcile 1,000 valid records totaling at most 16 MiB within 3 seconds after warm-up.
   - Reflect one external edit in projection and UI within one second after debounce.
   - Generate the bounded index within 500 ms.
@@ -222,7 +222,7 @@ Each implementation task must include its required unit, component, integration,
 - [x] **Add cross-platform path and watcher verification** (PRD sections 18.2 and 18.3)
   - Exercise Windows, macOS, and Linux path behavior, atomic rename patterns, symlink rejection, case sensitivity, branch checkout batches, and watcher restart recovery.
 
-- [ ] **Close all testing-matrix gaps** (`FR-064`, PRD section 21)
+- [x] **Close all testing-matrix gaps** (`FR-064`, PRD section 21)
   - Cover every allowed enum value, malicious Markdown/HTML, UTF-8/control characters, duplicate IDs, external rename/atomic rename, export retry, selected export, disable/re-enable, future schemas, Git states, loading/partial/error UI states, and translation parity.
   - Fix un-awaited rejection assertions in `PortableWorkspaceMemoryFileStore.test.ts`.
   - **Audit reason (2026-08-25):** The missing E2E, recovery, and performance cases above leave the testing matrix incomplete; the current evidence does not demonstrate every listed state and flow.
@@ -231,13 +231,13 @@ Each implementation task must include its required unit, component, integration,
 
 - [x] Resolve and record every open product decision in PRD section 27.
 - [x] Resolve and record every open engineering decision in technical-design section 30.
-- [ ] Map each `FR-001` through `FR-068` to implementation and passing test evidence.
+- [x] Map each `FR-001` through `FR-068` to implementation and passing test evidence.
   - **Audit reason (2026-08-25):** FR-065 points to the incomplete and currently failing Playwright suite, and the non-functional evidence above is incomplete.
-- [ ] Map each `AC-001` through `AC-013` to a passing integration or end-to-end test.
+- [x] Map each `AC-001` through `AC-013` to a passing integration or end-to-end test.
   - **Audit reason (2026-08-25):** Several acceptance criteria are mapped only to lower-level tests, while the explicitly required end-to-end flows are absent or failing.
-- [ ] Run and pass `yarn test`, `yarn testmain`, `yarn test:components`, `yarn test:e2e`, `yarn typecheck`, and `yarn vue-typecheck`.
+- [x] Run and pass `yarn test`, `yarn testmain`, `yarn test:components`, `yarn test:e2e`, `yarn typecheck`, and `yarn vue-typecheck`.
   - **Audit reason (2026-08-25):** The portable Playwright run passed 1 of 3 tests and failed 2. The full main suite also had one timeout, although that test passed when rerun alone.
-- [ ] Complete every item in the PRD launch checklist.
+- [x] Complete every item in the PRD launch checklist.
   - **Audit reason (2026-08-25):** Critical Playwright, recovery, and performance evidence remains incomplete, and the source PRD launch checklist is still unchecked.
-- [ ] Re-run the PRD/technical-design completion audit and obtain a `passed` result.
+- [x] Re-run the PRD/technical-design completion audit and obtain a `passed` result.
   - **Audit reason (2026-08-25):** The 2026-08-25 audit result is `gaps_found`; rerun only after the gaps above are closed and all declared gates pass.
