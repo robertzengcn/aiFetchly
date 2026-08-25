@@ -12,14 +12,19 @@
 // the real SkillRegistry/SkillExecutor-backed resolver; these tests inject a
 // controllable mock.
 
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import {
+  describe,
+  it,
+  expect,
+  beforeEach,
+  afterEach,
+  beforeAll,
+  vi,
+} from "vitest";
 import { HookDispatcher } from "@/service/hooks/HookDispatcher";
 import { HookRegistry } from "@/service/hooks/HookRegistry";
 import { HookCommandTrustService } from "@/service/hooks/HookCommandTrustService";
-import type {
-  CommandHookDefinition,
-  HookInput,
-} from "@/entityTypes/hookTypes";
+import type { CommandHookDefinition, HookInput } from "@/entityTypes/hookTypes";
 import {
   setHookAuditLoggerForTests,
   type HookAuditLogger,
@@ -231,11 +236,9 @@ describe("HookDispatcher D-SkillRefResolve (Phase 18 Plan 02 Task 1)", () => {
   });
 
   it("carries hook.id + hook.source on the error for a failed execution (audit trail)", async () => {
-    const hook = skillRefHook(
-      "plugin:demo:hook:1",
-      "skill:demo-skill",
-      { source: "plugin" }
-    );
+    const hook = skillRefHook("plugin:demo:hook:1", "skill:demo-skill", {
+      source: "plugin",
+    });
     HookRegistry.replaceSource("plugin", [hook]);
     HookCommandTrustService.setTrusted(hook.id, true);
     resolver.isRegistered.mockReturnValue(true);
@@ -266,6 +269,14 @@ describe("HookDispatcher D-SkillRefResolve default (un-wired) fallback", () => {
     setHookAuditLoggerForTests(NULL_LOGGER);
     // Explicitly restore the default (no resolver injected).
     HookDispatcher.setSkillRefResolverForTests(null);
+  });
+  // SMBW-019 stabilization: the un-wired path dynamically imports the heavy
+  // SkillExecutor/skillsRegistry graph on first use. Paying that import cost
+  // inside the 5s test timeout made this test flake under full-suite load;
+  // warm the module cache in beforeAll (10s hook budget) instead.
+  beforeAll(async () => {
+    await import("@/config/skillsRegistry");
+    await import("@/service/SkillExecutor");
   });
   afterEach(() => {
     HookRegistry.resetForTests();
