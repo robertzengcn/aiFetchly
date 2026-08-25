@@ -21,6 +21,10 @@ import {
 } from "@/service/AIImageAttachmentToolService";
 import { WorkspaceResolver } from "@/service/WorkspaceResolver";
 import { normalizeGeneratedImageReferences } from "@/service/generatedImageReferenceNormalize";
+import {
+  slimOutputImage,
+  type SlimmedOutputImage,
+} from "@/service/persistAgentImages";
 
 const PROCESSOR_IMAGE_EDIT = "image_edit";
 const DEFAULT_CONCURRENCY = 3;
@@ -71,17 +75,32 @@ interface ParsedBatchArgs {
   detail: ImageDetail;
 }
 
-interface ArtifactBatchItemResult {
+interface ArtifactBatchItemBase {
   input: ArtifactBatchInputIdentity;
   status: "completed" | "failed" | "cancelled";
   agentTaskId?: string;
-  outputFilePaths: string[];
-  outputImages: OpenAIChatImage[];
   error?: string;
   errorCode?: GeneratedImageReferenceErrorCode;
   storageWarning?: string;
   durationMs: number;
 }
+
+/** Workspace-branch item. Legacy shape retained deliberately: workspace file
+ * paths are user-visible inputs, not application-internal paths. */
+interface WorkspaceBatchItemResult extends ArtifactBatchItemBase {
+  outputFilePaths: string[];
+  outputImages: OpenAIChatImage[];
+}
+
+/** Generated-image branch item. Never carries application paths or bytes:
+ * outputFilePaths is omitted entirely and descriptors are slimmed. */
+interface GeneratedBatchItemResult extends ArtifactBatchItemBase {
+  outputImages: SlimmedOutputImage[];
+}
+
+type ArtifactBatchItemResult =
+  | WorkspaceBatchItemResult
+  | GeneratedBatchItemResult;
 
 export interface ArtifactBatchResult {
   status: "completed" | "partial" | "failed" | "cancelled";
@@ -93,7 +112,7 @@ export interface ArtifactBatchResult {
   concurrency: number;
   items: ArtifactBatchItemResult[];
   outputFilePaths?: string[];
-  outputImages?: OpenAIChatImage[];
+  outputImages?: Array<OpenAIChatImage | SlimmedOutputImage>;
 }
 
 export interface ArtifactBatchProcessingDeps {
@@ -439,8 +458,11 @@ function summarize(
   const cancelledCount = results.filter(
     (item) => item.status === "cancelled"
   ).length;
-  const outputImages = results.flatMap((item) => item.outputImages);
-  const outputFilePaths = results.flatMap((item) => item.outputFilePaths);
+  const outputImages: Array<OpenAIChatImage | SlimmedOutputImage> =
+    results.flatMap((item) => item.outputImages);
+  const outputFilePaths = results.flatMap((item) =>
+    "outputFilePaths" in item ? item.outputFilePaths : []
+  );
   const status: ArtifactBatchResult["status"] =
     cancelledCount === results.length
       ? "cancelled"
@@ -478,7 +500,6 @@ function failedReferenceItems(
   return references.map((reference) => ({
     input: { kind: "generated_image", reference },
     status: "failed",
-    outputFilePaths: [],
     outputImages: [],
     error,
     errorCode,
@@ -659,17 +680,24 @@ export class ArtifactBatchProcessingService {
         if (context.signal?.aborted) {
           snapshot.cancelledCount += 1;
           emitProgressEvent("processing");
-          results[index] = {
-            input: item.identity,
-            status: "cancelled",
-            outputFilePaths: [],
-            outputImages: [],
-            error: "Batch processing was cancelled.",
-            ...(item.identity.kind === "generated_image"
-              ? { errorCode: "generated_image_batch_cancelled" }
-              : {}),
-            durationMs: 0,
-          };
+          results[index] =
+            item.identity.kind === "generated_image"
+              ? {
+                  input: item.identity,
+                  status: "cancelled",
+                  outputImages: [],
+                  error: "Batch processing was cancelled.",
+                  errorCode: "generated_image_batch_cancelled",
+                  durationMs: 0,
+                }
+              : {
+                  input: item.identity,
+                  status: "cancelled",
+                  outputFilePaths: [],
+                  outputImages: [],
+                  error: "Batch processing was cancelled.",
+                  durationMs: 0,
+                };
           continue;
         }
         const startedAt = Date.now();
@@ -678,7 +706,6 @@ export class ArtifactBatchProcessingService {
         try {
           const agent = await item.launch();
           const outputImages = agent.outputImages ?? [];
-          const outputFilePaths = agent.outputFilePaths ?? [];
           const completed =
             agent.status === "completed" && outputImages.length > 0;
           const status: ArtifactBatchItemResult["status"] = completed
@@ -691,12 +718,10 @@ export class ArtifactBatchProcessingService {
           else if (status === "cancelled") snapshot.cancelledCount += 1;
           else snapshot.failedCount += 1;
           emitProgressEvent("processing");
-          results[index] = {
+          const base = {
             input: item.identity,
             status,
             agentTaskId: agent.agentTaskId,
-            outputFilePaths,
-            outputImages,
             ...(!completed
               ? {
                   error:
@@ -710,23 +735,43 @@ export class ArtifactBatchProcessingService {
               : {}),
             durationMs: Date.now() - startedAt,
           };
+          results[index] =
+            item.identity.kind === "generated_image"
+              ? {
+                  ...base,
+                  outputImages: outputImages.map(slimOutputImage),
+                }
+              : {
+                  ...base,
+                  outputFilePaths: agent.outputFilePaths ?? [],
+                  outputImages,
+                };
         } catch (error) {
           const cancelled = context.signal?.aborted === true;
           snapshot.runningCount -= 1;
           if (cancelled) snapshot.cancelledCount += 1;
           else snapshot.failedCount += 1;
           emitProgressEvent("processing");
-          results[index] = {
-            input: item.identity,
-            status: cancelled ? "cancelled" : "failed",
-            outputFilePaths: [],
-            outputImages: [],
-            error: error instanceof Error ? error.message : String(error),
-            ...(!cancelled && error instanceof GeneratedImageReferenceError
-              ? { errorCode: error.code }
-              : {}),
-            durationMs: Date.now() - startedAt,
-          };
+          results[index] =
+            item.identity.kind === "generated_image"
+              ? {
+                  input: item.identity,
+                  status: cancelled ? "cancelled" : "failed",
+                  outputImages: [],
+                  error: error instanceof Error ? error.message : String(error),
+                  ...(!cancelled && error instanceof GeneratedImageReferenceError
+                    ? { errorCode: error.code }
+                    : {}),
+                  durationMs: Date.now() - startedAt,
+                }
+              : {
+                  input: item.identity,
+                  status: cancelled ? "cancelled" : "failed",
+                  outputFilePaths: [],
+                  outputImages: [],
+                  error: error instanceof Error ? error.message : String(error),
+                  durationMs: Date.now() - startedAt,
+                };
         }
       }
     };
