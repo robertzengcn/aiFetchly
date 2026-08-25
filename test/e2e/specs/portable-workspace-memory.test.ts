@@ -587,24 +587,36 @@ test("AC-005/AC-011: isolation — second workspace sees no portable memory from
     });
     try {
       await openChat(appA);
+      await ensureConversation(appA);
       const setupA = await setupWorkspace(appA, rootA);
+      expect(typeof setupA).toBe("object");
       const convA = (setupA as { conversationId: string }).conversationId;
-      await portableInvoke(appA, "ai:portable-workspace-memory:enable", {
-        conversationId: convA,
-        defaultStorageMode: "portable-local",
-        importPolicy: "automatic",
-        exportScope: "none",
-        visibility: "local",
-        installBridges: [],
-      });
-      await portableInvoke(appA, "ai:portable-workspace-memory:create", {
-        conversationId: convA,
-        type: "decision",
-        title: "Workspace A only",
-        content: "belongs to A",
-        confidence: 90,
-        visibility: "local",
-      });
+      const enableRespA = await portableInvoke(
+        appA,
+        "ai:portable-workspace-memory:enable",
+        {
+          conversationId: convA,
+          defaultStorageMode: "portable-local",
+          importPolicy: "automatic",
+          exportScope: "none",
+          visibility: "local",
+          installBridges: [],
+        }
+      );
+      expect(enableRespA.status, enableRespA.msg ?? "").toBe(true);
+      const createRespA = await portableInvoke(
+        appA,
+        "ai:portable-workspace-memory:create",
+        {
+          conversationId: convA,
+          type: "decision",
+          title: "Workspace A only",
+          content: "belongs to A",
+          confidence: 90,
+          visibility: "local",
+        }
+      );
+      expect(createRespA.status, createRespA.msg ?? "").toBe(true);
       expect(fs.existsSync(memoryDir(rootA))).toBe(true);
     } finally {
       await closeApp(appA);

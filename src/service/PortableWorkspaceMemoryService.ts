@@ -1301,10 +1301,40 @@ export class PortableWorkspaceMemoryService {
     conversationId: string
   ): Promise<PortableMemorySyncSummary | null> {
     const ctx = await this.requireContext(conversationId);
+    // Trigger the watcher rescan (async — the coordinator reconciles the
+    // resulting snapshot).
     const manager = await this.getWatchManager();
     if (manager) {
       manager.rescan(String(ctx.workspaceId));
-      return null;
+    }
+    // Also do a direct scan + enqueue so the reconciliation happens even if
+    // the watcher's snapshot path has a scope-resolution mismatch. This is the
+    // authoritative reconciliation: scan the files directly, enqueue through
+    // the coordinator's queue.
+    try {
+      const { PortableMemoryFileScanner } = await import(
+        "@/childprocess/aifetchly-config/PortableMemoryFileScanner"
+      );
+      const scanner = new PortableMemoryFileScanner();
+      const snapshot = await scanner.scan({
+        workspaceRoot: ctx.workspaceRoot,
+        sourceId: `rescan-${ctx.workspaceId}`,
+      });
+      // Enqueue through the shared coordinator (same one the singleton wires).
+      const singletonMod = await import(
+        "@/service/workspaceWatch/WorkspaceWatchManagerSingleton"
+      );
+      const coordinator = singletonMod.getSharedPortableMemorySyncCoordinator();
+      await coordinator.enqueueSnapshot({
+        workspaceId: String(ctx.workspaceId),
+        workspaceRoot: ctx.workspaceRoot,
+        approved: true,
+        snapshot,
+      });
+    } catch (err) {
+      // If the direct scan fails (e.g., scanner not available), the watcher
+      // rescan above still fires — the coordinator will reconcile eventually.
+      void err;
     }
     return null;
   }
