@@ -75,13 +75,21 @@ describe("buildBuiltInToolCapabilitiesSection", () => {
     expect(s.toLowerCase()).toContain("not auto-promoted");
   });
 
-  it("teaches the model how to edit a previously generated image", () => {
+  it("routes generated-image edits to direct attachment, not export+attach", () => {
     const s = buildBuiltInToolCapabilitiesSection();
-    // The model must know the two-step workflow: export the generated image
-    // to the workspace, then use attach_local_images to edit it.
-    expect(s).toContain("export_generated_artifacts");
-    expect(s).toContain("aifetchly-generated-image://");
-    expect(s).toContain("attach_local_images");
+    // The obsolete two-step workflow (export to workspace, then attach) must
+    // be gone: selected generated images arrive attached to the current turn.
+    expect(s).not.toContain("export_generated_artifacts` (copy");
+    expect(s).not.toContain(
+      "then `attach_local_images` with the workspace path"
+    );
+    expect(s).not.toContain("aifetchly-generated-image://");
+    // Direct-attachment guidance must tell the model no workspace is needed.
+    const lower = s.toLowerCase();
+    expect(lower).toContain("attached to the current user turn");
+    expect(lower).toContain("no workspace");
+    // Explicit save/copy requests still route to export_generated_artifacts.
+    expect(s).toContain("`export_generated_artifacts`");
   });
 
   it("describes the full range of image editing operations, not just background", () => {

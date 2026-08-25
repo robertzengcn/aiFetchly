@@ -2617,6 +2617,52 @@ export default {
       document_failed: "Échec du traitement du document",
       image_alt: "Image jointe : {name}",
     },
+    generatedImageRefs: {
+      useAsReference: "Utiliser comme référence",
+      edit: "Modifier",
+      remove: "Supprimer",
+      clearAll: "Tout effacer",
+      moveUp: "Monter",
+      moveDown: "Descendre",
+      referenceTrayTitle: "Images de référence",
+      limitReached: "Vous pouvez référencer jusqu'à 3 images par requête.",
+      batchOffer:
+        "Plus de 3 images ont été sélectionnées. Les traiter plutôt comme un lot d'éditions indépendantes ?",
+      batchConfirmTitle: "Traiter par lot ?",
+      batchConfirmBody:
+        "Chaque image sélectionnée sera modifiée indépendamment dans un lot en arrière-plan. Cela peut prendre du temps.",
+      send: "Envoyer",
+      progressSummary:
+        "{completed} sur {requested} terminées · concurrence {concurrency}",
+      errors: {
+        generated_image_reference_invalid:
+          "Cette référence d'image n'est plus valide. Sélectionnez à nouveau l'image.",
+        generated_image_not_owned:
+          "Vous ne pouvez référencer que des images générées dans cette conversation.",
+        generated_image_missing:
+          "L'image d'origine n'est plus disponible. Régénérez-la ou choisissez une autre référence.",
+        generated_image_outside_store:
+          "La source de l'image est en dehors de la zone de stockage approuvée et ne peut pas être utilisée.",
+        generated_image_symlink_rejected:
+          "Ce fichier n'est pas une image stockée standard. Choisissez un autre élément généré.",
+        generated_image_unsupported_type:
+          "Type d'image non pris en charge. Choisissez une image PNG, JPEG ou WebP.",
+        generated_image_too_large:
+          "Cette image dépasse la limite de taille. Essayez moins d'images ou des images plus petites.",
+        generated_image_dimension_limit:
+          "Cette image dépasse la limite de dimensions. Redimensionnez-la ou régénérez-la en plus petit.",
+        generated_image_reference_limit:
+          "Trop d'images référencées pour une seule requête. Utilisez le traitement par lot pour des éditions indépendantes.",
+        generated_image_ambiguous:
+          "Plusieurs images peuvent correspondre à votre demande. Sélectionnez celle voulue.",
+        generated_image_fusion_limit:
+          "La combinaison d'images est limitée à 3 à la fois. Modifiez le reste séparément ou par lot.",
+        generated_image_batch_partial:
+          "Certains éléments du lot ont échoué. Conservez les réussites et réessayez les éléments échoués.",
+        generated_image_batch_cancelled:
+          "Lot arrêté. Les résultats terminés sont conservés ; vous pouvez reprendre les éléments restants.",
+      },
+    },
   },
   aifetchlyConfig: {
     title: "Configuration AiFetchly",

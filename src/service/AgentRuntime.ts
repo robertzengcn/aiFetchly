@@ -160,15 +160,20 @@ export class AgentRuntime {
       taskPacket: request.taskPacket,
     });
 
-    const { systemMessage, userMessage } = this.promptBuilder.build({
-      definition,
-      packet: request.taskPacket,
-    });
+    const { systemMessage, userMessage, userMessageText } =
+      this.promptBuilder.build({
+        definition,
+        packet: request.taskPacket,
+        // Trusted runtime-only channel: artifacts ride into the prompt here
+        // and nowhere else. createTask above persists the packet only, and
+        // the transcript below records the text projection (no bytes).
+        initialImageArtifacts: request.initialImageArtifacts,
+      });
     await transcript.appendSystemText(agentTaskId, systemMessage.content);
     await this.taskModule.appendMessage({
       agentTaskId,
       role: "user",
-      content: userMessage.content,
+      content: userMessageText,
     });
 
     await this.taskModule.setStatus(agentTaskId, "running", {

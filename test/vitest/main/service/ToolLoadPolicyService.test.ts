@@ -519,37 +519,46 @@ describe("ToolLoadPolicyService.classify", () => {
     ).toBe("deferred");
   });
 
-  describe("hasRecentGeneratedImages promotion", () => {
-    it("promotes export_generated_artifacts when user asks to edit a prior generated image", () => {
+  describe("generated-image followups stay deferred", () => {
+    it("does NOT promote export_generated_artifacts on generated-image edit wording", () => {
       expect(
         classify("export_generated_artifacts", "builtin", {
           currentUserMessage: "please add tree in front of the house",
           hasRecentGeneratedImages: true,
         })
-      ).toBe("contextual");
+      ).toBe("deferred");
+      expect(
+        classify("export_generated_artifacts", "builtin", {
+          currentUserMessage: "make it brighter",
+          hasRecentGeneratedImages: true,
+        })
+      ).toBe("deferred");
     });
 
-    it("promotes attach_local_images when user asks to edit a prior generated image", () => {
+    it("does NOT promote attach_local_images on generated-image edit wording", () => {
       expect(
         classify("attach_local_images", "builtin", {
           currentUserMessage: "please add tree in front of the house",
           hasRecentGeneratedImages: true,
         })
-      ).toBe("contextual");
-    });
-
-    it("does NOT promote when hasRecentGeneratedImages is false/undefined", () => {
-      expect(
-        classify("export_generated_artifacts", "builtin", {
-          currentUserMessage: "please add tree in front of the house",
-          hasRecentGeneratedImages: false,
-        })
       ).toBe("deferred");
       expect(
         classify("attach_local_images", "builtin", {
-          currentUserMessage: "please add tree in front of the house",
+          currentUserMessage: "make it brighter",
+          hasRecentGeneratedImages: true,
         })
       ).toBe("deferred");
+    });
+
+    it("still promotes export_generated_artifacts for explicit workspace save intent", () => {
+      // CONTEXTUAL_FILE_WRITE_TOOL_NAMES + FILE_WRITE_INTENT_RE path is
+      // untouched: explicit save/copy requests keep the export tool available.
+      expect(
+        classify("export_generated_artifacts", "builtin", {
+          currentUserMessage: "save the generated files into my workspace",
+          hasRecentGeneratedImages: true,
+        })
+      ).toBe("contextual");
     });
 
     it("does NOT promote when the message has no edit-like verb", () => {

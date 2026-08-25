@@ -117,6 +117,34 @@ describe("AgentDefinitionRegistry construction + built-ins", () => {
     const ids = r.list().map((d) => d.id);
     expect(ids).toContain("agent-lead-researcher");
   });
+
+  // Task 16: the generated-image editor ships as a built-in retrievable via
+  // the same lookup seam (getById → AgentDefinitionModule.getActiveById) as
+  // agent-batch-worker. Tool-free: its input image arrives as a trusted
+  // multimodal part on the initial task message, not via attach_local_images.
+  it("exposes agent-generated-image-editor through the same lookup path as agent-batch-worker", () => {
+    const r = new AgentDefinitionRegistryImpl();
+    const worker = r.getById("agent-batch-worker");
+    const editor = r.getById("agent-generated-image-editor");
+
+    expect(worker).not.toBeNull();
+    expect(editor).not.toBeNull();
+    expect(editor?.allowedTools).toEqual([]);
+    expect(editor?.mode).toBe("specialist");
+    expect(editor?.maxToolCalls).toBe(2);
+    expect(editor?.maxRuntimeMs).toBe(240000);
+    expect(editor?.status).toBe("active");
+    expect(editor?.source).toBe("built-in");
+    // Same output contract family as the batch worker.
+    expect(editor?.outputSchema).toEqual(worker?.outputSchema);
+    expect(editor?.systemPrompt).toContain(
+      "Use the image already attached to the initial task message."
+    );
+
+    // Singleton seam used by AgentDefinitionModule.ensureBuiltIns resolves it.
+    expect(AgentDefinitionRegistry.getById("agent-generated-image-editor"))
+      .not.toBeNull();
+  });
 });
 
 // --- AGT-01 D-Precedence (user wins over workspace — INTENTIONAL divergence) --

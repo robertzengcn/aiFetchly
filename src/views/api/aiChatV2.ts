@@ -155,6 +155,11 @@ export async function readPasteCache(
   return (resp as string | null) ?? null;
 }
 
+/** Error surfaced from a terminal stream chunk; carries the machine-readable
+ * errorCode (e.g. GeneratedImageReferenceErrorCode) when the main process sent
+ * one so the renderer can localize it. */
+export type ChatV2StreamError = Error & { errorCode?: string };
+
 /**
  * Stream a chat message over IPC.
  *
@@ -256,7 +261,10 @@ export async function streamChatV2Message(
           }`
         );
         if (chunk.eventType === "error" && chunk.errorMessage) {
-          const error = new Error(chunk.errorMessage);
+          const error: ChatV2StreamError = new Error(chunk.errorMessage);
+          if (typeof chunk.errorCode === "string") {
+            error.errorCode = chunk.errorCode;
+          }
           onError(error);
           reject(error);
         } else {

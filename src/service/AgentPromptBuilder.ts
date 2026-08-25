@@ -1,21 +1,42 @@
 // src/service/AgentPromptBuilder.ts
-import type { OpenAIChatMessage } from "@/api/aiChatApi";
+import type {
+  OpenAIChatMessage,
+  OpenAIImageUrlContentPart,
+  OpenAIMessageContent,
+} from "@/api/aiChatApi";
 import type {
   AgentDefinitionView,
+  AgentInitialImageArtifact,
   AgentTaskPacket,
 } from "@/entityTypes/agentTypes";
 
 export interface BuildPromptInput {
   definition: AgentDefinitionView;
   packet: AgentTaskPacket;
+  /** Runtime-only transient images (AgentRuntime strips them everywhere
+   * else). When non-empty, the user message becomes multimodal content
+   * parts: the packet JSON text part followed by one image_url part per
+   * artifact. The worker receives exactly one image per request. */
+  initialImageArtifacts?: readonly AgentInitialImageArtifact[];
 }
 
-export type AgentPromptMessage = OpenAIChatMessage & { content: string };
+export type AgentSystemMessage = OpenAIChatMessage & {
+  role: "system";
+  content: string;
+};
+
+export type AgentUserMessage = OpenAIChatMessage & {
+  role: "user";
+  content: OpenAIMessageContent;
+};
 
 export interface BuiltPrompt {
   messages: OpenAIChatMessage[];
-  systemMessage: AgentPromptMessage;
-  userMessage: AgentPromptMessage;
+  systemMessage: AgentSystemMessage;
+  userMessage: AgentUserMessage;
+  /** Plain-text projection of userMessage for transcripts/persistence —
+   * image parts are excluded so artifact bytes never reach storage. */
+  userMessageText: string;
 }
 
 export class AgentPromptBuilder {
@@ -44,7 +65,7 @@ export class AgentPromptBuilder {
       "   `confidence` to 0. NEVER respond with prose instead of JSON.",
     ].join("\n");
 
-    const systemMessage: AgentPromptMessage = {
+    const systemMessage: AgentSystemMessage = {
       role: "system",
       content: input.definition.systemPrompt + schemaReinforcement,
     };
@@ -55,18 +76,30 @@ export class AgentPromptBuilder {
     // valued keys, so the message stays clean. The resolved output schema is
     // attached explicitly so the model always sees the output contract
     // regardless of whether the packet carried requiredOutputSchema.
-    const userMessage: AgentPromptMessage = {
-      role: "user",
-      content: JSON.stringify(
-        { ...input.packet, requiredOutputSchema: schema },
-        null,
-        2
-      ),
-    };
+    const packetJson = JSON.stringify(
+      { ...input.packet, requiredOutputSchema: schema },
+      null,
+      2
+    );
+    const artifacts = input.initialImageArtifacts ?? [];
+    const content: OpenAIMessageContent =
+      artifacts.length === 0
+        ? packetJson
+        : [
+            { type: "text", text: packetJson },
+            ...artifacts.map(
+              (artifact): OpenAIImageUrlContentPart => ({
+                type: "image_url",
+                image_url: { url: artifact.dataUrl, detail: artifact.detail },
+              })
+            ),
+          ];
+    const userMessage: AgentUserMessage = { role: "user", content };
     return {
       messages: [systemMessage, userMessage],
       systemMessage,
       userMessage,
+      userMessageText: packetJson,
     };
   }
 }

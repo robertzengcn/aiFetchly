@@ -2612,6 +2612,52 @@ export default {
       document_failed: "Document processing failed",
       image_alt: "Attached image: {name}",
     },
+    generatedImageRefs: {
+      useAsReference: "Use as reference",
+      edit: "Edit",
+      remove: "Remove",
+      clearAll: "Clear all",
+      moveUp: "Move up",
+      moveDown: "Move down",
+      referenceTrayTitle: "Reference images",
+      limitReached: "You can reference up to 3 images per request.",
+      batchOffer:
+        "More than 3 images were selected. Run them as a batch of independent edits instead?",
+      batchConfirmTitle: "Process as batch?",
+      batchConfirmBody:
+        "Each selected image will be edited independently in a background batch. This may take a while.",
+      send: "Send",
+      progressSummary:
+        "{completed} of {requested} completed · concurrency {concurrency}",
+      errors: {
+        generated_image_reference_invalid:
+          "This image reference is no longer valid. Select the image again.",
+        generated_image_not_owned:
+          "You can only reference images generated in this conversation.",
+        generated_image_missing:
+          "The original image is no longer available. Regenerate it or choose another reference.",
+        generated_image_outside_store:
+          "The image source is outside the trusted storage area and cannot be used.",
+        generated_image_symlink_rejected:
+          "This file is not a regular stored image. Choose another generated artifact.",
+        generated_image_unsupported_type:
+          "Unsupported image type. Choose a PNG, JPEG, or WebP image.",
+        generated_image_too_large:
+          "This image exceeds the size limit. Try fewer or smaller images.",
+        generated_image_dimension_limit:
+          "This image exceeds the dimension limit. Resize it or regenerate at a smaller size.",
+        generated_image_reference_limit:
+          "Too many referenced images for one request. Use batch processing for independent edits.",
+        generated_image_ambiguous:
+          "Several images could match your request. Select the intended one.",
+        generated_image_fusion_limit:
+          "Combining images is limited to 3 at a time. Edit the rest separately or as a batch.",
+        generated_image_batch_partial:
+          "Some batch items failed. Keep the successes and retry the failed items.",
+        generated_image_batch_cancelled:
+          "Batch stopped. Completed results are kept; you can resume the remaining items.",
+      },
+    },
   },
   aifetchlyConfig: {
     title: "AiFetchly Configuration",
