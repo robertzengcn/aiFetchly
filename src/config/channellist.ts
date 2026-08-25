@@ -359,6 +359,16 @@ export const AI_CHAT_V2_SCHEDULED_LOOP_RESUME =
 export const AI_CHAT_V2_SCHEDULED_LOOP_STOP = "ai-chat-v2:scheduled-loop-stop";
 export const AI_CHAT_V2_SCHEDULED_LOOP_STOP_RUN =
   "ai-chat-v2:scheduled-loop-stop-run";
+// Skill installation channels (natural-language-skill-installation design §15.1).
+// PREPARE/APPROVE serve the AI-driven install flow and check USER_AI_ENABLED
+// first; STATUS/CANCEL are plain lifecycle queries. SUBMIT_SECRET is a
+// dedicated secure channel — the value never travels through chat or tool JSON.
+export const SKILL_INSTALL_PREPARE = "skill-install:prepare";
+export const SKILL_INSTALL_APPROVE = "skill-install:approve";
+export const SKILL_INSTALL_SUBMIT_SECRET = "skill-install:submit-secret";
+export const SKILL_INSTALL_STATUS = "skill-install:status";
+export const SKILL_INSTALL_CANCEL = "skill-install:cancel";
+export const SKILL_INSTALL_PROGRESS = "skill-install:progress";
 /** Main->renderer refresh hint after a scheduled turn persists (FR-11). */
 export const AI_CHAT_V2_CONVERSATION_UPDATED =
   "ai-chat-v2:conversation-updated";
