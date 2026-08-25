@@ -104,6 +104,47 @@
             {{ message.metadata.summary }}
           </div>
           <div
+            v-if="batchProgressView"
+            class="v2-message__batch-progress"
+          >
+            <div class="v2-message__batch-summary">
+              <span>{{
+                t("aiChatV2.generatedImageRefs.progressSummary", {
+                  completed: batchProgressView.completedCount,
+                  requested: batchProgressView.requestedCount,
+                  concurrency: batchProgressView.concurrency,
+                }) ||
+                `${batchProgressView.completedCount} of ${batchProgressView.requestedCount} completed`
+              }}</span>
+              <span class="v2-message__batch-status">{{
+                batchProgressView.status
+              }}</span>
+            </div>
+            <details
+              v-if="batchProgressView.failures.length > 0"
+              class="v2-message__details v2-message__batch-failures"
+            >
+              <summary
+                :title="
+                  t(
+                    'aiChatV2.generatedImageRefs.errors.generated_image_batch_partial'
+                  ) || ''
+                "
+              >
+                <v-icon size="x-small" color="error">mdi-alert-circle-outline</v-icon>
+                {{ batchProgressView.failures.length }}
+              </summary>
+              <div
+                v-for="(failure, failureIndex) in batchProgressView.failures"
+                :key="failureIndex"
+                class="v2-message__batch-failure-row"
+              >
+                <span class="v2-message__batch-item-label">{{ failure.label }}</span>
+                <span class="v2-message__batch-error">{{ failure.errorText }}</span>
+              </div>
+            </details>
+          </div>
+          <div
             v-if="attachLocalImagesAttachments.length > 0"
             class="v2-message__attachments"
           >
@@ -704,6 +745,133 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
 }
 
+// Batch progress card for process_artifact_batch results. Renders aggregate
+// counters plus an expandable per-item failure list. Trust boundary: only
+// counters, statuses, error strings and safe identity labels are read —
+// outputImages/base64 bytes and absolute paths are never surfaced.
+const BATCH_TOOL_NAME = "process_artifact_batch";
+const GENERATED_IMAGE_ERROR_KEY_PREFIX = "generated_image_";
+const BATCH_RESULT_STATUSES: ReadonlySet<string> = new Set([
+  "completed",
+  "partial",
+  "failed",
+  "cancelled",
+]);
+
+interface BatchFailureRowView {
+  readonly label: string;
+  readonly errorText: string;
+}
+
+interface BatchProgressView {
+  readonly status: string;
+  readonly requestedCount: number;
+  readonly completedCount: number;
+  readonly concurrency: number;
+  readonly failures: readonly BatchFailureRowView[];
+}
+
+function asNonNegativeInteger(value: unknown): number | null {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0
+    ? value
+    : null;
+}
+
+/** Workspace-file items are identified by file name only — never the path. */
+function pathBaseName(path: string): string {
+  const segments = path.split(/[/\\]/).filter((segment) => segment.length > 0);
+  const last = segments[segments.length - 1];
+  return last && last.length > 0 ? last : path;
+}
+
+/**
+ * Safe item label: workspace files show their base name; generated-image
+ * references are opaque, so they fall back to the order position "#N".
+ */
+function batchItemLabel(input: unknown, orderPosition: number): string {
+  if (input && typeof input === "object") {
+    const record = input as Record<string, unknown>;
+    if (
+      record.kind === "workspace_file" &&
+      typeof record.path === "string" &&
+      record.path.length > 0
+    ) {
+      return pathBaseName(record.path);
+    }
+  }
+  return `#${orderPosition}`;
+}
+
+function translatedBatchError(errorCode: string): string {
+  if (!errorCode.startsWith(GENERATED_IMAGE_ERROR_KEY_PREFIX)) return "";
+  const key = `aiChatV2.generatedImageRefs.errors.${errorCode}`;
+  return te(key) ? t(key) : "";
+}
+
+const batchProgressView = computed<BatchProgressView | null>(() => {
+  if (String(props.message.metadata?.toolName || "") !== BATCH_TOOL_NAME) {
+    return null;
+  }
+  const result = toolResult.value;
+  if (!result || typeof result !== "object" || Array.isArray(result)) {
+    return null;
+  }
+  const record = result as Record<string, unknown>;
+  const status =
+    typeof record.status === "string" && BATCH_RESULT_STATUSES.has(record.status)
+      ? record.status
+      : null;
+  const requestedCount = asNonNegativeInteger(record.requestedCount);
+  const completedCount = asNonNegativeInteger(record.completedCount);
+  const concurrency = asNonNegativeInteger(record.concurrency);
+  if (
+    status === null ||
+    requestedCount === null ||
+    completedCount === null ||
+    concurrency === null
+  ) {
+    return null;
+  }
+  const items: readonly unknown[] = Array.isArray(record.items)
+    ? record.items
+    : [];
+  const failures: BatchFailureRowView[] = [];
+  items.forEach((item, index) => {
+    if (!item || typeof item !== "object") return;
+    const itemRecord = item as Record<string, unknown>;
+    if (
+      itemRecord.status !== "failed" &&
+      itemRecord.status !== "cancelled"
+    ) {
+      return;
+    }
+    const errorCode =
+      typeof itemRecord.errorCode === "string" ? itemRecord.errorCode : "";
+    let errorText = translatedBatchError(errorCode);
+    if (
+      !errorText &&
+      typeof itemRecord.error === "string" &&
+      itemRecord.error.trim().length > 0
+    ) {
+      errorText = itemRecord.error.trim();
+    }
+    if (!errorText) {
+      errorText = t(
+        `aiChatV2.generatedImageRefs.errors.${
+          itemRecord.status === "cancelled"
+            ? "generated_image_batch_cancelled"
+            : "generated_image_batch_partial"
+        }`
+      );
+    }
+    failures.push({
+      label: batchItemLabel(itemRecord.input, index + 1),
+      errorText,
+    });
+  });
+  return { status, requestedCount, completedCount, concurrency, failures };
+});
+
 interface MentionChip {
   variant: "resolved" | "warning";
   icon: string;
@@ -1085,6 +1253,48 @@ const pastedChips = computed<PastedChip[]>(() => {
   margin: 0;
   white-space: pre-wrap;
   font-size: 12px;
+}
+.v2-message__batch-progress {
+  margin-top: 6px;
+}
+.v2-message__batch-summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 12.5px;
+}
+.v2-message__batch-status {
+  padding: 0 6px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.08);
+  font-family: monospace;
+  font-size: 11px;
+}
+.v2-message__batch-failures {
+  margin-top: 4px;
+}
+.v2-message__batch-failures summary {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+}
+.v2-message__batch-failure-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-top: 3px;
+  font-size: 12px;
+}
+.v2-message__batch-item-label {
+  font-family: monospace;
+  white-space: nowrap;
+}
+.v2-message__batch-error {
+  color: rgb(var(--v-theme-error));
 }
 .v2-message__mentions {
   display: flex;

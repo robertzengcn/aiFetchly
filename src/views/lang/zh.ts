@@ -2516,6 +2516,7 @@ export default {
       batchConfirmTitle: "按批处理？",
       batchConfirmBody: "每张所选图片将在后台批次中独立编辑，可能需要一些时间。",
       send: "发送",
+      progressSummary: "已完成 {completed}/{requested} · 并发数 {concurrency}",
       errors: {
         generated_image_reference_invalid: "该图片引用已失效，请重新选择图片。",
         generated_image_not_owned: "只能引用本对话中生成的图片。",

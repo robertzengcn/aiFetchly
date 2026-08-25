@@ -2627,6 +2627,8 @@ export default {
       batchConfirmBody:
         "Each selected image will be edited independently in a background batch. This may take a while.",
       send: "Send",
+      progressSummary:
+        "{completed} of {requested} completed · concurrency {concurrency}",
       errors: {
         generated_image_reference_invalid:
           "This image reference is no longer valid. Select the image again.",

@@ -2652,6 +2652,8 @@ export default {
       batchConfirmBody:
         "Cada imagen seleccionada se editará de forma independiente en un lote en segundo plano. Esto puede tardar un poco.",
       send: "Enviar",
+      progressSummary:
+        "{completed} de {requested} completadas · concurrencia {concurrency}",
       errors: {
         generated_image_reference_invalid:
           "Esta referencia de imagen ya no es válida. Vuelve a seleccionar la imagen.",

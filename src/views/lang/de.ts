@@ -2643,6 +2643,8 @@ export default {
       batchConfirmBody:
         "Jedes ausgewählte Bild wird unabhängig in einem Hintergrundstapel bearbeitet. Dies kann eine Weile dauern.",
       send: "Senden",
+      progressSummary:
+        "{completed} von {requested} abgeschlossen · Parallelität {concurrency}",
       errors: {
         generated_image_reference_invalid:
           "Diese Bildreferenz ist nicht mehr gültig. Wählen Sie das Bild erneut aus.",

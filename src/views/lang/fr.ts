@@ -2632,6 +2632,8 @@ export default {
       batchConfirmBody:
         "Chaque image sélectionnée sera modifiée indépendamment dans un lot en arrière-plan. Cela peut prendre du temps.",
       send: "Envoyer",
+      progressSummary:
+        "{completed} sur {requested} terminées · concurrence {concurrency}",
       errors: {
         generated_image_reference_invalid:
           "Cette référence d'image n'est plus valide. Sélectionnez à nouveau l'image.",

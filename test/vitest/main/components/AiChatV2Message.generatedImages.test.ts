@@ -20,6 +20,11 @@ import type {
  * `test/vitest/main/components/vitest.config.mjs` (happy-dom environment).
  */
 
+const TOO_LARGE_LABEL = "This image exceeds the size limit. Try fewer or smaller images.";
+const BATCH_CANCELLED_LABEL =
+  "Batch stopped. Completed results are kept; you can resume the remaining items.";
+const BATCH_PARTIAL_LABEL = "Some batch items failed. Keep the successes and retry the failed items.";
+
 const i18n = createI18n({
   legacy: false,
   locale: "en",
@@ -31,6 +36,13 @@ const i18n = createI18n({
         generatedImageRefs: {
           useAsReference: "Use as reference",
           edit: "Edit",
+          progressSummary:
+            "{completed} of {requested} completed · concurrency {concurrency}",
+          errors: {
+            generated_image_too_large: TOO_LARGE_LABEL,
+            generated_image_batch_cancelled: BATCH_CANCELLED_LABEL,
+            generated_image_batch_partial: BATCH_PARTIAL_LABEL,
+          },
         },
       },
     },
@@ -180,5 +192,182 @@ describe("AiChatV2Message generated image actions", () => {
     for (const btn of wrapper.findAll(".v2-message__edit-image-btn")) {
       expect(btn.attributes("aria-label")).toBe("Edit");
     }
+  });
+});
+
+/**
+ * Build the metadata.toolResult payload exactly as the chat loop persists it
+ * for a partial `process_artifact_batch` run (normalizeToolResult flattens
+ * success/executionTimeMs plus the ArtifactBatchResult fields).
+ */
+function makePartialBatchToolResult(): Record<string, unknown> {
+  return {
+    success: true,
+    executionTimeMs: 5231,
+    status: "partial",
+    processor: "image_edit",
+    requestedCount: 3,
+    completedCount: 1,
+    failedCount: 1,
+    cancelledCount: 1,
+    concurrency: 3,
+    items: [
+      {
+        input: { kind: "workspace_file", path: "/tmp/ws/photos/vacation-photo.png" },
+        status: "completed",
+        agentTaskId: "task-1",
+        outputFilePaths: [],
+        outputImages: [{ b64_json: "QUJDREVG", mime_type: "image/png" }],
+        durationMs: 4210,
+      },
+      {
+        input: { kind: "workspace_file", path: "/tmp/ws/photos/huge-file.tiff" },
+        status: "failed",
+        outputFilePaths: [],
+        outputImages: [],
+        error: TOO_LARGE_LABEL,
+        errorCode: "generated_image_too_large",
+        durationMs: 812,
+      },
+      {
+        input: {
+          kind: "generated_image",
+          reference: { messageId: "msg-gen-1", imageIndex: 0 },
+        },
+        status: "cancelled",
+        outputFilePaths: [],
+        outputImages: [],
+        error: "Batch processing was cancelled.",
+        errorCode: "generated_image_batch_cancelled",
+        durationMs: 0,
+      },
+    ],
+    outputImages: [{ b64_json: "QUJDREVG", mime_type: "image/png" }],
+  };
+}
+
+function makeBatchResultMessage(
+  toolResult: Record<string, unknown>
+): ChatV2MessageView {
+  return {
+    id: "msg-tool-batch-1",
+    conversationId: "c1",
+    role: "assistant",
+    content: "",
+    timestamp: new Date().toISOString(),
+    messageType: MessageType.TOOL_RESULT,
+    metadata: {
+      source: "chat-v2",
+      toolCallId: "call-batch-1",
+      toolName: "process_artifact_batch",
+      toolResult,
+      success: true,
+    },
+  } as unknown as ChatV2MessageView;
+}
+
+describe("AiChatV2Message artifact batch progress", () => {
+  it("renders the aggregate summary line with counts, concurrency and overall status", async () => {
+    const wrapper = mountWith(makeBatchResultMessage(makePartialBatchToolResult()));
+    await flushPromises();
+
+    const summary = wrapper.find(".v2-message__batch-summary");
+    expect(summary.exists()).toBe(true);
+    expect(summary.text()).toContain("1 of 3 completed");
+    expect(summary.text()).toContain("concurrency 3");
+    expect(wrapper.find(".v2-message__batch-status").text()).toBe("partial");
+  });
+
+  it("lists failed and cancelled items with safe labels and translated errors in an expandable section", async () => {
+    const wrapper = mountWith(makeBatchResultMessage(makePartialBatchToolResult()));
+    await flushPromises();
+
+    const failures = wrapper.find(".v2-message__batch-failures");
+    expect(failures.exists()).toBe(true);
+    // Expandable: opening it reveals the per-item rows.
+    expect((failures.element as HTMLDetailsElement).open).toBe(false);
+    await failures.find("summary").trigger("click");
+    expect((failures.element as HTMLDetailsElement).open).toBe(true);
+
+    const rows = wrapper.findAll(".v2-message__batch-failure-row");
+    expect(rows.length).toBe(2);
+
+    const firstLabel = rows[0].find(".v2-message__batch-item-label").text();
+    expect(firstLabel).toBe("huge-file.tiff");
+    expect(firstLabel).not.toContain("/tmp");
+    expect(rows[0].find(".v2-message__batch-error").text()).toBe(TOO_LARGE_LABEL);
+
+    const secondLabel = rows[1].find(".v2-message__batch-item-label").text();
+    expect(secondLabel).toBe("#3");
+    expect(secondLabel).not.toContain("/");
+    expect(rows[1].find(".v2-message__batch-error").text()).toBe(BATCH_CANCELLED_LABEL);
+  });
+
+  it("never renders absolute paths or base64 bytes from the batch result", async () => {
+    const wrapper = mountWith(makeBatchResultMessage(makePartialBatchToolResult()));
+    await flushPromises();
+
+    const text = wrapper.text();
+    expect(text).not.toContain("/tmp");
+    expect(text).not.toContain("/ws/");
+    expect(text).not.toContain("QUJDREVG");
+    expect(text).not.toContain("b64_json");
+    // Completed items are not failure rows.
+    expect(text).not.toContain("vacation-photo.png");
+  });
+
+  it("renders no failures section for a fully completed batch", async () => {
+    const toolResult = makePartialBatchToolResult();
+    const wrapper = mountWith(
+      makeBatchResultMessage({
+        ...toolResult,
+        status: "completed",
+        requestedCount: 1,
+        completedCount: 1,
+        failedCount: 0,
+        cancelledCount: 0,
+        items: [(toolResult.items as unknown[])[0]],
+      })
+    );
+    await flushPromises();
+
+    expect(wrapper.find(".v2-message__batch-summary").text()).toContain(
+      "1 of 1 completed"
+    );
+    expect(wrapper.find(".v2-message__batch-failures").exists()).toBe(false);
+  });
+
+  it("renders nothing for non-batch tool results", async () => {
+    const attachMessage = {
+      id: "msg-tool-attach-1",
+      conversationId: "c1",
+      role: "assistant",
+      content: "",
+      timestamp: new Date().toISOString(),
+      messageType: MessageType.TOOL_RESULT,
+      metadata: {
+        source: "chat-v2",
+        toolCallId: "call-attach-1",
+        toolName: "attach_local_images",
+        toolResult: { success: true },
+        success: true,
+      },
+    } as unknown as ChatV2MessageView;
+    const attachWrapper = mountWith(attachMessage);
+    await flushPromises();
+    expect(attachWrapper.find(".v2-message__batch-progress").exists()).toBe(false);
+
+    const plainWrapper = mountWith(makeTwoImageMessage());
+    await flushPromises();
+    expect(plainWrapper.find(".v2-message__batch-progress").exists()).toBe(false);
+  });
+
+  it("renders nothing when a batch tool result is malformed", async () => {
+    const malformedWrapper = mountWith(
+      makeBatchResultMessage({ success: false, error: "Provide either `files` or `generatedImageReferences`." })
+    );
+    await flushPromises();
+    expect(malformedWrapper.find(".v2-message__batch-progress").exists()).toBe(false);
+    expect(malformedWrapper.find(".v2-message__batch-summary").exists()).toBe(false);
   });
 });
