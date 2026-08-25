@@ -29,54 +29,67 @@ function memoryDir(root: E2ETestRoot): string {
 
 async function openChat(app: LaunchedApp): Promise<void> {
   await app.mainWindow.getByTestId("ai-chat-toggle").click();
-  await expect(
-    app.mainWindow.getByTestId("ai-chat-composer")
-  ).toBeVisible({ timeout: 30_000 });
+  await expect(app.mainWindow.getByTestId("ai-chat-composer")).toBeVisible({
+    timeout: 30_000,
+  });
+}
+
+/** Create a conversation by sending a message (the backend creates the
+ * conversation row on first send). Returns the conversationId. */
+async function ensureConversation(app: LaunchedApp): Promise<void> {
+  const textarea = app.mainWindow
+    .getByTestId("ai-chat-composer")
+    .locator("textarea")
+    .first();
+  await textarea.fill(`setup ${Date.now()}`);
+  await app.mainWindow.getByTestId("ai-chat-send").click();
+  // Wait for the streamed response to complete (creates the conversation row).
+  await expect(app.mainWindow.getByTestId("ai-chat-root")).toContainText(
+    "Hello world!",
+    { timeout: 30_000 }
+  );
 }
 
 async function setupWorkspace(
   app: LaunchedApp,
   root: E2ETestRoot
 ): Promise<{ conversationId: string; workspaceId: number } | string> {
-  return app.mainWindow.evaluate(
-    async (rootPath) => {
-      const api = (
-        window as unknown as {
-          api: {
-            invoke: (
-              c: string,
-              d?: unknown
-            ) => Promise<
-              { status: boolean; data: unknown; msg?: string } | undefined
-            >;
-          };
-        }
-      ).api;
-      const convResp = await api.invoke(
-        "ai-chat-v2:conversations",
-        JSON.stringify({})
-      );
-      const convs = (convResp?.data ?? []) as Array<{
-        conversationId: string;
-      }>;
-      if (!convs.length) return "no conversation";
-      const conversationId = convs[0].conversationId;
-      const setResp = await api.invoke(
-        "ai-workspace:set",
-        JSON.stringify({
-          conversationId,
-          rootPath,
-          label: "e2e-portable",
-        })
-      );
-      const id = (setResp?.data as { id?: unknown } | undefined)?.id;
-      if (typeof id !== "number")
-        return `no workspace id (${setResp?.msg ?? "?"})`;
-      await api.invoke("ai-workspace:approve", JSON.stringify({ id }));
-      return { conversationId, workspaceId: id };
-    },
-    root.workspacePath
-  );
+  return app.mainWindow.evaluate(async (rootPath) => {
+    const api = (
+      window as unknown as {
+        api: {
+          invoke: (
+            c: string,
+            d?: unknown
+          ) => Promise<
+            { status: boolean; data: unknown; msg?: string } | undefined
+          >;
+        };
+      }
+    ).api;
+    const convResp = await api.invoke(
+      "ai-chat-v2:conversations",
+      JSON.stringify({})
+    );
+    const convs = (convResp?.data ?? []) as Array<{
+      conversationId: string;
+    }>;
+    if (!convs.length) return "no conversation";
+    const conversationId = convs[0].conversationId;
+    const setResp = await api.invoke(
+      "ai-workspace:set",
+      JSON.stringify({
+        conversationId,
+        rootPath,
+        label: "e2e-portable",
+      })
+    );
+    const id = (setResp?.data as { id?: unknown } | undefined)?.id;
+    if (typeof id !== "number")
+      return `no workspace id (${setResp?.msg ?? "?"})`;
+    await api.invoke("ai-workspace:approve", JSON.stringify({ id }));
+    return { conversationId, workspaceId: id };
+  }, root.workspacePath);
 }
 
 async function portableInvoke(
@@ -99,15 +112,19 @@ async function portableInvoke(
         }
       ).api;
       const resp = await api.invoke(channel, JSON.stringify(payload));
-      return (
-        resp ?? { status: false, data: undefined, msg: "no response" }
-      ) as { status: boolean; data: unknown; msg?: string };
+      return (resp ?? {
+        status: false,
+        data: undefined,
+        msg: "no response",
+      }) as { status: boolean; data: unknown; msg?: string };
     },
     { channel, payload }
   );
 }
 
-test("AC-001/AC-006/AC-009: enable portable memory, create a record, verify file + projection", async ({ page: _page }, testInfo) => {
+test("AC-001/AC-006/AC-009: enable portable memory, create a record, verify file + projection", async ({
+  page: _page,
+}, testInfo) => {
   test.setTimeout(240_000);
   const fakeAi = await startFakeOpenAiServer();
   await fakeAi.setScenario("stream-text");
@@ -129,6 +146,7 @@ test("AC-001/AC-006/AC-009: enable portable memory, create a record, verify file
     });
     try {
       await openChat(app);
+      await ensureConversation(app);
       const setup = await setupWorkspace(app, root);
       expect(setup, `workspace setup failed: ${setup}`).not.toEqual(
         expect.any(String)
@@ -208,7 +226,9 @@ test("AC-001/AC-006/AC-009: enable portable memory, create a record, verify file
   }
 });
 
-test("AC-008: no Git mutation on enable/create", async ({ page: _page }, testInfo) => {
+test("AC-008: no Git mutation on enable/create", async ({
+  page: _page,
+}, testInfo) => {
   test.setTimeout(180_000);
   const fakeAi = await startFakeOpenAiServer();
   await fakeAi.setScenario("stream-text");
@@ -230,6 +250,7 @@ test("AC-008: no Git mutation on enable/create", async ({ page: _page }, testInf
     });
     try {
       await openChat(app);
+      await ensureConversation(app);
       const setup = await setupWorkspace(app, root);
       const { conversationId } = setup as { conversationId: string };
 
@@ -251,9 +272,9 @@ test("AC-008: no Git mutation on enable/create", async ({ page: _page }, testInf
       });
 
       expect(fs.existsSync(path.join(root.workspacePath, ".git"))).toBe(false);
-      expect(
-        fs.existsSync(path.join(root.workspacePath, ".gitignore"))
-      ).toBe(false);
+      expect(fs.existsSync(path.join(root.workspacePath, ".gitignore"))).toBe(
+        false
+      );
     } finally {
       await closeApp(app);
     }
@@ -262,7 +283,9 @@ test("AC-008: no Git mutation on enable/create", async ({ page: _page }, testInf
   }
 });
 
-test("AC-010: AGENTS.md bridge preserves unrelated user content", async ({ page: _page }, testInfo) => {
+test("AC-010: AGENTS.md bridge preserves unrelated user content", async ({
+  page: _page,
+}, testInfo) => {
   test.setTimeout(180_000);
   const fakeAi = await startFakeOpenAiServer();
   await fakeAi.setScenario("stream-text");
@@ -287,6 +310,7 @@ test("AC-010: AGENTS.md bridge preserves unrelated user content", async ({ page:
     });
     try {
       await openChat(app);
+      await ensureConversation(app);
       const setup = await setupWorkspace(app, root);
       const { conversationId } = setup as { conversationId: string };
 
@@ -319,7 +343,9 @@ test("AC-010: AGENTS.md bridge preserves unrelated user content", async ({ page:
   }
 });
 
-test("AC-002/AC-003: external edit is imported; invalid edit retains last valid", async ({ page: _page }, testInfo) => {
+test("AC-002/AC-003: external edit is imported; invalid edit retains last valid", async ({
+  page: _page,
+}, testInfo) => {
   test.setTimeout(240_000);
   const fakeAi = await startFakeOpenAiServer();
   await fakeAi.setScenario("stream-text");
@@ -341,6 +367,7 @@ test("AC-002/AC-003: external edit is imported; invalid edit retains last valid"
     });
     try {
       await openChat(app);
+      await ensureConversation(app);
       const setup = await setupWorkspace(app, root);
       const { conversationId } = setup as { conversationId: string };
 
@@ -369,7 +396,10 @@ test("AC-002/AC-003: external edit is imported; invalid edit retains last valid"
 
       // AC-002: external edit — modify the file externally.
       const content = fs.readFileSync(recordPath, "utf8");
-      const edited = content.replace("original content", "externally edited content");
+      const edited = content.replace(
+        "original content",
+        "externally edited content"
+      );
       fs.writeFileSync(recordPath, edited);
 
       // Trigger a rescan so AiFetchly picks up the external edit.
@@ -385,7 +415,10 @@ test("AC-002/AC-003: external edit is imported; invalid edit retains last valid"
         "ai:portable-workspace-memory:list",
         { conversationId }
       );
-      const rows = listResp.data as Array<{ memoryId: string; content: string }>;
+      const rows = listResp.data as Array<{
+        memoryId: string;
+        content: string;
+      }>;
       const row = rows.find((r) => r.memoryId === memoryId);
       expect(row?.content).toContain("externally edited content");
 
@@ -407,7 +440,10 @@ test("AC-002/AC-003: external edit is imported; invalid edit retains last valid"
         "ai:portable-workspace-memory:diagnostics:list",
         { conversationId }
       );
-      const diags = diagsResp.data as Array<{ code: string; relativePath: string }>;
+      const diags = diagsResp.data as Array<{
+        code: string;
+        relativePath: string;
+      }>;
       expect(diags.some((d) => d.code === "memory-secret-rejected")).toBe(true);
     } finally {
       await closeApp(app);
@@ -417,7 +453,9 @@ test("AC-002/AC-003: external edit is imported; invalid edit retains last valid"
   }
 });
 
-test("AC-007: concurrent edit protection — save does not overwrite external bytes", async ({ page: _page }, testInfo) => {
+test("AC-007: concurrent edit protection — save does not overwrite external bytes", async ({
+  page: _page,
+}, testInfo) => {
   test.setTimeout(240_000);
   const fakeAi = await startFakeOpenAiServer();
   await fakeAi.setScenario("stream-text");
@@ -439,6 +477,7 @@ test("AC-007: concurrent edit protection — save does not overwrite external by
     });
     try {
       await openChat(app);
+      await ensureConversation(app);
       const setup = await setupWorkspace(app, root);
       const { conversationId } = setup as { conversationId: string };
 
@@ -476,7 +515,10 @@ test("AC-007: concurrent edit protection — save does not overwrite external by
 
       // External edit between read and write.
       const content = fs.readFileSync(recordPath, "utf8");
-      fs.writeFileSync(recordPath, content.replace("original", "external racing edit"));
+      fs.writeFileSync(
+        recordPath,
+        content.replace("original", "external racing edit")
+      );
 
       // AiFetchly tries to save with the stale expectedHash → conflict.
       const updateResp = await portableInvoke(
@@ -508,7 +550,9 @@ test("AC-007: concurrent edit protection — save does not overwrite external by
   }
 });
 
-test("AC-005/AC-011: isolation — second workspace sees no portable memory from the first", async ({ page: _page }, testInfo) => {
+test("AC-005/AC-011: isolation — second workspace sees no portable memory from the first", async ({
+  page: _page,
+}, testInfo) => {
   test.setTimeout(240_000);
   const fakeAi = await startFakeOpenAiServer();
   await fakeAi.setScenario("stream-text");
