@@ -30,6 +30,8 @@ import {
   resetSmallModelRoutingCache,
 } from "@/config/aiLightweightRouting";
 import { getLightweightProfile } from "@/service/AIChatLightweightProfiles";
+import { AIChatTokenEstimator } from "@/service/AIChatTokenEstimator";
+import { CONSERVATIVE_SMALL_CONTEXT_FALLBACK } from "@/service/AIChatPromptBudget";
 import {
   AIChatLightweightFailure,
   type AIChatLightweightCompletionEvent,
@@ -87,6 +89,16 @@ function isUsableSmallCapability(
     Number.isInteger(contextSize) &&
     contextSize > 0
   );
+}
+
+/**
+ * True when a resolved-model string is the virtual alias echoed back (case-
+ * insensitive). The alias is never a real resolved model; an echo signals an
+ * older server and must not be persisted as durable attribution (SMBW-014).
+ */
+function isAliasEcho(model: string): boolean {
+  const lower = model.toLowerCase();
+  return lower === SMALL_MODEL_ALIAS || lower === "haiku";
 }
 
 /**
@@ -190,6 +202,7 @@ export class AIChatLightweightCompletionService {
     LightweightCooldownState
   >();
   private readonly enabled: boolean;
+  private readonly estimator = new AIChatTokenEstimator();
 
   constructor(private readonly deps: AIChatLightweightCompletionDeps) {
     // Read the kill switch once at construction; changes require a restart.
@@ -211,17 +224,32 @@ export class AIChatLightweightCompletionService {
   ): Promise<AIChatLightweightCompletionResult> {
     const profile = getLightweightProfile(input.workload);
     const startedAt = Date.now();
+    // SMBW-013: observability fields. The input estimate is local; the
+    // context window reuses the capability the state machine resolved (no
+    // second capability lookup — one resolver call per completion).
+    const inputTokenEstimate = this.estimator.estimateMessages([
+      ...input.messages,
+    ]);
 
-    const { outcome, metrics, providerKind } = await this.runStateMachine(
-      input,
-      profile
-    );
+    const { outcome, metrics, providerKind, capability } =
+      await this.runStateMachine(input, profile);
+    const contextWindow = isUsableSmallCapability(capability)
+      ? capability.context_size
+      : CONSERVATIVE_SMALL_CONTEXT_FALLBACK;
 
     if (outcome.kind === "cooldown_skip") {
-      this.emitEvent(input, providerKind, undefined, undefined, startedAt, {
-        ...metrics,
-        outcome: "cooldown_skip",
-      });
+      this.emitEvent(
+        input,
+        providerKind,
+        undefined,
+        undefined,
+        startedAt,
+        {
+          ...metrics,
+          outcome: "cooldown_skip",
+        },
+        { contextWindow, inputTokenEstimate }
+      );
       throw new AIChatLightweightFailure({
         reason: "small_model_unavailable",
         message: `Lightweight workload ${input.workload} skipped (cooldown).`,
@@ -229,11 +257,19 @@ export class AIChatLightweightCompletionService {
       });
     }
     if (outcome.kind === "failed") {
-      this.emitEvent(input, providerKind, undefined, undefined, startedAt, {
-        ...metrics,
-        outcome: "failed",
-        fallbackReason: outcome.failure.reason,
-      });
+      this.emitEvent(
+        input,
+        providerKind,
+        undefined,
+        undefined,
+        startedAt,
+        {
+          ...metrics,
+          outcome: "failed",
+          fallbackReason: outcome.failure.reason,
+        },
+        { contextWindow, inputTokenEstimate }
+      );
       throw outcome.failure;
     }
 
@@ -247,7 +283,8 @@ export class AIChatLightweightCompletionService {
         ...metrics,
         outcome: "success",
         ...(outcome.routeReason ? { routeReason: outcome.routeReason } : {}),
-      }
+      },
+      { contextWindow, inputTokenEstimate }
     );
     return {
       response: outcome.response,
@@ -276,6 +313,7 @@ export class AIChatLightweightCompletionService {
     outcome: LightweightAttemptOutcome;
     metrics: LightweightAttemptMetrics;
     providerKind: AIChatLightweightProviderKind;
+    capability: OpenAISmallModelCapability | null;
   }> {
     const resolution = await this.deps.resolveProvider();
     const r = await this.runStateMachineResolved(input, profile, resolution);
@@ -285,7 +323,10 @@ export class AIChatLightweightCompletionService {
   /**
    * The state machine proper, run against an already-resolved provider so the
    * provider is resolved exactly once per logical completion (re-resolving in
-   * the fallback path could observe a mid-flight provider switch).
+   * the fallback path could observe a mid-flight provider switch). Returns
+   * the small-model capability it resolved (null when the workload does not
+   * require discovered context or routing was disabled/local) so the caller
+   * can report the context window without a second capability lookup.
    */
   private async runStateMachineResolved(
     input: AIChatLightweightCompletionInput,
@@ -294,6 +335,7 @@ export class AIChatLightweightCompletionService {
   ): Promise<{
     outcome: LightweightAttemptOutcome;
     metrics: LightweightAttemptMetrics;
+    capability: OpenAISmallModelCapability | null;
   }> {
     // Base metrics seeded with the caller's repair flag so a domain-level
     // repair request is recorded as `repairAttempted: true` (SMBW-009).
@@ -306,6 +348,7 @@ export class AIChatLightweightCompletionService {
       return {
         outcome: { kind: "cooldown_skip" },
         metrics: base,
+        capability: null,
       };
     }
 
@@ -322,6 +365,7 @@ export class AIChatLightweightCompletionService {
         return {
           outcome: { kind: "failed", failure: result.failure },
           metrics: { ...base, attemptCount: 1 },
+          capability: null,
         };
       }
       return {
@@ -333,6 +377,7 @@ export class AIChatLightweightCompletionService {
           resolvedModel: result.resolvedModel,
         },
         metrics: { ...base, attemptCount: 1 },
+        capability: null,
       };
     }
 
@@ -351,6 +396,7 @@ export class AIChatLightweightCompletionService {
           return {
             outcome: { kind: "failed", failure: result.failure },
             metrics: { ...base, attemptCount: 1 },
+            capability,
           };
         }
         return {
@@ -363,6 +409,7 @@ export class AIChatLightweightCompletionService {
             routeReason: "capability_missing",
           },
           metrics: { ...base, attemptCount: 1 },
+          capability,
         };
       }
     }
@@ -380,6 +427,7 @@ export class AIChatLightweightCompletionService {
           resolvedModel: this.extractModel(response),
         },
         metrics: { ...base, attemptCount: 1 },
+        capability,
       };
     } catch (error) {
       const classified = classifyLightweightFailure(error, input.signal);
@@ -398,6 +446,7 @@ export class AIChatLightweightCompletionService {
           return {
             outcome: { kind: "failed", failure: this.toFailure(cancelled) },
             metrics: { ...base, attemptCount: 1 },
+            capability,
           };
         }
         try {
@@ -411,6 +460,7 @@ export class AIChatLightweightCompletionService {
               providerKind: resolution.providerKind,
               resolvedModel: this.extractModel(response),
             },
+            capability,
             metrics: {
               ...base,
               attemptCount: 2,
@@ -422,16 +472,24 @@ export class AIChatLightweightCompletionService {
             retryError,
             input.signal
           );
-          return this.handleSmallFailure(
+          const handled = await this.handleSmallFailure(
             input,
             profile,
             resolution,
             retryClassified,
             2
           );
+          return { ...handled, capability };
         }
       }
-      return this.handleSmallFailure(input, profile, resolution, classified, 1);
+      const handled = await this.handleSmallFailure(
+        input,
+        profile,
+        resolution,
+        classified,
+        1
+      );
+      return { ...handled, capability };
     }
   }
 
@@ -727,8 +785,24 @@ export class AIChatLightweightCompletionService {
     });
   }
 
+  /**
+   * Resolve the authoritative model from a completion response (SMBW-014).
+   * `response.model` is authoritative. When it is missing OR still equals the
+   * `small`/`haiku` alias (an older server incorrectly echoing the alias),
+   * the response is still usable but the alias must NOT be silently persisted
+   * as a resolved real model — log `resolved_alias_unexpected` and return a
+   * non-alias placeholder so durable attribution never stores the virtual
+   * alias.
+   */
   private extractModel(response: OpenAIChatCompletionResponse): string {
-    return response.model ?? SMALL_MODEL_ALIAS;
+    const model = response.model;
+    if (typeof model === "string" && model.length > 0 && !isAliasEcho(model)) {
+      return model;
+    }
+    log.info(
+      "[ai-lightweight] resolved_alias_unexpected — response.model missing or echoed the alias"
+    );
+    return "unresolved-small-model";
   }
 
   private retryDelay(
@@ -771,7 +845,8 @@ export class AIChatLightweightCompletionService {
     fields: LightweightAttemptMetrics & {
       outcome: AIChatLightweightOutcome;
       routeReason?: AIChatLightweightRouteReason;
-    }
+    },
+    observability?: { contextWindow?: number; inputTokenEstimate?: number }
   ): void {
     // Construct the typed event so the interface is the single source of
     // truth for the log shape. No prompt or output content is logged.
@@ -785,8 +860,17 @@ export class AIChatLightweightCompletionService {
           ? "small"
           : null,
       ...(response?.model ? { resolvedModel: response.model } : {}),
+      ...(observability?.contextWindow !== undefined
+        ? { contextWindow: observability.contextWindow }
+        : {}),
+      ...(observability?.inputTokenEstimate !== undefined
+        ? { inputTokenEstimate: observability.inputTokenEstimate }
+        : {}),
       ...(response?.usage?.completion_tokens !== undefined
         ? { outputTokens: response.usage.completion_tokens }
+        : {}),
+      ...(response?.usage?.prompt_tokens !== undefined
+        ? { providerInputTokens: response.usage.prompt_tokens }
         : {}),
       attemptCount: fields.attemptCount,
       repairAttempted: fields.repairAttempted,

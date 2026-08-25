@@ -602,6 +602,145 @@ describe("AIChatLightweightCompletionService", () => {
     });
   });
 
+  describe("observability + resolved model (SMBW-012/013/014)", () => {
+    it("emits contextWindow, inputTokenEstimate, and provider token usage on success", async () => {
+      const deps = buildDeps({
+        smallModelCapability: {
+          available: true,
+          resolved_model: "haiku",
+          context_size: 200_000,
+          max_tokens: 1024,
+        },
+      });
+      deps.completeHosted.mockResolvedValueOnce({
+        id: "r",
+        object: "chat.completion",
+        created: 1,
+        model: "haiku-resolved",
+        choices: [
+          {
+            index: 0,
+            message: { role: "assistant", content: "s" },
+            finish_reason: "stop",
+          },
+        ],
+        usage: { prompt_tokens: 42, completion_tokens: 7, total_tokens: 49 },
+      });
+      const svc = createLightweightCompletionService(deps);
+      const events: unknown[] = [];
+      const { log } = await import("@/modules/Logger");
+      const spy = vi
+        .spyOn(log, "info")
+        .mockImplementation((...args: unknown[]) => {
+          try {
+            const first = args[0];
+            if (
+              typeof first === "string" &&
+              first.startsWith("[ai-lightweight]")
+            ) {
+              // emitEvent logs (tag, json) as two arguments.
+              const payload = args[1];
+              events.push(
+                typeof payload === "string"
+                  ? JSON.parse(payload)
+                  : JSON.parse(first.replace("[ai-lightweight] ", ""))
+              );
+            }
+          } catch {
+            // ignore unrelated log lines
+          }
+        });
+
+      try {
+        await svc.complete({
+          workload: "user_auto_dream",
+          messages: [{ role: "user", content: "summarize this" }],
+          manual: false,
+        });
+      } finally {
+        spy.mockRestore();
+      }
+
+      expect(events).toHaveLength(1);
+      const ev = events[0] as Record<string, unknown>;
+      // user_auto_dream does not require discovered context — the capability
+      // is NOT consulted, so the conservative 32k is reported (SMBW-001
+      // contract preserved).
+      expect(ev.contextWindow).toBe(32_000);
+      expect(ev.inputTokenEstimate).toBeGreaterThan(0);
+      expect(ev.outputTokens).toBe(7);
+      expect(ev.providerInputTokens).toBe(42);
+      expect(ev.requestedAlias).toBe("small");
+      expect(ev.resolvedModel).toBe("haiku-resolved");
+    });
+
+    it("counts a small request + normal fallback as two attempts (SMBW-012)", async () => {
+      const deps = buildDeps({
+        smallModelCapability: { available: true, context_size: 200_000 },
+      });
+      deps.completeHosted
+        .mockRejectedValueOnce(new HttpResponseError("nf", 404, "{}"))
+        .mockResolvedValueOnce(okResponse("normal-compact"));
+      const svc = createLightweightCompletionService(deps);
+
+      const result = await svc.complete({
+        workload: "conversation_compact",
+        messages: [{ role: "user", content: "x" }],
+        normalModel: "normal-compact",
+        manual: false,
+      });
+      expect(result.attemptCount).toBe(2);
+      expect(result.fallbackAttempted).toBe(true);
+      expect(result.fallbackReason).toBe("small_model_unavailable");
+    });
+
+    it("never persists the virtual alias as the resolved model (SMBW-014)", async () => {
+      const deps = buildDeps({
+        smallModelCapability: { available: true, context_size: 200_000 },
+      });
+      // Server incorrectly echoes the alias back as the resolved model.
+      deps.completeHosted.mockResolvedValueOnce(okResponse("small"));
+      const svc = createLightweightCompletionService(deps);
+
+      const result = await svc.complete({
+        workload: "user_auto_dream",
+        messages: [{ role: "user", content: "x" }],
+        manual: false,
+      });
+      expect(result.resolvedModel).not.toBe("small");
+      expect(result.resolvedModel).not.toBe("haiku");
+    });
+
+    it("missing response.model resolves to a non-alias placeholder (SMBW-014)", async () => {
+      const deps = buildDeps({
+        smallModelCapability: { available: true, context_size: 200_000 },
+      });
+      deps.completeHosted.mockResolvedValueOnce({
+        id: "r",
+        object: "chat.completion",
+        created: 1,
+        // no model field
+        choices: [
+          {
+            index: 0,
+            message: { role: "assistant", content: "s" },
+            finish_reason: "stop",
+          },
+        ],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      });
+      const svc = createLightweightCompletionService(deps);
+
+      const result = await svc.complete({
+        workload: "user_auto_dream",
+        messages: [{ role: "user", content: "x" }],
+        manual: false,
+      });
+      expect(result.resolvedModel).not.toBe("small");
+      expect(result.resolvedModel.length).toBeGreaterThan(0);
+    });
+  });
+
   describe("compact controlled fallback", () => {
     // Router-level fallback tests: provide a valid capability so the small
     // route is eligible (SMBW-001 gate) and the fallback path can fire.

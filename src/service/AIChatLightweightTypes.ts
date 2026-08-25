@@ -214,7 +214,11 @@ export interface AIChatLightweightCompletionEvent {
   readonly resolvedModel?: string;
   readonly contextWindow?: number;
   readonly inputTokenEstimate?: number;
+  /** Provider-reported output tokens (usage.completion_tokens) when present. */
   readonly outputTokens?: number;
+  /** Provider-reported input tokens (usage.prompt_tokens) when present
+   * (SMBW-013). */
+  readonly providerInputTokens?: number;
   readonly attemptCount: number;
   readonly repairAttempted: boolean;
   readonly fallbackAttempted: boolean;
