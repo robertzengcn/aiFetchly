@@ -3,8 +3,11 @@ import {
   chunkGroupsByBudget,
   chunkSummariesByBudget,
   computeLightweightBudget,
+  estimateActiveMemoryTokens,
+  estimateAutoDreamPacketTokens,
   groupMessagesAtomically,
   maxPacketUpdatedAt,
+  reduceAutoDreamPacket,
   CONSERVATIVE_SMALL_CONTEXT_FALLBACK,
 } from "@/service/AIChatPromptBudget";
 import type { OpenAIChatMessage } from "@/api/aiChatApi";
@@ -205,6 +208,83 @@ describe("chunkSummariesByBudget", () => {
 
   it("returns an empty array for no summaries", () => {
     expect(chunkSummariesByBudget([], 100)).toEqual([]);
+  });
+});
+
+describe("estimateAutoDreamPacketTokens + reduceAutoDreamPacket (SMBW-007)", () => {
+  function packet(opts: { content?: string; msgs?: number; tools?: number }) {
+    const messages = Array.from({ length: opts.msgs ?? 2 }, (_, i) => ({
+      id: `m${i}`,
+      role: i % 2 === 0 ? "user" : "assistant",
+      content: opts.content ?? `message ${i}`,
+    }));
+    const toolCalls = Array.from({ length: opts.tools ?? 0 }, (_, i) => ({
+      toolCallId: `c${i}`,
+      toolName: `tool${i}`,
+      status: "success",
+      resultSummary: `summary ${i}`,
+    }));
+    return {
+      sourceKind: "chat_v2",
+      sourceId: "v2-1",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      title: "t",
+      messages,
+      ...(toolCalls.length ? { toolCalls } : {}),
+    };
+  }
+
+  it("estimateAutoDreamPacketTokens grows with more messages and tools", () => {
+    const small = estimateAutoDreamPacketTokens(packet({ msgs: 1 }));
+    const large = estimateAutoDreamPacketTokens(packet({ msgs: 5, tools: 2 }));
+    expect(large).toBeGreaterThan(small);
+  });
+
+  it("reduceAutoDreamPacket drops tool summaries first", () => {
+    const p = packet({ msgs: 2, tools: 3 });
+    const fullTokens = estimateAutoDreamPacketTokens(p);
+    const reduced = reduceAutoDreamPacket(p, Math.floor(fullTokens * 0.8));
+    expect(reduced.packet.toolCalls).toBeUndefined();
+    expect(reduced.minimumUsefulFits).toBe(true);
+  });
+
+  it("reduceAutoDreamPacket drops oldest messages before clamping the newest", () => {
+    const p = packet({ msgs: 5, tools: 0, content: "x".repeat(100) });
+    // Budget that can fit the identity header + a clamped newest message but
+    // not the full 5-message packet.
+    const fullTokens = estimateAutoDreamPacketTokens(p);
+    const reduced = reduceAutoDreamPacket(p, Math.floor(fullTokens * 0.4));
+    expect(reduced.packet.messages.length).toBeLessThanOrEqual(1);
+    expect(reduced.minimumUsefulFits).toBe(true);
+  });
+
+  it("reduceAutoDreamPacket never mutates the input", () => {
+    const p = packet({ msgs: 3, tools: 1 });
+    const before = JSON.parse(JSON.stringify(p));
+    reduceAutoDreamPacket(p, 5);
+    expect(p).toEqual(before);
+  });
+
+  it("a packet whose identity + newest message cannot fit reports minimumUsefulFits=false", () => {
+    const p = {
+      sourceKind: "chat_v2",
+      sourceId: "v2-1",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      title: "x".repeat(10),
+      messages: [{ id: "m0", role: "user", content: "y".repeat(10) }],
+    };
+    const reduced = reduceAutoDreamPacket(p, 1);
+    expect(reduced.minimumUsefulFits).toBe(false);
+  });
+
+  it("estimateActiveMemoryTokens measures the index line", () => {
+    const tokens = estimateActiveMemoryTokens({
+      memoryId: "mem-1",
+      type: "preference",
+      title: "Concise",
+      content: "User prefers concise answers.",
+    });
+    expect(tokens).toBeGreaterThan(0);
   });
 });
 

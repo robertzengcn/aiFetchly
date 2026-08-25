@@ -67,8 +67,8 @@ export function buildWorkspaceAutoDreamSystemPrompt(): string {
 export function buildWorkspaceAutoDreamUserPrompt(input: {
   workspaceKey: string;
   workspaceRoot: string;
-  activeMemories: AIWorkspaceMemoryView[];
-  packets: WorkspaceAwareAutoDreamSourcePacket[];
+  activeMemories: readonly AIWorkspaceMemoryView[];
+  packets: readonly WorkspaceAwareAutoDreamSourcePacket[];
 }): string {
   const memLines = input.activeMemories.length
     ? input.activeMemories
@@ -115,7 +115,7 @@ export function buildWorkspaceAutoDreamUserPrompt(input: {
 export function parseWorkspaceAutoDreamModelOutput(
   raw: string,
   validWorkspaceKeys: ReadonlySet<string>,
-  existing: AIWorkspaceMemoryView[]
+  existing: readonly AIWorkspaceMemoryView[]
 ): WorkspaceAutoDreamParseResult {
   const cleaned = stripCodeFence(raw).trim();
   if (!cleaned) {
@@ -181,8 +181,7 @@ function filterCreate(
     if (typeof sourceId !== "string") continue;
     const confidence = clampConfidence(obj.confidence);
     const sourceMessageIds = readStringArray(obj.sourceMessageIds);
-    const reason =
-      typeof obj.reason === "string" ? obj.reason : "auto_dream";
+    const reason = typeof obj.reason === "string" ? obj.reason : "auto_dream";
     out.push({
       workspaceKey,
       type,
@@ -216,7 +215,11 @@ function filterUpdate(
       memoryId,
       reason: typeof obj.reason === "string" ? obj.reason : "auto_dream",
     };
-    if (typeof title === "string" && isValidTitle(title) && !looksSecretlike(title))
+    if (
+      typeof title === "string" &&
+      isValidTitle(title) &&
+      !looksSecretlike(title)
+    )
       entry.title = title.trim().slice(0, MAX_TITLE_LEN);
     if (
       typeof content === "string" &&
@@ -224,7 +227,8 @@ function filterUpdate(
       !looksSecretlike(content)
     )
       entry.content = content.trim().slice(0, MAX_CONTENT_LEN);
-    if (confidence !== undefined) entry.confidence = clampConfidence(confidence);
+    if (confidence !== undefined)
+      entry.confidence = clampConfidence(confidence);
     out.push(entry);
   }
   return out;

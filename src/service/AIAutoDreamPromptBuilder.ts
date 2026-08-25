@@ -61,8 +61,8 @@ export function buildAutoDreamSystemPrompt(): string {
 }
 
 export function buildAutoDreamUserPrompt(input: {
-  activeMemories: AIUserMemoryView[];
-  packets: AutoDreamSourcePacket[];
+  activeMemories: readonly AIUserMemoryView[];
+  packets: readonly AutoDreamSourcePacket[];
 }): string {
   const memLines = input.activeMemories.length
     ? input.activeMemories
@@ -105,8 +105,8 @@ export function buildAutoDreamUserPrompt(input: {
 
 export function parseAutoDreamModelOutput(
   raw: string,
-  packets: AutoDreamSourcePacket[],
-  existing: AIUserMemoryView[]
+  packets: readonly AutoDreamSourcePacket[],
+  existing: readonly AIUserMemoryView[]
 ): ParseResult {
   const cleaned = stripCodeFence(raw).trim();
   if (!cleaned) {
@@ -166,8 +166,7 @@ function filterCreate(
     if (typeof sourceId !== "string" || !validSourceIds.has(sourceId)) continue;
     const confidence = clampConfidence(obj.confidence);
     const sourceMessageIds = readStringArray(obj.sourceMessageIds);
-    const reason =
-      typeof obj.reason === "string" ? obj.reason : "auto_dream";
+    const reason = typeof obj.reason === "string" ? obj.reason : "auto_dream";
     out.push({
       type,
       title: title.trim().slice(0, MAX_TITLE_LEN),
@@ -208,7 +207,8 @@ function filterUpdate(
       !isSecretLike(content)
     )
       entry.content = content.trim().slice(0, MAX_CONTENT_LEN);
-    if (confidence !== undefined) entry.confidence = clampConfidence(confidence);
+    if (confidence !== undefined)
+      entry.confidence = clampConfidence(confidence);
     out.push(entry);
   }
   return out;

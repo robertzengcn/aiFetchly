@@ -7,7 +7,7 @@ import {
   buildAutoDreamUserPrompt,
   parseAutoDreamModelOutput,
 } from "@/service/AIAutoDreamPromptBuilder";
-import { attemptAutoDreamJsonRepair } from "@/service/AIAutoDreamJsonRepair";
+import { runBatchedAutoDreamConsolidation } from "@/service/AIAutoDreamBatchRunner";
 import type {
   AIChatLightweightCompletionInput,
   AIChatLightweightCompletionResult,
@@ -16,8 +16,17 @@ import type {
   AIMemoryConsolidationRunView,
   AIAutoDreamStatusView,
 } from "@/entityTypes/aiUserMemoryTypes";
-import { openAIContentToString } from "@/api/aiChatApi";
-import type { OpenAIChatMessage } from "@/api/aiChatApi";
+import type {
+  OpenAIChatMessage,
+  OpenAISmallModelCapability,
+} from "@/api/aiChatApi";
+import type { AIUserMemoryView } from "@/entityTypes/aiUserMemoryTypes";
+import type { AutoDreamSourcePacket } from "@/service/AIAutoDreamSourceCollector";
+import type { ParseResult } from "@/service/AIAutoDreamPromptBuilder";
+import { getLightweightProfile } from "@/service/AIChatLightweightProfiles";
+
+/** Frozen profile for the user_auto_dream workload. */
+const AUTO_DREAM_PROFILE = getLightweightProfile("user_auto_dream");
 
 const MIN_HOURS_BETWEEN_RUNS = 24;
 const MIN_CHANGED_SOURCES = 5;
@@ -38,6 +47,13 @@ export interface AIAutoDreamServiceDeps {
   /** Resolves to the user-controllable auto-dream toggle. Reads from the
    * system_setting table; defaults to enabled when the row is absent. */
   isAutoDreamEnabled(): Promise<boolean>;
+  /**
+   * Resolves the hosted small-model capability metadata. Auto-dream uses a
+   * conservative 32k context when metadata is absent — it does NOT require a
+   * discovered context window (tech-design §8.4). Optional so tests can omit
+   * it; an omitted resolver uses the conservative fallback.
+   */
+  getSmallModelCapability?(): Promise<OpenAISmallModelCapability | null>;
 }
 
 export class AIAutoDreamService {
@@ -155,80 +171,60 @@ export class AIAutoDreamService {
     });
 
     try {
-      const activeMemories = await this.memoryModule.listMemories({
-        status: "active",
-        limit: 200,
-      });
-
-      const messages: OpenAIChatMessage[] = [
-        { role: "system", content: buildAutoDreamSystemPrompt() },
-        {
-          role: "user",
-          content: buildAutoDreamUserPrompt({
-            activeMemories,
-            packets: collected.packets,
-          }),
-        },
-      ];
-
-      // Route through the lightweight service: hosted + kill-switch-on sends
-      // `model: "small"` for the first attempt; the route result carries the
-      // resolved real model. Optional background work never falls back to the
-      // normal model (tech-design §8.1, §9.2).
+      // Total-budgeted batching (SMBW-007): resolve the small-model context
+      // (or the conservative 32k fallback), pack active memories + source
+      // packets into bounded batches, process each through the lightweight
+      // route with one same-route JSON repair, merge the plans, and apply the
+      // merged plan in one transactional call. Overflow packets are processed
+      // in later batches; an unprocessable packet fails the run locally
+      // without advancing the cursor.
       const isManual = input.reason === "manual" || input.force === true;
-      const result = await this.deps.completeLightweight({
-        workload: "user_auto_dream",
-        messages,
-        manual: isManual,
+      const outcome = await runBatchedAutoDreamConsolidation<ParseResult>({
+        runId: runView.runId,
+        packets: collected.packets,
+        reviewedThrough: collected.reviewedThrough,
+        isManual,
+        completeLightweight: (lwInput) =>
+          this.deps.completeLightweight(lwInput),
+        getSmallModelCapability: this.deps.getSmallModelCapability,
+        profile: AUTO_DREAM_PROFILE,
+        memory: {
+          listActiveMemories: async () =>
+            this.memoryModule.listMemories({ status: "active", limit: 200 }),
+          applyPlanAndCompleteRun: async (applyInput) =>
+            this.memoryModule.applyPlanAndCompleteRun(applyInput),
+        },
+        prompt: {
+          buildSystemPrompt: () => buildAutoDreamSystemPrompt(),
+          buildUserPrompt: ({
+            activeMemories,
+            packets,
+          }: {
+            activeMemories: ReadonlyArray<AIUserMemoryView>;
+            packets: readonly AutoDreamSourcePacket[];
+          }) => buildAutoDreamUserPrompt({ activeMemories, packets }),
+          parse: (
+            raw: string,
+            packets: readonly AutoDreamSourcePacket[],
+            activeMemories: ReadonlyArray<AIUserMemoryView>
+          ) => parseAutoDreamModelOutput(raw, packets, activeMemories),
+        },
       });
-      const resp = result.response;
-      const raw = openAIContentToString(resp.choices?.[0]?.message?.content);
-      let parsed = parseAutoDreamModelOutput(
-        raw,
-        collected.packets,
-        activeMemories
-      );
 
-      // JSON repair: if the small model returned non-empty but invalid
-      // consolidation JSON, send ONE repair request on the same route with
-      // the invalid output and the required schema. Never resend the full
-      // source prompt unless needed. Never fall back to the normal model
-      // (tech-design §9.4). Secret/semantic validation failure is NOT
-      // repairable.
-      if (!parsed.ok && raw.trim().length > 0) {
-        parsed = await attemptAutoDreamJsonRepair({
-          workload: "user_auto_dream",
-          invalidRaw: raw,
-          parsed,
-          manual: isManual,
-          completeLightweight: (input) => this.deps.completeLightweight(input),
-          parse: (r) =>
-            parseAutoDreamModelOutput(r, collected.packets, activeMemories),
-        });
-      }
-
-      if (!parsed.ok) {
+      if (outcome.outcome === "unprocessable") {
         await this.runModule.failRun(
           runView.runId,
-          `parse_error: ${parsed.error ?? "unknown"}`
+          `oversized_packet: ${outcome.sourceId}`
         );
         return await this.runModule.getByRunId(runView.runId);
       }
-
-      // Atomic apply: archive/update/create the memory plan AND mark the run
-      // completed with counts, resolved model, and source-derived cursor in
-      // ONE transaction. A failure rolls back all mutations; the previous
-      // successful cursor remains authoritative. No model call is repeated
-      // after a persistence failure (tech-design §14.4, §9.5).
-      await this.memoryModule.applyPlanAndCompleteRun({
-        runId: runView.runId,
-        plan: parsed,
-        chatConversationsReviewed: collected.chatConversationCount,
-        agentTasksReviewed: collected.agentTaskCount,
-        model: resp.model,
-        reviewedThrough: collected.reviewedThrough,
-      });
-
+      if (outcome.outcome === "parse_error") {
+        await this.runModule.failRun(
+          runView.runId,
+          `parse_error: ${outcome.error}`
+        );
+        return await this.runModule.getByRunId(runView.runId);
+      }
       return await this.runModule.getByRunId(runView.runId);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

@@ -22,8 +22,20 @@ import type {
   AIChatLightweightCompletionInput,
   AIChatLightweightCompletionResult,
 } from "@/service/AIChatLightweightTypes";
-import type { OpenAIChatMessage } from "@/api/aiChatApi";
+import type {
+  OpenAIChatMessage,
+  OpenAISmallModelCapability,
+} from "@/api/aiChatApi";
 import { openAIContentToString } from "@/api/aiChatApi";
+import { runBatchedAutoDreamConsolidation } from "@/service/AIAutoDreamBatchRunner";
+import type { AIWorkspaceMemoryView } from "@/entityTypes/aiWorkspaceMemoryTypes";
+import type { WorkspaceAutoDreamParseResult } from "@/service/AIWorkspaceAutoDreamPromptBuilder";
+import { getLightweightProfile } from "@/service/AIChatLightweightProfiles";
+
+/** Frozen profile for the workspace_auto_dream workload. */
+const WORKSPACE_AUTO_DREAM_PROFILE = getLightweightProfile(
+  "workspace_auto_dream"
+);
 
 const MIN_HOURS_BETWEEN_RUNS = 24;
 const MIN_CHANGED_SOURCES_PER_WORKSPACE = 3;
@@ -42,6 +54,12 @@ export interface AIWorkspaceAutoDreamServiceDeps {
   isAIEnabled(): boolean;
   /** Reads the workspace auto-dream toggle; defaults to enabled when absent. */
   isAutoDreamEnabled(): Promise<boolean>;
+  /**
+   * Resolves the hosted small-model capability metadata. Workspace auto-dream
+   * uses a conservative 32k context when metadata is absent (tech-design
+   * §8.4). Optional so tests can omit it.
+   */
+  getSmallModelCapability?(): Promise<OpenAISmallModelCapability | null>;
 }
 
 interface WorkspacePacketGroup {
@@ -239,83 +257,80 @@ export class AIWorkspaceAutoDreamService {
     });
 
     try {
-      const activeMemories = await this.memoryModule.listActiveForRetrieval(
-        scope,
-        200
-      );
-
       const validWorkspaceKeys = new Set([group.workspaceKey]);
-      const messages: OpenAIChatMessage[] = [
-        { role: "system", content: buildWorkspaceAutoDreamSystemPrompt() },
-        {
-          role: "user",
-          content: buildWorkspaceAutoDreamUserPrompt({
-            workspaceKey: group.workspaceKey,
-            workspaceRoot: group.workspaceRoot,
-            activeMemories,
-            packets: group.packets,
-          }),
-        },
-      ];
-      // Route through the lightweight service (workspace_auto_dream profile).
-      // Hosted + kill-switch-on sends `model: "small"`; optional background
-      // workloads never fall back to the normal model (tech-design §8.1, §9.2).
       const isManual = force;
-      const result = await this.deps.completeLightweight({
-        workload: "workspace_auto_dream",
-        messages,
-        manual: isManual,
-      });
-      const resp = result.response;
-      const raw = openAIContentToString(resp.choices?.[0]?.message?.content);
-      let parsed = parseWorkspaceAutoDreamModelOutput(
-        raw,
-        validWorkspaceKeys,
-        activeMemories
-      );
 
-      // JSON repair: one same-route repair request on invalid non-empty
-      // output. Never falls back to the normal model (tech-design §9.4).
-      if (!parsed.ok && raw.trim().length > 0) {
-        parsed = await attemptAutoDreamJsonRepair({
-          workload: "workspace_auto_dream",
-          invalidRaw: raw,
-          parsed,
-          manual: isManual,
-          completeLightweight: (input) => this.deps.completeLightweight(input),
-          parse: (r) =>
-            parseWorkspaceAutoDreamModelOutput(
-              r,
-              validWorkspaceKeys,
-              activeMemories
-            ),
+      // Total-budgeted batching (SMBW-007): shared runner packs workspace
+      // packets into bounded batches, processes each through the lightweight
+      // route with one same-route JSON repair, merges the plans, and applies
+      // the merged plan + run completion in one transaction scoped to this
+      // workspace.
+      const outcome =
+        await runBatchedAutoDreamConsolidation<WorkspaceAutoDreamParseResult>({
+          runId: runView.runId,
+          packets: group.packets,
+          reviewedThrough: groupReviewedThrough,
+          isManual,
+          completeLightweight: (lwInput) =>
+            this.deps.completeLightweight(lwInput),
+          getSmallModelCapability: this.deps.getSmallModelCapability,
+          profile: WORKSPACE_AUTO_DREAM_PROFILE,
+          memory: {
+            listActiveMemories: async () =>
+              this.memoryModule.listActiveForRetrieval(scope, 200),
+            applyPlanAndCompleteRun: async (applyInput) =>
+              this.memoryModule.applyPlanAndCompleteRun({
+                scope,
+                runId: applyInput.runId,
+                plan: applyInput.plan,
+                chatConversationsReviewed: applyInput.chatConversationsReviewed,
+                agentTasksReviewed: applyInput.agentTasksReviewed,
+                model: applyInput.model,
+                reviewedThrough: applyInput.reviewedThrough,
+              }),
+          },
+          prompt: {
+            buildSystemPrompt: () => buildWorkspaceAutoDreamSystemPrompt(),
+            buildUserPrompt: ({
+              activeMemories,
+              packets,
+            }: {
+              activeMemories: ReadonlyArray<AIWorkspaceMemoryView>;
+              packets: readonly WorkspaceAwareAutoDreamSourcePacket[];
+            }) =>
+              buildWorkspaceAutoDreamUserPrompt({
+                workspaceKey: group.workspaceKey,
+                workspaceRoot: group.workspaceRoot,
+                activeMemories,
+                packets,
+              }),
+            parse: (
+              raw: string,
+              _packets: readonly WorkspaceAwareAutoDreamSourcePacket[],
+              activeMemories: ReadonlyArray<AIWorkspaceMemoryView>
+            ) =>
+              parseWorkspaceAutoDreamModelOutput(
+                raw,
+                validWorkspaceKeys,
+                activeMemories
+              ),
+          },
         });
-      }
 
-      if (!parsed.ok) {
+      if (outcome.outcome === "unprocessable") {
         await this.runModule.failRun(
           runView.runId,
-          `parse_error: ${parsed.error ?? "unknown"}`
+          `oversized_packet: ${outcome.sourceId}`
         );
         return await this.runModule.getByRunId(runView.runId);
       }
-
-      // Atomic apply: memory plan + run completion in one transaction
-      // (tech-design §14.4).
-      await this.memoryModule.applyPlanAndCompleteRun({
-        scope,
-        runId: runView.runId,
-        plan: parsed,
-        chatConversationsReviewed: group.packets.filter(
-          (p) => p.sourceKind === "chat_v2"
-        ).length,
-        agentTasksReviewed: group.packets.filter(
-          (p) => p.sourceKind === "agent_task"
-        ).length,
-        model: resp.model,
-        reviewedThrough: groupReviewedThrough,
-      });
-
+      if (outcome.outcome === "parse_error") {
+        await this.runModule.failRun(
+          runView.runId,
+          `parse_error: ${outcome.error}`
+        );
+        return await this.runModule.getByRunId(runView.runId);
+      }
       return await this.runModule.getByRunId(runView.runId);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

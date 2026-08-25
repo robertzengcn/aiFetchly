@@ -264,3 +264,195 @@ export function chunkSummariesByBudget(
   flush();
   return chunks;
 }
+
+/**
+ * Estimate the token cost of an auto-dream source packet as the user-prompt
+ * payload the model sees: the source header plus each message line plus each
+ * tool-summary line. Kept in the budget module so the service and tests share
+ * one canonical measure (tech-design §14.2; SMBW-007).
+ */
+export function estimateAutoDreamPacketTokens(
+  packet: {
+    readonly title?: string;
+    readonly updatedAt?: string;
+    readonly messages?: ReadonlyArray<{
+      readonly role?: string;
+      readonly content?: string;
+    }>;
+    readonly toolCalls?: ReadonlyArray<{
+      readonly toolName?: string;
+      readonly status?: string;
+      readonly resultSummary?: string;
+      readonly errorMessage?: string;
+    }>;
+  },
+  estimator: AIChatTokenEstimator = new AIChatTokenEstimator()
+): number {
+  const header = `Source id=${packet.title ?? ""} updatedAt=${
+    packet.updatedAt ?? ""
+  }`;
+  const msgs = (packet.messages ?? [])
+    .map((m) => `    [${m.role ?? ""}] ${m.content ?? ""}`)
+    .join("\n");
+  const tools = (packet.toolCalls ?? [])
+    .map(
+      (t) =>
+        `    tool ${t.toolName ?? ""} status=${t.status ?? ""}${
+          t.resultSummary ? ` summary=${t.resultSummary}` : ""
+        }${t.errorMessage ? ` error=${t.errorMessage}` : ""}`
+    )
+    .join("\n");
+  return estimator.estimateText([header, msgs, tools].join("\n"));
+}
+
+/**
+ * Estimate the token cost of an active-memory index entry as the user-prompt
+ * payload the model sees (id, type, title, content). Auto-dream includes
+ * active memories as a compact index so the model can validate update/archive
+ * IDs and detect duplicates/contradictions (SMBW-007).
+ */
+export function estimateActiveMemoryTokens(
+  memory: {
+    readonly memoryId?: string;
+    readonly type?: string;
+    readonly title?: string;
+    readonly content?: string;
+  },
+  estimator: AIChatTokenEstimator = new AIChatTokenEstimator()
+): number {
+  return estimator.estimateText(
+    `- id=${memory.memoryId ?? ""} type=${memory.type ?? ""} title="${
+      memory.title ?? ""
+    }" content="${memory.content ?? ""}"`
+  );
+}
+
+/**
+ * Deterministically reduce an oversized auto-dream packet so it fits the
+ * remaining budget. Reduction order (tech-design §14.2): preserve title,
+ * source identity, update time, and the newest user/assistant exchange;
+ * remove oldest tool summaries first, then oldest message groups, then clamp
+ * the remaining longest message as the final step. Returns the reduced
+ * packet (a new object — never mutates the input). A packet that still
+ * cannot fit its identity + newest exchange alone is reported via the
+ * `minimumUsefulFits` flag so the caller fails locally without advancing the
+ * cursor (SMBW-007).
+ */
+export function reduceAutoDreamPacket(
+  packet: {
+    readonly sourceKind: string;
+    readonly sourceId: string;
+    readonly updatedAt: string;
+    readonly title: string;
+    readonly messages: ReadonlyArray<{
+      readonly id: string;
+      readonly role: string;
+      readonly content: string;
+    }>;
+    readonly toolCalls?: ReadonlyArray<{
+      readonly toolCallId: string;
+      readonly toolName: string;
+      readonly status: string;
+      readonly resultSummary?: string;
+      readonly errorMessage?: string;
+    }>;
+  },
+  usableTokens: number,
+  estimator: AIChatTokenEstimator = new AIChatTokenEstimator()
+): {
+  readonly packet: {
+    readonly sourceKind: string;
+    readonly sourceId: string;
+    readonly updatedAt: string;
+    readonly title: string;
+    readonly messages: ReadonlyArray<{
+      readonly id: string;
+      readonly role: string;
+      readonly content: string;
+    }>;
+    readonly toolCalls?: ReadonlyArray<{
+      readonly toolCallId: string;
+      readonly toolName: string;
+      readonly status: string;
+      readonly resultSummary?: string;
+      readonly errorMessage?: string;
+    }>;
+  };
+  readonly minimumUsefulFits: boolean;
+} {
+  const identity = {
+    sourceKind: packet.sourceKind,
+    sourceId: packet.sourceId,
+    updatedAt: packet.updatedAt,
+    title: packet.title,
+  };
+  // Step 1: drop ALL tool summaries (oldest first — order preserved).
+  let messages = [...packet.messages];
+  let toolCalls: typeof packet.toolCalls = undefined;
+  if (
+    estimatePacketWith(identity, messages, undefined, estimator) <= usableTokens
+  ) {
+    return {
+      packet: { ...identity, messages, ...(toolCalls ? { toolCalls } : {}) },
+      minimumUsefulFits: true,
+    };
+  }
+  // Step 2: drop oldest message groups one at a time, keeping the newest
+  // exchange (last two messages) to the end.
+  while (messages.length > 1) {
+    messages = messages.slice(1);
+    if (
+      estimatePacketWith(identity, messages, undefined, estimator) <=
+      usableTokens
+    ) {
+      return {
+        packet: { ...identity, messages },
+        minimumUsefulFits: true,
+      };
+    }
+  }
+  // Step 3: clamp the remaining (newest) message's content to fit.
+  const only = messages[0]!;
+  const headerTokens = estimator.estimateText(
+    `Source id=${identity.title} updatedAt=${identity.updatedAt}\n    [${only.role}] `
+  );
+  const budgetForContent = Math.max(0, usableTokens - headerTokens);
+  // 4 chars ≈ 1 token (inverse of the estimator's length/4 heuristic).
+  const charBudget = budgetForContent * 4;
+  const clampedContent =
+    only.content.length <= charBudget
+      ? only.content
+      : `${only.content.slice(0, Math.max(0, charBudget))}…`;
+  const clampedMessages = [{ ...only, content: clampedContent }];
+  const fits =
+    estimatePacketWith(identity, clampedMessages, undefined, estimator) <=
+    usableTokens;
+  return {
+    packet: { ...identity, messages: clampedMessages },
+    minimumUsefulFits: fits,
+  };
+}
+
+function estimatePacketWith(
+  identity: { readonly title: string; readonly updatedAt: string },
+  messages: ReadonlyArray<{ readonly role: string; readonly content: string }>,
+  toolCalls:
+    | ReadonlyArray<{
+        readonly toolName?: string;
+        readonly status?: string;
+        readonly resultSummary?: string;
+        readonly errorMessage?: string;
+      }>
+    | undefined,
+  estimator: AIChatTokenEstimator
+): number {
+  return estimateAutoDreamPacketTokens(
+    {
+      title: identity.title,
+      updatedAt: identity.updatedAt,
+      messages,
+      toolCalls,
+    },
+    estimator
+  );
+}
