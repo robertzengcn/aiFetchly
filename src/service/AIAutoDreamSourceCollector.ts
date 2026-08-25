@@ -12,6 +12,10 @@ import { maxPacketUpdatedAt } from "@/service/AIChatPromptBudget";
 
 const MAX_CHAT_CONVERSATIONS = 5;
 const MAX_AGENT_TASKS = 5;
+/** Shared bound on the merged chronological descriptor queue (chat + agent
+ * tasks) so one batch advances the cursor through the oldest eligible sources
+ * across both source kinds (SMBW-008, tech-design §14.1). */
+const MAX_MERGED_SOURCES = MAX_CHAT_CONVERSATIONS + MAX_AGENT_TASKS;
 const MAX_MESSAGES_PER_PACKET = 30;
 const MAX_MESSAGE_CHARS = 1200;
 const MAX_TOOL_SUMMARY_CHARS = 300;
@@ -67,100 +71,132 @@ export class AIAutoDreamSourceCollector {
   async collect(input: {
     reviewedSince: Date | null;
   }): Promise<CollectSourcesResult> {
-    const packets: WorkspaceAwareAutoDreamSourcePacket[] = [];
-
+    // Build lightweight descriptors for BOTH source kinds first, then merge
+    // into ONE chronological queue sorted by (updatedAt, sourceKind, sourceId)
+    // and apply a SHARED bound before hydration (SMBW-008, tech-design §14.1).
+    // This bounds DB+memory work to only the selected sources and guarantees
+    // no eligible source is skipped when the queue exceeds one batch.
     const conversations = await this.chatModule.getConversations();
-    // 1. Filter by reviewedSince BEFORE applying limits (tech-design §14.1).
-    // 2. Sort oldest-first (ascending) so a bounded batch advances the cursor
-    //    through the oldest eligible sources first — never skipping any.
-    const filteredChat = conversations
+    const chatDescriptors: SourceDescriptor[] = conversations
       .filter((c) => {
+        if (!c.conversationId) return false;
         const ts = new Date(c.lastMessageTimestamp).getTime();
         if (!Number.isFinite(ts)) return true;
         return input.reviewedSince ? ts >= input.reviewedSince.getTime() : true;
       })
-      .sort((a, b) =>
-        compareAscending(a.lastMessageTimestamp, b.lastMessageTimestamp)
-      )
-      .slice(0, MAX_CHAT_CONVERSATIONS);
-
-    for (const c of filteredChat) {
-      const convId = c.conversationId;
-      if (!convId) continue;
-      const rows: AIChatMessageEntity[] =
-        await this.chatModule.getConversationMessages(convId);
-      const messages = rows
-        .filter((r) => r.messageType === MessageType.MESSAGE)
-        .slice(-MAX_MESSAGES_PER_PACKET)
-        .map((r) => ({
-          id: r.messageId,
-          role: r.role,
-          content: clamp(r.content, MAX_MESSAGE_CHARS),
-          createdAt:
-            r.timestamp instanceof Date ? r.timestamp.toISOString() : undefined,
-        }));
-      // Resolve the durable workspace identity for this conversation. Failures
-      // (no approved workspace, revoked, etc.) yield no workspace context — the
-      // packet is still useful for global user-memory consolidation.
-      let workspace: WorkspaceAwareAutoDreamSourcePacket["workspace"];
-      try {
-        const resolved = await this.workspaceResolver.resolveWithKey(convId);
-        if (resolved) {
-          workspace = {
-            workspaceId: resolved.workspaceId,
-            workspaceKey: resolved.workspaceKey,
-            workspaceRoot: resolved.canonicalRootPath,
-            displayName: resolved.displayName,
-          };
-        }
-      } catch {
-        // non-fatal; packet proceeds without workspace context
-      }
-      packets.push({
-        sourceKind: "chat_v2",
-        sourceId: convId,
+      .map((c) => ({
+        sourceKind: "chat_v2" as const,
+        sourceId: c.conversationId!,
         updatedAt: c.lastMessageTimestamp ?? toIsoNow(),
-        title: c.title ?? convId,
-        messages,
-        ...(workspace ? { workspace } : {}),
-      });
-    }
+        title: c.title ?? c.conversationId!,
+        raw: c,
+      }));
 
+    // Fetch eligible agent tasks with a generous limit so the merged queue can
+    // choose them alongside chat sources (the shared bound is applied after
+    // the merge, not at the DB level).
     const agentTasks: AgentTaskEntity[] =
       await this.agentModule.listFinishedAfter(
         input.reviewedSince,
-        MAX_AGENT_TASKS
+        MAX_MERGED_SOURCES
       );
-
-    for (const t of agentTasks) {
-      const id = t.agentTaskId;
-      if (!id) continue;
-      const msgs: AgentTaskMessageRecord[] =
-        await this.agentModule.listMessages(id);
-      const messages = msgs.slice(-MAX_MESSAGES_PER_PACKET).map((m) => ({
-        id: m.toolCallId ?? "",
-        role: m.role,
-        content: clamp(m.content, MAX_MESSAGE_CHARS),
-      }));
-      const tcs: AgentToolCallRecord[] = await this.agentModule.listToolCalls(
-        id
-      );
-      const toolCalls = tcs.map((tc) => ({
-        toolCallId: tc.toolCallId,
-        toolName: tc.toolName,
-        status: tc.status,
-        resultSummary:
-          clamp(tc.resultSummary ?? "", MAX_TOOL_SUMMARY_CHARS) || undefined,
-        errorMessage: tc.errorMessage ?? undefined,
-      }));
-      packets.push({
-        sourceKind: "agent_task",
-        sourceId: id,
+    const agentDescriptors: SourceDescriptor[] = agentTasks
+      .filter((t) => Boolean(t.agentTaskId))
+      .map((t) => ({
+        sourceKind: "agent_task" as const,
+        sourceId: t.agentTaskId!,
         updatedAt: toIso(t.finishedAt) ?? toIso(t.updatedAt) ?? toIsoNow(),
-        title: (t.prompt ?? id).slice(0, 120),
-        messages,
-        toolCalls,
-      });
+        title: (t.prompt ?? t.agentTaskId!).slice(0, 120),
+        raw: t,
+      }));
+
+    // Merge and sort oldest-first by (updatedAt, sourceKind, sourceId) so the
+    // boundary is deterministic and ties do not skip data.
+    const merged = [...chatDescriptors, ...agentDescriptors].sort(
+      (a, b) =>
+        compareAscending(a.updatedAt, b.updatedAt) ||
+        compareAscending(a.sourceKind, b.sourceKind) ||
+        compareAscending(a.sourceId, b.sourceId)
+    );
+    const selected = merged.slice(0, MAX_MERGED_SOURCES);
+
+    // Hydrate only the selected descriptors (bounded DB + memory work).
+    const packets: WorkspaceAwareAutoDreamSourcePacket[] = [];
+    let chatConversationCount = 0;
+    let agentTaskCount = 0;
+    for (const desc of selected) {
+      if (desc.sourceKind === "chat_v2") {
+        const conv = desc.raw as (typeof conversations)[number];
+        const convId = conv.conversationId!;
+        const rows: AIChatMessageEntity[] =
+          await this.chatModule.getConversationMessages(convId);
+        const messages = rows
+          .filter((r) => r.messageType === MessageType.MESSAGE)
+          .slice(-MAX_MESSAGES_PER_PACKET)
+          .map((r) => ({
+            id: r.messageId,
+            role: r.role,
+            content: clamp(r.content, MAX_MESSAGE_CHARS),
+            createdAt:
+              r.timestamp instanceof Date
+                ? r.timestamp.toISOString()
+                : undefined,
+          }));
+        // Resolve the durable workspace identity for this conversation.
+        let workspace: WorkspaceAwareAutoDreamSourcePacket["workspace"];
+        try {
+          const resolved = await this.workspaceResolver.resolveWithKey(convId);
+          if (resolved) {
+            workspace = {
+              workspaceId: resolved.workspaceId,
+              workspaceKey: resolved.workspaceKey,
+              workspaceRoot: resolved.canonicalRootPath,
+              displayName: resolved.displayName,
+            };
+          }
+        } catch {
+          // non-fatal; packet proceeds without workspace context
+        }
+        packets.push({
+          sourceKind: "chat_v2",
+          sourceId: convId,
+          updatedAt: conv.lastMessageTimestamp ?? toIsoNow(),
+          title: conv.title ?? convId,
+          messages,
+          ...(workspace ? { workspace } : {}),
+        });
+        chatConversationCount += 1;
+      } else {
+        const t = desc.raw as AgentTaskEntity;
+        const id = t.agentTaskId!;
+        const msgs: AgentTaskMessageRecord[] =
+          await this.agentModule.listMessages(id);
+        const messages = msgs.slice(-MAX_MESSAGES_PER_PACKET).map((m) => ({
+          id: m.toolCallId ?? "",
+          role: m.role,
+          content: clamp(m.content, MAX_MESSAGE_CHARS),
+        }));
+        const tcs: AgentToolCallRecord[] = await this.agentModule.listToolCalls(
+          id
+        );
+        const toolCalls = tcs.map((tc) => ({
+          toolCallId: tc.toolCallId,
+          toolName: tc.toolName,
+          status: tc.status,
+          resultSummary:
+            clamp(tc.resultSummary ?? "", MAX_TOOL_SUMMARY_CHARS) || undefined,
+          errorMessage: tc.errorMessage ?? undefined,
+        }));
+        packets.push({
+          sourceKind: "agent_task",
+          sourceId: id,
+          updatedAt: toIso(t.finishedAt) ?? toIso(t.updatedAt) ?? toIsoNow(),
+          title: (t.prompt ?? id).slice(0, 120),
+          messages,
+          toolCalls,
+        });
+        agentTaskCount += 1;
+      }
     }
 
     // Source-derived cursor: the greatest updatedAt among INCLUDED packets.
@@ -170,11 +206,20 @@ export class AIAutoDreamSourceCollector {
     const reviewedThrough = maxPacketUpdatedAt(packets);
     return {
       packets,
-      chatConversationCount: filteredChat.length,
-      agentTaskCount: agentTasks.length,
+      chatConversationCount,
+      agentTaskCount,
       reviewedThrough,
     };
   }
+}
+
+/** Lightweight descriptor used to merge sources before hydration. */
+interface SourceDescriptor {
+  readonly sourceKind: "chat_v2" | "agent_task";
+  readonly sourceId: string;
+  readonly updatedAt: string;
+  readonly title: string;
+  readonly raw: unknown;
 }
 
 /**

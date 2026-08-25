@@ -85,11 +85,15 @@ describe("AIAutoDreamSourceCollector — batch-safe cursors", () => {
     expect(result.packets.map((p) => p.sourceId)).toEqual(["c1", "c2", "c3"]);
   });
 
-  it("respects the MAX_CHAT_CONVERSATIONS bound after oldest-first sort", async () => {
-    const convs = Array.from({ length: 7 }, (_, i) =>
-      conv(`c${i + 1}`, `2026-01-0${i + 1}T00:00:00.000Z`)
+  it("respects the shared merged bound after oldest-first sort (SMBW-008)", async () => {
+    // 12 chat conversations, no agent tasks. The shared merged bound is 10
+    // (MAX_CHAT + MAX_AGENT); the 10 OLDEST are taken, oldest-first.
+    const convs = Array.from({ length: 12 }, (_, i) =>
+      conv(
+        `c${i + 1}`,
+        `2026-01-${String(i + 1).padStart(2, "0")}T00:00:00.000Z`
+      )
     );
-    // Reverse them so the sort actually has to reorder.
     mockGetConversations.mockResolvedValue([...convs].reverse());
     mockGetConversationMessages.mockResolvedValue([
       msgRow("m", "user", "x", "2026-01-01T00:00:00.000Z"),
@@ -98,14 +102,18 @@ describe("AIAutoDreamSourceCollector — batch-safe cursors", () => {
     const collector = new AIAutoDreamSourceCollector();
     const result = await collector.collect({ reviewedSince: null });
 
-    // Bound is 5; the 5 OLDEST are taken (c1..c5), not the 5 newest.
-    expect(result.chatConversationCount).toBe(5);
+    expect(result.chatConversationCount).toBe(10);
     expect(result.packets.map((p) => p.sourceId)).toEqual([
       "c1",
       "c2",
       "c3",
       "c4",
       "c5",
+      "c6",
+      "c7",
+      "c8",
+      "c9",
+      "c10",
     ]);
   });
 
@@ -156,11 +164,14 @@ describe("AIAutoDreamSourceCollector — batch-safe cursors", () => {
   });
 
   it("does not skip an eligible source when there are more candidates than one batch can hold", async () => {
-    // 7 conversations, bound 5. After this batch the cursor is c5's timestamp.
-    // A subsequent run with reviewedSince = that cursor must start at c6 (the
-    // next oldest), proving no source was skipped.
-    const convs = Array.from({ length: 7 }, (_, i) =>
-      conv(`c${i + 1}`, `2026-01-0${i + 1}T00:00:00.000Z`)
+    // 12 conversations, shared bound 10. After this batch the cursor is c10's
+    // timestamp. A subsequent run with reviewedSince = that cursor must
+    // surface c11 and c12, proving no source was skipped.
+    const convs = Array.from({ length: 12 }, (_, i) =>
+      conv(
+        `c${i + 1}`,
+        `2026-01-${String(i + 1).padStart(2, "0")}T00:00:00.000Z`
+      )
     );
     mockGetConversations.mockResolvedValue([...convs]);
     mockGetConversationMessages.mockResolvedValue([
@@ -169,22 +180,81 @@ describe("AIAutoDreamSourceCollector — batch-safe cursors", () => {
 
     const collector = new AIAutoDreamSourceCollector();
     const first = await collector.collect({ reviewedSince: null });
-    expect(first.chatConversationCount).toBe(5);
+    expect(first.chatConversationCount).toBe(10);
     expect(first.reviewedThrough.toISOString()).toBe(
-      "2026-01-05T00:00:00.000Z"
+      "2026-01-10T00:00:00.000Z"
     );
 
-    // Second batch: reviewedSince = first batch's cursor. c1..c5 are filtered
-    // out (>= 2026-01-05 keeps c5; but c6 and c7 are the next oldest). Because
-    // the cursor is the max INCLUDED updatedAt, c5 may reappear (>=, harmless
-    // reprocessing) but c6 and c7 are never skipped.
+    // Second batch: reviewedSince = first batch's cursor. c1..c9 are filtered
+    // out (>= 2026-01-10 keeps c10; c11 and c12 are the next oldest). Because
+    // the cursor is the max INCLUDED updatedAt, c10 may reappear (>=, harmless
+    // reprocessing) but c11 and c12 are never skipped.
     mockGetConversations.mockResolvedValue([...convs]);
     const second = await collector.collect({
       reviewedSince: first.reviewedThrough,
     });
     const secondIds = second.packets.map((p) => p.sourceId);
-    // c6 and c7 must be present — no skipped gap.
-    expect(secondIds).toContain("c6");
-    expect(secondIds).toContain("c7");
+    // c11 and c12 must be present — no skipped gap.
+    expect(secondIds).toContain("c11");
+    expect(secondIds).toContain("c12");
+  });
+
+  it("merges chat + agent-task descriptors into one chronological queue (SMBW-008)", async () => {
+    // Interleaved timestamps: agent task at 02, chat at 01/03, agent at 04.
+    mockGetConversations.mockResolvedValue([
+      conv("chat-03", "2026-01-03T00:00:00.000Z"),
+      conv("chat-01", "2026-01-01T00:00:00.000Z"),
+    ]);
+    mockGetConversationMessages.mockResolvedValue([
+      msgRow("m", "user", "x", "2026-01-01T00:00:00.000Z"),
+    ]);
+    const agentAt = (id: string, ts: string) =>
+      ({
+        agentTaskId: id,
+        prompt: id,
+        finishedAt: new Date(ts),
+        updatedAt: new Date(ts),
+      } as unknown as import("@/entity/AgentTask.entity").AgentTaskEntity);
+    // collect() calls listFinishedAfter once with the merged bound; return
+    // both agent tasks in that one call.
+    mockListFinishedAfter.mockResolvedValue([
+      agentAt("agent-02", "2026-01-02T00:00:00.000Z"),
+      agentAt("agent-04", "2026-01-04T00:00:00.000Z"),
+    ]);
+    mockListMessages.mockResolvedValue([]);
+    mockListToolCalls.mockResolvedValue([]);
+
+    const collector = new AIAutoDreamSourceCollector();
+    const result = await collector.collect({ reviewedSince: null });
+
+    // Merged chronological order across chat + agent sources.
+    expect(result.packets.map((p) => p.sourceId)).toEqual([
+      "chat-01",
+      "agent-02",
+      "chat-03",
+      "agent-04",
+    ]);
+    // Per-kind counts still reported.
+    expect(result.chatConversationCount).toBe(2);
+    expect(result.agentTaskCount).toBe(2);
+  });
+
+  it("treats all sources at the boundary timestamp as eligible (>=) so ties are not skipped (SMBW-008)", async () => {
+    // Two conversations AT the same boundary timestamp.
+    mockGetConversations.mockResolvedValue([
+      conv("c-tie-a", "2026-01-01T00:00:00.000Z"),
+      conv("c-tie-b", "2026-01-01T00:00:00.000Z"),
+    ]);
+    mockGetConversationMessages.mockResolvedValue([
+      msgRow("m", "user", "x", "2026-01-01T00:00:00.000Z"),
+    ]);
+
+    const collector = new AIAutoDreamSourceCollector();
+    const result = await collector.collect({
+      reviewedSince: new Date("2026-01-01T00:00:00.000Z"),
+    });
+    // Both eligible (>=) — neither dropped.
+    expect(result.packets.map((p) => p.sourceId)).toContain("c-tie-a");
+    expect(result.packets.map((p) => p.sourceId)).toContain("c-tie-b");
   });
 });

@@ -182,6 +182,33 @@ describe("AIAutoDreamService", () => {
     expect(b).toBeNull();
   });
 
+  it("does not write the candidate reviewedThrough at startRun (SMBW-008)", async () => {
+    const svc = makeService({ aiEnabled: true, autoDreamEnabled: true });
+    mockCompleteChat.mockResolvedValue({
+      choices: [
+        {
+          message: {
+            content: JSON.stringify({ create: [], update: [], archive: [] }),
+          },
+        },
+      ],
+      model: "test-model",
+    });
+    mockGetByRunId.mockResolvedValue({ ...runView, status: "completed" });
+    await svc.runNow({ force: true });
+    // startRun must NOT receive the candidate reviewedThrough — the watermark
+    // commits only with the successful transaction.
+    const startArg = mockStartRun.mock.calls[0]![0] as {
+      reviewedThrough?: Date | null;
+    };
+    expect(startArg.reviewedThrough).toBeNull();
+    // The successful apply DOES carry the source-derived cursor.
+    const applyArg = mockApplyPlanAndCompleteRun.mock.calls[0]![0] as {
+      reviewedThrough: Date;
+    };
+    expect(applyArg.reviewedThrough).toBeInstanceOf(Date);
+  });
+
   it("creates, updates, and archives memories from validated output", async () => {
     const svc = makeService({ aiEnabled: true, autoDreamEnabled: true });
     mockListMemories.mockResolvedValue([

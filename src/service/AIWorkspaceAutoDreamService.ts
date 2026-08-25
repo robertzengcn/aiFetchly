@@ -250,10 +250,12 @@ export class AIWorkspaceAutoDreamService {
     // (tech-design §14.1, §14.5).
     const groupReviewedThrough = maxPacketUpdatedAt(group.packets);
 
+    // SMBW-008: do not pass the candidate reviewedThrough to startRun — the
+    // watermark commits only with the successful applyPlanAndCompleteRun.
     const runView = await this.runModule.startRun({
       workspaceKey: group.workspaceKey,
       reviewedSince: reviewedSince ?? null,
-      reviewedThrough: groupReviewedThrough,
+      reviewedThrough: null,
     });
 
     try {

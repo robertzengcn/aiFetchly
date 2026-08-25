@@ -165,9 +165,11 @@ export class AIAutoDreamService {
       if (totalChanged < MIN_CHANGED_SOURCES) return null;
     }
 
+    // SMBW-008: do not pass the candidate reviewedThrough to startRun — the
+    // watermark commits only with the successful applyPlanAndCompleteRun.
     const runView = await this.runModule.startRun({
       reviewedSince: reviewedSince ?? null,
-      reviewedThrough: collected.reviewedThrough,
+      reviewedThrough: null,
     });
 
     try {
