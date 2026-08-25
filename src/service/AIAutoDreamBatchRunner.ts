@@ -97,7 +97,8 @@ export type AutoDreamBatchOutcome<P> =
       agentTasksReviewed: number;
     }
   | { outcome: "parse_error"; error: string }
-  | { outcome: "unprocessable"; sourceId: string };
+  | { outcome: "unprocessable"; sourceId: string }
+  | { outcome: "cancelled" };
 
 /**
  * Run total-budgeted batched consolidation (SMBW-007).
@@ -121,6 +122,9 @@ export async function runBatchedAutoDreamConsolidation<
   packets: readonly AutoDreamSourcePacket[];
   reviewedThrough: Date;
   isManual: boolean;
+  /** Caller cancellation signal, checked before each batch/repair/apply
+   * (SMBW-011). Aborts surface as a terminal cancelled outcome. */
+  signal?: AbortSignal;
   completeLightweight: (
     input: AIChatLightweightCompletionInput
   ) => Promise<AIChatLightweightCompletionResult>;
@@ -170,6 +174,11 @@ export async function runBatchedAutoDreamConsolidation<
   let agentTaskCount = 0;
 
   for (const batch of batches.batches) {
+    // SMBW-011: check cancellation before each batch/repair/apply so a
+    // cancelled run stops without further model or DB calls.
+    if (input.signal?.aborted) {
+      return { outcome: "cancelled" };
+    }
     for (const p of batch.packets) {
       reviewedPacketCount += 1;
       if (p.sourceKind === "chat_v2") chatCount += 1;
@@ -202,6 +211,10 @@ export async function runBatchedAutoDreamConsolidation<
     let parsed = input.prompt.parse(raw, batch.packets, activeMemories);
 
     if (!parsed.ok && raw.trim().length > 0) {
+      // SMBW-011: check cancellation before the repair request.
+      if (input.signal?.aborted) {
+        return { outcome: "cancelled" };
+      }
       parsed = await attemptAutoDreamJsonRepair({
         workload: input.profile.workload,
         invalidRaw: raw,
@@ -224,6 +237,10 @@ export async function runBatchedAutoDreamConsolidation<
     mergedPlan.archive.push(...parsed.archive);
   }
 
+  // SMBW-011: check cancellation before the transactional apply.
+  if (input.signal?.aborted) {
+    return { outcome: "cancelled" };
+  }
   await input.memory.applyPlanAndCompleteRun({
     runId: input.runId,
     plan: mergedPlan,

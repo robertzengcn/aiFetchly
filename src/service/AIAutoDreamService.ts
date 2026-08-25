@@ -92,11 +92,15 @@ export class AIAutoDreamService {
   async runNow(input?: {
     force?: boolean;
     reason?: string;
+    /** Caller cancellation signal, propagated to every lightweight request
+     * and checked before retry/repair/transactional apply (SMBW-011). */
+    signal?: AbortSignal;
   }): Promise<AIMemoryConsolidationRunView> {
     const force = input?.force === true;
     const result = await this.maybeRun({
       force,
       reason: input?.reason ?? "manual",
+      signal: input?.signal,
     });
     if (!result) {
       throw new Error("Auto-dream run skipped");
@@ -121,6 +125,7 @@ export class AIAutoDreamService {
   private async maybeRun(input: {
     force?: boolean;
     reason: string;
+    signal?: AbortSignal;
   }): Promise<AIMemoryConsolidationRunView | null> {
     if (this.inFlight) {
       return this.inFlight.then(() => null).catch(() => null);
@@ -135,7 +140,9 @@ export class AIAutoDreamService {
   private async executeRun(input: {
     force?: boolean;
     reason: string;
+    signal?: AbortSignal;
   }): Promise<AIMemoryConsolidationRunView | null> {
+    if (input.signal?.aborted) return null;
     if (!this.deps.isAIEnabled()) return null;
     if (!(await this.deps.isAutoDreamEnabled()) && !input.force) return null;
 
@@ -186,15 +193,21 @@ export class AIAutoDreamService {
         packets: collected.packets,
         reviewedThrough: collected.reviewedThrough,
         isManual,
+        signal: input.signal,
         completeLightweight: (lwInput) =>
-          this.deps.completeLightweight(lwInput),
+          this.deps.completeLightweight({
+            ...lwInput,
+            ...(input.signal ? { signal: input.signal } : {}),
+          }),
         getSmallModelCapability: this.deps.getSmallModelCapability,
         profile: AUTO_DREAM_PROFILE,
         memory: {
           listActiveMemories: async () =>
             this.memoryModule.listMemories({ status: "active", limit: 200 }),
-          applyPlanAndCompleteRun: async (applyInput) =>
-            this.memoryModule.applyPlanAndCompleteRun(applyInput),
+          applyPlanAndCompleteRun: async (applyInput) => {
+            input.signal?.throwIfAborted();
+            return this.memoryModule.applyPlanAndCompleteRun(applyInput);
+          },
         },
         prompt: {
           buildSystemPrompt: () => buildAutoDreamSystemPrompt(),
@@ -224,6 +237,14 @@ export class AIAutoDreamService {
         await this.runModule.failRun(
           runView.runId,
           `parse_error: ${outcome.error}`
+        );
+        return await this.runModule.getByRunId(runView.runId);
+      }
+      if (outcome.outcome === "cancelled") {
+        // SMBW-011: cancellation is not a failure — leave the run record for
+        // stale-run recovery and do NOT advance the cursor or record a failure.
+        log.info(
+          `[ai-auto-dream] run cancelled conv-run=${runView.runId} — no cursor advance, no failure recorded`
         );
         return await this.runModule.getByRunId(runView.runId);
       }

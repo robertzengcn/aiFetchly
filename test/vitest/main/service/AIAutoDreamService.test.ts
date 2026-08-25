@@ -413,6 +413,63 @@ describe("AIAutoDreamService", () => {
     expect(mockFailRun).toHaveBeenCalled();
   });
 
+  it("cancellation aborts the run without recording a failure or advancing the cursor (SMBW-011)", async () => {
+    const svc = makeService({ aiEnabled: true, autoDreamEnabled: true });
+    // Multiple packets force batching; the controller aborts after the first
+    // batch completes.
+    mockCollect.mockResolvedValue({
+      packets: [
+        {
+          sourceKind: "chat_v2",
+          sourceId: "v2-a",
+          updatedAt: new Date().toISOString(),
+          title: "a",
+          messages: Array.from({ length: 5 }, (_, i) => ({
+            id: `m${i}`,
+            role: i % 2 === 0 ? "user" : "assistant",
+            content: "x".repeat(2000),
+          })),
+        },
+        {
+          sourceKind: "chat_v2",
+          sourceId: "v2-b",
+          updatedAt: new Date().toISOString(),
+          title: "b",
+          messages: Array.from({ length: 5 }, (_, i) => ({
+            id: `m${i}`,
+            role: i % 2 === 0 ? "user" : "assistant",
+            content: "x".repeat(2000),
+          })),
+        },
+      ],
+      chatConversationCount: 2,
+      agentTaskCount: 0,
+      reviewedThrough: new Date(),
+    });
+    const controller = new AbortController();
+    mockCompleteChat.mockImplementation(async () => {
+      // Abort after the first batch's model call completes.
+      controller.abort();
+      return {
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({ create: [], update: [], archive: [] }),
+            },
+          },
+        ],
+        model: "small-resolved",
+      };
+    });
+    mockGetByRunId.mockResolvedValue({ ...runView, status: "running" });
+
+    const r = await svc.runNow({ force: true, signal: controller.signal });
+    // Cancellation is not a failure — no failRun, no apply (cursor unchanged).
+    expect(mockFailRun).not.toHaveBeenCalled();
+    expect(mockApplyPlanAndCompleteRun).not.toHaveBeenCalled();
+    void r;
+  });
+
   describe("total-budgeted batching (SMBW-007)", () => {
     function okResponse(content = '{"create":[],"update":[],"archive":[]}') {
       return {

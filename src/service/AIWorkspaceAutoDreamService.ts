@@ -115,11 +115,15 @@ export class AIWorkspaceAutoDreamService {
   async runNow(input?: {
     force?: boolean;
     reason?: string;
+    /** Caller cancellation signal, propagated to every lightweight request
+     * and checked before retry/repair/transactional apply (SMBW-011). */
+    signal?: AbortSignal;
   }): Promise<AIWorkspaceMemoryConsolidationRunView[]> {
     const force = input?.force === true;
     const result = await this.maybeRun({
       force,
       reason: input?.reason ?? "manual",
+      signal: input?.signal,
     });
     if (!result) {
       throw new Error("Workspace auto-dream run skipped");
@@ -144,6 +148,7 @@ export class AIWorkspaceAutoDreamService {
   private async maybeRun(input: {
     force?: boolean;
     reason: string;
+    signal?: AbortSignal;
   }): Promise<AIWorkspaceMemoryConsolidationRunView[] | null> {
     if (this.inFlight) {
       return this.inFlight.then(() => null).catch(() => null);
@@ -158,7 +163,9 @@ export class AIWorkspaceAutoDreamService {
   private async executeRun(input: {
     force?: boolean;
     reason: string;
+    signal?: AbortSignal;
   }): Promise<AIWorkspaceMemoryConsolidationRunView[] | null> {
+    if (input.signal?.aborted) return null;
     if (!this.deps.isAIEnabled()) return null;
     if (!(await this.deps.isAutoDreamEnabled()) && !input.force) return null;
 
@@ -182,10 +189,13 @@ export class AIWorkspaceAutoDreamService {
 
     const results: AIWorkspaceMemoryConsolidationRunView[] = [];
     for (const group of groups) {
+      // SMBW-011: stop processing further workspace groups once cancelled.
+      if (input.signal?.aborted) break;
       const view = await this.runForGroup(
         group,
         reviewedSince,
-        input.force === true
+        input.force === true,
+        input.signal
       );
       if (view) results.push(view);
     }
@@ -214,7 +224,8 @@ export class AIWorkspaceAutoDreamService {
   private async runForGroup(
     group: WorkspacePacketGroup,
     reviewedSince: Date | null,
-    force: boolean
+    force: boolean,
+    signal?: AbortSignal
   ): Promise<AIWorkspaceMemoryConsolidationRunView | null> {
     const scope: WorkspaceMemoryScope = {
       workspaceKey: group.workspaceKey,
@@ -273,15 +284,20 @@ export class AIWorkspaceAutoDreamService {
           packets: group.packets,
           reviewedThrough: groupReviewedThrough,
           isManual,
+          signal,
           completeLightweight: (lwInput) =>
-            this.deps.completeLightweight(lwInput),
+            this.deps.completeLightweight({
+              ...lwInput,
+              ...(signal ? { signal } : {}),
+            }),
           getSmallModelCapability: this.deps.getSmallModelCapability,
           profile: WORKSPACE_AUTO_DREAM_PROFILE,
           memory: {
             listActiveMemories: async () =>
               this.memoryModule.listActiveForRetrieval(scope, 200),
-            applyPlanAndCompleteRun: async (applyInput) =>
-              this.memoryModule.applyPlanAndCompleteRun({
+            applyPlanAndCompleteRun: async (applyInput) => {
+              signal?.throwIfAborted();
+              return this.memoryModule.applyPlanAndCompleteRun({
                 scope,
                 runId: applyInput.runId,
                 plan: applyInput.plan,
@@ -289,7 +305,8 @@ export class AIWorkspaceAutoDreamService {
                 agentTasksReviewed: applyInput.agentTasksReviewed,
                 model: applyInput.model,
                 reviewedThrough: applyInput.reviewedThrough,
-              }),
+              });
+            },
           },
           prompt: {
             buildSystemPrompt: () => buildWorkspaceAutoDreamSystemPrompt(),
@@ -330,6 +347,14 @@ export class AIWorkspaceAutoDreamService {
         await this.runModule.failRun(
           runView.runId,
           `parse_error: ${outcome.error}`
+        );
+        return await this.runModule.getByRunId(runView.runId);
+      }
+      if (outcome.outcome === "cancelled") {
+        // SMBW-011: cancellation is not a failure — no cursor advance, no
+        // failure recorded. The run record is left for stale-run recovery.
+        log.info(
+          `[workspace-auto-dream] run cancelled ws=${group.workspaceKey} — no cursor advance, no failure recorded`
         );
         return await this.runModule.getByRunId(runView.runId);
       }

@@ -106,11 +106,17 @@ export interface SessionMemoryUpdateInput {
   promptTokens?: number;
   /** Model used by the triggering chat turn; forwarded to the compact request. */
   model?: string;
+  /** Caller cancellation signal, propagated to every lightweight request and
+   * checked before chunk iteration/repair/apply (SMBW-011). */
+  signal?: AbortSignal;
 }
 
 export interface FullCompactInput {
   conversationId: string;
   model?: string;
+  /** Caller cancellation signal, propagated to every lightweight request and
+   * checked before chunk/merge/apply/activation (SMBW-011). */
+  signal?: AbortSignal;
 }
 
 export class AIChatCompactAgentService {
@@ -419,6 +425,14 @@ export class AIChatCompactAgentService {
       const startedAt = Date.now();
 
       for (const chunk of chunks) {
+        // SMBW-011: stop iterating chunks once cancelled. Partial progress
+        // already persisted stays committed; no failure is recorded.
+        if (input.signal?.aborted) {
+          log.info(
+            `[ai-chat-compact] session update cancelled conv=${input.conversationId} processedGroups=${processedGroups}/${groups.length}`
+          );
+          return;
+        }
         const chunkMessages = chunk.groups.flatMap(
           (g) => g.messages as OpenAIChatMessage[]
         );
@@ -446,6 +460,7 @@ export class AIChatCompactAgentService {
           normalModel: input.model,
           manual: false,
           allowSameRouteRetry: false,
+          ...(input.signal ? { signal: input.signal } : {}),
         });
         const resp = result.response;
         if (resp.model) resolvedModel = resp.model;
@@ -459,6 +474,8 @@ export class AIChatCompactAgentService {
           (!normalized.ok || !hasAnySessionMemoryHeading(raw)) &&
           raw.trim().length > 0;
         if (needsRepair) {
+          // SMBW-011: check cancellation before the repair request.
+          if (input.signal?.aborted) return;
           const repairResult = await this.deps.completeLightweight({
             workload: "session_memory_summary",
             messages: [
@@ -481,6 +498,7 @@ export class AIChatCompactAgentService {
             manual: false,
             repairAttempted: true,
             allowSameRouteRetry: false,
+            ...(input.signal ? { signal: input.signal } : {}),
           });
           const repairRaw = openAIContentToString(
             repairResult.response.choices?.[0]?.message?.content
@@ -516,6 +534,13 @@ export class AIChatCompactAgentService {
         );
         processedGroups += chunkGroups.length;
         const tokenEstimate = this.estimator.estimateText(currentSummary);
+        // SMBW-011: check cancellation before persisting the chunk boundary.
+        if (input.signal?.aborted) {
+          log.info(
+            `[ai-chat-compact] session update cancelled before persist conv=${input.conversationId} processedGroups=${processedGroups}/${groups.length}`
+          );
+          return;
+        }
         await this.memory.upsertMemory({
           conversationId: input.conversationId,
           summary: currentSummary,
@@ -650,7 +675,8 @@ export class AIChatCompactAgentService {
         priorSummary,
         budget,
         input.model,
-        /* forceNormalRoute */ false
+        /* forceNormalRoute */ false,
+        input.signal
       );
       return await this.activateCompact(
         input.conversationId,
@@ -664,6 +690,8 @@ export class AIChatCompactAgentService {
         pipeline.chunkCount
       );
     } catch (error) {
+      // SMBW-011: cancellation is not a fallback-eligible failure; propagate.
+      if (input.signal?.aborted) throw error;
       if (this.isFallbackEligibleFailure(error)) {
         log.info(
           `[ai-chat-compact] small-route failed (${this.failureReason(
@@ -677,7 +705,8 @@ export class AIChatCompactAgentService {
           priorSummary,
           budget,
           input.model,
-          /* forceNormalRoute */ true
+          /* forceNormalRoute */ true,
+          input.signal
         );
         return await this.activateCompact(
           input.conversationId,
@@ -708,12 +737,13 @@ export class AIChatCompactAgentService {
     priorSummary: string | null,
     budget: ReturnType<typeof computeLightweightBudget>,
     model: string | undefined,
-    forceNormalRoute: boolean
+    forceNormalRoute: boolean,
+    signal?: AbortSignal
   ): Promise<{ summary: string; resolvedModel: string; chunkCount: number }> {
     const groups = groupMessagesAtomically(chunkSourceMessages);
     const chunks = chunkGroupsByBudget(groups, budget.usablePayloadTokens);
     const { chunkSummaries, singleChunkResponseModel } =
-      await this.summarizeChunks(chunks, model, forceNormalRoute);
+      await this.summarizeChunks(chunks, model, forceNormalRoute, signal);
 
     const { summary, resolvedModel } =
       chunkSummaries.length === 1
@@ -727,7 +757,8 @@ export class AIChatCompactAgentService {
             chunkSummaries,
             priorSummary,
             model,
-            forceNormalRoute
+            forceNormalRoute,
+            signal
           );
     return {
       summary,
@@ -926,7 +957,8 @@ export class AIChatCompactAgentService {
       }>;
     }>,
     model: string | undefined,
-    forceNormalRoute: boolean
+    forceNormalRoute: boolean,
+    signal?: AbortSignal
   ): Promise<{
     chunkSummaries: string[];
     singleChunkResponseModel: string | undefined;
@@ -934,6 +966,10 @@ export class AIChatCompactAgentService {
     const chunkSummaries: string[] = [];
     let singleChunkResponseModel: string | undefined;
     for (const chunk of chunks) {
+      // SMBW-011: stop iterating chunks once cancelled.
+      if (signal?.aborted) {
+        throw new DOMException("aborted", "AbortError");
+      }
       const chunkMessages = chunk.groups.flatMap(
         (g) => g.messages as OpenAIChatMessage[]
       );
@@ -953,6 +989,7 @@ export class AIChatCompactAgentService {
         ...(forceNormalRoute
           ? { forceNormalRoute: true }
           : { allowNormalFallback: false }),
+        ...(signal ? { signal } : {}),
       });
       const raw = openAIContentToString(
         result.response.choices?.[0]?.message?.content
@@ -985,7 +1022,8 @@ export class AIChatCompactAgentService {
     chunkSummaries: readonly string[],
     priorSummary: string | null,
     model: string | undefined,
-    forceNormalRoute: boolean
+    forceNormalRoute: boolean,
+    signal?: AbortSignal
   ): Promise<{ summary: string; resolvedModel: string }> {
     const budget = await this.computeCompactBudget(model);
     const fixedPromptTokens = this.estimator.estimateText(
@@ -1011,7 +1049,8 @@ export class AIChatCompactAgentService {
       inputs,
       mergeUsablePayload,
       model,
-      forceNormalRoute
+      forceNormalRoute,
+      signal
     );
   }
 
@@ -1034,8 +1073,13 @@ export class AIChatCompactAgentService {
     summaries: readonly string[],
     usablePayloadTokens: number,
     model: string | undefined,
-    forceNormalRoute: boolean
+    forceNormalRoute: boolean,
+    signal?: AbortSignal
   ): Promise<{ summary: string; resolvedModel: string }> {
+    // SMBW-011: stop the recursive merge once cancelled.
+    if (signal?.aborted) {
+      throw new DOMException("aborted", "AbortError");
+    }
     // Single summary left — it is the final result (clamped if oversized).
     if (summaries.length === 1) {
       return {
@@ -1054,7 +1098,8 @@ export class AIChatCompactAgentService {
       const merged = await this.requestMerge(
         batches[0]?.summaries ?? summaries,
         model,
-        forceNormalRoute
+        forceNormalRoute,
+        signal
       );
       return {
         summary: merged.summary,
@@ -1066,7 +1111,8 @@ export class AIChatCompactAgentService {
         summaries,
         usablePayloadTokens,
         model,
-        forceNormalRoute
+        forceNormalRoute,
+        signal
       );
     }
     // Multiple batches that reduce the count: merge each into an intermediate,
@@ -1074,10 +1120,14 @@ export class AIChatCompactAgentService {
     const intermediates: string[] = [];
     let resolvedModel: string | undefined;
     for (const batch of batches) {
+      if (signal?.aborted) {
+        throw new DOMException("aborted", "AbortError");
+      }
       const merged = await this.requestMerge(
         batch.summaries,
         model,
-        forceNormalRoute
+        forceNormalRoute,
+        signal
       );
       intermediates.push(merged.summary);
       if (!resolvedModel) {
@@ -1088,7 +1138,8 @@ export class AIChatCompactAgentService {
       intermediates,
       usablePayloadTokens,
       model,
-      forceNormalRoute
+      forceNormalRoute,
+      signal
     );
   }
 
@@ -1103,11 +1154,15 @@ export class AIChatCompactAgentService {
     summaries: readonly string[],
     usablePayloadTokens: number,
     model: string | undefined,
-    forceNormalRoute: boolean
+    forceNormalRoute: boolean,
+    signal?: AbortSignal
   ): Promise<{ summary: string; resolvedModel: string }> {
     const intermediates: string[] = [];
     let resolvedModel: string | undefined;
     for (let i = 0; i < summaries.length; i += 2) {
+      if (signal?.aborted) {
+        throw new DOMException("aborted", "AbortError");
+      }
       const a = summaries[i]!;
       const b = summaries[i + 1];
       if (b === undefined) {
@@ -1115,7 +1170,12 @@ export class AIChatCompactAgentService {
         intermediates.push(this.clampForMerge(a, usablePayloadTokens));
         continue;
       }
-      const merged = await this.requestMerge([a, b], model, forceNormalRoute);
+      const merged = await this.requestMerge(
+        [a, b],
+        model,
+        forceNormalRoute,
+        signal
+      );
       intermediates.push(merged.summary);
       if (!resolvedModel) {
         resolvedModel = merged.resolvedModel;
@@ -1131,7 +1191,8 @@ export class AIChatCompactAgentService {
       intermediates,
       usablePayloadTokens,
       model,
-      forceNormalRoute
+      forceNormalRoute,
+      signal
     );
   }
 
@@ -1139,8 +1200,13 @@ export class AIChatCompactAgentService {
   private async requestMerge(
     summaries: readonly string[],
     model: string | undefined,
-    forceNormalRoute: boolean
+    forceNormalRoute: boolean,
+    signal?: AbortSignal
   ): Promise<{ summary: string; resolvedModel: string }> {
+    // SMBW-011: check cancellation before the merge request.
+    if (signal?.aborted) {
+      throw new DOMException("aborted", "AbortError");
+    }
     const inputs: { role: "assistant"; content: string }[] = summaries.map(
       (s) => ({ role: "assistant" as const, content: s })
     );
@@ -1159,6 +1225,7 @@ export class AIChatCompactAgentService {
       ...(forceNormalRoute
         ? { forceNormalRoute: true }
         : { allowNormalFallback: false }),
+      ...(signal ? { signal } : {}),
     });
     const mergeRaw = openAIContentToString(
       mergeResult.response.choices?.[0]?.message?.content

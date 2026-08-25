@@ -777,6 +777,79 @@ describe("AIChatCompactAgentService", () => {
     });
   });
 
+  describe("cancellation propagation (SMBW-011)", () => {
+    it("a cancelled full compact stops without further model calls or activation", async () => {
+      mockGetActiveSummary.mockResolvedValue(null);
+      mockGetConversationMessages.mockResolvedValue(
+        Array.from({ length: 30 }, (_, i) => ({
+          messageId: `m${i}`,
+          conversationId: "v2-cancel",
+          role: i % 2 === 0 ? "user" : "assistant",
+          content: "x".repeat(2000),
+          timestamp: new Date(i + 1),
+          messageType: "message",
+        }))
+      );
+      const controller = new AbortController();
+      let calls = 0;
+      const completeChat = vi.fn(async () => {
+        calls += 1;
+        if (calls >= 1) controller.abort();
+        return makeCompletion("# Compact\n## Summary\npart");
+      });
+      const agent = makeAgent({
+        completeChat,
+        getContextWindow: vi.fn().mockResolvedValue(2000),
+      });
+
+      await expect(
+        agent.runFullCompact({
+          conversationId: "v2-cancel",
+          signal: controller.signal,
+        })
+      ).rejects.toThrow();
+      // No compact activated on cancellation.
+      expect(mockSaveFullCompact).not.toHaveBeenCalled();
+    });
+
+    it("a cancelled session-memory update stops without recording a failure", async () => {
+      mockGetByConversation.mockResolvedValue(null);
+      mockGetConversationMessages.mockResolvedValue(
+        Array.from({ length: 30 }, (_, i) => ({
+          messageId: `m${i}`,
+          conversationId: "v2-sm-cancel",
+          role: i % 2 === 0 ? "user" : "assistant",
+          content: "x".repeat(2000),
+          timestamp: new Date(i + 1),
+          messageType: "message",
+        }))
+      );
+      mockUpsertMemory.mockResolvedValue({});
+      const controller = new AbortController();
+      let calls = 0;
+      const completeChat = vi.fn(async () => {
+        calls += 1;
+        if (calls >= 1) controller.abort();
+        return makeCompletion("# Session Memory\n## Current Goal\nx");
+      });
+      const agent = makeAgent({
+        completeChat,
+        getContextWindow: vi.fn().mockResolvedValue(2000),
+      });
+
+      await expect(
+        agent.enqueueSessionMemoryUpdate({
+          conversationId: "v2-sm-cancel",
+          reason: "test",
+          promptTokens: 103_000,
+          signal: controller.signal,
+        })
+      ).resolves.toBeUndefined();
+      // Cancellation is not a failure — no recordFailure.
+      expect(mockRecordFailure).not.toHaveBeenCalled();
+    });
+  });
+
   describe("rolling session-memory chunks (SMBW-010)", () => {
     function bigRows(convId: string, n: number) {
       return Array.from({ length: n }, (_, i) => ({
