@@ -2137,6 +2137,73 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     },
   },
   {
+    name: "skill_install_update",
+    description:
+      "Update an INSTALLED skill to its latest source revision. Re-acquires the recorded " +
+      "source, re-inspects, and returns a fresh plan for approval — expanded capabilities " +
+      "always require renewed approval. Requires the installation_id.",
+    parameters: {
+      type: "object",
+      properties: {
+        installationId: {
+          type: "string",
+          description: "Installation id from a prior skill_install_status/approve result.",
+        },
+      },
+      required: ["installationId"],
+    },
+    tier: "main",
+    requiresConfirmation: true,
+    permissionCategory: "filesystem",
+    source: "built-in",
+    execute: async (args) => {
+      const { SkillInstallationModule, isSkillInstallerEnabled } = await import(
+        "@/modules/SkillInstallationModule"
+      );
+      if (!isSkillInstallerEnabled()) {
+        return { success: false, result: { error: "Installer disabled." } };
+      }
+      const installationId = String(args.installationId ?? "");
+      if (!installationId) {
+        return { success: false, result: { error: "installationId is required." } };
+      }
+      const snapshot = await new SkillInstallationModule().update(installationId);
+      return { success: snapshot.state !== "failed", result: { ...snapshot } };
+    },
+  },
+  {
+    name: "skill_install_repair",
+    description:
+      "Repair an installed skill WITHOUT updating it: recheck the activation, content, " +
+      "registry registration, and status; re-register in the runtime catalog when missing. " +
+      "Requires the installation_id.",
+    parameters: {
+      type: "object",
+      properties: {
+        installationId: {
+          type: "string",
+          description: "Installation id from a prior installer result.",
+        },
+      },
+      required: ["installationId"],
+    },
+    tier: "main",
+    requiresConfirmation: false,
+    permissionCategory: "pure",
+    source: "built-in",
+    execute: async (args) => {
+      const { SkillInstallationModule } = await import(
+        "@/modules/SkillInstallationModule"
+      );
+      const installationId = String(args.installationId ?? "");
+      if (!installationId) {
+        return { success: false, result: { error: "installationId is required." } };
+      }
+      const report = await new SkillInstallationModule().repair(installationId);
+      return { success: report.ok, result: { ...report } };
+    },
+  },
+  {
     name: "skill_install_status",
     description:
       "Get the current state, progress summary, and next required action for an " +

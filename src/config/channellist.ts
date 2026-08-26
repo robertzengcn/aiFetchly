@@ -369,6 +369,12 @@ export const SKILL_INSTALL_SUBMIT_SECRET = "skill-install:submit-secret";
 export const SKILL_INSTALL_STATUS = "skill-install:status";
 export const SKILL_INSTALL_CANCEL = "skill-install:cancel";
 export const SKILL_INSTALL_PROGRESS = "skill-install:progress";
+// Lifecycle management surface for the skill management UI (PRD §22.3).
+export const SKILL_INSTALL_UPDATE = "skill-install:update";
+export const SKILL_INSTALL_REPAIR = "skill-install:repair";
+export const SKILL_INSTALL_DISABLE = "skill-install:disable";
+export const SKILL_INSTALL_ENABLE = "skill-install:enable";
+export const SKILL_INSTALL_UNINSTALL = "skill-install:uninstall";
 /** Main->renderer refresh hint after a scheduled turn persists (FR-11). */
 export const AI_CHAT_V2_CONVERSATION_UPDATED =
   "ai-chat-v2:conversation-updated";

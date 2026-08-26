@@ -18,9 +18,14 @@ import { USER_AI_ENABLED } from "@/config/usersetting";
 import {
   SKILL_INSTALL_APPROVE,
   SKILL_INSTALL_CANCEL,
+  SKILL_INSTALL_DISABLE,
+  SKILL_INSTALL_ENABLE,
   SKILL_INSTALL_PREPARE,
+  SKILL_INSTALL_REPAIR,
   SKILL_INSTALL_STATUS,
   SKILL_INSTALL_SUBMIT_SECRET,
+  SKILL_INSTALL_UNINSTALL,
+  SKILL_INSTALL_UPDATE,
 } from "@/config/channellist";
 import {
   SkillInstallationModule,
@@ -177,6 +182,82 @@ export function registerSkillInstallationIpcHandlers(): void {
       });
     } catch (err) {
       return denied(err instanceof Error ? err.message : "Storing the credential failed.");
+    }
+  });
+}
+
+const installationSchema = z.object({ installationId: z.string().min(1) });
+const uninstallSchema = z.object({
+  installationId: z.string().min(1),
+  deleteSecrets: z.boolean().optional(),
+});
+
+export function registerSkillInstallationLifecycleIpcHandlers(): void {
+  ipcMain.handle(SKILL_INSTALL_UPDATE, async (_event, data: unknown) => {
+    if (!isAiEnabled()) return denied("AI functionality is only available to subscribers.");
+    const decoded = decode(installationSchema, data);
+    if (!decoded.ok) return denied(decoded.message);
+    try {
+      const snapshot = await new SkillInstallationModule().update(
+        decoded.value.installationId
+      );
+      return ok(snapshot);
+    } catch (err) {
+      return denied(err instanceof Error ? err.message : "Update failed.");
+    }
+  });
+
+  ipcMain.handle(SKILL_INSTALL_REPAIR, async (_event, data: unknown) => {
+    const decoded = decode(installationSchema, data);
+    if (!decoded.ok) return denied(decoded.message);
+    try {
+      const report = await new SkillInstallationModule().repair(
+        decoded.value.installationId
+      );
+      return ok(report);
+    } catch (err) {
+      return denied(err instanceof Error ? err.message : "Repair failed.");
+    }
+  });
+
+  ipcMain.handle(SKILL_INSTALL_DISABLE, async (_event, data: unknown) => {
+    const decoded = decode(installationSchema, data);
+    if (!decoded.ok) return denied(decoded.message);
+    try {
+      return ok(
+        await new SkillInstallationModule().disable(decoded.value.installationId)
+      );
+    } catch (err) {
+      return denied(err instanceof Error ? err.message : "Disable failed.");
+    }
+  });
+
+  ipcMain.handle(SKILL_INSTALL_ENABLE, async (_event, data: unknown) => {
+    const decoded = decode(installationSchema, data);
+    if (!decoded.ok) return denied(decoded.message);
+    try {
+      return ok(
+        await new SkillInstallationModule().enable(decoded.value.installationId)
+      );
+    } catch (err) {
+      return denied(err instanceof Error ? err.message : "Enable failed.");
+    }
+  });
+
+  ipcMain.handle(SKILL_INSTALL_UNINSTALL, async (_event, data: unknown) => {
+    const decoded = decode(uninstallSchema, data);
+    if (!decoded.ok) return denied(decoded.message);
+    try {
+      const result = await new SkillInstallationModule().uninstall({
+        installationId: decoded.value.installationId,
+        ...(decoded.value.deleteSecrets !== undefined
+          ? { deleteSecrets: decoded.value.deleteSecrets }
+          : {}),
+      });
+      if (!result.ok) return denied(result.message);
+      return ok(result);
+    } catch (err) {
+      return denied(err instanceof Error ? err.message : "Uninstall failed.");
     }
   });
 }

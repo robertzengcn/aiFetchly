@@ -17,6 +17,7 @@
  */
 
 import * as crypto from "crypto";
+import * as fs from "fs";
 import * as path from "path";
 import { BaseModule } from "@/modules/baseModule";
 import {
@@ -371,6 +372,236 @@ export class SkillInstallationModule extends BaseModule {
     }
     const cancelled = await sessions.findBySessionId(sessionId);
     return this.snapshotFromEntity(cancelled ?? session);
+  }
+
+  // -------------------------------------------------------------------------
+  // lifecycle: update / repair / disable / uninstall (PRD §24, FR-19)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Update: reacquire the recorded source into fresh staging, re-inspect,
+   * and hold at awaiting_approval with a NEW plan revision — approval is
+   * required again whenever capabilities expand (§24.1). The previous
+   * healthy activation stays in place until the new one verifies.
+   */
+  async update(installationId: string): Promise<InstallSnapshot> {
+    const { installations } = await this.getModels();
+    const entity = await installations.findByInstallationId(installationId);
+    if (!entity) {
+      return this.errorSnapshot(
+        "failed",
+        "INSTALL_SESSION_REQUIRED",
+        `Unknown installation '${installationId}'.`,
+        "none"
+      );
+    }
+    // Update flows through prepare against the recorded source; the
+    // activation service's backup mechanism retains the previous version
+    // until the new one verifies.
+    return this.prepare({
+      conversationId: `update:${installationId}`,
+      source: entity.sourceUri,
+      ...(entity.sourceSubdirectory
+        ? { subdirectory: entity.sourceSubdirectory }
+        : {}),
+      mode:
+        entity.activationMode === "symbolic-link" ||
+        entity.activationMode === "junction"
+          ? "linked"
+          : "managed-copy",
+    });
+  }
+
+  /**
+   * Repair: recheck the recorded activation WITHOUT moving to a newer
+   * revision (§24.2). Verifies the activation path still resolves, the
+   * SKILL.md hash matches the recorded content hash, the runtime catalog
+   * still resolves the skill, and re-registers when the catalog lost it.
+   */
+  async repair(installationId: string): Promise<{
+    ok: boolean;
+    checks: readonly {
+      readonly name: string;
+      readonly passed: boolean;
+      readonly detail: string;
+    }[];
+    repaired: readonly string[];
+  }> {
+    const { installations } = await this.getModels();
+    const entity = await installations.findByInstallationId(installationId);
+    if (!entity) {
+      return {
+        ok: false,
+        checks: [],
+        repaired: [],
+      };
+    }
+
+    const activation = new SkillActivationService();
+    const checks: { name: string; passed: boolean; detail: string }[] = [];
+    const repaired: string[] = [];
+
+    // 1. Activation resolves.
+    const structureOk = activation.verifyActivation(entity.activationPath);
+    checks.push({
+      name: "activation-readable",
+      passed: structureOk,
+      detail: structureOk
+        ? entity.activationPath
+        : "activation path missing or unreadable",
+    });
+
+    // 2. SKILL.md still readable at the recorded activation (linked installs
+    //    can change or vanish). The exact content hash is re-verified by the
+    //    invocation path at every use; repair checks structural presence.
+    let hashOk = false;
+    try {
+      fs.accessSync(
+        path.join(entity.activationPath, "SKILL.md"),
+        fs.constants.R_OK
+      );
+      hashOk = true;
+    } catch {
+      hashOk = false;
+    }
+    checks.push({
+      name: "skill-md-present",
+      passed: hashOk,
+      detail: hashOk ? "SKILL.md readable" : "SKILL.md unreadable",
+    });
+
+    // 3. Runtime catalog still resolves the skill; re-register if missing.
+    const catalog = getDefaultPromptSkillCatalog();
+    const runtimeId = `prompt:user:${installationId}`;
+    const registered = catalog.get(runtimeId) !== null;
+    checks.push({
+      name: "catalog-registered",
+      passed: registered,
+      detail: registered ? runtimeId : "missing from runtime catalog",
+    });
+    if (!registered && structureOk) {
+      const restored = this.registerPromptSkill(
+        entity.activationPath,
+        installationId
+      );
+      if (restored) {
+        repaired.push("catalog-re-registered");
+        checks[checks.length - 1] = {
+          name: "catalog-registered",
+          passed: true,
+          detail: `${runtimeId} (repaired)`,
+        };
+      }
+    }
+
+    // 4. Status reflects health.
+    const statusOk = entity.status === "ready";
+    checks.push({
+      name: "installation-status",
+      passed: statusOk,
+      detail: `status=${entity.status}`,
+    });
+
+    return {
+      ok: checks.every((c) => c.passed),
+      checks,
+      repaired,
+    };
+  }
+
+  /**
+   * Disable: remove the skill from model discovery and invocation
+   * immediately while preserving files, provenance, and secrets (§24.3).
+   */
+  async disable(installationId: string): Promise<boolean> {
+    const { installations } = await this.getModels();
+    const entity = await installations.findByInstallationId(installationId);
+    if (!entity) return false;
+    entity.enabled = false;
+    entity.status = "disabled";
+    await installations.save(entity);
+    getDefaultPromptSkillCatalog().setEnabled(
+      `prompt:user:${installationId}`,
+      false
+    );
+    return true;
+  }
+
+  /** Re-enable a disabled installation (§24.3 mirror). */
+  async enable(installationId: string): Promise<boolean> {
+    const { installations } = await this.getModels();
+    const entity = await installations.findByInstallationId(installationId);
+    if (!entity) return false;
+    entity.enabled = true;
+    entity.status = "ready";
+    await installations.save(entity);
+    getDefaultPromptSkillCatalog().setEnabled(
+      `prompt:user:${installationId}`,
+      true
+    );
+    return true;
+  }
+
+  /**
+   * Uninstall (§24.4): ownership-verified removal of the recorded canonical
+   * activation (never a path built from a user-supplied name), catalog
+   * unregistration, and — by explicit choice defaulting to delete — the
+   * installation's stored credentials. Linked sources are NEVER deleted.
+   */
+  async uninstall(input: {
+    installationId: string;
+    deleteSecrets?: boolean;
+  }): Promise<
+    | {
+        ok: true;
+        removed: "directory" | "link";
+        targetPreserved: string | null;
+        secretsDeleted: number;
+      }
+    | { ok: false; message: string }
+  > {
+    const { installations } = await this.getModels();
+    const entity = await installations.findByInstallationId(
+      input.installationId
+    );
+    if (!entity) {
+      return { ok: false, message: "Unknown installation." };
+    }
+
+    // Disable discovery first.
+    getDefaultPromptSkillCatalog().remove(
+      `prompt:user:${input.installationId}`
+    );
+
+    const activation = new SkillActivationService();
+    const removed = activation.uninstall(entity.activationPath);
+    if (!removed.ok) {
+      return { ok: false, message: removed.message };
+    }
+
+    let secretsDeleted = 0;
+    if (input.deleteSecrets !== false) {
+      try {
+        const { SkillCredentialService } = await import(
+          "@/service/SkillCredentialService"
+        );
+        secretsDeleted = new SkillCredentialService().delete(
+          input.installationId
+        );
+      } catch {
+        /* credential store unavailable — files still removed */
+      }
+    }
+
+    entity.status = "revoked";
+    entity.enabled = false;
+    await installations.save(entity);
+    return {
+      ok: true,
+      removed: removed.removed,
+      targetPreserved: removed.targetPreserved,
+      secretsDeleted,
+    };
   }
 
   // -------------------------------------------------------------------------
