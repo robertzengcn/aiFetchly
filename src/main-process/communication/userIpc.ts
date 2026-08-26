@@ -7,6 +7,8 @@ import {
   USER_SIGNOUT,
   LOGIN_STATUS,
   CHECK_LOGIN_SUCCEEDED,
+  USER_REFRESH_ENTITLEMENT,
+  USER_OPEN_PRICING_PLAN,
 } from "@/config/channellist";
 import { UserController } from "@/controller/UserController";
 import { User } from "@/modules/user";
@@ -23,6 +25,12 @@ import {
   USEREMAIL,
 } from "@/config/usersetting";
 import { TokenRefreshService } from "@/modules/tokenRefresh";
+import { SubscriptionEntitlementService } from "@/service/SubscriptionEntitlementService";
+import {
+  refreshEntitlementInputSchema,
+  openPricingPlanInputSchema,
+} from "@/schemas/ipc/subscriptionEntitlement";
+import type { EntitlementReconcileResult } from "@/entityTypes/subscriptionEntitlementTypes";
 
 /**
  * Holds the `cancel` callback for the currently-active desktop login
@@ -171,7 +179,29 @@ export function registerUserIpcHandlers(
   // controller does not import the IPC layer (avoids circular deps).
   UserController.setMainWindowProvider(winProvider);
 
-  ipcMain.handle(QUERY_USER_INFO, async (event, data) => {
+  // Entitlement reconciliation service needs the main window for broadcasts.
+  const entitlementService = SubscriptionEntitlementService.getInstance();
+  entitlementService.setMainWindow(winProvider());
+
+  // FR-5.1: reconcile entitlement after a successful access-token refresh.
+  // Registered once here (not inside TokenRefreshService) to avoid a circular
+  // import between tokenRefresh and the entitlement service.
+  TokenRefreshService.onRefreshSuccess(() => {
+    void entitlementService.reconcile("token_refresh");
+  });
+
+  // FR-3.2 / FR-4: reconcile on window focus. Ignore the first 2s after
+  // registration so the initial focus doesn't duplicate the startup reconcile.
+  const registeredAt = Date.now();
+  const win = winProvider();
+  if (win) {
+    win.on("focus", () => {
+      if (Date.now() - registeredAt < 2000) return;
+      entitlementService.onMainWindowFocus();
+    });
+  }
+
+  ipcMain.handle(QUERY_USER_INFO, async () => {
     const userControll = new UserController();
     const res = userControll.getUserInfo();
     const result: CommonMessage<UserInfoType> = {
@@ -189,7 +219,7 @@ export function registerUserIpcHandlers(
    * desktop handoff DID complete — the renderer should navigate instead of
    * showing a false "timeout" error.
    */
-  ipcMain.handle(CHECK_LOGIN_SUCCEEDED, async (_event, _data) => {
+  ipcMain.handle(CHECK_LOGIN_SUCCEEDED, async () => {
     let loginSucceeded = false;
     let email = "";
     try {
@@ -224,7 +254,7 @@ export function registerUserIpcHandlers(
    * is already opened here); calling prepareDesktopLogin() twice would
    * invalidate the first handoff.
    */
-  ipcMain.handle(GET_LOGIN_URL, async (event, data) => {
+  ipcMain.handle(GET_LOGIN_URL, async () => {
     try {
       // Abort any previous handoff BEFORE creating the new one. The old
       // cancel() closes the old loopback server and clears old pending
@@ -292,7 +322,7 @@ export function registerUserIpcHandlers(
    * value, so we simply do nothing here. Calling prepareDesktopLogin()
    * again would invalidate the active handoff.
    */
-  ipcMain.on(OPENLOGINPAGE, (_event, _data) => {
+  ipcMain.on(OPENLOGINPAGE, () => {
     /* no-op — browser already opened by GET_LOGIN_URL */
   });
 
@@ -300,7 +330,7 @@ export function registerUserIpcHandlers(
    * Aborts the currently-active desktop login handoff (closes the loopback
    * server, clears pending state). Safe to call when no handoff is active.
    */
-  ipcMain.handle(CANCEL_DESKTOP_LOGIN, async (event, data) => {
+  ipcMain.handle(CANCEL_DESKTOP_LOGIN, async () => {
     if (activeDesktopLoginCancel) {
       try {
         activeDesktopLoginCancel();
@@ -318,7 +348,7 @@ export function registerUserIpcHandlers(
     return { status: true, msg: "Desktop login cancelled", data: null };
   });
 
-  ipcMain.handle(USER_SIGNOUT, async (event, data) => {
+  ipcMain.handle(USER_SIGNOUT, async () => {
     const userModel = new User();
 
     const res = await userModel
@@ -346,5 +376,58 @@ export function registerUserIpcHandlers(
         }
       });
     return res;
+  });
+
+  /**
+   * Manual / test / renderer-initiated entitlement reconciliation.
+   * Validates input with Zod, then calls the service (never TypeORM directly).
+   * Returns the reconcile result so callers (and tests) can inspect it.
+   */
+  ipcMain.handle(USER_REFRESH_ENTITLEMENT, async (_event, raw) => {
+    const input = typeof raw === "string" ? JSON.parse(raw) : raw;
+    const parsed = refreshEntitlementInputSchema().safeParse(input);
+    if (!parsed.success) {
+      const msg = parsed.error.message;
+      log.warn(`[${USER_REFRESH_ENTITLEMENT}] validation failed: ${msg}`);
+      return { status: false, msg, data: null } satisfies CommonMessage<null>;
+    }
+    try {
+      const result: EntitlementReconcileResult =
+        await entitlementService.reconcile(parsed.data.trigger);
+      return {
+        status: true,
+        msg: "ok",
+        data: result,
+      } satisfies CommonMessage<EntitlementReconcileResult>;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Unknown error";
+      log.error(`[${USER_REFRESH_ENTITLEMENT}] reconcile error: ${msg}`);
+      return { status: false, msg, data: null } satisfies CommonMessage<null>;
+    }
+  });
+
+  /**
+   * Open the pricing page in the system browser. Main records pricingOpenedAt
+   * and starts the retry loop so a missed WebSocket notify is still recovered
+   * (PRD FR-3). Renderer must call this instead of window.open so main always
+   * knows pricing was opened.
+   */
+  ipcMain.handle(USER_OPEN_PRICING_PLAN, async (_event, raw) => {
+    const input = typeof raw === "string" ? JSON.parse(raw) : raw;
+    const parsed = openPricingPlanInputSchema().safeParse(input);
+    if (!parsed.success) {
+      const msg = parsed.error.message;
+      log.warn(`[${USER_OPEN_PRICING_PLAN}] validation failed: ${msg}`);
+      return { status: false, msg, data: null } satisfies CommonMessage<null>;
+    }
+    try {
+      const { url } = await entitlementService.markPricingOpened();
+      await shell.openExternal(url);
+      return { status: true, msg: "ok", data: { opened: true, url } };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Unknown error";
+      log.error(`[${USER_OPEN_PRICING_PLAN}] open pricing error: ${msg}`);
+      return { status: false, msg, data: null } satisfies CommonMessage<null>;
+    }
   });
 }
