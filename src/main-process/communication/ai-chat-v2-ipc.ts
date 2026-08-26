@@ -90,6 +90,7 @@ import type {
   ChatV2UploadedAttachment,
   ChatV2AttachmentKind,
   ChatToolApprovalMode,
+  ChatV2GeneratedImageReference,
 } from "@/entityTypes/aiChatV2Types";
 import { aiChatV2PastedContentsSchema } from "@/schemas/aiChatV2PastedText";
 import { PasteStoreService } from "@/service/pastedText/PasteStoreService";
@@ -97,7 +98,13 @@ import { CHAT_IMAGE_LIMITS } from "@/config/chatImageLimits";
 import {
   normalizeGeneratedImageReferences,
   GENERATED_IMAGE_REFERENCE_LIMIT_CODE,
+  GENERATED_IMAGE_REFERENCE_INVALID_CODE,
 } from "@/service/generatedImageReferenceNormalize";
+import { getConfirmedBatchReferenceRegistry } from "@/service/ConfirmedBatchReferenceRegistry";
+
+/** Cap for the user-confirmed batch reference set. Matches the batch tool's
+ * MAX_BATCH_ITEMS so a confirmed set is never rejected downstream. */
+const CONFIRMED_BATCH_MAX_REFERENCES = 50;
 
 /**
  * Minimal structural type for the IPC event object.
@@ -194,6 +201,9 @@ export function resetAiChatV2RuntimeForDatabaseSwitch(): void {
   // Clear the shared lightweight route cooldowns so one account/provider
   // cannot suppress another (tech-design §12).
   resetLightweightRuntime();
+  // Staged confirmed reference sets belong to the previous account's
+  // conversations; drop them so they can never feed a new account's batch.
+  getConfirmedBatchReferenceRegistry().clearAll();
 }
 
 function getCompactAgent(): AIChatCompactAgentService {
@@ -840,6 +850,69 @@ async function handleStream(event: IpcEventLike, data: string): Promise<void> {
     return;
   }
 
+  // User-confirmed batch reference set: normalized here and staged into
+  // trusted main-process state under this conversation's id. Staging runs
+  // AFTER every other validation so no earlier failure leaves a stale set
+  // behind, and the field is stripped from the request so the engine/model
+  // never sees it.
+  const confirmedBatch = req.confirmedGeneratedImageBatch;
+  let confirmedStageTarget: string | null = null;
+  let confirmedReferences: ChatV2GeneratedImageReference[] = [];
+  if (confirmedBatch !== undefined) {
+    const batchRecord =
+      typeof confirmedBatch === "object" &&
+      confirmedBatch !== null &&
+      !Array.isArray(confirmedBatch)
+        ? (confirmedBatch as { references?: unknown })
+        : undefined;
+    if (
+      !batchRecord ||
+      !Array.isArray(batchRecord.references) ||
+      typeof req.conversationId !== "string" ||
+      req.conversationId.length === 0
+    ) {
+      sendComplete(event, {
+        eventType: "error",
+        conversationId:
+          typeof req.conversationId === "string" ? req.conversationId : "",
+        errorMessage:
+          "confirmedGeneratedImageBatch requires a conversationId and a non-empty references array",
+        errorCode: GENERATED_IMAGE_REFERENCE_INVALID_CODE,
+      });
+      return;
+    }
+    const normalizedConfirmed = normalizeGeneratedImageReferences(
+      batchRecord.references,
+      CONFIRMED_BATCH_MAX_REFERENCES
+    );
+    if (
+      !normalizedConfirmed.ok ||
+      normalizedConfirmed.references.length === 0
+    ) {
+      sendComplete(event, {
+        eventType: "error",
+        conversationId: req.conversationId,
+        errorMessage: normalizedConfirmed.ok
+          ? "confirmedGeneratedImageBatch.references must contain at least one reference"
+          : normalizedConfirmed.reason,
+        errorCode: normalizedConfirmed.ok
+          ? GENERATED_IMAGE_REFERENCE_INVALID_CODE
+          : (normalizedConfirmed.errorCode ??
+            GENERATED_IMAGE_REFERENCE_INVALID_CODE),
+      });
+      return;
+    }
+    confirmedStageTarget = req.conversationId;
+    confirmedReferences = normalizedConfirmed.references;
+  }
+
+  if (confirmedStageTarget !== null && confirmedReferences.length > 0) {
+    getConfirmedBatchReferenceRegistry().stage(
+      confirmedStageTarget,
+      confirmedReferences
+    );
+  }
+
   const processedReq = {
     ...req,
     uploadedFiles: uploadedFiles.length > 0 ? uploadedFiles : undefined,
@@ -847,6 +920,8 @@ async function handleStream(event: IpcEventLike, data: string): Promise<void> {
       normalizedReferences.references.length > 0
         ? normalizedReferences.references
         : undefined,
+    // Trusted channel only: never forwarded to the engine or the model.
+    confirmedGeneratedImageBatch: undefined,
   };
 
   await engine.submitMessage({ request: processedReq, eventSink });
@@ -872,6 +947,14 @@ function handleStop(data?: unknown): void {
   if (raw && typeof raw === "object") {
     const value = (raw as { conversationId?: unknown }).conversationId;
     conversationId = typeof value === "string" ? value : undefined;
+  }
+  // A staged confirmed reference set belongs to the turn being stopped:
+  // dropping it prevents a cancelled turn from feeding a later batch run.
+  const registry = getConfirmedBatchReferenceRegistry();
+  if (conversationId !== undefined) {
+    registry.clear(conversationId);
+  } else {
+    registry.clearAll();
   }
   getQueryEngine().stopActiveTurn(conversationId);
 }

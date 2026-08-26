@@ -214,6 +214,16 @@ export interface ChatV2StreamRequest {
   pastedContents?: Record<string, string>;
   /** Send-time only: generated images the user selected as edit inputs. */
   readonly generatedImageReferences?: ChatV2GeneratedImageReference[];
+  /**
+   * Send-time only: the reference set the user explicitly confirmed in the
+   * batch dialog. The main process normalizes and stages it in trusted
+   * main-process state before the model can influence batch execution; the
+   * field is stripped from the request before it reaches the engine, so the
+   * model never sees or overrides the confirmed set.
+   */
+  confirmedGeneratedImageBatch?: {
+    readonly references: ChatV2GeneratedImageReference[];
+  };
 }
 
 export interface ChatV2HistoryRequest {

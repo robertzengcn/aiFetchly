@@ -1297,6 +1297,9 @@ interface PendingGeneratedImageSend {
   readonly conversationId: string;
   readonly text: string;
   readonly files: File[];
+  /** Reference set captured at batch-confirmation time; replayed verbatim on
+   * confirm so the main process stages exactly what the user approved. */
+  readonly confirmedReferences?: ChatV2GeneratedImageReference[];
   readonly options?: {
     isExpandedPrompt?: boolean;
     fromVoice?: boolean;
@@ -1308,7 +1311,6 @@ interface PendingGeneratedImageSend {
 const ambiguityCandidates = ref<GeneratedImageReferenceView[]>([]);
 const showGeneratedImageChooser = ref(false);
 const pendingGeneratedImageSend = ref<PendingGeneratedImageSend | null>(null);
-const batchConfirmReferences = ref<ChatV2GeneratedImageReference[]>([]);
 const showBatchConfirmDialog = ref(false);
 const generatedImageNotice = ref<string | null>(null);
 const showGeneratedImageNotice = computed<boolean>({
@@ -1345,19 +1347,21 @@ function cancelAmbiguityChooser(): void {
 
 function confirmGeneratedImageBatch(): void {
   const pending = pendingGeneratedImageSend.value;
+  const confirmed = pending?.confirmedReferences;
   pendingGeneratedImageSend.value = null;
-  batchConfirmReferences.value = [];
   showBatchConfirmDialog.value = false;
-  if (!pending) return;
+  if (!pending || !confirmed || confirmed.length === 0) return;
   void onSend(pending.text, pending.files, {
     ...pending.options,
     bypassGeneratedImageInference: true,
+    // Trusted channel: the exact set the user just confirmed, replayed
+    // verbatim so the main process stages it before the model runs.
+    confirmedBatchReferences: [...confirmed],
   });
 }
 
 function declineGeneratedImageBatch(): void {
   pendingGeneratedImageSend.value = null;
-  batchConfirmReferences.value = [];
   showBatchConfirmDialog.value = false;
 }
 
@@ -3811,8 +3815,8 @@ function runGeneratedImagePreflight(
         text,
         files,
         options,
+        confirmedReferences: [...result.references],
       };
-      batchConfirmReferences.value = [...result.references];
       showBatchConfirmDialog.value = true;
       return null;
     }
@@ -3845,6 +3849,8 @@ const onSend = async (
     onAccepted?: () => void;
     /** Internal: skip generated-image inference (batch-confirm resend). */
     bypassGeneratedImageInference?: boolean;
+    /** Internal: the user-confirmed batch reference set (trusted channel). */
+    confirmedBatchReferences?: ChatV2GeneratedImageReference[];
   }
 ): Promise<void> => {
   // Parse /loop before the stream guard so scheduled-loop staging (approval
@@ -4186,6 +4192,16 @@ const onSend = async (
     };
     if (uploadedFiles && uploadedFiles.length > 0) {
       streamRequest.uploadedFiles = uploadedFiles;
+    }
+    // Trusted channel: the user-confirmed batch reference set rides outside
+    // generatedImageReferences (which stays capped at 3 for direct sends).
+    if (
+      options?.confirmedBatchReferences &&
+      options.confirmedBatchReferences.length > 0
+    ) {
+      streamRequest.confirmedGeneratedImageBatch = {
+        references: [...options.confirmedBatchReferences],
+      };
     }
     await streamChatV2Message(
       streamRequest,

@@ -21,6 +21,8 @@ import {
 } from "@/service/AIImageAttachmentToolService";
 import { WorkspaceResolver } from "@/service/WorkspaceResolver";
 import { normalizeGeneratedImageReferences } from "@/service/generatedImageReferenceNormalize";
+import { getConfirmedBatchReferenceRegistry } from "@/service/ConfirmedBatchReferenceRegistry";
+import { log } from "@/modules/Logger";
 import {
   slimOutputImage,
   type SlimmedOutputImage,
@@ -129,6 +131,15 @@ export interface ArtifactBatchProcessingDeps {
     detail: "auto" | "low" | "high",
     signal?: AbortSignal
   ) => Promise<PreparedGeneratedImageArtifact[]>;
+  /**
+   * Trusted consume of the user-confirmed reference set staged by the IPC
+   * layer (ConfirmedBatchReferenceRegistry). Returns the confirmed list, or
+   * `null` when nothing is staged for this conversation. When a set is
+   * returned it IS the input list: model-supplied references are ignored.
+   */
+  consumeConfirmedReferences?: (
+    conversationId: string
+  ) => readonly ChatV2GeneratedImageReference[] | null;
 }
 
 interface ScheduledItem {
@@ -368,6 +379,8 @@ function createDefaultDeps(): ArtifactBatchProcessingDeps {
     resolveWorkspace: (conversationId) => resolver.resolve(conversationId),
     authorizeReferences: createDefaultAuthorizeReferences(),
     prepareReferences: createDefaultPrepareReferences(),
+    consumeConfirmedReferences: (conversationId) =>
+      getConfirmedBatchReferenceRegistry().consume(conversationId),
     runAgent: async (input) => {
       // Lazy imports break the registry cycle:
       // skillsRegistry -> this tool -> AgentRuntime -> skillsRegistry.
@@ -523,6 +536,19 @@ export class ArtifactBatchProcessingService {
     if (!parsed.ok) return { success: false, result: { error: parsed.error } };
     const batch = parsed.value;
     if (batch.source.kind === "generated_images") {
+      // Consume the user-confirmed reference set FIRST. Once present it is
+      // the authoritative input list: model-supplied generatedImageReferences
+      // are ignored entirely (they may conflict, be reordered, or omit items
+      // the user confirmed). The staged set still goes through authorization.
+      // Code-only note — never logs reference identities or user content.
+      const staged =
+        this.deps.consumeConfirmedReferences?.(context.conversationId) ?? null;
+      if (staged !== null && staged.length > 0) {
+        log.info(
+          `[process_artifact_batch] using user-confirmed reference set count=${staged.length} conversation=${context.conversationId} (model-supplied generatedImageReferences ignored)`
+        );
+        return this.executeGeneratedSources(staged, batch, context);
+      }
       return this.executeGeneratedSources(batch.source.references, batch, context);
     }
 

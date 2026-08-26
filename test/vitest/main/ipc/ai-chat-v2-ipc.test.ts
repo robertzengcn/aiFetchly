@@ -284,6 +284,7 @@ import {
   resetAiChatV2RuntimeForDatabaseSwitch,
 } from "@/main-process/communication/ai-chat-v2-ipc";
 import { AIChatQueryEngine } from "@/service/AIChatQueryEngine";
+import { getConfirmedBatchReferenceRegistry } from "@/service/ConfirmedBatchReferenceRegistry";
 import {
   AI_CHAT_V2_RESUME_TOOL_AFTER_PERMISSION,
   AI_CHAT_V2_CONVERSATIONS,
@@ -1503,5 +1504,143 @@ describe("AI Chat V2 — generated-image reference boundary", () => {
       { messageId: "msg-1", imageIndex: 3 },
       { messageId: "msg-2", imageIndex: 0 },
     ]);
+  });
+});
+
+describe("AI Chat V2 — confirmed batch reference staging", () => {
+  let submitSpy: MockInstance | undefined;
+  let stageSpy: MockInstance | undefined;
+
+  const confirmedSet = [
+    { messageId: "m1", imageIndex: 0 },
+    { messageId: "m2", imageIndex: 1 },
+    { messageId: "m3", imageIndex: 2 },
+    { messageId: "m4", imageIndex: 3 },
+  ];
+
+  function registry(): ReturnType<typeof getConfirmedBatchReferenceRegistry> {
+    return getConfirmedBatchReferenceRegistry();
+  }
+
+  function spyEngineSubmit(): MockInstance {
+    submitSpy = vi
+      .spyOn(AIChatQueryEngine.prototype, "submitMessage")
+      .mockResolvedValue(undefined);
+    return submitSpy;
+  }
+
+  beforeEach(() => {
+    setupElectronMocks();
+    vi.clearAllMocks();
+    mockToolApprovalState.modes.clear();
+    mockGetSkill.mockReturnValue(undefined);
+    mockIsRegistered.mockReturnValue(false);
+    registerAiChatV2IpcHandlers();
+    registry().clearAll();
+    stageSpy = vi.spyOn(registry(), "stage");
+  });
+
+  afterEach(() => {
+    submitSpy?.mockRestore();
+    submitSpy = undefined;
+    stageSpy?.mockRestore();
+    stageSpy = undefined;
+    registry().clearAll();
+    resetElectronMocks();
+  });
+
+  it("stages a valid confirmed set under the request conversationId and strips the field from the engine request", async () => {
+    const spy = spyEngineSubmit();
+    const senderSend = vi.fn();
+    await mockIpcMain.callHandler(
+      AI_CHAT_V2_STREAM,
+      { sender: { send: senderSend } },
+      JSON.stringify({
+        message: "edit all of these",
+        conversationId: "v2-test-conv",
+        confirmedGeneratedImageBatch: { references: confirmedSet },
+      })
+    );
+
+    expect(stageSpy).toHaveBeenCalledTimes(1);
+    expect(stageSpy).toHaveBeenCalledWith("v2-test-conv", confirmedSet);
+    expect(spy).toHaveBeenCalledTimes(1);
+    const input = spy.mock.calls[0][0] as {
+      request: { confirmedGeneratedImageBatch?: unknown };
+    };
+    expect(input.request.confirmedGeneratedImageBatch).toBeUndefined();
+  });
+
+  it("rejects a malformed confirmed set with a terminal error chunk and stages nothing", async () => {
+    const spy = spyEngineSubmit();
+    const senderSend = vi.fn();
+
+    await mockIpcMain.callHandler(
+      AI_CHAT_V2_STREAM,
+      { sender: { send: senderSend } },
+      JSON.stringify({
+        message: "edit all of these",
+        conversationId: "v2-test-conv",
+        confirmedGeneratedImageBatch: {
+          references: [{ messageId: "m1", imageIndex: 99 }],
+        },
+      })
+    );
+
+    const payloads = collectCompletePayloads(senderSend);
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]).toMatchObject({
+      eventType: "error",
+      errorCode: "generated_image_reference_invalid",
+    });
+    expect(stageSpy).not.toHaveBeenCalled();
+    expect(spy).not.toHaveBeenCalled();
+    expect(mockOpenAIChatCompletionStream).not.toHaveBeenCalled();
+  });
+
+  it("does not touch the registry when the AI availability gate denies the request", async () => {
+    mockState.aiEnabled = "false";
+    const spy = spyEngineSubmit();
+    const senderSend = vi.fn();
+
+    await mockIpcMain.callHandler(
+      AI_CHAT_V2_STREAM,
+      { sender: { send: senderSend } },
+      JSON.stringify({
+        message: "edit all of these",
+        conversationId: "v2-test-conv",
+        confirmedGeneratedImageBatch: { references: confirmedSet },
+      })
+    );
+
+    const payloads = collectCompletePayloads(senderSend);
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]).toMatchObject({ eventType: "error" });
+    expect(stageSpy).not.toHaveBeenCalled();
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("clears the staged set when the turn is stopped", async () => {
+    spyEngineSubmit();
+    const senderSend = vi.fn();
+    const event = { sender: { send: senderSend } };
+    const payload = JSON.stringify({
+      message: "edit all of these",
+      conversationId: "v2-test-conv",
+      confirmedGeneratedImageBatch: { references: confirmedSet },
+    });
+
+    await mockIpcMain.callHandler(AI_CHAT_V2_STREAM, event, payload);
+    // Sanity: staged after the request.
+    expect(registry().consume("v2-test-conv")).toEqual(confirmedSet);
+
+    // Re-stage, then stop the conversation's turn.
+    await mockIpcMain.callHandler(AI_CHAT_V2_STREAM, event, payload);
+    await mockIpcMain.callHandler(
+      AI_CHAT_V2_STREAM_STOP,
+      event,
+      JSON.stringify({ conversationId: "v2-test-conv" })
+    );
+    expect(registry().consume("v2-test-conv")).toBeNull();
   });
 });

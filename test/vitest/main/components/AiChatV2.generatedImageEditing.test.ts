@@ -719,7 +719,7 @@ describe("AiChatV2 generated-image editing wiring", () => {
     expect(wrapper.find('[data-testid="tray-count"]').text()).toBe("0");
   });
 
-  it("batch confirmation gates the send; confirming sends plain text without references", async () => {
+  it("batch confirmation gates the send; confirming carries the confirmed set on the request", async () => {
     await mockHistoryWithImages(4);
 
     const wrapper = mountChat();
@@ -746,7 +746,15 @@ describe("AiChatV2 generated-image editing wiring", () => {
 
     expect(streamChatV2Message).toHaveBeenCalledTimes(1);
     const { request } = lastStreamCall();
+    // The confirmed set rides the trusted channel — NOT generatedImageReferences.
     expect(request.generatedImageReferences).toBeUndefined();
+    expect(request.confirmedGeneratedImageBatch).toBeDefined();
+    expect(request.confirmedGeneratedImageBatch?.references).toEqual([
+      { messageId: "m1", imageIndex: 0 },
+      { messageId: "m1", imageIndex: 1 },
+      { messageId: "m1", imageIndex: 2 },
+      { messageId: "m1", imageIndex: 3 },
+    ]);
     expect(request.message).toContain("all of them");
   });
 
