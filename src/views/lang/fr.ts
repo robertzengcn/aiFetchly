@@ -3151,6 +3151,9 @@ export default {
       clear: "Effacer les messages",
       clearConfirm: "Effacer tous les messages de cette conversation ?",
       delete: "Supprimer la discussion",
+      export: "Exporter la conversation",
+      duplicate: "Dupliquer la conversation",
+      deleteConfirm: "Supprimer cette conversation ? Tous les messages et artefacts générés seront supprimés. Action irréversible.",
     },
     runStrip: {
       goal: "Objectif : {objective}",

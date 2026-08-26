@@ -3012,6 +3012,9 @@ export default {
       clear: "清空消息",
       clearConfirm: "确定清空该会话的全部消息吗？",
       delete: "删除聊天",
+      export: "导出会话",
+      duplicate: "复制会话",
+      deleteConfirm: "删除该会话？所有消息和生成的产物都将被移除，且无法恢复。",
     },
     runStrip: {
       goal: "目标：{objective}",

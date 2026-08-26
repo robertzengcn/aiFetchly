@@ -96,20 +96,17 @@
             {{ t('workspaceChat.newChat') || 'New chat' }}
           </v-btn>
         </div>
-        <AiChatV2Messages
+        <AiChatWorkspaceTranscript
           v-else
           :messages="[...selectedStore.messages]"
           :active-assistant-message-id="selectedStore.activeAssistantMessageId"
           :stream-status="streamStatusForMessages"
           :error-message="selectedStore.errorMessage ?? undefined"
-          :show-typing-indicator="selectedStore.streamStatus === 'streaming'"
-          @grant-permission="onGrantPermission"
-          @deny-permission="onDenyPermission"
-          @approve-plan="onLegacyPlanAction('approve-plan', $event)"
-          @reject-plan="onLegacyPlanAction('reject-plan', $event)"
+          :show-reasoning="true"
+          @approve-plan="onLegacyPlanAction('approve-plan')"
           @request-plan-changes="onLegacyPlanAction('request-plan-changes', $event)"
-          @open-artifact="onOpenArtifact"
-          @copy-artifact-html="onCopyArtifactHtml"
+          @submit-plan-answers="onPlanAnswers"
+          @open-activity="workspaceStore.openInspector('activity')"
         />
         <button
           v-if="selectedStore.hasOlder && conversationId"
@@ -240,7 +237,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
-import AiChatV2Messages from "@/views/components/aiChatV2/AiChatV2Messages.vue";
+import AiChatWorkspaceTranscript from "@/views/components/aiChatWorkspace/AiChatWorkspaceTranscript.vue";
 import AiChatV2Composer from "@/views/components/aiChatV2/AiChatV2Composer.vue";
 import AiChatV2ModeSelector from "@/views/components/aiChatV2/AiChatV2ModeSelector.vue";
 import AiChatV2ModelSelector from "@/views/components/aiChatV2/AiChatV2ModelSelector.vue";
@@ -271,8 +268,6 @@ import {
   clearChatV2Conversation,
   compactChatV2Conversation,
 } from "@/views/api/aiChatV2";
-import { windowInvoke } from "@/views/utils/apirequest";
-import { AI_CHAT_V2_RESUME_TOOL_AFTER_PERMISSION } from "@/config/channellist";
 import { useChatWorkspaceStore } from "@/views/store/chatWorkspace";
 import { useSelectedConversationStore } from "@/views/store/selectedConversation";
 import {
@@ -286,7 +281,6 @@ import {
 } from "@/views/api/aiChatWorkspace";
 import { useRoute, useRouter } from "vue-router";
 import { MessageType } from "@/entityTypes/commonType";
-import type { ChatV2MessageView } from "@/entityTypes/aiChatV2Types";
 import AiChatPlanQuestionFlow from "./AiChatPlanQuestionFlow.vue";
 import AiChatPlanDecisionCard from "./AiChatPlanDecisionCard.vue";
 import AiChatPlanReceipt from "./AiChatPlanReceipt.vue";
@@ -572,6 +566,10 @@ async function onComposerSend(
 }
 
 /** Submitted answers persist through the existing durable contract. */
+function onPlanAnswers(answers: unknown[]): void {
+  void onAnswerQuestion(answers as AskUserQuestionAnswer[]);
+}
+
 async function onAnswerQuestion(
   answers: AskUserQuestionAnswer[]
 ): Promise<void> {
@@ -738,32 +736,6 @@ async function onClear(): Promise<void> {
   }
 }
 
-/**
- * Grant resumes the EXACT run (PRD §22.3): the decision card carries the
- * tool-call identity; the main process records the permission and resumes.
- */
-async function onGrantPermission(
-  message: ChatV2MessageView,
-  persistent: boolean
-): Promise<void> {
-  void persistent;
-  const toolId = message.metadata?.toolCallId;
-  if (!conversationId.value || !toolId) return;
-  try {
-    await windowInvoke(AI_CHAT_V2_RESUME_TOOL_AFTER_PERMISSION, {
-      toolId,
-      conversationId: conversationId.value,
-    });
-  } catch {
-    // The decision card remains actionable on failure.
-  }
-}
-
-/** Denial terminates the exact run (PRD §22.3). */
-async function onDenyPermission(): Promise<void> {
-  await selectedStore.stopActiveRun();
-}
-
 /** Plan decisions flow through the existing durable plan APIs. */
 async function onLegacyPlanAction(
   action: "approve-plan" | "reject-plan" | "request-plan-changes",
@@ -796,14 +768,7 @@ async function onLegacyPlanAction(
   }
 }
 
-function onOpenArtifact(artifactId: string): void {
-  // FR-026/FR-030: artifact cards reopen persisted artifacts in the inspector.
-  workspaceStore.requestArtifactPreview(artifactId);
-}
 
-async function onCopyArtifactHtml(artifactId: string): Promise<void> {
-  void artifactId;
-}
 
 /** Rollback path: switching to classic re-shows the dock after navigation. */
 async function onToggleMode(): Promise<void> {

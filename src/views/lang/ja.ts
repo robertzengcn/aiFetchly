@@ -3103,6 +3103,9 @@ export default {
       clear: "メッセージを消去",
       clearConfirm: "この会話のすべてのメッセージを消去しますか？",
       delete: "チャットを削除",
+      export: "会話をエクスポート",
+      duplicate: "会話を複製",
+      deleteConfirm: "この会話を削除しますか？すべてのメッセージと生成済みアーティファクトが削除され、元に戻せません。",
     },
     runStrip: {
       goal: "ゴール：{objective}",

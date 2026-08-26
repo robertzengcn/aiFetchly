@@ -3135,6 +3135,9 @@ export default {
       clear: "Clear messages",
       clearConfirm: "Clear all messages in this conversation?",
       delete: "Delete chat",
+      export: "Export conversation",
+      duplicate: "Duplicate conversation",
+      deleteConfirm: "Delete this conversation? All messages and generated artifacts will be removed. This cannot be undone.",
     },
     runStrip: {
       goal: "Goal: {objective}",

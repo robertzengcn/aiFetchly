@@ -335,10 +335,10 @@ describe("plan question draft", () => {
     draft = draftMove(draft, -1, 2);
     expect(draft.currentIndex).toBe(0);
 
-    draft = draftToggleOption(draft, 1);
-    draft = draftToggleOption(draft, 0);
+    draft = draftToggleOption(draft, 1, true);
+    draft = draftToggleOption(draft, 0, true);
     expect(draft.selectedByIndex[0]).toEqual([1, 0]);
-    draft = draftToggleOption(draft, 1); // deselect
+    draft = draftToggleOption(draft, 1, true); // deselect
     expect(draft.selectedByIndex[0]).toEqual([0]);
   });
 });

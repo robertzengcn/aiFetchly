@@ -158,7 +158,7 @@ function isSelected(optionIndex: number): boolean {
 }
 
 function toggle(optionIndex: number): void {
-  draft.value = draftToggleOption(draft.value, optionIndex);
+  draft.value = draftToggleOption(draft.value, optionIndex, currentQuestion.value.multiSelect === true);
 }
 
 function back(): void {

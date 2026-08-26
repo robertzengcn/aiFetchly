@@ -170,12 +170,25 @@ export function draftMove(
 
 export function draftToggleOption(
   draft: PlanQuestionDraft,
-  optionIndex: number
+  optionIndex: number,
+  multiSelect: boolean
 ): PlanQuestionDraft {
   const current = draft.selectedByIndex[draft.currentIndex] ?? [];
-  const selected = current.includes(optionIndex)
-    ? current.filter((i) => i !== optionIndex)
-    : [...current, optionIndex];
+  if (multiSelect) {
+    // Multi-select: accumulate or deselect.
+    const selected = current.includes(optionIndex)
+      ? current.filter((i) => i !== optionIndex)
+      : [...current, optionIndex];
+    return {
+      ...draft,
+      selectedByIndex: {
+        ...draft.selectedByIndex,
+        [draft.currentIndex]: selected,
+      },
+    };
+  }
+  // Single-select: toggle off if same, otherwise replace.
+  const selected = current.includes(optionIndex) ? [] : [optionIndex];
   return {
     ...draft,
     selectedByIndex: {
