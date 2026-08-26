@@ -91,6 +91,7 @@ import type {
   ToolCatalogRuntimeContext,
 } from "@/entityTypes/toolCatalogTypes";
 import { log } from "@/modules/Logger";
+import { getConfirmedBatchReferenceRegistry } from "@/service/ConfirmedBatchReferenceRegistry";
 
 function isActivePlanState(plan?: AIChatPlanStateView | null): boolean {
   if (!plan) return false;
@@ -1484,6 +1485,7 @@ export class AIChatQueryEngine {
             errorMessage: userSafeError(err),
           });
           this.clearConversationTurnState(matchedByToolId.conversationId);
+          this.clearStagedConfirmedBatchRefs(matchedByToolId.conversationId);
         });
 
       return { ok: true };
@@ -1639,6 +1641,7 @@ export class AIChatQueryEngine {
           errorMessage: userSafeError(err),
         });
         this.clearConversationTurnState(pending.conversationId);
+        this.clearStagedConfirmedBatchRefs(pending.conversationId);
       });
 
     return { ok: true };
@@ -1761,6 +1764,9 @@ export class AIChatQueryEngine {
           );
         this.dispatchStop(conversationId, "completed");
         this.clearActiveTurnState(conversationId, assistantMessageId);
+        // Terminal: drop any staged confirmed reference set the turn did not
+        // consume so it can never feed a later unrelated batch call.
+        this.clearStagedConfirmedBatchRefs(conversationId);
         break;
       }
       case "cancelled": {
@@ -1789,6 +1795,7 @@ export class AIChatQueryEngine {
         });
         this.dispatchStop(conversationId, "user_stopped");
         this.clearActiveTurnState(conversationId, assistantMessageId);
+        this.clearStagedConfirmedBatchRefs(conversationId);
         break;
       }
       case "failed": {
@@ -1844,6 +1851,7 @@ export class AIChatQueryEngine {
         }
         this.dispatchStop(conversationId, "error");
         this.clearConversationTurnState(conversationId, assistantMessageId);
+        this.clearStagedConfirmedBatchRefs(conversationId);
         break;
       }
       case "paused_for_permission": {
@@ -1899,6 +1907,20 @@ export class AIChatQueryEngine {
       return;
     }
     this.activeTurns.delete(conversationId);
+  }
+
+  /**
+   * Drop any staged user-confirmed batch reference set for ONE conversation.
+   * Called on every terminal turn path (completed/cancelled/failed, unexpected
+   * engine failure, and resume-loop failures). The batch tool consumes the
+   * staged set at job start INSIDE the running turn — the query loop blocks
+   * on the job via pollAsyncJobToCompletion — so clearing here can never race
+   * a legitimate pending consume; anything still staged when the turn ends is
+   * stale (the turn finished without a generated-batch call) and must not
+   * leak into a later unrelated turn.
+   */
+  private clearStagedConfirmedBatchRefs(conversationId: string): void {
+    getConfirmedBatchReferenceRegistry().clear(conversationId);
   }
 
   /**
@@ -2060,5 +2082,6 @@ export class AIChatQueryEngine {
       errorMessage: userSafeError(err),
     });
     this.clearConversationTurnState(conversationId, assistantMessageId);
+    this.clearStagedConfirmedBatchRefs(conversationId);
   }
 }

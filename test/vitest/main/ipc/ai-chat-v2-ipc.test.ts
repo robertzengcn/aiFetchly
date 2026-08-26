@@ -1643,4 +1643,53 @@ describe("AI Chat V2 — confirmed batch reference staging", () => {
     );
     expect(registry().consume("v2-test-conv")).toBeNull();
   });
+
+  it("clears the staged set when a turn completes without any batch call", async () => {
+    // Real engine run: plain-text answer, no tool calls at all.
+    mockOpenAIChatCompletionStream.mockImplementation(
+      async (_req, onChunk: (c: unknown) => void) => {
+        onChunk({ choices: [{ delta: { content: "plain answer" } }] });
+        onChunk({
+          choices: [{ delta: { content: "" }, finish_reason: "stop" }],
+        });
+      }
+    );
+
+    const senderSend = vi.fn();
+    await mockIpcMain.callHandler(
+      AI_CHAT_V2_STREAM,
+      { sender: { send: senderSend } },
+      JSON.stringify({
+        message: "edit all of these",
+        conversationId: "v2-test-conv",
+        confirmedGeneratedImageBatch: { references: confirmedSet },
+      })
+    );
+
+    expect(findCompletePayload(senderSend)?.eventType).toBe("complete");
+    expect(stageSpy).toHaveBeenCalledTimes(1);
+    // Turn ended without consuming: the stale set must be gone.
+    expect(registry().consume("v2-test-conv")).toBeNull();
+  });
+
+  it("clears the staged set when the turn fails", async () => {
+    mockOpenAIChatCompletionStream.mockRejectedValue(
+      new Error("Server returned 500: provider exploded")
+    );
+
+    const senderSend = vi.fn();
+    await mockIpcMain.callHandler(
+      AI_CHAT_V2_STREAM,
+      { sender: { send: senderSend } },
+      JSON.stringify({
+        message: "edit all of these",
+        conversationId: "v2-test-conv",
+        confirmedGeneratedImageBatch: { references: confirmedSet },
+      })
+    );
+
+    expect(findCompletePayload(senderSend)?.eventType).toBe("error");
+    expect(stageSpy).toHaveBeenCalledTimes(1);
+    expect(registry().consume("v2-test-conv")).toBeNull();
+  });
 });
