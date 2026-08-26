@@ -22,6 +22,7 @@ import { registerSessionRecordingIpcHandlers } from "@/main-process/communicatio
 import { registerLanguagePreferenceIpcHandlers } from "@/main-process/communication/language-ipc";
 import { registerRagIpcHandlers } from "@/main-process/communication/rag-ipc";
 import { registerAiChatV2IpcHandlers } from "@/main-process/communication/ai-chat-v2-ipc";
+import { registerGeneratedImageExportIpcHandlers } from "@/main-process/communication/generatedImageExportIpc";
 import { registerAiFileOpenIpcHandlers } from "@/main-process/communication/ai-file-open-ipc";
 import { registerAiChatAtMentionIpcHandlers } from "@/main-process/communication/ai-chat-at-mention-ipc";
 import { registerAiChatGoalIpcHandlers } from "@/main-process/communication/ai-chat-goal-ipc";
@@ -100,6 +101,7 @@ export function registerCommunicationIpcHandlers(
     registerLanguagePreferenceIpcHandlers();
     registerRagIpcHandlers();
     registerAiChatV2IpcHandlers();
+    registerGeneratedImageExportIpcHandlers();
     registerAiFileOpenIpcHandlers();
     registerAiChatAtMentionIpcHandlers();
     registerAiChatGoalIpcHandlers();

@@ -33,6 +33,10 @@
         (reference: ChatV2GeneratedImageReference) =>
           emit('edit-generated-image', reference)
       "
+      @save-generated-image="
+        (reference: ChatV2GeneratedImageReference) =>
+          emit('save-generated-image', reference)
+      "
     />
     <div
       v-if="showTypingIndicator"
@@ -118,6 +122,10 @@ const emit = defineEmits<{
   ): void;
   (
     e: "edit-generated-image",
+    reference: ChatV2GeneratedImageReference
+  ): void;
+  (
+    e: "save-generated-image",
     reference: ChatV2GeneratedImageReference
   ): void;
 }>();

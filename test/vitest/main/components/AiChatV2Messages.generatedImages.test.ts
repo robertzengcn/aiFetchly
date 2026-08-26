@@ -31,6 +31,7 @@ const i18n = createI18n({
         generatedImageRefs: {
           useAsReference: "Use as reference",
           edit: "Edit",
+          saveToWorkspace: "Save to workspace",
         },
       },
     },
@@ -108,5 +109,23 @@ describe("AiChatV2Messages generated image event forwarding", () => {
     await inner.vm.$emit("edit-generated-image", reference);
 
     expect(emittedRefs(wrapper, "edit-generated-image")).toEqual([reference]);
+  });
+
+  it("forwards save-generated-image from the inner message verbatim", async () => {
+    const wrapper = mountMessages();
+    const inner = wrapper.findComponent(AiChatV2Message);
+    expect(inner.exists()).toBe(true);
+
+    const reference: ChatV2GeneratedImageReference = {
+      messageId: "assistant-1",
+      imageIndex: 0,
+    };
+    await inner.vm.$emit("save-generated-image", reference);
+
+    const refs = emittedRefs(wrapper, "save-generated-image");
+    expect(refs).toEqual([reference]);
+    for (const ref of refs) {
+      expect(Object.keys(ref).sort()).toEqual(["imageIndex", "messageId"]);
+    }
   });
 });

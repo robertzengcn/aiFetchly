@@ -12,6 +12,7 @@ import type {
   ChatV2ConversationSummary,
   ChatToolApprovalMode,
   ChatV2AutoCompactedEvent,
+  ChatV2GeneratedImageReference,
 } from "@/entityTypes/aiChatV2Types";
 import type { AIChatCompactSummaryView } from "@/entityTypes/aiChatCompactTypes";
 import type {
@@ -40,8 +41,39 @@ import {
   AI_CHAT_V2_GET_TOOL_APPROVAL_MODE,
   AI_CHAT_V2_SET_TOOL_APPROVAL_MODE,
   AI_CHAT_V2_READ_PASTE_CACHE,
+  AI_CHAT_V2_EXPORT_GENERATED_IMAGE,
   AI_CHAT_V2_AUTO_COMPACTED,
 } from "@/config/channellist";
+
+/** Outcome of one renderer-driven save-to-workspace action. */
+export interface ChatV2GeneratedImageExportResult {
+  status: "exported" | "workspace_required";
+  /** Absolute path of the copied file (status === "exported"). */
+  destinationPath?: string;
+  /** Workspace-relative path of the copied file (status === "exported"). */
+  relativeDestinationPath?: string;
+  /** File name of the copied file (status === "exported"). */
+  fileName?: string;
+}
+
+/**
+ * Save one generated chat image into the approved workspace. The click itself
+ * is user intent, so no permission prompt is involved; the main process still
+ * enforces the chat availability gate and authorizes the opaque reference.
+ *
+ * Throws (via windowInvoke) when the gate or authorization fails; a missing
+ * approved workspace is reported as `{ status: "workspace_required" }`.
+ */
+export async function exportGeneratedImage(
+  conversationId: string,
+  reference: ChatV2GeneratedImageReference
+): Promise<ChatV2GeneratedImageExportResult> {
+  const resp = await windowInvoke(AI_CHAT_V2_EXPORT_GENERATED_IMAGE, {
+    conversationId,
+    reference,
+  });
+  return resp as ChatV2GeneratedImageExportResult;
+}
 
 /**
  * Per-conversation stream listeners, keyed by conversationId. Each entry holds

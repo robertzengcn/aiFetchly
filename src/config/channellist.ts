@@ -342,6 +342,15 @@ export const AI_CHAT_V2_SET_TOOL_APPROVAL_MODE =
 /** Main->renderer: read cached expanded pasted-text bodies for previews. */
 export const AI_CHAT_V2_READ_PASTE_CACHE = "ai-chat-v2:read-paste-cache";
 export const AI_CHAT_V2_AT_MENTION_SUGGEST = "ai-chat-v2:at-mention-suggest";
+/**
+ * Renderer->Main: save one generated image into the approved workspace
+ * (explicit user intent — no model-facing permission flow). Handler enforces
+ * the chat availability gate, authorizes the reference via
+ * GeneratedImageReferenceService, and reuses the export_generated_artifacts
+ * copy policy.
+ */
+export const AI_CHAT_V2_EXPORT_GENERATED_IMAGE =
+  "ai-chat-v2:export-generated-image";
 export const AI_CHAT_V2_GOAL_CREATE = "ai-chat-v2:goal-create";
 export const AI_CHAT_V2_GOAL_GET = "ai-chat-v2:goal-get";
 export const AI_CHAT_V2_GOAL_LOOP_START = "ai-chat-v2:goal-loop-start";

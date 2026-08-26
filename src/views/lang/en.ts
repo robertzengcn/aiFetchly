@@ -2317,6 +2317,8 @@ export default {
       permissionTitle: "Export generated artifacts",
       permissionDescription:
         "Copy these AiFetchly-generated artifacts into {destination}.",
+      savedToWorkspace: "Saved {fileName} to your workspace.",
+      saveFailed: "Could not save to workspace.",
     },
     imageTool: {
       name: "Attach local images",
@@ -2615,6 +2617,7 @@ export default {
     generatedImageRefs: {
       useAsReference: "Use as reference",
       edit: "Edit",
+      saveToWorkspace: "Save to workspace",
       remove: "Remove",
       clearAll: "Clear all",
       moveUp: "Move up",

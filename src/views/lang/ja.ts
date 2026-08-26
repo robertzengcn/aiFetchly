@@ -2278,6 +2278,8 @@ export default {
       permissionTitle: "生成されたアーティファクトをエクスポート",
       permissionDescription:
         "AiFetchly が生成したアーティファクトを {destination} にコピーします。",
+      savedToWorkspace: "{fileName} をワークスペースに保存しました。",
+      saveFailed: "ワークスペースに保存できませんでした。",
     },
     imageTool: {
       name: "ローカル画像を添付",
@@ -2578,6 +2580,7 @@ export default {
     generatedImageRefs: {
       useAsReference: "参照として使用",
       edit: "編集",
+      saveToWorkspace: "ワークスペースに保存",
       remove: "削除",
       clearAll: "すべてクリア",
       moveUp: "上へ移動",

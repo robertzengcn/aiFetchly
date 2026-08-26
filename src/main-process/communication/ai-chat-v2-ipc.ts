@@ -291,7 +291,12 @@ function getChatResolver(): AIProviderResolver {
   return chatResolver;
 }
 
-function canUseChat(): { ok: true } | { ok: false; message: string } {
+/**
+ * Provider-aware Chat V2 availability gate. Exported so sibling AI-chat
+ * handler files (e.g. generated-image export) enforce the SAME gate FIRST,
+ * before parsing payloads or touching the filesystem.
+ */
+export function canUseChat(): { ok: true } | { ok: false; message: string } {
   const provider = getChatResolver().resolveForChat();
   if (provider.canUse) {
     return { ok: true };

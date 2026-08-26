@@ -36,6 +36,7 @@ const i18n = createI18n({
         generatedImageRefs: {
           useAsReference: "Use as reference",
           edit: "Edit",
+          saveToWorkspace: "Save to workspace",
           progressSummary:
             "{completed} of {requested} completed · concurrency {concurrency}",
           errors: {
@@ -153,6 +154,49 @@ describe("AiChatV2Message generated image actions", () => {
     ]);
     for (const ref of refs) {
       expect(Object.keys(ref).sort()).toEqual(["imageIndex", "messageId"]);
+    }
+  });
+
+  it("renders a save-to-workspace button with an accessible label after Edit", async () => {
+    const wrapper = mountWith(makeTwoImageMessage());
+    await flushPromises();
+
+    const saveButtons = wrapper.findAll(".v2-message__save-image-btn");
+    expect(saveButtons.length).toBe(2);
+    for (const btn of saveButtons) {
+      expect(btn.attributes("aria-label")).toBe("Save to workspace");
+      expect(btn.text()).toBe("Save to workspace");
+    }
+
+    // Ordering: Save comes after Edit within each action row.
+    const rows = wrapper.findAll(".v2-message__image-actions");
+    for (const row of rows) {
+      const classes = row
+        .findAll("button")
+        .map((b) => b.classes()[0]);
+      expect(classes.indexOf("v2-message__save-image-btn")).toBeGreaterThan(
+        classes.indexOf("v2-message__edit-image-btn")
+      );
+    }
+  });
+
+  it("emits save-generated-image with exact opaque references (no paths or URLs)", async () => {
+    const wrapper = mountWith(makeTwoImageMessage());
+    await flushPromises();
+
+    const saveButtons = wrapper.findAll(".v2-message__save-image-btn");
+    await saveButtons[0].trigger("click");
+    await saveButtons[1].trigger("click");
+
+    const refs = emittedRefs(wrapper, "save-generated-image");
+    expect(refs).toEqual([
+      { messageId: "msg-gen-1", imageIndex: 0 },
+      { messageId: "msg-gen-1", imageIndex: 1 },
+    ]);
+    for (const ref of refs) {
+      expect(Object.keys(ref).sort()).toEqual(["imageIndex", "messageId"]);
+      expect(ref).not.toHaveProperty("localPath");
+      expect(ref).not.toHaveProperty("url");
     }
   });
 

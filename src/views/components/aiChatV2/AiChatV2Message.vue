@@ -239,6 +239,20 @@
               >
                 {{ t("aiChatV2.generatedImageRefs.edit") || "Edit" }}
               </button>
+              <button
+                type="button"
+                class="v2-message__save-image-btn"
+                :aria-label="
+                  t('aiChatV2.generatedImageRefs.saveToWorkspace') ||
+                  'Save to workspace'
+                "
+                @click="emitSaveGeneratedImage(image)"
+              >
+                {{
+                  t("aiChatV2.generatedImageRefs.saveToWorkspace") ||
+                  "Save to workspace"
+                }}
+              </button>
             </div>
           </div>
         </div>
@@ -416,6 +430,10 @@ const emit = defineEmits<{
     e: "edit-generated-image",
     reference: ChatV2GeneratedImageReference
   ): void;
+  (
+    e: "save-generated-image",
+    reference: ChatV2GeneratedImageReference
+  ): void;
 }>();
 const { t, te } = useI18n();
 
@@ -478,6 +496,13 @@ function emitUseGeneratedImage(image: RenderableGeneratedImage): void {
 
 function emitEditGeneratedImage(image: RenderableGeneratedImage): void {
   emit("edit-generated-image", {
+    messageId: image.messageId,
+    imageIndex: image.imageIndex,
+  });
+}
+
+function emitSaveGeneratedImage(image: RenderableGeneratedImage): void {
+  emit("save-generated-image", {
     messageId: image.messageId,
     imageIndex: image.imageIndex,
   });

@@ -2218,6 +2218,8 @@ export default {
       permissionTitle: "导出生成的工件",
       permissionDescription:
         "将这些由 AiFetchly 生成的工件复制到 {destination}。",
+      savedToWorkspace: "已将 {fileName} 保存到你的工作区。",
+      saveFailed: "无法保存到工作区。",
     },
     imageTool: {
       name: "附加本地图片",
@@ -2506,6 +2508,7 @@ export default {
     generatedImageRefs: {
       useAsReference: "用作参考",
       edit: "编辑",
+      saveToWorkspace: "保存到工作区",
       remove: "移除",
       clearAll: "全部清除",
       moveUp: "上移",

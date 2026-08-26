@@ -2316,6 +2316,8 @@ export default {
       permissionTitle: "Generierte Artefakte exportieren",
       permissionDescription:
         "Kopiere diese von AiFetchly generierten Artefakte nach {destination}.",
+      savedToWorkspace: "{fileName} wurde in deinem Workspace gespeichert.",
+      saveFailed: "Speichern im Workspace fehlgeschlagen.",
     },
     imageTool: {
       name: "Lokale Bilder anhängen",
@@ -2631,6 +2633,7 @@ export default {
     generatedImageRefs: {
       useAsReference: "Als Referenz verwenden",
       edit: "Bearbeiten",
+      saveToWorkspace: "Im Workspace speichern",
       remove: "Entfernen",
       clearAll: "Alle entfernen",
       moveUp: "Nach oben",

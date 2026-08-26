@@ -213,6 +213,77 @@ async function selectDestination(input: {
   throw new Error("Could not find an available destination filename.");
 }
 
+interface SingleArtifactCopyInput {
+  readonly artifactUrl: string;
+  readonly requestedDestination?: string;
+  readonly collisionPolicy: CollisionPolicy;
+  readonly userDataPath: string;
+  readonly userRoot: string;
+  readonly guard: FilePathGuard;
+  readonly deps: Pick<
+    ExportGeneratedArtifactsDeps,
+    "lstat" | "mkdir" | "copyFile" | "access" | "realpath"
+  >;
+}
+
+interface SingleArtifactCopyOutcome {
+  readonly sourcePath: string;
+  readonly destinationPath: string;
+  readonly renamed: boolean;
+  readonly existed: boolean;
+  readonly sizeBytes: number;
+}
+
+/**
+ * Copy ONE generated artifact into the guarded workspace following the exact
+ * ownership checks and naming/collision policy of the export tool. Shared by
+ * the model-facing batch tool and the renderer-driven single-image export.
+ */
+async function copySingleGeneratedArtifact(
+  input: SingleArtifactCopyInput
+): Promise<SingleArtifactCopyOutcome> {
+  const source = resolveGeneratedImageProtocolPath(
+    input.artifactUrl,
+    input.userDataPath
+  );
+  if (!source || !isContained(input.userRoot, source)) {
+    throw new Error(
+      "Artifact URL is not owned by the current AiFetchly user."
+    );
+  }
+  const sourceStats = await input.deps.lstat(source);
+  if (!sourceStats.isFile() || sourceStats.isSymbolicLink()) {
+    throw new Error(
+      "Artifact source must be a regular app-managed file."
+    );
+  }
+  const requested =
+    input.requestedDestination ??
+    path.join(DEFAULT_EXPORT_DIRECTORY, path.basename(source));
+  const destination = await selectDestination({
+    requested,
+    policy: input.collisionPolicy,
+    guard: input.guard,
+    mkdir: input.deps.mkdir,
+    access: input.deps.access,
+    realpath: input.deps.realpath,
+  });
+  await input.deps.copyFile(
+    source,
+    destination.path,
+    input.collisionPolicy === "overwrite"
+      ? 0
+      : fsConstants.COPYFILE_EXCL
+  );
+  return {
+    sourcePath: source,
+    destinationPath: destination.path,
+    renamed: destination.renamed,
+    existed: destination.existed,
+    sizeBytes: sourceStats.size,
+  };
+}
+
 function buildPermissionPreview(
   args: Record<string, unknown>
 ): PermissionPreview | undefined {
@@ -284,57 +355,36 @@ export class ExportGeneratedArtifactsService {
         continue;
       }
       try {
-        const source = resolveGeneratedImageProtocolPath(
-          artifact.artifactUrl,
-          userDataPath
-        );
-        if (!source || !isContained(userRoot, source)) {
-          throw new Error(
-            "Artifact URL is not owned by the current AiFetchly user."
-          );
-        }
-        const sourceStats = await this.deps.lstat(source);
-        if (!sourceStats.isFile() || sourceStats.isSymbolicLink()) {
-          throw new Error(
-            "Artifact source must be a regular app-managed file."
-          );
-        }
-        const requested =
-          artifact.destination ??
-          path.join(DEFAULT_EXPORT_DIRECTORY, path.basename(source));
-        const destination = await selectDestination({
-          requested,
-          policy: parsed.value.collisionPolicy,
+        const outcome = await copySingleGeneratedArtifact({
+          artifactUrl: artifact.artifactUrl,
+          requestedDestination: artifact.destination,
+          collisionPolicy: parsed.value.collisionPolicy,
+          userDataPath,
+          userRoot,
           guard,
-          mkdir: this.deps.mkdir,
-          access: this.deps.access,
-          realpath: this.deps.realpath,
+          deps: this.deps,
         });
-        await this.deps.copyFile(
-          source,
-          destination.path,
-          parsed.value.collisionPolicy === "overwrite"
-            ? 0
-            : fsConstants.COPYFILE_EXCL
-        );
         items.push({
           artifactUrl: artifact.artifactUrl,
           requestedDestination: artifact.destination,
-          destination: destination.path,
+          destination: outcome.destinationPath,
           status: "exported",
-          renamed: destination.renamed,
+          renamed: outcome.renamed,
         });
         try {
           this.deps.trackFileOperation({
-            type: destination.existed ? "overwrite" : "create",
-            filePath: destination.path,
+            type: outcome.existed ? "overwrite" : "create",
+            filePath: outcome.destinationPath,
             success: true,
             conversationId: context.conversationId,
             skillName: "export_generated_artifacts",
             toolCallId: `${context.toolCallId}:${artifactIndex}`,
-            sizeBytes: sourceStats.size,
+            sizeBytes: outcome.sizeBytes,
             workspaceRoot: workspace.rootPath,
-            relativePath: path.relative(workspace.rootPath, destination.path),
+            relativePath: path.relative(
+              workspace.rootPath,
+              outcome.destinationPath
+            ),
           });
         } catch {
           // File-operation telemetry must never turn a successful copy into a
@@ -439,3 +489,88 @@ export const EXPORT_GENERATED_ARTIFACTS_TOOL: SkillDefinition = {
     };
   },
 };
+
+export interface ExportSingleGeneratedArtifactInput {
+  /** Owning conversation — drives approved-workspace resolution. */
+  readonly conversationId: string;
+  /** `aifetchly-generated-image://local/...` protocol URL of the artifact. */
+  readonly sourceUrl: string;
+}
+
+export type ExportSingleGeneratedArtifactResult =
+  | {
+      status: "exported";
+      /** Absolute path of the copied file inside the workspace. */
+      destinationPath: string;
+      /** Workspace-relative path of the copied file. */
+      relativeDestinationPath: string;
+      /** File name of the copied file. */
+      fileName: string;
+    }
+  | { status: "workspace_required" }
+  | { status: "failed"; error: string };
+
+/**
+ * Export ONE generated artifact into the approved workspace WITHOUT the
+ * model-facing permission flow. The caller is responsible for having already
+ * established user intent (e.g. an explicit renderer button click) and for
+ * authorizing the reference; this function reuses the exact same workspace
+ * resolution, ownership checks, and rename-on-collision policy as
+ * {@link EXPORT_GENERATED_ARTIFACTS_TOOL} so both paths stay byte-identical.
+ * A missing approved workspace yields `{ status: "workspace_required" }`.
+ */
+export async function exportSingleGeneratedArtifact(
+  input: ExportSingleGeneratedArtifactInput
+): Promise<ExportSingleGeneratedArtifactResult> {
+  const deps = defaultDeps();
+  const workspace = await deps.resolveWorkspace(input.conversationId);
+  if (!workspace) {
+    return { status: "workspace_required" };
+  }
+  const userDataPath = deps.getUserDataPath();
+  const userRoot = path.resolve(
+    getGeneratedImageUserRoot(userDataPath, deps.getCurrentUserEmail())
+  );
+  const guard = new FilePathGuard([workspace.rootPath]);
+  try {
+    const outcome = await copySingleGeneratedArtifact({
+      artifactUrl: input.sourceUrl,
+      collisionPolicy: "rename",
+      userDataPath,
+      userRoot,
+      guard,
+      deps,
+    });
+    try {
+      deps.trackFileOperation({
+        type: outcome.existed ? "overwrite" : "create",
+        filePath: outcome.destinationPath,
+        success: true,
+        conversationId: input.conversationId,
+        skillName: "export_generated_artifacts",
+        sizeBytes: outcome.sizeBytes,
+        workspaceRoot: workspace.rootPath,
+        relativePath: path.relative(
+          workspace.rootPath,
+          outcome.destinationPath
+        ),
+      });
+    } catch {
+      // Telemetry must never fail the export (same policy as the batch tool).
+    }
+    return {
+      status: "exported",
+      destinationPath: outcome.destinationPath,
+      relativeDestinationPath: path.relative(
+        workspace.rootPath,
+        outcome.destinationPath
+      ),
+      fileName: path.basename(outcome.destinationPath),
+    };
+  } catch (error) {
+    return {
+      status: "failed",
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}

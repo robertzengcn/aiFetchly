@@ -185,6 +185,7 @@
         @copy-artifact-html="(id: string) => emit('copy-artifact-html', id)"
         @use-generated-image="onUseGeneratedImage"
         @edit-generated-image="onEditGeneratedImage"
+        @save-generated-image="onSaveGeneratedImage"
       />
 
       <!-- Pinned action cards: permission + question + plan approval while awaiting user input.
@@ -856,6 +857,7 @@ import {
   getChatV2ToolApprovalMode,
   setChatV2ToolApprovalMode,
   detachChatV2ConversationStreamListeners,
+  exportGeneratedImage,
 } from "@/views/api/aiChatV2";
 import {
   AI_CHAT_V2_VOICE_SETTINGS_CHANGED_EVENT,
@@ -1269,6 +1271,102 @@ function onUseGeneratedImage(reference: ChatV2GeneratedImageReference): void {
 function onEditGeneratedImage(reference: ChatV2GeneratedImageReference): void {
   setGeneratedImageDraft(draftKeyFor(activeConversationId.value), [reference]);
   composerFocusSignal.value += 1;
+}
+
+// --- Save-to-workspace action for generated images -------------------------
+// The button click IS user intent; the main process still gates on chat
+// availability and authorizes the reference before copying the file.
+
+/** Pending exports awaiting an approved workspace, keyed by conversation. */
+const pendingGeneratedImageExports = ref<
+  Map<string, ChatV2GeneratedImageReference[]>
+>(new Map());
+
+function showGeneratedImageToast(message: string): void {
+  generatedImageNotice.value = message;
+}
+
+function enqueuePendingGeneratedImageExport(
+  conversationId: string,
+  reference: ChatV2GeneratedImageReference
+): void {
+  const key = draftKeyFor(conversationId);
+  const nextMap = new Map(pendingGeneratedImageExports.value);
+  const current = nextMap.get(key) ?? [];
+  if (
+    !current.some((ref) => sameGeneratedImageRef(ref, reference))
+  ) {
+    nextMap.set(key, [...current, reference]);
+  }
+  pendingGeneratedImageExports.value = nextMap;
+}
+
+function takePendingGeneratedImageExports(
+  conversationId: string
+): ChatV2GeneratedImageReference[] {
+  const key = draftKeyFor(conversationId);
+  const pending = pendingGeneratedImageExports.value.get(key) ?? [];
+  if (pending.length > 0) {
+    const nextMap = new Map(pendingGeneratedImageExports.value);
+    nextMap.delete(key);
+    pendingGeneratedImageExports.value = nextMap;
+  }
+  return pending;
+}
+
+async function attemptGeneratedImageExport(
+  conversationId: string,
+  reference: ChatV2GeneratedImageReference
+): Promise<void> {
+  try {
+    const result = await exportGeneratedImage(conversationId, reference);
+    if (result.status === "workspace_required") {
+      // Keep the export queued and surface the SAME request-workspace flow as
+      // the composer; the export retries automatically once a workspace is
+      // approved for this conversation.
+      enqueuePendingGeneratedImageExport(conversationId, reference);
+      ensureWorkspaceConversationId();
+      showWorkspaceRequired.value = true;
+      showGeneratedImageToast(
+        t("aiChatV2.imageTool.errors.workspaceRequired") ||
+          "An approved workspace is required first."
+      );
+      return;
+    }
+    showGeneratedImageToast(
+      t("aiChatV2.artifactExport.savedToWorkspace", {
+        fileName: result.fileName ?? "",
+      }) || `Saved ${result.fileName ?? ""} to your workspace.`
+    );
+  } catch (err) {
+    showGeneratedImageToast(
+      err instanceof Error && err.message
+        ? `${t("aiChatV2.artifactExport.saveFailed") || "Could not save to workspace."} (${err.message})`
+        : t("aiChatV2.artifactExport.saveFailed") ||
+            "Could not save to workspace."
+    );
+  }
+}
+
+async function onSaveGeneratedImage(
+  reference: ChatV2GeneratedImageReference
+): Promise<void> {
+  const conversationId = activeConversationId.value ?? ensureWorkspaceConversationId();
+  await attemptGeneratedImageExport(conversationId, reference);
+}
+
+/**
+ * Retry exports that were queued because no approved workspace existed.
+ * Called once a workspace becomes approved for the active conversation so the
+ * user's click completes without needing another action.
+ */
+async function retryPendingGeneratedImageExports(): Promise<void> {
+  const conversationId = activeConversationId.value;
+  if (!conversationId) return;
+  const pending = takePendingGeneratedImageExports(conversationId);
+  for (const reference of pending) {
+    await attemptGeneratedImageExport(conversationId, reference);
+  }
 }
 
 function onRemoveGeneratedImage(
@@ -1934,6 +2032,9 @@ function onWorkspaceApproved(
     approvalState: "approved",
   };
   showWorkspaceRequired.value = false;
+  // A workspace just became ready — complete any save-to-workspace actions
+  // that were queued while none existed.
+  void retryPendingGeneratedImageExports();
 }
 
 // Refresh the workspace badge whenever the active conversation changes.
