@@ -32,6 +32,7 @@ import { registerBuiltinHooks } from "@/service/hooks/builtinHooks";
 import { isAppTrustedOrigin } from "@/service/OriginTrust";
 import { buildAppContentSecurityPolicy } from "@/service/AppContentSecurityPolicy";
 import { PasteStoreService } from "@/service/pastedText/PasteStoreService";
+import { SubscriptionEntitlementService } from "@/service/SubscriptionEntitlementService";
 import * as path from "path";
 import { pathToFileURL } from "url";
 import { Token } from "@/modules/token";
@@ -1264,6 +1265,17 @@ function initialize() {
           log.error("Failed to initialize WebSocket connection:", error);
         }
       }
+
+      // FR-2.1: Reconcile entitlement from GET /api/user/info at startup.
+      // A logged-in user already has a valid access token, so this runs
+      // immediately after WebSocket init. If the WS "connected" welcome
+      // arrives shortly after, ws_connect coalesces within
+      // STARTUP_CONNECT_COALESCE_MS (10s). Failures keep the existing cache.
+      SubscriptionEntitlementService.getInstance()
+        .reconcile("startup")
+        .catch((err) => {
+          log.error("[entitlement] startup reconcile failed:", err);
+        });
 
       // Start background token auto-refresh for already-logged-in user (only if not already running)
       if (!TokenRefreshService.isAutoRefreshRunning()) {
