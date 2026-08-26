@@ -15,6 +15,7 @@ const collect = vi.fn();
 const createMemory = vi.fn();
 const updateMemory = vi.fn();
 const archiveMemory = vi.fn();
+const applyPlanAndCompleteRun = vi.fn();
 const listActive = vi.fn();
 const getPortableState = vi.fn();
 const resolveLegacyScope = vi.fn();
@@ -24,6 +25,7 @@ vi.mock("@/modules/AIWorkspaceMemoryModule", () => ({
     createMemory,
     updateMemory,
     archiveMemory,
+    applyPlanAndCompleteRun,
     listActiveForRetrieval: listActive,
   })),
 }));
@@ -167,12 +169,13 @@ describe("AIWorkspaceAutoDreamService — portable safety (D-09)", () => {
       importPolicy: "review-new",
     });
     getPortableState.mockResolvedValue(null);
+    applyPlanAndCompleteRun.mockResolvedValue(undefined);
   });
 
   it("skips archive and update for records with portable state", async () => {
     completeLightweight.mockResolvedValue({
-      model: "test-model",
-      choices: [
+      response: {
+        choices: [
         {
           message: {
             content: modelOutput({
@@ -184,6 +187,8 @@ describe("AIWorkspaceAutoDreamService — portable safety (D-09)", () => {
           },
         },
       ],
+      },
+      resolvedModel: "test-model",
     });
     listActive.mockResolvedValue([
       activeMemory("wmem-018f2f70-7d3d-7cc0-a07f-1d36e59c2ef1"),
@@ -198,17 +203,22 @@ describe("AIWorkspaceAutoDreamService — portable safety (D-09)", () => {
 
     await svc().runNow({ force: true, reason: "test" });
 
-    expect(archiveMemory).not.toHaveBeenCalled();
-    expect(updateMemory).not.toHaveBeenCalled();
+    // Portable records are filtered out before applyPlanAndCompleteRun.
+    expect(applyPlanAndCompleteRun).toHaveBeenCalledTimes(1);
+    const planArg = applyPlanAndCompleteRun.mock.calls[0][0].plan;
+    expect(planArg.archive).toHaveLength(0);
+    expect(planArg.update).toHaveLength(0);
     expect(failRun).not.toHaveBeenCalled();
   });
 
   it("resolves the internal scope id before applying writes", async () => {
     completeLightweight.mockResolvedValue({
-      model: "test-model",
-      choices: [
-        { message: { content: modelOutput({ create: [] }) } },
-      ],
+      response: {
+        choices: [
+          { message: { content: modelOutput({ create: [] }) } },
+        ],
+      },
+      resolvedModel: "test-model",
     });
     await svc().runNow({ force: true, reason: "test" });
     expect(resolveLegacyScope).toHaveBeenCalledWith(
@@ -221,8 +231,8 @@ describe("AIWorkspaceAutoDreamService — portable safety (D-09)", () => {
       activeMemory("wmem-018f2f70-7d3d-7cc0-a07f-1d36e59c2ef1"),
     ]);
     completeLightweight.mockResolvedValue({
-      model: "test-model",
-      choices: [
+      response: {
+        choices: [
         {
           message: {
             content: modelOutput({
@@ -231,10 +241,15 @@ describe("AIWorkspaceAutoDreamService — portable safety (D-09)", () => {
           },
         },
       ],
+      },
+      resolvedModel: "test-model",
     });
     await svc().runNow({ force: true, reason: "test" });
-    expect(archiveMemory).toHaveBeenCalledWith(
-      expect.objectContaining({ scopeId: SCOPE_ID }),
+    // applyPlanAndCompleteRun called with the full (unfiltered) plan.
+    expect(applyPlanAndCompleteRun).toHaveBeenCalledTimes(1);
+    const planArg = applyPlanAndCompleteRun.mock.calls[0][0].plan;
+    expect(planArg.archive).toHaveLength(1);
+    expect(planArg.archive[0].memoryId).toBe(
       "wmem-018f2f70-7d3d-7cc0-a07f-1d36e59c2ef1"
     );
   });
@@ -245,8 +260,8 @@ describe("AIWorkspaceAutoDreamService — portable safety (D-09)", () => {
       activeMemory("wmem-018f2f70-7d3d-7cc0-a07f-1d36e59c2ef1"),
     ]);
     completeLightweight.mockResolvedValue({
-      model: "test-model",
-      choices: [
+      response: {
+        choices: [
         {
           message: {
             content: modelOutput({
@@ -255,10 +270,15 @@ describe("AIWorkspaceAutoDreamService — portable safety (D-09)", () => {
           },
         },
       ],
+      },
+      resolvedModel: "test-model",
     });
     await svc().runNow({ force: true, reason: "test" });
-    expect(archiveMemory).toHaveBeenCalledWith(
-      expect.objectContaining({ workspaceKey: WS }),
+    // applyPlanAndCompleteRun called (scope resolution failed → legacy path).
+    expect(applyPlanAndCompleteRun).toHaveBeenCalledTimes(1);
+    const planArg = applyPlanAndCompleteRun.mock.calls[0][0].plan;
+    expect(planArg.archive).toHaveLength(1);
+    expect(planArg.archive[0].memoryId).toBe(
       "wmem-018f2f70-7d3d-7cc0-a07f-1d36e59c2ef1"
     );
   });
