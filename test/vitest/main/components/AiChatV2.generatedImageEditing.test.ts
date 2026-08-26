@@ -13,14 +13,13 @@ import { computed, defineComponent } from "vue";
 import type { PropType } from "vue";
 import AiChatV2 from "@/views/components/aiChatV2/AiChatV2.vue";
 import { streamChatV2Message } from "@/views/api/aiChatV2";
-import type {
-  ChatV2StreamRequest,
-} from "@/entityTypes/aiChatV2Types";
+import type { ChatV2StreamRequest } from "@/entityTypes/aiChatV2Types";
 import type { GeneratedImageReferenceView } from "@/views/components/aiChatV2/generatedImageReferenceView";
 
 vi.mock("@/views/api/aiChatV2", () => ({
   clearChatV2StreamListeners: vi.fn(),
   clearChatV2Conversation: vi.fn().mockResolvedValue({ deleted: 1 }),
+  detachChatV2ConversationStreamListeners: vi.fn(),
   subscribeAutoCompacted: vi.fn(),
   unsubscribeAutoCompacted: vi.fn(),
   getChatV2Conversations: vi.fn().mockResolvedValue([]),
@@ -244,30 +243,29 @@ const SlotPassThrough = (name: string): ReturnType<typeof defineComponent> =>
     template: "<div><slot /></div>",
   });
 
-const GlobalVuetifyStubs: Record<string, ReturnType<typeof defineComponent>> =
-  {
-    VIcon: SlotPassThrough("VIcon"),
-    VChip: SlotPassThrough("VChip"),
-    VSpacer: SlotPassThrough("VSpacer"),
-    VCardTitle: SlotPassThrough("VCardTitle"),
-    VCardText: SlotPassThrough("VCardText"),
-    VCardActions: SlotPassThrough("VCardActions"),
-    VProgressLinear: SlotPassThrough("VProgressLinear"),
-    VProgressCircular: SlotPassThrough("VProgressCircular"),
-    VDivider: SlotPassThrough("VDivider"),
-    VAlert: SlotPassThrough("VAlert"),
-    VTooltip: SlotPassThrough("VTooltip"),
-    VTextField: SlotPassThrough("VTextField"),
-    VSheet: SlotPassThrough("VSheet"),
-    VList: SlotPassThrough("VList"),
-    VListItem: SlotPassThrough("VListItem"),
-    VListItemTitle: SlotPassThrough("VListItemTitle"),
-    VListItemSubtitle: SlotPassThrough("VListItemSubtitle"),
-    VDialog: DialogStub,
-    VSnackbar: SnackbarStub,
-    VBtn: ButtonStub,
-    VCard: CardStub,
-  };
+const GlobalVuetifyStubs: Record<string, ReturnType<typeof defineComponent>> = {
+  VIcon: SlotPassThrough("VIcon"),
+  VChip: SlotPassThrough("VChip"),
+  VSpacer: SlotPassThrough("VSpacer"),
+  VCardTitle: SlotPassThrough("VCardTitle"),
+  VCardText: SlotPassThrough("VCardText"),
+  VCardActions: SlotPassThrough("VCardActions"),
+  VProgressLinear: SlotPassThrough("VProgressLinear"),
+  VProgressCircular: SlotPassThrough("VProgressCircular"),
+  VDivider: SlotPassThrough("VDivider"),
+  VAlert: SlotPassThrough("VAlert"),
+  VTooltip: SlotPassThrough("VTooltip"),
+  VTextField: SlotPassThrough("VTextField"),
+  VSheet: SlotPassThrough("VSheet"),
+  VList: SlotPassThrough("VList"),
+  VListItem: SlotPassThrough("VListItem"),
+  VListItemTitle: SlotPassThrough("VListItemTitle"),
+  VListItemSubtitle: SlotPassThrough("VListItemSubtitle"),
+  VDialog: DialogStub,
+  VSnackbar: SnackbarStub,
+  VBtn: ButtonStub,
+  VCard: CardStub,
+};
 
 const ComposerStub = defineComponent({
   name: "AiChatV2Composer",
@@ -359,6 +357,8 @@ const MessagesStub = defineComponent({
     "request-plan-changes",
     "open-artifact",
     "copy-artifact-html",
+    "retry-generated-image-batch",
+    "stop-batch",
   ],
   setup(_, { emit }) {
     const useImage = (): void =>
@@ -367,7 +367,16 @@ const MessagesStub = defineComponent({
       emit("edit-generated-image", { messageId: "m1", imageIndex: 1 });
     const useAt = (imageIndex: number): void =>
       emit("use-generated-image", { messageId: "m1", imageIndex });
-    return { useImage, editImage, useAt };
+    const retryBatch = (): void =>
+      emit("retry-generated-image-batch", {
+        references: [
+          { messageId: "msg-gen-9", imageIndex: 0 },
+          { messageId: "msg-gen-4", imageIndex: 2 },
+        ],
+        instruction: "make the lighting warmer",
+      });
+    const stopBatch = (): void => emit("stop-batch");
+    return { useImage, editImage, useAt, retryBatch, stopBatch };
   },
   template: `<div data-testid="messages">
     <span data-testid="messages-error">{{ errorMessage ?? "" }}</span>
@@ -376,6 +385,8 @@ const MessagesStub = defineComponent({
     <button data-testid="msg-use-img-2" @click="useAt(2)">use-2</button>
     <button data-testid="msg-use-img-3" @click="useAt(3)">use-3</button>
     <button data-testid="msg-edit-img" @click="editImage">edit</button>
+    <button data-testid="msg-retry-batch" @click="retryBatch">retry</button>
+    <button data-testid="msg-stop-batch" @click="stopBatch">stop</button>
   </div>`,
 });
 
@@ -470,11 +481,7 @@ async function mockHistoryWithImages(imageCount: number): Promise<void> {
       conversationId,
       messages:
         conversationId === "conv-A"
-          ? (assistantMessagesWithImages(
-              "conv-A",
-              "m1",
-              imageCount
-            ) as never)
+          ? (assistantMessagesWithImages("conv-A", "m1", imageCount) as never)
           : [],
       totalMessages: 1,
       runtimeStatus: "idle",
@@ -705,9 +712,7 @@ describe("AiChatV2 generated-image editing wiring", () => {
     // Defense in depth: even a late click on a stale candidate must not
     // replay conv-A's send into the newly active conversation.
     const chatVm = wrapper.vm as unknown as {
-      chooseAmbiguityCandidate?: (
-        view: GeneratedImageReferenceView
-      ) => void;
+      chooseAmbiguityCandidate?: (view: GeneratedImageReferenceView) => void;
     };
     expect(typeof chatVm.chooseAmbiguityCandidate).toBe("function");
     chatVm.chooseAmbiguityCandidate?.({
@@ -815,6 +820,44 @@ describe("AiChatV2 generated-image editing wiring", () => {
     ).toBe(false);
   });
 
+  it("retry-failed resubmits exactly the failed references with the original instruction", async () => {
+    const wrapper = mountChat();
+    await flushPromises();
+    await wrapper.setProps({
+      openConversationRequest: { id: 1, conversationId: "conv-A" },
+    });
+    await flushPromises();
+
+    await wrapper.find('[data-testid="msg-retry-batch"]').trigger("click");
+    await flushPromises();
+
+    expect(streamChatV2Message).toHaveBeenCalledTimes(1);
+    const { request } = lastStreamCall();
+    // Retry rides the trusted confirmed channel with ONLY the failed/cancelled
+    // references, in input order — never generatedImageReferences.
+    expect(request.confirmedGeneratedImageBatch?.references).toEqual([
+      { messageId: "msg-gen-9", imageIndex: 0 },
+      { messageId: "msg-gen-4", imageIndex: 2 },
+    ]);
+    expect(request.generatedImageReferences).toBeUndefined();
+    expect(request.message).toContain("make the lighting warmer");
+  });
+
+  it("stop-batch delegates to stopping the active conversation's turn", async () => {
+    const wrapper = mountChat();
+    await flushPromises();
+    await wrapper.setProps({
+      openConversationRequest: { id: 1, conversationId: "conv-A" },
+    });
+    await flushPromises();
+
+    await wrapper.find('[data-testid="msg-stop-batch"]').trigger("click");
+    await flushPromises();
+
+    const { stopChatV2Stream } = await import("@/views/api/aiChatV2");
+    expect(vi.mocked(stopChatV2Stream)).toHaveBeenCalledWith("conv-A");
+  });
+
   it("fusion wording with more than 3 candidates shows the toast and aborts the send", async () => {
     await mockHistoryWithImages(4);
 
@@ -825,9 +868,7 @@ describe("AiChatV2 generated-image editing wiring", () => {
     });
     await flushPromises();
 
-    await wrapper
-      .find('[data-testid="composer-send-fusion"]')
-      .trigger("click");
+    await wrapper.find('[data-testid="composer-send-fusion"]').trigger("click");
     await flushPromises();
 
     expect(streamChatV2Message).not.toHaveBeenCalled();
@@ -945,9 +986,7 @@ describe("AiChatV2 generated-image editing wiring", () => {
     await flushPromises();
 
     await selectReferences(wrapper, 4);
-    await wrapper
-      .find('[data-testid="composer-send-fusion"]')
-      .trigger("click");
+    await wrapper.find('[data-testid="composer-send-fusion"]').trigger("click");
     await flushPromises();
 
     expect(streamChatV2Message).not.toHaveBeenCalled();

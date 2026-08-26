@@ -2308,7 +2308,8 @@ export default {
       permissionTitle: "Exporter les artefacts générés",
       permissionDescription:
         "Copiez ces artefacts générés par AiFetchly vers {destination}.",
-      savedToWorkspace: "{fileName} a été enregistré dans votre espace de travail.",
+      savedToWorkspace:
+        "{fileName} a été enregistré dans votre espace de travail.",
       saveFailed: "Impossible d'enregistrer dans l'espace de travail.",
     },
     imageTool: {
@@ -2635,6 +2636,8 @@ export default {
       batchConfirmBody:
         "Les {count} images sélectionnées seront modifiées indépendamment dans un lot en arrière-plan. Cela peut prendre du temps.",
       send: "Envoyer",
+      stopBatch: "Arrêter le lot",
+      retryFailed: "Réessayer les éléments en échec ({count})",
       progressSummary:
         "{completed} sur {requested} terminées · concurrence {concurrency}",
       errors: {

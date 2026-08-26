@@ -82,6 +82,18 @@
             <strong :class="{ 'v2-message__tool-running': executionPending }">
               {{ executionPending ? t("aiChatV2.tool_running") || "Running..." : t("aiChatV2.tool_result_title") || "Tool Result" }}
             </strong>
+            <button
+              v-if="batchStopAvailable"
+              type="button"
+              class="v2-message__batch-stop"
+              :aria-label="
+                t('aiChatV2.generatedImageRefs.stopBatch') || 'Stop batch'
+              "
+              :disabled="disabled"
+              @click="emit('stop-batch')"
+            >
+              {{ t("aiChatV2.generatedImageRefs.stopBatch") || "Stop batch" }}
+            </button>
           </div>
           <AiArtifactCard
             v-if="message.metadata?.artifact"
@@ -119,6 +131,29 @@
               <span class="v2-message__batch-status">{{
                 batchProgressView.status
               }}</span>
+            </div>
+            <div
+              v-if="batchRetryAvailable"
+              class="v2-message__batch-actions"
+            >
+              <button
+                type="button"
+                class="v2-message__batch-retry"
+                :aria-label="
+                  t('aiChatV2.generatedImageRefs.retryFailed', {
+                    count: batchProgressView.retryableReferences.length,
+                  }) || 'Retry failed items'
+                "
+                :disabled="disabled"
+                @click="emitRetryGeneratedImageBatch"
+              >
+                {{
+                  t("aiChatV2.generatedImageRefs.retryFailed", {
+                    count: batchProgressView.retryableReferences.length,
+                  }) ||
+                  `Retry failed items (${batchProgressView.retryableReferences.length})`
+                }}
+              </button>
             </div>
             <details
               v-if="batchProgressView.failures.length > 0"
@@ -434,6 +469,14 @@ const emit = defineEmits<{
     e: "save-generated-image",
     reference: ChatV2GeneratedImageReference
   ): void;
+  (
+    e: "retry-generated-image-batch",
+    payload: {
+      references: ChatV2GeneratedImageReference[];
+      instruction: string;
+    }
+  ): void;
+  (e: "stop-batch"): void;
 }>();
 const { t, te } = useI18n();
 
@@ -794,6 +837,10 @@ interface BatchProgressView {
   readonly completedCount: number;
   readonly concurrency: number;
   readonly failures: readonly BatchFailureRowView[];
+  /** Safe instruction echo (≤500 chars) for the Retry-failed action. */
+  readonly instruction: string;
+  /** Failed/cancelled generated-image references, in input order. */
+  readonly retryableReferences: readonly ChatV2GeneratedImageReference[];
 }
 
 function asNonNegativeInteger(value: unknown): number | null {
@@ -861,6 +908,7 @@ const batchProgressView = computed<BatchProgressView | null>(() => {
     ? record.items
     : [];
   const failures: BatchFailureRowView[] = [];
+  const retryableReferences: ChatV2GeneratedImageReference[] = [];
   items.forEach((item, index) => {
     if (!item || typeof item !== "object") return;
     const itemRecord = item as Record<string, unknown>;
@@ -869,6 +917,13 @@ const batchProgressView = computed<BatchProgressView | null>(() => {
       itemRecord.status !== "cancelled"
     ) {
       return;
+    }
+    // Retry-failed only applies to generated-image inputs: opaque references
+    // can be resubmitted via the trusted batch channel, while workspace files
+    // keep their model-driven flow.
+    const retryReference = retryableReferenceFromInput(itemRecord.input);
+    if (retryReference) {
+      retryableReferences.push(retryReference);
     }
     const errorCode =
       typeof itemRecord.errorCode === "string" ? itemRecord.errorCode : "";
@@ -894,8 +949,79 @@ const batchProgressView = computed<BatchProgressView | null>(() => {
       errorText,
     });
   });
-  return { status, requestedCount, completedCount, concurrency, failures };
+  const instruction =
+    typeof record.instruction === "string" ? record.instruction.trim() : "";
+  return {
+    status,
+    requestedCount,
+    completedCount,
+    concurrency,
+    failures,
+    instruction,
+    retryableReferences,
+  };
 });
+
+/** Extract a valid opaque reference from a failed item input, or null. */
+function retryableReferenceFromInput(
+  input: unknown
+): ChatV2GeneratedImageReference | null {
+  if (!input || typeof input !== "object") return null;
+  const inputRecord = input as Record<string, unknown>;
+  if (inputRecord.kind !== "generated_image") return null;
+  const reference = inputRecord.reference;
+  if (!reference || typeof reference !== "object") return null;
+  const refRecord = reference as Record<string, unknown>;
+  if (
+    typeof refRecord.messageId !== "string" ||
+    refRecord.messageId.length === 0
+  ) {
+    return null;
+  }
+  if (
+    typeof refRecord.imageIndex !== "number" ||
+    !Number.isInteger(refRecord.imageIndex) ||
+    refRecord.imageIndex < 0
+  ) {
+    return null;
+  }
+  return { messageId: refRecord.messageId, imageIndex: refRecord.imageIndex };
+}
+
+const isBatchToolResult = computed(
+  () =>
+    props.message.messageType === MessageType.TOOL_RESULT &&
+    String(props.message.metadata?.toolName || "") === BATCH_TOOL_NAME
+);
+
+/** Stop renders while the batch tool is still executing (no result yet). */
+const batchStopAvailable = computed(
+  () =>
+    isBatchToolResult.value &&
+    executionPending.value &&
+    !disabled.value
+);
+
+/** Retry renders only on a settled batch with retryable generated refs and a
+ * usable instruction echo; successful items are never included. */
+const batchRetryAvailable = computed(() => {
+  const view = batchProgressView.value;
+  return (
+    view !== null &&
+    !executionPending.value &&
+    view.retryableReferences.length > 0 &&
+    view.instruction.length > 0
+  );
+});
+
+function emitRetryGeneratedImageBatch(): void {
+  const view = batchProgressView.value;
+  if (!view || view.retryableReferences.length === 0) return;
+  emit("retry-generated-image-batch", {
+    references: [...view.retryableReferences],
+    instruction: view.instruction,
+  });
+}
 
 interface MentionChip {
   variant: "resolved" | "warning";

@@ -128,4 +128,32 @@ describe("AiChatV2Messages generated image event forwarding", () => {
       expect(Object.keys(ref).sort()).toEqual(["imageIndex", "messageId"]);
     }
   });
+
+  it("forwards retry-generated-image-batch verbatim", async () => {
+    const wrapper = mountMessages();
+    const inner = wrapper.findComponent(AiChatV2Message);
+    expect(inner.exists()).toBe(true);
+
+    const payload = {
+      references: [
+        { messageId: "assistant-1", imageIndex: 0 },
+        { messageId: "assistant-2", imageIndex: 3 },
+      ],
+      instruction: "make the lighting warmer",
+    };
+    await inner.vm.$emit("retry-generated-image-batch", payload);
+
+    const events = wrapper.emitted("retry-generated-image-batch") ?? [];
+    expect(events.length).toBe(1);
+    expect(events[0][0]).toEqual(payload);
+  });
+
+  it("forwards stop-batch from the inner message", async () => {
+    const wrapper = mountMessages();
+    const inner = wrapper.findComponent(AiChatV2Message);
+    expect(inner.exists()).toBe(true);
+
+    await inner.vm.$emit("stop-batch");
+    expect(wrapper.emitted("stop-batch")?.length).toBe(1);
+  });
 });

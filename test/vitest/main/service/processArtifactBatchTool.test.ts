@@ -236,10 +236,7 @@ describe("ArtifactBatchProcessingService", () => {
       },
       context()
     );
-    const neither = await service.execute(
-      { instruction: "edit" },
-      context()
-    );
+    const neither = await service.execute({ instruction: "edit" }, context());
 
     expect(both.success).toBe(false);
     expect(both.result).toMatchObject({
@@ -304,9 +301,7 @@ describe("ArtifactBatchProcessingService generated-image sources", () => {
         if (source.kind !== "generated_image") throw new Error("unexpected");
         return agentResult({
           id: `task-${referenceKey(source.authorized.reference)}`,
-          images: [
-            image(`${referenceKey(source.authorized.reference)}.png`),
-          ],
+          images: [image(`${referenceKey(source.authorized.reference)}.png`)],
         });
       }
     );
@@ -324,7 +319,12 @@ describe("ArtifactBatchProcessingService generated-image sources", () => {
     );
     const resolveWorkspace = vi.fn(async () => null);
     return {
-      deps: { resolveWorkspace, runAgent, authorizeReferences, prepareReferences },
+      deps: {
+        resolveWorkspace,
+        runAgent,
+        authorizeReferences,
+        prepareReferences,
+      },
       runAgent,
       authorizeReferences,
       prepareReferences,
@@ -352,30 +352,59 @@ describe("ArtifactBatchProcessingService generated-image sources", () => {
     );
 
     expect(harness.resolveWorkspace).not.toHaveBeenCalled();
-    expect(harness.authorizeReferences).toHaveBeenCalledWith(
-      "conversation-1",
-      [
-        { messageId: "m1", imageIndex: 0 },
-        { messageId: "m2", imageIndex: 1 },
-      ]
-    );
+    expect(harness.authorizeReferences).toHaveBeenCalledWith("conversation-1", [
+      { messageId: "m1", imageIndex: 0 },
+      { messageId: "m2", imageIndex: 1 },
+    ]);
     expect(response.success).toBe(true);
     const result = response.result as ArtifactBatchResult;
     expect(result.status).toBe("completed");
     expect(result.completedCount).toBe(2);
     expect(result.items.map((item) => item.input)).toEqual([
-      { kind: "generated_image", reference: { messageId: "m1", imageIndex: 0 } },
-      { kind: "generated_image", reference: { messageId: "m2", imageIndex: 1 } },
+      {
+        kind: "generated_image",
+        reference: { messageId: "m1", imageIndex: 0 },
+      },
+      {
+        kind: "generated_image",
+        reference: { messageId: "m2", imageIndex: 1 },
+      },
     ]);
     const firstInput = harness.runAgent.mock
       .calls[0][0] as ArtifactBatchWorkerInput;
     expect(firstInput.source.kind).toBe("generated_image");
     if (firstInput.source.kind === "generated_image") {
       expect(firstInput.source.authorized.absolutePath).toContain("m1");
-      expect(firstInput.source.artifact.dataUrl.startsWith("data:image/png")).toBe(
-        true
-      );
+      expect(
+        firstInput.source.artifact.dataUrl.startsWith("data:image/png")
+      ).toBe(true);
     }
+  });
+
+  it("echoes the shared instruction (trimmed, bounded) for retry reuse", async () => {
+    const harness = generatedDeps();
+    const service = new ArtifactBatchProcessingService(harness.deps);
+
+    const response = await service.execute(
+      {
+        generatedImageReferences: [{ messageId: "m1", imageIndex: 0 }],
+        instruction: "  add a dog beside the lion  ",
+      },
+      context()
+    );
+    const result = response.result as ArtifactBatchResult;
+    expect(result.instruction).toBe("add a dog beside the lion");
+
+    const long = await service.execute(
+      {
+        generatedImageReferences: [{ messageId: "m1", imageIndex: 0 }],
+        instruction: `add a dog ${"x".repeat(600)}`,
+      },
+      context()
+    );
+    const longResult = long.result as ArtifactBatchResult;
+    expect(longResult.instruction?.length).toBe(500);
+    expect(longResult.instruction?.startsWith("add a dog ")).toBe(true);
   });
 
   it("bounds inflight provider work and keeps results in input order", async () => {
@@ -430,7 +459,10 @@ describe("ArtifactBatchProcessingService generated-image sources", () => {
     const harness = generatedDeps();
     const events: string[] = [];
     harness.prepareReferences.mockImplementation(
-      async (sources: readonly AuthorizedGeneratedImageSource[], detail: ImageDetail) => {
+      async (
+        sources: readonly AuthorizedGeneratedImageSource[],
+        detail: ImageDetail
+      ) => {
         if (sources.length !== 1) {
           throw new Error(`expected one source, got ${sources.length}`);
         }
@@ -458,7 +490,9 @@ describe("ArtifactBatchProcessingService generated-image sources", () => {
     );
 
     expect(response.success).toBe(true);
-    expect(events.filter((event) => event.startsWith("prepare:"))).toHaveLength(5);
+    expect(events.filter((event) => event.startsWith("prepare:"))).toHaveLength(
+      5
+    );
     const firstRunsAt = events.findIndex((event) => event.startsWith("run:"));
     expect(events.slice(0, firstRunsAt)).toHaveLength(3);
     expect(events.indexOf("run:message-0")).toBeLessThan(
@@ -469,7 +503,10 @@ describe("ArtifactBatchProcessingService generated-image sources", () => {
   it("isolates a per-item preparation failure and reports its mapped errorCode", async () => {
     const harness = generatedDeps();
     harness.prepareReferences.mockImplementation(
-      async (sources: readonly AuthorizedGeneratedImageSource[], detail: ImageDetail) => {
+      async (
+        sources: readonly AuthorizedGeneratedImageSource[],
+        detail: ImageDetail
+      ) => {
         const failing = sources.find(
           (source) => source.reference.messageId === "message-2"
         );
@@ -550,7 +587,10 @@ describe("ArtifactBatchProcessingService generated-image sources", () => {
   it("emits evolving progress events with counts and no path-like strings", async () => {
     const harness = generatedDeps();
     harness.prepareReferences.mockImplementation(
-      async (sources: readonly AuthorizedGeneratedImageSource[], detail: ImageDetail) => {
+      async (
+        sources: readonly AuthorizedGeneratedImageSource[],
+        detail: ImageDetail
+      ) => {
         const failing = sources.find(
           (source) => source.reference.messageId === "message-1"
         );
@@ -577,15 +617,16 @@ describe("ArtifactBatchProcessingService generated-image sources", () => {
     expect(response.success).toBe(true);
     expect(emitProgress.mock.calls.length).toBeGreaterThanOrEqual(3);
     const events = emitProgress.mock.calls.map(
-      (call) => call[0] as {
-        phase: string;
-        message: string;
-        expectedCount: number;
-        completedCount: number;
-        failedCount: number;
-        cancelledCount: number;
-        runningCount: number;
-      }
+      (call) =>
+        call[0] as {
+          phase: string;
+          message: string;
+          expectedCount: number;
+          completedCount: number;
+          failedCount: number;
+          cancelledCount: number;
+          runningCount: number;
+        }
     );
     const last = events[events.length - 1];
     expect(last.expectedCount).toBe(4);
@@ -708,8 +749,7 @@ describe("ArtifactBatchProcessingService generated-image sources", () => {
               delivery: "local_file",
               url: "aifetchly-generated-image://local/u/c/m1/0-out.png",
               original_url: "https://provider.example/original.png",
-              local_path:
-                "/tmp/app-store/u/c/m1/0-out.png",
+              local_path: "/tmp/app-store/u/c/m1/0-out.png",
               file_name: "0-out.png",
               b64_json: base64Fixture,
               expires_at: "2026-01-01T00:00:00Z",
@@ -770,7 +810,10 @@ describe("ArtifactBatchProcessingService generated-image sources", () => {
       runAgent: vi.fn(
         async ({ source }: { source: ArtifactBatchWorkerSource }) => {
           if (source.kind !== "workspace_file") throw new Error("unexpected");
-          return agentResult({ id: `task-${source.file}`, images: [image(`${source.file}.png`)] });
+          return agentResult({
+            id: `task-${source.file}`,
+            images: [image(`${source.file}.png`)],
+          });
         }
       ),
     };
@@ -784,9 +827,9 @@ describe("ArtifactBatchProcessingService generated-image sources", () => {
     expect(response.success).toBe(true);
     const result = response.result as ArtifactBatchResult;
     expect(result.outputFilePaths).toEqual(["/generated/a.jpg.png"]);
-    expect(result.outputFilePaths?.some((path) => path.startsWith("/tmp"))).toBe(
-      false
-    );
+    expect(
+      result.outputFilePaths?.some((path) => path.startsWith("/tmp"))
+    ).toBe(false);
     expect(result.items[0].input).toEqual({
       kind: "workspace_file",
       path: "a.jpg",
@@ -892,7 +935,9 @@ describe("PROCESS_ARTIFACT_BATCH_TOOL", () => {
   });
 
   it("returns no preview without a recognizable source", () => {
-    expect(PROCESS_ARTIFACT_BATCH_TOOL.buildPermissionPreview?.({})).toBeUndefined();
+    expect(
+      PROCESS_ARTIFACT_BATCH_TOOL.buildPermissionPreview?.({})
+    ).toBeUndefined();
   });
 });
 
@@ -926,9 +971,9 @@ describe("ArtifactBatchProcessingService user-confirmed reference staging", () =
     };
   }
 
-  function stagedHarness(stagedQueue: Array<
-    readonly ChatV2GeneratedImageReference[] | null
-  >): {
+  function stagedHarness(
+    stagedQueue: Array<readonly ChatV2GeneratedImageReference[] | null>
+  ): {
     deps: ArtifactBatchProcessingDeps;
     runAgent: ReturnType<typeof vi.fn>;
     authorizeReferences: ReturnType<typeof vi.fn>;
@@ -1006,16 +1051,26 @@ describe("ArtifactBatchProcessingService user-confirmed reference staging", () =
     expect(result.completedCount).toBe(2);
     // Order + identity of the confirmed set preserved verbatim into results.
     expect(result.items.map((item) => item.input)).toEqual([
-      { kind: "generated_image", reference: { messageId: "confirmed-b", imageIndex: 7 } },
-      { kind: "generated_image", reference: { messageId: "confirmed-a", imageIndex: 3 } },
+      {
+        kind: "generated_image",
+        reference: { messageId: "confirmed-b", imageIndex: 7 },
+      },
+      {
+        kind: "generated_image",
+        reference: { messageId: "confirmed-a", imageIndex: 3 },
+      },
     ]);
     for (const call of harness.runAgent.mock.calls as unknown as [
       ArtifactBatchWorkerInput
     ][]) {
       expect(call[0].source.kind).toBe("generated_image");
       if (call[0].source.kind === "generated_image") {
-        expect(confirmedSet).toContainEqual(call[0].source.authorized.reference);
-        expect(modelArgs).not.toContainEqual(call[0].source.authorized.reference);
+        expect(confirmedSet).toContainEqual(
+          call[0].source.authorized.reference
+        );
+        expect(modelArgs).not.toContainEqual(
+          call[0].source.authorized.reference
+        );
       }
     }
   });
@@ -1037,8 +1092,14 @@ describe("ArtifactBatchProcessingService user-confirmed reference staging", () =
     expect(response.success).toBe(true);
     const result = response.result as ArtifactBatchResult;
     expect(result.items.map((item) => item.input)).toEqual([
-      { kind: "generated_image", reference: { messageId: "model-x", imageIndex: 0 } },
-      { kind: "generated_image", reference: { messageId: "model-y", imageIndex: 4 } },
+      {
+        kind: "generated_image",
+        reference: { messageId: "model-x", imageIndex: 0 },
+      },
+      {
+        kind: "generated_image",
+        reference: { messageId: "model-y", imageIndex: 4 },
+      },
     ]);
   });
 
@@ -1062,7 +1123,10 @@ describe("ArtifactBatchProcessingService user-confirmed reference staging", () =
     expect(harness.consumeConfirmedReferences).toHaveBeenCalledTimes(2);
     const secondResult = second.result as ArtifactBatchResult;
     expect(secondResult.items.map((item) => item.input)).toEqual([
-      { kind: "generated_image", reference: { messageId: "model-z", imageIndex: 1 } },
+      {
+        kind: "generated_image",
+        reference: { messageId: "model-z", imageIndex: 1 },
+      },
     ]);
   });
 });

@@ -2593,7 +2593,10 @@ export default {
       batchConfirmBody:
         "選択した{count}枚の画像はバックグラウンドのバッチで個別に編集されます。時間がかかる場合があります。",
       send: "送信",
-      progressSummary: "{completed} / {requested} 件完了 · 同時実行数 {concurrency}",
+      stopBatch: "バッチを停止",
+      retryFailed: "失敗した項目を再試行（{count}）",
+      progressSummary:
+        "{completed} / {requested} 件完了 · 同時実行数 {concurrency}",
       errors: {
         generated_image_reference_invalid:
           "この画像参照は無効になりました。画像を再度選択してください。",

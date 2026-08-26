@@ -113,6 +113,12 @@ export interface ArtifactBatchResult {
   cancelledCount: number;
   concurrency: number;
   items: ArtifactBatchItemResult[];
+  /**
+   * Safe echo of the shared batch instruction (trimmed, ≤500 chars) so the
+   * renderer's Retry-failed action can resubmit exactly the original
+   * instruction without the model reconstructing it.
+   */
+  instruction?: string;
   outputFilePaths?: string[];
   outputImages?: Array<OpenAIChatImage | SlimmedOutputImage>;
 }
@@ -162,7 +168,12 @@ interface ArtifactBatchProgressSnapshot {
  * five verbatim; counters stay readable by direct consumers and tests.
  * Deliberately numbers + strings only — no paths, no references. */
 interface ArtifactBatchProgressEvent extends ArtifactBatchProgressSnapshot {
-  readonly phase: "queued" | "running" | "fetching" | "extracting" | "finalizing";
+  readonly phase:
+    | "queued"
+    | "running"
+    | "fetching"
+    | "extracting"
+    | "finalizing";
   readonly message: string;
   readonly progress: number;
   readonly partialCount: number;
@@ -210,7 +221,10 @@ function parseArgs(
     const files: string[] = [];
     for (const file of args.files) {
       if (typeof file !== "string" || file.trim().length === 0) {
-        return { ok: false, error: "Every `files` entry must be a path string." };
+        return {
+          ok: false,
+          error: "Every `files` entry must be a path string.",
+        };
       }
       if (!files.includes(file)) files.push(file);
     }
@@ -457,17 +471,27 @@ function createDefaultDeps(): ArtifactBatchProcessingDeps {
   };
 }
 
+/** Longest instruction echo kept in results — retry reuse only needs the
+ * operative text, and this keeps persisted tool results bounded. */
+const RESULT_INSTRUCTION_ECHO_MAX_CHARS = 500;
+
+function safeInstructionEcho(instruction: string): string | undefined {
+  const trimmed = instruction.trim();
+  return trimmed.length > 0
+    ? trimmed.slice(0, RESULT_INSTRUCTION_ECHO_MAX_CHARS)
+    : undefined;
+}
+
 function summarize(
   results: readonly ArtifactBatchItemResult[],
   processor: typeof PROCESSOR_IMAGE_EDIT,
-  concurrency: number
+  concurrency: number,
+  instruction: string
 ): { success: boolean; result: ArtifactBatchResult } {
   const completedCount = results.filter(
     (item) => item.status === "completed"
   ).length;
-  const failedCount = results.filter(
-    (item) => item.status === "failed"
-  ).length;
+  const failedCount = results.filter((item) => item.status === "failed").length;
   const cancelledCount = results.filter(
     (item) => item.status === "cancelled"
   ).length;
@@ -484,6 +508,7 @@ function summarize(
       : completedCount > 0
       ? "partial"
       : "failed";
+  const instructionEcho = safeInstructionEcho(instruction);
   return {
     success: completedCount > 0,
     result: {
@@ -495,6 +520,7 @@ function summarize(
       cancelledCount,
       concurrency,
       items: [...results],
+      ...(instructionEcho ? { instruction: instructionEcho } : {}),
       ...(outputFilePaths.length > 0 ? { outputFilePaths } : {}),
       ...(outputImages.length > 0 ? { outputImages } : {}),
     },
@@ -549,7 +575,11 @@ export class ArtifactBatchProcessingService {
         );
         return this.executeGeneratedSources(staged, batch, context);
       }
-      return this.executeGeneratedSources(batch.source.references, batch, context);
+      return this.executeGeneratedSources(
+        batch.source.references,
+        batch,
+        context
+      );
     }
 
     const workspace = await this.deps.resolveWorkspace(context.conversationId);
@@ -578,7 +608,13 @@ export class ArtifactBatchProcessingService {
           signal: context.signal,
         }),
     }));
-    return this.processItems(items, batch.processor, batch.concurrency, context);
+    return this.processItems(
+      items,
+      batch.processor,
+      batch.concurrency,
+      context,
+      batch.instruction
+    );
   }
 
   private async executeGeneratedSources(
@@ -598,7 +634,8 @@ export class ArtifactBatchProcessingService {
           "generated_image_reference_invalid"
         ),
         batch.processor,
-        batch.concurrency
+        batch.concurrency,
+        batch.instruction
       );
     }
     let authorizedSources: readonly AuthorizedGeneratedImageSource[];
@@ -616,13 +653,17 @@ export class ArtifactBatchProcessingService {
       return summarize(
         failedReferenceItems(references, message, code),
         batch.processor,
-        batch.concurrency
+        batch.concurrency,
+        batch.instruction
       );
     }
     const prepare =
       this.deps.prepareReferences ?? createDefaultPrepareReferences();
     const authorizedByKey = new Map(
-      authorizedSources.map((source) => [referenceKey(source.reference), source])
+      authorizedSources.map((source) => [
+        referenceKey(source.reference),
+        source,
+      ])
     );
     const items: ScheduledItem[] = references.map((reference) => ({
       identity: { kind: "generated_image", reference },
@@ -635,7 +676,11 @@ export class ArtifactBatchProcessingService {
         }
         // JIT preparation inside the bounded slot: one artifact at a time,
         // scoped to this iteration so it is collectible once runSync resolves.
-        const [artifact] = await prepare([authorized], batch.detail, context.signal);
+        const [artifact] = await prepare(
+          [authorized],
+          batch.detail,
+          context.signal
+        );
         if (!artifact) {
           throw new GeneratedImageReferenceError(
             "generated_image_reference_invalid"
@@ -651,14 +696,21 @@ export class ArtifactBatchProcessingService {
         });
       },
     }));
-    return this.processItems(items, batch.processor, batch.concurrency, context);
+    return this.processItems(
+      items,
+      batch.processor,
+      batch.concurrency,
+      context,
+      batch.instruction
+    );
   }
 
   private async processItems(
     items: readonly ScheduledItem[],
     processor: typeof PROCESSOR_IMAGE_EDIT,
     concurrency: number,
-    context: SkillExecutionContext
+    context: SkillExecutionContext,
+    instruction: string
   ): Promise<{ success: boolean; result: ArtifactBatchResult }> {
     const snapshot = {
       expectedCount: items.length,
@@ -680,7 +732,9 @@ export class ArtifactBatchProcessingService {
           ` failed=${snapshot.failedCount}` +
           ` cancelled=${snapshot.cancelledCount}` +
           ` running=${snapshot.runningCount}`,
-        progress: Math.round((settled / Math.max(1, snapshot.expectedCount)) * 100) / 100,
+        progress:
+          Math.round((settled / Math.max(1, snapshot.expectedCount)) * 100) /
+          100,
         partialCount: snapshot.completedCount,
         expectedCount: snapshot.expectedCount,
         completedCount: snapshot.completedCount,
@@ -785,7 +839,8 @@ export class ArtifactBatchProcessingService {
                   status: cancelled ? "cancelled" : "failed",
                   outputImages: [],
                   error: error instanceof Error ? error.message : String(error),
-                  ...(!cancelled && error instanceof GeneratedImageReferenceError
+                  ...(!cancelled &&
+                  error instanceof GeneratedImageReferenceError
                     ? { errorCode: error.code }
                     : {}),
                   durationMs: Date.now() - startedAt,
@@ -803,13 +858,12 @@ export class ArtifactBatchProcessingService {
     };
 
     await Promise.all(
-      Array.from(
-        { length: Math.min(concurrency, items.length) },
-        () => runNext()
+      Array.from({ length: Math.min(concurrency, items.length) }, () =>
+        runNext()
       )
     );
     emitProgressEvent("finalizing");
-    return summarize(results, processor, concurrency);
+    return summarize(results, processor, concurrency, instruction);
   }
 }
 

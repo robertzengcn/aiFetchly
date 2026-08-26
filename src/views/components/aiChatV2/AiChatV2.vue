@@ -186,6 +186,8 @@
         @use-generated-image="onUseGeneratedImage"
         @edit-generated-image="onEditGeneratedImage"
         @save-generated-image="onSaveGeneratedImage"
+        @retry-generated-image-batch="onRetryGeneratedImageBatch"
+        @stop-batch="onStop"
       />
 
       <!-- Pinned action cards: permission + question + plan approval while awaiting user input.
@@ -1353,6 +1355,22 @@ async function onSaveGeneratedImage(
 ): Promise<void> {
   const conversationId = activeConversationId.value ?? ensureWorkspaceConversationId();
   await attemptGeneratedImageExport(conversationId, reference);
+}
+
+/**
+ * Retry-failed action on a settled generated-image batch card: resubmit ONLY
+ * the failed/cancelled opaque references (never successful ones) with the
+ * original shared instruction, via the trusted user-confirmed staging channel.
+ */
+function onRetryGeneratedImageBatch(payload: {
+  references: ChatV2GeneratedImageReference[];
+  instruction: string;
+}): void {
+  if (payload.references.length === 0) return;
+  void onSend(payload.instruction, undefined, {
+    bypassGeneratedImageInference: true,
+    confirmedBatchReferences: [...payload.references],
+  });
 }
 
 /**

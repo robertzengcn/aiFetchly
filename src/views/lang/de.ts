@@ -2646,6 +2646,8 @@ export default {
       batchConfirmBody:
         "Alle {count} ausgewählten Bilder werden unabhängig in einem Hintergrundstapel bearbeitet. Dies kann eine Weile dauern.",
       send: "Senden",
+      stopBatch: "Stapel stoppen",
+      retryFailed: "Fehlgeschlagene Elemente wiederholen ({count})",
       progressSummary:
         "{completed} von {requested} abgeschlossen · Parallelität {concurrency}",
       errors: {

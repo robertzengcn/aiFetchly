@@ -2648,13 +2648,16 @@ export default {
       moveUp: "Subir",
       moveDown: "Bajar",
       referenceTrayTitle: "Imágenes de referencia",
-      limitReached: "Puedes hacer referencia a un máximo de 3 imágenes por solicitud.",
+      limitReached:
+        "Puedes hacer referencia a un máximo de 3 imágenes por solicitud.",
       batchOffer:
         "Se seleccionaron más de 3 imágenes. ¿Prefieres procesarlas como un lote de ediciones independientes?",
       batchConfirmTitle: "¿Procesar como lote?",
       batchConfirmBody:
         "Las {count} imágenes seleccionadas se editarán de forma independiente en un lote en segundo plano. Esto puede tardar un poco.",
       send: "Enviar",
+      stopBatch: "Detener lote",
+      retryFailed: "Reintentar elementos fallidos ({count})",
       progressSummary:
         "{completed} de {requested} completadas · concurrencia {concurrency}",
       errors: {

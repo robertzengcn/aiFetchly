@@ -37,6 +37,8 @@
         (reference: ChatV2GeneratedImageReference) =>
           emit('save-generated-image', reference)
       "
+      @retry-generated-image-batch="onRetryGeneratedImageBatch"
+      @stop-batch="emit('stop-batch')"
     />
     <div
       v-if="showTypingIndicator"
@@ -128,6 +130,14 @@ const emit = defineEmits<{
     e: "save-generated-image",
     reference: ChatV2GeneratedImageReference
   ): void;
+  (
+    e: "retry-generated-image-batch",
+    payload: {
+      references: ChatV2GeneratedImageReference[];
+      instruction: string;
+    }
+  ): void;
+  (e: "stop-batch"): void;
 }>();
 const { t } = useI18n();
 
@@ -157,6 +167,13 @@ const onGrantPermission = (
 
 const onDenyPermission = (message: ChatV2MessageView): void => {
   emit("deny-permission", message);
+};
+
+const onRetryGeneratedImageBatch = (payload: {
+  references: ChatV2GeneratedImageReference[];
+  instruction: string;
+}): void => {
+  emit("retry-generated-image-batch", payload);
 };
 
 onMounted(scrollToBottom);

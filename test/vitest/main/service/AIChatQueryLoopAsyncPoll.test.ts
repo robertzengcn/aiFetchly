@@ -371,4 +371,65 @@ describe("AIChatQueryLoop async poll", () => {
     const resultEvents = events.filter((e) => e.type === "tool_result");
     expect(resultEvents.length).toBe(0);
   });
+
+  it("passes a cancellable abort signal into the async tool context", async () => {
+    vi.useFakeTimers();
+    const toolCallId = "call-signal";
+    const events: AIChatQueryEvent[] = [];
+    const abort = new AbortController();
+    const fakeStream = makeFakeStream({
+      toolCallId,
+      toolName: "run_subagent",
+      argsJson: JSON.stringify({
+        agentId: "agent-lead-researcher",
+        prompt: "test",
+        taskPacket: { lead: { industry: "fintech" } },
+      }),
+    });
+
+    let capturedSignal: AbortSignal | undefined;
+    const deps = {
+      streamChatCompletion: fakeStream,
+      executeTool: async (
+        _name: string,
+        _args: Record<string, unknown>,
+        context: { signal?: AbortSignal }
+      ) => {
+        capturedSignal = context.signal;
+        // Hold the job open until the tool-level signal fires, the way a
+        // long-running batch tool waits on its abort signal between items.
+        await new Promise<void>((resolve) => {
+          if (context.signal?.aborted) {
+            resolve();
+            return;
+          }
+          context.signal?.addEventListener("abort", () => resolve(), {
+            once: true,
+          });
+        });
+        return { success: false, error: "cancelled", execution_time_ms: 1 };
+      },
+      getSkillDefinition: () => undefined,
+    };
+
+    const loop = new AIChatQueryLoop(deps as never);
+    const input = buildInput(events, abort);
+
+    const promise = loop.run(input);
+    await vi.advanceTimersByTimeAsync(ASYNC_POLL_INTERVAL_MS_PLUS);
+
+    // The async tool context must carry a real, not-yet-aborted AbortSignal.
+    expect(capturedSignal).toBeInstanceOf(AbortSignal);
+    expect(capturedSignal?.aborted).toBe(false);
+
+    abort.abort();
+    await vi.advanceTimersByTimeAsync(ASYNC_POLL_INTERVAL_MS_PLUS);
+    const result = await promise;
+
+    // Registry cancellation fires the tool-level signal via onCancel wiring,
+    // so a batch tool reading context.signal aborts its in-flight work.
+    expect(fake.cancelSpied).toHaveBeenCalledWith(lastStartedJobId());
+    expect(capturedSignal?.aborted).toBe(true);
+    expect(result.type).toBe("cancelled");
+  });
 });

@@ -2630,6 +2630,8 @@ export default {
       batchConfirmBody:
         "All {count} selected images will be edited independently in a background batch. This may take a while.",
       send: "Send",
+      stopBatch: "Stop batch",
+      retryFailed: "Retry failed items ({count})",
       progressSummary:
         "{completed} of {requested} completed · concurrency {concurrency}",
       errors: {

@@ -2217,11 +2217,18 @@ export class AIChatQueryLoop {
     }
 
     const registry = getDefaultToolJobRegistry();
+    // Tool-level abort signal for the async job. Fires when the job is
+    // cancelled (registry cancel handlers) — which happens when the turn's
+    // abortController fires (poll loop calls registry.cancel) or the job is
+    // stopped. Long-running batch tools read context.signal to abort in-flight
+    // provider work and mark queued items cancelled.
+    const asyncToolAbort = new AbortController();
     const { jobId } = registry.start(
       call.name,
       call.arguments ?? {},
       { conversationId: input.conversationId, toolCallId: call.id },
       async (handle) => {
+        handle.onCancel(() => asyncToolAbort.abort());
         try {
           const result = await this.deps.executeTool(
             call.name,
@@ -2231,6 +2238,7 @@ export class AIChatQueryLoop {
               toolCallId: call.id,
               args: call.arguments,
               model: input.request.model,
+              signal: asyncToolAbort.signal,
               emitProgress: (event) => {
                 input.eventSink.emit({
                   type: "tool_progress",
