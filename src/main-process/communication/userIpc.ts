@@ -384,7 +384,10 @@ export function registerUserIpcHandlers(
    * Returns the reconcile result so callers (and tests) can inspect it.
    */
   ipcMain.handle(USER_REFRESH_ENTITLEMENT, async (_event, raw) => {
-    const input = typeof raw === "string" ? JSON.parse(raw) : raw;
+    // Renderer may invoke with no args; coerce null/undefined to {} so the
+    // Zod default ("manual") applies.
+    const input =
+      raw == null ? {} : typeof raw === "string" ? JSON.parse(raw) : raw;
     const parsed = refreshEntitlementInputSchema().safeParse(input);
     if (!parsed.success) {
       const msg = parsed.error.message;
@@ -413,7 +416,8 @@ export function registerUserIpcHandlers(
    * knows pricing was opened.
    */
   ipcMain.handle(USER_OPEN_PRICING_PLAN, async (_event, raw) => {
-    const input = typeof raw === "string" ? JSON.parse(raw) : raw;
+    const input =
+      raw == null ? {} : typeof raw === "string" ? JSON.parse(raw) : raw;
     const parsed = openPricingPlanInputSchema().safeParse(input);
     if (!parsed.success) {
       const msg = parsed.error.message;
