@@ -1,15 +1,12 @@
 import { ipcMain } from "electron";
-import {
-  AI_CHAT_V2_EXPORT_GENERATED_IMAGE,
-} from "@/config/channellist";
+import { AI_CHAT_V2_EXPORT_GENERATED_IMAGE } from "@/config/channellist";
 import { canUseChat } from "@/main-process/communication/ai-chat-v2-ipc";
+import { log } from "@/modules/Logger";
 import { GeneratedImageReferenceService } from "@/service/GeneratedImageReferenceService";
 import { GeneratedImageReferenceError } from "@/entityTypes/generatedImageReferenceTypes";
 import type { ChatV2GeneratedImageReference } from "@/entityTypes/aiChatV2Types";
 import { WorkspaceResolver } from "@/service/WorkspaceResolver";
-import {
-  exportSingleGeneratedArtifact,
-} from "@/service/agentTools/exportGeneratedArtifactsTool";
+import { exportSingleGeneratedArtifact } from "@/service/agentTools/exportGeneratedArtifactsTool";
 import type { ExportSingleGeneratedArtifactResult } from "@/service/agentTools/exportGeneratedArtifactsTool";
 import { AIChatV2Module } from "@/modules/AIChatV2Module";
 import { userSafeError } from "@/service/AIChatErrorMapper";
@@ -25,12 +22,18 @@ export type GeneratedImageExportOutcome =
     }
   | { status: "workspace_required" };
 
-function ok(data: GeneratedImageExportOutcome): CommonMessage<GeneratedImageExportOutcome> {
+function ok(
+  data: GeneratedImageExportOutcome
+): CommonMessage<GeneratedImageExportOutcome> {
   return { status: true, msg: "", data };
 }
 
 function denied(msg: string): CommonMessage<GeneratedImageExportOutcome> {
-  return { status: false, msg, data: undefined as unknown as GeneratedImageExportOutcome };
+  return {
+    status: false,
+    msg,
+    data: undefined as unknown as GeneratedImageExportOutcome,
+  };
 }
 
 interface ParsedExportImageRequest {
@@ -48,15 +51,25 @@ function parseExportImageRequest(
 ): ParsedExportImageRequest | null {
   if (!data || typeof data !== "object" || Array.isArray(data)) return null;
   const raw = data as Record<string, unknown>;
-  if (typeof raw.conversationId !== "string" || raw.conversationId.length === 0) {
+  if (
+    typeof raw.conversationId !== "string" ||
+    raw.conversationId.length === 0
+  ) {
     return null;
   }
   const referenceRaw = raw.reference;
-  if (!referenceRaw || typeof referenceRaw !== "object" || Array.isArray(referenceRaw)) {
+  if (
+    !referenceRaw ||
+    typeof referenceRaw !== "object" ||
+    Array.isArray(referenceRaw)
+  ) {
     return null;
   }
   const reference = referenceRaw as Record<string, unknown>;
-  if (typeof reference.messageId !== "string" || reference.messageId.length === 0) {
+  if (
+    typeof reference.messageId !== "string" ||
+    reference.messageId.length === 0
+  ) {
     return null;
   }
   if (
@@ -83,7 +96,9 @@ function freshToolCallId(): string {
   ) {
     return `manual-export-${crypto.randomUUID()}`;
   }
-  return `manual-export-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  return `manual-export-${Date.now()}-${Math.random()
+    .toString(36)
+    .slice(2, 10)}`;
 }
 
 /**
@@ -95,7 +110,10 @@ async function persistChipCompatibleToolResult(input: {
   conversationId: string;
   assistantMessageId: string;
   protocolUrl: string;
-  exported: Extract<ExportSingleGeneratedArtifactResult, { status: "exported" }>;
+  exported: Extract<
+    ExportSingleGeneratedArtifactResult,
+    { status: "exported" }
+  >;
 }): Promise<void> {
   const module = new AIChatV2Module();
   await module.saveToolResultMessage({
@@ -136,17 +154,21 @@ async function handleExportGeneratedImage(
 
   const parsed = parseExportImageRequest(data);
   if (!parsed) {
-    return denied("conversationId and a {messageId, imageIndex} reference are required");
+    return denied(
+      "conversationId and a {messageId, imageIndex} reference are required"
+    );
   }
 
   // Authorize the single reference in the main process; never trust any
   // renderer-supplied path or URL.
   let protocolUrl: string;
   try {
-    const authorized = await new GeneratedImageReferenceService().authorizeOnly({
-      conversationId: parsed.conversationId,
-      references: [parsed.reference],
-    });
+    const authorized = await new GeneratedImageReferenceService().authorizeOnly(
+      {
+        conversationId: parsed.conversationId,
+        references: [parsed.reference],
+      }
+    );
     const source = authorized[0];
     if (!source) {
       return denied("generated_image_reference_invalid");
@@ -161,7 +183,9 @@ async function handleExportGeneratedImage(
   }
 
   // Approved workspace presence check (same resolver seam as the export tool).
-  const workspace = await new WorkspaceResolver().resolve(parsed.conversationId);
+  const workspace = await new WorkspaceResolver().resolve(
+    parsed.conversationId
+  );
   if (!workspace) {
     return ok({ status: "workspace_required" });
   }
@@ -188,7 +212,7 @@ async function handleExportGeneratedImage(
   } catch (err) {
     // The file was copied successfully; persistence of the history chip must
     // not turn an already-successful export into a renderer-visible failure.
-    console.error(
+    log.error(
       "[generated-image-export] failed to persist tool_result row:",
       err
     );
