@@ -3258,6 +3258,8 @@ export default {
       reviewAndSubmit: "Revisar y enviar",
       answerReview: "Tus respuestas",
       changeFeedbackPrompt: "¿Qué debería cambiar en este plan?",
+      submitError: "Envío fallido. Inténtalo de nuevo.",
+      customAnswer: "Respuesta personalizada (opcional)",
       approvedAt: "Aprobado",
       viewInActivity: "Ver en Actividad",
       receiptApproved: "Plan aprobado",

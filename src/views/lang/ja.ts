@@ -3198,6 +3198,8 @@ export default {
       reviewAndSubmit: "確認して送信",
       answerReview: "あなたの回答",
       changeFeedbackPrompt: "このプランのどこを変更すべきですか？",
+      submitError: "送信に失敗しました。もう一度お試しください。",
+      customAnswer: "カスタム回答（任意）",
       approvedAt: "承認済み",
       viewInActivity: "アクティビティで表示",
       receiptApproved: "プランを承認しました",

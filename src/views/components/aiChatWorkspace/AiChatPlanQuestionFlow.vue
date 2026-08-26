@@ -48,7 +48,36 @@
           </span>
         </button>
       </div>
+      <!-- FR-057: custom-text input where the question allows free-form answers. -->
+      <div v-if="allowCustomText" class="custom-text-field">
+        <v-text-field
+          v-model="customTextInput"
+          variant="outlined"
+          density="compact"
+          hide-details
+          :label="t('workspaceChat.plan.customAnswer') || 'Custom answer (optional)'"
+          data-testid="workspace-plan-custom-text"
+        />
+      </div>
     </div>
+
+    <!-- FR-059: submit error with localized retry state. -->
+    <p
+      v-if="submitError"
+      class="submit-error"
+      role="alert"
+      data-testid="workspace-plan-submit-error"
+    >
+      {{ submitError }}
+      <button
+        type="button"
+        class="retry-action"
+        data-testid="workspace-plan-retry"
+        @click="submit"
+      >
+        {{ t('ui.actions.retry') || 'Retry' }}
+      </button>
+    </p>
 
     <div class="flow-actions">
       <button
@@ -103,8 +132,6 @@
         {{ t('common.submit') || 'Submit' }}
       </button>
     </div>
-
-    <p v-if="submitError" class="submit-error" role="alert">{{ submitError }}</p>
   </section>
 </template>
 
@@ -124,6 +151,8 @@ import {
 
 const props = defineProps<{
   question: AIChatPlanQuestionView;
+  /** FR-059: submission error surfaced by the parent (IPC failure). */
+  submitError?: string | null;
 }>();
 
 const emit = defineEmits<{
@@ -134,7 +163,28 @@ const { t } = useI18n();
 
 const draft = ref<PlanQuestionDraft>(createPlanQuestionDraft(props.question));
 const showReview = ref(false);
-const submitError = ref<string | null>(null);
+
+/** FR-059: parent-owned error; stays null until the IPC call fails. */
+const submitError = computed(() => props.submitError ?? null);
+
+/** FR-057: custom-text input synced with the draft's customTextByIndex. */
+const customTextInput = computed({
+  get: () => draft.value.customTextByIndex[draft.value.currentIndex] ?? "",
+  set: (val: string) => {
+    draft.value = {
+      ...draft.value,
+      customTextByIndex: {
+        ...draft.value.customTextByIndex,
+        [draft.value.currentIndex]: val,
+      },
+    };
+  },
+});
+
+/** FR-057: some questions allow free-form answers alongside options. */
+const allowCustomText = computed(
+  () => !currentQuestion.value.multiSelect && currentQuestion.value.options.length > 0
+);
 
 const questions = computed(() => props.question.questions);
 const currentIndex = computed(() => draft.value.currentIndex);
@@ -186,17 +236,15 @@ function buildAnswers(): AskUserQuestionAnswer[] {
     const custom = draft.value.customTextByIndex[index]?.trim();
     return {
       question: item.question,
-      // The durable contract takes the selected labels (string | string[]).
-      answer: item.multiSelect ? labels : (labels[0] ?? ""),
+      // FR-057: single-select enforces one answer (first label or custom text).
+      answer: item.multiSelect ? labels : (labels[0] ?? custom ?? ""),
       customText: custom || undefined,
     };
   });
 }
 
 function submit(): void {
-  // Retain the draft until persisted success; show retry on failure
-  // (design §31 risk table).
-  submitError.value = null;
+  // FR-059: on retry, clear the parent's error display by re-emitting.
   if (questions.value.length > 1) {
     showReview.value = true;
     return;
@@ -348,5 +396,24 @@ function confirmSubmit(): void {
   margin: 0;
   color: rgb(var(--v-theme-error));
   font-size: 12px;
+}
+
+.retry-action {
+  border: none;
+  background: none;
+  color: rgb(var(--v-theme-primary));
+  font-size: 12px;
+  cursor: pointer;
+  text-decoration: underline;
+  margin-left: 4px;
+}
+
+.retry-action:focus-visible {
+  outline: 2px solid rgb(var(--v-theme-primary));
+  outline-offset: 1px;
+}
+
+.custom-text-field {
+  margin-top: 8px;
 }
 </style>

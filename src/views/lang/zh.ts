@@ -3107,6 +3107,8 @@ export default {
       reviewAndSubmit: "检查并提交",
       answerReview: "您的回答",
       changeFeedbackPrompt: "这个方案需要修改什么？",
+      submitError: "提交失败，请重试。",
+      customAnswer: "自定义回答（可选）",
       approvedAt: "批准于",
       viewInActivity: "在“活动”中查看",
       receiptApproved: "方案已批准",

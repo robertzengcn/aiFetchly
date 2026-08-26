@@ -3246,6 +3246,8 @@ export default {
       reviewAndSubmit: "Vérifier et envoyer",
       answerReview: "Vos réponses",
       changeFeedbackPrompt: "Que faut-il modifier dans ce plan ?",
+      submitError: "Échec de l'envoi. Veuillez réessayer.",
+      customAnswer: "Réponse personnalisée (facultatif)",
       approvedAt: "Approuvé",
       viewInActivity: "Voir dans Activité",
       receiptApproved: "Plan approuvé",

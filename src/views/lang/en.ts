@@ -3230,6 +3230,8 @@ export default {
       reviewAndSubmit: "Review and submit",
       answerReview: "Your answers",
       changeFeedbackPrompt: "What should change in this plan?",
+      submitError: "Submission failed. Please try again.",
+      customAnswer: "Custom answer (optional)",
       approvedAt: "Approved",
       viewInActivity: "View in Activity",
       receiptApproved: "Plan approved",

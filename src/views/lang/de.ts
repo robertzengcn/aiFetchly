@@ -3255,6 +3255,8 @@ export default {
       reviewAndSubmit: "Prüfen und senden",
       answerReview: "Deine Antworten",
       changeFeedbackPrompt: "Was soll an diesem Plan geändert werden?",
+      submitError: "Senden fehlgeschlagen. Bitte erneut versuchen.",
+      customAnswer: "Benutzerdefinierte Antwort (optional)",
       approvedAt: "Genehmigt",
       viewInActivity: "In Aktivität ansehen",
       receiptApproved: "Plan genehmigt",
