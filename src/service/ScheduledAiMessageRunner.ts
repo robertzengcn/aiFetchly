@@ -1,24 +1,11 @@
 // src/service/ScheduledAiMessageRunner.ts
 
-import {
-  AiChatApi,
-  type StreamEvent,
-  StreamEventType,
-  type ToolFunction,
-  type ToolExecutionResult,
-} from "@/api/aiChatApi";
 import { Token } from "@/modules/token";
-import { USER_AI_ENABLED, USERSDBPATH } from "@/config/usersetting";
-import { SkillRegistry } from "@/config/skillsRegistry";
-import { SkillExecutor } from "@/service/SkillExecutor";
+import { USERSDBPATH } from "@/config/usersetting";
+import { AIProviderResolver } from "@/service/aiProvider/AIProviderResolver";
 import { AiMessageTaskModule } from "@/modules/AiMessageTaskModule";
 import { AiMessageTaskRunModule } from "@/modules/AiMessageTaskRunModule";
 import { AiMessageTaskEntity } from "@/entity/AiMessageTask.entity";
-import {
-  canAutoApproveScheduledTool,
-  SCHEDULED_LOOP_READ_ONLY_TOOLS,
-} from "@/service/ScheduledAiToolPolicy";
-import { skillDefinitionToToolFunction } from "@/entityTypes/skillTypes";
 import type {
   AiMessageTaskToolPolicy,
   BlockedToolCallRecord,
@@ -42,6 +29,7 @@ import {
   nextFutureOccurrence,
 } from "@/config/aiChatScheduledLoopConfig";
 import type { ChatV2ConversationUpdatedEvent } from "@/entityTypes/aiChatScheduledLoopTypes";
+import { AIChatV2Module } from "@/modules/AIChatV2Module";
 
 /** Safety limits for a scheduled AI message run. */
 interface RunLimits {
@@ -78,7 +66,6 @@ export interface ScheduledAiMessageRunResult {
  * through the task-scoped policy, and persists results.
  */
 export class ScheduledAiMessageRunner {
-  private readonly aiChatApi: AiChatApi;
   private readonly taskModule: AiMessageTaskModule;
   private readonly runModule: AiMessageTaskRunModule;
   // Lazy-initialized deps for the chat-bound path (kept out of the legacy
@@ -89,7 +76,6 @@ export class ScheduledAiMessageRunner {
     AIChatConversationUpdateBroadcaster.getInstance();
 
   constructor() {
-    this.aiChatApi = new AiChatApi();
     this.taskModule = new AiMessageTaskModule();
     this.runModule = new AiMessageTaskRunModule();
   }
@@ -113,16 +99,11 @@ export class ScheduledAiMessageRunner {
     taskId: number,
     scheduleId?: number
   ): Promise<ScheduledAiMessageRunResult> {
-    // 1. Check AI enabled
-    const token = new Token();
-    const aiEnabled = token.getValue(USER_AI_ENABLED);
-    if (aiEnabled !== "true") {
-      return this.failFast(
-        taskId,
-        scheduleId,
-        "AI features are not enabled. Please upgrade your plan.",
-        "AI_DISABLED"
-      );
+    // 1. Chat availability — hosted subscription OR a configured local provider.
+    //    USER_AI_ENABLED alone would block local-provider schedules.
+    const chatAccess = new AIProviderResolver().resolveForChat();
+    if (!chatAccess.canUse) {
+      return this.failFast(taskId, scheduleId, chatAccess.message);
     }
 
     // 2. Load task configuration
@@ -131,8 +112,7 @@ export class ScheduledAiMessageRunner {
       return this.failFast(
         taskId,
         scheduleId,
-        `AI message task ${taskId} not found.`,
-        "TASK_NOT_FOUND"
+        `AI message task ${taskId} not found.`
       );
     }
 
@@ -140,10 +120,11 @@ export class ScheduledAiMessageRunner {
       return this.failFast(
         taskId,
         scheduleId,
-        `AI message task ${taskId} is not active (status: ${task.status}).`,
-        "TASK_NOT_FOUND"
+        `AI message task ${taskId} is not active (status: ${task.status}).`
       );
     }
+
+    const conversationId = await this.ensureV2Conversation(task);
 
     // 3. Parse policy and limits
     const policy = this.parseTaskPolicy(task);
@@ -153,14 +134,22 @@ export class ScheduledAiMessageRunner {
     const runId = await this.runModule.createRun({
       taskId,
       scheduleId,
-      conversationId: task.conversation_id ?? undefined,
+      conversationId,
     });
 
     await this.runModule.updateRunStatus(runId, "running");
 
-    // 5. Run the AI conversation loop
+    // 5. Run the AI conversation loop through Chat V2 so the transcript
+    //    appears in AiChatV2 history (v2-* conversation id).
     try {
-      const result = await this.executeRunLoop(runId, task, policy, limits);
+      const result = await this.executeRunLoop(
+        runId,
+        task,
+        policy,
+        limits,
+        conversationId,
+        scheduleId
+      );
       return result;
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : "Unknown error";
@@ -194,10 +183,10 @@ export class ScheduledAiMessageRunner {
     const { taskId, scheduleId, runId, occurrence, catchUp, scheduledFor } =
       input;
     const startedAt = new Date();
-    const token = new Token();
 
-    // 1. AI gate at execution time.
-    if (token.getValue(USER_AI_ENABLED) !== "true") {
+    // 1. Chat availability at execution time (hosted OR local provider).
+    const chatAccess = new AIProviderResolver().resolveForChat();
+    if (!chatAccess.canUse) {
       return this.finalizeChatRun({
         runId,
         taskId,
@@ -408,7 +397,6 @@ export class ScheduledAiMessageRunner {
     let status: ScheduledAiMessageRunResult["status"] = "failed";
     let assistantMessageId: string | undefined;
     let contentSummary = "";
-    let scheduleTerminal: "failed" | undefined;
     let scheduleSuccess = false;
     let schedulePause = !!pauseSchedule;
     let resultErrorCode = errorCode;
@@ -550,150 +538,273 @@ export class ScheduledAiMessageRunner {
   }
 
   /**
-   * Main AI conversation loop: send message → handle events → continue if tool calls.
+   * Guarantee the task is bound to a Chat V2 (`v2-*`) conversation. Legacy
+   * schedule-page tasks used `ai-msg-*` ids, which AiChatV2 history filters
+   * out. Mint and persist a v2 id when the stored one is missing or stale.
+   */
+  private async ensureV2Conversation(
+    task: AiMessageTaskEntity
+  ): Promise<string> {
+    const existing = task.conversation_id;
+    if (existing && existing.startsWith("v2-")) {
+      return existing;
+    }
+    const conversationId = new AIChatV2Module().createConversationIfNeeded(
+      existing ?? undefined
+    );
+    await this.taskModule.updateTask({
+      id: task.id,
+      conversationId,
+    });
+    task.conversation_id = conversationId;
+    return conversationId;
+  }
+
+  /**
+   * Cron / schedule-page run: persist the turn through AIChatQueryEngine so
+   * user + assistant rows land in the originating v2 conversation (and therefore
+   * in AiChatV2 history). Interval counters are owned by the chat-loop path.
    */
   private async executeRunLoop(
     runId: number,
     task: AiMessageTaskEntity,
     policy: AiMessageTaskToolPolicy,
-    limits: RunLimits
+    limits: RunLimits,
+    conversationId: string,
+    scheduleId?: number
   ): Promise<ScheduledAiMessageRunResult> {
-    const startTime = Date.now();
-    let assistantMessage = "";
-    let toolCallsCount = 0;
-    const continueCalls = 0;
-    const consecutiveToolFailures = 0;
-    const blockedToolCalls: BlockedToolCallRecord[] = [];
-
-    // Get filtered tool definitions for the AI server
-    const clientTools = this.buildFilteredClientTools(policy);
-
+    const startedAt = new Date();
+    const scheduleKey = scheduleId ?? 0;
+    const coordinator = AIChatConversationTurnCoordinator.getInstance();
     const abortController = new AbortController();
-
-    // Safety timeout
     const timeoutHandle = setTimeout(() => {
       abortController.abort();
     }, limits.maxRuntimeMs);
+    this.runRegistry.register(runId, abortController);
+    let lease: ConversationTurnLease | null = null;
+    let outcome: ScheduledTurnOutcome = {
+      kind: "failed",
+      errorMessage: "NO_TERMINAL_EVENT",
+    };
 
     try {
-      // Initial message
-      await this.aiChatApi.streamMessage(
-        {
+      try {
+        lease = await coordinator.acquire({
+          conversationId,
+          owner: "scheduled",
+          ownerId: `run-${runId}`,
+          waitMs: SCHEDULED_LOOP_CONVERSATION_LOCK_WAIT_MS,
+          signal: abortController.signal,
+        });
+      } catch {
+        const errorMessage = "CONVERSATION_BUSY";
+        await this.runModule.failRun(runId, errorMessage);
+        await this.taskModule.updateLastRunResult(task.id, null, errorMessage);
+        return {
+          runId,
+          status: "blocked_by_policy",
+          assistantFinalMessage: "",
+          toolCallsCount: 0,
+          blockedToolCalls: [],
+          errorMessage,
+        };
+      }
+
+      const engine = new AIChatQueryEngineFactory().createScheduled(policy);
+      const assistantMessageId = `scheduled-assistant-${scheduleKey}-${runId}`;
+      const sink = new ScheduledLoopEventSink((event) => {
+        if (event.type === "token") {
+          this.broadcaster.emitScheduledStream({
+            conversationId,
+            runId,
+            messageId: assistantMessageId,
+            kind: "token",
+            contentDelta: event.contentDelta,
+          });
+        } else if (event.type === "complete" || event.type === "error") {
+          this.broadcaster.emitScheduledStream({
+            conversationId,
+            runId,
+            messageId: assistantMessageId,
+            kind: event.type === "error" ? "error" : "done",
+            errorMessage:
+              event.type === "error" ? event.errorMessage : undefined,
+          });
+        }
+      });
+      await engine.submitMessage({
+        eventSink: sink,
+        request: {
+          conversationId,
           message: task.message,
-          conversationId: task.conversation_id ?? undefined,
           model: task.model && task.model !== "auto" ? task.model : undefined,
           systemPrompt: task.system_prompt ?? undefined,
-          functions: clientTools,
         },
-        (event: StreamEvent) => {
-          const elapsed = Date.now() - startTime;
-
-          switch (event.event) {
-            case StreamEventType.TOKEN: {
-              const token =
-                typeof event.data.content === "string"
-                  ? event.data.content
-                  : "";
-              if (
-                token &&
-                assistantMessage.length + token.length <=
-                  limits.maxAssistantMessageLength
-              ) {
-                assistantMessage += token;
-              }
-              break;
-            }
-
-            case StreamEventType.ERROR: {
-              const errMsg =
-                typeof event.data.content === "string"
-                  ? event.data.content
-                  : JSON.stringify(event.data.content);
-              throw new Error(`REMOTE_AI_ERROR: ${errMsg}`);
-            }
-
-            case StreamEventType.TOOL_CALL: {
-              // Phase 2: Block all tool calls, send failure result back
-              const toolData = event.data.data;
-              if (toolData) {
-                const blocked: BlockedToolCallRecord = {
-                  toolName: toolData.name,
-                  toolCallId: toolData.id,
-                  reason:
-                    "Tool execution is not supported in Phase 2. Scheduled tool calls will be enabled in a future update.",
-                  timestamp: new Date().toISOString(),
-                  args: toolData.arguments,
-                };
-                blockedToolCalls.push(blocked);
-                toolCallsCount++;
-              }
-              break;
-            }
-
-            case StreamEventType.DONE:
-            case StreamEventType.COMPLETE:
-              // Stream ended normally
-              break;
-          }
-
-          // Check runtime limit
-          if (elapsed >= limits.maxRuntimeMs) {
-            abortController.abort();
-          }
+        scheduledContext: {
+          source: "scheduled_loop",
+          taskId: task.id,
+          scheduleId: scheduleKey,
+          runId,
+          occurrence: runId,
+          scheduledFor: startedAt.toISOString(),
+          catchUp: false,
+          userMessageId: `scheduled-user-${scheduleKey}-${runId}`,
+          assistantMessageId,
         },
-        { signal: abortController.signal }
-      );
+      });
+      outcome = sink.getOutcome() ?? {
+        kind: "failed",
+        errorMessage: "NO_TERMINAL_EVENT",
+      };
     } catch (error: unknown) {
       if (error instanceof Error && error.name === "AbortError") {
-        // Timed out
-        const result: ScheduledAiMessageRunResult = {
+        const errorMessage = `Run exceeded maximum runtime of ${limits.maxRuntimeMs}ms.`;
+        await this.runModule.failRun(runId, errorMessage, {
+          metadata: { elapsedMs: Date.now() - startedAt.getTime() },
+        });
+        await this.taskModule.updateLastRunResult(task.id, null, errorMessage);
+        this.broadcastStandaloneUpdate(
+          conversationId,
+          scheduleKey,
+          runId,
+          "scheduled_turn_failed"
+        );
+        return {
           runId,
           status: "timeout",
-          assistantFinalMessage: assistantMessage,
-          toolCallsCount,
-          blockedToolCalls,
-          errorMessage: `Run exceeded maximum runtime of ${limits.maxRuntimeMs}ms.`,
+          assistantFinalMessage: "",
+          toolCallsCount: 0,
+          blockedToolCalls: [],
+          errorMessage,
         };
-        await this.runModule.failRun(runId, result.errorMessage ?? "Timeout", {
-          toolCallsCount,
-          blockedToolCalls,
-          metadata: { elapsedMs: Date.now() - startTime },
-        });
-        await this.taskModule.updateLastRunResult(
-          task.id,
-          null,
-          result.errorMessage ?? "Timeout"
-        );
-        return result;
       }
-      // Other errors — rethrow to outer catch
       throw error;
     } finally {
       clearTimeout(timeoutHandle);
+      this.runRegistry.unregister(runId);
+      if (lease) lease.release();
     }
 
-    // Persist successful completion
-    const finalMessage = assistantMessage || "[No response from AI server]";
-    await this.runModule.completeRun(runId, {
-      assistantFinalMessage: finalMessage,
-      toolCallsCount,
-      blockedToolCalls,
-      metadata: { elapsedMs: Date.now() - startTime, model: task.model },
+    return this.finalizeStandaloneRun({
+      runId,
+      taskId: task.id,
+      scheduleId: scheduleKey,
+      conversationId,
+      startedAt,
+      outcome,
     });
+  }
 
-    const resultSummary =
-      finalMessage.length > 200
-        ? finalMessage.substring(0, 200) + "..."
-        : finalMessage;
-    await this.taskModule.updateLastRunResult(task.id, resultSummary, null);
+  /**
+   * Persist a schedule-page (cron) run without touching interval counters.
+   */
+  private async finalizeStandaloneRun(input: {
+    runId: number;
+    taskId: number;
+    scheduleId: number;
+    conversationId: string;
+    startedAt: Date;
+    outcome: ScheduledTurnOutcome;
+  }): Promise<ScheduledAiMessageRunResult> {
+    const { runId, taskId, scheduleId, conversationId, startedAt, outcome } =
+      input;
+    const durationMs = Date.now() - startedAt.getTime();
+    const blockedToolCalls: BlockedToolCallRecord[] = [];
+
+    let status: ScheduledAiMessageRunResult["status"] = "failed";
+    let contentSummary = "";
+    let errorMessage: string | undefined;
+    let assistantMessageId: string | undefined;
+
+    switch (outcome.kind) {
+      case "completed":
+        status = "completed";
+        contentSummary = outcome.content;
+        assistantMessageId = outcome.assistantMessageId;
+        break;
+      case "cancelled":
+        status = "failed";
+        contentSummary = outcome.content;
+        assistantMessageId = outcome.assistantMessageId;
+        errorMessage = "RUN_INTERRUPTED";
+        break;
+      case "failed":
+        status = "failed";
+        assistantMessageId = outcome.assistantMessageId;
+        errorMessage = outcome.errorMessage || "REMOTE_AI_ERROR";
+        break;
+      case "blocked":
+        status = "blocked_by_policy";
+        assistantMessageId = outcome.assistantMessageId;
+        errorMessage = outcome.reason || "BLOCKED_BY_POLICY";
+        break;
+    }
+
+    if (status === "completed") {
+      await this.runModule.completeRun(runId, {
+        assistantFinalMessage: contentSummary,
+        toolCallsCount: 0,
+        blockedToolCalls,
+        metadata: { elapsedMs: durationMs, assistantMessageId },
+      });
+      const resultSummary =
+        contentSummary.length > 200
+          ? contentSummary.substring(0, 200) + "..."
+          : contentSummary;
+      await this.taskModule.updateLastRunResult(taskId, resultSummary, null);
+    } else {
+      await this.runModule.failRun(runId, errorMessage ?? "failed", {
+        toolCallsCount: 0,
+        blockedToolCalls,
+        metadata: { elapsedMs: durationMs, assistantMessageId },
+      });
+      await this.taskModule.updateLastRunResult(
+        taskId,
+        null,
+        errorMessage ?? "failed"
+      );
+    }
+
+    this.broadcastStandaloneUpdate(
+      conversationId,
+      scheduleId,
+      runId,
+      status === "completed"
+        ? "scheduled_turn_completed"
+        : "scheduled_turn_failed",
+      assistantMessageId
+    );
 
     return {
       runId,
-      status: "completed",
-      assistantFinalMessage: finalMessage,
-      toolCallsCount,
+      status,
+      assistantFinalMessage: contentSummary,
+      toolCallsCount: 0,
       blockedToolCalls,
+      errorMessage: status === "completed" ? undefined : errorMessage,
     };
+  }
+
+  private broadcastStandaloneUpdate(
+    conversationId: string,
+    scheduleId: number,
+    runId: number,
+    reason: ChatV2ConversationUpdatedEvent["reason"],
+    assistantMessageId?: string
+  ): void {
+    const event: ChatV2ConversationUpdatedEvent = {
+      conversationId,
+      reason,
+      scheduleId,
+      runId,
+      assistantMessageId,
+      occurredAt: new Date().toISOString(),
+    };
+    try {
+      this.broadcaster.emit(event);
+    } catch {
+      // Renderer delivery failure does not fail the run.
+    }
   }
 
   /**
@@ -728,47 +839,12 @@ export class ScheduledAiMessageRunner {
   }
 
   /**
-   * Build filtered client_tools list to send to the AI server.
-   * When auto-approve is on, advertise every curated read-only tool plus any
-   * explicitly allowlisted high-impact / automation tools (FR-16).
-   */
-  private buildFilteredClientTools(
-    policy: AiMessageTaskToolPolicy
-  ): ToolFunction[] {
-    if (!policy.autoApproveTools) {
-      return [];
-    }
-
-    const candidateNames = new Set<string>([
-      ...SCHEDULED_LOOP_READ_ONLY_TOOLS,
-      ...policy.allowedTools,
-    ]);
-
-    const tools: ToolFunction[] = [];
-    for (const toolName of candidateNames) {
-      const skill = SkillRegistry.getSkill(toolName);
-      if (skill && skill.source === "built-in") {
-        const decision = canAutoApproveScheduledTool({
-          skill,
-          taskPolicy: policy,
-          toolName,
-        });
-        if (decision.allowed) {
-          tools.push(skillDefinitionToToolFunction(skill));
-        }
-      }
-    }
-    return tools;
-  }
-
-  /**
    * Fast-fail: create a run log, mark as failed, update task, and return.
    */
   private async failFast(
     taskId: number,
     scheduleId: number | undefined,
-    errorMessage: string,
-    _errorCode: string
+    errorMessage: string
   ): Promise<ScheduledAiMessageRunResult> {
     try {
       const runId = await this.runModule.createRun({

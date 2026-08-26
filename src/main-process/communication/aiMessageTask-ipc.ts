@@ -15,10 +15,7 @@ import type {
   CreateAiMessageTaskRequest,
   UpdateAiMessageTaskRequest,
 } from "@/entityTypes/aiMessageTaskTypes";
-import {
-  registerAiValidatedHandler,
-  registerValidatedHandler,
-} from "@/main-process/communication/_shared/registerValidatedHandler";
+import { registerValidatedHandler } from "@/main-process/communication/_shared/registerValidatedHandler";
 import {
   aiMessageTaskWriteInputSchema,
   aiMessageTaskByIdInputSchema,
@@ -30,16 +27,18 @@ import {
 /**
  * AI Message Task IPC handlers.
  *
- * Create/update/delete/list/detail/run handlers are AI-gated. The tools
- * catalog is a local SkillRegistry lookup with no AI API call, so it stays
- * on registerValidatedHandler — same pattern as RAG_GET_AVAILABLE_MODELS
- * and SKILL_LIST_INSTALLED. The schedule create form needs that catalog
- * even when hosted AI is off (local provider, or filling the form first).
+ * All of these are local SQLite / SkillRegistry lookups. They do not call
+ * hosted AI APIs, so they stay on registerValidatedHandler — same pattern as
+ * RAG document CRUD and SKILL_LIST_INSTALLED. The schedule create/edit form
+ * and run history need this even when hosted AI is off (local provider).
+ *
+ * Actual model invocation is gated in ScheduledAiMessageRunner via
+ * AIProviderResolver.resolveForChat() (hosted subscription OR local provider).
  */
 export function registerAiMessageTaskIpcHandlers(): void {
   console.log("AI Message Task IPC handlers registered");
 
-  registerAiValidatedHandler(
+  registerValidatedHandler(
     AI_MESSAGE_TASK_CREATE,
     aiMessageTaskWriteInputSchema,
     async (input) => {
@@ -48,7 +47,7 @@ export function registerAiMessageTaskIpcHandlers(): void {
     },
   );
 
-  registerAiValidatedHandler(
+  registerValidatedHandler(
     AI_MESSAGE_TASK_UPDATE,
     aiMessageTaskWriteInputSchema,
     async (input) => {
@@ -58,7 +57,7 @@ export function registerAiMessageTaskIpcHandlers(): void {
     },
   );
 
-  registerAiValidatedHandler(
+  registerValidatedHandler(
     AI_MESSAGE_TASK_DELETE,
     aiMessageTaskByIdInputSchema,
     async (input) => {
@@ -68,7 +67,7 @@ export function registerAiMessageTaskIpcHandlers(): void {
     },
   );
 
-  registerAiValidatedHandler(
+  registerValidatedHandler(
     AI_MESSAGE_TASK_LIST,
     aiMessageTaskListInputSchema,
     async (input) => {
@@ -77,7 +76,7 @@ export function registerAiMessageTaskIpcHandlers(): void {
     },
   );
 
-  registerAiValidatedHandler(
+  registerValidatedHandler(
     AI_MESSAGE_TASK_DETAIL,
     aiMessageTaskByIdInputSchema,
     async (input) => {
@@ -90,7 +89,7 @@ export function registerAiMessageTaskIpcHandlers(): void {
     },
   );
 
-  registerAiValidatedHandler(
+  registerValidatedHandler(
     AI_MESSAGE_TASK_RUN_LIST,
     aiMessageTaskRunListInputSchema,
     async (input) => {
@@ -99,7 +98,7 @@ export function registerAiMessageTaskIpcHandlers(): void {
     },
   );
 
-  registerAiValidatedHandler(
+  registerValidatedHandler(
     AI_MESSAGE_TASK_RUN_DETAIL,
     aiMessageTaskByIdInputSchema,
     async (input) => {
@@ -112,7 +111,6 @@ export function registerAiMessageTaskIpcHandlers(): void {
     },
   );
 
-  // Local catalog only — do not gate on USER_AI_ENABLED.
   registerValidatedHandler(
     AI_MESSAGE_TASK_LIST_AVAILABLE_TOOLS,
     aiMessageTaskListToolsInputSchema,

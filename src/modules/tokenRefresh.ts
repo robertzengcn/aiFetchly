@@ -77,6 +77,8 @@ export function isTransientBackendError(error: unknown): boolean {
   return false;
 }
 
+type RefreshSuccessListener = () => void;
+
 /**
  * Service for refreshing access tokens using refresh tokens.
  *
@@ -119,6 +121,13 @@ export class TokenRefreshService {
    */
   private static _inFlight: Promise<CommonApiresp<TokenRefreshData>> | null =
     null;
+
+  /**
+   * Listeners notified after a successful token refresh. Used by the
+   * WebSocket client to reconnect when startup skipped the socket because
+   * the access token was expired.
+   */
+  private static _refreshSuccessListeners: RefreshSuccessListener[] = [];
 
   // --- Singleton background auto-refresh state ---
   private static _autoRefreshTimer: ReturnType<typeof setInterval> | null =
@@ -419,6 +428,30 @@ export class TokenRefreshService {
   }
 
   /**
+   * Register a callback that runs after access tokens are persisted from a
+   * successful refresh. Returns an unsubscribe function.
+   */
+  static onRefreshSuccess(listener: RefreshSuccessListener): () => void {
+    TokenRefreshService._refreshSuccessListeners.push(listener);
+    return (): void => {
+      TokenRefreshService._refreshSuccessListeners =
+        TokenRefreshService._refreshSuccessListeners.filter(
+          (item) => item !== listener
+        );
+    };
+  }
+
+  private static notifyRefreshSuccess(): void {
+    for (const listener of TokenRefreshService._refreshSuccessListeners) {
+      try {
+        listener();
+      } catch (error) {
+        log.error("[TokenRefresh] Refresh-success listener failed:", error);
+      }
+    }
+  }
+
+  /**
    * Refreshes the access token using the stored refresh token.
    *
    * Delegates to the process-wide {@link TokenRefreshService.refreshOnce} so
@@ -541,6 +574,8 @@ export class TokenRefreshService {
           Date.now() + response.data.refreshExpiresIn * 1000;
         tokenService.setValue(REFRESHTOKENEXPIRY, newRefreshExpiry.toString());
       }
+
+      TokenRefreshService.notifyRefreshSuccess();
     }
 
     return response;

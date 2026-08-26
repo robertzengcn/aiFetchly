@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { buildAppContentSecurityPolicy } from "@/service/AppContentSecurityPolicy";
+import {
+  buildAppContentSecurityPolicy,
+  shouldApplyAppContentSecurityPolicy,
+} from "@/service/AppContentSecurityPolicy";
 
 function getDirective(policy: string, name: string): string | undefined {
   return policy
@@ -20,6 +23,20 @@ describe("buildAppContentSecurityPolicy", () => {
   it("keeps blob out of default-src so the exception is scoped to media", () => {
     const policy = buildAppContentSecurityPolicy(false);
     expect(getDirective(policy, "default-src")).toBe("default-src 'self'");
+  });
+
+  it("does not apply app CSP to extension and devtools documents", () => {
+    expect(
+      shouldApplyAppContentSecurityPolicy(
+        "chrome-extension://lojjpkpnigleikjdhnceipeamjchmacb/pages/devtools-background.html"
+      )
+    ).toBe(false);
+    expect(shouldApplyAppContentSecurityPolicy("devtools://devtools/bundled/")).toBe(
+      false
+    );
+    expect(shouldApplyAppContentSecurityPolicy("http://localhost:5173/")).toBe(
+      true
+    );
   });
 
   it("keeps production script policy stricter than development", () => {

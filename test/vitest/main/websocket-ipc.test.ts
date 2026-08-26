@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi, Mock } from 'vitest';
-import { ipcMain, BrowserWindow } from 'electron';
+import { BrowserWindow } from 'electron';
 
 // Store captured handlers
 const capturedHandlers: Record<string, (...args: unknown[]) => unknown> = {};
@@ -16,12 +16,26 @@ const mockWsClient = {
   connect: vi.fn(),
   disconnect: vi.fn(),
   reconnect: vi.fn(),
+  retryConnectIfDisconnected: vi.fn((): boolean => true),
   getStatus: vi.fn((): string => 'disconnected'),
   getClientId: vi.fn((): string | null => null),
   isConnected: vi.fn((): boolean => false),
   send: vi.fn((): boolean => true),
   clearMessageQueue: vi.fn(),
 };
+
+let refreshSuccessListener: (() => void) | undefined;
+
+vi.mock('@/modules/tokenRefresh', () => ({
+  TokenRefreshService: {
+    onRefreshSuccess: vi.fn((listener: () => void) => {
+      refreshSuccessListener = listener;
+      return (): void => {
+        refreshSuccessListener = undefined;
+      };
+    }),
+  },
+}));
 
 // Mock Electron's ipcMain - capture handlers when registered
 vi.mock('electron', () => ({
@@ -262,6 +276,16 @@ describe('WebSocket IPC Handlers', () => {
         status: false,
         msg: 'Send error',
       });
+    });
+  });
+
+  describe('token refresh reconnect', () => {
+    it('retries WebSocket connection after a successful token refresh', () => {
+      expect(refreshSuccessListener).toBeDefined();
+      refreshSuccessListener?.();
+      expect(mockWsClient.retryConnectIfDisconnected).toHaveBeenCalledWith(
+        mockMainWindow
+      );
     });
   });
 });

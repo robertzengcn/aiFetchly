@@ -91,11 +91,13 @@ function resetStaticState(): void {
     _isAutoRefreshRunning: boolean;
     _autoRefreshTimer: ReturnType<typeof setInterval> | null;
     _consecutiveFailures: number;
+    _refreshSuccessListeners: Array<() => void>;
   };
   staticState._inFlight = null;
   staticState._isAutoRefreshRunning = false;
   staticState._autoRefreshTimer = null;
   staticState._consecutiveFailures = 0;
+  staticState._refreshSuccessListeners = [];
 }
 
 /**
@@ -302,6 +304,62 @@ describe("refreshOnce — process-wide serialization", () => {
     expect(mockFetch).toHaveBeenCalledTimes(1);
     expect(result.status).toBe(true);
     expect(result.data?.accessToken).toBe("a");
+  });
+
+  test("notifies refresh-success listeners after tokens are stored", async () => {
+    const listener = vi.fn();
+    const unsubscribe = TokenRefreshService.onRefreshSuccess(listener);
+
+    mockFetch.mockResolvedValue(
+      fakeResponse({
+        status: true,
+        code: 0,
+        msg: "ok",
+        data: { accessToken: "a", refreshToken: "r", expiresIn: 60 },
+      })
+    );
+
+    await TokenRefreshService.refreshOnce();
+
+    expect(listener).toHaveBeenCalledTimes(1);
+    unsubscribe();
+  });
+
+  test("does not notify refresh-success listeners when refresh fails", async () => {
+    const listener = vi.fn();
+    TokenRefreshService.onRefreshSuccess(listener);
+
+    mockFetch.mockResolvedValue(
+      fakeResponse(
+        { status: false, code: 500, msg: "server error", data: null },
+        { ok: true, status: 200 }
+      )
+    );
+
+    await expect(TokenRefreshService.refreshOnce()).rejects.toThrow(
+      /server error|Token refresh failed/
+    );
+
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  test("unsubscribe prevents further refresh-success notifications", async () => {
+    const listener = vi.fn();
+    const unsubscribe = TokenRefreshService.onRefreshSuccess(listener);
+    unsubscribe();
+
+    mockFetch.mockResolvedValue(
+      fakeResponse({
+        status: true,
+        code: 0,
+        msg: "ok",
+        data: { accessToken: "a", refreshToken: "r", expiresIn: 60 },
+      })
+    );
+
+    await TokenRefreshService.refreshOnce();
+
+    expect(listener).not.toHaveBeenCalled();
   });
 });
 

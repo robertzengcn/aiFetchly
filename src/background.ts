@@ -30,7 +30,11 @@ import { PluginComponentRegistryService } from "@/service/PluginComponentRegistr
 import { FileOperationTracker } from "@/service/FileOperationTracker";
 import { registerBuiltinHooks } from "@/service/hooks/builtinHooks";
 import { isAppTrustedOrigin } from "@/service/OriginTrust";
-import { buildAppContentSecurityPolicy } from "@/service/AppContentSecurityPolicy";
+import {
+  buildAppContentSecurityPolicy,
+  shouldApplyAppContentSecurityPolicy,
+} from "@/service/AppContentSecurityPolicy";
+import { registerDevelopmentProtocolHandler } from "@/main-process/registerDevelopmentProtocolHandler";
 import {
   isAppPermissionCheckAllowed,
   isAppPermissionRequestAllowed,
@@ -475,17 +479,29 @@ function initialize() {
       path.resolve(process.argv[1])
     );
     console.log("path:", path.resolve(process.argv[1]));
-    ProtocolRegistry.register(
+    void registerDevelopmentProtocolHandler({
       protocolScheme,
-      `"${process.execPath}" "${path.resolve(process.argv[1])}" "$_URL_"`,
-      {
-        override: true,
-        appName: appName,
-        terminal: true,
-      }
-    )
-      .then(() => console.log("Successfully registered"))
-      .catch((e) => console.error(e));
+      command:
+        `"${process.execPath}" "${path.resolve(process.argv[1])}" "$_URL_"`,
+      appName,
+      protocolRegistry: ProtocolRegistry,
+    })
+      .then((result) => {
+        if (result.status === "skipped-external") {
+          log.warn(
+            `Skipping ${protocolScheme}:// registration; already handled by ${result.defaultApp}`
+          );
+          return;
+        }
+        log.info(
+          result.status === "refreshed"
+            ? `Refreshed development protocol handler for ${protocolScheme}://`
+            : `Registered development protocol handler for ${protocolScheme}://`
+        );
+      })
+      .catch((error: unknown) => {
+        log.error("Failed to register development protocol handler:", error);
+      });
     // app.setAsDefaultProtocolClient(protocolScheme);
   }
   makeSingleInstance();
@@ -1258,6 +1274,18 @@ function initialize() {
         );
       }
 
+      // Refresh tokens before opening the WebSocket. An expired JWT at
+      // startup previously skipped the socket forever, so purchase
+      // notifications never reached this app.
+      if (!TokenRefreshService.isAutoRefreshRunning()) {
+        TokenRefreshService.startAutoRefresh();
+      }
+      try {
+        await TokenRefreshService.performAutoRefreshCheck();
+      } catch (error) {
+        log.error("Failed to refresh token before WebSocket init:", error);
+      }
+
       // Initialize WebSocket connection to marketing server
       // This enables real-time notifications and updates
       if (win) {
@@ -1267,11 +1295,6 @@ function initialize() {
         } catch (error) {
           log.error("Failed to initialize WebSocket connection:", error);
         }
-      }
-
-      // Start background token auto-refresh for already-logged-in user (only if not already running)
-      if (!TokenRefreshService.isAutoRefreshRunning()) {
-        TokenRefreshService.startAutoRefresh();
       }
     }
 
@@ -1337,6 +1360,10 @@ function configureContentSecurityPolicy() {
   const cspDirectives = buildAppContentSecurityPolicy(isDevelopment);
 
   defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    if (!shouldApplyAppContentSecurityPolicy(details.url)) {
+      callback({ responseHeaders: details.responseHeaders });
+      return;
+    }
     callback({
       responseHeaders: {
         ...details.responseHeaders,

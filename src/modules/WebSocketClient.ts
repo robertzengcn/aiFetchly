@@ -213,19 +213,59 @@ export class WebSocketClient {
     this.win = win;
     this.manualDisconnect = false;
 
-    // Check if already connected
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+    if (this.hasActiveSocket()) {
       log.info("WebSocket already connected");
       return;
     }
 
     // Check for valid token
     if (!this.hasValidToken()) {
-      log.info("No valid token found, skipping WebSocket connection");
+      log.info(
+        "No valid token found, skipping WebSocket connection (will retry after token refresh)"
+      );
       return;
     }
 
     this.doConnect();
+  }
+
+  /**
+   * Retry connecting after a successful token refresh.
+   *
+   * Startup often sees an expired JWT, skips the socket, then refreshes the
+   * token a moment later. Without this retry, purchase notifications never
+   * reach the desktop app because the hub only delivers to live connections.
+   */
+  public retryConnectIfDisconnected(win?: BrowserWindow): boolean {
+    if (win) {
+      this.win = win;
+    }
+
+    if (this.hasActiveSocket()) {
+      return true;
+    }
+
+    if (!this.win || this.win.isDestroyed()) {
+      log.info("Cannot retry WebSocket connection: no active window");
+      return false;
+    }
+
+    if (!this.hasValidToken()) {
+      log.info("Cannot retry WebSocket connection: token still invalid");
+      return false;
+    }
+
+    this.manualDisconnect = false;
+    this.doConnect();
+    return true;
+  }
+
+  private hasActiveSocket(): boolean {
+    return (
+      this.ws !== null &&
+      (this.ws.readyState === WebSocket.OPEN ||
+        this.ws.readyState === WebSocket.CONNECTING)
+    );
   }
 
   /**

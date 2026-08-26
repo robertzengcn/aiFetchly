@@ -71,7 +71,7 @@ function invoke(
   );
 }
 
-describe("aiMessageTask-ipc catalog vs AI gate", () => {
+describe("aiMessageTask-ipc local persistence vs hosted AI gate", () => {
   beforeEach(() => {
     handlers.clear();
     vi.clearAllMocks();
@@ -94,17 +94,20 @@ describe("aiMessageTask-ipc catalog vs AI gate", () => {
     expect(mocks.listSchedulableBuiltInTools).toHaveBeenCalledTimes(1);
   });
 
-  it("still blocks create when AI is disabled", async () => {
+  it("creates the task when hosted AI is disabled", async () => {
     const result = await invoke(AI_MESSAGE_TASK_CREATE, {
       name: "Nightly recap",
       message: "Summarize inbox",
     });
 
     expect(result).toMatchObject({
-      status: false,
-      msg: "AI feature is not enabled",
-      data: null,
+      status: true,
+      data: 42,
     });
-    expect(mocks.createTask).not.toHaveBeenCalled();
+    expect(mocks.createTask).toHaveBeenCalledTimes(1);
+    expect(mocks.createTask).toHaveBeenCalledWith({
+      name: "Nightly recap",
+      message: "Summarize inbox",
+    });
   });
 });
