@@ -25,7 +25,6 @@ import {
   TOKENEXPIRY,
   REFRESHTOKENEXPIRY,
 } from "@/config/usersetting";
-import { UserController } from "@/controller/UserController";
 import { SubscriptionEntitlementService } from "@/service/SubscriptionEntitlementService";
 import { DeviceFingerprintService } from "@/modules/deviceFingerprint";
 import { DeviceApi } from "@/api/deviceApi";
@@ -155,7 +154,6 @@ export async function completeDesktopLogin(
   // UserController.updateUserInfo() internally, compares the snapshot, and
   // broadcasts on change. On GET failure it keeps the cache and returns
   // ok:false (we surface that as a login error here).
-  const userController = new UserController();
   let reconcileOk = false;
   try {
     const result = await SubscriptionEntitlementService.getInstance().reconcile(
@@ -185,9 +183,9 @@ export async function completeDesktopLogin(
       message: "remote source returned no user info",
     };
   }
-  // Local read of the just-written cache (both paths required: layout that is
-  // already mounted gets USER_INFO_UPDATED; layout that mounts next reads this).
-  userController.getUserInfo();
+  // The cache is now written by the service's internal updateUserInfo() call.
+  // Layout reads it on mount via GetloginUserInfo; an already-mounted layout
+  // receives the USER_INFO_UPDATED broadcast.
 
   // --- 3. Register device (non-blocking) -------------------------------
   try {
