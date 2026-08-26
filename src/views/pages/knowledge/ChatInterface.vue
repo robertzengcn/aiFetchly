@@ -126,6 +126,12 @@
                 <v-icon left small>{{ message.liked ? 'mdi-thumb-up' : 'mdi-thumb-up-outline' }}</v-icon>
                 {{ message.likes || 0 }}
               </v-btn>
+              <AIContentReportButton
+                v-if="message.type === 'ai'"
+                :descriptor="buildKnowledgeDescriptor(message, index)"
+                :reported="reportedKnowledgeIndices.has(index)"
+                @report="openKnowledgeReportDialog(message, index)"
+              />
             </div>
           </div>
         </div>
@@ -231,14 +237,24 @@
         </v-card-actions>
       </v-card>
     </v-dialog>
+
+    <!-- AI Content Report dialog (PRD §8.1 knowledge chat surface) -->
+    <AIContentReportDialog
+      v-model="reportDialogOpen"
+      :descriptor="activeReportDescriptor"
+      @submitted="onKnowledgeReportSubmitted"
+    />
   </div>
 </template>
 
 <script>
 import { defineComponent, ref, onMounted, nextTick, watch } from 'vue';
+import AIContentReportButton from '@/views/components/aiContentReport/AIContentReportButton.vue';
+import AIContentReportDialog from '@/views/components/aiContentReport/AIContentReportDialog.vue';
 
 export default defineComponent({
   name: 'ChatInterface',
+  components: { AIContentReportButton, AIContentReportDialog },
   setup() {
     const messages = ref([]);
     const inputMessage = ref('');
@@ -246,6 +262,32 @@ export default defineComponent({
     const regenerating = ref(null);
     const chatContainer = ref(null);
     const showSettings = ref(false);
+
+    // AI Content Report state (PRD §8.1 knowledge chat surface).
+    const reportDialogOpen = ref(false);
+    const activeReportDescriptor = ref(null);
+    const reportedKnowledgeIndices = ref(new Set());
+    const activeReportIndex = ref(null);
+
+    const buildKnowledgeDescriptor = (message, index) => ({
+      surface: 'knowledge_chat',
+      contentType: 'text',
+      text: message.content,
+      context: { messageId: `knowledge-${index}-${message.timestamp?.getTime?.() ?? index}` },
+    });
+
+    const openKnowledgeReportDialog = (message, index) => {
+      activeReportIndex.value = index;
+      activeReportDescriptor.value = buildKnowledgeDescriptor(message, index);
+      reportDialogOpen.value = true;
+    };
+
+    const onKnowledgeReportSubmitted = () => {
+      const idx = activeReportIndex.value;
+      if (idx !== null) {
+        reportedKnowledgeIndices.value = new Set(reportedKnowledgeIndices.value).add(idx);
+      }
+    };
 
     const settings = ref({
       model: 'gpt-3.5-turbo',
@@ -478,7 +520,15 @@ export default defineComponent({
       saveSettings,
       formatTime,
       formatMessage,
-      getRelevanceColor
+      getRelevanceColor,
+      // AI Content Report
+      reportDialogOpen,
+      activeReportDescriptor,
+      reportedKnowledgeIndices,
+      activeReportIndex,
+      buildKnowledgeDescriptor,
+      openKnowledgeReportDialog,
+      onKnowledgeReportSubmitted,
     };
   }
 });

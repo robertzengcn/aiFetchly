@@ -286,6 +286,18 @@
           </details>
         </span>
       </div>
+      <div v-if="isReportableAssistant" class="v2-message__report">
+        <AIContentReportButton
+          :descriptor="reportDescriptor!"
+          :reported="reportSubmitted"
+          @report="reportDialogOpen = true"
+        />
+        <AIContentReportDialog
+          v-model="reportDialogOpen"
+          :descriptor="reportDescriptor"
+          @submitted="onReportSubmitted"
+        />
+      </div>
     </div>
   </div>
 </template>
@@ -305,6 +317,9 @@ import SkillApprovalCard from "@/views/components/aiChat/SkillApprovalCard.vue";
 import AiChatV2StreamStatus from "./AiChatV2StreamStatus.vue";
 import AiChatV2PlanApprovalCard from "./AiChatV2PlanApprovalCard.vue";
 import AiArtifactCard from "@/views/components/aiArtifacts/AiArtifactCard.vue";
+import AIContentReportButton from "@/views/components/aiContentReport/AIContentReportButton.vue";
+import AIContentReportDialog from "@/views/components/aiContentReport/AIContentReportDialog.vue";
+import { buildChatV2Descriptor } from "@/views/components/aiContentReport/reportableOutput";
 import { AI_FILE_OPEN } from "@/config/channellist";
 import { readPasteCache } from "@/views/api/aiChatV2";
 import { windowInvoke } from "@/views/utils/apirequest";
@@ -346,6 +361,22 @@ const { t, te } = useI18n();
 const isPlanCard = computed(
   () => props.message.metadata?.planStateView !== undefined
 );
+
+// Report AI output (PRD §8.1). Only completed assistant text/image messages
+// are reportable — not tool calls, tool results, user/system messages,
+// streaming, errors, or empty placeholders (PRD FR-1.2).
+const isReportableAssistant = computed(
+  () =>
+    props.message.role === "assistant" &&
+    props.message.messageType !== MessageType.TOOL_CALL &&
+    props.message.messageType !== MessageType.TOOL_RESULT &&
+    status.value === "idle"
+);
+const reportDescriptor = computed(() =>
+  isReportableAssistant.value ? buildChatV2Descriptor(props.message) : null
+);
+const reportDialogOpen = ref(false);
+const reportSubmitted = ref(false);
 
 const roleLabel = computed(() => {
   if (props.message.role === "user") {
@@ -490,6 +521,11 @@ function openGeneratedImageFile(image: RenderableGeneratedImage): void {
       console.error("[ai-chat-v2] Failed to open generated image:", openErr);
     }
   );
+}
+
+/** Mark this output reported for the session (PRD FR-1.4). */
+function onReportSubmitted(): void {
+  reportSubmitted.value = true;
 }
 
 const toolResult = computed<Record<string, unknown>>(
@@ -849,6 +885,11 @@ const pastedChips = computed<PastedChip[]>(() => {
   border-radius: 10px;
   background: rgba(0, 0, 0, 0.04);
   word-break: break-word;
+}
+.v2-message__report {
+  margin-top: 4px;
+  display: flex;
+  align-items: center;
 }
 .v2-message--user .v2-message__bubble {
   background: rgba(25, 118, 210, 0.12);

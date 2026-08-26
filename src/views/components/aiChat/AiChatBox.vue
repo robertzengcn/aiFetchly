@@ -308,8 +308,8 @@ class="message-bubble" :class="{
 
             <!-- Regular Message -->
             <template v-else>
-              <div 
-                class="message-header" 
+              <div
+                class="message-header"
                 v-if="message.role === 'assistant' && message.content && message.content.trim()"
                 :class="{ 'copied': copiedMessageId === message.id }"
               >
@@ -323,6 +323,11 @@ class="message-bubble" :class="{
                 >
                   <v-icon size="small">{{ copiedMessageId === message.id ? 'mdi-check' : 'mdi-content-copy' }}</v-icon>
                 </v-btn>
+                <AIContentReportButton
+                  :descriptor="buildLegacyChatDescriptor(message)"
+                  :reported="reportedMessageIds.has(message.id)"
+                  @report="openReportDialog(message)"
+                />
               </div>
               <div
                 class="message-header"
@@ -794,6 +799,13 @@ class="message-bubble" :class="{
         </v-card-actions>
       </v-card>
     </v-dialog>
+
+    <!-- AI Content Report dialog (one per chat box to avoid focus races) -->
+    <AIContentReportDialog
+      v-model="reportDialogOpen"
+      :descriptor="activeReportDescriptor"
+      @submitted="onReportSubmitted"
+    />
   </div>
 </template>
 
@@ -809,6 +821,9 @@ import MCPToolManager from './MCPToolManager.vue';
 import SkillApprovalCard from './SkillApprovalCard.vue';
 import FileOperationBadge from './FileOperationBadge.vue';
 import type { FileOperationRecord } from '@/entityTypes/fileOperationTypes';
+import AIContentReportButton from '@/views/components/aiContentReport/AIContentReportButton.vue';
+import AIContentReportDialog from '@/views/components/aiContentReport/AIContentReportDialog.vue';
+import type { ReportableOutputDescriptor } from '@/views/components/aiContentReport/reportableOutput';
 
 // Stream state enum for type safety
 // This ensures type safety for stream state management
@@ -879,6 +894,36 @@ const emit = defineEmits<{
 const messages = ref<ChatMessage[]>([]);
 const inputMessage = ref('');
 const isLoading = ref(false);
+
+// AI Content Report state (PRD §8.1 legacy chat surface). One dialog at the
+// chat-box root; reportedMessageIds tracks per-output "Reported" state.
+const reportDialogOpen = ref(false);
+const activeReportDescriptor = ref<ReportableOutputDescriptor | null>(null);
+const reportedMessageIds = ref<Set<string>>(new Set());
+
+function buildLegacyChatDescriptor(message: ChatMessage): ReportableOutputDescriptor {
+  return {
+    surface: 'legacy_chat',
+    contentType: 'text',
+    text: message.content,
+    context: {
+      conversationId: message.conversationId,
+      messageId: message.id,
+    },
+  };
+}
+
+function openReportDialog(message: ChatMessage): void {
+  activeReportDescriptor.value = buildLegacyChatDescriptor(message);
+  reportDialogOpen.value = true;
+}
+
+function onReportSubmitted(): void {
+  const id = activeReportDescriptor.value?.context.messageId;
+  if (id) {
+    reportedMessageIds.value = new Set(reportedMessageIds.value).add(id);
+  }
+}
 const isUploadingFiles = ref(false);
 const isLoadingHistory = ref(false);
 const isTyping = ref(false);
