@@ -185,16 +185,28 @@ Delivered on `worktree-natural-language-skill-installation` (commits
 Test totals: ~150 new tests across 9 files; full main suite 490 files /
 ~4360 tests green; component suite 155/155; tsc + vue-tsc 0 errors.
 
-### Deferred (documented, not blocking)
+### Second pass (2026-08-27) — all previously-deferred items delivered
 
-- Windows-runner CI matrix (provider tests are platform-parametrized and
-  run on Windows; the GitHub Actions windows job wiring is CI-config work)
-- Utility-process offload for acquisition (main-process execution this
-  pass — the design permits either)
-- Real-model E2E (Playwright) specs — the enforcement halves (tool policy,
-  always-loaded prepare, hidden-context handoff) are unit/integration tested
-- Legacy documentation-only wrapper delegation to the new invocation service
-  (design §10.11 runtime migration stage 3) — the new runtime and the legacy
-  path coexist; the adapter is a follow-up
-- SkillInstallCard wiring into the AiChatV2 tool_result renderer (the card +
-  API bridge + IPC are complete; the chat message-list hookup is UI polish)
+| Item | Commit |
+|---|---|
+| Available-skills catalog presenter + assembler block (FR-21) | `feat: surface installed prompt skills…` |
+| Legacy documentation-tool delegation (FR-25 / §10.11 stage 3) | `feat: delegate legacy documentation skills…` |
+| SkillInstallCard wiring in AiChatV2 tool results (§22.1) | `feat: render the skill install progress card…` |
+| update / repair / disable / enable / uninstall lifecycle (FR-19) | `feat: add update, repair, disable, and uninstall lifecycle operations` |
+| Explicit `/skill <name> [task]` invocation (§9.5) | `feat: add explicit /skill slash invocation…` |
+| Utility-process staging offload + inline fallback (§15.2) | `feat: offload skill staging to a utility process…` |
+| Windows CI shell matrix + skill-installation E2E specs (§16.4/§26.3/§26.5) | `test: add Windows CI shell matrix and skill-installation E2E specs` |
+
+Also fixed en route: prepare now REPORTS a healthy ready installation of
+the same source (§10.2) instead of re-acquiring; the E2E harness redirects
+config home/staging/credential store into the per-run temp root;
+assertCleanTeardown filters main-process network-guard violations by the
+expected-origin allowlist.
+
+### Remaining known limitations
+
+- The Windows matrix job must be validated on an actual windows-2022
+  runner (authored per build.yml's proven setup; cannot execute locally)
+- aiChat E2E T-05 is a parallel-run flake (passes in isolation)
+- Model-driven E2E (FakeOpenAI emitting skill_install_prepare tool calls)
+  is covered at the enforcement layer by unit/integration tests instead

@@ -16,6 +16,7 @@
 
 import * as crypto from "crypto";
 import * as path from "path";
+import { buildPackagedWorkerEnv } from "@/utils/packagedWorkerPath";
 import {
   stagePackageResponseSchema,
   type StagePackageRequest,
@@ -173,7 +174,11 @@ export class SkillInstallationWorkerClient {
   private ensureWorker(): WorkerHandle {
     if (this.worker) return this.worker;
     const worker = this.fork?.(this.workerEntry, [], {
-      env: { ...process.env, WORKER_TYPE: "skill-installation" },
+      // buildPackagedWorkerEnv sets NODE_PATH so the unpacked worker bundle
+      // resolves its deps in packaged builds (PackagedWorkerEnvGuard gate).
+      env: buildPackagedWorkerEnv({
+        extraEnv: { WORKER_TYPE: "skill-installation" },
+      }),
     });
     if (!worker) {
       throw new Error("worker fork unavailable");
