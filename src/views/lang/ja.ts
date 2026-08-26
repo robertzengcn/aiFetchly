@@ -1819,6 +1819,7 @@ export default {
     ai_message_task_create: "AIメッセージタスクを作成",
     ai_message_task_edit: "AIメッセージタスクを編集",
     ai_message_task_name: "タスク名",
+    ai_message_task_name_hint: "このAIメッセージタスクの名前を入力してください",
     ai_message_task_description: "説明",
     ai_message_task_message: "AIメッセージ",
     ai_message_task_message_hint:

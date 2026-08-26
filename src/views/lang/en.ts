@@ -1858,6 +1858,7 @@ export default {
     ai_message_task_create: "Create AI Message Task",
     ai_message_task_edit: "Edit AI Message Task",
     ai_message_task_name: "Task Name",
+    ai_message_task_name_hint: "Enter a name for this AI message task",
     ai_message_task_description: "Description",
     ai_message_task_message: "AI Message",
     ai_message_task_message_hint:

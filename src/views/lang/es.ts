@@ -1858,6 +1858,8 @@ export default {
     ai_message_task_create: "Crear Tarea de Mensaje IA",
     ai_message_task_edit: "Editar Tarea de Mensaje IA",
     ai_message_task_name: "Nombre de la Tarea",
+    ai_message_task_name_hint:
+      "Ingrese un nombre para esta tarea de mensaje IA",
     ai_message_task_description: "Descripción",
     ai_message_task_message: "Mensaje IA",
     ai_message_task_message_hint:
