@@ -163,6 +163,7 @@ v-if="mainStore.isMobile" variant="text" icon="mdi-menu"
             </div>
         </main>
         <AppNoticeHost v-if="innerShell.shellEnabled.value" />
+        <AppConfirmHost v-if="innerShell.shellEnabled.value" />
 
           <!-- Multiple Messages Display -->
           <div class="messages-container">
@@ -240,6 +241,7 @@ import { useAppShellStore } from '@/views/store/appShell';
 import { useResponsiveShell } from '@/views/composables/useResponsiveShell';
 import AppCenterRouteHost from '@/views/components/appShell/AppCenterRouteHost.vue';
 import AppNoticeHost from '@/views/components/appShell/AppNoticeHost.vue';
+import AppConfirmHost from '@/views/components/appShell/AppConfirmHost.vue';
 import AiArtifactWorkspace from '@/views/components/aiArtifacts/AiArtifactWorkspace.vue';
 import { getAIArtifact } from '@/views/api/aiArtifacts';
 import type { AIArtifactRecord } from '@/entityTypes/aiArtifactTypes';

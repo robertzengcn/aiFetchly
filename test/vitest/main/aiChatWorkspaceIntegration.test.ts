@@ -247,3 +247,68 @@ describe("workspace integration (design §28.7)", () => {
     expect(row?.status).toBe("completed");
   });
 });
+
+describe("workspace full restart (design §28.7 sixth case)", () => {
+  it("non-terminal runs are reconciled to interrupted after re-init", async () => {
+    await SqliteDb.ensureInitialized();
+    const runModule = new AIChatRunModule();
+    const restartRunModel = new AIChatRunModel(tmpDir);
+    const oldRun = await restartRunModel.createRun({
+      conversationId: "v2-restart",
+      owner: "interactive",
+    });
+    await restartRunModel.transition(oldRun.runId, "running", ["queued"]);
+    // Manually set queuedAt to before process start.
+    const entity = await restartRunModel.getByRunId(oldRun.runId);
+    if (entity) {
+      entity.queuedAt = new Date(Date.now() - 60000);
+      await restartRunModel.repository.save(entity);
+    }
+
+    const beforeRestart = await restartRunModel.getByRunId(oldRun.runId);
+    expect(beforeRestart?.status).toBe("running");
+
+    // Reconcile: marks old non-terminal runs as interrupted.
+    const reconciled = await runModule.reconcileInterruptedRuns(
+      "Application restarted before the run finished"
+    );
+    expect(reconciled).toBeGreaterThanOrEqual(1);
+    const afterRestart = await restartRunModel.getByRunId(oldRun.runId);
+    expect(afterRestart?.status).toBe("interrupted");
+    expect(afterRestart?.errorCode).toBe("process_loss");
+
+    // The coordinator's getLiveRuntime should now return null (no live state).
+    
+  });
+
+  it("reconciled interrupted runs cannot be silently resumed", async () => {
+    await SqliteDb.ensureInitialized();
+    const runModule = new AIChatRunModule();
+    const noresumeRunModel = new AIChatRunModel(tmpDir);
+
+    // Seed a non-terminal run directly with old queuedAt.
+    const run = await noresumeRunModel.createRun({
+      conversationId: "v2-noresume",
+      owner: "interactive",
+    });
+    await noresumeRunModel.transition(run.runId, "running", ["queued"]);
+    const ent = await noresumeRunModel.getByRunId(run.runId);
+    if (ent) {
+      ent.queuedAt = new Date(Date.now() - 60000);
+      await noresumeRunModel.repository.save(ent);
+    }
+
+    // Simulate restart: reconcile marks it interrupted.
+    const count = await runModule.reconcileInterruptedRuns("restart");
+    expect(count).toBeGreaterThanOrEqual(1);
+
+    // Verify it is now terminal.
+    const after = await noresumeRunModel.getByRunId(run.runId);
+    expect(after?.status).toBe("interrupted");
+
+    // Attempt to transition back to running — should fail (terminal immutable).
+    await expect(
+      noresumeRunModel.transition(run.runId, "running", ["queued"])
+    ).rejects.toThrow(/conflict/i);
+  });
+});
