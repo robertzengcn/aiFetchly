@@ -55,6 +55,7 @@
       <AiChatPlanQuestionFlow
         v-else-if="item.kind === 'plan-question'"
         :question="item.question"
+        :submit-error="props.planSubmitError"
         @submit="onPlanAnswer"
       />
     </template>
