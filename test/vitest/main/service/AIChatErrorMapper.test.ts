@@ -285,7 +285,7 @@ describe("AIChatErrorMapper - isContentLevelTransientError", () => {
 describe("AIChatErrorMapper - context window exceeded", () => {
   it("surfaces an actionable message for context_window_exceeded error code", () => {
     const err = new Error(
-      'AI server returned finish_reason=error (code=context_window_exceeded): Upstream LLM error: ContextWindowExceededError: The input (566014 tokens) is longer than the model\'s context length (524288 tokens).'
+      "AI server returned finish_reason=error (code=context_window_exceeded): Upstream LLM error: ContextWindowExceededError: The input (566014 tokens) is longer than the model's context length (524288 tokens)."
     );
     const result = userSafeError(err);
     expect(result).toContain("too long");
@@ -324,14 +324,77 @@ describe("AIChatErrorMapper - context window exceeded", () => {
       )
     ).toBe(true);
     expect(
-      isContextWindowExceededError(
-        new Error("maximum context window exceeded")
-      )
+      isContextWindowExceededError(new Error("maximum context window exceeded"))
     ).toBe(true);
-    expect(
-      isContextWindowExceededError(new Error("generic error"))
-    ).toBe(false);
+    expect(isContextWindowExceededError(new Error("generic error"))).toBe(
+      false
+    );
     expect(isContextWindowExceededError(null)).toBe(false);
     expect(isContextWindowExceededError("context window")).toBe(false);
+  });
+});
+
+describe("AIChatErrorMapper - image edit failure codes", () => {
+  it("classifies missing edit-model configuration as image_edit_unavailable", async () => {
+    const { imageEditErrorCode, userSafeError } = await import(
+      "@/service/AIChatErrorMapper"
+    );
+    expect(imageEditErrorCode(new Error("image_edit_unavailable"))).toBe(
+      "image_edit_unavailable"
+    );
+    expect(
+      imageEditErrorCode(new Error("No image-to-image model available"))
+    ).toBe("image_edit_unavailable");
+    expect(
+      imageEditErrorCode(new Error("edit model unavailable for this request"))
+    ).toBe("image_edit_unavailable");
+    expect(userSafeError(new Error("image edit model not configured"))).toBe(
+      "IMAGE_EDIT_UNAVAILABLE"
+    );
+  });
+
+  it("classifies provider edit rejections as image_edit_provider_failed", async () => {
+    const { imageEditErrorCode, userSafeError } = await import(
+      "@/service/AIChatErrorMapper"
+    );
+    expect(imageEditErrorCode(new Error("image_edit_provider_failed"))).toBe(
+      "image_edit_provider_failed"
+    );
+    expect(imageEditErrorCode(new Error("image generation failed"))).toBe(
+      "image_edit_provider_failed"
+    );
+    expect(
+      imageEditErrorCode(
+        new Error("provider error while editing the attached image")
+      )
+    ).toBe("image_edit_provider_failed");
+    expect(userSafeError(new Error("failed to edit the image"))).toBe(
+      "IMAGE_EDIT_PROVIDER_FAILED"
+    );
+  });
+
+  it("still returns the image-edit sentinels for AIProviderError-carried edit failures", async () => {
+    const { userSafeError } = await import("@/service/AIChatErrorMapper");
+    const providerErr = new AIProviderError(
+      "image edit model unavailable on the provider",
+      "not_found",
+      { status: 503 }
+    );
+    expect(userSafeError(providerErr)).toBe("IMAGE_EDIT_UNAVAILABLE");
+  });
+
+  it("never classifies quota, auth, or non-image failures as image-edit codes", async () => {
+    const { imageEditErrorCode, userSafeError } = await import(
+      "@/service/AIChatErrorMapper"
+    );
+    expect(
+      imageEditErrorCode(new Error("402 quota exceeded for image request"))
+    ).toBeNull();
+    expect(userSafeError(new Error("insufficient_quota"))).toBe(
+      QUOTA_EXHAUSTED_SENTINEL
+    );
+    expect(imageEditErrorCode(new Error("stream broke"))).toBeNull();
+    expect(imageEditErrorCode(new Error("NetworkError"))).toBeNull();
+    expect(imageEditErrorCode(null)).toBeNull();
   });
 });

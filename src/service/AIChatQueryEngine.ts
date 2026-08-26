@@ -45,7 +45,11 @@ import {
   countImageDataUrlChars,
 } from "@/service/AIChatImageHandoff";
 import { redirectToLoginOnAuthExpired } from "@/service/AIChatAuthExpiredHandler";
-import { userSafeError, isContextWindowExceededError } from "@/service/AIChatErrorMapper";
+import {
+  userSafeError,
+  isContextWindowExceededError,
+  imageEditErrorCode,
+} from "@/service/AIChatErrorMapper";
 import { Token } from "@/modules/token";
 import { USER_AI_AUTO_PLAN, USER_AI_ENABLED } from "@/config/usersetting";
 import { ENTER_PLAN_MODE_TOOL } from "@/service/EnterPlanModeTool";
@@ -175,8 +179,7 @@ const GENERATED_IMAGE_REFERENCE_ERROR_MESSAGES: Record<
     "Too many generated images selected for this request.",
   generated_image_batch_partial:
     "Some selected generated images could not be prepared.",
-  generated_image_batch_cancelled:
-    "Generated image preparation was cancelled.",
+  generated_image_batch_cancelled: "Generated image preparation was cancelled.",
 };
 
 /**
@@ -412,9 +415,7 @@ export class AIChatQueryEngine {
    * the model catalog's default (128k) when the model is unknown. Never
    * throws. Used by the pre-turn proactive compact gate.
    */
-  private async resolveContextWindowForModel(
-    model?: string
-  ): Promise<number> {
+  private async resolveContextWindowForModel(model?: string): Promise<number> {
     try {
       return await this.modelCatalog.getContextWindow(model);
     } catch {
@@ -842,9 +843,8 @@ export class AIChatQueryEngine {
         request.generatedImageReferences.length > 0
       ) {
         const uploadedImageCount =
-          currentUserContentParts?.filter(
-            (part) => part.type === "image_url"
-          ).length ?? 0;
+          currentUserContentParts?.filter((part) => part.type === "image_url")
+            .length ?? 0;
         const resolution = await this.resolveGeneratedImageInputs({
           conversationId,
           references: request.generatedImageReferences,
@@ -1719,17 +1719,16 @@ export class AIChatQueryEngine {
           // near the model's window: it actually shrinks the next assembled
           // prompt. Fall back to the advisory session-memory update otherwise.
           // Optional call guards test fakes that only stub one method.
-          Promise.resolve(compactAgent.enqueueAutoCompact?.(compactInput) ?? false)
+          Promise.resolve(
+            compactAgent.enqueueAutoCompact?.(compactInput) ?? false
+          )
             .then((compacted) =>
               compacted
                 ? undefined
                 : compactAgent.enqueueSessionMemoryUpdate(compactInput)
             )
             .catch((err) =>
-              log.error(
-                "[ai-chat-compact] post-turn compaction failed:",
-                err
-              )
+              log.error("[ai-chat-compact] post-turn compaction failed:", err)
             );
         }
         if (this.autoDreamService) {
@@ -1822,6 +1821,9 @@ export class AIChatQueryEngine {
           messageId:
             result.partialContent.length > 0 ? assistantMessageId : undefined,
           errorMessage: userSafeError(result.error),
+          // Stable image-edit codes let the renderer localize provider edit
+          // failures distinctly from invalid references and transient issues.
+          errorCode: imageEditErrorCode(result.error) ?? undefined,
         });
         // Emergency auto-compact: when the turn failed because the context
         // window was exceeded, immediately run a full compact so the next

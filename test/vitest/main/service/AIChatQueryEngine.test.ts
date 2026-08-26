@@ -553,6 +553,30 @@ describe("AIChatQueryEngine", () => {
       }
     });
 
+    it("attaches stable image-edit errorCode on failed image-edit turns", async () => {
+      const fakeRun = vi.fn().mockResolvedValue({
+        type: "failed" as const,
+        conversationId: "v2-test-conv",
+        assistantMessageId: "assistant-test",
+        error: new Error("image edit model unavailable on the provider"),
+        partialContent: "",
+      });
+      const engine = createEngineWithFakeLoop(fakeRun);
+      const { sink, events } = makeEventCollector();
+
+      await engine.submitMessage({
+        request: { message: "add a dog beside the lion" },
+        eventSink: sink,
+      });
+
+      const errorEvent = events.find((e) => e.type === "error");
+      expect(errorEvent).toBeDefined();
+      if (errorEvent && errorEvent.type === "error") {
+        expect(errorEvent.errorCode).toBe("image_edit_unavailable");
+        expect(errorEvent.errorMessage).toBe("IMAGE_EDIT_UNAVAILABLE");
+      }
+    });
+
     it("emits error when pre-stream setup throws", async () => {
       mockCreateConversationIfNeeded.mockImplementationOnce(() => {
         throw new Error("DB locked");
@@ -1101,21 +1125,23 @@ describe("AIChatQueryEngine generated-image references", () => {
     const artifact = makeGenArtifact(0);
     const resolver = {
       generatedImageReferenceResolver: {
-        resolveGeneratedImages: vi.fn(async (): Promise<ResolveGeneratedImagesResult> => {
-          order.push("resolve");
-          return {
-            artifacts: [artifact],
-            metadata: [
-              {
-                messageId: artifact.reference.messageId,
-                imageIndex: artifact.reference.imageIndex,
-                fileName: artifact.fileName,
-              },
-            ],
-            totalPreparedBytes: artifact.preparedSizeBytes,
-            totalDataUrlChars: artifact.dataUrl.length,
-          };
-        }),
+        resolveGeneratedImages: vi.fn(
+          async (): Promise<ResolveGeneratedImagesResult> => {
+            order.push("resolve");
+            return {
+              artifacts: [artifact],
+              metadata: [
+                {
+                  messageId: artifact.reference.messageId,
+                  imageIndex: artifact.reference.imageIndex,
+                  fileName: artifact.fileName,
+                },
+              ],
+              totalPreparedBytes: artifact.preparedSizeBytes,
+              totalDataUrlChars: artifact.dataUrl.length,
+            };
+          }
+        ),
       },
     };
     const fakeRun = vi.fn().mockResolvedValue({
@@ -1400,7 +1426,9 @@ describe("AIChatQueryEngine generated-image rehoming", () => {
   }
   afterEach(async () => {
     await Promise.all(
-      tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true }))
+      tempDirs
+        .splice(0)
+        .map((dir) => fs.rm(dir, { recursive: true, force: true }))
     );
   });
 
@@ -1446,9 +1474,7 @@ describe("AIChatQueryEngine generated-image rehoming", () => {
         const targetConv = sanitizeGeneratedImagePathPart(
           input.targetConversationId
         );
-        const targetMsg = sanitizeGeneratedImagePathPart(
-          input.targetMessageId
-        );
+        const targetMsg = sanitizeGeneratedImagePathPart(input.targetMessageId);
         const out: OpenAIChatImage[] = [];
         for (let index = 0; index < input.images.length; index += 1) {
           const image = input.images[index];
@@ -1490,7 +1516,12 @@ describe("AIChatQueryEngine generated-image rehoming", () => {
     const root = await makeTempDir();
     const nativeBytes = Buffer.from([1, 1, 1, 1]);
     const agentBytes = Buffer.from([2, 2, 2, 2]);
-    const nativePath = await seedImage(root, PARENT_CONV, PARENT_MSG, nativeBytes);
+    const nativePath = await seedImage(
+      root,
+      PARENT_CONV,
+      PARENT_MSG,
+      nativeBytes
+    );
     const agentPath = await seedImage(root, AGENT_CONV, AGENT_MSG, agentBytes);
 
     const nativeDescriptor: OpenAIChatImage = {
@@ -1548,9 +1579,14 @@ describe("AIChatQueryEngine generated-image rehoming", () => {
     expect(savedImages).toHaveLength(2);
 
     for (const image of savedImages) {
-      const identity = parseGeneratedImageProtocolIdentity(image.url ?? "", root);
+      const identity = parseGeneratedImageProtocolIdentity(
+        image.url ?? "",
+        root
+      );
       if (!identity) {
-        throw new Error(`expected parseable protocol URL: ${String(image.url)}`);
+        throw new Error(
+          `expected parseable protocol URL: ${String(image.url)}`
+        );
       }
       expect(identity.conversationPathPart).toBe(PARENT_CONV);
       expect(identity.messagePathPart).toBe(PARENT_MSG);

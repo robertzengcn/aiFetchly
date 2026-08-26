@@ -2687,6 +2687,10 @@ export default {
           "Algunos elementos del lote fallaron. Conserva los éxitos y reintenta los fallidos.",
         generated_image_batch_cancelled:
           "Lote detenido. Los resultados completados se conservan; puedes reanudar los elementos restantes.",
+        image_edit_unavailable:
+          "La edición de imágenes no está disponible: no hay ningún modelo de edición configurado. Configura uno e inténtalo de nuevo.",
+        image_edit_provider_failed:
+          "El proveedor de IA no pudo editar la imagen. Reintenta o revisa la configuración del proveedor.",
       },
     },
   },

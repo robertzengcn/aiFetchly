@@ -195,6 +195,10 @@ const i18n = createI18n({
               "Some batch items failed. Keep the successes and retry the failed items.",
             generated_image_batch_cancelled:
               "Batch stopped. Completed results are kept; you can resume the remaining items.",
+            image_edit_unavailable:
+              "Image editing is unavailable: no edit-capable model is configured. Configure one and try again.",
+            image_edit_provider_failed:
+              "The AI provider failed to edit the image. Retry, or check the provider configuration.",
           },
         },
       },
@@ -856,6 +860,41 @@ describe("AiChatV2 generated-image editing wiring", () => {
 
     const { stopChatV2Stream } = await import("@/views/api/aiChatV2");
     expect(vi.mocked(stopChatV2Stream)).toHaveBeenCalledWith("conv-A");
+  });
+
+  it("localizes image-edit error sentinels and codes on stream failure", async () => {
+    const wrapper = mountChat();
+    await flushPromises();
+    // conv-B keeps an empty history (mockHistoryWithImages only seeds
+    // conv-A), so singular wording cannot fork into the ambiguity chooser.
+    await wrapper.setProps({
+      openConversationRequest: { id: 1, conversationId: "conv-B" },
+    });
+    await flushPromises();
+
+    await wrapper
+      .find('[data-testid="composer-send-singular"]')
+      .trigger("click");
+    await flushPromises();
+    lastStreamCall().callbacks.onError(new Error("IMAGE_EDIT_UNAVAILABLE"));
+    await flushPromises();
+    expect(wrapper.find('[data-testid="messages-error"]').text()).toContain(
+      "no edit-capable model is configured"
+    );
+
+    await wrapper
+      .find('[data-testid="composer-send-singular"]')
+      .trigger("click");
+    await flushPromises();
+    lastStreamCall().callbacks.onError(
+      Object.assign(new Error("stream failed"), {
+        errorCode: "image_edit_provider_failed",
+      })
+    );
+    await flushPromises();
+    expect(wrapper.find('[data-testid="messages-error"]').text()).toContain(
+      "failed to edit the image"
+    );
   });
 
   it("fusion wording with more than 3 candidates shows the toast and aborts the send", async () => {

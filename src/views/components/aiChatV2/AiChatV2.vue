@@ -987,6 +987,8 @@ import {
 import {
   AUTH_EXPIRED_SENTINEL,
   QUOTA_EXHAUSTED_SENTINEL,
+  IMAGE_EDIT_UNAVAILABLE_SENTINEL,
+  IMAGE_EDIT_PROVIDER_FAILED_SENTINEL,
 } from "@/service/AIChatErrorSentinels";
 import {
   inferGeneratedImageReferences,
@@ -2955,6 +2957,18 @@ const mapStreamErrorMessage = (raw: string): string => {
       "Your session has expired. Please sign in again."
     );
   }
+  if (raw === IMAGE_EDIT_UNAVAILABLE_SENTINEL) {
+    return (
+      t("aiChatV2.generatedImageRefs.errors.image_edit_unavailable") ||
+      "Image editing is unavailable: no edit-capable model is configured. Configure one and try again."
+    );
+  }
+  if (raw === IMAGE_EDIT_PROVIDER_FAILED_SENTINEL) {
+    return (
+      t("aiChatV2.generatedImageRefs.errors.image_edit_provider_failed") ||
+      "The AI provider failed to edit the image. Retry, or check the provider configuration."
+    );
+  }
   return raw;
 };
 
@@ -2965,7 +2979,10 @@ const mapStreamErrorMessage = (raw: string): string => {
  */
 const displayStreamErrorMessage = (error: Error): string => {
   const code = (error as { errorCode?: unknown }).errorCode;
-  if (typeof code === "string" && code.startsWith("generated_image_")) {
+  if (
+    typeof code === "string" &&
+    (code.startsWith("generated_image_") || code.startsWith("image_edit_"))
+  ) {
     const key = `aiChatV2.generatedImageRefs.errors.${code}`;
     const translated = t(key);
     if (translated && translated !== key) return translated;

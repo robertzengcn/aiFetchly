@@ -2547,6 +2547,10 @@ export default {
           "部分批量任务失败，已成功的结果会保留，失败的项目可以重试。",
         generated_image_batch_cancelled:
           "批次已停止，已完成的结果会保留，您可以继续处理剩余项目。",
+        image_edit_unavailable:
+          "图片编辑功能不可用：尚未配置支持图生图的模型。请先配置后重试。",
+        image_edit_provider_failed:
+          "AI 服务商编辑图片失败。请重试，或检查服务商配置。",
       },
     },
   },

@@ -2661,6 +2661,10 @@ export default {
           "Some batch items failed. Keep the successes and retry the failed items.",
         generated_image_batch_cancelled:
           "Batch stopped. Completed results are kept; you can resume the remaining items.",
+        image_edit_unavailable:
+          "Image editing is unavailable: no edit-capable model is configured. Configure one and try again.",
+        image_edit_provider_failed:
+          "The AI provider failed to edit the image. Retry, or check the provider configuration.",
       },
     },
   },

@@ -2677,6 +2677,10 @@ export default {
           "Einige Stapelelemente sind fehlgeschlagen. Erfolgreiche bleiben erhalten; fehlgeschlagene können wiederholt werden.",
         generated_image_batch_cancelled:
           "Stapel gestoppt. Abgeschlossene Ergebnisse bleiben erhalten; die übrigen Elemente können fortgesetzt werden.",
+        image_edit_unavailable:
+          "Die Bildbearbeitung ist nicht verfügbar: Es ist kein bearbeitungsfähiges Modell konfiguriert. Konfigurieren Sie eines und versuchen Sie es erneut.",
+        image_edit_provider_failed:
+          "Der KI-Anbieter konnte das Bild nicht bearbeiten. Wiederholen Sie den Vorgang oder prüfen Sie die Anbieterkonfiguration.",
       },
     },
   },

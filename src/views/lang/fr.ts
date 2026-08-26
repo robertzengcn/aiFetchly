@@ -2667,6 +2667,10 @@ export default {
           "Certains éléments du lot ont échoué. Conservez les réussites et réessayez les éléments échoués.",
         generated_image_batch_cancelled:
           "Lot arrêté. Les résultats terminés sont conservés ; vous pouvez reprendre les éléments restants.",
+        image_edit_unavailable:
+          "La modification d'images est indisponible : aucun modèle capable de modifier des images n'est configuré. Configurez-en un et réessayez.",
+        image_edit_provider_failed:
+          "Le fournisseur d'IA n'a pas pu modifier l'image. Réessayez ou vérifiez la configuration du fournisseur.",
       },
     },
   },
