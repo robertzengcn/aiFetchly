@@ -441,6 +441,8 @@ import {
   DIAGNOSTICS_SET_DEBUG,
   DIAGNOSTICS_CLEAR_LOCAL,
   DIAGNOSTICS_LIST_CRASHES,
+  // AI Content Reporting — NOT AI-gated (safety/support function, PRD FR-4.4)
+  AI_CONTENT_REPORT_CREATE,
 } from "@/config/channellist";
 import {
   LOCAL_AI_RUNTIME_LIST,
@@ -1111,6 +1113,8 @@ contextBridge.exposeInMainWorld("api", {
       DIAGNOSTICS_SET_DEBUG,
       DIAGNOSTICS_CLEAR_LOCAL,
       DIAGNOSTICS_LIST_CRASHES,
+      // AI Content Reporting — safety/support, not AI-gated (PRD FR-4.4)
+      AI_CONTENT_REPORT_CREATE,
     ];
     if (validChannels.includes(channel)) {
       return ipcRenderer.invoke(channel, data);
