@@ -4,6 +4,10 @@ import {
   AIWorkspaceMemoryModel,
   AIWorkspaceMemoryCreateFields,
 } from "@/model/AIWorkspaceMemory.model";
+import { AIWorkspaceMemoryEntity } from "@/entity/AIWorkspaceMemory.entity";
+import { AIWorkspaceMemoryConsolidationRunEntity } from "@/entity/AIWorkspaceMemoryConsolidationRun.entity";
+import { applyConsolidationPlanInTransaction } from "@/modules/lib/consolidationPlanApply";
+import type { WorkspaceAutoDreamParseResult } from "@/service/AIWorkspaceAutoDreamPromptBuilder";
 import { randomUUID } from "node:crypto";
 import { looksSecretlike } from "@/service/MemorySecretFilter";
 import type {
@@ -237,6 +241,62 @@ export class AIWorkspaceMemoryModule extends BaseModule {
     } catch (err) {
       log.error("[workspace-memory] markMemoriesUsed failed:", err);
     }
+  }
+
+  /**
+   * Apply a parsed workspace consolidation plan AND mark the run completed in
+   * ONE TypeORM transaction. Archive/update/create run through transaction-
+   * bound repositories scoped to the workspace; the run is marked completed
+   * with counts, resolved model, and source-derived reviewedThrough in the
+   * same transaction. Returns counts only AFTER commit. A failure rolls back
+   * all mutations (tech-design §14.4, §14.5).
+   */
+  async applyPlanAndCompleteRun(input: {
+    scope: WorkspaceMemoryScope;
+    runId: string;
+    plan: WorkspaceAutoDreamParseResult;
+    chatConversationsReviewed: number;
+    agentTasksReviewed: number;
+    model?: string;
+    reviewedThrough?: Date | null;
+  }): Promise<void> {
+    await this.ensureConnection();
+    const { workspaceKey, workspaceRoot } = input.scope;
+    await this.sqliteDb.connection.transaction(async (manager) => {
+      await applyConsolidationPlanInTransaction({
+        manager,
+        memoryEntity: AIWorkspaceMemoryEntity,
+        runEntity: AIWorkspaceMemoryConsolidationRunEntity,
+        plan: input.plan,
+        runId: input.runId,
+        completion: {
+          chatConversationsReviewed: input.chatConversationsReviewed,
+          agentTasksReviewed: input.agentTasksReviewed,
+          model: input.model,
+          reviewedThrough: input.reviewedThrough,
+        },
+        buildCreateEntity: (c) => {
+          const e = new AIWorkspaceMemoryEntity();
+          e.memoryId = `wmem-${randomUUID()}`;
+          e.workspaceKey = workspaceKey;
+          e.workspaceRoot = workspaceRoot;
+          e.type = c.type;
+          e.title = c.title;
+          e.content = c.content;
+          e.status = "active";
+          e.confidence = clampConfidence(c.confidence ?? 100);
+          e.sourceKind = "auto_dream";
+          e.sourceConversationId =
+            c.sourceKind === "chat_v2" ? c.sourceId ?? null : null;
+          e.sourceAgentTaskId =
+            c.sourceKind === "agent_task" ? c.sourceId ?? null : null;
+          e.sourceMessageIds = (c.sourceMessageIds as string[] | null) ?? null;
+          return e;
+        },
+        archiveWhere: (memoryId) => ({ workspaceKey, memoryId }),
+        updateWhere: (memoryId) => ({ workspaceKey, memoryId }),
+      });
+    });
   }
 
   private toView(e: {

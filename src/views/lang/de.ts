@@ -2626,6 +2626,52 @@ export default {
       document_failed: "Dokumentverarbeitung fehlgeschlagen",
       image_alt: "Angehängtes Bild: {name}",
     },
+    generatedImageRefs: {
+      useAsReference: "Als Referenz verwenden",
+      edit: "Bearbeiten",
+      remove: "Entfernen",
+      clearAll: "Alle entfernen",
+      moveUp: "Nach oben",
+      moveDown: "Nach unten",
+      referenceTrayTitle: "Referenzbilder",
+      limitReached: "Pro Anfrage können bis zu 3 Bilder referenziert werden.",
+      batchOffer:
+        "Es wurden mehr als 3 Bilder ausgewählt. Stattdessen als Stapel unabhängiger Bearbeitungen verarbeiten?",
+      batchConfirmTitle: "Als Stapel verarbeiten?",
+      batchConfirmBody:
+        "Jedes ausgewählte Bild wird unabhängig in einem Hintergrundstapel bearbeitet. Dies kann eine Weile dauern.",
+      send: "Senden",
+      progressSummary:
+        "{completed} von {requested} abgeschlossen · Parallelität {concurrency}",
+      errors: {
+        generated_image_reference_invalid:
+          "Diese Bildreferenz ist nicht mehr gültig. Wählen Sie das Bild erneut aus.",
+        generated_image_not_owned:
+          "Sie können nur Bilder referenzieren, die in dieser Konversation generiert wurden.",
+        generated_image_missing:
+          "Das Originalbild ist nicht mehr verfügbar. Generieren Sie es neu oder wählen Sie eine andere Referenz.",
+        generated_image_outside_store:
+          "Die Bildquelle liegt außerhalb des vertrauenswürdigen Speicherbereichs und kann nicht verwendet werden.",
+        generated_image_symlink_rejected:
+          "Diese Datei ist kein regulär gespeichertes Bild. Wählen Sie ein anderes generiertes Element.",
+        generated_image_unsupported_type:
+          "Nicht unterstützter Bildtyp. Wählen Sie ein PNG-, JPEG- oder WebP-Bild.",
+        generated_image_too_large:
+          "Dieses Bild überschreitet das Größenlimit. Versuchen Sie weniger oder kleinere Bilder.",
+        generated_image_dimension_limit:
+          "Dieses Bild überschreitet das Abmessungslimit. Skalieren Sie es oder generieren Sie es kleiner neu.",
+        generated_image_reference_limit:
+          "Zu viele referenzierte Bilder für eine Anfrage. Nutzen Sie die Stapelverarbeitung für unabhängige Bearbeitungen.",
+        generated_image_ambiguous:
+          "Mehrere Bilder könnten Ihrer Anfrage entsprechen. Wählen Sie das gewünschte aus.",
+        generated_image_fusion_limit:
+          "Das Kombinieren von Bildern ist auf 3 gleichzeitig begrenzt. Bearbeiten Sie den Rest einzeln oder als Stapel.",
+        generated_image_batch_partial:
+          "Einige Stapelelemente sind fehlgeschlagen. Erfolgreiche bleiben erhalten; fehlgeschlagene können wiederholt werden.",
+        generated_image_batch_cancelled:
+          "Stapel gestoppt. Abgeschlossene Ergebnisse bleiben erhalten; die übrigen Elemente können fortgesetzt werden.",
+      },
+    },
   },
   aifetchlyConfig: {
     title: "AiFetchly-Konfiguration",

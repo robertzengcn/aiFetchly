@@ -4,10 +4,10 @@ import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 // --- Mocks ----------------------------------------------------------------
 
 const mockTokenGetValue = vi.hoisted(() =>
-  vi.fn<(key: string) => string>().mockReturnValue("")
+  vi.fn<(...args: [string]) => string>().mockReturnValue("")
 );
 const mockTokenSetValue = vi.hoisted(() =>
-  vi.fn<(key: string, value: string) => void>()
+  vi.fn<(...args: [string, string]) => void>()
 );
 
 vi.mock("@/modules/token", () => ({
@@ -17,7 +17,7 @@ vi.mock("@/modules/token", () => ({
   })),
 }));
 
-const mockRemoveToken = vi.hoisted(() => vi.fn<() => void>());
+const mockRemoveToken = vi.hoisted(() => vi.fn<(...args: []) => void>());
 
 vi.mock("@/modules/user", () => ({
   User: vi.fn().mockImplementation(() => ({
@@ -27,22 +27,30 @@ vi.mock("@/modules/user", () => ({
 
 // Mock TokenRefreshService so we can control refresh outcomes without going
 // through real network code in these HttpClient-level tests.
-const mockRefreshOnce = vi.hoisted(() => vi.fn<() => Promise<unknown>>());
+const mockRefreshOnce = vi.hoisted(() =>
+  vi.fn<(...args: []) => Promise<unknown>>()
+);
 
-vi.mock("@/modules/tokenRefresh", () => {
-  class RefreshTokenInvalidError extends Error {
+const MockRefreshTokenInvalidError = vi.hoisted(() => {
+  return class extends Error {
     constructor(message: string) {
       super(message);
       this.name = "RefreshTokenInvalidError";
     }
-  }
+  };
+});
+
+vi.mock("@/modules/tokenRefresh", () => {
   // Constructor-callable stub: HttpClient does `new TokenRefreshService()`
   // in its constructor. We attach a static `refreshOnce` method that the
   // source code calls for refreshes.
   const Stub = vi.fn().mockImplementation(() => ({}));
   (Stub as unknown as { refreshOnce: typeof mockRefreshOnce }).refreshOnce =
     mockRefreshOnce;
-  return { RefreshTokenInvalidError, TokenRefreshService: Stub };
+  return {
+    RefreshTokenInvalidError: MockRefreshTokenInvalidError,
+    TokenRefreshService: Stub,
+  };
 });
 
 // invalidate() is called after a successful refresh; make it a no-op.
@@ -56,7 +64,6 @@ vi.mock("@/modules/fieldCipher", () => ({
 process.env.VITE_LOGIN_URL = "http://localhost:3000";
 
 import { HttpClient } from "@/modules/lib/httpclient";
-import { RefreshTokenInvalidError } from "@/modules/tokenRefresh";
 
 function jsonResponse(
   payload: unknown,
@@ -185,7 +192,7 @@ describe("HttpClient token-refresh behavior", () => {
     );
 
     mockRefreshOnce.mockRejectedValue(
-      new RefreshTokenInvalidError("Refresh token rejected (HTTP 401)")
+      new MockRefreshTokenInvalidError("Refresh token rejected (HTTP 401)")
     );
 
     await expect(

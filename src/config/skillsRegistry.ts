@@ -72,6 +72,7 @@ import { verifyContactInfoForAi } from "@/service/ContactVerificationAiTools";
 import {
   CONTACT_VERIFICATION_TOOL_DESCRIPTION,
   CONTACT_VERIFICATION_TOOL_PARAMETERS,
+  EXTRACT_CONTACT_INFO_VERIFICATION_POSTCONDITION,
 } from "@/schemas/contactVerification";
 
 // ---------------------------------------------------------------------------
@@ -159,13 +160,14 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
   {
     name: "attach_local_images",
     description:
-      "REQUIRED for analyzing or editing local workspace images (change background color, " +
+      "Workspace files only. REQUIRED for analyzing or editing image FILES in the approved workspace (change background color, " +
       "make background white, remove background, product photo edits, compare images, visual Q&A). " +
+      "It cannot attach AI-generated chat images — a selected generated image is already attached to the current user turn and must be edited directly. " +
       "After glob_files finds image paths, call this tool with exact paths — do NOT use " +
       "shell_execute, Python, Pillow/PIL, ImageMagick, or file_read for image editing. " +
       "HARD LIMIT: at most 3 images per call and per AI request. " +
       "For image EDITING, use this directly with exactly 1 image. A provider may accept 3 inputs but return only 1 output, so multiple editable images must not share one request. " +
-      "WHEN 2 OR MORE files need the same edit, call process_artifact_batch once with all exact paths and the shared instruction. It runs one isolated provider operation per input with bounded concurrency and returns every output with its input mapping. " +
+      "WHEN 2 OR MORE images need the same edit, call process_artifact_batch once with all exact paths and the shared instruction. It accepts either workspace files or this conversation's AI-generated images (generatedImageReferences — no workspace needed), runs one isolated provider operation per input with bounded concurrency, and returns every output with its input mapping. " +
       "The 3-image form remains available for analysis/comparison requests that intentionally consume several images together. " +
       "NEVER pass more than 3 paths in one call. " +
       "NEVER issue multiple attach_local_images calls in the same assistant turn/tool round — " +
@@ -855,7 +857,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       "When the urls array contains 8 or more entries, this tool runs ASYNCHRONOUSLY: it returns { async: true, job_id } within ~2 seconds and continues working in the background. " +
       "Poll the result with check_tool_job_status(job_id) every 15-30 seconds until status is 'completed' or 'failed'. Do not retry the call while a job is running. " +
       "If a batch hits the extraction timeout, any contacts already collected are returned with partial: true plus a note listing the URLs that were NOT processed — retry those remaining URLs in a smaller batch. " +
-      "POSTCONDITION: If extraction succeeds and returns at least one email address or phone number, every returned contact already includes a Standard verification result (verification_performed: true) — present, export, save, or use those verified classifications rather than re-running verification. Do not call verify_contact_info again for results marked verification_performed: true unless the user explicitly requests re-verification.",
+      EXTRACT_CONTACT_INFO_VERIFICATION_POSTCONDITION,
     parameters: {
       type: "object",
       properties: {

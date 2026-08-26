@@ -1,7 +1,27 @@
 import { describe, expect, it, beforeEach, vi } from "vitest";
+import type { AIChatLightweightCompletionResult } from "@/service/AIChatLightweightTypes";
+import type { AIWorkspaceAutoDreamServiceDeps } from "@/service/AIWorkspaceAutoDreamService";
 
 // Module-level mocks for the auto-dream service's collaborators.
 const completeChat = vi.fn();
+// The lightweight dep wraps the completion response in a result object.
+// Typed as a vi.fn spy so call assertions work, matching the dep signature.
+const completeLightweight = vi.fn<
+  AIWorkspaceAutoDreamServiceDeps["completeLightweight"]
+>((input) =>
+  Promise.resolve(completeChat(input)).then(
+    (response) =>
+      ({
+        response,
+        route: "provider_normal",
+        resolvedModel: (response as { model?: string })?.model ?? "m",
+        providerKind: "hosted",
+        attemptCount: 1,
+        repairAttempted: false,
+        fallbackAttempted: false,
+      } as AIChatLightweightCompletionResult)
+  )
+);
 const startRun = vi.fn();
 const completeRun = vi.fn();
 const failRun = vi.fn();
@@ -14,6 +34,7 @@ const createMemory = vi.fn();
 const updateMemory = vi.fn();
 const archiveMemory = vi.fn();
 const listActive = vi.fn();
+const applyPlanAndCompleteRun = vi.fn();
 
 vi.mock("@/modules/AIWorkspaceMemoryModule", () => ({
   AIWorkspaceMemoryModule: vi.fn().mockImplementation(() => ({
@@ -21,6 +42,7 @@ vi.mock("@/modules/AIWorkspaceMemoryModule", () => ({
     updateMemory,
     archiveMemory,
     listActiveForRetrieval: listActive,
+    applyPlanAndCompleteRun,
   })),
 }));
 
@@ -41,7 +63,9 @@ vi.mock("@/modules/AIWorkspaceMemoryConsolidationRunModule", () => ({
 // workspace are excluded (the workspace-isolation first line of defense).
 vi.mock("@/service/AIAutoDreamSourceCollector", () => ({
   AIAutoDreamSourceCollector: vi.fn().mockImplementation(() => ({ collect })),
-  groupByWorkspace: (packets: ReadonlyArray<{ workspace?: { workspaceKey: string } }>) => {
+  groupByWorkspace: (
+    packets: ReadonlyArray<{ workspace?: { workspaceKey: string } }>
+  ) => {
     const m = new Map<string, unknown[]>();
     for (const p of packets) {
       const k = p.workspace?.workspaceKey;
@@ -99,7 +123,7 @@ const runView = {
 
 const svc = (ai = true, ad = true) =>
   new AIWorkspaceAutoDreamService({
-    completeChat,
+    completeLightweight,
     isAIEnabled: () => ai,
     isAutoDreamEnabled: async () => ad,
   });
@@ -114,13 +138,17 @@ describe("AIWorkspaceAutoDreamService", () => {
     getRunning.mockResolvedValue(null);
     recoverStale.mockResolvedValue(0);
     listActive.mockResolvedValue([]);
+    applyPlanAndCompleteRun.mockResolvedValue(undefined);
     collect.mockResolvedValue({
       packets: [],
       chatConversationCount: 0,
       agentTaskCount: 0,
       reviewedThrough: now(),
     });
-    completeChat.mockResolvedValue({ choices: [{ message: { content: "{}" } }], model: "m" });
+    completeChat.mockResolvedValue({
+      choices: [{ message: { content: "{}" } }],
+      model: "m",
+    });
   });
 
   it("skips (runNow throws) when AI is disabled", async () => {
@@ -148,7 +176,7 @@ describe("AIWorkspaceAutoDreamService", () => {
     });
     const r = await svc(true, false).runNow({ force: true });
     expect(startRun).toHaveBeenCalledTimes(1);
-    expect(completeRun).toHaveBeenCalled();
+    expect(applyPlanAndCompleteRun).toHaveBeenCalled();
     expect(r.length).toBe(1);
   });
 
@@ -178,7 +206,9 @@ describe("AIWorkspaceAutoDreamService", () => {
       agentTaskCount: 0,
       reviewedThrough: now(),
     });
-    getLatest.mockResolvedValue({ finishedAt: iso(new Date(Date.now() - 1 * 3600_000)) });
+    getLatest.mockResolvedValue({
+      finishedAt: iso(new Date(Date.now() - 1 * 3600_000)),
+    });
     const r = await svc().runNow();
     expect(r).toEqual([]);
     expect(startRun).not.toHaveBeenCalled();
@@ -214,7 +244,7 @@ describe("AIWorkspaceAutoDreamService", () => {
     });
 
     expect(startRun).toHaveBeenCalledTimes(1);
-    expect(completeRun).toHaveBeenCalledWith(
+    expect(applyPlanAndCompleteRun).toHaveBeenCalledWith(
       expect.objectContaining({
         runId: "wrun-1",
         chatConversationsReviewed: 1,
@@ -229,10 +259,12 @@ describe("AIWorkspaceAutoDreamService", () => {
       agentTaskCount: 0,
       reviewedThrough: now(),
     });
-    getLatest.mockResolvedValue({ finishedAt: iso(new Date(Date.now() - 25 * 3600_000)) });
+    getLatest.mockResolvedValue({
+      finishedAt: iso(new Date(Date.now() - 25 * 3600_000)),
+    });
     const r = await svc().runNow();
     expect(r.length).toBe(1);
-    expect(completeRun).toHaveBeenCalled();
+    expect(applyPlanAndCompleteRun).toHaveBeenCalled();
   });
 
   it("marks the run failed on a parse error, never throws past runNow", async () => {
@@ -242,11 +274,21 @@ describe("AIWorkspaceAutoDreamService", () => {
       agentTaskCount: 0,
       reviewedThrough: now(),
     });
-    completeChat.mockResolvedValue({ choices: [{ message: { content: "not json {" } }], model: "m" });
-    getByRunId.mockResolvedValue({ ...runView, status: "failed", errorMessage: "parse_error: invalid_json" });
+    completeChat.mockResolvedValue({
+      choices: [{ message: { content: "not json {" } }],
+      model: "m",
+    });
+    getByRunId.mockResolvedValue({
+      ...runView,
+      status: "failed",
+      errorMessage: "parse_error: invalid_json",
+    });
     const r = await svc().runNow({ force: true });
-    expect(failRun).toHaveBeenCalledWith("wrun-1", expect.stringMatching(/parse_error/));
-    expect(completeRun).not.toHaveBeenCalled();
+    expect(failRun).toHaveBeenCalledWith(
+      "wrun-1",
+      expect.stringMatching(/parse_error/)
+    );
+    expect(applyPlanAndCompleteRun).not.toHaveBeenCalled();
     expect(r[0].status).toBe("failed");
   });
 
@@ -258,9 +300,16 @@ describe("AIWorkspaceAutoDreamService", () => {
       reviewedThrough: now(),
     });
     completeChat.mockRejectedValue(new Error("boom"));
-    getByRunId.mockResolvedValue({ ...runView, status: "failed", errorMessage: "boom" });
+    getByRunId.mockResolvedValue({
+      ...runView,
+      status: "failed",
+      errorMessage: "boom",
+    });
     await expect(
-      svc().evaluateAfterChatTurn({ conversationId: "c", reason: "assistant_turn_completed" })
+      svc().evaluateAfterChatTurn({
+        conversationId: "c",
+        reason: "assistant_turn_completed",
+      })
     ).resolves.toBeUndefined();
     expect(failRun).toHaveBeenCalledWith("wrun-1", "boom");
   });
@@ -316,19 +365,25 @@ describe("AIWorkspaceAutoDreamService", () => {
       model: "m",
     });
     await svc().runNow({ force: true });
-    const order = [
-      archiveMemory.mock.invocationCallOrder[0],
-      updateMemory.mock.invocationCallOrder[0],
-      createMemory.mock.invocationCallOrder[0],
-    ];
-    expect(order).toEqual([...order].sort((a, b) => a - b));
+    // The parsed plan is applied AND the run completed atomically via
+    // applyPlanAndCompleteRun (tech-design §14.4). The archive/update/create
+    // ordering invariant now lives inside that transactional method.
+    expect(applyPlanAndCompleteRun).toHaveBeenCalledTimes(1);
+    const arg = applyPlanAndCompleteRun.mock.calls[0]![0] as {
+      runId: string;
+      plan: {
+        archive: unknown[];
+        update: unknown[];
+        create: Array<{ workspaceKey: string; type: string }>;
+      };
+      memoriesCreated?: number;
+    };
+    expect(arg.runId).toBe("wrun-1");
+    expect(arg.plan.archive).toHaveLength(1);
+    expect(arg.plan.update).toHaveLength(1);
+    expect(arg.plan.create).toHaveLength(1);
     // Create is scoped to the resolved workspaceKey, never a model-supplied other key.
-    expect(createMemory).toHaveBeenCalledWith(
-      expect.objectContaining({ workspaceKey: WS }),
-      expect.objectContaining({ type: "workflow" })
-    );
-    expect(completeRun).toHaveBeenCalledWith(
-      expect.objectContaining({ runId: "wrun-1", memoriesCreated: 1, memoriesUpdated: 1, memoriesArchived: 1 })
-    );
+    expect(arg.plan.create[0]!.workspaceKey).toBe(WS);
+    expect(arg.plan.create[0]!.type).toBe("workflow");
   });
 });

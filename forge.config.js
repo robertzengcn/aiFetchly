@@ -550,10 +550,30 @@ module.exports = {
               identity: requireProductionEnv("MAC_STORE_SIGNING_IDENTITY"),
               type: resolveMacStoreSigningType(),
               provisioningProfile: resolveMacStoreProvisioningProfile(),
+              // Fail hard on signing errors instead of the default
+              // continueOnError:true, which silently swallows osx-sign
+              // failures and leaves the app unsigned.
+              continueOnError: false,
+              // Our entitlements plist files already contain all required
+              // entitlements (com.apple.security.app-sandbox, network.client,
+              // files.user-selected.read-write, bookmarks.app-scope), so the
+              // preAutoEntitlements automation is not needed. Disabling it
+              // avoids a potential failure path where osx-sign cannot parse
+              // the team ID from the signing identity name.
+              preAutoEntitlements: false,
               optionsForFile: (filePath) => ({
                 entitlements: isMainApplicationBundle(filePath)
                   ? macStoreEntitlementsPath
                   : macStoreChildEntitlementsPath,
+                // Mac App Store builds use the sandbox security model, not
+                // hardened runtime. Disable it to avoid passing the
+                // --options runtime flag to codesign, which is unnecessary
+                // for MAS distribution.
+                hardenedRuntime: false,
+                // Mac App Store signing does not require a secure timestamp.
+                // Avoid making every file signature depend on Apple's remote
+                // timestamp service, which can be temporarily unavailable.
+                timestamp: "none",
               }),
             },
           }
@@ -780,6 +800,13 @@ module.exports = {
               certificatePassword: windowsSignConfig.certificatePassword,
             }
           : {}),
+        // Suppress ICE validation to avoid LGHT0217 failures in CI environments
+        // where the Windows Installer service is not accessible. ICE validation
+        // checks MSI authoring correctness but is not required for the MSI to
+        // build and install properly. Without this, the MSI build fails on
+        // GitHub Actions runners with "The Windows Installer Service could not
+        // be accessed" (error 0x643).
+        lightSwitches: ["-sval"],
         language: 1033,
         manufacturer: "Robert Zeng",
         icon: "./src/assets/images/icon.ico",

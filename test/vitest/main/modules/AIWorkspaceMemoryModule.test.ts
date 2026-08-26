@@ -224,7 +224,11 @@ describe("AIWorkspaceMemoryModule", () => {
     const list = vi
       .fn()
       .mockResolvedValue([
-        memoryRow({ memoryId: "wmem-active", status: "active", title: "Active" }),
+        memoryRow({
+          memoryId: "wmem-active",
+          status: "active",
+          title: "Active",
+        }),
       ]);
     const mod = createModuleWithListMock(list);
 
@@ -420,5 +424,88 @@ describe("AIWorkspaceMemoryModule", () => {
         process.env.WORKER_TYPE = previous;
       }
     }
+  });
+
+  it("applyPlanAndCompleteRun rejects secret-like create content and rolls back", async () => {
+    const mod = new AIWorkspaceMemoryModule();
+    await SqliteDb.ensureInitialized();
+    const existing = await mod.createMemory(SCOPE_A, {
+      type: "decision",
+      title: "legit",
+      content: "a real workspace preference",
+    });
+    const before = await mod.listMemories(SCOPE_A, {});
+    const beforeCount = before.length;
+
+    await expect(
+      mod.applyPlanAndCompleteRun({
+        scope: SCOPE_A,
+        runId: "run-ws-secret",
+        plan: {
+          ok: true,
+          create: [
+            {
+              workspaceKey: SCOPE_A.workspaceKey,
+              type: "decision",
+              title: "my api key",
+              content: "sk-1234567890abcdef1234567890abcdef",
+              confidence: 80,
+              sourceKind: "chat_v2",
+              sourceId: "v2-1",
+              reason: "r",
+            },
+          ],
+          update: [],
+          archive: [],
+        },
+        chatConversationsReviewed: 1,
+        agentTasksReviewed: 0,
+        model: "small",
+      })
+    ).rejects.toThrow(/secret filter/);
+
+    // Nothing created or mutated — the transaction rolled back.
+    const after = await mod.listMemories(SCOPE_A, {});
+    expect(after.length).toBe(beforeCount);
+    expect(await mod.getMemory(SCOPE_A, existing.memoryId)).toMatchObject({
+      title: "legit",
+    });
+  });
+
+  it("applyPlanAndCompleteRun rejects secret-like update content and rolls back", async () => {
+    const mod = new AIWorkspaceMemoryModule();
+    await SqliteDb.ensureInitialized();
+    const existing = await mod.createMemory(SCOPE_A, {
+      type: "decision",
+      title: "legit",
+      content: "a real workspace preference",
+    });
+
+    await expect(
+      mod.applyPlanAndCompleteRun({
+        scope: SCOPE_A,
+        runId: "run-ws-secret-update",
+        plan: {
+          ok: true,
+          create: [],
+          update: [
+            {
+              memoryId: existing.memoryId,
+              content:
+                "Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c",
+              reason: "r",
+            },
+          ],
+          archive: [],
+        },
+        chatConversationsReviewed: 0,
+        agentTasksReviewed: 0,
+        model: "small",
+      })
+    ).rejects.toThrow(/secret filter/);
+
+    expect(await mod.getMemory(SCOPE_A, existing.memoryId)).toMatchObject({
+      content: "a real workspace preference",
+    });
   });
 });

@@ -349,7 +349,8 @@ export class AIChatContextAssembler {
         content: augmentContentWithGeneratedImages(
           r.content,
           r.role,
-          r.metadata
+          r.metadata,
+          r.messageId
         ),
       });
     }

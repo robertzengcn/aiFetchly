@@ -10,19 +10,22 @@ import {
   groupByWorkspace,
 } from "@/service/AIAutoDreamSourceCollector";
 import type { WorkspaceAwareAutoDreamSourcePacket } from "@/service/AIAutoDreamSourceCollector";
+import { maxPacketUpdatedAt } from "@/service/AIChatPromptBudget";
 import {
   buildWorkspaceAutoDreamSystemPrompt,
   buildWorkspaceAutoDreamUserPrompt,
   parseWorkspaceAutoDreamModelOutput,
 } from "@/service/AIWorkspaceAutoDreamPromptBuilder";
+import { attemptAutoDreamJsonRepair } from "@/service/AIAutoDreamJsonRepair";
 import type {
   AIWorkspaceMemoryConsolidationRunView,
   AIWorkspaceAutoDreamStatusView,
 } from "@/entityTypes/aiWorkspaceMemoryTypes";
 import type {
-  OpenAIChatCompletionRequest,
-  OpenAIChatCompletionResponse,
-} from "@/api/aiChatApi";
+  AIChatLightweightCompletionInput,
+  AIChatLightweightCompletionResult,
+} from "@/service/AIChatLightweightTypes";
+import type { OpenAIChatMessage } from "@/api/aiChatApi";
 import { openAIContentToString } from "@/api/aiChatApi";
 
 const MIN_HOURS_BETWEEN_RUNS = 24;
@@ -31,9 +34,14 @@ const MIN_CHANGED_MESSAGES_PER_WORKSPACE = 6;
 const RUNNING_STALE_MS = 60 * 60 * 1000;
 
 export interface AIWorkspaceAutoDreamServiceDeps {
-  completeChat(
-    request: OpenAIChatCompletionRequest
-  ): Promise<OpenAIChatCompletionResponse>;
+  /**
+   * Lightweight completion route for the `workspace_auto_dream` workload.
+   * Hosted + kill-switch-on sends `model: "small"`; optional background
+   * workloads never fall back to the normal model.
+   */
+  completeLightweight(
+    input: AIChatLightweightCompletionInput
+  ): Promise<AIChatLightweightCompletionResult>;
   isAIEnabled(): boolean;
   /** Reads the workspace auto-dream toggle; defaults to enabled when absent. */
   isAutoDreamEnabled(): Promise<boolean>;
@@ -241,10 +249,16 @@ export class AIWorkspaceAutoDreamService {
       }
     }
 
+    // Source-derived cursor: the greatest updatedAt among this workspace
+    // group's packets. Never use new Date() as a success cursor — advancing
+    // the watermark past unprocessed material would skip eligible sources
+    // (tech-design §14.1, §14.5).
+    const groupReviewedThrough = maxPacketUpdatedAt(group.packets);
+
     const runView = await this.runModule.startRun({
       workspaceKey: group.workspaceKey,
       reviewedSince: reviewedSince ?? null,
-      reviewedThrough: new Date(),
+      reviewedThrough: groupReviewedThrough,
     });
 
     try {
@@ -254,27 +268,53 @@ export class AIWorkspaceAutoDreamService {
       );
 
       const validWorkspaceKeys = new Set([group.workspaceKey]);
-      const req: OpenAIChatCompletionRequest = {
-        messages: [
-          { role: "system", content: buildWorkspaceAutoDreamSystemPrompt() },
-          {
-            role: "user",
-            content: buildWorkspaceAutoDreamUserPrompt({
-              workspaceKey: group.workspaceKey,
-              workspaceRoot: group.workspaceRoot,
-              activeMemories,
-              packets: group.packets,
-            }),
-          },
-        ],
-      };
-      const resp = await this.deps.completeChat(req);
+      const messages: OpenAIChatMessage[] = [
+        { role: "system", content: buildWorkspaceAutoDreamSystemPrompt() },
+        {
+          role: "user",
+          content: buildWorkspaceAutoDreamUserPrompt({
+            workspaceKey: group.workspaceKey,
+            workspaceRoot: group.workspaceRoot,
+            activeMemories,
+            packets: group.packets,
+          }),
+        },
+      ];
+      // Route through the lightweight service (workspace_auto_dream profile).
+      // Hosted + kill-switch-on sends `model: "small"`; optional background
+      // workloads never fall back to the normal model (tech-design §8.1, §9.2).
+      const isManual = force;
+      const result = await this.deps.completeLightweight({
+        workload: "workspace_auto_dream",
+        messages,
+        manual: isManual,
+      });
+      const resp = result.response;
       const raw = openAIContentToString(resp.choices?.[0]?.message?.content);
-      const parsed = parseWorkspaceAutoDreamModelOutput(
+      let parsed = parseWorkspaceAutoDreamModelOutput(
         raw,
         validWorkspaceKeys,
         activeMemories
       );
+
+      // JSON repair: one same-route repair request on invalid non-empty
+      // output. Never falls back to the normal model (tech-design §9.4).
+      if (!parsed.ok && raw.trim().length > 0) {
+        parsed = await attemptAutoDreamJsonRepair({
+          workload: "workspace_auto_dream",
+          invalidRaw: raw,
+          parsed,
+          manual: isManual,
+          completeLightweight: (input) => this.deps.completeLightweight(input),
+          parse: (r) =>
+            parseWorkspaceAutoDreamModelOutput(
+              r,
+              validWorkspaceKeys,
+              activeMemories
+            ),
+        });
+      }
+
       if (!parsed.ok) {
         await this.runModule.failRun(
           runView.runId,
@@ -283,11 +323,9 @@ export class AIWorkspaceAutoDreamService {
         return await this.runModule.getByRunId(runView.runId);
       }
 
-      // Apply archives first to clear contradictions, then updates, then
-      // creates. Portable records are SKIPPED (design D-09 / §19.5): their
-      // files are authoritative, so a SQLite-only archive/update would be
-      // reverted by the next file scan. Auto-dream manages private records
-      // only; never hard-deletes anything.
+      // Portable records are SKIPPED (design D-09 / §19.5): their files are
+      // authoritative, so a SQLite-only archive/update would be reverted by
+      // the next file scan. Filter them out before the atomic transaction.
       let skippedPortable = 0;
       const isPortable = async (memoryId: string): Promise<boolean> => {
         if (!scope.scopeId) return false;
@@ -308,57 +346,47 @@ export class AIWorkspaceAutoDreamService {
           return false;
         }
       };
+      const filteredArchive: typeof parsed.archive = [];
       for (const a of parsed.archive) {
         if (await isPortable(a.memoryId)) {
           skippedPortable += 1;
           continue;
         }
-        await this.memoryModule.archiveMemory(scope, a.memoryId);
+        filteredArchive.push(a);
       }
+      const filteredUpdate: typeof parsed.update = [];
       for (const u of parsed.update) {
         if (await isPortable(u.memoryId)) {
           skippedPortable += 1;
           continue;
         }
-        await this.memoryModule.updateMemory(scope, {
-          memoryId: u.memoryId,
-          ...(u.title !== undefined ? { title: u.title } : {}),
-          ...(u.content !== undefined ? { content: u.content } : {}),
-          ...(u.confidence !== undefined ? { confidence: u.confidence } : {}),
-        });
+        filteredUpdate.push(u);
       }
       if (skippedPortable > 0) {
         log.info(
           `[workspace-auto-dream] skipped ${skippedPortable} portable record edits (files are authoritative)`
         );
       }
-      for (const c of parsed.create) {
-        await this.memoryModule.createMemory(scope, {
-          type: c.type,
-          title: c.title,
-          content: c.content,
-          confidence: c.confidence,
-          sourceKind: "auto_dream",
-          sourceConversationId:
-            c.sourceKind === "chat_v2" ? c.sourceId : undefined,
-          sourceAgentTaskId:
-            c.sourceKind === "agent_task" ? c.sourceId : undefined,
-          sourceMessageIds: c.sourceMessageIds,
-        });
-      }
+      const filteredPlan = {
+        ...parsed,
+        archive: filteredArchive,
+        update: filteredUpdate,
+      };
 
-      await this.runModule.completeRun({
+      // Atomic apply: memory plan + run completion in one transaction
+      // (tech-design §14.4, dev's transactional improvement).
+      await this.memoryModule.applyPlanAndCompleteRun({
+        scope,
         runId: runView.runId,
+        plan: filteredPlan,
         chatConversationsReviewed: group.packets.filter(
           (p) => p.sourceKind === "chat_v2"
         ).length,
         agentTasksReviewed: group.packets.filter(
           (p) => p.sourceKind === "agent_task"
         ).length,
-        memoriesCreated: parsed.create.length,
-        memoriesUpdated: parsed.update.length,
-        memoriesArchived: parsed.archive.length,
         model: resp.model,
+        reviewedThrough: groupReviewedThrough,
       });
 
       return await this.runModule.getByRunId(runView.runId);

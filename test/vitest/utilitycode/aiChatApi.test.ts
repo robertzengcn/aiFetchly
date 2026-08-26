@@ -3,7 +3,7 @@ import { AiChatApi } from "@/api/aiChatApi";
 import type { ElectronStoreService } from "@/modules/electronstoreservice";
 
 // Import the modules to be mocked
-import { HttpClient } from "@/modules/lib/httpclient";
+import { HttpClient as _HttpClient } from "@/modules/lib/httpclient";
 import { Token } from "@/modules/token";
 
 // Mock HttpClient: use a single shared instance so tests can assert on postJson calls
@@ -783,6 +783,104 @@ describe("AiChatApi - OpenAI compatibility fallback", () => {
     });
   });
 
+  it("preserves small_model capability metadata on an OpenAI-shaped response", async () => {
+    mockGetShared.mockResolvedValueOnce({
+      object: "list",
+      data: [
+        {
+          id: "agnes-2.0-flash",
+          object: "model",
+          created: 1,
+          owned_by: "ai-server",
+          context_size: 256000,
+        },
+      ],
+      default_model: "agnes-2.0-flash",
+      small_model: {
+        available: true,
+        resolved_model: "agnes-2.0-haiku",
+        context_size: 200000,
+        max_tokens: 4096,
+      },
+    });
+
+    const result = await api.listOpenAIModels();
+
+    // OpenAI pass-through must preserve top-level default_model AND small_model
+    // (previously the pass-through branch returned {object, data} only).
+    expect(result.default_model).toBe("agnes-2.0-flash");
+    expect(result.small_model).toEqual({
+      available: true,
+      resolved_model: "agnes-2.0-haiku",
+      context_size: 200000,
+      max_tokens: 4096,
+    });
+  });
+
+  it("preserves small_model capability metadata on the legacy models-shaped response", async () => {
+    mockGetShared.mockResolvedValueOnce({
+      models: [
+        {
+          name: "agnes-2.0-flash",
+          available: true,
+          max_tokens: 0,
+          context_size: 256000,
+        },
+      ],
+      default_model: "agnes-2.0-flash",
+      small_model: {
+        available: true,
+        resolved_model: "agnes-2.0-haiku",
+        context_size: 200000,
+      },
+    });
+
+    const result = await api.listOpenAIModels();
+
+    expect(result.default_model).toBe("agnes-2.0-flash");
+    expect(result.small_model).toEqual({
+      available: true,
+      resolved_model: "agnes-2.0-haiku",
+      context_size: 200000,
+    });
+  });
+
+  it("ignores malformed small_model fields without rejecting the model list", async () => {
+    mockGetShared.mockResolvedValueOnce({
+      object: "list",
+      data: [
+        {
+          id: "m1",
+          object: "model",
+          created: 1,
+          owned_by: "ai-server",
+          context_size: 128000,
+        },
+      ],
+      // Malformed: non-boolean available, non-integer tokens, negative context.
+      small_model: {
+        available: "yes",
+        resolved_model: 42,
+        context_size: -10,
+        max_tokens: "big",
+      },
+    });
+
+    const result = await api.listOpenAIModels();
+
+    // The model list is still returned; malformed optional fields are dropped.
+    expect(result.data).toHaveLength(1);
+    expect(result.data[0].id).toBe("m1");
+    // available is not a boolean -> small_model is not preserved as a usable
+    // capability (normalized to absent or a safe shape). Either way the list
+    // itself is unaffected.
+    if (result.small_model) {
+      expect(result.small_model.available).toBe(false);
+      expect(result.small_model.context_size).toBeUndefined();
+      expect(result.small_model.max_tokens).toBeUndefined();
+    }
+  });
+
   it("retries model listing when the backend is temporarily unreachable", async () => {
     vi.useFakeTimers();
     try {
@@ -1296,7 +1394,9 @@ describe("AiChatApi - OpenAI compatibility fallback", () => {
         },
         vi.fn()
       )
-    ).rejects.toThrow("AI server error code=500: database connection is not open");
+    ).rejects.toThrow(
+      "AI server error code=500: database connection is not open"
+    );
   });
 });
 

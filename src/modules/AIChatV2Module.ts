@@ -29,6 +29,29 @@ function uuid(): string {
   return `id-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
+/**
+ * Defensively parse the JSON `metadata` column into a record. Returns null for
+ * absent/corrupt/non-object payloads instead of throwing.
+ */
+function parseMetadataRecord(raw: string | undefined): Record<string, unknown> | null {
+  if (!raw) {
+    return null;
+  }
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (
+      typeof parsed === "object" &&
+      parsed !== null &&
+      !Array.isArray(parsed)
+    ) {
+      return parsed as Record<string, unknown>;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 export class AIChatV2Module extends BaseModule {
   private chatModule: AIChatModule;
   private sessionMemoryModule: AIChatSessionMemoryModule;
@@ -206,6 +229,37 @@ export class AIChatV2Module extends BaseModule {
       limit,
       offset
     );
+  }
+
+  /**
+   * Resolve a v2 assistant message by composite (conversation, messageId).
+   * Guards: conversation must be v2-scoped, role assistant, messageType
+   * MESSAGE, and metadata must carry source "chat-v2". Returns null otherwise;
+   * never touches the filesystem.
+   */
+  async getGeneratedImageSourceMessage(
+    conversationId: string,
+    messageId: string
+  ): Promise<AIChatMessageEntity | null> {
+    if (!conversationId.startsWith(V2_CONVERSATION_PREFIX)) {
+      return null;
+    }
+    const message =
+      await this.chatModule.getMessageByConversationAndMessageId(
+        conversationId,
+        messageId
+      );
+    if (!message || message.role !== "assistant") {
+      return null;
+    }
+    if (message.messageType !== MessageType.MESSAGE) {
+      return null;
+    }
+    const metadata = parseMetadataRecord(message.metadata);
+    if (!metadata || metadata.source !== "chat-v2") {
+      return null;
+    }
+    return message;
   }
 
   async clearConversation(conversationId: string): Promise<number> {

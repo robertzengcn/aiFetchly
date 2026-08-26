@@ -52,6 +52,20 @@ export interface ChatV2ReasoningMetadata {
 
 export type ChatV2GeneratedImage = OpenAIChatImage;
 
+/** Identifies one AI-generated image inside an assistant message. */
+export interface ChatV2GeneratedImageReference {
+  readonly messageId: string;
+  readonly imageIndex: number;
+}
+
+/** Persisted metadata for a referenced AI-generated image. */
+export interface ChatV2GeneratedImageReferenceMetadata {
+  readonly messageId: string;
+  readonly imageIndex: number;
+  readonly fileName?: string;
+  readonly protocolUrl?: string;
+}
+
 /** Authoritative main-process lifecycle state for a conversation turn. */
 export type ChatV2RuntimeStatus =
   | "idle"
@@ -122,6 +136,8 @@ export interface ChatV2MessageMetadata {
   reasoning?: ChatV2ReasoningMetadata;
   attachments?: ChatV2AttachmentMetadata[];
   generatedImages?: ChatV2GeneratedImage[];
+  /** Generated images referenced as edit inputs for this turn. */
+  readonly generatedImageReferences?: readonly ChatV2GeneratedImageReferenceMetadata[];
   // Plan-mode fields (present only on plan-related display rows)
   planEventType?:
     | "ask_user_question"
@@ -196,6 +212,8 @@ export interface ChatV2StreamRequest {
    * model-facing message right before mention resolution.
    */
   pastedContents?: Record<string, string>;
+  /** Send-time only: generated images the user selected as edit inputs. */
+  readonly generatedImageReferences?: ChatV2GeneratedImageReference[];
 }
 
 export interface ChatV2HistoryRequest {
@@ -308,6 +326,8 @@ export interface ChatV2StreamChunk {
   model?: string;
   finishReason?: string | null;
   errorMessage?: string;
+  /** Machine-readable error code for error chunks (e.g. GeneratedImageReferenceErrorCode values). */
+  readonly errorCode?: string;
   images?: ChatV2GeneratedImage[];
   toolCallId?: string;
   toolName?: string;

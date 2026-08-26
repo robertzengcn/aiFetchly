@@ -7,26 +7,33 @@ import {
   buildAutoDreamUserPrompt,
   parseAutoDreamModelOutput,
 } from "@/service/AIAutoDreamPromptBuilder";
+import { attemptAutoDreamJsonRepair } from "@/service/AIAutoDreamJsonRepair";
+import type {
+  AIChatLightweightCompletionInput,
+  AIChatLightweightCompletionResult,
+} from "@/service/AIChatLightweightTypes";
 import type {
   AIMemoryConsolidationRunView,
   AIAutoDreamStatusView,
 } from "@/entityTypes/aiUserMemoryTypes";
-import {
-  openAIContentToString,
-} from "@/api/aiChatApi";
-import type {
-  OpenAIChatCompletionRequest,
-  OpenAIChatCompletionResponse,
-} from "@/api/aiChatApi";
+import { openAIContentToString } from "@/api/aiChatApi";
+import type { OpenAIChatMessage } from "@/api/aiChatApi";
 
 const MIN_HOURS_BETWEEN_RUNS = 24;
 const MIN_CHANGED_SOURCES = 5;
 const RUNNING_STALE_MS = 60 * 60 * 1000;
 
 export interface AIAutoDreamServiceDeps {
-  completeChat(
-    request: OpenAIChatCompletionRequest
-  ): Promise<OpenAIChatCompletionResponse>;
+  /**
+   * Lightweight completion route for the `user_auto_dream` workload. When the
+   * kill switch is on and the provider is hosted, the first attempt sends
+   * `model: "small"`; otherwise the provider-normal path is used. Optional
+   * background workloads never fall back to the normal model
+   * (tech-design §8.1, §9.2).
+   */
+  completeLightweight(
+    input: AIChatLightweightCompletionInput
+  ): Promise<AIChatLightweightCompletionResult>;
   isAIEnabled(): boolean;
   /** Resolves to the user-controllable auto-dream toggle. Reads from the
    * system_setting table; defaults to enabled when the row is absent. */
@@ -153,25 +160,53 @@ export class AIAutoDreamService {
         limit: 200,
       });
 
-      const req: OpenAIChatCompletionRequest = {
-        messages: [
-          { role: "system", content: buildAutoDreamSystemPrompt() },
-          {
-            role: "user",
-            content: buildAutoDreamUserPrompt({
-              activeMemories,
-              packets: collected.packets,
-            }),
-          },
-        ],
-      };
-      const resp = await this.deps.completeChat(req);
+      const messages: OpenAIChatMessage[] = [
+        { role: "system", content: buildAutoDreamSystemPrompt() },
+        {
+          role: "user",
+          content: buildAutoDreamUserPrompt({
+            activeMemories,
+            packets: collected.packets,
+          }),
+        },
+      ];
+
+      // Route through the lightweight service: hosted + kill-switch-on sends
+      // `model: "small"` for the first attempt; the route result carries the
+      // resolved real model. Optional background work never falls back to the
+      // normal model (tech-design §8.1, §9.2).
+      const isManual = input.reason === "manual" || input.force === true;
+      const result = await this.deps.completeLightweight({
+        workload: "user_auto_dream",
+        messages,
+        manual: isManual,
+      });
+      const resp = result.response;
       const raw = openAIContentToString(resp.choices?.[0]?.message?.content);
-      const parsed = parseAutoDreamModelOutput(
+      let parsed = parseAutoDreamModelOutput(
         raw,
         collected.packets,
         activeMemories
       );
+
+      // JSON repair: if the small model returned non-empty but invalid
+      // consolidation JSON, send ONE repair request on the same route with
+      // the invalid output and the required schema. Never resend the full
+      // source prompt unless needed. Never fall back to the normal model
+      // (tech-design §9.4). Secret/semantic validation failure is NOT
+      // repairable.
+      if (!parsed.ok && raw.trim().length > 0) {
+        parsed = await attemptAutoDreamJsonRepair({
+          workload: "user_auto_dream",
+          invalidRaw: raw,
+          parsed,
+          manual: isManual,
+          completeLightweight: (input) => this.deps.completeLightweight(input),
+          parse: (r) =>
+            parseAutoDreamModelOutput(r, collected.packets, activeMemories),
+        });
+      }
+
       if (!parsed.ok) {
         await this.runModule.failRun(
           runView.runId,
@@ -180,41 +215,18 @@ export class AIAutoDreamService {
         return await this.runModule.getByRunId(runView.runId);
       }
 
-      // Apply archives first to clear contradictions.
-      for (const a of parsed.archive) {
-        await this.memoryModule.archiveMemory(a.memoryId);
-      }
-      for (const u of parsed.update) {
-        await this.memoryModule.updateMemory({
-          memoryId: u.memoryId,
-          ...(u.title !== undefined ? { title: u.title } : {}),
-          ...(u.content !== undefined ? { content: u.content } : {}),
-          ...(u.confidence !== undefined ? { confidence: u.confidence } : {}),
-        });
-      }
-      for (const c of parsed.create) {
-        await this.memoryModule.createMemory({
-          type: c.type,
-          title: c.title,
-          content: c.content,
-          confidence: c.confidence,
-          sourceKind: c.sourceKind === "chat_v2" ? "chat_v2" : "agent_task",
-          sourceConversationId:
-            c.sourceKind === "chat_v2" ? c.sourceId : undefined,
-          sourceAgentTaskId:
-            c.sourceKind === "agent_task" ? c.sourceId : undefined,
-          sourceMessageIds: c.sourceMessageIds,
-        });
-      }
-
-      await this.runModule.completeRun({
+      // Atomic apply: archive/update/create the memory plan AND mark the run
+      // completed with counts, resolved model, and source-derived cursor in
+      // ONE transaction. A failure rolls back all mutations; the previous
+      // successful cursor remains authoritative. No model call is repeated
+      // after a persistence failure (tech-design §14.4, §9.5).
+      await this.memoryModule.applyPlanAndCompleteRun({
         runId: runView.runId,
+        plan: parsed,
         chatConversationsReviewed: collected.chatConversationCount,
         agentTasksReviewed: collected.agentTaskCount,
-        memoriesCreated: parsed.create.length,
-        memoriesUpdated: parsed.update.length,
-        memoriesArchived: parsed.archive.length,
         model: resp.model,
+        reviewedThrough: collected.reviewedThrough,
       });
 
       return await this.runModule.getByRunId(runView.runId);

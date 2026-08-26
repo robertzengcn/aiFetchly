@@ -506,6 +506,42 @@ describe("ToolLoadPolicyService.classify", () => {
     ).toBe("contextual");
   });
 
+  it("promotes verify_contact_info for lead-research contact gathering", () => {
+    expect(
+      classify("verify_contact_info", "builtin", {
+        currentUserMessage:
+          "get computer wholesale in USA and get their contact method",
+      })
+    ).toBe("contextual");
+    expect(
+      classify("verify_contact_info", "builtin", {
+        currentUserMessage: "extract contact info from these company websites",
+      })
+    ).toBe("contextual");
+  });
+
+  it("promotes verify_contact_info after plan approval using the original goal", () => {
+    expect(
+      classify("verify_contact_info", "builtin", {
+        currentUserMessage:
+          "Plan approved. Please begin executing the plan now.",
+        recentUserMessages: [
+          "get computer wholesale in USA and get their contact method",
+        ],
+      })
+    ).toBe("contextual");
+  });
+
+  it("does not promote verify_contact_info on plan approval without contact intent", () => {
+    expect(
+      classify("verify_contact_info", "builtin", {
+        currentUserMessage:
+          "Plan approved. Please begin executing the plan now.",
+        recentUserMessages: ["write a short product tagline"],
+      })
+    ).toBe("deferred");
+  });
+
   it("does NOT promote verify_contact_info for generic email questions", () => {
     expect(
       classify("verify_contact_info", "builtin", {
@@ -519,37 +555,46 @@ describe("ToolLoadPolicyService.classify", () => {
     ).toBe("deferred");
   });
 
-  describe("hasRecentGeneratedImages promotion", () => {
-    it("promotes export_generated_artifacts when user asks to edit a prior generated image", () => {
+  describe("generated-image followups stay deferred", () => {
+    it("does NOT promote export_generated_artifacts on generated-image edit wording", () => {
       expect(
         classify("export_generated_artifacts", "builtin", {
           currentUserMessage: "please add tree in front of the house",
           hasRecentGeneratedImages: true,
         })
-      ).toBe("contextual");
+      ).toBe("deferred");
+      expect(
+        classify("export_generated_artifacts", "builtin", {
+          currentUserMessage: "make it brighter",
+          hasRecentGeneratedImages: true,
+        })
+      ).toBe("deferred");
     });
 
-    it("promotes attach_local_images when user asks to edit a prior generated image", () => {
+    it("does NOT promote attach_local_images on generated-image edit wording", () => {
       expect(
         classify("attach_local_images", "builtin", {
           currentUserMessage: "please add tree in front of the house",
           hasRecentGeneratedImages: true,
         })
-      ).toBe("contextual");
-    });
-
-    it("does NOT promote when hasRecentGeneratedImages is false/undefined", () => {
-      expect(
-        classify("export_generated_artifacts", "builtin", {
-          currentUserMessage: "please add tree in front of the house",
-          hasRecentGeneratedImages: false,
-        })
       ).toBe("deferred");
       expect(
         classify("attach_local_images", "builtin", {
-          currentUserMessage: "please add tree in front of the house",
+          currentUserMessage: "make it brighter",
+          hasRecentGeneratedImages: true,
         })
       ).toBe("deferred");
+    });
+
+    it("still promotes export_generated_artifacts for explicit workspace save intent", () => {
+      // CONTEXTUAL_FILE_WRITE_TOOL_NAMES + FILE_WRITE_INTENT_RE path is
+      // untouched: explicit save/copy requests keep the export tool available.
+      expect(
+        classify("export_generated_artifacts", "builtin", {
+          currentUserMessage: "save the generated files into my workspace",
+          hasRecentGeneratedImages: true,
+        })
+      ).toBe("contextual");
     });
 
     it("does NOT promote when the message has no edit-like verb", () => {

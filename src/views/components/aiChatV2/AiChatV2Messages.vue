@@ -25,6 +25,14 @@
       @request-plan-changes="(fb) => emit('request-plan-changes', fb)"
       @open-artifact="(id: string) => emit('open-artifact', id)"
       @copy-artifact-html="(id: string) => emit('copy-artifact-html', id)"
+      @use-generated-image="
+        (reference: ChatV2GeneratedImageReference) =>
+          emit('use-generated-image', reference)
+      "
+      @edit-generated-image="
+        (reference: ChatV2GeneratedImageReference) =>
+          emit('edit-generated-image', reference)
+      "
     />
     <div
       v-if="showTypingIndicator"
@@ -63,7 +71,10 @@
 <script setup lang="ts">
 import { ref, watch, nextTick, onMounted } from "vue";
 import { useI18n } from "vue-i18n";
-import type { ChatV2MessageView } from "@/entityTypes/aiChatV2Types";
+import type {
+  ChatV2GeneratedImageReference,
+  ChatV2MessageView,
+} from "@/entityTypes/aiChatV2Types";
 import AiChatV2Message from "./AiChatV2Message.vue";
 import AiChatV2RecoveryStatus from "./AiChatV2RecoveryStatus.vue";
 
@@ -101,6 +112,14 @@ const emit = defineEmits<{
   (e: "request-plan-changes", feedback: string): void;
   (e: "open-artifact", artifactId: string): void;
   (e: "copy-artifact-html", artifactId: string): void;
+  (
+    e: "use-generated-image",
+    reference: ChatV2GeneratedImageReference
+  ): void;
+  (
+    e: "edit-generated-image",
+    reference: ChatV2GeneratedImageReference
+  ): void;
 }>();
 const { t } = useI18n();
 

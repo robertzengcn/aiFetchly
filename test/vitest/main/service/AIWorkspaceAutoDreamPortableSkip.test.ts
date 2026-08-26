@@ -3,7 +3,7 @@ import { describe, expect, it, beforeEach, vi } from "vitest";
 // Auto-dream portable-safety harness (design D-09 / §19.5): the service must
 // resolve the internal memory scope for its groups and SKIP archive/update
 // for records that have portable state — their files are authoritative.
-const completeChat = vi.fn();
+const completeLightweight = vi.fn();
 const startRun = vi.fn();
 const completeRun = vi.fn();
 const failRun = vi.fn();
@@ -142,7 +142,7 @@ function activeMemory(memoryId: string) {
 
 const svc = () =>
   new AIWorkspaceAutoDreamService({
-    completeChat,
+    completeLightweight,
     isAIEnabled: () => true,
     isAutoDreamEnabled: async () => true,
   });
@@ -170,7 +170,7 @@ describe("AIWorkspaceAutoDreamService — portable safety (D-09)", () => {
   });
 
   it("skips archive and update for records with portable state", async () => {
-    completeChat.mockResolvedValue({
+    completeLightweight.mockResolvedValue({
       model: "test-model",
       choices: [
         {
@@ -204,7 +204,7 @@ describe("AIWorkspaceAutoDreamService — portable safety (D-09)", () => {
   });
 
   it("resolves the internal scope id before applying writes", async () => {
-    completeChat.mockResolvedValue({
+    completeLightweight.mockResolvedValue({
       model: "test-model",
       choices: [
         { message: { content: modelOutput({ create: [] }) } },
@@ -220,7 +220,7 @@ describe("AIWorkspaceAutoDreamService — portable safety (D-09)", () => {
     listActive.mockResolvedValue([
       activeMemory("wmem-018f2f70-7d3d-7cc0-a07f-1d36e59c2ef1"),
     ]);
-    completeChat.mockResolvedValue({
+    completeLightweight.mockResolvedValue({
       model: "test-model",
       choices: [
         {
@@ -244,7 +244,7 @@ describe("AIWorkspaceAutoDreamService — portable safety (D-09)", () => {
     listActive.mockResolvedValue([
       activeMemory("wmem-018f2f70-7d3d-7cc0-a07f-1d36e59c2ef1"),
     ]);
-    completeChat.mockResolvedValue({
+    completeLightweight.mockResolvedValue({
       model: "test-model",
       choices: [
         {
