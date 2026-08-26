@@ -82,19 +82,36 @@ function assistantOwnerFor(
 }
 
 /** Terminal statuses derived from a persisted TOOL_RESULT row. */
-function statusFromResult(
-  message: ChatV2MessageView
-): ToolExecutionStatus {
+function statusFromResult(message: ChatV2MessageView): ToolExecutionStatus {
   const metadata = message.metadata;
   if (metadata?.toolResultStatus === "error") return "failed";
   return "completed";
 }
 
 /** Classify a result row's semantic output surface (design §15.11). */
-function classifyOutput(
-  message: ChatV2MessageView
-): { kind: ToolOutputKind; summary?: string } {
+function classifyOutput(message: ChatV2MessageView): {
+  kind: ToolOutputKind;
+  summary?: string;
+} {
   const metadata = message.metadata;
+  // FR-047: files (write_file/edit_file/list_files results with file changes)
+  if (
+    metadata?.toolName === "write_file" ||
+    metadata?.toolName === "edit_file" ||
+    metadata?.toolName === "list_files" ||
+    metadata?.toolName === "search_files"
+  ) {
+    return { kind: "files" };
+  }
+  // FR-047: permission (skill permission prompts awaiting decision)
+  if (
+    metadata?.toolName === "install_system_dependency" ||
+    (metadata?.toolResult &&
+      typeof metadata.toolResult === "object" &&
+      "needsPermission" in metadata.toolResult)
+  ) {
+    return { kind: "permission" };
+  }
   if (metadata?.artifact) return { kind: "artifact" };
   if (metadata?.toolResultStatus === "error") {
     return {
@@ -233,7 +250,9 @@ export function buildToolExecutionGroups(
           ...entry.view,
           status: "running",
           phase:
-            typeof payload.phase === "string" ? payload.phase : entry.view.phase,
+            typeof payload.phase === "string"
+              ? payload.phase
+              : entry.view.phase,
           progress:
             typeof payload.progressFraction === "number"
               ? payload.progressFraction

@@ -103,6 +103,7 @@
           :stream-status="streamStatusForMessages"
           :error-message="selectedStore.errorMessage ?? undefined"
           :show-reasoning="true"
+          :plan-submit-error="planSubmitError"
           @approve-plan="onLegacyPlanAction('approve-plan')"
           @request-plan-changes="onLegacyPlanAction('request-plan-changes', $event)"
           @submit-plan-answers="onPlanAnswers"
@@ -151,25 +152,10 @@
         </button>
       </div>
 
-      <!-- Decision dock (PRD §12.4/§12.6): the latest unresolved plan
-           decision stays visible even with the inspector closed (FR-058). -->
-      <AiChatPlanQuestionFlow
-        v-if="pinnedQuestion && conversationId"
-        :question="pinnedQuestion"
-        @submit="onAnswerQuestion"
-      />
-      <AiChatPlanDecisionCard
-        v-else-if="pinnedApproval"
-        :plan="pinnedApproval"
-        @approve="onLegacyPlanAction('approve-plan')"
-        @request-changes="onRequestPlanChanges"
-        @review-full-plan="workspaceStore.openInspector('activity')"
-      />
-      <!-- Resolved plan transitions collapse to durable receipts (FR-052). -->
-      <AiChatPlanReceipt
-        v-else-if="planReceipt"
-        :plan="planReceipt"
-        @open-activity="workspaceStore.openInspector('activity')"
+      <!-- FR-062: plan decision surfaces are owned exclusively by the
+           transcript (AiChatWorkspaceTranscript). The dock no longer
+           duplicates plan-question/decision/receipt surfaces. The run
+           strip carries plan status; Activity carries the full document. -->
       />
 
       <AiChatV2Composer
@@ -281,13 +267,6 @@ import {
 } from "@/views/api/aiChatWorkspace";
 import { useRoute, useRouter } from "vue-router";
 import { MessageType } from "@/entityTypes/commonType";
-import AiChatPlanQuestionFlow from "./AiChatPlanQuestionFlow.vue";
-import AiChatPlanDecisionCard from "./AiChatPlanDecisionCard.vue";
-import AiChatPlanReceipt from "./AiChatPlanReceipt.vue";
-import {
-  selectPlanPresentation,
-  isReceiptSurface,
-} from "./planPresentationProjection";
 import type { AskUserQuestionAnswer } from "@/entityTypes/aiChatPlanTypes";
 import AiChatWorkspaceSidebar from "./AiChatWorkspaceSidebar.vue";
 import AiChatConversationHeader from "./AiChatConversationHeader.vue";
@@ -346,6 +325,9 @@ const activeToolCount = computed(() => {
 
 /** Seven-layer recovery is live when recovery_status events arrive. */
 const recovering = computed(() => selectedStore.recovery !== null);
+
+/** FR-059: plan-question submission error surfaced to the transcript flow. */
+const planSubmitError = ref<string | null>(null);
 
 /** Goal objective while a goal loop is active (PRD §13.3). */
 const activeGoalObjective = computed(() => {
@@ -474,26 +456,6 @@ const contextPercent = computed(() =>
   })
 );
 
-/** Lifecycle-specific plan surface (FR-051): exactly one pinned decision. */
-const planPresentation = computed(() =>
-  selectPlanPresentation(selectedStore.messages)
-);
-const pinnedQuestion = computed(() =>
-  planPresentation.value?.surface === "question"
-    ? planPresentation.value?.pendingQuestion ?? null
-    : null
-);
-const pinnedApproval = computed(() =>
-  planPresentation.value?.surface === "approval"
-    ? planPresentation.value
-    : null
-);
-const planReceipt = computed(() =>
-  planPresentation.value && isReceiptSurface(planPresentation.value.surface)
-    ? planPresentation.value
-    : null
-);
-
 async function onSelectConversation(id: string): Promise<void> {
   await selectedStore.loadSelection(id);
   void loadApprovalMode(id);
@@ -573,30 +535,35 @@ function onPlanAnswers(answers: unknown[]): void {
 async function onAnswerQuestion(
   answers: AskUserQuestionAnswer[]
 ): Promise<void> {
-  if (!conversationId.value || !pinnedQuestion.value) return;
+  // FR-059: propagate failure to the flow so it shows a retry state.
+  // The transcript owns the plan-question surface; answers arrive via
+  // the @submit-plan-answers event from AiChatWorkspaceTranscript.
+  if (!conversationId.value) return;
+  // Extract the questionId from the latest plan in message history.
+  const questionId = (() => {
+    for (let i = selectedStore.messages.length - 1; i >= 0; i -= 1) {
+      const q = selectedStore.messages[i].metadata?.questionView;
+      if (q?.status === "pending") return (q as { questionId: string }).questionId;
+    }
+    return null;
+  })();
+  if (!questionId) return;
   try {
     const result = await answerChatV2Question(
       conversationId.value,
-      pinnedQuestion.value.questionId,
+      questionId,
       answers
     );
     if (!result.ok) {
-      // Flow keeps its draft; the error is retryable.
+      // FR-059: surface the error to the flow via a ref the transcript reads.
+      planSubmitError.value = result.error || "Submission failed";
       console.warn("[ai-chat-workspace] answer submission failed:", result.error);
+    } else {
+      planSubmitError.value = null;
     }
   } catch {
     // Retain answers for retry (design §31).
   }
-}
-
-/** Request-changes opens one focused feedback field (PRD §12.8.8). */
-async function onRequestPlanChanges(): Promise<void> {
-  const feedback = await appPrompt(
-    t("workspaceChat.plan.changeFeedbackPrompt") ||
-      "What should change in this plan?"
-  );
-  if (feedback === null) return;
-  void onLegacyPlanAction("request-plan-changes", feedback || "");
 }
 
 /**

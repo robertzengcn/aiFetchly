@@ -91,6 +91,8 @@ const props = defineProps<{
   streamStatus: "idle" | "streaming" | "cancelled" | "error";
   errorMessage?: string;
   showReasoning?: boolean;
+  /** FR-059: submission error for the active plan-question flow. */
+  planSubmitError?: string | null;
 }>();
 
 const emit = defineEmits<{
@@ -121,6 +123,8 @@ type ProjectedItem =
 const projectedItems = computed<ProjectedItem[]>(() => {
   const messages = props.messages;
   const result: ProjectedItem[] = [];
+  // FR-052: only one plan lifecycle surface per transcript (latest plan).
+  let planSurfaceRendered = false;
 
   // Build execution groups from all tool messages.
   const groups = buildToolExecutionGroups(messages);
@@ -199,10 +203,19 @@ const projectedItems = computed<ProjectedItem[]>(() => {
       continue;
     }
 
-    // Plan metadata: render only lifecycle-specific surfaces (FR-052).
+    // Plan metadata: render only ONE lifecycle-specific surface for the latest
+    // plan (FR-052). The loop calls selectPlanPresentation once per
+    // plan-bearing message, so deduplicate by skipping all plan messages
+    // after the first one that produced a surface.
     if (msg.metadata?.planEventType || msg.metadata?.planStateView) {
+      if (planSurfaceRendered) {
+        // Skip duplicate plan metadata — only the latest plan gets a surface.
+        i += 1;
+        continue;
+      }
       const plan = selectPlanPresentation(messages);
       if (plan) {
+        planSurfaceRendered = true; // mark so no subsequent plan message duplicates
         if (plan.surface === "approval") {
           result.push({
             kind: "plan-decision",
