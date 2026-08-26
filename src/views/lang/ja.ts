@@ -670,6 +670,12 @@ export default {
     upgrade_plan: "アップグレード",
     pricing_url_missing: "料金ページのURLが設定されていません",
   },
+  subscriptionEntitlement: {
+    unlocked:
+      "サブスクリプションが有効です。ホスト型AI機能のロックが解除されました。",
+    cancelled:
+      "サブスクリプションが変更されました。一部のAI機能は利用できない場合があります。",
+  },
   extramodule: {
     extramoduleName: "追加モジュール名",
     extramoduleDescription: "追加モジュール説明",

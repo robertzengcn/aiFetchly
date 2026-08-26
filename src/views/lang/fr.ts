@@ -679,6 +679,12 @@ export default {
     upgrade_plan: "Mettre à niveau",
     pricing_url_missing: "L'URL de la page des tarifs n'est pas configurée",
   },
+  subscriptionEntitlement: {
+    unlocked:
+      "Votre abonnement est actif. Les fonctionnalités IA hébergées sont déverrouillées.",
+    cancelled:
+      "Votre abonnement a changé. Certaines fonctionnalités IA peuvent être indisponibles.",
+  },
   extramodule: {
     extramoduleName: "Extra Module Name",
     extramoduleDescription: "Extra Module Description",

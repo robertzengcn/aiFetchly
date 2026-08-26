@@ -684,6 +684,12 @@ export default {
     upgrade_plan: "Actualizar",
     pricing_url_missing: "La URL de la página de precios no está configurada",
   },
+  subscriptionEntitlement: {
+    unlocked:
+      "Tu suscripción está activa. Las funciones de IA alojadas están desbloqueadas.",
+    cancelled:
+      "Tu suscripción ha cambiado. Es posible que algunas funciones de IA no estén disponibles.",
+  },
   extramodule: {
     extramoduleName: "Nombre del módulo extra",
     extramoduleDescription: "Descripción del módulo extra",

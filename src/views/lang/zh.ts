@@ -646,6 +646,10 @@ export default {
     upgrade_plan: "升级",
     pricing_url_missing: "未配置价格页面 URL",
   },
+  subscriptionEntitlement: {
+    unlocked: "您的订阅已激活。托管 AI 功能已解锁。",
+    cancelled: "您的订阅已变更。部分 AI 功能可能不可用。",
+  },
   extramodule: {
     extramoduleName: "额外模块名称",
     extramoduleDescription: "额外模块描述",

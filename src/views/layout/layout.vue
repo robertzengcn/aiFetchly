@@ -238,7 +238,8 @@ import { getLanguagePreference } from '@/views/api/language'
 import { initializeLanguageDetection } from '@/views/utils/browserLanguageDetection'
 import { initializeLanguageSynchronization, syncLanguageChange } from '@/views/utils/languageSynchronization'
 import { getIpcTransport } from '@/views/utils/ipcTransport'
-import { AI_CHAT_V2_OPEN_FROM_NOTIFY } from '@/config/channellist'
+import { AI_CHAT_V2_OPEN_FROM_NOTIFY, USER_OPEN_PRICING_PLAN } from '@/config/channellist'
+import { useEntitlement } from '@/views/utils/subscriptionEntitlement'
 
 
 // import {ref, watchEffect} from "vue";
@@ -332,16 +333,8 @@ const accountPlanIcon = computed(() => {
 const showUpgradePlan = computed(() => {
     return currentPlans.value.length > 0 && currentPlans.value.every(isFreeSubscriptionPlan);
 });
-const pricingPlanUrl = computed(() => {
-    const baseUrl = normalizeLoginBaseUrl(import.meta.env.VITE_LOGIN_URL);
-    return baseUrl ? `${baseUrl}/pricing-plan` : '';
-});
 const normalizePlanName = (planName: string): string => {
     return planName.toLowerCase().replace(/[^a-z0-9]/g, '');
-};
-const normalizeLoginBaseUrl = (raw: unknown): string => {
-    if (typeof raw !== 'string') return '';
-    return raw.trim().replace(/^["']|["']$/g, '').replace(/\/+$/g, '');
 };
 const getDisplayPlans = (plans: Array<UserPlanType>): Array<UserPlanType> => {
     const namedPlans = plans.filter(plan => Boolean(plan.planName?.trim()));
@@ -357,6 +350,15 @@ const isFreeSubscriptionPlan = (plan: UserPlanType): boolean => {
     const planName = normalizePlanName(plan.planName || '');
     const planId = (plan.planId || '').toUpperCase();
     return planName.includes('community') || planName.includes('free') || planId === 'FREE';
+};
+/** Apply a plan set to the header chrome (label, Plus flag, Upgrade button). */
+const applyPlans = (plans: Array<UserPlanType>): void => {
+    if (plans && plans.length > 0) {
+        const displayPlans = getDisplayPlans(plans);
+        currentPlans.value = displayPlans;
+        isPlusPlan.value = displayPlans.some(isPlusSubscriptionPlan);
+        userPlan.value = displayPlans.map(plan => plan.planName).join(', ');
+    }
 };
 const showNotice = ref(false);
 const {t,locale} = useI18n();
@@ -394,12 +396,14 @@ const gotoSystemsetting=()=>{
 const gotodashborad=()=>{
     router.push('/dashboard/home')
 }
-const openPricingPlan = (): void => {
-    if (!pricingPlanUrl.value) {
+const openPricingPlan = async (): Promise<void> => {
+    // Route through the main process so it records pricingOpenedAt and starts
+    // the retry loop that recovers a missed WebSocket notify (PRD FR-3).
+    // The handler validates VITE_LOGIN_URL and opens the URL via shell.openExternal.
+    const res = await getIpcTransport().invoke(USER_OPEN_PRICING_PLAN)
+    if (!res || !res.status) {
         showErrorMessage(t('layout.pricing_url_missing') || 'Pricing page URL is not configured')
-        return
     }
-    window.open(pricingPlanUrl.value, '_blank')
 }
 
 watch(permanent, () => {
@@ -643,14 +647,24 @@ onMounted(async () => {
         userName.value = res.name
         userEmail.value = res.email
         if (res.plans && res.plans.length > 0) {
-            const displayPlans = getDisplayPlans(res.plans)
-            currentPlans.value = displayPlans
-            isPlusPlan.value = displayPlans.some(isPlusSubscriptionPlan)
-            userPlan.value = displayPlans.map(plan => plan.planName).join(', ')
+            applyPlans(res.plans)
         }
     } catch (error) {
         console.error('Failed to load login user info:', error)
     }
+
+    // FR-7.1: subscribe to entitlement broadcasts so the header plan label,
+    // Upgrade button, and AI-enabled UI update without remount/re-login.
+    // Toast rules (PRD §10): success on free→paid, info on paid→free.
+    useEntitlement({
+        onPlansChanged: (plans) => applyPlans(plans),
+        onUpgrade: () => {
+            showSuccessMessage(t('subscriptionEntitlement.unlocked') || 'Your subscription is active. Hosted AI features are unlocked.')
+        },
+        onDowngrade: () => {
+            showInfoMessage(t('subscriptionEntitlement.cancelled') || 'Your subscription has changed. Some AI features may be unavailable.')
+        },
+    })
 
     try {
         const name = await getAppName()

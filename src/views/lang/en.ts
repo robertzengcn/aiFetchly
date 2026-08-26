@@ -677,6 +677,11 @@ export default {
     upgrade_plan: "Upgrade",
     pricing_url_missing: "Pricing page URL is not configured",
   },
+  subscriptionEntitlement: {
+    unlocked: "Your subscription is active. Hosted AI features are unlocked.",
+    cancelled:
+      "Your subscription has changed. Some AI features may be unavailable.",
+  },
   extramodule: {
     extramoduleName: "Extra Module Name",
     extramoduleDescription: "Extra Module Description",

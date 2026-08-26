@@ -680,6 +680,12 @@ export default {
     upgrade_plan: "Upgrade",
     pricing_url_missing: "Die URL der Preisseite ist nicht konfiguriert",
   },
+  subscriptionEntitlement: {
+    unlocked:
+      "Ihr Abonnement ist aktiv. Gehostete KI-Funktionen sind freigeschaltet.",
+    cancelled:
+      "Ihr Abonnement hat sich geändert. Einige KI-Funktionen sind möglicherweise nicht verfügbar.",
+  },
   extramodule: {
     extramoduleName: "Zusatzmodul-Name",
     extramoduleDescription: "Zusatzmodul-Beschreibung",
