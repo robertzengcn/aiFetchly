@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import plist from "plist";
+import * as verifierModule from "../../scripts/verify-mac-store-app.js";
 
 type RunCommand = (command: string, args: readonly string[]) => string;
 
@@ -24,13 +25,15 @@ interface VerifierModule {
   ) => VerificationResult;
 }
 
-const verifier = require("../../scripts/verify-mac-store-app.js") as VerifierModule;
+const verifier = verifierModule as VerifierModule;
 
 const MAIN_ENTITLEMENTS = {
   "com.apple.security.app-sandbox": true,
   "com.apple.security.network.client": true,
   "com.apple.security.files.user-selected.read-write": true,
   "com.apple.security.files.bookmarks.app-scope": true,
+  "com.apple.application-identifier": "22RY733FNY.com.aifetchly.desktop",
+  "com.apple.developer.team-identifier": "22RY733FNY",
 };
 
 const CHILD_ENTITLEMENTS = {
@@ -159,6 +162,36 @@ describe("Mac App Store application verifier", (): void => {
         createDependencies({ mainEntitlements })
       )
     ).to.throw("com.apple.security.network.client");
+  });
+
+  it("rejects a main application without its signed application identifier", (): void => {
+    const appPath = createApplicationFixture(tempDirectory);
+    const mainEntitlements: Record<string, unknown> = {
+      ...MAIN_ENTITLEMENTS,
+    };
+    delete mainEntitlements["com.apple.application-identifier"];
+
+    expect(() =>
+      verifier.verifyMacStoreApp(
+        appPath,
+        createDependencies({ mainEntitlements })
+      )
+    ).to.throw("com.apple.application-identifier");
+  });
+
+  it("rejects a main application without its signed team identifier", (): void => {
+    const appPath = createApplicationFixture(tempDirectory);
+    const mainEntitlements: Record<string, unknown> = {
+      ...MAIN_ENTITLEMENTS,
+    };
+    delete mainEntitlements["com.apple.developer.team-identifier"];
+
+    expect(() =>
+      verifier.verifyMacStoreApp(
+        appPath,
+        createDependencies({ mainEntitlements })
+      )
+    ).to.throw("com.apple.developer.team-identifier");
   });
 
   it("rejects a helper that does not inherit its sandbox", (): void => {
