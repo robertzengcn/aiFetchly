@@ -25,9 +25,8 @@ import {
 import { GitPluginFetcher } from "@/service/pluginSources/GitPluginFetcher";
 import { LocalFolderPluginFetcher } from "@/service/pluginSources/LocalFolderPluginFetcher";
 import { LocalZipPluginFetcher } from "@/service/pluginSources/LocalZipPluginFetcher";
-import type {
-  PluginSourceRequest,
-} from "@/service/pluginSources/pluginSourceTypes";
+import type { PluginSourceRequest } from "@/service/pluginSources/pluginSourceTypes";
+import { SkillInstallationWorkerClient } from "@/service/SkillInstallationWorkerClient";
 import type {
   ResolvedSkillSource,
   SkillSourceDescriptor,
@@ -58,13 +57,18 @@ export type AcquisitionResult =
     };
 
 /** Normalize a user-supplied source string into a descriptor. */
-export function normalizeSkillSource(raw: string): SkillSourceDescriptor | null {
+export function normalizeSkillSource(
+  raw: string
+): SkillSourceDescriptor | null {
   const trimmed = raw.trim();
   if (!trimmed) return null;
 
   const github = classifyGitHubUrl(trimmed);
   if (github.type === "repo" || github.type === "unknown") {
-    if (trimmed.startsWith("https://github.com/") || trimmed.startsWith("http://github.com/")) {
+    if (
+      trimmed.startsWith("https://github.com/") ||
+      trimmed.startsWith("http://github.com/")
+    ) {
       if (github.type !== "repo") {
         return null;
       }
@@ -85,7 +89,11 @@ export function normalizeSkillSource(raw: string): SkillSourceDescriptor | null 
     return { kind: "git", canonicalUri: trimmed.replace(/\.git$/i, "") };
   }
   // Local references — absolute or explicitly relative paths.
-  if (path.isAbsolute(trimmed) || trimmed.startsWith("./") || trimmed.startsWith("../")) {
+  if (
+    path.isAbsolute(trimmed) ||
+    trimmed.startsWith("./") ||
+    trimmed.startsWith("../")
+  ) {
     return {
       kind: trimmed.match(/\.(zip|tgz|tar\.gz)$/i)
         ? "local-archive"
@@ -116,13 +124,16 @@ export class SkillSourceAcquisitionService {
   private readonly localZip = new LocalZipPluginFetcher();
   private readonly limits: AcquisitionLimits;
   private readonly stagingRoot: string;
+  private readonly stagingClient: SkillInstallationWorkerClient;
 
   constructor(
     limits: AcquisitionLimits = DEFAULT_ACQUISITION_LIMITS,
-    stagingRoot?: string
+    stagingRoot?: string,
+    stagingClient?: SkillInstallationWorkerClient
   ) {
     this.limits = limits;
     this.stagingRoot = resolveStagingRoot(stagingRoot);
+    this.stagingClient = stagingClient ?? new SkillInstallationWorkerClient();
   }
 
   /**
@@ -153,7 +164,9 @@ export class SkillSourceAcquisitionService {
       return { ok: false, code: "SOURCE_INVALID", message: request.message };
     }
 
-    const acquired = await this.fetcherFor(descriptor.kind).acquire(request.req);
+    const acquired = await this.fetcherFor(descriptor.kind).acquire(
+      request.req
+    );
     if (!acquired.success) {
       const message = acquired.errors
         .map((e) => e.message)
@@ -165,9 +178,28 @@ export class SkillSourceAcquisitionService {
     const { localRoot, cleanup } = acquired.source;
     try {
       const target = path.join(sourceDir, "content");
-      this.copyTreeBounded(localRoot, target);
 
-      const contentHash = this.hashTree(target);
+      // Stage through the worker client: the bounded copy + tree hash runs
+      // in the skill-installation utility process when available (design
+      // §15.2 — acquisition must not block the main process), falling back
+      // to inline staging with IDENTICAL limits and hashes.
+      const staged = await this.stagingClient.stage(localRoot, target, {
+        maxFiles: this.limits.maxFiles,
+        maxTotalBytes: this.limits.maxTotalBytes,
+        maxDepth: 20,
+      });
+      if (!staged.ok) {
+        return {
+          ok: false,
+          code:
+            staged.code === "SOURCE_LIMIT_EXCEEDED"
+              ? "SOURCE_LIMIT_EXCEEDED"
+              : "SOURCE_ACQUISITION_FAILED",
+          message: staged.message,
+        };
+      }
+
+      const contentHash = staged.result.contentHash;
       const resolvedRevision = await this.resolveRevision(target, descriptor);
 
       return {
@@ -191,7 +223,10 @@ export class SkillSourceAcquisitionService {
     } catch (err) {
       return {
         ok: false,
-        code: err instanceof LimitError ? "SOURCE_LIMIT_EXCEEDED" : "SOURCE_ACQUISITION_FAILED",
+        code:
+          err instanceof LimitError
+            ? "SOURCE_LIMIT_EXCEEDED"
+            : "SOURCE_ACQUISITION_FAILED",
         message: err instanceof Error ? err.message : String(err),
       };
     } finally {
@@ -255,68 +290,6 @@ export class SkillSourceAcquisitionService {
     }
   }
 
-  private copyTreeBounded(from: string, to: string): void {
-    let files = 0;
-    let bytes = 0;
-    const walk = (src: string, dest: string, depth: number): void => {
-      if (depth > 20) {
-        throw new LimitError("Repository traversal exceeds depth 20.");
-      }
-      const entries = fs.readdirSync(src, { withFileTypes: true });
-      fs.mkdirSync(dest, { recursive: true });
-      for (const entry of entries) {
-        if (entry.name === ".git") continue;
-        const srcPath = path.join(src, entry.name);
-        const destPath = path.join(dest, entry.name);
-        const stat = fs.statSync(srcPath);
-        if (stat.isDirectory()) {
-          walk(srcPath, destPath, depth + 1);
-          continue;
-        }
-        if (!stat.isFile()) {
-          continue; // devices, FIFOs, sockets ignored (PRD §11.2)
-        }
-        files += 1;
-        bytes += stat.size;
-        if (files > this.limits.maxFiles) {
-          throw new LimitError(
-            `Acquired package exceeds the ${this.limits.maxFiles}-file limit.`
-          );
-        }
-        if (bytes > this.limits.maxTotalBytes) {
-          throw new LimitError(
-            `Acquired package exceeds the ${Math.floor(
-              this.limits.maxTotalBytes / 1024 / 1024
-            )} MiB content limit.`
-          );
-        }
-        fs.copyFileSync(srcPath, destPath);
-      }
-    };
-    walk(from, to, 0);
-  }
-
-  private hashTree(root: string): string {
-    const hash = crypto.createHash("sha256");
-    const walk = (dir: string): void => {
-      const entries = fs
-        .readdirSync(dir, { withFileTypes: true })
-        .sort((a, b) => a.name.localeCompare(b.name));
-      for (const entry of entries) {
-        const p = path.join(dir, entry.name);
-        if (entry.isDirectory()) {
-          hash.update(entry.name + "/");
-          walk(p);
-        } else if (entry.isFile()) {
-          hash.update(entry.name);
-          hash.update(fs.readFileSync(p));
-        }
-      }
-    };
-    walk(root);
-    return hash.digest("hex");
-  }
-
   private async resolveRevision(
     stagingRoot: string,
     descriptor: SkillSourceDescriptor
@@ -333,7 +306,10 @@ export class SkillSourceAcquisitionService {
     ) {
       return descriptor.requestedRevision;
     }
-    return this.hashTree(stagingRoot);
+    const { hashTree } = await import(
+      "@/childprocess/skill-installation/stagePackage"
+    );
+    return hashTree(stagingRoot);
   }
 }
 

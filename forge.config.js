@@ -956,6 +956,11 @@ module.exports = {
             config: "vite.hookExecutionWorker.config.mjs",
           },
           {
+            entry:
+              "src/childprocess/skill-installation/SkillInstallationWorker.ts",
+            config: "vite.skillInstallationWorker.config.mjs",
+          },
+          {
             entry: "src/childprocess/google-maps/GoogleMapsWorker.ts",
             config: "vite.googleMapsWorker.config.mjs",
           },
