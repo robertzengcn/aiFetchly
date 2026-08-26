@@ -48,6 +48,7 @@ const SCOPE: WorkspaceMemoryScopeContext = {
   workspaceRoot: tmpDir,
   displayName: "Alpha",
   portableEnabled: true,
+  defaultStorageMode: "portable-local",
   importPolicy: "review-new",
 };
 
@@ -150,7 +151,9 @@ describe("PortableWorkspaceMemorySyncCoordinator", () => {
   it("imports a valid external record and marks new records pending-review under review-new", async () => {
     const summaries: unknown[] = [];
     const coordinator = makeCoordinator(SCOPE, summaries);
-    await coordinator.enqueueSnapshot(snapshotInput([recordDraft(VALID_CONTENT)]));
+    await coordinator.enqueueSnapshot(
+      snapshotInput([recordDraft(VALID_CONTENT)])
+    );
 
     const stateModel = new AIWorkspaceMemoryPortableStateModel(tmpDir);
     const state = await stateModel.getByScopeAndMemoryId(SCOPE.scopeId, DOC_ID);
@@ -179,7 +182,9 @@ describe("PortableWorkspaceMemorySyncCoordinator", () => {
 
   it("imports changed content on a known record without review (edit policy)", async () => {
     const coordinator = makeCoordinator(SCOPE);
-    await coordinator.enqueueSnapshot(snapshotInput([recordDraft(VALID_CONTENT)]));
+    await coordinator.enqueueSnapshot(
+      snapshotInput([recordDraft(VALID_CONTENT)])
+    );
     const changed = VALID_CONTENT.replace(
       "Markdown files are authoritative",
       "Updated content: files win"
@@ -215,7 +220,9 @@ describe("PortableWorkspaceMemorySyncCoordinator", () => {
       ...SCOPE,
       portableEnabled: false,
     });
-    await coordinator.enqueueSnapshot(snapshotInput([recordDraft(VALID_CONTENT)]));
+    await coordinator.enqueueSnapshot(
+      snapshotInput([recordDraft(VALID_CONTENT)])
+    );
     const memoryModel = new AIWorkspaceMemoryModel(tmpDir);
     expect(
       await memoryModel.getByScopeAndMemoryId(SCOPE.scopeId, DOC_ID)
@@ -227,7 +234,9 @@ describe("PortableWorkspaceMemorySyncCoordinator", () => {
       { ...SCOPE, importPolicy: "automatic" },
       []
     );
-    await coordinator.enqueueSnapshot(snapshotInput([recordDraft(VALID_CONTENT)]));
+    await coordinator.enqueueSnapshot(
+      snapshotInput([recordDraft(VALID_CONTENT)])
+    );
     // Next scan is INCOMPLETE and observes no files.
     await coordinator.enqueueSnapshot(
       snapshotInput([], { complete: false, seen: [] })
@@ -243,7 +252,9 @@ describe("PortableWorkspaceMemorySyncCoordinator", () => {
       { ...SCOPE, importPolicy: "automatic" },
       []
     );
-    await coordinator.enqueueSnapshot(snapshotInput([recordDraft(VALID_CONTENT)]));
+    await coordinator.enqueueSnapshot(
+      snapshotInput([recordDraft(VALID_CONTENT)])
+    );
     await coordinator.enqueueSnapshot(snapshotInput([], { complete: true }));
     const memoryModel = new AIWorkspaceMemoryModel(tmpDir);
     expect(
@@ -253,7 +264,9 @@ describe("PortableWorkspaceMemorySyncCoordinator", () => {
 
   it("marks records missing (not deleted) under review-new on a complete scan", async () => {
     const coordinator = makeCoordinator(SCOPE, []);
-    await coordinator.enqueueSnapshot(snapshotInput([recordDraft(VALID_CONTENT)]));
+    await coordinator.enqueueSnapshot(
+      snapshotInput([recordDraft(VALID_CONTENT)])
+    );
     await coordinator.enqueueSnapshot(snapshotInput([], { complete: true }));
     const memoryModel = new AIWorkspaceMemoryModel(tmpDir);
     expect(
@@ -266,7 +279,10 @@ describe("PortableWorkspaceMemorySyncCoordinator", () => {
 
   it("rejects invalid records while importing valid siblings", async () => {
     const summaries: unknown[] = [];
-    const coordinator = makeCoordinator({ ...SCOPE, importPolicy: "automatic" }, summaries);
+    const coordinator = makeCoordinator(
+      { ...SCOPE, importPolicy: "automatic" },
+      summaries
+    );
     const bad = recordDraft(
       VALID_CONTENT.replace("type: decision", "type: nonsense")
     );

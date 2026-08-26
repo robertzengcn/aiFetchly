@@ -1,8 +1,6 @@
 import { describe, expect, it, beforeEach, vi } from "vitest";
 import { SqliteDb } from "@/config/SqliteDb";
-import {
-  WorkspaceMemoryScopeModule,
-} from "@/modules/WorkspaceMemoryScopeModule";
+import { WorkspaceMemoryScopeModule } from "@/modules/WorkspaceMemoryScopeModule";
 import { AIWorkspaceMemoryModel } from "@/model/AIWorkspaceMemory.model";
 import { AIWorkspaceMemoryScopeModel } from "@/model/AIWorkspaceMemoryScope.model";
 import { AIWorkspaceMemoryScopePathModel } from "@/model/AIWorkspaceMemoryScopePath.model";
@@ -59,7 +57,7 @@ describe("WorkspaceMemoryScopeModule", () => {
     ).toBe("wscope-legacy-no-prefix");
   });
 
-  it("creates the legacy scope on first resolution with safe defaults", async () => {
+  it("creates the legacy scope on first resolution with portable-local defaults", async () => {
     const mod = makeModule();
     const ctx = await mod.resolveLegacyScope({
       workspaceKey: KEY_A,
@@ -67,7 +65,8 @@ describe("WorkspaceMemoryScopeModule", () => {
       displayName: "Alpha",
     });
     expect(ctx.scopeId).toBe(EXPECTED_SCOPE_A);
-    expect(ctx.portableEnabled).toBe(false);
+    expect(ctx.portableEnabled).toBe(true);
+    expect(ctx.defaultStorageMode).toBe("portable-local");
     expect(ctx.importPolicy).toBe("review-new");
     expect(ctx.workspaceKey).toBe(KEY_A);
     expect(ctx.workspaceRoot).toBe("/projects/alpha");
@@ -227,7 +226,10 @@ describe("WorkspaceMemoryScopeModule", () => {
   it("rejects policy updates for unknown scopes", async () => {
     const mod = makeModule();
     await expect(
-      mod.updatePolicy({ scopeId: "wscope-legacy-missing", portableEnabled: true })
+      mod.updatePolicy({
+        scopeId: "wscope-legacy-missing",
+        portableEnabled: true,
+      })
     ).rejects.toThrow(/not found/i);
   });
 
@@ -247,5 +249,44 @@ describe("WorkspaceMemoryScopeModule", () => {
     expect(updated.portableEnabled).toBe(true);
     expect(updated.defaultStorageMode).toBe("portable-local");
     expect(updated.importPolicy).toBe("automatic");
+  });
+
+  it("upgrades never-configured SQLite-only scopes to portable-local", async () => {
+    const scopeModel = new AIWorkspaceMemoryScopeModel(tmpDir);
+    await scopeModel.create({
+      scopeId: EXPECTED_SCOPE_A,
+      displayName: "Alpha",
+      portableEnabled: false,
+      defaultStorageMode: "private-only",
+      importPolicy: "review-new",
+    });
+    const mod = makeModule();
+    const ctx = await mod.resolveLegacyScope({
+      workspaceKey: KEY_A,
+      workspaceRoot: "/projects/alpha",
+      displayName: "Alpha",
+    });
+    expect(ctx.portableEnabled).toBe(true);
+    expect(ctx.defaultStorageMode).toBe("portable-local");
+  });
+
+  it("does not re-enable a scope the user explicitly disabled", async () => {
+    const mod = makeModule();
+    const created = await mod.resolveLegacyScope({
+      workspaceKey: KEY_A,
+      workspaceRoot: "/projects/alpha",
+      displayName: "Alpha",
+    });
+    await mod.updatePolicy({
+      scopeId: created.scopeId,
+      portableEnabled: false,
+    });
+    const again = await mod.resolveLegacyScope({
+      workspaceKey: KEY_A,
+      workspaceRoot: "/projects/alpha",
+      displayName: "Alpha",
+    });
+    expect(again.portableEnabled).toBe(false);
+    expect(again.defaultStorageMode).toBe("portable-local");
   });
 });

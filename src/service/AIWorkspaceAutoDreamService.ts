@@ -4,6 +4,7 @@ import type { WorkspaceMemoryScope } from "@/modules/AIWorkspaceMemoryModule";
 import { WorkspaceMemoryScopeModule } from "@/modules/WorkspaceMemoryScopeModule";
 import { PortableWorkspaceMemoryModule } from "@/modules/PortableWorkspaceMemoryModule";
 import type { WorkspaceMemoryScopeContext } from "@/entityTypes/portableWorkspaceMemoryTypes";
+import { PortableWorkspaceMemoryService } from "@/service/PortableWorkspaceMemoryService";
 import { AIWorkspaceMemoryConsolidationRunModule } from "@/modules/AIWorkspaceMemoryConsolidationRunModule";
 import {
   AIAutoDreamSourceCollector,
@@ -67,6 +68,7 @@ export class AIWorkspaceAutoDreamService {
   private readonly runModule = new AIWorkspaceMemoryConsolidationRunModule();
   private readonly scopeModule = new WorkspaceMemoryScopeModule();
   private readonly portableModule = new PortableWorkspaceMemoryModule();
+  private readonly portableMemory = new PortableWorkspaceMemoryService();
   private readonly sourceCollector = new AIAutoDreamSourceCollector();
   private readonly deps: AIWorkspaceAutoDreamServiceDeps;
   private inFlight: Promise<
@@ -102,11 +104,13 @@ export class AIWorkspaceAutoDreamService {
   async runNow(input?: {
     force?: boolean;
     reason?: string;
+    conversationId?: string;
   }): Promise<AIWorkspaceMemoryConsolidationRunView[]> {
     const force = input?.force === true;
     const result = await this.maybeRun({
       force,
       reason: input?.reason ?? "manual",
+      conversationId: input?.conversationId,
     });
     if (!result) {
       throw new Error("Workspace auto-dream run skipped");
@@ -131,6 +135,7 @@ export class AIWorkspaceAutoDreamService {
   private async maybeRun(input: {
     force?: boolean;
     reason: string;
+    conversationId?: string;
   }): Promise<AIWorkspaceMemoryConsolidationRunView[] | null> {
     if (this.inFlight) {
       return this.inFlight.then(() => null).catch(() => null);
@@ -145,6 +150,7 @@ export class AIWorkspaceAutoDreamService {
   private async executeRun(input: {
     force?: boolean;
     reason: string;
+    conversationId?: string;
   }): Promise<AIWorkspaceMemoryConsolidationRunView[] | null> {
     if (!this.deps.isAIEnabled()) return null;
     if (!(await this.deps.isAutoDreamEnabled()) && !input.force) return null;
@@ -163,9 +169,19 @@ export class AIWorkspaceAutoDreamService {
       }
     }
 
-    const collected = await this.sourceCollector.collect({ reviewedSince });
+    const collected = await this.sourceCollector.collect({
+      reviewedSince,
+      focusConversationId: input.conversationId,
+    });
     const groups = this.buildGroups(collected.packets);
-    if (groups.length === 0) return null;
+    if (groups.length === 0) {
+      log.info(
+        `[workspace-auto-dream] skipped: no workspace-bound sources (packets=${
+          collected.packets.length
+        } focus=${input.conversationId ?? "-"})`
+      );
+      return null;
+    }
 
     const results: AIWorkspaceMemoryConsolidationRunView[] = [];
     for (const group of groups) {
@@ -207,6 +223,7 @@ export class AIWorkspaceAutoDreamService {
       workspaceKey: group.workspaceKey,
       workspaceRoot: group.workspaceRoot,
     };
+    let scopeContext: WorkspaceMemoryScopeContext | null = null;
     // Portable-memory Phase A/F (design §19.5): resolve the internal scope so
     // writes land in the scope-keyed rows and legacy rows converge. Best
     // effort — a scope-table failure falls back to the legacy key path.
@@ -217,6 +234,7 @@ export class AIWorkspaceAutoDreamService {
           workspaceRoot: group.workspaceRoot,
           displayName: group.displayName,
         });
+      scopeContext = resolved;
       scope = {
         workspaceKey: resolved.workspaceKey,
         workspaceRoot: resolved.workspaceRoot,
@@ -316,69 +334,112 @@ export class AIWorkspaceAutoDreamService {
       }
 
       if (!parsed.ok) {
+        log.warn(
+          `[workspace-auto-dream] parse_error workspace=${
+            group.workspaceKey
+          } error=${parsed.error ?? "unknown"} rawChars=${raw.length}`
+        );
         await this.runModule.failRun(
           runView.runId,
           `parse_error: ${parsed.error ?? "unknown"}`
         );
         return await this.runModule.getByRunId(runView.runId);
       }
-
-      // Portable records are SKIPPED (design D-09 / §19.5): their files are
-      // authoritative, so a SQLite-only archive/update would be reverted by
-      // the next file scan. Filter them out before the atomic transaction.
-      let skippedPortable = 0;
-      const isPortable = async (memoryId: string): Promise<boolean> => {
-        if (!scope.scopeId) return false;
-        try {
-          const state = await this.portableModule.getPortableState(
-            {
-              scopeId: scope.scopeId,
-              workspaceKey: scope.workspaceKey,
-              workspaceRoot: scope.workspaceRoot,
-              displayName: group.displayName,
-              portableEnabled: false,
-              importPolicy: "review-new",
-            },
-            memoryId
-          );
-          return state !== null;
-        } catch {
-          return false;
-        }
-      };
-      const filteredArchive: typeof parsed.archive = [];
-      for (const a of parsed.archive) {
-        if (await isPortable(a.memoryId)) {
-          skippedPortable += 1;
-          continue;
-        }
-        filteredArchive.push(a);
-      }
-      const filteredUpdate: typeof parsed.update = [];
-      for (const u of parsed.update) {
-        if (await isPortable(u.memoryId)) {
-          skippedPortable += 1;
-          continue;
-        }
-        filteredUpdate.push(u);
-      }
-      if (skippedPortable > 0) {
+      if (
+        parsed.create.length === 0 &&
+        parsed.update.length === 0 &&
+        parsed.archive.length === 0
+      ) {
         log.info(
-          `[workspace-auto-dream] skipped ${skippedPortable} portable record edits (files are authoritative)`
+          `[workspace-auto-dream] empty plan workspace=${group.workspaceKey} rawChars=${raw.length}`
         );
       }
-      const filteredPlan = {
-        ...parsed,
-        archive: filteredArchive,
-        update: filteredUpdate,
-      };
+
+      // Portable records are SKIPPED on the SQLite path (design D-09 / §19.5)
+      // unless file-first mutations already handled them. Files remain
+      // authoritative; a SQLite-only archive/update would be reverted.
+      let planToApply = parsed;
+      let extraMemoriesCreated = 0;
+      let extraMemoriesUpdated = 0;
+      let extraMemoriesArchived = 0;
+      let fileMutationsApplied = false;
+
+      if (scopeContext?.portableEnabled) {
+        try {
+          const fileResult =
+            await this.portableMemory.applyAutoDreamFileMutations(
+              scopeContext,
+              parsed
+            );
+          planToApply = fileResult.sqlitePlan;
+          extraMemoriesCreated = fileResult.fileCreated;
+          extraMemoriesUpdated = fileResult.fileUpdated;
+          extraMemoriesArchived = fileResult.fileArchived;
+          fileMutationsApplied = true;
+        } catch (err) {
+          log.warn(
+            "[workspace-auto-dream] portable file write failed; sqlite fallback:",
+            err
+          );
+        }
+      }
+
+      if (!fileMutationsApplied) {
+        let skippedPortable = 0;
+        const isPortable = async (memoryId: string): Promise<boolean> => {
+          if (!scope.scopeId) return false;
+          try {
+            const state = await this.portableModule.getPortableState(
+              {
+                scopeId: scope.scopeId,
+                workspaceKey: scope.workspaceKey,
+                workspaceRoot: scope.workspaceRoot,
+                displayName: group.displayName,
+                portableEnabled: false,
+                defaultStorageMode: "private-only",
+                importPolicy: "review-new",
+              },
+              memoryId
+            );
+            return state !== null;
+          } catch {
+            return false;
+          }
+        };
+        const filteredArchive: typeof parsed.archive = [];
+        for (const a of parsed.archive) {
+          if (await isPortable(a.memoryId)) {
+            skippedPortable += 1;
+            continue;
+          }
+          filteredArchive.push(a);
+        }
+        const filteredUpdate: typeof parsed.update = [];
+        for (const u of parsed.update) {
+          if (await isPortable(u.memoryId)) {
+            skippedPortable += 1;
+            continue;
+          }
+          filteredUpdate.push(u);
+        }
+        if (skippedPortable > 0) {
+          log.info(
+            `[workspace-auto-dream] skipped ${skippedPortable} portable record edits (files are authoritative)`
+          );
+        }
+        planToApply = {
+          ...parsed,
+          archive: filteredArchive,
+          update: filteredUpdate,
+        };
+      }
 
       // Atomic apply: memory plan + run completion in one transaction
       // (tech-design §14.4, dev's transactional improvement).
       await this.memoryModule.applyPlanAndCompleteRun({
         scope,
         runId: runView.runId,
-        plan: filteredPlan,
+        plan: planToApply,
         chatConversationsReviewed: group.packets.filter(
           (p) => p.sourceKind === "chat_v2"
         ).length,
@@ -387,6 +448,9 @@ export class AIWorkspaceAutoDreamService {
         ).length,
         model: resp.model,
         reviewedThrough: groupReviewedThrough,
+        extraMemoriesCreated,
+        extraMemoriesUpdated,
+        extraMemoriesArchived,
       });
 
       return await this.runModule.getByRunId(runView.runId);

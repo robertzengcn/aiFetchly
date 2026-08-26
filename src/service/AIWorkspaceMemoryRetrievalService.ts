@@ -3,6 +3,7 @@ import type { WorkspaceMemoryScope } from "@/modules/AIWorkspaceMemoryModule";
 import { PortableWorkspaceMemoryModule } from "@/modules/PortableWorkspaceMemoryModule";
 import { WorkspaceMemoryContextResolver } from "@/service/WorkspaceMemoryContextResolver";
 import { AIChatTokenEstimator } from "@/service/AIChatTokenEstimator";
+import { log } from "@/modules/Logger";
 import type {
   AIWorkspaceMemoryView,
   AIWorkspaceMemoryInjectionResult,
@@ -83,10 +84,7 @@ export class AIWorkspaceMemoryRetrievalService {
       ...(ctx.scopeId ? { scopeId: ctx.scopeId } : {}),
     };
 
-    let pool = await this.memory.listActiveForRetrieval(
-      scope,
-      CANDIDATE_LIMIT
-    );
+    let pool = await this.memory.listActiveForRetrieval(scope, CANDIDATE_LIMIT);
     // Portable fail-closed filter: rejected, conflicted, missing, and
     // pending-review records are excluded even though their last valid
     // projection exists (design §14.4 recommendation / FR-052).
@@ -98,13 +96,14 @@ export class AIWorkspaceMemoryRetrievalService {
           workspaceRoot: ctx.workspaceRoot,
           displayName: ctx.displayName,
           portableEnabled: false,
+          defaultStorageMode: "private-only",
           importPolicy: "review-new",
         });
         if (excluded.size > 0) {
           pool = pool.filter((m) => !excluded.has(m.memoryId));
         }
       } catch (err) {
-        console.error(
+        log.error(
           "[workspace-memory] portable exclusion check failed:",
           err
         );

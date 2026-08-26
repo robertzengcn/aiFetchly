@@ -33,11 +33,11 @@ export class AIWorkspaceMemoryScopeEntity extends AuditableEntity {
   displayName!: string;
 
   /** Whether portable file storage is enabled for this scope. */
-  @Column("boolean", { default: false })
+  @Column("boolean", { default: true })
   portableEnabled!: boolean;
 
   /** Default storage mode for new memories (PRD §14.1). */
-  @Column("varchar", { length: 30, default: "private-only" })
+  @Column("varchar", { length: 30, default: "portable-local" })
   defaultStorageMode!: string;
 
   /** External-change review policy (PRD §16.4). */

@@ -1,12 +1,13 @@
 import { describe, expect, it, beforeEach, vi } from "vitest";
 import { SqliteDb } from "@/config/SqliteDb";
-import {
-  PortableWorkspaceMemorySyncCoordinator,
-} from "@/service/PortableWorkspaceMemorySyncCoordinator";
+import { PortableWorkspaceMemorySyncCoordinator } from "@/service/PortableWorkspaceMemorySyncCoordinator";
 import { PortableWorkspaceMemoryFormat } from "@/service/PortableWorkspaceMemoryFormat";
 import { PortableWorkspaceMemoryFileStore } from "@/service/PortableWorkspaceMemoryFileStore";
 import type { WorkspaceMemoryScopeResolver } from "@/service/WorkspaceMemoryScopeResolver";
-import type { WorkspaceMemoryScopeContext, PortableMemoryDocumentV1 } from "@/entityTypes/portableWorkspaceMemoryTypes";
+import type {
+  WorkspaceMemoryScopeContext,
+  PortableMemoryDocumentV1,
+} from "@/entityTypes/portableWorkspaceMemoryTypes";
 import { AIWorkspaceMemoryModel } from "@/model/AIWorkspaceMemory.model";
 import { AIWorkspaceMemoryPortableStateModel } from "@/model/AIWorkspaceMemoryPortableState.model";
 import path from "node:path";
@@ -18,13 +19,19 @@ const tmpDir = path.join(os.tmpdir(), "aifetchly-portable-conflict");
 beforeEach(() => {
   if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
   for (const f of fs.readdirSync(tmpDir)) {
-    try { fs.unlinkSync(path.join(tmpDir, f)); } catch { /* ignore */ }
+    try {
+      fs.unlinkSync(path.join(tmpDir, f));
+    } catch {
+      /* ignore */
+    }
   }
   // Clean any memory dir from prior runs.
   const memDir = path.join(tmpDir, ".aifetchly", "memory");
-  if (fs.existsSync(memDir)) fs.rmSync(memDir, { recursive: true, force: true });
+  if (fs.existsSync(memDir))
+    fs.rmSync(memDir, { recursive: true, force: true });
   (SqliteDb as unknown as { instance: unknown }).instance = null;
-  (SqliteDb as unknown as { currentDbPath: string | null }).currentDbPath = null;
+  (SqliteDb as unknown as { currentDbPath: string | null }).currentDbPath =
+    null;
   (SqliteDb as unknown as { initPromise: unknown }).initPromise = null;
   process.env.AIFETCHLY_TEST_DBPATH = tmpDir;
 });
@@ -44,6 +51,7 @@ const SCOPE: WorkspaceMemoryScopeContext = {
   workspaceRoot: tmpDir,
   displayName: "Alpha",
   portableEnabled: true,
+  defaultStorageMode: "portable-local",
   importPolicy: "automatic",
 };
 
@@ -54,7 +62,10 @@ function makeScopeResolver(scope = SCOPE): WorkspaceMemoryScopeResolver {
   } as unknown as WorkspaceMemoryScopeResolver;
 }
 
-function makeDocument(title: string, content: string): PortableMemoryDocumentV1 {
+function makeDocument(
+  title: string,
+  content: string
+): PortableMemoryDocumentV1 {
   return new PortableWorkspaceMemoryFormat().buildDocument({
     id: DOC_ID,
     type: "decision",
@@ -70,7 +81,8 @@ function makeDocument(title: string, content: string): PortableMemoryDocumentV1 
 }
 
 function makeCoordinator() {
-  const summaries: import("@/entityTypes/portableWorkspaceMemoryTypes").PortableMemorySyncSummary[] = [];
+  const summaries: import("@/entityTypes/portableWorkspaceMemoryTypes").PortableMemorySyncSummary[] =
+    [];
   const coordinator = new PortableWorkspaceMemorySyncCoordinator({
     scopeResolver: makeScopeResolver(),
     emitter: (s) => summaries.push(s),
@@ -85,11 +97,17 @@ describe("PortableWorkspaceMemorySyncCoordinator conflict detection (FR-029/AC-0
     const store = new PortableWorkspaceMemoryFileStore(tmpDir);
     // Write an initial file (simulating the last-known state).
     const doc1 = makeDocument("First", "Original content.");
-    const written1 = await store.writeRecord(DOC_ID, new PortableWorkspaceMemoryFormat().serialize(doc1));
+    const written1 = await store.writeRecord(
+      DOC_ID,
+      new PortableWorkspaceMemoryFormat().serialize(doc1)
+    );
 
     // External edit happens between read and write.
     const external = makeDocument("External", "Edited by another agent.");
-    await store.writeRecord(DOC_ID, new PortableWorkspaceMemoryFormat().serialize(external));
+    await store.writeRecord(
+      DOC_ID,
+      new PortableWorkspaceMemoryFormat().serialize(external)
+    );
 
     const result = await coordinator.applyAppWrite(SCOPE, doc1, {
       expectedHash: written1.contentHash,
@@ -115,11 +133,18 @@ describe("PortableWorkspaceMemorySyncCoordinator conflict detection (FR-029/AC-0
     const { coordinator, summaries } = makeCoordinator();
     const store = new PortableWorkspaceMemoryFileStore(tmpDir);
     const doc1 = makeDocument("First", "Original content.");
-    const written1 = await store.writeRecord(DOC_ID, new PortableWorkspaceMemoryFormat().serialize(doc1));
+    const written1 = await store.writeRecord(
+      DOC_ID,
+      new PortableWorkspaceMemoryFormat().serialize(doc1)
+    );
 
-    const result = await coordinator.applyAppWrite(SCOPE, makeDocument("Second", "App update."), {
-      expectedHash: written1.contentHash,
-    });
+    const result = await coordinator.applyAppWrite(
+      SCOPE,
+      makeDocument("Second", "App update."),
+      {
+        expectedHash: written1.contentHash,
+      }
+    );
     expect(result.conflicted).toBe(false);
 
     const after = await store.readRecord(DOC_ID);
@@ -132,8 +157,14 @@ describe("PortableWorkspaceMemorySyncCoordinator conflict detection (FR-029/AC-0
     const store = new PortableWorkspaceMemoryFileStore(tmpDir);
     // Pre-existing file with different content — but no expectedHash means no
     // guard (the caller did not read first).
-    await store.writeRecord(DOC_ID, new PortableWorkspaceMemoryFormat().serialize(makeDocument("Pre", "pre.")));
-    const result = await coordinator.applyAppWrite(SCOPE, makeDocument("New", "new."));
+    await store.writeRecord(
+      DOC_ID,
+      new PortableWorkspaceMemoryFormat().serialize(makeDocument("Pre", "pre."))
+    );
+    const result = await coordinator.applyAppWrite(
+      SCOPE,
+      makeDocument("New", "new.")
+    );
     expect(result.conflicted).toBe(false);
     expect(summaries).toHaveLength(0);
     const after = await store.readRecord(DOC_ID);
@@ -144,9 +175,19 @@ describe("PortableWorkspaceMemorySyncCoordinator conflict detection (FR-029/AC-0
     const { coordinator } = makeCoordinator();
     const store = new PortableWorkspaceMemoryFileStore(tmpDir);
     const doc1 = makeDocument("First", "Original content.");
-    const written1 = await store.writeRecord(DOC_ID, new PortableWorkspaceMemoryFormat().serialize(doc1));
-    await store.writeRecord(DOC_ID, new PortableWorkspaceMemoryFormat().serialize(makeDocument("External", "external.")));
-    await coordinator.applyAppWrite(SCOPE, doc1, { expectedHash: written1.contentHash });
+    const written1 = await store.writeRecord(
+      DOC_ID,
+      new PortableWorkspaceMemoryFormat().serialize(doc1)
+    );
+    await store.writeRecord(
+      DOC_ID,
+      new PortableWorkspaceMemoryFormat().serialize(
+        makeDocument("External", "external.")
+      )
+    );
+    await coordinator.applyAppWrite(SCOPE, doc1, {
+      expectedHash: written1.contentHash,
+    });
 
     const memoryModel = new AIWorkspaceMemoryModel(tmpDir);
     // Seed a memory projection row so listConflicts has context.
@@ -163,7 +204,9 @@ describe("PortableWorkspaceMemorySyncCoordinator conflict detection (FR-029/AC-0
     });
 
     // listConflicts lives on the module; test via the portable module.
-    const { PortableWorkspaceMemoryModule } = await import("@/modules/PortableWorkspaceMemoryModule");
+    const { PortableWorkspaceMemoryModule } = await import(
+      "@/modules/PortableWorkspaceMemoryModule"
+    );
     const mod = new PortableWorkspaceMemoryModule();
     const conflicts = await mod.listConflicts(SCOPE);
     expect(conflicts.length).toBe(1);

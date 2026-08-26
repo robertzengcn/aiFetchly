@@ -1,8 +1,8 @@
 import { describe, expect, it, beforeEach, vi } from "vitest";
 
-// Auto-dream portable-safety harness (design D-09 / §19.5): the service must
-// resolve the internal memory scope for its groups and SKIP archive/update
-// for records that have portable state — their files are authoritative.
+// Auto-dream portable writes: when portable is enabled, creates and edits
+// of portable records go file-first. The SQLite plan must not archive/update
+// those records (files are authoritative).
 const completeLightweight = vi.fn();
 const startRun = vi.fn();
 const completeRun = vi.fn();
@@ -75,6 +75,15 @@ vi.mock("@/modules/token", () => ({
   Token: vi.fn().mockImplementation(() => ({ getValue: vi.fn() })),
 }));
 
+const { applyAutoDreamFileMutations } = vi.hoisted(() => ({
+  applyAutoDreamFileMutations: vi.fn(),
+}));
+vi.mock("@/service/PortableWorkspaceMemoryService", () => ({
+  PortableWorkspaceMemoryService: vi.fn().mockImplementation(() => ({
+    applyAutoDreamFileMutations,
+  })),
+}));
+
 import { AIWorkspaceAutoDreamService } from "@/service/AIWorkspaceAutoDreamService";
 
 const WS = "ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -89,7 +98,11 @@ function pkt(id: string) {
     updatedAt: iso(now()),
     title: "t",
     messages: [
-      { id: "m0", role: "user" as const, content: "remember the deploy command" },
+      {
+        id: "m0",
+        role: "user" as const,
+        content: "remember the deploy command",
+      },
       { id: "m1", role: "assistant" as const, content: "yarn deploy" },
     ],
     workspace: {
@@ -166,27 +179,46 @@ describe("AIWorkspaceAutoDreamService — portable safety (D-09)", () => {
       workspaceRoot: "/p/a",
       displayName: "a",
       portableEnabled: true,
+      defaultStorageMode: "portable-local",
       importPolicy: "review-new",
     });
     getPortableState.mockResolvedValue(null);
     applyPlanAndCompleteRun.mockResolvedValue(undefined);
+    applyAutoDreamFileMutations.mockImplementation(
+      async (
+        _scope: unknown,
+        plan: {
+          ok: boolean;
+          create: unknown[];
+          update: unknown[];
+          archive: unknown[];
+        }
+      ) => ({
+        sqlitePlan: plan,
+        fileCreated: 0,
+        fileUpdated: 0,
+        fileArchived: 0,
+      })
+    );
   });
 
   it("skips archive and update for records with portable state", async () => {
     completeLightweight.mockResolvedValue({
       response: {
         choices: [
-        {
-          message: {
-            content: modelOutput({
-              archive: [{ memoryId: "wmem-018f2f70-7d3d-7cc0-a07f-1d36e59c2ef1" }],
-              update: [
-                { memoryId: "wmem-018f2f94-83c7-7a2e-9fc1-849880ba10c0" },
-              ],
-            }),
+          {
+            message: {
+              content: modelOutput({
+                archive: [
+                  { memoryId: "wmem-018f2f70-7d3d-7cc0-a07f-1d36e59c2ef1" },
+                ],
+                update: [
+                  { memoryId: "wmem-018f2f94-83c7-7a2e-9fc1-849880ba10c0" },
+                ],
+              }),
+            },
           },
-        },
-      ],
+        ],
       },
       resolvedModel: "test-model",
     });
@@ -200,10 +232,27 @@ describe("AIWorkspaceAutoDreamService — portable safety (D-09)", () => {
       lastValidHash: "a".repeat(64),
       visibility: "local",
     });
+    applyAutoDreamFileMutations.mockImplementation(
+      async (
+        _scope: unknown,
+        plan: {
+          ok: boolean;
+          create: unknown[];
+          update: unknown[];
+          archive: unknown[];
+        }
+      ) => ({
+        sqlitePlan: { ...plan, create: [], update: [], archive: [] },
+        fileCreated: 0,
+        fileUpdated: plan.update.length,
+        fileArchived: plan.archive.length,
+      })
+    );
 
     await svc().runNow({ force: true, reason: "test" });
 
-    // Portable records are filtered out before applyPlanAndCompleteRun.
+    // Portable records are applied file-first and stripped from the SQLite plan.
+    expect(applyAutoDreamFileMutations).toHaveBeenCalledTimes(1);
     expect(applyPlanAndCompleteRun).toHaveBeenCalledTimes(1);
     const planArg = applyPlanAndCompleteRun.mock.calls[0][0].plan;
     expect(planArg.archive).toHaveLength(0);
@@ -214,9 +263,7 @@ describe("AIWorkspaceAutoDreamService — portable safety (D-09)", () => {
   it("resolves the internal scope id before applying writes", async () => {
     completeLightweight.mockResolvedValue({
       response: {
-        choices: [
-          { message: { content: modelOutput({ create: [] }) } },
-        ],
+        choices: [{ message: { content: modelOutput({ create: [] }) } }],
       },
       resolvedModel: "test-model",
     });
@@ -233,14 +280,16 @@ describe("AIWorkspaceAutoDreamService — portable safety (D-09)", () => {
     completeLightweight.mockResolvedValue({
       response: {
         choices: [
-        {
-          message: {
-            content: modelOutput({
-              archive: [{ memoryId: "wmem-018f2f70-7d3d-7cc0-a07f-1d36e59c2ef1" }],
-            }),
+          {
+            message: {
+              content: modelOutput({
+                archive: [
+                  { memoryId: "wmem-018f2f70-7d3d-7cc0-a07f-1d36e59c2ef1" },
+                ],
+              }),
+            },
           },
-        },
-      ],
+        ],
       },
       resolvedModel: "test-model",
     });
@@ -262,14 +311,16 @@ describe("AIWorkspaceAutoDreamService — portable safety (D-09)", () => {
     completeLightweight.mockResolvedValue({
       response: {
         choices: [
-        {
-          message: {
-            content: modelOutput({
-              archive: [{ memoryId: "wmem-018f2f70-7d3d-7cc0-a07f-1d36e59c2ef1" }],
-            }),
+          {
+            message: {
+              content: modelOutput({
+                archive: [
+                  { memoryId: "wmem-018f2f70-7d3d-7cc0-a07f-1d36e59c2ef1" },
+                ],
+              }),
+            },
           },
-        },
-      ],
+        ],
       },
       resolvedModel: "test-model",
     });

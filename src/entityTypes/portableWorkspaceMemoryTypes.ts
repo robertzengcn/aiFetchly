@@ -217,6 +217,13 @@ export type PortableMemoryDefaultStorageMode =
   | "portable-team"
   | "ask-each-time";
 
+/** New workspaces enable portable file storage unless the user disables it. */
+export const PORTABLE_MEMORY_DEFAULT_ENABLED = true;
+
+/** New memories write `.aifetchly/memory` files that stay local (not git/team). */
+export const PORTABLE_MEMORY_DEFAULT_STORAGE_MODE: PortableMemoryDefaultStorageMode =
+  "portable-local";
+
 export const PORTABLE_MEMORY_SYNC_STATES: readonly PortableMemorySyncState[] = [
   "private",
   "synced",
@@ -435,5 +442,6 @@ export interface WorkspaceMemoryScopeContext {
   readonly displayName: string;
   readonly portableWorkspaceId?: string;
   readonly portableEnabled: boolean;
+  readonly defaultStorageMode: PortableMemoryDefaultStorageMode;
   readonly importPolicy: PortableMemoryImportPolicy;
 }

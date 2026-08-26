@@ -2,16 +2,10 @@ import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
-import {
-  PortableWorkspaceMemoryFileStore,
-} from "@/service/PortableWorkspaceMemoryFileStore";
+import { PortableWorkspaceMemoryFileStore } from "@/service/PortableWorkspaceMemoryFileStore";
 import { PortableWorkspaceMemoryFormat } from "@/service/PortableWorkspaceMemoryFormat";
-import {
-  PortableWorkspaceMemoryModule,
-} from "@/modules/PortableWorkspaceMemoryModule";
-import {
-  PortableWorkspaceMemorySyncCoordinator,
-} from "@/service/PortableWorkspaceMemorySyncCoordinator";
+import { PortableWorkspaceMemoryModule } from "@/modules/PortableWorkspaceMemoryModule";
+import { PortableWorkspaceMemorySyncCoordinator } from "@/service/PortableWorkspaceMemorySyncCoordinator";
 import type { WorkspaceMemoryScopeContext } from "@/entityTypes/portableWorkspaceMemoryTypes";
 import { SqliteDb } from "@/config/SqliteDb";
 
@@ -22,7 +16,8 @@ beforeEach(() => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), "portable-fault-"));
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "portable-fault-db-"));
   (SqliteDb as unknown as { instance: unknown }).instance = null;
-  (SqliteDb as unknown as { currentDbPath: string | null }).currentDbPath = null;
+  (SqliteDb as unknown as { currentDbPath: string | null }).currentDbPath =
+    null;
   (SqliteDb as unknown as { initPromise: unknown }).initPromise = null;
   process.env.AIFETCHLY_TEST_DBPATH = tmpDir;
 });
@@ -49,6 +44,7 @@ function scope(): WorkspaceMemoryScopeContext {
     workspaceRoot: root,
     displayName: "Alpha",
     portableEnabled: true,
+    defaultStorageMode: "portable-local",
     importPolicy: "automatic",
   };
 }
@@ -98,7 +94,12 @@ describe("Fault-injection: atomic-write recovery (AC-006)", () => {
     await store.ensureMemoryDir();
     const dir = store.memoryDir();
     // Seed a record + a stale temp file.
-    await store.writeRecord(DOC_ID, new PortableWorkspaceMemoryFormat().serialize(makeDocument("Keep", "keep me")));
+    await store.writeRecord(
+      DOC_ID,
+      new PortableWorkspaceMemoryFormat().serialize(
+        makeDocument("Keep", "keep me")
+      )
+    );
     const staleTemp = path.join(dir, "record.md.12345-678.tmp");
     fs.writeFileSync(staleTemp, "stale");
     const old = new Date(Date.now() - 25 * 60 * 60 * 1000);
@@ -145,9 +146,9 @@ describe("Fault-injection: DB failure after file write (AC-009)", () => {
       logger: () => undefined,
     });
 
-    await expect(
-      coordinator.applyAppWrite(scope(), doc)
-    ).rejects.toThrow(/simulated DB failure/);
+    await expect(coordinator.applyAppWrite(scope(), doc)).rejects.toThrow(
+      /simulated DB failure/
+    );
 
     // AC-009: the file remains on disk as the authoritative record — the next
     // reconciliation can rebuild the projection from it.
@@ -194,7 +195,10 @@ describe("Fault-injection: specific fault points (AC-006)", () => {
 
     // Simulate a truncated write (crash mid-rename leaves a partial file).
     const recordPath = path.join(store.memoryDir(), `${DOC_ID}.md`);
-    fs.writeFileSync(recordPath, "---\nschema: aifetchly.memory/v1\nid: " + DOC_ID + "\ntype: decis"); // truncated
+    fs.writeFileSync(
+      recordPath,
+      "---\nschema: aifetchly.memory/v1\nid: " + DOC_ID + "\ntype: decis"
+    ); // truncated
 
     // The read returns whatever is on disk (it's not the store's job to validate);
     // but the coordinator's parseDraft would reject it. Verify the file is NOT

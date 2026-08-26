@@ -56,6 +56,7 @@ const SCOPE: WorkspaceMemoryScopeContext = {
   workspaceRoot: tmpDir,
   displayName: "Alpha",
   portableEnabled: true,
+  defaultStorageMode: "portable-local",
   importPolicy: "automatic",
 };
 

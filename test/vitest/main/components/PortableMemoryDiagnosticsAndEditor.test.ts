@@ -131,7 +131,9 @@ describe("PortableMemoryDiagnosticsDialog", () => {
     const wrapper = mountDiagnostics({});
     await flushPromises();
     vi.mocked(portableWorkspaceMemoryApi.diagnostics).mockClear();
-    const rescanBtn = wrapper.findAll("button").find((b) => b.text() === "Rescan");
+    const rescanBtn = wrapper
+      .findAll("button")
+      .find((b) => b.text() === "Rescan");
     await rescanBtn?.trigger("click");
     await flushPromises();
     expect(portableWorkspaceMemoryApi.rescan).toHaveBeenCalledWith("conv-1");
@@ -178,6 +180,24 @@ describe("WorkspaceMemoryEditorDialog — expectedHash + storage (FR-038)", () =
       expectedHash?: string;
     };
     expect(result.expectedHash).toBeUndefined();
+  });
+
+  it("emits portable-local storageMode by default when allowStorageChoice is true", async () => {
+    const wrapper = mountEditor({ allowStorageChoice: true });
+    const vm = wrapper.vm as unknown as {
+      form: { storageMode: string; visibility: string };
+      onSave: () => void;
+    };
+    expect(vm.form.storageMode).toBe("portable-local");
+    expect(vm.form.visibility).toBe("local");
+    vm.onSave();
+    await flushPromises();
+    const result = wrapper.emitted("save")?.[0]?.[0] as {
+      visibility?: string;
+      storageMode?: string;
+    };
+    expect(result.storageMode).toBe("portable-local");
+    expect(result.visibility).toBe("local");
   });
 
   it("emits visibility and storageMode when allowStorageChoice is true", async () => {

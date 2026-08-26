@@ -145,7 +145,7 @@ const form = reactive<FormState>({
   confidence: 90,
   status: "active",
   visibility: "local",
-  storageMode: "private",
+  storageMode: "portable-local",
 });
 
 const isEdit = computed(() => !!props.memory);
@@ -165,7 +165,7 @@ function resetFromMemory(): void {
     form.confidence = 90;
     form.status = "active";
     form.visibility = "local";
-    form.storageMode = "private";
+    form.storageMode = "portable-local";
   }
 }
 

@@ -339,6 +339,7 @@ import type {
   AIWorkspaceMemoryView,
   AIWorkspaceMemoryType,
   AIWorkspaceMemoryStatus,
+  AIWorkspaceMemoryConsolidationRunView,
 } from "@/entityTypes/aiWorkspaceMemoryTypes";
 import { workspaceMemoryApi } from "@/views/api/aiWorkspaceMemory";
 import { portableWorkspaceMemoryApi } from "@/views/api/portableWorkspaceMemory";
@@ -674,7 +675,18 @@ async function onRunAutoDream(): Promise<void> {
       force: true,
     });
     if (resp.status) {
-      // Success feedback is the refreshed list + status badge; no snackbar.
+      const runs = Array.isArray(resp.data)
+        ? (resp.data as AIWorkspaceMemoryConsolidationRunView[])
+        : [];
+      const failed = runs.filter((r) => r.status === "failed");
+      if (failed.length > 0 && failed.length === runs.length) {
+        notify(
+          failed[0]?.errorMessage ||
+            t("workspaceMemory.autoDreamFailed") ||
+            "Last auto-dream run failed.",
+          "error"
+        );
+      }
       await refresh();
       emit("change");
     } else {

@@ -259,6 +259,9 @@ export class AIWorkspaceMemoryModule extends BaseModule {
     agentTasksReviewed: number;
     model?: string;
     reviewedThrough?: Date | null;
+    extraMemoriesCreated?: number;
+    extraMemoriesUpdated?: number;
+    extraMemoriesArchived?: number;
   }): Promise<void> {
     await this.ensureConnection();
     const { workspaceKey, workspaceRoot } = input.scope;
@@ -280,6 +283,7 @@ export class AIWorkspaceMemoryModule extends BaseModule {
           e.memoryId = `wmem-${randomUUID()}`;
           e.workspaceKey = workspaceKey;
           e.workspaceRoot = workspaceRoot;
+          if (input.scope.scopeId) e.scopeId = input.scope.scopeId;
           e.type = c.type;
           e.title = c.title;
           e.content = c.content;
@@ -295,6 +299,9 @@ export class AIWorkspaceMemoryModule extends BaseModule {
         },
         archiveWhere: (memoryId) => ({ workspaceKey, memoryId }),
         updateWhere: (memoryId) => ({ workspaceKey, memoryId }),
+        extraMemoriesCreated: input.extraMemoriesCreated,
+        extraMemoriesUpdated: input.extraMemoriesUpdated,
+        extraMemoriesArchived: input.extraMemoriesArchived,
       });
     });
   }

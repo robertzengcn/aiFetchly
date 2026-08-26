@@ -138,6 +138,10 @@ export async function applyConsolidationPlanInTransaction<
   ) => MemoryEntity;
   readonly archiveWhere: (memoryId: string) => Record<string, unknown>;
   readonly updateWhere: (memoryId: string) => Record<string, unknown>;
+  /** Counts from file-first portable writes applied outside this transaction. */
+  readonly extraMemoriesCreated?: number;
+  readonly extraMemoriesUpdated?: number;
+  readonly extraMemoriesArchived?: number;
 }): Promise<void> {
   const memoryRepo: Repository<MemoryEntity> = input.manager.getRepository(
     input.memoryEntity
@@ -186,9 +190,12 @@ export async function applyConsolidationPlanInTransaction<
     finishedAt: new Date(),
     chatConversationsReviewed: input.completion.chatConversationsReviewed,
     agentTasksReviewed: input.completion.agentTasksReviewed,
-    memoriesCreated: input.plan.create.length,
-    memoriesUpdated: input.plan.update.length,
-    memoriesArchived: input.plan.archive.length,
+    memoriesCreated:
+      input.plan.create.length + (input.extraMemoriesCreated ?? 0),
+    memoriesUpdated:
+      input.plan.update.length + (input.extraMemoriesUpdated ?? 0),
+    memoriesArchived:
+      input.plan.archive.length + (input.extraMemoriesArchived ?? 0),
     model: input.completion.model ?? null,
     errorMessage: null,
     ...(input.completion.reviewedThrough !== undefined

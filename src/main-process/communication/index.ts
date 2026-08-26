@@ -57,6 +57,8 @@ import { registerHooksIpcHandlers } from "@/main-process/communication/hooks-ipc
 import { registerSlashCommandHandlers } from "@/main-process/communication/slash-command-ipc";
 import { registerWorkspaceWatchHandlers } from "@/main-process/communication/workspace-watch-ipc";
 import { initWorkspaceWatchManager } from "@/service/workspaceWatch/WorkspaceWatchManagerSingleton";
+import { setApprovedWorkspaceAcquireHook } from "@/modules/WorkspaceWatchModule";
+import { ensurePortableMemoryDefault } from "@/service/PortableWorkspaceMemoryBootstrap";
 import { registerAboutIpcHandlers } from "@/main-process/communication/about-ipc";
 
 type GlobalIpcState = typeof globalThis & {
@@ -142,6 +144,13 @@ export function registerCommunicationIpcHandlers(
     registerHooksIpcHandlers();
     registerSlashCommandHandlers(win);
     const workspaceWatchManager = initWorkspaceWatchManager(win);
+    setApprovedWorkspaceAcquireHook((workspaceRoot) => {
+      void ensurePortableMemoryDefault({ workspaceRoot }).catch(
+        (err: unknown) => {
+          log.warn("[portable-memory] default layout bootstrap failed:", err);
+        }
+      );
+    });
     registerWorkspaceWatchHandlers(win, workspaceWatchManager);
     registerAboutIpcHandlers(getWin);
     AsyncMsg();

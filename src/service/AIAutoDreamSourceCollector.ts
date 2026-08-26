@@ -7,6 +7,7 @@ import type {
   AgentToolCallRecord,
 } from "@/entityTypes/agentTypes";
 import type { AgentTaskEntity } from "@/entity/AgentTask.entity";
+import type { ChatV2ConversationSummary } from "@/entityTypes/aiChatV2Types";
 import { WorkspaceResolver } from "@/service/WorkspaceResolver";
 import { maxPacketUpdatedAt } from "@/service/AIChatPromptBudget";
 
@@ -52,6 +53,17 @@ export interface WorkspaceAwareAutoDreamSourcePacket
   };
 }
 
+export interface CollectSourcesInput {
+  reviewedSince: Date | null;
+  /**
+   * Manual "Run Auto Summary" from a conversation's workspace panel.
+   * Always includes this conversation and restricts chat packets to the
+   * same resolved workspace so the newest chat is not dropped by the
+   * oldest-first batch cap.
+   */
+  focusConversationId?: string;
+}
+
 export interface CollectSourcesResult {
   packets: WorkspaceAwareAutoDreamSourcePacket[];
   chatConversationCount: number;
@@ -64,9 +76,7 @@ export class AIAutoDreamSourceCollector {
   private readonly agentModule = new AgentTaskModule();
   private readonly workspaceResolver = new WorkspaceResolver();
 
-  async collect(input: {
-    reviewedSince: Date | null;
-  }): Promise<CollectSourcesResult> {
+  async collect(input: CollectSourcesInput): Promise<CollectSourcesResult> {
     const packets: WorkspaceAwareAutoDreamSourcePacket[] = [];
 
     const conversations = await this.chatModule.getConversations();
@@ -81,10 +91,15 @@ export class AIAutoDreamSourceCollector {
       })
       .sort((a, b) =>
         compareAscending(a.lastMessageTimestamp, b.lastMessageTimestamp)
-      )
-      .slice(0, MAX_CHAT_CONVERSATIONS);
+      );
 
-    for (const c of filteredChat) {
+    const selectedChat = await this.selectChatConversations(
+      filteredChat,
+      conversations,
+      input.focusConversationId
+    );
+
+    for (const c of selectedChat) {
       const convId = c.conversationId;
       if (!convId) continue;
       const rows: AIChatMessageEntity[] =
@@ -170,10 +185,60 @@ export class AIAutoDreamSourceCollector {
     const reviewedThrough = maxPacketUpdatedAt(packets);
     return {
       packets,
-      chatConversationCount: filteredChat.length,
+      chatConversationCount: selectedChat.length,
       agentTaskCount: agentTasks.length,
       reviewedThrough,
     };
+  }
+
+  /**
+   * Background batches take the oldest `MAX_CHAT_CONVERSATIONS` eligible
+   * chats. A panel run passes `focusConversationId` so the open conversation
+   * (almost always the newest) is never sliced off, and sibling chats from
+   * other workspaces are not summarized into a different panel.
+   */
+  private async selectChatConversations(
+    eligible: ChatV2ConversationSummary[],
+    all: ChatV2ConversationSummary[],
+    focusConversationId: string | undefined
+  ): Promise<ChatV2ConversationSummary[]> {
+    const focusId = focusConversationId?.trim();
+    if (!focusId) {
+      return eligible.slice(0, MAX_CHAT_CONVERSATIONS);
+    }
+
+    const focusConv =
+      eligible.find((c) => c.conversationId === focusId) ??
+      all.find((c) => c.conversationId === focusId) ??
+      syntheticFocusSummary(focusId);
+
+    let focusKey: string | undefined;
+    try {
+      const resolved = await this.workspaceResolver.resolveWithKey(focusId);
+      focusKey = resolved?.workspaceKey;
+    } catch {
+      focusKey = undefined;
+    }
+    if (!focusKey) {
+      return [focusConv];
+    }
+
+    const others: ChatV2ConversationSummary[] = [];
+    for (const c of eligible) {
+      if (c.conversationId === focusId) continue;
+      if (others.length >= MAX_CHAT_CONVERSATIONS - 1) break;
+      try {
+        const resolved = await this.workspaceResolver.resolveWithKey(
+          c.conversationId
+        );
+        if (resolved?.workspaceKey === focusKey) {
+          others.push(c);
+        }
+      } catch {
+        // Skip conversations whose workspace cannot be resolved.
+      }
+    }
+    return [...others, focusConv];
   }
 }
 
@@ -198,6 +263,20 @@ export function groupByWorkspace(
     }
   }
   return groups;
+}
+
+function syntheticFocusSummary(
+  conversationId: string
+): ChatV2ConversationSummary {
+  const ts = toIsoNow();
+  return {
+    conversationId,
+    title: conversationId,
+    lastMessage: "",
+    lastMessageTimestamp: ts,
+    messageCount: 0,
+    createdAt: ts,
+  };
 }
 
 function clamp(s: string, max: number): string {

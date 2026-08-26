@@ -8,6 +8,8 @@ import type { WorkspaceMemoryScopeContext } from "@/entityTypes/portableWorkspac
 import {
   isPortableMemoryImportPolicy,
   isPortableMemoryDefaultStorageMode,
+  PORTABLE_MEMORY_DEFAULT_ENABLED,
+  PORTABLE_MEMORY_DEFAULT_STORAGE_MODE,
   type PortableMemoryDefaultStorageMode,
   type PortableMemoryImportPolicy,
 } from "@/entityTypes/portableWorkspaceMemoryTypes";
@@ -98,9 +100,17 @@ export class WorkspaceMemoryScopeModule extends BaseModule {
       scope = await this.scopeModel.create({
         scopeId,
         displayName: input.displayName,
-        portableEnabled: false,
-        defaultStorageMode: "private-only",
+        portableEnabled: PORTABLE_MEMORY_DEFAULT_ENABLED,
+        defaultStorageMode: PORTABLE_MEMORY_DEFAULT_STORAGE_MODE,
         importPolicy: "review-new",
+      });
+    } else if (this.isNeverConfiguredPrivateScope(scope)) {
+      // Pre-default-on rows used private-only + disabled. Promote them to
+      // the new product default. Scopes the user later disabled keep
+      // defaultStorageMode !== private-only, so they stay off.
+      scope = await this.scopeModel.updateByScopeId(scope.scopeId, {
+        portableEnabled: PORTABLE_MEMORY_DEFAULT_ENABLED,
+        defaultStorageMode: PORTABLE_MEMORY_DEFAULT_STORAGE_MODE,
       });
     }
     await this.scopePathModel.upsert({
@@ -407,6 +417,21 @@ export class WorkspaceMemoryScopeModule extends BaseModule {
         lastCompleteScanAt: new Date(),
       });
     }
+  }
+
+  /**
+   * A scope created under the original SQLite-only defaults, never enabled
+   * and never explicitly disabled after a portable enable.
+   */
+  private isNeverConfiguredPrivateScope(
+    scope: AIWorkspaceMemoryScopeEntity
+  ): boolean {
+    return (
+      scope.portableEnabled !== true &&
+      (scope.defaultStorageMode === "private-only" ||
+        scope.defaultStorageMode === undefined ||
+        scope.defaultStorageMode === "")
+    );
   }
 
   private async requireScope(

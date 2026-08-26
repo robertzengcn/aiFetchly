@@ -289,4 +289,38 @@ describe("WorkspaceMemoryPanel — portable memory banner", () => {
     vi.useRealTimers();
     void wrapper;
   });
+
+  it("Run Auto Summary sends the open conversationId with force: true", async () => {
+    vi.mocked(workspaceMemoryApi.runAutoDream).mockResolvedValue({
+      status: true,
+      msg: "",
+      data: [
+        {
+          id: 1,
+          runId: "wrun-1",
+          status: "completed",
+          startedAt: "2026-08-26T00:00:00.000Z",
+          chatConversationsReviewed: 1,
+          agentTasksReviewed: 0,
+          memoriesCreated: 1,
+          memoriesUpdated: 0,
+          memoriesArchived: 0,
+          createdAt: "2026-08-26T00:00:00.000Z",
+          updatedAt: "2026-08-26T00:00:00.000Z",
+        },
+      ],
+    } as never);
+    const wrapper = mountPanel({ conversationId: "conv-focus" });
+    await flushPromises();
+    const runBtn = wrapper
+      .findAll("button")
+      .find((b) => /runAutoSummary|AUTO SUMMARY/i.test(b.text()));
+    expect(runBtn).toBeDefined();
+    await runBtn?.trigger("click");
+    await flushPromises();
+    expect(workspaceMemoryApi.runAutoDream).toHaveBeenCalledWith({
+      conversationId: "conv-focus",
+      force: true,
+    });
+  });
 });

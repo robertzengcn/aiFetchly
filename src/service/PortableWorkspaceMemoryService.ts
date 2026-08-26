@@ -51,6 +51,9 @@ import type {
   AIWorkspaceMemoryType,
 } from "@/entityTypes/aiWorkspaceMemoryTypes";
 import type { PortableMemoryDocumentV1 } from "@/entityTypes/portableWorkspaceMemoryTypes";
+import type { WorkspaceMemoryScopeContext } from "@/entityTypes/portableWorkspaceMemoryTypes";
+import type { WorkspaceAutoDreamParseResult } from "@/service/AIWorkspaceAutoDreamPromptBuilder";
+import { writeDefaultLayout } from "@/service/PortableWorkspaceMemoryBootstrap";
 
 type PortableDocumentType = Parameters<
   PortableWorkspaceMemoryFormat["buildDocument"]
@@ -110,6 +113,13 @@ export interface PortableMemoryPromoteInput {
   readonly visibility: "local" | "team";
 }
 
+export interface PortableAutoDreamFileResult {
+  readonly sqlitePlan: WorkspaceAutoDreamParseResult;
+  readonly fileCreated: number;
+  readonly fileUpdated: number;
+  readonly fileArchived: number;
+}
+
 export class PortableWorkspaceMemoryService {
   private readonly contextResolver: WorkspaceMemoryContextResolver;
   private readonly scopeModule: WorkspaceMemoryScopeModule;
@@ -148,6 +158,13 @@ export class PortableWorkspaceMemoryService {
   ): Promise<PortableWorkspaceStatusView> {
     const ctx = await this.requireContext(conversationId);
     const scope = await this.requireScope(ctx);
+    if (scope.portableEnabled) {
+      try {
+        await writeDefaultLayout(scope);
+      } catch {
+        // Layout bootstrap is best-effort; status still returns.
+      }
+    }
     const states = await this.stateModel.listByScope(scope.scopeId);
     const count = (state: string): number =>
       states.filter((s) => s.syncState === state).length;
@@ -169,7 +186,7 @@ export class PortableWorkspaceMemoryService {
         : {}),
       defaultStorageMode: isStorageMode(scope.defaultStorageMode)
         ? scope.defaultStorageMode
-        : "private-only",
+        : "portable-local",
       importPolicy: scope.importPolicy,
       syncState: "idle",
       privateCount: total - portable,
@@ -789,6 +806,145 @@ export class PortableWorkspaceMemoryService {
     });
   }
 
+  /**
+   * File-first auto-dream writes when portable memory is enabled: new
+   * memories and edits to existing portable records go to
+   * `.aifetchly/memory`. Remaining private SQLite-only rows stay on the
+   * sqlite plan so applyPlanAndCompleteRun can still mutate them.
+   */
+  async applyAutoDreamFileMutations(
+    scope: WorkspaceMemoryScopeContext,
+    plan: WorkspaceAutoDreamParseResult
+  ): Promise<PortableAutoDreamFileResult> {
+    if (!scope.portableEnabled) {
+      return {
+        sqlitePlan: plan,
+        fileCreated: 0,
+        fileUpdated: 0,
+        fileArchived: 0,
+      };
+    }
+    await writeDefaultLayout(scope);
+    let fileCreated = 0;
+    let fileUpdated = 0;
+    let fileArchived = 0;
+
+    const sqliteUpdate: typeof plan.update = [];
+    for (const u of plan.update) {
+      const state = await this.stateModel.getByScopeAndMemoryId(
+        scope.scopeId,
+        u.memoryId
+      );
+      if (!state) {
+        sqliteUpdate.push(u);
+        continue;
+      }
+      const existing = await this.memoryModel.getByScopeAndMemoryId(
+        scope.scopeId,
+        u.memoryId
+      );
+      if (!existing) {
+        sqliteUpdate.push(u);
+        continue;
+      }
+      const document = this.format.buildDocument({
+        id: u.memoryId,
+        type: existing.type as PortableDocumentType,
+        status: existing.status as PortableDocumentStatus,
+        confidence: u.confidence ?? existing.confidence,
+        visibility: state.visibility === "team" ? "team" : "local",
+        createdAt: existing.createdAt ?? new Date(),
+        updatedAt: new Date(),
+        createdBy: (state.createdBy ??
+          "aifetchly") as PortableMemoryDocumentV1["frontmatter"]["createdBy"],
+        title: u.title ?? existing.title,
+        content: u.content ?? existing.content,
+      });
+      await this.runQueued(scope, () =>
+        this.coordinator.applyAppWrite(scope, document, {
+          expectedHash: state.lastValidHash ?? null,
+        })
+      );
+      fileUpdated += 1;
+    }
+
+    const sqliteArchive: typeof plan.archive = [];
+    for (const a of plan.archive) {
+      const state = await this.stateModel.getByScopeAndMemoryId(
+        scope.scopeId,
+        a.memoryId
+      );
+      if (!state) {
+        sqliteArchive.push(a);
+        continue;
+      }
+      const existing = await this.memoryModel.getByScopeAndMemoryId(
+        scope.scopeId,
+        a.memoryId
+      );
+      if (!existing) {
+        sqliteArchive.push(a);
+        continue;
+      }
+      const document = this.format.buildDocument({
+        id: a.memoryId,
+        type: existing.type as PortableDocumentType,
+        status: "archived",
+        confidence: existing.confidence,
+        visibility: state.visibility === "team" ? "team" : "local",
+        createdAt: existing.createdAt ?? new Date(),
+        updatedAt: new Date(),
+        createdBy: (state.createdBy ??
+          "aifetchly") as PortableMemoryDocumentV1["frontmatter"]["createdBy"],
+        title: existing.title,
+        content: existing.content,
+      });
+      await this.runQueued(scope, () =>
+        this.coordinator.applyAppWrite(scope, document, {
+          expectedHash: state.lastValidHash ?? null,
+        })
+      );
+      fileArchived += 1;
+    }
+
+    for (const c of plan.create) {
+      const memoryId = `wmem-${randomUUID()}`;
+      const now = new Date();
+      const document = this.format.buildDocument({
+        id: memoryId,
+        type: c.type,
+        status: "active",
+        confidence: c.confidence,
+        visibility: "local",
+        createdAt: now,
+        updatedAt: now,
+        createdBy: "aifetchly",
+        title: c.title,
+        content: c.content,
+      });
+      await this.runQueued(scope, () =>
+        this.coordinator.applyAppWrite(scope, document)
+      );
+      fileCreated += 1;
+    }
+
+    if (fileCreated + fileUpdated + fileArchived > 0) {
+      await this.refreshIndexFromScope(scope);
+    }
+
+    return {
+      sqlitePlan: {
+        ...plan,
+        create: [],
+        update: sqliteUpdate,
+        archive: sqliteArchive,
+      },
+      fileCreated,
+      fileUpdated,
+      fileArchived,
+    };
+  }
+
   // --- Portable CRUD (file-first through the coordinator queue) ---------------
 
   /**
@@ -808,6 +964,7 @@ export class PortableWorkspaceMemoryService {
   }): Promise<PortableMemoryRowView> {
     const ctx = await this.requireContext(input.conversationId);
     const scope = await this.requireScope(ctx);
+    await writeDefaultLayout(scope);
     const memoryId = `wmem-${randomUUID()}`;
     const now = new Date();
     const document = this.format.buildDocument({
@@ -1397,7 +1554,14 @@ export class PortableWorkspaceMemoryService {
     ctx: WorkspaceMemoryContext,
     scope: import("@/entityTypes/portableWorkspaceMemoryTypes").WorkspaceMemoryScopeContext
   ): Promise<void> {
-    const store = new PortableWorkspaceMemoryFileStore(ctx.workspaceRoot);
+    await this.refreshIndexFromScope(scope, ctx.workspaceRoot);
+  }
+
+  private async refreshIndexFromScope(
+    scope: import("@/entityTypes/portableWorkspaceMemoryTypes").WorkspaceMemoryScopeContext,
+    workspaceRoot: string = scope.workspaceRoot
+  ): Promise<void> {
+    const store = new PortableWorkspaceMemoryFileStore(workspaceRoot);
     const states = await this.stateModel.listByScope(scope.scopeId, "synced");
     const docs: PortableMemoryDocumentV1[] = [];
     for (const state of states) {
